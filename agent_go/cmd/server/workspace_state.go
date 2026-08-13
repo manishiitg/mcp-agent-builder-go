@@ -138,7 +138,18 @@ func (api *StreamingAPI) loadRunFoldersInternal(ctx context.Context, workspacePa
 	// Returns just the folders array without HTTP handling
 	folders, err := api.getRunFoldersFromWorkspace(ctx, workspacePath)
 	if err != nil {
-		return []RunFolderInfo{}, nil // Return empty on error, not nil
+		// Propagate. This used to return an empty slice with a nil error, which
+		// made "the workspace listing failed" indistinguishable from "this
+		// workflow has no run folders". Both existing HTTP callers already had
+		// `if err != nil` branches that could never fire, and the scheduler's
+		// run-outcome reconciler silently treated the empty result as a real
+		// baseline: with no folders recorded as pre-existing, every historical
+		// run folder looked newly created by the current invocation, so any
+		// old folder still carrying status "failed" was reported as this run's
+		// failure. A healthy hetznerssh security audit was marked failed that
+		// way on 2026-08-10, blamed on an iteration that had failed the day
+		// before, moments after workspace folder calls were returning errors.
+		return []RunFolderInfo{}, fmt.Errorf("load run folders for %s: %w", workspacePath, err)
 	}
 	return folders, nil
 }
@@ -622,7 +633,16 @@ func (api *StreamingAPI) handleGetWorkflowsOverview(w http.ResponseWriter, r *ht
 			costResp := loadWorkflowCosts(ctx, workspacePath)
 			costByFolder := make(map[string]workflowRunCostEntry, len(costResp.Runs))
 			for _, entry := range costResp.Runs {
-				costByFolder[entry.RunFolder] = entry
+				// Multiple immutable executions may have begun in iteration-0.
+				// Prefer the latest record for the run-folder overview; detailed
+				// cost APIs retain every execution separately.
+				folder := entry.RunFolder
+				if entry.ArchivedRunFolder != "" {
+					folder = entry.ArchivedRunFolder
+				}
+				if current, exists := costByFolder[folder]; !exists || workflowRunCostEntryTime(entry).After(workflowRunCostEntryTime(current)) {
+					costByFolder[folder] = entry
+				}
 			}
 
 			details := make([]WorkflowOverviewRunFolderDetail, 0, len(folders))

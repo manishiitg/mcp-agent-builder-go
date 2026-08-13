@@ -32,7 +32,6 @@ The learning system has **two active dimensions** per step: `learnings_access` c
 - **Do not write learnings** for routing/condition steps, schema validation, mechanical transforms, aggregation/report data shaping, human approval/input, message-only steps, pure db/KB readers, or mature scripted steps whose `main.py` already captures the execution method. Leave these at `"read"` unless `_global/SKILL.md` would actively mislead them.
 - **Use `"none"` sparingly** — only when the global skill content would actively mislead the step (rare) or when the step is so divorced from the target system that reading the skill just burns tokens.
 - **Learning locks are manual**: runtime execution never auto-sets or auto-clears `lock_learnings`. Set it only when the Workshop user intentionally decides this step should stop writing SKILL.md, and record the rationale in `review_notes`.
-- **Global Skill Objective**: set `global_skill_objective` in `execution_defaults` to describe what reusable HOW knowledge the skill should accumulate — e.g. *"Understand this website's structure, auth flows, selectors, and common failure modes so any step can interact with it reliably."* Every learning contribution is guided by this objective.
 - **scripted steps**: usually `learnings_access: "read"` (not `"read-write"`). The saved `learnings/{step-id}/main.py` IS the learned artifact — the HOW is encoded as code. Opt into write only when there's cross-step HOW knowledge the script itself can't capture (e.g. operator notes, patterns spanning multiple steps).
 - **Clearing a bad setting**: if a step was miss-configured with `learnings_access: "read-write"` but shouldn't contribute, clear it via `update_step_config(step_id, clear_fields=["learnings_access", "learning_objective"])`.
 
@@ -182,7 +181,7 @@ The step **description** in plan.json is the primary instruction the execution a
 - `description_reviewed` + `review_notes`
 If the step description changes later, clear `description_reviewed` yourself — the system does not auto-invalidate the review.
 
-**Artifact drift after material changes**: If you materially change a step's contract or dependent artifacts, run the canonical read-only `/review-artifact-drift` flow. It is separate from Bug Review; the parent Pulse Fixer applies verified repairs. Use `builder/improve.html` as the cursor/checkpoint.
+**Artifact drift after material changes**: If you materially change a step's contract or dependent artifacts, run the canonical read-only `/review-artifact-drift` flow. It is separate from Bug Review; the parent agent applies verified repairs. Use typed changelog review metadata as the cursor/checkpoint.
 
 ### 6. Post-Execution Step Review
 After running a step, review it for optimization — but follow this priority order. Fix fundamentals first before worrying about efficiency.
@@ -351,7 +350,7 @@ def call_sub_agent(route_id: str, todo_id: str, instructions: str) -> dict:
 ```
 
 Rules:
-- Only `call_sub_agent` is allowed — never call `call_generic_agent`, never run arbitrary shell or MCP tools directly. If you need a different tool, add it as a new predefined route.
+- Only `call_sub_agent` is allowed — never launch `run_in_background`, never run arbitrary shell or MCP tools directly. If you need a different tool, add it as a new predefined route.
 - `route_id` values must match one of the step's `predefined_routes` — unknown route IDs will fail at runtime.
 - Let unhandled exceptions bubble up. A non-zero exit is the fallback signal — the runtime drops to the LLM orchestrator with no script state carried over. Do not wrap everything in `try/except` that swallows failures; that makes fallback undetectable.
 - Read context dependencies from `sys.argv` (same convention as regular scripted). Write final outputs to `os.environ['STEP_OUTPUT_DIR']` if the step has a validation_schema.

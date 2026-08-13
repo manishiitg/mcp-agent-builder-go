@@ -23,9 +23,6 @@ type PulseIssue struct {
 }
 
 func pulseIssueID(finding PulseFindingLifecycle) string {
-	if id := strings.TrimSpace(finding.FindingID); id != "" {
-		return id
-	}
 	fingerprint := strings.ToUpper(strings.TrimSpace(finding.Fingerprint))
 	if len(fingerprint) > 8 {
 		fingerprint = fingerprint[:8]
@@ -67,6 +64,8 @@ func pulseIssueStatus(finding PulseFindingLifecycle) string {
 		return "in_progress"
 	case ConcernStatusAwaitingVerification:
 		return "in_review"
+	case ConcernStatusQueuedForEngineering:
+		return "backlog"
 	case ConcernStatusResolved:
 		return "done"
 	case ConcernStatusRejected:

@@ -26,10 +26,19 @@ func clearStepConfigField(sc *StepConfig, name string) bool {
 	ac := sc.AgentConfigs
 	switch name {
 	// LLM overrides
+	// PLAT-060: clearing a decision clears its justification too — a reason must
+	// not outlive the change it justified, or it reads as pre-approval for a
+	// future re-pin nobody reviewed.
 	case "execution_llm":
 		ac.ExecutionLLM = nil
+		ac.ExecutionLLMReason = ""
+	case "execution_llm_reason":
+		ac.ExecutionLLMReason = ""
 	case "execution_tier":
 		ac.ExecutionTier = ""
+		ac.ExecutionTierReason = ""
+	case "execution_tier_reason":
+		ac.ExecutionTierReason = ""
 
 	// Slice selections
 	case "servers":
@@ -49,7 +58,12 @@ func clearStepConfigField(sc *StepConfig, name string) bool {
 	case "learning_objective":
 		ac.LearningObjective = ""
 	case "lock_learnings":
+		// Clearing the lock clears its justification too — a reason left behind
+		// would attach to a freeze that no longer exists.
 		ac.LockLearnings = nil
+		ac.LockLearningsReason = ""
+	case "lock_learnings_reason":
+		ac.LockLearningsReason = ""
 	case "lock_code":
 		ac.LockCode = nil
 	case "use_code_execution_mode":
@@ -66,20 +80,14 @@ func clearStepConfigField(sc *StepConfig, name string) bool {
 		ac.KnowledgebaseAccess = ""
 	case "knowledgebase_contribution":
 		ac.KnowledgebaseContribution = ""
-	case "db_access":
-		ac.DBAccess = ""
 	case "review_notes":
 		ac.ReviewNotes = ""
 	case "declared_execution_mode":
 		ac.DeclaredExecutionMode = ""
 	case "declared_execution_mode_reason":
 		ac.DeclaredExecutionModeReason = ""
-	case "global_skill_objective":
-		ac.GlobalSkillObjective = ""
 	case "coding_agent_tmux_lifecycle":
 		ac.CodingAgentTmuxLifecycle = ""
-	case "transport":
-
 	default:
 		return false
 	}
@@ -94,17 +102,48 @@ func isKnownAgentConfigClearField(name string) bool {
 	switch name {
 	case "execution_llm", "execution_tier",
 		"servers", "tools", "enabled_custom_tools", "enabled_skills", "additional_read_paths",
-		"learning_objective", "lock_learnings", "lock_code",
+		"learning_objective", "lock_learnings", "lock_learnings_reason", "lock_code",
+		"execution_llm_reason", "execution_tier_reason",
 		"use_code_execution_mode",
 		"disable_parallel_tool_execution",
 		"description_reviewed",
-		"learning_mode", "knowledgebase_access", "knowledgebase_contribution",
-		"knowledgebase_write_method",
-		"learnings_write_method", "db_access",
+		"knowledgebase_access", "knowledgebase_contribution",
 		"review_notes", "declared_execution_mode", "declared_execution_mode_reason",
-		"global_skill_objective", "coding_agent_tmux_lifecycle",
-		"transport":
+		"coding_agent_tmux_lifecycle":
 		return true
 	}
 	return false
+}
+
+// retiredStepConfigClearFields are names that used to address a real field and
+// no longer do. PLAT-061.
+//
+// They cannot simply become unknown-field errors: three workflows still carry
+// these keys in step_config.json, and guidance referenced some of them, so a
+// caller following stale instructions would fail its whole update call — nothing
+// else in that call is applied. Nor can they stay silently "successful", which
+// is what `case "transport":` with an empty body did: the agent believed it had
+// cleared something it had not. That is the same failure shape as db_access.
+//
+// So they are acknowledged and reported as no-ops, which is the only honest
+// answer: the field is gone, its stored value is already ignored, and there is
+// nothing left to clear.
+var retiredStepConfigClearFields = map[string]string{
+	"transport":                     "never existed as a step config field",
+	"learning_mode":                 "retired with the per-step learning system",
+	"learnings_write_method":        "retired — direct write is the only mode",
+	"knowledgebase_write_method":    "retired — direct write is the only mode",
+	"db_access":                     "retired in PLAT-061 — every step gets managed read-write access",
+	"disable_tier_optimization":     "retired in PLAT-061 — pin execution_tier (with its reason) instead",
+	"enable_context_offloading":     "retired in PLAT-061 — never settable, never used",
+	"todo_task_orchestrator_tier":   "retired in PLAT-061 — use execution_llm to override",
+	"learn_code_max_fix_iterations": "retired in PLAT-061 — every stored value was a migration artifact; use lock_code to skip script repair",
+}
+
+// isRetiredStepConfigClearField reports whether a clear_fields name refers to a
+// field that no longer exists, along with why. Callers should report these as
+// no-ops rather than failing the call or claiming a change.
+func isRetiredStepConfigClearField(name string) (string, bool) {
+	reason, ok := retiredStepConfigClearFields[name]
+	return reason, ok
 }

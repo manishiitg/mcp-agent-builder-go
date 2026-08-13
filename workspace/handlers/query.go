@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,6 +31,7 @@ const (
 	maximumQueryMaxRows = 50_000
 	maximumMutationSQL  = 100_000
 	maximumStatements   = 20
+	maximumPragmaErrors = 1_000
 )
 
 var managedMigrationSQL = regexp.MustCompile(`(?is)^\s*CREATE\s+(?:TABLE|INDEX)\s+IF\s+NOT\s+EXISTS\b`)
@@ -182,7 +184,44 @@ func scanRows(rows *sql.Rows, maxRows int) ([]string, []map[string]interface{}, 
 	return cols, out, truncated, rows.Err()
 }
 
-var safePragmaPattern = regexp.MustCompile(`(?is)^pragma\s+(?:main\.)?(?:table_info|table_xinfo|index_list|index_info|index_xinfo|foreign_key_list)\s*\([^;]*\)\s*;?$|^pragma\s+(?:main\.)?(?:database_list|journal_mode|user_version|schema_version)\s*;?$`)
+var (
+	readPragmaPattern      = regexp.MustCompile(`(?is)^pragma\s+(?:main\.)?([a-z_]+)\s*(?:\(([^;]*)\))?\s*;?$`)
+	positiveIntegerPattern = regexp.MustCompile(`^[1-9][0-9]*$`)
+	sqlIdentifierPattern   = regexp.MustCompile(`(?s)^(?:[A-Za-z_][A-Za-z0-9_]*|"(?:[^"]|"")+"|'(?:[^']|'')+'|\[[^\]]+\]|` + "`(?:[^`]|``)+`" + `)$`)
+)
+
+// isSafeReadPragma deliberately recognizes PRAGMA names and their argument
+// shapes instead of growing one permissive regular expression. Every entry in
+// this allowlist is observational; assignments and unknown pragmas are denied.
+func isSafeReadPragma(input string) bool {
+	matches := readPragmaPattern.FindStringSubmatch(strings.TrimSpace(input))
+	if matches == nil {
+		return false
+	}
+	name := strings.ToLower(matches[1])
+	argument := strings.TrimSpace(matches[2])
+	hasArgument := strings.Contains(matches[0], "(")
+
+	switch name {
+	case "table_info", "table_xinfo", "index_list", "index_info", "index_xinfo", "foreign_key_list":
+		return hasArgument && argument != "" && sqlIdentifierPattern.MatchString(argument)
+	case "database_list", "journal_mode", "user_version", "schema_version":
+		return !hasArgument
+	case "integrity_check", "quick_check":
+		if !hasArgument {
+			return true
+		}
+		if !positiveIntegerPattern.MatchString(argument) {
+			return false
+		}
+		limit, err := strconv.Atoi(argument)
+		return err == nil && limit <= maximumPragmaErrors
+	case "foreign_key_check":
+		return !hasArgument || sqlIdentifierPattern.MatchString(argument)
+	default:
+		return false
+	}
+}
 
 // stripSQLCommentsAndSpace removes leading whitespace and comments so policy is
 // applied to the actual first token rather than a model-controlled prefix.
@@ -483,7 +522,7 @@ func validateReadSQL(input string) error {
 	case "SELECT", "WITH", "EXPLAIN":
 		return nil
 	case "PRAGMA":
-		if safePragmaPattern.MatchString(trimmed) {
+		if isSafeReadPragma(trimmed) {
 			return nil
 		}
 		return fmt.Errorf("pragma is not in the read-only allowlist")
@@ -562,7 +601,7 @@ func QueryWorkflowDB(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), queryTimeout)
 	defer cancel()
 
-	rows, err := db.QueryContext(ctx, req.SQL)
+	rows, err := db.QueryContext(ctx, req.SQL, req.Params...)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse[any]{
 			Success: false, Message: "Query failed", Error: err.Error(),

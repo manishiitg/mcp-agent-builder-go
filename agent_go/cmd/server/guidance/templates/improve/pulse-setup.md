@@ -1,108 +1,32 @@
 Set up recurring workflow runs with dynamic Pulse. Goal Advisor remains a
 Pulse-selected module; this command does not run Goal Advisor itself.
 
-Write to `builder/improve.html` — the durable Pulse and advisor log. For the log/HTML format, load `read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}])`.{{if .Focus}} Focus especially on: {{.Focus}}.{{end}}
-
-## Mental model
-
-Pulse is the recurring maintenance system. After every scheduled run, Pulse Gate decides which modules are due:
-
-- Bug Review / bounded reliability repair
-- artifact review
-- report health
-- evaluation health
-- stores health (learnings, knowledgebase, and DB)
-- Ops Review (cost, timing, tool/runtime reliability, model routing, setup,
-  and plan-design hygiene)
-- Strategy Auditor
-- Goal Advisor
-
-Goal Advisor is not a separate schedule anymore. It is an independent,
-selective blank-sheet strategy module that runs less frequently than Strategy
-Auditor. Gate selects it for its own opportunity/headroom cadence, an answered
-strategy decision, or an experiment checkpoint—not as a downstream response to
-another reviewer and not for every repeated goal miss. It asks what materially
-different approach outside the current plan could advance `soul.md`.
-
-## Goal
-
-Set up this workflow so it can keep improving from scheduled runs:
-
-1. Enable Pulse: call `update_workflow_config(post_run_monitor=true)`.
-2. Create or update one normal workshop Run-mode schedule for recurring execution.
-3. Do not create a separate optimizer/Goal Advisor schedule. If an old optimizer schedule exists for this same purpose, disable it after recording why in `builder/improve.html`.
+Pulse is SQLite-backed and shown in the Pulse popup. Do not create, read, or
+update a separate Pulse HTML journal.{{if .Focus}} Focus especially on: {{.Focus}}.{{end}}
 
 ## Discovery
 
-1. Call `get_workflow_config` and inspect schedules.
-2. If candidate schedules exist, call `get_schedule_runs` on the most relevant ones.
-3. Read `soul/soul.md` for objective and success criteria.
-4. Read `variables/variables.json` for valid group names.
-5. Read `builder/improve.html` for Maintenance Radar, recent Bug/Goal verdicts, open findings, prior Goal Advisor decisions, and historical question/answer outcomes. Read `soul/soul.md` for the Goal; pending questions come from the human-input tools/preface, not HTML cards. Legacy Chief of Staff recommendation cards are history only.
-6. Read `planning/changelog/` if present. Recent plan/config changes increase regression risk and can make Pulse Gate select deeper modules on the next run.
-7. If success is not defined, call `get_workflow_command_guidance(kind="define-success")` and follow it before scheduling.
+1. Read `workflow.json`, schedules, `soul/soul.md`, valid variable groups,
+   planning changelog, and typed Pulse module/finding/review/human-input state.
+2. Confirm that the Goal has success criteria. If not, run `/define-success`
+   before scheduling.
+3. Identify an existing normal execution schedule, stale optimizer schedules,
+   and any current Pulse state that affects safe cadence.
 
-## Schedule strategy
+## Setup
 
-Prefer updating or reusing a good existing run schedule. Only create a new schedule when no existing schedule already serves the purpose.
+1. Enable Pulse with `update_workflow_config(post_run_monitor=true)`.
+2. Create or update one normal workshop Run-mode schedule for recurring
+   workflow execution. Do not create a separate optimizer or Goal Advisor
+   schedule.
+3. If an old optimizer schedule duplicates Pulse, disable it (do not delete it
+   unless requested) and record the reason as a typed Pulse outcome.
+4. Let Gate select review modules from durable typed state, current run
+   evidence, and review history. `pulse_module_state` is the canonical
+   scheduler/UI state; do not add cadence fields to schedule JSON.
 
-The run cadence should create useful evidence without wasting runs:
+## Close-out
 
-- hourly or more frequent only when the workflow naturally has fresh inputs that often
-- daily for normal active workflows
-- weekdays for workday operational workflows
-- weekly for slower workflows where evidence changes slowly
-- calendar schedules when the user gives fixed dates/times instead of a recurring rhythm
-
-Pulse decides its own internal module cadence from the durable review history and
-next-check reasoning in `builder/improve.html`. The `pulse_module_state` rows in
-`db/db.sqlite` are only the current machine-readable scheduler/UI mirror. They
-must not replace or contradict the HTML history. Do not add new schedule JSON
-fields for module cadence.
-
-## Run schedule
-
-Create or update a schedule for normal recurring execution with:
-
-- `mode="workshop"`
-- `workshop_mode="run"`
-- valid `group_names`
-- a clear name and description marking it as the primary recurring run schedule
-- a single unattended scheduled message that names the exact groups and tells Run mode to call `run_full_workflow(group_name="<group>")` for each configured group
-
-The scheduled message must say:
-
-- do not ask for confirmation
-- proceed autonomously
-- use the exact configured group names
-- run the full workflow for each configured group
-- use default evaluation behavior so Pulse has fresh run/eval evidence
-- stop after the configured groups have run and report status plainly
-
-## Existing optimizer schedules
-
-If you find an old optimizer-mode schedule that clearly exists only for the previous Auto Improve / Goal Advisor loop:
-
-1. Disable it with `update_schedule(enabled=false)`; do not delete it unless the user asked.
-2. Record a short Fixes and improvements Decision card in `builder/improve.html` with `data-pulse-section="improvements"` and `data-module="pulse_fixer"`: Goal Advisor moved into Pulse Gate; this old schedule is paused to avoid duplicate strategy passes.
-3. Leave manually-authored optimizer schedules alone when they are clearly for another custom job.
-
-## Persistent log
-
-Create or update `builder/improve.html`.
-
-- Keep the Goal only in `soul/soul.md`; do not seed or refresh a Goal/Profile card in the HTML.
-- Record a setup/change as a readable Fixes and improvements Decision card with `data-pulse-section="improvements"` and `data-module="pulse_fixer"`.
-- Make clear that Pulse Gate will decide when deeper modules, including Goal Advisor, are due.
-- If nothing changed, record a short Decisions and analysis confirmation only when it adds useful evidence; use `data-pulse-section="reflection"` and `data-module="run_summary"`.
-
-## Final report
-
-Reply with:
-
-- Pulse enabled status
-- run schedule created/updated/reused
-- group scope
-- cadence and why
-- old optimizer schedule disabled/reused/left alone
-- any missing evidence or user decisions
+Report the schedule, Pulse enabled state, disabled duplicate schedules, and
+what Gate will decide on future runs. Persist findings or decisions through the
+typed tools only.

@@ -52,15 +52,15 @@ func createLearningActivityTool(childLabel string, recordEvent func(toolEvent)) 
 			"content files into it (the study material / test HTML, and any answer key as <name>-KEY.md), then call this with that " +
 			"folder as `dir` to write its activity.json manifest. `items` are the bare filenames inside the folder, in the order " +
 			"the child works through them (do NOT include the answer key). For an instruction-only/dynamic activity (the tutor " +
-			"generates questions live), leave `items` empty and put the full activity description in `guide_note`. Set " +
-			"`teaching_mode` per the parent's wishes for THIS activity: beginner (tell the answer and keep correcting), graduated " +
-			"(give `hints_before_answer` hints, then reveal), or strict (hints only while she's still working through it, like a " +
-			"real assessment — but always reveals the real answers once she's actually finished the whole activity, never just " +
-			"defers her to the parent). `persona` is the tutor's tone " +
-			"for this activity. `goal` is what COMPLETING this activity concretely looks like (e.g. \"reach the final scene and " +
-			"design one explorer ship\", \"answer all 10 practice questions\") — distinct from `guide_note` (which is about HOW to " +
-			"run it, pacing/tone); the tutor uses `goal` to keep steering the child back toward finishing even after the " +
-			"conversation wanders into their own tangents. After this, call open_activity(dir) so the parent sees it on the right with its 'Give to " + childLabel +
+			"generates questions live), leave `items` empty and put the full activity description in `goal`. `persona` is the " +
+			"tutor's tone for this activity. " +
+			"`goal` is WHAT this activity is for, in the parent's own words — what " + childLabel + " should get out of it, and " +
+			"what finishing it actually looks like (e.g. \"reach the final scene and design one explorer ship\", \"answer all 10 " +
+			"practice questions on her own, as a real assessment\"). Include anything the parent genuinely cares about (that it's " +
+			"a real test, a time limit, a topic to stay inside). Do NOT script HOW the tutor should run it, turn by turn — how " +
+			"much to hint, when to reveal, what order, what to do when she's stuck is the tutor's judgment live in the " +
+			"conversation, because a child does not go the way a plan written beforehand expects. State the intent; trust the " +
+			"tutor with the method. After this, call open_activity(dir) so the parent sees it on the right with its 'Give to " + childLabel +
 			"' button. Neither this nor open_activity hands anything to " + childLabel + " — only the parent tapping that button does; " +
 			"never say it's \"sent\" or \"on their screen\".",
 		Category: "family_tools",
@@ -72,13 +72,10 @@ func createLearningActivityTool(childLabel string, recordEvent func(toolEvent)) 
 				"items": map[string]interface{}{
 					"type":        "array",
 					"items":       map[string]interface{}{"type": "string"},
-					"description": "bare filenames inside the folder, in order (exclude any *-KEY.md answer key). Empty = instruction-only activity; then guide_note is required.",
+					"description": "bare filenames inside the folder, in order (exclude any *-KEY.md answer key). Empty = instruction-only activity; then goal is required.",
 				},
-				"guide_note":          map[string]interface{}{"type": "string", "description": "pacing/what-to-do-if-stuck, or (for instruction-only) the full activity description"},
-				"goal":                map[string]interface{}{"type": "string", "description": "what completing this activity concretely looks like — the tutor keeps steering back to this even through tangents"},
-				"teaching_mode":       map[string]interface{}{"type": "string", "enum": []string{"beginner", "graduated", "strict"}, "description": "how the tutor handles answers for THIS activity"},
-				"hints_before_answer": map[string]interface{}{"type": "integer", "description": "for graduated mode: how many hints before revealing the answer"},
-				"persona":             map[string]interface{}{"type": "string", "description": "the tutor's tone/personality for this activity, e.g. \"playful coach\""},
+				"goal":    map[string]interface{}{"type": "string", "description": "WHAT the activity is for and what finishing looks like, plus anything the parent genuinely cares about (a real assessment, a time limit, a topic to stay inside). Not a turn-by-turn script — how to teach it is the tutor's judgment"},
+				"persona": map[string]interface{}{"type": "string", "description": "the tutor's tone/personality for this activity, e.g. \"playful coach\""},
 			},
 			"required": []string{"dir", "title"},
 		},
@@ -117,29 +114,12 @@ func createLearningActivityTool(childLabel string, recordEvent func(toolEvent)) 
 					items = append(items, name)
 				}
 			}
-			guideNote := strings.TrimSpace(fmt.Sprint(args["guide_note"]))
-			if guideNote == "<nil>" {
-				guideNote = ""
-			}
-			if len(items) == 0 && guideNote == "" {
-				return "", fmt.Errorf("either items (files in the folder) or guide_note (for an instruction-only activity) is required")
-			}
 			goal := strings.TrimSpace(fmt.Sprint(args["goal"]))
 			if goal == "<nil>" {
 				goal = ""
 			}
-			mode := strings.TrimSpace(fmt.Sprint(args["teaching_mode"]))
-			switch mode {
-			case "beginner", "graduated", "strict", "", "<nil>":
-				if mode == "<nil>" {
-					mode = ""
-				}
-			default:
-				return "", fmt.Errorf("teaching_mode must be beginner, graduated, or strict")
-			}
-			hints := 0
-			if f, ok := args["hints_before_answer"].(float64); ok {
-				hints = int(f)
+			if len(items) == 0 && goal == "" {
+				return "", fmt.Errorf("either items (files in the folder) or goal (for an instruction-only activity) is required")
 			}
 			persona := strings.TrimSpace(fmt.Sprint(args["persona"]))
 			if persona == "<nil>" {
@@ -147,16 +127,13 @@ func createLearningActivityTool(childLabel string, recordEvent func(toolEvent)) 
 			}
 
 			m := activityManifest{
-				Title:             title,
-				Subject:           parts[0],
-				Topic:             parts[1],
-				Items:             items,
-				GuideNote:         guideNote,
-				Goal:              goal,
-				TeachingMode:      mode,
-				HintsBeforeAnswer: hints,
-				Persona:           persona,
-				CreatedAt:         time.Now().UTC().Format(time.RFC3339),
+				Title:     title,
+				Subject:   parts[0],
+				Topic:     parts[1],
+				Items:     items,
+				Goal:      goal,
+				Persona:   persona,
+				CreatedAt: time.Now().UTC().Format(time.RFC3339),
 			}
 			b, err := json.MarshalIndent(m, "", "  ")
 			if err != nil {

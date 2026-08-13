@@ -53,7 +53,7 @@ A good eval catches a bad run — including one that *looks* successful. Design 
 - **Ground in real run evidence.** Inspect the actual run via `{{"{{TARGET_RUN_PATH}}"}}` and `db/db.sqlite`; never score from the agent's narrative or chat memory. Quote which file/row/value justified the score.
 - **Fail loud / fail closed.** Missing input → fail (0), don't skip or assume. An eval that errors or finds nothing must register as failure, never as success. A failure caused by missing/broken input is **Bug evidence** — name the missing path in `reasoning` so Pulse routes it to Bug Review/Fixer instead of reading it as a goal regression.
 - **Explicit rubric + thresholds.** State the pass/fail criteria; define what 100 vs 0 means and any partial-credit rule, so scoring is repeatable.
-- **Rubric stability.** Changing scale, thresholds, or rubric changes what scores MEAN across runs. Do it only in a deliberate eval improvement pass (`/improve-evaluation`), record a Decision entry in `builder/improve.html` flagging that score semantics changed, and never bundle it with a workflow behavior or strategy change in the same pass — otherwise before/after comparisons are uninterpretable.
+- **Rubric stability.** Changing scale, thresholds, or rubric changes what scores MEAN across runs. Do it only in a deliberate eval improvement pass (`/improve-evaluation`), record a typed Pulse decision flagging that score semantics changed, and never bundle it with a workflow behavior or strategy change in the same pass — otherwise before/after comparisons are uninterpretable.
 - **Sandbox hygiene.** Eval steps execute in a shared sandbox (`evaluation/runs/iteration-0[/group]`) that is NOT cleaned between evaluations. Read evidence ONLY via `{{"{{TARGET_RUN_PATH}}"}}` (and `db/` for persistent stores); never base a score on files found in the sandbox except facts your own step just extracted. Remember `pre_validation` checks the sandbox, not the target run.
 - **Route-gate** with `applies_to_routes` so an eval only runs for the path the target run actually took.
 - **Cheap checks first.** Presence / format / SQL gates before any expensive model judgment.
@@ -88,7 +88,7 @@ output is the source of truth — there is no separate scoring agent. After the 
 extracts that verdict into `evaluation_report.json` (published under the target run's
 `evaluation/runs/<run_folder>/`) and mirrors the same rows into `db/db.sqlite`'s
 framework-owned `eval_results` table (`run_folder`, `step_id`, `score`, `max_score`,
-`reasoning`, `evidence`), read-only, so `report_health` can surface verdicts via
+`reasoning`, `evidence`), read-only, so Engineering Review can surface verdicts via
 `window.report.query` without a separate measurement step. Never insert into
 `eval_results` from an eval step — it is written by the framework, the same way
 `run_concerns` is.

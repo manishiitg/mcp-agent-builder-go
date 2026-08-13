@@ -27,7 +27,19 @@ import { resolveGroupFolderPath } from '../utils/workflowUtils'
 import { normalizeRunFolder } from '../utils/workflowStateNormalization'
 import { getRawActiveWorkspaceId, getWorkspaceScopedStorageKey } from './useWorkspaceConnectionStore'
 
-export type WorkflowWorkspaceView = 'builder' | 'report' | 'flow' | 'log' | 'soul' | 'files' | null
+export type WorkflowWorkspaceView =
+  | 'builder'
+  | 'report'
+  | 'flow'
+  | 'log'
+  | 'soul'
+  | 'files'
+  | 'costs'
+  | 'execution-logs'
+  | 'learnings'
+  | 'knowledgebase'
+  | 'database'
+  | null
 
 // Layout direction for workflow canvas
 export type LayoutDirection = 'LR' | 'TB'
@@ -84,6 +96,11 @@ function normalizeWorkflowWorkspaceView(view: unknown): WorkflowWorkspaceView {
     case 'flow':
     case 'log':
     case 'files':
+    case 'costs':
+    case 'execution-logs':
+    case 'learnings':
+    case 'knowledgebase':
+    case 'database':
     case null:
       return view
     case 'soul':
@@ -1462,7 +1479,11 @@ export const useWorkflowStore = create<WorkflowStore>()(
         // Check if any events are completion events
         // For workflow mode: workflow_end, request_human_feedback
         // For chat mode: unified_completion, agent_end, conversation_end, etc.
+        // PLAT-064: 'workflow_end' is never emitted by any Go code — kept only so
+        // this doesn't silently regress if it's ever wired up. 'orchestrator_end'
+        // is the real signal (BaseOrchestrator.EmitOrchestratorEnd).
         const completionEventTypes = [
+          'orchestrator_end',
           'workflow_end',
           'request_human_feedback',
           'unified_completion',

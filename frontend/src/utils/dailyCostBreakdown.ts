@@ -70,10 +70,15 @@ export const formatPhaseTitle = (phaseID: string) => {
     .join(' ')
 }
 
-export type StageBucket = 'execution' | 'learning' | 'evaluation' | 'knowledgebase' | 'routing' | 'workshop' | 'other'
+export type StageBucket = 'execution' | 'learning' | 'reflection' | 'evaluation' | 'knowledgebase' | 'routing' | 'workshop' | 'other'
 
 export const classifyPhase = (phase: string): StageBucket => {
   if (phase === 'execution_only') return 'execution'
+  // Must precede the 'learning' check. The reflection turn (PLAT-055) replaced
+  // the separate learning and KB turns, so it writes BOTH stores and belongs in
+  // neither legacy bucket. It gets its own so "what does reflection cost" is
+  // answerable — which is the whole reason the Go side attributes it separately.
+  if (phase === 'reflection') return 'reflection'
   if (phase === 'success_learning' || phase === 'failure_learning' || phase.includes('learning')) return 'learning'
   if (phase === 'evaluation_scoring' || phase.startsWith('evaluation')) return 'evaluation'
   if (phase.startsWith('kb_')) return 'knowledgebase'
@@ -87,6 +92,7 @@ const formatStageLabel = (phase: string, scope?: string) => {
   const labels: Record<StageBucket, string> = {
     execution: 'Execution',
     learning: 'Learning',
+    reflection: 'Reflection',
     evaluation: 'Evaluation',
     knowledgebase: 'Knowledgebase',
     routing: 'Routing',

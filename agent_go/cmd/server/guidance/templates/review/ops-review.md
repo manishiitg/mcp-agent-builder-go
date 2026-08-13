@@ -9,29 +9,28 @@ Focus especially on: {{.Focus}}.{{end}}{{if .RunFolder}}
 
 Use `{{.RunFolder}}` as the primary run folder.{{end}}
 
-1. Load `read_skill(skills=[{"name":"builder-reference","path":"references/post-run-monitor.md"}])`,
-   `read_skill(skills=[{"name":"builder-reference","path":"references/llm-selection.md"}])`, and
-   `read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}])`. These references belong to
-   the parent. Do not pass HTML style, skeleton, CSS, migration, or card-format
-   work to the reviewer.
+1. Load `read_skill(skills=[{"name":"builder-reference","path":"references/pulse-review-fixer.md"}])` and
+   `read_skill(skills=[{"name":"builder-reference","path":"references/llm-selection.md"}])`.
+   These references belong to the parent. Do not pass presentation work to the
+   reviewer; findings are persisted through typed Pulse tools.
 2. Inspect the current trustworthy Goal verdict, resolved workflow/step/eval
    LLM configuration, actual model/tier use, fallbacks, cost ledgers, token
    usage, timing summaries, representative conversation/tool traces, retained
    `efficiency_or_coaching` findings, workflow version, and current
-   backup/publish/notify readiness. Sample comparable earlier runs when needed
-   to establish recurrence; do not open every trace. Use retained evidence, not
+   backup/publish/notify readiness. For a recurrence, prior fix awaiting proof,
+   or claimed cost/quality regression, compare the current run with up to three
+   comparable retained runs (same route/group and materially equivalent
+   configuration). Read compact summaries and ledgers first; open raw traces
+   only for the differing or suspicious step/attempt. If fewer comparable runs
+   remain, state that limitation. Do not open every trace. Use retained evidence, not
    provider assumptions or generic best practices.
 3. Launch exactly one reviewer with
-   `call_generic_agent(todo_id="standalone-ops-review",
-   instructions="READ-ONLY REVIEW ...", preferred_tier=3,
-   module="llm_ops_review")`. Do not pass `pulse_run_id` or `review_run_id`;
-   for this standalone command the backend generates both identities, stores
-   the complete Markdown in SQLite, and files its `CONCERNS:` lines into the
-   structured finding lifecycle. The reviewer must not edit files or config,
+   `run_in_background(name="Standalone Operations Review", instruction="READ-ONLY OPERATIONS REVIEW ...", agent_type="executor")`.
+   The reviewer must not edit files or config,
    create questions, publish, notify, run the workflow, call Pulse module-state
    tools, or launch another agent. It may read only matching
-   LLM/Ops/open-finding regions of `builder/improve.html`; it must not format or
-   write the page. `call_generic_agent` returns an `execution_id` immediately;
+   LLM/Ops/open-finding records from the Pulse backlog; it must not format or
+   write any presentation. `run_in_background` returns an `execution_id` immediately;
    end the current turn and resume only from the automatic completion
    notification.
 4. Require the reviewer to check all of the following agentically:
@@ -48,18 +47,86 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
    not clean. Distinguish proven failure, review candidate, and evidence gap.
    Use judgment to decide necessity, impact, and the recommendation; do not
    assume a deterministic Go detector has already classified the trace.
-5. Reconcile raw ledgers before judging cost. Preserve
-   `date + scope + group_folder + run_folder`. Treat `by_model` as authoritative
-   and `by_step_and_model` as included attribution; never add both. Report a
-   positive remainder as unattributed/orchestrator, do not double-count an
-   explicit `workflow_orchestrator` row, and report overflow, missing buckets,
-   and unpriced calls instead of estimating.
+5. Reconcile raw ledgers before judging cost. For current ledgers, the
+   immutable `execution_id` (or `evaluation_id`) is the record identity;
+   `date + scope + group_folder` locates its shard, while `run_folder` and
+   `archived_run_folder` are display metadata only. Never merge or compare
+   records merely because they share an `iteration-0/...` path: that path is
+   reused after rotation. Use `run_folders` only as a legacy fallback when no
+   ID-keyed record exists. Within each execution record and model, treat
+   `by_model` as authoritative and `by_step_and_model` as included attribution;
+   never add both. Report a positive remainder as unattributed/orchestrator, do
+   not double-count an explicit `workflow_orchestrator` row, and report
+   overflow, missing buckets, and unpriced calls instead of estimating.
 6. Inventory exact model pins in explicit workflow roles and
    planning/evaluation step config. Call `list_provider_models` once per pinned
    provider and compare against its catalog and `default_tier_models`; never
    infer recency from model names. Provider-profile defaults update automatically
    and are not stale pins.
-7. Require a compact result grouped by `cost`, `time`,
+7. Judge structural fitness against the plan-design checklist, which names this
+   module as its owner. Load
+   `read_skill(skills=[{"name":"workflow-commands","path":"references/design-plan.md"}])`
+   and apply **PART 3 — STEP-TYPE FITNESS** to the current plan. (It lives in
+   `workflow-commands`, not `builder-reference`; `builder-reference` carries the
+   different, authoring-time `plan-design.md`.) That checklist's
+   own contract makes this a read-only use: return findings to the parent and
+   edit no workspace file; the Pulse Fixer remains the only writer. Attribute
+   these findings to `llm_ops_review`. Cite the checklist rather than restating
+   it. This is the one review that can judge step shape from *behaviour* instead
+   of description, because it is the only one holding per-step cost, tool-call
+   counts, and full tool-call traces:
+   - **Scripted candidates.** A step whose real tool-call sequence is
+     deterministic and identical in shape across runs is a scripted candidate
+     even when its description reads as agentic. Ground the finding in the trace
+     evidence, never the description alone. Judgment, synthesis, adaptive
+     discovery, and browser/UI work stay agentic; do not propose scripting them
+     to save cost.
+   - **Sequence shape.** Establish where a step's time actually goes before
+     recommending anything, measuring four things separately rather than
+     collapsing them into one: **model turns** (a recorded tool call is not
+     automatically its own round-trip — code-execution mode and batching can
+     issue many underlying calls inside a single model action), **tool-call
+     count**, **payload size** (a large result is not just slow to transfer; it
+     enlarges the context every later turn re-reads, so it can cost more than
+     the call that produced it), and **parallelism** (serial calls that could
+     have run concurrently). Name which of the four dominates, with the
+     measurement, and recommend against that one — batching a step whose cost is
+     really payload growth, or trimming payloads when the real cost is serial
+     round-trips, both spend effort for nothing. Propose merging adjacent steps
+     only when they genuinely share context, and splitting only at a boundary
+     the checklist recognises (credentials/security, independent outputs or
+     retries, clean-room independence, human/routing boundaries, context
+     contamination). "It is long" is not a boundary.
+   - **Schedule execution model.** Inspect enabled schedules as runtime entry
+     points. Route-backed schedules should select planned work via group_names
+     and route_selections. Direct message sequences are also valid when they
+     carry `direct_messages_reason`; measure their prompt/call cost and name the
+     missing step-level lifecycle, but do not call them defective merely for
+     being long. Recommend a route only after verifying matching side effects,
+     approval boundary, failure behavior, and reuse (especially draft-only
+     versus publish routes). Artifact Review owns topology drift; record an Ops
+     finding only for measured cost, latency, or runtime impact.
+   - **Reflection yield.** `reflection:<step-id>` is attributed separately from
+     `execution_only:<step-id>` in the cost ledger, and `reflection-timing.json`
+     sits beside the execution timing files. **A single reflection turn that
+     recorded no learning is not waste** — a turn that examined the run and
+     correctly concluded there was nothing new to record is the mechanism
+     working, and treating it as overhead would penalise honesty and push the
+     next turn toward inventing a learning to look productive. Judge the pattern
+     instead: only where several comparable runs (same route, materially
+     equivalent configuration) each show meaningful reflection cost together
+     with consistently absent contribution — `wrote_learnings`/`wrote_kb` false,
+     corroborated by `has_new_learning` in
+     `learnings/<step-id>/.learning_metadata.json` `detection_history` — is
+     there a finding. Then the recommendation is to sharpen the objective, or
+     drop the step to `learnings_access: "read"` when it should consume but not
+     contribute; not to make the turn faster. State the number of runs the
+     judgment rests on.
+   Any recommendation here still obeys item 8: state current state, exact
+   suggestion, expected benefit, risk, and evidence. A step-type change carries
+   real risk — scripting a step that is not actually deterministic breaks it —
+   so where the trace does not settle it, say so and leave it agentic.
+8. Require a compact result grouped by `cost`, `time`,
    `tool/runtime reliability`, `quality`, and `setup`. Every recommendation
    needs current state, exact suggestion, expected benefit, risk, and evidence.
    Separate evidence gaps from true optimization opportunities. If a material goal criterion is below target,
@@ -74,25 +141,40 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
    model, affected roles/steps, capability/cost/reasoning comparison, expected
    benefit, and risk. A newer model is not automatically better.
    Return a non-HTML packet with `module=llm_ops_review`, `verdict`, `next_check`,
-   and ordered findings. Every finding includes a stable `finding_id`,
-   `target_key`, severity, plain-language summary, exact evidence, bounded
+   and ordered findings. Every finding includes no invented identifier,
+   severity, plain-language summary, exact evidence, bounded
    `recommended_fix`, verification, and `user_judgment_required` with reason.
    A shared harness/runtime/bridge/tool-API defect must be classified as
-   `issue_kind=harness_issue` and carry the exact `PULSE_FINDING_JSON` marker
-   from the injected artifact contract, including expected versus observed and
+   `issue_kind=harness_issue` and be persisted with `record_pulse_finding`
+   under the injected typed review contract, including expected versus observed and
    a minimal safe reproduction or an explicit limitation. Wrong workflow
    arguments, paths, credentials, IDs, and data remain workflow findings. A
    harness issue is platform-owned, not a user-decision request, unless the
    remaining question is genuinely product policy.
-8. Read the persisted result with `get_pulse_state(view="review")` using the exact
-   `review_run_id` and `module` supplied by the completion notification. Validate and
-   deduplicate that result against `builder/improve.html`. As the parent, make
-   one bounded update that refreshes one compact LLM & operations review area
-   with
-   `data-pulse-section="signals" data-module="llm_ops_review"` in that HTML. Do not
-   apply recommendations or create approval cards in this read-only command.
+9. Read the child completion and validate its evidence against the actual
+   artifacts. Do not write Pulse lifecycle state, apply recommendations, or
+   create approval requests in this read-only command.
+
+Include reflection-turn cost as a first-class cost line. Each contributing step
+runs one post-completion reflection turn, and it is not free: a measured Social
+Media run spent **20.1% of all LLM time** there, with short steps at 30–55% of
+their own runtime. Judge yield, not just spend — `learnings/<step-id>/.learning_metadata.json`
+records `has_new_learning` per run in `detection_history`. A step whose recent
+turns produce nothing is paying for an objective that no longer earns it;
+recommend sharpening the objective or dropping the step to
+`learnings_access="read"`. A step producing real technique is working as
+intended however long it takes.
 
 Finish with a short executive summary followed by every evidence-backed
 recommendation in severity order. Identify which exact changes require user
-approval before `/pulse-fixer` can apply them. Do not truncate the result to a
+approval before `/engineering-review` can apply them. Do not truncate the result to a
 Top 3.
+
+Write every `execution_tier`, `execution_llm`, and `declared_execution_mode`
+recommendation so that it can be **stored verbatim as the change's reason**. The
+Fixer that applies it must supply `execution_tier_reason` /
+`execution_llm_reason` / `declared_execution_mode_reason`, and the tool rejects
+the change without one. Your recommendation text is that reason — state current
+state, the exact suggestion, the measured evidence, and the risk in a form that
+survives the handoff into `planning/step_config.json`, which is what the next
+reviewer reads. A recommendation too vague to store is too vague to apply.

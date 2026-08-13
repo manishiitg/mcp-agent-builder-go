@@ -14,7 +14,6 @@ All paths below are relative to the workspace root (prepend the absolute root wh
 | planning/plan.json | Workflow plan — step definitions, descriptions, validation schemas |
 | planning/step_config.json | Step-level config overrides (LLM, execution mode, learnings, etc.) |
 | variables/variables.json | Runtime variables and groups |
-| reports/report_plan.json | Registers live report HTML document(s) under db/reports/ (see persistent-stores design) |
 | soul/soul.md | Stable workflow intent only: objective, success criteria, and optional explicit user-approved constraints. Never store notification preferences, architecture, implementation choices, or agent-inferred assumptions here; notifications belong in `workflow.json`. |
 
 ### Execution Outputs (per run, per group)
@@ -22,8 +21,10 @@ All paths below are relative to the workspace root (prepend the absolute root wh
 |------|----------|
 | runs/{iter}/{group}/execution/{step-id}/ | Step output files (*.json) |
 | runs/{iter}/{group}/execution/Downloads/ | Downloaded files (bank statements, etc.) |
-| costs/execution/{group}/{YYYY-MM-DD}.json | Execution token usage ledger for that group/day |
-| costs/phase/token_usage.json | Aggregated phase-only token usage |
+| costs/execution/{group}/{YYYY-MM-DD}.json | Execution token-usage ledger shard. Current records live under `executions[execution_id]`; `run_folder` is display metadata and `run_folders` is legacy compatibility only. |
+| costs/evaluation/{group}/{YYYY-MM-DD}.json | Evaluation cost ledger shard. Current records live under `evaluations[evaluation_id]`; do not use a reusable run-folder path as identity. |
+| costs/phase/token_usage.json | Token usage for the `planning` phase plus workflow-builder chat interactions ONLY — not a workflow-wide total. Step-execution cost (the bulk of a real run) lives in `costs/execution/`, not here. `input_cost_usd` excludes cache-served tokens by design (`cache_cost_usd` carries their real charge) — a near-zero `input_cost_usd` next to a large `input_tokens` count is expected for a cache-heavy workload, not a pricing defect. |
+| costs/phase/daily/{YYYY-MM-DD}.json | Same narrow phase/model-key scope as `costs/phase/token_usage.json`, rolled up by date. Do not compare its total against `costs/execution/` and infer under/over-counting — the two ledgers cover different, non-overlapping call sets by design. |
 
 ### Execution Logs (per run, per group, per step)
 | Path | Contents |
@@ -74,7 +75,7 @@ Use this order when debugging latency:
 | db/db.sqlite | Workflow state and results — one SQLite database, one table per entity (agentic steps use managed DB tools; saved scripts retain direct compatibility; upsert on the primary key) |
 | db/README.md | Per-table schema contract (DDL, primary key, upsert rule, indexes, writers, consumers) |
 | db/assets/* | Durable media/file assets referenced by db.sqlite rows, reports, or later steps |
-| db/reports/*.html | Live report documents registered from reports/report_plan.json; they read db/db.sqlite through window.report |
+| db/reports/index.html | Complete workflow-owned live report UI; it owns internal navigation and reads db/db.sqlite through window.report |
 | knowledgebase/context/context.md | User-supplied runtime business context that steps with KB read access must respect |
 | knowledgebase/notes/*.md | Per-topic narrative markdown — durable observations discovered by the workflow. Normally written by step agents in direct-write mode; post-step KB agent only when explicitly requested. |
 | knowledgebase/notes/_index.json | Topic registry (covers, size_bytes, section_count, last_updated) kept in sync with notes/*.md |

@@ -1,5 +1,6 @@
 import type { ActiveSessionInfo, TerminalSnapshot } from '../services/api-types'
 import type { CustomPreset, PredefinedPreset } from '../types/preset'
+import { isMainAgentTerminal } from './terminalIdentity'
 
 type WorkflowPreset = CustomPreset | PredefinedPreset
 
@@ -145,7 +146,12 @@ export function liveWorkflowTerminalSessionForPreset(
   title: string,
 ): ActiveSessionInfo | undefined {
   const terminal = sortLiveWorkflowTerminals(terminals)
-    .find(candidate => candidate.session_id && terminalMatchesWorkflowPreset(candidate, preset) && isLiveWorkflowTerminal(candidate))
+    .find(candidate =>
+      candidate.session_id &&
+      isMainAgentTerminal(candidate) &&
+      terminalMatchesWorkflowPreset(candidate, preset) &&
+      isLiveWorkflowTerminal(candidate)
+    )
   return terminal ? activeSessionFromWorkflowTerminal(terminal, { preset, title }) : undefined
 }
 

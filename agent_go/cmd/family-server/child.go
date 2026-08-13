@@ -225,10 +225,13 @@ func runChildTurn(ctx context.Context, s familyState, activityDir string, messag
 
 	sess, err := agentsession.New(ctx, agentsession.Config{
 		Provider: provider,
-		// Child Mode now runs the SAME model and reasoning effort as Parent Mode.
+		// Child Mode runs the same MODEL as Parent Mode, but defaults to lower
+		// reasoning effort (see familyState.ChildFastMode) because a child
+		// waiting reads as breakage rather than thinking. The model choice
+		// below is deliberately unchanged — see why:
 		//
-		// It used to take a deliberately cheaper tier (lowTierModelID — haiku for
-		// Claude Code, composer-2.5 for Cursor) with "low" effort, on the theory
+		// It used to take a deliberately cheaper tier (haiku for Claude Code,
+		// composer-2.5 for Cursor) with "low" effort, on the theory
 		// that short one-at-a-time tutoring turns want latency over depth. That
 		// traded away quality on exactly the judgment that has to be right: how
 		// much to reveal under teaching_mode, whether her answer is actually
@@ -241,8 +244,8 @@ func runChildTurn(ctx context.Context, s familyState, activityDir string, messag
 		// never reach the *-KEY.md answer keys, other activities, or the parent's
 		// connectors. See parent_tools.go on why Child Mode is excluded from the
 		// shared parent manifest.
-		ModelID:         selectedModelID(s.FastMode, provider),
-		ReasoningEffort: "high",
+		ModelID:         selectedModelID(s, provider),
+		ReasoningEffort: selectedReasoningEffort(s.childFastMode(), provider),
 		WorkingDir:      workDir,
 		SystemPrompt:    childSystemPrompt(s.Child, s.ParentLabel, activityDir),
 		// Stable SessionID reuses the warm tmux within this process; SessionHandle
@@ -292,7 +295,7 @@ func runChildTurn(ctx context.Context, s familyState, activityDir string, messag
 	// message the child sends while it's still running can be injected live
 	// (see steer.go) instead of only ever being queued for afterward.
 	registerActiveTurn(activityDir, sess)
-	defer clearActiveTurn()
+	defer clearActiveTurn(activityDir)
 
 	reply, err := sess.Ask(ctx, history)
 	trace.finish(reply, err)
@@ -331,7 +334,10 @@ func runChildTurn(ctx context.Context, s familyState, activityDir string, messag
 		extra = append(extra, enginedetect.ChatMessage{Role: "tool", Tool: "scene", HTML: sceneOut})
 	}
 	persistConversationReplyWithExtras("child", activityDir, messages, reply, extra...)
-	recordActivityLogEntry(activityDir) // powers the "This Week" view (week.go) — deduped per day+activity
+	// powers the "This Week" view (week.go) — accumulates onto today's entry
+	// for this activity; trace.duration() excludes queue wait, not just raw
+	// elapsed time (see its own comment).
+	recordActivityLogEntry(activityDir, trace.duration())
 
 	return parentMessageResponse{Reply: reply, ToolEvents: evs, DebugCalls: debugOut, Scene: sceneOut}
 }

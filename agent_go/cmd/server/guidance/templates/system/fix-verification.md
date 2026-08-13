@@ -2,7 +2,7 @@
 
 The single contract for verifying that a bounded repair actually worked. It is
 the same standard whether the fix is applied inside a Pulse module turn, a
-standalone `/pulse-fixer` command, or a Goal Advisor measurement change. Load it
+manual `/engineering-review` sequence, or a Goal Advisor measurement change. Load it
 before applying any fix, and judge every "fixed" claim against it.
 
 ### Post-change evidence boundary

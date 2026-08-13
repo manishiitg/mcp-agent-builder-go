@@ -105,6 +105,88 @@ func TestWorkflowProgressBridgeNotifiesStepStartAndCompletion(t *testing.T) {
 	}
 }
 
+func TestWorkflowProgressBridgeWaitsForTodoTaskStepCompletion(t *testing.T) {
+	notifier := &recordingExecutionNotifier{}
+	session := &WorkshopChatSession{
+		StepRegistry:      NewWorkshopStepRegistry(),
+		executionNotifier: notifier,
+	}
+	bridge := &workflowProgressBridge{
+		session:   session,
+		parentID:  "workflow-full-123",
+		iteration: "iteration-0",
+		groupName: "default",
+	}
+
+	start := &baseevents.AgentEvent{
+		Type:      orchestrator_events.OrchestratorAgentStart,
+		Timestamp: time.Now(),
+		Data: &orchestrator_events.OrchestratorAgentStartEvent{
+			AgentType: "todo_task_orchestrator",
+			AgentName: "[Route] Execution",
+			StepIndex: 6,
+		},
+	}
+	if err := bridge.HandleEvent(context.Background(), start); err != nil {
+		t.Fatalf("start HandleEvent failed: %v", err)
+	}
+
+	// This is only the end of the LLM turn that launched an asynchronous child.
+	// The workflow step must remain running until the controller has waited for
+	// and reconciled that child.
+	turnEnd := &baseevents.AgentEvent{
+		Type:      orchestrator_events.OrchestratorAgentEnd,
+		Timestamp: time.Now(),
+		Data: &orchestrator_events.OrchestratorAgentEndEvent{
+			AgentType: "todo_task_orchestrator",
+			AgentName: "[Route] Execution",
+			StepIndex: 6,
+			Result:    "execute-allocate was dispatched asynchronously; waiting for completion",
+			Success:   true,
+		},
+	}
+	if err := bridge.HandleEvent(context.Background(), turnEnd); err != nil {
+		t.Fatalf("turn-end HandleEvent failed: %v", err)
+	}
+
+	if len(notifier.completes) != 0 {
+		t.Fatalf("todo-task LLM turn end emitted %d premature completion(s)", len(notifier.completes))
+	}
+	if len(notifier.starts) != 1 {
+		t.Fatalf("expected one running execution, got %d starts", len(notifier.starts))
+	}
+	if exec := session.StepRegistry.Get(notifier.starts[0].ID); exec == nil || exec.Status != WorkshopStepRunning {
+		t.Fatalf("todo-task execution should remain running after turn end, got %#v", exec)
+	}
+
+	stepCompleted := &baseevents.AgentEvent{
+		Type:      orchestrator_events.TodoTaskStepCompleted,
+		Timestamp: time.Now(),
+		Data: &TodoTaskStepCompletedEvent{
+			StepIndex:        6,
+			StepID:           "step-execution-pipeline",
+			StepTitle:        "[Route] Execution",
+			CompletionReason: "all asynchronous routes completed and reconciled",
+		},
+	}
+	if err := bridge.HandleEvent(context.Background(), stepCompleted); err != nil {
+		t.Fatalf("todo-task completion HandleEvent failed: %v", err)
+	}
+
+	if len(notifier.completes) != 1 {
+		t.Fatalf("expected one authoritative completion, got %d", len(notifier.completes))
+	}
+	if notifier.starts[0].ID != notifier.completes[0].id {
+		t.Fatalf("expected start/completion IDs to match, got %q and %q", notifier.starts[0].ID, notifier.completes[0].id)
+	}
+	if got := notifier.completes[0].meta["step_id"]; got != "step-execution-pipeline" {
+		t.Fatalf("step_id metadata = %q, want step-execution-pipeline", got)
+	}
+	if exec := session.StepRegistry.Get(notifier.completes[0].id); exec == nil || exec.Status != WorkshopStepDone {
+		t.Fatalf("todo-task execution should be done after authoritative completion, got %#v", exec)
+	}
+}
+
 func TestWorkflowProgressBridgeNotifiesCompletionWithoutStart(t *testing.T) {
 	notifier := &recordingExecutionNotifier{}
 	session := &WorkshopChatSession{

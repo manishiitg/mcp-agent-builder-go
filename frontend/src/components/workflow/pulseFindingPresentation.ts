@@ -12,9 +12,11 @@ import {
 
 export type PulseFindingQueue =
   | 'needs_action'
+  | 'queued_repair'
   | 'waiting_proof'
   | 'decisions'
   | 'proposals'
+  | 'blocked'
   | 'platform'
   | 'resolved'
   | 'workflow_reported'
@@ -35,6 +37,36 @@ export type PulseFindingProgressStep = {
 
 function readable(value?: string): string {
   return (value || '').trim().replaceAll('_', ' ')
+}
+
+function titleCase(value: string): string {
+  return value.replace(/\b\w/g, (character) => character.toUpperCase())
+}
+
+function latestVerification(finding: PulseFindingLifecycle): PulseFindingVerification | undefined {
+  // The lifecycle API returns verification records newest-first. A historical
+  // passing check must not hide a later failed check on the same finding.
+  return finding.verifications[0]
+}
+
+/**
+ * The raw step_id is the durable origin of a finding. `module` may be a
+ * normalized grouping (for example an old bug_review is grouped under the new
+ * workflow_review), so prefer step_id when naming who actually reported it.
+ */
+export function pulseFindingReporter(
+  finding: PulseFindingLifecycle,
+  groupedModuleLabel?: string,
+): string {
+  const origin = readable(finding.step_id || finding.module)
+  if (finding.phase !== 'review') {
+    return origin ? `Workflow step · ${origin}` : 'Workflow run'
+  }
+  if (!origin) return groupedModuleLabel || 'Pulse reviewer'
+  if (finding.step_id && finding.module && finding.step_id !== finding.module) {
+    return titleCase(origin)
+  }
+  return groupedModuleLabel || titleCase(origin)
 }
 
 export function pulseFindingDisposition(finding: PulseFindingLifecycle): string {
@@ -105,7 +137,7 @@ export function pulseFindingPresentation(finding: PulseFindingLifecycle): PulseF
   }
 
   if (finding.status === 'awaiting_verification') {
-    const failed = finding.verifications.some((verification) => verification.verdict === 'failed')
+    const failed = latestVerification(finding)?.verdict === 'failed'
     return {
       label: failed ? 'Verification failed' : 'Fix applied · needs verification',
       queue: failed ? 'needs_action' : 'waiting_proof',
@@ -124,6 +156,27 @@ export function pulseFindingPresentation(finding: PulseFindingLifecycle): PulseF
       tone: 'warning',
       nextAction: finding.resolution_note?.trim()
         || 'Run the producing workflow again so Pulse can verify the changed behavior.',
+    }
+  }
+
+  if (finding.status === 'queued_for_engineering') {
+    return {
+      label: 'Queued for Pulse',
+      queue: 'queued_repair',
+      tone: 'info',
+      nextAction: finding.resolution_note?.trim()
+        || finding.details?.next_check?.trim()
+        || 'Pulse will select this safe repair in a later Engineering pass.',
+    }
+  }
+
+  if (finding.status === 'open' && latestVerification(finding)?.verdict === 'failed') {
+    return {
+      label: 'Verification failed',
+      queue: 'needs_action',
+      tone: 'danger',
+      nextAction: finding.resolution_note?.trim()
+        || 'The latest verification failed; Pulse must reopen the repair and check it again.',
     }
   }
 
@@ -152,15 +205,58 @@ export function pulseFindingPresentation(finding: PulseFindingLifecycle): PulseF
       }
     }
     if (reason === 'blocked') {
+      // Old records used `blocked` to mean both “cannot act” and “not selected
+      // this pass.” Preserve their useful intent until the new durable queue
+      // state arrives, rather than falsely presenting deferred work as dead.
+      const latest = finding.events[0]?.summary?.toLowerCase() || ''
+      if (/next .*run|needs triage on the next|needs another .*run/.test(latest)) {
+        return {
+          label: 'Waiting for next run',
+          queue: 'waiting_proof',
+          tone: 'warning',
+          nextAction: finding.resolution_note?.trim() || finding.events[0]?.summary || 'A future workflow run will determine the next repair.',
+        }
+      }
+      if (/not attempted|deprioritized|deferred to (a )?future|next engineering pass/.test(latest)) {
+        return {
+          label: 'Queued for Pulse',
+          queue: 'queued_repair',
+          tone: 'info',
+          nextAction: finding.resolution_note?.trim() || finding.events[0]?.summary || 'Pulse will select this safe repair in a later Engineering pass.',
+        }
+      }
       return {
-        label: 'Blocked · no available action',
-        queue: 'platform',
+        label: 'Paused · no safe action',
+        queue: 'blocked',
         tone: 'neutral',
         nextAction: finding.resolution_note?.trim()
           || (finding.reopen_condition?.trim()
             ? `Reopen when ${finding.reopen_condition.trim()}`
             : 'Pulse has diagnosed this issue but has no safe repair path.'),
       }
+    }
+  }
+
+  const advisorModule = finding.step_id || finding.module
+  const advisorFinding = finding.phase === 'review'
+    && ['strategy_auditor', 'goal_advisor'].includes(advisorModule || '')
+  if (advisorFinding && finding.details?.recommended_route !== 'fixer_handoff') {
+    if (finding.details?.recommended_route === 'evidence_wait') {
+      return {
+        label: 'Waiting for evidence',
+        queue: 'proposals',
+        tone: 'info',
+        nextAction: finding.details.next_check?.trim()
+          || 'Pulse must record the exact future evidence boundary before revisiting this recommendation.',
+      }
+    }
+    return {
+      label: 'Untriaged recommendation',
+      queue: 'proposals',
+      tone: 'info',
+      nextAction: finding.details?.recommended_route === 'decision_required'
+        ? 'Pulse must create and link the decision card before asking you to act.'
+        : 'Pulse must classify this recommendation as a decision, evidence wait, or technical handoff before acting.',
     }
   }
 
@@ -179,11 +275,12 @@ export function pulseFindingProgress(finding: PulseFindingLifecycle): PulseFindi
     || finding.events.some((event) => !['filed', 'rediscovered'].includes(event.event_type))
     || presentation.queue === 'decisions'
     || presentation.queue === 'proposals'
+    || presentation.queue === 'blocked'
     || presentation.queue === 'platform'
     || presentation.queue === 'resolved'
   const fixApplied = finding.fix_attempts.some((attempt) => attempt.changed_files.length > 0)
     || ['changed_unverified', 'fixed_verified'].includes(disposition)
-  const verified = finding.verifications.some((verification) => verification.verdict === 'passed')
+  const verified = latestVerification(finding)?.verdict === 'passed'
     || ['fixed_verified', 'verified_no_change'].includes(disposition)
   const closed = presentation.queue === 'resolved'
   const flags = [true, diagnosed, fixApplied, verified, closed]

@@ -66,7 +66,9 @@ func GetWorkspaceMap(docsRoot, chatsFolder string) string {
 
 **Always use absolute paths in shell commands.** The workspace docs root is: ` + "`" + p.DocsRoot + "`" + `. Every absolute path you reference in a shell command MUST start with this exact prefix. The path guard rejects absolute paths under any other host root (` + "`" + "/Users/..." + "`" + `, ` + "`" + "/home/..." + "`" + `) that are not under the docs root. Do NOT prepend the project root, your home directory, or anything else — always use ` + "`" + p.DocsRoot + "`" + ` as the prefix. When tool descriptions show paths like ` + "`" + "Workflow/<name>/" + "`" + `, ` + "`" + "pulse/goals.html" + "`" + `, or ` + "`" + "Chats/<folder>/" + "`" + `, those are LOCAL paths RELATIVE to the docs root; the absolute equivalent is the docs root + that suffix.
 
-**Never use WebFetch/raw GitHub URLs for workspace artifacts, skills, or reference docs.** Files such as ` + "`" + "pulse/goals.html" + "`" + `, ` + "`" + "pulse/org-pulse.html" + "`" + `, ` + "`" + "Workflow/<name>/builder/improve.html" + "`" + `, and ` + "`" + "skills/<name>/SKILL.md" + "`" + ` live on local disk under the docs root above. Read them with the declared local tools/shell, or load canonical reference docs with ` + "`" + "read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/....md\"}])" + "`" + `.
+**Never use WebFetch/raw GitHub URLs for workspace artifacts, skills, or reference docs.** Files such as ` + "`" + "pulse/goals.html" + "`" + `, ` + "`" + "pulse/org-pulse.html" + "`" + `, and ` + "`" + "skills/<name>/SKILL.md" + "`" + ` live on local disk under the docs root above. Read them with the declared local tools/shell, or load canonical reference docs with ` + "`" + "read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/....md\"}])" + "`" + `.
+
+**Pulse storage is SQLite-only.** Use the typed Pulse, finding, review, and human-input tools; the Pulse popup is the only workflow Pulse presentation. Older journal artifacts are retired and must be ignored.
 
 | Path | Access | Purpose |
 |------|--------|---------|
@@ -139,7 +141,7 @@ Keep workflow-related files under the active workflow folder so they stay with t
 
 ` + "```" + `
 ` + absWorkflowFolder + `/
-  reports/                ← report plan and report assets
+  db/reports/index.html   ← complete workflow-owned live report UI
   db/                     ← structured workflow state and results
   knowledgebase/          ← durable narrative knowledge
   runs/                   ← execution outputs
@@ -226,7 +228,7 @@ List workflows with ` + "`execute_shell_command(command: \"ls " + absWorkflow + 
 Each workflow lives in ` + "`" + absWorkflow + `/<name>/` + "`" + ` with:
 
 **Planning & config:**
-- ` + "`soul/soul.md`" + ` — canonical stable workflow intent: ` + "`## Objective`" + `, ` + "`## Success Criteria`" + `, and optional explicit user-approved constraints. Read before review, improve, eval, harden, and ambiguous execution decisions. **Do not store architecture, current step design, provider/tool choices, implementation details, historical decisions, references, agent-inferred assumptions, or notification preferences in soul.md** — per-workflow notification preferences live in workflow.json ` + "`notifications`" + ` (` + "`run_summary_instructions`" + ` and ` + "`run_summary_channels`" + ` for execution outcomes, ` + "`pulse_summary_instructions`" + ` and ` + "`pulse_summary_channels`" + ` for Pulse activity, ` + "`exclude_channels`" + ` for workflow-wide channel opt-outs, and ` + "`block_recipients`" + ` for the email denylist). The backend applies delivery rules automatically, exposes the preferences to Workflow Builder, and supplies them to the Pulse finalizer for their matching notification sends. Those describe the revisable "how" and belong in workflow notification configuration, not soul.md. **Stays Markdown — never create a ` + "`soul.html`" + `, a "readable mirror", or any HTML copy.** It is parsed as Markdown (the framework-health check and run-time objective injection read the ` + "`## Objective`" + ` / ` + "`## Success Criteria`" + ` headings), and Runloop renders it directly in Goal. ` + "`builder/improve.html`" + ` stores time-based review, analysis, and improvement history; it may report evidence-stamped goal progress but must not copy a Goal/Profile card. soul.md is the single source; leave it Markdown.
+- ` + "`soul/soul.md`" + ` — canonical stable workflow intent: ` + "`## Objective`" + `, ` + "`## Success Criteria`" + `, and optional explicit user-approved constraints. Read before review, improve, eval, harden, and ambiguous execution decisions. **Do not store architecture, current step design, provider/tool choices, implementation details, historical decisions, references, agent-inferred assumptions, or notification preferences in soul.md** — per-workflow notification preferences live in workflow.json ` + "`notifications`" + ` (` + "`run_summary_instructions`" + ` and ` + "`run_summary_channels`" + ` for execution outcomes, ` + "`pulse_summary_instructions`" + ` and ` + "`pulse_summary_channels`" + ` for Pulse activity, ` + "`run_summary_recipients`" + ` and ` + "`pulse_summary_recipients`" + ` for WHO each summary is emailed to (empty = the account default recipient), ` + "`run_summary_slack_webhook_secret_names`" + ` and ` + "`pulse_summary_slack_webhook_secret_names`" + ` for WHICH Slack channel(s) each summary posts to — one Incoming Webhook is one channel, so a second channel needs a second webhook secret (empty = the single ` + "`slack_webhook_secret_name`" + `),` + "`exclude_channels`" + ` for workflow-wide channel opt-outs, and ` + "`block_recipients`" + ` for the email denylist). The backend applies delivery rules automatically, exposes the preferences to Workflow Builder, and supplies them to the Pulse finalizer for their matching notification sends. Those describe the revisable "how" and belong in workflow notification configuration, not soul.md. **Stays Markdown — never create a ` + "`soul.html`" + `, a "readable mirror", or any HTML copy.** It is parsed as Markdown (the framework-health check and run-time objective injection read the ` + "`## Objective`" + ` / ` + "`## Success Criteria`" + ` headings), and Runloop renders it directly in Goal. Typed Pulse records store time-based review, analysis, and improvement history; they may report evidence-stamped goal progress but must not copy a Goal/Profile card. soul.md is the single source; leave it Markdown.
 - ` + "`workflow.json`" + ` — workflow-level config: schedules, MCP servers, skills, LLM config, optional ` + "`run_retention_count`" + ` (backup iterations to keep; default 5). May carry legacy optional ` + "`objective`" + ` / ` + "`success_criteria`" + ` fallback values.
 - ` + "`planning/plan.json`" + ` — step definitions (IDs, titles, descriptions, dependencies, validation). It no longer owns root objective/success fields; use ` + "`soul/soul.md`" + ` for that.
 - ` + "`planning/step_config.json`" + ` — per-step settings. Each step's ` + "`agent_configs`" + ` object controls execution mode:
@@ -249,22 +251,20 @@ Each workflow lives in ` + "`" + absWorkflow + `/<name>/` + "`" + ` with:
 - ` + "`runs/iteration-{N}/{group-name}/logs/{step-id}/`" + ` — per-step logs (see Log Layout below). Generated nested routes may use composite folders; inspect the actual directory for those executions.
 
 **Reports & evaluation:**
-- ` + "`reports/report_plan.json`" + ` — registers the workflow's live report HTML document(s)
-- ` + "`db/reports/*.html`" + ` — live report documents rendered by the Report tab; they read ` + "`db/db.sqlite`" + ` through ` + "`window.report`" + `
+- ` + "`db/reports/index.html`" + ` — the complete workflow-owned reporting experience. It reads ` + "`db/db.sqlite`" + ` through ` + "`window.report`" + ` and owns any tabs, sidebar, sections, or scrolling layout; the platform adds no report navigation.
 - ` + "`reports/{group-name}/{timestamp}.md`" + ` — legacy/auxiliary finished-run prose when present; not the live report dashboard contract
 - ` + "`evaluation/runs/{runFolder}/evaluation_report.json`" + ` — evaluation step outputs and evidence (eval pipeline only, separate from normal runs)
 - ` + "`evaluation/runs/iteration-0/`" + ` — ephemeral eval sandbox used during evaluation execution
 
 **Interactive builder / workshop:**
 - ` + "`builder/conversation/YYYY-MM-DD/session-{id}-conversation.json`" + ` — workshop (interactive builder) conversation histories. These are JSON files with ` + "`conversation_history`" + ` entries. User messages have ` + "`Role`" + `=` + "`human`" + `/` + "`user`" + ` and text in ` + "`Parts[].Text`" + `; assistant replies have ` + "`Role`" + `=` + "`ai`" + `/` + "`assistant`" + `. Tool calls/results are interleaved and noisy, so scan from the end for the latest user/assistant text instead of assuming the final JSON entry is the latest user request. Used by workshop agents to avoid repeating failed approaches.
-- ` + "`builder/improve.html`" + ` — the workflow's single durable time-series log and the user's primary window into Pulse history. Read on every improvement turn. One self-contained, human-readable HTML document, newest-on-top: recent runs, issues and reviews, decisions and analysis, fixes and improvements, Goal Advisor decisions, and an Archive Index. It must not duplicate the stable Goal/Profile rendered from ` + "`soul/soul.md`" + `. Legacy Chief of Staff recommendation cards are historical only. Older detail moves to referenced ` + "`builder/improve-archive/YYYY-MM.html`" + ` files. Format: see the **Workflow log conventions**.
-- ` + "`planning/changelog/changelog-YYYY-MM-DD-HH-MM-SS.json`" + ` — per-session log of every plan-mod tool call (` + "`update_*_step`" + `, ` + "`add_*_step`" + `, ` + "`delete_plan_steps`" + `, ` + "`*_todo_task_route`" + `, ` + "`update_validation_schema`" + `, ` + "`update_step_config`" + `). Each entry carries timestamp, tool, the mandatory ` + "`reason`" + ` you supplied at invocation, affected step ids, per-field old/new values, and full JSON of added/deleted steps for revert; Artifact Review later stamps inspected entries with ` + "`artifact_review.done=true`" + ` through ` + "`mark_changelog_artifact_reviewed`" + `. **Read this** before proposing plan edits to see what's already been tried this session and why; complements workflow-level history in ` + "`builder/improve.html`" + ` with per-session, per-mutation detail. Files rotate hourly. Read-only via shell — entries are written automatically by the plan-mod tools, never edit them by hand.
+- ` + "`planning/changelog/changelog-YYYY-MM-DD-HH-MM-SS.json`" + ` — per-session log of every plan-mod tool call (` + "`update_*_step`" + `, ` + "`add_*_step`" + `, ` + "`delete_plan_steps`" + `, ` + "`*_todo_task_route`" + `, ` + "`update_validation_schema`" + `, ` + "`update_step_config`" + `). Each entry carries timestamp, tool, the mandatory ` + "`reason`" + ` you supplied at invocation, affected step ids, per-field old/new values, and full JSON of added/deleted steps for revert; Artifact Review later stamps inspected entries with ` + "`artifact_review.done=true`" + ` through ` + "`mark_changelog_artifact_reviewed`" + `. **Read this** before proposing plan edits to see what's already been tried this session and why; it complements typed Pulse findings with per-session, per-mutation detail. Files rotate hourly. Read-only via shell — entries are written automatically by the plan-mod tools, never edit them by hand.
 
 **Pulse / Goal Advisor framework files (opt-in per workflow):**
-- ` + "`knowledgebase/context/context.md`" + ` and ` + "`knowledgebase/context/examples/`" + ` — user-supplied runtime business context: rules, preferences, constraints, assumptions, examples. Agents append captured context through the ` + "`capture_context`" + ` tool when the user confirms capture (see "Proactive business-context capture" below for the flow). **Excluded** from ` + "`reorganize_knowledgebase`" + ` and ` + "`consolidate_knowledgebase`" + ` passes — user-supplied content is never silently rewritten by the optimizer. Steps with ` + "`knowledgebase_access: read`" + ` (or ` + "`read-write`" + `) automatically have read access — context lives as a sub-section of the knowledgebase. Each capture is also recorded as a **User rule (authoritative)** entry in ` + "`builder/improve.html`" + ` so it's visible in the workflow log.
+- ` + "`knowledgebase/context/context.md`" + ` and ` + "`knowledgebase/context/examples/`" + ` — user-supplied runtime business context: rules, preferences, constraints, assumptions, examples. Agents append captured context through the ` + "`capture_context`" + ` tool when the user confirms capture (see "Proactive business-context capture" below for the flow). **Excluded** from ` + "`reorganize_knowledgebase`" + ` and ` + "`consolidate_knowledgebase`" + ` passes — user-supplied content is never silently rewritten by the optimizer. Steps with ` + "`knowledgebase_access: read`" + ` (or ` + "`read-write`" + `) automatically have read access — context lives as a sub-section of the knowledgebase. Each capture is recorded as a typed authoritative context record so it is visible in Pulse.
 
 **Operating model and oversight:**
-- ` + "`/define-success`" + ` records the confirmed operating-model assessment (primary type, secondary traits, plan stability, runtime mode, business-context accumulation, and cadence) as a dated Decisions and analysis entry in ` + "`builder/improve.html`" + `. It is historical reasoning, not a permanent Goal/Profile card. Reassess it when evidence or user intent changes instead of treating an old classification as an immutable constraint.
+- ` + "`/define-success`" + ` records the confirmed operating-model assessment (primary type, secondary traits, plan stability, runtime mode, business-context accumulation, and cadence) as a typed decision record. It is historical reasoning, not a permanent Goal/Profile card. Reassess it when evidence or user intent changes instead of treating an old classification as an immutable constraint.
 - ` + "`oversight_mode`" + ` (in ` + "`workflow.json`" + `) — ` + "`manual`" + ` (every change gated) | ` + "`supervised`" + ` (low-risk auto, high-risk gated) | ` + "`autonomous`" + ` (all auto). Default: ` + "`supervised`" + `. Hard gate: drives auto-vs-human-approval flow.
 - ` + "`run_retention_count`" + ` (in ` + "`workflow.json`" + `) — optional integer, 1-50. Number of backup run/eval iterations to keep, excluding active ` + "`iteration-0`" + `. Default: 5. Builder, harden, and optimizer agents may raise it when a workflow needs a wider evidence window.
 ### Log Layout (inside ` + "`runs/iteration-{N}/{group-name}/logs/{step-id}/`" + `)
@@ -283,8 +283,8 @@ Each workflow lives in ` + "`" + absWorkflow + `/<name>/` + "`" + ` with:
 - **Variables + groups:** ` + "`execute_shell_command(command: \"cat " + absWorkflow + "/<name>/variables/variables.json\")`" + `
 - **Global workflow learnings:** ` + "`execute_shell_command(command: \"cat " + absWorkflow + "/<name>/learnings/_global/SKILL.md\")`" + `
 - **Saved step code (scripted steps only):** ` + "`execute_shell_command(command: \"cat " + absWorkflow + "/<name>/learnings/<step-id>/main.py\")`" + `
-- **Run logs:** start with ` + "`execute_shell_command(command: \"ls " + absWorkflow + "/<name>/runs/iteration-0/\")`" + ` for the latest active run, then inspect older retained ` + "`iteration-{N}`" + ` folders when improve.html / decision timestamps indicate a relevant before-after window.
-- **Live report plan/docs:** ` + "`execute_shell_command(command: \"cat " + absWorkflow + "/<name>/reports/report_plan.json && find " + absWorkflow + "/<name>/db/reports -maxdepth 1 -type f -name '*.html' -print\")`" + `
+- **Run logs:** start with ` + "`execute_shell_command(command: \"ls " + absWorkflow + "/<name>/runs/iteration-0/\")`" + ` for the latest active run, then inspect older retained ` + "`iteration-{N}`" + ` folders when Pulse decision timestamps indicate a relevant before-after window.
+- **Live report pages:** ` + "`execute_shell_command(command: \"find " + absWorkflow + "/<name>/db/reports -maxdepth 1 -type f -name '*.html' -print\")`" + `
 - **Full config (when needed):** ` + "`execute_shell_command(command: \"cat " + absWorkflow + "/<name>/workflow.json\")`" + `
 
 ### When the user asks about a workflow by name
@@ -299,7 +299,7 @@ Each workflow lives in ` + "`" + absWorkflow + `/<name>/` + "`" + ` with:
    - "What does the workflow know about X?" → ` + "`knowledgebase/context/context.md`" + ` for user-supplied runtime context, then ` + "`knowledgebase/notes/_index.json`" + ` plus selected ` + "`knowledgebase/notes/*.md`" + ` for narratives.
    - "How does the workflow do X?" → ` + "`learnings/_global/SKILL.md`" + `.
    - "Why does the workflow exist / what's its goal?" → ` + "`soul/soul.md`" + ` (objective, success criteria).
-   - "Latest results / most recent report?" → ` + "`reports/report_plan.json`" + ` + ` + "`db/reports/*.html`" + ` for the live dashboard, and ` + "`db/db.sqlite`" + ` for the rows it shows.
+   - "Latest results / most recent report?" → ` + "`db/reports/index.html`" + ` for the live dashboard, and ` + "`db/db.sqlite`" + ` for the rows it shows.
 3. **Synthesize a direct answer** grounded in what you read. If none of the workflow state covers the question, say so explicitly and offer to look elsewhere.
 
 **Do not**: answer a question about a named workflow without first consulting its state, even if the question seems general ("tell me about some recent findings").
@@ -307,7 +307,7 @@ Each workflow lives in ` + "`" + absWorkflow + `/<name>/` + "`" + ` with:
 ### What You Can Do
 - **Reuse global workflow learnings**: ` + "`learnings/_global/SKILL.md`" + ` contains reusable HOW-to-run knowledge for a workflow (how to log into a bank, parsing quirks, tool/API call patterns) — not domain facts or run results. Read it and reuse the guidance in your own delegated tasks for related work.
 - **Reuse saved step scripts**: For ` + "`scripted`" + ` steps, the canonical working script lives at ` + "`learnings/<step-id>/main.py`" + `. Read it to understand what a step does, or borrow patterns into your own scripts.
-- **Inspect recent runs**: ` + "`runs/iteration-0/`" + ` always holds the most recent execution. Older ` + "`runs/iteration-{N}/`" + ` folders are retained history; use them for trends, regressions, and before/after comparisons against builder/improve.html timestamps.
+- **Inspect recent runs**: ` + "`runs/iteration-0/`" + ` always holds the most recent execution. Older ` + "`runs/iteration-{N}/`" + ` folders are retained history; use them for trends, regressions, and before/after comparisons against typed Pulse timestamps.
 - **Use task and Pulse context**: recurring Chief of Staff task findings live in ` + "`pulse/task.html`" + `; factual org-goal and workflow-alignment history lives in ` + "`pulse/org-pulse.html`" + ` and ` + "`pulse/goals.html`" + `.
 
 ## Pulse and Goal Advisor — When to Use the Tools
@@ -327,7 +327,7 @@ Said simply: **plan defines the work and goal; eval plus run evidence shows wher
 
 ### Goal readiness: ` + "`/define-success`" + `
 
-Recurring improvement needs a clear Goal in ` + "`soul/soul.md`" + `, not a permanent profile card in ` + "`builder/improve.html`" + `. ` + "`/define-success`" + ` confirms or repairs the objective and checkable success criteria, records the operating-model assessment as a dated Decisions and analysis entry, and sets the structured ` + "`oversight_mode`" + ` gate.
+Recurring improvement needs a clear Goal in ` + "`soul/soul.md`" + `, not a permanent profile card in Pulse. ` + "`/define-success`" + ` confirms or repairs the objective and checkable success criteria, records the operating-model assessment as a typed decision, and sets the structured ` + "`oversight_mode`" + ` gate.
 
 When ` + "`/improve-evaluation`" + `, ` + "`/strategy-auditor`" + `, or ` + "`/goal-advisor`" + ` finds a missing or vague objective/success criteria in ` + "`soul/soul.md`" + `, redirect to ` + "`/define-success`" + `. Do not block merely because an old Workflow Profile card is absent.
 
@@ -344,11 +344,10 @@ Returns the canonical guided-flow text for any workflow slash command. Always ca
   Builder-mode audits:
     - design-plan            → design review: is the plan following best practices (step types, stores, validation, flow)
 
-  Reviews (recommend, don't apply; appends to ` + "`builder/improve.html`" + `):
+  Reviews (recommend, don't apply; record typed Pulse findings):
     - review-plan            → comprehensive plan audit (structure + per-step descriptions + todo_task orchestrators)
     - review-code            → saved main.py vs step descriptions (drift + browser + dynamism)
     - review-artifact-drift  → plan-changelog-to-artifact drift audit
-    - bug-review             → one-off Pulse QA / logic-bug review; no fixes
     - ops-review             → one agentic cost, time, tool/runtime, model, setup, and plan-design review
     - strategy-auditor       → one-off read-only cross-run plan-versus-goal diagnosis; no Goal Advisor or plan change
 
@@ -376,11 +375,9 @@ Pulse is the single broad maintenance path and owns routine Bug Review, bounded 
 
 ### Resolution discipline
 
-` + "`builder/improve.html`" + ` is the workflow's lightweight published executive journal (format: see the **Workflow log conventions** reference). SQLite is the finding and fix lifecycle source of truth; the Pulse popup is the complete operational tracker. Keep the HTML to Bug/Goal verdicts, one status sentence, reviewer coverage, optional assumptions, three Latest Pulse cells, Open/Fixing/Verify counts, and at most 12 material Activity cards. Do not copy issue queues, checks, attempts, technical tiles, filters, or raw reviewer evidence into it, and do not create a separate review document.
+SQLite is the finding and fix lifecycle source of truth; the Pulse popup is the complete operational tracker. Do not create a separate review document.
 
-**Close-out.** When a fix addresses an existing finding, update its SQLite lifecycle through the provided Pulse tools with the disposition and verification evidence. Add or refresh one short material Activity outcome in ` + "`builder/improve.html`" + ` only when the change matters to the operator; do not recreate the finding record there.
-
-Newest-on-top ordering, retention/archive into ` + "`builder/improve-archive/YYYY-MM.html`" + `, and the one-time migration off the retired ` + "`F-`" + `/` + "`I-`" + ` ids and ` + "```improve-decision" + ` JSON blocks are all covered in the Workflow log conventions — follow those.
+**Close-out.** When a fix addresses an existing finding, update its SQLite lifecycle through the provided Pulse tools with the disposition and verification evidence. The Pulse popup renders the result directly from those records.
 
 ### Honesty rules
 
@@ -406,9 +403,9 @@ There is no slash command for context capture because it should happen naturally
 **Capture flow:**
 1. **Recognize.** Briefly echo the rule back so the user confirms it's accurately captured. Do not write anything until the user confirms.
 2. **Pick a section.** Read ` + "`knowledgebase/context/context.md`" + ` when useful and choose the right ` + "`## <Section>`" + ` heading or propose a new one.
-3. **Capture.** Call ` + "`capture_context`" + ` with ` + "`section`" + ` and ` + "`context_text`" + `. The tool appends the context and records a **User rule (authoritative)** entry in ` + "`builder/improve.html`" + ` so the capture is visible in the log. Marking it user-authoritative is load-bearing — future agents must treat captured context as a hard constraint and never silently rewrite it.
+3. **Capture.** Call ` + "`capture_context`" + ` with ` + "`section`" + ` and ` + "`context_text`" + `. The tool appends the context and records it as **User rule (authoritative)** through typed Pulse tools. Marking it user-authoritative is load-bearing — future agents must treat captured context as a hard constraint and never silently rewrite it.
 4. **Wire affected steps.** If an existing step must apply this context at runtime, update that step through the plan modification tools: set ` + "`knowledgebase_access`" + ` to ` + "`read`" + ` or ` + "`read-write`" + ` and add one sentence to the step description naming the relevant ` + "`knowledgebase/context/context.md`" + ` section/path. Do not copy the whole context file into the description; make the dependency explicit so the step agent knows to read and apply it.
-5. **Confirm.** Tell the user the section + context that was added, which step descriptions/configs were wired, and the User rule entry ` + "`capture_context`" + ` recorded in improve.html.
+5. **Confirm.** Tell the user the section + context that was added, which step descriptions/configs were wired, and the typed User rule receipt returned by ` + "`capture_context`" + `.
 
 **On workflows without confirmed business-context accumulation**: do NOT add context to ` + "`knowledgebase/context/`" + ` unless the user has confirmed that operating-model trait. If the user shares what looks like durable runtime context:
 - For deterministic/compliance-style workflows, the rule probably belongs in ` + "`soul.md`" + `, the eval plan, or a hardened validation check; offer that path.
@@ -432,9 +429,11 @@ The ` + "`Workflow/`" + ` folder is read-only via raw shell writes — but sever
 
 Default mode rule: workflow schedules use ` + "`mode=\"workshop\"`" + `. Do not create direct ` + "`mode=\"workflow\"`" + ` schedules; legacy values are normalized to workshop execution.
 
-**Back up scheduled workflows** — whenever you create a recurring schedule, also arrange a backup so unattended runs persist their state off-box. Load ` + "`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/backup-strategy.md\"}])`" + ` and append a final backup turn to ` + "`messages`" + ` when a schedule has explicit messages. If messages are omitted and the default full-workflow run message is used, add the backup instruction to that message. Confirm before skipping backup on a recurring schedule.
+**Schedule execution-model rule** — prefer a route-backed schedule for durable workflow behavior: create or reuse the owning plan route/step, select it with ` + "`route_selections`" + `, and keep ` + "`messages`" + ` empty so canonical learnings, validation/retry, repair, and Pulse attribution apply. A direct ordered message sequence is also valid for genuinely schedule-specific conversation; record ` + "`direct_messages_reason`" + ` explaining why a route is the wrong abstraction and why its weaker step-level lifecycle is acceptable. Never choose solely from message length. Before mapping draft-only or approval-gated work to a route, verify identical inputs, outputs, side effects, failure behavior, and approval boundary.
 
-**Other config (LLM tiers, MCP servers, skills, secrets, variables, plan steps)** — *not* editable from multi-agent chat. These live in the workshop builder. If the user asks to change LLM config, MCP servers, selected skills, or plan steps, tell them to open the workflow in the canvas / workflow builder. (You can still *read* these fields from ` + "`workflow.json`" + ` to answer questions about them, and you can leave a recommendation in ` + "`builder/improve.html`" + `.)
+**Back up scheduled workflows** — backup behavior belongs to the planned workflow/finalizer, not a copied final message in every schedule. Whenever you create recurring work that mutates durable state, ensure its planned route has the workflow's configured backup behavior; do not append backup shell procedures to schedule messages. Confirm before intentionally skipping the configured backup behavior.
+
+**Other config (LLM tiers, MCP servers, skills, secrets, variables, plan steps)** — *not* editable from multi-agent chat. These live in the workshop builder. If the user asks to change LLM config, MCP servers, selected skills, or plan steps, tell them to open the workflow in the canvas / workflow builder. (You can still *read* these fields from ` + "`workflow.json`" + ` to answer questions about them, and record a recommendation through typed Pulse tools.)
 
 ## Creating New Workflows
 
@@ -868,12 +867,12 @@ func buildSingleWorkflowContext(client *skills.WorkspaceAPIClient, wsPath string
 - Per-step saved scripts: `+"`%s/learnings/{step_id}/main.py`"+` — persistent script for `+"`scripted`"+` steps (source of truth, reused across runs)
 - Knowledgebase: `+"`%s/knowledgebase/`"+` — persistent files across runs
 - Runs: `+"`%s/runs/iteration-0/`"+` is the **active** run; older runs are backed up to monotonic `+"`iteration-{N}/`"+` folders. `+"`workflow.json::run_retention_count`"+` controls how many backups are kept; default 5. Per-run layout: `+"`runs/iteration-{N}/{group}/execution/{step-id}/code/main.py`"+` for working main.py copies.
-- Live report dashboard: `+"`%s/reports/report_plan.json`"+` plus `+"`%s/db/reports/*.html`"+` — HTML documents that read `+"`db/db.sqlite`"+` through `+"`window.report`"+`
+- Live report dashboard: `+"`%s/db/reports/index.html`"+` — one complete HTML experience that reads `+"`db/db.sqlite`"+` through `+"`window.report`"+`, owns its internal navigation, and uses report assets under `+"`%s/db/assets/`"+`
 - Legacy finished-run prose: `+"`%s/reports/{group-name}/{timestamp}.md`"+` — supporting evidence when present, not the live dashboard contract
 - Evaluation reports: `+"`%s/evaluation/runs/{runFolder}/evaluation_report.json`"+`
 - Builder sessions: `+"`%s/builder/conversation/YYYY-MM-DD/session-{id}-conversation.json`"+` — workshop chat histories
-- Improve ledger: `+"`%s/builder/improve.html`"+` — the newest-first Pulse history for issues and reviews, decisions and analysis, and fixes and improvements. Goal comes directly from `+"`soul/soul.md`"+`; do not duplicate a Goal/Profile card here. Older detail may live in referenced `+"`%s/builder/improve-archive/YYYY-MM.html`"+` files.
-- Context store: `+"`%s/knowledgebase/context/context.md`"+` and `+"`%s/knowledgebase/context/examples/`"+` — accumulated user-supplied runtime business context; excluded from KB reorganize/consolidate passes. Each capture is recorded as a User rule card in `+"`builder/improve.html`"+`.
+- Pulse records: `+"`%s/db/db.sqlite`"+` and typed Pulse APIs — current findings, decisions, fixes, reviews, and history. Goal comes directly from `+"`%s/soul/soul.md`"+`; do not duplicate a Goal/Profile card in Pulse.
+- Context store: `+"`%s/knowledgebase/context/context.md`"+` and `+"`%s/knowledgebase/context/examples/`"+` — accumulated user-supplied runtime business context; excluded from KB reorganize/consolidate passes. Each capture is recorded as an authoritative typed context record.
 `, wsPath, wsPath, wsPath, wsPath, wsPath, wsPath, wsPath, wsPath, wsPath, wsPath, wsPath, wsPath, wsPath, wsPath, wsPath, wsPath, wsPath, wsPath))
 
 	// 7. Step folder naming conventions and log file guide

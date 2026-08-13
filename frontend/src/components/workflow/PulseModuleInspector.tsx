@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react'
 import { FileText, ShieldCheck } from 'lucide-react'
 import type { PulseReviewRecord } from '../../services/api-types'
-import { PulseReviewArtifacts } from './PulseReviewArtifacts'
+import { PulseReviewHistory } from './PulseReviewHistory'
 
-type InspectorView = 'summary' | 'raw'
+type InspectorView = 'summary' | 'history'
 
 function formatDate(value?: string): string {
   if (!value) return 'Not recorded'
@@ -40,10 +40,8 @@ function reviewTone(status?: string): string {
 }
 
 /**
- * Reviewer details deliberately contain only the reviewer judgment and the raw
- * forensic report. Findings, fixes, verification, and activity already live in
- * the canonical Issues section above; rendering them again here created a
- * second, more technical issue tracker with independently fetched data.
+ * Reviewer details contain only compact run receipts. Findings, fixes,
+ * verification, and activity live in the canonical Issues section.
  */
 export function PulseModuleInspector({
   workspacePath,
@@ -85,16 +83,16 @@ export function PulseModuleInspector({
         <button
           type="button"
           role="tab"
-          aria-selected={view === 'raw'}
-          onClick={() => setView('raw')}
+          aria-selected={view === 'history'}
+          onClick={() => setView('history')}
           className={`inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-[11px] font-medium transition-colors ${
-            view === 'raw'
+            view === 'history'
               ? 'bg-background text-foreground shadow-sm'
               : 'text-muted-foreground hover:text-foreground'
           }`}
         >
           <FileText className="h-3.5 w-3.5" />
-          Full report
+          Review history
           {moduleReviews.length > 0 && (
             <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] tabular-nums text-muted-foreground">
               {moduleReviews.length}
@@ -125,11 +123,11 @@ export function PulseModuleInspector({
               </div>
               <button
                 type="button"
-                onClick={() => setView('raw')}
+                onClick={() => setView('history')}
                 className="mt-4 inline-flex h-8 items-center gap-1.5 rounded-md border bg-background px-3 text-[11px] font-medium text-foreground hover:bg-muted"
               >
                 <FileText className="h-3.5 w-3.5" />
-                Open full reviewer report
+                View review history
               </button>
             </div>
           ) : (
@@ -142,8 +140,8 @@ export function PulseModuleInspector({
         </div>
       )}
 
-      {view === 'raw' && (
-        <PulseReviewArtifacts
+      {view === 'history' && (
+        <PulseReviewHistory
           workspacePath={workspacePath}
           module={module}
           label={label}

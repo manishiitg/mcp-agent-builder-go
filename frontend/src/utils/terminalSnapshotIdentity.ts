@@ -80,3 +80,69 @@ export function shouldStreamTerminal(terminal: TerminalSnapshot | null): boolean
   }
   return terminal.active || state === 'running' || state === 'idle'
 }
+
+/**
+ * Execution-tree placeholders are navigation entries, not published terminal
+ * transcripts. Fetching /events for one necessarily returns 404 until the
+ * runtime replaces it with a real terminal snapshot.
+ */
+export function shouldLoadTerminalEvents(
+  terminal: TerminalSnapshot | null,
+  usesSessionEvents: boolean,
+  formattedViewRequested: boolean,
+): boolean {
+  return Boolean(
+    formattedViewRequested &&
+    terminal &&
+    !usesSessionEvents &&
+    !terminal.execution_tree_placeholder,
+  )
+}
+
+/** Main-agent transcripts live in the session event store rather than the
+ * per-terminal event endpoint. Hydrate one bounded durable page when the
+ * formatted conversation is opened. A non-empty live tail is not proof that
+ * the beginning was loaded: a reconnect can contain tools and the answer while
+ * omitting the opening user message.
+ */
+export function shouldHydrateMainTerminalEvents(
+  usesSessionEvents: boolean,
+  formattedViewRequested: boolean,
+  _loadedEventCount: number,
+  _restoredHistoryRequired = false,
+  durableHistoryLoaded = false,
+): boolean {
+  return Boolean(
+    usesSessionEvents &&
+    formattedViewRequested &&
+    !durableHistoryLoaded,
+  )
+}
+
+/** Raw tmux output is the primary view. The formatted conversation remains an
+ * explicit per-terminal reading mode whenever structured events are available.
+ */
+export function resolveTerminalFormattedView(
+  canShowFormattedView: boolean,
+  explicitPreference?: boolean,
+): boolean {
+  if (!canShowFormattedView) return false
+  return explicitPreference ?? false
+}
+
+/** A terminal can offer Raw/Formatted even after its live tmux process is
+ * released. Retained raw bytes and main-session events are durable views; a
+ * live tmux_session is only one possible source, not the eligibility rule.
+ */
+export function canToggleTerminalView(
+  terminal: TerminalSnapshot | null,
+  isSynthetic: boolean,
+  hasRawContent: boolean,
+  usesSessionEvents: boolean,
+): boolean {
+  return Boolean(
+    terminal?.terminal_id &&
+    !isSynthetic &&
+    (terminal.tmux_session || hasRawContent || usesSessionEvents),
+  )
+}

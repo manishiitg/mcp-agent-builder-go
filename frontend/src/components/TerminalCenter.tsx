@@ -6,8 +6,12 @@ import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { agentApi } from '../services/api'
 import {
+  canToggleTerminalView,
   mergeTerminalSnapshotBody,
   reconcileTerminalSnapshots,
+  resolveTerminalFormattedView,
+  shouldHydrateMainTerminalEvents,
+  shouldLoadTerminalEvents,
   shouldStreamTerminal,
 } from '../utils/terminalSnapshotIdentity'
 import type { PollingEvent, RuntimeSnapshot, TerminalSnapshot } from '../services/api-types'
@@ -16,13 +20,14 @@ import { normalizeEventViewMode, useChatStore } from '../stores/useChatStore'
 import { useWorkflowStore } from '../stores/useWorkflowStore'
 import { useAppStore } from '../stores/useAppStore'
 import { TERMINAL_REFRESH_REQUEST_EVENT } from '../utils/terminalRefresh'
-import { GEOMETRY_RECONNECT_AFTER_CLOSE, planGeometryChange, planLiveAttachClose, terminalGridNeedsReconnect, terminalReconnectDelayMs, terminalSnapshotCanReconnect, type GeometryChangeStep } from '../utils/terminalReconnect'
+import { GEOMETRY_RECONNECT_AFTER_CLOSE, planGeometryChange, planLiveAttachClose, terminalGridChange, terminalGridNeedsReconnect, terminalReconnectDelayMs, terminalSnapshotCanReconnect, type GeometryChangeStep } from '../utils/terminalReconnect'
 import { terminalPayloadHasVisibleContent } from '../utils/terminalVisibleContent'
 import { useTheme } from '../hooks/useTheme'
+import { useSessionExecutionTree } from '../hooks/useSessionExecutionTree'
 import type { Theme } from '../contexts/ThemeContext'
 import { normalizeAnsiForEmbeddedXterm } from '../utils/ansiSanitize'
 import { preserveTerminalContinuity } from '../utils/terminalContinuity'
-import { isMainAgentTerminal } from '../utils/terminalIdentity'
+import { isMainAgentTerminal, preferredTerminalForContext } from '../utils/terminalIdentity'
 import { hasFreshTerminalDetailBody } from '../utils/terminalDetailFreshness'
 import {
   canonicalTerminalRailSelection,
@@ -38,10 +43,13 @@ import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip'
 import { reconcileTerminalRuntimeState, runtimeDisplayStatus } from '../utils/runtimeActivity'
 import { usePlanData } from './workflow/hooks/usePlanData'
 import { TerminalEventTranscript } from './TerminalEventTranscript'
-import { selectTerminalEvents } from '../utils/terminalEventTranscript'
+import { selectTerminalEvents, toolErrorContextByEventID } from '../utils/terminalEventTranscript'
+import { formatToolCallArguments } from '../utils/toolCallFormatting'
 import type { PlanStep } from '../utils/stepConfigMatching'
 import { requestWorkflowPlanStepFocus } from '../utils/workflowPlanFocus'
 import { mergeNewerTerminalEventPage, mergeTerminalEventPages, terminalEventSequenceBounds } from '../utils/terminalEventPage'
+import { projectExecutionTreeTerminals } from '../utils/terminalExecutionProjection'
+import { hydrateTabEvents } from '../utils/sessionRestore'
 
 // hasAnsiCodes returns true when the string contains at least one CSI escape.
 // Used to decide whether to take the colored-render path or fall back to the
@@ -63,7 +71,20 @@ function hasTerminalRedrawControls(s: string): boolean {
 
 function isTmuxContentSource(source?: string): boolean {
   const normalized = (source || '').trim().toLowerCase()
-  return normalized === 'tmux_pipe' || normalized === 'tmux_capture'
+  return normalized === 'tmux_pipe' || normalized === 'tmux_capture' || normalized === 'tmux_stream'
+}
+
+// xterm invokes write callbacks asynchronously. A React pane can unmount and
+// dispose its terminal before that callback runs; calling scrollToBottom on the
+// disposed instance throws inside xterm and can break the surrounding chat UI.
+function scrollCurrentXtermToBottom(term: XTerm, currentTerm: XTerm | null): boolean {
+  if (currentTerm !== term) return false
+  try {
+    term.scrollToBottom()
+    return true
+  } catch {
+    return false
+  }
 }
 
 interface TerminalCenterProps {
@@ -105,6 +126,15 @@ interface SelectedTerminalEventPage {
   error?: string
 }
 
+interface MainSessionOlderEventPage {
+  sessionId: string | null
+  events: PollingEvent[]
+  loadingOlder: boolean
+  hasOlder?: boolean
+  nextOffset: number
+  error?: string
+}
+
 const EMPTY_SELECTED_TERMINAL_EVENT_PAGE: SelectedTerminalEventPage = {
   terminalId: null,
   events: [],
@@ -112,6 +142,12 @@ const EMPTY_SELECTED_TERMINAL_EVENT_PAGE: SelectedTerminalEventPage = {
   loading: false,
   loadingOlder: false,
   hasOlder: false,
+}
+const EMPTY_MAIN_SESSION_OLDER_EVENT_PAGE: MainSessionOlderEventPage = {
+  sessionId: null,
+  events: [],
+  loadingOlder: false,
+  nextOffset: 0,
 }
 const EMPTY_TERMINAL_EVENTS: PollingEvent[] = []
 const LIVE_ATTACH_RESEED_DEBOUNCE_MS = 150
@@ -882,7 +918,12 @@ function formatSelectedTerminalMeta(terminal: TerminalSnapshot): string {
   // The selected pane already exposes provider/model/transport and execution
   // details in its status area. Keep this header to the minimum orientation
   // context: the title is rendered separately, followed by type and freshness.
-  return [terminalStepTypeLabel(terminal), formatUpdatedAge(terminal)].filter(Boolean).join(' · ')
+  return [
+    terminal.execution_tree_placeholder ? terminal.display_meta : '',
+    terminalStepTypeLabel(terminal),
+    formatStartedAt(terminal),
+    formatUpdatedAge(terminal),
+  ].filter(Boolean).join(' · ')
 }
 
 function findPlanStepByID(steps: PlanStep[] | undefined, stepID: string): PlanStep | null {
@@ -1146,6 +1187,18 @@ function formatUpdatedAge(terminal: TerminalSnapshot): string {
   if (minutes < 60) return `updated ${minutes}m ago`
   const hours = Math.floor(minutes / 60)
   return `updated ${hours}h ago`
+}
+
+function formatStartedAt(terminal: TerminalSnapshot): string {
+  const startedAt = terminalCreatedTime(terminal)
+  if (!startedAt) return ''
+
+  const date = new Date(startedAt)
+  const isToday = date.toDateString() === new Date().toDateString()
+  const time = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  return isToday
+    ? `started ${time}`
+    : `started ${date.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${time}`
 }
 
 function formatRailAge(terminal: TerminalSnapshot): { label: string; title: string } | null {
@@ -1475,7 +1528,7 @@ const LiveAttachXtermPaneInner: React.FC<{
     applyRawXtermTheme(term, xtermTheme)
     terminalRef.current = term
     onScrollToBottomReady?.(() => {
-      term.scrollToBottom()
+      if (!scrollCurrentXtermToBottom(term, terminalRef.current)) return
       onViewportStickChangeRef.current?.(true)
     })
 
@@ -1529,7 +1582,7 @@ const LiveAttachXtermPaneInner: React.FC<{
         if (snapshotContent.trim()) {
           clearXtermSelection(term)
           term.write(buildVisibleScreenReseed(snapshotContent), () => {
-            term.scrollToBottom()
+            if (!scrollCurrentXtermToBottom(term, terminalRef.current)) return
             onViewportStickChangeRef.current?.(true)
           })
           onOutputTextRef.current?.(snapshotContent)
@@ -1789,11 +1842,23 @@ const LiveAttachXtermPaneInner: React.FC<{
           return
         }
 
-        const needsReconnect = terminalGridNeedsReconnect(
-          { cols: term.cols, rows: term.rows },
-          fit.proposeDimensions(),
-          { cols: RAW_XTERM_MIN_FIT_COLS, rows: RAW_XTERM_MIN_FIT_ROWS },
-        )
+        const currentGrid = { cols: term.cols, rows: term.rows }
+        const proposedGrid = fit.proposeDimensions()
+        const minimumGrid = { cols: RAW_XTERM_MIN_FIT_COLS, rows: RAW_XTERM_MIN_FIT_ROWS }
+        const gridChange = terminalGridChange(currentGrid, proposedGrid, minimumGrid)
+
+        // Vertical layout changes do not alter line wrapping. Resize xterm and
+        // tmux over the existing socket so the browser's accumulated history is
+        // retained. Reconnecting here used to send a RIS seed, clearing all
+        // xterm scrollback; Claude's alternate-screen TUI commonly has
+        // tmux history_size=0, so there was nothing with which to restore it.
+        if (gridChange === 'rows-only' && wsRef.current?.readyState === WebSocket.OPEN) {
+          fitRawXtermToVisibleGrid(fit)
+          wsRef.current.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
+          return
+        }
+
+        const needsReconnect = terminalGridNeedsReconnect(currentGrid, proposedGrid, minimumGrid)
         const steps = planGeometryChange({
           hasSocket: Boolean(wsRef.current),
           alreadyPending: resizeReconnectPending,
@@ -1877,7 +1942,7 @@ const LiveAttachXtermPaneInner: React.FC<{
       setConnectionState('snapshot')
       clearXtermSelection(term)
       term.write(buildVisibleScreenReseed(content), () => {
-        term.scrollToBottom()
+        if (!scrollCurrentXtermToBottom(term, terminalRef.current)) return
         onViewportStickChangeRef.current?.(true)
       })
       return
@@ -1901,7 +1966,7 @@ const LiveAttachXtermPaneInner: React.FC<{
       lastVisibleReseedRef.current = { content, at: Date.now() }
       clearXtermSelection(currentTerm)
       currentTerm.write(buildSettledScreenReseed(content), () => {
-        currentTerm.scrollToBottom()
+        if (!scrollCurrentXtermToBottom(currentTerm, terminalRef.current)) return
         onViewportStickChangeRef.current?.(true)
       })
     }, waitMs)
@@ -2049,7 +2114,7 @@ const StaticXtermPaneInner: React.FC<{
     terminalRef.current = term
     fitRef.current = fit
     onScrollToBottomReady?.(() => {
-      term.scrollToBottom()
+      if (!scrollCurrentXtermToBottom(term, terminalRef.current)) return
       onViewportStickChangeRef.current?.(true)
     })
 
@@ -2121,7 +2186,7 @@ const StaticXtermPaneInner: React.FC<{
       } catch {
         // ignore
       }
-      term.scrollToBottom()
+      if (!scrollCurrentXtermToBottom(term, terminalRef.current)) return
       onViewportStickChangeRef.current?.(true)
     })
   }, [content])
@@ -2339,6 +2404,9 @@ interface TerminalErrorBannerEntry {
   message: string
   timestamp?: string
   terminalID?: string
+  toolName?: string
+  toolServer?: string
+  toolArguments?: string
 }
 
 const TERMINAL_ERROR_MESSAGE_LIMIT = 220
@@ -2359,6 +2427,32 @@ function extractErrorMessage(event: unknown): string {
     if (typeof v === 'string' && v.trim()) return v
   }
   return ''
+}
+
+function TerminalErrorExpandedDetails({ entry, maxHeightClass }: {
+  entry: TerminalErrorBannerEntry
+  maxHeightClass: string
+}) {
+  return (
+    <div className={`mt-1 space-y-2 overflow-y-auto rounded border border-red-900/45 bg-red-950/25 p-2 font-mono text-[11px] leading-4 text-red-200 ${maxHeightClass}`}>
+      {(entry.toolName || entry.toolServer) && (
+        <div>
+          <div className="font-sans text-[10px] font-semibold uppercase tracking-wide text-red-300/70">Tool</div>
+          <div className="break-all">{entry.toolName || 'tool'}{entry.toolServer ? ` · ${entry.toolServer}` : ''}</div>
+        </div>
+      )}
+      {entry.toolArguments && (
+        <div>
+          <div className="font-sans text-[10px] font-semibold uppercase tracking-wide text-red-300/70">Arguments</div>
+          <pre className="whitespace-pre-wrap break-words">{entry.toolArguments}</pre>
+        </div>
+      )}
+      <div>
+        <div className="font-sans text-[10px] font-semibold uppercase tracking-wide text-red-300/70">Error</div>
+        <div className="whitespace-pre-wrap break-words">{entry.message}</div>
+      </div>
+    </div>
+  )
 }
 
 function eventErrorParts(event: PollingEvent): {
@@ -2503,6 +2597,16 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
   // filtering by currentSessionId surfaces this chat's workflow steps
   // without leaking terminals from other chat tabs / unrelated workflows.
   const viewAll = false
+  // A foreground turn can finish before its asynchronous child starts. Keep
+  // polling while the surrounding session still expects activity; stopping on
+  // a briefly idle tree between dispatch and child registration would miss the
+  // later child and recreate the invisibility bug. Once the session is settled,
+  // the hook still polls for as long as the tree itself reports live work.
+  const { data: sessionExecutionTree } = useSessionExecutionTree(
+    currentSessionId,
+    !!currentSessionId,
+    hasPendingTerminalActivity,
+  )
   const [terminals, setTerminals] = useState<TerminalSnapshot[]>([])
   const [runtimeStatesBySession, setRuntimeStatesBySession] = useState<Record<string, RuntimeSnapshot>>({})
   // archivedTurnContents caches `:turn-N` snapshot bodies so we can stitch
@@ -2535,8 +2639,10 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
   const [error, setError] = useState<string | null>(null)
   const [terminalActionBusy, setTerminalActionBusy] = useState<string | null>(null)
   const [debugPanelOpenForID, setDebugPanelOpenForID] = useState<string | null>(null)
+  const [errorPanelOpenForID, setErrorPanelOpenForID] = useState<string | null>(null)
   const [debugText, setDebugText] = useState<string>('')
   const debugMenuRef = useRef<HTMLDivElement | null>(null)
+  const errorMenuRef = useRef<HTMLDivElement | null>(null)
 
   const activeWorkflowPath = useGlobalPresetStore(state => {
     const activeWorkflowId = state.activePresetIds.workflow
@@ -2554,14 +2660,28 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
     const tab = state.activeTabId ? state.chatTabs[state.activeTabId] : undefined
     return normalizeEventViewMode(tab?.viewMode ?? state.eventViewModePreference)
   })
+  const selectedTabRequiresHistoryHydration = useChatStore(state => {
+    const tab = state.activeTabId ? state.chatTabs[state.activeTabId] : undefined
+    return Boolean(tab?.sessionId === currentSessionId && tab?.metadata?.isViewOnly)
+  })
   const terminalWorkflowPathFilter = isWorkflowTerminalContext ? activeWorkflowPath : null
   const { plan: terminalWorkflowPlan } = usePlanData(terminalWorkflowPathFilter)
 
   const sessionEvents = useChatStore(state => (
     currentSessionId ? state.tabEvents[currentSessionId] : undefined
   ))
+  const sessionHasMoreOlderEvents = useChatStore(state => (
+    currentSessionId ? (state.tabHasMoreOlderEvents[currentSessionId] ?? false) : false
+  ))
   const [selectedTerminalEventPage, setSelectedTerminalEventPage] = useState<SelectedTerminalEventPage>(
     EMPTY_SELECTED_TERMINAL_EVENT_PAGE,
+  )
+  // Main-agent events live in the session stream rather than the per-terminal
+  // cursor endpoint. Keep older pages locally: they are only needed while the
+  // user has explicitly opened this Conversation, and should not bloat every
+  // other consumer of the session-wide store.
+  const [mainSessionOlderEventPage, setMainSessionOlderEventPage] = useState<MainSessionOlderEventPage>(
+    EMPTY_MAIN_SESSION_OLDER_EVENT_PAGE,
   )
   const selectedTerminalEventPageRef = useRef(selectedTerminalEventPage)
   const terminalEventRequestGenerationRef = useRef(0)
@@ -2569,6 +2689,11 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
   useEffect(() => {
     selectedTerminalEventPageRef.current = selectedTerminalEventPage
   }, [selectedTerminalEventPage])
+  useEffect(() => {
+    setMainSessionOlderEventPage(current => (
+      current.sessionId === currentSessionId ? current : EMPTY_MAIN_SESSION_OLDER_EVENT_PAGE
+    ))
+  }, [currentSessionId])
   useEffect(() => {
     setDismissedErrorIDs(readDismissedTerminalErrorIDs(currentSessionId))
   }, [currentSessionId])
@@ -2633,6 +2758,7 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
     const byTerminalID = new Map<string, TerminalErrorBannerEntry[]>()
     const global: TerminalErrorBannerEntry[] = []
     if (!sessionEvents || sessionEvents.length === 0) return { global, byTerminalID }
+    const toolErrorContexts = toolErrorContextByEventID(sessionEvents)
     const seen = new Set<string>()
     for (let i = sessionEvents.length - 1; i >= 0; i--) {
       const evt = sessionEvents[i] as unknown as { id?: string; type?: string; timestamp?: string }
@@ -2640,23 +2766,30 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
       const id = evt.id || `${evt.type}-${i}`
       if (dismissedErrorIDs.has(id)) continue
       const message = extractErrorMessage(evt) || evt.type.replace(/_/g, ' ')
+      const toolContext = toolErrorContexts.get(id)
       const terminal = resolveErrorTerminal(sessionEvents[i], terminals)
       const terminalID = terminal ? terminalPaneKey(terminal) : undefined
       const dedupeKey = `${terminalID || 'global'}:${evt.type}:${compactTerminalErrorMessage(message)}`
       if (seen.has(dedupeKey)) continue
       seen.add(dedupeKey)
-      const entry = { id, type: evt.type, message, timestamp: evt.timestamp, terminalID }
+      const entry: TerminalErrorBannerEntry = {
+        id,
+        type: evt.type,
+        message,
+        timestamp: evt.timestamp,
+        terminalID,
+        toolName: toolContext?.name,
+        toolServer: toolContext?.server,
+        toolArguments: toolContext?.args
+          ? formatToolCallArguments(toolContext.args).text
+          : undefined,
+      }
       if (terminalID) {
         const items = byTerminalID.get(terminalID) || []
-        if (items.length < 2) {
-          items.push(entry)
-          byTerminalID.set(terminalID, items)
-        }
-      } else if (global.length < 3) {
+        items.push(entry)
+        byTerminalID.set(terminalID, items)
+      } else {
         global.push(entry)
-      }
-      if (global.length >= 3 && byTerminalID.size >= terminals.length) {
-        break
       }
     }
     return { global, byTerminalID }
@@ -2881,6 +3014,27 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
     }
   }, [debugPanelOpenForID])
 
+  // Error details use the same compact header-menu interaction as terminal
+  // diagnostics. Keeping the menu out of the terminal body avoids covering
+  // live output or changing the tmux viewport whenever a noisy run records an
+  // expected/recoverable tool failure.
+  useEffect(() => {
+    if (!errorPanelOpenForID) return
+    const handleMouseDown = (event: MouseEvent) => {
+      if (errorMenuRef.current?.contains(event.target as Node)) return
+      setErrorPanelOpenForID(null)
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setErrorPanelOpenForID(null)
+    }
+    document.addEventListener('mousedown', handleMouseDown)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', handleMouseDown)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [errorPanelOpenForID])
+
   const selectTerminalFromRail = useCallback((terminal: TerminalSnapshot) => {
     const key = terminalPaneKey(terminal)
     setSelectedID(key)
@@ -2993,7 +3147,8 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
   }, [clearableNonRunningTerminals, dismissTerminal])
 
   const groupedTerminals = useMemo(() => {
-    const uniqueTerminals = dedupeTerminalsByID(terminals)
+    const projectedTerminals = projectExecutionTreeTerminals(terminals, sessionExecutionTree)
+    const uniqueTerminals = dedupeTerminalsByID(projectedTerminals)
     const railTerminals = uniqueTerminals.filter(isRailVisibleTerminal)
     // Selection always sees the complete terminal set. Rail filters only affect
     // navigation, so changing a filter cannot make the active pane jump.
@@ -3033,7 +3188,7 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
       visibleGroups,
       sectionCounts,
     }
-  }, [terminals, terminalRailFilter, terminalRailSearch, selectedID])
+  }, [terminals, sessionExecutionTree, terminalRailFilter, terminalRailSearch, selectedID])
   const terminalFocusActive = activeEventViewMode === 'terminal'
   const currentMainTerminal = useMemo(
     () => groupedTerminals.currentTerminals.find(terminal => isMainAgentTerminal(terminal)) || null,
@@ -3088,7 +3243,11 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
     const selected = groupedTerminals.orderedTerminals.find(terminal => terminalPaneKey(terminal) === selectedID)
     const userSelected = groupedTerminals.orderedTerminals.find(terminal => terminalPaneKey(terminal) === userSelectedID)
     const latestActive = groupedTerminals.activeTerminals[0]
-    const preferredTerminal = currentMainTerminal || latestActive || groupedTerminals.currentTerminals[0] || groupedTerminals.orderedTerminals[0]
+    const preferredTerminal = preferredTerminalForContext(
+      currentMainTerminal,
+      [latestActive, groupedTerminals.currentTerminals[0], groupedTerminals.orderedTerminals[0]],
+      isWorkflowTerminalContext,
+    )
 
     const canonicalSelected = canonicalTerminalRailSelection(groupedTerminals.logicalGroups, selected)
     if (selected && canonicalSelected && canonicalSelected.terminal_id !== selected.terminal_id) {
@@ -3121,10 +3280,10 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
       return
     }
 
-    if (!selectedID || !selected) {
+    if ((!selectedID || !selected) && preferredTerminal) {
       setSelectedID(terminalPaneKey(preferredTerminal))
     }
-  }, [currentMainTerminal, groupedTerminals, selectedID, userSelectedID])
+  }, [currentMainTerminal, groupedTerminals, isWorkflowTerminalContext, selectedID, userSelectedID])
 
   const selectedTerminal = useMemo(
     () => {
@@ -3233,22 +3392,15 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
     },
     [selectedTerminalView, priorArchivedTurns, archivedTurnContents],
   )
-  // Tmux terminals the user switched to the formatted view. A tmux pane shows
+  // Per-terminal explicit view choices. Raw tmux is the default; a tmux pane shows
   // raw TUI bytes, but the same turn is ALSO emitted as structured events
   // (tool_call_start/end with arguments, llm_generation_end with the answer) --
   // that is what the transcript renders for structured providers. Both views
   // describe the same run, so which one is useful is a reading choice, not a
-  // property of the transport. Kept per terminal id and not persisted: it is a
-  // way to look at something, not a setting.
-  const [formattedViewTerminalIDs, setFormattedViewTerminalIDs] = useState<Set<string>>(() => new Set())
-  const toggleFormattedView = useCallback((terminalID: string) => {
-    setFormattedViewTerminalIDs(current => {
-      const next = new Set(current)
-      if (next.has(terminalID)) next.delete(terminalID)
-      else next.add(terminalID)
-      return next
-    })
-  }, [])
+  // property of the transport. Coding-agent TUIs commonly use tmux's alternate
+  // screen (history_size=0), so the durable transcript remains available for
+  // both parent and child agents when the user explicitly selects it.
+  const [formattedViewPreferences, setFormattedViewPreferences] = useState<Record<string, boolean>>({})
   const selectedTerminalIsSynthetic = selectedTerminalView ? isSyntheticTerminal(selectedTerminalView) : false
   const selectedTerminalIsTmux = Boolean(
     selectedTerminalView &&
@@ -3261,9 +3413,27 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
   const selectedTerminalUsesSessionEvents = Boolean(
     selectedTerminalView && isMainAgentTerminal(selectedTerminalView),
   )
+  // The toggle describes an available view, not already-loaded data. In
+  // particular, restored Schedule tabs intentionally start with no event
+  // history; hiding the toggle in that state made Formatted unreachable.
+  const canShowFormattedView = canToggleTerminalView(
+    selectedTerminalView,
+    selectedTerminalIsSynthetic,
+    Boolean(selectedTerminalDisplayContent),
+    selectedTerminalUsesSessionEvents,
+  )
+  const showFormattedView = resolveTerminalFormattedView(
+    canShowFormattedView,
+    selectedTerminalID ? formattedViewPreferences[selectedTerminalID] : undefined,
+  )
+  const selectedTerminalCanLoadEvents = shouldLoadTerminalEvents(
+    selectedTerminalView,
+    selectedTerminalUsesSessionEvents,
+    selectedTerminalIsSynthetic || showFormattedView,
+  )
 
   const loadSelectedTerminalEventPage = useCallback(async () => {
-    if (!selectedTerminalID || selectedTerminalUsesSessionEvents) return
+    if (!selectedTerminalID || !selectedTerminalCanLoadEvents) return
 
     terminalEventRefreshInFlightRef.current = false
     const generation = ++terminalEventRequestGenerationRef.current
@@ -3298,23 +3468,159 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
         error: loadError instanceof Error ? loadError.message : 'Failed to load conversation events.',
       })
     }
-  }, [selectedTerminalID, selectedTerminalUsesSessionEvents])
+  }, [selectedTerminalCanLoadEvents, selectedTerminalID])
 
   useEffect(() => {
     terminalEventRequestGenerationRef.current++
     terminalEventRefreshInFlightRef.current = false
-    if (!selectedTerminalID || selectedTerminalUsesSessionEvents) {
-      setSelectedTerminalEventPage(EMPTY_SELECTED_TERMINAL_EVENT_PAGE)
+    if (!selectedTerminalID || !selectedTerminalCanLoadEvents) {
+      // Switching back to Raw must not fetch or discard transcript data. Clear
+      // only when selection moved to another terminal.
+      if (selectedTerminalEventPageRef.current.terminalId !== selectedTerminalID) {
+        setSelectedTerminalEventPage(EMPTY_SELECTED_TERMINAL_EVENT_PAGE)
+      }
       return
     }
+    const currentPage = selectedTerminalEventPageRef.current
+    if (currentPage.terminalId === selectedTerminalID && currentPage.loaded) return
     void loadSelectedTerminalEventPage()
-  }, [loadSelectedTerminalEventPage, selectedTerminalID, selectedTerminalUsesSessionEvents])
+  }, [loadSelectedTerminalEventPage, selectedTerminalCanLoadEvents, selectedTerminalID])
+
+  const [mainEventHydration, setMainEventHydration] = useState<{
+    sessionId: string | null
+    loading: boolean
+    loaded?: boolean
+    error?: string
+  }>({ sessionId: null, loading: false })
+
+  const loadMainSessionEvents = useCallback(async () => {
+    if (!currentSessionId) return
+    setMainEventHydration({ sessionId: currentSessionId, loading: true })
+    try {
+      await hydrateTabEvents(currentSessionId, {
+        workspacePath: activeWorkflowPath || undefined,
+        fallbackToChatHistory: true,
+        preferChatHistory: selectedTabRequiresHistoryHydration,
+      })
+      setMainEventHydration({ sessionId: currentSessionId, loading: false, loaded: true })
+    } catch (loadError) {
+      setMainEventHydration({
+        sessionId: currentSessionId,
+        loading: false,
+        error: loadError instanceof Error ? loadError.message : 'Failed to load conversation events.',
+      })
+    }
+  }, [activeWorkflowPath, currentSessionId, selectedTabRequiresHistoryHydration])
+
+  useEffect(() => {
+    if (!shouldHydrateMainTerminalEvents(
+      selectedTerminalUsesSessionEvents,
+      showFormattedView,
+      sessionEvents?.length ?? 0,
+      selectedTabRequiresHistoryHydration,
+      mainEventHydration.sessionId === currentSessionId && !!mainEventHydration.loaded,
+    )) return
+    if (mainEventHydration.sessionId === currentSessionId && mainEventHydration.loading) return
+    void loadMainSessionEvents()
+  }, [
+    currentSessionId,
+    loadMainSessionEvents,
+    mainEventHydration.loaded,
+    mainEventHydration.loading,
+    mainEventHydration.sessionId,
+    selectedTabRequiresHistoryHydration,
+    selectedTerminalUsesSessionEvents,
+    sessionEvents?.length,
+    showFormattedView,
+  ])
+
+  const mainSessionHasOlderEvents = mainSessionOlderEventPage.sessionId === currentSessionId &&
+    mainSessionOlderEventPage.hasOlder !== undefined
+    ? mainSessionOlderEventPage.hasOlder
+    : sessionHasMoreOlderEvents
+
+  const loadOlderMainSessionEvents = useCallback(async () => {
+    if (!currentSessionId || !mainSessionHasOlderEvents || mainSessionOlderEventPage.loadingOlder) return
+
+    const sessionId = currentSessionId
+    const offset = mainSessionOlderEventPage.sessionId === sessionId
+      ? mainSessionOlderEventPage.nextOffset
+      : 0
+    setMainSessionOlderEventPage(current => (
+      current.sessionId === sessionId
+        ? { ...current, loadingOlder: true, error: undefined }
+        : {
+            sessionId,
+            events: [],
+            loadingOlder: true,
+            hasOlder: undefined,
+            nextOffset: offset,
+          }
+    ))
+    try {
+      // Request the full session page. selectTerminalEvents below already
+      // removes events owned by sibling terminals; fetching the full page is
+      // what makes the offset a stable cursor instead of skipping history that
+      // the generic chat working set happened to filter out.
+      const response = await agentApi.getSessionEvents(sessionId, undefined, {
+        limit: TERMINAL_EVENT_PAGE_LIMIT,
+        offset,
+        workingSet: 'all',
+      })
+      setMainSessionOlderEventPage(current => {
+        if (current.sessionId !== sessionId) return current
+        const pageEvents = response.events || []
+        return {
+          ...current,
+          events: mergeTerminalEventPages(current.events, pageEvents),
+          loadingOlder: false,
+          hasOlder: response.has_more,
+          // Offset advances through the server's full page even when a later
+          // terminal-selection filter hides some entries from this view.
+          nextOffset: offset + pageEvents.length,
+        }
+      })
+    } catch (loadError) {
+      setMainSessionOlderEventPage(current => current.sessionId === sessionId
+        ? {
+            ...current,
+            loadingOlder: false,
+            error: loadError instanceof Error ? loadError.message : 'Failed to load older conversation events.',
+          }
+        : current)
+    }
+  }, [currentSessionId, mainSessionHasOlderEvents, mainSessionOlderEventPage.loadingOlder, mainSessionOlderEventPage.nextOffset, mainSessionOlderEventPage.sessionId])
+
+  const toggleFormattedView = useCallback((terminalID: string, currentlyFormatted: boolean) => {
+    const nextFormatted = !currentlyFormatted
+    setFormattedViewPreferences(current => ({
+      ...current,
+      [terminalID]: nextFormatted,
+    }))
+    if (shouldHydrateMainTerminalEvents(
+      selectedTerminalUsesSessionEvents,
+      nextFormatted,
+      sessionEvents?.length ?? 0,
+      selectedTabRequiresHistoryHydration,
+      mainEventHydration.sessionId === currentSessionId && !!mainEventHydration.loaded,
+    )) {
+      void loadMainSessionEvents()
+    }
+  }, [
+    currentSessionId,
+    loadMainSessionEvents,
+    mainEventHydration.loaded,
+    mainEventHydration.sessionId,
+    selectedTabRequiresHistoryHydration,
+    selectedTerminalUsesSessionEvents,
+    sessionEvents?.length,
+  ])
 
   const refreshSelectedTerminalEvents = useCallback(async () => {
     const page = selectedTerminalEventPageRef.current
     if (
       !selectedTerminalID ||
-      selectedTerminalUsesSessionEvents ||
+      !selectedTerminalCanLoadEvents ||
       page.terminalId !== selectedTerminalID ||
       !page.loaded ||
       page.loading ||
@@ -3351,13 +3657,13 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
         terminalEventRefreshInFlightRef.current = false
       }
     }
-  }, [selectedTerminalID, selectedTerminalUsesSessionEvents])
+  }, [selectedTerminalCanLoadEvents, selectedTerminalID])
 
   // Detailed child events do not enter the session-wide store. Poll only the
   // selected live transcript, and do one final refresh whenever its terminal
   // snapshot changes or settles.
   useEffect(() => {
-    if (!selectedTerminalID || selectedTerminalUsesSessionEvents) return
+    if (!selectedTerminalID || !selectedTerminalCanLoadEvents) return
     void refreshSelectedTerminalEvents()
     if (!isSelectedTerminalStreaming) return
     const interval = window.setInterval(
@@ -3369,7 +3675,7 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
     isSelectedTerminalStreaming,
     refreshSelectedTerminalEvents,
     selectedTerminalID,
-    selectedTerminalUsesSessionEvents,
+    selectedTerminalCanLoadEvents,
     selectedTerminalView?.chunk_index,
     selectedTerminalView?.updated_at,
   ])
@@ -3378,7 +3684,7 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
     const page = selectedTerminalEventPageRef.current
     if (
       !selectedTerminalID ||
-      selectedTerminalUsesSessionEvents ||
+      !selectedTerminalCanLoadEvents ||
       page.terminalId !== selectedTerminalID ||
       page.loadingOlder ||
       !page.hasOlder ||
@@ -3418,29 +3724,19 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
           }
         : current)
     }
-  }, [selectedTerminalID, selectedTerminalUsesSessionEvents])
+  }, [selectedTerminalCanLoadEvents, selectedTerminalID])
 
   const selectedTerminalEventSource = selectedTerminalUsesSessionEvents
-    ? sessionEvents
+    ? mergeTerminalEventPages(
+        mainSessionOlderEventPage.sessionId === currentSessionId ? mainSessionOlderEventPage.events : [],
+        sessionEvents || [],
+      )
     : selectedTerminalEventPage.terminalId === selectedTerminalID
       ? selectedTerminalEventPage.events
       : EMPTY_TERMINAL_EVENTS
   const selectedTerminalEvents = useMemo(
     () => selectTerminalEvents(selectedTerminalEventSource, selectedTerminalView, terminals),
     [selectedTerminalEventSource, selectedTerminalView, terminals],
-  )
-  const selectedTerminalHasEvents = useMemo(
-    () => selectedTerminalEvents.length > 0,
-    [selectedTerminalEvents],
-  )
-  // Offer the toggle only when there is something to switch TO. A tmux terminal
-  // with no captured events would render an empty transcript, which reads as a
-  // broken view rather than an empty one.
-  const canShowFormattedView = Boolean(
-    selectedTerminalIsTmux && selectedTerminalID && selectedTerminalHasEvents,
-  )
-  const showFormattedView = Boolean(
-    canShowFormattedView && selectedTerminalID && formattedViewTerminalIDs.has(selectedTerminalID),
   )
   const selectedTerminalHasPreValidationEvent = useMemo(
     () => selectedTerminalEvents.some(event => event.type === 'pre_validation_completed'),
@@ -3526,6 +3822,7 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
 
   useEffect(() => {
     if (!selectedTerminalView || useLiveAttachForSelected) return
+    if (selectedTerminalView.execution_tree_placeholder) return
     const detailKey = terminalDetailCacheKey(selectedTerminalView)
     const cached = terminalDetailCacheRef.current[detailKey]
     // selectedTerminalView may contain a deliberately stale cached body to
@@ -3643,6 +3940,12 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
   const selectedTerminalErrors = selectedTerminalView
     ? terminalErrorsByID.get(terminalPaneKey(selectedTerminalView)) || []
     : []
+  const selectedTerminalErrorEntries = selectedTerminalView
+    ? [...selectedTerminalErrors, ...sessionErrorBanner]
+    : []
+  const selectedTerminalErrorPanelKey = selectedTerminalView
+    ? terminalPaneKey(selectedTerminalView)
+    : null
   const railSpinner = useSpinnerFrame(groupedTerminals.activeTerminals.length > 0)
   const selectedTerminalSpinner = useSpinnerFrame(isSelectedTerminalStreaming)
 
@@ -3907,8 +4210,8 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
             // gives no clue which one finished last. Nothing in the icon or the
             // tooltip carried a time at all. Surface the age so recency is
             // readable without destabilising the order.
-            title={`${title} · ${viewLabel} · ${terminalStateDescription(terminal)} · ${formatUpdatedAge(terminal)}`}
-            aria-label={`Open ${title} in ${viewLabel}, ${terminalStateDescription(terminal)}, ${formatUpdatedAge(terminal)}`}
+            title={`${title} · ${terminal.display_meta ? `${terminal.display_meta} · ` : ''}${viewLabel} · ${terminalStateDescription(terminal)} · ${formatUpdatedAge(terminal)}`}
+            aria-label={`Open ${title}${terminal.display_meta ? `, ${terminal.display_meta}` : ''} in ${viewLabel}, ${terminalStateDescription(terminal)}, ${formatUpdatedAge(terminal)}`}
           >
             <span className="relative inline-flex h-5 w-5 items-center justify-center rounded border border-neutral-700/80 bg-neutral-900/90">
               <TerminalTypeGlyph terminal={terminal} className="h-3 w-3" />
@@ -4171,54 +4474,6 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
           </div>
         )}
 
-        {/* Error disclosure must not participate in terminal layout. A height
-            change makes live xterm reconnect at a new grid and clears the
-            scrollback the user is currently reading. */}
-        {sessionErrorBanner.length > 0 && (
-          <div
-            className="absolute left-2 right-2 top-2 z-[70] flex max-h-[min(40vh,20rem)] flex-col gap-1 overflow-y-auto rounded border border-red-900/55 bg-red-950/95 px-3 py-2 shadow-xl backdrop-blur-sm sm:left-16"
-            data-testid="terminal-global-error-overlay"
-          >
-            {sessionErrorBanner.map(entry => {
-              const isOpen = expandedErrorIDs.has(entry.id)
-              return (
-              <div key={entry.id} className="text-xs text-red-300">
-                <div className="flex min-w-0 items-center gap-2">
-                  <span className="shrink-0 rounded bg-red-900/35 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-red-200">
-                    {entry.type.replace(/_/g, ' ')}
-                  </span>
-                  <span className="min-w-0 flex-1 truncate leading-5" title={entry.message}>
-                    {compactTerminalErrorMessage(entry.message)}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => toggleTerminalError(entry.id)}
-                    className="shrink-0 rounded border border-red-800/60 px-2 py-0.5 text-[10px] font-medium text-red-200 hover:bg-red-900/35"
-                    aria-expanded={isOpen}
-                  >
-                    {isOpen ? 'Close' : 'Open'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => dismissTerminalError(entry.id)}
-                    className="shrink-0 rounded p-0.5 text-red-400/60 hover:bg-red-900/35 hover:text-red-200"
-                    title="Dismiss"
-                    aria-label="Dismiss error"
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </div>
-                {isOpen && (
-                  <div className="mt-1 max-h-32 overflow-y-auto rounded border border-red-900/45 bg-red-950/25 p-2 font-mono text-[11px] leading-4 text-red-200">
-                    {entry.message}
-                  </div>
-                )}
-              </div>
-              )
-            })}
-          </div>
-        )}
-
         {!error && terminals.length === 0 && routingDecisions.length === 0 && (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 py-12 text-center">
             <Terminal className="h-10 w-10 text-neutral-700" strokeWidth={1.25} />
@@ -4319,7 +4574,7 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                       {canShowFormattedView && selectedTerminalID && (
                         <button
                           type="button"
-                          onClick={() => toggleFormattedView(selectedTerminalID)}
+                          onClick={() => toggleFormattedView(selectedTerminalID, showFormattedView)}
                           aria-pressed={showFormattedView}
                           className={`inline-flex items-center gap-1 rounded px-1.5 py-1 text-[10px] font-medium transition-colors ${
                             showFormattedView
@@ -4327,14 +4582,14 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                               : 'text-neutral-500 hover:bg-neutral-800/80 hover:text-neutral-100'
                           }`}
                           title={showFormattedView
-                            ? 'Showing the formatted conversation. Switch back to the raw terminal.'
-                            : 'Show the formatted conversation (tool calls and replies) instead of the raw terminal.'}
+                            ? 'Showing the readable conversation. Click to inspect the technical terminal.'
+                            : 'Showing the technical terminal. Click to return to the readable conversation.'}
                         >
-                          {showFormattedView ? <Terminal className="h-3.5 w-3.5" /> : <Braces className="h-3.5 w-3.5" />}
-                          <span>{showFormattedView ? 'Raw' : 'Formatted'}</span>
+                          {showFormattedView ? <Braces className="h-3.5 w-3.5" /> : <Terminal className="h-3.5 w-3.5" />}
+                          <span>{showFormattedView ? 'Conversation' : 'Terminal'}</span>
                         </button>
                       )}
-                      {selectedTerminalIsTmux && (
+                      {selectedTerminalIsTmux && !showFormattedView && (
                         <>
                           <button
                             type="button"
@@ -4359,6 +4614,102 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                             )}
                           </button>
                         </>
+                      )}
+                      {selectedTerminalErrorEntries.length > 0 && selectedTerminalErrorPanelKey && (
+                        <div ref={errorMenuRef} className="relative inline-flex">
+                          <button
+                            type="button"
+                            onMouseDown={event => event.preventDefault()}
+                            onClick={() => setErrorPanelOpenForID(current => (
+                              current === selectedTerminalErrorPanelKey ? null : selectedTerminalErrorPanelKey
+                            ))}
+                            className={`relative inline-flex items-center justify-center rounded border p-1 transition-colors hover:bg-red-950/40 hover:text-red-100 ${
+                              errorPanelOpenForID === selectedTerminalErrorPanelKey
+                                ? 'border-red-700/80 bg-red-950/45 text-red-200'
+                                : 'border-red-900/70 text-red-300'
+                            }`}
+                            title={`${selectedTerminalErrorEntries.length} captured error${selectedTerminalErrorEntries.length === 1 ? '' : 's'}`}
+                            aria-label={`Show ${selectedTerminalErrorEntries.length} captured error${selectedTerminalErrorEntries.length === 1 ? '' : 's'}`}
+                            aria-haspopup="menu"
+                            aria-expanded={errorPanelOpenForID === selectedTerminalErrorPanelKey}
+                            data-testid="terminal-error-indicator"
+                          >
+                            <AlertTriangle className="h-3.5 w-3.5" />
+                            <span className="absolute -right-1.5 -top-1.5 min-w-3.5 rounded-full bg-red-600 px-1 text-center text-[9px] font-semibold leading-3.5 text-white tabular-nums">
+                              {selectedTerminalErrorEntries.length > 99 ? '99+' : selectedTerminalErrorEntries.length}
+                            </span>
+                          </button>
+                          {errorPanelOpenForID === selectedTerminalErrorPanelKey && (
+                            <div
+                              role="menu"
+                              className="absolute right-0 top-full z-[80] mt-1 flex max-h-[min(55vh,28rem)] w-[min(34rem,calc(100vw-5rem))] flex-col overflow-hidden rounded-lg border border-red-900/70 bg-[#171313] text-xs text-neutral-200 shadow-2xl"
+                              data-testid="terminal-error-menu"
+                            >
+                              <div className="flex items-center justify-between border-b border-red-950 px-3 py-2">
+                                <div className="flex items-center gap-2 font-medium text-red-200">
+                                  <AlertTriangle className="h-3.5 w-3.5" />
+                                  <span>Captured errors</span>
+                                  <span className="rounded bg-red-950 px-1.5 py-0.5 text-[10px] tabular-nums text-red-300">
+                                    {selectedTerminalErrorEntries.length}
+                                  </span>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => setErrorPanelOpenForID(null)}
+                                  className="rounded p-1 text-neutral-500 hover:bg-neutral-800 hover:text-neutral-100"
+                                  aria-label="Close captured errors"
+                                >
+                                  <X className="h-3.5 w-3.5" />
+                                </button>
+                              </div>
+                              <div className="flex min-h-0 flex-col gap-1 overflow-y-auto p-2">
+                                {selectedTerminalErrorEntries.map(entry => {
+                                  const isOpen = expandedErrorIDs.has(entry.id)
+                                  return (
+                                    <div key={entry.id} className="rounded border border-red-950/90 bg-red-950/20 p-2 text-red-200">
+                                      <div className="flex min-w-0 items-center gap-2">
+                                        <span className="shrink-0 rounded bg-red-900/35 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-red-200">
+                                          {entry.type.replace(/_/g, ' ')}
+                                        </span>
+                                        {entry.toolName && (
+                                          <span className="max-w-40 shrink truncate font-mono text-[10px] text-red-200/75" title={entry.toolName}>
+                                            {entry.toolName}
+                                          </span>
+                                        )}
+                                        <span className="min-w-0 flex-1 truncate leading-5" title={entry.message}>
+                                          {compactTerminalErrorMessage(entry.message)}
+                                        </span>
+                                        <button
+                                          type="button"
+                                          onClick={() => toggleTerminalError(entry.id)}
+                                          className="shrink-0 rounded border border-red-800/60 px-2 py-0.5 text-[10px] font-medium text-red-200 hover:bg-red-900/35"
+                                          aria-expanded={isOpen}
+                                        >
+                                          {isOpen ? 'Less' : 'Details'}
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            dismissTerminalError(entry.id)
+                                            if (selectedTerminalErrorEntries.length === 1) setErrorPanelOpenForID(null)
+                                          }}
+                                          className="shrink-0 rounded p-0.5 text-red-400/60 hover:bg-red-900/35 hover:text-red-200"
+                                          title="Dismiss"
+                                          aria-label="Dismiss terminal error"
+                                        >
+                                          <X className="h-3 w-3" />
+                                        </button>
+                                      </div>
+                                      {isOpen && (
+                                        <TerminalErrorExpandedDetails entry={entry} maxHeightClass="max-h-48" />
+                                      )}
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       )}
                       {hasTerminalDebugActions(selectedTerminalView) && (
                         <div ref={debugMenuRef} className="relative inline-flex">
@@ -4600,55 +4951,15 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                       {terminalPreValidationSummary(selectedTerminalView)}
                     </div>
                   )}
-                  {/* Keep scoped errors over the viewport rather than above it.
-                      Opening, closing, or dismissing one must not resize tmux. */}
                   <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-                    {selectedTerminalErrors.length > 0 && (
-                    <div
-                      className="absolute left-2 right-2 top-2 z-30 flex max-h-[min(40vh,20rem)] flex-col gap-1 overflow-y-auto rounded border border-red-900/55 bg-red-950/95 px-3 py-2 shadow-xl backdrop-blur-sm"
-                      data-testid="terminal-scoped-error-overlay"
-                    >
-                      {selectedTerminalErrors.map(entry => {
-                        const isOpen = expandedErrorIDs.has(entry.id)
-                        return (
-                          <div key={entry.id} className="text-xs text-red-300">
-                            <div className="flex min-w-0 items-center gap-2">
-                              <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-red-300" aria-hidden />
-                              <span className="shrink-0 rounded bg-red-900/35 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-red-200">
-                                {entry.type.replace(/_/g, ' ')}
-                              </span>
-                              <span className="min-w-0 flex-1 truncate leading-5" title={entry.message}>
-                                {compactTerminalErrorMessage(entry.message)}
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() => toggleTerminalError(entry.id)}
-                                className="shrink-0 rounded border border-red-800/60 px-2 py-0.5 text-[10px] font-medium text-red-200 hover:bg-red-900/35"
-                                aria-expanded={isOpen}
-                              >
-                                {isOpen ? 'Close' : 'Open'}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => dismissTerminalError(entry.id)}
-                                className="shrink-0 rounded p-0.5 text-red-400/60 hover:bg-red-900/35 hover:text-red-200"
-                                title="Dismiss"
-                                aria-label="Dismiss terminal error"
-                              >
-                                <X className="h-3 w-3" />
-                              </button>
-                            </div>
-                            {isOpen && (
-                              <div className="mt-1 max-h-40 overflow-y-auto rounded border border-red-900/45 bg-red-950/25 p-2 font-mono text-[11px] leading-4 text-red-200">
-                                {entry.message}
-                              </div>
-                            )}
-                          </div>
-                        )
-                      })}
-                    </div>
-                    )}
-                    {selectedTerminalIsSynthetic || showFormattedView ? (
+                    {selectedTerminalView?.execution_tree_placeholder ? (
+                      <TerminalWaitingPane
+                        className="min-w-0 flex-1 overflow-hidden overscroll-contain"
+                        contentRef={terminalOutputRef as React.RefObject<HTMLDivElement | null>}
+                        xtermTheme={rawXtermTheme}
+                        message="This asynchronous agent is running. Its detailed terminal will appear here as soon as the runtime publishes it."
+                      />
+                    ) : selectedTerminalIsSynthetic || showFormattedView ? (
                     // Clean view always renders the real event stream. Never
                     // substitute the legacy parsed-row card: it is not the
                     // conversation UI and can carry stale sibling metadata.
@@ -4661,12 +4972,22 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                       events={selectedTerminalEventSource}
                       terminal={selectedTerminalView}
                       siblingTerminals={terminals}
-                      loading={!selectedTerminalUsesSessionEvents && selectedTerminalEventPage.loading}
-                      loadingOlder={!selectedTerminalUsesSessionEvents && selectedTerminalEventPage.loadingOlder}
-                      hasOlder={!selectedTerminalUsesSessionEvents && selectedTerminalEventPage.hasOlder}
-                      error={!selectedTerminalUsesSessionEvents ? selectedTerminalEventPage.error : undefined}
-                      onLoadOlder={!selectedTerminalUsesSessionEvents ? loadOlderSelectedTerminalEvents : undefined}
-                      onRetry={!selectedTerminalUsesSessionEvents ? loadSelectedTerminalEventPage : undefined}
+                      loading={selectedTerminalUsesSessionEvents
+                        ? mainEventHydration.sessionId === currentSessionId && mainEventHydration.loading
+                        : selectedTerminalEventPage.loading}
+                      loadingOlder={selectedTerminalUsesSessionEvents
+                        ? mainSessionOlderEventPage.loadingOlder
+                        : selectedTerminalEventPage.loadingOlder}
+                      hasOlder={selectedTerminalUsesSessionEvents
+                        ? mainSessionHasOlderEvents
+                        : selectedTerminalEventPage.hasOlder}
+                      error={selectedTerminalUsesSessionEvents
+                        ? (mainSessionOlderEventPage.error || (mainEventHydration.sessionId === currentSessionId ? mainEventHydration.error : undefined))
+                        : selectedTerminalEventPage.error}
+                      onLoadOlder={selectedTerminalUsesSessionEvents ? loadOlderMainSessionEvents : loadOlderSelectedTerminalEvents}
+                      onRetry={selectedTerminalUsesSessionEvents
+                        ? (mainSessionOlderEventPage.error ? loadOlderMainSessionEvents : loadMainSessionEvents)
+                        : loadSelectedTerminalEventPage}
                     />
                   ) : stableLiveAttachId && stableLiveAttachKey ? (
                     <LiveAttachXtermPane

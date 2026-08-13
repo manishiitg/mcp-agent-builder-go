@@ -14,11 +14,12 @@ import (
 	"time"
 
 	virtualtools "github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
+	storeevents "github.com/manishiitg/coding-agent-loop/agent_go/internal/events"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/terminals"
-	step_based_workflow "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
-	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/pulsemodules"
+	todo_creation_human "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/schedulerstate"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workflowtypes"
+	"github.com/robfig/cron/v3"
 )
 
 func TestBuildScheduleCronExpressionAlwaysSetsTimezone(t *testing.T) {
@@ -177,6 +178,36 @@ func TestScheduleStateLockKeyFromRuntimeKey(t *testing.T) {
 	multiAgentKey := multiAgentScheduleRuntimeKey("user-1", "daily")
 	if got := scheduleStateLockKeyFromRuntimeKey(multiAgentKey); got != multiAgentKey {
 		t.Fatalf("multi-agent lock key = %q, want %q", got, multiAgentKey)
+	}
+	pulseKey := workflowScheduleRuntimeKey("/tmp/Workflow/demo", manualWorkflowPulseScheduleID)
+	wantPulse := strings.Join([]string{"workflow-pulse", "/tmp/Workflow/demo"}, scheduleScopeSeparator)
+	if got := scheduleStateLockKeyFromRuntimeKey(pulseKey); got != wantPulse {
+		t.Fatalf("Pulse lock key = %q, want %q", got, wantPulse)
+	}
+}
+
+func TestPulseAndWorkflowScheduleUseSeparateDurableLanes(t *testing.T) {
+	store, err := schedulerstate.Open(filepath.Join(t.TempDir(), "schedule-state.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	svc := NewSchedulerService(nil)
+	svc.stateStore = store
+	manifest := &WorkflowManifest{ID: "demo"}
+	pulse := buildScheduleContext("Workflow/demo", manifest, WorkflowSchedule{ID: manualWorkflowPulseScheduleID})
+	daily := buildScheduleContext("Workflow/demo", manifest, WorkflowSchedule{ID: "daily"})
+	now := time.Now().UTC()
+
+	if err := svc.claimScheduleRun(context.Background(), pulse, "pulse-run", now); err != nil {
+		t.Fatalf("claim Pulse lane: %v", err)
+	}
+	if err := svc.claimScheduleRun(context.Background(), daily, "daily-run", now); err != nil {
+		t.Fatalf("workflow schedule should coexist with Pulse/chat lane: %v", err)
+	}
+	if err := svc.claimScheduleRun(context.Background(), daily, "second-daily-run", now); err == nil {
+		t.Fatal("second workflow schedule unexpectedly acquired the workflow lane")
 	}
 }
 
@@ -595,6 +626,125 @@ func TestWorkflowScheduleListExposesWorkshopMode(t *testing.T) {
 	}
 }
 
+// TestUpdateScheduleClearsMessagesOnlyWhenExplicitlySet pins PLAT-097:
+// update_schedule(messages=[]) or update_schedule(messages=null) must clear a
+// schedule's messages back to the route-based default, and omitting the field
+// entirely must leave existing messages untouched. Before the fix, all three
+// cases collapsed to the same "messages == nil" value downstream, so an
+// explicit clear silently no-oped — the schedule reported success but
+// workflow.json kept the full prior array, with no way to migrate a
+// message-based schedule to the canonical route-backed model without
+// deleting and recreating it (losing get_schedule_runs history).
+func TestUpdateScheduleClearsMessagesOnlyWhenExplicitlySet(t *testing.T) {
+	workspacePath := "Workflow/social-media"
+	newManifest := func() *WorkflowManifest {
+		return &WorkflowManifest{
+			SchemaVersion: WorkflowManifestSchemaVersion,
+			ID:            "social-media",
+			Label:         "Social Media",
+			Schedules: []WorkflowSchedule{
+				{
+					ID:             "run-schedule",
+					Name:           "Daily publish",
+					CronExpression: "0 9 * * *",
+					Timezone:       "Asia/Kolkata",
+					Enabled:        true,
+					GroupNames:     []string{"group-1"},
+					Mode:           "workshop",
+					WorkshopMode:   "run",
+					Messages:       []string{"Run the full workflow using run_full_workflow(group_name=\"group-1\")"},
+				},
+			},
+		}
+	}
+
+	setup := func(t *testing.T) (*todo_creation_human.SchedulerCallbacks, func() []string) {
+		t.Helper()
+		manifest := newManifest()
+		manifestJSON, err := json.Marshal(manifest)
+		if err != nil {
+			t.Fatalf("marshal manifest: %v", err)
+		}
+		variablesJSON, err := json.Marshal(VariablesManifest{
+			Groups: []VariableGroup{{Name: "group-1", Enabled: true, Values: map[string]string{}}},
+		})
+		if err != nil {
+			t.Fatalf("marshal variables manifest: %v", err)
+		}
+		mock := &mockWorkspaceAPI{files: map[string]string{
+			workspacePath + "/workflow.json":            string(manifestJSON),
+			workspacePath + "/variables/variables.json": string(variablesJSON),
+		}}
+		workspace := httptest.NewServer(mock)
+		t.Cleanup(workspace.Close)
+		t.Setenv("WORKSPACE_API_URL", workspace.URL)
+
+		callbacks := (&StreamingAPI{}).buildSchedulerCallbacks()
+		currentMessages := func() []string {
+			mock.mu.Lock()
+			content := mock.files[workspacePath+"/workflow.json"]
+			mock.mu.Unlock()
+			var current WorkflowManifest
+			if err := json.Unmarshal([]byte(content), &current); err != nil {
+				t.Fatalf("unmarshal persisted manifest: %v", err)
+			}
+			return current.Schedules[0].Messages
+		}
+		return callbacks, currentMessages
+	}
+
+	t.Run("omitting messages leaves existing messages untouched", func(t *testing.T) {
+		callbacks, currentMessages := setup(t)
+		if _, err := callbacks.UpdateSchedule(context.Background(), "run-schedule", "", "", "", nil, false, nil, false, nil, "", nil, false, nil, "", nil); err != nil {
+			t.Fatalf("UpdateSchedule() error = %v", err)
+		}
+		if got := currentMessages(); len(got) != 1 {
+			t.Fatalf("messages = %v, want unchanged 1-item array", got)
+		}
+	})
+
+	// Both interactive_workshop_manager.go's append-loop parser and
+	// workflow_schedule_tools.go's stringSlice() helper turn a JSON []
+	// (empty array) into a nil Go slice, same as an explicit JSON null — so
+	// this is the shape that actually reaches UpdateSchedule for messages=[]
+	// through the primary (workshop) tool path. setMessages=true is what
+	// must carry the "clear" intent, since messages itself is
+	// indistinguishable from "omitted".
+	t.Run("explicit empty array clears messages (nil-slice parsing shape)", func(t *testing.T) {
+		callbacks, currentMessages := setup(t)
+		if _, err := callbacks.UpdateSchedule(context.Background(), "run-schedule", "", "", "", nil, false, nil, false, nil, "", nil, true, nil, "", nil); err != nil {
+			t.Fatalf("UpdateSchedule() error = %v", err)
+		}
+		if got := currentMessages(); len(got) != 0 {
+			t.Fatalf("messages = %v, want cleared to empty", got)
+		}
+	})
+
+	// workflow_schedule_tools.go's stringSlice() helper produces a non-nil
+	// empty slice for messages=[] specifically (unlike the workshop path
+	// above) — pin that setMessages, not messages' nil-ness, is what
+	// UpdateSchedule must trust either way.
+	t.Run("explicit empty array clears messages (non-nil empty-slice parsing shape)", func(t *testing.T) {
+		callbacks, currentMessages := setup(t)
+		if _, err := callbacks.UpdateSchedule(context.Background(), "run-schedule", "", "", "", nil, false, nil, false, nil, "", []string{}, true, nil, "", nil); err != nil {
+			t.Fatalf("UpdateSchedule() error = %v", err)
+		}
+		if got := currentMessages(); len(got) != 0 {
+			t.Fatalf("messages = %v, want cleared to empty", got)
+		}
+	})
+
+	t.Run("explicit null clears messages", func(t *testing.T) {
+		callbacks, currentMessages := setup(t)
+		if _, err := callbacks.UpdateSchedule(context.Background(), "run-schedule", "", "", "", nil, false, nil, false, nil, "", nil, true, nil, "", nil); err != nil {
+			t.Fatalf("UpdateSchedule() error = %v", err)
+		}
+		if got := currentMessages(); len(got) != 0 {
+			t.Fatalf("messages = %v, want cleared to empty", got)
+		}
+	})
+}
+
 func TestShouldUpdateChiefTaskReport(t *testing.T) {
 	tests := []struct {
 		name string
@@ -752,37 +902,31 @@ func TestWithChiefTaskRunContextSkipsOrgPulse(t *testing.T) {
 
 func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 	steps := postRunMonitorSteps()
-	if got := len(steps); got != 6 {
-		t.Fatalf("postRunMonitorSteps() length = %d, want 6", got)
+	if got := len(steps); got != 3 {
+		t.Fatalf("postRunMonitorSteps() length = %d, want 3", got)
 	}
-	for i, want := range []string{"gate", "workflow-review", "strategy-auditor", "goal-advisor", "dashboard", "finalize"} {
+	for i, want := range []string{"gate", "review-fix", "finalize"} {
 		if got := steps[i].label; got != want {
 			t.Fatalf("postRunMonitorSteps()[%d].label = %q, want %q", i, got, want)
 		}
 	}
-	workflowReview := steps[1].query
+	reviewFix := steps[1].query
 	for _, want := range []string{
-		"one continuous context",
-		"ordered lenses",
-		"correctness and safe exploratory QA",
-		"plan/changelog and artifact drift",
-		"report and eval truthfulness",
-		"learnings, knowledgebase, and database contracts",
-		"complete skill-package purity",
-		"effective read-write learning_objective",
-		"cost, time, model selection, tool/runtime reliability",
-		"Semantically consolidate the same root cause",
+		"Read the durable Gate worklist",
+		"PULSE REVIEW + FIX DISPATCH",
+		"run_in_background",
+		"one executor message sequence",
+		"Engineering Review → Stores Health",
+		"every later message_sequence item a non-empty message",
+		"Strategy Auditor and Goal Advisor as separate executor agents",
+		"The runtime tracks registered children and waits",
 	} {
-		if !strings.Contains(workflowReview, want) {
-			t.Fatalf("workflow-review prompt missing %q:\n%s", want, workflowReview)
+		if !strings.Contains(reviewFix, want) {
+			t.Fatalf("review-fix prompt missing %q:\n%s", want, reviewFix)
 		}
 	}
-	if !strings.Contains(steps[2].query, "independent READ-ONLY REVIEW") ||
-		!strings.Contains(steps[3].query, "independent read-only strategy advisor") {
-		t.Fatal("strategy and goal agents must remain independent read-only reviewers")
-	}
-	if !strings.Contains(steps[4].query, "PULSE DASHBOARD") || !strings.Contains(steps[5].query, "PULSE FINALIZER") {
-		t.Fatal("dashboard and finalizer must remain after the three-agent review phase")
+	if !strings.Contains(steps[2].query, "PULSE FINALIZER") || strings.Contains(steps[2].query, "PULSE DASHBOARD") {
+		t.Fatal("only the finalizer must remain after Review+Fix")
 	}
 	return
 
@@ -878,14 +1022,14 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 	}
 	gatePrompt := gate
 	gate = gate + "\n" + readContract("agent_go/cmd/server/guidance/templates/system/pulse-gate.md") +
-		"\n" + readContract("agent_go/cmd/server/guidance/templates/system/post-run-monitor.md")
+		"\n" + readContract("docs/design/pulse-post-run-monitor-spec.md")
 	dashboardPrompt := dashboard
 	dashboard = dashboard + "\n" + readContract("agent_go/cmd/server/guidance/templates/system/review-improve-log.md") +
-		"\n" + readContract("agent_go/cmd/server/guidance/templates/system/post-run-monitor.md")
+		"\n" + readContract("docs/design/pulse-post-run-monitor-spec.md")
 	finalizerPrompt := finalizer
 	finalizerContract := readContract("agent_go/cmd/server/guidance/templates/system/pulse-finalizer.md")
 	finalizer = finalizer + "\n" + finalizerContract +
-		"\n" + readContract("agent_go/cmd/server/guidance/templates/system/post-run-monitor.md")
+		"\n" + readContract("docs/design/pulse-post-run-monitor-spec.md")
 	for _, pair := range []struct{ prompt, ref string }{
 		{gatePrompt, `read_skill(skills=[{"name":"builder-reference","path":"references/pulse-gate.md"}])`},
 		{dashboardPrompt, `read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}])`},
@@ -1071,11 +1215,18 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 		"every content-bearing Markdown file",
 		"complete purity manifest",
 		"learning-objective audit",
+		"one semantic item, one authoritative owner",
+		"kb_purity_manifest",
+		"db_ownership_manifest",
+		"ownership_manifest",
+		"content-bearing TEXT/JSON column",
+		"per-step metadata and run evidence",
 		"references are part of the skill",
 		"re-reading the complete package",
 		"never rewrite knowledgebase/context",
 		"db/README.md",
 		"parent Pulse Fixer",
+		"safely routes content to its authoritative owner",
 		"record_pulse_result",
 		`module="stores_health"`,
 	} {
@@ -1172,13 +1323,15 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 		"PULSE DASHBOARD",
 		"This stage alone owns Pulse render",
 		`read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}])`,
-		`get_pulse_state(view="backlog") without a module filter`,
+		"SQLite-backed Pulse lifecycle state",
 		"builder/improve.html",
 		"builder/card.health.html",
-		"3 unique canonical coverage data-module ids",
+		"Visible HTML contains only the two verdicts",
 		"exactly 3 Latest Pulse cells",
-		`data-source="sqlite" Current work count strip`,
-		"Open/Fixing/Verify",
+		"Use editorial judgment: retain important active history",
+		"Never omit or fail the dashboard just to hit an item count",
+		"Do not render reviewer coverage",
+		`data-pulse-schema="5"`,
 		"no duplicated operational-detail sections",
 		"#pulse-agent-handoff[data-pulse-run-id]",
 		`command="dashboard"`,
@@ -1261,9 +1414,10 @@ func TestPulseEvalGuidanceSeparatesCorrectnessRepairsFromSemanticApproval(t *tes
 
 	advisorGuidance := read("agent_go/cmd/server/guidance/templates/improve/goal-advisor.md")
 	for _, want := range []string{
-		"older receipt/artifact for the current run",
-		"never turn it into a Goal Advisor proposal or human-input question",
-		"Operational correctness and deterministic eval wiring are never advisor proposals",
+		"strategy-first review",
+		"At most one strategy experiment may be active",
+		"record_pulse_impact(interventions=[...])",
+		"human_input_id whenever",
 	} {
 		if !strings.Contains(advisorGuidance, want) {
 			t.Fatalf("goal-advisor guidance missing %q", want)
@@ -1281,8 +1435,8 @@ func TestDesignPlanGuidanceSupportsReadOnlyPulseChecklist(t *testing.T) {
 	for _, want := range []string{
 		"parent Pulse prompt",
 		"read-only checklist",
-		"overrides the REVIEW LOG write step",
-		"do not edit the plan",
+		"overrides persistence",
+		"do not edit any workspace file",
 		"parent Pulse Fixer remains the only writer",
 		"llm_ops_review",
 		"is this checklist's automated owner",
@@ -1293,171 +1447,45 @@ func TestDesignPlanGuidanceSupportsReadOnlyPulseChecklist(t *testing.T) {
 	}
 }
 
-func TestPostRunMonitorModuleStepsDiscouragePollingLoops(t *testing.T) {
-	steps := postRunMonitorModuleSteps("pulse-test")
-	for _, step := range steps {
-		query := step.step.query
-		for _, forbidden := range []string{
-			"wait with query_step",
-			"until complete",
-			"until it completes",
-			"sleep 30",
-		} {
-			if strings.Contains(query, forbidden) {
-				t.Fatalf("%s step should not encourage polling loop phrase %q:\n%s", step.step.label, forbidden, query)
-			}
-		}
-		if strings.Contains(query, "query_step") && !strings.Contains(query, "at most once") {
-			t.Fatalf("%s step uses query_step without one-off limit:\n%s", step.step.label, query)
-		}
+func TestGateCanRunOpsWithoutEngineering(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+	workspacePath := "Workflow/ops-only"
+	pulseRunID := "pulse-ops-only"
+	if _, err := recordPulseWorklist(ctx, workspacePath, pulseRunID, completePulseWorklistDecisions(map[string]PulseWorklistDecision{
+		pulseModuleLLMOpsReview: {Module: pulseModuleLLMOpsReview, Due: true, Reason: "Runtime cost regressed."},
+	})); err != nil {
+		t.Fatalf("record ops-only worklist: %v", err)
 	}
-	if !strings.Contains(scheduledBackgroundNoPollingInstruction, "do not babysit") ||
-		!strings.Contains(scheduledBackgroundNoPollingInstruction, "[AUTO-NOTIFICATION]") {
-		t.Fatalf("scheduled no-polling instruction should explain yielding to auto-notification: %q", scheduledBackgroundNoPollingInstruction)
+	due, err := pulseWorklistHasDueModule(ctx, workspacePath, pulseRunID)
+	if err != nil {
+		t.Fatalf("inspect ops-only worklist: %v", err)
+	}
+	if !due {
+		t.Fatal("ops-only worklist should schedule the agent-owned Review+Fix turn")
 	}
 }
 
-func TestPulseWorkflowReviewConsolidatesOperationalLenses(t *testing.T) {
-	steps := postRunMonitorModuleSteps("pulse-test")
-	found := false
-	for _, step := range steps {
-		if step.module != pulseModuleWorkflowReview {
-			continue
-		}
-		found = true
-		for _, lens := range []string{"correctness", "artifact drift", "report and eval", "learnings, knowledgebase, and database", "cost, time, model selection"} {
-			if !strings.Contains(step.step.query, lens) {
-				t.Fatalf("workflow_review dropped the %s lens:\n%s", lens, step.step.query)
-			}
-		}
+func TestGateCanSkipEveryReviewAndFixer(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+	workspacePath := "Workflow/all-reviews-skipped"
+	pulseRunID := "pulse-all-reviews-skipped"
+	if _, err := recordPulseWorklist(ctx, workspacePath, pulseRunID, completePulseWorklistDecisions(nil)); err != nil {
+		t.Fatalf("record all-skipped worklist: %v", err)
 	}
-	if !found {
-		t.Fatalf("did not inspect expected module %s", pulseModuleWorkflowReview)
+
+	due, err := pulseWorklistHasDueModule(ctx, workspacePath, pulseRunID)
+	if err != nil {
+		t.Fatalf("inspect all-skipped worklist: %v", err)
+	}
+	if due {
+		t.Fatal("all-skipped worklist must omit the Review+Fix turn")
 	}
 }
 
 func TestPostRunMonitorPrependsWorkflowVersionUpgradeForOldManifest(t *testing.T) {
-	steps := postRunMonitorStepsForManifest(&WorkflowManifest{Version: "1.0.0"})
-	if got := len(steps); got != 25 {
-		t.Fatalf("postRunMonitorStepsForManifest(old) length = %d, want 25", got)
-	}
-	if got := steps[0].label; got != "upgrade-1.0.1" {
-		t.Fatalf("first step label = %q, want upgrade-1.0.1", got)
-	}
-	for _, want := range []string{
-		"WORKFLOW VERSION UPGRADE v1.0.0 -> v1.0.1",
-		`workflow.json "version" to "1.0.1"`,
-		`read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}])`,
-		`read_skill(skills=[{"name":"builder-reference","path":"references/publish-strategy.md"}])`,
-		"password-protected static publish contract",
-		"named secret only",
-		"StatiCrypt",
-		"Runloop dark password-gate styling",
-	} {
-		if !strings.Contains(steps[0].query, want) {
-			t.Fatalf("upgrade step missing %q:\n%s", want, steps[0].query)
-		}
-	}
-	if got := steps[1].label; got != "upgrade-1.0.2" {
-		t.Fatalf("second step label = %q, want upgrade-1.0.2", got)
-	}
-	if got := steps[2].label; got != "upgrade-1.0.3" {
-		t.Fatalf("third step label = %q, want upgrade-1.0.3", got)
-	}
-	if got := steps[3].label; got != "upgrade-1.0.4" {
-		t.Fatalf("fourth step label = %q, want upgrade-1.0.4", got)
-	}
-	if got := steps[4].label; got != "upgrade-1.0.5" {
-		t.Fatalf("fifth step label = %q, want upgrade-1.0.5", got)
-	}
-	if got := steps[5].label; got != "upgrade-1.0.6" {
-		t.Fatalf("sixth step label = %q, want upgrade-1.0.6", got)
-	}
-	if got := steps[6].label; got != "upgrade-1.0.7" {
-		t.Fatalf("seventh step label = %q, want upgrade-1.0.7", got)
-	}
-	if got := steps[7].label; got != "upgrade-1.0.8" {
-		t.Fatalf("eighth step label = %q, want upgrade-1.0.8", got)
-	}
-	if got := steps[8].label; got != "upgrade-1.0.9" {
-		t.Fatalf("ninth step label = %q, want upgrade-1.0.9", got)
-	}
-	if got := steps[9].label; got != "upgrade-1.0.10" {
-		t.Fatalf("tenth step label = %q, want upgrade-1.0.10", got)
-	}
-	if got := steps[10].label; got != "upgrade-1.0.11" {
-		t.Fatalf("eleventh step label = %q, want upgrade-1.0.11", got)
-	}
-	if got := steps[12].label; got != "upgrade-1.0.13" {
-		t.Fatalf("thirteenth step label = %q, want upgrade-1.0.13", got)
-	}
-	if got := steps[13].label; got != "upgrade-1.0.14" {
-		t.Fatalf("fourteenth step label = %q, want upgrade-1.0.14", got)
-	}
-	if got := steps[14].label; got != "upgrade-1.0.15" {
-		t.Fatalf("step 14 label = %q, want upgrade-1.0.15", got)
-	}
-	if got := steps[15].label; got != "upgrade-1.0.16" {
-		t.Fatalf("step 15 label = %q, want upgrade-1.0.16", got)
-	}
-	if got := steps[16].label; got != "upgrade-1.0.17" {
-		t.Fatalf("step 16 label = %q, want upgrade-1.0.17", got)
-	}
-	if got := steps[17].label; got != "upgrade-1.0.18" {
-		t.Fatalf("step 17 label = %q, want upgrade-1.0.18", got)
-	}
-	if got := steps[18].label; got != "upgrade-1.0.19" {
-		t.Fatalf("step 18 label = %q, want upgrade-1.0.19", got)
-	}
-	if got := steps[19].label; got != "gate" {
-		t.Fatalf("step 19 label = %q, want gate", got)
-	}
-}
-
-func TestScheduledWorkshopTurnsRunAllMissingUpgradesBeforeFirstScheduleMessage(t *testing.T) {
-	turns, err := scheduledWorkshopTurns(&WorkflowManifest{}, []string{"run the workflow"})
-	if err != nil {
-		t.Fatalf("scheduledWorkshopTurns: %v", err)
-	}
-	if got := len(turns); got != 20 {
-		t.Fatalf("turn count = %d, want 19 upgrades + 1 schedule message", got)
-	}
-	if turns[0].label != "upgrade-1.0.1" || turns[0].upgradeTarget != "1.0.1" {
-		t.Fatalf("first turn = %+v, want upgrade-1.0.1", turns[0])
-	}
-	if turns[9].label != "upgrade-1.0.10" || turns[9].upgradeTarget != "1.0.10" {
-		t.Fatalf("message-sequence upgrade turn = %+v, want upgrade-1.0.10", turns[9])
-	}
-	if turns[10].label != "upgrade-1.0.11" || turns[10].upgradeTarget != "1.0.11" {
-		t.Fatalf("pulse-history upgrade turn = %+v, want upgrade-1.0.11", turns[10])
-	}
-	if turns[11].label != "upgrade-1.0.12" || turns[11].upgradeTarget != "1.0.12" {
-		t.Fatalf("notification upgrade turn = %+v, want upgrade-1.0.12", turns[11])
-	}
-	if turns[12].label != "upgrade-1.0.13" || turns[12].upgradeTarget != "1.0.13" {
-		t.Fatalf("human-input ownership upgrade turn = %+v, want upgrade-1.0.13", turns[12])
-	}
-	if turns[13].label != "upgrade-1.0.14" || turns[13].upgradeTarget != "1.0.14" {
-		t.Fatalf("human-readable pulse-state upgrade turn = %+v, want upgrade-1.0.14", turns[13])
-	}
-	if turns[14].label != "upgrade-1.0.15" || turns[14].upgradeTarget != "1.0.15" {
-		t.Fatalf("upgrade-1.0.15 turn = %+v, want upgrade-1.0.15", turns[14])
-	}
-	if turns[15].label != "upgrade-1.0.16" || turns[15].upgradeTarget != "1.0.16" {
-		t.Fatalf("eval upgrade turn = %+v, want upgrade-1.0.16", turns[15])
-	}
-	if turns[16].label != "upgrade-1.0.17" || turns[16].upgradeTarget != "1.0.17" {
-		t.Fatalf("SQLite review upgrade turn = %+v, want upgrade-1.0.17", turns[16])
-	}
-	if turns[17].label != "upgrade-1.0.18" || turns[17].upgradeTarget != "1.0.18" {
-		t.Fatalf("compact Pulse report upgrade turn = %+v, want upgrade-1.0.18", turns[17])
-	}
-	if turns[18].label != "upgrade-1.0.19" || turns[18].upgradeTarget != "1.0.19" {
-		t.Fatalf("lightweight Pulse report upgrade turn = %+v, want upgrade-1.0.19", turns[18])
-	}
-	if turns[19].label != "schedule-message-1" || turns[19].query != "run the workflow" || turns[19].upgradeTarget != "" {
-		t.Fatalf("normal schedule turn = %+v", turns[19])
-	}
+	assertDirectContractUpgrade(t, &WorkflowManifest{Version: "1.0.0"}, "1.0.0")
 }
 
 func TestScheduledWorkshopTurnsCurrentWorkflowStartsWithScheduleMessage(t *testing.T) {
@@ -1481,744 +1509,102 @@ func TestScheduledWorkshopTurnsRejectsUnknownVersionBeforeScheduleMessage(t *tes
 }
 
 func TestPostRunMonitorPrependsWorkflowVersionUpgradeForMissingVersion(t *testing.T) {
-	steps := postRunMonitorStepsForManifest(&WorkflowManifest{})
-	if got := len(steps); got != 25 {
-		t.Fatalf("postRunMonitorStepsForManifest(missing version) length = %d, want 25", got)
-	}
-	if !strings.Contains(steps[0].query, `Current workflow.json version seen by scheduler: "1.0.0"`) {
-		t.Fatalf("missing version should be treated as 1.0.0:\n%s", steps[0].query)
-	}
+	assertDirectContractUpgrade(t, &WorkflowManifest{}, "1.0.0")
 }
 
 func TestPostRunMonitorPrependsPublishGateUpgradeForVersion101Manifest(t *testing.T) {
-	steps := postRunMonitorStepsForManifest(&WorkflowManifest{Version: "1.0.1"})
-	if got := len(steps); got != 24 {
-		t.Fatalf("postRunMonitorStepsForManifest(1.0.1) length = %d, want 24", got)
-	}
-	if got := steps[0].label; got != "upgrade-1.0.2" {
-		t.Fatalf("first step label = %q, want upgrade-1.0.2", got)
-	}
-	for _, want := range []string{
-		"WORKFLOW VERSION UPGRADE v1.0.1 -> v1.0.2",
-		`workflow.json "version" to "1.0.2"`,
-		`read_skill(skills=[{"name":"builder-reference","path":"references/publish-strategy.md"}])`,
-		"Runloop dark password-gate contract",
-		"default green/white StatiCrypt page",
-		"normal verified publish turn will republish with the new gate",
-	} {
-		if !strings.Contains(steps[0].query, want) {
-			t.Fatalf("publish gate upgrade step missing %q:\n%s", want, steps[0].query)
-		}
-	}
-	if got := steps[1].label; got != "upgrade-1.0.3" {
-		t.Fatalf("second step label = %q, want upgrade-1.0.3", got)
-	}
-	if got := steps[2].label; got != "upgrade-1.0.4" {
-		t.Fatalf("third step label = %q, want upgrade-1.0.4", got)
-	}
-	if got := steps[3].label; got != "upgrade-1.0.5" {
-		t.Fatalf("fourth step label = %q, want upgrade-1.0.5", got)
-	}
-	if got := steps[4].label; got != "upgrade-1.0.6" {
-		t.Fatalf("fifth step label = %q, want upgrade-1.0.6", got)
-	}
-	if got := steps[5].label; got != "upgrade-1.0.7" {
-		t.Fatalf("sixth step label = %q, want upgrade-1.0.7", got)
-	}
-	if got := steps[6].label; got != "upgrade-1.0.8" {
-		t.Fatalf("seventh step label = %q, want upgrade-1.0.8", got)
-	}
-	if got := steps[7].label; got != "upgrade-1.0.9" {
-		t.Fatalf("eighth step label = %q, want upgrade-1.0.9", got)
-	}
-	if got := steps[8].label; got != "upgrade-1.0.10" {
-		t.Fatalf("ninth step label = %q, want upgrade-1.0.10", got)
-	}
-	if got := steps[9].label; got != "upgrade-1.0.11" {
-		t.Fatalf("tenth step label = %q, want upgrade-1.0.11", got)
-	}
-	if got := steps[13].label; got != "upgrade-1.0.15" {
-		t.Fatalf("step 13 label = %q, want upgrade-1.0.15", got)
-	}
-	if got := steps[14].label; got != "upgrade-1.0.16" {
-		t.Fatalf("step 14 label = %q, want upgrade-1.0.16", got)
-	}
-	if got := steps[18].label; got != "gate" {
-		t.Fatalf("step 18 label = %q, want gate", got)
-	}
-}
-
-func TestPostRunMonitorPrependsHTMLReportUpgradeForVersion102Manifest(t *testing.T) {
-	steps := postRunMonitorStepsForManifest(&WorkflowManifest{Version: "1.0.2"})
-	if got := len(steps); got != 23 {
-		t.Fatalf("postRunMonitorStepsForManifest(1.0.2) length = %d, want 23", got)
-	}
-	if got := steps[0].label; got != "upgrade-1.0.3" {
-		t.Fatalf("first step label = %q, want upgrade-1.0.3", got)
-	}
-	for _, want := range []string{
-		"WORKFLOW VERSION UPGRADE v1.0.2 -> v1.0.3",
-		`reports/report_plan.json`,
-		`db/reports/`,
-		`window.report.query(sql)`,
-		`kind "file"`,
-		`renderFormat "html"`,
-		"Remove legacy widget kinds",
-		`workflow.json "version" to "1.0.3"`,
-	} {
-		if !strings.Contains(steps[0].query, want) {
-			t.Fatalf("html report upgrade step missing %q:\n%s", want, steps[0].query)
-		}
-	}
-	if got := steps[1].label; got != "upgrade-1.0.4" {
-		t.Fatalf("second step label = %q, want upgrade-1.0.4", got)
-	}
-	if got := steps[2].label; got != "upgrade-1.0.5" {
-		t.Fatalf("third step label = %q, want upgrade-1.0.5", got)
-	}
-	if got := steps[3].label; got != "upgrade-1.0.6" {
-		t.Fatalf("fourth step label = %q, want upgrade-1.0.6", got)
-	}
-	if got := steps[4].label; got != "upgrade-1.0.7" {
-		t.Fatalf("fifth step label = %q, want upgrade-1.0.7", got)
-	}
-	if got := steps[5].label; got != "upgrade-1.0.8" {
-		t.Fatalf("sixth step label = %q, want upgrade-1.0.8", got)
-	}
-	if got := steps[6].label; got != "upgrade-1.0.9" {
-		t.Fatalf("seventh step label = %q, want upgrade-1.0.9", got)
-	}
-	if got := steps[7].label; got != "upgrade-1.0.10" {
-		t.Fatalf("eighth step label = %q, want upgrade-1.0.10", got)
-	}
-	if got := steps[8].label; got != "upgrade-1.0.11" {
-		t.Fatalf("ninth step label = %q, want upgrade-1.0.11", got)
-	}
-	if got := steps[12].label; got != "upgrade-1.0.15" {
-		t.Fatalf("step 12 label = %q, want upgrade-1.0.15", got)
-	}
-	if got := steps[13].label; got != "upgrade-1.0.16" {
-		t.Fatalf("step 13 label = %q, want upgrade-1.0.16", got)
-	}
-	if got := steps[17].label; got != "gate" {
-		t.Fatalf("step 17 label = %q, want gate", got)
-	}
+	assertDirectContractUpgrade(t, &WorkflowManifest{Version: "1.0.1"}, "1.0.1")
 }
 
 func TestPostRunMonitorPrependsPulseReadabilityUpgradeForVersion103Manifest(t *testing.T) {
-	steps := postRunMonitorStepsForManifest(&WorkflowManifest{Version: "1.0.3"})
-	if got := len(steps); got != 22 {
-		t.Fatalf("postRunMonitorStepsForManifest(1.0.3) length = %d, want 22", got)
-	}
-	if got := steps[0].label; got != "upgrade-1.0.4" {
-		t.Fatalf("first step label = %q, want upgrade-1.0.4", got)
-	}
-	for _, want := range []string{
-		"WORKFLOW VERSION UPGRADE v1.0.3 -> v1.0.4",
-		`builder/improve.html`,
-		`read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}])`,
-		"What matters now",
-		"recent runs: metadata row first",
-		"full-width second row",
-		`<!-- LOG ENTRIES: newest first -->`,
-		`workflow.json "version" to "1.0.4"`,
-	} {
-		if !strings.Contains(steps[0].query, want) {
-			t.Fatalf("pulse readability upgrade step missing %q:\n%s", want, steps[0].query)
-		}
-	}
-	if got := steps[1].label; got != "upgrade-1.0.5" {
-		t.Fatalf("second step label = %q, want upgrade-1.0.5", got)
-	}
-	if got := steps[2].label; got != "upgrade-1.0.6" {
-		t.Fatalf("third step label = %q, want upgrade-1.0.6", got)
-	}
-	if got := steps[3].label; got != "upgrade-1.0.7" {
-		t.Fatalf("fourth step label = %q, want upgrade-1.0.7", got)
-	}
-	if got := steps[4].label; got != "upgrade-1.0.8" {
-		t.Fatalf("fifth step label = %q, want upgrade-1.0.8", got)
-	}
-	if got := steps[5].label; got != "upgrade-1.0.9" {
-		t.Fatalf("sixth step label = %q, want upgrade-1.0.9", got)
-	}
-	if got := steps[6].label; got != "upgrade-1.0.10" {
-		t.Fatalf("seventh step label = %q, want upgrade-1.0.10", got)
-	}
-	if got := steps[7].label; got != "upgrade-1.0.11" {
-		t.Fatalf("eighth step label = %q, want upgrade-1.0.11", got)
-	}
-	if got := steps[11].label; got != "upgrade-1.0.15" {
-		t.Fatalf("step 11 label = %q, want upgrade-1.0.15", got)
-	}
-	if got := steps[12].label; got != "upgrade-1.0.16" {
-		t.Fatalf("step 12 label = %q, want upgrade-1.0.16", got)
-	}
-	if got := steps[16].label; got != "gate" {
-		t.Fatalf("step 16 label = %q, want gate", got)
-	}
+	assertDirectContractUpgrade(t, &WorkflowManifest{Version: "1.0.3"}, "1.0.3")
 }
 
 func TestPostRunMonitorPrependsPulseFilterUpgradeForVersion104Manifest(t *testing.T) {
-	steps := postRunMonitorStepsForManifest(&WorkflowManifest{Version: "1.0.4"})
-	if got := len(steps); got != 21 {
-		t.Fatalf("postRunMonitorStepsForManifest(1.0.4) length = %d, want 21", got)
-	}
-	if got := steps[0].label; got != "upgrade-1.0.5" {
-		t.Fatalf("first step label = %q, want upgrade-1.0.5", got)
-	}
-	for _, want := range []string{
-		"WORKFLOW VERSION UPGRADE v1.0.4 -> v1.0.5",
-		`builder/improve.html`,
-		`read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}])`,
-		"Kind, Search, Reset",
-		"do not add a date picker",
-		`data-date="YYYY-MM-DD"`,
-		`data-kind="run|monitor|artifact|decision|advisor|cos|open|user|note"`,
-		`<!-- LOG ENTRIES: newest first -->`,
-		`workflow.json "version" to "1.0.5"`,
-	} {
-		if !strings.Contains(steps[0].query, want) {
-			t.Fatalf("pulse filter upgrade step missing %q:\n%s", want, steps[0].query)
-		}
-	}
-	if got := steps[1].label; got != "upgrade-1.0.6" {
-		t.Fatalf("second step label = %q, want upgrade-1.0.6", got)
-	}
-	if got := steps[2].label; got != "upgrade-1.0.7" {
-		t.Fatalf("third step label = %q, want upgrade-1.0.7", got)
-	}
-	if got := steps[3].label; got != "upgrade-1.0.8" {
-		t.Fatalf("fourth step label = %q, want upgrade-1.0.8", got)
-	}
-	if got := steps[4].label; got != "upgrade-1.0.9" {
-		t.Fatalf("fifth step label = %q, want upgrade-1.0.9", got)
-	}
-	if got := steps[5].label; got != "upgrade-1.0.10" {
-		t.Fatalf("sixth step label = %q, want upgrade-1.0.10", got)
-	}
-	if got := steps[6].label; got != "upgrade-1.0.11" {
-		t.Fatalf("seventh step label = %q, want upgrade-1.0.11", got)
-	}
-	if got := steps[10].label; got != "upgrade-1.0.15" {
-		t.Fatalf("step 10 label = %q, want upgrade-1.0.15", got)
-	}
-	if got := steps[11].label; got != "upgrade-1.0.16" {
-		t.Fatalf("step 11 label = %q, want upgrade-1.0.16", got)
-	}
-	if got := steps[15].label; got != "gate" {
-		t.Fatalf("step 15 label = %q, want gate", got)
-	}
+	assertDirectContractUpgrade(t, &WorkflowManifest{Version: "1.0.4"}, "1.0.4")
 }
 
 func TestPostRunMonitorPrependsRichPulseWidgetUpgradeForVersion105Manifest(t *testing.T) {
-	steps := postRunMonitorStepsForManifest(&WorkflowManifest{Version: "1.0.5"})
-	if got := len(steps); got != 20 {
-		t.Fatalf("postRunMonitorStepsForManifest(1.0.5) length = %d, want 20", got)
-	}
-	if got := steps[0].label; got != "upgrade-1.0.6" {
-		t.Fatalf("first step label = %q, want upgrade-1.0.6", got)
-	}
-	for _, want := range []string{
-		"WORKFLOW VERSION UPGRADE v1.0.5 -> v1.0.6",
-		`builder/improve.html`,
-		`read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}])`,
-		"What matters now widget cards",
-		"color-coded signal tiles",
-		".tile.ok",
-		`<!-- LOG ENTRIES: newest first -->`,
-		`workflow.json "version" to "1.0.6"`,
-	} {
-		if !strings.Contains(steps[0].query, want) {
-			t.Fatalf("rich pulse widget upgrade step missing %q:\n%s", want, steps[0].query)
-		}
-	}
-	if got := steps[1].label; got != "upgrade-1.0.7" {
-		t.Fatalf("second step label = %q, want upgrade-1.0.7", got)
-	}
-	if got := steps[2].label; got != "upgrade-1.0.8" {
-		t.Fatalf("third step label = %q, want upgrade-1.0.8", got)
-	}
-	if got := steps[3].label; got != "upgrade-1.0.9" {
-		t.Fatalf("fourth step label = %q, want upgrade-1.0.9", got)
-	}
-	if got := steps[4].label; got != "upgrade-1.0.10" {
-		t.Fatalf("fifth step label = %q, want upgrade-1.0.10", got)
-	}
-	if got := steps[5].label; got != "upgrade-1.0.11" {
-		t.Fatalf("sixth step label = %q, want upgrade-1.0.11", got)
-	}
-	if got := steps[9].label; got != "upgrade-1.0.15" {
-		t.Fatalf("step 9 label = %q, want upgrade-1.0.15", got)
-	}
-	if got := steps[10].label; got != "upgrade-1.0.16" {
-		t.Fatalf("step 10 label = %q, want upgrade-1.0.16", got)
-	}
-	if got := steps[14].label; got != "gate" {
-		t.Fatalf("step 14 label = %q, want gate", got)
-	}
+	assertDirectContractUpgrade(t, &WorkflowManifest{Version: "1.0.5"}, "1.0.5")
 }
 
 func TestPostRunMonitorPrependsLegacyOptimizerCleanupUpgradeForVersion106Manifest(t *testing.T) {
-	steps := postRunMonitorStepsForManifest(&WorkflowManifest{Version: "1.0.6"})
-	if got := len(steps); got != 19 {
-		t.Fatalf("postRunMonitorStepsForManifest(1.0.6) length = %d, want 19", got)
-	}
-	if got := steps[0].label; got != "upgrade-1.0.7" {
-		t.Fatalf("first step label = %q, want upgrade-1.0.7", got)
-	}
-	for _, want := range []string{
-		"WORKFLOW VERSION UPGRADE v1.0.6 -> v1.0.7",
-		"remove old separate Auto Improve / Goal Advisor optimizer schedules",
-		`workshop_mode is "optimizer"`,
-		"messages is missing/empty",
-		"STEP 1/5 PRE-BACKUP",
-		"Do not remove a schedule by name alone",
-		"Preserve explicit custom optimizer jobs",
-		"remove it from workflow.json schedules",
-		"schedule-runs.json history",
-		"post_run_monitor=true",
-		`workflow.json "version" to "1.0.7"`,
-		"do not publish",
-	} {
-		if !strings.Contains(steps[0].query, want) {
-			t.Fatalf("legacy optimizer cleanup step missing %q:\n%s", want, steps[0].query)
-		}
-	}
-	if got := steps[1].label; got != "upgrade-1.0.8" {
-		t.Fatalf("second step label = %q, want upgrade-1.0.8", got)
-	}
-	if got := steps[2].label; got != "upgrade-1.0.9" {
-		t.Fatalf("third step label = %q, want upgrade-1.0.9", got)
-	}
-	if got := steps[3].label; got != "upgrade-1.0.10" {
-		t.Fatalf("fourth step label = %q, want upgrade-1.0.10", got)
-	}
-	if got := steps[4].label; got != "upgrade-1.0.11" {
-		t.Fatalf("fifth step label = %q, want upgrade-1.0.11", got)
-	}
-	if got := steps[8].label; got != "upgrade-1.0.15" {
-		t.Fatalf("step 8 label = %q, want upgrade-1.0.15", got)
-	}
-	if got := steps[9].label; got != "upgrade-1.0.16" {
-		t.Fatalf("step 9 label = %q, want upgrade-1.0.16", got)
-	}
-	if got := steps[13].label; got != "gate" {
-		t.Fatalf("step 13 label = %q, want gate", got)
-	}
+	assertDirectContractUpgrade(t, &WorkflowManifest{Version: "1.0.6"}, "1.0.6")
 }
 
 func TestPostRunMonitorPrependsPulseDatePickerCleanupForVersion107Manifest(t *testing.T) {
-	steps := postRunMonitorStepsForManifest(&WorkflowManifest{Version: "1.0.7"})
-	if got := len(steps); got != 18 {
-		t.Fatalf("postRunMonitorStepsForManifest(1.0.7) length = %d, want 18", got)
-	}
-	if got := steps[0].label; got != "upgrade-1.0.8" {
-		t.Fatalf("first step label = %q, want upgrade-1.0.8", got)
-	}
-	for _, want := range []string{
-		"WORKFLOW VERSION UPGRADE v1.0.7 -> v1.0.8",
-		"remove the date picker",
-		`id="filter-date"`,
-		"keep Kind, Search, Reset",
-		"keep visible dates and data-date attributes",
-		`workflow.json "version" to "1.0.8"`,
-	} {
-		if !strings.Contains(steps[0].query, want) {
-			t.Fatalf("Pulse date-picker cleanup step missing %q:\n%s", want, steps[0].query)
-		}
-	}
-	if got := steps[1].label; got != "upgrade-1.0.9" {
-		t.Fatalf("second step label = %q, want upgrade-1.0.9", got)
-	}
-	if got := steps[2].label; got != "upgrade-1.0.10" {
-		t.Fatalf("third step label = %q, want upgrade-1.0.10", got)
-	}
-	if got := steps[3].label; got != "upgrade-1.0.11" {
-		t.Fatalf("fourth step label = %q, want upgrade-1.0.11", got)
-	}
-	if got := steps[7].label; got != "upgrade-1.0.15" {
-		t.Fatalf("step 7 label = %q, want upgrade-1.0.15", got)
-	}
-	if got := steps[8].label; got != "upgrade-1.0.16" {
-		t.Fatalf("step 8 label = %q, want upgrade-1.0.16", got)
-	}
-	if got := steps[12].label; got != "gate" {
-		t.Fatalf("step 12 label = %q, want gate", got)
-	}
+	assertDirectContractUpgrade(t, &WorkflowManifest{Version: "1.0.7"}, "1.0.7")
 }
 
 func TestPostRunMonitorPrependsStableSoulAndPulseHierarchyUpgradeForVersion108Manifest(t *testing.T) {
-	steps := postRunMonitorStepsForManifest(&WorkflowManifest{Version: "1.0.8"})
-	if got := len(steps); got != 17 {
-		t.Fatalf("postRunMonitorStepsForManifest(1.0.8) length = %d, want 17", got)
-	}
-	if got := steps[0].label; got != "upgrade-1.0.9" {
-		t.Fatalf("first step label = %q, want upgrade-1.0.9", got)
-	}
-	for _, want := range []string{
-		"WORKFLOW VERSION UPGRADE v1.0.8 -> v1.0.9",
-		"keep soul/soul.md limited to stable intent",
-		"explicit user-approved constraints",
-		"remove architecture",
-		"Assumptions challenged",
-		"Today's outcome",
-		`<details class="technical">`,
-		"#pulse-agent-handoff",
-		"must not repeat the user-facing report",
-		"Needs your decision",
-		`workflow.json "version" to "1.0.9"`,
-	} {
-		if !strings.Contains(steps[0].query, want) {
-			t.Fatalf("stable soul/Pulse hierarchy upgrade missing %q:\n%s", want, steps[0].query)
-		}
-	}
-	if got := steps[1].label; got != "upgrade-1.0.10" {
-		t.Fatalf("second step label = %q, want upgrade-1.0.10", got)
-	}
-	if got := steps[2].label; got != "upgrade-1.0.11" {
-		t.Fatalf("third step label = %q, want upgrade-1.0.11", got)
-	}
-	if got := steps[6].label; got != "upgrade-1.0.15" {
-		t.Fatalf("step 6 label = %q, want upgrade-1.0.15", got)
-	}
-	if got := steps[7].label; got != "upgrade-1.0.16" {
-		t.Fatalf("step 7 label = %q, want upgrade-1.0.16", got)
-	}
-	if got := steps[11].label; got != "gate" {
-		t.Fatalf("step 11 label = %q, want gate", got)
-	}
+	assertDirectContractUpgrade(t, &WorkflowManifest{Version: "1.0.8"}, "1.0.8")
 }
 
 func TestPostRunMonitorPrependsMessageSequenceCodeMigrationForVersion109Manifest(t *testing.T) {
-	steps := postRunMonitorStepsForManifest(&WorkflowManifest{Version: "1.0.9"})
-	if got := len(steps); got != 16 {
-		t.Fatalf("postRunMonitorStepsForManifest(1.0.9) length = %d, want 16", got)
-	}
-	if got := steps[0].label; got != "upgrade-1.0.10" {
-		t.Fatalf("first step label = %q, want upgrade-1.0.10", got)
-	}
-	for _, want := range []string{
-		"WORKFLOW VERSION UPGRADE v1.0.9 -> v1.0.10",
-		"migrate_message_sequence_code_items",
-		"standalone regular scripted step",
-		"do not guess and do not stamp the workflow version",
-		"Do not edit workflow.json",
-		"scheduler independently verifies",
-		`stamps version "1.0.10"`,
-	} {
-		if !strings.Contains(steps[0].query, want) {
-			t.Fatalf("message-sequence code migration missing %q:\n%s", want, steps[0].query)
-		}
-	}
-	if got := steps[1].label; got != "upgrade-1.0.11" {
-		t.Fatalf("second step label = %q, want upgrade-1.0.11", got)
-	}
-	if got := steps[5].label; got != "upgrade-1.0.15" {
-		t.Fatalf("step 5 label = %q, want upgrade-1.0.15", got)
-	}
-	if got := steps[6].label; got != "upgrade-1.0.16" {
-		t.Fatalf("step 6 label = %q, want upgrade-1.0.16", got)
-	}
-	if got := steps[8].label; got != "upgrade-1.0.18" {
-		t.Fatalf("step 8 label = %q, want upgrade-1.0.18", got)
-	}
-	if got := steps[10].label; got != "gate" {
-		t.Fatalf("step 10 label = %q, want gate", got)
-	}
+	assertDirectContractUpgrade(t, &WorkflowManifest{Version: "1.0.9"}, "1.0.9")
 }
 
 func TestPostRunMonitorPrependsPulseHistoryContractUpgradeForVersion110Manifest(t *testing.T) {
-	steps := postRunMonitorStepsForManifest(&WorkflowManifest{Version: "1.0.10"})
-	if got := len(steps); got != 15 {
-		t.Fatalf("postRunMonitorStepsForManifest(1.0.10) length = %d, want 15", got)
-	}
-	if got := steps[0].label; got != "upgrade-1.0.11" {
-		t.Fatalf("first step label = %q, want upgrade-1.0.11", got)
-	}
-	for _, want := range []string{
-		"WORKFLOW VERSION UPGRADE v1.0.10 -> v1.0.11",
-		`read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}])`,
-		`read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log-skeleton.md"}])`,
-		`data-pulse-schema="2"`,
-		"Issues and reviews",
-		"Decisions and analysis",
-		"Fixes and improvements",
-		"builder/improve.html stays time-first and newest-first",
-		"remove any duplicated Goal/Profile card",
-		"Current unanswered requests remain in report_human_inputs",
-		"selected option and/or free-form answer",
-		"#pulse-agent-handoff",
-		"Do not edit workflow.json",
-		"scheduler independently verifies",
-		`stamps version "1.0.11"`,
-	} {
-		if !strings.Contains(steps[0].query, want) {
-			t.Fatalf("Pulse history contract upgrade missing %q:\n%s", want, steps[0].query)
-		}
-	}
-	if got := steps[4].label; got != "upgrade-1.0.15" {
-		t.Fatalf("step 4 label = %q, want upgrade-1.0.15", got)
-	}
-	if got := steps[5].label; got != "upgrade-1.0.16" {
-		t.Fatalf("step 5 label = %q, want upgrade-1.0.16", got)
-	}
-	if got := steps[7].label; got != "upgrade-1.0.18" {
-		t.Fatalf("step 7 label = %q, want upgrade-1.0.18", got)
-	}
-	if got := steps[9].label; got != "gate" {
-		t.Fatalf("step 9 label = %q, want gate", got)
-	}
+	assertDirectContractUpgrade(t, &WorkflowManifest{Version: "1.0.10"}, "1.0.10")
 }
 
-func TestFinalizeMessageSequenceCodeUpgradeStampsVerifiedNoOpPlan(t *testing.T) {
-	workspacePath := "Workflow/instagram"
-	workspaceState := &mockWorkspaceAPI{files: map[string]string{
-		workspacePath + "/planning/plan.json": `{"steps":[{"id":"review","type":"message_sequence","items":[{"id":"inspect","type":"user_message","message":"Inspect the result."}]}]}`,
-	}}
-	workspace := httptest.NewServer(workspaceState)
-	defer workspace.Close()
-	t.Setenv("WORKSPACE_API_URL", workspace.URL)
-
-	manifest := &WorkflowManifest{
-		SchemaVersion: 1,
-		ID:            "instagram",
-		Version:       "1.0.9",
-		Label:         "Instagram",
-	}
-	if err := finalizeMessageSequenceCodeUpgrade(context.Background(), workspacePath, manifest); err != nil {
-		t.Fatalf("finalize verified no-op upgrade: %v", err)
-	}
-
-	workspaceState.mu.Lock()
-	stored := workspaceState.files[workspacePath+"/workflow.json"]
-	workspaceState.mu.Unlock()
-	var written WorkflowManifest
-	if err := json.Unmarshal([]byte(stored), &written); err != nil {
-		t.Fatalf("decode stamped workflow.json: %v", err)
-	}
-	if written.Version != "1.0.10" {
-		t.Fatalf("stamped version = %q, want 1.0.10", written.Version)
-	}
-}
-
-func TestFinalizeMessageSequenceCodeUpgradeRejectsRemainingLegacyCode(t *testing.T) {
-	workspacePath := "Workflow/legacy"
-	workspace := httptest.NewServer(&mockWorkspaceAPI{files: map[string]string{
-		workspacePath + "/planning/plan.json": `{"steps":[{"id":"legacy","type":"message_sequence","items":[{"id":"run","type":"code","script_path":"scripts/run.py","output_files":["db/result.json"]}]}]}`,
-	}})
-	defer workspace.Close()
-	t.Setenv("WORKSPACE_API_URL", workspace.URL)
-
-	manifest := &WorkflowManifest{SchemaVersion: 1, ID: "legacy", Version: "1.0.9", Label: "Legacy"}
-	err := finalizeMessageSequenceCodeUpgrade(context.Background(), workspacePath, manifest)
-	if err == nil || !strings.Contains(err.Error(), "legacy") {
-		t.Fatalf("finalize error = %v, want remaining legacy sequence blocker", err)
-	}
-	if manifest.Version != "1.0.9" {
-		t.Fatalf("manifest version changed on failed validation: %q", manifest.Version)
-	}
-}
-
-func TestFinalizePulseHistoryContractUpgradeStampsVerifiedReport(t *testing.T) {
-	workspacePath := "Workflow/current-report"
-	workspaceState := &mockWorkspaceAPI{files: map[string]string{
-		workspacePath + "/builder/improve.html": `<!doctype html>
-<html lang="en" data-pulse-schema="2"><head>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>html,body{max-width:100%;overflow-x:hidden}</style></head><body>
-<!-- LOG ENTRIES: newest first -->
-<div class="entry" data-date="2026-07-17" data-kind="maintenance" data-pulse-section="improvements" data-module="pulse_fixer">Pulse history contract migrated to v1.0.11.</div>
-<details><div id="pulse-agent-handoff"></div></details>
-</body></html>`,
-	}}
-	workspace := httptest.NewServer(workspaceState)
-	defer workspace.Close()
-	t.Setenv("WORKSPACE_API_URL", workspace.URL)
-
-	manifest := &WorkflowManifest{SchemaVersion: 1, ID: "current-report", Version: "1.0.10", Label: "Current report"}
-	if err := finalizePulseHistoryContractUpgrade(context.Background(), workspacePath, manifest); err != nil {
-		t.Fatalf("finalize Pulse history contract: %v", err)
-	}
-
-	workspaceState.mu.Lock()
-	stored := workspaceState.files[workspacePath+"/workflow.json"]
-	workspaceState.mu.Unlock()
-	var written WorkflowManifest
-	if err := json.Unmarshal([]byte(stored), &written); err != nil {
-		t.Fatalf("decode stamped workflow.json: %v", err)
-	}
-	if written.Version != workflowContractPulseHistoryVersion {
-		t.Fatalf("stamped version = %q, want %q", written.Version, workflowContractPulseHistoryVersion)
-	}
-}
-
-func TestFinalizePulseHistoryContractUpgradeRejectsInvalidReport(t *testing.T) {
-	workspacePath := "Workflow/old-report"
-	workspace := httptest.NewServer(&mockWorkspaceAPI{files: map[string]string{
-		workspacePath + "/builder/improve.html": `<html><body><input id="filter-date"></body></html>`,
-	}})
-	defer workspace.Close()
-	t.Setenv("WORKSPACE_API_URL", workspace.URL)
-
-	manifest := &WorkflowManifest{SchemaVersion: 1, ID: "old-report", Version: "1.0.10", Label: "Old report"}
-	err := finalizePulseHistoryContractUpgrade(context.Background(), workspacePath, manifest)
-	if err == nil || !strings.Contains(err.Error(), "Pulse history contract") {
-		t.Fatalf("finalize error = %v, want Pulse history contract blocker", err)
-	}
-	if manifest.Version != "1.0.10" {
-		t.Fatalf("manifest version changed on failed validation: %q", manifest.Version)
-	}
-}
-
-func TestFinalizePulseReviewSQLiteUpgradeImportsWithoutRetiringImproveHTMLOrLegacyFiles(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("WORKSPACE_DOCS_PATH", root)
-	workspacePath := "Workflow/review-migration"
-	reviewPath := filepath.Join(root, "Workflow", "review-migration", "pulse", "reviews", "legacy-run", "bug_review.md")
-	if err := os.MkdirAll(filepath.Dir(reviewPath), 0o755); err != nil {
-		t.Fatalf("create legacy review folder: %v", err)
-	}
-	markdown := "# Bug review\n\n- Review run: `legacy-run`\n\n## Verdict\n\nOne issue remains.\n"
-	if err := os.WriteFile(reviewPath, []byte(markdown), 0o644); err != nil {
-		t.Fatalf("write legacy review: %v", err)
-	}
-
-	workspaceState := &mockWorkspaceAPI{files: map[string]string{
-		workspacePath + "/builder/improve.html": "<!doctype html><html><body>Pulse dashboard remains authoritative.</body></html>",
-	}}
-	workspace := httptest.NewServer(workspaceState)
-	defer workspace.Close()
-	t.Setenv("WORKSPACE_API_URL", workspace.URL)
-
-	manifest := &WorkflowManifest{
-		SchemaVersion: 1,
-		ID:            "review-migration",
-		Version:       workflowContractEvalVerdictSchemaVersion,
-		Label:         "Review migration",
-	}
-	if err := finalizePulseReviewSQLiteUpgrade(context.Background(), workspacePath, manifest); err != nil {
-		t.Fatalf("finalize SQLite review migration: %v", err)
-	}
-	if _, err := os.Stat(reviewPath); err != nil {
-		t.Fatalf("legacy review should remain during compatibility phase: %v", err)
-	}
-	workspaceState.mu.Lock()
-	storedManifest := workspaceState.files[workspacePath+"/workflow.json"]
-	storedImprove := workspaceState.files[workspacePath+"/builder/improve.html"]
-	workspaceState.mu.Unlock()
-	var written WorkflowManifest
-	if err := json.Unmarshal([]byte(storedManifest), &written); err != nil {
-		t.Fatalf("decode stamped workflow.json: %v", err)
-	}
-	if written.Version != workflowContractPulseReviewSQLiteVersion {
-		t.Fatalf("stamped version = %q, want %q", written.Version, workflowContractPulseReviewSQLiteVersion)
-	}
-	if storedImprove != "<!doctype html><html><body>Pulse dashboard remains authoritative.</body></html>" {
-		t.Fatalf("SQLite review migration changed builder/improve.html: %q", storedImprove)
-	}
-	reviews, err := step_based_workflow.LoadPulseReviewArtifacts(context.Background(), workspacePath, pulseModuleBugReview, true, 10)
+// assertDirectContractUpgrade checks the upgrade turns a workflow at `from`
+// receives. It reads the blocking pre-run preflight, which is the only path
+// that delivers contract migrations: Pulse used to deliver a second copy of
+// them (b4e4fc14), the preflight replaced that (f58ac5b5), and the older path
+// was finally removed once it started bundling four unverified rungs into one
+// Review+Fix turn.
+func assertDirectContractUpgrade(t *testing.T, manifest *WorkflowManifest, from string) {
+	t.Helper()
+	turns, err := scheduledWorkshopTurns(manifest, nil)
 	if err != nil {
-		t.Fatalf("load migrated review: %v", err)
+		t.Fatalf("scheduledWorkshopTurns(%s): %v", from, err)
 	}
-	if len(reviews) != 1 || reviews[0].Markdown != markdown {
-		t.Fatalf("migrated reviews = %+v", reviews)
+	upgrades := workflowVersionUpgradePlan(&WorkflowManifest{Version: from})
+	if got, want := len(turns), len(upgrades); got != want {
+		t.Fatalf("upgrade turns for %s = %d, want %d", from, got, want)
 	}
-}
-
-func TestValidatePulseHistoryContractDoesNotCountCommentedExamples(t *testing.T) {
-	content := `<!doctype html>
-<html data-pulse-schema="2"><head><meta name="viewport" content="width=device-width"><style>html{max-width:100%;overflow-x:hidden}</style></head><body>
-<!-- LOG ENTRIES: newest first -->
-<!-- <div data-date="2026-07-01" data-kind="run" data-pulse-section="reflection" data-module="run_summary">example</div> -->
-<div data-date="2026-07-17" data-kind="maintenance" data-pulse-section="improvements">Migrated to v1.0.11.</div>
-<div id="pulse-agent-handoff"></div>
-</body></html>`
-	err := validatePulseHistoryContract(content)
-	if err == nil || !strings.Contains(err.Error(), "missing data-module") {
-		t.Fatalf("validation error = %v, want missing metadata blocker", err)
-	}
-}
-
-func TestPostRunMonitorDoesNotPrependWorkflowVersionUpgradeForCurrentManifest(t *testing.T) {
-	steps := postRunMonitorStepsForManifest(&WorkflowManifest{Version: WorkflowContractCurrentVersion})
-	if got := len(steps); got != 6 {
-		t.Fatalf("postRunMonitorStepsForManifest(current) length = %d, want 6", got)
-	}
-	if got := steps[0].label; got != "gate" {
-		t.Fatalf("first step label = %q, want gate", got)
-	}
-	if got := steps[1].label; got != "workflow-review" {
-		t.Fatalf("second step label = %q, want workflow-review", got)
-	}
-	for _, want := range []string{
-		"PULSE MODULE — WORKFLOW REVIEW",
-		"one continuous context",
-		"plan/changelog and artifact drift",
-		"artifact drift",
-	} {
-		if !strings.Contains(steps[1].query, want) {
-			t.Fatalf("workflow review step missing %q:\n%s", want, steps[1].query)
+	for index, upgrade := range upgrades {
+		if got := turns[index].label; got != upgrade.label {
+			t.Fatalf("upgrade %d label = %q, want %q", index, got, upgrade.label)
+		}
+		if got := turns[index].upgradeTarget; got != upgrade.to {
+			t.Fatalf("upgrade %q target = %q, want %q", upgrade.label, got, upgrade.to)
+		}
+		// The version pair reached only the retired Pulse path for a while, so
+		// the preflight never told the agent what it was migrating between.
+		for _, want := range []string{
+			"WORKFLOW CONTRACT UPGRADE",
+			`Current workflow.json version seen by scheduler: "` + from + `"`,
+			`Target workflow contract version: "` + upgrade.to + `"`,
+		} {
+			if !strings.Contains(turns[index].query, want) {
+				t.Fatalf("upgrade %q missing %q:\n%s", upgrade.label, want, turns[index].query)
+			}
 		}
 	}
 }
 
-func TestPostRunMonitorPrependsCompactPulseReportUpgradeForVersion117Manifest(t *testing.T) {
-	steps := postRunMonitorStepsForManifest(&WorkflowManifest{Version: "1.0.17"})
-	if got := len(steps); got != 8 {
-		t.Fatalf("postRunMonitorStepsForManifest(1.0.17) length = %d, want 8", got)
+func TestNoUpgradeTurnsForAWorkflowAlreadyAtTheCurrentContract(t *testing.T) {
+	turns, err := scheduledWorkshopTurns(&WorkflowManifest{Version: WorkflowContractCurrentVersion}, []string{"run the workflow"})
+	if err != nil {
+		t.Fatalf("scheduledWorkshopTurns: %v", err)
 	}
-	if got := steps[0].label; got != "upgrade-1.0.18" {
-		t.Fatalf("first step label = %q, want upgrade-1.0.18", got)
-	}
-	for _, want := range []string{
-		"WORKFLOW VERSION UPGRADE v1.0.17 -> v1.0.18",
-		`data-pulse-schema="3"`,
-		`get_pulse_state(view="backlog") without a module filter`,
-		`data-source="sqlite" Current work`,
-		"Important now",
-		"Needs verification",
-		"monthly builder/improve-archive/YYYY-MM.html",
-		"Do not impose a byte or character budget",
-		`workflow.json "version" to "1.0.18"`,
-	} {
-		if !strings.Contains(steps[0].query, want) {
-			t.Fatalf("compact Pulse report upgrade missing %q:\n%s", want, steps[0].query)
-		}
-	}
-	if got := steps[1].label; got != "upgrade-1.0.19" {
-		t.Fatalf("second step label = %q, want upgrade-1.0.19", got)
-	}
-	if got := steps[2].label; got != "gate" {
-		t.Fatalf("third step label = %q, want gate", got)
+	if len(turns) != 1 || turns[0].upgradeTarget != "" {
+		t.Fatalf("a current-contract workflow should start straight at its schedule message: %+v", turns)
 	}
 }
 
 func TestPostRunMonitorPrependsLightweightPulseReportUpgradeForVersion118Manifest(t *testing.T) {
-	steps := postRunMonitorStepsForManifest(&WorkflowManifest{Version: "1.0.18"})
-	if got := len(steps); got != 7 {
-		t.Fatalf("postRunMonitorStepsForManifest(1.0.18) length = %d, want 7", got)
-	}
-	if got := steps[0].label; got != "upgrade-1.0.19" {
-		t.Fatalf("first step label = %q, want upgrade-1.0.19", got)
-	}
-	for _, want := range []string{
-		"WORKFLOW VERSION UPGRADE v1.0.18 -> v1.0.19",
-		`data-pulse-schema="4"`,
-		"exactly three Latest Pulse cells",
-		"Current work count strip",
-		"Remove Current work issue-title queues",
-		"Keep at most 12 material Activity cards",
-		"Do not impose a byte, character, or token budget",
-		`workflow.json "version" to "1.0.19"`,
-	} {
-		if !strings.Contains(steps[0].query, want) {
-			t.Fatalf("lightweight Pulse report upgrade missing %q:\n%s", want, steps[0].query)
-		}
-	}
-	if got := steps[1].label; got != "gate" {
-		t.Fatalf("second step label = %q, want gate", got)
-	}
+	assertDirectContractUpgrade(t, &WorkflowManifest{Version: "1.0.18"}, "1.0.18")
+}
+
+func TestPostRunMonitorPrependsExecutivePulseJournalUpgradeForVersion119Manifest(t *testing.T) {
+	assertDirectContractUpgrade(t, &WorkflowManifest{Version: "1.0.19"}, "1.0.19")
+}
+
+func TestPostRunMonitorPrependsArtifactPurityUpgradeForVersion120Manifest(t *testing.T) {
+	assertDirectContractUpgrade(t, &WorkflowManifest{Version: "1.0.20"}, "1.0.20")
 }
 
 func TestWorkflowHasPendingPlanChangelogArtifactReview(t *testing.T) {
@@ -2283,269 +1669,7 @@ func TestWorkflowHasPendingPlanChangelogArtifactReview(t *testing.T) {
 	}
 }
 
-func TestSelectedPostRunMonitorModuleStepsUsesGateWorklist(t *testing.T) {
-	ctx := context.Background()
-	root := t.TempDir()
-	t.Setenv("WORKSPACE_DOCS_PATH", root)
-	workspacePath := "Workflow/demo"
-	pulseRunID := "pulse-run-1"
-
-	if _, err := recordPulseWorklist(ctx, workspacePath, pulseRunID, completePulseWorklistDecisions(map[string]PulseWorklistDecision{
-		pulseModuleWorkflowReview: {Module: pulseModuleWorkflowReview, Due: true, Reason: "A step failed and the operations lens is due.", Evidence: []string{"runs/latest"}},
-		pulseModuleStrategyAuditor: {
-			Module: pulseModuleStrategyAuditor,
-			Due:    true,
-			Reason: "Activity increased while the business outcome stayed flat.",
-		},
-		pulseModuleGoalAdvisor: {Module: pulseModuleGoalAdvisor, Due: true, Reason: "Goal drift persisted across runs."},
-	})); err != nil {
-		t.Fatalf("record worklist: %v", err)
-	}
-
-	s := NewSchedulerService(nil)
-	steps := s.selectedPostRunMonitorModuleSteps(ctx, &ScheduleContext{WorkspacePath: workspacePath}, pulseRunID)
-	got := postRunStepLabels(steps)
-	want := []string{"workflow-review", "strategy-auditor", "goal-advisor", "pulse-fixer", "dashboard", "finalize"}
-	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("selected labels = %#v, want %#v", got, want)
-	}
-	for index, module := range []string{pulseModuleWorkflowReview, pulseModuleStrategyAuditor, pulseModuleGoalAdvisor} {
-		query := steps[index].query
-		for _, required := range []string{
-			`read_skill(skills=[{"name":"builder-reference","path":"references/pulse-review-fixer.md"}])`,
-			`module="` + module + `"`,
-			`role="reviewer"`,
-			"exactly one call_generic_agent",
-			"stop without editing",
-		} {
-			if !strings.Contains(query, required) {
-				t.Fatalf("independent reviewer/fixer protocol for %s missing %q: %s", module, required, query)
-			}
-		}
-	}
-	fixer := steps[len(steps)-3].query
-	for _, required := range []string{`role="fixer"`, `module="pulse_fixer"`, `references/pulse-fixer-practices.md`, `references/fix-verification.md`, "short priority-ordered repair list", "record_pulse_result exactly once for every due module"} {
-		if !strings.Contains(fixer, required) {
-			t.Fatalf("consolidated Fixer prompt missing %q: %s", required, fixer)
-		}
-	}
-}
-
-func TestRunPostRunMonitorReviewerStagesUsesBoundedParallelismAndBarrier(t *testing.T) {
-	stages := make([]postRunMonitorReviewerStage, 4)
-	for i := range stages {
-		stages[i] = postRunMonitorReviewerStage{
-			step:      postRunMonitorStep{label: fmt.Sprintf("review-%d", i)},
-			sessionID: fmt.Sprintf("session-%d", i),
-		}
-	}
-
-	started := make(chan struct{}, len(stages))
-	release := make(chan struct{})
-	done := make(chan []postRunMonitorReviewerStageResult, 1)
-	var mu sync.Mutex
-	active := 0
-	peak := 0
-	go func() {
-		done <- runPostRunMonitorReviewerStages(
-			context.Background(), stages, pulsemodules.ReviewerMaxConcurrency,
-			func(_ context.Context, _ postRunMonitorReviewerStage) postRunMonitorStepRunResult {
-				mu.Lock()
-				active++
-				if active > peak {
-					peak = active
-				}
-				mu.Unlock()
-				started <- struct{}{}
-				<-release
-				mu.Lock()
-				active--
-				mu.Unlock()
-				return postRunMonitorStepRunResult{outcome: postRunMonitorStepCompleted}
-			},
-		)
-	}()
-
-	for i := 0; i < pulsemodules.ReviewerMaxConcurrency; i++ {
-		select {
-		case <-started:
-		case <-time.After(time.Second):
-			t.Fatal("parallel reviewer stage did not start")
-		}
-	}
-	select {
-	case <-started:
-		t.Fatalf("more than %d reviewer stages started before a slot was released", pulsemodules.ReviewerMaxConcurrency)
-	case <-time.After(30 * time.Millisecond):
-	}
-	select {
-	case <-done:
-		t.Fatal("reviewer barrier returned before active reviews completed")
-	case <-time.After(30 * time.Millisecond):
-	}
-
-	close(release)
-	var results []postRunMonitorReviewerStageResult
-	select {
-	case results = <-done:
-	case <-time.After(time.Second):
-		t.Fatal("reviewer barrier did not return after all reviews completed")
-	}
-	if len(results) != len(stages) {
-		t.Fatalf("reviewer results = %d, want %d", len(results), len(stages))
-	}
-	mu.Lock()
-	gotPeak := peak
-	mu.Unlock()
-	if gotPeak != pulsemodules.ReviewerMaxConcurrency {
-		t.Fatalf("reviewer peak concurrency = %d, want %d", gotPeak, pulsemodules.ReviewerMaxConcurrency)
-	}
-	for i, result := range results {
-		if result.stage.sessionID != stages[i].sessionID || result.result.outcome != postRunMonitorStepCompleted {
-			t.Fatalf("reviewer result %d = %+v, want ordered completed result for %s", i, result, stages[i].sessionID)
-		}
-	}
-}
-
-func TestStrategyAuditorAndGoalAdvisorPromptsAreIndependent(t *testing.T) {
-	reviewRunID := "2026-08-03T00-00-00.000Z_pulse-run-1"
-	strategy, ok := postRunMonitorIndependentModuleStep("pulse-run-1", reviewRunID, pulseModuleStrategyAuditor)
-	if !ok {
-		t.Fatal("strategy auditor step not found")
-	}
-	goal, ok := postRunMonitorIndependentModuleStep("pulse-run-1", reviewRunID, pulseModuleGoalAdvisor)
-	if !ok {
-		t.Fatal("goal advisor step not found")
-	}
-	for _, required := range []string{"current strategy", "in-plan recommendation", "Do not wait for or consume Bug Review, Artifact Review, or Goal Advisor conclusions"} {
-		if !strings.Contains(strategy.query, required) {
-			t.Fatalf("Strategy Auditor prompt missing independence contract %q", required)
-		}
-	}
-	for _, required := range []string{"blank-sheet lens", "materially different", "Do not wait for, consume, or require Strategy Auditor, Bug Review, or Artifact Review conclusions"} {
-		if !strings.Contains(goal.query, required) {
-			t.Fatalf("Goal Advisor prompt missing independence contract %q", required)
-		}
-	}
-	for _, forbidden := range []string{"consume its evidence-backed diagnosis", "sends any evidence-backed strategy_flaw", "run the Auditor first"} {
-		if strings.Contains(strategy.query, forbidden) || strings.Contains(goal.query, forbidden) {
-			t.Fatalf("reviewer prompts retained dependency text %q", forbidden)
-		}
-	}
-}
-
-func TestGateDurableWorklistRoutesModulesWithoutHTML(t *testing.T) {
-	ctx := context.Background()
-	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
-	workspacePath := "Workflow/gate-routing-no-html"
-	pulseRunID := "pulse-run-gate-routing-no-html"
-
-	if _, err := recordPulseWorklist(ctx, workspacePath, pulseRunID, completePulseWorklistDecisions(map[string]PulseWorklistDecision{
-		pulseModuleWorkflowReview: {
-			Module:   pulseModuleWorkflowReview,
-			Due:      true,
-			Reason:   "The report-health checkpoint is due.",
-			Evidence: []string{"durable Gate evidence"},
-		},
-	})); err != nil {
-		t.Fatalf("record worklist: %v", err)
-	}
-	if err := validatePulseGateCompletion(ctx, workspacePath, pulseRunID); err != nil {
-		t.Fatalf("complete durable worklist should survive missing HTML: %v", err)
-	}
-
-	s := NewSchedulerService(nil)
-	steps := s.selectedPostRunMonitorModuleSteps(ctx, &ScheduleContext{WorkspacePath: workspacePath}, pulseRunID)
-	if got, want := strings.Join(postRunStepLabels(steps), ","), "workflow-review,pulse-fixer,dashboard,finalize"; got != want {
-		t.Fatalf("selected labels = %q, want %q", got, want)
-	}
-	if !strings.Contains(steps[0].query, `module="workflow_review"`) {
-		t.Fatalf("durable due module was not routed: %s", steps[0].query)
-	}
-}
-
-func TestPulseReviewRunIDAndIndependentPromptUsesFocusedReference(t *testing.T) {
-	reviewRunID := pulseReviewRunID("schedule-manual--manual-p_1784571312755290000", time.Date(2026, 7, 21, 0, 8, 44, 123000000, time.UTC))
-	if want := "2026-07-21T00-08-44.123Z_schedule-manual--manual-p_1784571312755290000"; reviewRunID != want {
-		t.Fatalf("review run id = %q, want %q", reviewRunID, want)
-	}
-	step, ok := postRunMonitorIndependentModuleStep("pulse-run-1", reviewRunID, pulseModuleWorkflowReview)
-	if !ok {
-		t.Fatal("workflow review module step was not found")
-	}
-	if step.label != "workflow-review" {
-		t.Fatalf("label = %q", step.label)
-	}
-	if !strings.Contains(step.query, `read_skill(skills=[{"name":"builder-reference","path":"references/pulse-review-fixer.md"}])`) {
-		t.Fatalf("independent prompt missing focused reviewer reference:\n%s", step.query)
-	}
-	for _, required := range []string{"complete active retained backlog", "do not launch a duplicate reviewer", "never combine reviewers"} {
-		if !strings.Contains(step.query, required) {
-			t.Fatalf("independent prompt missing %q:\n%s", required, step.query)
-		}
-	}
-	for _, required := range []string{"MODULE-SPECIFIC CONTRACT", "PULSE MODULE — WORKFLOW REVIEW", "backend attaches the canonical", "one agent, one MCP session"} {
-		if !strings.Contains(step.query, required) {
-			t.Fatalf("independent prompt missing module brief %q", required)
-		}
-	}
-	if strings.Contains(step.query, `message_sequence=[`) {
-		t.Fatalf("scheduler duplicated the backend-owned sequence in its user message:\n%s", step.query)
-	}
-	if len(step.query) > 3000 {
-		t.Fatalf("workflow reviewer launcher prompt is %d bytes, want <= 3000", len(step.query))
-	}
-	for _, forbidden := range []string{"PULSE CONSOLIDATED REVIEW", "batches of at most two"} {
-		if strings.Contains(step.query, forbidden) {
-			t.Fatalf("independent prompt retained consolidated contract %q", forbidden)
-		}
-	}
-}
-
-func TestApplyPulseReviewerChildSessionPinsParentAndKind(t *testing.T) {
-	req := map[string]interface{}{"query": "review"}
-	applyPulseReviewerChildSession(req, " pulse-root-1 ")
-
-	if got := req["parent_session_id"]; got != "pulse-root-1" {
-		t.Fatalf("parent_session_id = %#v, want pulse-root-1", got)
-	}
-	if got := req["session_kind"]; got != "pulse_reviewer" {
-		t.Fatalf("session_kind = %#v, want pulse_reviewer", got)
-	}
-}
-
-func TestScheduledPulseStagePromptsUseFocusedReferences(t *testing.T) {
-	intro := postRunMonitorIntro("trigger=manual", "Workflow/demo", "pulse-run-1", "completed", "runs/iteration-0")
-	archive := postRunMonitorArchiveStep(pulseImproveArchiveAssessment{Due: true, TimelineEntries: 24, RecentRunRows: 7}).query
-	gate := postRunMonitorGateStep("pulse-run-1", "runs/iteration-0", "completed").query
-	moduleStep, ok := postRunMonitorIndependentModuleStep("pulse-run-1", "2026-07-21T00-08-44.123Z_pulse-run-1", pulseModuleWorkflowReview)
-	if !ok {
-		t.Fatal("workflow review module step was not found")
-	}
-	finalizer := pulseStepQueryByLabel(t, postRunMonitorFinalSteps("pulse-run-1"), "finalize")
-	dashboard := pulseStepQueryByLabel(t, postRunMonitorFinalSteps("pulse-run-1"), "dashboard")
-
-	for name, prompt := range map[string]string{
-		"intro": intro,
-	} {
-		if strings.TrimSpace(prompt) == "" {
-			t.Fatalf("%s scheduler prompt is empty", name)
-		}
-	}
-	for _, tc := range []struct{ prompt, ref string }{
-		{archive, `read_skill(skills=[{"name":"builder-reference","path":"references/pulse-archive.md"}])`},
-		{gate, `read_skill(skills=[{"name":"builder-reference","path":"references/pulse-gate.md"}])`},
-		{moduleStep.query, `read_skill(skills=[{"name":"builder-reference","path":"references/pulse-review-fixer.md"}])`},
-		{dashboard, `read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}])`},
-		{finalizer, `read_skill(skills=[{"name":"builder-reference","path":"references/pulse-finalizer.md"}])`},
-	} {
-		if !strings.Contains(tc.prompt, tc.ref) {
-			t.Fatalf("compact prompt missing focused reference %q: %s", tc.ref, tc.prompt)
-		}
-	}
-}
-
-func TestValidatePulseDueModuleResultsAndFailureReconciliation(t *testing.T) {
+func TestValidatePulseDueModuleResultsRequiresAgentReceipts(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	t.Setenv("WORKSPACE_DOCS_PATH", root)
@@ -2563,8 +1687,8 @@ func TestValidatePulseDueModuleResultsAndFailureReconciliation(t *testing.T) {
 	if _, err := markPulseModuleResultFromAgent(ctx, workspacePath, pulseModuleWorkflowReview, pulseRunID, "done", "Clean review.", []string{"pulse_review_log:run:workflow_review"}); err != nil {
 		t.Fatalf("mark bug review: %v", err)
 	}
-	if err := markUnresolvedPulseDueModules(ctx, workspacePath, pulseRunID, "failed", "Module stages did not finish"); err != nil {
-		t.Fatalf("mark unresolved: %v", err)
+	if _, err := markPulseModuleResultFromAgent(ctx, workspacePath, pulseModuleGoalAdvisor, pulseRunID, "done", "Advisor review complete.", []string{"pulse_review_log:run:goal_advisor"}); err != nil {
+		t.Fatalf("mark goal advisor: %v", err)
 	}
 	if err := validatePulseDueModuleResults(ctx, workspacePath, pulseRunID); err != nil {
 		t.Fatalf("terminal validation: %v", err)
@@ -2576,10 +1700,8 @@ func TestValidatePulseDueModuleResultsAndFailureReconciliation(t *testing.T) {
 	if got := worklist[pulseModuleWorkflowReview].LastResult; got != "done" {
 		t.Fatalf("existing completed module was overwritten: %q", got)
 	}
-	for _, module := range []string{pulseModuleGoalAdvisor} {
-		if got := worklist[module].LastResult; got != "failed" {
-			t.Fatalf("%s result = %q, want failed", module, got)
-		}
+	if got := worklist[pulseModuleGoalAdvisor].LastResult; got != "done" {
+		t.Fatalf("goal advisor result = %q, want done", got)
 	}
 }
 
@@ -2626,97 +1748,6 @@ func TestPostRunMonitorFinalStepsIncludesSplitNotificationRouting(t *testing.T) 
 			t.Fatalf("finalizer missing split-route instruction %q: %s", required, finalizer)
 		}
 	}
-}
-
-func TestSelectedPostRunMonitorModuleStepsFallsBackConservatively(t *testing.T) {
-	ctx := context.Background()
-	root := t.TempDir()
-	t.Setenv("WORKSPACE_DOCS_PATH", root)
-	workspacePath := "Workflow/demo"
-	pulseRunID := "pulse-run-missing-worklist"
-	workspace := httptest.NewServer(&mockWorkspaceAPI{files: map[string]string{}})
-	defer workspace.Close()
-	t.Setenv("WORKSPACE_API_URL", workspace.URL)
-
-	s := NewSchedulerService(nil)
-	steps := s.selectedPostRunMonitorModuleSteps(ctx, &ScheduleContext{WorkspacePath: workspacePath}, pulseRunID)
-	got := postRunStepLabels(steps)
-	want := []string{"dashboard", "finalize"}
-	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("fallback labels = %#v, want %#v", got, want)
-	}
-}
-
-func TestSelectedPostRunMonitorModuleStepsFallsBackForPartialWorklist(t *testing.T) {
-	ctx := context.Background()
-	root := t.TempDir()
-	t.Setenv("WORKSPACE_DOCS_PATH", root)
-	workspacePath := "Workflow/demo"
-	pulseRunID := "pulse-run-partial-worklist"
-	workspace := httptest.NewServer(&mockWorkspaceAPI{files: map[string]string{}})
-	defer workspace.Close()
-	t.Setenv("WORKSPACE_API_URL", workspace.URL)
-
-	normalized, db, err := openPulseModuleStateDB(ctx, workspacePath, true)
-	if err != nil {
-		t.Fatalf("open pulse db: %v", err)
-	}
-	defer db.Close()
-	if _, err := db.ExecContext(ctx, `INSERT INTO pulse_module_state (
-			module, workspace_path, last_pulse_run_id, last_checked_at,
-			last_decision, last_reason, last_gate_decision, updated_at
-		) VALUES (?, ?, ?, 'now', 'due', 'Partial stale row.', 'due', 'now')`,
-		pulseModuleWorkflowReview, normalized, pulseRunID); err != nil {
-		t.Fatalf("insert partial worklist: %v", err)
-	}
-
-	s := NewSchedulerService(nil)
-	steps := s.selectedPostRunMonitorModuleSteps(ctx, &ScheduleContext{WorkspacePath: workspacePath}, pulseRunID)
-	got := postRunStepLabels(steps)
-	want := []string{"workflow-review", "pulse-fixer", "dashboard", "finalize"}
-	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("partial-worklist fallback labels = %#v, want %#v", got, want)
-	}
-}
-
-func TestSelectedPostRunMonitorModuleStepsPartialWorklistKeepsDueGoalAdvisor(t *testing.T) {
-	ctx := context.Background()
-	root := t.TempDir()
-	t.Setenv("WORKSPACE_DOCS_PATH", root)
-	workspacePath := "Workflow/demo"
-	pulseRunID := "pulse-run-partial-goal-advisor"
-	workspace := httptest.NewServer(&mockWorkspaceAPI{files: map[string]string{}})
-	defer workspace.Close()
-	t.Setenv("WORKSPACE_API_URL", workspace.URL)
-
-	normalized, db, err := openPulseModuleStateDB(ctx, workspacePath, true)
-	if err != nil {
-		t.Fatalf("open pulse db: %v", err)
-	}
-	defer db.Close()
-	if _, err := db.ExecContext(ctx, `INSERT INTO pulse_module_state (
-			module, workspace_path, last_pulse_run_id, last_checked_at,
-			last_decision, last_reason, last_gate_decision, updated_at
-		) VALUES (?, ?, ?, 'now', 'due', 'Goal drift persisted.', 'due', 'now')`,
-		pulseModuleGoalAdvisor, normalized, pulseRunID); err != nil {
-		t.Fatalf("insert partial worklist: %v", err)
-	}
-
-	s := NewSchedulerService(nil)
-	steps := s.selectedPostRunMonitorModuleSteps(ctx, &ScheduleContext{WorkspacePath: workspacePath}, pulseRunID)
-	got := postRunStepLabels(steps)
-	want := []string{"goal-advisor", "pulse-fixer", "dashboard", "finalize"}
-	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("partial-worklist fallback labels = %#v, want %#v", got, want)
-	}
-}
-
-func postRunStepLabels(steps []postRunMonitorStep) []string {
-	labels := make([]string, 0, len(steps))
-	for _, step := range steps {
-		labels = append(labels, step.label)
-	}
-	return labels
 }
 
 func TestOptimizerScheduleMessagesKeepsCustomMessages(t *testing.T) {
@@ -3198,6 +2229,74 @@ func TestWaitForWorkshopIdleRequiresTwoFreshIdleTmuxChecks(t *testing.T) {
 	}
 }
 
+func TestWaitForPulseTurnCompletionUsesRuntimeEventsWithoutTmuxPolling(t *testing.T) {
+	oldSettle := pulseTurnSettleDelay
+	pulseTurnSettleDelay = 5 * time.Millisecond
+	defer func() { pulseTurnSettleDelay = oldSettle }()
+
+	eventStore := storeevents.NewEventStore(100)
+	defer eventStore.Stop()
+	sessionID := "pulse-event-driven-completion"
+	api := &StreamingAPI{eventStore: eventStore, terminalStore: terminals.NewStore()}
+	// A retained main CLI stays live and can still look busy in its pane after
+	// the structured main-turn completion. It must not hold Pulse's next
+	// message; only tracked children/background agents may do that.
+	api.setSessionBusy(sessionID, true)
+	svc := &SchedulerService{api: api}
+
+	oldRunOutput := runTerminalTmuxOutputCommand
+	defer func() { runTerminalTmuxOutputCommand = oldRunOutput }()
+	tmuxCaptures := 0
+	runTerminalTmuxOutputCommand = func(ctx context.Context, args ...string) (string, error) {
+		tmuxCaptures++
+		return "", nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := svc.waitForPulseTurnCompletion(ctx, sessionID, 500*time.Millisecond); err != nil {
+		t.Fatalf("waitForPulseTurnCompletion returned error: %v", err)
+	}
+	if tmuxCaptures != 0 {
+		t.Fatalf("tmux captures = %d, want 0 for event-driven Pulse wait", tmuxCaptures)
+	}
+}
+
+func TestWaitForPulseTurnCompletionWaitsForTrackedChild(t *testing.T) {
+	oldSettle := pulseTurnSettleDelay
+	pulseTurnSettleDelay = 5 * time.Millisecond
+	defer func() { pulseTurnSettleDelay = oldSettle }()
+
+	eventStore := storeevents.NewEventStore(100)
+	defer eventStore.Stop()
+	const sessionID = "pulse-structured-child"
+	api := &StreamingAPI{
+		eventStore: eventStore,
+		trackedWorkflowExecutions: map[string]*TrackedWorkflowExecution{
+			"child": {ExecutionID: "child", SessionID: sessionID, Status: trackedExecutionStatusRunning, StartedAt: time.Now()},
+		},
+	}
+	svc := &SchedulerService{api: api}
+
+	go func() {
+		time.Sleep(15 * time.Millisecond)
+		api.trackedWorkflowExecutionsMux.Lock()
+		api.trackedWorkflowExecutions["child"].Status = trackedExecutionStatusCompleted
+		api.trackedWorkflowExecutionsMux.Unlock()
+		eventStore.AddEvent(sessionID, storeevents.Event{ID: "child-complete", Type: "agent_end", Timestamp: time.Now(), SessionID: sessionID})
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	started := time.Now()
+	if err := svc.waitForPulseTurnCompletion(ctx, sessionID, 500*time.Millisecond); err != nil {
+		t.Fatalf("waitForPulseTurnCompletion returned error: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed < 15*time.Millisecond {
+		t.Fatalf("Pulse wait returned before the tracked child settled: %s", elapsed)
+	}
+}
+
 func TestWaitForWorkshopIdleAbortsStoppedSequenceBeforeNextMessage(t *testing.T) {
 	api := &StreamingAPI{stoppedSessions: map[string]bool{"session-stopped": true}}
 	svc := &SchedulerService{api: api}
@@ -3376,46 +2475,128 @@ func TestWaitForWorkshopIdleAllowsLongRunningTmuxWithProgress(t *testing.T) {
 	}
 }
 
-func TestPostRunMonitorStepMaxInactivityUsesLongerGoalAdvisorCap(t *testing.T) {
+func TestPostRunMonitorStepsUseOneTurnInactivityBoundary(t *testing.T) {
 	oldNormal := schedulerWorkshopMaxInactivity
-	oldAdvisor := schedulerGoalAdvisorMaxInactivity
 	schedulerWorkshopMaxInactivity = 10 * time.Minute
-	schedulerGoalAdvisorMaxInactivity = 30 * time.Minute
 	defer func() {
 		schedulerWorkshopMaxInactivity = oldNormal
-		schedulerGoalAdvisorMaxInactivity = oldAdvisor
 	}()
 
-	if got := (postRunMonitorStep{label: "workflow-review"}).idleMaxInactivity(); got != 10*time.Minute {
-		t.Fatalf("workflow-review max inactivity = %s, want 10m", got)
-	}
-	if got := (postRunMonitorStep{label: "goal-advisor"}).idleMaxInactivity(); got != 30*time.Minute {
-		t.Fatalf("goal-advisor max inactivity = %s, want 30m", got)
-	}
-	if got := (postRunMonitorStep{label: "strategy-auditor"}).idleMaxInactivity(); got != 30*time.Minute {
-		t.Fatalf("strategy-auditor max inactivity = %s, want 30m", got)
+	for _, label := range []string{"gate", "review-fix", "review-fix-continuation", "dashboard", "finalize"} {
+		if got := (postRunMonitorStep{label: label}).idleMaxInactivity(); got != 10*time.Minute {
+			t.Fatalf("%s max inactivity = %s, want 10m", label, got)
+		}
 	}
 }
 
-func TestPostRunMonitorStepClassificationSupportsTimeoutRecovery(t *testing.T) {
+func TestReviewFixContinuationIsParentReceiptReconciliationOnly(t *testing.T) {
+	step := postRunMonitorReviewFixContinuationStep("pulse-test", errors.New("workflow_review receipt missing"))
+	for _, want := range []string{
+		"one parent reconciliation turn, not a second fixer",
+		"do not restart completed reviews",
+		"do not restart completed reviews, automatically create a duplicate recovery/Fixer agent, re-run a child, or mutate workflow artifacts",
+		"A separately scoped repair agent remains available when a later parent turn deliberately chooses one",
+		"record_pulse_result exactly once",
+	} {
+		if !strings.Contains(step.query, want) {
+			t.Fatalf("continuation prompt missing %q:\n%s", want, step.query)
+		}
+	}
+}
+
+func TestPostRunMonitorFinalStepClassification(t *testing.T) {
 	tests := []struct {
 		label     string
-		module    string
 		finalStep bool
 	}{
-		{label: "workflow-review", module: pulseModuleWorkflowReview},
-		{label: "strategy-auditor", module: pulseModuleStrategyAuditor},
-		{label: "goal-advisor", module: pulseModuleGoalAdvisor},
-		{label: "dashboard", finalStep: true},
+		{label: "gate"},
+		{label: "review-fix"},
+		{label: "dashboard", finalStep: false},
 		{label: "finalize", finalStep: true},
 	}
 	for _, test := range tests {
-		if got := pulseModuleForPostRunMonitorStep(test.label); got != test.module {
-			t.Fatalf("module for %q = %q, want %q", test.label, got, test.module)
-		}
 		if got := isPostRunMonitorFinalStep(test.label); got != test.finalStep {
 			t.Fatalf("final-step classification for %q = %v, want %v", test.label, got, test.finalStep)
 		}
+	}
+}
+
+func TestPulseStepFailureMustStopBeforeNextTurn(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		result postRunMonitorStepRunResult
+		busy   bool
+		want   bool
+	}{
+		{name: "completed turn", result: postRunMonitorStepRunResult{outcome: postRunMonitorStepCompleted}, busy: true},
+		{name: "failed idle turn", result: postRunMonitorStepRunResult{outcome: postRunMonitorStepWaitFailed}, busy: false},
+		{name: "timed out live turn", result: postRunMonitorStepRunResult{outcome: postRunMonitorStepTimedOut}, busy: true, want: true},
+		{name: "failed-to-start while prior turn remains live", result: postRunMonitorStepRunResult{outcome: postRunMonitorStepStartFailed}, busy: true, want: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := pulseStepFailureMustStopBeforeNextTurn(test.result, test.busy); got != test.want {
+				t.Fatalf("pulseStepFailureMustStopBeforeNextTurn() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+// TestReconcileSessionBusySignal pins the PLAT-094 fix and its PLAT-095
+// generalization: neither a Pulse step boundary nor the workshop idle-wait
+// may abort on a stale runtime-snapshot busy signal once the explicit
+// per-turn flag says the turn has actually finished. Observed live on
+// build-in-public 2026-08-12 — Finalize was aborted on exactly this
+// disagreement, and no backup/publish/notify ran for that pass. Both call
+// sites now share this one function rather than each re-deriving the rule.
+func TestReconcileSessionBusySignal(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		snapshotBusy bool
+		explicitBusy bool
+		wantBusy     bool
+	}{
+		{name: "both agree idle", snapshotBusy: false, explicitBusy: false, wantBusy: false},
+		{name: "both agree busy", snapshotBusy: true, explicitBusy: true, wantBusy: true},
+		{
+			name:         "stale snapshot outlives the turn's own completion",
+			snapshotBusy: true, explicitBusy: false,
+			wantBusy: false, // the exact race: trust the explicit flag over the lagging snapshot
+		},
+		{
+			// Mirrors PLAT-071's own precedent exactly: the explicit flag is only
+			// ever consulted to correct a snapshot CLAIMING busy. An idle snapshot
+			// is trusted as-is and never escalated to busy from the explicit flag
+			// alone — that would be a new failure mode (spurious aborts), not the
+			// one either fix addresses.
+			name:         "snapshot idle is trusted even if the explicit flag disagrees",
+			snapshotBusy: false, explicitBusy: true,
+			wantBusy: false,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := reconcileSessionBusySignal(test.snapshotBusy, test.explicitBusy); got != test.wantBusy {
+				t.Fatalf("reconcileSessionBusySignal(snapshot=%v, explicit=%v) = %v, want %v",
+					test.snapshotBusy, test.explicitBusy, got, test.wantBusy)
+			}
+		})
+	}
+}
+
+// TestAbortIfTurnStillBusyReclassificationChangesTheOutcome proves the fix
+// matters, not just that the helper returns the right bool in isolation: with
+// the stale-snapshot shape, pulseStepFailureMustStopBeforeNextTurn — the
+// function that actually gates the abort — must flip from "stop" to
+// "continue" once the reconciliation is applied.
+func TestAbortIfTurnStillBusyReclassificationChangesTheOutcome(t *testing.T) {
+	result := postRunMonitorStepRunResult{outcome: postRunMonitorStepStartFailed}
+	staleSnapshotBusy, explicitBusy := true, false
+
+	if !pulseStepFailureMustStopBeforeNextTurn(result, staleSnapshotBusy) {
+		t.Fatal("precondition: the unreconciled stale snapshot must still read as must-stop, or this test proves nothing")
+	}
+	reconciled := reconcileSessionBusySignal(staleSnapshotBusy, explicitBusy)
+	if pulseStepFailureMustStopBeforeNextTurn(result, reconciled) {
+		t.Fatal("a finished turn's stale snapshot-busy signal must not abort Finalize (PLAT-094)")
 	}
 }
 
@@ -3945,6 +3126,38 @@ func TestReconcileWorkshopRunOutcomeIgnoresPreexistingFailure(t *testing.T) {
 	}
 }
 
+// TestReconcileWorkshopRunOutcomeMisattributesWhenBaselineIsLost pins the hazard
+// that makes the caller's guard necessary, rather than asserting a behaviour we
+// want. The function decides "new" purely by absence from the before-set, so an
+// EMPTY before-set means every folder looks new and any old failure is reported
+// as this invocation's.
+//
+// That is correct for a primitive that is handed a real baseline, and it is why
+// the baseline must never be a guess. loadRunFoldersInternal used to return an
+// empty slice with a nil error whenever the workspace listing failed, so the
+// scheduler could not tell "no run folders" from "could not look" and passed
+// exactly this empty set. On 2026-08-10 a hetznerssh production security audit
+// completed cleanly in iteration-0 and was recorded as an error, blamed on
+// iteration-25, which had failed the previous day — moments after workspace
+// folder calls were returning errors following a restart.
+//
+// The fix is at the call site: propagate the listing error and skip
+// reconciliation when either snapshot is unavailable. If this test ever starts
+// failing because the function itself learned to ignore an empty baseline, that
+// is fine — delete it and keep the caller guard.
+func TestReconcileWorkshopRunOutcomeMisattributesWhenBaselineIsLost(t *testing.T) {
+	lostBaseline := map[string]bool{} // what a failed listing produced
+	after := []RunFolderInfo{
+		{Name: "iteration-0", Metadata: &RunMetadata{Status: "completed"}},
+		{Name: "iteration-25", Metadata: &RunMetadata{Status: "failed"}}, // yesterday's
+	}
+	failedFolder, found := reconcileWorkshopRunOutcome(lostBaseline, after)
+	if !found || failedFolder != "iteration-25" {
+		t.Fatalf("expected the documented misattribution (iteration-25), got found=%v folder=%q; "+
+			"if the primitive now tolerates an empty baseline this test is obsolete", found, failedFolder)
+	}
+}
+
 // TestReconcileWorkshopRunOutcomeIgnoresAmbiguousStates proves that anything
 // other than an explicit "failed" — no metadata, "running", "completed" — is
 // left alone rather than treated as a failure. A transient listing hiccup or
@@ -3994,19 +3207,13 @@ func TestRunFolderNameSetSkipsEmptyNames(t *testing.T) {
 
 func TestPostRunMonitorModuleStepsReserveHTMLForDashboard(t *testing.T) {
 	steps := postRunMonitorSteps()
-	moduleLabels := map[string]bool{
-		"workflow-review": true, "strategy-auditor": true, "goal-advisor": true,
-	}
 	checked := 0
 	for _, step := range steps {
-		if !moduleLabels[step.label] {
+		if step.label != "review-fix" {
 			continue
 		}
 		checked++
-		for _, want := range []string{
-			"Do not update builder/improve.html or builder/card.health.html",
-			"dedicated Dashboard stage",
-		} {
+		for _, want := range []string{"Do not render the dashboard", "durable Gate worklist"} {
 			if !strings.Contains(step.query, want) {
 				t.Fatalf("module step %q missing single-renderer guard %q:\n%s", step.label, want, step.query)
 			}
@@ -4015,8 +3222,8 @@ func TestPostRunMonitorModuleStepsReserveHTMLForDashboard(t *testing.T) {
 			t.Fatalf("module step %q still loads the presentation contract:\n%s", step.label, step.query)
 		}
 	}
-	if checked != len(moduleLabels) {
-		t.Fatalf("checked %d module steps, want %d — module label set is out of sync with postRunMonitorSteps()", checked, len(moduleLabels))
+	if checked != 1 {
+		t.Fatalf("checked %d Review+Fix steps, want 1", checked)
 	}
 }
 
@@ -4049,14 +3256,266 @@ func pulseStepQueryByLabel(t *testing.T, steps []postRunMonitorStep, label strin
 // per-stage assertions are currently unreachable dead code after a premature
 // return partway through that function (a concurrent, unrelated in-progress
 // edit — see the go vet "unreachable code" flag at this file's line 787).
-func TestPulseDashboardStagePromptNamesTheCommandTool(t *testing.T) {
-	dashboard := pulseStepQueryByLabel(t, postRunMonitorSteps(), "dashboard")
-	for _, want := range []string{
-		`record_pulse_result(command="dashboard"`,
-		"never mutate_workflow_db or direct SQL for it",
-	} {
-		if !strings.Contains(dashboard, want) {
-			t.Fatalf("dashboard step missing %q:\n%s", want, dashboard)
+func TestPulseHasNoDashboardStage(t *testing.T) {
+	for _, step := range postRunMonitorSteps() {
+		if step.label == "dashboard" || strings.Contains(step.query, "PULSE DASHBOARD") {
+			t.Fatalf("retired HTML dashboard leaked into Pulse stage: %+v", step)
 		}
+	}
+}
+
+func TestWorkshopRunProducedEvidence(t *testing.T) {
+	start := time.Date(2026, 8, 5, 10, 0, 0, 0, time.UTC)
+	before := map[string]bool{"iteration-0": true}
+
+	tests := []struct {
+		name  string
+		after []RunFolderInfo
+		want  bool
+	}{
+		{
+			name: "pre-existing folder untouched",
+			after: []RunFolderInfo{{Name: "iteration-0", Metadata: &RunMetadata{
+				StartedAt: start.Add(-2 * time.Hour), CreatedAt: start.Add(-3 * time.Hour), Status: "completed",
+			}}},
+			want: false,
+		},
+		{
+			name: "new folder created",
+			after: []RunFolderInfo{
+				{Name: "iteration-0", Metadata: &RunMetadata{StartedAt: start.Add(-2 * time.Hour)}},
+				{Name: "iteration-1", Metadata: &RunMetadata{StartedAt: start.Add(time.Minute)}},
+			},
+			want: true,
+		},
+		{
+			name: "existing folder restarted",
+			after: []RunFolderInfo{{Name: "iteration-0", Metadata: &RunMetadata{
+				StartedAt: start.Add(30 * time.Second), CreatedAt: start.Add(-3 * time.Hour),
+			}}},
+			want: true,
+		},
+		{
+			name:  "failed new run still counts",
+			after: []RunFolderInfo{{Name: "iteration-2", Metadata: &RunMetadata{StartedAt: start.Add(time.Minute), Status: "failed"}}},
+			want:  true,
+		},
+		{
+			name:  "known folder without metadata proves nothing",
+			after: []RunFolderInfo{{Name: "iteration-0"}},
+			want:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := workshopRunProducedEvidence(before, tt.after, start); got != tt.want {
+				t.Fatalf("workshopRunProducedEvidence() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestScheduledWorkflowStepProducedEvidenceUsesLinkedStepExecutions(t *testing.T) {
+	since := time.Date(2026, 8, 11, 0, 0, 0, 0, time.UTC)
+	registry := NewBackgroundAgentRegistry()
+	registry.Register("schedule-session", &BackgroundAgent{
+		ID:        "exec-daily-report-1",
+		SessionID: "schedule-session",
+		Kind:      "workflow_step",
+		Status:    BGAgentCompleted,
+		CreatedAt: since.Add(time.Minute),
+		Metadata:  map[string]string{"execution_type": "workflow-step"},
+	})
+	service := &SchedulerService{api: &StreamingAPI{bgAgentRegistry: registry}}
+	if !service.scheduledWorkflowStepProducedEvidence("schedule-session", since) {
+		t.Fatal("a workflow step launched by this schedule must be Pulse evidence")
+	}
+
+	registry.Register("schedule-session", &BackgroundAgent{
+		ID:        "bg-unrelated-1",
+		SessionID: "schedule-session",
+		Kind:      "workshop_background",
+		Status:    BGAgentCompleted,
+		CreatedAt: since.Add(2 * time.Minute),
+	})
+	if !service.scheduledWorkflowStepProducedEvidence("schedule-session", since) {
+		t.Fatal("unrelated background work must not erase linked workflow-step evidence")
+	}
+
+	otherRegistry := NewBackgroundAgentRegistry()
+	otherRegistry.Register("schedule-session", &BackgroundAgent{
+		ID:        "bg-only-1",
+		SessionID: "schedule-session",
+		Kind:      "workshop_background",
+		Status:    BGAgentCompleted,
+		CreatedAt: since.Add(time.Minute),
+	})
+	otherService := &SchedulerService{api: &StreamingAPI{bgAgentRegistry: otherRegistry}}
+	if otherService.scheduledWorkflowStepProducedEvidence("schedule-session", since) {
+		t.Fatal("generic background work must not manufacture workflow evidence")
+	}
+}
+
+func TestNoRunFinalizerSkipsEvidenceStagesAndReportsReason(t *testing.T) {
+	reason := `workflow upgrade preflight upgrade-1.0.18 did not stamp required version "1.0.18"; normal schedule message was not started`
+	steps := postRunMonitorNoRunSteps("pulse-run-1", reason, workflowNotificationContentInstructions{
+		runSummaryChannels:   []string{"electron", "slack"},
+		runSummaryRecipients: []string{"owner@example.com"},
+	})
+	if len(steps) != 1 || steps[0].label != "finalize" {
+		t.Fatalf("no-run finalizer = %#v, want one finalize step", steps)
+	}
+	for _, want := range []string{
+		"WORKFLOW DID NOT RUN",
+		"Gate, reviewers, Fixer, dashboard, and publish were intentionally skipped",
+		`notification_kind="run_summary"`,
+		"dashboard has no record_pulse_result command and needs no receipt",
+		"mark publish skipped",
+		"source-hash-gated backup",
+		"electron, slack",
+		"owner@example.com",
+		// The label survives so the operator's run summary can name which
+		// migration stalled.
+		"workflow upgrade preflight upgrade-1.0.18 did not complete",
+	} {
+		if !strings.Contains(steps[0].query, want) {
+			t.Fatalf("no-run finalizer missing %q:\n%s", want, steps[0].query)
+		}
+	}
+	// The finalizer shares the scheduler's session. Restating the stamp
+	// instruction here is what invited the confida-login 2026-08-12 out-of-turn
+	// stamp, so the target version and the verb must not reach this turn.
+	for _, forbidden := range []string{"did not stamp", `"1.0.18"`} {
+		if strings.Contains(steps[0].query, forbidden) {
+			t.Fatalf("no-run finalizer restates the upgrade instruction (%q):\n%s", forbidden, steps[0].query)
+		}
+	}
+	if strings.Contains(steps[0].query, "write builder/improve.html once") {
+		t.Fatal("no-run finalizer must not contain the normal dashboard mutation contract")
+	}
+	// PLAT-083 regression: the numbered record_pulse_result instructions must
+	// never ask the agent to record "dashboard" — it was never a valid final
+	// command (only backup/publish/notify are), so the tool rejected every
+	// attempt and the agent had to recover from an error the prompt itself
+	// caused.
+	if strings.Contains(steps[0].query, "mark dashboard skipped") {
+		t.Fatal("no-run finalizer must not instruct the agent to record_pulse_result an invalid \"dashboard\" command")
+	}
+
+	fallback := postRunMonitorNoRunSteps("pulse-run-2", "   ")[0].query
+	if !strings.Contains(fallback, "no workflow run was started or resumed") {
+		t.Fatal("empty scheduler error must still produce a truthful explanation")
+	}
+}
+
+func TestDueCronOccurrencesRetainsEveryRecentOccurrenceAndLatestCatchup(t *testing.T) {
+	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+	schedule, err := parser.Parse("*/5 * * * *")
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := time.Date(2026, 8, 7, 10, 0, 0, 0, time.UTC)
+	now := time.Date(2026, 8, 7, 10, 17, 0, 0, time.UTC)
+	got := dueCronOccurrences(schedule, after, now)
+	want := []time.Time{
+		time.Date(2026, 8, 7, 10, 5, 0, 0, time.UTC),
+		time.Date(2026, 8, 7, 10, 10, 0, 0, time.UTC),
+		time.Date(2026, 8, 7, 10, 15, 0, 0, time.UTC),
+	}
+	if len(got) != len(want) {
+		t.Fatalf("occurrences=%v, want %v", got, want)
+	}
+	for i := range want {
+		if !got[i].Equal(want[i]) {
+			t.Fatalf("occurrence[%d]=%s, want %s", i, got[i], want[i])
+		}
+	}
+}
+
+func TestLatestCronOccurrenceReconcilesInterruptedAttempt(t *testing.T) {
+	store, err := schedulerstate.Open(filepath.Join(t.TempDir(), "schedule-state.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	scheduledFor := time.Date(2026, 8, 7, 10, 30, 0, 0, time.UTC)
+	if err := store.RecordFireDecision(context.Background(), schedulerstate.FireDecision{
+		DecisionID: "attempt", ScopeType: "workflow", ScopeID: "Workflow/demo", ScheduleID: "daily",
+		TriggerSource: "cron", Decision: "attempted", ScheduledFor: scheduledFor, FiredAt: scheduledFor,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service := NewSchedulerService(nil)
+	service.stateStore = store
+	sctx := &ScheduleContext{WorkspacePath: "Workflow/demo", SourceType: "workflow", Schedule: WorkflowSchedule{ID: "daily"}}
+	got, ok := service.latestCronOccurrence(sctx)
+	if !ok || !got.Equal(scheduledFor) {
+		t.Fatalf("latest occurrence=(%s,%t), want (%s,true)", got, ok, scheduledFor)
+	}
+	latest, err := store.LatestFireDecision(context.Background(), "workflow", "Workflow/demo", "daily", "cron")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest.Decision != "launch_outcome_unknown" || !strings.Contains(latest.Reason, "may or may not have started") {
+		t.Fatalf("interrupted attempt was not reconciled: %+v", latest)
+	}
+}
+
+func TestDueCronOccurrencesDoesNotDropMinuteOccurrencesWithinRecoveryWindow(t *testing.T) {
+	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+	schedule, err := parser.Parse("* * * * *")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 7, 10, 0, 0, 0, time.UTC)
+	after := now.Add(-12 * time.Hour)
+	got := dueCronOccurrences(schedule, after, now)
+	if len(got) != 12*60 {
+		t.Fatalf("retained occurrences=%d, want %d", len(got), 12*60)
+	}
+	if !got[0].Equal(after.Add(time.Minute)) || !got[len(got)-1].Equal(now) {
+		t.Fatalf("unexpected occurrence bounds: first=%s last=%s", got[0], got[len(got)-1])
+	}
+}
+
+// TestWorkshopRunStartedDuringInvocationIgnoresBaseline pins the reason this
+// helper exists separately from workshopRunProducedEvidence: it must answer
+// correctly with no before-set at all.
+//
+// social-media 2026-08-10: the run completed at 12:15:18Z, the workshop idle
+// wait expired 34 minutes later, and because that path returns before the
+// evidence check, ProducedRunEvidence kept its initialized false. Pulse was told
+// "the workflow did not run" and skipped publish — against a run that had landed
+// 19 actions, 18 of them independently verified. The durable record said
+// "completed" the whole time; nothing consulted it.
+func TestWorkshopRunStartedDuringInvocationIgnoresBaseline(t *testing.T) {
+	since := time.Date(2026, 8, 10, 9, 30, 53, 0, time.UTC)
+	folders := []RunFolderInfo{
+		// Pre-existing folder reused by this invocation — the shape that made the
+		// baseline-dependent helper unreliable here. iteration-0 always exists.
+		{Name: "iteration-0", Metadata: &RunMetadata{
+			Status:    "completed",
+			StartedAt: since.Add(4 * time.Minute),
+		}},
+	}
+	if !workshopRunStartedDuringInvocation(folders, since) {
+		t.Fatal("a run whose own metadata says it started during this invocation is evidence, baseline or not")
+	}
+}
+
+// TestWorkshopRunStartedDuringInvocationRejectsOlderAndUnstamped proves the
+// helper cannot manufacture evidence: a run from a previous invocation, and a
+// record with no usable timestamp, both count as nothing. The caller treats
+// false as "no evidence recorded", which is the pre-existing behaviour.
+func TestWorkshopRunStartedDuringInvocationRejectsOlderAndUnstamped(t *testing.T) {
+	since := time.Date(2026, 8, 10, 9, 30, 53, 0, time.UTC)
+	folders := []RunFolderInfo{
+		{Name: "iteration-254", Metadata: &RunMetadata{Status: "completed", StartedAt: since.Add(-2 * time.Hour)}},
+		{Name: "iteration-253", Metadata: &RunMetadata{Status: "failed"}}, // no timestamps
+		{Name: "iteration-252"}, // no metadata
+	}
+	if workshopRunStartedDuringInvocation(folders, since) {
+		t.Fatal("older or unstamped runs must not be reported as evidence for this invocation")
 	}
 }

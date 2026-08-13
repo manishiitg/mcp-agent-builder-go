@@ -228,7 +228,7 @@ func TestUpdateMessageSequenceExecutorAtomicallyPersistsLegacyUpgrade(t *testing
 
 func TestNonScriptedRegularStepNormalizesToMessageSequence(t *testing.T) {
 	validation := &ValidationSchema{}
-	config := &AgentConfigs{DeclaredExecutionMode: StepModeAgentic, DBAccess: "read"}
+	config := &AgentConfigs{DeclaredExecutionMode: StepModeAgentic}
 	regular := &RegularPlanStep{
 		Type: StepTypeRegular,
 		CommonStepFields: CommonStepFields{

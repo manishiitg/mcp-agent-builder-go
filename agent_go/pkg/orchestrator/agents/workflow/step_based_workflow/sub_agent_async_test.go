@@ -9,7 +9,10 @@ import (
 	"time"
 
 	virtualtools "github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/events"
+	baseevents "github.com/manishiitg/mcpagent/events"
+	loggerv2 "github.com/manishiitg/mcpagent/logger/v2"
 )
 
 func TestAsyncGenericAgentPreservesMessageSequenceContext(t *testing.T) {
@@ -22,6 +25,72 @@ func TestAsyncGenericAgentPreservesMessageSequenceContext(t *testing.T) {
 	if len(got) != 1 || got[0] != want[0] {
 		t.Fatalf("async child sequence = %#v, want %#v", got, want)
 	}
+}
+
+type subAgentAsyncTestNoopListener struct{}
+
+func (subAgentAsyncTestNoopListener) HandleEvent(context.Context, *baseevents.AgentEvent) error {
+	return nil
+}
+func (subAgentAsyncTestNoopListener) Name() string { return "noop" }
+
+// TestAsyncSubAgentChildLLMCallsReportIntoParentStepTiming is the PLAT-032
+// regression: registerAsyncCall builds a child's execution context from the
+// step's long-lived ParentContext, not from the in-flight tool-call context
+// that carries the parent step's active timing-capture ID. Without
+// propagating that ID, a child's LLM/tool calls silently land in a
+// different (or the default) collector and never appear in the parent
+// step's drained trace — exactly the 40-traced-vs-490-ledger gap reported.
+func TestAsyncSubAgentChildLLMCallsReportIntoParentStepTiming(t *testing.T) {
+	bridge := orchestrator.NewContextAwareEventBridge(subAgentAsyncTestNoopListener{}, loggerv2.NewNoop())
+
+	// The parent step starts its own capture and makes the tool-call context
+	// (what the call_sub_agent tool executor actually receives) carry it.
+	toolCtx := bridge.StartTimingCaptureFor(context.Background())
+
+	execCtx := &SubAgentExecutionContext{ParentContext: context.Background(), AsyncEnabled: true}
+	childCtx, call := execCtx.registerAsyncCall(toolCtx, "child-1", "todo-1", "route-1", "predefined")
+	defer execCtx.completeAsyncCall(call, "done", nil)
+
+	// Simulate the child agent's own LLM call reporting through the SAME
+	// bridge (as real child agents do) but with its detached childCtx.
+	if err := bridge.HandleEvent(childCtx, &baseevents.AgentEvent{
+		Type:      baseevents.LLMGenerationStart,
+		Timestamp: time.Now(),
+		Component: "test",
+		Data:      &baseevents.LLMGenerationStartEvent{Turn: 1, ModelID: "claude-opus-5"},
+	}); err != nil {
+		t.Fatalf("bridge.HandleEvent: %v", err)
+	}
+
+	snapshot := bridge.DrainTimingCaptureFor(toolCtx)
+	if len(snapshot.LLMCalls) != 1 {
+		t.Fatalf("parent step trace has %d LLM calls, want 1 (child call was not attributed to the parent's capture)", len(snapshot.LLMCalls))
+	}
+	if snapshot.LLMCalls[0].ModelID != "claude-opus-5" {
+		t.Fatalf("captured call model = %q, want claude-opus-5", snapshot.LLMCalls[0].ModelID)
+	}
+}
+
+// TestAsyncSubAgentWithNoActiveParentCaptureLeavesChildContextUnchanged
+// guards the no-op path: when the parent step never started a timing
+// capture, registerAsyncCall must not fabricate one for the child.
+func TestAsyncSubAgentWithNoActiveParentCaptureLeavesChildContextUnchanged(t *testing.T) {
+	execCtx := &SubAgentExecutionContext{ParentContext: context.Background(), AsyncEnabled: true}
+	childCtx, call := execCtx.registerAsyncCall(context.Background(), "child-1", "todo-1", "route-1", "predefined")
+	defer execCtx.completeAsyncCall(call, "done", nil)
+
+	bridge := orchestrator.NewContextAwareEventBridge(subAgentAsyncTestNoopListener{}, loggerv2.NewNoop())
+	if err := bridge.HandleEvent(childCtx, &baseevents.AgentEvent{
+		Type:      baseevents.LLMGenerationStart,
+		Timestamp: time.Now(),
+		Component: "test",
+		Data:      &baseevents.LLMGenerationStartEvent{Turn: 1, ModelID: "claude-opus-5"},
+	}); err != nil {
+		t.Fatalf("bridge.HandleEvent: %v", err)
+	}
+	// No capture was ever started, so there is nothing to drain — this call
+	// just proves HandleEvent doesn't panic/error without an active capture.
 }
 
 func TestWaitForUnreconciledWaitsForEveryOwnedChild(t *testing.T) {
@@ -93,6 +162,25 @@ func TestRunAsyncCallTurnsPanicIntoTerminalFailure(t *testing.T) {
 	}
 	if len(completions) != 1 || completions[0].Status != "failed" || completions[0].Error != "sub-agent panicked: provider crashed" {
 		t.Fatalf("unexpected panic completion: %#v", completions)
+	}
+}
+
+func TestRunAsyncCallPreservesChildExecutionFailure(t *testing.T) {
+	execCtx := &SubAgentExecutionContext{ParentContext: context.Background(), AsyncEnabled: true}
+	_, call := execCtx.registerAsyncCall(context.Background(), "child-failed", "failed", "route", "predefined")
+	execCtx.runAsyncCall(call, func() (string, error) {
+		return "partial child evidence", errors.New("failed to create execution-only agent")
+	})
+	completions, err := execCtx.waitForUnreconciled(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(completions) != 1 {
+		t.Fatalf("got %d completions, want 1", len(completions))
+	}
+	got := completions[0]
+	if got.Status != "failed" || got.Error != "failed to create execution-only agent" || got.Result != "partial child evidence" {
+		t.Fatalf("failed child completion = %#v", got)
 	}
 }
 

@@ -125,10 +125,9 @@ func workflowPublishEffectiveState(config *WorkflowPublishConfig, status *Workfl
 	return state
 }
 
-// The artifacts whose change should trigger a re-publish: the Pulse log, the
-// report HTML, and db.sqlite (the dashboard snapshot is baked from it).
+// The artifacts whose change should trigger a re-publish: report HTML and
+// db.sqlite (the dashboard snapshot is baked from it). Pulse is in-app only.
 var publishHashFiles = []string{
-	"builder/improve.html",
 	"db/db.sqlite",
 }
 

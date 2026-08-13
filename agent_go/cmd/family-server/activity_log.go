@@ -20,6 +20,11 @@ type ActivityLogEntry struct {
 	Date        string `json:"date"` // "2026-07-28", LOCAL time.Now()
 	ActivityDir string `json:"activity_dir"`
 	Title       string `json:"title"`
+	// DurationSeconds accumulates every turn's real work time (see
+	// turnTrace.duration) across however many turns happened on this
+	// activity today. Approximate, not exact — see the caller in child.go
+	// for what it does and doesn't capture.
+	DurationSeconds int `json:"duration_seconds,omitempty"`
 }
 
 var activityLogMu sync.Mutex
@@ -57,11 +62,15 @@ func saveActivityLog(entries []ActivityLogEntry) error {
 	return os.WriteFile(abs, b, 0o600)
 }
 
-// recordActivityLogEntry appends one entry for (today, activityDir) — unless
-// the LAST entry already matches both, so a burst of turns in one sitting
-// doesn't spam duplicates. Best-effort: a failure here should never fail the
-// real child turn it's called from, so errors are swallowed.
-func recordActivityLogEntry(activityDir string) {
+// recordActivityLogEntry accumulates duration onto today's entry for
+// activityDir, creating one if today has no entry for it yet. Scans the
+// TRAILING RUN of entries sharing today's date (not just the last entry) —
+// a child bouncing between two activities in one sitting (Math -> English ->
+// Math, completely normal) would otherwise have the second Math turn miss
+// the last entry (English) and append a second, fragmented Math entry
+// instead of accumulating onto the first. Best-effort: a failure here should
+// never fail the real child turn it's called from, so errors are swallowed.
+func recordActivityLogEntry(activityDir string, duration time.Duration) {
 	if activityDir == "" {
 		return
 	}
@@ -69,13 +78,18 @@ func recordActivityLogEntry(activityDir string) {
 	activityLogMu.Lock()
 	defer activityLogMu.Unlock()
 	entries := loadActivityLog()
-	if n := len(entries); n > 0 && entries[n-1].Date == today && entries[n-1].ActivityDir == activityDir {
-		return // already logged today for this activity
+	seconds := int(duration.Seconds())
+	for i := len(entries) - 1; i >= 0 && entries[i].Date == today; i-- {
+		if entries[i].ActivityDir == activityDir {
+			entries[i].DurationSeconds += seconds
+			_ = saveActivityLog(entries)
+			return
+		}
 	}
 	title := activityDir
 	if act, ok := loadActivity(activityDir); ok && act.Title != "" {
 		title = act.Title
 	}
-	entries = append(entries, ActivityLogEntry{Date: today, ActivityDir: activityDir, Title: title})
+	entries = append(entries, ActivityLogEntry{Date: today, ActivityDir: activityDir, Title: title, DurationSeconds: seconds})
 	_ = saveActivityLog(entries)
 }

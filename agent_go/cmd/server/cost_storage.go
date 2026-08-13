@@ -265,14 +265,34 @@ func readPhaseTokenUsageFromCosts(ctx context.Context, workspacePath string) (*o
 	return &tokenFile, nil
 }
 
-func readAllRunTokenUsageFromCosts(ctx context.Context, workspacePath string, scope orchestrator.CostScope) (map[string]*orchestrator.TokenUsageFile, error) {
+type storedRunTokenUsage struct {
+	ExecutionID       string
+	RunFolder         string
+	ArchivedRunFolder string
+	TokenUsage        *orchestrator.TokenUsageFile
+}
+
+func (r *storedRunTokenUsage) effectiveRunFolder() string {
+	if r == nil {
+		return ""
+	}
+	if strings.TrimSpace(r.ArchivedRunFolder) != "" {
+		return r.ArchivedRunFolder
+	}
+	return r.RunFolder
+}
+
+// readAllRunTokenUsageFromCosts returns one aggregate per immutable execution
+// ID. Legacy files without executions remain visible with a legacy:<path> key;
+// they are never merged into a new UUID-keyed execution.
+func readAllRunTokenUsageFromCosts(ctx context.Context, workspacePath string, scope orchestrator.CostScope) (map[string]*storedRunTokenUsage, error) {
 	if err := ensureWorkspaceCostMigration(ctx, workspacePath); err != nil {
 		return nil, err
 	}
 
 	root := workspaceCostPath(workspacePath, "costs", string(scope))
 
-	result := make(map[string]*orchestrator.TokenUsageFile)
+	result := make(map[string]*storedRunTokenUsage)
 	filePaths, err := listWorkspaceFilesRecursive(ctx, root)
 	if err != nil {
 		return nil, err
@@ -296,8 +316,34 @@ func readAllRunTokenUsageFromCosts(ctx context.Context, workspacePath string, sc
 		}
 		orchestrator.EnsureDailyGroupTokenUsageFilePricing(&dailyFile)
 
+		for executionID, execution := range dailyFile.Executions {
+			if execution == nil || execution.TokenUsage == nil || strings.TrimSpace(executionID) == "" {
+				continue
+			}
+			entry := result[executionID]
+			if entry == nil {
+				entry = &storedRunTokenUsage{ExecutionID: executionID, RunFolder: execution.RunFolder, ArchivedRunFolder: execution.ArchivedRunFolder}
+				result[executionID] = entry
+			}
+			if entry.RunFolder == "" {
+				entry.RunFolder = execution.RunFolder
+			}
+			if execution.ArchivedRunFolder != "" {
+				entry.ArchivedRunFolder = execution.ArchivedRunFolder
+			}
+			entry.TokenUsage = orchestrator.MergeTokenUsageFiles(entry.TokenUsage, execution.TokenUsage)
+		}
+
+		// run_folders is the v1 projection. It may be historically merged, so
+		// keep it separate instead of letting it contaminate a UUID record.
 		for storedRunFolder, tokenFile := range dailyFile.RunFolders {
-			result[storedRunFolder] = orchestrator.MergeTokenUsageFiles(result[storedRunFolder], tokenFile)
+			legacyKey := "legacy:" + storedRunFolder
+			entry := result[legacyKey]
+			if entry == nil {
+				entry = &storedRunTokenUsage{ExecutionID: legacyKey, RunFolder: storedRunFolder}
+				result[legacyKey] = entry
+			}
+			entry.TokenUsage = orchestrator.MergeTokenUsageFiles(entry.TokenUsage, tokenFile)
 		}
 	}
 
@@ -305,17 +351,21 @@ func readAllRunTokenUsageFromCosts(ctx context.Context, workspacePath string, sc
 }
 
 type workflowRunCostEntry struct {
+	ExecutionID          string                       `json:"execution_id,omitempty"`
 	RunFolder            string                       `json:"run_folder"`
+	ArchivedRunFolder    string                       `json:"archived_run_folder,omitempty"`
 	TokenUsage           *orchestrator.TokenUsageFile `json:"token_usage,omitempty"`
 	EvaluationTokenUsage *orchestrator.TokenUsageFile `json:"evaluation_token_usage,omitempty"`
 }
 
 type workflowRunDailyCostEntry struct {
-	Date        string                       `json:"date"`
-	Scope       orchestrator.CostScope       `json:"scope"`
-	GroupFolder string                       `json:"group_folder"`
-	RunFolder   string                       `json:"run_folder"`
-	TokenUsage  *orchestrator.TokenUsageFile `json:"token_usage,omitempty"`
+	Date              string                       `json:"date"`
+	Scope             orchestrator.CostScope       `json:"scope"`
+	ExecutionID       string                       `json:"execution_id,omitempty"`
+	GroupFolder       string                       `json:"group_folder"`
+	RunFolder         string                       `json:"run_folder"`
+	ArchivedRunFolder string                       `json:"archived_run_folder,omitempty"`
+	TokenUsage        *orchestrator.TokenUsageFile `json:"token_usage,omitempty"`
 }
 
 type workflowPhaseDailyCostEntry struct {
@@ -323,22 +373,19 @@ type workflowPhaseDailyCostEntry struct {
 	TokenUsage *orchestrator.PhaseTokenUsageFile `json:"token_usage,omitempty"`
 }
 
-func buildWorkflowRunCostEntries(executionCosts, evaluationCosts map[string]*orchestrator.TokenUsageFile) []workflowRunCostEntry {
-	runFolderSet := make(map[string]struct{})
-	for runFolder := range executionCosts {
-		runFolderSet[runFolder] = struct{}{}
+func buildWorkflowRunCostEntries(executionCosts, evaluationCosts map[string]*storedRunTokenUsage) []workflowRunCostEntry {
+	entries := make([]workflowRunCostEntry, 0, len(executionCosts)+len(evaluationCosts))
+	for _, cost := range executionCosts {
+		if cost == nil {
+			continue
+		}
+		entries = append(entries, workflowRunCostEntry{ExecutionID: cost.ExecutionID, RunFolder: cost.RunFolder, ArchivedRunFolder: cost.ArchivedRunFolder, TokenUsage: cost.TokenUsage})
 	}
-	for runFolder := range evaluationCosts {
-		runFolderSet[runFolder] = struct{}{}
-	}
-
-	entries := make([]workflowRunCostEntry, 0, len(runFolderSet))
-	for runFolder := range runFolderSet {
-		entries = append(entries, workflowRunCostEntry{
-			RunFolder:            runFolder,
-			TokenUsage:           executionCosts[runFolder],
-			EvaluationTokenUsage: evaluationCosts[runFolder],
-		})
+	for _, cost := range evaluationCosts {
+		if cost == nil {
+			continue
+		}
+		entries = append(entries, workflowRunCostEntry{ExecutionID: cost.ExecutionID, RunFolder: cost.RunFolder, ArchivedRunFolder: cost.ArchivedRunFolder, EvaluationTokenUsage: cost.TokenUsage})
 	}
 
 	sort.Slice(entries, func(i, j int) bool {
@@ -347,7 +394,10 @@ func buildWorkflowRunCostEntries(executionCosts, evaluationCosts map[string]*orc
 		if !iTime.Equal(jTime) {
 			return jTime.Before(iTime)
 		}
-		return entries[j].RunFolder < entries[i].RunFolder
+		if entries[i].RunFolder != entries[j].RunFolder {
+			return entries[j].RunFolder < entries[i].RunFolder
+		}
+		return entries[j].ExecutionID < entries[i].ExecutionID
 	})
 
 	return entries
@@ -466,7 +516,7 @@ func readAllRunDailyTokenUsageFromCosts(ctx context.Context, workspacePath strin
 			continue
 		}
 		orchestrator.EnsureDailyGroupTokenUsageFilePricing(&dailyFile)
-		if len(dailyFile.RunFolders) == 0 {
+		if len(dailyFile.RunFolders) == 0 && len(dailyFile.Executions) == 0 {
 			continue
 		}
 
@@ -479,6 +529,21 @@ func readAllRunDailyTokenUsageFromCosts(ctx context.Context, workspacePath strin
 			groupFolder = pathpkg.Base(pathpkg.Dir(filePath))
 		}
 
+		for executionID, execution := range dailyFile.Executions {
+			if execution == nil || execution.TokenUsage == nil {
+				continue
+			}
+			entries = append(entries, workflowRunDailyCostEntry{
+				Date:              date,
+				Scope:             scope,
+				ExecutionID:       executionID,
+				GroupFolder:       groupFolder,
+				RunFolder:         execution.RunFolder,
+				ArchivedRunFolder: execution.ArchivedRunFolder,
+				TokenUsage:        execution.TokenUsage,
+			})
+		}
+
 		for runFolder, tokenFile := range dailyFile.RunFolders {
 			if tokenFile == nil {
 				continue
@@ -486,6 +551,7 @@ func readAllRunDailyTokenUsageFromCosts(ctx context.Context, workspacePath strin
 			entries = append(entries, workflowRunDailyCostEntry{
 				Date:        date,
 				Scope:       scope,
+				ExecutionID: "legacy:" + runFolder,
 				GroupFolder: groupFolder,
 				RunFolder:   runFolder,
 				TokenUsage:  tokenFile,
@@ -503,7 +569,10 @@ func readAllRunDailyTokenUsageFromCosts(ctx context.Context, workspacePath strin
 		if entries[i].RunFolder != entries[j].RunFolder {
 			return entries[i].RunFolder < entries[j].RunFolder
 		}
-		return entries[i].Scope < entries[j].Scope
+		if entries[i].Scope != entries[j].Scope {
+			return entries[i].Scope < entries[j].Scope
+		}
+		return entries[i].ExecutionID < entries[j].ExecutionID
 	})
 
 	return entries, nil

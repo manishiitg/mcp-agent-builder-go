@@ -239,50 +239,6 @@ func readFileFromWorkspace(ctx context.Context, filePath string) (string, bool, 
 	return content, true, nil
 }
 
-// readWorkspaceFileMeta returns whether a workspace file exists and its
-// RFC3339 last-modified time. Used for cheap freshness checks (e.g. badging
-// unseen builder docs) — it does not return the body. Errors resolve to
-// (false, "") so callers can treat them as "no update".
-func readWorkspaceFileMeta(ctx context.Context, filePath string) (bool, string) {
-	pathSegments := strings.Split(filePath, "/")
-	encodedSegments := make([]string, len(pathSegments))
-	for i, segment := range pathSegments {
-		encodedSegments[i] = url.PathEscape(segment)
-	}
-	// need_last_modified=true: this meta read exists purely for the freshness
-	// timestamp, which GetDocument only serializes when explicitly requested.
-	apiURL := getWorkspaceAPIURL() + "/api/documents/" + strings.Join(encodedSegments, "/") + "?need_last_modified=true"
-	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
-	if err != nil {
-		return false, ""
-	}
-	resp, err := workspaceHTTPClient.Do(req)
-	if err != nil {
-		return false, ""
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound {
-		return false, ""
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil || resp.StatusCode != http.StatusOK {
-		return false, ""
-	}
-	var apiResp virtualtools.WorkspaceAPIResponse
-	if err := json.Unmarshal(body, &apiResp); err != nil || !apiResp.Success {
-		return false, ""
-	}
-	if strings.Contains(apiResp.Message, "File does not exist") || strings.Contains(apiResp.Error, "File not found") {
-		return false, ""
-	}
-	if dataMap, ok := apiResp.Data.(map[string]interface{}); ok {
-		if lm, ok := dataMap["last_modified"].(string); ok {
-			return true, lm
-		}
-	}
-	return true, ""
-}
-
 // deleteWorkspaceFile deletes a file from the workspace via the workspace API.
 // Returns nil if the file doesn't exist (404) or was successfully deleted.
 func deleteWorkspaceFile(ctx context.Context, configPath string) error {
@@ -390,8 +346,13 @@ func inferRunMetadata(ctx context.Context, workspacePath, folderName string, pro
 	}
 
 	if executionCosts, err := readAllRunTokenUsageFromCosts(ctx, workspacePath, orchestrator.CostScopeExecution); err == nil {
-		if tokenUsage := executionCosts[folderName]; tokenUsage != nil && !tokenUsage.CreatedAt.IsZero() {
-			metadata.CreatedAt = tokenUsage.CreatedAt
+		for _, execution := range executionCosts {
+			if execution == nil || execution.TokenUsage == nil || execution.effectiveRunFolder() != folderName || execution.TokenUsage.CreatedAt.IsZero() {
+				continue
+			}
+			if metadata.CreatedAt.IsZero() || execution.TokenUsage.CreatedAt.Before(metadata.CreatedAt) {
+				metadata.CreatedAt = execution.TokenUsage.CreatedAt
+			}
 		}
 	}
 
@@ -660,6 +621,11 @@ type ActiveWorkflowExecution struct {
 	WaitingMessage string           `json:"waiting_message,omitempty"`
 	WaitingSince   *time.Time       `json:"waiting_since,omitempty"`
 	RuntimeState   *RuntimeSnapshot `json:"runtime_state,omitempty"`
+	// DisplayStatus is the same collapsed busy/idle/stopped read ActiveSessionInfo
+	// ships (sessionDisplayStatusFromRuntime(RuntimeState).Status), computed here
+	// too so a caller never has to re-derive it from RuntimeState.Phase itself —
+	// see PLAT-095.
+	DisplayStatus string `json:"display_status,omitempty"`
 }
 
 // RunMetadataLLM captures which model was used for a specific role

@@ -5,17 +5,72 @@ import (
 
 	virtualtools "github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator"
+	todo_creation_human "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 )
 
-// TestToolSetInvariants guards the bug class that hid notify_user: a tool the
-// product depends on missing from its registration path.
-//
-// It used to also reconcile registration against GetToolsForWorkshopMode, via a
-// hand-maintained list of names registered outside the workflow pool. That list
-// was the band-aid over having two sources of truth, and it went stale twice
-// (notify_user, list_llm_capabilities). The mode allow-list is gone, so
-// registration is now the only source and there is nothing left to reconcile.
+func knownWorkshopRegisteredToolNamesOutsideWorkflowPool() map[string]string {
+	registered := map[string]string{}
+	add := func(source string, names ...string) {
+		for _, name := range names {
+			registered[name] = source
+		}
+	}
+
+	add("mcpagent virtual tools", "get_api_spec", "get_prompt", "get_resource")
+	add("execution sub-agent/session tools", "call_sub_agent", "call_generic_agent", "query_sub_agent", "stop_sub_agent", "get_sub_agent_conversation", "get_route_description")
+	add("conditional workspace browser tools", "agent_browser")
+	add("server secret management tools",
+		"list_secrets", "set_workflow_secret", "delete_workflow_secret",
+		"set_user_secret", "delete_user_secret",
+	)
+	add("auto-improvement context tools", "capture_context")
+	// Registered by registerLLMCapabilityDiscoveryTools in multiagent_llm_tools.go,
+	// which is outside the workflow tool pool. Granted to workshop mode by
+	// 385c95158 without a matching entry here, which left this invariant red.
+	add("LLM capability discovery tools", "list_llm_capabilities")
+	add("workshop plan tools",
+		"create_plan", "migrate_message_sequence_code_items",
+		"add_scripted_step", "add_message_sequence_step", "add_routing_step",
+		"add_human_input_step", "add_todo_task_step", "add_todo_task_route",
+		"update_scripted_step", "update_message_sequence_step", "update_routing_step",
+		"update_human_input_step", "update_todo_task_step", "update_todo_task_route",
+		"delete_todo_task_route", "delete_plan_steps", "cleanup_orphan_step_configs",
+		"update_validation_schema", "update_evaluation_plan",
+	)
+	add("workshop execution tools",
+		"execute_step", "query_step", "send_step_message", "debug_step", "list_executions",
+		"stop_step", "stop_all_executions", "run_in_background",
+		"run_full_workflow",
+	)
+	add("workshop review/maintenance tools",
+		"update_step_config", "get_step_prompts",
+		"review_plan", "mark_changelog_artifact_reviewed",
+		"review_workflow_timing", "review_workflow_costs", "review_step_code",
+		"get_cost_summary",
+		"run_full_evaluation", "validate_evaluation_plan",
+	)
+	add("workshop workflow/config tools",
+		"get_llm_config", "get_workflow_config", "update_workflow_config",
+		"set_workflow_contract_version",
+		"update_variable", "add_group", "update_group", "delete_group",
+		"list_schedules", "create_schedule", "create_calendar_schedule",
+		"update_schedule", "delete_schedule", "trigger_schedule", "get_schedule_runs",
+		"get_contract_upgrades",
+		"list_skills", "import_skill", "uninstall_skill", "search_skills", "install_skill",
+		"list_published_llms", "list_provider_models", "test_llm", "set_workflow_llm_config",
+	)
+	add("workshop report tools", "validate_report_html")
+	add("workshop guidance/status tools",
+		"get_workflow_command_guidance", "get_reference_doc",
+	)
+
+	return registered
+}
+
+// TestToolSetInvariants guards the bug class that hid notify_user: a tool that is
+// allow-listed for a mode but never registered (or vice versa), and accidental
+// loss of plan/workflow tools from the workshop allow-list.
 func TestToolSetInvariants(t *testing.T) {
 	// 1. The workflow tool pool (workflowMode=true) must register every human tool.
 	tools, _, cats := createCustomTools(true, "default", "invariant-test")
@@ -58,7 +113,7 @@ func TestToolSetInvariants(t *testing.T) {
 			t.Fatalf("filtered workflow pool contains %d definitions for %q", count, name)
 		}
 	}
-	for _, n := range []string{"human_feedback", "notify_user", "create_human_input_request", "mark_human_input_consumed"} {
+	for _, n := range []string{"human_feedback", "notify_user", "create_human_input_request", "answer_human_input_request", "mark_human_input_consumed"} {
 		if !pool[n] || cats[n] != "human_tools" {
 			t.Fatalf("workflow pool missing human tool %q (in_pool=%v cat=%q)", n, pool[n], cats[n])
 		}
@@ -67,10 +122,57 @@ func TestToolSetInvariants(t *testing.T) {
 		t.Fatal("workflow pool still exposes removed submit_human_answer tool")
 	}
 
-	// Human interaction/notification tools must be registered in the pool.
-	for _, n := range virtualtools.WorkshopHumanToolNames() {
-		if !pool[n] || cats[n] != "human_tools" {
-			t.Fatalf("workflow pool missing workshop human tool %q (in_pool=%v cat=%q)", n, pool[n], cats[n])
+	// human-tool name set (registerable human tools = source of truth)
+	humanNames := map[string]bool{}
+	for n := range virtualtools.CreateHumanToolExecutors() {
+		humanNames[n] = true
+	}
+	knownOutsidePool := knownWorkshopRegisteredToolNamesOutsideWorkflowPool()
+
+	for _, mode := range []string{"workshop", "run"} {
+		allow := todo_creation_human.GetToolsForWorkshopMode(mode)
+		allowSet := map[string]bool{}
+		for _, n := range allow {
+			allowSet[n] = true
+		}
+
+		// 2. INVARIANT: every allow-listed HUMAN tool must be registerable in the
+		//    workflow pool. (This is exactly what broke for notify_user.)
+		for _, n := range allow {
+			if humanNames[n] && !pool[n] {
+				t.Fatalf("mode=%s: human tool %q is allow-listed but NOT in the workflow pool (would be invisible via get_api_spec)", mode, n)
+			}
+		}
+
+		// Broad invariant: if a mode allow-lists a tool, it must have a real
+		// registration path. Most tools come from the workflow pool; workshop
+		// custom/guidance/virtual tools are registered separately and enumerated
+		// above. This guards the same bug class as notify_user and Pulse state
+		// tools for future additions.
+		for _, n := range allow {
+			if pool[n] {
+				continue
+			}
+			if _, ok := knownOutsidePool[n]; ok {
+				continue
+			}
+			t.Fatalf("mode=%s: allow-listed tool %q is neither in workflow pool nor known workshop/virtual registrations", mode, n)
+		}
+
+		// 3. Human interaction/notification/report tools must be usable in both modes.
+		for _, n := range virtualtools.HumanToolNamesForWorkshopMode(mode) {
+			if !pool[n] || cats[n] != "human_tools" {
+				t.Fatalf("workflow pool missing workshop human tool %q (in_pool=%v cat=%q)", n, pool[n], cats[n])
+			}
+			if !allowSet[n] {
+				t.Fatalf("mode=%s: expected %q in allow-list", mode, n)
+			}
+		}
+		if !allowSet["human_feedback"] {
+			t.Fatalf("mode=%s: blocking human_feedback must be exposed for explicit tests and urgent short-lived input", mode)
+		}
+		if mode == "run" && allowSet["answer_human_input_request"] {
+			t.Fatal("run mode must not let a scheduled/runtime agent answer a user decision")
 		}
 	}
 
@@ -78,9 +180,50 @@ func TestToolSetInvariants(t *testing.T) {
 	//    be visible in workshop mode, otherwise scheduled Pulse turns can ask
 	//    for record_pulse_result/get_pulse_state and then fail at
 	//    runtime with "not callable in this chat session".
-	for _, n := range []string{"get_pulse_state", "begin_pulse_fixer_run", "record_pulse_worklist", "record_pulse_result", "record_pulse_impact", "resolve_run_concern"} {
+	for _, n := range []string{"get_pulse_state", "record_pulse_worklist", "record_pulse_result", "record_pulse_impact", "resolve_run_concern"} {
 		if !pool[n] || cats[n] != "workflow" {
 			t.Fatalf("workflow pool missing Pulse state tool %q (in_pool=%v cat=%q)", n, pool[n], cats[n])
+		}
+	}
+
+	// 5. The workshop allow-list must still expose the plan/workflow tools
+	//    (guards against accidental loss during refactors).
+	workshop := map[string]bool{}
+	for _, n := range todo_creation_human.GetToolsForWorkshopMode("workshop") {
+		workshop[n] = true
+	}
+	for _, n := range []string{
+		"create_plan", "migrate_message_sequence_code_items", "add_scripted_step", "add_routing_step", "add_human_input_step",
+		"update_scripted_step", "delete_plan_steps",
+		"execute_step", "create_human_input_request", "answer_human_input_request",
+		"update_workflow_config", "update_step_config", "validate_report_html",
+		"list_schedules", "update_schedule", "get_schedule_runs",
+		"execute_shell_command", "diff_patch_workspace_file",
+		"get_pulse_state", "record_pulse_worklist", "record_pulse_result", "record_pulse_impact", "resolve_run_concern",
+		"mark_changelog_artifact_reviewed",
+	} {
+		if !workshop[n] {
+			t.Fatalf("workshop allow-list missing expected tool %q", n)
+		}
+	}
+	for _, removed := range []string{"improve_learnings", "improve_kb", "improve_db", "review_artifact_sync"} {
+		if workshop[removed] {
+			t.Fatalf("workshop allow-list still exposes removed dedicated maintenance tool %q", removed)
+		}
+	}
+	for _, renamed := range []string{"add_regular_step", "update_regular_step"} {
+		if workshop[renamed] {
+			t.Fatalf("workshop allow-list still exposes ambiguous legacy tool name %q", renamed)
+		}
+	}
+
+	run := map[string]bool{}
+	for _, n := range todo_creation_human.GetToolsForWorkshopMode("run") {
+		run[n] = true
+	}
+	for _, n := range []string{"get_pulse_state", "record_pulse_worklist", "record_pulse_result", "record_pulse_impact", "resolve_run_concern", "mark_changelog_artifact_reviewed"} {
+		if run[n] {
+			t.Fatalf("run allow-list must not expose Pulse mutation tool %q", n)
 		}
 	}
 }

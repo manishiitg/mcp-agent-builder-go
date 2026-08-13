@@ -68,6 +68,72 @@ func delegatedCodingAgentRuntimeFolder(userID, runtimeID string) string {
 	return strings.TrimSuffix(perUserChatsFolderFor(userID), "/") + "/.agents/" + safeDelegationRuntimeID(runtimeID)
 }
 
+// registerDelegatedWorkflowDecisionTool gives a workflow-owned background
+// worker the one human-input operation it needs: creating or refreshing a
+// non-blocking decision card for its own workflow.  Background reviewers are
+// often the first component to discover that a human decision is necessary;
+// making them wait for their parent to recreate the card loses the exact
+// context and can leave the finding in an un-actionable state.
+//
+// Do not give a child the answer/consume operations.  A child has no human
+// conversation to answer, and the later parent/Pulse turn owns consuming a
+// decision after it has acted on it.  The wrapper also prevents a delegated
+// workflow worker from creating a card in another workflow's database.
+func registerDelegatedWorkflowDecisionTool(subAgent *agent.LLMAgentWrapper, workflowPath string) error {
+	workflowPath, err := normalizeReportHumanInputWorkspacePath(workflowPath)
+	if err != nil {
+		return fmt.Errorf("normalize delegated workflow decision scope: %w", err)
+	}
+
+	tools, executors, categories := createReportHumanInputTools()
+	for _, tool := range tools {
+		if tool.Function == nil || tool.Function.Name != "create_human_input_request" {
+			continue
+		}
+		executor, ok := executors[tool.Function.Name].(func(context.Context, map[string]interface{}) (string, error))
+		if !ok {
+			return fmt.Errorf("missing executor for %s", tool.Function.Name)
+		}
+		params := map[string]interface{}{}
+		if tool.Function.Parameters != nil {
+			encoded, marshalErr := json.Marshal(tool.Function.Parameters)
+			if marshalErr != nil {
+				return fmt.Errorf("marshal parameters for %s: %w", tool.Function.Name, marshalErr)
+			}
+			if err := json.Unmarshal(encoded, &params); err != nil {
+				return fmt.Errorf("unmarshal parameters for %s: %w", tool.Function.Name, err)
+			}
+		}
+		category := categories[tool.Function.Name]
+		if category == "" {
+			return fmt.Errorf("missing category for %s", tool.Function.Name)
+		}
+		guardedExecutor := scopeDelegatedHumanInputExecutor(workflowPath, executor)
+		return subAgent.RegisterCustomTool(
+			tool.Function.Name,
+			tool.Function.Description+" This background worker may create requests only for "+workflowPath+".",
+			params,
+			guardedExecutor,
+			category,
+		)
+	}
+	return fmt.Errorf("create_human_input_request definition is missing")
+}
+
+func scopeDelegatedHumanInputExecutor(workflowPath string, executor func(context.Context, map[string]interface{}) (string, error)) func(context.Context, map[string]interface{}) (string, error) {
+	return func(ctx context.Context, args map[string]interface{}) (string, error) {
+		requested, _ := args["workspace_path"].(string)
+		normalized, normalizeErr := normalizeReportHumanInputWorkspacePath(requested)
+		if normalizeErr != nil {
+			return "", normalizeErr
+		}
+		if normalized != workflowPath {
+			return "", fmt.Errorf("background workflow agent may create human-input requests only for %s", workflowPath)
+		}
+		return executor(ctx, args)
+	}
+}
+
 // executeDelegatedTask executes a delegated task via a sub-agent.
 // onCreated is an optional callback invoked after the sub-agent wrapper is created
 // but before Invoke — used by background agents to attach a history func.
@@ -192,15 +258,15 @@ func (api *StreamingAPI) executeDelegatedTask(ctx context.Context, parentReq Que
 	// credential merely because they reference a workflow folder.
 	apiKeys := MergedProviderAPIKeys(ctx)
 	workflowOwnedDelegation := parentReq.AgentMode == "workflow" || parentReq.AgentMode == "workflow_phase" || strings.TrimSpace(parentReq.PhaseID) != ""
+	workflowDecisionScope := strings.TrimSpace(parentReq.SelectedFolder)
 	if workflowOwnedDelegation {
-		workflowPath := strings.TrimSpace(parentReq.SelectedFolder)
-		if workflowPath == "" && parentReq.PresetQueryID != "" {
+		if workflowDecisionScope == "" && parentReq.PresetQueryID != "" {
 			if resolved, resolveErr := api.resolveWorkspacePathFromPreset(context.Background(), parentReq.PresetQueryID); resolveErr == nil {
-				workflowPath = resolved
+				workflowDecisionScope = resolved
 			}
 		}
 		var credentialErr error
-		apiKeys, credentialErr = api.workflowProviderAPIKeys(ctx, subAgentUserID, workflowPath, apiKeys)
+		apiKeys, credentialErr = api.workflowProviderAPIKeys(ctx, subAgentUserID, workflowDecisionScope, apiKeys)
 		if credentialErr != nil {
 			return "", fmt.Errorf("load delegated workflow provider credentials: %w", credentialErr)
 		}
@@ -549,6 +615,20 @@ func (api *StreamingAPI) executeDelegatedTask(ctx context.Context, parentReq Que
 			}
 		}
 
+		if workflowOwnedDelegation {
+			if _, scopeErr := normalizeReportHumanInputWorkspacePath(workflowDecisionScope); scopeErr != nil {
+				// A delegated worker without a canonical workflow identity must
+				// still be able to complete non-decision work.  Do not expose a
+				// cross-workflow write capability as a fallback.
+				log.Printf("[DELEGATION] Skipping workflow decision tool for background worker: no canonical workflow scope (%v)", scopeErr)
+			} else if err := registerDelegatedWorkflowDecisionTool(subAgent, workflowDecisionScope); err != nil {
+				return "", fmt.Errorf("register delegated workflow decision tool: %w", err)
+			} else {
+				_ = subAgent.AddInstructions("If your review identifies a material user choice, create the structured decision card yourself with create_human_input_request. Use the current workflow path only; do not wait for the parent to recreate it.")
+				log.Printf("[DELEGATION] Registered workflow-scoped create_human_input_request for background worker (%s)", workflowDecisionScope)
+			}
+		}
+
 		// NOTE: Sub-agents do NOT get the delegate tool themselves (v1 design choice)
 		// This prevents runaway delegation chains.
 
@@ -849,6 +929,17 @@ func (n *workshopExecutionBgNotifier) OnExecutionComplete(execID, name, result s
 		n.api.completeTrackedExecution(execID, trackedExecutionStatusCompleted, "", meta)
 		displayResult := workshopCompletionDisplayResult(n.workspacePath, result, meta)
 		n.api.emitBackgroundAgentCompleted(n.sessionID, execID, name, "completed", displayResult, "", duration.Truncate(time.Second).String())
+	}
+
+	// A finished parent cannot still have live progress children. Settle any it
+	// left running, so an end event that never arrived cannot pin the session
+	// busy forever and stall the scheduler's drain-wait (PLAT-091).
+	if orphans := n.api.bgAgentRegistry.ReconcileOrphanedProgressChildren(
+		n.sessionID, execID,
+		fmt.Sprintf("parent execution %s finished without an end event for this step", execID),
+	); len(orphans) > 0 {
+		log.Printf("[BG AGENT] Settled %d orphaned progress child(ren) of finished execution %s in session %s: %v",
+			len(orphans), execID, n.sessionID, orphans)
 	}
 
 	// Signal completion to the notification loop unless the parent is already

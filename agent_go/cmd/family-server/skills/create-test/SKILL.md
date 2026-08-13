@@ -24,6 +24,12 @@ description: Create a practice test for the child from their materials and progr
    `skills/_shared/html-design.md`). It should read like a real test paper: a clear
    header with her name, grade/board, subject and topic, then numbered questions,
    marks shown as a `.badge`, and genuine space to work under each.
+   A question that needs a figure — an angle, a circle, a labelled triangle, a
+   graph to read values off — declares it with JSXGraph per
+   `skills/_shared/diagrams.md`, never as hand-written SVG coordinates; check any
+   figure renders correctly before you finish (html-design.md → "Check a figure
+   before you finish"). When she is meant to DRAW the graph herself, give her the
+   empty grid instead, and don't state the scale.
    Cover the methods that appear in her own materials, and make **most of the
    questions target the specific weak moves from step 1** — a couple she can already
    do (so it isn't demoralizing), the rest on the moves that actually need work,
@@ -69,15 +75,15 @@ description: Create a practice test for the child from their materials and progr
    A test still stays a real test paper first: if a genuine interest from
    `interests.md` fits ONE word problem's cover story naturally (a fraction
    question set at a Quidditch match, say), use it — but never at the cost of
-   realism, clarity, or exam register, never in every question, and never under a
-   `strict` teaching_mode where she needs to recognise the question in its real
-   exam form. Skip it entirely rather than force it.
+   realism, clarity, or exam register, and never in every question. In a real
+   assessment she needs to recognise the question in its own exam form, so skip it
+   entirely there rather than force it.
 
 4. **Write the answer key** as plain Markdown at `<name>-KEY.md` in that SAME folder
    — full worked solutions, plus a note on which questions target which weakness so
    the parent knows what to watch for. Never list it in `items`: it stays out of the
-   child's activity view entirely, and what the tutor may reveal from it during her
-   session is governed solely by `teaching_mode`.
+   child's activity view entirely, and what the tutor reveals from it during her
+   session is the tutor's own judgment, steered by what `goal` says this is.
 
 5. **Finalize** the activity with `goal` = "answer all N questions" (N = the real
    count). A test is usually `strict` (hints only, no reveal) or `graduated` — ask

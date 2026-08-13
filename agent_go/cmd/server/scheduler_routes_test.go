@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gorilla/mux"
@@ -109,7 +110,7 @@ func TestListScheduledJobsReflectsOrgPulseEnabledViaDuplicate(t *testing.T) {
 	}
 }
 
-func TestEnableBuiltinOrgPulseRequiresPersistedOverride(t *testing.T) {
+func TestEnableBuiltinOrgPulseCreatesPersistedOverrideForDirectToggle(t *testing.T) {
 	api := &mockWorkspaceAPI{files: map[string]string{}}
 	server := httptest.NewServer(api)
 	defer server.Close()
@@ -121,15 +122,15 @@ func TestEnableBuiltinOrgPulseRequiresPersistedOverride(t *testing.T) {
 
 	enableScheduledJobHandler(NewSchedulerService(nil)).ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, body = %s; want 404 for slash-managed built-in", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s; want 200 for direct Org Pulse toggle", rec.Code, rec.Body.String())
 	}
 
 	api.mu.Lock()
 	written := api.files[multiAgentSchedulesPath(GetDefaultUserID())]
 	api.mu.Unlock()
-	if written != "" {
-		t.Fatalf("generic enable should not materialize slash-managed org pulse; wrote:\n%s", written)
+	if !strings.Contains(written, `"id": "builtin-org-pulse"`) || !strings.Contains(written, `"enabled": true`) {
+		t.Fatalf("direct toggle did not persist enabled Org Pulse override; wrote:\n%s", written)
 	}
 }
 

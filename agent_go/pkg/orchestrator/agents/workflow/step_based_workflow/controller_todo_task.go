@@ -420,7 +420,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeTodoTaskStep(
 		// Run pre-validation if schema exists
 		if validationSchema != nil {
 			hcpo.GetLogger().Info(fmt.Sprintf("🔍 Running pre-validation after execution (attempt %d/%d)", retryAttempt, maxRetryAttempts))
-			preValidationPassed, formattedResults := hcpo.runTodoTaskPreValidation(ctx, step, stepIndex, todoTaskStepPath, stepExecutionPath)
+			preValidationPassed, formattedResults := hcpo.runTodoTaskPreValidation(ctx, step, stepIndex, todoTaskStepPath, stepExecutionPath, retryAttempt)
 
 			if preValidationPassed {
 				hcpo.GetLogger().Info("✅ Todo task step complete (pre-validation passed)")
@@ -935,8 +935,7 @@ func routeStepBehaviorDetails(step PlanStepInterface) string {
 // Priority:
 //  1. step config ExecutionLLM — explicit override always wins (same knob used for
 //     regular step execution; sub-agents spawned by this orchestrator inherit it too)
-//  2. step config TodoTaskOrchestratorTier — explicit tier override in tiered mode
-//  3. Tier 1 (High) — default for orchestrator (returns nil if tier resolver is unavailable)
+//  2. Tier 1 (High) — default for orchestrator (returns nil if tier resolver is unavailable)
 func (hcpo *StepBasedWorkflowOrchestrator) selectTodoTaskOrchestratorLLM(
 	ctx context.Context,
 	stepConfig *AgentConfigs,
@@ -961,31 +960,14 @@ func (hcpo *StepBasedWorkflowOrchestrator) selectTodoTaskOrchestratorLLM(
 	}
 
 	// 2. Tiered mode: todo task orchestrators default to Tier 1 (High), including nested
-	// todo-task orchestrators. An explicit todo_task_orchestrator_tier can override this.
+	// todo-task orchestrators. PLAT-061 removed todo_task_orchestrator_tier — it was an
+	// int where every other tier is a string enum, so it bypassed tier validation and
+	// PLAT-060's required-reason path. Use execution_llm to override.
 	if hcpo.tierResolver == nil {
 		hcpo.GetLogger().Warn(fmt.Sprintf("selectTodoTaskOrchestratorLLM: tier resolver is nil for step %s — returning nil so caller surfaces a user-visible error", stepPath))
 		return nil
 	}
 	tier := TierHigh
-	if stepConfig != nil && stepConfig.TodoTaskOrchestratorTier != nil {
-		switch *stepConfig.TodoTaskOrchestratorTier {
-		case int(TierHigh):
-			tier = TierHigh
-		case int(TierMedium):
-			tier = TierMedium
-		case int(TierLow):
-			tier = TierLow
-		default:
-			hcpo.GetLogger().Warn(fmt.Sprintf(
-				"selectTodoTaskOrchestratorLLM: invalid todo_task_orchestrator_tier=%d for step %s (%s) — falling back to Tier %d (%s)",
-				*stepConfig.TodoTaskOrchestratorTier,
-				stepID,
-				stepPath,
-				int(tier),
-				TierLevelLabel(tier),
-			))
-		}
-	}
 	llmConfig := hcpo.tierResolver.ResolveTier(tier)
 	if llmConfig == nil {
 		hcpo.GetLogger().Warn(fmt.Sprintf("selectTodoTaskOrchestratorLLM: tier resolver returned nil for Tier %d (%s) on step %s", int(tier), TierLevelLabel(tier), stepPath))
@@ -1929,6 +1911,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) runTodoTaskPreValidation(
 	stepIndex int,
 	stepPath string,
 	stepExecutionPath string,
+	retryAttempt int,
 ) (bool, string) {
 	// Get validation schema from step
 	validationSchema := step.GetValidationSchema()
@@ -1973,7 +1956,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) runTodoTaskPreValidation(
 	// Persist pre-validation results for Pulse Bug Review and diagnostics.
 	if hcpo.selectedRunFolder != "" {
 		preValLogPath := fmt.Sprintf("%s/runs/%s", hcpo.GetWorkspacePath(), hcpo.selectedRunFolder)
-		SavePreValidationLog(ctx, hcpo.BaseOrchestrator, preValLogPath, step.GetID(), stepPath, workspaceResults, validationSchema, hcpo.GetWorkspacePath(), hcpo.selectedRunFolder, hcpo.currentGroupName)
+		SavePreValidationLog(ctx, hcpo.BaseOrchestrator, preValLogPath, step.GetID(), stepPath, workspaceResults, validationSchema, hcpo.GetWorkspacePath(), hcpo.selectedRunFolder, hcpo.currentGroupName,
+			PreValidationAttempt{ExecutionMode: "todo_task", ValidationPhase: "final-gate", ExecutionAttempt: retryAttempt, ValidationAttempt: 1})
 	}
 
 	// Format results for feedback

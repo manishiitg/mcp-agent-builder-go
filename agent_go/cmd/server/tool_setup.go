@@ -290,6 +290,18 @@ func createCustomTools(workflowMode bool, sessionInfo ...string) ([]llmtypes.Too
 		for name, category := range pulseWorklistCategories {
 			toolCategories[name] = category
 		}
+
+		// PLAT-055. Steps get a structured concern outlet so findings that are
+		// not reusable how-to knowledge stop being written into learnings for
+		// lack of anywhere else to put them.
+		runConcernRegistry := virtualtools.CreateRunConcernToolRegistry(sessionID, recordStepRunConcernFromTool)
+		allTools = append(allTools, runConcernRegistry.Tools...)
+		for name, executor := range runConcernRegistry.Executors {
+			allExecutors[name] = executor
+		}
+		for name, category := range runConcernRegistry.Categories {
+			toolCategories[name] = category
+		}
 	}
 
 	// Note: Todo tools (create_todo, complete_todo, etc.) have been removed.
@@ -661,7 +673,7 @@ func wrapExecutorsWithFolderGuard(executors map[string]func(ctx context.Context,
 							// client normalizes the same way, but only after this guard runs,
 							// so it never got the chance. Prompts actively encourage absolute
 							// paths, which is how a legitimate write to
-							// Workflow/social-media/builder/improve.html was rejected against
+							// A retired Pulse HTML path was rejected against
 							// an allow list that contained Workflow/social-media.
 							if relPath, ok := orchestrator.NormalizeAbsoluteWorkspaceDocsPath(cleanedPath); ok {
 								cleanedPath = filepath.Clean(relPath)

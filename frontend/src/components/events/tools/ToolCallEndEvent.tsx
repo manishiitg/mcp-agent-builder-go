@@ -9,6 +9,7 @@ import { TooltipProvider } from '../../ui/tooltip'
 import { useExpandable } from '../useExpandable'
 import { Plus, Minus } from 'lucide-react'
 import { normalizeMCPToolName } from '../../../utils/customToolNames'
+import { formatToolCallResult } from '../../../utils/toolCallFormatting'
 
 type OutputFormat = 'markdown' | 'json' | 'csv' | null
 
@@ -35,6 +36,27 @@ interface ToolCallEndEventProps {
   event: ToolCallEndEvent
 }
 
+// Every execution owner (main chat, background child, and workflow step) uses
+// the same event component. Some tools have rich specialized cards and some
+// take the generic path, but an error must never depend on that presentation
+// choice. This frame makes the failure visible before a user expands output.
+const ToolCallFailureFrame: React.FC<React.PropsWithChildren<{ event: ToolCallEndEvent }>> = ({ event, children }) => {
+  const failed = React.useMemo(
+    () => typeof event.result === 'string' && formatToolCallResult(event.result).isError,
+    [event.result],
+  )
+  if (!failed) return <>{children}</>
+
+  return (
+    <div className="rounded border border-red-300 bg-red-50 p-1 dark:border-red-800 dark:bg-red-950/25">
+      <div className="px-1.5 py-1 text-xs font-medium text-red-700 dark:text-red-300">
+        ✗ Tool call failed{event.tool_name ? ` · ${event.tool_name}` : ''}
+      </div>
+      {children}
+    </div>
+  )
+}
+
 function isWorkspaceTool(name: string): boolean {
   const workspaceToolNames = [
     'read_workspace_file',
@@ -58,15 +80,15 @@ export const ToolCallEndEventDisplay: React.FC<ToolCallEndEventProps> = ({ event
   const normalizedToolName = event.tool_name ? normalizeMCPToolName(event.tool_name) : event.tool_name
 
   if (normalizedToolName && isWorkspaceTool(normalizedToolName)) {
-    return <WorkspaceToolCallEndDisplay event={event} />
+    return <ToolCallFailureFrame event={event}><WorkspaceToolCallEndDisplay event={event} /></ToolCallFailureFrame>
   }
 
   if (normalizedToolName && isCodeExecutionTool(normalizedToolName)) {
-    return <CodeExecutionToolCallEndDisplay event={{ ...event, tool_name: normalizedToolName }} />
+    return <ToolCallFailureFrame event={event}><CodeExecutionToolCallEndDisplay event={{ ...event, tool_name: normalizedToolName }} /></ToolCallFailureFrame>
   }
 
   if (normalizedToolName && isImageGenTool(normalizedToolName)) {
-    return <ImageGenToolCallEndDisplay event={event} />
+    return <ToolCallFailureFrame event={event}><ImageGenToolCallEndDisplay event={event} /></ToolCallFailureFrame>
   }
 
   return <GenericToolCallEndEventDisplay event={event} />
@@ -77,6 +99,14 @@ const GenericToolCallEndEventDisplay: React.FC<ToolCallEndEventProps> = ({ event
   const [isRawMode, setIsRawMode] = React.useState(false)
 
   const hasResult = typeof event.result === 'string' && event.result.length > 0
+  // Custom/bridge tools arrive here instead of the code-execution renderer.
+  // Use the same envelope-aware failure detector as the terminal transcript,
+  // otherwise a nested bridge error is visually indistinguishable from success.
+  const resultFormatting = React.useMemo(
+    () => (hasResult ? formatToolCallResult(event.result) : null),
+    [event.result, hasResult],
+  )
+  const isError = resultFormatting?.isError === true
 
   // Function to parse and extract content from JSON results
   const parseResultContent = (result: string): {
@@ -210,11 +240,11 @@ const GenericToolCallEndEventDisplay: React.FC<ToolCallEndEventProps> = ({ event
 
   const theme = isRetrieval ? 'blue' : 'green'
 
-  const bgColor = theme === 'blue' ? 'bg-blue-50 dark:bg-blue-900/20' : 'bg-green-50 dark:bg-green-900/20'
-  const borderColor = theme === 'blue' ? 'border-blue-200 dark:border-blue-800' : 'border-green-200 dark:border-green-800'
-  const textColor = theme === 'blue' ? 'text-blue-700 dark:text-blue-300' : 'text-green-700 dark:text-green-300'
-  const textSecondaryColor = theme === 'blue' ? 'text-blue-600 dark:text-blue-400' : 'text-green-600 dark:text-green-400'
-  const hoverBgColor = theme === 'blue' ? 'hover:bg-blue-200 dark:hover:bg-blue-800' : 'hover:bg-green-200 dark:hover:bg-green-800'
+  const bgColor = isError ? 'bg-red-50 dark:bg-red-950/25' : theme === 'blue' ? 'bg-blue-50 dark:bg-blue-900/20' : 'bg-green-50 dark:bg-green-900/20'
+  const borderColor = isError ? 'border-red-300 dark:border-red-800' : theme === 'blue' ? 'border-blue-200 dark:border-blue-800' : 'border-green-200 dark:border-green-800'
+  const textColor = isError ? 'text-red-700 dark:text-red-300' : theme === 'blue' ? 'text-blue-700 dark:text-blue-300' : 'text-green-700 dark:text-green-300'
+  const textSecondaryColor = isError ? 'text-red-600 dark:text-red-400' : theme === 'blue' ? 'text-blue-600 dark:text-blue-400' : 'text-green-600 dark:text-green-400'
+  const hoverBgColor = isError ? 'hover:bg-red-100 dark:hover:bg-red-900/40' : theme === 'blue' ? 'hover:bg-blue-200 dark:hover:bg-blue-800' : 'hover:bg-green-200 dark:hover:bg-green-800'
 
   // Single-line layout following design guidelines
   return (
@@ -224,7 +254,7 @@ const GenericToolCallEndEventDisplay: React.FC<ToolCallEndEventProps> = ({ event
         <div className="flex items-center gap-3 min-w-0 flex-1">
           <div className="min-w-0 flex-1">
             <div className={`text-sm font-medium ${textColor} flex items-center gap-2`}>
-              Tool Call End{' '}
+              {isError ? '✗ Tool Call Failed' : 'Tool Call End'}{' '}
               <span className={`text-xs font-normal ${textSecondaryColor}`}>
                 {event.turn != null && `• Turn: ${event.turn}`}
                 {event.tool_name && ` • Tool: ${event.tool_name}`}
@@ -267,10 +297,10 @@ const GenericToolCallEndEventDisplay: React.FC<ToolCallEndEventProps> = ({ event
 
       {/* Output panel */}
       {resultInfo && isExpanded && (
-        <div className={`border rounded-md mt-2 p-3 ${isFormatted ? 'bg-white dark:bg-gray-900 border-gray-200 dark:border-gray-700' : 'bg-gray-900 dark:bg-gray-950 border-gray-700'}`}>
+        <div className={`border rounded-md mt-2 p-3 ${isError ? 'border-red-300 bg-red-50 dark:border-red-900 dark:bg-red-950/25' : isFormatted ? 'bg-white dark:bg-gray-900 border-gray-200 dark:border-gray-700' : 'bg-gray-900 dark:bg-gray-950 border-gray-700'}`}>
           <div className="flex items-center justify-between mb-2">
-            <div className={`text-xs font-medium ${isFormatted ? 'text-gray-600 dark:text-gray-400' : 'text-gray-400'}`}>
-              Output
+            <div className={`text-xs font-medium ${isError ? 'text-red-700 dark:text-red-300' : isFormatted ? 'text-gray-600 dark:text-gray-400' : 'text-gray-400'}`}>
+              {isError ? 'Error output' : 'Output'}
             </div>
             <div className="flex items-center gap-2">
               <div className={`text-xs ${isFormatted ? 'text-gray-400 dark:text-gray-500' : 'text-gray-500'}`}>
@@ -307,7 +337,7 @@ const GenericToolCallEndEventDisplay: React.FC<ToolCallEndEventProps> = ({ event
             </div>
           )}
           {!isFormatted && (
-            <pre className="text-xs font-mono whitespace-pre-wrap overflow-x-auto max-h-96 overflow-y-auto text-green-300">
+            <pre className={`text-xs font-mono whitespace-pre-wrap overflow-x-auto max-h-96 overflow-y-auto ${isError ? 'text-red-700 dark:text-red-200' : 'text-green-300'}`}>
               {resultInfo.textContent}
             </pre>
           )}

@@ -1,23 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import type { PulseFindingLifecycle, PulseFixAttempt } from '../../services/api-types'
-import {
-  pulseFindingPresentation,
-  pulseFindingProgress,
-  pulseFixAttemptIsIncomplete,
-  pulseVerificationLevel,
-} from './pulseFindingPresentation'
+import type { PulseFindingLifecycle } from '../../services/api-types'
+import { pulseFindingPresentation, pulseFindingProgress } from './pulseFindingPresentation'
 
-function finding(overrides: Partial<PulseFindingLifecycle> = {}): PulseFindingLifecycle {
+function finding(overrides: Partial<PulseFindingLifecycle>): PulseFindingLifecycle {
   return {
-    fingerprint: 'finding-1',
+    fingerprint: 'fp',
     finding_id: 'PUL-1',
-    module: 'bug_review',
-    step_id: 'bug_review',
     phase: 'review',
-    text: 'The collector writes an incorrect total.',
+    step_id: 'workflow_review',
+    text: 'Finding',
     status: 'open',
-    first_seen_at: '2026-08-01T10:00:00Z',
-    last_seen_at: '2026-08-02T10:00:00Z',
     seen_count: 1,
     fix_attempts: [],
     verifications: [],
@@ -26,110 +18,56 @@ function finding(overrides: Partial<PulseFindingLifecycle> = {}): PulseFindingLi
   }
 }
 
-function attempt(overrides: Partial<PulseFixAttempt> = {}): PulseFixAttempt {
-  return {
-    attempt_id: 'attempt-1',
-    module: 'bug_review',
-    pulse_run_id: 'run-1',
-    summary: 'Correct the aggregation.',
-    status: 'fixing',
-    intended_files: ['db/query.sql'],
-    changed_files: ['db/query.sql'],
-    before_refs: [],
-    after_refs: [],
-    started_at: '2026-08-02T10:10:00Z',
-    ...overrides,
-  }
-}
-
-describe('Pulse finding presentation', () => {
-  it('routes an applied fix to proof instead of action', () => {
-    expect(pulseFindingPresentation(finding({ status: 'awaiting_verification' }))).toMatchObject({
-      queue: 'waiting_proof',
-      label: 'Fix applied · needs verification',
+describe('pulse finding action lanes', () => {
+  it('keeps a deferred safe repair in Pulse’s queue', () => {
+    expect(pulseFindingPresentation(finding({ status: 'queued_for_engineering' }))).toMatchObject({
+      queue: 'queued_repair', label: 'Queued for Pulse',
     })
   })
 
-  it('routes failed verification back to action', () => {
-    expect(pulseFindingPresentation(finding({
-      status: 'awaiting_verification',
-      verifications: [{ check: 'Replay corrected rows', verdict: 'failed' }],
-    }))).toMatchObject({
-      queue: 'needs_action',
-      label: 'Verification failed',
-    })
-  })
-
-  it('separates decisions, platform gaps, and workflow evidence', () => {
+  it('renders old deferred blocked records as queued work during migration', () => {
     expect(pulseFindingPresentation(finding({
       status: 'acknowledged',
       events: [{
-        event_type: 'awaiting_user',
-        summary: '',
-        metadata: { human_input_id: 'decision-1' },
-        recorded_at: '2026-08-02T10:00:00Z',
+        event_type: 'blocked',
+        summary: 'Browser snapshot overflow not attempted this pass; deferred to a future Engineering pass.',
+        recorded_at: '2026-08-08T00:00:00Z',
       }],
-    })).queue).toBe('decisions')
-
-    expect(pulseFindingPresentation(finding({
-      status: 'acknowledged',
-      events: [{ event_type: 'proposal_recorded', summary: '', recorded_at: '2026-08-02T10:00:00Z' }],
-    })).queue).toBe('proposals')
-
-    expect(pulseFindingPresentation(finding({
-      status: 'acknowledged',
-      events: [{ event_type: 'awaiting_user', summary: '', recorded_at: '2026-08-02T10:00:00Z' }],
-    }))).toMatchObject({ queue: 'needs_action', label: 'Decision request missing' })
-
-    expect(pulseFindingPresentation(finding({
-      status: 'external_action_required',
-      external_owner: 'scheduler platform',
-    })).queue).toBe('platform')
-
-    expect(pulseFindingPresentation(finding({
-      phase: 'prevalidation',
-      step_id: 'collect-data',
-    })).queue).toBe('workflow_reported')
+    }))).toMatchObject({ queue: 'queued_repair', label: 'Queued for Pulse' })
   })
 
-  it('uses the terminal disposition for a precise resolved label', () => {
+  it('renders old reproduce-on-next-run records as waiting for evidence', () => {
     expect(pulseFindingPresentation(finding({
-      status: 'resolved',
+      status: 'acknowledged',
       events: [{
-        event_type: 'closed',
-        summary: 'Replay passed.',
-        metadata: { disposition: 'fixed_verified' },
-        recorded_at: '2026-08-02T10:20:00Z',
+        event_type: 'blocked',
+        summary: 'Needs triage on the next daily-bid run before attempting a fix.',
+        recorded_at: '2026-08-08T00:00:00Z',
       }],
-    }))).toMatchObject({
-      queue: 'resolved',
-      label: 'Fixed and verified',
+    }))).toMatchObject({ queue: 'waiting_proof', label: 'Waiting for next run' })
+  })
+
+  it('uses the latest verification instead of a historical pass', () => {
+    const record = finding({
+      verifications: [
+        {
+          check: 'Global learning skill size and purity',
+          verdict: 'failed',
+          expected: 'The learning skill stays within its compact, pure-skill contract.',
+          observed: 'The file still exceeds the contract.',
+          verified_at: '2026-08-06T00:00:00Z',
+        },
+        {
+          check: 'Contradictory claims removed',
+          verdict: 'passed',
+          verified_at: '2026-08-05T00:00:00Z',
+        },
+      ],
     })
-  })
 
-  it('marks a stale fixing attempt as incomplete after the finding advances', () => {
-    const staleAttempt = attempt()
-    expect(pulseFixAttemptIsIncomplete(
-      finding({ status: 'awaiting_run', fix_attempts: [staleAttempt] }),
-      staleAttempt,
-    )).toBe(true)
-    expect(pulseFixAttemptIsIncomplete(
-      finding({ status: 'fixing', fix_attempts: [staleAttempt] }),
-      staleAttempt,
-    )).toBe(false)
-  })
-
-  it('explains verification strength in human terms', () => {
-    expect(pulseVerificationLevel({ check: 'Inspect plan configuration', verdict: 'passed' })).toBe('Static check')
-    expect(pulseVerificationLevel({ check: 'Replay all stored rows', verdict: 'passed' })).toBe('Deterministic check')
-    expect(pulseVerificationLevel({ check: 'Next workflow run publishes the value', verdict: 'inconclusive' })).toBe('Producing-run check')
-  })
-
-  it('shows the unresolved lifecycle step instead of implying closure', () => {
-    const steps = pulseFindingProgress(finding({
-      status: 'awaiting_verification',
-      fix_attempts: [attempt({ completed_at: '2026-08-02T10:15:00Z', status: 'completed' })],
-    }))
-    expect(steps.map((step) => step.state)).toEqual(['done', 'done', 'done', 'current', 'pending'])
+    expect(pulseFindingPresentation(record)).toMatchObject({
+      queue: 'needs_action', label: 'Verification failed',
+    })
+    expect(pulseFindingProgress(record).find((step) => step.label === 'Verified')?.state).not.toBe('done')
   })
 })

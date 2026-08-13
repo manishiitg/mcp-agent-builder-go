@@ -14,6 +14,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { MarkdownRenderer } from '../ui/MarkdownRenderer'
+import { formatToolCallResult } from '../../utils/toolCallFormatting'
 
 // Type definitions for conversation structure
 export interface ConversationPart {
@@ -79,6 +80,11 @@ interface LLMCallTiming {
   tool_calls?: number
   context_usage_percent?: number
   offset_from_agent_start_ms?: number
+}
+
+function failedToolTiming(timing?: ToolCallTiming): boolean {
+  const status = timing?.status?.trim().toLowerCase()
+  return status === 'error' || status === 'failed' || Boolean(timing?.error)
 }
 
 interface TimingData {
@@ -383,6 +389,7 @@ export const ConversationToolCallDisplay: React.FC<{
   timing?: ToolCallTiming
 }> = ({ name, arguments: args, callId, timing }) => {
   const [showArgs, setShowArgs] = useState(false)
+  const isError = failedToolTiming(timing)
 
   let formattedArgs = args
   try {
@@ -393,10 +400,11 @@ export const ConversationToolCallDisplay: React.FC<{
   }
 
   return (
-    <div className="bg-muted/50 rounded border border-border p-1.5 my-1">
+    <div className={cn('rounded border p-1.5 my-1', isError ? 'border-red-300 bg-red-50 dark:border-red-900 dark:bg-red-950/25' : 'bg-muted/50 border-border')}>
       <div className="flex items-center gap-1.5">
-        <Code className="w-3 h-3 text-orange-500 flex-shrink-0" />
+        <Code className={cn('w-3 h-3 flex-shrink-0', isError ? 'text-red-500' : 'text-orange-500')} />
         <span className="font-mono text-[11px] font-semibold text-foreground">{name}</span>
+        {isError && <span className="rounded bg-red-100 px-1 py-0.5 text-[9px] font-medium text-red-700 dark:bg-red-950 dark:text-red-300">failed</span>}
         {callId && (
           <span className="text-[9px] font-mono text-muted-foreground bg-muted px-1 py-0.5 rounded">
             {callId}
@@ -438,21 +446,17 @@ export const ConversationToolResponseDisplay: React.FC<{
   timing?: ToolCallTiming
 }> = ({ toolName, toolCallId, content, timing }) => {
   const [showContent, setShowContent] = useState(false)
+  const resultFormatting = useMemo(() => formatToolCallResult(content), [content])
+  const isError = resultFormatting.isError || failedToolTiming(timing)
 
-  let displayContent = content
-  try {
-    const parsed = JSON.parse(content)
-    displayContent = JSON.stringify(parsed, null, 2)
-  } catch {
-    // Keep original if not valid JSON
-  }
+  const displayContent = resultFormatting.text
 
   const isLongContent = displayContent.length > 300
 
   return (
-    <div className="bg-muted/30 rounded border border-border p-1.5 my-1">
+    <div className={cn('rounded border p-1.5 my-1', isError ? 'border-red-300 bg-red-50 dark:border-red-900 dark:bg-red-950/25' : 'bg-muted/30 border-border')}>
       <div className="flex items-center gap-1.5">
-        <FileText className="w-3 h-3 text-orange-500 flex-shrink-0" />
+        <FileText className={cn('w-3 h-3 flex-shrink-0', isError ? 'text-red-500' : 'text-orange-500')} />
         {toolName && (
           <span className="font-mono text-[11px] font-medium text-foreground">{toolName}</span>
         )}
@@ -461,6 +465,7 @@ export const ConversationToolResponseDisplay: React.FC<{
             {toolCallId}
           </span>
         )}
+        {isError && <span className="rounded bg-red-100 px-1 py-0.5 text-[9px] font-medium text-red-700 dark:bg-red-950 dark:text-red-300">failed</span>}
         {timing && (
           <TimingChip title="Tool duration">
             <Clock className="h-2.5 w-2.5" />
@@ -478,7 +483,7 @@ export const ConversationToolResponseDisplay: React.FC<{
         )}
       </div>
       {(isLongContent ? showContent : true) && (
-        <pre className="mt-1.5 p-1.5 bg-background rounded text-[10px] font-mono overflow-x-auto max-h-48 overflow-y-auto text-muted-foreground whitespace-pre-wrap">
+        <pre className={cn('mt-1.5 p-1.5 rounded text-[10px] font-mono overflow-x-auto max-h-48 overflow-y-auto whitespace-pre-wrap', isError ? 'border border-red-200 bg-red-100/60 text-red-800 dark:border-red-900 dark:bg-red-950/50 dark:text-red-200' : 'bg-background text-muted-foreground')}>
           {displayContent}
         </pre>
       )}

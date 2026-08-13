@@ -280,14 +280,8 @@ func registerStepSessionShellEnv(sessionID, stepOutputAbsPath, stepExecutionAbsP
 	common.SetSessionShellEnv(sessionID, env)
 }
 
-func resolveEffectiveDBAccess(stepConfig *AgentConfigs, evaluationMode, evaluationDBWrite bool) string {
-	if !evaluationMode {
-		return resolveDBAccess(stepConfig)
-	}
-	if evaluationDBWrite {
-		return DBAccessReadWrite
-	}
-	return DBAccessRead
+func resolveEffectiveDBAccess(stepConfig *AgentConfigs, _, _ bool) string {
+	return resolveDBAccess(stepConfig)
 }
 
 const workflowDBAccessEnv = "WORKFLOW_DB_ACCESS"
@@ -430,7 +424,14 @@ func (hcpo *StepBasedWorkflowOrchestrator) setupExecutionFolderGuard(stepPath st
 	// The run folder also holds logs/ and run_metadata.json, which are ordinary
 	// evidence for a step reasoning about its own run. Read-only, and scoped to
 	// this run — it grants nothing outside what execution/ already exposes.
-	readPaths = []string{runWorkspacePath, executionWorkspacePath, soulPath, builderPath, planningPath}
+	// MCP_TOOL_OUTPUT_DIR (mcpagent's spill target for any bridge tool result
+	// past its inline size cap — e.g. a large agent_browser snapshot) resolves
+	// to <workspace-root>/tool_output_folder, a sibling of runs/ that nothing
+	// below granted read access to. Without it, a step told to read its own
+	// spilled tool output back hits "outside every workspace root" and has no
+	// legal way to comply (PLAT-073 cluster F, dd9ede3c).
+	toolOutputPath := fmt.Sprintf("%s/tool_output_folder", baseWorkspacePath)
+	readPaths = []string{runWorkspacePath, executionWorkspacePath, soulPath, builderPath, planningPath, toolOutputPath}
 	// Generic agents are also used as read-only Pulse specialists. Their review
 	// contracts span plan, eval, report, cost, config, store, and run evidence,
 	// so give them workflow-wide read access while retaining the narrow write
@@ -452,8 +453,10 @@ func (hcpo *StepBasedWorkflowOrchestrator) setupExecutionFolderGuard(stepPath st
 		writePaths = []string{stepFolderPath, downloadsPath}
 	}
 
-	// db/ is readable only when the step explicitly resolves to read/read-write. The
-	// read-write default remains for backward compatibility; "none" is full isolation.
+	// db/ is always readable. Ordinary workflow execution currently resolves dbAccess
+	// to read-write uniformly, so db/ is also writable for those steps. The read branch
+	// remains only for callers that explicitly construct a reader profile while the
+	// canonical reader/writer refactor is incomplete.
 	dbPath := getDBPath(baseWorkspacePath)
 	if dbAccess != DBAccessNone {
 		readPaths = append(readPaths, dbPath)
@@ -659,15 +662,12 @@ func (hcpo *StepBasedWorkflowOrchestrator) selectExecutionLLM(
 			}
 			return llmConfig
 		}
-		// If disable_tier_optimization is set, always use Tier 1 regardless of learning maturity
-		if stepConfig != nil && stepConfig.DisableTierOptimization != nil && *stepConfig.DisableTierOptimization {
-			llmConfig := hcpo.tierResolver.ResolveTier(TierHigh)
-			if llmConfig != nil {
-				hcpo.GetLogger().Info(fmt.Sprintf("🏷️ [TIERED] Execution agent for step %s using Tier 1 (High) — tier optimization disabled: %s/%s",
-					stepPath, llmConfig.Primary.Provider, llmConfig.Primary.ModelID))
-			}
-			return llmConfig
-		}
+		// PLAT-061 removed disable_tier_optimization, which pinned this to Tier 1.
+		// It was a second, un-settable and un-reasoned path to the same outcome as
+		// pinning execution_tier — which PLAT-060 made an Ops-owned decision that
+		// must state its justification. Use execution_tier="high" (with its
+		// required reason) to hold a step on high reasoning.
+
 		// Evaluation mode defaults to medium tier — eval steps are verification checks
 		// that don't need the most powerful model. Step config can still override via ExecutionLLM (step 3).
 		if hcpo.isEvaluationMode {
@@ -773,11 +773,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) applyStepConfigToAgentConfig(config *
 	effectiveTransport := hcpo.applyWorkflowTransportToAgentConfig(config, stepConfig, "workflow step")
 	hcpo.publishWorkflowTransportContext(effectiveTransport, stepConfig)
 
-	// Set EnableContextOffloading if specified
-	if stepConfig != nil && stepConfig.EnableContextOffloading != nil {
-		config.EnableContextOffloading = stepConfig.EnableContextOffloading
-		hcpo.GetLogger().Info(fmt.Sprintf("🔧 Using step-specific context offloading setting: %v", *stepConfig.EnableContextOffloading))
-	}
 }
 
 // Long-running workflow execution agents should inherit cancellation from the
@@ -827,6 +822,11 @@ func (hcpo *StepBasedWorkflowOrchestrator) prepareCustomTools(stepConfig *AgentC
 		if resolveDBAccess(stepConfig) == DBAccessReadWrite {
 			enabledTools = append(enabledTools, "workflow_db:mutate_workflow_db")
 		}
+		// PLAT-055. Every step can raise a structured concern. This is
+		// capability-derived like the DB tools above: a step that observed a
+		// defect must always be able to report it, and a custom allowlist must
+		// not be able to silence that channel.
+		enabledTools = append(enabledTools, "workflow_db:record_run_concern")
 
 		// Auto-include workspace_browser:* if agent_browser exists in the workspace tools pool
 		// (present when preset has enable_browser_access: true) and not already listed.
@@ -1199,10 +1199,15 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 		if len(writePaths) > 0 {
 			stepEnvOutputPathOverride = writePaths[0]
 		}
-		hcpo.GetLogger().Info(fmt.Sprintf("🔒 Message sequence folder guard override for execution agent - Read: %v Write: %v", readPaths, writePaths))
-		if dbAccess == DBAccessReadWrite && !dbWritePathGranted(writePaths, hcpo.GetWorkspacePath()) {
-			dbAccess = DBAccessRead
+		// The item-specific override may narrow files/KB/learnings, but DB is a
+		// uniform workflow-step capability. Restore the workflow DB path instead
+		// of silently downgrading the child and removing mutate_workflow_db.
+		if !dbWritePathGranted(writePaths, hcpo.GetWorkspacePath()) {
+			dbPath := getDBPath(hcpo.GetWorkspacePath())
+			readPaths = common.DeduplicateStrings(append(readPaths, dbPath))
+			writePaths = common.DeduplicateStrings(append(writePaths, dbPath))
 		}
+		hcpo.GetLogger().Info(fmt.Sprintf("🔒 Message sequence folder guard override for execution agent - Read: %v Write: %v", readPaths, writePaths))
 	}
 
 	// Scripted code mode: add code/ subdir to the enforced write paths so the LLM can write main.py there.
@@ -1268,6 +1273,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 	config.MCPSessionID = execSessionID
 	directDBAccess := isScriptedExecutionModeConfig(stepConfig)
 	configureWorkflowDBSession(execSessionID, hcpo.GetWorkspacePath(), dbAccess, directDBAccess)
+	// PLAT-055. record_run_concern attributes from this trusted identity rather
+	// than from tool arguments, so a step cannot file against another step.
+	hcpo.configureRunConcernSession(execSessionID, stepID, ConcernPhaseExecution)
 	// Keep browser-sharing behavior unchanged: bind the per-step execution session to the
 	// same shared browser session the group session uses. If a caller later requests
 	// share_browser=false, the isolated browser session override below still wins.
@@ -1306,11 +1314,28 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 
 	// Check for isolated browser session ID (from share_browser=false in sub-agent tools)
 	if isolatedSessionID, ok := ctx.Value(virtualtools.SubAgentIsolatedSessionIDKey).(string); ok && isolatedSessionID != "" {
+		// The isolated session is minted fresh (`<parent>-isolated-<nanos>`) and
+		// carries no session-scoped setup of its own. Everything configured above
+		// was keyed to execSessionID, but from here on this is the session the
+		// agent's tools actually call through, so each binding has to be re-applied
+		// or it is silently absent for the whole step:
+		//   - folder guard: without it the step's read/write scope is not enforced
+		//     at session level;
+		//   - workflow DB: carries the access level AND the db.sqlite deny paths
+		//     that force use of the managed DB tools instead of raw sqlite;
+		//   - run-concern identity: record_run_concern attributes from the trusted
+		//     session identity, so without it the tool fails with "no trusted step
+		//     identity" even though it is registered and advertised to the agent.
+		// Guard first — configureWorkflowDBSession appends its deny paths to
+		// whatever the session config already carries.
+		hcpo.configureSubAgentSessionGuard(isolatedSessionID, "exec-isolated", stepID, readPaths, writePaths)
 		if cfg := common.GetSessionShellConfig(config.MCPSessionID); cfg != nil && strings.TrimSpace(cfg.WorkingDir) != "" {
 			common.SetSessionWorkingDir(isolatedSessionID, cfg.WorkingDir)
 		}
+		configureWorkflowDBSession(isolatedSessionID, hcpo.GetWorkspacePath(), dbAccess, directDBAccess)
+		hcpo.configureRunConcernSession(isolatedSessionID, stepID, ConcernPhaseExecution)
 		config.MCPSessionID = isolatedSessionID
-		hcpo.GetLogger().Info(fmt.Sprintf("Browser isolation: overriding MCPSessionID to %s", isolatedSessionID))
+		hcpo.GetLogger().Info(fmt.Sprintf("Browser isolation: overriding MCPSessionID to %s (folder guard, workflow DB, and run-concern identity re-bound)", isolatedSessionID))
 	}
 
 	// 5. Prepare custom tools (filtered by step config)
@@ -1580,6 +1605,15 @@ func (hcpo *StepBasedWorkflowOrchestrator) createTodoTaskOrchestratorAgent(ctx c
 	dbAccess := resolveEffectiveDBAccess(stepConfig, hcpo.isEvaluationMode, false)
 	directDBAccess := isScriptedExecutionModeConfig(stepConfig)
 	configureWorkflowDBSession(todoSessionID, hcpo.GetWorkspacePath(), dbAccess, directDBAccess)
+	// record_run_concern is registered for every workflow-mode session, so the
+	// orchestrator is offered the tool whether or not it can use it. Without a
+	// trusted identity on this session the call fails with "no trusted step
+	// identity" — the orchestrator sees an advertised tool that always errors,
+	// and its own observations (a route that keeps failing, a sub-agent that
+	// never produced its artifact) have nowhere structured to go. It owns a
+	// dedicated session already, so this attributes to its own step ID and
+	// cannot file against another step.
+	hcpo.configureRunConcernSession(todoSessionID, stepID, ConcernPhaseExecution)
 	if subAgentExecCtx != nil {
 		subAgentExecCtx.ToolSessionID = todoSessionID
 	}
@@ -1624,12 +1658,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) createTodoTaskOrchestratorAgent(ctx c
 	// This allows concurrent execution of multiple tool calls (e.g., call_sub_agent, call_generic_agent)
 	config.EnableParallelToolExecution = true
 	hcpo.GetLogger().Info("⚡ Parallel tool execution enabled for todo task orchestrator agent")
-
-	// Set EnableContextOffloading if specified
-	if stepConfig != nil && stepConfig.EnableContextOffloading != nil {
-		config.EnableContextOffloading = stepConfig.EnableContextOffloading
-		hcpo.GetLogger().Info(fmt.Sprintf("🔧 Using step-specific context offloading setting: %v", *stepConfig.EnableContextOffloading))
-	}
 
 	// Setup Downloads folder for agent-browser.
 	hcpo.setupBrowserDownloadsPathOverride(ctx, config, stepConfig)
@@ -2073,10 +2101,11 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutePredefinedSubAgentSyncFu
 
 		if err != nil {
 			hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ [TOOL] Predefined sub-agent execution failed: %v", err))
-			if strings.Contains(err.Error(), "route ") && strings.Contains(err.Error(), " not found in predefined routes") {
-				return "", err
-			}
-			return fmt.Sprintf("ERROR: %v", err), nil // Return error as result, not as error (agent can handle)
+			// Preserve the typed failure here. The virtual-tool boundary turns it
+			// into a success:false payload for a synchronous caller, while the
+			// async owner records a failed completion. Converting it to ERROR text
+			// plus nil made failed children look completed (PLAT-082).
+			return result, err
 		}
 
 		hcpo.GetLogger().Info(fmt.Sprintf("✅ [TOOL] Predefined sub-agent completed successfully: route=%s, todo=%s", routeID, todoID))
@@ -2174,7 +2203,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecuteGenericAgentSyncFunc(
 
 		if err != nil {
 			hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ [TOOL] Generic agent execution failed: %v", err))
-			return fmt.Sprintf("ERROR: %v", err), nil // Return error as result, not as error (agent can handle)
+			return result, err
 		}
 
 		hcpo.GetLogger().Info(fmt.Sprintf("✅ [TOOL] Generic agent completed successfully: todo=%s", todoID))

@@ -851,7 +851,7 @@ During Stage A:
 - `pulse_review_log` remains reviewer history;
 - `run_concerns` remains durable concern state;
 - `pulse_final_command_state` remains finalizer state;
-- current reviewer Markdown remains forensic evidence;
+- structured finding evidence and compact review receipts remain forensic evidence;
 - current HTML recovery state is preserved but not expanded.
 
 No live-state migration occurs during measurement.

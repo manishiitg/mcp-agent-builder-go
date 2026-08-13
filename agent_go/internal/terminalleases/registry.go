@@ -250,6 +250,10 @@ func (r *Registry) Prune(now time.Time) int {
 }
 
 func policyForSnapshot(snapshot terminals.Snapshot) Policy {
+	// A scheduled main agent may be waiting for an asynchronous workflow child.
+	// It must retain its native coding-CLI session so that an eventual
+	// AUTO-NOTIFICATION can continue the same conversation. The idle backstop
+	// owns cleanup once the entire session is actually complete.
 	if snapshot.ExecutionKind == "main_agent" || snapshot.Scope == "main_agent" || strings.HasPrefix(snapshot.OwnerID, "main:") {
 		return PolicyPersistent
 	}

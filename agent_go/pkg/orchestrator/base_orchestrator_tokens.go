@@ -518,9 +518,56 @@ func (bo *BaseOrchestrator) GetStepModels(phase string, step int, stepID string)
 	return result
 }
 
+func containsString(values []string, target string) bool {
+	for _, v := range values {
+		if v == target {
+			return true
+		}
+	}
+	return false
+}
+
+// stampExecutionID records the run-instance identity on a run folder's
+// token aggregate (PLAT-031). Sticky first-write: the first call to touch
+// this aggregate claims it, so within one continuous execution — including
+// across a UTC-midnight date-shard rotation, where each date's file starts
+// this call fresh — every date file ends up stamped with the same ID. A
+// later call carrying a different, non-empty ExecutionID means a separate
+// execution reused the same run folder; the displaced ID is preserved in
+// PriorExecutionIDs instead of being silently overwritten, so two runs
+// sharing a run folder remain distinguishable.
+func stampExecutionID(tokenFile *TokenUsageFile, executionID string) {
+	if tokenFile == nil || executionID == "" {
+		return
+	}
+	switch {
+	case tokenFile.ExecutionID == "":
+		tokenFile.ExecutionID = executionID
+	case tokenFile.ExecutionID != executionID:
+		if !containsString(tokenFile.PriorExecutionIDs, tokenFile.ExecutionID) {
+			tokenFile.PriorExecutionIDs = append(tokenFile.PriorExecutionIDs, tokenFile.ExecutionID)
+		}
+		tokenFile.ExecutionID = executionID
+	}
+}
+
+// stepAggregationKey builds the by_step_and_model bucket key for a step
+// cost event. When no validated StepID is available it must NOT fall back
+// to the caller's phase plus a bare numeric index — that numeric index is
+// typically a schedule-message counter, not a planning/plan.json step ID,
+// and bucketing it under e.g. "execution_only:10" makes the ledger claim
+// plan-step provenance it doesn't have (PLAT-031). Bucket unvalidated
+// numeric indices under an explicit non-step phase instead.
+func stepAggregationKey(data *StepTokenData) string {
+	if data.StepID != "" {
+		return fmt.Sprintf("%s:%s", data.Phase, data.StepID)
+	}
+	return fmt.Sprintf("schedule_message:%d", data.Step)
+}
+
 // PersistTokenUsage saves token usage into the daily group cost bucket under costs/.
-// The daily file is keyed by scope + group + UTC date, and contains one aggregate
-// TokenUsageFile per run folder for that date.
+// The daily file is sharded by scope + group + UTC date, while records inside it
+// are keyed by immutable execution ID. The run folder is only display metadata.
 func (bo *BaseOrchestrator) PersistTokenUsage(ctx context.Context, iterationFolder string,
 	stepTokenData *StepTokenData, modelTokenData *ModelTokenData) error {
 	if iterationFolder == "" {
@@ -551,6 +598,7 @@ func (bo *BaseOrchestrator) PersistTokenUsage(ctx context.Context, iterationFold
 		Date:        CostDateKey(now),
 		GroupFolder: ExtractGroupFolderFromRunFolder(runFolder),
 		UpdatedAt:   now,
+		Executions:  make(map[string]*ExecutionTokenUsage),
 		RunFolders:  make(map[string]*TokenUsageFile),
 	}
 	existingContent, err := bo.ReadWorkspaceFile(ctx, filePath)
@@ -569,8 +617,30 @@ func (bo *BaseOrchestrator) PersistTokenUsage(ctx context.Context, iterationFold
 		}
 	}
 
-	// Start from the existing aggregate for this run folder inside the daily file.
-	tokenFile := CloneTokenUsageFile(dailyFile.RunFolders[runFolder])
+	// The immutable bridge execution ID is the authoritative aggregation key.
+	// The old run_folders map uses iteration-0/... and is deliberately not read
+	// here: after rotation that path is reused, so reading it would merge an old
+	// execution into the new one before this write even begins.
+	executionID := ""
+	if stepTokenData != nil {
+		executionID = strings.TrimSpace(stepTokenData.ExecutionID)
+	}
+	var executionEntry *ExecutionTokenUsage
+	var tokenFile *TokenUsageFile
+	if executionID != "" {
+		executionEntry = CloneExecutionTokenUsage(dailyFile.Executions[executionID])
+		if executionEntry == nil {
+			executionEntry = &ExecutionTokenUsage{RunFolder: runFolder}
+		}
+		if executionEntry.RunFolder == "" {
+			executionEntry.RunFolder = runFolder
+		}
+		tokenFile = CloneTokenUsageFile(executionEntry.TokenUsage)
+	} else {
+		// A legacy caller with no execution identity retains the old behavior.
+		// New workflow execution bridges always provide one.
+		tokenFile = CloneTokenUsageFile(dailyFile.RunFolders[runFolder])
+	}
 	if tokenFile == nil {
 		tokenFile = &TokenUsageFile{
 			CreatedAt:      now,
@@ -589,6 +659,11 @@ func (bo *BaseOrchestrator) PersistTokenUsage(ctx context.Context, iterationFold
 	}
 	tokenFile.UpdatedAt = now
 
+	if executionID != "" {
+		tokenFile.ExecutionID = executionID
+		tokenFile.PriorExecutionIDs = nil
+	}
+
 	// Merge new model token data if provided
 	if modelTokenData != nil {
 		tokenFile.ByModel[modelTokenData.ModelID] = ApplyModelTokenData(tokenFile.ByModel[modelTokenData.ModelID], modelTokenData)
@@ -596,13 +671,7 @@ func (bo *BaseOrchestrator) PersistTokenUsage(ctx context.Context, iterationFold
 
 	// Store step+model token data if both stepTokenData and modelTokenData are provided
 	if stepTokenData != nil && modelTokenData != nil {
-		// Use StepID if available (new format), otherwise fall back to step index (old format)
-		var stepKey string
-		if stepTokenData.StepID != "" {
-			stepKey = fmt.Sprintf("%s:%s", stepTokenData.Phase, stepTokenData.StepID)
-		} else {
-			stepKey = fmt.Sprintf("%s:%d", stepTokenData.Phase, stepTokenData.Step)
-		}
+		stepKey := stepAggregationKey(stepTokenData)
 		modelID := modelTokenData.ModelID
 
 		// Initialize step map if it doesn't exist
@@ -613,7 +682,12 @@ func (bo *BaseOrchestrator) PersistTokenUsage(ctx context.Context, iterationFold
 	}
 
 	dailyFile.UpdatedAt = now
-	dailyFile.RunFolders[runFolder] = tokenFile
+	if executionID != "" {
+		executionEntry.TokenUsage = tokenFile
+		dailyFile.Executions[executionID] = executionEntry
+	} else {
+		dailyFile.RunFolders[runFolder] = tokenFile
+	}
 
 	// Marshal to JSON
 	jsonData, err := json.MarshalIndent(dailyFile, "", "  ")

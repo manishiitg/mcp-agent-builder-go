@@ -44,7 +44,7 @@ func TestNewPulseIssueMapsStructuredSummaryPriorityAndStatus(t *testing.T) {
 	}
 
 	issue := NewPulseIssue(finding)
-	if issue.ID != "HARNESS-17" || issue.Status != "blocked" || issue.Priority != "urgent" {
+	if issue.ID != "PUL-FEDCBA98" || issue.Status != "blocked" || issue.Priority != "urgent" {
 		t.Fatalf("unexpected identity/status/priority: %+v", issue)
 	}
 	if issue.Title != "Scheduler marks incomplete runs successful" || !strings.Contains(issue.Description, "Impact:") {
@@ -56,6 +56,7 @@ func TestNewPulseIssueMapsFixLifecycleToWorkflowStatuses(t *testing.T) {
 	tests := map[string]string{
 		ConcernStatusFixing:                 "in_progress",
 		ConcernStatusAwaitingVerification:   "in_review",
+		ConcernStatusQueuedForEngineering:   "backlog",
 		ConcernStatusResolved:               "done",
 		ConcernStatusRejected:               "canceled",
 		ConcernStatusExternalActionRequired: "external",

@@ -8,10 +8,13 @@ Focus especially on: {{.Focus}}.{{end}}{{if .RunFolder}}
 Use `{{.RunFolder}}` as the newest evidence anchor, then compare it with the
 smallest useful retained window.{{end}}
 
-1. Load `read_skill(skills=[{"name":"builder-reference","path":"references/post-run-monitor.md"}])`,
-   `read_skill(skills=[{"name":"builder-reference","path":"references/strategy-auditor.md"}])`,
-   `read_skill(skills=[{"name":"builder-reference","path":"references/assumption-audit.md"}])`, and
-   `read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log.md"}])`. The Strategy Auditor
+Read `workflow.json`. If `pulse.advisor_specialization.strategy_auditor` is
+active, apply it as the owner-approved workflow-specific lens subordinate to
+this canonical role and the current `soul.md`/plan. It may specialize what to
+inspect; it may not turn this into Goal Advisor, Engineering, or Ops review.
+
+1. Load `read_skill(skills=[{"name":"builder-reference","path":"references/strategy-auditor.md"}])`,
+   `read_skill(skills=[{"name":"builder-reference","path":"references/assumption-audit.md"}])`. The Strategy Auditor
    reference is the classification and evidence contract. These references
    belong to the parent; never give the reviewer HTML/CSS/formatting work.
 2. Read the objective and success criteria from `soul/soul.md`, then inspect the
@@ -24,15 +27,11 @@ smallest useful retained window.{{end}}
    unreliable, classify `execution_bug` or `insufficient_evidence`, identify the
    affected path, and name the exact next outcome-bearing checkpoint.
 4. Launch exactly one reviewer with
-   `call_generic_agent(todo_id="standalone-strategy-auditor",
-   instructions="READ-ONLY REVIEW ...", preferred_tier=3,
-   module="strategy_auditor")`. Do not pass `pulse_run_id` or `review_run_id`;
-   for this standalone command the backend generates both identities, stores
-   the complete Markdown in SQLite, and files its `CONCERNS:` lines into the
-   structured finding lifecycle. The reviewer must not edit files or databases,
+   `run_in_background(name="Standalone Strategy Audit", instruction="READ-ONLY STRATEGY AUDIT ...", agent_type="executor")`.
+   The reviewer must not edit files or databases,
    run producing actions, publish, notify, ask the user, create/consume
    decisions, update Pulse state, or launch another agent. SQLite access is
-   read-only. `call_generic_agent` returns an `execution_id` immediately; end
+   read-only. `run_in_background` returns an `execution_id` immediately; end
    the current turn and resume only from the automatic completion notification.
 5. Require one primary classification: `strategy_flaw`, `execution_bug`,
    `measurement_gap`, `insufficient_evidence`, or `no_material_problem`.
@@ -41,16 +40,13 @@ smallest useful retained window.{{end}}
    lag, perfect-execution counterfactual, competing explanations, and exact
    next checkpoint. Return a compact non-HTML packet with
    `module=strategy_auditor`, `verdict`, `next_check`, and every evidence-backed
-   ordered finding. Each finding includes stable `finding_id`, `target_key`, severity,
+   ordered finding. Each finding includes no invented identifier, severity,
    claim/mechanism, exact evidence, confidence, `recommended_fix` limited to an
    evidence or module handoff rather than a plan mutation, verification, and
    `user_judgment_required` with reason.
-6. Read the persisted result with `get_pulse_state(view="review")` using the exact
-   `review_run_id` and `module` supplied by the completion notification. Validate and
-   deduplicate that complete result against `builder/improve.html`. As the
-   parent, append one compact newest-first diagnostic entry with
-   `data-pulse-section="signals" data-module="strategy_auditor"`. Do not edit
-   the plan, configuration, DB, reports/evals, or Pulse module state.
+6. Read the child completion and validate its evidence against the actual
+   artifacts. Do not edit the plan, configuration, DB, reports/evals, or
+   Pulse module state.
    Do not launch `/goal-advisor` automatically.
 
 Finish with a short executive summary followed by every finding, bounded

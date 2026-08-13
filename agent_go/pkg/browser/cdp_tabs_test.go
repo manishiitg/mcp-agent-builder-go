@@ -96,7 +96,10 @@ func TestNormalizeAgentBrowserCommandArgs(t *testing.T) {
 		want    []string
 	}{
 		{name: "wait command repeated with duration", command: "wait", args: []string{"wait", "6s"}, want: []string{"6000"}},
-		{name: "snapshot command repeated", command: "snapshot", args: []string{"snapshot", "-i"}, want: []string{"-i"}},
+		{name: "snapshot command repeated is stripped only", command: "snapshot", args: []string{"snapshot", "-i"}, want: []string{"-i"}},
+		{name: "unscoped snapshot is unchanged", command: "snapshot", args: nil, want: nil},
+		{name: "explicit snapshot depth is unchanged", command: "snapshot", args: []string{"--depth", "9", "-i"}, want: []string{"--depth", "9", "-i"}},
+		{name: "selector scoped snapshot is unchanged", command: "snapshot", args: []string{"--selector", "#results"}, want: []string{"--selector", "#results"}},
 		{name: "wait text option unchanged", command: "wait", args: []string{"--text", "Welcome"}, want: []string{"--text", "Welcome"}},
 		{name: "single wait token unchanged", command: "wait", args: []string{"wait"}, want: []string{"wait"}},
 	}
@@ -113,6 +116,27 @@ func TestNormalizeAgentBrowserCommandArgs(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSnapshotResultTooLargeErrorPreservesSmallResultAndRejectsLargeResult(t *testing.T) {
+	short := "- button Submit"
+	if err := snapshotResultTooLargeError(short); err != nil {
+		t.Fatalf("small snapshot error = %v, want nil", err)
+	}
+
+	large := strings.Repeat("x", maxInlineSnapshotOutputRunes+100)
+	err := snapshotResultTooLargeError(large)
+	if err == nil {
+		t.Fatal("large snapshot error = nil, want explicit retry error")
+	}
+	for _, want := range []string{
+		"SNAPSHOT_RESULT_TOO_LARGE", "ran exactly as requested", "did not add --compact",
+		"did not", "truncate its evidence", "--selector <css>", "--depth <n>",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("large snapshot error missing %q:\n%s", want, err)
+		}
 	}
 }
 

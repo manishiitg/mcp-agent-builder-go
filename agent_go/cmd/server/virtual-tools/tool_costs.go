@@ -45,10 +45,19 @@ type workflowCostTarget struct {
 }
 
 type toolCostDailyGroupFile struct {
-	Date        string                             `json:"date"`
-	GroupFolder string                             `json:"group_folder"`
-	UpdatedAt   time.Time                          `json:"updated_at"`
-	RunFolders  map[string]*toolCostTokenUsageFile `json:"run_folders"`
+	Date        string                              `json:"date"`
+	GroupFolder string                              `json:"group_folder"`
+	UpdatedAt   time.Time                           `json:"updated_at"`
+	Executions  map[string]*toolCostExecutionRecord `json:"executions,omitempty"`
+	RunFolders  map[string]*toolCostTokenUsageFile  `json:"run_folders,omitempty"`
+}
+
+// toolCostExecutionRecord mirrors the workflow token-cost ledger's v2 shape
+// without importing orchestrator (which would create an import cycle).
+type toolCostExecutionRecord struct {
+	RunFolder         string                  `json:"run_folder"`
+	ArchivedRunFolder string                  `json:"archived_run_folder,omitempty"`
+	TokenUsage        *toolCostTokenUsageFile `json:"token_usage"`
 }
 
 type toolCostTokenUsageFile struct {
@@ -155,18 +164,40 @@ func recordPricedToolCost(ctx context.Context, workspaceAPIURL, userID string, c
 		Date:        toolCostDateKey(now),
 		GroupFolder: extractToolCostGroupFolder(target.RunFolder),
 		UpdatedAt:   now,
+		Executions:  make(map[string]*toolCostExecutionRecord),
 		RunFolders:  make(map[string]*toolCostTokenUsageFile),
 	}
 	if existing, err := wsClient.ReadWorkspaceFile(ctx, workspace.ReadWorkspaceFileParams{Filepath: filePath}); err == nil && strings.TrimSpace(existing.Content) != "" {
-		if err := json.Unmarshal([]byte(existing.Content), dailyFile); err == nil && dailyFile.RunFolders == nil {
-			dailyFile.RunFolders = make(map[string]*toolCostTokenUsageFile)
+		if err := json.Unmarshal([]byte(existing.Content), dailyFile); err == nil {
+			if dailyFile.RunFolders == nil {
+				dailyFile.RunFolders = make(map[string]*toolCostTokenUsageFile)
+			}
+			if dailyFile.Executions == nil {
+				dailyFile.Executions = make(map[string]*toolCostExecutionRecord)
+			}
 		}
 	}
 	if dailyFile.RunFolders == nil {
 		dailyFile.RunFolders = make(map[string]*toolCostTokenUsageFile)
 	}
+	if dailyFile.Executions == nil {
+		dailyFile.Executions = make(map[string]*toolCostExecutionRecord)
+	}
 
-	tokenFile := cloneToolCostTokenUsageFile(dailyFile.RunFolders[target.RunFolder])
+	var executionRecord *toolCostExecutionRecord
+	var tokenFile *toolCostTokenUsageFile
+	if strings.TrimSpace(executionID) != "" {
+		executionRecord = cloneToolCostExecutionRecord(dailyFile.Executions[executionID])
+		if executionRecord == nil {
+			executionRecord = &toolCostExecutionRecord{RunFolder: target.RunFolder}
+		}
+		if executionRecord.RunFolder == "" {
+			executionRecord.RunFolder = target.RunFolder
+		}
+		tokenFile = cloneToolCostTokenUsageFile(executionRecord.TokenUsage)
+	} else {
+		tokenFile = cloneToolCostTokenUsageFile(dailyFile.RunFolders[target.RunFolder])
+	}
 	if tokenFile == nil {
 		tokenFile = &toolCostTokenUsageFile{}
 	}
@@ -187,7 +218,12 @@ func recordPricedToolCost(ctx context.Context, workspaceAPIURL, userID string, c
 	}
 	aggregateKey := toolCostAggregateKey(cost.ToolName, cost.Provider, cost.ModelID)
 	applyToolCostUsage(tokenFile, target.StepKey, aggregateKey, toolUsage, now)
-	dailyFile.RunFolders[target.RunFolder] = tokenFile
+	if strings.TrimSpace(executionID) != "" {
+		executionRecord.TokenUsage = tokenFile
+		dailyFile.Executions[executionID] = executionRecord
+	} else {
+		dailyFile.RunFolders[target.RunFolder] = tokenFile
+	}
 	dailyFile.Date = toolCostDateKey(now)
 	dailyFile.GroupFolder = extractToolCostGroupFolder(target.RunFolder)
 	dailyFile.UpdatedAt = now
@@ -255,6 +291,17 @@ func cloneToolCostTokenUsageFile(src *toolCostTokenUsageFile) *toolCostTokenUsag
 		}
 	}
 	return clone
+}
+
+func cloneToolCostExecutionRecord(src *toolCostExecutionRecord) *toolCostExecutionRecord {
+	if src == nil {
+		return nil
+	}
+	return &toolCostExecutionRecord{
+		RunFolder:         src.RunFolder,
+		ArchivedRunFolder: src.ArchivedRunFolder,
+		TokenUsage:        cloneToolCostTokenUsageFile(src.TokenUsage),
+	}
 }
 
 func cloneRawMessageMap(src map[string]json.RawMessage) map[string]json.RawMessage {

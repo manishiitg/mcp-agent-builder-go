@@ -4,6 +4,7 @@ import {
   GEOMETRY_RECONNECT_AFTER_CLOSE,
   planGeometryChange,
   planLiveAttachClose,
+  terminalGridChange,
   terminalGridNeedsReconnect,
   terminalReconnectDelayMs,
   terminalSnapshotCanReconnect,
@@ -43,15 +44,25 @@ describe('terminal reconnect recovery', () => {
     expect(terminalSnapshotCanReconnect(snapshot({ tmux_session: '' }))).toBe(false)
   })
 
-  it('reconnects only for a usable changed terminal grid', () => {
+  it('reconnects only when a usable grid changes width', () => {
     const current = { cols: 120, rows: 40 }
     const minimum = { cols: 40, rows: 10 }
 
     expect(terminalGridNeedsReconnect(current, { cols: 100, rows: 40 }, minimum)).toBe(true)
-    expect(terminalGridNeedsReconnect(current, { cols: 120, rows: 42 }, minimum)).toBe(true)
+    expect(terminalGridNeedsReconnect(current, { cols: 120, rows: 42 }, minimum)).toBe(false)
     expect(terminalGridNeedsReconnect(current, { cols: 120, rows: 40 }, minimum)).toBe(false)
     expect(terminalGridNeedsReconnect(current, { cols: 20, rows: 8 }, minimum)).toBe(false)
     expect(terminalGridNeedsReconnect(current, undefined, minimum)).toBe(false)
+  })
+
+  it('distinguishes row-only resize from width-changing reconnect', () => {
+    const current = { cols: 117, rows: 43 }
+    const minimum = { cols: 40, rows: 10 }
+
+    expect(terminalGridChange(current, { cols: 117, rows: 38 }, minimum)).toBe('rows-only')
+    expect(terminalGridChange(current, { cols: 118, rows: 38 }, minimum)).toBe('columns')
+    expect(terminalGridChange(current, current, minimum)).toBe('none')
+    expect(terminalGridChange(current, { cols: 20, rows: 8 }, minimum)).toBe('none')
   })
 })
 

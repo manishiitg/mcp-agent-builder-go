@@ -141,9 +141,9 @@ export const MessageSequenceNode = memo(({ data, selected }: MessageSequenceNode
   const knowledgebaseAccess = agentConfig?.knowledgebase_access
   const dbAccess = agentConfig?.db_access
   const accessChips = [
-    learningsAccess && learningsAccess !== 'none' ? { icon: BookOpen, label: `Learnings: ${learningsAccess}` } : null,
-    knowledgebaseAccess && knowledgebaseAccess !== 'none' ? { icon: FileText, label: `KB: ${knowledgebaseAccess}` } : null,
-    dbAccess && dbAccess !== 'none' ? { icon: Database, label: `DB: ${dbAccess}` } : null,
+    learningsAccess ? { icon: BookOpen, label: `Learnings: ${learningsAccess}` } : null,
+    knowledgebaseAccess ? { icon: FileText, label: `KB: ${knowledgebaseAccess}` } : null,
+    dbAccess ? { icon: Database, label: 'DB: read-write (runtime)' } : null,
   ].filter((c): c is { icon: typeof BookOpen; label: string } => c !== null)
 
   useEffect(() => {

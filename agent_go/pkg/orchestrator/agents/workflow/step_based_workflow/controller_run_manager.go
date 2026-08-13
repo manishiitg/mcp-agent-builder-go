@@ -99,6 +99,15 @@ func (hcpo *StepBasedWorkflowOrchestrator) rotatePairedIterationZero(ctx context
 				return fmt.Errorf("refusing to rotate runs: failed to back up eval iteration-0 to %s: %w", backupName, err)
 			}
 		}
+		// Cost records keep the UUID as their immutable identity. Rotation only
+		// updates their human-readable archived path, so the next iteration-0
+		// run cannot inherit historical spend.
+		if err := hcpo.ArchiveRunCostPaths(ctx, "iteration-0", backupName); err != nil {
+			hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Could not update archived cost paths for %s: %v", backupName, err))
+		}
+		if err := hcpo.archiveEvaluationScoreRunFolder(ctx, "iteration-0", backupName); err != nil {
+			hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Could not update archived evaluation paths for %s: %v", backupName, err))
+		}
 	}
 
 	hcpo.pruneOldIterations(ctx, runsPath, keep)

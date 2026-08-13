@@ -411,7 +411,21 @@ var (
 
 	ownerMu    sync.Mutex
 	warmOwners = map[string]llm.Provider{}
+	// warmOwnerLastUsed tracks when each warmOwners entry last actually ran a
+	// turn — see HasOtherWarmInteractiveSession for why staleness here matters.
+	warmOwnerLastUsed = map[string]time.Time{}
 )
+
+// warmOwnerFreshness bounds how long a warmOwners entry counts as "someone is
+// using this" for HasOtherWarmInteractiveSession. Entries are otherwise NEVER
+// removed on their own (only an explicit close deletes one — see
+// closeOtherInteractiveSessions / CloseAllInteractiveSessions), so without this
+// bound a single turn run once and never revisited again would read as
+// "active" forever, permanently blocking Pulse from ever running (confirmed
+// live: whole days with zero completed Pulse cycles, just repeated deferrals).
+// Kept comfortably under tmux_sweep.go's 45-minute periodic reap threshold so
+// this never says "still active" about a session that reap has already killed.
+const warmOwnerFreshness = 30 * time.Minute
 
 // ensureSharedBridge starts the process-global executor / MCP bridge exactly
 // once and returns it on every later call. Following AgentWorks — whose bridge
@@ -478,6 +492,7 @@ func ensureSharedBridge(logger loggerv2.Logger) (*sharedBridge, error) {
 func rememberInteractiveOwner(sessionID string, provider llm.Provider) {
 	ownerMu.Lock()
 	warmOwners[sessionID] = provider
+	warmOwnerLastUsed[sessionID] = time.Now()
 	ownerMu.Unlock()
 }
 
@@ -518,7 +533,7 @@ func HasOtherWarmInteractiveSession(exceptSessionID string) bool {
 	ownerMu.Lock()
 	defer ownerMu.Unlock()
 	for id := range warmOwners {
-		if id != exceptSessionID {
+		if id != exceptSessionID && time.Since(warmOwnerLastUsed[id]) < warmOwnerFreshness {
 			return true
 		}
 	}
@@ -536,6 +551,7 @@ func CloseAllInteractiveSessions() {
 		owners[id] = p
 	}
 	warmOwners = map[string]llm.Provider{}
+	warmOwnerLastUsed = map[string]time.Time{}
 	ownerMu.Unlock()
 
 	for id, p := range owners {
@@ -555,6 +571,7 @@ func closeOtherInteractiveSessions(keepSessionID string) {
 		}
 		toClose[id] = p
 		delete(warmOwners, id)
+		delete(warmOwnerLastUsed, id)
 	}
 	ownerMu.Unlock()
 

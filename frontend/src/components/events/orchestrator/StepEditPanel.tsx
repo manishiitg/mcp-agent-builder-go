@@ -1146,29 +1146,24 @@ export const StepEditPanel: React.FC<StepEditPanelProps> = ({
 	                <div>
 	                  <label className="text-xs text-gray-600 dark:text-gray-400">Execution Tier</label>
 	                  <p className="text-[10px] text-gray-500 dark:text-gray-500 mb-1">
-	                    Persistent tier override for this step in tiered mode
+	                    Set by Ops Review with evidence; pinning also disables adaptive tiering
 	                  </p>
 	                  {agentConfigs.execution_llm?.provider && agentConfigs.execution_llm?.model_id ? (
 	                    <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-1">
-	                      ⚠️ Execution LLM is set — it takes precedence over execution tier. Clear Execution LLM above to use tier-based selection.
+	                      ⚠️ Execution LLM is set — it takes precedence over execution tier.
 	                    </p>
 	                  ) : (
-	                    <select
-	                      value={agentConfigs.execution_tier ?? ''}
-	                      onChange={(e) => {
-	                        const val = e.target.value as AgentConfigs['execution_tier'] | '';
-	                        setAgentConfigs((prev) => ({
-	                          ...prev,
-	                          execution_tier: val || undefined,
-	                        }));
-	                      }}
-	                      className="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-xs focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-	                    >
-	                      <option value="">Auto (adaptive/default)</option>
-	                      <option value="high">Tier 1 - High Reasoning</option>
-	                      <option value="medium">Tier 2 - Medium Reasoning</option>
-	                      <option value="low">Tier 3 - Low Reasoning</option>
-	                    </select>
+	                    /* PLAT-060: the tier setter was removed deliberately. Pinning a tier also
+	                       disables adaptive tiering for this step — it stops promoting high→medium
+	                       automatically after 3 stable runs — so it is a cost decision, not a
+	                       preference. It now arrives from an llm_ops_review recommendation carrying
+	                       its evidence, and the runtime requires a stated reason. State stays
+	                       visible here; change it via Pulse. */
+	                    <p className="text-xs text-gray-900 dark:text-gray-100">
+	                      {agentConfigs.execution_tier
+	                        ? `${agentConfigs.execution_tier} (pinned by Ops Review)`
+	                        : 'Auto (adaptive)'}
+	                    </p>
 	                  )}
 	                </div>
 	              )}

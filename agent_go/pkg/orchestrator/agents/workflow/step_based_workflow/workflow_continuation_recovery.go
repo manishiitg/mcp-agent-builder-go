@@ -366,13 +366,16 @@ func (hcpo *StepBasedWorkflowOrchestrator) queueRecoveredDirectLearning(state *W
 		hcpo.recordWorkflowContinuationPhaseForRunFolder(execCtx, state.RunFolder, state.StepID, state.StepPath, workflowContinuationOwnerStepExecution, workflowContinuationPhaseDirectLearning, workflowContinuationStatusWaitingForLock, "", agent)
 		learningsGlobalFileMutex.Lock()
 		defer learningsGlobalFileMutex.Unlock()
+		globalLearningsPath := fmt.Sprintf("%s/learnings/%s", hcpo.GetWorkspacePath(), GlobalLearningID)
+		beforeRef := hcpo.snapshotCanonicalArtifactRef(execCtx, globalLearningsPath)
 		result, _, err := hcpo.withWorkshopMessageTarget(execCtx, state.StepID, "recovered-learnings", agent, func() (string, []llmtypes.MessageContent, error) {
 			return base.Execute(execCtx, learnMsg, runtime.ExecutionHistory, "", false)
 		})
 		if err != nil {
 			return "", err
 		}
-		hasNewLearning, reasoning, confidence := inferHasNewLearningFromResult(result)
+		afterRef := hcpo.snapshotCanonicalArtifactRef(execCtx, globalLearningsPath)
+		hasNewLearning, reasoning, confidence := learningArtifactChange(beforeRef, afterRef)
 		if metadataErr := hcpo.updateLearningMetadataWithTurnCount(
 			execCtx,
 			runtime.StepIndex,

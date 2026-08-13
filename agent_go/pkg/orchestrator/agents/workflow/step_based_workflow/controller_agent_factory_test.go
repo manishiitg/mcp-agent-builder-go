@@ -43,20 +43,19 @@ func TestRegisterStepSessionShellEnvProvidesBridgeParity(t *testing.T) {
 	}
 }
 
-func TestResolveEffectiveDBAccessMakesEvaluationReadOnlyByDefault(t *testing.T) {
-	configuredReadWrite := &AgentConfigs{DBAccess: DBAccessReadWrite}
-	if got := resolveEffectiveDBAccess(configuredReadWrite, true, false); got != DBAccessRead {
-		t.Fatalf("evaluation without db_write must be read-only, got %q", got)
-	}
-	if got := resolveEffectiveDBAccess(configuredReadWrite, true, true); got != DBAccessReadWrite {
-		t.Fatalf("evaluation with explicit db_write must be read-write, got %q", got)
-	}
-	if got := resolveEffectiveDBAccess(configuredReadWrite, false, false); got != DBAccessReadWrite {
-		t.Fatalf("normal execution must preserve configured DB access, got %q", got)
-	}
-	configuredNone := &AgentConfigs{DBAccess: DBAccessNone}
-	if got := resolveEffectiveDBAccess(configuredNone, false, false); got != DBAccessNone {
-		t.Fatalf("normal execution must preserve disabled DB access, got %q", got)
+func TestResolveEffectiveDBAccessIsReadWriteForEveryWorkflowStep(t *testing.T) {
+	// PLAT-061 removed the db_access field; the invariant it never actually
+	// enforced is what matters and must hold for every shape of config.
+	for name, cfg := range map[string]*AgentConfigs{"configured": {}, "nil": nil} {
+		if got := resolveEffectiveDBAccess(cfg, true, false); got != DBAccessReadWrite {
+			t.Fatalf("%s: evaluation without db_write must still be read-write, got %q", name, got)
+		}
+		if got := resolveEffectiveDBAccess(cfg, true, true); got != DBAccessReadWrite {
+			t.Fatalf("%s: evaluation with legacy db_write must be read-write, got %q", name, got)
+		}
+		if got := resolveEffectiveDBAccess(cfg, false, false); got != DBAccessReadWrite {
+			t.Fatalf("%s: normal execution must be read-write, got %q", name, got)
+		}
 	}
 }
 
@@ -107,54 +106,6 @@ func TestWorkshopToolAgentBridgeSessionOverridesParentRouting(t *testing.T) {
 			t.Fatalf("%s = %q, want %q", key, got, want)
 		}
 	}
-}
-
-func TestPulseFixerDBCapabilityPreflight(t *testing.T) {
-	t.Setenv("MCP_API_URL", "http://127.0.0.1:7777/s/stale-parent")
-	tool := func(name string) llmtypes.Tool {
-		return llmtypes.Tool{Type: "function", Function: &llmtypes.FunctionDefinition{Name: name}}
-	}
-	tools := []llmtypes.Tool{tool("query_workflow_db"), tool("mutate_workflow_db")}
-	executors := map[string]interface{}{
-		"query_workflow_db":  func(context.Context, map[string]interface{}) (string, error) { return "", nil },
-		"mutate_workflow_db": func(context.Context, map[string]interface{}) (string, error) { return "", nil },
-	}
-
-	t.Run("accepts explicit child-scoped read-write capability", func(t *testing.T) {
-		sessionID := "pulse-fixer-preflight-ok"
-		t.Cleanup(func() { common.ClearSessionShellConfig(sessionID) })
-		common.SetSessionFolderGuard(sessionID, []string{"Workflow/demo"}, []string{"Workflow/demo/db"})
-		configureWorkshopToolAgentBridgeSession(sessionID)
-		configureWorkflowDBSession(sessionID, "Workflow/demo", DBAccessReadWrite, false)
-		if err := pulseFixerDBCapabilityPreflight(sessionID, "Workflow/demo", tools, executors); err != nil {
-			t.Fatalf("preflight rejected valid Fixer capability: %v", err)
-		}
-	})
-
-	t.Run("fails before provider work when mutation grant is absent", func(t *testing.T) {
-		sessionID := "pulse-fixer-preflight-no-db-write"
-		t.Cleanup(func() { common.ClearSessionShellConfig(sessionID) })
-		common.SetSessionFolderGuard(sessionID, []string{"Workflow/demo"}, nil)
-		configureWorkshopToolAgentBridgeSession(sessionID)
-		configureWorkflowDBSession(sessionID, "Workflow/demo", DBAccessRead, false)
-		err := pulseFixerDBCapabilityPreflight(sessionID, "Workflow/demo", tools, executors)
-		if err == nil || !strings.Contains(err.Error(), "lacks workflow DB write scope") {
-			t.Fatalf("preflight did not fail closed on missing DB write scope: %v", err)
-		}
-	})
-
-	t.Run("fails before provider work when shell routes to parent session", func(t *testing.T) {
-		sessionID := "pulse-fixer-preflight-stale-route"
-		t.Cleanup(func() { common.ClearSessionShellConfig(sessionID) })
-		common.SetSessionFolderGuard(sessionID, []string{"Workflow/demo"}, []string{"Workflow/demo/db"})
-		configureWorkshopToolAgentBridgeSession(sessionID)
-		configureWorkflowDBSession(sessionID, "Workflow/demo", DBAccessReadWrite, false)
-		common.SetSessionShellEnv(sessionID, map[string]string{"MCP_SESSION_ID": "parent-workshop"})
-		err := pulseFixerDBCapabilityPreflight(sessionID, "Workflow/demo", tools, executors)
-		if err == nil || !strings.Contains(err.Error(), "shell bridge session") {
-			t.Fatalf("preflight did not reject stale parent routing: %v", err)
-		}
-	})
 }
 
 func TestKBMaintenanceAgentsGetQueryButNotMutation(t *testing.T) {
@@ -222,22 +173,17 @@ func TestPrepareCustomToolsMaterializesDBCapabilityFromDBAccess(t *testing.T) {
 	}
 	hcpo := &StepBasedWorkflowOrchestrator{BaseOrchestrator: base}
 
+	// PLAT-061 removed db_access; what this pins is that a deliberately narrow
+	// explicit tool list still cannot strip the capability-derived DB tools.
 	tests := []struct {
-		name         string
-		access       string
-		wantQuery    bool
-		wantMutation bool
+		name   string
+		access string
 	}{
-		{name: "none", access: DBAccessNone, wantQuery: false, wantMutation: false},
-		{name: "read only", access: DBAccessRead, wantQuery: true, wantMutation: false},
-		{name: "read write", access: DBAccessReadWrite, wantQuery: true, wantMutation: true},
+		{name: "narrow explicit tool list", access: DBAccessReadWrite},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// A deliberately narrow explicit list must not remove capability-
-			// derived DB tools.
 			tools, executors := hcpo.prepareCustomTools(&AgentConfigs{
-				DBAccess:           tt.access,
 				EnabledCustomTools: []string{"workspace_advanced:execute_shell_command"},
 			})
 			names := make([]string, 0, len(tools))
@@ -246,36 +192,18 @@ func TestPrepareCustomToolsMaterializesDBCapabilityFromDBAccess(t *testing.T) {
 					names = append(names, definition.Function.Name)
 				}
 			}
-			gotQuery := slices.Contains(names, "query_workflow_db") && executors["query_workflow_db"] != nil
-			if gotQuery != tt.wantQuery {
-				t.Fatalf("db_access=%q query materialized=%v, want %v (tools=%v)", tt.access, gotQuery, tt.wantQuery, names)
+			if !slices.Contains(names, "query_workflow_db") || executors["query_workflow_db"] == nil {
+				t.Fatalf("db_access=%q missing query tool: tools=%v executors=%v", tt.access, names, executors)
 			}
 			gotMutation := slices.Contains(names, "mutate_workflow_db") && executors["mutate_workflow_db"] != nil
-			if gotMutation != tt.wantMutation {
-				t.Fatalf("db_access=%q mutation materialized=%v, want %v (tools=%v)", tt.access, gotMutation, tt.wantMutation, names)
+			if !gotMutation {
+				t.Fatalf("db_access=%q missing uniform mutation capability (tools=%v)", tt.access, names)
 			}
 		})
 	}
 }
 
-func TestExecutionFolderGuardWithDBNoneExcludesDatabase(t *testing.T) {
-	base, err := orchestrator.NewBaseOrchestrator(
-		loggerv2.NewNoop(), nil, orchestrator.OrchestratorTypeWorkflow, "", 0,
-		"", nil, nil, false, &orchestrator.LLMConfig{}, 1, nil, nil, nil,
-	)
-	if err != nil {
-		t.Fatalf("NewBaseOrchestrator returned error: %v", err)
-	}
-	base.SetWorkspacePath("Workflow/video")
-	hcpo := &StepBasedWorkflowOrchestrator{BaseOrchestrator: base, selectedRunFolder: "iteration-0/video-one"}
-	readPaths, writePaths := hcpo.setupExecutionFolderGuard("research", "research", KBAccessNone, LearningsAccessNone, DBAccessNone, &AgentConfigs{DBAccess: DBAccessNone})
-	dbPath := getDBPath("Workflow/video")
-	if slices.Contains(readPaths, dbPath) || slices.Contains(writePaths, dbPath) {
-		t.Fatalf("db_access=none exposed %q: read=%v write=%v", dbPath, readPaths, writePaths)
-	}
-}
-
-func TestEvaluationFolderGuardReadsDBButCannotWriteIt(t *testing.T) {
+func TestEvaluationFolderGuardReadsAndWritesDB(t *testing.T) {
 	base, err := orchestrator.NewBaseOrchestrator(
 		loggerv2.NewNoop(), nil, orchestrator.OrchestratorTypeWorkflow, "", 0,
 		"", nil, nil, false, &orchestrator.LLMConfig{}, 1, nil, nil, nil,
@@ -298,8 +226,8 @@ func TestEvaluationFolderGuardReadsDBButCannotWriteIt(t *testing.T) {
 	if !slices.Contains(readPaths, dbPath) {
 		t.Fatalf("evaluation must be able to read %q, got %v", dbPath, readPaths)
 	}
-	if slices.Contains(writePaths, dbPath) {
-		t.Fatalf("evaluation must not be able to write %q, got %v", dbPath, writePaths)
+	if !slices.Contains(writePaths, dbPath) {
+		t.Fatalf("evaluation must be able to write %q, got %v", dbPath, writePaths)
 	}
 }
 
@@ -479,9 +407,9 @@ func TestApplyStepConfigToAgentConfigEnablesWorkspaceIsolation(t *testing.T) {
 // of CodingAgentWorkingDir. These factories live in two files:
 //   - controller_agent_factory.go (2): regular-step path (applyStepConfigToAgentConfig)
 //     and the todo-task orchestrator (createTodoTaskOrchestratorAgent).
-//   - interactive_workshop_manager.go (6): the workshop background agents — the
-//     `run_in_background` task agent plus the Goal Advisor stage runner and
-//     the review-plan / review-timing / review-costs / review-step-code agents —
+//   - interactive_workshop_manager.go (5): the workshop background agents — the
+//     `run_in_background` task agent plus the review-plan / review-timing /
+//     review-costs / review-step-code agents —
 //     each spawns a coding-CLI
 //     session for a workflow task and must isolate its workspace.
 //
@@ -499,7 +427,7 @@ func TestAllWorkflowAgentFactoriesEnableWorkspaceIsolation(t *testing.T) {
 		want int
 	}{
 		{path: "controller_agent_factory.go", want: 2},     // regular + todo-task orchestrator
-		{path: "interactive_workshop_manager.go", want: 6}, // run_in_background + goal-advisor + review workshop agents
+		{path: "interactive_workshop_manager.go", want: 5}, // run_in_background + review workshop agents
 	}
 	const needle = "config.IsolateCodingAgentWorkspace = true"
 	for _, tc := range cases {
@@ -1172,5 +1100,41 @@ func TestExecutionFolderGuardGrantsTheRunFolderNotOnlyItsExecutionChild(t *testi
 	// stay denied — this fix widens by exactly one level, not to everything.
 	if slices.Contains(readPaths, "Workflow/testing") {
 		t.Fatalf("read scope widened to the workflow root, got %v", readPaths)
+	}
+}
+
+// TestExecutionFolderGuardGrantsToolOutputFolderRead pins the PLAT-073
+// cluster F fix (dd9ede3c): mcpagent spills any bridge tool result over its
+// inline size cap (a large agent_browser snapshot, chief among them) to
+// MCP_TOOL_OUTPUT_DIR, which resolves to <workspace-root>/tool_output_folder
+// — a sibling of runs/ that was previously outside every granted read path.
+// A step told to read its own spilled output back had no legal way to
+// comply. This must be readable without widening to the bare workflow root.
+func TestExecutionFolderGuardGrantsToolOutputFolderRead(t *testing.T) {
+	base, err := orchestrator.NewBaseOrchestrator(
+		loggerv2.NewNoop(), nil, orchestrator.OrchestratorTypeWorkflow, "", 0,
+		"", nil, nil, false, &orchestrator.LLMConfig{}, 1, nil, nil, nil,
+	)
+	if err != nil {
+		t.Fatalf("NewBaseOrchestrator returned error: %v", err)
+	}
+	base.SetWorkspacePath("Workflow/testing")
+	hcpo := &StepBasedWorkflowOrchestrator{
+		BaseOrchestrator:  base,
+		selectedRunFolder: "iteration-0/default",
+	}
+
+	readPaths, _ := hcpo.setupExecutionFolderGuard(
+		"step-1", "some-step", KBAccessNone, LearningsAccessNone,
+		resolveEffectiveDBAccess(nil, false, false),
+		nil,
+	)
+
+	toolOutputPath := "Workflow/testing/tool_output_folder"
+	if !slices.Contains(readPaths, toolOutputPath) {
+		t.Fatalf("step must be able to read its own spilled tool output at %q, got %v", toolOutputPath, readPaths)
+	}
+	if slices.Contains(readPaths, "Workflow/testing") {
+		t.Fatalf("granting tool_output_folder read must not widen to the bare workflow root, got %v", readPaths)
 	}
 }

@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { ReportHumanInput } from '../services/api-types'
 import type { ChatTab } from '../stores/useChatStore'
-import { buildReportHumanInputChatMessage, selectReportDiscussionTab } from './reportHumanInputChat'
+import {
+  buildReportHumanInputChatMessage,
+  buildReportHumanInputDelegatedActionMessage,
+  selectReportDiscussionTab,
+} from './reportHumanInputChat'
 
 function tab(tabId: string, overrides: Partial<ChatTab> = {}): ChatTab {
   return {
@@ -85,8 +89,36 @@ describe('Pulse decision chat routing', () => {
     const message = buildReportHumanInputChatMessage(input, 'Workflow/example', 'Why is archiving safer?')
 
     expect(message).toContain('Do not submit, dismiss, or mark the decision handled yet')
+    expect(message).toContain('call answer_human_input_request')
+    expect(message).toContain('Decision ID: decision-one')
     expect(message).toContain('How should I finish the job?')
-    expect(message).toContain('Archive older entries — Nothing is lost.')
+    expect(message).toContain('Archive older entries [option_id=archive] — Nothing is lost.')
     expect(message).toContain('My question:\nWhy is archiving safer?')
+  })
+
+  it('makes an explicit delegated action authorize a choice without allowing an invented unsafe action', () => {
+    const input = {
+      id: 'decision-one',
+      workspace_path: 'Workflow/example',
+      source: 'pulse',
+      status: 'pending',
+      priority: 'medium',
+      question: 'How should I finish the job?',
+      context: 'The previous cleanup did not reach the limit.',
+      options: [{ id: 'archive', title: 'Archive older entries', description: 'Nothing is lost.' }],
+      allow_free_text: true,
+      evidence: 'builder/improve.html',
+      created_at: '2026-08-04T08:22:00Z',
+      updated_at: '2026-08-04T08:22:00Z',
+    } as ReportHumanInput
+
+    const message = buildReportHumanInputDelegatedActionMessage(input, 'Workflow/example')
+
+    expect(message).toContain('I delegate this pending Pulse decision to you.')
+    expect(message).toContain('choose the best supported option')
+    expect(message).toContain('do not invent one or take an unsafe action')
+    expect(message).toContain('call answer_human_input_request')
+    expect(message).toContain('Do not mark the decision consumed yourself.')
+    expect(message).toContain('Archive older entries [option_id=archive] — Nothing is lost.')
   })
 })

@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { X, BookOpen, Lock, Unlock, Loader2, AlertCircle, ChevronDown, ChevronRight, Code, FileText, Trash2, Search, Globe, Hash, RefreshCw, Eye, Edit2, Save, Ban, Check, Copy, GitBranch, Bot, Terminal } from 'lucide-react'
+import { X, BookOpen, Lock, Unlock, Loader2, AlertCircle, ChevronDown, ChevronRight, Code, FileText, Trash2, Search, Globe, Hash, Eye, Edit2, Save, Ban, Check, Copy, GitBranch, Bot, Terminal, ArrowLeft } from 'lucide-react'
 import { agentApi } from '../../services/api'
 import type { PlanningResponse, PlanStep } from '../../utils/stepConfigMatching'
 import { isTodoTaskStep } from '../../utils/stepConfigMatching'
@@ -13,6 +13,7 @@ interface LearningsPopupProps {
   onClose: () => void
   workspacePath: string | null
   plan: PlanningResponse | null
+  embedded?: boolean
 }
 
 // LearningMetadata — fields read from learnings/{stepId}/.learning_metadata.json,
@@ -26,11 +27,16 @@ interface LearningMetadata {
   last_turn_count?: number
   total_iterations?: number
 
-  // Auto-lock lifecycle (description-hash scoped)
-  auto_locked_at?: string
-  auto_lock_reason?: string
-  auto_unlocked_at?: string
-  auto_unlock_reason?: string
+  // Adaptive execution tiering (description-hash scoped). These are written by
+  // controller_execution_tiering.go, NOT by any learnings mechanism: a step is
+  // promoted High -> Medium after executionTierPromotionThreshold (3) stable
+  // successful runs on an unchanged description, and a description change
+  // resets the counter. They live here because the popup surfaces them.
+  //
+  // The auto_locked_at / auto_lock_reason / auto_unlocked_at / auto_unlock_reason
+  // fields were removed: no Go code has ever set them. The only remaining
+  // reference (workflow.go:2638) CLEARS them on manual unlock, so every derived
+  // badge could render nothing but an empty state.
   last_description_hash?: string
   description_hash_runs?: number
 
@@ -48,10 +54,6 @@ function isStepLocked(metadata: LearningMetadata | null): boolean {
   return metadata?.lock_learnings === true
 }
 
-function isStepAutoLocked(metadata: LearningMetadata | null): boolean {
-  return isStepLocked(metadata) && !!metadata?.auto_locked_at
-}
-
 function getSuccessfulRuns(metadata: LearningMetadata | null): number {
   if (!metadata) return 0
   return metadata.successful_runs || 0
@@ -59,7 +61,7 @@ function getSuccessfulRuns(metadata: LearningMetadata | null): number {
 
 // Check if learnings folder exists
 // Returns true only if metadata contains actual learning data (not just step config fields)
-// Step config fields (use_code_execution_mode, learning_detail_level, lock_learnings) can exist
+// Step config fields (use_code_execution_mode, lock_learnings) can exist
 // even when the folder doesn't exist, so we need to check for actual learning data fields
 function hasLearningsFolder(
   metadata: LearningMetadata | null,
@@ -73,8 +75,7 @@ function hasLearningsFolder(
     metadata.step_id !== undefined ||
     metadata.successful_runs !== undefined ||
     metadata.last_turn_count !== undefined ||
-    metadata.auto_locked_at !== undefined ||
-    metadata.auto_lock_reason !== undefined ||
+    metadata.description_hash_runs !== undefined ||
     metadata.total_iterations !== undefined
   
   // If no learning data fields, folder doesn't exist (only step config fields present)
@@ -148,7 +149,7 @@ function getStepTitle(plan: PlanningResponse | null, stepId: string): string {
   return step?.title || stepId
 }
 
-export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }: LearningsPopupProps) {
+export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, embedded = false }: LearningsPopupProps) {
   const [learnings, setLearnings] = useState<Record<string, LearningMetadata | null>>({})
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -162,7 +163,6 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
   // Loading states for individual items
   const [loadingStepIds, setLoadingStepIds] = useState<Set<string>>(new Set())
 
-  const [updatingLockStepIds, setUpdatingLockStepIds] = useState<Set<string>>(new Set())
   
   // Delete state
   const [deletingStepIds, setDeletingStepIds] = useState<Set<string>>(new Set())
@@ -184,7 +184,7 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
   const [globalFiles, setGlobalFiles] = useState<Array<{ name: string; relPath: string; absPath: string; dir: string }>>([])
   const [globalLoading, setGlobalLoading] = useState(false)
   const [globalError, setGlobalError] = useState<string | null>(null)
-  const [globalExpanded, setGlobalExpanded] = useState(true)
+  const [globalExpanded, setGlobalExpanded] = useState(false)
   const [expandedFilePaths, setExpandedFilePaths] = useState<Set<string>>(new Set())
   const [fileContentCache, setFileContentCache] = useState<Record<string, string>>({})
 
@@ -225,7 +225,7 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
 
   // Fetch learnings when popup opens (API now includes step config data merged in)
   useEffect(() => {
-    if (!isOpen || !workspacePath) return
+    if ((!isOpen && !embedded) || !workspacePath) return
 
     setIsLoading(true)
     setError(null)
@@ -249,13 +249,13 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
       .finally(() => {
         setIsLoading(false)
       })
-  }, [isOpen, workspacePath])
+  }, [isOpen, embedded, workspacePath])
 
   // Fetch everything under _global/ on open: SKILL.md content + the full file
   // tree (references/, scripts/, assets/, any other artifacts the learning agent
   // decided to write). Per-file content is lazy-loaded on click.
   useEffect(() => {
-    if (!isOpen || !workspacePath) return
+    if ((!isOpen && !embedded) || !workspacePath) return
     let cancelled = false
     setGlobalLoading(true)
     setGlobalError(null)
@@ -377,7 +377,7 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
       }
     })()
     return () => { cancelled = true }
-  }, [isOpen, workspacePath])
+  }, [isOpen, embedded, workspacePath])
 
   // Lazy-load a single file under _global/ when its row is expanded.
   const toggleGlobalFile = async (relPath: string, absPath: string) => {
@@ -438,39 +438,6 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
         const next = new Set(prev)
         next.delete(stepId)
         return next
-      })
-    }
-  }
-
-  const toggleLock = async (stepId: string, isCurrentlyLocked: boolean) => {
-    if (!workspacePath || updatingLockStepIds.has(stepId)) return
-
-    setUpdatingLockStepIds(prev => new Set(prev).add(stepId))
-
-    try {
-      const step = plan?.steps?.find(s => s.id === stepId)
-      const metadata = learnings[stepId]
-      const currentConfigs = step?.agent_configs || (metadata ? { lock_learnings: metadata.lock_learnings } : {})
-
-      await agentApi.updateStepConfig(workspacePath, stepId, {
-        ...currentConfigs,
-        lock_learnings: !isCurrentlyLocked
-      })
-
-      // Refresh learnings
-      const response = await agentApi.getAllStepLearnings(workspacePath)
-      if (response.success) {
-        setLearnings(parseLearningsResponse(response.learnings || {}))
-      }
-    } catch (err: unknown) {
-      console.error('[LearningsPopup] Error toggling lock:', err)
-      const errorMessage = err instanceof Error ? err.message : 'Unknown error'
-      setError('Failed to update lock status: ' + errorMessage)
-    } finally {
-      setUpdatingLockStepIds(prev => {
-        const newSet = new Set(prev)
-        newSet.delete(stepId)
-        return newSet
       })
     }
   }
@@ -542,19 +509,19 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
   // Handle Escape key to close modal
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && isOpen) {
+      if (event.key === 'Escape' && isOpen && !embedded) {
         onClose()
       }
     }
 
-    if (isOpen) {
+    if (isOpen && !embedded) {
       document.addEventListener('keydown', handleKeyDown)
     }
 
     return () => {
       document.removeEventListener('keydown', handleKeyDown)
     }
-  }, [isOpen, onClose])
+  }, [isOpen, embedded, onClose])
 
   // Fetch learning content when an item is expanded
   const fetchLearningContent = async (stepId: string) => {
@@ -730,17 +697,15 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
   // Toggle expand/collapse for a step
   const toggleExpand = (stepId: string) => {
     setExpandedStepIds(prev => {
-      const newSet = new Set(prev)
-      if (newSet.has(stepId)) {
-        newSet.delete(stepId)
+      if (prev.has(stepId)) {
+        return new Set()
       } else {
-        newSet.add(stepId)
         // Fetch content if not cached
         if (!learningContentCache[stepId]) {
           fetchLearningContent(stepId)
         }
+        return new Set([stepId])
       }
-      return newSet
     })
   }
 
@@ -787,7 +752,7 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
     return stepsWithMetadata
   }, [plan])
 
-  if (!isOpen) return null
+  if (!embedded && !isOpen) return null
 
   // Steps in execution order. _global is rendered separately as a featured card
   // above — no longer prepended into this list.
@@ -812,6 +777,11 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
     })
   }
 
+  const focusedStepId = expandedStepIds.values().next().value as string | undefined
+  const visibleStepsWithLearnings = focusedStepId
+    ? stepsWithLearnings.filter(step => step.stepId === focusedStepId)
+    : stepsWithLearnings
+
   console.log('[LEARNINGS_POPUP_DEBUG] visible', {
     workspacePath,
     allPlanStepIds: allStepsInOrder.map(step => step.stepId),
@@ -821,26 +791,10 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
     searchTerm,
   })
 
-  const handleExpandAll = () => {
-    const newExpanded = new Set<string>()
-    stepsWithLearnings.forEach(step => {
-      newExpanded.add(step.stepId)
-      // Trigger fetch if not cached
-      if (!learningContentCache[step.stepId]) {
-        fetchLearningContent(step.stepId)
-      }
-    })
-    setExpandedStepIds(newExpanded)
-  }
-
-  const handleCollapseAll = () => {
-    setExpandedStepIds(new Set())
-  }
-
-  return (
-    <ModalPortal>
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[9999] p-2 sm:p-4">
-      <div className="bg-background text-foreground border border-border rounded-lg shadow-2xl w-full max-w-6xl xl:max-w-7xl h-[calc(100dvh-1rem)] sm:h-[92vh] flex flex-col">
+  const shell = (
+      <div className={embedded
+        ? 'flex h-full min-h-0 w-full flex-col bg-background text-foreground'
+        : 'bg-background text-foreground border border-border rounded-lg shadow-2xl w-full max-w-6xl xl:max-w-7xl h-[calc(100dvh-1rem)] sm:h-[92vh] flex flex-col'}>
         {/* Header — title + close only. Step search / filter / expand controls
             moved to sit above the step list so they're visually adjacent to what
             they operate on (the per-step section, not the global skill). */}
@@ -849,13 +803,13 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
             <BookOpen className="w-5 h-5 text-primary" />
             <h2 className="truncate text-lg font-semibold">Automation Learnings</h2>
           </div>
-          <button
+          {!embedded && <button
             onClick={onClose}
             className="p-1 rounded-md hover:bg-muted transition-colors"
             title="Close (Esc)"
           >
             <X className="w-5 h-5" />
-          </button>
+          </button>}
         </div>
 
         {/* Content */}
@@ -1054,18 +1008,6 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
               </div>
               <div className="flex items-center gap-1.5">
                 <button
-                  onClick={handleExpandAll}
-                  className="px-2.5 py-1.5 text-xs font-medium bg-muted hover:bg-muted/80 rounded-md transition-colors whitespace-nowrap"
-                >
-                  Expand All
-                </button>
-                <button
-                  onClick={handleCollapseAll}
-                  className="px-2.5 py-1.5 text-xs font-medium bg-muted hover:bg-muted/80 rounded-md transition-colors whitespace-nowrap"
-                >
-                  Collapse All
-                </button>
-                <button
                   onClick={() => setShowOnlyUnlocked(!showOnlyUnlocked)}
                   className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors whitespace-nowrap ${
                     showOnlyUnlocked
@@ -1093,19 +1035,29 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
 
           {!isLoading && !error && stepsWithLearnings.length > 0 && (
             <div className="space-y-3">
-              {stepsWithLearnings.map(({ stepId, stepNumber, stepType, relationType }) => {
+              {focusedStepId && (
+                <button
+                  type="button"
+                  onClick={() => setExpandedStepIds(new Set())}
+                  className="sticky top-0 z-20 inline-flex items-center gap-2 rounded-md border border-border bg-background/95 px-3 py-2 text-sm font-medium shadow-sm backdrop-blur-sm transition-colors hover:bg-accent"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  Back to all steps
+                </button>
+              )}
+              {visibleStepsWithLearnings.map(({ stepId, stepNumber, stepType, relationType }) => {
                 const metadata = learnings[stepId]
                 // Lock state comes only from step_config.json (merged by the backend
                 // into metadata.lock_learnings for this API response). Metadata is
                 // used only to explain whether a current lock was auto or manual.
+                // Every lock is a deliberate Workshop/user decision (PLAT-059 also
+                // requires a stated reason), so there is no auto/manual split to
+                // display — nothing has ever written auto_locked_at.
                 const isLocked = isStepLocked(metadata)
-                const isAutoLocked = isStepAutoLocked(metadata)
-                const isManuallyLocked = isLocked && !isAutoLocked
-                const wasRecentlyAutoUnlocked = !!metadata?.auto_unlocked_at &&
-                  (!metadata.auto_locked_at || (metadata.auto_unlocked_at > metadata.auto_locked_at))
 
-                // Hash-scoped run counter drives auto-lock. Falls back to legacy
-                // successful_runs while .learning_metadata.json hasn't been rewritten.
+                // Hash-scoped run counter. Drives adaptive execution-tier promotion,
+                // not learnings. Falls back to legacy successful_runs while
+                // .learning_metadata.json hasn't been rewritten.
                 const hashRuns = metadata?.description_hash_runs ?? 0
                 const successfulRuns = getSuccessfulRuns(metadata)
                 const progressRuns = hashRuns > 0 ? hashRuns : successfulRuns
@@ -1120,7 +1072,6 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
                 const isExpanded = expandedStepIds.has(stepId)
                 const isLoadingContent = loadingStepIds.has(stepId)
                 const cachedContent = learningContentCache[stepId]
-                const isUpdatingLock = updatingLockStepIds.has(stepId)
 
                 // Determine step type label and badge color
                 const getStepTypeLabel = () => {
@@ -1178,7 +1129,7 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2.5 mb-2.5 flex-wrap sm:flex-nowrap">
+                          <div className={`flex items-center gap-2.5 flex-wrap sm:flex-nowrap ${isExpanded ? 'mb-2.5' : ''}`}>
                             <button
                               onClick={(e) => {
                                 e.stopPropagation()
@@ -1186,6 +1137,8 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
                               }}
                               className="p-1 hover:bg-muted rounded-md transition-colors shrink-0 flex items-center justify-center"
                               title={isExpanded ? "Collapse" : "Expand"}
+                              aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${stepTitle} learnings`}
+                              aria-expanded={isExpanded}
                             >
                               {isExpanded ? (
                                 <ChevronDown className="w-4 h-4 text-muted-foreground" />
@@ -1208,7 +1161,7 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
                             </span>
                           </div>
 
-                          <div className="flex flex-col gap-2 ml-7">
+                          {isExpanded && <div className="flex flex-col gap-2 ml-7">
                             {/* Single-line metadata: access, lock status, lock button, auto-unlock badge, turns, iterations. */}
                             <div className="flex items-center gap-2.5 flex-wrap text-xs">
                               
@@ -1250,17 +1203,6 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
                                 })}
                               </div>
 
-                              {/* Auto-unlocked indicator */}
-                              {wasRecentlyAutoUnlocked && (
-                                <div
-                                  className="flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20 shadow-sm"
-                                  title={metadata?.auto_unlock_reason || 'Description changed — previous auto-lock invalidated'}
-                                >
-                                  <RefreshCw className="w-3.5 h-3.5" />
-                                  <span>Auto-unlocked (description changed)</span>
-                                </div>
-                              )}
-
                               {metadata && (
                                 <div className="flex items-center gap-2 bg-muted/30 px-2 py-0.5 rounded-lg border border-border/40">
                                   <div className="flex items-center gap-1">
@@ -1268,9 +1210,7 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
                                       <>
                                         <Lock className="w-3.5 h-3.5 text-green-500" />
                                         <span className="text-green-600 dark:text-green-400 font-semibold text-xs">
-                                          {isAutoLocked ? 'Locked (Auto)' :
-                                           isManuallyLocked ? 'Locked (Manual)' :
-                                           'Locked'}
+                                          Locked
                                         </span>
                                       </>
                                     ) : (
@@ -1280,37 +1220,12 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
                                       </>
                                     )}
                                   </div>
-                                  <div className="w-px h-3 bg-border/80 mx-1" />
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation()
-                                      toggleLock(stepId, isLocked)
-                                    }}
-                                    disabled={isUpdatingLock}
-                                    className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-                                      isLocked
-                                        ? 'bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/30 dark:hover:bg-amber-900/40 text-amber-700 dark:text-amber-400'
-                                        : 'bg-muted hover:bg-muted/80 text-muted-foreground hover:text-foreground'
-                                    }`}
-                                    title={isLocked ? "Unlock learnings" : "Lock learnings manually"}
-                                  >
-                                    {isUpdatingLock ? (
-                                      <>
-                                        <Loader2 className="w-3 h-3 animate-spin" />
-                                        <span>Updating...</span>
-                                      </>
-                                    ) : isLocked ? (
-                                      <>
-                                        <Unlock className="w-3 h-3" />
-                                        <span>Unlock</span>
-                                      </>
-                                    ) : (
-                                      <>
-                                        <Lock className="w-3 h-3" />
-                                        <span>Lock</span>
-                                      </>
-                                    )}
-                                  </button>
+                                  {/* The lock toggle was removed deliberately (PLAT-059). Locking a
+                                      step is a considered decision, not a click: under the shared
+                                      topic-organised skill a locked step reads every other step's
+                                      contributions and can never give anything back, and it now
+                                      requires a written reason that only the agent path can carry.
+                                      State stays visible here; set it via chat or Pulse. */}
                                 </div>
                               )}
 
@@ -1323,11 +1238,6 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
                               {metadata && metadata.total_iterations !== undefined && (
                                 <span className="text-[10px] text-muted-foreground bg-muted/40 px-2 py-1 rounded-md border border-border/30 ml-auto flex items-center gap-1">
                                   Iter: <span className="font-mono font-semibold text-foreground">{metadata.total_iterations}</span>
-                                  {metadata.auto_lock_reason && (
-                                    <span className="text-amber-600 dark:text-amber-500 ml-1.5 truncate max-w-[120px] inline-block align-bottom font-medium" title={metadata.auto_lock_reason}>
-                                      · {metadata.auto_lock_reason.replace('threshold_reached_', '').replace(/_/g, ' ').slice(0, 30)}
-                                    </span>
-                                  )}
                                 </span>
                               )}
                             </div>
@@ -1336,8 +1246,11 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
                             {metadata && (
                               <div className="mt-1 bg-muted/25 border border-border/40 rounded-xl p-2.5 flex flex-wrap sm:flex-nowrap items-center justify-between gap-4">
                                 <div className="flex items-center gap-2 flex-wrap">
-                                  <span className="text-[11px] font-semibold text-muted-foreground flex items-center gap-1 shrink-0">
-                                    <Hash className="w-3 h-3" /> Runs on current description:
+                                  <span
+                                    className="text-[11px] font-semibold text-muted-foreground flex items-center gap-1 shrink-0"
+                                    title="Stable successful runs on the current step description. At 3, adaptive execution tiering promotes this step from High to Medium; editing the description resets the count. This is an execution-tier signal, not a learnings lock."
+                                  >
+                                    <Hash className="w-3 h-3" /> Stable runs → tier promotion:
                                   </span>
                                   {/* 3 milestone circles with connecting line */}
                                   <div className="flex items-center gap-1.5 shrink-0">
@@ -1396,11 +1309,11 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
                               </div>
                             )}
 
-                          </div>
+                          </div>}
                         </div>
 
                         {/* Delete Button */}
-                        {hasLearningsFolder(metadata, cachedContent) && (
+                        {isExpanded && hasLearningsFolder(metadata, cachedContent) && (
                           <button
                             onClick={(e) => {
                               e.stopPropagation()
@@ -1619,7 +1532,6 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
             </div>
           )}
         </div>
-      </div>
 
       {/* Delete Confirmation Dialog */}
       <ConfirmationDialog
@@ -1643,6 +1555,15 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan }:
         cancelText="Cancel"
         type="danger"
       />
+    </div>
+  )
+
+  if (embedded) return shell
+
+  return (
+    <ModalPortal>
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[9999] p-2 sm:p-4">
+      {shell}
     </div>
     </ModalPortal>
   )

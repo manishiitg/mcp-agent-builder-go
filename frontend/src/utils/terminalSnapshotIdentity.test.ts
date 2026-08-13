@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { TerminalSnapshot } from '../services/api-types'
 import {
+  canToggleTerminalView,
   mergeTerminalSnapshotBody,
   reconcileTerminalSnapshots,
+  resolveTerminalFormattedView,
+  shouldHydrateMainTerminalEvents,
+  shouldLoadTerminalEvents,
   shouldStreamTerminal,
 } from './terminalSnapshotIdentity'
 
@@ -121,5 +125,89 @@ describe('shouldStreamTerminal', () => {
       snapshot_kind: 'archived',
       tmux_session: 'tmux-main',
     }))).toBe(false)
+  })
+})
+
+describe('shouldLoadTerminalEvents', () => {
+  it('does not request an unpublished execution-tree placeholder', () => {
+    expect(shouldLoadTerminalEvents(terminal('child', {
+      execution_tree_placeholder: true,
+      state: 'running',
+      active: true,
+    }), false, true)).toBe(false)
+  })
+
+  it('does not load a real child transcript while Raw is selected', () => {
+    expect(shouldLoadTerminalEvents(terminal('child', {
+      state: 'running',
+      active: true,
+    }), false, false)).toBe(false)
+  })
+
+  it('loads events once Formatted is selected for a real child terminal', () => {
+    expect(shouldLoadTerminalEvents(terminal('child', {
+      state: 'running',
+      active: true,
+    }), false, true)).toBe(true)
+  })
+})
+
+describe('shouldHydrateMainTerminalEvents', () => {
+  it('keeps restored Schedule main-agent history unloaded in Raw mode', () => {
+    expect(shouldHydrateMainTerminalEvents(true, false, 0)).toBe(false)
+  })
+
+  it('hydrates an empty restored Schedule main-agent history on Formatted', () => {
+    expect(shouldHydrateMainTerminalEvents(true, true, 0, true, false)).toBe(true)
+  })
+
+  it('hydrates a restored Schedule history even if a newer live event has arrived', () => {
+    expect(shouldHydrateMainTerminalEvents(true, true, 1, true, false)).toBe(true)
+  })
+
+  it('does not hydrate the same restored Schedule history twice', () => {
+    expect(shouldHydrateMainTerminalEvents(true, true, 12, true, true)).toBe(false)
+  })
+
+  it('hydrates once even when a live event tail is already present', () => {
+    expect(shouldHydrateMainTerminalEvents(true, true, 12)).toBe(true)
+  })
+
+  it('does not hydrate the same durable page twice', () => {
+    expect(shouldHydrateMainTerminalEvents(true, true, 12, false, true)).toBe(false)
+  })
+})
+
+describe('resolveTerminalFormattedView', () => {
+  it('defaults to raw tmux even when structured events exist', () => {
+    expect(resolveTerminalFormattedView(true)).toBe(false)
+  })
+
+  it('respects an explicit raw or formatted choice', () => {
+    expect(resolveTerminalFormattedView(true, false)).toBe(false)
+    expect(resolveTerminalFormattedView(true, true)).toBe(true)
+  })
+
+  it('never shows an unavailable formatted transcript', () => {
+    expect(resolveTerminalFormattedView(false, true)).toBe(false)
+  })
+})
+
+describe('canToggleTerminalView', () => {
+  it('keeps Raw/Formatted available for an archived main-agent snapshot after tmux closes', () => {
+    const archived = terminal('main', {
+      active: false,
+      execution_kind: 'main_agent',
+      process_state: 'closed',
+      snapshot_kind: 'archived',
+      tmux_session: undefined,
+      content: 'retained raw terminal bytes',
+    })
+
+    expect(canToggleTerminalView(archived, false, true, true)).toBe(true)
+  })
+
+  it('does not offer a raw toggle for synthetic clean-view terminals', () => {
+    expect(canToggleTerminalView(terminal('synthetic'), true, true, false)).toBe(false)
   })
 })

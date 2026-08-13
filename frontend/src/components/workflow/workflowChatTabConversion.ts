@@ -19,6 +19,7 @@ export function convertObservedWorkflowTabToInteractive(tab: ChatTab): ChatTab {
       isBotRun: false,
       botPlatform: undefined,
       readOnlyRestoredAt: undefined,
+      userInteractiveContinuation: true,
     },
   }
 }

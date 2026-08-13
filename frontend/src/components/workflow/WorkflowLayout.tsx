@@ -25,9 +25,12 @@ import {
   chatHistoryWorkshopModeLabel,
 } from '../PreviousChatHistoryPanel'
 import {
+  DEFAULT_REPORT_PREVIEW_DEVICE,
   REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT,
-  reportPreviewPreferenceKey,
-} from './ReportViewer'
+  openWorkflowInDefaultPreview,
+  readReportPreviewPreference,
+  type ReportPreviewDevice,
+} from '../../utils/reportPreviewPreference'
 
 // Helper component to get observerId and render ChatArea
 // Always renders ChatArea (even without observerId) so it can handle initialization
@@ -516,6 +519,7 @@ async function restoreWorkflowStateFromEvents(
       await hydrateTabEvents(sessionId, {
         workspacePath: workspacePath || undefined,
         fallbackToChatHistory: true,
+        preferChatHistory: true,
       })
       events = getTabEvents(sessionId)
       lastIndex = getTabLastEventIndex(sessionId)
@@ -729,10 +733,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
     }
     try {
       const activeWorkspacePath = useGlobalPresetStore.getState().getActivePreset('workflow')?.selectedFolder?.filepath ?? null
-      localStorage.setItem(reportPreviewPreferenceKey(activeWorkspacePath), 'mobile')
-      window.dispatchEvent(new CustomEvent(REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT, {
-        detail: { preference: 'mobile', scopeId: activeWorkspacePath },
-      }))
+      openWorkflowInDefaultPreview(activeWorkspacePath)
     } catch {
       // UI preference only.
     }
@@ -909,26 +910,22 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
     showResumeHint &&
     !!workspacePath
 
-  const [reportPreviewPreference, setReportPreviewPreference] = useState<'auto' | 'desktop' | 'tablet' | 'mobile'>(() => {
-    try {
-      const saved = localStorage.getItem(reportPreviewPreferenceKey(workspacePath))
-      return saved === 'desktop' || saved === 'tablet' || saved === 'mobile' ? saved : 'auto'
-    } catch {
-      return 'auto'
-    }
-  })
+  const [reportPreviewPreference, setReportPreviewPreference] = useState<ReportPreviewDevice>(
+    () => readReportPreviewPreference(workspacePath),
+  )
 
-  const forceMobilePreview = useCallback(() => {
-    setReportPreviewPreference('mobile')
-    try {
-      localStorage.setItem(reportPreviewPreferenceKey(workspacePath), 'mobile')
-    } catch {
-      // UI preference only.
-    }
-    window.dispatchEvent(new CustomEvent(REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT, {
-      detail: { preference: 'mobile', scopeId: workspacePath ?? null },
-    }))
+  const openDefaultPreview = useCallback(() => {
+    setReportPreviewPreference(DEFAULT_REPORT_PREVIEW_DEVICE)
+    openWorkflowInDefaultPreview(workspacePath)
   }, [workspacePath])
+
+  // Every workflow opens in the balanced Tablet layout. Device changes made
+  // after opening still work normally; switching away and back starts from the
+  // same predictable report/chat split instead of inheriting an old Mobile
+  // value written by terminal restoration.
+  useEffect(() => {
+    openDefaultPreview()
+  }, [openDefaultPreview])
 
   const createFreshWorkflowBuilderTab = useCallback(async (presetId: string, options?: { composerFirst?: boolean }) => {
     const chatStore = useChatStore.getState()
@@ -946,7 +943,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
       presetQueryId: presetId
     })
     if (options?.composerFirst) {
-      forceMobilePreview()
+      openDefaultPreview()
       setWorkflowWorkspaceView('builder')
       setShowWorkspacePane(true)
       setFocusedPane('chat')
@@ -963,18 +960,13 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
         logger.warn('WorkflowLayout', 'Failed to clean up old workflow builder tabs after starting new chat:', error)
       })
     }
-  }, [forceMobilePreview, setFocusedPane, setShowChatArea, setShowWorkspacePane, setWorkflowWorkspaceView])
+  }, [openDefaultPreview, setFocusedPane, setShowChatArea, setShowWorkspacePane, setWorkflowWorkspaceView])
 
   useEffect(() => {
-    // Re-read this workflow's scoped preference (default auto/desktop) on mount, on
+    // Re-read this workflow's scoped preference (default Tablet) on mount, on
     // workflow switch, and whenever the device changes (event/storage).
     const syncReportPreviewPreference = () => {
-      try {
-        const saved = localStorage.getItem(reportPreviewPreferenceKey(workspacePath))
-        setReportPreviewPreference(saved === 'desktop' || saved === 'tablet' || saved === 'mobile' ? saved : 'auto')
-      } catch {
-        setReportPreviewPreference('auto')
-      }
+      setReportPreviewPreference(readReportPreviewPreference(workspacePath))
     }
     syncReportPreviewPreference()
 
@@ -988,22 +980,16 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
   }, [workspacePath])
 
   const workspacePaneVisible = !showChatArea || showWorkspacePane
-  const isFilesWorkspace = workflowWorkspaceView === 'files'
-  // Each preview tier controls the OUTER report pane width when both chat and
-  // canvas are visible — not just the inner shell. Otherwise switching to
-  // laptop mode would only change the inner max-width while the surrounding
-  // pane stayed pinned at 50% of the screen.
+  // The device tier controls the OUTER workspace pane for every workspace view,
+  // not only Plan and Report. Cost, Logs, Learnings, KB, DB, and Files are peer
+  // destinations in the same workspace and must retain the same layout choice.
   //
   //   mobile  → preview/files 480px column, chat takes the rest (review-style)
   //   tablet  → equal 50/50 split between chat and preview
   //   laptop  → chat is hidden, report fills the full width
   //   default → 50/50 split (no preview pref, or running in non-preview views)
-  const isPreviewableWorkspaceCanvas =
-    !isFilesWorkspace &&
-    showChatArea &&
-    workspacePaneVisible &&
-    (canvasViewMode === 'report' || canvasViewMode === 'flow' || canvasViewMode === 'log' || canvasViewMode === 'soul')
-  const previewPaneTier: 'mobile' | 'tablet' | 'laptop' | null = isPreviewableWorkspaceCanvas
+  const isResponsiveWorkspaceCanvas = showChatArea && workspacePaneVisible
+  const previewPaneTier: 'mobile' | 'tablet' | 'laptop' | null = isResponsiveWorkspaceCanvas
     ? reportPreviewPreference === 'mobile'
       ? 'mobile'
       : reportPreviewPreference === 'tablet'
@@ -1019,7 +1005,12 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
     workflowWorkspaceView === 'flow' ||
     workflowWorkspaceView === 'report' ||
     workflowWorkspaceView === 'log' ||
-    workflowWorkspaceView === 'soul'
+    workflowWorkspaceView === 'soul' ||
+    workflowWorkspaceView === 'costs' ||
+    workflowWorkspaceView === 'execution-logs' ||
+    workflowWorkspaceView === 'learnings' ||
+    workflowWorkspaceView === 'knowledgebase' ||
+    workflowWorkspaceView === 'database'
   const chatPaneVisibilityClass =
     workspacePaneVisible && isWorkspaceViewActive
       ? 'hidden md:flex'
@@ -1030,9 +1021,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
   //   laptop → chat is hidden, report/flow fills the full width
   //   default → normal split pane
   const laptopHidesChat = previewPaneTier === 'laptop'
-  const splitGridCols = isFilesWorkspace
-    ? 'md:grid-cols-[minmax(0,1fr)_480px]'
-    : previewPaneTier === 'mobile' ? 'md:grid-cols-[minmax(0,1fr)_480px]'
+  const splitGridCols = previewPaneTier === 'mobile' ? 'md:grid-cols-[minmax(0,1fr)_480px]'
     : previewPaneTier === 'tablet' ? 'md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]'
     : previewPaneTier === 'laptop' ? 'md:grid-cols-[minmax(0,1fr)]'
     : 'md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]'
@@ -1047,7 +1036,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
     ? 'flex-1 min-h-0 min-w-0'
     : !workspacePaneVisible
       ? 'hidden'
-      : `min-h-0 min-w-0 w-full md:w-auto md:col-start-2 md:row-start-2 ${isFilesWorkspace ? 'border-l border-border' : ''}`
+      : `min-h-0 min-w-0 w-full md:w-auto md:col-start-2 md:row-start-2 ${isWorkspaceViewActive ? 'border-l border-border' : ''}`
 
   // Load execution_defaults from workflow.json when workspace changes
   useEffect(() => {
@@ -1227,9 +1216,25 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
 
   // The global workspace toggle now maps to the workflow's right-side Files
   // pane instead of the old app-level far-right file column.
+  //
+  // The preview views are exempt. WorkflowCanvasWithProvider returns a
+  // *different component type* per view — WorkflowFilesCanvasInner vs
+  // WorkflowReportCanvasInner vs the ReactFlow tree — so switching
+  // workflowWorkspaceView does not re-render the pane, it unmounts and rebuilds
+  // it. Forcing 'files' while the user is on Report therefore tears the report
+  // down, and the branch below immediately restores it, producing a visible
+  // flash. It reads as a data refresh but nothing is refetched: the remounted
+  // viewer repopulates synchronously from the module-level reportDataCache,
+  // which is exactly why it is fast and why no report event fires.
+  //
+  // Cost of the exemption: un-minimizing the workspace while a preview view is
+  // open no longer auto-switches to Files — click Files to get there.
   useEffect(() => {
     if (selectedModeCategory !== 'workflow') return
-    if (!workspaceMinimized && (workflowWorkspaceView !== 'files' || !showWorkspacePane)) {
+    const onPreviewView = workflowWorkspaceView === 'report'
+      || workflowWorkspaceView === 'log'
+      || workflowWorkspaceView === 'soul'
+    if (!workspaceMinimized && !onPreviewView && (workflowWorkspaceView !== 'files' || !showWorkspacePane)) {
       setShowWorkspacePane(true)
       setWorkflowWorkspaceView('files')
       return
@@ -2102,7 +2107,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
 
   const handleWorkflowNewChat = useCallback(async () => {
     if (activePresetId) {
-      forceMobilePreview()
+      openDefaultPreview()
       setWorkflowWorkspaceView('builder')
       setShowWorkspacePane(true)
       setFocusedPane('chat')
@@ -2165,12 +2170,12 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
       return
     }
 
-    forceMobilePreview()
+    openDefaultPreview()
     setWorkflowWorkspaceView('builder')
     setShowWorkspacePane(true)
     setFocusedPane('chat')
     chatAreaRef.current?.handleNewChat()
-  }, [activePresetId, activeSessionId, createFreshWorkflowBuilderTab, forceMobilePreview, setFocusedPane, setShowChatArea, setShowWorkspacePane, setWorkflowWorkspaceView, workspacePath])
+  }, [activePresetId, activeSessionId, createFreshWorkflowBuilderTab, openDefaultPreview, setFocusedPane, setShowChatArea, setShowWorkspacePane, setWorkflowWorkspaceView, workspacePath])
 
   const handleKillAndStart = useCallback(async () => {
     if (!activePresetId) {

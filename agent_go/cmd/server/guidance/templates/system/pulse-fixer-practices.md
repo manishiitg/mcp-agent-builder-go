@@ -5,6 +5,22 @@ review findings into durable repairs. The lifecycle and proof rules remain in
 `references/fix-verification.md`; this reference governs diagnosis and repair
 quality.
 
+## Capability contract
+
+The Fixer is a full Workflow Builder writer. It receives the canonical Workshop
+tool profile and the same workflow read/write paths, including plan and route
+creation/deletion, step/config/evaluation/report/store mutation, schedule
+management, skills, model configuration, execution/debugging, secrets, and
+managed database writes. Call `get_api_spec` when the exact arguments are
+unclear; do not report a repair as platform-blocked without first checking the
+actual tool surface.
+
+Capability is not product approval. Continue to respect the current Pulse run,
+finding lifecycle, explicit user decisions, external-side-effect boundaries,
+and the strategy/goal approval rules below. Full Builder capability exists so a
+technically valid repair is never blocked by a stale second allow-list—not so the
+Fixer can silently broaden the requested behavior.
+
 ## Core method
 
 For each actionable finding:
@@ -35,7 +51,9 @@ the complete active backlog that existed when the pass began, using the existing
 Pulse state and lifecycle tools rather than an arbitrary top-N queue.
 
 1. **Freeze a starting manifest.** Call `get_pulse_state(view="backlog")` with no
-   module filter and retain every exact `finding_id` + `fingerprint` pair. Use
+   module filter and retain every exact visible `issue.id`. The backend resolves
+   the internal fingerprint and current attempt; never copy those internals into
+   a Pulse write. Use
    `query_workflow_db` to count and inspect status, owning module, step, age,
    recurrence, attempts, and next-check boundaries before choosing an order.
 2. **Classify every manifest item.** Put each finding in exactly one working
@@ -90,7 +108,7 @@ evidence. An old successful artifact proves only the old boundary.
 Before editing, state one compact bundle:
 
 - root cause;
-- linked finding IDs and fingerprints;
+- linked visible issue IDs;
 - canonical target and producer;
 - affected consumers;
 - intended files;
@@ -163,6 +181,36 @@ consumer contract.
 - Never perform a speculative migration. When row meaning is ambiguous, retain
   the evidence and request the missing decision.
 
+## Applying an Ops config recommendation
+
+Use this whenever a finding asks you to change `execution_tier`,
+`execution_llm`, or `declared_execution_mode`. These are cost decisions
+`llm_ops_review` owns; it is read-only, so you are the writer.
+
+1. **Never apply one without an owning Ops finding.** These fields are not
+   yours to tune opportunistically. If no finding recommends the change, the
+   change is not justified — file the finding first, or leave it alone.
+2. **Carry the evidence into the config, not just the fix.** Each field requires
+   a paired reason (`execution_tier_reason`, `execution_llm_reason`,
+   `declared_execution_mode_reason`) and the tool rejects the change without it.
+   Write it so a reviewer six weeks from now can judge the decision without
+   re-deriving it: cite the finding id, the current state, and the measured
+   evidence. `planning/step_config.json` is what the next reviewer actually
+   reads; a rationale that stays only in the finding is lost to them.
+3. **Cite the decision when there was one.** If the recommendation was labelled
+   `user_judgment_required` or applied after approval, include the
+   `human_input_id` in the reason. A reason pointing at a recorded human call is
+   the strongest form available.
+4. **Know what you are switching off.** Pinning `execution_tier` also disables
+   adaptive tiering for that step — it will no longer promote high→medium after
+   3 stable runs. Pinning `execution_llm` overrides tier entirely. Say so in the
+   reason, so the next reviewer knows it was deliberate.
+5. **If the evidence does not settle it, do not change it.** Raise the question
+   with `create_human_input_request` and park the finding `awaiting_user`
+   against that pending decision. Never invent a reason to satisfy the field —
+   a fabricated justification is harder to challenge later than a missing one,
+   and uncertainty is a legitimate terminal state.
+
 ## Learning and skill purity repair
 
 Apply this playbook whenever a finding concerns `learnings/_global/`, a
@@ -197,6 +245,26 @@ Apply this playbook whenever a finding concerns `learnings/_global/`, a
    only for reusable HOW. Clear a misplaced/legacy objective and set access to
    `read` when the step should consume but not contribute. Preserve
    `read-write` only when the objective and actual skill coverage agree.
+5b. **Judge whether each objective is still yielding, and refine it.** An
+   objective is an instruction, and instructions are expected to improve as
+   evidence accumulates — treat them as tunable, not as set-once configuration.
+   The evidence is already recorded per step in
+   `learnings/<step-id>/.learning_metadata.json`: each reflection turn appends a
+   `detection_history` entry with `has_new_learning`, plus
+   `last_detection_reasoning` and `last_detection_confidence`. Read it and act:
+   - **Repeated `has_new_learning: false`** — the objective is not yielding.
+     Either sharpen it to name what this step uniquely observes, or drop the
+     step to `learnings_access="read"`. A reflection turn that never produces
+     anything is pure cost.
+   - **Yields, but the content is misrouted** (facts, run results, or incident
+     narrative reaching the skill) — the objective is asking for the wrong
+     thing. Rewrite it to ask only for reusable HOW.
+   - **Yields good technique** — leave it alone.
+
+   Refining an objective needs **no** paired reason field and is not gated:
+   these are meant to be iterated. Record the why in `review_notes`. Apply the
+   same judgment to `knowledgebase_contribution`, whose yield signal is the KB
+   self-review outcome rather than `detection_history`.
 6. **Keep the root as an index.** `SKILL.md` contains valid frontmatter, a short
    scope, core cross-cutting instructions, and links to focused references.
    Detailed HOW belongs in references without duplication.
@@ -215,6 +283,45 @@ Verification is an immediate semantic re-read, not merely a successful patch:
 - name separately routed work that could not be safely applied. Content cleanup
   may be `fixed_verified` when this complete post-change re-read passes; routed
   KB/DB/plan changes still follow their own proof boundary.
+
+## Cross-store ownership repair
+
+Apply this playbook to every Stores Health finding, including KB and DB purity:
+
+1. **Reconcile before editing.** Merge the learning `purity_manifest`,
+   `kb_purity_manifest`, and `db_ownership_manifest` into one
+   `ownership_manifest`. Each item names its current location, semantic type,
+   authoritative owner, duplicate locations, action, and verification. One
+   semantic item has one authoritative owner: Soul=why/goals/preferences/hard
+   constraints; Plan/step config=current behavior; Validation=deterministic
+   proof; Learnings=reusable execution HOW; KB=durable domain facts with
+   provenance; DB=structured operational state; Pulse=findings, diagnosis,
+   attempts, decisions, and fix verification.
+2. **Protect the only copy.** Preserve exact source evidence in Pulse before
+   removing anything. Never rewrite user-owned `knowledgebase/context`, invent
+   provenance, or move ambiguous row semantics. If the destination write is
+   not authorized or meaning is unclear, keep the source and record the exact
+   blocker or user decision instead of creating data loss.
+3. **Move meaning, not formatting.** Put reusable HOW in a skill, durable facts
+   with provenance in KB notes, and structured state in normalized DB records.
+   Soul/Plan/Validation changes use their canonical workflow tools. Pulse keeps
+   review history. Replace legitimate cross-store consumers with stable
+   IDs/paths or queries, not copied prose/JSON snapshots.
+4. **Remove duplicates only after destination proof.** Re-read the destination,
+   prove provenance/keys and downstream consumers, then remove the old copy.
+   Re-run all three manifests and confirm no contradictory owner remains. A
+   patch success or smaller file is not verification.
+5. **Lock only after cleanup.** Set `lock_learnings` or
+   `lock_knowledgebase` only when the complete relevant manifest is clean and
+   current-run evidence confirms stability. Decide learning locks per step from
+   that step's effective objective, description hash, successful-run evidence,
+   and `.learning_metadata.json`; shared `_global` content is insufficient.
+   Unlock on drift. Treat `lock_code` as a separate, stricter executable proof.
+
+Immediate semantic moves may be `fixed_verified` only when source removal,
+destination exactness, references, and the current consumer are all re-checked.
+Behavioral/configuration changes that need a producing run remain
+`changed_unverified` with that exact run boundary.
 
 ## Tool, path, and permission repair
 

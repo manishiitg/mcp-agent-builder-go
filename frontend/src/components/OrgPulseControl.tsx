@@ -9,10 +9,9 @@ import ModalPortal from './ui/ModalPortal'
 import { formatBackupStateLabel, getBackupDotClass } from './workflow/backupStatus'
 import { formatPublishStateLabel, getPublishDotClass } from './workflow/publishStatus'
 
-// The Org Pulse daily pass is a built-in multi-agent schedule. Enabling and
-// tuning it is intentionally guided through /pulse-setup so cadence, goals, and
-// backup/publish expectations are confirmed in chat instead of hidden behind a
-// bare switch.
+// Org Pulse is a built-in multi-agent schedule. Setup remains guided for goals
+// and cadence, but pausing a live daily schedule must always be immediate and
+// available from the control that displays its state.
 const ORG_PULSE_JOB_ID = 'builtin-org-pulse'
 const ORG_PULSE_SETUP_SLASH_COMMAND = '/pulse-setup '
 
@@ -32,6 +31,7 @@ const relTime = (iso?: string): string => {
 export const OrgPulseControl: React.FC = () => {
   const [job, setJob] = useState<ScheduledJob | null>(null)
   const [open, setOpen] = useState(false)
+  const [togglePending, setTogglePending] = useState(false)
   const [backupState, setBackupState] = useState('loading')
   const [publishState, setPublishState] = useState('not_configured')
   const activeTabId = useChatStore(s => s.activeTabId)
@@ -86,6 +86,22 @@ export const OrgPulseControl: React.FC = () => {
     setWorkspaceMinimized(false)
     setOpen(false)
   }, [setMultiAgentRightPanelView, setWorkspaceMinimized])
+
+  const toggleSchedule = useCallback(async () => {
+    if (!job || togglePending) return
+    setTogglePending(true)
+    try {
+      const updated = job.enabled
+        ? await schedulerApi.disableJob(ORG_PULSE_JOB_ID)
+        : await schedulerApi.enableJob(ORG_PULSE_JOB_ID)
+      setJob(updated)
+      addToast(updated.enabled ? 'Daily Org Pulse is on.' : 'Daily Org Pulse is off.', 'success')
+    } catch {
+      addToast(`Could not ${job.enabled ? 'turn off' : 'turn on'} Daily Org Pulse.`, 'error')
+    } finally {
+      setTogglePending(false)
+    }
+  }, [addToast, job, togglePending])
 
   return (
     <>
@@ -165,10 +181,17 @@ export const OrgPulseControl: React.FC = () => {
 
               <div className="space-y-2 border-t border-border px-5 py-4">
                 <button
+                  onClick={toggleSchedule}
+                  disabled={!job || togglePending}
+                  className="inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {togglePending ? 'Updating…' : enabled ? 'Turn off Daily Org Pulse' : 'Turn on Daily Org Pulse'}
+                </button>
+                <button
                   onClick={runPulseSetup}
                   className="inline-flex w-full items-center justify-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
                 >
-                  Use /pulse-setup in chat
+                  Configure goals and cadence in chat
                 </button>
                 {hasRun ? (
                   <button

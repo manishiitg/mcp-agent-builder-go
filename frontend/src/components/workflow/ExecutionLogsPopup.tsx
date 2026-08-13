@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import {
   X,
   Loader2,
@@ -22,6 +22,7 @@ import {
   ListTodo,
   Archive,
   Search,
+  ArrowLeft,
 } from 'lucide-react'
 import { agentApi } from '../../services/api'
 import type { ExecutionLogsResponse, StepExecutionLogs } from '../../services/api-types'
@@ -29,6 +30,7 @@ import { formatStartedAt } from '../../utils/duration'
 import { ConversationViewer } from './ConversationViewer'
 import { MarkdownRenderer } from '../ui/MarkdownRenderer'
 import ModalPortal from '../ui/ModalPortal'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 
 interface ValidationFeedback {
   severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | string
@@ -65,29 +67,197 @@ const StepMetadata = ({ description, successCriteria }: { description?: string, 
   if (!description && !successCriteria) return null;
   
   return (
-    <div className="p-4 bg-muted/20 border-b border-border space-y-3">
-      {description && (
-        <div>
-          <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1 flex items-center gap-1.5">
-            <FileText className="w-3 h-3" /> Description
+    <details className="group border-b border-border bg-muted/10">
+      <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-2 text-xs font-medium text-muted-foreground hover:bg-accent/40 hover:text-foreground">
+        <ChevronRight className="h-3.5 w-3.5 transition-transform group-open:rotate-90" />
+        <FileText className="h-3.5 w-3.5" />
+        Instructions
+        {description && <span className="ml-auto text-[10px] font-normal tabular-nums">{description.length.toLocaleString()} chars</span>}
+      </summary>
+      <div className="max-h-[45vh] space-y-3 overflow-y-auto border-t border-border p-4">
+        {description && (
+          <div>
+            <div className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <FileText className="h-3 w-3" /> Description
+            </div>
+            <p className="whitespace-pre-wrap text-xs leading-relaxed text-foreground">
+              {description}
+            </p>
           </div>
-          <p className="text-xs text-foreground leading-relaxed">
-            {description}
-          </p>
-        </div>
-      )}
-      {successCriteria && (
-        <div>
-          <div className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider mb-1 flex items-center gap-1.5">
-            <CheckCircle className="w-3 h-3" /> Success Criteria
+        )}
+        {successCriteria && (
+          <div>
+            <div className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
+              <CheckCircle className="h-3 w-3" /> Success Criteria
+            </div>
+            <p className="rounded border border-emerald-500/15 bg-emerald-500/[0.04] p-2 text-xs leading-relaxed text-foreground">
+              {successCriteria}
+            </p>
           </div>
-          <p className="text-xs text-foreground leading-relaxed bg-emerald-500/[0.04] p-2 rounded border border-emerald-500/15">
-            {successCriteria}
-          </p>
+        )}
+      </div>
+    </details>
+  )
+}
+
+const formatLogFileContent = (content: unknown): string => {
+  if (typeof content !== 'string') return JSON.stringify(content, null, 2)
+  const trimmed = content.trim()
+  if (!trimmed || (!trimmed.startsWith('{') && !trimmed.startsWith('['))) return content
+
+  try {
+    return JSON.stringify(JSON.parse(trimmed), null, 2)
+  } catch {
+    return content
+  }
+}
+
+const parseJsonLike = (content: unknown): unknown => {
+  if (typeof content !== 'string') return content
+  const trimmed = content.trim()
+  if (!trimmed || (!trimmed.startsWith('{') && !trimmed.startsWith('['))) return content
+
+  try {
+    return JSON.parse(trimmed)
+  } catch {
+    return content
+  }
+}
+
+const StructuredJsonValue = ({ value, depth = 0 }: { value: unknown; depth?: number }) => {
+  if (value === null || value === undefined) {
+    return <span className="italic text-muted-foreground">{value === null ? 'null' : 'not set'}</span>
+  }
+
+  if (typeof value === 'boolean') {
+    return (
+      <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${value
+        ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300'
+        : 'border-rose-500/25 bg-rose-500/10 text-rose-600 dark:text-rose-300'
+      }`}>
+        {value ? 'true' : 'false'}
+      </span>
+    )
+  }
+
+  if (typeof value === 'number') {
+    return <span className="font-mono tabular-nums text-sky-600 dark:text-sky-300">{value.toLocaleString()}</span>
+  }
+
+  if (typeof value === 'string') {
+    if (value.length > 360) {
+      return (
+        <details className="group/string">
+          <summary className="cursor-pointer list-none text-foreground/85 hover:text-foreground">
+            <span className="line-clamp-2 whitespace-pre-wrap break-words">{value}</span>
+            <span className="mt-1 inline-block text-[10px] font-medium text-primary group-open/string:hidden">Show full text</span>
+          </summary>
+          <p className="mt-2 whitespace-pre-wrap break-words leading-relaxed text-foreground/85">{value}</p>
+        </details>
+      )
+    }
+    return <span className="whitespace-pre-wrap break-words text-foreground/85">{value || '—'}</span>
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) return <span className="text-muted-foreground">Empty list</span>
+    const simpleValues = value.every(item => item === null || ['string', 'number', 'boolean'].includes(typeof item))
+    if (simpleValues && value.length <= 12) {
+      return (
+        <div className="flex flex-wrap gap-1.5">
+          {value.map((item, index) => (
+            <span key={index} className="max-w-full rounded-md border border-border bg-muted/40 px-2 py-1 text-[11px]">
+              <StructuredJsonValue value={item} depth={depth + 1} />
+            </span>
+          ))}
         </div>
-      )}
+      )
+    }
+    return (
+      <details className="group/array" open={depth < 1}>
+        <summary className="cursor-pointer text-[11px] font-medium text-primary">
+          {value.length} item{value.length === 1 ? '' : 's'}
+        </summary>
+        <div className="mt-2 space-y-2 border-l border-border pl-3">
+          {value.map((item, index) => (
+            <div key={index} className="rounded-md border border-border/70 bg-background/60 p-2">
+              <div className="mb-1 text-[10px] font-semibold text-muted-foreground">Item {index + 1}</div>
+              <StructuredJsonValue value={item} depth={depth + 1} />
+            </div>
+          ))}
+        </div>
+      </details>
+    )
+  }
+
+  if (typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+    if (entries.length === 0) return <span className="text-muted-foreground">Empty object</span>
+    return (
+      <div className="overflow-hidden rounded-md border border-border/80 bg-background/60">
+        {entries.map(([key, nestedValue]) => (
+          <div key={key} className="grid grid-cols-1 gap-1 border-b border-border/60 px-3 py-2.5 last:border-b-0 sm:grid-cols-[minmax(120px,28%)_1fr] sm:gap-4">
+            <dt className="break-words font-mono text-[10px] font-semibold text-muted-foreground">{key}</dt>
+            <dd className="min-w-0 text-xs"><StructuredJsonValue value={nestedValue} depth={depth + 1} /></dd>
+          </div>
+        ))}
+      </div>
+    )
+  }
+
+  return <span className="font-mono text-xs">{String(value)}</span>
+}
+
+const StructuredJsonView = ({ value, label = 'Technical details', collapsed = true }: { value: unknown; label?: string; collapsed?: boolean }) => {
+  const body = (
+    <div className="max-h-[60vh] overflow-auto bg-muted/10 p-3">
+      <StructuredJsonValue value={parseJsonLike(value)} />
     </div>
   )
+
+  if (!collapsed) {
+    return (
+      <div className="overflow-hidden rounded-md border border-border bg-background/70">
+        <div className="border-b border-border px-3 py-2 text-xs font-semibold text-foreground">{label}</div>
+        {body}
+      </div>
+    )
+  }
+
+  return (
+    <details className="group/json overflow-hidden rounded-md border border-border bg-background/70">
+      <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-xs font-semibold text-foreground hover:bg-accent/40">
+        <ChevronRight className="h-3.5 w-3.5 text-muted-foreground transition-transform group-open/json:rotate-90" />
+        {label}
+        <span className="ml-auto text-[10px] font-normal text-muted-foreground">Structured data</span>
+      </summary>
+      <div className="border-t border-border">{body}</div>
+    </details>
+  )
+}
+
+const getStepResultPreview = (stepLogs: unknown): string => {
+  const step = asRecord(stepLogs)
+  const executions = Array.isArray(step?.executions) ? step.executions : []
+
+  for (let index = executions.length - 1; index >= 0; index -= 1) {
+    const execution = asRecord(executions[index])
+    const content = asRecord(execution?.content)
+    const candidates = [
+      content?.execution_result,
+      content?.result,
+      content?.output,
+      execution?.result,
+    ]
+
+    for (const candidate of candidates) {
+      if (typeof candidate !== 'string') continue
+      const compact = candidate.replace(/\s+/g, ' ').trim()
+      if (compact) return compact
+    }
+  }
+
+  return ''
 }
 
 const getStepIcon = (type: string) => {
@@ -553,7 +723,7 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
   const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set())
   const [fileContents, setFileContents] = useState<Record<string, string>>({})
   const [loadingFiles, setLoadingFiles] = useState<Set<string>>(new Set())
-  const autoExpandedRunRef = useRef<string | null>(null)
+  const focusedStepId = expandedSteps.values().next().value as string | undefined
 
   // Update selected run folder when prop changes
   useEffect(() => {
@@ -562,7 +732,6 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
 
   useEffect(() => {
     if (isOpen && workspacePath && selectedRunFolder) {
-      autoExpandedRunRef.current = null
       setExpandedSteps(new Set())
       setExpandedValidations(new Set())
       setExpandedExecutions(new Set())
@@ -598,23 +767,6 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
       const data = await agentApi.getExecutionLogs(workspacePath, selectedRunFolder)
       setLogs(data)
       
-      const failedOrRunningStepIds = Object.entries(data.steps)
-        .filter(([, stepLogs]) => {
-          const status = getStepStatus(stepLogs)
-          return status === 'failed' || status === 'running'
-        })
-        .map(([stepId]) => stepId)
-
-      if (autoExpandedRunRef.current !== selectedRunFolder) {
-        autoExpandedRunRef.current = selectedRunFolder
-        setExpandedSteps(new Set(failedOrRunningStepIds))
-      } else if (failedOrRunningStepIds.length > 0) {
-        setExpandedSteps(prev => {
-          const next = new Set(prev)
-          failedOrRunningStepIds.forEach(stepId => next.add(stepId))
-          return next
-        })
-      }
     } catch (err) {
       console.error('Failed to load execution logs:', err)
       setError('Failed to load execution logs')
@@ -625,21 +777,27 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
 
   const toggleStep = (stepId: string) => {
     setExpandedSteps(prev => {
-      const next = new Set(prev)
-      if (next.has(stepId)) {
-        next.delete(stepId)
-      } else {
-        next.add(stepId)
-        
+      if (prev.has(stepId)) {
+        setExpandedExecutions(new Set())
+        setExpandedArchived(new Set())
+        setExpandedFiles(new Set())
+        return new Set()
+      }
+
+      setExpandedExecutions(new Set())
+      setExpandedArchived(new Set())
+      setExpandedFiles(new Set())
+
+      {
         // Auto-expand latest execution attempt
         const stepLogs = logs?.steps[stepId]
         if (stepLogs && stepLogs.executions && stepLogs.executions.length > 0) {
           const latest = stepLogs.executions[stepLogs.executions.length - 1]
           const execId = `${stepId}-exec-${latest.attempt}-${latest.iteration}`
-          setExpandedExecutions(prevExec => new Set(prevExec).add(execId))
+          setExpandedExecutions(new Set([execId]))
         }
       }
-      return next
+      return new Set([stepId])
     })
   }
 
@@ -696,7 +854,7 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
       setLoadingFiles(prev => new Set(prev).add(path))
       try {
         const content = await agentApi.getLogFile(path)
-        const contentStr = typeof content === 'string' ? content : JSON.stringify(content, null, 2)
+        const contentStr = formatLogFileContent(content)
         setFileContents(prev => ({ ...prev, [path]: contentStr }))
       } catch (e) {
         console.error(e)
@@ -721,6 +879,21 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
         if (!searchQuery) return true
         return JSON.stringify(item).toLowerCase().includes(searchQuery.toLowerCase())
       }
+
+      const visibleArchivedExecutions = (stepLogs.archived_executions || [])
+        .filter((archive: any) => archive.output_content || (archive.artifacts?.length || 0) > 0)
+        .filter((archive: any, index: number, archives: any[]) => {
+          const identity = JSON.stringify({
+            run: archive.run_number,
+            output: archive.output_content?.file_path || '',
+            artifacts: (archive.artifacts || []).map((artifact: any) => artifact.file_path).sort(),
+          })
+          return archives.findIndex((candidate: any) => JSON.stringify({
+            run: candidate.run_number,
+            output: candidate.output_content?.file_path || '',
+            artifacts: (candidate.artifacts || []).map((artifact: any) => artifact.file_path).sort(),
+          }) === identity) === index
+        })
       
       return (
         <div className="border-t border-border divide-y divide-border">
@@ -729,11 +902,11 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
             <Search className="w-3.5 h-3.5 text-muted-foreground" />
             <input
               type="text"
-              placeholder="Search logs in this step..."
+              placeholder="Search results, tools, and artifacts..."
+              aria-label={`Search ${stepLogs.title || stepId} execution details`}
               value={searchQuery}
               onChange={(e) => setStepSearchQueries(prev => ({ ...prev, [stepId]: e.target.value }))}
               className="text-xs bg-transparent border-none focus:outline-none focus:ring-0 w-full placeholder:text-muted-foreground/70 text-foreground"
-              autoFocus
             />
             {searchQuery && (
                 <button onClick={() => setStepSearchQueries(prev => { const n = {...prev}; delete n[stepId]; return n })} className="text-muted-foreground hover:text-foreground p-1">
@@ -771,6 +944,8 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                     <div key={idx} className={`bg-background rounded border overflow-hidden ${isFastPath ? 'border-indigo-200 dark:border-indigo-800' : 'border-border'}`}>
                       <button
                         onClick={() => toggleExecution(execId)}
+                        aria-expanded={isExecExpanded}
+                        aria-label={`${isExecExpanded ? 'Collapse' : 'Expand'} ${isFastPath ? 'saved fast-path execution' : `attempt ${exec.attempt}`}`}
                         className="w-full flex items-start gap-3 p-3 text-left hover:bg-accent/50 transition-colors"
                       >
                         <Terminal className={`w-4 h-4 mt-0.5 flex-shrink-0 ${isFastPath ? 'text-indigo-600 dark:text-indigo-400' : 'text-muted-foreground'}`} />
@@ -850,10 +1025,7 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                                   </pre>
                                 </>
                               )}
-                              <div className="font-semibold text-foreground mb-1">Full JSON:</div>
-                              <pre className="whitespace-pre-wrap overflow-x-auto text-muted-foreground max-h-[40vh] overflow-y-auto">
-                                {JSON.stringify(exec.content, null, 2)}
-                              </pre>
+                              <StructuredJsonView value={exec.content} />
                             </div>
                           ) : (
                             // LLM attempt: conversation viewer + execution_result + full JSON.
@@ -892,10 +1064,7 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                               <div className="max-h-[60vh] overflow-y-auto mb-3">
                                 <MarkdownRenderer content={result || ''} className="!text-[11px] [&_p]:!text-[11px] [&_li]:!text-[11px] [&_h1]:!text-base [&_h2]:!text-sm [&_h3]:!text-xs [&_code]:!text-[10px]" />
                               </div>
-                              <div className="font-semibold text-foreground mb-1">Full JSON:</div>
-                              <pre className="whitespace-pre-wrap overflow-x-auto text-muted-foreground max-h-[60vh] overflow-y-auto">
-                                {JSON.stringify(exec.content, null, 2)}
-                              </pre>
+                              <StructuredJsonView value={exec.content} />
                             </>
                           )}
                         </div>
@@ -921,9 +1090,7 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                 <div className="bg-background rounded border border-border overflow-hidden">
                   <div className="p-3 max-h-[60vh] overflow-auto">
                     {stepLogs.output_content.is_json ? (
-                      <pre className="text-xs font-mono text-foreground whitespace-pre-wrap break-words">
-                        {JSON.stringify(stepLogs.output_content.content, null, 2)}
-                      </pre>
+                      <StructuredJsonView value={stepLogs.output_content.content} label="Output data" collapsed={false} />
                     ) : (
                       <pre className="text-xs font-mono text-foreground whitespace-pre-wrap break-words">
                         {String(stepLogs.output_content.content)}
@@ -969,9 +1136,7 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                       {isFileExpanded && (
                         <div className="p-3 border-t border-border bg-muted/20">
                           {fileContents[artifact.file_path] ? (
-                            <pre className="text-[10px] font-mono whitespace-pre-wrap text-muted-foreground max-h-[60vh] overflow-auto">
-                              {fileContents[artifact.file_path]}
-                            </pre>
+                            <StructuredJsonView value={fileContents[artifact.file_path]} label={artifact.file_name || 'File data'} collapsed={false} />
                           ) : !loadingFiles.has(artifact.file_path) && (
                             <div className="text-xs text-muted-foreground italic flex items-center gap-2">
                               <AlertCircle className="w-3 h-3" />
@@ -1770,14 +1935,14 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
           )}
 
           {/* Archived execution outputs from deterministic routing. */}
-          {stepLogs.archived_executions && stepLogs.archived_executions.filter(matchesSearch).length > 0 && (
+          {visibleArchivedExecutions.filter(matchesSearch).length > 0 && (
             <div className="p-4 bg-indigo-500/[0.03] border-t border-indigo-500/15">
               <h4 className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider mb-3 flex items-center gap-2">
-                <Archive className="w-4 h-4" /> Archived Execution Runs ({stepLogs.archived_executions.filter(matchesSearch).length})
+                <Archive className="w-4 h-4" /> Archived Execution Runs ({visibleArchivedExecutions.filter(matchesSearch).length})
               </h4>
               <div className="space-y-3">
                 {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-                {stepLogs.archived_executions.filter(matchesSearch).map((archive: any, archiveIdx: number) => {
+                {visibleArchivedExecutions.filter(matchesSearch).map((archive: any, archiveIdx: number) => {
                   const archiveId = `${stepId}-archived-exec-${archiveIdx}`
                   const isArchiveExpanded = expandedArchived.has(archiveId)
                   const hasOutput = !!archive.output_content
@@ -1787,6 +1952,8 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                     <div key={archiveIdx} className="bg-background rounded border border-indigo-500/20 dark:border-indigo-500/30 overflow-hidden">
                       <button
                         onClick={() => toggleArchived(archiveId)}
+                        aria-expanded={isArchiveExpanded}
+                        aria-label={`${isArchiveExpanded ? 'Collapse' : 'Expand'} archived run ${archive.run_number}`}
                         className="w-full flex items-center gap-3 p-3 text-left hover:bg-indigo-500/10 transition-colors"
                       >
                         {isArchiveExpanded ? <ChevronDown className="w-4 h-4 text-indigo-500" /> : <ChevronRight className="w-4 h-4 text-indigo-500" />}
@@ -1891,34 +2058,39 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
   const shell = (
       <div className={`bg-background flex flex-col border border-border relative ${
         embedded
-          ? 'h-[calc(100vh-320px)] min-h-[520px] rounded-xl'
+          ? 'h-full min-h-0 rounded-none border-0'
           : 'rounded-lg shadow-xl w-full max-w-[calc(100vw-1rem)] sm:max-w-[90vw] h-[calc(100dvh-1rem)] sm:h-[95vh]'
       }`}>
         {/* Header */}
-        <div className="flex items-start justify-between gap-3 px-4 py-3 border-b border-border sm:px-6 sm:py-4">
-          <div className="flex-1 min-w-0">
-            <h2 className="text-lg font-semibold text-foreground flex items-center gap-2">
-              <Terminal className="w-5 h-5 text-primary" />
+        <div className={`flex items-center justify-between gap-3 border-b border-border ${embedded ? 'px-3 py-2' : 'px-4 py-3 sm:px-6 sm:py-4'}`}>
+          <div className={`flex min-w-0 flex-1 ${embedded ? 'items-center gap-3' : 'items-start gap-3'}`}>
+            <h2 className={`${embedded ? 'text-sm' : 'text-lg'} flex shrink-0 items-center gap-2 font-semibold text-foreground`}>
+              <Terminal className={`${embedded ? 'h-4 w-4' : 'h-5 w-5'} text-primary`} />
               Execution Logs
               {startedAt && (
                 <span className="text-xs font-normal text-muted-foreground">{formatStartedAt(startedAt)}</span>
               )}
             </h2>
-            <div className="flex flex-wrap items-center gap-3 mt-2">
+            <div className={`flex min-w-0 flex-1 items-center gap-2 ${embedded ? 'justify-end' : 'flex-wrap'}`}>
               {/* Run Folder Selector */}
               {runFolderOptions.length > 0 && (
-                <div className="flex items-center gap-1.5 bg-muted border border-border rounded-lg px-2 py-1">
-                  <Filter className="w-3.5 h-3.5 text-muted-foreground" />
-                  <select
+                <div className="flex min-w-0 items-center gap-1.5">
+                  <Filter className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  <Select
                     value={selectedRunFolder}
-                    onChange={(e) => setSelectedRunFolder(e.target.value)}
-                    className="text-xs bg-transparent border-none outline-none focus:ring-0 text-foreground pr-1 cursor-pointer font-medium"
+                    onValueChange={setSelectedRunFolder}
                   >
-                    <option value="">Select iteration/group...</option>
-                    {runFolderOptions.map(folder => (
-                      <option key={folder} value={folder}>{folder}</option>
-                    ))}
-                  </select>
+                    <SelectTrigger className="h-7 w-52 max-w-[42vw] bg-card px-2 text-xs font-medium shadow-none" aria-label="Execution run">
+                      <SelectValue placeholder="Select iteration/group" />
+                    </SelectTrigger>
+                    <SelectContent className="max-h-72">
+                      {runFolderOptions.map(folder => (
+                        <SelectItem key={folder} value={folder} className="text-xs">
+                          {folder}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
               )}
 
@@ -1928,6 +2100,7 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                 disabled={loading || !selectedRunFolder}
                 className="p-1.5 rounded-lg border border-border bg-card text-muted-foreground hover:text-foreground hover:bg-muted transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed ml-auto"
                 title="Refresh logs"
+                aria-label="Refresh logs"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
               </button>
@@ -1973,6 +2146,19 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
             </div>
           ) : (
             <div className="space-y-4">
+              {focusedStepId && (
+                <div className="sticky top-0 z-20 -mx-1 flex items-center border-b border-border/80 bg-background/95 px-1 pb-3 pt-1 backdrop-blur-sm">
+                  <button
+                    type="button"
+                    onClick={() => toggleStep(focusedStepId)}
+                    className="inline-flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm font-medium text-foreground shadow-sm transition-colors hover:bg-accent"
+                  >
+                    <ArrowLeft className="h-4 w-4" />
+                    Back to all steps
+                  </button>
+                </div>
+              )}
+
               {/* Message when no step logs found */}
               {logs && Object.keys(logs.steps).length === 0 && (
                 <div className="flex flex-col items-center justify-center py-8 text-muted-foreground border border-dashed border-border rounded-lg">
@@ -1988,11 +2174,12 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
 
               {Object.entries(logs?.steps || {})
                 .sort(sortStepEntriesByExecution)
+                .filter(([stepId]) => !focusedStepId || stepId === focusedStepId)
                 .map(([stepId, stepLogs]) => {
                   const isExpanded = expandedSteps.has(stepId)
                   const displayId = stepLogs.original_id || stepId
                   const displayTitle = (stepLogs.title && stepLogs.title.trim()) ? stepLogs.title : displayId
-                  const description = stepLogs.description || ''
+                  const resultPreview = getStepResultPreview(stepLogs)
                   const nestingLevel = getStepNestingLevel(stepId)
                   const indentStyle = getStepIndentStyle(nestingLevel)
                   const nestingClass = getStepNestingClass(stepId)
@@ -2030,6 +2217,9 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
 
                       <button
                         onClick={() => toggleStep(stepId)}
+                        aria-expanded={isExpanded}
+                        aria-controls={`execution-step-${stepId}`}
+                        aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${displayTitle}`}
                         className={`
                           w-full flex flex-col gap-2 pl-5 pr-4 py-3 text-left transition-colors
                           ${isExpanded ? 'bg-accent/30' : 'hover:bg-accent/40'}
@@ -2049,8 +2239,8 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                                   {getStepTypeLabel(stepLogs.type)}
                                 </span>
                               </div>
-                              {description && (
-                                <span className="text-xs text-muted-foreground line-clamp-1 truncate w-full mt-0.5 pl-6">{description}</span>
+                              {resultPreview && (
+                                <span className="mt-0.5 w-full truncate pl-6 text-xs text-muted-foreground">{resultPreview}</span>
                               )}
                             </div>
                           </div>
@@ -2081,7 +2271,11 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                         </div>
                       </button>
 
-                      {isExpanded && renderStepContent(stepId, stepLogs)}
+                      {isExpanded && (
+                        <div id={`execution-step-${stepId}`}>
+                          {renderStepContent(stepId, stepLogs)}
+                        </div>
+                      )}
                     </div>
                   )
                 })}

@@ -23,9 +23,12 @@ func getToolNamesByCategory(category string) map[string]bool {
 			toolNames[toolName] = true
 		}
 	case "human_tools":
-		// Get tool names from human tool executors (source of truth)
-		executors := virtualtools.CreateHumanToolExecutors()
-		for toolName := range executors {
+		// WorkshopHumanToolNames is the complete workflow-facing human-tool
+		// contract.  CreateHumanToolExecutors only contains the older
+		// immediate-feedback tools, so using it here silently dropped the
+		// durable Pulse decision tools from `human_tools:*` in background
+		// workflow agents.
+		for _, toolName := range virtualtools.WorkshopHumanToolNames() {
 			toolNames[toolName] = true
 		}
 	case "workspace_browser":
@@ -41,7 +44,7 @@ func getToolNamesByCategory(category string) map[string]bool {
 
 // FilterCustomToolsByCategory filters custom tools and executors based on enabled tools
 // Format: single array with entries like "category:tool" or "category:*"
-//   - "workspace_tools:*" → all tools from CreateWorkspaceToolExecutors()
+//   - "workspace_tools:*" → the advanced workspace registry plus browser tools
 //   - "workspace_tools:execute_shell_command" → specific tool
 //   - "human_tools:*" → all tools from CreateHumanToolExecutors()
 //   - "human_tools:human_feedback" → specific blocking tool

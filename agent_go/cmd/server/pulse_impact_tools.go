@@ -32,6 +32,7 @@ func createRecordPulseImpactTool() (llmtypes.Tool, func(context.Context, map[str
 		"type": "object", "additionalProperties": false,
 		"properties": map[string]interface{}{
 			"intervention_id":       map[string]interface{}{"type": "string", "description": "Stable id; omit to derive it from criterion, metric, and title."},
+			"kind":                  map[string]interface{}{"type": "string", "enum": []string{"fix_bundle", "strategy_experiment"}, "description": "Use strategy_experiment only for the single approval-gated Goal Advisor experiment. Omit for ordinary fix bundles."},
 			"title":                 map[string]interface{}{"type": "string"},
 			"criterion_id":          map[string]interface{}{"type": "string", "description": "Stable success-criterion id from the workflow's durable goal contract."},
 			"impact_type":           map[string]interface{}{"type": "string", "enum": []string{"direct_goal", "reliability", "measurement", "presentation_maintenance"}},
@@ -41,8 +42,12 @@ func createRecordPulseImpactTool() (llmtypes.Tool, func(context.Context, map[str
 			"provenance":            map[string]interface{}{"type": "string", "description": "Exact query or artifact that supplies comparable measurements."},
 			"baseline_window":       map[string]interface{}{"type": "string"},
 			"checkpoint":            map[string]interface{}{"type": "string"},
+			"guardrails":            stringArray,
+			"rollback_condition":    map[string]interface{}{"type": "string"},
+			"human_input_id":        map[string]interface{}{"type": "string", "description": "Link the create_human_input_request id when approval is needed."},
+			"terminal_outcome":      map[string]interface{}{"type": "string", "description": "Required when a strategy experiment is adopted, rejected, or retired."},
 			"minimum_evidence_runs": map[string]interface{}{"type": "integer", "minimum": 1},
-			"status":                map[string]interface{}{"type": "string", "enum": []string{"awaiting_evidence", "measuring", "assessed", "retired"}},
+			"status":                map[string]interface{}{"type": "string", "enum": []string{"awaiting_evidence", "measuring", "assessed", "retired", "proposed", "deferred", "approved", "running", "blocked", "adopted", "rejected"}},
 			"sources":               map[string]interface{}{"type": "array", "items": sourceSchema},
 		},
 		"required": []string{"title", "criterion_id", "impact_type", "metric", "expected_direction"},
@@ -104,8 +109,8 @@ func createRecordPulseImpactTool() (llmtypes.Tool, func(context.Context, map[str
 	executor := func(ctx context.Context, args map[string]interface{}) (string, error) {
 		workspacePath, _ := args["workspace_path"].(string)
 		pulseRunID, _ := args["pulse_run_id"].(string)
-		pulseRunID = strings.TrimSpace(pulseRunID)
-		if err := validateTrustedPulseToolRunID(ctx, pulseRunID); err != nil {
+		pulseRunID = pulseRunIDForSession(ctx, pulseRunID)
+		if err := validatePulseToolRunID(ctx, pulseRunID); err != nil {
 			return "", err
 		}
 		raw := map[string]interface{}{

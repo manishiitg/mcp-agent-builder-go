@@ -129,24 +129,39 @@ func RunPreValidation(
 
 // PreValidationLogEntry represents a pre-validation result persisted to disk
 type PreValidationLogEntry struct {
-	StepID       string            `json:"step_id"`
-	StepPath     string            `json:"step_path"`
-	Timestamp    string            `json:"timestamp"`
-	OverallPass  bool              `json:"overall_pass"`
-	TotalChecks  int               `json:"total_checks"`
-	PassedChecks int               `json:"passed_checks"`
-	FailedChecks int               `json:"failed_checks"`
-	Errors       []ValidationError `json:"errors,omitempty"`
-	FilesChecked []FileCheckResult `json:"files_checked,omitempty"`
-	Schema       *ValidationSchema `json:"schema_used,omitempty"`
+	StepID            string            `json:"step_id"`
+	StepPath          string            `json:"step_path"`
+	RunFolder         string            `json:"run_folder,omitempty"`
+	GroupName         string            `json:"group_name,omitempty"`
+	ExecutionMode     string            `json:"execution_mode,omitempty"`
+	ValidationPhase   string            `json:"validation_phase,omitempty"`
+	ExecutionAttempt  int               `json:"execution_attempt"`
+	ValidationAttempt int               `json:"validation_attempt"`
+	Timestamp         string            `json:"timestamp"`
+	OverallPass       bool              `json:"overall_pass"`
+	TotalChecks       int               `json:"total_checks"`
+	PassedChecks      int               `json:"passed_checks"`
+	FailedChecks      int               `json:"failed_checks"`
+	Errors            []ValidationError `json:"errors,omitempty"`
+	FilesChecked      []FileCheckResult `json:"files_checked,omitempty"`
+	Schema            *ValidationSchema `json:"schema_used,omitempty"`
+}
+
+// PreValidationAttempt identifies one concrete validation invocation within a
+// run. The caller supplies both counters instead of deriving them from file
+// order or timestamps, so a retry can never overwrite its earlier evidence.
+type PreValidationAttempt struct {
+	ExecutionMode     string
+	ValidationPhase   string
+	ExecutionAttempt  int
+	ValidationAttempt int
 }
 
 // SavePreValidationLog writes pre-validation results to the step's log folder.
-// Path: logs/{stepID}/pre_validation.json. This file is overwritten on every
-// attempt (see saveMessageSequencePreValidationLog's doc comment), so it is
-// never where a chronic gate problem becomes visible on its own -- a step that
-// fails and then passes on repair looks identical to one that always passes.
-// A failing result is therefore also filed as a durable, cross-run,
+// Path: logs/{stepID}/pre_validation.json. That compatibility pointer is
+// overwritten with the latest result, while every invocation is also retained
+// at logs/{stepID}/pre_validation_<phase>_execution_N_attempt_M.json. A failing
+// result is additionally filed as a durable, cross-run,
 // deduplicated concern via RecordRunConcerns (db/db.sqlite, not this file):
 // unlike the log file, that record survives past this run, aggregates
 // (seen_count) across every run where the same field keeps failing, and
@@ -165,22 +180,33 @@ func SavePreValidationLog(
 	workspaceRoot string,
 	runFolder string,
 	groupName string,
+	attempts ...PreValidationAttempt,
 ) {
 	if results == nil {
 		return
 	}
+	attempt := PreValidationAttempt{ExecutionMode: "unknown", ValidationPhase: "validation", ExecutionAttempt: 1, ValidationAttempt: 1}
+	if len(attempts) > 0 {
+		attempt = attempts[0]
+	}
 
 	entry := PreValidationLogEntry{
-		StepID:       stepID,
-		StepPath:     stepPath,
-		Timestamp:    time.Now().Format(time.RFC3339),
-		OverallPass:  results.OverallPass,
-		TotalChecks:  results.Summary.TotalChecks,
-		PassedChecks: results.Summary.PassedChecks,
-		FailedChecks: results.Summary.FailedChecks,
-		Errors:       results.Summary.Errors,
-		FilesChecked: results.FilesChecked,
-		Schema:       schema,
+		StepID:            stepID,
+		StepPath:          stepPath,
+		RunFolder:         runFolder,
+		GroupName:         groupName,
+		ExecutionMode:     strings.TrimSpace(attempt.ExecutionMode),
+		ValidationPhase:   normalizePreValidationAttemptPart(attempt.ValidationPhase, "validation"),
+		ExecutionAttempt:  attempt.ExecutionAttempt,
+		ValidationAttempt: attempt.ValidationAttempt,
+		Timestamp:         time.Now().Format(time.RFC3339),
+		OverallPass:       results.OverallPass,
+		TotalChecks:       results.Summary.TotalChecks,
+		PassedChecks:      results.Summary.PassedChecks,
+		FailedChecks:      results.Summary.FailedChecks,
+		Errors:            results.Summary.Errors,
+		FilesChecked:      results.FilesChecked,
+		Schema:            schema,
 	}
 
 	data, err := json.MarshalIndent(entry, "", "  ")
@@ -190,6 +216,11 @@ func SavePreValidationLog(
 
 	logFolder := getArtifactFolderName(stepID, stepPath)
 	logPath := fmt.Sprintf("%s/logs/%s/pre_validation.json", validationWorkspacePath, logFolder)
+	historyPath := fmt.Sprintf("%s/logs/%s/pre_validation_%s_execution_%03d_attempt_%03d.json",
+		validationWorkspacePath, logFolder, entry.ValidationPhase, entry.ExecutionAttempt, entry.ValidationAttempt)
+	// Write the immutable attempt record first. A failure to update the compact
+	// pointer must never erase the evidence that explains a transient failure.
+	_ = bo.WriteWorkspaceFile(ctx, historyPath, string(data))
 	_ = bo.WriteWorkspaceFile(ctx, logPath, string(data))
 
 	if !results.OverallPass && strings.TrimSpace(workspaceRoot) != "" {
@@ -197,6 +228,19 @@ func SavePreValidationLog(
 			_, _ = RecordRunConcerns(ctx, workspaceRoot, runFolder, groupName, stepID, ConcernPhasePreValidation, summary)
 		}
 	}
+}
+
+func normalizePreValidationAttemptPart(value, fallback string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		value = fallback
+	}
+	value = regexp.MustCompile(`[^a-z0-9]+`).ReplaceAllString(value, "-")
+	value = strings.Trim(value, "-")
+	if value == "" {
+		return fallback
+	}
+	return value
 }
 
 // buildPreValidationConcernSummary renders one CONCERNS: line for the step's

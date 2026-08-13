@@ -130,44 +130,43 @@ func (hcpo *StepBasedWorkflowOrchestrator) messageSequenceClosingItems(ctx conte
 	stepID := seq.GetID()
 	desc := seq.GetDescription()
 
-	// Learnings: same gate the regular-step path uses (learnings_access write +
-	// a non-empty learning_objective; BuildLearningsContributionTurn returns ""
-	// when the objective is empty, so this is double-gated).
-	if shouldDirectWriteLearnings(cfg, seq, hcpo.isEvaluationMode) && !hcpo.shouldSkipDirectLearningsDueToLock(ctx, cfg, stepIndex) {
-		if msg := hcpo.buildLearningsContributionTurn(stepID, desc, strings.TrimSpace(cfg.LearningObjective), false); msg != "" {
-			items = append(items, MessageSequenceItem{
-				ID:          fmt.Sprintf("%s-learnings-contribution", stepID),
-				Type:        "user_message",
-				Kind:        "learning",
-				Title:       "Learnings contribution",
-				Message:     msg,
-				WriteAccess: MessageSequenceWriteAccess{Learnings: true},
-			})
-		}
+	// PLAT-055. One reflection item, not a learnings item followed by a
+	// knowledgebase item. Appending them separately reproduced the same defect
+	// the regular-step path had: the agent chose a destination based on which
+	// turn it happened to be in rather than on which store owns the content.
+	learningsDue := shouldDirectWriteLearnings(cfg, seq, hcpo.isEvaluationMode) &&
+		!hcpo.shouldSkipDirectLearningsDueToLock(ctx, cfg, stepIndex)
+	kbAccess := resolveKnowledgebaseAccess(cfg, hcpo.UseKnowledgebase())
+	kbContribution := strings.TrimSpace(kbContributionForPrompt(cfg))
+	// Under write_method=agent the constraint layer strips KB from every item's
+	// guard, so a KB item here would be a guaranteed-denied write; agent-mode
+	// contributions are handled by maybeEnqueueKBUpdate after the sequence.
+	kbDue := kbContribution != "" && kbAccessAllowsWrite(kbAccess)
+
+	input := StepReflectionTurnInput{
+		StepID:              stepID,
+		StepDescription:     desc,
+		LearningsTargetPath: hcpo.directLearningsPromptTargetPath(),
+		HasBrowserAccess:    hcpo.HasBrowserCapability(),
+		DBTableNames:        hcpo.reflectionDBTableNames(ctx),
+	}
+	if learningsDue {
+		input.LearningObjective = strings.TrimSpace(cfg.LearningObjective)
+		input.SkillIndexLines = hcpo.reflectionSkillIndexLines(ctx)
+	}
+	if kbDue {
+		input.KBAccess = kbAccess
+		input.KBContribution = kbContribution
 	}
 
-	// Knowledgebase: resolved write-capable access + a non-empty contribution
-	// instruction + DIRECT write method. Under write_method=agent the constraint
-	// layer strips KB from every item's guard (notes/ is only writable by the
-	// post-step KB update agent), so appending this turn would create a
-	// guaranteed-denied write: the prompt promises access enforcement refuses.
-	// Agent-mode contributions are handled by maybeEnqueueKBUpdate after the
-	// sequence completes (see the message-sequence dispatch path).
-	if contribution := strings.TrimSpace(kbContributionForPrompt(cfg)); contribution != "" &&
-		kbAccessAllowsWrite(resolveKnowledgebaseAccess(cfg, hcpo.UseKnowledgebase())) {
-		var b strings.Builder
-		b.WriteString("## Knowledgebase Contribution (dedicated turn)\n\n")
-		b.WriteString("The sequence is complete. In this turn you have WRITE access to the knowledgebase. Fulfill this step's knowledgebase contribution, then stop.\n\n")
-		b.WriteString("**Contribution instruction:**\n")
-		b.WriteString(contribution)
-		b.WriteString("\n\nWrite durable, deduplicated notes under `knowledgebase/notes/`. If there is nothing new worth recording, say so explicitly and write nothing.")
+	if msg := BuildStepReflectionTurn(input); msg != "" {
 		items = append(items, MessageSequenceItem{
-			ID:          fmt.Sprintf("%s-kb-contribution", stepID),
+			ID:          fmt.Sprintf("%s-reflection", stepID),
 			Type:        "user_message",
-			Kind:        "knowledgebase",
-			Title:       "Knowledgebase contribution",
-			Message:     b.String(),
-			WriteAccess: MessageSequenceWriteAccess{Knowledgebase: true},
+			Kind:        "learning",
+			Title:       "Reflection",
+			Message:     msg,
+			WriteAccess: MessageSequenceWriteAccess{Learnings: learningsDue, Knowledgebase: kbDue},
 		})
 	}
 	return items
@@ -636,7 +635,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeMessageSequenceItem(ctx contex
 					},
 				}
 				hcpo.emitPreValidationCompletedEvent(ctx, step, stepIndex, stepPath, isNestedExecution, results)
-				hcpo.saveMessageSequencePreValidationLog(ctx, step, stepPath, results, schema)
+				hcpo.saveMessageSequencePreValidationLog(ctx, step, stepPath, item.ID, attempt, results, schema)
 				return "", err
 			}
 			if results == nil {
@@ -658,7 +657,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeMessageSequenceItem(ctx contex
 				}
 			}
 			hcpo.emitPreValidationCompletedEvent(ctx, step, stepIndex, stepPath, isNestedExecution, results)
-			hcpo.saveMessageSequencePreValidationLog(ctx, step, stepPath, results, schema)
+			hcpo.saveMessageSequencePreValidationLog(ctx, step, stepPath, item.ID, attempt, results, schema)
 			if results.OverallPass {
 				if attempt == 0 {
 					return "prevalidation passed", nil
@@ -687,14 +686,15 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeMessageSequenceItem(ctx contex
 	}
 }
 
-// saveMessageSequencePreValidationLog preserves the latest gate result in the
-// same compact log used by regular steps. Each later attempt overwrites the
-// previous one, so Pulse gets durable evidence without accumulating per-attempt
-// log files.
+// saveMessageSequencePreValidationLog preserves the latest gate result and the
+// individual repair attempts. ItemID belongs in the phase so two validation
+// gates in one message-sequence step cannot overwrite each other.
 func (hcpo *StepBasedWorkflowOrchestrator) saveMessageSequencePreValidationLog(
 	ctx context.Context,
 	step *MessageSequencePlanStep,
 	stepPath string,
+	itemID string,
+	attempt int,
 	results *WorkspaceVerificationResult,
 	schema *ValidationSchema,
 ) {
@@ -702,7 +702,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) saveMessageSequencePreValidationLog(
 		return
 	}
 	preValidationLogPath := fmt.Sprintf("%s/runs/%s", hcpo.GetWorkspacePath(), hcpo.selectedRunFolder)
-	SavePreValidationLog(ctx, hcpo.BaseOrchestrator, preValidationLogPath, step.GetID(), stepPath, results, schema, hcpo.GetWorkspacePath(), hcpo.selectedRunFolder, hcpo.currentGroupName)
+	SavePreValidationLog(ctx, hcpo.BaseOrchestrator, preValidationLogPath, step.GetID(), stepPath, results, schema, hcpo.GetWorkspacePath(), hcpo.selectedRunFolder, hcpo.currentGroupName,
+		PreValidationAttempt{ExecutionMode: "message_sequence", ValidationPhase: "message-sequence-" + itemID, ExecutionAttempt: 1, ValidationAttempt: attempt + 1})
 }
 
 // summarizeMessageSequencePrevalidationErrors renders a one-line, comma-joined
@@ -808,6 +809,10 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeMessageSequenceUserMessage(ctx
 		learningsGlobalFileMutex.Lock()
 		defer learningsGlobalFileMutex.Unlock()
 	}
+	learningRefBefore := ""
+	if strings.TrimSpace(item.Kind) == "learning" && writeAccess.Learnings {
+		learningRefBefore = hcpo.snapshotCanonicalArtifactRef(ctx, filepath.Join(hcpo.GetWorkspacePath(), LearningsFolderName, GlobalLearningID))
+	}
 
 	message := strings.TrimSpace(item.Message)
 	if session.LastRuntimeContext != "" {
@@ -867,7 +872,12 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeMessageSequenceUserMessage(ctx
 	// Freshness: message_sequence is the primary execution path, so its synthetic
 	// learnings/KB closing turns are where store confirmation is recorded (the
 	// regular-step hooks in controller_execution.go rarely fire now). Best-effort.
-	hcpo.recordMessageSequenceStoreFreshness(item, step.GetID(), trimmedResult)
+	learningChanged := false
+	if strings.TrimSpace(item.Kind) == "learning" && writeAccess.Learnings {
+		learningRefAfter := hcpo.snapshotCanonicalArtifactRef(context.Background(), filepath.Join(hcpo.GetWorkspacePath(), LearningsFolderName, GlobalLearningID))
+		learningChanged = learningRefBefore != learningRefAfter
+	}
+	hcpo.recordMessageSequenceStoreFreshness(item, step.GetID(), trimmedResult, learningChanged)
 	return trimmedResult, nil
 }
 
@@ -875,7 +885,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeMessageSequenceUserMessage(ctx
 // a learnings/KB contribution closing turn completes: a run reviewed the store and
 // left it current this run. Learnings distinguishes updated vs reviewed-unchanged
 // from the turn result; KB records a review. Never fails the run.
-func (hcpo *StepBasedWorkflowOrchestrator) recordMessageSequenceStoreFreshness(item MessageSequenceItem, stepID, result string) {
+func (hcpo *StepBasedWorkflowOrchestrator) recordMessageSequenceStoreFreshness(item MessageSequenceItem, stepID, result string, learningChanged bool) {
 	// Do not record a confirmation for a turn that self-reported failure. The
 	// sequence driver treats STATUS: FAILED as a terminal item failure (see
 	// messageSequenceItemReportedFailure in the driver loop), and this hook runs
@@ -886,8 +896,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) recordMessageSequenceStoreFreshness(i
 	}
 	switch strings.TrimSpace(item.Kind) {
 	case "learning":
-		updated, _, _ := inferHasNewLearningFromResult(result)
-		if err := hcpo.recordLearningsConfirmation(context.Background(), hcpo.selectedRunFolder, stepID, updated); err != nil {
+		if err := hcpo.recordLearningsConfirmation(context.Background(), hcpo.selectedRunFolder, stepID, learningChanged); err != nil {
 			hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Failed to record learnings freshness for message_sequence step %s: %v", stepID, err))
 		}
 	case "knowledgebase":
@@ -1022,11 +1031,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) setMessageSequenceShellEnv(sessionID,
 		"",
 		hcpo.snapshotWorkspaceEnv(),
 	)
-	dbAccess := DBAccessRead
-	if cfg := common.GetSessionShellConfig(sessionID); cfg != nil && dbWritePathGranted(cfg.WritePaths, hcpo.GetWorkspacePath()) {
-		dbAccess = DBAccessReadWrite
-	}
-	configureWorkflowDBSession(sessionID, hcpo.GetWorkspacePath(), dbAccess, false)
+	configureWorkflowDBSession(sessionID, hcpo.GetWorkspacePath(), DBAccessReadWrite, false)
 }
 
 func (hcpo *StepBasedWorkflowOrchestrator) messageSequenceRuntimeSessionID(stepPath string, stepID string) string {
@@ -1154,7 +1159,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) messageSequenceStepFullWriteAccess(st
 
 func (hcpo *StepBasedWorkflowOrchestrator) constrainMessageSequenceWriteAccess(stepConfig *AgentConfigs, requested MessageSequenceWriteAccess) MessageSequenceWriteAccess {
 	return MessageSequenceWriteAccess{
-		DB:            requested.DB && resolveDBAccess(stepConfig) == DBAccessReadWrite,
+		// DB is intentionally not narrowed by an item's write_access. Every
+		// workflow step and sequence turn receives the same managed DB tools.
+		DB:            true,
 		Knowledgebase: requested.Knowledgebase && kbAccessAllowsWrite(resolveKnowledgebaseAccess(stepConfig, hcpo.UseKnowledgebase())),
 		Learnings:     requested.Learnings && resolveLearningsAccess(stepConfig) == LearningsAccessReadWrite,
 	}
@@ -1191,7 +1198,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) setupMessageSequenceFolderGuard(stepP
 		readPaths = appendLearningReadPaths(readPaths, baseWorkspacePath, stepID)
 	}
 	writePaths = []string{stepFolderPath, downloadsPath}
-	if itemWriteAccess.DB && dbAccess == DBAccessReadWrite {
+	if dbAccess == DBAccessReadWrite {
 		writePaths = append(writePaths, getDBPath(baseWorkspacePath))
 	}
 	if itemWriteAccess.Knowledgebase && kbAccessAllowsWrite(kbAccess) {
@@ -1228,10 +1235,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) buildMessageSequenceTemplateVars(step
 	if writeAccess.Knowledgebase {
 		kbAccess = KBAccessReadWrite
 	}
-	dbAccess := DBAccessRead
-	if writeAccess.DB {
-		dbAccess = DBAccessReadWrite
-	}
+	dbAccess := DBAccessReadWrite
 	// Honor the step's declared context_output so the sequence writes the file
 	// downstream steps expect (in execution/<stepID>/, the normal step folder).
 	// Fall back to the generic name only when the step declares no output.

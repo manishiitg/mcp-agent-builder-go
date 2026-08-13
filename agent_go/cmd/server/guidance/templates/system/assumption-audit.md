@@ -58,13 +58,14 @@ a Goal concern. Do not confuse the two.
    remove stale prose, parameterize a literal, stop treating a tactic as a goal,
    or mark a current choice as revisable.
 4. If changing it would alter business intent, risk, cost, external behavior, or
-   a material plan path, do not guess. Add or refresh one concise item in the top
-   **Assumptions challenged** section of `builder/improve.html` with the
-   assumption, source, evidence for/against, and validation/retirement condition.
-   Route high-leverage strategy work to Goal Advisor. Create a human-input request
-   only when a real user decision is required.
-5. When an assumption is resolved, remove it from the top section and record the
-   outcome once in the timeline. Never duplicate the same challenge across cards.
+   a material plan path, do not guess. Add or refresh one concise Product finding
+   in the SQLite-backed Pulse lifecycle with the assumption, source, evidence
+   for/against, and validation/retirement condition. Route high-leverage strategy
+   work to Goal Advisor. Create a human-input request only when a real user
+   decision is required. Do not create a separate assumptions presentation.
+5. When an assumption is resolved, close its Product finding and record the
+   consequential outcome through typed Pulse tools. Never duplicate the same
+   challenge across findings.
 
 ### Store-specific ownership
 

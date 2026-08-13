@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -24,7 +25,7 @@ const WorkflowManifestSchemaVersion = 1
 // contract version. Unlike schema_version, this gates agent-run workflow
 // upgrades: Pulse can add version-specific messages and stamp this value only
 // after the workflow has been checked or migrated.
-const WorkflowContractCurrentVersion = "1.0.19"
+const WorkflowContractCurrentVersion = "1.0.25"
 
 const workflowContractInitialVersion = "1.0.0"
 const workflowContractMessageSequenceCodeVersion = "1.0.10"
@@ -34,9 +35,14 @@ const workflowContractHumanInputOwnershipVersion = "1.0.13"
 const workflowContractHumanReadablePulseStateVersion = "1.0.14"
 const workflowContractKBWriteMethodRetiredVersion = "1.0.15"
 const workflowContractEvalVerdictSchemaVersion = "1.0.16"
-const workflowContractPulseReviewSQLiteVersion = "1.0.17"
 const workflowContractCompactPulseReportVersion = "1.0.18"
 const workflowContractLightweightPulseReportVersion = "1.0.19"
+const workflowContractExecutivePulseJournalVersion = "1.0.20"
+const workflowContractArtifactPurityVersion = "1.0.21"
+const workflowContractLearningsLockAuditVersion = "1.0.22"
+const workflowContractDirectHTMLReportsVersion = "1.0.23"
+const workflowContractScheduledRouteVersion = "1.0.24"
+const workflowContractScheduleExecutionModelVersion = "1.0.25"
 
 const (
 	DefaultRunRetentionCount = 5
@@ -60,9 +66,8 @@ type WorkflowManifest struct {
 	//
 	// Only fields that drive HARD behavioral gates live here. Workflow profile
 	// (deterministic / exploratory / contextual classification, plan-stability
-	// guidance, dual-mode declarations) lives as prose in builder/improve.html
-	// — the agent reads improve.html on every improvement turn anyway, and prose
-	// captures nuance that enums can't.
+	// guidance, dual-mode declarations) belongs in semantic workflow artifacts
+	// and typed Pulse records; prose captures nuance that enums cannot.
 	OversightMode OversightMode `json:"oversight_mode,omitempty"`
 
 	// PostRunMonitor opts this workflow into the post-run monitor: a compact
@@ -72,6 +77,10 @@ type WorkflowManifest struct {
 	// for workflows where silent breakage matters (QA, production, monitoring,
 	// compliance). Unset/false = off (no monitor pass, no extra cost).
 	PostRunMonitor *bool `json:"post_run_monitor,omitempty"`
+
+	// Pulse contains owner-approved workflow-specific review lenses. These
+	// specialize the stable reviewer contracts; they never replace them.
+	Pulse *WorkflowPulseConfig `json:"pulse,omitempty"`
 
 	// Backup is declarative configuration for builder-agent managed backup.
 	// Operational status is written separately to backup/status.json so normal
@@ -89,6 +98,18 @@ type WorkflowManifest struct {
 	// (never serialized): set during ReadWorkflowManifest, used to avoid clobbering
 	// the on-disk config on write-back and to flag the issue.
 	MalformedConfig []string `json:"-"`
+}
+
+type WorkflowPulseConfig struct {
+	AdvisorSpecialization *WorkflowAdvisorSpecialization `json:"advisor_specialization,omitempty"`
+}
+
+type WorkflowAdvisorSpecialization struct {
+	Version         int    `json:"version"`
+	StrategyAuditor string `json:"strategy_auditor"`
+	GoalAdvisor     string `json:"goal_advisor"`
+	ApprovedInputID string `json:"approved_input_id,omitempty"`
+	UpdatedAt       string `json:"updated_at,omitempty"`
 }
 
 // MonitorEnabled reports whether the post-run monitor should run for this
@@ -174,6 +195,16 @@ type WorkflowCapabilities struct {
 type WorkflowNotificationConfig struct {
 	SlackWebhookSecretName string `json:"slack_webhook_secret_name,omitempty"`
 
+	// Per-summary Slack channels. A Slack Incoming Webhook is bound to ONE
+	// channel when it is created and ignores a channel field in the payload, so
+	// "send this summary to a different channel" means "post it through a
+	// different webhook". Each entry names an encrypted secret holding a
+	// complete webhook URL; listing several fans that summary out to several
+	// channels. An empty list falls back to SlackWebhookSecretName, so a
+	// workflow that never split its channels behaves exactly as before.
+	RunSummarySlackWebhookSecretNames   []string `json:"run_summary_slack_webhook_secret_names,omitempty"`
+	PulseSummarySlackWebhookSecretNames []string `json:"pulse_summary_slack_webhook_secret_names,omitempty"`
+
 	// RunSummaryInstructions controls the execution/outcome section of a
 	// notification. PulseSummaryInstructions controls the review/fix section.
 	// Both are ordinary workflow configuration, never secrets, recipients, or
@@ -198,6 +229,17 @@ type WorkflowNotificationConfig struct {
 	// account-wide GmailConfig.BlockedRecipients at send time. It can only block
 	// MORE addresses for this workflow, never unblock a globally-blocked one.
 	BlockRecipients []string `json:"block_recipients,omitempty"`
+
+	// RunSummaryRecipients and PulseSummaryRecipients say WHERE this workflow's
+	// email goes, selected by notify_user's notification_kind — the positive
+	// counterpart to BlockRecipients, which only ever says where it must not go.
+	// Empty means "inherit the account-level default recipient", so an existing
+	// workflow keeps its current behavior. These never widen permission: the
+	// account-wide denylist and BlockRecipients are still applied on top and
+	// still win, so naming a blocked address here skips the send rather than
+	// unblocking it.
+	RunSummaryRecipients   []string `json:"run_summary_recipients,omitempty"`
+	PulseSummaryRecipients []string `json:"pulse_summary_recipients,omitempty"`
 }
 
 func (c *WorkflowNotificationConfig) EffectiveRunSummaryInstructions() string {
@@ -225,7 +267,6 @@ type WorkflowExecutionDefaults struct {
 	AlwaysUseSameRun bool `json:"always_use_same_run"`
 	// Global step overrides (replaces step_override.json)
 	DisableLearning              *bool    `json:"disable_learning,omitempty"`
-	GlobalSkillObjective         string   `json:"global_skill_objective,omitempty"`
 	DisableParallelToolExecution *bool    `json:"disable_parallel_tool_execution,omitempty"`
 	ExecutionMaxTurns            *int     `json:"execution_max_turns,omitempty"`
 	EnabledCustomTools           []string `json:"enabled_custom_tools,omitempty"`
@@ -244,11 +285,18 @@ type WorkflowSchedule struct {
 	TriggerPayload json.RawMessage        `json:"trigger_payload,omitempty"`
 	CalendarItems  []CalendarScheduleItem `json:"calendar_items,omitempty"`
 	GroupNames     []string               `json:"group_names,omitempty"`
-	Mode           string                 `json:"mode,omitempty"`            // "workshop" for workflow schedules; legacy "workflow" is normalized at runtime
-	Messages       []string               `json:"messages,omitempty"`        // Predefined message queue for workshop schedules (sent one-by-one)
-	WorkshopMode   string                 `json:"workshop_mode,omitempty"`   // Workshop builder mode for scheduled runs: "run" (default) or "optimizer" (legacy "ask"/"runner"/"debugger" auto-migrated to "run")
-	Query          string                 `json:"query,omitempty"`           // Message to execute (multi-agent mode)
-	ResumePrevious *bool                  `json:"resume_previous,omitempty"` // Coding-agent CLI only: resume the latest prior thread (same provider) instead of a fresh session each run. nil = default (fresh session); explicit true opts in.
+	// RouteSelections selects deterministic routing-step branches for the scheduled
+	// full workflow. It is the same shape accepted by run_full_workflow; keeping it
+	// as data prevents a schedule from becoming a second, free-text workflow.
+	RouteSelections map[string]string `json:"route_selections,omitempty"`
+	Mode            string            `json:"mode,omitempty"`     // "workshop" for workflow schedules; legacy "workflow" is normalized at runtime
+	Messages        []string          `json:"messages,omitempty"` // Predefined message queue for workshop schedules (sent one-by-one)
+	// DirectMessagesReason records why a schedule-local conversation is preferable
+	// to a canonical route despite its weaker step-level lifecycle.
+	DirectMessagesReason string `json:"direct_messages_reason,omitempty"`
+	WorkshopMode         string `json:"workshop_mode,omitempty"`   // Workshop builder mode for scheduled runs: "run" (default) or "optimizer" (legacy "ask"/"runner"/"debugger" auto-migrated to "run")
+	Query                string `json:"query,omitempty"`           // Message to execute (multi-agent mode)
+	ResumePrevious       *bool  `json:"resume_previous,omitempty"` // Coding-agent CLI only: resume the latest prior thread (same provider) instead of a fresh session each run. nil = default (fresh session); explicit true opts in.
 }
 
 // ShouldResumePrevious reports whether a scheduled run should resume the
@@ -283,6 +331,18 @@ func ValidateManifest(m *WorkflowManifest) error {
 	if m.RunRetentionCount != nil {
 		if *m.RunRetentionCount < 1 || *m.RunRetentionCount > MaxRunRetentionCount {
 			return fmt.Errorf("run_retention_count must be between 1 and %d", MaxRunRetentionCount)
+		}
+	}
+	if m.Pulse != nil && m.Pulse.AdvisorSpecialization != nil {
+		specialization := m.Pulse.AdvisorSpecialization
+		if specialization.Version < 1 {
+			return fmt.Errorf("pulse.advisor_specialization.version must be >= 1")
+		}
+		if strings.TrimSpace(specialization.StrategyAuditor) == "" {
+			return fmt.Errorf("pulse.advisor_specialization.strategy_auditor is required")
+		}
+		if strings.TrimSpace(specialization.GoalAdvisor) == "" {
+			return fmt.Errorf("pulse.advisor_specialization.goal_advisor is required")
 		}
 	}
 
@@ -507,10 +567,23 @@ func ReadWorkflowManifest(ctx context.Context, workspacePath string) (*WorkflowM
 	applyManifestDefaults(&m)
 	llmConfigMigrated := workflowtypes.NormalizePresetLLMConfig(m.Capabilities.LLMConfig)
 
-	// Persist auto-assigned schedule IDs so subsequent lookups find the same UUID.
-	// Skip the write-back when we had to drop a malformed config block on read —
-	// rewriting now would silently erase the user's backup/publish config from disk.
-	if (hadMissingLabel || hadEmptyScheduleID || llmConfigMigrated) && len(m.MalformedConfig) == 0 {
+	// A field retired from the Go schema (e.g. a past execution_defaults knob
+	// that no longer does anything) otherwise lingers in workflow.json forever:
+	// json.Unmarshal above already silently dropped it from m, but nothing ever
+	// rewrites the file to match. Detect that drift on every open/run so stale
+	// prose can't sit there implying behavior it no longer has.
+	staleTopLevel, staleExecutionDefaults, staleCapabilities := staleManifestFields([]byte(content))
+	hasStaleFields := len(staleTopLevel) > 0 || len(staleExecutionDefaults) > 0 || len(staleCapabilities) > 0
+
+	// Persist auto-assigned schedule IDs (and any stale-field prune) so
+	// subsequent lookups see the cleaned-up manifest. Skip the write-back when
+	// we had to drop a malformed config block on read — rewriting now would
+	// silently erase the user's backup/publish config from disk.
+	if (hadMissingLabel || hadEmptyScheduleID || llmConfigMigrated || hasStaleFields) && len(m.MalformedConfig) == 0 {
+		if hasStaleFields {
+			log.Printf("[MANIFEST] %s: pruning retired field(s) no longer in schema — top-level=%v execution_defaults=%v capabilities=%v",
+				workspacePath, staleTopLevel, staleExecutionDefaults, staleCapabilities)
+		}
 		if err := WriteWorkflowManifest(ctx, workspacePath, &m); err != nil {
 			log.Printf("[WARN] ReadWorkflowManifest: failed to persist manifest migrations for %s: %v", workspacePath, err)
 		}
@@ -530,6 +603,66 @@ func workflowLabelFromWorkspacePath(workspacePath string) string {
 		return "Workflow"
 	}
 	return normalized
+}
+
+// staleManifestFields reports JSON object keys present in raw workflow.json
+// content but absent from the current Go schema, scoped to the top-level
+// manifest plus its two plain nested config objects, execution_defaults and
+// capabilities — the two places retired per-field knobs have historically
+// accumulated. backup, publish, pulse, and schedules are deliberately NOT
+// inspected here: those are agent-authored blocks that intentionally allow
+// shapes the Go structs don't fully model (see stripOptionalConfigBlocks),
+// so treating their contents as "stale" would risk deleting live data.
+func staleManifestFields(content []byte) (topLevel, executionDefaults, capabilities []string) {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(content, &top); err != nil {
+		return nil, nil, nil
+	}
+	topLevel = unknownManifestKeys(top, knownJSONFieldNames(reflect.TypeOf(WorkflowManifest{})))
+	if raw, ok := top["execution_defaults"]; ok {
+		var obj map[string]json.RawMessage
+		if json.Unmarshal(raw, &obj) == nil {
+			executionDefaults = unknownManifestKeys(obj, knownJSONFieldNames(reflect.TypeOf(WorkflowExecutionDefaults{})))
+		}
+	}
+	if raw, ok := top["capabilities"]; ok {
+		var obj map[string]json.RawMessage
+		if json.Unmarshal(raw, &obj) == nil {
+			capabilities = unknownManifestKeys(obj, knownJSONFieldNames(reflect.TypeOf(WorkflowCapabilities{})))
+		}
+	}
+	return topLevel, executionDefaults, capabilities
+}
+
+// knownJSONFieldNames returns the set of JSON key names a struct type declares
+// via its `json` tags (ignoring "-" and any ",omitempty"/",string" options).
+func knownJSONFieldNames(t reflect.Type) map[string]bool {
+	names := make(map[string]bool, t.NumField())
+	for i := 0; i < t.NumField(); i++ {
+		tag := t.Field(i).Tag.Get("json")
+		if tag == "" {
+			continue
+		}
+		name := strings.Split(tag, ",")[0]
+		if name == "" || name == "-" {
+			continue
+		}
+		names[name] = true
+	}
+	return names
+}
+
+// unknownManifestKeys returns the keys of obj that aren't in known, sorted for
+// stable log output.
+func unknownManifestKeys(obj map[string]json.RawMessage, known map[string]bool) []string {
+	var extra []string
+	for key := range obj {
+		if !known[key] {
+			extra = append(extra, key)
+		}
+	}
+	sort.Strings(extra)
+	return extra
 }
 
 // stripOptionalConfigBlocks removes the agent-authored optional config blocks
@@ -557,6 +690,88 @@ func stripOptionalConfigBlocks(content []byte) ([]byte, []string) {
 		return content, nil
 	}
 	return stripped, dropped
+}
+
+// workflowManifestChangelogChanges returns a stable, value-free description of
+// a workflow.json mutation. The changelog already carries content hashes as
+// the authoritative change boundary; copying values here would make a human
+// diff easier at the cost of leaking secrets such as webhook or token values.
+// Field paths plus lifecycle markers are sufficient for Artifact Review.
+//
+// Arrays deliberately appear as one changed field. Their order and contents
+// are meaningful to a manifest, but producing index-level entries would be
+// noisy and unstable when an item is inserted or reordered.
+func workflowManifestChangelogChanges(previous, current string) []step_based_workflow.PlanFieldChange {
+	var before, after interface{}
+	beforeOK := strings.TrimSpace(previous) != ""
+	if beforeOK && json.Unmarshal([]byte(previous), &before) != nil {
+		// An old corrupt artifact is still evidence that the whole manifest was
+		// replaced, but it cannot support a truthful field-level comparison.
+		return []step_based_workflow.PlanFieldChange{manifestChangelogChange("workflow.json", true, true)}
+	}
+	if err := json.Unmarshal([]byte(current), &after); err != nil {
+		// current is produced by json.MarshalIndent above, so this path is only a
+		// defensive fallback. Never omit the fact that a write occurred.
+		return []step_based_workflow.PlanFieldChange{manifestChangelogChange("workflow.json", beforeOK, true)}
+	}
+
+	var changes []step_based_workflow.PlanFieldChange
+	collectWorkflowManifestChangelogChanges(&changes, "workflow.json", before, beforeOK, after, true)
+	return changes
+}
+
+func collectWorkflowManifestChangelogChanges(changes *[]step_based_workflow.PlanFieldChange, path string, before interface{}, beforeOK bool, after interface{}, afterOK bool) {
+	if !beforeOK || !afterOK {
+		if beforeOK != afterOK {
+			*changes = append(*changes, manifestChangelogChange(path, beforeOK, afterOK))
+		}
+		return
+	}
+
+	beforeObject, beforeIsObject := before.(map[string]interface{})
+	afterObject, afterIsObject := after.(map[string]interface{})
+	if beforeIsObject && afterIsObject {
+		keys := make(map[string]struct{}, len(beforeObject)+len(afterObject))
+		for key := range beforeObject {
+			keys[key] = struct{}{}
+		}
+		for key := range afterObject {
+			keys[key] = struct{}{}
+		}
+		orderedKeys := make([]string, 0, len(keys))
+		for key := range keys {
+			orderedKeys = append(orderedKeys, key)
+		}
+		sort.Strings(orderedKeys)
+		for _, key := range orderedKeys {
+			beforeValue, beforePresent := beforeObject[key]
+			afterValue, afterPresent := afterObject[key]
+			collectWorkflowManifestChangelogChanges(changes, path+"."+key, beforeValue, beforePresent, afterValue, afterPresent)
+		}
+		return
+	}
+
+	// Collections are an atomic artifact-level field for changelog purposes.
+	// Values are never persisted in this evidence list.
+	if !reflect.DeepEqual(before, after) {
+		*changes = append(*changes, manifestChangelogChange(path, true, true))
+	}
+}
+
+func manifestChangelogChange(path string, beforeOK, afterOK bool) step_based_workflow.PlanFieldChange {
+	change := step_based_workflow.PlanFieldChange{Field: path}
+	switch {
+	case !beforeOK:
+		change.OldValue = "absent"
+		change.NewValue = "added"
+	case !afterOK:
+		change.OldValue = "removed"
+		change.NewValue = "absent"
+	default:
+		change.OldValue = "present"
+		change.NewValue = "changed"
+	}
+	return change
 }
 
 // WriteWorkflowManifest validates and writes workflow.json to a workspace.
@@ -593,8 +808,9 @@ func WriteWorkflowManifest(ctx context.Context, workspacePath string, m *Workflo
 	if !previousExists || previous != string(data) {
 		step_based_workflow.LogCanonicalArtifactChange(
 			ctx, workspacePath, "write_workflow_manifest",
-			"workflow.json was written directly; recorded so artifact drift review can see the change.",
-			nil, workflowManifestChangelogReader, writeFileToWorkspace, createServerLogger(),
+			"Recorded workflow.json field changes for artifact drift review.",
+			workflowManifestChangelogChanges(previous, string(data)), workflowManifestChangelogReader, writeFileToWorkspace, createServerLogger(),
+			"workflow.json", previous, string(data),
 		)
 	}
 	return nil
@@ -651,7 +867,7 @@ func applyManifestDefaults(m *WorkflowManifest) {
 
 	// Auto-improvement framework defaults. oversight_mode is the one hard-gate
 	// field that default-fills — typology, plan-stability, and decision-log
-	// handling live as prose in builder/improve.html, not as manifest enums.
+	// handling stay in semantic artifacts and typed Pulse records.
 	if m.OversightMode == "" {
 		m.OversightMode = OversightSupervised
 	}

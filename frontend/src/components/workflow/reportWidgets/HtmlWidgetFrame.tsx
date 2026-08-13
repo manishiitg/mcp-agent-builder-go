@@ -1,5 +1,13 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 import { useReportDataApi } from './reportEmbedContext'
+
+// Kept behind Vite's development flag: this lets us distinguish an iframe
+// navigation from a normal React render when diagnosing report flicker, without
+// adding production console noise.
+function debugReportFrame(event: string, title: string, detail?: Record<string, unknown>) {
+  if (!import.meta.env.DEV) return
+  console.debug('[ReportFrame]', event, { title, ...detail })
+}
 
 // App theme tokens (HSL triplets) exposed to the HTML report as CSS variables so
 // it can match the app palette via hsl(var(--…)) and switch with light/dark. Read
@@ -103,27 +111,55 @@ function injectMarkdownStyles(doc: Document) {
 // standalone fallback).
 //
 // autoHeight: size the iframe to its content (no inner scrollbar / clipping) and
-// keep it in sync via a ResizeObserver as content renders. Used for the inline
-// report view; the modal preview keeps a fixed height and scrolls internally.
-export function HtmlReportFrame({
+// keep it in sync via a ResizeObserver as content renders. The outer report
+// pane owns scrolling, so this frame must not impose its own scroll boundary.
+function HtmlReportFrameComponent({
   html,
   title,
   className,
   autoHeight = false,
+  refreshToken = 0,
 }: {
   html: string
   title: string
   className: string
   autoHeight?: boolean
+  // A report's live data is deliberately refreshed only when its owner asks.
+  // Background workflow/status polling must never turn into an iframe reload.
+  refreshToken?: number
 }) {
   const dataApi = useReportDataApi()
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const observerRef = useRef<ResizeObserver | null>(null)
+  const appliedHtmlRef = useRef<string | null>(null)
+  const loadedDocumentRef = useRef<Document | null>(null)
+  const injectedDocumentRef = useRef<Document | null>(null)
+  const injectedDataApiRef = useRef<typeof dataApi>(null)
+  const injectedRefreshTokenRef = useRef<number | null>(null)
+  const appliedThemeRef = useRef<{ document: Document; theme: 'dark' | 'light' } | null>(null)
+
+  // Do not pass srcDoc through React's normal DOM-prop reconciliation. A report
+  // frame is a live document: when an outer polling update re-renders its
+  // parent, Chromium can treat a reapplied srcDoc as a navigation and visibly
+  // restart the report. Assign it imperatively only on initial mount or when
+  // the report file's actual HTML changes.
+  useLayoutEffect(() => {
+    const frame = iframeRef.current
+    if (!frame || appliedHtmlRef.current === html) return
+    appliedHtmlRef.current = html
+    injectedDocumentRef.current = null
+    injectedDataApiRef.current = null
+    injectedRefreshTokenRef.current = null
+    appliedThemeRef.current = null
+    loadedDocumentRef.current = null
+    debugReportFrame('srcdoc assigned', title, { bytes: html.length })
+    frame.srcdoc = html
+  }, [html, title])
 
   // Mirror the APP's light/dark theme onto the iframe document (the agent's HTML
   // designs its own palette but keys the active mode off this). The app uses a
   // `.dark` (or `.dark-plus`) class on <html>.
-  const applyTheme = useCallback(() => {
+  const applyTheme = useCallback((emitChange = true) => {
     const frame = iframeRef.current
     if (!frame) return
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -132,16 +168,22 @@ export function HtmlReportFrame({
     if (!win || !doc?.documentElement) return
     const cl = document.documentElement.classList
     const theme: 'dark' | 'light' = cl.contains('dark') || cl.contains('dark-plus') ? 'dark' : 'light'
+    const previousTheme = appliedThemeRef.current?.document === doc
+      ? appliedThemeRef.current.theme
+      : null
     doc.documentElement.classList.toggle('dark', theme === 'dark')
     doc.documentElement.setAttribute('data-theme', theme)
     if (win.report) win.report.theme = theme
     // Expose the app's resolved theme tokens (current light/dark + report theme)
     // as CSS variables inside the iframe so the HTML can use hsl(var(--…)).
     injectThemeTokens(frame, doc)
-    try {
-      win.dispatchEvent(new win.Event('report:theme'))
-    } catch {
-      /* iframe may have navigated/reloaded */
+    appliedThemeRef.current = { document: doc, theme }
+    if (emitChange && previousTheme !== null && previousTheme !== theme) {
+      try {
+        win.dispatchEvent(new win.Event('report:theme'))
+      } catch {
+        /* iframe may have navigated/reloaded */
+      }
     }
   }, [])
 
@@ -152,11 +194,12 @@ export function HtmlReportFrame({
     if (!frame || !doc) return
     const content = Math.max(doc.documentElement?.scrollHeight || 0, doc.body?.scrollHeight || 0)
     if (content <= 0) return
-    // Grow to fit content, but cap at ~viewport height so a tall report can never
-    // be cut off if the outer pane doesn't scroll — past the cap the iframe itself
-    // scrolls (iframes scroll their document by default). Short reports fit exactly.
-    const cap = Math.max(360, Math.round((window.innerHeight || 800) * 0.9))
-    frame.style.height = `${Math.min(content, cap)}px`
+    const nextHeight = `${content}px`
+    if (frame.style.height === nextHeight) return
+    // The outer report pane owns scrolling. Let the frame reach its actual content
+    // height so an HTML report never creates a second, nested scroll surface.
+    debugReportFrame('height changed', frame.title, { from: frame.style.height, to: nextHeight })
+    frame.style.height = nextHeight
   }, [autoHeight])
 
   const inject = useCallback(() => {
@@ -165,6 +208,8 @@ export function HtmlReportFrame({
     const win = frame?.contentWindow as any
     const doc = frame?.contentDocument
     if (!win || !doc) return
+    const firstInjectionForDocument = injectedDocumentRef.current !== doc
+    const dataApiChanged = injectedDataApiRef.current !== dataApi
 
     injectBaseReset(doc)
     injectMarkdownStyles(doc)
@@ -217,13 +262,31 @@ export function HtmlReportFrame({
         openFile: dataApi.openFile,
         theme: 'light',
       }
-      applyTheme()
-      try {
-        win.dispatchEvent(new win.Event('report:data'))
-      } catch {
-        /* iframe may have navigated/reloaded */
+      // Initial theme application is setup, not a theme change. The single
+      // report:data event below owns the initial render. This avoids every HTML
+      // report doing a full data render once for theme and again for data.
+      applyTheme(false)
+      // A new iframe document and an explicit report refresh both need fresh
+      // data. A normal parent render does not: assigning srcDoc again makes
+      // Chromium navigate the iframe and visually "refresh" the report.
+      const refreshRequested = injectedRefreshTokenRef.current !== refreshToken
+      if (firstInjectionForDocument || dataApiChanged || refreshRequested) {
+        debugReportFrame('report:data dispatched', title, {
+          firstInjectionForDocument,
+          dataApiChanged,
+          refreshRequested,
+          refreshToken,
+        })
+        try {
+          win.dispatchEvent(new win.Event('report:data'))
+        } catch {
+          /* iframe may have navigated/reloaded */
+        }
       }
     }
+    injectedDocumentRef.current = doc
+    injectedDataApiRef.current = dataApi
+    injectedRefreshTokenRef.current = refreshToken
 
     if (autoHeight) {
       observerRef.current?.disconnect()
@@ -237,10 +300,14 @@ export function HtmlReportFrame({
         /* ResizeObserver unavailable — height stays at last measure */
       }
     }
-  }, [dataApi, autoHeight, resize, applyTheme])
+  }, [dataApi, autoHeight, resize, applyTheme, refreshToken, title])
 
   // Re-inject when the report data changes (sources refreshed).
   useEffect(() => {
+    // The first injection belongs exclusively to iframe onLoad. Calling it
+    // before that can target the transient about:blank document and then make
+    // the loaded report render a second time moments later.
+    if (loadedDocumentRef.current !== iframeRef.current?.contentDocument) return
     inject()
   }, [inject])
 
@@ -259,10 +326,18 @@ export function HtmlReportFrame({
     <iframe
       ref={iframeRef}
       title={title}
-      srcDoc={html}
       sandbox="allow-same-origin allow-scripts"
-      onLoad={inject}
+      onLoad={() => {
+        loadedDocumentRef.current = iframeRef.current?.contentDocument || null
+        debugReportFrame('iframe loaded', title)
+        inject()
+      }}
       className={className}
     />
   )
 }
+
+// Report frames contain independently-running HTML. Keep their document stable
+// while terminal, Pulse, and human-input polling updates the outer React tree.
+// The owner passes refreshToken when a deliberate data refresh is wanted.
+export const HtmlReportFrame = memo(HtmlReportFrameComponent)

@@ -116,6 +116,25 @@ func isMCPBridgeVirtualToolCategory(name string) bool {
 	return mcpBridgeVirtualToolCategories[normalizeMCPBridgeCategory(name)]
 }
 
+// runtimeMCPServers removes legacy custom-tool categories from a workflow's
+// selected-server list. Older workflow.json files stored category labels such
+// as workspace_advanced alongside real MCP servers. Those labels are used when
+// registering direct tools later in setup; they must never be handed to the MCP
+// connection layer as server names.
+func runtimeMCPServers(selected []string) []string {
+	servers := make([]string, 0, len(selected))
+	for _, name := range selected {
+		if isMCPBridgeCustomToolCategory(name) || isMCPBridgeVirtualToolCategory(name) {
+			continue
+		}
+		servers = append(servers, name)
+	}
+	if len(servers) == 0 {
+		return []string{mcpclient.NoServers}
+	}
+	return servers
+}
+
 // stepDelegationRegistry maps a workshop step's ForceCorrelationID ("workshop-step-*") to the
 // delegation IDs spawned within that step. This lets query_step include tool calls from API-based
 // delegation sub-agents that use their own correlation ID ("delegation-<index>-<ts>") instead of
@@ -405,8 +424,9 @@ type StreamingAPI struct {
 	// Their structured terminal events remain available (the same events used by
 	// Terminal Center's Formatted view), so keep an explicit runtime lifecycle
 	// instead of guessing activity solely from the latest rendered spinner text.
-	retainedMainTurns   map[string]time.Time
-	retainedMainTurnsMu sync.Mutex
+	retainedMainTurns            map[string]time.Time
+	retainedMainTurnWatchCancels map[string]context.CancelFunc
+	retainedMainTurnsMu          sync.Mutex
 
 	// Pending completions queue — background agent IDs that finished while session was busy
 	pendingCompletions map[string][]string
@@ -621,9 +641,18 @@ type QueryRequest struct {
 	NotificationPulseSummaryChannels     []string `json:"notification_pulse_summary_channels,omitempty"`
 	NotificationExcludeChannels          []string `json:"notification_exclude_channels,omitempty"`
 	NotificationBlockRecipients          []string `json:"notification_block_recipients,omitempty"`
-	// Internal-only resolved notification credential. Unlike DecryptedSecrets,
-	// this value is never serialized, prompted, or injected as SECRET_*.
-	notificationSlackWebhookURL string `json:"-"`
+	NotificationRunSummaryRecipients     []string `json:"notification_run_summary_recipients,omitempty"`
+	NotificationPulseSummaryRecipients   []string `json:"notification_pulse_summary_recipients,omitempty"`
+	// Per-summary Slack channels, as encrypted-secret names holding webhook URLs.
+	NotificationRunSummarySlackWebhookSecretNames   []string `json:"notification_run_summary_slack_webhook_secret_names,omitempty"`
+	NotificationPulseSummarySlackWebhookSecretNames []string `json:"notification_pulse_summary_slack_webhook_secret_names,omitempty"`
+	// Internal-only resolved notification credentials. Unlike DecryptedSecrets,
+	// these values are never serialized, prompted, or injected as SECRET_*.
+	// notificationSlackWebhookURL is the default/fallback webhook;
+	// notificationSlackWebhookURLs holds every resolved webhook by secret name,
+	// including the per-summary channels.
+	notificationSlackWebhookURL  string            `json:"-"`
+	notificationSlackWebhookURLs map[string]string `json:"-"`
 	// Delegation tier configuration: Maps reasoning levels (high/medium/low) to specific provider/model pairs
 	DelegationTierConfig *virtualtools.DelegationTierConfig `json:"delegation_tier_config,omitempty"`
 	// Decrypted secrets to inject into agent system prompt
@@ -659,6 +688,12 @@ type QueryRequest struct {
 	// the next cron message waits for turn completion instead of racing a tmux
 	// snapshot that may not have flipped to busy yet.
 	DisableLiveInputDelivery bool `json:"disable_live_input_delivery,omitempty"`
+	// KeepNativeSessionAlive keeps one native coding-CLI process alive while a
+	// scheduler sends its known consecutive turns (upgrade → run → Pulse).
+	KeepNativeSessionAlive bool `json:"keep_native_session_alive,omitempty"`
+	// UserInteractiveContinuation promotes an observed schedule/bot conversation
+	// into an interactive chat without changing its session or native resume ID.
+	UserInteractiveContinuation bool `json:"user_interactive_continuation,omitempty"`
 	// Internal: user ID for synthetic turn reconstruction (not from JSON)
 	userID string `json:"-"`
 }
@@ -711,19 +746,39 @@ func notificationDestinationFromQuery(req QueryRequest, userID string) *services
 			URL:        req.notificationSlackWebhookURL,
 		}
 	}
+	// Per-summary Slack channels. A name whose secret did not resolve is dropped
+	// rather than carried as an empty URL, so a missing credential shows up as
+	// "this channel was skipped" instead of a silent post to nowhere.
+	webhooksFor := func(names []string) []services.SlackWebhookDest {
+		var webhooks []services.SlackWebhookDest
+		for _, name := range uniqueNonEmpty(names) {
+			url := strings.TrimSpace(req.notificationSlackWebhookURLs[name])
+			if url == "" {
+				continue
+			}
+			webhooks = append(webhooks, services.SlackWebhookDest{SecretName: name, URL: url})
+		}
+		return webhooks
+	}
+	dest.RunSummaryWebhooks = webhooksFor(req.NotificationRunSummarySlackWebhookSecretNames)
+	dest.PulseSummaryWebhooks = webhooksFor(req.NotificationPulseSummarySlackWebhookSecretNames)
 	// Per-workflow notification preferences (workflow.json notifications.*).
 	if len(req.NotificationExcludeChannels) > 0 {
 		dest.ExcludeChannels = append([]string(nil), req.NotificationExcludeChannels...)
 	}
 	dest.RunSummaryChannels = append([]string(nil), req.NotificationRunSummaryChannels...)
 	dest.PulseSummaryChannels = append([]string(nil), req.NotificationPulseSummaryChannels...)
+	dest.RunSummaryRecipients = append([]string(nil), req.NotificationRunSummaryRecipients...)
+	dest.PulseSummaryRecipients = append([]string(nil), req.NotificationPulseSummaryRecipients...)
 	if len(req.NotificationBlockRecipients) > 0 {
 		if dest.Gmail == nil {
 			dest.Gmail = &services.GmailDest{}
 		}
 		dest.Gmail.BlockedRecipients = append(dest.Gmail.BlockedRecipients, req.NotificationBlockRecipients...)
 	}
-	if dest.UserID == "" && dest.Slack == nil && dest.SlackWebhook == nil && dest.WhatsApp == nil && dest.Gmail == nil && len(dest.ExcludeChannels) == 0 {
+	if dest.UserID == "" && dest.Slack == nil && dest.SlackWebhook == nil && dest.WhatsApp == nil && dest.Gmail == nil &&
+		len(dest.ExcludeChannels) == 0 && len(dest.RunSummaryRecipients) == 0 && len(dest.PulseSummaryRecipients) == 0 &&
+		len(dest.RunSummaryWebhooks) == 0 && len(dest.PulseSummaryWebhooks) == 0 {
 		return nil
 	}
 	return dest
@@ -737,17 +792,33 @@ func (api *StreamingAPI) resolveNotificationSecretForRequest(ctx context.Context
 	if api == nil || req == nil {
 		return
 	}
-	secretName := strings.TrimSpace(req.NotificationSlackWebhookSecretName)
-	if secretName == "" {
+	// Every configured webhook is a delivery credential, including the
+	// per-summary channel webhooks. They must ALL be stripped from agent-visible
+	// injection, not just the default one — otherwise adding a second channel
+	// would quietly turn its URL into a SECRET_* variable the agent can read.
+	defaultSecretName := strings.TrimSpace(req.NotificationSlackWebhookSecretName)
+	secretNames := uniqueNonEmpty(append(
+		append([]string{defaultSecretName}, req.NotificationRunSummarySlackWebhookSecretNames...),
+		req.NotificationPulseSummarySlackWebhookSecretNames...,
+	))
+	if len(secretNames) == 0 {
 		req.notificationSlackWebhookURL = ""
+		req.notificationSlackWebhookURLs = nil
 		return
 	}
 
+	wanted := make(map[string]bool, len(secretNames))
+	for _, name := range secretNames {
+		wanted[name] = true
+	}
+	resolved := make(map[string]string, len(secretNames))
+
 	filtered := req.DecryptedSecrets[:0]
 	for _, secret := range req.DecryptedSecrets {
-		if strings.TrimSpace(secret.Name) == secretName {
-			if req.notificationSlackWebhookURL == "" {
-				req.notificationSlackWebhookURL = secret.Value
+		name := strings.TrimSpace(secret.Name)
+		if wanted[name] {
+			if resolved[name] == "" {
+				resolved[name] = secret.Value
 			}
 			continue
 		}
@@ -756,24 +827,48 @@ func (api *StreamingAPI) resolveNotificationSecretForRequest(ctx context.Context
 	req.DecryptedSecrets = filtered
 
 	// nil means "inject every global secret", so convert it to an explicit
-	// allow-list before removing the notification credential. Otherwise a
+	// allow-list before removing the notification credentials. Otherwise a
 	// GLOBAL_SECRET_<NAME> webhook would still leak through mergeGlobalSecrets.
 	if req.SelectedGlobalSecrets == nil {
 		allowed := make([]string, 0, len(getGlobalSecrets()))
 		for _, secret := range getGlobalSecrets() {
-			if strings.TrimSpace(secret.Name) != secretName {
+			if !wanted[strings.TrimSpace(secret.Name)] {
 				allowed = append(allowed, secret.Name)
 			}
 		}
 		req.SelectedGlobalSecrets = &allowed
 	} else {
-		filteredGlobals := removeString(*req.SelectedGlobalSecrets, secretName)
+		filteredGlobals := *req.SelectedGlobalSecrets
+		for _, name := range secretNames {
+			filteredGlobals = removeString(filteredGlobals, name)
+		}
 		req.SelectedGlobalSecrets = &filteredGlobals
 	}
 
-	if strings.TrimSpace(req.notificationSlackWebhookURL) == "" {
-		req.notificationSlackWebhookURL, _ = api.resolveBackendNotificationSecret(ctx, userID, workflowPath, secretName)
+	for _, name := range secretNames {
+		if strings.TrimSpace(resolved[name]) == "" {
+			if value, ok := api.resolveBackendNotificationSecret(ctx, userID, workflowPath, name); ok {
+				resolved[name] = value
+			}
+		}
 	}
+	req.notificationSlackWebhookURLs = resolved
+	req.notificationSlackWebhookURL = resolved[defaultSecretName]
+}
+
+// uniqueNonEmpty trims, drops blanks, and de-duplicates while preserving order.
+func uniqueNonEmpty(values []string) []string {
+	seen := make(map[string]bool, len(values))
+	out := make([]string, 0, len(values))
+	for _, raw := range values {
+		value := strings.TrimSpace(raw)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
 }
 
 // resolveBackendNotificationSecret deliberately ignores agent secret-selection
@@ -940,6 +1035,10 @@ func applyMultiAgentCapabilitiesToRequest(req *QueryRequest, caps WorkflowCapabi
 		req.NotificationPulseSummaryChannels = append([]string(nil), caps.Notifications.PulseSummaryChannels...)
 		req.NotificationExcludeChannels = append([]string(nil), caps.Notifications.ExcludeChannels...)
 		req.NotificationBlockRecipients = append([]string(nil), caps.Notifications.BlockRecipients...)
+		req.NotificationRunSummaryRecipients = append([]string(nil), caps.Notifications.RunSummaryRecipients...)
+		req.NotificationPulseSummaryRecipients = append([]string(nil), caps.Notifications.PulseSummaryRecipients...)
+		req.NotificationRunSummarySlackWebhookSecretNames = append([]string(nil), caps.Notifications.RunSummarySlackWebhookSecretNames...)
+		req.NotificationPulseSummarySlackWebhookSecretNames = append([]string(nil), caps.Notifications.PulseSummarySlackWebhookSecretNames...)
 	}
 	if req.BrowserMode == "" {
 		req.BrowserMode = "none"
@@ -1526,6 +1625,7 @@ func runServer(cmd *cobra.Command, args []string) {
 		sessionBusy:                     make(map[string]bool),
 		sessionBusySince:                make(map[string]time.Time),
 		retainedMainTurns:               make(map[string]time.Time),
+		retainedMainTurnWatchCancels:    make(map[string]context.CancelFunc),
 		pendingCompletions:              make(map[string][]string),
 		completionRetryScheduled:        make(map[string]bool),
 		pendingStartNotifications:       make(map[string][]string),
@@ -1854,16 +1954,12 @@ func runServer(cmd *cobra.Command, args []string) {
 	apiRouter.HandleFunc("/report-human-inputs/{input_id}/answer", api.handleAnswerReportHumanInput).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/report-human-inputs/{input_id}/dismiss", api.handleDismissReportHumanInput).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/report-human-inputs/{input_id}/consume", api.handleConsumeReportHumanInput).Methods("POST", "OPTIONS")
-	apiRouter.HandleFunc("/report-widget-responses", api.handleListReportWidgetResponses).Methods("GET", "OPTIONS")
-	apiRouter.HandleFunc("/report-widget-responses/{widget_id}/answer", api.handleAnswerReportWidgetResponse).Methods("POST", "OPTIONS")
-	apiRouter.HandleFunc("/report-widget-responses/{widget_id}/claim", api.handleClaimReportWidgetResponse).Methods("POST", "OPTIONS")
-	apiRouter.HandleFunc("/report-widget-responses/{widget_id}/consume", api.handleConsumeReportWidgetResponse).Methods("POST", "OPTIONS")
-	apiRouter.HandleFunc("/report-widget-responses/{widget_id}/fail", api.handleFailReportWidgetResponse).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/pulse-module-state", api.handleGetPulseModuleState).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/pulse-findings", api.handleGetPulseFindings).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/pulse-reviews", api.handleGetPulseReviews).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/pulse-agent-metrics", api.handleGetPulseAgentMetrics).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/pulse-impact", api.handleGetPulseImpact).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/workflow/pulse-context", api.handleGetPulseContext).Methods("GET", "OPTIONS")
 
 	// Workflow running-session API (decoupled from chat session storage).
 	apiRouter.HandleFunc("/workflow/running", api.handleListRunningWorkflows).Methods("GET")
@@ -2081,8 +2177,6 @@ func runServer(cmd *cobra.Command, args []string) {
 
 	// Auto-improvement framework — see docs/workflow/auto_improvement_framework.md
 	apiRouter.HandleFunc("/workflow/builder-doc", api.handleGetBuilderDoc).Methods("GET", "OPTIONS")
-	apiRouter.HandleFunc("/workflow/builder-docs-status", api.handleGetBuilderDocsStatus).Methods("GET", "OPTIONS")
-	apiRouter.HandleFunc("/workflow/builder-doc-archives", api.handleGetBuilderDocArchives).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/plan-changelog", api.handleGetPlanChangelog).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/plan-changelog/prune", requireWorkflowWriteAccess(api.handlePrunePlanChangelog)).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/framework-health", api.handleGetFrameworkHealth).Methods("GET", "OPTIONS")
@@ -2093,10 +2187,8 @@ func runServer(cmd *cobra.Command, args []string) {
 	apiRouter.HandleFunc("/workflow/plan/batch-update-steps", requireWorkflowWriteAccess(api.handleBatchUpdateSteps)).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/plan/delete-step", requireWorkflowWriteAccess(api.handleDeleteStep)).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/plan/add-step", requireWorkflowWriteAccess(api.handleAddStep)).Methods("POST", "OPTIONS")
-	// Dynamic report system (docs/workflow/persistent_stores_design.md section 2).
-	// No backend wrappers — the frontend ReportViewer reads reports/report_plan.json
-	// and db/db.sqlite (via the query endpoint) / knowledgebase files via the workspace service's
-	// /api/documents/{path} endpoint (agentApi.getPlannerFileContent).
+	// Dynamic report system. The frontend ReportViewer loads db/reports/index.html
+	// directly; HTML pages read durable data through window.report.
 
 	apiRouter.HandleFunc("/workflow/backup", api.handleGetWorkflowBackup).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/publish", api.handleGetWorkflowPublish).Methods("GET", "OPTIONS")
@@ -3229,6 +3321,10 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					req.NotificationPulseSummaryChannels = append([]string(nil), manifest.Capabilities.Notifications.PulseSummaryChannels...)
 					req.NotificationExcludeChannels = append([]string(nil), manifest.Capabilities.Notifications.ExcludeChannels...)
 					req.NotificationBlockRecipients = append([]string(nil), manifest.Capabilities.Notifications.BlockRecipients...)
+					req.NotificationRunSummaryRecipients = append([]string(nil), manifest.Capabilities.Notifications.RunSummaryRecipients...)
+					req.NotificationPulseSummaryRecipients = append([]string(nil), manifest.Capabilities.Notifications.PulseSummaryRecipients...)
+					req.NotificationRunSummarySlackWebhookSecretNames = append([]string(nil), manifest.Capabilities.Notifications.RunSummarySlackWebhookSecretNames...)
+					req.NotificationPulseSummarySlackWebhookSecretNames = append([]string(nil), manifest.Capabilities.Notifications.PulseSummarySlackWebhookSecretNames...)
 				}
 				api.resolveNotificationSecretForRequest(context.Background(), currentUserID, resolvedWPath, &req)
 
@@ -3344,6 +3440,10 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					req.NotificationPulseSummaryChannels = append([]string(nil), caps.Notifications.PulseSummaryChannels...)
 					req.NotificationExcludeChannels = append([]string(nil), caps.Notifications.ExcludeChannels...)
 					req.NotificationBlockRecipients = append([]string(nil), caps.Notifications.BlockRecipients...)
+					req.NotificationRunSummaryRecipients = append([]string(nil), caps.Notifications.RunSummaryRecipients...)
+					req.NotificationPulseSummaryRecipients = append([]string(nil), caps.Notifications.PulseSummaryRecipients...)
+					req.NotificationRunSummarySlackWebhookSecretNames = append([]string(nil), caps.Notifications.RunSummarySlackWebhookSecretNames...)
+					req.NotificationPulseSummarySlackWebhookSecretNames = append([]string(nil), caps.Notifications.PulseSummarySlackWebhookSecretNames...)
 				}
 				api.resolveNotificationSecretForRequest(context.Background(), currentUserID, manifestWorkspacePath, &req)
 				req.CdpPorts = append([]int(nil), caps.CDPPorts...)
@@ -4231,7 +4331,8 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		forceStructuredCodingAgent := codingAgentUsesStructuredTransportForPolicy(finalProvider, profileTransportPolicy)
-		claudeCodePersistentInteractive, codexPersistentInteractive, cursorPersistentInteractive, piPersistentInteractive := codingAgentPersistentInteractiveFlags(finalProvider)
+		allowPersistentInteractive := codingAgentRequestAllowsPersistentInteractive(&req, sessionID)
+		claudeCodePersistentInteractive, codexPersistentInteractive, cursorPersistentInteractive, piPersistentInteractive := codingAgentPersistentInteractiveFlags(finalProvider, allowPersistentInteractive)
 		claudeCodeTransport := codingAgentClaudeCodeChatTransport(finalProvider)
 		if forceStructuredCodingAgent {
 			// A structured coding CLI is a one-shot native JSON process. There is
@@ -4364,6 +4465,17 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			// This ensures MCP servers with OAuth use user-specific token files
 			UserID: currentUserID,
 		}
+
+		// Legacy manifests may still place built-in tool categories in
+		// SelectedServers. Keep those categories for direct tool registration,
+		// but never attempt to connect to them as MCP servers.
+		selectedServers = runtimeMCPServers(selectedServers)
+		if len(selectedServers) == 1 && selectedServers[0] == mcpclient.NoServers {
+			serverList = mcpclient.NoServers
+		} else {
+			serverList = strings.Join(selectedServers, ",")
+		}
+		agentConfig.ServerName = serverList
 
 		applySharedLLMAgentTuning(&agentConfig, &req, presetLLMConfig)
 
@@ -5640,6 +5752,25 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 		// Observers are runtime construction inputs, so attach them to the draft
 		// before finalization instead of mutating the live agent afterward.
 		eventObserver := events.NewEventObserverWithLogger(api.eventStore, sessionID, api.logger)
+		// Scope resolution, in priority order (PLAT-088):
+		//  1. The scheduler's explicit llm_config_source marker. A scheduled
+		//     Pulse turn is indistinguishable from the workflow-orchestration
+		//     turns around it by mode or phase alone — same session, same phase
+		//     id — so this stamp is the only reliable Pulse signal here.
+		//  2. Otherwise the agent mode + phase. req.AgentMode is rewritten to
+		//     "multi-agent" far above purely to route workflow_phase requests
+		//     down the standard agent path, so inferring from it directly
+		//     charged every scheduled workflow AND Pulse turn to "chat".
+		//     isWorkflowPhase is captured before that rewrite and is what the
+		//     inference is supposed to see.
+		costScope := scopeForScheduledLLMRole(req.LLMConfigSource)
+		if costScope == "" {
+			agentModeForScope := req.AgentMode
+			if isWorkflowPhase {
+				agentModeForScope = "workflow_phase"
+			}
+			costScope = inferCostScope(agentModeForScope, workflowPhaseID)
+		}
 		costObs := newCostObserver(
 			api.costLedger,
 			sessionID,
@@ -5647,7 +5778,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			req.AgentMode,
 			withCostModel(finalProvider, finalModelID),
 			withCostAttribution(
-				inferCostScope(req.AgentMode, workflowPhaseID),
+				costScope,
 				costFirstNonEmpty(workflowPhaseFolder, req.SelectedFolder),
 				workflowPhaseRunFolder,
 				queryID,
@@ -5939,6 +6070,20 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				if !forceStructuredCodingAgent && restoredRuntimeUsesLaunchableTerminalTransport(restoredRuntime) {
 					if handle, err := mcpagent.StartAgentTransportSession(agentCtx, underlyingAgent); err != nil {
 						logfWithContext(queryLogCtx, "[CHAT_HISTORY] Failed to prelaunch restored coding-agent transport session: %v", err)
+						// PLAT-067. This turn needs a launchable terminal transport and its
+						// pane is already gone; StartAgentTransportSession IS the verify +
+						// single-replacement attempt (it relaunches with --resume and waits
+						// for a ready prompt). Its failure means there is no transport to
+						// talk to, so this error must stop the turn rather than be logged
+						// and stepped over. Streaming anyway sends the turn into a dead
+						// pane where it produces nothing and sits until cancellation:
+						// observed on an RTS Latency cron run as two consecutive ~32-minute
+						// turns, which consumed the run's budget and killed every producing
+						// step scheduled after them. Failing here also preserves any queued
+						// background-child completion, so recovery retries only the parent
+						// continuation and never re-runs a child that already succeeded.
+						sendError(fmt.Sprintf("parent_transport_unavailable: could not restore the coding-agent terminal for this session: %v", err), true)
+						return
 					} else if handle != nil && strings.TrimSpace(handle.TmuxSession) != "" {
 						// FIX B: After a server restart the original tmux is dead, so the
 						// restore path published a STATIC snapshot (Active:false, empty
@@ -6259,8 +6404,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				if modelID == "" {
 					modelID = runtimeInfo.LLMConfig.ModelID
 				}
-				orchestrator.EnsureModelTokenUsagePricing(modelID, modelUsage)
-				orchestrator.ApplyModelUsageToPhaseTokenUsageFile(&tokenFile, phaseKey, modelID, modelUsage, now)
+				deltaUsage := orchestrator.ApplyCumulativeSessionModelUsageToPhaseTokenUsageFile(&tokenFile, persistSessionID, phaseKey, modelID, modelUsage, now)
 
 				if tokenJSON, err := json.MarshalIndent(tokenFile, "", "  "); err == nil {
 					if err := writeRawFileToWorkspace(context.Background(), tokenFilePath, string(tokenJSON)); err != nil {
@@ -6271,7 +6415,11 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 								log.Printf("[BUILDER LOG] Failed to delete legacy token_usage.json: %v", err)
 							}
 						}
-						log.Printf("[BUILDER LOG] Updated %s (phase=%s, $%.4f this turn)", tokenFilePath, phaseKey, totalCost)
+						turnCost := 0.0
+						if deltaUsage != nil {
+							turnCost = deltaUsage.TotalCost
+						}
+						log.Printf("[BUILDER LOG] Updated %s (phase=%s, $%.4f this turn)", tokenFilePath, phaseKey, turnCost)
 					}
 				}
 
@@ -6285,7 +6433,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				if dailyTokenFile.TokenUsage == nil {
 					dailyTokenFile.TokenUsage = &orchestrator.PhaseTokenUsageFile{}
 				}
-				orchestrator.ApplyModelUsageToPhaseTokenUsageFile(dailyTokenFile.TokenUsage, phaseKey, modelID, modelUsage, now)
+				orchestrator.ApplyModelUsageToPhaseTokenUsageFile(dailyTokenFile.TokenUsage, phaseKey, modelID, deltaUsage, now)
 
 				if dailyTokenJSON, err := json.MarshalIndent(dailyTokenFile, "", "  "); err == nil {
 					if err := writeRawFileToWorkspace(context.Background(), dailyTokenFilePath, string(dailyTokenJSON)); err != nil {
@@ -6762,16 +6910,152 @@ func (api *StreamingAPI) markRetainedMainCodingTurnRunning(sessionID string) {
 			continue
 		}
 		api.terminalStore.MarkTurnRunning(snapshot.TerminalID)
+		provider := llmproviders.Provider(retainedCodingAgentProvider(snapshot))
+		watchCtx, watchCancel := context.WithCancel(context.Background())
 		api.retainedMainTurnsMu.Lock()
 		if api.retainedMainTurns == nil {
 			api.retainedMainTurns = make(map[string]time.Time)
 		}
+		if api.retainedMainTurnWatchCancels == nil {
+			api.retainedMainTurnWatchCancels = make(map[string]context.CancelFunc)
+		}
+		previousWatchCancel := api.retainedMainTurnWatchCancels[sessionID]
 		api.retainedMainTurns[sessionID] = time.Now()
+		api.retainedMainTurnWatchCancels[sessionID] = watchCancel
 		api.retainedMainTurnsMu.Unlock()
+		if previousWatchCancel != nil {
+			previousWatchCancel()
+		}
 		api.setSessionBusy(sessionID, true)
 		api.updateSessionStatus(sessionID, "running")
+		go api.observeRetainedMainTurnStream(watchCtx, sessionID, snapshot, provider)
 		return
 	}
+}
+
+const (
+	retainedMainTurnStreamQuietWindow = 350 * time.Millisecond
+	retainedMainTurnReadyStableWindow = 1200 * time.Millisecond
+	retainedMainTurnCaptureTimeout    = 3 * time.Second
+)
+
+// observeRetainedMainTurnStream derives the logical end of a direct retained
+// turn from the real tmux output stream. Stream output schedules a coherent
+// in-band pane capture after a short quiet boundary; the provider adapter then
+// decides whether the screen is truly back at its idle composer. Requiring the
+// ready screen to remain stable prevents an intermediate repaint from settling
+// a turn that immediately continues into another tool/action.
+func (api *StreamingAPI) observeRetainedMainTurnStream(
+	ctx context.Context,
+	sessionID string,
+	snapshot terminals.Snapshot,
+	provider llmproviders.Provider,
+) {
+	if api == nil || api.liveAttach == nil || strings.TrimSpace(snapshot.TmuxSession) == "" || provider == "" {
+		return
+	}
+	output := make(chan struct{}, 1)
+	stream, unsubscribe, err := api.liveAttach.observeOutput(snapshot.TmuxSession, func([]byte) {
+		select {
+		case output <- struct{}{}:
+		default:
+		}
+	})
+	if err != nil {
+		log.Printf("[RETAINED_TURN] Could not observe tmux stream session=%s terminal=%s: %v", sessionID, snapshot.TerminalID, err)
+		return
+	}
+	defer unsubscribe()
+
+	// Inspect once even when the turn completed faster than stream attachment.
+	// Confirmed delivery plus a stable idle composer is a valid completion.
+	output <- struct{}{}
+	timer := time.NewTimer(time.Hour)
+	if !timer.Stop() {
+		<-timer.C
+	}
+	defer timer.Stop()
+	resetTimer := func(delay time.Duration) {
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		timer.Reset(delay)
+	}
+
+	var readySince time.Time
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-stream.done:
+			return
+		case <-output:
+			readySince = time.Time{}
+			resetTimer(retainedMainTurnStreamQuietWindow)
+		case <-timer.C:
+			captureCtx, cancel := context.WithTimeout(ctx, retainedMainTurnCaptureTimeout)
+			pane, captureErr := stream.capturePane(captureCtx)
+			cancel()
+			if captureErr != nil {
+				if ctx.Err() == nil {
+					log.Printf("[RETAINED_TURN] Tmux stream capture failed session=%s terminal=%s: %v", sessionID, snapshot.TerminalID, captureErr)
+				}
+				return
+			}
+			if !llmproviders.CodingAgentPaneReady(provider, pane) {
+				readySince = time.Time{}
+				continue
+			}
+			if readySince.IsZero() {
+				readySince = time.Now()
+				resetTimer(retainedMainTurnReadyStableWindow)
+				continue
+			}
+			api.emitRetainedMainTurnStreamCompletion(sessionID, snapshot, provider)
+			return
+		}
+	}
+}
+
+func (api *StreamingAPI) emitRetainedMainTurnStreamCompletion(sessionID string, snapshot terminals.Snapshot, provider llmproviders.Provider) {
+	if api == nil {
+		return
+	}
+	now := time.Now()
+	executionID := strings.TrimSpace(snapshot.ExecutionID)
+	if executionID == "" {
+		executionID = "main:" + sessionID
+	}
+	event := events.Event{
+		ID:              fmt.Sprintf("retained-turn-completion-%d", now.UnixNano()),
+		Type:            "unified_completion",
+		Timestamp:       now,
+		SessionID:       sessionID,
+		ExecutionID:     executionID,
+		ExecutionKind:   "main_agent",
+		TerminalOwnerID: "main:" + sessionID,
+		TerminalID:      snapshot.TerminalID,
+		Data: &unifiedevents.AgentEvent{
+			Type:      unifiedevents.EventType("unified_completion"),
+			Timestamp: now,
+			SessionID: sessionID,
+			Data: &unifiedevents.GenericEventData{Data: map[string]interface{}{
+				"source":         "tmux_stream",
+				"provider":       string(provider),
+				"tmux_session":   snapshot.TmuxSession,
+				"execution_kind": "main_agent",
+				"scope":          "main_agent",
+			}},
+		},
+	}
+	if api.eventStore != nil {
+		api.eventStore.AddEvent(sessionID, event)
+		return
+	}
+	api.observeRetainedMainTurnEvent(sessionID, event)
 }
 
 func retainedMainTurnCompletionEvent(eventType string) bool {
@@ -6821,14 +7105,20 @@ func (api *StreamingAPI) observeRetainedMainTurnEvent(sessionID string, event ev
 
 	api.retainedMainTurnsMu.Lock()
 	currentStart, stillTracked := api.retainedMainTurns[sessionID]
+	var watchCancel context.CancelFunc
 	if stillTracked && currentStart.Equal(startedAt) {
 		delete(api.retainedMainTurns, sessionID)
+		watchCancel = api.retainedMainTurnWatchCancels[sessionID]
+		delete(api.retainedMainTurnWatchCancels, sessionID)
 	} else {
 		stillTracked = false
 	}
 	api.retainedMainTurnsMu.Unlock()
 	if !stillTracked {
 		return
+	}
+	if watchCancel != nil {
+		watchCancel()
 	}
 
 	api.setSessionBusy(sessionID, false)
@@ -6916,7 +7206,7 @@ func codingAgentHasNativeResume(provider string, underlyingAgent *mcpagent.Agent
 		return false
 	}
 	handle := mcpagent.SnapshotAgentSession(underlyingAgent)
-	if handle == nil || handle.Provider.Empty() {
+	if handle == nil || handle.Provider.Empty() || strings.TrimSpace(handle.Provider.NativeSessionID) == "" {
 		return false
 	}
 	provider = strings.ToLower(strings.TrimSpace(provider))
@@ -8586,6 +8876,12 @@ func (api *StreamingAPI) buildWorkshopConfig(
 // to the workflow.json manifest and scheduler service. No database dependency.
 func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.SchedulerCallbacks {
 	return &todo_creation_human.SchedulerCallbacks{
+		GetContractUpgrades: func(ctx context.Context, workspacePath string) (string, error) {
+			return describeWorkflowContractUpgrades(ctx, workspacePath)
+		},
+		NextContractUpgrade: func(ctx context.Context, workspacePath string) (string, string, error) {
+			return nextWorkflowContractUpgrade(ctx, workspacePath)
+		},
 		ListSchedules: func(ctx context.Context, workspacePath string) (string, error) {
 			manifest, found, err := ReadWorkflowManifest(ctx, workspacePath)
 			if err != nil || !found {
@@ -8634,11 +8930,17 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 				} else {
 					sb.WriteString("- **Groups**: all\n")
 				}
+				if len(sched.RouteSelections) > 0 {
+					sb.WriteString(fmt.Sprintf("- **Route selections**: %v\n", sched.RouteSelections))
+				}
+				if strings.TrimSpace(sched.DirectMessagesReason) != "" {
+					sb.WriteString(fmt.Sprintf("- **Direct message rationale**: %s\n", sched.DirectMessagesReason))
+				}
 				sb.WriteString("\n")
 			}
 			return sb.String(), nil
 		},
-		CreateSchedule: func(ctx context.Context, workspacePath, name, cronExpr, timezone string, groupNames []string, mode string, messages []string, workshopMode string, resumePrevious *bool) (string, error) {
+		CreateSchedule: func(ctx context.Context, workspacePath, name, cronExpr, timezone string, groupNames []string, routeSelections map[string]string, mode string, messages []string, directMessagesReason string, workshopMode string, resumePrevious *bool) (string, error) {
 			mode = scheduleModeOrDefault(mode)
 			if mode == "multi-agent" {
 				return "", fmt.Errorf("workflow schedules must use workshop mode; create multi-agent schedules in the multi-agent schedule store")
@@ -8647,6 +8949,9 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 				return "", fmt.Errorf("invalid cron expression %q: %w", cronExpr, err)
 			}
 			if err := ValidateScheduleTimezone(timezone); err != nil {
+				return "", err
+			}
+			if err := validateScheduleMessages(messages, directMessagesReason); err != nil {
 				return "", err
 			}
 			manifest, found, err := ReadWorkflowManifest(ctx, workspacePath)
@@ -8658,16 +8963,18 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 				return "", err
 			}
 			newSched := WorkflowSchedule{
-				ID:             generateScheduleID(),
-				Name:           name,
-				CronExpression: cronExpr,
-				Timezone:       timezone,
-				GroupNames:     groupNames,
-				Enabled:        true,
-				Mode:           mode,
-				Messages:       messages,
-				WorkshopMode:   workshopMode,
-				ResumePrevious: resumePrevious,
+				ID:                   generateScheduleID(),
+				Name:                 name,
+				CronExpression:       cronExpr,
+				Timezone:             timezone,
+				GroupNames:           groupNames,
+				RouteSelections:      routeSelections,
+				Enabled:              true,
+				Mode:                 mode,
+				Messages:             messages,
+				DirectMessagesReason: directMessagesReason,
+				WorkshopMode:         workshopMode,
+				ResumePrevious:       resumePrevious,
 			}
 			manifest.Schedules = append(manifest.Schedules, newSched)
 			if err := WriteWorkflowManifest(ctx, workspacePath, manifest); err != nil {
@@ -8685,9 +8992,13 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 			if nextRun != nil {
 				nextRunStr = nextRun.Format(time.RFC3339)
 			}
-			return fmt.Sprintf("Schedule created and activated.\n- **ID**: `%s`\n- **Name**: %s\n- **Cron**: `%s`\n- **Timezone**: %s\n- **Next Run**: %s", newSched.ID, name, cronExpr, timezone, nextRunStr), nil
+			result := fmt.Sprintf("Schedule created and activated.\n- **ID**: `%s`\n- **Name**: %s\n- **Cron**: `%s`\n- **Timezone**: %s\n- **Next Run**: %s", newSched.ID, name, cronExpr, timezone, nextRunStr)
+			if advisory := scheduleMessagesAdvisory(messages, directMessagesReason); advisory != "" {
+				result += "\n- **Execution model**: " + advisory
+			}
+			return result, nil
 		},
-		CreateCalendarSchedule: func(ctx context.Context, workspacePath, name, timezone string, groupNames []string, calendarItemsJSON string, mode string, messages []string, workshopMode string) (string, error) {
+		CreateCalendarSchedule: func(ctx context.Context, workspacePath, name, timezone string, groupNames []string, calendarItemsJSON string, mode string, messages []string, directMessagesReason string, workshopMode string) (string, error) {
 			mode = scheduleModeOrDefault(mode)
 			if mode == "multi-agent" {
 				return "", fmt.Errorf("workflow calendar schedules must use workshop mode")
@@ -8703,6 +9014,13 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 			if err := validateScheduleRequest("calendar", "", calendarItems); err != nil {
 				return "", err
 			}
+			allMessages := append([]string(nil), messages...)
+			for _, item := range calendarItems {
+				allMessages = append(allMessages, item.Messages...)
+			}
+			if err := validateScheduleMessages(allMessages, directMessagesReason); err != nil {
+				return "", err
+			}
 			manifest, found, err := ReadWorkflowManifest(ctx, workspacePath)
 			if err != nil || !found {
 				return "", fmt.Errorf("workflow manifest not found at %s", workspacePath)
@@ -8712,16 +9030,17 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 				return "", err
 			}
 			newSched := WorkflowSchedule{
-				ID:            generateScheduleID(),
-				Name:          name,
-				ScheduleType:  "calendar",
-				Timezone:      timezone,
-				CalendarItems: calendarItems,
-				GroupNames:    groupNames,
-				Enabled:       true,
-				Mode:          mode,
-				Messages:      messages,
-				WorkshopMode:  workshopMode,
+				ID:                   generateScheduleID(),
+				Name:                 name,
+				ScheduleType:         "calendar",
+				Timezone:             timezone,
+				CalendarItems:        calendarItems,
+				GroupNames:           groupNames,
+				Enabled:              true,
+				Mode:                 mode,
+				Messages:             messages,
+				DirectMessagesReason: directMessagesReason,
+				WorkshopMode:         workshopMode,
 			}
 			manifest.Schedules = append(manifest.Schedules, newSched)
 			if err := WriteWorkflowManifest(ctx, workspacePath, manifest); err != nil {
@@ -8738,9 +9057,13 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 			if nextRun != nil {
 				nextRunStr = nextRun.Format(time.RFC3339)
 			}
-			return fmt.Sprintf("Calendar schedule created and activated.\n- **ID**: `%s`\n- **Name**: %s\n- **Items**: %d\n- **Timezone**: %s\n- **Next Run**: %s", newSched.ID, name, len(calendarItems), timezone, nextRunStr), nil
+			result := fmt.Sprintf("Calendar schedule created and activated.\n- **ID**: `%s`\n- **Name**: %s\n- **Items**: %d\n- **Timezone**: %s\n- **Next Run**: %s", newSched.ID, name, len(calendarItems), timezone, nextRunStr)
+			if advisory := scheduleMessagesAdvisory(allMessages, directMessagesReason); advisory != "" {
+				result += "\n- **Execution model**: " + advisory
+			}
+			return result, nil
 		},
-		UpdateSchedule: func(ctx context.Context, jobID, name, cronExpr, timezone string, groupNames []string, setGroupNames bool, enabled *bool, mode string, messages []string, workshopMode string, resumePrevious *bool) (string, error) {
+		UpdateSchedule: func(ctx context.Context, jobID, name, cronExpr, timezone string, groupNames []string, setGroupNames bool, routeSelections map[string]string, setRouteSelections bool, enabled *bool, mode string, messages []string, setMessages bool, directMessagesReason *string, workshopMode string, resumePrevious *bool) (string, error) {
 			if cronExpr != "" {
 				if err := ValidateCronExpression(cronExpr); err != nil {
 					return "", fmt.Errorf("invalid cron expression %q: %w", cronExpr, err)
@@ -8772,6 +9095,9 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 				}
 				sched.GroupNames = validGroupNames
 			}
+			if setRouteSelections {
+				sched.RouteSelections = routeSelections
+			}
 			if enabled != nil {
 				sched.Enabled = *enabled
 			}
@@ -8782,8 +9108,24 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 				}
 				sched.Mode = normalizedMode
 			}
-			if messages != nil {
+			candidateMessages := sched.Messages
+			candidateReason := sched.DirectMessagesReason
+			if setMessages {
+				candidateMessages = messages
+			}
+			if directMessagesReason != nil {
+				candidateReason = *directMessagesReason
+			}
+			if setMessages || directMessagesReason != nil {
+				if err := validateScheduleMessages(candidateMessages, candidateReason); err != nil {
+					return "", err
+				}
+			}
+			if setMessages {
 				sched.Messages = messages
+			}
+			if directMessagesReason != nil {
+				sched.DirectMessagesReason = *directMessagesReason
 			}
 			if workshopMode != "" {
 				sched.WorkshopMode = workshopMode
@@ -8809,7 +9151,11 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 			if nextRun != nil {
 				nextRunStr = nextRun.Format(time.RFC3339)
 			}
-			return fmt.Sprintf("Schedule updated.\n- **ID**: `%s`\n- **Name**: %s\n- **Cron**: `%s`\n- **Enabled**: %v\n- **Next Run**: %s", sched.ID, sched.Name, sched.CronExpression, sched.Enabled, nextRunStr), nil
+			result := fmt.Sprintf("Schedule updated.\n- **ID**: `%s`\n- **Name**: %s\n- **Cron**: `%s`\n- **Enabled**: %v\n- **Next Run**: %s", sched.ID, sched.Name, sched.CronExpression, sched.Enabled, nextRunStr)
+			if advisory := scheduleMessagesAdvisory(sched.Messages, sched.DirectMessagesReason); advisory != "" {
+				result += "\n- **Execution model**: " + advisory
+			}
+			return result, nil
 		},
 		DeleteSchedule: func(ctx context.Context, jobID string) error {
 			workspacePath, manifest, idx, err := findScheduleByID(ctx, jobID)

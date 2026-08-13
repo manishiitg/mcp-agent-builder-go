@@ -97,6 +97,20 @@ func TestQueryWorkflowDBUnknownColumnReportsThatTablesColumns(t *testing.T) {
 	}
 }
 
+func TestQueryWorkflowDBBindsPositionalParams(t *testing.T) {
+	registry, _ := startWorkflowDBSchemaHintServer(t, 0)
+	result, err := registry.Executors["query_workflow_db"](context.Background(), map[string]any{
+		"sql":    "SELECT question FROM human_inputs WHERE workflow_id = ?",
+		"params": []any{"wf-1"},
+	})
+	if err != nil {
+		t.Fatalf("parameterized read: %v", err)
+	}
+	if !strings.Contains(result, "ready?") {
+		t.Fatalf("parameterized read returned unexpected result: %s", result)
+	}
+}
+
 func TestQueryWorkflowDBUnknownTableReportsAvailableTables(t *testing.T) {
 	registry, _ := startWorkflowDBSchemaHintServer(t, 0)
 
@@ -185,6 +199,63 @@ func TestQueryWorkflowDBSuccessfulQueryIsUnchanged(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(requests); got != 1 {
 		t.Fatalf("a successful query must not trigger a describe: requests=%d", got)
+	}
+}
+
+func TestQueryWorkflowDBAcceptsQueryAlias(t *testing.T) {
+	registry, requests := startWorkflowDBSchemaHintServer(t, 0)
+
+	result, err := registry.Executors["query_workflow_db"](context.Background(), map[string]any{
+		"query": "SELECT question, status FROM human_inputs ORDER BY id",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result, `"ready?"`) || !strings.Contains(result, `"columns"`) {
+		t.Fatalf("unexpected query payload: %s", result)
+	}
+	if got := atomic.LoadInt32(requests); got != 1 {
+		t.Fatalf("query alias must execute exactly once: requests=%d", got)
+	}
+}
+
+func TestQueryWorkflowDBIntegrityCheckUsesGuardedNamedAction(t *testing.T) {
+	registry, requests := startWorkflowDBSchemaHintServer(t, 0)
+
+	result, err := registry.Executors["query_workflow_db"](context.Background(), map[string]any{
+		"action": "integrity_check",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.ToLower(result), `"ok"`) {
+		t.Fatalf("integrity result=%s", result)
+	}
+	if got := atomic.LoadInt32(requests); got != 1 {
+		t.Fatalf("integrity action must execute exactly once: requests=%d", got)
+	}
+
+	_, err = registry.Executors["query_workflow_db"](context.Background(), map[string]any{
+		"action": "integrity_check",
+		"sql":    "PRAGMA foreign_key_check",
+	})
+	if err == nil || !strings.Contains(err.Error(), "does not accept sql") {
+		t.Fatalf("integrity action accepted caller SQL: %v", err)
+	}
+}
+
+func TestQueryWorkflowDBRejectsConflictingSQLAliases(t *testing.T) {
+	registry, requests := startWorkflowDBSchemaHintServer(t, 0)
+
+	_, err := registry.Executors["query_workflow_db"](context.Background(), map[string]any{
+		"sql":   "SELECT 1",
+		"query": "SELECT 2",
+	})
+	if err == nil || !strings.Contains(err.Error(), "different values") {
+		t.Fatalf("conflicting alias error=%v", err)
+	}
+	if got := atomic.LoadInt32(requests); got != 0 {
+		t.Fatalf("conflicting aliases reached the database: requests=%d", got)
 	}
 }
 

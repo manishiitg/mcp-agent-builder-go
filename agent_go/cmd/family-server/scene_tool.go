@@ -28,11 +28,14 @@ func childShowSceneTool(recordScene func(html string)) agentsession.Tool {
 			"skills/_shared/html-design.md's visual style). One real constraint: this iframe stays mounted in her chat history forever " +
 			"— it is never torn down when the conversation moves on — so any setInterval/requestAnimationFrame loop must have a natural " +
 			"stopping point (finish the animation, end the game, clear the timer) rather than run forever in the background. " +
-			"To offer a real choice you need to see and respond to, use a button that calls `SQ.choose(text, this)` — never a `<details>` " +
-			"reveal or a button that does nothing further. It also disables itself the instant it's tapped, so a slow reply can't be " +
-			"mistaken for a missed tap and answered twice: `<button onclick=\"SQ.choose('Investigate Saturn', this)\">" +
-			"Investigate Saturn</button>`. Call this when a visual moment genuinely helps, not every single turn — plain conversation is " +
-			"fine most of the time.",
+			"IF THE SCENE ASKS HER ANYTHING, IT MUST CARRY THE ANSWERS AS BUTTONS — two to four of them, each calling " +
+			"`SQ.choose(text, this)`: `<button onclick=\"SQ.choose('Investigate Saturn', this)\">Investigate Saturn</button>`. You see " +
+			"exactly which she picked, and each disables itself the instant it's tapped so a slow reply can't be mistaken for a missed " +
+			"tap and answered twice. Never a `<details>` reveal, never a button that does nothing further. She can still type instead — " +
+			"the buttons are so she doesn't HAVE to. Measured live: ten scenes in a row shipped without a single button, so every answer " +
+			"had to be typed out, and by the end her replies had decayed into fragments and she asked to stop. A tap is the difference " +
+			"between playing and doing homework. Call this when a visual moment genuinely helps, not every single turn — plain " +
+			"conversation is fine most of the time.",
 		Category: "family_tools",
 		Params: map[string]interface{}{
 			"type": "object",

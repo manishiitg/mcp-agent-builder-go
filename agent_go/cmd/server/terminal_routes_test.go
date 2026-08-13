@@ -1136,6 +1136,43 @@ func TestTerminalRoutesGetTerminalHistoryIdlePaneUsesCaptureNotPipe(t *testing.T
 	}
 }
 
+func TestTerminalRoutesGetTerminalHistoryIdlePanePreservesLiveStream(t *testing.T) {
+	store := terminals.NewStore()
+	api := &StreamingAPI{terminalStore: store}
+	sessionID := "session-terminal-stream-history"
+	terminalID := sessionID + ":workflow-step:review-plan"
+	tmuxSession := "mlp-claude-stream-history"
+	streamContent := "\x1bcfirst retained line\r\nsecond retained line\r\nfinal retained line\n"
+
+	store.HandleEvent(sessionID, terminalRouteChunkEvent(sessionID, "workflow-step:review-plan", tmuxSession, "short pane", 2))
+	if _, ok := store.SetDisplayContent(terminalID, streamContent, "tmux_stream"); !ok {
+		t.Fatal("expected live stream transcript to be stored")
+	}
+	store.HandleEvent(sessionID, terminalRouteEndEvent(sessionID, "workflow-step:review-plan", tmuxSession, 60))
+
+	oldRunOutput := runTerminalTmuxOutputCommand
+	runTerminalTmuxOutputCommand = func(context.Context, ...string) (string, error) {
+		t.Fatal("settled history attempted capture-pane despite a retained tmux stream")
+		return "", nil
+	}
+	defer func() { runTerminalTmuxOutputCommand = oldRunOutput }()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/terminals/"+terminalID+"?content=history", nil)
+	req = mux.SetURLVars(req, map[string]string{"terminal_id": terminalID})
+	rec := httptest.NewRecorder()
+	api.handleGetTerminal(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get status = %d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	var response terminals.Snapshot
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode history response: %v", err)
+	}
+	if response.Content != streamContent || response.ContentSource != "tmux_stream" {
+		t.Fatalf("idle stream = source %q content %q, want retained stream", response.ContentSource, response.Content)
+	}
+}
+
 func TestTerminalRoutesGetTerminalCapturesRunningTmuxVisibleScreen(t *testing.T) {
 	store := terminals.NewStore()
 	api := &StreamingAPI{terminalStore: store}
@@ -1418,7 +1455,7 @@ func TestTerminalRoutesKillTerminalKillsTmuxAndMarksFailed(t *testing.T) {
 	}
 }
 
-func TestTerminalRoutesKillTerminalIsIdempotentForCompletedSnapshot(t *testing.T) {
+func TestTerminalRoutesKillTerminalClosesCompletedLiveProcessWithoutChangingOutcome(t *testing.T) {
 	store := terminals.NewStore()
 	api := &StreamingAPI{terminalStore: store}
 	sessionID := "session-terminal-kill-completed"
@@ -1442,8 +1479,8 @@ func TestTerminalRoutesKillTerminalIsIdempotentForCompletedSnapshot(t *testing.T
 	if rec.Code != http.StatusOK {
 		t.Fatalf("kill completed status = %d body=%s, want 200", rec.Code, rec.Body.String())
 	}
-	if called {
-		t.Fatalf("completed terminal should not call tmux kill")
+	if !called {
+		t.Fatalf("completed terminal with a live process should call tmux kill")
 	}
 	var response terminalActionResponse
 	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
@@ -1451,6 +1488,9 @@ func TestTerminalRoutesKillTerminalIsIdempotentForCompletedSnapshot(t *testing.T
 	}
 	if response.Terminal.Active || response.Terminal.State != "completed" {
 		t.Fatalf("terminal active/state = %v/%q, want false/completed", response.Terminal.Active, response.Terminal.State)
+	}
+	if response.Terminal.ProcessState != "closed" || response.Terminal.TmuxSession != "" {
+		t.Fatalf("terminal process/tmux = %q/%q, want closed/empty", response.Terminal.ProcessState, response.Terminal.TmuxSession)
 	}
 }
 

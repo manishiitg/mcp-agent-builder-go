@@ -9,11 +9,13 @@ export type ReportHumanInputContextSection = {
 export function reportHumanInputStatusLabel(input: ReportHumanInput): string {
 	if (input.status === 'answered') {
 		if (input.source === 'chief_of_staff') return 'Waiting for Chief of Staff'
+		if (input.source === 'strategy_auditor') return 'Waiting for Strategy Auditor'
 		if (input.source === 'goal_advisor') return 'Waiting for Goal Advisor'
 		return 'Waiting for Pulse'
 	}
 	if (input.status === 'claimed') {
 		if (input.source === 'chief_of_staff') return 'Chief of Staff is working'
+		if (input.source === 'strategy_auditor') return 'Strategy Auditor is working'
 		if (input.source === 'goal_advisor') return 'Goal Advisor is working'
 		return 'Pulse is working'
 	}
@@ -28,7 +30,7 @@ export function reportHumanInputHistory(inputs: ReportHumanInput[], limit = 4): 
     .slice(0, limit)
 }
 
-const CONTEXT_MARKER_PATTERN = /(?:^|\s)(Proposal|Exact intended edits(?: if approved)?|Rationale|Expected impact|Risk|Evidence):\s*/gi
+const CONTEXT_MARKER_PATTERN = /(?:^|\s)(Proposal|Strategy Auditor specialization|Goal Advisor specialization|Exact intended edits(?: if approved)?|Rationale|Expected impact|Risk|Evidence):\s*/gi
 
 function displayLabel(value: string): string {
   const normalized = value.trim().toLowerCase()

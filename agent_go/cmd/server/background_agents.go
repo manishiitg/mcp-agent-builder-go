@@ -323,11 +323,24 @@ func (a *BackgroundAgent) GetSnapshot() BackgroundAgentSnapshot {
 	return snap
 }
 
-// SetMetadata stores arbitrary key-value metadata on the agent (thread-safe).
+// SetMetadata merges the given key-value pairs into the agent's existing
+// metadata (thread-safe). A replace-all here would silently wipe
+// registration-time fields (execution_type, workflow_path,
+// suppress_auto_notification, ...) the moment an execution completes, since
+// completion-time callers only know their own subset of keys (iteration,
+// group_name, ...) and have no way to preserve fields set earlier in the
+// execution's lifecycle (PLAT-084 follow-up). An empty/nil value for an
+// existing key still overwrites it — callers that want to clear a key pass
+// it explicitly, same as before; only keys absent from meta are preserved.
 func (a *BackgroundAgent) SetMetadata(meta map[string]string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.Metadata = meta
+	if a.Metadata == nil {
+		a.Metadata = make(map[string]string, len(meta))
+	}
+	for k, v := range meta {
+		a.Metadata[k] = v
+	}
 }
 
 // BackgroundAgentRegistry manages background agents across sessions
@@ -408,6 +421,61 @@ func (r *BackgroundAgentRegistry) GetAll(sessionID string) []*BackgroundAgent {
 		agents = append(agents, agent)
 	}
 	return agents
+}
+
+// ReconcileOrphanedProgressChildren settles progress sub-executions that a
+// finished parent left running, and returns their ids.
+//
+// Workflow and evaluation runs publish per-step progress executions whose ids
+// are built as "<parentID>-step-<n>-<token>" (workflowProgressExecIDForStart).
+// Each is registered on OrchestratorAgentStart and settled on the matching end
+// event — but several real paths never deliver that end. A superseded or
+// abandoned evaluation stops emitting entirely, and a todo_task_orchestrator's
+// successful turn end is deliberately ignored in favour of a later
+// TodoTaskStepCompleted event that an abandoned run never sends.
+//
+// That matters because HasRunningAgents treats BGAgentRunning as live
+// unconditionally and the registry never deletes entries, so one orphan pins
+// its session busy forever. Observed live (PLAT-091): four
+// eval-full-…-step-0-* children outlived their parent and blocked Pulse's
+// Review+Fix, Finalize, backup and notification for the full three-hour
+// ceiling, on a run that was never marked failed.
+//
+// The parent finishing is a sound completion boundary: a progress child cannot
+// still be doing work once the execution that owns it has settled. Only
+// descendants of that parent are touched, so unrelated children keep holding
+// the session open exactly as before.
+func (r *BackgroundAgentRegistry) ReconcileOrphanedProgressChildren(sessionID, parentExecutionID, reason string) []string {
+	parentExecutionID = strings.TrimSpace(parentExecutionID)
+	if r == nil || parentExecutionID == "" {
+		return nil
+	}
+	prefix := parentExecutionID + "-step-"
+
+	r.mu.RLock()
+	sessionAgents, ok := r.agents[sessionID]
+	orphans := make([]*BackgroundAgent, 0, 4)
+	if ok {
+		for id, agent := range sessionAgents {
+			if agent == nil || !strings.HasPrefix(id, prefix) {
+				continue
+			}
+			orphans = append(orphans, agent)
+		}
+	}
+	r.mu.RUnlock()
+
+	settled := make([]string, 0, len(orphans))
+	for _, agent := range orphans {
+		// GetStatus takes the agent's own lock, so this must happen outside the
+		// registry lock above.
+		if agent.GetStatus() != BGAgentRunning {
+			continue
+		}
+		agent.SetError(reason)
+		settled = append(settled, agent.ID)
+	}
+	return settled
 }
 
 // CancelAgent cancels a specific background agent
@@ -1823,7 +1891,7 @@ func workflowRunGoalAlignmentDirective(snap BackgroundAgentSnapshot) string {
 		stepNote = fmt.Sprintf(" This was a single-step run for `%s`, so distinguish step evidence from full-workflow evidence.", stepID)
 	}
 
-	return fmt.Sprintf("\n\nAfter backup, do org goal alignment for this run. If `pulse/goals.html` exists, call read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/org-goals.md\"}]), read `pulse/goals.html`, and compare `%s` against any goals whose contributing workflows name this workflow. Use concrete evidence from %s, `builder/improve.html`, `reports/`, and `db/db.sqlite`. In your reply include a short `Org goal alignment` section: goal, status (`on-track`, `at-risk`, `off-track`, or `unknown`), evidence path, gap, and next action.%s If no goal names this workflow, classify it as supporting/maintenance or unaligned. Update `pulse/goals.html` only when this run provides concrete new evidence that changes the scorecard; load read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/org-html.md\"}]) first and preserve goal history. Do not invent proxy metrics.", workflowRef, runEvidencePath, stepNote)
+	return fmt.Sprintf("\n\nAfter backup, do org goal alignment for this run. If `pulse/goals.html` exists, call read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/org-goals.md\"}]), read `pulse/goals.html`, and compare `%s` against any goals whose contributing workflows name this workflow. Use concrete evidence from %s, typed Pulse state from get_pulse_state, `reports/`, and `db/db.sqlite`. In your reply include a short `Org goal alignment` section: goal, status (`on-track`, `at-risk`, `off-track`, or `unknown`), evidence path, gap, and next action.%s If no goal names this workflow, classify it as supporting/maintenance or unaligned. Update `pulse/goals.html` only when this run provides concrete new evidence that changes the scorecard; load read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/org-html.md\"}]) first and preserve goal history. Do not invent proxy metrics.", workflowRef, runEvidencePath, stepNote)
 }
 
 func workflowRunCompletionDirective(snap BackgroundAgentSnapshot) string {

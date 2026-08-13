@@ -162,9 +162,11 @@ func TestCaptureChatHistoryTerminalSnapshotsRedactsAndPreservesAnsi(t *testing.T
 	}
 }
 
-func TestCaptureChatHistoryTerminalSnapshotsPrefersRuntimeTmuxCapture(t *testing.T) {
+func TestCaptureChatHistoryTerminalSnapshotsPrefersStoredTmuxStream(t *testing.T) {
+	captureCalled := false
 	oldCapture := captureChatHistoryTerminalPaneLines
 	captureChatHistoryTerminalPaneLines = func(_ context.Context, tmuxSession string, lines int) (string, error) {
+		captureCalled = true
 		if tmuxSession != "live-runtime-pane" {
 			t.Fatalf("tmux session = %q, want live-runtime-pane", tmuxSession)
 		}
@@ -178,16 +180,20 @@ func TestCaptureChatHistoryTerminalSnapshotsPrefersRuntimeTmuxCapture(t *testing
 	sessionID := "chat-runtime-terminal"
 	store := terminals.NewStore()
 	api := &StreamingAPI{terminalStore: store}
-	if _, ok := store.UpsertStaticSnapshot(sessionID, terminals.Snapshot{
-		OwnerID:       "main:" + sessionID,
-		ExecutionKind: "main_agent",
-		StepTransport: "tmux",
-		ContentSource: "tmux_pipe",
-		TmuxSession:   "live-runtime-pane",
-		Content:       "[terminal output truncated; showing latest output]\n0;bad-title\a\x1b[13;2Hpipe output\n",
-		UpdatedAt:     time.Now(),
-	}); !ok {
-		t.Fatal("expected pipe terminal snapshot to be stored")
+	terminalID := sessionID + ":main:" + sessionID
+	store.HandleEvent(sessionID, terminalRouteChunkEvent(
+		sessionID,
+		"main:"+sessionID,
+		"live-runtime-pane",
+		"initial screen",
+		1,
+	))
+	if _, ok := store.SetDisplayContent(
+		terminalID,
+		"\x1bcfirst raw line\r\nsecond raw line\r\nfinal raw line\n",
+		"tmux_stream",
+	); !ok {
+		t.Fatal("expected live tmux stream to be stored")
 	}
 	runtime := &ChatHistoryAgentRuntime{
 		Kind:          "coding_agent",
@@ -209,20 +215,16 @@ func TestCaptureChatHistoryTerminalSnapshotsPrefersRuntimeTmuxCapture(t *testing
 		t.Fatalf("terminal snapshot count = %d, want 1", len(snapshots))
 	}
 	got := snapshots[0]
-	if got.StepTransport != "tmux" || got.TmuxSession != "live-runtime-pane" || got.ContentSource != "tmux_capture" {
+	if got.TmuxSession != "live-runtime-pane" || got.ContentSource != "tmux_stream" {
 		t.Fatalf("runtime fallback metadata = transport:%q tmux:%q source:%q", got.StepTransport, got.TmuxSession, got.ContentSource)
 	}
-	if got.WorkflowPath != "Workflow/substack" || got.OwnerID != "main:"+sessionID || got.ExecutionKind != "main_agent" {
-		t.Fatalf("runtime fallback identity = %#v", got)
+	if captureCalled {
+		t.Fatal("capture-pane fallback ran even though a complete tmux stream was stored")
 	}
-	if !strings.Contains(got.Content, "\x1b[32m") || !strings.Contains(got.Content, "runtime output") {
-		t.Fatalf("expected ANSI runtime terminal content, got %q", got.Content)
-	}
-	if strings.Contains(got.Content, "pipe output") || strings.Contains(got.Content, "0;bad-title") {
-		t.Fatalf("expected runtime capture to replace raw pipe snapshot, got %q", got.Content)
-	}
-	if strings.Contains(got.Content, "super-secret") || !strings.Contains(got.Content, "MCP_API_TOKEN=[redacted]") {
-		t.Fatalf("runtime fallback snapshot was not redacted: %q", got.Content)
+	for _, line := range []string{"first raw line", "second raw line", "final raw line"} {
+		if !strings.Contains(got.Content, line) {
+			t.Fatalf("stored stream lost %q: %q", line, got.Content)
+		}
 	}
 }
 
@@ -1719,6 +1721,19 @@ func TestSeedCodingAgentRuntimeFromCurrentConversationReplacesIncompleteCursorHa
 	}
 	if got := requireAgentHandle(t, agent).Provider.NativeSessionID; got != "cursor-native-restored" {
 		t.Fatalf("native session ID = %q", got)
+	}
+}
+
+func TestCodingAgentHasNativeResumeRejectsHandleWithoutNativeID(t *testing.T) {
+	agent := testAgentWithHandle("chat-1", llmtypes.CodingProviderSessionHandle{
+		Provider:   "claude-code",
+		Transport:  llmtypes.CodingProviderTransportTmux,
+		WorkingDir: "/workspace",
+		Model:      "claude-opus-5",
+		Status:     llmtypes.CodingProviderSessionStatusIdle,
+	})
+	if codingAgentHasNativeResume("claude-code", agent) {
+		t.Fatal("handle without native session ID must not bypass persisted-runtime recovery")
 	}
 }
 

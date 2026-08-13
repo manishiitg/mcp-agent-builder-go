@@ -95,28 +95,19 @@ func (hcpo *StepBasedWorkflowOrchestrator) GetLearningMetadata(
 	return &metadata, nil
 }
 
-func inferHasNewLearningFromResult(result string) (bool, string, float64) {
-	trimmed := strings.TrimSpace(result)
-	if trimmed == "" {
-		return true, "learning result empty; conservatively treat as new learning", 0.4
+// learningArtifactChange classifies a learning turn from the managed artifact
+// tree itself. Agent prose is not evidence of a write: a turn can mention files
+// changed by a KB/DB operation while leaving learnings byte-identical.
+func learningArtifactChange(beforeRef, afterRef string) (bool, string, float64) {
+	if beforeRef != afterRef {
+		return true, "managed learning artifact tree changed", 1
 	}
+	return false, "managed learning artifact tree was byte-identical", 1
+}
 
-	lines := strings.Split(trimmed, "\n")
-	for _, line := range lines {
-		normalized := strings.ToLower(strings.TrimSpace(line))
-		switch {
-		case strings.HasPrefix(normalized, "learnings updated: files changed:"):
-			return true, "direct learnings turn reported changed files", 0.95
-		case strings.Contains(normalized, "no learning changes"):
-			return false, "direct learnings turn reported no learning changes were needed", 0.9
-		case strings.Contains(normalized, "nothing new worth capturing"):
-			return false, "agent said there was nothing new worth capturing", 0.9
-		case strings.Contains(normalized, "already covers it"):
-			return false, "agent said existing learnings already cover the pattern", 0.85
-		}
-	}
-
-	return true, "learning turn reported file updates or other non-empty output", 0.7
+func refreshLearningMetadataIdentity(metadata *LearningMetadata, stepID, stepPath string) {
+	metadata.StepID = stepID
+	metadata.StepPath = stepPath
 }
 
 // updateLearningMetadataWithTurnCount updates the learning metadata with TurnCount-based complexity tracking.
@@ -167,6 +158,10 @@ func (hcpo *StepBasedWorkflowOrchestrator) updateLearningMetadataWithTurnCount(
 	}
 
 	// Update common fields
+	// Step IDs are stable, but step_path is an execution position and changes
+	// whenever the plan is reordered. Refresh both on every write rather than
+	// preserving creation-time identity forever.
+	refreshLearningMetadataIdentity(&metadata, learningPathIdentifier, stepPath)
 	metadata.TotalIterations++
 	metadata.LastTurnCount = turnCount
 	metadata.LastExecutionLLM = executionLLM

@@ -274,7 +274,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) ReadStepOverrides(ctx context.Context
 			DisableParallelToolExecution *bool    `json:"disable_parallel_tool_execution"`
 			ExecutionMaxTurns            *int     `json:"execution_max_turns"`
 			EnabledCustomTools           []string `json:"enabled_custom_tools"`
-			GlobalSkillObjective         string   `json:"global_skill_objective"`
 		} `json:"execution_defaults"`
 	}
 	if err := json.Unmarshal([]byte(manifestContent), &manifest); err != nil {
@@ -282,7 +281,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) ReadStepOverrides(ctx context.Context
 	}
 
 	ed := manifest.ExecutionDefaults
-	if ed.DisableParallelToolExecution == nil && ed.ExecutionMaxTurns == nil && len(ed.EnabledCustomTools) == 0 && ed.GlobalSkillObjective == "" {
+	if ed.DisableParallelToolExecution == nil && ed.ExecutionMaxTurns == nil && len(ed.EnabledCustomTools) == 0 {
 		return nil, nil
 	}
 
@@ -291,7 +290,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) ReadStepOverrides(ctx context.Context
 		DisableParallelToolExecution: ed.DisableParallelToolExecution,
 		ExecutionMaxTurns:            ed.ExecutionMaxTurns,
 		EnabledCustomTools:           ed.EnabledCustomTools,
-		GlobalSkillObjective:         ed.GlobalSkillObjective,
 	}, nil
 }
 
@@ -386,6 +384,9 @@ func MergeAgentConfigFields(target *AgentConfigs, source *AgentConfigs, stepID s
 	if source.LockLearnings != nil {
 		target.LockLearnings = source.LockLearnings
 	}
+	if source.LockLearningsReason != "" {
+		target.LockLearningsReason = source.LockLearningsReason
+	}
 	if source.LearningObjective != "" {
 		target.LearningObjective = source.LearningObjective
 	}
@@ -397,6 +398,12 @@ func MergeAgentConfigFields(target *AgentConfigs, source *AgentConfigs, stepID s
 	}
 	if source.ExecutionTier != "" {
 		target.ExecutionTier = source.ExecutionTier
+	}
+	if source.ExecutionTierReason != "" {
+		target.ExecutionTierReason = source.ExecutionTierReason
+	}
+	if source.ExecutionLLMReason != "" {
+		target.ExecutionLLMReason = source.ExecutionLLMReason
 	}
 	if source.SelectedServers != nil {
 		target.SelectedServers = source.SelectedServers
@@ -422,10 +429,6 @@ func MergeAgentConfigFields(target *AgentConfigs, source *AgentConfigs, stepID s
 		target.CodingAgentTmuxLifecycle = source.CodingAgentTmuxLifecycle
 		logger.Info(fmt.Sprintf("🔧 Using step config (ID: %s) - coding_agent_tmux_lifecycle: %s", stepID, source.CodingAgentTmuxLifecycle))
 	}
-	if source.DisableTierOptimization != nil {
-		target.DisableTierOptimization = source.DisableTierOptimization
-		logger.Info(fmt.Sprintf("🔧 Using step config (ID: %s) - disable_tier_optimization: %v", stepID, *source.DisableTierOptimization))
-	}
 	if source.DeclaredExecutionMode != "" {
 		target.DeclaredExecutionMode = source.DeclaredExecutionMode
 	}
@@ -438,8 +441,27 @@ func MergeAgentConfigFields(target *AgentConfigs, source *AgentConfigs, stepID s
 	if source.ReviewNotes != "" {
 		target.ReviewNotes = source.ReviewNotes
 	}
-	if source.GlobalSkillObjective != "" {
-		target.GlobalSkillObjective = source.GlobalSkillObjective
+
+	// PLAT-061/E4. These were missing, so on the merge path — taken whenever the
+	// step already carries in-memory AgentConfigs — a saved lock_code:true or
+	// knowledgebase_access never reached the runtime, silently. Three of them
+	// gate writes, which is why an incomplete merge here is a correctness bug
+	// rather than untidiness. TestMergeAgentConfigFieldsCoversEveryField fails
+	// when a new field is added without a case.
+	if source.LockCode != nil {
+		target.LockCode = source.LockCode
+	}
+	if source.KnowledgebaseAccess != "" {
+		target.KnowledgebaseAccess = source.KnowledgebaseAccess
+	}
+	if source.KnowledgebaseContribution != "" {
+		target.KnowledgebaseContribution = source.KnowledgebaseContribution
+	}
+	if source.ExecutionMaxTurns != nil {
+		target.ExecutionMaxTurns = source.ExecutionMaxTurns
+	}
+	if source.SuccessfulRuns != nil {
+		target.SuccessfulRuns = source.SuccessfulRuns
 	}
 }
 
@@ -527,7 +549,7 @@ func ApplyStepConfigFromFile(
 
 	// Apply global overrides from workflow.json execution_defaults (highest priority)
 	// This must run even when no step_config.json match exists, since execution_defaults
-	// (e.g., global_skill_objective, disable_learning) apply to ALL steps regardless of per-step config.
+	// (e.g., execution_max_turns, disable_parallel_tool_execution) apply to ALL steps regardless of per-step config.
 	overrides, err := orchestrator.ReadStepOverrides(ctx)
 	if err != nil {
 		orchestrator.GetLogger().Warn(fmt.Sprintf("⚠️ Failed to read step_override.json in ApplyStepConfigFromFile: %v", err))

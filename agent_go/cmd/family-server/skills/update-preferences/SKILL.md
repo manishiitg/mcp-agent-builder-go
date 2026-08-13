@@ -15,9 +15,9 @@ things the parent has told you in chat that aren't already captured by a dedicat
 field (`set_child_profile`, `set_parent_label`) — so they never have to repeat
 themselves in a later conversation. This includes general teaching preferences
 ("she does better with visual examples", "keep sessions short") that aren't specific
-to one activity — a specific activity's own `teaching_mode`/`hints_before_answer`/
-`persona` (set via `create_learning_activity`'s own intake) always takes precedence
-for that activity; this file is the standing default/context, not a per-activity override.
+to one activity — a specific activity's own `goal`/`persona` (set via
+`create_learning_activity`'s own intake) always takes precedence for that activity;
+this file is the standing default/context, not a per-activity override.
 
 1. **Read what's already captured**: `cat memory/preferences.md` if it exists (it may
    not, on a fresh family — that's fine, start from empty).

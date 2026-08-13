@@ -10,14 +10,12 @@ import (
 )
 
 const (
-	pulseFinalCommandDashboard = "dashboard"
-	pulseFinalCommandBackup    = "backup"
-	pulseFinalCommandPublish   = "publish"
-	pulseFinalCommandNotify    = "notify"
+	pulseFinalCommandBackup  = "backup"
+	pulseFinalCommandPublish = "publish"
+	pulseFinalCommandNotify  = "notify"
 )
 
 var pulseFinalCommandOrder = []string{
-	pulseFinalCommandDashboard,
 	pulseFinalCommandBackup,
 	pulseFinalCommandPublish,
 	pulseFinalCommandNotify,
@@ -28,10 +26,9 @@ var pulseFinalCommandOrder = []string{
 var pulseFinalCommandResultValues = []string{"running", "done", "skipped", "blocked", "failed"}
 
 var validPulseFinalCommands = map[string]bool{
-	pulseFinalCommandDashboard: true,
-	pulseFinalCommandBackup:    true,
-	pulseFinalCommandPublish:   true,
-	pulseFinalCommandNotify:    true,
+	pulseFinalCommandBackup:  true,
+	pulseFinalCommandPublish: true,
+	pulseFinalCommandNotify:  true,
 }
 
 const pulseFinalCommandStateSchema = `CREATE TABLE IF NOT EXISTS pulse_final_command_state (
@@ -180,6 +177,11 @@ func markPulseFinalCommandStateFromAgent(ctx context.Context, workspacePath, com
 	} else if changed != 1 {
 		return nil, fmt.Errorf("final command %q changed concurrently; refresh its state before retrying", command)
 	}
+	if status == "done" {
+		if err := reconcileFinalCommandOwnedFindings(ctx, db, command, pulseRunID, now); err != nil {
+			return nil, err
+		}
+	}
 	return getPulseFinalCommandStateByCommand(ctx, db, normalized, command)
 }
 
@@ -252,7 +254,86 @@ func markPulseFinalCommandStateInDB(ctx context.Context, db *sql.DB, workspacePa
 	if err != nil {
 		return nil, err
 	}
+	if status == "done" {
+		if err := reconcileFinalCommandOwnedFindings(ctx, db, command, pulseRunID, now); err != nil {
+			return nil, err
+		}
+	}
 	return getPulseFinalCommandStateByCommand(ctx, db, workspacePath, command)
+}
+
+var pulseFinalCommandOwnedReasonCodes = map[string][]string{
+	pulseFinalCommandPublish: {
+		"finalizer_publish_owned",
+		"published_snapshots_are_publish_owned",
+	},
+}
+
+// reconcileFinalCommandOwnedFindings closes the old false-positive class where
+// a reviewer filed normal stage separation as an external platform defect.
+// Matching uses the stable reason_code written by the lifecycle, never prose.
+// A genuine terminal command failure is untouched and remains reportable.
+func reconcileFinalCommandOwnedFindings(ctx context.Context, db *sql.DB, command, pulseRunID, recordedAt string) error {
+	reasonCodes := pulseFinalCommandOwnedReasonCodes[command]
+	if len(reasonCodes) == 0 {
+		return nil
+	}
+	var lifecycleTableCount int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master
+		WHERE type='table' AND name IN ('run_concerns','pulse_finding_events')`).Scan(&lifecycleTableCount); err != nil {
+		return err
+	}
+	if lifecycleTableCount != 2 {
+		return nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(reasonCodes)), ",")
+	queryArgs := make([]interface{}, 0, len(reasonCodes))
+	for _, reasonCode := range reasonCodes {
+		queryArgs = append(queryArgs, reasonCode)
+	}
+	rows, err := db.QueryContext(ctx, fmt.Sprintf(`SELECT c.fingerprint,
+		COALESCE((SELECT e.finding_id FROM pulse_finding_events e
+			WHERE e.fingerprint=c.fingerprint ORDER BY e.recorded_at DESC, e._id DESC LIMIT 1), '')
+		FROM run_concerns c
+		WHERE c.status='external_action_required'
+		AND COALESCE((SELECT json_extract(e.metadata_json, '$.reason_code')
+			FROM pulse_finding_events e WHERE e.fingerprint=c.fingerprint
+			AND e.event_type='external_action_required'
+			ORDER BY e.recorded_at DESC, e._id DESC LIMIT 1), '') IN (%s)`, placeholders), queryArgs...)
+	if err != nil {
+		return err
+	}
+	type findingRef struct{ fingerprint, findingID string }
+	var findings []findingRef
+	for rows.Next() {
+		var finding findingRef
+		if err := rows.Scan(&finding.fingerprint, &finding.findingID); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		findings = append(findings, finding)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, finding := range findings {
+		summary := fmt.Sprintf("Pulse finalizer command %s completed successfully; normal stage ownership is not a platform defect.", command)
+		if _, err := db.ExecContext(ctx, `UPDATE run_concerns SET status='resolved', resolved_at=?,
+			resolved_by='pulse_finalizer', resolution_note=? WHERE fingerprint=? AND status='external_action_required'`,
+			recordedAt, summary, finding.fingerprint); err != nil {
+			return err
+		}
+		metadata := fmt.Sprintf(`{"command":%q,"status":"done","reconciled_reason":"finalizer_stage_completed"}`, command)
+		if _, err := db.ExecContext(ctx, `INSERT INTO pulse_finding_events
+			(fingerprint, finding_id, pulse_run_id, attempt_id, event_type, summary, metadata_json, recorded_at)
+			VALUES (?, ?, ?, '', 'closed', ?, ?, ?)
+			ON CONFLICT(fingerprint, pulse_run_id, attempt_id, event_type) DO UPDATE SET
+				summary=excluded.summary, metadata_json=excluded.metadata_json, recorded_at=excluded.recorded_at`,
+			finding.fingerprint, finding.findingID, strings.TrimSpace(pulseRunID), summary, metadata, recordedAt); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func getPulseFinalCommandStates(ctx context.Context, workspacePath string) ([]PulseFinalCommandState, error) {
@@ -376,43 +457,48 @@ func finalizeAllUnresolvedPulseFinalCommands(ctx context.Context, workspacePath,
 	return result.RowsAffected()
 }
 
-// reconcilePulseDashboardCommand runs only after the dedicated dashboard stage
-// became idle cleanly and validatePulseDashboardArtifact proved the new
-// projection. That backend proof is sufficient to mark dashboard done even if
-// the agent forgot to call record_pulse_result itself.
+// finalizeAllRunningPulseReviewLogs closes reviewer rows that were left mid-flight.
 //
-// The dashboard has its own stage, so the blanket
-// finalizeUnresolvedPulseFinalCommands is wrong here: it would mark
-// backup/publish/notify failed before their stage has even started. This is not
-// an assumption of success: the caller has already checked the artifact
-// contract and read-back boundary. The finalizer commands do not have an
-// equivalent deterministic artifact proof, so they must still self-report.
-func reconcilePulseDashboardCommand(ctx context.Context, workspacePath, pulseRunID string) error {
-	normalized, db, err := openPulseModuleStateDB(ctx, workspacePath, true)
-	if err != nil {
-		return err
+// PLAT-054 / PLAT-017. pulse_review_log is only ever written by an agent through
+// recordPulseReviewOnDB, so a pass that dies between "review started" and
+// "review recorded" strands its row at status='running' permanently. The
+// startup sweep already reconciles pulse_final_command_state the same way;
+// without this, Upwork accumulated three stranded workflow_review rows from
+// three different runs on a single day, which then read as live reviewer work
+// that no longer exists.
+//
+// Deliberately narrow: only rows already marked running are touched, and only
+// the status/verdict fields are rewritten. Findings and verification counts the
+// dead pass genuinely recorded stay exactly as they were — the row is being
+// closed, not erased.
+func finalizeAllRunningPulseReviewLogs(ctx context.Context, workspacePath, reason string) (int64, error) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return 0, fmt.Errorf("reason is required")
+	}
+	_, db, err := openPulseModuleStateDB(ctx, workspacePath, false)
+	if err != nil || db == nil {
+		return 0, err
 	}
 	defer db.Close()
 
-	var currentStatus string
-	err = db.QueryRowContext(ctx, `SELECT status FROM pulse_final_command_state
-		WHERE workspace_path = ? AND pulse_run_id = ? AND command = ?`,
-		normalized, strings.TrimSpace(pulseRunID), pulseFinalCommandDashboard).Scan(&currentStatus)
-	if err != nil {
+	// The table is created by the workflow-side reviewer path, so a workspace
+	// that has never run a Pulse review legitimately has no such table.
+	var exists string
+	if err := db.QueryRowContext(ctx,
+		`SELECT name FROM sqlite_master WHERE type='table' AND name='pulse_review_log'`).Scan(&exists); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("dashboard command was not initialized for Pulse run %q", strings.TrimSpace(pulseRunID))
+			return 0, nil
 		}
-		return err
+		return 0, err
 	}
-	if currentStatus == "done" {
-		return nil
+
+	result, err := db.ExecContext(ctx, `UPDATE pulse_review_log SET
+			status = 'failed',
+			verdict = CASE WHEN TRIM(verdict) = '' THEN ? ELSE verdict END
+		WHERE status = 'running'`, reason)
+	if err != nil {
+		return 0, err
 	}
-	if currentStatus == "waiting" || currentStatus == "running" {
-		if _, markErr := markPulseFinalCommandStateInDB(ctx, db, normalized, pulseFinalCommandDashboard, pulseRunID,
-			"done", "Dashboard artifact rendered and validated by the scheduler"); markErr != nil {
-			return markErr
-		}
-		return nil
-	}
-	return fmt.Errorf("dashboard command ended with non-success status %q", currentStatus)
+	return result.RowsAffected()
 }

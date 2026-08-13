@@ -164,6 +164,35 @@ func TestGetEventsInitialFetchPreservesStructuralEventsOutsideLimit(t *testing.T
 	}
 }
 
+func TestGetEventsOffsetPaginationStopsAfterExactFinalPage(t *testing.T) {
+	store := NewEventStore(20)
+	defer store.Stop()
+
+	now := time.Now()
+	const sessionID = "session-offset-pagination"
+	for i := 0; i < 6; i++ {
+		store.AddEvent(sessionID, Event{
+			ID:        fmt.Sprintf("event-%d", i),
+			Type:      string(pkgevents.ToolCallStart),
+			Timestamp: now.Add(time.Duration(i) * time.Millisecond),
+			SessionID: sessionID,
+			Data: &pkgevents.AgentEvent{
+				Type:      pkgevents.ToolCallStart,
+				Timestamp: now.Add(time.Duration(i) * time.Millisecond),
+			},
+		})
+	}
+
+	first := store.GetEvents(sessionID, GetEventsOptions{SinceIndex: -1, Limit: 3, Offset: 0})
+	if !first.HasMore {
+		t.Fatal("first exact page should advertise the remaining page")
+	}
+	last := store.GetEvents(sessionID, GetEventsOptions{SinceIndex: -1, Limit: 3, Offset: 3})
+	if last.HasMore {
+		t.Fatal("final exact page must not advertise a nonexistent next page")
+	}
+}
+
 func TestEventStoreRetentionPreservesStructuralWorkflowMilestones(t *testing.T) {
 	store := NewEventStore(5)
 	defer store.Stop()

@@ -21,19 +21,30 @@ const activityManifestName = "activity.json"
 // Items are BARE filenames within the folder, in the order the child works
 // through them (empty = an instruction-only / dynamically-generated activity).
 // The answer key (`*-KEY.md`) lives in the folder but is deliberately NOT in
-// Items — it's the parent's, and what the tutor reveals to the child is
-// governed by TeachingMode, not by the file's presence.
+// Items — it's the parent's, and what the tutor reveals to the child is the
+// tutor's judgment in the moment, not something the file's presence decides.
 type activityManifest struct {
-	Title             string   `json:"title"`
-	Subject           string   `json:"subject,omitempty"`
-	Topic             string   `json:"topic,omitempty"`
-	Items             []string `json:"items,omitempty"`
-	GuideNote         string   `json:"guide_note,omitempty"`          // HOW to run it: pacing, tone, what to do if stuck
-	Goal              string   `json:"goal,omitempty"`                // WHAT completion looks like: the tutor steers back to this even if the chat wanders
-	TeachingMode      string   `json:"teaching_mode,omitempty"`       // beginner | graduated | strict
-	HintsBeforeAnswer int      `json:"hints_before_answer,omitempty"` // for graduated
-	Persona           string   `json:"persona,omitempty"`
-	CreatedAt         string   `json:"created_at,omitempty"`
+	Title   string   `json:"title"`
+	Subject string   `json:"subject,omitempty"`
+	Topic   string   `json:"topic,omitempty"`
+	Items   []string `json:"items,omitempty"`
+	// Goal is WHAT the activity is for — what the child should get out of it,
+	// in the parent's own words. HOW to get there is deliberately not stored:
+	// it's the tutor's judgment, live in the conversation.
+	//
+	// This replaced two earlier fields that both tried to pin the "how" down in
+	// advance — guide_note (pacing/order/what-to-do-if-stuck) and teaching_mode
+	// (a beginner|graduated|strict enum with an hints_before_answer count).
+	// Both were decided before anyone knew how the session would actually go,
+	// and then could not bend when it went differently: a child who is
+	// genuinely stuck, out of time, or facing a question that turned out to be
+	// wrong needs a tutor that adapts, not one honouring a setting made
+	// yesterday. The teaching judgment those encoded now lives in
+	// childSystemPrompt as default behaviour the tutor applies with sense, and
+	// Goal steers it where the parent actually wants something specific.
+	Goal      string `json:"goal,omitempty"`
+	Persona   string `json:"persona,omitempty"`
+	CreatedAt string `json:"created_at,omitempty"`
 }
 
 // Activity is a loaded activity: its workspace-relative folder Dir plus the
@@ -147,7 +158,7 @@ func findActivityForPath(path string) string {
 
 // currentActivityPointer is the tiny root-level `current-activity.json` naming
 // which activity the child session is currently bound to. Everything else the
-// child needs (items, guide_note, teaching_mode, persona) it reads from that
+// child needs (items, goal, persona) it reads from that
 // activity's own activity.json, which it has full access to.
 type currentActivityPointer struct {
 	Dir string `json:"dir"`

@@ -343,11 +343,13 @@ func migratePackages(root string, itemToActivityDir, manifestToActivityDir map[s
 			createdAt = mtime.UTC().Format(time.RFC3339)
 		}
 		m := activityManifest{
-			Title:     pkg.Title,
-			Subject:   subject,
-			Topic:     topic,
-			Items:     newItems,
-			GuideNote: pkg.GuideNote,
+			Title:   pkg.Title,
+			Subject: subject,
+			Topic:   topic,
+			Items:   newItems,
+			// The old package format's guide_note lands in Goal — the single
+			// instruction field that absorbed it (see activityManifest).
+			Goal:      pkg.GuideNote,
 			CreatedAt: createdAt,
 		}
 		mb, _ := json.MarshalIndent(m, "", "  ")

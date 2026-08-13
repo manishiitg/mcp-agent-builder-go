@@ -40,8 +40,8 @@ func TestPulseAgentMetricsCaptureExactExecutionAndJoinReview(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	if err := RecordPulseReview(ctx, workspacePath, "strategy_auditor", "review-1", "pulse-1", "", "## Verdict\nOne strategic gap."); err != nil {
-		t.Fatalf("RecordPulseReview: %v", err)
+	if err := CompletePulseReview(ctx, workspacePath, []string{"strategy_auditor"}, "review-1", "pulse-1", "One strategic gap.", "completed"); err != nil {
+		t.Fatalf("CompletePulseReview: %v", err)
 	}
 	if err := RecordPulseAgentMetric(ctx, workspacePath, PulseAgentMetricRecord{
 		ExecutionID:     "pulse-review-strategy",
@@ -75,9 +75,9 @@ func TestPulseAgentMetricsCaptureExactExecutionAndJoinReview(t *testing.T) {
 		t.Fatalf("metric timing/coverage = %#v", metric)
 	}
 
-	reviews, err := LoadPulseReviewArtifacts(ctx, workspacePath, "strategy_auditor", false, -1)
+	reviews, err := LoadPulseReviewReceipts(ctx, workspacePath, "strategy_auditor", -1)
 	if err != nil {
-		t.Fatalf("LoadPulseReviewArtifacts: %v", err)
+		t.Fatalf("LoadPulseReviewReceipts: %v", err)
 	}
 	if len(reviews) != 1 || reviews[0].Metrics == nil || reviews[0].Metrics.ExecutionID != "pulse-review-strategy" {
 		t.Fatalf("review did not join its metric: %#v", reviews)
@@ -88,16 +88,16 @@ func TestPulseAgentMetricsMakeMissingUsageExplicit(t *testing.T) {
 	workspacePath := concernsWorkspace(t)
 	costledger.SetDefaultLedger(nil)
 	if err := RecordPulseAgentMetric(context.Background(), workspacePath, PulseAgentMetricRecord{
-		ExecutionID: "pulse-fixer-no-ledger",
+		ExecutionID: "pulse-review-no-ledger",
 		PulseRunID:  "pulse-2",
 		ReviewRunID: "review-2",
-		Module:      "pulse_fixer",
-		Role:        "fixer",
+		Module:      "workflow_review",
+		Role:        "reviewer",
 		Status:      "failed",
 	}); err != nil {
 		t.Fatalf("RecordPulseAgentMetric: %v", err)
 	}
-	metrics, err := LoadPulseAgentMetrics(context.Background(), workspacePath, "pulse-2", "pulse_fixer", "fixer", -1)
+	metrics, err := LoadPulseAgentMetrics(context.Background(), workspacePath, "pulse-2", "workflow_review", "reviewer", -1)
 	if err != nil {
 		t.Fatalf("LoadPulseAgentMetrics: %v", err)
 	}

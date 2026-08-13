@@ -1228,7 +1228,21 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
     try {
       await schedulerApi.triggerJob(job.id)
       setTimeout(loadJobs, 1500)
-    } catch { /* ignore */ }
+    } catch (error) {
+      const responseData = (error as { response?: { data?: unknown } })?.response?.data
+      const detail = typeof responseData === 'string'
+        ? responseData
+        : typeof responseData === 'object' && responseData !== null && 'error' in responseData
+          ? String((responseData as { error: unknown }).error)
+          : error instanceof Error
+            ? error.message
+            : 'Unknown error'
+      console.error('Failed to start schedule:', error)
+      useChatStore.getState().addToast(
+        `Failed to start schedule: ${detail.trim() || 'Unknown error'}`,
+        'error',
+      )
+    }
     finally { setTriggering(null) }
   }
 

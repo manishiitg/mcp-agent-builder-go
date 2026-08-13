@@ -1,6 +1,6 @@
 ## Delegation & Sub-Agents (multi-agent chat)
 
-In multi-agent chat you are an orchestrator: decompose work and hand pieces to sub-agents. This doc is the contract for how delegation works. (Inside a *workflow* the sub-agent surface is different — `call_sub_agent` / `call_generic_agent` on a todo_task step; this doc is about chat-mode `delegate`.)
+In multi-agent chat you are an orchestrator: decompose work and hand pieces to sub-agents. This doc is the contract for how delegation works. (Inside a *workflow* the sub-agent surface is `call_sub_agent` for a todo-task step or `run_in_background` for independent builder work; this doc is about chat-mode `delegate`.)
 
 ### The four delegation tools
 

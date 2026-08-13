@@ -240,7 +240,15 @@ func (api *StreamingAPI) handleGetTerminal(w http.ResponseWriter, r *http.Reques
 	// as a lightweight refresh — if the pane content changed (e.g. after Claude
 	// Code context compaction), ChunkIndex increments, the list-poll returns the
 	// new value, and the frontend re-fetches automatically.
-	shouldCaptureTmux := shouldCaptureTerminalPaneForDetail(snapshot, r)
+	// The live-attach transcript already contains the seed plus every streamed
+	// byte and therefore owns the retained Raw scrollback. Do not replace it with
+	// a late capture-pane snapshot when the terminal settles: alternate-screen
+	// CLIs often expose only their final viewport through tmux at that point.
+	preserveSettledStream := !snapshot.Active &&
+		wantsHistoryTerminalContent(r) &&
+		strings.EqualFold(strings.TrimSpace(snapshot.ContentSource), "tmux_stream") &&
+		strings.TrimSpace(snapshot.Content) != ""
+	shouldCaptureTmux := shouldCaptureTerminalPaneForDetail(snapshot, r) && !preserveSettledStream
 	debugTerminal := terminalDebugEnabled(r)
 	debugSource := terminalDebugSource(r)
 	captureSkipReason := terminalCaptureSkipReason(snapshot, r, shouldCaptureTmux)
@@ -678,7 +686,9 @@ func (api *StreamingAPI) handleRefreshTerminal(w http.ResponseWriter, r *http.Re
 	_ = json.NewEncoder(w).Encode(terminalActionResponse{OK: true, Terminal: api.enrichTerminalSnapshot(r.Context(), newTerminalPlanTypeResolver(r.Context()), updated)})
 }
 
-// handleKillTerminal kills the backing tmux session and marks the UI snapshot failed.
+// handleKillTerminal kills the backing tmux session. An active execution is
+// failed; a logically completed execution keeps its completed outcome while
+// its retained continuation process is closed.
 // POST /api/terminals/{terminal_id}/kill
 func (api *StreamingAPI) handleKillTerminal(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -694,11 +704,6 @@ func (api *StreamingAPI) handleKillTerminal(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "Terminal has no tmux session", http.StatusBadRequest)
 		return
 	}
-	if !snapshot.Active {
-		_ = json.NewEncoder(w).Encode(terminalActionResponse{OK: true, Terminal: api.enrichTerminalSnapshot(r.Context(), newTerminalPlanTypeResolver(r.Context()), snapshot)})
-		return
-	}
-
 	ctx, cancel := context.WithTimeout(r.Context(), terminalTmuxActionTimeout)
 	defer cancel()
 	if err := runTerminalTmuxCommand(ctx, "", "kill-session", "-t", snapshot.TmuxSession); err != nil {
@@ -707,12 +712,16 @@ func (api *StreamingAPI) handleKillTerminal(w http.ResponseWriter, r *http.Reque
 			return
 		}
 	}
-	updated, ok := api.terminalStore.MarkFailed(snapshot.TerminalID)
-	if !ok {
-		http.Error(w, "Terminal not found", http.StatusNotFound)
-		return
+	updated := snapshot
+	if snapshot.Active {
+		var marked bool
+		updated, marked = api.terminalStore.MarkFailed(snapshot.TerminalID)
+		if !marked {
+			http.Error(w, "Terminal not found", http.StatusNotFound)
+			return
+		}
+		api.reconcileUnexpectedTerminalExit(snapshot, "killed by operator")
 	}
-	api.reconcileUnexpectedTerminalExit(snapshot, "killed by operator")
 	if registry := api.ensureTerminalLeaseRegistry(); registry != nil {
 		registry.MarkClosed(snapshot.TmuxSession, "killed by operator", time.Now())
 	}

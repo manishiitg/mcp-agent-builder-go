@@ -10,7 +10,7 @@ import {
   type NodeChange,
   type OnNodeDrag
 } from '@xyflow/react'
-import { Braces, Download, FileText, Laptop, ListOrdered, PanelRightClose, RefreshCw, Route, Settings, SlidersHorizontal, Smartphone, Tablet, X } from 'lucide-react'
+import { Braces, FileText, ListOrdered, Route, Settings, X } from 'lucide-react'
 import '@xyflow/react/dist/style.css'
 
 import { useModeStore } from '../../../stores/useModeStore'
@@ -22,12 +22,14 @@ import { WorkflowToolbar } from './WorkflowToolbar'
 import { VariablesSidebar } from './VariablesSidebar'
 import { BatchProgressHeader } from '../BatchProgressHeader'
 import {
-  REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT,
-  reportPreviewPreferenceKey,
   ReportView,
 } from '../ReportViewer'
-import { LogViewer } from '../LogViewer'
-import { WORKFLOW_LOG_REFRESH_EVENT } from '../workflowEvents'
+import {
+  REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT,
+  isReportPreviewDevice,
+  readReportPreviewPreference,
+  type ReportPreviewDevice,
+} from '../../../utils/reportPreviewPreference'
 import { usePlanData, type PlanChanges } from '../hooks/usePlanData'
 import { useEvaluationPlanData } from '../hooks/useEvaluationPlanData'
 import { usePlanToFlow, type WorkflowNode, type WorkflowEdge, type WorkflowNodeData, type StepNodeData, type EvaluationStepNodeData } from '../hooks/usePlanToFlow'
@@ -47,6 +49,11 @@ import {
 import type { VariablesManifest } from '../../../services/api-types'
 import { buildGroupFolderPath } from '../../../utils/workflowUtils'
 import { MarkdownRenderer } from '../../ui/MarkdownRenderer'
+import CostsPopup from '../CostsPopup'
+import ExecutionLogsPopup from '../ExecutionLogsPopup'
+import LearningsPopup from '../LearningsPopup'
+import KBPopup from '../KBPopup'
+import DatabasePopup from '../DatabasePopup'
 
 // Duration to show highlights before clearing (in ms)
 const HIGHLIGHT_DURATION = 4000
@@ -129,6 +136,7 @@ interface WorkflowCanvasProps {
   readOnly?: boolean
   /** Embed only the reusable read-only Plan canvas, without global workflow view switching. */
   embeddedPlanOnly?: boolean
+  openPulseOnMount?: boolean
 }
 
 // On-pane controls for the preview (canvas) pane: a Plan/Report segmented switch
@@ -141,47 +149,31 @@ interface WorkflowCanvasProps {
 export const WORKFLOW_REPORT_EXPORT_EVENT = 'workflow-report-export-requested'
 export const WORKFLOW_REPORT_REFRESH_EVENT = 'workflow-report-refresh-requested'
 
-const PREVIEW_DEVICE_OPTS = [
-  { mode: 'mobile' as const, Icon: Smartphone, label: 'Mobile preview' },
-  { mode: 'tablet' as const, Icon: Tablet, label: 'Tablet preview' },
-  { mode: 'desktop' as const, Icon: Laptop, label: 'Laptop preview' },
-]
-type PreviewDevice = 'mobile' | 'tablet' | 'desktop'
+type PreviewDevice = ReportPreviewDevice
 
 // Shared device-width preference, synced across the on-pane bar, the report
 // shell, and the plan/flow shell via REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT.
 // Per-workflow device preference, scoped by `scopeId` (the workflow's
-// workspacePath). A workflow with no saved choice defaults to desktop so the
-// report/plan uses the available workspace unless the user explicitly chooses
-// the phone preview.
+// workspacePath). A workflow with no saved choice defaults to tablet so the
+// report and chat share the available workspace evenly.
 // Exported for focused layout tests; this module also owns the production canvas.
 // eslint-disable-next-line react-refresh/only-export-components
 export function usePreviewDevice(scopeId?: string | null): PreviewDevice {
-  const read = (): PreviewDevice => {
-    try {
-      const v = localStorage.getItem(reportPreviewPreferenceKey(scopeId))
-      return v === 'mobile' || v === 'tablet' || v === 'desktop' ? v : 'desktop'
-    } catch { return 'desktop' }
-  }
-  const [pref, setPref] = React.useState<PreviewDevice>(read)
+  const [pref, setPref] = React.useState<PreviewDevice>(() => readReportPreviewPreference(scopeId))
   React.useEffect(() => {
     // Re-read when the workflow (scope) changes.
-    setPref(read())
+    setPref(readReportPreviewPreference(scopeId))
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail
       if ((detail?.scopeId ?? null) !== (scopeId ?? null)) return
       const p = detail?.preference
-      if (p === 'mobile' || p === 'tablet' || p === 'desktop') setPref(p)
+      if (isReportPreviewDevice(p)) setPref(p)
     }
     window.addEventListener(REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT, handler)
     return () => window.removeEventListener(REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT, handler)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scopeId])
   return pref
-}
-function setPreviewDevice(mode: PreviewDevice, scopeId?: string | null) {
-  try { localStorage.setItem(reportPreviewPreferenceKey(scopeId), mode) } catch { /* ignore */ }
-  window.dispatchEvent(new CustomEvent(REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT, { detail: { preference: mode, scopeId: scopeId ?? null } }))
 }
 // Tailwind shell width for a device preview (centered, constrained).
 // eslint-disable-next-line react-refresh/only-export-components
@@ -191,179 +183,6 @@ export function previewDeviceShellClass(device: PreviewDevice): string {
     : device === 'tablet'
       ? 'w-full max-w-full'
     : 'w-full'
-}
-
-function PreviewPaneControls({ hasPlan, onExportPlan, onRefreshPlan, scopeId }: { hasPlan: boolean; onExportPlan?: () => void; onRefreshPlan?: () => void; scopeId?: string | null }) {
-  const canvasViewMode = useWorkflowStore(state => state.canvasViewMode)
-  const visibleCanvasViewMode = canvasViewMode === 'soul' ? 'log' : canvasViewMode
-  const workflowWorkspaceView = useWorkflowStore(state => state.workflowWorkspaceView)
-  const isFiles = workflowWorkspaceView === 'files'
-  const isReport = !isFiles && visibleCanvasViewMode === 'report'
-  const isLog = !isFiles && visibleCanvasViewMode === 'log'
-
-  // "New Pulse" dot — show a dot on the Pulse tab when builder/improve.html
-  // changed since the user last viewed it. Per-workspace seen-timestamp persists
-  // in localStorage; cleared whenever the user opens the Pulse tab.
-  const [pulseLastModified, setPulseLastModified] = React.useState<string | null>(null)
-  const [pulseSeenTick, setPulseSeenTick] = React.useState(0)
-  React.useEffect(() => {
-    if (!scopeId) { setPulseLastModified(null); return }
-    let active = true
-    const poll = async () => {
-      try {
-        const res = await agentApi.getBuilderDocsStatus(scopeId)
-        if (active && res.success) setPulseLastModified(res.improve?.last_modified || null)
-      } catch { /* soft signal */ }
-    }
-    void poll()
-    const id = setInterval(() => { void poll() }, 60000)
-    return () => { active = false; clearInterval(id) }
-  }, [scopeId])
-  const hasUnseenPulse = React.useMemo(() => {
-    if (!scopeId || !pulseLastModified) return false
-    void pulseSeenTick
-    let seen: string | undefined
-    try { seen = JSON.parse(localStorage.getItem('pulseSeen') || '{}')[scopeId] } catch { /* ignore */ }
-    return !seen || new Date(pulseLastModified).getTime() > new Date(seen).getTime()
-  }, [scopeId, pulseLastModified, pulseSeenTick])
-  React.useEffect(() => {
-    if (!isLog || !scopeId || !pulseLastModified) return
-    try {
-      const all = JSON.parse(localStorage.getItem('pulseSeen') || '{}')
-      all[scopeId] = pulseLastModified
-      localStorage.setItem('pulseSeen', JSON.stringify(all))
-    } catch { /* localStorage may be unavailable */ }
-    setPulseSeenTick(t => t + 1)
-  }, [isLog, scopeId, pulseLastModified])
-
-  const devicePref = usePreviewDevice(scopeId)
-  const setDevice = (mode: PreviewDevice) => setPreviewDevice(mode, scopeId)
-  const showReport = () => {
-    useAppStore.getState().setWorkspaceMinimized(true)
-    const s = useWorkflowStore.getState()
-    s.setWorkflowWorkspaceView('report')
-    s.setCanvasViewMode('report')
-  }
-  const showPlan = () => {
-    useAppStore.getState().setWorkspaceMinimized(true)
-    const s = useWorkflowStore.getState()
-    s.setWorkflowWorkspaceView('flow')
-    s.setCanvasViewMode('flow')
-  }
-  const showLog = () => {
-    useAppStore.getState().setWorkspaceMinimized(true)
-    const s = useWorkflowStore.getState()
-    s.setWorkflowWorkspaceView('log')
-    s.setCanvasViewMode('log')
-  }
-  const showFiles = () => {
-    const s = useWorkflowStore.getState()
-    s.setShowWorkspacePane(true)
-    s.setWorkflowWorkspaceView('files')
-    useAppStore.getState().setWorkspaceMinimized(false)
-  }
-  const hidePane = () => {
-    useAppStore.getState().setWorkspaceMinimized(true)
-    useWorkflowStore.getState().setShowWorkspacePane(false)
-  }
-  const download = () => {
-    if (isReport) window.dispatchEvent(new CustomEvent(WORKFLOW_REPORT_EXPORT_EVENT))
-    else onExportPlan?.()
-  }
-  const refresh = () => {
-    if (isReport) window.dispatchEvent(new CustomEvent(WORKFLOW_REPORT_REFRESH_EVENT))
-    else if (isLog) window.dispatchEvent(new CustomEvent(WORKFLOW_LOG_REFRESH_EVENT))
-    else onRefreshPlan?.()
-  }
-  const canDownload = !isFiles && (isReport || Boolean(onExportPlan))
-  const canRefresh = !isFiles && (isReport || isLog || Boolean(onRefreshPlan))
-  const tabCls = (active: boolean) =>
-    `rounded px-2.5 py-1 text-xs font-medium transition-colors ${
-      active ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
-    }`
-  const iconBtnCls =
-    'inline-flex h-7 w-7 items-center justify-center rounded-lg border border-border bg-background/90 text-muted-foreground shadow-sm backdrop-blur-sm transition-colors hover:bg-muted hover:text-foreground'
-
-  // Minimized by default — the bar grew large, so collapse to a small pill (the
-  // current view + a controls glyph) and reveal the full controls on hover/focus.
-  const [expanded, setExpanded] = React.useState(false)
-  if (!expanded) {
-    return (
-      <div className="absolute right-2 top-2 z-50 flex items-center gap-1">
-        <button
-          type="button"
-          onMouseEnter={() => setExpanded(true)}
-          onFocus={() => setExpanded(true)}
-          onClick={() => setExpanded(true)}
-          title={hasUnseenPulse ? 'View controls — new Pulse update' : 'View controls'}
-          aria-label="View controls"
-          className="relative inline-flex items-center gap-1.5 rounded-lg border border-border bg-background/90 px-2 py-1 text-xs font-medium text-muted-foreground shadow-sm backdrop-blur-sm transition-colors hover:bg-muted hover:text-foreground"
-        >
-          <span>{isFiles ? 'Files' : isReport ? 'Report' : isLog ? 'Pulse' : 'Plan'}</span>
-          <SlidersHorizontal className="h-3.5 w-3.5" />
-          {hasUnseenPulse && !isLog && <span className="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-primary ring-2 ring-background" aria-label="New Pulse update" />}
-        </button>
-        {canRefresh && (
-          <button type="button" onClick={refresh} title="Refresh" aria-label="Refresh" className={iconBtnCls}>
-            <RefreshCw className="h-4 w-4" />
-          </button>
-        )}
-        <button type="button" onClick={hidePane} title="Hide panel" aria-label="Hide panel" className={iconBtnCls}>
-          <PanelRightClose className="h-4 w-4" />
-        </button>
-      </div>
-    )
-  }
-  return (
-    <div
-      className="absolute right-2 top-2 z-50 flex flex-wrap items-center justify-end gap-1"
-      onMouseLeave={() => setExpanded(false)}
-      onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setExpanded(false) }}
-    >
-      <div className="inline-flex items-center gap-0.5 rounded-lg border border-border bg-muted/70 p-0.5 shadow-sm backdrop-blur-sm">
-        {hasPlan && (
-          <button type="button" onClick={showPlan} className={tabCls(!isFiles && visibleCanvasViewMode === 'flow')}>Plan</button>
-        )}
-        <button type="button" onClick={showReport} className={tabCls(isReport)}>Report</button>
-        <button type="button" onClick={showLog} className={`relative ${tabCls(isLog)}`} title={hasUnseenPulse ? 'Pulse — new update' : 'Pulse'}>
-          Pulse
-          {hasUnseenPulse && <span className="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-primary ring-2 ring-background" aria-label="New Pulse update" />}
-        </button>
-        <button type="button" onClick={showFiles} className={tabCls(isFiles)}>Files</button>
-      </div>
-      {!isFiles && (
-        <div className="inline-flex items-center gap-0.5 rounded-lg border border-border bg-muted/70 p-0.5 shadow-sm backdrop-blur-sm">
-          {PREVIEW_DEVICE_OPTS.map(({ mode, Icon, label }) => (
-            <button
-              key={mode}
-              type="button"
-              onClick={() => setDevice(mode)}
-              title={label}
-              aria-label={label}
-              className={`inline-flex h-6 w-6 items-center justify-center rounded transition-colors ${
-                devicePref === mode ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              <Icon className="h-3.5 w-3.5" />
-            </button>
-          ))}
-        </div>
-      )}
-      {canDownload && (
-        <button type="button" onClick={download} title={`Download ${isReport ? 'report' : 'plan'} (PNG)`} aria-label="Download" className={iconBtnCls}>
-          <Download className="h-4 w-4" />
-        </button>
-      )}
-      {canRefresh && (
-        <button type="button" onClick={refresh} title="Refresh" aria-label="Refresh" className={iconBtnCls}>
-          <RefreshCw className="h-4 w-4" />
-        </button>
-      )}
-      <button type="button" onClick={hidePane} title="Hide panel" aria-label="Hide panel" className={iconBtnCls}>
-        <PanelRightClose className="h-4 w-4" />
-      </button>
-    </div>
-  )
 }
 
 const WorkflowReportCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>(({
@@ -426,6 +245,11 @@ const WorkflowReportCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasPr
     ])
   }, [loadPlanRefresh, refreshWorkspaceState])
 
+  const handleReportRefresh = useCallback(async () => {
+    await handleRefresh()
+    window.dispatchEvent(new CustomEvent(WORKFLOW_REPORT_REFRESH_EVENT))
+  }, [handleRefresh])
+
   useImperativeHandle(ref, () => ({
     refresh: async () => {
       await handleRefresh()
@@ -455,7 +279,8 @@ const WorkflowReportCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasPr
             onCreatePlan={onCreatePlan || (() => {})}
             showChatArea={showChatArea}
             onToggleChatArea={onToggleChatArea}
-            onRefresh={handleRefresh}
+            onRefresh={handleReportRefresh}
+            onExport={() => window.dispatchEvent(new CustomEvent(WORKFLOW_REPORT_EXPORT_EVENT))}
             chatTabsSlot={chatTabsSlot}
           />
         </div>
@@ -464,10 +289,7 @@ const WorkflowReportCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasPr
       <div data-tour="workflow-canvas-pane" data-testid="tour-workflow-canvas-pane" className={`${sharedToolbar && showChatArea ? 'flex-1 col-start-1 row-start-2 md:col-start-2' : 'flex-1'} ${paneClassName} min-h-0`}>
         {toolbarOnly ? null : (
           <div className="h-full min-h-0 relative">
-            <PreviewPaneControls hasPlan={Boolean(plan?.steps?.length)} scopeId={workspacePath} />
-            {workspacePath && (paneMode === 'log' || paneMode === 'soul'
-              ? <div className={documentPreviewShellClassName}><LogViewer workspacePath={workspacePath} /></div>
-              : <ReportView workspacePath={workspacePath} focusTier={reportFocusTier} reserveTopControlsSpace />)}
+            {workspacePath && <ReportView workspacePath={workspacePath} focusTier={reportFocusTier} />}
           </div>
         )}
       </div>
@@ -562,8 +384,6 @@ const WorkflowFilesCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasPro
       <div data-tour="workflow-canvas-pane" data-testid="tour-workflow-canvas-pane" className={`${sharedToolbar && showChatArea ? 'flex-1 col-start-1 row-start-2 md:col-start-2' : 'flex-1'} ${paneClassName} min-h-0`}>
         {toolbarOnly ? null : (
           <div className="relative flex h-full min-h-0 flex-col bg-background">
-            <PreviewPaneControls hasPlan={Boolean(plan?.steps?.length)} scopeId={workspacePath} />
-            <div className="h-10 shrink-0" />
             <div className="min-h-0 flex-1">
               <Workspace
                 minimized={false}
@@ -579,6 +399,136 @@ const WorkflowFilesCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasPro
 })
 
 WorkflowFilesCanvasInner.displayName = 'WorkflowFilesCanvasInner'
+
+const INSPECTOR_WORKSPACE_VIEWS = new Set([
+  'costs',
+  'execution-logs',
+  'learnings',
+  'knowledgebase',
+  'database',
+])
+
+const WorkflowInspectorCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>(({
+  workspacePath,
+  presetQueryId,
+  currentPhase,
+  onStartPhase,
+  onCreatePlan,
+  showChatArea = false,
+  onToggleChatArea,
+  toolbarOnly = false,
+  sharedToolbar = false,
+  chatTabsSlot,
+  paneClassName = '',
+  className = '',
+  hideToolbar = false,
+}, ref) => {
+  const selectedRunFolder = useWorkflowStore(state => state.selectedRunFolder)
+  const workflowWorkspaceView = useWorkflowStore(state => state.workflowWorkspaceView)
+  const planData = usePlanData(workspacePath)
+  const plan = planData.plan
+  const loadPlanRefresh = planData.refresh
+  const { status } = useWorkflowExecution()
+  const {
+    state: workspaceState,
+    loading: isLoadingWorkspaceState,
+    refresh: refreshWorkspaceState,
+  } = useWorkspaceState(workspacePath, selectedRunFolder)
+
+  const variablesManifest = workspaceState?.variables_manifest || null
+  const runFoldersForToolbar = React.useMemo(() => {
+    if (!workspaceState?.run_folders) return []
+    return workspaceState.run_folders.map(f => ({ name: f.name }))
+  }, [workspaceState?.run_folders])
+  const runFolderNames = React.useMemo(
+    () => runFoldersForToolbar.map(folder => folder.name),
+    [runFoldersForToolbar],
+  )
+
+  const handleRefresh = useCallback(async () => {
+    await Promise.all([loadPlanRefresh(), refreshWorkspaceState()])
+  }, [loadPlanRefresh, refreshWorkspaceState])
+
+  useImperativeHandle(ref, () => ({
+    refresh: async () => {
+      await handleRefresh()
+      return null
+    },
+    getStepCount: () => plan?.steps?.length ?? 0,
+    focusStep: () => {},
+  }), [handleRefresh, plan])
+
+  const closeInspector = useCallback(() => {
+    useWorkflowStore.getState().setShowWorkspacePane(false)
+  }, [])
+
+  const inspector = workflowWorkspaceView === 'costs' ? (
+    <CostsPopup
+      isOpen
+      embedded
+      onClose={closeInspector}
+      workspacePath={workspacePath}
+      runFolders={runFolderNames}
+      selectedRunFolder={selectedRunFolder}
+    />
+  ) : workflowWorkspaceView === 'execution-logs' ? (
+    <ExecutionLogsPopup
+      isOpen
+      embedded
+      onClose={closeInspector}
+      workspacePath={workspacePath}
+      runFolder={selectedRunFolder}
+      runFolders={runFolderNames}
+    />
+  ) : workflowWorkspaceView === 'learnings' ? (
+    <LearningsPopup
+      isOpen
+      embedded
+      onClose={closeInspector}
+      workspacePath={workspacePath}
+      plan={plan}
+    />
+  ) : workflowWorkspaceView === 'knowledgebase' ? (
+    <KBPopup isOpen embedded onClose={closeInspector} workspacePath={workspacePath} />
+  ) : (
+    <DatabasePopup isOpen embedded onClose={closeInspector} workspacePath={workspacePath} />
+  )
+
+  return (
+    <div className={`flex h-full flex-col ${className} ${sharedToolbar && showChatArea ? 'contents' : ''}`}>
+      {!hideToolbar && (
+        <div className={sharedToolbar && showChatArea ? 'col-start-1 row-start-1 md:col-span-2' : ''}>
+          <WorkflowToolbar
+            status={status}
+            hasPlan={Boolean(plan?.steps?.length)}
+            plan={plan || undefined}
+            currentPhase={currentPhase}
+            workspacePath={workspacePath}
+            presetQueryId={presetQueryId}
+            runFolders={runFoldersForToolbar}
+            variablesManifest={variablesManifest}
+            isLoadingWorkspaceState={isLoadingWorkspaceState}
+            onStartPhase={(phaseId, options) => onStartPhase?.(phaseId, options)}
+            onCreatePlan={onCreatePlan || (() => {})}
+            showChatArea={showChatArea}
+            onToggleChatArea={onToggleChatArea}
+            onRefresh={handleRefresh}
+            chatTabsSlot={chatTabsSlot}
+          />
+        </div>
+      )}
+      <div
+        data-tour="workflow-canvas-pane"
+        data-testid="tour-workflow-canvas-pane"
+        className={`${sharedToolbar && showChatArea ? 'col-start-1 row-start-2 flex-1 md:col-start-2' : 'flex-1'} ${paneClassName} min-h-0 overflow-hidden border-l border-border`}
+      >
+        {toolbarOnly ? null : inspector}
+      </div>
+    </div>
+  )
+})
+
+WorkflowInspectorCanvasInner.displayName = 'WorkflowInspectorCanvasInner'
 
 function formatJson(value: unknown): string {
   return JSON.stringify(value, null, 2)
@@ -1388,6 +1338,7 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
   hideToolbar = false,
   readOnly = false,
   embeddedPlanOnly = false,
+  openPulseOnMount = false
 }, ref) => {
   const reactFlowWrapper = useRef<HTMLDivElement>(null)
   const highlightTimeoutRef = useRef<NodeJS.Timeout | null>(null)
@@ -1533,7 +1484,7 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
   // Changing the device width resizes the flow pane; re-fit the diagram after the
   // CSS width transition (~300ms) so it recenters into the new width.
   useEffect(() => {
-    if (embeddedPlanOnly || effectiveCanvasViewMode === 'report' || toolbarOnly) return
+    if (embeddedPlanOnly || effectiveCanvasViewMode === 'report' || toolbarOnly || previewDevice === 'tablet') return
     const t = setTimeout(() => {
       try { void fitView({ padding: FLOW_FIT_PADDING, duration: 350, minZoom: FLOW_FIT_MIN_ZOOM, maxZoom: FLOW_FIT_MAX_ZOOM }) } catch { /* ignore */ }
     }, 360)
@@ -2768,6 +2719,17 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
     if (!hasInitializedView.current && nodes.length > 0) {
       const fitTimer = window.setTimeout(() => {
         window.requestAnimationFrame(() => {
+          if (previewDevice === 'tablet') {
+            const firstNode = nodes.find(node => node.id !== 'start' && node.id !== 'variables') ?? nodes[0]
+            setViewport({
+              x: 48 - firstNode.position.x * 0.85,
+              y: 48 - firstNode.position.y * 0.85,
+              zoom: 0.85,
+            }, { duration: 350 })
+            viewportStateRef.current = getViewport()
+            hasInitializedView.current = true
+            return
+          }
           const embeddedFocusNodes = embeddedPlanOnly ? nodes.slice(0, Math.min(nodes.length, 8)) : undefined
           Promise.resolve(
             fitView({
@@ -2786,7 +2748,7 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
 
       return () => window.clearTimeout(fitTimer)
     }
-  }, [embeddedPlanOnly, nodes, fitView, getViewport, toolbarOnly, effectiveCanvasViewMode])
+  }, [embeddedPlanOnly, nodes, fitView, getViewport, previewDevice, setViewport, toolbarOnly, effectiveCanvasViewMode])
 
   // Track previous stepStatusMap to detect actual changes
   const prevStepStatusMapRef = React.useRef<Map<string, 'pending' | 'running' | 'completed' | 'failed'>>(new Map())
@@ -2967,6 +2929,7 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
               onToggleChatArea={onToggleChatArea}
               onRefresh={handleRefresh}
               chatTabsSlot={chatTabsSlot}
+              openPulseOnMount={openPulseOnMount}
             />
           </div>
         )}
@@ -3017,6 +2980,10 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
             onToggleChatArea={onToggleChatArea}
             onRefresh={handleRefresh}
             chatTabsSlot={chatTabsSlot}
+            openPulseOnMount={openPulseOnMount}
+            onExport={effectiveCanvasViewMode === 'report'
+              ? () => window.dispatchEvent(new CustomEvent(WORKFLOW_REPORT_EXPORT_EVENT))
+              : () => { void handleExportImage('png') }}
           />
         </div>
       )}
@@ -3025,11 +2992,9 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
         {/* Canvas area — skip when toolbarOnly to avoid rendering 1000+ SVG nodes */}
         {toolbarOnly ? null : effectiveCanvasViewMode === 'report' ? (
           <div className="h-full min-h-0 relative">
-            {!embeddedPlanOnly && <PreviewPaneControls hasPlan={hasPlan} onExportPlan={() => { void handleExportImage('png') }} onRefreshPlan={() => { void handleRefresh() }} scopeId={workspacePath} />}
-            {workspacePath && <ReportView workspacePath={workspacePath} focusTier={reportFocusTier} reserveTopControlsSpace />}
+            {workspacePath && <ReportView workspacePath={workspacePath} focusTier={reportFocusTier} />}
           </div>
         ) : <div className="h-full min-h-0 relative flex">
-          {!embeddedPlanOnly && <PreviewPaneControls hasPlan={hasPlan} onExportPlan={() => { void handleExportImage('png') }} onRefreshPlan={() => { void handleRefresh() }} scopeId={workspacePath} />}
           <div className={`min-h-0 h-full transition-all duration-300 ${showVariablesSidebar ? 'mr-[450px]' : ''} ${previewDevice === 'desktop' ? 'flex-1' : previewDeviceShellClass(previewDevice)}`}>
         <ReactFlow
           className="w-full h-full bg-gray-50 dark:bg-gray-900"
@@ -3071,9 +3036,8 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
         {/* Batch Progress Header */}
         <BatchProgressHeader position="canvas" />
 
-        {/* The old floating flow controls (top-right export + bottom device/refresh)
-            were removed — plan export, device-width, and refresh now live in the
-            shared on-pane bar (PreviewPaneControls). */}
+        {/* Plan/report navigation, device width, export, refresh, and collapse
+            now live in the workflow-level toolbar. */}
         </div>
 
         {selectedFlowNode && (
@@ -3112,6 +3076,10 @@ export const WorkflowCanvasWithProvider = React.memo(forwardRef<WorkflowCanvasRe
 
   if (!props.embeddedPlanOnly && workflowWorkspaceView === 'files') {
     return <WorkflowFilesCanvasInner {...props} ref={ref} />
+  }
+
+  if (workflowWorkspaceView && INSPECTOR_WORKSPACE_VIEWS.has(workflowWorkspaceView)) {
+    return <WorkflowInspectorCanvasInner {...props} ref={ref} />
   }
 
   // Report and Pulse (log) are lightweight preview-pane views (no React Flow tree).

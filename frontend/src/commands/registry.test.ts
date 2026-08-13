@@ -15,13 +15,57 @@ describe('Pulse slash commands', () => {
     const workflowCommands = getCommands('workflow', 'workshop').map(command => command.command)
     const orgCommands = getCommands('multi-agent').map(command => command.command)
 
-    for (const command of ['pulse', 'bug-review', 'ops-review', 'strategy-auditor', 'pulse-fixer', 'goal-advisor']) {
+    for (const command of ['pulse', 'pulse-backlog', 'ops-review', 'strategy-auditor', 'engineering-review', 'goal-advisor', 'specialize-advisors']) {
       expect(workflowCommands).toContain(command)
       expect(orgCommands).not.toContain(command)
     }
-    for (const retiredCommand of ['review-speed', 'review-cost', 'llm-ops-review']) {
+    for (const retiredCommand of ['bug-review', 'review-speed', 'review-cost', 'llm-ops-review', 'pulse-fixer']) {
       expect(workflowCommands).not.toContain(retiredCommand)
     }
+  })
+
+  it('runs backlog consolidation through typed Pulse lifecycle tools only', () => {
+    const command = findCommand('pulse-backlog', 'workflow')
+    let submitted = ''
+    command?.execute({
+      beforeSlash: 'focus on repeated database tool symptoms',
+      onSubmit: (message: string) => { submitted = message },
+      workshopMode: 'workshop',
+    } as CommandContext)
+
+    expect(submitted).toContain('get_pulse_state(view="backlog")')
+    expect(submitted).toContain('merge_pulse_issues')
+    expect(submitted).toContain('do not edit workflow artifacts')
+  })
+
+  it('routes advisor specialization through canonical approval guidance', () => {
+    const command = findCommand('specialize-advisors', 'workflow')
+    let submitted = ''
+
+    command?.execute({
+      beforeSlash: 'emphasize acquisition concentration and novel channels',
+      onSubmit: (message: string) => { submitted = message },
+      workshopMode: 'workshop',
+    } as CommandContext)
+
+    expect(submitted).toContain('kind="specialize-advisors"')
+    expect(submitted).toContain('emphasize acquisition concentration and novel channels')
+  })
+
+  it('routes Engineering Review to the single review-and-fix sequence', () => {
+    const command = findCommand('engineering-review', 'workflow')
+    let submitted = ''
+
+    command?.execute({
+      beforeSlash: 'prioritize failed evaluation writes',
+      onSubmit: (message: string) => { submitted = message },
+      workshopMode: 'workshop',
+      getWorkflowStore: () => ({ selectedRunFolder: 'iteration-9/default' }),
+    } as CommandContext)
+
+    expect(submitted).toContain('kind="engineering-review"')
+    expect(submitted).toContain('iteration-9/default')
+    expect(submitted).toContain('prioritize failed evaluation writes')
   })
 
   it('routes the unified Ops Review command to the canonical backend guidance', () => {
@@ -58,7 +102,7 @@ describe('Pulse slash commands', () => {
     expect(submitted).toContain('focus on repeated targets')
   })
 
-  it('routes Goal Advisor directly to its persisted native background pipeline', () => {
+  it('routes Goal Advisor through the normal guided background review path', () => {
     const command = findCommand('goal-advisor', 'workflow')
     let submitted = ''
 
@@ -68,10 +112,10 @@ describe('Pulse slash commands', () => {
       workshopMode: 'workshop',
     } as CommandContext)
 
-    expect(submitted).toContain('run_goal_advisor_review')
+    expect(submitted).toContain('get_workflow_command_guidance')
     expect(submitted).toContain('challenge feed concentration')
-    expect(submitted).toContain('do not wrap it in run_in_background')
-    expect(submitted).toContain('persists its complete result and open CONCERNS in SQLite')
+    expect(submitted).toContain('BACKGROUND task')
+    expect(submitted).toContain('run_in_background')
   })
 
   it('uses design-plan as the single comprehensive plan review command', () => {

@@ -1,503 +1,36 @@
-// Dynamic report viewer — parses reports/report_plan.json. HTML file widgets
-// fetch their `source` and read live data through window.report. Native
-// interaction widgets persist configured responses through backend-owned APIs.
-// See docs/workflow/persistent_stores_design.md.
+// HTML report viewer. A workflow owns one complete reporting experience at
+// db/reports/index.html. The HTML itself decides whether that experience uses
+// tabs, sections, a sidebar, or a single scrolling page.
 
-import { createElement, lazy, memo, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createElement, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { BarChart3, Loader2, RefreshCw } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { FileListWidget, FileWidget } from './reportWidgets/FileWidget'
-import { FilePreviewModal } from './reportWidgets/FilePreviewModal'
-import { ReportEmbedProvider, type ReportDataApi } from './reportWidgets/reportEmbedContext'
-import {
-  WidgetError,
-  WidgetShell,
-  WidgetVisibilityButton,
-  isDocumentWidget,
-  isHtmlDocumentWidget,
-} from './reportWidgets/shared'
-import { useCompactWidgetLayout, useContainerSizeTier } from './reportWidgets/tableHelpers'
-import { BarChart3, Check, ChevronDown, Loader2, RefreshCw } from 'lucide-react'
 import { agentApi, workspaceApi } from '../../services/api'
 import { useReportFilePreviewStore } from '../../stores/useReportFilePreviewStore'
-import { useChatStore } from '../../stores/useChatStore'
-import { useRunningWorkflowsStore } from '../../stores/useRunningWorkflowsStore'
-import { createBoundedCache } from '../../utils/boundedCache'
 import {
-  applyWidgetFilter,
-  evaluateShowIf,
-  parseReportPlan,
-  resolveJSONPath,
-} from '../../lib/reportPlanParser'
+  REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT,
+  readReportPreviewPreference,
+  type ReportPreviewDevice,
+} from '../../utils/reportPreviewPreference'
 import ModalPortal from '../ui/ModalPortal'
-import type {
-  ParsedReportPlan,
-  ReportEntry,
-  ReportSection,
-  ReportWidget,
-  ReportWidgetKind,
-} from '../../services/api-types'
+import { FilePreviewModal } from './reportWidgets/FilePreviewModal'
+import { HtmlReportFrame } from './reportWidgets/HtmlWidgetFrame'
+import { ReportEmbedProvider, type ReportDataApi } from './reportWidgets/reportEmbedContext'
+import { ReportHumanInputPanel } from './ReportHumanInputPanel'
 
-const InteractionWidget = lazy(() =>
-  import('./reportWidgets/InteractionWidget').then(module => ({ default: module.InteractionWidget })),
-)
+const WORKFLOW_REPORT_REFRESH_EVENT = 'workflow-report-refresh-requested'
 
-export const REPORT_PREVIEW_PREFERENCE_KEY = 'workflow_report_preview_preference'
-export const REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT = 'workflow-report-preview-preference-changed'
-
-// The device-width preview preference is PER WORKFLOW — scope the storage key by
-// the workflow's workspacePath so a choice in one workflow doesn't leak to others.
-// A workflow with no saved choice defaults to mobile.
-export function reportPreviewPreferenceKey(scopeId?: string | null): string {
-  return scopeId ? `${REPORT_PREVIEW_PREFERENCE_KEY}:${scopeId}` : REPORT_PREVIEW_PREFERENCE_KEY
-}
-const REPORT_SVG_EXPORT_SCALE = 2
-const REPORT_PNG_EXPORT_SCALE = 1
-const REPORT_PNG_EXPORT_MAX_SIDE = 16000
-const REPORT_PNG_EXPORT_MAX_PIXELS = 64_000_000
-type ReportExportFormat = 'svg' | 'png'
-
-function utf8ToBase64(value: string): string {
-  const bytes = new TextEncoder().encode(value)
-  let binary = ''
-  const chunkSize = 8192
-  for (let index = 0; index < bytes.length; index += chunkSize) {
-    const chunk = bytes.slice(index, index + chunkSize)
-    binary += String.fromCharCode(...chunk)
-  }
-  return btoa(binary)
+function debugReportView(event: string, detail?: Record<string, unknown>) {
+  if (!import.meta.env.DEV) return
+  console.debug('[ReportView]', event, detail)
 }
 
-function dataUrlPayload(dataUrl: string): string {
-  const commaIndex = dataUrl.indexOf(',')
-  return commaIndex >= 0 ? dataUrl.slice(commaIndex + 1) : dataUrl
-}
-
-function inlineComputedStyles(source: Element, target: Element): void {
-  if (target instanceof HTMLElement || target instanceof SVGElement) {
-    const computed = window.getComputedStyle(source)
-    for (const property of Array.from(computed)) {
-      target.style.setProperty(property, computed.getPropertyValue(property), computed.getPropertyPriority(property))
-    }
-  }
-
-  const sourceChildren = Array.from(source.children)
-  const targetChildren = Array.from(target.children)
-  sourceChildren.forEach((sourceChild, index) => {
-    const targetChild = targetChildren[index]
-    if (targetChild) inlineComputedStyles(sourceChild, targetChild)
-  })
-}
-
-function triggerSvgDownload(dataUrl: string, filename: string): void {
-  const link = document.createElement('a')
-  link.href = dataUrl
-  link.download = filename
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
-}
-
-async function saveReportImage(dataUrl: string, filename: string, format: ReportExportFormat): Promise<{ canceled?: boolean; filePath?: string } | null> {
-  const electronAPI = (window as unknown as {
-    electronAPI?: {
-      saveFlowImage?: (payload: { filename: string; dataUrl: string; format: ReportExportFormat }) => Promise<{ canceled?: boolean; filePath?: string }>
-    }
-  }).electronAPI
-
-  if (electronAPI?.saveFlowImage) {
-    const payload = dataUrlPayload(dataUrl)
-    if (format === 'png' && !payload.startsWith('iVBOR')) {
-      throw new Error('PNG export payload was invalid. Reload the Electron window and try again.')
-    }
-    return electronAPI.saveFlowImage({ filename, dataUrl: payload, format })
-  }
-
-  triggerSvgDownload(dataUrl, filename)
-  return null
-}
-
-function reportExportFilename(workspacePath: string, format: ReportExportFormat): string {
-  const workflowName = workspacePath.split('/').filter(Boolean).pop() || 'workflow'
-  const safeName = workflowName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'workflow'
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
-  return `${safeName}-report-${timestamp}.${format}`
-}
-
-function reportSectionDomId(sectionIndex: number): string {
-  return `workflow-report-section-${sectionIndex}`
-}
-
-type ReportViewUiState = {
-  scrollTop: number
-  tabsBySection: Record<string, string>
-}
-
-const reportViewUiStateCache = createBoundedCache<string, ReportViewUiState>(24)
-
-function reportViewUiStateKey(workspacePath: string, selectedRunFolder?: string | null): string {
-  return selectedRunFolder ? `${workspacePath}::run:${selectedRunFolder}` : workspacePath
-}
-
-function getReportViewUiState(key: string): ReportViewUiState {
-  const existing = reportViewUiStateCache.get(key)
-  if (existing) return existing
-  const created: ReportViewUiState = { scrollTop: 0, tabsBySection: {} }
-  reportViewUiStateCache.set(key, created)
-  return created
-}
-
-function setReportViewScrollTop(key: string, scrollTop: number): void {
-  const state = getReportViewUiState(key)
-  reportViewUiStateCache.set(key, {
-    ...state,
-    scrollTop: Math.max(0, scrollTop),
-  })
-}
-
-function reportSectionTabStateKey(section: ReportSection, sectionIndex: number): string {
-  const heading = section.heading?.trim().toLowerCase() || 'section'
-  return `${sectionIndex}:${heading}`
-}
-
-function getReportSectionTabKey(viewStateKey: string, sectionStateKey: string): string | null {
-  return getReportViewUiState(viewStateKey).tabsBySection[sectionStateKey] ?? null
-}
-
-function setReportSectionTabKey(viewStateKey: string, sectionStateKey: string, tabKey: string): void {
-  const state = getReportViewUiState(viewStateKey)
-  reportViewUiStateCache.set(viewStateKey, {
-    ...state,
-    tabsBySection: {
-      ...state.tabsBySection,
-      [sectionStateKey]: tabKey,
-    },
-  })
-}
-
-function renderReportElementToSvg(reportElement: HTMLElement): string {
-  const width = Math.max(1, Math.ceil(reportElement.scrollWidth || reportElement.getBoundingClientRect().width))
-  const height = Math.max(1, Math.ceil(reportElement.scrollHeight || reportElement.getBoundingClientRect().height))
-  const exportWidth = width * REPORT_SVG_EXPORT_SCALE
-  const exportHeight = height * REPORT_SVG_EXPORT_SCALE
-  const clone = reportElement.cloneNode(true) as HTMLElement
-  inlineComputedStyles(reportElement, clone)
-  clone.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml')
-  clone.style.width = `${width}px`
-  clone.style.minHeight = `${height}px`
-  clone.style.margin = '0'
-
-  const html = new XMLSerializer().serializeToString(clone)
-  const svg = [
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${exportWidth}" height="${exportHeight}" viewBox="0 0 ${width} ${height}">`,
-    `<foreignObject width="100%" height="100%">${html}</foreignObject>`,
-    '</svg>',
-  ].join('')
-  return `data:image/svg+xml;base64,${utf8ToBase64(svg)}`
-}
-
-// HTML report widgets render inside a sandboxed `srcDoc` iframe, whose content is
-// a SEPARATE document — serializing the outer report DOM (renderReportElementToSvg)
-// produces an empty box where the iframe sits, so the PNG export comes out blank.
-// The iframe is `allow-same-origin`, so we can reach its contentDocument and
-// rasterize the INNER document directly.
-//
-// We serialize the WHOLE document (<html> incl. <head>), NOT a style-inlined <body>
-// clone: the report's styling lives in <head><style> blocks, the injected theme
-// tokens are a <style> node, and the light/dark state is the `.dark` class +
-// CSS variables on <html>. Carrying the full document verbatim preserves all of
-// that (stylesheets, custom properties, pseudo-elements, fonts); element-by-element
-// computed-style inlining silently dropped it. Returns null if the frame isn't
-// reachable, so the caller can fall back to the normal outer-DOM capture.
-function renderIframeDocumentToSvg(iframe: HTMLIFrameElement): string | null {
-  const doc = iframe.contentDocument
-  const docEl = doc?.documentElement
-  const body = doc?.body
-  if (!doc || !docEl || !body) return null
-  const width = Math.max(1, Math.ceil(docEl.scrollWidth || body.scrollWidth || iframe.clientWidth))
-  const height = Math.max(1, Math.ceil(docEl.scrollHeight || body.scrollHeight || iframe.clientHeight))
-  const exportWidth = width * REPORT_SVG_EXPORT_SCALE
-  const exportHeight = height * REPORT_SVG_EXPORT_SCALE
-  const clone = docEl.cloneNode(true) as HTMLElement
-  clone.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml')
-  // A cloned <canvas> is blank — its drawn bitmap doesn't clone. Charting libs
-  // (Chart.js etc.) draw to canvas, so snapshot each live canvas into an <img> at
-  // the matching position in the clone. SVG/DOM charts clone fine and are untouched.
-  const liveCanvases = doc.querySelectorAll('canvas')
-  const cloneCanvases = clone.querySelectorAll('canvas')
-  liveCanvases.forEach((live, i) => {
-    const target = cloneCanvases[i]
-    if (!target) return
-    try {
-      const png = (live as HTMLCanvasElement).toDataURL('image/png')
-      const img = doc.createElement('img')
-      img.setAttribute('src', png)
-      img.setAttribute('width', String(live.clientWidth || (live as HTMLCanvasElement).width))
-      img.setAttribute('height', String(live.clientHeight || (live as HTMLCanvasElement).height))
-      img.setAttribute('style', target.getAttribute('style') || '')
-      target.replaceWith(img)
-    } catch {
-      /* tainted canvas (cross-origin draw) — leave the blank clone */
-    }
-  })
-  // Pin the document box to the measured content size so foreignObject lays it out
-  // identically to the live frame (the iframe auto-sizes to content).
-  clone.style.width = `${width}px`
-  clone.style.height = `${height}px`
-  clone.style.margin = '0'
-  // Backstop background: <html>/<body> are often transparent over the iframe's
-  // default white, which rasterizes to black on some platforms. Use the resolved
-  // page background, falling back to the theme surface so the export is never black.
-  const view = doc.defaultView || window
-  const transparent = (c: string) => !c || c === 'transparent' || c === 'rgba(0, 0, 0, 0)'
-  const rootBg = view.getComputedStyle(docEl).backgroundColor
-  const bodyBg = view.getComputedStyle(body).backgroundColor
-  const pageBg = !transparent(bodyBg) ? bodyBg : !transparent(rootBg) ? rootBg : ''
-  const html = new XMLSerializer().serializeToString(clone)
-  const svg = [
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${exportWidth}" height="${exportHeight}" viewBox="0 0 ${width} ${height}">`,
-    pageBg ? `<rect width="100%" height="100%" fill="${pageBg}"/>` : '',
-    `<foreignObject width="100%" height="100%">${html}</foreignObject>`,
-    '</svg>',
-  ].join('')
-  return `data:image/svg+xml;base64,${utf8ToBase64(svg)}`
-}
-
-function svgDataUrlToPngDataUrl(svgDataUrl: string, scale = REPORT_PNG_EXPORT_SCALE): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const image = new Image()
-    image.onload = () => {
-      const sourceWidth = Math.max(1, image.naturalWidth || image.width)
-      const sourceHeight = Math.max(1, image.naturalHeight || image.height)
-      const maxScale = Math.min(
-        scale,
-        REPORT_PNG_EXPORT_MAX_SIDE / sourceWidth,
-        REPORT_PNG_EXPORT_MAX_SIDE / sourceHeight,
-        Math.sqrt(REPORT_PNG_EXPORT_MAX_PIXELS / (sourceWidth * sourceHeight))
-      )
-      const safeScale = Math.max(0.1, maxScale)
-      const canvas = document.createElement('canvas')
-      canvas.width = Math.ceil(sourceWidth * safeScale)
-      canvas.height = Math.ceil(sourceHeight * safeScale)
-      const context = canvas.getContext('2d')
-      if (!context) {
-        reject(new Error('Could not create PNG export canvas'))
-        return
-      }
-      context.scale(safeScale, safeScale)
-      context.drawImage(image, 0, 0, sourceWidth, sourceHeight)
-      const dataUrl = canvas.toDataURL('image/png')
-      if (!dataUrl.startsWith('data:image/png;base64,')) {
-        reject(new Error('Failed to create a valid PNG export'))
-        return
-      }
-      resolve(dataUrl)
-    }
-    image.onerror = () => reject(new Error('Failed to render SVG export as PNG'))
-    image.src = svgDataUrl
-  })
-}
-
-function loadDataUrlImage(src: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const img = new Image()
-    img.onload = () => resolve(img)
-    img.onerror = () => reject(new Error('Failed to load captured slice'))
-    img.src = src
-  })
-}
-
-// Wait two animation frames so a programmatic scroll has actually painted before
-// the native capture reads the framebuffer.
-function nextPaint(): Promise<void> {
-  return new Promise((resolve) => {
-    requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
-  })
-}
-
-// Nearest scrollable ancestor (the report's scroll pane), or null.
-function findScrollParent(el: HTMLElement): HTMLElement | null {
-  let node = el.parentElement
-  while (node) {
-    const overflowY = getComputedStyle(node).overflowY
-    if ((overflowY === 'auto' || overflowY === 'scroll') && node.scrollHeight > node.clientHeight + 1) {
-      return node
-    }
-    node = node.parentElement
-  }
-  return null
-}
-
-type ElectronCaptureRegion = (payload: {
-  rect: { x: number; y: number; width: number; height: number }
-}) => Promise<{ dataUrl?: string }>
-
-function electronCaptureRegion(): ElectronCaptureRegion | null {
-  const api = (window as unknown as { electronAPI?: { captureRegion?: ElectronCaptureRegion } }).electronAPI
-  return api?.captureRegion ?? null
-}
-
-// Pixel-perfect, full-length capture of an HTML report. `capturePage` only grabs
-// the visible viewport, so we scroll the report's pane through its full height,
-// native-capture each slice exactly as rendered (fonts, images, theme — true
-// WYSIWYG), and stitch them into one tall PNG. Returns a PNG data URL, or null
-// if native capture is unavailable (caller falls back to the SVG path).
-// Electron-only.
-async function captureReportIframeByStitching(target: HTMLElement): Promise<string | null> {
-  const captureRegion = electronCaptureRegion()
-  if (!captureRegion) return null
-  const iframe = target.querySelector('iframe')
-  if (!iframe) return null
-  const container = findScrollParent(target) || target.parentElement
-  if (!container) return null
-
-  const dpr = window.devicePixelRatio || 1
-  const startScroll = container.scrollTop
-  const fullWidth = Math.max(1, Math.ceil(iframe.getBoundingClientRect().width))
-  const fullHeight = Math.max(1, Math.ceil(iframe.getBoundingClientRect().height))
-
-  // Cap the stitched output so a very tall report can't exceed canvas limits.
-  const outScale = Math.max(0.1, Math.min(
-    dpr,
-    REPORT_PNG_EXPORT_MAX_SIDE / fullWidth,
-    REPORT_PNG_EXPORT_MAX_SIDE / fullHeight,
-    Math.sqrt(REPORT_PNG_EXPORT_MAX_PIXELS / (fullWidth * fullHeight)),
-  ))
-
-  const canvas = document.createElement('canvas')
-  canvas.width = Math.max(1, Math.round(fullWidth * outScale))
-  canvas.height = Math.max(1, Math.round(fullHeight * outScale))
-  const ctx = canvas.getContext('2d')
-  if (!ctx) return null
-
-  // Content offset of the iframe's top within the scroll container's content box.
-  const c0 = container.getBoundingClientRect()
-  const i0 = iframe.getBoundingClientRect()
-  const iframeTopInContent = (i0.top - c0.top) + container.scrollTop
-
-  try {
-    let captured = 0
-    let guard = 0
-    while (captured < fullHeight && guard < 1000) {
-      guard += 1
-      container.scrollTop = iframeTopInContent + captured
-      await nextPaint()
-      const actual = container.scrollTop
-      // On the last slice scrollTop clamps below the target, so the row we want
-      // sits `within` px down from the pane's top — capture from there.
-      const within = Math.max(0, (iframeTopInContent + captured) - actual)
-      const cRect = container.getBoundingClientRect()
-      const iRect = iframe.getBoundingClientRect()
-      const sliceTopOnScreen = cRect.top + within
-      const sliceMaxVisible = cRect.bottom - sliceTopOnScreen
-      const sliceHeight = Math.min(sliceMaxVisible, fullHeight - captured)
-      if (sliceHeight < 1) break
-      const { dataUrl } = await captureRegion({
-        rect: { x: iRect.left, y: sliceTopOnScreen, width: iRect.width, height: sliceHeight },
-      })
-      if (!dataUrl) return null
-      const slice = await loadDataUrlImage(dataUrl)
-      ctx.drawImage(
-        slice,
-        0, Math.round(captured * outScale),
-        Math.round(fullWidth * outScale), Math.round(sliceHeight * outScale),
-      )
-      captured += sliceHeight
-    }
-  } finally {
-    container.scrollTop = startScroll
-  }
-
-  const out = canvas.toDataURL('image/png')
-  return out.startsWith('data:image/png;base64,') ? out : null
-}
-
-// Convert "#rgb" / "#rrggbb" / "rgb(r,g,b)" / "hsl(h,s%,l%)" to a Tailwind-style
-// "H S% L%" triplet. Tailwind's CSS variables expect that triplet so they can
-// be wrapped in `hsl(var(--name))` — passing a full `hsl(...)` or hex string
-// breaks every consumer. Returns null for unrecognized inputs so the caller
-// can fall back to the named theme.
-function hexToHslTriplet(input: string): string | null {
-  const value = input.trim()
-  if (!value) return null
-
-  // Pass through if the author already wrote "H S% L%" (e.g. "200 70% 45%").
-  if (/^\s*\d+(\.\d+)?\s+\d+(\.\d+)?%\s+\d+(\.\d+)?%\s*$/.test(value)) {
-    return value.replace(/\s+/g, ' ').trim()
-  }
-
-  // Hex (#rgb or #rrggbb).
-  let hex = value
-  if (hex.startsWith('#')) hex = hex.slice(1)
-  if (/^[0-9a-fA-F]{3}$/.test(hex)) {
-    hex = hex.split('').map(c => c + c).join('')
-  }
-  if (!/^[0-9a-fA-F]{6}$/.test(hex)) return null
-
-  const r = parseInt(hex.slice(0, 2), 16) / 255
-  const g = parseInt(hex.slice(2, 4), 16) / 255
-  const b = parseInt(hex.slice(4, 6), 16) / 255
-
-  const max = Math.max(r, g, b)
-  const min = Math.min(r, g, b)
-  const l = (max + min) / 2
-  let h = 0
-  let s = 0
-  if (max !== min) {
-    const d = max - min
-    s = l > 0.5 ? d / (2 - max - min) : d / (max + min)
-    switch (max) {
-      case r: h = (g - b) / d + (g < b ? 6 : 0); break
-      case g: h = (b - r) / d + 2; break
-      case b: h = (r - g) / d + 4; break
-    }
-    h /= 6
-  }
-  return `${Math.round(h * 360)} ${Math.round(s * 100)}% ${Math.round(l * 100)}%`
-}
-
-// Build the inline style object that injects custom theme colors as CSS
-// variables. Each entry maps a themeColors field to the matching Tailwind
-// variable name. The variables cascade to every descendant, so charts, cards,
-// stats, and primary buttons all pick them up automatically. Returns undefined
-// when there's nothing to inject so React doesn't churn on an empty object.
-function buildThemeStyle(themeColors: ParsedReportPlan['themeColors']): React.CSSProperties | undefined {
-  if (!themeColors) return undefined
-  const entries: Array<[string, string]> = []
-  const set = (name: string, value: string | undefined) => {
-    if (!value) return
-    const triplet = hexToHslTriplet(value)
-    if (triplet) entries.push([name, triplet])
-  }
-  set('--primary', themeColors.primary)
-  set('--accent', themeColors.accent)
-  set('--card', themeColors.card)
-  set('--muted', themeColors.muted)
-  set('--border', themeColors.border)
-  set('--ring', themeColors.primary) // Focus ring tracks primary by convention.
-  if (themeColors.chart) {
-    themeColors.chart.slice(0, 5).forEach((color, idx) => {
-      set(`--chart-${idx + 1}`, color)
-    })
-  }
-  if (entries.length === 0) return undefined
-  return Object.fromEntries(entries) as React.CSSProperties
-}
-
-async function readWorkspaceText(filepath: string): Promise<string | null> {
-  try {
-    const resp = await agentApi.getPlannerFileContent(filepath)
-    if (resp && resp.success && resp.data && typeof resp.data.content === 'string') {
-      return resp.data.content
-    }
-    return null
-  } catch {
-    // 404 / network — missing source files are expected when a widget points at a db/
-    // file that hasn't been written yet. Callers distinguish missing from fetched by
-    // the `null` vs `undefined` cache entry below.
-    return null
-  }
+type ReportDocument = {
+  path: string
+  label: string
+  html?: string
 }
 
 interface ReportViewerProps {
@@ -510,1292 +43,170 @@ interface ReportViewProps {
   workspacePath: string
   selectedRunFolder?: string | null
   reviewData?: unknown
-  /** Optional close/back handler; when omitted, no close button is rendered (used for canvas-mode). */
   onClose?: () => void
-  // When the report pane is chat-focused in Mobile it shrinks, so the parent caps
-  // the report to mobile so it fits the narrow column. undefined = no override.
   focusTier?: 'mobile'
-  // Workflow canvas has its own floating Files/Pulse/Report controls in the
-  // pane's top-right corner. Keep the in-report section navigator below that
-  // toolbar so section headings never block those controls.
   reserveTopControlsSpace?: boolean
 }
 
-// Source content cached per workspace-relative path. `undefined` = not yet fetched;
-// `null` = fetched and missing/malformed; otherwise the parsed JSON value.
-type SourceCache = Record<string, unknown>
-
-type WidgetSourceInput =
-  | { status: 'ok'; value: unknown; label: string }
-  | { status: 'loading'; label: string }
-  | { status: 'missing'; label: string }
-
-interface ReportDataSnapshot {
-  planSource: string | null
-  sources: SourceCache
+function normalizeSource(path: string): string {
+  return path.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+/g, '/')
 }
 
-const reportDataCache = createBoundedCache<string, ReportDataSnapshot>(8)
-const reportDataPromises = new Map<string, Promise<ReportDataSnapshot>>()
-
-// Workflow runs write the data reports read (db/db.sqlite + artifacts), so a
-// run reaching a terminal state makes this cache stale. Watch the running-
-// workflows store for transitions INTO completed/failed, drop the cached
-// snapshot for that workspace, and announce it so a mounted viewer for that
-// workspace reloads instead of showing pre-run data until a manual Refresh.
-export const REPORT_DATA_STALE_EVENT = 'workflow-report-data-stale'
-let reportTerminalRunKeys = new Set<string>()
-useRunningWorkflowsStore.subscribe((state) => {
-  const terminalNow = new Set<string>()
-  for (const wf of state.runningWorkflows) {
-    if ((wf.status === 'completed' || wf.status === 'failed') && wf.workspacePath) {
-      terminalNow.add(`${wf.id}::${wf.workspacePath}`)
-    }
-  }
-  for (const key of terminalNow) {
-    if (reportTerminalRunKeys.has(key)) continue
-    const workspacePath = key.slice(key.indexOf('::') + 2)
-    reportDataCache.delete(workspacePath)
-    reportDataPromises.delete(workspacePath)
-    window.dispatchEvent(new CustomEvent(REPORT_DATA_STALE_EVENT, { detail: { workspacePath } }))
-  }
-  reportTerminalRunKeys = terminalNow
-})
-
-// File-path sources for file/file-list widgets that point `source` at a file
-// under the workspace.
-function widgetSourcePaths(widget: ReportWidget): string[] {
-  return widget.source ? [widget.source] : []
-}
-
-function isFileArtifactWidget(widget: ReportWidget): boolean {
-  return widget.kind === 'file' || widget.kind === 'file-list'
-}
-
-function collectReportSourcePaths(planSource: string | null): string[] {
-  if (!planSource) return []
-  const plan = parseReportPlan(planSource)
-  const set = new Set<string>()
-  for (const section of plan.sections) {
-    for (const entry of section.entries) {
-      if (entry.kind === 'single') {
-        for (const source of widgetSourcePaths(entry.widget)) set.add(source)
-      } else {
-        for (const widget of entry.row.widgets) {
-          for (const source of widgetSourcePaths(widget)) set.add(source)
-        }
-      }
-    }
-  }
-  return Array.from(set).sort()
-}
-
-async function loadReportDataSnapshot(workspacePath: string, force = false): Promise<ReportDataSnapshot> {
-  if (!force) {
-    const cached = reportDataCache.get(workspacePath)
-    if (cached) return cached
-    const inFlight = reportDataPromises.get(workspacePath)
-    if (inFlight) return inFlight
-  }
-
-  const promise = (async (): Promise<ReportDataSnapshot> => {
-    const planSource = await readWorkspaceText(`${workspacePath}/reports/report_plan.json`)
-    const paths = collectReportSourcePaths(planSource)
-    const sourceEntries = await Promise.all(
-      paths.map(async (path): Promise<readonly [string, unknown]> => {
-        const content = await readWorkspaceText(`${workspacePath}/${path}`)
-        if (content === null || content.trim() === '') return [path, null] as const
-        // Raw-text sources are not JSON. File widgets self-fetch their content,
-        // but keeping plain text here preserves source visibility for any future
-        // lightweight non-JSON attachment widget.
-        if (/\.(txt)$/i.test(path)) return [path, content] as const
-        try {
-          return [path, JSON.parse(content)] as const
-        } catch {
-          return [path, null] as const
-        }
-      })
-    )
-    const snapshot: ReportDataSnapshot = {
-      planSource,
-      sources: Object.fromEntries(sourceEntries),
-    }
-    reportDataCache.set(workspacePath, snapshot)
-    return snapshot
-  })()
-
-  reportDataPromises.set(workspacePath, promise)
+async function readWorkspaceText(filepath: string): Promise<string | null> {
   try {
-    return await promise
-  } finally {
-    reportDataPromises.delete(workspacePath)
+    const response = await agentApi.getPlannerFileContent(filepath)
+    return response?.success && typeof response.data?.content === 'string' ? response.data.content : null
+  } catch {
+    return null
   }
 }
 
-function widgetSourceLabel(widget: ReportWidget): string {
-  return widget.source ?? ''
+function allowedReportPath(path: string): string {
+  const normalized = normalizeSource(path)
+  if (!normalized || normalized.split('/').includes('..')) return ''
+  const allowedRoots = ['db/', 'knowledgebase/', 'docs/', 'planning/', 'evaluation/', 'costs/', 'variables/']
+  const exactFiles = ['soul.md', 'workflow.json']
+  return allowedRoots.some(root => normalized.startsWith(root)) || exactFiles.includes(normalized) ? normalized : ''
 }
 
-// Resolve a file widget's `source` file from the prefetched cache.
-function resolveWidgetSourceInput(widget: ReportWidget, sources: SourceCache): WidgetSourceInput {
-  const label = widgetSourceLabel(widget)
-  if (!widget.source) return { status: 'missing', label }
-  const raw = sources[widget.source]
-  if (raw === undefined) return { status: 'loading', label }
-  if (raw === null) return { status: 'missing', label }
-  return { status: 'ok', value: raw, label }
-}
-
-function widgetRawForVisibility(widget: ReportWidget, sources: SourceCache): unknown {
-  if (widget.kind === 'interaction') return {}
-  const input = resolveWidgetSourceInput(widget, sources)
-  if (input.status === 'ok') return input.value
-  if (input.status === 'loading') return undefined
-  return null
-}
-
-function widgetInstanceKey(
-  widget: ReportWidget,
-  ids: { sectionIndex: number; entryIndex: number; widgetIndex: number },
-) {
-  return [
-    ids.sectionIndex,
-    ids.entryIndex,
-    ids.widgetIndex,
-    widget.kind,
-    widget.id ?? '',
-    widget.instanceKey ?? '',
-    widget.source ?? '',
-    widget.db ?? '',
-    widget.sql ?? '',
-    widget.path ?? '',
-    widget.title ?? '',
-  ].join('::')
-}
-
-function widgetShouldRender(widget: ReportWidget, raw: unknown) {
-  if (widget.hidden) return false
-  if (widget.kind === 'interaction') return true
-  if (isFileArtifactWidget(widget)) return Boolean(widget.source)
-  if (raw === undefined || raw === null) return true
-  if (!evaluateShowIf(raw, widget.showIf)) return false
-
-  const resolvedRaw = resolveJSONPath(raw, widget.path)
-  if (resolvedRaw === undefined) return true
-
-  const resolved = applyWidgetFilter(resolvedRaw, widget.filter)
-  if (resolved == null) return false
-  if (Array.isArray(resolved) && resolved.length === 0) return true
-  return true
-}
-
-// Modal wrapper — overlay + panel + close-on-backdrop. Used by scheduler runs panel.
-export function ReportViewer({ workspacePath, isOpen, onClose }: ReportViewerProps) {
-  if (!isOpen) return null
-  return (
-    <ModalPortal>
-    <div
-      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 px-2 py-3 backdrop-blur-sm sm:px-4 sm:py-6"
-      onClick={onClose}
-    >
-      <div
-        className="flex max-h-[94vh] w-full max-w-6xl flex-col overflow-hidden rounded-xl border border-border/70 bg-background shadow-[0_24px_80px_rgba(0,0,0,0.45)] sm:max-h-[90vh] sm:rounded-2xl"
-        onClick={e => e.stopPropagation()}
-      >
-        <ReportView workspacePath={workspacePath} onClose={onClose} />
-      </div>
-    </div>
-    </ModalPortal>
-  )
-}
-
-// Inline content — renders the report plan directly without modal chrome. Used by the
-// workflow canvas when canvasViewMode === 'report'.
-function ReportViewComponent({ workspacePath, selectedRunFolder, onClose, focusTier, reserveTopControlsSpace = false }: ReportViewProps) {
-  // Three explicit preview widths plus 'auto'. The internal name 'desktop' is
-  // surfaced as "Laptop" in the UI to match the user's mental model — laptop
-  // viewports are what fill the full max-width shell. 'auto' falls back to
-  // desktop unless the parent explicitly requests a focused mobile pane.
-  const [previewPreference, setPreviewPreference] = useState<'auto' | 'desktop' | 'tablet' | 'mobile'>(() => {
-    try {
-      const saved = localStorage.getItem(reportPreviewPreferenceKey(workspacePath))
-      return saved === 'desktop' || saved === 'tablet' || saved === 'mobile' ? saved : 'auto'
-    } catch {
-      return 'auto'
-    }
-  })
-  // Re-read the per-workflow preference when the workflow (workspacePath) changes,
-  // since this component can be reused across workflows without remounting.
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem(reportPreviewPreferenceKey(workspacePath))
-      setPreviewPreference(saved === 'desktop' || saved === 'tablet' || saved === 'mobile' ? saved : 'auto')
-    } catch {
-      setPreviewPreference('auto')
-    }
-  }, [workspacePath])
-  const [loading, setLoading] = useState(false)
-  const initialSnapshot = reportDataCache.get(workspacePath)
-  const [planSource, setPlanSource] = useState<string | null>(initialSnapshot?.planSource ?? null)
-  const [sources, setSources] = useState<SourceCache>(() => initialSnapshot?.sources ?? {})
-  const [error, setError] = useState<string | null>(null)
-  const [refreshNonce, setRefreshNonce] = useState(0)
-  const [initialLoadDeferred, setInitialLoadDeferred] = useState(false)
-  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<Set<string>>(() => new Set())
-  const [, setIsExportingReport] = useState(false)
-  const reportExportRef = useRef<HTMLDivElement>(null)
-  const reportScrollContainerRef = useRef<HTMLDivElement>(null)
-  const refreshWorkspaceRef = useRef<string | null>(null)
-  const viewStateKey = useMemo(
-    () => reportViewUiStateKey(workspacePath, selectedRunFolder),
-    [workspacePath, selectedRunFolder],
-  )
-
-  const plan: ParsedReportPlan = useMemo(() => {
-    if (!planSource) return { sections: [] }
-    return parseReportPlan(planSource)
-  }, [planSource])
-
-  useEffect(() => {
-    if (!workspacePath) return
-    const isExplicitRefreshForWorkspace = refreshNonce > 0 && refreshWorkspaceRef.current === workspacePath
-    const cached = !isExplicitRefreshForWorkspace ? reportDataCache.get(workspacePath) : undefined
-    if (cached) {
-      setInitialLoadDeferred(false)
-      setPlanSource(cached.planSource)
-      setSources(cached.sources)
-      setLoading(false)
-      setError(null)
-      return
-    }
-
-    // Previously the workflow split view deferred initial report load to
-    // avoid parsing/rendering large JSON on the main thread during
-    // workflow switches — the user had to click "Load report" manually.
-    // That created a UX where opening the Report tab still showed an
-    // empty pane. Now we always auto-load on mount; if perf regressions
-    // surface from heavy report data, revisit with a worker-side parse.
-    let cancelled = false
-    setInitialLoadDeferred(false)
-    setLoading(true)
-    setError(null)
-
-    // Debounce the heavy fetch+parse so flicking through workflows (Ctrl+K /
-    // header pills) only loads the report you actually LAND on — not every one
-    // you pass through. The skeleton shows immediately; cached workflows above
-    // skip this entirely and stay instant. An explicit refresh skips the wait.
-    const loadDelayMs = isExplicitRefreshForWorkspace ? 0 : 250
-    const loadTimer = setTimeout(() => {
-      if (cancelled) return
-      loadReportDataSnapshot(workspacePath, isExplicitRefreshForWorkspace)
-        .then(snapshot => {
-          if (cancelled) return
-          setPlanSource(snapshot.planSource)
-          setSources(snapshot.sources)
-        })
-        .catch(error => {
-          if (cancelled) return
-          const message = error instanceof Error ? error.message : String(error)
-          setError(message || 'Failed to load report.')
-          setPlanSource(null)
-          setSources({})
-        })
-        .finally(() => {
-          if (!cancelled) setLoading(false)
-        })
-    }, loadDelayMs)
-
-    return () => {
-      cancelled = true
-      clearTimeout(loadTimer)
-    }
-  }, [workspacePath, refreshNonce])
-
-  useEffect(() => {
-    setHiddenWidgetKeys(new Set())
-  }, [workspacePath, planSource, refreshNonce])
-
-  useEffect(() => {
-    const container = reportScrollContainerRef.current
-    return () => {
-      if (container) setReportViewScrollTop(viewStateKey, container.scrollTop)
-    }
-  }, [viewStateKey])
-
-  const handleRefresh = () => {
-    setInitialLoadDeferred(false)
-    setError(null)
-    setSources({})
-    refreshWorkspaceRef.current = workspacePath
-    setRefreshNonce(prev => prev + 1)
-  }
-
-  const handleExportReport = async (format: ReportExportFormat) => {
-    const target = reportExportRef.current
-    if (!target) return
-    setIsExportingReport(true)
-    try {
-      const filename = reportExportFilename(workspacePath, format)
-      let dataUrl: string | null = null
-      // Prefer a pixel-perfect native scroll-and-stitch capture for HTML reports
-      // (Electron only) so the export matches EXACTLY what the user sees — fonts,
-      // images, theme — and covers the full length past the viewport fold.
-      if (format === 'png' && htmlOnlyReport) {
-        try {
-          dataUrl = await captureReportIframeByStitching(target)
-        } catch (err) {
-          console.warn('[ReportView] Native report capture failed, falling back to SVG export:', err)
-          dataUrl = null
-        }
-      }
-      // Fallback: serialize the DOM to SVG (web, or if native capture is
-      // unavailable). For an HTML report the content is a same-origin srcDoc
-      // iframe the outer-DOM capture can't see, so rasterize the iframe's own
-      // document; fall back to the normal capture if it isn't reachable.
-      if (!dataUrl) {
-        let svgDataUrl: string | null = null
-        if (htmlOnlyReport) {
-          const iframe = target.querySelector('iframe')
-          if (iframe) svgDataUrl = renderIframeDocumentToSvg(iframe)
-        }
-        if (!svgDataUrl) svgDataUrl = renderReportElementToSvg(target)
-        dataUrl = format === 'png' ? await svgDataUrlToPngDataUrl(svgDataUrl) : svgDataUrl
-      }
-      const result = await saveReportImage(dataUrl, filename, format)
-      if (result?.canceled) return
-      const location = result?.filePath ? ` to ${result.filePath}` : ''
-      useChatStore.getState().addToast(`Exported report as ${format.toUpperCase()}${location}`, 'success')
-    } catch (error) {
-      console.error('[ReportView] Failed to export report:', error)
-      useChatStore.getState().addToast(error instanceof Error ? error.message : 'Failed to export report', 'error')
-    } finally {
-      setIsExportingReport(false)
-    }
-  }
-
-  // The shared on-pane toolbar (PreviewPaneControls) triggers report export by
-  // dispatching this window event (string matches WORKFLOW_REPORT_EXPORT_EVENT
-  // in WorkflowCanvas). A ref keeps the latest handler without re-subscribing.
-  const exportReportRef = useRef(handleExportReport)
-  exportReportRef.current = handleExportReport
-  const refreshReportRef = useRef(handleRefresh)
-  refreshReportRef.current = handleRefresh
-  useEffect(() => {
-    const onExport = () => { void exportReportRef.current('png') }
-    const onRefresh = () => { void refreshReportRef.current() }
-    const onPref = (e: Event) => {
-      const detail = (e as CustomEvent).detail
-      // Only react to changes for THIS workflow (scoped per workspacePath).
-      if ((detail?.scopeId ?? null) !== (workspacePath ?? null)) return
-      const p = detail?.preference
-      if (p === 'mobile' || p === 'tablet' || p === 'desktop' || p === 'auto') setPreviewPreference(p)
-    }
-    const onDataStale = (e: Event) => {
-      const stalePath = (e as CustomEvent).detail?.workspacePath
-      // The module-level subscriber already dropped the cache entry; this
-      // refresh only fires for the workspace currently on screen.
-      if (stalePath && stalePath === workspacePath) void refreshReportRef.current()
-    }
-    window.addEventListener('workflow-report-export-requested', onExport)
-    window.addEventListener('workflow-report-refresh-requested', onRefresh)
-    window.addEventListener(REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT, onPref)
-    window.addEventListener(REPORT_DATA_STALE_EVENT, onDataStale)
-    return () => {
-      window.removeEventListener('workflow-report-export-requested', onExport)
-      window.removeEventListener('workflow-report-refresh-requested', onRefresh)
-      window.removeEventListener(REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT, onPref)
-      window.removeEventListener(REPORT_DATA_STALE_EVENT, onDataStale)
-    }
-  }, [workspacePath])
-
-  const handleToggleWidgetHidden = (widgetKey: string) => {
-    setHiddenWidgetKeys(prev => {
-      const next = new Set(prev)
-      if (next.has(widgetKey)) next.delete(widgetKey)
-      else next.add(widgetKey)
-      return next
-    })
-  }
-
-  const planExists = planSource !== null
-  const visibleSections = useMemo(() => {
-    return plan.sections.flatMap((section, sectionIndex) => {
-      const entries = section.entries.flatMap((entry, entryIndex) => {
-        const widgets = entry.kind === 'single' ? [entry.widget] : entry.row.widgets
-        const hasVisibleWidget = widgets.some((widget, widgetIndex) => {
-          if (hiddenWidgetKeys.has(widgetInstanceKey(widget, { sectionIndex, entryIndex, widgetIndex }))) return true
-          return widgetShouldRender(widget, widgetRawForVisibility(widget, sources))
-        })
-        return hasVisibleWidget ? [{ entry, entryIndex }] : []
-      })
-
-      if (entries.length === 0) return []
-      return [{ section, sectionIndex, entries }]
-    })
-  }, [plan, hiddenWidgetKeys, sources])
-  const hasAnyContent = useMemo(() => {
-    if (!planExists) return false
-    for (let sectionIndex = 0; sectionIndex < plan.sections.length; sectionIndex += 1) {
-      const section = plan.sections[sectionIndex]
-      for (let entryIndex = 0; entryIndex < section.entries.length; entryIndex += 1) {
-        const entry = section.entries[entryIndex]
-        const widgets = entry.kind === 'single' ? [entry.widget] : entry.row.widgets
-        for (let widgetIndex = 0; widgetIndex < widgets.length; widgetIndex += 1) {
-          const w = widgets[widgetIndex]
-          if (hiddenWidgetKeys.has(widgetInstanceKey(w, { sectionIndex, entryIndex, widgetIndex }))) return true
-          if (widgetShouldRender(w, widgetRawForVisibility(w, sources))) return true
-        }
-      }
-    }
-    return false
-  }, [planExists, plan, sources, hiddenWidgetKeys])
-
-  useEffect(() => {
-    if (!hasAnyContent) return
-    const container = reportScrollContainerRef.current
-    if (!container) return
-    const savedScrollTop = getReportViewUiState(viewStateKey).scrollTop
-    if (savedScrollTop <= 0) return
-    const frame = window.requestAnimationFrame(() => {
-      const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight)
-      container.scrollTop = Math.min(savedScrollTop, maxScrollTop)
-    })
-    return () => window.cancelAnimationFrame(frame)
-  }, [hasAnyContent, planSource, viewStateKey])
-  // Report renders at the selected device width. When the pane is chat-focused in
-  // Mobile the parent passes focusTier='mobile' so the report fits the narrow pane;
-  // otherwise it follows the user's saved preference. Device selection lives in the
-  // shared on-pane bar (PreviewPaneControls).
-  const previewMode: 'desktop' | 'tablet' | 'mobile' = focusTier
-    ? focusTier
-    : (previewPreference === 'mobile' || previewPreference === 'tablet' || previewPreference === 'desktop'
-        ? previewPreference
-        : 'desktop')
-  useLayoutEffect(() => {
-    if (!hasAnyContent) return
-    const container = reportScrollContainerRef.current
-    if (!container) return
-    const savedScrollTop = getReportViewUiState(viewStateKey).scrollTop
-    if (savedScrollTop <= 0) return
-    const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight)
-    container.scrollTop = Math.min(savedScrollTop, maxScrollTop)
-  }, [hasAnyContent, previewMode, viewStateKey])
-  // Per-mode shell width. Mobile mimics a phone (~480px). Tablet is a split-layout
-  // mode: the compact terminal already constrains the available report viewport,
-  // so the report must fill that pane instead of being centered inside another
-  // artificial width cap. Laptop also fills all available space.
-  const previewShellClassName =
-    previewMode === 'mobile'
-      ? 'mx-auto w-full max-w-[480px] p-1.5 transition-all duration-200'
-      : previewMode === 'tablet'
-        ? 'w-full max-w-full transition-all duration-200'
-      : 'mx-auto w-full max-w-full transition-all duration-200'
-  // A report made only of self-contained documents (md/html) renders edge-to-edge:
-  // each document owns its own width / padding / background, so we add no
-  // content-width cap, no scroll padding, and no card chrome around it (avoids
-  // double margins/frames). This covers a single document AND a tabbed/multi-entry
-  // section of documents (e.g. per-PAN report tabs) — every visible entry must be a
-  // single document widget for the report to count as document-only.
-  const documentWidgets = useMemo(() => {
-    const all: ReportWidget[] = []
-    for (const { entries } of visibleSections) {
-      for (const { entry } of entries) {
-        if (entry.kind !== 'single' || !isDocumentWidget(entry.widget)) return null
-        all.push(entry.widget)
-      }
-    }
-    return all.length > 0 ? all : null
-  }, [visibleSections])
-  const documentOnlyReport = documentWidgets != null
-  // HTML documents render in iframes that own their full width/scroll; when EVERY
-  // document is HTML the report goes full-width with no reserved scrollbar gutter.
-  // (Mixed attachments keep the readable content width.)
-  const htmlOnlyReport = documentWidgets != null && documentWidgets.every(isHtmlDocumentWidget)
-  const showDocumentSectionNavigator = documentOnlyReport && visibleSections.length > 1
-
-  const previewContentClassName =
-    previewMode === 'mobile'
-      ? 'w-full max-w-full'
-      : htmlOnlyReport
-        ? 'w-full max-w-full'
-        : 'mx-auto w-full max-w-5xl'
-
-
-  // Inline custom palette → CSS variables on the report root. Hex values get
-  // converted to "H S% L%" triplets because Tailwind variables are HSL-shaped
-  // (`hsl(var(--primary))`). Anything we don't override falls through to the
-  // named theme block and ultimately the workspace defaults.
-  const themeStyle = useMemo(() => buildThemeStyle(plan.themeColors), [plan.themeColors])
-
-  // Live data API exposed to HTML report documents as `window.report`. HTML
-  // renders its own visuals; we just deliver data. `query` runs read-only SQL
-  // against db/db.sqlite (the primary data source); `get`/`getText` are scoped to
-  // db/ knowledgebase/ docs/ (same as file widgets) for markdown/text/assets so a
-  // report can't read arbitrary workspace files.
-  const dataApi = useMemo<ReportDataApi>(() => {
-    const query = async (sql: string): Promise<Record<string, unknown>[]> => {
-      const res = await agentApi.queryWorkflowDB(`${workspacePath}/db/db.sqlite`, sql)
-      if (!res.success || !res.data) throw new Error(res.error || 'Query failed.')
-      return res.data.rows
-    }
-    const allowed = (p: string): string => {
-      const n = p.replace(/\\/g, '/').replace(/^\/+/, '')
-      if (!n || n.split('/').includes('..')) return ''
-      // Read-only workflow surface a report may pull from: stores + the operational
-      // data folders (costs / evaluation / planning-metrics / variable groups) and a
-      // few stable top-level files. runs/ is intentionally excluded — per-run paths
-      // aren't knowable at report-authoring time and transcripts can be sensitive.
-      const folderPrefixes = ['db/', 'knowledgebase/', 'docs/', 'planning/', 'evaluation/', 'costs/', 'variables/']
-      const exactFiles = ['soul.md', 'workflow.json', 'improve.html']
-      if (folderPrefixes.some((pre) => n.startsWith(pre)) || exactFiles.includes(n)) return n
-      return ''
-    }
+function useReportDataApi(workspacePath: string): ReportDataApi {
+  return useMemo(() => {
     const getText = async (path: string): Promise<string | null> => {
-      const n = allowed(path)
-      if (!n) return null
-      return readWorkspaceText(`${workspacePath}/${n}`)
+      const allowed = allowedReportPath(path)
+      return allowed ? readWorkspaceText(`${workspacePath}/${allowed}`) : null
     }
-    const get = async (path: string): Promise<unknown> => {
-      const text = await getText(path)
-      if (text == null || text.trim() === '') return null
+    const renderMarkdown = (markdown: string): string => {
+      if (!markdown) return ''
       try {
-        return JSON.parse(text)
-      } catch {
-        return text
-      }
-    }
-    // Render a markdown file to an HTML string (same engine as the markdown
-    // file widget: react-markdown + GFM), wrapped so an HTML report can inject a
-    // rendered .md inline and the iframe's default .report-markdown prose style
-    // (or the report's own) can target it.
-    // renderMarkdown renders a markdown STRING to a themed HTML string (the app's
-    // react-markdown + GFM engine), so an HTML report can render markdown it already
-    // holds — a db/sql value, a knowledgebase field, inline text — without a file:
-    //   cell.innerHTML = window.report.renderMarkdown(row.notes_md)
-    // Synchronous (no fetch). getHtml is the file-path variant built on top of it.
-    const renderMarkdown = (md: string): string => {
-      if (!md) return ''
-      try {
-        const body = renderToStaticMarkup(
-          createElement(ReactMarkdown, { remarkPlugins: [remarkGfm] }, md),
-        )
-        return `<div class="report-markdown">${body}</div>`
+        return `<div class="report-markdown">${renderToStaticMarkup(createElement(ReactMarkdown, { remarkPlugins: [remarkGfm] }, markdown))}</div>`
       } catch {
         return ''
       }
     }
-    const getHtml = async (path: string): Promise<string | null> => {
-      const text = await getText(path)
-      if (text == null) return null
-      return renderMarkdown(text) || null
+    return {
+      workspacePath,
+      query: async (sql: string) => {
+        const response = await agentApi.queryWorkflowDB(`${workspacePath}/db/db.sqlite`, sql)
+        if (!response.success || !response.data) throw new Error(response.error || 'Query failed.')
+        return response.data.rows
+      },
+      getText,
+      get: async (path: string) => {
+        const text = await getText(path)
+        if (!text?.trim()) return null
+        try { return JSON.parse(text) } catch { return text }
+      },
+      renderMarkdown,
+      getHtml: async (path: string) => {
+        const text = await getText(path)
+        return text == null ? null : renderMarkdown(text) || null
+      },
+      fileUrl: async (path: string) => {
+        const allowed = allowedReportPath(path)
+        if (!allowed) return null
+        try {
+          const response = await workspaceApi.get(`/api/documents/${encodeURIComponent(`${workspacePath}/${allowed}`)}`, {
+            params: { download: 'true' }, responseType: 'blob', headers: { Accept: 'application/octet-stream' }, transformResponse: [(data) => data],
+          })
+          const blob = response.data instanceof Blob ? response.data : new Blob([response.data])
+          return URL.createObjectURL(blob)
+        } catch {
+          return null
+        }
+      },
+      openFile: (path: string) => {
+        const allowed = allowedReportPath(path)
+        if (allowed) useReportFilePreviewStore.getState().show({ path: `${workspacePath}/${allowed}` })
+      },
     }
-    const fileUrl = async (path: string): Promise<string | null> => {
-      const n = allowed(path)
-      if (!n) return null
-      try {
-        const response = await workspaceApi.get(`/api/documents/${encodeURIComponent(`${workspacePath}/${n}`)}`, {
-          params: { download: 'true' },
-          responseType: 'blob',
-          headers: { Accept: 'application/octet-stream' },
-          transformResponse: [(d) => d],
-        })
-        const blob = response.data instanceof Blob ? response.data : new Blob([response.data])
-        return URL.createObjectURL(blob)
-      } catch {
-        return null
-      }
+  }, [workspacePath])
+}
+
+async function loadReportDocument(workspacePath: string): Promise<ReportDocument | null> {
+  const path = `${normalizeSource(workspacePath)}/db/reports/index.html`
+  const html = await readWorkspaceText(path)
+  if (html == null) return null
+  const title = html.match(/<title[^>]*>\s*([^<]+?)\s*<\/title>/i)?.[1]?.trim()
+  return { path, html, label: title || 'Report' }
+}
+
+function ReportViewComponent({ workspacePath, onClose, focusTier }: ReportViewProps) {
+  const [report, setReport] = useState<ReportDocument | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [refreshNonce, setRefreshNonce] = useState(0)
+  const [previewPreference, setPreviewPreference] = useState<ReportPreviewDevice>(() => readReportPreviewPreference(workspacePath))
+  const dataApi = useReportDataApi(workspacePath)
+
+  const refresh = useCallback(() => setRefreshNonce(value => value + 1), [])
+  useEffect(() => {
+    const sync = () => setPreviewPreference(readReportPreviewPreference(workspacePath))
+    window.addEventListener(REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT, sync)
+    window.addEventListener(WORKFLOW_REPORT_REFRESH_EVENT, refresh)
+    return () => {
+      window.removeEventListener(REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT, sync)
+      window.removeEventListener(WORKFLOW_REPORT_REFRESH_EVENT, refresh)
     }
-    const openFile = (path: string): void => {
-      const n = allowed(path)
-      if (!n) return
-      useReportFilePreviewStore.getState().show({ path: `${workspacePath}/${n}` })
-    }
-    return { workspacePath, query, get, getText, getHtml, renderMarkdown, fileUrl, openFile }
+  }, [refresh, workspacePath])
+  useEffect(() => setPreviewPreference(readReportPreviewPreference(workspacePath)), [workspacePath])
+  useEffect(() => {
+    debugReportView('report loading', { workspacePath, refreshNonce })
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+    void loadReportDocument(workspacePath).then(next => {
+      if (cancelled) return
+      setReport(next)
+    }).catch(reason => {
+      if (!cancelled) setError(reason instanceof Error ? reason.message : 'Failed to load report.')
+    }).finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [refreshNonce, workspacePath])
+
+  useEffect(() => {
+    debugReportView('mounted', { workspacePath })
+    return () => debugReportView('unmounted', { workspacePath })
   }, [workspacePath])
 
-  const reportRuntime = useMemo(() => ({ data: dataApi }), [dataApi])
+  const previewMode = focusTier || previewPreference
+  const shellClass = previewMode === 'mobile' ? 'mx-auto w-full max-w-[480px] p-1.5' : 'w-full max-w-full'
+  const runtime = useMemo(() => ({ data: dataApi }), [dataApi])
 
   return (
-    <ReportEmbedProvider value={reportRuntime}>
-    <div
-      className="relative h-full w-full flex flex-col overflow-hidden bg-gradient-to-b from-background via-background to-muted/20 text-foreground"
-      data-report-theme={plan.theme || undefined}
-      style={themeStyle}
-    >
-      {onClose && (
-        <div className="flex flex-shrink-0 items-center justify-end border-b border-border/50 bg-background/80 px-3 py-2.5 backdrop-blur-sm sm:px-5">
-          <button
-            onClick={onClose}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border/70 bg-background/80 text-xl leading-none text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-            title="Close"
-            aria-label="Close report"
-          >
-            ×
-          </button>
-        </div>
-      )}
-
-      <div
-        ref={reportScrollContainerRef}
-        onScroll={event => setReportViewScrollTop(viewStateKey, event.currentTarget.scrollTop)}
-        className={`min-h-0 flex-1 overflow-y-auto overscroll-y-contain ${htmlOnlyReport ? '' : '[scrollbar-gutter:stable]'} ${documentOnlyReport ? '' : 'px-2 py-2 sm:px-3 sm:py-3'}`}
-      >
-        <div ref={reportExportRef} className={previewShellClassName}>
-          <div className={`flex flex-col gap-3 ${previewContentClassName}`}>
-            {loading && <ReportSkeleton />}
-            {error && <div className="text-destructive">Failed to load report: {error}</div>}
-
-            {!loading && !error && initialLoadDeferred && (
-              <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-border/70 bg-card/70 px-4 py-8 text-center shadow-sm sm:px-6 sm:py-10">
-                <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-primary/20 bg-primary/10 text-primary sm:h-14 sm:w-14">
-                  <BarChart3 className="h-6 w-6" />
-                </div>
-                <div className="space-y-1">
-                  <div className="text-base font-semibold text-foreground">Report not loaded</div>
-                  <div className="text-xs uppercase tracking-[0.22em] text-muted-foreground">Refresh When Needed</div>
-                </div>
-                <button
-                  type="button"
-                  onClick={handleRefresh}
-                  className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-3 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-muted"
-                >
-                  <RefreshCw className="h-3.5 w-3.5" />
-                  Load report
-                </button>
-              </div>
-            )}
-
-            {!loading && !error && !initialLoadDeferred && !hasAnyContent && (
-              <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-border/70 bg-card/70 px-4 py-8 text-center shadow-sm sm:px-6 sm:py-10">
-                <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-primary/20 bg-primary/10 text-primary sm:h-14 sm:w-14">
-                  <BarChart3 className="h-6 w-6" />
-                </div>
-                <div className="space-y-1">
-                  <div className="text-base font-semibold text-foreground">No report yet</div>
-                  <div className="text-xs uppercase tracking-[0.22em] text-muted-foreground">Waiting For Plan Or Data</div>
-                </div>
-                <div className="max-w-md text-center text-sm text-muted-foreground leading-6">
-                  The builder writes <code className="px-1 rounded bg-muted">reports/report_plan.json</code> to configure
-                  this view; widgets render once <code className="px-1 rounded bg-muted">db/</code> has data.
-                </div>
-              </div>
-            )}
-
-            {!loading && !error && hasAnyContent && (
-              <div className="flex flex-col gap-4 animate-in fade-in duration-200 sm:gap-5">
-                {showDocumentSectionNavigator && (
-                  <div className={`sticky ${reserveTopControlsSpace ? 'top-10 z-10 mt-9' : 'top-0 z-20'} -mx-1 bg-background/95 px-1 py-1.5 backdrop-blur supports-[backdrop-filter]:bg-background/80`}>
-                    <div className="flex gap-1 overflow-x-auto [scrollbar-width:thin]" aria-label="Report sections">
-                      {visibleSections.map(({ section, sectionIndex }) => (
-                        <button
-                          key={sectionIndex}
-                          type="button"
-                          onClick={() => {
-                            document.getElementById(reportSectionDomId(sectionIndex))?.scrollIntoView({
-                              behavior: 'smooth',
-                              block: 'start',
-                            })
-                          }}
-                          className="shrink-0 rounded-md border border-border/70 bg-card/80 px-3 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                        >
-                          <span className="block max-w-52 truncate">{section.heading}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {visibleSections.map(({ section, sectionIndex, entries }) => (
-                  <SectionContainer
-                    key={sectionIndex}
-                    domId={reportSectionDomId(sectionIndex)}
-                    section={section}
-                    sectionIndex={sectionIndex}
-                    viewStateKey={viewStateKey}
-                    workspacePath={workspacePath}
-                    entries={entries}
-                    sources={sources}
-                    hiddenWidgetKeys={hiddenWidgetKeys}
-                    handleToggleWidgetHidden={handleToggleWidgetHidden}
-                  />
-                ))}
-              </div>
-            )}
+    <ReportEmbedProvider value={runtime}>
+      <div className="flex h-full w-full flex-col overflow-hidden bg-background text-foreground">
+        {onClose && <div className="flex shrink-0 justify-end border-b border-border/60 px-3 py-2"><button type="button" onClick={onClose} aria-label="Close report" className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border text-lg text-muted-foreground hover:bg-muted hover:text-foreground">×</button></div>}
+        <div
+          tabIndex={0}
+          aria-label="Report content"
+          className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain"
+        >
+          <div className={shellClass}>
+            <ReportHumanInputPanel workspacePath={workspacePath} contentMode="pending" />
+            {loading && <div className="flex min-h-64 items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Loading report…</div>}
+            {error && <div className="m-3 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">Failed to load report: {error}</div>}
+            {!loading && !error && !report && <div className="m-3 flex flex-col items-center gap-3 rounded-xl border border-dashed border-border p-8 text-center"><BarChart3 className="h-8 w-8 text-muted-foreground" /><div><div className="font-semibold">Report upgrade required</div><p className="mt-1 text-sm text-muted-foreground">This workflow needs its single <code>db/reports/index.html</code> report document.</p></div><button type="button" onClick={refresh} className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm hover:bg-muted"><RefreshCw className="h-3.5 w-3.5" /> Refresh</button></div>}
+            {!loading && report && !report.html && <div className="m-3 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">Could not read {report.label}.</div>}
+            {report?.html && <HtmlReportFrame html={report.html} title={report.label} autoHeight refreshToken={refreshNonce} className="block w-full border-0" />}
           </div>
         </div>
+        <FilePreviewModal />
       </div>
-
-      {/* Report export (SVG/PNG) is triggered from the shared on-pane toolbar's
-          download button (PreviewPaneControls) via WORKFLOW_REPORT_EXPORT_EVENT —
-          see the listener effect below. The old top-right export cluster was
-          removed because it overlapped that bar. */}
-
-      {/* Device-width selection + refresh moved to the shared on-pane bar
-          (PreviewPaneControls); preference changes arrive via the
-          REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT listener, refresh via
-          WORKFLOW_REPORT_REFRESH_EVENT. */}
-
-      {/* In-report file preview modal — opened from file-list rows and
-          table/cards file links via useReportFilePreviewStore. Self-contained
-          (fixed overlay) so it works inside the workflow layout without the chat
-          workspace's file-content viewer. */}
-      <FilePreviewModal />
-    </div>
     </ReportEmbedProvider>
   )
 }
 
 export const ReportView = memo(ReportViewComponent)
 
-// Loading skeleton — shimmer placeholders so the layout doesn't jump when widgets
-// resolve. Uses a moving gradient overlay (keyframes defined inline) for a subtle
-// shimmer, with card-shaped blocks matching typical section + widget heights.
-function ReportSkeleton() {
-  const shimmer =
-    'relative overflow-hidden bg-muted/40 before:absolute before:inset-0 before:-translate-x-full before:animate-[shimmer_1.6s_infinite] before:bg-gradient-to-r before:from-transparent before:via-muted-foreground/10 before:to-transparent'
+export function ReportViewer({ workspacePath, isOpen, onClose }: ReportViewerProps) {
+  if (!isOpen) return null
   return (
-    <>
-      <style>{`@keyframes shimmer { 100% { transform: translateX(100%); } }`}</style>
-      <div className="flex flex-col gap-4">
-        {[0, 1, 2].map(i => (
-          <div key={i} className="flex flex-col gap-2.5 rounded-xl border border-border/50 bg-card/55 p-2.5 sm:rounded-2xl sm:p-3.5">
-            <div className={`h-3 w-24 rounded-full ${shimmer}`} />
-            <div className={`h-4 w-48 rounded ${shimmer}`} />
-            <div className={`h-32 w-full rounded-xl border border-border/50 ${shimmer}`} />
-          </div>
-        ))}
-      </div>
-    </>
-  )
-}
-
-function SectionHeader({
-  heading,
-}: {
-  heading: string
-}) {
-  return (
-    <div className="flex flex-col gap-2 border-b border-border pb-3 sm:flex-row sm:flex-wrap sm:items-end">
-      <div className="flex min-w-0 items-center gap-2.5">
-        <div className="min-w-0">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">
-            Report Section
-          </div>
-          <h3 className="report-heading m-0 truncate text-xl font-semibold text-foreground">
-            {heading}
-          </h3>
+    <ModalPortal>
+      <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 px-2 py-3 backdrop-blur-sm sm:px-4 sm:py-6" onClick={onClose}>
+        <div className="flex max-h-[94vh] w-full max-w-6xl flex-col overflow-hidden rounded-xl border border-border/70 bg-background shadow-[0_24px_80px_rgba(0,0,0,0.45)] sm:max-h-[90vh] sm:rounded-2xl" onClick={event => event.stopPropagation()}>
+          <ReportView workspacePath={workspacePath} onClose={onClose} />
         </div>
       </div>
-    </div>
+    </ModalPortal>
   )
 }
-
-type SectionTabGroup = { key: string; label: string; entries: Array<{ entry: ReportEntry; entryIndex: number }> }
-
-// MobileTabPicker collapses a section's tab strip into a dropdown on phones, so
-// every tab is reachable in one tap instead of scrolling a horizontal strip
-// that hides tabs off-screen (important when tabs are per-entity, e.g. per-PAN).
-// The strip is still used on tablet/desktop.
-function MobileTabPicker({
-  tabGroups,
-  activeKey,
-  onSelect,
-}: {
-  tabGroups: SectionTabGroup[]
-  activeKey: string
-  onSelect: (key: string) => void
-}) {
-  const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!open) return
-    const onDoc = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
-    }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false)
-    }
-    document.addEventListener('mousedown', onDoc)
-    window.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDoc)
-      window.removeEventListener('keydown', onKey)
-    }
-  }, [open])
-
-  const active = tabGroups.find(t => t.key === activeKey) ?? tabGroups[0]
-
-  return (
-    <div ref={ref} className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen(o => !o)}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        className="flex w-full items-center justify-between gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted/40"
-      >
-        <span className="min-w-0 truncate">{active?.label}</span>
-        <ChevronDown className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${open ? 'rotate-180' : ''}`} />
-      </button>
-      {open && (
-        <div role="listbox" className="absolute left-0 right-0 z-20 mt-1 max-h-72 overflow-auto rounded-md border border-border bg-background py-1 shadow-lg">
-          {tabGroups.map(tab => {
-            const isActive = active?.key === tab.key
-            return (
-              <button
-                key={tab.key}
-                type="button"
-                role="option"
-                aria-selected={isActive}
-                onClick={() => {
-                  onSelect(tab.key)
-                  setOpen(false)
-                }}
-                className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm ${
-                  isActive ? 'bg-muted/60 font-medium text-foreground' : 'text-muted-foreground hover:bg-muted/40 hover:text-foreground'
-                }`}
-              >
-                <span className="flex min-w-0 items-center gap-2">
-                  <Check className={`h-3.5 w-3.5 shrink-0 ${isActive ? 'opacity-100' : 'opacity-0'}`} />
-                  <span className="truncate">{tab.label}</span>
-                </span>
-              </button>
-            )
-          })}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// Renders one section's heading + entries. Lives in its own component so the
-// section container can call useContainerSizeTier and collapse the grid into
-// a tier-appropriate column count: 1 on phones (<640px), ~half on tablets
-// (640–960px), full on desktop. A user-declared `columns: 12` therefore
-// renders as 12 on desktop, 6 on tablet, 1 on mobile — and per-widget spans
-// scale proportionally so a widget with span: 4 keeps roughly its share of
-// the row at every tier.
-function SectionContainer({
-  domId,
-  section,
-  sectionIndex,
-  viewStateKey,
-  workspacePath,
-  entries,
-  sources,
-  hiddenWidgetKeys,
-  handleToggleWidgetHidden,
-}: {
-  domId?: string
-  section: ReportSection
-  sectionIndex: number
-  viewStateKey: string
-  workspacePath: string
-  entries: Array<{ entry: ReportEntry; entryIndex: number }>
-  sources: SourceCache
-  hiddenWidgetKeys: Set<string>
-  handleToggleWidgetHidden: (widgetKey: string) => void
-}) {
-  const tabsEnabled = section.layout?.mode === 'tabs'
-  const tabGroups = useMemo(() => {
-    if (!tabsEnabled) return []
-    const groups: Array<{ key: string; label: string; entries: Array<{ entry: ReportEntry; entryIndex: number }> }> = []
-    const byKey = new Map<string, { key: string; label: string; entries: Array<{ entry: ReportEntry; entryIndex: number }> }>()
-    for (const item of entries) {
-      const label = item.entry.tab?.trim() || 'Overview'
-      const key = label.toLowerCase()
-      let group = byKey.get(key)
-      if (!group) {
-        group = { key, label, entries: [] }
-        byKey.set(key, group)
-        groups.push(group)
-      }
-      group.entries.push(item)
-    }
-    return groups
-  }, [entries, tabsEnabled])
-  const sectionStateKey = useMemo(
-    () => reportSectionTabStateKey(section, sectionIndex),
-    [section, sectionIndex],
-  )
-  const tabStateScope = `${viewStateKey}::${sectionStateKey}`
-  const [activeTabState, setActiveTabState] = useState<{ scope: string; key: string | null }>(() => ({
-    scope: tabStateScope,
-    key: getReportSectionTabKey(viewStateKey, sectionStateKey),
-  }))
-  const activeTabKey = activeTabState.scope === tabStateScope
-    ? activeTabState.key
-    : getReportSectionTabKey(viewStateKey, sectionStateKey)
-  useEffect(() => {
-    if (activeTabState.scope !== tabStateScope) {
-      setActiveTabState({
-        scope: tabStateScope,
-        key: getReportSectionTabKey(viewStateKey, sectionStateKey),
-      })
-    }
-  }, [activeTabState.scope, sectionStateKey, tabStateScope, viewStateKey])
-  useEffect(() => {
-    if (!tabsEnabled || tabGroups.length === 0) {
-      if (activeTabState.scope !== tabStateScope || activeTabState.key !== null) {
-        setActiveTabState({ scope: tabStateScope, key: null })
-      }
-      return
-    }
-    const savedTabKey = getReportSectionTabKey(viewStateKey, sectionStateKey)
-    const nextTabKey = activeTabKey && tabGroups.some(tab => tab.key === activeTabKey)
-      ? activeTabKey
-      : savedTabKey && tabGroups.some(tab => tab.key === savedTabKey)
-        ? savedTabKey
-        : tabGroups[0].key
-    if (activeTabState.scope !== tabStateScope || activeTabState.key !== nextTabKey) {
-      setActiveTabState({ scope: tabStateScope, key: nextTabKey })
-    }
-    setReportSectionTabKey(viewStateKey, sectionStateKey, nextTabKey)
-  }, [activeTabKey, activeTabState.key, activeTabState.scope, sectionStateKey, tabGroups, tabStateScope, tabsEnabled, viewStateKey])
-  const handleSelectTab = (tabKey: string) => {
-    setReportSectionTabKey(viewStateKey, sectionStateKey, tabKey)
-    setActiveTabState({ scope: tabStateScope, key: tabKey })
-  }
-
-  // Container size tier — phone / tablet / desktop, matching the project's
-  // sm/md Tailwind breakpoints. Container-width based, so it works in
-  // split-pane / mobile-preview modes where the report tab is narrower than
-  // the actual viewport.
-  const [gridRef, sizeTier] = useContainerSizeTier()
-  const requestedColumns = section.layout?.columns
-  const gridGap = section.layout?.gap ?? 8
-  // Scale the user-requested column count to the active tier:
-  //   phone   → 1 (always stack)
-  //   tablet  → roughly half, rounded down, capped at 6 to keep cells legible
-  //   desktop → as requested
-  // Widget spans then scale by the same ratio so a widget keeps roughly its
-  // declared share of a row at every tier (e.g. span: 4 of 12 cols stays at
-  // span: 2 of 6 cols on tablet).
-  const effectiveColumns = requestedColumns
-    ? sizeTier === 'phone'
-      ? 1
-      : sizeTier === 'tablet'
-        ? Math.min(6, Math.max(1, Math.floor(requestedColumns / 2)))
-        : requestedColumns
-    : undefined
-  const tierSpan = (declared: number | undefined): number | undefined => {
-    if (declared == null || !requestedColumns || !effectiveColumns) return undefined
-    if (sizeTier === 'desktop') return Math.min(declared, effectiveColumns)
-    // Scale by the same ratio columns were scaled, with a minimum of 1.
-    const ratio = effectiveColumns / requestedColumns
-    return Math.min(effectiveColumns, Math.max(1, Math.round(declared * ratio)))
-  }
-  const containerClassName = effectiveColumns
-    ? 'grid'
-    : 'flex flex-col gap-2'
-  const containerStyle = effectiveColumns
-    ? {
-        gridTemplateColumns: `repeat(${effectiveColumns}, minmax(0, 1fr))`,
-        gap: `${gridGap}px`,
-      }
-    : undefined
-  const activeTab = tabsEnabled && tabGroups.length > 0
-    ? tabGroups.find(tab => tab.key === activeTabKey) ?? tabGroups[0]
-    : null
-  const renderedEntries = activeTab ? activeTab.entries : entries
-  // A section whose entries are ALL self-contained documents (md/html) doesn't
-  // need the section heading + card chrome — each document carries its own title
-  // and should fill the whole section. This holds whether the documents are
-  // stacked or arranged as tabs (e.g. per-PAN report tabs): the tab bar still
-  // renders, but the card border/padding is dropped so an HTML iframe sits flush
-  // against the report panel instead of inside a framed, padded box.
-  const documentOnly =
-    entries.length > 0 &&
-    entries.every(({ entry }) => entry.kind === 'single' && isDocumentWidget(entry.widget))
-  const shouldShowSectionHeader = !documentOnly
-  const tabListClassName = documentOnly
-    ? 'flex gap-1 overflow-x-auto rounded-xl border border-border/70 bg-muted/45 p-1 shadow-sm [scrollbar-width:thin]'
-    : 'flex gap-1 overflow-x-auto border-b border-border/60 pb-1 [scrollbar-width:thin]'
-  return (
-    <section
-      id={domId}
-      className={documentOnly ? 'flex scroll-mt-14 flex-col gap-3' : 'flex scroll-mt-14 flex-col gap-2 p-0 sm:gap-2.5 sm:rounded-2xl sm:border sm:border-border/50 sm:bg-card/55 sm:p-3 sm:shadow-sm'}
-    >
-      {shouldShowSectionHeader && <SectionHeader heading={section.heading} />}
-      {tabsEnabled && tabGroups.length > 0 && (
-        sizeTier === 'phone' ? (
-            <MobileTabPicker
-              tabGroups={tabGroups}
-              activeKey={activeTab?.key ?? tabGroups[0]?.key}
-              onSelect={handleSelectTab}
-            />
-        ) : (
-          <div className={tabListClassName}>
-            {tabGroups.map(tab => (
-              <button
-                key={tab.key}
-                type="button"
-                onClick={() => handleSelectTab(tab.key)}
-                className={documentOnly
-                  ? `shrink-0 rounded-lg border px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
-                      (activeTab?.key ?? tabGroups[0]?.key) === tab.key
-                        ? 'border-border bg-background text-foreground shadow-sm'
-                        : 'border-transparent text-muted-foreground hover:bg-background/60 hover:text-foreground'
-                    }`
-                  : `shrink-0 rounded-t-md border px-3 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
-                      (activeTab?.key ?? tabGroups[0]?.key) === tab.key
-                        ? 'border-border border-b-background bg-background font-medium text-foreground shadow-sm'
-                        : 'border-transparent text-muted-foreground hover:bg-muted/50 hover:text-foreground'
-                    }`
-                }
-              >
-                <span className="block max-w-72 truncate">{tab.label}</span>
-              </button>
-            ))}
-          </div>
-        )
-      )}
-      <div ref={gridRef} className={containerClassName} style={containerStyle}>
-        {renderedEntries.map(({ entry, entryIndex }) => {
-          const span = entry.kind === 'single'
-            ? entry.widget.layout?.span
-            : undefined
-          // Row entries always span the full grid; widgets within reflow via the row's own flex.
-          const cellSpan = effectiveColumns
-            ? entry.kind === 'row'
-              ? effectiveColumns
-              : tierSpan(span) ?? effectiveColumns
-            : undefined
-          const cellMinWidth = entry.kind === 'single'
-            ? entry.widget.layout?.minWidth
-            : undefined
-          const cellStyle = effectiveColumns
-            ? {
-                gridColumn: `span ${cellSpan} / span ${cellSpan}`,
-                ...(cellMinWidth ? { minWidth: `${cellMinWidth}px` } : {}),
-              }
-            : undefined
-          const renderer = (
-            <EntryRenderer
-              entry={entry}
-              entryIndex={entryIndex}
-              sectionIndex={sectionIndex}
-              workspacePath={workspacePath}
-              sources={sources}
-              hiddenWidgetKeys={hiddenWidgetKeys}
-              onToggleWidgetHidden={handleToggleWidgetHidden}
-            />
-          )
-          return effectiveColumns ? (
-            <div key={entryIndex} style={cellStyle}>{renderer}</div>
-          ) : (
-            <div key={entryIndex}>{renderer}</div>
-          )
-        })}
-      </div>
-    </section>
-  )
-}
-
-function EntryRenderer({
-  entry,
-  entryIndex,
-  sectionIndex,
-  workspacePath,
-  sources,
-  hiddenWidgetKeys,
-  onToggleWidgetHidden,
-}: {
-  entry: ReportEntry
-  entryIndex: number
-  sectionIndex: number
-  workspacePath: string
-  sources: SourceCache
-  hiddenWidgetKeys: Set<string>
-  onToggleWidgetHidden: (widgetKey: string) => void
-}) {
-  const [rowRef, isCompact] = useCompactWidgetLayout()
-  if (entry.kind === 'single') {
-    const widgetKey = widgetInstanceKey(entry.widget, { sectionIndex, entryIndex, widgetIndex: 0 })
-    return (
-      <WidgetCard
-        widget={entry.widget}
-        sources={sources}
-        hidden={hiddenWidgetKeys.has(widgetKey)}
-        onToggleHidden={() => onToggleWidgetHidden(widgetKey)}
-        workspacePath={workspacePath}
-      />
-    )
-  }
-  const visibleWidgets = entry.row.widgets.flatMap((widget, widgetIndex) => {
-    const widgetKey = widgetInstanceKey(widget, { sectionIndex, entryIndex, widgetIndex })
-    if (hiddenWidgetKeys.has(widgetKey)) return [{ widget, widgetKey, hidden: true }]
-    if (!widgetShouldRender(widget, widgetRawForVisibility(widget, sources))) return []
-    return [{ widget, widgetKey, hidden: false }]
-  })
-  if (visibleWidgets.length === 0) return null
-  return (
-    <div ref={rowRef} className={`flex gap-2.5 ${isCompact ? 'flex-col' : 'flex-col md:flex-row md:flex-wrap'}`}>
-      {visibleWidgets.map(({ widget, widgetKey, hidden }) => (
-        <div key={widgetKey} className={`w-full ${isCompact ? '' : 'md:min-w-[260px] md:flex-1'}`}>
-          <WidgetCard
-            widget={widget}
-            sources={sources}
-            hidden={Boolean(hidden)}
-            onToggleHidden={() => onToggleWidgetHidden(widgetKey)}
-            workspacePath={workspacePath}
-          />
-        </div>
-      ))}
-    </div>
-  )
-}
-
-// Renderer registries. Each map covers one dispatch path.
-type CollectionWidgetRenderer = React.FC<{ value: unknown; widget: ReportWidget }>
-type FileWidgetRenderer = React.FC<{ widget: ReportWidget; workspacePath: string }>
-
-const COLLECTION_WIDGET_RENDERERS: Partial<Record<ReportWidgetKind, CollectionWidgetRenderer>> = {}
-const FILE_WIDGET_RENDERERS: Partial<Record<ReportWidgetKind, FileWidgetRenderer>> = {}
-
-function HiddenWidgetCard({
-  widget,
-  onShow,
-}: {
-  widget: ReportWidget
-  onShow: () => void
-}) {
-  return (
-    <div className="relative flex min-h-[52px] items-center rounded-xl border border-dashed border-border/70 bg-muted/15 px-3 py-2.5 shadow-sm">
-      <div className="min-w-0 pr-10">
-        <div className="truncate text-sm font-medium text-foreground">
-          {widget.title || `${widget.kind[0].toUpperCase()}${widget.kind.slice(1)} widget`}
-        </div>
-        <div className="text-xs text-muted-foreground">
-          Hidden widget
-        </div>
-      </div>
-      <WidgetVisibilityButton hidden onToggle={onShow} />
-    </div>
-  )
-}
-
-function WidgetCard({
-  widget,
-  sources,
-  hidden = false,
-  onToggleHidden,
-  workspacePath,
-}: {
-  widget: ReportWidget
-  sources: SourceCache
-  hidden?: boolean
-  onToggleHidden?: () => void
-  workspacePath: string
-}) {
-  const sourceInput = useMemo(() => resolveWidgetSourceInput(widget, sources), [widget, sources])
-  const raw = sourceInput.status === 'ok' ? sourceInput.value : sourceInput.status === 'loading' ? undefined : null
-
-  if (hidden && onToggleHidden) {
-    return <HiddenWidgetCard widget={widget} onShow={onToggleHidden} />
-  }
-
-  const wrapNotice = (content: React.ReactNode) => (
-    <WidgetShell widget={widget} onToggleHidden={onToggleHidden}>{content}</WidgetShell>
-  )
-
-  if (widget.kind === 'interaction') {
-    return (
-      <WidgetShell widget={widget} onToggleHidden={onToggleHidden}>
-        <Suspense fallback={<div className="flex min-h-24 items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>}>
-          <InteractionWidget widget={widget} workspacePath={workspacePath} />
-        </Suspense>
-      </WidgetShell>
-    )
-  }
-
-  // file / file-list widgets render a stored artifact (or list a folder) directly.
-  if (isFileArtifactWidget(widget)) {
-    const Renderer = FILE_WIDGET_RENDERERS[widget.kind]
-    if (!Renderer) return null
-    if (!widget.source) {
-      return wrapNotice(
-        <WidgetError
-          widget={widget}
-          message="File widget has no source."
-          hint="Set source to a path under db/, knowledgebase/, or docs/."
-        />,
-      )
-    }
-    return (
-      <WidgetShell widget={widget} onToggleHidden={onToggleHidden}>
-        <Renderer widget={widget} workspacePath={workspacePath} />
-      </WidgetShell>
-    )
-  }
-
-  // Non-file widgets are ignored by the parser; this is a defensive fallback.
-  if (!widget.source) {
-    return (
-      <div
-        aria-hidden="true"
-        className="w-full"
-        style={{ minHeight: `${widget.height ?? 72}px` }}
-      />
-    )
-  }
-
-  if (raw === undefined) {
-    return wrapNotice(
-      <div className="py-1.5 text-xs italic text-muted-foreground">Loading {sourceInput.label}…</div>,
-    )
-  }
-  if (raw === null) {
-    return wrapNotice(
-      <div className="py-1.5 text-xs italic text-muted-foreground">
-        Source not available: <code className="px-1 rounded bg-muted">{sourceInput.label}</code>
-      </div>,
-    )
-  }
-  const effectiveRaw: unknown = raw
-
-  if (!evaluateShowIf(effectiveRaw, widget.showIf)) return null
-
-  // Resolve path → filter → render.
-  const resolvedRaw = resolveJSONPath(effectiveRaw, widget.path)
-  let content: React.ReactNode = null
-  if (resolvedRaw === undefined) {
-    content = (
-      <WidgetError
-        widget={widget}
-        message={`Path "${widget.path || '(root)'}" doesn't resolve in ${sourceInput.label}.`}
-        hint="Check the source for a matching key. Run validate_report_plan in builder chat for specifics."
-      />
-    )
-  } else {
-    const resolved = applyWidgetFilter(resolvedRaw, widget.filter)
-    if (resolved == null) return null
-    if (Array.isArray(resolved) && resolved.length === 0) {
-      content = (
-        <WidgetError
-          widget={widget}
-          message={`No rows in ${sourceInput.label}${widget.filter ? ` matching filter "${widget.filter}"` : ''}.`}
-          hint="The source is valid but empty for this widget; this usually clears after the automation runs."
-          severity="info"
-        />
-      )
-    } else {
-      const Renderer = COLLECTION_WIDGET_RENDERERS[widget.kind]
-      if (Renderer) content = <Renderer value={resolved} widget={widget} />
-    }
-  }
-
-  if (content == null) return null
-  return (
-    <WidgetShell widget={widget} onToggleHidden={onToggleHidden}>
-      {content}
-    </WidgetShell>
-  )
-}
-
-
-// ---------------------------------------------------------------------------
-// Widget registry. WidgetCard reads from these maps to render the kept,
-// documents-only widget kinds.
-// ---------------------------------------------------------------------------
-FILE_WIDGET_RENDERERS.file = FileWidget
-FILE_WIDGET_RENDERERS['file-list'] = FileListWidget

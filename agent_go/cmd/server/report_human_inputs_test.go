@@ -2,11 +2,67 @@ package server
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/gorilla/mux"
 )
+
+func TestNormalizeReportHumanInputSourcePreservesReviewerIdentity(t *testing.T) {
+	for input, want := range map[string]string{
+		"strategy-auditor": "strategy_auditor",
+		"Strategy Auditor": "strategy_auditor",
+		"goal-advisor":     "goal_advisor",
+		"unknown":          "pulse",
+	} {
+		if got := normalizeReportHumanInputSource(input); got != want {
+			t.Fatalf("normalizeReportHumanInputSource(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestBackgroundWorkflowChildCanCreateOnlyOwnHumanInputRequest(t *testing.T) {
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+	tools, executors, _ := createReportHumanInputTools()
+	var createFound bool
+	for _, tool := range tools {
+		if tool.Function != nil && tool.Function.Name == "create_human_input_request" {
+			createFound = true
+		}
+	}
+	if !createFound {
+		t.Fatal("create_human_input_request is not defined")
+	}
+	create, ok := executors["create_human_input_request"].(func(context.Context, map[string]interface{}) (string, error))
+	if !ok {
+		t.Fatal("create_human_input_request executor has the wrong type")
+	}
+
+	childCreate := scopeDelegatedHumanInputExecutor("Workflow/owned", create)
+	if _, err := childCreate(context.Background(), map[string]interface{}{
+		"workspace_path": "Workflow/owned",
+		"input_id":       "strategy-proposal-own-scope",
+		"source":         "strategy_auditor",
+		"question":       "Approve the scoped proposal?",
+	}); err != nil {
+		t.Fatalf("background child could not create its own decision: %v", err)
+	}
+	inputs, err := listReportHumanInputs(context.Background(), "Workflow/owned", "pending", "")
+	if err != nil || len(inputs) != 1 {
+		t.Fatalf("own workflow decision = %d inputs, err=%v; want one", len(inputs), err)
+	}
+	if _, err := childCreate(context.Background(), map[string]interface{}{
+		"workspace_path": "Workflow/other",
+		"question":       "This must not escape the child workflow.",
+	}); err == nil || !strings.Contains(err.Error(), "only for Workflow/owned") {
+		t.Fatalf("cross-workflow decision error = %v, want scope rejection", err)
+	}
+}
 
 func TestReportHumanInputsUseWorkflowLocalDB(t *testing.T) {
 	ctx := context.Background()
@@ -87,6 +143,69 @@ func TestReportHumanInputsUseWorkflowLocalDB(t *testing.T) {
 	}
 	if block := formatAnsweredReportHumanInputsForAgent(ctx, workspacePath); block != "" {
 		t.Fatalf("consumed answer should not be re-injected, got:\n%s", block)
+	}
+}
+
+func TestAnswerHumanInputRequestToolUsesValidatedDecisionLifecycle(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+	workspacePath := "Workflow/chat-answer"
+	inputID := "quality-scorecard-status"
+
+	if _, err := createReportHumanInput(ctx, workspacePath, ReportHumanInputCreateRequest{
+		InputID:  inputID,
+		Source:   "pulse",
+		Question: "Should the quality scorecard be turned back on?",
+		Options: []ReportHumanInputOption{
+			{ID: "turn_on", Title: "Turn it back on"},
+			{ID: "keep_off", Title: "Keep it off"},
+		},
+	}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	tools, executors, categories := createReportHumanInputTools()
+	found := false
+	for _, tool := range tools {
+		if tool.Function != nil && tool.Function.Name == "answer_human_input_request" {
+			found = true
+			break
+		}
+	}
+	if !found || categories["answer_human_input_request"] != "human_tools" {
+		t.Fatalf("answer tool is not registered in human_tools: found=%v category=%q", found, categories["answer_human_input_request"])
+	}
+	executor, ok := executors["answer_human_input_request"].(func(context.Context, map[string]interface{}) (string, error))
+	if !ok {
+		t.Fatal("answer_human_input_request executor is missing or has the wrong type")
+	}
+
+	if _, err := executor(ctx, map[string]interface{}{
+		"workspace_path":     workspacePath,
+		"input_id":           inputID,
+		"selected_option_id": "invented_option",
+	}); err == nil || !strings.Contains(err.Error(), "is not valid") {
+		t.Fatalf("invalid option error = %v, want validation failure", err)
+	}
+	pending, err := listReportHumanInputs(ctx, workspacePath, "pending", "")
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("invalid tool call changed the pending decision: inputs=%+v err=%v", pending, err)
+	}
+
+	result, err := executor(ctx, map[string]interface{}{
+		"workspace_path":     workspacePath,
+		"input_id":           inputID,
+		"selected_option_id": "turn_on",
+	})
+	if err != nil {
+		t.Fatalf("answer tool: %v", err)
+	}
+	if !strings.Contains(result, `"status":"answered"`) || !strings.Contains(result, `"selected_option_id":"turn_on"`) {
+		t.Fatalf("answer tool result does not report the transition: %s", result)
+	}
+	answered, err := listReportHumanInputs(ctx, workspacePath, "answered", "")
+	if err != nil || len(answered) != 1 || answered[0].SelectedOptionID != "turn_on" {
+		t.Fatalf("answered decision mismatch: inputs=%+v err=%v", answered, err)
 	}
 }
 
@@ -300,5 +419,75 @@ func TestReportHumanInputRejectsEscapingWorkspacePath(t *testing.T) {
 		Question: "Should this be rejected?",
 	}); err == nil {
 		t.Fatal("expected path traversal workspace_path to be rejected")
+	}
+}
+
+func TestReportHumanInputAnswerPersistsAttributionAndEvent(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	workspacePath := "Workflow/attribution"
+	if _, err := createReportHumanInput(ctx, workspacePath, ReportHumanInputCreateRequest{
+		InputID: "approve", Question: "Approve?", AllowFreeText: true,
+		CreatedBy: "pulse", CreatedByKind: "agent", CreatedVia: "agent_tool", SessionID: "pulse-run-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	answered, err := answerReportHumanInput(ctx, workspacePath, "approve", ReportHumanInputAnswerRequest{
+		Note: "yes", AnsweredBy: "operator-1", AnsweredByKind: "human_ui", AnsweredVia: "report_ui", SessionID: "chat-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if answered.AnsweredBy != "operator-1" || answered.AnsweredByKind != "human_ui" || answered.AnsweredVia != "report_ui" || answered.AnsweredSessionID != "chat-1" {
+		t.Fatalf("answer attribution mismatch: %+v", answered)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(root, "Workflow", "attribution", "db", "db.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var eventType, actorID, actorKind, channel, sessionID, details string
+	if err := db.QueryRow(`SELECT event_type, actor_id, actor_kind, channel, session_id, details
+		FROM report_human_input_events WHERE input_id='approve' ORDER BY id DESC LIMIT 1`).Scan(
+		&eventType, &actorID, &actorKind, &channel, &sessionID, &details); err != nil {
+		t.Fatal(err)
+	}
+	if eventType != "answered" || actorID != "operator-1" || actorKind != "human_ui" || channel != "report_ui" || sessionID != "chat-1" {
+		t.Fatalf("event attribution = %q %q %q %q %q", eventType, actorID, actorKind, channel, sessionID)
+	}
+	if strings.Contains(details, "yes") || !strings.Contains(details, `"note_present":true`) {
+		t.Fatalf("event must record answer shape without duplicating free text: %s", details)
+	}
+}
+
+func TestReportHumanInputHTTPAnswerIgnoresForgedActor(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+	workspacePath := "Workflow/http-attribution"
+	if _, err := createReportHumanInput(ctx, workspacePath, ReportHumanInputCreateRequest{
+		InputID: "approve", Question: "Approve?", AllowFreeText: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(ReportHumanInputAnswerRequest{
+		WorkspacePath: workspacePath, Note: "yes", AnsweredBy: "forged-user",
+	})
+	req := httptest.NewRequest("POST", "/api/report-human-inputs/approve/answer", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-AgentWorks-Session-ID", "ui-session-1")
+	req = mux.SetURLVars(req, map[string]string{"input_id": "approve"})
+	recorder := httptest.NewRecorder()
+	api := &StreamingAPI{}
+	api.handleAnswerReportHumanInput(recorder, req)
+	if recorder.Code != 200 {
+		t.Fatalf("answer status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	inputs, err := listReportHumanInputs(ctx, workspacePath, "answered", "")
+	if err != nil || len(inputs) != 1 {
+		t.Fatalf("answered inputs=%+v err=%v", inputs, err)
+	}
+	if inputs[0].AnsweredBy == "forged-user" || inputs[0].AnsweredByKind != "human_ui" || inputs[0].AnsweredVia != "report_ui" || inputs[0].AnsweredSessionID != "ui-session-1" {
+		t.Fatalf("HTTP attribution was not server-derived: %+v", inputs[0])
 	}
 }

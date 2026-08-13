@@ -6,7 +6,7 @@
 |---|---|
 | Assigned agent | `Unassigned` |
 | Ticket state | `runtime_verified` |
-| Last synchronized | `2026-08-04` |
+| Last synchronized | `2026-08-05` |
 
 > Claim this ticket in this file before implementation. During active work,
 > update this fragment rather than the shared index; synchronize the index
@@ -31,3 +31,30 @@
   input, output, reasoning, cache-read, and cache-write components reconcile to
   the total. Golden tests cover both Opus and Sonnet on adjacent dates.
 
+## Tectonicus follow-up — 2026-08-05
+
+Tectonicus Pulse found a separate reconciliation symptom after the rate-card
+repair: `costs/phase/daily` and `costs/execution` disagree by **3.1×** under a
+single opaque workflow-builder bucket. The workflow has no producer, plan step,
+or configuration surface that controls that grouping, so it is platform-owned.
+
+This does not refute the verified rate-card repair. It shows that correct
+per-call pricing alone is insufficient when summaries cannot reconcile the same
+execution across phase/daily and execution views. Coordinate with PLAT-009 and
+PLAT-031: add a real per-execution reconciliation test that proves each view's
+scope, includes every charge once, and labels intentionally cumulative views as
+non-comparable rather than presenting them as a run total.
+
+## Scope-presentation repair — 2026-08-05
+
+**Implemented; needs a fresh workflow/Pulse run for runtime re-verification.**
+`get_cost_summary(run_folder=...)` now states that its execution totals cover
+only that run and renders Builder/Pulse usage as a cumulative reference which
+must not be added to it. The dashboard likewise presents **Selected run cost**
+separately from Builder/Pulse spend across recorded days, rather than silently
+forming a misleading mixed-scope “total cost.” This prevents the observed 3.1×
+comparison from being presented as a run-cost mismatch while PLAT-009/031
+continue to improve ledger reconciliation itself.
+
+Focused verification: the workflow-review sequence tests and the frontend
+production build pass.

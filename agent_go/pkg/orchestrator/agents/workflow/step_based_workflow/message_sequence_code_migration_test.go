@@ -161,15 +161,14 @@ func TestConvertLegacyCodeSequenceCreatesStandaloneScriptedSteps(t *testing.T) {
 			t.Fatalf("step %s is not configured as scripted: %+v", cfg.ID, cfg.AgentConfigs)
 		}
 	}
-	if migratedConfigs[0].AgentConfigs.DBAccess != DBAccessReadWrite {
-		t.Fatalf("db-producing item access = %q, want %q", migratedConfigs[0].AgentConfigs.DBAccess, DBAccessReadWrite)
-	}
-	if migratedConfigs[0].AgentConfigs.ScriptedMaxFixIter == nil || *migratedConfigs[0].AgentConfigs.ScriptedMaxFixIter != 2 {
-		t.Fatalf("repairing item max fixes = %v, want 2", migratedConfigs[0].AgentConfigs.ScriptedMaxFixIter)
-	}
-	if migratedConfigs[1].AgentConfigs.ScriptedMaxFixIter == nil || *migratedConfigs[1].AgentConfigs.ScriptedMaxFixIter != 0 {
-		t.Fatalf("stop-on-failure item max fixes = %v, want 0", migratedConfigs[1].AgentConfigs.ScriptedMaxFixIter)
-	}
+	// PLAT-061 dropped two derived fields from this migration:
+	//   db_access — the runtime discarded it entirely.
+	//   learn_code_max_fix_iterations — it wrote 0 for every item without a
+	//     legacy repair action, which read as a deliberate "never repair" but was
+	//     only the absence of a legacy field. Five hetznerssh steps carried that
+	//     0 with no reasoning behind it.
+	// Scripted steps now take the uniform default; lock_code is the explicit way
+	// to skip the fix loop.
 	if migratedConfigs[1].ValidationSchema == nil || len(migratedConfigs[1].ValidationSchema.Files) != 1 {
 		t.Fatalf("final migrated step did not preserve parent config validation: %+v", migratedConfigs[1].ValidationSchema)
 	}

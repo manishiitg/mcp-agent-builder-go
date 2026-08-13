@@ -27,8 +27,8 @@ Use the same workflow-style config/status split:
 - **Reporting dashboard** (`reports/`) — **live** HTML: it calls `window.report.query(sql)`
   against `db/db.sqlite` inside the app, which doesn't exist on a static host. **Generate a
   static snapshot** first (next section) → `dashboard.html`.
-- **Pulse log** (`builder/improve.html`, or the org's `pulse/org-pulse.html`) — a
-  **self-contained** HTML document → `pulse.html`. Publish it as-is (after the theme step).
+- **Pulse state** — remains in SQLite and is shown in the application Pulse popup.
+  It is not a static publish artifact.
 
 For workflow publish, deploy three files: `dashboard.html`, `pulse.html`, and an
 **`index.html` wrapper** with a **top nav** (Dashboard | Pulse) over a single iframe —
@@ -76,7 +76,7 @@ publish secrets, `db/db.sqlite` raw, credentials, or `.env`/key files.
 
 A live report won't work on static hosting. Bake it to static HTML at publish time:
 
-1. **Find the queries.** Read the report HTML (and `reports/report_plan.json`) and collect
+1. **Find the queries.** Read `db/reports/index.html`, including each internal view, and collect
    every `window.report.query("…")` SQL string it runs.
 2. **Run them** against `db/db.sqlite` (`sqlite3 -json db/db.sqlite "<sql>"`), capturing each
    result set as JSON.
@@ -441,8 +441,8 @@ Follow the same set-up-then-prove flow as backup:
    and only then mark `published`. Record the URL in both the destination and the top-level
    `url`.
 3. Auto-republish (the post-run Pulse step) runs against a **verified** destination on **every**
-   run — the source artifacts (`builder/improve.html` + `db/db.sqlite`) change every run (a fresh
-   Pulse entry + new data), so there is no unchanged run to skip; it always re-publishes.
+   run — the source artifacts (`db/db.sqlite` + reports) can change every run, so
+   publishing must use the current verified source set.
 
 ## Always write publish status
 
@@ -471,7 +471,7 @@ If a destination is missing credentials or setup, mark it `failed` and continue 
 others.
 
 **Get `last_source_hash` right or the dot lies.** The backend computes the source hash itself
-(a sha256 over `builder/improve.html`, `db/db.sqlite`, and `reports/`) and reports it as
+(a sha256 over `db/db.sqlite` and `reports/`) and reports it as
 `current_source_hash` in the workflow publish status. For org publish, hash
 `pulse/goals.html` and `pulse/org-pulse.html` deterministically and record that hash in the
 `pulse/publish/status.json` status file. Set `last_source_hash` to the current source hash you just

@@ -73,14 +73,12 @@ import type {
   WorkflowPublishSecretResponse,
   ReportHumanInputResponse,
   ReportHumanInputsResponse,
-  ReportWidgetResponseResponse,
-  ReportWidgetResponsesResponse,
   PulseModuleStateResponse,
   PulseFindingsResponse,
-  PulseReviewResponse,
   PulseReviewsResponse,
   PulseAgentMetricsResponse,
   PulseImpactResponse,
+  PulseContextResponse,
 } from './api-types'
 import type { PlanStep, AgentConfigs } from '../utils/stepConfigMatching'
 
@@ -611,9 +609,14 @@ export const agentApi = {
     options?: {
       limit?: number
       offset?: number
+	      // The normal chat working set omits detailed child transcripts. The
+	      // terminal Conversation view needs the complete page, then scopes it
+	      // locally to the selected terminal before rendering.
+	      workingSet?: 'session' | 'all'
     }
   ): Promise<GetEventsResponse> => {
-    const params: Record<string, string | number> = { working_set: 'session' }
+    const params: Record<string, string | number> = {}
+    if (options?.workingSet !== 'all') params.working_set = 'session'
 
     // Forward polling mode: use sinceIndex
     if (sinceIndex !== undefined && sinceIndex >= -1) {
@@ -635,12 +638,15 @@ export const agentApi = {
     return response.data
   },
 
-  // Initial restores should not use since=-1. That requests the entire
-  // in-memory event buffer before the frontend trims it, which can spike both
-  // backend and Electron memory on large workflow runs. since=0 uses the
-  // backend's bounded initial page and still returns last_processed_index.
+  // Initial restores use a bounded backward page. `since=0` looks similar but
+  // is not equivalent: event index zero legitimately contains the opening
+  // user message, so forward polling from zero can omit the very first message
+  // while still returning later tools and the answer.
   getRecentSessionEvents: async (sessionId: string): Promise<GetEventsResponse> => {
-    return agentApi.getSessionEvents(sessionId, 0)
+    return agentApi.getSessionEvents(sessionId, undefined, {
+      limit: 300,
+      offset: 0,
+    })
   },
 
   getTerminalEvents: async (
@@ -1514,13 +1520,6 @@ export const agentApi = {
     return response.data as PulseReviewsResponse
   },
 
-  getPulseReview: async (workspacePath: string, id: number) => {
-    const response = await api.get('/api/workflow/pulse-reviews', {
-      params: { workspace_path: workspacePath, id },
-    })
-    return response.data as PulseReviewResponse
-  },
-
   getPulseAgentMetrics: async (
     workspacePath: string,
     filters: { pulseRunId?: string; module?: string; role?: 'reviewer' | 'fixer' } = {},
@@ -1543,6 +1542,13 @@ export const agentApi = {
     return response.data as PulseImpactResponse
   },
 
+  getPulseContext: async (workspacePath: string) => {
+    const response = await api.get('/api/workflow/pulse-context', {
+      params: { workspace_path: workspacePath },
+    })
+    return response.data as PulseContextResponse
+  },
+
   answerReportHumanInput: async (
     workspacePath: string,
     inputId: string,
@@ -1561,47 +1567,6 @@ export const agentApi = {
       workspace_path: workspacePath,
     })
     return response.data as ReportHumanInputResponse
-  },
-
-  listReportWidgetResponses: async (
-    workspacePath: string,
-    widgetId?: string,
-    instanceKey?: string,
-    status?: string,
-  ) => {
-    const response = await api.get('/api/report-widget-responses', {
-      params: {
-        workspace_path: workspacePath,
-        ...(widgetId ? { widget_id: widgetId } : {}),
-        ...(instanceKey ? { instance_key: instanceKey } : {}),
-        ...(status ? { status } : {}),
-      },
-    })
-    return response.data as ReportWidgetResponsesResponse
-  },
-
-  answerReportWidgetResponse: async (
-    workspacePath: string,
-    widgetId: string,
-		body: {
-			instance_key?: string
-			selected_option_id?: string
-			note?: string
-			expected_subject_id?: string
-			expected_subject_version?: string
-			expected_subject_hash?: string
-		},
-  ) => {
-    const response = await api.post(`/api/report-widget-responses/${encodeURIComponent(widgetId)}/answer`, {
-      workspace_path: workspacePath,
-      instance_key: body.instance_key || '',
-      selected_option_id: body.selected_option_id || '',
-			note: body.note || '',
-			expected_subject_id: body.expected_subject_id || '',
-			expected_subject_version: body.expected_subject_version || '',
-			expected_subject_hash: body.expected_subject_hash || '',
-    })
-    return response.data as ReportWidgetResponseResponse
   },
 
   updatePlannerFile: async (filepath: string, content: string, commitMessage?: string) => {
@@ -1932,21 +1897,9 @@ export const agentApi = {
     }
   },
 
-  getBuilderDoc: async (workspacePath: string, doc: 'improve' | 'soul' | 'card-health' | 'card-progress' | 'card-cost', filePath?: string): Promise<{ success: boolean; doc: string; path: string; exists: boolean; content: string; error?: string }> => {
-    const response = await api.get('/api/workflow/builder-doc', { params: { workspace_path: workspacePath, doc, path: filePath || '' } })
+  getBuilderDoc: async (workspacePath: string, doc: 'soul' | 'card-health' | 'card-progress' | 'card-cost'): Promise<{ success: boolean; doc: string; path: string; exists: boolean; content: string; error?: string }> => {
+    const response = await api.get('/api/workflow/builder-doc', { params: { workspace_path: workspacePath, doc } })
     return response.data
-  },
-  getBuilderDocsStatus: async (workspacePath: string): Promise<{
-    success: boolean
-    improve: { exists: boolean; last_modified?: string; path: string }
-    error?: string
-  }> => {
-    const response = await api.get('/api/workflow/builder-docs-status', { params: { workspace_path: workspacePath } })
-    return response.data
-  },
-  getBuilderDocArchives: async (workspacePath: string, doc: 'improve' = 'improve'): Promise<{ success: boolean; files: Array<{ path: string; label: string }>; error?: string }> => {
-    const response = await api.get('/api/workflow/builder-doc-archives', { params: { workspace_path: workspacePath, doc } })
-    return { ...response.data, files: Array.isArray(response.data?.files) ? response.data.files : [] }
   },
   getPlanChangelog: async (workspacePath: string): Promise<import('./api-types').PlanChangelogResponse> => {
     const response = await api.get('/api/workflow/plan-changelog', { params: { workspace_path: workspacePath } })

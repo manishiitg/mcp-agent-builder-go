@@ -43,9 +43,7 @@ const pulseAgentMetricsIndexes = `
 CREATE INDEX IF NOT EXISTS idx_pulse_agent_metrics_run ON pulse_agent_metrics(pulse_run_id, role, module);
 CREATE INDEX IF NOT EXISTS idx_pulse_agent_metrics_review ON pulse_agent_metrics(review_run_id, module, role);`
 
-// PulseAgentMetricRecord is one durable measurement for a Pulse reviewer or
-// fixer child. Queue delay is kept separate from execution time so constrained
-// concurrency cannot be mistaken for slow model work.
+// PulseAgentMetricRecord is one durable measurement for Pulse work.
 type PulseAgentMetricRecord struct {
 	ID               int64                            `json:"id"`
 	ExecutionID      string                           `json:"execution_id"`
@@ -90,9 +88,7 @@ func RecordPulseAgentMetric(ctx context.Context, workspacePath string, metric Pu
 		return fmt.Errorf("Pulse agent metric requires execution_id")
 	}
 	metric.Module = strings.TrimSpace(metric.Module)
-	if metric.Module != "pulse_fixer" {
-		metric.Module = pulsemodules.Normalize(metric.Module)
-	}
+	metric.Module = pulsemodules.Normalize(metric.Module)
 	metric.Role = strings.ToLower(strings.TrimSpace(metric.Role))
 	if metric.Role != "reviewer" && metric.Role != "fixer" {
 		return fmt.Errorf("Pulse agent metric role must be reviewer or fixer")
@@ -250,7 +246,7 @@ func LoadPulseAgentMetrics(ctx context.Context, workspacePath, pulseRunID, modul
 		value  string
 	}{{"pulse_run_id", pulseRunID}, {"module", module}, {"role", role}} {
 		if value := strings.TrimSpace(filter.value); value != "" {
-			if filter.column == "module" && value != "pulse_fixer" {
+			if filter.column == "module" {
 				value = pulsemodules.Normalize(value)
 			}
 			query += " AND " + filter.column + "=?"

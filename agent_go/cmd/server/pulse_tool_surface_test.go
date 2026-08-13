@@ -10,7 +10,7 @@ import (
 	mcpexecutor "github.com/manishiitg/mcpagent/executor"
 )
 
-// pulseConsolidatedToolNames is the complete agent-facing Pulse surface.
+// pulseConsolidatedToolNames is the established Pulse state/fixer surface.
 //
 // Eight tools became four. The naming rule is derivable and exhaustive: a Pulse
 // tool is `get_pulse_*` when it reads and `record_pulse_*` when it writes, and
@@ -19,13 +19,20 @@ import (
 // close_pulse_fix_attempt, complete_pulse_fix_attempt, consume_human_input,
 // resolve_human_input, and update_human_input, none of which ever existed.
 //
-// begin_pulse_fixer_run and resolve_run_concern are outside the consolidation
-// (they were never part of the eight) and are asserted separately.
+// resolve_run_concern is outside the consolidation (it was never part of the
+// eight) and is asserted separately.
 var pulseConsolidatedToolNames = []string{
 	"get_pulse_state",
 	"record_pulse_worklist",
 	"record_pulse_result",
 	"record_pulse_impact",
+}
+
+var pulseReviewerWriteToolNames = []string{
+	"record_pulse_finding",
+	"record_pulse_verification",
+	"complete_pulse_review",
+	"merge_pulse_issues",
 }
 
 // pulseRemovedToolNames must never reappear. Each was folded into one of the
@@ -40,7 +47,7 @@ var pulseRemovedToolNames = []string{
 	"mark_pulse_final_command_result",
 }
 
-func TestPulseToolSurfaceIsExactlyTheFourConsolidatedTools(t *testing.T) {
+func TestPulseToolSurfaceIncludesTypedReviewerWrites(t *testing.T) {
 	tools, executors, categories := createPulseWorklistTools()
 	registered := map[string]bool{}
 	for _, tool := range tools {
@@ -61,6 +68,17 @@ func TestPulseToolSurfaceIsExactlyTheFourConsolidatedTools(t *testing.T) {
 			t.Errorf("consolidated Pulse tool %q has category %q, want workflow", name, categories[name])
 		}
 	}
+	for _, name := range pulseReviewerWriteToolNames {
+		if !registered[name] {
+			t.Errorf("typed reviewer tool %q is not registered", name)
+		}
+		if _, ok := executors[name]; !ok {
+			t.Errorf("typed reviewer tool %q has no executor", name)
+		}
+		if categories[name] != "workflow" {
+			t.Errorf("typed reviewer tool %q has category %q, want workflow", name, categories[name])
+		}
+	}
 	for _, name := range pulseRemovedToolNames {
 		if registered[name] {
 			t.Errorf("removed Pulse tool %q is still registered", name)
@@ -73,15 +91,20 @@ func TestPulseToolSurfaceIsExactlyTheFourConsolidatedTools(t *testing.T) {
 		}
 	}
 
-	// The surface is the four plus the two tools that were never part of the
-	// consolidation. Anything else is a tool nobody accounted for.
-	expected := map[string]bool{"begin_pulse_fixer_run": true, "resolve_run_concern": true}
+	// The surface is the four consolidated lifecycle tools, typed reviewer
+	// writes, and resolve_run_concern. merge_pulse_issues is intentionally the
+	// one semantic maintenance verb: calling it record_* would conceal that it
+	// retires duplicate queue entries while preserving their history.
+	expected := map[string]bool{"resolve_run_concern": true}
 	for _, name := range pulseConsolidatedToolNames {
+		expected[name] = true
+	}
+	for _, name := range pulseReviewerWriteToolNames {
 		expected[name] = true
 	}
 	for name := range registered {
 		if !expected[name] {
-			t.Errorf("unexpected Pulse tool %q; the surface is %v plus begin_pulse_fixer_run and resolve_run_concern",
+			t.Errorf("unexpected Pulse tool %q; the surface is %v plus resolve_run_concern",
 				name, pulseConsolidatedToolNames)
 		}
 	}
@@ -89,10 +112,11 @@ func TestPulseToolSurfaceIsExactlyTheFourConsolidatedTools(t *testing.T) {
 		t.Errorf("registered %d Pulse tools, want %d", len(registered), len(expected))
 	}
 
-	// Every Pulse tool name follows the one rule, so the agent can derive a name
-	// instead of guessing one.
+	// Every ordinary Pulse tool follows the one naming rule, so the agent can
+	// derive a name instead of guessing one. The two explicit semantic actions
+	// are documented by name in the returned tool index.
 	for name := range registered {
-		if name == "begin_pulse_fixer_run" || name == "resolve_run_concern" {
+		if name == "resolve_run_concern" || name == "complete_pulse_review" || name == "merge_pulse_issues" {
 			continue
 		}
 		if !strings.HasPrefix(name, "get_pulse_") && !strings.HasPrefix(name, "record_pulse_") {
@@ -141,7 +165,7 @@ func TestGetPulseStateViewsReturnWhatTheirPredecessorsReturned(t *testing.T) {
 
 	// view="backlog" — what get_pulse_finding_backlog returned.
 	if _, err := step_based_workflow.RecordRunConcerns(
-		ctx, workspacePath, "pulse-view", "", pulseModuleBugReview,
+		ctx, workspacePath, "pulse-view", "", pulseModuleWorkflowReview,
 		step_based_workflow.ConcernPhaseReview, "CONCERNS: the collector writes a null column",
 	); err != nil {
 		t.Fatalf("file concern: %v", err)
@@ -153,16 +177,20 @@ func TestGetPulseStateViewsReturnWhatTheirPredecessorsReturned(t *testing.T) {
 	var backlogView struct {
 		Findings []step_based_workflow.PulseFindingLifecycle `json:"findings"`
 		Total    int                                         `json:"total"`
+		Summary  map[string]interface{}                      `json:"summary"`
 		Note     string                                      `json:"note"`
 	}
 	if err := json.Unmarshal([]byte(raw), &backlogView); err != nil {
 		t.Fatalf("decode backlog view: %v", err)
 	}
-	if backlogView.Total != 1 || len(backlogView.Findings) != 1 || backlogView.Note == "" {
+	if backlogView.Total != 1 || len(backlogView.Findings) != 1 || backlogView.Note == "" || backlogView.Summary["active_count"] != float64(1) {
 		t.Fatalf(`view="backlog" did not return the durable issue backlog: %s`, raw)
 	}
-	if backlogView.Findings[0].Issue.ID == "" || backlogView.Findings[0].Fingerprint == "" {
-		t.Fatalf(`view="backlog" lost the issue.id/fingerprint pair a fixer must carry: %+v`, backlogView.Findings[0])
+	if backlogView.Findings[0].Issue.ID == "" || backlogView.Findings[0].Fingerprint != "" {
+		t.Fatalf(`view="backlog" must expose PUL issue id but not lifecycle fingerprint: %+v`, backlogView.Findings[0])
+	}
+	if strings.Contains(raw, `"fingerprint"`) || strings.Contains(raw, `"finding_id"`) || strings.Contains(raw, `"attempt_id"`) {
+		t.Fatalf(`view="backlog" leaked an internal lifecycle identity: %s`, raw)
 	}
 	// The optional module filter still filters, and still names the closed set.
 	if _, err := execute(ctx, map[string]interface{}{
@@ -172,16 +200,17 @@ func TestGetPulseStateViewsReturnWhatTheirPredecessorsReturned(t *testing.T) {
 		t.Fatalf(`view="backlog" module rejection must name the closed set: %v`, err)
 	}
 
-	// view="review" — what get_pulse_review_result returned.
+	// view="review" returns only the compact receipt. Findings and proof are
+	// loaded from the lifecycle backlog, never from persisted reviewer prose.
 	const reviewRunID = "2026-08-01T00-00-00.000Z_surface"
-	if err := step_based_workflow.RecordPulseReview(
-		ctx, workspacePath, pulseModuleBugReview, reviewRunID, "pulse-view", "", "## Verdict\nClean.",
+	if err := step_based_workflow.CompletePulseReview(
+		ctx, workspacePath, []string{pulseModuleWorkflowReview}, reviewRunID, "pulse-view", "Clean.", "completed",
 	); err != nil {
 		t.Fatalf("record review: %v", err)
 	}
 	raw, err = execute(ctx, map[string]interface{}{
 		"workspace_path": workspacePath, "view": "review",
-		"review_run_id": reviewRunID, "module": pulseModuleBugReview,
+		"review_run_id": reviewRunID, "module": pulseModuleWorkflowReview,
 	})
 	if err != nil {
 		t.Fatalf(`get_pulse_state(view="review"): %v`, err)
@@ -190,13 +219,16 @@ func TestGetPulseStateViewsReturnWhatTheirPredecessorsReturned(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &reviewView); err != nil {
 		t.Fatalf("decode review view: %v", err)
 	}
-	for _, key := range []string{"module", "review_run_id", "pulse_run_id", "status", "verifications", "markdown"} {
+	for _, key := range []string{"module", "review_run_id", "pulse_run_id", "status", "verdict", "finding_count", "verification_count", "verifications"} {
 		if _, exists := reviewView[key]; !exists {
-			t.Errorf(`view="review" dropped %q, which get_pulse_review_result returned: %s`, key, raw)
+			t.Errorf(`view="review" dropped compact receipt field %q: %s`, key, raw)
 		}
 	}
-	if markdown, _ := reviewView["markdown"].(string); !strings.Contains(markdown, "Clean.") {
-		t.Errorf(`view="review" did not return the saved reviewer Markdown: %s`, raw)
+	if _, exists := reviewView["markdown"]; exists {
+		t.Errorf(`view="review" unexpectedly returned legacy reviewer prose: %s`, raw)
+	}
+	if verdict, _ := reviewView["verdict"].(string); verdict != "Clean." {
+		t.Errorf(`view="review" verdict = %q, want Clean.`, verdict)
 	}
 
 	// A not-yet-saved review is the expected result of the pre-discovery check the
@@ -204,7 +236,7 @@ func TestGetPulseStateViewsReturnWhatTheirPredecessorsReturned(t *testing.T) {
 	// caller looking for a different id — the identity was validated just above.
 	_, err = execute(ctx, map[string]interface{}{
 		"workspace_path": workspacePath, "view": "review",
-		"review_run_id": "2026-08-01T00-00-00.000Z_missing", "module": pulseModuleBugReview,
+		"review_run_id": "2026-08-01T00-00-00.000Z_missing", "module": pulseModuleWorkflowReview,
 	})
 	if err == nil {
 		t.Fatal("missing review returned no error")
@@ -259,8 +291,6 @@ func TestRecordPulseResultCoversBothFormerResultTypes(t *testing.T) {
 	if err := initializePulseFinalCommandStates(context.Background(), workspacePath, pulseRunID); err != nil {
 		t.Fatalf("initialize final commands: %v", err)
 	}
-	release := registerTrustedPulseSession(sessionID, pulseRunID)
-	defer release()
 
 	_, executors, _ := createPulseWorklistTools()
 	execute := executors["record_pulse_result"].(func(context.Context, map[string]interface{}) (string, error))
@@ -296,8 +326,8 @@ func TestRecordPulseResultCoversBothFormerResultTypes(t *testing.T) {
 	commandArgs := func(status string) map[string]interface{} {
 		return map[string]interface{}{
 			"workspace_path": workspacePath, "pulse_run_id": pulseRunID,
-			"command": pulseFinalCommandDashboard, "result": status,
-			"reason": "Dashboard " + status,
+			"command": pulseFinalCommandBackup, "result": status,
+			"reason": "Backup " + status,
 		}
 	}
 	if _, err := execute(ctx, commandArgs("done")); err == nil || !strings.Contains(err.Error(), "marked running before done") {
@@ -318,7 +348,7 @@ func TestRecordPulseResultCoversBothFormerResultTypes(t *testing.T) {
 		t.Fatalf("get final command states: %v", err)
 	}
 	for _, state := range commands {
-		if state.Command == pulseFinalCommandDashboard && state.Status != "done" {
+		if state.Command == pulseFinalCommandBackup && state.Status != "done" {
 			t.Fatalf("final command result was not persisted: %+v", state)
 		}
 	}
@@ -332,8 +362,6 @@ func TestRecordPulseResultRejectionsNameBothTargets(t *testing.T) {
 	execute := executors["record_pulse_result"].(func(context.Context, map[string]interface{}) (string, error))
 	sessionID := "merged-reject-session"
 	pulseRunID := "schedule-cron--merged-reject"
-	release := registerTrustedPulseSession(sessionID, pulseRunID)
-	defer release()
 	ctx := mcpexecutor.WithSessionID(context.Background(), sessionID)
 
 	base := map[string]interface{}{
@@ -353,7 +381,7 @@ func TestRecordPulseResultRejectionsNameBothTargets(t *testing.T) {
 
 	_, err := execute(ctx, clone(nil))
 	assertRejectionContains(t, err, "exactly one of module or command",
-		"module=missing", "command=missing", pulseModuleWorkflowReview, pulseFinalCommandDashboard)
+		"module=missing", "command=missing", pulseModuleWorkflowReview, pulseFinalCommandBackup)
 
 	_, err = execute(ctx, clone(map[string]interface{}{
 		"module": pulseModuleWorkflowReview, "command": pulseFinalCommandBackup,
@@ -378,11 +406,10 @@ func TestSchedulerPulsePromptsNameNoRemovedTool(t *testing.T) {
 	for _, step := range postRunMonitorSteps() {
 		prompts[step.label] = step.query
 	}
-	for _, moduleStep := range postRunMonitorModuleSteps("pulse-test") {
-		prompts[moduleStep.module+"-module"] = moduleStep.step.query
-	}
-	for _, step := range postRunMonitorStepsForManifest(&WorkflowManifest{Version: "1.0.0"}) {
-		prompts[step.label+"-upgrade"] = step.query
+	// Contract-upgrade turns are delivered by the pre-run preflight, not by
+	// Pulse, but they name tools too and are built in the same package.
+	for _, upgrade := range workflowVersionUpgradePlan(&WorkflowManifest{Version: "1.0.0"}) {
+		prompts[upgrade.label+"-upgrade"] = upgrade.query
 	}
 	if len(prompts) == 0 {
 		t.Fatal("no scheduler Pulse prompts were collected")

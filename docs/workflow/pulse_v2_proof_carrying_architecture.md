@@ -76,19 +76,19 @@ The current Pulse loop is broadly:
 2. A consolidated parent launches read-only module reviewers in batches.
 3. The same parent becomes the single Pulse Fixer and applies bounded changes.
 4. A finalizer updates the dashboard, backs up, publishes, and notifies.
-5. SQLite, reviewer Markdown, `builder/improve.html`, cards, and run metadata
+5. SQLite lifecycle records, compact review receipts, `builder/improve.html`,
+   cards, and run metadata
    preserve different parts of the outcome and recovery state.
 
-The canonical module set currently contains:
+The canonical reviewer-perspective set currently contains:
 
-- `bug_review`
-- `artifact_review`
-- `report_health`
-- `eval_health`
-- `stores_health`
+- `workflow_review` (Engineering Review)
 - `llm_ops_review`
 - `strategy_auditor`
 - `goal_advisor`
+
+The older artifact-named identities remain readable aliases but are not
+scheduled reviewers.
 
 The July 2026 work materially improved Pulse:
 
@@ -213,8 +213,9 @@ Pulse state currently spans:
 - `pulse_fix_verifications` and `pulse_finding_events`;
 - `pulse_final_command_state`;
 - `eval_results`;
-- full reviewer Markdown stored as TEXT in `pulse_review_log` (with retained
-  legacy `pulse/reviews/**/*.md` files during the v1.0.17 compatibility window);
+- compact reviewer receipts in `pulse_review_log`; typed reviewer tools write
+  findings and verifications directly, while reviewer prose is transient,
+  and legacy `pulse/reviews/**/*.md` files are removed after conversion;
 - `builder/improve.html`;
 - the hidden `#pulse-agent-handoff` recovery marker;
 - dashboard cards;
@@ -223,7 +224,7 @@ Pulse state currently spans:
 
 Some duplication is intentional, but recovery guidance must now explain which
 copy is authoritative and how to repair one mirror from another. Once a
-recovery process has to reconcile HTML, SQLite, reviewer artifacts, and
+recovery process has to reconcile HTML, SQLite lifecycle records, and
 scheduler state, presentation has become part of the transaction protocol.
 
 The system needs one immutable operational ledger and code-owned projections.
@@ -231,8 +232,8 @@ The system needs one immutable operational ledger and code-owned projections.
 ### 5. Agent-authored HTML is both a report and a state carrier
 
 `builder/improve.html` is valuable as a human-readable published journal. Since
-workflow contract v1.0.19 it is deliberately lightweight: three summary cells,
-three lifecycle counts, and at most 12 material Activity cards. It is not an
+workflow contract v1.0.20 it is deliberately lightweight: three summary cells
+and at most six material Activity transitions. It is not an
 operational source of truth or a recovery mechanism; the Pulse popup renders
 the complete SQLite-backed tracker.
 
@@ -788,16 +789,27 @@ For external side effects:
 
 Render from projections rather than agent-authored HTML.
 
-The UI should prioritize:
+The database-native Pulse popup uses this outcome-first hierarchy (implemented
+2026-08-05):
 
-1. decisions requiring the user;
-2. current workflow outcome;
-3. newly opened or worsening exceptions;
-4. repairs and proof state;
-5. active experiments;
-6. cost/time changes;
-7. backup/publish status;
-8. historical activity.
+1. workflow Goal, Success, and Constraints;
+2. latest retained workflow outcome and an ownership summary;
+3. pending Strategy Auditor and Goal Advisor decisions;
+4. three user-facing work areas: Engineering issues, Operations, and Product
+   improvements;
+5. one filterable issue and follow-through list, including proof, platform, and
+   resolved states;
+6. recent fixes and lifecycle follow-through;
+7. Pulse activity: what Gate ran or skipped, why, Fixer participation, time,
+   tokens, and cost;
+8. impact over time against the workflow success measures;
+9. finalization details such as backup, publish, and notification.
+
+The UI exposes only the current Engineering, Operations, Strategy, and Goal
+perspectives. Report, evaluation, artifact, database, knowledgebase, learning,
+and runtime checks are Engineering evidence packs rather than separate reviewer
+identities. The popup explains outcomes and ownership; implementation details
+remain secondary drill-down evidence.
 
 Static `pulse.html` publishing can reuse the same renderer or a server-generated
 HTML template.
@@ -999,8 +1011,8 @@ Pulse v2 should be considered successful when:
 8. Should static Pulse publishing happen on every state change or be
    source-hash gated?
 9. Which Goal Advisor proposals may enter a canary without explicit approval?
-10. How should historical `pulse_module_audit` and reviewer Markdown be exposed
-    after migration?
+10. How should historical `pulse_module_audit` and compact review receipts be
+    exposed after migration?
 
 ## Non-goals
 
@@ -1061,8 +1073,8 @@ contained `learning_health` / `knowledgebase_health` / `db_health` but **not**
 persist its result with `module "stores_health" is not a valid Pulse review
 module`. The reviewer would run, produce findings, and lose them at write time.
 
-Fixed by adding `stores_health` while retaining the three retired names so
-historical `pulse/reviews/<run>/<module>.md` artifacts stay readable. Two
+Fixed by adding `stores_health` while retaining the three retired identities so
+historical compact receipts remain readable. Two
 regression tests added, verified by revert (they reproduce the exact production
 error string).
 
@@ -1896,7 +1908,7 @@ the result is `inconclusive`, not permission to proceed.
 
 The missing cost model is real. Comparing Stage A only with token savings would
 still be incomplete: registry/state improvements also reduce outages, lost
-review artifacts, incorrect fixes, and operator investigation time.
+review findings, incorrect fixes, and operator investigation time.
 
 Track both operating cost and assurance value.
 
@@ -2047,6 +2059,13 @@ the current decision record.
 ## Decision: one consolidated Fixer (2026-08-01)
 
 **Status: adopted by operator decision, over the measurement below.**
+
+**2026-08-07 evolution:** the single-writer principle remains, but orchestration
+is now owned by the main Pulse agent. Gate is one turn; the optional Review+Fix
+turn chooses and owns any useful specialist children, consolidates evidence,
+repairs, verifies, and writes terminal receipts; Dashboard and Finalize follow.
+Go no longer starts reviewer, residual-Fixer, or recovery sessions. The history
+below explains the earlier single-writer decision that this newer shape retains.
 
 This section has been reversed twice in one day, so read the whole thing before
 touching it.
@@ -2310,26 +2329,73 @@ to produce anything; someone has to go and look.
 
 That is the shape now built. A `changed_unverified` finding names a `next_check`
 boundary; when a later reviewer runs and that evidence has arrived, it judges the
-finding before doing any discovery and emits a `PULSE_VERIFICATION_JSON` marker
-with the verdict. The Fixer routes it: `passed` closes as `fixed_verified`,
+finding before doing any discovery and calls the typed
+`record_pulse_verification` tool with the verdict. This replaced the former
+`PULSE_VERIFICATION_JSON` text transport; the lifecycle behavior is unchanged.
+The Fixer routes it: `passed` closes as `fixed_verified`,
 `failed` reopens, `inconclusive` leaves it awaiting the boundary it still names.
-Verification does not count against the finding cap, so a reviewer never has to
-choose between confirming past work and finding new problems.
+Verification happens before discovery, so a reviewer never chooses between
+confirming past work and describing fresh symptoms.
 
 This is what the 13 reopens were asking for. They were not evidence that
 verification is weak; they were fixes waiting on runs that then completed with
 nobody assigned to check them, so each pass repaired them again. rtslatency
 carried one finding at `seen_count` 4 for exactly this reason.
 
-### Confirmed defect: attemptless verification can discard a complete review (2026-08-03)
+### Decision: one public issue identity and semantic backlog consolidation (2026-08-08)
 
-**Status: implemented and verified (2026-08-03).** The latest
+**Status: implemented and covered by focused lifecycle, server-tool, and UI
+command tests.** Upwork exposed the prior design failure: reviews could create a
+new durable identity whenever their wording changed, so the queue grew while
+repairs did not keep pace. The internal fingerprint is still the database join
+key, but it is no longer an agent-facing contract.
+
+- Every Pulse tool now accepts the visible `PUL-…` `issue_id`; backlog and Gate
+  projections redact fingerprints and attempt IDs.
+- `record_pulse_finding(issue_id=…)` updates the existing root cause even when
+  the current wording or evidence path differs.
+- `merge_pulse_issues` lets the agent retire proven symptom duplicates into one
+  canonical root cause without deleting their events, attempts, or proof.
+- The Review+Fix contract is backlog-first: verify, repair, or classify active
+  issues before discovery. A new issue needs a distinct repair, owner, or proof
+  boundary. There is deliberately **no numeric finding cap**.
+- `get_pulse_state(view="backlog")` reports active, terminal, and merged counts,
+  and `/pulse-backlog` performs a one-time semantic cleanup without editing
+  workflow artifacts.
+
+This is not automated keyword merging. Causal sameness remains agentic; Go
+only preserves identity, history, and queue state after that judgment.
+
+### Decision: Gate-selected backlog-drain mode (2026-08-08)
+
+**Status: implemented and covered by server tests.** A large active queue is
+not itself a reason to buy another broad audit. The Gate now records one
+agent-selected mode alongside its complete module worklist:
+
+- `backlog_drain` — verify prior changes whose evidence has arrived, then repair
+  retained active root causes; do not launch broad discovery or product advisors.
+- `discovery` — investigate material new run, plan, store, or operational
+  evidence that the retained backlog does not explain.
+- `strategy` — run only selected Strategy Auditor/Goal Advisor product work.
+- `observe` — run no review/fix work and wait for an explicit evidence boundary.
+
+The mode and its reason are durable per Pulse run and are returned by
+`get_pulse_state(view="module", pulse_run_id=…)`. The following Review+Fix
+message sequence reads that stored mode before dispatching children. Go only
+validates and persists the finite mode vocabulary; it does not apply an issue
+count threshold or select reviewers. This keeps the system agentic while
+preventing a large unchanged backlog from repeatedly paying for rediscovery.
+
+### Confirmed defect: text-encoded verification could discard a complete review (2026-08-03)
+
+**Status: superseded by typed reviewer tools (2026-08-06).** The latest
 `build-in-public` Artifact Review demonstrated a contract seam between the
 review instructions and the persistence layer. The reviewer completed 11m40s
 of work, made 46 tool calls, and consumed 3.39M cumulative token operations,
-but its complete review was rejected before `pulse_review_log` persistence.
+but its structured terminal result was rejected before `pulse_review_log`
+persistence.
 
-The first rejected marker was:
+The first rejected marker used the former internal-only transport shape:
 
 ```json
 {"finding_id":"PUL-71DC2B32","fingerprint":"71dc2b32264343a2","attempt_id":"","verdict":"failed", ...}
@@ -2341,7 +2407,7 @@ The exact validation failure was:
 verification marker line 15 requires finding_id, fingerprint, attempt_id, expected, and observed
 ```
 
-Nine of the ten `PULSE_VERIFICATION_JSON` markers carried an empty
+Nine of the ten former `PULSE_VERIFICATION_JSON` markers carried an empty
 `attempt_id`. Only `PUL-DB6AC22E` named a real attempt. This was not a malformed
 finding analysis: the later, module-specific reviewer brief asked the reviewer
 to classify all ten retained findings and said to include an attempt ID "when
@@ -2350,24 +2416,24 @@ already rejected or closed with prior verification. None was an active
 `changed_unverified` fix awaiting proof, so the correct verification allowlist
 for this pass was empty.
 
-The Go invariant is intentional. `ExtractPulseReviewVerifications` requires a
-non-empty attempt ID, and the terminal module validator later joins the review
-verdict to the exact finding disposition by finding ID, fingerprint, and
-attempt ID. A `passed` verdict becomes `fixed_verified`; `failed` reopens the
-attempt; `inconclusive` remains `changed_unverified`. Relaxing only the parser
-would therefore move the same failure into the Fixer rather than solve it. See
+The lifecycle invariant is intentional. Internally, a reviewer verdict joins
+to one exact finding and fix attempt. Public tools now take only visible
+`issue_id`; the backend resolves the internal semantic fingerprint and eligible
+attempt before applying the same invariant. A `passed` verdict becomes
+`fixed_verified`; `failed` reopens the attempt; `inconclusive` remains
+`changed_unverified`. See
 [`pulse_review_log.go`](../../agent_go/pkg/orchestrator/agents/workflow/step_based_workflow/pulse_review_log.go)
 and [`pulse_worklist.go`](../../agent_go/cmd/server/pulse_worklist.go).
 
 The correct contract is narrower:
 
-- `PULSE_VERIFICATION_JSON` is proof about a **specific Fixer attempt**, not a
+- `record_pulse_verification` records proof about a **specific Fixer attempt**, not a
   generic re-check of any retained finding.
 - Only an owned `changed_unverified` finding with a non-empty `attempt_id` and
   an arrived `next_check` boundary is eligible.
 - Acknowledged, blocked, rejected, already-closed, suppressed, and legacy
-  attemptless findings are classified in the retained-finding manifest and
-  prose. They emit no verification marker.
+  attemptless findings are classified in the retained-finding manifest. They
+  do not call the verification tool.
 - Evidence contradicting a closed finding is a reopen/rediscovery event. It is
   not retroactively attached to an absent Fixer attempt.
 
@@ -2399,8 +2465,8 @@ reconstructed by the agent.
 The implementation keeps the strict proof validator and closes the seam at both
 boundaries:
 
-- reviewer launch receives a backend-generated allowlist of exact
-  `finding_id`/`fingerprint`/`attempt_id`/`next_check` tuples;
+- reviewer launch receives a backend-generated allowlist of exact internal
+  issue/attempt tuples; agents submit only its visible `issue_id`;
 - the allowlist is derived only from owned `changed_unverified` attempts that
   are still awaiting verification, including retired module aliases normalized
   to their current owner;
@@ -2515,34 +2581,49 @@ should be judged against all four: it is not better merely because it is
 cheaper, and it is not successful merely because it closes more findings if
 the workflow's goal does not improve.
 
-### Consolidated Workflow Review: one agent, native ordered turns
+### Gate-selected perspectives: one agent-owned Review+Fix turn
 
-**Implementation status (2026-08-03): implemented and pushed to `main` in
-`561fa2ce`.** The
-operational reviewers are consolidated into one `workflow_review` agent, while
-`strategy_auditor` and `goal_advisor` remain independent agents. Workflow Review
-is not one oversized prompt and is not six separately spawned agents. The
-backend now accepts `message_sequence` on background executor agents and on
-both generic-agent entry points. It creates one agent, then sends an opening
-instruction followed by ordered user messages while preserving the same
-conversation history, MCP session, folder guard, and isolated coding workspace.
+**Implementation status (2026-08-07): implemented locally, runtime verification
+pending.** Pulse now stays in the scheduled run's main-agent conversation. Go
+sends Gate, Review+Fix, Dashboard, and Finalize in order. It no longer chooses
+reviewer sessions, launches a residual Fixer/recovery agent, or polls tmux every
+three seconds. The Review+Fix agent reads the worklist, chooses the cheapest
+sufficient approach, and owns any specialist children through completion.
 
-The scheduled sequence is:
+Gate independently decides whether these four perspectives are due:
 
-1. opening evidence/backlog collection;
-2. correctness and pending-fix verification;
-3. plan and artifact drift;
-4. report and eval truthfulness;
-5. learnings, knowledgebase, and database contracts;
-6. LLM, cost, timing, and tool/runtime operations;
-7. semantic deduplication and final review.
+1. `workflow_review` — Engineering Review: execution correctness, pending-fix
+   verification, report/evaluation implementation, plan-change blast radius,
+   artifact consistency, and store integrity;
+2. `llm_ops_review` — SRE/FinOps: LLM, cost, timing, tools, retries, timeouts,
+   and operational efficiency;
+3. `strategy_auditor` — product/business review of whether the correctly
+   implemented current strategy and measurement system can achieve the goal;
+4. `goal_advisor` — blank-sheet product review of materially different routes
+   to the goal.
 
-Only the final turn receives the trusted completion marker. A failed turn stops
-the sequence immediately, and `workflow_review` is rejected at launch if the
-scheduled caller omits `message_sequence`; it cannot silently regress to the
-old single-turn shape. Independent work still uses separate agents and runs in
-parallel. Ordered turns are only for lenses that intentionally share evidence
-and reasoning state.
+Artifact-named reviewer modules are retired rather than normalized. Engineering
+Review owns their evidence packs under one durable identity from this design
+forward; old records are not a separate compatibility surface.
+
+The Review+Fix turn first reconciles retained findings and pending verification,
+then performs only the due lenses, semantically deduplicates their evidence,
+applies approved safe changes, and records one terminal receipt per due module.
+A skipped perspective is absent rather than receiving a no-op turn. Strategy
+Auditor and Goal Advisor remain distinct product lenses; the parent may delegate
+them independently, but owns the resulting proposal/decision routing. If the
+turn ends without every receipt, one compact continuation is sent to the same
+conversation and starts from durable state rather than rediscovering work.
+
+Advisor recommendations have an explicit route. `decision_required` creates a
+linked pending question (`strategy-proposal-*` for Strategy Auditor,
+`plan-proposal-*` for Goal Advisor). `evidence_wait` is the only valid
+`proposal_only` path and must name an exact `next_check`. `fixer_handoff` routes
+a truth-preserving technical prerequisite into the normal repair lifecycle.
+The lifecycle validator rejects an advisor `proposal_only` with no evidence
+boundary and rejects an advisor decision owned by the wrong source or ID
+namespace. This closes the Social Media failure where two real Auditor
+recommendations were recorded but neither became a decision nor a repair.
 
 ### Longitudinal impact: did repeated Pulse work advance the goal?
 
@@ -2782,10 +2863,10 @@ perform the task, or does it merely explain what happened previously?
 
 ### Reviewer contract
 
-The scheduled `workflow_review` stores turn now explicitly loads the
-`improve-learnings`, `improve-knowledge`, and `improve-database` references. It
-uses their audit rules inside the continuous Workflow Review conversation and
-suppresses their legacy standalone `stores_health` result envelopes.
+When Gate selects Engineering Review with store-integrity evidence, its turn in
+the shared reviewer explicitly loads the `improve-learnings`, `improve-knowledge`, and
+`improve-database` references. It uses their audit rules inside the continuous
+review conversation and suppresses their legacy standalone result envelopes.
 
 The learning lens must return two complete checkpoints:
 
@@ -2797,9 +2878,9 @@ The learning lens must return two complete checkpoints:
    steps that should be cleared.
 
 Missing a recorded package-wide purity baseline or observing non-skill content
-anywhere in the package is now a Stores-lens due signal for Workflow Review.
-The reviewer remains read-only and records bounded recommendations plus exact
-source evidence.
+anywhere in the package is now a due signal for Engineering Review with this
+evidence pack. The reviewer remains read-only and
+records bounded recommendations plus exact source evidence.
 
 ### Fixer contract
 
@@ -2853,3 +2934,107 @@ alone did not prevent the historical pollution. If new non-skill content still
 appears after the Pulse contract is live, the next hardening step is a guarded
 learning-write workflow that classifies proposed content before committing it;
 do not add brittle date/ID keyword rejection in Go.
+
+## Decision: Stores Health enforces one authoritative owner across workflow stores (2026-08-04)
+
+### Problem
+
+The learning purity contract fixed only one side of a broader ownership
+problem. KB review could detect stale or duplicate notes without proving that
+every note contained KB-owned material. DB review could verify schema and
+control-state paths without noticing long-form prompts, strategy, facts, or
+review history hidden in TEXT/JSON columns. Soul, Plan, Validation, Learnings,
+KB, DB, and Pulse could therefore retain independently stale copies of the same
+meaning while each individual store looked locally valid.
+
+### Ownership model
+
+Pulse Stores Health now applies one rule: **one semantic item, one
+authoritative owner**.
+
+| Owner | Canonical content |
+|---|---|
+| Soul | Why the workflow exists; goals, owner preferences, hard constraints, safety boundaries |
+| Plan / step config | What the current workflow does; strategy, cadence, routing, inputs, outputs, dependencies, behavior |
+| Validation | Deterministic acceptance and proof contracts |
+| Learnings | Reusable execution HOW: tools, selectors, parsing, retries, recovery, stable failure signatures |
+| Knowledgebase | Durable domain facts and patterns with provenance |
+| DB | Structured operational state: entities, metrics, actions, queues, status, timestamps, relationships, history rows |
+| Pulse | Findings, diagnosis, attempts, decisions, fix evidence, and verification history |
+
+Another store may retain a stable ID/path/query that resolves the canonical
+record. It must not retain a second prose or JSON copy that can drift.
+
+### Reviewer contract
+
+The continuous Workflow Review Stores turn loads all three store checklists and
+returns one reconciled `ownership_manifest`. Each misplaced or duplicated item
+has:
+
+```text
+item
+current_location
+semantic_type
+authoritative_owner
+duplicate_locations
+migration_or_removal_action
+verification
+```
+
+The component checkpoints are evidence for that final manifest:
+
+- Learnings: the existing complete `purity_manifest` and
+  `learning_objective_audit`, plus `ownership_candidates`.
+- Knowledgebase: required `kb_purity_manifest` covering every content-bearing
+  note on disk. Large files may use heading/search-routed bounded chunks, but no
+  file may be omitted. User-owned `knowledgebase/context/` is not inspected or
+  rewritten by maintenance.
+- DB: required `db_ownership_manifest` for every relevant table and every
+  content-bearing TEXT/JSON column, using bounded samples. It names structured
+  purpose, keys, writers, consumers, retention/lifecycle, sample evidence, and
+  semantic owner.
+
+The reviewer remains read-only. It reconciles the three lenses before filing
+findings so one misplaced item is not reported separately by its source and
+destination stores.
+
+### Fixer contract
+
+The main conversation's Review+Fix turn:
+
+1. classifies meaning before changing files or rows;
+2. preserves exact source evidence in Pulse and never discards the only copy;
+3. writes the authoritative destination only through its allowed workflow
+   tools, preserving provenance and keys;
+4. replaces legitimate cross-store copies with stable references where needed;
+5. re-reads the destination and proves the current consumer before removing the
+   old copy;
+6. re-runs all purity/ownership manifests and confirms no contradictory owner
+   remains.
+
+It never rewrites user-owned KB context, invents provenance, or performs a
+speculative semantic row migration. Ambiguous ownership or unavailable write
+authority produces a bounded decision/blocker rather than data loss. Immediate
+semantic moves are `fixed_verified` only after source removal, destination
+exactness, references, and consumer behavior are checked. Behavioral changes
+that require a producing run remain `changed_unverified` with that run as the
+next boundary.
+
+### Lock policy
+
+`lock_learnings` and `lock_knowledgebase` are recommendations only after the
+complete relevant manifest is clean and current evidence confirms stability.
+Learning locks are decided per step from its effective objective, description
+hash, recent successful runs, and its own `.learning_metadata.json`; the shared
+`learnings/_global/` package alone cannot prove that a particular contributor
+should be locked. Drift clears the recommendation. `lock_code` remains a
+separate, stricter executable-stability decision.
+
+### Implementation status and validation
+
+Implemented in the learning, KB, DB, post-run monitor, review/fixer, legacy
+scheduled Stores, and continuous Workflow Review sequence guidance. Regression
+tests pin all three manifests, the one-owner rule, cross-store Fixer playbook,
+and lock-after-cleanup rule. This remains an agentic prompt-and-tools contract;
+it does not add keyword classifiers, migrations, or new persistence logic in
+Go.

@@ -93,7 +93,7 @@ func TestArtifactReviewNotices(t *testing.T) {
 		"learnings/step-a",
 		"db/README.md",
 		"knowledgebase_access",
-		"reports/report_plan.json",
+		"db/reports/index.html",
 		"review-artifact-drift",
 	} {
 		if !strings.Contains(updateNotice, want) {

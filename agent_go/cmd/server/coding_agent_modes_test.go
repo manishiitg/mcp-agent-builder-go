@@ -28,41 +28,51 @@ import (
 
 func TestCodingAgentPersistentInteractiveFlags(t *testing.T) {
 	tests := []struct {
-		name           string
-		provider       string
-		wantClaudeCode bool
-		wantCodexCLI   bool
-		wantCursorCLI  bool
-		wantPiCLI      bool
+		name            string
+		provider        string
+		allowPersistent bool
+		wantClaudeCode  bool
+		wantCodexCLI    bool
+		wantCursorCLI   bool
+		wantPiCLI       bool
 	}{
 		{
-			name:           "claude code chat gets persistent tmux",
-			provider:       string(llm.ProviderClaudeCode),
-			wantClaudeCode: true,
+			name:            "claude code chat gets persistent tmux",
+			provider:        string(llm.ProviderClaudeCode),
+			allowPersistent: true,
+			wantClaudeCode:  true,
 		},
 		{
-			name:         "codex chat gets persistent tmux",
-			provider:     string(llm.ProviderCodexCLI),
-			wantCodexCLI: true,
+			name:            "codex chat gets persistent tmux",
+			provider:        string(llm.ProviderCodexCLI),
+			allowPersistent: true,
+			wantCodexCLI:    true,
 		},
 		{
-			name:     "cursor chat uses structured transport",
-			provider: string(llm.ProviderCursorCLI),
+			name:            "cursor chat uses structured transport",
+			provider:        string(llm.ProviderCursorCLI),
+			allowPersistent: true,
 		},
 		{
-			name:      "pi chat gets persistent tmux",
-			provider:  string(llm.ProviderPiCLI),
-			wantPiCLI: true,
+			name:            "pi chat gets persistent tmux",
+			provider:        string(llm.ProviderPiCLI),
+			allowPersistent: true,
+			wantPiCLI:       true,
 		},
 		{
-			name:     "non coding provider never gets tmux",
-			provider: string(llm.ProviderOpenAI),
+			name:            "non coding provider never gets tmux",
+			provider:        string(llm.ProviderOpenAI),
+			allowPersistent: true,
+		},
+		{
+			name:     "noninteractive coding agent never persists",
+			provider: string(llm.ProviderClaudeCode),
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotClaudeCode, gotCodexCLI, gotCursorCLI, gotPiCLI := codingAgentPersistentInteractiveFlags(tt.provider)
+			gotClaudeCode, gotCodexCLI, gotCursorCLI, gotPiCLI := codingAgentPersistentInteractiveFlags(tt.provider, tt.allowPersistent)
 			if gotClaudeCode != tt.wantClaudeCode || gotCodexCLI != tt.wantCodexCLI || gotCursorCLI != tt.wantCursorCLI || gotPiCLI != tt.wantPiCLI {
 				t.Fatalf("flags = (%v, %v, %v, %v), want (%v, %v, %v, %v)", gotClaudeCode, gotCodexCLI, gotCursorCLI, gotPiCLI, tt.wantClaudeCode, tt.wantCodexCLI, tt.wantCursorCLI, tt.wantPiCLI)
 			}
@@ -79,7 +89,7 @@ func TestCodingAgentPersistentInteractiveFlagsCoverTmuxContracts(t *testing.T) {
 			continue
 		}
 		t.Run(string(contract.Provider), func(t *testing.T) {
-			gotClaudeCode, gotCodexCLI, gotCursorCLI, gotPiCLI := codingAgentPersistentInteractiveFlags(string(contract.Provider))
+			gotClaudeCode, gotCodexCLI, gotCursorCLI, gotPiCLI := codingAgentPersistentInteractiveFlags(string(contract.Provider), true)
 			count := 0
 			for _, enabled := range []bool{gotClaudeCode, gotCodexCLI, gotCursorCLI, gotPiCLI} {
 				if enabled {
@@ -116,6 +126,33 @@ func TestCodingAgentUsesStructuredTransportForPolicy(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := codingAgentUsesStructuredTransportForPolicy(tc.provider, tc.policy); got != tc.want {
 				t.Fatalf("codingAgentUsesStructuredTransportForPolicy(%q, %q) = %v, want %v", tc.provider, tc.policy, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCodingAgentRequestAllowsPersistentInteractive(t *testing.T) {
+	tests := []struct {
+		name      string
+		req       *QueryRequest
+		sessionID string
+		want      bool
+	}{
+		{name: "ordinary user chat", req: &QueryRequest{AgentMode: "multi-agent"}, sessionID: "chat-1", want: true},
+		{name: "ordinary workflow builder chat", req: &QueryRequest{AgentMode: "workflow_phase", PhaseID: "workflow-builder"}, sessionID: "builder-chat-1", want: true},
+		{name: "scheduled trigger", req: &QueryRequest{TriggeredBy: "cron"}, sessionID: "chat-1"},
+		{name: "scheduled session id", req: &QueryRequest{}, sessionID: "schedule-manual--123"},
+		{name: "scheduled consecutive turns retain native CLI", req: &QueryRequest{TriggeredBy: "cron", KeepNativeSessionAlive: true}, sessionID: "schedule-manual--123", want: true},
+		{name: "background child", req: &QueryRequest{ParentSessionID: "parent-1"}, sessionID: "child-1"},
+		{name: "background child never retains native CLI", req: &QueryRequest{ParentSessionID: "parent-1", KeepNativeSessionAlive: true}, sessionID: "schedule-manual--123"},
+		{name: "typed pulse stage", req: &QueryRequest{SessionKind: "pulse_reviewer"}, sessionID: "review-1"},
+		{name: "converted schedule keeps identity and becomes persistent", req: &QueryRequest{UserInteractiveContinuation: true}, sessionID: "schedule-manual--123", want: true},
+		{name: "auto notification cannot promote schedule", req: &QueryRequest{UserInteractiveContinuation: true, IsAutoNotification: true}, sessionID: "schedule-manual--123"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := codingAgentRequestAllowsPersistentInteractive(tt.req, tt.sessionID); got != tt.want {
+				t.Fatalf("allows persistent = %v, want %v", got, tt.want)
 			}
 		})
 	}

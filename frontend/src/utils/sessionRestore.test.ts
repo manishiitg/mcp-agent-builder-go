@@ -1,85 +1,74 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const getRecentSessionEvents = vi.fn()
-const getChatHistoryConversation = vi.fn()
+const mocks = vi.hoisted(() => ({
+  setTabEvents: vi.fn(),
+  setTabLastEventIndex: vi.fn(),
+  setTabHasMoreOlderEvents: vi.fn(),
+  getRecentSessionEvents: vi.fn(),
+  getChatHistoryConversation: vi.fn(),
+}))
 
-vi.mock('../services/api', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../services/api')>()
-  return {
-    ...actual,
-    agentApi: {
-      ...actual.agentApi,
-      getRecentSessionEvents,
-      getChatHistoryConversation,
-    },
-  }
-})
+vi.mock('../stores/useChatStore', () => ({
+  useChatStore: {
+    getState: () => ({
+      setTabEvents: mocks.setTabEvents,
+      setTabLastEventIndex: mocks.setTabLastEventIndex,
+      setTabHasMoreOlderEvents: mocks.setTabHasMoreOlderEvents,
+    }),
+  },
+}))
 
-const createMemoryStorage = (): Storage => {
-  const values = new Map<string, string>()
-  return {
-    get length() { return values.size },
-    clear: () => values.clear(),
-    getItem: (key) => values.get(key) ?? null,
-    key: (index) => Array.from(values.keys())[index] ?? null,
-    removeItem: (key) => { values.delete(key) },
-    setItem: (key, value) => { values.set(key, value) },
-  }
-}
+vi.mock('../stores/useModeStore', () => ({
+  useModeStore: { getState: () => ({ setModeCategory: vi.fn() }) },
+}))
 
-describe('session restore chat-history fallback', () => {
+vi.mock('../services/api', () => ({
+  agentApi: {
+    getRecentSessionEvents: mocks.getRecentSessionEvents,
+    getChatHistoryConversation: mocks.getChatHistoryConversation,
+  },
+}))
+
+import { hydrateTabEvents } from './sessionRestore'
+
+describe('hydrateTabEvents restored chat fallback', () => {
   beforeEach(() => {
-    vi.resetModules()
-    vi.stubGlobal('localStorage', createMemoryStorage())
-    getRecentSessionEvents.mockReset()
-    getChatHistoryConversation.mockReset()
+    vi.clearAllMocks()
   })
 
-  afterEach(() => {
-    vi.unstubAllGlobals()
-    vi.restoreAllMocks()
-  })
-
-  it('hydrates a persisted product session when runtime events are empty', async () => {
-    getRecentSessionEvents.mockResolvedValue({
-      events: [],
+  it('prefers complete persisted history when reopening a chat', async () => {
+    const persistedEvent = {
+      id: 'persisted-1',
+      type: 'conversation_end',
+      session_id: 'restored-session',
+      timestamp: '2026-08-05T00:00:00Z',
+      data: {},
+    }
+    mocks.getRecentSessionEvents.mockResolvedValue({
+      events: [{ ...persistedEvent, id: 'volatile-tail-only' }],
       session_status: 'completed',
-      has_running_background_agents: false,
-      is_synthetic_turn: false,
-      can_steer: false,
+      last_processed_index: -1,
+      has_more: false,
     })
-    getChatHistoryConversation.mockResolvedValue({
-      session_id: 'video-studio:project:launch',
-      conversation_history: [
-        { Role: 'user', Parts: [{ Text: 'Create the launch teaser.' }] },
-        { Role: 'assistant', Parts: [{ Text: 'The finished teaser is ready.' }] },
-      ],
+    mocks.getChatHistoryConversation.mockResolvedValue({
+      session_id: 'restored-session',
+      conversation_history: [],
+      ui_events: [persistedEvent],
     })
 
-    const { useChatStore, waitForChatStoreHydration } = await import('../stores/useChatStore')
-    const { restoreSession } = await import('./sessionRestore')
-    await waitForChatStoreHydration()
-    const workspacePath = 'Chats/Video Studio/projects/launch'
-    const tabId = await useChatStore.getState().createChatTab('Launch teaser', {
-      mode: 'multi-agent',
-      agentProfileId: 'video-studio',
-      agentProfileVersion: 1,
-      agentProfileWorkspace: workspacePath,
-    }, 'video-studio:project:launch')
+    await hydrateTabEvents('restored-session', {
+      workspacePath: '/workspace/workflow',
+      fallbackToChatHistory: true,
+      preferChatHistory: true,
+    })
 
-    await expect(restoreSession('video-studio:project:launch', {
-      source: 'video-project-open',
-    })).resolves.toBe(tabId)
-
-    expect(getChatHistoryConversation).toHaveBeenCalledWith(
-      'video-studio:project:launch',
-      workspacePath,
+    expect(mocks.getChatHistoryConversation).toHaveBeenCalledWith(
+      'restored-session',
+      '/workspace/workflow',
     )
-    expect(useChatStore.getState().getTabEvents('video-studio:project:launch').map((event) => event.type)).toEqual([
-      'conversation_resumed',
-      'user_message',
-      'conversation_end',
-    ])
-    expect(useChatStore.getState().chatTabs[tabId]?.isStreaming).toBe(false)
+    expect(mocks.setTabEvents).toHaveBeenCalledWith('restored-session', [persistedEvent])
+    expect(mocks.setTabLastEventIndex).toHaveBeenCalledWith('restored-session', 0)
+    expect(mocks.setTabHasMoreOlderEvents).toHaveBeenCalledWith('restored-session', false)
+    expect(mocks.getRecentSessionEvents).not.toHaveBeenCalled()
   })
 })

@@ -3,8 +3,8 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { PulseReviewRecord } from '../../services/api-types'
 
-vi.mock('./PulseReviewArtifacts', () => ({
-  PulseReviewArtifacts: () => <div>Forensic report</div>,
+vi.mock('./PulseReviewHistory', () => ({
+  PulseReviewHistory: () => <div>Review history</div>,
 }))
 
 import { PulseModuleInspector } from './PulseModuleInspector'
@@ -15,8 +15,8 @@ const reviews: PulseReviewRecord[] = [{
   review_run_id: 'review-run-1',
   verdict: 'The collector fix held on the latest producing run.',
   status: 'completed',
-  artifact_kind: 'review',
-  artifact_bytes: 1200,
+  finding_count: 2,
+  verification_count: 1,
   recorded_at: '2026-08-03T10:40:00Z',
 }]
 
@@ -33,7 +33,7 @@ describe('PulseModuleInspector', () => {
 
     expect(html).toContain('Latest judgment')
     expect(html).toContain('The collector fix held on the latest producing run.')
-    expect(html).toContain('Full report')
+    expect(html).toContain('Review history')
     expect(html).not.toContain('Findings')
     expect(html).not.toContain('Needs attention')
     expect(html).not.toContain('Recent lifecycle activity')

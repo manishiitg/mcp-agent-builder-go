@@ -240,8 +240,8 @@ func TestWorkshopCLIPromptUsesProjectedWorkspaceToolReference(t *testing.T) {
 	for _, routingContract := range []string{
 		"The native `api-bridge` exposes `execute_shell_command`",
 		"intrinsic `read_skill`",
-		"logical HTTP-backed tools",
-		"Never call `api-bridge.list_executions`",
+		"All other workflow tools are HTTP-backed",
+		"never guess a bridge name or URL",
 		`get_api_spec(tool_name="<name>")`,
 		"$MCP_MCP",
 		"foreground curl",
@@ -339,18 +339,25 @@ func TestWorkshopModeIsMergedSuperset(t *testing.T) {
 		t.Errorf("workshop mode prompt should include the phase-detection directive")
 	}
 
-	// Should expose strategy/eval tooling. These are mentioned in the inline
-	// Workshop cheat sheet and through the
-	// pointer to optimize-playbook.
+	// Should expose the compact inline strategy/eval entry points. The full
+	// workflow-tool catalog is projected as a reference skill for coding CLIs,
+	// so do not duplicate individual catalog entries in the system prompt.
 	mustContain := []string{
 		"create_human_input_request",
-		"run_goal_advisor_review",
 		`read_skill(skills=[{"name":"builder-reference","path":"references/optimize-playbook.md"}])`,
 	}
 	for _, s := range mustContain {
 		if !strings.Contains(prompt, s) {
 			t.Errorf("workshop mode prompt missing editable-workflow content: %q", s)
 		}
+	}
+
+	workflowTools, err := guidance.RenderReferenceKindForTest("workflow-tools", "workshop")
+	if err != nil {
+		t.Fatalf("render workflow-tools reference: %v", err)
+	}
+	if !strings.Contains(workflowTools, "goal-advisor") {
+		t.Error("projected workflow-tools reference is missing goal-advisor guidance")
 	}
 }
 

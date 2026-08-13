@@ -68,16 +68,21 @@ const (
 	ConcernStatusFixing               = "fixing"
 	ConcernStatusAwaitingVerification = "awaiting_verification"
 	ConcernStatusAwaitingRun          = "awaiting_run"
+	// ConcernStatusQueuedForEngineering is actionable workflow work which was
+	// deliberately not attempted in this Pulse pass. It remains visible to Gate
+	// and must not be conflated with a true blocker.
+	ConcernStatusQueuedForEngineering = "queued_for_engineering"
 )
 
 const (
-	FindingDispositionFixedVerified     = "fixed_verified"
-	FindingDispositionVerifiedNoChange  = "verified_no_change"
-	FindingDispositionChangedUnverified = "changed_unverified"
-	FindingDispositionProposalOnly      = "proposal_only"
-	FindingDispositionAwaitingUser      = "awaiting_user"
-	FindingDispositionBlocked           = "blocked"
-	FindingDispositionExternalAction    = "external_action_required"
+	FindingDispositionFixedVerified        = "fixed_verified"
+	FindingDispositionVerifiedNoChange     = "verified_no_change"
+	FindingDispositionChangedUnverified    = "changed_unverified"
+	FindingDispositionProposalOnly         = "proposal_only"
+	FindingDispositionAwaitingUser         = "awaiting_user"
+	FindingDispositionQueuedForEngineering = "queued_for_engineering"
+	FindingDispositionBlocked              = "blocked"
+	FindingDispositionExternalAction       = "external_action_required"
 	// FindingDispositionAwaitingRun is a real finding that no one is stuck on:
 	// the evidence to resolve it simply has not been produced yet, and the next
 	// scheduled run will produce it.
@@ -113,6 +118,7 @@ var (
 		FindingDispositionChangedUnverified,
 		FindingDispositionProposalOnly,
 		FindingDispositionAwaitingUser,
+		FindingDispositionQueuedForEngineering,
 		FindingDispositionAwaitingRun,
 		FindingDispositionBlocked,
 		FindingDispositionExternalAction,
@@ -224,6 +230,46 @@ type PulseFindingDisposition struct {
 	Verification []PulseFindingVerification `json:"verification,omitempty"`
 }
 
+// ResolvePulseFindingDispositionIssueIDs turns the one public issue identity
+// supplied by an agent into the internal fingerprint required by the durable
+// lifecycle tables. Fingerprints remain essential for semantic deduplication,
+// but they are backend plumbing: making agents copy both identifiers caused
+// routine lifecycle writes to fail on an avoidable transcription mistake.
+func ResolvePulseFindingDispositionIssueIDs(
+	ctx context.Context,
+	workspacePath string,
+	dispositions []PulseFindingDisposition,
+) ([]PulseFindingDisposition, error) {
+	if len(dispositions) == 0 {
+		return nil, nil
+	}
+	findings, err := LoadPulseFindingLifecycles(ctx, workspacePath, "", -1)
+	if err != nil {
+		return nil, err
+	}
+
+	resolved := make([]PulseFindingDisposition, len(dispositions))
+	for index, disposition := range dispositions {
+		disposition = NormalizePulseFindingDisposition(disposition)
+		if disposition.FindingID == "" {
+			return nil, fmt.Errorf("finding_dispositions[%d] requires issue_id: the visible PUL-… id from get_pulse_state(view=\"backlog\")", index)
+		}
+		fingerprint := ""
+		for _, finding := range findings {
+			if strings.EqualFold(finding.Issue.ID, disposition.FindingID) {
+				fingerprint = finding.Fingerprint
+				break
+			}
+		}
+		if fingerprint == "" {
+			return nil, fmt.Errorf("no Pulse issue with issue_id %q; refresh get_pulse_state(view=\"backlog\") and use its issue.id", disposition.FindingID)
+		}
+		disposition.Fingerprint = fingerprint
+		resolved[index] = disposition
+	}
+	return resolved, nil
+}
+
 type PulseFindingEvent struct {
 	FindingID  string                 `json:"finding_id,omitempty"`
 	EventType  string                 `json:"event_type"`
@@ -259,8 +305,138 @@ type PulseFindingLifecycle struct {
 	Events          []PulseFindingEvent        `json:"events"`
 }
 
+// ResolvePulseFindingIssueID translates the one public Pulse identity into the
+// internal lifecycle row. Fingerprints remain database implementation details:
+// callers and agents must never copy them out of a backlog response.
+func ResolvePulseFindingIssueID(ctx context.Context, workspacePath, issueID string) (PulseFindingLifecycle, error) {
+	issueID = strings.TrimSpace(issueID)
+	if issueID == "" {
+		return PulseFindingLifecycle{}, fmt.Errorf("issue_id is required: use the visible issue.id from get_pulse_state(view=\"backlog\")")
+	}
+	findings, err := LoadPulseFindingLifecycles(ctx, workspacePath, "", -1)
+	if err != nil {
+		return PulseFindingLifecycle{}, err
+	}
+	matches := make([]PulseFindingLifecycle, 0, 1)
+	for _, finding := range findings {
+		if strings.EqualFold(NewPulseIssue(finding).ID, issueID) {
+			matches = append(matches, finding)
+		}
+	}
+	switch len(matches) {
+	case 1:
+		if matches[0].Details != nil && strings.TrimSpace(matches[0].Details.MergedIntoIssueID) != "" {
+			return PulseFindingLifecycle{}, fmt.Errorf("Pulse issue %q was merged into %s; update the canonical issue instead", issueID, matches[0].Details.MergedIntoIssueID)
+		}
+		return matches[0], nil
+	case 0:
+		return PulseFindingLifecycle{}, fmt.Errorf("no Pulse issue with issue_id %q; refresh get_pulse_state(view=\"backlog\") and use issue.id exactly", issueID)
+	default:
+		return PulseFindingLifecycle{}, fmt.Errorf("issue_id %q resolves to %d lifecycle rows; run the Pulse backlog consolidation before updating it", issueID, len(matches))
+	}
+}
+
+// MergePulseFindingIssues retires symptom-level duplicates without deleting
+// their evidence. The semantic decision is agent-owned; this function only
+// validates PUL identities, preserves the old history, and links each retired
+// record to its canonical root cause.
+func MergePulseFindingIssues(ctx context.Context, workspacePath, canonicalIssueID string, duplicateIssueIDs []string, reason string) (int, error) {
+	canonical, err := ResolvePulseFindingIssueID(ctx, workspacePath, canonicalIssueID)
+	if err != nil {
+		return 0, err
+	}
+	canonicalIssueID = NewPulseIssue(canonical).ID
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return 0, fmt.Errorf("merge reason is required: state the shared root cause")
+	}
+	if len(duplicateIssueIDs) == 0 {
+		return 0, fmt.Errorf("duplicate_issue_ids must contain at least one PUL issue to merge")
+	}
+	seen := map[string]bool{}
+	duplicates := make([]PulseFindingLifecycle, 0, len(duplicateIssueIDs))
+	for _, duplicateIssueID := range duplicateIssueIDs {
+		duplicateIssueID = strings.TrimSpace(duplicateIssueID)
+		if duplicateIssueID == "" || seen[strings.ToUpper(duplicateIssueID)] {
+			continue
+		}
+		seen[strings.ToUpper(duplicateIssueID)] = true
+		if strings.EqualFold(duplicateIssueID, canonicalIssueID) {
+			return 0, fmt.Errorf("canonical issue %q cannot also be a duplicate", canonicalIssueID)
+		}
+		duplicate, lookupErr := ResolvePulseFindingIssueID(ctx, workspacePath, duplicateIssueID)
+		if lookupErr != nil {
+			return 0, lookupErr
+		}
+		duplicates = append(duplicates, duplicate)
+	}
+	if len(duplicates) == 0 {
+		return 0, fmt.Errorf("no distinct duplicate issue ids were supplied")
+	}
+
+	db, err := openRunConcernsDB(ctx, workspacePath, true)
+	if err != nil || db == nil {
+		return 0, err
+	}
+	defer db.Close()
+	if err := ensurePulseFindingLifecycleSchema(ctx, db); err != nil {
+		return 0, err
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, duplicate := range duplicates {
+		details := PulseFindingDetails{}
+		if duplicate.Details != nil {
+			details = *duplicate.Details
+		}
+		details.MergedIntoIssueID = canonicalIssueID
+		detailJSON, marshalErr := json.Marshal(normalizePulseFindingDetails(details))
+		if marshalErr != nil {
+			return 0, marshalErr
+		}
+		note := fmt.Sprintf("Merged into %s: %s", canonicalIssueID, reason)
+		if _, err := tx.ExecContext(ctx, `UPDATE run_concerns
+			SET status=?, resolved_at=?, resolved_by=?, resolution_note=? WHERE fingerprint=?`,
+			ConcernStatusResolved, now, "pulse_backlog_consolidation", note, duplicate.Fingerprint); err != nil {
+			return 0, err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO pulse_finding_details
+			(fingerprint, finding_id, issue_kind, target_key, detail_json, source_run_id, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(fingerprint) DO UPDATE SET detail_json=excluded.detail_json, updated_at=excluded.updated_at`,
+			duplicate.Fingerprint, details.FindingID, details.IssueKind, details.TargetKey, string(detailJSON), duplicate.LastSeenRun, now); err != nil {
+			return 0, err
+		}
+		metadata, _ := json.Marshal(map[string]string{"canonical_issue_id": canonicalIssueID, "reason": reason})
+		if _, err := tx.ExecContext(ctx, `INSERT INTO pulse_finding_events
+			(fingerprint, finding_id, pulse_run_id, event_type, summary, metadata_json, recorded_at)
+			VALUES (?, ?, '', 'merged_duplicate', ?, ?, ?)
+			ON CONFLICT(fingerprint, pulse_run_id, attempt_id, event_type) DO NOTHING`,
+			duplicate.Fingerprint, NewPulseIssue(duplicate).ID, note, string(metadata), now); err != nil {
+			return 0, err
+		}
+	}
+	metadata, _ := json.Marshal(map[string]interface{}{"merged_count": len(duplicates), "reason": reason})
+	_, err = tx.ExecContext(ctx, `INSERT INTO pulse_finding_events
+		(fingerprint, finding_id, pulse_run_id, event_type, summary, metadata_json, recorded_at)
+		VALUES (?, ?, '', 'duplicates_merged', ?, ?, ?)
+		ON CONFLICT(fingerprint, pulse_run_id, attempt_id, event_type) DO NOTHING`,
+		canonical.Fingerprint, canonicalIssueID, fmt.Sprintf("Merged %d duplicate issue(s)", len(duplicates)), string(metadata), now)
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return len(duplicates), nil
+}
+
 // PulseReviewVerificationCandidate is the backend-owned allowlist entry for a
-// reviewer checking a prior fix. A review may emit PULSE_VERIFICATION_JSON only
+// reviewer checking a prior fix. A review may call record_pulse_verification only
 // for one of these exact tuples; ordinary open, blocked, rejected, and already
 // resolved findings have no attempt to verify.
 type PulseReviewVerificationCandidate struct {
@@ -270,10 +446,82 @@ type PulseReviewVerificationCandidate struct {
 	NextCheck   string `json:"next_check"`
 }
 
+// ResolvePulseReviewVerificationIssueID resolves the one public issue identity
+// a reviewer supplies into the exact changed_unverified attempt it is allowed
+// to verify. Attempt and fingerprint identifiers are lifecycle internals; a
+// reviewer should never have to copy them from a backlog payload.
+func ResolvePulseReviewVerificationIssueID(
+	ctx context.Context,
+	workspacePath, module, issueID string,
+) (PulseReviewVerificationCandidate, error) {
+	issueID = strings.TrimSpace(issueID)
+	if issueID == "" {
+		return PulseReviewVerificationCandidate{}, fmt.Errorf("issue_id is required: use the visible issue.id from get_pulse_state(view=\"backlog\")")
+	}
+	candidates, err := LoadPulseReviewVerificationCandidates(ctx, workspacePath, module)
+	if err != nil {
+		return PulseReviewVerificationCandidate{}, err
+	}
+	matched := []PulseReviewVerificationCandidate{}
+	for _, candidate := range candidates {
+		if strings.EqualFold(candidate.FindingID, issueID) {
+			matched = append(matched, candidate)
+		}
+	}
+	switch len(matched) {
+	case 1:
+		return matched[0], nil
+	case 0:
+		return PulseReviewVerificationCandidate{}, fmt.Errorf("issue_id %q has no pending verification in module %q; refresh get_pulse_state(view=\"backlog\") and record a normal finding result instead if it is not awaiting proof", issueID, pulsemodules.Normalize(module))
+	default:
+		return PulseReviewVerificationCandidate{}, fmt.Errorf("issue_id %q has %d pending verification attempts in module %q; this is a backend lifecycle inconsistency", issueID, len(matched), pulsemodules.Normalize(module))
+	}
+}
+
 type pulseFindingLifecycleDB interface {
 	ExecContext(context.Context, string, ...interface{}) (sql.Result, error)
 	QueryContext(context.Context, string, ...interface{}) (*sql.Rows, error)
 	QueryRowContext(context.Context, string, ...interface{}) *sql.Row
+}
+
+// migrateRunConcernPlatformVersionColumn adds first_seen_platform_version to
+// databases created before PLAT-072.
+//
+// Existing rows keep an empty value, which is correct and must stay that way:
+// their platform revision is genuinely unknown and back-filling the current one
+// would assert they were first seen against today's build — the exact false
+// claim the column exists to prevent. Those rows continue to be triaged by
+// reading; only findings recorded from now on can be judged mechanically.
+func migrateRunConcernPlatformVersionColumn(ctx context.Context, db pulseFindingLifecycleDB) error {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(run_concerns)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	present := false
+	for rows.Next() {
+		var (
+			cid                        int
+			name, colType              string
+			notNull, primaryKey        int
+			defaultValue               sql.NullString
+		)
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return err
+		}
+		if name == "first_seen_platform_version" {
+			present = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if present {
+		return nil
+	}
+	_, err = db.ExecContext(ctx,
+		`ALTER TABLE run_concerns ADD COLUMN first_seen_platform_version TEXT NOT NULL DEFAULT ''`)
+	return err
 }
 
 func ensurePulseFindingLifecycleSchema(ctx context.Context, db pulseFindingLifecycleDB) error {
@@ -288,6 +536,9 @@ func ensurePulseFindingLifecycleSchema(ctx context.Context, db pulseFindingLifec
 		if _, err := db.ExecContext(ctx, ddl); err != nil {
 			return err
 		}
+	}
+	if err := migrateRunConcernPlatformVersionColumn(ctx, db); err != nil {
+		return err
 	}
 	if err := migratePreValidationConcernGranularity(ctx, db); err != nil {
 		return err
@@ -400,12 +651,13 @@ func migratePreValidationConcernGranularity(ctx context.Context, db pulseFinding
 type pulseIdentityRow struct {
 	Fingerprint string
 	FindingID   string
+	IssueKind   string
 	TargetKey   string
 	StepID      string
 }
 
 func migrateDuplicatePulseFindingIdentities(ctx context.Context, db pulseFindingLifecycleDB) error {
-	rows, err := db.QueryContext(ctx, `SELECT d.fingerprint, d.finding_id, d.target_key, COALESCE(c.step_id, '')
+	rows, err := db.QueryContext(ctx, `SELECT d.fingerprint, d.finding_id, COALESCE(d.issue_kind, ''), d.target_key, COALESCE(c.step_id, '')
 		FROM pulse_finding_details d LEFT JOIN run_concerns c USING (fingerprint)
 		ORDER BY d.fingerprint`)
 	if err != nil {
@@ -414,7 +666,7 @@ func migrateDuplicatePulseFindingIdentities(ctx context.Context, db pulseFinding
 	var identities []pulseIdentityRow
 	for rows.Next() {
 		var row pulseIdentityRow
-		if err := rows.Scan(&row.Fingerprint, &row.FindingID, &row.TargetKey, &row.StepID); err != nil {
+		if err := rows.Scan(&row.Fingerprint, &row.FindingID, &row.IssueKind, &row.TargetKey, &row.StepID); err != nil {
 			rows.Close()
 			return err
 		}
@@ -424,27 +676,45 @@ func migrateDuplicatePulseFindingIdentities(ctx context.Context, db pulseFinding
 		return err
 	}
 
-	for _, field := range []string{"finding_id"} {
-		groups := map[string][]pulseIdentityRow{}
-		for _, row := range identities {
-			value := row.FindingID
-			if field == "target_key" {
-				value = row.TargetKey
-			}
-			value = strings.TrimSpace(value)
-			if value != "" {
-				groups[strings.ToLower(value)] = append(groups[strings.ToLower(value)], row)
-			}
+	groups := map[string][]pulseIdentityRow{}
+	for _, row := range identities {
+		value := strings.TrimSpace(row.FindingID)
+		if value != "" {
+			groups[strings.ToLower(value)] = append(groups[strings.ToLower(value)], row)
 		}
-		for _, group := range groups {
-			marker := pulseFindingDetailMarker{PulseFindingDetails: PulseFindingDetails{FindingID: group[0].FindingID, TargetKey: group[0].TargetKey}}
-			target := pulseFindingCanonicalFingerprint(group[0].StepID, marker)
-			if len(group) == 1 && group[0].Fingerprint == target {
-				continue
-			}
-			if err := mergePulseIdentityGroup(ctx, db, target, group); err != nil {
-				return err
-			}
+	}
+	// A harness finding can be split across the fingerprint boundary without
+	// ever acquiring a human-assigned finding_id (PLAT-073 cluster I,
+	// f2cbf9a1: HARNESS-REFDOC-REVIEW-ARTIFACT-DRIFT existed as two rows,
+	// neither with finding_id set, so the pass above could not see them as
+	// duplicates). target_key is the identity harness findings actually
+	// share in that case — fall back to it, scoped to IssueKindHarness only
+	// so a coincidental target_key match between unrelated workflow findings
+	// is never merged.
+	for _, row := range identities {
+		if strings.TrimSpace(row.FindingID) != "" || row.IssueKind != IssueKindHarness {
+			continue
+		}
+		key := strings.TrimSpace(row.TargetKey)
+		if key == "" {
+			continue
+		}
+		groupKey := "target_key:" + strings.ToLower(key)
+		groups[groupKey] = append(groups[groupKey], row)
+	}
+	for _, group := range groups {
+		// A visible issue id (or, for harness findings, a shared target_key)
+		// is an alias for a durable identity, never source material for a new
+		// fingerprint. The old migration derived `target` from finding_id
+		// even for a singleton, so every PUL-* ID it generated was re-hashed
+		// on the next read. Only genuine duplicate legacy rows need
+		// collapsing; retain the first stored fingerprint as canonical.
+		if len(group) < 2 {
+			continue
+		}
+		target := group[0].Fingerprint
+		if err := mergePulseIdentityGroup(ctx, db, target, group); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -517,8 +787,12 @@ func mergePulseIdentityGroup(ctx context.Context, db pulseFindingLifecycleDB, ta
 			continue
 		}
 		if !initialized {
+			// Target columns are named rather than relying on positional order, so
+			// adding a column to run_concerns cannot silently break this copy with
+			// a "table has N columns but M values were supplied" error.
 			if _, err := db.ExecContext(ctx, `INSERT OR IGNORE INTO run_concerns
-				SELECT ?, step_id, phase, group_name, text, first_seen_run, first_seen_at, last_seen_run, last_seen_at, seen_count, status, resolved_at, resolved_by, resolution_note
+				(fingerprint, step_id, phase, group_name, text, first_seen_run, first_seen_at, last_seen_run, last_seen_at, seen_count, status, resolved_at, resolved_by, resolution_note, first_seen_platform_version)
+				SELECT ?, step_id, phase, group_name, text, first_seen_run, first_seen_at, last_seen_run, last_seen_at, seen_count, status, resolved_at, resolved_by, resolution_note, first_seen_platform_version
 				FROM run_concerns WHERE fingerprint=?`, target, old); err != nil {
 				return err
 			}
@@ -791,8 +1065,8 @@ func validateFindingDisposition(disposition PulseFindingDisposition) error {
 	add := func(format string, args ...interface{}) { problems = append(problems, fmt.Sprintf(format, args...)) }
 
 	if disposition.Fingerprint == "" || disposition.FindingID == "" {
-		add("requires both fingerprint and finding_id (got %s); copy both from the same get_pulse_state(view=\"backlog\") item, where finding_id is issue.id",
-			pulseArrivalReport(pulseStringArrival("fingerprint", disposition.Fingerprint), pulseStringArrival("finding_id", disposition.FindingID)))
+		add("requires issue_id from get_pulse_state(view=\"backlog\"); lifecycle identity was not resolved (got %s)",
+			pulseArrivalReport(pulseStringArrival("issue_id", disposition.FindingID)))
 	}
 	if disposition.Summary == "" {
 		add("requires summary: one sentence stating what was done and what it means for this finding")
@@ -878,6 +1152,13 @@ func validateFindingDisposition(disposition PulseFindingDisposition) error {
 			if len(disposition.ChangedFiles) > 0 {
 				add("awaiting_run changed files; a finding with a fix applied is changed_unverified, not awaiting_run")
 			}
+		case FindingDispositionQueuedForEngineering:
+			if disposition.NextCheck == "" {
+				add("queued_for_engineering requires next_check naming the next Engineering/Pulse pass or concrete repair boundary; use blocked only when no safe action exists")
+			}
+			if len(disposition.ChangedFiles) > 0 {
+				add("queued_for_engineering changed files; a finding with a repair applied is changed_unverified or fixed_verified, not queued_for_engineering")
+			}
 		case FindingDispositionAwaitingUser:
 			// A finding cannot wait on a decision nobody was asked for. Requiring
 			// the question id here is what turns "awaiting_user" from a label into
@@ -925,17 +1206,19 @@ func FormatPulseDispositionProblems(findingID string, problems []string) error {
 func lifecycleStatusForDisposition(disposition string) (status, eventType, resolvedBy string) {
 	switch strings.TrimSpace(disposition) {
 	case FindingDispositionFixedVerified, FindingDispositionVerifiedNoChange:
-		return ConcernStatusResolved, "closed", "pulse_fixer"
+		return ConcernStatusResolved, "closed", "workflow_builder"
 	case FindingDispositionChangedUnverified:
 		return ConcernStatusAwaitingVerification, "verification_inconclusive", ""
 	case FindingDispositionRejected:
-		return ConcernStatusRejected, "rejected", "pulse_fixer"
+		return ConcernStatusRejected, "rejected", "workflow_builder"
 	case FindingDispositionFailed:
 		return ConcernStatusOpen, "verification_failed", ""
 	case FindingDispositionProposalOnly:
 		return ConcernStatusAcknowledged, "proposal_recorded", ""
 	case FindingDispositionAwaitingUser:
 		return ConcernStatusAcknowledged, "awaiting_user", ""
+	case FindingDispositionQueuedForEngineering:
+		return ConcernStatusQueuedForEngineering, "queued_for_engineering", ""
 	case FindingDispositionBlocked:
 		return ConcernStatusAcknowledged, "blocked", ""
 	case FindingDispositionAwaitingRun:
@@ -981,6 +1264,11 @@ func RecordPulseFindingDispositionsTx(
 		if err := validateFindingDisposition(disposition); err != nil {
 			return err
 		}
+		if (module == pulsemodules.StrategyAuditorID || module == pulsemodules.GoalAdvisorID) &&
+			disposition.Disposition == FindingDispositionProposalOnly && disposition.NextCheck == "" {
+			return fmt.Errorf("%s finding %q cannot use proposal_only without next_check: proposal_only is reserved for a recommendation waiting on a named future evidence boundary; create a pending human decision and use awaiting_user for an actionable strategy/goal change, or route a safe technical prerequisite to the Fixer",
+				module, disposition.FindingID)
+		}
 		fingerprint := disposition.Fingerprint
 		findingID := disposition.FindingID
 		attemptID := disposition.AttemptID
@@ -993,14 +1281,92 @@ func RecordPulseFindingDispositionsTx(
 		if concernExists != 1 {
 			return fmt.Errorf("no concern with fingerprint %q for finding %q; fingerprint must be copied verbatim from a get_pulse_state(view=\"backlog\") item's fingerprint field, not from its issue.id", fingerprint, findingID)
 		}
+		// issue_kind is decided once at filing; status is decided here, later and
+		// repeatedly, by a different tool. Nothing used to compare them, so a
+		// finding could be filed as harness_issue ("no workflow-level repair can
+		// fix this") and then parked as queued_for_engineering ("a workflow-level
+		// Engineering Review pass will fix this"). That pair is self-contradictory
+		// and self-perpetuating: every later pass re-reads it as actionable, spends
+		// a reviewer slot rediscovering that it is not, and re-defers it.
+		//
+		// Only this one pairing is rejected. A harness finding that is resolved,
+		// acknowledged, or awaiting_verification is legitimate — the behaviour can
+		// stop, be disproven, or be worked around from inside the workflow.
+		if disposition.Disposition == FindingDispositionQueuedForEngineering {
+			var issueKind string
+			err := db.QueryRowContext(ctx,
+				`SELECT COALESCE(issue_kind, '') FROM pulse_finding_details WHERE fingerprint=?`, fingerprint,
+			).Scan(&issueKind)
+			// Plain CONCERNS: findings carry no details row at all, so no issue_kind
+			// was ever claimed and there is nothing to contradict.
+			if err != nil && err != sql.ErrNoRows {
+				return err
+			}
+			if err == nil && strings.TrimSpace(issueKind) == IssueKindHarness {
+				return fmt.Errorf("finding %q was filed as %s and cannot be queued_for_engineering: no workflow-level Engineering Review pass can repair a boundary the workflow does not own, so queueing it here means it is rediscovered and re-deferred every pass. Either use external_action_required with external_owner=\"platform\", a reason_code, and a reopen_condition so it reaches docs/bugs/pulse_platform_issue_register.md, or re-file it as %s if this workflow's own plan, config, code, or data does own the failure",
+					findingID, IssueKindHarness, IssueKindWorkflow)
+			}
+		}
+		if isPulseAdvisorModule(module) {
+			var detailJSON string
+			err := db.QueryRowContext(ctx, `SELECT detail_json FROM pulse_finding_details WHERE fingerprint=?`, fingerprint).Scan(&detailJSON)
+			if err != nil && err != sql.ErrNoRows {
+				return err
+			}
+			if err == nil && strings.TrimSpace(detailJSON) != "" {
+				var details PulseFindingDetails
+				if err := json.Unmarshal([]byte(detailJSON), &details); err != nil {
+					return fmt.Errorf("decode routing contract for finding %q: %w", findingID, err)
+				}
+				details = normalizePulseFindingDetails(details)
+				switch details.RecommendedRoute {
+				case pulseFindingRouteDecisionRequired:
+					if disposition.Disposition == FindingDispositionAwaitingUser {
+						break
+					}
+					if !pulseDispositionConsumesLinkedDecision(disposition.Disposition) {
+						return fmt.Errorf("%s finding %q is routed decision_required and must use awaiting_user with a linked pending decision; got %s", module, findingID, disposition.Disposition)
+					}
+					var linkedDecisionStatus string
+					err := db.QueryRowContext(ctx, `SELECT COALESCE(h.status, '')
+						FROM pulse_finding_events e
+						JOIN report_human_inputs h
+						  ON h.id=json_extract(e.metadata_json, '$.human_input_id')
+						WHERE e.fingerprint=? AND e.event_type='awaiting_user'
+						ORDER BY e.recorded_at DESC, e._id DESC LIMIT 1`, fingerprint).Scan(&linkedDecisionStatus)
+					if err == sql.ErrNoRows {
+						return fmt.Errorf("%s finding %q is routed decision_required and cannot become %s without a prior linked awaiting_user decision", module, findingID, disposition.Disposition)
+					}
+					if err != nil {
+						return err
+					}
+					if linkedDecisionStatus != "answered" {
+						return fmt.Errorf("%s finding %q is routed decision_required and cannot become %s while its linked decision has status %q", module, findingID, disposition.Disposition, linkedDecisionStatus)
+					}
+				case pulseFindingRouteEvidenceWait:
+					if disposition.Disposition != FindingDispositionProposalOnly {
+						return fmt.Errorf("%s finding %q is routed evidence_wait and must use proposal_only; got %s", module, findingID, disposition.Disposition)
+					}
+					if disposition.NextCheck != details.NextCheck {
+						return fmt.Errorf("%s finding %q must preserve the routed next_check exactly; got %q, want %q", module, findingID, disposition.NextCheck, details.NextCheck)
+					}
+				case pulseFindingRouteFixerHandoff:
+					if disposition.Disposition == FindingDispositionProposalOnly || disposition.Disposition == FindingDispositionAwaitingUser {
+						return fmt.Errorf("%s finding %q is routed fixer_handoff and cannot be parked as %s", module, findingID, disposition.Disposition)
+					}
+				case pulseFindingRouteNone:
+					return fmt.Errorf("%s finding %q was routed none and must not have been filed as an active concern", module, findingID)
+				}
+			}
+		}
 		// Prove the decision exists and is still open. A claimed id is not
 		// evidence: an already-answered or invented question would leave the
 		// finding parked on a decision the operator can never make.
 		if disposition.Disposition == FindingDispositionAwaitingUser {
-			var inputStatus string
+			var inputStatus, inputSource string
 			err := db.QueryRowContext(ctx,
-				`SELECT status FROM report_human_inputs WHERE id=?`, disposition.HumanInputID,
-			).Scan(&inputStatus)
+				`SELECT status, COALESCE(source, '') FROM report_human_inputs WHERE id=?`, disposition.HumanInputID,
+			).Scan(&inputStatus, &inputSource)
 			if err != nil {
 				if err == sql.ErrNoRows {
 					return fmt.Errorf("awaiting_user finding %q references human input %q, which does not exist", findingID, disposition.HumanInputID)
@@ -1009,6 +1375,23 @@ func RecordPulseFindingDispositionsTx(
 			}
 			if inputStatus != "pending" {
 				return fmt.Errorf("awaiting_user finding %q references human input %q with status %q; a finding can only wait on a pending decision", findingID, disposition.HumanInputID, inputStatus)
+			}
+			expectedSource, expectedPrefix := "", ""
+			switch module {
+			case pulsemodules.StrategyAuditorID:
+				expectedSource, expectedPrefix = pulsemodules.StrategyAuditorID, "strategy-proposal-"
+			case pulsemodules.GoalAdvisorID:
+				expectedSource, expectedPrefix = pulsemodules.GoalAdvisorID, "plan-proposal-"
+			}
+			if expectedSource != "" {
+				if strings.TrimSpace(inputSource) != expectedSource {
+					return fmt.Errorf("awaiting_user %s finding %q references human input %q with source %q; create the decision with source=%q so the UI preserves who asked",
+						module, findingID, disposition.HumanInputID, inputSource, expectedSource)
+				}
+				if !strings.HasPrefix(disposition.HumanInputID, expectedPrefix) {
+					return fmt.Errorf("awaiting_user %s finding %q references human input %q; decision ids for this module must start with %q",
+						module, findingID, disposition.HumanInputID, expectedPrefix)
+				}
 			}
 		}
 		if attemptID != "" {
@@ -1094,6 +1477,7 @@ func RecordPulseFindingDispositionsTx(
 			"external_owner":   disposition.ExternalOwner,
 			"reason_code":      disposition.ReasonCode,
 			"reopen_condition": disposition.ReopenCondition,
+			"human_input_id":   disposition.HumanInputID,
 		})
 		if _, err := db.ExecContext(ctx, `INSERT INTO pulse_finding_events
 			(fingerprint, finding_id, pulse_run_id, attempt_id, event_type, summary, metadata_json, recorded_at)
@@ -1103,6 +1487,11 @@ func RecordPulseFindingDispositionsTx(
 			fingerprint, findingID, pulseRunID, attemptID, eventType,
 			strings.TrimSpace(disposition.Summary), string(metadata), recordedAt); err != nil {
 			return err
+		}
+		if pulseDispositionConsumesLinkedDecision(disposition.Disposition) {
+			if err := consumeLinkedPulseDecisionTx(ctx, db, fingerprint, disposition.Summary, recordedAt); err != nil {
+				return err
+			}
 		}
 		if attemptID != "" {
 			if _, err := db.ExecContext(ctx, `UPDATE pulse_fix_attempt_findings SET
@@ -1141,6 +1530,45 @@ func RecordPulseFindingDispositionsTx(
 	return nil
 }
 
+// pulseDispositionConsumesLinkedDecision identifies lifecycle outcomes that
+// prove an earlier awaiting_user answer has actually been used. Merely reading
+// an answer, failing a check, blocking, or waiting for evidence must not consume
+// it. A changed_unverified repair has still used the decision even though its
+// behavioral proof arrives on a later run.
+func pulseDispositionConsumesLinkedDecision(disposition string) bool {
+	switch strings.TrimSpace(disposition) {
+	case FindingDispositionFixedVerified, FindingDispositionVerifiedNoChange,
+		FindingDispositionChangedUnverified, FindingDispositionRejected:
+		return true
+	default:
+		return false
+	}
+}
+
+// consumeLinkedPulseDecisionTx closes the durable human-input loop when a
+// finding with a previously linked awaiting_user decision reaches an outcome.
+// The link comes from the immutable lifecycle event, not from prose or a guessed
+// ID. Only an answered row transitions; pending, already-consumed, or unrelated
+// questions are untouched.
+func consumeLinkedPulseDecisionTx(ctx context.Context, db pulseFindingLifecycleDB, fingerprint, summary, recordedAt string) error {
+	var humanInputID string
+	err := db.QueryRowContext(ctx, `SELECT COALESCE(json_extract(metadata_json, '$.human_input_id'), '')
+		FROM pulse_finding_events
+		WHERE fingerprint=? AND event_type='awaiting_user'
+		ORDER BY recorded_at DESC, _id DESC LIMIT 1`, fingerprint).Scan(&humanInputID)
+	if errors.Is(err, sql.ErrNoRows) || strings.TrimSpace(humanInputID) == "" {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	_, err = db.ExecContext(ctx, `UPDATE report_human_inputs SET
+		status='consumed', consumed_by='pulse', outcome_summary=?, consumed_at=?, updated_at=?
+		WHERE id=? AND status='answered'`,
+		strings.TrimSpace(summary), recordedAt, recordedAt, strings.TrimSpace(humanInputID))
+	return err
+}
+
 func decodeLifecycleStrings(raw string) []string {
 	var values []string
 	_ = json.Unmarshal([]byte(raw), &values)
@@ -1169,7 +1597,7 @@ func LoadPulseReviewVerificationCandidates(
 
 	module = pulsemodules.Normalize(module)
 	acceptedModules := []string{}
-	for _, candidate := range append(pulsemodules.IDs(), pulsemodules.RetiredIDs...) {
+	for _, candidate := range pulsemodules.IDs() {
 		if pulsemodules.Normalize(candidate) == module {
 			acceptedModules = append(acceptedModules, candidate)
 		}
@@ -1238,22 +1666,7 @@ func LoadPulseFindingLifecycles(ctx context.Context, workspacePath, module strin
 	if limit == 0 {
 		limit = 100
 	}
-	module = strings.TrimSpace(module)
-	// "pulse_fixer" is the consolidated Fixer's module sentinel, meaning every
-	// due module rather than a module of that name. The write path has always
-	// understood it; this read path did not, and `module` here is a plain
-	// step_id filter. No concern carries step_id "pulse_fixer" and no attempt is
-	// recorded under it, so the tool that hands the Fixer its queue returned an
-	// empty list for the exact value its own contract tells it to pass — 0 rows
-	// against 149 for an omitted module on social-media, 2026-08-01. The Fixer
-	// only did any work at all by falling back to omitting the filter.
-	if module == pulsemodules.PseudoPulseFixerID {
-		module = ""
-	}
-	workflowReviewFilter := 0
-	if module == pulsemodules.WorkflowReviewID {
-		workflowReviewFilter = 1
-	}
+	module = pulsemodules.Normalize(module)
 	// Lead with the step carrying the most unresolved work, and keep its rows
 	// together.
 	//
@@ -1269,7 +1682,7 @@ func LoadPulseFindingLifecycles(ctx context.Context, workspacePath, module strin
 	// reordered first, but that backs get_pulse_state(view="module") while the
 	// Fixer reads this query through view="backlog" — so the fix landed on
 	// a path the Fixer never reads and the backlog did not move.
-	query := `SELECT c.fingerprint, c.step_id, c.phase, c.group_name, c.text,
+	query := fmt.Sprintf(`SELECT c.fingerprint, c.step_id, c.phase, c.group_name, c.text,
 			c.first_seen_run, c.first_seen_at, c.last_seen_run, c.last_seen_at, c.seen_count,
 			c.status, c.resolution_note, COALESCE(d.detail_json, '')
 		FROM run_concerns c
@@ -1280,21 +1693,14 @@ func LoadPulseFindingLifecycles(ctx context.Context, workspacePath, module strin
 			WHERE status NOT IN ('resolved', 'rejected', 'external_action_required')
 			GROUP BY step_id
 		) cluster ON cluster.step_id = c.step_id
-		WHERE ?='' OR c.step_id=? OR (?=1 AND c.phase='review' AND c.step_id IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)) OR EXISTS (
+		WHERE ?='' OR c.step_id=? OR EXISTS (
 			SELECT 1 FROM pulse_fix_attempt_findings af
 			JOIN pulse_fix_attempts a ON a.attempt_id=af.attempt_id
-			WHERE af.fingerprint=c.fingerprint AND (a.module=? OR (?=1 AND a.module IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)))
+			WHERE af.fingerprint=c.fingerprint AND a.module=?
 		)
 		ORDER BY COALESCE(cluster.active_count, 0) DESC, COALESCE(cluster.peak_seen, 0) DESC,
-			c.step_id ASC, c.last_seen_at DESC, c.seen_count DESC`
-	legacyWorkflowReviewModules := make([]interface{}, 0, len(pulsemodules.RetiredIDs))
-	for _, retired := range pulsemodules.RetiredIDs {
-		legacyWorkflowReviewModules = append(legacyWorkflowReviewModules, retired)
-	}
-	args := []interface{}{module, module, workflowReviewFilter}
-	args = append(args, legacyWorkflowReviewModules...)
-	args = append(args, module, workflowReviewFilter)
-	args = append(args, legacyWorkflowReviewModules...)
+			c.step_id ASC, c.last_seen_at DESC, c.seen_count DESC`)
+	args := []interface{}{module, module, module}
 	if limit > 0 {
 		query += ` LIMIT ?`
 		args = append(args, limit)

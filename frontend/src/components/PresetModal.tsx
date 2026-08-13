@@ -44,6 +44,17 @@ function agentLLMUsesProvider(config: AgentLLMConfig | null | undefined, provide
   return config?.provider === provider || Boolean(config?.fallbacks?.some(fallback => fallback.provider === provider));
 }
 
+// Mirrors maskCredentialPreview in agent_go/cmd/server/workflow_provider_auth.go.
+// Used only right after the user has typed the token into this same form — the
+// plaintext is already in the browser at that point, so masking it locally adds
+// no new exposure. The server is the only source of truth once the modal is
+// reopened; this is purely so the "Saved" state updates instantly.
+function maskCredentialPreviewClient(token: string): string | null {
+  const affixLen = 4;
+  if (token.length < affixLen * 2 + 4) return null;
+  return `${token.slice(0, affixLen)}...${token.slice(-affixLen)}`;
+}
+
 function sameAgentLLM(left: AgentLLMConfig | null | undefined, right: AgentLLMConfig | null | undefined): boolean {
   if (!left || !right) return left === right;
   return left.provider === right.provider
@@ -113,6 +124,10 @@ const PresetModal: React.FC<PresetModalProps> = React.memo(({
   const [expandedWorkflowLLMRole, setExpandedWorkflowLLMRole] = useState<WorkflowLLMRoleKey | null>(null);
   const [claudeCodeToken, setClaudeCodeToken] = useState('');
   const [claudeCredentialConfigured, setClaudeCredentialConfigured] = useState(false);
+  // Masked "first4...last4" preview of the saved token (e.g. "sk-a...DQAA").
+  // The server decrypts to build this and never returns the full value —
+  // lets a user confirm which token is saved without re-exposing it.
+  const [claudeCredentialPreview, setClaudeCredentialPreview] = useState<string | null>(null);
   const [isLoadingClaudeCredential, setIsLoadingClaudeCredential] = useState(false);
   const [isSavingClaudeCredential, setIsSavingClaudeCredential] = useState(false);
   const [isDeletingClaudeCredential, setIsDeletingClaudeCredential] = useState(false);
@@ -347,6 +362,7 @@ const PresetModal: React.FC<PresetModalProps> = React.memo(({
   useEffect(() => {
     if (!isOpen || effectiveAgentMode !== 'workflow' || !workflowCredentialPath) {
       setClaudeCredentialConfigured(false);
+      setClaudeCredentialPreview(null);
       setIsLoadingClaudeCredential(false);
       return;
     }
@@ -354,10 +370,16 @@ const PresetModal: React.FC<PresetModalProps> = React.memo(({
     setIsLoadingClaudeCredential(true);
     void secretsApi.getWorkflowClaudeCodeCredentialStatus(workflowCredentialPath)
       .then(status => {
-        if (!cancelled) setClaudeCredentialConfigured(status.configured);
+        if (!cancelled) {
+          setClaudeCredentialConfigured(status.configured);
+          setClaudeCredentialPreview(status.preview ?? null);
+        }
       })
       .catch(() => {
-        if (!cancelled) setClaudeCredentialConfigured(false);
+        if (!cancelled) {
+          setClaudeCredentialConfigured(false);
+          setClaudeCredentialPreview(null);
+        }
       })
       .finally(() => {
         if (!cancelled) setIsLoadingClaudeCredential(false);
@@ -499,6 +521,7 @@ const PresetModal: React.FC<PresetModalProps> = React.memo(({
     try {
       await secretsApi.deleteWorkflowClaudeCodeCredential(workspacePath);
       setClaudeCredentialConfigured(false);
+      setClaudeCredentialPreview(null);
       setClaudeCodeToken('');
       useChatStore.getState().addToast('Workflow Claude Code token removed; saved Claude login will be used.', 'success');
     } catch (error) {
@@ -519,6 +542,7 @@ const PresetModal: React.FC<PresetModalProps> = React.memo(({
     try {
       await secretsApi.storeWorkflowClaudeCodeCredential(workspacePath, token);
       setClaudeCredentialConfigured(true);
+      setClaudeCredentialPreview(maskCredentialPreviewClient(token));
       setClaudeCodeToken('');
       setShowClaudeCodeToken(false);
       useChatStore.getState().addToast('Workflow Claude Code token saved.', 'success');
@@ -644,8 +668,10 @@ const PresetModal: React.FC<PresetModalProps> = React.memo(({
       if (saved === false) return;
       manifestSaved = true;
       if (!editingPreset && effectiveAgentMode === 'workflow' && usesClaudeCode && claudeCodeToken.trim() && selectedFolder?.filepath) {
-        await secretsApi.storeWorkflowClaudeCodeCredential(selectedFolder.filepath, claudeCodeToken.trim());
+        const savedToken = claudeCodeToken.trim();
+        await secretsApi.storeWorkflowClaudeCodeCredential(selectedFolder.filepath, savedToken);
         setClaudeCredentialConfigured(true);
+        setClaudeCredentialPreview(maskCredentialPreviewClient(savedToken));
         setClaudeCodeToken('');
         useChatStore.getState().addToast('Workflow Claude Code token saved.', 'success');
       }
@@ -999,7 +1025,17 @@ const PresetModal: React.FC<PresetModalProps> = React.memo(({
                           {isLoadingClaudeCredential ? (
                             <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Checking</>
                           ) : claudeCredentialConfigured ? (
-                            <><CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> Saved</>
+                            <>
+                              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> Saved
+                              {claudeCredentialPreview && (
+                                <code
+                                  className="rounded bg-background px-1 py-0.5 font-mono text-foreground"
+                                  title="Masked preview — the full token is never sent to the browser"
+                                >
+                                  {claudeCredentialPreview}
+                                </code>
+                              )}
+                            </>
                           ) : (
                             'Using saved login'
                           )}

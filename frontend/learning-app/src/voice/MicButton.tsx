@@ -36,8 +36,7 @@ export const MicButton = forwardRef(function MicButton({
   useEffect(() => { onStateChange?.(state) }, [state, onStateChange])
   useImperativeHandle(ref, () => ({ stopAndSubmit }), [stopAndSubmit])
 
-  // Cmd/Ctrl+Shift+M — deliberately not a bare key: a child typing an answer
-  // must never trigger recording by accident.
+  // Cmd/Ctrl+Shift+M — the explicit, discoverable shortcut.
   useEffect(() => {
     if (!shortcutEnabled || disabled) return
     const onKey = (e: KeyboardEvent) => {
@@ -50,18 +49,80 @@ export const MicButton = forwardRef(function MicButton({
     return () => window.removeEventListener('keydown', onKey)
   }, [shortcutEnabled, disabled, toggle])
 
+  // TAP Option (Alt) on its own to start, tap it again to stop and send — the
+  // one-key dictation toggle, close to hand while typing.
+  //
+  // A bare modifier was deliberately avoided for the shortcut above, for a
+  // reason that still holds: this is the child's composer too, and recording
+  // that starts itself while she is typing an answer is worse than no
+  // shortcut. So "tap" here is strict, and both conditions have to hold:
+  //
+  //   1. NOTHING ELSE was pressed while Option was down. Option is macOS's
+  //      dead-key modifier (⌥e → é, ⌥n → ñ), so any Option+key combination is
+  //      someone typing a character, never reaching for the mic. One other
+  //      key and this press is disqualified outright.
+  //   2. It was RELEASED QUICKLY (under half a second). Holding Option is what
+  //      people do while hunting for the second key of a combination, or
+  //      resting a hand — a deliberate tap is short.
+  //
+  // Auto-repeat (holding Option fires keydown over and over) is ignored via
+  // e.repeat, which would otherwise flip the mic on and off continuously.
+  useEffect(() => {
+    if (!shortcutEnabled || disabled) return
+    let downAt = 0
+    let soloTap = false
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Alt') {
+        if (e.repeat) return
+        downAt = Date.now()
+        soloTap = true
+        return
+      }
+      soloTap = false // some other key joined it — this is a combination
+    }
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key !== 'Alt') return
+      const wasTap = soloTap && Date.now() - downAt < 500
+      soloTap = false
+      if (wasTap) toggle()
+    }
+    // Any click/blur mid-press also disqualifies it: releasing Option after
+    // switching focus or windows is not a tap aimed at the mic.
+    const cancel = () => { soloTap = false }
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('keyup', onKeyUp)
+    window.addEventListener('mousedown', cancel)
+    window.addEventListener('blur', cancel)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keyup', onKeyUp)
+      window.removeEventListener('mousedown', cancel)
+      window.removeEventListener('blur', cancel)
+    }
+  }, [shortcutEnabled, disabled, toggle])
+
+  // Stopping the mic sends. Dictating and then pressing Enter was two actions
+  // for one intent — reported as "99% of the time I never change anything" —
+  // and the transcript the composer receives is the accurate batch pass, not
+  // the rough live preview. A wrong one is cheap to correct with another
+  // message; an extra keypress on every single dictation is not.
+  const stopOrStart = () => {
+    if (state === 'recording') stopAndSubmit()
+    else toggle()
+  }
+
   const preparing = state === 'preparing'
   // Both non-interactive states show a spinner and refuse clicks. 'preparing'
   // matters most: on a cold start it can last seconds while the model loads,
   // and leaving the button looking idle invites repeat clicks.
   const busy = state === 'transcribing' || preparing
   const label = state === 'recording'
-    ? 'Stop recording'
+    ? 'Stop and send (tap ⌥)'
     : preparing
       ? 'Getting voice ready…'
       : state === 'transcribing'
         ? 'Transcribing…'
-        : 'Speak your message (⌘⇧M)'
+        : 'Speak your message (tap ⌥, or ⌘⇧M)'
 
   return (
     <span className="fl-mic-wrap">
@@ -71,7 +132,7 @@ export const MicButton = forwardRef(function MicButton({
         aria-label={label}
         title={label}
         disabled={disabled || busy}
-        onClick={toggle}
+        onClick={stopOrStart}
       >
         {busy
           ? <Loader2 size={19} className="fl-mic-spin" />

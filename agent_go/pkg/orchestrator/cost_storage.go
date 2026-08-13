@@ -14,10 +14,45 @@ const (
 )
 
 type DailyGroupTokenUsageFile struct {
-	Date        string                     `json:"date"`
-	GroupFolder string                     `json:"group_folder"`
-	UpdatedAt   time.Time                  `json:"updated_at"`
-	RunFolders  map[string]*TokenUsageFile `json:"run_folders"`
+	Date        string    `json:"date"`
+	GroupFolder string    `json:"group_folder"`
+	UpdatedAt   time.Time `json:"updated_at"`
+	// Executions is the authoritative v2 ledger.  Its key is the immutable
+	// execution ID, never the rotating runs/iteration-0 path.  RunFolders is
+	// retained only so existing, pre-v2 files and external readers remain
+	// readable during the migration.
+	Executions map[string]*ExecutionTokenUsage `json:"executions,omitempty"`
+	RunFolders map[string]*TokenUsageFile      `json:"run_folders,omitempty"`
+}
+
+// ExecutionTokenUsage is one immutable execution's cost aggregate. RunFolder
+// records where it started; ArchivedRunFolder is filled when iteration-0 is
+// rotated. Neither path is an identity or a map key.
+type ExecutionTokenUsage struct {
+	RunFolder         string          `json:"run_folder"`
+	ArchivedRunFolder string          `json:"archived_run_folder,omitempty"`
+	TokenUsage        *TokenUsageFile `json:"token_usage"`
+}
+
+func (e *ExecutionTokenUsage) EffectiveRunFolder() string {
+	if e == nil {
+		return ""
+	}
+	if strings.TrimSpace(e.ArchivedRunFolder) != "" {
+		return e.ArchivedRunFolder
+	}
+	return e.RunFolder
+}
+
+func CloneExecutionTokenUsage(src *ExecutionTokenUsage) *ExecutionTokenUsage {
+	if src == nil {
+		return nil
+	}
+	return &ExecutionTokenUsage{
+		RunFolder:         src.RunFolder,
+		ArchivedRunFolder: src.ArchivedRunFolder,
+		TokenUsage:        CloneTokenUsageFile(src.TokenUsage),
+	}
 }
 
 type DailyPhaseTokenUsageFile struct {
@@ -123,43 +158,47 @@ func buildModelTokenUsage(modelTokenData *ModelTokenData) *ModelTokenUsage {
 		return nil
 	}
 
-	inputCost, outputCost, reasoningCost, cacheCost, totalCost, contextWindow := calculatePricingFromModelData(modelTokenData)
-	totalTokens := modelTokenData.InputTokens + modelTokenData.OutputTokens
-	var contextUsagePercent float64
-	if contextWindow > 0 {
-		contextUsagePercent = (float64(totalTokens) / float64(contextWindow)) * 100.0
-		if contextUsagePercent > 100.0 {
-			contextUsagePercent = 100.0
-		}
-	}
+	// PLAT-072/B. context_window_usage/context_usage_percent removed from the
+	// persisted ledger by operator decision (2026-08-10). This function
+	// unconditionally recomputed both from modelTokenData.InputTokens+
+	// OutputTokens — the call's TOTAL token count, not a context-window
+	// snapshot — silently ignoring the correctly-scoped ModelTokenData.
+	// ContextWindowUsage field entirely. Once accumulated across a day's calls
+	// via ApplyModelTokenData, that produced e.g. 4,469,416 against a 200,000
+	// window (23x over, permanently pinned at the 100% clamp below) — a live
+	// misreading, not real context pressure. Traced but not consumed by any
+	// gate/summarization decision downstream: purely display (CostsPopup UI)
+	// and Pulse review-finding evidence text, both now equally misleading.
+	// The one place this concept is genuinely load-bearing — live in-session
+	// context editing during the actual API transfer — is
+	// mcpagent/agent.go's contextWindowUsageKnown-gated path (2026-08-10,
+	// commit 0ebd5c8) and is untouched by this change.
+	inputCost, outputCost, reasoningCost, cacheCost, totalCost, _ := calculatePricingFromModelData(modelTokenData)
 
 	return &ModelTokenUsage{
-		Provider:            modelTokenData.Provider,
-		PricingModelID:      modelTokenData.ModelID,
-		PricingVersion:      modelPricingVersion,
-		InputTokens:         modelTokenData.InputTokens,
-		OutputTokens:        modelTokenData.OutputTokens,
-		InputTokensM:        formatTokensM(modelTokenData.InputTokens),
-		OutputTokensM:       formatTokensM(modelTokenData.OutputTokens),
-		CacheTokens:         modelTokenData.CacheTokens,
-		CacheTokensM:        formatTokensM(modelTokenData.CacheTokens),
-		CacheReadTokens:     modelTokenData.CacheReadTokens,
-		CacheReadTokensM:    formatTokensM(modelTokenData.CacheReadTokens),
-		CacheWriteTokens:    modelTokenData.CacheWriteTokens,
-		CacheWriteTokensM:   formatTokensM(modelTokenData.CacheWriteTokens),
-		ReasoningTokens:     modelTokenData.ReasoningTokens,
-		ReasoningTokensM:    formatTokensM(modelTokenData.ReasoningTokens),
-		LLMCallCount:        modelTokenData.LLMCallCount,
-		InputCost:           inputCost,
-		OutputCost:          outputCost,
-		ReasoningCost:       reasoningCost,
-		CacheCost:           cacheCost,
-		CacheReadCost:       modelTokenData.CacheReadCost,
-		CacheWriteCost:      modelTokenData.CacheWriteCost,
-		TotalCost:           totalCost,
-		ContextWindowUsage:  totalTokens,
-		ModelContextWindow:  contextWindow,
-		ContextUsagePercent: contextUsagePercent,
+		Provider:          modelTokenData.Provider,
+		PricingModelID:    modelTokenData.ModelID,
+		PricingVersion:    modelPricingVersion,
+		InputTokens:       modelTokenData.InputTokens,
+		OutputTokens:      modelTokenData.OutputTokens,
+		InputTokensM:      formatTokensM(modelTokenData.InputTokens),
+		OutputTokensM:     formatTokensM(modelTokenData.OutputTokens),
+		CacheTokens:       modelTokenData.CacheTokens,
+		CacheTokensM:      formatTokensM(modelTokenData.CacheTokens),
+		CacheReadTokens:   modelTokenData.CacheReadTokens,
+		CacheReadTokensM:  formatTokensM(modelTokenData.CacheReadTokens),
+		CacheWriteTokens:  modelTokenData.CacheWriteTokens,
+		CacheWriteTokensM: formatTokensM(modelTokenData.CacheWriteTokens),
+		ReasoningTokens:   modelTokenData.ReasoningTokens,
+		ReasoningTokensM:  formatTokensM(modelTokenData.ReasoningTokens),
+		LLMCallCount:      modelTokenData.LLMCallCount,
+		InputCost:         inputCost,
+		OutputCost:        outputCost,
+		ReasoningCost:     reasoningCost,
+		CacheCost:         cacheCost,
+		CacheReadCost:     modelTokenData.CacheReadCost,
+		CacheWriteCost:    modelTokenData.CacheWriteCost,
+		TotalCost:         totalCost,
 	}
 }
 
@@ -187,7 +226,7 @@ func EnsureModelTokenUsagePricing(modelID string, usage *ModelTokenUsage) {
 	}
 
 	modelTokenData := buildModelTokenDataFromUsage(modelID, usage)
-	inputCost, outputCost, reasoningCost, cacheCost, totalCost, contextWindow := calculatePricingFromModelData(modelTokenData)
+	inputCost, outputCost, reasoningCost, cacheCost, totalCost, _ := calculatePricingFromModelData(modelTokenData)
 
 	if inputCost > 0 || outputCost > 0 || reasoningCost > 0 || cacheCost > 0 || totalCost > 0 {
 		usage.PricingModelID = modelID
@@ -201,18 +240,7 @@ func EnsureModelTokenUsagePricing(modelID string, usage *ModelTokenUsage) {
 		usage.TotalCost = totalCost
 	}
 
-	if usage.ModelContextWindow == 0 && contextWindow > 0 {
-		usage.ModelContextWindow = contextWindow
-	}
-	if usage.ContextWindowUsage == 0 {
-		usage.ContextWindowUsage = usage.InputTokens + usage.OutputTokens
-	}
-	if usage.ContextUsagePercent == 0 && usage.ModelContextWindow > 0 && usage.LLMCallCount <= 1 {
-		usage.ContextUsagePercent = (float64(usage.ContextWindowUsage) / float64(usage.ModelContextWindow)) * 100.0
-		if usage.ContextUsagePercent > 100.0 {
-			usage.ContextUsagePercent = 100.0
-		}
-	}
+	// PLAT-072/B: no longer backfilled here — see buildModelTokenUsage.
 }
 
 func EnsureTokenUsageFilePricing(tokenFile *TokenUsageFile) {
@@ -253,6 +281,11 @@ func EnsureDailyGroupTokenUsageFilePricing(dailyFile *DailyGroupTokenUsageFile) 
 	if dailyFile == nil {
 		return
 	}
+	for _, execution := range dailyFile.Executions {
+		if execution != nil {
+			EnsureTokenUsageFilePricing(execution.TokenUsage)
+		}
+	}
 	for _, tokenFile := range dailyFile.RunFolders {
 		EnsureTokenUsageFilePricing(tokenFile)
 	}
@@ -289,6 +322,9 @@ func EnsurePhaseTokenUsageFileInitialized(tokenFile *PhaseTokenUsageFile) {
 	if tokenFile.ByModel == nil {
 		tokenFile.ByModel = make(map[string]*ModelTokenUsage)
 	}
+	if tokenFile.SessionCumulative == nil {
+		tokenFile.SessionCumulative = make(map[string]*ModelTokenUsage)
+	}
 }
 
 func ApplyModelTokenData(dst *ModelTokenUsage, modelTokenData *ModelTokenData) *ModelTokenUsage {
@@ -323,13 +359,8 @@ func ApplyModelTokenData(dst *ModelTokenUsage, modelTokenData *ModelTokenData) *
 	if usage.Provider != "" {
 		dst.Provider = usage.Provider
 	}
-	if usage.ModelContextWindow > 0 {
-		dst.ModelContextWindow = usage.ModelContextWindow
-		if modelTokenData.LLMCallCount <= 1 {
-			dst.ContextWindowUsage = usage.ContextWindowUsage
-			dst.ContextUsagePercent = usage.ContextUsagePercent
-		}
-	}
+	// PLAT-072/B: ModelContextWindow/ContextWindowUsage/ContextUsagePercent no
+	// longer propagated here — see buildModelTokenUsage.
 
 	return dst
 }
@@ -340,12 +371,14 @@ func CloneTokenUsageFile(src *TokenUsageFile) *TokenUsageFile {
 	}
 
 	clone := &TokenUsageFile{
-		CreatedAt:      src.CreatedAt,
-		UpdatedAt:      src.UpdatedAt,
-		ByModel:        make(map[string]*ModelTokenUsage),
-		ByStepAndModel: make(map[string]map[string]*ModelTokenUsage),
-		ByTool:         make(map[string]*ToolCostUsage),
-		ByStepAndTool:  make(map[string]map[string]*ToolCostUsage),
+		CreatedAt:         src.CreatedAt,
+		UpdatedAt:         src.UpdatedAt,
+		ByModel:           make(map[string]*ModelTokenUsage),
+		ByStepAndModel:    make(map[string]map[string]*ModelTokenUsage),
+		ByTool:            make(map[string]*ToolCostUsage),
+		ByStepAndTool:     make(map[string]map[string]*ToolCostUsage),
+		ExecutionID:       src.ExecutionID,
+		PriorExecutionIDs: append([]string(nil), src.PriorExecutionIDs...),
 	}
 
 	for modelID, usage := range src.ByModel {
@@ -437,15 +470,8 @@ func MergeModelTokenUsage(dst, src *ModelTokenUsage) *ModelTokenUsage {
 	if src.PricingVersion != "" {
 		dst.PricingVersion = src.PricingVersion
 	}
-	if src.ModelContextWindow > 0 {
-		dst.ModelContextWindow = src.ModelContextWindow
-	}
-	if src.ContextWindowUsage > 0 {
-		dst.ContextWindowUsage = src.ContextWindowUsage
-	}
-	if src.ContextUsagePercent > dst.ContextUsagePercent {
-		dst.ContextUsagePercent = src.ContextUsagePercent
-	}
+	// PLAT-072/B: ModelContextWindow/ContextWindowUsage/ContextUsagePercent no
+	// longer propagated here — see buildModelTokenUsage.
 
 	return dst
 }
@@ -623,10 +649,11 @@ func ClonePhaseTokenUsageFile(src *PhaseTokenUsageFile) *PhaseTokenUsageFile {
 	}
 
 	clone := &PhaseTokenUsageFile{
-		CreatedAt:       src.CreatedAt,
-		UpdatedAt:       src.UpdatedAt,
-		ByPhaseAndModel: make(map[string]map[string]*ModelTokenUsage),
-		ByModel:         make(map[string]*ModelTokenUsage),
+		CreatedAt:         src.CreatedAt,
+		UpdatedAt:         src.UpdatedAt,
+		ByPhaseAndModel:   make(map[string]map[string]*ModelTokenUsage),
+		ByModel:           make(map[string]*ModelTokenUsage),
+		SessionCumulative: make(map[string]*ModelTokenUsage),
 	}
 
 	for modelID, usage := range src.ByModel {
@@ -638,6 +665,9 @@ func ClonePhaseTokenUsageFile(src *PhaseTokenUsageFile) *PhaseTokenUsageFile {
 		for modelID, usage := range modelMap {
 			clone.ByPhaseAndModel[phaseID][modelID] = CloneModelTokenUsage(usage)
 		}
+	}
+	for sessionID, usage := range src.SessionCumulative {
+		clone.SessionCumulative[sessionID] = CloneModelTokenUsage(usage)
 	}
 
 	return clone
@@ -663,6 +693,9 @@ func MergePhaseTokenUsageFiles(dst, src *PhaseTokenUsageFile) *PhaseTokenUsageFi
 	if dst.ByPhaseAndModel == nil {
 		dst.ByPhaseAndModel = make(map[string]map[string]*ModelTokenUsage)
 	}
+	if dst.SessionCumulative == nil {
+		dst.SessionCumulative = make(map[string]*ModelTokenUsage)
+	}
 
 	for modelID, usage := range src.ByModel {
 		dst.ByModel[modelID] = MergeModelTokenUsage(dst.ByModel[modelID], usage)
@@ -674,6 +707,12 @@ func MergePhaseTokenUsageFiles(dst, src *PhaseTokenUsageFile) *PhaseTokenUsageFi
 		}
 		for modelID, usage := range modelMap {
 			dst.ByPhaseAndModel[phaseID][modelID] = MergeModelTokenUsage(dst.ByPhaseAndModel[phaseID][modelID], usage)
+		}
+	}
+	for sessionID, usage := range src.SessionCumulative {
+		current := dst.SessionCumulative[sessionID]
+		if current == nil || modelUsageSnapshotIsNewer(usage, current) {
+			dst.SessionCumulative[sessionID] = CloneModelTokenUsage(usage)
 		}
 	}
 
@@ -699,6 +738,9 @@ func ApplyModelTokenDataToPhaseTokenUsageFile(tokenFile *PhaseTokenUsageFile, ph
 	tokenFile.ByPhaseAndModel[phaseKey][modelID] = ApplyModelTokenData(tokenFile.ByPhaseAndModel[phaseKey][modelID], modelTokenData)
 }
 
+// ApplyModelUsageToPhaseTokenUsageFile adds a per-turn or per-call delta to
+// workflow-wide phase totals. Cumulative coding-session snapshots must first
+// pass through ApplyCumulativeSessionModelUsageToPhaseTokenUsageFile.
 func ApplyModelUsageToPhaseTokenUsageFile(tokenFile *PhaseTokenUsageFile, phaseKey, modelID string, usage *ModelTokenUsage, now time.Time) {
 	if tokenFile == nil || usage == nil || strings.TrimSpace(phaseKey) == "" || strings.TrimSpace(modelID) == "" {
 		return
@@ -715,4 +757,69 @@ func ApplyModelUsageToPhaseTokenUsageFile(tokenFile *PhaseTokenUsageFile, phaseK
 		tokenFile.ByPhaseAndModel[phaseKey] = make(map[string]*ModelTokenUsage)
 	}
 	tokenFile.ByPhaseAndModel[phaseKey][modelID] = MergeModelTokenUsage(tokenFile.ByPhaseAndModel[phaseKey][modelID], usage)
+}
+
+// ApplyCumulativeSessionModelUsageToPhaseTokenUsageFile turns the coding
+// agent's session-cumulative diagnostics into a delta, adds that delta to the
+// workflow-wide totals, and returns it so the caller can add the same delta to
+// the current daily ledger. Keeping the prior snapshot by session prevents
+// both same-session double counting and cross-session data loss.
+func ApplyCumulativeSessionModelUsageToPhaseTokenUsageFile(tokenFile *PhaseTokenUsageFile, sessionID, phaseKey, modelID string, cumulative *ModelTokenUsage, now time.Time) *ModelTokenUsage {
+	if tokenFile == nil || cumulative == nil || strings.TrimSpace(sessionID) == "" || strings.TrimSpace(phaseKey) == "" || strings.TrimSpace(modelID) == "" {
+		return nil
+	}
+	EnsurePhaseTokenUsageFileInitialized(tokenFile)
+	previous := tokenFile.SessionCumulative[sessionID]
+	delta := subtractCumulativeModelUsage(cumulative, previous)
+	EnsureModelTokenUsagePricing(modelID, delta)
+	ApplyModelUsageToPhaseTokenUsageFile(tokenFile, phaseKey, modelID, delta, now)
+	tokenFile.SessionCumulative[sessionID] = CloneModelTokenUsage(cumulative)
+	return delta
+}
+
+func subtractCumulativeModelUsage(current, previous *ModelTokenUsage) *ModelTokenUsage {
+	if current == nil {
+		return nil
+	}
+	if previous == nil || !modelUsageSnapshotIsNewer(current, previous) {
+		return CloneModelTokenUsage(current)
+	}
+	delta := CloneModelTokenUsage(current)
+	delta.InputTokens -= previous.InputTokens
+	delta.OutputTokens -= previous.OutputTokens
+	delta.CacheTokens -= previous.CacheTokens
+	delta.CacheReadTokens -= previous.CacheReadTokens
+	delta.CacheWriteTokens -= previous.CacheWriteTokens
+	delta.ReasoningTokens -= previous.ReasoningTokens
+	delta.LLMCallCount -= previous.LLMCallCount
+	delta.InputCost -= previous.InputCost
+	delta.OutputCost -= previous.OutputCost
+	delta.ReasoningCost -= previous.ReasoningCost
+	delta.CacheCost -= previous.CacheCost
+	delta.CacheReadCost -= previous.CacheReadCost
+	delta.CacheWriteCost -= previous.CacheWriteCost
+	delta.TotalCost -= previous.TotalCost
+	delta.InputTokensM = formatTokensM(delta.InputTokens)
+	delta.OutputTokensM = formatTokensM(delta.OutputTokens)
+	delta.CacheTokensM = formatTokensM(delta.CacheTokens)
+	delta.CacheReadTokensM = formatTokensM(delta.CacheReadTokens)
+	delta.CacheWriteTokensM = formatTokensM(delta.CacheWriteTokens)
+	delta.ReasoningTokensM = formatTokensM(delta.ReasoningTokens)
+	return delta
+}
+
+// A lower counter means the coding CLI started a fresh diagnostic epoch (for
+// example after a process/session reset). Treat the whole current snapshot as
+// new usage instead of producing negative deltas.
+func modelUsageSnapshotIsNewer(current, previous *ModelTokenUsage) bool {
+	if current == nil || previous == nil {
+		return current != nil
+	}
+	return current.InputTokens >= previous.InputTokens &&
+		current.OutputTokens >= previous.OutputTokens &&
+		current.CacheTokens >= previous.CacheTokens &&
+		current.CacheReadTokens >= previous.CacheReadTokens &&
+		current.CacheWriteTokens >= previous.CacheWriteTokens &&
+		current.ReasoningTokens >= previous.ReasoningTokens &&
+		current.LLMCallCount >= previous.LLMCallCount
 }

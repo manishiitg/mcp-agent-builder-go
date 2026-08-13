@@ -54,6 +54,18 @@ func RegisterSessionNotificationDestination(sessionID string, dest *services.Not
 	if len(incoming.PulseSummaryChannels) > 0 {
 		current.PulseSummaryChannels = incoming.PulseSummaryChannels
 	}
+	if len(incoming.RunSummaryRecipients) > 0 {
+		current.RunSummaryRecipients = incoming.RunSummaryRecipients
+	}
+	if len(incoming.PulseSummaryRecipients) > 0 {
+		current.PulseSummaryRecipients = incoming.PulseSummaryRecipients
+	}
+	if len(incoming.RunSummaryWebhooks) > 0 {
+		current.RunSummaryWebhooks = incoming.RunSummaryWebhooks
+	}
+	if len(incoming.PulseSummaryWebhooks) > 0 {
+		current.PulseSummaryWebhooks = incoming.PulseSummaryWebhooks
+	}
 	sessionNotificationDestinations.values[sessionID] = current
 }
 

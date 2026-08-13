@@ -25,6 +25,12 @@ var safeWorkflowDBTableName = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
 // so both answer from the same statement.
 const workflowDBDescribeAllSQL = "SELECT name, type, sql FROM sqlite_master WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' ORDER BY type, name"
 
+// workflowDBIntegrityCheckSQL is exposed only through the named integrity_check
+// action. Agents cannot use it as a path to arbitrary PRAGMA execution, while
+// database-health reviewers can run the exact deterministic check their
+// contract requires through the same guarded, query-only connection.
+const workflowDBIntegrityCheckSQL = "PRAGMA integrity_check"
+
 // workflowDBDescribeRows bounds the follow-up describe. Schema rows are one per
 // column or one per table, so this is far above any real workflow database.
 const workflowDBDescribeRows = 500
@@ -50,13 +56,15 @@ type WorkflowDBToolRegistry struct {
 func workflowDBQueryToolDefinition() llmtypes.Tool {
 	return llmtypes.Tool{Type: "function", Function: &llmtypes.FunctionDefinition{
 		Name:        "query_workflow_db",
-		Description: "Read the current workflow SQLite database. Pass sql to run one statement; it opens read-only and cannot mutate. Use action=describe to inspect an unfamiliar table first. The backend resolves the database; never pass a path. Single-statement, row-bounded, WAL-aware.",
+		Description: "Read the current workflow SQLite database. Pass sql to run one statement; query is accepted as a compatibility alias. It opens read-only and cannot mutate. Use action=describe to inspect an unfamiliar table, or action=integrity_check for the guarded SQLite integrity check. The backend resolves the database; never pass a path. Single-statement, row-bounded, WAL-aware.",
 		Parameters: llmtypes.NewParameters(map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"action":   map[string]any{"type": "string", "enum": []string{"describe", "query"}, "description": "Optional. Omit it and pass sql to run a statement. Use describe to list schemas or columns."},
+				"action":   map[string]any{"type": "string", "enum": []string{"describe", "query", "integrity_check"}, "description": "Optional. Omit it and pass sql to run a statement. Use describe to list schemas or columns; integrity_check runs the fixed guarded SQLite integrity check."},
 				"table":    map[string]any{"type": "string", "description": "Optional table name for action=describe. Omit to list all table/view definitions."},
-				"sql":      map[string]any{"type": "string", "description": "One SELECT, read-only WITH/EXPLAIN, or safe schema PRAGMA statement. This is the normal way to use the tool."},
+				"sql":      map[string]any{"type": "string", "description": "One SELECT, read-only WITH/EXPLAIN, or allowlisted read-only PRAGMA statement. Supported integrity checks include PRAGMA integrity_check, quick_check[(N)], and foreign_key_check[(table)]. This is the normal way to use the tool."},
+				"params":   map[string]any{"type": "array", "description": "Optional positional values for ? placeholders in sql."},
+				"query":    map[string]any{"type": "string", "description": "Compatibility alias for sql. Prefer sql. If both are supplied they must be identical."},
 				"max_rows": map[string]any{"type": "integer", "minimum": 1, "maximum": 1000, "description": "Maximum rows to return for action=query. Default 500."},
 			},
 		}),
@@ -107,6 +115,10 @@ func CreateWorkflowDBToolRegistry(workspaceURL, userID, fallbackSessionID string
 		}
 		action, _ := args["action"].(string)
 		action = strings.TrimSpace(strings.ToLower(action))
+		querySQL, err := workflowDBReadSQLArgument(args)
+		if err != nil {
+			return "", err
+		}
 		var sqlText string
 		maxRows := 500
 		if raw, ok := args["max_rows"].(float64); ok && raw > 0 {
@@ -124,7 +136,7 @@ func CreateWorkflowDBToolRegistry(workspaceURL, userID, fallbackSessionID string
 		// "sql is required for action=query" failures from callers that had already
 		// supplied valid SQL.
 		if action == "" {
-			if raw, _ := args["sql"].(string); strings.TrimSpace(raw) != "" {
+			if querySQL != "" {
 				action = "query"
 			} else if _, hasTable := args["table"]; hasTable {
 				action = "describe"
@@ -143,17 +155,22 @@ func CreateWorkflowDBToolRegistry(workspaceURL, userID, fallbackSessionID string
 				sqlText = workflowDBDescribeTableSQL(table)
 			}
 		case "query":
-			sqlText, _ = args["sql"].(string)
-			if strings.TrimSpace(sqlText) == "" {
-				return "", fmt.Errorf("sql is required for action=query")
+			sqlText = querySQL
+			if sqlText == "" {
+				return "", fmt.Errorf("sql (or its query alias) is required for action=query")
 			}
+		case "integrity_check":
+			if querySQL != "" {
+				return "", fmt.Errorf("action=integrity_check does not accept sql or query; it runs the fixed guarded statement %q", workflowDBIntegrityCheckSQL)
+			}
+			sqlText = workflowDBIntegrityCheckSQL
 		default:
 			return "", fmt.Errorf(
-				"pass sql to run a read-only statement, or action=\"describe\" (with optional table) to list schemas. Received top-level keys %v",
+				"pass sql to run a read-only statement, action=\"describe\" (with optional table) to list schemas, or action=\"integrity_check\". Received top-level keys %v",
 				sortedArgumentKeys(args),
 			)
 		}
-		result, err := client.QueryAuthorizedWorkflowDB(ctx, workspace.QueryWorkflowDBParams{DBPath: dbPath, SQL: sqlText, MaxRows: maxRows})
+		result, err := client.QueryAuthorizedWorkflowDB(ctx, workspace.QueryWorkflowDBParams{DBPath: dbPath, SQL: sqlText, Params: workflowDBParams(args), MaxRows: maxRows})
 		if err != nil {
 			// A bare "no such column: input_id" tells the caller only that its guess
 			// was wrong, so it guesses again — one overnight run spent 18 tool calls
@@ -242,6 +259,30 @@ func CreateWorkflowDBToolRegistry(workspaceURL, userID, fallbackSessionID string
 			"mutate_workflow_db": WorkflowDBToolCategory,
 		},
 	}
+}
+
+// workflowDBReadSQLArgument normalizes the read tool's canonical sql argument
+// and its compatibility alias. query_workflow_db used to reject {"query":"…"},
+// even though that is the most natural argument name for the tool; callers then
+// spent extra turns discovering the schema before retrying with sql. Both names
+// reach the same query-only execution path, while conflicting inputs fail closed.
+func workflowDBReadSQLArgument(args map[string]any) (string, error) {
+	sqlText, _ := args["sql"].(string)
+	queryText, _ := args["query"].(string)
+	sqlText = strings.TrimSpace(sqlText)
+	queryText = strings.TrimSpace(queryText)
+	if sqlText != "" && queryText != "" && sqlText != queryText {
+		return "", fmt.Errorf("sql and query were both supplied with different values; pass only sql or make them identical")
+	}
+	if sqlText != "" {
+		return sqlText, nil
+	}
+	return queryText, nil
+}
+
+func workflowDBParams(args map[string]any) []interface{} {
+	params, _ := args["params"].([]interface{})
+	return params
 }
 
 func WorkflowDBToolNames() map[string]bool {

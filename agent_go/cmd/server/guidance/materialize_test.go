@@ -2,11 +2,14 @@ package guidance
 
 import (
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 )
+
+var builderReferenceReadPattern = regexp.MustCompile(`"name":"builder-reference","path":"(references/[^"]+\.md)"`)
 
 func materializedFileContent(t *testing.T, skill *llmtypes.Skill, relPath string) string {
 	t.Helper()
@@ -55,6 +58,53 @@ func TestMaterializedReferenceSkillIncludesConfigToolOnlyDocs(t *testing.T) {
 	for _, banned := range []string{"config/published-llms.json", "config/provider-api-keys.json", "config/image-generation-config.json", "config/image-analysis-config.json"} {
 		if strings.Contains(mediaTools, banned) {
 			t.Fatalf("workspace-media-tools reference should not expose raw config file %q\n%s", banned, mediaTools)
+		}
+	}
+}
+
+func TestStandaloneBugReviewCommandIsRetired(t *testing.T) {
+	if _, exists := allKinds["bug-review"]; exists {
+		t.Fatal("standalone bug-review remains registered; Engineering Review owns bug diagnosis and fixes")
+	}
+	if _, err := os.Stat("templates/review/bug-review.md"); !os.IsNotExist(err) {
+		t.Fatalf("retired standalone bug-review template still exists: %v", err)
+	}
+	if got := MaterializeGuidanceSkill("workshop"); got != nil && strings.Contains(got.Content, "bug-review") {
+		t.Fatal("workflow-commands skill still advertises retired bug-review")
+	}
+}
+
+// Guidance may name a reference only through read_skill. The reference bundle
+// is the authority for those paths, so a deleted or renamed file must fail in
+// tests rather than reaching an agent as an opaque runtime error.
+func TestGuidanceDoesNotRequestMissingBuilderReferenceFile(t *testing.T) {
+	available := map[string]bool{}
+	for _, mode := range []string{"workshop", "multi-agent"} {
+		bundle := MaterializeReferenceSkill(mode)
+		if bundle == nil {
+			t.Fatalf("expected %s builder-reference bundle", mode)
+		}
+		for _, file := range bundle.SupportingFiles {
+			available[file.RelPath] = true
+		}
+	}
+
+	registries := []map[string]kindMeta{allKinds, referenceKinds}
+	for _, registry := range registries {
+		for kind := range registry {
+			rendered, err := renderFromRegistry(kind, tmplData{}, registry)
+			if err != nil {
+				t.Errorf("render %s: %v", kind, err)
+				continue
+			}
+			for _, match := range builderReferenceReadPattern.FindAllStringSubmatch(rendered, -1) {
+				if strings.Contains(match[1], "<") {
+					continue // documented placeholder, not a literal request
+				}
+				if !available[match[1]] {
+					t.Errorf("%s requests %q from builder-reference, but that file is not bundled", kind, match[1])
+				}
+			}
 		}
 	}
 }
@@ -169,32 +219,28 @@ func TestPulseReviewFixerDocsAreNamedAndLoadable(t *testing.T) {
 	}
 }
 
-// The standalone Fixer is the single writer for a pass, so it must see the whole
-// backlog before choosing an order. Scoping by module produced the failure this
-// change addresses: two focused runs on 2026-08-02 both landed on stores_health
-// while six operator answers and five recurring deliver-briefing concerns —
-// neither of which needs a reviewer first — went untouched for six days.
-func TestStandalonePulseFixerWorksTheWholeBacklog(t *testing.T) {
-	raw, err := os.ReadFile("templates/improve/pulse-fixer.md")
+func TestEngineeringReviewUsesTheCanonicalReviewAndFixSequence(t *testing.T) {
+	raw, err := os.ReadFile("templates/improve/engineering-review.md")
 	if err != nil {
-		t.Fatalf("read pulse-fixer template: %v", err)
+		t.Fatalf("read engineering-review template: %v", err)
 	}
 	prompt := string(raw)
 	for _, want := range []string{
-		"whole active backlog across every module",
-		"query_workflow_db",
-		"seen_count",
-		"answered",
-		"Full-backlog drain contract",
-		"starting manifest",
-		`get_pulse_state(view="backlog")`,
+		"continuing Workflow Builder conversation",
+		"pulse_run_id=\"current\"",
+		"Own the review yourself",
+		"Persist typed findings and verification",
+		"normal Workflow Builder tools",
+		"one terminal module result for Engineering and one for Operations",
 	} {
 		if !strings.Contains(prompt, want) {
-			t.Errorf("pulse-fixer prompt is missing %q — the Fixer cannot size or prioritize the backlog without it", want)
+			t.Errorf("engineering-review prompt is missing canonical sequence contract %q", want)
 		}
 	}
-	if strings.Contains(prompt, "for the\n   selected owning modules") {
-		t.Errorf("pulse-fixer still scopes the backlog to selected modules")
+	for _, forbidden := range []string{"STANDALONE PULSE FIXER", `role="fixer"`, `review_lanes=[`} {
+		if strings.Contains(prompt, forbidden) {
+			t.Errorf("engineering-review retained obsolete standalone Fixer contract %q", forbidden)
+		}
 	}
 }
 
@@ -220,7 +266,7 @@ func TestPulseFixerPracticesRequireExhaustiveAgenticDrain(t *testing.T) {
 	scheduled := RenderSystemDoc("pulse-review-fixer")
 	for _, want := range []string{
 		"complete active starting manifest",
-		"do not narrow the consolidated Fixer's retained",
+		"do not narrow the executor's retained",
 		"Full-backlog drain contract",
 		"must not claim completion",
 	} {

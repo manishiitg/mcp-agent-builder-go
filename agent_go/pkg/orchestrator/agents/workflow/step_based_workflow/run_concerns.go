@@ -47,7 +47,8 @@ const runConcernsSchema = `CREATE TABLE IF NOT EXISTS run_concerns (
 	status TEXT NOT NULL DEFAULT 'open',
 	resolved_at TEXT NOT NULL DEFAULT '',
 	resolved_by TEXT NOT NULL DEFAULT '',
-	resolution_note TEXT NOT NULL DEFAULT ''
+	resolution_note TEXT NOT NULL DEFAULT '',
+	first_seen_platform_version TEXT NOT NULL DEFAULT ''
 )`
 
 // Phases a concern can be raised from. The step body and its two closing turns
@@ -143,21 +144,13 @@ func preValidationConcernFingerprint(stepID string) string {
 	return concernFingerprint(stepID, "prevalidation:step-output-contract")
 }
 
-// existingWorkflowReviewFingerprint preserves the identity of an exact
-// historical operational finding after the six reviewer modules were folded
-// into workflow_review. Without this bridge the same CONCERNS payload would be
-// refiled under a different step-id hash on the first consolidated pass.
-func existingWorkflowReviewFingerprint(ctx context.Context, db pulseFindingLifecycleDB, text string) string {
+// existingCanonicalReviewFingerprint preserves the identity of an exact finding
+// in the same current review lane.
+func existingCanonicalReviewFingerprint(ctx context.Context, db pulseFindingLifecycleDB, module, text string) string {
 	wanted := strings.ToLower(strings.Join(strings.Fields(text), " "))
-	modules := append([]string{pulsemodules.WorkflowReviewID}, pulsemodules.RetiredIDs...)
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(modules)), ",")
-	args := make([]interface{}, 0, len(modules)+1)
-	args = append(args, ConcernPhaseReview)
-	for _, module := range modules {
-		args = append(args, module)
-	}
+	args := []interface{}{ConcernPhaseReview, module}
 	rows, err := db.QueryContext(ctx, `SELECT fingerprint, text FROM run_concerns
-		WHERE phase=? AND step_id IN (`+placeholders+`)`, args...)
+		WHERE phase=? AND step_id=?`, args...)
 	if err != nil {
 		return ""
 	}
@@ -204,9 +197,17 @@ func openRunConcernsDB(ctx context.Context, workspacePath string, create bool) (
 // Best-effort by contract: a step that did its work must not fail because its
 // concern could not be filed. Callers log and continue.
 func RecordRunConcerns(ctx context.Context, workspacePath, runFolder, groupName, stepID, phase, summary string) (int, error) {
+	if phase == ConcernPhaseReview && pulsemodules.IsValid(stepID) {
+		stepID = pulsemodules.Normalize(stepID)
+	}
 	lines := ParseConcernLines(summary)
 	if len(lines) == 0 {
 		return 0, nil
+	}
+	if phase == ConcernPhaseReview {
+		if err := validatePulseAdvisorFindingRoutes(stepID, summary); err != nil {
+			return 0, err
+		}
 	}
 	db, err := openRunConcernsDB(ctx, workspacePath, true)
 	if err != nil || db == nil {
@@ -233,16 +234,6 @@ func RecordRunConcerns(ctx context.Context, workspacePath, runFolder, groupName,
 	return recorded, nil
 }
 
-func recordRunConcernLinesAt(
-	ctx context.Context,
-	db pulseFindingLifecycleDB,
-	runFolder, groupName, stepID, phase string,
-	lines []string,
-	observedAt string,
-) (int, error) {
-	return recordRunConcernLinesAtWithFingerprints(ctx, db, runFolder, groupName, stepID, phase, lines, observedAt, nil)
-}
-
 func recordRunConcernLinesAtWithFingerprints(
 	ctx context.Context,
 	db pulseFindingLifecycleDB,
@@ -263,8 +254,8 @@ func recordRunConcernLinesAtWithFingerprints(
 		} else if fp == "" {
 			fp = concernFingerprint(stepID, text)
 		}
-		if stepID == pulsemodules.WorkflowReviewID {
-			if historical := existingWorkflowReviewFingerprint(ctx, db, text); historical != "" {
+		if phase == ConcernPhaseReview && pulsemodules.IsValid(stepID) {
+			if historical := existingCanonicalReviewFingerprint(ctx, db, stepID, text); historical != "" {
 				fp = historical
 			}
 		}
@@ -280,9 +271,13 @@ func recordRunConcernLinesAtWithFingerprints(
 		// run happened and did not resolve it, so awaiting_run reopens too.
 		// "rejected" is deliberately sticky — someone judged it a non-issue, and
 		// recurrence is not new evidence against that judgement.
+		// first_seen_platform_version is written on INSERT only; the ON CONFLICT
+		// branch deliberately leaves it alone. It answers "what was this first
+		// observed against", so a recurrence must not overwrite it with a newer
+		// revision — that would erase exactly the signal a staleness sweep reads.
 		_, err := db.ExecContext(ctx, `INSERT INTO run_concerns
-			(fingerprint, step_id, phase, group_name, text, first_seen_run, first_seen_at, last_seen_run, last_seen_at, seen_count, status)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+			(fingerprint, step_id, phase, group_name, text, first_seen_run, first_seen_at, last_seen_run, last_seen_at, seen_count, status, first_seen_platform_version)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
 			ON CONFLICT(fingerprint) DO UPDATE SET
 				text = excluded.text,
 				phase = excluded.phase,
@@ -294,7 +289,7 @@ func recordRunConcernLinesAtWithFingerprints(
 					ELSE 1
 				END,
 				status = CASE WHEN run_concerns.status IN (?, ?, ?) THEN ? ELSE run_concerns.status END`,
-			fp, stepID, phase, groupName, text, runFolder, observedAt, runFolder, observedAt, ConcernStatusOpen,
+			fp, stepID, phase, groupName, text, runFolder, observedAt, runFolder, observedAt, ConcernStatusOpen, PlatformVersion(),
 			ConcernStatusResolved, ConcernStatusAwaitingVerification, ConcernStatusAwaitingRun, ConcernStatusOpen)
 		if err != nil {
 			return recorded, err
@@ -345,15 +340,15 @@ func LoadOpenRunConcerns(ctx context.Context, workspacePath string, limit int) (
 		JOIN (
 			SELECT step_id, COUNT(*) AS active_count, MAX(seen_count) AS peak_seen
 			FROM run_concerns
-			WHERE status IN (?, ?, ?, ?, ?)
+			WHERE status IN (?, ?, ?, ?, ?, ?)
 			GROUP BY step_id
 		) cluster ON cluster.step_id = c.step_id
-		WHERE c.status IN (?, ?, ?, ?, ?)
+		WHERE c.status IN (?, ?, ?, ?, ?, ?)
 		ORDER BY cluster.active_count DESC, cluster.peak_seen DESC, c.step_id ASC,
 			c.seen_count DESC, c.first_seen_at ASC, c.last_seen_at DESC`
 	args := []interface{}{
-		ConcernStatusOpen, ConcernStatusAcknowledged, ConcernStatusFixing, ConcernStatusAwaitingVerification, ConcernStatusAwaitingRun,
-		ConcernStatusOpen, ConcernStatusAcknowledged, ConcernStatusFixing, ConcernStatusAwaitingVerification, ConcernStatusAwaitingRun,
+		ConcernStatusOpen, ConcernStatusAcknowledged, ConcernStatusFixing, ConcernStatusAwaitingVerification, ConcernStatusAwaitingRun, ConcernStatusQueuedForEngineering,
+		ConcernStatusOpen, ConcernStatusAcknowledged, ConcernStatusFixing, ConcernStatusAwaitingVerification, ConcernStatusAwaitingRun, ConcernStatusQueuedForEngineering,
 	}
 	if limit > 0 {
 		query += ` LIMIT ?`
@@ -460,11 +455,12 @@ func ResolveRunConcern(ctx context.Context, workspacePath, fingerprint, status, 
 // a bookkeeping write. A failure here is logged and the run continues — the
 // concern still appears inline in the completion summary either way, so the
 // worst case is losing recurrence tracking for one occurrence, not the report.
-func (hcpo *StepBasedWorkflowOrchestrator) recordStepConcerns(ctx context.Context, stepID string, summariesByPhase map[string]string) {
+func (hcpo *StepBasedWorkflowOrchestrator) recordStepConcerns(ctx context.Context, stepID string, summariesByPhase map[string]string) error {
 	workspacePath := strings.TrimSpace(hcpo.GetWorkspacePath())
 	if workspacePath == "" {
-		return
+		return nil
 	}
+	var recordErrors []string
 	for phase, summary := range summariesByPhase {
 		if strings.TrimSpace(summary) == "" {
 			continue
@@ -472,12 +468,17 @@ func (hcpo *StepBasedWorkflowOrchestrator) recordStepConcerns(ctx context.Contex
 		n, err := RecordRunConcerns(ctx, workspacePath, hcpo.selectedRunFolder, hcpo.currentGroupName, stepID, phase, summary)
 		if err != nil {
 			hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Failed to record %s concerns for step %s: %v", phase, stepID, err))
+			recordErrors = append(recordErrors, phase+": "+err.Error())
 			continue
 		}
 		if n > 0 {
 			hcpo.GetLogger().Info(fmt.Sprintf("📌 Recorded %d %s concern(s) for step %s", n, phase, stepID))
 		}
 	}
+	if len(recordErrors) > 0 {
+		return fmt.Errorf("record concerns for %s: %s", stepID, strings.Join(recordErrors, "; "))
+	}
+	return nil
 }
 
 // LoadPriorPreValidationFailures returns this step's still-open prevalidation

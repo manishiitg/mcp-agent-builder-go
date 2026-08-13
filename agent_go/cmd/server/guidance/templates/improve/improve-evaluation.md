@@ -1,24 +1,23 @@
-# READ-ONLY EVALUATION HEALTH REVIEW
+# ENGINEERING REVIEW — EVALUATION LENS
 
 Review `evaluation/evaluation_plan.json` and its latest evidence. This specialist
 is read-only. Do not edit eval/config/report files, call plan/config mutation
-tools, run an eval, update `builder/improve.html`, create questions, or mark
+tools, run an eval, update any presentation artifact, create questions, or mark
 module state. Any later wording such as improve, apply, edit, fix, add, retire,
 remove, update, resolve, or run means **recommend the exact change to the Pulse
 Fixer**. The Pulse Fixer may automatically apply correctness-preserving repairs;
 semantic changes still require an exact approved human-input request.
 
-Return only: `module=eval_health`, `verdict`, `next_check`, and ordered findings
+Return only: `module=workflow_review`, `verdict`, `next_check`, and ordered findings
 tagged `CORRECTNESS_REPAIR`, `OPERATIONAL`, or `GOAL_SEMANTIC`. Every finding
 includes stable `finding_id`, `target_key`, severity, plain-language summary,
 precise `evidence`, bounded `recommended_fix`, score-continuity impact, exact
 `verification`, and `user_judgment_required` with reason. Use the remaining
 document only as the evaluation-health audit checklist.
 
-Read `builder/improve.html` as the durable prior-decision log, but do not write
-it. Use targeted semantic reads only; do not inspect CSS, load HTML
-style/skeleton guidance, migrate markup, or format cards. The Pulse Fixer owns
-the one consolidated log update and close-out.
+Read typed Pulse findings, decisions, and review history as durable prior context,
+but do not mutate them. Use targeted semantic reads only. The parent agent owns
+the typed disposition and close-out.
 
 The parent Workshop/Pulse agent must load `assumption-audit` and include the parent-provided eval lens with this checklist. The generic reviewer must not call Workshop-only guidance, validation, eval-run, or mutation tools. An eval must measure `soul.md` success, not reward compliance with the current architecture, channel, step sequence, provider, artifact shape, or proxy unless the user explicitly made that part of success. Recommend bounded measurement corrections when semantics stay unchanged; surface material goal/rubric choices for Pulse's Assumptions challenged and require user approval when business meaning changes.
 
@@ -32,14 +31,14 @@ The eval plan's completeness test is the two-way coverage matrix:
 
 Eval is also a per-run tax: auto-eval runs after every execution, so cost matters. Fewer, deeper steps; scripted fact-extraction; model judgment only on verdicts. Eval spend rivaling execution spend (see `costs/evaluation/`) is itself a finding.
 
-Eval changes are special-cased because they change what is measured, not the workflow's behavior. Handle them carefully and tell the parent Pulse Fixer to record rubric changes in `builder/improve.html` so future agents can interpret before/after runs honestly.{{if .Focus}}
+Eval changes are special-cased because they change what is measured, not the workflow's behavior. Handle them carefully and tell the parent agent to record rubric changes through typed Pulse tools so future agents can interpret before/after runs honestly.{{if .Focus}}
 
 Focus on: {{.Focus}}.{{end}}
 
 PASS 0 - FRAMEWORK PRECHECK
-1. Read only matching eval-health entries, open findings, answered decisions, and referenced archive rows from `builder/improve.html`. If an archive row references an older eval semantic change that affects the current recommendation, read that archive file. Do not read unrelated cards or page formatting.
+1. Read only matching Engineering Review evaluation findings, answered decisions, and review history through typed Pulse tools. Do not inspect unrelated presentation state.
 2. Read `soul/soul.md` and extract the objective and success criteria. If those are missing or not checkable, return `blocked` and recommend `define-success`; Goal Advisor is not the setup path.
-3. Treat `soul/soul.md` as the Goal source of truth. `builder/improve.html` holds time-based review, analysis, and improvement history, not a duplicate Goal/Profile block.
+3. Treat `soul/soul.md` as the Goal source of truth. Typed Pulse records hold time-based review, analysis, and improvement history, not a duplicate Goal/Profile block.
 
 PASS 1 - STRUCTURAL VALIDATION REVIEW
 1. Inspect `evaluation/evaluation_plan.json` and `evaluation/step_config.json`
@@ -51,7 +50,7 @@ PASS 1 - STRUCTURAL VALIDATION REVIEW
    per step in `db/db.sqlite`'s `eval_results` table for the same `run_folder` (Go
    writes both after every eval run — see `evaluation-plan.md`). A report with no
    matching `eval_results` rows means the db.sqlite mirror silently failed for that
-   run; the report file itself is still authoritative, but `report_health` cannot
+   run; the report file itself is still authoritative, but Engineering Review cannot
    see it via `window.report.query` until the mirror is fixed — flag as OPERATIONAL.
 
 PASS 2 - OUTPUT-FIRST ALIGNMENT
@@ -138,14 +137,14 @@ When you finish, return:
 - what you recommend and what is safe for the Pulse Fixer to apply
 - any proposed rubric-change Decision entry
 
-The parent records every evaluation-health result as an **Issues and reviews** card
-using `data-pulse-section="signals"` and `data-module="eval_health"`. A later
-verified repair is a separate Fixes and improvements Pulse Fixer card.
+The parent records every evaluation-lens result through the typed Pulse finding
+tools with `module=workflow_review`. A later verified repair is a typed disposition
+and verification record on that finding.
 
 If you recommend a proposed but not-yet-applied eval change as an open finding, give it a short anchor id only so the parent can record it and a later decision can mark it resolved.
 
 CLOSE-OUT RECOMMENDATIONS
-When preparing eval recommendations, scan `builder/improve.html` for open findings that the change would address. Match by intent, not exact wording.
+When preparing eval recommendations, scan typed Pulse findings for open items that the change would address. Match by intent, not exact wording.
 
 For each matching open finding, propose this close-out text for the Pulse Fixer:
 ```

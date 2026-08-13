@@ -275,44 +275,21 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 		}
 
 		if phaseTemplateVars["WorkshopMode"] == "workshop" || phaseTemplateVars["WorkshopMode"] == "builder" || phaseTemplateVars["WorkshopMode"] == "optimizer" || phaseTemplateVars["WorkshopMode"] == "reporting" {
-			// Reporting tools: JSON report-plan read/write tools plus validation and
-			// preview against real db/db.sqlite tables / knowledgebase sources. The renderer
-			// silently drops bad widgets, so validation stays in the loop.
-			if err := todo_creation_human.RegisterReportPlanManagementTools(
-				definitionAgent,
-				phaseWorkspacePath,
-				api.logger,
-				phaseReadFile,
-				phaseWriteFile,
-			); err != nil {
-				log.Printf("[WORKFLOW_PHASE] Warning: Failed to register report plan management tools in %s: %v", workflowPhaseID, err)
-			} else {
-				log.Printf("[WORKFLOW_PHASE] Registered report plan management tools in %s", workflowPhaseID)
-			}
-
-			if err := todo_creation_human.RegisterReportPlanValidationTools(
+			// The HTML report is loaded directly from db/reports/index.html. The
+			// builder edits those files with normal workspace tools and validates
+			// each page; there is no report-plan JSON registry or widget layer.
+			if err := todo_creation_human.RegisterHTMLReportTools(
 				definitionAgent,
 				phaseWorkspacePath,
 				api.logger,
 				phaseReadFile,
 			); err != nil {
-				log.Printf("[WORKFLOW_PHASE] Warning: Failed to register report plan validation tool in %s: %v", workflowPhaseID, err)
+				log.Printf("[WORKFLOW_PHASE] Warning: Failed to register HTML report tools in %s: %v", workflowPhaseID, err)
 			} else {
-				log.Printf("[WORKFLOW_PHASE] Registered report plan validation tool in %s", workflowPhaseID)
-			}
-
-			if err := todo_creation_human.RegisterReportRenderPreviewTool(
-				definitionAgent,
-				phaseWorkspacePath,
-				api.logger,
-				phaseReadFile,
-			); err != nil {
-				log.Printf("[WORKFLOW_PHASE] Warning: Failed to register report render preview tool in %s: %v", workflowPhaseID, err)
-			} else {
-				log.Printf("[WORKFLOW_PHASE] Registered report render preview tool in %s", workflowPhaseID)
+				log.Printf("[WORKFLOW_PHASE] Registered HTML report tools in %s", workflowPhaseID)
 			}
 		} else {
-			log.Printf("[WORKFLOW_PHASE] Skipped report plan tools in %s mode for %s", phaseTemplateVars["WorkshopMode"], workflowPhaseID)
+			log.Printf("[WORKFLOW_PHASE] Skipped HTML report tools in %s mode for %s", phaseTemplateVars["WorkshopMode"], workflowPhaseID)
 		}
 
 		// Create eval session for run_full_evaluation (needs isEvaluationMode=true)

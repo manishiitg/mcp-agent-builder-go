@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { CheckCircle2, ChevronDown, ChevronRight, Clock3, Loader2, MessageSquareText, RefreshCw, Send, X } from 'lucide-react'
+import { CheckCircle2, ChevronDown, ChevronRight, Clock3, Loader2, MessageSquareText, RefreshCw, Send, Sparkles, X } from 'lucide-react'
 import { agentApi } from '../../services/api'
 import type { ReportHumanInput } from '../../services/api-types'
 import { useChatStore } from '../../stores/useChatStore'
@@ -8,7 +8,7 @@ import {
   reportHumanInputHistory,
   reportHumanInputStatusLabel,
 } from '../../utils/reportHumanInputFormatting'
-import { sendReportHumanInputQuestionToChat } from '../../utils/reportHumanInputChat'
+import { delegateReportHumanInputActionToChat, sendReportHumanInputQuestionToChat } from '../../utils/reportHumanInputChat'
 import { useContainerSizeTier } from './reportWidgets/tableHelpers'
 import { WORKFLOW_LOG_REFRESH_EVENT } from './workflowEvents'
 
@@ -19,9 +19,18 @@ type ReportHumanInputDraft = {
   chatQuestion?: string
   chatOpen?: boolean
   askingInChat?: boolean
+  delegating?: boolean
 }
 
-function sourceLabel(source: string): string {
+function keepPreviousInputsWhenUnchanged(
+  previous: ReportHumanInput[],
+  next: ReportHumanInput[],
+): ReportHumanInput[] {
+  return JSON.stringify(previous) === JSON.stringify(next) ? previous : next
+}
+
+function sourceLabel(source?: string): string {
+	if (source === 'strategy_auditor') return 'Strategy Auditor'
   if (source === 'goal_advisor') return 'Goal Advisor'
   if (source === 'chief_of_staff') return 'Chief of Staff'
   return 'Pulse'
@@ -125,21 +134,25 @@ export function ReportHumanInputPanel({
 	const visibleLoading = externallyManaged ? Boolean(providedLoading) : loading
 	const visibleError = externallyManaged ? (providedError || null) : error
 
-  const loadInputs = useCallback(async (cancelled?: () => boolean) => {
+  const loadInputs = useCallback(async (cancelled?: () => boolean, showLoading = true) => {
     if (!workspacePath) return
-    setLoading(true)
-    setError(null)
+    if (showLoading) setLoading(true)
+    if (showLoading) setError(null)
     try {
       const res = await agentApi.listReportHumanInputs(workspacePath, undefined, source)
       if (cancelled?.()) return
       if (!res.success) throw new Error(res.error || 'Failed to load questions.')
-      setInputs(res.inputs || [])
+      const nextInputs = res.inputs || []
+      setInputs(previous => keepPreviousInputsWhenUnchanged(previous, nextInputs))
+      if (!showLoading) setError(null)
     } catch (err) {
       if (cancelled?.()) return
       setError(err instanceof Error ? err.message : 'Failed to load questions.')
-      setInputs([])
+      // A transient background-poll failure must not blank a decision card the
+      // user is reading. Explicit/initial loads still surface an empty result.
+      if (showLoading) setInputs([])
     } finally {
-      if (!cancelled?.()) setLoading(false)
+      if (showLoading && !cancelled?.()) setLoading(false)
     }
   }, [source, workspacePath])
 
@@ -157,12 +170,12 @@ export function ReportHumanInputPanel({
     return () => window.removeEventListener(WORKFLOW_LOG_REFRESH_EVENT, onRefresh)
 	}, [externallyManaged, loadInputs])
 
-	const waitingForPulse = contentMode !== 'pending' && visibleInputs.some(input => input.status === 'answered' || input.status === 'claimed')
+	const needsStatusPolling = visibleInputs.some(input => input.status === 'pending' || input.status === 'answered' || input.status === 'claimed')
 	useEffect(() => {
-		if (externallyManaged || !waitingForPulse) return
-    const timer = window.setInterval(() => { void loadInputs() }, 5000)
+		if (externallyManaged || !needsStatusPolling) return
+    const timer = window.setInterval(() => { void loadInputs(undefined, false) }, 5000)
     return () => window.clearInterval(timer)
-	}, [externallyManaged, loadInputs, waitingForPulse])
+	}, [externallyManaged, loadInputs, needsStatusPolling])
 
   useEffect(() => {
     setDrafts({})
@@ -253,6 +266,25 @@ export function ReportHumanInputPanel({
       useChatStore.getState().addToast(err instanceof Error ? err.message : 'Failed to send the question to chat.', 'error')
     } finally {
       updateDraft(input.id, { askingInChat: false })
+    }
+  }
+
+  const delegateActionToChat = async (input: ReportHumanInput) => {
+    updateDraft(input.id, { delegating: true })
+    try {
+      const result = await delegateReportHumanInputActionToChat({ input, workspacePath })
+      useChatStore.getState().addToast(
+        result.queuedBehindRunningTurn
+          ? 'Delegated decision queued behind the current chat turn.'
+          : result.reused
+            ? 'Decision delegated to the existing chat.'
+            : 'New chat opened to analyze and act on this decision.',
+        'success',
+      )
+    } catch (err) {
+      useChatStore.getState().addToast(err instanceof Error ? err.message : 'Failed to delegate the decision to chat.', 'error')
+    } finally {
+      updateDraft(input.id, { delegating: false })
     }
   }
 
@@ -380,7 +412,7 @@ export function ReportHumanInputPanel({
             </div>
             <div className="text-xs text-muted-foreground">
               {pending.length > 0
-                ? `Your answer will be used by the next ${source === 'chief_of_staff' ? 'Chief of Staff' : 'Pulse'} run.`
+				? `Your answer will be used by the next ${sourceLabel(source)} run.`
                 : 'Previous questions, your answers, and their outcomes.'}
             </div>
           </div>
@@ -400,7 +432,8 @@ export function ReportHumanInputPanel({
           const draft = drafts[input.id] || { selectedOptionId: '', note: '' }
           const submitting = Boolean(draft.submitting)
           const askingInChat = Boolean(draft.askingInChat)
-          const busy = submitting || askingInChat
+          const delegating = Boolean(draft.delegating)
+          const busy = submitting || askingInChat || delegating
           return (
             <article key={input.id} className="rounded-md border border-border/70 bg-background/75 p-3">
               <div className="flex flex-wrap items-center gap-2 text-[11px]">
@@ -525,6 +558,16 @@ export function ReportHumanInputPanel({
                 </button>
                 <button
                   type="button"
+                  onClick={() => void delegateActionToChat(input)}
+                  disabled={busy}
+                  title="Let the agent analyze the evidence, choose the best option, and take the resulting safe workflow action."
+                  className="inline-flex h-8 items-center gap-1.5 rounded-md border border-violet-400/40 bg-violet-400/15 px-3 text-xs font-semibold text-violet-100 hover:bg-violet-400/25 disabled:opacity-50"
+                >
+                  {delegating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                  Take best action
+                </button>
+                <button
+                  type="button"
                   onClick={() => void answerInput(input)}
                   disabled={busy}
                   className="inline-flex h-8 items-center gap-1.5 rounded-md border border-cyan-400/40 bg-cyan-400/15 px-3 text-xs font-semibold text-cyan-100 hover:bg-cyan-400/25 disabled:opacity-50"
@@ -579,25 +622,27 @@ export function ReportHumanInputCollection({
 	const [error, setError] = useState<string | null>(null)
 	const [refreshNonce, setRefreshNonce] = useState(0)
 
-	const loadInputs = useCallback(async (cancelled?: () => boolean) => {
+	const loadInputs = useCallback(async (cancelled?: () => boolean, showLoading = true) => {
 		const paths = stableScopes.map(scope => scope.workspacePath).filter(Boolean)
 		if (paths.length === 0) {
 			setInputs([])
 			return
 		}
-		setLoading(true)
-		setError(null)
+		if (showLoading) setLoading(true)
+		if (showLoading) setError(null)
 		try {
 			const result = await agentApi.listReportHumanInputsAggregate(paths, undefined, source)
 			if (cancelled?.()) return
 			if (!result.success) throw new Error(result.error || 'Failed to load questions.')
-			setInputs(result.inputs || [])
+			const nextInputs = result.inputs || []
+			setInputs(previous => keepPreviousInputsWhenUnchanged(previous, nextInputs))
+			if (!showLoading) setError(null)
 		} catch (err) {
 			if (cancelled?.()) return
 			setError(err instanceof Error ? err.message : 'Failed to load questions.')
-			setInputs([])
+			if (showLoading) setInputs([])
 		} finally {
-			if (!cancelled?.()) setLoading(false)
+			if (showLoading && !cancelled?.()) setLoading(false)
 		}
 	}, [source, stableScopes])
 
@@ -613,12 +658,12 @@ export function ReportHumanInputCollection({
 		return () => window.removeEventListener(WORKFLOW_LOG_REFRESH_EVENT, onRefresh)
 	}, [loadInputs])
 
-	const waitingForAgent = inputs.some(input => input.status === 'answered' || input.status === 'claimed')
+	const needsStatusPolling = inputs.some(input => input.status === 'pending' || input.status === 'answered' || input.status === 'claimed')
 	useEffect(() => {
-		if (!waitingForAgent) return
-		const timer = window.setInterval(() => { void loadInputs() }, 5000)
+		if (!needsStatusPolling) return
+		const timer = window.setInterval(() => { void loadInputs(undefined, false) }, 5000)
 		return () => window.clearInterval(timer)
-	}, [loadInputs, waitingForAgent])
+	}, [loadInputs, needsStatusPolling])
 
 	if (loading && inputs.length === 0 && !error) return null
 

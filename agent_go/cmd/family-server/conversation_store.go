@@ -356,6 +356,43 @@ func rewriteRelativeAssetURLs(html []byte, relPath string) []byte {
 	})
 }
 
+// A page that draws a figure carries only the `<div class="jxgbox">` and its
+// initBoard calls — never the ~1MB library itself (see LearningApp.tsx's
+// withDiagramLib, which supplies it in the in-app viewer). Anything served
+// from HERE is being opened as a real page instead: the print view, a PDF
+// export, or the agent looking at its own work. Those have no React layer to
+// inject it, so without this the figure is an empty box and the console says
+// "JXG is not defined" — confirmed live.
+//
+// That mattered most for the agent's own check: it is told to look at a
+// figure before finishing, so a page that can never render one would have it
+// "fixing" correct geometry forever.
+//
+// Unlike the srcDoc viewer, this is served over real HTTP from the same origin
+// as the frontend, so a root-relative URL resolves and no port has to be
+// guessed.
+var jsxgraphUseRE = regexp.MustCompile(`(?i)jxgbox|JXG\.`)
+var htmlHeadOpenRE = regexp.MustCompile(`(?i)<head[^>]*>`)
+
+const diagramLibTags = `<link rel="stylesheet" href="/lib/jsxgraph.css"><script src="/lib/jsxgraphcore.js"></script>`
+
+// withDiagramLibHTML inserts the diagram library into a page that uses it, and
+// leaves every other page byte-identical. Into <head> when there is one, else
+// at the very front — it must be defined before the page's own inline
+// initBoard call runs.
+func withDiagramLibHTML(b []byte) []byte {
+	if !jsxgraphUseRE.Match(b) {
+		return b
+	}
+	if loc := htmlHeadOpenRE.FindIndex(b); loc != nil {
+		out := make([]byte, 0, len(b)+len(diagramLibTags))
+		out = append(out, b[:loc[1]]...)
+		out = append(out, diagramLibTags...)
+		return append(out, b[loc[1]:]...)
+	}
+	return append([]byte(diagramLibTags), b...)
+}
+
 func handleWorkspaceRaw(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -374,27 +411,37 @@ func handleWorkspaceRaw(w http.ResponseWriter, r *http.Request) {
 		name := strings.ReplaceAll(filepath.Base(abs), `"`, "")
 		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, name))
 	}
-	// ?print=1 on an HTML file serves it in a full page (opened in a new tab) that
-	// auto-opens the browser's print dialog. This is the robust way to print a
-	// test/report: it doesn't depend on the generated HTML embedding a print
-	// handler (a skill can forget to), and it isn't blocked by the in-app viewer's
-	// iframe sandbox. A page's own relative asset references (e.g. an
-	// illustration saved next to it) don't resolve on their own here — see
-	// rewriteRelativeAssetURLs — so they're rewritten before serving.
-	if r.URL.Query().Get("print") != "" {
-		ext := strings.ToLower(filepath.Ext(abs))
-		if ext == ".html" || ext == ".htm" {
-			b, err := os.ReadFile(abs)
-			if err != nil {
-				http.Error(w, "not found", http.StatusNotFound)
-				return
-			}
-			b = rewriteRelativeAssetURLs(b, r.URL.Query().Get("path"))
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			_, _ = w.Write(b)
-			_, _ = w.Write([]byte("\n<script>window.addEventListener('load',function(){setTimeout(function(){window.print()},250)});</script>\n"))
+	// An HTML file served from here is being opened as a REAL page — the print
+	// view (?print=1), a PDF export, or the agent looking at what it just wrote
+	// — rather than through the in-app viewer, which fetches
+	// /api/workspace/file and does its own fixups in React. So the two things
+	// that viewer does have to happen here too, or the page renders subtly
+	// wrong in exactly the places a person actually inspects it:
+	//   - relative asset refs (an illustration saved beside the page) can't
+	//     resolve against this endpoint's query-string addressing — see
+	//     rewriteRelativeAssetURLs;
+	//   - a page with a figure needs the diagram library — see
+	//     withDiagramLibHTML.
+	// Skipped for ?download=1, which should hand over the file as it is on disk.
+	ext := strings.ToLower(filepath.Ext(abs))
+	if (ext == ".html" || ext == ".htm") && r.URL.Query().Get("download") == "" {
+		b, err := os.ReadFile(abs)
+		if err != nil {
+			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
+		b = rewriteRelativeAssetURLs(b, r.URL.Query().Get("path"))
+		b = withDiagramLibHTML(b)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(b)
+		// ?print=1 additionally auto-opens the browser's print dialog. Doing it
+		// here rather than in the generated page is what makes printing robust:
+		// it can't be forgotten by a skill, and isn't blocked by the in-app
+		// viewer's iframe sandbox.
+		if r.URL.Query().Get("print") != "" {
+			_, _ = w.Write([]byte("\n<script>window.addEventListener('load',function(){setTimeout(function(){window.print()},250)});</script>\n"))
+		}
+		return
 	}
 	http.ServeFile(w, r, abs)
 }

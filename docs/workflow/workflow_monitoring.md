@@ -24,9 +24,9 @@ There are three practical scopes:
 
 ## Pulse — structured workspace plus generated dashboard
 
-The Pulse popup is the primary in-app monitoring surface. It reads structured SQLite projections and presents the workflow goal/success criteria, pending user decisions, current findings, lifecycle history, reviewer evidence, fix attempts, verification, final-command status, and goal impact over time. Full reviewer Markdown is available as supporting evidence, not used as the layout or lifecycle model.
+The Pulse popup is the primary in-app monitoring surface. It reads structured SQLite projections and presents the workflow goal/success criteria, pending user decisions, current findings, lifecycle history, compact review receipts, fix attempts, verification, final-command status, and goal impact over time. Narrative reviewer reports are not persisted; detailed evidence belongs to the finding lifecycle.
 
-`builder/improve.html` remains a separate required artifact: the Dashboard stage generates a lightweight, publishable, archive-linked executive journal after review and fixing. It contains the verdict/status summary, three Latest Pulse cells, Current work counts, and material history; the popup owns complete operational details and does not scrape HTML snippets from that file. Every workflow is judged on two independent axes, each stamped with the run it is based on:
+`builder/improve.html` remains a separate required artifact: the Dashboard stage generates a lightweight, publishable, archive-linked executive journal after review and fixing. It contains only the verdict/status summary, three Latest Pulse cells, and up to six material history transitions; the popup owns complete operational details and does not scrape HTML snippets from that file. Every workflow is judged on two independent axes, each stamped with the run it is based on:
 
 - **Bug** — did it run correctly (errors, skipped steps, missing/empty artifacts, regressions)? Fixed by hardening.
 - **Goal** — is it achieving its success criteria (eval scores and outcome metrics vs `soul.md`)? Fixed by refining or replanning.

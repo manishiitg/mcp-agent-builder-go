@@ -159,6 +159,23 @@ func (t *turnTrace) toolBreakdown() string {
 	return strings.Join(parts, ",")
 }
 
+// duration returns the turn's real work time — total elapsed since start,
+// MINUS queue wait behind another turn on agentTurnMu. Callers that want
+// "how long did the child actually spend on this" (e.g. recordActivityLogEntry)
+// need this rather than raw time.Since(start): parent/child/Pulse turns all
+// serialize on the same mutex, and a Pulse cycle alone can hold it for
+// 25-250s per check, several checks back to back — without subtracting
+// queued, a child's turn arriving mid-cycle would have that wait time
+// misattributed as time spent on her activity.
+func (t *turnTrace) duration() time.Duration {
+	if t == nil {
+		return 0
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return time.Since(t.start) - t.queued
+}
+
 // finish logs the one summary line for this turn.
 func (t *turnTrace) finish(reply string, err error) {
 	if t == nil {

@@ -69,8 +69,18 @@ export const STORAGE_KEYS = {
  * Event types for workflow status detection
  */
 export const EVENT_TYPES = {
-  /** Events that indicate workflow completion */
-  COMPLETION: ['workflow_end', 'orchestrator_end', 'batch_execution_end'] as const,
+  /**
+   * Events that indicate workflow completion.
+   *
+   * PLAT-063/064: 'workflow_end' and 'batch_execution_end' were removed. Neither
+   * is emitted by any Go code — the entire workflow_start/workflow_progress/
+   * workflow_end family is a dead parallel to the live orchestrator_* family
+   * (BaseOrchestrator.EmitOrchestratorEnd, one caller, workflow_orchestrator.go).
+   * They looked like redundant completion signals; they provided none, and their
+   * presence made this array look safer against a single-event failure than it
+   * actually is. 'orchestrator_end' is the only real signal.
+   */
+  COMPLETION: ['orchestrator_end'] as const,
   /** Events that indicate workflow errors (fatal) */
   ERROR: ['orchestrator_error', 'workflow_error'] as const,
   /** Important events that should always be retained during cleanup */
@@ -80,12 +90,10 @@ export const EVENT_TYPES = {
     'orchestrator_error',
     'unified_completion',
     'conversation_end',
-    'workflow_end',
     'request_human_feedback',
     'blocking_human_feedback',
     'orchestrator_end',
     'agent_end',
-    'workflow_start',
     'step_progress_updated'
   ] as const,
 } as const

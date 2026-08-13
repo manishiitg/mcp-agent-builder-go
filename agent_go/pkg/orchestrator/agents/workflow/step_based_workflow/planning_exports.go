@@ -213,12 +213,32 @@ func PhaseChatSystemPrompt(phaseId string, templateVars map[string]string) strin
 // This avoids importing database/scheduler packages in the workshop package.
 type SchedulerCallbacks struct {
 	ListSchedules          func(ctx context.Context, workspacePath string) (string, error)
-	CreateSchedule         func(ctx context.Context, workspacePath, name, cronExpr, timezone string, groupNames []string, mode string, messages []string, workshopMode string, resumePrevious *bool) (string, error)
-	CreateCalendarSchedule func(ctx context.Context, workspacePath, name, timezone string, groupNames []string, calendarItemsJSON string, mode string, messages []string, workshopMode string) (string, error)
-	UpdateSchedule         func(ctx context.Context, jobID, name, cronExpr, timezone string, groupNames []string, setGroupNames bool, enabled *bool, mode string, messages []string, workshopMode string, resumePrevious *bool) (string, error)
+	CreateSchedule         func(ctx context.Context, workspacePath, name, cronExpr, timezone string, groupNames []string, routeSelections map[string]string, mode string, messages []string, directMessagesReason string, workshopMode string, resumePrevious *bool) (string, error)
+	CreateCalendarSchedule func(ctx context.Context, workspacePath, name, timezone string, groupNames []string, calendarItemsJSON string, mode string, messages []string, directMessagesReason string, workshopMode string) (string, error)
+	UpdateSchedule         func(ctx context.Context, jobID, name, cronExpr, timezone string, groupNames []string, setGroupNames bool, routeSelections map[string]string, setRouteSelections bool, enabled *bool, mode string, messages []string, setMessages bool, directMessagesReason *string, workshopMode string, resumePrevious *bool) (string, error)
 	DeleteSchedule         func(ctx context.Context, jobID string) error
 	TriggerSchedule        func(ctx context.Context, jobID string) (string, error)
 	GetScheduleRuns        func(ctx context.Context, jobID string, limit int) (string, error)
+
+	// GetContractUpgrades reports the workflow's pending contract migrations.
+	//
+	// The upgrade instructions are Go constants delivered only by the scheduler,
+	// so before this there was no way for the workflow's owner to see which
+	// migration was blocking, what it asked for, or why it had failed — the run
+	// error named a version and nothing else. confida-login sat blocked for days
+	// and diagnosing it meant reading server logs and session transcripts by
+	// hand.
+	GetContractUpgrades func(ctx context.Context, workspacePath string) (string, error)
+
+	// NextContractUpgrade returns the one migration this workflow owes next —
+	// its target version and label — or an empty target when it is current.
+	//
+	// An operator-led upgrade has no scheduler grant pinning the target, so
+	// without this the agent could stamp the newest version directly and skip
+	// three migrations whose work was never done. The version is the record
+	// that a migration happened; a stamp that outruns the work is the exact
+	// defect this subsystem already produced once.
+	NextContractUpgrade func(ctx context.Context, workspacePath string) (target string, label string, err error)
 }
 
 // SkillCallbacks provides skill management operations via callbacks from server.go.
@@ -1460,6 +1480,18 @@ func (b *workflowProgressBridge) HandleEvent(ctx context.Context, event *baseeve
 	case orchestrator_events.OrchestratorAgentEnd:
 		if endEvent, ok := event.Data.(*orchestrator_events.OrchestratorAgentEndEvent); ok {
 			agentType := endEvent.AgentType
+			// A todo_task orchestrator can end many successful LLM turns while the
+			// step is still running. In particular, an asynchronous call_sub_agent
+			// launch deliberately ends the current turn so the runtime can wait for
+			// the child outside the CLI process and deliver its completion back into
+			// the same conversation. Treating that turn boundary as step completion
+			// sends a false AUTO-NOTIFICATION to the workshop chat and closes the
+			// parent execution while its child is still live. The controller emits a
+			// TodoTaskStepCompleted event only after all owned children have settled
+			// and their results have been reconciled; that is the success boundary.
+			if agentType == "todo_task_orchestrator" && endEvent.Success {
+				break
+			}
 			if workflowProgressTracksAgent(agentType, endEvent.AgentName) {
 				stepName := endEvent.AgentName
 				// Use the plan-level step ID stamped by context_aware_bridge, falling back to
@@ -1525,6 +1557,59 @@ func (b *workflowProgressBridge) HandleEvent(ctx context.Context, event *baseeve
 				if b.logger != nil {
 					b.logger.Info(fmt.Sprintf("📊 [WORKFLOW_PROGRESS] Step %d '%s' %s", endEvent.StepIndex, stepName, status))
 				}
+			}
+		}
+	case orchestrator_events.TodoTaskStepCompleted:
+		if completedEvent, ok := event.Data.(*TodoTaskStepCompletedEvent); ok {
+			stepName := strings.TrimSpace(completedEvent.StepTitle)
+			if stepName == "" {
+				stepName = strings.TrimSpace(completedEvent.StepID)
+			}
+			if stepName == "" {
+				stepName = fmt.Sprintf("Step %d", completedEvent.StepIndex)
+			}
+			result := strings.TrimSpace(completedEvent.CompletionReason)
+			if result == "" {
+				result = "Todo task step completed"
+			}
+
+			progressID, alreadyStarted := b.workflowProgressExecIDForEnd("todo_task_orchestrator", stepName, completedEvent.StepIndex)
+			if b.session != nil && b.session.StepRegistry != nil {
+				b.session.StepRegistry.Register(&WorkshopStepExecution{
+					ID:     progressID,
+					StepID: completedEvent.StepID,
+					Status: WorkshopStepDone,
+					Result: fmt.Sprintf("[Step %d: %s] completed — %s", completedEvent.StepIndex, stepName, truncateResult(result, 500)),
+				})
+			}
+
+			if b.session != nil && b.session.executionNotifier != nil {
+				meta := map[string]string{
+					"execution_type": "workflow-step",
+					"step_name":      stepName,
+					"step_id":        completedEvent.StepID,
+					"agent_type":     "todo_task_orchestrator",
+					"step_index":     fmt.Sprintf("%d", completedEvent.StepIndex),
+				}
+				if b.iteration != "" {
+					meta["iteration"] = b.iteration
+				}
+				if b.groupName != "" {
+					meta["group_name"] = b.groupName
+				}
+				if !alreadyStarted {
+					b.session.executionNotifier.OnExecutionStart(WorkshopExecutionStart{
+						ID:                progressID,
+						ParentExecutionID: b.parentID,
+						Name:              workflowProgressDisplayName(stepName),
+						Kind:              string(orchestrator_events.ExecutionKindOrchestrator),
+					})
+				}
+				b.session.executionNotifier.OnExecutionComplete(progressID, workflowProgressDisplayName(stepName), result, meta, nil)
+			}
+
+			if b.logger != nil {
+				b.logger.Info(fmt.Sprintf("📊 [WORKFLOW_PROGRESS] Todo task step %d '%s' completed", completedEvent.StepIndex, stepName))
 			}
 		}
 	case orchestrator_events.BatchGroupEnd:
@@ -2049,6 +2134,12 @@ func RegisterRunFullWorkflowTool(
 					DisableEval:       disableEval,
 				}
 				workflowController.SetExecutionOptions(execOpts)
+				if len(routeSelections) > 0 {
+					// PLAT-066: pairs with the seed-time log in seedRouteSelectionsForRun.
+					// If that log never shows this run's ID/route pair, the value was
+					// lost somewhere inside CreateTodoList's call chain, not here.
+					logger.Info(fmt.Sprintf("🔀 run_full_workflow: SetExecutionOptions carries route_selections=%v before CreateTodoList", routeSelections))
+				}
 
 				result, execErr = workflowController.CreateTodoList(
 					execCtx,
@@ -2109,42 +2200,16 @@ func RegisterEvaluationValidationTools(
 	return registerEvaluationValidationTools(mcpAgent, workspacePath, logger, readFile)
 }
 
-// RegisterReportPlanValidationTools is the exported wrapper for registering the
-// validate_report_plan tool on an MCP agent. Used by server.go for workflow-builder
-// chat sessions. Validates reports/report_plan.json.
-func RegisterReportPlanValidationTools(
+// RegisterHTMLReportTools registers the HTML-only report contract for a
+// workflow-builder session. The report is db/reports/index.html; the
+// frontend discovers those files directly rather than reading a JSON layout.
+func RegisterHTMLReportTools(
 	mcpAgent DefinitionToolRegistrar,
 	workspacePath string,
 	logger loggerv2.Logger,
 	readFile func(context.Context, string) (string, error),
 ) error {
-	return registerReportPlanValidationTools(mcpAgent, workspacePath, logger, readFile)
-}
-
-// RegisterReportPlanManagementTools is the exported wrapper for registering the
-// JSON report plan read/write tools on an MCP agent. Used by server.go for
-// workflow-builder and optimizer chat sessions.
-func RegisterReportPlanManagementTools(
-	mcpAgent DefinitionToolRegistrar,
-	workspacePath string,
-	logger loggerv2.Logger,
-	readFile func(context.Context, string) (string, error),
-	writeFile func(context.Context, string, string) error,
-) error {
-	return registerReportPlanManagementTools(mcpAgent, workspacePath, logger, readFile, writeFile)
-}
-
-// RegisterReportRenderPreviewTool is the exported wrapper for registering the
-// preview_report_render tool on an MCP agent. Used by server.go for workflow-builder
-// and optimizer chat sessions so the agent can inspect the final report structure
-// and resolved data without relying on the frontend UI.
-func RegisterReportRenderPreviewTool(
-	mcpAgent DefinitionToolRegistrar,
-	workspacePath string,
-	logger loggerv2.Logger,
-	readFile func(context.Context, string) (string, error),
-) error {
-	return registerReportRenderPreviewTool(mcpAgent, workspacePath, logger, readFile)
+	return registerHTMLReportTools(mcpAgent, workspacePath, logger, readFile)
 }
 
 // RegisterPlanModificationTools is the exported wrapper for registering plan modification tools

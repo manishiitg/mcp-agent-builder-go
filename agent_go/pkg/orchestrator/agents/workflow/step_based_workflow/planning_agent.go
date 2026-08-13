@@ -226,33 +226,30 @@ type ConsistencyRule struct {
 // AgentConfigs represents per-agent configuration for a step
 type AgentConfigs struct {
 	ExecutionLLM                 *AgentLLMConfig `json:"execution_llm,omitempty"`
+	ExecutionLLMReason           string          `json:"execution_llm_reason,omitempty"`            // PLAT-060. Why this step is pinned to a specific model. Required whenever execution_llm is set — update_step_config rejects the pin without it. A pin outranks execution_tier entirely, so it silently overrides every tier decision above it. Cite the owning llm_ops_review finding id, and the human_input_id when the pin was user-approved.
 	ExecutionTier                string          `json:"execution_tier,omitempty"`                  // Persistent execution tier override in tiered mode: "high" | "medium" | "low"
+	ExecutionTierReason          string          `json:"execution_tier_reason,omitempty"`           // PLAT-060. Why this step's tier is pinned. Required whenever execution_tier is set — update_step_config rejects the override without it. Setting the tier explicitly also DISABLES adaptive tiering for the step (see shouldUseAdaptiveExecutionTiering), so it opts out of the automatic high→medium promotion after 3 stable runs. Cite the owning llm_ops_review finding id, and the human_input_id when approved.
 	ExecutionMaxTurns            *int            `json:"execution_max_turns,omitempty"`             // default: 500
 	LearningObjective            string          `json:"learning_objective,omitempty"`              // What SKILL.md should capture from successful runs of this step — selectors, timings, auth flows, tool-call patterns, API quirks. This is the instruction the step agent uses during its post-completion turn to know what HOW-to-run knowledge to extract. Required when learnings_access includes write; must be specific (not "learn from this run").
 	LearningsAccess              string          `json:"learnings_access,omitempty"`                // "read" | "read-write" | "none". Mirrors knowledgebase_access. "read" (default): step sees global SKILL.md in its prompt but doesn't write. "read-write": reads and writes — requires learning_objective to be non-empty. "none": no read, no write. Empty = legacy auto-migration (see resolveLearningsAccess). Writes happen via the step agent's own post-completion turn (shell + diff_patch_workspace_file); no separate analyzer runs.
-	LockLearnings                *bool           `json:"lock_learnings,omitempty"`                  // lock learnings (SKILL.md) - prevents new writes but still uses existing SKILL.md (nil = not set/unlocked, true = locked, false = explicitly unlocked)
+	LockLearnings                *bool           `json:"lock_learnings,omitempty"`                  // lock learnings (SKILL.md) - prevents new writes but still uses existing SKILL.md (nil = not set/unlocked, true = locked, false = explicitly unlocked). Setting true requires a non-empty lock_learnings_reason.
+	LockLearningsReason          string          `json:"lock_learnings_reason,omitempty"`           // PLAT-059. Why this step is frozen. Required whenever lock_learnings is set true — update_step_config rejects the lock without it. A locked step still reads the whole shared skill but can never contribute to it, so the freeze needs a stated justification a later reviewer can judge rather than infer.
 	LockCode                     *bool           `json:"lock_code,omitempty"`                       // lock code (main.py) - prevents LLM-rewritten main.py from being saved back to learnings, skips fix loop (nil = not set/unlocked, true = locked, false = explicitly unlocked)
 	SelectedServers              []string        `json:"selected_servers,omitempty"`                // step-level MCP server selection (subset of preset servers)
 	SelectedTools                []string        `json:"selected_tools,omitempty"`                  // step-level tool selection (format: "server:tool" or "server:*" for all tools)
 	EnabledCustomTools           []string        `json:"enabled_custom_tools,omitempty"`            // e.g., ["workspace_advanced:execute_shell_command", "human_tools:notify_user"] - enables specific tools (overrides categories if both specified)
-	EnableContextOffloading      *bool           `json:"enable_context_offloading,omitempty"`       // Enable/disable context offloading (default: true if nil)
 	UseCodeExecutionMode         *bool           `json:"use_code_execution_mode,omitempty"`         // Step-level code execution mode override (nil = use preset default, true/false = override)
 	EnabledSkills                []string        `json:"enabled_skills,omitempty"`                  // Step-level skill selection (skill folder names, overrides preset if specified)
 	AdditionalReadPaths          []string        `json:"additional_read_paths,omitempty"`           // Extra workflow-relative folders/files this step may read (for example "variables" or "reports/reference.json"). Paths are read-only, must stay inside this workflow, and never widen write access.
 	KnowledgebaseAccess          string          `json:"knowledgebase_access,omitempty"`            // "read" | "write" | "read-write" | "none". If empty, defaults to "none" — KB is opt-in per step. Preset-level UseKnowledgebase is a prerequisite (off → forced "none"). When granted "read", this also covers user-supplied runtime context at knowledgebase/context/context.md. knowledgebase/context/ is excluded from KB health/fixer passes — user-supplied content is never silently rewritten.
 	KnowledgebaseContribution    string          `json:"knowledgebase_contribution,omitempty"`      // User-authored instruction for KB writes — what this step should contribute to notes/. In "agent" write-method, it's the extraction instruction handed to the post-step KB update agent. In "direct" write-method, it's injected into the step agent's prompt as its contribution contract. Required to trigger KB writes; if empty, no KB write happens regardless of access.
-	DBAccess                     string          `json:"db_access,omitempty"`                       // "none" | "read" | "read-write". Empty defaults to "read-write" for back-compat. "none" removes db/ and both workflow DB tools from the step.
-	TodoTaskOrchestratorTier     *int            `json:"todo_task_orchestrator_tier,omitempty"`     // Tier for todo task orchestrator agent (1/2/3) in tiered mode
 	DisableParallelToolExecution *bool           `json:"disable_parallel_tool_execution,omitempty"` // Disable parallel tool execution for this step (nil = enabled by default, true = disabled, false = explicitly enabled)
 	CodingAgentTmuxLifecycle     string          `json:"coding_agent_tmux_lifecycle,omitempty"`     // Tmux lifecycle for CLI coding providers: "close_on_completion" (default for steps) or "keep_alive" (only when a step intentionally needs the native coding session after completion).
-	DisableTierOptimization      *bool           `json:"disable_tier_optimization,omitempty"`       // If true, execution agents always use Tier 1 (high reasoning)
 	SuccessfulRuns               *int            `json:"successful_runs,omitempty"`                 // System-managed counter. Written by syncSuccessfulRunsToStepConfig after each successful validation; mirrors the authoritative count in learning metadata. Read by the readiness checklist to gauge optimization progress (3+ = ready). Agents must NOT set this directly.
-	ScriptedMaxFixIter           *int            `json:"learn_code_max_fix_iterations,omitempty"`   // Max LLM fix iterations when main.py execution fails (default: 5)
 	DeclaredExecutionMode        string          `json:"declared_execution_mode,omitempty"`         // Required mode decision for the step: "scripted" or "agentic" (legacy values "learn_code" / "code_exec" are still accepted on read)
 	DeclaredExecutionModeReason  string          `json:"declared_execution_mode_reason,omitempty"`  // Audit trail: why the declared mode is the best fit. Not consumed by Go runtime, but preserved so future LLM reviewers (harden, replan) reading raw step_config.json see the original decision rationale.
 	DescriptionReviewed          *bool           `json:"description_reviewed,omitempty"`            // True when the step description has been reviewed — clarity AND secrets/hardcoded values.
 	ReviewNotes                  string          `json:"review_notes,omitempty"`                    // Free-form rationale covering why config, locks, learning/KB choices, or description review state are justified.
-	GlobalSkillObjective         string          `json:"global_skill_objective,omitempty"`          // Objective for the global skill — what domain knowledge should it capture and why
 }
 
 // ============================================================================
@@ -875,8 +872,20 @@ type PlanChangelogEntry struct {
 	Target          string                       `json:"target"`                    // canonical artifact path or surface
 	BeforeRef       string                       `json:"before_ref"`                // immutable digest of the pre-mutation state
 	AfterRef        string                       `json:"after_ref"`                 // immutable digest of the post-mutation state
+	NoOp            bool                         `json:"no_op,omitempty"`           // true when BeforeSnapshot/AfterSnapshot were both real and identical
 	Actor           string                       `json:"actor"`                     // managed mutation authority
 	DependencyClass string                       `json:"dependency_class"`          // review domain affected by the mutation
+
+	// BeforeSnapshot / AfterSnapshot are the actual target-artifact content
+	// before and after the mutation, captured by the caller. When set, these
+	// — not Changes — are what BeforeRef/AfterRef hash, so the recorded refs
+	// always reflect the real artifact instead of a caller-reported diff
+	// that can be incomplete or entirely absent (PLAT-033: before_ref ==
+	// after_ref == sha256("[]") whenever a caller left Changes empty, even
+	// though the artifact demonstrably changed). Never persisted — only the
+	// resulting hashes are, not the raw content.
+	BeforeSnapshot interface{} `json:"-"`
+	AfterSnapshot  interface{} `json:"-"`
 }
 
 type PlanChangelogArtifactReview struct {
@@ -1017,18 +1026,43 @@ func completePlanChangelogEntry(entry *PlanChangelogEntry) {
 		}
 	}
 	if entry.BeforeRef == "" {
-		before := make([]interface{}, 0, len(entry.Changes))
-		for _, change := range entry.Changes {
-			before = append(before, change.OldValue)
+		switch {
+		case entry.BeforeSnapshot != nil:
+			entry.BeforeRef = artifactContentRef(entry.BeforeSnapshot)
+		case len(entry.DeletedSteps) > 0:
+			// No explicit snapshot, but the caller captured the real
+			// pre-mutation content as DeletedSteps (e.g. delete_plan_steps,
+			// delete_todo_task_route) — hash that instead of collapsing to
+			// the empty-Changes placeholder (PLAT-074).
+			entry.BeforeRef = artifactContentRef(entry.DeletedSteps)
+		default:
+			before := make([]interface{}, 0, len(entry.Changes))
+			for _, change := range entry.Changes {
+				before = append(before, change.OldValue)
+			}
+			entry.BeforeRef = artifactContentRef(before)
 		}
-		entry.BeforeRef = artifactContentRef(before)
 	}
 	if entry.AfterRef == "" {
-		after := make([]interface{}, 0, len(entry.Changes))
-		for _, change := range entry.Changes {
-			after = append(after, change.NewValue)
+		switch {
+		case entry.AfterSnapshot != nil:
+			entry.AfterRef = artifactContentRef(entry.AfterSnapshot)
+		case len(entry.AddedSteps) > 0:
+			// Same fallback for the add side (e.g. add_scripted_step and its
+			// siblings) — AddedSteps already carries the real added content.
+			entry.AfterRef = artifactContentRef(entry.AddedSteps)
+		default:
+			after := make([]interface{}, 0, len(entry.Changes))
+			for _, change := range entry.Changes {
+				after = append(after, change.NewValue)
+			}
+			entry.AfterRef = artifactContentRef(after)
 		}
-		entry.AfterRef = artifactContentRef(after)
+	}
+	// Only claim a no-op when both sides came from a real snapshot — an empty
+	// Changes list with no snapshot is "unknown," not "nothing changed."
+	if entry.BeforeSnapshot != nil && entry.AfterSnapshot != nil && entry.BeforeRef == entry.AfterRef {
+		entry.NoOp = true
 	}
 	if entry.Actor == "" {
 		entry.Actor = "managed_tool:" + strings.TrimSpace(entry.Tool)
@@ -1130,7 +1164,7 @@ func getAddRegularStepSchema() string {
 			},
 			"description": {
 				"type": "string",
-				"description": "REQUIRED: Complete deterministic execution contract for the checked-in learnings/<step-id>/main.py script. Specify exact inputs, fixed API/SDK/CLI operations, persistence behavior, outputs, idempotency, error handling, and provenance/freshness requirements. This is not an LLM prompt; conversational or judgment-heavy work belongs in add_message_sequence_step."
+				"description": "REQUIRED: Complete semantic execution contract for the checked-in learnings/<step-id>/main.py script. Specify inputs, target-domain operations, persistence behavior, outputs, idempotency, error handling, and provenance/freshness requirements. Do not copy shared AgentWorks bridge/auth, Folder Guard, managed-tool, tool-discovery, or coding-session mechanics into this field. This is not an LLM prompt; conversational or judgment-heavy work belongs in add_message_sequence_step."
 			},
 			"context_dependencies": {
 				"type": "array",
@@ -1205,7 +1239,7 @@ func getAddMessageSequenceStepSchema() string {
 		"properties": {
 			"id": {"type": "string", "description": "REQUIRED: Stable URL-friendly step ID."},
 			"title": {"type": "string", "description": "REQUIRED: Short title for the message sequence step."},
-			"description": {"type": "string", "description": "REQUIRED: The opening instruction AND complete coherent outcome. This IS EXECUTED as the first user turn (turn 0): it leads items[0] inside the same conversation — identical to how a todo_task's description is its first turn. Write it as an actionable work instruction, not throwaway metadata (anything you put here runs). Keep routine sub-actions here; reserve items[] (turns 1..N) for decision-useful validation, critique, repair, new input, or real phase changes."},
+			"description": {"type": "string", "description": "REQUIRED: The opening instruction AND complete coherent outcome. This IS EXECUTED as the first user turn (turn 0): it leads items[0] inside the same conversation — identical to how a todo_task's description is its first turn. Write it as an actionable semantic workflow instruction: domain action, inputs, durable result, failure behavior, and verification. Do not copy shared AgentWorks bridge/auth, Folder Guard, managed-tool, tool-discovery, or coding-session mechanics here. Keep routine sub-actions here; reserve items[] (turns 1..N) for decision-useful validation, critique, repair, new input, or real phase changes."},
 			"context_dependencies": {"type": "array", "items": {"type": "string"}, "description": "REQUIRED: Prior context files this sequence depends on. Use [] if none."},
 			"context_output": {"type": "string", "description": "OPTIONAL: Summary/result file for later steps. Omit when the step writes its result to the db (validate via validation_schema.db)."},
 			"items": {
@@ -1218,7 +1252,7 @@ func getAddMessageSequenceStepSchema() string {
 						"type": {"type": "string", "enum": ["user_message", "prevalidation", "foreach"], "description": "user_message, prevalidation, or foreach"},
 						"kind": {"type": "string", "description": "Optional shorthand that narrows this turn's inherited writes to one store: learning, knowledgebase, or db. Explicit non-empty write_access overrides kind."},
 						"title": {"type": "string"},
-						"message": {"type": "string", "description": "For user_message items: a follow-up instruction run in the same persistent conversation. Prefer evidence-seeking validation/repair turns (e.g. \"Re-open the output. Did you actually satisfy every criterion? Quote the evidence, then fix every unsupported or incomplete item.\") over routine subtask instructions. For foreach items: a Go text/template rendered once per row of source, with the row bound to '.' (e.g. 'Process {{.id}}: {{.task}}')."},
+						"message": {"type": "string", "description": "For user_message items: a follow-up semantic workflow instruction run in the same persistent conversation. Do not copy shared AgentWorks bridge/auth, Folder Guard, managed-tool, tool-discovery, or coding-session mechanics here. Prefer evidence-seeking validation/repair turns (e.g. \"Re-open the output. Did you actually satisfy every criterion? Quote the evidence, then fix every unsupported or incomplete item.\") over routine subtask instructions. For foreach items: a Go text/template rendered once per row of source, with the row bound to '.' (e.g. 'Process {{.id}}: {{.task}}')."},
 						"write_access": {
 							"type": "object",
 							"description": "Optional item-scoped narrowing. Omit it to inherit the step-level DB/KB/learnings write permissions. A non-empty object limits this turn to the selected stores and can never exceed step-level access. Folder-level booleans only — NO per-file path scoping (a \"paths\" list is rejected).",
@@ -3359,7 +3393,7 @@ func buildPlanStepDependentArtifactReviewNotice(stepID string, fieldChanges []Pl
 	b.WriteString("- DB: if output/state shape changed, update db/README.md, the db/db.sqlite table schema/writers/upsert rules, and any report widgets (sql) that read those columns.\n")
 	b.WriteString("- KB: if business context or notes consumed/produced changed, update knowledgebase_access, knowledgebase_contribution, and description references.\n")
 	b.WriteString("- Scripted code: if this step uses scripted/code execution or learnings/" + stepID + "/main.py exists, patch or regenerate main.py, or delete stale script state when returning to agentic execution.\n")
-	b.WriteString("- Downstream wiring: if semantics changed, review reports/report_plan.json, evaluation/evaluation_plan.json, routes, and downstream context_dependencies.\n")
+	b.WriteString("- Downstream wiring: if semantics changed, review db/reports/index.html, evaluation/evaluation_plan.json, routes, and downstream context_dependencies.\n")
 	b.WriteString("- Before marking the plan done, run get_workflow_command_guidance(kind=\"review-artifact-drift\", focus=\"" + stepID + "\").")
 	return b.String()
 }
@@ -3385,7 +3419,7 @@ func buildAddedStepArtifactSetupNotice(stepID, stepType string) string {
 	b.WriteString("- DB: decide whether the step reads/writes db/ files; update db/README.md and schemas/merge rules if it does.\n")
 	b.WriteString("- KB: decide knowledgebase_access and knowledgebase_contribution for business context and notes.\n")
 	b.WriteString("- Scripted code: if " + stepType + " step " + stepID + " should run code, create or review learnings/" + stepID + "/main.py and set code execution config; otherwise make sure no stale script is implied.\n")
-	b.WriteString("- Downstream wiring: connect routes/next_step_id/context_dependencies, and update reports/report_plan.json or evaluation/evaluation_plan.json if this step affects outputs.\n")
+	b.WriteString("- Downstream wiring: connect routes/next_step_id/context_dependencies, and update db/reports/index.html or evaluation/evaluation_plan.json if this step affects outputs.\n")
 	b.WriteString("- Before marking the plan done, run get_workflow_command_guidance(kind=\"review-artifact-drift\", focus=\"" + stepID + "\").")
 	return b.String()
 }
@@ -3407,7 +3441,7 @@ func buildDeletedStepArtifactCleanupNotice(deletedIDs []string, prunedConfigIDs 
 	b.WriteString("- Pre-validation: remove validation schemas that validate deleted-step outputs and update schemas that depended on them.\n")
 	b.WriteString("- Learnings/code: remove or archive stale learnings/<step-id>/ content and main.py scripts, unless intentionally kept as reusable docs.\n")
 	b.WriteString("- DB/KB: remove stale db writers/readers, db/README.md mentions, knowledgebase references, and contribution rules tied to deleted steps.\n")
-	b.WriteString("- Reports/evals/docs: update reports/report_plan.json, evaluation/evaluation_plan.json, docs, and widgets that referenced deleted outputs.\n")
+	b.WriteString("- Reports/evals/docs: update db/reports/index.html, evaluation/evaluation_plan.json, and docs that referenced deleted outputs.\n")
 	b.WriteString("- Before marking the plan done, run get_workflow_command_guidance(kind=\"review-artifact-drift\", focus=\"deleted steps\").")
 	return b.String()
 }
@@ -3453,6 +3487,9 @@ func createUpdateRegularStepExecutor(workspacePath string, logger loggerv2.Logge
 	return func(ctx context.Context, args map[string]interface{}) (string, error) {
 		reason, err := requireReason(args)
 		if err != nil {
+			return "", err
+		}
+		if err := validateWorkflowArtifactMutationArgs(args); err != nil {
 			return "", err
 		}
 
@@ -3589,6 +3626,9 @@ func createUpdateMessageSequenceStepExecutor(workspacePath string, logger logger
 	return func(ctx context.Context, args map[string]interface{}) (string, error) {
 		reason, err := requireReason(args)
 		if err != nil {
+			return "", err
+		}
+		if err := validateWorkflowArtifactMutationArgs(args); err != nil {
 			return "", err
 		}
 		stepJSON, err := json.Marshal(args)
@@ -3926,6 +3966,9 @@ func createUpdateHumanInputStepExecutor(workspacePath string, logger loggerv2.Lo
 		if err != nil {
 			return "", err
 		}
+		if err := validateWorkflowArtifactMutationArgs(args); err != nil {
+			return "", err
+		}
 
 		stepJSON, err := json.Marshal(args)
 		if err != nil {
@@ -4016,6 +4059,9 @@ func createUpdateTodoTaskStepExecutor(workspacePath string, logger loggerv2.Logg
 	return func(ctx context.Context, args map[string]interface{}) (string, error) {
 		reason, err := requireReason(args)
 		if err != nil {
+			return "", err
+		}
+		if err := validateWorkflowArtifactMutationArgs(args); err != nil {
 			return "", err
 		}
 
@@ -4567,6 +4613,9 @@ func createSingleStepAdder(workspacePath string, logger loggerv2.Logger, readFil
 	return func(ctx context.Context, args map[string]interface{}) (string, error) {
 		reason, err := requireReason(args)
 		if err != nil {
+			return "", err
+		}
+		if err := validateWorkflowArtifactMutationArgs(args); err != nil {
 			return "", err
 		}
 
@@ -5125,8 +5174,9 @@ func registerPlanModificationTools(
 
 func withPlanMutationWriteAccess(workspacePath string, writeFile func(context.Context, string, string) error) func(context.Context, string, string) error {
 	planningPath := normalizePathForWorkspaceAPI("planning", workspacePath)
+	evaluationPlanPath := normalizePathForWorkspaceAPI(evaluationPlanRelPath, workspacePath)
 	return func(ctx context.Context, path, content string) error {
-		return writeFile(workspacepkg.WithSystemManagedWritePaths(ctx, planningPath), path, content)
+		return writeFile(workspacepkg.WithSystemManagedWritePaths(ctx, planningPath, evaluationPlanPath), path, content)
 	}
 }
 
@@ -5135,6 +5185,9 @@ func createAddTodoTaskRouteExecutor(workspacePath string, logger loggerv2.Logger
 	return func(ctx context.Context, args map[string]interface{}) (string, error) {
 		reason, err := requireReason(args)
 		if err != nil {
+			return "", err
+		}
+		if err := validateWorkflowArtifactMutationArgs(args); err != nil {
 			return "", err
 		}
 
@@ -5169,6 +5222,11 @@ func createAddTodoTaskRouteExecutor(workspacePath string, logger loggerv2.Logger
 						return "", fmt.Errorf("failed to parse predefined_route JSON string: %w", err)
 					}
 				}
+			}
+		}
+		if newRouteRaw != nil {
+			if err := validateWorkflowArtifactMutationValue("step.new_route", newRouteRaw); err != nil {
+				return "", err
 			}
 		}
 		if newRouteRaw == nil {
@@ -5253,10 +5311,21 @@ func createAddTodoTaskRouteExecutor(workspacePath string, logger loggerv2.Logger
 			return "", fmt.Errorf("route was added but required scripted configuration for its regular execution boundary could not be saved: %w", err)
 		}
 
+		// Marshal the route as it actually landed in the plan (post orphan-ref
+		// resolution), not the pre-resolution local var, so the changelog's
+		// after_ref reflects what was really written (PLAT-074).
+		var addedRouteJSON []json.RawMessage
+		if addedRoute, err := json.Marshal(todoTaskStep.PredefinedRoutes[len(todoTaskStep.PredefinedRoutes)-1]); err == nil {
+			addedRouteJSON = []json.RawMessage{addedRoute}
+		} else {
+			logger.Warn(fmt.Sprintf("⚠️ Failed to marshal added route %s for changelog: %v", newRoute.RouteID, err))
+		}
+
 		logPlanChange(ctx, workspacePath, PlanChangelogEntry{
-			Tool:    "add_todo_task_route",
-			Reason:  reason,
-			StepIDs: []string{parentStepID, newRoute.RouteID},
+			Tool:       "add_todo_task_route",
+			Reason:     reason,
+			StepIDs:    []string{parentStepID, newRoute.RouteID},
+			AddedSteps: addedRouteJSON,
 		}, readFile, writeFile, logger)
 
 		routeReviewNotice := handleTodoTaskRouteArtifactReview(ctx, workspacePath, parentStepID, newRoute.RouteID, "added", readFile, writeFile, logger)
@@ -5271,6 +5340,9 @@ func createUpdateTodoTaskRouteExecutor(workspacePath string, logger loggerv2.Log
 	return func(ctx context.Context, args map[string]interface{}) (string, error) {
 		reason, err := requireReason(args)
 		if err != nil {
+			return "", err
+		}
+		if err := validateWorkflowArtifactMutationArgs(args); err != nil {
 			return "", err
 		}
 
@@ -5326,6 +5398,17 @@ func createUpdateTodoTaskRouteExecutor(workspacePath string, logger loggerv2.Log
 				availableRouteIDs = append(availableRouteIDs, route.RouteID)
 			}
 			return "", fmt.Errorf("route with route_id '%s' not found in todo task step '%s'. Available route IDs: %v", existingRouteID, parentStepID, availableRouteIDs)
+		}
+
+		// Capture the pre-mutation route content so the changelog can record a
+		// real before/after diff instead of collapsing to a placeholder
+		// (PLAT-074) — routeToUpdate is a pointer into the live plan, so this
+		// must happen before any field is touched below.
+		var beforeRouteSnapshot interface{}
+		if beforeRouteJSON, err := json.Marshal(*routeToUpdate); err == nil {
+			beforeRouteSnapshot = json.RawMessage(beforeRouteJSON)
+		} else {
+			logger.Warn(fmt.Sprintf("⚠️ Failed to marshal pre-update route %s for changelog: %v", existingRouteID, err))
 		}
 
 		// Update fields if provided
@@ -5406,10 +5489,19 @@ func createUpdateTodoTaskRouteExecutor(workspacePath string, logger loggerv2.Log
 			return "", fmt.Errorf("route was updated but required scripted configuration for its regular execution boundary could not be saved: %w", err)
 		}
 
+		var afterRouteSnapshot interface{}
+		if afterRouteJSON, err := json.Marshal(*routeToUpdate); err == nil {
+			afterRouteSnapshot = json.RawMessage(afterRouteJSON)
+		} else {
+			logger.Warn(fmt.Sprintf("⚠️ Failed to marshal post-update route %s for changelog: %v", existingRouteID, err))
+		}
+
 		logPlanChange(ctx, workspacePath, PlanChangelogEntry{
-			Tool:    "update_todo_task_route",
-			Reason:  reason,
-			StepIDs: []string{parentStepID, existingRouteID},
+			Tool:           "update_todo_task_route",
+			Reason:         reason,
+			StepIDs:        []string{parentStepID, existingRouteID},
+			BeforeSnapshot: beforeRouteSnapshot,
+			AfterSnapshot:  afterRouteSnapshot,
 		}, readFile, writeFile, logger)
 
 		routeReviewNotice := handleTodoTaskRouteArtifactReview(ctx, workspacePath, parentStepID, existingRouteID, "updated", readFile, writeFile, logger)

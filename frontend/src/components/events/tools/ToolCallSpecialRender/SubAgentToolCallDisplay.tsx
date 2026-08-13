@@ -1,7 +1,7 @@
 import React from 'react'
 import type { ToolCallStartEvent } from '../../../../generated/event-types'
 import { useExpandable } from '../../useExpandable'
-import { Plus, Minus, Bot, Zap } from 'lucide-react'
+import { Plus, Minus, Bot } from 'lucide-react'
 import { MarkdownRenderer } from '../../../ui/MarkdownRenderer'
 
 interface SubAgentToolCallDisplayProps {
@@ -10,7 +10,6 @@ interface SubAgentToolCallDisplayProps {
 
 export const SubAgentToolCallDisplay: React.FC<SubAgentToolCallDisplayProps> = ({ event }) => {
   const { isExpanded, toggle } = useExpandable(true)
-  const isGeneric = event.tool_name === 'call_generic_agent'
 
   let parsedArgs: Record<string, unknown> = {}
   try {
@@ -40,12 +39,12 @@ export const SubAgentToolCallDisplay: React.FC<SubAgentToolCallDisplayProps> = (
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-start gap-2 min-w-0 flex-1">
           <span className="flex-shrink-0 mt-0.5 text-indigo-500 dark:text-indigo-400">
-            {isGeneric ? <Zap className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
+            <Bot className="w-4 h-4" />
           </span>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-xs font-semibold text-gray-800 dark:text-gray-100">
-                {isGeneric ? 'Generic Agent' : (routeId || 'Sub-agent')}
+                {routeId || 'Sub-agent'}
               </span>
               {preferredTier && (
                 <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${tierColors[preferredTier] || 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400'}`}>

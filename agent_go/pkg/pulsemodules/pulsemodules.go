@@ -9,12 +9,11 @@
 // description, a reviewer artifact-path whitelist, and two frontend files.
 // Nothing asserted they agreed.
 //
-// On 2026-07-29 a single refactor (merging learning_health,
-// knowledgebase_health, and db_health into stores_health) desynchronized four
-// of them at once. Two caused production failures: a missing ToolCategories
-// entry blocked every todo_task orchestrator, and a missing entry in the
-// reviewer whitelist made every stores_health review silently fail to persist
-// its result. Both built cleanly and passed the full test suite.
+// A 2026-07-29 refactor merged several maintenance lenses without updating all
+// consumers. Two production failures followed: a missing ToolCategories entry
+// blocked every todo_task orchestrator, and a missing reviewer-whitelist entry
+// silently discarded a whole review result. Both built cleanly and passed the
+// full test suite.
 //
 // The registry is a leaf package with no imports because both cmd/server and
 // pkg/orchestrator/.../step_based_workflow must consume it, and server already
@@ -22,12 +21,6 @@
 package pulsemodules
 
 import "strings"
-
-// ReviewerMaxConcurrency is the shared bound for scheduled reviewer stages and
-// their read-only child agents. Keeping the scheduler and child runtime on the
-// same value prevents queued parent turns from defeating the intended bounded
-// parallel review phase.
-const ReviewerMaxConcurrency = 3
 
 // Module is one scheduled Pulse review module.
 type Module struct {
@@ -47,56 +40,34 @@ type Module struct {
 // these values rather than restating their string literals.
 const (
 	WorkflowReviewID  = "workflow_review"
-	BugReviewID       = "bug_review"
-	ArtifactReviewID  = "artifact_review"
-	ReportHealthID    = "report_health"
-	EvalHealthID      = "eval_health"
-	StoresHealthID    = "stores_health"
 	LLMOpsReviewID    = "llm_ops_review"
 	StrategyAuditorID = "strategy_auditor"
 	GoalAdvisorID     = "goal_advisor"
 )
 
-// Historical IDs remain constants because read paths must recognize them, but
-// current writers must never emit them.
-const (
-	RetiredLearningHealthID      = "learning_health"
-	RetiredKnowledgebaseHealthID = "knowledgebase_health"
-	RetiredDBHealthID            = "db_health"
-	// CostLLMTimeID remains readable for historical Pulse state and artifacts.
-	// New runs fold cost, timing, and tool/LLM operations into WorkflowReviewID.
-	CostLLMTimeID = "cost_llm_time"
-)
-
 // HTML-only classifications. They are not scheduled review modules.
 const (
 	PseudoRunSummaryID = "run_summary"
-	PseudoPulseFixerID = "pulse_fixer"
 )
 
 // All is the canonical, ordered module set. Order is the Pulse worklist order
 // and is part of the contract — the scheduler and UI both rely on it.
 var All = []Module{
 	{
-		// Workflow Review is one read-only agent session with ordered lenses.
-		// It replaces six agents that repeatedly loaded the same plan, run,
-		// backlog, and database evidence and then filed overlapping findings.
-		// Historical module IDs remain readable below and normalize here when a
-		// current command still uses an older focused name.
+		// WorkflowReviewID is retained as the durable identity for Engineering
+		// Review. Artifact names are evidence packs, not reviewer perspectives:
+		// execution, report/eval implementation, plan-change impact, artifact
+		// consistency, and store-integrity defects all belong here.
 		ID:        WorkflowReviewID,
-		Label:     "Workflow review",
+		Label:     "Engineering review",
 		StepLabel: "workflow-review",
-		Aliases: []string{
-			"workflow", "review", "operational_review",
-			"bug", BugReviewID,
-			"artifact", "artifact_drift", ArtifactReviewID,
-			"report", "reporting", "report_repair", ReportHealthID,
-			"eval", "evaluation", "evaluation_health", "eval_repair", EvalHealthID,
-			"learnings", "learning", "learning_policy", "learning_health",
-			"kb", "knowledgebase", "knowledgebase_health",
-			"db", "database", "db_health", StoresHealthID,
-			"ops", "operations", "cost", "llm_cost", "cost_time", CostLLMTimeID, LLMOpsReviewID,
-		},
+		Aliases:   []string{"workflow", "review", "engineering", "engineering_review", "correctness", "correctness_review"},
+	},
+	{
+		ID:        LLMOpsReviewID,
+		Label:     "LLM & operations",
+		StepLabel: "llm-ops-review",
+		Aliases:   []string{"ops", "operations"},
 	},
 	{
 		// Strategy Auditor improves the selected strategy by finding missing
@@ -116,28 +87,11 @@ var All = []Module{
 	},
 }
 
-// RetiredIDs were once canonical module IDs. They are no longer scheduled, but
-// historical reviewer artifacts under pulse/reviews/<run>/<module>.md and old
-// builder/improve.html cards still carry them, so read paths must keep
-// accepting them. They must never be written by current runs.
-var RetiredIDs = []string{
-	BugReviewID,
-	ArtifactReviewID,
-	ReportHealthID,
-	EvalHealthID,
-	StoresHealthID,
-	LLMOpsReviewID,
-	RetiredLearningHealthID,
-	RetiredKnowledgebaseHealthID,
-	RetiredDBHealthID,
-	CostLLMTimeID,
-}
-
 // PseudoIDs are data-module values that appear in builder/improve.html but are
-// not scheduled review modules: run_summary covers Gate and run rows,
-// pulse_fixer covers applied fixes. Consumers that classify HTML must accept
-// them; the scheduler must not treat them as modules.
-var PseudoIDs = []string{PseudoRunSummaryID, PseudoPulseFixerID}
+// not scheduled review modules. run_summary covers Gate and run rows; fixes
+// and decisions belong to their actual Engineering, Operations, Strategy, or
+// Goal Advisor source rather than a synthetic "Pulse fixer" lane.
+var PseudoIDs = []string{PseudoRunSummaryID}
 
 // IDs returns the canonical module IDs in worklist order.
 func IDs() []string {
@@ -158,19 +112,8 @@ func IsValid(id string) bool {
 	return false
 }
 
-// IsRetired reports whether id was a canonical module that no longer schedules.
-func IsRetired(id string) bool {
-	for _, r := range RetiredIDs {
-		if r == id {
-			return true
-		}
-	}
-	return false
-}
-
-// Normalize maps shorthand, superseded, and loosely-cased spellings onto a
-// canonical ID. An unrecognized value is returned normalized but unchanged, so
-// callers can still reject it explicitly rather than silently remapping it.
+// Normalize maps current shorthand and loosely-cased spellings onto a canonical
+// ID. Retired module identities are deliberately not translated.
 func Normalize(module string) string {
 	module = strings.ToLower(strings.TrimSpace(module))
 	module = strings.ReplaceAll(module, "-", "_")
@@ -198,11 +141,8 @@ func ForStepLabel(label string) string {
 	return ""
 }
 
-// AcceptedForReviewArtifacts is the set of module IDs a reviewer artifact path
-// may use: every current module plus every retired one, so historical results
-// stay readable. Omitting a current module here silently breaks that module's
-// result persistence — the exact 2026-07-29 stores_health defect.
-func AcceptedForReviewArtifacts() []string {
-	out := append(IDs(), RetiredIDs...)
-	return out
+// AcceptedForReviewReceipts is the current module set accepted for durable
+// reviewer receipts.
+func AcceptedForReviewReceipts() []string {
+	return IDs()
 }

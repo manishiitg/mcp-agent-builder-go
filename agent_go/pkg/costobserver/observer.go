@@ -2,8 +2,7 @@
 //
 // It lives outside cmd/server because more than one launch path spends
 // tokens: the chat/query path and delegate() run inside package server, while
-// workflow steps, todo_task sub-agents, call_generic_agent children, and the
-// Pulse / Goal Advisor background stages are created by the orchestrator.
+// workflow steps and background sub-agents are created by the orchestrator.
 // Those orchestrator-created agents previously had no ledger attachment at
 // all, so their spend was invisible. Both sides now construct the same
 // Observer from here — a second copy of attribution logic would drift.
@@ -200,6 +199,7 @@ func (o *Observer) recordLLMGeneration(event *unifiedevents.AgentEvent, generati
 	entry.EffectiveModelID = effectiveModel
 	entry.TurnCount = 1
 	entry.LLMCallCount = 1
+	entry.LLMGenerationDurationMS = generation.Duration.Milliseconds()
 	entry.PromptTokens = generation.UsageMetrics.PromptTokens
 	entry.CompletionTokens = generation.UsageMetrics.CompletionTokens
 	entry.ReasoningTokens = generation.UsageMetrics.ReasoningTokens
@@ -311,6 +311,29 @@ func matchPhaseScope(values ...string) string {
 	return ""
 }
 
+// ScopeForScheduledLLMRole maps the scheduler's explicit llm_config_source
+// marker to a cost scope, and returns "" when the request carries none.
+//
+// This marker is the only *reliable* Pulse signal on the chat/query path. A
+// scheduled Pulse turn runs in the same session, with the same agent mode and
+// the same workflow-builder phase id, as the workflow-orchestration turns that
+// precede it — so neither the mode nor the phase can tell them apart. The
+// scheduler already stamps this field when it swaps in the Pulse/maintenance
+// LLM, so the intent is known at the source and only needs to be honored here.
+//
+// scheduled_auto_improve maps to Pulse deliberately: Goal Advisor and Strategy
+// Auditor are Pulse modules that happen to run on the maintenance LLM, so their
+// spend belongs in the Pulse total rather than in a bucket of its own.
+func ScopeForScheduledLLMRole(llmConfigSource string) string {
+	switch strings.ToLower(strings.TrimSpace(llmConfigSource)) {
+	case "scheduled_pulse", "scheduled_auto_improve":
+		return ScopePulse
+	case "scheduled_chief_of_staff":
+		return ScopeChiefOfStaff
+	}
+	return ""
+}
+
 // InferScope names the scope for a chat-session agent — the chat/query path
 // and delegate() sub-agents. Anything not otherwise identified is chat.
 func InferScope(agentMode, phaseID string) string {
@@ -329,8 +352,7 @@ func InferScope(agentMode, phaseID string) string {
 }
 
 // InferWorkflowScope names the scope for an agent created by the workflow
-// orchestrator: a workflow step, a todo_task sub-agent, a call_generic_agent
-// child, or a Pulse / Goal Advisor background stage.
+// orchestrator: a workflow step or a background sub-agent.
 //
 // hasRunFolder is the signal that separates a live workflow execution from
 // builder-side work: the orchestrator only sets an iteration/run folder once

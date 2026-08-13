@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/pulsemodules"
 )
 
 func concernsWorkspace(t *testing.T) string {
@@ -77,6 +79,43 @@ func TestRecordRunConcernsDedupesAndCountsRecurrence(t *testing.T) {
 	}
 	if open[0].Phase != ConcernPhaseExecution || open[0].StepID != "step-a" {
 		t.Fatalf("attribution lost: %#v", open[0])
+	}
+}
+
+func TestAdvisorConcernsRequireDurableRouting(t *testing.T) {
+	ctx := context.Background()
+	workspacePath := concernsWorkspace(t)
+	concern := "the current target mix cannot reach enough new accounts"
+
+	if _, err := RecordRunConcerns(ctx, workspacePath, "pulse-1", "", pulsemodules.StrategyAuditorID,
+		ConcernPhaseReview, "CONCERNS: "+concern); err == nil || !strings.Contains(err.Error(), "missing its PULSE_FINDING_JSON routing marker") {
+		t.Fatalf("bare strategy concern was accepted: %v", err)
+	}
+
+	evidenceWait := strings.Join([]string{
+		`PULSE_FINDING_JSON: {"module":"strategy_auditor","concern":"` + concern + `","issue_kind":"workflow_issue","recommended_route":"evidence_wait","next_check":"after three completed acquisition runs"}`,
+		"CONCERNS: " + concern,
+	}, "\n")
+	if _, err := RecordRunConcerns(ctx, workspacePath, "pulse-1", "", pulsemodules.StrategyAuditorID,
+		ConcernPhaseReview, evidenceWait); err != nil {
+		t.Fatalf("routed strategy concern was rejected: %v", err)
+	}
+	findings, err := LoadPulseFindingLifecycles(ctx, workspacePath, pulsemodules.StrategyAuditorID, 10)
+	if err != nil || len(findings) != 1 || findings[0].Details == nil {
+		t.Fatalf("load routed strategy concern: findings=%+v err=%v", findings, err)
+	}
+	if findings[0].Details.RecommendedRoute != pulseFindingRouteEvidenceWait ||
+		findings[0].Details.NextCheck != "after three completed acquisition runs" {
+		t.Fatalf("advisor route was not persisted: %+v", findings[0].Details)
+	}
+
+	noneConcern := strings.Join([]string{
+		`PULSE_FINDING_JSON: {"module":"goal_advisor","concern":"no material strategic gap","issue_kind":"workflow_issue","recommended_route":"none"}`,
+		"CONCERNS: no material strategic gap",
+	}, "\n")
+	if _, err := RecordRunConcerns(ctx, concernsWorkspace(t), "pulse-2", "", pulsemodules.GoalAdvisorID,
+		ConcernPhaseReview, noneConcern); err == nil || !strings.Contains(err.Error(), "must not have been filed") && !strings.Contains(err.Error(), "omit the CONCERNS line") {
+		t.Fatalf("recommended_route=none was accepted as an active concern: %v", err)
 	}
 }
 
@@ -190,41 +229,8 @@ func TestResolveRunConcernRejectsUnknownStatus(t *testing.T) {
 
 // Reviewer artifacts are per-run files that nothing diffs across runs, so a
 // finding repeated every cycle reads as new every cycle. Reviewer concerns go
-// through the same fingerprinting as step concerns, keyed by module.
-func TestReviewerConcernsDedupeByModuleAcrossRuns(t *testing.T) {
-	ws := concernsWorkspace(t)
-	ctx := context.Background()
-	artifact := "## Findings\nStored-data integrity issue found.\n\nCONCERNS: ASTERDM/ATUL rows have NULL pnl_inr\n"
-
-	for _, run := range []string{"pulse-1", "pulse-2"} {
-		if _, err := RecordRunConcerns(ctx, ws, run, "", "db_health", ConcernPhaseReview, artifact); err != nil {
-			t.Fatalf("record %s: %v", run, err)
-		}
-	}
-	// A different module reporting the same sentence is a separate finding.
-	if _, err := RecordRunConcerns(ctx, ws, "pulse-2", "", "bug_review", ConcernPhaseReview, artifact); err != nil {
-		t.Fatalf("record other module: %v", err)
-	}
-
-	open, err := LoadOpenRunConcerns(ctx, ws, 10)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if len(open) != 2 {
-		t.Fatalf("expected 2 rows (one per module), got %d: %#v", len(open), open)
-	}
-	if open[0].SeenCount != 2 || open[0].StepID != "db_health" {
-		t.Fatalf("recurring module finding should rank first with count 2, got %#v", open[0])
-	}
-	if open[0].Phase != ConcernPhaseReview {
-		t.Fatalf("phase = %q, want %q", open[0].Phase, ConcernPhaseReview)
-	}
-}
-
-// Distinct execution/review findings on one step remain separate, but should
-// stay adjacent and outrank an isolated recurrence so a reviewer can reason
-// about their shared boundary together. Prevalidation uses a stronger rule:
-// every failed check on one step is one lifecycle finding.
+// through the same fingerprinting as step concerns, keyed by current reviewer
+// perspective. Historical artifact-named modules now share Engineering Review.
 func TestRelatedStepConcernsOutrankAnIsolatedRecurrence(t *testing.T) {
 	ws := concernsWorkspace(t)
 	ctx := context.Background()

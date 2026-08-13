@@ -1,9 +1,9 @@
 ## Pulse Bug Review — read-only QA and execution-trace contract
 
-Load this when the `bug_review` module is due. It is the deep read-only review
-contract used by the Bug Review reviewer and the Pulse Fixer. Gate does not load
-it — Gate only decides whether `bug_review` is due from the triggers in
-`read_skill(skills=[{"name":"builder-reference","path":"references/post-run-monitor.md"}])`. The reviewer inspects and advises;
+Load this when Engineering Review is due and runtime/logic evidence is selected.
+It is the deep read-only execution evidence pack used by Engineering Review and
+the Review+Fix sequence. Gate does not load it — Gate only decides whether
+`workflow_review` is due from the durable worklist recorded by Pulse Gate. The reviewer inspects and advises;
 only the Pulse Fixer applies bounded repairs, and only for confirmed
 `correctness_bug` findings.
 
@@ -91,6 +91,26 @@ Act like a careful human QA engineer, but remain read-only and side-effect safe:
    and `untested risk` alongside the normal ordered findings. Coverage is not a
    percentage unless a real denominator exists.
 
+#### Artifact ownership purity
+
+When Engineering Review is selected, inspect current plan descriptions and
+message-sequence messages plus the effective Learnings and KB packages for
+shared AgentWorks mechanics copied into workflow-owned prose: bridge/auth
+environment variables or curl envelopes, api-bridge routing, Folder Guard
+internals, managed workflow-DB tool syntax, `get_api_spec` workarounds, and
+coding-agent tmux/native-session plumbing. Preserve target-specific selectors,
+third-party API behavior, parsing, recovery, and target-service authentication.
+Generic words such as API, SQL, curl, browser, database, session, or tool are
+not findings by themselves.
+
+Consolidate all confirmed occurrences into one root-cause finding per workflow,
+with the affected locations as evidence; never file one finding per token,
+line, or file. Classify it as artifact ownership/contract drift. The bounded
+fix rewrites Plan through typed mutation tools and Learnings/KB through focused
+patches, preserving business behavior and verification. Re-run this evidence
+pack when the Plan/Learnings/KB fingerprint changed, a prior purity repair is
+awaiting verification, or the workflow has never been audited.
+
 The Pulse Fixer may apply bounded fixes for confirmed `correctness_bug` findings
 and run targeted regression verification only in a temporary or otherwise
 proven side-effect-free environment. It must not rerun a side-effecting
@@ -112,6 +132,12 @@ step's latest applicable observable trace:
 This is targeted escalation, not a mandatory audit of every conversation. Start
 from Gate evidence and open only the step/attempt needed to test the suspected
 problem. Valid triggers include:
+
+For a recurring defect or prior fix awaiting verification, compare the current
+run with up to three comparable retained runs (same route/group and materially
+equivalent configuration). Read compact summaries and typed findings first;
+open raw traces only for the differing or suspicious step/attempt. If fewer
+comparable runs remain, state that limitation rather than inferring recurrence.
 
 - evaluation, validation, report, DB, or artifact evidence contradicts the
   step's claimed success
@@ -152,9 +178,8 @@ verification. Use exactly these classifications:
   decision was wrong; name the missing evidence and do not invent a defect
 
 When the trace proves the shared harness, runtime adapter, MCP bridge, or tool
-API violated its own contract, set `issue_kind=harness_issue` and emit the
-single-line `PULSE_FINDING_JSON` record required by the reviewer artifact
-contract immediately before the matching `CONCERNS:` line. Prove ownership:
+API violated its own contract, set `issue_kind=harness_issue` and persist it
+with `record_pulse_finding` under the typed reviewer contract. Prove ownership:
 show that the workflow supplied a valid request and that the shared boundary
 rejected, rewrote, mislabeled, truncated, or misreported it. Include a minimal
 side-effect-free reproduction with setup, action, expected, and observed; when
@@ -167,7 +192,7 @@ Review. It must not rewrite a step merely because another tool might have been
 faster or stylistically preferable. Route `efficiency_or_coaching` findings to
 the `llm_ops_review` evidence set: if that module is due in the current worklist,
 pass the finding to its reviewer; otherwise record one deduplicated evidence
-pointer and next-check trigger in `builder/improve.html` so the next Gate makes
+pointer and next-check trigger through typed Pulse tools so the next Gate makes
 LLM/Ops due. Record `no_issue` as reviewed with no action. Keep
 `insufficient_evidence` visible only when it is consequential, with a concrete
 way to obtain the missing evidence.

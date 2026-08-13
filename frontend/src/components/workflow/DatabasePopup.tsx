@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   AlertCircle,
+  ArrowLeft,
   FileJson,
   Link2,
   Loader2,
@@ -22,6 +23,7 @@ interface DatabasePopupProps {
   isOpen: boolean
   onClose: () => void
   workspacePath: string | null
+  embedded?: boolean
 }
 
 type FileSummary = {
@@ -352,10 +354,12 @@ async function readText(filepath: string): Promise<string | null> {
   }
 }
 
-export default function DatabasePopup({ isOpen, onClose, workspacePath }: DatabasePopupProps) {
+export default function DatabasePopup({ isOpen, onClose, workspacePath, embedded = false }: DatabasePopupProps) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [files, setFiles] = useState<PlannerFile[]>([])
+  const [tableRowCounts, setTableRowCounts] = useState<Record<string, number>>({})
+  const [tableColumns, setTableColumns] = useState<Record<string, string[]>>({})
   const [contentCache, setContentCache] = useState<Record<string, ContentCacheEntry | undefined>>({})
   const [relationships, setRelationships] = useState<DBRelationship[]>([])
   const [relationshipLoading, setRelationshipLoading] = useState(false)
@@ -383,6 +387,8 @@ export default function DatabasePopup({ isOpen, onClose, workspacePath }: Databa
 
       const tables = resp.data.tables.slice().sort((a, b) => a.name.localeCompare(b.name))
       const pseudoFiles: PlannerFile[] = tables.map(t => ({ filepath: `db/db.sqlite#${t.name}`, type: 'file' } as PlannerFile))
+      setTableRowCounts(Object.fromEntries(tables.map(t => [`db/db.sqlite#${t.name}`, t.row_count])))
+      setTableColumns(Object.fromEntries(tables.map(t => [`db/db.sqlite#${t.name}`, t.columns.map(column => column.name)])))
       const cache: Record<string, ContentCacheEntry> = {}
       for (const t of tables) {
         const path = `db/db.sqlite#${t.name}`
@@ -403,7 +409,7 @@ export default function DatabasePopup({ isOpen, onClose, workspacePath }: Databa
       setContentCache(cache)
       setSelectedPath(prev => {
         if (prev && pseudoFiles.some(file => file.filepath === prev)) return prev
-        return pseudoFiles[0]?.filepath ?? null
+        return null
       })
 
       // Relationship inference over the sample rows (same heuristic as before).
@@ -414,6 +420,8 @@ export default function DatabasePopup({ isOpen, onClose, workspacePath }: Databa
       setLoading(false)
     } catch (err) {
       setFiles([])
+      setTableRowCounts({})
+      setTableColumns({})
       setRelationships([])
       setError(err instanceof Error ? err.message : String(err))
       setLoading(false)
@@ -422,21 +430,21 @@ export default function DatabasePopup({ isOpen, onClose, workspacePath }: Databa
   }, [dbFile])
 
   useEffect(() => {
-    if (isOpen) load()
-  }, [isOpen, load])
+    if (isOpen || embedded) load()
+  }, [isOpen, embedded, load])
 
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
-      if (e.key !== 'Escape' || !isOpen) return
+      if (e.key !== 'Escape' || !isOpen || embedded) return
       if (maximizedCell) {
         setMaximizedCell(null)
         return
       }
       onClose()
     }
-    if (isOpen) window.addEventListener('keydown', handleKey)
+    if (isOpen && !embedded) window.addEventListener('keydown', handleKey)
     return () => window.removeEventListener('keydown', handleKey)
-  }, [isOpen, maximizedCell, onClose])
+  }, [isOpen, embedded, maximizedCell, onClose])
 
   const selectFile = useCallback(async (path: string) => {
     setSelectedPath(path)
@@ -471,23 +479,24 @@ export default function DatabasePopup({ isOpen, onClose, workspacePath }: Databa
     [selectedCache?.content, selectedPath, workspacePath],
   )
   const selectedFields = useMemo(() => {
+    if (selectedPath && tableColumns[selectedPath]?.length) return tableColumns[selectedPath]
     const fields = new Set<string>()
     for (const preview of selectedPreviews) {
       for (const column of preview.columns) fields.add(column)
     }
     return Array.from(fields).sort()
-  }, [selectedPreviews])
+  }, [selectedPath, selectedPreviews, tableColumns])
   const selectedRelationships = useMemo(() => {
     if (!selectedRel) return []
     return relationships.filter(rel => rel.fromTable === selectedRel || rel.toTable === selectedRel || rel.fromTable.startsWith(`${selectedRel}.`) || rel.toTable.startsWith(`${selectedRel}.`))
   }, [relationships, selectedRel])
 
-  if (!isOpen) return null
+  if (!embedded && !isOpen) return null
 
-  return (
-    <ModalPortal>
-      <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-2 sm:p-4">
-        <div className="flex max-h-[calc(100dvh-1rem)] w-full max-w-5xl flex-col rounded-lg border border-border bg-background shadow-xl sm:max-h-[90vh]">
+  const shell = (
+        <div className={embedded
+          ? 'flex h-full min-h-0 w-full flex-col bg-background'
+          : 'flex max-h-[calc(100dvh-1rem)] w-full max-w-5xl flex-col rounded-lg border border-border bg-background shadow-xl sm:max-h-[90vh]'}>
           <div className="flex flex-shrink-0 items-start justify-between gap-3 border-b border-border p-3 sm:p-4">
             <div className="flex min-w-0 flex-wrap items-center gap-2">
               <Table2 className="h-5 w-5 text-primary" />
@@ -503,49 +512,34 @@ export default function DatabasePopup({ isOpen, onClose, workspacePath }: Databa
               >
                 <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
               </button>
-              <button
+              {!embedded && <button
                 onClick={onClose}
                 className="ml-2 rounded-md p-1 transition-colors hover:bg-muted"
                 title="Close (Esc)"
               >
                 <X className="h-5 w-5" />
-              </button>
+              </button>}
             </div>
           </div>
 
-          <div className="flex flex-shrink-0 items-center gap-4 border-b border-border px-4 py-3 text-sm">
-            <div>
-              <span className="text-muted-foreground">Files: </span>
-              <span className="font-medium">{files.length}</span>
-            </div>
-            {totalSize && (
-              <div>
-                <span className="text-muted-foreground">Loaded size: </span>
-                <span className="font-medium">{totalSize}</span>
-              </div>
-            )}
-            {dbFile && <div className="ml-auto truncate font-mono text-xs text-muted-foreground">{dbFile}</div>}
-          </div>
-
-          <div className="flex flex-shrink-0 flex-col gap-2 border-b border-border px-4 py-3 text-sm lg:flex-row lg:items-center">
+          <div className="flex flex-shrink-0 flex-col gap-2 border-b border-border px-4 py-3 text-sm sm:flex-row sm:items-center">
             <div className="grid grid-cols-3 gap-2 text-xs sm:flex sm:items-center sm:gap-3">
               <div className="rounded-md border border-border bg-muted/20 px-2.5 py-1.5">
-                <span className="text-muted-foreground">Files</span>
+                <span className="text-muted-foreground">Tables</span>
                 <span className="ml-2 font-semibold">{files.length}</span>
               </div>
               <div className="rounded-md border border-border bg-muted/20 px-2.5 py-1.5">
-                <span className="text-muted-foreground">Links</span>
+                <span className="text-muted-foreground">Relationships</span>
                 <span className="ml-2 font-semibold">{relationships.length}</span>
               </div>
               <div className="rounded-md border border-border bg-muted/20 px-2.5 py-1.5">
-                <span className="text-muted-foreground">Loaded</span>
+                <span className="text-muted-foreground">Sample size</span>
                 <span className="ml-2 font-semibold">{totalSize ?? '-'}</span>
               </div>
             </div>
-            {dbFile && <div className="min-w-0 truncate font-mono text-xs text-muted-foreground lg:ml-auto">{dbFile}</div>}
           </div>
 
-          <div className="flex min-h-0 flex-1 flex-col lg:grid lg:grid-cols-[20rem_minmax(0,1fr)]">
+          <div className="flex min-h-0 flex-1 flex-col">
             {loading && files.length === 0 && (
               <div className="col-span-full flex items-center gap-2 p-4 text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -571,19 +565,20 @@ export default function DatabasePopup({ isOpen, onClose, workspacePath }: Databa
 
             {!error && files.length > 0 && (
               <>
-                <aside className="min-h-0 border-b border-border lg:border-b-0 lg:border-r">
+                {!selectedPath && <aside className="flex min-h-0 flex-1 flex-col">
                   <div className="border-b border-border p-3">
                     <div className="relative">
                       <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
                       <input
                         value={searchTerm}
                         onChange={event => setSearchTerm(event.target.value)}
-                        placeholder="Search files or fields"
+                        placeholder="Search tables or columns"
+                        aria-label="Search database tables or columns"
                         className="h-9 w-full rounded-md border border-input bg-background pl-8 pr-3 text-sm outline-none transition-colors focus:border-primary"
                       />
                     </div>
                   </div>
-                  <div className="max-h-64 overflow-y-auto p-2 lg:max-h-none">
+                  <div className="grid flex-1 content-start gap-2 overflow-y-auto p-3 sm:grid-cols-2">
                     {filteredFiles.map(file => {
                       const path = file.filepath
                       const cache = contentCache[path]
@@ -594,7 +589,7 @@ export default function DatabasePopup({ isOpen, onClose, workspacePath }: Databa
                         <button
                           key={path}
                           onClick={() => selectFile(path)}
-                          className={`mb-1 flex w-full items-start gap-2 rounded-md border px-2.5 py-2 text-left transition-colors ${
+                          className={`flex w-full items-start gap-2 rounded-md border px-3 py-3 text-left transition-colors ${
                             isSelected
                               ? 'border-primary/40 bg-primary/10'
                               : 'border-transparent hover:border-border hover:bg-muted/50'
@@ -605,27 +600,27 @@ export default function DatabasePopup({ isOpen, onClose, workspacePath }: Databa
                             <span className="block truncate font-mono text-sm">{rel}</span>
                             <span className="mt-1 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
                               <span className="truncate">{cache?.summary.label ?? 'not loaded'}</span>
-                              {size && <span className="flex-shrink-0">{size}</span>}
+                              {size && <span className="flex-shrink-0">{size} sample</span>}
                             </span>
                           </span>
                         </button>
                       )
                     })}
                     {filteredFiles.length === 0 && (
-                      <div className="px-2 py-8 text-center text-sm text-muted-foreground">No matching DB files.</div>
+                      <div className="col-span-full px-2 py-8 text-center text-sm text-muted-foreground">No matching tables.</div>
                     )}
                   </div>
-                </aside>
+                </aside>}
 
-                <section className="min-h-0 overflow-y-auto p-4">
-                  {!selectedPath && (
-                    <div className="py-12 text-center text-muted-foreground">
-                      <Table2 className="mx-auto mb-3 h-10 w-10 opacity-30" />
-                      <div className="text-sm">Select a DB file to inspect its rows, fields, and raw JSON.</div>
-                    </div>
-                  )}
-
-                  {selectedPath && (
+                {selectedPath && <section className="min-h-0 flex-1 overflow-y-auto p-4">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedPath(null)}
+                      className="sticky top-0 z-20 mb-3 inline-flex items-center gap-2 rounded-md border border-border bg-background/95 px-3 py-2 text-sm font-medium shadow-sm backdrop-blur-sm transition-colors hover:bg-accent"
+                    >
+                      <ArrowLeft className="h-4 w-4" />
+                      Back to all tables
+                    </button>
                     <div className="space-y-4">
                       <div className="flex flex-col gap-3 rounded-md border border-border bg-muted/20 p-3 sm:flex-row sm:items-start sm:justify-between">
                         <div className="min-w-0">
@@ -636,7 +631,7 @@ export default function DatabasePopup({ isOpen, onClose, workspacePath }: Databa
                           <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
                             <span>{selectedCache?.summary.kind ?? 'loading'}</span>
                             {selectedCache?.summary.label && <span>{selectedCache.summary.label}</span>}
-                            {selectedSize && <span>{selectedSize}</span>}
+                            {selectedSize && <span>{selectedSize} sample</span>}
                           </div>
                           {selectedCache?.summary.detail && (
                             <div className="mt-2 line-clamp-2 font-mono text-xs text-muted-foreground">{selectedCache.summary.detail}</div>
@@ -690,7 +685,9 @@ export default function DatabasePopup({ isOpen, onClose, workspacePath }: Databa
                                   <Table2 className="h-4 w-4 text-primary" />
                                   <span className="min-w-0 truncate font-mono font-medium">{preview.label}</span>
                                   <span className="ml-auto text-xs text-muted-foreground">
-                                    showing {preview.rows.length} of {preview.totalRows} rows
+                                    {tableRowCounts[preview.id] && tableRowCounts[preview.id] > preview.rows.length
+                                      ? `showing ${preview.rows.length} sampled rows of ${tableRowCounts[preview.id]} total`
+                                      : `showing ${preview.rows.length} of ${preview.totalRows} rows`}
                                   </span>
                                 </div>
                                 <div className="overflow-auto">
@@ -727,7 +724,7 @@ export default function DatabasePopup({ isOpen, onClose, workspacePath }: Databa
                                                         preview: cellText || 'null',
                                                         detail: formatCellDetail(rawValue),
                                                       })}
-                                                      className="mt-[-1px] hidden rounded p-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground group-hover/cell:inline-flex focus:inline-flex"
+                                                      className="mt-[-1px] inline-flex rounded p-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                                                       title="Maximize cell"
                                                       aria-label={`Maximize ${column} cell`}
                                                     >
@@ -826,12 +823,10 @@ export default function DatabasePopup({ isOpen, onClose, workspacePath }: Databa
                         )
                       )}
                     </div>
-                  )}
-                </section>
+                </section>}
               </>
             )}
           </div>
-        </div>
 
         {maximizedCell && (
           <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 p-3 sm:p-6" onMouseDown={() => setMaximizedCell(null)}>
@@ -862,6 +857,15 @@ export default function DatabasePopup({ isOpen, onClose, workspacePath }: Databa
             </div>
           </div>
         )}
+      </div>
+  )
+
+  if (embedded) return shell
+
+  return (
+    <ModalPortal>
+      <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-2 sm:p-4">
+        {shell}
       </div>
     </ModalPortal>
   )

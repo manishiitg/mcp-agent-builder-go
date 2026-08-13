@@ -180,6 +180,9 @@ export interface AgentQueryRequest {
     local_datetime?: string
   }
   selected_folder?: string
+  // True after the user converts an observed schedule/bot run into an
+  // interactive chat. Keeps the same session/native conversation identity.
+  user_interactive_continuation?: boolean
 }
 
 // Delegation tier configuration for multi-LLM support
@@ -215,6 +218,11 @@ export interface AgentQueryResponse {
   // already-running coding-agent turn instead of starting a new one (single-entry
   // routing for tmux-transport CLIs).
   status: string
+  kind?: 'fix_bundle' | 'strategy_experiment' | string
+  guardrails?: string[]
+  rollback_condition?: string
+  human_input_id?: string
+  terminal_outcome?: string
   message?: string
   sse_endpoint?: string
   session_id?: string
@@ -363,7 +371,7 @@ export interface ReportHumanInputOption {
 export interface ReportHumanInput {
   id: string
   workspace_path: string
-  source: 'pulse' | 'goal_advisor' | 'chief_of_staff' | string
+  source: 'pulse' | 'strategy_auditor' | 'goal_advisor' | 'chief_of_staff' | string
   priority: 'low' | 'medium' | 'high' | string
   question: string
   context?: string
@@ -376,6 +384,9 @@ export interface ReportHumanInput {
   evidence?: string
   created_by?: string
   answered_by?: string
+  answered_by_kind?: string
+  answered_via?: string
+  answered_session_id?: string
   consumed_by?: string
   outcome_summary?: string
   created_at: string
@@ -429,6 +440,14 @@ export interface PulseFinalCommandState {
   updated_at?: string
 }
 
+export interface PulseRunMode {
+  workspace_path: string
+  pulse_run_id: string
+  mode: 'backlog_drain' | 'discovery' | 'strategy' | 'observe' | string
+  reason: string
+  recorded_at: string
+}
+
 export interface PulseLoopClosureFinding {
   kind: 'answer_not_applied' | 'decision_waiting_on_user' | 'concern_keeps_recurring' | string
   severity: 'high' | 'medium' | string
@@ -455,6 +474,7 @@ export interface PulseModuleStateResponse {
   success: boolean
   modules: PulseModuleState[]
   commands: PulseFinalCommandState[]
+  gate_mode?: PulseRunMode | null
   shadow_signal_observations?: PulseShadowSignalObservation[]
   shadow_signal_coverage?: {
     status: string
@@ -482,6 +502,11 @@ export interface PulseIntervention {
   checkpoint?: string
   minimum_evidence_runs: number
   status: string
+  kind?: 'fix_bundle' | 'strategy_experiment' | string
+  guardrails?: string[]
+  rollback_condition?: string
+  human_input_id?: string
+  terminal_outcome?: string
   created_at?: string
   updated_at?: string
   sources?: PulseInterventionSource[]
@@ -528,6 +553,22 @@ export interface PulseImpactLedger {
 export interface PulseImpactResponse {
   success: boolean
   impact: PulseImpactLedger
+  error?: string
+}
+
+export interface PulseContextRecord {
+  context_id: string
+  section: string
+  context_text: string
+  example_note?: string
+  path: string
+  created_at: string
+}
+
+export interface PulseContextResponse {
+  success: boolean
+  records: PulseContextRecord[]
+  total: number
   error?: string
 }
 
@@ -585,6 +626,8 @@ export interface PulseFindingDetails {
   finding_id?: string
   target_key?: string
   issue_kind?: 'harness_issue' | 'workflow_bug' | 'external_dependency' | 'evidence_gap' | string
+  recommended_route?: 'decision_required' | 'evidence_wait' | 'fixer_handoff' | 'none' | string
+  next_check?: string
   classification?: string
   severity?: string
   summary?: string
@@ -653,12 +696,9 @@ export interface PulseReviewRecord {
   pulse_run_id?: string
   verdict?: string
   status?: string
-  artifact_kind: string
-  legacy_source_path?: string
-  artifact_bytes: number
-  content_sha256?: string
+  finding_count: number
+  verification_count: number
   recorded_at: string
-  markdown?: string
   metrics?: PulseAgentMetricRecord
 }
 
@@ -708,12 +748,6 @@ export interface PulseAgentMetricsResponse {
   success: boolean
   total?: number
   metrics: PulseAgentMetricRecord[]
-  error?: string
-}
-
-export interface PulseReviewResponse {
-  success: boolean
-  review: PulseReviewRecord
   error?: string
 }
 
@@ -940,6 +974,7 @@ export interface TerminalSnapshot {
   session_id: string
   owner_id?: string
   execution_id?: string
+  parent_execution_id?: string
   execution_kind?: string
   label?: string
   scope?: string
@@ -953,7 +988,10 @@ export interface TerminalSnapshot {
   display_title?: string
   display_meta?: string
   tmux_session?: string
-  content_source?: 'tmux_pipe' | 'tmux_capture' | 'event_stream' | string
+  content_source?: 'tmux_pipe' | 'tmux_capture' | 'tmux_stream' | 'event_stream' | string
+  // True for the short-lived rail row projected from the live execution tree
+  // before the corresponding terminal/transcript snapshot has been retained.
+  execution_tree_placeholder?: boolean
   // Rich step context — populated by the orchestrator's bridge for
   // workflow-step terminals. Used to render the transport-class chip
   // and the "step 3/7 · attempt 1 · triggered by X" meta row.
@@ -1526,6 +1564,11 @@ export interface RunningWorkflowInfo {
   needs_user_input?: boolean;
   waiting_message?: string;
   waiting_since?: string;
+  runtime_state?: RuntimeSnapshot;
+  // Same collapsed busy/idle/stopped read ActiveSessionInfo.display_status
+  // ships, computed from runtime_state so callers don't have to re-derive it
+  // from runtime_state.phase themselves. See PLAT-095.
+  display_status?: 'busy' | 'idle' | 'stopped';
 }
 
 export interface UpdateRunningWorkflowRequest {
@@ -1547,6 +1590,9 @@ export interface CostAggregate {
   cache_write_tokens: number
   total_cost_usd: number
   call_count: number
+  // Sum of time spent waiting for LLM generations. This deliberately excludes
+  // tool execution and queue time, so it is not a workflow wall-clock duration.
+  llm_generation_duration_ms?: number
 }
 
 // CostDateAggregate is one row in the per-date rollup. It inherits all
@@ -1555,6 +1601,12 @@ export interface CostAggregate {
 // can expand a row to see which models contributed.
 export interface CostDateAggregate extends CostAggregate {
   by_model?: Record<string, CostAggregate>
+  by_scope?: Record<string, CostScopeAggregate>
+  workflow_run_count?: number
+}
+
+export interface CostScopeAggregate extends CostAggregate {
+  by_execution?: Record<string, CostAggregate>
 }
 
 export interface CostSummary {
@@ -1563,6 +1615,19 @@ export interface CostSummary {
   total: CostAggregate
   by_date: Record<string, CostDateAggregate>
   by_model: Record<string, CostAggregate>
+  by_scope?: Record<string, CostScopeAggregate>
+}
+
+export interface WorkflowActivityTimingAggregate {
+  duration_ms: number
+  llm_duration_ms: number
+  tool_duration_ms: number
+  by_execution?: Record<string, WorkflowActivityTimingAggregate>
+}
+
+export interface WorkflowActivityTimingSummary {
+  by_scope: Record<string, WorkflowActivityTimingAggregate>
+  by_date: Record<string, { by_scope: Record<string, WorkflowActivityTimingAggregate> }>
 }
 
 // Preset LLM Configuration types
@@ -1986,10 +2051,12 @@ export interface WorkflowRunDailyCostsEntry {
 
 export interface WorkflowCostsResponse {
   success: boolean;
+  scoped_costs?: CostSummary;
   phase_token_usage?: PhaseTokenUsageFile;
   phase_daily_costs: WorkflowPhaseDailyCostsEntry[];
   run_daily_costs?: WorkflowRunDailyCostsEntry[];
   runs: WorkflowRunCostsEntry[];
+  activity_timing?: WorkflowActivityTimingSummary;
 }
 
 export interface ExecutionLogsResponse {
@@ -2149,7 +2216,7 @@ export type ReportSectionLayout = ReportPlanDocumentSectionLayout;
 // can rely on it being defined — the schema makes it optional because Go's
 // omitempty allows it to be absent on the wire.
 //
-// HTML report documents render stored artifacts and read db/db.sqlite live via
+// The workflow-owned HTML report document renders stored artifacts and reads db/db.sqlite live via
 // window.report. Native interaction widgets have no `source`; they persist
 // configured user responses to the workflow database.
 export type ReportWidget = ReportPlanDocumentWidget & {
@@ -2695,6 +2762,12 @@ export interface WorkflowNotificationInfoResponse {
   pulse_summary_instructions?: string
   run_summary_channels?: string[]
   pulse_summary_channels?: string[]
+  // Who each summary is emailed to. Empty means the account default recipient.
+  run_summary_recipients?: string[]
+  pulse_summary_recipients?: string[]
+  // Slack channels per summary, as webhook secret names (one webhook = one channel).
+  run_summary_slack_webhooks?: string[]
+  pulse_summary_slack_webhooks?: string[]
   exclude_channels?: string[]
   block_recipients?: string[]
 }
@@ -2835,7 +2908,20 @@ export interface WorkflowManifest {
   updated_at?: string
   run_retention_count?: number
   post_run_monitor?: boolean
+  pulse?: WorkflowPulseConfig
   backup?: WorkflowBackupConfig
+}
+
+export interface WorkflowPulseConfig {
+  advisor_specialization?: WorkflowAdvisorSpecialization
+}
+
+export interface WorkflowAdvisorSpecialization {
+  version: number
+  strategy_auditor: string
+  goal_advisor: string
+  approved_input_id?: string
+  updated_at?: string
 }
 
 export interface WorkflowCapabilities {
@@ -2866,7 +2952,6 @@ export interface WorkflowExecutionDefaults {
   always_use_same_run: boolean
   // Global step overrides (replaces step_override.json)
   disable_learning?: boolean
-  global_skill_objective?: string
   disable_parallel_tool_execution?: boolean
   execution_max_turns?: number
   enabled_custom_tools?: string[]
@@ -2934,6 +3019,10 @@ export interface UpdateWorkflowManifestRequest {
   pulse_notification_instructions?: string
   run_notification_channels?: string[]
   pulse_notification_channels?: string[]
+  // Send an empty array to clear a recipient list back to the account default;
+  // omit the field to leave it unchanged.
+  run_notification_recipients?: string[]
+  pulse_notification_recipients?: string[]
   notification_instructions?: string
 }
 

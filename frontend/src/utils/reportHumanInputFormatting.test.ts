@@ -43,6 +43,20 @@ describe('report human input context formatting', () => {
     ])
   })
 
+  it('renders both advisor specialization texts as separate sections', () => {
+    const sections = parseReportHumanInputContext(
+      'Proposal: Specialize both reviewers. Strategy Auditor specialization: Check channel concentration. Goal Advisor specialization: Explore partnerships and referral loops.',
+    )
+
+    expect(sections.map(section => section.label)).toEqual([
+      'Proposal',
+      'Strategy auditor specialization',
+      'Goal advisor specialization',
+    ])
+    expect(sections[1].body).toBe('Check channel concentration.')
+    expect(sections[2].body).toBe('Explore partnerships and referral loops.')
+  })
+
   it('keeps consumed inputs in decision history so their outcome remains visible', () => {
     const consumed = {
       ...input('consumed'),
@@ -57,8 +71,10 @@ describe('report human input context formatting', () => {
     expect(reportHumanInputStatusLabel(input('pending'))).toBe('Needs answer')
     expect(reportHumanInputStatusLabel(input('answered'))).toBe('Waiting for Pulse')
     expect(reportHumanInputStatusLabel({ ...input('answered'), source: 'goal_advisor' })).toBe('Waiting for Goal Advisor')
+		expect(reportHumanInputStatusLabel({ ...input('answered'), source: 'strategy_auditor' })).toBe('Waiting for Strategy Auditor')
     expect(reportHumanInputStatusLabel({ ...input('answered'), source: 'chief_of_staff' })).toBe('Waiting for Chief of Staff')
     expect(reportHumanInputStatusLabel({ ...input('claimed'), source: 'goal_advisor' })).toBe('Goal Advisor is working')
+		expect(reportHumanInputStatusLabel({ ...input('claimed'), source: 'strategy_auditor' })).toBe('Strategy Auditor is working')
     expect(reportHumanInputStatusLabel(input('consumed'))).toBe('Action completed')
     expect(reportHumanInputStatusLabel(input('dismissed'))).toBe('Dismissed')
   })

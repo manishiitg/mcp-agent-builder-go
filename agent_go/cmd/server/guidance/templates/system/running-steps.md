@@ -59,8 +59,8 @@ When running a step or the full workflow:
 If the workflow objective, success criteria, or user request names an org
 goal, the run follow-up must point to the concrete evidence that a Chief of
 Staff / Org Pulse pass can use to measure that goal: run outputs under
-`runs/iteration-0/<group>/execution/`, Pulse verdicts in
-`builder/improve.html`, reports under `reports/`, and durable rows/metrics in
+`runs/iteration-0/<group>/execution/`, typed Pulse verdicts, reports under
+`reports/`, and durable rows/metrics in
 `db/db.sqlite`.
 
 Do not edit workspace-level `pulse/goals.html` from workflow run/workshop mode.

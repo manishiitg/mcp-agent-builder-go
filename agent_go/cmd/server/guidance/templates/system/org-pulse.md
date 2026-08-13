@@ -58,7 +58,7 @@ the workflow inventory and missing-alignment result.
 
 For every discovered workflow:
 
-1. Read the latest human-readable Goal verdict and headline in `builder/improve.html`.
+1. Read the latest typed Pulse goal verdict and headline.
 2. Read the workflow's `soul/soul.md` objective only when needed to determine alignment.
 3. Read the specific report, database row, or run artifact named as the source of truth for an org
    goal. Do not broadly audit the workflow.

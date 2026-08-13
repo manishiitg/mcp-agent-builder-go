@@ -26,12 +26,12 @@ func assertRejectionContains(t *testing.T, err error, wants ...string) {
 // A raw json.Unmarshal failure names an internal Go struct field and never the
 // shape that would have worked, which is unusable mid-turn.
 func TestPulseToolDecodeFailuresPublishTheExpectedShape(t *testing.T) {
-	_, err := pulseFindingDispositionsFromToolArg(map[string]interface{}{
+	_, err := pulseFindingDispositionsFromToolArg([]map[string]interface{}{{
 		"fingerprint": "fp-1", "finding_id": "PUL-1",
-	})
+	}})
 	assertRejectionContains(t, err,
 		"finding_dispositions", "array of disposition objects",
-		`"fingerprint"`, `"finding_id"`, `"disposition"`, `"summary"`, `"verification"`)
+		`"issue_id"`, `"disposition"`, `"summary"`, `"verification"`, `unknown field`)
 
 	_, err = pulseFindingDispositionsFromToolArg("fixed_verified")
 	assertRejectionContains(t, err, "array of disposition objects", "not an object or a string")
@@ -40,8 +40,6 @@ func TestPulseToolDecodeFailuresPublishTheExpectedShape(t *testing.T) {
 
 func TestRecordPulseImpactDecodeFailurePublishesTheExpectedShape(t *testing.T) {
 	_, executor := createRecordPulseImpactTool()
-	release := registerTrustedPulseSession("impact-shape-session", "impact-shape-run")
-	defer release()
 	ctx := mcpexecutor.WithSessionID(context.Background(), "impact-shape-session")
 
 	_, err := executor(ctx, map[string]interface{}{
@@ -68,27 +66,27 @@ func TestPulseWorklistUnknownFieldNamesAllowedSetAndSuggestsIntent(t *testing.T)
 	}{
 		{
 			name: "decision alias still points at the boolean due field",
-			item: map[string]interface{}{"module": pulseModuleBugReview, "decision": "due", "reason": "test"},
+			item: map[string]interface{}{"module": pulseModuleWorkflowReview, "decision": "due", "reason": "test"},
 			want: []string{`unknown field "decision"`, "use the required boolean field due"},
 		},
 		{
 			name: "status alias points at due",
-			item: map[string]interface{}{"module": pulseModuleBugReview, "status": "due", "reason": "test"},
+			item: map[string]interface{}{"module": pulseModuleWorkflowReview, "status": "due", "reason": "test"},
 			want: []string{`unknown field "status"`, "use the required boolean field due"},
 		},
 		{
 			name: "rationale points at reason",
-			item: map[string]interface{}{"module": pulseModuleBugReview, "due": true, "rationale": "test"},
+			item: map[string]interface{}{"module": pulseModuleWorkflowReview, "due": true, "rationale": "test"},
 			want: []string{`unknown field "rationale"`, `did you mean "reason"`},
 		},
 		{
 			name: "near-miss spelling points at the field it nearly matched",
-			item: map[string]interface{}{"module": pulseModuleBugReview, "due": true, "reason": "r", "cooldown": 2},
+			item: map[string]interface{}{"module": pulseModuleWorkflowReview, "due": true, "reason": "r", "cooldown": 2},
 			want: []string{`unknown field "cooldown"`, `did you mean "cooldown_runs"`},
 		},
 		{
 			name: "unrecognized field still gets the complete allowed set",
-			item: map[string]interface{}{"module": pulseModuleBugReview, "due": true, "reason": "r", "zzz": 1},
+			item: map[string]interface{}{"module": pulseModuleWorkflowReview, "due": true, "reason": "r", "zzz": 1},
 			want: []string{`unknown field "zzz"`},
 		},
 	}
@@ -101,24 +99,24 @@ func TestPulseWorklistUnknownFieldNamesAllowedSetAndSuggestsIntent(t *testing.T)
 }
 
 func TestPulseWorklistArgumentShapeRejectionsAreActionable(t *testing.T) {
-	_, err := pulseWorklistDecisionsFromArgs("bug_review")
+	_, err := pulseWorklistDecisionsFromArgs("workflow_review")
 	assertRejectionContains(t, err, "decisions must be an array", `"module"`, `"due"`, `"reason"`)
 
-	_, err = pulseWorklistDecisionsFromArgs([]interface{}{"bug_review"})
+	_, err = pulseWorklistDecisionsFromArgs([]interface{}{"workflow_review"})
 	assertRejectionContains(t, err, "decisions[0] must be an object", `"module"`, `"due"`, `"reason"`, "string")
 
 	_, err = pulseWorklistDecisionsFromArgs([]interface{}{
-		map[string]interface{}{"module": pulseModuleBugReview, "due": true},
+		map[string]interface{}{"module": pulseModuleWorkflowReview, "due": true},
 	})
 	assertRejectionContains(t, err, "decisions[0].reason", "module, due, and reason", "nothing")
 
 	_, err = pulseWorklistDecisionsFromArgs([]interface{}{
-		map[string]interface{}{"module": pulseModuleBugReview, "due": true, "reason": "r", "cooldown_runs": "two"},
+		map[string]interface{}{"module": pulseModuleWorkflowReview, "due": true, "reason": "r", "cooldown_runs": "two"},
 	})
 	assertRejectionContains(t, err, "decisions[0].cooldown_runs", "integer", "a string")
 
 	_, err = pulseWorklistDecisionsFromArgs([]interface{}{
-		map[string]interface{}{"module": pulseModuleBugReview, "due": true, "reason": "r", "evidence": "one thing"},
+		map[string]interface{}{"module": pulseModuleWorkflowReview, "due": true, "reason": "r", "evidence": "one thing"},
 	})
 	assertRejectionContains(t, err, "decisions[0].evidence", "array of strings", "a string")
 }
@@ -138,12 +136,12 @@ func TestPulseWorklistClosedSetRejectionsPrintTheirMembers(t *testing.T) {
 	err = validatePulseWorklistDecisions(completePulseWorklistDecisions(nil)[:1])
 	assertRejectionContains(t, err, append([]string{"exactly one entry for each Pulse module"}, pulseModuleOrder...)...)
 
-	_, err = markPulseModuleResult(ctx, t.TempDir(), pulseModuleBugReview, "pulse-1", "finished", "reason", nil)
+	_, err = markPulseModuleResult(ctx, t.TempDir(), pulseModuleWorkflowReview, "pulse-1", "finished", "reason", nil)
 	assertRejectionContains(t, err, `result "finished" is not valid`, "Must be one of:",
 		"done", "changed", "blocked", "failed", "skipped", "timed_out")
 
 	_, err = markPulseModuleResultFromAgentWithAuditAndFindings(
-		ctx, t.TempDir(), pulseModuleBugReview, "pulse-1", "finished", "reason", nil,
+		ctx, t.TempDir(), pulseModuleWorkflowReview, "pulse-1", "finished", "reason", nil,
 		PulseModuleAuditInput{}, nil,
 	)
 	assertRejectionContains(t, err, `result "finished" is not valid`, "Must be one of:",
@@ -157,14 +155,12 @@ func TestPulseWorklistClosedSetRejectionsPrintTheirMembers(t *testing.T) {
 func TestMarkPulseModuleResultChangedNamesTheWholeRequiredSet(t *testing.T) {
 	_, executors, _ := createPulseWorklistTools()
 	execute := executors["record_pulse_result"].(func(context.Context, map[string]interface{}) (string, error))
-	release := registerTrustedPulseSession("changed-set-session", "changed-set-run")
-	defer release()
 	ctx := mcpexecutor.WithSessionID(context.Background(), "changed-set-session")
 
 	base := map[string]interface{}{
 		"workspace_path": "Workflow/testing",
 		"pulse_run_id":   "changed-set-run",
-		"module":         pulseModuleBugReview,
+		"module":         pulseModuleWorkflowReview,
 		"result":         "changed",
 		"reason":         "fixed the selector",
 	}

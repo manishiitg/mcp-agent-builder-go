@@ -46,16 +46,20 @@ type Entry struct {
 	// the turn with — may drift from ModelID when the user picked an
 	// alias like "auto" or "cursor-cli", or when a /model swap happened
 	// mid-session. Empty when the provider doesn't surface it.
-	EffectiveProvider string  `json:"effective_provider,omitempty"`
-	EffectiveModelID  string  `json:"effective_model_id,omitempty"`
-	TurnCount         int     `json:"turn_count,omitempty"`
-	LLMCallCount      int     `json:"llm_call_count,omitempty"`
-	PromptTokens      int     `json:"prompt_tokens,omitempty"`
-	CompletionTokens  int     `json:"completion_tokens,omitempty"`
-	ReasoningTokens   int     `json:"reasoning_tokens,omitempty"`
-	CacheReadTokens   int     `json:"cache_read_tokens,omitempty"`
-	CacheWriteTokens  int     `json:"cache_write_tokens,omitempty"`
-	TotalCostUSD      float64 `json:"total_cost_usd,omitempty"`
+	EffectiveProvider string `json:"effective_provider,omitempty"`
+	EffectiveModelID  string `json:"effective_model_id,omitempty"`
+	TurnCount         int    `json:"turn_count,omitempty"`
+	LLMCallCount      int    `json:"llm_call_count,omitempty"`
+	// LLMGenerationDurationMS is time spent waiting for model responses. It is
+	// intentionally not an agent wall-clock duration: tool work and queueing
+	// are not present on each cost event and must not be implied by this value.
+	LLMGenerationDurationMS int64   `json:"llm_generation_duration_ms,omitempty"`
+	PromptTokens            int     `json:"prompt_tokens,omitempty"`
+	CompletionTokens        int     `json:"completion_tokens,omitempty"`
+	ReasoningTokens         int     `json:"reasoning_tokens,omitempty"`
+	CacheReadTokens         int     `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens        int     `json:"cache_write_tokens,omitempty"`
+	TotalCostUSD            float64 `json:"total_cost_usd,omitempty"`
 	// CostUSDSource flags whether TotalCostUSD came from the provider
 	// ("provider", e.g. claude's total_cost_usd) or was computed
 	// downstream from tokens × registry rates ("estimated"). For
@@ -83,6 +87,7 @@ type Aggregate struct {
 	CacheWriteTokens         int     `json:"cache_write_tokens"`
 	TotalCostUSD             float64 `json:"total_cost_usd"`
 	CallCount                int     `json:"call_count"`
+	LLMGenerationDurationMS  int64   `json:"llm_generation_duration_ms"`
 	AccountingEventCount     int     `json:"accounting_event_count"`
 	UnpricedCallCount        int     `json:"unpriced_call_count"`
 	ProviderActualCostUSD    float64 `json:"provider_actual_cost_usd"`
@@ -120,6 +125,7 @@ func (a *Aggregate) add(e Entry) {
 	a.CacheWriteTokens += e.CacheWriteTokens
 	a.TotalCostUSD += e.TotalCostUSD
 	a.CallCount += e.LLMCallCount
+	a.LLMGenerationDurationMS += e.LLMGenerationDurationMS
 	a.AccountingEventCount++
 	if e.LLMCallCount > 0 && e.BillingBasis == "unpriced" {
 		a.UnpricedCallCount += e.LLMCallCount
@@ -146,17 +152,29 @@ func (a *Aggregate) add(e Entry) {
 // row.
 type DateAggregate struct {
 	Aggregate
-	ByModel map[string]*Aggregate `json:"by_model,omitempty"`
+	ByModel          map[string]*Aggregate      `json:"by_model,omitempty"`
+	ByScope          map[string]*ScopeAggregate `json:"by_scope,omitempty"`
+	WorkflowRunCount int                        `json:"workflow_run_count,omitempty"`
+	workflowRunIDs   map[string]struct{}
+}
+
+// ScopeAggregate rolls a scope up while retaining the individual runtime
+// executions that produced it. This is the canonical hierarchy used by the
+// cost UI: builder/pulse/workflow/evaluation, then their child agents/steps.
+type ScopeAggregate struct {
+	Aggregate
+	ByExecution map[string]*Aggregate `json:"by_execution,omitempty"`
 }
 
 // Summary is the aggregated view returned by Summarize.
 type Summary struct {
-	From     string                    `json:"from,omitempty"`
-	To       string                    `json:"to,omitempty"`
-	Total    Aggregate                 `json:"total"`
-	ByDate   map[string]*DateAggregate `json:"by_date"`  // YYYY-MM-DD UTC
-	ByModel  map[string]*Aggregate     `json:"by_model"` // model_id
-	Coverage Coverage                  `json:"coverage"`
+	From     string                     `json:"from,omitempty"`
+	To       string                     `json:"to,omitempty"`
+	Total    Aggregate                  `json:"total"`
+	ByDate   map[string]*DateAggregate  `json:"by_date"`  // YYYY-MM-DD UTC
+	ByModel  map[string]*Aggregate      `json:"by_model"` // model_id
+	ByScope  map[string]*ScopeAggregate `json:"by_scope,omitempty"`
+	Coverage Coverage                   `json:"coverage"`
 }
 
 // Coverage reports whether the aggregate omitted or could not price evidence.
@@ -199,7 +217,7 @@ func DefaultLedger() *Ledger {
 
 type sqliteStore interface {
 	append(Entry) error
-	summarize(from, to, executionID string) (*Summary, error)
+	summarize(from, to, executionID, workflowID string) (*Summary, error)
 	migrateLegacyJSONL(path string) (MigrationReport, error)
 	close() error
 }
@@ -329,9 +347,9 @@ func (l *Ledger) Summarize(from, to string) (*Summary, error) {
 		return nil, fmt.Errorf("costledger: nil ledger")
 	}
 	if l.db != nil {
-		return l.db.summarize(from, to, "")
+		return l.db.summarize(from, to, "", "")
 	}
-	return l.summarizeLegacy(from, to, "")
+	return l.summarizeLegacy(from, to, "", "")
 }
 
 // SummarizeExecution returns the exact cost and token rows attributed to one
@@ -347,12 +365,28 @@ func (l *Ledger) SummarizeExecution(executionID string) (*Summary, error) {
 		return nil, fmt.Errorf("costledger: execution id is required")
 	}
 	if l.db != nil {
-		return l.db.summarize("", "", executionID)
+		return l.db.summarize("", "", executionID, "")
 	}
-	return l.summarizeLegacy("", "", executionID)
+	return l.summarizeLegacy("", "", executionID, "")
 }
 
-func (l *Ledger) summarizeLegacy(from, to, executionID string) (*Summary, error) {
+// SummarizeWorkflow returns only events attributed to one workflow. The exact
+// workflow id is the workspace-relative path recorded on every cost event.
+func (l *Ledger) SummarizeWorkflow(workflowID string) (*Summary, error) {
+	if l == nil {
+		return nil, fmt.Errorf("costledger: nil ledger")
+	}
+	workflowID = strings.TrimSpace(workflowID)
+	if workflowID == "" {
+		return nil, fmt.Errorf("costledger: workflow id is required")
+	}
+	if l.db != nil {
+		return l.db.summarize("", "", "", workflowID)
+	}
+	return l.summarizeLegacy("", "", "", workflowID)
+}
+
+func (l *Ledger) summarizeLegacy(from, to, executionID, workflowID string) (*Summary, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -361,6 +395,7 @@ func (l *Ledger) summarizeLegacy(from, to, executionID string) (*Summary, error)
 		To:       to,
 		ByDate:   make(map[string]*DateAggregate),
 		ByModel:  make(map[string]*Aggregate),
+		ByScope:  make(map[string]*ScopeAggregate),
 		Coverage: Coverage{Source: "legacy_jsonl"},
 	}
 
@@ -395,6 +430,9 @@ func (l *Ledger) summarizeLegacy(from, to, executionID string) (*Summary, error)
 		if executionID != "" && e.ExecutionID != executionID {
 			continue
 		}
+		if workflowID != "" && e.WorkflowID != workflowID {
+			continue
+		}
 		addEntryToSummary(summary, date, e)
 	}
 	if err := sc.Err(); err != nil {
@@ -422,12 +460,58 @@ func (l *Ledger) MigrateLegacyJSONL(path string) (MigrationReport, error) {
 
 func addEntryToSummary(summary *Summary, date string, e Entry) {
 	summary.Total.add(e)
+	if summary.ByScope == nil {
+		summary.ByScope = make(map[string]*ScopeAggregate)
+	}
+	scope := strings.TrimSpace(e.Scope)
+	if scope == "" {
+		scope = "unknown"
+	}
+	scopeBucket, ok := summary.ByScope[scope]
+	if !ok {
+		scopeBucket = &ScopeAggregate{ByExecution: make(map[string]*Aggregate)}
+		summary.ByScope[scope] = scopeBucket
+	}
+	scopeBucket.Aggregate.add(e)
+	executionID := strings.TrimSpace(e.ExecutionID)
+	if executionID == "" && strings.TrimSpace(e.SessionID) != "" {
+		executionID = "session:" + strings.TrimSpace(e.SessionID)
+	}
+	if executionID == "" {
+		executionID = "unattributed"
+	}
+	executionBucket, ok := scopeBucket.ByExecution[executionID]
+	if !ok {
+		executionBucket = &Aggregate{}
+		scopeBucket.ByExecution[executionID] = executionBucket
+	}
+	executionBucket.add(e)
 	bucket, ok := summary.ByDate[date]
 	if !ok {
-		bucket = &DateAggregate{ByModel: make(map[string]*Aggregate)}
+		bucket = &DateAggregate{
+			ByModel:        make(map[string]*Aggregate),
+			ByScope:        make(map[string]*ScopeAggregate),
+			workflowRunIDs: make(map[string]struct{}),
+		}
 		summary.ByDate[date] = bucket
 	}
 	bucket.Aggregate.add(e)
+	dateScopeBucket, ok := bucket.ByScope[scope]
+	if !ok {
+		dateScopeBucket = &ScopeAggregate{ByExecution: make(map[string]*Aggregate)}
+		bucket.ByScope[scope] = dateScopeBucket
+	}
+	dateScopeBucket.Aggregate.add(e)
+	dateExecutionBucket, ok := dateScopeBucket.ByExecution[executionID]
+	if !ok {
+		dateExecutionBucket = &Aggregate{}
+		dateScopeBucket.ByExecution[executionID] = dateExecutionBucket
+	}
+	dateExecutionBucket.add(e)
+	if scope == "workflow_execution" && strings.TrimSpace(e.RunID) != "" {
+		bucket.workflowRunIDs[e.RunID] = struct{}{}
+		bucket.WorkflowRunCount = len(bucket.workflowRunIDs)
+	}
 	modelID := e.EffectiveModelID
 	if modelID == "" {
 		modelID = e.ModelID

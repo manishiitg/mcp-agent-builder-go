@@ -6,6 +6,7 @@ describe('Pulse workspace registry', () => {
     const moduleIds = PULSE_MODULE_COMMANDS.map(module => module.id)
     expect(moduleIds).toEqual([
       'workflow_review',
+      'llm_ops_review',
       'strategy_auditor',
       'goal_advisor',
     ])

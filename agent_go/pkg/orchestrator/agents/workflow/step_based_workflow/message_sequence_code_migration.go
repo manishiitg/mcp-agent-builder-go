@@ -189,6 +189,12 @@ func createMigrateMessageSequenceCodeItemsExecutor(
 			Tool:    "migrate_message_sequence_code_items",
 			Reason:  "Move deterministic code out of hidden message-sequence items into visible standalone scripted steps for workflow contract v1.0.10.",
 			StepIDs: append(append([]string{}, result.SequenceIDs...), result.ScriptedIDs...),
+			// planContent/migratedPlan are the real pre/post planning/plan.json
+			// content already in scope from the rewrite above — wire them in so
+			// the changelog records a real diff instead of the empty-Changes
+			// placeholder (PLAT-074).
+			BeforeSnapshot: json.RawMessage(planContent),
+			AfterSnapshot:  json.RawMessage(migratedPlan),
 		}, readFile, withPlanMutationWriteAccess(workspacePath, writeFile), logger)
 
 		payload, _ := json.Marshal(result)
@@ -457,19 +463,14 @@ func cloneMigrationStepConfig(parent *StepConfig, item legacyMessageSequenceCode
 		unlocked := false
 		agent.LockCode = &unlocked
 	}
-	if migrationCodeItemWritesDB(item) {
-		agent.DBAccess = DBAccessReadWrite
-	} else {
-		agent.DBAccess = DBAccessRead
-	}
-	retries := 0
-	if item.OnFailure.Action == "repair_with_llm" || item.OnFailure.Action == "repair_same_session" {
-		retries = item.OnFailure.MaxRetries
-		if retries <= 0 {
-			retries = 1
-		}
-	}
-	agent.ScriptedMaxFixIter = &retries
+	// db_access was removed in PLAT-061: it never narrowed anything — every
+	// workflow step receives managed read-write access — so deriving it from
+	// whether the migrated item touched the DB was writing a field the runtime
+	// discarded.
+	// PLAT-061: the migration no longer derives a fix-iteration count. It wrote 0
+	// for every item without a legacy repair action, which read as a deliberate
+	// "never repair" but was only the absence of a legacy field. Scripted steps
+	// now use the uniform default; lock_code is the explicit way to skip repair.
 	return StepConfig{ID: item.ID, Title: title, AgentConfigs: &agent}
 }
 
@@ -484,19 +485,6 @@ func mergeMigrationValidationSchemas(a, b *ValidationSchema) *ValidationSchema {
 		Files: append(append([]FileValidationRule{}, a.Files...), b.Files...),
 		DB:    append(append([]DBValidationRule{}, a.DB...), b.DB...),
 	}
-}
-
-func migrationCodeItemWritesDB(item legacyMessageSequenceCodeItem) bool {
-	if item.WriteAccess.DB {
-		return true
-	}
-	for _, output := range item.OutputFiles {
-		clean := filepath.ToSlash(filepath.Clean(strings.TrimSpace(output)))
-		if clean == "db" || strings.HasPrefix(clean, "db/") || strings.Contains(clean, "/db/") {
-			return true
-		}
-	}
-	return false
 }
 
 func collectRawPlanStepIDs(raw json.RawMessage, ids map[string]bool) {

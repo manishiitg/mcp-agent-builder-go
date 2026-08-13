@@ -33,16 +33,17 @@ func TestSQLiteLedgerConcurrentAppendsAreIdempotent(t *testing.T) {
 	errCh := make(chan error, eventCount*2)
 	for i := 0; i < eventCount; i++ {
 		entry := Entry{
-			EventID:          fmt.Sprintf("event-%d", i),
-			IdempotencyKey:   fmt.Sprintf("call-%d", i),
-			Timestamp:        time.Date(2026, 7, 13, 10, 0, i, 0, time.UTC),
-			Provider:         "codex-cli",
-			ModelID:          "auto",
-			EffectiveModelID: "gpt-5.6-sol",
-			LLMCallCount:     1,
-			PromptTokens:     100,
-			TotalCostUSD:     0.01,
-			BillingBasis:     "subscription_shadow",
+			EventID:                 fmt.Sprintf("event-%d", i),
+			IdempotencyKey:          fmt.Sprintf("call-%d", i),
+			Timestamp:               time.Date(2026, 7, 13, 10, 0, i, 0, time.UTC),
+			Provider:                "codex-cli",
+			ModelID:                 "auto",
+			EffectiveModelID:        "gpt-5.6-sol",
+			LLMCallCount:            1,
+			LLMGenerationDurationMS: int64(100 + i),
+			PromptTokens:            100,
+			TotalCostUSD:            0.01,
+			BillingBasis:            "subscription_shadow",
 		}
 		for _, ledger := range []*Ledger{first, second} {
 			wg.Add(1)
@@ -87,18 +88,19 @@ func TestSummarizeExecutionDoesNotMixParallelAgents(t *testing.T) {
 
 	for i, executionID := range []string{"pulse-review-workflow", "pulse-review-strategy", "pulse-review-workflow"} {
 		if err := ledger.Append(Entry{
-			EventID:          fmt.Sprintf("pulse-event-%d", i),
-			IdempotencyKey:   fmt.Sprintf("pulse-call-%d", i),
-			Timestamp:        time.Date(2026, 8, 3, 6, i, 0, 0, time.UTC),
-			ExecutionID:      executionID,
-			Scope:            "pulse",
-			EffectiveModelID: "claude-opus-5",
-			LLMCallCount:     1,
-			PromptTokens:     100 + i,
-			CompletionTokens: 10 + i,
-			CacheReadTokens:  1000 + i,
-			TotalCostUSD:     float64(i+1) / 10,
-			BillingBasis:     "provider_actual",
+			EventID:                 fmt.Sprintf("pulse-event-%d", i),
+			IdempotencyKey:          fmt.Sprintf("pulse-call-%d", i),
+			Timestamp:               time.Date(2026, 8, 3, 6, i, 0, 0, time.UTC),
+			ExecutionID:             executionID,
+			Scope:                   "pulse",
+			EffectiveModelID:        "claude-opus-5",
+			LLMCallCount:            1,
+			LLMGenerationDurationMS: int64(100 + i),
+			PromptTokens:            100 + i,
+			CompletionTokens:        10 + i,
+			CacheReadTokens:         1000 + i,
+			TotalCostUSD:            float64(i+1) / 10,
+			BillingBasis:            "provider_actual",
 		}); err != nil {
 			t.Fatalf("Append(%d) error = %v", i, err)
 		}
@@ -113,6 +115,50 @@ func TestSummarizeExecutionDoesNotMixParallelAgents(t *testing.T) {
 	}
 	if math.Abs(summary.Total.TotalCostUSD-0.4) > 1e-9 {
 		t.Fatalf("TotalCostUSD = %v, want 0.4", summary.Total.TotalCostUSD)
+	}
+	if summary.Total.LLMGenerationDurationMS != 202 {
+		t.Fatalf("LLMGenerationDurationMS = %d, want 202", summary.Total.LLMGenerationDurationMS)
+	}
+}
+
+func TestSummarizeWorkflowGroupsScopeAndChildExecution(t *testing.T) {
+	ledger, err := NewSQLiteLedger(filepath.Join(t.TempDir(), "costs.sqlite"))
+	if err != nil {
+		t.Fatalf("NewSQLiteLedger() error = %v", err)
+	}
+	defer ledger.Close()
+
+	entries := []Entry{
+		{EventID: "builder", IdempotencyKey: "builder", WorkflowID: "Workflow/demo", Scope: "builder", ExecutionID: "builder-turn", LLMCallCount: 1, TotalCostUSD: 1},
+		{EventID: "pulse-a", IdempotencyKey: "pulse-a", WorkflowID: "Workflow/demo", Scope: "pulse", ExecutionID: "engineering-review", LLMCallCount: 1, TotalCostUSD: 2},
+		{EventID: "pulse-b", IdempotencyKey: "pulse-b", WorkflowID: "Workflow/demo", Scope: "pulse", ExecutionID: "engineering-review", LLMCallCount: 1, TotalCostUSD: 3},
+		{EventID: "run-a", IdempotencyKey: "run-a", WorkflowID: "Workflow/demo", Scope: "workflow_execution", RunID: "run-a", ExecutionID: "step-a", LLMCallCount: 1, TotalCostUSD: 4},
+		{EventID: "run-a-second-call", IdempotencyKey: "run-a-second-call", WorkflowID: "Workflow/demo", Scope: "workflow_execution", RunID: "run-a", ExecutionID: "step-b", LLMCallCount: 1, TotalCostUSD: 5},
+		{EventID: "other", IdempotencyKey: "other", WorkflowID: "Workflow/other", Scope: "pulse", ExecutionID: "engineering-review", LLMCallCount: 1, TotalCostUSD: 100},
+	}
+	for i := range entries {
+		entries[i].Timestamp = time.Date(2026, 8, 12, 1, i, 0, 0, time.UTC)
+		if err := ledger.Append(entries[i]); err != nil {
+			t.Fatalf("Append(%q) error = %v", entries[i].EventID, err)
+		}
+	}
+
+	summary, err := ledger.SummarizeWorkflow("Workflow/demo")
+	if err != nil {
+		t.Fatalf("SummarizeWorkflow() error = %v", err)
+	}
+	if summary.Total.CallCount != 5 || summary.Total.TotalCostUSD != 15 {
+		t.Fatalf("workflow filter failed: total = %#v", summary.Total)
+	}
+	if got := summary.ByScope["pulse"]; got == nil || got.CallCount != 2 || got.TotalCostUSD != 5 {
+		t.Fatalf("pulse scope = %#v, want 2 calls and $5", got)
+	}
+	if got := summary.ByScope["pulse"].ByExecution["engineering-review"]; got == nil || got.CallCount != 2 || got.TotalCostUSD != 5 {
+		t.Fatalf("pulse child execution = %#v, want 2 calls and $5", got)
+	}
+	day := summary.ByDate["2026-08-12"]
+	if day == nil || day.ByScope["pulse"].TotalCostUSD != 5 || day.ByScope["workflow_execution"].TotalCostUSD != 9 || day.WorkflowRunCount != 1 {
+		t.Fatalf("daily category attribution = %#v, want pulse=$5 workflow=$9 and one workflow run", day)
 	}
 }
 

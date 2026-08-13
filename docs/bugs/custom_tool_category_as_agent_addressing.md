@@ -21,6 +21,24 @@ but the later prompt-delivery failure disproved the stronger claim that the
 agent-facing tool contract was complete. Tool-name uniqueness is detected but
 not yet enforced. See "Coverage audit" and "Why this now warrants a refactor".
 
+**2026-08-04 follow-up:** the same ambiguity remained in the generated tool
+manifest even after name-only `get_api_spec` resolution was fixed. It rendered
+the custom display group `workflow_db` in the same flat object as real MCP
+servers, immediately followed by the generic example
+`$MCP_MCP/{server}/{tool}`. A workflow agent therefore called
+`$MCP_MCP/workflow_db/query_workflow_db` and received `requested MCP server
+'workflow_db' not found in config`; its next name-only `get_api_spec` call
+correctly recovered `$MCP_CUSTOM/query_workflow_db`. The prompt was teaching
+both the mistake and its recovery.
+
+The manifest now has two explicit namespaces: `custom_tools` carries
+`endpoint: $MCP_CUSTOM/{tool}` with display-only `groups`, while `mcp_servers`
+contains the only legal `$MCP_MCP/{server}/{tool}` server keys and includes the
+resolved endpoint beside every server. The code-execution examples now show
+the custom route first and state that group labels are never server names or
+URL segments. Regression coverage pins both the JSON structure and the prompt
+language.
+
 Code referenced here lives in `manishiitg/mcpagent`, not this repository.
 
 ## How often this actually fires

@@ -233,7 +233,7 @@ cleanup_coding_agent_tmux_sessions() {
     local count=0
     while IFS= read -r session; do
         case "$session" in
-            mlp-claude-code-exp*|mlp-codex-cli-int*|mlp-cursor-cli-int*|mlp-agy-cli-int*|mlp-pi-cli-int*)
+            mlp-claude-code-*|mlp-codex-cli-*|mlp-cursor-cli-*|mlp-agy-cli-*|mlp-pi-cli-*)
                 tmux kill-session -t "$session" 2>/dev/null || true
                 count=$((count + 1))
                 ;;
@@ -1738,13 +1738,35 @@ for ab_dir in "$HOME/.agent-browser" "/tmp/.agent-browser"; do
 done
 fi
 
+# PLAT-072: stamp the platform revision into the binary.
+#
+# Findings record what they observed but not what they observed it against, so a
+# fixed problem is indistinguishable from a live one and staleness becomes a
+# memory test. Go's own VCS stamping cannot supply this here: a go.work at
+# /Users/mipl/ai-work puts the build in workspace mode, which disables -buildvcs
+# silently (even -buildvcs=true produces no vcs.* settings), so the revision has
+# to be injected explicitly.
+#
+# An empty value is a legitimate "unknown" and is handled as such by the reader;
+# it must never be treated as "old".
+PLATFORM_REVISION="$(git -C "$(dirname "$0")/.." rev-parse --short=12 HEAD 2>/dev/null || echo "")"
+if [ -n "$PLATFORM_REVISION" ] && [ -n "$(git -C "$(dirname "$0")/.." status --porcelain 2>/dev/null)" ]; then
+    PLATFORM_REVISION="${PLATFORM_REVISION}+dirty"
+fi
+GO_LDFLAGS="-X github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow.injectedPlatformVersion=${PLATFORM_REVISION}"
+if [ -n "$PLATFORM_REVISION" ]; then
+    echo "🔖 Platform revision: $PLATFORM_REVISION"
+else
+    echo "🔖 Platform revision: unknown (not a git checkout) — findings will record no version"
+fi
+
 # Run the server with all the enhanced configuration
 echo "🚀 Starting server with 'go run'..."
 
 if [ "$BACKGROUND_MODE" = true ]; then
     # Background mode: run in background and capture PID
     echo "🔄 Starting server in background mode..."
-    nohup go run main.go server \
+    nohup go run -ldflags "$GO_LDFLAGS" main.go server \
         --port "$AGENT_PORT" \
         --log-level debug \
         --debug \
@@ -1801,7 +1823,7 @@ elif [ "$WITH_FRONTEND" = true ]; then
     # then tail the server log so the user still sees server output.
     echo "🔄 Starting server in foreground mode (with frontend)..."
     echo "   Agent API URL: $MCP_AGENT_SERVER_URL"
-    nohup go run main.go server \
+    nohup go run -ldflags "$GO_LDFLAGS" main.go server \
         --port "$AGENT_PORT" \
         --log-level debug \
         --debug \
@@ -1834,7 +1856,7 @@ else
     echo "   Agent API URL: $MCP_AGENT_SERVER_URL"
     echo ""
 
-    go run main.go server \
+    go run -ldflags "$GO_LDFLAGS" main.go server \
         --port "$AGENT_PORT" \
         --log-level debug \
         --debug \

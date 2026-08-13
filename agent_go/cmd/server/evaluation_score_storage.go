@@ -16,10 +16,27 @@ var (
 )
 
 type evaluationScoreDailyFile struct {
-	Date        string                       `json:"date"`
-	GroupFolder string                       `json:"group_folder"`
-	UpdatedAt   time.Time                    `json:"updated_at"`
-	RunFolders  map[string]*EvaluationReport `json:"run_folders"`
+	Date        string                             `json:"date"`
+	GroupFolder string                             `json:"group_folder"`
+	UpdatedAt   time.Time                          `json:"updated_at"`
+	Evaluations map[string]*storedEvaluationReport `json:"evaluations,omitempty"`
+	RunFolders  map[string]*EvaluationReport       `json:"run_folders,omitempty"`
+}
+
+type storedEvaluationReport struct {
+	RunFolder         string            `json:"run_folder"`
+	ArchivedRunFolder string            `json:"archived_run_folder,omitempty"`
+	Report            *EvaluationReport `json:"report"`
+}
+
+func (r *storedEvaluationReport) effectiveRunFolder() string {
+	if r == nil {
+		return ""
+	}
+	if strings.TrimSpace(r.ArchivedRunFolder) != "" {
+		return r.ArchivedRunFolder
+	}
+	return r.RunFolder
 }
 
 func ensureWorkspaceEvaluationScoreMigration(ctx context.Context, workspacePath string) error {
@@ -132,6 +149,7 @@ func persistEvaluationReportToScores(ctx context.Context, workspacePath, runFold
 		Date:        evaluationScoreDateKey(persistAt),
 		GroupFolder: evaluationScoreGroupFolder(runFolder),
 		UpdatedAt:   time.Now().UTC(),
+		Evaluations: make(map[string]*storedEvaluationReport),
 		RunFolders:  make(map[string]*EvaluationReport),
 	}
 
@@ -141,6 +159,9 @@ func persistEvaluationReportToScores(ctx context.Context, workspacePath, runFold
 			if existing.RunFolders == nil {
 				existing.RunFolders = make(map[string]*EvaluationReport)
 			}
+			if existing.Evaluations == nil {
+				existing.Evaluations = make(map[string]*storedEvaluationReport)
+			}
 			dailyFile = &existing
 		}
 	}
@@ -148,7 +169,11 @@ func persistEvaluationReportToScores(ctx context.Context, workspacePath, runFold
 	dailyFile.Date = evaluationScoreDateKey(persistAt)
 	dailyFile.GroupFolder = evaluationScoreGroupFolder(runFolder)
 	dailyFile.UpdatedAt = time.Now().UTC()
-	dailyFile.RunFolders[runFolder] = report
+	if strings.TrimSpace(report.EvaluationID) != "" {
+		dailyFile.Evaluations[report.EvaluationID] = &storedEvaluationReport{RunFolder: runFolder, Report: report}
+	} else {
+		dailyFile.RunFolders[runFolder] = report
+	}
 
 	jsonData, err := json.MarshalIndent(dailyFile, "", "  ")
 	if err != nil {
@@ -161,14 +186,14 @@ func persistEvaluationReportToScores(ctx context.Context, workspacePath, runFold
 	return nil
 }
 
-func readAllEvaluationReportsFromScores(ctx context.Context, workspacePath string) (map[string]EvaluationReport, error) {
+func readAllEvaluationReportsFromScores(ctx context.Context, workspacePath string) (map[string]*storedEvaluationReport, error) {
 	if err := ensureWorkspaceEvaluationScoreMigration(ctx, workspacePath); err != nil {
 		return nil, err
 	}
 
 	root := workspaceCostPath(workspacePath, "scores", "evaluation")
 	if !evaluationScoresRootExists(ctx, workspacePath) {
-		return map[string]EvaluationReport{}, nil
+		return map[string]*storedEvaluationReport{}, nil
 	}
 
 	filePaths, err := listWorkspaceFilesRecursive(ctx, root)
@@ -176,7 +201,7 @@ func readAllEvaluationReportsFromScores(ctx context.Context, workspacePath strin
 		return nil, err
 	}
 
-	result := make(map[string]EvaluationReport)
+	result := make(map[string]*storedEvaluationReport)
 	for _, filePath := range filePaths {
 		if !strings.HasSuffix(filePath, ".json") {
 			continue
@@ -195,14 +220,24 @@ func readAllEvaluationReportsFromScores(ctx context.Context, workspacePath strin
 			continue
 		}
 
+		for evaluationID, stored := range dailyFile.Evaluations {
+			if stored == nil || stored.Report == nil || strings.TrimSpace(evaluationID) == "" {
+				continue
+			}
+			existing := result[evaluationID]
+			if existing == nil || evaluationScoreGeneratedAt(stored.Report).After(evaluationScoreGeneratedAt(existing.Report)) {
+				result[evaluationID] = stored
+			}
+		}
+
 		for runFolder, report := range dailyFile.RunFolders {
 			if report == nil {
 				continue
 			}
-
-			existing, ok := result[runFolder]
-			if !ok || evaluationScoreGeneratedAt(report).After(evaluationScoreGeneratedAt(&existing)) {
-				result[runFolder] = *report
+			legacyID := "legacy:" + runFolder + ":" + strings.TrimSpace(report.GeneratedAt)
+			existing := result[legacyID]
+			if existing == nil || evaluationScoreGeneratedAt(report).After(evaluationScoreGeneratedAt(existing.Report)) {
+				result[legacyID] = &storedEvaluationReport{RunFolder: runFolder, Report: report}
 			}
 		}
 	}

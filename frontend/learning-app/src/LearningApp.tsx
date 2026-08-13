@@ -155,18 +155,19 @@ function dateOnlyLabel(iso?: string): string {
   return new Date(t).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' })
 }
 
-// activityMode turns an activity's teaching_mode into the one word a parent
-// actually cares about when scanning their library: is this something she'll
-// be taught, something she'll practise, or something she's being tested on?
-// It's already recorded on every activity but was invisible in the UI until
-// now. Colours reuse the app's own long-standing guides/tests/reports tints.
-function activityMode(mode?: string): { label: string; cls: string } | null {
-  switch (mode) {
-    case 'beginner': return { label: 'Learn', cls: 'is-learn' }
-    case 'graduated': return { label: 'Practice', cls: 'is-practice' }
-    case 'strict': return { label: 'Test', cls: 'is-test' }
-    default: return null // older activities predate the field — say nothing rather than guess
-  }
+// formatDuration renders an activity-log entry's accumulated turn time for
+// the "This Week" grid, e.g. "12m", "1h 5m". This is approximate (server
+// round-trip time per turn, not real reading/thinking time between turns —
+// see recordActivityLogEntry's own comment) — deliberately NOT precise to
+// the second, and callers should present it as "~Xm" rather than an exact
+// duration. Empty string when there's nothing meaningful to show.
+function formatDuration(seconds?: number): string {
+  if (!seconds || seconds < 60) return ''
+  const totalMinutes = Math.round(seconds / 60)
+  const hours = Math.floor(totalMinutes / 60)
+  const minutes = totalMinutes % 60
+  if (hours === 0) return `${minutes}m`
+  return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`
 }
 
 // Which side of the handoff the browser should land on after a refresh.
@@ -280,7 +281,7 @@ const THEME_KEY = 'sparkquill.theme'
 // "This Week" tab types — mirror week.go's ScheduleEntry/ActivityLogEntry/
 // SchoolDeadline/weekResponse Go structs exactly (JSON field names match).
 type ScheduleEntry = { day: string; start: string; end: string; label: string }
-type WeekActivityEntry = { date: string; activity_dir: string; title: string }
+type WeekActivityEntry = { date: string; activity_dir: string; title: string; duration_seconds?: number }
 type WeekDeadline = { title: string; subject?: string; due_date?: string; kind?: string }
 type WeekDay = { date: string; weekday: string; schedule?: ScheduleEntry[]; activities?: WeekActivityEntry[]; deadlines?: WeekDeadline[] }
 type WeekResponse = { week_start: string; week_end: string; days: WeekDay[]; upcoming_deadlines?: WeekDeadline[] }
@@ -348,6 +349,34 @@ function withSceneResizeScript(html: string): string {
     parent.postMessage({ __sq: 1, op: 'choose', text: text }, '*');
   } };
 })();</script>`
+}
+
+// withDiagramLib supplies JSXGraph to a generated page that draws a geometric
+// figure (an angle, a circle, a labelled triangle, a graph). The page itself
+// only ever contains a `<div class="jxgbox">` plus a few declarative
+// JXG.JSXGraph.initBoard(...) calls — the ~1MB library is NOT written into
+// every activity file; it's served once from the app's own dist (public/lib/)
+// and browser-cached, so pages stay small and a second diagram costs nothing.
+//
+// Why the URL must be absolute: the viewer is a srcDoc iframe, whose document
+// URL is about:srcdoc — relative paths have no base to resolve against and
+// silently 404. That's the same reason images are rewritten to absolute
+// FAMILY_API URLs (see rewriteImgSrcsRelativeTo).
+//
+// Why PREPEND and not append: the page's own initBoard call is inline in its
+// body, so the library has to be defined before that runs — appending it (the
+// way withViewerPositionScript appends) would raise "JXG is not defined".
+// Injected into <head> when there is one, else at the very front.
+//
+// Skipped entirely for pages with no figure, so a plain worksheet never pays
+// for it.
+function withDiagramLib(html: string): string {
+  if (!/jxgbox|JXG\./.test(html)) return html
+  const tags =
+    `<link rel="stylesheet" href="${FAMILY_API}/lib/jsxgraph.css">` +
+    `<script src="${FAMILY_API}/lib/jsxgraphcore.js"></script>`
+  if (/<head[^>]*>/i.test(html)) return html.replace(/<head[^>]*>/i, (m) => m + tags)
+  return tags + html
 }
 
 // withViewerPositionScript keeps the child's place in her worksheet across the
@@ -547,7 +576,7 @@ function SceneFrame({ html, activityDir }: { html: string; activityDir: string }
   const clipped = rawHeight > SCENE_MAX_HEIGHT
   return (
     <div className="fl-scene-card">
-      <iframe ref={ref} className="fl-scene-frame" title="Scene" sandbox="allow-scripts" style={{ height: Math.min(rawHeight, SCENE_MAX_HEIGHT) }} srcDoc={withSceneResizeScript(resolved)} />
+      <iframe ref={ref} className="fl-scene-frame" title="Scene" sandbox="allow-scripts" style={{ height: Math.min(rawHeight, SCENE_MAX_HEIGHT) }} srcDoc={withSceneResizeScript(withDiagramLib(resolved))} />
       {clipped && <div className="fl-scene-more" aria-hidden="true">scroll for more ↓</div>}
     </div>
   )
@@ -1373,7 +1402,7 @@ export default function LearningApp() {
   // per genuine content/focus/path/zoom change, not once per render.
   const childViewerSrcDoc = useMemo(
     () => withViewerPositionScript(
-      childViewerContent?.content ?? '',
+      withDiagramLib(childViewerContent?.content ?? ''),
       childViewerFocus,
       childViewerScrollRef.current[childViewerPath ?? ''] ?? 0,
       childZoom,
@@ -1407,8 +1436,8 @@ export default function LearningApp() {
   const setViewerContent = useWorkspaceStore((s) => s.setViewerContent)
   const [viewerMeta, setViewerMeta] = useState<Record<string, unknown> | null>(null)
   const [metaOpen, setMetaOpen] = useState(false)
-  // Which activity's guide_note (the parent's own pacing/instructions for
-  // that activity) is currently revealed via its (i) button — collapsed by default.
+  // Which activity's goal (the parent's own instructions for that activity)
+  // is currently revealed via its (i) button — collapsed by default.
   const [expandedActivity, setExpandedActivity] = useState<string | null>(null)
   // Which folders in the "all files" tree the user has explicitly opened or
   // closed, keyed by path — survives the FileTree unmounting when a file is
@@ -1554,6 +1583,44 @@ export default function LearningApp() {
   // Pulse config above.
   const [fastMode, setFastMode] = useState(false)
   const [savingFastMode, setSavingFastMode] = useState(false)
+  // Child Mode's own Fast Mode, defaulting ON (see familyState.ChildFastMode's
+  // comment on why: a child waiting reads as breakage, not thinking). True
+  // until the server says otherwise, so Settings doesn't flash "off" for the
+  // instant before the real value loads.
+  const [childFastMode, setChildFastMode] = useState(true)
+
+  // Which model the chosen coding agent should use. The list comes from the
+  // server (which reads the provider's real catalog) rather than being written
+  // here, so the picker cannot offer a model the agent would reject.
+  type ModelInfo = { provider: string; selected: string; default: string; models: { id: string; label: string }[] }
+  const [modelInfo, setModelInfo] = useState<ModelInfo | null>(null)
+  const [savingModel, setSavingModel] = useState(false)
+
+  const loadModels = useCallback(() => {
+    fetch(`${FAMILY_API}/api/models`)
+      .then((r) => r.json())
+      .then((d: ModelInfo) => setModelInfo(d?.models?.length ? d : null))
+      .catch(() => setModelInfo(null))
+  }, [])
+
+  // Reloads when the engine changes: the catalog is per coding agent, so the
+  // previous agent's models must not linger in the picker.
+  useEffect(() => { loadModels() }, [loadModels, engine])
+
+  const saveModel = (id: string) => {
+    setSavingModel(true)
+    // Optimistic so the select doesn't snap back while the request is in
+    // flight; the reload below is the source of truth.
+    setModelInfo((cur) => (cur ? { ...cur, selected: id } : cur))
+    fetch(`${FAMILY_API}/api/models`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model_id: id }),
+    })
+      .then(() => loadModels())
+      .catch(() => loadModels())
+      .finally(() => setSavingModel(false))
+  }
 
   // Child Mode reminder sound — off by default, opt-in from Settings. Quill
   // can take anywhere from a few seconds to several minutes to reply (real
@@ -1571,7 +1638,11 @@ export default function LearningApp() {
     let cancelled = false
     fetch(`${FAMILY_API}/api/fast-mode`)
       .then((r) => r.json())
-      .then((d: { enabled: boolean }) => { if (!cancelled) setFastMode(!!d.enabled) })
+      .then((d: { enabled: boolean; child_enabled: boolean }) => {
+        if (cancelled) return
+        setFastMode(!!d.enabled)
+        setChildFastMode(!!d.child_enabled)
+      })
       .catch(() => {})
     return () => { cancelled = true }
   }, [screen, settingsOpen])
@@ -1583,6 +1654,21 @@ export default function LearningApp() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled }),
+    })
+      .catch(() => {})
+      .finally(() => setSavingFastMode(false))
+  }
+
+  // Separate request from toggleFastMode: this must NOT touch the parent's
+  // own `enabled` value, or turning off Child Fast Mode would silently also
+  // turn off the parent's.
+  const toggleChildFastModeSetting = (enabled: boolean) => {
+    setChildFastMode(enabled)
+    setSavingFastMode(true)
+    fetch(`${FAMILY_API}/api/fast-mode`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: fastMode, child_enabled: enabled }),
     })
       .catch(() => {})
       .finally(() => setSavingFastMode(false))
@@ -2433,10 +2519,7 @@ export default function LearningApp() {
   // a client-generated id) — so there is exactly one child conversation per
   // activity, matching activity.json's own conversation.json.
   // modelExtra is appended to what the MODEL sees for this one message, but
-  // never shown to the child or persisted in their transcript — for the
-  // handoff kickoff, this is how the parent's actual guide_note instructions
-  // reach Quill directly on the first turn, rather than relying on it
-  // separately deciding to go read activity.json on its own initiative.
+  // never shown to the child or persisted in their transcript.
   const sendChildText = (raw: string, base?: ParentMsg[], modelExtra?: string) => {
     const text = raw.trim()
     if (!text) return
@@ -2599,24 +2682,28 @@ export default function LearningApp() {
   // (if any) is opened automatically by the auto-open effect above once
   // childActivity reflects this handoff — no need to thread a file path
   // through the handoff call itself.
-  const enterChildModeAfterHandoff = (newSession: boolean, greeting: string, guideNote?: string, activityTitle?: string) => {
+  const enterChildModeAfterHandoff = (newSession: boolean, greeting: string, goal?: string) => {
     persistHandoffSide('tutor')
     setScreen('tutor')
     setChildTreeRefreshKey((k) => k + 1)
-    // Hand the parent's real instructions to Quill directly on this first turn
-    // — never shown to the child as a separate message, just extra context for
-    // the model. On a brand-new session, also have Quill fold a short, plain
-    // statement of the actual plan into the START of its own opening reply
-    // (not a generic "let's begin!") — this is the one place the guide_note's
-    // real content becomes visible to the child, since sendChildKickoff never
-    // renders a synthetic message of its own.
-    const modelExtra = guideNote
-      ? `(For you, Quill — not from ${childName || 'the child'}: the parent's own instructions for${activityTitle ? ` "${activityTitle}"` : ' this'}: ${guideNote} Follow this pacing/order exactly.${newSession ? ` Open your very first reply with one short, plain sentence stating the actual plan in your own words (e.g. "Here's our plan: ...") before anything else — this is the only place ${childName || 'the child'} sees what this session is about, so state it concretely, not generically.` : ''})`
-      : undefined
     // Resume (newSession === false) only ever targets the activity already
     // open in this session — childMessages already holds its real
     // conversation, so there's nothing to send here: just the screen switch
     // above, and the child sees exactly where they left off.
+    //
+    // goal is passed through so Quill reliably has it from her very first
+    // reply, rather than it being contingent on her remembering to go read
+    // activity.json before answering. The explicit "do NOT recite it" wording
+    // matters: an earlier version force-fed the (then separate) guide_note
+    // here WITH an instruction to open by stating the plan verbatim, which
+    // locked a specific framing in at the moment of handoff that the parent
+    // could no longer revise once the child was partway through. Handing over
+    // the standing target is useful; scripting the opening line is not.
+    const modelExtra = goal
+      ? `(For you, Quill — not from ${childName || 'the child'}: this activity's goal is: ${goal}. Keep this in mind ` +
+        `and steer back toward it over the whole conversation — do NOT recite it or turn your opening reply into a ` +
+        `stated plan; just start naturally, the same as always.)`
+      : undefined
     if (newSession) {
       setChildMessages([])
       sendChildKickoff(greeting, [], modelExtra)
@@ -2641,14 +2728,14 @@ export default function LearningApp() {
       body: JSON.stringify({ dir, resume }),
     })
       .then((res) => res.json())
-      .then((data: { new_session?: boolean; dir?: string; title?: string; guide_note?: string }) => {
+      .then((data: { new_session?: boolean; dir?: string; goal?: string }) => {
         if (!data.dir) return
         // A newer handoff has started since this one was fired (a different
         // activity, clicked before this request finished) — its own response
         // will apply instead, so bail out here rather than starting a chat
         // for an activity the parent already navigated away from.
         if (myGeneration !== handoffGenerationRef.current) return
-        enterChildModeAfterHandoff(!!data.new_session, handoffGreeting(greetingText), data.guide_note, data.title)
+        enterChildModeAfterHandoff(!!data.new_session, handoffGreeting(greetingText), data.goal)
       })
       .catch(() => {})
   }
@@ -3400,7 +3487,7 @@ export default function LearningApp() {
                   // rather than a blank iframe.
                   <p className="fl-note">The academic map hasn't been built yet — ask Quill to "update the academic map" once there's some material to show.</p>
                 ) : (
-                  <iframe className="fl-map-frame" title="Academic map" sandbox="allow-scripts" srcDoc={mapHtml} />
+                  <iframe className="fl-map-frame" title="Academic map" sandbox="allow-scripts" srcDoc={withDiagramLib(mapHtml)} />
                 )
               )}
 
@@ -3411,7 +3498,7 @@ export default function LearningApp() {
                   ) : progressHtml.includes('living report grows as') ? (
                     <p className="fl-note">The progress report hasn't been built yet — ask Quill to "update the progress report" once there's some real activity to show.</p>
                   ) : (
-                    <iframe className="fl-map-frame" title="Progress report" sandbox="allow-scripts" srcDoc={progressHtml} />
+                    <iframe className="fl-map-frame" title="Progress report" sandbox="allow-scripts" srcDoc={withDiagramLib(progressHtml)} />
                   )}
                 </>
               )}
@@ -3454,9 +3541,14 @@ export default function LearningApp() {
                             {(day.schedule ?? []).map((s, i) => (
                               <div key={i} className="fl-week-block is-busy" title={`${s.start}–${s.end}`}>{s.label}</div>
                             ))}
-                            {(day.activities ?? []).map((a, i) => (
-                              <div key={i} className="fl-week-block is-activity" title={a.title}>{a.title}</div>
-                            ))}
+                            {(day.activities ?? []).map((a, i) => {
+                              const dur = formatDuration(a.duration_seconds)
+                              return (
+                                <div key={i} className="fl-week-block is-activity" title={dur ? `${a.title} — ~${dur}` : a.title}>
+                                  {a.title}{dur && <span className="fl-week-block-time"> · ~{dur}</span>}
+                                </div>
+                              )
+                            })}
                             {(day.deadlines ?? []).map((d, i) => (
                               <div key={i} className={`fl-week-block is-deadline is-${d.kind || 'assignment'}`} title={d.title}>{d.kind === 'test' ? '📝 ' : '📌 '}{d.title}</div>
                             ))}
@@ -3577,7 +3669,7 @@ export default function LearningApp() {
                   ) : !viewerContent.isText ? (
                     <NonPreviewableFile path={viewerPath} meta={viewerMeta} />
                   ) : (viewerPath.endsWith('.html') || viewerPath.endsWith('.htm')) ? (
-                    <iframe ref={iframeRef} className="fl-viewer-frame" title="File preview" sandbox="allow-scripts" srcDoc={viewerContent.content} />
+                    <iframe ref={iframeRef} className="fl-viewer-frame" title="File preview" sandbox="allow-scripts" srcDoc={withDiagramLib(viewerContent.content)} />
                   ) : (viewerPath.endsWith('.md') || viewerPath.endsWith('.markdown')) ? (
                     <div className="fl-viewer-md"><Markdown text={viewerContent.content} /></div>
                   ) : (viewerPath.endsWith('.json') || viewerPath.endsWith('.jsonl')) ? (
@@ -3626,7 +3718,6 @@ export default function LearningApp() {
                           )}
                         </div>
                       </div>
-                      {(act.items.length === 0 || expanded) && act.guide_note && <p className="fl-package-note">{act.guide_note}</p>}
                       {(act.items.length === 0 || expanded) && act.goal && <p className="fl-package-goal"><strong>Goal:</strong> {act.goal}</p>}
                       {expanded && act.items.length > 0 && (
                         <div className="fl-package-detail-items">
@@ -3691,11 +3782,10 @@ export default function LearningApp() {
                     const renderActivities = (acts: Activity[]) => acts.map((act) => {
                       const expanded = expandedActivity === act.dir
                       const openable = act.items.length > 0
-                      const mode = activityMode(act.teaching_mode)
                       const isCurrent = childActivity?.dir === act.dir
                       // Details show for an expanded activity, and always for an
-                      // adaptive one — it has no items to expand, so its guide
-                      // note IS the activity.
+                      // adaptive one — it has no items to expand, so its goal
+                      // IS the activity.
                       const showDetails = expanded || !openable
                       return (
                         <div key={act.dir} className={`fl-act${expanded ? ' is-expanded' : ''}${isCurrent ? ' is-current' : ''}`}>
@@ -3710,9 +3800,7 @@ export default function LearningApp() {
                             {openable && <ChevronDown size={15} className={`fl-act-chev${expanded ? ' is-open' : ''}`} />}
                           </button>
                           <div className="fl-act-row">
-                            {isCurrent
-                              ? <span className="fl-act-mode is-live">With {childName || 'your child'} now</span>
-                              : mode && <span className={`fl-act-mode ${mode.cls}`}>{mode.label}</span>}
+                            {isCurrent && <span className="fl-act-mode is-live">With {childName || 'your child'} now</span>}
                             <span className="fl-act-sub">
                               {openable ? `${act.items.length} part${act.items.length === 1 ? '' : 's'}` : 'Adaptive'}
                               {dateTimeLabel(act.created_at) ? ` · ${dateTimeLabel(act.created_at)}` : ''}
@@ -3726,7 +3814,6 @@ export default function LearningApp() {
                               Give to {childName || 'child'}
                             </button>
                           </div>
-                          {showDetails && act.guide_note && <p className="fl-package-note">{act.guide_note}</p>}
                           {showDetails && act.goal && <p className="fl-package-goal"><strong>Goal:</strong> {act.goal}</p>}
                           {expanded && act.items.map((item) => (
                             <div key={item.path} className="fl-file-item fl-package-item has-preview">
@@ -4094,8 +4181,28 @@ export default function LearningApp() {
                     </div>
                   )}
 
+                  {modelInfo && modelInfo.models.length > 0 && (
+                    <>
+                      <p className="fl-drawer-label" style={{ marginTop: '20px' }}>Which model</p>
+                      <p className="fl-note">
+                        Picks the exact model within the AI you chose above. “Recommended” is the one this app is tuned for — change it only if you specifically want a stronger or cheaper one.
+                      </p>
+                      <select
+                        className="fl-model-select"
+                        value={modelInfo.selected}
+                        disabled={savingModel}
+                        onChange={(e) => saveModel(e.target.value)}
+                      >
+                        <option value="">Recommended{modelInfo.default ? ` (${modelInfo.default})` : ''}</option>
+                        {modelInfo.models.map((m) => (
+                          <option key={m.id} value={m.id}>{m.label}</option>
+                        ))}
+                      </select>
+                    </>
+                  )}
+
                   <p className="fl-drawer-label" style={{ marginTop: '20px' }}>Fast mode</p>
-                  <p className="fl-note">Trades depth for speed — a cheaper, faster model answers every chat (web, WhatsApp, and Pulse check-ins) instead of the usual one. Good for quick questions; turn it off again for anything that needs careful judgment.</p>
+                  <p className="fl-note">Keeps the model you chose but lets it think less before answering — quicker replies, less depth, in your own chat, WhatsApp, and Pulse check-ins. Child Mode has its own setting below, so this does not affect {childName || 'your child'}'s tutor. Turn it off again for anything that needs careful judgment.</p>
                   <label className="fl-pulse-config-row">
                     <input
                       type="checkbox"
@@ -4103,7 +4210,20 @@ export default function LearningApp() {
                       disabled={savingFastMode}
                       onChange={(e) => toggleFastMode(e.target.checked)}
                     />
-                    <span>Use fast mode</span>
+                    <span>Use fast mode for my own chat</span>
+                  </label>
+
+                  <p className="fl-note" style={{ marginTop: '10px' }}>
+                    Same idea for {childName || 'your child'}'s tutor. On by default — a child waiting for a reply reads as the app being broken, not as Quill thinking. Turn it off if she needs the more careful, slower version.
+                  </p>
+                  <label className="fl-pulse-config-row">
+                    <input
+                      type="checkbox"
+                      checked={childFastMode}
+                      disabled={savingFastMode}
+                      onChange={(e) => toggleChildFastModeSetting(e.target.checked)}
+                    />
+                    <span>Use fast mode for {childName || 'her'} chat</span>
                   </label>
 
                   <VoiceSettings status={voiceStatus} childName={childName} onRefresh={refreshVoiceStatus} />
@@ -4181,7 +4301,7 @@ export default function LearningApp() {
                   <div className="fl-child-hi"><strong>Hi {childName || 'Maya'}!</strong><small>Let’s keep learning together</small></div>
                 </div>
                 {childActivity?.title && (() => {
-                  const hasInfo = !!(childActivity.goal || childActivity.guide_note)
+                  const hasInfo = !!childActivity.goal
                   return (
                     <div className="fl-child-assignment-wrap">
                       {goalPopoverOpen && <div className="fl-menu-backdrop" onClick={() => setGoalPopoverOpen(false)} />}
@@ -4199,7 +4319,6 @@ export default function LearningApp() {
                       {goalPopoverOpen && hasInfo && (
                         <div className="fl-child-goal-popover" role="dialog">
                           {childActivity.goal && <p><strong>Goal</strong>{childActivity.goal}</p>}
-                          {childActivity.guide_note && <p><strong>Plan</strong>{childActivity.guide_note}</p>}
                         </div>
                       )}
                     </div>
@@ -4375,11 +4494,11 @@ export default function LearningApp() {
                 </div>
                 <button
                   type="button"
-                  className={`composer-icon ${fastMode ? 'is-active' : ''}`}
+                  className={`composer-icon ${childFastMode ? 'is-active' : ''}`}
                   aria-label="Fast mode"
-                  aria-pressed={fastMode}
-                  title={fastMode ? 'Fast mode is on — quicker, lighter replies. Tap to turn off.' : 'Turn on fast mode for quicker (lighter) replies'}
-                  onClick={() => toggleFastMode(!fastMode)}
+                  aria-pressed={childFastMode}
+                  title={childFastMode ? 'Fast mode is on — quicker, lighter replies. Tap to turn off.' : 'Turn on fast mode for quicker (lighter) replies'}
+                  onClick={() => toggleChildFastModeSetting(!childFastMode)}
                   disabled={savingFastMode}
                 >
                   <Zap size={19} />

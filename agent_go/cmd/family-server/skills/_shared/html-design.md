@@ -187,8 +187,8 @@ for going-well / to-practise, a `.grid` of `.card`s for the academic map's subje
 `.answered-note` records WHAT she answered and never whether it was right. Write it
 as `✎ Answered: <em>her words</em>` — a pencil, never a tick, and never green. A tick
 and a green note were both being read as "correct" by the parent AND the child, which
-quietly turns a neutral record into a grade the tutor never gave — and under a strict
-`teaching_mode` the tutor must not reveal correctness at all. Marking is the parent's
+quietly turns a neutral record into a grade the tutor never gave — and during a real
+assessment the tutor must not reveal correctness at all. Marking is the parent's
 job, from the answer key.
 
 ## Real pictures
@@ -202,9 +202,15 @@ the credit to print under it.
 - **Use it where seeing the thing IS the teaching** — a real landform, a map, a
   labeled biological diagram, a historical photograph.
 - **Not for what you can draw better yourself.** A relationship, a process, a
-  comparison, a bar of progress — an inline SVG or CSS diagram is sharper, scales
-  cleanly, and can use the page's own colours. A fetched picture is for things
-  that genuinely exist in the world.
+  comparison, a bar of progress — a drawn figure is sharper, scales cleanly, and
+  can use the page's own colours. A fetched picture is for things that genuinely
+  exist in the world.
+- **For geometry, graphs and number lines, read `skills/_shared/diagrams.md`
+  first.** An angle, a circle, a labelled triangle, a bar chart she reads values
+  off — those are declared with JSXGraph (already available on every page), never
+  hand-written as SVG coordinates. Hand-computed geometry gets the y-axis
+  direction, the arc flags and the label placement wrong, and a wrong figure
+  teaches the wrong thing.
 - **Reference it relatively and give it real alt text**, describing what it shows
   rather than repeating the caption:
   ```html
@@ -267,3 +273,37 @@ numbers, never the tone around them: no KPI walls, no grades-as-verdict, no red.
 
 The parent can print any page from the print icon in the app's viewer — no print
 button belongs in the generated page itself.
+
+## Check a figure before you finish
+
+**Only when the page you just wrote contains a geometric figure, graph or chart**
+(see `skills/_shared/diagrams.md`) — plain prose, question and study pages need
+none of this, so don't spend the time on them.
+
+A figure is the one thing on a page you cannot verify by re-reading your own
+markup: it either renders correctly or it silently doesn't, and a wrong or blank
+figure teaches the wrong thing. So look at it:
+
+1. Open the page with `agent_browser` at
+   `http://127.0.0.1:8010/api/workspace/raw?path=<the page's workspace-relative path>`
+   (URL-encode the path) and take a `screenshot`.
+
+   **Never open it as a `file://` path.** The page carries only the figure's
+   own few lines; the drawing library is supplied by the server on that URL. A
+   `file://` copy has no library, so EVERY figure looks like an empty box and
+   the console says "JXG is not defined" — you would be staring at a fault in
+   how you opened it, not in your figure, and "fixing" geometry that was
+   already right. (Port 8010 is the default; if it isn't reachable, skip this
+   check and finish rather than retrying — a page with an unverified figure is
+   better than no page.)
+2. `read_image` the screenshot.
+3. Check the things that actually go wrong: is the figure THERE at all (not a
+   blank box)? Are the labels on the right points — is the vertex of ∠ABC really
+   at B? Does anything overlap or sit outside the frame? Do the bars match the
+   axis values they're supposed to show?
+4. Fix and re-check if something is wrong. If it's still wrong after a couple of
+   rounds, simplify the figure rather than shipping a broken one — a plainer
+   figure that is correct beats an ambitious one that isn't.
+
+Never tell the child or the parent that you did this, and never mention
+screenshots or files — it is your own check, part of writing the page.

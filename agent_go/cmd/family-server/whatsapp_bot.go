@@ -101,6 +101,7 @@ func (a *waAccount) react(chat, sender types.JID, msgID types.MessageID, emoji s
 // clears within seconds (e.g. right after whatsmeow reconnects) rather than a
 // permanent failure. attemptTimeout bounds each individual attempt.
 func (a *waAccount) sendTextWithRetry(chat types.JID, text string, attempts int, attemptTimeout time.Duration, logPrefix string) error {
+	text = stripHTMLForWhatsApp(text)
 	msg := &waProto.Message{Conversation: &text}
 	var err error
 	for attempt := 1; attempt <= attempts; attempt++ {
@@ -134,6 +135,7 @@ func (a *waAccount) SendToSelf(ctx context.Context, text string) error {
 	// device part"). ToNonAD strips it down to the plain addressable user
 	// JID, which is what SendMessage actually wants.
 	own = own.ToNonAD()
+	text = stripHTMLForWhatsApp(text)
 	msg := &waProto.Message{Conversation: &text}
 	_, err := a.client.SendMessage(ctx, own, msg)
 	return err
@@ -168,6 +170,7 @@ func (a *waAccount) SendDocumentToSelf(ctx context.Context, data []byte, filenam
 		FileLength:    &fileLength,
 	}
 	if strings.TrimSpace(caption) != "" {
+		caption = stripHTMLForWhatsApp(caption)
 		doc.Caption = &caption
 	}
 	msg := &waProto.Message{DocumentMessage: doc}
@@ -839,6 +842,18 @@ func extractWhatsAppMessageText(m *waProto.Message) string {
 	if m == nil {
 		return ""
 	}
+	// Sent from a linked companion device (WhatsApp Web/Desktop) rather than
+	// the primary phone — whatsmeow unwraps Ephemeral/ViewOnce automatically
+	// but leaves this one wrapped, so a message typed from Web/Desktop landed
+	// here with every field empty and silently fell into the "no text" bucket
+	// below. EditedMessage (the user corrected a typo after sending) wraps the
+	// same way and was missing for the same reason.
+	if inner := m.GetDeviceSentMessage().GetMessage(); inner != nil {
+		return extractWhatsAppMessageText(inner)
+	}
+	if inner := m.GetEditedMessage().GetMessage(); inner != nil {
+		return extractWhatsAppMessageText(inner)
+	}
 	if m.Conversation != nil {
 		return strings.TrimSpace(*m.Conversation)
 	}
@@ -863,6 +878,20 @@ func extractWhatsAppMessageText(m *waProto.Message) string {
 		return strings.TrimSpace(m.DocumentMessage.GetCaption())
 	}
 	return ""
+}
+
+// htmlTagRe strips markup for stripHTMLForWhatsApp below.
+var htmlTagRe = regexp.MustCompile(`<[^>]*>`)
+
+// stripHTMLForWhatsApp removes HTML tags (keeping their text content) from a
+// reply before it goes out over WhatsApp. Both childSystemPrompt and
+// parentSystemPrompt explicitly encourage `<span style="color:...">` for the
+// desktop app's rendered chat bubbles — WhatsApp is plain text with nowhere
+// for that markup to go, so it showed up as literal `<span ...>` in the
+// message instead of being reformatted. Confirmed live in Pulse's own
+// WhatsApp summaries. Only tags are removed; the text inside them stays.
+func stripHTMLForWhatsApp(text string) string {
+	return htmlTagRe.ReplaceAllString(text, "")
 }
 
 func (w *waBot) handleIncomingMessage(acct *waAccount, evt *events.Message) {

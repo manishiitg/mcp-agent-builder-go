@@ -5,7 +5,10 @@ import { useChatStore, type ChatTab } from '../stores/useChatStore'
 import { useModeStore } from '../stores/useModeStore'
 import { activateTab } from '../utils/activateTab'
 import { useGlobalPresetStore } from '../stores/useGlobalPresetStore'
-import { isScheduledWorkflowSession, openActiveSession } from '../utils/workflowSessionRestore'
+import {
+  isScheduledWorkflowSession,
+  openCanonicalActivitySession,
+} from '../utils/workflowSessionRestore'
 import { useAppStore } from '../stores/useAppStore'
 import { isLocalActivityFallbackTab } from '../utils/activityFallback'
 import { hasLiveBackgroundAgents, isVisibleActivitySession, nonWorkflowActivityTitle } from '../utils/activitySessions'
@@ -280,9 +283,10 @@ export const GlobalActivityMonitor: React.FC = () => {
   }, [])
 
   const handleOpenSession = useCallback(async (session: ActiveSessionInfo) => {
-    // Shared path with the Ctrl+K quick-switcher so opening the same session
-    // behaves identically from either surface.
-    await openActiveSession(session, {
+    // A workflow pill represents the workflow, not whichever reviewer/step
+    // most recently emitted activity. Resolve the preset again and let the
+    // canonical workflow navigation path choose its root main-agent session.
+    await openCanonicalActivitySession(session, {
       title: sessionTitle(session, undefined, currentWorkflowPresetName),
       source: 'global-activity-monitor',
     })

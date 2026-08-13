@@ -17,7 +17,6 @@ import { schedulerApi } from '../api/scheduler'
 import type { EvaluationReportEntry, ModelTokenUsage, PhaseTokenUsageFile, PlannerFile, TokenUsageFile, ToolCostUsage, WorkflowPhaseDailyCostsEntry, WorkflowReviewDataResponse, WorkflowRunCostsEntry, WorkflowRunDailyCostsEntry } from '../services/api-types'
 import ExecutionLogsPopup from './workflow/ExecutionLogsPopup'
 import { ReportView } from './workflow/ReportViewer'
-import { LogViewer } from './workflow/LogViewer'
 import { WorkflowCanvas } from './workflow/canvas'
 import { useAppStore } from '../stores/useAppStore'
 import { useGlobalPresetStore } from '../stores/useGlobalPresetStore'
@@ -55,7 +54,7 @@ const workflowsSignature = (workflows: WorkflowSummary[]): string => {
   )
 }
 
-type ReviewTab = 'report' | 'pulse' | 'flow' | 'evaluation' | 'cost' | 'knowledgebase' | 'logs' | 'soul' | 'skills' | 'config'
+type ReviewTab = 'report' | 'flow' | 'evaluation' | 'cost' | 'knowledgebase' | 'logs' | 'soul' | 'skills' | 'config'
 
 interface ImproveDocState {
   loading: boolean
@@ -607,6 +606,7 @@ export const EmployeeDashboard: React.FC = () => {
   const [workflows, setWorkflows] = useState<WorkflowSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null)
+  const [pulseOpenRequestFor, setPulseOpenRequestFor] = useState<string | null>(null)
   const [orgView, setOrgView] = useState<'workflow' | 'goals' | 'pulse' | 'tasks' | 'dashboard'>('dashboard')
   const [reviewTab, setReviewTab] = useState<ReviewTab>('report')
   const [reviewState, setReviewState] = useState<WorkflowReviewState>(EMPTY_REVIEW_STATE)
@@ -1012,7 +1012,15 @@ export const EmployeeDashboard: React.FC = () => {
   const handleSelectWorkflow = useCallback((workflowPath: string, nextTab?: ReviewTab) => {
     setSelectedWorkflowId(workflowPath)
     setOrgView('workflow')
+    setPulseOpenRequestFor(null)
     if (nextTab) setReviewTab(nextTab)
+  }, [])
+
+  const handleOpenPulseDecision = useCallback((workflowPath: string) => {
+    setSelectedWorkflowId(workflowPath)
+    setOrgView('workflow')
+    setReviewTab('flow')
+    setPulseOpenRequestFor(workflowPath)
   }, [])
 
   const executionCost = getTokenUsageTotal(reviewState.tokenUsage)
@@ -1348,7 +1356,7 @@ export const EmployeeDashboard: React.FC = () => {
               <div className="h-[calc(100vh-160px)] min-h-[480px] overflow-hidden bg-background">
                 <OrgDashboard
                   workflows={workflows}
-                  onOpenDecision={(workspacePath) => handleSelectWorkflow(workspacePath, 'pulse')}
+                  onOpenDecision={handleOpenPulseDecision}
                 />
               </div>
             ) : orgView === 'goals' ? (
@@ -1408,7 +1416,7 @@ export const EmployeeDashboard: React.FC = () => {
                   <div>
                     <h4 className="text-base font-semibold text-foreground">Latest report</h4>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      Select an automation to review its report, Pulse, and cost.
+                      Select an automation to review its report and cost. Pulse is available from the workspace Pulse control.
                     </p>
                   </div>
                 )}
@@ -1417,7 +1425,6 @@ export const EmployeeDashboard: React.FC = () => {
               <div className="border-b border-border px-5 py-3">
                 <div className="inline-flex items-center gap-1 rounded-xl bg-muted/60 p-1">
                   <ReviewTabButton active={reviewTab === 'report'} label="Report" onClick={() => setReviewTab('report')} />
-                  <ReviewTabButton active={reviewTab === 'pulse'} label="Pulse" onClick={() => setReviewTab('pulse')} />
                   <ReviewTabButton active={reviewTab === 'flow'} label="Flow" onClick={() => setReviewTab('flow')} />
                   <ReviewTabButton active={reviewTab === 'cost'} label="Cost" onClick={() => setReviewTab('cost')} />
                   <ReviewTabButton active={reviewTab === 'soul'} label="Soul" onClick={() => setReviewTab('soul')} />
@@ -1428,16 +1435,16 @@ export const EmployeeDashboard: React.FC = () => {
                 </div>
               </div>
 
-              <div className={reviewTab === 'pulse' ? 'p-5' : 'max-h-[calc(100vh-240px)] overflow-y-auto p-5'}>
+              <div className="max-h-[calc(100vh-240px)] overflow-y-auto p-5">
                 {!selectedWorkflow ? (
                   <div className="rounded-2xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
-                    Select an automation from the left to review its report, Pulse, and cost.
+                    Select an automation from the left to review its report and cost.
                   </div>
-                ) : reviewTab !== 'pulse' && reviewTab !== 'soul' && reviewTab !== 'skills' && reviewTab !== 'config' && reviewTab !== 'knowledgebase' && reviewTab !== 'logs' && reviewTab !== 'flow' && !selectedWorkflow.latestRunFolder ? (
+                ) : reviewTab !== 'soul' && reviewTab !== 'skills' && reviewTab !== 'config' && reviewTab !== 'knowledgebase' && reviewTab !== 'logs' && reviewTab !== 'flow' && !selectedWorkflow.latestRunFolder ? (
                   <div className="rounded-2xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
                     This automation has not produced a run yet, so there is no report or cost data to review.
                   </div>
-                ) : reviewTab !== 'pulse' && reviewTab !== 'soul' && reviewTab !== 'skills' && reviewTab !== 'config' && reviewTab !== 'knowledgebase' && reviewTab !== 'logs' && reviewTab !== 'flow' && reviewState.loading ? (
+                ) : reviewTab !== 'soul' && reviewTab !== 'skills' && reviewTab !== 'config' && reviewTab !== 'knowledgebase' && reviewTab !== 'logs' && reviewTab !== 'flow' && reviewState.loading ? (
                   <div className="flex items-center justify-center py-16 text-sm text-muted-foreground">
                     <Loader2 className="mr-2 h-5 w-5 animate-spin text-cyan-500" />
                     Loading latest automation review data...
@@ -1446,18 +1453,15 @@ export const EmployeeDashboard: React.FC = () => {
                   <div className="h-[calc(100vh-320px)] min-h-[400px]">
                     <ReportView workspacePath={selectedWorkflow.workspacePath} selectedRunFolder={selectedWorkflow.latestRunFolder} reviewData={reviewState.reviewData} />
                   </div>
-                ) : reviewTab === 'pulse' ? (
-                  <div className="min-w-0">
-                    <LogViewer workspacePath={selectedWorkflow.workspacePath} />
-                  </div>
                 ) : reviewTab === 'flow' ? (
                   <div className="h-[calc(100vh-320px)] min-h-[520px] overflow-hidden rounded-xl border border-border bg-card">
                     <WorkflowCanvas
                       workspacePath={selectedWorkflow.workspacePath}
                       presetQueryId={selectedWorkflow.id}
                       viewMode="flow"
-                      hideToolbar
+                      hideToolbar={pulseOpenRequestFor !== selectedWorkflow.workspacePath}
                       readOnly
+                      openPulseOnMount={pulseOpenRequestFor === selectedWorkflow.workspacePath}
                       className="h-full"
                     />
                   </div>
@@ -1814,14 +1818,18 @@ export const EmployeeDashboard: React.FC = () => {
                   <div className="space-y-4">
                     {(() => {
                       const phaseCostTotal = costTrend.rows.reduce((sum, r) => sum + r.phase, 0)
-                      const grandTotal = (totalKnownCost || 0) + phaseCostTotal
                       return (
                         <div className="rounded-xl border border-border bg-muted/30 px-4 py-3">
-                          <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Total cost</div>
-                          <div className="mt-2 text-2xl font-semibold text-foreground">{formatUsd(grandTotal > 0 ? grandTotal : null)}</div>
+                          <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Selected run cost</div>
+                          <div className="mt-2 text-2xl font-semibold text-foreground">{formatUsd(totalKnownCost)}</div>
                           <div className="mt-1 text-xs text-muted-foreground">
-                            {formatUsd(executionCost)} execution · {formatUsd(evaluationCost)} evaluation · {formatUsd(phaseCostTotal > 0 ? phaseCostTotal : null)} builder
+                            {formatUsd(executionCost)} execution · {formatUsd(evaluationCost)} evaluation
                           </div>
+                          {phaseCostTotal > 0 && (
+                            <div className="mt-2 border-t border-border pt-2 text-xs text-muted-foreground">
+                              {formatUsd(phaseCostTotal)} builder/Pulse across all recorded days — separate from this run
+                            </div>
+                          )}
                         </div>
                       )
                     })()}
@@ -1841,7 +1849,7 @@ export const EmployeeDashboard: React.FC = () => {
                     {costTrend.rows.length >= 1 && (
                       <div className="rounded-xl border border-border bg-card px-4 py-3">
                         <div className="mb-2 flex items-center justify-between">
-                          <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Cost over time</div>
+                          <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Cost over time · all recorded activity</div>
                           <div className="text-[11px] text-muted-foreground">
                             {costTrend.rows.length} day{costTrend.rows.length !== 1 ? 's' : ''}
                           </div>
@@ -1869,7 +1877,7 @@ export const EmployeeDashboard: React.FC = () => {
                     {costTrend.rows.length >= 1 && (
                       <div className="overflow-hidden rounded-xl border border-border">
                         <div className="border-b border-border bg-muted/30 px-4 py-3">
-                          <div className="text-sm font-medium text-foreground">Cost by day</div>
+                          <div className="text-sm font-medium text-foreground">Cost by day · all recorded activity</div>
                         </div>
                         <div className="grid grid-cols-[auto_1fr_auto_auto_auto_auto] items-center gap-x-4 border-b border-border bg-muted/20 px-4 py-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                           <div className="w-7"></div>
