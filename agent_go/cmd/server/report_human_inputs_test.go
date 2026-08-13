@@ -209,6 +209,53 @@ func TestAnswerHumanInputRequestToolUsesValidatedDecisionLifecycle(t *testing.T)
 	}
 }
 
+func TestGetHumanInputRequestToolReadsCanonicalDecision(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+	workspacePath := "Workflow/read-decision"
+	inputID := "strategy-proposal-read-me"
+	if _, err := createReportHumanInput(ctx, workspacePath, ReportHumanInputCreateRequest{
+		InputID:  inputID,
+		Source:   "strategy_auditor",
+		Question: "Apply the proposed strategy?",
+		Context:  "Proposal: use the verified strategy on the next run.",
+		Options:  []ReportHumanInputOption{{ID: "approve", Title: "Approve"}},
+	}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := answerReportHumanInput(ctx, workspacePath, inputID, ReportHumanInputAnswerRequest{
+		SelectedOptionID: "approve",
+		AnsweredBy:       "user",
+	}); err != nil {
+		t.Fatalf("answer: %v", err)
+	}
+
+	tools, executors, categories := createReportHumanInputTools()
+	found := false
+	for _, tool := range tools {
+		if tool.Function != nil && tool.Function.Name == "get_human_input_request" {
+			found = true
+			break
+		}
+	}
+	if !found || categories["get_human_input_request"] != "human_tools" {
+		t.Fatalf("get tool is not registered in human_tools: found=%v category=%q", found, categories["get_human_input_request"])
+	}
+	get, ok := executors["get_human_input_request"].(func(context.Context, map[string]interface{}) (string, error))
+	if !ok {
+		t.Fatal("get_human_input_request executor is missing or has the wrong type")
+	}
+	result, err := get(ctx, map[string]interface{}{"workspace_path": workspacePath, "input_id": inputID})
+	if err != nil {
+		t.Fatalf("get tool: %v", err)
+	}
+	for _, want := range []string{`"status":"read"`, `"selected_option_id":"approve"`, "use the verified strategy"} {
+		if !strings.Contains(result, want) {
+			t.Fatalf("get tool result missing %q: %s", want, result)
+		}
+	}
+}
+
 func TestAnsweredGoalAdvisorPlanProposalCarriesContext(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()

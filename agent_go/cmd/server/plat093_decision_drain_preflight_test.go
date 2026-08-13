@@ -38,21 +38,25 @@ func TestDecisionDrainTurnOnlyExistsWhenThereIsSomethingToApply(t *testing.T) {
 // rejected — is the worst available outcome, so the answer travels with the id.
 func TestDecisionDrainTurnCarriesTheOperatorsActualAnswer(t *testing.T) {
 	turn, ok := scheduledDecisionDrainTurn([]ReportHumanInput{
-		{ID: "plan-proposal-scoring", Status: "answered", SelectedOptionID: "approve-both"},
-		{ID: "strategy-proposal-stops", Status: "answered", SelectedOptionID: "reject"},
+		{ID: "plan-proposal-scoring", WorkspacePath: "Workflow/example", Status: "answered", SelectedOptionID: "approve-both"},
+		{ID: "strategy-proposal-stops", WorkspacePath: "Workflow/example", Status: "answered", SelectedOptionID: "reject"},
 	})
 	if !ok {
 		t.Fatal("expected a turn")
 	}
 	for _, want := range []string{
-		"plan-proposal-scoring (answered: approve-both)",
-		"strategy-proposal-stops (answered: reject)",
+		"Workflow/example: plan-proposal-scoring (answered: approve-both)",
+		"Workflow/example: strategy-proposal-stops (answered: reject)",
+		"get_human_input_request(workspace_path=<the exact Workflow/... path shown>",
 		"mark_human_input_consumed",
 		"BEFORE this run starts",
 	} {
 		if !strings.Contains(turn.query, want) {
 			t.Fatalf("drain prompt missing %q:\n%s", want, turn.query)
 		}
+	}
+	if strings.Contains(turn.query, "report_human_inputs") {
+		t.Fatalf("drain prompt refers to the SQLite table as though it were a tool:\n%s", turn.query)
 	}
 	if !turn.decisionDrain {
 		t.Fatal("the turn must be flagged decisionDrain so the loop treats it as non-fatal")

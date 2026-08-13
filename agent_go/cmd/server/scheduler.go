@@ -2842,6 +2842,9 @@ func scheduledDecisionDrainTurn(pending []ReportHumanInput) (scheduledWorkshopTu
 		if id == "" {
 			continue
 		}
+		if workspacePath := strings.TrimSpace(input.WorkspacePath); workspacePath != "" {
+			id = workspacePath + ": " + id
+		}
 		if selected := strings.TrimSpace(input.SelectedOptionID); selected != "" {
 			id += " (answered: " + selected + ")"
 		}
@@ -2858,7 +2861,7 @@ func scheduledDecisionDrainTurn(pending []ReportHumanInput) (scheduledWorkshopTu
 			"PRE-RUN DECISION DRAIN. The operator has answered %d decision(s) that are still unapplied. "+
 				"Apply them now, BEFORE this run starts, so the run uses what they decided rather than repeating the behavior they already asked you to change.\n\n"+
 				"Answered and unapplied: %s\n\n"+
-				"Read each one with report_human_inputs. Its `context` states what happens if approved, and `selected_option_id` is the operator's actual answer — honor that answer, including a rejection.\n\n"+
+				"Read each one with get_human_input_request(workspace_path=<the exact Workflow/... path shown>, input_id=<the exact decision id shown>). Its `context` states what happens if approved, and `selected_option_id` is the operator's actual answer — honor that answer, including a rejection.\n\n"+
 				"For each decision, exactly one of:\n"+
 				"1. APPLY it with the normal typed tools (plan modification, update_step_config, evaluation, schedule, workflow config), confirm the change actually landed by re-reading the artifact, then call mark_human_input_consumed with an outcome_summary naming what changed. Consume only what you truly applied — never to tidy the list.\n"+
 				"2. LEAVE it, when you cannot honestly apply it now: the answer needs evidence from a run that has not happened yet, the premise no longer holds because the plan moved since it was answered (compare its run_id and answered_at against the current plan and changelog), or the intent is ambiguous. Say so plainly in your reply and do not consume it. The post-run Pulse pass will pick it up with fresh evidence.\n\n"+

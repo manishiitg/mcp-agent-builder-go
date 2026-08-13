@@ -738,6 +738,21 @@ func createReportHumanInputTools() ([]llmtypes.Tool, map[string]interface{}, map
 			}),
 		},
 	}
+	getTool := llmtypes.Tool{
+		Type: "function",
+		Function: &llmtypes.FunctionDefinition{
+			Name:        "get_human_input_request",
+			Description: "Read one existing Pulse/report decision by its exact workflow path and input id. Use this before applying an answered decision so its context, selected option, evidence, and lifecycle status are read from the canonical typed record rather than inferred from a summary or queried directly from SQLite.",
+			Parameters: llmtypes.NewParameters(map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"workspace_path": map[string]interface{}{"type": "string", "description": "Exact workflow-relative path, for example Workflow/rtslatency, or pulse for an org-wide Chief of Staff decision."},
+					"input_id":       map[string]interface{}{"type": "string", "description": "Exact decision id supplied by the scheduler, Pulse state, or chat context."},
+				},
+				"required": []string{"workspace_path", "input_id"},
+			}),
+		},
+	}
 	consumeTool := llmtypes.Tool{
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
@@ -773,6 +788,29 @@ func createReportHumanInputTools() ([]llmtypes.Tool, map[string]interface{}, map
 		},
 	}
 	executors := map[string]interface{}{
+		"get_human_input_request": func(ctx context.Context, args map[string]interface{}) (string, error) {
+			workspacePath, _ := args["workspace_path"].(string)
+			inputID, _ := args["input_id"].(string)
+			if strings.TrimSpace(workspacePath) == "" || strings.TrimSpace(inputID) == "" {
+				return "", fmt.Errorf("workspace_path and input_id are required")
+			}
+			normalized, db, err := openReportHumanInputDB(ctx, workspacePath, false)
+			if err != nil {
+				return "", err
+			}
+			if db == nil {
+				return "", fmt.Errorf("human input %q was not found in %s", strings.TrimSpace(inputID), strings.TrimSpace(workspacePath))
+			}
+			defer db.Close()
+			input, err := getReportHumanInputByID(ctx, db, normalized, inputID)
+			if err != nil {
+				return "", err
+			}
+			if input == nil {
+				return "", fmt.Errorf("human input %q was not found in %s", strings.TrimSpace(inputID), normalized)
+			}
+			return marshalReportHumanInputToolResult("read", input)
+		},
 		"create_human_input_request": func(ctx context.Context, args map[string]interface{}) (string, error) {
 			req, err := reportHumanInputCreateRequestFromToolArgs(args)
 			if err != nil {
@@ -826,11 +864,12 @@ func createReportHumanInputTools() ([]llmtypes.Tool, map[string]interface{}, map
 		},
 	}
 	categories := map[string]string{
+		"get_human_input_request":    "human_tools",
 		"create_human_input_request": "human_tools",
 		"answer_human_input_request": "human_tools",
 		"mark_human_input_consumed":  "human_tools",
 	}
-	return []llmtypes.Tool{createTool, answerTool, consumeTool}, executors, categories
+	return []llmtypes.Tool{getTool, createTool, answerTool, consumeTool}, executors, categories
 }
 
 func reportHumanInputCreateRequestFromToolArgs(args map[string]interface{}) (ReportHumanInputCreateRequest, error) {
