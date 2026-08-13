@@ -58,8 +58,7 @@ Shell commands may use the absolute paths below. Workspace tools that accept a f
 | Execution folder | `+"`"+`{{.WorkspacePath}}/`+"`"+` |
 | Step folder (VOLATILE) | `+"`"+`{{.StepExecutionPath}}/`+"`"+` |
 | Downloads (user files) | `+"`"+`{{.WorkspacePath}}/Downloads/`+"`"+` |
-{{if ne .DBAccess "none"}}| DB (PERSISTENT, structured JSON) | `+"`"+`{{.DBPath}}/`+"`"+` |
-{{end}}
+| DB (PERSISTENT, structured JSON) | `+"`"+`{{.DBPath}}/`+"`"+` |
 {{if ne .KbAccess "none"}}| Knowledgebase (PERSISTENT, {{.KbAccessLabel}}) | `+"`"+`{{.KnowledgebasePath}}/`+"`"+` |
 {{end}}
 
@@ -93,7 +92,7 @@ cat knowledgebase/notes/company-acme.md
 {{end}}
 {{if .KBGuidanceBlock}}{{.KBGuidanceBlock}}{{end}}
 ## EXECUTION RULES
-{{if .StepContextOutput}}1. **Mandatory Output**: Create `+"`"+`{{.StepContextOutput}}`+"`"+` under `+"`"+`$STEP_OUTPUT_DIR`+"`"+` (step folder: `+"`"+`{{.StepExecutionPath}}/`+"`"+`).{{else}}{{if eq .DBAccess "none"}}1. **No output declared**: complete without using workflow database state.{{else if eq .DBAccess "read"}}1. **No output file**: this read-only step must complete without mutating the workflow DB.{{else if eq .DBDirectAccess "true"}}1. **Output to the db**: this scripted step declares no output file — persist through the absolute `+"`"+`$DB_PATH`+"`"+`.{{else}}1. **Output to the db**: this step declares no output file — persist results with `+"`mutate_workflow_db`"+`; no `+"`"+`$STEP_OUTPUT_DIR`+"`"+` file is required.{{end}}{{end}}
+{{if .StepContextOutput}}1. **Mandatory Output**: Create `+"`"+`{{.StepContextOutput}}`+"`"+` under `+"`"+`$STEP_OUTPUT_DIR`+"`"+` (step folder: `+"`"+`{{.StepExecutionPath}}/`+"`"+`).{{else}}{{if eq .DBAccess "read"}}1. **No output file**: this read-only step must complete without mutating the workflow DB.{{else if eq .DBDirectAccess "true"}}1. **Output to the db**: this scripted step declares no output file — persist through the absolute `+"`"+`$DB_PATH`+"`"+`.{{else}}1. **Output to the db**: this step declares no output file — persist results with `+"`mutate_workflow_db`"+`; no `+"`"+`$STEP_OUTPUT_DIR`+"`"+` file is required.{{end}}{{end}}
 {{if .UseCodeStyleRules}}2. Derive output paths from `+"`"+`os.environ['STEP_OUTPUT_DIR']`+"`"+` in code. E.g., `+"`"+`open(os.path.join(os.environ['STEP_OUTPUT_DIR'], '{{.StepContextOutput}}'), "w")`+"`"+`.
 3. **No env var fallbacks in Python**: always `+"`"+`os.environ['KEY']`+"`"+` — never `+"`"+`os.environ.get('KEY', 'default')`+"`"+`. Variables use `+"`"+`VAR_<NAME>`+"`"+`, secrets use `+"`"+`SECRET_<NAME>`+"`"+`. Missing var must raise KeyError, not silently use a hardcoded value.
 {{else}}2. Derive output paths from `+"`"+`$STEP_OUTPUT_DIR`+"`"+` in shell commands. E.g., `+"`"+`mkdir -p "$(dirname "$STEP_OUTPUT_DIR/{{.StepContextOutput}}")" && echo '...' > "$STEP_OUTPUT_DIR/{{.StepContextOutput}}"`+"`"+`.
@@ -192,7 +191,7 @@ You MUST incorporate it into this run. It takes priority over the default step d
 {{if .StepContextDependencies}}{{.StepContextDependencies}}{{else}}None{{end}}
 
 ### Output
-{{if .StepContextOutput}}- **Output File**: {{.StepContextOutput}} (Create in '{{.StepExecutionPath}}/'){{else}}{{if eq .DBAccess "none"}}- **No output file** — database access is disabled.{{else if eq .DBAccess "read"}}- **No output file** — read-only DB access; do not persist database changes.{{else if eq .DBDirectAccess "true"}}- **No output file** — persist scripted results through `+"`"+`$DB_PATH`+"`"+`.{{else}}- **No output file** — persist results with `+"`mutate_workflow_db`"+`.{{end}}{{end}}
+{{if .StepContextOutput}}- **Output File**: {{.StepContextOutput}} (Create in '{{.StepExecutionPath}}/'){{else}}{{if eq .DBAccess "read"}}- **No output file** — read-only DB access; do not persist database changes.{{else if eq .DBDirectAccess "true"}}- **No output file** — persist scripted results through `+"`"+`$DB_PATH`+"`"+`.{{else}}- **No output file** — persist results with `+"`mutate_workflow_db`"+`.{{end}}{{end}}
 
 {{if .ScriptedPriorContext}}{{.ScriptedPriorContext}}
 {{end}}### Execution Checklist

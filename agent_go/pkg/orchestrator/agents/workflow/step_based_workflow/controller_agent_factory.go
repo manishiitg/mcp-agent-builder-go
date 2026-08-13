@@ -458,10 +458,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) setupExecutionFolderGuard(stepPath st
 	// remains only for callers that explicitly construct a reader profile while the
 	// canonical reader/writer refactor is incomplete.
 	dbPath := getDBPath(baseWorkspacePath)
-	if dbAccess != DBAccessNone {
-		readPaths = append(readPaths, dbPath)
-	}
-	if dbAccess == DBAccessReadWrite {
+	readPaths = append(readPaths, dbPath)
+	if dbAccess != DBAccessRead {
 		writePaths = append(writePaths, dbPath)
 	}
 
@@ -816,9 +814,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) prepareCustomTools(stepConfig *AgentC
 		// Workflow DB tools are capability-derived, not model-selected. A custom
 		// tool allowlist may narrow other tools but cannot remove the safe query
 		// path or escalate a read-only step to mutation authority.
-		if resolveDBAccess(stepConfig) != DBAccessNone {
-			enabledTools = append(enabledTools, "workflow_db:query_workflow_db")
-		}
+		enabledTools = append(enabledTools, "workflow_db:query_workflow_db")
 		if resolveDBAccess(stepConfig) == DBAccessReadWrite {
 			enabledTools = append(enabledTools, "workflow_db:mutate_workflow_db")
 		}
@@ -860,9 +856,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) prepareCustomTools(stepConfig *AgentC
 		defaultEnabledTools := []string{
 			"workspace_advanced:*",
 			"human_tools:*",
-		}
-		if resolveDBAccess(stepConfig) != DBAccessNone {
-			defaultEnabledTools = append(defaultEnabledTools, "workflow_db:query_workflow_db")
+			"workflow_db:query_workflow_db",
 		}
 		if resolveDBAccess(stepConfig) == DBAccessReadWrite {
 			defaultEnabledTools = append(defaultEnabledTools, "workflow_db:mutate_workflow_db")
@@ -1340,22 +1334,16 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 
 	// 5. Prepare custom tools (filtered by step config)
 	toolsToRegister, executorsToUse := hcpo.prepareCustomTools(stepConfig)
-	if dbAccess == DBAccessRead || dbAccess == DBAccessNone {
-		filtered := make([]llmtypes.Tool, 0, len(toolsToRegister))
+	if dbAccess == DBAccessRead {
+		filtered := toolsToRegister[:0]
 		for _, tool := range toolsToRegister {
-			if tool.Function != nil {
-				name := tool.Function.Name
-				if name == "mutate_workflow_db" || (dbAccess == DBAccessNone && name == "query_workflow_db") {
-					continue
-				}
+			if tool.Function != nil && tool.Function.Name == "mutate_workflow_db" {
+				continue
 			}
 			filtered = append(filtered, tool)
 		}
 		toolsToRegister = filtered
 		delete(executorsToUse, "mutate_workflow_db")
-		if dbAccess == DBAccessNone {
-			delete(executorsToUse, "query_workflow_db")
-		}
 	}
 	// Inject STEP_OUTPUT_DIR and STEP_EXECUTION_DIR for all execution-only agents (both scripted and agentic).
 	// Any script run via execute_shell_command may need STEP_OUTPUT_DIR to know where to write output
@@ -1369,7 +1357,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 		stepOutputAbsPath := filepath.Join(GetPromptDocsRoot(), stepExecutionPath)
 		stepExecutionAbsPath := filepath.Dir(stepOutputAbsPath)
 		dbAbsPath := ""
-		if directDBAccess && dbAccess != DBAccessNone {
+		if directDBAccess {
 			dbAbsPath = filepath.Join(GetPromptDocsRoot(), hcpo.GetWorkspacePath(), DBFolderName, "db.sqlite")
 		}
 		workspaceEnv := hcpo.snapshotWorkspaceEnv()
@@ -1695,9 +1683,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) createTodoTaskOrchestratorAgent(ctx c
 		return false
 	}
 	for _, name := range []string{"query_workflow_db", "mutate_workflow_db"} {
-		if dbAccess == DBAccessNone {
-			continue
-		}
 		if name == "mutate_workflow_db" && dbAccess == DBAccessRead {
 			continue
 		}
@@ -1713,22 +1698,16 @@ func (hcpo *StepBasedWorkflowOrchestrator) createTodoTaskOrchestratorAgent(ctx c
 			}
 		}
 	}
-	if dbAccess == DBAccessRead || dbAccess == DBAccessNone {
-		filtered := make([]llmtypes.Tool, 0, len(toolsToRegister))
+	if dbAccess == DBAccessRead {
+		filtered := toolsToRegister[:0]
 		for _, tool := range toolsToRegister {
-			if tool.Function != nil {
-				name := tool.Function.Name
-				if name == "mutate_workflow_db" || (dbAccess == DBAccessNone && name == "query_workflow_db") {
-					continue
-				}
+			if tool.Function != nil && tool.Function.Name == "mutate_workflow_db" {
+				continue
 			}
 			filtered = append(filtered, tool)
 		}
 		toolsToRegister = filtered
 		delete(executorsToUse, "mutate_workflow_db")
-		if dbAccess == DBAccessNone {
-			delete(executorsToUse, "query_workflow_db")
-		}
 	}
 
 	// Inject STEP_OUTPUT_DIR and STEP_EXECUTION_DIR into execute_shell_command so the

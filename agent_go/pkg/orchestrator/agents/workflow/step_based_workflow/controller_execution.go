@@ -181,7 +181,6 @@ func resolveKnowledgebaseAccess(stepConfig *AgentConfigs, presetEnabled bool) st
 const (
 	DBAccessReadWrite = "read-write"
 	DBAccessRead      = "read"
-	DBAccessNone      = "none"
 )
 
 // resolveDBAccess returns the uniform execution-step DB capability. The config
