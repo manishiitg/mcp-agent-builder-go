@@ -669,6 +669,12 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
   // Session-specific selector: only re-renders when the ACTIVE session's events change
   // (not when any other session gets events)
   const activeSessionId = activeTab?.sessionId
+  // Read inside polling callbacks, which must not be rebuilt (and their timers
+  // restarted) every time the user switches tabs.
+  const activeSessionIdRef = useRef<string | undefined>(activeSessionId)
+  useEffect(() => {
+    activeSessionIdRef.current = activeSessionId
+  }, [activeSessionId])
   const tabEvents = useChatStore((state) =>
     activeSessionId ? state.tabEvents[activeSessionId] || EMPTY_EVENTS : EMPTY_EVENTS
   )
@@ -1425,7 +1431,13 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       chatStore.setTabHasRunningBgAgents(tab.tabId, hasBgAgents)
       setTabSyntheticTurn(tab.tabId, isSyntheticTurn)
       setTabCanSteer(tab.tabId, canSteer)
-    } else if (!tab && sessionStatus) {
+    } else if (!tab && sessionStatus && actualSessionId === activeSessionIdRef.current) {
+      // Only the session the user is actually looking at may drive these.
+      // setIsStreaming/setIsCompleted/setHasActiveChat are cross-tab globals
+      // (see the activeTabStreaming comment below), and several sessions are
+      // polled concurrently — a background session landing here would flip the
+      // foreground indicator against the real one every poll, which is what
+      // made the composer flash between "working" and idle.
       const hasBgAgents = response.has_running_background_agents ?? false
       const isSyntheticTurn = response.is_synthetic_turn ?? false
       const canSteer = response.can_steer ?? false
@@ -2045,7 +2057,12 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
 
       const store = useChatStore.getState()
       const tab = Object.values(store.chatTabs).find(candidate => candidate.sessionId === sessionId) || null
-      if (!tab) return
+      // Returning without clearing the timer entry leaked a dead generation into
+      // the map; the loop is over for this session once its tab is gone.
+      if (!tab) {
+        delete productCatchUpTimersRef.current[sessionId]
+        return
+      }
 
       let shouldContinue = true
       try {
