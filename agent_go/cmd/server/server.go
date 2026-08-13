@@ -1886,6 +1886,9 @@ func runServer(cmd *cobra.Command, args []string) {
 	apiRouter.HandleFunc("/workflow-provider-credentials/claude-code", api.handleGetWorkflowClaudeCodeCredential).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/workflow-provider-credentials/claude-code", api.handleStoreWorkflowClaudeCodeCredential).Methods("PUT", "OPTIONS")
 	apiRouter.HandleFunc("/workflow-provider-credentials/claude-code", api.handleDeleteWorkflowClaudeCodeCredential).Methods("DELETE", "OPTIONS")
+	apiRouter.HandleFunc("/workflow-provider-credentials/cursor-cli", api.handleGetWorkflowCursorCLICredential).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/workflow-provider-credentials/cursor-cli", api.handleStoreWorkflowCursorCLICredential).Methods("PUT", "OPTIONS")
+	apiRouter.HandleFunc("/workflow-provider-credentials/cursor-cli", api.handleDeleteWorkflowCursorCLICredential).Methods("DELETE", "OPTIONS")
 
 	// Provider API keys (encrypted file storage for scheduled runs)
 	apiRouter.HandleFunc("/provider-keys", api.handleSaveProviderKeys).Methods("PUT", "OPTIONS")

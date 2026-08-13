@@ -158,3 +158,98 @@ func encryptProviderCredentialForTest(t *testing.T, value, userID string) string
 	ciphertext := aead.Seal(nonce, nonce, []byte(value), []byte(userID))
 	return base64.StdEncoding.EncodeToString(ciphertext)
 }
+
+// A workflow-scoped Cursor key must behave exactly like the Claude Code token:
+// private to one user and one workflow, and never written into the ordinary
+// workflow secret store where the agent could read it back.
+func TestWorkflowCursorCLIKeyIsUserAndWorkflowScoped(t *testing.T) {
+	store, err := chathistory.NewFilesystemStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFilesystemStore() error = %v", err)
+	}
+	api := &StreamingAPI{chatStore: store}
+	ctx := context.Background()
+	const userID = "alice"
+	const workflowA = "Workflow/video-explainer"
+	const workflowB = "Workflow/support-triage"
+	const scopedKey = "crsr_workflow_scoped_key"
+
+	encrypted := encryptProviderCredentialForTest(t, scopedKey, userID)
+	if err := store.UpsertWorkflowProviderCredential(ctx, userID, workflowA, cursorCLIProviderID, encrypted); err != nil {
+		t.Fatalf("UpsertWorkflowProviderCredential() error = %v", err)
+	}
+
+	keysA, err := api.workflowProviderAPIKeys(ctx, userID, workflowA, &llm.ProviderAPIKeys{})
+	if err != nil {
+		t.Fatalf("workflowProviderAPIKeys(workflowA) error = %v", err)
+	}
+	if keysA.CursorCLI == nil || *keysA.CursorCLI != scopedKey {
+		t.Fatalf("workflow A Cursor key = %#v", keysA.CursorCLI)
+	}
+
+	keysB, err := api.workflowProviderAPIKeys(ctx, userID, workflowB, &llm.ProviderAPIKeys{})
+	if err != nil {
+		t.Fatalf("workflowProviderAPIKeys(workflowB) error = %v", err)
+	}
+	if keysB.CursorCLI != nil {
+		t.Fatalf("workflow B received workflow A Cursor key: %#v", keysB.CursorCLI)
+	}
+
+	keysOtherUser, err := api.workflowProviderAPIKeys(ctx, "bob", workflowA, &llm.ProviderAPIKeys{})
+	if err != nil {
+		t.Fatalf("workflowProviderAPIKeys(other user) error = %v", err)
+	}
+	if keysOtherUser.CursorCLI != nil {
+		t.Fatalf("other user received Alice's Cursor key: %#v", keysOtherUser.CursorCLI)
+	}
+
+	workflowSecrets, err := store.ListWorkflowSecrets(ctx, userID, workflowA)
+	if err != nil {
+		t.Fatalf("ListWorkflowSecrets() error = %v", err)
+	}
+	if len(workflowSecrets) != 0 {
+		t.Fatalf("Cursor credential leaked into workflow secrets: %+v", workflowSecrets)
+	}
+}
+
+// Unlike Claude Code, Cursor may already have a server-wide key in the base
+// configuration. A workflow without its own key must keep using that shared
+// key; clearing it would break every workflow relying on the server default.
+func TestWorkflowCursorCLIKeyOverridesSharedKeyOnlyWhenPresent(t *testing.T) {
+	store, err := chathistory.NewFilesystemStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFilesystemStore() error = %v", err)
+	}
+	api := &StreamingAPI{chatStore: store}
+	ctx := context.Background()
+	const userID = "alice"
+	const scopedWorkflow = "Workflow/video-explainer"
+	const plainWorkflow = "Workflow/no-scoped-key"
+	sharedKey := "crsr_server_wide_key"
+	const scopedKey = "crsr_workflow_scoped_key"
+
+	encrypted := encryptProviderCredentialForTest(t, scopedKey, userID)
+	if err := store.UpsertWorkflowProviderCredential(ctx, userID, scopedWorkflow, cursorCLIProviderID, encrypted); err != nil {
+		t.Fatalf("UpsertWorkflowProviderCredential() error = %v", err)
+	}
+	base := &llm.ProviderAPIKeys{CursorCLI: &sharedKey}
+
+	scoped, err := api.workflowProviderAPIKeys(ctx, userID, scopedWorkflow, base)
+	if err != nil {
+		t.Fatalf("workflowProviderAPIKeys(scoped) error = %v", err)
+	}
+	if scoped.CursorCLI == nil || *scoped.CursorCLI != scopedKey {
+		t.Fatalf("workflow key did not override the shared key: %#v", scoped.CursorCLI)
+	}
+
+	plain, err := api.workflowProviderAPIKeys(ctx, userID, plainWorkflow, base)
+	if err != nil {
+		t.Fatalf("workflowProviderAPIKeys(plain) error = %v", err)
+	}
+	if plain.CursorCLI == nil || *plain.CursorCLI != sharedKey {
+		t.Fatalf("a workflow without its own key lost the shared key: %#v", plain.CursorCLI)
+	}
+	if sharedKey != "crsr_server_wide_key" {
+		t.Fatal("the base key was mutated through the clone")
+	}
+}

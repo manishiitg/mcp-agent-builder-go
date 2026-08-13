@@ -3,11 +3,12 @@ import { Button } from './ui/Button';
 import { Input } from './ui/Input';
 import { Textarea } from './ui/Textarea';
 import { Card } from './ui/Card';
-import { CheckCircle2, ChevronDown, Eye, EyeOff, Folder, KeyRound, Loader2, Plus, Settings, SlidersHorizontal, Trash2, X } from 'lucide-react';
+import { ChevronDown, Folder, Loader2, Plus, Settings, SlidersHorizontal, Trash2, X } from 'lucide-react';
 import { FolderSelectionDialog } from './FolderSelectionDialog';
 import { ToolSelectionSection } from './ToolSelectionSection';
 import { SkillSelectionSection } from './skills/SkillSelectionSection';
 import { SecretSelectionSection } from './secrets/SecretSelectionSection';
+import { WorkflowProviderCredentialField } from './WorkflowProviderCredentialField';
 import ConfirmationDialog from './ui/ConfirmationDialog';
 import type { CustomPreset } from '../types/preset';
 import type { PlannerFile, PresetLLMConfig, AgentLLMConfig, AgentLLMFallback, LLMProvider } from '../services/api-types';
@@ -22,7 +23,6 @@ import ModalPortal from './ui/ModalPortal';
 import { getWorkflowLLMOptions, getWorkflowLLMTierDefaults, getWorkflowProviderOptions } from '../utils/workflowLLMTierDefaults';
 import { llmOptionMatchesRef, llmOptionsKey } from '../utils/llmConfigDisplay';
 import { mergeCdpPorts } from '../utils/cdpSetup';
-import { secretsApi } from '../api/secrets';
 import { useChatStore } from '../stores/useChatStore';
 import BrowserAutomationSettings from './BrowserAutomationSettings';
 
@@ -42,17 +42,6 @@ type WorkflowLLMRoleRow = {
 
 function agentLLMUsesProvider(config: AgentLLMConfig | null | undefined, provider: string): boolean {
   return config?.provider === provider || Boolean(config?.fallbacks?.some(fallback => fallback.provider === provider));
-}
-
-// Mirrors maskCredentialPreview in agent_go/cmd/server/workflow_provider_auth.go.
-// Used only right after the user has typed the token into this same form — the
-// plaintext is already in the browser at that point, so masking it locally adds
-// no new exposure. The server is the only source of truth once the modal is
-// reopened; this is purely so the "Saved" state updates instantly.
-function maskCredentialPreviewClient(token: string): string | null {
-  const affixLen = 4;
-  if (token.length < affixLen * 2 + 4) return null;
-  return `${token.slice(0, affixLen)}...${token.slice(-affixLen)}`;
 }
 
 function sameAgentLLM(left: AgentLLMConfig | null | undefined, right: AgentLLMConfig | null | undefined): boolean {
@@ -122,17 +111,9 @@ const PresetModal: React.FC<PresetModalProps> = React.memo(({
   const [tier3Fallbacks, setTier3Fallbacks] = useState<AgentLLMFallback[]>([]);
   const [showWorkflowLLMAdvanced, setShowWorkflowLLMAdvanced] = useState(false);
   const [expandedWorkflowLLMRole, setExpandedWorkflowLLMRole] = useState<WorkflowLLMRoleKey | null>(null);
-  const [claudeCodeToken, setClaudeCodeToken] = useState('');
-  const [claudeCredentialConfigured, setClaudeCredentialConfigured] = useState(false);
-  // Masked "first4...last4" preview of the saved token (e.g. "sk-a...DQAA").
-  // The server decrypts to build this and never returns the full value —
-  // lets a user confirm which token is saved without re-exposing it.
-  const [claudeCredentialPreview, setClaudeCredentialPreview] = useState<string | null>(null);
-  const [isLoadingClaudeCredential, setIsLoadingClaudeCredential] = useState(false);
-  const [isSavingClaudeCredential, setIsSavingClaudeCredential] = useState(false);
-  const [isDeletingClaudeCredential, setIsDeletingClaudeCredential] = useState(false);
-  const [showClaudeCodeToken, setShowClaudeCodeToken] = useState(false);
-  const [claudeCredentialError, setClaudeCredentialError] = useState<string | null>(null);
+  // Each credential field owns its own entry/saved state; the parent only needs
+  // to know whether one still holds unsaved text, so it can block its submit.
+  const [unsavedCredentialProvider, setUnsavedCredentialProvider] = useState<string | null>(null);
   const [isSavingPreset, setIsSavingPreset] = useState(false);
 
   const { selectedModeCategory, getAgentModeFromCategory } = useModeStore();
@@ -306,13 +287,22 @@ const PresetModal: React.FC<PresetModalProps> = React.memo(({
   // Draft create paths can collide with existing workflows, so only load scoped secrets for persisted workflows.
   const workflowSecretPath = editingPreset ? selectedFolder?.filepath : undefined;
   const workflowCredentialPath = editingPreset ? selectedFolder?.filepath : undefined;
+  // Clears any half-typed credential when the modal opens or switches
+  // automations, so one workflow's entry can never be submitted against another.
+  const credentialResetKey = `${isOpen ? 'open' : 'closed'}:${editingPreset?.id ?? 'new'}`;
 
-  const usesClaudeCode = useMemo(() => {
-    return selectedWorkflowLLMOption?.provider === 'claude-code'
+  // Whether any resolved role or fallback runs on a given coding-CLI provider.
+  // A provider reached only through a fallback still needs its credential, so
+  // the fallback lists are part of the check.
+  const usesCodingProvider = useCallback((providerId: string) => {
+    return selectedWorkflowLLMOption?.provider === providerId
       || [effectiveTier1LLM, effectiveTier2LLM, effectiveTier3LLM, effectiveBuilderLLM, effectiveMaintenanceLLM, effectivePulseLLM]
-        .some(config => agentLLMUsesProvider(config, 'claude-code'))
-      || [...tier1Fallbacks, ...tier2Fallbacks, ...tier3Fallbacks].some(fallback => fallback.provider === 'claude-code');
+        .some(config => agentLLMUsesProvider(config, providerId))
+      || [...tier1Fallbacks, ...tier2Fallbacks, ...tier3Fallbacks].some(fallback => fallback.provider === providerId);
   }, [effectiveBuilderLLM, effectiveMaintenanceLLM, effectivePulseLLM, effectiveTier1LLM, effectiveTier2LLM, effectiveTier3LLM, selectedWorkflowLLMOption?.provider, tier1Fallbacks, tier2Fallbacks, tier3Fallbacks]);
+
+  const usesClaudeCode = useMemo(() => usesCodingProvider('claude-code'), [usesCodingProvider]);
+  const usesCursorCLI = useMemo(() => usesCodingProvider('cursor-cli'), [usesCodingProvider]);
 
   const hasAdvancedWorkflowLLMConfig = useCallback((presetLLM?: PresetLLMConfig | null) => {
     return presetLLM?.mode === 'explicit';
@@ -354,38 +344,7 @@ const PresetModal: React.FC<PresetModalProps> = React.memo(({
   useEffect(() => {
     if (!isOpen) return;
     setExpandedWorkflowLLMRole(null);
-    setClaudeCodeToken('');
-    setShowClaudeCodeToken(false);
-    setClaudeCredentialError(null);
   }, [editingPreset?.id, isOpen]);
-
-  useEffect(() => {
-    if (!isOpen || effectiveAgentMode !== 'workflow' || !workflowCredentialPath) {
-      setClaudeCredentialConfigured(false);
-      setClaudeCredentialPreview(null);
-      setIsLoadingClaudeCredential(false);
-      return;
-    }
-    let cancelled = false;
-    setIsLoadingClaudeCredential(true);
-    void secretsApi.getWorkflowClaudeCodeCredentialStatus(workflowCredentialPath)
-      .then(status => {
-        if (!cancelled) {
-          setClaudeCredentialConfigured(status.configured);
-          setClaudeCredentialPreview(status.preview ?? null);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setClaudeCredentialConfigured(false);
-          setClaudeCredentialPreview(null);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setIsLoadingClaudeCredential(false);
-      });
-    return () => { cancelled = true; };
-  }, [effectiveAgentMode, isOpen, workflowCredentialPath]);
 
   useEffect(() => {
     if (editingPreset) {
@@ -514,50 +473,6 @@ const PresetModal: React.FC<PresetModalProps> = React.memo(({
     setSelectedFolder(makeWorkflowFolder(folderName));
   }, [makeWorkflowFolder, sanitizeWorkflowFolderName]);
 
-  const handleDeleteClaudeCredential = useCallback(async () => {
-    const workspacePath = selectedFolder?.filepath;
-    if (!workspacePath) return;
-    setIsDeletingClaudeCredential(true);
-    try {
-      await secretsApi.deleteWorkflowClaudeCodeCredential(workspacePath);
-      setClaudeCredentialConfigured(false);
-      setClaudeCredentialPreview(null);
-      setClaudeCodeToken('');
-      useChatStore.getState().addToast('Workflow Claude Code token removed; saved Claude login will be used.', 'success');
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : 'Unknown error';
-      useChatStore.getState().addToast(`Failed to remove Claude Code token: ${detail}`, 'error');
-    } finally {
-      setIsDeletingClaudeCredential(false);
-    }
-  }, [selectedFolder?.filepath]);
-
-  const handleSaveClaudeCredential = useCallback(async () => {
-    const workspacePath = workflowCredentialPath;
-    const token = claudeCodeToken.trim();
-    if (!workspacePath || !token) return;
-
-    setIsSavingClaudeCredential(true);
-    setClaudeCredentialError(null);
-    try {
-      await secretsApi.storeWorkflowClaudeCodeCredential(workspacePath, token);
-      setClaudeCredentialConfigured(true);
-      setClaudeCredentialPreview(maskCredentialPreviewClient(token));
-      setClaudeCodeToken('');
-      setShowClaudeCodeToken(false);
-      useChatStore.getState().addToast('Workflow Claude Code token saved.', 'success');
-    } catch (error) {
-      const serverDetail = (error as { response?: { data?: unknown } })?.response?.data;
-      const detail = typeof serverDetail === 'string' && serverDetail.trim() !== ''
-        ? serverDetail.trim()
-        : error instanceof Error ? error.message : 'Unable to save this token';
-      setClaudeCredentialError(detail);
-      useChatStore.getState().addToast(`Failed to save Claude Code token: ${detail}`, 'error');
-    } finally {
-      setIsSavingClaudeCredential(false);
-    }
-  }, [claudeCodeToken, workflowCredentialPath]);
-
   const handleSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
     const isQueryRequired = effectiveAgentMode !== 'workflow';
@@ -566,9 +481,12 @@ const PresetModal: React.FC<PresetModalProps> = React.memo(({
       alert('Folder selection is required for workflow presets');
       return;
     }
-    if (editingPreset && usesClaudeCode && claudeCodeToken.trim()) {
-      setClaudeCredentialError('Save or clear the token before updating the automation.');
-      document.getElementById('claude-code-token')?.focus();
+    // Saving the automation with a pasted credential still sitting unsaved in
+    // its box looks like it stored the credential; it does not.
+    if (unsavedCredentialProvider) {
+      const inputId = unsavedCredentialProvider === 'cursor-cli' ? 'cursor-api-key' : 'claude-code-token';
+      useChatStore.getState().addToast('Save or clear the credential before updating the automation.', 'error');
+      document.getElementById(inputId)?.focus();
       return;
     }
 
@@ -667,28 +585,22 @@ const PresetModal: React.FC<PresetModalProps> = React.memo(({
       );
       if (saved === false) return;
       manifestSaved = true;
-      if (!editingPreset && effectiveAgentMode === 'workflow' && usesClaudeCode && claudeCodeToken.trim() && selectedFolder?.filepath) {
-        const savedToken = claudeCodeToken.trim();
-        await secretsApi.storeWorkflowClaudeCodeCredential(selectedFolder.filepath, savedToken);
-        setClaudeCredentialConfigured(true);
-        setClaudeCredentialPreview(maskCredentialPreviewClient(savedToken));
-        setClaudeCodeToken('');
-        useChatStore.getState().addToast('Workflow Claude Code token saved.', 'success');
-      }
       onClose();
     } catch (error) {
       const serverDetail = (error as { response?: { data?: unknown } })?.response?.data;
       const detail = typeof serverDetail === 'string' && serverDetail.trim() !== ''
         ? serverDetail.trim()
         : error instanceof Error ? error.message : 'Unknown error';
+      // Provider credentials are saved by their own field, not here, so a
+      // failure after the manifest landed can only be the close itself.
       const message = manifestSaved
-        ? `Automation configuration was saved, but the Claude Code token was not saved: ${detail}`
+        ? `Automation configuration was saved, but the modal could not close: ${detail}`
         : `Failed to save automation: ${detail}`;
       useChatStore.getState().addToast(message, 'error');
     } finally {
       setIsSavingPreset(false);
     }
-  }, [label, query, effectiveAgentMode, selectedFolder, selectedServers, selectedTools, selectedSkills, selectedSecrets, selectedGlobalSecrets, llmConfig, builderLLM, effectiveBuilderLLM, maintenanceLLM, effectiveMaintenanceLLM, pulseLLM, effectivePulseLLM, browserMode, cdpPort, editingPreset, tier1Fallbacks, tier2Fallbacks, tier3Fallbacks, onSave, onClose, defaultAgentLLM, effectiveTier1LLM, effectiveTier2LLM, effectiveTier3LLM, showWorkflowLLMAdvanced, usesClaudeCode, claudeCodeToken]);
+  }, [label, query, effectiveAgentMode, selectedFolder, selectedServers, selectedTools, selectedSkills, selectedSecrets, selectedGlobalSecrets, llmConfig, builderLLM, effectiveBuilderLLM, maintenanceLLM, effectiveMaintenanceLLM, pulseLLM, effectivePulseLLM, browserMode, cdpPort, editingPreset, tier1Fallbacks, tier2Fallbacks, tier3Fallbacks, onSave, onClose, defaultAgentLLM, effectiveTier1LLM, effectiveTier2LLM, effectiveTier3LLM, showWorkflowLLMAdvanced, unsavedCredentialProvider]);
 
   // Close modal on escape key
   useEffect(() => {
@@ -1011,97 +923,57 @@ const PresetModal: React.FC<PresetModalProps> = React.memo(({
                 </div>
 
                 {usesClaudeCode && (
-                  <div>
-                    <label className="mb-2 flex items-center gap-2 text-sm font-medium">
-                      <KeyRound className="h-4 w-4" />
-                      Claude Code login for this automation
-                    </label>
-                    <div className="rounded-md border border-border bg-muted/30 p-3 text-foreground">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <p className="text-xs leading-relaxed text-muted-foreground">
+                  <WorkflowProviderCredentialField
+                    provider="claude-code"
+                    inputId="claude-code-token"
+                    workflowCredentialPath={workflowCredentialPath}
+                    isFormBusy={isSavingPreset}
+                    resetKey={credentialResetKey}
+                    onDirtyChange={dirty => setUnsavedCredentialProvider(previous => (
+                      dirty ? 'claude-code' : previous === 'claude-code' ? null : previous
+                    ))}
+                    copy={{
+                      heading: 'Claude Code login for this automation',
+                      hint: (
+                        <>
                           Use a token from <code className="rounded bg-background px-1 py-0.5 font-mono text-foreground">claude setup-token</code>, or leave this empty to use the saved Claude login.
-                        </p>
-                        <span className="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
-                          {isLoadingClaudeCredential ? (
-                            <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Checking</>
-                          ) : claudeCredentialConfigured ? (
-                            <>
-                              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> Saved
-                              {claudeCredentialPreview && (
-                                <code
-                                  className="rounded bg-background px-1 py-0.5 font-mono text-foreground"
-                                  title="Masked preview — the full token is never sent to the browser"
-                                >
-                                  {claudeCredentialPreview}
-                                </code>
-                              )}
-                            </>
-                          ) : (
-                            'Using saved login'
-                          )}
-                        </span>
-                      </div>
+                        </>
+                      ),
+                      fallbackLabel: 'Using saved login',
+                      inputPlaceholder: 'Paste Claude Code token',
+                      replacePlaceholder: 'Paste a replacement token',
+                      noun: 'token',
+                      savedMessage: 'Workflow Claude Code token saved.',
+                      removedMessage: 'Workflow Claude Code token removed; saved Claude login will be used.',
+                    }}
+                  />
+                )}
 
-                      {editingPreset ? (
-                        <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-                          <div className="relative min-w-0 flex-1">
-                            <input
-                              id="claude-code-token"
-                              type={showClaudeCodeToken ? 'text' : 'password'}
-                              autoComplete="off"
-                              value={claudeCodeToken}
-                              onChange={event => {
-                                setClaudeCodeToken(event.target.value);
-                                setClaudeCredentialError(null);
-                              }}
-                              placeholder={claudeCredentialConfigured ? 'Paste a replacement token' : 'Paste Claude Code token'}
-                              className="h-9 w-full rounded-md border border-input bg-background px-3 pr-10 font-mono text-sm text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => setShowClaudeCodeToken(previous => !previous)}
-                              className="absolute inset-y-0 right-0 flex w-9 items-center justify-center text-muted-foreground hover:text-foreground"
-                              aria-label={showClaudeCodeToken ? 'Hide token' : 'Show token'}
-                              title={showClaudeCodeToken ? 'Hide token' : 'Show token'}
-                            >
-                              {showClaudeCodeToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                            </button>
-                          </div>
-                          <Button
-                            type="button"
-                            size="sm"
-                            onClick={handleSaveClaudeCredential}
-                            disabled={!claudeCodeToken.trim() || isSavingClaudeCredential || isSavingPreset}
-                            className="h-9 shrink-0"
-                          >
-                            {isSavingClaudeCredential && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />}
-                            {isSavingClaudeCredential ? 'Verifying...' : 'Save token'}
-                          </Button>
-                        </div>
-                      ) : (
-                        <p className="mt-3 text-xs text-muted-foreground">Create the automation first, then edit it to add a workflow-specific token.</p>
-                      )}
-
-                      {claudeCredentialError && (
-                        <p role="alert" className="mt-2 text-xs text-red-600 dark:text-red-400">{claudeCredentialError}</p>
-                      )}
-
-                      <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-                        <span className="text-[11px] text-muted-foreground">This token is private to the current user and automation.</span>
-                        {claudeCredentialConfigured && (
-                          <button
-                            type="button"
-                            onClick={handleDeleteClaudeCredential}
-                            disabled={isDeletingClaudeCredential || isSavingClaudeCredential || isSavingPreset}
-                            className="inline-flex shrink-0 items-center gap-1 text-xs text-red-600 hover:text-red-700 disabled:opacity-50 dark:text-red-400"
-                          >
-                            {isDeletingClaudeCredential ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-                            Remove token
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  </div>
+                {usesCursorCLI && (
+                  <WorkflowProviderCredentialField
+                    provider="cursor-cli"
+                    inputId="cursor-api-key"
+                    workflowCredentialPath={workflowCredentialPath}
+                    isFormBusy={isSavingPreset}
+                    resetKey={credentialResetKey}
+                    onDirtyChange={dirty => setUnsavedCredentialProvider(previous => (
+                      dirty ? 'cursor-cli' : previous === 'cursor-cli' ? null : previous
+                    ))}
+                    copy={{
+                      heading: 'Cursor login for this automation',
+                      hint: (
+                        <>
+                          Paste an API key from <code className="rounded bg-background px-1 py-0.5 font-mono text-foreground">cursor.com</code> settings, or leave this empty to use the saved Cursor login.
+                        </>
+                      ),
+                      fallbackLabel: 'Using saved login',
+                      inputPlaceholder: 'Paste Cursor API key',
+                      replacePlaceholder: 'Paste a replacement API key',
+                      noun: 'API key',
+                      savedMessage: 'Workflow Cursor API key saved.',
+                      removedMessage: 'Workflow Cursor API key removed; saved Cursor login will be used.',
+                    }}
+                  />
                 )}
               </div>
 
