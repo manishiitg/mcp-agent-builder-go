@@ -139,12 +139,30 @@ profile:
     transport: structured
     provider: claude-code
     model_id: claude-sonnet-5
-    # Enable provider-native coding tools for workspace work (rendering, files,
-    # QA). Product HTTP APIs deliberately still go through the bridge shell
-    # above rather than each CLI's own shell — api_transport.native_shell is
-    # implemented and left OFF; the reasoning and evidence are in
+    # hybrid: native CLI tools (Read/Write/Shell) handle project file work;
+    # the guarded AgentWorks MCP bridge (api-bridge) handles product control
+    # (execute_step, show_video, secrets, etc). See the mode table in
+    # docs/design/video_studio_inside_agentworks.md.
+    #
+    # A prior investigation into apparent hybrid-mode failures (native tools
+    # running unblocked, "product shell not connected" errors) root-caused
+    # them to a bug unrelated to this mode setting: the structured Cursor CLI
+    # adapter never created a git-root marker in the project working
+    # directory, so cursor-agent walked up to the enclosing monorepo root
+    # looking for .cursor/mcp.json, found nothing there, and silently never
+    # connected the api-bridge MCP server on ANY mode. That's fixed in
+    # cursorcli_structured_adapter.go (mirrors the tmux adapter's existing
+    # cursorWorkingDirIsGitRoot/initCursorWorkspaceGitMarker fix). With the
+    # bridge actually reachable, re-testing hybrid here.
+    #
+    # hybrid + compatibility is documented as valid only "for a trusted local
+    # developer machine" and "must never be silently selected for hosted or
+    # multi-user deployments" — native tools aren't constrained by
+    # FolderGuard the way MCP tools are.
+    #
+    # Product HTTP APIs go through the bridge shell either way —
+    # api_transport.native_shell is implemented and left OFF; see
     # docs/design/product_api_transport_for_coding_agents.md.
-    # Each provider's own automatic safety classifier reviews native actions.
     agent_tools:
       mode: hybrid
     approvals:
