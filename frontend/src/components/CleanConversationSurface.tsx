@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, type ReactNode } from 'react'
-import { AlertCircle, Check, Loader2, Sparkles, Wrench } from 'lucide-react'
+import { AlertCircle, Bell, Check, Loader2, Sparkles, Wrench } from 'lucide-react'
 import type { PollingEvent } from '../services/api-types'
 import { buildCleanConversationItems, buildProductionActivityItems } from '../utils/cleanConversation'
 import { ConversationMarkdownRenderer } from './ui/MarkdownRenderer'
@@ -65,6 +65,11 @@ export function CleanConversationSurface({
             <summary className="cursor-pointer select-none text-xs font-semibold text-violet-300">Thinking</summary>
             <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-slate-300">{item.content}</p>
           </details>
+        ) : item.role === 'notification' ? (
+          <div key={item.id} className="mx-auto flex max-w-[90%] items-start gap-2 rounded-full bg-slate-100 px-3.5 py-2 text-[11px] leading-5 text-slate-500 dark:bg-slate-900 dark:text-slate-400" data-testid="clean-notification-message">
+            <Bell className="mt-0.5 h-3 w-3 shrink-0" />
+            <p className="whitespace-pre-wrap break-words">{item.content}</p>
+          </div>
         ) : (
           <article key={item.id} className="flex w-full items-start gap-3" data-testid={item.role === 'error' ? 'clean-error-message' : 'clean-assistant-message'}>
             <span className={`mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-xl ${item.role === 'error' ? 'bg-red-50 text-red-600 dark:bg-red-950/50 dark:text-red-300' : 'bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300'}`}>
@@ -74,15 +79,19 @@ export function CleanConversationSurface({
               {item.role === 'assistant'
                 ? <ConversationMarkdownRenderer content={item.content} maxHeight="none" framed={false} />
                 : <p className="whitespace-pre-wrap text-sm leading-6">{item.content}</p>}
-              {item.role === 'assistant' && item.usage ? (
-                <p className="mt-3 flex flex-wrap gap-x-3 gap-y-1 border-t border-slate-100 pt-2 text-[10px] font-medium text-slate-400 dark:border-slate-800" data-testid="clean-assistant-usage">
-                  <span>Input {formatTokenCount(item.usage.inputTokens)}</span>
-                  <span>Output {formatTokenCount(item.usage.outputTokens)}</span>
-                  {item.usage.cacheTokens > 0 ? <span>Cache {formatTokenCount(item.usage.cacheTokens)}</span> : null}
-                  {item.usage.isEstimated ? <span>Estimated</span> : null}
-                </p>
+              {(item.role === 'assistant' && item.usage) || messageTime(item.timestamp) ? (
+                <div className={`mt-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 pt-2 text-[10px] font-medium text-slate-400 ${item.role === 'assistant' && item.usage ? 'border-t border-slate-100 dark:border-slate-800' : ''}`}>
+                  {item.role === 'assistant' && item.usage ? (
+                    <p className="flex flex-wrap gap-x-3 gap-y-1" data-testid="clean-assistant-usage">
+                      <span>Input {formatTokenCount(item.usage.inputTokens)}</span>
+                      <span>Output {formatTokenCount(item.usage.outputTokens)}</span>
+                      {item.usage.cacheTokens > 0 ? <span>Cache {formatTokenCount(item.usage.cacheTokens)}</span> : null}
+                      {item.usage.isEstimated ? <span>Estimated</span> : null}
+                    </p>
+                  ) : <span />}
+                  {messageTime(item.timestamp) ? <time>{messageTime(item.timestamp)}</time> : null}
+                </div>
               ) : null}
-              {messageTime(item.timestamp) ? <time className="mt-2 block text-[10px] text-slate-400">{messageTime(item.timestamp)}</time> : null}
             </div>
           </article>
         ))}

@@ -13,7 +13,7 @@ function event(id: string, type: string, data: Record<string, unknown>, extra: P
 }
 
 describe('buildCleanConversationItems', () => {
-  it('keeps the human conversation and removes internal runtime messages', () => {
+  it('keeps the human conversation, surfaces auto-notifications, and removes other internal runtime messages', () => {
     const items = buildCleanConversationItems([
       event('user-1', 'user_message', {
         content: 'Make a launch video\n\nPrevious workflow-builder conversation file: Chats/internal.md',
@@ -25,6 +25,7 @@ describe('buildCleanConversationItems', () => {
 
     expect(items).toEqual([
       expect.objectContaining({ role: 'user', content: 'Make a launch video' }),
+      expect.objectContaining({ role: 'notification', content: 'internal runtime update' }),
       expect.objectContaining({ role: 'assistant', content: 'Your launch video is ready.' }),
     ])
   })

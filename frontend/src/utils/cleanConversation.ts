@@ -4,7 +4,7 @@ import { pairToolCalls } from './terminalEventTranscript'
 
 export type ConversationItem = {
   id: string
-  role: 'user' | 'assistant' | 'reasoning' | 'error'
+  role: 'user' | 'assistant' | 'reasoning' | 'error' | 'notification'
   content: string
   timestamp?: string
   usage?: ConversationUsage
@@ -107,7 +107,15 @@ export function buildCleanConversationItems(events: PollingEvent[]): Conversatio
 
     if (event.type === 'user_message') {
       const content = displaySafeUserMessage(firstText(payload.content, asRecord(event.data)?.content))
-      if (!content || content.startsWith('[AUTO-NOTIFICATION]')) continue
+      if (!content) continue
+      if (content.startsWith('[AUTO-NOTIFICATION]')) {
+        // Surfaced directly for now — background execute_step / run_full_workflow
+        // completions were previously only inferable from the assistant's next
+        // reply, which read as the agent narrating unprompted.
+        const notification = content.replace(/^\[AUTO-NOTIFICATION\]\s*/, '').trim()
+        if (notification) pushUnique({ id: event.id, role: 'notification', content: notification, timestamp: event.timestamp })
+        continue
+      }
 			if (event.id?.startsWith('user-message-')) {
 				pendingFrontendUserEchoes.set(content, (pendingFrontendUserEchoes.get(content) || 0) + 1)
 			} else {
