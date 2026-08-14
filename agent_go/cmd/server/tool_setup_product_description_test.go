@@ -5,39 +5,81 @@ import (
 	"testing"
 )
 
-// A product surface has its own workspace vocabulary (Video Studio's prompt
-// names uploads/, work/ and outputs/) and does not carry the org-level Pulse
-// tools at all, so AgentWorks' plan/pulse placement rules must not be appended
-// to the shell tool description it reads on every get_api_spec call.
-func TestMultiAgentToolDescriptionOmitsAgentWorksPlacementForProducts(t *testing.T) {
+func profileWithPlacement(placement map[string][]string) *resolvedAgentProfile {
+	profile := &resolvedAgentProfile{}
+	profile.Definition.Runtime.Workspace.Placement = placement
+	return profile
+}
+
+// A product declares where its own artifacts go; it must not inherit
+// AgentWorks' layout (plan folders, pulse/goals.html) for concepts it does not
+// have. Video Studio's system prompt names uploads//work//outputs/, and the
+// tool description is what the model re-reads on every get_api_spec call, so
+// the two contradicting each other is the bug this guards.
+func TestMultiAgentToolDescriptionUsesDeclaredPlacement(t *testing.T) {
 	const folder = "_users/default/Chats/Video Studio/projects/demo"
+	profile := profileWithPlacement(map[string][]string{
+		"execute_shell_command":     {"Direct-chat work belongs in `work/`; finished exports belong in `outputs/`."},
+		"diff_patch_workspace_file": {"Patch files in `work/` or the step's own run folder."},
+	})
 
-	product := enhanceToolDescriptionForMultiAgentMode("execute_shell_command", "base.", folder, true)
+	shell := enhanceToolDescriptionForMultiAgentMode("execute_shell_command", "base.", folder, profile)
+	if !strings.Contains(shell, "finished exports belong in `outputs/`") {
+		t.Fatalf("declared placement missing from shell description:\n%s", shell)
+	}
 	for _, leaked := range []string{"pulse/", "goals.html", "org-pulse.html", "{plan_id}"} {
-		if strings.Contains(product, leaked) {
-			t.Fatalf("product profile description leaked AgentWorks guidance %q:\n%s", leaked, product)
+		if strings.Contains(shell, leaked) {
+			t.Fatalf("product description leaked AgentWorks guidance %q:\n%s", leaked, shell)
 		}
 	}
-	// The access restriction itself is true everywhere and must survive.
-	if !strings.Contains(product, folder) || !strings.Contains(product, "read-only unless explicitly allowed") {
-		t.Fatalf("product profile description dropped the write-scope restriction:\n%s", product)
+	// The write-scope restriction is true everywhere and must survive.
+	if !strings.Contains(shell, folder) || !strings.Contains(shell, "read-only unless explicitly allowed") {
+		t.Fatalf("product description dropped the write-scope restriction:\n%s", shell)
 	}
 
-	// AgentWorks keeps the guidance it actually uses.
-	agentworks := enhanceToolDescriptionForMultiAgentMode("execute_shell_command", "base.", folder, false)
+	// Per-tool, not one shared block: each tool gets only what was declared for it.
+	patch := enhanceToolDescriptionForMultiAgentMode("diff_patch_workspace_file", "base.", folder, profile)
+	if !strings.Contains(patch, "Patch files in `work/`") {
+		t.Fatalf("patch tool did not get its own declared placement:\n%s", patch)
+	}
+	if strings.Contains(patch, "finished exports belong in `outputs/`") {
+		t.Fatalf("patch tool received the shell tool's placement lines:\n%s", patch)
+	}
+}
+
+// Declaring nothing for a tool yields no placement lines. Falling back to the
+// AgentWorks layout here would reintroduce exactly what this replaced.
+func TestMultiAgentToolDescriptionUndeclaredToolGetsNoPlacement(t *testing.T) {
+	const folder = "_users/default/Chats/Video Studio/projects/demo"
+	got := enhanceToolDescriptionForMultiAgentMode("execute_shell_command", "base.", folder, profileWithPlacement(nil))
+	for _, leaked := range []string{"pulse/", "{plan_id}"} {
+		if strings.Contains(got, leaked) {
+			t.Fatalf("undeclared tool fell back to AgentWorks guidance %q:\n%s", leaked, got)
+		}
+	}
+	if !strings.Contains(got, "read-only unless explicitly allowed") {
+		t.Fatalf("undeclared tool lost the write-scope restriction:\n%s", got)
+	}
+}
+
+// A session with no profile is plain AgentWorks and keeps its own layout.
+func TestMultiAgentToolDescriptionKeepsAgentWorksLayoutWithoutProfile(t *testing.T) {
+	const folder = "_users/default/Chats"
+
+	shell := enhanceToolDescriptionForMultiAgentMode("execute_shell_command", "base.", folder, nil)
 	for _, want := range []string{"pulse/goals.html", "{plan_id}"} {
-		if !strings.Contains(agentworks, want) {
-			t.Fatalf("AgentWorks description lost %q:\n%s", want, agentworks)
+		if !strings.Contains(shell, want) {
+			t.Fatalf("AgentWorks description lost %q:\n%s", want, shell)
 		}
 	}
 
-	// Read-only tools: same split, and the product variant must not advertise a
-	// pulse/ write scope it does not have.
-	readOnlyProduct := enhanceToolDescriptionForMultiAgentMode("read_workspace_file", "base.", folder, true)
-	if strings.Contains(readOnlyProduct, "pulse/") {
-		t.Fatalf("product read-only description advertises pulse/ write access:\n%s", readOnlyProduct)
+	// Read-only tools advertise the writable scopes; only AgentWorks includes pulse/.
+	readOnly := enhanceToolDescriptionForMultiAgentMode("read_workspace_file", "base.", folder, nil)
+	if !strings.Contains(readOnly, "pulse/") {
+		t.Fatalf("AgentWorks read-only description lost pulse/:\n%s", readOnly)
 	}
-	if readOnlyAgentWorks := enhanceToolDescriptionForMultiAgentMode("read_workspace_file", "base.", folder, false); !strings.Contains(readOnlyAgentWorks, "pulse/") {
-		t.Fatalf("AgentWorks read-only description lost pulse/:\n%s", readOnlyAgentWorks)
+	productReadOnly := enhanceToolDescriptionForMultiAgentMode("read_workspace_file", "base.", folder, profileWithPlacement(nil))
+	if strings.Contains(productReadOnly, "pulse/") {
+		t.Fatalf("product read-only description advertises pulse/ write access:\n%s", productReadOnly)
 	}
 }

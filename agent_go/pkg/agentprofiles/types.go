@@ -33,6 +33,24 @@ type RuntimePolicy struct {
 	// shell keeps the guarded AgentWorks shell tool absent while giving a native
 	// coding CLI its scoped, session-bound API endpoint environment.
 	APITransport APITransportPolicy `json:"api_transport,omitempty" yaml:"api_transport,omitempty"`
+	// Workspace declares where this product's own artifacts belong, in the
+	// product's own vocabulary. Write-capable workspace tools append these lines
+	// to their description, so a product states its layout once here instead of
+	// inheriting AgentWorks' (plan folders, pulse/goals.html) — which a product
+	// without those concepts would be told to use anyway, contradicting the
+	// placement rules its system prompt had just given.
+	Workspace WorkspacePolicy `json:"workspace,omitempty" yaml:"workspace,omitempty"`
+}
+
+// WorkspacePolicy carries a product's declared artifact placement rules.
+type WorkspacePolicy struct {
+	// Placement is keyed by tool name: each tool's description gets only the
+	// lines declared for it. Per-tool rather than one shared block because the
+	// advice that helps differs by tool — where a shell command should write is
+	// not what a patch tool needs to be told — and because a product declares
+	// rules only for tools it actually exposes. Lines are appended verbatim and
+	// read by the model, so phrase each as an instruction naming a concrete path.
+	Placement map[string][]string `json:"placement,omitempty" yaml:"placement,omitempty"`
 }
 
 type AgentToolsPolicy struct {

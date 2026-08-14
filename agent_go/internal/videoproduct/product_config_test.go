@@ -67,6 +67,11 @@ func TestVideoStudioManifestDrivesProfileAndWorkflowCapabilities(t *testing.T) {
 	}
 	// AgentWorks-wide administration, the shared media/LLM bridge, sub-agent
 	// orchestration, and scheduling are not this product's business.
+	// diff_patch_workspace_file is excluded for a different reason, pinned by
+	// TestProductToolGateGovernsTheCodingAgentBridgeCatalog: the bridge carries
+	// only what a coding CLI cannot do natively, and every supported CLI ships
+	// its own file editor. agent_browser is the contrast — it stays because none
+	// of them can drive the user's signed-in browser.
 	for _, name := range []string{
 		"set_provider_auth", "install_skill", "add_mcp_server",
 		"diff_patch_workspace_file", "generate_video",
@@ -88,6 +93,20 @@ func TestVideoStudioManifestDrivesProfileAndWorkflowCapabilities(t *testing.T) {
 
 	if manifest.Workflows.BrowserMode != "auto" || len(manifest.Workflows.SelectedSkills) == 0 {
 		t.Fatalf("unexpected workflow definition: %+v", manifest.Workflows)
+	}
+
+	// Every tool that can write declares where this product's artifacts belong.
+	// Without a declaration the tool description says nothing about layout —
+	// and the shared AgentWorks default it used to inherit (plan folders,
+	// pulse/goals.html) names concepts Video Studio does not have and
+	// contradicts the uploads//work//outputs/ rules in its own system prompt.
+	for _, writer := range []string{"execute_shell_command", "diff_patch_workspace_file"} {
+		if !enabled[writer] {
+			continue
+		}
+		if len(manifest.Profile.Runtime.Workspace.Placement[writer]) == 0 {
+			t.Fatalf("%s is exposed but declares no runtime.workspace.placement: %+v", writer, manifest.Profile.Runtime.Workspace)
+		}
 	}
 }
 

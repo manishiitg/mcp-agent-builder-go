@@ -167,6 +167,20 @@ profile:
       mode: hybrid
     approvals:
       mode: provider_auto
+    # Where this product's artifacts belong, in its own vocabulary, keyed by the
+    # tool the advice is for. Declared here rather than left to the shared
+    # default, which is AgentWorks' layout — plan folders and pulse/goals.html —
+    # for concepts Video Studio does not have. Only execute_shell_command is
+    # listed because it is the only writing tool this product exposes;
+    # diff_patch_workspace_file is deliberately not in the allow list above.
+    # Keep in step with prompts/system-prompt.md, which tells the agent the same
+    # thing; the tool description is what it re-reads on every get_api_spec.
+    workspace:
+      placement:
+        execute_shell_command:
+          - "Uploaded references live in `uploads/` and are read-only — never modify them."
+          - "Direct-chat work belongs in `work/`; finished exports belong in `outputs/`."
+          - "Workflow steps write inside their own run folder, not at the project root."
     provider_options:
       - id: claude-code
         label: Claude Code
