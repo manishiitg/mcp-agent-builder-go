@@ -273,3 +273,28 @@ func TestPreProductionIsOrchestratedSoCritiqueFindingsHaveAnAddressee(t *testing
 		}
 	}
 }
+
+// The creative critique writes "the exact acceptance criteria the builder must
+// prove". The builder is the first stage after the orchestrated gate, so if its
+// instructions never name the scorecard, those criteria are written and then
+// read by nobody until the composition critique — one stage too late to steer
+// the build they were written for.
+func TestBuilderIsPointedAtTheCriteriaTheCritiqueWrote(t *testing.T) {
+	var critique, design *PipelineStage
+	for i := range infographicPipeline.Stages {
+		switch infographicPipeline.Stages[i].ID {
+		case "infographic-creative-critique":
+			critique = &infographicPipeline.Stages[i]
+		case "infographic-design":
+			design = &infographicPipeline.Stages[i]
+		}
+	}
+	if critique == nil || design == nil {
+		t.Fatal("creative critique or design stage is missing from the infographic pipeline")
+	}
+	for _, artifact := range append([]string{critique.Output}, critique.Artifacts...) {
+		if !strings.Contains(design.Description, artifact) {
+			t.Fatalf("the build stage never mentions %q, so the critique's acceptance criteria reach no builder", artifact)
+		}
+	}
+}
