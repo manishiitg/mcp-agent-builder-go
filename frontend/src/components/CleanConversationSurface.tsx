@@ -126,34 +126,35 @@ export function CleanConversationSurface({
         ))}
 
         {productionActivity.length > 0 ? (
-          <section className="w-full rounded-2xl border border-slate-800 bg-slate-900/80 p-3" aria-label="Production activity" data-testid="clean-production-activity">
-            <details open={isStreaming}>
-              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 select-none [&::-webkit-details-marker]:hidden">
-              <span className="flex items-center gap-2 text-[11px] font-semibold text-slate-200"><Wrench className="h-3.5 w-3.5 text-violet-400" /> Production activity</span>
-              <span className="text-[10px] text-slate-400">{productionActivity.length} {productionActivity.length === 1 ? 'action' : 'actions'}</span>
-              </summary>
-              <div className="mt-2 space-y-1.5">
+          // Plain text, no card: a bordered box per turn read as a UI element
+          // competing with the conversation, for information nobody reads unless
+          // they explicitly ask. Closed by default even while streaming — with a
+          // workflow in flight this list can run to dozens of calls.
+          <details className="w-full" aria-label="Production activity" data-testid="clean-production-activity">
+            <summary className="flex cursor-pointer list-none items-center gap-1 select-none text-[11px] text-slate-500 hover:text-slate-300 [&::-webkit-details-marker]:hidden">
+              <Wrench className="h-3 w-3" />
+              <span>+{productionActivity.length} {productionActivity.length === 1 ? 'tool' : 'tools'}</span>
+            </summary>
+            <div className="mt-1.5 space-y-1 pl-4 text-[11px] text-slate-500">
               {productionActivity.map((activityItem) => (
-                <div key={activityItem.id} className="flex items-start gap-2.5 rounded-xl bg-slate-950/70 px-2.5 py-2 shadow-sm" data-status={activityItem.status}>
-                  <span className={`mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full ${activityItem.status === 'complete' ? 'bg-emerald-100 text-emerald-600 dark:bg-emerald-950 dark:text-emerald-300' : activityItem.status === 'error' ? 'bg-red-100 text-red-600 dark:bg-red-950 dark:text-red-300' : 'bg-violet-100 text-violet-600 dark:bg-violet-950 dark:text-violet-300'}`}>
-                    {activityItem.status === 'complete' ? <Check className="h-3 w-3" /> : activityItem.status === 'error' ? <AlertCircle className="h-3 w-3" /> : <Loader2 className="h-3 w-3 animate-spin" />}
+                <div key={activityItem.id} className="flex items-start gap-1.5" data-status={activityItem.status}>
+                  <span className="mt-0.5 shrink-0">
+                    {activityItem.status === 'complete' ? <Check className="h-3 w-3 text-emerald-500" /> : activityItem.status === 'error' ? <AlertCircle className="h-3 w-3 text-red-500" /> : <Loader2 className="h-3 w-3 animate-spin text-violet-500" />}
                   </span>
                   <div className="min-w-0 flex-1">
-                    <strong className="block truncate text-[11px] font-semibold text-slate-200">{activityItem.title}</strong>
-                    <small className="mt-0.5 block text-[10px] leading-4 text-slate-400">{activityItem.detail}</small>
+                    <span className="block truncate">{activityItem.title}</span>
                     {activityItem.arguments || activityItem.result ? (
-                      <details className="mt-2 rounded-lg border border-slate-800 bg-black/20 px-2 py-1.5 text-[10px] text-slate-300">
-                        <summary className="cursor-pointer select-none font-medium text-violet-300">Developer details</summary>
-                        {activityItem.arguments ? <><p className="mt-2 font-semibold text-slate-400">Arguments</p><pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono leading-4 text-slate-200">{activityItem.arguments}</pre></> : null}
-                        {activityItem.result ? <><p className="mt-2 font-semibold text-slate-400">Result</p><pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono leading-4 text-slate-200">{activityItem.result}</pre></> : null}
+                      <details className="mt-1 text-slate-500">
+                        <summary className="cursor-pointer select-none text-violet-400">Developer details</summary>
+                        {activityItem.arguments ? <><p className="mt-1 text-slate-500">Arguments</p><pre className="mt-0.5 max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono leading-4">{activityItem.arguments}</pre></> : null}
+                        {activityItem.result ? <><p className="mt-1 text-slate-500">Result</p><pre className="mt-0.5 max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono leading-4">{activityItem.result}</pre></> : null}
                       </details>
                     ) : null}
                   </div>
                 </div>
               ))}
-              </div>
-            </details>
-          </section>
+            </div>
+          </details>
         ) : null}
 
         {isStreaming && !streamingText.trim() ? (
