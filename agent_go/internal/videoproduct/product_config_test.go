@@ -2,6 +2,7 @@ package videoproduct
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -295,6 +296,65 @@ func TestBuilderIsPointedAtTheCriteriaTheCritiqueWrote(t *testing.T) {
 	for _, artifact := range append([]string{critique.Output}, critique.Artifacts...) {
 		if !strings.Contains(design.Description, artifact) {
 			t.Fatalf("the build stage never mentions %q, so the critique's acceptance criteria reach no builder", artifact)
+		}
+	}
+}
+
+// Skills are attached per step id via step_config.steps[].agent_configs.
+// enabled_skills, and the runtime resolves them by matching that id — including
+// recursively into predefined_routes[].sub_agent_step (populateRuntimeFields).
+// Moving a stage from a top-level step to a route therefore keeps its skills
+// ONLY because its step_config entry is still emitted under the same id. This
+// pins that: a stage that loses its entry would run with no skills at all,
+// which fails as a vague result rather than an error.
+func TestOrchestratedRoutesKeepTheirSkillEntries(t *testing.T) {
+	raw, err := json.Marshal(stepConfigForAll(pipelineRegistry))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config struct {
+		Steps []struct {
+			ID     string `json:"id"`
+			Agents struct {
+				Skills []string `json:"enabled_skills"`
+			} `json:"agent_configs"`
+		} `json:"steps"`
+	}
+	if err := json.Unmarshal(raw, &config); err != nil {
+		t.Fatal(err)
+	}
+	skillsByID := map[string][]string{}
+	for _, step := range config.Steps {
+		skillsByID[step.ID] = step.Agents.Skills
+	}
+
+	for _, p := range pipelineRegistry {
+		if p.Orchestrated == nil {
+			continue
+		}
+		if _, ok := skillsByID[p.Orchestrated.ID]; !ok {
+			t.Fatalf("orchestrator %q has no step_config entry; it would fall back to platform defaults instead of this product's LLM", p.Orchestrated.ID)
+		}
+		for _, id := range p.Orchestrated.StageIDs {
+			var stage *PipelineStage
+			for i := range p.Stages {
+				if p.Stages[i].ID == id {
+					stage = &p.Stages[i]
+				}
+			}
+			if stage == nil {
+				t.Fatalf("orchestrated stage id %q matches no stage in pipeline %q", id, p.ID)
+			}
+			got, ok := skillsByID[id]
+			if !ok {
+				t.Fatalf("orchestrated route %q has no step_config entry; as a route it would run with no skills", id)
+			}
+			if !reflect.DeepEqual(got, stage.Skills) {
+				t.Fatalf("route %q skills = %v, want %v", id, got, stage.Skills)
+			}
+			if len(stage.Skills) > 0 && len(got) == 0 {
+				t.Fatalf("route %q declares skills but its config carries none", id)
+			}
 		}
 	}
 }
