@@ -82,18 +82,23 @@ export function CleanConversationSurface({
           // has a visible cause. Full width with its own label, because the
           // payload is a multi-line status report — the centered pill this used
           // to be was built for a one-line notice and wrapped badly.
-          <div key={item.id} className="w-full rounded-xl border border-cyan-200/70 bg-cyan-50/60 px-4 py-3 dark:border-cyan-900/60 dark:bg-cyan-950/20" data-testid="clean-notification-message">
-            <p className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-cyan-700 dark:text-cyan-300">
+          // Collapsed by default: the body is orchestration bookkeeping written
+          // for the agent (raw `iter=`/`step=`/`item=` context plus the step's
+          // STATUS contract line), not prose for a video creator. The header
+          // alone answers the question this card exists to answer — why the
+          // agent just spoke — and the detail stays one click away.
+          <details key={item.id} className="w-full rounded-xl border border-cyan-200/70 bg-cyan-50/60 px-4 py-3 dark:border-cyan-900/60 dark:bg-cyan-950/20" data-testid="clean-notification-message">
+            <summary className="flex cursor-pointer select-none items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-cyan-700 dark:text-cyan-300">
               <Bell className="h-3 w-3 shrink-0" />
               {isFailedStepNotification(item.content) ? 'Step failed' : 'Step complete'}
-            </p>
+            </summary>
             {/* The payload is authored as markdown (bold step names, `code`
                 paths, bullet lists when several steps land together), so render
                 it rather than printing the syntax literally. */}
-            <div className="text-xs leading-5 text-slate-600 dark:text-slate-300">
+            <div className="mt-2 text-xs leading-5 text-slate-600 dark:text-slate-300">
               <ConversationMarkdownRenderer content={item.content} maxHeight="none" framed={false} />
             </div>
-          </div>
+          </details>
         ) : (
           <article key={item.id} className="flex w-full items-start gap-3" data-testid={item.role === 'error' ? 'clean-error-message' : 'clean-assistant-message'}>
             <span className={`mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-xl ${item.role === 'error' ? 'bg-red-50 text-red-600 dark:bg-red-950/50 dark:text-red-300' : 'bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300'}`}>
