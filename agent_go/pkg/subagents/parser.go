@@ -10,6 +10,9 @@ import (
 
 // ParseSubAgentFile parses a SUBAGENT.md file content into frontmatter and body
 func ParseSubAgentFile(content string) (*SubAgentFrontmatter, string, error) {
+	if strings.TrimSpace(content) == "" {
+		return nil, "", fmt.Errorf("SUBAGENT.md is empty or could not be read")
+	}
 	if !strings.HasPrefix(content, "---") {
 		return nil, "", fmt.Errorf("SUBAGENT.md must start with YAML frontmatter (---)")
 	}
