@@ -85,4 +85,23 @@ func TestGeneratedVideoStudioPlanRefreshesWhenCritiqueGatesAreMissing(t *testing
 	if !shouldRefreshGeneratedVideoStudioPlan(preOrchestrator) {
 		t.Fatal("a pre-orchestrator Video Studio infographic plan should upgrade")
 	}
+
+	// The case marker-matching cannot see: every current identifier is present,
+	// so no fingerprint fires, but the stored plan is one the platform refuses
+	// to load. This is what a project seeded between the orchestrator landing
+	// and its next_step_id fix actually held, and run_full_workflow failed with
+	// "plan.json uses an invalid or legacy format" rather than running.
+	invalidButCurrent := `{"steps":[{"type":"routing","id":"route","routes":[{"route_id": "infographic","next_step_id":"infographic-preproduction"}]},` +
+		`{"type":"todo_task","id":"infographic-preproduction","title":"Brief","description":"d",` +
+		`"predefined_routes":[{"route_id":"infographic-research","route_name":"r","condition":"c",` +
+		`"sub_agent_step":{"type":"message_sequence","id":"infographic-research","title":"t","description":"d",` +
+		`"items":[{"id":"i","type":"user_message","message":"m"}]}}]},` +
+		`{"type":"message_sequence","id":"infographic-render-critique","title":"t","description":"d",` +
+		`"items":[{"id":"i","type":"user_message","message":"m"}],"next_step_id":"end"}]}`
+	if planLoadsOnThisPlatform(invalidButCurrent) {
+		t.Fatal("fixture is meant to be a plan the platform rejects; it now loads, so this asserts nothing")
+	}
+	if !shouldRefreshGeneratedVideoStudioPlan(invalidButCurrent) {
+		t.Fatal("a stored plan the platform will not load must be re-seeded, whatever markers it carries")
+	}
 }

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/agentprofiles"
+	sbw "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/presentations"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workspace"
 )
@@ -255,6 +256,16 @@ func shouldRefreshGeneratedVideoStudioPlan(content string) bool {
 		!strings.Contains(content, `"infographic-research"`) {
 		return false
 	}
+	// A plan this product generated that the platform will not load is worse
+	// than an out-of-date one: run_full_workflow fails outright with "plan.json
+	// uses an invalid or legacy format", and no marker check catches it because
+	// the defect is a missing field inside a step that is otherwise present and
+	// current. Re-seeding is always the right answer here — this is our own
+	// generated plan, and the generated one is valid by construction (see
+	// TestGeneratedPlanSatisfiesThePlatformValidator).
+	if !planLoadsOnThisPlatform(content) {
+		return true
+	}
 	// Structural upgrades belong here for the same reason the critic gates do:
 	// a plan generated before one of them exists is missing a required part of
 	// the workflow, and nothing else brings it forward. The orchestrator id is
@@ -419,4 +430,16 @@ func RegisterAgentProfileRuntime(registry *agentprofiles.Registry, workspaceAPIU
 		return err
 	}
 	return registry.RegisterToolFactory("video.show-video", showVideoFactory(workspaceAPIURL))
+}
+
+// planLoadsOnThisPlatform reports whether the workflow runtime would accept
+// this plan.json. It runs the same exported validator the plan loader uses, so
+// a stored product plan that would fail at run_full_workflow time is detected
+// during seeding instead of at the moment the user asks for a video.
+func planLoadsOnThisPlatform(content string) bool {
+	var plan sbw.PlanningResponse
+	if err := json.Unmarshal([]byte(content), &plan); err != nil {
+		return false
+	}
+	return sbw.ValidatePlanStructure(&plan) == nil
 }
