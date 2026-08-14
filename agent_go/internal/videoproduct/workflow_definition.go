@@ -32,7 +32,7 @@ func planForAll(pipelines []*Pipeline) map[string]interface{} {
 			for _, artifact := range stage.Artifacts {
 				required = append(required, map[string]interface{}{"file_name": artifact, "must_exist": true})
 			}
-			step := map[string]interface{}{"type": "regular", "id": stage.ID, "title": stage.Title, "description": stage.Description, "context_dependencies": deps, "context_output": stage.Output, "has_loop": false, "validation_schema": map[string]interface{}{"files": required}}
+			step := map[string]interface{}{"type": "message_sequence", "id": stage.ID, "title": stage.Title, "description": stage.Description, "context_dependencies": deps, "context_output": stage.Output, "items": []map[string]interface{}{stageExecuteItem()}, "validation_schema": map[string]interface{}{"files": required}}
 			if i == len(p.Stages)-1 {
 				step["next_step_id"] = "end"
 			}
@@ -41,6 +41,32 @@ func planForAll(pipelines []*Pipeline) map[string]interface{} {
 	}
 	return map[string]interface{}{"steps": steps}
 }
+// stageExecuteItem is the one turn a production stage runs. Every stage here is
+// conversational and judgment-heavy — writing a brief, a storyboard, a design,
+// a critique — which is exactly what the plan-authoring guidance means by
+// "use message_sequence for every conversational, judgment-heavy, browser-driven
+// or adaptive step, even when it needs only one message. Non-scripted regular
+// steps are unsupported." (frontend/src/commands/builtin-commands.tsx).
+//
+// These stages were authored as `regular` and only ran because the runtime
+// rewrites every non-scripted regular step into a sequence exactly like this one
+// (normalizeRegularStepToMessageSequence). Declaring it makes the stored plan
+// say what actually executes, so the plan UI no longer has to reconstruct it and
+// a stage that later wants a second turn — a critique pass, a repair gate — can
+// simply add an item instead of needing a different step type.
+//
+// The wording is the runtime's own synthesized message, kept verbatim so this
+// change alters what the plan DECLARES, not how a stage behaves.
+func stageExecuteItem() map[string]interface{} {
+	return map[string]interface{}{
+		"id":   "execute-and-verify",
+		"type": "user_message",
+		"kind": "execution",
+		"message": "Complete the step described above. Re-open the produced evidence, verify the result against every stated requirement, " +
+			"repair any gap you find, and finish only when the step is complete.",
+	}
+}
+
 func baseStageAgentConfig() map[string]interface{} {
 	return map[string]interface{}{"execution_llm": videoAgentLLMConfig(), "execution_max_turns": 100, "use_code_execution_mode": true, "declared_execution_mode": "agentic", "additional_read_paths": []string{"uploads"}, "learnings_access": "none", "knowledgebase_access": "none", "db_access": "none"}
 }

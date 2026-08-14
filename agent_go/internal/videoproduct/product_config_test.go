@@ -1,6 +1,7 @@
 package videoproduct
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -111,6 +112,57 @@ func TestVideoStudioManifestDrivesProfileAndWorkflowCapabilities(t *testing.T) {
 		if len(manifest.Profile.Runtime.Workspace.Placement[writer]) == 0 {
 			t.Fatalf("%s is exposed but declares no runtime.workspace.placement: %+v", writer, manifest.Profile.Runtime.Workspace)
 		}
+	}
+}
+
+// Plan-authoring guidance (frontend/src/commands/builtin-commands.tsx): use
+// message_sequence "for every conversational, judgment-heavy, browser-driven, or
+// adaptive step, even when it needs only one message. Non-scripted regular steps
+// are unsupported." Every production stage here is exactly that — writing a
+// brief, a storyboard, a design, a critique — and each declares
+// declared_execution_mode: agentic, so none qualifies for `regular`.
+//
+// They previously authored as `regular` and ran only because the runtime
+// rewrites non-scripted regular steps into this same shape
+// (normalizeRegularStepToMessageSequence), which left the stored plan
+// describing an execution model that no longer exists and forced the plan UI to
+// reconstruct the real one.
+func TestGeneratedPlanAuthorsStagesAsMessageSequences(t *testing.T) {
+	raw, err := json.Marshal(planForAll(pipelineRegistry))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plan struct {
+		Steps []struct {
+			ID    string `json:"type_id"`
+			Type  string `json:"type"`
+			Items []struct {
+				ID   string `json:"id"`
+				Type string `json:"type"`
+			} `json:"items"`
+		} `json:"steps"`
+	}
+	if err := json.Unmarshal(raw, &plan); err != nil {
+		t.Fatal(err)
+	}
+	stages := 0
+	for _, step := range plan.Steps {
+		if step.Type == "routing" {
+			continue // a router branches; it runs no stage turn
+		}
+		stages++
+		if step.Type != "message_sequence" {
+			t.Fatalf("stage step has type %q; non-scripted stages must author as message_sequence", step.Type)
+		}
+		if len(step.Items) == 0 {
+			t.Fatal("message_sequence stage declares no items; the runtime would have to synthesize the turn again")
+		}
+		if step.Items[0].Type != "user_message" {
+			t.Fatalf("stage's first item is %q, want user_message", step.Items[0].Type)
+		}
+	}
+	if stages == 0 {
+		t.Fatal("no stage steps generated")
 	}
 }
 
