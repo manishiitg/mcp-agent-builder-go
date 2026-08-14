@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	mcpagent "github.com/manishiitg/mcpagent/agent"
 	"path"
 	"sort"
 	"strings"
@@ -1019,4 +1020,24 @@ func buildLearningsSummary(client *skills.WorkspaceAPIClient, wsPath string) str
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+// installedSkillResolver adapts the workspace skill reader to mcpagent's
+// read_skill fallback. Kept as one helper so chat and workflow stages resolve
+// installed skills identically — a skill readable in one and not the other is
+// the kind of divergence that only shows up as an agent behaving differently
+// in a workflow than in chat.
+func installedSkillResolver(workspacePath string) mcpagent.InstalledSkillResolver {
+	read := skills.NewInstalledSkillReader(getWorkspaceAPIURL(), workspacePath)
+	return func(skillName, relPath string) (mcpagent.InstalledSkillFile, error) {
+		file, err := read(skillName, relPath)
+		if err != nil {
+			return mcpagent.InstalledSkillFile{}, err
+		}
+		return mcpagent.InstalledSkillFile{
+			Content:        file.Content,
+			Description:    file.Description,
+			AvailableFiles: file.AvailableFiles,
+		}, nil
+	}
 }

@@ -3,6 +3,7 @@ package step_based_workflow
 import (
 	"context"
 	"fmt"
+	mcpagent "github.com/manishiitg/mcpagent/agent"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/guidance"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/common"
@@ -41,6 +42,12 @@ func (hcpo *StepBasedWorkflowOrchestrator) appendSupplementaryPrompts(
 	// prompt; CLI adapters additionally project SKILL.md folders to
 	// disk via the SkillProjector contract. No more manual
 	// BuildWorkflowSkillPrompt + AppendSystemPrompt.
+	// Set unconditionally: a stage with no attached skills can still be told by
+	// its description to read one, and stages must resolve installed skills the
+	// same way chat does or an agent behaves differently in a workflow.
+	if baseAgent != nil && baseAgent.Agent() != nil {
+		baseAgent.Agent().SetInstalledSkillResolver(installedWorkflowSkillResolver(hcpo.GetWorkspacePath()))
+	}
 	if len(effectiveSkills) > 0 {
 		if attached := skills.LoadAttachableIn(getWorkspaceAPIURL(), hcpo.GetWorkspacePath(), effectiveSkills); len(attached) > 0 {
 			identitySkills = append(identitySkills, attached...)
@@ -180,4 +187,21 @@ func (hcpo *StepBasedWorkflowOrchestrator) resolveBrowserConfig(serverNames []st
 	}
 
 	return cfg
+}
+
+// installedWorkflowSkillResolver adapts the workspace skill reader to
+// mcpagent's read_skill fallback, matching what chat mode installs.
+func installedWorkflowSkillResolver(workspacePath string) mcpagent.InstalledSkillResolver {
+	read := skills.NewInstalledSkillReader(getWorkspaceAPIURL(), workspacePath)
+	return func(skillName, relPath string) (mcpagent.InstalledSkillFile, error) {
+		file, err := read(skillName, relPath)
+		if err != nil {
+			return mcpagent.InstalledSkillFile{}, err
+		}
+		return mcpagent.InstalledSkillFile{
+			Content:        file.Content,
+			Description:    file.Description,
+			AvailableFiles: file.AvailableFiles,
+		}, nil
+	}
 }

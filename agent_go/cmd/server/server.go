@@ -5349,6 +5349,12 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				// lookup, so those skills never attached — and read_skill, which
 				// serves only ATTACHED skills, then had nothing to read. That is
 				// what surfaced in chat as "the skill reader was blocked".
+				// read_skill can also serve a skill installed in this workspace
+				// but not attached, so a router skill names the specialists and
+				// the agent asks by name instead of shelling out to a path.
+				if underlying := llmAgent.GetUnderlyingAgent(); underlying != nil {
+					underlying.SetInstalledSkillResolver(installedSkillResolver(req.SelectedFolder))
+				}
 				if attached := skills.LoadAttachableIn(getWorkspaceAPIURL(), req.SelectedFolder, req.SelectedSkills); len(attached) > 0 {
 					attachedNames := make([]string, 0, len(attached))
 					for _, s := range attached {
