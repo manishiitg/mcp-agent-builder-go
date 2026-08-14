@@ -226,6 +226,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeTodoTaskStep(
 			WorkshopCorrelationID: workshopCorrelationID,
 			ParentContext:         ctx,
 			ToolSessionID:         hcpo.getSessionID(),
+			HumanInputs:           execCtx.HumanInputs,
 		}
 		hcpo.restoreSubAgentToolExecutors(fastPathExecCtx)
 
@@ -370,6 +371,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeTodoTaskStep(
 				conversationHistory,
 				allSteps,
 				progress,
+				execCtx.HumanInputs,
 			)
 		} else {
 			feedbackUserMsg := buildValidationContinuationUserMessage(validationResponse, retryAttempt)
@@ -991,6 +993,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeTodoTaskOrchestratorAgent(
 	conversationHistory []llmtypes.MessageContent,
 	allSteps []PlanStepInterface,
 	progress *StepProgress,
+	humanInputs map[string]string,
 ) (*TodoTaskResponse, []llmtypes.MessageContent, string, *SubAgentExecutionContext, orchestratoragents.OrchestratorAgent, error) {
 	agentName := step.Title
 	if agentName == "" {
@@ -1033,6 +1036,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeTodoTaskOrchestratorAgent(
 		WorkshopCorrelationID: workshopCorrelationID,
 		ParentContext:         ctx,
 		AsyncEnabled:          true,
+		HumanInputs:           humanInputs,
 	}
 
 	// Use factory method to create agent with proper event bridge connection
@@ -1444,6 +1448,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executePredefinedSubAgent(
 	response *TodoTaskResponse,
 	allSteps []PlanStepInterface,
 	progress *StepProgress,
+	humanInputs map[string]string,
 ) (string, []llmtypes.MessageContent, error) {
 	// Find the route
 	var route *PlanOrchestrationRoute
@@ -1504,13 +1509,24 @@ func (hcpo *StepBasedWorkflowOrchestrator) executePredefinedSubAgent(
 	// Execute the sub-agent step using executeSingleStep
 	// This will include learning and prevalidation like regular orchestration sub-agents
 	var capturedHistory []llmtypes.MessageContent
-	execCtx := &ExecutionContext{
-		SkipHumanInput:             true, // Sub-agents don't request human feedback
-		RunSingleStepOnly:          false,
-		SingleStepTarget:           -1,
-		IsEvaluationMode:           false,
-		ArtifactFolderNameOverride: subAgentStepPath,
-		ConversationHistoryCapture: &capturedHistory,
+	// A run_full_workflow human_inputs entry keyed by this route's own step ID
+	// (as shown in the plan JSON's sub_agent_step.id) reaches this turn's
+	// prompt the same way it would for a top-level step of the same name.
+	// Reusing executionContextForStep (rather than a second inline lookup)
+	// keeps the scoping rule — and its test coverage — single-sourced.
+	// Carrying the whole map forward, not just this one lookup, also means a
+	// route that is itself a nested todo_task can resolve ITS OWN routes'
+	// entries the identical way — nesting depth already caps how far this goes
+	// (validateTodoTaskNestingDepth).
+	execCtx := executionContextForStep(&ExecutionContext{HumanInputs: humanInputs}, stepToExecute.GetID())
+	execCtx.SkipHumanInput = true // Sub-agents don't request human feedback
+	execCtx.RunSingleStepOnly = false
+	execCtx.SingleStepTarget = -1
+	execCtx.IsEvaluationMode = false
+	execCtx.ArtifactFolderNameOverride = subAgentStepPath
+	execCtx.ConversationHistoryCapture = &capturedHistory
+	if execCtx.WorkshopHumanInput != "" {
+		hcpo.GetLogger().Info(fmt.Sprintf("[WORKSHOP] Injecting human_input into route %q (step %q) prompt (%d chars)", route.RouteID, stepToExecute.GetID(), len(execCtx.WorkshopHumanInput)))
 	}
 
 	// Notify sub-agent start

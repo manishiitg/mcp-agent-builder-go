@@ -84,11 +84,7 @@ func unknownWorkflowStepInputIDs(steps []PlanStepInterface, inputs map[string]st
 		return nil
 	}
 	known := make(map[string]struct{}, len(steps))
-	for _, step := range steps {
-		if step != nil {
-			known[strings.TrimSpace(step.GetID())] = struct{}{}
-		}
-	}
+	collectKnownWorkflowStepIDs(steps, known)
 	unknown := make([]string, 0)
 	for stepID := range inputs {
 		if _, ok := known[stepID]; !ok {
@@ -97,6 +93,34 @@ func unknownWorkflowStepInputIDs(steps []PlanStepInterface, inputs map[string]st
 	}
 	sort.Strings(unknown)
 	return unknown
+}
+
+// collectKnownWorkflowStepIDs descends into todo_task predefined_routes the
+// same way collectStepIDsRecursive (planning_management.go) does for step-ID
+// uniqueness, so a human_inputs key can target either a top-level step or a
+// route inside an orchestrator by the exact ID shown in the plan JSON.
+//
+// Without this, run_full_workflow(human_inputs={"a-route-id": "..."}) was
+// rejected outright with "human_inputs contains unknown step ID(s)" — a route
+// ID is real and visible in the plan, but this check never looked past the
+// top-level steps array, so the rejection was wrong, not the input.
+func collectKnownWorkflowStepIDs(steps []PlanStepInterface, known map[string]struct{}) {
+	for _, step := range steps {
+		if step == nil {
+			continue
+		}
+		if id := strings.TrimSpace(step.GetID()); id != "" {
+			known[id] = struct{}{}
+		}
+		if todo, ok := step.(*TodoTaskPlanStep); ok {
+			for _, route := range todo.PredefinedRoutes {
+				if route.SubAgentStep == nil {
+					continue
+				}
+				collectKnownWorkflowStepIDs([]PlanStepInterface{route.SubAgentStep}, known)
+			}
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
