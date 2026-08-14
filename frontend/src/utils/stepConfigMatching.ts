@@ -308,6 +308,49 @@ export function isMessageSequenceStep(step: PlanStep): step is MessageSequencePl
   return step.type === 'message_sequence';
 }
 
+// A stored `regular` step is a legacy on-disk type: the runtime normalizes every
+// non-scripted one into a message_sequence before executing it, and the direct
+// regular-step execution path no longer exists. Rendering plan.json's raw `type`
+// therefore describes something that never runs — a plain step card with no
+// items, for work that actually executes as a sequence and reports completions
+// naming items ("execute-and-verify") found nowhere in the plan.
+//
+// Mirrors shouldNormalizeRegularStepToMessageSequence / effectiveRuntimeStepType
+// in controller_message_sequence.go. `declared_execution_mode` reaches us from
+// step_config.json, merged onto the step by usePlanData.
+export function runsAsMessageSequence(step: PlanStep): boolean {
+  if (isMessageSequenceStep(step)) return true;
+  return isRegularStep(step) && step.agent_configs?.declared_execution_mode !== 'scripted';
+}
+
+// The item list the runtime actually executes. An authored message_sequence
+// supplies its own; a normalized regular step gets the single synthesized turn
+// from normalizeRegularStepToMessageSequence, plus the validation gate
+// appendMessageSequenceFinalValidation adds when the step declares a schema.
+//
+// Display only — these are never written back to plan.json, exactly as the Go
+// side marks them Synthetic and keeps them out of serialization.
+export function effectiveMessageSequenceItems(step: PlanStep): MessageSequenceItem[] {
+  if (isMessageSequenceStep(step)) return step.items ?? [];
+  if (!runsAsMessageSequence(step)) return [];
+
+  const items: MessageSequenceItem[] = [{
+    id: 'execute-and-verify',
+    type: 'user_message',
+    kind: 'execution',
+    message: 'Complete the step described above. Re-open the produced evidence, verify the result against every stated requirement, repair any gap you find, and finish only when the step is complete.'
+  }];
+  if (step.validation_schema) {
+    items.push({
+      id: '__automatic_final_validation__',
+      type: 'prevalidation',
+      title: 'Final validation',
+      validation_schema: step.validation_schema
+    });
+  }
+  return items;
+}
+
 export function isRoutingStep(step: PlanStep): step is RoutingPlanStep {
   return step.type === 'routing';
 }

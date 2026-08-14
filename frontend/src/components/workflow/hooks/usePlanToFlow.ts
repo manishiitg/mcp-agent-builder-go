@@ -2,7 +2,7 @@ import { useMemo, useRef, useEffect } from 'react'
 import type { Node, Edge } from '@xyflow/react'
 import dagre from 'dagre'
 import type { PlanStep, PlanningResponse, AgentLLMConfig, ValidationSchema, RoutingRoute, MessageSequenceItem } from '../../../utils/stepConfigMatching'
-import { isHumanInputStep, isTodoTaskStep, isRoutingStep, isMessageSequenceStep, isRegularStep } from '../../../utils/stepConfigMatching'
+import { isHumanInputStep, isTodoTaskStep, isRoutingStep, isMessageSequenceStep, isRegularStep, runsAsMessageSequence, effectiveMessageSequenceItems } from '../../../utils/stepConfigMatching'
 import type { ChangeType, PlanChanges } from './usePlanData'
 import type { VariablesManifest, EvaluationStep } from '../../../services/api-types'
 import type { VariablesNodeData } from '../nodes/VariablesNode'
@@ -802,14 +802,18 @@ function stepToNode(
     }
   }
 
-  if (isMessageSequenceStep(step)) {
+  // Covers authored message_sequence steps AND stored `regular` steps, which the
+  // runtime normalizes into a sequence before running (see runsAsMessageSequence).
+  // Showing the latter as a plain step card described an execution path that no
+  // longer exists.
+  if (runsAsMessageSequence(step)) {
     return {
       id: nodeId,
       type: 'message_sequence',
       position: { x: 0, y: 0 },
       data: {
         ...baseData,
-        items: step.items
+        items: effectiveMessageSequenceItems(step)
         // Note: status is inherited from baseData (computed based on completedStepIndices)
       } as MessageSequenceNodeData
     }
@@ -957,9 +961,10 @@ function processSteps(
           )
           todoTaskSubAgentNodes.push(...nestedTodoGraph.nodes)
           todoTaskEdges.push(...nestedTodoGraph.edges)
-        } else if (isMessageSequenceStep(subAgentStep)) {
+        } else if (runsAsMessageSequence(subAgentStep)) {
           // A message_sequence sub-agent must render as a MessageSequenceNode so its
-          // ordered items show — not as a generic step card.
+          // ordered items show — not as a generic step card. A stored `regular`
+          // sub-agent runs as one too, so it gets the same treatment.
           const seqNode: WorkflowNode = {
             id: subAgentNodeId,
             type: 'message_sequence',
@@ -968,7 +973,7 @@ function processSteps(
               id: subAgentNodeId,
               title: subAgentStep.title || `${route.route_name || route.route_id || routeId}`,
               description: subAgentStep.description,
-              items: subAgentStep.items,
+              items: effectiveMessageSequenceItems(subAgentStep),
               status,
               stepIndex: parentStepIndex,
               step: subAgentStep,
