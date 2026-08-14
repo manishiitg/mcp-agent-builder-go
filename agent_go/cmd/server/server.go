@@ -4784,10 +4784,14 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				log.Printf("[WORKFLOW PHASE FOLDER GUARD] Applied workflow folder restriction (workflow writes: %v, chats read-only: %s, read-only: %v, blocked-write: %v)", writePaths, perUserChatsWrite, workflowReadOnlyFolders, fileContextBlockedWriteFolders)
 			}
 
-			// Apply skill folder guard if filesystem skills are selected (read-only access to selected skills only).
+			// Report the selected filesystem skills, not a restriction. Every
+			// branch above grants "skills/" wholesale, and this list is used
+			// nowhere else — the old wording ("only selected skills accessible")
+			// described a guard that is not applied, which sent me looking for a
+			// permission problem when a skill failed to attach.
 			// Runtime-only skills such as agent-browser are exposed through tools/prompts, not skills/<name>/SKILL.md.
 			if filesystemSkills := filesystemSelectedSkills(req.SelectedSkills); len(filesystemSkills) > 0 {
-				log.Printf("[SKILL FOLDER GUARD] Applied skill folder restriction - only selected skills accessible: %v", filesystemSkills)
+				log.Printf("[SKILLS] Filesystem skills selected for this session: %v (skills/ is readable in full)", filesystemSkills)
 			}
 
 			workspaceToolModeLabel := "chat mode"
@@ -5339,11 +5343,19 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				// disclosure listing (name + description); CLI transports
 				// additionally project SKILL.md folders to disk in Phase 3b.
 				// The legacy buildSkillPrompt path is gone.
-				if attached := skills.LoadAttachable(getWorkspaceAPIURL(), req.SelectedSkills); len(attached) > 0 {
+				// Resolve against the session's own folder first. A product that
+				// installs skills into its project (Video Studio installs its
+				// managed HyperFrames set there) was invisible to the unscoped
+				// lookup, so those skills never attached — and read_skill, which
+				// serves only ATTACHED skills, then had nothing to read. That is
+				// what surfaced in chat as "the skill reader was blocked".
+				if attached := skills.LoadAttachableIn(getWorkspaceAPIURL(), req.SelectedFolder, req.SelectedSkills); len(attached) > 0 {
+					attachedNames := make([]string, 0, len(attached))
 					for _, s := range attached {
 						_ = llmAgent.AttachSkill(s)
+						attachedNames = append(attachedNames, s.Name)
 					}
-					log.Printf("[SKILLS] Attached %d skill(s) to agent", len(attached))
+					log.Printf("[SKILLS] Attached %d of %d skill(s): %v", len(attached), len(req.SelectedSkills), attachedNames)
 				}
 			}
 
