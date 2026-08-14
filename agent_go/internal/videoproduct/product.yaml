@@ -116,6 +116,11 @@ profile:
       # network and no env of its own), so it is not redundant with the CLI's
       # native shell.
       - execute_shell_command
+      # The only structured file edit available under agent_tools: mcp_only,
+      # where the CLI's own Read/Write are denied. Excluded under hybrid, since
+      # every supported CLI ships an editor and the bridge carries only what
+      # they cannot do — remove this again if the mode changes back.
+      - diff_patch_workspace_file
       # Managed browser capability, matching the agent-browser skill above.
       - agent_browser
       # Project and user secret CRUD. ui.secrets is required for this product.
@@ -139,40 +144,44 @@ profile:
     transport: structured
     provider: claude-code
     model_id: claude-sonnet-5
-    # hybrid: native CLI tools (Read/Write/Shell) handle project file work;
-    # the guarded AgentWorks MCP bridge (api-bridge) handles product control
-    # (execute_step, show_video, secrets, etc). See the mode table in
+    # mcp_only: the CLI's native Read/Write/Shell are denied; every action —
+    # file work, rendering, product control — goes through the guarded
+    # AgentWorks MCP bridge. See the mode table in
     # docs/design/video_studio_inside_agentworks.md.
     #
-    # A prior investigation into apparent hybrid-mode failures (native tools
-    # running unblocked, "product shell not connected" errors) root-caused
-    # them to a bug unrelated to this mode setting: the structured Cursor CLI
-    # adapter never created a git-root marker in the project working
-    # directory, so cursor-agent walked up to the enclosing monorepo root
-    # looking for .cursor/mcp.json, found nothing there, and silently never
-    # connected the api-bridge MCP server on ANY mode. That's fixed in
-    # cursorcli_structured_adapter.go (mirrors the tmux adapter's existing
-    # cursorWorkingDirIsGitRoot/initCursorWorkspaceGitMarker fix). With the
-    # bridge actually reachable, re-testing hybrid here.
+    # Chosen over hybrid because hybrid's native tools are NOT constrained by
+    # FolderGuard, which the design doc calls valid only "for a trusted local
+    # developer machine" and says "must never be silently selected for hosted
+    # or multi-user deployments". Under mcp_only every write is guarded.
     #
-    # hybrid + compatibility is documented as valid only "for a trusted local
-    # developer machine" and "must never be silently selected for hosted or
-    # multi-user deployments" — native tools aren't constrained by
-    # FolderGuard the way MCP tools are.
+    # This mode is why diff_patch_workspace_file is in the allow list above.
+    # The bridge's rule is that it carries what the CLI cannot do natively —
+    # under hybrid that excludes a file editor, because every supported CLI
+    # ships one, but under mcp_only those are denied and the bridge is the only
+    # way to edit a file at all. Without it the agent is left rewriting files
+    # with shell heredocs. Flipping this mode back to hybrid should remove that
+    # tool again; see TestProductToolGateGovernsTheCodingAgentBridgeCatalog,
+    # which pins both directions.
+    #
+    # An earlier round of "mcp_only is broken" symptoms (native commands
+    # running unblocked, "product shell not connected") turned out not to be
+    # about this setting at all: the structured Cursor CLI adapter never
+    # created a git-root marker in the project working directory, so
+    # cursor-agent walked up to the enclosing monorepo root looking for
+    # .cursor/mcp.json, found none, and silently never connected the api-bridge
+    # MCP server on ANY mode. Fixed in cursorcli_structured_adapter.go.
     #
     # Product HTTP APIs go through the bridge shell either way —
     # api_transport.native_shell is implemented and left OFF; see
     # docs/design/product_api_transport_for_coding_agents.md.
     agent_tools:
-      mode: hybrid
+      mode: mcp_only
     approvals:
       mode: provider_auto
     # Where this product's artifacts belong, in its own vocabulary, keyed by the
     # tool the advice is for. Declared here rather than left to the shared
     # default, which is AgentWorks' layout — plan folders and pulse/goals.html —
-    # for concepts Video Studio does not have. Only execute_shell_command is
-    # listed because it is the only writing tool this product exposes;
-    # diff_patch_workspace_file is deliberately not in the allow list above.
+    # for concepts Video Studio does not have.
     # Keep in step with prompts/system-prompt.md, which tells the agent the same
     # thing; the tool description is what it re-reads on every get_api_spec.
     workspace:
@@ -181,6 +190,8 @@ profile:
           - "Uploaded references live in `uploads/` and are read-only — never modify them."
           - "Direct-chat work belongs in `work/`; finished exports belong in `outputs/`."
           - "Workflow steps write inside their own run folder, not at the project root."
+        diff_patch_workspace_file:
+          - "Patch files in `work/` (direct chat) or the step's own run folder (workflow). `uploads/` is read-only — copy a reference into `work/` before changing it."
     provider_options:
       - id: claude-code
         label: Claude Code

@@ -65,16 +65,20 @@ func TestVideoStudioManifestDrivesProfileAndWorkflowCapabilities(t *testing.T) {
 	if showVideoBinding.Presentation == nil || showVideoBinding.Presentation.Kind != "media.video" {
 		t.Fatalf("video.show-video must declare presentation.kind=media.video, got %+v", showVideoBinding.Presentation)
 	}
+	// Under mcp_only the CLI's own Read/Write are denied, so the bridge has to
+	// supply the file editor or the agent is left rewriting files with shell
+	// heredocs. This is mode-dependent, not a property of the tool — the full
+	// rule (and the hybrid direction, where it must be absent) is pinned by
+	// TestProductToolGateGovernsTheCodingAgentBridgeCatalog.
+	if manifest.Profile.Runtime.AgentTools.Mode != "hybrid" && !enabled["diff_patch_workspace_file"] {
+		t.Fatalf("agent_tools.mode=%q denies native edits; the bridge must carry diff_patch_workspace_file: %+v",
+			manifest.Profile.Runtime.AgentTools.Mode, manifest.Profile.ToolPolicy)
+	}
 	// AgentWorks-wide administration, the shared media/LLM bridge, sub-agent
 	// orchestration, and scheduling are not this product's business.
-	// diff_patch_workspace_file is excluded for a different reason, pinned by
-	// TestProductToolGateGovernsTheCodingAgentBridgeCatalog: the bridge carries
-	// only what a coding CLI cannot do natively, and every supported CLI ships
-	// its own file editor. agent_browser is the contrast — it stays because none
-	// of them can drive the user's signed-in browser.
 	for _, name := range []string{
 		"set_provider_auth", "install_skill", "add_mcp_server",
-		"diff_patch_workspace_file", "generate_video",
+		"generate_video",
 		"delegate", "query_agent", "create_workflow_schedule", "notify_user",
 	} {
 		if enabled[name] {
@@ -87,8 +91,8 @@ func TestVideoStudioManifestDrivesProfileAndWorkflowCapabilities(t *testing.T) {
 	if manifest.Profile.Runtime.Transport != "structured" {
 		t.Fatalf("Video Studio runtime transport = %q, want structured", manifest.Profile.Runtime.Transport)
 	}
-	if manifest.Profile.Runtime.AgentTools.Mode != "hybrid" || manifest.Profile.Runtime.Approvals.Mode != "provider_auto" {
-		t.Fatalf("Video Studio native-tool policy = %+v %+v, want hybrid/provider_auto", manifest.Profile.Runtime.AgentTools, manifest.Profile.Runtime.Approvals)
+	if manifest.Profile.Runtime.AgentTools.Mode != "mcp_only" || manifest.Profile.Runtime.Approvals.Mode != "provider_auto" {
+		t.Fatalf("Video Studio native-tool policy = %+v %+v, want mcp_only/provider_auto", manifest.Profile.Runtime.AgentTools, manifest.Profile.Runtime.Approvals)
 	}
 
 	if manifest.Workflows.BrowserMode != "auto" || len(manifest.Workflows.SelectedSkills) == 0 {
