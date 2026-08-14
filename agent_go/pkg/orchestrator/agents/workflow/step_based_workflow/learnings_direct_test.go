@@ -30,13 +30,14 @@ func (f *fakeDirectLearningAgent) Close() error { return nil }
 
 func (f *fakeDirectLearningAgent) GetBaseAgent() *agents.BaseAgent { return nil }
 
-func TestBuildLearningsContributionTurnUsesShellForPermittedWrites(t *testing.T) {
+func TestBuildLearningsContributionTurnRequiresPatchToolForAllWrites(t *testing.T) {
 	targetPath := "/tmp/workspace-docs/Workflow/social-media/learnings/_global"
 	msg := BuildLearningsContributionTurnWithTarget("unfollow-cleanup", "Unfollow stale X accounts.", "Capture the unfollow flow.", false, targetPath)
 	for _, want := range []string{
-		"Use `execute_shell_command` carefully for every write",
+		"Use `diff_patch_workspace_file` for every write",
 		"including creating a new `/tmp/workspace-docs/Workflow/social-media/learnings/_global/references/<topic>.md` file",
-		"`execute_shell_command` for inspection and permitted writes",
+		"Do not use shell redirection, heredocs, tee, Python",
+		"`execute_shell_command` for read-only inspection",
 		"cat '/tmp/workspace-docs/Workflow/social-media/learnings/_global/SKILL.md'",
 		"do not rely on your shell working directory",
 		// Negative store boundary: learnings hold HOW, not discovered facts/results.

@@ -193,7 +193,7 @@ func TestQuotingFailureGetsAnActionableHint(t *testing.T) {
 		"escaped twice",
 		"Do NOT rewrite the same text",
 		"QUOTED heredoc delimiter",
-		"preserve unrelated content",
+		"diff_patch_workspace_file",
 	} {
 		if !strings.Contains(res.Stderr, want) {
 			t.Fatalf("quoting hint missing %q, got: %s", want, res.Stderr)
@@ -209,7 +209,7 @@ func TestQuotingFailureGetsAnActionableHint(t *testing.T) {
 // noise the agent learns to skip.
 func TestQuotingHintDoesNotFireSpuriously(t *testing.T) {
 	cases := []ShellCommandResult{
-		{ExitCode: 0, Stderr: "unterminated string literal"},                  // succeeded; not a failure
+		{ExitCode: 0, Stderr: "unterminated string literal"},                   // succeeded; not a failure
 		{ExitCode: 1, Stderr: "ModuleNotFoundError: No module named 'pandas'"}, // different failure
 		{ExitCode: 2, Stderr: "grep: no such file"},
 	}

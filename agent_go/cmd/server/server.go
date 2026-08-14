@@ -181,8 +181,8 @@ func seedMCPBridgeCodeExecRegistry(logger loggerv2.Logger) {
 	advancedExecutors := virtualtools.CreateWorkspaceAdvancedToolExecutors()
 	browserExecutors := virtualtools.CreateWorkspaceBrowserToolExecutors()
 
-	bridgeExecutors := make(map[string]func(context.Context, map[string]interface{}) (string, error), 2)
-	for _, name := range []string{"execute_shell_command"} {
+	bridgeExecutors := make(map[string]func(context.Context, map[string]interface{}) (string, error), 3)
+	for _, name := range []string{"execute_shell_command", "diff_patch_workspace_file"} {
 		if exec, ok := advancedExecutors[name]; ok {
 			bridgeExecutors[name] = exec
 		}
@@ -6683,6 +6683,18 @@ func retainedCodingAgentProvider(snapshot terminals.Snapshot) string {
 // bootstrap a fresh /api/query stream, so it must explicitly reactivate the
 // existing terminal snapshot and session status after confirmed delivery.
 func (api *StreamingAPI) markRetainedMainCodingTurnRunning(sessionID string, executionIDs ...string) {
+	api.markRetainedMainCodingTurnRunningWithOwner(sessionID, false, executionIDs...)
+}
+
+// markMCPAgentSessionTurnRunning records the host-visible busy lifecycle for a
+// retained turn whose completion is owned by mcpagent.Session. Unlike the
+// cold-restart compatibility path, it does not start a second provider/tmux
+// completion detector in AgentWorks.
+func (api *StreamingAPI) markMCPAgentSessionTurnRunning(sessionID string, executionIDs ...string) {
+	api.markRetainedMainCodingTurnRunningWithOwner(sessionID, true, executionIDs...)
+}
+
+func (api *StreamingAPI) markRetainedMainCodingTurnRunningWithOwner(sessionID string, sessionOwnsCompletion bool, executionIDs ...string) {
 	if api == nil || api.terminalStore == nil {
 		return
 	}
@@ -6691,7 +6703,13 @@ func (api *StreamingAPI) markRetainedMainCodingTurnRunning(sessionID string, exe
 		executionID = strings.TrimSpace(executionIDs[0])
 	}
 	for _, snapshot := range api.terminalStore.ListRaw(sessionID) {
-		if !codingAgentSnapshotIsMainAgent(snapshot) || !terminalSnapshotHasLiveTmux(snapshot) {
+		if !codingAgentSnapshotIsMainAgent(snapshot) {
+			continue
+		}
+		// A Session acknowledgement proves that the provider accepted this input
+		// even when AgentWorks' process_state snapshot is stale. The compatibility
+		// path has no Session, so it still requires independent live-tmux proof.
+		if !sessionOwnsCompletion && !terminalSnapshotHasLiveTmux(snapshot) {
 			continue
 		}
 		api.terminalStore.MarkTurnRunning(snapshot.TerminalID)
@@ -6736,7 +6754,11 @@ func (api *StreamingAPI) markRetainedMainCodingTurnRunning(sessionID string, exe
 		}
 		api.setSessionBusy(sessionID, true)
 		api.updateSessionStatus(sessionID, "running")
-		go api.observeRetainedMainTurnStream(watchCtx, sessionID, snapshot, provider)
+		if sessionOwnsCompletion {
+			watchCancel()
+		} else {
+			go api.observeRetainedMainTurnStream(watchCtx, sessionID, snapshot, provider)
+		}
 		return
 	}
 }
@@ -6964,6 +6986,23 @@ func retainedMainTurnCompletionEvent(eventType string) bool {
 	}
 }
 
+// mcpAgentSessionCompletion reports whether this is the canonical completion
+// emitted by the durable mcpagent.Session retained-turn lifecycle. Events
+// crossing BaseEventBridge intentionally do not carry AgentWorks terminal IDs,
+// so the source marker is the authoritative way to distinguish this main-turn
+// completion from unrelated child-agent completions in the same session.
+func mcpAgentSessionCompletion(event events.Event) bool {
+	agentEvent := event.Data
+	if agentEvent == nil {
+		return false
+	}
+	completion, ok := agentEvent.Data.(*unifiedevents.UnifiedCompletionEvent)
+	if !ok || completion == nil || completion.Metadata == nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(fmt.Sprint(completion.Metadata["source"])), "mcpagent_session")
+}
+
 // observeRetainedMainTurnEvent settles the explicit busy lifecycle opened by
 // markRetainedMainCodingTurnRunning. These are the same structured events that
 // back Terminal Center's Formatted view. A normal foreground turn is unaffected
@@ -6984,7 +7023,24 @@ func (api *StreamingAPI) observeRetainedMainTurnEvent(sessionID string, event ev
 
 	snapshot, ok := api.terminalStore.GetRaw(event.TerminalID)
 	if !ok || !codingAgentSnapshotIsMainAgent(snapshot) {
-		return
+		// BaseEventBridge preserves the canonical mcpagent event but has no
+		// AgentWorks terminal identity to attach to it. Resolve the main terminal
+		// from the already-tracked owner session only for the explicit Session
+		// completion source. This keeps child completions from settling the turn.
+		if !mcpAgentSessionCompletion(event) {
+			return
+		}
+		ok = false
+		for _, candidate := range api.terminalStore.ListRaw(sessionID) {
+			if codingAgentSnapshotIsMainAgent(candidate) {
+				snapshot = candidate
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return
+		}
 	}
 
 	// streaming_end is first applied by the terminal observer. It can reject an
@@ -7107,6 +7163,14 @@ func (api *StreamingAPI) deliverRetainedMainTerminalInput(ctx context.Context, s
 }
 
 func (api *StreamingAPI) recordRetainedTerminalLiveInput(sessionID, message, provider string, executionIDs ...string) string {
+	return api.recordRetainedLiveInput(sessionID, message, provider, false, executionIDs...)
+}
+
+func (api *StreamingAPI) recordMCPAgentSessionLiveInput(sessionID, message, provider string, executionIDs ...string) string {
+	return api.recordRetainedLiveInput(sessionID, message, provider, true, executionIDs...)
+}
+
+func (api *StreamingAPI) recordRetainedLiveInput(sessionID, message, provider string, sessionOwnsCompletion bool, executionIDs ...string) string {
 	messageID := newSteerMessageID()
 	executionID := "live-turn:" + messageID
 	if len(executionIDs) > 0 && strings.TrimSpace(executionIDs[0]) != "" {
@@ -7121,12 +7185,20 @@ func (api *StreamingAPI) recordRetainedTerminalLiveInput(sessionID, message, pro
 	api.lastQueryMu.RUnlock()
 	api.trackConversationTurnStart(executionID, sessionID, request)
 	api.recordLiveCodingAgentUserMessage(sessionID, message, provider, messageID, "sent_to_cli")
-	api.markRetainedMainCodingTurnRunning(sessionID, executionID)
+	if sessionOwnsCompletion {
+		api.markMCPAgentSessionTurnRunning(sessionID, executionID)
+	} else {
+		api.markRetainedMainCodingTurnRunning(sessionID, executionID)
+	}
 	return messageID
 }
 
 func writeRetainedTerminalLiveInputResponse(w http.ResponseWriter, sessionID, message, provider string, api *StreamingAPI) {
 	messageID := api.recordRetainedTerminalLiveInput(sessionID, message, provider)
+	writeRetainedTerminalLiveInputResponseWithMessageID(w, sessionID, provider, messageID)
+}
+
+func writeRetainedTerminalLiveInputResponseWithMessageID(w http.ResponseWriter, sessionID, provider, messageID string) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(LiveInputResponse{
 		Success:        true,
@@ -7858,7 +7930,7 @@ func (api *StreamingAPI) tryDeliverQueryAsLiveInput(w http.ResponseWriter, r *ht
 			log.Printf("[QUERY->LIVE] Durable session delivery failed for session %s: %v; trying retained-terminal recovery before rebuilding", sessionID, err)
 		} else if delivery.Status == mcpagent.UserMessageDeliveryStatusSentToCLI {
 			provider := string(delivery.Provider)
-			api.recordRetainedTerminalLiveInput(sessionID, message, provider, queryID)
+			api.recordMCPAgentSessionLiveInput(sessionID, message, provider, queryID)
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(QueryResponse{
 				QueryID: queryID, SessionID: sessionID,
@@ -8006,7 +8078,8 @@ func (api *StreamingAPI) handleLiveInputMessage(w http.ResponseWriter, r *http.R
 			log.Printf("[LIVE INPUT] Durable session delivery failed for session %s: %v; trying retained-terminal recovery before rebuilding", sessionID, err)
 		} else if delivery.Status == mcpagent.UserMessageDeliveryStatusSentToCLI {
 			provider := string(delivery.Provider)
-			writeRetainedTerminalLiveInputResponse(w, sessionID, req.Message, provider, api)
+			messageID := api.recordMCPAgentSessionLiveInput(sessionID, req.Message, provider)
+			writeRetainedTerminalLiveInputResponseWithMessageID(w, sessionID, provider, messageID)
 			log.Printf("[LIVE INPUT] Delivered through durable mcpagent session=%s provider=%s transport=%s: %.80s", sessionID, provider, delivery.Transport, req.Message)
 			api.appendLiveInputToPersistedChatHistory(GetUserIDFromContext(r.Context()), sessionID, req.Message)
 			return

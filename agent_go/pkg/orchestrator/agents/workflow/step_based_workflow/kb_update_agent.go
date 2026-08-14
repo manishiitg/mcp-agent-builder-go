@@ -22,7 +22,8 @@ var kbReorganizeSystemPromptTemplate = MustRegisterTemplate("kbReorganizeSystemP
 ## READ-ONLY REVIEW OVERRIDE
 This maintenance agent reviews a proposed KB reorganization. Do not create,
 edit, move, merge, rename, compact, or delete files. Do not update _index.json.
-Use shell only for read-only inspection. Treat every later mutation instruction as an audit
+Use shell only for read-only inspection and do not call
+diff_patch_workspace_file. Treat every later mutation instruction as an audit
 criterion. Return: verdict, ordered findings, exact evidence, bounded
 recommended edits for the Pulse Fixer, and whether user judgment is required.
 
@@ -87,7 +88,8 @@ Notes operations the user may ask for:
 - **Do NOT touch `+"`"+`knowledgebase/context/`+"`"+`** — that folder holds user-supplied runtime business context captured via the `+"`"+`capture_context`+"`"+` tool. It is a sub-section of the knowledgebase but is excluded from this reorganize pass and from any consolidate pass. The contents are user-owned and must never be rewritten by the optimizer. Restrict every read and every write to `+"`"+`knowledgebase/notes/`+"`"+` only.
 
 ## Tools
-- **execute_shell_command** — inspect files and make every permitted file change. Use narrow, verified writes; preserve unrelated content in topic files and `+"`"+`_index.json`+"`"+`.
+- **execute_shell_command** — read-only inspection (`+"`"+`cat`+"`"+`, `+"`"+`jq`+"`"+`, `+"`"+`wc`+"`"+`, `+"`"+`grep`+"`"+`, `+"`"+`find`+"`"+`) plus explicit file operations only when the requested transformation needs them (`+"`"+`mv`+"`"+` for rename, `+"`"+`rm`+"`"+` for drop). Do not use shell redirection/heredocs/tee/Python to write note content or the registry.
+- **diff_patch_workspace_file** — for every content write inside topic files and `+"`"+`_index.json`+"`"+`, including compaction rewrites and new canonical topic files.
 
 ## Final action
 Print exactly one summary line:
@@ -169,7 +171,8 @@ var kbConsolidateSystemPromptTemplate = MustRegisterTemplate("kbConsolidateSyste
 ## READ-ONLY REVIEW OVERRIDE
 This maintenance agent reviews cross-step KB consolidation opportunities. Do not
 create, edit, move, merge, canonicalize, or delete files. Do not update
-_index.json. Use shell only for read-only inspection. Treat every later write instruction as an audit
+_index.json. Use shell only for read-only inspection and do not call
+diff_patch_workspace_file. Treat every later write instruction as an audit
 criterion. Return: verdict, ordered findings, exact evidence, bounded
 recommended edits for the Pulse Fixer, contradictions requiring user judgment,
 and deferred items.
@@ -203,7 +206,8 @@ You own reads and writes to the per-topic narrative files under `+"`"+`{{.NotesF
 **Objective (from user):** the consolidation goal for this invocation. Scope your work to it — do not opportunistically do other consolidation.
 
 ## Tools
-- `+"`"+`execute_shell_command`+"`"+` — inspect, calculate, and make every permitted KB content change. Use narrow, verified writes for topic files and `+"`"+`_index.json`+"`"+`, including new files, section appends, merges, and compaction rewrites.
+- `+"`"+`execute_shell_command`+"`"+` — read/jq files and calculate values. Do not write KB content with shell redirection/heredocs/tee/Python.
+- `+"`"+`diff_patch_workspace_file`+"`"+` — every content write for topic files and `+"`"+`_index.json`+"`"+`, including new files, section appends, merges, and compaction rewrites. Pass workspace-relative file paths or absolute paths under the workspace docs root.
 
 ## Safety rails
 - Apply changes incrementally. If the objective calls for three consolidation actions, do them as three reads + three writes, not one megabatch.

@@ -890,6 +890,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) prepareWorkspaceToolsOnly() ([]llmtyp
 		hcpo.WorkspaceToolExecutors,
 		[]string{
 			"workspace_advanced:execute_shell_command",
+			"workspace_advanced:diff_patch_workspace_file",
 			"workflow_db:query_workflow_db",
 		},
 	)

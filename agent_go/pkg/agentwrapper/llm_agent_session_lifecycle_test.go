@@ -59,3 +59,14 @@ func TestWrapperKeepsSessionAfterTurnReturns(t *testing.T) {
 		t.Fatal("wrapper Close left its durable session registered")
 	}
 }
+
+func TestWrapperBuildsSessionTurnWithExplicitContinuationInput(t *testing.T) {
+	history := []llmtypes.MessageContent{{Role: llmtypes.ChatMessageTypeHuman, Parts: []llmtypes.ContentPart{llmtypes.TextContent{Text: "hi"}}}}
+	turn := buildSessionTurn("[AUTO-NOTIFICATION] child completed", history, mcpagent.ToolPolicy{}, nil)
+	if turn.Input != "[AUTO-NOTIFICATION] child completed" {
+		t.Fatalf("turn input = %q, want current continuation", turn.Input)
+	}
+	if len(turn.History) != 1 {
+		t.Fatalf("turn history = %d messages, want prior history only", len(turn.History))
+	}
+}

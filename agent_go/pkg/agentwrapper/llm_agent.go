@@ -996,6 +996,15 @@ func (w *LLMAgentWrapper) emitEvent(eventData events.EventData) {
 	w.tracer.EmitEvent(event)
 }
 
+func buildSessionTurn(prompt string, history []llmtypes.MessageContent, policy mcpagent.ToolPolicy, streamingCallback func(llmtypes.StreamChunk)) mcpagent.Turn {
+	return mcpagent.Turn{
+		Input:             prompt,
+		History:           history,
+		ToolPolicy:        policy,
+		StreamingCallback: streamingCallback,
+	}
+}
+
 // StreamWithEvents streams text chunks from the agent during execution
 // Events are handled separately via the EventObserver and polling API
 func (w *LLMAgentWrapper) StreamWithEvents(ctx context.Context, prompt string) (<-chan string, error) {
@@ -1057,10 +1066,12 @@ func (w *LLMAgentWrapper) StreamWithEvents(ctx context.Context, prompt string) (
 			}
 		}()
 
-		// Add user message to history
-		w.AppendUserMessage(prompt)
-
-		// Get conversation history and execute
+		// Snapshot prior wrapper history separately from this turn. Session owns the
+		// durable continuation history after its first Run, so every later turn
+		// must carry the new prompt in Turn.Input. Passing only Turn.History makes
+		// Session ignore the new message once its internal history is non-empty,
+		// which previously replayed the first user message for every synthetic
+		// background-agent notification.
 		messages := w.GetHistory()
 		if providerNeedsPlainTextHistory(w.config.Provider) {
 			before := len(messages)
@@ -1128,11 +1139,7 @@ func (w *LLMAgentWrapper) StreamWithEvents(ctx context.Context, prompt string) (
 			}
 			return
 		}
-		result, err := runtimeSession.Run(ctx, mcpagent.Turn{
-			History:           messages,
-			ToolPolicy:        toolPolicy,
-			StreamingCallback: streamingCallback,
-		})
+		result, err := runtimeSession.Run(ctx, buildSessionTurn(prompt, messages, toolPolicy, streamingCallback))
 		response := result.Text
 		updatedMessages := result.History
 

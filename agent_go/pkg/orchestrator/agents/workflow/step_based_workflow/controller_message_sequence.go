@@ -971,7 +971,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) getMessageSequenceRuntime(ctx context
 	hcpo.setMessageSequenceShellEnv(sessionID, stepPath, step.GetID())
 
 	// The message_sequence execution agent is created ONCE and reused for every
-	// item, and the workspace write sandbox enforces a
+	// item, and the workspace-write tools (diff_patch_workspace_file) enforce a
 	// folder-guard snapshot FROZEN into the agent at creation (createExecutionOnlyAgent
 	// -> config.FolderGuardWritePaths, which the wrapper captures by value and never
 	// re-reads). So the snapshot must cover every store the sequence's synthetic

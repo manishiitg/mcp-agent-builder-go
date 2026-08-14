@@ -4,7 +4,7 @@
 
 | Field | Value |
 |---|---|
-| Status | `complete` — warm session lookup, main-chat session ownership, actual-transport acknowledgement, retained tool receipts, and the required IC-11 live P0 harness are implemented; authenticated retained-window proof passes for Codex, Claude Code, and Cursor (`auto`). Cold-restart rehydration was explicitly declined as unnecessary; the existing compatibility fallback remains for surviving terminals after a backend restart. |
+| Status | `implemented; restart and live Pi verification pending` — warm session lookup, main-chat session ownership, actual-transport acknowledgement, retained tool receipts, and the IC-11 harness are implemented. A 2026-08-14 Pi run exposed a missing between-turn completion lifecycle; the shared Session now owns it and focused tests pass. The running backend must be restarted before live verification. Cold-restart rehydration was explicitly declined; the existing compatibility fallback remains for surviving terminals after a backend restart. |
 | Priority | P1 |
 | Owner | mcpagent session lifetime and delivery acknowledgement |
 | Reported | 2026-08-14 |
@@ -132,6 +132,49 @@ The safe first migration slice is implemented and covered by tests:
   terminal before rebuilding a complete turn. An accepted structured-transport
   queue result does not trigger that bypass.
 
+### Resolved regression — `Session.Send` delivered input but owned no completion lifecycle
+
+A real Pi continuation exposed a lifecycle hole after the durable delivery work.
+Session `5c0ca18f-4b1f-4933-b7f2-be89bc90049c` accepted its follow-up through
+`mcpagent.Session` at 13:09:30. Its tools continued until 13:11:59 and the Pi
+tmux then exited, but AgentWorks still showed the conversation busy more than
+30 minutes later. Delivery was successful; completion was never observed.
+
+The cause was precise: `Session.Send` called the transport-neutral delivery
+function and returned its acknowledgement, but only `Session.Run` owned a turn
+lifecycle. AgentWorks' older retained-tmux path used its own pane observer, but
+the new durable-session path deliberately bypassed that host-owned observer.
+The migration had therefore removed the only completion detector without
+putting one behind the Session contract.
+
+The repair keeps one owner:
+
+- an idle `Session.Send` that is accepted by a retained tmux starts a Session-
+  owned completion watch using the provider adapter's canonical retained final
+  response;
+- the Session appends the user and assistant messages to its durable history
+  and emits exactly one `unified_completion` marked
+  `source=mcpagent_session`;
+- direct sends are serialized, and `Session.Run` rejects while a retained turn
+  is being delivered or remains active. A rapid follow-up therefore steers the
+  same retained turn instead of racing a second foreground run;
+- AgentWorks marks the host conversation busy after delivery but starts no
+  second tmux observer. It settles from that canonical completion instead;
+- `BaseEventBridge` does not carry an AgentWorks terminal ID. The settlement
+  code therefore resolves the main terminal from the owner session only when
+  the nested completion has the exact `mcpagent_session` source marker. A child
+  completion cannot accidentally finish the main conversation;
+- `Session.Run` now marks the Agent turn in flight. This makes the existing
+  direct-receipt suppression effective and prevents bridge receipts from being
+  duplicated alongside transcript-derived tool events during ordinary turns.
+
+Focused regressions prove Session-owned completion/history, direct-receipt
+suppression during `Session.Run`, and settlement through the real bridge event
+shape with no terminal ID. `go test ./agent/...` and `go build ./...` pass in
+`mcpagent`; focused AgentWorks retained-turn tests pass. A backend restart and a
+live Pi continuation remain the final runtime proof; this document does not
+claim that proof before it is run.
+
 ### Resolved regression — the main chat path did not retain its session
 
 Review on 2026-08-14 found that two bullets above were mutually exclusive on the
@@ -180,6 +223,26 @@ remains resolvable after that method returns, then proves wrapper close
 unregisters it. This closes the inert-path regression but is not substituted
 for IC-11 proof 2: that proof must still complete a real CLI streaming turn
 before exercising the retained-window follow-up.
+
+### Resolved regression — retained synthetic turns replayed the first user message
+
+The durable-session migration initially gave `LLMAgentWrapper` and
+`mcpagent.Session` separate histories. `StreamWithEvents` appended the current
+prompt only to the wrapper history and called `Session.Run` with `Turn.History`
+but an empty `Turn.Input`. That works once: after the first run the Session owns
+non-empty history and deliberately ignores later `Turn.History`. Every later
+background completion therefore resumed the provider with the last human input
+from the first turn instead of the supplied auto-notification.
+
+This was reproduced in the live `salesoutreach` session: prompt receipts at
+12:01, 12:08, 12:13, and later synthetic turns all recorded `hi`, even though
+the server log showed distinct background-agent completion dispatches at those
+times. It was a backend replay, not a frontend rendering duplicate.
+
+`LLMAgentWrapper` now snapshots only prior wrapper history and always passes the
+current prompt as `Turn.Input`. The Session appends that input to its own durable
+history on every run. A focused regression test pins that continuation input so
+future session-lifetime changes cannot silently revive stale-message replay.
 
 The implementation is intentionally **not marked complete**. A provider tmux can
 survive a backend restart while the new in-memory session registry cannot. The
