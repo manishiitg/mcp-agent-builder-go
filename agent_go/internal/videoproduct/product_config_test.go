@@ -133,32 +133,70 @@ func TestGeneratedPlanAuthorsStagesAsMessageSequences(t *testing.T) {
 	}
 	var plan struct {
 		Steps []struct {
-			ID    string `json:"type_id"`
+			ID    string `json:"id"`
 			Type  string `json:"type"`
 			Items []struct {
-				ID   string `json:"id"`
 				Type string `json:"type"`
 			} `json:"items"`
+			Routes []struct {
+				RouteID string `json:"route_id"`
+				Sub     struct {
+					ID    string `json:"id"`
+					Type  string `json:"type"`
+					Items []struct {
+						Type string `json:"type"`
+					} `json:"items"`
+				} `json:"sub_agent_step"`
+			} `json:"predefined_routes"`
 		} `json:"steps"`
 	}
 	if err := json.Unmarshal(raw, &plan); err != nil {
 		t.Fatal(err)
 	}
+
+	assertStage := func(id, stepType string, items int, firstItem string) {
+		t.Helper()
+		if stepType != "message_sequence" {
+			t.Fatalf("stage %q has type %q; non-scripted stages must author as message_sequence", id, stepType)
+		}
+		if items == 0 {
+			t.Fatalf("stage %q declares no items; the runtime would have to synthesize the turn again", id)
+		}
+		if firstItem != "user_message" {
+			t.Fatalf("stage %q first item is %q, want user_message", id, firstItem)
+		}
+	}
+
 	stages := 0
 	for _, step := range plan.Steps {
-		if step.Type == "routing" {
+		switch step.Type {
+		case "routing":
 			continue // a router branches; it runs no stage turn
+		case "todo_task":
+			// An orchestrator runs no turn of its own — its work is its routes,
+			// and each of those is still a stage and still a message_sequence.
+			if len(step.Routes) == 0 {
+				t.Fatalf("todo_task %q declares no predefined_routes", step.ID)
+			}
+			for _, route := range step.Routes {
+				stages++
+				first := ""
+				if len(route.Sub.Items) > 0 {
+					first = route.Sub.Items[0].Type
+				}
+				assertStage(route.Sub.ID, route.Sub.Type, len(route.Sub.Items), first)
+				if route.RouteID != route.Sub.ID {
+					t.Fatalf("route_id %q does not match its sub_agent_step id %q; the orchestrator re-dispatches by route_id", route.RouteID, route.Sub.ID)
+				}
+			}
+			continue
 		}
 		stages++
-		if step.Type != "message_sequence" {
-			t.Fatalf("stage step has type %q; non-scripted stages must author as message_sequence", step.Type)
+		first := ""
+		if len(step.Items) > 0 {
+			first = step.Items[0].Type
 		}
-		if len(step.Items) == 0 {
-			t.Fatal("message_sequence stage declares no items; the runtime would have to synthesize the turn again")
-		}
-		if step.Items[0].Type != "user_message" {
-			t.Fatalf("stage's first item is %q, want user_message", step.Items[0].Type)
-		}
+		assertStage(step.ID, step.Type, len(step.Items), first)
 	}
 	if stages == 0 {
 		t.Fatal("no stage steps generated")
@@ -174,5 +212,64 @@ func TestVideoStudioPromptExpandsAllowListedVariables(t *testing.T) {
 	}
 	if strings.Contains(prompt, "AgentWorks launch") || strings.Contains(prompt, "{{TIME}}") || strings.Contains(prompt, "{{PRODUCT_NAME}}") {
 		t.Fatalf("prompt variables were not expanded: %s", prompt)
+	}
+}
+
+// The pre-production block is orchestrated because its critic is a pure
+// reviewer: it faults BRIEF/STORYBOARD/SCRIPT/frame.md, owns none of them, and
+// is told not to build. Linearly its `revise` verdict had no addressee — the
+// author's step had finished, the next step did not own the artifact, and the
+// platform removed step loops. This pins the wiring that gives a finding
+// somewhere to go.
+func TestPreProductionIsOrchestratedSoCritiqueFindingsHaveAnAddressee(t *testing.T) {
+	block := infographicPipeline.Orchestrated
+	if block == nil {
+		t.Fatal("infographic pipeline declares no orchestrated block; a creative-critique verdict would again have nowhere to go")
+	}
+
+	// The critic must be inside the block. Outside it, the orchestrator never
+	// sees the verdict and cannot re-dispatch anyone.
+	var hasCritic bool
+	for _, id := range block.StageIDs {
+		if id == "infographic-creative-critique" {
+			hasCritic = true
+		}
+	}
+	if !hasCritic {
+		t.Fatalf("creative critique is not one of the orchestrated routes: %v", block.StageIDs)
+	}
+
+	// It must also be able to reach the authors of what it faults, or a
+	// `revise` verdict still has no addressee.
+	for _, owner := range []string{"infographic-concept", "infographic-copy", "infographic-layout"} {
+		var found bool
+		for _, id := range block.StageIDs {
+			if id == owner {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("%s authors an artifact the critique faults but is not a route the orchestrator can re-dispatch: %v", owner, block.StageIDs)
+		}
+	}
+
+	// The instruction has to say what each verdict does. Without this the
+	// orchestrator sees a scorecard and no mandate to act on it.
+	for _, required := range []string{"revise", "blocked", "pass"} {
+		if !strings.Contains(block.Description, required) {
+			t.Fatalf("orchestrator description never handles verdict %q", required)
+		}
+	}
+	// Bounded, or a failing critique loops forever.
+	if !strings.Contains(block.Description, "three review rounds") {
+		t.Fatalf("orchestrator description sets no bound on re-review rounds:\n%s", block.Description)
+	}
+
+	// The later critiques stay linear on purpose: they own the artifact they
+	// judge and repair it in place, which needs no orchestrator.
+	for _, id := range block.StageIDs {
+		if id == "infographic-composition-critique" || id == "infographic-render-critique" {
+			t.Fatalf("%s repairs the artifact it judges; orchestrating it adds nondeterminism for nothing", id)
+		}
 	}
 }

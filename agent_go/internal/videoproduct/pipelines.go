@@ -31,6 +31,37 @@ type PipelineStage struct {
 	RequiresApproval bool
 }
 
+// OrchestratedBlock groups consecutive stages under one todo_task orchestrator
+// instead of emitting them as a linear chain.
+//
+// It exists for exactly one reason: a critic that does not build cannot act on
+// its own findings, and a linear chain has nowhere to send them. The stage that
+// follows does not own the faulted artifact, the stage that wrote it has already
+// finished, and the platform removed step loops — so a `revise` verdict was
+// written, validated as "file exists", and then ignored.
+//
+// An orchestrator closes that loop the way the critic's own prompt already
+// assumes ("tell the orchestrator to pause for the user"): it receives each
+// route's result in its own conversation, and re-calling a message_sequence
+// route resumes THAT specialist's conversation with the feedback as the
+// re-entry message. The storyboard author revises its own storyboard, in the
+// context that produced it, and the critic stays independent.
+//
+// Only blocks that need this get one. The composition and render critiques are
+// deliberately NOT orchestrated: they own the artifact they judge and repair it
+// in place, which is cheaper and already works.
+type OrchestratedBlock struct {
+	ID       string   // plan step id for the orchestrator itself
+	Title    string   // user-facing name
+	Summary  string   // one-line user-facing explanation
+	StageIDs []string // stages to run as routes, in their authored order
+	// Description is the orchestrator's own instruction: how to sequence the
+	// routes, what to do with each verdict, and when to stop.
+	Description string
+	// Output is the artifact the block as a whole must leave behind.
+	Output string
+}
+
 // Pipeline is one named workflow.
 type Pipeline struct {
 	ID          string
@@ -38,6 +69,9 @@ type Pipeline struct {
 	Description string
 	WhenToUse   string // routing hint: how a brief maps to this pipeline
 	Stages      []PipelineStage
+	// Orchestrated, when set, runs the named stages as routes of one todo_task
+	// instead of as a linear chain. See OrchestratedBlock for why.
+	Orchestrated *OrchestratedBlock
 }
 
 // Stage descriptions are the stage agents' prompts. They live here rather than
@@ -73,6 +107,30 @@ var infographicPipeline = &Pipeline{
 	Name:        "Product explainer / infographic",
 	Description: "A high-quality HyperFrames product explainer with independent critique and bounded refinement gates.",
 	WhenToUse:   "Product explainers, feature breakdowns, stat and data pieces, comparison or pricing videos — anything whose value comes from typography, numbers and layout rather than footage and mood.",
+	// Pre-production is orchestrated because its critic is a pure reviewer: it
+	// faults BRIEF/STORYBOARD/SCRIPT/frame.md, none of which it owns or may
+	// build. Linear, its `revise` verdict had no addressee. The two later
+	// critiques stay linear — they repair the artifact they judge.
+	Orchestrated: &OrchestratedBlock{
+		ID:      "infographic-preproduction",
+		Title:   "Brief, storyboard and creative review",
+		Summary: "Agree the brief, storyboard, script and visual system, then pass an independent creative review.",
+		Output:  "creative-review.md",
+		Description: "Own pre-production for this video: brief, storyboard, script, visual system, and the independent creative review that gates them. " +
+			"Run the routes in their listed order — each one writes the artifact the next depends on, so none can be skipped or reordered. " +
+			"When the creative review finishes, read creative-scorecard.json and act on its verdict; it is a gate, not advice.\n" +
+			"- verdict `pass`: pre-production is done. Finish the step.\n" +
+			"- verdict `revise`: for each blocking finding, call the route that OWNS the faulted artifact again — storyboard findings go to the storyboard route, wording to script and copy, palette/type/motion to visual system — passing that finding's targeted repair instructions and acceptance criteria as your instructions. Re-calling a route resumes that specialist's own conversation, so it revises its work with the context that produced it; do not re-run the whole block and do not repair the artifact yourself. Then call the creative review route again to re-judge. Stop after three review rounds and finish with the outstanding findings named, rather than looping.\n" +
+			"- verdict `blocked`: the review has found a missing decision or missing evidence that cannot be invented. Do not guess it and do not send it back to a specialist. Finish the step and report exactly what the user must decide or supply.\n" +
+			"Never write the routes' artifacts yourself. Your job is to sequence them, carry the review's findings to whoever owns them, and know when to stop.",
+		StageIDs: []string{
+			"infographic-research",
+			"infographic-concept",
+			"infographic-copy",
+			"infographic-layout",
+			"infographic-creative-critique",
+		},
+	},
 	Stages: []PipelineStage{
 		{ID: "infographic-research", Title: "Brief and evidence", Summary: "Confirm the message, authoritative evidence, format, and HyperFrames route.", Output: "BRIEF.md", Skills: []string{"product-infographic", "video-creation", "hyperframes", "product-launch-video", "faceless-explainer", "motion-graphics", "general-video"}},
 		{ID: "infographic-concept", Title: "Storyboard", Summary: "Shape the teaching or product-proof sequence scene by scene.", Output: "STORYBOARD.md", Skills: []string{"product-infographic", "hyperframes-creative"}},
