@@ -261,7 +261,7 @@ func runChildTurn(ctx context.Context, s familyState, activityDir string, messag
 		Observers:                 []mcpagent.AgentEventListener{toolCalls},
 		DirectToolExecutionEvents: true,
 		Tools: []agentsession.Tool{
-			childShellTool(), childOpenFile, celebrate, notifyTool(), childReadImageTool(s.Engine),
+			childShellTool(), childOpenFile, celebrate, notifyTool(), childDiffPatchWorkspaceFileTool(), childReadImageTool(s.Engine),
 			// Illustrations mid-lesson. The requested dir is IGNORED: whatever the
 			// tutor passes, a picture can only ever land in this activity's own
 			// folder, matching the child sandbox everywhere else.

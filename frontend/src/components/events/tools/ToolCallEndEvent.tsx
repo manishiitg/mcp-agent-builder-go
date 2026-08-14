@@ -61,6 +61,7 @@ function isWorkspaceTool(name: string): boolean {
   const workspaceToolNames = [
     'read_workspace_file',
     'update_workspace_file',
+    'diff_patch_workspace_file',
     'list_workspace_files',
     'delete_workspace_file',
   ]

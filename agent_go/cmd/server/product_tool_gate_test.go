@@ -162,18 +162,22 @@ func TestProductToolGateGovernsTheCodingAgentBridgeCatalog(t *testing.T) {
 		t.Fatal("Video Studio declares tool_policy.mode=allowlist; the gate must enforce")
 	}
 
-	// diff_patch_workspace_file stays out, and no longer because a CLI supplies
-	// its own editor: AgentWorks removed the tool outright, so no executor for it
-	// remains in agent_go, the workspace module, or mcpagent. Allow-listing a
-	// name nothing serves is what produced the original "not registered for
-	// session" failure described above.
+	// The bridge carries what the CLI cannot do natively, so a file editor's
+	// place depends on the mode: under hybrid every supported CLI ships one and
+	// diff_patch_workspace_file is redundant; under mcp_only they are denied and
+	// it is the only guarded way to edit a file. Asserting one direction
+	// unconditionally made the exclusion look like a property of the tool.
 	//
 	// execute_shell_command stays IN: it is how product HTTP APIs are
 	// reached, and Codex can reach it only as an MCP tool (its JS code-mode
 	// sandbox has no network and no env). See
 	// docs/design/product_api_transport_for_coding_agents.md.
-	if gate.Admit("diff_patch_workspace_file") {
-		t.Fatal("diff_patch_workspace_file has no executor anywhere; allow-listing it advertises a tool nothing serves")
+	nativeToolsDenied := manifest.Profile.Runtime.AgentTools.Mode != "hybrid"
+	if got := gate.Admit("diff_patch_workspace_file"); got != nativeToolsDenied {
+		if nativeToolsDenied {
+			t.Fatalf("agent_tools.mode=%q denies the CLI's own editor, so the bridge must supply diff_patch_workspace_file", manifest.Profile.Runtime.AgentTools.Mode)
+		}
+		t.Fatal("diff_patch_workspace_file must stay out of a hybrid profile's surface: the CLI supplies its own")
 	}
 	for _, kept := range []string{"execute_shell_command", "agent_browser"} {
 		if !gate.Admit(kept) {

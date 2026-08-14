@@ -1305,12 +1305,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     workflowPhaseWorkspacePath,
   ])
 
-  const activeLLMLabel = useMemo(() => {
-    if (!primaryLLM?.provider) return 'LLM'
-    const model = primaryLLM.model?.split('/').pop()
-    return model ? `${primaryLLM.provider}/${model}` : primaryLLM.provider
-  }, [primaryLLM?.model, primaryLLM?.provider])
-
   // The main agent runs in a tmux pane only for coding-agent CLI providers
   // (claude-code, codex-cli, cursor-cli, pi-cli, ...). This drives whether
   // the "keyboard → terminal" toggle is offered. Derived from primaryLLM
@@ -3570,13 +3564,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             )}
             <div className="flex justify-between items-center">
               <div className="flex items-center gap-2">
-                {/* Workflow and Chief of Staff both show the active agent, not selectors. */}
-                {!isProductSurface && ((hideExtras && isWorkflowPhaseChat) || isMultiAgentMode) && (
-                  <div className="flex max-w-[18rem] items-center gap-1 rounded-md border border-gray-300 bg-gray-100 px-2 py-1.5 text-xs text-gray-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-400">
-                    <span className="truncate">{activeLLMLabel}</span>
-                  </div>
-                )}
-
                 {/* Server and LLM Selection — hidden in workflow phase chat (servers come from preset) */}
                 {(
                   <div data-tour="chat-input-tools" data-testid="tour-chat-input-tools" className="flex items-center gap-2">

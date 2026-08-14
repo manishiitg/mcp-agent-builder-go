@@ -1832,7 +1832,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 					if stepLearningHistory != "" {
 						stepLearningHistory += "\n\n"
 					}
-					stepLearningHistory += fmt.Sprintf("📜 **Saved script available** at `%s` — this is a working implementation from a previous run. Read it before starting, then update it carefully with `execute_shell_command` rather than rewriting the entire file.", execCodeMainPyAbsPath)
+					stepLearningHistory += fmt.Sprintf("📜 **Saved script available** at `%s` — this is a working implementation from a previous run. Read it before starting, then use `diff_patch_workspace_file` to update it rather than rewriting the entire file.", execCodeMainPyAbsPath)
 				}
 				templateVars["LearningHistory"] = stepLearningHistory
 				// Set HasLearnings flag to explicitly indicate whether learnings exist (prevents agent from searching)

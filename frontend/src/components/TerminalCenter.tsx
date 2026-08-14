@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Activity, AlertTriangle, ArrowDownToLine, ArrowRightToLine, Bot, Braces, Bug, Check, ChevronDown, ChevronRight, ChevronUp, ClipboardCheck, Copy, CornerDownLeft, CornerUpLeft, GitBranch, History, Info, ListRestart, Network, Power, RefreshCw, SearchCheck, Square, Terminal, Trash2, X } from 'lucide-react'
+import { Activity, AlertTriangle, ArrowDownToLine, ArrowRightToLine, Bot, Braces, Bug, Check, ChevronDown, ChevronRight, ChevronUp, ClipboardCheck, Copy, CornerDownLeft, CornerUpLeft, GitBranch, History, Info, ListRestart, MessageSquare, Network, Power, RefreshCw, SearchCheck, Square, Terminal, Trash2, X } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { Terminal as XTerm, type ITheme } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -3438,6 +3438,14 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
     canShowFormattedView,
     selectedTerminalID ? formattedViewPreferences[selectedTerminalID] : undefined,
   )
+  const selectedHeaderTitle = showFormattedView && selectedTerminalView && isMainAgentTerminal(selectedTerminalView)
+    ? humanizeIdentifier(
+        selectedTerminalView.workflow_label
+          || selectedTerminalView.workflow_name
+          || selectedTerminalDisplayTitle.split('>')[0]
+          || 'Conversation',
+      )
+    : selectedTerminalDisplayTitle
   const selectedTerminalCanLoadEvents = shouldLoadTerminalEvents(
     selectedTerminalView,
     selectedTerminalUsesSessionEvents,
@@ -4557,9 +4565,9 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                       )}
                       <span
                         className="max-w-[38%] shrink-0 truncate font-medium text-neutral-200"
-                        title={selectedTerminalDisplayTitle}
+                        title={selectedHeaderTitle}
                       >
-                        {selectedTerminalDisplayTitle}
+                        {selectedHeaderTitle}
                       </span>
                       {selectedPlanStep && (
                         <button
@@ -4572,10 +4580,14 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                           <Info className="h-3.5 w-3.5" />
                         </button>
                       )}
-                      <span className="shrink-0 opacity-35" aria-hidden="true">·</span>
-                      <span className="min-w-0 flex-1 truncate opacity-80">
-                        {formatSelectedTerminalMeta(selectedTerminalView)}
-                      </span>
+                      {!showFormattedView && (
+                        <>
+                          <span className="shrink-0 opacity-35" aria-hidden="true">·</span>
+                          <span className="min-w-0 flex-1 truncate opacity-80">
+                            {formatSelectedTerminalMeta(selectedTerminalView)}
+                          </span>
+                        </>
+                      )}
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
                       {terminalState(selectedTerminalView) === 'closing' && (
@@ -4600,8 +4612,8 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                             ? 'Showing the readable conversation. Click to inspect the technical terminal.'
                             : 'Showing the technical terminal. Click to return to the readable conversation.'}
                         >
-                          {showFormattedView ? <Braces className="h-3.5 w-3.5" /> : <Terminal className="h-3.5 w-3.5" />}
-                          <span>{showFormattedView ? 'Conversation' : 'Terminal'}</span>
+                          {showFormattedView ? <Terminal className="h-3.5 w-3.5" /> : <MessageSquare className="h-3.5 w-3.5" />}
+                          <span>{showFormattedView ? 'Terminal' : 'Conversation'}</span>
                         </button>
                       )}
                       {selectedTerminalIsTmux && !showFormattedView && (

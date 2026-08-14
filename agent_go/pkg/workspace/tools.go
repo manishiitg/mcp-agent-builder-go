@@ -60,6 +60,20 @@ func NewAdvancedExecutor(client *Client) map[string]func(ctx context.Context, ar
 		return client.ReadImage(ctx, params)
 	}
 
+	executors["diff_patch_workspace_file"] = func(ctx context.Context, args map[string]interface{}) (string, error) {
+		var params DiffPatchWorkspaceFileParams
+		if err := mapToStruct(args, &params); err != nil {
+			return "", fmt.Errorf("invalid arguments: %w", err)
+		}
+		result, err := client.DiffPatchWorkspaceFile(ctx, params)
+		if err != nil {
+			return "", err
+		}
+		// Intentionally no workspace_file_operation event: tool receipts already
+		// provide the canonical operation record, and that legacy event was removed.
+		return marshalResult(result)
+	}
+
 	return executors
 }
 

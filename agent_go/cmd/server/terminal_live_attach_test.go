@@ -18,6 +18,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
+	unifiedevents "github.com/manishiitg/mcpagent/events"
 	llmproviders "github.com/manishiitg/multi-llm-provider-go"
 	"github.com/manishiitg/multi-llm-provider-go/pkg/tmuxinput"
 
@@ -362,6 +363,71 @@ firstCaptureObserved:
 	}
 	if !foundCompletion {
 		t.Fatal("tmux stream settlement did not emit unified_completion")
+	}
+}
+
+func TestMCPAgentSessionCompletionSettlesWithoutHostTmuxObserver(t *testing.T) {
+	const sessionID = "mcpagent-owned-retained-completion"
+	const tmuxSession = "mlp-pi-cli-int-mcpagent-owned"
+	terminalID := sessionID + ":main:" + sessionID
+	terminalStore := terminals.NewStore()
+	terminalStore.HandleEvent(sessionID, codingAgentTmuxReaperChunkEvent(
+		time.Now(), sessionID, "main:"+sessionID, tmuxSession,
+	))
+	if _, ok := terminalStore.MarkTurnCompleted(terminalID); !ok {
+		t.Fatal("could not prepare retained main terminal")
+	}
+	// Reproduce the live failure: AgentWorks' process snapshot was stale even
+	// though mcpagent had just accepted input through the durable Pi session.
+	terminalStore.MarkProcessClosed(terminalID, "stale host snapshot")
+
+	eventStore := internalevents.NewEventStore(100)
+	defer eventStore.Stop()
+	api := &StreamingAPI{
+		eventStore:                   eventStore,
+		terminalStore:                terminalStore,
+		activeSessions:               map[string]*ActiveSessionInfo{sessionID: {SessionID: sessionID, Status: "completed"}},
+		retainedMainTurns:            make(map[string]time.Time),
+		retainedMainTurnWatchCancels: make(map[string]context.CancelFunc),
+	}
+	eventStore.SetEventAddedCallback(func(ownerSessionID string, event internalevents.Event) {
+		terminalStore.HandleEventWithChange(ownerSessionID, event)
+		api.observeRetainedMainTurnEvent(ownerSessionID, event)
+	})
+
+	api.markMCPAgentSessionTurnRunning(sessionID, "live-turn:test")
+	if !api.isSessionBusy(sessionID) {
+		t.Fatal("mcpagent-owned retained turn was not marked busy")
+	}
+
+	now := time.Now()
+	completion := unifiedevents.NewUnifiedCompletionEvent("coding_agent", "retained", "upgrade", "done", "completed", time.Second, 1)
+	completion.SessionID = sessionID
+	completion.Metadata["source"] = "mcpagent_session"
+	eventStore.AddEvent(sessionID, internalevents.Event{
+		ID:              "mcpagent-owned-completion",
+		Type:            "unified_completion",
+		Timestamp:       now,
+		SessionID:       sessionID,
+		ExecutionID:     "live-turn:test",
+		ExecutionKind:   "main_agent",
+		TerminalOwnerID: "main:" + sessionID,
+		Data: &unifiedevents.AgentEvent{
+			Type:      unifiedevents.EventType("unified_completion"),
+			Timestamp: now,
+			SessionID: sessionID,
+			Data:      completion,
+		},
+	})
+
+	if api.isSessionBusy(sessionID) {
+		t.Fatal("canonical mcpagent completion did not settle retained turn")
+	}
+	api.activeSessionsMux.RLock()
+	status := api.activeSessions[sessionID].Status
+	api.activeSessionsMux.RUnlock()
+	if status != "completed" {
+		t.Fatalf("session status = %q, want completed", status)
 	}
 }
 

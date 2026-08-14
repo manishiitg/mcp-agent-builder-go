@@ -29,7 +29,7 @@ Apply these when writing or patching a step's `main.py`. Scripts must run identi
 
 **Patching discipline**
 - Edit `learnings/{step-id}/main.py` — this is the source of truth. NEVER edit `execution/{step-id}/code/main.py`; the controller overwrites it from learnings on every run.
-- Use `execute_shell_command` for targeted changes, preserving working code and reducing regressions. Full rewrite only when restructuring large portions.
+- Prefer `diff_patch_workspace_file` for targeted changes — preserves working code and reduces regressions. Full rewrite (cat-heredoc) only when restructuring large portions.
 - Helper files alongside main.py also live in `learnings/{step-id}/` — patch them the same way.
 
 **Never hand-escape prose into a string literal**
@@ -56,7 +56,7 @@ Keep text out of code instead of trying to quote it correctly:
   `<< 'PYEOF'` and not `<< PYEOF`. Quoting the delimiter stops the shell
   expanding or re-escaping anything in the body, which is the other half of the
   same problem.
-- Prefer a targeted `execute_shell_command` edit over a full rewrite. A targeted
+- Prefer `diff_patch_workspace_file` over a full heredoc rewrite. A targeted
   patch touches fewer lines, so there is less text to get wrong.
 
 If a generated script fails to parse twice, stop rewriting it the same way. The

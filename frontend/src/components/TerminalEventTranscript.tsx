@@ -1,6 +1,6 @@
-import React, { memo, useCallback, useMemo, useRef, useState } from 'react'
-import { Virtuoso } from 'react-virtuoso'
-import { CheckCircle2, ChevronDown, ChevronRight, CircleDashed, Wrench, XCircle } from 'lucide-react'
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
+import { CheckCircle2, ChevronDown, ChevronRight, CircleDashed, XCircle } from 'lucide-react'
 import { EventDispatcher } from './events/EventDispatcher'
 import { ConversationMarkdownRenderer } from './ui/MarkdownRenderer'
 import {
@@ -283,13 +283,12 @@ const ToolBatch: React.FC<{ item: Extract<TranscriptItem, { kind: 'tools' }> }> 
         onClick={toggle}
         aria-expanded={expanded}
         data-testid="terminal-clear-tool-batch-toggle"
-        className="flex w-full items-center gap-2 rounded-lg border border-neutral-800/80 bg-neutral-900/35 px-2.5 py-2 text-left text-xs text-neutral-400 transition-colors hover:bg-neutral-800/60 hover:text-neutral-200"
+        className="flex items-center gap-1 py-1 text-left text-[11px] text-neutral-600 transition-colors hover:text-neutral-400"
       >
-        <Wrench className="h-3.5 w-3.5 shrink-0" />
-        <span>+{item.toolCount} tool {item.toolCount === 1 ? 'call' : 'calls'}</span>
+        <span>{item.toolCount} tool {item.toolCount === 1 ? 'call' : 'calls'}</span>
         {expanded
-          ? <ChevronDown className="ml-auto h-3.5 w-3.5 shrink-0" />
-          : <ChevronRight className="ml-auto h-3.5 w-3.5 shrink-0" />}
+          ? <ChevronDown className="h-3 w-3 shrink-0" />
+          : <ChevronRight className="h-3 w-3 shrink-0" />}
       </button>
       {expanded && (
         <div data-testid="terminal-clear-tool-batch-content" className="mt-1 space-y-0.5 border-l border-neutral-700/60 pl-3">
@@ -338,11 +337,45 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
   streamingStatus = '',
 }) => {
   const scrollerRef = useRef<HTMLElement | Window | null>(null)
+  const virtuosoRef = useRef<VirtuosoHandle | null>(null)
   const scoped = useMemo(
     () => selectTerminalEvents(events, terminal, siblingTerminals),
     [events, terminal, siblingTerminals],
   )
   const items = useMemo<TranscriptRenderItem[]>(() => buildTranscriptItems(scoped), [scoped])
+  const latestUserMessageKey = useMemo(() => {
+    for (let index = items.length - 1; index >= 0; index -= 1) {
+      const item = items[index]
+      if (item.kind === 'event' && item.event.type === 'user_message') return item.key
+    }
+    return ''
+  }, [items])
+  const followedUserMessageKeyRef = useRef(latestUserMessageKey)
+
+  // Sending a message changes more than the transcript: the optimistic user
+  // row appears immediately, then delivery/status chrome can reduce the
+  // transcript viewport a frame later. Virtuoso's normal followOutput handles
+  // the first change but not that later resize, leaving the new message partly
+  // above the real bottom. Follow only a genuinely new user message (not every
+  // background event), and repeat once after the surrounding layout settles.
+  useEffect(() => {
+    if (!latestUserMessageKey || followedUserMessageKeyRef.current === latestUserMessageKey) return
+    followedUserMessageKeyRef.current = latestUserMessageKey
+
+    const scrollToLatest = () => {
+      virtuosoRef.current?.scrollToIndex({
+        index: Math.max(0, items.length - 1),
+        align: 'end',
+        behavior: 'auto',
+      })
+    }
+    const frame = window.requestAnimationFrame(scrollToLatest)
+    const settledLayoutTimer = window.setTimeout(scrollToLatest, 180)
+    return () => {
+      window.cancelAnimationFrame(frame)
+      window.clearTimeout(settledLayoutTimer)
+    }
+  }, [items.length, latestUserMessageKey])
 
   // Electron occasionally fails to route a physical wheel/trackpad gesture to
   // Virtuoso's internal scroller even though accessibility scroll actions work.
@@ -452,6 +485,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
       {/* Virtualized: the tree inherited this from EventHierarchy. A flat list
           that rendered every event would regress long sessions badly. */}
       <Virtuoso
+        ref={virtuosoRef}
         data={streamingText || streamingStatus
           ? [...items, { kind: 'live' as const, key: '__live-stream__', text: streamingText, status: streamingStatus }]
           : items}
@@ -478,18 +512,13 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
   )
 }
 
-const LiveAssistantTranscript: React.FC<{ text: string; status: string }> = ({ text, status }) => (
+const LiveAssistantTranscript: React.FC<{ text: string; status: string }> = ({ text }) => (
   text ? (
     <article data-testid="terminal-clear-live-assistant-message" className="mx-5 my-4 border-l-2 border-cyan-400/55 pl-4 pr-2">
       <ConversationMarkdownRenderer content={text} framed={false} maxHeight="none" />
       <span aria-label="Writing" className="mt-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-cyan-400" />
     </article>
-  ) : (
-    <div data-testid="terminal-clear-live-assistant-message" className="mx-5 my-4 flex items-center gap-2 text-sm text-neutral-500">
-      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-cyan-400" />
-      <span>{status || 'Working…'}</span>
-    </div>
-  )
+  ) : null
 )
 
 // Memoized: the parent re-renders on every terminal poll, and re-rendering the

@@ -1,0 +1,76 @@
+package workspace
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestStripWorkspacePrefixUsesEnvRoot(t *testing.T) {
+	t.Setenv("WORKSPACE_DOCS_PATH", "/Users/mipl/ai-work/coding-agent-loop/workspace-docs")
+
+	got := stripWorkspacePrefix("/Users/mipl/ai-work/coding-agent-loop/workspace-docs/Workflow/demo/learnings/_global/SKILL.md")
+	want := "Workflow/demo/learnings/_global/SKILL.md"
+	if got != want {
+		t.Fatalf("stripWorkspacePrefix() = %q, want %q", got, want)
+	}
+}
+
+func TestStripWorkspacePrefixDiscoversSiblingWorkspaceDocs(t *testing.T) {
+	t.Setenv("WORKSPACE_DOCS_PATH", "")
+	root := t.TempDir()
+	agentDir := filepath.Join(root, "agent_go")
+	docsDir := filepath.Join(root, "workspace-docs")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(docsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	oldCwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(agentDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(oldCwd)
+	})
+	actualAgentDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	actualDocsDir := filepath.Join(filepath.Dir(actualAgentDir), "workspace-docs")
+
+	got := stripWorkspacePrefix(filepath.Join(actualDocsDir, "Workflow/demo/learnings/_global/SKILL.md"))
+	want := "Workflow/demo/learnings/_global/SKILL.md"
+	if got != want {
+		t.Fatalf("stripWorkspacePrefix() = %q, want %q", got, want)
+	}
+}
+
+func TestEncodeWorkspaceDocumentPath(t *testing.T) {
+	got := encodeWorkspaceDocumentPath("Workflow/my flow/learnings/file #1.md")
+	want := "Workflow/my%20flow/learnings/file%20%231.md"
+	if got != want {
+		t.Fatalf("encoded path = %q, want %q", got, want)
+	}
+}
+
+func TestDiffPatchWorkspaceFileValidatesInternally(t *testing.T) {
+	client := NewClient("http://127.0.0.1:1", WithFolderGuard(&FolderGuardConfig{
+		Enabled:    true,
+		WritePaths: []string{"Workflow/allowed"},
+	}))
+
+	_, err := client.DiffPatchWorkspaceFile(context.Background(), DiffPatchWorkspaceFileParams{
+		Filepath: "Workflow/blocked/report.html",
+		Diff:     "--- a/report.html\n+++ b/report.html\n@@ -0,0 +1 @@\n+hello\n",
+	})
+	if err == nil || !strings.Contains(err.Error(), "ACCESS DENIED") {
+		t.Fatalf("diff patch should be denied before making an HTTP request, got %v", err)
+	}
+}

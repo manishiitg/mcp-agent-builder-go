@@ -121,11 +121,12 @@ func TestKBMaintenanceAgentsGetQueryButNotMutation(t *testing.T) {
 	}
 	noop := func(context.Context, map[string]interface{}) (string, error) { return "", nil }
 	base.WorkspaceTools = []llmtypes.Tool{
-		tool("execute_shell_command"),
+		tool("execute_shell_command"), tool("diff_patch_workspace_file"),
 		tool("query_workflow_db"), tool("mutate_workflow_db"),
 	}
 	base.WorkspaceToolExecutors = map[string]interface{}{
-		"execute_shell_command": noop,
+		"execute_shell_command":     noop,
+		"diff_patch_workspace_file": noop,
 		"query_workflow_db":         noop,
 		"mutate_workflow_db":        noop,
 	}
