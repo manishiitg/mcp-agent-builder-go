@@ -318,8 +318,7 @@ func createCustomTools(workflowMode bool, sessionInfo ...string) ([]llmtypes.Too
 // chatsFolder is the full per-user path (e.g. "_users/default/Chats").
 func enhanceToolDescriptionForChatMode(toolName, originalDescription, chatsFolder string) string {
 	writeTools := map[string]bool{
-		"diff_patch_workspace_file": true,
-		"execute_shell_command":     true,
+		"execute_shell_command": true,
 	}
 
 	var accessInfo strings.Builder
@@ -347,8 +346,7 @@ func enhanceToolDescriptionForWorkflowPhase(toolName, originalDescription, workf
 	}
 
 	writeTools := map[string]bool{
-		"diff_patch_workspace_file": true,
-		"execute_shell_command":     true,
+		"execute_shell_command": true,
 	}
 
 	var accessInfo strings.Builder
@@ -368,8 +366,7 @@ func enhanceToolDescriptionForWorkflowPhase(toolName, originalDescription, workf
 // chatsFolder is the full per-user path (e.g. "_users/default/Chats").
 func enhanceToolDescriptionForMultiAgentMode(toolName, originalDescription, chatsFolder string) string {
 	writeTools := map[string]bool{
-		"diff_patch_workspace_file": true,
-		"execute_shell_command":     true,
+		"execute_shell_command": true,
 	}
 
 	var accessInfo strings.Builder
@@ -540,9 +537,7 @@ func wrapExecutorsWithFolderGuard(executors map[string]func(ctx context.Context,
 	}
 
 	// Write tools that should be restricted
-	writeTools := map[string]bool{
-		"diff_patch_workspace_file": true,
-	}
+	writeTools := map[string]bool{}
 
 	// Path parameters to check for all tools (both read and write)
 	allPathParams := []string{"filepath", "source_filepath", "destination_filepath", "folder", "pattern"}
@@ -657,7 +652,7 @@ func wrapExecutorsWithFolderGuard(executors map[string]func(ctx context.Context,
 				fmt.Printf("[%s] Injected write paths=%v read paths=%v for %s\n", wrapperLogPrefix, shellAllowedFolders, readFolders, toolNameCopy)
 			}
 
-			// For WRITE tools (diff_patch_workspace_file primarily), check blocked-write
+			// For tools with explicit file-path parameters, check blocked-write
 			// prefixes first and then allowed-write prefixes. Shell commands are handled
 			// via the isolator's BlockedPaths (kernel-level enforcement, set up at
 			// SetSessionFolderGuard call site) — no string-scanning needed here.
@@ -718,9 +713,7 @@ func wrapExecutorsWithPlanFolderGuard(executors map[string]func(ctx context.Cont
 	shellAllowedFolders := make([]string, len(allowedWriteFolders))
 	copy(shellAllowedFolders, allowedWriteFolders)
 
-	writeTools := map[string]bool{
-		"diff_patch_workspace_file": true,
-	}
+	writeTools := map[string]bool{}
 
 	allPathParams := []string{"filepath", "source_filepath", "destination_filepath", "folder", "pattern"}
 	writePathParams := []string{"filepath", "source_filepath", "destination_filepath"}

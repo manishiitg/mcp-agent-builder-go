@@ -1,4 +1,5 @@
 import type { ActiveSessionInfo, RuntimeSnapshot, SessionExecutionTreeResponse, TerminalSnapshot } from '../services/api-types'
+import { isMainAgentTerminal } from './terminalIdentity'
 
 export type RuntimeDisplayStatus = 'busy' | 'idle' | 'stopped'
 
@@ -116,6 +117,30 @@ function runtimeExecutionRecords(runtime: RuntimeSnapshot): RuntimeExecutionReco
 function runtimeRecordTime(record: RuntimeExecutionRecord): number {
   const parsed = Date.parse(record.completedAt || record.startedAt || '')
   return Number.isNaN(parsed) ? 0 : parsed
+}
+
+/**
+ * Whether this terminal is doing work now, as opposed to merely retaining a
+ * live interactive CLI process for the next message.
+ */
+export function terminalTurnIsBusy(
+  terminal: TerminalSnapshot,
+  runtime?: RuntimeSnapshot | null,
+): boolean {
+  if (isMainAgentTerminal(terminal) && runtime) {
+    return runtime.foreground_turn.busy
+  }
+
+  if (runtime) {
+    const matches = runtimeExecutionRecords(runtime)
+      .filter(record => runtimeRecordMatchesTerminal(record.id, terminal))
+    if (matches.length > 0) {
+      return matches.some(record => LIVE_EXECUTION_STATUSES.has(record.status.trim().toLowerCase()))
+    }
+  }
+
+  const state = (terminal.state || '').trim().toLowerCase()
+  return terminal.active && (state === 'running' || state === 'starting')
 }
 
 export function reconcileTerminalRuntimeState(

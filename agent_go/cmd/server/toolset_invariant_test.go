@@ -198,7 +198,7 @@ func TestToolSetInvariants(t *testing.T) {
 		"execute_step", "get_human_input_request", "create_human_input_request", "answer_human_input_request",
 		"update_workflow_config", "update_step_config", "validate_report_html",
 		"list_schedules", "update_schedule", "get_schedule_runs",
-		"execute_shell_command", "diff_patch_workspace_file",
+		"execute_shell_command",
 		"get_pulse_state", "record_pulse_worklist", "record_pulse_result", "record_pulse_impact", "resolve_run_concern",
 		"mark_changelog_artifact_reviewed",
 	} {

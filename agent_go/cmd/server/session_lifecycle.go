@@ -245,9 +245,7 @@ func (api *StreamingAPI) handleStopSession(w http.ResponseWriter, r *http.Reques
 	delete(api.sessionWorkspaceFolders, sessionID)
 	api.sessionWorkspaceMu.Unlock()
 
-	api.sessionAgentsMux.Lock()
-	delete(api.sessionAgents, sessionID)
-	api.sessionAgentsMux.Unlock()
+	api.removeSessionAgent(sessionID)
 
 	api.completionLoopStartedMu.Lock()
 	delete(api.completionLoopStarted, sessionID)

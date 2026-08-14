@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { createLiveInputSubmissionCoordinator } from './liveInputSubmission'
+import { createLiveInputSubmissionCoordinator, shouldAppendOptimisticLiveInputMessage } from './liveInputSubmission'
 
 describe('createLiveInputSubmissionCoordinator', () => {
   it('executes a rapid duplicate live message exactly once', async () => {
@@ -28,5 +28,31 @@ describe('createLiveInputSubmissionCoordinator', () => {
     await submitLiveInput('session-a', 'first', () => submit('first-again'))
 
     expect(submit).toHaveBeenCalledTimes(3)
+  })
+})
+
+describe('shouldAppendOptimisticLiveInputMessage', () => {
+  it('does not append a second copy when SSE delivered the acknowledged message first', () => {
+    const events = [{
+      type: 'user_message',
+      data: {
+        data: {
+          content: 'how are you',
+          metadata: { message_id: 'steer-123' },
+        },
+      },
+    }]
+
+    expect(shouldAppendOptimisticLiveInputMessage(events, 'steer-123')).toBe(false)
+  })
+
+  it('still appends for a different acknowledgement or before the backend echo arrives', () => {
+    const events = [{
+      type: 'user_message',
+      data: { data: { content: 'same text', metadata: { message_id: 'older' } } },
+    }]
+
+    expect(shouldAppendOptimisticLiveInputMessage(events, 'newer')).toBe(true)
+    expect(shouldAppendOptimisticLiveInputMessage([], 'newer')).toBe(true)
   })
 })

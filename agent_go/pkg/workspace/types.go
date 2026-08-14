@@ -52,11 +52,6 @@ type MoveFileResult struct {
 	Moved               bool   `json:"moved"`
 }
 
-// DiffPatchResult is the typed response from DiffPatchWorkspaceFile
-type DiffPatchResult struct {
-	Data json.RawMessage `json:"data"`
-}
-
 // ShellCommandResult is the typed response from ExecuteShellCommand
 type ShellCommandResult struct {
 	Stdout          string  `json:"stdout"`
@@ -69,17 +64,6 @@ type ShellCommandResult struct {
 // CommandFailed returns true if the shell command had a non-zero exit code or error
 func (r ShellCommandResult) CommandFailed() bool {
 	return r.ExitCode != 0 || r.Error != ""
-}
-
-// --- Helpers ---
-
-// marshalResult marshals any typed result to a JSON string (used by executor wrappers)
-func marshalResult(v interface{}) (string, error) {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal result: %w", err)
-	}
-	return string(b), nil
 }
 
 // readResponseBody reads and validates HTTP response

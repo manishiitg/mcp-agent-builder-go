@@ -119,7 +119,6 @@ export interface EventDataUnion {
   tool_execution?: ToolExecutionEvent;
   tool_output?: ToolOutputEvent;
   tool_response?: ToolResponseEvent;
-  workspace_file_operation?: WorkspaceFileOperationEvent;
   mcp_server_connection?: MCPServerConnectionEvent;
   mcp_server_discovery?: MCPServerDiscoveryEvent;
   mcp_server_selection?: MCPServerSelectionEvent;
@@ -589,27 +588,6 @@ export interface ToolResponseEvent {
   server_name?: string;
   status?: string;
   error?: string;
-}
-export interface WorkspaceFileOperationEvent {
-  timestamp?: string;
-  trace_id?: string;
-  span_id?: string;
-  event_id?: string;
-  parent_id?: string;
-  is_end_event?: boolean;
-  correlation_id?: string;
-  hierarchy_level?: number;
-  session_id?: string;
-  component?: string;
-  metadata?: {
-    [k: string]: unknown;
-  };
-  operation?: string;
-  filepath?: string;
-  folder?: string;
-  turn?: number;
-  server_name?: string;
-  should_highlight?: boolean;
 }
 export interface MCPServerConnectionEvent {
   timestamp?: string;

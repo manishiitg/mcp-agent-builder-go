@@ -4051,64 +4051,6 @@
         }
       },
       "type": "object"
-    },
-    "WorkspaceFileOperationEvent": {
-      "additionalProperties": false,
-      "properties": {
-        "component": {
-          "type": "string"
-        },
-        "correlation_id": {
-          "type": "string"
-        },
-        "event_id": {
-          "type": "string"
-        },
-        "filepath": {
-          "type": "string"
-        },
-        "folder": {
-          "type": "string"
-        },
-        "hierarchy_level": {
-          "type": "integer"
-        },
-        "is_end_event": {
-          "type": "boolean"
-        },
-        "metadata": {
-          "type": "object"
-        },
-        "operation": {
-          "type": "string"
-        },
-        "parent_id": {
-          "type": "string"
-        },
-        "server_name": {
-          "type": "string"
-        },
-        "session_id": {
-          "type": "string"
-        },
-        "should_highlight": {
-          "type": "boolean"
-        },
-        "span_id": {
-          "type": "string"
-        },
-        "timestamp": {
-          "format": "date-time",
-          "type": "string"
-        },
-        "trace_id": {
-          "type": "string"
-        },
-        "turn": {
-          "type": "integer"
-        }
-      },
-      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -4296,9 +4238,6 @@
     },
     "variables_extracted": {
       "$ref": "#/$defs/VariablesExtractedEvent"
-    },
-    "workspace_file_operation": {
-      "$ref": "#/$defs/WorkspaceFileOperationEvent"
     }
   },
   "type": "object"

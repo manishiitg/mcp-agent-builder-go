@@ -68,6 +68,7 @@ import (
 
 	mcpagent "github.com/manishiitg/mcpagent/agent"
 	"github.com/manishiitg/mcpagent/agent/prompt"
+	"github.com/manishiitg/mcpagent/agent/retainedturn"
 	llmproviders "github.com/manishiitg/multi-llm-provider-go"
 )
 
@@ -180,8 +181,8 @@ func seedMCPBridgeCodeExecRegistry(logger loggerv2.Logger) {
 	advancedExecutors := virtualtools.CreateWorkspaceAdvancedToolExecutors()
 	browserExecutors := virtualtools.CreateWorkspaceBrowserToolExecutors()
 
-	bridgeExecutors := make(map[string]func(context.Context, map[string]interface{}) (string, error), 3)
-	for _, name := range []string{"execute_shell_command", "diff_patch_workspace_file"} {
+	bridgeExecutors := make(map[string]func(context.Context, map[string]interface{}) (string, error), 2)
+	for _, name := range []string{"execute_shell_command"} {
 		if exec, ok := advancedExecutors[name]; ok {
 			bridgeExecutors[name] = exec
 		}
@@ -281,6 +282,9 @@ type StreamingAPI struct {
 	// provider-owned main tmux pane is still alive. Production dispatch uses the
 	// provider's typed live-input entry point.
 	internalRetainedTerminalInputHandler func(context.Context, llmproviders.Provider, string, string, string) error
+	// internalRetainedTurnFinalResponseReader is the test seam for the read-only
+	// coding-CLI sidecar lookup used after a directly injected turn completes.
+	internalRetainedTurnFinalResponseReader func(llmproviders.Provider, string, time.Time) string
 
 	// Note: Removed session management - fresh agents created per request
 
@@ -1159,6 +1163,12 @@ type QueryResponse struct {
 	// chat UI can render the same "sent to CLI" feedback without a second endpoint.
 	DeliveryStatus string `json:"delivery_status,omitempty"`
 	Provider       string `json:"provider,omitempty"`
+	// DeliveryTransport and DeliverySource make retained delivery auditable.
+	// Transport is the transport that actually accepted the message, not the
+	// provider's default. Source distinguishes the durable mcpagent Session path
+	// from the temporary cold-restart compatibility path.
+	DeliveryTransport string `json:"delivery_transport,omitempty"`
+	DeliverySource    string `json:"delivery_source,omitempty"`
 }
 
 // queryStatusLiveInputDelivered is the QueryResponse.Status returned when a
@@ -1167,6 +1177,12 @@ type QueryResponse struct {
 // tmux-transport CLI input. The regular query endpoint still uses this path as
 // a fallback; plain CLI follow-ups use the smaller /live-input endpoint first.
 const queryStatusLiveInputDelivered = "live_input_delivered"
+
+const (
+	queryDeliverySourceMCPAgentSession       = "mcpagent_session"
+	queryDeliverySourceRetainedCompatibility = "retained_terminal_compatibility"
+	queryDeliverySourceRunningAgent          = "running_agent"
+)
 
 const (
 	llmConfigSourceScheduledAutoImprove  = "scheduled_auto_improve"
@@ -5946,9 +5962,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 		// immediately. Waiting until the end of the first streamed turn creates a race where
 		// the completion loop sees no stored agent and drops the auto-notification.
 		{
-			api.sessionAgentsMux.Lock()
-			api.sessionAgents[sessionID] = llmAgent
-			api.sessionAgentsMux.Unlock()
+			api.storeSessionAgent(sessionID, llmAgent)
 			log.Printf("[BG AGENT] Stored agent for session %s for synthetic turn reuse (pre-stream)", sessionID)
 		}
 
@@ -6249,9 +6263,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 		// Store agent for reuse by synthetic turns (multi-agent chat and workflow phase chat).
 		// The stored agent retains all tools, prompts, observers, and conversation history.
 		{
-			api.sessionAgentsMux.Lock()
-			api.sessionAgents[sessionID] = llmAgent
-			api.sessionAgentsMux.Unlock()
+			api.storeSessionAgent(sessionID, llmAgent)
 			log.Printf("[BG AGENT] Stored agent for session %s for synthetic turn reuse", sessionID)
 		}
 
@@ -6733,7 +6745,10 @@ const (
 	retainedMainTurnStreamQuietWindow = 350 * time.Millisecond
 	retainedMainTurnReadyStableWindow = 1200 * time.Millisecond
 	retainedMainTurnCaptureTimeout    = 3 * time.Second
+	retainedMainTurnRecheckWindow     = time.Second
 )
+
+var inspectRetainedMainTurnTmuxState = inspectCodingTmuxPaneState
 
 // observeRetainedMainTurnStream derives the logical end of a direct retained
 // turn from the real tmux output stream. Stream output schedules a coherent
@@ -6787,6 +6802,10 @@ func (api *StreamingAPI) observeRetainedMainTurnStream(
 		case <-ctx.Done():
 			return
 		case <-stream.done:
+			if ctx.Err() != nil {
+				return
+			}
+			api.handleRetainedMainTurnStreamClosed(ctx, sessionID, snapshot, provider)
 			return
 		case <-output:
 			readySince = time.Time{}
@@ -6798,11 +6817,15 @@ func (api *StreamingAPI) observeRetainedMainTurnStream(
 			if captureErr != nil {
 				if ctx.Err() == nil {
 					log.Printf("[RETAINED_TURN] Tmux stream capture failed session=%s terminal=%s: %v", sessionID, snapshot.TerminalID, captureErr)
+					api.handleRetainedMainTurnStreamClosed(ctx, sessionID, snapshot, provider)
 				}
 				return
 			}
 			if !llmproviders.CodingAgentPaneReady(provider, pane) {
 				readySince = time.Time{}
+				// A capture can race the final repaint and leave no later output
+				// to wake this observer. Keep checking while the turn is active.
+				resetTimer(retainedMainTurnRecheckWindow)
 				continue
 			}
 			if readySince.IsZero() {
@@ -6810,25 +6833,104 @@ func (api *StreamingAPI) observeRetainedMainTurnStream(
 				resetTimer(retainedMainTurnReadyStableWindow)
 				continue
 			}
-			api.emitRetainedMainTurnStreamCompletion(sessionID, snapshot, provider)
+			api.emitRetainedMainTurnStreamCompletion(sessionID, snapshot, provider, "completed", "")
 			return
 		}
 	}
 }
 
-func (api *StreamingAPI) emitRetainedMainTurnStreamCompletion(sessionID string, snapshot terminals.Snapshot, provider llmproviders.Provider) {
+// handleRetainedMainTurnStreamClosed reconciles a control-stream exit instead
+// of silently leaving the logical turn busy. The provider sidecar wins when it
+// already contains a final response. A missing provider process is a failure;
+// a still-live pane gets a fresh observer because the control client can fail
+// independently of the coding CLI.
+func (api *StreamingAPI) handleRetainedMainTurnStreamClosed(
+	ctx context.Context,
+	sessionID string,
+	snapshot terminals.Snapshot,
+	provider llmproviders.Provider,
+) {
+	api.retainedMainTurnsMu.Lock()
+	turnStartedAt, tracked := api.retainedMainTurns[sessionID]
+	api.retainedMainTurnsMu.Unlock()
+	if !tracked || ctx.Err() != nil {
+		return
+	}
+	readFinalResponse := retainedturn.FinalResponse
+	if api.internalRetainedTurnFinalResponseReader != nil {
+		readFinalResponse = api.internalRetainedTurnFinalResponseReader
+	}
+	if finalResult := readFinalResponse(provider, sessionID, turnStartedAt); strings.TrimSpace(finalResult) != "" {
+		log.Printf("[RETAINED_TURN] Tmux stream closed after a durable final response; settling session=%s terminal=%s", sessionID, snapshot.TerminalID)
+		api.emitRetainedMainTurnStreamCompletion(sessionID, snapshot, provider, "completed", "")
+		return
+	}
+
+	switch inspectRetainedMainTurnTmuxState(snapshot.TmuxSession) {
+	case codingTmuxPaneMissing, codingTmuxPaneDead:
+		reason := "retained coding-agent terminal exited before producing a final response"
+		log.Printf("[RETAINED_TURN] %s session=%s terminal=%s tmux=%s", reason, sessionID, snapshot.TerminalID, snapshot.TmuxSession)
+		api.reconcileUnexpectedTerminalExit(snapshot, reason)
+		api.terminalStore.MarkFailed(snapshot.TerminalID)
+		api.terminalStore.MarkProcessClosed(snapshot.TerminalID, reason)
+		api.emitRetainedMainTurnStreamCompletion(sessionID, snapshot, provider, "failed", reason)
+	default:
+		log.Printf("[RETAINED_TURN] Tmux control stream closed while provider pane remains live; reattaching session=%s terminal=%s", sessionID, snapshot.TerminalID)
+		timer := time.NewTimer(retainedMainTurnRecheckWindow)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+			go api.observeRetainedMainTurnStream(ctx, sessionID, snapshot, provider)
+		}
+	}
+}
+
+func (api *StreamingAPI) emitRetainedMainTurnStreamCompletion(sessionID string, snapshot terminals.Snapshot, provider llmproviders.Provider, status, failureReason string) {
 	if api == nil {
 		return
 	}
 	now := time.Now()
 	api.retainedMainTurnsMu.Lock()
 	executionID := strings.TrimSpace(api.retainedMainTurnExecutionIDs[sessionID])
+	turnStartedAt := api.retainedMainTurns[sessionID]
 	api.retainedMainTurnsMu.Unlock()
 	if executionID == "" {
 		executionID = strings.TrimSpace(snapshot.ExecutionID)
 	}
 	if executionID == "" {
 		executionID = "main:" + sessionID
+	}
+	readFinalResponse := retainedturn.FinalResponse
+	if api.internalRetainedTurnFinalResponseReader != nil {
+		readFinalResponse = api.internalRetainedTurnFinalResponseReader
+	}
+	finalResult := readFinalResponse(provider, sessionID, turnStartedAt)
+	if strings.TrimSpace(finalResult) == "" && strings.TrimSpace(failureReason) != "" {
+		finalResult = strings.TrimSpace(failureReason)
+	}
+	if strings.TrimSpace(status) == "" {
+		status = "completed"
+	}
+	completion := unifiedevents.NewUnifiedCompletionEvent(
+		"coding_agent",
+		"retained",
+		"",
+		finalResult,
+		status,
+		now.Sub(turnStartedAt),
+		1,
+	)
+	completion.SessionID = sessionID
+	completion.Metadata["source"] = "coding_agent_sidecar"
+	completion.Metadata["provider"] = string(provider)
+	completion.Metadata["tmux_session"] = snapshot.TmuxSession
+	completion.Metadata["execution_kind"] = "main_agent"
+	completion.Metadata["scope"] = "main_agent"
+	if finalResult == "" {
+		completion.Metadata["final_response_missing"] = true
+		log.Printf("[RETAINED_TURN] Sidecar had no final assistant response session=%s terminal=%s provider=%s", sessionID, snapshot.TerminalID, provider)
 	}
 	event := events.Event{
 		ID:              fmt.Sprintf("retained-turn-completion-%d", now.UnixNano()),
@@ -6843,13 +6945,7 @@ func (api *StreamingAPI) emitRetainedMainTurnStreamCompletion(sessionID string, 
 			Type:      unifiedevents.EventType("unified_completion"),
 			Timestamp: now,
 			SessionID: sessionID,
-			Data: &unifiedevents.GenericEventData{Data: map[string]interface{}{
-				"source":         "tmux_stream",
-				"provider":       string(provider),
-				"tmux_session":   snapshot.TmuxSession,
-				"execution_kind": "main_agent",
-				"scope":          "main_agent",
-			}},
+			Data:      completion,
 		},
 	}
 	if api.eventStore != nil {
@@ -7750,30 +7846,52 @@ func (api *StreamingAPI) tryDeliverQueryAsLiveInput(w http.ResponseWriter, r *ht
 	if api == nil || strings.TrimSpace(message) == "" {
 		return false
 	}
-	// The terminal is the durable provider conversation. Prefer it before the
-	// short-lived Go Agent map: a stale or just-completed Agent must not send a
-	// user message through the new-turn path while its main tmux pane is live.
-	retainedInputCtx, retainedCancel := context.WithTimeout(r.Context(), liveCodingAgentInputTimeout)
-	defer retainedCancel()
-	retainedProvider, handled, err := api.deliverRetainedMainTerminalInput(retainedInputCtx, sessionID, message)
-	if handled {
+	// The mcpagent Session, not this host's short-lived running-Agent map or a
+	// provider-specific terminal branch, owns warm delivery. It survives the
+	// wrapped turn and reports the transport that actually accepted the input.
+	tryColdRetainedFallback := true
+	if retainedSession, ok := mcpagent.LookupSession(sessionID); ok {
+		sessionInputCtx, sessionInputCancel := context.WithTimeout(r.Context(), liveCodingAgentInputTimeout)
+		delivery, err := retainedSession.Send(sessionInputCtx, message)
+		sessionInputCancel()
 		if err != nil {
-			log.Printf("[QUERY->LIVE] Retained terminal delivery failed for session %s provider=%s: %v", sessionID, retainedProvider, err)
-			http.Error(w, fmt.Sprintf("Live input unavailable: %v", err), http.StatusConflict)
+			log.Printf("[QUERY->LIVE] Durable session delivery failed for session %s: %v; trying retained-terminal recovery before rebuilding", sessionID, err)
+		} else if delivery.Status == mcpagent.UserMessageDeliveryStatusSentToCLI {
+			provider := string(delivery.Provider)
+			api.recordRetainedTerminalLiveInput(sessionID, message, provider, queryID)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(QueryResponse{
+				QueryID: queryID, SessionID: sessionID,
+				Status: queryStatusLiveInputDelivered, Message: "Delivered to retained coding-agent session",
+				DeliveryStatus: string(delivery.Status), Provider: provider,
+				DeliveryTransport: string(delivery.Transport), DeliverySource: queryDeliverySourceMCPAgentSession,
+			})
+			log.Printf("[QUERY->LIVE] Delivered /api/query through durable mcpagent session=%s provider=%s transport=%s: %.80s", sessionID, provider, delivery.Transport, message)
+			return true
+		} else {
+			// Queueing is an accepted non-tmux submission. It is not evidence that
+			// the durable session is broken, so do not bypass mcpagent via tmux.
+			tryColdRetainedFallback = false
+		}
+	}
+	if tryColdRetainedFallback {
+		// Transitional cold-restart compatibility: a provider tmux from the
+		// previous server process can outlive the in-memory Session registry. It
+		// also recovers a stale/closed warm Session without paying for full Agent
+		// reconstruction, preserving PLAT-102's latency guarantee.
+		fallbackCtx, fallbackCancel := context.WithTimeout(r.Context(), liveCodingAgentInputTimeout)
+		retainedProvider, handled, err := api.deliverRetainedMainTerminalInput(fallbackCtx, sessionID, message)
+		fallbackCancel()
+		if handled {
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Live input unavailable: %v", err), http.StatusConflict)
+				return true
+			}
+			api.recordRetainedTerminalLiveInput(sessionID, message, retainedProvider, queryID)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(QueryResponse{QueryID: queryID, SessionID: sessionID, Status: queryStatusLiveInputDelivered, Message: "Delivered to retained coding-agent CLI", DeliveryStatus: "sent_to_cli", Provider: retainedProvider, DeliveryTransport: "tmux", DeliverySource: queryDeliverySourceRetainedCompatibility})
 			return true
 		}
-		api.recordRetainedTerminalLiveInput(sessionID, message, retainedProvider, queryID)
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(QueryResponse{
-			QueryID:        queryID,
-			SessionID:      sessionID,
-			Status:         queryStatusLiveInputDelivered,
-			Message:        "Delivered to retained coding-agent CLI",
-			DeliveryStatus: "sent_to_cli",
-			Provider:       retainedProvider,
-		})
-		log.Printf("[QUERY->LIVE] Delivered /api/query message directly to retained terminal for session %s provider=%s: %.80s", sessionID, retainedProvider, message)
-		return true
 	}
 
 	api.runningAgentsMux.RLock()
@@ -7834,12 +7952,14 @@ func (api *StreamingAPI) tryDeliverQueryAsLiveInput(w http.ResponseWriter, r *ht
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(QueryResponse{
-		QueryID:        queryID,
-		SessionID:      sessionID,
-		Status:         queryStatusLiveInputDelivered,
-		Message:        "Delivered to retained coding-agent CLI",
-		DeliveryStatus: deliveryStatus,
-		Provider:       provider,
+		QueryID:           queryID,
+		SessionID:         sessionID,
+		Status:            queryStatusLiveInputDelivered,
+		Message:           "Delivered to retained coding-agent CLI",
+		DeliveryStatus:    deliveryStatus,
+		Provider:          provider,
+		DeliveryTransport: "tmux",
+		DeliverySource:    queryDeliverySourceRunningAgent,
 	})
 	return true
 }
@@ -7875,25 +7995,39 @@ func (api *StreamingAPI) handleLiveInputMessage(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// A retained main tmux pane is the session's actual CLI conversation even
-	// while an old Go Agent entry remains registered. Route to it first so a
-	// completed Agent cannot turn this into a new workflow-builder request.
-	retainedInputCtx, retainedCancel := context.WithTimeout(r.Context(), liveCodingAgentInputTimeout)
-	defer retainedCancel()
-	retainedProvider, handled, err := api.deliverRetainedMainTerminalInput(retainedInputCtx, sessionID, req.Message)
-	if handled {
+	// One durable mcpagent Session owns warm delivery across transports and
+	// remains addressable after the wrapped Go turn has completed.
+	tryColdRetainedFallback := true
+	if retainedSession, ok := mcpagent.LookupSession(sessionID); ok {
+		sessionInputCtx, sessionInputCancel := context.WithTimeout(r.Context(), liveCodingAgentInputTimeout)
+		delivery, err := retainedSession.Send(sessionInputCtx, req.Message)
+		sessionInputCancel()
 		if err != nil {
-			log.Printf("[LIVE INPUT] Retained terminal delivery failed for session %s provider=%s: %v", sessionID, retainedProvider, err)
-			http.Error(w, fmt.Sprintf("Live input unavailable: %v", err), http.StatusConflict)
+			log.Printf("[LIVE INPUT] Durable session delivery failed for session %s: %v; trying retained-terminal recovery before rebuilding", sessionID, err)
+		} else if delivery.Status == mcpagent.UserMessageDeliveryStatusSentToCLI {
+			provider := string(delivery.Provider)
+			writeRetainedTerminalLiveInputResponse(w, sessionID, req.Message, provider, api)
+			log.Printf("[LIVE INPUT] Delivered through durable mcpagent session=%s provider=%s transport=%s: %.80s", sessionID, provider, delivery.Transport, req.Message)
+			api.appendLiveInputToPersistedChatHistory(GetUserIDFromContext(r.Context()), sessionID, req.Message)
+			return
+		} else {
+			tryColdRetainedFallback = false
+		}
+	}
+	if tryColdRetainedFallback {
+		// Same cold-restart/stale-session compatibility as /api/query above.
+		fallbackCtx, fallbackCancel := context.WithTimeout(r.Context(), liveCodingAgentInputTimeout)
+		retainedProvider, handled, err := api.deliverRetainedMainTerminalInput(fallbackCtx, sessionID, req.Message)
+		fallbackCancel()
+		if handled {
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Live input unavailable: %v", err), http.StatusConflict)
+				return
+			}
+			writeRetainedTerminalLiveInputResponse(w, sessionID, req.Message, retainedProvider, api)
+			api.appendLiveInputToPersistedChatHistory(GetUserIDFromContext(r.Context()), sessionID, req.Message)
 			return
 		}
-		writeRetainedTerminalLiveInputResponse(w, sessionID, req.Message, retainedProvider, api)
-		log.Printf("[LIVE INPUT] Delivered user message directly to retained terminal for session %s provider=%s: %.80s", sessionID, retainedProvider, req.Message)
-		// Steering never completes a query turn, so without this the transcript
-		// stays frozen at the last real turn and a restart resumes from there.
-		// Runs after the response is written; it must not be on the send path.
-		api.appendLiveInputToPersistedChatHistory(GetUserIDFromContext(r.Context()), sessionID, req.Message)
-		return
 	}
 
 	// Look up the running agent for this session

@@ -324,9 +324,7 @@ func (api *StreamingAPI) detachConflictingPiCLISession(sessionID, status string)
 	delete(api.runningAgents, sessionID)
 	api.runningAgentsMux.Unlock()
 
-	api.sessionAgentsMux.Lock()
-	delete(api.sessionAgents, sessionID)
-	api.sessionAgentsMux.Unlock()
+	api.removeSessionAgent(sessionID)
 
 	api.setSessionBusy(sessionID, false)
 	api.setSyntheticTurn(sessionID, false)

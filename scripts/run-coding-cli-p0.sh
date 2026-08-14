@@ -159,6 +159,16 @@ for raw_provider in "${provider_list[@]}"; do
   go -C "$ROOT_DIR/agent_go" run . test workflow-auto-notification-e2e \
     --server-url "$SERVER_URL" --workspace-docs "$WORKSPACE_DOCS" \
     --provider "$provider" --timeout 8m
+
+  # IC-11: cross the AgentWorks -> mcpagent boundary after a real first turn
+  # has completed and the provider tmux is retained. This proves the warm
+  # follow-up uses the durable Session, returns one authoritative tool receipt
+  # (arguments/result/duration), persists exactly one final response, avoids
+  # Agent reconstruction, and leaves the tmux reusable.
+  go -C "$ROOT_DIR/agent_go" run . test coding-agent-chat-e2e \
+    --server-url "$SERVER_URL" --provider "$provider" \
+    --selected-folder "_users/default/Chats" \
+    --retained-window-p0-only --timeout 8m
 done
 
 run_required_go_tests go -C "$ROOT_DIR/agent_go" test -json ./pkg/orchestrator/types \
@@ -168,4 +178,4 @@ run_required_go_tests go -C "$ROOT_DIR/agent_go" test -json ./pkg/orchestrator/t
   -coding-cli-p0-workspace-api="$WORKSPACE_API_URL" \
   -coding-cli-p0-workspace-docs="$WORKSPACE_DOCS"
 
-echo "P0 live CLI, MCP bridge, and workflow contracts passed for: $PROVIDERS"
+echo "P0 live CLI, retained-session, MCP bridge, and workflow contracts passed for: $PROVIDERS"

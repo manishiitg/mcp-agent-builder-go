@@ -1440,7 +1440,7 @@ func GetToolsForWorkshopMode(mode string) []string {
 	system := []string{
 		// Workspace advanced tools. Basic workspace file tools are intentionally
 		// not in the central workspace registry; use shell/diff/image/media tools.
-		"execute_shell_command", "diff_patch_workspace_file",
+		"execute_shell_command",
 		"read_image", "generate_text_llm", "search_web_llm",
 		"query_workflow_db", "mutate_workflow_db",
 		"image_gen", "image_edit", "generate_video", "text_to_speech", "speech_to_text", "generate_music",
@@ -2007,7 +2007,7 @@ func (iwm *InteractiveWorkshopManager) InteractiveWorkshopOnly(ctx context.Conte
 // by the workshop main agent and every workshop sub-agent (review agents,
 // maintenance background tasks). Keeping writes confined to
 // these subfolders means a builder can't `cat > planning/plan.json` via shell
-// or `diff_patch_workspace_file` and bypass the plan-mod tools that validate
+// or a shell write and bypass the plan-mod tools that validate
 // schemas and emit events. Workspace-root config files (workflow.json,
 // mcp_config.json) are mutated through dedicated tools that go via the
 // workspace API and bypass this sandbox altogether, so they don't appear here.
@@ -2499,11 +2499,11 @@ Every `+"`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"referenc
 
 For `+"`human_feedback`"+`, use a foreground curl. Never use `+"`nohup`"+`, background the call, or poll a result file; the foreground response resumes the agent automatically. Cursor agents must keep `+"`timeout_seconds <= 45`"+`.
 
-The native `+"`api-bridge`"+` exposes `+"`execute_shell_command`"+`, `+"`diff_patch_workspace_file`"+`, `+"`agent_browser`"+`, `+"`get_api_spec`"+`, and intrinsic `+"`read_skill`"+` when skills are attached. All other workflow tools are HTTP-backed, not native `+"`api-bridge.<name>`"+` calls: use `+"`get_api_spec(tool_name=\"<name>\")`"+`, then its returned `+"`$MCP_MCP`"+`/`+"`$MCP_CUSTOM`"+` route with `+"`$MCP_AUTH`"+`; never guess a bridge name or URL. Normal execution waits for automatic completion instead of polling and queries a live step only when the user asks. Use `+"`create_human_input_request`"+` to ask a durable question and `+"`answer_human_input_request`"+` only after the user explicitly answers it. Read `+"`builder-reference/references/workflow-tools.md`"+` through `+"`read_skill`"+` for the complete catalog and rules.
+The native `+"`api-bridge`"+` exposes `+"`execute_shell_command`"+`, `+"`agent_browser`"+`, `+"`get_api_spec`"+`, and intrinsic `+"`read_skill`"+` when skills are attached. All other workflow tools are HTTP-backed, not native `+"`api-bridge.<name>`"+` calls: use `+"`get_api_spec(tool_name=\"<name>\")`"+`, then its returned `+"`$MCP_MCP`"+`/`+"`$MCP_CUSTOM`"+` route with `+"`$MCP_AUTH`"+`; never guess a bridge name or URL. Normal execution waits for automatic completion instead of polling and queries a live step only when the user asks. Use `+"`create_human_input_request`"+` to ask a durable question and `+"`answer_human_input_request`"+` only after the user explicitly answers it. Read `+"`builder-reference/references/workflow-tools.md`"+` through `+"`read_skill`"+` for the complete catalog and rules.
 {{else}}
 ## TOOLS REFERENCE (cheat sheet)
 
-{{if eq .IsCodeExecutionMode "true"}}**Code execution mode:** Bridge-native tools: `+"`execute_shell_command`"+`, `+"`diff_patch_workspace_file`"+`, `+"`agent_browser`"+`, `+"`get_api_spec`"+`, and intrinsic `+"`read_skill`"+` when skills are attached. All other workflow tools are available via the workflow API path — use `+"`get_api_spec(tool_name=\"...\")`"+` for their schemas. Do **not** hardcode raw HTTP requests.
+{{if eq .IsCodeExecutionMode "true"}}**Code execution mode:** Bridge-native tools: `+"`execute_shell_command`"+`, `+"`agent_browser`"+`, `+"`get_api_spec`"+`, and intrinsic `+"`read_skill`"+` when skills are attached. All other workflow tools are available via the workflow API path — use `+"`get_api_spec(tool_name=\"...\")`"+` for their schemas. Do **not** hardcode raw HTTP requests.
 {{end}}
 
 This is the one-line-per-category map. For full signatures, parameters, when-to-use rules, and gotchas (especially Schedules and Secrets, which have multi-step flows), call **`+"`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/workflow-tools.md\"}])`"+`**.
@@ -2520,7 +2520,7 @@ This is the one-line-per-category map. For full signatures, parameters, when-to-
 - **Variables & config**: `+"`update_variable`"+`, `+"`add_group`"+`/`+"`update_group`"+`/`+"`delete_group`"+`, `+"`update_workflow_config`"+`. Use `+"`update_workflow_config`"+` for workflow MCP servers, workflow-level MCP tool allowlists, selected skills, selected secrets, the one-way Slack webhook secret reference, browser_mode, KB lock, run retention, the per-run monitor (`+"`post_run_monitor`"+`), and activation of an owner-approved advisor specialization decision. Do NOT edit `+"`workflow.json`"+` manually.
 - **Schedule management**: `+"`list_schedules`"+`, `+"`create_schedule`"+`, `+"`create_calendar_schedule`"+`, `+"`update_schedule`"+`, `+"`delete_schedule`"+`, `+"`trigger_schedule`"+`, `+"`get_schedule_runs`"+`. Cron / message-authoring rules, normal Run schedules plus Pulse, the `+"`/pulse-setup`"+` setup path, and unattended-message discipline — all live in the `+"`workflow-tools`"+` ref doc. Workflow schedules always use the workshop path; do not create direct `+"`mode=\"workflow\"`"+` schedules. **Whenever you create a recurring schedule, also pair it with a backup** so unattended runs persist their state off-box — see `+"`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/backup-strategy.md\"}])`"+`.
 {{end}}
-- **Shell & discovery**: `+"`execute_shell_command`"+`, `+"`diff_patch_workspace_file`"+`, `+"`read_image`"+`, `+"`generate_text_llm`"+`, `+"`search_web_llm`"+`.
+- **Shell & discovery**: `+"`execute_shell_command`"+`, `+"`read_image`"+`, `+"`generate_text_llm`"+`, `+"`search_web_llm`"+`.
 - **Human attention**: `+"`human_feedback`"+` opens a blocking AgentWorks response card. It never sends through Gmail, workflow webhooks, `+"`notify_user`"+`, or account-level notification connectors. Use it only for an explicit in-app channel test or urgent, short-lived human-only input such as CAPTCHA/OTP/immediate approval; for an ordinary Builder question, ask in your normal response. In a bridge-only coding CLI, call `+"`$MCP_CUSTOM/human_feedback`"+` with a foreground curl and wait for that same call to return the answer. Never use `+"`nohup`"+`, append `+"`&`"+`, delegate/background it, write its result to a temporary file, poll it, or ask the user to message again after responding; the foreground response resumes the agent automatically. Do not make the shell timeout shorter than `+"`human_feedback.timeout_seconds`"+`. Cursor CLI has an approximately 60-second silent MCP-call ceiling, so Cursor agents must use `+"`timeout_seconds <= 45`"+`; after a real expiry, retry only if the input is still required. `+"`notify_user`"+` sends a non-blocking message to connected channels (Slack / WhatsApp / email) for FYIs, progress, alerts, or completion notices when no reply is required. Slack webhook delivery is backend-owned rich Block Kit by default; for structured summaries use `+"`slack_title`"+`, `+"`slack_color`"+`, `+"`slack_fields`"+`, `+"`slack_sections`"+`, and `+"`slack_footer`"+`. Never access or post to a webhook URL directly. For email it accepts `+"`email_subject`"+`, an HTML body (`+"`email_html`"+` or `+"`email_html_file`"+`), and `+"`email_attachments`"+`. Report delivery failures honestly. Workflow steps use the same tools through the `+"`human_tools`"+` step capability.
 - **Skills**: `+"`list_skills`"+`, `+"`search_skills`"+`, `+"`install_skill`"+`, `+"`import_skill`"+`, `+"`uninstall_skill`"+`. Skills live at `+"`{{.AbsDocsRoot}}/skills/{folder}/SKILL.md`"+` (workspace root, shared across workflows). `+"`update_workflow_config(add_skills=[...])`"+` selects skills for workshop/builder discovery; step execution requires explicit `+"`update_step_config(step_id, enabled_skills=[...])`"+`. Shared workflow-specific HOW belongs in `+"`learnings/_global/SKILL.md`"+`.
 - **Secrets**: `+"`set_workflow_secret`"+`, `+"`set_user_secret`"+`, `+"`list_secrets`"+`, `+"`delete_workflow_secret`"+`, `+"`delete_user_secret`"+`. Setting a secret **auto-attaches** it to the active workflow and injects `+"`$SECRET_<NAME>`"+` into the live shell — usable immediately, no separate `+"`update_workflow_config(add_secrets=[...])`"+` call needed (that's only for attaching an already-stored secret, e.g. a global or a reusable user secret you didn't just set). Three buckets (workflow / user / global). Values never appear in prompts or logs; step agents read them via `+"`$SECRET_<NAME>`"+` env vars only.
@@ -3637,7 +3637,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				isAnalysisAgent := strings.HasPrefix(execID, "learn-") || strings.HasPrefix(execID, "debug-")
 				var hint string
 				if isAnalysisAgent {
-					hint = "\n\nNote: This is a learning/optimization agent — it only uses workspace tools (execute_shell_command, diff_patch_workspace_file). For richer insights, use debug_step(step_id) instead."
+					hint = "\n\nNote: This is a learning/optimization agent — it only uses execute_shell_command for workspace access. For richer insights, use debug_step(step_id) instead."
 				}
 
 				if toolCallInfo == "" {
@@ -4116,7 +4116,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				"enabled_custom_tools": map[string]interface{}{
 					"type":        "array",
 					"items":       map[string]interface{}{"type": "string"},
-					"description": "Workspace/custom tools to enable (format: 'category:tool' or 'category:*'). Categories: workspace_advanced (execute_shell_command, diff_patch_workspace_file, read_image, generate_text_llm, search_web_llm), human_tools (human_feedback, notify_user), workspace_browser (agent_browser). Example: ['workspace_advanced:execute_shell_command', 'workspace_advanced:diff_patch_workspace_file']",
+					"description": "Workspace/custom tools to enable (format: 'category:tool' or 'category:*'). Categories: workspace_advanced (execute_shell_command, read_image, generate_text_llm, search_web_llm), human_tools (human_feedback, notify_user), workspace_browser (agent_browser). Example: ['workspace_advanced:execute_shell_command']",
 				},
 				"enabled_skills": map[string]interface{}{
 					"type":        "array",
@@ -4131,7 +4131,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				"knowledgebase_access": map[string]interface{}{
 					"type":        "string",
 					"enum":        []string{"read", "write", "read-write", "none"},
-					"description": "Access mode for this step against knowledgebase/ (per-topic notes/ + notes/_index.json registry). Defaults to 'none' — KB is opt-in per step. 'read' — may consume existing narrative (read notes via index-first then selective cat); 'write' / 'read-write' — may contribute: the step agent writes notes/ inline with diff_patch_workspace_file and closes with a self-review turn against its knowledgebase_contribution; 'none' — no access. Granting write without a knowledgebase_contribution results in no KB writes at all. Omit to keep the default.",
+					"description": "Access mode for this step against knowledgebase/ (per-topic notes/ + notes/_index.json registry). Defaults to 'none' — KB is opt-in per step. 'read' — may consume existing narrative (read notes via index-first then selective cat); 'write' / 'read-write' — may contribute: the step agent writes notes/ inline with execute_shell_command and closes with a self-review turn against its knowledgebase_contribution; 'none' — no access. Granting write without a knowledgebase_contribution results in no KB writes at all. Omit to keep the default.",
 				},
 				"learnings_access": map[string]interface{}{
 					"type":        "string",
@@ -4642,15 +4642,14 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					}
 				}
 
-				// 5b. Ensure required workspace tools are present (execute_shell_command, diff_patch_workspace_file)
+				// 5b. Ensure the required workspace tool is present.
 				existingSet := make(map[string]bool, len(targetConfig.AgentConfigs.EnabledCustomTools))
 				for _, t := range targetConfig.AgentConfigs.EnabledCustomTools {
 					existingSet[t] = true
 				}
 				if !existingSet["workspace_advanced:*"] {
 					required := map[string]string{
-						"workspace_advanced:execute_shell_command":     "execute_shell_command",
-						"workspace_advanced:diff_patch_workspace_file": "diff_patch_workspace_file",
+						"workspace_advanced:execute_shell_command": "execute_shell_command",
 					}
 					var missing []string
 					for key, name := range required {

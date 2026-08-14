@@ -68,7 +68,7 @@ import {
   type ApiEngine,
   type ParentMsg,
   type StoredMsg,
-  type DebugToolCall,
+  type ToolCallRecord,
   type TreeNode,
   type WsFile,
   type Activity,
@@ -542,7 +542,7 @@ function StartBurst({ onDone }: { onDone: () => void }) {
 // live in-flight indicator (calls have no result/err yet — still streaming)
 // and the final persisted summary (result/err filled in once the turn
 // completes) — same shape, so nothing has to change when it switches over.
-function ToolCallSummary({ calls }: { calls: DebugToolCall[] }) {
+function ToolCallSummary({ calls }: { calls: ToolCallRecord[] }) {
   const [open, setOpen] = useState(false)
   const [openIdx, setOpenIdx] = useState<number | null>(null)
   if (calls.length === 0) return null
@@ -556,11 +556,11 @@ function ToolCallSummary({ calls }: { calls: DebugToolCall[] }) {
           {calls.map((c, i) => (
             <div key={i} className="fl-tool-call">
               <button type="button" className="fl-tool-call-row" onClick={() => setOpenIdx((cur) => (cur === i ? null : i))}>
-                <span className="fl-tool-call-name">{c.tool}</span>
-                {c.args && <span className="fl-tool-call-args">{c.args}</span>}
+                <span className="fl-tool-call-name">{c.tool_name}</span>
+                {c.arguments && <span className="fl-tool-call-args">{c.arguments}</span>}
               </button>
               {openIdx === i && (
-                <pre className="fl-tool-call-response">{c.err ? `Error: ${c.err}` : (c.result || '(still running…)')}</pre>
+                <pre className="fl-tool-call-response">{c.error ? `Error: ${c.error}` : (c.result || '(still running…)')}</pre>
               )}
             </div>
           ))}
@@ -568,6 +568,14 @@ function ToolCallSummary({ calls }: { calls: DebugToolCall[] }) {
       )}
     </div>
   )
+}
+
+function upsertToolCall(calls: ToolCallRecord[], incoming: ToolCallRecord): ToolCallRecord[] {
+  const i = incoming.tool_call_id ? calls.findIndex((call) => call.tool_call_id === incoming.tool_call_id) : -1
+  if (i < 0) return [...calls, incoming]
+  const next = [...calls]
+  next[i] = { ...next[i], ...incoming, arguments: incoming.arguments || next[i].arguments }
+  return next
 }
 
 // SceneFrame renders one show_scene snippet, auto-sized to its actual content
@@ -1256,21 +1264,21 @@ export default function LearningApp() {
   // as a collapsible "N tools" chip next to the thinking indicator. Reset at
   // turn start; replaced by a persisted debug_summary message (WITH results,
   // from the final response) once the turn completes — see sendChildMessage.
-  const [childLiveToolCalls, setChildLiveToolCalls] = useState<DebugToolCall[]>([])
+  const [childLiveToolCalls, setChildLiveToolCalls] = useState<ToolCallRecord[]>([])
   // Live status/tool calls for a turn on THIS activity that this tab did NOT
   // start itself (e.g. WhatsApp's @child routing running runChildTurn) — the
   // ambient subscription effect below is what actually populates these; see
   // its own comment for why a second, separate stream/state pair is needed
   // rather than reusing childLiveStatus/childLiveToolCalls.
   const [childRemoteStatus, setChildRemoteStatus] = useState('')
-  const [childRemoteToolCalls, setChildRemoteToolCalls] = useState<DebugToolCall[]>([])
-  const [liveToolCalls, setLiveToolCalls] = useState<DebugToolCall[]>([])
+  const [childRemoteToolCalls, setChildRemoteToolCalls] = useState<ToolCallRecord[]>([])
+  const [liveToolCalls, setLiveToolCalls] = useState<ToolCallRecord[]>([])
   // Live status/tool calls for a parent-conversation turn THIS tab did NOT
   // start (e.g. a real WhatsApp message running w.runTurn) — see the ambient
   // subscription effect below, mirroring Child Mode's own childRemoteStatus/
   // childRemoteToolCalls.
   const [remoteStatus, setRemoteStatus] = useState('')
-  const [remoteToolCalls, setRemoteToolCalls] = useState<DebugToolCall[]>([])
+  const [remoteToolCalls, setRemoteToolCalls] = useState<ToolCallRecord[]>([])
   const menuOpen = useParentChatStore((s) => s.menuOpen)
   const setMenuOpen = useParentChatStore((s) => s.setMenuOpen)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -1980,12 +1988,12 @@ export default function LearningApp() {
     source.onmessage = (ev) => {
       if (sendingRef.current) return
       try {
-        const parsed = JSON.parse(ev.data) as { type?: string; text?: string; tool?: string; args?: string }
+        const parsed = JSON.parse(ev.data) as { type?: string; text?: string; tool_call?: ToolCallRecord }
         if (parsed.type === 'status') {
           setRemoteStatus(parsed.text ?? '')
           armIdleReset()
-        } else if (parsed.type === 'tool_call' && parsed.tool) {
-          setRemoteToolCalls((cur) => [...cur, { tool: parsed.tool as string, args: parsed.args }])
+        } else if (parsed.type === 'tool_call' && parsed.tool_call) {
+          setRemoteToolCalls((cur) => upsertToolCall(cur, parsed.tool_call as ToolCallRecord))
           armIdleReset()
         }
       } catch { /* ignore malformed event */ }
@@ -2076,12 +2084,12 @@ export default function LearningApp() {
       // the same tool call never renders twice.
       if (childSendingRef.current) return
       try {
-        const parsed = JSON.parse(ev.data) as { type?: string; text?: string; tool?: string; args?: string }
+        const parsed = JSON.parse(ev.data) as { type?: string; text?: string; tool_call?: ToolCallRecord }
         if (parsed.type === 'status') {
           setChildRemoteStatus(parsed.text ?? '')
           armIdleReset()
-        } else if (parsed.type === 'tool_call' && parsed.tool) {
-          setChildRemoteToolCalls((cur) => [...cur, { tool: parsed.tool as string, args: parsed.args }])
+        } else if (parsed.type === 'tool_call' && parsed.tool_call) {
+          setChildRemoteToolCalls((cur) => upsertToolCall(cur, parsed.tool_call as ToolCallRecord))
           armIdleReset()
         }
       } catch { /* ignore malformed event */ }
@@ -2593,14 +2601,14 @@ export default function LearningApp() {
     const statusSource = new EventSource(`${FAMILY_API}/api/parent/status?conversation_id=${encodeURIComponent(conversationId)}`)
     statusSource.onmessage = (ev) => {
       try {
-        const parsed = JSON.parse(ev.data) as { type?: string; text?: string; tool?: string; args?: string }
+        const parsed = JSON.parse(ev.data) as { type?: string; text?: string; tool_call?: ToolCallRecord }
         if (parsed.type === 'delta') setStreamingReply((cur) => cur + (parsed.text ?? ''))
         else if (parsed.type === 'status') setLiveStatus(parsed.text ?? '')
         // Live tool-call visibility as each call happens (not batched at the
-        // end) — see tool_call_debug.go. No result yet; the final response
+        // end). No result yet; the final response
         // replaces this with the same calls, results filled in.
-        else if (parsed.type === 'tool_call' && parsed.tool) {
-          setLiveToolCalls((cur) => [...cur, { tool: parsed.tool as string, args: parsed.args }])
+        else if (parsed.type === 'tool_call' && parsed.tool_call) {
+          setLiveToolCalls((cur) => upsertToolCall(cur, parsed.tool_call as ToolCallRecord))
         }
       } catch { /* ignore malformed event */ }
     }
@@ -2618,7 +2626,7 @@ export default function LearningApp() {
       body: JSON.stringify({ messages: history, conversation_id: conversationId, viewer_path: currentViewerPath || undefined }),
     })
       .then((res) => res.json())
-      .then((data: { reply?: string; error?: string; suggestions?: { label: string; message: string }[]; tool_events?: { tool: string; name?: string; grade?: string; board?: string; path?: string; parent_label?: string }[]; debug_tool_calls?: DebugToolCall[] }) => {
+      .then((data: { reply?: string; error?: string; suggestions?: { label: string; message: string }[]; tool_events?: { tool: string; name?: string; grade?: string; board?: string; path?: string; parent_label?: string }[]; tool_calls?: ToolCallRecord[] }) => {
         const events = data.tool_events ?? []
         const toolMsgs: ParentMsg[] = events.filter((e) => e.tool === 'set_child_profile').map((e) => ({ role: 'tool', tool: e.tool, name: e.name, grade: e.grade, board: e.board }))
         const cp = events.find((e) => e.tool === 'set_child_profile')
@@ -2633,7 +2641,7 @@ export default function LearningApp() {
         // until the parent notices and clicks the (easy-to-miss) chevron.
         if (op?.path) { setDrawerTab('files'); setViewerPath(null); setViewerActivityDir(op.path); setExpandedActivity(op.path) }
         setSuggestions(data.suggestions ?? [])
-        if (data.debug_tool_calls?.length) toolMsgs.push({ role: 'tool', tool: 'debug_summary', toolCalls: data.debug_tool_calls })
+        if (data.tool_calls?.length) toolMsgs.push({ role: 'tool', tool: 'tool_summary', toolCalls: data.tool_calls })
         setParentMessages((cur) => [...cur, ...toolMsgs, { role: 'assistant', text: data.error ? `Sorry — ${data.error}` : (data.reply || '(no response)') }])
       })
       .catch(() => setParentMessages((cur) => [...cur, { role: 'assistant', text: 'Sorry — I couldn’t reach the learning engine.' }]))
@@ -2728,11 +2736,11 @@ export default function LearningApp() {
     statusSource.onmessage = (ev) => {
       // Same JSON envelope as the parent stream ({type:"status"|"delta"|"tool_call",text,tool,args}).
       try {
-        const parsed = JSON.parse(ev.data) as { type?: string; text?: string; tool?: string; args?: string }
+        const parsed = JSON.parse(ev.data) as { type?: string; text?: string; tool_call?: ToolCallRecord }
         if (parsed.type === 'delta') setChildStreamingReply((cur) => cur + (parsed.text ?? ''))
         else if (parsed.type === 'status') setChildLiveStatus(parsed.text ?? '')
-        else if (parsed.type === 'tool_call' && parsed.tool) {
-          setChildLiveToolCalls((cur) => [...cur, { tool: parsed.tool as string, args: parsed.args }])
+        else if (parsed.type === 'tool_call' && parsed.tool_call) {
+          setChildLiveToolCalls((cur) => upsertToolCall(cur, parsed.tool_call as ToolCallRecord))
         }
       } catch { /* ignore malformed event */ }
     }
@@ -2747,7 +2755,7 @@ export default function LearningApp() {
       body: JSON.stringify({ messages: history, conversation_id: convId }),
     })
       .then((res) => res.json())
-      .then((data: { reply?: string; error?: string; tool_events?: { tool: string; path?: string; focus?: string; stars?: number; total?: number; reason?: string }[]; scene?: string; debug_tool_calls?: DebugToolCall[] }) => {
+      .then((data: { reply?: string; error?: string; tool_events?: { tool: string; path?: string; focus?: string; stars?: number; total?: number; reason?: string }[]; scene?: string; tool_calls?: ToolCallRecord[] }) => {
         const events = data.tool_events ?? []
         const of = [...events].reverse().find((e) => e.tool === 'open_file' && e.path)
         if (of?.path) { setChildViewerFocus(of.focus ?? ''); setChildViewerPath(of.path); setChildViewerRefreshKey((k) => k + 1) }
@@ -2765,7 +2773,7 @@ export default function LearningApp() {
         if (data.reply) setChildStreamingReply(data.reply)
         setChildMessages((cur) => {
           const next: ParentMsg[] = [...cur]
-          if (data.debug_tool_calls?.length) next.push({ role: 'tool', tool: 'debug_summary', toolCalls: data.debug_tool_calls })
+          if (data.tool_calls?.length) next.push({ role: 'tool', tool: 'tool_summary', toolCalls: data.tool_calls })
           next.push({ role: 'assistant', text: data.error ? `Hmm, something went wrong — ${data.error}` : (data.reply || '(no response)') })
           if (cel) next.push({ role: 'tool', tool: 'celebrate', stars: cel.stars ?? 1, reason: cel.reason ?? '' })
           if (data.scene) next.push({ role: 'tool', tool: 'scene', html: data.scene })
@@ -2796,11 +2804,11 @@ export default function LearningApp() {
     const statusSource = new EventSource(`${FAMILY_API}/api/child/status?conversation_id=${encodeURIComponent(convId)}`)
     statusSource.onmessage = (ev) => {
       try {
-        const parsed = JSON.parse(ev.data) as { type?: string; text?: string; tool?: string; args?: string }
+        const parsed = JSON.parse(ev.data) as { type?: string; text?: string; tool_call?: ToolCallRecord }
         if (parsed.type === 'delta') setChildStreamingReply((cur) => cur + (parsed.text ?? ''))
         else if (parsed.type === 'status') setChildLiveStatus(parsed.text ?? '')
-        else if (parsed.type === 'tool_call' && parsed.tool) {
-          setChildLiveToolCalls((cur) => [...cur, { tool: parsed.tool as string, args: parsed.args }])
+        else if (parsed.type === 'tool_call' && parsed.tool_call) {
+          setChildLiveToolCalls((cur) => upsertToolCall(cur, parsed.tool_call as ToolCallRecord))
         }
       } catch { /* ignore malformed event */ }
     }
@@ -2815,7 +2823,7 @@ export default function LearningApp() {
       body: JSON.stringify({ messages: history, conversation_id: convId }),
     })
       .then((res) => res.json())
-      .then((data: { reply?: string; error?: string; tool_events?: { tool: string; path?: string; focus?: string; stars?: number; total?: number; reason?: string }[]; scene?: string; debug_tool_calls?: DebugToolCall[] }) => {
+      .then((data: { reply?: string; error?: string; tool_events?: { tool: string; path?: string; focus?: string; stars?: number; total?: number; reason?: string }[]; scene?: string; tool_calls?: ToolCallRecord[] }) => {
         const events = data.tool_events ?? []
         const of = [...events].reverse().find((e) => e.tool === 'open_file' && e.path)
         if (of?.path) { setChildViewerFocus(of.focus ?? ''); setChildViewerPath(of.path); setChildViewerRefreshKey((k) => k + 1) }
@@ -2829,7 +2837,7 @@ export default function LearningApp() {
         // tool-call bubbles / scene) do.
         setChildMessages((cur) => {
           const next: ParentMsg[] = [...cur]
-          if (data.debug_tool_calls?.length) next.push({ role: 'tool', tool: 'debug_summary', toolCalls: data.debug_tool_calls })
+          if (data.tool_calls?.length) next.push({ role: 'tool', tool: 'tool_summary', toolCalls: data.tool_calls })
           next.push({ role: 'assistant', text: data.error ? `Hmm, something went wrong — ${data.error}` : (data.reply || '(no response)') })
           if (cel) next.push({ role: 'tool', tool: 'celebrate', stars: cel.stars ?? 1, reason: cel.reason ?? '' })
           if (data.scene) next.push({ role: 'tool', tool: 'scene', html: data.scene })

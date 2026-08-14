@@ -193,7 +193,7 @@ func TestQuotingFailureGetsAnActionableHint(t *testing.T) {
 		"escaped twice",
 		"Do NOT rewrite the same text",
 		"QUOTED heredoc delimiter",
-		"diff_patch_workspace_file",
+		"preserve unrelated content",
 	} {
 		if !strings.Contains(res.Stderr, want) {
 			t.Fatalf("quoting hint missing %q, got: %s", want, res.Stderr)

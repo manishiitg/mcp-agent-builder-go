@@ -26,9 +26,7 @@ func shouldFilterWriteToolWithPaths(readPaths, writePaths []string, toolName str
 		return false
 	}
 
-	writeTools := map[string]bool{
-		"diff_patch_workspace_file": true,
-	}
+	writeTools := map[string]bool{}
 
 	if writeTools[toolName] && len(writePaths) == 0 {
 		return true
@@ -66,9 +64,7 @@ func (bo *BaseOrchestrator) EnhanceToolDescriptionWithFolderGuard(toolName, orig
 		"read_image":            true,
 	}
 
-	writeTools := map[string]bool{
-		"diff_patch_workspace_file": true,
-	}
+	writeTools := map[string]bool{}
 
 	// Determine tool type
 	isReadOnly := readOnlyTools[toolName]
@@ -181,9 +177,7 @@ func (bo *BaseOrchestrator) wrapWorkspaceToolsWithPaths(snapshotReadPaths, snaps
 		"read_image":            {"filepath"},
 	}
 
-	writeTools := map[string][]string{
-		"diff_patch_workspace_file": {"filepath"},
-	}
+	writeTools := map[string][]string{}
 
 	// Combine all tools for iteration
 	toolsToValidate := make(map[string][]string)

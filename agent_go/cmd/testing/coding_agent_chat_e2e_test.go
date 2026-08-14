@@ -48,9 +48,9 @@ func TestCodingAgentE2EClientObtainsUserJWTSeparatelyFromMCPToken(st *stdtesting
 func TestDefaultCodingAgentE2EModelIncludesCodingCLIProviders(st *stdtesting.T) {
 	tests := map[string]string{
 		"codex-cli":   "gpt-5.3-codex-spark",
-		"cursor-cli":  "cursor-cli",
+		"cursor-cli":  "auto",
 		"agy-cli":     "agy-cli",
-		"claude-code": "claude-code",
+		"claude-code": "claude-sonnet-5",
 	}
 
 	for provider, want := range tests {
@@ -171,6 +171,52 @@ func TestExtractUnifiedCompletionFinalUsesDocumentedShape(st *stdtesting.T) {
 	}
 	if got := extractUnifiedCompletionFinal(events); got != "right answer" {
 		st.Fatalf("extractUnifiedCompletionFinal() = %q, want right answer", got)
+	}
+}
+
+func TestRetainedWindowAssertionsRequireOneCanonicalToolAndFinal(st *stdtesting.T) {
+	events := []map[string]interface{}{
+		{
+			"type": "tool_call_start",
+			"data": map[string]interface{}{"data": map[string]interface{}{
+				"tool_name": "execute_shell_command", "tool_call_id": "call-1",
+				"tool_params": map[string]interface{}{"arguments": `{"command":"printf RECEIPT_TOKEN"}`},
+			}},
+		},
+		{
+			"type": "tool_call_end",
+			"data": map[string]interface{}{"data": map[string]interface{}{
+				"tool_name": "execute_shell_command", "tool_call_id": "call-1",
+				"result": "RECEIPT_TOKEN", "duration": float64(12000000),
+			}},
+		},
+		{
+			"type": "unified_completion",
+			"data": map[string]interface{}{"data": map[string]interface{}{
+				"final_result": "FINAL_TOKEN",
+			}},
+		},
+	}
+	if err := assertOneRetainedToolReceipt(events, "execute_shell_command", "RECEIPT_TOKEN"); err != nil {
+		st.Fatalf("tool receipt: %v", err)
+	}
+	if err := assertOneRetainedCompletion(events, "FINAL_TOKEN"); err != nil {
+		st.Fatalf("completion: %v", err)
+	}
+
+	duplicate := append(append([]map[string]interface{}{}, events...), events[2])
+	if err := assertOneRetainedCompletion(duplicate, "FINAL_TOKEN"); err == nil {
+		st.Fatalf("duplicate completion was accepted")
+	}
+	missingDuration := append([]map[string]interface{}{}, events...)
+	missingDuration[1] = map[string]interface{}{
+		"type": "tool_call_end",
+		"data": map[string]interface{}{"data": map[string]interface{}{
+			"tool_name": "execute_shell_command", "tool_call_id": "call-1", "result": "RECEIPT_TOKEN",
+		}},
+	}
+	if err := assertOneRetainedToolReceipt(missingDuration, "execute_shell_command", "RECEIPT_TOKEN"); err == nil {
+		st.Fatalf("tool receipt without duration was accepted")
 	}
 }
 

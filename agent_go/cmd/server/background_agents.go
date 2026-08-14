@@ -2543,9 +2543,7 @@ func (api *StreamingAPI) executeSyntheticTurn(sessionID, syntheticMsg string, pa
 		}
 
 		// Update stored agent (it now has the latest history from this turn)
-		api.sessionAgentsMux.Lock()
-		api.sessionAgents[sessionID] = llmAgent
-		api.sessionAgentsMux.Unlock()
+		api.storeSessionAgent(sessionID, llmAgent)
 
 		// Update session status to completed
 		api.updateSessionStatus(sessionID, "completed")

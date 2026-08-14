@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestBuildStepKBGuidanceWithTargetRequiresPatchToolForAllWrites(t *testing.T) {
+func TestBuildStepKBGuidanceWithTargetUsesShellForPermittedWrites(t *testing.T) {
 	target := "/app/workspace-docs/Workflow/social-media/knowledgebase/notes"
 	prompt := BuildStepKBGuidanceWithTarget(KBAccessReadWrite, "Capture durable audience facts.", target)
 
@@ -13,9 +13,9 @@ func TestBuildStepKBGuidanceWithTargetRequiresPatchToolForAllWrites(t *testing.T
 		"Knowledgebase contribution",
 		"**Target:** `" + target + "/`",
 		"Use these exact paths; do not rely on your shell working directory",
-		"diff_patch_workspace_file",
+		"execute_shell_command",
 		"including new topic files",
-		"Do not use shell redirection, heredocs, tee, Python",
+		"preserve unrelated content",
 	}
 	for _, snippet := range required {
 		if !strings.Contains(prompt, snippet) {
@@ -35,15 +35,15 @@ func TestBuildStepKBGuidanceWithTargetRequiresPatchToolForAllWrites(t *testing.T
 	}
 }
 
-func TestBuildKBContributionReviewMessageWithTargetRequiresPatchTool(t *testing.T) {
+func TestBuildKBContributionReviewMessageWithTargetUsesShell(t *testing.T) {
 	target := "/app/workspace-docs/Workflow/social-media/knowledgebase/notes"
 	prompt := BuildKBContributionReviewMessageWithTarget(KBAccessReadWrite, "Capture durable audience facts.", target)
 
 	required := []string{
 		"**Target:** `" + target + "/`",
 		"Use these exact paths; do not rely on cwd",
-		"diff_patch_workspace_file",
-		"Do not use shell redirection, heredocs, tee, Python",
+		"execute_shell_command",
+		"Preserve unrelated content",
 	}
 	for _, snippet := range required {
 		if !strings.Contains(prompt, snippet) {

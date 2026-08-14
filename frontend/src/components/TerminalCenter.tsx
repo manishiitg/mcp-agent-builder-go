@@ -40,7 +40,7 @@ import {
   type TerminalRailSection,
 } from '../utils/terminalRailOrganization'
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip'
-import { reconcileTerminalRuntimeState, runtimeDisplayStatus } from '../utils/runtimeActivity'
+import { reconcileTerminalRuntimeState, runtimeDisplayStatus, terminalTurnIsBusy } from '../utils/runtimeActivity'
 import { usePlanData } from './workflow/hooks/usePlanData'
 import { TerminalEventTranscript } from './TerminalEventTranscript'
 import { selectTerminalEvents, toolErrorContextByEventID } from '../utils/terminalEventTranscript'
@@ -2673,6 +2673,12 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
   const sessionHasMoreOlderEvents = useChatStore(state => (
     currentSessionId ? (state.tabHasMoreOlderEvents[currentSessionId] ?? false) : false
   ))
+  const sessionStreamingText = useChatStore(state => (
+    currentSessionId ? state.streamingText[currentSessionId] : undefined
+  ))
+  const sessionStreamingStatus = useChatStore(state => (
+    currentSessionId ? state.streamingStatus[currentSessionId] : undefined
+  ))
   const [selectedTerminalEventPage, setSelectedTerminalEventPage] = useState<SelectedTerminalEventPage>(
     EMPTY_SELECTED_TERMINAL_EVENT_PAGE,
   )
@@ -3410,6 +3416,12 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
   const selectedTerminalID = selectedTerminalView?.terminal_id ?? null
   const selectedTerminalState = (selectedTerminalView?.state || '').trim().toLowerCase()
   const isSelectedTerminalStreaming = shouldStreamTerminal(selectedTerminalView)
+  const isSelectedTerminalTurnBusy = Boolean(
+    selectedTerminalView && terminalTurnIsBusy(
+      selectedTerminalView,
+      runtimeStatesBySession[selectedTerminalView.session_id],
+    ),
+  )
   const selectedTerminalUsesSessionEvents = Boolean(
     selectedTerminalView && isMainAgentTerminal(selectedTerminalView),
   )
@@ -3946,8 +3958,11 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
   const selectedTerminalErrorPanelKey = selectedTerminalView
     ? terminalPaneKey(selectedTerminalView)
     : null
-  const railSpinner = useSpinnerFrame(groupedTerminals.activeTerminals.length > 0)
-  const selectedTerminalSpinner = useSpinnerFrame(isSelectedTerminalStreaming)
+  const hasBusyTerminal = groupedTerminals.orderedTerminals.some(terminal => (
+    terminalTurnIsBusy(terminal, runtimeStatesBySession[terminal.session_id])
+  ))
+  const railSpinner = useSpinnerFrame(hasBusyTerminal)
+  const selectedTerminalSpinner = useSpinnerFrame(isSelectedTerminalTurnBusy)
 
   const activeRailTmuxProbeTargets = useMemo(
     () => groupedTerminals.orderedTerminals
@@ -4185,7 +4200,7 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
       const preValidationChip = terminalPreValidationChip(terminal, terminalTheme)
       const state = terminalState(terminal)
       const sessionLifecycle = runtimeDisplayStatus(runtimeStatesBySession[terminal.session_id])
-      const isRunning = state === 'running'
+      const isRunning = terminalTurnIsBusy(terminal, runtimeStatesBySession[terminal.session_id])
       const railAge = formatRailAge(terminal)
       const railTransport = formatRailTransportChip(terminal)
       const terminalErrors = terminalErrorsByID.get(terminalPaneKey(terminal)) || []
@@ -4985,6 +5000,24 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                       onRetry={selectedTerminalUsesSessionEvents
                         ? (mainSessionOlderEventPage.error ? loadOlderMainSessionEvents : loadMainSessionEvents)
                         : loadSelectedTerminalEventPage}
+                      // Tmux providers stream terminal snapshots/progress, not
+                      // reliable assistant-token deltas. Rendering those in the
+                      // formatted transcript creates a growing raw-output blog
+                      // immediately before the authoritative sidecar-backed
+                      // completion answer. Keep the friendly live status, but
+                      // reserve prose for the final structured answer. API
+                      // providers (no tmux session) still stream their answer
+                      // naturally as it is generated.
+                      streamingText={selectedTerminalUsesSessionEvents && !selectedTerminalView?.tmux_session
+                        ? sessionStreamingText
+                        : undefined}
+                      // Only display a live status that the event stream itself
+                      // supplied. Terminal lifecycle metadata can lag behind a
+                      // completed tmux turn, so deriving "Working…" from it made
+                      // an already-finished conversation look permanently busy.
+                      streamingStatus={isSelectedTerminalTurnBusy
+                        ? (selectedTerminalUsesSessionEvents ? sessionStreamingStatus : undefined) || 'Working…'
+                        : undefined}
                     />
                   ) : stableLiveAttachId && stableLiveAttachKey ? (
                     <LiveAttachXtermPane
@@ -5093,8 +5126,8 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                         terminalFocusActive ? 'px-2 py-0.5' : 'px-3 py-1'
                       }`}>
                         <div className="flex min-w-0 items-center gap-2">
-                          <span className={isSelectedTerminalStreaming ? terminalTheme.streaming : 'text-neutral-600'}>
-                            {isSelectedTerminalStreaming ? selectedTerminalSpinner : '·'}
+                          <span className={isSelectedTerminalTurnBusy ? terminalTheme.streaming : 'text-neutral-600'}>
+                            {isSelectedTerminalTurnBusy ? selectedTerminalSpinner : '·'}
                           </span>
                           <span
                             className="min-w-0 flex-1 truncate"

@@ -767,9 +767,8 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
     window.addEventListener('workflow-readonly-run-restored', handleReadOnlyRestore)
     return () => window.removeEventListener('workflow-readonly-run-restored', handleReadOnlyRestore)
   }, [revealWorkflowTerminal])
-  // NOTE: During workflow execution, we no longer auto-fetch workspace files (response is 2-3MB).
-  // New files are added incrementally via addFileToTree from workspace_file_operation events.
-  // The Workspace component shows a "Refresh" banner when needsRefresh is set.
+  // During workflow execution we do not synchronize the file tree event-by-event.
+  // The Workspace component marks the view stale after completed workspace work.
 
   // Get selected run folder and workspace functions (defined early for use in useEffect)
   const selectedRunFolder = useWorkflowStore(state => state.selectedRunFolder)

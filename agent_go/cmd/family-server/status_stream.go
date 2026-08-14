@@ -8,19 +8,19 @@ import (
 	"sync"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/agentsession"
+	"github.com/manishiitg/mcpagent/events"
 )
 
 // sseEvent is one message on a conversation's live stream: a cosmetic
 // "what Quill is doing right now" status label (Type "status"), a real
 // content fragment of the reply as the model generates it (Type "delta"), or
-// a raw tool-call event (Type "tool_call" — TEMPORARY debug visibility, see
-// tool_call_debug.go). All share one connection/subscription per conversation
-// since they're small, ordered, ephemeral signals for the SAME in-flight turn.
+// a canonical mcpagent tool-call receipt (Type "tool_call"). All share one
+// connection/subscription per conversation because they are ordered signals
+// for the same in-flight turn.
 type sseEvent struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-	Tool string `json:"tool,omitempty"`
-	Args string `json:"args,omitempty"`
+	Type     string                 `json:"type"`
+	Text     string                 `json:"text"`
+	ToolCall *events.ToolCallRecord `json:"tool_call,omitempty"`
 }
 
 // statusHub is a tiny in-memory pub-sub for live per-turn events, keyed by
@@ -48,11 +48,11 @@ func (h *statusHub) publishDelta(conversationID, text string) {
 	h.publishEvent(conversationID, sseEvent{Type: "delta", Text: text})
 }
 
-// publishToolCall is the TEMPORARY tool-call visibility feature (see
-// tool_call_debug.go) — pushed live the moment a tool actually runs, so the
-// UI shows it right away instead of only once the whole turn finishes.
-func (h *statusHub) publishToolCall(conversationID, tool, args string) {
-	h.publishEvent(conversationID, sseEvent{Type: "tool_call", Tool: tool, Args: args})
+// publishToolCall publishes mcpagent's canonical bridge-side tool receipt.
+// The running record arrives immediately; the completed record follows with
+// the real result or error.
+func (h *statusHub) publishToolCall(conversationID string, call events.ToolCallRecord) {
+	h.publishEvent(conversationID, sseEvent{Type: "tool_call", ToolCall: &call})
 }
 
 func (h *statusHub) publishEvent(conversationID string, ev sseEvent) {
@@ -112,9 +112,9 @@ var toolStatusLabels = map[string]string{
 	"agent_browser":            "Checking that link",
 }
 
-// withLiveStatus wraps each tool whose name has a friendly label so its
-// Handler publishes that label to conversationID's status stream the moment it
-// starts, then runs unchanged. Tools with no mapped label pass through as-is.
+// withLiveStatus remains for non-agent-session callers that invoke a handler
+// directly (Pulse/WhatsApp). Parent and child coding sessions instead receive
+// the same status from toolCallCollector's mcpagent execution event.
 func withLiveStatus(conversationID string, tools []agentsession.Tool) []agentsession.Tool {
 	out := make([]agentsession.Tool, len(tools))
 	for i, t := range tools {

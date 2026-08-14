@@ -269,6 +269,12 @@ func NewBaseAgent(
 		Observability: mcpagent.ObservabilityRuntimeConfig{
 			Logger: logger, Tracers: []observability.Tracer{tracer}, TraceID: traceID,
 			PromptLogLabel: name, Streaming: true, GenerationStreamingEvents: boolPointer(false),
+			// A retained coding-CLI session can accept a later turn directly through
+			// tmux without starting another mcpagent Ask stream. The bridge remains
+			// the authoritative place where tools execute, so publish its canonical
+			// start/end/error receipts as well; otherwise formatted mode shows the
+			// agent working but silently omits every tool from those continued turns.
+			DirectToolExecutionEvents: true,
 		},
 	}
 	if forceStructuredCodingAgent {

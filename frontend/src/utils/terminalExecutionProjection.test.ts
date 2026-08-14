@@ -102,6 +102,36 @@ describe('live execution-tree terminal projection', () => {
     expect(result[0].execution_tree_placeholder).toBeUndefined()
   })
 
+  it('uses the published parent step terminal for a live message-sequence item', () => {
+    const publishedStepTerminal = terminal({
+      terminal_id: 'session-1:workflow-step:exec-discover-1:discover',
+      execution_id: 'workflow-step:exec-discover-1:discover',
+      owner_id: 'workflow-step:exec-discover-1:discover',
+      active: true,
+      state: 'running',
+    })
+
+    const result = projectExecutionTreeTerminals([publishedStepTerminal], tree([
+      node('msgseq-discover-audit-123', {
+        parent_execution_id: 'exec-discover-1',
+        kind: 'message_sequence_item',
+        name: 'Audit candidate pool',
+      }),
+    ]))
+
+    // The item shares its structured agent and event stream with the parent
+    // workflow-step terminal. A second placeholder would have no terminal or
+    // event endpoint to load.
+    expect(result).toHaveLength(1)
+    expect(result[0]).toMatchObject({
+      terminal_id: publishedStepTerminal.terminal_id,
+      execution_id: publishedStepTerminal.execution_id,
+      active: true,
+      state: 'running',
+    })
+    expect(result[0].execution_tree_placeholder).toBeUndefined()
+  })
+
   it('does not create retained UI rows for completed children', () => {
     const result = projectExecutionTreeTerminals([], tree([
       node('child-1', { status: 'completed', completed_at: '2026-08-04T16:01:00Z' }),

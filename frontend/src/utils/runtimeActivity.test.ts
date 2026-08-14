@@ -7,6 +7,7 @@ import {
   runtimeHasBackgroundAgents,
   runtimeNeedsUserInput,
   sessionRuntimeStatus,
+  terminalTurnIsBusy,
 } from './runtimeActivity'
 
 function runtime(phase: RuntimePhase, overrides: Partial<RuntimeSnapshot> = {}): RuntimeSnapshot {
@@ -47,6 +48,33 @@ function terminal(overrides: Partial<TerminalSnapshot> = {}): TerminalSnapshot {
 }
 
 describe('authoritative runtime activity selector', () => {
+  it('does not call a reusable idle main CLI busy', () => {
+    const state = runtime('idle', {
+      foreground_turn: { busy: false, has_cancel: false, can_steer: true, synthetic: false },
+    })
+    expect(terminalTurnIsBusy(terminal({
+      terminal_id: 'session-1:main:session-1',
+      owner_id: 'main:session-1',
+      execution_kind: 'main_agent',
+      process_state: 'live',
+      state: 'completed',
+      active: false,
+      tmux_session: 'tmux-main',
+    }), state)).toBe(false)
+  })
+
+  it('calls the foreground main turn busy while it is generating', () => {
+    const state = runtime('running', {
+      foreground_turn: { busy: true, has_cancel: true, can_steer: true, synthetic: false },
+    })
+    expect(terminalTurnIsBusy(terminal({
+      terminal_id: 'session-1:main:session-1',
+      owner_id: 'main:session-1',
+      execution_kind: 'main_agent',
+      tmux_session: 'tmux-main',
+    }), state)).toBe(true)
+  })
+
   it.each([
     ['starting', 'busy'], ['running', 'busy'], ['waiting', 'idle'], ['idle', 'idle'],
     ['completed', 'stopped'], ['failed', 'stopped'], ['canceled', 'stopped'],

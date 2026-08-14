@@ -16,7 +16,18 @@ export type ApiEngine = {
 
 export type ConvMeta = { id: string; title: string; when: string; scope: 'parent' | 'child'; updated: string }
 
-export type DebugToolCall = { tool: string; args?: string; result?: string; err?: string }
+// Mirrors mcpagent/events.ToolCallRecord. Tool calls are execution receipts,
+// not a SparkQuill-only debug format, so every coding CLI has the same shape.
+export type ToolCallRecord = {
+  tool_call_id?: string
+  tool_name: string
+  server_name?: string
+  arguments?: string
+  result?: string
+  error?: string
+  duration?: number
+  status: 'running' | 'completed' | 'failed'
+}
 
 // Voice (speech-to-text) — mirrors the Go side's voiceTier /
 // voiceStatusResponse in cmd/family-server/voice_hardware.go.
@@ -46,7 +57,7 @@ export type VoiceStatus = {
   hardware: { arch: string; is_apple_silicon: boolean; total_ram_bytes: number }
   stt_tiers: VoiceTier[]
 }
-export type ParentMsg = { role: 'user' | 'assistant' | 'tool'; text?: string; tool?: string; name?: string; grade?: string; board?: string; stars?: number; reason?: string; source?: string; html?: string; path?: string; toolCalls?: DebugToolCall[] }
+export type ParentMsg = { role: 'user' | 'assistant' | 'tool'; text?: string; tool?: string; name?: string; grade?: string; board?: string; stars?: number; reason?: string; source?: string; html?: string; path?: string; toolCalls?: ToolCallRecord[] }
 export type StoredMsg = { role: string; text?: string; tool?: string; stars?: number; reason?: string; source?: string; html?: string; path?: string }
 
 export type TreeNode = { name: string; path: string; type: 'dir' | 'file'; children?: TreeNode[]; size?: number }

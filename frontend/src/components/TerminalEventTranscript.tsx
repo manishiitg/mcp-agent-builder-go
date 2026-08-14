@@ -1,9 +1,12 @@
 import React, { memo, useCallback, useMemo, useRef, useState } from 'react'
 import { Virtuoso } from 'react-virtuoso'
-import { CheckCircle2, ChevronDown, ChevronRight, CircleDashed, UserRound, Wrench, XCircle } from 'lucide-react'
+import { CheckCircle2, ChevronDown, ChevronRight, CircleDashed, Wrench, XCircle } from 'lucide-react'
 import { EventDispatcher } from './events/EventDispatcher'
+import { ConversationMarkdownRenderer } from './ui/MarkdownRenderer'
 import {
   buildTranscriptItems,
+  internalTranscriptMessageTitle,
+  isInternalTranscriptMessage,
   pairToolCalls,
   type PairedToolCall,
   selectTerminalEvents,
@@ -12,6 +15,13 @@ import {
 import { formatDurationCompact } from '../utils/duration'
 import { formatToolCallArguments, formatToolCallResult } from '../utils/toolCallFormatting'
 import type { PollingEvent, TerminalSnapshot } from '../services/api-types'
+
+type TranscriptRenderItem = TranscriptItem | {
+  kind: 'live'
+  key: string
+  text: string
+  status: string
+}
 
 // Clean view = the SAME rich event components the tree used, laid out as one
 // flat chronological conversation for a single terminal.
@@ -56,10 +66,6 @@ const TranscriptEvent: React.FC<{
   event: PollingEvent
   onSendMessage?: (msg: string) => void
 }> = ({ event, onSendMessage }) => {
-  if (event.type !== 'user_message') {
-    return <EventDispatcher event={event} onSendMessage={onSendMessage} compact hideOrchestratorContext />
-  }
-
   const payload = transcriptEventPayload(event)
   const content = typeof payload.content === 'string' ? payload.content.trim() : ''
   const rawTimestamp = event.timestamp || (typeof payload.timestamp === 'string' ? payload.timestamp : '')
@@ -67,13 +73,72 @@ const TranscriptEvent: React.FC<{
     ? new Date(rawTimestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     : ''
 
+  if (isInternalTranscriptMessage(event)) {
+    return <InternalActivityEvent title={internalTranscriptMessageTitle(event)} content={content} timestamp={timestamp} />
+  }
+
+  if (event.type === 'llm_generation_end' && content) {
+    return <AssistantTranscriptMessage event={event} content={content} timestamp={timestamp} />
+  }
+
+  // A completed background task often carries its only useful human result in
+  // `result`.  In the formatted transcript this is an answer from the
+  // automation, not a diagnostic event, so it deserves the same calm treatment
+  // as a main-agent response rather than EventDispatcher's dense status card.
+  if (event.type === 'background_agent_completed') {
+    const result = typeof payload.result === 'string' ? payload.result.trim() : ''
+    if (result) return <AssistantTranscriptMessage event={event} content={result} timestamp={timestamp} label="Task update" />
+  }
+
+  if (event.type !== 'user_message') {
+    return <EventDispatcher event={event} onSendMessage={onSendMessage} compact hideOrchestratorContext />
+  }
+
   return (
-    <div className="ml-auto my-1 flex max-w-[88%] items-start gap-2 rounded-2xl rounded-tr-md border border-cyan-900/50 bg-cyan-950/25 px-3 py-2.5">
-      <UserRound className="mt-0.5 h-3.5 w-3.5 shrink-0 text-cyan-400" />
-      <div className="min-w-0 flex-1">
-        <div className="whitespace-pre-wrap break-words text-xs leading-5 text-neutral-100">{content || 'Message sent'}</div>
-        {timestamp && <div className="mt-1 text-[10px] text-neutral-500">You · {timestamp}</div>}
+    <div className="ml-auto my-4 max-w-[84%] text-right">
+      <div className="whitespace-pre-wrap break-words text-[14px] leading-6 text-neutral-200">{content || 'Message sent'}</div>
+      {timestamp && <div className="mt-1 text-[10px] tabular-nums text-neutral-600">{timestamp}</div>}
+    </div>
+  )
+}
+
+const AssistantTranscriptMessage: React.FC<{ event: PollingEvent; content: string; timestamp: string; label?: string }> = ({ event, content, timestamp, label = 'Agent' }) => {
+  const fields = transcriptEventPayload(event)
+  const duration = typeof fields.duration === 'number' && fields.duration > 0
+    ? formatDurationCompact(fields.duration)
+    : ''
+  const turn = typeof fields.turn === 'number' ? fields.turn : undefined
+
+  return (
+    <article data-testid="terminal-clear-assistant-message" className="my-4 border-l-2 border-emerald-400/65 pl-4 pr-2">
+      <div className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-emerald-300/75">
+        <span>{label}</span>
+        <span className="h-1 w-1 rounded-full bg-neutral-600" />
+        <span className="normal-case font-medium tracking-normal text-neutral-500">
+          {turn != null ? `Turn ${turn}` : 'Response'}{duration ? ` · ${duration}` : ''}{timestamp ? ` · ${timestamp}` : ''}
+        </span>
       </div>
+      <ConversationMarkdownRenderer content={content} framed={false} maxHeight="none" />
+    </article>
+  )
+}
+
+const InternalActivityEvent: React.FC<{ title: string; content: string; timestamp: string }> = ({ title, content, timestamp }) => {
+  const [open, setOpen] = useState(false)
+  return (
+    <div data-testid="terminal-clear-system-activity" className="my-3 border-y border-neutral-800/60 py-2">
+      <button
+        type="button"
+        onClick={() => setOpen(value => !value)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-2 text-left text-[11px] text-neutral-500 transition-colors hover:text-neutral-300"
+      >
+        <CircleDashed className="h-3.5 w-3.5 shrink-0 text-neutral-500" />
+        <span className="truncate">Automation update · {title}</span>
+        {timestamp && <span className="ml-auto shrink-0 tabular-nums text-neutral-600">{timestamp}</span>}
+        {open ? <ChevronDown className="h-3.5 w-3.5 shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0" />}
+      </button>
+      {open && <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-black/20 p-3 text-[11px] leading-5 text-neutral-400">{content}</pre>}
     </div>
   )
 }
@@ -120,12 +185,9 @@ const ToolCallCard: React.FC<{ pair: PairedToolCall }> = ({ pair }) => {
     >
       <button
         type="button"
-        onClick={() => hasDetail && setOpen(prev => !prev)}
-        aria-expanded={hasDetail ? open : undefined}
-        disabled={!hasDetail}
-        className={`flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs ${
-          hasDetail ? 'hover:bg-neutral-800/60' : 'cursor-default'
-        }`}
+        onClick={() => setOpen(prev => !prev)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs hover:bg-neutral-800/60"
       >
         <span className={`shrink-0 font-mono ${markClass}`}>{mark}</span>
         <span className="truncate font-medium text-neutral-200">{pair.name}</span>
@@ -140,13 +202,20 @@ const ToolCallCard: React.FC<{ pair: PairedToolCall }> = ({ pair }) => {
             failed
           </span>
         )}
-        {hasDetail && <span className="ml-auto shrink-0 font-mono text-neutral-600">{open ? '▾' : '▸'}</span>}
+        {open
+          ? <ChevronDown className="ml-auto h-3.5 w-3.5 shrink-0 text-neutral-500" aria-label="Hide tool details" />
+          : <ChevronRight className="ml-auto h-3.5 w-3.5 shrink-0 text-neutral-500" aria-label="Show tool details" />}
       </button>
 
-      {open && hasDetail && (
+      {open && (
         <div className="space-y-2 border-t border-neutral-800 px-2 py-2">
           {pair.args && <ToolCallField label="Arguments" value={pair.args} />}
-          {pair.result && <ToolCallField label="Result" value={pair.result} />}
+          {pair.result && <ToolCallField label="Output" value={pair.result} />}
+          {!hasDetail && (
+            <p className="text-[11px] leading-5 text-neutral-500">
+              This coding-CLI call did not retain its arguments or output. New calls will include them once the bridge trace update is running.
+            </p>
+          )}
         </div>
       )}
     </div>
@@ -159,7 +228,7 @@ const ToolCallCard: React.FC<{ pair: PairedToolCall }> = ({ pair }) => {
 const ToolCallField: React.FC<{ label: string; value: string }> = ({ label, value }) => {
   const [full, setFull] = useState(false)
   const formatted = useMemo(
-    () => label === 'Result' ? formatToolCallResult(value) : formatToolCallArguments(value),
+    () => label === 'Arguments' ? formatToolCallArguments(value) : formatToolCallResult(value),
     [label, value],
   )
   const isLong = formatted.text.length > PREVIEW_LIMIT
@@ -248,6 +317,10 @@ interface TerminalEventTranscriptProps {
   error?: string
   onLoadOlder?: () => void
   onRetry?: () => void
+  /** Transient response text from SSE. It is intentionally not persisted as
+   * individual protocol events, but belongs in the readable live transcript. */
+  streamingText?: string
+  streamingStatus?: string
 }
 
 const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
@@ -261,13 +334,15 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
   error,
   onLoadOlder,
   onRetry,
+  streamingText = '',
+  streamingStatus = '',
 }) => {
   const scrollerRef = useRef<HTMLElement | Window | null>(null)
   const scoped = useMemo(
     () => selectTerminalEvents(events, terminal, siblingTerminals),
     [events, terminal, siblingTerminals],
   )
-  const items = useMemo(() => buildTranscriptItems(scoped), [scoped])
+  const items = useMemo<TranscriptRenderItem[]>(() => buildTranscriptItems(scoped), [scoped])
 
   // Electron occasionally fails to route a physical wheel/trackpad gesture to
   // Virtuoso's internal scroller even though accessibility scroll actions work.
@@ -289,7 +364,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
     scroller.scrollTop += wheelDeltaPixels(event.deltaY, event.deltaMode, scroller.clientHeight)
   }, [])
 
-  if (items.length === 0) {
+  if (items.length === 0 && !streamingText && !streamingStatus) {
     const state = (terminal?.state || '').trim().toLowerCase()
     const failed = state === 'failed' || state === 'error' || state === 'stale'
     const completed = state === 'completed' || state === 'closing'
@@ -344,7 +419,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
   return (
     <div
       data-testid="terminal-clear-view"
-      className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[#0b0d0c]"
+      className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[#0d100f]"
       onWheelCapture={handleWheelCapture}
     >
       {(hasOlder || loadingOlder || error) && (
@@ -377,19 +452,23 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
       {/* Virtualized: the tree inherited this from EventHierarchy. A flat list
           that rendered every event would regress long sessions badly. */}
       <Virtuoso
-        data={items}
+        data={streamingText || streamingStatus
+          ? [...items, { kind: 'live' as const, key: '__live-stream__', text: streamingText, status: streamingStatus }]
+          : items}
         className="min-h-0 flex-1"
         scrollerRef={ref => { scrollerRef.current = ref }}
         followOutput="smooth"
         initialTopMostItemIndex={Math.max(0, items.length - 1)}
         computeItemKey={(_, item) => item.key}
         itemContent={(_, item) =>
-          item.kind === 'tools' ? (
-            <div className="px-3">
+          item.kind === 'live' ? (
+            <LiveAssistantTranscript text={item.text} status={item.status} />
+          ) : item.kind === 'tools' ? (
+            <div className="px-5">
               <ToolBatch item={item} />
             </div>
           ) : (
-            <div data-testid={`terminal-clear-event-${item.event.id || item.key}`} className="px-3 py-0.5">
+            <div data-testid={`terminal-clear-event-${item.event.id || item.key}`} className="px-5 py-0.5">
               <TranscriptEvent event={item.event} onSendMessage={onSendMessage} />
             </div>
           )
@@ -398,6 +477,20 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
     </div>
   )
 }
+
+const LiveAssistantTranscript: React.FC<{ text: string; status: string }> = ({ text, status }) => (
+  text ? (
+    <article data-testid="terminal-clear-live-assistant-message" className="mx-5 my-4 border-l-2 border-cyan-400/55 pl-4 pr-2">
+      <ConversationMarkdownRenderer content={text} framed={false} maxHeight="none" />
+      <span aria-label="Writing" className="mt-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-cyan-400" />
+    </article>
+  ) : (
+    <div data-testid="terminal-clear-live-assistant-message" className="mx-5 my-4 flex items-center gap-2 text-sm text-neutral-500">
+      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-cyan-400" />
+      <span>{status || 'Working…'}</span>
+    </div>
+  )
+)
 
 // Memoized: the parent re-renders on every terminal poll, and re-rendering the
 // whole transcript each time would defeat EventDispatcher's own memoization.

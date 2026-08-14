@@ -4,37 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/browser"
-	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/common"
-
-	"github.com/manishiitg/mcpagent/events"
 )
-
-// workspaceEventEmitterKey matches the key used in virtualtools package
-const workspaceEventEmitterKey common.ContextKey = "workspace_event_emitter"
-
-// emitWorkspaceFileEvent emits a workspace_file_operation event if an emitter is present in context
-func emitWorkspaceFileEvent(ctx context.Context, operation, filepath, folder string) {
-	emitter, ok := ctx.Value(workspaceEventEmitterKey).(interface {
-		HandleEvent(ctx context.Context, event *events.AgentEvent) error
-	})
-	if !ok || emitter == nil {
-		return
-	}
-
-	turn, _ := ctx.Value(common.ContextKey("turn")).(int)
-	serverName, _ := ctx.Value(common.ContextKey("server_name")).(string)
-
-	eventData := events.NewWorkspaceFileOperationEvent(operation, filepath, folder, turn, serverName)
-	agentEvent := &events.AgentEvent{
-		Type:      events.WorkspaceFileOperation,
-		Timestamp: time.Now(),
-		Data:      eventData,
-	}
-	_ = emitter.HandleEvent(ctx, agentEvent)
-}
 
 // Helper to convert generic map args to typed struct
 func mapToStruct(args map[string]interface{}, v interface{}) error {
@@ -57,7 +29,7 @@ func mapToStruct(args map[string]interface{}, v interface{}) error {
 // (ReadWorkspaceFile and friends) are unaffected — the server uses them
 // throughout to read files in Go.
 
-// NewAdvancedExecutor creates executors for advanced workspace tools (shell, image, pdf, diff patch)
+// NewAdvancedExecutor creates executors for advanced workspace tools.
 func NewAdvancedExecutor(client *Client) map[string]func(ctx context.Context, args map[string]interface{}) (string, error) {
 	executors := make(map[string]func(ctx context.Context, args map[string]interface{}) (string, error))
 
@@ -86,19 +58,6 @@ func NewAdvancedExecutor(client *Client) map[string]func(ctx context.Context, ar
 			return "", fmt.Errorf("invalid arguments: %w", err)
 		}
 		return client.ReadImage(ctx, params)
-	}
-
-	executors["diff_patch_workspace_file"] = func(ctx context.Context, args map[string]interface{}) (string, error) {
-		var params DiffPatchWorkspaceFileParams
-		if err := mapToStruct(args, &params); err != nil {
-			return "", fmt.Errorf("invalid arguments: %w", err)
-		}
-		result, err := client.DiffPatchWorkspaceFile(ctx, params)
-		if err != nil {
-			return "", err
-		}
-		emitWorkspaceFileEvent(ctx, "patch", params.Filepath, "")
-		return marshalResult(result)
 	}
 
 	return executors

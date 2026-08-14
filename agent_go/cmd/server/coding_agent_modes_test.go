@@ -988,6 +988,57 @@ func TestRetainedTerminalDeliveryUsesLiveProviderAfterAutomationSwitch(t *testin
 	}
 }
 
+func TestRetainedTurnCompletionUsesSidecarFinalResponse(t *testing.T) {
+	const sessionID = "retained-sidecar-completion"
+	const finalResponse = "This is the final assistant response from the sidecar."
+	startedAt := time.Now().Add(-2 * time.Second)
+	store := internalevents.NewEventStore(10)
+	defer store.Stop()
+
+	api := &StreamingAPI{
+		eventStore: store,
+		retainedMainTurns: map[string]time.Time{
+			sessionID: startedAt,
+		},
+		retainedMainTurnExecutionIDs: map[string]string{
+			sessionID: "live-turn:test",
+		},
+		internalRetainedTurnFinalResponseReader: func(provider llmproviders.Provider, ownerSessionID string, turnStart time.Time) string {
+			if provider != llmproviders.ProviderCodexCLI || ownerSessionID != sessionID {
+				t.Fatalf("sidecar lookup provider=%q owner=%q", provider, ownerSessionID)
+			}
+			if !turnStart.Equal(startedAt) {
+				t.Fatalf("sidecar lookup turn start=%v, want %v", turnStart, startedAt)
+			}
+			return finalResponse
+		},
+	}
+
+	api.emitRetainedMainTurnStreamCompletion(sessionID, terminals.Snapshot{
+		TerminalID:  sessionID + ":main:" + sessionID,
+		TmuxSession: "mlp-codex-cli-int-retained",
+	}, llmproviders.ProviderCodexCLI, "completed", "")
+
+	recorded := store.GetAllEventsRaw(sessionID)
+	if len(recorded) != 1 {
+		t.Fatalf("recorded events=%d, want 1", len(recorded))
+	}
+	agentEvent := recorded[0].Data
+	if agentEvent == nil {
+		t.Fatal("event data is nil, want AgentEvent")
+	}
+	completion, ok := agentEvent.Data.(*pkgevents.UnifiedCompletionEvent)
+	if !ok {
+		t.Fatalf("agent event data type=%T, want *events.UnifiedCompletionEvent", agentEvent.Data)
+	}
+	if completion.FinalResult != finalResponse || completion.Status != "completed" {
+		t.Fatalf("completion=%#v", completion)
+	}
+	if completion.Metadata["source"] != "coding_agent_sidecar" {
+		t.Fatalf("completion source=%v", completion.Metadata["source"])
+	}
+}
+
 // API/LLM unchanged: even when busy, a non-coding (API) agent must NOT be
 // short-circuited — those keep their frontend steer-vs-queue path.
 func TestTryDeliverQueryAsLiveInputSkipsNonCodingAgent(t *testing.T) {

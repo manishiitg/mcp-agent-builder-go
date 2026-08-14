@@ -30,14 +30,13 @@ func (f *fakeDirectLearningAgent) Close() error { return nil }
 
 func (f *fakeDirectLearningAgent) GetBaseAgent() *agents.BaseAgent { return nil }
 
-func TestBuildLearningsContributionTurnRequiresPatchToolForAllWrites(t *testing.T) {
+func TestBuildLearningsContributionTurnUsesShellForPermittedWrites(t *testing.T) {
 	targetPath := "/tmp/workspace-docs/Workflow/social-media/learnings/_global"
 	msg := BuildLearningsContributionTurnWithTarget("unfollow-cleanup", "Unfollow stale X accounts.", "Capture the unfollow flow.", false, targetPath)
 	for _, want := range []string{
-		"Use `diff_patch_workspace_file` for every write",
+		"Use `execute_shell_command` carefully for every write",
 		"including creating a new `/tmp/workspace-docs/Workflow/social-media/learnings/_global/references/<topic>.md` file",
-		"Do not use shell redirection, heredocs, tee, Python",
-		"`execute_shell_command` for read-only inspection",
+		"`execute_shell_command` for inspection and permitted writes",
 		"cat '/tmp/workspace-docs/Workflow/social-media/learnings/_global/SKILL.md'",
 		"do not rely on your shell working directory",
 		// Negative store boundary: learnings hold HOW, not discovered facts/results.
@@ -50,7 +49,6 @@ func TestBuildLearningsContributionTurnRequiresPatchToolForAllWrites(t *testing.
 	}
 	for _, forbidden := range []string{
 		"heredoc creation",
-		"diff_patch_workspace_file` (for updating existing files)",
 	} {
 		if strings.Contains(msg, forbidden) {
 			t.Fatalf("learning prompt still contains stale write guidance %q:\n%s", forbidden, msg)

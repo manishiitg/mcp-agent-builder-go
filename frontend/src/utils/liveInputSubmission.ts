@@ -20,3 +20,32 @@ export function createLiveInputSubmissionCoordinator(): LiveInputSubmissionCoord
 }
 
 export const liveInputSubmissionCoordinator = createLiveInputSubmissionCoordinator()
+
+// The live-input endpoint records the durable user_message before returning its
+// acknowledgement. SSE can therefore deliver that event while the submitter is
+// still awaiting HTTP. Only add the optimistic copy when the acknowledged
+// message ID has not already reached the local event store. Matching by the
+// backend ID preserves intentional repeated messages with identical text.
+export function shouldAppendOptimisticLiveInputMessage(
+  events: unknown[],
+  acknowledgedMessageId: string | undefined,
+): boolean {
+  const wanted = acknowledgedMessageId?.trim()
+  if (!wanted) return true
+
+  return !events.some(eventValue => {
+    if (!eventValue || typeof eventValue !== 'object') return false
+    const event = eventValue as Record<string, unknown>
+    if (event.type !== 'user_message') return false
+    const outer = event.data && typeof event.data === 'object'
+      ? event.data as Record<string, unknown>
+      : undefined
+    const payload = outer?.data && typeof outer.data === 'object'
+      ? outer.data as Record<string, unknown>
+      : outer
+    const metadata = payload?.metadata && typeof payload.metadata === 'object'
+      ? payload.metadata as Record<string, unknown>
+      : undefined
+    return metadata?.message_id === wanted
+  })
+}

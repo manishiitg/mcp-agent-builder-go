@@ -67,7 +67,6 @@ export interface UnifiedEventsComplete {
   tool_response?: ToolResponseEvent;
   user_message?: UserMessageEvent;
   variables_extracted?: VariablesExtractedEvent;
-  workspace_file_operation?: WorkspaceFileOperationEvent;
 }
 export interface AgentEndEvent {
   agent_type?: string;
@@ -1511,25 +1510,4 @@ export interface Variable {
   description?: string;
   name?: string;
   value?: string;
-}
-export interface WorkspaceFileOperationEvent {
-  component?: string;
-  correlation_id?: string;
-  event_id?: string;
-  filepath?: string;
-  folder?: string;
-  hierarchy_level?: number;
-  is_end_event?: boolean;
-  metadata?: {
-    [k: string]: unknown;
-  };
-  operation?: string;
-  parent_id?: string;
-  server_name?: string;
-  session_id?: string;
-  should_highlight?: boolean;
-  span_id?: string;
-  timestamp?: string;
-  trace_id?: string;
-  turn?: number;
 }
