@@ -177,6 +177,12 @@ func TestExtractUnifiedCompletionFinalUsesDocumentedShape(st *stdtesting.T) {
 func TestRetainedWindowAssertionsRequireOneCanonicalToolAndFinal(st *stdtesting.T) {
 	events := []map[string]interface{}{
 		{
+			"type": "streaming_chunk",
+			"data": map[string]interface{}{"data": map[string]interface{}{
+				"content": "RETAINED_PROGRESS_TOKEN",
+			}},
+		},
+		{
 			"type": "tool_call_start",
 			"data": map[string]interface{}{"data": map[string]interface{}{
 				"tool_name": "execute_shell_command", "tool_call_id": "call-1",
@@ -203,13 +209,16 @@ func TestRetainedWindowAssertionsRequireOneCanonicalToolAndFinal(st *stdtesting.
 	if err := assertOneRetainedCompletion(events, "FINAL_TOKEN"); err != nil {
 		st.Fatalf("completion: %v", err)
 	}
+	if err := assertRetainedCompletionAfterTool(events, "execute_shell_command"); err != nil {
+		st.Fatalf("lifecycle order: %v", err)
+	}
 
-	duplicate := append(append([]map[string]interface{}{}, events...), events[2])
+	duplicate := append(append([]map[string]interface{}{}, events...), events[3])
 	if err := assertOneRetainedCompletion(duplicate, "FINAL_TOKEN"); err == nil {
 		st.Fatalf("duplicate completion was accepted")
 	}
 	missingDuration := append([]map[string]interface{}{}, events...)
-	missingDuration[1] = map[string]interface{}{
+	missingDuration[2] = map[string]interface{}{
 		"type": "tool_call_end",
 		"data": map[string]interface{}{"data": map[string]interface{}{
 			"tool_name": "execute_shell_command", "tool_call_id": "call-1", "result": "RECEIPT_TOKEN",
@@ -217,6 +226,11 @@ func TestRetainedWindowAssertionsRequireOneCanonicalToolAndFinal(st *stdtesting.
 	}
 	if err := assertOneRetainedToolReceipt(missingDuration, "execute_shell_command", "RECEIPT_TOKEN"); err == nil {
 		st.Fatalf("tool receipt without duration was accepted")
+	}
+
+	earlyCompletion := []map[string]interface{}{events[0], events[3], events[1], events[2]}
+	if err := assertRetainedCompletionAfterTool(earlyCompletion, "execute_shell_command"); err == nil {
+		st.Fatalf("completion before the tool receipt was accepted")
 	}
 }
 
