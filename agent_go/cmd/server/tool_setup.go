@@ -366,7 +366,17 @@ func enhanceToolDescriptionForWorkflowPhase(toolName, originalDescription, workf
 
 // enhanceToolDescriptionForMultiAgentMode augments workspace tool descriptions for multi-agent plan mode.
 // chatsFolder is the full per-user path (e.g. "_users/default/Chats").
-func enhanceToolDescriptionForMultiAgentMode(toolName, originalDescription, chatsFolder string) string {
+//
+// isProductProfile suppresses the AgentWorks-specific placement rules. A product
+// surface (Video Studio and anything else running on an agent profile) has its
+// own workspace vocabulary — its system prompt names uploads/, work/ and
+// outputs/ — and does not carry the org-level Pulse tools at all. Appending
+// "save plan outputs to {plan_id}/output.txt" and "org goals belong in
+// pulse/goals.html" to its shell tool put AgentWorks concepts the product does
+// not have into a description the model reads on every get_api_spec call, and
+// contradicted the placement rules the product prompt had just given it.
+// The access restriction itself is true everywhere and stays.
+func enhanceToolDescriptionForMultiAgentMode(toolName, originalDescription, chatsFolder string, isProductProfile bool) string {
 	writeTools := map[string]bool{
 		"diff_patch_workspace_file": true,
 		"execute_shell_command":     true,
@@ -377,8 +387,12 @@ func enhanceToolDescriptionForMultiAgentMode(toolName, originalDescription, chat
 
 	if writeTools[toolName] {
 		accessInfo.WriteString(fmt.Sprintf("\n\n⚠️ **IMPORTANT:** You can write to '%s/' (primary). All other folders are read-only unless explicitly allowed. Use dedicated configuration tools for config changes; do not read or write `config/` with file tools.", chatsFolder))
-		accessInfo.WriteString(fmt.Sprintf("\nSave plan outputs inside the plan folder (e.g. '%s/{plan_id}/output.txt').", chatsFolder))
-		accessInfo.WriteString("\nOrg-level goals and pulse artifacts belong in `pulse/` (for example `pulse/goals.html` and `pulse/org-pulse.html`).")
+		if !isProductProfile {
+			accessInfo.WriteString(fmt.Sprintf("\nSave plan outputs inside the plan folder (e.g. '%s/{plan_id}/output.txt').", chatsFolder))
+			accessInfo.WriteString("\nOrg-level goals and pulse artifacts belong in `pulse/` (for example `pulse/goals.html` and `pulse/org-pulse.html`).")
+		}
+	} else if isProductProfile {
+		accessInfo.WriteString(fmt.Sprintf("\n\nYou have READ access to allowed workspace folders. WRITE access is restricted to `%s/` and any explicitly allowed subfolders. Configuration data is available through dedicated tools.", chatsFolder))
 	} else {
 		accessInfo.WriteString(fmt.Sprintf("\n\nYou have READ access to allowed workspace folders. WRITE access is restricted to `%s/`, `pulse/`, and any explicitly allowed subfolders. Configuration data is available through dedicated tools.", chatsFolder))
 	}

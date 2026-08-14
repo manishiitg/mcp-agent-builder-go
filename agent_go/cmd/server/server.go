@@ -4776,7 +4776,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 						if resolvedProfile != nil {
 							descriptionRoot = agentProfileRuntimeWorkspace(currentUserID, req.SelectedFolder)
 						}
-						enhancedDescription = enhanceToolDescriptionForMultiAgentMode(toolName, tool.Function.Description, descriptionRoot)
+						enhancedDescription = enhanceToolDescriptionForMultiAgentMode(toolName, tool.Function.Description, descriptionRoot, resolvedProfile != nil)
 					} else {
 						enhancedDescription = enhanceToolDescriptionForWorkflowPhase(toolName, tool.Function.Description, workflowPhaseFolder)
 					}
