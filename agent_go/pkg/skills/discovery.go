@@ -47,12 +47,18 @@ type DocumentContentResponse struct {
 	Success bool `json:"success"`
 	Data    struct {
 		Content      string `json:"content"`
+		Filepath     string `json:"filepath,omitempty"`
 		IsBinary     bool   `json:"is_binary,omitempty"`
 		Size         int64  `json:"size,omitempty"`
 		MimeType     string `json:"mime_type,omitempty"`
 		LastModified string `json:"last_modified"`
 	} `json:"data"`
 	Message string `json:"message"`
+	// The workspace API reports a missing document as HTTP 200 with
+	// success:true and the reason only in these fields. They were not decoded
+	// at all, which is why a not-found was indistinguishable from an empty
+	// file to every caller.
+	Error string `json:"error,omitempty"`
 }
 
 // ListFiles lists files in a folder via workspace API
@@ -123,6 +129,14 @@ func (c *WorkspaceAPIClient) ReadFile(filePath string) (string, error) {
 
 	if !result.Success {
 		return "", fmt.Errorf("API returned error: %s", result.Message)
+	}
+	// The workspace API answers a missing document with HTTP 200 AND
+	// success:true, carrying the failure only in Error/Message with an empty
+	// filepath. Without this check the empty Content flows on and the first
+	// parser to touch it reports the file as malformed — a missing skill was
+	// surfacing as "SKILL.md must start with YAML frontmatter (---)".
+	if strings.TrimSpace(result.Error) != "" && strings.TrimSpace(result.Data.Filepath) == "" {
+		return "", fmt.Errorf("file not found: %s", filePath)
 	}
 	if result.Data.IsBinary {
 		return "", fmt.Errorf("cannot read binary file as text: %s", filePath)
@@ -309,13 +323,45 @@ func DiscoverSkills(workspaceAPIURL string) ([]Skill, error) {
 
 // GetSkill retrieves a specific skill by folder name
 func GetSkill(workspaceAPIURL, folderName string) (*Skill, error) {
+	return GetSkillIn(workspaceAPIURL, "", folderName)
+}
+
+// GetSkillIn resolves a skill from a workspace's own skills/ folder, falling
+// back to the user-level one.
+//
+// Products that install skills per project (Video Studio installs its managed
+// HyperFrames set into <project>/skills/) were invisible to the unscoped
+// lookup, which only ever read _users/<id>/skills/. Every attach of such a
+// skill failed, including one the product explicitly declares as attach:.
+// The fallback keeps ordinary workflows, whose skills are user-level, working
+// exactly as before.
+func GetSkillIn(workspaceAPIURL, workspacePath, folderName string) (*Skill, error) {
 	client := NewWorkspaceAPIClient(workspaceAPIURL)
 
-	skillFilePath := path.Join(SkillsBasePath, folderName, SkillFileName)
-	content, err := client.ReadFile(skillFilePath)
-	if err != nil {
+	candidates := make([]string, 0, 2)
+	if strings.TrimSpace(workspacePath) != "" {
+		candidates = append(candidates, path.Join(workspacePath, SkillsBasePath, folderName, SkillFileName))
+	}
+	candidates = append(candidates, path.Join(SkillsBasePath, folderName, SkillFileName))
+
+	// The fetch path may be workspace-scoped, but the path handed back must stay
+	// workspace-relative: it is what the lazy-body excerpt tells the agent to
+	// read, and the agent's folder guard is rooted at its own workspace.
+	relativePath := path.Join(SkillsBasePath, folderName, SkillFileName)
+	var content string
+	var found bool
+	var err error
+	for _, candidate := range candidates {
+		content, err = client.ReadFile(candidate)
+		if err == nil {
+			found = true
+			break
+		}
+	}
+	if !found {
 		return nil, fmt.Errorf("skill not found: %w", err)
 	}
+	skillFilePath := relativePath
 
 	skill, err := ParseSkillFromContent(content, folderName, skillFilePath)
 	if err != nil {

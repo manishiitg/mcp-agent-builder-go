@@ -349,11 +349,17 @@ func TestOrchestratedRoutesKeepTheirSkillEntries(t *testing.T) {
 			if !ok {
 				t.Fatalf("orchestrated route %q has no step_config entry; as a route it would run with no skills", id)
 			}
-			if !reflect.DeepEqual(got, stage.Skills) {
-				t.Fatalf("route %q skills = %v, want %v", id, got, stage.Skills)
+			// Not every declared skill attaches — the ones the product installs
+			// as read-from-disk files are granted a read path instead (see
+			// TestStagesAttachOnlyDeclaredAttachableSkills). What must hold is
+			// that the attach list is exactly the attachable subset, so moving
+			// a stage into a route still carries its skills.
+			wantAttach, _ := splitStageSkills(stage.Skills)
+			if !reflect.DeepEqual(got, wantAttach) {
+				t.Fatalf("route %q attaches %v, want %v", id, got, wantAttach)
 			}
-			if len(stage.Skills) > 0 && len(got) == 0 {
-				t.Fatalf("route %q declares skills but its config carries none", id)
+			if len(wantAttach) > 0 && len(got) == 0 {
+				t.Fatalf("route %q declares attachable skills but its config carries none", id)
 			}
 		}
 	}
@@ -397,5 +403,76 @@ func TestOrchestratorNamesItsSuccessor(t *testing.T) {
 	}
 	if seen == 0 {
 		t.Fatal("no todo_task step in the generated plan")
+	}
+}
+
+// product.yaml installs twelve HyperFrames skills and declares attach:
+// [hyperframes]; productdeps describes the rest as "ordinary files for
+// progressive disclosure", and product-infographic routes the agent to read
+// them at skills/<name>/SKILL.md.
+//
+// enabled_skills drove BOTH attachment and the folder guard, so every stage
+// asked to attach all twelve. That failed silently while the skills loader
+// could only see user-level skills; once it became workspace-aware the same
+// declaration would have loaded eleven specialist skills into every stage —
+// exactly what the product prompt forbids. This pins the split.
+func TestStagesAttachOnlyDeclaredAttachableSkills(t *testing.T) {
+	installed, attachable := managedSkillPolicy()
+	if !attachable["hyperframes"] {
+		t.Fatal("product.yaml no longer declares hyperframes attachable; this test encodes that contract")
+	}
+
+	raw, err := json.Marshal(stepConfigForAll(pipelineRegistry))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config struct {
+		Steps []struct {
+			ID     string `json:"id"`
+			Agents struct {
+				Skills []string `json:"enabled_skills"`
+				Paths  []string `json:"additional_read_paths"`
+			} `json:"agent_configs"`
+		} `json:"steps"`
+	}
+	if err := json.Unmarshal(raw, &config); err != nil {
+		t.Fatal(err)
+	}
+
+	byID := map[string]int{}
+	for i, step := range config.Steps {
+		byID[step.ID] = i
+	}
+	for _, p := range pipelineRegistry {
+		for _, stage := range p.Stages {
+			idx, ok := byID[stage.ID]
+			if !ok {
+				t.Fatalf("stage %q has no step_config entry", stage.ID)
+			}
+			got := config.Steps[idx].Agents
+			for _, name := range got.Skills {
+				if installed[name] && !attachable[name] {
+					t.Errorf("stage %q attaches %q, which the product installs as a read-from-disk skill", stage.ID, name)
+				}
+			}
+			// Whatever left enabled_skills must still be reachable: the folder
+			// guard is built from enabled_skills, so a skill the agent is told
+			// to read is unopenable without an explicit read path.
+			for _, name := range stage.Skills {
+				if !installed[name] || attachable[name] {
+					continue
+				}
+				want := "skills/" + name
+				var granted bool
+				for _, p := range got.Paths {
+					if p == want {
+						granted = true
+					}
+				}
+				if !granted {
+					t.Errorf("stage %q must read %s but has no read path for it (paths=%v)", stage.ID, want, got.Paths)
+				}
+			}
+		}
 	}
 }

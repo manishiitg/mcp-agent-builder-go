@@ -42,9 +42,16 @@ func (hcpo *StepBasedWorkflowOrchestrator) appendSupplementaryPrompts(
 	// disk via the SkillProjector contract. No more manual
 	// BuildWorkflowSkillPrompt + AppendSystemPrompt.
 	if len(effectiveSkills) > 0 {
-		if attached := skills.LoadAttachable(getWorkspaceAPIURL(), effectiveSkills); len(attached) > 0 {
+		if attached := skills.LoadAttachableIn(getWorkspaceAPIURL(), hcpo.GetWorkspacePath(), effectiveSkills); len(attached) > 0 {
 			identitySkills = append(identitySkills, attached...)
-			hcpo.GetLogger().Info(fmt.Sprintf("🎯 Attached %d step skill(s) to agent: %v", len(attached), effectiveSkills))
+			attachedNames := make([]string, 0, len(attached))
+			for _, skill := range attached {
+				attachedNames = append(attachedNames, skill.Name)
+			}
+			// Log what attached, not what was asked for. Printing the request
+			// beside the count read as "attached 2: [seven names]" and hid the
+			// five failures behind a line that looked like success.
+			hcpo.GetLogger().Info(fmt.Sprintf("🎯 Attached %d of %d step skill(s): %v", len(attached), len(effectiveSkills), attachedNames))
 		}
 	}
 

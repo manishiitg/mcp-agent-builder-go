@@ -154,6 +154,45 @@ func stageExecuteItem() map[string]interface{} {
 	}
 }
 
+// managedSkillPolicy splits a stage's declared skills by how the product says
+// each one reaches the agent. product.yaml installs twelve HyperFrames skills
+// but declares `attach: [hyperframes]`; the rest are, in productdeps' own
+// words, "ordinary files for progressive disclosure" — product-infographic
+// routes the agent to read them by path (`skills/<name>/SKILL.md`).
+//
+// One field was doing both jobs. Every stage asked to ATTACH all of them,
+// which failed silently before the loader became workspace-aware and would now
+// succeed and load eleven specialist skills nobody asked for — the exact thing
+// the product prompt says not to do. So attachment gets the skills declared
+// attachable, and the remainder get a read path instead.
+func managedSkillPolicy() (installed map[string]bool, attachable map[string]bool) {
+	installed = map[string]bool{}
+	attachable = map[string]bool{}
+	for _, source := range mustVideoStudioManifest().Dependencies.Skills {
+		for _, name := range source.Install {
+			installed[name] = true
+		}
+		for _, name := range source.Attach {
+			attachable[name] = true
+		}
+	}
+	return installed, attachable
+}
+
+// splitStageSkills returns the skills a stage should attach and the workspace
+// read paths it needs for the ones it must read from disk instead.
+func splitStageSkills(stageSkills []string) (attach []string, readPaths []string) {
+	installed, attachable := managedSkillPolicy()
+	for _, name := range stageSkills {
+		if installed[name] && !attachable[name] {
+			readPaths = append(readPaths, "skills/"+name)
+			continue
+		}
+		attach = append(attach, name)
+	}
+	return attach, readPaths
+}
+
 func baseStageAgentConfig() map[string]interface{} {
 	return map[string]interface{}{"execution_llm": videoAgentLLMConfig(), "execution_max_turns": 100, "use_code_execution_mode": true, "declared_execution_mode": "agentic", "additional_read_paths": []string{"uploads"}, "learnings_access": "none", "knowledgebase_access": "none", "db_access": "none"}
 }
@@ -170,7 +209,16 @@ func stepConfigForAll(pipelines []*Pipeline) map[string]interface{} {
 		for _, stage := range p.Stages {
 			config := baseStageAgentConfig()
 			if len(stage.Skills) > 0 {
-				config["enabled_skills"] = append([]string{}, stage.Skills...)
+				attach, diskPaths := splitStageSkills(stage.Skills)
+				if len(attach) > 0 {
+					config["enabled_skills"] = attach
+				}
+				if len(diskPaths) > 0 {
+					// enabled_skills also drives the folder guard, so skills that
+					// move out of it must get their read path back explicitly or
+					// the agent cannot open the file it is told to read.
+					config["additional_read_paths"] = append(config["additional_read_paths"].([]string), diskPaths...)
+				}
 			}
 			steps = append(steps, map[string]interface{}{"id": stage.ID, "title": stage.Title, "agent_configs": config})
 		}

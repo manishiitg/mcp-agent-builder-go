@@ -10,6 +10,13 @@ import (
 
 // ParseSkillFile parses a SKILL.md file content into frontmatter and body
 func ParseSkillFile(content string) (*SkillFrontmatter, string, error) {
+	// Report what is actually wrong. This parser is the first thing to touch
+	// whatever the loader returned, so every upstream failure surfaced as its
+	// error — a missing file read back as "" was reported as malformed
+	// frontmatter, which sends the reader to inspect a file that is fine.
+	if strings.TrimSpace(content) == "" {
+		return nil, "", fmt.Errorf("SKILL.md is empty or could not be read")
+	}
 	// Check for YAML frontmatter delimiters
 	if !strings.HasPrefix(content, "---") {
 		return nil, "", fmt.Errorf("SKILL.md must start with YAML frontmatter (---)")
