@@ -717,7 +717,15 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       // history, but do not replay dozens of internal prompts when a read-only
       // scheduled run is converted to an interactive chat. Background-agent
       // start/completion events remain visible as the user-facing status UI.
-      if (isInternalAutoNotificationEvent(event)) return false
+      //
+      // A product surface supplying its own contentRenderer is exempt: it
+      // renders its own conversation from these events and already has a
+      // dedicated treatment for them (buildCleanConversationItems maps the
+      // [AUTO-NOTIFICATION] prefix to role 'notification', which
+      // CleanConversationSurface draws as a labelled notice). Filtering here
+      // made that path unreachable, so a workflow step completing showed only
+      // the agent's reply with nothing saying what prompted it.
+      if (!ContentRenderer && isInternalAutoNotificationEvent(event)) return false
 
       // Hide Total Token Usage and Context Offloading events
       if (event.type === 'token_usage' && !showConversationUsage) {
@@ -758,7 +766,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     // Output actually changed — cache the new array for next comparison
     displayEventsRef.current = filtered
     return filtered
-  }, [tabEvents, showConversationUsage])
+  }, [tabEvents, showConversationUsage, ContentRenderer])
 
   const hasConversationContent = useMemo(() => {
     return displayEvents.some(event =>

@@ -25,6 +25,16 @@ function formatTokenCount(tokens: number): string {
   return String(tokens)
 }
 
+// These notices are overwhelmingly step completions, so they are labelled as
+// such — but a failed background step is delivered through the same channel,
+// and labelling that "Step complete" would state the opposite of what happened.
+// Keyed off the two markers the backend writes for a failure: `status=failed`
+// in the header line, and the "Error: " prefix it puts on the result body
+// (buildAutoNotificationMessage, agent_go/cmd/server/background_agents.go).
+function isFailedStepNotification(content: string): boolean {
+  return /\bstatus=failed\b/i.test(content) || /(^|\n)\s*(- )?Result: Error:/i.test(content)
+}
+
 export function CleanConversationSurface({
   events,
   isStreaming,
@@ -66,9 +76,23 @@ export function CleanConversationSurface({
             <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-slate-300">{item.content}</p>
           </details>
         ) : item.role === 'notification' ? (
-          <div key={item.id} className="mx-auto flex max-w-[90%] items-start gap-2 rounded-full bg-slate-100 px-3.5 py-2 text-[11px] leading-5 text-slate-500 dark:bg-slate-900 dark:text-slate-400" data-testid="clean-notification-message">
-            <Bell className="mt-0.5 h-3 w-3 shrink-0" />
-            <p className="whitespace-pre-wrap break-words">{item.content}</p>
+          // An automatic update the runtime delivered to the agent (a background
+          // step finishing), not something the user typed or the agent said. It
+          // is shown rather than hidden so a reply that arrives with no prompt
+          // has a visible cause. Full width with its own label, because the
+          // payload is a multi-line status report — the centered pill this used
+          // to be was built for a one-line notice and wrapped badly.
+          <div key={item.id} className="w-full rounded-xl border border-cyan-200/70 bg-cyan-50/60 px-4 py-3 dark:border-cyan-900/60 dark:bg-cyan-950/20" data-testid="clean-notification-message">
+            <p className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-cyan-700 dark:text-cyan-300">
+              <Bell className="h-3 w-3 shrink-0" />
+              {isFailedStepNotification(item.content) ? 'Step failed' : 'Step complete'}
+            </p>
+            {/* The payload is authored as markdown (bold step names, `code`
+                paths, bullet lists when several steps land together), so render
+                it rather than printing the syntax literally. */}
+            <div className="text-xs leading-5 text-slate-600 dark:text-slate-300">
+              <ConversationMarkdownRenderer content={item.content} maxHeight="none" framed={false} />
+            </div>
           </div>
         ) : (
           <article key={item.id} className="flex w-full items-start gap-3" data-testid={item.role === 'error' ? 'clean-error-message' : 'clean-assistant-message'}>
