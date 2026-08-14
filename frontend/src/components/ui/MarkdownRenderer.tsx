@@ -569,7 +569,7 @@ export const MermaidDiagram: React.FC<{ content: string }> = ({ content }) => {
   )
 }
 
-export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
+const MarkdownRendererImpl: React.FC<MarkdownRendererProps> = ({
   content,
   className = "",
   maxHeight = "none",
@@ -1272,6 +1272,21 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
   )
 }
 
+// Memoized because this component REMOUNTS its output rather than re-rendering
+// it. The `components` map handed to ReactMarkdown is an object literal built
+// inline on every render, so each render produces a new function identity for
+// `p`, `h1`, … — React sees a different component *type* for every markdown
+// node and therefore unmounts the old subtree and mounts a fresh one instead of
+// reconciling it. In a polling chat surface that repeats several times a second
+// for every message on screen: measured 120 DOM mutations in 6s on an idle
+// conversation, visible as tool cards flashing and re-opening on their own.
+//
+// Memo fixes it at the boundary that matters — identical props now skip the
+// render entirely, so the map is never rebuilt. Callers passing inline
+// onLinkClick/renderEmbeddedWidget closures still re-render (their props really
+// do change each time); the conversation surfaces pass only primitives.
+export const MarkdownRenderer = React.memo(MarkdownRendererImpl)
+
 // Specialized versions for different event types
 export const LLMMarkdownRenderer: React.FC<{ content: string; maxHeight?: string }> = ({ content, maxHeight = "600px" }) => (
   <div className={`border border-gray-200 dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 overflow-y-auto overflow-x-hidden min-w-0`} style={{ maxHeight }}>
@@ -1297,7 +1312,9 @@ export const SystemMarkdownRenderer: React.FC<{ content: string; maxHeight?: str
   </div>
 )
 
-export const ConversationMarkdownRenderer: React.FC<{ content: string; maxHeight?: string; disablePathLinking?: boolean; framed?: boolean }> = ({ content, maxHeight = "384px", disablePathLinking, framed = true }) => (
+// Memoized for the same reason as MarkdownRenderer above — this is the wrapper
+// every chat surface renders per message, so it is the one that multiplies.
+export const ConversationMarkdownRenderer: React.FC<{ content: string; maxHeight?: string; disablePathLinking?: boolean; framed?: boolean }> = React.memo(({ content, maxHeight = "384px", disablePathLinking, framed = true }) => (
   <div
     className={`${framed ? 'border border-gray-200 dark:border-gray-700 rounded-md bg-white dark:bg-gray-800' : ''} overflow-y-auto overflow-x-hidden min-w-0`}
     style={{ maxHeight }}
@@ -1306,4 +1323,4 @@ export const ConversationMarkdownRenderer: React.FC<{ content: string; maxHeight
       <MarkdownRenderer content={content} disablePathLinking={disablePathLinking} />
     </div>
   </div>
-)
+))
