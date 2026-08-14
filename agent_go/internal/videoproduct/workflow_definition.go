@@ -50,7 +50,17 @@ func planForAll(pipelines []*Pipeline) map[string]interface{} {
 					"sub_agent_step": step,
 				})
 				if stage.ID == p.Orchestrated.StageIDs[len(p.Orchestrated.StageIDs)-1] {
-					steps = append(steps, orchestratorStep(p, blockRoutes, blockDeps, i == len(p.Stages)-1))
+					// A todo_task must name its successor. The runtime would fall
+					// through to the next step in array order anyway, but the plan
+					// graph refuses to draw a sequential edge out of a todo_task —
+					// it only follows next_step_id — so without this the
+					// orchestrator renders as a dead end and the plan stops
+					// describing what actually runs.
+					next := "end"
+					if i+1 < len(p.Stages) {
+						next = p.Stages[i+1].ID
+					}
+					steps = append(steps, orchestratorStep(p, blockRoutes, blockDeps, next))
 				}
 				continue
 			}
@@ -104,7 +114,7 @@ func stageStep(p *Pipeline, stage PipelineStage, deps []string, last bool) map[s
 // orchestratorStep runs an OrchestratedBlock's stages as sub-agent routes. Its
 // own validation asserts the block's output so the step cannot pass by talking
 // about work its routes never did.
-func orchestratorStep(p *Pipeline, blockRoutes []map[string]interface{}, deps []string, last bool) map[string]interface{} {
+func orchestratorStep(p *Pipeline, blockRoutes []map[string]interface{}, deps []string, nextStepID string) map[string]interface{} {
 	step := map[string]interface{}{
 		"type": "todo_task", "id": p.Orchestrated.ID, "title": p.Orchestrated.Title,
 		"description": p.Orchestrated.Description, "context_dependencies": deps,
@@ -113,9 +123,7 @@ func orchestratorStep(p *Pipeline, blockRoutes []map[string]interface{}, deps []
 		"validation_schema": map[string]interface{}{"files": []map[string]interface{}{
 			{"file_name": p.Orchestrated.Output, "must_exist": true},
 		}},
-	}
-	if last {
-		step["next_step_id"] = "end"
+		"next_step_id": nextStepID,
 	}
 	return step
 }

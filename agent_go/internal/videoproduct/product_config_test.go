@@ -358,3 +358,44 @@ func TestOrchestratedRoutesKeepTheirSkillEntries(t *testing.T) {
 		}
 	}
 }
+
+// The plan graph draws no sequential edge out of a todo_task — usePlanToFlow
+// sets lastExitNodeId = null for it and follows next_step_id only. The runtime
+// would fall through in array order regardless, so omitting it ran correctly
+// while rendering the orchestrator as a dead end with no path to the build.
+func TestOrchestratorNamesItsSuccessor(t *testing.T) {
+	raw, err := json.Marshal(planForAll(pipelineRegistry))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plan struct {
+		Steps []struct {
+			ID   string `json:"id"`
+			Type string `json:"type"`
+			Next string `json:"next_step_id"`
+		} `json:"steps"`
+	}
+	if err := json.Unmarshal(raw, &plan); err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]bool{"end": true}
+	for _, s := range plan.Steps {
+		ids[s.ID] = true
+	}
+	var seen int
+	for _, s := range plan.Steps {
+		if s.Type != "todo_task" {
+			continue
+		}
+		seen++
+		if s.Next == "" {
+			t.Fatalf("todo_task %q names no next_step_id; the plan graph renders it as a dead end", s.ID)
+		}
+		if !ids[s.Next] {
+			t.Fatalf("todo_task %q points at %q, which is not a step in the plan", s.ID, s.Next)
+		}
+	}
+	if seen == 0 {
+		t.Fatal("no todo_task step in the generated plan")
+	}
+}
