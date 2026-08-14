@@ -406,7 +406,10 @@ func (api *StreamingAPI) executeDelegatedTask(ctx context.Context, parentReq Que
 		// set once so assembly-time identity also deduplicates correctly before
 		// the wrapper finalizes its immutable mcpagent definition.
 		if len(spec.Skills) > 0 {
-			if attached := skills.LoadAttachable(getWorkspaceAPIURL(), spec.Skills); len(attached) > 0 {
+			// Sub-agents inherit the parent's workspace, so resolve skills there
+			// first — otherwise a delegated agent silently loses every skill the
+			// product installs into its project.
+			if attached := skills.LoadAttachableIn(getWorkspaceAPIURL(), parentReq.SelectedFolder, spec.Skills); len(attached) > 0 {
 				identitySkills = append(identitySkills, attached...)
 			}
 		}
@@ -1147,7 +1150,10 @@ func buildCapabilitiesContext(req QueryRequest) *virtualtools.CapabilitiesContex
 	// are represented by browser tools and browser prompts instead.
 	workspaceAPIURL := getWorkspaceAPIURL()
 	for _, folderName := range filesystemSelectedSkills(req.SelectedSkills) {
-		skill, err := skills.GetSkill(workspaceAPIURL, folderName)
+		// Scope to the session's folder first: a product that installs skills
+		// into its project was invisible to the unscoped lookup, so its skill
+		// summaries silently went missing from the capability listing.
+		skill, err := skills.GetSkillIn(workspaceAPIURL, req.SelectedFolder, folderName)
 		if err != nil {
 			log.Printf("[CAPABILITIES] Warning: Failed to load skill %s: %v", folderName, err)
 			continue
