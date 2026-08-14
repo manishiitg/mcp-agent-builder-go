@@ -877,6 +877,16 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
   // lingers true after New Chat from a running conversation (a cross-tab signal,
   // not session-scoped) and would wrongly force 'active'.
   const activeTabStreaming = !!activeTab?.isStreaming
+  // isStreaming is deliberately false while only background agents run, so the
+  // composer stays usable (see isForegroundStreaming in utils/sessionRestore).
+  // It therefore follows can_steer, which on the server falls through to a tmux
+  // busy-content heuristic (polling.go: SessionHasBusyMainCodingTmux) — that
+  // flips as the pane's output starts and stalls, so anything MOUNTED on this
+  // flag unmounts and remounts a couple of times a second during a run.
+  // Measured: 13 mount/unmount pairs in 6s for the Working indicator and its
+  // Cancel button. Display state needs a signal that stays true for the whole
+  // turn; the composer keeps the volatile one.
+  const activeTabBusy = activeTabStreaming || !!activeTab?.hasRunningBgAgents
   const activeTabHasRunningBackendSession = !!activeTab?.sessionId && activeSessionsCache.some(session => {
     if (session.session_id !== activeTab.sessionId) return false
     const status = (session.status || '').toLowerCase()
@@ -3393,7 +3403,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
         {ContentRenderer && selectedModeCategory !== 'workflow' ? (
           <ContentRenderer
             events={displayEvents}
-            isStreaming={activeTabStreaming}
+            isStreaming={activeTabBusy}
             isRestoring={multiAgentSurface === 'restoring'}
             streamingText={activeStreamingText}
             landingContent={landingContent}

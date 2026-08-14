@@ -604,6 +604,13 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   // CRITICAL: Always use tab's status - never fall back to global to prevent mixing
   // If no active tab, this is an error condition (tabs should always exist)
   const isStreaming = activeTab?.isStreaming ?? false
+  // Whether a turn is in flight at all. isStreaming alone is deliberately false
+  // while only background agents run (so the composer stays usable), and it
+  // follows the server's can_steer, which falls through to a volatile tmux
+  // busy-content heuristic. Mounting the cancel control on it made the control
+  // flicker several times a second during a run. Gate the control's PRESENCE on
+  // this; keep isStreaming for whether the composer accepts input.
+  const isTurnInFlight = isStreaming || (activeTab?.hasRunningBgAgents ?? false)
   const canSteer = activeTab?.canSteer ?? false
   const tabSessionId = activeTab?.sessionId ?? null
   const isViewOnly = activeTab?.metadata?.isViewOnly ?? false
@@ -4031,7 +4038,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                           <p>{isUploadingFiles ? 'Uploading files...' : isProductSurface ? 'Attach files to this project' : `Upload file(s) to ${uploadTargetFolder}`}</p>
                         </TooltipContent>
                       </Tooltip>
-                      {isStreaming && (
+                      {isTurnInFlight && (
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <Button
