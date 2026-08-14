@@ -74,4 +74,15 @@ func TestGeneratedVideoStudioPlanRefreshesWhenCritiqueGatesAreMissing(t *testing
 	if shouldRefreshGeneratedVideoStudioPlan(userPlan) {
 		t.Fatal("an unrelated user-authored video plan must be preserved")
 	}
+
+	// A plan seeded after the critic gates landed but before pre-production was
+	// orchestrated satisfies every older fingerprint, so nothing upgraded it and
+	// the project kept a linear plan with no orchestrator — which is what the
+	// running instance actually showed.
+	preOrchestrator := `{"steps":[{"id":"route","routes":[{"route_id": "infographic"}]},` +
+		`{"id":"infographic-research"},{"id":"infographic-creative-critique"},` +
+		`{"id":"infographic-render-critique"}]}`
+	if !shouldRefreshGeneratedVideoStudioPlan(preOrchestrator) {
+		t.Fatal("a pre-orchestrator Video Studio infographic plan should upgrade")
+	}
 }

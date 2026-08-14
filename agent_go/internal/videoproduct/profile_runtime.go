@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -250,9 +251,25 @@ func shouldRefreshGeneratedVideoStudioPlan(content string) bool {
 		strings.Contains(content, `Build each panel in HTML/CSS`) {
 		return true
 	}
-	return strings.Contains(content, `"route_id": "infographic"`) &&
-		strings.Contains(content, `"infographic-research"`) &&
-		!strings.Contains(content, `"infographic-render-critique"`)
+	if !strings.Contains(content, `"route_id": "infographic"`) ||
+		!strings.Contains(content, `"infographic-research"`) {
+		return false
+	}
+	// Structural upgrades belong here for the same reason the critic gates do:
+	// a plan generated before one of them exists is missing a required part of
+	// the workflow, and nothing else brings it forward. The orchestrator id is
+	// read from the pipeline rather than written out, so renaming the block
+	// cannot leave this fingerprint silently checking for a stale name.
+	required := []string{`"infographic-render-critique"`}
+	if infographicPipeline.Orchestrated != nil {
+		required = append(required, strconv.Quote(infographicPipeline.Orchestrated.ID))
+	}
+	for _, marker := range required {
+		if !strings.Contains(content, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func resolveWorkspaceEvidence(ctx context.Context, client *workspace.Client, projectRoot, rawPath, reportPath string) (string, []byte, error) {
