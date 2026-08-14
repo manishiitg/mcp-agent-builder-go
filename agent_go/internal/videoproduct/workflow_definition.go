@@ -41,6 +41,7 @@ func planForAll(pipelines []*Pipeline) map[string]interface{} {
 	}
 	return map[string]interface{}{"steps": steps}
 }
+
 // stageExecuteItem is the one turn a production stage runs. Every stage here is
 // conversational and judgment-heavy — writing a brief, a storyboard, a design,
 // a critique — which is exactly what the plan-authoring guidance means by

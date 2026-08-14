@@ -1,0 +1,432 @@
+[← Pulse platform issue index](../pulse_platform_issue_register.md)
+
+# PLAT-105 — retained delivery is transport-neutral already, but only reachable through a live `*Agent`
+
+| Field | Value |
+|---|---|
+| Status | `complete` — warm session lookup, main-chat session ownership, actual-transport acknowledgement, retained tool receipts, and the required IC-11 live P0 harness are implemented; authenticated retained-window proof passes for Codex, Claude Code, and Cursor (`auto`). Cold-restart rehydration was explicitly declined as unnecessary; the existing compatibility fallback remains for surviving terminals after a backend restart. |
+| Priority | P1 |
+| Owner | mcpagent session lifetime and delivery acknowledgement |
+| Reported | 2026-08-14 |
+| Related | [PLAT-020](plat-020.md), [PLAT-035](plat-035.md), [PLAT-099](plat-099.md), [PLAT-102](plat-102.md), [PLAT-103](plat-103.md) |
+
+## Problem
+
+AgentWorks has two delivery paths for a follow-up message:
+
+- when a short-lived `mcpagent.Agent` is still registered, it calls
+  `mcpagent.DeliverAgentInput`;
+- when the Go agent object has ended but its coding-CLI tmux remains live,
+  `deliverRetainedMainTerminalInput` detects the provider, reconciles it against
+  the stored continuation request, reads
+  `GetCodingAgentProviderContract(...).SupportsLiveInput`, and calls
+  `llmproviders.SendCodingAgentLiveInput` directly.
+
+The second path is fast and functionally necessary today, but it makes the host
+application own provider transport details that mcpagent already owns.
+
+The same split also drops structured tool observability on retained turns. A
+real 2026-08-14 Codex follow-up executed `execute_shell_command` and
+`agent_browser` repeatedly through the session-scoped MCP bridge, and the
+backend logs carried every call under the correct session ID, but Formatted
+mode displayed no tools. The initial wrapped turn receives transcript-derived
+`tool_call_start/end` events; the direct retained-tmux branch bypasses that
+stream and did not publish the bridge's authoritative execution receipts.
+
+## Root cause
+
+**This is a lifetime and reachability defect, not a missing abstraction.**
+
+`mcpagent` already implements transport-neutral submission in
+`agent/message_delivery.go` (`deliverUserMessage`). That function normalizes and
+validates the message into a typed `CodingAgentDeliveryError`, resolves the
+coding-agent contract, routes tmux live-input against structured/API steer
+queueing, and returns a typed `UserMessageDeliveryResult{Provider, Transport,
+DeliveryStatus}`. It is exported as `mcpagent.DeliverAgentInput`.
+
+Its only defect is its **signature**: it requires a `*Agent`.
+
+AgentWorks registers `runningAgents[sessionID]` immediately after
+`FinalizeDefinition` and deletes it when the streaming loop ends — the in-code
+comment reads *"Clean up running agent reference (steer injection no longer
+possible)"*. The provider tmux is unaffected and stays live. So the map entry is
+scoped to the **streaming turn**, while the provider conversation is scoped to
+the **tmux process**. The only transport-neutral delivery path in the system
+becomes unreachable at exactly the moment it is needed, and the host
+re-implements it against provider internals.
+
+The older fallback compounded this by treating a missing Go agent as a missing
+provider conversation and rebuilding a complete agent — tools, skills, MCP
+configuration, permissions, and provider startup — even when a reusable coding
+session still existed. PLAT-102 added the correct fast retained path, but at the
+AgentWorks layer rather than by fixing reachability in mcpagent.
+
+## What already exists (do not rebuild)
+
+An implementer must start from these, not from a blank sheet. Three of the four
+pieces the previous revision of this ticket proposed are already shipped:
+
+| Proposed responsibility | Already implemented as |
+|---|---|
+| `Session.Submit(message)` | `Session.Send(ctx, input) (DeliveryResult, error)` — `agent/turn_session.go` |
+| `Session.Events()` | `Session.Events() <-chan *events.AgentEvent`, plus `mcpagent.SubscribeAgentEvents` |
+| `Session.Close(reason)` | `Session.Close() error` — contract pinned by `TestAgentAndSessionCloseContractsMatch` |
+| Opaque continuation state | `AgentSessionHandle` (`agent/session_handle.go`), persisted per conversation by `CodingSessionStore` (`agent/coding_session.go`); provider-native state nested in `llmtypes.CodingProviderSessionHandle` |
+
+`Session` is pinned by `TestSessionPublicMethodSurface` to exactly
+`{Close, Events, Run, Send, Snapshot}`.
+
+**The single missing property** is that `Session` is minted by `Agent.Start()`
+and holds a `*Agent` field, so its lifetime is bound to the agent object rather
+than to the durable provider conversation. That binding — not the API shape — is
+what this ticket must remove.
+
+Introducing a second, parallel session type would leave the codebase with four
+overlapping continuation concepts. It must not happen.
+
+## Required change
+
+Make the existing delivery path reachable by **session identity** rather than
+**object identity**, and let the retained conversation own a `Session` whose
+lifetime matches the provider process.
+
+1. Decouple `Session` from the `*Agent` turn object, so a session created for a
+   new conversation survives the streaming loop that created it.
+2. Give mcpagent a lookup from `sessionID` to that live session, so a warm
+   follow-up resolves a session without an `*Agent` and without reconstructing
+   configuration.
+3. Move retained completion, reconnection, and sidecar ownership out of
+   AgentWorks and into the provider adapters behind the session.
+4. Replace both AgentWorks delivery branches with one session submission call.
+   AgentWorks must stop identifying providers, reading `SupportsLiveInput`,
+   parsing pane readiness, and reading provider sidecars.
+5. Delete the superseded provider-specific retained-turn code in AgentWorks only
+   after real E2E parity is proven.
+
+## Implementation status — 2026-08-14
+
+The safe first migration slice is implemented and covered by tests:
+
+- `mcpagent.Session` is registered by session ID. `CloseSession` removes it, and
+  closing an older replaced session cannot accidentally remove the newer session.
+  `LLMAgentWrapper` now owns that session across main-chat turns.
+- both warm AgentWorks submission endpoints resolve that durable session first
+  and call `Session.Send`; they no longer reconstruct an agent for the normal
+  between-turn case;
+- the delivery acknowledgement reports the transport actually used, including
+  a structured transport selected in spite of a provider contract whose default
+  is tmux;
+- the MCP bridge publishes canonical direct-execution tool start/end/error
+  receipts for retained turns, including arguments, result/error, and duration;
+  those receipts are suppressed while a wrapped run is active because that run
+  already has transcript-derived tool events. This prevents both forms of the
+  observed bug: missing retained tool rows and duplicate ordinary tool rows.
+- the one-turn `Agent.Run` convenience path closes its temporary `Session`
+  before returning, so it cannot pin an Agent and its tool/MCP state in the
+  process registry indefinitely;
+- `Agent.Close` invalidates a registered session only when that session still
+  belongs to the exact Agent being closed. This prevents both a half-closed
+  Agent remaining addressable and an old replaced Agent deleting the newer
+  session under the same conversation ID;
+- if a warm `Session.Send` fails, AgentWorks now tries the still-live retained
+  terminal before rebuilding a complete turn. An accepted structured-transport
+  queue result does not trigger that bypass.
+
+### Resolved regression — the main chat path did not retain its session
+
+Review on 2026-08-14 found that two bullets above were mutually exclusive on the
+path that matters. `Agent.Run` closing its temporary session and the durable
+session surviving the wrapped turn cannot both hold, because **the main chat
+turn runs through `Agent.Run`**:
+
+```
+server.go            llmAgent.StreamWithEvents(agentCtx, chatQuery)
+  llm_agent.go       runtimeAgent.Run(ctx, mcpagent.Turn{...})   <- Agent.Run
+    turn_session.go  Start() registers -> defer session.Close() unregisters
+```
+
+`Agent.Run` calls `Start` (which registers) and now defers `Close` (which
+unregisters). The session is therefore destroyed at exactly the moment the
+retained window opens. `LookupSession(sessionID)` misses, and both AgentWorks
+endpoints fall through to `deliverRetainedMainTerminalInput` — the provider-
+specific branch this ticket exists to retire. **The new path is inert on the
+only flow that reaches it.**
+
+Verified directly rather than by inspection: a probe that called `Agent.Run` on
+an agent with a session ID and then queried the registry reported the session
+gone. `internal/agentsession` is unaffected because it holds a `Session` from
+`Start` and calls `Session.Run`; that subsystem is not the chat turn.
+
+**Why no test caught it.** `turn_session_registry_test.go` calls `Start` and
+`Close` directly and never exercises `Agent.Run`, so it proves registry
+mechanics against a path the product does not take. Build, unit tests, and the
+focused server tests all pass while the feature does nothing. This is precisely
+the failure mode IC-11 proof 2's anti-requirement was written to prevent — the
+retained window must be reached by letting a real turn end, never by
+constructing the state directly.
+
+**Resolution.** The dilemma is false: `Agent.Run` should not have to choose
+between pinning an Agent forever and destroying a durable conversation. Session
+ownership belongs to the caller that owns the conversation. `LLMAgentWrapper`
+now holds one `Session` obtained from `Start` for the lifetime of the chat
+session and drives turns through `Session.Run`, exactly as
+`internal/agentsession` already does, leaving `Agent.Run` a genuine one-shot
+convenience whose deferred `Close` is correct and harmless. Replacing or
+removing a stored wrapper closes its prior wrapper-owned Session, so the map no
+longer silently drops an Agent/Session graph.
+
+A unit regression test drives the wrapper's turn method and proves the session
+remains resolvable after that method returns, then proves wrapper close
+unregisters it. This closes the inert-path regression but is not substituted
+for IC-11 proof 2: that proof must still complete a real CLI streaming turn
+before exercising the retained-window follow-up.
+
+The implementation is intentionally **not marked complete**. A provider tmux can
+survive a backend restart while the new in-memory session registry cannot. The
+old AgentWorks retained-terminal branch therefore remains only as cold-restart
+compatibility. Retained completion/reconnection and sidecar ownership also
+remain in AgentWorks. They can be deleted only after IC-11's real retained-window
+E2E proves delivery, tool events, final response, provider exit, and restart
+behavior through the shared session contract.
+
+The cold-restart decision is now explicit: the fallback is **not** the desired
+permanent architecture. A server restart must rehydrate the mcpagent session
+from the persisted `AgentSessionHandle` / `CodingSessionStore` before the static
+neutrality gate can turn green. Session identity alone is insufficient while
+the registry is process-local. Until rehydration and IC-11 exist, removing the
+fallback would regress live tmux conversations that survive a backend restart.
+
+IC-11 proof 2 is now implemented in `coding_agent_chat_e2e.go` and is required
+for every selected provider by `scripts/run-coding-cli-p0.sh`. It lets the real
+first turn finish, verifies the foreground steer target is gone while tmux is
+live, submits a tool-backed follow-up, and requires the durable mcpagent source,
+actual transport, sub-second acknowledgement, exactly one paired tool receipt,
+exactly one final response, no `agent_start`, and a reusable tmux. The harness
+has now passed authenticated live runs for Codex and Claude Code. The Claude run
+used `claude-sonnet-5`. Cursor accepted model `auto` and completed turn one, but
+the live logs showed `Executing Cursor CLI structured: cursor-agent --print`
+and no retained tmux existed, despite the provider contract declaring tmux.
+That is a real contract/adapter mismatch; proof 2 correctly remains red for
+Cursor rather than pretending a structured one-shot process was retained.
+
+The mismatch was traced to multi-provider commit `4c9e1825`: it changed
+`CursorCLIAdapter.GenerateContent` to unconditionally execute structured
+`--print`, but left the shared provider contract and AgentWorks interactive-chat
+configuration on tmux. The repair does not force every Cursor use case onto one
+transport. It restores the existing explicit selector:
+
+- ordinary interactive chat follows the provider contract and uses retained
+  tmux, so live input and the IC-11 retained window are real;
+- workflow/background execution continues to pass
+  `WithCursorStructuredTransport(true)` and receives typed stream-json events.
+
+Regression coverage pins unset/false to tmux and true to structured. Focused
+provider, mcpagent, wrapper, and server tests pass, as do `go build ./...` in
+both `multi-llm-provider-go` and AgentWorks. The authenticated real Cursor tmux
+contract also passes with model `auto` (`TestCursorCLIRealInteractiveTmuxFullContract`,
+44.64s), including reuse of the same tmux session for its second turn. After the
+backend restart, the cross-repository Cursor IC-11 run passed too: the real first
+turn completed, the retained session accepted the follow-up, exactly one tool
+receipt and one final response were observed, no Agent reconstruction occurred,
+and the tmux remained reusable.
+
+Verification completed for this slice:
+
+- `go test ./agent/... -count=1` in `mcpagent`;
+- focused AgentWorks live-input/retained/coding-agent server tests;
+- the `LLMAgentWrapper` session-lifecycle regression test;
+- `go build ./...` in `agent_go`.
+
+### Two defects this ticket must absorb
+
+**a. The typed acknowledgement can report the wrong transport.**
+`deliverUserMessage` sets `result.Transport = contract.Transport` — the
+*declared* contract transport — but routes on `a.usesStructuredTransport()`,
+which is the union of `wantsStructuredTransport()`, the per-provider
+`CodexStructuredTransport` / `CursorStructuredTransport` / `PiStructuredTransport`
+flags, and a non-tmux contract. A Codex run on the structured transport
+therefore returns `Transport: "tmux"` alongside `DeliveryStatus:
+"queued_for_injection"`. The acknowledgement contradicts itself.
+
+This is not hypothetical: `legacyCodingProviderSessionHandle`
+(`agent/session_handle.go`) already carries a comment documenting the identical
+bug class found live on the continuation handle, where recording
+`Transport=tmux` for a structured turn silently lost all turn-1 context on
+Codex/Cursor. The delivery result needs the same fix — report the transport the
+call **actually used**.
+
+**b. There is no `rejected` status.** `UserMessageDeliveryStatus` has exactly
+two values, `sent_to_cli` and `queued_for_injection`. Rejection is an `error`
+return carrying `CodingAgentDeliveryError{Kind, Provider, Reason}`. Either add
+an explicit rejected status or state that rejection stays a typed error — but
+the contract must say which, because acceptance depends on it.
+
+**Decision implemented:** `DeliveryResult` represents accepted delivery only;
+rejection remains a typed `CodingAgentDeliveryError`. `Session.Send` no longer
+replaces an empty-message rejection with a generic formatting error, so hosts
+can branch on the stable error kind without parsing text.
+
+## Provider adapter responsibilities
+
+Adapters implement the mechanics against the transport recorded on the handle
+(`llmtypes.CodingProviderTransportTmux` / `CodingProviderTransportStructured`),
+plus API-backed providers:
+
+- **interactive tmux:** inject input, observe provider readiness, read the
+  authoritative transcript/sidecar;
+- **structured JSON/event:** submit through the provider channel and normalize
+  its structured stream;
+- **API:** continue through the provider conversation identifier and normalize
+  streamed or bounded responses.
+
+## Migration plan
+
+1. Fix the transport-reporting defect in `deliverUserMessage` and decide the
+   rejection representation. Both are prerequisites for a stable contract.
+2. Decouple `Session` lifetime from `*Agent` and add session lookup by
+   `sessionID`.
+3. Have agent creation register the durable session handle for the conversation.
+4. Move retained completion, reconnection, and sidecar ownership from AgentWorks
+   into the provider adapters.
+5. Replace both AgentWorks delivery branches with the single session call.
+6. Update the pinned API golden files **in the same commit** (see Gates).
+7. Land IC-11 proof 1 (static neutrality assertion) with step 5, and IC-11
+   proof 2 (retained-window E2E) before step 8.
+8. Remove the superseded AgentWorks retained-turn code only after E2E parity.
+   IC-11 proof 1 turning green is the objective signal that this is complete.
+
+## Proposed certification — IC-11: retained submission neutrality
+
+The existing P0 certification suite cannot catch this defect, and it is worth
+being precise about why before adding coverage.
+
+`requiredP0CertificationIDs` includes `CertLiveInput` and `CertBusyLiveInput`,
+both enforced as real E2Es. Neither helps here, for two independent reasons:
+
+- **Wrong layer.** Those certifications live in `multi-llm-provider-go` and
+  prove Boundary 3 (adapter ↔ CLI). They pass identically whether AgentWorks
+  routes through mcpagent or bypasses it and calls
+  `llmproviders.SendCodingAgentLiveInput` itself — which is what it does today.
+  The broken boundary is the one they do not observe.
+- **Wrong moment.** Every live-input certification and the IC-10 chat E2E
+  exercise the *in-flight* case: `coding_agent_chat_e2e.go` starts a query,
+  waits for the session to become steerable, and steers mid-turn.
+  `CertBusyLiveInput` is explicitly a follow-up during a slow tool call. This
+  ticket's defect lives in the window *between* turns, after
+  `runningAgents[sessionID]` is deleted and while the tmux is still alive. No
+  suite enters that state.
+
+Also note `RequiredP0CodingAgentCertificationIDs` returns `nil` for any
+non-tmux contract, so structured-transport runs currently have **no required P0
+floor at all** — directly relevant to acceptance 3 and 6.
+
+This coverage therefore belongs at Boundary 1 as a new integration-contract
+area in `agent_go/docs/cross_repo_integration_contract.md`, **not** as a new ID
+in the `multi-llm-provider-go` certification registry: that registry is keyed
+per provider adapter and its runner asserts the proof lives under
+`pkg/adapters/<provider>/`, which is the wrong repo and the wrong layer.
+
+### IC-11 — Boundary 1 (coding-agent-loop → mcpagent)
+
+*A follow-up to a live provider conversation is submitted through one mcpagent
+API, with no provider-specific knowledge in the host.*
+
+**Proof 1 — static neutrality assertion (always on, no CLI required).**
+An AST test over `agent_go/cmd/server` asserting that the package contains zero
+references to `llmproviders.SendCodingAgentLiveInput`,
+`GetCodingAgentProviderContract`, and the retained sidecar readers. This mirrors
+the approach already used in `mcpagent/agent/public_api_golden_test.go`, runs in
+ordinary CI, and is the assertion that actually prevents regression — a runtime
+spy can only prove one path was not taken on one run, whereas this proves the
+capability is absent. It also gives migration step 7 an objective completion
+signal.
+
+**Proof 2 — retained-window live E2E (opt-in, gated).**
+The state no current suite reaches. Following the `cmd/testing/` opt-in live
+command pattern used by IC-10:
+
+1. Start a turn and let it complete.
+2. Wait until `runningAgents[sessionID]` has been deleted **and** the provider
+   tmux is still live — the assertion setup, not an incidental precondition.
+3. Send a follow-up.
+4. Assert: it is accepted; the acknowledgement is the typed session result with
+   the transport that was actually used; exactly one non-empty
+   `unified_completion.final_result` is persisted; the session settles while the
+   tmux stays reusable; and delivery latency stays within PLAT-102's envelope.
+5. Assert no agent reconstruction occurred — no tool-registry or MCP-bridge
+   rebuild for the warm turn. PLAT-102 established that reconstruction costs
+   seconds and is visible in the startup-timing stages, so this is observable
+   rather than inferred.
+
+Run it per transport, enumerated: Claude Code, Codex, Cursor, and Pi have
+retained sidecar recovery today. Structured and API transports are explicitly
+out of scope for proof 2 until acceptance 6's gap is closed; that exclusion must
+be recorded rather than left implicit.
+
+**Anti-requirement.** The E2E must reach the retained window by letting a real
+turn end, never by deleting the agent registration to manufacture the state.
+PLAT-035 records the precedent — a regression test that injected `streaming_end`
+itself proved what happened *after* an event arrived but not that a real
+retained input produced one — and `CertReplyFormattingFidelity` carries the same
+warning that *"a green test that proved nothing is how this defect shipped in
+the first place."*
+
+## Gates
+
+- `agent/public_api_golden_test.go` pins the public surface and its own comment
+  requires that *"any deliberate change updates this list in the same commit."*
+  A new exported function must be added to `TestPackageFunctionSurfaceDoesNotRegrow`,
+  and — if its signature mentions `*Agent` — also to `TestAgentFacadeFunctionSurface`.
+  New `Session` methods change `TestSessionPublicMethodSurface`. `*Agent` itself
+  is pinned to exactly four methods and zero exported fields; this work must not
+  regrow it.
+- PLAT-099 hazard: `deliverRetainedMainTerminalInput` currently clears `modelID`
+  when the live tmux provider disagrees with the stored continuation provider,
+  which is what stops a message reaching a stale provider after Update
+  Automation switches providers. Moving that logic behind the session must
+  preserve it, or PLAT-099 reopens. Acceptance 5 owns this.
+
+## Acceptance
+
+1. AgentWorks uses one mcpagent API for follow-up submission regardless of
+   transport, and contains no provider identification, `SupportsLiveInput`
+   check, pane-readiness parsing, or sidecar read. Proven by IC-11 proof 1,
+   which fails if any of that capability remains in `agent_go/cmd/server`.
+2. A warm follow-up does not rebuild an `Agent`, tool registry, skills, MCP
+   configuration, or provider process.
+3. Every transport returns the **same acknowledgement type**, with transport
+   differences expressed as field values, never as different call shapes. The
+   reported `Transport` matches the transport actually used, including when a
+   per-provider structured flag overrides a tmux contract. Codex legitimately
+   accepting a follow-up as the *next* turn while Claude Code, Cursor, and Pi
+   accept it in-turn is a value difference, not a contract violation.
+4. Final responses, tool calls, errors, queueing, cancellation, rate limits,
+   reconnection, and process exit have transport-independent host semantics.
+   In particular, a warm retained turn emits exactly one visible tool row per
+   real bridge execution, carrying the authoritative arguments, result/error,
+   and duration; it must neither omit the call nor duplicate it with a
+   transcript-intent event.
+5. Rapid messages are serialized per session and never merged or delivered to a
+   stale provider after a configuration change. The PLAT-099 provider-switch
+   case has explicit regression coverage.
+6. Real E2E covers first turn, warm continuation, concurrent submission,
+   provider exit, reconnection, and final-response recovery for **each supported
+   transport**, enumerated explicitly. Note the current gap:
+   `ReadCodingAgentRetainedTurnMessages` implements retained-turn recovery for
+   Claude Code, Codex, Cursor, and Pi only, and returns `nil` by default — so
+   structured and API transports have no retained-response path yet. Either
+   close that gap here or scope this acceptance to the tmux transports and open
+   a follow-up.
+7. PLAT-102's warm retained latency does not regress; the measured sub-second
+   delivery path is preserved.
+
+## Non-goals
+
+- Do not introduce a new session type alongside `Session`, `AgentSessionHandle`,
+  and `CodingProviderSessionHandle`.
+- Do not force every provider to use tmux or pretend API calls are persistent
+  processes.
+- Do not standardize provider-internal mechanics; standardize host-visible
+  submission and lifecycle semantics.
+- Do not remove the current fast path before the shared contract has equivalent
+  runtime coverage.

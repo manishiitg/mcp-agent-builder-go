@@ -66,20 +66,13 @@ func TestVideoStudioManifestDrivesProfileAndWorkflowCapabilities(t *testing.T) {
 	if showVideoBinding.Presentation == nil || showVideoBinding.Presentation.Kind != "media.video" {
 		t.Fatalf("video.show-video must declare presentation.kind=media.video, got %+v", showVideoBinding.Presentation)
 	}
-	// Under mcp_only the CLI's own Read/Write are denied, so the bridge has to
-	// supply the file editor or the agent is left rewriting files with shell
-	// heredocs. This is mode-dependent, not a property of the tool — the full
-	// rule (and the hybrid direction, where it must be absent) is pinned by
-	// TestProductToolGateGovernsTheCodingAgentBridgeCatalog.
-	if manifest.Profile.Runtime.AgentTools.Mode != "hybrid" && !enabled["diff_patch_workspace_file"] {
-		t.Fatalf("agent_tools.mode=%q denies native edits; the bridge must carry diff_patch_workspace_file: %+v",
-			manifest.Profile.Runtime.AgentTools.Mode, manifest.Profile.ToolPolicy)
-	}
 	// AgentWorks-wide administration, the shared media/LLM bridge, sub-agent
 	// orchestration, and scheduling are not this product's business.
 	for _, name := range []string{
 		"set_provider_auth", "install_skill", "add_mcp_server",
-		"generate_video",
+		// No executor for this exists anywhere any more (agent_go, workspace,
+		// mcpagent); allow-listing it would advertise a tool nothing serves.
+		"diff_patch_workspace_file", "generate_video",
 		"delegate", "query_agent", "create_workflow_schedule", "notify_user",
 	} {
 		if enabled[name] {
@@ -105,7 +98,7 @@ func TestVideoStudioManifestDrivesProfileAndWorkflowCapabilities(t *testing.T) {
 	// and the shared AgentWorks default it used to inherit (plan folders,
 	// pulse/goals.html) names concepts Video Studio does not have and
 	// contradicts the uploads//work//outputs/ rules in its own system prompt.
-	for _, writer := range []string{"execute_shell_command", "diff_patch_workspace_file"} {
+	for _, writer := range []string{"execute_shell_command"} {
 		if !enabled[writer] {
 			continue
 		}

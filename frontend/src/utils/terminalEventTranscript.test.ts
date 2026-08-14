@@ -5,6 +5,8 @@ import {
   selectTerminalEvents,
   buildTranscriptItems,
   collapseCompletedLifecycleStarts,
+  internalTranscriptMessageTitle,
+  isInternalTranscriptMessage,
   type TranscriptItem,
 } from './terminalEventTranscript'
 import type { PollingEvent, TerminalSnapshot } from '../services/api-types'
@@ -37,6 +39,23 @@ function terminal(partial: Partial<TerminalSnapshot> & { session_id: string; own
     ...partial,
   } as TerminalSnapshot
 }
+
+describe('internal transcript messages', () => {
+  it('keeps automation notifications out of the person-authored chat stream', () => {
+    const notification = evt({
+      id: 'notice', session_id: 's1', type: 'user_message',
+      data: { content: "[AUTO-NOTIFICATION] Agent 'Research prospects' completed — status=completed" } as never,
+    })
+    const person = evt({
+      id: 'person', session_id: 's1', type: 'user_message',
+      data: { content: 'Please review the results.' } as never,
+    })
+
+    expect(isInternalTranscriptMessage(notification)).toBe(true)
+    expect(internalTranscriptMessageTitle(notification)).toBe('Research prospects · completed')
+    expect(isInternalTranscriptMessage(person)).toBe(false)
+  })
+})
 
 describe('selectTerminalEvents — owned terminal (workflow step, message-sequence item, ...)', () => {
 
@@ -130,6 +149,24 @@ describe('selectTerminalEvents — owned terminal (workflow step, message-sequen
     expect(selectTerminalEvents(events, terminal({ session_id: 's1', owner_id: '' }))).toEqual([])
     expect(selectTerminalEvents(events, null)).toEqual([])
     expect(selectTerminalEvents(undefined, terminal({ session_id: 's1', owner_id: 'exec-1' }))).toEqual([])
+  })
+})
+
+describe('selectTerminalEvents — main agent', () => {
+  it('keeps an optimistic user message once it is tagged with the active session', () => {
+    const main = terminal({
+      session_id: 's-live',
+      owner_id: 'main:s-live',
+      execution_kind: 'main_agent',
+    })
+    const message = evt({
+      id: 'user-message-local',
+      session_id: 's-live',
+      type: 'user_message',
+      data: { data: { content: 'Please continue.' } } as never,
+    })
+
+    expect(selectTerminalEvents([message], main)).toEqual([message])
   })
 })
 
@@ -655,6 +692,22 @@ describe('pairToolCalls — args and result surfaced on the pair', () => {
     expect(pair.args).toBe('{"command":"pwd"}')
     expect(pair.result).toBe('ok')
   })
+
+  it('keeps direct CLI arguments and error output when the canonical fields are absent', () => {
+    const start = evt({
+      id: 'a', session_id: 's1', type: 'tool_call_start',
+      data: { data: { tool_call_id: 'c1', tool_name: 'execute_shell_command', input: { command: 'pwd' } } } as never,
+    })
+    const failure = evt({
+      id: 'b', session_id: 's1', type: 'tool_call_error',
+      data: { data: { tool_call_id: 'c1', tool_name: 'execute_shell_command', error: 'Operation not permitted' } } as never,
+    })
+
+    const [pair] = pairToolCalls([start, failure])
+    expect(pair.args).toBe('{\n  "command": "pwd"\n}')
+    expect(pair.result).toBe('Operation not permitted')
+    expect(pair.status).toBe('error')
+  })
 })
 
 describe('toolErrorContextByEventID', () => {
@@ -730,6 +783,19 @@ describe('answer shown exactly once', () => {
     const ids = items.filter(i => i.kind === 'event').map(i => (i as any).event.id)
     expect(ids).toContain('done')
     expect(ids).not.toContain('gen')
+  })
+
+  it('drops an exact repeated answer even when it is short', () => {
+    const shortAnswer = 'Hi! Ready when you are.'
+    const items = buildTranscriptItems([gen(shortAnswer), completion(shortAnswer)])
+    const ids = items.filter(i => i.kind === 'event').map(i => (i as any).event.id)
+    expect(ids).toEqual(['done'])
+  })
+
+  it('does not fuzzy-dedupe a different short answer', () => {
+    const items = buildTranscriptItems([gen('Ready when you are.'), completion('Hi! Ready when you are.')])
+    const ids = items.filter(i => i.kind === 'event').map(i => (i as any).event.id)
+    expect(ids).toEqual(['gen', 'done'])
   })
 
   it('still keeps generation-end when no completion card carries the answer', () => {

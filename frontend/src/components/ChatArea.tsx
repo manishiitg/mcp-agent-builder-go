@@ -3,6 +3,7 @@ import { useRenderLogger, useMemoLogger } from '../utils/renderLogger'
 import { chatSubmissionLane } from '../utils/promiseLane'
 import {
   liveInputSubmissionCoordinator,
+  shouldAppendOptimisticLiveInputMessage,
   shouldRefreshSessionEventStream,
   shouldUseRetainedLiveInput,
 } from '../utils/liveInputSubmission'
@@ -688,9 +689,6 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
 
   // Always use tab events - never fall back to global events to prevent cross-tab mixing
   // If there are no tabs, return empty array (tabs should always exist in multi-tab mode)
-  // Filter out workspace_file_operation events from display
-  // (These events are still sent to frontend for workspace store processing, but hidden from chat UI)
-  //
   // PERF FIX: Return a ref-stable array when the filtered output hasn't changed.
   // Events are append-only with unique IDs, so comparing length + first/last ID
   // is sufficient. This prevents downstream cascade: EventHierarchy → eventTree →
@@ -704,8 +702,6 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
 
   const displayEvents = useMemo(() => {
     const filtered = tabEvents.filter(event => {
-      if (event.type === 'workspace_file_operation') return false
-
       // These drive the live streaming text buffer. They are transport-level
       // chunks, not durable conversation records; rendering retained chunks
       // creates one "Unknown Event Type" JSON card per packet after a page
@@ -1576,15 +1572,6 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
         }
       }
 
-      // Also detect workspace_file_operation events targeting plan.json
-      if (event.type === 'workspace_file_operation') {
-        const filePath = (innerData?.filepath ?? agentEvent?.filepath ?? innerData?.file_path ?? agentEvent?.file_path ?? '') as string
-        if (filePath.includes('plan.json') || filePath.includes('step_config.json')) {
-          console.log('[PLAN REFRESH] Workspace file operation on plan file:', filePath)
-          signalPlanModified()
-        }
-      }
-
       // Dedup keys now include correlation_id (unique per execution), so clearing is not needed
 
       // Auto-notifications for workshop step completions are now handled entirely by the backend
@@ -1688,22 +1675,11 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       }
 
       // Track workspace-modifying events for refresh-on-completion
-      if (event.type === 'workspace_file_operation') {
-        hadWorkspaceActivityRef.current = true
-      }
       if (event.type === 'tool_execution') {
         const toolName = innerData?.tool_name ?? agentEvent?.tool_name
         if (toolName === 'execute_shell_command') {
           hadWorkspaceActivityRef.current = true
         }
-      }
-
-      // PERF FIX: Only call processWorkspaceEvent for workspace_file_operation events.
-      // Previously called for ALL events (tool_execution, streaming_text, delegation_start, etc.),
-      // each incurring function call + event type check + dedup lookup overhead.
-      // Also skip if this tab belongs to a background preset (avoid polluting visible workspace)
-      if (event.type === 'workspace_file_operation' && isActivePresetTab !== false) {
-        useWorkspaceStore.getState().processWorkspaceEvent(event)
       }
 
       if (event.type === 'learn_code_script_execution') {
@@ -1729,23 +1705,14 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     // (~2-3MB JSON for large workspaces with many workflow runs). This happened on every
     // completion event and background agent completion.
     //
-    // FIX: Set needsRefresh flag → Workspace component shows a "Files may be out of date"
-    // banner with a manual "Refresh" button. New files during execution are still added
-    // incrementally via addFileToTree (from workspace_file_operation events, no network).
+    // Files are deliberately not synchronized event-by-event: shell and MCP
+    // writes share no reliable common file event. Mark the view stale after a
+    // completed run and let the user choose when to refresh it.
     const isCompletionLike = hasCompletionEvent || newEvents.some(e => e.type === 'background_agent_completed')
     if (isCompletionLike && hadWorkspaceActivityRef.current && isActivePresetTab !== false) {
       hadWorkspaceActivityRef.current = false
-      const isChatLikeMode = selectedModeCategory === 'multi-agent'
-      if (isChatLikeMode) {
-        // Reconcile only dirty folders when we know them; fall back to a full refresh for
-        // shell-driven changes where no workspace_file_operation events were emitted.
-        console.log('[Workspace] Reconciling workspace (completion event + had workspace activity, multi-agent mode)')
-        useWorkspaceStore.getState().refreshDirtyFolders({ fallbackToFullFetch: true })
-      } else {
-        // Workflow mode: just mark stale — workflow has its own debounced refresh logic
-        console.log('[Workspace] Marking needsRefresh (completion event + had workspace activity)')
-        useWorkspaceStore.getState().setNeedsRefresh(true)
-      }
+      console.log('[Workspace] Marking files stale after workspace activity')
+      useWorkspaceStore.getState().setNeedsRefresh(true)
     }
 
     // Process workflow events — only for the ACTIVE preset's tabs
@@ -2492,11 +2459,14 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
             return ts === null ? latest : Math.max(latest, ts)
           }, 0)
           const optimisticTimestampMs = Math.max(Date.now(), latestTimestampMs + 1)
-          chatStore.addTabEvents(tabSessionId, [createUserMessageEvent(
-            trimmedQuery,
-            nextEventIndex,
-            new Date(optimisticTimestampMs).toISOString(),
-          )])
+          if (shouldAppendOptimisticLiveInputMessage(existingEvents, response.message_id)) {
+            chatStore.addTabEvents(tabSessionId, [createUserMessageEvent(
+              trimmedQuery,
+              nextEventIndex,
+              new Date(optimisticTimestampMs).toISOString(),
+              tabSessionId,
+            )])
+          }
           chatStore.setAutoScroll(true)
           chatStore.setIsCompleted(false)
           chatStore.setIsStreaming(true)
@@ -2667,7 +2637,8 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     const optimisticUserMessage = createUserMessageEvent(
       displayQueryWithContext,
       nextEventIndex,
-      new Date(optimisticTimestampMs).toISOString()
+      new Date(optimisticTimestampMs).toISOString(),
+      tabSessionId,
     )
     chatStore.addTabEvents(tabSessionId, [optimisticUserMessage])
 

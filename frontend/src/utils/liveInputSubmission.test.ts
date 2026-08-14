@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   createLiveInputSubmissionCoordinator,
+  shouldAppendOptimisticLiveInputMessage,
   shouldRefreshSessionEventStream,
   shouldUseRetainedLiveInput,
 } from './liveInputSubmission'
@@ -72,5 +73,31 @@ describe('shouldRefreshSessionEventStream', () => {
 
   it('connects any surface when no stream exists', () => {
     expect(shouldRefreshSessionEventStream(false, false)).toBe(true)
+  })
+})
+
+describe('shouldAppendOptimisticLiveInputMessage', () => {
+  it('does not append a second copy when SSE delivered the acknowledged message first', () => {
+    const events = [{
+      type: 'user_message',
+      data: {
+        data: {
+          content: 'how are you',
+          metadata: { message_id: 'steer-123' },
+        },
+      },
+    }]
+
+    expect(shouldAppendOptimisticLiveInputMessage(events, 'steer-123')).toBe(false)
+  })
+
+  it('still appends for a different acknowledgement or before the backend echo arrives', () => {
+    const events = [{
+      type: 'user_message',
+      data: { data: { content: 'same text', metadata: { message_id: 'older' } } },
+    }]
+
+    expect(shouldAppendOptimisticLiveInputMessage(events, 'newer')).toBe(true)
+    expect(shouldAppendOptimisticLiveInputMessage([], 'newer')).toBe(true)
   })
 })

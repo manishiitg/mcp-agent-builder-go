@@ -18,6 +18,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
+	llmproviders "github.com/manishiitg/multi-llm-provider-go"
 	"github.com/manishiitg/multi-llm-provider-go/pkg/tmuxinput"
 
 	internalevents "github.com/manishiitg/coding-agent-loop/agent_go/internal/events"
@@ -29,6 +30,44 @@ func TestLiveAttachEnabled(t *testing.T) {
 	// The RUNLOOP_TERMINAL_LIVE_ATTACH flag was removed; live-attach is always on.
 	if !liveAttachEnabled() {
 		t.Error("liveAttachEnabled() = false, want true (flag removed, always on)")
+	}
+}
+
+func TestRetainedTurnKeepsOriginalRootWhenSteeredContinuationArrives(t *testing.T) {
+	const sessionID = "retained-turn-multiple-owners"
+	terminalStore := terminals.NewStore()
+	terminalStore.HandleEvent(sessionID, codingAgentTmuxReaperChunkEvent(
+		time.Now(), sessionID, "main:"+sessionID, "mlp-codex-cli-int-multiple-owners",
+	))
+	terminalID := sessionID + ":main:" + sessionID
+	if _, ok := terminalStore.MarkTurnCompleted(terminalID); !ok {
+		t.Fatal("could not prepare retained main terminal")
+	}
+
+	api := &StreamingAPI{
+		terminalStore:                          terminalStore,
+		activeSessions:                         map[string]*ActiveSessionInfo{sessionID: {SessionID: sessionID, Status: "completed"}},
+		retainedMainTurns:                      make(map[string]time.Time),
+		retainedMainTurnExecutionIDs:           make(map[string]string),
+		retainedMainTurnAdditionalExecutionIDs: make(map[string]map[string]struct{}),
+		retainedMainTurnWatchCancels:           make(map[string]context.CancelFunc),
+	}
+	api.markRetainedMainCodingTurnRunning(sessionID, "scheduled-message-root")
+	api.markRetainedMainCodingTurnRunning(sessionID, "live-completion-continuation")
+
+	api.retainedMainTurnsMu.Lock()
+	primary := api.retainedMainTurnExecutionIDs[sessionID]
+	_, hasContinuation := api.retainedMainTurnAdditionalExecutionIDs[sessionID]["live-completion-continuation"]
+	cancel := api.retainedMainTurnWatchCancels[sessionID]
+	api.retainedMainTurnsMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if primary != "scheduled-message-root" {
+		t.Fatalf("primary retained execution = %q, want scheduled-message-root", primary)
+	}
+	if !hasContinuation {
+		t.Fatal("live completion continuation replaced the original root instead of joining its idle boundary")
 	}
 }
 
@@ -290,13 +329,9 @@ firstCaptureObserved:
 	pane = []string{"Completed", "›"}
 	paneMu.Unlock()
 
-	api.liveAttach.mu.Lock()
-	stream := api.liveAttach.sessions[tmuxSession]
-	api.liveAttach.mu.Unlock()
-	if stream == nil {
-		t.Fatal("retained lifecycle did not attach to the tmux stream")
-	}
-	stream.broadcast([]byte("\x1b[2Jcodex repainted its idle composer"))
+	// Do not broadcast another chunk. The observer must re-check after a
+	// not-ready snapshot even when the final TUI repaint produced no decoded
+	// output notification.
 
 	deadline := time.Now().Add(4 * time.Second)
 	for api.isSessionBusy(sessionID) && time.Now().Before(deadline) {
@@ -327,6 +362,52 @@ firstCaptureObserved:
 	}
 	if !foundCompletion {
 		t.Fatal("tmux stream settlement did not emit unified_completion")
+	}
+}
+
+func TestRetainedMainTurnSettlesWhenControlStreamClosesAfterFinalResponse(t *testing.T) {
+	const sessionID = "retained-stream-closed-after-response"
+	const tmuxSession = "mlp-codex-cli-int-stream-closed"
+	terminalID := sessionID + ":main:" + sessionID
+	terminalStore := terminals.NewStore()
+	terminalStore.HandleEvent(sessionID, codingAgentTmuxReaperChunkEvent(
+		time.Now(), sessionID, "main:"+sessionID, tmuxSession,
+	))
+	eventStore := internalevents.NewEventStore(100)
+	defer eventStore.Stop()
+	startedAt := time.Now().Add(-time.Second)
+	api := &StreamingAPI{
+		eventStore:                   eventStore,
+		terminalStore:                terminalStore,
+		activeSessions:               map[string]*ActiveSessionInfo{sessionID: {SessionID: sessionID, Status: "running"}},
+		retainedMainTurns:            map[string]time.Time{sessionID: startedAt},
+		retainedMainTurnExecutionIDs: map[string]string{sessionID: "main:" + sessionID},
+		retainedMainTurnAdditionalExecutionIDs: map[string]map[string]struct{}{
+			sessionID: {},
+		},
+		retainedMainTurnWatchCancels: map[string]context.CancelFunc{},
+		internalRetainedTurnFinalResponseReader: func(llmproviders.Provider, string, time.Time) string {
+			return "durable answer"
+		},
+	}
+	eventStore.SetEventAddedCallback(func(ownerSessionID string, event internalevents.Event) {
+		terminalStore.HandleEventWithChange(ownerSessionID, event)
+		api.observeRetainedMainTurnEvent(ownerSessionID, event)
+	})
+	api.setSessionBusy(sessionID, true)
+	snapshot, ok := terminalStore.GetRaw(terminalID)
+	if !ok {
+		t.Fatal("missing retained terminal snapshot")
+	}
+
+	api.handleRetainedMainTurnStreamClosed(context.Background(), sessionID, snapshot, llmproviders.ProviderCodexCLI)
+
+	if api.isSessionBusy(sessionID) {
+		t.Fatal("durable final response did not settle the retained turn after control-stream closure")
+	}
+	settled, ok := terminalStore.GetRaw(terminalID)
+	if !ok || settled.Active || settled.State != "completed" || settled.ProcessState != "live" {
+		t.Fatalf("settled terminal = %+v, want completed logical turn with live provider process", settled)
 	}
 }
 

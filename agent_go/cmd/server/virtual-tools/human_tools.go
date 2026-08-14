@@ -358,11 +358,12 @@ func IsHumanToolCategory(category string) bool {
 // human_feedback is available for explicit channel tests and truly urgent,
 // short-lived human-only input; ordinary builder questions stay in chat.
 // notify_user is the non-blocking outbound push (Slack/WhatsApp/Gmail).
-// create_human_input_request, answer_human_input_request, and
-// mark_human_input_consumed implement the non-blocking Pulse/report question
-// lifecycle stored in the workflow-local db/db.sqlite.
+// get_human_input_request, create_human_input_request,
+// answer_human_input_request, and mark_human_input_consumed implement the
+// non-blocking Pulse/report question lifecycle stored in the workflow-local
+// db/db.sqlite.
 func WorkshopHumanToolNames() []string {
-	return []string{"human_feedback", "notify_user", "create_human_input_request", "answer_human_input_request", "mark_human_input_consumed"}
+	return []string{"human_feedback", "notify_user", "get_human_input_request", "create_human_input_request", "answer_human_input_request", "mark_human_input_consumed"}
 }
 
 // HumanToolNamesForWorkshopMode narrows the registered human-tool surface for

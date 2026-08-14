@@ -979,6 +979,96 @@ func TestHandleLiveInputMessageDeliversDirectlyToLiveMainTmuxWithoutAgent(t *tes
 	}
 }
 
+func TestRetainedTerminalDeliveryUsesLiveProviderAfterAutomationSwitch(t *testing.T) {
+	const sessionID = "workflow-provider-switched"
+	terminalStore := terminals.NewStore()
+	terminalStore.HandleEvent(sessionID, codingAgentTmuxReaperChunkEvent(
+		time.Now(), sessionID, "main:"+sessionID, "mlp-codex-cli-int-switched",
+	))
+
+	api := &StreamingAPI{
+		terminalStore: terminalStore,
+		lastQueryRequests: map[string]QueryRequest{
+			sessionID: {
+				Provider: string(llm.ProviderClaudeCode),
+				ModelID:  "claude-opus-5",
+				LLMConfig: &orchestrator.LLMConfig{Primary: orchestrator.LLMModel{
+					Provider: string(llm.ProviderClaudeCode),
+					ModelID:  "claude-opus-5",
+				}},
+			},
+		},
+		internalRetainedTerminalInputHandler: func(_ context.Context, provider llmproviders.Provider, modelID, ownerSessionID, message string) error {
+			if provider != llmproviders.ProviderCodexCLI {
+				t.Fatalf("provider = %q, want live Codex tmux provider", provider)
+			}
+			if modelID != "" {
+				t.Fatalf("model = %q, want stale Claude model discarded", modelID)
+			}
+			if ownerSessionID != sessionID || message != "continue with Codex" {
+				t.Fatalf("delivery session=%q message=%q", ownerSessionID, message)
+			}
+			return nil
+		},
+	}
+
+	provider, handled, err := api.deliverRetainedMainTerminalInput(context.Background(), sessionID, "continue with Codex")
+	if err != nil || !handled || provider != string(llm.ProviderCodexCLI) {
+		t.Fatalf("delivery provider=%q handled=%v err=%v", provider, handled, err)
+	}
+}
+
+func TestRetainedTurnCompletionUsesSidecarFinalResponse(t *testing.T) {
+	const sessionID = "retained-sidecar-completion"
+	const finalResponse = "This is the final assistant response from the sidecar."
+	startedAt := time.Now().Add(-2 * time.Second)
+	store := internalevents.NewEventStore(10)
+	defer store.Stop()
+
+	api := &StreamingAPI{
+		eventStore: store,
+		retainedMainTurns: map[string]time.Time{
+			sessionID: startedAt,
+		},
+		retainedMainTurnExecutionIDs: map[string]string{
+			sessionID: "live-turn:test",
+		},
+		internalRetainedTurnFinalResponseReader: func(provider llmproviders.Provider, ownerSessionID string, turnStart time.Time) string {
+			if provider != llmproviders.ProviderCodexCLI || ownerSessionID != sessionID {
+				t.Fatalf("sidecar lookup provider=%q owner=%q", provider, ownerSessionID)
+			}
+			if !turnStart.Equal(startedAt) {
+				t.Fatalf("sidecar lookup turn start=%v, want %v", turnStart, startedAt)
+			}
+			return finalResponse
+		},
+	}
+
+	api.emitRetainedMainTurnStreamCompletion(sessionID, terminals.Snapshot{
+		TerminalID:  sessionID + ":main:" + sessionID,
+		TmuxSession: "mlp-codex-cli-int-retained",
+	}, llmproviders.ProviderCodexCLI, "completed", "")
+
+	recorded := store.GetAllEventsRaw(sessionID)
+	if len(recorded) != 1 {
+		t.Fatalf("recorded events=%d, want 1", len(recorded))
+	}
+	agentEvent := recorded[0].Data
+	if agentEvent == nil {
+		t.Fatal("event data is nil, want AgentEvent")
+	}
+	completion, ok := agentEvent.Data.(*pkgevents.UnifiedCompletionEvent)
+	if !ok {
+		t.Fatalf("agent event data type=%T, want *events.UnifiedCompletionEvent", agentEvent.Data)
+	}
+	if completion.FinalResult != finalResponse || completion.Status != "completed" {
+		t.Fatalf("completion=%#v", completion)
+	}
+	if completion.Metadata["source"] != "coding_agent_sidecar" {
+		t.Fatalf("completion source=%v", completion.Metadata["source"])
+	}
+}
+
 // API/LLM unchanged: even when busy, a non-coding (API) agent must NOT be
 // short-circuited — those keep their frontend steer-vs-queue path.
 func TestTryDeliverQueryAsLiveInputSkipsNonCodingAgent(t *testing.T) {
@@ -1311,6 +1401,29 @@ func TestQueryRequestForContinuationLeavesMultiAgentContextUnchanged(t *testing.
 	got := queryRequestForContinuation(req, false, "Workflow/ignored")
 	if got.AgentMode != req.AgentMode || got.SelectedFolder != req.SelectedFolder {
 		t.Fatalf("non-workflow continuation changed: got=%#v want=%#v", got, req)
+	}
+}
+
+func TestQueryRequestWithEffectiveRuntimeReplacesStaleProviderWithoutMutatingSource(t *testing.T) {
+	sourceConfig := &orchestrator.LLMConfig{Primary: orchestrator.LLMModel{
+		Provider: string(llm.ProviderClaudeCode),
+		ModelID:  "claude-opus-5",
+	}}
+	req := QueryRequest{
+		Provider:  string(llm.ProviderClaudeCode),
+		ModelID:   "claude-opus-5",
+		LLMConfig: sourceConfig,
+	}
+
+	got := queryRequestWithEffectiveRuntime(req, string(llm.ProviderCodexCLI), "gpt-5.6-sol")
+	if got.Provider != string(llm.ProviderCodexCLI) || got.ModelID != "gpt-5.6-sol" {
+		t.Fatalf("effective runtime = %s/%s", got.Provider, got.ModelID)
+	}
+	if got.LLMConfig == nil || got.LLMConfig.Primary.Provider != string(llm.ProviderCodexCLI) || got.LLMConfig.Primary.ModelID != "gpt-5.6-sol" {
+		t.Fatalf("stored LLM config = %#v", got.LLMConfig)
+	}
+	if sourceConfig.Primary.Provider != string(llm.ProviderClaudeCode) || sourceConfig.Primary.ModelID != "claude-opus-5" {
+		t.Fatalf("source request config was mutated: %#v", sourceConfig.Primary)
 	}
 }
 

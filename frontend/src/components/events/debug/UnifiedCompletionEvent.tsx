@@ -68,13 +68,13 @@ export const UnifiedCompletionEventDisplay: React.FC<UnifiedCompletionEventDispl
   // collapses to a generic "Error" box and hides the useful restored summary.
   if (displayResult) {
     return (
-      <div className="flex items-start gap-2">
+      <div className="flex items-start gap-2 py-2">
         <div className="flex-1 min-w-0">
-          <div className="relative group rounded-md border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800/70">
-            <div className="absolute top-1.5 right-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+          <div className="relative group border-l-2 border-emerald-400/65 pl-4 pr-2">
+            <div className="absolute top-0 right-0 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
               <button
                 onClick={handleCopy}
-                className="p-1 rounded text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                className="rounded p-1 text-neutral-500 hover:bg-neutral-800 hover:text-neutral-200"
                 title="Copy markdown"
               >
                 {copied ? <Check className="w-3.5 h-3.5 text-green-500" /> : <Copy className="w-3.5 h-3.5" />}
@@ -82,11 +82,11 @@ export const UnifiedCompletionEventDisplay: React.FC<UnifiedCompletionEventDispl
             </div>
             <ConversationMarkdownRenderer content={displayResult} maxHeight="none" framed={false} />
           </div>
-          <div className="flex items-center gap-2 mt-1 px-1 text-[10px] text-gray-400 dark:text-gray-500">
-            {event.duration && <span>{formatDuration(event.duration)}</span>}
-            {event.turns && <span>{event.turns} turns</span>}
-            {event.timestamp && <span>{new Date(event.timestamp).toLocaleTimeString()}</span>}
-          </div>
+          {event.duration != null && (
+            <div className="mt-2 pl-4 text-[10px] tabular-nums text-neutral-500">
+              {formatDuration(event.duration)}
+            </div>
+          )}
         </div>
       </div>
     )

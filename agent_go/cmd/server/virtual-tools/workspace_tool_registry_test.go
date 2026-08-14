@@ -20,7 +20,6 @@ func TestCreateWorkspaceToolRegistryIncludesProviderMediaTools(t *testing.T) {
 
 	for _, name := range []string{
 		"execute_shell_command",
-		"diff_patch_workspace_file",
 		"read_image",
 		"generate_text_llm",
 		"search_web_llm",

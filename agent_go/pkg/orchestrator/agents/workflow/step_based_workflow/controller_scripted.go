@@ -321,13 +321,6 @@ func detectSuccessfulLLMScriptedSelfRun(history []llmtypes.MessageContent, mainP
 						!isReadOnlyMainPyCommand(command, mainPyAbsPath) {
 						lastMainPyMutation = callIndex
 					}
-				case "diff_patch_workspace_file", "mcp_api-bridge_diff_patch_workspace_file":
-					var args struct {
-						Filepath string `json:"filepath"`
-					}
-					if err := json.Unmarshal([]byte(toolCall.FunctionCall.Arguments), &args); err == nil && strings.TrimSpace(args.Filepath) == mainPyAbsPath {
-						lastMainPyMutation = callIndex
-					}
 				}
 			}
 		case llmtypes.ChatMessageTypeTool:

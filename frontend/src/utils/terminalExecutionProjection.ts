@@ -42,9 +42,26 @@ function flattenExecutionTree(root: SessionExecutionTreeNode): SessionExecutionT
 
 function terminalMatchesExecution(terminal: TerminalSnapshot, node: SessionExecutionTreeNode): boolean {
   if (terminal.session_id !== node.session_id) return false
-  return terminal.execution_id === node.execution_id ||
+  if (terminal.execution_id === node.execution_id ||
     terminal.owner_id === node.execution_id ||
-    terminal.terminal_id === `${node.session_id}:${node.execution_id}`
+    terminal.terminal_id === `${node.session_id}:${node.execution_id}`) {
+    return true
+  }
+
+  // A message-sequence item is a lifecycle child, not a separate agent
+  // process. Its item notification gets a unique `msgseq-*` execution ID,
+  // while the structured agent and its events live under the parent workflow
+  // step terminal (`workflow-step:<parent execution>:<step id>`). Treat that
+  // published parent terminal as the item's concrete terminal. Without this
+  // bridge, the rail creates an empty synthetic row which can only display the
+  // misleading “Waiting for terminal” screen even as the item is making tool
+  // calls.
+  const parentExecutionID = (node.parent_execution_id || '').trim()
+  if (!parentExecutionID) return false
+  const parentTerminalPrefix = `workflow-step:${parentExecutionID}:`
+  return [terminal.execution_id, terminal.owner_id, terminal.terminal_id]
+    .filter((value): value is string => Boolean(value))
+    .some(value => value === parentExecutionID || value.includes(parentTerminalPrefix))
 }
 
 function runningTerminalState(node: SessionExecutionTreeNode): TerminalSnapshot['state'] {

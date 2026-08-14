@@ -164,7 +164,7 @@ func BuildLearningsContributionTurnWithTargetAndBrowser(stepID, stepDescription,
 	b.WriteString("'` and `ls '")
 	b.WriteString(referencesPath)
 	b.WriteString("'` to see which topics already exist before writing. Use the exact target paths; never write under `runs/`.\n")
-	b.WriteString("2. **Patch surgically, never rewrite.** Use `diff_patch_workspace_file` for every write, including creating a new `")
+	b.WriteString("2. **Preserve existing content.** Use `execute_shell_command` carefully for every write, including creating a new `")
 	b.WriteString(filepath.Join(referencesPath, "<topic>.md"))
 	b.WriteString("` file. **Do not use shell redirection, heredocs, tee, Python, or built-in file-edit tools to create or edit learning files.** **Never rewrite SKILL.md wholesale** — you'd destroy other steps' contributions.\n")
 	b.WriteString("3. **SKILL.md is only the index (~80-100 lines max):** frontmatter, a brief scope note, links to topic files. Every detail from this run — selectors, auth flows, API quirks, timing, retry patterns, format notes — goes in `")
@@ -193,7 +193,7 @@ func BuildLearningsContributionTurnWithTargetAndBrowser(stepID, stepDescription,
 	b.WriteString("- This is your final learnings turn for this step — there is no second pass.\n")
 	b.WriteString("- If there's genuinely nothing new worth capturing (e.g. the step was trivial and the existing SKILL.md already covers it), do NOT force an edit. Reply briefly that no learning changes were needed and why — a `CONCERNS:` line still applies on a no-op turn.\n")
 	b.WriteString("- If you did update files, end with exactly one summary line: `Learnings updated: files changed: <comma-separated file list>`.\n")
-	b.WriteString("- Available tools: `execute_shell_command` for read-only inspection (`cat`, `ls`, `find`) and `diff_patch_workspace_file` for all writes under `")
+	b.WriteString("- Available tools: `execute_shell_command` for inspection and permitted writes under `")
 	b.WriteString(targetPath)
 	b.WriteString("/`, including new files.\n")
 

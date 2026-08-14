@@ -4,12 +4,76 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	internalevents "github.com/manishiitg/coding-agent-loop/agent_go/internal/events"
 	mcpagent "github.com/manishiitg/mcpagent/agent"
 	"github.com/manishiitg/mcpagent/llm"
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 )
+
+func TestSteeredCompletionKeepsQueryTreeOpenForRetry(t *testing.T) {
+	store := internalevents.NewEventStore(10)
+	defer store.Stop()
+
+	const sessionID = "scheduled-retry-session"
+	const rootID = "scheduled-message-root"
+	runningAgent := testCodingAgent(llm.ProviderCodexCLI, "codex-cli")
+	api := lifecycleTestAPI()
+	api.eventStore = store
+	api.runningAgents = map[string]*mcpagent.Agent{sessionID: runningAgent}
+	api.agentCancelFuncs = map[string]context.CancelFunc{sessionID: func() {}}
+	api.internalUserMessageDeliveryHandler = func(_ context.Context, _ *mcpagent.Agent, _ mcpagent.UserMessageDeliveryRequest) (mcpagent.UserMessageDeliveryResult, error) {
+		return mcpagent.UserMessageDeliveryResult{
+			Provider:       llm.ProviderCodexCLI,
+			DeliveryStatus: mcpagent.UserMessageDeliveryStatusSentToCLI,
+			Transport:      llm.CodingAgentTransportTmux,
+		}, nil
+	}
+
+	now := time.Now().UTC()
+	rootDone := now.Add(time.Second)
+	api.trackedWorkflowExecutions[rootID] = &TrackedWorkflowExecution{
+		ExecutionID: rootID, SessionID: sessionID, Source: trackedExecutionSourceConversationTurn,
+		Status: trackedExecutionStatusCompleted, StartedAt: now, CompletedAt: &rootDone,
+	}
+	childDone := now.Add(2 * time.Second)
+	bg := &BackgroundAgent{
+		ID: "workflow-attempt-1", ParentExecutionID: rootID, Name: "full workflow",
+		SessionID: sessionID, Status: BGAgentFailed, Error: "first attempt failed",
+		CreatedAt: now, CompletedAt: &childDone,
+	}
+	api.bgAgentRegistry.Register(sessionID, bg)
+
+	if !api.steerBackgroundAgentCompletion(sessionID, bg.ID) {
+		t.Fatal("steered completion was not delivered")
+	}
+
+	continuationID := api.currentConversationTurnExecutionID(sessionID)
+	if continuationID == "" || continuationID == rootID {
+		t.Fatalf("continuation id = %q, want a new running synthetic turn", continuationID)
+	}
+	if got := trackedExecutionParentID(api.trackedWorkflowExecutions[continuationID]); got != rootID {
+		t.Fatalf("continuation parent = %q, want %q", got, rootID)
+	}
+
+	api.trackedWorkflowExecutions["workflow-retry"] = &TrackedWorkflowExecution{
+		ExecutionID: "workflow-retry", SessionID: sessionID, Status: trackedExecutionStatusRunning,
+		StartedAt: time.Now().UTC(), Metadata: map[string]string{"parent_execution_id": rootID},
+	}
+	if state := api.conversationTurnTreeSnapshot(rootID); state.terminal() || state.RunningChildren != 2 {
+		t.Fatalf("root advanced while continuation and retry were running: %+v", state)
+	}
+
+	api.completeTrackedExecution(continuationID, trackedExecutionStatusCompleted, "", nil)
+	if state := api.conversationTurnTreeSnapshot(rootID); state.terminal() || state.RunningChildren != 1 {
+		t.Fatalf("root advanced before retry completed: %+v", state)
+	}
+	api.completeTrackedExecution("workflow-retry", trackedExecutionStatusCompleted, "", nil)
+	if state := api.conversationTurnTreeSnapshot(rootID); !state.terminal() {
+		t.Fatalf("root did not finish after retry completed: %+v", state)
+	}
+}
 
 // TestSteerBackgroundAgentCompletionFallsBackForFailedLiveDelivery verifies
 // that an unconfirmed tmux send is not hidden in the agent steer queue. The

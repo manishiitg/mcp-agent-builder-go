@@ -12,6 +12,7 @@ import (
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/agentsession"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/enginedetect"
+	mcpagent "github.com/manishiitg/mcpagent/agent"
 )
 
 // POST /api/child/message — run one turn of Child Mode tutoring through the
@@ -80,7 +81,7 @@ func runChildTurn(ctx context.Context, s familyState, activityDir string, messag
 	// discovers its project config and drops its own session-scoped files
 	// (Cursor's .cursor/hooks.json + hooks/mlp-deny-builtin.sh, a git marker,
 	// etc.). Scoped to THIS activity's own folder, not the shared workspace
-	// root: every custom tool (execute_shell_command, diff_patch_workspace_file,
+	// root: every custom tool (execute_shell_command,
 	// open_file, read_image) resolves its paths independently via
 	// resolveWorkspacePath/workspaceRoot() regardless of this value, so
 	// nothing about what the child can read/write changes — but the
@@ -121,9 +122,6 @@ func runChildTurn(ctx context.Context, s familyState, activityDir string, messag
 	// on the right, mirroring the parent flow (chat.go).
 	var evMu sync.Mutex
 	var events []toolEvent
-	// TEMPORARY: records every tool call this turn — see tool_call_debug.go.
-	var debugMu sync.Mutex
-	var debugCalls []debugToolCall
 	// Recorder for show_scene — at most one scene per turn is shown (the
 	// latest call wins if the model calls it more than once).
 	var sceneMu sync.Mutex
@@ -214,6 +212,7 @@ func runChildTurn(ctx context.Context, s familyState, activityDir string, messag
 	// Created BEFORE the mutex so trace.locked() below can see how long this
 	// turn actually waited behind another one — see turntrace.go's own comment.
 	trace := newTurnTrace("child", s.Engine)
+	toolCalls := newToolCallCollector("child:"+activityDir, trace)
 	// Serialize on the shared agent-turn lock (parent + child share global MCP env).
 	agentTurnMu.Lock()
 	defer agentTurnMu.Unlock()
@@ -259,8 +258,10 @@ func runChildTurn(ctx context.Context, s familyState, activityDir string, messag
 			trace.delta()
 			statusHubs.publishDelta("child:"+activityDir, text)
 		},
-		Tools: withToolCallDebug(&debugMu, &debugCalls, "child:"+activityDir, trace, withLiveStatus("child:"+activityDir, []agentsession.Tool{
-			childShellTool(), childOpenFile, celebrate, notifyTool(), childDiffPatchWorkspaceFileTool(), childReadImageTool(s.Engine),
+		Observers:                 []mcpagent.AgentEventListener{toolCalls},
+		DirectToolExecutionEvents: true,
+		Tools: []agentsession.Tool{
+			childShellTool(), childOpenFile, celebrate, notifyTool(), childReadImageTool(s.Engine),
 			// Illustrations mid-lesson. The requested dir is IGNORED: whatever the
 			// tutor passes, a picture can only ever land in this activity's own
 			// folder, matching the child sandbox everywhere else.
@@ -272,7 +273,7 @@ func runChildTurn(ctx context.Context, s familyState, activityDir string, messag
 				scene = html
 				sceneMu.Unlock()
 			}),
-		})),
+		},
 	})
 	if err != nil {
 		trace.finish("", err)
@@ -303,18 +304,12 @@ func runChildTurn(ctx context.Context, s familyState, activityDir string, messag
 		// Persist the turn even on failure — see chat.go's parent handler for why.
 		msg := friendlyTurnError(err)
 		persistConversationReply("child", activityDir, messages, msg)
-		debugMu.Lock()
-		debugOut := append([]debugToolCall(nil), debugCalls...)
-		debugMu.Unlock()
-		return parentMessageResponse{Error: msg, DebugCalls: debugOut}
+		return parentMessageResponse{Error: msg, ToolCalls: toolCalls.Snapshot()}
 	}
 	saveSessionHandle("child", activityDir, sess.Handle())
 	evMu.Lock()
 	evs := events
 	evMu.Unlock()
-	debugMu.Lock()
-	debugOut := append([]debugToolCall(nil), debugCalls...)
-	debugMu.Unlock()
 	sceneMu.Lock()
 	sceneOut := scene
 	sceneMu.Unlock()
@@ -339,7 +334,7 @@ func runChildTurn(ctx context.Context, s familyState, activityDir string, messag
 	// elapsed time (see its own comment).
 	recordActivityLogEntry(activityDir, trace.duration())
 
-	return parentMessageResponse{Reply: reply, ToolEvents: evs, DebugCalls: debugOut, Scene: sceneOut}
+	return parentMessageResponse{Reply: reply, ToolEvents: evs, ToolCalls: toolCalls.Snapshot(), Scene: sceneOut}
 }
 
 func findCelebrateEvent(evs []toolEvent) *toolEvent {

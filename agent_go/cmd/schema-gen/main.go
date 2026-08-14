@@ -80,13 +80,12 @@ type EventDataUnion struct {
 	LLMGenerationWithRetry *events.LLMGenerationWithRetryEvent `json:"llm_generation_with_retry,omitempty"`
 
 	// Tool Events
-	ToolCallStart          *events.ToolCallStartEvent          `json:"tool_call_start,omitempty"`
-	ToolCallEnd            *events.ToolCallEndEvent            `json:"tool_call_end,omitempty"`
-	ToolCallError          *events.ToolCallErrorEvent          `json:"tool_call_error,omitempty"`
-	ToolExecution          *events.ToolExecutionEvent          `json:"tool_execution,omitempty"`
-	ToolOutput             *events.ToolOutputEvent             `json:"tool_output,omitempty"`
-	ToolResponse           *events.ToolResponseEvent           `json:"tool_response,omitempty"`
-	WorkspaceFileOperation *events.WorkspaceFileOperationEvent `json:"workspace_file_operation,omitempty"`
+	ToolCallStart *events.ToolCallStartEvent `json:"tool_call_start,omitempty"`
+	ToolCallEnd   *events.ToolCallEndEvent   `json:"tool_call_end,omitempty"`
+	ToolCallError *events.ToolCallErrorEvent `json:"tool_call_error,omitempty"`
+	ToolExecution *events.ToolExecutionEvent `json:"tool_execution,omitempty"`
+	ToolOutput    *events.ToolOutputEvent    `json:"tool_output,omitempty"`
+	ToolResponse  *events.ToolResponseEvent  `json:"tool_response,omitempty"`
 
 	// MCP Server Events
 	MCPServerConnection *events.MCPServerConnectionEvent `json:"mcp_server_connection,omitempty"`
@@ -235,13 +234,12 @@ var EventRegistry = map[events.EventType]string{
 	events.LLMGenerationWithRetry: "llm_generation_with_retry",
 
 	// Tool Events
-	events.ToolCallStart:          "tool_call_start",
-	events.ToolCallEnd:            "tool_call_end",
-	events.ToolCallError:          "tool_call_error",
-	events.ToolExecution:          "tool_execution",
-	events.ToolOutput:             "tool_output",
-	events.ToolResponse:           "tool_response",
-	events.WorkspaceFileOperation: "workspace_file_operation",
+	events.ToolCallStart: "tool_call_start",
+	events.ToolCallEnd:   "tool_call_end",
+	events.ToolCallError: "tool_call_error",
+	events.ToolExecution: "tool_execution",
+	events.ToolOutput:    "tool_output",
+	events.ToolResponse:  "tool_response",
 
 	// MCP Server Events
 	events.MCPServerConnection: "mcp_server_connection",
@@ -607,9 +605,6 @@ type UnifiedEvent struct {
 	TodoStepsExtractedEvent       todo_creation_human.TodoStepsExtractedEvent       `json:"todo_steps_extracted"`
 	VariablesExtractedEvent       todo_creation_human.VariablesExtractedEvent       `json:"variables_extracted"`
 	IndependentStepsSelectedEvent todo_creation_human.IndependentStepsSelectedEvent `json:"independent_steps_selected"`
-
-	// Workspace Events
-	WorkspaceFileOperationEvent events.WorkspaceFileOperationEvent `json:"workspace_file_operation"`
 
 	// Large Output Error Events
 	LargeToolOutputFileWriteErrorEvent    events.LargeToolOutputFileWriteErrorEvent    `json:"large_tool_output_file_write_error"`

@@ -111,6 +111,11 @@ type Config struct {
 	// streaming option. Nil is a no-op: the turn behaves exactly as before,
 	// with the reply available only once Ask returns.
 	StreamCallback func(text string)
+	// Observers receive mcpagent's normalized events. In particular, callers
+	// can opt into DirectToolExecutionEvents to receive the bridge-side receipt
+	// for every tool that really ran, including its arguments and result/error.
+	Observers                 []mcpagent.AgentEventListener
+	DirectToolExecutionEvents bool
 	// Transport, when set, overrides the provider contract's declared process
 	// transport for this one session — llm.CodingAgentTransportStructured runs
 	// the CLI's one-shot JSON mode (no tmux pane, no live steering — Deliver
@@ -275,12 +280,16 @@ func New(ctx context.Context, cfg Config) (*Session, error) {
 
 	runtime := mcpagent.RuntimeConfig{
 		Model: model, MCPConfigPath: b.mcpConfigPath, ResumeHandle: cfg.SessionHandle,
-		Generation:    generation,
-		Tools:         mcpagent.ToolRuntimeConfig{CodeExecution: true},
-		Coding:        mcpagent.CodingRuntimeConfig{Transport: cfg.Transport, BridgeRoutingInstructionsOverride: cfg.BridgeRoutingInstructions},
-		MCP:           mcpagent.MCPRuntimeConfig{SessionID: sessionID},
-		Workspace:     mcpagent.WorkspaceRuntimeConfig{CodingAgentWorkingDir: cfg.WorkingDir},
-		Observability: mcpagent.ObservabilityRuntimeConfig{Logger: logger},
+		Generation: generation,
+		Tools:      mcpagent.ToolRuntimeConfig{CodeExecution: true},
+		Coding:     mcpagent.CodingRuntimeConfig{Transport: cfg.Transport, BridgeRoutingInstructionsOverride: cfg.BridgeRoutingInstructions},
+		MCP:        mcpagent.MCPRuntimeConfig{SessionID: sessionID},
+		Workspace:  mcpagent.WorkspaceRuntimeConfig{CodingAgentWorkingDir: cfg.WorkingDir},
+		Observability: mcpagent.ObservabilityRuntimeConfig{
+			Logger:                    logger,
+			Observers:                 cfg.Observers,
+			DirectToolExecutionEvents: cfg.DirectToolExecutionEvents,
+		},
 	}
 	if effort := strings.TrimSpace(cfg.ReasoningEffort); effort != "" {
 		// Set the primary model's reasoning/thinking effort. GetLLMModelConfig

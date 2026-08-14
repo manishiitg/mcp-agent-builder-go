@@ -88,6 +88,27 @@ func TestRunningWorkflowListCarriesTheCollapsedDisplayStatus(t *testing.T) {
 	}
 }
 
+func TestWorkspaceRunningWorkflowUsesSameLifecycleProjectionAsGlobalMonitor(t *testing.T) {
+	startedAt := time.Now().UTC()
+	api := &StreamingAPI{trackedWorkflowExecutions: map[string]*TrackedWorkflowExecution{
+		"exec-workspace": {
+			ExecutionID: "exec-workspace", SessionID: "session-workspace", Source: trackedExecutionSourceConversationTurn,
+			Kind: "workflow_builder_task", WorkspacePath: "Workflow/rts-video",
+			Status: trackedExecutionStatusRunning, UserID: "user-1", StartedAt: startedAt,
+		},
+	}}
+	api.setSessionBusy("session-workspace", true)
+
+	global := api.listRunningWorkflowExecutions("user-1")
+	workspace := api.listRunningWorkflowExecutionsForWorkspace("Workflow/rts-video")
+	if len(global) != 1 || len(workspace) != 1 {
+		t.Fatalf("global=%d workspace=%d, want one lifecycle projection in both", len(global), len(workspace))
+	}
+	if workspace[0].RuntimeState == nil || workspace[0].DisplayStatus != global[0].DisplayStatus {
+		t.Fatalf("workspace lifecycle %+v does not match Global Monitor %+v", workspace[0], global[0])
+	}
+}
+
 func TestRunningWorkflowListKeepsInternalWorkflowStepsOut(t *testing.T) {
 	api := &StreamingAPI{
 		trackedWorkflowExecutions: map[string]*TrackedWorkflowExecution{

@@ -333,12 +333,18 @@ export async function findOrCreateWorkflowTab(params: {
 // 1f. createUserMessageEvent — typed factory replacing `as any` cast
 // ---------------------------------------------------------------------------
 
-export function createUserMessageEvent(content: string, eventIndex?: number, timestamp?: string): PollingEvent {
+export function createUserMessageEvent(
+  content: string,
+  eventIndex?: number,
+  timestamp?: string,
+  sessionId?: string,
+): PollingEvent {
   const eventTimestamp = timestamp ?? new Date().toISOString()
   return {
     id: `user-message-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
     type: 'user_message',
     timestamp: eventTimestamp,
+    ...(sessionId ? { session_id: sessionId } : {}),
     ...(typeof eventIndex === 'number' ? { event_index: eventIndex } : {}),
     data: {
       type: 'user_message',

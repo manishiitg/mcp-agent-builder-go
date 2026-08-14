@@ -116,11 +116,6 @@ profile:
       # network and no env of its own), so it is not redundant with the CLI's
       # native shell.
       - execute_shell_command
-      # The only structured file edit available under agent_tools: mcp_only,
-      # where the CLI's own Read/Write are denied. Excluded under hybrid, since
-      # every supported CLI ships an editor and the bridge carries only what
-      # they cannot do — remove this again if the mode changes back.
-      - diff_patch_workspace_file
       # Managed browser capability, matching the agent-browser skill above.
       - agent_browser
       # Project and user secret CRUD. ui.secrets is required for this product.
@@ -154,14 +149,10 @@ profile:
     # developer machine" and says "must never be silently selected for hosted
     # or multi-user deployments". Under mcp_only every write is guarded.
     #
-    # This mode is why diff_patch_workspace_file is in the allow list above.
-    # The bridge's rule is that it carries what the CLI cannot do natively —
-    # under hybrid that excludes a file editor, because every supported CLI
-    # ships one, but under mcp_only those are denied and the bridge is the only
-    # way to edit a file at all. Without it the agent is left rewriting files
-    # with shell heredocs. Flipping this mode back to hybrid should remove that
-    # tool again; see TestProductToolGateGovernsTheCodingAgentBridgeCatalog,
-    # which pins both directions.
+    # Note: there is no bridge file-editor to fall back on. AgentWorks removed
+    # diff_patch_workspace_file entirely (no executor remains in agent_go, the
+    # workspace module, or mcpagent), so under mcp_only the agent edits files
+    # through execute_shell_command. Revisit if a guarded editor returns.
     #
     # An earlier round of "mcp_only is broken" symptoms (native commands
     # running unblocked, "product shell not connected") turned out not to be
@@ -190,8 +181,6 @@ profile:
           - "Uploaded references live in `uploads/` and are read-only — never modify them."
           - "Direct-chat work belongs in `work/`; finished exports belong in `outputs/`."
           - "Workflow steps write inside their own run folder, not at the project root."
-        diff_patch_workspace_file:
-          - "Patch files in `work/` (direct chat) or the step's own run folder (workflow). `uploads/` is read-only — copy a reference into `work/` before changing it."
     provider_options:
       - id: claude-code
         label: Claude Code

@@ -14,7 +14,6 @@ export const WORKSPACE_ADVANCED_TOOLS = [
   'text_to_speech',
   'speech_to_text',
   'generate_music',
-  'diff_patch_workspace_file',
 ] as const;
 
 // workspace_browser: 1 browser automation tool

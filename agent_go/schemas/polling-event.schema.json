@@ -2144,9 +2144,6 @@
         "tool_response": {
           "$ref": "#/$defs/ToolResponseEvent"
         },
-        "workspace_file_operation": {
-          "$ref": "#/$defs/WorkspaceFileOperationEvent"
-        },
         "mcp_server_connection": {
           "$ref": "#/$defs/MCPServerConnectionEvent"
         },
@@ -2481,8 +2478,7 @@
         "tool_response",
         "unified_completion",
         "user_message",
-        "variables_extracted",
-        "workspace_file_operation"
+        "variables_extracted"
       ]
     },
     "FallbackAttemptEvent": {
@@ -6451,64 +6447,6 @@
         },
         "run_folder": {
           "type": "string"
-        }
-      },
-      "additionalProperties": false,
-      "type": "object"
-    },
-    "WorkspaceFileOperationEvent": {
-      "properties": {
-        "timestamp": {
-          "type": "string",
-          "format": "date-time"
-        },
-        "trace_id": {
-          "type": "string"
-        },
-        "span_id": {
-          "type": "string"
-        },
-        "event_id": {
-          "type": "string"
-        },
-        "parent_id": {
-          "type": "string"
-        },
-        "is_end_event": {
-          "type": "boolean"
-        },
-        "correlation_id": {
-          "type": "string"
-        },
-        "hierarchy_level": {
-          "type": "integer"
-        },
-        "session_id": {
-          "type": "string"
-        },
-        "component": {
-          "type": "string"
-        },
-        "metadata": {
-          "type": "object"
-        },
-        "operation": {
-          "type": "string"
-        },
-        "filepath": {
-          "type": "string"
-        },
-        "folder": {
-          "type": "string"
-        },
-        "turn": {
-          "type": "integer"
-        },
-        "server_name": {
-          "type": "string"
-        },
-        "should_highlight": {
-          "type": "boolean"
         }
       },
       "additionalProperties": false,

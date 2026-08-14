@@ -32,6 +32,7 @@ var codingAgentChatE2EFlags struct {
 	timeout             time.Duration
 	skipLiveSteer       bool
 	skipCompletionProbe bool
+	retainedWindowOnly  bool
 	runTmuxLossResume   bool
 	vertexFinalJudge    bool
 	vertexJudgeModel    string
@@ -45,7 +46,7 @@ var codingAgentChatE2ECmd = &cobra.Command{
 This intentionally does not call the provider adapter directly. It exercises:
 1. /api/query turn startup
 2. persisted session runtime capture
-3. a second /api/query turn using the same chat session
+3. a retained-window /api/query turn after the first turn has fully completed
 4. optional /api/sessions/{session_id}/steer live input while a coding CLI is running
 5. /api/sessions/{session_id}/events polling and unified completion extraction
 6. terminal-backed completion detection after a real MCP bridge tool call
@@ -62,7 +63,7 @@ Example:
   mcp-agent test coding-agent-chat-e2e \
     --server-url http://localhost:18743 \
     --provider cursor-cli \
-    --model cursor-cli \
+    --model auto \
     --selected-folder _users/default/Chats
 
   mcp-agent test coding-agent-chat-e2e \
@@ -124,11 +125,14 @@ Example:
 		}
 		fmt.Println("PASS turn 1: note canary acknowledged")
 
-		secondQuery := "What exact token did I ask you to take note of in the previous turn? Do not use tools. Reply with exactly that token and nothing else."
-		if err := client.runAndAssertContains(ctx, sessionID, provider, model, secondQuery, []string{noteToken}); err != nil {
-			return fmt.Errorf("turn 2 native multi-turn recall failed: %w", err)
+		if err := client.runRetainedWindowP0(ctx, sessionID, provider, model, noteToken); err != nil {
+			return fmt.Errorf("IC-11 retained-window P0 failed: %w", err)
 		}
-		fmt.Println("PASS turn 2: same chat session retained native coding-agent context")
+		fmt.Println("PASS IC-11: retained session delivered one tool receipt and one final response without reconstruction")
+		if codingAgentChatE2EFlags.retainedWindowOnly {
+			fmt.Println("PASS coding agent retained-window P0")
+			return nil
+		}
 
 		if codingAgentChatE2EFlags.runTmuxLossResume {
 			if !providerSupportsTmuxLossResumeE2E(provider) {
@@ -263,6 +267,7 @@ func init() {
 	codingAgentChatE2ECmd.Flags().DurationVar(&codingAgentChatE2EFlags.timeout, "timeout", 6*time.Minute, "overall test timeout")
 	codingAgentChatE2ECmd.Flags().BoolVar(&codingAgentChatE2EFlags.skipLiveSteer, "skip-live-steer", false, "skip the in-flight /steer regression test")
 	codingAgentChatE2ECmd.Flags().BoolVar(&codingAgentChatE2EFlags.skipCompletionProbe, "skip-completion-probe", false, "skip the tool-backed completion detection regression test")
+	codingAgentChatE2ECmd.Flags().BoolVar(&codingAgentChatE2EFlags.retainedWindowOnly, "retained-window-p0-only", false, "run only the two-turn IC-11 retained-session P0 contract")
 	codingAgentChatE2ECmd.Flags().BoolVar(&codingAgentChatE2EFlags.runTmuxLossResume, "run-tmux-loss-resume", false, "kill the latest tmux pane after turn 2 and require provider-native continuation recovery; certified for claude-code, codex-cli, and agy-cli")
 	codingAgentChatE2ECmd.Flags().BoolVar(&codingAgentChatE2EFlags.vertexFinalJudge, "vertex-final-judge", false, "use a Gemini/Vertex LLM judge to validate each extracted unified_completion final answer")
 	codingAgentChatE2ECmd.Flags().StringVar(&codingAgentChatE2EFlags.vertexJudgeModel, "vertex-final-judge-model", "", "Gemini/Vertex model for --vertex-final-judge; defaults to VERTEX_FINAL_EXTRACTION_JUDGE_MODEL or gemini-3.1-pro-preview")
@@ -308,11 +313,11 @@ func defaultCodingAgentE2EModel(provider string) string {
 	case "codex-cli":
 		return "gpt-5.3-codex-spark"
 	case "cursor-cli":
-		return "cursor-cli"
+		return "auto"
 	case "agy-cli":
 		return "agy-cli"
 	case "claude-code":
-		return "claude-code"
+		return "claude-sonnet-5"
 	case "pi-cli":
 		return "google/gemini-3.5-flash"
 	default:
@@ -359,6 +364,25 @@ func (c *codingAgentChatE2EClient) runAndAssertFinal(ctx context.Context, sessio
 }
 
 func (c *codingAgentChatE2EClient) startQuery(ctx context.Context, sessionID, provider, model, query string) (string, error) {
+	resp, _, err := c.startQueryWithResponse(ctx, sessionID, provider, model, query)
+	if err != nil {
+		return "", err
+	}
+	return resp.QueryID, nil
+}
+
+type codingAgentQueryResponse struct {
+	QueryID           string `json:"query_id"`
+	SessionID         string `json:"session_id"`
+	Status            string `json:"status"`
+	Message           string `json:"message"`
+	DeliveryStatus    string `json:"delivery_status"`
+	Provider          string `json:"provider"`
+	DeliveryTransport string `json:"delivery_transport"`
+	DeliverySource    string `json:"delivery_source"`
+}
+
+func (c *codingAgentChatE2EClient) startQueryWithResponse(ctx context.Context, sessionID, provider, model, query string) (codingAgentQueryResponse, time.Duration, error) {
 	payload := map[string]interface{}{
 		"query":    query,
 		"provider": provider,
@@ -387,22 +411,167 @@ func (c *codingAgentChatE2EClient) startQuery(ctx context.Context, sessionID, pr
 		}
 	}
 
-	var resp struct {
-		QueryID   string `json:"query_id"`
-		SessionID string `json:"session_id"`
-		Status    string `json:"status"`
-		Message   string `json:"message"`
-	}
+	var resp codingAgentQueryResponse
+	startedAt := time.Now()
 	if err := c.doJSON(ctx, http.MethodPost, "/api/query", sessionID, payload, &resp); err != nil {
-		return "", err
+		return resp, time.Since(startedAt), err
 	}
-	if resp.Status != "started" && resp.Status != "workflow_started" {
-		return "", fmt.Errorf("unexpected query status %q message=%q", resp.Status, resp.Message)
+	deliveryLatency := time.Since(startedAt)
+	if resp.Status != "started" && resp.Status != "workflow_started" && resp.Status != "live_input_delivered" {
+		return resp, deliveryLatency, fmt.Errorf("unexpected query status %q message=%q", resp.Status, resp.Message)
 	}
 	if resp.QueryID == "" {
-		return "", fmt.Errorf("server returned empty query_id")
+		return resp, deliveryLatency, fmt.Errorf("server returned empty query_id")
 	}
-	return resp.QueryID, nil
+	return resp, deliveryLatency, nil
+}
+
+const retainedWindowP0DeliveryLimit = time.Second
+
+// runRetainedWindowP0 is the IC-11 cross-repository contract. It deliberately
+// reaches the retained window by letting the preceding real CLI turn finish;
+// it never deletes a registration or injects a completion event to manufacture
+// the state under test.
+func (c *codingAgentChatE2EClient) runRetainedWindowP0(ctx context.Context, sessionID, provider, model, rememberedToken string) error {
+	before, raw, err := c.getEvents(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("read completed first-turn state: %w", err)
+	}
+	if before.SessionStatus != "completed" {
+		return fmt.Errorf("first turn has not reached the retained window: status=%q raw=%s", before.SessionStatus, truncateE2E(raw, 1200))
+	}
+	if before.CanSteer {
+		return fmt.Errorf("first turn still reports an in-flight steer target; retained-window proof requires the foreground turn to be gone")
+	}
+	if err := c.assertRetainedTmuxLive(ctx, sessionID); err != nil {
+		return fmt.Errorf("provider process was not retained after turn 1: %w", err)
+	}
+
+	since := before.LastProcessedIndex
+	toolToken := "RETAINED_TOOL_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	query := fmt.Sprintf("Use execute_shell_command exactly once to run `printf %s`. After the tool returns, reply with exactly %s and nothing else.", toolToken, rememberedToken)
+	ack, deliveryLatency, err := c.startQueryWithResponse(ctx, sessionID, provider, model, query)
+	if err != nil {
+		return fmt.Errorf("submit retained follow-up: %w", err)
+	}
+	if ack.Status != "live_input_delivered" || ack.DeliveryStatus != "sent_to_cli" {
+		return fmt.Errorf("follow-up did not use retained delivery: status=%q delivery_status=%q", ack.Status, ack.DeliveryStatus)
+	}
+	if ack.DeliverySource != "mcpagent_session" {
+		return fmt.Errorf("follow-up bypassed the durable mcpagent Session: delivery_source=%q", ack.DeliverySource)
+	}
+	if ack.DeliveryTransport != "tmux" {
+		return fmt.Errorf("retained acknowledgement reported transport %q, want tmux", ack.DeliveryTransport)
+	}
+	if !strings.EqualFold(strings.TrimSpace(ack.Provider), strings.TrimSpace(provider)) {
+		return fmt.Errorf("retained acknowledgement provider=%q, want %q", ack.Provider, provider)
+	}
+	if deliveryLatency > retainedWindowP0DeliveryLimit {
+		return fmt.Errorf("retained delivery took %s, exceeding the %s PLAT-102 P0 envelope", deliveryLatency.Round(time.Millisecond), retainedWindowP0DeliveryLimit)
+	}
+
+	final, completionRaw, events, err := c.waitForCompletion(ctx, sessionID, since)
+	if err != nil {
+		return fmt.Errorf("retained follow-up did not complete: %w", err)
+	}
+	if strings.TrimSpace(final) != rememberedToken {
+		return fmt.Errorf("retained final response=%q, want exactly %q; raw=%s", final, rememberedToken, truncateE2E(completionRaw, 1500))
+	}
+	if err := assertOneRetainedCompletion(events, rememberedToken); err != nil {
+		return err
+	}
+	if err := assertOneRetainedToolReceipt(events, "execute_shell_command", toolToken); err != nil {
+		return err
+	}
+	for _, event := range events {
+		if strings.EqualFold(strings.TrimSpace(fmt.Sprint(event["type"])), "agent_start") {
+			return fmt.Errorf("retained follow-up emitted agent_start, proving the host reconstructed an Agent")
+		}
+	}
+	if err := c.assertRetainedTmuxLive(ctx, sessionID); err != nil {
+		return fmt.Errorf("provider process was not reusable after retained turn: %w", err)
+	}
+	return nil
+}
+
+func assertOneRetainedCompletion(events []map[string]interface{}, expectedFinal string) error {
+	count := 0
+	for _, event := range events {
+		if fmt.Sprint(event["type"]) != "unified_completion" {
+			continue
+		}
+		final := strings.TrimSpace(eventPayloadString(event, "final_result"))
+		if final == "" {
+			return fmt.Errorf("retained turn emitted an empty unified_completion.final_result")
+		}
+		if final != expectedFinal {
+			return fmt.Errorf("retained unified_completion.final_result=%q, want %q", final, expectedFinal)
+		}
+		count++
+	}
+	if count != 1 {
+		return fmt.Errorf("retained turn emitted %d unified completions, want exactly 1", count)
+	}
+	return nil
+}
+
+func assertOneRetainedToolReceipt(events []map[string]interface{}, toolName, token string) error {
+	starts := make([]map[string]interface{}, 0, 1)
+	ends := make([]map[string]interface{}, 0, 1)
+	for _, event := range events {
+		if eventPayloadString(event, "tool_name") != toolName {
+			continue
+		}
+		switch fmt.Sprint(event["type"]) {
+		case "tool_call_start":
+			starts = append(starts, event)
+		case "tool_call_end":
+			ends = append(ends, event)
+		case "tool_call_error":
+			return fmt.Errorf("retained %s call failed: %s", toolName, eventPayloadString(event, "error"))
+		}
+	}
+	if len(starts) != 1 || len(ends) != 1 {
+		return fmt.Errorf("retained %s receipts start=%d end=%d, want exactly one of each", toolName, len(starts), len(ends))
+	}
+	startID := eventPayloadString(starts[0], "tool_call_id")
+	endID := eventPayloadString(ends[0], "tool_call_id")
+	if startID == "" || startID != endID {
+		return fmt.Errorf("retained %s receipt IDs do not pair: start=%q end=%q", toolName, startID, endID)
+	}
+	params := eventPayloadMap(starts[0], "tool_params")
+	arguments := strings.TrimSpace(fmt.Sprint(params["arguments"]))
+	if !strings.Contains(arguments, token) {
+		return fmt.Errorf("retained %s arguments do not contain probe token; args=%q", toolName, arguments)
+	}
+	result := eventPayloadString(ends[0], "result")
+	if !strings.Contains(result, token) {
+		return fmt.Errorf("retained %s result does not contain probe token; result=%q", toolName, result)
+	}
+	if _, ok := eventPayloadNumber(ends[0], "duration"); !ok {
+		return fmt.Errorf("retained %s result has no numeric duration", toolName)
+	}
+	return nil
+}
+
+func (c *codingAgentChatE2EClient) assertRetainedTmuxLive(ctx context.Context, sessionID string) error {
+	resp, raw, err := c.getTerminals(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	for _, terminal := range resp.Terminals {
+		if strings.TrimSpace(terminal.TmuxSession) == "" {
+			continue
+		}
+		// The backend owns an isolated TMUX_TMPDIR, so invoking tmux from this
+		// test process addresses a different socket. These fields are computed by
+		// the backend that owns the real socket and are the authoritative
+		// cross-process liveness signal.
+		if strings.EqualFold(terminal.ProcessState, "live") && strings.EqualFold(terminal.SnapshotKind, "live") {
+			return nil
+		}
+	}
+	return fmt.Errorf("no live tmux session found; raw=%s", truncateE2E(raw, 1500))
 }
 
 func (c *codingAgentChatE2EClient) waitUntilCanSteer(ctx context.Context, sessionID string, timeout time.Duration) error {
@@ -498,14 +667,16 @@ type codingAgentTerminalsResponse struct {
 }
 
 type codingAgentTerminalSnapshot struct {
-	TerminalID  string                    `json:"terminal_id"`
-	SessionID   string                    `json:"session_id"`
-	TmuxSession string                    `json:"tmux_session"`
-	Active      bool                      `json:"active"`
-	State       string                    `json:"state"`
-	Content     string                    `json:"content"`
-	Status      codingAgentTerminalStatus `json:"status"`
-	UpdatedAt   time.Time                 `json:"updated_at"`
+	TerminalID   string                    `json:"terminal_id"`
+	SessionID    string                    `json:"session_id"`
+	TmuxSession  string                    `json:"tmux_session"`
+	Active       bool                      `json:"active"`
+	State        string                    `json:"state"`
+	ProcessState string                    `json:"process_state"`
+	SnapshotKind string                    `json:"snapshot_kind"`
+	Content      string                    `json:"content"`
+	Status       codingAgentTerminalStatus `json:"status"`
+	UpdatedAt    time.Time                 `json:"updated_at"`
 }
 
 type codingAgentTerminalStatus struct {
@@ -812,6 +983,28 @@ func eventPayloadMap(event map[string]interface{}, key string) map[string]interf
 		}
 	}
 	return nil
+}
+
+func eventPayloadNumber(event map[string]interface{}, key string) (float64, bool) {
+	if event == nil || key == "" {
+		return 0, false
+	}
+	for _, payload := range eventPayloadCandidates(event) {
+		switch value := payload[key].(type) {
+		case float64:
+			return value, true
+		case float32:
+			return float64(value), true
+		case int:
+			return float64(value), true
+		case int64:
+			return float64(value), true
+		case json.Number:
+			parsed, err := value.Float64()
+			return parsed, err == nil
+		}
+	}
+	return 0, false
 }
 
 func eventPayloadCandidates(event map[string]interface{}) []map[string]interface{} {

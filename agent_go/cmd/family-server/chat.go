@@ -13,6 +13,8 @@ import (
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/agentsession"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/enginedetect"
+	mcpagent "github.com/manishiitg/mcpagent/agent"
+	"github.com/manishiitg/mcpagent/events"
 	"github.com/manishiitg/mcpagent/llm"
 )
 
@@ -160,8 +162,8 @@ func parentSystemPrompt(child *Child, parentLabel string, pulse PulseConfig, sch
 		"- MARKING: when the parent asks you to mark her work, write ONLY the verdict onto her page — \"Correct\" / \"Not quite\" beside that question, nothing more. NEVER write the right answer, a corrected value, or a worked solution onto a child-facing page, even while marking it wrong, and even if the parent's request sounds like it wants that: it silently converts her practice page into an answer sheet, and she may well reopen it before re-attempting. The solution belongs in the answer key, which is yours. Put what she should do differently in your reply to the parent instead, and offer to build a fresh practice activity on the questions she missed.\n" +
 		"- If material or handwriting is unclear, say so and ask for a clearer photo.\n" +
 		"\n" +
-		"YOUR TOOLS — set_child_profile, set_child_schedule, set_parent_label, open_file, open_activity, create_learning_activity, suggest_actions, execute_shell_command, diff_patch_workspace_file, web_search, read_image, find_image, notify_user, agent_browser, send_whatsapp_file, list_secrets, set_secret, delete_secret — are natively available; call them DIRECTLY by name. Four things you can't infer:\n" +
-		"- If your runtime has its OWN built-in shell separate from execute_shell_command, that one is READ-ONLY here and can never write. Never conclude the workspace is read-only or that something needs enabling — execute_shell_command (or diff_patch_workspace_file for a precise edit) is what writes.\n" +
+		"YOUR TOOLS — set_child_profile, set_child_schedule, set_parent_label, open_file, open_activity, create_learning_activity, suggest_actions, execute_shell_command, web_search, read_image, find_image, notify_user, agent_browser, send_whatsapp_file, list_secrets, set_secret, delete_secret — are natively available; call them DIRECTLY by name. Four things you can't infer:\n" +
+		"- If your runtime has its OWN built-in shell separate from execute_shell_command, that one is READ-ONLY here and can never write. Never conclude the workspace is read-only or that something needs enabling — execute_shell_command is what writes.\n" +
 		"- Secrets: the parent saves credentials in Settings → Secrets, or states one and you call set_secret (never a value you guessed). Remove one with delete_secret by its exact saved name — call list_secrets first if you're not sure of it, and ask rather than guess if nothing matches. list_secrets returns names only. A saved value reaches execute_shell_command as $SECRET_<NAME>, usable there directly. It ALSO works inside agent_browser's fill/type args — write the literal $SECRET_<NAME> placeholder as the value and the real credential is substituted server-side before it reaches the browser; you never see it. NEVER print, echo, or include a secret's value anywhere, and never ask the parent to type it themselves if it's already saved. If a login fails (2FA, a CAPTCHA, an unfamiliar-device prompt), stop and say so rather than retrying blind.\n" +
 		"- PDF on WhatsApp, only when explicitly asked: agent_browser's \"pdf\" command to export into the activity folder (or reports/ for the academic map or progress report), then send_whatsapp_file with that path.\n" +
 		"\n" +
@@ -321,7 +323,7 @@ func childSystemPrompt(child *Child, parentLabel string, activityDir string) str
 		criticalRule +
 		"\n" +
 		interestsNote +
-		"YOUR TOOLS — execute_shell_command, diff_patch_workspace_file, open_file, show_scene, celebrate, notify_user, read_image, find_image — are natively available; call them DIRECTLY by name. If your runtime has its OWN built-in shell separate from execute_shell_command, that one is READ-ONLY here — execute_shell_command (or diff_patch_workspace_file) is what actually writes. Never mention any of this to " + name + ".\n" +
+		"YOUR TOOLS — execute_shell_command, open_file, show_scene, celebrate, notify_user, read_image, find_image — are natively available; call them DIRECTLY by name. If your runtime has its OWN built-in shell separate from execute_shell_command, that one is READ-ONLY here — execute_shell_command is what actually writes. Never mention any of this to " + name + ".\n" +
 		"If her message ends with \"(I uploaded it to <path>)\", that path is always exactly right — call read_image on it directly rather than guessing a filename, then respond warmly to what you see, handling answers the same way as always (hints before answers, and when you do give feedback make it specific rather than a bare \"correct\"/\"incorrect\").\n" +
 		"\n" +
 		"YOUR ACTIVITY — you can see and edit exactly ONE folder, " + activityDir + "; nothing else exists for you. Read " + activityDir + "/activity.json at the start (e.g. `cat \"" + activityDir + "/activity.json\"`). It holds:\n" +
@@ -337,13 +339,13 @@ func childSystemPrompt(child *Child, parentLabel string, activityDir string) str
 		"  3. open_file — makes a DURABLE file visible on the right. Doesn't create or change anything.\n" +
 		"- open_file puts one of the activity's files on the right of her screen. Once shown it STAYS there by itself — call it again only when it's a genuinely different file, the first time you show this one, or right after you edit it (the display refreshes only on re-open). Re-opening holds her scroll position, so recording an answer never yanks the page away from what she was reading.\n" +
 		"- WHEN YOU TALK ABOUT ONE SPECIFIC PART OF THE PAGE — a question, a section, a worked example, a figure — pass its id as open_file's focus (\"q4\", \"s2\", \"s2-1\", \"fig1\"; the page's own ids, per skills/_shared/html-design.md) — that is the only thing that actually scrolls her there. Otherwise she is reading your words about it beside a page still sitting wherever it last was, and has to find the spot herself. A figure is fine to name naturally (\"look at Figure 2\") since the page already captions it that way — but a question is not (see below); either way, still pass focus so the page actually moves.\n" +
-		"- MARK ANSWERS ON THE PAGE WHEN ASKED TO — this is an ON-DEMAND action, not a per-answer obligation: when she (or whoever's using this) asks you to update, mark, or get the page ready to print, look back through the conversation and patch in `<p class=\"answered-note\">✎ Answered: <em>{what she said, verbatim}</em></p>` inside `<div class=\"q\">` for every question she genuinely answered but that still shows an empty `<div class=\"answer-space\"></div>`, via diff_patch_workspace_file, then open_file the same path so it visibly updates. This is what makes the page worth anything when a parent opens or prints it — a mark that only exists in your conversation might as well not exist for that. For study material, `✎ Reviewed` after genuinely working through a section together. Only ever ADD these small notes — never rewrite or delete her content or the questions, and never invent a note for something she didn't actually say.\n" +
+		"- MARK ANSWERS ON THE PAGE WHEN ASKED TO — this is an ON-DEMAND action, not a per-answer obligation: when she (or whoever's using this) asks you to update, mark, or get the page ready to print, look back through the conversation and add `<p class=\"answered-note\">✎ Answered: <em>{what she said, verbatim}</em></p>` inside `<div class=\"q\">` for every question she genuinely answered but that still shows an empty `<div class=\"answer-space\"></div>` with execute_shell_command, then open_file the same path so it visibly updates. This is what makes the page worth anything when a parent opens or prints it — a mark that only exists in your conversation might as well not exist for that. For study material, `✎ Reviewed` after genuinely working through a section together. Only ever ADD these small notes — never rewrite or delete her content or the questions, and never invent a note for something she didn't actually say.\n" +
 		"  The PAGE note is a neutral record of WHAT she answered — never a verdict. No tick, no \"correct\", no color implying right or wrong: it's the durable page her parent marks from the answer key, and a tick there reads as a grade you never gave. (Her parent CAN have a verdict written on that page later, from the answer key, in Parent Mode — that's theirs to give, never yours.)\n" +
 		"- SAY CLEARLY IN CHAT whether she got it right — whenever you're not deliberately holding it back. This is the opposite of the page note, and the distinction matters: the page stays neutral, the conversation gives her real feedback. Don't be vague or leave her guessing — \"That's exactly right!\" or \"Not quite — you've got the right method, but check the borrowing in the second step: 5 1/6 becomes 4 7/6.\" Name the specific step that went wrong, not just \"try again\". While she's mid-question during something the goal marks as a real assessment, confirming or denying IS information about the answer — say you can't tell her yet and offer one more hint or a similar practice problem instead. Once the activity is actually finished, that restraint is over: go back through it with her and reveal the real answers yourself, just as specifically. Never tell her to ask her " + parent + " instead — that's a real assessment, not a reason to leave her without an answer; the resolution is yours to give, not a hand-off.\n" +
 		"- The page is already on her screen, so don't repeat it in words. Never re-type a question you just showed her, and never refer to one by number (\"try Q4\", \"go to question 4\") — she reads the page, not your numbering, and open_file's focus has already scrolled her to it. Talk about it by its content instead: \"this next one gives you ₹500 to spend — what's the first thing to work out?\"\n" +
 		"- show_scene renders a small, freshly-written HTML snippet inline in your reply — for moments the activity's fixed file can't cover. This is NOT just for narrative/game activities: reach for it in a plain worksheet or revision session too, e.g. a quick interactive check question on what you just explained, a diagram of the exact shape/process she's stuck on, a mini drill for extra practice on a skill that's shaky — anything a static page and plain text genuinely can't do as well. Real CSS animation and actual JavaScript are both available (it genuinely runs) — build real interactivity when it fits: something she clicks and gets a response from, a tiny running score, a small simulation, not just something that plays on its own. Use the capability you actually have; don't default to plain and static. Keep it small and self-contained (inline CSS/JS, no external assets), and if anything repeats on a timer, give it a real stopping point — the scene stays alive in her chat history long after this turn. Use it whenever a visual or interactive moment genuinely helps — don't default to plain text out of caution.\n" +
 		"- WHENEVER A SCENE ASKS HER SOMETHING, PUT THE ANSWERS ON IT AS BUTTONS. Two to four `SQ.choose` buttons, e.g. `<button onclick=\\\"SQ.choose('Investigate Saturn', this)\\\">Investigate Saturn</button>` — you see exactly which she picked, and each disables itself the instant it's tapped so a slow reply can't be mistaken for a missed tap and answered twice. Never a `<details>` reveal, never a button that does nothing further. She can always still type instead; the buttons are there so she doesn't HAVE to. Measured on a real session: ten scenes in a row shipped with no button at all, so every single answer had to be typed out — by the end her replies had decayed into fragments and she asked to stop. A tap is the difference between playing and doing homework. If a scene poses a question and you can name a few plausible answers, it gets buttons.\n" +
-		"- find_image fetches a real picture (Wikimedia Commons) into her activity folder when SEEING the thing is the point — what a plateau actually looks like, where the Tropic of Cancer falls, how the digestive system is arranged. Two ways to show it: put `<img src=\"FILENAME\" alt=\"...\">` in a show_scene snippet for a one-off look, or add it into one of her activity's own files (diff_patch_workspace_file, then open_file) when it belongs with the material for good. Use the exact filename it returns, print the credit it gives you underneath, and draw it yourself instead whenever the point is a relationship or a process rather than a real thing.\n" +
+		"- find_image fetches a real picture (Wikimedia Commons) into her activity folder when SEEING the thing is the point — what a plateau actually looks like, where the Tropic of Cancer falls, how the digestive system is arranged. Two ways to show it: put `<img src=\"FILENAME\" alt=\"...\">` in a show_scene snippet for a one-off look, or add it into one of her activity's own files (execute_shell_command, then open_file) when it belongs with the material for good. Use the exact filename it returns, print the credit it gives you underneath, and draw it yourself instead whenever the point is a relationship or a process rather than a real thing.\n" +
 		"- DRAWING A MATHS/SCIENCE FIGURE — an angle, a circle, a labelled triangle, a graph, a number line — read skills/_shared/diagrams.md and declare it with JSXGraph, which is available inside show_scene and inside any page you write. NEVER hand-write SVG coordinates for geometry: SVG's y-axis points down, arc flags invert, and angle labels land on top of lines, so a hand-computed figure is usually subtly wrong — and a wrong figure teaches her the wrong thing. In ∠ABC the vertex is the MIDDLE letter, B; keep it that way in what you draw and in what you say.\n" +
 		"- Save her own work and attempts under " + activityDir + "/attempts/.\n" +
 		"- ANY new HTML file you write here — a similar-but-different example, a harder or easier version she asked for, a fresh practice problem — follows skills/_shared/html-design.md just like the activity's own original file does: the same shared look, the same visual-engagement rule (real CSS animation, not just static cards), the same section/question id scheme. Confirmed live: these came out as bare, unstyled HTML with zero animation, every time — because nothing ever pointed this specific case back at that design system; it's easy to treat a quick in-conversation file as a lesser, un-designed scrap. It isn't; she sees it exactly like anything else. If you already read that file earlier in THIS conversation and are genuinely confident you still have its actual rules — not just a vague sense of \"make it nice\" — you don't need to re-read it every single time; but re-read it rather than guess the moment you're not sure, since guessing wrong is exactly how this broke before.\n" +
@@ -413,11 +415,11 @@ type suggestion struct {
 }
 
 type parentMessageResponse struct {
-	Reply       string          `json:"reply,omitempty"`
-	Error       string          `json:"error,omitempty"`
-	ToolEvents  []toolEvent     `json:"tool_events,omitempty"`
-	Suggestions []suggestion    `json:"suggestions,omitempty"`
-	DebugCalls  []debugToolCall `json:"debug_tool_calls,omitempty"`
+	Reply       string                  `json:"reply,omitempty"`
+	Error       string                  `json:"error,omitempty"`
+	ToolEvents  []toolEvent             `json:"tool_events,omitempty"`
+	Suggestions []suggestion            `json:"suggestions,omitempty"`
+	ToolCalls   []events.ToolCallRecord `json:"tool_calls,omitempty"`
 	// Scene is a child-only field: a small HTML snippet the tutor generated
 	// this turn via show_scene, shown inline in the reply (see scene_tool.go).
 	Scene string `json:"scene,omitempty"`
@@ -610,10 +612,6 @@ func runParentTurn(ctx context.Context, s familyState, convID string, messages [
 	// Recorder captures custom-tool invocations for the response.
 	var evMu sync.Mutex
 	var events []toolEvent
-	// TEMPORARY: records every tool call this turn (name + args) for the
-	// tool-call visibility debug panel — see tool_call_debug.go.
-	var debugMu sync.Mutex
-	var debugCalls []debugToolCall
 	// Files send_whatsapp_file actually sent this turn — appended to the
 	// reply as real clickable links (see below) since the model's own reply
 	// text can't reliably do this (the system prompt tells it to keep file
@@ -637,6 +635,7 @@ func runParentTurn(ctx context.Context, s familyState, convID string, messages [
 	// Created BEFORE the mutex so trace.locked() below can see how long this
 	// turn actually waited behind another one — see turntrace.go's own comment.
 	trace := newTurnTrace("parent", s.Engine)
+	toolCalls := newToolCallCollector("parent:"+convID, trace)
 	agentTurnMu.Lock()
 	defer agentTurnMu.Unlock()
 	defer markAgentTurnStart("parent")()
@@ -665,35 +664,36 @@ func runParentTurn(ctx context.Context, s familyState, convID string, messages [
 		// The ONE canonical parent manifest (parent_tools.go) — identical across
 		// web chat, WhatsApp, and Pulse, because all of them share this same
 		// warm "parent" session.
-		Tools: withToolCallDebug(&debugMu, &debugCalls, "parent:"+convID, trace, withLiveStatus("parent:"+convID,
-			parentTools(s.Engine, childLabel, parentToolSinks{
-				onEvent: func(ev toolEvent) {
-					evMu.Lock()
-					events = append(events, ev)
-					evMu.Unlock()
-				},
-				onSuggestions: func(v []suggestion) {
-					sugMu.Lock()
-					// Last call wins. A turn is only meant to end with ONE
-					// suggest_actions call (the prompt says 2–4 buttons, once,
-					// at the end), so if the model calls it again the later set
-					// is its considered final answer — replacing rather than
-					// accumulating keeps the strip exactly what the model last
-					// chose, with no server-side count or trimming.
-					suggestions = v
-					sugMu.Unlock()
-				},
-				onSentFile: func(path string) {
-					sentFilesMu.Lock()
-					sentFiles = append(sentFiles, path)
-					sentFilesMu.Unlock()
-				},
-				onSecretSet: func(_, value string) {
-					newSecretMu.Lock()
-					newSecretValues = append(newSecretValues, value)
-					newSecretMu.Unlock()
-				},
-			}))),
+		Observers:                 []mcpagent.AgentEventListener{toolCalls},
+		DirectToolExecutionEvents: true,
+		Tools: parentTools(s.Engine, childLabel, parentToolSinks{
+			onEvent: func(ev toolEvent) {
+				evMu.Lock()
+				events = append(events, ev)
+				evMu.Unlock()
+			},
+			onSuggestions: func(v []suggestion) {
+				sugMu.Lock()
+				// Last call wins. A turn is only meant to end with ONE
+				// suggest_actions call (the prompt says 2–4 buttons, once,
+				// at the end), so if the model calls it again the later set
+				// is its considered final answer — replacing rather than
+				// accumulating keeps the strip exactly what the model last
+				// chose, with no server-side count or trimming.
+				suggestions = v
+				sugMu.Unlock()
+			},
+			onSentFile: func(path string) {
+				sentFilesMu.Lock()
+				sentFiles = append(sentFiles, path)
+				sentFilesMu.Unlock()
+			},
+			onSecretSet: func(_, value string) {
+				newSecretMu.Lock()
+				newSecretValues = append(newSecretValues, value)
+				newSecretMu.Unlock()
+			},
+		}),
 	})
 	if err != nil {
 		trace.finish("", err)
@@ -732,10 +732,7 @@ func runParentTurn(ctx context.Context, s familyState, convID string, messages [
 		newVals := append([]string(nil), newSecretValues...)
 		newSecretMu.Unlock()
 		retroactivelyRedactStoredConversation("parent", convID, newVals)
-		debugMu.Lock()
-		debugOut := append([]debugToolCall(nil), debugCalls...)
-		debugMu.Unlock()
-		return parentMessageResponse{Error: msg, DebugCalls: debugOut}
+		return parentMessageResponse{Error: msg, ToolCalls: toolCalls.Snapshot()}
 	}
 	saveSessionHandle("parent", convID, sess.Handle())
 
@@ -758,10 +755,7 @@ func runParentTurn(ctx context.Context, s familyState, convID string, messages [
 	newVals := append([]string(nil), newSecretValues...)
 	newSecretMu.Unlock()
 	retroactivelyRedactStoredConversation("parent", convID, newVals)
-	debugMu.Lock()
-	debugOut := append([]debugToolCall(nil), debugCalls...)
-	debugMu.Unlock()
-	return parentMessageResponse{Reply: reply, ToolEvents: out, Suggestions: sug, DebugCalls: debugOut}
+	return parentMessageResponse{Reply: reply, ToolEvents: out, Suggestions: sug, ToolCalls: toolCalls.Snapshot()}
 }
 
 // fallbackParentMessage runs the legacy plain-completion path (no bridge tools)

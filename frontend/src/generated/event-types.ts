@@ -46,7 +46,6 @@ import type {
   ToolExecutionEvent,
   ToolOutputEvent,
   ToolResponseEvent,
-  WorkspaceFileOperationEvent,
   MCPServerConnectionEvent,
   MCPServerDiscoveryEvent,
   MCPServerSelectionEvent,
@@ -200,7 +199,6 @@ export type EventTypeString =
   | 'tool_execution'
   | 'tool_output'
   | 'tool_response'
-  | 'workspace_file_operation'
   | 'mcp_server_connection'
   | 'mcp_server_connection_error'
   | 'mcp_server_discovery'
@@ -330,7 +328,6 @@ export interface EventTypeToDataMap {
   'tool_execution': ToolExecutionEvent;
   'tool_output': ToolOutputEvent;
   'tool_response': ToolResponseEvent;
-  'workspace_file_operation': WorkspaceFileOperationEvent;
   'mcp_server_connection': MCPServerConnectionEvent;
   'mcp_server_connection_error': MCPServerConnectionErrorEvent;
   'mcp_server_discovery': MCPServerDiscoveryEvent;
@@ -845,7 +842,6 @@ export type {
   ToolExecutionEvent,
   ToolOutputEvent,
   ToolResponseEvent,
-  WorkspaceFileOperationEvent,
   MCPServerConnectionEvent,
   MCPServerDiscoveryEvent,
   MCPServerSelectionEvent,

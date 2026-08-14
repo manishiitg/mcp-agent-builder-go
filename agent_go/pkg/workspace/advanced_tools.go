@@ -9,7 +9,7 @@ func shellToolDef() llmtypes.Tool {
 	return llmtypes.Tool{
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
-			Name:        "execute_shell_command",
+			Name: "execute_shell_command",
 			// The working directory is per-session and is NOT always the docs root:
 			// a workshop tool-agent runs in its workflow folder, a step in its run
 			// execution folder. Claiming the docs root here made agents prefix their
@@ -124,31 +124,6 @@ func searchWebLLMToolDef() llmtypes.Tool {
 	}
 }
 
-// diffPatchToolDef returns the diff_patch_workspace_file tool definition.
-func diffPatchToolDef() llmtypes.Tool {
-	return llmtypes.Tool{
-		Type: "function",
-		Function: &llmtypes.FunctionDefinition{
-			Name:        "diff_patch_workspace_file",
-			Description: "Apply a unified diff patch to a workspace file and return the result. The filepath may be workspace-relative or an absolute path under the workspace docs root.",
-			Parameters: llmtypes.NewParameters(map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"filepath": map[string]interface{}{
-						"type":        "string",
-						"description": "Path to the file to patch. Accepts workspace-relative paths like \"Workflow/my-flow/learnings/_global/SKILL.md\" and absolute paths under the workspace docs root like \"/Users/.../workspace-docs/Workflow/my-flow/learnings/_global/SKILL.md\". Absolute paths outside the docs root are rejected.",
-					},
-					"diff": map[string]interface{}{
-						"type":        "string",
-						"description": "Unified diff patch string to apply.\n\nFormat:\n- Headers: --- a/file and +++ b/file\n- Hunk headers: @@ -startLine,lineCount +startLine,lineCount @@\n- Context lines: ' ' prefix (space + content)\n- Removals: '-' prefix\n- Additions: '+' prefix\n- End with a trailing newline\n\nExample:\n--- a/file\n+++ b/file\n@@ -5,1 +5,1 @@\n-- [ ] task-1\n+- [x] task-1\n",
-					},
-				},
-				"required": []string{"filepath", "diff"},
-			}),
-		},
-	}
-}
-
 // GetShellToolDefinitions returns only the shell (execute_shell_command) tool.
 func GetShellToolDefinitions() []llmtypes.Tool {
 	return []llmtypes.Tool{shellToolDef()}
@@ -169,18 +144,12 @@ func GetSearchWebLLMToolDefinitions() []llmtypes.Tool {
 	return []llmtypes.Tool{searchWebLLMToolDef()}
 }
 
-// GetDiffPatchToolDefinitions returns only the diff_patch_workspace_file tool definition.
-func GetDiffPatchToolDefinitions() []llmtypes.Tool {
-	return []llmtypes.Tool{diffPatchToolDef()}
-}
-
-// GetAdvancedToolDefinitions returns all advanced workspace tools (shell, image/video, text generation, diff patch).
+// GetAdvancedToolDefinitions returns all advanced workspace tools.
 func GetAdvancedToolDefinitions() []llmtypes.Tool {
 	var tools []llmtypes.Tool
 	tools = append(tools, GetShellToolDefinitions()...)
 	tools = append(tools, GetImageToolDefinitions()...)
 	tools = append(tools, GetGenerateTextLLMToolDefinitions()...)
 	tools = append(tools, GetSearchWebLLMToolDefinitions()...)
-	tools = append(tools, GetDiffPatchToolDefinitions()...)
 	return tools
 }

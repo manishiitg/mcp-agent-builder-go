@@ -113,7 +113,7 @@ func TestToolSetInvariants(t *testing.T) {
 			t.Fatalf("filtered workflow pool contains %d definitions for %q", count, name)
 		}
 	}
-	for _, n := range []string{"human_feedback", "notify_user", "create_human_input_request", "answer_human_input_request", "mark_human_input_consumed"} {
+	for _, n := range []string{"human_feedback", "notify_user", "get_human_input_request", "create_human_input_request", "answer_human_input_request", "mark_human_input_consumed"} {
 		if !pool[n] || cats[n] != "human_tools" {
 			t.Fatalf("workflow pool missing human tool %q (in_pool=%v cat=%q)", n, pool[n], cats[n])
 		}
@@ -195,10 +195,10 @@ func TestToolSetInvariants(t *testing.T) {
 	for _, n := range []string{
 		"create_plan", "migrate_message_sequence_code_items", "add_scripted_step", "add_routing_step", "add_human_input_step",
 		"update_scripted_step", "delete_plan_steps",
-		"execute_step", "create_human_input_request", "answer_human_input_request",
+		"execute_step", "get_human_input_request", "create_human_input_request", "answer_human_input_request",
 		"update_workflow_config", "update_step_config", "validate_report_html",
 		"list_schedules", "update_schedule", "get_schedule_runs",
-		"execute_shell_command", "diff_patch_workspace_file",
+		"execute_shell_command",
 		"get_pulse_state", "record_pulse_worklist", "record_pulse_result", "record_pulse_impact", "resolve_run_concern",
 		"mark_changelog_artifact_reviewed",
 	} {

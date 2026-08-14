@@ -137,7 +137,7 @@ func BuildStepReflectionTurn(in StepReflectionTurnInput) string {
 		b.WriteString("- If there is genuinely nothing new worth capturing, do **not** force an edit. Say so briefly and why. A concern still applies on a no-op turn.\n")
 		b.WriteString("- If you changed files, end with exactly one line: `Learnings updated: files changed: <comma-separated list>`.\n")
 	}
-	b.WriteString("- Available tools: `execute_shell_command` for read-only inspection (`cat`, `ls`, `find`, `wc`), `query_workflow_db` for reads, `diff_patch_workspace_file` for writes, and `record_run_concern`.\n")
+	b.WriteString("- Available tools: `execute_shell_command` for workspace inspection and permitted writes, `query_workflow_db` for reads, and `record_run_concern`.\n")
 
 	return b.String()
 }
@@ -216,7 +216,7 @@ func buildReflectionLearningsSection(in StepReflectionTurnInput, skillPath, refe
 
 	b.WriteString("**Write rules:**\n")
 	b.WriteString("1. **Read before writing.** `cat` the topic file you intend to change, and the index, to see what is already there.\n")
-	b.WriteString("2. **Patch, never rewrite.** Use `diff_patch_workspace_file` for every write, including creating a new topic file. Do not use shell redirection, heredocs, tee, Python, or built-in file-edit tools. Never rewrite the index wholesale — you would destroy other topics' entries.\n")
+	b.WriteString("2. **Preserve existing content.** Use `execute_shell_command` carefully for every permitted write, including creating a new topic file. Never rewrite the index wholesale — you would destroy other topics' entries.\n")
 	b.WriteString("3. **Reconcile what you touch.** Where content you are editing contradicts what this run observed — an obsolete selector, a changed path — fix it in the same patch rather than leaving a \"this may be stale\" caveat beside it.\n")
 	b.WriteString("4. **Cross-reference, don't duplicate.** If your lesson overlaps another step's file, name that file instead of copying its content.\n")
 	b.WriteString("5. **No ephemeral references.** Session-local handles (`@e1`, `e68`) are meaningless in a later run.\n")
@@ -257,7 +257,7 @@ func buildReflectionKBSection(in StepReflectionTurnInput) string {
 	b.WriteString("`. `cat` the registry first to see which topics exist and reuse one rather than creating a near-duplicate. ")
 	b.WriteString("Never glob `notes/*.md` — the file count is unbounded.\n\n")
 	b.WriteString("Topic ids: entity-scoped narrative uses the entity slug (`company-acme.md`); a cross-cutting pattern uses `pattern-<slug>`. ")
-	b.WriteString("Write every change with `diff_patch_workspace_file`, including registry updates.\n\n")
+	b.WriteString("Write every permitted change carefully with `execute_shell_command`, including registry updates.\n\n")
 	b.WriteString("Do not write to `knowledgebase/context/` — that store is user-owned.\n\n")
 	b.WriteString("**Your contribution contract:**\n")
 	b.WriteString(strings.TrimSpace(in.KBContribution))

@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/claudeauth"
+	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
+	claudecodeadapter "github.com/manishiitg/multi-llm-provider-go/pkg/adapters/claudecode"
 )
 
 // TestLiveClaudeUsageAPIDiffersBetweenSavedAndWorkflowCredential is an opt-in,
@@ -129,6 +131,54 @@ func TestLiveClaudeTmuxUsageDiffersBetweenSavedAndWorkflowCredential(t *testing.
 	}
 	t.Logf("Claude tmux /usage routing verified:\nsaved-login:\n%s\nworkflow:\n%s",
 		savedSignature, workflowSignature)
+}
+
+// TestLiveClaudeProductionAdapterUsesWorkflowCredential runs the same adapter
+// and one-shot structured transport used by workflow steps and background
+// agents. The machine's saved Claude login may be exhausted; the call must
+// still succeed through rtslatency's stored setup token. This catches
+// regressions where the token is loaded correctly by Builder but remapped or
+// dropped at the final Claude process-launch boundary.
+//
+// Run from agent_go:
+//
+//	set -a; source .env; set +a
+//	RUN_CLAUDE_WORKFLOW_AUTH_E2E=1 go test ./cmd/server \
+//	  -run TestLiveClaudeProductionAdapterUsesWorkflowCredential -v
+func TestLiveClaudeProductionAdapterUsesWorkflowCredential(t *testing.T) {
+	if os.Getenv("RUN_CLAUDE_WORKFLOW_AUTH_E2E") != "1" {
+		t.Skip("set RUN_CLAUDE_WORKFLOW_AUTH_E2E=1 to run the production adapter credential test")
+	}
+	if strings.TrimSpace(os.Getenv("AUTH_SECRET")) == "" {
+		t.Fatal("AUTH_SECRET is required to decrypt the stored workflow credential")
+	}
+
+	repositoryRoot := liveClaudeRepositoryRoot(t)
+	workflowToken := liveClaudeWorkflowToken(t, repositoryRoot, "Workflow/rtslatency")
+	adapter := claudecodeadapter.NewClaudeCodeInteractiveAdapterWithOAuthToken("claude-sonnet-5", workflowToken, &e2eMockLogger{})
+	t.Cleanup(func() { _ = claudecodeadapter.CleanupClaudeCodeTmuxSessions(context.Background()) })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	const marker = "RTS_WORKFLOW_AUTH_OK"
+	response, err := adapter.GenerateContent(ctx, []llmtypes.MessageContent{{
+		Role:  llmtypes.ChatMessageTypeHuman,
+		Parts: []llmtypes.ContentPart{llmtypes.TextContent{Text: "Reply with exactly: " + marker}},
+	}},
+		claudecodeadapter.WithWorkingDir(t.TempDir()),
+		claudecodeadapter.WithClaudeCodeTools(""),
+		claudecodeadapter.WithEffort("low"),
+		// Workflow steps use the one-shot structured transport. Keeping this
+		// enabled makes the E2E exercise the same final process launcher instead
+		// of only proving the retained tmux path.
+		claudecodeadapter.WithClaudeStructuredTransport(true),
+	)
+	if err != nil {
+		t.Fatalf("production Claude adapter did not use the RTS workflow credential: %v", err)
+	}
+	if response == nil || len(response.Choices) == 0 || !strings.Contains(response.Choices[0].Content, marker) {
+		t.Fatalf("production Claude adapter response did not contain %q: %#v", marker, response)
+	}
 }
 
 type liveClaudeAuthStatusResponse struct {

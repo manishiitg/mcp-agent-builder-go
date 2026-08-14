@@ -31,6 +31,7 @@ func TestHumanToolsCategoryIncludesDurableWorkflowDecisionTools(t *testing.T) {
 	for _, name := range []string{
 		"human_feedback",
 		"notify_user",
+		"get_human_input_request",
 		"create_human_input_request",
 		"answer_human_input_request",
 		"mark_human_input_consumed",

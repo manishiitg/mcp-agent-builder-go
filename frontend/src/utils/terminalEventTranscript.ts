@@ -143,6 +143,35 @@ function textField(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+/**
+ * A few orchestrator messages travel over the same transport as a person's
+ * chat input.  They are useful audit trail, but they are not authored by the
+ * person looking at the conversation.  Rendering them as a "You" bubble made
+ * the formatted view lie about who said what and then repeat the completion
+ * in the following assistant response.
+ */
+export function isInternalTranscriptMessage(event: PollingEvent): boolean {
+  if (event.type !== 'user_message') return false
+  const content = textField(eventFields(event).content)
+  return /^\[AUTO-NOTIFICATION\]/.test(content) ||
+    /^PULSE RUN CONTEXT\./.test(content) ||
+    /^PULSE GATE\s*\/\s*WORKLIST\./.test(content)
+}
+
+export function internalTranscriptMessageTitle(event: PollingEvent): string {
+  const content = textField(eventFields(event).content)
+  if (/^\[AUTO-NOTIFICATION\]/.test(content)) {
+    const agent = content.match(/^\[AUTO-NOTIFICATION\]\s*Agent\s+'([^']+)'/i)?.[1]
+    const status = content.match(/completed\s+—\s+status=([a-z_]+)/i)?.[1]
+    return agent
+      ? `${agent}${status ? ` · ${status.replace(/_/g, ' ')}` : ''}`
+      : 'Automation update'
+  }
+  if (/^PULSE RUN CONTEXT\./.test(content)) return 'Pulse run context'
+  if (/^PULSE GATE\s*\/\s*WORKLIST\./.test(content)) return 'Pulse review plan'
+  return 'Automation update'
+}
+
 function normalizedLifecycleName(fields: Record<string, unknown>): string {
   return (textField(fields.agent_name) || textField(fields.name))
     .toLowerCase()
@@ -569,8 +598,13 @@ function dropAnswersRepeatedByCompletionCard(events: PollingEvent[]): PollingEve
   return events.filter(event => {
     if ((event.type || '') !== 'llm_generation_end') return true
     const text = comparableAnswer(answerText(event))
-    // Too short to judge: a handful of words can coincide without being the
-    // same answer, so keep it rather than risk hiding a real reply.
+    // Exact equality is definitive even for a one-word reply. The backend
+    // intentionally carries the final answer on both llm_generation_end and
+    // unified_completion; keeping short exact matches made replies such as
+    // "Hi! Ready when you are." appear twice. Only the looser containment
+    // comparison needs a minimum length to avoid hiding coincidentally similar
+    // short messages.
+    if (completionAnswers.some(done => done === text)) return false
     if (text.length < 24) return true
     return !completionAnswers.some(done => done.includes(text) || text.includes(done))
   })
@@ -665,13 +699,43 @@ export function mcpToolDisplayName(raw: string): { name: string; server?: string
   return { name: match[2], server: match[1] }
 }
 
-/** Arguments live under tool_params.arguments on the start event. */
+/**
+ * Tool payloads are normally strings, but coding-CLI and restored events can
+ * preserve arguments/results as decoded JSON. Keep that structured detail
+ * visible instead of treating it as absent merely because it is not a string.
+ */
+function toolCallDisplayText(value: unknown): string {
+  if (typeof value === 'string') return value.trim()
+  if (value == null) return ''
+  try {
+    const encoded = JSON.stringify(value, null, 2)
+    return typeof encoded === 'string' ? encoded.trim() : ''
+  } catch {
+    return ''
+  }
+}
+
+/** Arguments normally live under tool_params.arguments on the start event. */
 function toolCallArgs(event: PollingEvent): string {
   const params = toolCallField(event, 'tool_params')
   if (params && typeof params === 'object') {
-    return stringifyToolCallValue((params as Record<string, unknown>).arguments)
+    const record = params as Record<string, unknown>
+    const nested = toolCallDisplayText(record.arguments)
+    if (nested) return nested
   }
-  return ''
+  // CLI/replayed tool events have historically used these direct fields.
+  return toolCallDisplayText(toolCallField(event, 'arguments')) ||
+    toolCallDisplayText(toolCallField(event, 'tool_args')) ||
+    toolCallDisplayText(toolCallField(event, 'input'))
+}
+
+function toolCallResult(event: PollingEvent): string {
+  return toolCallDisplayText(toolCallField(event, 'result')) ||
+    toolCallDisplayText(toolCallField(event, 'output')) ||
+    // ToolCallErrorEvent carries its useful response as `error`, rather than
+    // `result`. Without this fallback, an errored tool looks expandable only
+    // when its start happened to retain arguments.
+    toolCallDisplayText(toolCallField(event, 'error'))
 }
 
 function stringifyToolCallValue(value: unknown): string {
@@ -806,7 +870,7 @@ export function pairToolCalls(events: PollingEvent[]): PairedToolCall[] {
       if (typeof duration === 'number') item.durationNs = duration
       const args = normalizedCall.args
       if (args) item.args = args
-      const result = textField(toolCallField(event, 'result'))
+      const result = toolCallResult(event)
       if (result) item.result = result
       out.push(item)
       if (callID) byCallID.set(callID, item)
@@ -820,7 +884,7 @@ export function pairToolCalls(events: PollingEvent[]): PairedToolCall[] {
     if (typeof duration === 'number') existing.durationNs = duration
     const args = normalizedCall.args
     if (args) existing.args = args
-    const result = textField(toolCallField(event, 'result'))
+    const result = toolCallResult(event)
     if (result) existing.result = result
     // A start may lack the name that the end carries (and vice versa).
     if ((existing.name === 'tool' || existing.name === 'CallMcpTool') && normalizedCall.name) {

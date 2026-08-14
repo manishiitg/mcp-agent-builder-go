@@ -21,7 +21,7 @@ handling, cancellation.
 ## Table of Contents
 
 1. [Boundaries](#boundaries)
-2. [Integration Contract Areas (IC-1 through IC-10)](#integration-contract-areas)
+2. [Integration Contract Areas (IC-1 through IC-11)](#integration-contract-areas)
 3. [Cost Tracking Contract](#cost-tracking-contract)
 4. [Inspector Debug Contract](#inspector-debug-contract)
 5. [Test Matrix](#test-matrix)
@@ -210,6 +210,16 @@ history for subsequent turns. CLI providers receive tool context as text
 `WithAgyResumeSessionID(id)` → Antigravity `agy --conversation <id>`
 MCP tool calls work through the bridge end-to-end.
 
+### IC-11: Retained Submission Neutrality
+
+After a real coding-CLI turn completes, a follow-up must traverse the durable
+`mcpagent.Session` while the provider process remains live. The acknowledgement
+must identify the transport that actually accepted the message. A tool-backed
+follow-up must persist exactly one canonical tool receipt with arguments,
+result/error, and duration, followed by exactly one non-empty final assistant
+response. The host must not reconstruct the Agent, MCP bridge, skills, or tool
+registry, and the retained provider process must remain reusable.
+
 ---
 
 ## Cost Tracking Contract
@@ -253,6 +263,7 @@ real provider call
 | IC-8 | Cancellation (subscriber) | `internal/events/event_store_test.go` | 19 subtests |
 | IC-8 | Cancellation (shutdown) | `cmd/server/shutdown_cleanup_test.go` | 2 tests |
 | IC-10 | Coding CLI chat contract: multi-turn, literal `@` prompt text, MCP bridge tool completion, live steer, and terminal pane de-dupe | `cmd/testing/coding_agent_chat_e2e.go` | opt-in `coding-agent-chat-e2e` live command |
+| IC-11 | Completed-turn retained delivery: typed transport acknowledgement, one tool receipt, one final response, no reconstruction, reusable tmux | `cmd/testing/coding_agent_chat_e2e.go` | required per provider by `scripts/run-coding-cli-p0.sh` |
 | IC-10 | Coding CLI → MCP bridge → `agent_browser` CDP mode | `cmd/testing/agent_browse_e2e.go` | opt-in `agent-browse-e2e` live command |
 | IC-10 | Parallel coding CLIs → shared `agent_browser` CDP lock | `cmd/testing/agent_browse_stress_e2e.go` | opt-in `agent-browse-stress-e2e` live command |
 | IC-10 | Direct mcpbridge-compatible API → shared `agent_browser` CDP lock | `cmd/testing/agent_browse_api_stress_e2e.go` | opt-in `agent-browse-api-stress-e2e` live command |
@@ -400,6 +411,7 @@ matrix test fails loudly with which provider broke.
 | IC-8 | Cancellation propagation | B1 → B3 | coding-agent-loop |
 | IC-9 | Multi-turn tool context | B2 → B3 | mcpagent |
 | IC-10 | MCP bridge propagation | B1 → B3 | mcpagent |
+| IC-11 | Retained submission neutrality | B1 → B2 | coding-agent-loop + mcpagent |
 | Cost | Cost emission + bucketing | B3 → B2 → B1 | adapter + bridge + ledger + HTTP |
 | Inspector | Debug-event contract | B3 → B2 → B1 (separate sink) | adapter + store + HTTP |
 
@@ -430,6 +442,7 @@ Each contract area should be verified for all supported providers.
 - IC-2 Streaming chunk flow
 - IC-4 Session ID & resume
 - IC-8 Cancellation propagation
+- IC-11 Retained submission neutrality
 
 **P1 (degrades quality):**
 - IC-1 Config propagation
@@ -476,6 +489,7 @@ Cross-adapter matrix test: `inspector_contract_matrix_test.go` (currently anthro
 - IC-7: `cmd/server/sse_test.go` — 4 tests
 - IC-8: `internal/events/event_store_test.go` (19 subtests), `cmd/server/shutdown_cleanup_test.go` (2 tests)
 - IC-10 cross-stack: `cmd/testing/coding_agent_chat_e2e.go`, `cmd/testing/agent_browse_*_e2e.go`
+- IC-11 cross-stack: `cmd/testing/coding_agent_chat_e2e.go --retained-window-p0-only`, enforced per provider by `scripts/run-coding-cli-p0.sh`
 - Validate-key cross-stack: `cmd/server/validate_<provider>_real_test.go` (anthropic, openai, vertex)
 - Inspector: `cmd/server/inspector_e2e_real_test.go` + `internal/inspector/store_test.go`
 

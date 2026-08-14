@@ -20,7 +20,6 @@ export const ToolCallStartEventDisplay: React.FC<ToolCallStartEventProps> = ({ e
       'update_workspace_file',
       'read_workspace_file',
       'list_workspace_files',
-      'diff_patch_workspace_file',
       'delete_workspace_file',
     ]
     return workspaceToolNames.includes(name)

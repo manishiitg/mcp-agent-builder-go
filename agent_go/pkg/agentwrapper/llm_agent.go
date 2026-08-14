@@ -28,6 +28,7 @@ import (
 // LLMAgentWrapper wraps the complex MCP Agent to provide a simple LLM-like interface
 type LLMAgentWrapper struct {
 	agent      *mcpagent.Agent
+	session    *mcpagent.Session
 	name       string
 	mu         sync.RWMutex
 	closed     bool
@@ -137,6 +138,7 @@ func runtimeConfigForLLMAgent(config LLMAgentConfig, model llmtypes.Model, trace
 		Observability: mcpagent.ObservabilityRuntimeConfig{
 			Logger: logger, Tracers: []observability.Tracer{tracer}, TraceID: traceID,
 			PromptLogLabel: config.Name, Streaming: true, GenerationStreamingEvents: runtimeBool(false),
+			DirectToolExecutionEvents: true,
 		},
 	}
 	if config.ForceStructuredCodingAgent {
@@ -331,7 +333,7 @@ type LLMAgentConfig struct {
 	// codex's workspace-write sandbox blocks network unless asked otherwise,
 	// whereas Claude Code's native Bash has no equivalent restriction.
 	CodexNetworkAccess bool
-	APIKeys                      *llm.ProviderAPIKeys // API keys for providers
+	APIKeys            *llm.ProviderAPIKeys // API keys for providers
 
 	// Context summarization configuration
 	EnableContextSummarization     bool    // Enable context summarization feature
@@ -534,7 +536,7 @@ func (w *LLMAgentWrapper) InvokeWithHistory(ctx context.Context, messages []llmt
 		w.mu.Unlock()
 		return "", errors.New("agent is closed")
 	}
-	runtimeAgent := w.agent
+	runtimeSession := w.session
 	// Use the passed messages directly, don't overwrite internal history
 	w.mu.Unlock()
 
@@ -587,7 +589,10 @@ func (w *LLMAgentWrapper) InvokeWithHistory(ctx context.Context, messages []llmt
 	if providerNeedsPlainTextHistory(w.config.Provider) {
 		messages = sanitizeHistoryForPlainTextProvider(messages)
 	}
-	result, err := runtimeAgent.Run(timeoutCtx, mcpagent.Turn{History: messages})
+	if runtimeSession == nil {
+		return "", errors.New("agent session is not initialized")
+	}
+	result, err := runtimeSession.Run(timeoutCtx, mcpagent.Turn{History: messages})
 	response := result.Text
 	updatedMessages := result.History
 	duration := time.Since(startTime)
@@ -799,10 +804,44 @@ func (w *LLMAgentWrapper) FinalizeDefinition(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("finalize immutable agent definition: %w", err)
 	}
+	nextSession, err := next.Start(ctx)
+	if err != nil {
+		_ = next.Close()
+		return fmt.Errorf("start finalized agent session: %w", err)
+	}
 	old := w.agent
+	oldSession := w.session
 	w.agent = next
+	w.session = nextSession
 	w.finalized = true
+	if oldSession != nil {
+		_ = oldSession.Close()
+	}
 	mcpagent.RetireReplacedAgent(old)
+	return nil
+}
+
+// Close releases the wrapper-owned durable session and its immutable Agent.
+// The wrapper is the conversation owner; individual Run calls do not close it.
+func (w *LLMAgentWrapper) Close() error {
+	w.mu.Lock()
+	if w.closed {
+		w.mu.Unlock()
+		return nil
+	}
+	w.closed = true
+	session := w.session
+	agent := w.agent
+	w.session = nil
+	w.agent = nil
+	w.mu.Unlock()
+
+	if session != nil {
+		_ = session.Close()
+	}
+	if agent != nil {
+		return agent.Close()
+	}
 	return nil
 }
 
@@ -1127,9 +1166,16 @@ func (w *LLMAgentWrapper) StreamWithEvents(ctx context.Context, prompt string) (
 		// native continuation internally and returns history, handle, and usage
 		// as one result.
 		w.mu.RLock()
-		runtimeAgent := w.agent
+		runtimeSession := w.session
 		w.mu.RUnlock()
-		result, err := runtimeAgent.Run(ctx, mcpagent.Turn{
+		if runtimeSession == nil {
+			select {
+			case <-ctx.Done():
+			case textChan <- "agent session is not initialized":
+			}
+			return
+		}
+		result, err := runtimeSession.Run(ctx, mcpagent.Turn{
 			History:           messages,
 			StreamingCallback: streamingCallback,
 		})

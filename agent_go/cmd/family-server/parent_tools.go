@@ -113,7 +113,6 @@ func parentTools(engine, childLabel string, sinks parentToolSinks) []agentsessio
 		}),
 		notifyTool(),
 		shellTool(),
-		diffPatchWorkspaceFileTool(),
 		agentBrowserTool(),
 		sendWhatsAppFileTool(sinks.sentFile),
 		listSecretsTool(),

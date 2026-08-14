@@ -400,7 +400,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) setupExecutionFolderGuard(stepPath st
 	// + global and step-specific learnings (if mode grants read) + knowledgebase folder (if mode grants read)
 	// WRITE: only the specific step folder (including nested sub-agent folders) plus execution/Downloads.
 	// NOTE: under kbWriteMethod=direct we add knowledgebase/notes/ to writePaths so the
-	// step can write per-topic markdown with diff_patch_workspace_file. Under
+	// step can write per-topic markdown through execute_shell_command. Under
 	// kbWriteMethod=agent we add nothing — notes/ is only writable by the post-step KB
 	// update agent (setupKBUpdateFolderGuard, triggered by a non-empty knowledgebase_contribution).
 	// Use getExecutionFolderPath to support top-level and nested executions.
@@ -465,7 +465,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) setupExecutionFolderGuard(stepPath st
 
 	// Add knowledgebase folder to READ paths when the mode grants read. Under
 	// kbWriteMethod=direct, also add knowledgebase/notes/ to WRITE paths so the step
-	// can author per-topic markdown with diff_patch_workspace_file.
+	// can author per-topic markdown through execute_shell_command.
 	if kbAccess != KBAccessNone && kbAccessAllowsRead(kbAccess) {
 		knowledgebasePath := getKnowledgebasePath(baseWorkspacePath)
 		readPaths = append(readPaths, knowledgebasePath)
@@ -890,7 +890,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) prepareWorkspaceToolsOnly() ([]llmtyp
 		hcpo.WorkspaceToolExecutors,
 		[]string{
 			"workspace_advanced:execute_shell_command",
-			"workspace_advanced:diff_patch_workspace_file",
 			"workflow_db:query_workflow_db",
 		},
 	)

@@ -816,6 +816,14 @@ func (n *workshopExecutionBgNotifier) OnExecutionStart(start todo_creation_human
 			kind = "workshop_background"
 		}
 	}
+	parentExecutionID := strings.TrimSpace(start.ParentExecutionID)
+	if parentExecutionID == "" {
+		// Workshop sessions deliberately detach long-running work from the
+		// initiating HTTP context. If an older/custom launch path did not copy
+		// the query root before detaching, recover the exact currently-running
+		// conversation turn here rather than registering an orphan execution.
+		parentExecutionID = n.api.currentConversationTurnExecutionID(n.sessionID)
+	}
 	metadata := map[string]string{
 		"workflow_path":    n.workspacePath,
 		"preset_query_id":  n.presetQueryID,
@@ -829,7 +837,7 @@ func (n *workshopExecutionBgNotifier) OnExecutionStart(start todo_creation_human
 	}
 	bgAgent := &BackgroundAgent{
 		ID:                start.ID,
-		ParentExecutionID: start.ParentExecutionID,
+		ParentExecutionID: parentExecutionID,
 		Name:              start.Name,
 		SessionID:         n.sessionID,
 		Kind:              kind,
@@ -839,7 +847,7 @@ func (n *workshopExecutionBgNotifier) OnExecutionStart(start todo_creation_human
 		Metadata:          metadata,
 	}
 	n.api.bgAgentRegistry.Register(n.sessionID, bgAgent)
-	n.api.trackWorkshopExecutionStart(n.sessionID, n.workspacePath, n.presetQueryID, n.userID, start.ID, start.Name)
+	n.api.trackWorkshopExecutionStart(n.sessionID, n.workspacePath, n.presetQueryID, n.userID, start.ID, start.Name, parentExecutionID)
 
 	// Pre-create the channel so NotifyCompletion never drops a completion
 	n.api.bgAgentRegistry.GetNotificationChannel(n.sessionID)
@@ -860,7 +868,7 @@ func (n *workshopExecutionBgNotifier) OnExecutionStart(start todo_creation_human
 	// Forward the kind resolved above (creator's declaration, or the
 	// workshop_background default, or the workflow_step override) so the
 	// terminal store never has to re-infer it from the execution id.
-	n.api.emitBackgroundAgentStarted(n.sessionID, start.ID, start.Name, "", start.ParentExecutionID, orchEvents.ParseExecutionKind(kind))
+	n.api.emitBackgroundAgentStarted(n.sessionID, start.ID, start.Name, "", parentExecutionID, orchEvents.ParseExecutionKind(kind))
 	if metadata["suppress_auto_notification"] != "true" {
 		n.api.notifyBackgroundAgentStarted(n.sessionID, start.ID)
 	}

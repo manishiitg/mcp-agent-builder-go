@@ -221,23 +221,9 @@ type SchedulerCallbacks struct {
 	GetScheduleRuns        func(ctx context.Context, jobID string, limit int) (string, error)
 
 	// GetContractUpgrades reports the workflow's pending contract migrations.
-	//
-	// The upgrade instructions are Go constants delivered only by the scheduler,
-	// so before this there was no way for the workflow's owner to see which
-	// migration was blocking, what it asked for, or why it had failed — the run
-	// error named a version and nothing else. confida-login sat blocked for days
-	// and diagnosing it meant reading server logs and session transcripts by
-	// hand.
 	GetContractUpgrades func(ctx context.Context, workspacePath string) (string, error)
 
-	// NextContractUpgrade returns the one migration this workflow owes next —
-	// its target version and label — or an empty target when it is current.
-	//
-	// An operator-led upgrade has no scheduler grant pinning the target, so
-	// without this the agent could stamp the newest version directly and skip
-	// three migrations whose work was never done. The version is the record
-	// that a migration happened; a stamp that outruns the work is the exact
-	// defect this subsystem already produced once.
+	// NextContractUpgrade returns the next migration owed by the workflow.
 	NextContractUpgrade func(ctx context.Context, workspacePath string) (target string, label string, err error)
 }
 
@@ -1296,6 +1282,7 @@ func RegisterRunFullEvaluationTool(
 
 			execID := fmt.Sprintf("eval-full-%s-%d", targetRunFolder, time.Now().UnixNano())
 			execCtx, cancel := context.WithCancel(session.sessionCtx)
+			execCtx = withWorkshopExecutionParent(execCtx, ctx)
 
 			// Inject correlation IDs so eval execution events are tagged as sub-agent events.
 			// Without this, query_step_tools cannot find tool calls — it matches by correlationID
@@ -1955,6 +1942,7 @@ func RegisterRunFullWorkflowTool(
 			execToken := workflowExecutionIDToken()
 			execID := fmt.Sprintf("workflow-full-%s", execToken)
 			execCtx, cancel := context.WithCancel(session.sessionCtx)
+			execCtx = withWorkshopExecutionParent(execCtx, ctx)
 
 			agentSessionID := fmt.Sprintf("workshop-workflow-full-%s", execToken)
 			execCtx = context.WithValue(execCtx, orchestrator_events.AgentSessionIDKey, agentSessionID)

@@ -10,8 +10,8 @@ import (
 // conversation, its attempts) and can reach nothing else. So the child access
 // checks collapse to a single question: "is this path inside the current
 // activity folder?" — no per-item enumeration, no per-file exemptions, no
-// approved-for-child list. `childCanSee`, `childCanWrite`, and childShellTool's
-// Read/WritePaths (shell_tool.go) all derive from `currentActivityDir()`.
+// approved-for-child list. `childCanSee` and childShellTool's Read/WritePaths
+// (shell_tool.go) both derive from `currentActivityDir()`.
 
 // withinCurrentActivity reports whether a workspace-relative path resolves and
 // sits inside the current activity folder (the folder itself, or any file
@@ -37,12 +37,6 @@ func withinCurrentActivity(rel string) bool {
 // the tutor prompt + by being absent from activity.json items / the child UI —
 // see the plan.)
 func childCanSee(rel string) bool { return withinCurrentActivity(rel) }
-
-// childCanWrite — the child agent may write anywhere in the current activity
-// folder (this is how the tutor records "✓ Answered" progress notes straight
-// onto the real file — see childSystemPrompt). Must stay in sync with
-// childShellTool's WritePaths.
-func childCanWrite(rel string) bool { return withinCurrentActivity(rel) }
 
 // childDisplayName is the child's first name for prompt wording, or a neutral
 // fallback when no profile exists yet.

@@ -19,8 +19,7 @@ func profileWithPlacement(placement map[string][]string) *resolvedAgentProfile {
 func TestMultiAgentToolDescriptionUsesDeclaredPlacement(t *testing.T) {
 	const folder = "_users/default/Chats/Video Studio/projects/demo"
 	profile := profileWithPlacement(map[string][]string{
-		"execute_shell_command":     {"Direct-chat work belongs in `work/`; finished exports belong in `outputs/`."},
-		"diff_patch_workspace_file": {"Patch files in `work/` or the step's own run folder."},
+		"execute_shell_command": {"Direct-chat work belongs in `work/`; finished exports belong in `outputs/`."},
 	})
 
 	shell := enhanceToolDescriptionForMultiAgentMode("execute_shell_command", "base.", folder, profile)
@@ -37,14 +36,6 @@ func TestMultiAgentToolDescriptionUsesDeclaredPlacement(t *testing.T) {
 		t.Fatalf("product description dropped the write-scope restriction:\n%s", shell)
 	}
 
-	// Per-tool, not one shared block: each tool gets only what was declared for it.
-	patch := enhanceToolDescriptionForMultiAgentMode("diff_patch_workspace_file", "base.", folder, profile)
-	if !strings.Contains(patch, "Patch files in `work/`") {
-		t.Fatalf("patch tool did not get its own declared placement:\n%s", patch)
-	}
-	if strings.Contains(patch, "finished exports belong in `outputs/`") {
-		t.Fatalf("patch tool received the shell tool's placement lines:\n%s", patch)
-	}
 }
 
 // Declaring nothing for a tool yields no placement lines. Falling back to the
