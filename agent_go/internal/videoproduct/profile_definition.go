@@ -48,7 +48,10 @@ var profileSkills = []struct{ name, description, path string }{
 	{"video-quality", "Validate candidate videos technically, visually, and editorially.", "skills/video-quality/SKILL.md"},
 	{"hyperframes-quality", "Gate editable HyperFrames compositions and rendered evidence for layout, timing, contrast, and motion quality.", "skills/hyperframes-quality/SKILL.md"},
 	{"html-composition", "Design video frames as HTML/CSS and render them with headless Chrome and ffmpeg.", "skills/html-composition/SKILL.md"},
-	{"fal-ai", "Generate AI video, image, voice, and music clips via fal.ai's Python client for long-form narrative productions.", "skills/fal-ai/SKILL.md"},
+	{"fal-ai", "Generate AI video, image, voice, and music clips via fal.ai's Node.js client for long-form narrative productions.", "skills/fal-ai/SKILL.md"},
+	{"google-ai", "Generate AI video and image clips via Google's own Gemini API (Node.js client) -- Gemini image models and Veo -- for long-form narrative productions.", "skills/google-ai/SKILL.md"},
+	{"video-model-selection", "Choose which fal.ai or Google model fits one shot's requirements -- input mode, duration, character consistency, native audio, cost -- before generating.", "skills/video-model-selection/SKILL.md"},
+	{"video-cinematography", "Turn a storyboard beat into camera, lighting, and framing direction for a generated shot, and keep a character or subject consistent across shots.", "skills/video-cinematography/SKILL.md"},
 }
 
 var registerProductSkillsOnce sync.Once

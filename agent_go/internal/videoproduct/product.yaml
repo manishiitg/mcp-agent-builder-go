@@ -75,6 +75,9 @@ profile:
     - hyperframes
     - agent-browser
     - fal-ai
+    - google-ai
+    - video-model-selection
+    - video-cinematography
   tools:
     - id: video.show-video
       # Declares what this tool shows, not how. The frontend renderer
@@ -238,4 +241,7 @@ workflows:
     - hyperframes
     - agent-browser
     - fal-ai
+    - google-ai
+    - video-model-selection
+    - video-cinematography
   browser_mode: auto

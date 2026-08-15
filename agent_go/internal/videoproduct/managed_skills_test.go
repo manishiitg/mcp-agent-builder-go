@@ -100,49 +100,62 @@ func TestInfographicWorkflowCarriesDurableArtifactsForward(t *testing.T) {
 	}
 }
 
-// fal-ai is a product-owned skill (embedded via profileSkills, not the
-// managed HyperFrames dependency source), and it is not part of the
+// fal-ai and google-ai are product-owned skills (embedded via profileSkills,
+// not the managed HyperFrames dependency source), and neither is part of the
 // infographic pipeline's own stages -- product-infographic never routes to
-// it. It exists so a chat session can generate AI video/image/voice/music
-// for a long-form production the infographic route does not cover. This
-// pins that it registers and reads back cleanly, and that adding it did not
-// silently pull it into every infographic stage's attach list.
-func TestFalAISkillRegistersAndStaysOutOfTheInfographicPipeline(t *testing.T) {
+// them. They exist so a chat session can generate AI video/image/voice/music
+// for a long-form production the infographic route does not cover, one per
+// provider (fal.ai's hosted third-party models vs. Google's own Gemini/Veo).
+// This pins that both register and read back cleanly, and that adding them
+// did not silently pull either into every infographic stage's attach list.
+func TestGenerationSkillsRegisterAndStayOutOfTheInfographicPipeline(t *testing.T) {
 	if err := RegisterProductSkills(); err != nil {
 		t.Fatalf("RegisterProductSkills: %v", err)
 	}
-	if !skills.IsBuiltinSkill("fal-ai") {
-		t.Fatal("fal-ai did not register as a builtin skill")
+
+	cases := []struct {
+		name         string
+		requiredText []string
+	}{
+		{"fal-ai", []string{"SECRET_FAL_KEY", "Never invent a model ID", "@fal-ai/client"}},
+		{"google-ai", []string{"SECRET_GEMINI_API_KEY", "Never invent a model ID", "@google/genai"}},
+		{"video-model-selection", []string{"video-cinematography", "fal-ai", "google-ai", "Shot count vs. budget"}},
+		{"video-cinematography", []string{"Rack focus", "Reference-image conditioning", "video-model-selection"}},
 	}
-	attached := skills.LoadAttachable("", []string{"fal-ai"})
-	if len(attached) != 1 {
-		t.Fatalf("LoadAttachable(fal-ai) = %v, want exactly one skill", attached)
-	}
-	if !strings.Contains(attached[0].Content, "SECRET_FAL_KEY") {
-		t.Fatal("fal-ai skill lost the SECRET_ prefix translation guidance")
-	}
-	if !strings.Contains(attached[0].Content, "Never invent a model ID") {
-		t.Fatal("fal-ai skill lost its no-guessed-model-ID rule")
+	for _, tc := range cases {
+		if !skills.IsBuiltinSkill(tc.name) {
+			t.Fatalf("%s did not register as a builtin skill", tc.name)
+		}
+		attached := skills.LoadAttachable("", []string{tc.name})
+		if len(attached) != 1 {
+			t.Fatalf("LoadAttachable(%s) = %v, want exactly one skill", tc.name, attached)
+		}
+		for _, want := range tc.requiredText {
+			if !strings.Contains(attached[0].Content, want) {
+				t.Fatalf("%s skill lost required content %q", tc.name, want)
+			}
+		}
 	}
 
 	manifest, err := VideoStudioManifest()
 	if err != nil {
 		t.Fatal(err)
 	}
-	found := false
+	inDefaultSet := map[string]bool{}
 	for _, name := range manifest.Profile.Skills {
-		if name == "fal-ai" {
-			found = true
+		inDefaultSet[name] = true
+	}
+	for _, tc := range cases {
+		if !inDefaultSet[tc.name] {
+			t.Fatalf("%s is not in the product's default skill set: %v", tc.name, manifest.Profile.Skills)
 		}
 	}
-	if !found {
-		t.Fatalf("fal-ai is not in the product's default skill set: %v", manifest.Profile.Skills)
-	}
 
+	generationSkillNames := map[string]bool{"fal-ai": true, "google-ai": true, "video-model-selection": true, "video-cinematography": true}
 	for _, stage := range infographicPipeline.Stages {
 		for _, name := range stage.Skills {
-			if name == "fal-ai" {
-				t.Fatalf("infographic stage %q attaches fal-ai; the infographic route stays on HyperFrames composition", stage.ID)
+			if generationSkillNames[name] {
+				t.Fatalf("infographic stage %q attaches %q; the infographic route stays on HyperFrames composition", stage.ID, name)
 			}
 		}
 	}
