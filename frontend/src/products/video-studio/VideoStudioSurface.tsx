@@ -27,6 +27,7 @@ import {
 } from 'lucide-react'
 import ChatArea, { type ChatContentRendererProps } from '../../components/ChatArea'
 import { CleanConversationSurface } from '../../components/CleanConversationSurface'
+import { ConversationMarkdownRenderer } from '../../components/ui/MarkdownRenderer'
 import { videoStamp } from './videoStamp'
 import { ProductSurfaceSwitcher } from '../../components/ProductSurfaceSwitcher'
 import SecretsManagerModal from '../../components/secrets/SecretsManagerModal'
@@ -670,7 +671,11 @@ function CharactersSection({ project, characters }: { project: VideoProject; cha
         <a href={imageURL} download className="shrink-0 rounded-lg border border-slate-200 px-2.5 py-1.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">Download</a>
       </div>
       {selected.note ? <p className="mt-3 rounded-xl bg-slate-100 p-3 text-xs leading-5 text-slate-600 dark:bg-slate-800 dark:text-slate-300">{selected.note}</p> : null}
-      {selected.spec ? <pre data-testid="video-studio-character-spec" className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap rounded-xl border border-slate-200 bg-white p-3 font-mono text-[11px] leading-5 text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">{selected.spec}</pre> : null}
+      {selected.spec ? (
+        <div data-testid="video-studio-character-spec" className="mt-3 max-h-72 overflow-auto rounded-xl border border-slate-200 bg-white p-3 text-xs leading-5 text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
+          <ConversationMarkdownRenderer content={selected.spec} maxHeight="none" framed={false} />
+        </div>
+      ) : null}
       {characters.length > 1 ? (
         <div className="mt-5 grid grid-cols-2 gap-2 border-t border-slate-200 pt-4 sm:grid-cols-3 dark:border-slate-800">
           {characters.map((character) => (
@@ -717,7 +722,9 @@ function DocumentsSection({ documents }: { documents: DocumentPresentation[] }) 
         {videoStamp(selected.updatedAt).short ? <span title={videoStamp(selected.updatedAt).full} className="shrink-0 text-[10px] font-medium text-slate-500 dark:text-slate-400">{videoStamp(selected.updatedAt).short}{selected.revision > 1 ? ` · rev ${selected.revision}` : ''}</span> : null}
       </div>
       {selected.note ? <p className="mt-3 rounded-xl bg-slate-100 p-3 text-xs leading-5 text-slate-600 dark:bg-slate-800 dark:text-slate-300">{selected.note}</p> : null}
-      <pre data-testid="video-studio-document-body" className="mt-3 max-h-[32rem] overflow-auto whitespace-pre-wrap rounded-xl border border-slate-200 bg-white p-4 font-mono text-[11px] leading-5 text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">{selected.markdown}</pre>
+      <div data-testid="video-studio-document-body" className="mt-3 max-h-[32rem] overflow-auto rounded-xl border border-slate-200 bg-white p-4 text-xs leading-5 text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
+        <ConversationMarkdownRenderer content={selected.markdown} maxHeight="none" framed={false} />
+      </div>
     </div>
     </ProductionSection>
   )
