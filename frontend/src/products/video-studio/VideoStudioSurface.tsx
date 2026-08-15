@@ -62,7 +62,7 @@ import {
   type VideoProject,
 } from './videoStudioData'
 
-type WorkspacePanel = 'videos' | 'characters' | 'documents' | 'files' | 'workflow'
+type WorkspacePanel = 'production' | 'files' | 'workflow'
 const EMPTY_SECRET_IDS: string[] = []
 // Only a network failure uses this bootstrap state. Once loaded, the choices
 // come directly from the server's YAML-backed agent profile.
@@ -463,18 +463,80 @@ function MediaVideoPresentation({ presentation, workspacePath }: PresentationRen
 
 registerPresentationRenderer('media.video', MediaVideoPresentation)
 
-function VideosPanel({ project, videos }: { project: VideoProject; videos: VideoPresentation[] }) {
+// One collapsible section of the Production panel. Sections with nothing in
+// them are not rendered at all rather than shown empty: a production moves
+// through documents, then characters, then a finished video, so an empty
+// section is a stage that has not happened yet, and showing it as a header
+// with a zero next to it just makes the panel longer without saying anything.
+function ProductionSection({ id, title, count, icon, children }: { id: string; title: string; count: number; icon: ReactNode; children: ReactNode }) {
+  const [open, setOpen] = useState(true)
+  return (
+    <section data-testid={`video-studio-section-${id}`} data-section-count={count} className="border-b border-slate-200 last:border-b-0 dark:border-slate-800">
+      <button type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open} className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800/60">
+        <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform ${open ? '' : '-rotate-90'}`} />
+        <span className="grid h-5 w-5 shrink-0 place-items-center text-slate-400">{icon}</span>
+        <span className="flex-1 truncate">{title}</span>
+        <span className="shrink-0 rounded-md bg-slate-200 px-1.5 py-0.5 text-[9px] font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">{count}</span>
+      </button>
+      {open ? <div className="px-4 pb-4">{children}</div> : null}
+    </section>
+  )
+}
+
+function VideosSection({ project, videos }: { project: VideoProject; videos: VideoPresentation[] }) {
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [isDraggingAssets, setIsDraggingAssets] = useState(false)
-  const [uploadingAssets, setUploadingAssets] = useState(false)
-  const [uploadMessage, setUploadMessage] = useState('')
-  const uploadInputRef = useRef<HTMLInputElement>(null)
-  const uploadDestination = `${project.workspacePath.replace(/\/$/, '')}/uploads`
   const selected = videos.find((video) => video.id === selectedId) || videos[0]
   useEffect(() => {
     if (videos.length === 0) setSelectedId(null)
     else if (!videos.some((video) => video.id === selectedId)) setSelectedId(videos[0].id)
   }, [selectedId, videos])
+  if (!selected) return null
+
+  const mediaURL = workspaceMediaURL(`${project.workspacePath}/${selected.path.replace(/^\/+/, '')}`)
+  return (
+    <ProductionSection id="videos" title="Videos" count={videos.length} icon={<Film className="h-3.5 w-3.5" />}>
+      <div data-testid="video-studio-videos-panel" data-video-count={videos.length}>
+        <div className="overflow-hidden rounded-2xl bg-black shadow-lg">
+          <PresentationRenderer presentation={selected.workspacePresentation} workspacePath={project.workspacePath} fallback={<div className="grid aspect-video place-items-center text-xs text-slate-400">No renderer is registered for this presentation.</div>} />
+        </div>
+        <div className="mt-3 flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h3 className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{selected.title}</h3>
+            <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] font-medium">
+              <span className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400"><CheckCircle2 className="h-3 w-3" /> QA {selected.verdict || 'passed'}</span>
+              {videoStamp(selected.updatedAt).short ? <span data-testid="video-studio-video-timestamp" title={videoStamp(selected.updatedAt).full} className="text-slate-500 dark:text-slate-400">{videoStamp(selected.updatedAt).short}{selected.revision > 1 ? ` · rev ${selected.revision}` : ''}</span> : null}
+            </p>
+          </div>
+          <a href={mediaURL} download className="shrink-0 rounded-lg border border-slate-200 px-2.5 py-1.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">Download</a>
+        </div>
+        {selected.note ? <p className="mt-3 rounded-xl bg-slate-100 p-3 text-xs leading-5 text-slate-600 dark:bg-slate-800 dark:text-slate-300">{selected.note}</p> : null}
+        {videos.length > 1 ? (
+          <div className="mt-4 space-y-2">
+            {videos.map((video) => (
+              <button key={video.id} type="button" data-testid="video-studio-video-list-item" data-video-id={video.id} data-selected={video.id === selected.id} onClick={() => setSelectedId(video.id)} className={`flex w-full items-center gap-3 rounded-xl border p-2 text-left ${video.id === selected.id ? 'border-violet-500/60 bg-slate-900 shadow-sm shadow-violet-950/30' : 'border-slate-200 bg-white hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900 dark:hover:bg-slate-800'}`}>
+                <span className="grid h-9 w-12 shrink-0 place-items-center rounded-lg bg-slate-950 text-white"><Play className="h-3.5 w-3.5" fill="currentColor" /></span>
+                <span className="min-w-0"><strong className={`block truncate text-xs ${video.id === selected.id ? 'text-slate-50' : 'text-slate-800 dark:text-slate-200'}`}>{video.title}</strong><small title={videoStamp(video.updatedAt).full} className={video.id === selected.id ? 'text-[10px] text-slate-300' : 'text-[10px] text-slate-400'}>{videoStamp(video.updatedAt).short || `Revision ${video.revision}`}{video.revision > 1 ? ` · rev ${video.revision}` : ''}</small></span>
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </ProductionSection>
+  )
+}
+
+// Everything the production has made, in the order it makes it: the finished
+// video when there is one, the characters every shot is generated against, and
+// the written artifacts approved between stages. These were three sibling tabs,
+// which hid the sequence and made Characters something you had to already know
+// to click.
+function ProductionPanel({ project, videos, characters, documents }: { project: VideoProject; videos: VideoPresentation[]; characters: CharacterPresentation[]; documents: DocumentPresentation[] }) {
+  const [isDraggingAssets, setIsDraggingAssets] = useState(false)
+  const [uploadingAssets, setUploadingAssets] = useState(false)
+  const [uploadMessage, setUploadMessage] = useState('')
+  const uploadInputRef = useRef<HTMLInputElement>(null)
+  const uploadDestination = `${project.workspacePath.replace(/\/$/, '')}/uploads`
+  const isEmpty = videos.length === 0 && characters.length === 0 && documents.length === 0
 
   const uploadAssets = async (files: File[]) => {
     if (files.length === 0 || uploadingAssets) return
@@ -520,10 +582,24 @@ function VideosPanel({ project, videos }: { project: VideoProject; videos: Video
     </>
   )
 
-  if (!selected) return <div className="grid h-full place-items-center p-8 text-center"><div className="w-full max-w-sm"><span className="mx-auto grid h-14 w-14 place-items-center rounded-2xl border border-dashed border-violet-300 bg-white text-violet-500 dark:border-violet-800 dark:bg-slate-900"><Film className="h-6 w-6" /></span><h2 className="mt-4 text-sm font-semibold text-slate-800 dark:text-slate-200">No presented videos yet</h2><p className="mt-1 text-xs leading-5 text-slate-400">When the final checks pass, your finished video will appear here.</p><div className="mt-4 text-left">{uploadDropZone}</div></div></div>
-
-  const mediaURL = workspaceMediaURL(`${project.workspacePath}/${selected.path.replace(/^\/+/, '')}`)
-  return <div data-testid="video-studio-videos-panel" data-video-count={videos.length} className="min-h-0 flex-1 overflow-y-auto p-4"><div className="mb-3">{uploadDropZone}</div><div className="overflow-hidden rounded-2xl bg-black shadow-lg"><PresentationRenderer presentation={selected.workspacePresentation} workspacePath={project.workspacePath} fallback={<div className="grid aspect-video place-items-center text-xs text-slate-400">No renderer is registered for this presentation.</div>} /></div><div className="mt-3 flex items-start justify-between gap-3"><div className="min-w-0"><h3 className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{selected.title}</h3><p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] font-medium"><span className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400"><CheckCircle2 className="h-3 w-3" /> QA {selected.verdict || 'passed'}</span>{videoStamp(selected.updatedAt).short ? <span data-testid="video-studio-video-timestamp" title={videoStamp(selected.updatedAt).full} className="text-slate-500 dark:text-slate-400">{videoStamp(selected.updatedAt).short}{selected.revision > 1 ? ` · rev ${selected.revision}` : ''}</span> : null}</p></div><a href={mediaURL} download className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">Download</a></div>{selected.note ? <p className="mt-3 rounded-xl bg-slate-100 p-3 text-xs leading-5 text-slate-600 dark:bg-slate-800 dark:text-slate-300">{selected.note}</p> : null}{videos.length > 1 ? <div className="mt-5 space-y-2 border-t border-slate-200 pt-4 dark:border-slate-800">{videos.map((video) => <button key={video.id} type="button" data-testid="video-studio-video-list-item" data-video-id={video.id} data-selected={video.id === selected.id} onClick={() => setSelectedId(video.id)} className={`flex w-full items-center gap-3 rounded-xl border p-2 text-left ${video.id === selected.id ? 'border-violet-500/60 bg-slate-900 shadow-sm shadow-violet-950/30' : 'border-slate-200 bg-white hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900 dark:hover:bg-slate-800'}`}><span className="grid h-9 w-12 shrink-0 place-items-center rounded-lg bg-slate-950 text-white"><Play className="h-3.5 w-3.5" fill="currentColor" /></span><span className="min-w-0"><strong className={`block truncate text-xs ${video.id === selected.id ? 'text-slate-50' : 'text-slate-800 dark:text-slate-200'}`}>{video.title}</strong><small title={videoStamp(video.updatedAt).full} className={video.id === selected.id ? 'text-[10px] text-slate-300' : 'text-[10px] text-slate-400'}>{videoStamp(video.updatedAt).short || `Revision ${video.revision}`}{video.revision > 1 ? ` · rev ${video.revision}` : ''}</small></span></button>)}</div> : null}</div>
+  return (
+    <div data-testid="video-studio-production-panel" data-video-count={videos.length} data-character-count={characters.length} data-document-count={documents.length} className="min-h-0 flex-1 overflow-y-auto">
+      <div className="p-4 pb-3">{uploadDropZone}</div>
+      {isEmpty ? (
+        <div className="px-8 pb-10 pt-4 text-center">
+          <span className="mx-auto grid h-14 w-14 place-items-center rounded-2xl border border-dashed border-violet-300 bg-white text-violet-500 dark:border-violet-800 dark:bg-slate-900"><Film className="h-6 w-6" /></span>
+          <h2 className="mt-4 text-sm font-semibold text-slate-800 dark:text-slate-200">Nothing produced yet</h2>
+          <p className="mt-1 text-xs leading-5 text-slate-400">Briefs, scripts, character references, and the finished video appear here as each stage completes.</p>
+        </div>
+      ) : (
+        <>
+          <VideosSection project={project} videos={videos} />
+          <CharactersSection project={project} characters={characters} />
+          <DocumentsSection documents={documents} />
+        </>
+      )}
+    </div>
+  )
 }
 
 // Characters are shown before the shots that use them exist, so this panel is
@@ -531,29 +607,19 @@ function VideosPanel({ project, videos }: { project: VideoProject; videos: Video
 // at a size worth judging a face at, beside the exact spec text that will be
 // repeated verbatim into every prompt, and the model the subject's whole arc
 // is committed to.
-function CharactersPanel({ project, characters }: { project: VideoProject; characters: CharacterPresentation[] }) {
+function CharactersSection({ project, characters }: { project: VideoProject; characters: CharacterPresentation[] }) {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const selected = characters.find((character) => character.id === selectedId) || characters[0]
   useEffect(() => {
     if (characters.length === 0) setSelectedId(null)
     else if (!characters.some((character) => character.id === selectedId)) setSelectedId(characters[0].id)
   }, [selectedId, characters])
-
-  if (!selected) {
-    return (
-      <div data-testid="video-studio-characters-panel" data-character-count={0} className="grid h-full place-items-center p-8 text-center">
-        <div className="w-full max-w-sm">
-          <span className="mx-auto grid h-14 w-14 place-items-center rounded-2xl border border-dashed border-violet-300 bg-white text-violet-500 dark:border-violet-800 dark:bg-slate-900"><Users className="h-6 w-6" /></span>
-          <h2 className="mt-4 text-sm font-semibold text-slate-800 dark:text-slate-200">No characters defined yet</h2>
-          <p className="mt-1 text-xs leading-5 text-slate-400">Recurring characters, presenters, and products appear here with the reference image every shot of them is generated against.</p>
-        </div>
-      </div>
-    )
-  }
+  if (!selected) return null
 
   const imageURL = workspaceMediaURL(`${project.workspacePath}/${selected.imagePath.replace(/^\/+/, '')}`)
   return (
-    <div data-testid="video-studio-characters-panel" data-character-count={characters.length} className="min-h-0 flex-1 overflow-y-auto p-4">
+    <ProductionSection id="characters" title="Characters" count={characters.length} icon={<Users className="h-3.5 w-3.5" />}>
+    <div data-testid="video-studio-characters-panel" data-character-count={characters.length}>
       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-100 dark:border-slate-800 dark:bg-slate-900">
         <img src={imageURL} alt={`Reference image for ${selected.name}`} data-testid="video-studio-character-reference" className="max-h-[22rem] w-full bg-slate-950 object-contain" />
       </div>
@@ -580,6 +646,7 @@ function CharactersPanel({ project, characters }: { project: VideoProject; chara
         </div>
       ) : null}
     </div>
+    </ProductionSection>
   )
 }
 
@@ -587,28 +654,18 @@ function CharactersPanel({ project, characters }: { project: VideoProject; chara
 // stages. Rendered as plain text rather than parsed markdown: these are
 // working documents read for their content, and a faithful monospace view
 // cannot silently drop a heading or a table the way a partial renderer can.
-function DocumentsPanel({ documents }: { documents: DocumentPresentation[] }) {
+function DocumentsSection({ documents }: { documents: DocumentPresentation[] }) {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const selected = documents.find((document) => document.id === selectedId) || documents[0]
   useEffect(() => {
     if (documents.length === 0) setSelectedId(null)
     else if (!documents.some((document) => document.id === selectedId)) setSelectedId(documents[0].id)
   }, [selectedId, documents])
-
-  if (!selected) {
-    return (
-      <div data-testid="video-studio-documents-panel" data-document-count={0} className="grid h-full place-items-center p-8 text-center">
-        <div className="w-full max-w-sm">
-          <span className="mx-auto grid h-14 w-14 place-items-center rounded-2xl border border-dashed border-violet-300 bg-white text-violet-500 dark:border-violet-800 dark:bg-slate-900"><FileText className="h-6 w-6" /></span>
-          <h2 className="mt-4 text-sm font-semibold text-slate-800 dark:text-slate-200">No documents yet</h2>
-          <p className="mt-1 text-xs leading-5 text-slate-400">Briefs, scripts, and shot lists appear here as each stage finishes them.</p>
-        </div>
-      </div>
-    )
-  }
+  if (!selected) return null
 
   return (
-    <div data-testid="video-studio-documents-panel" data-document-count={documents.length} className="min-h-0 flex-1 overflow-y-auto p-4">
+    <ProductionSection id="documents" title="Documents" count={documents.length} icon={<FileText className="h-3.5 w-3.5" />}>
+    <div data-testid="video-studio-documents-panel" data-document-count={documents.length}>
       {documents.length > 1 ? (
         <div className="mb-3 flex flex-wrap gap-1.5">
           {documents.map((document) => (
@@ -624,8 +681,9 @@ function DocumentsPanel({ documents }: { documents: DocumentPresentation[] }) {
         {videoStamp(selected.updatedAt).short ? <span title={videoStamp(selected.updatedAt).full} className="shrink-0 text-[10px] font-medium text-slate-500 dark:text-slate-400">{videoStamp(selected.updatedAt).short}{selected.revision > 1 ? ` · rev ${selected.revision}` : ''}</span> : null}
       </div>
       {selected.note ? <p className="mt-3 rounded-xl bg-slate-100 p-3 text-xs leading-5 text-slate-600 dark:bg-slate-800 dark:text-slate-300">{selected.note}</p> : null}
-      <pre data-testid="video-studio-document-body" className="mt-3 overflow-auto whitespace-pre-wrap rounded-xl border border-slate-200 bg-white p-4 font-mono text-[11px] leading-5 text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">{selected.markdown}</pre>
+      <pre data-testid="video-studio-document-body" className="mt-3 max-h-[32rem] overflow-auto whitespace-pre-wrap rounded-xl border border-slate-200 bg-white p-4 font-mono text-[11px] leading-5 text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">{selected.markdown}</pre>
     </div>
+    </ProductionSection>
   )
 }
 
@@ -647,7 +705,7 @@ function WorkflowPanel({ project }: { project: VideoProject }) {
 
 function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: () => void }) {
   const [tabId, setTabId] = useState<string | null>(null)
-  const [panel, setPanel] = useState<WorkspacePanel>('videos')
+  const [panel, setPanel] = useState<WorkspacePanel>('production')
   const [videos, setVideos] = useState<VideoPresentation[]>([])
   const [characters, setCharacters] = useState<CharacterPresentation[]>([])
   const [documents, setDocuments] = useState<DocumentPresentation[]>([])
@@ -768,10 +826,10 @@ function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: 
         <aside className="hidden min-h-0 border-l border-slate-200 bg-slate-50 lg:flex lg:flex-col dark:border-slate-800 dark:bg-slate-900/40">
           <div className="flex h-14 shrink-0 items-center justify-between border-b border-slate-200 px-3 dark:border-slate-800">
             <div className="flex h-full items-center">
-              {(['videos', 'characters', 'documents', 'files', 'workflow'] as WorkspacePanel[]).map((item) => {
-                const count = item === 'videos' ? videos.length : item === 'characters' ? characters.length : item === 'documents' ? documents.length : 0
+              {(['production', 'files', 'workflow'] as WorkspacePanel[]).map((item) => {
+                const count = item === 'production' ? videos.length + characters.length + documents.length : 0
                 return (
-                  <button key={item} type="button" onClick={() => setPanel(item)} className={`h-full border-b-2 px-2.5 text-xs font-semibold capitalize ${panel === item ? 'border-violet-600 text-violet-700 dark:text-violet-300' : 'border-transparent text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'}`}>
+                  <button key={item} type="button" onClick={() => setPanel(item)} className={`h-full border-b-2 px-3 text-xs font-semibold capitalize ${panel === item ? 'border-violet-600 text-violet-700 dark:text-violet-300' : 'border-transparent text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'}`}>
                     {item}{count > 0 ? <span className="ml-1 rounded-md bg-violet-100 px-1.5 py-0.5 text-[9px] dark:bg-violet-950">{count}</span> : null}
                   </button>
                 )
@@ -779,7 +837,7 @@ function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: 
             </div>
             <button type="button" onClick={() => void refreshProject()} disabled={refreshing} aria-label="Refresh project panel" className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 hover:bg-slate-200 hover:text-slate-700 disabled:opacity-50 dark:hover:bg-slate-800 dark:hover:text-slate-200"><RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} /></button>
           </div>
-          {loadingProject ? <div className="grid h-full place-items-center text-xs text-slate-400"><Loader2 className="h-5 w-5 animate-spin" /></div> : panel === 'videos' ? <VideosPanel project={project} videos={videos} /> : panel === 'characters' ? <CharactersPanel project={project} characters={characters} /> : panel === 'documents' ? <DocumentsPanel documents={documents} /> : panel === 'files' ? <FilesPanel project={project} /> : <WorkflowPanel project={project} />}
+          {loadingProject ? <div className="grid h-full place-items-center text-xs text-slate-400"><Loader2 className="h-5 w-5 animate-spin" /></div> : panel === 'production' ? <ProductionPanel project={project} videos={videos} characters={characters} documents={documents} /> : panel === 'files' ? <FilesPanel project={project} /> : <WorkflowPanel project={project} />}
         </aside>
       </div>
       {showVideoPlayer && videos.length > 0 ? (
@@ -788,7 +846,9 @@ function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: 
             <div className="flex items-center gap-2 text-sm font-semibold text-white"><Film className="h-4 w-4 text-violet-300" />Presented video</div>
             <button type="button" onClick={() => setShowVideoPlayer(false)} className="grid h-8 w-8 place-items-center rounded-lg text-slate-300 hover:bg-slate-800 hover:text-white" aria-label="Close video player"><X className="h-4 w-4" /></button>
           </div>
-          <VideosPanel project={project} videos={videos} />
+          <div className="min-h-0 flex-1 overflow-y-auto bg-white dark:bg-slate-950">
+            <VideosSection project={project} videos={videos} />
+          </div>
         </div>
       ) : null}
     </div>
