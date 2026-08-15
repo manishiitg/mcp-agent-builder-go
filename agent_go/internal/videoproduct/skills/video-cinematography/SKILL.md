@@ -242,11 +242,18 @@ subject**, not after an inconsistency is already noticed:
 
 Both live in a `characters/` folder, and where that folder sits follows
 `video-creation`'s file-layout rule rather than being a third convention:
-in direct chat it is `work/characters/`; running as a workflow stage it is
-`characters/` inside your own step folder. Keep the spec and its reference
-image side by side under the same character name -- a spec whose reference
-image has to be hunted for is a spec that gets paraphrased instead of
-reused.
+in direct chat it is `work/productions/<slug>/characters/`, namespaced per
+production because one project can hold several; running as a workflow
+stage it is `characters/` inside your own step folder. Keep the spec and
+its reference image side by side under the same character name -- a spec
+whose reference image has to be hunted for is a spec that gets paraphrased
+instead of reused.
+
+Call `show_character` as soon as both exist and **before generating any
+shot that uses them**. Every later shot is conditioned on that reference,
+so an unapproved face propagates through the whole piece and can only be
+undone by regenerating all of it -- this is the cheapest moment in the
+production to be told the character is wrong.
 
 Once both exist, every subsequent shot of that subject conditions on the
 same reference image and repeats the same spec phrase verbatim -- this is

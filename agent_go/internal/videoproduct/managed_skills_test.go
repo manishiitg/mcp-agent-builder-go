@@ -183,7 +183,7 @@ func TestCharacterArtifactsHaveOneAgreedLocation(t *testing.T) {
 	}
 
 	cinematography := loadOne("video-cinematography")
-	for _, want := range []string{"characters/<character-name>.md", "characters/<character-name>.png", "work/characters/"} {
+	for _, want := range []string{"characters/<character-name>.md", "characters/<character-name>.png", "work/productions/<slug>/characters/"} {
 		if !strings.Contains(cinematography, want) {
 			t.Fatalf("video-cinematography no longer establishes %q as the character artifact path", want)
 		}
@@ -191,13 +191,15 @@ func TestCharacterArtifactsHaveOneAgreedLocation(t *testing.T) {
 	if !strings.Contains(cinematography, "video-creation") {
 		t.Fatal("video-cinematography does not defer to video-creation's file-layout rule for where characters/ sits")
 	}
+	// The reference is only worth generating early if the user gets to reject
+	// it early; a character shown after its shots exist is a bill, not a check.
+	if !strings.Contains(cinematography, "show_character") {
+		t.Fatal("video-cinematography no longer tells the agent to present a character before generating shots of it")
+	}
 
 	creation := loadOne("video-creation")
-	if !strings.Contains(creation, "work/characters/") {
-		t.Fatal("video-creation's chat file layout no longer accounts for work/characters/")
-	}
-	if !strings.Contains(creation, "`characters/`") {
-		t.Fatal("video-creation's production.json record no longer points at the characters/ artifacts")
+	if !strings.Contains(creation, "work/productions/<slug>/characters/") {
+		t.Fatal("video-creation's chat file layout no longer accounts for per-production character folders")
 	}
 }
 
@@ -247,6 +249,39 @@ func TestGenerationSkillsCarryTheMechanicsTheirGuidanceAssumes(t *testing.T) {
 	for _, want := range []string{"Narration drives the timeline", "ffprobe", "video-storytelling"} {
 		if !strings.Contains(editing, want) {
 			t.Fatalf("video-editing no longer establishes narration-first assembly (missing %q)", want)
+		}
+	}
+}
+
+// Direct chat has no stage gates, so the only thing standing between a user
+// and a finished video they never agreed to is video-creation telling the
+// agent to stop and ask. Its default guidance is the opposite -- infer, do
+// not force a plan, ask at most one question -- which is right for a free
+// re-render and wrong for a paid generation, and in practice produced a
+// finished video with characters the user never saw. This pins the carve-out.
+func TestDirectChatHoldsCheckpointsBeforeSpending(t *testing.T) {
+	if err := RegisterProductSkills(); err != nil {
+		t.Fatalf("RegisterProductSkills: %v", err)
+	}
+	attached := skills.LoadAttachable("", []string{"video-creation"})
+	if len(attached) != 1 {
+		t.Fatalf("LoadAttachable(video-creation) = %v, want exactly one skill", attached)
+	}
+	content := attached[0].Content
+
+	for _, want := range []string{
+		// The checkpoints exist and are tied to spending, not to length.
+		"Checkpoints for a generated production",
+		"Before the first paid call",
+		// Each checkpoint names the tool that makes it visible to the user.
+		"show_document",
+		"show_character",
+		// The default "infer, don't ask" guidance must stay carved out, or it
+		// silently overrides everything above.
+		"This changes when the production will generate footage",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("video-creation no longer holds checkpoints before paid generation (missing %q)", want)
 		}
 	}
 }

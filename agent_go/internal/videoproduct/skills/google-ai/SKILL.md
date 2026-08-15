@@ -165,7 +165,7 @@ conditioned on:
 ```js
 import { readFile } from "node:fs/promises";
 
-const bytes = await readFile("work/characters/<character-name>.png");
+const bytes = await readFile("work/productions/<slug>/characters/<name>.png");
 
 const response = await ai.models.generateContent({
   model: "<resolved-model-id>",

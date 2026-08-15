@@ -138,7 +138,7 @@ the CDN URL to pass in:
 ```js
 import { readFile } from "node:fs/promises";
 
-const bytes = await readFile("work/characters/<character-name>.png");
+const bytes = await readFile("work/productions/<slug>/characters/<name>.png");
 const referenceUrl = await fal.storage.upload(
   new File([bytes], "<character-name>.png", { type: "image/png" }),
 );

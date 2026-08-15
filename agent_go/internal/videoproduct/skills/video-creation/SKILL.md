@@ -5,12 +5,12 @@ description: Direct a video project from a conversational brief through a reprod
 
 # Direct video creation
 
-Treat the conversation as the creative brief. Do not force the user through a formal plan or expose implementation details unless asked.
+Treat the conversation as the creative brief. Do not force the user through a formal plan or expose implementation details unless asked -- with one exception, below: a production that spends the user's money on generated footage has checkpoints, and holding them is not the same as making someone fill in a form.
 
 ## Work inside the project
 
 - Treat `uploads/` as immutable user-owned source material.
-- **Working directly in chat:** use `work/` for scripts, manifests, generated shots, audio, frames, and temporary files (including `work/characters/` for character specs and reference images); put final playable videos in `outputs/`.
+- **Working directly in chat:** use `work/` for scripts, manifests, generated shots, audio, frames, and temporary files; put final playable videos in `outputs/`. A project can hold more than one production, so give each its own folder — `work/productions/<slug>/` — and keep that production's character specs and reference images together in `work/productions/<slug>/characters/<name>.md` and `.png`. Record those exact paths in `production.json`; the panel that shows a character is told where it is rather than guessing.
 - **Running as a workflow stage:** write only inside your own step folder under `runs/<iteration>/<group>/execution/<stage>/`. `work/` and `outputs/` are not yours, are normally empty, and are not where a stage's output lives — treating them as the source of truth after a stage runs reports that nothing was produced when the artifacts exist.
 - Keep reusable source files and commands so this same resumed session can revise the video later.
 - Never publish, share, or upload a result.
@@ -26,6 +26,39 @@ Infer as much as possible from the chat and uploaded assets. Establish only the 
 - whether to edit supplied footage, generate new shots, or combine both.
 
 Ask one concise question only when a missing choice would substantially change the result or cost. Otherwise make a reasonable choice and state it briefly.
+
+**This changes when the production will generate footage.** The guidance above is calibrated for uploaded assets and deterministic composition, where a wrong guess costs a free re-render. Paid generation is different in kind: a wrong character or a misjudged scope is money already spent, and no amount of later editing recovers it. For any production that will call `fal-ai` or `google-ai`, work through the checkpoints below instead of inferring your way to a finished video.
+
+## Checkpoints for a generated production
+
+Direct chat has no stage gates -- the `longform` and `shortform` workflows
+do, and running in chat does not mean skipping what those gates are for. It
+means you hold them yourself. Stop at each checkpoint and let the user
+answer before spending:
+
+1. **Before the first paid call**, resolve the production-level unknowns in
+   `video-model-selection`: which provider keys actually exist, whether any
+   character or product must recur across shots, roughly how many paid calls
+   the piece implies and any cost ceiling, and how many re-prompts a
+   disappointing shot gets. Ask these together, once, in plain language --
+   this is the one place a short interview is worth more than a good guess.
+2. **Show the plan before building it.** When the script and shot list
+   exist, call `show_document` for each so the user reads what they are
+   paying for. A shot list is cheap to change and expensive to regret.
+3. **Show every recurring character before generating a single shot of it.**
+   Once its spec and reference image exist (see `video-cinematography`),
+   call `show_character` and wait. This is the highest-value checkpoint in
+   the whole product: every later shot is conditioned on that reference, so
+   an unapproved face propagates through the entire piece and can only be
+   fixed by regenerating all of it.
+4. **Then generate**, staying inside the agreed ceiling, and report what was
+   spent against it.
+
+Skipping these because the user seemed to be in a hurry is the wrong trade:
+they are what makes a paid production correctable while correcting it is
+still cheap. A user who genuinely wants no checkpoints will say so, and
+that is a decision they get to make explicitly rather than one you make for
+them by staying quiet.
 
 ## Inspect before producing
 
