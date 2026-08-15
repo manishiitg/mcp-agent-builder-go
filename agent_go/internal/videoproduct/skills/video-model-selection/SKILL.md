@@ -86,6 +86,12 @@ model explorer, Google's Gemini API model reference), not from memory:
   supports the production's required aspect ratio and resolution rather than
   planning to crop/pad a mismatched output after the fact, which degrades
   framing decided at generation time.
+- **Open vs. closed weights**: most hosted models are closed API-only. A
+  minority ship open weights, meaning the model can also be self-hosted or
+  fine-tuned rather than only called as a paid API -- relevant if the brief
+  has licensing constraints, or the user asks specifically for an
+  open-weight option rather than assuming every model is equivalent on this
+  axis.
 
 ## Notable options as of 2026-08-15 -- a starting point, not a source of truth
 
@@ -103,7 +109,13 @@ memory in a later session; re-check instead.
   latent space as the visuals so it's synchronized without a post layering
   pass, and roughly double 2.0's native ceiling -- for image-to-video this
   shows up most as materially better subject/character consistency across
-  the whole clip (see `video-cinematography`'s consistency section). Also
+  the whole clip (see `video-cinematography`'s consistency section). MiniMax
+  H3 (`minimax/h3/text-to-video`, `.../image-to-video`, `.../reference-to-video`)
+  is the notable open-weights option -- self-hostable/fine-tunable, not
+  only a closed API -- generating 2K, 5-15s clips at 24 FPS with native
+  stereo audio and rich multimodal reference input (up to 9 images for
+  subject/style, 3 video clips for motion, 3 audio clips), which also makes
+  it a strong reference-conditioning option for character consistency. Also
   available: Veo 3.1 / Veo 3.1 Lite (native audio, lip-synced dialogue),
   Kling 3.0 Pro (cinematic, native audio, multilingual lip-sync), Wan 2.6,
   LTX 2.0.
