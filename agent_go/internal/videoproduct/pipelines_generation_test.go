@@ -7,24 +7,34 @@ import (
 
 // The generation pipelines are the only ones that spend the user's money —
 // the infographic route's assets stage makes ffmpeg placeholders and costs
-// nothing. RequiresApproval is a documentation flag the runtime never reads,
-// so the gate that actually works is the authorization paragraph in the
-// stage's own prompt. This pins the two together: a stage marked as spending
-// must carry the gate, and a stage carrying the gate must be marked. Either
-// half alone is a stage that can quietly bill someone.
+// nothing. The gate is the authorization paragraph in the stage's own prompt,
+// so this pins exactly which stages carry it. Naming them here is the point:
+// a new stage that starts calling a paid API without the gate fails this
+// test, and removing the gate from one of these fails it too.
 func TestEverySpendingStageCarriesTheApprovalGate(t *testing.T) {
 	const gateMarker = "ONLY from the human input for THIS stage"
+
+	wantGated := map[string]bool{
+		"longform-characters": true,
+		"longform-narration":  true,
+		"longform-generate":   true,
+		"shortform-generate":  true,
+	}
 
 	for _, pipeline := range []*Pipeline{longformPipeline, shortformPipeline} {
 		for _, stage := range pipeline.Stages {
 			hasGate := strings.Contains(stage.Description, gateMarker)
 			switch {
-			case stage.RequiresApproval && !hasGate:
-				t.Fatalf("%s/%s is marked RequiresApproval but its prompt carries no approval gate, so nothing stops it spending", pipeline.ID, stage.ID)
-			case !stage.RequiresApproval && hasGate:
-				t.Fatalf("%s/%s carries the approval gate but is not marked RequiresApproval; the flag is the only place a reader sees which stages cost money", pipeline.ID, stage.ID)
+			case wantGated[stage.ID] && !hasGate:
+				t.Fatalf("%s spends money but its prompt carries no approval gate, so nothing stops it billing the user", stage.ID)
+			case !wantGated[stage.ID] && hasGate:
+				t.Fatalf("%s carries the approval gate but is not listed as a spending stage; add it to wantGated so the paid surface stays written down in one place", stage.ID)
 			}
+			delete(wantGated, stage.ID)
 		}
+	}
+	for id := range wantGated {
+		t.Fatalf("%s is listed as a spending stage but no longer exists in either pipeline", id)
 	}
 
 	// The gate is worthless if it accepts approval granted anywhere else --

@@ -26,9 +26,6 @@ type PipelineStage struct {
 	// only its own director skill plus the shared meta/core ones. Empty means
 	// "no stage-specific skill yet" (wired in a later phase).
 	Skills []string
-	// RequiresApproval marks a stage that must not spend money or produce
-	// irreversible output without explicit user approval in its human input.
-	RequiresApproval bool
 }
 
 // OrchestratedBlock groups consecutive stages under one todo_task orchestrator
