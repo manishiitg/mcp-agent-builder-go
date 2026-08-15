@@ -28,6 +28,7 @@ import {
 import ChatArea, { type ChatContentRendererProps } from '../../components/ChatArea'
 import { CleanConversationSurface } from '../../components/CleanConversationSurface'
 import { ConversationMarkdownRenderer } from '../../components/ui/MarkdownRenderer'
+import { clampPanelWidth, loadStoredPanelWidth, saveStoredPanelWidth } from './panelWidth'
 import { videoStamp } from './videoStamp'
 import { ProductSurfaceSwitcher } from '../../components/ProductSurfaceSwitcher'
 import SecretsManagerModal from '../../components/secrets/SecretsManagerModal'
@@ -757,6 +758,35 @@ function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: 
   const [refreshing, setRefreshing] = useState(false)
   const videoCountRef = useRef(0)
 
+  // Production panel width: draggable, and remembered per browser rather than
+  // reset every visit. Read once on mount rather than on every render -- the
+  // stored value only matters as a starting point, not something to keep
+  // re-syncing against.
+  const [panelWidth, setPanelWidth] = useState(() => loadStoredPanelWidth())
+  const [isResizingPanel, setIsResizingPanel] = useState(false)
+  const layoutGridRef = useRef<HTMLDivElement>(null)
+  const startPanelResize = useCallback((event: React.PointerEvent) => {
+    event.preventDefault()
+    const grid = layoutGridRef.current
+    if (!grid) return
+    setIsResizingPanel(true)
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      const gridRight = grid.getBoundingClientRect().right
+      setPanelWidth(clampPanelWidth(gridRight - moveEvent.clientX))
+    }
+    const stopResize = () => {
+      setIsResizingPanel(false)
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', stopResize)
+      // Persist once at the end of the drag rather than on every pointermove
+      // -- localStorage.setItem on a mousemove-frequency callback is wasted
+      // work for a value nobody reads until the next page load.
+      setPanelWidth((current) => { saveStoredPanelWidth(current); return current })
+    }
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', stopResize)
+  }, [])
+
   const refreshProject = useCallback(async (quiet = false) => {
     if (!quiet) setRefreshing(true)
     // Loaded together so one refresh reflects the whole production. Only the
@@ -850,7 +880,11 @@ function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: 
         <div className="min-w-0"><span className="block text-[10px] font-medium text-slate-400">Projects /</span><h1 className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{project.title}</h1></div>
         {videos.length > 0 ? <button type="button" onClick={() => setShowVideoPlayer(true)} className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-violet-600 px-2.5 text-xs font-semibold text-white shadow-sm hover:bg-violet-500 lg:hidden" aria-label="Play presented video"><Play className="h-3.5 w-3.5" fill="currentColor" />Play</button> : null}
       </VideoStudioHeader>
-      <div className="grid min-h-0 flex-1 lg:grid-cols-[minmax(440px,1fr)_minmax(340px,460px)]">
+      <div
+        ref={layoutGridRef}
+        className="grid min-h-0 flex-1 lg:grid-cols-[minmax(440px,1fr)_auto_var(--vs-panel-width)]"
+        style={{ '--vs-panel-width': `${clampPanelWidth(panelWidth)}px` } as React.CSSProperties}
+      >
         <main className="flex min-h-0 flex-col overflow-hidden bg-white dark:bg-slate-950">
           <div className="min-h-0 flex-1">
             {tabId ? (
@@ -866,6 +900,17 @@ function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: 
             ) : <div className="grid h-full place-items-center text-xs text-slate-400"><Loader2 className="mr-2 inline h-4 w-4 animate-spin" />Connecting project agent…</div>}
           </div>
         </main>
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize the production panel"
+          onPointerDown={startPanelResize}
+          className={`relative hidden w-1.5 shrink-0 cursor-col-resize touch-none lg:block ${isResizingPanel ? 'bg-violet-400 dark:bg-violet-600' : 'bg-transparent hover:bg-violet-200 dark:hover:bg-violet-900'}`}
+        >
+          {/* Wider than the visible bar so the drag target is comfortable to grab
+              without making the resting divider look thick. */}
+          <div className="absolute inset-y-0 -left-1.5 -right-1.5" />
+        </div>
         <aside className="hidden min-h-0 border-l border-slate-200 bg-slate-50 lg:flex lg:flex-col dark:border-slate-800 dark:bg-slate-900/40">
           <div className="flex h-14 shrink-0 items-center justify-between border-b border-slate-200 px-3 dark:border-slate-800">
             <div className="flex h-full items-center">
