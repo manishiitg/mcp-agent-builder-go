@@ -6,7 +6,8 @@ vi.mock('../../services/api', () => ({
   getAuthToken: () => null,
 }))
 import { agentApi } from '../../services/api'
-import { loadVideoProjects, parsePresentations, parseProjectManifest, parseWorkflowSteps, projectSlug, relativeTime } from './videoStudioData'
+import { loadVideoProjects, parsePresentations, parseProjectManifest, parseWorkflowSteps, projectSlug, relativeTime, toCharacterPresentations, toDocumentPresentations } from './videoStudioData'
+import type { WorkspacePresentation } from '../../platform/presentations/presentationData'
 
 describe('Video Studio workspace data', () => {
   it('accepts only a complete Video Studio product manifest', () => {
@@ -89,5 +90,54 @@ describe('Video Studio workspace data', () => {
 
     expect(projects.map((project) => project.id)).toEqual(['alpha', 'beta'])
     expect(getPlannerFileContent).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('Video Studio pre-production presentations', () => {
+  const presentation = (payload: Record<string, unknown>, overrides: Partial<WorkspacePresentation> = {}): WorkspacePresentation => ({
+    id: 'p1',
+    kind: 'media.character',
+    title: 'Aang',
+    status: 'ready',
+    revision: 1,
+    updatedAt: '2026-08-15T10:00:00Z',
+    payload,
+    ...overrides,
+  } as WorkspacePresentation)
+
+  it('drops a character with no reference image', () => {
+    // The reference image is what a generated shot gets compared against, so a
+    // character without one cannot do the job the panel exists for -- better
+    // absent than rendered as a broken tile that looks approved.
+    const characters = toCharacterPresentations([
+      presentation({ name: 'Aang', image_path: 'work/characters/aang.png', spec_path: 'work/characters/aang.md', spec: 'bald, blue arrow tattoo', model: 'bytedance/seedance-2.5', provider: 'fal-ai' }),
+      presentation({ name: 'Katara', spec_path: 'work/characters/katara.md' }, { id: 'p2' }),
+    ])
+
+    expect(characters).toHaveLength(1)
+    expect(characters[0]).toMatchObject({
+      name: 'Aang',
+      imagePath: 'work/characters/aang.png',
+      spec: 'bald, blue arrow tattoo',
+      model: 'bytedance/seedance-2.5',
+      provider: 'fal-ai',
+    })
+  })
+
+  it('falls back to the presentation title when the payload carries no name', () => {
+    const [character] = toCharacterPresentations([
+      presentation({ image_path: 'a.png' }, { title: 'Narrator' }),
+    ])
+    expect(character.name).toBe('Narrator')
+  })
+
+  it('drops a document with no path and titles one from its filename', () => {
+    const documents = toDocumentPresentations([
+      presentation({ path: 'work/longform-script.md', markdown: '# Script' }, { id: 'd1', kind: 'document.markdown', title: '' }),
+      presentation({ markdown: 'orphan' }, { id: 'd2', kind: 'document.markdown', title: '' }),
+    ])
+
+    expect(documents).toHaveLength(1)
+    expect(documents[0]).toMatchObject({ title: 'longform-script.md', path: 'work/longform-script.md', markdown: '# Script' })
   })
 })

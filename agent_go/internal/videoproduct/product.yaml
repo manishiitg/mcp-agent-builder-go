@@ -88,6 +88,17 @@ profile:
       # pkg/presentations and docs/design/agent_tool_surface_single_source.md.
       presentation:
         kind: media.video
+    # A character reference is pre-production, not a deliverable: it is shown
+    # so the user can reject a face while changing it is still cheap, which is
+    # why it carries no QA gate the way show-video does.
+    - id: video.show-character
+      presentation:
+        kind: media.character
+    # The written artifacts a stage produces — brief, script, shot list — are
+    # what the user actually approves between stages.
+    - id: video.show-document
+      presentation:
+        kind: document.markdown
   tool_policy:
     # Video Studio names the tools it needs. Everything AgentWorks registers that
     # is not listed here never reaches the agent.
@@ -116,6 +127,10 @@ profile:
     enabled:
       # The product's own control.
       - show_video
+      # Pre-production surfaces: a character's reference image before shots are
+      # generated from it, and the written artifact a stage just produced.
+      - show_character
+      - show_document
       # The bridge shell is how product HTTP APIs are called. Every provider can
       # reach it (Codex only through its JS code-mode sandbox, which has no
       # network and no env of its own), so it is not redundant with the CLI's

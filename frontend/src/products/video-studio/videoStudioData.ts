@@ -86,6 +86,35 @@ export type VideoPresentation = {
   workspacePresentation: WorkspacePresentation
 }
 
+// A character is the reference every later shot of that subject is generated
+// against, so the panel shows the image and its spec together — checking a
+// shot against a remembered description is exactly how identity drift gets
+// missed.
+export type CharacterPresentation = {
+  id: string
+  name: string
+  imagePath: string
+  specPath: string
+  spec: string
+  model: string
+  provider: string
+  note: string
+  revision: number
+  updatedAt: string
+  workspacePresentation: WorkspacePresentation
+}
+
+export type DocumentPresentation = {
+  id: string
+  title: string
+  path: string
+  markdown: string
+  note: string
+  revision: number
+  updatedAt: string
+  workspacePresentation: WorkspacePresentation
+}
+
 export type VideoAsset = {
   path: string
   name: string
@@ -308,6 +337,54 @@ export async function loadVideoPresentations(project: VideoProject): Promise<Vid
       workspacePresentation: presentation,
     }]
   })
+}
+
+// A character without a reference image is not a character this panel can do
+// its job with -- the image is what a later shot gets compared against -- so
+// it is dropped rather than rendered as a broken tile.
+export function toCharacterPresentations(presentations: WorkspacePresentation[]): CharacterPresentation[] {
+  return presentations.flatMap((presentation) => {
+    const imagePath = asString(presentation.payload.image_path)
+    if (!imagePath) return []
+    return [{
+      id: presentation.id,
+      name: asString(presentation.payload.name) || presentation.title,
+      imagePath,
+      specPath: asString(presentation.payload.spec_path),
+      spec: asString(presentation.payload.spec),
+      model: asString(presentation.payload.model),
+      provider: asString(presentation.payload.provider),
+      note: asString(presentation.payload.note),
+      revision: presentation.revision,
+      updatedAt: presentation.updatedAt,
+      workspacePresentation: presentation,
+    }]
+  })
+}
+
+export async function loadCharacterPresentations(project: VideoProject): Promise<CharacterPresentation[]> {
+  return toCharacterPresentations(await loadWorkspacePresentations(project.workspacePath, ['media.character']))
+}
+
+export function toDocumentPresentations(presentations: WorkspacePresentation[]): DocumentPresentation[] {
+  return presentations.flatMap((presentation) => {
+    const path = asString(presentation.payload.path)
+    if (!path) return []
+    return [{
+      id: presentation.id,
+      title: presentation.title || path.split('/').pop() || 'Document',
+      path,
+      markdown: asString(presentation.payload.markdown),
+      note: asString(presentation.payload.note),
+      revision: presentation.revision,
+      updatedAt: presentation.updatedAt,
+      workspacePresentation: presentation,
+    }]
+  })
+}
+
+export async function loadDocumentPresentations(project: VideoProject): Promise<DocumentPresentation[]> {
+  return toDocumentPresentations(await loadWorkspacePresentations(project.workspacePath, ['document.markdown']))
 }
 
 export async function loadVideoAssets(project: VideoProject): Promise<VideoAsset[]> {
