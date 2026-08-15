@@ -55,4 +55,11 @@ func TestSystemPromptMatchesTheProductItDescribes(t *testing.T) {
 	if !strings.Contains(strings.ToLower(text), "approval of a storyboard is not approval to spend") {
 		t.Fatal("the system prompt no longer warns that an approved plan is not approval to spend")
 	}
+
+	// Chat and run_full_workflow are two different contracts: chat pauses at
+	// checkpoints, the workflow runs end to end unattended. Losing this line
+	// is how chat quietly turns into a silent workflow run.
+	if !strings.Contains(text, "run_full_workflow") || !strings.Contains(strings.ToLower(text), "not friction to minimize") {
+		t.Fatal("the system prompt no longer distinguishes chat's checkpoints from run_full_workflow's unattended mode")
+	}
 }

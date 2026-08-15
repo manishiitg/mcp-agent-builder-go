@@ -3,14 +3,11 @@ package videoproduct
 import (
 	"embed"
 	"errors"
-	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/agentprofiles"
-	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/skills"
-	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 )
 
 const DefaultClaudeModel = "claude-sonnet-5"
@@ -61,23 +58,11 @@ var registerProductSkillsErr error
 
 func RegisterProductSkills() error {
 	registerProductSkillsOnce.Do(func() {
-		for _, definition := range profileSkills {
-			data, err := profileSkillFiles.ReadFile(definition.path)
-			if err != nil {
-				registerProductSkillsErr = err
-				return
-			}
-			content := string(data)
-			if strings.HasPrefix(content, "---\n") {
-				if end := strings.Index(content[4:], "\n---\n"); end >= 0 {
-					content = content[end+9:]
-				}
-			}
-			if err := skills.RegisterBuiltin(&llmtypes.Skill{Name: definition.name, Description: definition.description, Content: content, Source: llmtypes.SkillSource{Origin: "builtin"}}); err != nil {
-				registerProductSkillsErr = fmt.Errorf("register skill %q: %w", definition.name, err)
-				return
-			}
+		bindings := make([]agentprofiles.SkillFileBinding, len(profileSkills))
+		for i, definition := range profileSkills {
+			bindings[i] = agentprofiles.SkillFileBinding{Name: definition.name, Description: definition.description, Path: definition.path}
 		}
+		registerProductSkillsErr = agentprofiles.RegisterEmbeddedSkills(profileSkillFiles, bindings)
 	})
 	return registerProductSkillsErr
 }

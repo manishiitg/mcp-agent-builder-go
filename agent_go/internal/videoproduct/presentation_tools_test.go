@@ -179,6 +179,37 @@ func TestProductCommandsCarryTheirPromptsAndHideTheirPaths(t *testing.T) {
 	}
 }
 
+// Before this, a product had no way to say which credentials its skills
+// need, so nothing could answer "what does this workspace still need" before
+// a paid run started -- a user found that out only when a generation call
+// failed partway through. This pins that both credentials this product
+// actually reads (see fal-ai and google-ai's Authentication sections) are
+// declared, and that they are grouped rather than each marked independently
+// required -- either alone is enough to carry a production, so requiring
+// both would be a false constraint no config would ever satisfy exactly.
+func TestProductDeclaresTheSecretsItsSkillsRead(t *testing.T) {
+	manifest, err := VideoStudioManifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]agentprofiles.SecretBinding{}
+	for _, secret := range manifest.Profile.Secrets {
+		byName[secret.Name] = secret
+	}
+	for _, name := range []string{"FAL_KEY", "GEMINI_API_KEY"} {
+		secret, ok := byName[name]
+		if !ok {
+			t.Fatalf("product.yaml does not declare %s, but fal-ai/google-ai read it from the environment", name)
+		}
+		if strings.TrimSpace(secret.Description) == "" {
+			t.Fatalf("%s has no description; a user deciding whether to configure it has nothing to read", name)
+		}
+	}
+	if byName["FAL_KEY"].Group == "" || byName["FAL_KEY"].Group != byName["GEMINI_API_KEY"].Group {
+		t.Fatal("FAL_KEY and GEMINI_API_KEY must share a group -- either alone carries a production, so neither should be independently required")
+	}
+}
+
 // The tools are useless unless the product both declares a kind for them and
 // admits them through its allowlist -- the two halves live in different parts
 // of product.yaml and each is silently inert without the other.

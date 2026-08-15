@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"embed"
 	"fmt"
-	"strings"
 	"sync"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/agentprofiles"
@@ -74,25 +73,14 @@ func VideoStudioManifest() (ProductManifest, error) {
 			return
 		}
 		// Slash-command prompts live in their own files so they read as prompts
-		// rather than as manifest data. Resolve them once, here, so everything
-		// downstream -- including the profile the frontend fetches -- sees a
-		// command that already carries its text. A declared command whose file
-		// is missing is a broken product, not a command to quietly drop.
-		for i, command := range productManifest.Profile.Commands {
-			if strings.TrimSpace(command.File) == "" {
-				productManifestErr = fmt.Errorf("Video Studio command %q declares no file", command.Name)
-				return
-			}
-			prompt, err := productConfigFiles.ReadFile(command.File)
-			if err != nil {
-				productManifestErr = fmt.Errorf("read Video Studio command %q: %w", command.Name, err)
-				return
-			}
-			if len(bytes.TrimSpace(prompt)) == 0 {
-				productManifestErr = fmt.Errorf("Video Studio command %q has an empty prompt", command.Name)
-				return
-			}
-			productManifest.Profile.Commands[i].Prompt = string(bytes.TrimSpace(prompt))
+		// rather than as manifest data; the shared resolver reads each one and
+		// fills in Prompt so everything downstream -- including the profile the
+		// frontend fetches -- sees a command that already carries its text. A
+		// declared command whose file is missing is a broken product, not a
+		// command to quietly drop.
+		if err := agentprofiles.ResolveCommandPrompts(productConfigFiles, productManifest.Profile.Commands); err != nil {
+			productManifestErr = fmt.Errorf("Video Studio %w", err)
+			return
 		}
 	})
 	return productManifest, productManifestErr
@@ -107,17 +95,11 @@ func renderProductPrompt(_ string, localTime string) string {
 	if err != nil {
 		panic(fmt.Errorf("read Video Studio prompt %q: %w", manifest.Prompt.File, err))
 	}
-	values := map[string]string{
-		"TIME": localTime,
-	}
+	values := map[string]string{"TIME": localTime}
 	for name, value := range manifest.Prompt.Variables {
 		values[name] = value
 	}
-	prompt := string(contents)
-	for name, value := range values {
-		prompt = strings.ReplaceAll(prompt, "{{"+name+"}}", value)
-	}
-	return prompt
+	return agentprofiles.RenderPromptTemplate(string(contents), values)
 }
 
 func mustVideoStudioManifest() ProductManifest {

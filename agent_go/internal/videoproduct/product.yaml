@@ -189,6 +189,18 @@ profile:
       description: Re-run quality checks on the current cut
       icon: check
       file: commands/check.md
+  # Credentials this product's skills read from the environment. Declaring
+  # these is what lets "which key is missing" be answered before a paid run
+  # starts, instead of only after a generation call fails partway through a
+  # production -- see fal-ai and google-ai's Authentication sections for the
+  # SECRET_<NAME> mechanics these names are read through.
+  secrets:
+    - name: FAL_KEY
+      description: fal.ai API key. Unlocks fal.ai's hosted third-party video/image/voice/music models (see the fal-ai skill). Get one at fal.ai.
+      group: generation-provider
+    - name: GEMINI_API_KEY
+      description: Google Gemini API key. Unlocks Google's own video (Veo), image, and narration (TTS) models (see the google-ai skill) -- alone, enough for a complete narrated production. Get one at aistudio.google.com.
+      group: generation-provider
   runtime:
     # Video Studio is a non-technical surface. Every supported coding provider
     # runs through its native structured JSON protocol: tool calls, usage, and

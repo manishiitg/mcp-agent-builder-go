@@ -133,6 +133,30 @@ type CommandBinding struct {
 	Prompt string `json:"prompt" yaml:"prompt,omitempty"`
 }
 
+// SecretBinding names a credential a product's skills read from the
+// environment, so a workspace can be checked for what it is missing before a
+// run starts rather than discovering a missing key mid-generation. Nothing
+// before this declared secrets at all -- a product's skills had to explain
+// the `SECRET_<NAME>` convention in prose, and there was no way to answer
+// "what does this product need" without reading every skill.
+//
+// This is deliberately declarative only: no value, no default, nothing that
+// could leak a credential through a profile response. A client cross-checks
+// Name against the workspace/user secrets it already fetches separately (see
+// GET /api/secrets/workflow/stored) to compute whether it is configured.
+type SecretBinding struct {
+	Name string `json:"name" yaml:"name"`
+	// Description says what the credential is for and, ideally, where to get
+	// one -- this is read by a human deciding whether to go set it up.
+	Description string `json:"description" yaml:"description"`
+	// Group marks secrets where any ONE member satisfies the requirement --
+	// e.g. FAL_KEY and GEMINI_API_KEY both unlock generation, so neither is
+	// individually required, but the group as a whole is. Secrets with no
+	// group are independently required when Required is true.
+	Group    string `json:"group,omitempty" yaml:"group,omitempty"`
+	Required bool   `json:"required,omitempty" yaml:"required,omitempty"`
+}
+
 type Profile struct {
 	ID                   string           `json:"id" yaml:"id"`
 	Name                 string           `json:"name" yaml:"name"`
@@ -141,6 +165,7 @@ type Profile struct {
 	Skills               []string         `json:"skills,omitempty" yaml:"skills,omitempty"`
 	Tools                []ToolBinding    `json:"tools,omitempty" yaml:"tools,omitempty"`
 	Commands             []CommandBinding `json:"commands,omitempty" yaml:"commands,omitempty"`
+	Secrets              []SecretBinding  `json:"secrets,omitempty" yaml:"secrets,omitempty"`
 	ToolPolicy           ToolPolicy       `json:"tool_policy,omitempty" yaml:"tool_policy,omitempty"`
 	Runtime              RuntimePolicy    `json:"runtime" yaml:"runtime"`
 	BuiltIn              bool             `json:"built_in" yaml:"built_in"`
