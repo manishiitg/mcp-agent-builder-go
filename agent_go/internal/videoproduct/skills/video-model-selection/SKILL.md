@@ -95,11 +95,18 @@ capabilities against the provider's own live reference before calling
 anything, per "Never invent a model ID" above. Do not extend this list from
 memory in a later session; re-check instead.
 
-- **Video, hosted on fal.ai**: Veo 3.1 / Veo 3.1 Lite (native audio,
-  lip-synced dialogue), Kling 3.0 Pro (cinematic, native audio,
-  multilingual lip-sync), Seedance 2.0 Fast/Pro (native audio, real-world
-  physics, director-level camera control, accepts text/image/audio/video
-  input), Wan 2.6, LTX 2.0.
+- **Video, hosted on fal.ai**: Seedance 2.5 (`bytedance/seedance-2.5/text-to-video`,
+  `.../image-to-video`, `.../reference-to-video`) supersedes 2.0 -- native
+  30-second generation in one pass (relevant to the shot-count arithmetic
+  above: two calls can cover a full 60-second piece), up to 50 multimodal
+  references in one generation, native audio co-processed in the same
+  latent space as the visuals so it's synchronized without a post layering
+  pass, and roughly double 2.0's native ceiling -- for image-to-video this
+  shows up most as materially better subject/character consistency across
+  the whole clip (see `video-cinematography`'s consistency section). Also
+  available: Veo 3.1 / Veo 3.1 Lite (native audio, lip-synced dialogue),
+  Kling 3.0 Pro (cinematic, native audio, multilingual lip-sync), Wan 2.6,
+  LTX 2.0.
 - **Image, hosted on fal.ai**: FLUX, and Google's Nano Banana models
   re-hosted alongside fal.ai's own catalog.
 - **Voice/audio, hosted on fal.ai**: ElevenLabs (text-to-speech, voice

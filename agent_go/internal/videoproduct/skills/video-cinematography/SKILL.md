@@ -91,7 +91,10 @@ before committing to an approach for the whole arc (see
    character/subject first, then condition every subsequent shot on that
    same reference rather than re-describing appearance in text each time.
    Text descriptions alone drift across independent generations even with
-   an identical prompt.
+   an identical prompt. See `video-model-selection`'s dated model notes for
+   a current example of a model whose image-to-video mode specifically
+   improves consistency this way -- confirm against the live reference
+   before relying on it, the same as any other model claim.
 2. **A written character/subject sheet.** Maintain one canonical, detailed
    description (face, build, exact outfit, product's exact colors/markings)
    in `production.json` and reuse it verbatim in every prompt for that
