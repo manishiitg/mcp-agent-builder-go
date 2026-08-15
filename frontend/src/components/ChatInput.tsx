@@ -2722,7 +2722,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     clearInputState()
 
     // Look up and execute the command from the registry
-    const cmd = findCommand(command, selectedModeCategory)
+    const cmd = findCommand(command, selectedModeCategory, activeTab?.metadata?.agentProfileId)
     const validationError = cmd ? getCommandValidationError(cmd, beforeSlash) : null
     if (cmd && validationError) {
       addToast(validationError, 'info')
@@ -4161,6 +4161,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         position={commandDialogPosition}
         modeCategory={selectedModeCategory}
         workshopMode={selectedModeCategory === 'workflow' ? getEffectiveWorkflowModes().workshopMode : undefined}
+        agentProfileId={activeTab?.metadata?.agentProfileId}
         onManageCommands={handleManageCommands}
         onEditCommand={handleEditCommand}
         onDeleteCommand={handleDeleteCommand}
