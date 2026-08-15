@@ -48,6 +48,7 @@ var profileSkills = []struct{ name, description, path string }{
 	{"video-quality", "Validate candidate videos technically, visually, and editorially.", "skills/video-quality/SKILL.md"},
 	{"hyperframes-quality", "Gate editable HyperFrames compositions and rendered evidence for layout, timing, contrast, and motion quality.", "skills/hyperframes-quality/SKILL.md"},
 	{"html-composition", "Design video frames as HTML/CSS and render them with headless Chrome and ffmpeg.", "skills/html-composition/SKILL.md"},
+	{"fal-ai", "Generate AI video, image, voice, and music clips via fal.ai's Python client for long-form narrative productions.", "skills/fal-ai/SKILL.md"},
 }
 
 var registerProductSkillsOnce sync.Once

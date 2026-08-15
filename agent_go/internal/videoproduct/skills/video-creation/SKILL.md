@@ -61,7 +61,8 @@ As a workflow stage, the equivalent record is your stage's own artifact (researc
 
 - Use local editing for trims, crops, concatenation, audio, captions, and supplied footage.
 - Use programmatic overlays for exact text, branded cards, product UI, or repeatable templates.
-- For this product, build explainers from uploaded assets and deterministic HTML/CSS composition; do not create cinematic or AI-generated footage.
+- For product-led explainers, feature breakdowns, and short-form pieces, build from uploaded assets and deterministic HTML/CSS composition (`product-infographic` / HyperFrames) rather than generating footage -- exact wording, UI, and prices belong in that layer, not an AI-generated shot.
+- For narrative long-form video where the brief genuinely calls for AI-generated footage, reference imagery, voice, or music, use the `fal-ai` skill. This is the exception, not the default: prefer uploaded assets and deterministic composition whenever they can carry the brief.
 - Use the `video-editing` skill for assembly, captions, audio, and exports.
 - Use the `video-quality` skill before presenting a version as complete.
 

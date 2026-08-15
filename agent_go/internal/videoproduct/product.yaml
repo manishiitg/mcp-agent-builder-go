@@ -74,6 +74,7 @@ profile:
     - html-composition
     - hyperframes
     - agent-browser
+    - fal-ai
   tools:
     - id: video.show-video
       # Declares what this tool shows, not how. The frontend renderer
@@ -236,4 +237,5 @@ workflows:
     - html-composition
     - hyperframes
     - agent-browser
+    - fal-ai
   browser_mode: auto

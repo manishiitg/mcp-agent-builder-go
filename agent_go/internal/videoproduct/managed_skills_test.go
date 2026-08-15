@@ -1,6 +1,11 @@
 package videoproduct
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/skills"
+)
 
 func TestVideoStudioDeclaresManagedHyperFramesSkills(t *testing.T) {
 	manifest, err := VideoStudioManifest()
@@ -91,6 +96,54 @@ func TestInfographicWorkflowCarriesDurableArtifactsForward(t *testing.T) {
 	for _, name := range []string{"BRIEF.md", "render-report.md", "final.mp4", "hyperframes-project-final.tgz"} {
 		if !qualityDeps[name] {
 			t.Fatalf("quality dependencies omit %q: %+v", name, qualityDeps)
+		}
+	}
+}
+
+// fal-ai is a product-owned skill (embedded via profileSkills, not the
+// managed HyperFrames dependency source), and it is not part of the
+// infographic pipeline's own stages -- product-infographic never routes to
+// it. It exists so a chat session can generate AI video/image/voice/music
+// for a long-form production the infographic route does not cover. This
+// pins that it registers and reads back cleanly, and that adding it did not
+// silently pull it into every infographic stage's attach list.
+func TestFalAISkillRegistersAndStaysOutOfTheInfographicPipeline(t *testing.T) {
+	if err := RegisterProductSkills(); err != nil {
+		t.Fatalf("RegisterProductSkills: %v", err)
+	}
+	if !skills.IsBuiltinSkill("fal-ai") {
+		t.Fatal("fal-ai did not register as a builtin skill")
+	}
+	attached := skills.LoadAttachable("", []string{"fal-ai"})
+	if len(attached) != 1 {
+		t.Fatalf("LoadAttachable(fal-ai) = %v, want exactly one skill", attached)
+	}
+	if !strings.Contains(attached[0].Content, "SECRET_FAL_KEY") {
+		t.Fatal("fal-ai skill lost the SECRET_ prefix translation guidance")
+	}
+	if !strings.Contains(attached[0].Content, "Never invent a model ID") {
+		t.Fatal("fal-ai skill lost its no-guessed-model-ID rule")
+	}
+
+	manifest, err := VideoStudioManifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, name := range manifest.Profile.Skills {
+		if name == "fal-ai" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("fal-ai is not in the product's default skill set: %v", manifest.Profile.Skills)
+	}
+
+	for _, stage := range infographicPipeline.Stages {
+		for _, name := range stage.Skills {
+			if name == "fal-ai" {
+				t.Fatalf("infographic stage %q attaches fal-ai; the infographic route stays on HyperFrames composition", stage.ID)
+			}
 		}
 	}
 }
