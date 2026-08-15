@@ -19,7 +19,21 @@ type resolvedAgentProfile struct {
 	Prompt     string
 }
 
-func cleanAgentProfileWorkspace(raw string) (string, error) {
+// cleanAgentProfileWorkspace validates the client-supplied selected_folder for
+// a profile-backed turn. It is the authorization gate for that path: every
+// agentProfileRuntimeWorkspace() call in the query path runs only after a
+// profile resolved successfully, so rejecting here keeps an unauthorized path
+// from ever reaching a folder guard or CLI working directory.
+//
+// Blocking traversal is not sufficient on its own. agentProfileRuntimeWorkspace
+// only re-scopes paths that start with "Chats" into the caller's own
+// _users/<id>/Chats space and returns anything else verbatim, so an explicit
+// "_users/<someone-else>/..." never gets rewritten and would be handed to the
+// agent as its read/write root. userID is therefore required, and a foreign
+// _users/ prefix is refused rather than silently rewritten -- a caller aiming
+// at another user's workspace is not a path to normalize, it is a request to
+// deny.
+func cleanAgentProfileWorkspace(raw, userID string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return "", fmt.Errorf("selected_folder is required when agent_profile_id is set")
@@ -30,6 +44,16 @@ func cleanAgentProfileWorkspace(raw string) (string, error) {
 	clean := filepath.ToSlash(filepath.Clean(filepath.FromSlash(raw)))
 	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
 		return "", fmt.Errorf("selected_folder must stay inside the workspace")
+	}
+	if clean == "_users" || strings.HasPrefix(clean, "_users/") {
+		owner := strings.TrimPrefix(clean, "_users")
+		owner = strings.TrimPrefix(owner, "/")
+		if idx := strings.Index(owner, "/"); idx >= 0 {
+			owner = owner[:idx]
+		}
+		if owner == "" || owner != sanitizeUserIDForPath(userID) {
+			return "", fmt.Errorf("selected_folder must stay inside your own workspace")
+		}
 	}
 	return clean, nil
 }
@@ -95,7 +119,7 @@ func (api *StreamingAPI) resolveAgentProfileForQuery(ctx context.Context, req *Q
 	if req.AgentMode != "multi-agent" {
 		return nil, fmt.Errorf("agent profiles currently require agent_mode=multi-agent")
 	}
-	workspacePath, err := cleanAgentProfileWorkspace(req.SelectedFolder)
+	workspacePath, err := cleanAgentProfileWorkspace(req.SelectedFolder, userID)
 	if err != nil {
 		return nil, err
 	}

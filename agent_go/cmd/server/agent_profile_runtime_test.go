@@ -182,3 +182,49 @@ func TestResolveProfileRuntimeModelUsesOnlyYAMLProviderOptions(t *testing.T) {
 		t.Fatalf("unapproved provider/model escaped profile allow-list: provider=%q model=%q", provider, model)
 	}
 }
+
+// A profile turn's selected_folder becomes the agent's read/write root, and
+// agentProfileRuntimeWorkspace only re-scopes paths beginning with "Chats" --
+// anything else is passed through verbatim. Blocking "../" traversal alone
+// therefore left an explicit "_users/<victim>/..." fully usable, which is a
+// cross-user workspace read/write, so this pins the authorization gate itself.
+func TestCleanAgentProfileWorkspaceRejectsCrossUserPaths(t *testing.T) {
+	const caller = "alice"
+
+	for _, tc := range []struct {
+		name string
+		path string
+	}{
+		{"another user's chats", "_users/bob/Chats/Video Studio/projects/x"},
+		{"another user's root", "_users/bob"},
+		{"the users root itself", "_users"},
+		{"traversal out of own space", "_users/alice/../bob/Chats"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got, err := cleanAgentProfileWorkspace(tc.path, caller); err == nil {
+				t.Fatalf("cleanAgentProfileWorkspace(%q, %q) = %q, want an error", tc.path, caller, got)
+			}
+		})
+	}
+
+	// The legitimate shapes must keep working: the user-relative form the
+	// frontend actually sends, and the caller's own canonical _users path.
+	for _, tc := range []struct {
+		name string
+		path string
+		want string
+	}{
+		{"user-relative chats path", "Chats/Video Studio/projects/x", "Chats/Video Studio/projects/x"},
+		{"caller's own canonical path", "_users/alice/Chats/x", "_users/alice/Chats/x"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := cleanAgentProfileWorkspace(tc.path, caller)
+			if err != nil {
+				t.Fatalf("cleanAgentProfileWorkspace(%q, %q) error = %v, want success", tc.path, caller, err)
+			}
+			if got != tc.want {
+				t.Fatalf("cleanAgentProfileWorkspace(%q, %q) = %q, want %q", tc.path, caller, got, tc.want)
+			}
+		})
+	}
+}
