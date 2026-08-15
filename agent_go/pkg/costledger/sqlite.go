@@ -180,8 +180,12 @@ func (s *sqliteLedger) summarize(from, to, executionID, workflowID string) (*Sum
 	if err != nil {
 		return nil, err
 	}
+	return s.summarizeWindow(fromInclusive, toExclusive, executionID, workflowID, "")
+}
+
+func (s *sqliteLedger) summarizeWindow(fromInclusive, toExclusive, executionID, workflowID, scope string) (*Summary, error) {
 	summary := &Summary{
-		From: from, To: to,
+		From: fromInclusive, To: toExclusive,
 		ByDate: make(map[string]*DateAggregate), ByModel: make(map[string]*Aggregate),
 		ByScope:  make(map[string]*ScopeAggregate),
 		Coverage: Coverage{Source: "sqlite"},
@@ -211,6 +215,10 @@ FROM cost_events`
 	if workflowID = strings.TrimSpace(workflowID); workflowID != "" {
 		where = append(where, "workflow_id = ?")
 		args = append(args, workflowID)
+	}
+	if scope = strings.TrimSpace(scope); scope != "" {
+		where = append(where, "scope = ?")
+		args = append(args, scope)
 	}
 	if len(where) > 0 {
 		query += " WHERE " + strings.Join(where, " AND ")

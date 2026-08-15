@@ -45,4 +45,31 @@ describe('preferredTerminalForContext', () => {
     })
     expect(preferredTerminalForContext(null, [agent], false)).toBe(agent)
   })
+
+  // PLAT-107: an execution-tree placeholder has no published terminal behind
+  // it, so auto-selecting one renders an unexplained blank pane. The workflow
+  // branch already refused this; a Schedule session is not a workflow context.
+  it('never auto-selects an unpublished placeholder outside workflow context', () => {
+    const placeholder = terminal({
+      terminal_id: 'session-1:pulse-finalizer-1',
+      owner_id: 'pulse-finalizer-1',
+      execution_kind: 'background_agent',
+      execution_tree_placeholder: true,
+    })
+    expect(preferredTerminalForContext(null, [placeholder], false)).toBeNull()
+  })
+
+  it('prefers a real terminal over a placeholder that appeared first', () => {
+    const placeholder = terminal({
+      terminal_id: 'session-1:pulse-finalizer-1',
+      owner_id: 'pulse-finalizer-1',
+      execution_tree_placeholder: true,
+    })
+    const real = terminal({
+      terminal_id: 'session-1:background-review',
+      owner_id: 'background-review',
+      execution_kind: 'background_agent',
+    })
+    expect(preferredTerminalForContext(null, [placeholder, real], false)).toBe(real)
+  })
 })

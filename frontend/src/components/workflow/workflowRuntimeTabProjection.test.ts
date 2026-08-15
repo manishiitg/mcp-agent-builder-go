@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { RunningWorkflowInfo } from '../../services/api-types'
-import { workflowRuntimeTabProjection } from './workflowRuntimeTabProjection'
+import type { ChatTab } from '../../stores/useChatStore'
+import { shouldDisplayWorkflowTab, workflowRuntimeTabProjection } from './workflowRuntimeTabProjection'
 
 function runtime(overrides: Partial<RunningWorkflowInfo>): RunningWorkflowInfo {
   return {
@@ -48,5 +49,33 @@ describe('workflowRuntimeTabProjection', () => {
       session_id: 'bot-slack-123',
       triggered_by: 'bot-slack',
     }), 'workflow-social')).toBeNull()
+  })
+})
+
+describe('shouldDisplayWorkflowTab', () => {
+  it('keeps a Schedule visible after the user switches to Chat', () => {
+    expect(shouldDisplayWorkflowTab({
+      tabId: 'schedule-tab',
+      name: 'Schedule',
+      sessionId: 'schedule-session',
+      isStreaming: false,
+      isCompleted: false,
+      hasRunningBgAgents: false,
+      isSyntheticTurn: false,
+      canSteer: false,
+      hideToolCalls: true,
+      viewMode: 'terminal',
+      config: {} as ChatTab['config'],
+      createdAt: 1,
+      lastAccessedAt: 1,
+      lastViewedEventCount: 0,
+      lastViewedEventCounts: { micro: 0 },
+      metadata: {
+        mode: 'workflow',
+        presetQueryId: 'workflow-1',
+        isViewOnly: true,
+        isScheduledRun: true,
+      },
+    }, 'chat-tab')).toBe(true)
   })
 })

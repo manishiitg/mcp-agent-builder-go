@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	virtualtools "github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/contractupgrade"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/costledger"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/fsutil"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/schedulerstate"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workflowtypes"
@@ -2133,6 +2135,7 @@ const (
 
 func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *ScheduleContext, manifest *WorkflowManifest, runStatus, runFolder, runSessionID, scheduleRunID, runFailureReason string) (pulseResult postRunMonitorResult) {
 	pulseResult = postRunMonitorPartial
+	var reviewFixStartedAt, reviewFixCompletedAt time.Time
 
 	// Resume the SAME session the workflow run just used, so Pulse continues in the
 	// run's chat thread — the user sees the run and its post-run steward as one
@@ -2187,6 +2190,9 @@ func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *Schedule
 		reqMap := cloneStringInterfaceMap(baseReqMap)
 		s.applyPulseLLMToReqMap(reqMap, sctx, sessionID)
 		query := st.query
+		if st.label == "finalize" {
+			query += pulseReviewFixCostContext(s.api.costLedger, sctx.WorkspacePath, reviewFixStartedAt, reviewFixCompletedAt)
+		}
 		includesIntro := false
 		if !introSent {
 			priorFailureContext := ""
@@ -2313,6 +2319,9 @@ func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *Schedule
 		// No Pulse turn stamps a contract version, so none of them is granted
 		// one. Revoking after each turn keeps that true even if a future step
 		// starts minting.
+		if st.label == "review-fix" {
+			reviewFixStartedAt = time.Now().UTC()
+		}
 		result := runStep(st)
 		contractupgrade.Revoke(sessionID)
 		if abortIfInterrupted(st, result) {
@@ -2333,6 +2342,9 @@ func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *Schedule
 				}
 			}
 		}
+		if st.label == "review-fix" {
+			reviewFixCompletedAt = time.Now().UTC()
+		}
 		if result.outcome != postRunMonitorStepCompleted {
 			handleStepFailure(st, result, i < len(steps)-1)
 		}
@@ -2347,6 +2359,32 @@ func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *Schedule
 	// Pulse owns its own notification from the durable SQLite state. The popup is
 	// the only Pulse presentation; there is no parallel HTML journal to update.
 	return pulseResult
+}
+
+func pulseReviewFixCostContext(ledger *costledger.Ledger, workspacePath string, startedAt, completedAt time.Time) string {
+	if startedAt.IsZero() && completedAt.IsZero() {
+		return "\n\nREVIEWER/FIXER COST. Review+Fix was not run in this pass, so its cost is $0.00. Include that compact fact in Operations; do not substitute Gate, Finalize, workflow, builder, or prior-pass cost."
+	}
+	const unavailable = "\n\nREVIEWER/FIXER COST. Cost evidence is unavailable for this pass. Say that plainly in Operations; do not estimate or reuse a prior run's amount."
+	if ledger == nil || startedAt.IsZero() || completedAt.IsZero() || !completedAt.After(startedAt) {
+		return unavailable
+	}
+	summary, err := ledger.SummarizeWorkflowScopeWindow(workspacePath, "pulse", startedAt, completedAt)
+	if err != nil {
+		return unavailable
+	}
+	total := summary.Total
+	if total.AccountingEventCount == 0 {
+		return "\n\nREVIEWER/FIXER COST. Review+Fix ran, but no LLM cost events were recorded in its measured window. Report the measurement gap in Operations; do not present it as $0.00 or substitute another cost bucket."
+	}
+	costLabel := "accounted cost"
+	if total.SubscriptionShadowUSD > 0 && total.ProviderActualCostUSD == 0 && total.TokenEstimateCostUSD == 0 {
+		costLabel = "estimated token-equivalent cost (subscription-backed coding CLI)"
+	}
+	return fmt.Sprintf(
+		"\n\nREVIEWER/FIXER COST (backend-measured after Review+Fix completed at %s). Include this exact, compact line in the notification's Operations section: Reviewers + Fixer %s: $%.2f across %d LLM call(s). This covers the parent Review+Fix turn, its background reviewer/fixer agents, and any receipt continuation inside that stage. It excludes Gate, Finalize, workflow execution, builder activity, and prior Pulse passes.",
+		completedAt.UTC().Format(time.RFC3339), costLabel, total.TotalCostUSD, total.CallCount,
+	)
 }
 
 type postRunMonitorStep struct{ label, query string }
@@ -2604,18 +2642,78 @@ func validatePulseDueModuleResults(ctx context.Context, workspacePath, pulseRunI
 	if !ok {
 		return fmt.Errorf("Pulse worklist %q is missing", pulseRunID)
 	}
+	var dueModules []string
 	var unresolved []string
 	for _, module := range pulseModuleOrder {
 		state, exists := worklist[module]
 		if !exists || strings.TrimSpace(strings.ToLower(state.LastDecision)) != "due" {
 			continue
 		}
+		dueModules = append(dueModules, module)
 		if strings.TrimSpace(state.LastResult) == "" {
 			unresolved = append(unresolved, module)
 		}
 	}
 	if len(unresolved) > 0 {
 		return fmt.Errorf("due Pulse modules lack terminal current-run results: %s", strings.Join(unresolved, ", "))
+	}
+	if err := validatePulseDueModuleReviewReceipts(ctx, workspacePath, pulseRunID, dueModules); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validatePulseDueModuleReviewReceipts closes the gap between the two durable
+// completion projections owned by Review+Fix. A module result records the
+// parent turn's summary; pulse_review_log is the typed reviewer receipt. The
+// scheduler must not advance when only the first exists: Upwork did exactly
+// that on 2026-08-15, then a later server restart found the still-running
+// reviewer row and falsely labeled an already-finished review interrupted.
+func validatePulseDueModuleReviewReceipts(ctx context.Context, workspacePath, pulseRunID string, dueModules []string) error {
+	if len(dueModules) == 0 {
+		return nil
+	}
+	_, db, err := openPulseModuleStateDB(ctx, workspacePath, false)
+	if err != nil {
+		return fmt.Errorf("open Pulse review receipts: %w", err)
+	}
+	if db == nil {
+		return fmt.Errorf("due Pulse modules lack terminal current-run review receipts: %s", strings.Join(dueModules, ", "))
+	}
+	defer db.Close()
+
+	var tableName string
+	if err := db.QueryRowContext(ctx,
+		`SELECT name FROM sqlite_master WHERE type='table' AND name='pulse_review_log'`).Scan(&tableName); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("due Pulse modules lack terminal current-run review receipts: %s", strings.Join(dueModules, ", "))
+		}
+		return fmt.Errorf("inspect Pulse review receipts: %w", err)
+	}
+
+	var incomplete []string
+	for _, module := range dueModules {
+		var status, verdict string
+		err := db.QueryRowContext(ctx, `SELECT status, verdict FROM pulse_review_log
+			WHERE pulse_run_id = ? AND module = ? ORDER BY _id DESC LIMIT 1`,
+			strings.TrimSpace(pulseRunID), normalizePulseModule(module)).Scan(&status, &verdict)
+		if errors.Is(err, sql.ErrNoRows) {
+			incomplete = append(incomplete, module+" (missing)")
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("read Pulse review receipt for %s: %w", module, err)
+		}
+		status = strings.ToLower(strings.TrimSpace(status))
+		if (status != "completed" && status != "failed") || strings.TrimSpace(verdict) == "" {
+			if status == "" {
+				status = "empty"
+			}
+			incomplete = append(incomplete, fmt.Sprintf("%s (%s)", module, status))
+		}
+	}
+	if len(incomplete) > 0 {
+		return fmt.Errorf("due Pulse modules lack terminal current-run review receipts: %s", strings.Join(incomplete, ", "))
 	}
 	return nil
 }
@@ -3084,7 +3182,7 @@ func runFolderNameSet(folders []RunFolderInfo) map[string]bool {
 //
 // A run whose metadata carries no usable timestamp is not counted. The caller
 // treats a false here as "no evidence recorded", which is the pre-existing
-// behaviour, so an unreadable record never manufactures evidence.
+// behavior, so an unreadable record never manufactures evidence.
 func workshopRunStartedDuringInvocation(after []RunFolderInfo, since time.Time) bool {
 	for _, folder := range after {
 		if folder.Name == "" || folder.Metadata == nil {

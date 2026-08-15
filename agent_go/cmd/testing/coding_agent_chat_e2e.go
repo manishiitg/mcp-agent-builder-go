@@ -448,8 +448,9 @@ func (c *codingAgentChatE2EClient) runRetainedWindowP0(ctx context.Context, sess
 	}
 
 	since := before.LastProcessedIndex
+	progressToken := "RETAINED_PROGRESS_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	toolToken := "RETAINED_TOOL_" + strings.ReplaceAll(uuid.NewString(), "-", "")
-	query := fmt.Sprintf("Use execute_shell_command exactly once to run `printf %s`. After the tool returns, reply with exactly %s and nothing else.", toolToken, rememberedToken)
+	query := fmt.Sprintf("Before using any tool, send a brief progress update containing exactly %s. That update is intermediate commentary, not your final answer. Then use execute_shell_command exactly once to run `sleep 2; printf %s`. Only after the tool returns, reply with exactly %s and nothing else.", progressToken, toolToken, rememberedToken)
 	ack, deliveryLatency, err := c.startQueryWithResponse(ctx, sessionID, provider, model, query)
 	if err != nil {
 		return fmt.Errorf("submit retained follow-up: %w", err)
@@ -469,6 +470,9 @@ func (c *codingAgentChatE2EClient) runRetainedWindowP0(ctx context.Context, sess
 	if deliveryLatency > retainedWindowP0DeliveryLimit {
 		return fmt.Errorf("retained delivery took %s, exceeding the %s PLAT-102 P0 envelope", deliveryLatency.Round(time.Millisecond), retainedWindowP0DeliveryLimit)
 	}
+	if err := c.assertRetainedToolStartsBeforeCompletion(ctx, sessionID, since, "execute_shell_command"); err != nil {
+		return err
+	}
 
 	final, completionRaw, events, err := c.waitForCompletion(ctx, sessionID, since)
 	if err != nil {
@@ -483,6 +487,9 @@ func (c *codingAgentChatE2EClient) runRetainedWindowP0(ctx context.Context, sess
 	if err := assertOneRetainedToolReceipt(events, "execute_shell_command", toolToken); err != nil {
 		return err
 	}
+	if err := assertRetainedCompletionAfterTool(events, "execute_shell_command"); err != nil {
+		return err
+	}
 	for _, event := range events {
 		if strings.EqualFold(strings.TrimSpace(fmt.Sprint(event["type"])), "agent_start") {
 			return fmt.Errorf("retained follow-up emitted agent_start, proving the host reconstructed an Agent")
@@ -490,6 +497,65 @@ func (c *codingAgentChatE2EClient) runRetainedWindowP0(ctx context.Context, sess
 	}
 	if err := c.assertRetainedTmuxLive(ctx, sessionID); err != nil {
 		return fmt.Errorf("provider process was not reusable after retained turn: %w", err)
+	}
+	return nil
+}
+
+// assertRetainedToolStartsBeforeCompletion catches the precise retained-turn
+// regression before the deliberately slow tool can finish. Intermediate CLI
+// commentary is not returned by the polling API, so the P0 observes the
+// externally meaningful invariant instead: commentary cannot complete the
+// session before its requested tool has even started.
+func (c *codingAgentChatE2EClient) assertRetainedToolStartsBeforeCompletion(ctx context.Context, sessionID string, since int, toolName string) error {
+	deadline := e2eDeadline(ctx, 30*time.Second)
+	cursor := since
+	for time.Now().Before(deadline) {
+		resp, raw, err := c.getEventsSince(ctx, sessionID, cursor)
+		if err != nil {
+			return err
+		}
+		for _, event := range resp.Events {
+			switch fmt.Sprint(event["type"]) {
+			case "unified_completion":
+				return fmt.Errorf("retained turn completed before %s started; intermediate commentary was treated as final; raw=%s", toolName, truncateE2E(raw, 1500))
+			case "tool_call_start":
+				if eventPayloadString(event, "tool_name") == toolName {
+					return nil
+				}
+			}
+		}
+		cursor = advanceE2ECursor(cursor, resp.LastProcessedIndex)
+		if err := sleepContext(ctx, 100*time.Millisecond); err != nil {
+			return err
+		}
+	}
+	return fmt.Errorf("timed out waiting for retained %s to start", toolName)
+}
+
+// assertRetainedCompletionAfterTool guards the completion boundary that previously
+// escaped the retained-window P0: coding CLIs may emit assistant commentary
+// before calling a tool, but that commentary must never become the committed
+// final response. The normalized completion must follow the completed receipt.
+func assertRetainedCompletionAfterTool(events []map[string]interface{}, toolName string) error {
+	toolEndIndex := -1
+	completionIndex := -1
+	for i, event := range events {
+		eventType := fmt.Sprint(event["type"])
+		if eventType == "tool_call_end" && eventPayloadString(event, "tool_name") == toolName {
+			toolEndIndex = i
+		}
+		if eventType == "unified_completion" {
+			completionIndex = i
+		}
+	}
+	if toolEndIndex < 0 {
+		return fmt.Errorf("retained turn has no completed %s receipt", toolName)
+	}
+	if completionIndex < 0 {
+		return fmt.Errorf("retained turn has no unified_completion")
+	}
+	if toolEndIndex >= completionIndex {
+		return fmt.Errorf("retained unified_completion occurred at event %d before %s completed at event %d", completionIndex, toolName, toolEndIndex)
 	}
 	return nil
 }

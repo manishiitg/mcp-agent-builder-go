@@ -6,7 +6,7 @@
 |---|---|
 | Assigned agent | `Claude Code` |
 | Ticket state | `implemented; runtime reverify` |
-| Last synchronized | `2026-08-09` |
+| Last synchronized | `2026-08-15` |
 
 - **Priority:** P0
 - **Owner:** scheduler turn sequencing
@@ -130,6 +130,12 @@ never covered. `finalizeAllRunningPulseReviewLogs` now runs alongside
 `finalizeAllUnresolvedPulseFinalCommands` in `Start()`. Evidence and the
 still-open `run_metadata` half are recorded in
 [PLAT-017](plat-017.md#reproduction-on-the-current-binary--2026-08-09-upwork).
+
+The 2026-08-15 Upwork run proved the sweep can also expose an upstream receipt
+gap: Review+Fix and Finalize had already ended, but `pulse_review_log` remained
+`running`, so the later restart sweep used its generic interruption verdict.
+The scheduler now requires the typed terminal review receipt before advancing;
+see [PLAT-017's 2026-08-15 reproduction](plat-017.md#false-interruption-reproduction-and-scheduler-side-repair--2026-08-15-upwork).
 
 ## Test command
 

@@ -9,6 +9,7 @@ import { useWorkflowStore } from '../../stores/useWorkflowStore'
 import { useGlobalPresetStore } from '../../stores/useGlobalPresetStore'
 import { executionTreeRuntimeStatus } from '../../utils/runtimeActivity'
 import { convertObservedWorkflowTabToInteractive } from './workflowChatTabConversion'
+import { shouldDisplayWorkflowTab } from './workflowRuntimeTabProjection'
 
 // ---------------------------------------------------------------------------
 // WorkflowTabItem — per-tab component with narrow store subscriptions
@@ -172,12 +173,10 @@ export const WorkflowChatTabs: React.FC<WorkflowChatTabsProps> = ({ onNewChat, e
   // restore look like it failed.
   const activeWorkflowTabs = useMemo(() => {
     const allTabs = Object.values(chatTabs)
-    const shouldShowViewOnlyTab = (tab: ChatTab) =>
-      !tab.metadata?.isViewOnly || tab.tabId === activeTabId || tab.isStreaming || tab.hasRunningBgAgents
     const matched = allTabs.filter(tab =>
       tab.metadata?.mode === 'workflow' &&
       tab.metadata.presetQueryId === activePresetId &&
-      shouldShowViewOnlyTab(tab)
+      shouldDisplayWorkflowTab(tab, activeTabId)
     )
     const activeTab = activeTabId ? chatTabs[activeTabId] : undefined
     const activeWorkflowTab = activeTab?.metadata?.mode === 'workflow' ? activeTab : undefined

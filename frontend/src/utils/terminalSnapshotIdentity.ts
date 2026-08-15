@@ -1,4 +1,5 @@
 import type { TerminalSnapshot } from '../services/api-types'
+import { isMainAgentTerminal } from './terminalIdentity'
 
 const isRecord = (value: unknown): value is Record<string, unknown> => (
   value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -82,6 +83,18 @@ export function shouldStreamTerminal(terminal: TerminalSnapshot | null): boolean
 }
 
 /**
+ * Main-agent terminal IDs can change when a retained conversation starts its
+ * next turn. Keep the reader's Raw/Formatted choice on the durable session;
+ * child terminals remain independently selectable by terminal ID.
+ */
+export function terminalViewPreferenceKey(terminal: TerminalSnapshot | null): string | null {
+  if (!terminal?.terminal_id) return null
+  const sessionID = (terminal.session_id || '').trim()
+  if (sessionID && isMainAgentTerminal(terminal)) return `session:${sessionID}`
+  return `terminal:${terminal.terminal_id}`
+}
+
+/**
  * Execution-tree placeholders are navigation entries, not published terminal
  * transcripts. Fetching /events for one necessarily returns 404 until the
  * runtime replaces it with a real terminal snapshot.
@@ -119,15 +132,16 @@ export function shouldHydrateMainTerminalEvents(
   )
 }
 
-/** Raw tmux output is the primary view. The formatted conversation remains an
- * explicit per-terminal reading mode whenever structured events are available.
+/** The formatted conversation is the user-facing default whenever structured
+ * events are available. Raw tmux remains an explicit diagnostic choice and an
+ * explicit choice must always win.
  */
 export function resolveTerminalFormattedView(
   canShowFormattedView: boolean,
   explicitPreference?: boolean,
 ): boolean {
   if (!canShowFormattedView) return false
-  return explicitPreference ?? false
+  return explicitPreference ?? true
 }
 
 /** A terminal can offer Raw/Formatted even after its live tmux process is

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const getRecentSessionEvents = vi.fn()
-const getChatHistoryConversation = vi.fn()
+const getChatHistoryResumeConversation = vi.fn()
 
 vi.mock('../services/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../services/api')>()
@@ -10,7 +10,7 @@ vi.mock('../services/api', async (importOriginal) => {
     agentApi: {
       ...actual.agentApi,
       getRecentSessionEvents,
-      getChatHistoryConversation,
+      getChatHistoryResumeConversation,
     },
   }
 })
@@ -32,7 +32,7 @@ describe('session restore chat-history fallback', () => {
     vi.resetModules()
     vi.stubGlobal('localStorage', createMemoryStorage())
     getRecentSessionEvents.mockReset()
-    getChatHistoryConversation.mockReset()
+    getChatHistoryResumeConversation.mockReset()
   })
 
   afterEach(() => {
@@ -48,7 +48,7 @@ describe('session restore chat-history fallback', () => {
       is_synthetic_turn: false,
       can_steer: false,
     })
-    getChatHistoryConversation.mockResolvedValue({
+    getChatHistoryResumeConversation.mockResolvedValue({
       session_id: 'video-studio:project:launch',
       conversation_history: [
         { Role: 'user', Parts: [{ Text: 'Create the launch teaser.' }] },
@@ -71,14 +71,14 @@ describe('session restore chat-history fallback', () => {
       source: 'video-project-open',
     })).resolves.toBe(tabId)
 
-    expect(getChatHistoryConversation).toHaveBeenCalledWith(
+    expect(getChatHistoryResumeConversation).toHaveBeenCalledWith(
       'video-studio:project:launch',
       workspacePath,
     )
     expect(useChatStore.getState().getTabEvents('video-studio:project:launch').map((event) => event.type)).toEqual([
       'conversation_resumed',
       'user_message',
-      'conversation_end',
+      'llm_generation_end',
     ])
     expect(useChatStore.getState().chatTabs[tabId]?.isStreaming).toBe(false)
   })

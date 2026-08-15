@@ -1,14 +1,121 @@
 [← Pulse platform issue index](../pulse_platform_issue_register.md)
 
-# PLAT-105 — retained delivery is transport-neutral already, but only reachable through a live `*Agent`
+# PLAT-105 — retained delivery and per-turn completion must share one transport-neutral session contract
 
 | Field | Value |
 |---|---|
-| Status | `implemented; restart and live Pi verification pending` — warm session lookup, main-chat session ownership, actual-transport acknowledgement, retained tool receipts, and the IC-11 harness are implemented. A 2026-08-14 Pi run exposed a missing between-turn completion lifecycle; the shared Session now owns it and focused tests pass. The running backend must be restarted before live verification. Cold-restart rehydration was explicitly declined; the existing compatibility fallback remains for surviving terminals after a backend restart. |
-| Priority | P1 |
+| Status | `blocking live regression; implementation incomplete` — delivery through the durable Session works, but a 2026-08-15 Social Media run proved that a provider can capture its final response and exit while AgentWorks never receives or settles the canonical per-turn completion. The UI remains busy indefinitely. Do not close this ticket from unit tests or delivery-only evidence. |
+| Priority | P0 |
 | Owner | mcpagent session lifetime and delivery acknowledgement |
 | Reported | 2026-08-14 |
 | Related | [PLAT-020](plat-020.md), [PLAT-035](plat-035.md), [PLAT-099](plat-099.md), [PLAT-102](plat-102.md), [PLAT-103](plat-103.md) |
+
+## Blocking live regression — final response captured, turn never settled
+
+The 2026-08-15 Social Media backlog-audit chat provides a concrete production
+reproduction. Session
+`86500e07-f362-4d47-8b47-220282b0e981` ran in tmux
+`mlp-codex-cli-int-1786777150030462000-719b6a79`. The provider completed the
+work, and `server_debug.log` recorded at 12:35:00:
+
+```text
+codex interactive response captured owner=86500e07-f362-4d47-8b47-220282b0e981
+tmux=mlp-codex-cli-int-1786777150030462000-719b6a79 elapsed=5m47.854s
+codex interactive trailing capture skipped ... reason=persistent_session
+```
+
+The tmux process subsequently no longer existed and runtime health showed zero
+running processes. Nevertheless, AgentWorks still exposed the Chat tab as
+busy, kept the cancel action and spinner visible, and showed only `59 tool
+calls`; the captured final assistant response was not projected into Formatted
+mode.
+
+This proves that successful provider response capture is not reliably followed
+by the canonical terminal event that settles the host turn. The defect is at
+the mcpagent-to-AgentWorks lifecycle boundary, not in the spinner component.
+Frontend timeout, polling, deduplication, or tmux-pane heuristics are not valid
+primary fixes.
+
+### Why previous fixes did not close it
+
+The system still has overlapping notions of completion:
+
+1. the coding CLI returned/captured a final response;
+2. the provider process or tmux became idle or exited;
+3. the mcpagent Session considers a turn active or complete;
+4. AgentWorks holds `sessionBusy` and tracked-execution state;
+5. the terminal event store projects the state and final answer to the UI.
+
+Earlier fixes reconciled individual consumers or made the durable Session own
+retained delivery. They did not prove that every accepted turn emits one
+terminal completion and that AgentWorks consumes that event before the
+provider session is retained or discarded. In this reproduction, the adapter
+captured the answer but the host-side turn-completion defer/settlement never
+ran. Whether the producer omitted the event or the bridge dropped it must be
+pinned with tracing before changing code; the observable contract failure is
+already established.
+
+## Required per-turn lifecycle contract
+
+The durable conversation and an individual turn have different lifetimes. A
+tmux/provider session may remain alive for later messages without keeping its
+current turn busy.
+
+1. Assign one stable `turn_id` when AgentWorks accepts a user or scheduled
+   message. Preserve it through AgentWorks, mcpagent, the provider adapter,
+   normalized events, persistence, and UI projection.
+2. For every accepted turn, mcpagent must emit exactly one terminal
+   `unified_completion` carrying that `turn_id`. A successful final assistant
+   response must be included in, or durably correlated with, that completion.
+3. AgentWorks must clear `sessionBusy` and complete the tracked execution from
+   that canonical event. It must not infer normal completion from tmux pane
+   contents, provider process lifetime, polling inactivity, or the continued
+   existence of the reusable Session.
+4. Provider/tmux lifetime represents conversation transport availability only.
+   It must never be used as the busy state of the most recent turn.
+5. Completion is idempotent: duplicate terminal signals for the same `turn_id`
+   are ignored, while a second accepted message receives a new `turn_id`.
+6. Add diagnostic reconciliation as a safety net, not the main lifecycle: if a
+   durable final response exists, no provider turn is live, and canonical
+   completion is missing after a bounded grace period, record the invariant
+   violation and settle that same turn exactly once. Do not silently leave the
+   UI busy and do not manufacture a second assistant message.
+
+### Implementation sequence
+
+1. Add trace logging for `turn_id` at response capture, Session terminal-event
+   emission, bridge receipt, AgentWorks settlement, and UI-event persistence.
+   Use the live reproduction to identify whether the producer or bridge loses
+   the event.
+2. Repair that single ownership path so provider final-response capture closes
+   the mcpagent turn and emits its canonical completion before retained-session
+   cleanup or reuse.
+3. Make AgentWorks settlement consume the event idempotently and clear busy in
+   a defer/failure-safe path.
+4. Remove any frontend or server workaround that independently guesses that a
+   turn ended, once the contract test proves the canonical path.
+
+### Mandatory P0 regression
+
+Extend IC-11 with a real host-visible retained-conversation test. It must use
+the normal product path rather than constructing registry or completion state:
+
+1. start a real first turn and wait for its final response;
+2. assert the final assistant response is persisted and visible in Formatted
+   mode;
+3. assert Chat busy is false, the spinner/cancel state is gone, and tracked
+   execution is terminal;
+4. assert exactly one `unified_completion` exists for the first `turn_id`;
+5. assert the provider Session/tmux remains reusable;
+6. send a follow-up through that same Session and repeat assertions 2–4 for a
+   distinct `turn_id`;
+7. assert exactly one user message, assistant response, and terminal completion
+   per turn, with no Agent reconstruction and no duplicate tool receipts.
+
+The P0 must fail if it observes only provider-level response capture while the
+host remains busy. Tests that directly invoke `Session.Close`, inject a
+completion event, or manually manufacture the retained window do not satisfy
+this requirement.
 
 ## Problem
 

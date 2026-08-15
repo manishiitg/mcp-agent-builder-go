@@ -20,10 +20,58 @@ function isLiveExecution(node: SessionExecutionTreeNode): boolean {
   )
 }
 
-function isVisibleChildExecution(node: SessionExecutionTreeNode, rootID: string): boolean {
-  if (!node.execution_id || node.execution_id === rootID) return false
-  if (node.execution_id.startsWith('main:')) return false
-  return !HIDDEN_EXECUTION_KINDS.has((node.kind || '').trim().toLowerCase())
+// Event-stream nodes describe activity, not process ownership. A tool call or
+// turn can have its own execution id and parent edge without ever owning a
+// terminal. Projecting such a node as an unpublished terminal creates a
+// permanent "Waiting for terminal" pane because no terminal can arrive for it.
+//
+// Concrete background/workflow registries remain the authority for temporary
+// child rows. Event data may still enrich a terminal that already exists via
+// terminalMatchesExecution; it simply cannot invent one.
+function canProjectUnpublishedTerminal(node: SessionExecutionTreeNode): boolean {
+  return (node.source || '').trim().toLowerCase() !== 'event_stream'
+}
+
+// A node's parent edge is only usable when it names a DIFFERENT execution.
+// A self-parent edge (parent_execution_id === execution_id) is malformed input:
+// resolving it returns the node itself, which rendered as the nonsensical
+// "PULSE FINALIZER · Child of PULSE FINALIZER" rail row.
+function parentExecutionIDOf(node: SessionExecutionTreeNode): string {
+  const parentID = (node.parent_execution_id || '').trim()
+  if (!parentID || parentID === node.execution_id) return ''
+  return parentID
+}
+
+// A sequential main-agent turn is the SAME conversation as the root, not a
+// child process. Kind alone is not sufficient: a node that arrives with an
+// empty/unknown kind would otherwise fall through to a `background_agent`
+// placeholder. Ownership is therefore checked independently of kind.
+function isMainConversationExecution(node: SessionExecutionTreeNode, root: SessionExecutionTreeNode): boolean {
+  const executionID = (node.execution_id || '').trim()
+  if (!executionID) return true
+  if (executionID === root.execution_id) return true
+  if (executionID.startsWith('main:')) return true
+  // Same owner as the root session's main conversation.
+  if (executionID === `main:${node.session_id}`) return true
+  // A self-parent edge is malformed input, and it is precisely how a sequential
+  // main-agent turn arrived misprojected: the node claimed to be its own child.
+  // Collapse it back into the main conversation. Merely relabelling it would
+  // still leave a phantom rail row that hides real progress — which is the
+  // defect PLAT-107 reports, not just the "Child of itself" caption.
+  const declaredParent = (node.parent_execution_id || '').trim()
+  if (declaredParent && declaredParent === executionID) return true
+  const kind = (node.kind || '').trim().toLowerCase()
+  if (HIDDEN_EXECUTION_KINDS.has(kind)) return true
+  // An unclassified node that carries no distinct parent cannot be shown to be
+  // a genuine child, so it stays in the main timeline rather than inventing a
+  // placeholder terminal for it.
+  if (!kind && !parentExecutionIDOf(node)) return true
+  return false
+}
+
+function isVisibleChildExecution(node: SessionExecutionTreeNode, root: SessionExecutionTreeNode): boolean {
+  if (!node.execution_id) return false
+  return !isMainConversationExecution(node, root)
 }
 
 function flattenExecutionTree(root: SessionExecutionTreeNode): SessionExecutionTreeNode[] {
@@ -56,7 +104,7 @@ function terminalMatchesExecution(terminal: TerminalSnapshot, node: SessionExecu
   // bridge, the rail creates an empty synthetic row which can only display the
   // misleading “Waiting for terminal” screen even as the item is making tool
   // calls.
-  const parentExecutionID = (node.parent_execution_id || '').trim()
+  const parentExecutionID = parentExecutionIDOf(node)
   if (!parentExecutionID) return false
   const parentTerminalPrefix = `workflow-step:${parentExecutionID}:`
   return [terminal.execution_id, terminal.owner_id, terminal.terminal_id]
@@ -89,7 +137,7 @@ export function projectExecutionTreeTerminals(
   const nodesByID = new Map(nodes.map(node => [node.execution_id, node]))
 
   for (const node of nodes) {
-    if (!isVisibleChildExecution(node, tree.root.execution_id)) continue
+    if (!isVisibleChildExecution(node, tree.root)) continue
 
     const matchingIndexes: number[] = []
     projected.forEach((terminal, index) => {
@@ -105,7 +153,7 @@ export function projectExecutionTreeTerminals(
         const live = isLiveExecution(node)
         next[index] = {
           ...terminal,
-          parent_execution_id: node.parent_execution_id || terminal.parent_execution_id,
+          parent_execution_id: parentExecutionIDOf(node) || terminal.parent_execution_id,
           execution_kind: terminal.execution_kind || node.kind,
           agent_name: terminal.agent_name || node.name,
           display_title: terminal.display_title || node.name,
@@ -122,19 +170,20 @@ export function projectExecutionTreeTerminals(
     }
 
     // Completed historical tree nodes do not need another retained UI row.
-    // Only a currently live child can otherwise become invisible.
-    if (!isLiveExecution(node)) continue
+    // Only a currently live, process-owned child can otherwise become
+    // invisible. Generic event nodes are activity in an existing conversation,
+    // not terminals waiting to be published.
+    if (!isLiveExecution(node) || !canProjectUnpublishedTerminal(node)) continue
 
-    const parent = node.parent_execution_id
-      ? nodesByID.get(node.parent_execution_id)
-      : undefined
+    const parentExecutionID = parentExecutionIDOf(node)
+    const parent = parentExecutionID ? nodesByID.get(parentExecutionID) : undefined
     const startedAt = node.started_at || new Date(0).toISOString()
     projected = [...projected, {
       terminal_id: `${node.session_id}:${node.execution_id}`,
       session_id: node.session_id,
       owner_id: node.execution_id,
       execution_id: node.execution_id,
-      parent_execution_id: node.parent_execution_id,
+      parent_execution_id: parentExecutionID || undefined,
       execution_kind: node.kind || 'background_agent',
       agent_name: node.name || 'Background agent',
       display_title: node.name || 'Background agent',

@@ -6,8 +6,10 @@ import { ConversationMarkdownRenderer } from './ui/MarkdownRenderer'
 import {
   buildTranscriptItems,
   internalTranscriptMessageTitle,
+  isExecutionPromptTranscriptMessage,
   isInternalTranscriptMessage,
   pairToolCalls,
+  shouldCollapseTranscriptUserMessage,
   type PairedToolCall,
   selectTerminalEvents,
   type TranscriptItem,
@@ -90,15 +92,49 @@ const TranscriptEvent: React.FC<{
     if (result) return <AssistantTranscriptMessage event={event} content={result} timestamp={timestamp} label="Task update" />
   }
 
+  if (isExecutionPromptTranscriptMessage(event)) {
+    return <EventDispatcher event={event} onSendMessage={onSendMessage} compact hideOrchestratorContext />
+  }
+
   if (event.type !== 'user_message') {
     return <EventDispatcher event={event} onSendMessage={onSendMessage} compact hideOrchestratorContext />
   }
 
+  return <UserTranscriptMessage content={content || 'Message sent'} timestamp={timestamp} />
+}
+
+const USER_MESSAGE_PREVIEW_LIMIT = 480
+
+const UserTranscriptMessage: React.FC<{ content: string; timestamp: string }> = ({ content, timestamp }) => {
+  const collapsible = shouldCollapseTranscriptUserMessage(content)
+  const [expanded, setExpanded] = useState(false)
+  const shown = collapsible && !expanded
+    ? `${content.slice(0, USER_MESSAGE_PREVIEW_LIMIT).trimEnd()}…`
+    : content
+
+  if (!collapsible) {
+    return (
+      <div className="ml-auto my-4 max-w-[84%] text-right">
+        <div className="whitespace-pre-wrap break-words text-[14px] leading-6 text-neutral-200">{shown}</div>
+        {timestamp && <div className="mt-1 text-[10px] tabular-nums text-neutral-600">{timestamp}</div>}
+      </div>
+    )
+  }
+
   return (
-    <div className="ml-auto my-4 max-w-[84%] text-right">
-      <div className="whitespace-pre-wrap break-words text-[14px] leading-6 text-neutral-200">{content || 'Message sent'}</div>
-      {timestamp && <div className="mt-1 text-[10px] tabular-nums text-neutral-600">{timestamp}</div>}
-    </div>
+    <article className="ml-auto my-4 w-[min(92%,52rem)] rounded-lg border border-neutral-800 bg-neutral-900/45 px-4 py-3 text-left">
+      <div className="whitespace-pre-wrap break-words text-[13px] leading-6 text-neutral-300">{shown}</div>
+      <div className="mt-2 flex items-center gap-3">
+        <button
+          type="button"
+          onClick={() => setExpanded(value => !value)}
+          className="text-[11px] font-medium text-neutral-500 transition-colors hover:text-neutral-300"
+        >
+          {expanded ? 'Show less' : 'Show full message'}
+        </button>
+        {timestamp && <span className="ml-auto text-[10px] tabular-nums text-neutral-600">{timestamp}</span>}
+      </div>
+    </article>
   )
 }
 
@@ -350,17 +386,52 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
     }
     return ''
   }, [items])
+  const transcriptTailRevision = useMemo(() => {
+    const tail = items[items.length - 1]
+    if (!tail) return `empty:${streamingStatus}:${streamingText.length}`
+    if (tail.kind === 'event') {
+      const payload = transcriptEventPayload(tail.event)
+      const body = typeof payload.content === 'string'
+        ? payload.content
+        : typeof payload.result === 'string'
+          ? payload.result
+          : ''
+      return `${tail.key}:${body.length}:${streamingStatus}:${streamingText.length}`
+    }
+    return `${tail.key}:${streamingStatus}:${streamingText.length}`
+  }, [items, streamingStatus, streamingText.length])
   const followedUserMessageKeyRef = useRef(latestUserMessageKey)
+  const followCurrentTurnRef = useRef(true)
+  const [isAtTranscriptStart, setIsAtTranscriptStart] = useState(true)
+
+  const showEarlierMessagesControl = Boolean(
+    hasOlder || loadingOlder || error || (!isAtTranscriptStart && items.length > 1),
+  )
+
+  const handleEarlierMessages = useCallback(() => {
+    if (hasOlder) {
+      onLoadOlder?.()
+      return
+    }
+    followCurrentTurnRef.current = false
+    virtuosoRef.current?.scrollToIndex({ index: 0, align: 'start', behavior: 'auto' })
+  }, [hasOlder, onLoadOlder])
 
   // Sending a message changes more than the transcript: the optimistic user
   // row appears immediately, then delivery/status chrome can reduce the
   // transcript viewport a frame later. Virtuoso's normal followOutput handles
-  // the first change but not that later resize, leaving the new message partly
-  // above the real bottom. Follow only a genuinely new user message (not every
-  // background event), and repeat once after the surrounding layout settles.
+  // the first change but not a same-length live-to-final replacement. Follow
+  // the whole current turn through its final answer, and stop only when the
+  // reader deliberately scrolls upward.
   useEffect(() => {
-    if (!latestUserMessageKey || followedUserMessageKeyRef.current === latestUserMessageKey) return
-    followedUserMessageKeyRef.current = latestUserMessageKey
+    const isNewUserMessage = Boolean(
+      latestUserMessageKey && followedUserMessageKeyRef.current !== latestUserMessageKey,
+    )
+    if (isNewUserMessage) {
+      followedUserMessageKeyRef.current = latestUserMessageKey
+      followCurrentTurnRef.current = true
+    }
+    if (!followCurrentTurnRef.current) return
 
     const scrollToLatest = () => {
       virtuosoRef.current?.scrollToIndex({
@@ -375,7 +446,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
       window.cancelAnimationFrame(frame)
       window.clearTimeout(settledLayoutTimer)
     }
-  }, [items.length, latestUserMessageKey])
+  }, [items.length, latestUserMessageKey, transcriptTailRevision])
 
   // Electron occasionally fails to route a physical wheel/trackpad gesture to
   // Virtuoso's internal scroller even though accessibility scroll actions work.
@@ -384,6 +455,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
   const handleWheelCapture = useCallback((event: React.WheelEvent<HTMLDivElement>) => {
     const scroller = scrollerRef.current
     if (!(scroller instanceof HTMLElement) || event.deltaY === 0) return
+    if (event.deltaY < 0) followCurrentTurnRef.current = false
 
     let target = event.target instanceof HTMLElement ? event.target : null
     while (target && target !== event.currentTarget) {
@@ -395,6 +467,9 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
     event.preventDefault()
     event.stopPropagation()
     scroller.scrollTop += wheelDeltaPixels(event.deltaY, event.deltaMode, scroller.clientHeight)
+    if (event.deltaY > 0 && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 32) {
+      followCurrentTurnRef.current = true
+    }
   }, [])
 
   if (items.length === 0 && !streamingText && !streamingStatus) {
@@ -455,7 +530,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
       className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[#0d100f]"
       onWheelCapture={handleWheelCapture}
     >
-      {(hasOlder || loadingOlder || error) && (
+      {showEarlierMessagesControl && (
         <div className={`flex shrink-0 items-center border-b px-3 py-1.5 text-[11px] ${
           error
             ? 'border-red-900/60 bg-red-950/25 text-red-300'
@@ -473,11 +548,15 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
           ) : (
             <button
               type="button"
-              onClick={onLoadOlder}
-              disabled={!hasOlder || loadingOlder}
+              onClick={handleEarlierMessages}
+              disabled={loadingOlder}
               className="mx-auto rounded px-2 py-0.5 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200 disabled:cursor-wait disabled:opacity-60"
             >
-              {loadingOlder ? 'Loading earlier messages…' : 'Load earlier messages'}
+              {loadingOlder
+                ? 'Loading earlier messages…'
+                : hasOlder
+                  ? 'Load earlier messages'
+                  : 'View earlier messages'}
             </button>
           )}
         </div>
@@ -489,8 +568,9 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
         data={streamingText || streamingStatus
           ? [...items, { kind: 'live' as const, key: '__live-stream__', text: streamingText, status: streamingStatus }]
           : items}
-        className="min-h-0 flex-1"
+        className="custom-scrollbar min-h-0 flex-1"
         scrollerRef={ref => { scrollerRef.current = ref }}
+        rangeChanged={({ startIndex }) => { setIsAtTranscriptStart(startIndex === 0) }}
         followOutput="smooth"
         initialTopMostItemIndex={Math.max(0, items.length - 1)}
         computeItemKey={(_, item) => item.key}

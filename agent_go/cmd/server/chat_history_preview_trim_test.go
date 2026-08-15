@@ -70,3 +70,88 @@ func TestTrimChatHistoryConversationForPreviewKeepsShortConversationsWhole(t *te
 		t.Errorf("kept %d, want both messages", len(got["conversation_history"]))
 	}
 }
+
+func TestProjectChatHistoryConversationForResumeKeepsRealTurnsOnly(t *testing.T) {
+	message := func(role, text string) map[string]interface{} {
+		return map[string]interface{}{
+			"Role":  role,
+			"Parts": []map[string]string{{"Text": text}},
+		}
+	}
+	raw, _ := json.Marshal(map[string]interface{}{
+		"session_id": "resume-1",
+		"conversation_history": []map[string]interface{}{
+			message("system", "large system prompt"),
+			message("human", "first question"),
+			message("ai", "I will inspect it."),
+			message("ai", `[Previous tool call: exec({"input":"secret trace"})]`),
+			message("tool", "tool output"),
+			message("ai", "First final answer."),
+			message("human", "second question"),
+			message("ai", "Second final answer."),
+		},
+		"ui_events":          []map[string]string{{"type": "tool_call_start"}},
+		"terminal_snapshots": []map[string]string{{"content": "raw pane"}},
+	})
+
+	out := projectChatHistoryConversationForResume(raw, 20)
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := got["ui_events"]; ok {
+		t.Error("resume projection must not return trace events")
+	}
+	if _, ok := got["terminal_snapshots"]; ok {
+		t.Error("resume projection must not return terminal snapshots")
+	}
+	var history []struct {
+		Role  string `json:"Role"`
+		Parts []struct {
+			Text string `json:"Text"`
+		} `json:"Parts"`
+	}
+	if err := json.Unmarshal(got["conversation_history"], &history); err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 4 {
+		t.Fatalf("got %d projected messages, want two user/assistant pairs", len(history))
+	}
+	texts := make([]string, 0, len(history))
+	for _, item := range history {
+		texts = append(texts, item.Parts[0].Text)
+	}
+	want := []string{"first question", "First final answer.", "second question", "Second final answer."}
+	for index := range want {
+		if texts[index] != want[index] {
+			t.Fatalf("message %d = %q, want %q", index, texts[index], want[index])
+		}
+	}
+}
+
+func TestProjectChatHistoryConversationForResumeLimitsByUserTurn(t *testing.T) {
+	message := func(role, text string) map[string]interface{} {
+		return map[string]interface{}{"role": role, "parts": []map[string]string{{"text": text}}}
+	}
+	raw, _ := json.Marshal(map[string]interface{}{
+		"conversation_history": []map[string]interface{}{
+			message("user", "one"), message("assistant", "answer one"),
+			message("user", "two"), message("assistant", "answer two"),
+			message("user", "three"), message("assistant", "answer three"),
+		},
+	})
+
+	var got struct {
+		History []json.RawMessage `json:"conversation_history"`
+	}
+	if err := json.Unmarshal(projectChatHistoryConversationForResume(raw, 2), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.History) != 4 {
+		t.Fatalf("got %d messages, want the final two turns", len(got.History))
+	}
+	_, firstText := chatHistoryMessageRoleAndText(got.History[0])
+	if firstText != "two" {
+		t.Fatalf("first retained turn = %q, want two", firstText)
+	}
+}

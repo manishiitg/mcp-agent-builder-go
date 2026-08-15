@@ -7,6 +7,7 @@ import {
   runtimeHasBackgroundAgents,
   runtimeNeedsUserInput,
   sessionRuntimeStatus,
+  terminalConversationHasPendingWork,
   terminalTurnIsBusy,
 } from './runtimeActivity'
 
@@ -73,6 +74,58 @@ describe('authoritative runtime activity selector', () => {
       execution_kind: 'main_agent',
       tmux_session: 'tmux-main',
     }), state)).toBe(true)
+  })
+
+  it('keeps conversation progress visible while a main agent waits for its background child', () => {
+    const state = runtime('running', {
+      background_live: true,
+      foreground_turn: { busy: false, has_cancel: false, can_steer: true, synthetic: false },
+    })
+    const main = terminal({
+      terminal_id: 'session-1:main:session-1',
+      owner_id: 'main:session-1',
+      execution_kind: 'main_agent',
+      tmux_session: 'tmux-main',
+    })
+
+    expect(terminalTurnIsBusy(main, state)).toBe(false)
+    expect(terminalConversationHasPendingWork(main, state)).toBe(true)
+  })
+
+  it('uses an active child terminal when the session background flag is stale', () => {
+    const state = runtime('running', {
+      background_live: false,
+      foreground_turn: { busy: false, has_cancel: false, can_steer: true, synthetic: false },
+    })
+    const main = terminal({
+      terminal_id: 'session-1:main:session-1',
+      owner_id: 'main:session-1',
+      execution_kind: 'main_agent',
+      state: 'completed',
+      active: false,
+    })
+    const child = terminal({
+      terminal_id: 'session-1:child:review',
+      owner_id: 'child:review',
+      execution_id: 'review',
+      execution_kind: 'background_agent',
+      state: 'running',
+      active: true,
+    })
+
+    expect(terminalConversationHasPendingWork(main, state, [main, child])).toBe(true)
+  })
+
+  it('stops conversation progress after the runtime settles', () => {
+    const state = runtime('completed', {
+      background_live: true,
+      foreground_turn: { busy: false, has_cancel: false, can_steer: false, synthetic: false },
+    })
+    expect(terminalConversationHasPendingWork(terminal({
+      terminal_id: 'session-1:main:session-1',
+      owner_id: 'main:session-1',
+      execution_kind: 'main_agent',
+    }), state)).toBe(false)
   })
 
   it.each([

@@ -6,7 +6,9 @@ import {
   buildTranscriptItems,
   collapseCompletedLifecycleStarts,
   internalTranscriptMessageTitle,
+  isExecutionPromptTranscriptMessage,
   isInternalTranscriptMessage,
+  shouldCollapseTranscriptUserMessage,
   type TranscriptItem,
 } from './terminalEventTranscript'
 import type { PollingEvent, TerminalSnapshot } from '../services/api-types'
@@ -54,6 +56,35 @@ describe('internal transcript messages', () => {
     expect(isInternalTranscriptMessage(notification)).toBe(true)
     expect(internalTranscriptMessageTitle(notification)).toBe('Research prospects · completed')
     expect(isInternalTranscriptMessage(person)).toBe(false)
+  })
+})
+
+describe('execution prompt transcript messages', () => {
+  it('distinguishes workflow task input from a human chat message', () => {
+    const task = evt({
+      id: 'task', session_id: 's1', type: 'user_message',
+      data: { data: { content: 'Read the fixtures.', metadata: { source: 'execution_prompt' } } } as never,
+    })
+    const legacyTask = evt({
+      id: 'legacy-task', session_id: 's1', type: 'user_message',
+      data: { data: { content: 'Read the fixtures.', turn: 0, metadata: { current_step_id: 'collect-summary' } } } as never,
+    })
+    const human = evt({
+      id: 'human', session_id: 's1', type: 'user_message',
+      data: { data: { content: 'Please run the step.' } } as never,
+    })
+
+    expect(isExecutionPromptTranscriptMessage(task)).toBe(true)
+    expect(isExecutionPromptTranscriptMessage(legacyTask)).toBe(true)
+    expect(isExecutionPromptTranscriptMessage(human)).toBe(false)
+  })
+})
+
+describe('long user messages', () => {
+  it('collapses long task briefs but leaves ordinary chat messages alone', () => {
+    expect(shouldCollapseTranscriptUserMessage('Can you check this?')).toBe(false)
+    expect(shouldCollapseTranscriptUserMessage(Array.from({ length: 7 }, (_, index) => `line ${index}`).join('\n'))).toBe(true)
+    expect(shouldCollapseTranscriptUserMessage('x'.repeat(481))).toBe(true)
   })
 })
 
@@ -142,6 +173,22 @@ describe('selectTerminalEvents — owned terminal (workflow step, message-sequen
       evt({ id: 'early', session_id: 's1', execution_id: 'exec-1', timestamp: '2026-07-25T10:00:01Z' }),
     ]
     expect(selectTerminalEvents(events, t).map(e => e.id)).toEqual(['early', 'late'])
+  })
+
+  it('uses durable sequence before misleading lifecycle timestamps', () => {
+    const t = terminal({ session_id: 's1', owner_id: 'exec-1' })
+    const events = [
+      evt({
+        id: 'completion', session_id: 's1', execution_id: 'exec-1',
+        sequence: 12, timestamp: '2026-07-25T10:00:01Z', type: 'background_agent_completed',
+      }),
+      evt({
+        id: 'task-work', session_id: 's1', execution_id: 'exec-1',
+        sequence: 11, timestamp: '2026-07-25T10:00:05Z', type: 'llm_generation_end',
+      }),
+    ]
+
+    expect(selectTerminalEvents(events, t).map(e => e.id)).toEqual(['task-work', 'completion'])
   })
 
   it('returns nothing for an empty or missing terminal', () => {
@@ -1058,6 +1105,16 @@ describe('a terminal does not repeat its own name as an opening card', () => {
       t,
     )
     expect(events.map(e => e.id)).toEqual(['msg'])
+  })
+
+  it('keeps the terminal\'s own start card when it contains the task', () => {
+    const start = evt({
+      id: 'start', type: 'background_agent_started', session_id: 's1', execution_id: 'exec-1',
+      data: { data: { name: 'Review Artifact Drift Review', instruction: 'Inspect the report and verify every claim.' } } as never,
+    })
+    const events = selectTerminalEvents([start, ev('done', 'background_agent_completed', 'exec-1')], t)
+
+    expect(events.map(e => e.id)).toEqual(['start', 'done'])
   })
 
   // The completion card is kept: it carries the outcome, which the header

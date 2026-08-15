@@ -68,6 +68,7 @@ describe('live execution-tree terminal projection', () => {
       }),
       node('child-1', {
         parent_execution_id: 'main:session-1',
+        source: 'background_agent_registry',
         name: 'Execute trending radar',
       }),
     ]))
@@ -81,6 +82,43 @@ describe('live execution-tree terminal projection', () => {
       state: 'running',
       execution_tree_placeholder: true,
     })
+  })
+
+  it('does not invent a terminal for event-stream activity', () => {
+    const result = projectExecutionTreeTerminals([], tree([
+      node('main:session-1', {
+        kind: 'main_agent',
+        status: 'completed',
+        name: 'Main agent',
+      }),
+      node('tool-call-1', {
+        parent_execution_id: 'main:session-1',
+        source: 'event_stream',
+        kind: 'tool',
+        name: 'Call get_workflow_command_guidance',
+      }),
+    ]))
+
+    expect(result).toEqual([])
+  })
+
+  it('allows event-stream activity to enrich an already-published terminal', () => {
+    const retained = terminal()
+    const result = projectExecutionTreeTerminals([retained], tree([
+      node('child-1', {
+        parent_execution_id: 'main:session-1',
+        source: 'event_stream',
+        name: 'Background review',
+      }),
+    ]))
+
+    expect(result).toHaveLength(1)
+    expect(result[0]).toMatchObject({
+      terminal_id: retained.terminal_id,
+      active: true,
+      state: 'running',
+    })
+    expect(result[0].execution_tree_placeholder).toBeUndefined()
   })
 
   it('replaces the placeholder identity with the real terminal without duplicating it', () => {
@@ -138,5 +176,72 @@ describe('live execution-tree terminal projection', () => {
     ]))
 
     expect(result).toEqual([])
+  })
+
+  // PLAT-107 acceptance 2: the rail must contain NO extra row for a self-parent
+  // Finalizer — not merely a relabelled one. A phantom "Asynchronous child"
+  // still hides real progress and makes a healthy run look stalled, which is
+  // the reported defect. A self-parent edge means a sequential main turn was
+  // misprojected, so it collapses into the main conversation entirely.
+  it('discards a self-parent main turn instead of leaving a phantom rail row', () => {
+    const result = projectExecutionTreeTerminals([], tree([
+      node('pulse-finalizer-1', {
+        parent_execution_id: 'pulse-finalizer-1',
+        name: 'PULSE FINALIZER',
+      }),
+    ]))
+
+    expect(result).toEqual([])
+  })
+
+  // Acceptance 6: malformed self-parent input is ignored even alongside a
+  // genuine child, which must still be projected.
+  it('ignores a self-parent node without suppressing a real sibling child', () => {
+    const result = projectExecutionTreeTerminals([], tree([
+      node('main:session-1', { kind: 'main_agent', name: 'Route execution' }),
+      node('pulse-finalizer-1', {
+        parent_execution_id: 'pulse-finalizer-1',
+        name: 'PULSE FINALIZER',
+      }),
+      node('child-1', { parent_execution_id: 'main:session-1', name: 'Trending radar' }),
+    ]))
+
+    expect(result).toHaveLength(1)
+    expect(result[0].execution_id).toBe('child-1')
+    expect(result.some(t => t.display_meta?.includes('PULSE FINALIZER'))).toBe(false)
+  })
+
+  // PLAT-107: sequential Pulse messages are main-agent turns in the existing
+  // conversation. They must never be projected as child terminals.
+  it('keeps a sequential main-agent turn out of the rail', () => {
+    const result = projectExecutionTreeTerminals([], tree([
+      node('main:session-1', { kind: 'main_agent', name: 'PULSE FINALIZER' }),
+    ]))
+
+    expect(result).toEqual([])
+  })
+
+  // PLAT-107: kind alone was insufficient. An unclassified node with no
+  // distinct parent used to fall through to a `background_agent` placeholder.
+  it('does not invent a child for an unclassified node with no distinct parent', () => {
+    const result = projectExecutionTreeTerminals([], tree([
+      node('turn-000', { kind: '', name: 'PULSE FINALIZER' }),
+    ]))
+
+    expect(result).toEqual([])
+  })
+
+  it('still projects a genuine child that has a distinct parent', () => {
+    const result = projectExecutionTreeTerminals([], tree([
+      node('main:session-1', { kind: 'main_agent', name: 'Route execution' }),
+      node('child-1', { parent_execution_id: 'main:session-1', name: 'Trending radar' }),
+    ]))
+
+    expect(result).toHaveLength(1)
+    expect(result[0]).toMatchObject({
+      execution_id: 'child-1',
+      display_meta: 'Child of Route execution',
+      execution_tree_placeholder: true,
+    })
   })
 })

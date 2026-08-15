@@ -8,6 +8,7 @@ import {
   shouldUseRetainedLiveInput,
 } from '../utils/liveInputSubmission'
 import { isInternalAutoNotificationEvent } from '../utils/internalChatEvents'
+import { eventBelongsToSession } from '../utils/sessionEventWorkingSet'
 import { useShallow } from 'zustand/react/shallow'
 import { agentApi, resetSessionId, getSessionId } from '../services/api'
 import type { PollingEvent, ExtendedLLMConfiguration, SSEEventMessage, SSEStatusMessage, ExecutionOptions } from '../services/api-types'
@@ -47,6 +48,7 @@ import {
   isChatCompatiblePhase,
 } from '../utils/chatSubmitHelpers'
 import { resolveDelegationMainModel } from '../utils/workflowLLMTierDefaults'
+import { shouldKeepWorkflowSessionSubscribed } from '../utils/workflowSessionSubscription'
 
 // Stable empty array to avoid infinite re-render loops in Zustand selectors
 // (a new [] on every selector call breaks referential equality checks)
@@ -270,6 +272,11 @@ function handleLiveStreamingEvent(
   actualSessionId: string,
   chatStore: ReturnType<typeof useChatStore.getState>
 ) {
+  // PLAT-106: streaming text is session-owned state. The response envelope
+  // alone is not authoritative — an event that names a different owning
+  // session must never drive another session's visible stream.
+  if (!eventBelongsToSession(actualSessionId, event)) return
+
   const { agentEvent, innerData, metadata } = getEventPayloadParts(event)
   const scope = getRuntimeEventScope(event)
   const correlationId = innerData?.correlation_id ?? agentEvent?.correlation_id
@@ -698,9 +705,20 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
   // through EventHierarchy props → eventTree memo → flattenedItems memo → Virtuoso diff,
   // all for zero actual change.
   const displayEventsRef = useRef<PollingEvent[]>([])
+  // PLAT-106 repair 3: the ref-stability cache above is session-scoped. Carried
+  // across a session change it can return the PREVIOUS session's array — the
+  // length + first/last-ID check is a same-session heuristic and says nothing
+  // about ownership. Stamping it with the session it belongs to makes the reset
+  // synchronous with the switch instead of one render late.
+  const displayEventsSessionRef = useRef<string | undefined>(activeSessionId)
   const emptyTerminalRestoreAttemptRef = useRef<Set<string>>(new Set())
 
   const displayEvents = useMemo(() => {
+    if (displayEventsSessionRef.current !== activeSessionId) {
+      displayEventsSessionRef.current = activeSessionId
+      displayEventsRef.current = []
+    }
+
     const filtered = tabEvents.filter(event => {
       // These drive the live streaming text buffer. They are transport-level
       // chunks, not durable conversation records; rendering retained chunks
@@ -762,7 +780,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     // Output actually changed — cache the new array for next comparison
     displayEventsRef.current = filtered
     return filtered
-  }, [tabEvents, showConversationUsage, ContentRenderer])
+  }, [tabEvents, showConversationUsage, ContentRenderer, activeSessionId])
 
   const hasConversationContent = useMemo(() => {
     return displayEvents.some(event =>
@@ -1881,8 +1899,14 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
         return false
       }
 
-      // Skip if completed (definitely done) — unless background agents are still running
-      if (currentTab.isCompleted && !currentTab.hasRunningBgAgents) {
+      // A locally completed turn may still receive child completions while the
+      // backend keeps the session active. Only stop polling when both sources
+      // agree that the session is done.
+      if (
+        currentTab.isCompleted &&
+        !currentTab.hasRunningBgAgents &&
+        !freshActiveIds.has(currentTab.sessionId)
+      ) {
         return false
       }
 
@@ -2202,14 +2226,21 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
         return false
       }
 
-      // Workflow tabs stay lightweight when idle. Keep live connections for
-      // active turns because some providers build their clean transcript from
-      // streaming events instead of tmux snapshots.
+      // Workflow tabs stay lightweight when genuinely idle. The backend active
+      // session signal must remain authoritative after the foreground turn
+      // settles: background children can still steer auto-notifications into
+      // the main transcript after isStreaming/hasRunningBgAgents have already
+      // gone false. Dropping SSE in that gap made those updates appear only
+      // after the user's next message reconnected the session.
       if (tab.metadata?.mode === 'workflow') {
         const bgTab = chatStore.getTab(tab.tabId)
         const bgStreaming = bgTab?.isStreaming ?? tab.isStreaming
         const bgRunning = bgTab?.hasRunningBgAgents ?? false
-        return bgStreaming || bgRunning
+        return shouldKeepWorkflowSessionSubscribed({
+          isStreaming: bgStreaming,
+          hasRunningBackgroundAgents: bgRunning,
+          isBackendActive: activeIds.has(tab.sessionId),
+        })
       }
 
       // Skip completed sessions (definitely done) — unless bg agents are still running

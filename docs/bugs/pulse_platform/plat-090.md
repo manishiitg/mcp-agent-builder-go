@@ -5,8 +5,8 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `open` — designed, not built |
-| Last synchronized | `2026-08-11` |
+| Ticket state | `open` — Finalize snapshot landed; comparative UI and durable stage timing remain |
+| Last synchronized | `2026-08-15` |
 
 - **Priority:** P2 — no incorrect behavior; the platform simply cannot report
   what its own self-improvement loop costs relative to the work it improves.
@@ -95,3 +95,23 @@ PLAT-069's ask, now on a foundation that can support it.
 - The figures reconcile with `cost_events` for the same run and window.
 - Any trend view states the date from which its data is trustworthy instead of
   charting across the PLAT-088 attribution change as if it were a real trend.
+
+## 2026-08-15 incremental implementation
+
+The scheduler now snapshots the authoritative central ledger immediately after
+Review+Fix and before Finalize, restricted to the current workflow,
+`scope=pulse`, and the exact Review+Fix stage window. Finalize receives the
+measured reviewer/fixer cost and LLM-call count and must include the compact
+amount in the notification's Operations section. Subscription-backed coding
+CLI amounts retain their truthful "estimated token-equivalent cost" label.
+
+The snapshot deliberately measures the expensive work the operator asked to
+track: the Review+Fix parent turn, its background Engineering/Ops reviewers and
+Fixer work, and any receipt continuation. Gate, Finalize, prior Pulse passes,
+workflow execution, builder activity, and other workflows are excluded by the
+backend query. A pass that skips Review+Fix reports `$0.00`; a stage that ran
+without matching ledger events reports a measurement gap rather than a false
+zero. Regression coverage proves the time-window and scope isolation.
+
+This does not close PLAT-090. The Pulse popup comparison and durable Gate /
+Review+Fix / Finalize wall-clock timing remain to be implemented.

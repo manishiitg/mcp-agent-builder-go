@@ -476,13 +476,151 @@ func getChatHistoryConversationHandler(api *StreamingAPI) http.HandlerFunc {
 		// let it ask for just that. Without this it downloaded the whole file --
 		// 1.3 MB for a real builder session, nearly all of it ui_events -- and
 		// threw away everything but the last handful of messages client-side.
-		if limit := parsePositiveQueryInt(r, "preview_messages"); limit > 0 {
+		if limit := parsePositiveQueryInt(r, "resume_turns"); limit > 0 {
+			data = projectChatHistoryConversationForResume(data, limit)
+		} else if limit := parsePositiveQueryInt(r, "preview_messages"); limit > 0 {
 			data = trimChatHistoryConversationForPreview(data, limit)
 		}
 
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(data)
 	}
+}
+
+// projectChatHistoryConversationForResume returns the actual conversational
+// turns needed by Formatted mode, without terminal snapshots, UI trace events,
+// system prompts, tool results, or coding-provider tool-call marker messages.
+//
+// Coding CLIs persist many internal AI messages between two user messages. The
+// last ordinary AI message before the next user message is the completed reply;
+// retaining only that message prevents a resumed chat from looking like a tmux
+// transcript while preserving the user/assistant conversation itself.
+func projectChatHistoryConversationForResume(data []byte, maxTurns int) []byte {
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return data
+	}
+	delete(doc, "ui_events")
+	delete(doc, "terminal_snapshots")
+
+	rawHistory, ok := doc["conversation_history"]
+	if !ok {
+		return marshalChatHistoryProjectionOrOriginal(doc, data)
+	}
+	var history []json.RawMessage
+	if err := json.Unmarshal(rawHistory, &history); err != nil {
+		return data
+	}
+
+	type turn struct {
+		user      json.RawMessage
+		assistant json.RawMessage
+	}
+	turns := make([]turn, 0)
+	var current *turn
+	var assistantWithoutUser json.RawMessage
+	for _, raw := range history {
+		role, text := chatHistoryMessageRoleAndText(raw)
+		switch role {
+		case "human", "user":
+			turns = append(turns, turn{user: raw})
+			current = &turns[len(turns)-1]
+		case "ai", "assistant":
+			if text == "" || isPersistedToolCallMarker(text) {
+				continue
+			}
+			if current != nil {
+				current.assistant = raw
+			} else {
+				assistantWithoutUser = raw
+			}
+		}
+	}
+
+	if maxTurns > 0 && len(turns) > maxTurns {
+		turns = turns[len(turns)-maxTurns:]
+	}
+	projected := make([]json.RawMessage, 0, len(turns)*2+1)
+	if len(turns) == 0 && len(assistantWithoutUser) > 0 {
+		projected = append(projected, assistantWithoutUser)
+	}
+	for _, item := range turns {
+		projected = append(projected, item.user)
+		if len(item.assistant) > 0 {
+			projected = append(projected, item.assistant)
+		}
+	}
+	encoded, err := json.Marshal(projected)
+	if err != nil {
+		return data
+	}
+	doc["conversation_history"] = encoded
+	return marshalChatHistoryProjectionOrOriginal(doc, data)
+}
+
+func marshalChatHistoryProjectionOrOriginal(doc map[string]json.RawMessage, original []byte) []byte {
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return original
+	}
+	return out
+}
+
+func chatHistoryMessageRoleAndText(raw json.RawMessage) (string, string) {
+	var message struct {
+		Role      string `json:"Role"`
+		RoleLower string `json:"role"`
+		Parts     []struct {
+			Text      string `json:"Text"`
+			TextLower string `json:"text"`
+			Content   string `json:"Content"`
+			ContentLo string `json:"content"`
+		} `json:"Parts"`
+		PartsLower []struct {
+			Text      string `json:"Text"`
+			TextLower string `json:"text"`
+			Content   string `json:"Content"`
+			ContentLo string `json:"content"`
+		} `json:"parts"`
+	}
+	if err := json.Unmarshal(raw, &message); err != nil {
+		return "", ""
+	}
+	role := strings.ToLower(strings.TrimSpace(message.Role))
+	if role == "" {
+		role = strings.ToLower(strings.TrimSpace(message.RoleLower))
+	}
+	parts := message.Parts
+	if len(parts) == 0 {
+		parts = message.PartsLower
+	}
+	var text strings.Builder
+	for _, part := range parts {
+		value := part.Text
+		if value == "" {
+			value = part.TextLower
+		}
+		if value == "" {
+			value = part.Content
+		}
+		if value == "" {
+			value = part.ContentLo
+		}
+		if strings.TrimSpace(value) == "" {
+			continue
+		}
+		if text.Len() > 0 {
+			text.WriteString("\n\n")
+		}
+		text.WriteString(value)
+	}
+	return role, strings.TrimSpace(text.String())
+}
+
+func isPersistedToolCallMarker(text string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(text))
+	return strings.HasPrefix(normalized, "[previous tool call:") ||
+		strings.HasPrefix(normalized, "[previous tool result:")
 }
 
 // parsePositiveQueryInt returns a positive integer query parameter, or 0 when
