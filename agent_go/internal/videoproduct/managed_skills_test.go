@@ -120,7 +120,8 @@ func TestGenerationSkillsRegisterAndStayOutOfTheInfographicPipeline(t *testing.T
 		{"fal-ai", []string{"SECRET_FAL_KEY", "Never invent a model ID", "@fal-ai/client"}},
 		{"google-ai", []string{"SECRET_GEMINI_API_KEY", "Never invent a model ID", "@google/genai"}},
 		{"video-model-selection", []string{"video-cinematography", "fal-ai", "google-ai", "Shot count vs. budget"}},
-		{"video-cinematography", []string{"Rack focus", "Reference-image conditioning", "video-model-selection"}},
+		{"video-cinematography", []string{"dolly is not zoom", "reference-image conditioning", "video-model-selection"}},
+		{"video-storytelling", []string{"video-cinematography", "video-model-selection", "But-therefore, not and-then", "Scaling to true long-form"}},
 	}
 	for _, tc := range cases {
 		if !skills.IsBuiltinSkill(tc.name) {
@@ -151,7 +152,7 @@ func TestGenerationSkillsRegisterAndStayOutOfTheInfographicPipeline(t *testing.T
 		}
 	}
 
-	generationSkillNames := map[string]bool{"fal-ai": true, "google-ai": true, "video-model-selection": true, "video-cinematography": true}
+	generationSkillNames := map[string]bool{"fal-ai": true, "google-ai": true, "video-model-selection": true, "video-cinematography": true, "video-storytelling": true}
 	for _, stage := range infographicPipeline.Stages {
 		for _, name := range stage.Skills {
 			if generationSkillNames[name] {

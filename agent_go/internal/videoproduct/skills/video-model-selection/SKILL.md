@@ -31,11 +31,16 @@ generation call, resolve whatever the brief hasn't already answered:
   `video-cinematography`'s consistency section) and must be known before the
   first shot of that subject is generated, not discovered after three
   independently-drifting attempts.
-- **Shot count vs. budget.** A 60-second production built from many short
-  paid generations costs differently than one from a few longer ones. If the
-  user hasn't stated a cost ceiling or a maximum acceptable number of paid
-  generation calls, ask once, compactly -- do not silently generate an
-  open-ended number of variants.
+- **Shot count vs. budget.** A true long-form (8-15+ minute) production is
+  assembled from dozens of separately-generated clips -- at roughly 5-15
+  seconds of usable video per paid call, a 10-minute piece is on the order
+  of 50-100+ generation calls before accounting for re-prompts. That is a
+  materially different cost and time commitment than a handful of shots,
+  and it compounds with regeneration tolerance below. If the user hasn't
+  stated a cost ceiling or a maximum acceptable number of paid generation
+  calls, ask once, compactly, with the rough call-count arithmetic shown --
+  do not silently generate an open-ended number of variants across a
+  production this large.
 - **Regeneration tolerance.** If a shot doesn't match the brief on the first
   attempt, how many re-prompts is reasonable before stopping to ask the user
   rather than continuing to spend on the same shot? State a default (e.g.
@@ -58,13 +63,18 @@ model explorer, Google's Gemini API model reference), not from memory:
   reference image or an established character needs image-to-video support,
   not just a strong text-to-video model.
 - **Duration and shot length**: confirm the model's actual max clip length
-  against what the storyboard needs for this shot. A 60-second production
-  built from several short clips needs models whose per-call duration limit
-  is compatible with the planned cut count -- do the arithmetic explicitly
-  (shot count x per-shot duration) rather than assuming any model covers an
-  arbitrary length. A generated clip rarely comes out at exactly the beat's
+  against what the storyboard needs for this shot. No model generates an
+  8-15+ minute clip in one call -- a true long-form piece is always
+  assembled from many short generations, so do the arithmetic explicitly
+  (total runtime ÷ per-shot duration = roughly how many generation calls
+  the production needs) rather than assuming duration is a one-time choice.
+  A model with a longer native per-call duration (e.g. Seedance 2.5's
+  native 30-second generation, versus a model capped at 5-8s) reduces the
+  call count and the number of stitch points for the same total runtime,
+  which is a real cost and consistency advantage at this scale, not just a
+  convenience. A generated clip rarely comes out at exactly the beat's
   needed length -- see `video-editing`'s "Stitching independently
-  AI-generated clips" for how to trim, normalize, and concatenate multiple
+  AI-generated clips" for how to trim, normalize, and concatenate dozens of
   generated clips into the final assembly.
 - **Subject/character consistency across shots**: if the same character,
   product, or object must recognizably recur across multiple generated
@@ -107,12 +117,14 @@ memory in a later session; re-check instead.
 - **Video, hosted on fal.ai**: Seedance 2.5 (`bytedance/seedance-2.5/text-to-video`,
   `.../image-to-video`, `.../reference-to-video`) supersedes 2.0 -- native
   30-second generation in one pass (relevant to the shot-count arithmetic
-  above: two calls can cover a full 60-second piece), up to 50 multimodal
-  references in one generation, native audio co-processed in the same
-  latent space as the visuals so it's synchronized without a post layering
-  pass, and roughly double 2.0's native ceiling -- for image-to-video this
-  shows up most as materially better subject/character consistency across
-  the whole clip (see `video-cinematography`'s consistency section). MiniMax
+  above: fewer, longer calls to cover the same total long-form runtime than
+  a model capped at 5-8s per call), up to 50 multimodal references in one
+  generation, native audio co-processed in the same latent space as the
+  visuals so it's synchronized without a post layering pass, and roughly
+  double 2.0's native ceiling -- for image-to-video this shows up most as
+  materially better subject/character consistency across the whole clip
+  (see `video-cinematography`'s consistency section), which matters more,
+  not less, the longer a character's arc runs across a production. MiniMax
   H3 (`minimax/h3/text-to-video`, `.../image-to-video`, `.../reference-to-video`)
   is the notable open-weights option -- self-hostable/fine-tunable, not
   only a closed API -- generating 2K, 5-15s clips at 24 FPS with native
@@ -140,6 +152,39 @@ both, the choice is about aggregation convenience and pricing, not
 capability -- fal.ai gives one unified surface across many vendors' models
 under one key; going direct to Google skips that layer for Google's own
 models specifically.
+
+## Prompt length and structure are model-specific
+
+Once a model is chosen, `video-cinematography`'s five-aspect formula
+(subject, motion, scene, spatial framing, camera) still applies, but how
+much of it to spell out, and how long the prompt should run, varies by
+model and changes as models version forward -- re-confirm rather than
+reusing these numbers indefinitely. As last checked (dated, may have
+shifted with newer versions):
+
+- **Seedance** is unusually literal about camera language and rewards a
+  fully-specified, long, structured prompt -- roughly 200-400 words for a
+  hero shot, 80-150 for a cutaway/insert. It also supports an explicit
+  multi-shot structure inside one generation call (`Shot 1 (...)`,
+  `Shot 2 (...)`, ...), which tends to hold subject identity more reliably
+  across those shots than separate calls do, since the identity anchor is
+  interpreted once per call instead of cold-started per shot -- prefer this
+  for a tight sequence of the same subject when the model supports it.
+- **Veo** responds to a comprehensive structured prompt (subject, action,
+  scene, camera angle, camera movement, lens/optical effects, lighting,
+  tone, style, ambiance, pacing, audio, editing terms, negative prompt) and
+  natively generates dialogue and synchronized ambient audio/music when
+  asked for it in the prompt. Sweet spot is roughly 100-250 words; longer
+  prompts tend to stop helping past that. **Veo may add unrequested
+  subtitles by default for dialogue** -- add "no subtitles, no captions, no
+  text overlays" to the negative prompt to prevent this (see also
+  "Overlays are not scene depth" in `video-cinematography`).
+- Lighter-weight or lower-latency models tend to plateau on prompt length
+  much sooner (well under 100 words) and reward simple, motion-focused
+  language over exhaustive detail -- check the specific model's own
+  guidance rather than assuming a longer prompt is always safer.
+
+## Provider is a routing decision, not a preference
 
 ## Provider is a routing decision, not a preference
 

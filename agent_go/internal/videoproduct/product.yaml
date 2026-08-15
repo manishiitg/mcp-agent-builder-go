@@ -78,6 +78,7 @@ profile:
     - google-ai
     - video-model-selection
     - video-cinematography
+    - video-storytelling
   tools:
     - id: video.show-video
       # Declares what this tool shows, not how. The frontend renderer
@@ -244,4 +245,5 @@ workflows:
     - google-ai
     - video-model-selection
     - video-cinematography
+    - video-storytelling
   browser_mode: auto

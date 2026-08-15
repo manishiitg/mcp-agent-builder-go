@@ -52,6 +52,7 @@ var profileSkills = []struct{ name, description, path string }{
 	{"google-ai", "Generate AI video and image clips via Google's own Gemini API (Node.js client) -- Gemini image models and Veo -- for long-form narrative productions.", "skills/google-ai/SKILL.md"},
 	{"video-model-selection", "Choose which fal.ai or Google model fits one shot's requirements -- input mode, duration, character consistency, native audio, cost -- before generating.", "skills/video-model-selection/SKILL.md"},
 	{"video-cinematography", "Turn a storyboard beat into camera, lighting, and framing direction for a generated shot, and keep a character or subject consistent across shots.", "skills/video-cinematography/SKILL.md"},
+	{"video-storytelling", "Structure a video's narrative arc and pacing, scaled from a short explainer to a true long-form (8+ minute) piece's chapters, retention curve, and pattern interrupts.", "skills/video-storytelling/SKILL.md"},
 }
 
 var registerProductSkillsOnce sync.Once

@@ -1,62 +1,144 @@
 ---
 name: video-cinematography
-description: Turn a storyboard beat into camera, lighting, and framing direction for an AI-generated shot, and keep a character or subject visually consistent across multiple generated shots. Use before calling fal-ai or google-ai for any shot in a long-form production, and whenever a generated shot needs re-prompting because framing, motion, lighting, or character identity drifted from the brief.
+description: Construct the actual generation prompt for an AI video/image shot -- the five-aspect formula (subject, motion, scene, spatial framing, camera), a precise camera-movement and lighting vocabulary, and keeping a character or subject visually consistent across shots. Use after video-storytelling has placed a beat in the narrative arc and video-model-selection has picked a model, and whenever a generated shot needs re-prompting because framing, motion, lighting, or identity drifted from the brief.
 ---
 
 # Cinematography and consistency for generated video
 
 A generation model responds to specific technical direction far better than
-a vague creative brief. This skill translates a storyboard beat into that
-direction. It is provider- and model-agnostic -- `video-model-selection`
-picks the model, `fal-ai`/`google-ai` make the call; this skill decides what
-you tell the model to do.
+a vague creative brief. This skill turns a storyboard beat into that
+direction. It is provider- and model-agnostic -- `video-storytelling` places
+the beat in the narrative arc, `video-model-selection` picks the model,
+`fal-ai`/`google-ai` make the call; this skill decides what you tell the
+model to do once you're ready to write the actual prompt.
+
+## The self-contained-prompt test
+
+Before generating, check: could someone who has never seen the intended
+shot picture the subject, scene, motion, and camera work from the prompt
+text alone? If a human reader couldn't picture it from the words, a
+generation model will not render it either. Vague, mood-only language
+("cinematic," "epic," "moody") fails this test even when it sounds evocative
+-- see "Describe the visual cause, not the emotion" below.
+
+## The five-aspect prompt formula
+
+Video generation models reliably render a described subject and scene, but
+routinely fail on motion, spatial framing, and camera work when those are
+left implicit. Structure every generation prompt to fill all five slots
+explicitly, not just the ones that feel obvious:
+
+```
+Subject          type + key visual attributes + how to tell apart from
+                 other subjects in frame
+Subject motion   actions in temporal order; how subjects interact with
+                 objects and each other; group action if more than one
+Scene            setting + time of day + scene dynamics -- list any
+                 on-screen overlays (titles, captions) separately, they
+                 are NOT part of scene depth (see below)
+Spatial framing  shot size + where the subject sits in frame + depth
+                 (foreground/midground/background) + camera height
+                 relative to subject -- and how any of this changes
+                 during the shot
+Camera           playback speed, then lens effects, then height, then
+                 angle, then focus/depth-of-field, then steadiness,
+                 then movement -- in that order
+```
+
+Shorter prompts leave the model more creative freedom; longer, fully-specified
+prompts give more control. Neither is universally right -- match the prompt's
+density to how much this specific shot needs to be controlled versus
+discovered, and check `video-model-selection`'s dated notes for how much
+prompt length a given model actually rewards (some plateau past ~250 words,
+others are built for 200-400 word structured prompts).
+
+### Ordering multiple subjects or events
+
+When a prompt lists more than one subject or event, order them deliberately:
+**temporal order** when things happen in sequence ("first X enters, then Y
+reacts"), **prominence order** when timing isn't the point (people before
+objects, the largest/most-centered subject first, secondary subjects after).
 
 ## Shot composition: map the beat to the frame
 
 For every shot, resolve before generating:
 
 - **What the shot proves.** One shot, one idea -- match the visual change to
-  the story beat it serves (see `video-creation`'s "Shape the story"). A shot
-  trying to prove two things usually proves neither clearly in a few
-  seconds.
-- **Framing**: wide (establish context/scale), medium (person/product with
-  surroundings), close-up (detail, emotion, a specific proof point), or
-  extreme close-up (a single critical detail). Choose the tightest framing
-  that still reads clearly -- long-form video loses viewers to shots that
-  don't commit to a clear subject.
+  the story beat it serves (see `video-storytelling`). A shot trying to
+  prove two things usually proves neither clearly in a few seconds.
+- **Framing**: wide/establishing (location context), full/long (subject
+  head-to-toe with environment), medium (waist-up, balances detail and
+  context), medium close-up (chest-up, conversational), close-up (face or
+  key object, emphasizes emotion or a specific proof point), extreme
+  close-up (one isolated detail). Choose the tightest framing that still
+  reads clearly.
 - **Composition**: rule-of-thirds subject placement, leading lines, negative
   space for text/overlay if the shot will carry on-screen copy, headroom
   appropriate to the framing.
 
-## Camera movement vocabulary
+## Camera vocabulary: precise, not evocative
 
-Name the movement explicitly in the prompt rather than describing an effect
-and hoping the model infers the technique -- most models respond much more
-reliably to named camera language:
+Name the exact technique rather than describing an effect and hoping the
+model infers it -- models respond far more reliably to named, correctly
+grouped camera language, and conflating two different primitives routinely
+produces the wrong result.
 
-- **Static**: no movement. The default for a shot whose value is in what's
-  shown, not how it's revealed. Use it deliberately, not by omission.
-- **Pan / tilt**: camera pivots horizontally/vertically from a fixed point.
-  Use to reveal scale or follow motion without repositioning the camera.
-- **Dolly / truck**: camera physically moves forward-back (dolly) or
-  side-to-side (truck) while keeping the same look direction. A dolly-in
-  builds intensity or draws attention to a detail; a dolly-out reveals
-  context.
-- **Crane / jib**: camera moves vertically, often combined with a pan --
-  reveals scale or transitions between a wide establishing view and a
-  grounded one.
-- **Rack focus**: focus shifts from one subject/depth to another within the
-  shot, directing attention without moving the camera. Effective for a
-  two-beat shot (e.g. product in foreground, context in background) inside
-  one clip.
-- **Dolly zoom**: camera moves while the lens zooms to compensate, keeping
-  the subject's size constant while the background compresses/expands --
-  a strong, specific effect; use sparingly and only when the beat calls for
-  genuine visual tension, not as generic "cinematic" flavor.
-- **Handheld / stabilized**: state explicitly which one is wanted. Handheld
-  reads as immediate/authentic; a locked-off or gimbal-stabilized shot reads
-  as polished/controlled. The wrong default for the brief's tone is a common
-  cause of a shot feeling off without an obvious reason why.
+### Camera movement, grouped correctly
+
+Models frequently confuse camera translation, rotation, and lens-only
+changes when the prompt doesn't clearly separate them. Use the right group:
+
+- **Translation** (the camera physically moves through space): dolly
+  in/out (along the lens axis), truck left/right (laterally), pedestal
+  up/down (vertically).
+- **Rotation** (the camera stays in place and pivots): pan left/right
+  (yaw), tilt up/down (pitch), roll clockwise/counter-clockwise (Dutch /
+  Z-axis).
+- **Lens-only** (neither the camera nor its position changes): zoom in/out
+  (focal-length change), rack focus / pull focus / focus tracking
+  (focal-plane change).
+- **Hybrid / signature moves**: dolly zoom (the vertigo effect -- camera
+  moves while the lens zooms to compensate, subject size stays constant
+  while the background compresses or expands; a strong, specific effect,
+  use only for genuine visual tension, not generic "cinematic" flavor),
+  arc/orbit, crane/jib (vertical move, often combined with a pan -- reveals
+  scale or transitions between a wide and a grounded view), whip pan,
+  tracking/follow, handheld.
+- **Stillness**: static (strictly zero movement, zero focus change, zero
+  zoom -- if any of those occur, it isn't static, name the actual
+  primitive instead), micro-shake, locked-off.
+
+**dolly is not zoom** -- dolly is the camera physically moving; zoom is a
+focal-length change with the camera fixed. **pan is not truck** -- pan
+rotates in place; truck moves laterally. Models follow whichever word is
+present, so using the wrong one produces the wrong shot, not a close
+approximation.
+
+### Camera height and angle
+
+State both independently -- height is where the camera physically sits
+(aerial, overhead, eye-level, hip-level, ground-level, water-level,
+underwater); angle is the camera's relationship to the subject (bird's-eye
+is strict top-down, not the same as merely "aerial" altitude; high angle
+looks down on the subject; level angle matches subject height; low angle
+looks up, reading as powerful/dominant; worm's-eye looks straight up; Dutch
+angle tilts the horizon, fixed or rolling, for unease or tension).
+
+### Focus and depth of field
+
+Deep focus (everything sharp, foreground to background), shallow
+depth-of-field (subject sharp, background soft), extremely shallow (a razor
+focal plane), rack focus (a snap shift between two focal points mid-shot),
+pull focus (the same shift, slower and more gradual than rack), focus
+tracking (focus follows a moving subject). When focus changes during a
+shot, state both the starting and ending focal plane.
+
+### Playback speed
+
+Time-lapse (much faster than real time), fast-motion (roughly 1-3x real
+time), slow-motion, stop-motion (discrete frame-by-frame movement),
+speed-ramp (a mix of fast and slow within one shot), time-reversed. These
+are distinct primitives, not synonyms for "fast" or "slow."
 
 ## Lighting and atmosphere
 
@@ -66,54 +148,168 @@ State lighting direction as part of the prompt, not as an afterthought:
   (sharp shadows, high contrast, dramatic) or soft (diffused, low contrast,
   flattering). Three-point lighting (key, fill, rim/back) is the reliable
   default for a clear, well-modeled subject when the brief doesn't call for
-  something more stylized.
-- **Color temperature and mood**: warm (golden hour, incandescent) vs cool
-  (overcast, moonlight, fluorescent/clinical) sets emotional register before
-  a single word of copy appears on screen.
+  something more stylized. Rembrandt lighting (a small light triangle on
+  the cheek) is a specific, recognizable portrait look; film noir (deep
+  shadow, stark highlight) and volumetric (visible light rays through fog
+  or dust) are others worth naming explicitly rather than approximating.
+- **Color temperature and mood**: warm (golden hour, incandescent/tungsten)
+  vs cool (overcast, moonlight, daylight/fluorescent) sets emotional
+  register before a single word of copy appears on screen.
 - **Practical vs motivated light**: whether light sources are visible in
-  frame (practicals: a window, a lamp) or implied off-frame -- affects how
-  "real" vs "produced" a shot reads.
+  frame (practicals: a window, a lamp, a neon sign) or implied off-frame --
+  affects how "real" vs "produced" a shot reads.
 - Keep lighting continuity across shots in the same scene/location unless a
   time or mood change is deliberate and telegraphed (e.g. a transition beat
-  explicitly moving from day to night).
+  explicitly moving from day to night). Never state conflicting lighting in
+  one prompt ("bright noon" plus "dark dramatic shadows") -- the model
+  picks one and silently drops the other.
 
-## Keeping a character or subject consistent across shots
+## Describe the visual cause, not the emotion
+
+Replace emotional or mood adjectives with the concrete visual detail that
+would actually cause that emotion in a viewer -- "inspiring," "epic,"
+"powerful," and "moody" don't constrain a single pixel, so models render
+their own generic default for them:
+
+| Instead of | Write |
+|---|---|
+| "sad character" | "tears on the cheek, shoulders slumped, staring at an empty chair" |
+| "epic reveal" | "wide aerial pull-back; subject silhouetted against the rising sun" |
+| "cinematic mood" | "low-key Rembrandt key light, shadows lifted two stops, 35mm anamorphic, crushed blacks" |
+| "powerful music swell" | "music drops to silence at the cut, holds for 1.5s, returns with a low drum at half tempo" |
+
+This applies to narration/on-screen copy as much as to generation prompts --
+a viewer reads "epic" as filler; they respond to what's actually on screen.
+
+## Subject transitions
+
+When a shot introduces a new subject, removes one, or hands focus from one
+subject to another, name the transition explicitly rather than leaving it
+for the model to infer:
+
+- **Revealing**: a new subject enters or becomes visible mid-shot, by
+  either subject movement or camera movement (a door opens, the camera
+  pans to find them, fog clears).
+- **Disappearing**: an existing subject leaves frame or is removed (walks
+  out, fades, is occluded).
+- **Switching**: focus jumps from one subject to another, typically via a
+  cut, a rack focus, or a camera whip.
+- **Complex-alternating**: multiple subjects trade focus repeatedly within
+  one shot (a debate, cross-cutting, ensemble action).
+
+Name the mechanism too ("by camera movement," "via rack focus") -- this is
+what actually unlocks reliable reveal-style camerawork rather than a random
+guess at how the transition should look.
+
+## Overlays are not scene depth
+
+On-screen text, captions, titles, HUD elements, and watermarks are not part
+of a scene's foreground/midground/background depth axis -- list them
+separately with their exact content and placement, never as "overlay in the
+foreground." Exact text, logos, and prices belong in a deterministic
+overlay layer added in `video-editing`, not baked into the generation
+prompt -- models render text unreliably, and some (Google's Veo family
+specifically) may add unrequested subtitles by default for dialogue unless
+told not to.
+
+## Define every recurring character before generating its first shot
 
 This is the hardest part of a multi-shot AI-generated production and the
 most common source of a viewer-visible defect (a character's face, outfit,
-or a product's exact appearance shifting between shots). Techniques, in
-order of reliability -- check which your chosen model actually supports
-before committing to an approach for the whole arc (see
-`video-model-selection`):
+or a product's exact appearance shifting between shots). Do not discover a
+character's appearance opportunistically shot by shot -- for every
+character, presenter, or product that recurs across more than one shot,
+produce both deliverables below **before generating any shot of that
+subject**, not after an inconsistency is already noticed:
 
-1. **Reference-image conditioning (most reliable).** If the model accepts an
-   image input, generate or source one strong reference image of the
-   character/subject first, then condition every subsequent shot on that
-   same reference rather than re-describing appearance in text each time.
-   Text descriptions alone drift across independent generations even with
-   an identical prompt. See `video-model-selection`'s dated model notes for
-   a current example of a model whose image-to-video mode specifically
-   improves consistency this way -- confirm against the live reference
-   before relying on it, the same as any other model claim.
-2. **A written character/subject sheet.** Maintain one canonical, detailed
-   description (face, build, exact outfit, product's exact colors/markings)
-   in `production.json` and reuse it verbatim in every prompt for that
-   subject -- do not let the description drift by paraphrasing it
-   differently per shot.
-3. **Seed reuse where supported.** Some models expose a seed parameter that
-   improves consistency across generations sharing it. This alone is
-   usually not sufficient for a recognizable recurring character; combine it
-   with a reference image when available.
-4. **Shot-to-shot anchoring.** For an image-to-video model, extracting a
-   frame from an approved shot and using it as the reference/first-frame
-   input for the next shot in the same sequence can carry appearance
-   continuity forward through a scene.
-5. **When none of the above holds well enough**, treat that as a real
-   constraint to report, not a defect to hide: tell the user the chosen
-   model cannot reliably hold the character/subject consistent across this
-   many shots, and offer the tradeoff (fewer shots of that subject, a
-   model switch, or accepting visible variation) rather than presenting a
-   version with drifting identity as finished.
+1. **A written character spec.** One canonical, detailed description --
+   face, build, exact outfit, product's exact colors/markings -- saved once
+   (e.g. `characters/<character-name>.md`, referenced from
+   `production.json`). Pick 3-6 specific, disambiguating visual attributes
+   (e.g. "bald, blue arrow tattoo on forehead, orange-and-yellow robes")
+   and reuse that exact phrase, verbatim, in every prompt for that subject.
+   Pronouns and phrases like "the same character as before" do not carry
+   identity across independent generations -- each generation is evaluated
+   cold, as if it had never seen the earlier one. Do not let the
+   description drift by paraphrasing it differently per shot.
+2. **A generated character-sheet reference image.** Use `fal-ai` or
+   `google-ai` (whichever the chosen model needs -- see
+   `video-model-selection`) to generate one strong reference image of the
+   character/subject from the spec, saved to a stable path (e.g.
+   `characters/<character-name>.png`). Text descriptions alone drift across
+   independent generations even with an identical prompt; a shared image
+   reference does not.
+
+Once both exist, every subsequent shot of that subject conditions on the
+same reference image and repeats the same spec phrase verbatim -- this is
+reference-image conditioning, the most reliable of the techniques below, and
+it only works if the reference was made first and reused deliberately, not
+regenerated per shot.
+
+## Keep the whole character arc on one model and provider
+
+Once a model is chosen for a character (based on which one actually supports
+reference-image conditioning well -- see `video-model-selection`), commit to
+that same model and provider for every shot of that character in the
+production. This is a default to follow, not a preference: even with an
+identical reference image, different models and providers interpret and
+render a reference differently, so switching mid-arc routinely breaks
+consistency in a way that switching shots *within* one model, sharing its
+own reference, generally does not. Treat a mid-arc model or provider switch
+as a last resort requiring the user's explicit sign-off, not a routine
+production decision -- and if it happens, re-verify consistency against the
+reference image explicitly rather than assuming the new model's output
+matches by prompt alone.
+
+## Other consistency techniques
+
+In addition to reference-image conditioning and the single-model/provider
+default above:
+
+- **Seed reuse where supported.** Some models expose a seed parameter that
+  improves consistency across generations sharing it. This alone is usually
+  not sufficient for a recognizable recurring character; combine it with the
+  reference image, never use it as a substitute for one. Lock a seed once a
+  shot's composition reads well, and reuse it for controlled variations of
+  that same shot.
+- **Shot-to-shot anchoring.** For an image-to-video model, extracting a
+  frame from an approved shot and using it as the reference/first-frame
+  input for the next shot in the same sequence can carry appearance
+  continuity forward through a scene, on top of the character-sheet
+  reference. When chaining independently-generated clips this way, write
+  the two adjoining prompts so the last described moment of clip N matches
+  the first described moment of clip N+1 -- overlapping the description at
+  the seam, not just the reference image, reduces visible discontinuity at
+  the stitch point (see `video-editing`'s stitching guidance).
+- **Multi-shot generation in one call.** Some models (check
+  `video-model-selection`'s dated notes) accept an explicit shot list
+  inside a single generation call (`Shot 1 (...)`, `Shot 2 (...)`, etc.)
+  and hold identity more reliably across shots generated together than
+  across separate calls, since the identity anchor only has to be
+  interpreted once per call rather than re-cold-started per shot. Prefer
+  this for a tight sequence of the same subject when the model supports it.
+
+**When none of the above holds well enough**, treat that as a real
+constraint to report, not a defect to hide: tell the user the chosen model
+cannot reliably hold the character/subject consistent across this many
+shots, and offer the tradeoff (fewer shots of that subject, or accepting
+visible variation). Do not offer a model or provider switch as a casual
+equal option here -- per the rule above, that trades a known consistency
+problem for a second one and needs the user's explicit sign-off, not a
+silent default.
+
+## Prompt iteration strategy
+
+1. Start simple: subject, action, setting. See what the model produces
+   before adding constraints.
+2. Add one element at a time -- camera, then lighting, then style. Adding
+   everything at once makes it hard to tell which change caused a result to
+   improve or misfire.
+3. If a shot misfires, strip back rather than piling on more adjectives:
+   simplify the action, freeze the camera, remove one variable at a time.
+4. For consistency across clips in one sequence, repeat the same
+   style/lighting/grade description alongside the character reference, not
+   just the subject description.
 
 ## Verify before calling a shot done
 
@@ -132,11 +328,25 @@ Re-prompt with more specific, technically-named direction (not just a
 stronger adjective) when a shot misses -- most drift traces back to an
 under-specified prompt rather than an unreliable model.
 
+## What to avoid
+
+| Don't | Why | Do instead |
+|---|---|---|
+| "Beautiful scene" | No visual information to render | "Wet cobblestone street, warm streetlamp glow reflecting in puddles" |
+| "Person moves quickly" | No visible, specific action | "She sprints three steps and vaults over the railing" |
+| Four or more simultaneous actions in one shot | Motion coherence tends to collapse | Split into a multi-shot sequence instead |
+| Readable text or logos inside the generated clip | Text rendering is unreliable across models | Keep exact text in the overlay layer (see "Overlays are not scene depth") |
+| Complex physics (explosions, crowds colliding) | Chaotic motion causes visible artifacts | Keep physics simple; walking/gesturing is reliable, destruction is risky |
+| Multiple characters speaking in one shot | Multi-person dialogue sync tends to break | One speaker per shot, or use reaction shots instead |
+| Everything specified at once on a first attempt | Hard to diagnose which element caused a miss | Layer in complexity one element at a time (see "Prompt iteration strategy") |
+
 ## Where this fits
 
 - Use `video-creation` to plan the shot list and own the overall brief.
+- Use `video-storytelling` to place each beat in the narrative arc before
+  writing its shot.
 - Use `video-model-selection` to choose a model per shot.
-- Use this skill to turn the beat into camera/lighting/consistency direction
-  before calling `fal-ai` or `google-ai`.
+- Use this skill to turn the beat into the actual generation prompt --
+  camera, lighting, consistency -- before calling `fal-ai` or `google-ai`.
 - Use `video-editing` to assemble the results, `video-quality` before
   presenting any version as complete.
