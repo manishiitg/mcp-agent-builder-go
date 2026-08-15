@@ -43,7 +43,12 @@ Run Backup, Publish, then Notify. Before and after each, call
      issues, blocker, next owner, and checkpoint. If over five, show the top five,
      remaining count, and tell the user to open Pulse for details.
    - **Needs your decision:** pending requests and what each unblocks.
-   - **Operations:** backup/publish, cost/time, and next Pulse action.
+   - **Operations:** backup/publish, the backend-supplied current-pass
+     **Reviewers + Fixer** cost, time, and next Pulse action. Preserve the
+     supplied cost label exactly. It covers only the Review+Fix parent turn,
+     its background reviewer/fixer agents, and any receipt continuation. Never
+     substitute Gate, Finalize, cumulative daily, workflow-execution, builder,
+     or prior-pass cost.
 
    If a newly found issue remains pending, say so instead of duplicating it
    ambiguously. Say `Backup risk: local only` until an off-device destination is verified.

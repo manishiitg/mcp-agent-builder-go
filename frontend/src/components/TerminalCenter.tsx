@@ -13,6 +13,7 @@ import {
   shouldHydrateMainTerminalEvents,
   shouldLoadTerminalEvents,
   shouldStreamTerminal,
+  terminalViewPreferenceKey,
 } from '../utils/terminalSnapshotIdentity'
 import type { PollingEvent, RuntimeSnapshot, TerminalSnapshot } from '../services/api-types'
 import { useGlobalPresetStore } from '../stores/useGlobalPresetStore'
@@ -40,7 +41,7 @@ import {
   type TerminalRailSection,
 } from '../utils/terminalRailOrganization'
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip'
-import { reconcileTerminalRuntimeState, runtimeDisplayStatus, terminalTurnIsBusy } from '../utils/runtimeActivity'
+import { reconcileTerminalRuntimeState, runtimeDisplayStatus, terminalConversationHasPendingWork, terminalTurnIsBusy } from '../utils/runtimeActivity'
 import { usePlanData } from './workflow/hooks/usePlanData'
 import { TerminalEventTranscript } from './TerminalEventTranscript'
 import { selectTerminalEvents, toolErrorContextByEventID } from '../utils/terminalEventTranscript'
@@ -2662,7 +2663,17 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
   })
   const selectedTabRequiresHistoryHydration = useChatStore(state => {
     const tab = state.activeTabId ? state.chatTabs[state.activeTabId] : undefined
-    return Boolean(tab?.sessionId === currentSessionId && tab?.metadata?.isViewOnly)
+    return Boolean(
+      tab?.sessionId === currentSessionId &&
+      (tab?.metadata?.isViewOnly || tab?.config?.restoredConversationPath),
+    )
+  })
+  const selectedTabPrefersFormattedResume = useChatStore(state => {
+    const tab = state.activeTabId ? state.chatTabs[state.activeTabId] : undefined
+    return Boolean(
+      tab?.sessionId === currentSessionId &&
+      tab?.config?.restoredConversationPath,
+    )
   })
   const terminalWorkflowPathFilter = isWorkflowTerminalContext ? activeWorkflowPath : null
   const { plan: terminalWorkflowPlan } = usePlanData(terminalWorkflowPathFilter)
@@ -2823,6 +2834,23 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
   const lastSizeHintSentRef = useRef<{ cols: number; rows: number } | null>(null)
   const terminalTheme = TERMINAL_THEMES[terminalColorScheme]
   const rawXtermTheme = RAW_XTERM_THEMES[appTheme]
+
+  // PLAT-106 repair 3: the session-change reset below is a useEffect, so it runs
+  // AFTER the first render for the new session — that render still paints the
+  // previous session's terminals and selection. Switching between a Chat and a
+  // Schedule tab therefore showed the wrong session's pane for a frame.
+  //
+  // Adjusting state during render (React's documented "adjust state when a prop
+  // changes" idiom) makes the reset synchronous: React discards this render and
+  // immediately re-renders with cleared state, so stale terminals are never
+  // committed. The effect below still owns the ref/non-state cleanups.
+  const [terminalsSessionID, setTerminalsSessionID] = useState<string | null | undefined>(currentSessionId)
+  if (terminalsSessionID !== currentSessionId) {
+    setTerminalsSessionID(currentSessionId)
+    setTerminals([])
+    setSelectedID(null)
+    setUserSelectedID(null)
+  }
 
   useEffect(() => {
     setTerminals([])
@@ -3414,6 +3442,7 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
     selectedTerminalView.tmux_session,
   )
   const selectedTerminalID = selectedTerminalView?.terminal_id ?? null
+  const selectedTerminalViewPreferenceKey = terminalViewPreferenceKey(selectedTerminalView)
   const selectedTerminalState = (selectedTerminalView?.state || '').trim().toLowerCase()
   const isSelectedTerminalStreaming = shouldStreamTerminal(selectedTerminalView)
   const isSelectedTerminalTurnBusy = Boolean(
@@ -3422,9 +3451,48 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
       runtimeStatesBySession[selectedTerminalView.session_id],
     ),
   )
+  const selectedTerminalHasPendingConversationWork = Boolean(
+    selectedTerminalView && (
+      terminalConversationHasPendingWork(
+        selectedTerminalView,
+        runtimeStatesBySession[selectedTerminalView.session_id],
+        terminals,
+      ) ||
+      // ChatArea owns the submitted-turn lifecycle. It remains true across the
+      // gap where the main foreground is idle and a just-dispatched child has
+      // not yet appeared in the runtime snapshot/terminal ledger.
+      (isMainAgentTerminal(selectedTerminalView) && hasPendingTerminalActivity)
+    ),
+  )
+  const selectedTerminalHasBusyChild = Boolean(
+    selectedTerminalView &&
+    isMainAgentTerminal(selectedTerminalView) &&
+    terminals.some(terminal => (
+      terminal.terminal_id !== selectedTerminalView.terminal_id &&
+      terminal.session_id === selectedTerminalView.session_id &&
+      !isMainAgentTerminal(terminal) &&
+      terminalTurnIsBusy(terminal, runtimeStatesBySession[terminal.session_id])
+    ))
+  )
+  const selectedTerminalWaitingForBackground = Boolean(
+    selectedTerminalView &&
+    isMainAgentTerminal(selectedTerminalView) &&
+    !isSelectedTerminalTurnBusy &&
+    (runtimeStatesBySession[selectedTerminalView.session_id]?.background_live ||
+      selectedTerminalHasBusyChild ||
+      hasPendingTerminalActivity)
+  )
   const selectedTerminalUsesSessionEvents = Boolean(
     selectedTerminalView && isMainAgentTerminal(selectedTerminalView),
   )
+  useEffect(() => {
+    if (!selectedTabPrefersFormattedResume || !selectedTerminalViewPreferenceKey) return
+    setFormattedViewPreferences(current => (
+      Object.prototype.hasOwnProperty.call(current, selectedTerminalViewPreferenceKey)
+        ? current
+        : { ...current, [selectedTerminalViewPreferenceKey]: true }
+    ))
+  }, [selectedTabPrefersFormattedResume, selectedTerminalViewPreferenceKey])
   // The toggle describes an available view, not already-loaded data. In
   // particular, restored Schedule tabs intentionally start with no event
   // history; hiding the toggle in that state made Formatted unreachable.
@@ -3436,7 +3504,9 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
   )
   const showFormattedView = resolveTerminalFormattedView(
     canShowFormattedView,
-    selectedTerminalID ? formattedViewPreferences[selectedTerminalID] : undefined,
+    selectedTerminalViewPreferenceKey
+      ? (formattedViewPreferences[selectedTerminalViewPreferenceKey] ?? (selectedTabPrefersFormattedResume ? true : undefined))
+      : undefined,
   )
   const selectedHeaderTitle = showFormattedView && selectedTerminalView && isMainAgentTerminal(selectedTerminalView)
     ? humanizeIdentifier(
@@ -3611,11 +3681,11 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
     }
   }, [currentSessionId, mainSessionHasOlderEvents, mainSessionOlderEventPage.loadingOlder, mainSessionOlderEventPage.nextOffset, mainSessionOlderEventPage.sessionId])
 
-  const toggleFormattedView = useCallback((terminalID: string, currentlyFormatted: boolean) => {
+  const toggleFormattedView = useCallback((preferenceKey: string, currentlyFormatted: boolean) => {
     const nextFormatted = !currentlyFormatted
     setFormattedViewPreferences(current => ({
       ...current,
-      [terminalID]: nextFormatted,
+      [preferenceKey]: nextFormatted,
     }))
     if (shouldHydrateMainTerminalEvents(
       selectedTerminalUsesSessionEvents,
@@ -3970,7 +4040,7 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
     terminalTurnIsBusy(terminal, runtimeStatesBySession[terminal.session_id])
   ))
   const railSpinner = useSpinnerFrame(hasBusyTerminal)
-  const selectedTerminalSpinner = useSpinnerFrame(isSelectedTerminalTurnBusy)
+  const selectedTerminalSpinner = useSpinnerFrame(selectedTerminalHasPendingConversationWork)
 
   const activeRailTmuxProbeTargets = useMemo(
     () => groupedTerminals.orderedTerminals
@@ -4598,10 +4668,10 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                           {terminalStateLabel(selectedTerminalView)}
                         </span>
                       )}
-                      {canShowFormattedView && selectedTerminalID && (
+                      {canShowFormattedView && selectedTerminalViewPreferenceKey && (
                         <button
                           type="button"
-                          onClick={() => toggleFormattedView(selectedTerminalID, showFormattedView)}
+                          onClick={() => toggleFormattedView(selectedTerminalViewPreferenceKey, showFormattedView)}
                           aria-pressed={showFormattedView}
                           className={`inline-flex items-center gap-1 rounded px-1.5 py-1 text-[10px] font-medium transition-colors ${
                             showFormattedView
@@ -5027,8 +5097,9 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                       // supplied. Terminal lifecycle metadata can lag behind a
                       // completed tmux turn, so deriving "Working…" from it made
                       // an already-finished conversation look permanently busy.
-                      streamingStatus={isSelectedTerminalTurnBusy
-                        ? (selectedTerminalUsesSessionEvents ? sessionStreamingStatus : undefined) || 'Working…'
+                      streamingStatus={selectedTerminalHasPendingConversationWork
+                        ? (selectedTerminalUsesSessionEvents ? sessionStreamingStatus : undefined) ||
+                          (selectedTerminalWaitingForBackground ? 'Waiting for background work…' : 'Working…')
                         : undefined}
                     />
                   ) : stableLiveAttachId && stableLiveAttachKey ? (
@@ -5138,8 +5209,8 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                         terminalFocusActive ? 'px-2 py-0.5' : 'px-3 py-1'
                       }`}>
                         <div className="flex min-w-0 items-center gap-2">
-                          <span className={isSelectedTerminalTurnBusy ? terminalTheme.streaming : 'text-neutral-600'}>
-                            {isSelectedTerminalTurnBusy ? selectedTerminalSpinner : '·'}
+                          <span className={selectedTerminalHasPendingConversationWork ? terminalTheme.streaming : 'text-neutral-600'}>
+                            {selectedTerminalHasPendingConversationWork ? selectedTerminalSpinner : '·'}
                           </span>
                           <span
                             className="min-w-0 flex-1 truncate"

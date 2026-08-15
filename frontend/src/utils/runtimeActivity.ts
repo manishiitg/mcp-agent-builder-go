@@ -143,6 +143,34 @@ export function terminalTurnIsBusy(
   return terminal.active && (state === 'running' || state === 'starting')
 }
 
+/** Whether this conversation still owes the user a response. */
+export function terminalConversationHasPendingWork(
+  terminal: TerminalSnapshot,
+  runtime?: RuntimeSnapshot | null,
+  siblingTerminals: TerminalSnapshot[] = [],
+): boolean {
+  if (!isMainAgentTerminal(terminal)) {
+    return terminalTurnIsBusy(terminal, runtime)
+  }
+
+  const hasBusyChildTerminal = siblingTerminals.some(sibling => (
+    sibling.terminal_id !== terminal.terminal_id &&
+    sibling.session_id === terminal.session_id &&
+    !isMainAgentTerminal(sibling) &&
+    terminalTurnIsBusy(sibling, runtime)
+  ))
+  if (!runtime) {
+    return terminalTurnIsBusy(terminal) || hasBusyChildTerminal
+  }
+
+  // A main-agent foreground turn can be idle while an asynchronous child is
+  // running. The conversation is still in progress until the main agent
+  // consumes that completion and emits its final response.
+  return runtimeDisplayStatus(runtime) !== 'stopped' && (
+    runtime.foreground_turn.busy || runtime.background_live || hasBusyChildTerminal
+  )
+}
+
 export function reconcileTerminalRuntimeState(
   terminal: TerminalSnapshot,
   runtime?: RuntimeSnapshot | null,

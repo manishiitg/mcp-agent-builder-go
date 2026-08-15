@@ -6,7 +6,7 @@
 |---|---|
 | Assigned agent | `Unassigned` |
 | Ticket state | `reproduced; implementation boundary open` |
-| Last synchronized | `2026-08-09` |
+| Last synchronized | `2026-08-15` |
 
 > Claim this ticket in this file before implementation. During active work,
 > update this fragment rather than the shared index; synchronize the index
@@ -79,3 +79,35 @@ half. Startup reconciliation closes stranded rows *after the fact*; it does not
 make scheduler history and workflow run metadata agree at completion time. The
 implementation boundary question in *Current state* is unchanged.
 
+## False interruption reproduction and scheduler-side repair — 2026-08-15 (Upwork)
+
+The startup sweep exposed a second failure mode that its original acceptance
+did not cover. Upwork's run
+`schedule-cron--78ba88d0_1786764627822589000` completed Review+Fix at 10:23,
+completed Finalize at 10:27, and delivered its email. The reviewer had written
+finding and module-result state, but its current-run `pulse_review_log` row was
+still `running`: it never completed the typed `complete_pulse_review` receipt.
+At the next backend start (11:35), the PLAT-054 sweep correctly found that row
+stale but misleadingly labelled the already-finished review "Pulse interrupted
+because the server restarted."
+
+The root cause was upstream of the sweep. `validatePulseDueModuleResults`
+checked only `pulse_module_state.last_result`. It did not require the second
+durable completion projection, so the scheduler logged `review-fix done` and
+advanced to Finalize while the typed reviewer receipt remained open.
+
+The scheduler completion contract now requires, for every due module:
+
+- a terminal current-run module result; and
+- a current-run `pulse_review_log` row whose status is `completed` or `failed`
+  and whose verdict is non-empty.
+
+A missing or `running` receipt activates the existing parent reconciliation
+turn. If that turn still does not produce the receipt, Review+Fix is failed and
+the finalizer receives explicit partial-failure context; it can no longer look
+fully successful and then be rewritten as interrupted on a later restart.
+Focused regression coverage reproduces both a completely missing receipt and
+the exact Upwork state: terminal module result plus `pulse_review_log=running`.
+
+This closes the `pulse_review_log` completion-boundary half. The independent
+`run_metadata.json` half described above remains open.

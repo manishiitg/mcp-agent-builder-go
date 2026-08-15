@@ -1,5 +1,4 @@
-import React, { useCallback, useState } from 'react'
-import { Copy, Check } from 'lucide-react'
+import React from 'react'
 import { ConversationMarkdownRenderer } from '../../ui/MarkdownRenderer'
 import { humanReadableAgentResult } from '../system/eventDisplayUtils'
 
@@ -51,16 +50,6 @@ export const UnifiedCompletionEventDisplay: React.FC<UnifiedCompletionEventDispl
     }
   }
 
-  // Copy handler
-  const [copied, setCopied] = useState(false)
-  const handleCopy = useCallback(() => {
-    if (!displayResult) return
-    navigator.clipboard.writeText(displayResult).then(() => {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    })
-  }, [displayResult])
-
   const isError = event.status === 'error' || event.error
 
   // Render restored step errors and other completions with content as normal
@@ -70,16 +59,7 @@ export const UnifiedCompletionEventDisplay: React.FC<UnifiedCompletionEventDispl
     return (
       <div className="flex items-start gap-2 py-2">
         <div className="flex-1 min-w-0">
-          <div className="relative group border-l-2 border-emerald-400/65 pl-4 pr-2">
-            <div className="absolute top-0 right-0 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-              <button
-                onClick={handleCopy}
-                className="rounded p-1 text-neutral-500 hover:bg-neutral-800 hover:text-neutral-200"
-                title="Copy markdown"
-              >
-                {copied ? <Check className="w-3.5 h-3.5 text-green-500" /> : <Copy className="w-3.5 h-3.5" />}
-              </button>
-            </div>
+          <div className="border-l-2 border-emerald-400/65 pl-4 pr-2">
             <ConversationMarkdownRenderer content={displayResult} maxHeight="none" framed={false} />
           </div>
           {event.duration != null && (

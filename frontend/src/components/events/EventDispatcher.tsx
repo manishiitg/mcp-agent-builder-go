@@ -1443,22 +1443,20 @@ export const EventDispatcher: React.FC<EventDispatcherProps> = React.memo(({
   }
 
   // Auto Notification Steered Event — a background agent's completion was
-  // delivered directly into an already-running foreground CLI turn instead
-  // of queued for the next turn. Small and informational: confirms delivery
-  // happened, doesn't compete visually with the agent's own result card.
+  // delivered directly into the main agent's live turn instead of queued for
+  // the next turn. Keep the copy user-facing: "steered" and provider routing
+  // described the implementation but made a successful notification look
+  // like an unexplained diagnostic.
   if (isEventType(event, 'auto_notification_steered')) {
     const fields = getEventData(event)
     const rawName = fields.name || ''
     const displayName = rawName.replace(/^Planner:\s*/i, '').trim() || 'Task'
-    const provider = fields.provider || ''
-
     return (
       <CompactWrapper compact={compact}>
         <div className={`flex items-center gap-2 ${compact ? 'text-[10px]' : 'text-xs'} text-sky-600 dark:text-sky-400`}>
           <span className="inline-block w-1.5 h-1.5 rounded-full bg-sky-400" />
           <span>
-            Steered <span className="font-medium">{displayName}</span> completion into the live turn
-            {provider ? ` (${provider})` : ''}
+            <span className="font-medium">{displayName}</span> completed · main agent notified
           </span>
         </div>
       </CompactWrapper>

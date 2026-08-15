@@ -6,7 +6,7 @@ function eventKey(event: PollingEvent, index: number): string {
   return `fallback:${event.type || ''}:${event.timestamp || ''}:${index}`
 }
 
-function compareTerminalEvents(a: PollingEvent, b: PollingEvent): number {
+export function compareTerminalEvents(a: PollingEvent, b: PollingEvent): number {
   const aSequence = typeof a.sequence === 'number' ? a.sequence : 0
   const bSequence = typeof b.sequence === 'number' ? b.sequence : 0
   if (aSequence > 0 && bSequence > 0 && aSequence !== bSequence) return aSequence - bSequence

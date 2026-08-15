@@ -7,6 +7,8 @@ import { useModeStore } from '../../stores/useModeStore'
 import { normalizeEventViewMode, useChatStore, waitForChatStoreHydration, type ChatTab } from '../../stores/useChatStore'
 import { useWorkflowStore } from '../../stores/useWorkflowStore'
 import { useWorkspaceStore } from '../../stores/useWorkspaceStore'
+import { useWorkflowManifestStore } from '../../stores/useWorkflowManifestStore'
+import { resolveWorkflowHistoryPath } from '../../utils/workflowHistoryPath'
 import ChatArea, { type ChatAreaRef } from '../ChatArea'
 import { WorkflowChatTabs } from './WorkflowChatTabs'
 import { useRunningWorkflowsStore, useShowRunningDrawer } from '../../stores/useRunningWorkflowsStore'
@@ -339,17 +341,16 @@ const WorkflowPreviousChatsPanel: React.FC<{
       restoredConversationNativeResume: useTerminalRestore || useNativeResume,
     })
     // Both tmux terminal-restore and native-resume sessions reattach into a
-    // coding-agent tmux terminal on the backend, so open the terminal view and
-    // kick the restore for either — not just transport === "tmux". (Previously
-    // native-resume showed the "Resuming coding session" banner but never
-    // surfaced the terminal.)
+    // coding-agent terminal on the backend. Keep that transport restoration,
+    // but present its normalized event transcript by default; Raw remains an
+    // explicit diagnostic choice rather than the first thing a user sees.
     if (useTerminalRestore || useNativeResume) {
-      chatStore.setTabViewMode(targetTabId, 'terminal')
+      chatStore.setTabViewMode(targetTabId, 'tree')
       chatStore.switchTab(targetTabId)
       setShowChatArea(true)
-      startRestoredTransportTerminal(session.session_id, path, session.session_id)
+      startRestoredTransportTerminal(session.session_id, path, session.session_id, workspacePath)
     }
-  }, [activePresetId, activeTabId, addToast, setShowChatArea, setTabConfig])
+  }, [activePresetId, activeTabId, addToast, setShowChatArea, setTabConfig, workspacePath])
 
   return (
     <PreviousChatHistoryPanel
@@ -857,7 +858,16 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
     const presetId = state.activePresetIds.workflow
     return presetId ? state.workflowPresets.find(preset => preset.id === presetId) ?? null : null
   })
-  const activeWorkflowWorkspacePath = activeWorkflowPreset?.selectedFolder?.filepath ?? null
+  // The manifest registry is the canonical workflow identity. Preset objects
+  // can briefly lag behind activePresetId during an in-app workflow switch;
+  // deriving history from that stale object made the new workflow request the
+  // previous/empty path until a page reload rebuilt all stores.
+  const workflowManifests = useWorkflowManifestStore(state => state.workflows)
+  const activeWorkflowWorkspacePath = resolveWorkflowHistoryPath(
+    activePresetId,
+    workflowManifests,
+    activeWorkflowPreset,
+  )
   const showResumeHint = useChatStore(state => {
     const tabId = state.activeTabId
     const tab = tabId ? state.chatTabs[tabId] : null
@@ -2322,6 +2332,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
                 suppressTerminalPane={showWorkflowPreviousChatsAsPrimary}
                 workflowPreviousChatsPanel={workspacePath ? (
                   <WorkflowPreviousChatsPanel
+                    key={`${activePresetId || 'workflow'}:${workspacePath}`}
                     primary
                     workspacePath={workspacePath}
                   />

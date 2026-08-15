@@ -8,6 +8,7 @@ import {
   shouldHydrateMainTerminalEvents,
   shouldLoadTerminalEvents,
   shouldStreamTerminal,
+  terminalViewPreferenceKey,
 } from './terminalSnapshotIdentity'
 
 const terminal = (id: string, overrides: Partial<TerminalSnapshot> = {}): TerminalSnapshot => ({
@@ -128,6 +129,23 @@ describe('shouldStreamTerminal', () => {
   })
 })
 
+describe('terminalViewPreferenceKey', () => {
+  it('keeps the main-agent view choice stable across turn terminal IDs', () => {
+    const firstTurn = terminal('session-1:main:turn-1', { execution_kind: 'main_agent' })
+    const nextTurn = terminal('session-1:main:turn-2', { execution_kind: 'main_agent' })
+
+    expect(terminalViewPreferenceKey(firstTurn)).toBe('session:session-1')
+    expect(terminalViewPreferenceKey(nextTurn)).toBe('session:session-1')
+  })
+
+  it('keeps child-agent view choices scoped to their own terminal', () => {
+    expect(terminalViewPreferenceKey(terminal('child-1', {
+      execution_kind: 'sub_agent',
+      owner_id: 'child:one',
+    }))).toBe('terminal:child-1')
+  })
+})
+
 describe('shouldLoadTerminalEvents', () => {
   it('does not request an unpublished execution-tree placeholder', () => {
     expect(shouldLoadTerminalEvents(terminal('child', {
@@ -179,8 +197,8 @@ describe('shouldHydrateMainTerminalEvents', () => {
 })
 
 describe('resolveTerminalFormattedView', () => {
-  it('defaults to raw tmux even when structured events exist', () => {
-    expect(resolveTerminalFormattedView(true)).toBe(false)
+  it('defaults to the formatted conversation when structured events exist', () => {
+    expect(resolveTerminalFormattedView(true)).toBe(true)
   })
 
   it('respects an explicit raw or formatted choice', () => {

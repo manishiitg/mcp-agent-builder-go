@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   setTabHasMoreOlderEvents: vi.fn(),
   getRecentSessionEvents: vi.fn(),
   getChatHistoryConversation: vi.fn(),
+  getChatHistoryResumeConversation: vi.fn(),
 }))
 
 vi.mock('../stores/useChatStore', () => ({
@@ -26,6 +27,7 @@ vi.mock('../services/api', () => ({
   agentApi: {
     getRecentSessionEvents: mocks.getRecentSessionEvents,
     getChatHistoryConversation: mocks.getChatHistoryConversation,
+    getChatHistoryResumeConversation: mocks.getChatHistoryResumeConversation,
   },
 }))
 
@@ -37,23 +39,20 @@ describe('hydrateTabEvents restored chat fallback', () => {
   })
 
   it('prefers complete persisted history when reopening a chat', async () => {
-    const persistedEvent = {
-      id: 'persisted-1',
-      type: 'conversation_end',
-      session_id: 'restored-session',
-      timestamp: '2026-08-05T00:00:00Z',
-      data: {},
-    }
     mocks.getRecentSessionEvents.mockResolvedValue({
-      events: [{ ...persistedEvent, id: 'volatile-tail-only' }],
+      events: [{ id: 'volatile-tail-only', type: 'conversation_end' }],
       session_status: 'completed',
       last_processed_index: -1,
       has_more: false,
     })
-    mocks.getChatHistoryConversation.mockResolvedValue({
+    mocks.getChatHistoryResumeConversation.mockResolvedValue({
       session_id: 'restored-session',
-      conversation_history: [],
-      ui_events: [persistedEvent],
+      conversation_history: [
+        { Role: 'human', Parts: [{ Text: 'Hello' }] },
+        { Role: 'ai', Parts: [{ Text: 'I will inspect that.' }] },
+        { Role: 'ai', Parts: [{ Text: '[Previous tool call: exec({})]' }] },
+        { Role: 'ai', Parts: [{ Text: 'Hi there' }] },
+      ],
     })
 
     await hydrateTabEvents('restored-session', {
@@ -62,12 +61,23 @@ describe('hydrateTabEvents restored chat fallback', () => {
       preferChatHistory: true,
     })
 
-    expect(mocks.getChatHistoryConversation).toHaveBeenCalledWith(
+    expect(mocks.getChatHistoryResumeConversation).toHaveBeenCalledWith(
       'restored-session',
       '/workspace/workflow',
     )
-    expect(mocks.setTabEvents).toHaveBeenCalledWith('restored-session', [persistedEvent])
-    expect(mocks.setTabLastEventIndex).toHaveBeenCalledWith('restored-session', 0)
+    expect(mocks.setTabEvents).toHaveBeenCalledWith(
+      'restored-session',
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'user_message' }),
+        expect.objectContaining({
+          type: 'llm_generation_end',
+          data: expect.objectContaining({
+            data: expect.objectContaining({ content: 'Hi there', result: 'Hi there' }),
+          }),
+        }),
+      ]),
+    )
+    expect(mocks.setTabLastEventIndex).toHaveBeenCalledWith('restored-session', 2)
     expect(mocks.setTabHasMoreOlderEvents).toHaveBeenCalledWith('restored-session', false)
     expect(mocks.getRecentSessionEvents).not.toHaveBeenCalled()
   })

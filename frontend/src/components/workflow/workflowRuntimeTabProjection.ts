@@ -8,6 +8,18 @@ export interface WorkflowRuntimeTabProjection {
   autoActivate: boolean
 }
 
+/**
+ * A Schedule is a first-class parallel lane, not a temporary observer that
+ * disappears when Chat becomes active. Keep it in the tab strip until the user
+ * closes it. Other read-only lanes retain the old active/running visibility
+ * rule so stale bot observations do not accumulate in the toolbar.
+ */
+export function shouldDisplayWorkflowTab(tab: ChatTab, activeTabId: string | null): boolean {
+  if (!tab.metadata?.isViewOnly) return true
+  if (tab.metadata?.isScheduledRun) return true
+  return tab.tabId === activeTabId || tab.isStreaming || tab.hasRunningBgAgents
+}
+
 /** Describe the top-level tab for one live workflow execution. */
 export function workflowRuntimeTabProjection(
   running: RunningWorkflowInfo,

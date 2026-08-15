@@ -25,5 +25,10 @@ export function preferredTerminalForContext(
   // before the main terminal snapshot is published, but it must only become
   // the active pane after the user explicitly selects it from the rail.
   if (isWorkflowContext) return null
-  return fallbackTerminals.find((terminal): terminal is TerminalSnapshot => Boolean(terminal)) || null
+  // An execution-tree placeholder has no published terminal behind it, so
+  // auto-selecting one shows an unexplained blank pane. It may only become the
+  // active pane through an explicit user click, in every context — not just
+  // workflow navigation.
+  return fallbackTerminals.find((terminal): terminal is TerminalSnapshot =>
+    Boolean(terminal) && !terminal!.execution_tree_placeholder) || null
 }

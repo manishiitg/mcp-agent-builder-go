@@ -1,6 +1,7 @@
 import { getOwnedTerminalOwnerKeys, getTerminalOwnerPayload } from './eventOwnership'
 import { isMainAgentTerminal } from './terminalIdentity'
 import type { PollingEvent, TerminalSnapshot } from '../services/api-types'
+import { compareTerminalEvents } from './terminalEventPage'
 
 // Pure selection/grouping logic for the terminal clean view.
 //
@@ -143,6 +144,16 @@ function textField(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+/** Long, multi-line inputs are task briefs, even when authored by the user.
+ * They need a compact readable card rather than a narrow right-aligned chat
+ * line that makes every wrapped line appear to run backwards.
+ */
+export function shouldCollapseTranscriptUserMessage(content: string): boolean {
+  const normalized = content.trim()
+  if (!normalized) return false
+  return normalized.length > 480 || normalized.split(/\r?\n/).length > 6
+}
+
 /**
  * A few orchestrator messages travel over the same transport as a person's
  * chat input.  They are useful audit trail, but they are not authored by the
@@ -156,6 +167,24 @@ export function isInternalTranscriptMessage(event: PollingEvent): boolean {
   return /^\[AUTO-NOTIFICATION\]/.test(content) ||
     /^PULSE RUN CONTEXT\./.test(content) ||
     /^PULSE GATE\s*\/\s*WORKLIST\./.test(content)
+}
+
+/**
+ * Workflow execution instructions share the user_message event type because
+ * they are input to the coding agent, but they are not messages authored by
+ * the person in chat. The transcript must render them as a left-aligned Task,
+ * not as a right-aligned human message.
+ */
+export function isExecutionPromptTranscriptMessage(event: PollingEvent): boolean {
+  if (event.type !== 'user_message') return false
+  const fields = eventFields(event)
+  const metadata = fields.metadata && typeof fields.metadata === 'object'
+    ? fields.metadata as Record<string, unknown>
+    : undefined
+  if (textField(metadata?.source) === 'execution_prompt') return true
+
+  const hasStepScope = Boolean(textField(metadata?.current_step_id) || textField(metadata?.step_name))
+  return fields.turn === 0 && hasStepScope
 }
 
 export function internalTranscriptMessageTitle(event: PollingEvent): string {
@@ -483,7 +512,15 @@ function isOwnTerminalLifecycleStart(event: PollingEvent, terminal: TerminalSnap
   const descriptor = LIFECYCLE_EVENT_FAMILIES[event.type || '']
   if (!descriptor?.start) return false
   const terminalExecutionId = (terminal.execution_id || '').trim()
-  return Boolean(terminalExecutionId) && lifecycleExecutionID(event) === terminalExecutionId
+  if (!terminalExecutionId || lifecycleExecutionID(event) !== terminalExecutionId) return false
+
+  // A name-only opening card merely repeats the terminal header and stays
+  // hidden. A start carrying the actual task is different: removing it made a
+  // finished step open on "Completed", so the transcript looked backwards
+  // and the user could not see what the agent had been asked to do.
+  const kickoffField = KICKOFF_CONTENT_FIELD[event.type || '']
+  if (kickoffField && textField(eventFields(event)[kickoffField])) return false
+  return true
 }
 
 export function selectTerminalEvents(
@@ -537,16 +574,17 @@ export function selectTerminalEvents(
     })
   }
 
-  // Stable chronological order. Out-of-order arrivals (retries, batched
-  // flushes) would otherwise render in arrival order and read as scrambled.
+  // Use the same durable ordering as the retained terminal-event loader.
+  // Lifecycle events can be flushed in a batch with timestamps that do not
+  // reflect their persisted sequence; sorting those timestamp-first made a
+  // completion appear above the task work it completed.
   return matched
     .filter(isTranscriptEvent)
     .filter(event => !isOwnTerminalLifecycleStart(event, terminal))
     .map((event, index) => ({ event, index }))
     .sort((a, b) => {
-      const at = Date.parse(a.event.timestamp || '')
-      const bt = Date.parse(b.event.timestamp || '')
-      if (Number.isFinite(at) && Number.isFinite(bt) && at !== bt) return at - bt
+      const compared = compareTerminalEvents(a.event, b.event)
+      if (compared !== 0) return compared
       return a.index - b.index // stable for equal/unparseable timestamps
     })
     .map(entry => entry.event)

@@ -221,8 +221,22 @@ function conversationToRestoredEvents(conversation: ChatHistoryConversation): Po
   ]
 
   let turn = 0
-  let lastUserMessage = ''
-  let lastAssistantMessage = ''
+  let currentQuestion = ''
+  let pendingAssistant = ''
+  const flushAssistant = () => {
+    if (!pendingAssistant) return
+    // TerminalCenter's readable transcript treats llm_generation_end as the
+    // canonical assistant message. conversation_end is lifecycle-only there
+    // and intentionally hidden, so using it made resumed replies disappear.
+    events.push(makeRestoredEvent(sessionId, 'llm_generation_end', {
+      status: 'completed',
+      question: currentQuestion,
+      content: pendingAssistant,
+      result: pendingAssistant,
+      turns: turn,
+    }, events.length))
+    pendingAssistant = ''
+  }
 
   for (const message of messages) {
     const role = getMessageRole(message)
@@ -232,41 +246,34 @@ function conversationToRestoredEvents(conversation: ChatHistoryConversation): Po
     if (!content) continue
 
     if (role === 'human' || role === 'user') {
+      flushAssistant()
       turn += 1
-      lastUserMessage = content
+      currentQuestion = content
       events.push(makeRestoredEvent(sessionId, 'user_message', {
         content,
         role: 'user',
         turn,
       }, events.length))
     } else if (role === 'ai' || role === 'assistant') {
-      lastAssistantMessage = content
-      events.push(makeRestoredEvent(sessionId, 'conversation_end', {
-        status: 'completed',
-        question: lastUserMessage,
-        result: content,
-        turns: turn,
-      }, events.length))
+      const normalized = content.trim().toLowerCase()
+      if (normalized.startsWith('[previous tool call:') || normalized.startsWith('[previous tool result:')) {
+        continue
+      }
+      // Coding providers persist commentary and tool markers as separate AI
+      // messages. The final ordinary AI message before the next user message
+      // is the completed reply that belongs in the resumed chat.
+      pendingAssistant = content
     }
   }
-
-  if (events.length === 1 && lastAssistantMessage) {
-    events.push(makeRestoredEvent(sessionId, 'conversation_end', {
-      status: 'completed',
-      result: lastAssistantMessage,
-      turns: turn,
-    }, events.length))
-  }
+  flushAssistant()
 
   return events
 }
 
 async function hydrateTabEventsFromChatHistory(sessionId: string, workspacePath?: string): Promise<RuntimeSessionState> {
   const chatStore = useChatStore.getState()
-  const conversation = await agentApi.getChatHistoryConversation(sessionId, workspacePath)
-  const events = (conversation.ui_events && conversation.ui_events.length > 0)
-    ? (conversation.ui_events as PollingEvent[])
-    : conversationToRestoredEvents(conversation)
+  const conversation = await agentApi.getChatHistoryResumeConversation(sessionId, workspacePath)
+  const events = conversationToRestoredEvents(conversation)
 
   chatStore.setTabEvents(sessionId, events)
   chatStore.setTabLastEventIndex(sessionId, events.length - 1)
@@ -274,7 +281,7 @@ async function hydrateTabEventsFromChatHistory(sessionId: string, workspacePath?
   console.info(`${TAG} Hydrated persisted conversation`, {
     sessionId,
     eventCount: events.length,
-    source: conversation.ui_events && conversation.ui_events.length > 0 ? 'ui_events' : 'conversation_history',
+    source: 'conversation_history',
   })
 
   return {

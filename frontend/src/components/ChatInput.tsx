@@ -2833,12 +2833,19 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     })
     if (useTerminalRestore || useNativeResume) {
       const latestStore = useChatStore.getState()
-      latestStore.setTabViewMode(activeTabId, 'terminal')
-      startRestoredTransportTerminal(session.session_id, path, session.session_id)
+      // Resume into the user-facing conversation. The terminal session is still
+      // restored below and remains available through the Raw toggle.
+      latestStore.setTabViewMode(activeTabId, 'tree')
+      startRestoredTransportTerminal(
+        session.session_id,
+        path,
+        session.session_id,
+        workflowPhaseWorkspacePath,
+      )
     }
     setShowResumeDialog(false)
     setTimeout(() => textareaRef.current?.focus(), 0)
-  }, [activeTabId, chatFileContext, resumeSessions, setTabConfig])
+  }, [activeTabId, chatFileContext, resumeSessions, setTabConfig, workflowPhaseWorkspacePath])
 
   const handleWorkflowSelect = useCallback((workflow: { presetId: string; label: string; workspacePath: string }) => {
     if (!textareaRef.current || hashPosition === -1 || !activeTabId) return

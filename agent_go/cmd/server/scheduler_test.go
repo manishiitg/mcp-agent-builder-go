@@ -14,6 +14,7 @@ import (
 
 	virtualtools "github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/terminals"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/costledger"
 	todo_creation_human "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/schedulerstate"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workflowtypes"
@@ -53,6 +54,42 @@ func TestBuildScheduleCronExpressionAlwaysSetsTimezone(t *testing.T) {
 				t.Fatalf("buildScheduleCronExpression() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestPulseReviewFixCostContextUsesOnlyReviewFixWindow(t *testing.T) {
+	ledger, err := costledger.NewSQLiteLedger(filepath.Join(t.TempDir(), "costs.sqlite"))
+	if err != nil {
+		t.Fatalf("NewSQLiteLedger() error = %v", err)
+	}
+	defer ledger.Close()
+	start := time.Date(2026, 8, 15, 1, 0, 0, 0, time.UTC)
+	for _, entry := range []costledger.Entry{
+		{EventID: "prior", IdempotencyKey: "prior", Timestamp: start.Add(-time.Second), WorkflowID: "Workflow/demo", Scope: "pulse", LLMCallCount: 1, TotalCostUSD: 90},
+		{EventID: "gate", IdempotencyKey: "gate", Timestamp: start.Add(time.Second), WorkflowID: "Workflow/demo", Scope: "pulse", LLMCallCount: 1, TotalCostUSD: 1.25, BillingBasis: "subscription_shadow"},
+		{EventID: "review", IdempotencyKey: "review", Timestamp: start.Add(2 * time.Second), WorkflowID: "Workflow/demo", Scope: "pulse", LLMCallCount: 2, TotalCostUSD: 2.75, BillingBasis: "subscription_shadow"},
+		{EventID: "run", IdempotencyKey: "run", Timestamp: start.Add(2 * time.Second), WorkflowID: "Workflow/demo", Scope: "workflow_execution", LLMCallCount: 1, TotalCostUSD: 80},
+	} {
+		if err := ledger.Append(entry); err != nil {
+			t.Fatalf("Append(%q) error = %v", entry.EventID, err)
+		}
+	}
+
+	got := pulseReviewFixCostContext(ledger, "Workflow/demo", start, start.Add(3*time.Second))
+	for _, want := range []string{"$4.00", "3 LLM call(s)", "estimated token-equivalent cost", "excludes Gate, Finalize"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("pulseReviewFixCostContext() missing %q: %s", want, got)
+		}
+	}
+	if strings.Contains(got, "$90") || strings.Contains(got, "$80") {
+		t.Fatalf("pulseReviewFixCostContext() mixed prior/workflow cost: %s", got)
+	}
+}
+
+func TestPulseReviewFixCostContextReportsSkippedStageAsZero(t *testing.T) {
+	got := pulseReviewFixCostContext(nil, "Workflow/demo", time.Time{}, time.Time{})
+	if !strings.Contains(got, "not run") || !strings.Contains(got, "$0.00") {
+		t.Fatalf("skipped Review+Fix cost context = %q", got)
 	}
 }
 
@@ -1688,6 +1725,11 @@ func TestValidatePulseDueModuleResultsRequiresAgentReceipts(t *testing.T) {
 	if _, err := markPulseModuleResultFromAgent(ctx, workspacePath, pulseModuleGoalAdvisor, pulseRunID, "done", "Advisor review complete.", []string{"pulse_review_log:run:goal_advisor"}); err != nil {
 		t.Fatalf("mark goal advisor: %v", err)
 	}
+	if err := validatePulseDueModuleResults(ctx, workspacePath, pulseRunID); err == nil || !strings.Contains(err.Error(), "terminal current-run review receipts") {
+		t.Fatalf("missing typed-review validation error = %v", err)
+	}
+	seedPulseReviewLogRow(ctx, t, workspacePath, pulseModuleWorkflowReview, pulseRunID, "completed", "Clean review.")
+	seedPulseReviewLogRow(ctx, t, workspacePath, pulseModuleGoalAdvisor, pulseRunID, "completed", "Advisor review complete.")
 	if err := validatePulseDueModuleResults(ctx, workspacePath, pulseRunID); err != nil {
 		t.Fatalf("terminal validation: %v", err)
 	}
@@ -1700,6 +1742,26 @@ func TestValidatePulseDueModuleResultsRequiresAgentReceipts(t *testing.T) {
 	}
 	if got := worklist[pulseModuleGoalAdvisor].LastResult; got != "done" {
 		t.Fatalf("goal advisor result = %q, want done", got)
+	}
+}
+
+func TestValidatePulseDueModuleResultsRejectsRunningReviewReceipt(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	workspacePath := "Workflow/demo"
+	pulseRunID := "pulse-running-review"
+	if _, err := recordPulseWorklist(ctx, workspacePath, pulseRunID, completePulseWorklistDecisions(map[string]PulseWorklistDecision{
+		pulseModuleWorkflowReview: {Module: pulseModuleWorkflowReview, Due: true, Reason: "Operational evidence."},
+	})); err != nil {
+		t.Fatalf("record worklist: %v", err)
+	}
+	if _, err := markPulseModuleResultFromAgent(ctx, workspacePath, pulseModuleWorkflowReview, pulseRunID, "done", "Review turn ended.", []string{"pulse_review_log:run:workflow_review"}); err != nil {
+		t.Fatalf("mark review: %v", err)
+	}
+	seedPulseReviewLogRow(ctx, t, workspacePath, pulseModuleWorkflowReview, pulseRunID, "running", "")
+	if err := validatePulseDueModuleResults(ctx, workspacePath, pulseRunID); err == nil || !strings.Contains(err.Error(), "workflow_review (running)") {
+		t.Fatalf("running review receipt validation error = %v", err)
 	}
 }
 
@@ -2753,7 +2815,7 @@ func TestReconcileWorkshopRunOutcomeIgnoresPreexistingFailure(t *testing.T) {
 }
 
 // TestReconcileWorkshopRunOutcomeMisattributesWhenBaselineIsLost pins the hazard
-// that makes the caller's guard necessary, rather than asserting a behaviour we
+// that makes the caller's guard necessary, rather than asserting a behavior we
 // want. The function decides "new" purely by absence from the before-set, so an
 // EMPTY before-set means every folder looks new and any old failure is reported
 // as this invocation's.
@@ -3133,7 +3195,7 @@ func TestWorkshopRunStartedDuringInvocationIgnoresBaseline(t *testing.T) {
 // TestWorkshopRunStartedDuringInvocationRejectsOlderAndUnstamped proves the
 // helper cannot manufacture evidence: a run from a previous invocation, and a
 // record with no usable timestamp, both count as nothing. The caller treats
-// false as "no evidence recorded", which is the pre-existing behaviour.
+// false as "no evidence recorded", which is the pre-existing behavior.
 func TestWorkshopRunStartedDuringInvocationRejectsOlderAndUnstamped(t *testing.T) {
 	since := time.Date(2026, 8, 10, 9, 30, 53, 0, time.UTC)
 	folders := []RunFolderInfo{

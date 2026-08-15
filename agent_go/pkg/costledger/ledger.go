@@ -218,6 +218,7 @@ func DefaultLedger() *Ledger {
 type sqliteStore interface {
 	append(Entry) error
 	summarize(from, to, executionID, workflowID string) (*Summary, error)
+	summarizeWindow(fromInclusive, toExclusive, executionID, workflowID, scope string) (*Summary, error)
 	migrateLegacyJSONL(path string) (MigrationReport, error)
 	close() error
 }
@@ -386,7 +387,48 @@ func (l *Ledger) SummarizeWorkflow(workflowID string) (*Summary, error) {
 	return l.summarizeLegacy("", "", "", workflowID)
 }
 
+// SummarizeWorkflowScopeWindow returns cost events for one workflow and scope
+// inside an exact UTC time window. Unlike Summarize, this is not date-bucket
+// filtering: callers such as Pulse can isolate one scheduled pass even when a
+// workflow runs several times on the same day.
+func (l *Ledger) SummarizeWorkflowScopeWindow(workflowID, scope string, fromInclusive, toExclusive time.Time) (*Summary, error) {
+	if l == nil {
+		return nil, fmt.Errorf("costledger: nil ledger")
+	}
+	workflowID = strings.TrimSpace(workflowID)
+	if workflowID == "" {
+		return nil, fmt.Errorf("costledger: workflow id is required")
+	}
+	scope = strings.TrimSpace(scope)
+	if scope == "" {
+		return nil, fmt.Errorf("costledger: scope is required")
+	}
+	if fromInclusive.IsZero() {
+		return nil, fmt.Errorf("costledger: window start is required")
+	}
+	if !toExclusive.IsZero() && !toExclusive.After(fromInclusive) {
+		return nil, fmt.Errorf("costledger: window end must be after start")
+	}
+	from := fromInclusive.UTC().Format(time.RFC3339Nano)
+	to := ""
+	if !toExclusive.IsZero() {
+		to = toExclusive.UTC().Format(time.RFC3339Nano)
+	}
+	if l.db != nil {
+		return l.db.summarizeWindow(from, to, "", workflowID, scope)
+	}
+	return l.summarizeLegacyWindow(from, to, "", workflowID, scope)
+}
+
 func (l *Ledger) summarizeLegacy(from, to, executionID, workflowID string) (*Summary, error) {
+	return l.summarizeLegacyFiltered(from, to, executionID, workflowID, "", false)
+}
+
+func (l *Ledger) summarizeLegacyWindow(from, to, executionID, workflowID, scope string) (*Summary, error) {
+	return l.summarizeLegacyFiltered(from, to, executionID, workflowID, scope, true)
+}
+
+func (l *Ledger) summarizeLegacyFiltered(from, to, executionID, workflowID, scope string, exactWindow bool) (*Summary, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -421,16 +463,23 @@ func (l *Ledger) summarizeLegacy(from, to, executionID, workflowID string) (*Sum
 		}
 		normalizeEntry(&e)
 		date := e.Timestamp.UTC().Format("2006-01-02")
-		if from != "" && date < from {
+		comparisonValue := date
+		if exactWindow {
+			comparisonValue = e.Timestamp.UTC().Format(time.RFC3339Nano)
+		}
+		if from != "" && comparisonValue < from {
 			continue
 		}
-		if to != "" && date > to {
+		if to != "" && ((!exactWindow && comparisonValue > to) || (exactWindow && comparisonValue >= to)) {
 			continue
 		}
 		if executionID != "" && e.ExecutionID != executionID {
 			continue
 		}
 		if workflowID != "" && e.WorkflowID != workflowID {
+			continue
+		}
+		if scope != "" && e.Scope != scope {
 			continue
 		}
 		addEntryToSummary(summary, date, e)

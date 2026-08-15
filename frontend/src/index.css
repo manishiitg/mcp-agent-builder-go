@@ -1537,6 +1537,7 @@
 
 /* ===== CUSTOM SCROLLBAR STYLING ===== */
 /* Thin, light scrollbars for better aesthetics - only on scrollable elements */
+.custom-scrollbar,
 *[class*="overflow-y-auto"],
 *[class*="overflow-x-auto"],
 *[class*="overflow-auto"] {

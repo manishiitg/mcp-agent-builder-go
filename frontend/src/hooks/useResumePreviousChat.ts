@@ -74,11 +74,17 @@ export function useResumePreviousChat() {
       restoredConversationNativeResume: useTerminalRestore || useNativeResume,
     })
 
-    // Native-resume and tmux terminal-restore sessions reattach into a tmux
-    // terminal on the backend, so open the terminal view and kick the restore.
+    // Reattach the transport for continuation, but reopen the saved structured
+    // conversation by default. Raw remains available as an explicit terminal
+    // diagnostic view.
     if (useTerminalRestore || useNativeResume) {
-      latestStore.setTabViewMode(targetTabId, 'terminal')
-      startRestoredTransportTerminal(session.session_id, path, session.session_id)
+      latestStore.setTabViewMode(targetTabId, 'tree')
+      startRestoredTransportTerminal(
+        session.session_id,
+        path,
+        session.session_id,
+        session.workspace_path || session.runtime?.workspace_path,
+      )
     }
     latestStore.switchTab(targetTabId)
   }, [])

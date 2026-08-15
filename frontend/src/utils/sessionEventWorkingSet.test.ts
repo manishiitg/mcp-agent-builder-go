@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { PollingEvent } from '../services/api-types'
-import { retainEventInSessionWorkingSet } from './sessionEventWorkingSet'
+import { eventBelongsToSession, retainEventInSessionWorkingSet } from './sessionEventWorkingSet'
 
 const sessionId = 'session-1'
 
@@ -13,6 +13,10 @@ function event(type: string, terminalId?: string, ownerId?: string): PollingEven
     terminal_id: terminalId,
     terminal_owner_id: ownerId,
   } as PollingEvent
+}
+
+function ownedEvent(type: string, owningSessionId: string): PollingEvent {
+  return { ...event(type), id: `${type}-${owningSessionId}`, session_id: owningSessionId } as PollingEvent
 }
 
 describe('retainEventInSessionWorkingSet', () => {
@@ -40,4 +44,42 @@ describe('retainEventInSessionWorkingSet', () => {
       expect(retainEventInSessionWorkingSet(sessionId, child)).toBe(true)
     },
   )
+})
+
+// PLAT-106: a Schedule event was rendered under the Chat tab. Ownership is a
+// hard boundary and must be enforced before any volume/type classification.
+describe('session ownership boundary', () => {
+  const scheduleSession = 'schedule-cron--51af4f19_1786764627816018000'
+
+  it('rejects an event owned by a different session', () => {
+    expect(eventBelongsToSession(sessionId, ownedEvent('unified_completion', scheduleSession))).toBe(false)
+    expect(retainEventInSessionWorkingSet(sessionId, ownedEvent('unified_completion', scheduleSession))).toBe(false)
+  })
+
+  it('accepts an event owned by this session', () => {
+    expect(retainEventInSessionWorkingSet(sessionId, ownedEvent('unified_completion', sessionId))).toBe(true)
+  })
+
+  // These types are absent from CHILD_TRANSCRIPT_DETAIL_EVENT_TYPES, so before
+  // the ownership check they passed straight into the wrong session's bucket —
+  // which is exactly how a finished Schedule answer surfaced inside Chat.
+  it.each(['unified_completion', 'agent_end', 'conversation_end'])(
+    'rejects foreign %s even though its type is not volume-filtered',
+    type => {
+      expect(retainEventInSessionWorkingSet(sessionId, ownedEvent(type, scheduleSession))).toBe(false)
+    },
+  )
+
+  it('still accepts events that declare no owning session', () => {
+    // Optimistic/local records and legacy events carry no session_id; dropping
+    // them would silently discard the user's own messages.
+    expect(retainEventInSessionWorkingSet(sessionId, event('user_message'))).toBe(true)
+    expect(eventBelongsToSession(sessionId, event('unified_completion'))).toBe(true)
+  })
+
+  it('does not fail open for a foreign event that has no terminal identity', () => {
+    const foreign = ownedEvent('unified_completion', scheduleSession)
+    expect(foreign.terminal_id).toBeUndefined()
+    expect(retainEventInSessionWorkingSet(sessionId, foreign)).toBe(false)
+  })
 })
