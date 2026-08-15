@@ -39,6 +39,7 @@ import { registerPresentationRenderer } from '../../platform/presentations/prese
 import { usePresentationEvents } from '../../platform/presentations/usePresentationEvents'
 import { agentApi } from '../../services/api'
 import { setProductCommands } from '../../commands/registry'
+import { sectionThatGrew, type ProductionCounts } from './productionPanelScroll'
 import { toProductCommandDefinitions } from './productCommands'
 import { useAppStore } from '../../stores/useAppStore'
 import { useAuthStore } from '../../stores/useAuthStore'
@@ -471,10 +472,19 @@ registerPresentationRenderer('media.video', MediaVideoPresentation)
 // through documents, then characters, then a finished video, so an empty
 // section is a stage that has not happened yet, and showing it as a header
 // with a zero next to it just makes the panel longer without saying anything.
-function ProductionSection({ id, title, count, icon, children }: { id: string; title: string; count: number; icon: ReactNode; children: ReactNode }) {
+function ProductionSection({ id, title, count, icon, children, forceOpenKey }: { id: string; title: string; count: number; icon: ReactNode; children: ReactNode; forceOpenKey?: number }) {
   const [open, setOpen] = useState(true)
+  // A section a user collapsed should reopen when something new lands in it --
+  // scrolling to a section that is still closed would show them nothing.
+  const lastForceOpenKey = useRef(forceOpenKey)
+  useEffect(() => {
+    if (forceOpenKey !== undefined && forceOpenKey !== lastForceOpenKey.current) {
+      lastForceOpenKey.current = forceOpenKey
+      setOpen(true)
+    }
+  }, [forceOpenKey])
   return (
-    <section data-testid={`video-studio-section-${id}`} data-section-count={count} className="border-b border-slate-200 last:border-b-0 dark:border-slate-800">
+    <section data-testid={`video-studio-section-${id}`} data-section-id={id} data-section-count={count} className="border-b border-slate-200 last:border-b-0 dark:border-slate-800">
       <button type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open} className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800/60">
         <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform ${open ? '' : '-rotate-90'}`} />
         <span className="grid h-5 w-5 shrink-0 place-items-center text-slate-400">{icon}</span>
@@ -497,7 +507,7 @@ function VideosSection({ project, videos }: { project: VideoProject; videos: Vid
 
   const mediaURL = workspaceMediaURL(`${project.workspacePath}/${selected.path.replace(/^\/+/, '')}`)
   return (
-    <ProductionSection id="videos" title="Videos" count={videos.length} icon={<Film className="h-3.5 w-3.5" />}>
+    <ProductionSection id="videos" title="Videos" count={videos.length} icon={<Film className="h-3.5 w-3.5" />} forceOpenKey={videos.length}>
       <div data-testid="video-studio-videos-panel" data-video-count={videos.length}>
         <div className="overflow-hidden rounded-2xl bg-black shadow-lg">
           <PresentationRenderer presentation={selected.workspacePresentation} workspacePath={project.workspacePath} fallback={<div className="grid aspect-video place-items-center text-xs text-slate-400">No renderer is registered for this presentation.</div>} />
@@ -540,6 +550,29 @@ function ProductionPanel({ project, videos, characters, documents }: { project: 
   const uploadInputRef = useRef<HTMLInputElement>(null)
   const uploadDestination = `${project.workspacePath.replace(/\/$/, '')}/uploads`
   const isEmpty = videos.length === 0 && characters.length === 0 && documents.length === 0
+  const panelRef = useRef<HTMLDivElement>(null)
+
+  // Sections stack Videos / Characters / Documents in one scroll, so new
+  // content lower down is easy to miss -- reported directly: a character was
+  // shown successfully but sat off-screen below the videos with nothing to
+  // draw the eye there. When a count grows, scroll that section into view;
+  // characters take priority over documents over videos, since an unapproved
+  // character is the more time-sensitive thing to see. The first render is
+  // excluded -- an existing project opening with content already in every
+  // section has nothing single "new" to jump to.
+  const knownCounts = useRef<ProductionCounts | null>(null)
+  useEffect(() => {
+    const previous = knownCounts.current
+    const current = { videos: videos.length, characters: characters.length, documents: documents.length }
+    knownCounts.current = current
+    const grew = sectionThatGrew(previous, current)
+    if (!grew) return
+    // Sections mount their content synchronously when forced open, but give
+    // the reopen a frame before measuring/scrolling to it.
+    requestAnimationFrame(() => {
+      panelRef.current?.querySelector(`[data-section-id="${grew}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+  }, [videos.length, characters.length, documents.length])
 
   const uploadAssets = async (files: File[]) => {
     if (files.length === 0 || uploadingAssets) return
@@ -586,7 +619,7 @@ function ProductionPanel({ project, videos, characters, documents }: { project: 
   )
 
   return (
-    <div data-testid="video-studio-production-panel" data-video-count={videos.length} data-character-count={characters.length} data-document-count={documents.length} className="min-h-0 flex-1 overflow-y-auto">
+    <div ref={panelRef} data-testid="video-studio-production-panel" data-video-count={videos.length} data-character-count={characters.length} data-document-count={documents.length} className="min-h-0 flex-1 overflow-y-auto">
       <div className="p-4 pb-3">{uploadDropZone}</div>
       {isEmpty ? (
         <div className="px-8 pb-10 pt-4 text-center">
@@ -621,7 +654,7 @@ function CharactersSection({ project, characters }: { project: VideoProject; cha
 
   const imageURL = workspaceMediaURL(`${project.workspacePath}/${selected.imagePath.replace(/^\/+/, '')}`)
   return (
-    <ProductionSection id="characters" title="Characters" count={characters.length} icon={<Users className="h-3.5 w-3.5" />}>
+    <ProductionSection id="characters" title="Characters" count={characters.length} icon={<Users className="h-3.5 w-3.5" />} forceOpenKey={characters.length}>
     <div data-testid="video-studio-characters-panel" data-character-count={characters.length}>
       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-100 dark:border-slate-800 dark:bg-slate-900">
         <img src={imageURL} alt={`Reference image for ${selected.name}`} data-testid="video-studio-character-reference" className="max-h-[22rem] w-full bg-slate-950 object-contain" />
@@ -667,7 +700,7 @@ function DocumentsSection({ documents }: { documents: DocumentPresentation[] }) 
   if (!selected) return null
 
   return (
-    <ProductionSection id="documents" title="Documents" count={documents.length} icon={<FileText className="h-3.5 w-3.5" />}>
+    <ProductionSection id="documents" title="Documents" count={documents.length} icon={<FileText className="h-3.5 w-3.5" />} forceOpenKey={documents.length}>
     <div data-testid="video-studio-documents-panel" data-document-count={documents.length}>
       {documents.length > 1 ? (
         <div className="mb-3 flex flex-wrap gap-1.5">
