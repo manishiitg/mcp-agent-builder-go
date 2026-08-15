@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, type ReactNode } from 'react'
+import { Fragment, useEffect, useMemo, useRef, type ReactNode } from 'react'
 import { AlertCircle, Bell, Check, Loader2, Sparkles, Wrench } from 'lucide-react'
 import type { PollingEvent } from '../services/api-types'
-import { buildCleanConversationItems, buildProductionActivityItems } from '../utils/cleanConversation'
+import { buildCleanConversationItems, buildProductionActivityTurns } from '../utils/cleanConversation'
+import type { ProductionActivityItem, ProductionActivityTurn } from '../utils/cleanConversation'
 import { ConversationMarkdownRenderer } from './ui/MarkdownRenderer'
 
 export interface CleanConversationSurfaceProps {
@@ -35,6 +36,44 @@ function isFailedStepNotification(content: string): boolean {
   return /\bstatus=failed\b/i.test(content) || /(^|\n)\s*(- )?Result: Error:/i.test(content)
 }
 
+// One turn's tool activity. Rendered per turn rather than once for the whole
+// conversation: the summary used to describe only the newest turn, so sending
+// a message erased the record of what had just been done on the user's behalf.
+function ProductionActivityDetails({ items }: { items: ProductionActivityItem[] }) {
+  if (items.length === 0) return null
+  return (
+          // Plain text, no card: a bordered box per turn read as a UI element
+          // competing with the conversation, for information nobody reads unless
+          // they explicitly ask. Closed by default even while streaming — with a
+          // workflow in flight this list can run to dozens of calls.
+          <details className="w-full" aria-label="Production activity" data-testid="clean-production-activity">
+            <summary className="flex cursor-pointer list-none items-center gap-1 select-none text-[11px] text-slate-500 hover:text-slate-300 [&::-webkit-details-marker]:hidden">
+              <Wrench className="h-3 w-3" />
+              <span>+{items.length} {items.length === 1 ? 'tool' : 'tools'}</span>
+            </summary>
+            <div className="mt-1.5 space-y-1 pl-4 text-[11px] text-slate-500">
+              {items.map((activityItem) => (
+                <div key={activityItem.id} className="flex items-start gap-1.5" data-status={activityItem.status}>
+                  <span className="mt-0.5 shrink-0">
+                    {activityItem.status === 'complete' ? <Check className="h-3 w-3 text-emerald-500" /> : activityItem.status === 'error' ? <AlertCircle className="h-3 w-3 text-red-500" /> : <Loader2 className="h-3 w-3 animate-spin text-violet-500" />}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <span className="block truncate">{activityItem.title}</span>
+                    {activityItem.arguments || activityItem.result ? (
+                      <details className="mt-1 text-slate-500">
+                        <summary className="cursor-pointer select-none text-violet-400">Developer details</summary>
+                        {activityItem.arguments ? <><p className="mt-1 text-slate-500">Arguments</p><pre className="mt-0.5 max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono leading-4">{activityItem.arguments}</pre></> : null}
+                        {activityItem.result ? <><p className="mt-1 text-slate-500">Result</p><pre className="mt-0.5 max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono leading-4">{activityItem.result}</pre></> : null}
+                      </details>
+                    ) : null}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </details>
+  )
+}
+
 export function CleanConversationSurface({
   events,
   isStreaming,
@@ -44,7 +83,25 @@ export function CleanConversationSurface({
 }: CleanConversationSurfaceProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const items = useMemo(() => buildCleanConversationItems(events), [events])
-  const productionActivity = useMemo(() => buildProductionActivityItems(events), [events])
+  const activityTurns = useMemo(() => buildProductionActivityTurns(events), [events])
+
+  // Each turn's activity renders after that turn's messages and before the
+  // next thing the user typed, so a new message no longer takes the previous
+  // turn's work off screen. Work can also precede the first human message on
+  // a restored conversation, which is the turn with no anchor.
+  const { rows, trailingActivity } = useMemo(() => {
+    const byAnchor = new Map(activityTurns.filter((turn) => turn.anchorId).map((turn) => [turn.anchorId, turn]))
+    let pending = activityTurns.find((turn) => !turn.anchorId) ?? null
+    const built = items.map((item) => {
+      let activityBefore: ProductionActivityTurn | null = null
+      if (item.role === 'user') {
+        activityBefore = pending
+        pending = byAnchor.get(item.id) ?? null
+      }
+      return { item, activityBefore }
+    })
+    return { rows: built, trailingActivity: pending }
+  }, [items, activityTurns])
 
   useEffect(() => {
     const element = scrollRef.current
@@ -66,7 +123,10 @@ export function CleanConversationSurface({
   return (
     <div ref={scrollRef} className="h-full overflow-y-auto overscroll-contain px-4 py-6 sm:px-6" aria-live="polite" data-testid="clean-conversation-surface">
       <div className="flex w-full flex-col gap-6">
-        {items.map((item) => item.role === 'user' ? (
+        {rows.map(({ item, activityBefore }) => (
+          <Fragment key={`row:${item.id}`}>
+            {activityBefore ? <ProductionActivityDetails items={activityBefore.items} /> : null}
+            {item.role === 'user' ? (
           <article key={item.id} className="ml-auto max-w-full rounded-2xl rounded-br-md bg-violet-600 px-4 py-3 text-sm leading-6 text-white shadow-sm" data-testid="clean-user-message">
             <p className="whitespace-pre-wrap break-words">{item.content}</p>
           </article>
@@ -123,39 +183,11 @@ export function CleanConversationSurface({
               ) : null}
             </div>
           </article>
+            )}
+          </Fragment>
         ))}
 
-        {productionActivity.length > 0 ? (
-          // Plain text, no card: a bordered box per turn read as a UI element
-          // competing with the conversation, for information nobody reads unless
-          // they explicitly ask. Closed by default even while streaming — with a
-          // workflow in flight this list can run to dozens of calls.
-          <details className="w-full" aria-label="Production activity" data-testid="clean-production-activity">
-            <summary className="flex cursor-pointer list-none items-center gap-1 select-none text-[11px] text-slate-500 hover:text-slate-300 [&::-webkit-details-marker]:hidden">
-              <Wrench className="h-3 w-3" />
-              <span>+{productionActivity.length} {productionActivity.length === 1 ? 'tool' : 'tools'}</span>
-            </summary>
-            <div className="mt-1.5 space-y-1 pl-4 text-[11px] text-slate-500">
-              {productionActivity.map((activityItem) => (
-                <div key={activityItem.id} className="flex items-start gap-1.5" data-status={activityItem.status}>
-                  <span className="mt-0.5 shrink-0">
-                    {activityItem.status === 'complete' ? <Check className="h-3 w-3 text-emerald-500" /> : activityItem.status === 'error' ? <AlertCircle className="h-3 w-3 text-red-500" /> : <Loader2 className="h-3 w-3 animate-spin text-violet-500" />}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <span className="block truncate">{activityItem.title}</span>
-                    {activityItem.arguments || activityItem.result ? (
-                      <details className="mt-1 text-slate-500">
-                        <summary className="cursor-pointer select-none text-violet-400">Developer details</summary>
-                        {activityItem.arguments ? <><p className="mt-1 text-slate-500">Arguments</p><pre className="mt-0.5 max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono leading-4">{activityItem.arguments}</pre></> : null}
-                        {activityItem.result ? <><p className="mt-1 text-slate-500">Result</p><pre className="mt-0.5 max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono leading-4">{activityItem.result}</pre></> : null}
-                      </details>
-                    ) : null}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </details>
-        ) : null}
+        {trailingActivity ? <ProductionActivityDetails items={trailingActivity.items} /> : null}
 
         {isStreaming && !streamingText.trim() ? (
           <div className="flex items-center gap-2 text-xs text-slate-400" role="status" aria-live="polite" data-testid="clean-working-indicator">

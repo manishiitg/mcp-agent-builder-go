@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { PollingEvent } from '../services/api-types'
-import { buildCleanConversationItems, buildProductionActivityItems, cleanConversationActivity } from '../utils/cleanConversation'
+import { buildCleanConversationItems, buildProductionActivityItems, buildProductionActivityTurns, cleanConversationActivity } from '../utils/cleanConversation'
 
 function event(id: string, type: string, data: Record<string, unknown>, extra: Partial<PollingEvent> = {}): PollingEvent {
   return {
@@ -226,5 +226,50 @@ describe('buildProductionActivityItems', () => {
       detail: 'Product infographic',
       status: 'complete',
     }))
+  })
+})
+
+describe('buildProductionActivityTurns', () => {
+  it('keeps an earlier turn\'s tools after the user sends another message', () => {
+    // The reported bug: activity was computed for the newest turn only, so
+    // sending a message erased the visible record of the work just done.
+    const turns = buildProductionActivityTurns([
+      event('user-1', 'user_message', { content: 'Make the video' }),
+      event('t1-start', 'tool_call_start', { tool_call_id: 'call-1', tool_name: 'execute_shell_command' }),
+      event('t1-end', 'tool_call_end', { tool_call_id: 'call-1', tool_name: 'execute_shell_command' }),
+      event('user-2', 'user_message', { content: 'Now make it shorter' }),
+      event('t2-start', 'tool_call_start', { tool_call_id: 'call-2', tool_name: 'show_video' }),
+      event('t2-end', 'tool_call_end', { tool_call_id: 'call-2', tool_name: 'show_video' }),
+    ])
+
+    expect(turns).toHaveLength(2)
+    expect(turns[0].anchorId).toBe('user-1')
+    expect(turns[0].items.map((item) => item.title)).toEqual(['execute_shell_command'])
+    expect(turns[1].anchorId).toBe('user-2')
+    expect(turns[1].items).toHaveLength(1)
+  })
+
+  it('keeps auto-notification work in the turn that triggered it', () => {
+    // Auto-notifications arrive as user_message events but nobody typed them,
+    // so they must not split a turn -- doing so would strand the work under a
+    // message the user never sent.
+    const turns = buildProductionActivityTurns([
+      event('user-1', 'user_message', { content: 'Run the workflow' }),
+      event('t1-start', 'tool_call_start', { tool_call_id: 'call-1', tool_name: 'run_full_workflow' }),
+      event('t1-end', 'tool_call_end', { tool_call_id: 'call-1', tool_name: 'run_full_workflow' }),
+      event('auto', 'user_message', { content: '[AUTO-NOTIFICATION] step done' }),
+      event('t2-start', 'tool_call_start', { tool_call_id: 'call-2', tool_name: 'show_video' }),
+      event('t2-end', 'tool_call_end', { tool_call_id: 'call-2', tool_name: 'show_video' }),
+    ])
+
+    expect(turns).toHaveLength(1)
+    expect(turns[0].anchorId).toBe('user-1')
+    expect(turns[0].items).toHaveLength(2)
+  })
+
+  it('returns no turns when nothing observable happened', () => {
+    expect(buildProductionActivityTurns([
+      event('user-1', 'user_message', { content: 'Hello' }),
+    ])).toEqual([])
   })
 })

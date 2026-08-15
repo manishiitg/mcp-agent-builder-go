@@ -221,10 +221,55 @@ function lastHumanTurnEvents(events: PollingEvent[]): PollingEvent[] {
   return events.slice(start)
 }
 
+/** Index of every event that opens a human turn. Auto-notifications arrive as
+ * user_message events but nobody typed them, so they continue the turn they
+ * were triggered by rather than starting a new one. */
+function humanTurnStarts(events: PollingEvent[]): number[] {
+  const starts: number[] = []
+  events.forEach((event, index) => {
+    if (event.type !== 'user_message') return
+    const content = firstText(eventPayload(event).content, asRecord(event.data)?.content)
+    if (content.startsWith('[AUTO-NOTIFICATION]')) return
+    starts.push(index)
+  })
+  return starts
+}
+
+export type ProductionActivityTurn = {
+  /** Event id of the user message that opened this turn, so the surface can
+   * render each turn's activity against its own message. */
+  anchorId: string
+  items: ProductionActivityItem[]
+}
+
+/** Activity grouped per turn, so sending a new message does not take the
+ * previous turn's work off screen -- it happened, and the record of it is
+ * often the only place a user can see what was done on their behalf. */
+export function buildProductionActivityTurns(events: PollingEvent[]): ProductionActivityTurn[] {
+  const starts = humanTurnStarts(events)
+  if (starts.length === 0) {
+    const items = productionActivityForTurn(events)
+    return items.length > 0 ? [{ anchorId: '', items }] : []
+  }
+  const turns: ProductionActivityTurn[] = []
+  // Work can precede the first human message on a restored conversation.
+  const opening = productionActivityForTurn(events.slice(0, starts[0]))
+  if (opening.length > 0) turns.push({ anchorId: '', items: opening })
+  starts.forEach((start, position) => {
+    const end = position + 1 < starts.length ? starts[position + 1] : events.length
+    const items = productionActivityForTurn(events.slice(start, end))
+    if (items.length > 0) turns.push({ anchorId: events[start].id, items })
+  })
+  return turns
+}
+
 /** Product-facing, observable work for the current turn. Raw terminal output,
  * private reasoning, tool arguments, and tool results remain internal. */
 export function buildProductionActivityItems(events: PollingEvent[]): ProductionActivityItem[] {
-  const turnEvents = lastHumanTurnEvents(events)
+  return productionActivityForTurn(lastHumanTurnEvents(events))
+}
+
+function productionActivityForTurn(turnEvents: PollingEvent[]): ProductionActivityItem[] {
   const toolItems: ProductionActivityItem[] = pairToolCalls(turnEvents).map((tool) => {
     const copy = toolActivityCopy(tool.name)
     return {
