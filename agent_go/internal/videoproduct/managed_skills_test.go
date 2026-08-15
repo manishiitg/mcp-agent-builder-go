@@ -162,6 +162,45 @@ func TestGenerationSkillsRegisterAndStayOutOfTheInfographicPipeline(t *testing.T
 	}
 }
 
+// Character specs and reference images are the load-bearing artifact for
+// keeping a subject consistent across a long-form production's many shots,
+// and the workspace UI surfaces them by path. video-cinematography owns the
+// `characters/` layout, but video-creation owns the file-layout convention
+// it has to sit inside (work/ in chat, the step folder as a workflow stage)
+// and the production.json record that points at it. A bare top-level
+// `characters/` path would contradict both, so this pins that the two
+// skills still agree on where the folder lives and who records it.
+func TestCharacterArtifactsHaveOneAgreedLocation(t *testing.T) {
+	if err := RegisterProductSkills(); err != nil {
+		t.Fatalf("RegisterProductSkills: %v", err)
+	}
+	loadOne := func(name string) string {
+		attached := skills.LoadAttachable("", []string{name})
+		if len(attached) != 1 {
+			t.Fatalf("LoadAttachable(%s) = %v, want exactly one skill", name, attached)
+		}
+		return attached[0].Content
+	}
+
+	cinematography := loadOne("video-cinematography")
+	for _, want := range []string{"characters/<character-name>.md", "characters/<character-name>.png", "work/characters/"} {
+		if !strings.Contains(cinematography, want) {
+			t.Fatalf("video-cinematography no longer establishes %q as the character artifact path", want)
+		}
+	}
+	if !strings.Contains(cinematography, "video-creation") {
+		t.Fatal("video-cinematography does not defer to video-creation's file-layout rule for where characters/ sits")
+	}
+
+	creation := loadOne("video-creation")
+	if !strings.Contains(creation, "work/characters/") {
+		t.Fatal("video-creation's chat file layout no longer accounts for work/characters/")
+	}
+	if !strings.Contains(creation, "`characters/`") {
+		t.Fatal("video-creation's production.json record no longer points at the characters/ artifacts")
+	}
+}
+
 // video-editing is shared between both routes (infographic and long-form),
 // so its content changes for one route's sake if not careful. This pins the
 // AI-clip-stitching addition landed and stayed cross-referenced from the

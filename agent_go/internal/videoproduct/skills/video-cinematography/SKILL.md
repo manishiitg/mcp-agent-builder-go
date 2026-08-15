@@ -224,8 +224,8 @@ subject**, not after an inconsistency is already noticed:
 
 1. **A written character spec.** One canonical, detailed description --
    face, build, exact outfit, product's exact colors/markings -- saved once
-   (e.g. `characters/<character-name>.md`, referenced from
-   `production.json`). Pick 3-6 specific, disambiguating visual attributes
+   to `characters/<character-name>.md` and referenced from
+   `production.json`. Pick 3-6 specific, disambiguating visual attributes
    (e.g. "bald, blue arrow tattoo on forehead, orange-and-yellow robes")
    and reuse that exact phrase, verbatim, in every prompt for that subject.
    Pronouns and phrases like "the same character as before" do not carry
@@ -235,10 +235,18 @@ subject**, not after an inconsistency is already noticed:
 2. **A generated character-sheet reference image.** Use `fal-ai` or
    `google-ai` (whichever the chosen model needs -- see
    `video-model-selection`) to generate one strong reference image of the
-   character/subject from the spec, saved to a stable path (e.g.
-   `characters/<character-name>.png`). Text descriptions alone drift across
+   character/subject from the spec, saved alongside its spec as
+   `characters/<character-name>.png`. Text descriptions alone drift across
    independent generations even with an identical prompt; a shared image
    reference does not.
+
+Both live in a `characters/` folder, and where that folder sits follows
+`video-creation`'s file-layout rule rather than being a third convention:
+in direct chat it is `work/characters/`; running as a workflow stage it is
+`characters/` inside your own step folder. Keep the spec and its reference
+image side by side under the same character name -- a spec whose reference
+image has to be hunted for is a spec that gets paraphrased instead of
+reused.
 
 Once both exist, every subsequent shot of that subject conditions on the
 same reference image and repeats the same spec phrase verbatim -- this is

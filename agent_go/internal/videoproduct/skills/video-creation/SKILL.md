@@ -10,7 +10,7 @@ Treat the conversation as the creative brief. Do not force the user through a fo
 ## Work inside the project
 
 - Treat `uploads/` as immutable user-owned source material.
-- **Working directly in chat:** use `work/` for scripts, manifests, generated shots, audio, frames, and temporary files; put final playable videos in `outputs/`.
+- **Working directly in chat:** use `work/` for scripts, manifests, generated shots, audio, frames, and temporary files (including `work/characters/` for character specs and reference images); put final playable videos in `outputs/`.
 - **Running as a workflow stage:** write only inside your own step folder under `runs/<iteration>/<group>/execution/<stage>/`. `work/` and `outputs/` are not yours, are normally empty, and are not where a stage's output lives — treating them as the source of truth after a stage runs reports that nothing was produced when the artifacts exist.
 - Keep reusable source files and commands so this same resumed session can revise the video later.
 - Never publish, share, or upload a result.
@@ -50,6 +50,7 @@ In direct chat, create or update `work/production.json` before substantial media
 - source assets and their roles;
 - script or beat list;
 - shot status and generated filenames;
+- for an AI-generated production, every recurring character/subject: the path to its spec and reference image under `characters/`, and which model and provider its arc is committed to (see `video-cinematography`);
 - music, caption, and overlay decisions;
 - final output versions and QA status.
 
