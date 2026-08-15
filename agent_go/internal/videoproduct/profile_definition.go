@@ -53,6 +53,7 @@ var profileSkills = []struct{ name, description, path string }{
 	{"video-model-selection", "Choose which fal.ai or Google model fits one shot's requirements -- input mode, duration, character consistency, native audio, cost -- before generating.", "skills/video-model-selection/SKILL.md"},
 	{"video-cinematography", "Construct the generation prompt for one shot -- the five-aspect formula, camera-movement and lighting vocabulary -- and keep a character or subject consistent across shots.", "skills/video-cinematography/SKILL.md"},
 	{"video-storytelling", "Structure a video's narrative arc and pacing, scaled from a short explainer to a true long-form (8+ minute) piece's chapters, retention curve, and pattern interrupts.", "skills/video-storytelling/SKILL.md"},
+	{"generated-video-quality", "Check AI-generated footage for identity drift, generation artifacts, temporal discontinuity, motion plausibility, lip-sync, color consistency, prompt adherence, and narration alignment. Used alongside video-quality, never in place of it.", "skills/generated-video-quality/SKILL.md"},
 }
 
 var registerProductSkillsOnce sync.Once

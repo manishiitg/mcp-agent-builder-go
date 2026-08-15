@@ -122,6 +122,7 @@ func TestGenerationSkillsRegisterAndStayOutOfTheInfographicPipeline(t *testing.T
 		{"video-model-selection", []string{"video-cinematography", "fal-ai", "google-ai", "Shot count vs. budget"}},
 		{"video-cinematography", []string{"dolly is not zoom", "reference-image conditioning", "video-model-selection"}},
 		{"video-storytelling", []string{"video-cinematography", "video-model-selection", "But-therefore, not and-then", "Scaling to true long-form"}},
+		{"generated-video-quality", []string{"character_consistency", "generation_artifacts", "temporal_coherence", "video-quality"}},
 	}
 	for _, tc := range cases {
 		if !skills.IsBuiltinSkill(tc.name) {
@@ -152,7 +153,7 @@ func TestGenerationSkillsRegisterAndStayOutOfTheInfographicPipeline(t *testing.T
 		}
 	}
 
-	generationSkillNames := map[string]bool{"fal-ai": true, "google-ai": true, "video-model-selection": true, "video-cinematography": true, "video-storytelling": true}
+	generationSkillNames := map[string]bool{"fal-ai": true, "google-ai": true, "video-model-selection": true, "video-cinematography": true, "video-storytelling": true, "generated-video-quality": true}
 	for _, stage := range infographicPipeline.Stages {
 		for _, name := range stage.Skills {
 			if generationSkillNames[name] {
@@ -283,6 +284,39 @@ func TestDirectChatHoldsCheckpointsBeforeSpending(t *testing.T) {
 		if !strings.Contains(content, want) {
 			t.Fatalf("video-creation no longer holds checkpoints before paid generation (missing %q)", want)
 		}
+	}
+}
+
+// A production stitched several unapproved clips together and showed the
+// user only the combined result -- nobody had seen or approved any single
+// clip before it was already part of an assembly, so a wrong direction in
+// the first clip was invisible until every clip after it had also been
+// generated on top of it. This pins the two places that failure is now
+// explicitly forbidden: video-creation's checkpoint list, and video-editing
+// at the exact point stitching happens, so the rule is visible from
+// whichever skill the agent reads first.
+func TestGenerationCannotStitchWithoutShowingEachClipFirst(t *testing.T) {
+	if err := RegisterProductSkills(); err != nil {
+		t.Fatalf("RegisterProductSkills: %v", err)
+	}
+	loadOne := func(name string) string {
+		attached := skills.LoadAttachable("", []string{name})
+		if len(attached) != 1 {
+			t.Fatalf("LoadAttachable(%s) = %v, want exactly one skill", name, attached)
+		}
+		return attached[0].Content
+	}
+
+	creation := loadOne("video-creation")
+	for _, want := range []string{"Generate one shot, then stop", "Never let stitching be the first look"} {
+		if !strings.Contains(creation, want) {
+			t.Fatalf("video-creation no longer requires a per-clip checkpoint before stitching (missing %q)", want)
+		}
+	}
+
+	editing := loadOne("video-editing")
+	if !strings.Contains(editing, "already shown to the user individually") {
+		t.Fatal("video-editing no longer requires each clip to be approved before it enters an assembly")
 	}
 }
 

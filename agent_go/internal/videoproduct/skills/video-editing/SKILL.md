@@ -29,6 +29,14 @@ npx --yes hyperframes@latest doctor --json
 
 ## Stitching independently AI-generated clips
 
+**Before stitching anything, check that each clip going into the assembly
+was already shown to the user individually** (see `video-creation`'s
+generation checkpoints). Combining clips into a preview is not a substitute
+for that -- it is one more clip nobody has approved yet, and if the
+combination is wrong there is no way to tell which of the unapproved clips
+caused it. A stitched preview is something to build from approved parts,
+not a way to get feedback on parts that were never shown.
+
 A long-form piece assembled from `fal-ai`/`google-ai` generations is a
 harder assembly problem than editing one continuous shoot: each clip was
 generated independently, often by different models, with no natural

@@ -51,14 +51,29 @@ answer before spending:
    the whole product: every later shot is conditioned on that reference, so
    an unapproved face propagates through the entire piece and can only be
    fixed by regenerating all of it.
-4. **Then generate**, staying inside the agreed ceiling, and report what was
-   spent against it.
+4. **Generate one shot, then stop.** The first shot of a new character,
+   scene, or model choice is a sample, not a commitment. Generate it alone,
+   show it (`show_video` once it has passed `video-quality`, or describe
+   the local file if a full QA pass does not fit a single sample), and wait
+   for the user's reaction before generating anything else. If the batch
+   has several unrelated shots, one representative sample is enough --
+   commit the whole direction on one unapproved guess only when the user
+   has explicitly said not to check in.
+5. **Never let stitching be the first look.** Do not generate several clips
+   and hand the user a combined preview as their first view of any of them
+   -- by then every clip in it was made without feedback, and rejecting the
+   combination means rejecting all of them at once. Show each new clip on
+   its own before it is added to an assembly with anything else.
+6. **Then generate the rest**, staying inside the agreed ceiling, and
+   report what was spent against it.
 
 Skipping these because the user seemed to be in a hurry is the wrong trade:
 they are what makes a paid production correctable while correcting it is
 still cheap. A user who genuinely wants no checkpoints will say so, and
 that is a decision they get to make explicitly rather than one you make for
-them by staying quiet.
+them by staying quiet. Generating a whole batch and presenting only the
+finished, stitched result is exactly the failure mode this section exists
+to prevent -- it is not a shortcut, it is the checkpoint being skipped.
 
 ## Inspect before producing
 

@@ -73,7 +73,7 @@ var longformStageDescriptions = map[string]string{
 
 	"longform-check": qualityReviewDescription("longform-final.mp4 as named by longform-render.md", "longform-delivery.md") +
 		" This is a long-form piece assembled from many independently-generated clips, so weight the review accordingly: produce one contact sheet per chapter rather than one unreadable sheet for the whole runtime, and cover every edit boundary across the set rather than sampling a few. " +
-		"Check each recurring subject against its reference image in longform-characters.md rather than from memory — drifting identity is this pipeline's characteristic defect and it is invisible unless compared directly. " +
+		"After video-quality's checks pass, run generated-video-quality's checks against the same candidate and add their results to the same quality-report.json: character_consistency (against every reference image in longform-characters.md, not from memory — drifting identity is this pipeline's characteristic defect and it is invisible unless compared directly), generation_artifacts, temporal_coherence at every stitch point, motion_plausibility, lip_sync where dialogue exists, clip_color_consistency, prompt_adherence against longform-shotlist.md, and narration_alignment against longform-narration.md's measured durations. A candidate that passes video-quality but fails any of these is not ready to present. " +
 		"Also verify the narrative promises longform-script.md made: the hook lands inside the first 30 seconds, each chapter pays off, the open loop planted early is actually resolved, and the ending delivers the message the brief asked for.",
 }
 
@@ -90,7 +90,7 @@ var longformPipeline = &Pipeline{
 		{ID: "longform-shotlist", Title: "Shot list and prompts", Summary: "Derive every shot and its prompt from the measured narration, and cost the run.", Output: "longform-shotlist.md", Skills: []string{"video-cinematography", "video-model-selection", "video-editing"}},
 		{ID: "longform-generate", Title: "Generate shots", Summary: "Produce the approved shots, conditioned on each character's reference.", Output: "longform-generation.md", Skills: []string{"fal-ai", "google-ai", "video-cinematography", "video-model-selection"}},
 		{ID: "longform-assemble", Title: "Assemble and mix", Summary: "Cut the visuals to the narration, stitch, mix, and render the candidate.", Output: "longform-render.md", Artifacts: []string{"longform-final.mp4"}, Skills: []string{"video-editing"}},
-		{ID: "longform-check", Title: "Quality check", Summary: "Verify the render, the character continuity, and the narrative promises.", Output: "longform-delivery.md", Artifacts: []string{"quality-report.json", "qa-contact-sheet.jpg"}, Skills: []string{"video-quality", "video-cinematography"}},
+		{ID: "longform-check", Title: "Quality check", Summary: "Verify the render, the character continuity, and the narrative promises.", Output: "longform-delivery.md", Artifacts: []string{"quality-report.json", "qa-contact-sheet.jpg"}, Skills: []string{"video-quality", "generated-video-quality", "video-cinematography"}},
 	},
 }
 
@@ -121,7 +121,7 @@ var shortformStageDescriptions = map[string]string{
 
 	"shortform-check": qualityReviewDescription("shortform-final.mp4 as named by shortform-render.md", "shortform-delivery.md") +
 		" Weight the review for short-form: confirm the hook actually lands in the opening seconds, that captions and key subjects sit inside the destination platform's safe areas at the target aspect ratio, and that the piece reads clearly at phone size and at speed. " +
-		"Where a subject recurs across shots, check it against its reference rather than from memory.",
+		"After video-quality's checks pass, run generated-video-quality's checks against the same candidate and add their results to the same quality-report.json: character_consistency against each subject's reference (not from memory), generation_artifacts, temporal_coherence at every stitch point, prompt_adherence against shortform-shotlist.md, and lip_sync where dialogue exists. A candidate that passes video-quality but fails any of these is not ready to present.",
 }
 
 var shortformPipeline = &Pipeline{
@@ -135,6 +135,6 @@ var shortformPipeline = &Pipeline{
 		{ID: "shortform-shotlist", Title: "Shot list and prompts", Summary: "Turn each beat into a costed shot with its generation prompt.", Output: "shortform-shotlist.md", Skills: []string{"video-cinematography", "video-model-selection"}},
 		{ID: "shortform-generate", Title: "Generate shots", Summary: "Produce the approved shots.", Output: "shortform-generation.md", Skills: []string{"fal-ai", "google-ai", "video-cinematography", "video-model-selection"}},
 		{ID: "shortform-assemble", Title: "Assemble and mix", Summary: "Stitch, mix, overlay text, and render the candidate.", Output: "shortform-render.md", Artifacts: []string{"shortform-final.mp4"}, Skills: []string{"video-editing"}},
-		{ID: "shortform-check", Title: "Quality check", Summary: "Verify the render, the hook, and platform safe areas.", Output: "shortform-delivery.md", Artifacts: []string{"quality-report.json", "qa-contact-sheet.jpg"}, Skills: []string{"video-quality"}},
+		{ID: "shortform-check", Title: "Quality check", Summary: "Verify the render, the hook, and platform safe areas.", Output: "shortform-delivery.md", Artifacts: []string{"quality-report.json", "qa-contact-sheet.jpg"}, Skills: []string{"video-quality", "generated-video-quality"}},
 	},
 }

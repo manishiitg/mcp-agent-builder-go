@@ -338,6 +338,26 @@ func validateWorkspaceQualityReport(ctx context.Context, client *workspace.Clien
 			return "", fmt.Errorf("the %s check is not supported by passing evidence", name)
 		}
 	}
+	// generated-video-quality's checks are not required for every candidate --
+	// the infographic route never generates footage and has nothing to check
+	// here. But a report that includes one of these names is claiming that
+	// check was actually run, and the same evidence discipline applies: a
+	// fabricated "pass" with no evidence is rejected exactly like a missing
+	// base check would be. This does not force the check to exist; it refuses
+	// to trust it when it claims to.
+	for _, name := range []string{
+		"character_consistency", "generation_artifacts", "temporal_coherence",
+		"motion_plausibility", "lip_sync", "clip_color_consistency",
+		"prompt_adherence", "narration_alignment",
+	} {
+		check, ok := report.Checks[name]
+		if !ok {
+			continue
+		}
+		if (check.Status != "pass" && check.Status != "not_applicable") || len(check.Evidence) == 0 {
+			return "", fmt.Errorf("the %s check is not supported by passing evidence", name)
+		}
+	}
 	if len(report.SampledFrames) < 4 {
 		return "", errors.New("fewer than four inspected frames were recorded")
 	}

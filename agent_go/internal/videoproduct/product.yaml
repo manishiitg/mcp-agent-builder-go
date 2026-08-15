@@ -79,6 +79,7 @@ profile:
     - video-model-selection
     - video-cinematography
     - video-storytelling
+    - generated-video-quality
   tools:
     - id: video.show-video
       # Declares what this tool shows, not how. The frontend renderer
@@ -291,4 +292,5 @@ workflows:
     - video-model-selection
     - video-cinematography
     - video-storytelling
+    - generated-video-quality
   browser_mode: auto

@@ -7,6 +7,8 @@ description: Validate a candidate video technically, visually, and editorially b
 
 Do not call a video complete because rendering succeeded. Validate the exact output file the user will receive.
 
+For a candidate assembled from `fal-ai`/`google-ai` clips, this skill is the baseline, not the whole review -- add `generated-video-quality`'s checks (identity drift, generation artifacts, temporal discontinuity at stitch points, motion plausibility, lip-sync, prompt adherence) to the same pass. Generated footage fails in ways a technical decode check and a general visual-coherence pass both miss, because nothing about them fails to decode and nothing about them is a black frame.
+
 If the render report says the candidate was assembled from `placeholder: true` assets, apply only the **Deterministic checks** below — a solid-color or drawtext placeholder has no face, hand, or lip movement to check, and grading it against creative criteria it was never meant to satisfy is meaningless. Skip visual and content review, and record the verdict as a placeholder-pipeline pass or fail, not a creative `PASS` — the distinction matters because a placeholder passing means the *pipeline* works, not that the video is finished.
 
 ## Deterministic checks
