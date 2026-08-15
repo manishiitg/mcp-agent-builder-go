@@ -2683,6 +2683,29 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     void routeSubmit(queryToSubmit)
   }, [queryToSubmit, executeSlashCommandFromQuery, routeSubmit])
 
+
+  // Opens the same command menu a typed "/" does, for anyone who would not
+  // think to type it. slashPosition uses the current text length rather than
+  // an actual "/" character -- handleCommandSelect only reads up to that
+  // index as context, it never requires the character to be present, so this
+  // reproduces typed-slash behavior without mutating what the user wrote.
+  const openCommandMenu = useCallback(() => {
+    if (showCommandDialog) {
+      setShowCommandDialog(false)
+      return
+    }
+    setSlashPosition(inputText.length)
+    setCommandSearchQuery('')
+    setShowCommandDialog(true)
+    setShowFileDialog(false)
+    setShowWorkflowDialog(false)
+    const rect = textareaRef.current?.getBoundingClientRect()
+    if (rect) {
+      setCommandDialogPosition({ bottom: window.innerHeight - rect.top + 8, left: rect.left + window.scrollX })
+    }
+    textareaRef.current?.focus()
+  }, [inputText, showCommandDialog])
+
   // Command selection handler - executes commands directly
   const handleCommandSelect = useCallback((command: string) => {
     if (!activeTabId) return
@@ -4006,6 +4029,25 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                     </div>
                   ) : (
                     <div data-tour="chat-send-controls" data-testid="tour-chat-send-controls" className="flex items-center gap-1">
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={isStreaming || isSummarizing}
+                            onClick={openCommandMenu}
+                            className="px-2.5"
+                            data-testid="chat-command-menu-button"
+                            aria-label="Browse commands"
+                          >
+                            <Terminal className="w-4 h-4" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>Browse commands</p>
+                        </TooltipContent>
+                      </Tooltip>
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <Button
