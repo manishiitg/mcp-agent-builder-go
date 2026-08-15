@@ -19,7 +19,7 @@ func TestMirrorAndLoadAttachedSkillUsesNormalSkillsFolder(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(source, "references", "timeline.md"), []byte("Timeline reference"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := mirrorCLISkills(root); err != nil {
+	if err := mirrorCLISkills(root, []string{"hyperframes"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(root, "skills", "hyperframes", "SKILL.md")); err != nil {
@@ -77,5 +77,54 @@ func TestValidateRequiredJSONChecks(t *testing.T) {
 	}
 	if err := validateRequiredJSONChecks("not JSON", []string{"Version"}); err == nil {
 		t.Fatal("expected invalid JSON error")
+	}
+}
+
+// mirrorCLISkills used to copy every directory under .agents/skills into the
+// product's skills/ folder and RemoveAll each destination first. That let a
+// skill the manifest never declared (left by an earlier run or another
+// source) enter the product surface, and let an external copy silently
+// replace a same-named skill the workspace already owned.
+func TestMirrorCLISkillsOnlyMirrorsDeclaredSkills(t *testing.T) {
+	root := t.TempDir()
+	writeSkill := func(dir, name, body string) {
+		t.Helper()
+		full := filepath.Join(dir, name)
+		if err := os.MkdirAll(full, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(full, "SKILL.md"), []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	staging := filepath.Join(root, ".agents", "skills")
+	writeSkill(staging, "hyperframes", "---\nname: hyperframes\ndescription: declared\n---\n")
+	writeSkill(staging, "leftover-from-another-source", "---\nname: leftover\ndescription: undeclared\n---\n")
+	writeSkill(staging, "video-quality", "---\nname: video-quality\ndescription: external copy\n---\n")
+
+	// A product-owned skill that happens to share a name with something in
+	// staging must survive untouched when the manifest did not declare it.
+	writeSkill(filepath.Join(root, "skills"), "video-quality", "PRODUCT OWNED")
+
+	if err := mirrorCLISkills(root, []string{"hyperframes"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(filepath.Join(root, "skills", "hyperframes", "SKILL.md")); err != nil {
+		t.Fatalf("declared skill was not mirrored: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "skills", "leftover-from-another-source")); !os.IsNotExist(err) {
+		t.Fatalf("undeclared skill entered the product surface (err=%v)", err)
+	}
+	body, err := os.ReadFile(filepath.Join(root, "skills", "video-quality", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("product-owned skill was destroyed: %v", err)
+	}
+	if string(body) != "PRODUCT OWNED" {
+		t.Fatalf("product-owned skill was overwritten by the external copy: %q", body)
+	}
+	// The staging swap must not leave its scratch directory behind.
+	if _, err := os.Stat(filepath.Join(root, "skills", "hyperframes.incoming")); !os.IsNotExist(err) {
+		t.Fatalf("staging directory was left behind (err=%v)", err)
 	}
 }

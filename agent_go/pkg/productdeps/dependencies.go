@@ -225,7 +225,7 @@ func syncSkillSource(ctx context.Context, workspacePath string, source SkillSour
 	if output, err := run(ctx, workspacePath, npx, args); err != nil {
 		return false, fmt.Errorf("sync external skills from %q: %w\n%s", source.Source, err, output)
 	}
-	if err := mirrorCLISkills(workspacePath); err != nil {
+	if err := mirrorCLISkills(workspacePath, source.Install); err != nil {
 		return false, fmt.Errorf("mirror external skills from %q: %w", source.Source, err)
 	}
 	for _, name := range source.Install {
@@ -314,22 +314,57 @@ func LoadAttachedSkills(workspacePath string, manifest Manifest) ([]*llmtypes.Sk
 	return attached, nil
 }
 
-func mirrorCLISkills(workspacePath string) error {
+// mirrorCLISkills copies the skills this source declared from the CLI's
+// staging folder into the workspace's own skills/ folder.
+//
+// install scopes it deliberately. Mirroring every directory found under
+// .agents/skills meant anything left there by an earlier run or a different
+// source silently entered the product surface, and any same-named skill the
+// workspace already owned was deleted and replaced by the external copy. A
+// product's tool/skill surface is supposed to be what its manifest declared,
+// not whatever happens to be sitting in a staging directory.
+//
+// Each skill is staged beside its destination and swapped in, so a copy that
+// fails partway leaves the previous skill intact rather than destroying it
+// with a RemoveAll that already happened.
+func mirrorCLISkills(workspacePath string, install []string) error {
 	sourceRoot := filepath.Join(workspacePath, ".agents", "skills")
 	entries, err := os.ReadDir(sourceRoot)
 	if err != nil {
 		return fmt.Errorf("read npx skills output: %w", err)
 	}
+	wanted := make(map[string]struct{}, len(install))
+	for _, name := range install {
+		if trimmed := strings.TrimSpace(name); trimmed != "" {
+			wanted[trimmed] = struct{}{}
+		}
+	}
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
+		// An empty install list means the source named no skills; mirroring
+		// everything in that case is the same over-broad copy, so mirror
+		// nothing and let the caller's post-install check report it.
+		if _, ok := wanted[entry.Name()]; !ok {
+			continue
+		}
 		source := filepath.Join(sourceRoot, entry.Name())
 		destination := filepath.Join(workspacePath, "skills", entry.Name())
-		if err := os.RemoveAll(destination); err != nil {
+		staged := destination + ".incoming"
+		if err := os.RemoveAll(staged); err != nil {
 			return err
 		}
-		if err := copySkillTree(source, destination); err != nil {
+		if err := copySkillTree(source, staged); err != nil {
+			os.RemoveAll(staged)
+			return err
+		}
+		if err := os.RemoveAll(destination); err != nil {
+			os.RemoveAll(staged)
+			return err
+		}
+		if err := os.Rename(staged, destination); err != nil {
+			os.RemoveAll(staged)
 			return err
 		}
 	}

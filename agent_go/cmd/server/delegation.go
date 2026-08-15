@@ -340,6 +340,18 @@ func (api *StreamingAPI) executeDelegatedTask(ctx context.Context, parentReq Que
 	// derive their surface from one source instead of two — the divergence that
 	// let a background child come up short of its parent in the first place.
 	if subProfile, profileErr := api.resolveAgentProfileForQuery(ctx, &parentReq, subAgentUserID, sessionID); profileErr != nil {
+		// Failing open here defeated the rule stated directly above: with no
+		// AdmitTool set, the child came up with a WIDER surface than the
+		// product declared, so a failed profile resolution turned delegation
+		// into the tool_policy bypass this gate exists to prevent. Only abort
+		// when the parent actually declared a profile -- an inconsistent
+		// request with no profile id has no product surface to enforce, and
+		// there the old log-and-continue is still the right behavior.
+		if strings.TrimSpace(parentReq.AgentProfileID) != "" {
+			log.Printf("[DELEGATION] Refusing to delegate: could not resolve the parent agent profile %q for the sub-agent tool surface: %v", parentReq.AgentProfileID, profileErr)
+			api.emitDelegationEndEvent(sessionID, delegationID, currentDepth, "", profileErr.Error(), nil)
+			return "", fmt.Errorf("failed to resolve the agent profile tool surface for delegation: %w", profileErr)
+		}
 		log.Printf("[DELEGATION] Could not resolve the parent agent profile for the sub-agent tool surface: %v", profileErr)
 	} else if gate := newProductToolGate(subProfile); gate.enforcing() {
 		subAgentConfig.AdmitTool = gate.Admit

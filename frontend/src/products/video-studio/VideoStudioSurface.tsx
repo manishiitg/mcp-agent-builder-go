@@ -760,6 +760,7 @@ function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: 
   const [showVideoPlayer, setShowVideoPlayer] = useState(false)
   const [loadingProject, setLoadingProject] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+  const [loadError, setLoadError] = useState('')
   const videoCountRef = useRef(0)
 
   // Production panel width: draggable, and remembered per browser rather than
@@ -793,20 +794,30 @@ function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: 
 
   const refreshProject = useCallback(async (quiet = false) => {
     if (!quiet) setRefreshing(true)
-    // Loaded together so one refresh reflects the whole production. Only the
-    // video count auto-opens the player; a new character or document should
-    // not yank the user out of whatever they were reading.
-    const [nextVideos, nextCharacters, nextDocuments] = await Promise.all([
-      loadVideoPresentations(project),
-      loadCharacterPresentations(project),
-      loadDocumentPresentations(project),
-    ])
-    if (nextVideos.length > videoCountRef.current) setShowVideoPlayer(true)
-    videoCountRef.current = nextVideos.length
-    setVideos(nextVideos)
-    setCharacters(nextCharacters)
-    setDocuments(nextDocuments)
-    setRefreshing(false)
+    try {
+      // Loaded together so one refresh reflects the whole production. Only the
+      // video count auto-opens the player; a new character or document should
+      // not yank the user out of whatever they were reading.
+      const [nextVideos, nextCharacters, nextDocuments] = await Promise.all([
+        loadVideoPresentations(project),
+        loadCharacterPresentations(project),
+        loadDocumentPresentations(project),
+      ])
+      if (nextVideos.length > videoCountRef.current) setShowVideoPlayer(true)
+      videoCountRef.current = nextVideos.length
+      setVideos(nextVideos)
+      setCharacters(nextCharacters)
+      setDocuments(nextDocuments)
+      setLoadError('')
+    } catch (cause) {
+      // These loads now distinguish "no managed database yet" (empty, and
+      // still resolves normally) from a real failure. A real one must not be
+      // shown as an empty production -- keep whatever was already loaded and
+      // say so, rather than blanking the panel with no way to tell why.
+      setLoadError(cause instanceof Error ? cause.message : 'Could not load this production.')
+    } finally {
+      setRefreshing(false)
+    }
   }, [project])
 
   useEffect(() => {
@@ -934,6 +945,15 @@ function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: 
               persisted preference from an older version -- should land on the
               work itself rather than silently showing the workflow canvas where
               the user's video used to be. */}
+          {/* Shown above the panel rather than replacing it: a failed refresh
+              should not throw away the production the user can already see. */}
+          {loadError ? (
+            <div role="alert" data-testid="video-studio-load-error" className="mx-3 mt-3 shrink-0 rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs leading-5 text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+              <p className="font-semibold">This production could not be loaded.</p>
+              <p className="mt-1 break-words">{loadError}</p>
+              <button type="button" onClick={() => void refreshProject()} disabled={refreshing} className="mt-2 inline-flex h-7 items-center rounded-lg bg-amber-600 px-2.5 text-[11px] font-semibold text-white hover:bg-amber-500 disabled:opacity-50">{refreshing ? 'Retrying…' : 'Retry'}</button>
+            </div>
+          ) : null}
           {loadingProject ? <div className="grid h-full place-items-center text-xs text-slate-400"><Loader2 className="h-5 w-5 animate-spin" /></div> : panel === 'files' ? <FilesPanel project={project} /> : panel === 'workflow' ? <WorkflowPanel project={project} /> : <ProductionPanel project={project} videos={videos} characters={characters} documents={documents} />}
         </aside>
       </div>
@@ -999,7 +1019,15 @@ export function VideoStudioSurface() {
     setLastProjectId(projectId)
   }
 
-  if (openProject) return <ProjectWorkspace project={openProject} onBack={() => selectProject(null)} />
+  // key by project id so switching projects REMOUNTS rather than reusing the
+  // instance. ProjectWorkspace holds per-project refs that are meaningless
+  // across a switch: handledPresentationEventCountRef (a new project with
+  // fewer historical events than the old counter would have its refresh
+  // events ignored entirely) and videoCountRef (which decides whether to
+  // auto-open the player). Resetting them individually on project change
+  // fixes only the ones anyone remembered to list; remounting fixes the
+  // class.
+  if (openProject) return <ProjectWorkspace key={openProject.id} project={openProject} onBack={() => selectProject(null)} />
 
   const handleCreate = async (title: string, description: string) => {
     const project = await createVideoProject(title, description)
