@@ -111,8 +111,8 @@ model explorer, Google's Gemini API model reference), not from memory:
 This list was checked against real search results and Google's own docs on
 2026-08-15. It will go stale -- confirm the exact model ID and current
 capabilities against the provider's own live reference before calling
-anything, per "Never invent a model ID" above. Do not extend this list from
-memory in a later session; re-check instead.
+anything, per "Never invent a model ID" in `fal-ai` and `google-ai`. Do not
+extend this list from memory in a later session; re-check instead.
 
 - **Video, hosted on fal.ai**: Seedance 2.5 (`bytedance/seedance-2.5/text-to-video`,
   `.../image-to-video`, `.../reference-to-video`) supersedes 2.0 -- native
@@ -212,6 +212,8 @@ the model-per-shot record already exists.
 ## Where this fits
 
 - Use `video-creation` to plan the shot list and own the overall brief.
+- Use `video-storytelling` to structure the narrative arc and pacing before
+  a shot list exists to choose models for.
 - Use this skill to choose a model per shot.
 - Use `video-cinematography` to turn the creative intent for that shot into
   the actual prompt/camera/lighting direction handed to the chosen model.
