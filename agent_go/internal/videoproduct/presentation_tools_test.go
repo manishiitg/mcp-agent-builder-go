@@ -165,6 +165,25 @@ func TestProductCommandsCarryTheirPromptsAndHideTheirPaths(t *testing.T) {
 		}
 	}
 
+	// /characters is a full character-management entry point -- design a new
+	// one, review what exists, or revise one already in use -- not only a
+	// lookup. Each path is a real capability the command has to actually
+	// cover, not just mention.
+	var characters string
+	for _, command := range manifest.Profile.Commands {
+		if command.Name == "characters" {
+			characters = command.Prompt
+		}
+	}
+	if characters == "" {
+		t.Fatal("no /characters command")
+	}
+	for _, want := range []string{"design", "already exist", "asking to change"} {
+		if !strings.Contains(strings.ToLower(characters), want) {
+			t.Fatalf("/characters no longer covers %q as one of its paths", want)
+		}
+	}
+
 	// File is the product's own layout detail. Serialising it would ship an
 	// internal path to every browser that loads the profile.
 	encoded, err := json.Marshal(manifest.Profile)

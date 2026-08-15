@@ -174,7 +174,7 @@ profile:
       icon: clapperboard
       file: commands/production.md
     - name: characters
-      description: Show the characters this production will generate against
+      description: Design a new character, review existing ones, or revise one already in use
       icon: users
       file: commands/characters.md
     - name: plan
