@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { KeyRound, Check, Settings, Globe, Square, CheckSquare } from 'lucide-react';
+import { Shield, Check, Settings, Globe, Square, CheckSquare } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Card } from '../ui/Card';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip';
@@ -91,7 +91,7 @@ export default function SecretSelectionDropdown({
                   : 'bg-gray-100 dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-400 dark:text-gray-500'
               } ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:pr-2'}`}
             >
-              <KeyRound className="w-4 h-4 flex-shrink-0" />
+              <Shield className="w-4 h-4 flex-shrink-0" />
               <span className="text-xs font-medium max-w-0 overflow-hidden whitespace-nowrap group-hover:max-w-[70px] transition-all duration-200">
                 {labelText}
               </span>
