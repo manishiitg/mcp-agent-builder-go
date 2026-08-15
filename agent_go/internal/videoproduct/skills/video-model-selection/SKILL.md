@@ -32,15 +32,17 @@ generation call, resolve whatever the brief hasn't already answered:
   first shot of that subject is generated, not discovered after three
   independently-drifting attempts.
 - **Shot count vs. budget.** A true long-form (8-15+ minute) production is
-  assembled from dozens of separately-generated clips -- at roughly 5-15
-  seconds of usable video per paid call, a 10-minute piece is on the order
-  of 50-100+ generation calls before accounting for re-prompts. That is a
-  materially different cost and time commitment than a handful of shots,
-  and it compounds with regeneration tolerance below. If the user hasn't
-  stated a cost ceiling or a maximum acceptable number of paid generation
-  calls, ask once, compactly, with the rough call-count arithmetic shown --
-  do not silently generate an open-ended number of variants across a
-  production this large.
+  assembled from dozens of separately-generated clips. Do the arithmetic
+  for the actual model in hand rather than quoting a fixed number: a
+  10-minute piece is 600 seconds of finished runtime, so a model producing
+  5-second clips needs ~120 calls, one producing 15-second clips ~40, and
+  one producing 30-second clips ~20 -- before accounting for re-prompts,
+  which the regeneration tolerance below multiplies on top. Per-call
+  duration is therefore a budget decision as much as a creative one. If the
+  user hasn't stated a cost ceiling or a maximum acceptable number of paid
+  generation calls, ask once, compactly, showing the call-count arithmetic
+  for the model actually being considered -- do not silently generate an
+  open-ended number of variants across a production this large.
 - **Regeneration tolerance.** If a shot doesn't match the brief on the first
   attempt, how many re-prompts is reasonable before stopping to ask the user
   rather than continuing to spend on the same shot? State a default (e.g.
@@ -86,9 +88,15 @@ model explorer, Google's Gemini API model reference), not from memory:
 - **Native audio**: some video models generate synchronized audio (dialogue,
   ambience, SFX) directly; others produce silent video that needs a separate
   voice/music generation pass (see `fal-ai`'s and `google-ai`'s audio
-  capabilities) plus assembly in `video-editing`. Decide this per shot, not
-  once for the whole production, since a narrated hook and a silent B-roll
-  cutaway may want different models.
+  capabilities) plus assembly in `video-editing`. Decide this per shot
+  rather than once for the whole production, since a narrated hook and a
+  silent B-roll cutaway may want different models -- but only for shots
+  with no recurring character or subject in them. Any shot featuring a
+  recurring subject is bound to that subject's committed model and provider
+  (see "Keep the whole character arc on one model and provider" in
+  `video-cinematography`); when that model's audio support is wrong for the
+  shot, generate it silent on the committed model and add the audio in
+  `video-editing` rather than switching models for one shot.
 - **Cost and generation time**: video generation is priced and timed very
   differently from image generation, and cost typically scales with
   duration and resolution. Confirm current per-call pricing before
@@ -183,8 +191,6 @@ shifted with newer versions):
   much sooner (well under 100 words) and reward simple, motion-focused
   language over exhaustive detail -- check the specific model's own
   guidance rather than assuming a longer prompt is always safer.
-
-## Provider is a routing decision, not a preference
 
 ## Provider is a routing decision, not a preference
 

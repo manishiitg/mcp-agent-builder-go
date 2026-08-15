@@ -201,6 +201,48 @@ func TestCharacterArtifactsHaveOneAgreedLocation(t *testing.T) {
 	}
 }
 
+// Two mechanics the whole long-form route depends on, both of which read as
+// prose an edit could quietly drop. Reference-image conditioning is the most
+// reliable consistency technique there is, but it is inert unless the
+// provider skills say how to actually send a local file -- fal.ai wants an
+// uploaded URL, Gemini wants inline base64, and neither is guessable from
+// the other. Narration ordering is the expensive one to get wrong: visuals
+// are cut to measured narration, so a pipeline that generates clips first
+// has to redo them.
+func TestGenerationSkillsCarryTheMechanicsTheirGuidanceAssumes(t *testing.T) {
+	if err := RegisterProductSkills(); err != nil {
+		t.Fatalf("RegisterProductSkills: %v", err)
+	}
+	loadOne := func(name string) string {
+		attached := skills.LoadAttachable("", []string{name})
+		if len(attached) != 1 {
+			t.Fatalf("LoadAttachable(%s) = %v, want exactly one skill", name, attached)
+		}
+		return attached[0].Content
+	}
+
+	falAI := loadOne("fal-ai")
+	for _, want := range []string{"fal.storage.upload", "image_url", "characters/"} {
+		if !strings.Contains(falAI, want) {
+			t.Fatalf("fal-ai no longer shows how to send a local reference image (missing %q)", want)
+		}
+	}
+
+	googleAI := loadOne("google-ai")
+	for _, want := range []string{"inlineData", "base64", "characters/"} {
+		if !strings.Contains(googleAI, want) {
+			t.Fatalf("google-ai no longer shows how to send a local reference image (missing %q)", want)
+		}
+	}
+
+	editing := loadOne("video-editing")
+	for _, want := range []string{"Narration drives the timeline", "ffprobe", "video-storytelling"} {
+		if !strings.Contains(editing, want) {
+			t.Fatalf("video-editing no longer establishes narration-first assembly (missing %q)", want)
+		}
+	}
+}
+
 // video-editing is shared between both routes (infographic and long-form),
 // so its content changes for one route's sake if not careful. This pins the
 // AI-clip-stitching addition landed and stayed cross-referenced from the

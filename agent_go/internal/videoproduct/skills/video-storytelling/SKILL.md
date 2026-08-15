@@ -27,7 +27,7 @@ this order, scaling section lengths proportionally to total duration:
 3. **Concept beats** -- one idea per beat, each building on the last. End
    each beat with a "but" or "therefore" transition into the next, never
    "and then" (see "But-therefore, not and-then" below).
-4. **Palette cleanser** -- a brief pause, a visual beat, or a "let that sink
+4. **Palate cleanser** -- a brief pause, a visual beat, or a "let that sink
    in" moment between concept beats, giving the viewer a moment to
    consolidate before the next idea lands.
 5. **Key insight** -- the "aha" moment the whole piece has been building to.
@@ -125,9 +125,13 @@ Press) on how people actually process narrated video, not just convention:
   outperforms written words plus the same pictures for comprehension. Use
   on-screen text for what needs to be read exactly (a stat, a quote, a
   claim), not as a substitute for narration.
-- **New visual element roughly every 3-5 seconds** keeps attention without
-  requiring a hard cut -- a held shot can still satisfy this if something
-  in-frame changes (subject motion, a graphic appearing).
+- **New visual element roughly every 3-5 seconds** keeps attention. This is
+  not a cut every 3-5 seconds -- a held shot satisfies it whenever
+  something in frame changes: subject motion, a camera move, a graphic
+  appearing, a reveal. Cutting that often would over-cut a reflective beat
+  (see `video-editing`'s pacing guidance, which governs cut frequency);
+  what this rule asks for is visual *change*, of which a cut is only one
+  kind.
 
 ## Scaling to true long-form (8+ minutes)
 
@@ -138,10 +142,18 @@ What changes at length:
 ### Chapter structure
 
 Break the piece into 2-4 minute chapters (max 5-6 chapters for a 10-15
-minute video -- more fragments the narrative). Each chapter is its own
-smaller arc: a mini-hook or re-engagement line at its start, a payoff before
-its end. Add explicit chapter markers/timestamps as metadata for the
-finished piece.
+minute video -- more fragments the narrative). Add explicit chapter
+markers/timestamps as metadata for the finished piece.
+
+**The arc applies at both levels, and they are not the same arc.** The
+eight-step explainer arc above runs once across the whole piece: one hook
+at the top, one key insight the entire video builds toward, one reframe at
+the end. Each chapter then carries a smaller version of the same shape --
+a mini-hook or re-engagement line at its start, one idea, a payoff before
+its end -- feeding the larger arc rather than restating it. A chapter that
+delivers its own full "aha" and closes it off leaves the viewer with no
+reason to continue; a chapter that ends on a payoff *and* an unanswered
+question does.
 
 ### The retention curve has known danger zones
 

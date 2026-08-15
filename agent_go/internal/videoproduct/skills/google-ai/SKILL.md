@@ -57,12 +57,16 @@ or pass it directly to the client instead of relying on ambient env:
 ```js
 import { GoogleGenAI } from "@google/genai";
 
-const ai = new GoogleGenAI({ apiKey: process.env.SECRET_GEMINI_API_KEY });
+const ai = new GoogleGenAI({
+  apiKey: process.env.SECRET_GEMINI_API_KEY ?? process.env.GEMINI_API_KEY,
+});
 ```
 
-If `$SECRET_GEMINI_API_KEY` is unset, stop and report the blocker -- do not
-proceed without generation credentials, and never print or log the key value
-itself.
+Accept either name: `SECRET_GEMINI_API_KEY` is what the injection mechanism
+provides, but a key set directly in the environment as `GEMINI_API_KEY` is
+equally valid and should not be treated as missing. If neither is set, stop
+and report the blocker -- do not proceed without generation credentials, and
+never print or log the key value itself.
 
 ## Environment
 
@@ -98,6 +102,34 @@ const response = await ai.models.generateContent({
 // reference -- this differs between image models and Veo's video models,
 // and moves independently of this skill.
 ```
+
+## Sending a local file as input
+
+Unlike `fal-ai`, which uploads a file and passes back a URL, Gemini takes
+image input inline as base64 bytes alongside the prompt. This is how a
+character reference image produced per `video-cinematography` gets
+conditioned on:
+
+```js
+import { readFile } from "node:fs/promises";
+
+const bytes = await readFile("work/characters/<character-name>.png");
+
+const response = await ai.models.generateContent({
+  model: "<resolved-model-id>",
+  contents: [
+    { inlineData: { mimeType: "image/png", data: bytes.toString("base64") } },
+    { text: "<prompt>" },
+  ],
+});
+```
+
+Confirm the exact `contents` shape against the resolved model's own
+reference before relying on it -- part ordering, field names, and whether a
+model accepts more than one reference image all vary, and the larger-file
+path (an upload/file API rather than inline bytes) differs again. Record
+which reference image conditioned which shot in `production.json` (see
+`video-creation`) so a revision reuses the same one.
 
 Video generation (Veo) is typically a longer-running operation than image
 generation -- confirm whether the resolved model returns synchronously or

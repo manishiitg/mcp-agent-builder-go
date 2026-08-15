@@ -61,11 +61,16 @@ or pass it directly to the client instead of relying on ambient env:
 ```js
 import { fal } from "@fal-ai/client";
 
-fal.config({ credentials: process.env.SECRET_FAL_KEY });
+fal.config({
+  credentials: process.env.SECRET_FAL_KEY ?? process.env.FAL_KEY,
+});
 ```
 
-If `$SECRET_FAL_KEY` is unset, stop and report the blocker -- do not proceed
-without generation credentials, and never print or log the key value itself.
+Accept either name: `SECRET_FAL_KEY` is what the injection mechanism
+provides, but a key set directly in the environment as `FAL_KEY` is equally
+valid and should not be treated as missing. If neither is set, stop and
+report the blocker -- do not proceed without generation credentials, and
+never print or log the key value itself.
 
 ## Environment
 
@@ -122,6 +127,38 @@ const { request_id } = await fal.queue.submit("<resolved-model-id>", {
 Treat a job that errors or times out as a real failure to report with the
 request ID and error payload -- do not silently retry with different input
 hoping one succeeds, and do not fabricate a result if generation fails.
+
+## Sending a local file as input
+
+Input fields like `image_url` take a URL, not a filesystem path. A local
+file -- most importantly a character reference image produced per
+`video-cinematography` -- has to be uploaded first, and the client returns
+the CDN URL to pass in:
+
+```js
+import { readFile } from "node:fs/promises";
+
+const bytes = await readFile("work/characters/<character-name>.png");
+const referenceUrl = await fal.storage.upload(
+  new File([bytes], "<character-name>.png", { type: "image/png" }),
+);
+
+const result = await fal.subscribe("<resolved-model-id>", {
+  input: { prompt: "...", image_url: referenceUrl },
+  logs: true,
+});
+```
+
+Upload each reference image once and reuse the returned URL across every
+shot that conditions on it, rather than re-uploading per call. Record that
+URL in `production.json` next to the character's local path (see
+`video-creation`), so a later revision conditions on the same reference
+instead of regenerating one that drifts.
+
+Field names vary by model -- some take `image_url`, others a differently
+named field or an array of references. Copy the exact shape from the
+model's own reference page. Some models also accept a `data:` URI for
+inline content, but an uploaded URL is the form that works everywhere.
 
 ## Output handling
 

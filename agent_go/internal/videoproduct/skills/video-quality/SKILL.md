@@ -23,7 +23,11 @@ Useful detectors include `blackdetect`, `freezedetect`, and `volumedetect`. Trea
 
 ## Visual review
 
-Create a contact sheet containing the opening, each edit boundary, representative middle frames, all text cards, and the final frame. Inspect it for:
+Create a contact sheet containing the opening, each edit boundary, representative middle frames, all text cards, and the final frame.
+
+For a long-form piece assembled from dozens of clips, one sheet of every edit boundary is unreadable and stops being a review. Produce one contact sheet per chapter instead, and keep every boundary covered across the set rather than sampling a subset — a dropped boundary is exactly where a mismatch hides. Where a recurring character appears, put its reference image (see `video-cinematography`) beside its shots so consistency is checked against the reference rather than from memory.
+
+Inspect for:
 
 - consistent people, products, wardrobe, sets, and color treatment;
 - natural faces, hands, lip movement, and object geometry;
@@ -74,7 +78,7 @@ Use this shared contract for every path:
 }
 ```
 
-All paths are project-relative. Every required check must be `pass` or genuinely `not_applicable`; never use `not_applicable` to hide a check that could not be run. `sampled_frames` must contain at least four inspected frames including the opening and ending. A placeholder candidate uses `verdict: "placeholder-pass"` and must be described as a placeholder when presented.
+All paths are project-relative. Every required check must be `pass` or genuinely `not_applicable`; never use `not_applicable` to hide a check that could not be run. `sampled_frames` must contain at least four inspected frames including the opening and ending — four is a floor for a short piece, not a target: scale the count with duration and cut count, at least one frame per chapter and per edit boundary for a long-form assembly. A placeholder candidate uses `verdict: "placeholder-pass"` and must be described as a placeholder when presented.
 
 **Running as a workflow stage:** write the human report named by the stage plus `quality-report.json` and `qa-contact-sheet.jpg` inside your own step folder under `runs/<iteration>/<group>/execution/<stage>/`; all three are required outputs. The JSON must name the exact project-relative candidate file you validated. **Working directly in chat:** write `quality-report.json`, `qa-contact-sheet.jpg`, and the sampled frames under `work/qa/<output-name>/`.
 

@@ -53,10 +53,16 @@ asked for.
   or color mismatch between clips from different models or providers, which
   is a separate, harder problem: two technically-identical clips from
   different generators can still look like they belong to different videos.
-  Either keep a scene's shots on one model/provider when visual consistency
-  matters most, or add a light, consistent color-grade pass across every
-  clip in the assembly (matched black level, white balance, and saturation)
-  rather than trusting raw generation output to match on its own.
+  Keeping shots on one model and provider is what actually prevents this,
+  and for any recurring character or subject that is already a hard rule
+  decided upstream, not an option at edit time (see "Keep the whole
+  character arc on one model and provider" in `video-cinematography`). At
+  this stage the remaining lever is a light, consistent color-grade pass
+  across every clip in the assembly (matched black level, white balance,
+  and saturation) rather than trusting raw generation output to match on
+  its own -- that narrows a residual mismatch, but it does not rescue a
+  character generated on two different models, which needs regeneration
+  upstream.
 - **Concatenate with ffmpeg's concat demuxer** once every segment is
   normalized to identical specs -- it is lossless and reliable for clips
   that already match:
@@ -72,15 +78,9 @@ asked for.
   when segments still need a per-clip filter (scale, fps conversion, a
   crossfade) applied as part of the same command, since the demuxer above
   assumes segments are already stream-compatible and only concatenates.
-- **Transitions between independently-generated shots.** With no natural
-  continuity to preserve, a hard cut is the safe default -- it does not ask
-  the viewer to reconcile two generations' subtle differences the way a
-  crossfade does. Pick one transition grammar for the whole piece (e.g.
-  "hard cuts throughout" or "a specific dissolve style at scene boundaries
-  only") and apply it consistently, the same way `video-cinematography`
-  asks for consistent camera/lighting choices -- an inconsistent mix of
-  transition styles reads as unintentional even when each individual cut is
-  fine.
+- **Transitions between independently-generated shots** are chosen by the
+  rules in "Choosing a transition at each cut" below, which account for
+  these clips having no natural continuity to preserve.
 - Record which model/provider produced each segment and the exact trim
   points used in `production.json` (see `video-model-selection`), so a
   revision to one shot re-cuts only that segment instead of re-deriving the
@@ -96,12 +96,53 @@ asked for.
   cinematography when a stitch keeps failing rather than trying to paper
   over a seam with an ever-longer crossfade.
 
+## Narration drives the timeline, not the other way around
+
+For a narrated long-form piece, the voiceover is the spine and the visuals
+are cut to it. Build in this order -- reversing it is the most expensive
+mistake available here, because it forces either re-generated clips or
+narration rewritten to fit an arbitrary length:
+
+1. **Lock the script first** (see `video-storytelling` for its shape).
+2. **Generate the narration before generating any visuals for those
+   beats** -- via a TTS model through `fal-ai`, or preserved native
+   dialogue where a video model produced lip-synced speech (see
+   `video-model-selection`'s native-audio criterion).
+3. **Measure what you actually got**, per beat, with `ffprobe` -- do not
+   plan against an estimate from the word count. Delivered TTS timing
+   routinely differs from the estimate, and every downstream duration
+   depends on it:
+
+   ```bash
+   ffprobe -v error -show_entries format=duration -of csv=p=0 vo-ch2-beat3.wav
+   ```
+4. **Derive the shot plan from those measured durations.** A chapter whose
+   narration measures 90 seconds needs 90 seconds of visuals -- how many
+   clips that is falls out of the chosen model's per-call duration (see
+   `video-model-selection`'s shot-count arithmetic), rather than being
+   picked first and forcing the narration to match.
+5. **Then generate and trim visuals** to those durations, per the stitching
+   guidance above.
+
+**Generate narration in per-beat or per-chapter segments, not one long
+pass.** A single 12-minute render cannot be fixed in one place without
+re-timing everything after it; segmented VO lets one beat be regenerated
+while every other beat's timing survives untouched. Name each segment for
+its beat and record it in `production.json`.
+
+Keep narration and the visual it describes simultaneous -- `video-storytelling`'s
+temporal-contiguity rule is enforced here, at assembly, and it is the main
+reason the visuals are cut to measured narration rather than estimated
+narration.
+
 ## Choosing a transition at each cut
 
-Pick the transition by what's actually changing at that cut, not by
-habit or by what looks nicest in isolation -- and once a rule is chosen for
-a given situation, apply it consistently across the whole piece the way
-`video-cinematography` asks for consistent camera/lighting choices:
+Pick the transition by what's actually changing at that cut, not by habit
+or by what looks nicest in isolation. Decide the grammar once, at the start
+of the assembly, and apply the same rule to every cut of the same kind --
+the same way `video-cinematography` asks for consistent camera and lighting
+choices. An inconsistent mix of transition styles reads as unintentional
+even when each individual cut is fine.
 
 | At this cut | Use | Typical duration |
 |---|---|---|
@@ -113,13 +154,23 @@ a given situation, apply it consistently across the whole piece the way
 
 Match transition duration to content pace: quick, energetic sections read
 better with faster transitions (or none); slower, reflective sections can
-sustain a longer dissolve without feeling sluggish. With no natural
-continuity between independently-generated shots, a hard cut is still the
-safer default in any row above where the choice is close -- it does not ask
-the viewer to reconcile two generations' subtle differences the way a
-crossfade does.
+sustain a longer dissolve without feeling sluggish.
 
-## Stitching at true long-form scale (50-100+ clips)
+**Two rules override the table.** Both exist because a dissolve asks the
+viewer to look at two images at once, which is exactly when
+independently-generated footage gives itself away:
+
+1. **Between two independently-generated clips, bias toward the hard cut.**
+   Where the table's choice is close, take the cut -- it does not ask the
+   viewer to reconcile two generations' subtle differences the way a
+   crossfade does. Reserve the dissolve and fade-through-black rows for
+   boundaries that genuinely earn them (a chapter break, a deliberate tonal
+   shift), not for routine beat changes.
+2. **Never crossfade between two generated talking-head shots** -- it
+   produces a visible double face. Use a hard cut, or cut away to B-roll
+   and back.
+
+## Stitching at true long-form scale (dozens of clips)
 
 A true long-form (8-15+ minute) piece assembled from many short generated
 clips is a materially bigger assembly problem than stitching a handful of
@@ -172,36 +223,58 @@ rather than discovering after a full render:
 - **Sustained audio consistency across the whole runtime**, not just
   clip-to-clip: keep one continuous music bed under the whole piece rather
   than restarting a music cue per chapter (restarting reads as several
-  short videos stitched together, not one long one). Target -14 LUFS
-  integrated for the full mix, duck under narration to -18 to -20dB, and
-  keep tempo within roughly ±10 BPM across the entire video -- a tempo jump
-  between chapters is as noticeable as a visual jump cut. Keep per-chapter
-  loudness variation under about 2 LUFS so no chapter reads as noticeably
-  louder or quieter than its neighbors.
+  short videos stitched together, not one long one). Keep tempo within
+  roughly ±10 BPM across the entire video -- a tempo jump between chapters
+  is as noticeable as a visual jump cut -- and keep per-chapter loudness
+  variation under about 2 LUFS so no chapter reads as noticeably louder or
+  quieter than its neighbors.
 
-### Audio level targets by content type
+### Audio level targets
 
-| Content | Target | Notes |
+These are three different measurements, and conflating them is the usual
+cause of a mix that meets its target number and still sounds wrong. Set the
+delivery target first, then place the stems inside it:
+
+**The finished mix** -- measured across the whole program, this is the
+delivery target: **-14 LUFS integrated**, with **-1 dBTP** true peak
+headroom to leave margin against inter-sample clipping on export.
+
+**Each stem, measured in isolation** -- how the elements sit inside that
+mix. Narration is the anchor; everything else is placed relative to it:
+
+| Stem | Target | Notes |
 |---|---|---|
-| Narration/dialogue | -16 LUFS | primary intelligibility reference |
-| Music under narration | -28 to -24 LUFS | ducked; see side-chain guidance below |
-| Music-only passage (no narration) | -14 LUFS | matches "sustained audio consistency" target above |
-| SFX | -20 LUFS | scale up briefly for a deliberate accent, not as a new baseline |
-| All tracks | -1dB true peak headroom | leaves margin against inter-sample clipping on the final export |
+| Narration/dialogue | -16 LUFS | the intelligibility anchor -- set this first, then place everything else against it |
+| Music under narration | -28 to -24 LUFS | roughly 8-12 dB below the narration |
+| Music in a passage with no narration | around -18 to -16 LUFS | comes up so the moment isn't a hole, without overshooting the program target |
+| SFX | -20 LUFS | push above this only for a deliberate accent, and only briefly |
+
+**Duck depth** -- how far the music drops when narration is present, which
+is a *gain reduction*, not a level: **8-12 dB**. Stating a duck as an
+absolute LUFS value is ambiguous and usually wrong; a music bed sitting
+around -16 LUFS solo, ducked 8-12 dB, lands in the -28 to -24 LUFS band the
+table above gives for music under narration -- which is the check that
+these numbers agree.
 
 ## Cut for pace and continuity
 
 - Trim generated presenter clips to useful speech, including a small natural handle before and after the spoken words.
 - Remove frozen openings, generation glitches, dead air, repeated phrases, and accidental endings.
-- Use hard cuts between generated talking-head clips. Crossfades commonly produce a visible double face.
-- Use dissolves only where both adjacent shots are visually compatible and the transition serves the story.
+- Choose each transition by the rules in "Choosing a transition at each cut" above, including its two overrides.
 - Keep a frame-based timeline manifest so captions, cards, and overlays remain aligned after revisions.
 
 ### What to cut, and what to deliberately leave in
 
-Word-level timestamps (from transcription) make this a precise trim, not a
-guess -- but which category a moment falls into is an editorial judgment
-call, not something a transcript alone answers:
+This applies to speech you did not author -- an uploaded recording, or a
+generated clip with native dialogue. Narration you generated yourself from
+a script needs no cleanup pass: you already have the exact words, and TTS
+does not produce filler or false starts.
+
+Where a cleanup pass is needed, `silencedetect` (below) locates candidate
+silences precisely; word boundaries otherwise come from listening, since no
+transcription capability is established here. Which category a moment falls
+into is an editorial judgment call either way, not something timings
+answer on their own:
 
 | Cut | Leave in |
 |---|---|
@@ -259,21 +332,25 @@ errors rather than clamping silently.
 ### Choosing a cut point inside a generated clip
 
 When trimming a generated clip to the strongest continuous span (see
-"Duration mismatch is normal" above), sample candidate frames near likely
-cut points and check them against simple, concrete criteria rather than a
-subjective "looks fine" pass -- a frame that fails one of these rarely
-reads as an intentional stylistic choice:
+"Duration mismatch is normal" above), extract candidate frames near likely
+cut points with ffmpeg and actually look at them -- a cut landing on a
+blurry, blown-out, or motion-smeared frame reads as a mistake rather than a
+stylistic choice:
 
-- **Blur**: a Laplacian-variance blur score below roughly 100 indicates a
-  soft/blurry frame -- avoid landing a cut exactly there.
-- **Exposure**: mean brightness below roughly 40 reads as underexposed,
-  above roughly 220 as overexposed/blown out.
-- **Contrast**: pixel-value standard deviation below roughly 30 indicates a
-  flat, low-contrast frame.
+```bash
+# one frame at a candidate cut point
+ffmpeg -ss 00:00:03.5 -i shot-07.mp4 -frames:v 1 -q:v 2 frame-3.5s.jpg
+```
 
-These are rough triage thresholds for picking a usable frame, not a
-substitute for actually looking at the candidate -- use them to rule out
-obviously bad frames before a final visual check.
+What to reject a candidate frame for: visible blur or motion smear,
+crushed/blown exposure, a flat low-contrast image, a subject caught
+mid-blink or mid-gesture, or a generation artifact. Inspecting the frame
+is the check -- there is no scoring tool here beyond your own eye, so do
+not report a numeric quality score as if one had been computed.
+
+ffmpeg can narrow *where* to look before you inspect: `blackdetect` finds
+black frames worth avoiding as cut points, and `freezedetect` finds frozen
+spans, which frequently mark a generation's warm-up or stall.
 
 ## Captions and exact graphics
 
@@ -318,14 +395,15 @@ resolution rather than treating these as universal:
 ## Audio
 
 - Preserve good native presenter audio when it is already lip-synced.
-- Use TTS only for voiceover over silent or muted footage.
-- Normalize dialogue first. Loop and trim music to the video duration, then duck it under speech with side-chain compression -- ffmpeg's `sidechaincompress` filter with a threshold around 0.02, ratio around 9, attack around 200ms, and release around 500ms is a reasonable starting point to tune per mix.
+- Use TTS only for voiceover over silent or muted footage. For a narrated long-form piece, generate it before the visuals it narrates and measure it -- see "Narration drives the timeline, not the other way around".
+- Normalize dialogue first. Loop and trim music to the video duration, then duck it under speech with side-chain compression, targeting the 8-12 dB duck depth in "Audio level targets" -- ffmpeg's `sidechaincompress` filter with a threshold around 0.02, ratio around 9, attack around 200ms, and release around 500ms is a reasonable starting point to tune per mix.
 - Use short fades at the beginning and end of music, avoid abrupt cutoffs, and prevent clipping.
 - Never add copyrighted music unless the user supplied it or its permitted source is clear.
-- Hit the level targets in "Audio level targets by content type" above for
-  every track; for anything longer than a couple of minutes, also apply
-  "Sustained audio consistency across the whole runtime" so the mix doesn't
-  drift chapter to chapter.
+- Hit the numbers in "Audio level targets" above -- the -14 LUFS / -1 dBTP
+  delivery target for the finished mix, and the per-stem levels inside it.
+  For anything longer than a couple of minutes, also apply "Sustained audio
+  consistency across the whole runtime" so the mix doesn't drift chapter to
+  chapter.
 
 ## Where your files go
 
