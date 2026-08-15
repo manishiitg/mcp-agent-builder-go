@@ -231,7 +231,7 @@ ui:
   streaming: structured
 
 workflows:
-  enabled: [infographic, quality]
+  enabled: [infographic, shortform, longform, quality]
   selected_skills:
     - product-infographic
     - video-creation

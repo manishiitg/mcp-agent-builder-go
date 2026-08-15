@@ -183,7 +183,10 @@ func qualityReviewDescription(candidateSource, markdownOutput string) string {
 // registry rejects slashes, so layered names wait on nested discovery.
 
 // pipelineRegistry holds every pipeline the product can run. Routing picks one.
-var pipelineRegistry = []*Pipeline{infographicPipeline, qualityPipeline}
+// Order matters: the router's default is the first entry, and the product's
+// default route stays the infographic explainer because it is the only one
+// that cannot spend the user's money.
+var pipelineRegistry = []*Pipeline{infographicPipeline, shortformPipeline, longformPipeline, qualityPipeline}
 
 func init() {
 	// Attach descriptions by stage id so the definitions above stay scannable.
@@ -193,12 +196,16 @@ func init() {
 				continue
 			}
 			id := pipeline.Stages[i].ID
-			if text := cinematicStageDescriptions[id]; text != "" {
-				pipeline.Stages[i].Description = text
-				continue
-			}
-			if text := infographicStageDescriptions[id]; text != "" {
-				pipeline.Stages[i].Description = text
+			for _, set := range []map[string]string{
+				cinematicStageDescriptions,
+				infographicStageDescriptions,
+				longformStageDescriptions,
+				shortformStageDescriptions,
+			} {
+				if text := set[id]; text != "" {
+					pipeline.Stages[i].Description = text
+					break
+				}
 			}
 		}
 	}
