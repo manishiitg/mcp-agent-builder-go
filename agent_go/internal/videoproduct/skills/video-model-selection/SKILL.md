@@ -87,6 +87,38 @@ model explorer, Google's Gemini API model reference), not from memory:
   planning to crop/pad a mismatched output after the fact, which degrades
   framing decided at generation time.
 
+## Notable options as of 2026-08-15 -- a starting point, not a source of truth
+
+This list was checked against real search results and Google's own docs on
+2026-08-15. It will go stale -- confirm the exact model ID and current
+capabilities against the provider's own live reference before calling
+anything, per "Never invent a model ID" above. Do not extend this list from
+memory in a later session; re-check instead.
+
+- **Video, hosted on fal.ai**: Veo 3.1 / Veo 3.1 Lite (native audio,
+  lip-synced dialogue), Kling 3.0 Pro (cinematic, native audio,
+  multilingual lip-sync), Seedance 2.0 Fast/Pro (native audio, real-world
+  physics, director-level camera control, accepts text/image/audio/video
+  input), Wan 2.6, LTX 2.0.
+- **Image, hosted on fal.ai**: FLUX, and Google's Nano Banana models
+  re-hosted alongside fal.ai's own catalog.
+- **Voice/audio, hosted on fal.ai**: ElevenLabs (text-to-speech, voice
+  cloning), plus separate music-generation models.
+- **Image, direct via Google's Gemini API**: Nano Banana 2 =
+  `gemini-3.1-flash-image` (most versatile); Nano Banana 2 Lite =
+  `gemini-3.1-flash-lite-image`.
+- **Video, direct via Google's Gemini API**: Veo 3.1. A newer multimodal
+  option, `gemini-omni-flash-preview`, was reported rolling out with native
+  video generation and conversational editing from text/image/video input,
+  priced comparably to Veo 3.1 Fast.
+
+One real overlap worth knowing: Veo 3.1 is reachable through both fal.ai
+(hosted) and Google's own API (direct). Where a model is available through
+both, the choice is about aggregation convenience and pricing, not
+capability -- fal.ai gives one unified surface across many vendors' models
+under one key; going direct to Google skips that layer for Google's own
+models specifically.
+
 ## Provider is a routing decision, not a preference
 
 - Use `fal-ai` when the brief needs a specific third-party model (Kling,
