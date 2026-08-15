@@ -266,6 +266,10 @@ profile:
         label: Cursor
         provider: cursor-cli
         model_id: auto
+      - id: pi-cli
+        label: Pi CLI (Gemini)
+        provider: pi-cli
+        model_id: google/gemini-3.7-flash
     capabilities:
       # Structured turns are one-shot processes. Follow-ups queue at a safe
       # boundary; they are never typed into a live terminal prompt.

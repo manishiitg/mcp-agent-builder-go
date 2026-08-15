@@ -71,13 +71,7 @@ import {
 
 type WorkspacePanel = 'production' | 'files' | 'workflow'
 const EMPTY_SECRET_IDS: string[] = []
-// Only a network failure uses this bootstrap state. Once loaded, the choices
-// come directly from the server's YAML-backed agent profile.
-const FALLBACK_VIDEO_AGENT_PROVIDER_OPTIONS: VideoAgentProviderOption[] = [
-  { id: 'claude-code', label: 'Claude Code', provider: 'claude-code', modelId: 'claude-sonnet-5' },
-  { id: 'codex', label: 'Codex', provider: 'codex-cli', modelId: 'gpt-5.6-terra' },
-  { id: 'cursor', label: 'Cursor', provider: 'cursor-cli', modelId: 'auto' },
-] as const
+const EMPTY_VIDEO_AGENT_PROVIDER_OPTIONS: VideoAgentProviderOption[] = []
 
 type ProviderCredentialDialogCopy = {
   title: string
@@ -198,7 +192,7 @@ function VideoStudioHeader({ children, projectTabId }: { children?: ReactNode; p
   const user = useAuthStore((state) => state.user)
   const [showSecretsManager, setShowSecretsManager] = useState(false)
   const [showCredentialSetup, setShowCredentialSetup] = useState(false)
-  const [providerOptions, setProviderOptions] = useState<VideoAgentProviderOption[]>(FALLBACK_VIDEO_AGENT_PROVIDER_OPTIONS)
+  const [providerOptions, setProviderOptions] = useState<VideoAgentProviderOption[]>(EMPTY_VIDEO_AGENT_PROVIDER_OPTIONS)
   // Keep the fallback reference stable. Zustand uses Object.is for selector
   // results, so allocating [] here causes useSyncExternalStore to re-render
   // forever while a project tab is still being restored.
