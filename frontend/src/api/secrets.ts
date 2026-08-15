@@ -24,7 +24,7 @@ api.interceptors.request.use((config) => {
  * workflow to one person's own subscription instead of whichever login happens
  * to be on the server.
  */
-export type WorkflowCredentialProvider = 'claude-code' | 'cursor-cli';
+export type WorkflowCredentialProvider = 'claude-code' | 'cursor-cli' | 'pi-cli';
 
 export interface WorkflowProviderCredentialStatus {
   configured: boolean;
@@ -135,6 +135,15 @@ export const secretsApi = {
 
   deleteWorkflowCursorCredential: (workspacePath: string) =>
     secretsApi.deleteWorkflowProviderCredential('cursor-cli', workspacePath),
+
+  getWorkflowPiCLICredentialStatus: (workspacePath: string) =>
+    secretsApi.getWorkflowProviderCredentialStatus('pi-cli', workspacePath),
+
+  storeWorkflowPiCLICredential: (workspacePath: string, apiKey: string) =>
+    secretsApi.storeWorkflowProviderCredential('pi-cli', workspacePath, apiKey),
+
+  deleteWorkflowPiCLICredential: (workspacePath: string) =>
+    secretsApi.deleteWorkflowProviderCredential('pi-cli', workspacePath),
 };
 
 export default secretsApi;

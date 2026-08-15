@@ -258,6 +258,95 @@ func TestWorkflowCursorCLIKeyOverridesSharedKeyOnlyWhenPresent(t *testing.T) {
 	}
 }
 
+func TestWorkflowPiCLIGeminiKeyIsUserAndWorkflowScoped(t *testing.T) {
+	store, err := chathistory.NewFilesystemStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFilesystemStore() error = %v", err)
+	}
+	api := &StreamingAPI{chatStore: store}
+	ctx := context.Background()
+	const userID = "alice"
+	const workflowA = "Workflow/video-explainer"
+	const workflowB = "Workflow/support-triage"
+	const scopedKey = "gemini_workflow_scoped_key"
+
+	encrypted := encryptProviderCredentialForTest(t, scopedKey, userID)
+	if err := store.UpsertWorkflowProviderCredential(ctx, userID, workflowA, piCLIProviderID, encrypted); err != nil {
+		t.Fatalf("UpsertWorkflowProviderCredential() error = %v", err)
+	}
+
+	keysA, err := api.workflowProviderAPIKeys(ctx, userID, workflowA, &llm.ProviderAPIKeys{})
+	if err != nil {
+		t.Fatalf("workflowProviderAPIKeys(workflowA) error = %v", err)
+	}
+	if keysA.PiProviderKeys["google"] != scopedKey {
+		t.Fatalf("workflow A Pi CLI Gemini key = %#v", keysA.PiProviderKeys)
+	}
+
+	keysB, err := api.workflowProviderAPIKeys(ctx, userID, workflowB, &llm.ProviderAPIKeys{})
+	if err != nil {
+		t.Fatalf("workflowProviderAPIKeys(workflowB) error = %v", err)
+	}
+	if _, ok := keysB.PiProviderKeys["google"]; ok {
+		t.Fatalf("workflow B received workflow A's Pi CLI Gemini key: %#v", keysB.PiProviderKeys)
+	}
+
+	keysOtherUser, err := api.workflowProviderAPIKeys(ctx, "bob", workflowA, &llm.ProviderAPIKeys{})
+	if err != nil {
+		t.Fatalf("workflowProviderAPIKeys(other user) error = %v", err)
+	}
+	if _, ok := keysOtherUser.PiProviderKeys["google"]; ok {
+		t.Fatalf("other user received Alice's Pi CLI Gemini key: %#v", keysOtherUser.PiProviderKeys)
+	}
+}
+
+// Pi CLI routes by sub-provider, so a workflow-scoped Gemini key must land in
+// PiProviderKeys["google"] specifically and must not disturb any other
+// sub-provider key (zai, minimax, ...) already present in the shared base --
+// those have nothing to do with Video Studio's Gemini-pinned Pi CLI option.
+func TestWorkflowPiCLIGeminiKeyOverridesSharedKeyOnlyWhenPresent(t *testing.T) {
+	store, err := chathistory.NewFilesystemStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFilesystemStore() error = %v", err)
+	}
+	api := &StreamingAPI{chatStore: store}
+	ctx := context.Background()
+	const userID = "alice"
+	const scopedWorkflow = "Workflow/video-explainer"
+	const plainWorkflow = "Workflow/no-scoped-key"
+	const sharedGeminiKey = "gemini_server_wide_key"
+	const sharedZAIKey = "zai_server_wide_key"
+	const scopedKey = "gemini_workflow_scoped_key"
+
+	encrypted := encryptProviderCredentialForTest(t, scopedKey, userID)
+	if err := store.UpsertWorkflowProviderCredential(ctx, userID, scopedWorkflow, piCLIProviderID, encrypted); err != nil {
+		t.Fatalf("UpsertWorkflowProviderCredential() error = %v", err)
+	}
+	base := &llm.ProviderAPIKeys{PiProviderKeys: map[string]string{"google": sharedGeminiKey, "zai": sharedZAIKey}}
+
+	scoped, err := api.workflowProviderAPIKeys(ctx, userID, scopedWorkflow, base)
+	if err != nil {
+		t.Fatalf("workflowProviderAPIKeys(scoped) error = %v", err)
+	}
+	if scoped.PiProviderKeys["google"] != scopedKey {
+		t.Fatalf("workflow key did not override the shared Gemini key: %#v", scoped.PiProviderKeys)
+	}
+	if scoped.PiProviderKeys["zai"] != sharedZAIKey {
+		t.Fatalf("an unrelated sub-provider key was disturbed: %#v", scoped.PiProviderKeys)
+	}
+
+	plain, err := api.workflowProviderAPIKeys(ctx, userID, plainWorkflow, base)
+	if err != nil {
+		t.Fatalf("workflowProviderAPIKeys(plain) error = %v", err)
+	}
+	if plain.PiProviderKeys["google"] != sharedGeminiKey {
+		t.Fatalf("a workflow without its own key lost the shared Gemini key: %#v", plain.PiProviderKeys)
+	}
+	if base.PiProviderKeys["google"] != sharedGeminiKey {
+		t.Fatal("the base key was mutated through the clone")
+	}
+}
+
 // resolveEffectiveAPIKeys is the single call site every part of this package
 // should use for a turn's effective provider keys — see its doc comment for
 // why. This test proves the two things that actually mattered when it was

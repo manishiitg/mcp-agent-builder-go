@@ -13,11 +13,19 @@ import (
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/claudeauth"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/cursorauth"
+	"github.com/manishiitg/coding-agent-loop/agent_go/internal/geminiauth"
 )
 
 const (
 	claudeCodeProviderID = "claude-code"
 	cursorCLIProviderID  = "cursor-cli"
+	// piCLIProviderID scopes a workflow-level Gemini key for Video Studio's
+	// Pi CLI option, which is pinned to google/gemini-3.7-flash -- not a
+	// general per-sub-provider Pi CLI credential store. If Video Studio ever
+	// offers a Pi CLI model routed through a different sub-provider, this
+	// needs its own scoped credential (and its own ID) rather than widening
+	// what "google" means here.
+	piCLIProviderID = "pi-cli"
 )
 
 // workflowCredentialProvider carries the handful of things that differ between
@@ -56,6 +64,17 @@ func cursorCLICredentialProvider() workflowCredentialProvider {
 		validate: validateCursorCLIAPIKey,
 		closeIdleSessions: func(api *StreamingAPI, userID, workflowPath, reason string) {
 			api.closeIdleWorkflowCursorCLISessions(userID, workflowPath, reason)
+		},
+	}
+}
+
+func piCLICredentialProvider() workflowCredentialProvider {
+	return workflowCredentialProvider{
+		id:       piCLIProviderID,
+		label:    "Pi CLI (Gemini) API key",
+		validate: validatePiCLIGeminiAPIKey,
+		closeIdleSessions: func(api *StreamingAPI, userID, workflowPath, reason string) {
+			api.closeIdleWorkflowPiCLISessions(userID, workflowPath, reason)
 		},
 	}
 }
@@ -109,6 +128,18 @@ func (api *StreamingAPI) handleStoreWorkflowCursorCLICredential(w http.ResponseW
 
 func (api *StreamingAPI) handleDeleteWorkflowCursorCLICredential(w http.ResponseWriter, r *http.Request) {
 	api.deleteWorkflowProviderCredential(w, r, cursorCLICredentialProvider())
+}
+
+func (api *StreamingAPI) handleGetWorkflowPiCLICredential(w http.ResponseWriter, r *http.Request) {
+	api.getWorkflowProviderCredential(w, r, piCLICredentialProvider())
+}
+
+func (api *StreamingAPI) handleStoreWorkflowPiCLICredential(w http.ResponseWriter, r *http.Request) {
+	api.storeWorkflowProviderCredential(w, r, piCLICredentialProvider())
+}
+
+func (api *StreamingAPI) handleDeleteWorkflowPiCLICredential(w http.ResponseWriter, r *http.Request) {
+	api.deleteWorkflowProviderCredential(w, r, piCLICredentialProvider())
 }
 
 func (api *StreamingAPI) getWorkflowProviderCredential(w http.ResponseWriter, r *http.Request, provider workflowCredentialProvider) {
@@ -206,12 +237,25 @@ func validateCursorCLIAPIKey(parent context.Context, key string) error {
 	return cursorauth.ValidateAPIKey(parent, key)
 }
 
+// validatePiCLIGeminiAPIKey checks the key directly against Google's Gemini
+// API rather than through the pi CLI binary: Video Studio's Pi CLI option is
+// pinned to google/gemini-3.7-flash, and this scoped credential is exactly
+// that Gemini key, so validating it does not need pi (or tmux) installed on
+// the backend the way the general Pi CLI runtime check does.
+func validatePiCLIGeminiAPIKey(parent context.Context, key string) error {
+	return geminiauth.ValidateAPIKey(parent, key)
+}
+
 func (api *StreamingAPI) loadWorkflowClaudeCodeOAuthToken(ctx context.Context, userID, workflowPath string) (*string, error) {
 	return api.loadWorkflowProviderSecret(ctx, userID, workflowPath, claudeCodeProviderID, "Claude Code")
 }
 
 func (api *StreamingAPI) loadWorkflowCursorCLIAPIKey(ctx context.Context, userID, workflowPath string) (*string, error) {
 	return api.loadWorkflowProviderSecret(ctx, userID, workflowPath, cursorCLIProviderID, "Cursor")
+}
+
+func (api *StreamingAPI) loadWorkflowPiCLIGeminiAPIKey(ctx context.Context, userID, workflowPath string) (*string, error) {
+	return api.loadWorkflowProviderSecret(ctx, userID, workflowPath, piCLIProviderID, "Pi CLI (Gemini)")
 }
 
 func (api *StreamingAPI) loadWorkflowProviderSecret(ctx context.Context, userID, workflowPath, providerID, label string) (*string, error) {
@@ -265,6 +309,26 @@ func (api *StreamingAPI) workflowProviderAPIKeys(ctx context.Context, userID, wo
 	}
 	if cursorKey != nil {
 		keys.CursorCLI = cursorKey
+	}
+
+	// Pi CLI routes by sub-provider (see PiProviderKeys), but Video Studio's
+	// Pi CLI option is pinned to google/gemini-3.7-flash, so the only key a
+	// project-scoped override can mean here is the "google" entry. Fail
+	// closed on that one entry only, not the whole map -- an unrelated
+	// shared zai/minimax/etc. key has nothing to do with this lookup and
+	// must not be dropped because it failed.
+	piGeminiKey, piErr := api.loadWorkflowPiCLIGeminiAPIKey(ctx, userID, workflowPath)
+	if piErr != nil {
+		if keys.PiProviderKeys != nil {
+			delete(keys.PiProviderKeys, "google")
+		}
+		return keys, piErr
+	}
+	if piGeminiKey != nil {
+		if keys.PiProviderKeys == nil {
+			keys.PiProviderKeys = make(map[string]string, 1)
+		}
+		keys.PiProviderKeys["google"] = *piGeminiKey
 	}
 	return keys, nil
 }
@@ -357,6 +421,25 @@ func (api *StreamingAPI) closeIdleWorkflowCursorCLISessions(userID, workflowPath
 				continue
 			}
 			llmproviders.CloseCursorCLIInteractiveSessionByTmux(snapshot.TmuxSession, reason)
+			api.terminalStore.MarkProcessClosed(snapshot.TerminalID, reason)
+		}
+	}
+}
+
+// closeIdleWorkflowPiCLISessions is the Pi CLI counterpart. Video Studio
+// drives Pi CLI over the structured transport like Cursor, so this mainly
+// guards the interactive tmux path for any other workflow-scoped caller.
+func (api *StreamingAPI) closeIdleWorkflowPiCLISessions(userID, workflowPath, reason string) {
+	for _, sessionID := range api.workflowSessionIDs(userID, workflowPath) {
+		llmproviders.ClosePiCLIInteractiveSessionForOwner(sessionID, reason)
+		if api.terminalStore == nil {
+			continue
+		}
+		for _, snapshot := range api.terminalStore.ListRaw(sessionID) {
+			if !strings.HasPrefix(strings.TrimSpace(snapshot.TmuxSession), "mlp-pi-cli-int") {
+				continue
+			}
+			llmproviders.ClosePiCLIInteractiveSessionByTmux(snapshot.TmuxSession, reason)
 			api.terminalStore.MarkProcessClosed(snapshot.TerminalID, reason)
 		}
 	}

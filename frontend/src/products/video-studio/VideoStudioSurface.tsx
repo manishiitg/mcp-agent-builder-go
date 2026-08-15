@@ -87,12 +87,12 @@ type ProviderCredentialDialogCopy = {
 
 /**
  * Per-project credential entry for a coding-CLI provider, scoped to this
- * project's workspace path. Claude Code and Cursor share this dialog because
- * both need the same guarantee: without a scoped credential the project falls
- * back to whichever login is on the server, silently billing that account.
- * The backend already treats every provider identically
- * (workflowProviderAPIKeys in workflow_provider_auth.go); this keeps the
- * frontend the same way instead of growing one dialog per provider.
+ * project's workspace path. Claude Code, Cursor, and Pi CLI share this dialog
+ * because all three need the same guarantee: without a scoped credential the
+ * project falls back to whichever login/key is on the server, silently
+ * billing that account. The backend already treats every provider
+ * identically (workflowProviderAPIKeys in workflow_provider_auth.go); this
+ * keeps the frontend the same way instead of growing one dialog per provider.
  */
 function ProviderCredentialDialog({ provider, copy, workspacePath, onClose }: { provider: WorkflowCredentialProvider; copy: ProviderCredentialDialogCopy; workspacePath: string; onClose: () => void }) {
   const [token, setToken] = useState('')
@@ -186,6 +186,15 @@ const PROVIDER_CREDENTIAL_COPY: Partial<Record<WorkflowCredentialProvider, Provi
     replacePlaceholder: 'Paste a replacement API key',
     noun: 'API key',
   },
+  'pi-cli': {
+    title: 'Pi CLI (Gemini) API key',
+    subtitle: 'Optional for this project. Without one, Video Studio uses whichever Gemini key is configured on the server.',
+    hint: <>Paste a Gemini API key from <code className="rounded bg-white px-1 py-0.5 font-mono text-[11px] dark:bg-slate-800">aistudio.google.com</code>. It is encrypted, private to this project, and never shown again.</>,
+    fallbackLabel: 'Using the server-configured Gemini key',
+    inputPlaceholder: 'Paste Gemini API key',
+    replacePlaceholder: 'Paste a replacement API key',
+    noun: 'API key',
+  },
 }
 
 function VideoStudioHeader({ children, projectTabId }: { children?: ReactNode; projectTabId?: string | null }) {
@@ -212,8 +221,8 @@ function VideoStudioHeader({ children, projectTabId }: { children?: ReactNode; p
   }
   const selectedProviderID = providerOptions.find((option) => option.provider === projectLLMConfig?.provider && option.modelId === projectLLMConfig?.model_id)?.id ?? providerOptions.find((option) => option.isDefault)?.id ?? providerOptions[0]?.id ?? ''
   const selectedProvider = providerOptions.find((option) => option.id === selectedProviderID)
-  // Only providers with a per-project credential (Claude Code, Cursor) show the
-  // key button; the rest have no scoped-credential story yet.
+  // Only providers with a per-project credential (Claude Code, Cursor, Pi
+  // CLI) show the key button; Codex has no scoped-credential story yet.
   const selectedCredentialCopy = selectedProvider ? PROVIDER_CREDENTIAL_COPY[selectedProvider.provider as WorkflowCredentialProvider] : undefined
   const updateProvider = (providerID: string) => {
     if (!projectTabId) return
