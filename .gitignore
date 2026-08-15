@@ -37,6 +37,14 @@ bin/*
 !agent_go/cmd/server/secrets_routes.go
 !agent_go/pkg/orchestrator/**/secrets_*.go
 !agent_go/cmd/server/guidance/templates/system/secret-management.md
+# The *credential* rule above is meant for credential FILES, but it also
+# swallows source that merely has "Credential" in its name. These two are
+# ordinary UI source (a form field and a masking helper) holding no secret
+# value, and they were silently never committed: the build passed locally
+# where the untracked files exist and failed in CI where they don't. Same
+# class of problem the secret* negations above already had to solve.
+!frontend/src/components/WorkflowProviderCredentialField.tsx
+!frontend/src/utils/maskCredentialPreview.ts
 
 # Binary files
 *.exe
