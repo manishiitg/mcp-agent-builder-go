@@ -837,7 +837,12 @@ function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: 
             </div>
             <button type="button" onClick={() => void refreshProject()} disabled={refreshing} aria-label="Refresh project panel" className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 hover:bg-slate-200 hover:text-slate-700 disabled:opacity-50 dark:hover:bg-slate-800 dark:hover:text-slate-200"><RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} /></button>
           </div>
-          {loadingProject ? <div className="grid h-full place-items-center text-xs text-slate-400"><Loader2 className="h-5 w-5 animate-spin" /></div> : panel === 'production' ? <ProductionPanel project={project} videos={videos} characters={characters} documents={documents} /> : panel === 'files' ? <FilesPanel project={project} /> : <WorkflowPanel project={project} />}
+          {/* Production is the fallback, not workflow: a panel value this build
+              no longer knows -- a renamed tab surviving a hot reload, or a
+              persisted preference from an older version -- should land on the
+              work itself rather than silently showing the workflow canvas where
+              the user's video used to be. */}
+          {loadingProject ? <div className="grid h-full place-items-center text-xs text-slate-400"><Loader2 className="h-5 w-5 animate-spin" /></div> : panel === 'files' ? <FilesPanel project={project} /> : panel === 'workflow' ? <WorkflowPanel project={project} /> : <ProductionPanel project={project} videos={videos} characters={characters} documents={documents} />}
         </aside>
       </div>
       {showVideoPlayer && videos.length > 0 ? (
