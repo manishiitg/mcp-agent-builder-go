@@ -64,6 +64,10 @@ export interface CommandDefinition {
   requiredWorkshopMode?: WorkshopMode | WorkshopMode[]
   validate?: (ctx: CommandContext) => string | null
   hidden?: boolean
-  source: 'builtin' | 'user'
+  // 'product' commands ship with the active product (declared in its
+  // product.yaml) rather than being hardcoded platform builtins or the
+  // user's own markdown -- they are not user-editable, which the command
+  // dialog keys off when deciding whether to offer edit/delete.
+  source: 'builtin' | 'user' | 'product'
   execute: (ctx: CommandContext) => void
 }

@@ -29,7 +29,20 @@ export type VideoAgentProviderOption = {
   isDefault?: boolean
 }
 
+export type VideoProductCommand = {
+  name: string
+  description: string
+  icon: string
+  prompt: string
+}
+
 type AgentProfileResponse = {
+  commands?: Array<{
+    name?: unknown
+    description?: unknown
+    icon?: unknown
+    prompt?: unknown
+  }>
   runtime?: {
     provider_options?: Array<{
       id?: unknown
@@ -39,6 +52,32 @@ type AgentProfileResponse = {
       default?: unknown
     }>
   }
+}
+
+// Slash commands the product ships with itself, declared in its product.yaml.
+// A command with no prompt is dropped rather than offered: it would appear in
+// the menu and then submit nothing, which reads as the product being broken.
+export function parseProductCommands(profile: { commands?: Array<Record<string, unknown>> }): VideoProductCommand[] {
+  return (profile.commands ?? []).flatMap((command) => {
+    const name = asString(command.name)
+    const prompt = asString(command.prompt)
+    if (!name || !prompt) return []
+    return [{
+      name,
+      description: asString(command.description),
+      icon: asString(command.icon) || 'terminal',
+      prompt,
+    }]
+  })
+}
+
+export async function loadVideoProductCommands(): Promise<VideoProductCommand[]> {
+  const token = getAuthToken()
+  const response = await fetch(`${getApiBaseUrl()}/api/agent-profiles/${encodeURIComponent(VIDEO_PROFILE_ID)}?version=${VIDEO_PROFILE_VERSION}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  })
+  if (!response.ok) throw new Error(`Unable to load Video Studio commands (${response.status})`)
+  return parseProductCommands(await response.json() as AgentProfileResponse)
 }
 
 // The profile endpoint returns the server's YAML-loaded profile. This keeps

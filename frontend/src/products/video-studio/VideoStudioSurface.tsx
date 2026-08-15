@@ -38,6 +38,8 @@ import { PresentationRenderer, type PresentationRendererProps } from '../../plat
 import { registerPresentationRenderer } from '../../platform/presentations/presentationRegistry'
 import { usePresentationEvents } from '../../platform/presentations/usePresentationEvents'
 import { agentApi } from '../../services/api'
+import { setProductCommands } from '../../commands/registry'
+import { toProductCommandDefinitions } from './productCommands'
 import { useAppStore } from '../../stores/useAppStore'
 import { useAuthStore } from '../../stores/useAuthStore'
 import { useChatStore, waitForChatStoreHydration } from '../../stores/useChatStore'
@@ -50,6 +52,7 @@ import {
   createVideoProject,
   loadVideoAgentProviderOptions,
   loadVideoPresentations,
+  loadVideoProductCommands,
   loadCharacterPresentations,
   loadDocumentPresentations,
   loadVideoProjects,
@@ -861,6 +864,17 @@ function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: 
 }
 
 export function VideoStudioSurface() {
+  // Product slash commands come from the same profile the provider options do,
+  // and are cleared on unmount so leaving Video Studio does not leave its
+  // commands offered in another product's chat.
+  useEffect(() => {
+    let cancelled = false
+    void loadVideoProductCommands()
+      .then((commands) => { if (!cancelled) setProductCommands(toProductCommandDefinitions(commands)) })
+      .catch(() => { if (!cancelled) setProductCommands([]) })
+    return () => { cancelled = true; setProductCommands([]) }
+  }, [])
+
   const lastProjectId = useProductSurfaceStore((state) => state.lastVideoProjectId)
   const setLastProjectId = useProductSurfaceStore((state) => state.setLastVideoProjectId)
   const [projects, setProjects] = useState<VideoProject[]>([])

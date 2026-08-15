@@ -3,6 +3,7 @@ import type { CommandDefinition, WorkshopMode } from './types'
 import { builtinCommands } from './builtin-commands'
 
 let userCommands: CommandDefinition[] = []
+let productCommands: CommandDefinition[] = []
 
 function matchesMode(cmd: CommandDefinition, mode?: ModeCategory, workshopMode?: WorkshopMode): boolean {
   if (cmd.hidden) return false
@@ -31,17 +32,25 @@ export function setUserCommands(cmds: CommandDefinition[]) {
   userCommands = cmds
 }
 
+// Registered when a product's profile loads. Cleared by passing an empty list
+// so switching products cannot leave the previous product's commands in the
+// menu, offering flows the current agent has no skills for.
+export function setProductCommands(cmds: CommandDefinition[]) {
+  productCommands = cmds
+}
+
 export function getCommands(mode?: ModeCategory, workshopMode?: WorkshopMode): CommandDefinition[] {
-  return [...builtinCommands, ...userCommands].filter(cmd => matchesMode(cmd, mode, workshopMode))
+  return [...productCommands, ...builtinCommands, ...userCommands].filter(cmd => matchesMode(cmd, mode, workshopMode))
 }
 
 export function findCommand(name: string, mode?: ModeCategory): CommandDefinition | undefined {
-  return [...builtinCommands, ...userCommands].find(cmd =>
+  return [...productCommands, ...builtinCommands, ...userCommands].find(cmd =>
     cmd.command === name && matchesMode(cmd, mode)
   )
 }
 
 export function findCommandAnyMode(name: string): CommandDefinition | undefined {
-  return builtinCommands.find(c => c.command === name)
+  return productCommands.find(c => c.command === name)
+    ?? builtinCommands.find(c => c.command === name)
     ?? userCommands.find(c => c.command === name)
 }

@@ -12,7 +12,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-//go:embed product.yaml prompts/system-prompt.md
+//go:embed product.yaml prompts/system-prompt.md commands/*.md
 var productConfigFiles embed.FS
 
 // ProductManifest is the declarative, reusable product contract. It references
@@ -71,6 +71,28 @@ func VideoStudioManifest() (ProductManifest, error) {
 		}
 		if err := productdeps.Validate(productManifest.Dependencies); err != nil {
 			productManifestErr = fmt.Errorf("invalid Video Studio dependencies: %w", err)
+			return
+		}
+		// Slash-command prompts live in their own files so they read as prompts
+		// rather than as manifest data. Resolve them once, here, so everything
+		// downstream -- including the profile the frontend fetches -- sees a
+		// command that already carries its text. A declared command whose file
+		// is missing is a broken product, not a command to quietly drop.
+		for i, command := range productManifest.Profile.Commands {
+			if strings.TrimSpace(command.File) == "" {
+				productManifestErr = fmt.Errorf("Video Studio command %q declares no file", command.Name)
+				return
+			}
+			prompt, err := productConfigFiles.ReadFile(command.File)
+			if err != nil {
+				productManifestErr = fmt.Errorf("read Video Studio command %q: %w", command.Name, err)
+				return
+			}
+			if len(bytes.TrimSpace(prompt)) == 0 {
+				productManifestErr = fmt.Errorf("Video Studio command %q has an empty prompt", command.Name)
+				return
+			}
+			productManifest.Profile.Commands[i].Prompt = string(bytes.TrimSpace(prompt))
 		}
 	})
 	return productManifest, productManifestErr

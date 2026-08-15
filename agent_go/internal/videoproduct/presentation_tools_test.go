@@ -2,6 +2,7 @@ package videoproduct
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -115,6 +116,66 @@ func TestPresentationToolsRejectUnusableInput(t *testing.T) {
 		if !strings.Contains(result, "project-relative .md path") {
 			t.Fatalf("%s: got %q, want the .md validation message", tc.why, result)
 		}
+	}
+}
+
+// Slash commands are declared in product.yaml with their prompts in separate
+// files, so two things can silently break: a declared command whose file went
+// missing, and the internal file path leaking to the browser. The manifest
+// loader treats a missing or empty prompt as a broken product rather than
+// dropping the command, because a command that appears in the menu and submits
+// nothing is worse than one that was never offered.
+func TestProductCommandsCarryTheirPromptsAndHideTheirPaths(t *testing.T) {
+	manifest, err := VideoStudioManifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.Profile.Commands) == 0 {
+		t.Fatal("the product declares no slash commands")
+	}
+
+	seen := map[string]bool{}
+	for _, command := range manifest.Profile.Commands {
+		if seen[command.Name] {
+			t.Fatalf("duplicate command name %q; the menu would show two identical entries", command.Name)
+		}
+		seen[command.Name] = true
+		if strings.TrimSpace(command.Description) == "" {
+			t.Fatalf("command %q has no description, so the menu cannot say what it does", command.Name)
+		}
+		if strings.TrimSpace(command.Prompt) == "" {
+			t.Fatalf("command %q resolved to an empty prompt; it would submit nothing", command.Name)
+		}
+	}
+
+	// The command that starts a production is the one that has to hold the
+	// checkpoints, since a user reaching for it is asking to begin spending.
+	var production string
+	for _, command := range manifest.Profile.Commands {
+		if command.Name == "production" {
+			production = command.Prompt
+		}
+	}
+	if production == "" {
+		t.Fatal("no /production command; the interview has no entry point")
+	}
+	for _, want := range []string{"ceiling", "recur", "wait"} {
+		if !strings.Contains(strings.ToLower(production), want) {
+			t.Fatalf("/production no longer asks about %q before spending", want)
+		}
+	}
+
+	// File is the product's own layout detail. Serialising it would ship an
+	// internal path to every browser that loads the profile.
+	encoded, err := json.Marshal(manifest.Profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "commands/production.md") {
+		t.Fatal("the command's source file path is serialized to the client")
+	}
+	if !strings.Contains(string(encoded), `"prompt"`) {
+		t.Fatal("commands serialize without their prompt, so the client has nothing to submit")
 	}
 }
 

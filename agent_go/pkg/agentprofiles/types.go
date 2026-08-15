@@ -113,17 +113,38 @@ type PresentationBinding struct {
 	Kind string `json:"kind" yaml:"kind"`
 }
 
+// CommandBinding is a slash command a product ships with itself. The platform
+// already has two command sources -- hardcoded builtins and per-user markdown
+// under commands/custom/ -- but neither lets a product carry its own, so a
+// product's opinionated flows had no way to reach the command menu.
+//
+// Prompt is what the command submits on the user's behalf, and follows the
+// same contract as a user command: `{{context}}` is replaced with whatever the
+// user typed before the slash, or removed when they typed nothing. Products
+// keep the text in their own files and fill this in at load time, so a long
+// prompt does not have to live inline in the product manifest.
+type CommandBinding struct {
+	Name        string   `json:"name" yaml:"name"`
+	Description string   `json:"description" yaml:"description"`
+	Icon        string   `json:"icon,omitempty" yaml:"icon,omitempty"`
+	// File is the product-relative path holding the prompt. It is resolved by
+	// the product at load time and never sent to a client.
+	File   string `json:"-" yaml:"file,omitempty"`
+	Prompt string `json:"prompt" yaml:"prompt,omitempty"`
+}
+
 type Profile struct {
-	ID                   string        `json:"id" yaml:"id"`
-	Name                 string        `json:"name" yaml:"name"`
-	Version              int           `json:"version" yaml:"version"`
-	SystemPromptTemplate string        `json:"system_prompt" yaml:"system_prompt"`
-	Skills               []string      `json:"skills,omitempty" yaml:"skills,omitempty"`
-	Tools                []ToolBinding `json:"tools,omitempty" yaml:"tools,omitempty"`
-	ToolPolicy           ToolPolicy    `json:"tool_policy,omitempty" yaml:"tool_policy,omitempty"`
-	Runtime              RuntimePolicy `json:"runtime" yaml:"runtime"`
-	BuiltIn              bool          `json:"built_in" yaml:"built_in"`
-	OwnerID              string        `json:"owner_id,omitempty" yaml:"owner_id,omitempty"`
+	ID                   string           `json:"id" yaml:"id"`
+	Name                 string           `json:"name" yaml:"name"`
+	Version              int              `json:"version" yaml:"version"`
+	SystemPromptTemplate string           `json:"system_prompt" yaml:"system_prompt"`
+	Skills               []string         `json:"skills,omitempty" yaml:"skills,omitempty"`
+	Tools                []ToolBinding    `json:"tools,omitempty" yaml:"tools,omitempty"`
+	Commands             []CommandBinding `json:"commands,omitempty" yaml:"commands,omitempty"`
+	ToolPolicy           ToolPolicy       `json:"tool_policy,omitempty" yaml:"tool_policy,omitempty"`
+	Runtime              RuntimePolicy    `json:"runtime" yaml:"runtime"`
+	BuiltIn              bool             `json:"built_in" yaml:"built_in"`
+	OwnerID              string           `json:"owner_id,omitempty" yaml:"owner_id,omitempty"`
 }
 
 // ToolPolicy controls generic AgentWorks capabilities a product receives.

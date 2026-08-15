@@ -173,6 +173,7 @@ func (r *Registry) BuildTool(binding ToolBinding, runtime ToolRuntimeContext) (T
 func cloneProfile(profile Profile) Profile {
 	cloned := profile
 	cloned.Skills = append([]string(nil), profile.Skills...)
+	cloned.Commands = append([]CommandBinding(nil), profile.Commands...)
 	cloned.Tools = make([]ToolBinding, len(profile.Tools))
 	for i, binding := range profile.Tools {
 		cloned.Tools[i] = binding
