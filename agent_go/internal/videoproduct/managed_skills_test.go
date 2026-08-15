@@ -160,3 +160,29 @@ func TestGenerationSkillsRegisterAndStayOutOfTheInfographicPipeline(t *testing.T
 		}
 	}
 }
+
+// video-editing is shared between both routes (infographic and long-form),
+// so its content changes for one route's sake if not careful. This pins the
+// AI-clip-stitching addition landed and stayed cross-referenced from the
+// skill that surfaces the underlying problem (a generated clip's duration
+// rarely matches the storyboard beat exactly).
+func TestVideoEditingCoversStitchingIndependentlyGeneratedClips(t *testing.T) {
+	if err := RegisterProductSkills(); err != nil {
+		t.Fatalf("RegisterProductSkills: %v", err)
+	}
+	attached := skills.LoadAttachable("", []string{"video-editing"})
+	if len(attached) != 1 {
+		t.Fatalf("LoadAttachable(video-editing) = %v, want exactly one skill", attached)
+	}
+	content := attached[0].Content
+	for _, want := range []string{"concat demuxer", "Duration mismatch is normal", "color mismatch"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("video-editing skill lost required content %q", want)
+		}
+	}
+
+	modelSelection := skills.LoadAttachable("", []string{"video-model-selection"})
+	if len(modelSelection) != 1 || !strings.Contains(modelSelection[0].Content, "video-editing") {
+		t.Fatal("video-model-selection does not point to video-editing for stitching mismatched clip durations")
+	}
+}

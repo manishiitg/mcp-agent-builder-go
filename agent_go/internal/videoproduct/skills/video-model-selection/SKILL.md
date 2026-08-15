@@ -62,7 +62,10 @@ model explorer, Google's Gemini API model reference), not from memory:
   built from several short clips needs models whose per-call duration limit
   is compatible with the planned cut count -- do the arithmetic explicitly
   (shot count x per-shot duration) rather than assuming any model covers an
-  arbitrary length.
+  arbitrary length. A generated clip rarely comes out at exactly the beat's
+  needed length -- see `video-editing`'s "Stitching independently
+  AI-generated clips" for how to trim, normalize, and concatenate multiple
+  generated clips into the final assembly.
 - **Subject/character consistency across shots**: if the same character,
   product, or object must recognizably recur across multiple generated
   shots, check whether the model supports reference-image conditioning or a
