@@ -132,6 +132,37 @@ func TestGenerationPipelinesUseGenerationSkillsOnly(t *testing.T) {
 	}
 }
 
+// A user with only one provider's key must still be able to finish a whole
+// production. Narration is where that nearly broke: the stage used to attach
+// only fal-ai and tell the agent to use it for TTS, which left a Google-only
+// user stuck halfway through a long-form run with a script and no voiceover.
+// Both providers generate speech, so both are attached and the prompt defers
+// to whichever the brief committed to.
+func TestNarrationIsNotLockedToOneProvider(t *testing.T) {
+	var narration PipelineStage
+	for _, stage := range longformPipeline.Stages {
+		if stage.ID == "longform-narration" {
+			narration = stage
+		}
+	}
+	if narration.ID == "" {
+		t.Fatal("longform-narration stage is missing")
+	}
+
+	attached := map[string]bool{}
+	for _, skill := range narration.Skills {
+		attached[skill] = true
+	}
+	for _, provider := range []string{"fal-ai", "google-ai"} {
+		if !attached[provider] {
+			t.Fatalf("longform-narration does not attach %s, so an agent with only that provider's key cannot generate narration: %v", provider, narration.Skills)
+		}
+	}
+	if strings.Contains(narration.Description, "Use fal-ai for TTS") {
+		t.Fatal("longform-narration hard-defaults to fal-ai again, which blocks a Google-only production")
+	}
+}
+
 // Routing is what makes the new pipelines reachable at all; without a route
 // the stages sit in plan.json and never execute. The default deliberately
 // stays on the pipeline that cannot spend money.

@@ -1,14 +1,16 @@
 ---
 name: google-ai
-description: Generate AI video and image clips via Google's own Gemini API (Node.js client) for long-form narrative video productions -- Gemini image models (publicly nicknamed "Nano Banana") and Veo video models. Use instead of fal-ai specifically when the brief calls for a Google-native model rather than a third-party model fal.ai hosts. Not for short product-led explainers -- those stay on HyperFrames typography/composition (see hyperframes, product-infographic).
+description: Generate AI video, image, and narration (text-to-speech) via Google's own Gemini API (Node.js client) -- Gemini image models (publicly nicknamed "Nano Banana"), Veo video models, and Gemini TTS. Use instead of fal-ai when the brief calls for a Google-native model, or when Google is the only provider configured -- this skill can carry a whole production except its music bed. Read alongside video-model-selection, which owns which model to pick.
 ---
 
 # Google Gemini generation
 
-Google's own image and video models (Gemini image generation, publicly
-nicknamed "Nano Banana"; Veo for video) are reached directly through Google's
-Gemini API, not through fal.ai. Use this skill instead of `fal-ai` when the
-brief specifically calls for a Google-native model. The two skills share the
+Google's own image, video, and speech models (Gemini image generation,
+publicly nicknamed "Nano Banana"; Veo for video; Gemini TTS for narration)
+are reached directly through Google's Gemini API, not through fal.ai. Use
+this skill instead of `fal-ai` when the brief specifically calls for a
+Google-native model, or when Google is the only provider configured -- it
+covers everything a production needs except a music bed. The two skills share the
 same operational discipline (never invent a model ID, cost awareness, output
 handling) -- read `fal-ai`'s equivalent sections too if this is the first
 generation skill you're reading this session, since the rules are stated
@@ -102,6 +104,56 @@ const response = await ai.models.generateContent({
 // reference -- this differs between image models and Veo's video models,
 // and moves independently of this skill.
 ```
+
+## Generating narration (text-to-speech)
+
+Gemini generates speech through the same client, which is what lets a
+production run entirely on Google without a fal.ai key. Two things about
+the output differ from every other call in this skill and both will produce
+a broken file if missed:
+
+- **The audio comes back as raw PCM, not a playable file.** It is base64
+  16-bit PCM at 24 kHz, mono. Writing those bytes to `.wav` unchanged
+  produces a file nothing will play -- wrap it in a WAV header first (or
+  convert with ffmpeg, `-f s16le -ar 24000 -ac 1`). Confirm the returned
+  sample rate rather than assuming, since it is stated per model.
+- **Quality drifts on long passages.** Google's own guidance is to split
+  anything beyond a few minutes into chunks. This matches what
+  `video-editing` already requires for a different reason -- narration is
+  generated per beat or per chapter so one bad beat can be regenerated
+  without re-timing everything after it -- so generate per segment and
+  measure each with `ffprobe`, never as one long pass.
+
+```js
+const response = await ai.models.generateContent({
+  model: "<resolved-tts-model-id>",
+  contents: [{ parts: [{ text: "<the exact narration line>" }] }],
+  config: {
+    responseModalities: ["AUDIO"],
+    speechConfig: {
+      voiceConfig: { prebuiltVoiceConfig: { voiceName: "<voice>" } },
+    },
+  },
+});
+// base64 PCM -- wrap as WAV before writing, per above.
+const pcm = response.candidates[0].content.parts[0].inlineData.data;
+```
+
+Confirm the model id, the voice list, the exact response path, and whether
+your SDK version prefers this or a newer speech endpoint against Google's
+own current speech-generation reference before relying on it -- this
+surface is in preview and moves faster than the rest of the API. Keep one
+voice for the whole production unless the script genuinely calls for more
+than one speaker; multi-speaker output is supported but capped at two.
+
+## Music is not covered here
+
+Google's API surface in this skill covers video, image, and speech -- not a
+music bed. A production that needs one and has no fal.ai key should use an
+uploaded or licensed track (see `video-editing` for the levels to mix it
+at), or run without music rather than substituting something whose licence
+is unclear. Say which of those is happening rather than quietly shipping a
+silent mix the brief did not ask for.
 
 ## Sending a local file as input
 

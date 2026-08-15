@@ -234,6 +234,14 @@ func TestGenerationSkillsCarryTheMechanicsTheirGuidanceAssumes(t *testing.T) {
 			t.Fatalf("google-ai no longer shows how to send a local reference image (missing %q)", want)
 		}
 	}
+	// Speech is what lets Google alone carry a narrated production. The PCM
+	// warning earns its place: the bytes come back as raw samples, and writing
+	// them straight to .wav yields a file nothing plays.
+	for _, want := range []string{"responseModalities", "PCM", "speechConfig"} {
+		if !strings.Contains(googleAI, want) {
+			t.Fatalf("google-ai no longer covers text-to-speech (missing %q), which a Google-only production needs for narration", want)
+		}
+	}
 
 	editing := loadOne("video-editing")
 	for _, want := range []string{"Narration drives the timeline", "ffprobe", "video-storytelling"} {

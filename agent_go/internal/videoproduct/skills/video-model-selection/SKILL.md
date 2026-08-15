@@ -153,6 +153,14 @@ extend this list from memory in a later session; re-check instead.
   option, `gemini-omni-flash-preview`, was reported rolling out with native
   video generation and conversational editing from text/image/video input,
   priced comparably to Veo 3.1 Fast.
+- **Narration/TTS, direct via Google's Gemini API**: Gemini TTS, in preview
+  at the time of writing under ids of the shape
+  `gemini-3.1-flash-tts-preview` and `gemini-2.5-flash-preview-tts` /
+  `gemini-2.5-pro-preview-tts`. Output is raw PCM needing WAV wrapping, and
+  multi-speaker is capped at two -- see `google-ai` for the mechanics. This
+  matters for provider routing, not just capability: it means Google alone
+  can carry a narrated production end to end, so a missing fal.ai key is
+  not a blocker for anything except a generated music bed.
 
 One real overlap worth knowing: Veo 3.1 is reachable through both fal.ai
 (hosted) and Google's own API (direct). Where a model is available through
@@ -198,7 +206,15 @@ shifted with newer versions):
   Runway, Seedance, Hunyuan, and similar) that fal.ai hosts, or when you want
   one aggregator surface across many vendors' models under one key.
 - Use `google-ai` when the brief specifically calls for a Google-native
-  model -- Gemini image generation or Veo -- rather than a third-party one.
+  model -- Gemini image generation, Veo, or Gemini TTS -- rather than a
+  third-party one.
+- **Which credentials actually exist is part of this decision.** Confirm
+  which provider keys are configured before planning a production around
+  one: either provider alone covers video, image, and narration, so a
+  single key is enough for a complete piece. Only a generated music bed is
+  fal.ai-only (see `google-ai`'s note on music). Plan within the keys
+  available, or say plainly which key is missing and what it would add --
+  do not design a production around a provider the user cannot call.
 - The same production can legitimately use both: e.g. Google's model for a
   product shot that needs Gemini's specific strengths, fal.ai for a stylized
   B-roll shot from a different vendor's model. Record which model produced
