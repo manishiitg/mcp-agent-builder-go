@@ -13,7 +13,7 @@ interface SecretsManagerModalProps {
 const isValidName = (name: string) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name);
 
 export default function SecretsManagerModal({ onClose }: SecretsManagerModalProps) {
-  const { secrets, addSecret, updateSecret, removeSecret, globalSecrets, fetchGlobalSecrets, storedUserSecrets, botEnabledNames, fetchBotSecrets, toggleBotAccess } = useSecretsStore();
+  const { secrets, addSecret, updateSecret, removeSecret, globalSecrets, fetchGlobalSecrets, storedUserSecrets, botEnabledNames, fetchBotSecrets, toggleBotAccess, lastError, clearLastError } = useSecretsStore();
 
   // Secrets the server holds that this browser has no local record of.
   const serverOnly = serverOnlySecretNames(storedUserSecrets, secrets);
@@ -382,6 +382,14 @@ export default function SecretsManagerModal({ onClose }: SecretsManagerModalProp
                     </div>
                   ))
                 )}
+                          {lastError ? (
+                  <div role="alert" data-testid="secrets-save-error" className="rounded-md border border-red-300 bg-red-50 p-2.5 text-xs text-red-700 dark:border-red-800 dark:bg-red-950/40 dark:text-red-300">
+                    <div className="flex items-start gap-2">
+                      <span className="flex-1">{lastError}</span>
+                      <button type="button" onClick={clearLastError} className="shrink-0 underline">Dismiss</button>
+                    </div>
+                  </div>
+                ) : null}
                 {serverOnly.map((name) => (
                   <div
                     key={`server:${name}`}

@@ -78,7 +78,10 @@ export const secretsApi = {
     return response.data;
   },
 
-  listStoredSecrets: async (): Promise<{ name: string }[]> => {
+  // Returns the caller's own secrets complete with their encrypted values, so
+  // the client never needs a parallel copy of them. Decryption still happens
+  // server-side through /api/secrets/decrypt.
+  listStoredSecrets: async (): Promise<{ id?: string; name: string; encrypted_value?: string }[]> => {
     const response = await api.get('/api/secrets/stored');
     return response.data;
   },

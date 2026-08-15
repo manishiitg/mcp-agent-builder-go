@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { secretsApi } from '../api/secrets'
+import { secretsStateFromServer } from '../components/secrets/secretsManagerUtils'
 
 export interface StoredSecret {
   id: string
@@ -30,6 +31,10 @@ interface SecretsState {
   // null = all global secrets selected (default), string[] = only these names selected
   selectedGlobalSecretNames: string[] | null
   botEnabledNames: Set<string>
+  // Surfaced by the manager so a rejected save is visible; a credential that
+  // silently failed to save is worse than one that visibly did.
+  lastError: string | null
+  clearLastError: () => void
   addSecret: (secret: Omit<StoredSecret, 'id' | 'createdAt' | 'updatedAt'>) => StoredSecret
   updateSecret: (id: string, updates: Partial<Pick<StoredSecret, 'name' | 'encryptedValue'>>) => void
   removeSecret: (id: string) => void
@@ -45,6 +50,7 @@ interface SecretsState {
   toggleBotAccess: (id: string) => Promise<void>
 }
 
+
 export const useSecretsStore = create<SecretsState>()(
   persist(
     (set, get) => ({
@@ -54,6 +60,9 @@ export const useSecretsStore = create<SecretsState>()(
       workflowSecretsByPath: {},
       selectedGlobalSecretNames: null,
       botEnabledNames: new Set<string>(),
+      lastError: null,
+
+      clearLastError: () => set({ lastError: null }),
 
       addSecret: (secret) => {
         const now = Date.now()
@@ -71,8 +80,17 @@ export const useSecretsStore = create<SecretsState>()(
             : [...state.storedUserSecrets, { name: secret.name }].sort((a, b) => a.name.localeCompare(b.name)),
           botEnabledNames: new Set([...state.botEnabledNames, secret.name]),
         }))
-        // Fire-and-forget sync to server for bot session access
-        secretsApi.storeSecret(secret.name, secret.encryptedValue).catch(() => {})
+        // The server is where this actually lives. A failed write used to be
+        // swallowed, leaving the secret listed in the UI while no agent ever
+        // received it -- the most confusing possible outcome for a credential.
+        // Roll the optimistic entry back and surface it instead.
+        secretsApi.storeSecret(secret.name, secret.encryptedValue).catch((error) => {
+          set((state) => ({
+            secrets: state.secrets.filter((s) => s.id !== newSecret.id),
+            storedUserSecrets: state.storedUserSecrets.filter((s) => s.name !== secret.name),
+          }))
+          set({ lastError: `Could not save "${secret.name}": ${error instanceof Error ? error.message : 'the server rejected it'}` })
+        })
         return newSecret
       },
 
@@ -155,10 +173,7 @@ export const useSecretsStore = create<SecretsState>()(
       fetchStoredUserSecrets: async () => {
         try {
           const result = await secretsApi.listStoredSecrets()
-          set({
-            storedUserSecrets: result,
-            botEnabledNames: new Set(result.map((s) => s.name)),
-          })
+          set({ ...secretsStateFromServer(result, get().secrets) })
         } catch {
           set({ storedUserSecrets: [] })
         }
@@ -222,10 +237,7 @@ export const useSecretsStore = create<SecretsState>()(
       fetchBotSecrets: async () => {
         try {
           const result = await secretsApi.listStoredSecrets()
-          set({
-            storedUserSecrets: result,
-            botEnabledNames: new Set(result.map((s) => s.name)),
-          })
+          set({ ...secretsStateFromServer(result, get().secrets) })
         } catch {
           // Silently fail
         }
@@ -272,8 +284,12 @@ export const useSecretsStore = create<SecretsState>()(
     }),
     {
       name: 'secrets-store',
+      // `secrets` is deliberately NOT persisted: the server holds every secret
+      // with its encrypted value and is refetched on load. Persisting them here
+      // created a second, browser-local source of truth that disagreed with the
+      // server in both directions -- secrets saved elsewhere were invisible, and
+      // secrets saved here appeared to vanish when site data was cleared.
       partialize: (state) => ({
-        secrets: state.secrets,
         selectedGlobalSecretNames: state.selectedGlobalSecretNames,
       }),
     }
