@@ -3522,13 +3522,15 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                 )}
               </div>
             )}
-            {/* Queued messages indicator */}
-            {queuedMessages.length > 0 && isProductSurface ? (
-              <div className="flex items-center gap-2 rounded-lg bg-violet-50 px-2.5 py-1.5 text-[11px] font-medium text-violet-700 dark:bg-violet-950/40 dark:text-violet-200">
-                <span className="h-1.5 w-1.5 rounded-full bg-violet-500" />
-                {queuedMessages.length} {queuedMessages.length === 1 ? 'message' : 'messages'} queued
-              </div>
-            ) : queuedMessages.length > 0 && (
+            {/* Queued messages: a message sent while the agent is still working is
+                held here until the current turn ends, then sent as the next one.
+                The product surface used to collapse this to a bare "N messages
+                queued" count with no visible content -- reported directly: a
+                message typed mid-turn "doesn't show up anywhere". Reusing the
+                same list the developer surface uses (minus the Steer button,
+                which assumes CLI/live-run concepts this audience shouldn't need)
+                means what was actually typed stays visible while it waits. */}
+            {queuedMessages.length > 0 && (
               <div className="space-y-1">
                 {queuedDisplayItems.map((item, index) => {
                   if (item.type === 'auto-group') {
@@ -3537,7 +3539,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                         key={`auto-group-${item.items[0]?.index ?? index}`}
                         items={item.items}
                         onDelete={removeQueuedMessageAtIndex}
-                        onSteer={canShowSteer && tabSessionId ? handleSteerQueuedMessage : undefined}
+                        onSteer={!isProductSurface && canShowSteer && tabSessionId ? handleSteerQueuedMessage : undefined}
                         steeringIndex={steeringIndex}
                       />
                     )
@@ -3553,7 +3555,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                       preview={preview}
                       isLong={isLong}
                       onDelete={() => removeQueuedMessageAtIndex(item.index)}
-                      onSteer={canShowSteer && tabSessionId ? () => handleSteerQueuedMessage(item.index, item.msg) : undefined}
+                      onSteer={!isProductSurface && canShowSteer && tabSessionId ? () => handleSteerQueuedMessage(item.index, item.msg) : undefined}
                       isSteering={steeringIndex === item.index}
                     />
                   )
