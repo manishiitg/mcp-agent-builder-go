@@ -32,10 +32,11 @@ export type WorkshopMode = 'workshop' | 'run'
 
 export interface CommandContext {
   beforeSlash: string
-  // Set for a specific product's tab (e.g. 'video-studio'); unset for the
-  // base Chief of Staff multi-agent chat -- the same distinction the rest of
-  // the codebase already uses (`!tab.metadata?.agentProfileId`). Lets a
-  // command opt out of surfaces it makes no sense in.
+  // Set for a specific product's tab (e.g. 'video-studio'); unset for a
+  // legacy Chief of Staff chat, or 'chief-of-staff' itself for an explicit
+  // one -- see isChiefOfStaffTab (utils/chiefOfStaff.ts) for the same
+  // distinction against a full tab. Lets a command opt out of surfaces it
+  // makes no sense in.
   agentProfileId?: string
   activeTabId: string
   tabSessionId: string | null

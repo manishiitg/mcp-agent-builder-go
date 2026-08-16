@@ -23,6 +23,7 @@ import { useModeStore } from "./stores/useModeStore";
 import { useProductSurfaceStore } from "./stores/useProductSurfaceStore";
 import { useLLMStore } from "./stores/useLLMStore";
 import { normalizeEventViewMode, waitForChatStoreHydration, type ChatTab } from "./stores/useChatStore";
+import { isChiefOfStaffTab } from "./utils/chiefOfStaff";
 import { useLLMDefaults } from "./hooks/useLLMDefaults";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./components/ui/tooltip";
 import "./App.css";
@@ -76,14 +77,13 @@ const isRecentExplicitReadOnlyWorkflowTab = (tab: ChatTab | null | undefined): t
 }
 
 const isChiefOfStaffScheduleTab = (tab: ChatTab): boolean =>
-  tab.metadata?.mode === 'multi-agent' && !tab.metadata?.agentProfileId && (
+  isChiefOfStaffTab(tab) && (
     tab.metadata?.isScheduledRun === true ||
     isScheduledSession({ sessionId: tab.sessionId })
   )
 
 const isInteractiveChiefOfStaffTab = (tab: ChatTab): boolean =>
-  tab.metadata?.mode === 'multi-agent' &&
-  !tab.metadata?.agentProfileId &&
+  isChiefOfStaffTab(tab) &&
   tab.metadata?.isOrganizationAssistant !== true &&
   !isChiefOfStaffScheduleTab(tab)
 
@@ -164,8 +164,7 @@ function App() {
       if (cancelled || useProductSurfaceStore.getState().productSurface !== 'agentworks') return
       const chatStore = useChatStore.getState()
       const chiefTab = Object.values(chatStore.chatTabs).find((tab) =>
-        tab.metadata?.mode === 'multi-agent' &&
-        !tab.metadata?.agentProfileId &&
+        isChiefOfStaffTab(tab) &&
         tab.metadata?.isOrganizationAssistant !== true &&
         tab.metadata?.isViewOnly !== true &&
         tab.metadata?.isScheduledRun !== true &&
@@ -768,8 +767,7 @@ function App() {
       // read-only schedule. Collapse duplicates within each lane, never across
       // lanes, so opening a schedule cannot replace the chat.
       const multiAgentTabs = Object.values(chatStore.chatTabs).filter(tab =>
-        tab.metadata?.mode === 'multi-agent' &&
-        !tab.metadata?.agentProfileId &&
+        isChiefOfStaffTab(tab) &&
         tab.metadata?.isOrganizationAssistant !== true
       )
       const lanes = [
@@ -793,8 +791,7 @@ function App() {
       // Check if activeTabId is null, points to a non-existent tab, or belongs to a different mode
       const activeTab = activeTabId ? chatStore.getTab(activeTabId) : null
       const hasValidActiveTab = activeTab &&
-        activeTab.metadata?.mode === selectedModeCategory &&
-        !activeTab.metadata?.agentProfileId &&
+        isChiefOfStaffTab(activeTab) &&
         activeTab.metadata?.isOrganizationAssistant !== true
 
       if (!hasValidActiveTab && multiAgentTabs.length > 0) {

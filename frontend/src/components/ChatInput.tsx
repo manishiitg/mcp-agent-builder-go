@@ -171,6 +171,7 @@ import LLMConfigurationModal from './LLMConfigurationModal'
 import type { PlannerFile, LLMProvider, ChatHistorySession } from '../services/api-types'
 import type { LLMOption } from '../types/llm'
 import { useAppStore, useMCPStore, useLLMStore, useChatStore } from '../stores'
+import { isChiefOfStaffTab } from '../utils/chiefOfStaff'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useCommandDialogStore } from '../stores/useCommandDialogStore'
 import { usePresetApplication, useGlobalPresetStore } from '../stores/useGlobalPresetStore'
@@ -1848,7 +1849,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     }
 
     const modeTabs = Object.values(chatStore.chatTabs)
-      .filter(tab => tab.metadata?.mode === 'multi-agent' && !tab.metadata?.agentProfileId && tab.metadata?.isOrganizationAssistant !== true)
+      .filter(tab => isChiefOfStaffTab(tab) && tab.metadata?.isOrganizationAssistant !== true)
       .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))
 
     if (modeTabs.length > 0) {
@@ -1881,7 +1882,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
       active.metadata?.isOrganizationAssistant !== true
     if (activeIsVisibleMultiAgent) return
     const modeTabs = Object.values(store.chatTabs)
-      .filter(tab => tab.metadata?.mode === 'multi-agent' && !tab.metadata?.agentProfileId && tab.metadata?.isOrganizationAssistant !== true)
+      .filter(tab => isChiefOfStaffTab(tab) && tab.metadata?.isOrganizationAssistant !== true)
       .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))
     if (modeTabs.length > 0) {
       store.switchTab(modeTabs[0].tabId)

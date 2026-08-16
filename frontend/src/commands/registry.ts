@@ -1,18 +1,22 @@
 import type { ModeCategory } from '../stores/useModeStore'
 import type { CommandDefinition, WorkshopMode } from './types'
 import { builtinCommands } from './builtin-commands'
+import { CHIEF_OF_STAFF_PROFILE_ID } from '../utils/chiefOfStaff'
 
 let userCommands: CommandDefinition[] = []
 let productCommands: CommandDefinition[] = []
 
 function matchesMode(cmd: CommandDefinition, mode?: ModeCategory, workshopMode?: WorkshopMode, agentProfileId?: string): boolean {
   if (cmd.hidden) return false
-  // A command written for Chief of Staff (org goals, its own notification
-  // config, create_workflow) assumes tools and concepts a product's agent
-  // does not have. agentProfileId set means we are inside a specific
-  // product's tab, not the base Chief of Staff chat -- the same distinction
-  // the rest of the codebase already uses for this (`!agentProfileId`).
-  if (cmd.chiefOfStaffOnly && agentProfileId) return false
+  // A command written for Chief of Staff (its own notification config,
+  // create_workflow) assumes tools and concepts a product's agent does not
+  // have. An agentProfileId set to a DIFFERENT product's id means we are
+  // inside that product's tab, not Chief of Staff -- but agentProfileId can
+  // now also be the explicit 'chief-of-staff' id itself (not just absent,
+  // the legacy shape), which must still count as Chief of Staff, not "a
+  // product." See isChiefOfStaffTab (utils/chiefOfStaff.ts) for the same
+  // distinction against a full tab rather than a bare id.
+  if (cmd.chiefOfStaffOnly && agentProfileId && agentProfileId !== CHIEF_OF_STAFF_PROFILE_ID) return false
   if (mode === undefined || mode === null) return true
 
   if (mode === 'workflow') {
