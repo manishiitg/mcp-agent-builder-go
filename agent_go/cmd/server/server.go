@@ -1946,24 +1946,24 @@ func runServer(cmd *cobra.Command, args []string) {
 	apiRouter.HandleFunc("/sessions/{session_id}/events/stream", api.handleSSEStream).Methods("GET")
 	apiRouter.HandleFunc("/sessions/{session_id}/reconnect", api.handleReconnectSession).Methods("POST")
 	apiRouter.HandleFunc("/sessions/{session_id}/status", api.handleGetSessionStatus).Methods("GET")
-	apiRouter.HandleFunc("/sessions/{session_id}/execution-tree", api.handleGetSessionExecutionTree).Methods("GET")
-	apiRouter.HandleFunc("/sessions/{session_id}/activity-tree", api.handleGetSessionActivityTree).Methods("GET")
+	apiRouter.HandleFunc("/sessions/{session_id}/execution-tree", api.runtimeDiagnosticsHandler(api.handleGetSessionExecutionTree)).Methods("GET")
+	apiRouter.HandleFunc("/sessions/{session_id}/activity-tree", api.runtimeDiagnosticsHandler(api.handleGetSessionActivityTree)).Methods("GET")
 	apiRouter.HandleFunc("/sessions/{session_id}/dismiss", api.handleDismissSession).Methods("POST", "OPTIONS")
-	apiRouter.HandleFunc("/terminals", api.handleListTerminals).Methods("GET", "OPTIONS")
-	apiRouter.HandleFunc("/terminals/{terminal_id}/events", api.handleGetTerminalEvents).Methods("GET", "OPTIONS")
-	apiRouter.HandleFunc("/terminals/{terminal_id}", api.handleGetTerminal).Methods("GET", "OPTIONS")
-	apiRouter.HandleFunc("/terminals/{terminal_id}", api.handleDismissTerminal).Methods("DELETE", "OPTIONS")
-	apiRouter.HandleFunc("/terminals/{terminal_id}/complete", api.handleCompleteTerminal).Methods("POST", "OPTIONS")
-	apiRouter.HandleFunc("/terminals/{terminal_id}/fail", api.handleFailTerminal).Methods("POST", "OPTIONS")
-	apiRouter.HandleFunc("/terminals/{terminal_id}/refresh", api.handleRefreshTerminal).Methods("POST", "OPTIONS")
-	apiRouter.HandleFunc("/terminals/{terminal_id}/kill", api.handleKillTerminal).Methods("POST", "OPTIONS")
-	apiRouter.HandleFunc("/terminals/{terminal_id}/input", api.handleSendTerminalInput).Methods("POST", "OPTIONS")
-	apiRouter.HandleFunc("/terminals/{terminal_id}/key", api.handleSendTerminalKey).Methods("POST", "OPTIONS")
-	apiRouter.HandleFunc("/terminals/{terminal_id}/resize", api.handleResizeTerminal).Methods("POST", "OPTIONS")
-	apiRouter.HandleFunc("/terminals/size-hint", api.handleTerminalSizeHint).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/terminals", api.runtimeDiagnosticsHandler(api.handleListTerminals)).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/terminals/{terminal_id}/events", api.runtimeDiagnosticsHandler(api.handleGetTerminalEvents)).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/terminals/{terminal_id}", api.runtimeDiagnosticsHandler(api.handleGetTerminal)).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/terminals/{terminal_id}", api.runtimeDiagnosticsHandler(api.handleDismissTerminal)).Methods("DELETE", "OPTIONS")
+	apiRouter.HandleFunc("/terminals/{terminal_id}/complete", api.runtimeDiagnosticsHandler(api.handleCompleteTerminal)).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/terminals/{terminal_id}/fail", api.runtimeDiagnosticsHandler(api.handleFailTerminal)).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/terminals/{terminal_id}/refresh", api.runtimeDiagnosticsHandler(api.handleRefreshTerminal)).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/terminals/{terminal_id}/kill", api.runtimeDiagnosticsHandler(api.handleKillTerminal)).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/terminals/{terminal_id}/input", api.runtimeDiagnosticsHandler(api.handleSendTerminalInput)).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/terminals/{terminal_id}/key", api.runtimeDiagnosticsHandler(api.handleSendTerminalKey)).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/terminals/{terminal_id}/resize", api.runtimeDiagnosticsHandler(api.handleResizeTerminal)).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/terminals/size-hint", api.runtimeDiagnosticsHandler(api.handleTerminalSizeHint)).Methods("POST", "OPTIONS")
 	// Live-attach (control-mode) WebSocket transport for the selected live tmux
 	// terminal. Inert (404) only if tmux is too old; see terminal_live_attach.go.
-	apiRouter.HandleFunc("/terminals/{terminal_id}/stream", api.handleTerminalStream).Methods("GET")
+	apiRouter.HandleFunc("/terminals/{terminal_id}/stream", api.runtimeDiagnosticsHandler(api.handleTerminalStream)).Methods("GET")
 
 	// LLM Guidance API routes
 	apiRouter.HandleFunc("/sessions/{session_id}/llm-guidance", api.handleSetLLMGuidance).Methods("POST", "OPTIONS")
@@ -4156,20 +4156,28 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 		if credentialErr != nil {
 			logfWithContext(queryLogCtx.WithWorkflow(workflowPhaseFolder), "[WORKFLOW_AUTH] Failed to load provider credentials: %v", credentialErr)
 		}
-	} else if req.LLMConfig != nil && req.LLMConfig.APIKeys != nil {
-		// resolveAgentProfileForQuery already resolved a project-scoped credential
-		// for a product surface (e.g. Video Studio) and overlaid it onto this same
-		// MergedProviderAPIKeys base — req.LLMConfig.APIKeys is the only place that
-		// happens. Recomputing mergedAPIKeys from scratch below would silently
-		// discard it: NewLLMAgentWrapper reads mergedAPIKeys, not req.LLMConfig.
+	} else if resolvedProfile != nil && resolvedProfile.APIKeys != nil {
+		// resolveAgentProfileForQuery resolved a project-scoped credential for a
+		// product surface (e.g. Video Studio) from the encrypted per-workspace
+		// store. Recomputing mergedAPIKeys from scratch below would discard it:
+		// NewLLMAgentWrapper reads mergedAPIKeys, not req.LLMConfig.
+		//
+		// The credential is read from the RESOLVER'S RESULT, never from
+		// req.LLMConfig. req is deserialized from the client body — `llm_config`
+		// is `json:"llm_config,omitempty"` and every ProviderAPIKeys field except
+		// ClaudeCodeOAuthToken is JSON-visible — so keying this branch off the
+		// request would (a) let any authenticated caller replace the turn's
+		// provider keys, including pointing Azure.Endpoint at a host they control,
+		// and (b) fire on ordinary chats, because the frontend always sends
+		// `api_keys: {}` and an empty JSON object unmarshals to a NON-NIL pointer,
+		// wiping every server-resolved key.
 		//
 		// This branch is deliberately narrower than "any chat with SelectedFolder
 		// set": an ordinary multi-agent chat that merely references a workflow
 		// folder must not inherit that workflow's credential (see delegation.go's
 		// workflowOwnedDelegation check, which enforces the same rule for
-		// sub-agents) — only a chat resolveAgentProfileForQuery actually bound to
-		// an agent profile reaches this branch, because only it sets this field.
-		mergedAPIKeys = req.LLMConfig.APIKeys
+		// sub-agents).
+		mergedAPIKeys = resolvedProfile.APIKeys
 	}
 
 	queryInputLaneRelease := releaseInputLane
@@ -6326,8 +6334,20 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			persistedHistory = merged
 			log.Printf("[CONVERSATION DEBUG] Mode-change merge: persisting %d msgs (snapshot %d + new %d)", len(persistedHistory), len(preModeChangeSnapshot), len(finalHistory)-1)
 		}
+		// Deliberately NOT bounded: the comment above calls this file the
+		// canonical record of the conversation, and trimming it here deletes the
+		// oldest messages on every write rather than withholding them. The
+		// hazard the bound was added for is the no-resume fallback that feeds
+		// this transcript to a provider as prompt context — that path is bounded
+		// at its own call site with the much smaller
+		// maxCodingAgentFallbackMessages/Bytes, which is lossless because the
+		// file still holds everything.
+		//
+		// The "the coding agent's own conversation is not at risk" argument only
+		// covers CLI providers, which keep their own rollout/transcript. This is
+		// the generic query path: for an API-backed chat there is no provider
+		// transcript behind it, so this file is the only record that exists.
 		persistedHistory = cleanChatHistoryForPersistence(persistedHistory)
-		persistedHistory = boundedChatHistoryTail(persistedHistory, maxPersistedChatHistoryMessages, maxPersistedChatHistoryBytes)
 
 		runtimeWorkspacePath := strings.TrimSpace(req.SelectedFolder)
 		if isWorkflowPhase && workflowPhaseFolder != "" {
@@ -6361,8 +6381,11 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 		} else if ok && target != nil {
 			persistSessionID = target.SessionID
 			persistConversationPath = target.ConversationPath
+			// Also deliberately unbounded — and the merge makes it sharper: this
+			// combines the restored conversation with the current turn, so a
+			// bound here would trim the very history the user just reopened,
+			// permanently, on the first message they send into it.
 			persistedHistoryForDisk = mergeRestoredChatHistory(target.History, persistedHistory)
-			persistedHistoryForDisk = boundedChatHistoryTail(persistedHistoryForDisk, maxPersistedChatHistoryMessages, maxPersistedChatHistoryBytes)
 			logfWithContext(queryLogCtx, "[CHAT_HISTORY] Continuing restored coding-agent conversation current_session=%s persisted_session=%s path=%s merged_messages=%d",
 				sessionID, persistSessionID, persistConversationPath, len(persistedHistoryForDisk))
 		}

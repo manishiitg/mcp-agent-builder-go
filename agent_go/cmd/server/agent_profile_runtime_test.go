@@ -6,6 +6,8 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
@@ -64,6 +66,92 @@ func TestResolveAgentProfileForQueryPinsVersionAndSkills(t *testing.T) {
 	}
 	if got := agentProfileRuntimeWorkspace("user-1", req.SelectedFolder); got != "_users/user-1/Chats/Video Studio/projects/launch" {
 		t.Fatalf("runtime folder = %q", got)
+	}
+}
+
+// Delegation consults the profile to build its tool gate; it does not enter the
+// product. resolveAgentProfileForQuery runs agentProfiles.Initialize, which for
+// a real product seeds the workspace, writes a plan refresh, initializes the
+// workflow DB, and runs productdeps.Ensure — work that must happen once per
+// turn, not once per sub-agent.
+func TestLookupAgentProfileDefinitionDoesNotRunTheRuntimeInitializer(t *testing.T) {
+	registry := agentprofiles.NewRegistry()
+	profile := agentprofiles.Profile{
+		ID: "video-studio", Name: "Video Studio", Version: 1, BuiltIn: true,
+		SystemPromptTemplate: "{{.ProjectTitle}}",
+		ToolPolicy: agentprofiles.ToolPolicy{
+			Mode:    agentprofiles.ToolPolicyModeAllowlist,
+			Enabled: []string{"show_video"},
+		},
+		Runtime: agentprofiles.RuntimePolicy{Transport: "auto"},
+	}
+	if err := registry.RegisterProfile(profile); err != nil {
+		t.Fatal(err)
+	}
+	initializerCalls := 0
+	if err := registry.RegisterInitializer("video-studio", func(context.Context, agentprofiles.RuntimeContext) error {
+		initializerCalls++
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	api := &StreamingAPI{agentProfiles: registry}
+	req := QueryRequest{
+		AgentMode: "multi-agent", AgentProfileID: "video-studio",
+		SelectedFolder:      "Chats/Video Studio/projects/launch",
+		AgentProfileContext: agentprofiles.PromptContext{ProjectTitle: "Launch"},
+	}
+
+	// The per-turn path enters the product, so it initializes exactly once.
+	if _, err := api.resolveAgentProfileForQuery(context.Background(), &req, "user-1", "session-1"); err != nil {
+		t.Fatal(err)
+	}
+	if initializerCalls != 1 {
+		t.Fatalf("resolveAgentProfileForQuery ran the initializer %d times, want 1", initializerCalls)
+	}
+
+	// The delegation path only reads the declared surface, so it must not.
+	before := req
+	resolved, err := api.lookupAgentProfileDefinition(&req, "user-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if initializerCalls != 1 {
+		t.Fatalf("lookupAgentProfileDefinition ran the initializer (total %d); delegation would re-seed the workspace per sub-agent", initializerCalls)
+	}
+
+	// It must still return what the tool gate consumes...
+	if resolved == nil || resolved.Definition.ID != "video-studio" ||
+		len(resolved.Definition.ToolPolicy.Enabled) != 1 || resolved.Definition.ToolPolicy.Enabled[0] != "show_video" {
+		t.Fatalf("lookup did not return the declared tool surface: %+v", resolved)
+	}
+	if gate := newProductToolGate(resolved); !gate.enforcing() {
+		t.Fatal("tool gate built from the lookup is not enforcing; delegation would get a wider surface than the product declared")
+	}
+
+	// ...without rewriting the caller's request the way the per-turn path does.
+	if req.Provider != before.Provider || req.ModelID != before.ModelID || len(req.SelectedSkills) != len(before.SelectedSkills) {
+		t.Fatalf("lookup mutated the request: provider=%q model=%q skills=%v", req.Provider, req.ModelID, req.SelectedSkills)
+	}
+}
+
+// The check above proves the helper is cheap; it does not prove delegation uses
+// it. Without this, reverting the call site to resolveAgentProfileForQuery
+// passes every assertion above while restoring the per-sub-agent initializer.
+func TestDelegationUsesTheReadOnlyProfileLookup(t *testing.T) {
+	source, err := os.ReadFile("delegation.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(source), "resolveAgentProfileForQuery(") {
+		t.Fatal("delegation calls resolveAgentProfileForQuery, which re-runs the product runtime initializer " +
+			"(workspace seeding, plan refresh, workflow DB init, productdeps.Ensure) for every sub-agent; " +
+			"it needs only Definition.ToolPolicy, so use lookupAgentProfileDefinition")
+	}
+	if !strings.Contains(string(source), "lookupAgentProfileDefinition(") {
+		t.Fatal("delegation no longer resolves the parent profile at all; the sub-agent would get a wider " +
+			"tool surface than the product declared")
 	}
 }
 
@@ -158,11 +246,53 @@ func TestResolveAgentProfileInjectsProjectScopedCursorAPIKey(t *testing.T) {
 	}
 	api := &StreamingAPI{agentProfiles: registry, chatStore: store}
 	req := QueryRequest{AgentMode: "multi-agent", AgentProfileID: "video-studio", SelectedFolder: workspacePath, AgentProfileContext: agentprofiles.PromptContext{ProjectTitle: "Launch"}}
-	if _, err := api.resolveAgentProfileForQuery(context.Background(), &req, userID, "session-1"); err != nil {
+	resolved, err := api.resolveAgentProfileForQuery(context.Background(), &req, userID, "session-1")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if req.LLMConfig == nil || req.LLMConfig.APIKeys == nil || req.LLMConfig.APIKeys.CursorCLI == nil || *req.LLMConfig.APIKeys.CursorCLI != cursorKey {
-		t.Fatalf("project-scoped Cursor key was not injected: %+v", req.LLMConfig)
+	// The credential is carried on the RESOLVER'S RESULT, not on req.LLMConfig.
+	// req is deserialized from the client body, so routing a credential through
+	// it would make the request body a credential source.
+	if resolved == nil || resolved.APIKeys == nil || resolved.APIKeys.CursorCLI == nil || *resolved.APIKeys.CursorCLI != cursorKey {
+		t.Fatalf("project-scoped Cursor key was not returned on the resolved profile: %+v", resolved)
+	}
+	if req.LLMConfig != nil && req.LLMConfig.APIKeys != nil {
+		t.Fatal("resolver wrote a credential back onto req.LLMConfig; the query path must never read keys from the request")
+	}
+}
+
+// The query path must take provider keys only from the resolver. A client can
+// set llm_config.api_keys on the wire — every ProviderAPIKeys field except
+// ClaudeCodeOAuthToken is JSON-visible — so honoring it would let any
+// authenticated caller replace the turn's credentials (e.g. redirect
+// Azure.Endpoint). It also fires on ordinary chats: the frontend always sends
+// `api_keys: {}`, and an empty JSON object unmarshals to a NON-NIL pointer,
+// which would wipe every server-resolved key.
+func TestClientSuppliedAPIKeysAreNotACredentialSource(t *testing.T) {
+	body := []byte(`{"agent_mode":"multi-agent","llm_config":{"api_keys":{"CursorCLI":"attacker-key"}}}`)
+	var req QueryRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		t.Fatal(err)
+	}
+	// Deserialization does populate the field — this is the trap, not a no-op.
+	if req.LLMConfig == nil || req.LLMConfig.APIKeys == nil || req.LLMConfig.APIKeys.CursorCLI == nil {
+		t.Fatal("expected client-supplied api_keys to deserialize; if this fails the wire contract changed")
+	}
+
+	// Empty object is the shape the real frontend sends on every request.
+	var empty QueryRequest
+	if err := json.Unmarshal([]byte(`{"llm_config":{"api_keys":{}}}`), &empty); err != nil {
+		t.Fatal(err)
+	}
+	if empty.LLMConfig.APIKeys == nil {
+		t.Fatal("expected `api_keys: {}` to produce a NON-NIL pointer; the old branch keyed off exactly this")
+	}
+
+	// With no profile resolved there is no credential to apply, so the query
+	// path must fall through to the server-resolved keys untouched.
+	var resolved *resolvedAgentProfile
+	if resolved != nil && resolved.APIKeys != nil {
+		t.Fatal("unreachable: guards the shape the query path branches on")
 	}
 }
 

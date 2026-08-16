@@ -24,9 +24,12 @@ type InstalledSkillFile struct {
 // folder guard already exposes skills/ — it only lets the agent ask by name.
 func NewInstalledSkillReader(workspaceAPIURL, workspacePath string) func(string, string) (InstalledSkillFile, error) {
 	return func(skillName, relPath string) (InstalledSkillFile, error) {
-		name := strings.TrimSpace(skillName)
-		if name == "" {
-			return InstalledSkillFile{}, fmt.Errorf("skill name is required")
+		// The name is joined into a workspace path just like relPath below, so it
+		// gets the same host-boundary check. read_skill supplies it directly, so
+		// it is model-controlled input.
+		name, err := ValidateSkillName(skillName)
+		if err != nil {
+			return InstalledSkillFile{}, err
 		}
 		// The caller normalises the path, but this is a host boundary: re-check
 		// rather than trust that the only caller always will.

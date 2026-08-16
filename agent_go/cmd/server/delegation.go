@@ -339,7 +339,13 @@ func (api *StreamingAPI) executeDelegatedTask(ctx context.Context, parentReq Que
 	// the same parent request rather than threaded down, so parent and child
 	// derive their surface from one source instead of two — the divergence that
 	// let a background child come up short of its parent in the first place.
-	if subProfile, profileErr := api.resolveAgentProfileForQuery(ctx, &parentReq, subAgentUserID, sessionID); profileErr != nil {
+	// Look up, do not re-enter: the gate below reads only Definition.ID and
+	// Definition.ToolPolicy. resolveAgentProfileForQuery would re-run the
+	// product's runtime initializer (workspace seeding, plan refresh, workflow
+	// DB init, productdeps.Ensure) on every single delegation, and its request
+	// mutations are discarded here anyway because parentReq is a copy and
+	// subAgentConfig is already built.
+	if subProfile, profileErr := api.lookupAgentProfileDefinition(&parentReq, subAgentUserID); profileErr != nil {
 		// Failing open here defeated the rule stated directly above: with no
 		// AdmitTool set, the child came up with a WIDER surface than the
 		// product declared, so a failed profile resolution turned delegation

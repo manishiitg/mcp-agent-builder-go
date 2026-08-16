@@ -9,7 +9,6 @@ import { useModeStore } from '../stores/useModeStore'
 import { useRunningWorkflowsStore } from '../stores/useRunningWorkflowsStore'
 import { useWorkflowStore } from '../stores/useWorkflowStore'
 import type { CustomPreset, PredefinedPreset } from '../types/preset'
-import { liveWorkflowTerminalSessionForPreset } from './workflowTerminalActivity'
 import { isInternalChildSession, isScheduledSession } from './workflowSessionKinds'
 import { isVisibleActivitySession } from './activitySessions'
 import { openWorkflowInDefaultPreview } from './reportPreviewPreference'
@@ -28,7 +27,6 @@ type OpenWorkflowPresetPageOptions = {
   scrollToBottom?: boolean
 }
 
-const WORKFLOW_TERMINAL_LOOKUP_TIMEOUT_MS = 1500
 
 function normalizeWorkspacePath(path?: string): string {
   return (path || '').replace(/\/+$/, '')
@@ -180,22 +178,6 @@ async function findRunningWorkflowForPreset(
   }
 }
 
-async function findLiveWorkflowTerminalSession(
-  preset: CustomPreset | PredefinedPreset,
-  title: string,
-): Promise<ActiveSessionInfo | undefined> {
-  try {
-    const response = await Promise.race([
-      agentApi.listTerminals(undefined, 'none', { activeOnly: true }),
-      new Promise<undefined>(resolve => setTimeout(() => resolve(undefined), WORKFLOW_TERMINAL_LOOKUP_TIMEOUT_MS)),
-    ])
-    if (!response) return undefined
-    return liveWorkflowTerminalSessionForPreset(response.terminals || [], preset, title)
-  } catch {
-    return undefined
-  }
-}
-
 function tabSortTimestamp(tab: ChatTab): number {
   return tab.lastAccessedAt ?? tab.createdAt ?? 0
 }
@@ -286,9 +268,9 @@ function requestChatScrollToBottom(): void {
   setTimeout(() => window.dispatchEvent(new CustomEvent('chat-scroll-to-bottom')), 400)
 }
 
-function revealWorkflowTerminal(tabId: string, workspacePath?: string | null): void {
+function revealWorkflowChat(tabId: string, workspacePath?: string | null): void {
   const chatStore = useChatStore.getState()
-  chatStore.setTabViewMode(tabId, 'terminal')
+  chatStore.setTabViewMode(tabId, 'formatted')
 
   openWorkflowInDefaultPreview(workspacePath)
 
@@ -356,7 +338,7 @@ export async function restoreWorkflowSessionChat(
     if (builderTab?.sessionId !== session.session_id) {
       latestChatStore.updateTabSessionId(tabId, session.session_id)
     }
-    latestChatStore.setTabViewMode(tabId, 'terminal')
+    latestChatStore.setTabViewMode(tabId, 'formatted')
 
     const hasExistingEvents = latestChatStore.getTabEvents(session.session_id).length > 0
     // Fast path for switching back to an already-open running workflow:
@@ -367,7 +349,7 @@ export async function restoreWorkflowSessionChat(
       latestChatStore.setTabStreaming(tabId, isActive)
       latestChatStore.setTabCompleted(tabId, !isActive)
       activateTab(tabId)
-      revealWorkflowTerminal(tabId, workspacePath)
+      revealWorkflowChat(tabId, workspacePath)
       if (options.scrollToBottom !== false) requestChatScrollToBottom()
       return tabId
     }
@@ -378,7 +360,7 @@ export async function restoreWorkflowSessionChat(
     latestChatStore.setTabStreaming(tabId, isActive)
     latestChatStore.setTabCompleted(tabId, !isActive)
     activateTab(tabId)
-    revealWorkflowTerminal(tabId, workspacePath)
+    revealWorkflowChat(tabId, workspacePath)
     if (options.scrollToBottom !== false) requestChatScrollToBottom()
 
     return tabId
@@ -443,16 +425,6 @@ export async function openWorkflowPresetPage(
       runningWorkflow: options.runningWorkflow,
       title,
       source: options.source,
-    })
-    return
-  }
-
-  const terminalBackedSession = await findLiveWorkflowTerminalSession(preset, title)
-  if (terminalBackedSession) {
-    await openActiveSession(terminalBackedSession, {
-      preset,
-      title,
-      source: options.source || 'workflow-terminal',
     })
     return
   }
@@ -540,7 +512,7 @@ async function restoreReadOnlyWorkflowRunChat(
   const interactiveTab = findTabForSession(chatStore.chatTabs, session.session_id)
   if (interactiveTab && !interactiveTab.metadata?.isViewOnly) {
     activateTab(interactiveTab.tabId)
-    revealWorkflowTerminal(interactiveTab.tabId, workspacePath)
+    revealWorkflowChat(interactiveTab.tabId, workspacePath)
     if (options.scrollToBottom !== false) requestChatScrollToBottom()
     return interactiveTab.tabId
   }
@@ -563,7 +535,7 @@ async function restoreReadOnlyWorkflowRunChat(
 
   const tabId = existingTab?.tabId ?? await chatStore.createChatTab(desiredName, metadata, session.session_id)
   chatStore.setTabMetadata(tabId, metadata)
-  chatStore.setTabViewMode(tabId, 'terminal')
+  chatStore.setTabViewMode(tabId, 'formatted')
   if (existingTab && existingTab.name !== desiredName) {
     useChatStore.setState((state) => {
       const tab = state.chatTabs[tabId]
@@ -580,7 +552,7 @@ async function restoreReadOnlyWorkflowRunChat(
   chatStore.setTabStreaming(tabId, isActive)
   chatStore.setTabCompleted(tabId, !isActive)
   activateTab(tabId)
-  revealWorkflowTerminal(tabId, workspacePath)
+  revealWorkflowChat(tabId, workspacePath)
   window.dispatchEvent(new CustomEvent('workflow-readonly-run-restored', {
     detail: { presetId, tabId, workspacePath }
   }))

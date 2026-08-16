@@ -4020,6 +4020,24 @@ func (api *StreamingAPI) handleGetCosts(w http.ResponseWriter, r *http.Request) 
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	if r.URL.Query().Get("view") == "summary" {
+		days := 30
+		if rawDays := strings.TrimSpace(r.URL.Query().Get("days")); rawDays != "" {
+			parsed, err := strconv.Atoi(rawDays)
+			if err != nil || parsed <= 0 {
+				http.Error(w, "days must be a positive integer", http.StatusBadRequest)
+				return
+			}
+			days = parsed
+		}
+		response, err := loadWorkflowCostSummary(cleanedWorkspacePath, days, r.URL.Query().Get("before"), time.Now())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		json.NewEncoder(w).Encode(response)
+		return
+	}
 	json.NewEncoder(w).Encode(loadWorkflowCosts(r.Context(), cleanedWorkspacePath))
 }
 

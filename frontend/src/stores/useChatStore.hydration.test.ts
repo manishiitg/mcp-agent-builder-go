@@ -49,8 +49,8 @@ describe('useChatStore hydration bootstrap', () => {
     vi.stubGlobal('localStorage', storage)
     const chatStore = await import('./useChatStore')
     await chatStore.waitForChatStoreHydration()
-    expect(chatStore.normalizeEventViewMode('tree')).toBe('terminal')
-    chatStore.useChatStore.setState({ eventViewModePreference: 'terminal' })
+    expect(chatStore.normalizeEventViewMode('tree')).toBe('formatted')
+    chatStore.useChatStore.setState({ eventViewModePreference: 'formatted' })
     vi.advanceTimersByTime(250)
     setItem.mockClear()
 
@@ -61,7 +61,7 @@ describe('useChatStore hydration bootstrap', () => {
     expect(setItem).not.toHaveBeenCalled()
 
     chatStore.useChatStore.setState({ eventViewModePreference: 'tree' })
-    chatStore.useChatStore.setState({ eventViewModePreference: 'terminal' })
+    chatStore.useChatStore.setState({ eventViewModePreference: 'formatted' })
     chatStore.useChatStore.setState({ eventViewModePreference: 'tree' })
     vi.advanceTimersByTime(250)
 

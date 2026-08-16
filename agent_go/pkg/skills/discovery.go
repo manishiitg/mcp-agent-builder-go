@@ -336,6 +336,11 @@ func GetSkill(workspaceAPIURL, folderName string) (*Skill, error) {
 // The fallback keeps ordinary workflows, whose skills are user-level, working
 // exactly as before.
 func GetSkillIn(workspaceAPIURL, workspacePath, folderName string) (*Skill, error) {
+	validName, nameErr := ValidateSkillName(folderName)
+	if nameErr != nil {
+		return nil, nameErr
+	}
+	folderName = validName
 	client := NewWorkspaceAPIClient(workspaceAPIURL)
 
 	candidates := make([]string, 0, 2)

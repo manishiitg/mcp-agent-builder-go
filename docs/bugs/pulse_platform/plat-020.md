@@ -5,8 +5,8 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | `Codex` |
-| Ticket state | `runtime_reverify` |
-| Last synchronized | `2026-08-04` |
+| Ticket state | `implementation_complete_runtime_reverify` |
+| Last synchronized | `2026-08-15` |
 
 > Claim this ticket in this file before implementation. During active work,
 > update this fragment rather than the shared index; synchronize the index
@@ -34,6 +34,20 @@
   tests cover scheduled and bot observations and assert that conversion keeps
   both `tabId` and `sessionId`; TypeScript compilation passes. A real converted
   schedule remains to be exercised after deployment.
+- **2026-08-15 regression and root cause:** commit `d18e071e1` made scheduled
+  runs first-class runtime tabs. Its 10-second reconciliation merged the
+  runtime Schedule projection (`isViewOnly=true`, `isScheduledRun=true`) over
+  an existing tab without respecting `userInteractiveContinuation=true`.
+  Consequently, a correctly converted Chat reverted to Schedule a few seconds
+  later. Live evidence showed the message itself was not lost: session
+  `schedule-manual--384703db_1786780881148580000` accepted the follow-up at
+  14:37:27 in 82 ms and emitted its terminal completion at 14:37:59, while the
+  frontend hid the interactive continuation.
+- **2026-08-15 repair:** runtime-tab reconciliation now treats the explicit
+  user promotion as the higher-precedence fact. It may continue refreshing
+  runtime status, but cannot rewrite the tab name, phase, or read-only flags.
+  Name and metadata are committed atomically so a poll cannot expose a mixed
+  Schedule/Chat state.
 - **Completion follow-up:** PLAT-035 records the separate defect where a
   successfully delivered retained turn stayed `foreground_turn.busy=true`
   after its tmux had returned to an idle prompt. PLAT-020 owns conversation
@@ -41,7 +55,11 @@
 - **Regression tests:**
   `TestTryDeliverQueryAsLiveInputReactivatesSettledRetainedTmux` plus
   `TestCodingAgentRequestAllowsPersistentInteractive` and
-  `workflowChatTabConversion.test.ts` for scheduled and bot conversations.
+  `workflowChatTabConversion.test.ts` for scheduled and bot conversations;
+  `workflowRuntimeTabProjection.test.ts` now converts a real-shaped Schedule
+  tab, applies multiple reconciliation ticks, and proves the same tab/session
+  remains interactive. The paired control proves ordinary Schedule tabs still
+  receive runtime projection updates.
 - **Acceptance:** active, settled, and relaunched scheduled coding-agent chats
   keep the same logical session ID and conversation context. The first user
   message is delivered exactly once—to the existing tmux when live, otherwise

@@ -2,12 +2,10 @@ import React, { useMemo, useEffect, useCallback, useRef } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { MessageSquare, Plus, Square, X } from 'lucide-react'
 import { useChatStore, type ChatTab } from '../../stores/useChatStore'
-import { useSessionExecutionTree } from '../../hooks/useSessionExecutionTree'
 import { agentApi } from '../../services/api'
 import { activateTab } from '../../utils/activateTab'
 import { useWorkflowStore } from '../../stores/useWorkflowStore'
 import { useGlobalPresetStore } from '../../stores/useGlobalPresetStore'
-import { executionTreeRuntimeStatus } from '../../utils/runtimeActivity'
 import { convertObservedWorkflowTabToInteractive } from './workflowChatTabConversion'
 import { shouldDisplayWorkflowTab } from './workflowRuntimeTabProjection'
 
@@ -46,17 +44,13 @@ const WorkflowTabItem = React.memo<WorkflowTabItemProps>(({
     ? 'Chat'
     : tab.name
 
-  // Pull this tab's own backend status (only polls while busy). Combine with the
-  // local streaming flags so "busy" shows immediately, before the tree catches up.
-  const { data: execTree } = useSessionExecutionTree(
-    tab.sessionId,
-    !!tab.sessionId && isActive,
-  )
-  const treeStatus = executionTreeRuntimeStatus(execTree)
+  // Tabs are a product-level conversation switcher. Derive their small status
+  // marker from the session's own lifecycle flags rather than polling the
+  // diagnostic execution tree for every active tab.
   const status: 'busy' | 'idle' | 'stopped' =
-    treeStatus === 'busy' || (!execTree?.runtime_state && (tab.isStreaming || tab.hasRunningBgAgents))
+    tab.isStreaming || tab.hasRunningBgAgents
       ? 'busy'
-      : treeStatus === 'stopped'
+      : tab.isCompleted
         ? 'stopped'
         : 'idle'
   const dot = TAB_STATUS_DOT[status]

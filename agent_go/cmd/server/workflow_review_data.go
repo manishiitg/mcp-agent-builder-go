@@ -25,6 +25,15 @@ type workflowCostsResponse struct {
 	RunDailyCosts   []workflowRunDailyCostEntry       `json:"run_daily_costs"`
 	Runs            []workflowRunCostEntry            `json:"runs"`
 	ActivityTiming  workflowActivityTimingSummary     `json:"activity_timing"`
+	History         *workflowCostHistoryPage          `json:"history,omitempty"`
+}
+
+type workflowCostHistoryPage struct {
+	Days       int    `json:"days"`
+	WindowFrom string `json:"window_from"`
+	WindowTo   string `json:"window_to"`
+	HasMore    bool   `json:"has_more"`
+	NextBefore string `json:"next_before,omitempty"`
 }
 
 // workflowActivityTimingAggregate deliberately calls this agent time rather
@@ -150,6 +159,53 @@ func loadWorkflowCosts(ctx context.Context, workspacePath string) workflowCostsR
 		Runs:            buildWorkflowRunCostEntries(executionCosts, evaluationCosts),
 		ActivityTiming:  loadWorkflowActivityTiming(ctx, workspacePath),
 	}
+}
+
+func loadWorkflowCostSummary(workspacePath string, days int, before string, now time.Time) (workflowCostsResponse, error) {
+	if days <= 0 {
+		days = 30
+	}
+	if days > 90 {
+		days = 90
+	}
+
+	endDay := now.UTC()
+	endDay = time.Date(endDay.Year(), endDay.Month(), endDay.Day(), 0, 0, 0, 0, time.UTC)
+	if strings.TrimSpace(before) != "" {
+		parsed, err := time.Parse("2006-01-02", strings.TrimSpace(before))
+		if err != nil {
+			return workflowCostsResponse{}, fmt.Errorf("invalid before date %q (expected YYYY-MM-DD)", before)
+		}
+		endDay = parsed.UTC().AddDate(0, 0, -1)
+	}
+	startDay := endDay.AddDate(0, 0, -(days - 1))
+	windowFrom := startDay.Format("2006-01-02")
+	windowTo := endDay.Format("2006-01-02")
+
+	response := workflowCostsResponse{
+		Success:         true,
+		PhaseDailyCosts: []workflowPhaseDailyCostEntry{},
+		RunDailyCosts:   []workflowRunDailyCostEntry{},
+		Runs:            []workflowRunCostEntry{},
+		ActivityTiming:  newWorkflowActivityTimingSummary(),
+		History: &workflowCostHistoryPage{
+			Days:       days,
+			WindowFrom: windowFrom,
+			WindowTo:   windowTo,
+		},
+	}
+	if ledger := costledger.DefaultLedger(); ledger != nil {
+		summary, hasMore, err := ledger.SummarizeWorkflowOverview(workspacePath, windowFrom, windowTo)
+		if err != nil {
+			return workflowCostsResponse{}, err
+		}
+		response.ScopedCosts = summary
+		response.History.HasMore = hasMore
+		if hasMore {
+			response.History.NextBefore = windowFrom
+		}
+	}
+	return response, nil
 }
 
 func newWorkflowActivityTimingSummary() workflowActivityTimingSummary {

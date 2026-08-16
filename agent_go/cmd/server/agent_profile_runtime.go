@@ -12,11 +12,19 @@ import (
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/agentprofiles"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator"
 	unifiedevents "github.com/manishiitg/mcpagent/events"
+	"github.com/manishiitg/mcpagent/llm"
 )
 
 type resolvedAgentProfile struct {
 	Definition agentprofiles.Profile
 	Prompt     string
+	// APIKeys carries the project-scoped credential this resolver loaded from the
+	// encrypted per-user/workspace store. It is returned on the resolver's own
+	// result rather than handed back through req.LLMConfig so the query path can
+	// never take a credential from the request body: LLMConfig is deserialized
+	// from client JSON, and every field of ProviderAPIKeys except
+	// ClaudeCodeOAuthToken is JSON-visible. nil when no profile is bound.
+	APIKeys *llm.ProviderAPIKeys
 }
 
 // cleanAgentProfileWorkspace validates the client-supplied selected_folder for
@@ -103,6 +111,35 @@ func resolveProfileRuntimeModel(runtime agentprofiles.RuntimePolicy, requestedPr
 		}
 	}
 	return provider, modelID
+}
+
+// lookupAgentProfileDefinition returns the profile a request is bound to
+// WITHOUT running its runtime initializer and without mutating the request.
+//
+// resolveAgentProfileForQuery is not a resolver: it calls
+// agentProfiles.Initialize, which for a product like Video Studio seeds the
+// workspace, writes a plan refresh, initializes the workflow DB, and runs
+// productdeps.Ensure (which can shell out to `npx skills add`). It also rewrites
+// the request's provider, model, skills, and secrets. That is correct once per
+// turn and wrong for a caller that only needs to read the declared surface —
+// delegation ran the whole initializer again for every sub-agent.
+//
+// Use this wherever the profile is being consulted rather than entered. It
+// keeps the same authorization boundary: Resolve is what enforces ownership of
+// a non-built-in profile.
+func (api *StreamingAPI) lookupAgentProfileDefinition(req *QueryRequest, userID string) (*resolvedAgentProfile, error) {
+	profileID := strings.TrimSpace(req.AgentProfileID)
+	if profileID == "" {
+		return nil, nil
+	}
+	if api.agentProfiles == nil {
+		return nil, fmt.Errorf("agent profiles are unavailable")
+	}
+	profile, err := api.agentProfiles.Resolve(profileID, req.AgentProfileVersion, userID)
+	if err != nil {
+		return nil, err
+	}
+	return &resolvedAgentProfile{Definition: profile}, nil
 }
 
 func (api *StreamingAPI) resolveAgentProfileForQuery(ctx context.Context, req *QueryRequest, userID, sessionID string) (*resolvedAgentProfile, error) {
@@ -199,6 +236,7 @@ func (api *StreamingAPI) resolveAgentProfileForQuery(ctx context.Context, req *Q
 			req.BrowserMode = "auto"
 		}
 	}
+	var resolvedKeys *llm.ProviderAPIKeys
 	if provider, modelID := resolveProfileRuntimeModel(profile.Runtime, req.Provider, req.ModelID); provider != "" && modelID != "" {
 		// A profile-owned model binding is authoritative over the user's global
 		// AgentWorks chat selection, while still using the shared provider adapter,
@@ -219,13 +257,16 @@ func (api *StreamingAPI) resolveAgentProfileForQuery(ctx context.Context, req *Q
 			if credentialErr != nil {
 				return nil, fmt.Errorf("load agent profile %s credential: %w", provider, credentialErr)
 			}
-			req.LLMConfig.APIKeys = keys
+			// Returned on resolvedAgentProfile, NOT written back onto req.LLMConfig.
+			// The query path reads the resolver's result, so a credential can never
+			// originate from the request body.
+			resolvedKeys = keys
 		}
 	}
 	if strings.TrimSpace(req.SessionTitle) == "" {
 		req.SessionTitle = promptContext.ProjectTitle
 	}
-	return &resolvedAgentProfile{Definition: profile, Prompt: rendered}, nil
+	return &resolvedAgentProfile{Definition: profile, Prompt: rendered, APIKeys: resolvedKeys}, nil
 }
 
 func profileRuntimeEventType(event any) string {

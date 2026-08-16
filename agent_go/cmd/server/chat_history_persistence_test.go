@@ -1980,6 +1980,47 @@ func TestRestorePersistedConversationHistoryHydratesStableProjectSession(t *test
 	}
 }
 
+// The persisted conversation JSON is the canonical record. For a coding CLI the
+// provider also keeps a rollout/transcript, but an API-backed chat has nothing
+// behind this file, so trimming it on write destroys the only copy.
+//
+// boundedChatHistoryTail is correct for building prompt context — that is
+// lossless, because the file still holds everything — and wrong for deciding
+// what to store. This asserts the distinction structurally: the durable write
+// path must not call it, while the fallback path must.
+func TestDurableChatHistoryIsNotTruncatedOnWrite(t *testing.T) {
+	source, err := os.ReadFile("server.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, forbidden := range []string{
+		"persistedHistory = boundedChatHistoryTail(",
+		"persistedHistoryForDisk = boundedChatHistoryTail(",
+	} {
+		if strings.Contains(string(source), forbidden) {
+			t.Fatalf("durable write path calls %q — the canonical transcript must not be trimmed on write; "+
+				"bound the fallback prompt payload instead", forbidden)
+		}
+	}
+
+	// The fallback payload IS bounded, with the deliberately smaller limits.
+	if !strings.Contains(string(source), "boundedChatHistoryTail(historyForAgent, maxCodingAgentFallbackMessages, maxCodingAgentFallbackBytes)") {
+		t.Fatal("the no-resume fallback should still bound what it sends as prompt context")
+	}
+
+	// The two limit sets must stay distinct: collapsing them would reintroduce
+	// the durable trim by making the fallback bound look safe to reuse.
+	if maxCodingAgentFallbackMessages >= maxPersistedChatHistoryMessages {
+		t.Fatalf("fallback message limit (%d) must stay well below the persisted ceiling (%d)",
+			maxCodingAgentFallbackMessages, maxPersistedChatHistoryMessages)
+	}
+	if maxCodingAgentFallbackBytes >= maxPersistedChatHistoryBytes {
+		t.Fatalf("fallback byte limit (%d) must stay well below the persisted ceiling (%d)",
+			maxCodingAgentFallbackBytes, maxPersistedChatHistoryBytes)
+	}
+}
+
 func TestBoundedChatHistoryTailKeepsNewestCompleteMessages(t *testing.T) {
 	history := make([]llmtypes.MessageContent, 0, 5)
 	for _, text := range []string{"one", "two", "three", "four", "five"} {

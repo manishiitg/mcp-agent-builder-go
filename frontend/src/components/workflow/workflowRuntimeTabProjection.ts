@@ -9,6 +9,45 @@ export interface WorkflowRuntimeTabProjection {
 }
 
 /**
+ * Apply a live-runtime projection without undoing an explicit user promotion.
+ *
+ * Runtime discovery owns whether a session is still running. It does not own
+ * the presentation of a Schedule/Bot tab after the user has deliberately
+ * converted that exact conversation into an interactive Builder chat. The
+ * userInteractiveContinuation marker is therefore the higher-precedence fact.
+ */
+export function reconcileWorkflowRuntimeTab(
+  tab: ChatTab,
+  projection: WorkflowRuntimeTabProjection,
+): ChatTab {
+  if (tab.metadata?.userInteractiveContinuation === true) {
+    return {
+      ...tab,
+      metadata: {
+        ...tab.metadata,
+        mode: 'workflow',
+        presetQueryId: projection.metadata.presetQueryId ?? tab.metadata.presetQueryId,
+        isViewOnly: false,
+        isScheduledRun: false,
+        scheduledJobName: undefined,
+        isBotRun: false,
+        botPlatform: undefined,
+        userInteractiveContinuation: true,
+      },
+    }
+  }
+
+  return {
+    ...tab,
+    name: projection.name,
+    metadata: {
+      ...tab.metadata,
+      ...projection.metadata,
+    },
+  }
+}
+
+/**
  * A Schedule is a first-class parallel lane, not a temporary observer that
  * disappears when Chat becomes active. Keep it in the tab strip until the user
  * closes it. Other read-only lanes retain the old active/running visibility
