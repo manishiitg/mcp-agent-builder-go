@@ -555,6 +555,59 @@ framing below at face value; it's kept as history, not as a live todo.
   nothing writes anymore — see Data-source findings). Real, independent of
   this migration, but not blocking it. Revisit separately.
 
+## TODO — raised 2026-08-16, not yet designed
+
+Four follow-ups the user flagged in one pass. None investigated in depth yet
+beyond the grounding note under each; treat these as a raw list to pick up
+next, not decisions. **Scope note:** these are written from Chief of
+Staff's vantage point since that's what this doc covers, but all four are
+actually cross-product gaps (Video Studio has the same de facto MCP/browser
+mechanism, the same generic LLM picker, and would hit the same
+bot-connector routing question) — the user flagged this explicitly and does
+not want that broader cross-product design work started yet, just noted.
+When picked up, scope the investigation across every product, not only
+Chief of Staff.
+
+1. **A proper design for MCP server access**, not the current de facto
+   mechanism. Today Chief of Staff gets MCP servers exactly like any
+   multi-agent chat: a single global, persisted frontend store
+   (`useMCPStore`'s `chatSelectedServers`, not per-product-surface) feeds
+   `req.EnabledServers` on every request (`server.go:3072`), with zero
+   profile/product-level involvement. `agentprofiles`' own
+   `EnabledServers`/`SelectedServers` fields and product.yaml's
+   `dependencies.mcp_servers: []` exist but are genuinely unused
+   (`resolveAgentProfileForQuery` never reads them) — this is the same gap
+   as "MCP servers via product.yaml" above, now explicitly re-raised as a
+   TODO rather than just deferred.
+2. **A proper design for LLM selection**, beyond the defer-to-request fix
+   already shipped (see "Single pinned LLM" correction above: full
+   published-catalog picker, profile's pinned model is only a starting
+   default for a new chat). That fix solved the immediate
+   pin-overriding-user-choice bug; whether the overall selection *design*
+   (no per-profile default persistence beyond a brand-new chat, generic
+   `ChatInput` picker with no Chief-of-Staff-specific curation) is actually
+   right long-term is still open.
+3. **Properly enabling browser access.** Same shape of gap as MCP:
+   `req.BrowserMode`/`caps.BrowserMode` (`server.go:919-1097`) is a
+   per-request field the frontend toggle in `ChatInput.tsx` sets (shared,
+   so it works inside Chief of Staff's own chat input too), defaulting to
+   `"none"` unless a user manually enables it each time. No product.yaml
+   declaration lets a product default browser access on (or off) the way
+   `ui_panels`/`tool_policy` do for other capabilities. `workflows:
+   browser_mode` exists in product.yaml today but is a different thing —
+   consumed only by Video Studio's own per-project workflow-manifest
+   generation (`videoStudioWorkflowManifest`), not by interactive chat.
+4. **WhatsApp/Slack.** These are real, already-shipped account-level bot
+   connectors (`frontend/src/components/settings/BotConnectorModal.tsx`,
+   backend `whatsapp_routes.go`) — interactive channels a user can chat with
+   their assistant *through*, separate from the outbound notification
+   webhooks already covered elsewhere in this doc. Not yet checked: whether
+   an inbound WhatsApp/Slack message correctly resolves to the Chief of
+   Staff profile (global scope, right persona/commands/tools) rather than
+   falling back to the legacy profile-less path, and whether anything
+   Chief-of-Staff-specific (its own commands, notification config) behaves
+   differently when reached this way vs. the web UI.
+
 ## What actually shipped (summary)
 
 - Core scaffolding: `agentprofiles.Profile.Scope = global`,
