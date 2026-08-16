@@ -38,6 +38,11 @@ func Validate(profile Profile) error {
 	if !profile.BuiltIn && strings.TrimSpace(profile.OwnerID) == "" {
 		return fmt.Errorf("user profile owner is required")
 	}
+	switch scope := strings.TrimSpace(profile.Scope); scope {
+	case "", ProfileScopeProject, ProfileScopeGlobal:
+	default:
+		return fmt.Errorf("invalid profile scope %q (want %q, %q, or empty)", scope, ProfileScopeProject, ProfileScopeGlobal)
+	}
 
 	seenSkills := make(map[string]struct{}, len(profile.Skills))
 	for _, raw := range profile.Skills {
