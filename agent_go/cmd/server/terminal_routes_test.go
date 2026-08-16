@@ -102,9 +102,7 @@ func TestGetMainTerminalReturnsOnlyMainAgentPane(t *testing.T) {
 	api := &StreamingAPI{terminalStore: store}
 	sessionID := "session-main-terminal-product-view"
 
-	child := terminalRouteChunkEvent(sessionID, "workflow-step:child", "tmux-child", "child output", 1)
-	store.HandleEvent(sessionID, child)
-
+	store.HandleEvent(sessionID, terminalRouteChunkEvent(sessionID, "workflow-step:child", "tmux-child", "child output", 1))
 	main := terminalRouteChunkEvent(sessionID, "main:"+sessionID, "tmux-main", "main output", 1)
 	main.ExecutionKind = "main_agent"
 	chunk := main.Data.Data.(*agentevents.StreamingChunkEvent)

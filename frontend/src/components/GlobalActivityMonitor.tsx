@@ -14,10 +14,8 @@ import { isLocalActivityFallbackTab } from '../utils/activityFallback'
 import { hasLiveBackgroundAgents, isVisibleActivitySession, nonWorkflowActivityTitle } from '../utils/activitySessions'
 import { runtimeNeedsUserInput } from '../utils/runtimeActivity'
 import {
-  currentActiveSession,
   currentSessionId as resolveCurrentSessionId,
   headerStatusLabel,
-  sessionWorkflowKey,
   statusTone,
   visibleActivitySessions,
 } from '../utils/globalActivityMonitorStatus'
@@ -181,22 +179,9 @@ export const GlobalActivityMonitor: React.FC = () => {
     () => resolveCurrentSessionId(activeTabId, chatTabs, selectedModeCategory, showWorkflowsOverview),
     [activeTabId, chatTabs, selectedModeCategory, showWorkflowsOverview],
   )
-  // The plain session-id exclusion below only ever removed the current tab's
-  // own session. A sibling session for the SAME workflow — a background Pulse
-  // schedule, a second tab observing the same run — has a different session
-  // id, so it survived into the pill list while ModePresetBar's selector also
-  // showed that workflow's status: the one workflow appeared twice at once,
-  // which is exactly the acceptance criterion ("appears exactly once") this
-  // component exists to satisfy. Excluding by the current session's workflow
-  // identity, not just its id, is what actually closes that gap.
-  const currentWorkflowKey = useMemo(() => {
-    const session = currentActiveSession(activeSessionsCache, currentSessionId)
-    return session && isWorkflowSession(session) ? sessionWorkflowKey(session) : ''
-  }, [activeSessionsCache, currentSessionId])
-
   const visibleSessions = useMemo(
-    () => visibleActivitySessions(activeSessions, currentSessionId, currentWorkflowKey),
-    [activeSessions, currentSessionId, currentWorkflowKey],
+    () => visibleActivitySessions(activeSessions, currentSessionId),
+    [activeSessions, currentSessionId],
   )
 
   const visibleActivityKeys = useMemo(() => {

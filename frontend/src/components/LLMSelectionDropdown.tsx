@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Brain, ChevronDown, Check, RefreshCw, Search, Box, DollarSign, Terminal, KeyRound, AudioLines, Loader2 } from 'lucide-react';
+import { Brain, ChevronDown, Check, RefreshCw, Search, Box, DollarSign, Terminal, KeyRound, AudioLines } from 'lucide-react';
 import { Button } from './ui/Button';
 import { Card } from './ui/Card';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip';
@@ -72,8 +72,6 @@ interface LLMSelectionDropdownProps {
   openDirection?: 'up' | 'down'; // Add prop to control dropdown direction
   title?: string; // Custom title for the dropdown modal (defaults to "Select Primary LLM")
   placeholder?: string; // Custom placeholder text when no LLM is selected
-  /** The selected model is actively handling the visible chat turn. */
-  isRunning?: boolean;
 }
 
 export default function LLMSelectionDropdown({
@@ -86,7 +84,6 @@ export default function LLMSelectionDropdown({
   openDirection = 'down', // Default to downward
   title = 'Select Primary LLM', // Default title
   placeholder,
-  isRunning = false,
 }: LLMSelectionDropdownProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -204,13 +201,9 @@ export default function LLMSelectionDropdown({
               }`}
               aria-expanded={isOpen}
               aria-haspopup="menu"
-              aria-label={`${getDisplayText(false)} — ${isRunning ? 'working' : 'waiting'}`}
+              aria-label={title}
             >
-              {isRunning ? (
-                <Loader2 className="w-3.5 h-3.5 mr-1.5 flex-shrink-0 animate-spin text-primary" aria-hidden="true" />
-              ) : (
-                <Brain className="w-3.5 h-3.5 mr-1.5 flex-shrink-0" aria-hidden="true" />
-              )}
+              <Brain className="w-3.5 h-3.5 mr-1.5 flex-shrink-0" />
               <span className="inline-block overflow-hidden whitespace-nowrap w-[140px] group-hover:w-[240px] transition-[width] duration-300 text-left">
                 {getDisplayText(false)}
               </span>

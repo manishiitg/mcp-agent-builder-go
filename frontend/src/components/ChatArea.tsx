@@ -29,7 +29,7 @@ import { PresetSelectionOverlay } from './PresetSelectionOverlay'
 import { ModeSwitchDialog } from './ui/ModeSwitchDialog'
 import type { ChatTab } from '../stores/useChatStore'
 import type { CustomPreset } from '../types/preset'
-import { restoreSession } from '../utils/sessionRestore'
+import { conversationToRestoredEvents, restoreSession } from '../utils/sessionRestore'
 import { logger } from '../utils/logger'
 import { secretsApi } from '../api/secrets'
 import { useSecretsStore } from '../stores'
@@ -691,6 +691,15 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
   const streamingStatus = useChatStore((state) =>
     activeSessionId ? state.streamingStatus[activeSessionId] || '' : ''
   )
+  const historyPagination = useChatStore((state) =>
+    activeSessionId ? state.tabHistoryPagination[activeSessionId] : undefined
+  )
+  const [olderHistory, setOlderHistory] = useState<{
+    sessionId?: string
+    events: PollingEvent[]
+    loading: boolean
+    error?: string
+  }>({ events: [], loading: false })
 
   // Get active preset for workflow mode
   const activeWorkflowPreset = getActivePreset('workflow')
@@ -782,6 +791,60 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     displayEventsRef.current = filtered
     return filtered
   }, [tabEvents, showConversationUsage, ContentRenderer, activeSessionId])
+
+  // Durable chat history is deliberately fetched in bounded tail-first pages.
+  // Keeping older pages locally avoids polluting the live event working set,
+  // while the stable server cursor prevents loading the same page twice.
+  const transcriptEvents = useMemo(() => (
+    olderHistory.sessionId === activeSessionId && olderHistory.events.length > 0
+      ? [...olderHistory.events, ...displayEvents]
+      : displayEvents
+  ), [activeSessionId, displayEvents, olderHistory.events, olderHistory.sessionId])
+
+  const loadOlderConversationPage = useCallback(async () => {
+    if (!activeSessionId || !historyPagination?.hasMore || olderHistory.loading) return
+
+    const sessionId = activeSessionId
+    setOlderHistory((current) => ({
+      sessionId,
+      events: current.sessionId === sessionId ? current.events : [],
+      loading: true,
+      error: undefined,
+    }))
+    try {
+      const conversation = await agentApi.getChatHistoryResumeConversation(
+        sessionId,
+        activeTab?.metadata?.agentProfileWorkspace,
+        100,
+        historyPagination.nextOffset,
+      )
+      // The page marker is useful only when initially hydrating an otherwise
+      // empty transcript. Do not repeat it between real user/assistant pages.
+      const olderEvents = conversationToRestoredEvents(conversation)
+        .filter((event) => event.type !== 'conversation_resumed')
+      const pagination = conversation.history_pagination
+      const chatStore = useChatStore.getState()
+      chatStore.setTabHistoryPagination(
+        sessionId,
+        pagination ? { hasMore: pagination.has_more, nextOffset: pagination.next_offset } : null,
+      )
+      chatStore.setTabHasMoreOlderEvents(sessionId, pagination?.has_more ?? false)
+      setOlderHistory((current) => ({
+        sessionId,
+        events: current.sessionId === sessionId
+          ? [...olderEvents, ...current.events]
+          : olderEvents,
+        loading: false,
+      }))
+    } catch (error) {
+      setOlderHistory((current) => ({
+        sessionId,
+        events: current.sessionId === sessionId ? current.events : [],
+        loading: false,
+        error: error instanceof Error ? error.message : 'Could not load earlier messages',
+      }))
+    }
+  }, [activeSessionId, activeTab?.metadata?.agentProfileWorkspace, historyPagination?.hasMore, historyPagination?.nextOffset, olderHistory.loading])
 
   const hasConversationContent = useMemo(() => {
     return displayEvents.some(event =>
@@ -3304,7 +3367,17 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
             {visibleWorkflowSurface === 'active' && activeTab?.sessionId && (
               showMainTerminal
                 ? <MainAgentTerminal sessionId={activeTab.sessionId} />
-                : <TerminalEventTranscript events={displayEvents} terminal={null} streamingText={activeStreamingText} streamingStatus={streamingStatus} />
+                : <TerminalEventTranscript
+                    events={transcriptEvents}
+                    terminal={null}
+                    streamingText={activeStreamingText}
+                    streamingStatus={streamingStatus}
+                    hasOlder={historyPagination?.hasMore ?? false}
+                    loadingOlder={olderHistory.sessionId === activeSessionId && olderHistory.loading}
+                    error={olderHistory.sessionId === activeSessionId ? olderHistory.error : undefined}
+                    onLoadOlder={historyPagination?.hasMore ? loadOlderConversationPage : undefined}
+                    onRetry={loadOlderConversationPage}
+                  />
             )}
 
             {/* landing — fresh automation chat. Prefer the previous-chats panel
@@ -3348,7 +3421,17 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
             {multiAgentSurface === 'active' && activeTab?.sessionId && (
               showMainTerminal
                 ? <MainAgentTerminal sessionId={activeTab.sessionId} />
-                : <TerminalEventTranscript events={displayEvents} terminal={null} streamingText={activeStreamingText} streamingStatus={streamingStatus} />
+                : <TerminalEventTranscript
+                    events={transcriptEvents}
+                    terminal={null}
+                    streamingText={activeStreamingText}
+                    streamingStatus={streamingStatus}
+                    hasOlder={historyPagination?.hasMore ?? false}
+                    loadingOlder={olderHistory.sessionId === activeSessionId && olderHistory.loading}
+                    error={olderHistory.sessionId === activeSessionId ? olderHistory.error : undefined}
+                    onLoadOlder={historyPagination?.hasMore ? loadOlderConversationPage : undefined}
+                    onRetry={loadOlderConversationPage}
+                  />
             )}
           </>
         )}

@@ -1389,6 +1389,12 @@ export interface ChatHistoryConversation {
   conversation_history: ChatHistoryMessage[];
   terminal_snapshots?: TerminalSnapshot[];
   ui_events?: PollingEventSchema[];
+  history_pagination?: {
+    has_more: boolean;
+    next_offset: number;
+    start_turn: number;
+    total_turns: number;
+  };
   updated_at?: string;
 }
 

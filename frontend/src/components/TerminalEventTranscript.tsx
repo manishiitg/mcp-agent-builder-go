@@ -146,7 +146,7 @@ const AssistantTranscriptMessage: React.FC<{ event: PollingEvent; content: strin
   const turn = typeof fields.turn === 'number' ? fields.turn : undefined
 
   return (
-    <article data-testid="terminal-clear-assistant-message" className="my-4 border-l-2 border-emerald-400/65 pl-4 pr-2">
+    <article data-testid="terminal-clear-assistant-message" className="my-4 border-l border-emerald-400/55 pl-4 pr-2">
       <div className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-emerald-300/75">
         <span>{label}</span>
         <span className="h-1 w-1 rounded-full bg-neutral-600" />
@@ -402,19 +402,18 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
   }, [items, streamingStatus, streamingText.length])
   const followedUserMessageKeyRef = useRef(latestUserMessageKey)
   const followCurrentTurnRef = useRef(true)
-  const [isAtTranscriptStart, setIsAtTranscriptStart] = useState(true)
-
+  // Do not reserve a permanent header for history. The user reaches this
+  // control by scrolling to the oldest currently-loaded item; it only exists
+  // when another page can actually be fetched from the backend.
+  const [isAtTranscriptStart, setIsAtTranscriptStart] = useState(false)
+  const hasNavigatedFromTailRef = useRef(false)
   const showEarlierMessagesControl = Boolean(
-    hasOlder || loadingOlder || error || (!isAtTranscriptStart && items.length > 1),
+    error || (isAtTranscriptStart && (hasOlder || loadingOlder) && onLoadOlder),
   )
 
   const handleEarlierMessages = useCallback(() => {
-    if (hasOlder) {
-      onLoadOlder?.()
-      return
-    }
-    followCurrentTurnRef.current = false
-    virtuosoRef.current?.scrollToIndex({ index: 0, align: 'start', behavior: 'auto' })
+    if (!hasOlder) return
+    onLoadOlder?.()
   }, [hasOlder, onLoadOlder])
 
   // Sending a message changes more than the transcript: the optimistic user
@@ -455,7 +454,10 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
   const handleWheelCapture = useCallback((event: React.WheelEvent<HTMLDivElement>) => {
     const scroller = scrollerRef.current
     if (!(scroller instanceof HTMLElement) || event.deltaY === 0) return
-    if (event.deltaY < 0) followCurrentTurnRef.current = false
+    if (event.deltaY < 0) {
+      followCurrentTurnRef.current = false
+      hasNavigatedFromTailRef.current = true
+    }
 
     let target = event.target instanceof HTMLElement ? event.target : null
     while (target && target !== event.currentTarget) {
@@ -552,11 +554,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
               disabled={loadingOlder}
               className="mx-auto rounded px-2 py-0.5 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200 disabled:cursor-wait disabled:opacity-60"
             >
-              {loadingOlder
-                ? 'Loading earlier messages…'
-                : hasOlder
-                  ? 'Load earlier messages'
-                  : 'View earlier messages'}
+              {loadingOlder ? 'Loading earlier messages…' : 'Load earlier messages'}
             </button>
           )}
         </div>
@@ -570,7 +568,13 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
           : items}
         className="custom-scrollbar min-h-0 flex-1"
         scrollerRef={ref => { scrollerRef.current = ref }}
-        rangeChanged={({ startIndex }) => { setIsAtTranscriptStart(startIndex === 0) }}
+        rangeChanged={({ startIndex }) => {
+          // `startIndex === 0` is also true for a brand-new short transcript.
+          // Do not show paging chrome just because it mounted there; it is an
+          // action the reader reaches by navigating back toward the beginning.
+          if (startIndex > 0) hasNavigatedFromTailRef.current = true
+          setIsAtTranscriptStart(startIndex === 0 && hasNavigatedFromTailRef.current)
+        }}
         followOutput="smooth"
         initialTopMostItemIndex={Math.max(0, items.length - 1)}
         computeItemKey={(_, item) => item.key}

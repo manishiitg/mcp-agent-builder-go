@@ -558,7 +558,7 @@ type TerminalTheme = (typeof TERMINAL_THEMES)[TerminalColorScheme]
 const RAW_XTERM_FONT_FAMILY = '"JetBrains Mono", "SFMono-Regular", "SF Mono", Menlo, Monaco, "Cascadia Mono", "Fira Code", Consolas, "Liberation Mono", monospace'
 const RAW_XTERM_FONT_SIZE = 13
 const RAW_XTERM_CSS_LINE_HEIGHT = 'normal'
-const RAW_XTERM_THEMES: Record<Theme, ITheme> = {
+export const RAW_XTERM_THEMES: Record<Theme, ITheme> = {
   dark: {
     background: '#0b0e14',
   },
@@ -1475,7 +1475,9 @@ const LiveAttachXtermPaneInner: React.FC<{
   onViewportStickChange?: (isNearBottom: boolean) => void
   onScrollToBottomReady?: (handler: (() => void) | null) => void
   onOutputText?: (text: string) => void
-}> = ({ terminalId, tmuxSession, sessionId, className, contentRef, xtermTheme, authoritativeContent, authoritativeVersion, reconnectOnClose, onViewportStickChange, onScrollToBottomReady, onOutputText }) => {
+  streamUrl?: (cols: number, rows: number) => string
+  loadSnapshot?: () => Promise<TerminalSnapshot>
+}> = ({ terminalId, tmuxSession, sessionId, className, contentRef, xtermTheme, authoritativeContent, authoritativeVersion, reconnectOnClose, onViewportStickChange, onScrollToBottomReady, onOutputText, streamUrl, loadSnapshot }) => {
   const [connectionState, setConnectionState] = useState<'connecting' | 'connected' | 'reconnecting' | 'snapshot' | 'settled' | 'superseded'>('connecting')
   // Set inside the socket effect so the superseded badge's "Take over" button
   // can re-attach this pane without remounting it.
@@ -1571,11 +1573,13 @@ const LiveAttachXtermPaneInner: React.FC<{
       if (closed || snapshotInFlight) return reconnectOnCloseRef.current
       snapshotInFlight = true
       try {
-        const snapshot = await agentApi.getTerminal(terminalId, {
-          content: 'screen',
-          lines: LIVE_ATTACH_SNAPSHOT_LINES,
-          debugSource: 'live-attach-reconnect',
-        })
+        const snapshot = loadSnapshot
+          ? await loadSnapshot()
+          : await agentApi.getTerminal(terminalId, {
+              content: 'screen',
+              lines: LIVE_ATTACH_SNAPSHOT_LINES,
+              debugSource: 'live-attach-reconnect',
+            })
         if (closed) return false
 
         const canReconnect = terminalSnapshotCanReconnect(snapshot)
@@ -1633,7 +1637,9 @@ const LiveAttachXtermPaneInner: React.FC<{
         return
       }
       hasConnected = true
-      const url = agentApi.getTerminalStreamUrl(terminalId, term.cols, term.rows, tmuxSession, sessionId)
+      const url = streamUrl
+        ? streamUrl(term.cols, term.rows)
+        : agentApi.getTerminalStreamUrl(terminalId, term.cols, term.rows, tmuxSession, sessionId)
       let ws: WebSocket
       try {
         ws = new WebSocket(url)
@@ -2032,7 +2038,7 @@ const LiveAttachXtermPaneInner: React.FC<{
   )
 }
 
-const LiveAttachXtermPane = memo(LiveAttachXtermPaneInner)
+export const LiveAttachXtermPane = memo(LiveAttachXtermPaneInner)
 
 const TerminalWaitingPane: React.FC<{
   className?: string
@@ -2226,7 +2232,7 @@ const StaticXtermPaneInner: React.FC<{
   )
 }
 
-const StaticXtermPane = memo(StaticXtermPaneInner)
+export const StaticXtermPane = memo(StaticXtermPaneInner)
 
 function normalizeTerminalWorkflowPath(path?: string | null): string {
   return (path || '')

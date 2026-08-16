@@ -95,73 +95,16 @@ export function currentActiveSession(
 }
 
 /**
- * Identifies which workflow a session belongs to, for de-duplicating pills
- * that point at the same workflow from different sessions — e.g. an open
- * chat tab and a background Pulse schedule for that same workflow.
- */
-export function sessionWorkflowKey(session: ActiveSessionInfo): string {
-  return session.workflow_name || session.workflow_label || session.workspace_path || ''
-}
-
-/**
- * The pills GlobalActivityMonitor should render: every visible session
- * except the current one, with same-workflow siblings collapsed to the most
- * useful row.
- *
- * Excluding the current session by session_id alone left a real gap: a
- * sibling session for the SAME workflow (a background Pulse schedule, a
- * second observing tab) has a different session_id, so it survived into the
- * pill list while the header's current-workflow selector also showed that
- * workflow's status — the one workflow rendered twice at once, violating
- * "the selected running workflow must appear exactly once". Excluding by the
- * current session's workflow identity, not just its id, is what actually
- * satisfies that.
+ * The global monitor renders every visible session except the one currently
+ * open in the chat surface. A workflow may have an interactive chat and a
+ * scheduled run at the same time; they have independent session IDs,
+ * lifecycles, and destinations. Collapsing them by workspace hides real work.
  */
 export function visibleActivitySessions(
   activeSessions: ActiveSessionInfo[],
   currentSessionId: string | null,
-  currentSessionWorkflowKey: string,
 ): ActiveSessionInfo[] {
-  const filtered = activeSessions.filter(session => {
-    if (session.session_id === currentSessionId) return false
-    if (currentSessionWorkflowKey && isWorkflowSession(session) && sessionWorkflowKey(session) === currentSessionWorkflowKey) {
-      return false
-    }
-    return true
-  })
-
-  const byWorkflow = new Map<string, ActiveSessionInfo>()
-  const nonWorkflow: ActiveSessionInfo[] = []
-  const rank = (s: ActiveSessionInfo) => {
-    const st = sessionRuntimeStatus(s)
-    let score = 0
-    if (st === 'busy') score += 30
-    if (st === 'idle') score += 10
-    if (hasLiveBackgroundAgents(s)) score += 20
-    if (runtimeNeedsUserInput(s)) score += 15
-    if (s.has_retained_tmux_session) score += 50
-    return score
-  }
-  const timestamp = (s: ActiveSessionInfo) => Date.parse(s.last_activity || s.created_at || '') || 0
-
-  for (const session of filtered) {
-    const key = isWorkflowSession(session) ? sessionWorkflowKey(session) : ''
-    if (!key) {
-      nonWorkflow.push(session)
-      continue
-    }
-    const existing = byWorkflow.get(key)
-    if (!existing) {
-      byWorkflow.set(key, session)
-      continue
-    }
-    const rankDelta = rank(session) - rank(existing)
-    if (rankDelta > 0 || (rankDelta === 0 && timestamp(session) > timestamp(existing))) {
-      byWorkflow.set(key, session)
-    }
-  }
-
-  return [...byWorkflow.values(), ...nonWorkflow]
+  return activeSessions.filter(session => session.session_id !== currentSessionId)
 }
 
 export function statusTone(
