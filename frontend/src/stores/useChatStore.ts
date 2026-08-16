@@ -41,7 +41,9 @@ const STREAMING_INACTIVITY_MS = 60000
 
 // Per-mode event counts type — kept for backwards compat with persisted state
 export type PerModeEventCounts = { micro: number }
-export type EventViewMode = 'tree' | 'terminal'
+// `tree` remains only so persisted state and older callers deserialize safely;
+// normalizeEventViewMode always migrates it to the formatted product surface.
+export type EventViewMode = 'formatted' | 'terminal' | 'tree'
 
 export type ExecutionStreamingActivity = {
   sessionId: string
@@ -53,10 +55,11 @@ export type ExecutionStreamingActivity = {
 }
 
 export function normalizeEventViewMode(viewMode?: string | null): EventViewMode {
-  // The legacy event tree has been removed. Normalize persisted tree
-  // preferences to the automatic terminal surface during store hydration.
-  void viewMode
-  return 'terminal'
+  // The product default is a readable event-backed conversation. Raw terminal
+  // inspection is developer diagnostics and is only rendered when its explicit
+  // runtime gate is enabled; preserve an intentional terminal choice for that
+  // mode, but migrate the removed legacy tree surface to formatted.
+  return viewMode === 'terminal' ? 'terminal' : 'formatted'
 }
 
 type ScriptedExecutionData = {
@@ -675,11 +678,12 @@ let previousDurableChatState: DurableChatState | null = null
  * same object for the buffered adapter to skip serialization entirely.
  */
 const selectDurableChatState = (state: ChatState): DurableChatState => {
+  const normalizedViewMode = normalizeEventViewMode(state.eventViewModePreference)
   if (
     previousDurableChatState &&
     state.chatTabs === previousDurableChatTabs &&
     state.activeTabId === previousDurableActiveTabId &&
-    state.eventViewModePreference === previousDurableViewMode
+    normalizedViewMode === previousDurableViewMode
   ) {
     return previousDurableChatState
   }
@@ -720,11 +724,11 @@ const selectDurableChatState = (state: ChatState): DurableChatState => {
 
   previousDurableChatTabs = state.chatTabs
   previousDurableActiveTabId = state.activeTabId
-  previousDurableViewMode = state.eventViewModePreference
+  previousDurableViewMode = normalizedViewMode
   previousDurableChatState = {
     chatTabs,
     activeTabId,
-    eventViewModePreference: normalizeEventViewMode(state.eventViewModePreference),
+    eventViewModePreference: normalizedViewMode,
   }
   return previousDurableChatState
 }
@@ -808,7 +812,7 @@ export const useChatStore = create<ChatState>()(
       sessionId: null,
       hasActiveChat: false,
       autoScroll: true,
-      eventViewModePreference: 'terminal',
+    eventViewModePreference: 'formatted',
       terminalCenterOpen: false,
       finalResponse: '',
       isCompleted: false,
@@ -2004,7 +2008,7 @@ export const useChatStore = create<ChatState>()(
           isSyntheticTurn: false,
           canSteer: false,
           hideToolCalls: true,
-          viewMode: mode === 'multi-agent' ? 'terminal' : normalizeEventViewMode(get().eventViewModePreference),
+          viewMode: normalizeEventViewMode(get().eventViewModePreference),
           config: defaultConfig, // Initialize with default config from global state
           createdAt: timestamp,
           lastAccessedAt: timestamp,

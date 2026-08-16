@@ -191,10 +191,10 @@ describe('selectTerminalEvents — owned terminal (workflow step, message-sequen
     expect(selectTerminalEvents(events, t).map(e => e.id)).toEqual(['task-work', 'completion'])
   })
 
-  it('returns nothing for an empty or missing terminal', () => {
+  it('returns a full session transcript when no terminal is supplied', () => {
     const events = [evt({ id: 'a', session_id: 's1', execution_id: 'exec-1' })]
     expect(selectTerminalEvents(events, terminal({ session_id: 's1', owner_id: '' }))).toEqual([])
-    expect(selectTerminalEvents(events, null)).toEqual([])
+    expect(selectTerminalEvents(events, null).map(event => event.id)).toEqual(['a'])
     expect(selectTerminalEvents(undefined, terminal({ session_id: 's1', owner_id: 'exec-1' }))).toEqual([])
   })
 })

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, forwardRef, useImperativeHandle, useMemo, useState, type ForwardedRef } from 'react'
+import { Suspense, lazy, useEffect, useRef, useCallback, forwardRef, useImperativeHandle, useMemo, useState, type ForwardedRef } from 'react'
 import { useRenderLogger, useMemoLogger } from '../utils/renderLogger'
 import { chatSubmissionLane } from '../utils/promiseLane'
 import { liveInputSubmissionCoordinator, shouldAppendOptimisticLiveInputMessage } from '../utils/liveInputSubmission'
@@ -9,29 +9,25 @@ import { agentApi, resetSessionId, getSessionId } from '../services/api'
 import type { PollingEvent, ExtendedLLMConfiguration, SSEEventMessage, SSEStatusMessage, ExecutionOptions } from '../services/api-types'
 import type { AgentMode } from '../stores/types'
 import { ChatInput } from './ChatInput'
-import { TerminalCenter } from './TerminalCenter'
+import { TerminalEventTranscript } from './TerminalEventTranscript'
 import { WorkflowModeHandler, type WorkflowModeHandlerRef, signalPlanModified } from './workflow'
 import { ToastContainer } from './ui/Toast'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useWorkflowStore } from '../stores/useWorkflowStore'
 import { useAppStore, useLLMStore, useMCPStore, useChatStore, useGlobalPresetStore } from '../stores'
+import { useCapabilitiesStore } from '../stores/useCapabilitiesStore'
 import { useModeStore, type ModeCategory } from '../stores/useModeStore'
 import { PreviousChatHistoryPanel } from './PreviousChatHistoryPanel'
 import { resolveChatSurface, resolveWorkflowChatSurface } from './resolveChatSurface'
 import { PresetSelectionOverlay } from './PresetSelectionOverlay'
 import { ModeSwitchDialog } from './ui/ModeSwitchDialog'
-import { normalizeEventViewMode, type ChatTab } from '../stores/useChatStore'
+import type { ChatTab } from '../stores/useChatStore'
 import type { CustomPreset } from '../types/preset'
 import { restoreSession } from '../utils/sessionRestore'
 import { logger } from '../utils/logger'
 import { secretsApi } from '../api/secrets'
 import { useSecretsStore } from '../stores'
-import { useSessionExecutionTree } from '../hooks/useSessionExecutionTree'
-import { useSessionTerminals } from '../hooks/useSessionTerminals'
 import { useResumePreviousChat } from '../hooks/useResumePreviousChat'
-import { requestTerminalRefreshBurst } from '../utils/terminalRefresh'
-import { isLiveWorkflowTerminal } from '../utils/workflowTerminalActivity'
-import { startRestoredTransportTerminal } from '../utils/restoredTerminal'
 import {
   determineModeFlag,
   buildLLMConfigWithApiKeys,
@@ -51,22 +47,19 @@ const AUTO_NOTIFICATION_PREFIX = '[AUTO-NOTIFICATION]'
 const ENABLE_LEGACY_FRONTEND_AUTO_NOTIFICATIONS = false
 const RESTORED_CONVERSATION_CONTEXT_MARKER = '\n\nPrevious workflow-builder conversation file:'
 const STALE_STREAMING_RECOVERY_GRACE_MS = 10000
-// Grace window after a resume marker appears (page-load auto-restore sleeps ~500ms
-// before isRestoringChatSessions flips true; a freshly-resumed chat streams its
-// first turn shortly after). The previous-chats list stays hidden during this
-// window so a NON-empty resumed chat doesn't flash the list before its first
-// event/terminal arrives; once it elapses still-empty, the list is revealed.
-//
-// CRITICAL: this MUST outlast the useSessionTerminals presence probe so the list
-// never flashes mid-resume. That probe (src/hooks/useSessionTerminals.ts) polls
-// every 3000ms and the restored static snapshot only lands after the async
-// restore-terminal POST, so the terminal is typically detected on the 2nd–3rd
-// poll (~3–6s). A 2500ms settle expired BEFORE the probe's second poll → the
-// resolver fell to 'landing' and the user had to click Resume 2–3 times. 10000ms
-// gives the probe ~4 polls to confirm the terminal (→ 'active') before the settle
-// can ever fall through to 'landing' (only a genuinely dead/empty resume does).
+// Grace window after a resume marker appears. The normal product surface is an
+// event transcript, so we wait only for durable conversation events/SSE rather
+// than probing the internal tmux terminal inventory.
 const RESUME_SETTLE_MS = 10000
 const STREAMING_EVENT_TYPES = new Set(['streaming_start', 'streaming_chunk', 'streaming_end'])
+// Terminal inspection is developer diagnostics, not product navigation. Keep it
+// explicitly opt-in so ordinary Chat/Schedule tabs never mount the terminal rail
+// or its snapshot/execution-tree polling. The server independently gates those
+// endpoints with AGENTWORKS_RUNTIME_DEBUG.
+const RUNTIME_DIAGNOSTICS_ENABLED = import.meta.env.VITE_RUNTIME_DEBUG === '1'
+// Keep xterm, pane capture, and terminal-tree code out of the normal product
+// bundle/runtime. This module is loaded only after both debug gates opt in.
+const RuntimeDiagnosticsPanel = lazy(() => import('./TerminalCenter').then(module => ({ default: module.TerminalCenter })))
 
 type RuntimeEventScope = {
   kind: 'session' | 'delegation' | 'workshop'
@@ -405,7 +398,6 @@ interface ChatAreaProps {
   // Compact mode for smaller font sizes (used in workflow layout)
   compact?: boolean
   // Suppress terminal content while the parent renders an idle/history state.
-  suppressTerminalPane?: boolean
   // Tab ID - if provided, use this tab's session ID (works for both chat and workflow modes).
   // Pass null explicitly to disable all active behavior (SSE, polling, queue) — used when
   // this ChatArea instance is hidden behind another instance for the same tab.
@@ -439,7 +431,7 @@ let globalHasRestored = false
 
 // Inner component for chat area
 const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAreaRef>) => {
-  const { onNewChat, hideInput = false, compact = false, suppressTerminalPane = false, tabId, previousChatsCompact = false, workflowPreviousChatsPanel } = props
+  const { onNewChat, hideInput = false, compact = false, tabId, previousChatsCompact = false, workflowPreviousChatsPanel } = props
   // null means "inactive — don't subscribe to any tab or run any effects"
   const isInactive = tabId === null
 
@@ -503,8 +495,6 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
   const activeTab = useChatStore(state =>
     targetTabId ? state.chatTabs[targetTabId] : undefined
   )
-  const activeEventViewMode = normalizeEventViewMode(activeTab?.viewMode)
-
   // PERF FIX: Stable tab-session key to avoid phantom re-renders.
   //
   // PROBLEM: Previously `const chatTabs = useChatStore(state => state.chatTabs)` subscribed
@@ -644,8 +634,16 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
   // Session-specific selector: only re-renders when the ACTIVE session's events change
   // (not when any other session gets events)
   const activeSessionId = activeTab?.sessionId
+  const serverRuntimeDiagnosticsEnabled = useCapabilitiesStore(state => state.capabilities?.runtime_debug === true)
+  const showRuntimeDiagnostics = RUNTIME_DIAGNOSTICS_ENABLED && serverRuntimeDiagnosticsEnabled
   const tabEvents = useChatStore((state) =>
     activeSessionId ? state.tabEvents[activeSessionId] || EMPTY_EVENTS : EMPTY_EVENTS
+  )
+  const streamingText = useChatStore((state) =>
+    activeSessionId ? state.streamingText[activeSessionId] || '' : ''
+  )
+  const streamingStatus = useChatStore((state) =>
+    activeSessionId ? state.streamingStatus[activeSessionId] || '' : ''
   )
 
   // processEventsResponse runs for every polled session and does not carry
@@ -677,7 +675,6 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
   // about ownership. Stamping it with the session it belongs to makes the reset
   // synchronous with the switch instead of one render late.
   const displayEventsSessionRef = useRef<string | undefined>(activeSessionId)
-  const emptyTerminalRestoreAttemptRef = useRef<Set<string>>(new Set())
 
   const displayEvents = useMemo(() => {
     if (displayEventsSessionRef.current !== activeSessionId) {
@@ -748,15 +745,6 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     )
   }, [displayEvents])
 
-  // The removed tree layout used to be the reason this was fetched, but it has a
-  // SECOND consumer: restoredSessionHasExecutionContent (below) needs the node
-  // counts to decide whether a resumed tab still shows execution activity, so
-  // the previous-chats list never replaces a populated terminal pane. Fetch it
-  // for restored conversations only — that is the one surface that reads it.
-  const shouldFetchSessionExecutionTree =
-    !!activeSessionId && !!activeTab?.config?.restoredConversationPath
-  const { data: sessionExecutionTree } = useSessionExecutionTree(activeSessionId, shouldFetchSessionExecutionTree)
-
   // --- Render tracking (filter by [Render] in console) ---
   useRenderLogger('ChatArea', {
     displayEvents: displayEvents.length,
@@ -802,80 +790,25 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
   // while the resume is genuinely loading (see the two guards below), so an empty
   // resumed tab falls through to the previous-chats list.
   const activeTabHasRestoredConversation = !!activeTab?.config?.restoredConversationPath
-  // Terminal / coding-agent resumes have no conversation events — their surface is
-  // the terminal pane. Keep the list hidden while the restored session still shows
-  // execution-tree activity so it never replaces a populated terminal/coding pane.
-  const restoredSessionHasExecutionContent =
-    activeTabHasRestoredConversation &&
-    !!sessionExecutionTree &&
-    (sessionExecutionTree.summary.running_count +
-      sessionExecutionTree.summary.completed_count +
-      sessionExecutionTree.summary.failed_count +
-      sessionExecutionTree.summary.canceled_count) > 0
-  // A native/terminal resume reattaches a live terminal but produces NO
-  // execution-tree nodes, so restoredSessionHasExecutionContent alone can't see
-  // it — without this probe the surface would flip from the restored terminal to
-  // the previous-chats landing once the settle window elapsed. Probe the same
-  // terminal list that decides TerminalCenter's "No terminals yet" empty state;
-  // a present terminal means the resumed tab's surface is the terminal pane.
-  const shouldProbeSessionTerminals =
-    !!activeSessionId &&
-    (
-      activeTabHasRestoredConversation ||
-      (selectedModeCategory === 'workflow' && activeEventViewMode === 'terminal')
-    )
-  const { data: sessionTerminals, isFetched: sessionTerminalsFetched } = useSessionTerminals(
-    activeSessionId,
-    shouldProbeSessionTerminals,
-  )
-  // Subscribe to active sessions cache updates. Keep this near the terminal
-  // surface derivations so pending/running terminal flags are initialized before
-  // later restore/surface effects read them.
+  // Subscribe to the session cache for lifecycle only. The transcript itself is
+  // sourced from the session event stream; it does not inspect terminal state.
   const activeSessionsCache = useChatStore((state) => state.activeSessionsCache)
   const activeSessionIds = useMemo(() => {
     return new Set(activeSessionsCache.map(s => s.session_id))
   }, [activeSessionsCache])
-  const restoredSessionTerminals = sessionTerminals?.terminals || []
   // A tab observing a specific scheduled/bot run is a read-only view of THAT
   // run, never a fresh chat. The chat-surface resolver keeps such tabs in
   // restoring (while events load) or active (once present) and never lets them
   // bounce to the previous-chats landing panel (the "schedule-bounce" fix).
   const isReadOnlyRunView =
     !!activeTab?.metadata?.isScheduledRun || !!activeTab?.metadata?.isBotRun
-  const readOnlyRunHasTerminal =
-    isReadOnlyRunView && selectedModeCategory === 'workflow' && restoredSessionTerminals.length > 0
-  const restoredSessionHasTerminal =
-    (activeTabHasRestoredConversation || readOnlyRunHasTerminal) && restoredSessionTerminals.length > 0
-  // Any recognized "this resumed tab is live" signal: execution-tree activity OR
-  // a live terminal pane. Feeds the resolver's active-over-landing decision.
-  const hasRestoredLiveContent = restoredSessionHasExecutionContent || restoredSessionHasTerminal
+  // A resumed conversation becomes active when its durable events arrive. Never
+  // use a tmux snapshot as a proxy for product-visible chat content.
+  const hasRestoredLiveContent = activeTabHasRestoredConversation && hasConversationContent
   // Use the ACTIVE TAB's streaming flag, not the global state.isStreaming, which
   // lingers true after New Chat from a running conversation (a cross-tab signal,
   // not session-scoped) and would wrongly force 'active'.
   const activeTabStreaming = !!activeTab?.isStreaming
-  const activeTabHasRunningBackendSession = !!activeTab?.sessionId && activeSessionsCache.some(session => {
-    if (session.session_id !== activeTab.sessionId) return false
-    const status = (session.status || '').toLowerCase()
-    return status === 'running' || status === 'paused'
-  })
-  const hasLiveWorkflowTerminal = selectedModeCategory === 'workflow' && restoredSessionTerminals.some(isLiveWorkflowTerminal)
-  const terminalProbeSettledEmpty =
-    shouldProbeSessionTerminals &&
-    sessionTerminalsFetched &&
-    restoredSessionTerminals.length === 0
-  const terminalActivityStillPlausible =
-    !terminalProbeSettledEmpty ||
-    activeTab?.metadata?.isViewOnly !== true
-  // The terminal empty-state copy is narrower still: "Starting terminal / Your
-  // message was sent" is only true for a live submitted/running turn, not merely
-  // because an opened/restored workflow tab has historical conversation events.
-  // Read-only Schedule/Bot runs can stay "running" in the backend after their
-  // terminal pane is gone; once the terminal probe has settled empty, do not keep
-  // forcing a dead "Starting terminal" surface.
-  const hasPendingTerminalActivity = !suppressTerminalPane && (
-    (activeTabStreaming && terminalActivityStillPlausible) ||
-    (activeTabHasRunningBackendSession && terminalActivityStillPlausible)
-  )
   // Resume give-up TIMER only. A resume that never produces a terminal/content may
   // eventually fall to 'landing'; resumeGaveUp flips true after RESUME_SETTLE_MS so
   // a genuinely-dead resume isn't stuck on a spinner forever. This is purely a
@@ -1517,13 +1450,6 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
         }
       }
 
-      if (
-        event.type === 'auto_notification_steered' ||
-        (event.type === 'user_message' && getDisplaySafeUserMessageContent(getUserMessageContent(event)).startsWith(AUTO_NOTIFICATION_PREFIX))
-      ) {
-        requestTerminalRefreshBurst()
-      }
-
       if (!isSubAgentEvent && (event.type === 'llm_generation_end' || event.type === 'unified_completion' || event.type === 'agent_end' || event.type === 'conversation_end' || event.type === 'conversation_error' || event.type === 'context_cancelled')) {
         hasCompletionEvent = true
       }
@@ -2079,17 +2005,6 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     restoreAll()
   }, [getActiveSessions, switchTab, selectedModeCategory])
 
-  // Key that changes whenever any tab's view-mode flips, so the
-  // Key that changes whenever any tab's view-mode flips. The SSE effect
-  // uses it as a cheap wake-up signal so mode changes do not leave a tab's
-  // connection state stale.
-  const viewModeKey = useChatStore(state =>
-    Object.entries(state.chatTabs)
-      .map(([tid, t]) => `${tid}:${normalizeEventViewMode(t.viewMode)}`)
-      .sort()
-      .join('|')
-  )
-
   // Only poll tabs that have their session ID in the backend's active sessions list
   // Backend determines activity based on event activity (10 min timeout)
   // CRITICAL: Also include tabs that are streaming (user just submitted a query)
@@ -2226,18 +2141,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       stopPolling()
     }
 
-  }, [tabsWithActiveSessions, viewModeKey, connectSSE, disconnectSSE, handleSSEMessage, handleSSEStatus, handleSSEFallback, pollingInterval, startPolling, stopPolling, pollEvents])
-
-  // When the active tab's viewMode flips OFF Terminal, kick a single
-  // poll immediately so the backfill from the server's 1500-event ring
-  // doesn't have to wait for the next poll tick.
-  const prevActiveViewModeRef = useRef<string>(activeEventViewMode)
-  useEffect(() => {
-    if (prevActiveViewModeRef.current === 'terminal' && activeEventViewMode !== 'terminal') {
-      void pollEvents()
-    }
-    prevActiveViewModeRef.current = activeEventViewMode
-  }, [activeEventViewMode, pollEvents])
+  }, [tabsWithActiveSessions, connectSSE, disconnectSSE, handleSSEMessage, handleSSEStatus, handleSSEFallback, pollingInterval, startPolling, stopPolling, pollEvents])
 
   // Cleanup polling and SSE on unmount
   useEffect(() => {
@@ -2385,7 +2289,6 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
           chatStore.setHasActiveChat(true)
           chatStore.setTabCompleted(currentTab.tabId, false)
           chatStore.setTabStreaming(currentTab.tabId, true)
-          requestTerminalRefreshBurst()
           setTimeout(() => { scrollToBottom('smooth') }, 50)
           if (!useChatStore.getState().sseConnections[tabSessionId]) {
             connectSSE(
@@ -2492,7 +2395,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     const queryWithContext = `${displayQueryWithContext}${restoredConversationContext}`
 
     if (restoredConversationUsesNative) {
-      chatStore.setTabViewMode(currentTab.tabId, 'terminal')
+      chatStore.setTabViewMode(currentTab.tabId, 'formatted')
     }
 
     // Decrypt selected secrets for payload (passed separately, never in query text)
@@ -2597,7 +2500,6 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     chatStore.setHasActiveChat(true)
     chatStore.setTabCompleted(currentTab.tabId, false)
     chatStore.setTabStreaming(currentTab.tabId, true)
-    requestTerminalRefreshBurst()
 
     // Reset lastEventIndex so polling starts fresh from the in-memory event store
     // (critical when continuing a restored session — DB events have different indices than in-memory)
@@ -2750,7 +2652,6 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
         console.log('[WF_DEBUG] 4. After updateTabSessionId', { events: chatStore.getTabEvents(responseSessionId).length, activeTabSession: useChatStore.getState().chatTabs[currentTab.tabId]?.sessionId })
         chatStore.setTabStreaming(currentTab.tabId, true)
         chatStore.setTabCompleted(currentTab.tabId, false)
-        requestTerminalRefreshBurst()
 
         // Reactivate historical session if needed
         const currentSessionState = useChatStore.getState().sessionState
@@ -2792,7 +2693,6 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
         const sid = response.session_id || tabSessionId
         chatStore.setTabStreaming(currentTab.tabId, true)
         chatStore.setTabCompleted(currentTab.tabId, false)
-        requestTerminalRefreshBurst()
         if (sid && !useChatStore.getState().sseConnections[sid]) {
           connectSSE(
             sid,
@@ -3059,51 +2959,9 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     currentWorkflowPhase
   }), [handleNewChat, resetChatState, refreshWorkflowPresets, submitQueryWithQuery, displayEvents, isStreaming, currentWorkflowPhase])
 
-  // Single source of truth for "which surface shows" — shared by BOTH the
-  // multi-agent and workflow render branches (see ./resolveChatSurface). The two
-  // branches derive `hasContent` differently (mirroring today's behavior):
-  // multi-agent keys off conversation events, workflow off any display event.
-  // isStreaming below is the ACTIVE TAB's flag (activeTabStreaming), NOT the
-  // global state.isStreaming. The global flag is a cross-tab signal that lingers
-  // true after New Chat from a running conversation (resetTabChat rotates the
-  // sessionId + clears the per-tab flag but does not reset the global one), which
-  // wrongly kept a fresh New-Chat tab on 'active' (empty terminal) instead of
-  // 'landing'. Reading the per-tab flag scopes "is streaming" to THIS session.
-  useEffect(() => {
-    if (!activeSessionId || !sessionTerminalsFetched) return
-    if (activeEventViewMode !== 'terminal') return
-    if (hasPendingTerminalActivity || restoredSessionTerminals.length > 0) return
-
-    const restoredPath = activeTab?.config?.restoredConversationPath?.trim() || ''
-    const sourceSessionId = activeTab?.config?.restoredConversationNativeResume === true || selectedModeCategory === 'workflow'
-      ? activeSessionId
-      : ''
-    if (!restoredPath && !sourceSessionId) return
-
-    const workspacePath = selectedModeCategory === 'workflow'
-      ? activeWorkflowPreset?.selectedFolder?.filepath
-      : undefined
-    const attemptKey = `${activeSessionId}:${restoredPath || 'session'}:${workspacePath || ''}`
-    if (emptyTerminalRestoreAttemptRef.current.has(attemptKey)) return
-    emptyTerminalRestoreAttemptRef.current.add(attemptKey)
-
-    startRestoredTransportTerminal(
-      activeSessionId,
-      restoredPath || undefined,
-      sourceSessionId || undefined,
-      workspacePath,
-    )
-  }, [
-    activeEventViewMode,
-    activeSessionId,
-    activeTab?.config?.restoredConversationNativeResume,
-    activeTab?.config?.restoredConversationPath,
-    activeWorkflowPreset?.selectedFolder?.filepath,
-    hasPendingTerminalActivity,
-    restoredSessionTerminals.length,
-    selectedModeCategory,
-    sessionTerminalsFetched,
-  ])
+  // Single source of truth for which product surface shows. A chat is active
+  // when it has durable messages or a live turn; terminal presence is never a
+  // product-visible state.
   const multiAgentSurface = resolveChatSurface({
     isRestoring: isRestoringChatSessions,
     // The resolver's resume-pending → 'restoring' input is now the SYNCHRONOUS
@@ -3114,18 +2972,6 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     hasRestoredLiveContent,
     isReadOnlyRunView,
   })
-  // A workflow terminal is authoritative even when the chat has no hydrated
-  // events and its streaming flag has settled. Without feeding this signal into
-  // the resolver, an idle-but-live tmux pane could be replaced by Previous Chats
-  // on a later polling render.
-  const workflowHasTerminalSurface =
-    hasPendingTerminalActivity || hasLiveWorkflowTerminal || restoredSessionHasTerminal
-  // Workflow shares the resume-pending signals (resumeSettling + the terminal/
-  // execution-tree probe) so a coding-agent/terminal resume in the workflow pane
-  // stays 'restoring' until its terminal is confirmed — then 'active' — instead of
-  // flashing the previous-chats list on the first Resume click. Both inputs are
-  // false/gated whenever there's no restoredConversationPath, so a FRESH workflow
-  // chat is unaffected (still resolves to 'landing').
   const workflowSurface = resolveWorkflowChatSurface({
     isRestoring: isRestoringWorkflowSessions,
     resumeSettling: resumePending,
@@ -3133,19 +2979,8 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     isStreaming: activeTabStreaming,
     hasRestoredLiveContent,
     isReadOnlyRunView,
-  }, workflowHasTerminalSurface)
-  // In workflow terminal mode, old events are not enough to show the terminal
-  // surface. Ctrl+K should open an idle automation to its normal landing/history
-  // view unless there is a live submitted turn, a running backend session, or an
-  // actual terminal snapshot for this resumed session. Restored terminal rows can
-  // be stale snapshots when tmux is gone; they still need to render TerminalCenter
-  // so Resume never lands on a blank workflow pane.
-  const visibleWorkflowSurface =
-    workflowSurface === 'active' &&
-    activeEventViewMode === 'terminal' &&
-    !workflowHasTerminalSurface
-      ? 'landing'
-      : workflowSurface
+  }, false)
+  const visibleWorkflowSurface = workflowSurface
 
   // Keep the bottom "Resuming coding session" indicator in sync with the surface
   // (both modes). A native/terminal resume that settles onto the previous-chats
@@ -3191,14 +3026,10 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     selectedModeCategory === 'workflow' &&
     visibleWorkflowSurface === 'landing' &&
     !!workflowPreviousChatsPanel
-  // Layout: the terminal pane is full-height unless the multi-agent landing list
-  // is covering it; the two landing panels are also full-height. (Preserves the
-  // original shouldRenderTerminalPane / shouldUseFullHeightContent formulas.)
-  const shouldRenderTerminalPane =
-    activeEventViewMode === 'terminal' &&
-    !showNormalPreviousChatsPanel &&
-    !(selectedModeCategory === 'workflow' && visibleWorkflowSurface === 'landing')
-  const shouldUseFullHeightContent = shouldRenderTerminalPane || showNormalPreviousChatsPanel || showWorkflowPreviousChatsPanel
+  const hasActiveTranscript =
+    (selectedModeCategory === 'workflow' && visibleWorkflowSurface === 'active') ||
+    (selectedModeCategory === 'multi-agent' && multiAgentSurface === 'active')
+  const shouldUseFullHeightContent = hasActiveTranscript || showNormalPreviousChatsPanel || showWorkflowPreviousChatsPanel
 
   return (
     <div className="flex flex-col h-full min-w-0" data-testid="chat-area-container">
@@ -3233,7 +3064,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
           around the fixed-height terminal box. */}
       <div ref={chatContentRef} className={`flex-1 ${shouldUseFullHeightContent ? 'overflow-hidden' : 'overflow-y-auto'} overflow-x-hidden min-w-0 relative overscroll-y-none ${compact ? 'text-sm' : ''}`} style={{ scrollBehavior: 'auto' }}>
 
-        <div className={`min-w-0 ${shouldUseFullHeightContent ? 'flex h-full flex-col' : 'min-h-full'} ${shouldRenderTerminalPane ? '' : (compact ? 'px-2 pb-2' : 'px-3 pb-4')}`}>
+        <div className={`min-w-0 ${shouldUseFullHeightContent ? 'flex h-full flex-col' : 'min-h-full'} ${compact ? 'px-2 pb-2' : 'px-3 pb-4'}`}>
           {/* Loading indicator for historical events */}
           {isLoadingHistory && (
             <div className={`flex items-center justify-center ${compact ? 'py-4' : 'py-8'}`}>
@@ -3290,9 +3121,13 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
               </div>
             )}
 
-            {/* active — terminal-or-events by the view toggle. */}
+            {/* Active workflow runs render the same simple, event-backed
+                conversation as a normal chat. The terminal rail exists only
+                in explicitly enabled runtime diagnostics. */}
             {visibleWorkflowSurface === 'active' && activeTab?.sessionId && (
-              <TerminalCenter currentSessionId={activeTab.sessionId} compact={false} hasPendingTerminalActivity={hasPendingTerminalActivity} />
+              showRuntimeDiagnostics
+                ? <Suspense fallback={<div className="p-4 text-sm text-neutral-500">Loading runtime diagnostics…</div>}><RuntimeDiagnosticsPanel currentSessionId={activeTab.sessionId} compact={false} /></Suspense>
+                : <TerminalEventTranscript events={displayEvents} terminal={null} streamingText={streamingText} streamingStatus={streamingStatus} />
             )}
 
             {/* landing — fresh automation chat. Prefer the previous-chats panel
@@ -3329,9 +3164,12 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
               />
             )}
 
-            {/* active — terminal-or-events by the view toggle. */}
+            {/* The product chat is event-backed. Internal terminal inspection
+                is available only through the explicit developer flag. */}
             {multiAgentSurface === 'active' && activeTab?.sessionId && (
-              <TerminalCenter currentSessionId={activeTab.sessionId} compact={false} hasPendingTerminalActivity={hasPendingTerminalActivity} />
+              showRuntimeDiagnostics
+                ? <Suspense fallback={<div className="p-4 text-sm text-neutral-500">Loading runtime diagnostics…</div>}><RuntimeDiagnosticsPanel currentSessionId={activeTab.sessionId} compact={false} /></Suspense>
+                : <TerminalEventTranscript events={displayEvents} terminal={null} streamingText={streamingText} streamingStatus={streamingStatus} />
             )}
           </>
         )}

@@ -246,15 +246,16 @@ func (api *StreamingAPI) handleCapabilities(w http.ResponseWriter, r *http.Reque
 			"enabled":  tracingProvider != "noop",
 			"provider": tracingProvider,
 		},
-		"workspace":  map[string]interface{}{},
-		"servers":    []string{},
-		"local_mode": IsLocalMode(),
+		"workspace":     map[string]interface{}{},
+		"servers":       []string{},
+		"local_mode":    IsLocalMode(),
+		"runtime_debug": runtimeDiagnosticsEnabled(),
 		// Live-attach (control-mode) terminal WebSocket transport. True when tmux
 		// is new enough for control mode (the manager is constructed). Lets the
 		// frontend render the selected live tmux terminal over
 		// /api/terminals/{id}/stream instead of the snapshot/replay polling.
 		// See docs/refactor/terminal_live_attach_transport.md.
-		"terminal_live_attach": api.liveAttach != nil,
+		"terminal_live_attach": runtimeDiagnosticsEnabled() && api.liveAttach != nil,
 	})
 }
 

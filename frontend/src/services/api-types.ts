@@ -1720,6 +1720,8 @@ export interface CapabilitiesResponse {
   workspace: Record<string, never>;
   servers: string[];
   local_mode?: boolean;
+  runtime_debug?: boolean;
+  terminal_live_attach?: boolean;
 }
 
 
