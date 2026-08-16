@@ -32,7 +32,24 @@ describe('appendStreamingText', () => {
 
       // The exact user-visible defect: sentences glued to each other.
       expect(got).not.toContain('report table.Now')
-      expect(got).toContain('report table.\nNow')
+      expect(got).toContain('report table.\n\nNow')
+    })
+
+    it('puts a BLANK line before a markdown table so GFM parses it', () => {
+      const got = reduce(CLAUDE_BLOCK_CHUNKS, false)
+
+      // A single newline is not enough: CommonMark/GFM treats the table as lazy
+      // continuation of the preceding paragraph and renders literal pipes.
+      expect(got).not.toMatch(/[^\n]\n\| Field \| Value \|/)
+      expect(got).toContain('\n\n| Field | Value |')
+    })
+
+    it('separates complete messages into their own paragraphs', () => {
+      // Each block chunk is a whole assistant message. Joined with a single
+      // "\n" they soft-wrap into one run-on paragraph on render, losing the
+      // segmentation the provider actually sent.
+      const got = reduce(['First sentence.', 'Second sentence.'], false)
+      expect(got).toBe('First sentence.\n\nSecond sentence.')
     })
 
     it('puts a markdown table on its own line so it can render as a table', () => {
@@ -53,9 +70,10 @@ describe('appendStreamingText', () => {
       expect(appendStreamingText(once, 'beta', false)).toBe(once)
     })
 
-    it('does not add a second newline when one side already has one', () => {
-      expect(appendStreamingText('alpha\n', 'beta', false)).toBe('alpha\nbeta')
-      expect(appendStreamingText('alpha', '\nbeta', false)).toBe('alpha\nbeta')
+    it('does not stack extra newlines when a side already has one', () => {
+      expect(appendStreamingText('alpha\n', 'beta', false)).toBe('alpha\n\nbeta')
+      expect(appendStreamingText('alpha\n\n', 'beta', false)).toBe('alpha\n\nbeta')
+      expect(appendStreamingText('alpha', '\n\nbeta', false)).toBe('alpha\n\nbeta')
     })
   })
 

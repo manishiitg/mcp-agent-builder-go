@@ -2802,7 +2802,15 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
           : llmStore.primaryConfig
       const tierConfig = llmStore.delegationTierConfig
       const delegationMainModel = resolveDelegationMainModel(tierConfig, llmStore.providerManifest)
-      const effectiveLLMConfig: ExtendedLLMConfiguration = (isMultiAgentMode && delegationMainModel)
+      // A product surface (Video Studio and friends) picks its provider per
+      // PROJECT, from the manifest's own agent options, and shows that choice in
+      // its header. The global delegation tier is an AgentWorks-wide setting and
+      // must not silently outrank it: it did, so a project whose header read
+      // "Codex" actually ran the tier's pi-cli/gemini — and failed on a Gemini
+      // credential the user never chose to use. Product surfaces are identified
+      // by the same agentProfileId that authorizes the profile server-side.
+      const isProductSurfaceTab = Boolean(currentTab?.metadata?.agentProfileId)
+      const effectiveLLMConfig: ExtendedLLMConfiguration = (isMultiAgentMode && delegationMainModel && !isProductSurfaceTab)
         ? {
             ...baseLLMConfig,
             provider: delegationMainModel.provider as ExtendedLLMConfiguration['provider'],

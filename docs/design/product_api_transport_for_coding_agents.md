@@ -203,3 +203,113 @@ Both are described in
   the gate that decides a profile's tool surface
 - [`native_coding_agent_environment_policy.md`](native_coding_agent_environment_policy.md) —
   the scoped environment `native_shell` depends on
+
+## tmux vs structured: what each transport can actually do
+
+This is the capability trade-off a product makes when it sets
+`runtime.transport`. It is measured, not assumed — the per-provider numbers come
+from the live P0 e2e records in
+`mcpagent/agent/testdata/agent-reviews/TestRealBridgeStreaming_*.json` and from
+probing the CLIs directly.
+
+| Capability | tmux | structured |
+|---|---|---|
+| Progressive text while the turn runs | yes — the pane is tailed live | only if the provider's JSON protocol emits partials (see below) |
+| Reasoning / "thinking" content | provider-dependent | provider-dependent (same source; not a transport property) |
+| Live steer into a running turn | yes — the CLI has live stdin | **no** — there is no stdin to write to |
+| Typed tool call / usage / completion events | derived from pane scraping | yes, first-class |
+| Raw terminal frames in the stream | yes (`Source: terminal`) | none |
+
+The load-bearing asymmetry is that **structured transport cannot stream unless
+the CLI chooses to emit partial events**, and most do not:
+
+| Provider | Structured protocol emits | Streams in structured mode? |
+|---|---|---|
+| pi-cli | true per-token deltas (`IsDelta` on every content chunk) | yes |
+| claude-code | one `assistant` event per completed content block | coarsely — block at a time |
+| codex-cli | `thread.started`, `turn.started`, `item.completed`, `turn.completed` | **no** — one event carries the whole reply |
+| cursor-cli | token-level fragments on `assistant` events (`--stream-partial-output`) | yes — richest of all four |
+
+`codex exec --json` was probed directly: a 1365-character answer produced exactly
+four events, the third of which carried the entire text. There is no delta event
+being dropped by the adapter — codex does not emit one. Any product that pins
+`transport: structured` therefore shows a codex user nothing at all until the
+turn finishes, no matter what the frontend does.
+
+### Choosing a transport
+
+Pick `structured` when the turn is non-interactive and typed events matter more
+than feedback: batch runs, schedules, sub-agents, anything with no human
+watching. Pick `tmux` (or `auto`) when a human watches the turn and expects to
+see progress or interrupt it. `auto` resolves per provider rather than forcing
+one answer for all four.
+
+A profile that sets `transport: structured` together with `live_input: required`
+is contradictory and profile validation rejects it — live input has nowhere to
+go on a transport with no stdin.
+
+### Known drift (2026-08-16)
+
+`video_studio_inside_agentworks.md` specifies `transport: auto` for Video Studio
+and describes selecting "a tmux-capable runtime for live steering", but the
+shipped `agent_go/internal/videoproduct/product.yaml` pins `transport:
+structured`. Those disagree. The shipped setting is why Video Studio shows no
+progress on codex and claude-code while pi-cli looks fine — pi is the only one of
+the four whose structured protocol streams.
+
+Resolving the drift is a product decision, not a bug fix: `structured` buys typed
+events and a clean non-technical surface, and costs streaming and live steering
+on three of four providers.
+
+
+## Measured matrix (2026-08-16)
+
+Every cell below is a live run of `TestRealBridgeStreamingE2E` in mcpagent —
+real CLI, real mcpbridge, real `execute_shell_command`, real file written to
+disk. Re-run any cell with:
+
+```
+RUN_MCPAGENT_REAL_BRIDGE_E2E=1 \
+MCPAGENT_REAL_BRIDGE_ONLY=<claude|codex|cursor|pi> \
+MCPAGENT_REAL_BRIDGE_TRANSPORT=<tmux|structured> \
+go test ./agent/ -run TestRealBridgeStreamingE2E -v
+```
+
+Omit both `ONLY` and `TRANSPORT` to run the whole matrix.
+
+| provider / transport | pass | deltas | thinking | clean chunks | first signal |
+|---|---|---|---|---|---|
+| claude / tmux | yes | 0 | 0 | 4 | 8.5s |
+| codex / tmux | yes | 0 | 0 | 4 | 7.3s |
+| pi / tmux | yes | 8 | 0 | 8 | 5.0s |
+| cursor / structured | yes | 92 | 29 | 92 | 10.8s |
+| cursor / tmux | **no** | 0 | 0 | 4 | 11.2s |
+
+Two conclusions this data supports, both of which contradict a plausible-sounding
+assumption:
+
+**"structured cannot stream" is false in general.** It is true of *codex*, whose
+protocol emits the whole reply as one `item.completed`. cursor's structured
+protocol emits 92 token-level deltas and 29 reasoning events — the richest signal
+of any cell in the table. Transport alone does not decide streaming; the
+provider's protocol does.
+
+**Pinning cursor to structured is correct.** `codingAgentUsesStructuredTransport`
+justifies the pin as "native CLI JSON protocol is more reliable than terminal UI
+automation". The measurement supports it more strongly than the comment claims:
+cursor over tmux is worse on every axis AND fails outright (a tool call that
+starts and never ends). The pin was not the problem; the pinned path was simply
+broken, so its advantage was invisible until fixed.
+
+### Why the advantage was invisible
+
+cursor's `assistant` events carry text FRAGMENTS and have **no `subtype` field at
+all** (verified by probing `cursor-agent --print --output-format stream-json
+--stream-partial-output` directly: seven fragment events for one sentence, every
+`subtype` absent; the assembled text arrives separately on the `result` event).
+The adapter never set `llmtypes.ContentDeltaMetadataKey` on them, so every
+consumer newline-joined tokens and a streamed markdown table rendered as a column
+of bare pipes. Only pi had ever set that marker.
+
+Guard against regression: the e2e asserts on the REASSEMBLED message and fails on
+structurally broken table rows, so an unmarked-delta provider cannot pass again.

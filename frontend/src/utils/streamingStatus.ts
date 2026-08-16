@@ -141,8 +141,27 @@ export function appendStreamingText(
   // Block chunk: skip an exact repeat of what we already end with, then ensure
   // it starts on its own line so markdown blocks (tables, lists, fences) parse.
   if (currentText.endsWith(incoming)) return currentText
-  const separator = currentText.endsWith('\n') || incoming.startsWith('\n') ? '' : '\n'
-  return currentText + separator + incoming
+  return currentText + blockSeparator(currentText, incoming) + incoming
+}
+
+/**
+ * Markdown block elements need a BLANK line before them, not merely a newline.
+ *
+ * With a single "\n", CommonMark/GFM treats a following table row as lazy
+ * continuation of the preceding paragraph, so it renders as literal pipes
+ * instead of a table — the exact "not formatted or readable" symptom, still
+ * present after chunks stopped running together. A plain sentence following a
+ * sentence only needs the single newline.
+ */
+function blockSeparator(currentText: string, incoming: string): string {
+  if (currentText.endsWith('\n\n') || incoming.startsWith('\n\n')) return ''
+  // A block chunk is a COMPLETE message, so it starts a new paragraph. A single
+  // "\n" is only a soft wrap in CommonMark/GFM: separate narration lines
+  // collapse into one run-on paragraph, and a following table is swallowed as
+  // lazy continuation and rendered as literal pipes. Both were observed on real
+  // provider output.
+  if (currentText.endsWith('\n')) return '\n'
+  return '\n\n'
 }
 
 export function formatLiveStreamingPreview(value: string, maxLength = 140): string {

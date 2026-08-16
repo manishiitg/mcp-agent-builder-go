@@ -204,7 +204,7 @@ export function CleanConversationSurface({
                 <Loader2 className="h-3.5 w-3.5 animate-spin text-violet-400" />
                 Preparing response
               </div>
-              <div className="mt-2 text-sm leading-6 text-slate-200">
+              <div className="mt-2 text-sm leading-6 text-slate-200" data-testid="clean-streaming-text">
                 <ConversationMarkdownRenderer content={streamingText} maxHeight="none" framed={false} />
               </div>
             </div>

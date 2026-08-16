@@ -734,6 +734,9 @@ func (es *EventStore) AddEvent(sessionID string, event Event) {
 		eventAddedCallback(sessionID, event)
 	}
 
+	logStreamingChunkTelemetry(sessionID, event)
+	logToolCallTelemetry(sessionID, event)
+
 	// Notify SSE subscribers (non-blocking send; drop if buffer full)
 	es.subscribersMu.RLock()
 	subs := es.subscribers[sessionID]
@@ -1436,5 +1439,181 @@ func NewGenericEventData(eventType string, fields map[string]interface{}) *Gener
 	return &GenericEventData{
 		EventType: eventType,
 		Fields:    fields,
+	}
+}
+
+// --- streaming telemetry -----------------------------------------------------
+//
+// Streaming defects are invisible in the UI alone: "no text appeared" can mean
+// the provider never streamed, or it streamed only raw terminal frames the
+// product surface deliberately suppresses, or it streamed one block at the very
+// end. Those are three different bugs with three different owners, and telling
+// them apart from a screenshot is guesswork -- diagnosing the codex case cost a
+// long round of browser probing that one log line would have answered.
+//
+// Every streaming_chunk passes through AddEvent, so this is the one place that
+// sees the true shape. Per chunk we log the two fields that decide how a UI may
+// render it (source, is_delta); per turn we log the summary that answers "did
+// this turn stream at all, and how did it arrive".
+
+type streamingTurnStats struct {
+	chunks    int
+	deltas    int
+	terminal  int
+	clean     int
+	chars     int
+	firstAt   time.Time
+	lastAt    time.Time
+	startedAt time.Time
+}
+
+var (
+	streamingStatsMu sync.Mutex
+	streamingStats   = map[string]*streamingTurnStats{}
+)
+
+// streamingChunkFields pulls source/is_delta/content out of whichever envelope
+// shape the chunk arrived in (typed event or generic map).
+func streamingChunkFields(event Event) (source string, isDelta bool, contentLen int) {
+	if event.Data == nil {
+		return "", false, 0
+	}
+	switch d := event.Data.Data.(type) {
+	case *events.StreamingChunkEvent:
+		return d.Source, d.IsDelta, len(d.Content)
+	case *events.GenericEventData:
+		source, _ = d.Data["source"].(string)
+		isDelta, _ = d.Data["is_delta"].(bool)
+		if content, ok := d.Data["content"].(string); ok {
+			contentLen = len(content)
+		}
+		return source, isDelta, contentLen
+	}
+	return "", false, 0
+}
+
+func logStreamingChunkTelemetry(sessionID string, event Event) {
+	switch event.Type {
+	case "streaming_start":
+		streamingStatsMu.Lock()
+		streamingStats[sessionID] = &streamingTurnStats{startedAt: time.Now()}
+		streamingStatsMu.Unlock()
+		log.Printf("[STREAM] session=%s turn started", sessionID)
+	case "streaming_chunk":
+		source, isDelta, contentLen := streamingChunkFields(event)
+		if source == "" {
+			source = "unset"
+		}
+		streamingStatsMu.Lock()
+		stats := streamingStats[sessionID]
+		if stats == nil {
+			stats = &streamingTurnStats{startedAt: time.Now()}
+			streamingStats[sessionID] = stats
+		}
+		now := time.Now()
+		if stats.firstAt.IsZero() {
+			stats.firstAt = now
+		}
+		stats.lastAt = now
+		stats.chunks++
+		stats.chars += contentLen
+		if isDelta {
+			stats.deltas++
+		}
+		if source == "terminal" {
+			stats.terminal++
+		} else {
+			stats.clean++
+		}
+		index := stats.chunks
+		sinceStart := now.Sub(stats.startedAt)
+		streamingStatsMu.Unlock()
+		log.Printf("[STREAM] session=%s chunk=%d source=%s is_delta=%t chars=%d t+%dms",
+			sessionID, index, source, isDelta, contentLen, sinceStart.Milliseconds())
+	case "streaming_end":
+		streamingStatsMu.Lock()
+		stats := streamingStats[sessionID]
+		delete(streamingStats, sessionID)
+		streamingStatsMu.Unlock()
+		if stats == nil {
+			log.Printf("[STREAM] session=%s turn ended with NO streaming chunks", sessionID)
+			return
+		}
+		var firstMS, spreadMS int64
+		if !stats.firstAt.IsZero() {
+			firstMS = stats.firstAt.Sub(stats.startedAt).Milliseconds()
+			spreadMS = stats.lastAt.Sub(stats.firstAt).Milliseconds()
+		}
+		// spread_ms is the tell: a turn whose chunks all land within a few ms
+		// did not stream, it just delivered late, however many chunks it had.
+		log.Printf("[STREAM] session=%s turn ended chunks=%d clean=%d terminal=%d deltas=%d chars=%d first_chunk_ms=%d spread_ms=%d",
+			sessionID, stats.chunks, stats.clean, stats.terminal, stats.deltas, stats.chars, firstMS, spreadMS)
+	}
+}
+
+// --- tool-call telemetry -----------------------------------------------------
+//
+// A tool chip that spins forever means its ToolCallEnd never arrived, or arrived
+// under a different ToolCallID than the Start. Both look identical in the UI and
+// neither is visible in the frontend's own logs, so the pairing is logged here
+// where both events are guaranteed to pass. The P0 streaming e2e asserts only
+// that a ToolCallStart happened -- it never checks that a matching End follows --
+// so an unpaired call is exactly the defect our tests cannot currently catch.
+
+type toolCallTelemetry struct {
+	name      string
+	startedAt time.Time
+}
+
+var (
+	toolCallsMu  sync.Mutex
+	openToolCall = map[string]map[string]*toolCallTelemetry{} // sessionID -> toolCallID
+)
+
+func logToolCallTelemetry(sessionID string, event Event) {
+	if event.Data == nil {
+		return
+	}
+	switch d := event.Data.Data.(type) {
+	case *events.ToolCallStartEvent:
+		toolCallsMu.Lock()
+		if openToolCall[sessionID] == nil {
+			openToolCall[sessionID] = map[string]*toolCallTelemetry{}
+		}
+		openToolCall[sessionID][d.ToolCallID] = &toolCallTelemetry{name: d.ToolName, startedAt: time.Now()}
+		open := len(openToolCall[sessionID])
+		toolCallsMu.Unlock()
+		log.Printf("[TOOL] session=%s START id=%s name=%s args_len=%d open=%d",
+			sessionID, d.ToolCallID, d.ToolName, len(d.ToolParams.Arguments), open)
+	case *events.ToolCallEndEvent:
+		toolCallsMu.Lock()
+		started := openToolCall[sessionID][d.ToolCallID]
+		if started != nil {
+			delete(openToolCall[sessionID], d.ToolCallID)
+		}
+		open := len(openToolCall[sessionID])
+		toolCallsMu.Unlock()
+		if started == nil {
+			// The chip keyed by the Start id will never clear.
+			log.Printf("[TOOL] session=%s END id=%s name=%s UNPAIRED (no matching START id) result_len=%d open=%d",
+				sessionID, d.ToolCallID, d.ToolName, len(d.Result), open)
+			return
+		}
+		log.Printf("[TOOL] session=%s END id=%s name=%s duration=%s result_len=%d open=%d",
+			sessionID, d.ToolCallID, started.name, time.Since(started.startedAt).Truncate(time.Millisecond), len(d.Result), open)
+	}
+	// A turn that ends with calls still open is the spinning-chip case.
+	if event.Type == "agent_end" || event.Type == "unified_completion" {
+		toolCallsMu.Lock()
+		stuck := make([]string, 0, len(openToolCall[sessionID]))
+		for id, tc := range openToolCall[sessionID] {
+			stuck = append(stuck, tc.name+"("+id+")")
+		}
+		delete(openToolCall, sessionID)
+		toolCallsMu.Unlock()
+		if len(stuck) > 0 {
+			log.Printf("[TOOL] session=%s turn ended with %d tool call(s) STILL OPEN -- their UI chips will spin forever: %s",
+				sessionID, len(stuck), strings.Join(stuck, ", "))
+		}
 	}
 }

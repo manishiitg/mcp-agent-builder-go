@@ -219,8 +219,33 @@ function VideoStudioHeader({ children, projectTabId }: { children?: ReactNode; p
   const updateSelectedSecrets = (next: string[]) => {
     if (projectTabId) useChatStore.getState().setTabConfig(projectTabId, { selectedSecrets: next })
   }
-  const selectedProviderID = providerOptions.find((option) => option.provider === projectLLMConfig?.provider && option.modelId === projectLLMConfig?.model_id)?.id ?? providerOptions.find((option) => option.isDefault)?.id ?? providerOptions[0]?.id ?? ''
-  const selectedProvider = providerOptions.find((option) => option.id === selectedProviderID)
+  // Resolution is deliberately three-stage. An exact provider+model match wins;
+  // failing that we match on PROVIDER ALONE, because a saved project pins a
+  // model id that product.yaml can later rename (a project saved with
+  // codex-cli/"codex-cli" no longer matched once the option moved to
+  // gpt-5.6-terra). Without the provider-only stage that project fell through to
+  // the isDefault option and the header rendered "Claude Code" while the request
+  // still carried the stored provider — the label and the turn disagreed.
+  const exactProviderOption = providerOptions.find((option) => option.provider === projectLLMConfig?.provider && option.modelId === projectLLMConfig?.model_id)
+  const providerOnlyOption = providerOptions.find((option) => option.provider === projectLLMConfig?.provider)
+  const resolvedProviderOption = exactProviderOption ?? providerOnlyOption ?? providerOptions.find((option) => option.isDefault) ?? providerOptions[0]
+  const selectedProviderID = resolvedProviderOption?.id ?? ''
+  const selectedProvider = resolvedProviderOption
+  // Whatever the header ends up displaying is now written back as the project's
+  // real configuration, so the dropdown can never be a cosmetic lie about which
+  // provider the next turn will actually use.
+  useEffect(() => {
+    if (!projectTabId || !resolvedProviderOption || !projectLLMConfig) return
+    if (projectLLMConfig.provider === resolvedProviderOption.provider && projectLLMConfig.model_id === resolvedProviderOption.modelId) return
+    useChatStore.getState().setTabConfig(projectTabId, {
+      llmConfig: {
+        ...projectLLMConfig,
+        provider: resolvedProviderOption.provider,
+        model_id: resolvedProviderOption.modelId,
+        fallback_models: [],
+      },
+    })
+  }, [projectTabId, resolvedProviderOption, projectLLMConfig])
   // Only providers with a per-project credential (Claude Code, Cursor, Pi
   // CLI) show the key button; Codex has no scoped-credential story yet.
   const selectedCredentialCopy = selectedProvider ? PROVIDER_CREDENTIAL_COPY[selectedProvider.provider as WorkflowCredentialProvider] : undefined

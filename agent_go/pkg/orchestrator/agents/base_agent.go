@@ -267,7 +267,11 @@ func NewBaseAgent(
 		},
 		Observability: mcpagent.ObservabilityRuntimeConfig{
 			Logger: logger, Tracers: []observability.Tracer{tracer}, TraceID: traceID,
-			PromptLogLabel: name, Streaming: true, GenerationStreamingEvents: boolPointer(false),
+			// See the matching comment in pkg/agentwrapper/llm_agent.go: false here
+			// suppresses clean content-chunk streaming for every workflow agent,
+			// leaving structured-transport providers (pi-cli) with no streaming
+			// signal at all for the whole turn.
+			PromptLogLabel: name, Streaming: true, GenerationStreamingEvents: boolPointer(true),
 			// A retained coding-CLI session can accept a later turn directly through
 			// tmux without starting another mcpagent Ask stream. The bridge remains
 			// the authoritative place where tools execute, so publish its canonical

@@ -137,7 +137,17 @@ func runtimeConfigForLLMAgent(config LLMAgentConfig, model llmtypes.Model, trace
 		Workspace: mcpagent.WorkspaceRuntimeConfig{CodingAgentWorkingDir: config.CodingAgentWorkingDir},
 		Observability: mcpagent.ObservabilityRuntimeConfig{
 			Logger: logger, Tracers: []observability.Tracer{tracer}, TraceID: traceID,
-			PromptLogLabel: config.Name, Streaming: true, GenerationStreamingEvents: runtimeBool(false),
+			// GenerationStreamingEvents true is what makes clean per-token content
+			// (StreamChunkTypeContent -> StreamingChunkEvent, Source != terminal)
+			// actually reach the frontend. With it false, ONLY raw terminal-pane
+			// snapshot chunks survive (llm_generation.go exempts those explicitly) --
+			// fine for tmux providers, which still have a pane to show, but for a
+			// structured-transport provider with no pane (pi-cli) it meant ZERO
+			// streaming_chunk events for the whole turn: confirmed live, a 30s
+			// pi-cli/gemini turn produced none. The frontend now honors is_delta /
+			// source correctly (useChatStore.appendStreamingText), which was the
+			// other half of why this was left off.
+			PromptLogLabel: config.Name, Streaming: true, GenerationStreamingEvents: runtimeBool(true),
 			DirectToolExecutionEvents: true,
 		},
 	}
