@@ -7,150 +7,191 @@
 A number of existing workflows each track one slice of personal finance.
 Each already has its own `db/db.sqlite` with real, populated data. The idea
 is a single dashboard that consolidates them into one view, plus a chat
-panel to ask questions across all of them.
+panel (later, not v1) to ask questions across all of them.
 
-**Scope: bank accounts and tax only.** Trading (`globalinvestment`,
-`trading`) is explicitly out — a different domain with its own richer
-concerns (P&L, strategies, positions), not part of this dashboard.
+**Scope: bank accounts, investments (mutual funds), and tax.** Trading
+(`globalinvestment`, `trading`) is explicitly out — a different domain
+(positions, P&L, strategies), not part of this dashboard.
 
-**Single-user, own data, read-only chat.** This is not a client-facing
-product — no permission model, no untrusted content, no write barrier to
-design. That makes it a much simpler build than the other two product
-concepts explored the same day (see "Related" below), and a good candidate
-for the first real product built cleanly on the platform pattern.
+**Single-user, own data, dashboard-only v1.** Not a client-facing product —
+no permission model, no untrusted content, no write barrier to design, and
+(per the 2026-08-16 decisions) no chat in the first slice either. That makes
+it the simplest of the product concepts explored this session, and a good
+candidate for the first one actually built.
 
-## What already exists to build on
+## Architecture: no new backend, no Go files
 
-**Real, populated sources in scope**, confirmed 2026-08-16
+**The whole thing is frontend-only.** `agentApi.queryWorkflowDB(dbPath,
+sql)` (`frontend/src/services/api.ts:1487`) already exists, already works
+from any React component, and already takes an explicit `dbPath` — it is a
+plain `POST /api/query` call, nothing iframe- or report-specific. Proof: the
+workflow report system's own `window.report.query` is *implemented as* a
+thin wrapper around this exact function
+(`frontend/src/components/workflow/ReportViewer.tsx:88-89`:
+`query: async (sql) => agentApi.queryWorkflowDB(\`${workspacePath}/db/db.sqlite\`, sql)`).
+`window.report` exists only to hand that function into an
+**iframe-sandboxed** HTML document — a constraint this product doesn't have,
+since it's a real React surface, not agent-authored HTML (see
+`workflow_custom_ui_product.md` for where that distinction matters). So:
+call `agentApi.queryWorkflowDB` directly, no bridge, no iframe, no new
+backend route, no Go package, no product.yaml (nothing here needs its own
+agent identity while there's no chat).
+
+```
+frontend/src/products/finance/
+  adapters/
+    hdfc.ts        → agentApi.queryWorkflowDB('Workflow/HDFC-Personal-Accounts/db/db.sqlite', sql)
+    icici.ts        → same, ICICI's path + SQL
+    mutualFund.ts   → same, Mututal-Fund's path + SQL
+    tax.ts          → same, check-form-26as-xspaces's path + SQL
+    gst.ts          → same, gstdatacollection's path + SQL
+  types.ts          → the card types below
+  FinanceSurface.tsx → calls all adapters in parallel, renders card sections
+```
+
+Every adapter is a small `.ts` file: a `dbPath` constant, one or two
+`SELECT`s, and a mapper into a typed card. Buildable and testable entirely
+against real data with no server restart — `agentApi.queryWorkflowDB` talks
+to the already-running workspace server.
+
+## The card types — designed against all five real schemas at once
+
+There is no single unifying struct. Bank/investment data and tax/GST data
+don't share a "balance" concept, and even within banking, HDFC only stores
+a transaction *count* while ICICI stores real transaction rows — a
+transaction list can't be a shared concept either, only some sources
+support it. Real schemas, confirmed 2026-08-16
 (`workspace-docs/Workflow/*/db/db.sqlite`):
 
-| Workflow | Domain | Own tables (non-platform) |
+| Workflow | Domain | Real columns (non-platform tables) |
 |---|---|---|
-| `HDFC-Personal-Accounts` | bank | `balance_history`, `transaction_summary`, `portfolio_summary` |
-| `ICICI-BANK-PARSING` | bank | `current_balances`, `bank_balance_history`, `recent_transactions` |
-| `check-form-26as-xspaces` | tax | `tax_summary`, `notices` |
-| `gstdatacollection` | GST/tax | `gst_snapshot`, `gst_ledger_balance`, `gst_return_status` |
+| `HDFC-Personal-Accounts` | bank | `balance_history(group_name, current_balance, total_fixed_deposit, updated_at_iso)`; `transaction_summary(group_name, total_transactions, latest_month, latest_transaction)` — **count only, no transaction rows** |
+| `ICICI-BANK-PARSING` | bank | `current_balances(group_name, account_name, account_number, total_balance_inr, fd_balance)`; `recent_transactions(group_name, txn_date, description, amount_inr, cr_dr, closing_balance)` — **real per-transaction rows** |
+| `Mututal-Fund` | investments | `portfolio_holdings(group_name, scheme_name, folio_number, units, current_value, invested_value, nav, profit_loss)`; `account_xirr(group_name, xirr_pct, as_of_date)` |
+| `check-form-26as-xspaces` | tax | `tax_summary(pan, total_tds_current_ay, pending_notice_count, total_refund_amount, last_checked)`; `notices(pan, din, title, status, issue_date, action_required)` |
+| `gstdatacollection` | tax | `gst_snapshot(gstin, legal_name, turnover_aggregate)`; `gst_ledger_balance(igst, cgst, sgst, cess)`; `gst_return_status(fin_year, period, due_date, status, filed_date)` |
 
-Out of scope by explicit decision: `Mututal-Fund`, `globalinvestment`,
-`trading` — a different domain (positions, P&L, strategies) with its own
-concerns, not part of this dashboard.
+```ts
+type BankAccountCard = {
+  source: 'HDFC' | 'ICICI'
+  accountLabel: string        // group_name / account_name
+  currentBalance: number
+  fixedDeposit: number
+  lastUpdated: string
+  // HDFC has no transaction rows, only a count -- carried here, not faked
+  // into a transaction list:
+  transactionCount?: number
+  lastTransactionDate?: string
+}
+
+type RecentTransaction = {   // ICICI only -- HDFC's adapter emits none
+  source: string
+  date: string
+  description: string
+  amountInr: number
+  direction: 'credit' | 'debit'
+}
+
+type InvestmentHolding = {   // mutual funds
+  schemeName: string
+  folioNumber: string
+  units: number
+  currentValue: number
+  investedValue: number
+  profitLoss: number
+}
+
+type InvestmentAccountCard = {
+  source: 'Mutual Fund'
+  accountLabel: string        // group_name
+  totalCurrentValue: number
+  totalInvested: number
+  xirrPct?: number
+  holdings: InvestmentHolding[]
+}
+
+type TaxCard = {
+  pan: string
+  tdsThisYear: number
+  pendingNotices: number
+  refundAmount: number
+  lastChecked: string
+}
+
+type GstCard = {
+  gstin: string
+  legalName: string
+  turnoverAggregate: number
+  ledgerBalance: { igst: number; cgst: number; sgst: number; cess: number }
+  nextReturnDue?: string
+  filingStatus?: string
+}
+```
 
 Not every workflow in the workspace is a finance source despite the
 name/location — `ICICI-BANK-PARSING-v2` and `confida-login` turned out to be
-unrelated QA/verification workflows on inspection. **The source list must be
-curated, not auto-discovered** — there is no naming convention reliable
-enough to infer it, and the risk of silently pulling in the wrong data is
-real.
-
-**No shared schema across sources — confirmed, not assumed.** Every source
-above invented its own table and column names independently (e.g. "recent
-transactions" is `transaction_summary` in HDFC but `recent_transactions` in
-ICICI, with different columns). A dashboard cannot run one generic query
-across N databases; it needs one small adapter per source mapping that
-source's actual schema into a handful of shared concepts (balance,
-recent-transactions, portfolio-value, allocation — whichever the dashboard
-actually wants to show).
-
-**The query primitive already supports cross-workflow reads.**
-`workspace.Client.QueryWorkflowDB` / `QueryAuthorizedWorkflowDB`
-(`agent_go/pkg/workspace/query_workflow_db.go:9-37`) takes an explicit,
-caller-supplied `DBPath` — "the workspace-relative path to the SQLite file,
-e.g. `Workflow/<name>/db/db.sqlite`" — and enforces read-only. It is not
-scoped to one workflow at the API level; the *agent tool*
-`query_workflow_db` just happens to default `DBPath` to whichever workflow
-the current session is in
-(`cmd/server/virtual-tools/workflow_db_tools.go:112`,
-`resolveCurrentWorkflowDBPath`). A new aggregator calling the same client
-once per configured source, with an explicit path each time, needs no new
-primitive — just a loop and per-source SQL.
-
-**The product-surface pattern applies directly** — see
-`chief_of_staff_as_product.md` / `video_studio_inside_agentworks.md` for the
-worked examples: a lazy-imported React surface, a product.yaml-declared
-profile if chat needs its own identity, three hand-edits to mount it.
-
-## Architecture
-
-```
-per-source adapter (Go)          shared shape                  UI
-  hdfc.go    → query HDFC db  ─┐
-  icici.go   → query ICICI db ─┼─→  []AccountSummary  ──→  Dashboard cards
-  tax.go     → query tax db   ─┤    []Transaction     ──→  Transaction list
-  gst.go     → query GST db   ─┘
-
-                                                          Chat (read-only,
-                                                          same adapters,
-                                                          answers questions)
-```
-
-Each adapter is small: one file, one source, a handful of `SELECT`s against
-that source's actual tables, mapped into a couple of shared Go structs. New
-source added later = new adapter file, not a schema migration.
-
-Chat reuses the *same* adapters rather than a separate path, so "what did
-HDFC show me" and "what does the dashboard show for HDFC" can never
-disagree.
+unrelated QA/verification workflows on inspection. **The source list is
+curated by hand, never auto-discovered** — no naming convention is reliable
+enough to infer it, and silently pulling in the wrong data is a real risk.
 
 ## Decisions (2026-08-16)
 
 | Question | Decision |
 |---|---|
-| Scope | Bank accounts and tax only — trading and mutual funds are a different domain, out |
-| Which sources feed it | A curated list you name, one adapter per source — not auto-discovery |
+| Scope | Bank accounts, investments (mutual funds), and tax — trading is a different domain, out |
+| Which sources feed it | A curated list named by hand, one adapter per source — not auto-discovery |
 | Where it lives | A new product surface, own tile — a real dashboard needs layout a chat+aside shape doesn't fit |
-| What chat can do | Read-only for v1 — answers questions over already-synced data, no triggering a refresh run |
-
-Read-only chat means this needs none of the run-mode / `tool_policy`
-narrowing work from `workflow_custom_ui_product.md` — that question is
-deferred until "refresh from chat" is actually wanted.
+| Backend | None — frontend-only, `agentApi.queryWorkflowDB` directly, no Go, no new routes |
+| Chat | Not in v1 — dashboard first, chat is a later, separate slice |
+| Branch | Continues on `feature/chief-of-staff-product` (not split to its own branch) |
 
 ## Build order
 
 The reuse rule from `reusable_vertical_product_platform.md` ("extract after
 a second consumer demonstrates the common behavior") does not counsel
-staging here — it exists to avoid *guessing* about an unknown future
-consumer. Here all four sources are already fixed and already inspected
-(schemas above), so there is nothing to discover by building one first that
-isn't already visible from the schema dump. Building only HDFC's adapter
-first would mean designing the shared struct around one source's shape and
-finding out later it doesn't fit a tax summary — the exact mistake
-sequencing is meant to prevent, self-inflicted instead of avoided.
+staging schema design here — it exists to avoid *guessing* about an unknown
+future consumer. All five sources are already fixed and already inspected
+(table above), so there is nothing left to discover by building one adapter
+first that isn't already visible in the schema dump. Building only HDFC's
+adapter first would mean designing the card types around one source and
+finding out later they don't fit tax or investment data — the exact mistake
+sequencing exists to prevent, self-inflicted instead of avoided.
 
-1. **Design the shared structs once, against all four schemas at once**
-   (table above) — not against one source, not abstractly ahead of any of
-   them.
-2. **Write all four adapters together**, each a small file mapping its
-   source's real tables into those structs.
-3. **One dashboard card, wired end to end, first** — pick one source to
-   render before wiring the rest, so query plumbing and the product surface
-   itself are proven before building on top of them. This is the only place
-   staging still earns its keep: it isolates *integration* risk (does the
-   query path work, does the surface mount correctly), not *schema* risk,
-   which is already resolved by step 1.
-4. **The full dashboard grid** over all four adapters' output.
-5. **Read-only chat** — same adapters, a narrow read-only tool surface (list
-   sources, query a source's summary, no `execute_shell_command`, no write
-   tools at all — narrower than `run` mode, since nothing here should ever
-   execute a workflow).
+1. **The card types** (above) — already designed against all five schemas
+   together, not one at a time.
+2. **Write all five adapters together** — each a small `.ts` file, a
+   `dbPath` constant, a couple of `SELECT`s, a mapper.
+3. **One dashboard card, wired end to end, first** — pick one source (a
+   bank account is the simplest) and render it before wiring the rest, so
+   the `agentApi.queryWorkflowDB` path and the product surface itself are
+   proven before building on top of them. This is the only place staging
+   still earns its keep: it isolates *integration* risk, not *schema* risk,
+   which step 1 already resolved.
+4. **The full dashboard grid** over all five adapters' output — bank
+   section, investments section, tax section.
+5. **(Later, separate slice) Chat.** When it's wanted: read-only tool
+   surface reusing these same adapters' queries, narrower than workflow
+   `run` mode since nothing here should ever execute a workflow. See
+   `workflow_custom_ui_product.md`'s Gap 1 finding if execution is ever
+   added later — the write-barrier concern there doesn't apply to
+   read-only queries, but would apply the moment "run/refresh" is added.
 
 ## Open questions
 
-- Refresh cadence: do adapters read live from `db.sqlite` on every dashboard
-  load, or is a periodic snapshot/cache needed once there are enough sources
-  that N live queries per page load gets slow?
-- Where do shared structs live — inside the new product package, or a
-  small shared package if a future second consolidation dashboard (e.g.
-  something non-financial) would reuse the pattern? Reuse rule from
-  `reusable_vertical_product_platform.md` applies: wait for a second real
-  consumer before extracting.
+- Refresh cadence: does the dashboard query live on every load, or does it
+  need caching once five sources' worth of queries per page load is
+  noticeable? Five is small enough this is probably premature — revisit if
+  it's actually slow.
+- Where do the card types/adapters live if a second, unrelated consolidation
+  surface is ever wanted — still `frontend/src/products/finance/`, or
+  extracted? Per the reuse rule: wait for a second real consumer.
 
 ## Related
 
-- `docs/design/workflow_custom_ui_product.md` — a different, harder concept
+- `docs/design/workflow_custom_ui_product.md` — a harder, different concept
   (client-facing custom UI *per workflow*, with a real write barrier and
-  permission model to design). This dashboard is simpler: single user, one
-  UI spanning many workflows, read-only.
+  permission model to design, and a genuine agent-authored-HTML sandboxing
+  question). This dashboard avoids all of that: one first-party UI spanning
+  several trusted sources, read-only, no backend at all in v1.
 - `docs/design/reusable_vertical_product_platform.md` — the reuse rule
-  invoked (and explained why it doesn't apply to schema design here) in
-  "Build order" above; still applies to the shared-structs-location open
-  question below.
+  invoked (and explained why it doesn't apply to schema design here) above.
