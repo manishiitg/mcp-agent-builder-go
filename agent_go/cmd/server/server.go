@@ -1625,15 +1625,19 @@ func runServer(cmd *cobra.Command, args []string) {
 	if err := videoproduct.RegisterAgentProfileRuntime(profileRegistry, getWorkspaceAPIURL()); err != nil {
 		log.Fatalf("Failed to register Video Studio agent profile runtime: %v", err)
 	}
-	// Chief of Staff has no embedded skills and no product-owned tool
-	// factories to register here (its three tools register separately, once
-	// api exists -- see registerChiefOfStaffToolFactories below), so this is
-	// just the profile itself.
+	if err := chiefofstaffproduct.RegisterProductSkills(); err != nil {
+		log.Fatalf("Failed to register Chief of Staff skills: %v", err)
+	}
 	for _, profile := range chiefofstaffproduct.BuiltinAgentProfiles() {
 		if err := profileRegistry.RegisterProfile(profile); err != nil {
 			log.Fatalf("Failed to register Chief of Staff agent profile: %v", err)
 		}
 	}
+	// No RegisterAgentProfileRuntime equivalent: Chief of Staff's tool
+	// factories are registered separately once api exists -- see
+	// registerChiefOfStaffToolFactories below -- since their handlers are
+	// *StreamingAPI methods, not a workspace-API-client pattern like Video
+	// Studio's.
 
 	api := &StreamingAPI{
 		config:                             config,
@@ -5425,12 +5429,21 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 						_ = llmAgent.AddInstructions(tierSection)
 					}
 				}
-				// Attach the full reference surface for multi-agent chat.
+				// Attach the full reference surface for multi-agent chat --
+				// but only for a truly profile-less chat. A resolved profile
+				// that reaches this branch (a global-scoped one, e.g. Chief
+				// of Staff) declares its own reference material individually
+				// in profile.skills[] (registerAgentProfileTools' sibling,
+				// req.SelectedSkills assignment in resolveAgentProfileForQuery)
+				// instead of the mode-gated bundle; attaching both would
+				// duplicate the same content under two different shapes.
 				// mcpagent exposes attached bundles through read_skill on API
 				// and coding-CLI transports; native CLI projection is only an
 				// additional browseable view.
-				if err := guidance.AttachReferenceSurface("multi-agent", llmAgent.AttachSkill); err != nil {
-					logfWithContext(queryLogCtx, "[REFERENCE_DOC] Failed to attach multi-agent reference surface: %v", err)
+				if resolvedProfile == nil {
+					if err := guidance.AttachReferenceSurface("multi-agent", llmAgent.AttachSkill); err != nil {
+						logfWithContext(queryLogCtx, "[REFERENCE_DOC] Failed to attach multi-agent reference surface: %v", err)
+					}
 				}
 			}
 

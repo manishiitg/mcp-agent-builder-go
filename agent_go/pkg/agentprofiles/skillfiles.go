@@ -51,3 +51,18 @@ func RegisterEmbeddedSkills(fsys fs.FS, bindings []SkillFileBinding) error {
 	}
 	return nil
 }
+
+// RegisterSkills registers already-materialized skills directly -- for a
+// product whose skill content isn't a static embedded file (e.g. rendered
+// from a shared template registry, like
+// guidance.MaterializeReferenceKindsAsSkills) but should still be an
+// individually-named, product-declared skill the same way
+// RegisterEmbeddedSkills' file-backed ones are.
+func RegisterSkills(items []*llmtypes.Skill) error {
+	for _, item := range items {
+		if err := skills.RegisterBuiltin(item); err != nil {
+			return fmt.Errorf("register skill %q: %w", item.Name, err)
+		}
+	}
+	return nil
+}

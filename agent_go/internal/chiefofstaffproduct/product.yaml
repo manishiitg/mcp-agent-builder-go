@@ -33,10 +33,28 @@ profile:
   # agentprofiles.Profile.EffectiveScope and its callers in
   # cmd/server/agent_profile_runtime.go / server.go.
   scope: global
-  # No commands, no embedded skills: Chief of Staff's skill/reference surface
-  # stays fully dynamic via AttachReferenceSurface (same as today's
-  # profile-less chat), not a static declared list.
-  skills: []
+  # No commands. Skills ARE declared here, like Video Studio's own -- each
+  # name is individually registered by RegisterProductSkills()
+  # (profile_definition.go), rendered once from the same shared reference-doc
+  # templates the old mode-gated AttachReferenceSurface bundle drew from
+  # (guidance.MaterializeReferenceKindsAsSkills), not duplicated content.
+  # org-goals/org-html/org-pulse/chief-task-report are deliberately excluded
+  # -- goal-alignment content, dropped alongside the goals feature.
+  skills:
+    - stores
+    - file-layout
+    - llm-provider-config
+    - skill-management
+    - delegation
+    - schedule-management
+    - secret-management
+    - html-output
+    - browser-usage
+    - mcp-bridge
+    - workspace-media-tools
+    - debugging-flow
+    - publish-strategy
+    - backup-strategy
   # get_activity_status and update_chief_of_staff_notifications are
   # registered as ToolFactory entries at server startup
   # (chief_of_staff_tool_factories.go) -- their handlers are deeply coupled to

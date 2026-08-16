@@ -1,9 +1,12 @@
 package chiefofstaffproduct
 
 import (
+	"reflect"
+	"sort"
 	"testing"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/agentprofiles"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/skills"
 )
 
 func TestChiefOfStaffManifestDeclaresGlobalScopeAndPinnedModel(t *testing.T) {
@@ -47,6 +50,31 @@ func TestChiefOfStaffManifestDeclaresGlobalScopeAndPinnedModel(t *testing.T) {
 	}
 	if manifest.UI.Surface != "chief-of-staff" {
 		t.Fatalf("unexpected ui.surface: %q", manifest.UI.Surface)
+	}
+	gotSkills := append([]string(nil), manifest.Profile.Skills...)
+	sort.Strings(gotSkills)
+	wantSkills := append([]string(nil), chiefOfStaffSkillNames...)
+	sort.Strings(wantSkills)
+	if !reflect.DeepEqual(gotSkills, wantSkills) {
+		t.Fatalf("manifest skills %v do not match the registered set %v -- product.yaml and profile_definition.go's chiefOfStaffSkillNames must list the same names", gotSkills, wantSkills)
+	}
+	for _, excluded := range []string{"org-goals", "org-html", "org-pulse", "chief-task-report"} {
+		for _, name := range manifest.Profile.Skills {
+			if name == excluded {
+				t.Fatalf("goal-related skill %q must not be declared -- goals feature is dropped", excluded)
+			}
+		}
+	}
+}
+
+func TestRegisterProductSkillsRegistersEveryDeclaredSkill(t *testing.T) {
+	if err := RegisterProductSkills(); err != nil {
+		t.Fatalf("RegisterProductSkills failed: %v", err)
+	}
+	for _, name := range chiefOfStaffSkillNames {
+		if !skills.IsBuiltinSkill(name) {
+			t.Fatalf("expected %q to be registered as a builtin skill", name)
+		}
 	}
 }
 

@@ -105,6 +105,46 @@ func MaterializeGuidanceSkill(mode string) *llmtypes.Skill {
 // mcpagent exposes every attached bundle through its intrinsic read_skill tool
 // on API and coding-CLI transports. Native CLI projection is an optimization,
 // not a separate access contract.
+// MaterializeReferenceKindsAsSkills renders each named referenceKinds entry
+// as its OWN individually-named skill, for a product that wants to declare
+// reference material in profile.skills[] the way it would declare any other
+// product-owned skill -- e.g. Chief of Staff declaring "delegation",
+// "secret-management" by name -- rather than relying on the mode-gated
+// "builder-reference" bundle AttachReferenceSurface produces. mode gates
+// eligibility exactly as it does there; requesting a kind not allowed in
+// mode, or a name that doesn't exist, is an error (a product declaring a
+// skill it can't actually have is a configuration bug, not something to
+// silently drop).
+//
+// Reference templates (templates/system/*.md) don't use tmplData's per-turn
+// fields (Focus/Iteration/RunFolder/WorkshopMode) -- they're static
+// background material, not per-invocation guided flows -- so rendering once
+// here with a zero-value tmplData is safe and produces the same content
+// AttachReferenceSurface's bundle would have shown under this name.
+func MaterializeReferenceKindsAsSkills(mode string, names []string) ([]*llmtypes.Skill, error) {
+	out := make([]*llmtypes.Skill, 0, len(names))
+	for _, name := range names {
+		meta, ok := referenceKinds[name]
+		if !ok {
+			return nil, fmt.Errorf("unknown reference kind %q", name)
+		}
+		if !modeAllowedIn(name, mode, referenceKinds) {
+			return nil, fmt.Errorf("reference kind %q is not allowed in mode %q", name, mode)
+		}
+		content, err := renderReferenceKind(name, tmplData{})
+		if err != nil {
+			return nil, fmt.Errorf("render reference kind %q: %w", name, err)
+		}
+		out = append(out, &llmtypes.Skill{
+			Name:        name,
+			Description: meta.Description,
+			Content:     content,
+			Source:      llmtypes.SkillSource{Origin: "builtin"},
+		})
+	}
+	return out, nil
+}
+
 func AttachReferenceSurface(mode string, attach func(*llmtypes.Skill) error) error {
 	if attach == nil {
 		return fmt.Errorf("attach reference surface: nil attach function")
