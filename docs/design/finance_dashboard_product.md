@@ -106,17 +106,29 @@ deferred until "refresh from chat" is actually wanted.
 
 ## Build order
 
-1. **One adapter, one card.** Pick one bank source (HDFC or ICICI), write
-   its adapter, render one dashboard card from it. Prove the shape end to
-   end before adding the second source.
-2. **Add the remaining three sources incrementally** (the other bank, then
-   the two tax sources), one adapter each, growing the shared structs only
-   as far as real data requires — do not pre-design a generic
-   `FinancialAccount` schema before two sources have proven what's actually
-   common between a bank account and a tax summary.
-3. **The product surface** — dashboard grid over the adapters' combined
-   output.
-4. **Read-only chat** — same adapters, a narrow read-only tool surface (list
+The reuse rule from `reusable_vertical_product_platform.md` ("extract after
+a second consumer demonstrates the common behavior") does not counsel
+staging here — it exists to avoid *guessing* about an unknown future
+consumer. Here all four sources are already fixed and already inspected
+(schemas above), so there is nothing to discover by building one first that
+isn't already visible from the schema dump. Building only HDFC's adapter
+first would mean designing the shared struct around one source's shape and
+finding out later it doesn't fit a tax summary — the exact mistake
+sequencing is meant to prevent, self-inflicted instead of avoided.
+
+1. **Design the shared structs once, against all four schemas at once**
+   (table above) — not against one source, not abstractly ahead of any of
+   them.
+2. **Write all four adapters together**, each a small file mapping its
+   source's real tables into those structs.
+3. **One dashboard card, wired end to end, first** — pick one source to
+   render before wiring the rest, so query plumbing and the product surface
+   itself are proven before building on top of them. This is the only place
+   staging still earns its keep: it isolates *integration* risk (does the
+   query path work, does the surface mount correctly), not *schema* risk,
+   which is already resolved by step 1.
+4. **The full dashboard grid** over all four adapters' output.
+5. **Read-only chat** — same adapters, a narrow read-only tool surface (list
    sources, query a source's summary, no `execute_shell_command`, no write
    tools at all — narrower than `run` mode, since nothing here should ever
    execute a workflow).
@@ -138,6 +150,7 @@ deferred until "refresh from chat" is actually wanted.
   (client-facing custom UI *per workflow*, with a real write barrier and
   permission model to design). This dashboard is simpler: single user, one
   UI spanning many workflows, read-only.
-- `docs/design/reusable_vertical_product_platform.md` — the reuse rule this
-  build order follows (adapters grow from real sources, not designed ahead
-  of them).
+- `docs/design/reusable_vertical_product_platform.md` — the reuse rule
+  invoked (and explained why it doesn't apply to schema design here) in
+  "Build order" above; still applies to the shared-structs-location open
+  question below.
