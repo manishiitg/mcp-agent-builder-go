@@ -27,6 +27,7 @@ import (
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/chiefofstaffproduct"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/events"
+	"github.com/manishiitg/coding-agent-loop/agent_go/internal/financeproduct"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/inspector"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/videoproduct"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/agentprofiles"
@@ -1637,6 +1638,17 @@ func runServer(cmd *cobra.Command, args []string) {
 	// registerChiefOfStaffToolFactories below -- since their handlers are
 	// *StreamingAPI methods, not a workspace-API-client pattern like Video
 	// Studio's.
+	if err := financeproduct.RegisterProductSkills(); err != nil {
+		log.Fatalf("Failed to register Finance skills: %v", err)
+	}
+	for _, profile := range financeproduct.BuiltinAgentProfiles() {
+		if err := profileRegistry.RegisterProfile(profile); err != nil {
+			log.Fatalf("Failed to register Finance agent profile: %v", err)
+		}
+	}
+	if err := financeproduct.RegisterAgentProfileRuntime(profileRegistry, getWorkspaceAPIURL()); err != nil {
+		log.Fatalf("Failed to register Finance agent profile runtime: %v", err)
+	}
 
 	api := &StreamingAPI{
 		config:                             config,

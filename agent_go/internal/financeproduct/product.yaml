@@ -1,0 +1,122 @@
+schema_version: 2
+
+# Finance has no per-project workspace to provision the way Video Studio
+# does -- it reads a fixed set of existing finance workflows via its one
+# tool, not a project folder. Still scope: project, not global -- see the
+# profile.scope comment below for why that distinction matters here.
+dependencies: {}
+
+prompt:
+  file: prompts/system-prompt.md
+  variables: {}
+
+profile:
+  id: finance
+  name: Finance
+  version: 1
+  # Project-scoped, NOT global -- despite Finance spanning several sources
+  # the same way Chief of Staff spans several workflows. Two reasons this
+  # profile needs project scope specifically, discovered empirically
+  # (2026-08-16), not assumed by analogy to Chief of Staff:
+  #   1. Global scope makes provider_options non-authoritative by design
+  #      (resolveAgentProfileForQuery: "isGlobalScope && requestHasExplicitModel"
+  #      lets the user's own chat-level selection win outright, always --
+  #      exactly what Chief of Staff wants, and exactly what defeats the
+  #      provider restriction below).
+  #   2. Global scope takes the dynamic multi-agent delegation prompt
+  #      instead of this product's own prompt.file -- confirmed live: an
+  #      earlier global-scoped version of this profile never actually sent
+  #      prompts/system-prompt.md to the model at all.
+  # Project scope's usual narrowing (folder guard collapsed to one root,
+  # chat-wide grants dropped) is a non-issue here: this profile's one tool
+  # (finance.query-source) bypasses FolderGuard entirely -- it queries a
+  # fixed, hardcoded path whitelist (finance_query_tool.go), never the
+  # general filesystem -- so there is nothing project scope could narrow
+  # that this profile was using anyway.
+  scope: project
+  # No commands, no ui_panels, no skills -- the dashboard itself
+  # (frontend/src/products/finance/FinanceSurface.tsx) is pure frontend
+  # with no dependency on this profile at all; this profile exists solely
+  # to run the read-only chat panel alongside it.
+  tools:
+    - id: finance.query-source
+  # Deliberately narrower than a workflow's own `run` mode, which still
+  # carries execute_shell_command/diff_patch_workspace_file as "always
+  # available regardless of mode" -- see the load-bearing finding in
+  # docs/design/workflow_custom_ui_product.md's Gap 1. This profile's
+  # allowlist is the real, server-enforced boundary that finding calls
+  # for: only the one read-only query tool this product needs, nothing
+  # else -- no shell, no file writes, no delegation, no schedules, no
+  # workflow execution. mcpagent's own intrinsic tools (get_api_spec,
+  # get_prompt, get_resource, read_skill) are injected by mcpagent itself
+  # and are not governed by this list -- see Video Studio's own
+  # tool_policy comment for why.
+  tool_policy:
+    mode: allowlist
+    enabled:
+      - query_finance_source
+  runtime:
+    # Load-bearing. codingAgentUsesStructuredTransport (the per-provider
+    # default "auto"/unset falls back to) returns true ONLY for cursor-cli
+    # -- every other provider, including codex-cli, defaults to
+    # native/interactive (tmux) mode, where the coding CLI runs with its
+    # OWN full built-in tool loop (a real `exec`, not the platform's
+    # execute_shell_command) entirely outside mcpagent's tool registry.
+    # tool_policy above literally does not apply there: confirmed live
+    # (2026-08-16) -- a finance chat on codex-cli made 12 genuine `exec`
+    # tool calls, none of them query_finance_source, while the platform's
+    # own registered-tools list for that session correctly showed only
+    # [query_finance_source read_skill web_fetch web_search]. `structured`
+    # closes that path; provider_options below closes a second, separate
+    # one codex-cli has even under structured transport (see its comment).
+    transport: structured
+    # Curated to exactly one provider, deliberately -- NOT "any published
+    # LLM" the way Chief of Staff's identical-looking runtime.provider is.
+    # A second real leak was found live (2026-08-16), independent of the
+    # transport fix above: even under transport: structured, codex-cli
+    # still exposed its own native Node REPL as a tool named `js` (with
+    # working `fetch` and a real filesystem `cwd`), which the model reached
+    # for once query_finance_source proved hard to invoke -- tool_policy
+    # never saw it, the same way it never saw codex's native `exec`. That
+    # is a second escape hatch structured transport did not close. This
+    # profile's whole reason to exist is that its tool surface is
+    # trustworthy; that guarantee cannot be made per-provider without
+    # testing every provider's own intrinsic toolset, so exactly one
+    # provider is offered -- the same one Video Studio's own security
+    # model already depends on in production. Note: claude-code's safety
+    # here is inferred from that existing reliance, not independently
+    # re-verified live in this exact profile -- a real gap, worth closing
+    # before this ships broadly (see docs/design/finance_dashboard_product.md).
+    provider_options:
+      - id: claude-code
+        label: Claude Code
+        provider: claude-code
+        model_id: claude-sonnet-5
+        default: true
+    # Explicit, not relied-on-as-default, matching Video Studio's own
+    # convention -- the empty-string default already resolves to mcp_only
+    # (confirmed live: the codex-cli session that leaked its native `exec`
+    # and `js` tools still logged hybrid=false), so this isn't the fix for
+    # either leak above; it just states the intent plainly rather than
+    # leaving it implicit.
+    agent_tools:
+      mode: mcp_only
+    provider: claude-code
+    model_id: claude-sonnet-5
+  built_in: true
+
+branding:
+  icon: finance
+  favicon: ""
+
+ui:
+  surface: finance
+  files_panel: false
+  workflow_panel: false
+  secrets: false
+  streaming: structured
+
+workflows:
+  enabled: []
+  selected_skills: []
+  browser_mode: ""

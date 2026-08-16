@@ -19,7 +19,131 @@ no permission model, no untrusted content, no write barrier to design, and
 it the simplest of the product concepts explored this session, and a good
 candidate for the first one actually built.
 
-## Architecture: no new backend, no Go files
+## Chat (built 2026-08-17) — needed a real backend after all
+
+The dashboard itself stayed frontend-only, as designed below. Chat did not
+-- an LLM turn needs the platform's agent infrastructure, so this added a
+new `agent_go/internal/financeproduct/` package: a `product.yaml`-declared
+profile (id `finance`), one custom tool (`finance.query-source`, backend
+name `query_finance_source`) that maps a whitelisted `source` argument
+(hdfc/icici/mutual_fund/tax/gst) to the same five hardcoded db paths the
+frontend adapters use, and runs a read-only SQL query via
+`workspace.Client.QueryAuthorizedWorkflowDB` -- the same read-only-enforced
+primitive as everywhere else in this doc. A real system prompt
+(`prompts/system-prompt.md`) documents every source's actual schema and
+known data-quality caveats (the dirty ICICI currency string, HDFC's
+JSON-blob transaction field, mutual fund's untracked cost basis, GST's
+re-observed-per-snapshot duplication, tax notices having no resolved
+status) so the agent doesn't have to rediscover them the hard way.
+
+**Chat is deliberately not part of the frontend-only architecture below.**
+Everything under "Architecture" and "The card types" still describes the
+dashboard; this section is additive.
+
+### Three real security findings, found only by testing against a live turn
+
+None of these were visible from reading the code or from unit tests --
+each required actually watching a real chat turn run and checking the
+server log, not just the UI.
+
+1. **`transport: structured` is load-bearing, and its absence is silent.**
+   `codingAgentUsesStructuredTransport` returns `true` only for
+   `cursor-cli`; every other provider (codex-cli included) defaults to
+   native/interactive (tmux) mode, where the coding CLI runs its own full
+   built-in tool loop entirely outside mcpagent's tool registry --
+   `tool_policy` never sees it. Confirmed live: a finance chat on codex-cli
+   made 12 genuine `exec` tool calls, zero of them `query_finance_source`,
+   while the platform's own registered-tools list for that session
+   correctly showed only the intended four names. The allowlist was
+   working exactly as designed and it didn't matter, because the CLI never
+   went through it.
+2. **`transport: structured` alone was not sufficient for codex-cli.** Even
+   under structured transport, codex-cli still exposed a second native
+   tool, `js` -- its own Node REPL, with a working `fetch` and a real
+   filesystem `cwd`. The model reached for it once `query_finance_source`
+   proved hard to invoke. `tool_policy` cannot see this tool either, for
+   the same reason it couldn't see `exec`.
+3. **Global scope makes `provider_options` decorative, not authoritative
+   -- by design, not a bug.** `resolveAgentProfileForQuery`'s own logic:
+   `if isGlobalScope && requestHasExplicitModel { provider, modelID =
+   req.Provider, req.ModelID }` -- the user's own chat-level selection
+   always wins for a global-scoped profile, unconditionally. That's
+   exactly right for Chief of Staff (the whole point of its own design) and
+   exactly wrong for Finance, whose entire safety story depends on the
+   provider actually being restricted. Global scope also takes the dynamic
+   multi-agent delegation prompt instead of this profile's own
+   `prompt.file` -- confirmed live that an earlier global-scoped version of
+   this profile never sent `prompts/system-prompt.md` to the model at all.
+   **Finance is `scope: project`, not global**, even though it spans
+   multiple sources the same shape-of-reason Chief of Staff does --
+   project scope's usual narrowing (folder guard collapsed to one root) is
+   a non-issue here since this profile's one tool bypasses `FolderGuard`
+   entirely via its own hardcoded path whitelist.
+
+**The fix, in the product.yaml `runtime:` block**: `transport: structured`,
+`agent_tools.mode: mcp_only` (explicit, matching Video Studio's own
+convention, though confirmed not itself the fix for finding 1 or 2 --
+empty already resolved to mcp_only), and `provider_options` curated to
+**exactly one** entry, `claude-code` -- not the four-provider list Video
+Studio offers. That restriction is deliberate, not an oversight: Video
+Studio's own reliance on `codex-cli`/`cursor-cli`/`pi-cli` as safe options
+is not proof those providers are safe under a real allowlist -- it's
+possible Video Studio has the same class of gap and has simply never hit
+it, since Video Studio's blast radius (a video project) is lower-stakes
+than Finance's (real account data). Finance verified codex-cli leaks and
+does not currently offer it. **claude-code's own safety here is inferred
+from Video Studio's existing production reliance on it, not independently
+re-verified live in this profile** -- see "Confirmed vs. not yet confirmed"
+below.
+
+### Confirmed vs. not yet confirmed (2026-08-17)
+
+**Solidly confirmed, from direct server-log evidence:**
+- `provider=claude-code hybrid=false` for every turn after the fix,
+  regardless of what the frontend's (stale, cosmetic-only) model-selector
+  label displayed.
+- `[PRODUCT_TOOL_GATE] profile=finance ... mode=allowlist registered=1:
+  query_finance_source` paired with `filtered=55: [execute_shell_command
+  delegate agent_browser list_secrets create_workflow_schedule ...]` -- the
+  allowlist is genuinely, actively filtering 55 other platform tools, every
+  turn.
+- After the fix, on claude-code, **no unauthorized tool call ever actually
+  executed** -- the model correctly refused to fabricate numbers or invent
+  a workaround when it couldn't reach its one tool, twice.
+- Before the fix, on codex-cli, the model's own native `exec`/`js` calls
+  *did* run genuinely, 12 times, with real output (one result was 37,846
+  bytes). Whether that was actually contained to something harmless is
+  **not established** -- the tmux launch command showed `--sandbox
+  workspace-write` and the `js` call's own reported `cwd` was scoped to
+  the Chats folder, but this investigation did not verify path-traversal
+  resistance or test for an actual escape, only observed that the turns it
+  happened to run were benign (balance-checking, not adversarial probing).
+  Treat the pre-fix codex-cli leak as a real, not fully characterized risk,
+  not as "confirmed safe because nothing bad happened this time."
+
+**Not yet cleanly confirmed: a truly fresh session successfully calling
+`query_finance_source` and returning real data.** Every post-fix test
+attempt inherited a resumed claude-code thread (the platform's session
+restore matches by title/workspace, not just a cleared local tab) carrying
+forward an incorrect "I don't have this tool" belief from earlier,
+differently-configured testing -- the model never even attempted the tool
+call in that state, just repeated its earlier claim. This is very likely a
+session-continuity artifact of live-testing through several config changes
+in one dev session, not a reflection of a genuine first-time user's
+experience, but it was not cleanly proven before this investigation had to
+stop. **This is a real open item**, and also a real platform finding worth
+someone else's attention: if a resumed session can carry forward a stale
+belief about its own tool availability across a server restart and profile
+change, that could affect any product relying on session resume after a
+mid-conversation reconfiguration, not just Finance.
+
+**Next step before relying on this**: open Finance chat from a genuinely
+clean state (no prior session under this title/workspace, e.g. a different
+`_users/<id>/` or a purged conversation file) and confirm
+`query_finance_source` is actually called and returns correct data end to
+end. Do not assume it works from the tool-gate log alone.
+
+## Architecture: no new backend, no Go files (dashboard only)
 
 **The whole thing is frontend-only.** `agentApi.queryWorkflowDB(dbPath,
 sql)` (`frontend/src/services/api.ts:1487`) already exists, already works
@@ -222,8 +346,9 @@ a test, not an inline `parseFloat`.
 | Scope | Bank accounts, investments (mutual funds), and tax — trading is a different domain, out |
 | Which sources feed it | A curated list named by hand, one adapter per source — not auto-discovery |
 | Where it lives | A new product surface, own tile — a real dashboard needs layout a chat+aside shape doesn't fit |
-| Backend | None — frontend-only, `agentApi.queryWorkflowDB` directly, no Go, no new routes |
-| Chat | Not in v1 — dashboard first, chat is a later, separate slice |
+| Backend (dashboard) | None — frontend-only, `agentApi.queryWorkflowDB` directly, no Go, no new routes |
+| Backend (chat) | A real `agent_go/internal/financeproduct/` package — built 2026-08-17, see "Chat" above. Chat needs an LLM turn, the dashboard doesn't. |
+| Chat | Built 2026-08-17: `scope: project` (not global — see "Chat" above for why), one custom read-only tool, `provider_options` curated to `claude-code` only. Functional end-to-end verification still open — see "Confirmed vs. not yet confirmed". |
 | Branch | Continues on `feature/chief-of-staff-product` (not split to its own branch) |
 
 ## Build order

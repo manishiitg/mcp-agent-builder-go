@@ -1,7 +1,12 @@
 import { useEffect, useState } from 'react'
-import { AlertTriangle, ArrowDownRight, ArrowUpRight, Clock, Landmark, ReceiptIndianRupee, TrendingUp } from 'lucide-react'
+import { AlertTriangle, ArrowDownRight, ArrowUpRight, Clock, Landmark, MessageCircle, ReceiptIndianRupee, TrendingUp, X } from 'lucide-react'
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts'
+import ChatArea from '../../components/ChatArea'
 import { ProductSurfaceSwitcher } from '../../components/ProductSurfaceSwitcher'
+import { useAppStore } from '../../stores/useAppStore'
+import { useChatStore, waitForChatStoreHydration } from '../../stores/useChatStore'
+import { useModeStore } from '../../stores/useModeStore'
+import { restoreSession } from '../../utils/sessionRestore'
 import { loadHdfcAccounts } from './adapters/hdfc'
 import { loadIciciAccounts, loadIciciTransactions } from './adapters/icici'
 import { loadGstAttentionItems, loadGstCards } from './adapters/gst'
@@ -9,6 +14,69 @@ import { loadMutualFundAccounts, loadMutualFundTransactions } from './adapters/m
 import { loadTaxAttentionItems, loadTaxCards } from './adapters/tax'
 import { buildFreshnessEntries, combineAttentionItems, computeNetWorth, findStaleSources, mergeRecentActivity } from './synthesize'
 import type { AttentionItem, BankAccountCard, GstCard, InvestmentAccountCard, RecentTransaction, TaxCard } from './types'
+
+const FINANCE_PROFILE_ID = 'finance'
+
+// Finds-or-creates the one singleton Finance chat tab, same pattern as
+// Chief of Staff's own mount effect -- minus the legacy-tab-adoption logic,
+// since this profile is brand new with no prior no-profile shape to adopt.
+function FinanceChatWelcome() {
+  return (
+    <div className="flex h-full items-center justify-center px-6 py-10">
+      <div className="max-w-xs text-center">
+        <span className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
+          <MessageCircle className="h-5 w-5" />
+        </span>
+        <h2 className="mt-4 text-base font-semibold text-slate-900 dark:text-slate-100">Ask about your finances</h2>
+        <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">
+          Read-only over bank, investment, tax, and GST data already synced here. It can answer and explain -- it
+          won't run or change anything.
+        </p>
+      </div>
+    </div>
+  )
+}
+
+function useFinanceChatTab() {
+  const [tabId, setTabId] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const prepare = async () => {
+      useModeStore.getState().setModeCategory('multi-agent')
+      useAppStore.getState().setAgentMode('multi-agent')
+      await waitForChatStoreHydration()
+      if (cancelled) return
+      const chatStore = useChatStore.getState()
+
+      let tab = Object.values(chatStore.chatTabs).find((t) => t.metadata?.agentProfileId === FINANCE_PROFILE_ID)
+      if (!tab) {
+        const createdTabId = await chatStore.createChatTab('Finance', {
+          mode: 'multi-agent',
+          agentProfileId: FINANCE_PROFILE_ID,
+          agentProfileVersion: 1,
+          agentProfileWorkspace: 'Chats',
+          agentProfileProjectTitle: 'Finance',
+        })
+        tab = chatStore.getTab(createdTabId)
+      }
+      if (cancelled || !tab) return
+
+      const restoredTabId = await restoreSession(tab.sessionId ?? tab.tabId, {
+        title: 'Finance',
+        source: 'finance-open',
+        skipConfigRestore: true,
+      })
+      if (cancelled) return
+      chatStore.switchTab(restoredTabId)
+      setTabId(restoredTabId)
+    }
+    void prepare()
+    return () => { cancelled = true }
+  }, [])
+
+  return tabId
+}
 
 type LoadState = {
   bankAccounts: BankAccountCard[]
@@ -118,6 +186,8 @@ const CARD = 'rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm tran
 
 export function FinanceSurface() {
   const { bankAccounts, investmentAccounts, tax, gst, transactions, attentionItems, loading, error } = useFinanceData()
+  const chatTabId = useFinanceChatTab()
+  const [showChat, setShowChat] = useState(false)
 
   const netWorth = computeNetWorth(bankAccounts, investmentAccounts)
   const staleSources = findStaleSources(buildFreshnessEntries(bankAccounts, investmentAccounts, tax, gst))
@@ -131,7 +201,21 @@ export function FinanceSurface() {
     <div className="flex h-screen min-h-0 flex-col overflow-hidden bg-slate-50 dark:bg-slate-950">
       <header className="flex h-[62px] shrink-0 items-center gap-4 border-b border-slate-200 bg-white px-4 dark:border-slate-800 dark:bg-slate-950">
         <ProductSurfaceSwitcher />
+        <button
+          type="button"
+          onClick={() => setShowChat((v) => !v)}
+          className={`ml-auto flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${
+            showChat
+              ? 'border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300'
+              : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800'
+          }`}
+        >
+          {showChat ? <X className="h-3.5 w-3.5" /> : <MessageCircle className="h-3.5 w-3.5" />}
+          {showChat ? 'Close chat' : 'Ask Finance'}
+        </button>
       </header>
+      <div className="flex min-h-0 flex-1">
+      <div className="flex min-h-0 flex-1 flex-col">
       {loading ? (
         <div className="grid flex-1 place-items-center text-sm text-slate-400">Loading finance data…</div>
       ) : error ? (
@@ -375,6 +459,17 @@ export function FinanceSurface() {
           </div>
         </div>
       )}
+      </div>
+      {showChat && (
+        <aside className="flex w-[420px] shrink-0 flex-col border-l border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950">
+          {chatTabId ? (
+            <ChatArea tabId={chatTabId} onNewChat={() => {}} landingContent={<FinanceChatWelcome />} fullTurnStreaming showConversationUsage />
+          ) : (
+            <div className="grid h-full place-items-center text-xs text-slate-400">Connecting…</div>
+          )}
+        </aside>
+      )}
+      </div>
     </div>
   )
 }
