@@ -6334,8 +6334,20 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			persistedHistory = merged
 			log.Printf("[CONVERSATION DEBUG] Mode-change merge: persisting %d msgs (snapshot %d + new %d)", len(persistedHistory), len(preModeChangeSnapshot), len(finalHistory)-1)
 		}
+		// Deliberately NOT bounded: the comment above calls this file the
+		// canonical record of the conversation, and trimming it here deletes the
+		// oldest messages on every write rather than withholding them. The
+		// hazard the bound was added for is the no-resume fallback that feeds
+		// this transcript to a provider as prompt context — that path is bounded
+		// at its own call site with the much smaller
+		// maxCodingAgentFallbackMessages/Bytes, which is lossless because the
+		// file still holds everything.
+		//
+		// The "the coding agent's own conversation is not at risk" argument only
+		// covers CLI providers, which keep their own rollout/transcript. This is
+		// the generic query path: for an API-backed chat there is no provider
+		// transcript behind it, so this file is the only record that exists.
 		persistedHistory = cleanChatHistoryForPersistence(persistedHistory)
-		persistedHistory = boundedChatHistoryTail(persistedHistory, maxPersistedChatHistoryMessages, maxPersistedChatHistoryBytes)
 
 		runtimeWorkspacePath := strings.TrimSpace(req.SelectedFolder)
 		if isWorkflowPhase && workflowPhaseFolder != "" {
@@ -6369,8 +6381,11 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 		} else if ok && target != nil {
 			persistSessionID = target.SessionID
 			persistConversationPath = target.ConversationPath
+			// Also deliberately unbounded — and the merge makes it sharper: this
+			// combines the restored conversation with the current turn, so a
+			// bound here would trim the very history the user just reopened,
+			// permanently, on the first message they send into it.
 			persistedHistoryForDisk = mergeRestoredChatHistory(target.History, persistedHistory)
-			persistedHistoryForDisk = boundedChatHistoryTail(persistedHistoryForDisk, maxPersistedChatHistoryMessages, maxPersistedChatHistoryBytes)
 			logfWithContext(queryLogCtx, "[CHAT_HISTORY] Continuing restored coding-agent conversation current_session=%s persisted_session=%s path=%s merged_messages=%d",
 				sessionID, persistSessionID, persistConversationPath, len(persistedHistoryForDisk))
 		}

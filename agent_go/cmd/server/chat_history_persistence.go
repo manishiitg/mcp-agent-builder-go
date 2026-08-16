@@ -84,9 +84,17 @@ type restoredChatHistoryPersistTarget struct {
 const (
 	maxPersistedChatHistoryUIEvents = 200
 	maxChatHistoryFallbackScan      = 1000
-	// The conversation JSON is a UI record, not coding-agent context. Keep it
-	// bounded so a corrupted or unusually verbose transcript cannot become an
-	// unbounded disk record or a dangerous fallback payload.
+	// Ceiling for reading a persisted transcript back, NOT for writing one.
+	//
+	// These were briefly applied to the durable write path, which deletes the
+	// oldest messages on every save instead of withholding them. The conversation
+	// JSON is the canonical record: for a coding CLI the provider also keeps a
+	// rollout/transcript, but an API-backed chat has nothing behind this file.
+	// Bounding what is loaded or sent is lossless; bounding what is stored is not.
+	//
+	// The real hazard — an unbounded transcript becoming a prompt payload — is
+	// handled by the fallback limits below, at the one call site that builds
+	// prompt context.
 	maxPersistedChatHistoryMessages = 1000
 	maxPersistedChatHistoryBytes    = 4 * 1024 * 1024
 	// A provider without a native continuation handle gets only recent context.
