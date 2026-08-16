@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { CalendarClock, KeyRound, ListChecks, Users } from 'lucide-react'
+import { CalendarClock, FolderOpen, KeyRound, ListChecks, Users } from 'lucide-react'
 import ChatArea from '../../components/ChatArea'
 import { FileContentViewer } from '../../components/FileContentViewer'
 import { ProductSurfaceSwitcher } from '../../components/ProductSurfaceSwitcher'
@@ -7,6 +7,7 @@ import { ChiefTasksPanel } from '../../components/org/OrgHtmlPanels'
 import MultiAgentSchedulesPopup from '../../components/scheduler/MultiAgentSchedulesPopup'
 import SecretsManagerModal from '../../components/secrets/SecretsManagerModal'
 import SecretSelectionDropdown from '../../components/secrets/SecretSelectionDropdown'
+import Workspace from '../../components/Workspace'
 import { useAppStore } from '../../stores/useAppStore'
 import { useChatStore, waitForChatStoreHydration } from '../../stores/useChatStore'
 import { useModeStore } from '../../stores/useModeStore'
@@ -16,10 +17,10 @@ import { setProductCommands } from '../../commands/registry'
 import { toChiefOfStaffCommandDefinitions } from './productCommands'
 import { loadChiefOfStaffProfileData, type ChiefOfStaffUIPanels } from './chiefOfStaffData'
 
-const EMPTY_UI_PANELS: ChiefOfStaffUIPanels = { secrets: false, schedules: false }
+const EMPTY_UI_PANELS: ChiefOfStaffUIPanels = { secrets: false, schedules: false, files: false }
 const EMPTY_SECRET_IDS: string[] = []
 
-type ChiefOfStaffPanel = 'tasks' | 'schedules'
+type ChiefOfStaffPanel = 'tasks' | 'schedules' | 'files'
 
 // Model selection deliberately has no header control here, unlike Video
 // Studio's provider dropdown: Chief of Staff uses the same full published-LLM
@@ -161,6 +162,7 @@ export function ChiefOfStaffSurface() {
   const panelTabs: Array<{ key: ChiefOfStaffPanel; label: string; icon: typeof ListChecks }> = [
     { key: 'tasks', label: 'Tasks', icon: ListChecks },
     ...(uiPanels.schedules ? [{ key: 'schedules' as const, label: 'Schedules', icon: CalendarClock }] : []),
+    ...(uiPanels.files ? [{ key: 'files' as const, label: 'Files', icon: FolderOpen }] : []),
   ]
 
   return (
@@ -201,6 +203,8 @@ export function ChiefOfStaffSurface() {
           <div className="min-h-0 flex-1 overflow-hidden">
             {panel === 'schedules' && uiPanels.schedules ? (
               <MultiAgentSchedulesPopup embedded />
+            ) : panel === 'files' && uiPanels.files ? (
+              <Workspace minimized={false} onToggleMinimize={() => {}} hideMinimizeControl />
             ) : (
               <ChiefTasksPanel hideHeader />
             )}

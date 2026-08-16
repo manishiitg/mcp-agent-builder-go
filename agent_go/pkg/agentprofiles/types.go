@@ -206,6 +206,10 @@ type UIPanels struct {
 	// runs (enable/disable/trigger/delete), reusing the same list the
 	// AgentWorks schedules popup shows.
 	Schedules bool `json:"schedules,omitempty" yaml:"schedules,omitempty"`
+	// Files shows a Files panel with the same unscoped workspace file
+	// browser AgentWorks' own multi-agent files view uses -- unscoped,
+	// unlike Video Studio's FilesPanel which is pinned to one project.
+	Files bool `json:"files,omitempty" yaml:"files,omitempty"`
 }
 
 const (

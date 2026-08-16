@@ -57,6 +57,7 @@ profile:
   ui_panels:
     secrets: true
     schedules: true
+    files: true
   # Skills ARE declared here, like Video Studio's own -- each
   # name is individually registered by RegisterProductSkills()
   # (profile_definition.go), rendered once from the same shared reference-doc

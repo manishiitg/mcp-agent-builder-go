@@ -16,6 +16,7 @@ export type ChiefOfStaffCommand = {
 export type ChiefOfStaffUIPanels = {
   secrets: boolean
   schedules: boolean
+  files: boolean
 }
 
 type AgentProfileResponse = {
@@ -28,6 +29,7 @@ type AgentProfileResponse = {
   ui_panels?: {
     secrets?: unknown
     schedules?: unknown
+    files?: unknown
   }
 }
 
@@ -66,6 +68,7 @@ export async function loadChiefOfStaffProfileData(): Promise<ChiefOfStaffProfile
   const uiPanels: ChiefOfStaffUIPanels = {
     secrets: profile.ui_panels?.secrets === true,
     schedules: profile.ui_panels?.schedules === true,
+    files: profile.ui_panels?.files === true,
   }
 
   return { commands, uiPanels }
