@@ -21,9 +21,6 @@ func TestResolveDelegationTierConfigExpandsProviderProfile(t *testing.T) {
 	if got := resolved.Main.Options["reasoning_effort"]; got != "medium" {
 		t.Fatalf("main reasoning_effort = %#v, want medium", got)
 	}
-	if resolved.ChiefOfStaff == nil || resolved.ChiefOfStaff.ModelID != "claude-opus-5" {
-		t.Fatalf("chief_of_staff = %+v, want claude-opus-5", resolved.ChiefOfStaff)
-	}
 	if resolved.High == nil || resolved.High.ModelID != "claude-sonnet-5" {
 		t.Fatalf("high = %+v, want claude-sonnet-5", resolved.High)
 	}

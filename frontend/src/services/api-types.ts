@@ -191,7 +191,6 @@ export interface DelegationTierConfig {
   mode: 'provider_profile' | 'explicit'
   provider?: string
   main?: TierModel    // orchestrator/main agent model
-  chief_of_staff?: TierModel // scheduled Chief of Staff / Org Pulse model
   high?: TierModel
   medium?: TierModel
   low?: TierModel

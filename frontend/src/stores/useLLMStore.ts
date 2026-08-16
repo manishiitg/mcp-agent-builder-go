@@ -668,7 +668,7 @@ export const useLLMStore = create<LLMState>()(
               azure: state.azureConfig,
             }
             const tierConfig = config as unknown as Record<string, { provider?: string }>
-            for (const tier of ['main', 'chief_of_staff', 'high', 'medium', 'low']) {
+            for (const tier of ['main', 'high', 'medium', 'low']) {
               const provider = tierConfig[tier]?.provider
               if (provider && providerConfigs[provider]?.api_key && !providerKeys[provider]) {
                 providerKeys[provider] = providerConfigs[provider].api_key!
@@ -697,7 +697,7 @@ export const useLLMStore = create<LLMState>()(
             // Try to load saved config from workspace file first
             try {
               const saved = await agentApi.getDelegationTierConfig()
-              const hasSaved = saved && (saved.provider || saved.main || saved.chief_of_staff || saved.high || saved.medium || saved.low ||
+              const hasSaved = saved && (saved.provider || saved.main || saved.high || saved.medium || saved.low ||
                 (saved.custom && Object.keys(saved.custom as object).length > 0))
               if (hasSaved) {
                 set({
@@ -711,7 +711,7 @@ export const useLLMStore = create<LLMState>()(
             }
             // Fall back to env var defaults
             const defaults = await llmConfigService.getDelegationTierDefaults()
-            const hasDefaults = defaults.main || defaults.chief_of_staff || defaults.high || defaults.medium || defaults.low ||
+            const hasDefaults = defaults.main || defaults.high || defaults.medium || defaults.low ||
               (defaults.custom && Object.keys(defaults.custom).length > 0)
             if (hasDefaults) {
               set({ delegationTierConfig: defaults })

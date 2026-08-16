@@ -21,7 +21,6 @@ func testExplicitConfig() *PresetLLMConfig {
 
 func TestValidatePresetLLMConfigExplicit(t *testing.T) {
 	cfg := testExplicitConfig()
-	cfg.ChiefOfStaffLLM = &AgentLLMConfig{Provider: "claude-code", ModelID: "claude-opus-4-8"}
 	if err := ValidatePresetLLMConfigPublic(cfg); err != nil {
 		t.Fatalf("ValidatePresetLLMConfigPublic() error = %v", err)
 	}
@@ -136,16 +135,6 @@ func TestResolveProviderProfilePulseConfigUsesProviderDefault(t *testing.T) {
 	got, ok := ResolveProviderProfilePulseConfig(providerProfile("claude-code"))
 	if !ok || got.Provider != "claude-code" || got.ModelID != "claude-sonnet-5" {
 		t.Fatalf("ResolveProviderProfilePulseConfig() = %+v, %v", got, ok)
-	}
-}
-
-func TestResolveProviderProfileChiefOfStaffConfigUsesProviderDefault(t *testing.T) {
-	got, ok := ResolveProviderProfileChiefOfStaffConfig(providerProfile("claude-code"))
-	if !ok || got.Provider != "claude-code" || got.ModelID != "claude-opus-5" {
-		t.Fatalf("ResolveProviderProfileChiefOfStaffConfig() = %+v, %v", got, ok)
-	}
-	if got.Options["reasoning_effort"] != "medium" {
-		t.Fatalf("reasoning_effort = %#v, want medium", got.Options["reasoning_effort"])
 	}
 }
 

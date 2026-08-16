@@ -1196,10 +1196,9 @@ const (
 )
 
 const (
-	llmConfigSourceAgentProfile          = "agent_profile"
-	llmConfigSourceScheduledAutoImprove  = "scheduled_auto_improve"
-	llmConfigSourceScheduledPulse        = "scheduled_pulse"
-	llmConfigSourceScheduledChiefOfStaff = "scheduled_chief_of_staff"
+	llmConfigSourceAgentProfile         = "agent_profile"
+	llmConfigSourceScheduledAutoImprove = "scheduled_auto_improve"
+	llmConfigSourceScheduledPulse       = "scheduled_pulse"
 )
 
 func requestLLMConfigOverridesManifest(req QueryRequest) bool {
@@ -1207,7 +1206,7 @@ func requestLLMConfigOverridesManifest(req QueryRequest) bool {
 		return false
 	}
 	switch strings.TrimSpace(req.LLMConfigSource) {
-	case llmConfigSourceAgentProfile, llmConfigSourceScheduledAutoImprove, llmConfigSourceScheduledPulse, llmConfigSourceScheduledChiefOfStaff:
+	case llmConfigSourceAgentProfile, llmConfigSourceScheduledAutoImprove, llmConfigSourceScheduledPulse:
 		return true
 	default:
 		return false
@@ -7967,7 +7966,6 @@ func resolveDelegationTierConfig(frontendConfig *virtualtools.DelegationTierConf
 				Mode:          "provider_profile",
 				Provider:      strings.TrimSpace(frontendConfig.Provider),
 				Main:          toTierModel(defaults.Builder),
-				ChiefOfStaff:  toTierModel(defaults.ChiefOfStaff),
 				High:          toTierModel(defaults.High),
 				Medium:        toTierModel(defaults.Medium),
 				Low:           toTierModel(defaults.Low),
@@ -7996,10 +7994,6 @@ func resolveDelegationTierConfig(frontendConfig *virtualtools.DelegationTierConf
 	if frontendConfig != nil {
 		if main := sanitizeTierModel(frontendConfig.Main); main != nil {
 			result.Main = main
-			hasAny = true
-		}
-		if chiefOfStaff := sanitizeTierModel(frontendConfig.ChiefOfStaff); chiefOfStaff != nil {
-			result.ChiefOfStaff = chiefOfStaff
 			hasAny = true
 		}
 		if high := sanitizeTierModel(frontendConfig.High); high != nil {

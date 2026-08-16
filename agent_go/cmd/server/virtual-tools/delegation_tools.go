@@ -78,7 +78,6 @@ type DelegationTierConfig struct {
 	Mode          string                      `json:"mode"`
 	Provider      string                      `json:"provider,omitempty"`
 	Main          *TierModel                  `json:"main,omitempty"` // orchestrator/main agent model
-	ChiefOfStaff  *TierModel                  `json:"chief_of_staff,omitempty"`
 	High          *TierModel                  `json:"high,omitempty"`
 	Medium        *TierModel                  `json:"medium,omitempty"`
 	Low           *TierModel                  `json:"low,omitempty"`

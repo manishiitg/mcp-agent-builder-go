@@ -40,7 +40,6 @@ func resolvedWorkflowLLMRoles(manifestJSON string) ([]resolvedLLMRole, error) {
 		}
 		maintenance, _ := workflowtypes.ResolveProviderProfileMaintenanceConfig(cfg)
 		pulse, _ := workflowtypes.ResolveProviderProfilePulseConfig(cfg)
-		chief, _ := workflowtypes.ResolveProviderProfileChiefOfStaffConfig(cfg)
 		source := "provider_profile:" + cfg.Provider
 		return []resolvedLLMRole{
 			{"builder", builder, source, false},
@@ -49,19 +48,10 @@ func resolvedWorkflowLLMRoles(manifestJSON string) ([]resolvedLLMRole, error) {
 			{"execution_low", tiers.Tier3, source, false},
 			{"maintenance", maintenance, source, false},
 			{"pulse", pulse, source, false},
-			{"chief_of_staff", chief, source, false},
 		}, nil
 	}
 	if cfg.TieredConfig == nil {
 		return nil, fmt.Errorf("explicit LLM config has no execution tiers")
-	}
-	chief := cfg.ChiefOfStaffLLM
-	chiefSource := "explicit_override"
-	chiefOverride := chief != nil
-	if chief == nil {
-		// An explicit workflow config suppresses deployment-level fallback in the
-		// scheduler. Surface the missing role instead of inventing inheritance.
-		chiefSource = "unconfigured"
 	}
 	return []resolvedLLMRole{
 		{"builder", cfg.BuilderLLM, "explicit_override", true},
@@ -70,7 +60,6 @@ func resolvedWorkflowLLMRoles(manifestJSON string) ([]resolvedLLMRole, error) {
 		{"execution_low", cfg.TieredConfig.Tier3, "explicit_override", true},
 		{"maintenance", cfg.MaintenanceLLM, "explicit_override", true},
 		{"pulse", cfg.PulseLLM, "explicit_override", true},
-		{"chief_of_staff", chief, chiefSource, chiefOverride},
 	}, nil
 }
 
