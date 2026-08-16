@@ -25,6 +25,7 @@ import WorkflowSelectionDialog from './WorkflowSelectionDialog'
 import { isChatCompatiblePhase } from '../utils/chatSubmitHelpers'
 import { useWorkflowStore } from '../stores/useWorkflowStore'
 import { useWorkflowManifestStore } from '../stores/useWorkflowManifestStore'
+import { useCapabilitiesStore } from '../stores/useCapabilitiesStore'
 import { startRestoredTransportTerminal } from '../utils/restoredTerminal'
 import { chromeCdpInstallCommand, chromeCdpLaunchCommand, chromeCdpVerifyCommand, chromeCdpZipUrl } from '../utils/cdpSetup'
 import { CHAT_TOOL_COMMAND_EVENT, chatToolCommandFromEvent } from '../utils/chatToolEvents'
@@ -32,6 +33,9 @@ import { resolveDelegationMainModel } from '../utils/workflowLLMTierDefaults'
 import { hasActiveSessionWork } from '../utils/activitySessions'
 import { shouldClearAcceptedChatDraft } from '../utils/chatSubmissionDraft'
 import { liveTerminalControlKey } from '../utils/liveTerminalKeys'
+import { normalizeEventViewMode } from '../stores/useChatStore'
+
+const RUNTIME_DIAGNOSTICS_ENABLED = import.meta.env.VITE_RUNTIME_DEBUG === '1'
 
 const removePasteMarkersFromText = (text: string, markers: string[]) => {
   return markers.reduce((next, marker) => {
@@ -562,6 +566,9 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   const activeTab = useChatStore(state =>
     activeTabId ? state.chatTabs[activeTabId] : undefined
   )
+  const serverRuntimeDiagnosticsEnabled = useCapabilitiesStore(state => state.capabilities?.runtime_debug === true)
+  const terminalDiagnosticsAvailable = RUNTIME_DIAGNOSTICS_ENABLED && serverRuntimeDiagnosticsEnabled && !!activeTab?.sessionId
+  const terminalViewSelected = normalizeEventViewMode(activeTab?.viewMode) === 'terminal'
   const tabModeCategory = activeTab?.metadata?.mode
   const isWorkflowMode = tabModeCategory === 'workflow' || selectedModeCategory === 'workflow'
   const isMultiAgentMode = !isWorkflowMode && (tabModeCategory === 'multi-agent' || selectedModeCategory === 'multi-agent')
@@ -2905,7 +2912,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
       const latestStore = useChatStore.getState()
       // Resume into the user-facing conversation. The terminal session is still
       // restored below and remains available through the Raw toggle.
-      latestStore.setTabViewMode(activeTabId, 'tree')
+      latestStore.setTabViewMode(activeTabId, 'formatted')
       startRestoredTransportTerminal(
         session.session_id,
         path,
@@ -4038,6 +4045,28 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                     </div>
                   ) : (
                     <div data-tour="chat-send-controls" data-testid="tour-chat-send-controls" className="flex items-center gap-1">
+                      {terminalDiagnosticsAvailable && activeTabId && (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              type="button"
+                              variant={terminalViewSelected ? 'secondary' : 'outline'}
+                              size="sm"
+                              onClick={() => useChatStore.getState().setTabViewMode(
+                                activeTabId,
+                                terminalViewSelected ? 'formatted' : 'terminal',
+                              )}
+                              className="px-2.5"
+                              aria-label={terminalViewSelected ? 'Return to conversation' : 'Open tmux terminal'}
+                            >
+                              <Terminal className="w-4 h-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p>{terminalViewSelected ? 'Return to conversation' : 'Open tmux terminal'}</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      )}
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <Button

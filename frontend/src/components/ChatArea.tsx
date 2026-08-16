@@ -1,7 +1,4 @@
 import { Suspense, lazy, useEffect, useRef, useCallback, forwardRef, useImperativeHandle, useMemo, useState, type ComponentType, type ForwardedRef, type ReactNode } from 'react'
-import { isLiveWorkflowTerminal } from '../utils/workflowTerminalActivity'
-import { requestTerminalRefreshBurst } from '../utils/terminalRefresh'
-import { useSessionTerminals } from '../hooks/useSessionTerminals'
 import { normalizeEventViewMode } from '../stores/useChatStore'
 import { useRenderLogger, useMemoLogger } from '../utils/renderLogger'
 import { chatSubmissionLane } from '../utils/promiseLane'
@@ -426,8 +423,6 @@ interface ChatAreaProps {
   hideInput?: boolean
   // Compact mode for smaller font sizes (used in workflow layout)
   compact?: boolean
-  // Suppress terminal content while the parent renders an idle/history state.
-  suppressTerminalPane?: boolean
   // Tab ID - if provided, use this tab's session ID (works for both chat and workflow modes).
   // Pass null explicitly to disable all active behavior (SSE, polling, queue) — used when
   // this ChatArea instance is hidden behind another instance for the same tab.
@@ -480,7 +475,7 @@ let globalHasRestored = false
 
 // Inner component for chat area
 const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAreaRef>) => {
-  const { onNewChat, hideInput = false, compact = false, suppressTerminalPane = false, tabId, previousChatsCompact = false, workflowPreviousChatsPanel, landingContent, contentRenderer: ContentRenderer, inputVariant = 'default', fullTurnStreaming = false, showConversationUsage = false } = props
+  const { onNewChat, hideInput = false, compact = false, tabId, previousChatsCompact = false, workflowPreviousChatsPanel, landingContent, contentRenderer: ContentRenderer, inputVariant = 'default', fullTurnStreaming = false, showConversationUsage = false } = props
   // null means "inactive — don't subscribe to any tab or run any effects"
   const isInactive = tabId === null
 
@@ -684,7 +679,9 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
   // (not when any other session gets events)
   const activeSessionId = activeTab?.sessionId
   const serverRuntimeDiagnosticsEnabled = useCapabilitiesStore(state => state.capabilities?.runtime_debug === true)
-  const showRuntimeDiagnostics = RUNTIME_DIAGNOSTICS_ENABLED && serverRuntimeDiagnosticsEnabled
+  const runtimeDiagnosticsAvailable = RUNTIME_DIAGNOSTICS_ENABLED && serverRuntimeDiagnosticsEnabled
+  const activeEventViewMode = normalizeEventViewMode(activeTab?.viewMode)
+  const showRuntimeDiagnostics = runtimeDiagnosticsAvailable && activeEventViewMode === 'terminal'
 
   // processEventsResponse runs for every polled session and does not carry
   // activeSessionId in its dependency array, so reading it through a ref keeps
@@ -878,45 +875,6 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
   // Cancel button. Display state needs a signal that stays true for the whole
   // turn; the composer keeps the volatile one.
   const activeTabBusy = activeTabStreaming || !!activeTab?.hasRunningBgAgents
-  const activeTabHasRunningBackendSession = !!activeTab?.sessionId && activeSessionsCache.some(session => {
-    if (session.session_id !== activeTab.sessionId) return false
-    const status = (session.status || '').toLowerCase()
-    return status === 'running' || status === 'paused'
-  })
-  const activeEventViewMode = normalizeEventViewMode(activeTab?.viewMode)
-  // Probe the same terminal list that decides TerminalCenter's "No terminals
-  // yet" empty state; a present terminal means the resumed tab's surface is the
-  // terminal pane. Without this the surface flips from the restored terminal to
-  // the previous-chats landing once the settle window elapses.
-  const shouldProbeSessionTerminals =
-    !!activeSessionId &&
-    (
-      activeTabHasRestoredConversation ||
-      (selectedModeCategory === 'workflow' && activeEventViewMode === 'terminal')
-    )
-  const { data: sessionTerminals, isFetched: sessionTerminalsFetched } = useSessionTerminals(
-    activeSessionId,
-    shouldProbeSessionTerminals,
-  )
-  const restoredSessionTerminals = sessionTerminals?.terminals || []
-  const hasLiveWorkflowTerminal = selectedModeCategory === 'workflow' && restoredSessionTerminals.some(isLiveWorkflowTerminal)
-  const terminalProbeSettledEmpty =
-    shouldProbeSessionTerminals &&
-    sessionTerminalsFetched &&
-    restoredSessionTerminals.length === 0
-  const terminalActivityStillPlausible =
-    !terminalProbeSettledEmpty ||
-    activeTab?.metadata?.isViewOnly !== true
-  // The terminal empty-state copy is narrower still: "Starting terminal / Your
-  // message was sent" is only true for a live submitted/running turn, not merely
-  // because an opened/restored workflow tab has historical conversation events.
-  // Read-only Schedule/Bot runs can stay "running" in the backend after their
-  // terminal pane is gone; once the terminal probe has settled empty, do not keep
-  // forcing a dead "Starting terminal" surface.
-  const hasPendingTerminalActivity = !suppressTerminalPane && (
-    (activeTabStreaming && terminalActivityStillPlausible) ||
-    (activeTabHasRunningBackendSession && terminalActivityStillPlausible)
-  )
   // Resume give-up TIMER only. A resume that never produces a terminal/content may
   // eventually fall to 'landing'; resumeGaveUp flips true after RESUME_SETTLE_MS so
   // a genuinely-dead resume isn't stuck on a spinner forever. This is purely a
@@ -2898,7 +2856,6 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
         const sid = response.session_id || tabSessionId
         chatStore.setTabStreaming(currentTab.tabId, true)
         chatStore.setTabCompleted(currentTab.tabId, false)
-        requestTerminalRefreshBurst()
         if (sid && shouldRefreshSessionEventStream(
           fullTurnStreaming,
           Boolean(useChatStore.getState().sseConnections[sid]),
