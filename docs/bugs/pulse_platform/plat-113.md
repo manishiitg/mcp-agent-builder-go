@@ -4,7 +4,7 @@
 
 | Field | Value |
 |---|---|
-| Status | `partially implemented` — steps 1 and 2 landed 2026-08-16; step 3 (demote `sessionBusy`) pending, and neither step is runtime-verified |
+| Status | `partially implemented; unverified at runtime` — steps 1 and 2 landed 2026-08-16 (`6397b7cce`, `9f345ef42`). Step 3 pending. **The backend has been down since 2026-08-16 10:08 IST, so neither fix has executed once.** Do not treat this as resolved until a live scheduled run exercises it |
 | Priority | P0 |
 | Owner | session turn occupancy and auto-notification queueing |
 | Reported | 2026-08-16 |
@@ -181,6 +181,36 @@ review — deliberately not bundled here.
    `already running, skipping` and no idle-wait timeout.
 6. After a run ends, polling for that session stops without requiring a server
    restart or shutdown.
+
+## Verification state — 2026-08-16
+
+**Nothing here has run yet.** The backend was shut down at 10:08 IST (the log
+ends on `⏳ Still waiting for HTTP handlers (5s elapsed)`) and has not been
+restarted, so neither step 1 nor step 2 has executed a single time in a real
+process. What is confirmed is only:
+
+- `go build ./...` clean; `cmd/server` green apart from three failures that
+  predate this work and fail identically on `main`;
+- both new tests were verified to fail when their fix is reverted.
+
+Because the server is down, social-media has also produced **no runs today**.
+Its schedules are `0 10,15,20 * * *` and `30 8 * * *` (Asia/Kolkata), so the
+08:30 and 10:00 slots were missed outright.
+
+**The next real check is the 15:00 IST execution slot**, if the backend is up by
+then. What to look for in `agent_go/logs/schedule.log`:
+
+| signal | broken | fixed |
+|---|---|---|
+| `⏭️ Schedule … is already running, skipping` | present | absent |
+| `⚠️ LATE_FIRE … drift=` | hours | absent or seconds |
+| `workshop idle wait timed out … running_children=N` | present, N ≈ 10 | absent |
+| `synthetic-turn:steer-message-…` in `[EXEC_TRACKER] Reaping stale` | ~25 | none |
+| auto-notifications after the turn | 25 separate | one `Multiple step completions` batch |
+| polling after the run ends | continues for hours | stops |
+
+Until that run is observed, this ticket stays `unverified at runtime` regardless
+of how green the unit tests are.
 
 ## Note on verification
 
