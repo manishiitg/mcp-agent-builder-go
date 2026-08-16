@@ -9367,7 +9367,7 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 			}
 			return sb.String(), nil
 		},
-		CreateSchedule: func(ctx context.Context, workspacePath, name, cronExpr, timezone string, groupNames []string, routeSelections map[string]string, mode string, messages []string, directMessagesReason string, workshopMode string, resumePrevious *bool) (string, error) {
+		CreateSchedule: func(ctx context.Context, workspacePath, name, cronExpr, timezone string, groupNames []string, routeSelections map[string]string, mode string, messages []string, directMessagesReason string, workshopMode string, resumePrevious *bool, pulseReviewOnly bool) (string, error) {
 			mode = scheduleModeOrDefault(mode)
 			if mode == "multi-agent" {
 				return "", fmt.Errorf("workflow schedules must use workshop mode; create multi-agent schedules in the multi-agent schedule store")
@@ -9385,9 +9385,15 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 			if err != nil || !found {
 				return "", fmt.Errorf("workflow manifest not found at %s", workspacePath)
 			}
-			groupNames, err = validateScheduleGroupNamesForWorkspace(ctx, workspacePath, groupNames)
-			if err != nil {
-				return "", err
+			// PLAT-115: a PulseReviewOnly schedule never runs the workflow, so it
+			// has no group to validate — the same reason the manual "Run Pulse
+			// now" trigger's synthetic schedule (manualWorkflowPulseScheduleID)
+			// carries no GroupNames either.
+			if !pulseReviewOnly {
+				groupNames, err = validateScheduleGroupNamesForWorkspace(ctx, workspacePath, groupNames)
+				if err != nil {
+					return "", err
+				}
 			}
 			newSched := WorkflowSchedule{
 				ID:                   generateScheduleID(),
@@ -9402,6 +9408,7 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 				DirectMessagesReason: directMessagesReason,
 				WorkshopMode:         workshopMode,
 				ResumePrevious:       resumePrevious,
+				PulseReviewOnly:      pulseReviewOnly,
 			}
 			manifest.Schedules = append(manifest.Schedules, newSched)
 			if err := WriteWorkflowManifest(ctx, workspacePath, manifest); err != nil {
@@ -9490,7 +9497,7 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 			}
 			return result, nil
 		},
-		UpdateSchedule: func(ctx context.Context, jobID, name, cronExpr, timezone string, groupNames []string, setGroupNames bool, routeSelections map[string]string, setRouteSelections bool, enabled *bool, mode string, messages []string, setMessages bool, directMessagesReason *string, workshopMode string, resumePrevious *bool) (string, error) {
+		UpdateSchedule: func(ctx context.Context, jobID, name, cronExpr, timezone string, groupNames []string, setGroupNames bool, routeSelections map[string]string, setRouteSelections bool, enabled *bool, mode string, messages []string, setMessages bool, directMessagesReason *string, workshopMode string, resumePrevious *bool, pulseReviewOnly *bool) (string, error) {
 			if cronExpr != "" {
 				if err := ValidateCronExpression(cronExpr); err != nil {
 					return "", fmt.Errorf("invalid cron expression %q: %w", cronExpr, err)
@@ -9560,11 +9567,18 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 			if resumePrevious != nil {
 				sched.ResumePrevious = resumePrevious
 			}
-			validGroupNames, err := validateScheduleGroupNamesForWorkspace(ctx, workspacePath, sched.GroupNames)
-			if err != nil {
-				return "", err
+			if pulseReviewOnly != nil {
+				sched.PulseReviewOnly = *pulseReviewOnly
 			}
-			sched.GroupNames = validGroupNames
+			// PLAT-115: a PulseReviewOnly schedule carries no GroupNames — same
+			// reason CreateSchedule skips the group-name requirement for it.
+			if !sched.PulseReviewOnly {
+				validGroupNames, err := validateScheduleGroupNamesForWorkspace(ctx, workspacePath, sched.GroupNames)
+				if err != nil {
+					return "", err
+				}
+				sched.GroupNames = validGroupNames
+			}
 			if err := WriteWorkflowManifest(ctx, workspacePath, manifest); err != nil {
 				return "", fmt.Errorf("failed to write manifest: %w", err)
 			}

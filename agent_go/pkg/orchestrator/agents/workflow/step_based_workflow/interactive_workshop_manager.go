@@ -6325,6 +6325,11 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					"type":        "boolean",
 					"description": "Enable the per-run monitor (Pulse): after each scheduled run Gate selects evidence-backed review/fix work, ordinary background agents perform the selected work, and the parent consolidates results before the finalizer updates builder/improve.html, backup/publish status, and notification. Set true for workflows where a silent failure matters; default off. /pulse-setup turns this on as part of recurring setup; /goal-advisor does not change it.",
 				},
+				"post_run_monitor_mode": map[string]interface{}{
+					"type":        "string",
+					"description": "\"per_run\" (default, or omit): Gate/Review+Fix/Finalize run after every scheduled run, in that run's own session — today's behavior. \"periodic\": every run instead gets only a lightweight backup+notify pass; the full Gate/Review+Fix/Finalize review runs separately, on its own cadence, via a schedule created with create_schedule(pulse_review_only=true). Only set \"periodic\" once that schedule exists — otherwise no full review ever runs for this workflow. Pass \"\" to reset to per_run.",
+					"enum":        []string{"per_run", "periodic", ""},
+				},
 				"advisor_specialization_approval_input_id": map[string]interface{}{
 					"type":        "string",
 					"description": "Activate the exact Strategy Auditor and Goal Advisor specialization text in an answered report_human_inputs decision whose id starts advisor-specialization- and whose selected option is activate. The two texts are resolved from the approved decision and written atomically to workflow.json; arbitrary replacement text is not accepted here.",
@@ -7526,6 +7531,49 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				logger.Info(fmt.Sprintf("Updated workflow post_run_monitor=%v", enabled))
 			}
 
+			// --- Post-run monitor mode (PLAT-115) ---
+			if raw, ok := args["post_run_monitor_mode"]; ok && raw != nil {
+				mode, isString := raw.(string)
+				if !isString {
+					return "Error: post_run_monitor_mode must be a string.", nil
+				}
+				mode = strings.TrimSpace(mode)
+				if mode != "" && mode != "per_run" && mode != "periodic" {
+					return "Error: post_run_monitor_mode must be \"per_run\", \"periodic\", or \"\" to reset to per_run.", nil
+				}
+				content, err := iwm.controller.ReadWorkspaceFile(ctx, "workflow.json")
+				if err != nil {
+					return fmt.Sprintf("Failed to read workflow.json: %v", err), nil
+				}
+				var manifest map[string]interface{}
+				if err := json.Unmarshal([]byte(content), &manifest); err != nil {
+					return fmt.Sprintf("Failed to parse workflow.json: %v", err), nil
+				}
+				if mode == "" || mode == "per_run" {
+					delete(manifest, "post_run_monitor_mode")
+				} else {
+					manifest["post_run_monitor_mode"] = mode
+				}
+				manifest["updated_at"] = time.Now().UTC().Format(time.RFC3339)
+				out, err := json.MarshalIndent(manifest, "", "  ")
+				if err != nil {
+					return fmt.Sprintf("Failed to marshal workflow.json: %v", err), nil
+				}
+				if err := iwm.controller.WriteWorkspaceFile(ctx, "workflow.json", string(out)); err != nil {
+					return fmt.Sprintf("Failed to write workflow.json: %v", err), nil
+				}
+				anyChanged = true
+				display := mode
+				description := "after every scheduled run, in that run's own session"
+				if display == "" {
+					display = "per_run"
+				} else if display == "periodic" {
+					description = "on this workflow's own separately-scheduled periodic Pulse review, not after every run"
+				}
+				sb.WriteString(fmt.Sprintf("\n### Post-run monitor mode (%s)\nGate/Review+Fix/Finalize now run %s.\n", display, description))
+				logger.Info(fmt.Sprintf("Updated workflow post_run_monitor_mode=%q", mode))
+			}
+
 			// --- Owner-approved advisor specialization ---
 			if raw, ok := args["advisor_specialization_approval_input_id"]; ok && raw != nil {
 				inputID, _ := raw.(string)
@@ -7734,8 +7782,12 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					"type":        "boolean",
 					"description": "Optional opt-in when this workflow runs on a coding-agent CLI (claude-code, cursor-cli, codex-cli, pi-cli). When true, each scheduled run resumes the previous run's thread (same CLI) instead of starting a fresh session, so the agent keeps prior context across runs. API model providers and non-resumable runs start fresh. Defaults to false; omit for fresh sessions.",
 				},
+				"pulse_review_only": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Creates this workflow's own periodic Pulse review schedule instead of a workflow-execution schedule. On its own cadence it reviews the accumulated runs/iteration-N backlog and runs Gate/Review+Fix/Finalize — it never runs the workflow itself, so group_names/route_selections/messages do not apply. Pairs with update_workflow_config(post_run_monitor_mode=\"periodic\"), which shortens every normal run's own pass to backup+notify only, deferring the full review to this schedule. Omit or false for an ordinary workflow-execution schedule.",
+				},
 			},
-			"required": []string{"name", "cron_expression", "timezone", "group_names"},
+			"required": []string{"name", "cron_expression", "timezone"},
 		},
 		func(ctx context.Context, args map[string]interface{}) (string, error) {
 			if iwm.schedulerFuncs == nil {
@@ -7744,6 +7796,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			if iwm.schedulerWorkspacePath == "" {
 				return "No workspace path associated with this workflow session.", nil
 			}
+			pulseReviewOnly, _ := args["pulse_review_only"].(bool)
 			name, _ := args["name"].(string)
 			cronExpr, _ := args["cron_expression"].(string)
 			timezone, _ := args["timezone"].(string)
@@ -7793,10 +7846,13 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			if err := validateWorkshopScheduleTimezone(timezone); err != nil {
 				return err.Error(), nil
 			}
-			if len(groupNames) == 0 {
+			if !pulseReviewOnly && len(groupNames) == 0 {
 				return "group_names is required. Read variables/variables.json and provide at least one explicit group_name, e.g. ['group-1'].", nil
 			}
-			return iwm.schedulerFuncs.CreateSchedule(ctx, iwm.schedulerWorkspacePath, name, cronExpr, timezone, groupNames, routeSelections, mode, messages, directMessagesReason, workshopMode, resumePrevious)
+			if pulseReviewOnly && (len(groupNames) > 0 || len(routeSelections) > 0 || len(messages) > 0) {
+				return "pulse_review_only does not run the workflow — it must not set group_names, route_selections, or messages.", nil
+			}
+			return iwm.schedulerFuncs.CreateSchedule(ctx, iwm.schedulerWorkspacePath, name, cronExpr, timezone, groupNames, routeSelections, mode, messages, directMessagesReason, workshopMode, resumePrevious, pulseReviewOnly)
 		},
 		"workflow",
 	); err != nil {
@@ -7949,6 +8005,10 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					"type":        "string",
 					"description": "Set or clear the rationale for an intentional direct schedule sequence.",
 				},
+				"pulse_review_only": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Converts this schedule between a workflow-execution schedule and this workflow's periodic Pulse review schedule (PLAT-115). true: this schedule stops running the workflow and instead runs Gate/Review+Fix/Finalize over the accumulated backlog on its own cadence. false: converts it back to an ordinary workflow-execution schedule. Omit to leave the current setting unchanged.",
+				},
 			},
 			"required": []string{"job_id"},
 		},
@@ -8033,7 +8093,16 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					resumePrevious = &b
 				}
 			}
-			return iwm.schedulerFuncs.UpdateSchedule(ctx, jobID, name, cronExpr, timezone, groupNames, setGroupNames, routeSelections, setRouteSelections, enabled, mode, messages, setMessages, directMessagesReason, workshopMode, resumePrevious)
+			var pulseReviewOnly *bool
+			if raw, ok := args["pulse_review_only"]; ok && raw != nil {
+				if b, ok := raw.(bool); ok {
+					pulseReviewOnly = &b
+				}
+			}
+			if pulseReviewOnly != nil && *pulseReviewOnly && (setGroupNames || setRouteSelections || setMessages) {
+				return "pulse_review_only=true does not run the workflow — do not combine it with group_names, route_selections, or messages in the same call.", nil
+			}
+			return iwm.schedulerFuncs.UpdateSchedule(ctx, jobID, name, cronExpr, timezone, groupNames, setGroupNames, routeSelections, setRouteSelections, enabled, mode, messages, setMessages, directMessagesReason, workshopMode, resumePrevious, pulseReviewOnly)
 		},
 		"workflow",
 	); err != nil {

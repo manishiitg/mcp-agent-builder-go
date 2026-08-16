@@ -730,7 +730,7 @@ func TestUpdateScheduleClearsMessagesOnlyWhenExplicitlySet(t *testing.T) {
 
 	t.Run("omitting messages leaves existing messages untouched", func(t *testing.T) {
 		callbacks, currentMessages := setup(t)
-		if _, err := callbacks.UpdateSchedule(context.Background(), "run-schedule", "", "", "", nil, false, nil, false, nil, "", nil, false, nil, "", nil); err != nil {
+		if _, err := callbacks.UpdateSchedule(context.Background(), "run-schedule", "", "", "", nil, false, nil, false, nil, "", nil, false, nil, "", nil, nil); err != nil {
 			t.Fatalf("UpdateSchedule() error = %v", err)
 		}
 		if got := currentMessages(); len(got) != 1 {
@@ -747,7 +747,7 @@ func TestUpdateScheduleClearsMessagesOnlyWhenExplicitlySet(t *testing.T) {
 	// indistinguishable from "omitted".
 	t.Run("explicit empty array clears messages (nil-slice parsing shape)", func(t *testing.T) {
 		callbacks, currentMessages := setup(t)
-		if _, err := callbacks.UpdateSchedule(context.Background(), "run-schedule", "", "", "", nil, false, nil, false, nil, "", nil, true, nil, "", nil); err != nil {
+		if _, err := callbacks.UpdateSchedule(context.Background(), "run-schedule", "", "", "", nil, false, nil, false, nil, "", nil, true, nil, "", nil, nil); err != nil {
 			t.Fatalf("UpdateSchedule() error = %v", err)
 		}
 		if got := currentMessages(); len(got) != 0 {
@@ -761,7 +761,7 @@ func TestUpdateScheduleClearsMessagesOnlyWhenExplicitlySet(t *testing.T) {
 	// UpdateSchedule must trust either way.
 	t.Run("explicit empty array clears messages (non-nil empty-slice parsing shape)", func(t *testing.T) {
 		callbacks, currentMessages := setup(t)
-		if _, err := callbacks.UpdateSchedule(context.Background(), "run-schedule", "", "", "", nil, false, nil, false, nil, "", []string{}, true, nil, "", nil); err != nil {
+		if _, err := callbacks.UpdateSchedule(context.Background(), "run-schedule", "", "", "", nil, false, nil, false, nil, "", []string{}, true, nil, "", nil, nil); err != nil {
 			t.Fatalf("UpdateSchedule() error = %v", err)
 		}
 		if got := currentMessages(); len(got) != 0 {
@@ -771,7 +771,7 @@ func TestUpdateScheduleClearsMessagesOnlyWhenExplicitlySet(t *testing.T) {
 
 	t.Run("explicit null clears messages", func(t *testing.T) {
 		callbacks, currentMessages := setup(t)
-		if _, err := callbacks.UpdateSchedule(context.Background(), "run-schedule", "", "", "", nil, false, nil, false, nil, "", nil, true, nil, "", nil); err != nil {
+		if _, err := callbacks.UpdateSchedule(context.Background(), "run-schedule", "", "", "", nil, false, nil, false, nil, "", nil, true, nil, "", nil, nil); err != nil {
 			t.Fatalf("UpdateSchedule() error = %v", err)
 		}
 		if got := currentMessages(); len(got) != 0 {
@@ -851,6 +851,76 @@ func TestShouldUpdateChiefTaskReport(t *testing.T) {
 				t.Fatalf("shouldUpdateChiefTaskReport() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestCreateAndUpdatePulseReviewOnlyScheduleSkipsGroupNamesRequirement pins
+// PLAT-115 at the real CreateSchedule/UpdateSchedule implementations (not
+// just the tool-layer guard): a pulse_review_only schedule must not be
+// rejected for missing group_names at create time, and a later update that
+// only changes its cron must not be rejected either — CreateSchedule's own
+// explicit skip and UpdateSchedule's final unconditional
+// validateScheduleGroupNamesForWorkspace revalidation (which runs
+// independent of whether this call touched group_names at all) both had to
+// be guarded, not just the one the caller happens to exercise first.
+func TestCreateAndUpdatePulseReviewOnlyScheduleSkipsGroupNamesRequirement(t *testing.T) {
+	workspacePath := "Workflow/social-media"
+	manifest := &WorkflowManifest{
+		SchemaVersion: WorkflowManifestSchemaVersion,
+		ID:            "social-media",
+		Label:         "Social Media",
+	}
+	manifestJSON, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	mock := &mockWorkspaceAPI{files: map[string]string{
+		workspacePath + "/workflow.json": string(manifestJSON),
+		// Deliberately no variables/variables.json — a PulseReviewOnly schedule
+		// must never need it, unlike an ordinary workflow-execution schedule.
+	}}
+	workspace := httptest.NewServer(mock)
+	defer workspace.Close()
+	t.Setenv("WORKSPACE_API_URL", workspace.URL)
+
+	callbacks := (&StreamingAPI{}).buildSchedulerCallbacks()
+	readManifest := func() WorkflowManifest {
+		mock.mu.Lock()
+		content := mock.files[workspacePath+"/workflow.json"]
+		mock.mu.Unlock()
+		var current WorkflowManifest
+		if err := json.Unmarshal([]byte(content), &current); err != nil {
+			t.Fatalf("unmarshal persisted manifest: %v", err)
+		}
+		return current
+	}
+
+	if _, err := callbacks.CreateSchedule(context.Background(), workspacePath, "Periodic Pulse Review", "0 3 * * *", "Asia/Kolkata",
+		nil, nil, "workshop", nil, "", "run", nil, true); err != nil {
+		t.Fatalf("CreateSchedule(pulseReviewOnly=true) error = %v, want success without group_names", err)
+	}
+	current := readManifest()
+	if len(current.Schedules) != 1 {
+		t.Fatalf("schedules = %d, want 1", len(current.Schedules))
+	}
+	if !current.Schedules[0].PulseReviewOnly {
+		t.Fatal("persisted schedule must have pulse_review_only=true")
+	}
+	if len(current.Schedules[0].GroupNames) != 0 {
+		t.Fatalf("group_names = %v, want empty for a pulse_review_only schedule", current.Schedules[0].GroupNames)
+	}
+	jobID := current.Schedules[0].ID
+
+	newCron := "0 4 * * *"
+	if _, err := callbacks.UpdateSchedule(context.Background(), jobID, "", newCron, "", nil, false, nil, false, nil, "", nil, false, nil, "", nil, nil); err != nil {
+		t.Fatalf("UpdateSchedule() on an existing pulse_review_only schedule, changing only cron, error = %v", err)
+	}
+	current = readManifest()
+	if current.Schedules[0].CronExpression != newCron {
+		t.Fatalf("cron_expression = %q, want %q", current.Schedules[0].CronExpression, newCron)
+	}
+	if !current.Schedules[0].PulseReviewOnly {
+		t.Fatal("pulse_review_only must survive an unrelated update")
 	}
 }
 
@@ -2311,6 +2381,131 @@ func TestReviewFixContinuationIsParentReceiptReconciliationOnly(t *testing.T) {
 	} {
 		if !strings.Contains(step.query, want) {
 			t.Fatalf("continuation prompt missing %q:\n%s", want, step.query)
+		}
+	}
+}
+
+// TestPostRunMonitorUsesLightweightFinalizeRequiresRealEvidence pins PLAT-115:
+// the lightweight backup+notify-only finalizer only ever applies to a run
+// that produced real evidence under an explicitly "periodic" workflow. Every
+// other combination — no evidence, the periodic review pass itself
+// (PulseOnly), an unset/legacy/unrecognized mode — must fall through to the
+// existing behavior unchanged.
+func TestPostRunMonitorUsesLightweightFinalizeRequiresRealEvidence(t *testing.T) {
+	periodic := &WorkflowManifest{PostRunMonitorMode: "periodic"}
+	perRun := &WorkflowManifest{}
+
+	tests := []struct {
+		name                    string
+		reviewEvidenceAvailable bool
+		pulseOnly               bool
+		manifest                *WorkflowManifest
+		want                    bool
+	}{
+		{"periodic, evidence, not the review pass itself", true, false, periodic, true},
+		{"periodic, but no evidence this invocation", false, false, periodic, false},
+		{"periodic, but this IS the periodic review pass (PulseOnly)", true, true, periodic, false},
+		{"per_run (default) manifest, with evidence", true, false, perRun, false},
+		{"nil manifest fails safe to per_run", true, false, nil, false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := postRunMonitorUsesLightweightFinalize(test.reviewEvidenceAvailable, test.pulseOnly, test.manifest); got != test.want {
+				t.Fatalf("postRunMonitorUsesLightweightFinalize(%v, %v, %+v) = %v, want %v",
+					test.reviewEvidenceAvailable, test.pulseOnly, test.manifest, got, test.want)
+			}
+		})
+	}
+}
+
+// TestLightweightFinalizeStepNeverRunsGateOrPublishesFindings pins the
+// content contract of the periodic-mode per-run finalizer: it must forbid
+// Gate/reviewers/Fixer, must not present old findings as new, and must mark
+// publish skipped with a stated reason rather than silently omitting it.
+func TestLightweightFinalizeStepNeverRunsGateOrPublishesFindings(t *testing.T) {
+	steps := postRunMonitorLightweightFinalizeStep("pulse-test")
+	if len(steps) != 1 || steps[0].label != "finalize" {
+		t.Fatalf("steps = %+v, want exactly one \"finalize\" step", steps)
+	}
+	query := steps[0].query
+	for _, want := range []string{
+		"Do not run Gate, reviewers, or Fixer",
+		"not a failure or a skip due to missing evidence",
+		"mark publish skipped",
+		"do not include a Pulse findings/fixes section",
+	} {
+		if !strings.Contains(query, want) {
+			t.Fatalf("lightweight finalize prompt missing %q:\n%s", want, query)
+		}
+	}
+}
+
+// TestPulseReviewBacklogSummaryExcludesNonTerminalIterationZero pins PLAT-115:
+// iteration-0 is the live/reused slot, never a stable identity across time,
+// so Gate must never be handed it while it might still be mid-run. Rotated
+// folders (iteration-1, iteration-2, ...) are always included regardless of
+// status — a failed run is real evidence too, the same principle
+// ProducedRunEvidence already applies elsewhere in this file.
+func TestPulseReviewBacklogSummaryExcludesNonTerminalIterationZero(t *testing.T) {
+	completedAt := time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC)
+	startedAt := completedAt.Add(-10 * time.Minute)
+
+	t.Run("iteration-0 still running is excluded", func(t *testing.T) {
+		folders := []RunFolderInfo{
+			{Name: "iteration-0", Metadata: &RunMetadata{Status: "running", StartedAt: startedAt}},
+			{Name: "iteration-5", Metadata: &RunMetadata{Status: "completed", StartedAt: startedAt, CompletedAt: &completedAt}},
+		}
+		summary := pulseReviewBacklogSummary(folders)
+		if strings.Contains(summary, "iteration-0") {
+			t.Fatalf("summary must exclude a still-running iteration-0:\n%s", summary)
+		}
+		if !strings.Contains(summary, "iteration-5") {
+			t.Fatalf("summary must include the terminal rotated folder:\n%s", summary)
+		}
+	})
+
+	t.Run("iteration-0 terminal is included", func(t *testing.T) {
+		folders := []RunFolderInfo{
+			{Name: "iteration-0", Metadata: &RunMetadata{Status: "completed", StartedAt: startedAt, CompletedAt: &completedAt}},
+		}
+		summary := pulseReviewBacklogSummary(folders)
+		if !strings.Contains(summary, "iteration-0") {
+			t.Fatalf("summary must include a terminal iteration-0:\n%s", summary)
+		}
+	})
+
+	t.Run("a failed rotated run is still real evidence", func(t *testing.T) {
+		folders := []RunFolderInfo{
+			{Name: "iteration-3", Metadata: &RunMetadata{Status: "failed", StartedAt: startedAt, CompletedAt: &completedAt}},
+		}
+		summary := pulseReviewBacklogSummary(folders)
+		if !strings.Contains(summary, "iteration-3") || !strings.Contains(summary, "status=failed") {
+			t.Fatalf("a failed rotated folder must still be listed:\n%s", summary)
+		}
+	})
+
+	t.Run("no folders at all", func(t *testing.T) {
+		if summary := pulseReviewBacklogSummary(nil); !strings.Contains(summary, "no run folders") {
+			t.Fatalf("empty backlog summary = %q, want an explicit \"no run folders\" statement", summary)
+		}
+	})
+}
+
+// TestBacklogGateStepDefersWhatsNewReasoningToGate pins the design decision:
+// Go hands Gate the raw listing and explicitly tells it to compare against
+// get_pulse_state's last_checked_at itself — Go must never pre-filter "what's
+// new" or silently assume every listed folder is unreviewed.
+func TestBacklogGateStepDefersWhatsNewReasoningToGate(t *testing.T) {
+	step := postRunMonitorBacklogGateStep("pulse-test", "- iteration-5 (status=completed, started_at=..., completed_at=...)")
+	for _, want := range []string{
+		"periodic Pulse review pass",
+		"last_checked_at",
+		"do not assume every listed folder is new",
+		"run_retention_count",
+		"iteration-5",
+	} {
+		if !strings.Contains(step.query, want) {
+			t.Fatalf("backlog Gate prompt missing %q:\n%s", want, step.query)
 		}
 	}
 }

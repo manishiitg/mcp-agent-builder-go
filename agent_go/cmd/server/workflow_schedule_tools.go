@@ -107,6 +107,10 @@ func createWorkflowScheduleTools() []llmtypes.Tool {
 							"type":        "boolean",
 							"description": "Optional opt-in for workshop runs backed by a coding-agent CLI (claude-code, cursor-cli, codex-cli, pi-cli). When true, each scheduled run resumes the previous run's thread (same CLI) instead of starting a fresh session, so the agent keeps prior context across runs. API model providers and non-resumable runs start fresh. Defaults to false; omit for fresh sessions.",
 						},
+						"pulse_review_only": map[string]interface{}{
+							"type":        "boolean",
+							"description": "Creates this workflow's own periodic Pulse review schedule instead of a workflow-execution schedule. On its own cadence it reviews the accumulated runs/iteration-N backlog and runs Gate/Review+Fix/Finalize — it never runs the workflow itself, so group_names/route_selections/messages do not apply. Pairs with update_workflow_config(post_run_monitor_mode=\"periodic\"), which shortens every normal run's own pass to backup+notify only, deferring the full review to this schedule. Omit or false for an ordinary workflow-execution schedule.",
+						},
 					},
 					Required: []string{"workflow_path", "name", "cron_expression", "timezone"},
 				},
@@ -172,6 +176,10 @@ func createWorkflowScheduleTools() []llmtypes.Tool {
 						"resume_previous": map[string]interface{}{
 							"type":        "boolean",
 							"description": "Optional opt-in for workshop schedules backed by a coding-agent CLI. When true, runs resume the previous thread (same CLI) instead of starting fresh. Set false to go back to fresh sessions. Omit to keep the current setting.",
+						},
+						"pulse_review_only": map[string]interface{}{
+							"type":        "boolean",
+							"description": "Converts this schedule between a workflow-execution schedule and this workflow's periodic Pulse review schedule (PLAT-115). true: this schedule stops running the workflow and instead runs Gate/Review+Fix/Finalize over the accumulated backlog on its own cadence. false: converts it back to an ordinary workflow-execution schedule. Omit to leave the current setting unchanged.",
 						},
 					},
 					Required: []string{"job_id"},
@@ -375,14 +383,18 @@ func createWorkflowScheduleExecutors(api *StreamingAPI, currentUserID string) ma
 					resumePrevious = &b
 				}
 			}
+			pulseReviewOnly, _ := args["pulse_review_only"].(bool)
 
 			if mode == "multi-agent" {
 				return "create_workflow_schedule only creates workflow schedules. Use the multi-agent schedule path for multi-agent chat schedules.", nil
 			}
-			if len(groupNames) == 0 {
+			if !pulseReviewOnly && len(groupNames) == 0 {
 				return "group_names is required. Read variables.json and provide at least one group.", nil
 			}
-			return cb.CreateSchedule(ctx, workflowPath, name, cronExpr, timezone, groupNames, routeSelections, mode, messages, directMessagesReason, workshopMode, resumePrevious)
+			if pulseReviewOnly && (len(groupNames) > 0 || len(routeSelections) > 0 || len(messages) > 0) {
+				return "pulse_review_only does not run the workflow — it must not set group_names, route_selections, or messages.", nil
+			}
+			return cb.CreateSchedule(ctx, workflowPath, name, cronExpr, timezone, groupNames, routeSelections, mode, messages, directMessagesReason, workshopMode, resumePrevious, pulseReviewOnly)
 		},
 
 		"create_calendar_workflow_schedule": func(ctx context.Context, args map[string]interface{}) (string, error) {
@@ -484,8 +496,17 @@ func createWorkflowScheduleExecutors(api *StreamingAPI, currentUserID string) ma
 					resumePrevious = &b
 				}
 			}
+			var pulseReviewOnly *bool
+			if raw, ok := args["pulse_review_only"]; ok && raw != nil {
+				if b, ok := raw.(bool); ok {
+					pulseReviewOnly = &b
+				}
+			}
+			if pulseReviewOnly != nil && *pulseReviewOnly && (setGroupNames || setRouteSelections || setMessages) {
+				return "pulse_review_only=true does not run the workflow — do not combine it with group_names, route_selections, or messages in the same call.", nil
+			}
 
-			return cb.UpdateSchedule(ctx, jobID, name, cronExpr, timezone, groupNames, setGroupNames, routeSelections, setRouteSelections, enabled, mode, messages, setMessages, directMessagesReason, workshopMode, resumePrevious)
+			return cb.UpdateSchedule(ctx, jobID, name, cronExpr, timezone, groupNames, setGroupNames, routeSelections, setRouteSelections, enabled, mode, messages, setMessages, directMessagesReason, workshopMode, resumePrevious, pulseReviewOnly)
 		},
 
 		"delete_workflow_schedule": func(ctx context.Context, args map[string]interface{}) (string, error) {

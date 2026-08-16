@@ -58,19 +58,44 @@ Use only for the scheduler's Gate stage — a progressive evidence scan, not a
 full audit or fixer.
 
 Read `soul/soul.md`, the compact schedule definitions in `workflow.json`,
-`get_pulse_state(view="module")`, latest run summary,
-compact freshness/LLM/readiness state, and human inputs. Weigh returned
-`open_concerns`, `plan_change_backlog`, `loop_closure`, and
-`module_review_history`; justify every skip. `loop_closure` is read-only
+`get_pulse_state(view="module")`, each run folder's summary since you last
+checked (one run's summary on a normal pass; a listed backlog on a periodic
+review pass — see below), compact freshness/LLM/readiness state, and human
+inputs. Weigh returned `open_concerns`, `plan_change_backlog`, `loop_closure`,
+and `module_review_history`; justify every skip. `loop_closure` is read-only
 evidence, and empty is clean only with verified coverage.
 
 Compare exact pins with `list_provider_models` and `default_tier_models`;
 Provider-profile defaults auto-update; never infer freshness by name.
 
-For the supplied run folder, inspect every executed step/item's compact final
-for `CONCERNS:`: `execution-final-summary.json`, `session.json`, or latest
-`execution-attempt-*.json` fallback. Retain step/item and evidence path;
-completion does not erase it, but it is not automatic run failure.
+For each run folder in the backlog since your last check, inspect every
+executed step/item's compact final for `CONCERNS:`: `execution-final-summary.json`,
+`session.json`, or latest `execution-attempt-*.json` fallback. Retain
+step/item and evidence path; completion does not erase it, but it is not
+automatic run failure.
+
+### Periodic review passes (a listed backlog, not one run)
+
+A workflow using `post_run_monitor_mode="periodic"` defers Gate entirely to
+its own separately-scheduled review pass, which reviews a *listed backlog* of
+currently-existing run folders instead of one just-completed run. On that
+pass, reason about what's actually new yourself: compare each listed folder's
+`started_at`/`completed_at` against `get_pulse_state`'s `last_checked_at` per
+module. Do not assume every listed folder is new just because it's listed,
+and do not skip the whole backlog because only part of it is new — a folder
+you already reasoned about on a prior pass does not need re-inspecting, but
+one you haven't seen does, even if it sits between two you've already
+reviewed.
+
+Folders get deleted once `run_retention_count` is exceeded — retained
+history is not guaranteed to cover the full gap since your last check. If the
+number of runs since you last checked plausibly exceeds what was retained
+(compare the run schedule's cadence against how long it's been since
+`last_checked_at`), say so explicitly in your worklist evidence rather than
+silently reviewing a partial sample as if it were complete. If the mismatch
+is clear-cut, raise it as a `workflow_review`/`llm_ops_review` finding so the
+Fixer can adjust `run_retention_count` via `update_workflow_config` — do not
+adjust it yourself from Gate.
 
 Gate owns the durable worklist and the cheap per-run goal observation checkpoint.
 Do not write HTML, a recovery ledger, or any workflow artifact. The Pulse popup

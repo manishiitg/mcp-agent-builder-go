@@ -44,6 +44,7 @@ func workflowContractVersionRank(version string) (int, bool) {
 		workflowContractDirectHTMLReportsVersion,
 		workflowContractScheduledRouteVersion,
 		workflowContractScheduleExecutionModelVersion,
+		workflowContractPeriodicPulseReviewVersion,
 	}
 	for rank, candidate := range known {
 		if version == candidate {
@@ -70,7 +71,7 @@ const upgradeEvalVerdictSchema = `WORKFLOW CONTRACT UPGRADE: EVALUATION VERDICTS
 
 This workflow predates the current evaluation output contract. Do only this migration. If evaluation/evaluation_plan.json is absent, this is a no-op. Otherwise load the evaluation-plan reference, inspect every evaluation step, and make each step emit numeric output_content.score on the current 0-10 scale without changing what it measures. Update validation schemas to require the emitted score and use validate_evaluation_plan. Do not run a normal workflow execution. If a representative evaluation can safely be run, use it to verify changed steps produce scores; otherwise record the exact evidence boundary. Do not stamp on a validation failure. When the plan is compliant, call set_workflow_contract_version(version="1.0.16") and stop.`
 
-const upgradeLearningsLockAudit = `WORKFLOW CONTRACT UPGRADE: LEARNINGS LOCK AUDIT (PLAT-055 / J).
+const upgradeLearningsLockAudit = `WORKFLOW CONTRACT UPGRADE: LEARNINGS LOCK AUDIT.
 
 This is a read-mostly audit, not a rewrite. Note first: the routing rule that used
 to have to live inside each step's learning_objective (which store owns what,
@@ -143,6 +144,58 @@ until index.html has passed validation. Do not run the workflow. If a source is
 missing or the consolidation is ambiguous, report the blocker and do not stamp.
 Otherwise call set_workflow_contract_version(version="1.0.23") and stop.`
 
+const upgradePeriodicPulseReview = `WORKFLOW CONTRACT UPGRADE: PERIODIC PULSE REVIEW.
+
+Today Gate/Review+Fix/Finalize run after every scheduled run, in that run's
+own session. For a workflow that runs frequently, this has caused real bugs:
+long Pulse-adjacent sessions reused across runs deadlocked on their own input
+lane, and evicted their own background agents' completion records once a
+fixed-size event cache filled from later activity in the same session.
+post_run_monitor_mode="periodic" fixes this by splitting every run's own pass
+down to backup+notify only, and running the full review separately, on its
+own cadence, over whatever runs/iteration-N backlog has accumulated.
+
+This is a genuine tradeoff, not a strict upgrade: under periodic mode, a real
+problem now waits up to the review interval before Gate ever sees it. Decide
+from this workflow's actual behavior, not by default.
+
+1. Read every enabled cron schedule on this workflow and its recent
+   get_schedule_runs history to determine its real run frequency — not its
+   nominal cron alone, since drift/backoff can differ from it.
+2. If no schedule runs more than a few times a day, this workflow does not
+   need splitting — per_run's cost was never the problem. Leave
+   post_run_monitor_mode unset (the "per_run" default) and record that
+   decision plainly; do not force periodic mode because the option exists.
+3. If a schedule runs frequently enough that this is a real cost (roughly:
+   hourly or more), do both of the following in the SAME turn, never one
+   without the other — a workflow left in "periodic" mode with no review
+   schedule yet gets a lightweight pass every run and a full review from
+   nothing, ever:
+   - Create the review schedule: create_schedule(pulse_review_only=true,
+     cron_expression=..., ...). Do not set group_names, route_selections, or
+     messages on it — it never runs the workflow. Choose a cron interval that
+     balances review latency against genuinely batched evidence; when in
+     doubt, prefer more frequent over less — Gate's own backlog reasoning
+     already handles reviewing several accumulated runs in one pass cheaply.
+   - Set post_run_monitor_mode="periodic" via update_workflow_config.
+4. Check run_retention_count (workflow.json, default 5) against the review
+   interval you chose. If the workflow could produce more runs between
+   reviews than retention preserves, raise it — a rotated run folder beyond
+   run_retention_count is permanently deleted, and a review pass that runs
+   less often than folders get deleted from under it silently misses real
+   evidence. This is exactly the same reasoning Gate itself is now expected
+   to apply on every periodic pass (see pulse-gate.md); doing it once here at
+   setup time does not remove that ongoing responsibility from Gate.
+5. If this workflow already reviews cheaply (few or no runs since the last
+   Pulse pass, no history suggesting Gate/Review+Fix run long), that is a
+   sound decision to leave it on per_run — state that reasoning rather than
+   defaulting silently.
+
+Do not run the workflow. Re-read workflow.json after any change to confirm it
+persisted. If the right choice is ambiguous, keep per_run with an honest
+rationale rather than guessing. Then call
+set_workflow_contract_version(version="1.0.26") and stop.`
+
 const upgradeScheduledRoutes = `WORKFLOW CONTRACT UPGRADE: SCHEDULE EXECUTION MODEL (PLAT-086).
 
 Workflow schedules support two valid execution models. A route-based schedule
@@ -213,7 +266,12 @@ func workflowVersionUpgradePlan(manifest *WorkflowManifest) []workflowVersionUpg
 	if rank < 22 {
 		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractDirectHTMLReportsVersion, label: "upgrade-direct-html-reports", query: upgradeDirectHTMLReports})
 	}
-	steps = append(steps, workflowVersionUpgrade{from: version, to: WorkflowContractCurrentVersion, label: "upgrade-schedule-execution-model", query: upgradeScheduledRoutes})
+	// workflowContractScheduleExecutionModelVersion ("1.0.25") sits at rank 24
+	// — a workflow already at or past it must not repeat this rung.
+	if rank < 24 {
+		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractScheduleExecutionModelVersion, label: "upgrade-schedule-execution-model", query: upgradeScheduledRoutes})
+	}
+	steps = append(steps, workflowVersionUpgrade{from: version, to: WorkflowContractCurrentVersion, label: "upgrade-periodic-pulse-review", query: upgradePeriodicPulseReview})
 	// Attached here rather than at the call site so the turn text is identical
 	// wherever it is built. The version pair used to be added only on the Pulse
 	// delivery path, which meant the blocking preflight — the one that actually

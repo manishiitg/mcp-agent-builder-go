@@ -251,3 +251,28 @@ func TestReadWorkflowManifestPrunesRetiredExecutionDefaultsField(t *testing.T) {
 		t.Fatalf("persisted manifest lost known field workshop_mode: %s", persistedJSON)
 	}
 }
+
+// TestPostRunMonitorIsPeriodicFailsSafeToPerRun pins PLAT-115: every
+// existing workflow has no post_run_monitor_mode set at all, and must keep
+// running Gate/Review+Fix/Finalize after every run exactly as before. Only
+// the exact value "periodic" opts out of that — anything else (empty,
+// whitespace, an unrecognized future value, or a nil manifest) fails safe to
+// today's per-run behavior rather than silently skipping review.
+func TestPostRunMonitorIsPeriodicFailsSafeToPerRun(t *testing.T) {
+	var nilManifest *WorkflowManifest
+	if nilManifest.PostRunMonitorIsPeriodic() {
+		t.Fatal("nil manifest must not be periodic")
+	}
+	for _, mode := range []string{"", "   ", "per_run", "unknown_future_value"} {
+		m := &WorkflowManifest{PostRunMonitorMode: mode}
+		if m.PostRunMonitorIsPeriodic() {
+			t.Fatalf("mode %q must not be treated as periodic", mode)
+		}
+	}
+	if m := (&WorkflowManifest{PostRunMonitorMode: "periodic"}); !m.PostRunMonitorIsPeriodic() {
+		t.Fatal("mode \"periodic\" must be treated as periodic")
+	}
+	if m := (&WorkflowManifest{PostRunMonitorMode: "  periodic  "}); !m.PostRunMonitorIsPeriodic() {
+		t.Fatal("mode \"periodic\" with surrounding whitespace must still be treated as periodic")
+	}
+}

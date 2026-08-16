@@ -283,6 +283,7 @@ Rules:
 | [PLAT-111](pulse_platform/plat-111.md) | Cost Analysis blocks first paint on an unbounded all-history ledger/file scan and then serially loads logs for every historical run | platform | `implemented_pending_live_reverify` (bounded 30-day summary + exact SQL headlines + cursor pagination; initial log fan-out removed 2026-08-16) | cost API + ledger rollups + `CostsPopup` lazy detail loading |
 | [PLAT-112](pulse_platform/plat-112.md) | Production workflow UI exposes the internal terminal/child-agent debug rail and continues terminal observation work even when nobody is debugging | platform | `implemented_pending_live_reverify` (default-off server/client diagnostic gates; normal Chat/Schedule now use session events without terminal/tree polling, 2026-08-16) | runtime projection + terminal observation APIs + workflow workspace UI |
 | [PLAT-114](pulse_platform/plat-114.md) | Background agents (Pulse's Gate/reviewers/Fixer included) had no durable execution record — only a receipt a module's Fixer turn may never write, and a 200-event UI cache overwritten on session reuse | unassigned | `implemented` (durable log shipped and tested; no query surface yet) | background-agent lifecycle |
+| [PLAT-115](pulse_platform/plat-115.md) | Gate/Review+Fix/Finalize always ran inside the same session as the run they reviewed — the root shape behind PLAT-113 and PLAT-114 on frequently-run workflows. Added an opt-in periodic mode: lightweight backup+notify every run, full review decoupled onto its own schedule and session, reviewing a Gate-reasoned backlog instead of one pinned folder | unassigned | `implemented` (platform capability shipped and tested; no real workflow has adopted it yet) | scheduler Pulse orchestration, workflow manifest, schedule tools |
 
 Assignment reserves the lane; it does not claim that work has started. An agent
 sets its fragment to `in_progress` when it actually begins. PLAT-004, PLAT-008,
@@ -643,7 +644,7 @@ priority and historical run context.
 | [PLAT-102](pulse_platform/plat-102.md) | [PLAT-103](pulse_platform/plat-103.md) | [PLAT-104](pulse_platform/plat-104.md) |  |
 | [PLAT-105](pulse_platform/plat-105.md) | [PLAT-106](pulse_platform/plat-106.md) | [PLAT-107](pulse_platform/plat-107.md) | [PLAT-108](pulse_platform/plat-108.md) |
 | [PLAT-109](pulse_platform/plat-109.md) | [PLAT-110](pulse_platform/plat-110.md) | [PLAT-111](pulse_platform/plat-111.md) |  |
-| [PLAT-112](pulse_platform/plat-112.md) | [PLAT-113](pulse_platform/plat-113.md) | [PLAT-114](pulse_platform/plat-114.md) |  |
+| [PLAT-112](pulse_platform/plat-112.md) | [PLAT-113](pulse_platform/plat-113.md) | [PLAT-114](pulse_platform/plat-114.md) | [PLAT-115](pulse_platform/plat-115.md) |
 ## Explicitly not platform issues
 
 The following remain workflow-owned or evidence-state items even when they are

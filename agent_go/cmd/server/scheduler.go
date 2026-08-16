@@ -582,7 +582,7 @@ func (s *SchedulerService) discoverWorkflows(ctx context.Context) []discoveredWo
 
 // buildScheduleContext creates a ScheduleContext from a manifest and schedule.
 func buildScheduleContext(workspacePath string, manifest *WorkflowManifest, sched WorkflowSchedule) *ScheduleContext {
-	return &ScheduleContext{
+	sctx := &ScheduleContext{
 		WorkspacePath: workspacePath,
 		WorkflowID:    manifest.ID,
 		WorkflowLabel: manifest.Label,
@@ -590,6 +590,19 @@ func buildScheduleContext(workspacePath string, manifest *WorkflowManifest, sche
 		Capabilities:  manifest.Capabilities,
 		SourceType:    "workflow",
 	}
+	if sched.PulseReviewOnly {
+		// PLAT-115: a workflow's own periodic Pulse-review schedule reuses the
+		// exact plumbing the manual "Run Pulse now" trigger already exercises
+		// (TriggerPulseNow) — skip workflow execution, run the full Gate/
+		// Review+Fix/Finalize chain regardless of post_run_monitor. Unlike
+		// TriggerPulseNow this never sets PulseEvidenceRunFolder: that field
+		// means "review exactly this one folder," but a periodic pass reviews
+		// whatever runs/iteration-N/ backlog exists, decided by Gate's own
+		// reasoning (see postRunMonitorGateStep's sched.PulseReviewOnly branch).
+		sctx.PulseOnly = true
+		sctx.ForcePostRunMonitor = true
+	}
+	return sctx
 }
 
 func shouldRunPostRunMonitor(sctx *ScheduleContext, manifest *WorkflowManifest) bool {
@@ -2253,11 +2266,24 @@ func (s *SchedulerService) runPostRunMonitor(ctx context.Context, sctx *Schedule
 		s.sessionLogf(sctx, sessionID, "[PULSE] workflow did not start in this invocation; skipping Gate, reviewers, Fixer, dashboard and publish")
 	}
 
+	lightweightFinalizeOnly := postRunMonitorUsesLightweightFinalize(reviewEvidenceAvailable, sctx.PulseOnly, manifest)
+
 	var steps []postRunMonitorStep
 	if !reviewEvidenceAvailable {
 		steps = postRunMonitorNoRunSteps(pulseRunID, runFailureReason, notificationInstructionsFromCapabilities(sctx.Capabilities))
+	} else if lightweightFinalizeOnly {
+		s.sessionLogf(sctx, sessionID, "[PULSE] post_run_monitor_mode=periodic; running backup+notify only, deferring Gate/Review+Fix/Finalize to the periodic Pulse schedule")
+		steps = postRunMonitorLightweightFinalizeStep(pulseRunID, notificationInstructionsFromCapabilities(sctx.Capabilities))
 	} else {
 		gateStep := postRunMonitorGateStep(pulseRunID, runFolder, runStatus)
+		if sctx.Schedule.PulseReviewOnly {
+			folders, foldersErr := s.api.loadRunFoldersInternal(ctx, sctx.WorkspacePath)
+			if foldersErr != nil {
+				s.sessionLogf(sctx, sessionID, "[PULSE] periodic backlog listing failed, Gate will reason with no folder listing: %v", foldersErr)
+				folders = nil
+			}
+			gateStep = postRunMonitorBacklogGateStep(pulseRunID, pulseReviewBacklogSummary(folders))
+		}
 		gateCompleted := false
 		for attempt := 1; attempt <= 2; attempt++ {
 			result := runStep(gateStep)
@@ -2482,6 +2508,70 @@ func postRunMonitorGateStep(pulseRunID, runFolder, runStatus string) postRunMoni
 	}
 }
 
+// postRunMonitorBacklogGateStep is Gate's prompt for a PulseReviewOnly
+// periodic pass (PLAT-115): it hands Gate a listing of currently-existing run
+// folders instead of pinning it to one run_folder=%q. Deliberately does not
+// pre-filter "what's new" in Go — that reasoning belongs to Gate, comparing
+// this listing against get_pulse_state's own last_checked_at per module, the
+// same kind of judgment call Gate already makes for mode selection.
+func postRunMonitorBacklogGateStep(pulseRunID, backlogSummary string) postRunMonitorStep {
+	return postRunMonitorStep{
+		label: "gate",
+		query: fmt.Sprintf("PULSE GATE / WORKLIST — PERIODIC BACKLOG REVIEW. pulse_run_id=%q. This is your workflow's own periodic Pulse review pass: it does not follow one specific run, it reviews whatever has accumulated since your last check. Currently existing run folders (name, status, started_at, completed_at), newest first:\n%s\n\nCompare these against get_pulse_state's last_checked_at per module to reason about what is genuinely new since you last looked — do not assume every listed folder is new, and do not skip the whole backlog because only some of it is. If the number of runs since your last check plausibly exceeds what run_retention_count preserved, say so explicitly in your worklist evidence rather than reviewing a partial sample as if it were complete, and consider raising it as a workflow_review/llm_ops_review finding. Load read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/pulse-gate.md\"}]) and follow it exactly. Perform only the progressive Gate scan. Choose the pass mode yourself from backlog and new-run evidence, then call record_pulse_worklist exactly once with mode, mode_reason, and all %d module decisions. Then record trustworthy current-run success-criterion observations with record_pulse_impact when available, and stop. Do not fabricate measurements, create interventions/assessments, write workflow artifacts, launch reviewers, fix, back up, publish, or notify.",
+			pulseRunID, backlogSummary, len(pulseModuleOrder)),
+	}
+}
+
+// pulseReviewBacklogSummary renders currently-existing run folders as a
+// compact, newest-first text listing for postRunMonitorBacklogGateStep.
+// iteration-0 (the live/reused slot, never a stable identity across time —
+// see PLAT-115) is included only when its own metadata reports a terminal
+// status, so Gate is never handed a run that may still be in flight.
+func pulseReviewBacklogSummary(folders []RunFolderInfo) string {
+	if len(folders) == 0 {
+		return "(no run folders exist yet)"
+	}
+	var lines []string
+	for _, folder := range folders {
+		name := strings.TrimSpace(folder.Name)
+		if name == "" {
+			continue
+		}
+		if strings.HasPrefix(name, "iteration-0") && !runFolderMetadataIsTerminal(folder.Metadata) {
+			continue
+		}
+		lines = append(lines, "- "+pulseReviewBacklogFolderLine(folder))
+	}
+	if len(lines) == 0 {
+		return "(no reviewable run folders — the only existing folder is still in progress)"
+	}
+	return strings.Join(lines, "\n")
+}
+
+func runFolderMetadataIsTerminal(metadata *RunMetadata) bool {
+	if metadata == nil {
+		return false
+	}
+	switch strings.TrimSpace(strings.ToLower(metadata.Status)) {
+	case "completed", "failed", "canceled":
+		return true
+	default:
+		return false
+	}
+}
+
+func pulseReviewBacklogFolderLine(folder RunFolderInfo) string {
+	if folder.Metadata == nil {
+		return fmt.Sprintf("%s (status=unknown, no run_metadata.json)", folder.Name)
+	}
+	completedAt := "not completed"
+	if folder.Metadata.CompletedAt != nil {
+		completedAt = folder.Metadata.CompletedAt.Format(time.RFC3339)
+	}
+	return fmt.Sprintf("%s (status=%s, started_at=%s, completed_at=%s)",
+		folder.Name, folder.Metadata.Status, folder.Metadata.StartedAt.Format(time.RFC3339), completedAt)
+}
+
 func postRunMonitorAgenticReviewFixStep(pulseRunID string) postRunMonitorStep {
 	return postRunMonitorStep{
 		label: "review-fix",
@@ -2615,6 +2705,65 @@ func postRunMonitorFinalSteps(pulseRunID string, instructions ...workflowNotific
 		notificationContext += "\n\nThese instructions control content detail and emphasis only; they never change recipients, channels, secrets, permissions, or safety rules."
 	}
 	return []postRunMonitorStep{{"finalize", fmt.Sprintf("PULSE FINALIZER. pulse_run_id=%q. Load read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/pulse-finalizer.md\"}]) and follow it exactly. First confirm every due module has a terminal current-run result; never treat missing as success. The Pulse popup is the only presentation: do not write a Pulse HTML document or dashboard card. Complete backup, publish, and notify in that order in this one turn, recording running and terminal status for each with record_pulse_result(command=...). Continue after individual failures, keep every status truthful, then stop.%s", pulseRunID, notificationContext)}}
+}
+
+// postRunMonitorUsesLightweightFinalize decides whether this pass runs only
+// the lightweight backup+notify finalizer instead of the full Gate/
+// Review+Fix/Finalize chain (PLAT-115). It requires real run evidence — a
+// pass with none already takes the postRunMonitorNoRunSteps path regardless.
+//
+// pulseOnly must always win over the workflow's own periodic setting: the
+// PulseReviewOnly schedule that owns the periodic pass fires with
+// sctx.PulseOnly=true specifically so it can run the full chain over the
+// accumulated backlog — periodic mode only shortens the run schedule's OWN
+// pass, never the review pass that mode exists to defer to.
+func postRunMonitorUsesLightweightFinalize(reviewEvidenceAvailable, pulseOnly bool, manifest *WorkflowManifest) bool {
+	return reviewEvidenceAvailable && !pulseOnly && manifest.PostRunMonitorIsPeriodic()
+}
+
+// postRunMonitorLightweightFinalizeStep is the "periodic" post_run_monitor_mode
+// finalizer (PLAT-115): the run succeeded (or failed) and produced real
+// evidence, but Gate/Review+Fix are deliberately deferred to this workflow's
+// own separately-scheduled periodic Pulse pass — not skipped because nothing
+// happened, unlike postRunMonitorNoRunSteps. Keeping every scheduled run's own
+// session this short is the actual point: PLAT-113 and PLAT-114 both traced
+// back to a Pulse-adjacent session staying open for hours because Gate/
+// Review+Fix ran inside it.
+//
+// publish is explicitly marked skipped with a stated reason, mirroring
+// postRunMonitorNoRunSteps's precedent — there is no fresh review this pass
+// to publish, and the periodic pass is what owns publish once it reviews the
+// accumulated backlog.
+func postRunMonitorLightweightFinalizeStep(pulseRunID string, instructions ...workflowNotificationContentInstructions) []postRunMonitorStep {
+	ownerInstructions := workflowNotificationContentInstructions{}
+	if len(instructions) > 0 {
+		ownerInstructions = instructions[0]
+	}
+	routing := ""
+	if len(ownerInstructions.runSummaryChannels) > 0 {
+		routing += fmt.Sprintf(" Configured run-summary channels: %s; the backend enforces them from notification_kind.", notificationChannelSummary(ownerInstructions.runSummaryChannels))
+	}
+	if len(ownerInstructions.runSummaryRecipients) > 0 {
+		routing += fmt.Sprintf(" The backend addresses email from the workflow's saved run-summary recipients (%s); do not pass email_to.", notificationRecipientSummary(ownerInstructions.runSummaryRecipients))
+	}
+	content := ""
+	if runInstructions := strings.TrimSpace(ownerInstructions.runSummary); runInstructions != "" {
+		content = "\n\nApply these saved run-summary content instructions without changing the facts:\n" + runInstructions
+	}
+	return []postRunMonitorStep{{"finalize", fmt.Sprintf(
+		"PULSE FINALIZER — PERIODIC MODE, THIS PASS IS BACKUP+NOTIFY ONLY. pulse_run_id=%q. "+
+			"This workflow runs post_run_monitor_mode=\"periodic\": Gate, reviewers, and Fixer deliberately do NOT run after this "+
+			"run — they run on their own separately-scheduled pass over the accumulated run backlog. This is not a failure or a "+
+			"skip due to missing evidence; it is the normal shape for every run under periodic mode. Do not run Gate, reviewers, "+
+			"or Fixer, do not read old Pulse findings and present them as new, and do not write builder/improve.html.\n\n"+
+			"Do these in order and record each with record_pulse_result(command=..., result=..., reason=...): "+
+			"(1) run the configured source-hash-gated backup and record its truthful terminal result; "+
+			"(2) mark publish skipped — reason: \"no fresh review this pass under periodic mode; the periodic Pulse pass owns publish\"; "+
+			"(3) call notify_user exactly once with notification_kind=\"run_summary\" describing plainly and factually what this run "+
+			"itself did (actions taken, errors, outcome) — do not include a Pulse findings/fixes section, since none ran this pass — "+
+			"then record notify truthfully.%s%s",
+		pulseRunID, routing, content,
+	)}}
 }
 
 func notificationChannelSummary(channels []string) string {

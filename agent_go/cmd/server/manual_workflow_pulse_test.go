@@ -66,6 +66,52 @@ func TestManualPulseScheduleContract(t *testing.T) {
 	}
 }
 
+// TestPulseReviewOnlyScheduleContractMirrorsManualPulseTrigger pins PLAT-115:
+// a persisted, recurring PulseReviewOnly schedule must reach the exact same
+// PulseOnly/ForcePostRunMonitor state buildScheduleContext + the manual
+// toolbar trigger already produce (TestManualPulseScheduleContract, above) —
+// automatically, from the fired schedule's own field, not hand-set by the
+// caller. Unlike the manual trigger it must NOT set PulseEvidenceRunFolder:
+// that means "review exactly this one folder," but a periodic pass reviews
+// whatever backlog Gate itself decides is new (Part D), not a Go-selected
+// single folder.
+func TestPulseReviewOnlyScheduleContractMirrorsManualPulseTrigger(t *testing.T) {
+	manifest := &WorkflowManifest{ID: "workflow-id", Label: "Workflow", PostRunMonitor: boolPtr(false)}
+	sched := WorkflowSchedule{
+		ID:              "periodic-pulse-review",
+		Name:            "Periodic Pulse Review",
+		Mode:            "workshop",
+		WorkshopMode:    "run",
+		CronExpression:  "0 3 * * *",
+		PulseReviewOnly: true,
+	}
+	sctx := buildScheduleContext("/tmp/workflow", manifest, sched)
+
+	if !sctx.PulseOnly {
+		t.Fatal("a PulseReviewOnly schedule must set sctx.PulseOnly")
+	}
+	if !sctx.ForcePostRunMonitor {
+		t.Fatal("a PulseReviewOnly schedule must force Pulse to run even with post_run_monitor disabled")
+	}
+	if sctx.PulseEvidenceRunFolder != "" {
+		t.Fatalf("PulseEvidenceRunFolder = %q, want empty — a periodic pass must not be pinned to a single folder", sctx.PulseEvidenceRunFolder)
+	}
+	if !shouldRunPostRunMonitor(sctx, manifest) {
+		t.Fatal("a PulseReviewOnly schedule must execute Pulse even when the workflow's own post_run_monitor is disabled")
+	}
+	if messages := scheduledWorkshopMessages(sctx); len(messages) != 0 {
+		t.Fatalf("PulseReviewOnly must not enqueue a workflow message: %v", messages)
+	}
+
+	// A schedule with the flag unset (the overwhelming majority of schedules,
+	// including every existing one before this field existed) must be
+	// completely unaffected.
+	ordinary := buildScheduleContext("/tmp/workflow", manifest, WorkflowSchedule{Mode: "workshop", WorkshopMode: "run"})
+	if ordinary.PulseOnly || ordinary.ForcePostRunMonitor {
+		t.Fatalf("an ordinary schedule must not be marked Pulse-only: %+v", ordinary)
+	}
+}
+
 func TestLatestRetainedPulseEvidenceSkipsPriorManualPulseRuns(t *testing.T) {
 	now := time.Now().UTC()
 	runs := []ScheduleRunEntry{
