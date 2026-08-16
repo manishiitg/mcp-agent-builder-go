@@ -2255,6 +2255,9 @@
         "auto_notification_steered": {
           "$ref": "#/$defs/AutoNotificationSteeredEvent"
         },
+        "presentation_updated": {
+          "$ref": "#/$defs/PresentationUpdatedEvent"
+        },
         "step_token_usage": {
           "$ref": "#/$defs/StepTokenUsageEvent"
         },
@@ -2449,6 +2452,7 @@
         "orchestrator_start",
         "performance",
         "pre_validation_completed",
+        "presentation_updated",
         "request_human_feedback",
         "routing_evaluated",
         "step_progress_updated",
@@ -4503,6 +4507,61 @@
         },
         "workspace_path": {
           "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "PresentationUpdatedEvent": {
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "hierarchy_level": {
+          "type": "integer"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "component": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "presentation_id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "workspace_path": {
+          "type": "string"
+        },
+        "payload": {
+          "type": "object"
         }
       },
       "additionalProperties": false,

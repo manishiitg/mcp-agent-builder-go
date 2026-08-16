@@ -34,6 +34,7 @@ import {
   ConversationEndEventDisplay,
   ConversationErrorEventDisplay,
   ConversationTurnEventDisplay,
+  ConversationThinkingEventDisplay,
 } from './conversation'
 
 import {
@@ -438,6 +439,9 @@ export const EventDispatcher: React.FC<EventDispatcherProps> = React.memo(({
         </EventWithOrchestratorContext>
       </CompactWrapper>
     )
+  }
+  if (isEventType(event, 'conversation_thinking')) {
+    return <CompactWrapper compact={compact}><WithContext Component={ConversationThinkingEventDisplay} data={getEventData(event)} compact={compact} hideContext={hideOrchestratorContext} /></CompactWrapper>
   }
 
   // LLM Events

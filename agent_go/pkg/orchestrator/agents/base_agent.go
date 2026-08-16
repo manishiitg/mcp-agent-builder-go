@@ -107,7 +107,6 @@ type BaseAgent struct {
 	maxTurns     int
 	provider     string
 	mcpSessionID string
-	toolPolicy   mcpagent.ToolPolicy
 	definition   mcpagent.AgentDefinition
 	runtime      mcpagent.RuntimeConfig
 	lastHandle   *mcpagent.AgentSessionHandle
@@ -268,7 +267,11 @@ func NewBaseAgent(
 		},
 		Observability: mcpagent.ObservabilityRuntimeConfig{
 			Logger: logger, Tracers: []observability.Tracer{tracer}, TraceID: traceID,
-			PromptLogLabel: name, Streaming: true, GenerationStreamingEvents: boolPointer(false),
+			// See the matching comment in pkg/agentwrapper/llm_agent.go: false here
+			// suppresses clean content-chunk streaming for every workflow agent,
+			// leaving structured-transport providers (pi-cli) with no streaming
+			// signal at all for the whole turn.
+			PromptLogLabel: name, Streaming: true, GenerationStreamingEvents: boolPointer(true),
 			// A retained coding-CLI session can accept a later turn directly through
 			// tmux without starting another mcpagent Ask stream. The bridge remains
 			// the authoritative place where tools execute, so publish its canonical
@@ -333,9 +336,8 @@ func (ba *BaseAgent) Execute(ctx context.Context, userMessage string, conversati
 		orchestratorCtx = context.WithValue(orchestratorCtx, common.ChatSessionIDKey, ba.mcpSessionID)
 	}
 	result, err := ba.session.Run(orchestratorCtx, mcpagent.Turn{
-		Input:      userMessage,
-		History:    conversationHistory,
-		ToolPolicy: ba.toolPolicy,
+		Input:   userMessage,
+		History: conversationHistory,
 	})
 	ba.lastHandle = result.Handle
 
@@ -549,12 +551,6 @@ func (ba *BaseAgent) Resume(ctx context.Context, handle *mcpagent.AgentSessionHa
 // SessionHandle returns the latest opaque continuation state produced by Run.
 func (ba *BaseAgent) SessionHandle() *mcpagent.AgentSessionHandle {
 	return ba.lastHandle
-}
-
-// SetToolPolicy applies a runtime authorization view to subsequent turns. It
-// does not mutate the agent definition or its request-time tool registry.
-func (ba *BaseAgent) SetToolPolicy(toolNames []string) {
-	ba.toolPolicy = mcpagent.ToolPolicy{AllowedTools: append([]string(nil), toolNames...)}
 }
 
 // SetWorkspacePolicy configures filesystem enforcement as runtime policy,

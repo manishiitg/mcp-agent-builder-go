@@ -19,6 +19,23 @@ api.interceptors.request.use((config) => {
   return config
 })
 
+/**
+ * Coding-CLI providers that support a per-workflow credential. Each scopes a
+ * workflow to one person's own subscription instead of whichever login happens
+ * to be on the server.
+ */
+export type WorkflowCredentialProvider = 'claude-code' | 'cursor-cli' | 'pi-cli';
+
+export interface WorkflowProviderCredentialStatus {
+  configured: boolean;
+  updated_at?: string;
+  /** Masked "first4...last4" rendering. The full value never leaves the server. */
+  preview?: string;
+}
+
+const workflowProviderCredentialUrl = (provider: WorkflowCredentialProvider) =>
+  `/api/workflow-provider-credentials/${provider}`;
+
 export const secretsApi = {
   encrypt: async (value: string): Promise<{ encrypted: string }> => {
     const response = await api.post('/api/secrets/encrypt', { value });
@@ -61,7 +78,10 @@ export const secretsApi = {
     return response.data;
   },
 
-  listStoredSecrets: async (): Promise<{ name: string }[]> => {
+  // Returns the caller's own secrets complete with their encrypted values, so
+  // the client never needs a parallel copy of them. Decryption still happens
+  // server-side through /api/secrets/decrypt.
+  listStoredSecrets: async (): Promise<{ id?: string; name: string; encrypted_value?: string }[]> => {
     const response = await api.get('/api/secrets/stored');
     return response.data;
   },
@@ -73,28 +93,57 @@ export const secretsApi = {
     return response.data;
   },
 
-  getWorkflowClaudeCodeCredentialStatus: async (workspacePath: string): Promise<{ configured: boolean; updated_at?: string; preview?: string }> => {
-    const response = await api.get('/api/workflow-provider-credentials/claude-code', {
+  getWorkflowProviderCredentialStatus: async (provider: WorkflowCredentialProvider, workspacePath: string): Promise<WorkflowProviderCredentialStatus> => {
+    const response = await api.get(workflowProviderCredentialUrl(provider), {
       params: { workspace_path: workspacePath },
     });
     return response.data;
   },
 
-  storeWorkflowClaudeCodeCredential: async (workspacePath: string, token: string): Promise<{ success: boolean }> => {
+  storeWorkflowProviderCredential: async (provider: WorkflowCredentialProvider, workspacePath: string, token: string): Promise<{ success: boolean }> => {
     const encrypted = await secretsApi.encrypt(token);
-    const response = await api.put('/api/workflow-provider-credentials/claude-code', {
+    // The server validates the credential against the provider's CLI before
+    // storing it, which is a real round trip — hence the extended timeout.
+    const response = await api.put(workflowProviderCredentialUrl(provider), {
       workspace_path: workspacePath,
       encrypted_value: encrypted.encrypted,
-    }, { timeout: 20_000 });
+    }, { timeout: 120_000 });
     return response.data;
   },
 
-  deleteWorkflowClaudeCodeCredential: async (workspacePath: string): Promise<{ success: boolean }> => {
-    const response = await api.delete('/api/workflow-provider-credentials/claude-code', {
+  deleteWorkflowProviderCredential: async (provider: WorkflowCredentialProvider, workspacePath: string): Promise<{ success: boolean }> => {
+    const response = await api.delete(workflowProviderCredentialUrl(provider), {
       params: { workspace_path: workspacePath },
     });
     return response.data;
   },
+
+  getWorkflowClaudeCodeCredentialStatus: (workspacePath: string) =>
+    secretsApi.getWorkflowProviderCredentialStatus('claude-code', workspacePath),
+
+  storeWorkflowClaudeCodeCredential: (workspacePath: string, token: string) =>
+    secretsApi.storeWorkflowProviderCredential('claude-code', workspacePath, token),
+
+  deleteWorkflowClaudeCodeCredential: (workspacePath: string) =>
+    secretsApi.deleteWorkflowProviderCredential('claude-code', workspacePath),
+
+  getWorkflowCursorCredentialStatus: (workspacePath: string) =>
+    secretsApi.getWorkflowProviderCredentialStatus('cursor-cli', workspacePath),
+
+  storeWorkflowCursorCredential: (workspacePath: string, apiKey: string) =>
+    secretsApi.storeWorkflowProviderCredential('cursor-cli', workspacePath, apiKey),
+
+  deleteWorkflowCursorCredential: (workspacePath: string) =>
+    secretsApi.deleteWorkflowProviderCredential('cursor-cli', workspacePath),
+
+  getWorkflowPiCLICredentialStatus: (workspacePath: string) =>
+    secretsApi.getWorkflowProviderCredentialStatus('pi-cli', workspacePath),
+
+  storeWorkflowPiCLICredential: (workspacePath: string, apiKey: string) =>
+    secretsApi.storeWorkflowProviderCredential('pi-cli', workspacePath, apiKey),
+
+  deleteWorkflowPiCLICredential: (workspacePath: string) =>
+    secretsApi.deleteWorkflowProviderCredential('pi-cli', workspacePath),
 };
 
 export default secretsApi;

@@ -115,7 +115,7 @@ export const ChatTabs: React.FC<ChatTabsProps> = ({ onNewChat, onSubmitOrgComman
     tab.metadata?.isScheduledRun === true || isScheduledSession({ sessionId: tab.sessionId }), [])
 
   const chiefOfStaffTabs = useMemo(() => Object.values(chatTabs)
-    .filter(tab => tab.metadata?.mode === 'multi-agent' && !isHiddenOrganizationTab(tab))
+    .filter(tab => tab.metadata?.mode === 'multi-agent' && !tab.metadata?.agentProfileId && !isHiddenOrganizationTab(tab))
     .sort((a, b) => {
       const laneOrder = Number(isScheduleTab(a)) - Number(isScheduleTab(b))
       if (laneOrder !== 0) return laneOrder
@@ -272,6 +272,7 @@ export const ChatTabs: React.FC<ChatTabsProps> = ({ onNewChat, onSubmitOrgComman
       if (
         activeTab &&
         activeTab.metadata?.mode === 'multi-agent' &&
+        !activeTab.metadata?.agentProfileId &&
         !isHiddenOrganizationTab(activeTab)
       ) {
         return
@@ -292,7 +293,7 @@ export const ChatTabs: React.FC<ChatTabsProps> = ({ onNewChat, onSubmitOrgComman
   }
 
   const showHeaderContent =
-    !!activeTab && activeTab.metadata?.mode === 'multi-agent' && !isHiddenOrganizationTab(activeTab)
+    !!activeTab && activeTab.metadata?.mode === 'multi-agent' && !activeTab.metadata?.agentProfileId && !isHiddenOrganizationTab(activeTab)
   return (
     <>
     <div className="relative flex-shrink-0 flex items-center gap-2 bg-gray-50 dark:bg-gray-800 px-3 py-1.5 border-b border-gray-200 dark:border-gray-700">

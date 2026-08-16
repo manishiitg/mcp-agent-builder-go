@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/events"
+	mcpagent "github.com/manishiitg/mcpagent/agent"
 
 	"github.com/gorilla/mux"
 )
@@ -33,6 +34,19 @@ func (api *StreamingAPI) canSteerSession(sessionID string) bool {
 	runningAgent, exists := api.runningAgents[sessionID]
 	api.runningAgentsMux.RUnlock()
 	if !exists || runningAgent == nil {
+		return false
+	}
+
+	// A structured-transport agent (e.g. Cursor's one-shot `cursor-agent
+	// --print`) has no live pane to send-keys into between turns — the same
+	// reason deliverUserMessage always resolves to QueuedForInjection for it
+	// (see mcpagent/agent/message_delivery.go). Without this check, callers
+	// that gate a steer attempt on canSteerSession (background_agents.go's
+	// completion-notification path) would retry a steer that structurally can
+	// never succeed every few seconds forever, each retry writing a fresh
+	// duplicate event into the session — found live as a flickering
+	// tool-call entry in a structured Cursor session's activity feed.
+	if !mcpagent.AgentSupportsSteering(runningAgent) {
 		return false
 	}
 

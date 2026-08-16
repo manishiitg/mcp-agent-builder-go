@@ -107,6 +107,63 @@ export function looksLikeTerminalScreenText(value: string): boolean {
   return markerCount >= 2 || normalized.includes('shift+tab to accept edits')
 }
 
+/**
+ * Appends one streamed chunk to the text accumulated so far, honouring the
+ * backend's per-chunk `is_delta` marker.
+ *
+ * Providers stream in two shapes and the marker is the only reliable way to
+ * tell them apart:
+ *  - delta chunks are fragments of ONE message (pi splits mid-word: "workspace_"
+ *    + "advanced` server.") and must be concatenated verbatim.
+ *  - block chunks are each a COMPLETE message (claude-code, codex, cursor all
+ *    report delta_content_count = 0) and must be newline-separated.
+ *
+ * Concatenating everything verbatim — what this store did previously — is why
+ * Claude Code output rendered as one run-on blob with the markdown table glued
+ * onto the end of a sentence, which stops it being parsed as a table at all.
+ *
+ * This mirrors the server-side assembly in agent_go/internal/terminals/store.go
+ * (structuredChunkIsDelta) so both paths reconstruct a message identically,
+ * including its guard against a repeated trailing chunk.
+ *
+ * When `isDelta` is undefined the chunk came from an emitter that predates the
+ * marker; we keep the old verbatim behaviour there rather than guessing, so
+ * this can only improve streams that actually carry the field.
+ */
+export function appendStreamingText(
+  currentText: string,
+  incoming: string,
+  isDelta?: boolean
+): string {
+  if (!incoming) return currentText
+  if (!currentText) return incoming
+  if (isDelta !== false) return currentText + incoming
+  // Block chunk: skip an exact repeat of what we already end with, then ensure
+  // it starts on its own line so markdown blocks (tables, lists, fences) parse.
+  if (currentText.endsWith(incoming)) return currentText
+  return currentText + blockSeparator(currentText, incoming) + incoming
+}
+
+/**
+ * Markdown block elements need a BLANK line before them, not merely a newline.
+ *
+ * With a single "\n", CommonMark/GFM treats a following table row as lazy
+ * continuation of the preceding paragraph, so it renders as literal pipes
+ * instead of a table — the exact "not formatted or readable" symptom, still
+ * present after chunks stopped running together. A plain sentence following a
+ * sentence only needs the single newline.
+ */
+function blockSeparator(currentText: string, incoming: string): string {
+  if (currentText.endsWith('\n\n') || incoming.startsWith('\n\n')) return ''
+  // A block chunk is a COMPLETE message, so it starts a new paragraph. A single
+  // "\n" is only a soft wrap in CommonMark/GFM: separate narration lines
+  // collapse into one run-on paragraph, and a following table is swallowed as
+  // lazy continuation and rendered as literal pipes. Both were observed on real
+  // provider output.
+  if (currentText.endsWith('\n')) return '\n'
+  return '\n\n'
+}
+
 export function formatLiveStreamingPreview(value: string, maxLength = 140): string {
   if (!value) return ''
   if (looksLikeTerminalScreenText(value)) return ''

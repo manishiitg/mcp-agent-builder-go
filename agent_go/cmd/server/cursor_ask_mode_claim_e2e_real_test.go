@@ -46,8 +46,11 @@ func TestCursorAgentModeWithAndWithoutBridge(t *testing.T) {
 
 	model := strings.TrimSpace(os.Getenv("CURSOR_CLI_REAL_E2E_MODEL"))
 	if model == "" {
-		// The model the failing step actually used.
-		model = "grok-4.5"
+		// The failing step used grok-4.5, since retired from Cursor's catalog
+		// (superseded by the cursor-grok-4.6-* generation) — grok-4.6 is the
+		// current equivalent default; the test isn't about which grok model,
+		// just holding "same model" constant across the two sub-cases.
+		model = "grok-4.6"
 	}
 
 	t.Run("bridge healthy writes the file", func(t *testing.T) {

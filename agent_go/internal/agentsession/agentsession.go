@@ -73,8 +73,11 @@ type Config struct {
 	WorkingDir      string // scope root (Family/parent). "" -> process cwd
 	SystemPrompt    string // agent persona / instructions
 	Tools           []Tool // app-specific custom tools
-	Logger          loggerv2.Logger
-	MaxTurns        int // 0 -> provider default
+	// Skills are Anthropic-format skill bundles projected into the coding
+	// agent's native skill directory for this session.
+	Skills   []*llmtypes.Skill
+	Logger   loggerv2.Logger
+	MaxTurns int // 0 -> provider default
 	// SessionID, when set, makes turns RESUME the coding agent's own session
 	// (warm tmux/session resume) instead of cold-starting a fresh one. Use a
 	// stable id per conversation (e.g. the conversation id). Empty -> fresh
@@ -104,10 +107,9 @@ type Config struct {
 	// the model generates its reply (real token/chunk streaming, not just a
 	// cosmetic "working on it" status label) — via Turn.StreamingCallback,
 	// which only ever delivers content fragments (never tool-call/terminal
-	// chunks). Requires the provider's own streaming env var to be set for
-	// interactive/tmux sessions (e.g. CODEX_CLI_STREAM_TRANSCRIPT=1) — set once
-	// at process startup, not per-call. Nil is a no-op: the turn behaves exactly
-	// as before, reply available only once Ask returns.
+	// chunks). Registering this callback enables the provider adapter's transcript
+	// streaming option. Nil is a no-op: the turn behaves exactly as before,
+	// with the reply available only once Ask returns.
 	StreamCallback func(text string)
 	// Observers receive mcpagent's normalized events. In particular, callers
 	// can opt into DirectToolExecutionEvents to receive the bridge-side receipt
@@ -122,6 +124,22 @@ type Config struct {
 	// today). This exists to A/B the two transports from a live conversation;
 	// see RuntimeConfig.Coding.Transport for the tradeoff.
 	Transport llm.CodingAgentTransport
+	// ClaudeCodeOAuthToken scopes this session to one user's own Claude Code
+	// subscription (`claude setup-token`) instead of whatever login happens to
+	// be on the machine. Reaches the adapter through
+	// RuntimeConfig.Generation.APIKeys.
+	//
+	// Empty is NOT neutral: the provider falls back to the CLI's saved login and
+	// logs "using the CLI saved login", so a missing token silently bills and
+	// authenticates as whoever set up the terminal. Set RequireProviderToken to
+	// refuse the session instead.
+	ClaudeCodeOAuthToken string
+	// RequireProviderToken refuses to start a session for a coding-agent
+	// provider that has no token, rather than letting it fall back to the
+	// machine's saved login. The check belongs here, at session construction:
+	// the CLI session either starts authenticated as this user or does not
+	// start at all.
+	RequireProviderToken bool
 }
 
 func definitionFromConfig(cfg Config) mcpagent.AgentDefinition {
@@ -141,6 +159,7 @@ func definitionFromConfig(cfg Config) mcpagent.AgentDefinition {
 	}
 	return mcpagent.AgentDefinition{
 		Instructions: cfg.SystemPrompt,
+		Skills:       cfg.Skills,
 		Tools: mcpagent.ToolSet{
 			Direct: directTools,
 			MCP:    []mcpagent.MCPToolSource{{Name: "exa-search"}},
@@ -173,6 +192,22 @@ type Session struct {
 	// rejected). In all of those the CLI has nothing to resume from, so
 	// truncating to the last message left the model with no history at all.
 	holdsPriorContext bool
+}
+
+// WarmSharedBridge starts the process-global executor/MCP bridge (see
+// ensureSharedBridge) if it has not started already, without creating a
+// coding-agent session. Call this once at process startup, before any HTTP
+// request is served, so MCP_API_URL/MCP_API_TOKEN are already set in the
+// process environment before other code paths — e.g. a workflow's tool
+// registry — read them via os.Getenv. Without this, whichever one runs first
+// wins the race: if a tool registry snapshots the env before the bridge sets
+// the token, that snapshot is typically cached and never re-reads the token.
+func WarmSharedBridge(logger loggerv2.Logger) error {
+	if logger == nil {
+		logger = loggerv2.NewNoop()
+	}
+	_, err := ensureSharedBridge(logger)
+	return err
 }
 
 // New builds a per-turn Session. Following the AgentWorks model, it reuses the
@@ -230,9 +265,22 @@ func New(ctx context.Context, cfg Config) (*Session, error) {
 	// different engine cannot give this one context.
 	handleRestored := cfg.SessionHandle != nil && !cfg.SessionHandle.Empty()
 	holdsPriorContext := resume && (handleRestored || hasWarmInteractiveOwner(sessionID, cfg.Provider))
+
+	// Authenticate as this user, or do not start. Without a token the provider
+	// quietly uses the CLI's saved login, so a missing token is not a degraded
+	// session — it is somebody else's account.
+	oauthToken := strings.TrimSpace(cfg.ClaudeCodeOAuthToken)
+	if cfg.RequireProviderToken && oauthToken == "" {
+		return nil, fmt.Errorf("no Claude Code token configured for this session: add one (claude setup-token) before starting")
+	}
+	generation := mcpagent.GenerationRuntimeConfig{Provider: cfg.Provider, MaxTurns: cfg.MaxTurns}
+	if oauthToken != "" {
+		generation.APIKeys = &mcpagent.AgentAPIKeys{ClaudeCodeOAuthToken: &oauthToken}
+	}
+
 	runtime := mcpagent.RuntimeConfig{
 		Model: model, MCPConfigPath: b.mcpConfigPath, ResumeHandle: cfg.SessionHandle,
-		Generation: mcpagent.GenerationRuntimeConfig{Provider: cfg.Provider, MaxTurns: cfg.MaxTurns},
+		Generation: generation,
 		Tools:      mcpagent.ToolRuntimeConfig{CodeExecution: true},
 		Coding:     mcpagent.CodingRuntimeConfig{Transport: cfg.Transport, BridgeRoutingInstructionsOverride: cfg.BridgeRoutingInstructions},
 		MCP:        mcpagent.MCPRuntimeConfig{SessionID: sessionID},

@@ -1,21 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense, type FormEvent, type ChangeEvent } from 'react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-import rehypeRaw from 'rehype-raw'
-import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
-import { visit } from 'unist-util-visit'
-import type { Element as HastElement } from 'hast'
-
-// Lazy-loaded the same way AgentWorks does it — react-syntax-highlighter's
-// language grammars are large, so keep them out of the initial bundle and
-// only fetch when a reply/file actually contains a fenced code block.
-const SyntaxHighlightedCode = lazy(() => import('./SyntaxHighlightedCode'))
-
-let mermaidModule: Promise<typeof import('mermaid').default> | null = null
-function loadMermaid() {
-  mermaidModule ??= import('mermaid').then((m) => m.default)
-  return mermaidModule
-}
+import { useState, useEffect, useRef, useCallback, useMemo, type FormEvent, type ChangeEvent } from 'react'
 import {
   Activity as PulseIcon,
   ArrowLeft,
@@ -79,6 +62,7 @@ import { VoiceSettings } from './voice/VoiceSettings'
 import { readReminderSoundPref, persistReminderSoundPref, playReminderChime } from './notifySound'
 import { MicButton, type MicButtonHandle } from './voice/MicButton'
 import type { MicState } from './voice/useMicDictation'
+import { ChatMarkdown as SharedChatMarkdown, ToolCallSummary as SharedToolCallSummary, stabilizeStreamingMarkdown as stabilizeSharedStreamingMarkdown } from '../../shared/chat/ChatRenderer'
 
 // autoGrowTextarea lets a composer grow with a long message instead of
 // staying a single row — resets to natural height first so it can shrink
@@ -542,32 +526,20 @@ function StartBurst({ onDone }: { onDone: () => void }) {
 // live in-flight indicator (calls have no result/err yet — still streaming)
 // and the final persisted summary (result/err filled in once the turn
 // completes) — same shape, so nothing has to change when it switches over.
+// Renders through the shared chat renderer rather than a second inline
+// implementation. main kept the local copy while this branch extracted the
+// shared one; the surrounding file is on main's ToolCallRecord, so the record
+// is adapted to SharedToolCall here instead of reviving a parallel widget.
 function ToolCallSummary({ calls }: { calls: ToolCallRecord[] }) {
-  const [open, setOpen] = useState(false)
-  const [openIdx, setOpenIdx] = useState<number | null>(null)
-  if (calls.length === 0) return null
-  return (
-    <div className="fl-tool-summary">
-      <button type="button" className="fl-tool-summary-toggle" onClick={() => setOpen((v) => !v)}>
-        🔧 {calls.length} tool{calls.length === 1 ? '' : 's'} <span className="fl-tool-summary-caret">{open ? '▲' : '▼'}</span>
-      </button>
-      {open && (
-        <div className="fl-tool-summary-list">
-          {calls.map((c, i) => (
-            <div key={i} className="fl-tool-call">
-              <button type="button" className="fl-tool-call-row" onClick={() => setOpenIdx((cur) => (cur === i ? null : i))}>
-                <span className="fl-tool-call-name">{c.tool_name}</span>
-                {c.arguments && <span className="fl-tool-call-args">{c.arguments}</span>}
-              </button>
-              {openIdx === i && (
-                <pre className="fl-tool-call-response">{c.error ? `Error: ${c.error}` : (c.result || '(still running…)')}</pre>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  )
+  return <SharedToolCallSummary calls={calls.map((call, index) => ({
+    id: call.tool_call_id ?? `${call.tool_name}-${index}`,
+    tool: call.tool_name,
+    args: call.arguments,
+    result: call.result,
+    error: call.error,
+    status: call.status,
+    durationMs: call.duration,
+  }))} />
 }
 
 function upsertToolCall(calls: ToolCallRecord[], incoming: ToolCallRecord): ToolCallRecord[] {
@@ -717,150 +689,10 @@ function ChatLink({ href, children }: { href?: string; children?: React.ReactNod
   return <a href={href} target="_blank" rel="noreferrer">{children}</a>
 }
 
-// MermaidDiagram renders a ```mermaid fenced block as an actual diagram —
-// ported from AgentWorks' MarkdownRenderer.tsx (self-contained there, no
-// store coupling, so this is a near-verbatim copy).
-let mermaidCounter = 0
-function MermaidDiagram({ content }: { content: string }) {
-  const [svg, setSvg] = useState('')
-  const [error, setError] = useState('')
-  const idRef = useRef(`mermaid-${mermaidCounter++}`)
-
-  const renderDiagram = useCallback(async () => {
-    try {
-      const mermaid = await loadMermaid()
-      mermaid.initialize({ startOnLoad: false, theme: readTheme() === 'dark' ? 'dark' : 'default', securityLevel: 'loose' })
-      const { svg: renderedSvg } = await mermaid.render(idRef.current, content)
-      setSvg(renderedSvg)
-      setError('')
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to render mermaid diagram')
-      setSvg('')
-    }
-  }, [content])
-
-  useEffect(() => { renderDiagram() }, [renderDiagram])
-
-  if (error) {
-    return (
-      <div className="fl-mermaid-error">
-        <div>Diagram error</div>
-        <pre>{error}</pre>
-      </div>
-    )
-  }
-  if (!svg) return <div className="fl-mermaid-loading">Rendering diagram…</div>
-  return <div className="fl-mermaid" dangerouslySetInnerHTML={{ __html: svg }} />
-}
-
-// stabilizeStreamingMarkdown hides markdown syntax that hasn't finished arriving.
-//
-// A stream delivers "**bo" before "**bold**", and react-markdown correctly
-// renders an unmatched "**" as literal asterisks — so mid-stream the reply
-// flickers raw markdown characters (**, `, _, #) that vanish once the closing
-// token lands. The text is never wrong, it just looks broken while it types.
-//
-// So for the STREAMING bubble only, drop a trailing token that is still
-// unbalanced. Applied to the live preview, never to the stored message — the
-// final render always gets the untouched text.
-function stabilizeStreamingMarkdown(text: string): string {
-  let out = text
-  // An odd count means the run that's still open is the last one; cut from there.
-  for (const token of ['**', '`', '*', '_']) {
-    const parts = out.split(token)
-    if (parts.length > 1 && (parts.length - 1) % 2 === 1) {
-      out = parts.slice(0, -1).join(token)
-    }
-  }
-  // A heading or list marker alone on the final line has no content yet.
-  return out.replace(/\n[#>\-*+]+[ \t]*$/, '')
-}
-
-// Markdown has no native color syntax at all, but the model writes raw HTML
-// spans very fluently (it's an extremely common real-world pattern in the
-// GitHub-flavored markdown this kind of model is trained on) — far more
-// natural than inventing a bespoke {color}text{/color} syntax it would only
-// ever use if the prompt keeps reminding it to. rehype-raw parses that raw
-// HTML into real nodes; rehype-sanitize (extended to allow `style` on
-// `span`, which the default schema doesn't) strips anything actually
-// dangerous (script tags, event handlers, iframes, etc.); this schema and
-// the plugin below narrow what survives specifically to color.
-const colorSpanSchema = {
-  ...defaultSchema,
-  attributes: {
-    ...defaultSchema.attributes,
-    span: [...(defaultSchema.attributes?.span ?? []), 'style'],
-  },
-}
-
-// A style attribute passing rehype-sanitize's schema is still an ARBITRARY
-// CSS declaration list (sanitize only allowlists which ATTRIBUTES exist, not
-// their values) — position/overlay/pointer-events tricks are a real UI-
-// spoofing concern even without script execution. This keeps only a `color`
-// declaration and discards everything else in the same style attribute, so
-// a span can change text color and nothing more.
-function restrictSpanStyleToColor() {
-  return (tree: HastElement) => {
-    visit(tree, 'element', (node: HastElement) => {
-      if (node.tagName !== 'span' || typeof node.properties?.style !== 'string') return
-      const match = /color\s*:\s*([#a-zA-Z0-9(),.\s%]+)/i.exec(node.properties.style)
-      if (match) {
-        node.properties.style = `color: ${match[1].trim()}`
-      } else {
-        delete node.properties.style
-      }
-    })
-  }
-}
-
-// Markdown renders the agent's reply with react-markdown + GFM — the same
-// battle-tested renderer the main AgentWorks frontend uses (handles tables,
-// nested lists, lazy-continuation of terminal-wrapped list items, mermaid
-// diagrams, and syntax-highlighted code, etc.). Also allows a narrow,
-// sanitized `<span style="color:...">` for colored text — see
-// colorSpanSchema/restrictSpanStyleToColor above for why and how it's scoped.
+// SparkQuill adds workspace-link behavior, while rendering itself is shared
+// with other chat products such as Video Studio.
 function Markdown({ text }: { text: string }) {
-  return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      rehypePlugins={[rehypeRaw, [rehypeSanitize, colorSpanSchema], restrictSpanStyleToColor]}
-      components={{
-        a: ChatLink,
-        // The `code` renderer below returns its own fully-formed element for
-        // fenced blocks (a MermaidDiagram, a Suspense-wrapped
-        // SyntaxHighlightedCode, or a styled <pre>) — react-markdown's
-        // default `pre` would otherwise wrap that a second time, so hand
-        // back children as-is here.
-        pre({ children }) {
-          return <>{children}</>
-        },
-        code(props) {
-          const { className, children, ...rest } = props as { className?: string; children?: React.ReactNode; node?: unknown }
-          const match = /language-(\w+)/.exec(className || '')
-          const isInline = !match && !String(children).includes('\n')
-          if (isInline) {
-            return <code className="fl-inline-code" {...rest}>{children}</code>
-          }
-          const codeString = String(children).replace(/\n$/, '')
-          if (!match) {
-            return <pre className="fl-code-block-plain">{codeString}</pre>
-          }
-          const language = match[1]
-          if (language === 'mermaid') return <MermaidDiagram content={codeString} />
-          if (['text', 'txt', 'plain', 'plaintext', 'terminal'].includes(language.toLowerCase())) {
-            return <pre className="fl-code-block-plain">{codeString}</pre>
-          }
-          return (
-            <Suspense fallback={<pre className="fl-code-block-plain">{codeString}</pre>}>
-              <SyntaxHighlightedCode code={codeString} language={language} isDark={readTheme() === 'dark'} />
-            </Suspense>
-          )
-        },
-      }}
-    >
-      {text}
-    </ReactMarkdown>
-  )
+  return <SharedChatMarkdown text={text} theme={readTheme() === 'dark' ? 'dark' : 'light'} linkComponent={ChatLink} />
 }
 
 // QUICK_SKILLS are one-click shortcuts in the composer menu; each sends a message
@@ -3483,7 +3315,7 @@ export default function LearningApp() {
                       <div className="fl-stream-think">
                         <span className="fl-stream-think-label">Thinking</span>
                         <div className="fl-stream-think-body is-streaming">
-                          <Markdown text={stabilizeStreamingMarkdown(streamingReply)} />
+                          <Markdown text={stabilizeSharedStreamingMarkdown(streamingReply)} />
                         </div>
                       </div>
                     )}
@@ -4624,7 +4456,7 @@ export default function LearningApp() {
                         <div className="fl-stream-think">
                           <span className="fl-stream-think-label">Thinking</span>
                           <div className="fl-stream-think-body is-streaming">
-                            <Markdown text={stabilizeStreamingMarkdown(childStreamingReply)} />
+                            <Markdown text={stabilizeSharedStreamingMarkdown(childStreamingReply)} />
                           </div>
                         </div>
                       )}

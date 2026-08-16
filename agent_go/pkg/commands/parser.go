@@ -10,6 +10,9 @@ import (
 
 // ParseCommandFile parses a COMMAND.md file content into frontmatter and body
 func ParseCommandFile(content string) (*CommandFrontmatter, string, error) {
+	if strings.TrimSpace(content) == "" {
+		return nil, "", fmt.Errorf("COMMAND.md is empty or could not be read")
+	}
 	if !strings.HasPrefix(content, "---") {
 		return nil, "", fmt.Errorf("COMMAND.md must start with YAML frontmatter (---)")
 	}

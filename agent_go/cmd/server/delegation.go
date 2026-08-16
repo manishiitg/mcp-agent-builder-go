@@ -266,7 +266,7 @@ func (api *StreamingAPI) executeDelegatedTask(ctx context.Context, parentReq Que
 			}
 		}
 		var credentialErr error
-		apiKeys, credentialErr = api.workflowProviderAPIKeys(ctx, subAgentUserID, workflowDecisionScope, apiKeys)
+		apiKeys, credentialErr = api.resolveEffectiveAPIKeys(ctx, subAgentUserID, workflowDecisionScope, apiKeys)
 		if credentialErr != nil {
 			return "", fmt.Errorf("load delegated workflow provider credentials: %w", credentialErr)
 		}
@@ -334,6 +334,36 @@ func (api *StreamingAPI) executeDelegatedTask(ctx context.Context, parentReq Que
 	// root chat agent resolves them (no preset at delegation time).
 	applySharedLLMAgentTuning(&subAgentConfig, &parentReq, nil)
 
+	// A child must not exceed the tool surface its product declared, or
+	// delegating becomes a way around tool_policy. The profile is resolved from
+	// the same parent request rather than threaded down, so parent and child
+	// derive their surface from one source instead of two — the divergence that
+	// let a background child come up short of its parent in the first place.
+	// Look up, do not re-enter: the gate below reads only Definition.ID and
+	// Definition.ToolPolicy. resolveAgentProfileForQuery would re-run the
+	// product's runtime initializer (workspace seeding, plan refresh, workflow
+	// DB init, productdeps.Ensure) on every single delegation, and its request
+	// mutations are discarded here anyway because parentReq is a copy and
+	// subAgentConfig is already built.
+	if subProfile, profileErr := api.lookupAgentProfileDefinition(&parentReq, subAgentUserID); profileErr != nil {
+		// Failing open here defeated the rule stated directly above: with no
+		// AdmitTool set, the child came up with a WIDER surface than the
+		// product declared, so a failed profile resolution turned delegation
+		// into the tool_policy bypass this gate exists to prevent. Only abort
+		// when the parent actually declared a profile -- an inconsistent
+		// request with no profile id has no product surface to enforce, and
+		// there the old log-and-continue is still the right behavior.
+		if strings.TrimSpace(parentReq.AgentProfileID) != "" {
+			log.Printf("[DELEGATION] Refusing to delegate: could not resolve the parent agent profile %q for the sub-agent tool surface: %v", parentReq.AgentProfileID, profileErr)
+			api.emitDelegationEndEvent(sessionID, delegationID, currentDepth, "", profileErr.Error(), nil)
+			return "", fmt.Errorf("failed to resolve the agent profile tool surface for delegation: %w", profileErr)
+		}
+		log.Printf("[DELEGATION] Could not resolve the parent agent profile for the sub-agent tool surface: %v", profileErr)
+	} else if gate := newProductToolGate(subProfile); gate.enforcing() {
+		subAgentConfig.AdmitTool = gate.Admit
+		defer gate.logSurface(sessionID)
+	}
+
 	// Create sub-agent using the wrapper (same as parent agent creation)
 	subAgent, err := agent.NewLLMAgentWrapper(ctx, subAgentConfig, nil, api.logger)
 	if err != nil {
@@ -394,7 +424,10 @@ func (api *StreamingAPI) executeDelegatedTask(ctx context.Context, parentReq Que
 		// set once so assembly-time identity also deduplicates correctly before
 		// the wrapper finalizes its immutable mcpagent definition.
 		if len(spec.Skills) > 0 {
-			if attached := skills.LoadAttachable(getWorkspaceAPIURL(), spec.Skills); len(attached) > 0 {
+			// Sub-agents inherit the parent's workspace, so resolve skills there
+			// first — otherwise a delegated agent silently loses every skill the
+			// product installs into its project.
+			if attached := skills.LoadAttachableIn(getWorkspaceAPIURL(), parentReq.SelectedFolder, spec.Skills); len(attached) > 0 {
 				identitySkills = append(identitySkills, attached...)
 			}
 		}
@@ -1135,7 +1168,10 @@ func buildCapabilitiesContext(req QueryRequest) *virtualtools.CapabilitiesContex
 	// are represented by browser tools and browser prompts instead.
 	workspaceAPIURL := getWorkspaceAPIURL()
 	for _, folderName := range filesystemSelectedSkills(req.SelectedSkills) {
-		skill, err := skills.GetSkill(workspaceAPIURL, folderName)
+		// Scope to the session's folder first: a product that installs skills
+		// into its project was invisible to the unscoped lookup, so its skill
+		// summaries silently went missing from the capability listing.
+		skill, err := skills.GetSkillIn(workspaceAPIURL, req.SelectedFolder, folderName)
 		if err != nil {
 			log.Printf("[CAPABILITIES] Warning: Failed to load skill %s: %v", folderName, err)
 			continue

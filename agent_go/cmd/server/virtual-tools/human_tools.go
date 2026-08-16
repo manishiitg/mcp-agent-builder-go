@@ -347,10 +347,13 @@ func IsHumanToolCategory(category string) bool {
 }
 
 // WorkshopHumanToolNames is the SINGLE SOURCE OF TRUTH for which human tools a
-// workflow-builder / workshop / run agent may use. The workshop allow-list
-// (GetToolsForWorkshopMode) derives its human tools from here, and these are all
-// registered by createCustomTools(workflowMode=true) — so the allow-list can never
-// drift from what's actually registered (the drift that made notify_user invisible).
+// workflow-builder / workshop / run agent may use. These are all registered by
+// createCustomTools(workflowMode=true).
+//
+// This list once fed a separate workshop allow-list, and deriving that list from
+// here rather than retyping it is what kept the two in sync — the drift that made
+// notify_user invisible. That allow-list is gone: registration is now the only
+// source, so nothing can be allowed-but-unregistered.
 //
 // human_feedback is available for explicit channel tests and truly urgent,
 // short-lived human-only input; ordinary builder questions stay in chat.

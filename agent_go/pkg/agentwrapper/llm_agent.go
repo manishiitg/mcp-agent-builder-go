@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -40,7 +41,9 @@ type LLMAgentWrapper struct {
 	finalized  bool
 	definition mcpagent.AgentDefinition
 	observers  []mcpagent.AgentEventListener
-	toolPolicy mcpagent.ToolPolicy
+	// admitTool, when set, decides whether a tool may join the definition at
+	// all. Fixed at construction from LLMAgentConfig.AdmitTool.
+	admitTool func(string) bool
 
 	// In-memory conversation history for multi-turn state
 	history    []llmtypes.MessageContent
@@ -111,13 +114,22 @@ func runtimeConfigForLLMAgent(config LLMAgentConfig, model llmtypes.Model, trace
 			EditingTurnThreshold:      config.ContextEditingTurnThreshold,
 		},
 		Coding: mcpagent.CodingRuntimeConfig{
-			ClaudeCodeTransport:  config.ClaudeCodeTransport,
-			PersistentClaudeCode: config.ClaudeCodePersistentInteractiveSession,
-			PersistentCodex:      config.CodexPersistentInteractiveSession,
-			PersistentCursor:     config.CursorPersistentInteractiveSession,
-			PersistentPi:         config.PiPersistentInteractiveSession,
-			CursorBridgeTools:    config.CursorBridgeToolsMode,
-			CLISecurityPolicy:    config.CLISecurityPolicy,
+			ClaudeCodeTransport:               config.ClaudeCodeTransport,
+			PersistentClaudeCode:              config.ClaudeCodePersistentInteractiveSession,
+			PersistentCodex:                   config.CodexPersistentInteractiveSession,
+			PersistentCursor:                  config.CursorPersistentInteractiveSession,
+			PersistentPi:                      config.PiPersistentInteractiveSession,
+			CursorBridgeTools:                 config.CursorBridgeToolsMode,
+			AgentToolsMode:                    config.CodingAgentToolsMode,
+			ApprovalsMode:                     config.CodingAgentApprovalsMode,
+			BridgeRoutingInstructionsOverride: config.BridgeRoutingInstructionsOverride,
+			CLISecurityPolicy:                 config.CLISecurityPolicy,
+			SecretEnvironment:                 config.CodingAgentSecretEnvironment,
+			CodexNetworkAccess:                config.CodexNetworkAccess,
+			// The same predicate that admits tool registration also decides what
+			// the coding-agent bridge advertises, so its catalog can never offer
+			// a tool this session would refuse to execute.
+			BridgeToolAdmit: config.AdmitTool,
 		},
 		MCP: mcpagent.MCPRuntimeConfig{
 			SessionID: config.SessionID, UserID: config.UserID, RuntimeOverrides: config.RuntimeOverrides,
@@ -125,7 +137,17 @@ func runtimeConfigForLLMAgent(config LLMAgentConfig, model llmtypes.Model, trace
 		Workspace: mcpagent.WorkspaceRuntimeConfig{CodingAgentWorkingDir: config.CodingAgentWorkingDir},
 		Observability: mcpagent.ObservabilityRuntimeConfig{
 			Logger: logger, Tracers: []observability.Tracer{tracer}, TraceID: traceID,
-			PromptLogLabel: config.Name, Streaming: true, GenerationStreamingEvents: runtimeBool(false),
+			// GenerationStreamingEvents true is what makes clean per-token content
+			// (StreamChunkTypeContent -> StreamingChunkEvent, Source != terminal)
+			// actually reach the frontend. With it false, ONLY raw terminal-pane
+			// snapshot chunks survive (llm_generation.go exempts those explicitly) --
+			// fine for tmux providers, which still have a pane to show, but for a
+			// structured-transport provider with no pane (pi-cli) it meant ZERO
+			// streaming_chunk events for the whole turn: confirmed live, a 30s
+			// pi-cli/gemini turn produced none. The frontend now honors is_delta /
+			// source correctly (useChatStore.appendStreamingText), which was the
+			// other half of why this was left off.
+			PromptLogLabel: config.Name, Streaming: true, GenerationStreamingEvents: runtimeBool(true),
 			DirectToolExecutionEvents: true,
 		},
 	}
@@ -274,6 +296,22 @@ type LLMAgentConfig struct {
 	AgentMode          mcpagent.AgentMode // Agent mode (Simple or ReAct)
 	SelectedTools      []string           // Selected tools in "server:tool" format
 
+	// AdmitTool decides which tools may enter this agent's definition. It is a
+	// construction input rather than a setter because the decision is only
+	// meaningful before the first registration: it defines the agent's identity,
+	// which is fixed once assembled.
+	//
+	// This is not ToolPolicy. ToolPolicy narrows a finished agent per turn and
+	// also rewrites the session-wide code-execution registry, so it reaches
+	// actors the caller did not intend and can hide a tool the agent has already
+	// been told about. Admission decides membership once, before the coding CLI
+	// caches its catalog, so a declined tool is never advertised and a retained
+	// one can never silently disappear.
+	//
+	// nil admits everything. Invoked while the wrapper's lock is held, so it
+	// must not call back into the wrapper.
+	AdmitTool func(name string) bool
+
 	// Unified fallback configuration (replaces FallbackModels and CrossProviderFallback)
 	Fallbacks []FallbackModel // Fallback models with optional provider override
 	// Code execution mode: When enabled, only virtual tools are added to LLM
@@ -284,15 +322,28 @@ type LLMAgentConfig struct {
 	CursorPersistentInteractiveSession     bool
 	PiPersistentInteractiveSession         bool
 	CursorBridgeToolsMode                  bool
-	ClaudeCodeTransport                    string
+	CodingAgentToolsMode                   string
+	CodingAgentApprovalsMode               string
+	// BridgeRoutingInstructionsOverride replaces mcpagent's generic
+	// bridge-only preamble. Product profiles with native coding tools use an
+	// empty override because their own prompt explains the product tools.
+	BridgeRoutingInstructionsOverride *string
+	ClaudeCodeTransport               string
 	// ForceStructuredCodingAgent forces coding-agent CLI providers to use
 	// the structured JSON transport (--print/--exec) for this agent's
 	// LLM calls, overriding the default tmux behavior. Wired from the
 	// workflow step config AgentConfigs.Transport == "structured".
-	ForceStructuredCodingAgent bool
-	CodingAgentWorkingDir      string
-	CLISecurityPolicy          *llmtypes.CLISecurityPolicy
-	APIKeys                    *llm.ProviderAPIKeys // API keys for providers
+	ForceStructuredCodingAgent   bool
+	CodingAgentWorkingDir        string
+	CLISecurityPolicy            *llmtypes.CLISecurityPolicy
+	CodingAgentSecretEnvironment map[string]string
+	// CodexNetworkAccess lets codex's sandboxed native shell reach the network.
+	// A native_shell profile's product APIs are session-scoped HTTP endpoints,
+	// so without this codex's own shell cannot call any product tool at all —
+	// codex's workspace-write sandbox blocks network unless asked otherwise,
+	// whereas Claude Code's native Bash has no equivalent restriction.
+	CodexNetworkAccess bool
+	APIKeys            *llm.ProviderAPIKeys // API keys for providers
 
 	// Context summarization configuration
 	EnableContextSummarization     bool    // Enable context summarization feature
@@ -387,7 +438,15 @@ func NewLLMAgentWrapperWithTrace(ctx context.Context, config LLMAgentConfig, tra
 	if logger == nil {
 		logger = loggerv2.NewDefault()
 	}
-	logger.Info(fmt.Sprintf("NewLLMAgentWrapper received config: %+v", config))
+	// Never format the full config here: CodingAgentSecretEnvironment contains
+	// plaintext SECRET_* values for the native child process. Logging the struct
+	// with %+v would disclose those values to the server debug log.
+	secretNames := make([]string, 0, len(config.CodingAgentSecretEnvironment))
+	for name := range config.CodingAgentSecretEnvironment {
+		secretNames = append(secretNames, name)
+	}
+	sort.Strings(secretNames)
+	logger.Info(fmt.Sprintf("NewLLMAgentWrapper config: name=%s provider=%s model=%s code_execution=%t coding_agent_tools=%s approvals=%s secret_names=%v session=%s", config.Name, config.Provider, config.ModelID, config.UseCodeExecutionMode, config.CodingAgentToolsMode, config.CodingAgentApprovalsMode, secretNames, config.SessionID))
 	if providerUsesNativeContextManagement(config.Provider) {
 		if config.EnableContextSummarization {
 			logger.Info(fmt.Sprintf("📝 Context summarization disabled for %s - CLI provider manages context natively", config.Provider))
@@ -448,6 +507,7 @@ func NewLLMAgentWrapperWithTrace(ctx context.Context, config LLMAgentConfig, tra
 		},
 		tracer: tracer, traceID: traceID, logger: logger,
 		runtime: runtime, definition: definition,
+		admitTool: config.AdmitTool,
 	}
 	if mainTraceID == "" {
 		logger.Info(fmt.Sprintf("Created agent trace for conversation: %s", traceID))
@@ -487,7 +547,6 @@ func (w *LLMAgentWrapper) InvokeWithHistory(ctx context.Context, messages []llmt
 		return "", errors.New("agent is closed")
 	}
 	runtimeSession := w.session
-	toolPolicy := mcpagent.ToolPolicy{AllowedTools: append([]string(nil), w.toolPolicy.AllowedTools...)}
 	// Use the passed messages directly, don't overwrite internal history
 	w.mu.Unlock()
 
@@ -543,7 +602,7 @@ func (w *LLMAgentWrapper) InvokeWithHistory(ctx context.Context, messages []llmt
 	if runtimeSession == nil {
 		return "", errors.New("agent session is not initialized")
 	}
-	result, err := runtimeSession.Run(timeoutCtx, mcpagent.Turn{History: messages, ToolPolicy: toolPolicy})
+	result, err := runtimeSession.Run(timeoutCtx, mcpagent.Turn{History: messages})
 	response := result.Text
 	updatedMessages := result.History
 	duration := time.Since(startTime)
@@ -653,12 +712,6 @@ func (w *LLMAgentWrapper) AddObserver(observer mcpagent.AgentEventListener) erro
 	return nil
 }
 
-func (w *LLMAgentWrapper) SetToolPolicy(toolNames []string) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.toolPolicy = mcpagent.ToolPolicy{AllowedTools: append([]string(nil), toolNames...)}
-}
-
 // SetCodingAgentWorkingDir updates construction-time runtime state before the
 // immutable Agent is finalized. It deliberately does not mutate a live Agent.
 func (w *LLMAgentWrapper) SetCodingAgentWorkingDir(dir string) error {
@@ -697,6 +750,12 @@ func (w *LLMAgentWrapper) RegisterCustomToolWithTimeout(name, description string
 	defer w.mu.Unlock()
 	if err := w.ensureDefinitionMutable(); err != nil {
 		return err
+	}
+	// Registration admission. Declining is not an error: the caller registered
+	// a tool this agent's profile does not include, which is a policy outcome,
+	// not a failure. Callers treat a returned error as fatal to the session.
+	if w.admitTool != nil && !w.admitTool(name) {
+		return nil
 	}
 	tool := mcpagent.ToolDefinition{
 		Name: name, Description: description, InputSchema: parameters,
@@ -1086,9 +1145,11 @@ func (w *LLMAgentWrapper) StreamWithEvents(ctx context.Context, prompt string) (
 		if w.config.SessionID != "" {
 			unregisterHTTPToolHook = toolcalllog.RegisterHook(w.config.SessionID, toolcalllog.Hook{
 				OnStart: func(tc toolcalllog.StartedCall) {
-					if w.agent == nil {
-						return
-					}
+					// The HTTP bridge owns the authoritative arguments for coding
+					// agents. Provider stream events can have empty ToolArgs even
+					// though the command is about to run. Emitting through the tracer
+					// does not require the in-memory Agent pointer, which may be
+					// swapped during native resume; do not discard this detail.
 					ev := events.NewToolCallStartEventWithCorrelation(
 						1,
 						tc.Name,
@@ -1101,9 +1162,6 @@ func (w *LLMAgentWrapper) StreamWithEvents(ctx context.Context, prompt string) (
 					w.emitEvent(ev)
 				},
 				OnEnd: func(tc toolcalllog.CompletedCall) {
-					if w.agent == nil {
-						return
-					}
 					duration := time.Duration(0)
 					if !tc.StartedAt.IsZero() {
 						duration = tc.CompletedAt.Sub(tc.StartedAt)
@@ -1130,7 +1188,6 @@ func (w *LLMAgentWrapper) StreamWithEvents(ctx context.Context, prompt string) (
 		// as one result.
 		w.mu.RLock()
 		runtimeSession := w.session
-		toolPolicy := mcpagent.ToolPolicy{AllowedTools: append([]string(nil), w.toolPolicy.AllowedTools...)}
 		w.mu.RUnlock()
 		if runtimeSession == nil {
 			select {
@@ -1139,7 +1196,13 @@ func (w *LLMAgentWrapper) StreamWithEvents(ctx context.Context, prompt string) (
 			}
 			return
 		}
-		result, err := runtimeSession.Run(ctx, buildSessionTurn(prompt, messages, toolPolicy, streamingCallback))
+		// Turn.Input is required, not optional: Session owns the durable history
+		// after its first Run, so a later turn that passes only History is
+		// ignored and the first user message gets replayed — which broke every
+		// synthetic background-agent notification. ToolPolicy is empty here
+		// because this branch derives the tool surface at registration instead
+		// (6c4a8908), so there is no per-turn policy to thread.
+		result, err := runtimeSession.Run(ctx, buildSessionTurn(prompt, messages, mcpagent.ToolPolicy{}, streamingCallback))
 		response := result.Text
 		updatedMessages := result.History
 

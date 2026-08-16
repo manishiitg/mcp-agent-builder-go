@@ -476,11 +476,25 @@ func appendMessageSequenceFinalValidation(items []MessageSequenceItem, schema *V
 		Type:             "prevalidation",
 		Title:            "Final validation",
 		ValidationSchema: schema,
+		Synthetic:        true,
 	})
 }
 
 func (hcpo *StepBasedWorkflowOrchestrator) startMessageSequenceItemNotification(ctx context.Context, step *MessageSequencePlanStep, item MessageSequenceItem, stepIndex int, stepPath string, source string, started time.Time) (string, string, map[string]string, bool) {
 	if hcpo == nil || step == nil {
+		return "", "", nil, false
+	}
+	// The runtime's own final validation gate does not get an auto-notification.
+	// On the happy path it is a deterministic file/DB check in Go (RunPreValidation
+	// — no model turn, nothing the agent did not already report), yet announcing it
+	// cost a full synthetic LLM turn and put a second near-identical "step finished"
+	// message in the conversation for one step. A real failure is not lost: it
+	// propagates out of executeMessageSequenceItem, fails the sequence, and is
+	// reported by the step's own completion notification with the validation errors
+	// in its summary — and emitPreValidationCompletedEvent still feeds the UI the
+	// gate result either way. Author-declared prevalidation items keep their
+	// notifications; only the appended gate is silent.
+	if item.Synthetic {
 		return "", "", nil, false
 	}
 	// Fail loud, not silent: a nil notifier means this execution path forgot to

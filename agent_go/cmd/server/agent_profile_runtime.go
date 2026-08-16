@@ -1,0 +1,370 @@
+package server
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"path/filepath"
+	"strings"
+	"time"
+
+	internalevents "github.com/manishiitg/coding-agent-loop/agent_go/internal/events"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/agentprofiles"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator"
+	unifiedevents "github.com/manishiitg/mcpagent/events"
+	"github.com/manishiitg/mcpagent/llm"
+)
+
+type resolvedAgentProfile struct {
+	Definition agentprofiles.Profile
+	Prompt     string
+	// APIKeys carries the project-scoped credential this resolver loaded from the
+	// encrypted per-user/workspace store. It is returned on the resolver's own
+	// result rather than handed back through req.LLMConfig so the query path can
+	// never take a credential from the request body: LLMConfig is deserialized
+	// from client JSON, and every field of ProviderAPIKeys except
+	// ClaudeCodeOAuthToken is JSON-visible. nil when no profile is bound.
+	APIKeys *llm.ProviderAPIKeys
+}
+
+// cleanAgentProfileWorkspace validates the client-supplied selected_folder for
+// a profile-backed turn. It is the authorization gate for that path: every
+// agentProfileRuntimeWorkspace() call in the query path runs only after a
+// profile resolved successfully, so rejecting here keeps an unauthorized path
+// from ever reaching a folder guard or CLI working directory.
+//
+// Blocking traversal is not sufficient on its own. agentProfileRuntimeWorkspace
+// only re-scopes paths that start with "Chats" into the caller's own
+// _users/<id>/Chats space and returns anything else verbatim, so an explicit
+// "_users/<someone-else>/..." never gets rewritten and would be handed to the
+// agent as its read/write root. userID is therefore required, and a foreign
+// _users/ prefix is refused rather than silently rewritten -- a caller aiming
+// at another user's workspace is not a path to normalize, it is a request to
+// deny.
+func cleanAgentProfileWorkspace(raw, userID string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", fmt.Errorf("selected_folder is required when agent_profile_id is set")
+	}
+	if filepath.IsAbs(raw) {
+		return "", fmt.Errorf("selected_folder must be workspace-relative")
+	}
+	clean := filepath.ToSlash(filepath.Clean(filepath.FromSlash(raw)))
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
+		return "", fmt.Errorf("selected_folder must stay inside the workspace")
+	}
+	if clean == "_users" || strings.HasPrefix(clean, "_users/") {
+		owner := strings.TrimPrefix(clean, "_users")
+		owner = strings.TrimPrefix(owner, "/")
+		if idx := strings.Index(owner, "/"); idx >= 0 {
+			owner = owner[:idx]
+		}
+		if owner == "" || owner != sanitizeUserIDForPath(userID) {
+			return "", fmt.Errorf("selected_folder must stay inside your own workspace")
+		}
+	}
+	return clean, nil
+}
+
+func appendUniqueStrings(current []string, additions ...string) []string {
+	seen := make(map[string]struct{}, len(current)+len(additions))
+	out := make([]string, 0, len(current)+len(additions))
+	for _, values := range [][]string{current, additions} {
+		for _, value := range values {
+			value = strings.TrimSpace(value)
+			if value == "" {
+				continue
+			}
+			if _, exists := seen[value]; exists {
+				continue
+			}
+			seen[value] = struct{}{}
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func agentProfileRuntimeWorkspace(userID, workspacePath string) string {
+	workspacePath = filepath.ToSlash(filepath.Clean(filepath.FromSlash(workspacePath)))
+	if workspacePath == "Chats" || strings.HasPrefix(workspacePath, "Chats/") {
+		suffix := strings.TrimPrefix(strings.TrimPrefix(workspacePath, "Chats"), "/")
+		return filepath.ToSlash(filepath.Join(perUserChatsFolderFor(userID), suffix))
+	}
+	return workspacePath
+}
+
+func resolveProfileRuntimeModel(runtime agentprofiles.RuntimePolicy, requestedProvider, requestedModelID string) (string, string) {
+	provider, modelID := strings.TrimSpace(runtime.Provider), strings.TrimSpace(runtime.ModelID)
+	for _, option := range runtime.ProviderOptions {
+		if option.Default {
+			provider, modelID = strings.TrimSpace(option.Provider), strings.TrimSpace(option.ModelID)
+			break
+		}
+	}
+	requestedProvider = strings.TrimSpace(requestedProvider)
+	requestedModelID = strings.TrimSpace(requestedModelID)
+	for _, option := range runtime.ProviderOptions {
+		if strings.EqualFold(requestedProvider, strings.TrimSpace(option.Provider)) &&
+			strings.EqualFold(requestedModelID, strings.TrimSpace(option.ModelID)) {
+			return strings.TrimSpace(option.Provider), strings.TrimSpace(option.ModelID)
+		}
+	}
+	return provider, modelID
+}
+
+// lookupAgentProfileDefinition returns the profile a request is bound to
+// WITHOUT running its runtime initializer and without mutating the request.
+//
+// resolveAgentProfileForQuery is not a resolver: it calls
+// agentProfiles.Initialize, which for a product like Video Studio seeds the
+// workspace, writes a plan refresh, initializes the workflow DB, and runs
+// productdeps.Ensure (which can shell out to `npx skills add`). It also rewrites
+// the request's provider, model, skills, and secrets. That is correct once per
+// turn and wrong for a caller that only needs to read the declared surface —
+// delegation ran the whole initializer again for every sub-agent.
+//
+// Use this wherever the profile is being consulted rather than entered. It
+// keeps the same authorization boundary: Resolve is what enforces ownership of
+// a non-built-in profile.
+func (api *StreamingAPI) lookupAgentProfileDefinition(req *QueryRequest, userID string) (*resolvedAgentProfile, error) {
+	profileID := strings.TrimSpace(req.AgentProfileID)
+	if profileID == "" {
+		return nil, nil
+	}
+	if api.agentProfiles == nil {
+		return nil, fmt.Errorf("agent profiles are unavailable")
+	}
+	profile, err := api.agentProfiles.Resolve(profileID, req.AgentProfileVersion, userID)
+	if err != nil {
+		return nil, err
+	}
+	return &resolvedAgentProfile{Definition: profile}, nil
+}
+
+func (api *StreamingAPI) resolveAgentProfileForQuery(ctx context.Context, req *QueryRequest, userID, sessionID string) (*resolvedAgentProfile, error) {
+	profileID := strings.TrimSpace(req.AgentProfileID)
+	if profileID == "" {
+		if req.AgentProfileVersion != 0 || strings.TrimSpace(req.AgentProfileContext.ProjectTitle) != "" || strings.TrimSpace(req.AgentProfileContext.WorkspaceDescription) != "" {
+			return nil, fmt.Errorf("agent_profile_id is required when agent profile fields are provided")
+		}
+		return nil, nil
+	}
+	if api.agentProfiles == nil {
+		return nil, fmt.Errorf("agent profiles are unavailable")
+	}
+	if req.AgentMode != "multi-agent" {
+		return nil, fmt.Errorf("agent profiles currently require agent_mode=multi-agent")
+	}
+	workspacePath, err := cleanAgentProfileWorkspace(req.SelectedFolder, userID)
+	if err != nil {
+		return nil, err
+	}
+	req.SelectedFolder = workspacePath
+
+	profile, err := api.agentProfiles.Resolve(profileID, req.AgentProfileVersion, userID)
+	if err != nil {
+		return nil, err
+	}
+	promptContext := req.AgentProfileContext
+	promptContext.ProjectTitle = strings.TrimSpace(promptContext.ProjectTitle)
+	if promptContext.ProjectTitle == "" {
+		return nil, fmt.Errorf("agent_profile_context.project_title is required")
+	}
+	if strings.TrimSpace(promptContext.LocalDateTime) == "" {
+		now := time.Now()
+		_, offsetSeconds := now.Zone()
+		offsetSign := "+"
+		if offsetSeconds < 0 {
+			offsetSign = "-"
+			offsetSeconds = -offsetSeconds
+		}
+		promptContext.LocalDateTime = fmt.Sprintf("%s (UTC%s%02d:%02d)", now.Format("Monday, 2 January 2006 at 3:04 PM MST"), offsetSign, offsetSeconds/3600, (offsetSeconds%3600)/60)
+	}
+	rendered, err := agentprofiles.RenderPrompt(profile, promptContext)
+	if err != nil {
+		return nil, err
+	}
+	if err := api.agentProfiles.Initialize(ctx, profile.ID, agentprofiles.RuntimeContext{
+		UserID: userID, SessionID: sessionID, WorkspacePath: workspacePath,
+	}); err != nil {
+		return nil, fmt.Errorf("initialize agent profile %q: %w", profile.ID, err)
+	}
+	req.AgentProfileID = profile.ID
+	req.AgentProfileVersion = profile.Version
+	req.AgentProfileContext = promptContext
+	req.SelectedSkills = appendUniqueStrings(req.SelectedSkills, profile.Skills...)
+	if profile.Runtime.Capabilities.Secrets == agentprofiles.CapabilityDisabled {
+		// Product profiles may explicitly opt out of the shared secret runtime.
+		// Clear both user and global selections after saved chat configuration has
+		// been applied, so a profile cannot inherit credentials accidentally.
+		req.DecryptedSecrets = nil
+		noGlobalSecrets := []string{}
+		req.SelectedGlobalSecrets = &noGlobalSecrets
+	} else if api.chatStore != nil && userID != "" {
+		// A product project owns its workflow-scoped secrets. Attach their names
+		// automatically for every direct-chat turn so native coding-agent tools
+		// receive SECRET_<NAME> without the model ever seeing a value. User-wide
+		// secrets remain opt-in through the existing selected-secret mechanism;
+		// a project secret with the same name deliberately resolves to the
+		// project value.
+		stored, secretErr := api.chatStore.ListWorkflowSecrets(ctx, userID, workspacePath)
+		if secretErr != nil {
+			log.Printf("[SECRETS] Failed to list product workspace secrets for %s (%s): %v", userID, workspacePath, secretErr)
+		} else {
+			selectedNames := make([]string, 0, len(req.DecryptedSecrets)+len(stored))
+			for _, secret := range req.DecryptedSecrets {
+				selectedNames = appendUniqueStrings(selectedNames, secret.Name)
+			}
+			for _, secret := range stored {
+				selectedNames = appendUniqueStrings(selectedNames, secret.Name)
+			}
+			if len(selectedNames) > 0 {
+				req.DecryptedSecrets = api.loadSelectedSecrets(ctx, userID, workspacePath, selectedNames)
+			}
+		}
+	}
+	browserRequirement := profile.Runtime.Capabilities.Browser
+	if browserRequirement == agentprofiles.CapabilityRequired || browserRequirement == agentprofiles.CapabilityPreferred || browserRequirement == agentprofiles.CapabilityOptional {
+		// Agent profiles declare browser capability once. The generic chat
+		// runtime then registers AgentWorks' managed agent_browser tool and
+		// attaches its shared built-in skill; product code must not duplicate
+		// either implementation.
+		browserEnabled := true
+		req.EnableBrowserAccess = &browserEnabled
+		if strings.TrimSpace(req.BrowserMode) == "" || strings.EqualFold(strings.TrimSpace(req.BrowserMode), "none") {
+			req.BrowserMode = "auto"
+		}
+	}
+	var resolvedKeys *llm.ProviderAPIKeys
+	if provider, modelID := resolveProfileRuntimeModel(profile.Runtime, req.Provider, req.ModelID); provider != "" && modelID != "" {
+		// A profile-owned model binding is authoritative over the user's global
+		// AgentWorks chat selection, while still using the shared provider adapter,
+		// credentials, session registry, and streaming lifecycle.
+		req.Provider = provider
+		req.ModelID = modelID
+		req.LLMConfig = &orchestrator.LLMConfig{Primary: orchestrator.LLMModel{Provider: provider, ModelID: modelID}}
+		req.LLMConfigSource = llmConfigSourceAgentProfile
+		if api.chatStore != nil {
+			// Product workspaces use the same encrypted per-project credential store
+			// as AgentWorks workflows (Claude Code's setup token, Cursor's API key).
+			// It stays scoped to this user/workspace and is injected only into the
+			// provider runtime, never into a prompt or tool. resolveEffectiveAPIKeys
+			// always checks both supported providers and is a no-op for whichever
+			// one isn't in use, so this call needs no gate on the resolved provider
+			// name — that gate existed before and silently excluded cursor-cli.
+			keys, credentialErr := api.resolveEffectiveAPIKeys(ctx, userID, workspacePath, nil)
+			if credentialErr != nil {
+				return nil, fmt.Errorf("load agent profile %s credential: %w", provider, credentialErr)
+			}
+			// Returned on resolvedAgentProfile, NOT written back onto req.LLMConfig.
+			// The query path reads the resolver's result, so a credential can never
+			// originate from the request body.
+			resolvedKeys = keys
+		}
+	}
+	if strings.TrimSpace(req.SessionTitle) == "" {
+		req.SessionTitle = promptContext.ProjectTitle
+	}
+	return &resolvedAgentProfile{Definition: profile, Prompt: rendered, APIKeys: resolvedKeys}, nil
+}
+
+func profileRuntimeEventType(event any) string {
+	if typed, ok := event.(unifiedevents.EventData); ok {
+		if eventType := strings.TrimSpace(string(typed.GetEventType())); eventType != "" {
+			return eventType
+		}
+	}
+	if payload, ok := event.(map[string]interface{}); ok {
+		if eventType, _ := payload["type"].(string); strings.TrimSpace(eventType) != "" {
+			return strings.TrimSpace(eventType)
+		}
+	}
+	return "agent_profile_event"
+}
+
+// emitAgentProfileEvent records an agent-profile-emitted event for this
+// session's stream.
+//
+// event should be a value implementing unifiedevents.EventData -- a real
+// struct from a schema-gen-registered event package (e.g.
+// orchestrator_events.PresentationUpdatedEvent), not a hand-built
+// map[string]interface{}. A typed value is used directly as the
+// AgentEvent.Data payload, so it serializes at the same nesting depth as
+// every other typed event (tool_call_end, llm_generation_end, ...) and gets
+// a real generated TypeScript interface via cmd/schema-gen instead of an
+// `unknown`-typed blob the frontend has to defensively unwrap.
+//
+// The map[string]interface{} path still exists underneath for a caller that
+// has no registered event type yet, but it comes at a real cost: schema-gen
+// has no way to generate a shape for it, so consumers get no compile-time
+// guarantee about what is inside, and it wraps one JSON level deeper
+// (GenericEventData's own "data" field) than a typed event does. Prefer
+// registering a real type (see docs/design/agent_tool_surface_single_source.md
+// for why "declared once, consumed everywhere" beats "reconstructed per
+// consumer").
+func (api *StreamingAPI) emitAgentProfileEvent(sessionID string, event any) {
+	if api.eventStore == nil {
+		return
+	}
+	eventType := profileRuntimeEventType(event)
+	now := time.Now()
+
+	var data unifiedevents.EventData
+	if typed, ok := event.(unifiedevents.EventData); ok {
+		data = typed
+	} else {
+		payload := map[string]interface{}{"event": event}
+		if untyped, ok := event.(map[string]interface{}); ok {
+			payload = untyped
+		}
+		data = &unifiedevents.GenericEventData{Data: payload}
+	}
+
+	api.eventStore.AddEvent(sessionID, internalevents.Event{
+		ID:        fmt.Sprintf("profile_%s_%d", strings.ReplaceAll(eventType, ".", "_"), now.UnixNano()),
+		Type:      eventType,
+		Timestamp: now,
+		SessionID: sessionID,
+		Data: &unifiedevents.AgentEvent{
+			Type: unifiedevents.EventType(eventType), Timestamp: now,
+			Data: data,
+		},
+	})
+}
+
+func (api *StreamingAPI) registerAgentProfileTools(registrar definitionToolRegistrar, resolved *resolvedAgentProfile, userID, sessionID, workspacePath string) error {
+	if resolved == nil {
+		return nil
+	}
+	for _, binding := range resolved.Definition.Tools {
+		tool, err := api.agentProfiles.BuildTool(binding, agentprofiles.ToolRuntimeContext{
+			UserID: userID, SessionID: sessionID, WorkspacePath: workspacePath,
+			Emit:         func(event any) { api.emitAgentProfileEvent(sessionID, event) },
+			Presentation: binding.Presentation,
+		})
+		if err != nil {
+			return err
+		}
+		category := strings.TrimSpace(tool.Category)
+		if category == "" {
+			category = "agent_profile_tools"
+		}
+		if err := registrar.RegisterCustomTool(tool.Name, tool.Description, tool.Parameters, tool.Execute, category); err != nil {
+			return fmt.Errorf("register profile tool %q: %w", tool.Name, err)
+		}
+	}
+	return nil
+}
+
+func profileDisablesVirtualTool(profile *resolvedAgentProfile, toolName string) bool {
+	if profile == nil {
+		return false
+	}
+	for _, disabled := range profile.Definition.ToolPolicy.Disabled {
+		if strings.EqualFold(strings.TrimSpace(disabled), strings.TrimSpace(toolName)) {
+			return true
+		}
+	}
+	return false
+}

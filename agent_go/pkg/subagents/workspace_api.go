@@ -46,12 +46,16 @@ type DocumentContentResponse struct {
 	Success bool `json:"success"`
 	Data    struct {
 		Content      string `json:"content"`
+		Filepath     string `json:"filepath,omitempty"`
 		IsBinary     bool   `json:"is_binary,omitempty"`
 		Size         int64  `json:"size,omitempty"`
 		MimeType     string `json:"mime_type,omitempty"`
 		LastModified string `json:"last_modified"`
 	} `json:"data"`
 	Message string `json:"message"`
+	// See the identical field in pkg/skills: the workspace API reports a
+	// missing document as HTTP 200 with success:true and the reason only here.
+	Error string `json:"error,omitempty"`
 }
 
 // ListFiles lists files in a folder via workspace API
@@ -124,6 +128,12 @@ func (c *WorkspaceAPIClient) ReadFile(filePath string) (string, error) {
 
 	if !result.Success {
 		return "", fmt.Errorf("API returned error: %s", result.Message)
+	}
+	// A missing document answers 200 + success:true, so without this the empty
+	// Content flows on and ParseSubagentFile reports the file as malformed
+	// frontmatter — the same false diagnosis this pattern produced for skills.
+	if strings.TrimSpace(result.Error) != "" && strings.TrimSpace(result.Data.Filepath) == "" {
+		return "", fmt.Errorf("file not found: %s", filePath)
 	}
 	if result.Data.IsBinary {
 		return "", fmt.Errorf("cannot read binary file as text: %s", filePath)

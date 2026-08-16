@@ -52,7 +52,7 @@ type newCDPTabRequest struct {
 }
 
 func sharedCDPSessionName(port int) string {
-	return fmt.Sprintf("shared-cdp-%d", port)
+	return common.PrefixBrowserSessionID(fmt.Sprintf("shared-cdp-%d", port))
 }
 
 func sharedCDPLock(port int) *sync.Mutex {
@@ -734,6 +734,15 @@ func formatCDPTabIdentity(prefix string, tab cdpTabInfo) string {
 func (e *Executor) reuseCDPTabForNew(ctx context.Context, session, cdpURL string, opts *ExecuteOptions, port int, ownerID string, request newCDPTabRequest) (string, bool, error) {
 	output, err := e.listCDPTabs(ctx, session, cdpURL, executeOptionsWithTimeout(opts, cdpTabListTimeout))
 	if err != nil {
+		// The wrapped error below is what reaches the agent, and it has misled
+		// diagnosis before: the CLI's own combined stdout+stderr can contain an
+		// unrelated warning (e.g. a config-file notice) ahead of the actual
+		// exit reason, so a reader stops at the first line rather than the one
+		// that matters. Log the full context server-side so a recurrence can be
+		// diagnosed from what actually happened -- session, port, and CDP
+		// endpoint -- rather than from whichever line of CLI output looked most
+		// like a cause.
+		log.Printf("[BROWSER] CDP tab list refresh failed before creating label %q for %q: session=%s port=%d cdpURL=%s err=%v", request.Label, request.URL, session, port, cdpURL, err)
 		return "", false, fmt.Errorf("CDP_TAB_REUSE_CHECK_UNAVAILABLE: cannot safely create label %q for %q because the real tab list could not be refreshed: %w", request.Label, request.URL, err)
 	}
 	tabs, err := parseCDPTabs(output)

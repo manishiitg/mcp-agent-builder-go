@@ -66,6 +66,17 @@ jobs:
         with:
           node-version: 20
 
+      # learning-app deliberately resolves shared source from ../src and
+      # ../shared, and its vite config states that dependencies come from
+      # ../node_modules. Node resolution walks UPWARD from the importing file,
+      # so frontend/shared/chat/ChatRenderer.tsx looks in frontend/node_modules
+      # and never in frontend/learning-app/node_modules -- installing only in
+      # learning-app left react-markdown unresolvable and failed this build,
+      # while local builds passed because frontend/node_modules already exists.
+      - name: Install the AgentWorks frontend dependencies that shared source resolves against
+        working-directory: frontend
+        run: npm ci
+
       - name: Build the frontend
         working-directory: frontend/learning-app
         run: |

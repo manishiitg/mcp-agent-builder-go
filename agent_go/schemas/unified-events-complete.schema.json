@@ -2668,6 +2668,61 @@
       },
       "type": "object"
     },
+    "PresentationUpdatedEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "component": {
+          "type": "string"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "hierarchy_level": {
+          "type": "integer"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "payload": {
+          "type": "object"
+        },
+        "presentation_id": {
+          "type": "string"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "workspace_path": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "RequestHumanFeedbackEvent": {
       "additionalProperties": false,
       "properties": {
@@ -4184,6 +4239,9 @@
     },
     "pre_validation_completed": {
       "$ref": "#/$defs/PreValidationCompletedEvent"
+    },
+    "presentation_updated": {
+      "$ref": "#/$defs/PresentationUpdatedEvent"
     },
     "request_human_feedback": {
       "$ref": "#/$defs/RequestHumanFeedbackEvent"

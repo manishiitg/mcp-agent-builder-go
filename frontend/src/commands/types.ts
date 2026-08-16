@@ -32,6 +32,11 @@ export type WorkshopMode = 'workshop' | 'run'
 
 export interface CommandContext {
   beforeSlash: string
+  // Set for a specific product's tab (e.g. 'video-studio'); unset for the
+  // base Chief of Staff multi-agent chat -- the same distinction the rest of
+  // the codebase already uses (`!tab.metadata?.agentProfileId`). Lets a
+  // command opt out of surfaces it makes no sense in.
+  agentProfileId?: string
   activeTabId: string
   tabSessionId: string | null
   tabConfig: ChatTabConfig | undefined
@@ -60,10 +65,20 @@ export interface CommandDefinition {
   description: string
   icon: ReactNode
   modes?: ModeCategory[]
+  // True for a command that assumes Chief of Staff concepts (org goals, its
+  // own notification config, building a new workflow) rather than anything
+  // a specific product's agent can act on -- e.g. Video Studio has no
+  // create_workflow or org-Pulse tools, so offering the command there is a
+  // dead end at best. Excluded whenever CommandContext.agentProfileId is set.
+  chiefOfStaffOnly?: boolean
   requiredWorkflowMode?: 'plan' | 'eval' | 'output'
   requiredWorkshopMode?: WorkshopMode | WorkshopMode[]
   validate?: (ctx: CommandContext) => string | null
   hidden?: boolean
-  source: 'builtin' | 'user'
+  // 'product' commands ship with the active product (declared in its
+  // product.yaml) rather than being hardcoded platform builtins or the
+  // user's own markdown -- they are not user-editable, which the command
+  // dialog keys off when deciding whether to offer edit/delete.
+  source: 'builtin' | 'user' | 'product'
   execute: (ctx: CommandContext) => void
 }

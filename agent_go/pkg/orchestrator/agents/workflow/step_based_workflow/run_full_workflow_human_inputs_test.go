@@ -107,3 +107,52 @@ func TestExecutionContextForStepPreservesExplicitSingleStepInput(t *testing.T) {
 		t.Fatalf("explicit input was overwritten: %q", got.WorkshopHumanInput)
 	}
 }
+
+// A predefined route's sub_agent_step has a real, plan-visible ID — the exact
+// value shown in plan.json's predefined_routes[].sub_agent_step.id — but
+// unknownWorkflowStepInputIDs only ever walked the top-level steps array. So
+// run_full_workflow(human_inputs={"<route id>": "..."}) was rejected outright
+// with "human_inputs contains unknown step ID(s)", even though the ID was
+// real: the check never looked past the orchestrator that owns the route.
+func TestUnknownWorkflowStepInputIDsAcceptsPredefinedRouteIDs(t *testing.T) {
+	steps := []PlanStepInterface{
+		&MessageSequencePlanStep{CommonStepFields: CommonStepFields{ID: "top-level-step"}},
+		&TodoTaskPlanStep{
+			CommonStepFields: CommonStepFields{ID: "orchestrator-step"},
+			PredefinedRoutes: []PlanOrchestrationRoute{
+				{
+					RouteID: "route-a",
+					SubAgentStep: &MessageSequencePlanStep{
+						CommonStepFields: CommonStepFields{ID: "route-a"},
+					},
+				},
+				{
+					RouteID: "route-b",
+					// A route nested inside a route: the same recursion that
+					// already handles this for step-ID uniqueness must apply here.
+					SubAgentStep: &TodoTaskPlanStep{
+						CommonStepFields: CommonStepFields{ID: "nested-orchestrator"},
+						PredefinedRoutes: []PlanOrchestrationRoute{
+							{RouteID: "route-c", SubAgentStep: &MessageSequencePlanStep{
+								CommonStepFields: CommonStepFields{ID: "route-c"},
+							}},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	got := unknownWorkflowStepInputIDs(steps, map[string]string{
+		"top-level-step":      "a",
+		"orchestrator-step":   "b", // the todo_task's own ID
+		"route-a":             "c", // a route ID
+		"nested-orchestrator": "d",
+		"route-c":             "e", // a route nested two levels deep
+		"genuinely-missing":   "f",
+	})
+	want := []string{"genuinely-missing"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unknown IDs = %#v, want %#v (a real route ID must not be rejected as unknown)", got, want)
+	}
+}

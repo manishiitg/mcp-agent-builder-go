@@ -12,6 +12,7 @@ interface CommandSelectionDialogProps {
   position: { bottom: number; left: number }
   modeCategory?: ModeCategory
   workshopMode?: WorkshopMode
+  agentProfileId?: string
   onManageCommands?: () => void
   onEditCommand?: (command: CommandDefinition) => void
   onDeleteCommand?: (command: CommandDefinition) => void
@@ -25,6 +26,7 @@ export const CommandSelectionDialog: React.FC<CommandSelectionDialogProps> = ({
   position,
   modeCategory,
   workshopMode,
+  agentProfileId,
   onManageCommands,
   onEditCommand,
   onDeleteCommand
@@ -69,7 +71,7 @@ export const CommandSelectionDialog: React.FC<CommandSelectionDialogProps> = ({
 
   // Filter commands based on search query and current mode
   useEffect(() => {
-    const allCommands = getCommands(modeCategory, workshopMode)
+    const allCommands = getCommands(modeCategory, workshopMode, agentProfileId)
 
     if (!searchQuery.trim()) {
       setFilteredCommands(allCommands)

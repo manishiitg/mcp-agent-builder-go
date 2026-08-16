@@ -3,19 +3,81 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
-	"os"
-	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/manishiitg/mcpagent/llm"
 	llmproviders "github.com/manishiitg/multi-llm-provider-go"
+
+	"github.com/manishiitg/coding-agent-loop/agent_go/internal/claudeauth"
+	"github.com/manishiitg/coding-agent-loop/agent_go/internal/cursorauth"
+	"github.com/manishiitg/coding-agent-loop/agent_go/internal/geminiauth"
 )
 
-const claudeCodeProviderID = "claude-code"
+const (
+	claudeCodeProviderID = "claude-code"
+	cursorCLIProviderID  = "cursor-cli"
+	// piCLIProviderID scopes a workflow-level Gemini key for Video Studio's
+	// Pi CLI option, which is pinned to google/gemini-3.7-flash -- not a
+	// general per-sub-provider Pi CLI credential store. If Video Studio ever
+	// offers a Pi CLI model routed through a different sub-provider, this
+	// needs its own scoped credential (and its own ID) rather than widening
+	// what "google" means here.
+	piCLIProviderID = "pi-cli"
+)
+
+// workflowCredentialProvider carries the handful of things that differ between
+// one coding-CLI provider's stored credential and another's. Everything else —
+// encryption, per-user/per-workflow scoping, the busy-session guard, the masked
+// preview — is identical, and keeping it identical is the point: the Claude
+// Code path is the one that has been through review, so Cursor inherits it
+// rather than growing a parallel implementation that can drift.
+type workflowCredentialProvider struct {
+	id string
+	// label names the credential in user-facing errors ("Claude Code token").
+	label string
+	// validate proves the credential works before it is stored. Skipping it
+	// would turn a typo into a failed turn much later, with no hint why.
+	validate func(context.Context, string) error
+	// closeIdleSessions drops idle CLI sessions still holding the previous
+	// credential, so the next turn picks up the new one.
+	closeIdleSessions func(api *StreamingAPI, userID, workflowPath, reason string)
+}
+
+func claudeCodeCredentialProvider() workflowCredentialProvider {
+	return workflowCredentialProvider{
+		id:       claudeCodeProviderID,
+		label:    "Claude Code token",
+		validate: validateClaudeCodeOAuthToken,
+		closeIdleSessions: func(api *StreamingAPI, userID, workflowPath, reason string) {
+			api.closeIdleWorkflowClaudeCodeSessions(userID, workflowPath, reason)
+		},
+	}
+}
+
+func cursorCLICredentialProvider() workflowCredentialProvider {
+	return workflowCredentialProvider{
+		id:       cursorCLIProviderID,
+		label:    "Cursor API key",
+		validate: validateCursorCLIAPIKey,
+		closeIdleSessions: func(api *StreamingAPI, userID, workflowPath, reason string) {
+			api.closeIdleWorkflowCursorCLISessions(userID, workflowPath, reason)
+		},
+	}
+}
+
+func piCLICredentialProvider() workflowCredentialProvider {
+	return workflowCredentialProvider{
+		id:       piCLIProviderID,
+		label:    "Pi CLI (Gemini) API key",
+		validate: validatePiCLIGeminiAPIKey,
+		closeIdleSessions: func(api *StreamingAPI, userID, workflowPath, reason string) {
+			api.closeIdleWorkflowPiCLISessions(userID, workflowPath, reason)
+		},
+	}
+}
 
 type workflowProviderCredentialRequest struct {
 	WorkspacePath  string `json:"workspace_path"`
@@ -45,13 +107,49 @@ func maskCredentialPreview(token string) string {
 }
 
 func (api *StreamingAPI) handleGetWorkflowClaudeCodeCredential(w http.ResponseWriter, r *http.Request) {
+	api.getWorkflowProviderCredential(w, r, claudeCodeCredentialProvider())
+}
+
+func (api *StreamingAPI) handleStoreWorkflowClaudeCodeCredential(w http.ResponseWriter, r *http.Request) {
+	api.storeWorkflowProviderCredential(w, r, claudeCodeCredentialProvider())
+}
+
+func (api *StreamingAPI) handleDeleteWorkflowClaudeCodeCredential(w http.ResponseWriter, r *http.Request) {
+	api.deleteWorkflowProviderCredential(w, r, claudeCodeCredentialProvider())
+}
+
+func (api *StreamingAPI) handleGetWorkflowCursorCLICredential(w http.ResponseWriter, r *http.Request) {
+	api.getWorkflowProviderCredential(w, r, cursorCLICredentialProvider())
+}
+
+func (api *StreamingAPI) handleStoreWorkflowCursorCLICredential(w http.ResponseWriter, r *http.Request) {
+	api.storeWorkflowProviderCredential(w, r, cursorCLICredentialProvider())
+}
+
+func (api *StreamingAPI) handleDeleteWorkflowCursorCLICredential(w http.ResponseWriter, r *http.Request) {
+	api.deleteWorkflowProviderCredential(w, r, cursorCLICredentialProvider())
+}
+
+func (api *StreamingAPI) handleGetWorkflowPiCLICredential(w http.ResponseWriter, r *http.Request) {
+	api.getWorkflowProviderCredential(w, r, piCLICredentialProvider())
+}
+
+func (api *StreamingAPI) handleStoreWorkflowPiCLICredential(w http.ResponseWriter, r *http.Request) {
+	api.storeWorkflowProviderCredential(w, r, piCLICredentialProvider())
+}
+
+func (api *StreamingAPI) handleDeleteWorkflowPiCLICredential(w http.ResponseWriter, r *http.Request) {
+	api.deleteWorkflowProviderCredential(w, r, piCLICredentialProvider())
+}
+
+func (api *StreamingAPI) getWorkflowProviderCredential(w http.ResponseWriter, r *http.Request, provider workflowCredentialProvider) {
 	workspacePath := strings.TrimSpace(r.URL.Query().Get("workspace_path"))
 	if workspacePath == "" {
 		http.Error(w, "workspace_path is required", http.StatusBadRequest)
 		return
 	}
 	userID := GetUserIDFromContext(r.Context())
-	credential, err := api.chatStore.GetWorkflowProviderCredential(r.Context(), userID, workspacePath, claudeCodeProviderID)
+	credential, err := api.chatStore.GetWorkflowProviderCredential(r.Context(), userID, workspacePath, provider.id)
 	if err != nil {
 		http.Error(w, "Failed to load workflow provider credential", http.StatusInternalServerError)
 		return
@@ -70,7 +168,7 @@ func (api *StreamingAPI) handleGetWorkflowClaudeCodeCredential(w http.ResponseWr
 	_ = json.NewEncoder(w).Encode(status)
 }
 
-func (api *StreamingAPI) handleStoreWorkflowClaudeCodeCredential(w http.ResponseWriter, r *http.Request) {
+func (api *StreamingAPI) storeWorkflowProviderCredential(w http.ResponseWriter, r *http.Request, provider workflowCredentialProvider) {
 	var req workflowProviderCredentialRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -85,7 +183,7 @@ func (api *StreamingAPI) handleStoreWorkflowClaudeCodeCredential(w http.Response
 
 	userID := GetUserIDFromContext(r.Context())
 	if api.workflowHasBusySession(userID, req.WorkspacePath) {
-		http.Error(w, "Stop the active workflow before changing its Claude Code token", http.StatusConflict)
+		http.Error(w, fmt.Sprintf("Stop the active workflow before changing its %s", provider.label), http.StatusConflict)
 		return
 	}
 	token, err := decryptSecretValue(req.EncryptedValue, userID)
@@ -93,20 +191,20 @@ func (api *StreamingAPI) handleStoreWorkflowClaudeCodeCredential(w http.Response
 		http.Error(w, "Invalid encrypted credential", http.StatusBadRequest)
 		return
 	}
-	if err := validateClaudeCodeOAuthToken(r.Context(), token); err != nil {
+	if err := provider.validate(r.Context(), token); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := api.chatStore.UpsertWorkflowProviderCredential(r.Context(), userID, req.WorkspacePath, claudeCodeProviderID, req.EncryptedValue); err != nil {
+	if err := api.chatStore.UpsertWorkflowProviderCredential(r.Context(), userID, req.WorkspacePath, provider.id, req.EncryptedValue); err != nil {
 		http.Error(w, "Failed to store workflow provider credential", http.StatusInternalServerError)
 		return
 	}
-	api.closeIdleWorkflowClaudeCodeSessions(userID, req.WorkspacePath, "workflow Claude Code token changed")
+	provider.closeIdleSessions(api, userID, req.WorkspacePath, fmt.Sprintf("workflow %s changed", provider.label))
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
 
-func (api *StreamingAPI) handleDeleteWorkflowClaudeCodeCredential(w http.ResponseWriter, r *http.Request) {
+func (api *StreamingAPI) deleteWorkflowProviderCredential(w http.ResponseWriter, r *http.Request, provider workflowCredentialProvider) {
 	workspacePath := strings.TrimSpace(r.URL.Query().Get("workspace_path"))
 	if workspacePath == "" {
 		http.Error(w, "workspace_path is required", http.StatusBadRequest)
@@ -114,88 +212,63 @@ func (api *StreamingAPI) handleDeleteWorkflowClaudeCodeCredential(w http.Respons
 	}
 	userID := GetUserIDFromContext(r.Context())
 	if api.workflowHasBusySession(userID, workspacePath) {
-		http.Error(w, "Stop the active workflow before removing its Claude Code token", http.StatusConflict)
+		http.Error(w, fmt.Sprintf("Stop the active workflow before removing its %s", provider.label), http.StatusConflict)
 		return
 	}
-	if err := api.chatStore.DeleteWorkflowProviderCredential(r.Context(), userID, workspacePath, claudeCodeProviderID); err != nil {
+	if err := api.chatStore.DeleteWorkflowProviderCredential(r.Context(), userID, workspacePath, provider.id); err != nil {
 		http.Error(w, "Failed to delete workflow provider credential", http.StatusInternalServerError)
 		return
 	}
-	api.closeIdleWorkflowClaudeCodeSessions(userID, workspacePath, "workflow Claude Code token removed")
+	provider.closeIdleSessions(api, userID, workspacePath, fmt.Sprintf("workflow %s removed", provider.label))
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
 
+// validateClaudeCodeOAuthToken defers to the shared checker so workflows and
+// Video Studio cannot drift apart on what counts as a valid token.
 func validateClaudeCodeOAuthToken(parent context.Context, token string) error {
-	token = strings.TrimSpace(token)
-	if token == "" {
-		return fmt.Errorf("Claude Code token is required")
-	}
-	configDir, err := os.MkdirTemp("", "claude-auth-check-*")
-	if err != nil {
-		return fmt.Errorf("could not prepare Claude Code credential check")
-	}
-	defer os.RemoveAll(configDir)
-
-	ctx, cancel := context.WithTimeout(parent, 15*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "claude", "auth", "status", "--json")
-	cmd.Env = claudeCredentialCheckEnv(os.Environ(), configDir, token)
-	output, err := cmd.Output()
-	if err != nil {
-		if errorsIsCommandNotFound(err) {
-			return fmt.Errorf("Claude Code CLI is not installed")
-		}
-		return fmt.Errorf("Claude Code did not accept the workflow token")
-	}
-	var status struct {
-		LoggedIn   bool   `json:"loggedIn"`
-		AuthMethod string `json:"authMethod"`
-	}
-	if err := json.Unmarshal(output, &status); err != nil {
-		return fmt.Errorf("Claude Code returned an unreadable authentication status")
-	}
-	if !status.LoggedIn || status.AuthMethod != "oauth_token" {
-		return fmt.Errorf("Claude Code did not recognize this as an OAuth token")
-	}
-	return nil
+	return claudeauth.ValidateOAuthToken(parent, token)
 }
 
-func claudeCredentialCheckEnv(base []string, configDir, token string) []string {
-	blocked := map[string]bool{
-		"ANTHROPIC_API_KEY":       true,
-		"ANTHROPIC_AUTH_TOKEN":    true,
-		"ANTHROPIC_BASE_URL":      true,
-		"CLAUDE_CODE_OAUTH_TOKEN": true,
-		"CLAUDE_CONFIG_DIR":       true,
-	}
-	out := make([]string, 0, len(base)+2)
-	for _, entry := range base {
-		key, _, _ := strings.Cut(entry, "=")
-		if blocked[key] {
-			continue
-		}
-		out = append(out, entry)
-	}
-	return append(out, "CLAUDE_CONFIG_DIR="+configDir, "CLAUDE_CODE_OAUTH_TOKEN="+token)
+// validateCursorCLIAPIKey mirrors validateClaudeCodeOAuthToken: Cursor has no
+// `setup-token` equivalent, so the pasted dashboard key is checked against the
+// CLI before it is stored.
+func validateCursorCLIAPIKey(parent context.Context, key string) error {
+	return cursorauth.ValidateAPIKey(parent, key)
 }
 
-func errorsIsCommandNotFound(err error) bool {
-	var execErr *exec.Error
-	return errors.As(err, &execErr)
+// validatePiCLIGeminiAPIKey checks the key directly against Google's Gemini
+// API rather than through the pi CLI binary: Video Studio's Pi CLI option is
+// pinned to google/gemini-3.7-flash, and this scoped credential is exactly
+// that Gemini key, so validating it does not need pi (or tmux) installed on
+// the backend the way the general Pi CLI runtime check does.
+func validatePiCLIGeminiAPIKey(parent context.Context, key string) error {
+	return geminiauth.ValidateAPIKey(parent, key)
 }
 
 func (api *StreamingAPI) loadWorkflowClaudeCodeOAuthToken(ctx context.Context, userID, workflowPath string) (*string, error) {
+	return api.loadWorkflowProviderSecret(ctx, userID, workflowPath, claudeCodeProviderID, "Claude Code")
+}
+
+func (api *StreamingAPI) loadWorkflowCursorCLIAPIKey(ctx context.Context, userID, workflowPath string) (*string, error) {
+	return api.loadWorkflowProviderSecret(ctx, userID, workflowPath, cursorCLIProviderID, "Cursor")
+}
+
+func (api *StreamingAPI) loadWorkflowPiCLIGeminiAPIKey(ctx context.Context, userID, workflowPath string) (*string, error) {
+	return api.loadWorkflowProviderSecret(ctx, userID, workflowPath, piCLIProviderID, "Pi CLI (Gemini)")
+}
+
+func (api *StreamingAPI) loadWorkflowProviderSecret(ctx context.Context, userID, workflowPath, providerID, label string) (*string, error) {
 	if strings.TrimSpace(userID) == "" || strings.TrimSpace(workflowPath) == "" {
 		return nil, nil
 	}
-	credential, err := api.chatStore.GetWorkflowProviderCredential(ctx, userID, workflowPath, claudeCodeProviderID)
+	credential, err := api.chatStore.GetWorkflowProviderCredential(ctx, userID, workflowPath, providerID)
 	if err != nil || credential == nil {
 		return nil, err
 	}
 	token, err := decryptSecretValue(credential.EncryptedValue, userID)
 	if err != nil {
-		return nil, fmt.Errorf("decrypt workflow Claude Code credential: %w", err)
+		return nil, fmt.Errorf("decrypt workflow %s credential: %w", label, err)
 	}
 	token = strings.TrimSpace(token)
 	if token == "" {
@@ -206,7 +279,8 @@ func (api *StreamingAPI) loadWorkflowClaudeCodeOAuthToken(ctx context.Context, u
 
 // workflowProviderAPIKeys clones the normal provider configuration and adds
 // private credentials for exactly one user/workflow. It is the only Builder
-// path allowed to populate ClaudeCodeOAuthToken.
+// path allowed to populate ClaudeCodeOAuthToken or a workflow-scoped CursorCLI
+// key.
 func (api *StreamingAPI) workflowProviderAPIKeys(ctx context.Context, userID, workflowPath string, base *llm.ProviderAPIKeys) (*llm.ProviderAPIKeys, error) {
 	keys := base.Clone()
 	if keys == nil {
@@ -221,7 +295,66 @@ func (api *StreamingAPI) workflowProviderAPIKeys(ctx context.Context, userID, wo
 		return keys, err
 	}
 	keys.ClaudeCodeOAuthToken = token
+
+	// Cursor differs from Claude Code in one way that matters here: the base
+	// keys may already carry a server-wide CURSOR_API_KEY. A workflow-scoped
+	// key overrides it, but its absence must leave the shared key intact —
+	// clearing it would break every workflow that relies on the server default.
+	cursorKey, cursorErr := api.loadWorkflowCursorCLIAPIKey(ctx, userID, workflowPath)
+	if cursorErr != nil {
+		// Fail closed for this provider only: an unreadable scoped key must not
+		// silently downgrade to the shared account.
+		keys.CursorCLI = nil
+		return keys, cursorErr
+	}
+	if cursorKey != nil {
+		keys.CursorCLI = cursorKey
+	}
+
+	// Pi CLI routes by sub-provider (see PiProviderKeys), but Video Studio's
+	// Pi CLI option is pinned to google/gemini-3.7-flash, so the only key a
+	// project-scoped override can mean here is the "google" entry. Fail
+	// closed on that one entry only, not the whole map -- an unrelated
+	// shared zai/minimax/etc. key has nothing to do with this lookup and
+	// must not be dropped because it failed.
+	piGeminiKey, piErr := api.loadWorkflowPiCLIGeminiAPIKey(ctx, userID, workflowPath)
+	if piErr != nil {
+		if keys.PiProviderKeys != nil {
+			delete(keys.PiProviderKeys, "google")
+		}
+		return keys, piErr
+	}
+	if piGeminiKey != nil {
+		if keys.PiProviderKeys == nil {
+			keys.PiProviderKeys = make(map[string]string, 1)
+		}
+		keys.PiProviderKeys["google"] = *piGeminiKey
+	}
 	return keys, nil
+}
+
+// resolveEffectiveAPIKeys is the single call every part of the codebase uses
+// to get a turn's effective provider keys: the environment/workspace-wide
+// base (computed fresh when base is nil) layered with a per-project
+// coding-CLI credential for userID/workspacePath, via workflowProviderAPIKeys.
+//
+// Before this existed, six call sites across server.go, delegation.go, and
+// agent_profile_runtime.go each independently wrote the same two-line
+// MergedProviderAPIKeys-then-workflowProviderAPIKeys pattern. Two of them
+// gated it incorrectly — one only for the claude-code provider, one only for
+// workflow-phase turns — and Video Studio's Cursor turns silently ran under
+// whichever login was on the server for two commits in a row before either
+// was caught. Consolidating the mechanism here doesn't remove the need for
+// each caller to still decide WHETHER and to WHICH workspace path this
+// applies (see the comment at each call site — a plain multi-agent chat
+// must not inherit a credential merely because it references a workflow
+// folder, which delegation.go documents and depends on) — but it means a
+// provider added to workflowProviderAPIKeys only has to be handled once.
+func (api *StreamingAPI) resolveEffectiveAPIKeys(ctx context.Context, userID, workspacePath string, base *llm.ProviderAPIKeys) (*llm.ProviderAPIKeys, error) {
+	if base == nil {
+		base = MergedProviderAPIKeys(ctx)
+	}
+	return api.workflowProviderAPIKeys(ctx, userID, workspacePath, base)
 }
 
 func normalizeWorkflowCredentialPath(workflowPath string) string {
@@ -267,6 +400,46 @@ func (api *StreamingAPI) closeIdleWorkflowClaudeCodeSessions(userID, workflowPat
 				continue
 			}
 			llmproviders.CloseClaudeCodeInteractiveSessionByTmux(snapshot.TmuxSession, reason)
+			api.terminalStore.MarkProcessClosed(snapshot.TerminalID, reason)
+		}
+	}
+}
+
+// closeIdleWorkflowCursorCLISessions is the Cursor counterpart. Video Studio
+// drives Cursor over the structured (-p) transport, which starts a fresh
+// process per turn and so picks the new key up on its own; this covers the
+// interactive tmux sessions, which outlive a turn and would otherwise keep
+// running under the replaced credential.
+func (api *StreamingAPI) closeIdleWorkflowCursorCLISessions(userID, workflowPath, reason string) {
+	for _, sessionID := range api.workflowSessionIDs(userID, workflowPath) {
+		llmproviders.CloseCursorCLIInteractiveSessionForOwner(sessionID, reason)
+		if api.terminalStore == nil {
+			continue
+		}
+		for _, snapshot := range api.terminalStore.ListRaw(sessionID) {
+			if !strings.HasPrefix(strings.TrimSpace(snapshot.TmuxSession), "mlp-cursor") {
+				continue
+			}
+			llmproviders.CloseCursorCLIInteractiveSessionByTmux(snapshot.TmuxSession, reason)
+			api.terminalStore.MarkProcessClosed(snapshot.TerminalID, reason)
+		}
+	}
+}
+
+// closeIdleWorkflowPiCLISessions is the Pi CLI counterpart. Video Studio
+// drives Pi CLI over the structured transport like Cursor, so this mainly
+// guards the interactive tmux path for any other workflow-scoped caller.
+func (api *StreamingAPI) closeIdleWorkflowPiCLISessions(userID, workflowPath, reason string) {
+	for _, sessionID := range api.workflowSessionIDs(userID, workflowPath) {
+		llmproviders.ClosePiCLIInteractiveSessionForOwner(sessionID, reason)
+		if api.terminalStore == nil {
+			continue
+		}
+		for _, snapshot := range api.terminalStore.ListRaw(sessionID) {
+			if !strings.HasPrefix(strings.TrimSpace(snapshot.TmuxSession), "mlp-pi-cli-int") {
+				continue
+			}
+			llmproviders.ClosePiCLIInteractiveSessionByTmux(snapshot.TmuxSession, reason)
 			api.terminalStore.MarkProcessClosed(snapshot.TerminalID, reason)
 		}
 	}

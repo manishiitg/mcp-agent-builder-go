@@ -10,6 +10,13 @@ import (
 	"syscall"
 )
 
+// ShouldRunGlobalStartupCleanup reports whether singleton startup may clean
+// browser processes it did not create. Named local instances disable this so
+// they cannot disrupt the normal AgentWorks application.
+func ShouldRunGlobalStartupCleanup() bool {
+	return !strings.EqualFold(strings.TrimSpace(os.Getenv("AGENTWORKS_SKIP_GLOBAL_BROWSER_CLEANUP")), "true")
+}
+
 // KillAllTrackedSessions kills every daemon + Chrome process for all sessions
 // currently tracked by the global SessionTracker. Call this on SIGTERM/SIGINT so
 // Chrome and daemon processes don't linger after the server exits.

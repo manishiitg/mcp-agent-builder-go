@@ -77,12 +77,19 @@ If a referenced file does not exist, the workflow has not accumulated that piece
 }
 
 func LoadAttachable(workspaceAPIURL string, selectedSkills []string) []*llmtypes.Skill {
+	return LoadAttachableIn(workspaceAPIURL, "", selectedSkills)
+}
+
+// LoadAttachableIn resolves each skill against the given workspace first, then
+// the user-level skills folder. LoadGlobalSkill already took a workspace path;
+// attachment did not, so a workspace's own skills/ folder could never be found.
+func LoadAttachableIn(workspaceAPIURL, workspacePath string, selectedSkills []string) []*llmtypes.Skill {
 	if len(selectedSkills) == 0 {
 		return nil
 	}
 	out := make([]*llmtypes.Skill, 0, len(selectedSkills))
 	for _, folderName := range selectedSkills {
-		skill, err := loadOneAttachable(workspaceAPIURL, folderName)
+		skill, err := loadOneAttachable(workspaceAPIURL, workspacePath, folderName)
 		if err != nil {
 			log.Printf("[SKILLS] Failed to load %s: %v (skipping)", folderName, err)
 			continue
@@ -92,12 +99,12 @@ func LoadAttachable(workspaceAPIURL string, selectedSkills []string) []*llmtypes
 	return out
 }
 
-func loadOneAttachable(workspaceAPIURL, folderName string) (*llmtypes.Skill, error) {
+func loadOneAttachable(workspaceAPIURL, workspacePath, folderName string) (*llmtypes.Skill, error) {
 	if skill := builtinAttachableSkill(folderName); skill != nil {
 		return skill, nil
 	}
 
-	parsed, err := GetSkill(workspaceAPIURL, folderName)
+	parsed, err := GetSkillIn(workspaceAPIURL, workspacePath, folderName)
 	if err != nil {
 		return nil, fmt.Errorf("read SKILL.md: %w", err)
 	}

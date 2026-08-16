@@ -483,6 +483,12 @@ type MessageSequenceItem struct {
 	// orchestrator's scripted sequence (todo_task); a standalone message_sequence
 	// uses its own fixed repair cap. Default 1 when unset.
 	MaxCorrections int `json:"max_corrections,omitempty"`
+	// Synthetic marks an item the runtime appended itself rather than one an
+	// author wrote in plan.json — today only the final validation gate from
+	// appendMessageSequenceFinalValidation. Never serialized: these items exist
+	// only for the duration of a run, and writing them back would turn a
+	// generated gate into authored plan content.
+	Synthetic bool `json:"-"`
 }
 
 type MessageSequencePlanStep struct {

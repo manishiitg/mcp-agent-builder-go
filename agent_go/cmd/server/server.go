@@ -26,6 +26,8 @@ import (
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/events"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/inspector"
+	"github.com/manishiitg/coding-agent-loop/agent_go/internal/videoproduct"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/agentprofiles"
 	agent "github.com/manishiitg/coding-agent-loop/agent_go/pkg/agentwrapper"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/chathistory"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/clisecurity"
@@ -269,6 +271,7 @@ type ActiveSessionInfo struct {
 type StreamingAPI struct {
 	config           ServerConfig
 	cliSecurityStore *clisecurity.Store
+	agentProfiles    *agentprofiles.Registry
 
 	// internalQueryHandler is a narrow test seam for server-owned follow-up
 	// turns. Production dispatch falls back to handleQuery.
@@ -587,6 +590,12 @@ type QueryRequest struct {
 	LLMConfigSource string                  `json:"llm_config_source,omitempty"`
 	PresetQueryID   string                  `json:"preset_query_id,omitempty"`
 	LLMGuidance     string                  `json:"llm_guidance,omitempty"` // LLM guidance message
+	// AgentProfileID selects a registered, versioned main-agent definition.
+	// The normal AgentWorks chat leaves this empty. Product workspaces pass a
+	// profile plus trusted workspace scope through the same /api/query runtime.
+	AgentProfileID      string                      `json:"agent_profile_id,omitempty"`
+	AgentProfileVersion int                         `json:"agent_profile_version,omitempty"`
+	AgentProfileContext agentprofiles.PromptContext `json:"agent_profile_context,omitempty"`
 	// Code execution mode: When enabled, only virtual tools are added to LLM
 	// MCP tools are accessed through generated scripts using the on-demand HTTP API specification.
 	UseCodeExecutionMode bool `json:"use_code_execution_mode,omitempty"`
@@ -1185,6 +1194,7 @@ const (
 )
 
 const (
+	llmConfigSourceAgentProfile          = "agent_profile"
 	llmConfigSourceScheduledAutoImprove  = "scheduled_auto_improve"
 	llmConfigSourceScheduledPulse        = "scheduled_pulse"
 	llmConfigSourceScheduledChiefOfStaff = "scheduled_chief_of_staff"
@@ -1195,7 +1205,7 @@ func requestLLMConfigOverridesManifest(req QueryRequest) bool {
 		return false
 	}
 	switch strings.TrimSpace(req.LLMConfigSource) {
-	case llmConfigSourceScheduledAutoImprove, llmConfigSourceScheduledPulse, llmConfigSourceScheduledChiefOfStaff:
+	case llmConfigSourceAgentProfile, llmConfigSourceScheduledAutoImprove, llmConfigSourceScheduledPulse, llmConfigSourceScheduledChiefOfStaff:
 		return true
 	default:
 		return false
@@ -1601,10 +1611,23 @@ func runServer(cmd *cobra.Command, args []string) {
 	if err != nil {
 		log.Fatalf("Failed to initialize AgentWorks CLI security store: %v", err)
 	}
+	if err := videoproduct.RegisterProductSkills(); err != nil {
+		log.Fatalf("Failed to register Video Studio skills: %v", err)
+	}
+	profileRegistry := agentprofiles.NewRegistry()
+	for _, profile := range videoproduct.BuiltinAgentProfiles() {
+		if err := profileRegistry.RegisterProfile(profile); err != nil {
+			log.Fatalf("Failed to register Video Studio agent profile: %v", err)
+		}
+	}
+	if err := videoproduct.RegisterAgentProfileRuntime(profileRegistry, getWorkspaceAPIURL()); err != nil {
+		log.Fatalf("Failed to register Video Studio agent profile runtime: %v", err)
+	}
 
 	api := &StreamingAPI{
 		config:                             config,
 		cliSecurityStore:                   cliSecurityStore,
+		agentProfiles:                      profileRegistry,
 		agentCancelFuncs:                   make(map[string]context.CancelFunc),
 		workflowOrchestratorContexts:       make(map[string]context.CancelFunc),
 		activeWorkflowExecutions:           make(map[string]*ActiveWorkflowExecution),
@@ -1681,47 +1704,52 @@ func runServer(cmd *cobra.Command, args []string) {
 		api.schedulePendingCompletionRetry(sessionID)
 	}
 
-	// Kill any orphaned browser processes from a previous run.
-	// On restart, the in-memory SessionTracker is empty but chromium processes
-	// may still be running in the workspace-api container from the previous session.
-	go func() {
-		workspaceAPIURL := os.Getenv("WORKSPACE_API_URL")
-		if workspaceAPIURL == "" {
-			workspaceAPIURL = "http://127.0.0.1:8081"
-		}
-		client := browser.NewClient(workspaceAPIURL)
-		// Send a kill-all command via workspace-api to clean up any leftover browsers
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		_, err := client.ExecuteCommand(ctx, []string{"--kill-all"}, &browser.ExecuteOptions{Timeout: 15 * time.Second})
-		if err != nil {
-			// --kill-all may not be supported; fall back to pkill
-			log.Printf("[BROWSER_CLEANUP] --kill-all not supported, trying pkill fallback")
-			killCmd := "pkill -9 -f 'agent-browser' 2>/dev/null; pkill -9 -f chromium 2>/dev/null; pkill -9 -f 'Google Chrome for Testing' 2>/dev/null; echo 'cleanup done'"
-			reqBody := browser.ShellExecuteRequest{Command: killCmd, WorkingDirectory: ".", Timeout: 10}
-			jsonBody, _ := json.Marshal(reqBody)
-			req, _ := http.NewRequestWithContext(ctx, "POST", workspaceAPIURL+"/api/execute", bytes.NewBuffer(jsonBody))
-			if req != nil {
-				req.Header.Set("Content-Type", "application/json")
-				// /api/execute is token-protected. This fallback builds its request
-				// by hand instead of going through workspace.Client.doRequest, which
-				// is the only place the token is normally attached — so without this
-				// it 401s and the cleanup silently never happens.
-				if token := strings.TrimSpace(os.Getenv("WORKSPACE_API_TOKEN")); token != "" {
-					req.Header.Set("X-Workspace-Token", token)
-				}
-				resp, execErr := http.DefaultClient.Do(req)
-				if execErr != nil {
-					log.Printf("[BROWSER_CLEANUP] Startup cleanup failed: %v (browsers may still be running)", execErr)
-				} else {
-					resp.Body.Close()
-					log.Printf("[BROWSER_CLEANUP] Startup cleanup: killed orphaned browser processes in workspace-api")
-				}
+	// Kill orphaned browser processes only for the normal singleton instance.
+	// A named isolated instance must never issue workspace-wide --kill-all/pkill:
+	// the workspace runs natively and those processes may belong to the user's
+	// main AgentWorks instance.
+	if browser.ShouldRunGlobalStartupCleanup() {
+		go func() {
+			workspaceAPIURL := os.Getenv("WORKSPACE_API_URL")
+			if workspaceAPIURL == "" {
+				workspaceAPIURL = "http://127.0.0.1:8081"
 			}
-		} else {
-			log.Printf("[BROWSER_CLEANUP] Startup cleanup: killed orphaned browser processes via --kill-all")
-		}
-	}()
+			client := browser.NewClient(workspaceAPIURL)
+			// Send a kill-all command via workspace-api to clean up any leftover browsers
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			_, err := client.ExecuteCommand(ctx, []string{"--kill-all"}, &browser.ExecuteOptions{Timeout: 15 * time.Second})
+			if err != nil {
+				// --kill-all may not be supported; fall back to pkill
+				log.Printf("[BROWSER_CLEANUP] --kill-all not supported, trying pkill fallback")
+				killCmd := "pkill -9 -f 'agent-browser' 2>/dev/null; pkill -9 -f chromium 2>/dev/null; pkill -9 -f 'Google Chrome for Testing' 2>/dev/null; echo 'cleanup done'"
+				reqBody := browser.ShellExecuteRequest{Command: killCmd, WorkingDirectory: ".", Timeout: 10}
+				jsonBody, _ := json.Marshal(reqBody)
+				req, _ := http.NewRequestWithContext(ctx, "POST", workspaceAPIURL+"/api/execute", bytes.NewBuffer(jsonBody))
+				if req != nil {
+					req.Header.Set("Content-Type", "application/json")
+					// /api/execute is token-protected. This fallback builds its request
+					// by hand instead of going through workspace.Client.doRequest, which
+					// is the only place the token is normally attached — so without this
+					// it 401s and the cleanup silently never happens.
+					if token := strings.TrimSpace(os.Getenv("WORKSPACE_API_TOKEN")); token != "" {
+						req.Header.Set("X-Workspace-Token", token)
+					}
+					resp, execErr := http.DefaultClient.Do(req)
+					if execErr != nil {
+						log.Printf("[BROWSER_CLEANUP] Startup cleanup failed: %v (browsers may still be running)", execErr)
+					} else {
+						resp.Body.Close()
+						log.Printf("[BROWSER_CLEANUP] Startup cleanup: killed orphaned browser processes in workspace-api")
+					}
+				}
+			} else {
+				log.Printf("[BROWSER_CLEANUP] Startup cleanup: killed orphaned browser processes via --kill-all")
+			}
+		}()
+	} else {
+		log.Printf("[BROWSER_CLEANUP] Isolated instance: skipped workspace-wide startup cleanup")
+	}
 
 	// Generate API token for code execution mode per-tool endpoints. Tests and
 	// local harnesses may set MCP_SERVER_API_TOKEN before startup so sibling
@@ -1771,6 +1799,7 @@ func runServer(cmd *cobra.Command, args []string) {
 	apiRouter.HandleFunc("/auth/desktop/exchange", api.handleDesktopConnectExchange).Methods("POST", "OPTIONS")
 
 	apiRouter.HandleFunc("/query", api.handleQuery).Methods("POST", "OPTIONS")
+	AgentProfileRoutes(apiRouter, api.agentProfiles)
 	apiRouter.HandleFunc("/health", api.handleHealth).Methods("GET")
 	apiRouter.HandleFunc("/capabilities", api.handleCapabilities).Methods("GET")
 	CLISecurityRoutes(apiRouter, api.cliSecurityStore)
@@ -1905,6 +1934,12 @@ func runServer(cmd *cobra.Command, args []string) {
 	apiRouter.HandleFunc("/workflow-provider-credentials/claude-code", api.handleGetWorkflowClaudeCodeCredential).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/workflow-provider-credentials/claude-code", api.handleStoreWorkflowClaudeCodeCredential).Methods("PUT", "OPTIONS")
 	apiRouter.HandleFunc("/workflow-provider-credentials/claude-code", api.handleDeleteWorkflowClaudeCodeCredential).Methods("DELETE", "OPTIONS")
+	apiRouter.HandleFunc("/workflow-provider-credentials/cursor-cli", api.handleGetWorkflowCursorCLICredential).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/workflow-provider-credentials/cursor-cli", api.handleStoreWorkflowCursorCLICredential).Methods("PUT", "OPTIONS")
+	apiRouter.HandleFunc("/workflow-provider-credentials/cursor-cli", api.handleDeleteWorkflowCursorCLICredential).Methods("DELETE", "OPTIONS")
+	apiRouter.HandleFunc("/workflow-provider-credentials/pi-cli", api.handleGetWorkflowPiCLICredential).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/workflow-provider-credentials/pi-cli", api.handleStoreWorkflowPiCLICredential).Methods("PUT", "OPTIONS")
+	apiRouter.HandleFunc("/workflow-provider-credentials/pi-cli", api.handleDeleteWorkflowPiCLICredential).Methods("DELETE", "OPTIONS")
 
 	// Provider API keys (encrypted file storage for scheduled runs)
 	apiRouter.HandleFunc("/provider-keys", api.handleSaveProviderKeys).Methods("PUT", "OPTIONS")
@@ -2951,6 +2986,11 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 	logfWithContext(queryLogCtx, "[USER_ID_DEBUGGING] HTTP handler: currentUserID=%q (from auth context)", currentUserID)
 
 	api.applySavedMultiAgentChatConfig(r.Context(), &req, currentUserID)
+	resolvedProfile, err := api.resolveAgentProfileForQuery(r.Context(), &req, currentUserID, sessionID)
+	if err != nil {
+		http.Error(w, "Invalid agent profile request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
 	// Scheduled/Chief requests may already carry the configured secret name at
 	// this point. Resolve it for backend delivery and strip it from agent env.
 	api.resolveNotificationSecretForRequest(r.Context(), currentUserID, req.SelectedFolder, &req)
@@ -3087,6 +3127,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 	// session must not race through from another browser/tab.
 	claimedChiefOfStaffChat := false
 	if req.AgentMode == "multi-agent" &&
+		resolvedProfile == nil &&
 		!req.IsAutoNotification &&
 		!isScheduledSessionIdentity(sessionID, req.TriggeredBy) &&
 		strings.TrimSpace(req.BotPlatform) == "" {
@@ -3563,7 +3604,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 		if workflowLLMConfig == nil {
 			workflowLLMConfig = &orchestrator.LLMConfig{}
 		}
-		workflowKeys, credentialErr := api.workflowProviderAPIKeys(r.Context(), currentUserID, manifestWorkspacePath, MergedProviderAPIKeys(r.Context()))
+		workflowKeys, credentialErr := api.resolveEffectiveAPIKeys(r.Context(), currentUserID, manifestWorkspacePath, nil)
 		if credentialErr != nil {
 			http.Error(w, "Failed to load workflow provider credentials", http.StatusInternalServerError)
 			return
@@ -4135,10 +4176,32 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 	mergedAPIKeys := MergedProviderAPIKeys(r.Context())
 	if isWorkflowPhase && workflowPhaseFolder != "" {
 		var credentialErr error
-		mergedAPIKeys, credentialErr = api.workflowProviderAPIKeys(r.Context(), currentUserID, workflowPhaseFolder, mergedAPIKeys)
+		mergedAPIKeys, credentialErr = api.resolveEffectiveAPIKeys(r.Context(), currentUserID, workflowPhaseFolder, mergedAPIKeys)
 		if credentialErr != nil {
 			logfWithContext(queryLogCtx.WithWorkflow(workflowPhaseFolder), "[WORKFLOW_AUTH] Failed to load provider credentials: %v", credentialErr)
 		}
+	} else if resolvedProfile != nil && resolvedProfile.APIKeys != nil {
+		// resolveAgentProfileForQuery resolved a project-scoped credential for a
+		// product surface (e.g. Video Studio) from the encrypted per-workspace
+		// store. Recomputing mergedAPIKeys from scratch below would discard it:
+		// NewLLMAgentWrapper reads mergedAPIKeys, not req.LLMConfig.
+		//
+		// The credential is read from the RESOLVER'S RESULT, never from
+		// req.LLMConfig. req is deserialized from the client body — `llm_config`
+		// is `json:"llm_config,omitempty"` and every ProviderAPIKeys field except
+		// ClaudeCodeOAuthToken is JSON-visible — so keying this branch off the
+		// request would (a) let any authenticated caller replace the turn's
+		// provider keys, including pointing Azure.Endpoint at a host they control,
+		// and (b) fire on ordinary chats, because the frontend always sends
+		// `api_keys: {}` and an empty JSON object unmarshals to a NON-NIL pointer,
+		// wiping every server-resolved key.
+		//
+		// This branch is deliberately narrower than "any chat with SelectedFolder
+		// set": an ordinary multi-agent chat that merely references a workflow
+		// folder must not inherit that workflow's credential (see delegation.go's
+		// workflowOwnedDelegation check, which enforces the same rule for
+		// sub-agents).
+		mergedAPIKeys = resolvedProfile.APIKeys
 	}
 
 	queryInputLaneRelease := releaseInputLane
@@ -4342,10 +4405,39 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 
 		// Create new agent with streamCtx instead of r.Context()
 		log.Printf("[AGENT CONFIG DEBUG] Creating agent with ServerName: %s, UseCodeExecutionMode: %v", serverList, useCodeExecutionMode)
+		profileTransportPolicy := ""
+		profileAgentToolsMode := ""
+		profileApprovalsMode := ""
+		var profileBridgeRoutingInstructions *string
+		if resolvedProfile != nil {
+			profileTransportPolicy = resolvedProfile.Definition.Runtime.Transport
+			profileAgentToolsMode = resolvedProfile.Definition.Runtime.AgentTools.Mode
+			profileApprovalsMode = resolvedProfile.Definition.Runtime.Approvals.Mode
+			if strings.EqualFold(profileAgentToolsMode, "hybrid") {
+				// The product prompt deliberately tells native-tool agents how to
+				// work. Suppress mcpagent's bridge-only shell/diff routing block.
+				empty := ""
+				profileBridgeRoutingInstructions = &empty
+			}
+		}
+		forceStructuredCodingAgent := codingAgentUsesStructuredTransportForPolicy(finalProvider, profileTransportPolicy)
 		allowPersistentInteractive := codingAgentRequestAllowsPersistentInteractive(&req, sessionID)
 		claudeCodePersistentInteractive, codexPersistentInteractive, cursorPersistentInteractive, piPersistentInteractive := codingAgentPersistentInteractiveFlags(finalProvider, allowPersistentInteractive)
 		claudeCodeTransport := codingAgentClaudeCodeChatTransport(finalProvider)
+		if forceStructuredCodingAgent {
+			// A structured coding CLI is a one-shot native JSON process. There is
+			// no persistent pane to retain, and preserving one would accidentally
+			// route this product back into tmux behavior.
+			claudeCodePersistentInteractive = false
+			codexPersistentInteractive = false
+			cursorPersistentInteractive = false
+			piPersistentInteractive = false
+			claudeCodeTransport = ""
+		}
 		chatWorkingFolder := perUserChatsFolder
+		if resolvedProfile != nil {
+			chatWorkingFolder = agentProfileRuntimeWorkspace(currentUserID, req.SelectedFolder)
+		}
 		if isWorkflowPhase && workflowPhaseFolder != "" && workflowPhaseFolder != "default_workspace" {
 			chatWorkingFolder = workflowPhaseFolder
 		}
@@ -4368,10 +4460,55 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				log.Printf("[PI_CLI_CONFLICT] Cleared %d conflicting Pi CLI session(s) before starting chat session %s in %s", closed, sessionID, chatWorkingDir)
 			}
 		}
+		codingAgentSecretEnvironment := make(map[string]string)
+		for _, secret := range mergeGlobalSecrets(req.DecryptedSecrets, req.SelectedGlobalSecrets) {
+			codingAgentSecretEnvironment["SECRET_"+secret.Name] = secret.Value
+		}
+		nativeShellAPITransport := false
+		if resolvedProfile != nil && strings.EqualFold(strings.TrimSpace(resolvedProfile.Definition.Runtime.APITransport.Mode), "native_shell") {
+			nativeShellAPITransport = true
+			// Product APIs remain session-scoped HTTP endpoints, but this profile
+			// deliberately does not expose AgentWorks' execute_shell_command.
+			// Give the native coding CLI only the derived bridge routes and its
+			// bearer header, so its own Bash tool can call a documented API without
+			// inheriting the broad server shell executor.
+			nativeAPIEnv := map[string]string{
+				"MCP_API_URL":    strings.TrimRight(os.Getenv("MCP_API_URL"), "/") + "/s/" + sessionID,
+				"MCP_API_TOKEN":  os.Getenv("MCP_API_TOKEN"),
+				"MCP_SESSION_ID": sessionID,
+			}
+			if strings.TrimSpace(os.Getenv("MCP_API_URL")) != "" && strings.TrimSpace(os.Getenv("MCP_API_TOKEN")) != "" {
+				common.PopulateMCPBridgeShortEnv(nativeAPIEnv)
+				for name, value := range nativeAPIEnv {
+					codingAgentSecretEnvironment[name] = value
+				}
+			} else {
+				// Fail closed. This profile has no execute_shell_command and its
+				// product tools are only reachable over these routes, so starting
+				// the turn without them yields an agent that cannot call anything
+				// and cannot tell a missing route from a missing tool. It reports
+				// an outage and asks the user to reload, which is exactly the
+				// failure this transport was introduced to remove — and it did
+				// that while logging this line, which nobody read.
+				logfWithContext(queryLogCtx, "[API_TRANSPORT] native_shell requested but MCP bridge environment is incomplete (MCP_API_URL/MCP_API_TOKEN unset); refusing the turn")
+				sendError("This product's API transport is not configured on the server: MCP_API_URL and MCP_API_TOKEN must be set for a native_shell profile. No product tool can be called until that is fixed.", true)
+				return
+			}
+		}
+		// The product tool gate is the one place a profile decides its tool
+		// surface. It is a construction input, so every registration path is
+		// covered without each one having to remember to consult a policy.
+		// Without tool_policy.mode=allowlist it only observes and logs, which is
+		// how a real enabled: list gets seeded from a live session rather than
+		// guessed.
+		toolGate := newProductToolGate(resolvedProfile)
+		defer toolGate.logSurface(sessionID)
+
 		agentConfig := agent.LLMAgentConfig{
 			Name:               "chat-agent",
 			ServerName:         serverList, // Use full server list, not just first one
 			ConfigPath:         api.mcpConfigPath,
+			AdmitTool:          toolGate.Admit,
 			Provider:           llm.Provider(finalProvider),
 			ModelID:            finalModelID,
 			Options:            resolvedPrimaryOptions,
@@ -4390,12 +4527,24 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			ClaudeCodePersistentInteractiveSession: claudeCodePersistentInteractive,
 			CodexPersistentInteractiveSession:      codexPersistentInteractive,
 			CursorPersistentInteractiveSession:     cursorPersistentInteractive,
-			CursorBridgeToolsMode:                  cursorPersistentInteractive,
+			CursorBridgeToolsMode:                  strings.EqualFold(finalProvider, string(llm.ProviderCursorCLI)),
+			CodingAgentToolsMode:                   profileAgentToolsMode,
+			CodingAgentApprovalsMode:               profileApprovalsMode,
+			BridgeRoutingInstructionsOverride:      profileBridgeRoutingInstructions,
 			PiPersistentInteractiveSession:         piPersistentInteractive,
 			ClaudeCodeTransport:                    claudeCodeTransport,
+			ForceStructuredCodingAgent:             forceStructuredCodingAgent,
 			CodingAgentWorkingDir:                  chatWorkingDir,
 			CLISecurityPolicy:                      cliSecurityPolicy,
-			APIKeys:                                mergedAPIKeys,
+			CodingAgentSecretEnvironment:           codingAgentSecretEnvironment,
+			// A native_shell profile reaches its product APIs over session-scoped
+			// HTTP from the CLI's own shell, so codex's workspace-write sandbox
+			// has to allow network. macOS does not actually enforce codex's
+			// network_access=false (verified against codex 0.147.0: curl
+			// succeeds either way), so this changes nothing locally — Linux
+			// enforces it, which is where this would otherwise silently break.
+			CodexNetworkAccess: nativeShellAPITransport,
+			APIKeys:            mergedAPIKeys,
 			// Tool timeout, context summarization/editing, large-output offloading,
 			// and parallel tool execution are set by applySharedLLMAgentTuning below
 			// (shared with sub-agent creation in executeDelegatedTask).
@@ -4603,24 +4752,43 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				// Per-user chat folders replace the legacy global "Chats/" write path.
 				perUserChatsWrite := perUserChatsFolder + "/"
 				perUserChatHistory := strings.TrimSuffix(perUserChatsFolder, "Chats") + "chat_history/"
-				orgPulseWrite := "pulse/"
-				additionalFolders := append([]string{}, resolvedGrants.WriteFolders...)
-				additionalFolders = append(additionalFolders, fileContextWriteFolders...)
-				additionalFolders = append(additionalFolders, perUserChatHistory)
-				additionalFolders = append(additionalFolders, orgPulseWrite)
-				workspaceExecutors = wrapExecutorsWithPlanFolderGuard(workspaceExecutors, perUserChatsFolder, workflowReadOnlyFolders, additionalFolders...)
-				workspace.SetSessionWorkingDir(sessionID, chatWorkingFolder)
-				readPaths := append([]string{perUserChatsWrite, perUserChatHistory, "skills/", "subagents/", "Downloads/", "Workflow/"}, additionalFolders...)
-				readPaths = append(readPaths, resolvedGrants.ReadOnlyExtra...)
-				readPaths = append(readPaths, workflowReadOnlyFolders...)
-				workspace.SetSessionFolderGuard(sessionID,
-					readPaths,
-					append([]string{perUserChatsWrite, "Downloads/", perUserChatHistory}, additionalFolders...),
-				)
-				if hostDownloads := common.GrantSessionCDPHostDownloadsReadOnly(sessionID, req.BrowserMode); hostDownloads != "" {
-					log.Printf("[MULTI-AGENT FOLDER GUARD] Added read-only CDP host Downloads: %s", hostDownloads)
+				if resolvedProfile != nil {
+					// A product profile is bound to one project. Do not inherit the
+					// Chief-of-Staff chat-wide grants or @context write expansion.
+					// Explicit workflow references remain readable, never writable.
+					profileRoot := agentProfileRuntimeWorkspace(currentUserID, req.SelectedFolder)
+					profileWrite := strings.TrimSuffix(profileRoot, "/") + "/"
+					profileReadOnly := append([]string{"skills/", "subagents/", "Downloads/"}, workflowReadOnlyFolders...)
+					workspaceExecutors = wrapExecutorsWithPlanFolderGuard(workspaceExecutors, profileRoot, profileReadOnly, perUserChatHistory)
+					workspace.SetSessionWorkingDir(sessionID, profileRoot)
+					workspace.SetSessionFolderGuard(sessionID,
+						append([]string{profileWrite, perUserChatHistory}, profileReadOnly...),
+						[]string{profileWrite, perUserChatHistory},
+					)
+					if hostDownloads := common.GrantSessionCDPHostDownloadsReadOnly(sessionID, req.BrowserMode); hostDownloads != "" {
+						log.Printf("[AGENT PROFILE FOLDER GUARD] Added read-only CDP host Downloads: %s", hostDownloads)
+					}
+					log.Printf("[AGENT PROFILE FOLDER GUARD] Applied project restriction (profile=%s workspace=%s read-only=%v)", resolvedProfile.Definition.ID, profileWrite, profileReadOnly)
+				} else {
+					orgPulseWrite := "pulse/"
+					additionalFolders := append([]string{}, resolvedGrants.WriteFolders...)
+					additionalFolders = append(additionalFolders, fileContextWriteFolders...)
+					additionalFolders = append(additionalFolders, perUserChatHistory)
+					additionalFolders = append(additionalFolders, orgPulseWrite)
+					workspaceExecutors = wrapExecutorsWithPlanFolderGuard(workspaceExecutors, perUserChatsFolder, workflowReadOnlyFolders, additionalFolders...)
+					workspace.SetSessionWorkingDir(sessionID, chatWorkingFolder)
+					readPaths := append([]string{perUserChatsWrite, perUserChatHistory, "skills/", "subagents/", "Downloads/", "Workflow/"}, additionalFolders...)
+					readPaths = append(readPaths, resolvedGrants.ReadOnlyExtra...)
+					readPaths = append(readPaths, workflowReadOnlyFolders...)
+					workspace.SetSessionFolderGuard(sessionID,
+						readPaths,
+						append([]string{perUserChatsWrite, "Downloads/", perUserChatHistory}, additionalFolders...),
+					)
+					if hostDownloads := common.GrantSessionCDPHostDownloadsReadOnly(sessionID, req.BrowserMode); hostDownloads != "" {
+						log.Printf("[MULTI-AGENT FOLDER GUARD] Added read-only CDP host Downloads: %s", hostDownloads)
+					}
+					log.Printf("[MULTI-AGENT FOLDER GUARD] Applied per-user folder restriction (chats: %s, write: %v, read-only: %v, grants: %v)", perUserChatsWrite, additionalFolders, workflowReadOnlyFolders, resolvedGrants.AppliedNames)
 				}
-				log.Printf("[MULTI-AGENT FOLDER GUARD] Applied per-user folder restriction (chats: %s, write: %v, read-only: %v, grants: %v)", perUserChatsWrite, additionalFolders, workflowReadOnlyFolders, resolvedGrants.AppliedNames)
 			} else {
 				perUserChatsWrite := perUserChatsFolder + "/"
 				perUserChatHistory := strings.TrimSuffix(perUserChatsFolder, "Chats") + "chat_history/"
@@ -4651,10 +4819,14 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				log.Printf("[WORKFLOW PHASE FOLDER GUARD] Applied workflow folder restriction (workflow writes: %v, chats read-only: %s, read-only: %v, blocked-write: %v)", writePaths, perUserChatsWrite, workflowReadOnlyFolders, fileContextBlockedWriteFolders)
 			}
 
-			// Apply skill folder guard if filesystem skills are selected (read-only access to selected skills only).
+			// Report the selected filesystem skills, not a restriction. Every
+			// branch above grants "skills/" wholesale, and this list is used
+			// nowhere else — the old wording ("only selected skills accessible")
+			// described a guard that is not applied, which sent me looking for a
+			// permission problem when a skill failed to attach.
 			// Runtime-only skills such as agent-browser are exposed through tools/prompts, not skills/<name>/SKILL.md.
 			if filesystemSkills := filesystemSelectedSkills(req.SelectedSkills); len(filesystemSkills) > 0 {
-				log.Printf("[SKILL FOLDER GUARD] Applied skill folder restriction - only selected skills accessible: %v", filesystemSkills)
+				log.Printf("[SKILLS] Filesystem skills selected for this session: %v (skills/ is readable in full)", filesystemSkills)
 			}
 
 			workspaceToolModeLabel := "chat mode"
@@ -4669,11 +4841,19 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 				toolName := tool.Function.Name
+				if profileDisablesVirtualTool(resolvedProfile, toolName) {
+					log.Printf("[AGENT_PROFILE] Skipping disabled virtual tool %s for profile %s", toolName, resolvedProfile.Definition.ID)
+					continue
+				}
 				if executor, exists := workspaceExecutors[toolName]; exists {
 					// Enhance tool description based on mode
 					var enhancedDescription string
 					if !isWorkflowPhase {
-						enhancedDescription = enhanceToolDescriptionForMultiAgentMode(toolName, tool.Function.Description, perUserChatsFolder)
+						descriptionRoot := perUserChatsFolder
+						if resolvedProfile != nil {
+							descriptionRoot = agentProfileRuntimeWorkspace(currentUserID, req.SelectedFolder)
+						}
+						enhancedDescription = enhanceToolDescriptionForMultiAgentMode(toolName, tool.Function.Description, descriptionRoot, resolvedProfile)
 					} else {
 						enhancedDescription = enhanceToolDescriptionForWorkflowPhase(toolName, tool.Function.Description, workflowPhaseFolder)
 					}
@@ -4732,6 +4912,11 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			if enableBrowserAccess {
 				browserGuard := func(execs codingAgentToolExecutors) codingAgentToolExecutors {
 					if !isWorkflowPhase {
+						if resolvedProfile != nil {
+							profileRoot := agentProfileRuntimeWorkspace(currentUserID, req.SelectedFolder)
+							profileReadOnly := append([]string{"skills/", "subagents/", "Downloads/"}, workflowReadOnlyFolders...)
+							return wrapExecutorsWithPlanFolderGuard(execs, profileRoot, profileReadOnly)
+						}
 						additionalFolders := append([]string{}, resolvedGrants.WriteFolders...)
 						additionalFolders = append(additionalFolders, fileContextWriteFolders...)
 						return wrapExecutorsWithPlanFolderGuard(execs, perUserChatsFolder, workflowReadOnlyFolders, additionalFolders...)
@@ -5043,16 +5228,42 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			}
 			log.Printf("[CUSTOM TOOLS] Registered %d custom tools with agent", registeredCount)
 
-			isMultiAgentChat := !isWorkflowPhase
-			if isMultiAgentChat {
-				if err := api.registerMultiAgentLLMTools(llmAgent); err != nil {
+			if err := api.registerAgentProfileTools(llmAgent, resolvedProfile, currentUserID, sessionID, req.SelectedFolder); err != nil {
+				logfWithContext(queryLogCtx, "[AGENT PROFILE] Failed to register tools: %v", err)
+				sendError(fmt.Sprintf("Failed to register agent profile tools: %v", err), true)
+				return
+			}
+			if err := api.registerAgentProfileWorkflowTools(
+				context.WithoutCancel(streamCtx),
+				llmAgent,
+				resolvedProfile,
+				currentUserID,
+				sessionID,
+				req.SelectedFolder,
+				selectedServers,
+				mergedAPIKeys,
+				req,
+			); err != nil {
+				logfWithContext(queryLogCtx, "[AGENT PROFILE] Failed to register workflow runtime: %v", err)
+				sendError(fmt.Sprintf("Failed to register agent profile workflow runtime: %v", err), true)
+				return
+			}
+
+			isToolBackedChat := !isWorkflowPhase
+			isChiefOfStaffChat := isToolBackedChat && resolvedProfile == nil
+			if isToolBackedChat {
+				if err := api.registerMultiAgentLLMTools(llmAgent, func(toolName string) bool {
+					return profileDisablesVirtualTool(resolvedProfile, toolName)
+				}); err != nil {
 					logfWithContext(queryLogCtx, "[LLM TOOLS] Failed to register multi-agent LLM tools: %v", err)
 					sendError(fmt.Sprintf("Failed to register multi-agent LLM tools: %v", err), true)
 					return
 				}
 				logfWithContext(queryLogCtx, "[LLM TOOLS] Registered multi-agent LLM tools")
 
-				if err := api.registerMultiAgentSkillTools(llmAgent); err != nil {
+				if err := api.registerMultiAgentSkillTools(llmAgent, func(toolName string) bool {
+					return profileDisablesVirtualTool(resolvedProfile, toolName)
+				}); err != nil {
 					logfWithContext(queryLogCtx, "[SKILL TOOLS] Failed to register multi-agent skill tools: %v", err)
 					sendError(fmt.Sprintf("Failed to register multi-agent skill tools: %v", err), true)
 					return
@@ -5067,16 +5278,30 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				}
 				logfWithContext(queryLogCtx, "[LLM TOOLS] Registered workflow LLM discovery tools")
 			}
-			if isMultiAgentChat {
-				if err := api.registerMultiAgentMCPServerTools(llmAgent); err != nil {
+			if isToolBackedChat {
+				if err := api.registerMultiAgentMCPServerTools(llmAgent, func(toolName string) bool {
+					return profileDisablesVirtualTool(resolvedProfile, toolName)
+				}); err != nil {
 					logfWithContext(queryLogCtx, "[MCP SERVER TOOLS] Failed to register multi-agent MCP server tools: %v", err)
 					sendError(fmt.Sprintf("Failed to register multi-agent MCP server tools: %v", err), true)
 					return
 				}
 				logfWithContext(queryLogCtx, "[MCP SERVER TOOLS] Registered multi-agent MCP server tools")
 
-				// create_workflow — privileged tool for writing new workflows under Workflow/
-				// Bypasses the session folder guard by writing via direct filesystem I/O.
+				secretWorkflowPath := ""
+				if resolvedProfile != nil {
+					secretWorkflowPath = req.SelectedFolder
+				}
+				if err := api.registerSecretManagementTools(llmAgent, currentUserID, secretWorkflowPath, "secret_tools", nil, nil); err != nil {
+					logfWithContext(queryLogCtx, "[SECRET TOOLS] Failed to register multi-agent secret tools: %v", err)
+					sendError(fmt.Sprintf("Failed to register multi-agent secret tools: %v", err), true)
+					return
+				}
+				logfWithContext(queryLogCtx, "[SECRET TOOLS] Registered multi-agent secret tools (list_secrets, set_user_secret, delete_user_secret; global names read-only)")
+			}
+			if isChiefOfStaffChat {
+				// Chief-of-Staff administration tools intentionally stay out of
+				// product-owned agent profiles.
 				if err := api.registerWorkflowCreatorTool(llmAgent); err != nil {
 					logfWithContext(queryLogCtx, "[WORKFLOW CREATOR] Failed to register create_workflow tool: %v", err)
 					sendError(fmt.Sprintf("Failed to register create_workflow tool: %v", err), true)
@@ -5090,13 +5315,6 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				logfWithContext(queryLogCtx, "[ACTIVITY STATUS] Registered get_activity_status tool")
-
-				if err := api.registerSecretManagementTools(llmAgent, currentUserID, "", "secret_tools", nil, nil); err != nil {
-					logfWithContext(queryLogCtx, "[SECRET TOOLS] Failed to register multi-agent secret tools: %v", err)
-					sendError(fmt.Sprintf("Failed to register multi-agent secret tools: %v", err), true)
-					return
-				}
-				logfWithContext(queryLogCtx, "[SECRET TOOLS] Registered multi-agent secret tools (list_secrets, set_user_secret, delete_user_secret; global names read-only)")
 
 				if err := api.registerMultiAgentNotificationTool(llmAgent, currentUserID); err != nil {
 					logfWithContext(queryLogCtx, "[NOTIFICATION TOOLS] Failed to register Chief of Staff notification tool: %v", err)
@@ -5125,7 +5343,13 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 
 			// 1. OPERATING MODE — the agent's core behavior (delegate everything vs work directly).
 			//    This MUST come first so it takes precedence over reference material.
-			if !isWorkflowPhase {
+			if resolvedProfile != nil {
+				if err := llmAgent.ResetInstructions(resolvedProfile.Prompt); err != nil {
+					sendError(fmt.Sprintf("Failed to apply agent profile prompt: %v", err), true)
+					return
+				}
+				logfWithContext(queryLogCtx, "[AGENT PROFILE] Applied %s@%d system prompt", resolvedProfile.Definition.ID, resolvedProfile.Definition.Version)
+			} else if !isWorkflowPhase {
 				_ = llmAgent.AddInstructions(virtualtools.GetMultiAgentDelegationInstructionsWithUser(perUserChatsFolder, currentUserID))
 				logfWithContext(queryLogCtx, "[DELEGATION] Added multi-agent delegation instructions to system prompt")
 				if section := virtualtools.BuildSpawnCapabilitiesSection(buildCapabilitiesContext(req)); section != "" {
@@ -5145,54 +5369,70 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
-			// 2. WORKSPACE MAP — compact folder listing with absolute paths and access levels.
-			if isWorkflowPhase {
-				_ = llmAgent.AddInstructions(GetWorkflowPhaseWorkspaceMap(shellRoot, workflowPhaseFolder))
-			} else {
-				_ = llmAgent.AddInstructions(GetWorkspaceMap(shellRoot, perUserChatsFolder))
-			}
-			if capabilitySection := buildLLMCapabilityPromptSection(r.Context()); capabilitySection != "" {
-				_ = llmAgent.AddInstructions(capabilitySection)
-				log.Printf("[LLM TOOLS] Added LLM/media capability snapshot to system prompt")
-			}
-
-			// 3. CONTEXT — workflow references, skills (what the agent needs to know).
-			if len(req.WorkflowContextPaths) > 0 {
-				if workflowPrompt := buildWorkflowContextPrompt(req.WorkflowContextPaths, getWorkspaceAPIURL()); workflowPrompt != "" {
-					_ = llmAgent.AddInstructions(workflowPrompt)
-					log.Printf("[WORKFLOW-CTX] Added workflow context to system prompt (%d workflows)", len(req.WorkflowContextPaths))
-				}
-			}
+			// 2. CONTEXT — skills. Attaching a skill is not an instruction
+			//    section (AttachSkill, not AddInstructions), so it stays here
+			//    rather than in the prompt-section registry below.
 			if len(req.SelectedSkills) > 0 {
 				// Phase 3 rewire: skills are now first-class on the agent.
 				// mcpagent's ensureSystemPrompt auto-injects the progressive-
 				// disclosure listing (name + description); CLI transports
 				// additionally project SKILL.md folders to disk in Phase 3b.
 				// The legacy buildSkillPrompt path is gone.
-				if attached := skills.LoadAttachable(getWorkspaceAPIURL(), req.SelectedSkills); len(attached) > 0 {
+				// Resolve against the session's own folder first. A product that
+				// installs skills into its project (Video Studio installs its
+				// managed HyperFrames set there) was invisible to the unscoped
+				// lookup, so those skills never attached — and read_skill, which
+				// serves only ATTACHED skills, then had nothing to read. That is
+				// what surfaced in chat as "the skill reader was blocked".
+				// read_skill can also serve a skill installed in this workspace
+				// but not attached, so a router skill names the specialists and
+				// the agent asks by name instead of shelling out to a path.
+				if underlying := llmAgent.GetUnderlyingAgent(); underlying != nil {
+					underlying.SetInstalledSkillResolver(installedSkillResolver(req.SelectedFolder))
+				}
+				if attached := skills.LoadAttachableIn(getWorkspaceAPIURL(), req.SelectedFolder, req.SelectedSkills); len(attached) > 0 {
+					attachedNames := make([]string, 0, len(attached))
 					for _, s := range attached {
 						_ = llmAgent.AttachSkill(s)
+						attachedNames = append(attachedNames, s.Name)
 					}
-					log.Printf("[SKILLS] Attached %d skill(s) to agent", len(attached))
+					log.Printf("[SKILLS] Attached %d of %d skill(s): %v", len(attached), len(req.SelectedSkills), attachedNames)
 				}
 			}
 
-			// Channel formatting rules — tell the agent which markup subset
-			// the bot platform renders, so replies don't arrive with stray
-			// "## Headers" or "[link](url)" syntax that WhatsApp / Slack
-			// display literally. No-op when BotPlatform is empty (chat UI).
-			if channelPrompt := buildChannelFormattingInstructions(req.BotPlatform); channelPrompt != "" {
-				_ = llmAgent.AddInstructions(channelPrompt)
-				log.Printf("[CHANNEL] Added %s formatting rules to system prompt", req.BotPlatform)
+			// 3. INSTRUCTION SECTIONS — workspace map, capabilities, workflow
+			//    context, channel formatting, browser pointer, reference docs,
+			//    grants, and the CLI tool environment. Each is a named section
+			//    with its condition beside every other section's, and the
+			//    assembler logs what it applied. See prompt_sections.go for why
+			//    these stopped being inline ifs.
+			promptCtx := promptContext{
+				Provider:            req.Provider,
+				HasProfile:          resolvedProfile != nil,
+				IsWorkflowPhase:     isWorkflowPhase,
+				ShellRoot:           shellRoot,
+				PerUserChatsFolder:  perUserChatsFolder,
+				WorkflowPhaseFolder: workflowPhaseFolder,
+				ProfileWorkspace:    agentProfileRuntimeWorkspace(currentUserID, req.SelectedFolder),
+				CapabilitySection:   buildLLMCapabilityPromptSection(r.Context()),
+				// The snapshot instructs the agent to call these. The gate is the
+				// authority on whether it can, so ask it rather than assuming.
+				HasLLMCapabilityTools: toolGate.Admit("list_llm_capabilities") ||
+					toolGate.Admit("text_to_speech") ||
+					toolGate.Admit("generate_music") ||
+					toolGate.Admit("set_provider_auth"),
+				ChannelFormatting: buildChannelFormattingInstructions(req.BotPlatform),
+				GrantSections:     resolvedGrants.PromptSections,
 			}
-
-			// 4. MODE-SPECIFIC — browser.
-			//
-			// The full guide lives in the builder-reference mega-skill
-			// (`browser-usage`) and is loaded on demand. We only
-			// inject a one-line pointer per capability so the agent KNOWS the
-			// surface exists, without paying for the ~10KB browser block on every
-			// single turn.
+			if resolvedProfile != nil {
+				promptCtx.ProfileID = resolvedProfile.Definition.ID
+				promptCtx.NativeCodingTools = strings.EqualFold(strings.TrimSpace(resolvedProfile.Definition.Runtime.AgentTools.Mode), "hybrid")
+			}
+			if len(req.WorkflowContextPaths) > 0 {
+				promptCtx.WorkflowContext = buildWorkflowContextPrompt(req.WorkflowContextPaths, getWorkspaceAPIURL())
+			}
+			// The full browser guide is a ~10KB on-demand skill; this is only a
+			// pointer so the agent knows the surface exists.
 			chatBrowserCfg := buildChatBrowserConfig(req)
 			if chatBrowserCfg.HasAgentBrowser {
 				browserPrompt := "\n## Browser\n\nThis session has a browser tool configured (mode=" + chatBrowserCfg.Mode + "). " +
@@ -5201,21 +5441,18 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					_, endpointGuidance := cdpPromptEndpoints(chatBrowserCfg.CdpPorts, chatBrowserCfg.CdpPort)
 					browserPrompt += endpointGuidance + " These endpoints are configured candidates; live status is authoritative.\n"
 				}
-				_ = llmAgent.AddInstructions(browserPrompt)
-				log.Printf("[BROWSER] Added dynamic browser pointer to system prompt (configured_mode=%s candidate_cdp_ports=%v)",
-					chatBrowserCfg.Mode, chatBrowserCfg.CdpPorts)
+				promptCtx.BrowserPointer = browserPrompt
 			}
-			// 5. REFERENCE DOCS — detailed config schemas, workflow structure, workflow creation.
-			//    Only for worker agents (workflow phase). The orchestrator delegates all file
-			//    work so it doesn't need 300+ lines of config schemas and parsing commands.
-			if isWorkflowPhase {
-				_ = llmAgent.AddInstructions(GetWorkspaceReference(shellRoot, perUserChatsFolder))
+			if common.IsCLIProvider(req.Provider) {
+				promptCtx.CLIToolEnvironment = virtualtools.BuildCLIToolEnvironmentPrompt(req.Provider)
 			}
 
-			// 6. SUPPLEMENTARY — conditional grants, CLI provider overrides.
-			for _, section := range resolvedGrants.PromptSections {
-				_ = llmAgent.AddInstructions(section)
+			includedSections, skippedSections, sectionErr := assemblePromptSections(llmAgent, promptCtx)
+			if sectionErr != nil {
+				sendError(fmt.Sprintf("Failed to assemble the system prompt: %v", sectionErr), true)
+				return
 			}
+			logPromptAssembly(promptCtx, includedSections, skippedSections)
 			if len(resolvedGrants.PromptSections) > 0 {
 				log.Printf("[GRANTS] Appended %d prompt section(s) for active grants: %v", len(resolvedGrants.PromptSections), resolvedGrants.AppliedNames)
 			}
@@ -5232,13 +5469,6 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 
 			log.Printf("[SYSTEM_PROMPT] Final assembled prompt length=%d chars, hasGuidance=%v", len(llmAgent.AssemblyInstructions()), req.LLMGuidance != "" || llmGuidance != "")
 
-			// Add CLI-specific tool mapping for providers that use the api-bridge.
-			// Tool names differ by CLI: Claude Code uses mcp__api-bridge__* while
-			// Codex/Gemini expose the same bridge as mcp_api-bridge_*.
-			if common.IsCLIProvider(req.Provider) {
-				_ = llmAgent.AddInstructions(virtualtools.BuildCLIToolEnvironmentPrompt(req.Provider))
-				log.Printf("[CLI PROVIDER] Added custom tool HTTP API mapping for %s", req.Provider)
-			}
 			// --- Workflow Phase Chat Mode ---
 			// Override system prompt and register plan modification tools for conversational phase editing
 			if isWorkflowPhase && workflowPhaseID != "" {
@@ -5459,17 +5689,29 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					phaseSystemPrompt += "\n\n" + codeExecInstructions
 				}
 
+				// Config schemas and workflow structure belong to this prompt: they
+				// describe the phase agent's own job and no other mode ever gets
+				// them. They used to be appended as a shared section BEFORE the
+				// reset below, which silently discarded them — they never reached
+				// an agent. Building them into the base is what keeps them.
+				phaseSystemPrompt += "\n\n" + GetWorkspaceReference(shellRoot, perUserChatsFolder)
+
 				// Override the agent's system prompt — use SetSystemPrompt to properly set tracking flags
 				// so that rebuildSystemPromptWithUpdatedToolStructure preserves this prompt
 				_ = llmAgent.ResetInstructions(phaseSystemPrompt)
 				log.Printf("[WORKFLOW_PHASE] Overrode system prompt (%d chars) for phase=%s", len(phaseSystemPrompt), workflowPhaseID)
 
-				// Re-append supplementary prompts after system prompt override
-				// (ClearAppendedSystemPrompts above wiped browser/secrets instructions)
-				if capabilitySection := buildLLMCapabilityPromptSection(r.Context()); capabilitySection != "" {
-					_ = llmAgent.AddInstructions(capabilitySection)
-					log.Printf("[WORKFLOW_PHASE] Appended LLM/media capability snapshot to %s system prompt", workflowPhaseID)
+				// ResetInstructions replaces the whole instruction string, so every
+				// shared section assembled earlier is gone. Re-run the SAME
+				// assembler rather than hand-restoring a subset: the previous
+				// hand-written list rebuilt browser/secrets/capability and silently
+				// dropped the workspace map, grants, and channel formatting.
+				phaseIncluded, phaseSkipped, phaseSectionErr := assemblePromptSections(llmAgent, promptCtx)
+				if phaseSectionErr != nil {
+					sendError(fmt.Sprintf("Failed to reassemble the system prompt for phase %s: %v", workflowPhaseID, phaseSectionErr), true)
+					return
 				}
+				logPromptAssembly(promptCtx, phaseIncluded, phaseSkipped)
 				if workflowPhaseID == workflowtypes.WorkflowStatusWorkflowBuilder {
 					if notificationPrompt := buildWorkflowNotificationInstructionsPrompt(req.NotificationRunSummaryInstructions, req.NotificationPulseSummaryInstructions); notificationPrompt != "" {
 						_ = llmAgent.AddInstructions(notificationPrompt)
@@ -5576,13 +5818,11 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 
-				// Register phase-appropriate tools via the shared helper.
-				// The /api/query path passes the live request's options and
-				// applyAllowList=true so the per-turn mode allow list narrows
-				// the tool set. The chat-history auto-restore path
-				// (setupWorkflowPhaseToolsForRestore) calls the same helper with
-				// a synthesized request + applyAllowList=false so the restored
-				// CLI sees the superset; this /api/query later narrows it.
+				// Register phase-appropriate tools via the shared helper. The
+				// chat-history auto-restore path calls the same helper with a
+				// synthesized request, and both now install the identical
+				// surface — there is no per-turn narrowing for one path to
+				// apply and the other to miss.
 				syntheticReq := QueryRequest{
 					LLMConfig:             req.LLMConfig,
 					ExecutionOptions:      req.ExecutionOptions,
@@ -5591,11 +5831,11 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					PresetQueryID:         req.PresetQueryID,
 				}
 				if err := api.installWorkflowPhaseTools(
-					setupCtx, llmAgent, llmAgent.SetToolPolicy, sessionID, currentUserID,
+					setupCtx, llmAgent, sessionID, currentUserID,
 					workflowPhaseID, phaseWorkspacePath, phaseRunFolder,
 					phaseTemplateVars, selectedServers, mergedAPIKeys,
 					phaseReadFile, phaseWriteFile, phaseMoveFile,
-					syntheticReq, true, // applyAllowList=true
+					syntheticReq,
 				); err != nil {
 					// Preserve the original Fatal semantics for the /api/query
 					// caller: the workflow-builder system prompt advertises the
@@ -5784,16 +6024,26 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Load conversation history for this session from the in-memory
-		// cache. When the server restarts the cache is empty and the agent
-		// starts a fresh conversation. After a mode-change above, this replays
-		// just a small pointer to the previous conversation JSON file.
+		// Restore the durable transcript into the process-local UI cache. It is
+		// deliberately NOT replayed into a coding agent: the agent's own live
+		// transport or opaque provider-native continuation handle owns context.
+		// Replaying the UI transcript caused repeated restore cycles to grow a
+		// coding-agent prompt without bound.
+		if !modeChangedThisTurn {
+			api.restorePersistedConversationHistory(
+				sessionID,
+				currentUserID,
+				workflowPhaseFolder,
+			)
+		}
+
+		// Snapshot the UI history. Whether it becomes fallback agent context is
+		// decided only after native coding-agent resume has been resolved.
+		var historyForAgent []llmtypes.MessageContent
 		api.conversationMux.RLock()
 		if history, ok := api.conversationHistory[sessionID]; ok && len(history) > 0 {
-			log.Printf("[CONVERSATION] Replaying %d in-memory messages for session %s", len(history), sessionID)
-			for _, msg := range history {
-				llmAgent.AppendMessage(msg)
-			}
+			historyForAgent = append([]llmtypes.MessageContent(nil), history...)
+			log.Printf("[CONVERSATION] Loaded %d UI-history messages for session %s", len(historyForAgent), sessionID)
 		}
 		api.conversationMux.RUnlock()
 
@@ -5846,6 +6096,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			logfWithContext(queryLogCtx, "[SECRETS] Injected %d secret names (not values) into immutable agent definition", len(allChatSecrets))
 		}
 
+		replayHistoryToAgent := true
 		if underlyingAgent := llmAgent.GetUnderlyingAgent(); underlyingAgent != nil {
 			restoredNativeCodingResume := false
 			restoredConversationPath := strings.TrimSpace(req.RestoredConversationPath)
@@ -5890,7 +6141,11 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					// PiSessionID/--resume without a re-launch).
 					if currentRuntime != nil && !api.sessionHasLiveMainCodingTmux(sessionID) {
 						restoredRuntime = currentRuntime
-						logfWithContext(queryLogCtx, "[CHAT_HISTORY] Active-tab auto-resume: session %s tmux is gone; routing through --resume re-launch + materialize", sessionID)
+						if forceStructuredCodingAgent {
+							logfWithContext(queryLogCtx, "[CHAT_HISTORY] Active-tab auto-resume: session %s is routing through native structured continuation", sessionID)
+						} else {
+							logfWithContext(queryLogCtx, "[CHAT_HISTORY] Active-tab auto-resume: session %s tmux is gone; routing through --resume re-launch + materialize", sessionID)
+						}
 					}
 				}
 			}
@@ -5910,7 +6165,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			// Resume. Gated on a native-resume handle (it IS a coding agent mid-session)
 			// AND "no live tmux" so a genuinely live session is never disrupted by a
 			// spurious relaunch.
-			if !restoredNativeCodingResume && !modeChangedThisTurn && restoredRuntime == nil &&
+			if !forceStructuredCodingAgent && !restoredNativeCodingResume && !modeChangedThisTurn && restoredRuntime == nil &&
 				codingAgentHasNativeResume(finalProvider, underlyingAgent) && !api.sessionHasLiveMainCodingTmux(sessionID) {
 				if runtime, ok, err := ReadChatHistoryRuntimeForSession(currentUserID, sessionID, workflowPhaseFolder); err != nil {
 					logfWithContext(queryLogCtx, "[CHAT_HISTORY] Materialize guard: failed to read runtime for session %s: %v", sessionID, err)
@@ -5921,7 +6176,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			if restoredNativeCodingResume {
-				if restoredRuntimeUsesLaunchableTerminalTransport(restoredRuntime) {
+				if !forceStructuredCodingAgent && restoredRuntimeUsesLaunchableTerminalTransport(restoredRuntime) {
 					if handle, err := mcpagent.StartAgentTransportSession(agentCtx, underlyingAgent); err != nil {
 						logfWithContext(queryLogCtx, "[CHAT_HISTORY] Failed to prelaunch restored coding-agent transport session: %v", err)
 						// PLAT-067. This turn needs a launchable terminal transport and its
@@ -5965,19 +6220,30 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					logfWithContext(queryLogCtx, "[CHAT_HISTORY] Using native coding-agent resume; stripped restored conversation attach context from prompt")
 				}
 			} else if restoredConversationPathForFallback != "" {
-				if shouldAttachRestoredConversationFallback(restoredRuntime, finalProvider, newWorkshopMode) {
-					nextChatQuery := appendRestoredConversationContext(chatQuery, restoredConversationPathForFallback)
-					if nextChatQuery != chatQuery {
-						chatQuery = nextChatQuery
-						logfWithContext(queryLogCtx, "[CHAT_HISTORY] Native resume unavailable; attached restored conversation file as fallback context")
-					}
-				} else {
-					cleanedChatQuery := cleanChatHistoryQuery(chatQuery)
-					if cleanedChatQuery != chatQuery {
-						chatQuery = cleanedChatQuery
-					}
-					logfWithContext(queryLogCtx, "[CHAT_HISTORY] Restoring coding-agent chat via CLI provider %q; skipped restored conversation file fallback", finalProvider)
-				}
+				// A conversation JSON is UI state. Never attach it as an ad-hoc
+				// prompt file: native resume is preferred, and an unavailable native
+				// resume falls back to the bounded in-memory tail below.
+				chatQuery = cleanChatHistoryQuery(chatQuery)
+				logfWithContext(queryLogCtx, "[CHAT_HISTORY] Native resume unavailable; refusing unbounded conversation-file prompt fallback")
+			}
+
+			if isCodingAgentProvider(finalProvider, finalModelID) &&
+				(restoredNativeCodingResume || codingAgentHasNativeResume(finalProvider, underlyingAgent) || api.sessionHasLiveMainCodingTmux(sessionID)) {
+				replayHistoryToAgent = false
+				logfWithContext(queryLogCtx, "[CONVERSATION] Coding-agent context is owned by its transport/native continuation; UI history will not be replayed")
+			}
+		}
+
+		if len(historyForAgent) > 0 && replayHistoryToAgent {
+			historyToReplay := historyForAgent
+			if isCodingAgentProvider(finalProvider, finalModelID) {
+				historyToReplay = boundedChatHistoryTail(historyForAgent, maxCodingAgentFallbackMessages, maxCodingAgentFallbackBytes)
+				logfWithContext(queryLogCtx, "[CONVERSATION] Native coding-agent continuation unavailable; replaying bounded fallback of %d/%d UI-history messages", len(historyToReplay), len(historyForAgent))
+			} else {
+				logfWithContext(queryLogCtx, "[CONVERSATION] Replaying %d in-memory messages for session %s", len(historyToReplay), sessionID)
+			}
+			for _, msg := range historyToReplay {
+				llmAgent.AppendMessage(msg)
 			}
 		}
 
@@ -6092,6 +6358,19 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			persistedHistory = merged
 			log.Printf("[CONVERSATION DEBUG] Mode-change merge: persisting %d msgs (snapshot %d + new %d)", len(persistedHistory), len(preModeChangeSnapshot), len(finalHistory)-1)
 		}
+		// Deliberately NOT bounded: the comment above calls this file the
+		// canonical record of the conversation, and trimming it here deletes the
+		// oldest messages on every write rather than withholding them. The
+		// hazard the bound was added for is the no-resume fallback that feeds
+		// this transcript to a provider as prompt context — that path is bounded
+		// at its own call site with the much smaller
+		// maxCodingAgentFallbackMessages/Bytes, which is lossless because the
+		// file still holds everything.
+		//
+		// The "the coding agent's own conversation is not at risk" argument only
+		// covers CLI providers, which keep their own rollout/transcript. This is
+		// the generic query path: for an API-backed chat there is no provider
+		// transcript behind it, so this file is the only record that exists.
 		persistedHistory = cleanChatHistoryForPersistence(persistedHistory)
 
 		runtimeWorkspacePath := strings.TrimSpace(req.SelectedFolder)
@@ -6126,6 +6405,10 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 		} else if ok && target != nil {
 			persistSessionID = target.SessionID
 			persistConversationPath = target.ConversationPath
+			// Also deliberately unbounded — and the merge makes it sharper: this
+			// combines the restored conversation with the current turn, so a
+			// bound here would trim the very history the user just reopened,
+			// permanently, on the first message they send into it.
 			persistedHistoryForDisk = mergeRestoredChatHistory(target.History, persistedHistory)
 			logfWithContext(queryLogCtx, "[CHAT_HISTORY] Continuing restored coding-agent conversation current_session=%s persisted_session=%s path=%s merged_messages=%d",
 				sessionID, persistSessionID, persistConversationPath, len(persistedHistoryForDisk))
@@ -6612,6 +6895,54 @@ func (api *StreamingAPI) seedCodingAgentRuntimeFromCurrentConversation(sessionID
 		return true, runtime
 	}
 	return false, nil
+}
+
+// restorePersistedConversationHistory hydrates the process-local UI cache for a
+// stable project session after a server restart. The transcript is authoritative
+// for what the user sees, while a coding provider's native session handle is
+// authoritative for agent context. Callers must never treat this return value as
+// a reason to suppress a compatible native resume.
+func (api *StreamingAPI) restorePersistedConversationHistory(sessionID, userID, workspacePath string) bool {
+	if api == nil || strings.TrimSpace(sessionID) == "" {
+		return false
+	}
+
+	api.conversationMux.RLock()
+	_, alreadyLoaded := api.conversationHistory[sessionID]
+	api.conversationMux.RUnlock()
+	if alreadyLoaded {
+		return false
+	}
+
+	target, ok, err := readRestoredChatHistoryPersistTargetForSession(userID, sessionID, workspacePath)
+	if err != nil {
+		log.Printf("[CHAT_HISTORY] Failed to restore durable conversation for session %s: %v", sessionID, err)
+		return false
+	}
+	if !ok || target == nil || len(target.History) == 0 {
+		return false
+	}
+
+	// Recheck under the write lock so simultaneous reconnects cannot replace a
+	// history that was populated by the first request.
+	history := append([]llmtypes.MessageContent(nil), target.History...)
+	api.conversationMux.Lock()
+	if _, exists := api.conversationHistory[sessionID]; exists {
+		api.conversationMux.Unlock()
+		return false
+	}
+	if api.conversationHistory == nil {
+		api.conversationHistory = make(map[string][]llmtypes.MessageContent)
+	}
+	api.conversationHistory[sessionID] = history
+	api.conversationMux.Unlock()
+
+	// Keep writing to the same conversation JSON after recovery. This matters
+	// when a session crosses a date boundary and prevents a second transcript
+	// from being created for the same project.
+	api.rememberRestoredConversationPersistTarget(sessionID, *target)
+	log.Printf("[CHAT_HISTORY] Restored %d durable UI messages for project session %s from %s", len(history), sessionID, target.ConversationPath)
+	return true
 }
 
 // sessionHasLiveCodingTmux reports whether the session currently has a live
@@ -7242,16 +7573,39 @@ func codingAgentHasNativeResume(provider string, underlyingAgent *mcpagent.Agent
 		return false
 	}
 	provider = strings.ToLower(strings.TrimSpace(provider))
-	return provider == "" || strings.EqualFold(handle.Provider.Provider, provider)
+	if provider != "" && !strings.EqualFold(handle.Provider.Provider, provider) {
+		return false
+	}
+
+	// Provider identity alone is not a continuation. A newly configured coding
+	// agent already has its provider/model/working directory, but it cannot
+	// resume until the provider has returned a native conversation ID. Treating
+	// that incomplete handle as resumable prevents the current conversation's
+	// persisted handle from being restored on the next request.
+	if strings.TrimSpace(handle.Provider.NativeSessionID) != "" {
+		return true
+	}
+	// Codex can resume from its project directory when a native thread ID is
+	// unavailable. Other providers require their native session ID.
+	return strings.EqualFold(handle.Provider.Provider, "codex-cli") && strings.TrimSpace(handle.Provider.ProjectDirID) != ""
 }
 
 func codingAgentProviderSupportsNativeResume(provider, modelID string) bool {
+	contract, ok := codingAgentProviderContract(provider, modelID)
+	return ok && contract.SupportsNativeResume
+}
+
+func isCodingAgentProvider(provider, modelID string) bool {
+	_, ok := codingAgentProviderContract(provider, modelID)
+	return ok
+}
+
+func codingAgentProviderContract(provider, modelID string) (llmproviders.CodingAgentProviderContract, bool) {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	if provider == "" {
-		return false
+		return llmproviders.CodingAgentProviderContract{}, false
 	}
-	contract, ok := llmproviders.GetCodingAgentProviderContract(llmproviders.Provider(provider), strings.TrimSpace(modelID))
-	return ok && contract.SupportsNativeResume
+	return llmproviders.GetCodingAgentProviderContract(llmproviders.Provider(provider), strings.TrimSpace(modelID))
 }
 
 func (api *StreamingAPI) seedCodingAgentRuntimeFromRestoredConversation(sessionID, currentProvider, currentWorkshopMode string, runtime *ChatHistoryAgentRuntime, underlyingAgent *mcpagent.Agent) bool {
@@ -8699,11 +9053,11 @@ func (api *StreamingAPI) buildWorkshopConfig(
 	if workshopLLMConfig == nil {
 		workshopLLMConfig = &orchestrator.LLMConfig{}
 	}
-	baseAPIKeys := MergedProviderAPIKeys(ctx)
+	var preloadedAPIKeys *llm.ProviderAPIKeys
 	if len(apiKeys) > 0 && apiKeys[0] != nil {
-		baseAPIKeys = apiKeys[0]
+		preloadedAPIKeys = apiKeys[0]
 	}
-	workshopAPIKeys, credentialErr := api.workflowProviderAPIKeys(ctx, currentUserID, workspacePath, baseAPIKeys)
+	workshopAPIKeys, credentialErr := api.resolveEffectiveAPIKeys(ctx, currentUserID, workspacePath, preloadedAPIKeys)
 	if credentialErr != nil {
 		return nil, fmt.Errorf("load workflow provider credentials: %w", credentialErr)
 	}
@@ -9384,13 +9738,16 @@ func (api *StreamingAPI) buildSkillCallbacks() *todo_creation_human.SkillCallbac
 
 func (api *StreamingAPI) registerMultiAgentSkillTools(registrar interface {
 	RegisterCustomTool(string, string, map[string]interface{}, func(context.Context, map[string]interface{}) (string, error), string) error
-}) error {
+}, disabled func(string) bool) error {
 	skillFuncs := api.buildSkillCallbacks()
 	if skillFuncs == nil {
 		return fmt.Errorf("skill callbacks unavailable")
 	}
 
 	registerTool := func(name, description string, params map[string]interface{}, exec func(context.Context, map[string]interface{}) (string, error)) error {
+		if disabled != nil && disabled(name) {
+			return nil
+		}
 		return registrar.RegisterCustomTool(name, description, params, exec, "skill_tools")
 	}
 
@@ -9620,8 +9977,11 @@ func (api *StreamingAPI) buildLLMToolsCallbacks() *todo_creation_human.LLMToolsC
 
 func (api *StreamingAPI) registerMultiAgentMCPServerTools(registrar interface {
 	RegisterCustomTool(string, string, map[string]interface{}, func(context.Context, map[string]interface{}) (string, error), string) error
-}) error {
+}, disabled func(string) bool) error {
 	registerTool := func(name, description string, params map[string]interface{}, exec func(context.Context, map[string]interface{}) (string, error)) error {
+		if disabled != nil && disabled(name) {
+			return nil
+		}
 		return registrar.RegisterCustomTool(name, description, params, exec, "mcp_server_tools")
 	}
 

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { KeyRound, Plus, Trash2, Eye, EyeOff, Pencil, X, Globe, Bot } from 'lucide-react';
 import { useSecretsStore } from '../../stores';
 import { secretsApi } from '../../api/secrets';
+import { serverOnlySecretNames } from './secretsManagerUtils';
 import type { StoredSecret } from '../../stores';
 
 interface SecretsManagerModalProps {
@@ -12,7 +13,10 @@ interface SecretsManagerModalProps {
 const isValidName = (name: string) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name);
 
 export default function SecretsManagerModal({ onClose }: SecretsManagerModalProps) {
-  const { secrets, addSecret, updateSecret, removeSecret, globalSecrets, fetchGlobalSecrets, botEnabledNames, fetchBotSecrets, toggleBotAccess } = useSecretsStore();
+  const { secrets, addSecret, updateSecret, removeSecret, globalSecrets, fetchGlobalSecrets, storedUserSecrets, botEnabledNames, fetchBotSecrets, toggleBotAccess, lastError, clearLastError } = useSecretsStore();
+
+  // Secrets the server holds that this browser has no local record of.
+  const serverOnly = serverOnlySecretNames(storedUserSecrets, secrets);
 
   useEffect(() => {
     if (globalSecrets.length === 0) {
@@ -271,7 +275,7 @@ export default function SecretsManagerModal({ onClose }: SecretsManagerModalProp
                 Your Secrets
               </h4>
               <div className="flex-1 overflow-y-auto space-y-2">
-                {secrets.length === 0 ? (
+                {secrets.length === 0 && serverOnly.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-8 text-gray-500 dark:text-gray-400">
                     <KeyRound className="w-8 h-8 mb-2 opacity-50" />
                     <p className="text-sm font-medium">No secrets stored</p>
@@ -378,6 +382,32 @@ export default function SecretsManagerModal({ onClose }: SecretsManagerModalProp
                     </div>
                   ))
                 )}
+                          {lastError ? (
+                  <div role="alert" data-testid="secrets-save-error" className="rounded-md border border-red-300 bg-red-50 p-2.5 text-xs text-red-700 dark:border-red-800 dark:bg-red-950/40 dark:text-red-300">
+                    <div className="flex items-start gap-2">
+                      <span className="flex-1">{lastError}</span>
+                      <button type="button" onClick={clearLastError} className="shrink-0 underline">Dismiss</button>
+                    </div>
+                  </div>
+                ) : null}
+                {serverOnly.map((name) => (
+                  <div
+                    key={`server:${name}`}
+                    data-testid="server-only-secret"
+                    className="border border-gray-200 dark:border-gray-600 rounded-md p-2.5 bg-gray-50 dark:bg-gray-900/40"
+                  >
+                    <div className="flex items-center gap-2">
+                      <KeyRound className="w-3.5 h-3.5 shrink-0 text-gray-400" />
+                      <span className="font-mono text-sm text-gray-900 dark:text-gray-100 truncate">{name}</span>
+                      <span className="ml-auto shrink-0 rounded bg-gray-200 dark:bg-gray-700 px-1.5 py-0.5 text-[10px] font-medium text-gray-600 dark:text-gray-300">
+                        Saved on server
+                      </span>
+                    </div>
+                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                      Available to agents in this workspace. Its value was saved elsewhere, so it cannot be shown or edited here — add it again above to replace it.
+                    </p>
+                  </div>
+                ))}
               </div>
             </div>
           </div>

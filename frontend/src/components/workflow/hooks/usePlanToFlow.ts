@@ -2,7 +2,7 @@ import { useMemo, useRef, useEffect } from 'react'
 import type { Node, Edge } from '@xyflow/react'
 import dagre from 'dagre'
 import type { PlanStep, PlanningResponse, AgentLLMConfig, ValidationSchema, RoutingRoute, MessageSequenceItem } from '../../../utils/stepConfigMatching'
-import { isHumanInputStep, isTodoTaskStep, isRoutingStep, isMessageSequenceStep, isRegularStep } from '../../../utils/stepConfigMatching'
+import { isHumanInputStep, isTodoTaskStep, isRoutingStep, isMessageSequenceStep, isRegularStep, runsAsMessageSequence, effectiveMessageSequenceItems } from '../../../utils/stepConfigMatching'
 import type { ChangeType, PlanChanges } from './usePlanData'
 import type { VariablesManifest, EvaluationStep } from '../../../services/api-types'
 import type { VariablesNodeData } from '../nodes/VariablesNode'
@@ -314,18 +314,16 @@ function estimateNodeHeight(node: WorkflowNode): number {
       learningObjective.length > 0 ||
       learningConfig?.lock_learnings === true ||
       learningAccess === 'read' ||
-      learningAccess === 'read-write' ||
-      learningAccess === 'none'
+      learningAccess === 'read-write'
     )
     const hasKnowledgebaseMetadata = (
       knowledgebaseContribution.length > 0 ||
       knowledgebaseAccess === 'read' ||
       knowledgebaseAccess === 'write' ||
       knowledgebaseAccess === 'read-write' ||
-      knowledgebaseAccess === 'none' ||
       referencesKnowledgebase
     )
-    const hasDbMetadata = dbAccess === 'read' || dbAccess === 'write' || dbAccess === 'read-write' || dbAccess === 'none' || referencesDatabase
+    const hasDbMetadata = dbAccess === 'read' || dbAccess === 'write' || dbAccess === 'read-write' || referencesDatabase
     const metadataRowCount = [hasLearningMetadata, hasKnowledgebaseMetadata, hasDbMetadata].filter(Boolean).length
     if (metadataRowCount > 0) {
       contentHeight += (hasLearningMetadata ? 44 : 0) + (hasKnowledgebaseMetadata ? 44 : 0) + (hasDbMetadata ? 28 : 0) +
@@ -804,14 +802,18 @@ function stepToNode(
     }
   }
 
-  if (isMessageSequenceStep(step)) {
+  // Covers authored message_sequence steps AND stored `regular` steps, which the
+  // runtime normalizes into a sequence before running (see runsAsMessageSequence).
+  // Showing the latter as a plain step card described an execution path that no
+  // longer exists.
+  if (runsAsMessageSequence(step)) {
     return {
       id: nodeId,
       type: 'message_sequence',
       position: { x: 0, y: 0 },
       data: {
         ...baseData,
-        items: step.items
+        items: effectiveMessageSequenceItems(step)
         // Note: status is inherited from baseData (computed based on completedStepIndices)
       } as MessageSequenceNodeData
     }
@@ -959,9 +961,10 @@ function processSteps(
           )
           todoTaskSubAgentNodes.push(...nestedTodoGraph.nodes)
           todoTaskEdges.push(...nestedTodoGraph.edges)
-        } else if (isMessageSequenceStep(subAgentStep)) {
+        } else if (runsAsMessageSequence(subAgentStep)) {
           // A message_sequence sub-agent must render as a MessageSequenceNode so its
-          // ordered items show — not as a generic step card.
+          // ordered items show — not as a generic step card. A stored `regular`
+          // sub-agent runs as one too, so it gets the same treatment.
           const seqNode: WorkflowNode = {
             id: subAgentNodeId,
             type: 'message_sequence',
@@ -970,7 +973,7 @@ function processSteps(
               id: subAgentNodeId,
               title: subAgentStep.title || `${route.route_name || route.route_id || routeId}`,
               description: subAgentStep.description,
-              items: subAgentStep.items,
+              items: effectiveMessageSequenceItems(subAgentStep),
               status,
               stepIndex: parentStepIndex,
               step: subAgentStep,

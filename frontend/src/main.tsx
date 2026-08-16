@@ -6,7 +6,10 @@ import './index.css'
 import App from './App.tsx'
 import ServerConnectionStatus from './components/ServerConnectionStatus'
 import ErrorBoundary from './components/ErrorBoundary'
+import { applyRuntimeBranding } from './runtime-branding'
 import { useCapabilitiesStore } from './stores/useCapabilitiesStore'
+
+applyRuntimeBranding(window.__APP_RUNTIME_CONFIG__ as Parameters<typeof applyRuntimeBranding>[0])
 
 // Kick off the capabilities load at app entry (this always runs on a full load),
 // independent of any component mount. The store retries until the backend answers,

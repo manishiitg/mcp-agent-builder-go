@@ -366,7 +366,38 @@ func enhanceToolDescriptionForWorkflowPhase(toolName, originalDescription, workf
 
 // enhanceToolDescriptionForMultiAgentMode augments workspace tool descriptions for multi-agent plan mode.
 // chatsFolder is the full per-user path (e.g. "_users/default/Chats").
-func enhanceToolDescriptionForMultiAgentMode(toolName, originalDescription, chatsFolder string) string {
+//
+// multiAgentPlacementGuidance returns the artifact-layout lines for one tool.
+// A product declares its own per tool in runtime.workspace.placement; a session
+// with no profile falls back to AgentWorks' own layout.
+//
+// This used to be hardcoded and appended to every write tool alike, so Video
+// Studio — which has no plan folders and does not carry the Pulse tools at all
+// — was told on every get_api_spec call to save plan outputs to
+// {plan_id}/output.txt and org goals to pulse/goals.html, contradicting the
+// uploads//work//outputs/ layout its own system prompt had just given it.
+//
+// A profile that declares nothing for a tool gets no placement lines, which is
+// the correct answer rather than a reason to fall back: inheriting another
+// product's conventions is the bug this replaced.
+func multiAgentPlacementGuidance(toolName, chatsFolder string, profile *resolvedAgentProfile) []string {
+	if profile != nil {
+		return profile.Definition.Runtime.Workspace.Placement[toolName]
+	}
+	switch toolName {
+	case "diff_patch_workspace_file", "execute_shell_command":
+		return []string{
+			fmt.Sprintf("Save plan outputs inside the plan folder (e.g. '%s/{plan_id}/output.txt').", chatsFolder),
+			"Org-level goals and pulse artifacts belong in `pulse/` (for example `pulse/goals.html` and `pulse/org-pulse.html`).",
+		}
+	}
+	return nil
+}
+
+// enhanceToolDescriptionForMultiAgentMode augments workspace tool descriptions for multi-agent plan mode.
+// chatsFolder is the full per-user path (e.g. "_users/default/Chats").
+// profile is the active agent profile, nil for a plain AgentWorks session.
+func enhanceToolDescriptionForMultiAgentMode(toolName, originalDescription, chatsFolder string, profile *resolvedAgentProfile) string {
 	writeTools := map[string]bool{
 		"diff_patch_workspace_file": true,
 		"execute_shell_command":     true,
@@ -377,10 +408,18 @@ func enhanceToolDescriptionForMultiAgentMode(toolName, originalDescription, chat
 
 	if writeTools[toolName] {
 		accessInfo.WriteString(fmt.Sprintf("\n\n⚠️ **IMPORTANT:** You can write to '%s/' (primary). All other folders are read-only unless explicitly allowed. Use dedicated configuration tools for config changes; do not read or write `config/` with file tools.", chatsFolder))
-		accessInfo.WriteString(fmt.Sprintf("\nSave plan outputs inside the plan folder (e.g. '%s/{plan_id}/output.txt').", chatsFolder))
-		accessInfo.WriteString("\nOrg-level goals and pulse artifacts belong in `pulse/` (for example `pulse/goals.html` and `pulse/org-pulse.html`).")
+		for _, line := range multiAgentPlacementGuidance(toolName, chatsFolder, profile) {
+			accessInfo.WriteString("\n" + line)
+		}
 	} else {
-		accessInfo.WriteString(fmt.Sprintf("\n\nYou have READ access to allowed workspace folders. WRITE access is restricted to `%s/`, `pulse/`, and any explicitly allowed subfolders. Configuration data is available through dedicated tools.", chatsFolder))
+		// Read-only tools name the writable scopes so the model knows where a
+		// companion write tool may put things. Only AgentWorks' own layout adds
+		// pulse/ here; a product's writable scope is its project folder.
+		writable := fmt.Sprintf("`%s/`", chatsFolder)
+		if profile == nil {
+			writable = fmt.Sprintf("`%s/`, `pulse/`,", chatsFolder)
+		}
+		accessInfo.WriteString(fmt.Sprintf("\n\nYou have READ access to allowed workspace folders. WRITE access is restricted to %s and any explicitly allowed subfolders. Configuration data is available through dedicated tools.", writable))
 	}
 
 	return originalDescription + accessInfo.String()

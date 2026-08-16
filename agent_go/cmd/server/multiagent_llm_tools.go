@@ -1156,12 +1156,19 @@ func estimateLLMCost(args map[string]interface{}) (map[string]interface{}, error
 	}, nil
 }
 
-func (api *StreamingAPI) registerMultiAgentLLMTools(underlyingAgent definitionToolRegistrar) error {
+// registerMultiAgentLLMTools registers the shared AgentWorks model-library
+// tools. Product profiles may opt out of individual tools through
+// profile.tool_policy.disabled; otherwise every tool-backed chat receives the
+// generic administration surface by default.
+func (api *StreamingAPI) registerMultiAgentLLMTools(underlyingAgent definitionToolRegistrar, disabled func(string) bool) error {
 	if underlyingAgent == nil {
 		return fmt.Errorf("underlying agent is nil")
 	}
 
 	registerTool := func(name, description string, params map[string]interface{}, exec func(context.Context, map[string]interface{}) (string, error)) error {
+		if disabled != nil && disabled(name) {
+			return nil
+		}
 		return underlyingAgent.RegisterCustomTool(name, description, params, exec, "llm_config_tools")
 	}
 

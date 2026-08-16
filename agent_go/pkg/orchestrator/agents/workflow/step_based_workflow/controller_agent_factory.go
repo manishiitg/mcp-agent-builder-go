@@ -1439,6 +1439,14 @@ type SubAgentExecutionContext struct {
 	Progress     *StepProgress
 	StepConfig   *AgentConfigs // Step-level configuration for LLM overrides
 
+	// HumanInputs is the run_full_workflow human_inputs map, unscoped. A route
+	// dispatch (executePredefinedSubAgent) looks up its own entry by the
+	// dispatched step's ID. Without this, only the todo_task step's OWN entry
+	// (keyed by its own ID) ever reached a prompt — a caller supplying guidance
+	// keyed by a ROUTE's ID, e.g. human_inputs={"infographic-research": "..."},
+	// had it silently dropped: no error, and the route ran with no idea it existed.
+	HumanInputs map[string]string
+
 	// TierSelectionRequired tells the sub-agent tool handlers to reject calls that
 	// don't include a valid preferred_tier. Mirrors the enableTierSelection flag
 	// used when building the tool schema.
@@ -2048,6 +2056,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutePredefinedSubAgentSyncFu
 			response,
 			execCtx.AllSteps,
 			execCtx.Progress,
+			execCtx.HumanInputs,
 		)
 
 		executionTime := time.Since(startTime)

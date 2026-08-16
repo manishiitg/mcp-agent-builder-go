@@ -187,6 +187,28 @@ func (e *BackgroundAgentTerminatedEvent) GetEventType() events.EventType {
 	return BackgroundAgentTerminated
 }
 
+// PresentationUpdatedEvent announces that a product tool has shown or
+// re-shown something in ui_presentations (a video today; a report or any
+// other kind a future product declares under the same contract). Kind
+// dispatches the frontend's presentation renderer registry, the same way it
+// dispatches ToolBinding.Presentation on the backend -- one declared value,
+// two consumers, instead of a hardcoded name check on either side.
+//
+// It carries the full title and payload so a listener can render immediately
+// without a second database round trip.
+type PresentationUpdatedEvent struct {
+	events.BaseEventData
+	PresentationID string                 `json:"presentation_id"`
+	Kind           string                 `json:"kind"`
+	Title          string                 `json:"title"`
+	WorkspacePath  string                 `json:"workspace_path"`
+	Payload        map[string]interface{} `json:"payload"`
+}
+
+func (e *PresentationUpdatedEvent) GetEventType() events.EventType {
+	return PresentationUpdated
+}
+
 // SyntheticTurnReadyEvent notifies the main agent that background work has
 // started or completed, so a synthetic turn can weave the update in.
 type SyntheticTurnReadyEvent struct {

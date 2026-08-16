@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { KeyRound, Check, Settings, Globe, Square, CheckSquare } from 'lucide-react';
+import { Shield, Check, Settings, Globe, Square, CheckSquare } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Card } from '../ui/Card';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip';
@@ -12,6 +12,8 @@ interface SecretSelectionDropdownProps {
   onSelectAll: (allSecretIds: string[]) => void;
   onClearAll: () => void;
   disabled?: boolean;
+  placement?: 'above' | 'below';
+  align?: 'left' | 'right';
 }
 
 export default function SecretSelectionDropdown({
@@ -19,7 +21,9 @@ export default function SecretSelectionDropdown({
   onSecretToggle,
   onSelectAll,
   onClearAll,
-  disabled = false
+  disabled = false,
+  placement = 'above',
+  align = 'left',
 }: SecretSelectionDropdownProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [showManager, setShowManager] = useState(false);
@@ -87,7 +91,7 @@ export default function SecretSelectionDropdown({
                   : 'bg-gray-100 dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-400 dark:text-gray-500'
               } ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:pr-2'}`}
             >
-              <KeyRound className="w-4 h-4 flex-shrink-0" />
+              <Shield className="w-4 h-4 flex-shrink-0" />
               <span className="text-xs font-medium max-w-0 overflow-hidden whitespace-nowrap group-hover:max-w-[70px] transition-all duration-200">
                 {labelText}
               </span>
@@ -105,7 +109,7 @@ export default function SecretSelectionDropdown({
               onClick={() => setIsOpen(false)}
             />
 
-            <div className="absolute bottom-full left-0 mb-1 z-50 w-64">
+            <div className={`absolute z-50 w-64 max-w-[calc(100vw-1rem)] ${align === 'right' ? 'right-0' : 'left-0'} ${placement === 'above' ? 'bottom-full mb-1' : 'top-full mt-1'}`}>
               <Card className="p-4 shadow-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">

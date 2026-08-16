@@ -303,6 +303,7 @@ Always write publish/status.json.`
     modes: ['workflow', 'multi-agent'],
     requiredWorkflowMode: 'plan',
     requiredWorkshopMode: 'workshop',
+    chiefOfStaffOnly: true,
     source: 'builtin',
     execute: (ctx) => {
       if (ctx.modeCategory === 'multi-agent') {
@@ -335,6 +336,7 @@ Always write publish/status.json.`
     description: 'Set org goals, align automations, and configure Daily Org Pulse',
     icon: <Target className="w-4 h-4" />,
     modes: ['multi-agent'],
+    chiefOfStaffOnly: true,
     source: 'builtin',
     execute: (ctx) => {
       const appStore = ctx.getAppStore()
@@ -375,6 +377,7 @@ Also ask whether I want to set up org-level backup and publish:
     description: 'Set up or tune Daily Org Pulse',
     icon: <Activity className="w-4 h-4" />,
     modes: ['multi-agent'],
+    chiefOfStaffOnly: true,
     source: 'builtin',
     execute: (ctx) => {
       const appStore = ctx.getAppStore()
@@ -411,6 +414,7 @@ Only enable or change the built-in Org Pulse schedule after I confirm the cadenc
     description: 'Set up or run backup for org goals, pulse, and tasks',
     icon: <Cloud className="w-4 h-4" />,
     modes: ['multi-agent'],
+    chiefOfStaffOnly: true,
     source: 'builtin',
     execute: (ctx) => {
       const appStore = ctx.getAppStore()
@@ -442,6 +446,7 @@ Always write pulse/backup/status.json. Never write org backup state into any wor
     description: 'Set up or publish org goals and Org Pulse pages',
     icon: <Globe className="w-4 h-4" />,
     modes: ['multi-agent'],
+    chiefOfStaffOnly: true,
     source: 'builtin',
     execute: (ctx) => {
       const appStore = ctx.getAppStore()
@@ -471,6 +476,7 @@ Always write pulse/publish/status.json. Never publish secrets or raw task transc
     description: 'Turn this conversation into a reusable automation (Workflow/<name>/)',
     icon: <Layers className="w-4 h-4" />,
     modes: ['multi-agent'],
+    chiefOfStaffOnly: true,
     source: 'builtin',
     execute: (ctx) => {
       const instruction = `Turn our current conversation into a new reusable workflow by calling the \`create_workflow\` tool with a valid workflow.json and plan.json.

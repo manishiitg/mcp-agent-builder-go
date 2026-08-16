@@ -658,12 +658,86 @@ describe('pairToolCalls — args and result surfaced on the pair', () => {
     expect(pair.status).toBe('ok')
   })
 
+  it('unwraps Cursor CallMcpTool into the actual MCP tool and nested arguments', () => {
+    const [pair] = pairToolCalls([
+      evt({
+        id: 'cursor-start', session_id: 's1', type: 'tool_call_start',
+        data: { data: {
+          tool_call_id: 'cursor-1',
+          tool_name: 'CallMcpTool',
+          tool_params: { arguments: {
+            server: 'api-bridge',
+            toolName: 'execute_shell_command',
+            arguments: { command: 'pwd' },
+          } },
+        } } as never,
+      }),
+    ])
+
+    expect(pair.name).toBe('execute_shell_command')
+    expect(pair.server).toBe('api-bridge')
+    expect(pair.args).toBe('{"command":"pwd"}')
+  })
+
+  it('unwraps Cursor structured CallMcpTool variants with bridge identifiers', () => {
+    const [pair] = pairToolCalls([
+      evt({
+        id: 'cursor-structured-start', session_id: 's1', type: 'tool_call_start',
+        data: { data: {
+          tool_call_id: 'cursor-structured-1',
+          tool_name: 'call_mcp_tool',
+          tool_params: { arguments: {
+            providerIdentifier: 'api-bridge',
+            serverIdentifier: 'api-bridge',
+            toolName: 'execute_shell_command',
+            args: { command: 'pwd' },
+          } },
+        } } as never,
+      }),
+    ])
+
+    expect(pair.name).toBe('execute_shell_command')
+    expect(pair.server).toBe('api-bridge')
+    expect(pair.args).toBe('{"command":"pwd"}')
+  })
+
+  it('drops an orphan Cursor CallMcpTool event with no resolvable capability', () => {
+    const pairs = pairToolCalls([
+      evt({
+        id: 'cursor-orphan', session_id: 's1', type: 'tool_call_end',
+        data: { data: { tool_call_id: 'cursor-orphan-1', tool_name: 'CallMcpTool' } } as never,
+      }),
+    ])
+
+    expect(pairs).toEqual([])
+  })
+
   it('leaves args/result undefined when the provider sent neither', () => {
     const [pair] = pairToolCalls([
       evt({ id: 'a', session_id: 's1', type: 'tool_call_start', data: { data: { tool_call_id: 'c1', tool_name: 'x' } } as never }),
     ])
     expect(pair.args).toBeUndefined()
     expect(pair.result).toBeUndefined()
+  })
+
+  it('recovers empty provider-start arguments from the structured coding transcript', () => {
+    const start = evt({
+      id: 'start', session_id: 's1', type: 'tool_call_start',
+      data: { data: { tool_call_id: 'toolu_1', tool_name: 'execute_shell_command', tool_params: { arguments: '' } } } as never,
+    })
+    const end = evt({
+      id: 'end', session_id: 's1', type: 'tool_call_end',
+      data: { data: { tool_call_id: 'toolu_1', tool_name: 'execute_shell_command', result: 'ok' } } as never,
+    })
+    const completion = evt({
+      id: 'completion', session_id: 's1', type: 'llm_generation_end',
+      data: { data: { metadata: { generation_info: { coding_provider_intermediate_messages: { messages: [{
+        Role: 'ai', Parts: [{ ID: 'toolu_1', FunctionCall: { Name: 'mcp__api-bridge__execute_shell_command', Arguments: '{"command":"pwd"}' } }],
+      }] } } } } } as never,
+    })
+    const [pair] = pairToolCalls([start, end, completion])
+    expect(pair.args).toBe('{"command":"pwd"}')
+    expect(pair.result).toBe('ok')
   })
 
   it('keeps direct CLI arguments and error output when the canonical fields are absent', () => {

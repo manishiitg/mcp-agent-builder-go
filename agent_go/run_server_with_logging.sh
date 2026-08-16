@@ -44,6 +44,7 @@ WITH_FRONTEND=false
 ONLY_FRONTEND=false
 UPDATE_MMX_CLI=false
 FRONTEND_BUILD_MODE=false
+WITHOUT_ELECTRON=false
 ENABLE_CHAT_TERMINAL_DEBUGS=false
 MCP_SERVER_API_TOKEN_ARG=""
 MCP_SERVER_API_TOKEN_ARG_SET=false
@@ -76,6 +77,9 @@ for arg in "$@"; do
             ;;
         --build)
             FRONTEND_BUILD_MODE=true
+            ;;
+        --without-electron)
+            WITHOUT_ELECTRON=true
             ;;
         --enable-chat-terminal-debugs)
             ENABLE_CHAT_TERMINAL_DEBUGS=true
@@ -144,6 +148,16 @@ port_in_use() {
     lsof -nP -iTCP:"$1" -sTCP:LISTEN > /dev/null 2>&1
 }
 
+json_escape_runtime_value() {
+    local value="$1"
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    value="${value//$'\n'/\\n}"
+    value="${value//$'\r'/\\r}"
+    value="${value//$'\t'/\\t}"
+    printf '%s' "$value"
+}
+
 print_port_status() {
     local port="$1"
     local label="$2"
@@ -176,6 +190,13 @@ kill_process_on_port() {
     local port="$1"
     local label="${2:-process on port $port}"
     local grace_attempts="${3:-50}"
+
+    if [ "${AGENTWORKS_STRICT_PROCESS_OWNERSHIP:-false}" = "true" ]; then
+        if port_in_use "$port"; then
+            echo "⚠️  Strict process ownership: refusing to kill unrecorded $label on port $port"
+        fi
+        return 0
+    fi
 
     local pid
     pid="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | head -1)"
@@ -323,7 +344,7 @@ if [ "$ONLY_FRONTEND" = true ]; then
     FRONTEND_DIR="${SCRIPT_DIR}/../frontend"
     DESKTOP_DIR="${SCRIPT_DIR}/../desktop"
     ELECTRON_BIN="${DESKTOP_DIR}/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron"
-    FRONTEND_RUNTIME_CONFIG_PATH="${SCRIPT_DIR}/../frontend/public/runtime-config.js"
+    FRONTEND_RUNTIME_CONFIG_PATH="${AGENTWORKS_RUNTIME_CONFIG_PATH:-${SCRIPT_DIR}/../frontend/public/runtime-config.js}"
 
     # Fallback chain for AGENT_PORT / WORKSPACE_PORT (when not explicitly set):
     #   1. running backend process (most accurate — survives stale config)
@@ -389,18 +410,23 @@ if [ "$ONLY_FRONTEND" = true ]; then
         echo "🔧 Vite URL: $FRONTEND_URL"
     fi
 
-    mkdir -p logs
+    LOG_DIR="${AGENTWORKS_LOG_DIR:-logs}"
+    RUNTIME_APP_NAME="$(json_escape_runtime_value "${AGENTWORKS_APP_NAME:-AgentWorks}")"
+    RUNTIME_FAVICON_URL="$(json_escape_runtime_value "${AGENTWORKS_FAVICON_URL:-/logo.svg}")"
+    mkdir -p "$LOG_DIR"
     mkdir -p "$(dirname "$FRONTEND_RUNTIME_CONFIG_PATH")"
     cat > "$FRONTEND_RUNTIME_CONFIG_PATH" <<EOF
 window.__APP_RUNTIME_CONFIG__ = {
   apiBaseUrl: "${MCP_AGENT_SERVER_URL}",
-  workspaceApiBaseUrl: "${WORKSPACE_API_URL}"
+  workspaceApiBaseUrl: "${WORKSPACE_API_URL}",
+  appName: "${RUNTIME_APP_NAME}",
+  faviconUrl: "${RUNTIME_FAVICON_URL}"
 };
 EOF
     echo "📝 Frontend runtime config written to: $FRONTEND_RUNTIME_CONFIG_PATH"
 
-    FRONTEND_LOG_PATH="logs/frontend_debug.log"
-    ELECTRON_LOG_PATH="logs/electron_debug.log"
+    FRONTEND_LOG_PATH="${LOG_DIR}/frontend_debug.log"
+    ELECTRON_LOG_PATH="${LOG_DIR}/electron_debug.log"
     > "$FRONTEND_LOG_PATH"
     > "$ELECTRON_LOG_PATH"
 
@@ -493,36 +519,41 @@ EOF
         exit 1
     fi
 
-    if [ ! -f "${DESKTOP_DIR}/package.json" ]; then
+    if [ "$WITHOUT_ELECTRON" != true ] && [ ! -f "${DESKTOP_DIR}/package.json" ]; then
         echo "❌ Error: desktop package.json not found: ${DESKTOP_DIR}/package.json"
         kill_process_tree "$FRONTEND_PID" "frontend server"
         exit 1
     fi
-    if [ ! -x "$ELECTRON_BIN" ]; then
+    if [ "$WITHOUT_ELECTRON" != true ] && [ ! -x "$ELECTRON_BIN" ]; then
         echo "❌ Error: Electron binary not found or not executable: $ELECTRON_BIN"
         kill_process_tree "$FRONTEND_PID" "frontend server"
         print_port_status "$FRONTEND_PORT" "frontend"
         exit 1
     fi
 
-    echo "🚀 Electron Session Started: $(date)" > "$ELECTRON_LOG_PATH"
-    if [ "$BACKGROUND_MODE" = true ]; then
-        nohup bash -lc "cd \"$DESKTOP_DIR\" && DEV_URL=\"$FRONTEND_URL\" exec \"$ELECTRON_BIN\" ." >> "$ELECTRON_LOG_PATH" 2>&1 &
+    ELECTRON_PID=""
+    if [ "$WITHOUT_ELECTRON" = true ]; then
+        echo "🌐 Browser-only frontend requested; Electron will not be started"
     else
-        (
-            cd "$DESKTOP_DIR" || exit 1
-            DEV_URL="$FRONTEND_URL" exec "$ELECTRON_BIN" .
-        ) >> "$ELECTRON_LOG_PATH" 2>&1 &
-    fi
-    ELECTRON_PID=$!
-    echo "✅ Electron started (PID: $ELECTRON_PID)"
-    sleep 2
-    if ! kill -0 "$ELECTRON_PID" 2>/dev/null; then
-        echo "❌ Error: Electron exited immediately. Check logs: $ELECTRON_LOG_PATH"
-        tail -30 "$ELECTRON_LOG_PATH"
-        kill_process_tree "$FRONTEND_PID" "frontend server"
-        print_port_status "$FRONTEND_PORT" "frontend"
-        exit 1
+        echo "🚀 Electron Session Started: $(date)" > "$ELECTRON_LOG_PATH"
+        if [ "$BACKGROUND_MODE" = true ]; then
+            nohup bash -lc "cd \"$DESKTOP_DIR\" && DEV_URL=\"$FRONTEND_URL\" exec \"$ELECTRON_BIN\" ." >> "$ELECTRON_LOG_PATH" 2>&1 &
+        else
+            (
+                cd "$DESKTOP_DIR" || exit 1
+                DEV_URL="$FRONTEND_URL" exec "$ELECTRON_BIN" .
+            ) >> "$ELECTRON_LOG_PATH" 2>&1 &
+        fi
+        ELECTRON_PID=$!
+        echo "✅ Electron started (PID: $ELECTRON_PID)"
+        sleep 2
+        if ! kill -0 "$ELECTRON_PID" 2>/dev/null; then
+            echo "❌ Error: Electron exited immediately. Check logs: $ELECTRON_LOG_PATH"
+            tail -30 "$ELECTRON_LOG_PATH"
+            kill_process_tree "$FRONTEND_PID" "frontend server"
+            print_port_status "$FRONTEND_PORT" "frontend"
+            exit 1
+        fi
     fi
 
     cleanup_frontend_only() {
@@ -547,16 +578,16 @@ EOF
         echo ""
         echo "✅ Frontend services running in background:"
         echo "   - Frontend server (PID: $FRONTEND_PID) — $FRONTEND_URL"
-        echo "   - Electron (PID: $ELECTRON_PID)"
-        echo "   Logs: $FRONTEND_LOG_PATH (vite), $ELECTRON_LOG_PATH (electron)"
-        echo "🛑 To stop: kill $FRONTEND_PID $ELECTRON_PID"
+        [ -n "$ELECTRON_PID" ] && echo "   - Electron (PID: $ELECTRON_PID)"
+        echo "   Logs: $FRONTEND_LOG_PATH (vite)${ELECTRON_PID:+, $ELECTRON_LOG_PATH (electron)}"
+        echo "🛑 To stop: kill $FRONTEND_PID${ELECTRON_PID:+ $ELECTRON_PID}"
         exit 0
     fi
 
     echo ""
     echo "✅ Frontend services running (foreground):"
     echo "   - Frontend server (PID: $FRONTEND_PID) — $FRONTEND_URL"
-    echo "   - Electron (PID: $ELECTRON_PID)"
+    [ -n "$ELECTRON_PID" ] && echo "   - Electron (PID: $ELECTRON_PID)"
     echo "   Backend expected at: $MCP_AGENT_SERVER_URL"
     echo "   Press Ctrl+C to stop."
     echo ""
@@ -566,7 +597,7 @@ EOF
             tail -20 "$FRONTEND_LOG_PATH"
             exit 1
         fi
-        if ! kill -0 "$ELECTRON_PID" 2>/dev/null; then
+        if [ -n "$ELECTRON_PID" ] && ! kill -0 "$ELECTRON_PID" 2>/dev/null; then
             echo "❌ Electron exited. Check logs: $ELECTRON_LOG_PATH"
             tail -30 "$ELECTRON_LOG_PATH"
             kill_process_tree "$FRONTEND_PID" "frontend server"
@@ -748,17 +779,42 @@ ensure_local_auth_secret() {
     echo "🔐 Generated local AUTH_SECRET in $target_env_file"
 }
 
-# Source environment variables from .env file if it exists
+# Source an env file and export every assignment to child processes. The server,
+# workspace, Electron, and provider CLIs all need the same resolved instance
+# environment, including a persisted AUTH_SECRET on the second launch.
+source_exported_env_file() {
+    local env_file="$1"
+    local restore_allexport=true
+    case "$-" in
+        *a*) restore_allexport=false ;;
+    esac
+    set -a
+    source "$env_file"
+    if [ "$restore_allexport" = true ]; then
+        set +a
+    fi
+}
+
+# Source environment variables from an explicit instance file when configured;
+# otherwise preserve the historical repo-local discovery behavior.
 ENV_FILE_PATH=""
-if [ -f "../agent_go/.env" ]; then
+if [ -n "${AGENTWORKS_ENV_FILE:-}" ]; then
+    ENV_FILE_PATH="$AGENTWORKS_ENV_FILE"
+    if [ -f "$ENV_FILE_PATH" ]; then
+        echo "🔧 Loading environment variables from isolated instance file: $ENV_FILE_PATH"
+        source_exported_env_file "$ENV_FILE_PATH"
+    else
+        echo "🔧 Isolated instance environment will be initialized at: $ENV_FILE_PATH"
+    fi
+elif [ -f "../agent_go/.env" ]; then
     echo "🔧 Loading environment variables from ../agent_go/.env..."
     ENV_FILE_PATH="../agent_go/.env"
-    source ../agent_go/.env
+    source_exported_env_file ../agent_go/.env
     echo "✅ Environment variables loaded (including Langfuse configuration)"
 elif [ -f ".env" ]; then
     echo "🔧 Loading environment variables from .env..."
     ENV_FILE_PATH=".env"
-    source .env
+    source_exported_env_file .env
     echo "✅ Environment variables loaded (including Langfuse configuration)"
 else
     echo "⚠️  No .env file found. Langfuse tracing will be disabled."
@@ -788,14 +844,15 @@ export MAX_BROWSER_SESSIONS_GLOBAL=8
 # Set environment variables for the server
 export LOG_LEVEL="debug"
 # Use LOG_PATH for the shell script to redirect output
-LOG_PATH="logs/server_debug.log"
+LOG_DIR="${AGENTWORKS_LOG_DIR:-logs}"
+LOG_PATH="${LOG_DIR}/server_debug.log"
 # Unset LOG_FILE to ensure the Go application logs to stdout (avoiding duplicates)
 unset LOG_FILE
 
 # Set MCP_GENERATED_DIR to point to agent_go/generated/
 # This ensures code generation happens in the correct location
 # (SCRIPT_DIR already set above for test-connections mode)
-export MCP_GENERATED_DIR="${SCRIPT_DIR}/generated"
+export MCP_GENERATED_DIR="${MCP_GENERATED_DIR:-${SCRIPT_DIR}/generated}"
 echo "🔧 Set MCP_GENERATED_DIR to: $MCP_GENERATED_DIR"
 
 # WORKSPACE_DOCS_PATH: absolute path to workspace-docs as seen by the workspace server.
@@ -806,10 +863,11 @@ echo "🔧 Set MCP_GENERATED_DIR to: $MCP_GENERATED_DIR"
 WORKSPACE_PID=""
 WORKSPACE_LOG_PATH=""
 WORKSPACE_DIR="${SCRIPT_DIR}/../workspace"
-FRONTEND_RUNTIME_CONFIG_PATH="${SCRIPT_DIR}/../frontend/public/runtime-config.js"
+FRONTEND_RUNTIME_CONFIG_PATH="${AGENTWORKS_RUNTIME_CONFIG_PATH:-${SCRIPT_DIR}/../frontend/public/runtime-config.js}"
 
 FRONTEND_PID=""
 ELECTRON_PID=""
+ELECTRON_MEMORY_MONITOR_PID=""
 FRONTEND_LOG_PATH=""
 ELECTRON_LOG_PATH=""
 FRONTEND_DIR="${SCRIPT_DIR}/../frontend"
@@ -903,11 +961,17 @@ if [ "$WITH_WORKSPACE" = true ]; then
 fi
 
 write_frontend_runtime_config() {
+    local runtime_app_name
+    local runtime_favicon_url
+    runtime_app_name="$(json_escape_runtime_value "${AGENTWORKS_APP_NAME:-AgentWorks}")"
+    runtime_favicon_url="$(json_escape_runtime_value "${AGENTWORKS_FAVICON_URL:-/logo.svg}")"
     mkdir -p "$(dirname "$FRONTEND_RUNTIME_CONFIG_PATH")"
     cat > "$FRONTEND_RUNTIME_CONFIG_PATH" <<EOF
 window.__APP_RUNTIME_CONFIG__ = {
   apiBaseUrl: "${MCP_AGENT_SERVER_URL}",
-  workspaceApiBaseUrl: "${WORKSPACE_API_URL:-${LOCALHOST_BASE_URL}:${WORKSPACE_PORT}}"
+  workspaceApiBaseUrl: "${WORKSPACE_API_URL:-${LOCALHOST_BASE_URL}:${WORKSPACE_PORT}}",
+  appName: "${runtime_app_name}",
+  faviconUrl: "${runtime_favicon_url}"
 };
 EOF
     echo "📝 Frontend runtime config written to: $FRONTEND_RUNTIME_CONFIG_PATH"
@@ -941,7 +1005,7 @@ export CODING_AGENT_MCP_TOOL_TIMEOUT="90m"
 export MCP_CACHE_TTL_MINUTES="10080"
 
 # Set MCP cache directory to ensure consistent path across restarts
-export MCP_CACHE_DIR="${SCRIPT_DIR}/cache"
+export MCP_CACHE_DIR="${MCP_CACHE_DIR:-${SCRIPT_DIR}/cache}"
 echo "🔧 Set MCP_CACHE_DIR to: $MCP_CACHE_DIR"
 
 # Context summarization configuration
@@ -990,22 +1054,22 @@ export MCPAGENT_CLAUDE_ENFORCE_HTTP_TOOL_ROUTING="${MCPAGENT_CLAUDE_ENFORCE_HTTP
 # Obsidian configuration removed - now using workspace tools
 
 # Create logs directory if it doesn't exist
-mkdir -p logs
+mkdir -p "$LOG_DIR"
 
 # Truncate the log files to start fresh
 echo "📝 Truncating log files for clean start..."
 > "$LOG_PATH"
 echo "✅ Server log file truncated: $LOG_PATH"
-> "logs/llm_debug.log"
-echo "✅ LLM log file truncated: logs/llm_debug.log"
+> "${LOG_DIR}/llm_debug.log"
+echo "✅ LLM log file truncated: ${LOG_DIR}/llm_debug.log"
 if [ "$WITH_WORKSPACE" = true ]; then
-    WORKSPACE_LOG_PATH="logs/workspace_debug.log"
+    WORKSPACE_LOG_PATH="${LOG_DIR}/workspace_debug.log"
     > "$WORKSPACE_LOG_PATH"
     echo "✅ Workspace log file truncated: $WORKSPACE_LOG_PATH"
 fi
 if [ "$WITH_FRONTEND" = true ]; then
-    FRONTEND_LOG_PATH="logs/frontend_debug.log"
-    ELECTRON_LOG_PATH="logs/electron_debug.log"
+    FRONTEND_LOG_PATH="${LOG_DIR}/frontend_debug.log"
+    ELECTRON_LOG_PATH="${LOG_DIR}/electron_debug.log"
     > "$FRONTEND_LOG_PATH"
     > "$ELECTRON_LOG_PATH"
     echo "✅ Frontend log file truncated: $FRONTEND_LOG_PATH"
@@ -1016,13 +1080,13 @@ fi
 LOG_ROTATE_LINES=500000
 
 # Clean up agent prompt logs to start fresh
-echo "🧹 Cleaning logs/agent_prompts..."
-if [ -d "logs/agent_prompts" ]; then
-    rm -rf logs/agent_prompts/*
-    echo "✅ logs/agent_prompts cleaned"
+echo "🧹 Cleaning ${LOG_DIR}/agent_prompts..."
+if [ -d "${LOG_DIR}/agent_prompts" ]; then
+    rm -rf "${LOG_DIR}/agent_prompts"/*
+    echo "✅ ${LOG_DIR}/agent_prompts cleaned"
 else
-    mkdir -p logs/agent_prompts
-    echo "✅ logs/agent_prompts created"
+    mkdir -p "${LOG_DIR}/agent_prompts"
+    echo "✅ ${LOG_DIR}/agent_prompts created"
 fi
 
 # Clean up tool_output_folder to start fresh
@@ -1123,12 +1187,94 @@ stop_native_workspace() {
     fi
 }
 
+process_tree_rss_kb() {
+    local root_pid="$1"
+    local rss_kb
+    local total_kb
+    local child_pid
+    local child_total_kb
+
+    if [ -z "$root_pid" ] || ! kill -0 "$root_pid" 2>/dev/null; then
+        echo 0
+        return 0
+    fi
+
+    rss_kb="$(ps -o rss= -p "$root_pid" 2>/dev/null | tr -d '[:space:]')"
+    total_kb="${rss_kb:-0}"
+    for child_pid in $(pgrep -P "$root_pid" 2>/dev/null || true); do
+        child_total_kb="$(process_tree_rss_kb "$child_pid")"
+        total_kb=$((total_kb + child_total_kb))
+    done
+    echo "$total_kb"
+}
+
+stop_electron_memory_monitor() {
+    if [ -n "$ELECTRON_MEMORY_MONITOR_PID" ] && kill -0 "$ELECTRON_MEMORY_MONITOR_PID" 2>/dev/null; then
+        kill "$ELECTRON_MEMORY_MONITOR_PID" 2>/dev/null || true
+        wait "$ELECTRON_MEMORY_MONITOR_PID" 2>/dev/null || true
+    fi
+    ELECTRON_MEMORY_MONITOR_PID=""
+}
+
+stop_isolated_electron_helpers() {
+    local user_data_dir="${RUNLOOP_USER_DATA_DIR:-}"
+    local process_line
+    local candidate_pid
+    local candidate_command
+
+    [ -n "$user_data_dir" ] || return 0
+
+    # Chromium helpers can briefly re-parent while the Electron main process is
+    # exiting. Resolve only helpers carrying this instance's exact profile path;
+    # never touch Electron/Codex processes owned by another app or worktree.
+    while IFS= read -r process_line; do
+        candidate_pid="${process_line%% *}"
+        candidate_command="${process_line#* }"
+        case "$candidate_command" in
+            *Electron*"--user-data-dir=${user_data_dir}"*)
+                if [ "$candidate_pid" != "$$" ] && kill -0 "$candidate_pid" 2>/dev/null; then
+                    echo "🧹 Stopping orphaned isolated Electron helper (PID: $candidate_pid)"
+                    kill_process_tree "$candidate_pid" "isolated Electron helper" 10
+                fi
+                ;;
+        esac
+    done < <(ps -axo pid=,command= | sed 's/^[[:space:]]*//')
+}
+
+start_electron_memory_monitor() {
+    local limit_mb="${AGENTWORKS_ELECTRON_RSS_LIMIT_MB:-0}"
+    if ! [[ "$limit_mb" =~ ^[0-9]+$ ]] || [ "$limit_mb" -eq 0 ]; then
+        return 0
+    fi
+
+    local electron_root_pid="$ELECTRON_PID"
+    local limit_kb=$((limit_mb * 1024))
+    (
+        while kill -0 "$electron_root_pid" 2>/dev/null; do
+            sleep 1
+            local rss_kb
+            rss_kb="$(process_tree_rss_kb "$electron_root_pid")"
+            if [ "$rss_kb" -gt "$limit_kb" ]; then
+                local rss_mb=$((rss_kb / 1024))
+                local message="Electron memory watchdog: isolated process tree reached ${rss_mb} MB (limit ${limit_mb} MB); terminating it to protect the system"
+                echo "⚠️  $message" | tee -a "$ELECTRON_LOG_PATH" >&2
+                kill_process_tree "$electron_root_pid" "Electron memory limit" 10
+                exit 0
+            fi
+        done
+    ) &
+    ELECTRON_MEMORY_MONITOR_PID=$!
+    echo "🛡️  Electron memory watchdog active (tree RSS limit: ${limit_mb} MB, PID: $ELECTRON_MEMORY_MONITOR_PID)"
+}
+
 stop_electron() {
+    stop_electron_memory_monitor
     if [ -n "$ELECTRON_PID" ] && kill -0 "$ELECTRON_PID" 2>/dev/null; then
         print_stop_target "Electron" "$ELECTRON_PID"
         kill_process_tree "$ELECTRON_PID" "Electron"
         wait "$ELECTRON_PID" 2>/dev/null
     fi
+    stop_isolated_electron_helpers
 }
 
 stop_frontend_dev() {
@@ -1271,6 +1417,18 @@ start_frontend_dev() {
         return 1
     fi
 
+    # Match the frontend-only path: a newly created worktree may not have all
+    # lockfile dependencies even when another worktree is already bootstrapped.
+    echo "📦 Ensuring frontend dependencies (npm install)..."
+    (
+        cd "$FRONTEND_DIR" || exit 1
+        npm install
+    ) >> "$FRONTEND_LOG_PATH" 2>&1 || {
+        echo "❌ Error: frontend dependency install failed. Check logs: $FRONTEND_LOG_PATH"
+        tail -30 "$FRONTEND_LOG_PATH"
+        return 1
+    }
+
     if port_in_use "$FRONTEND_PORT"; then
         echo "❌ Error: Port $FRONTEND_PORT is already in use."
         if [ -n "$FRONTEND_PORT_EXPLICIT" ]; then
@@ -1360,10 +1518,25 @@ start_electron() {
     if [ "$WITH_FRONTEND" != true ]; then
         return 0
     fi
+    if [ "$WITHOUT_ELECTRON" = true ]; then
+        echo "🌐 Browser-only frontend requested; Electron will not be started"
+        return 0
+    fi
 
     if [ ! -f "${DESKTOP_DIR}/package.json" ]; then
         echo "❌ Error: desktop package.json not found: ${DESKTOP_DIR}/package.json"
         return 1
+    fi
+    if [ ! -x "$ELECTRON_BIN" ]; then
+        echo "📦 Ensuring desktop dependencies (npm install)..."
+        (
+            cd "$DESKTOP_DIR" || exit 1
+            npm install
+        ) >> "$ELECTRON_LOG_PATH" 2>&1 || {
+            echo "❌ Error: desktop dependency install failed. Check logs: $ELECTRON_LOG_PATH"
+            tail -30 "$ELECTRON_LOG_PATH"
+            return 1
+        }
     fi
     if [ ! -x "$ELECTRON_BIN" ]; then
         echo "❌ Error: Electron binary not found or not executable: $ELECTRON_BIN"
@@ -1396,6 +1569,7 @@ start_electron() {
         tail -30 "$ELECTRON_LOG_PATH"
         return 1
     fi
+    start_electron_memory_monitor
 }
 
 # Start the server with enhanced logging and structured output LLM
@@ -1486,12 +1660,24 @@ ensure_tmux_for_claude_code() {
     fi
 }
 
-ensure_tmux_for_claude_code
+if [ "${AGENTWORKS_SKIP_GLOBAL_DEPENDENCY_UPDATES:-false}" = "true" ]; then
+    echo "🔒 Isolated instance: skipping global tmux and agent-browser updates"
+    if ! command -v tmux >/dev/null 2>&1; then
+        echo "❌ Error: tmux is required and global dependency updates are disabled"
+        exit 1
+    fi
+    if ! command -v agent-browser >/dev/null 2>&1; then
+        echo "❌ Error: agent-browser is required and global dependency updates are disabled"
+        exit 1
+    fi
+else
+    ensure_tmux_for_claude_code
 
-# Always update agent-browser to latest on startup so browser automation stays current.
-echo "📦 Updating agent-browser to latest..."
-npm install -g agent-browser@latest 2>&1 | tail -3
-echo "✅ agent-browser updated: $(agent-browser --version 2>/dev/null || echo 'version unknown')"
+    # Keep the historical developer-runner behavior for the normal instance.
+    echo "📦 Updating agent-browser to latest..."
+    npm install -g agent-browser@latest 2>&1 | tail -3
+    echo "✅ agent-browser updated: $(agent-browser --version 2>/dev/null || echo 'version unknown')"
+fi
 
 # Build mcpbridge binary (required for CLI provider MCP bridge)
 # Install from local source to pick up latest fixes (e.g., virtual tool scoping)
@@ -1517,6 +1703,9 @@ fi
 # Kill all leftover agent-browser daemon processes from previous runs.
 # These accumulate as zombies when Chrome crashes — the daemon stays alive with a
 # dead CDP connection. We kill them all at startup so the new server gets a clean slate.
+if [ "${AGENTWORKS_SKIP_GLOBAL_BROWSER_CLEANUP:-false}" = "true" ]; then
+    echo "🔒 Isolated instance: skipping global agent-browser process and state cleanup"
+else
 ZOMBIE_COUNT=$(pgrep -f 'agent-browser-darwin-arm64' 2>/dev/null | wc -l | tr -d ' ')
 if [ "$ZOMBIE_COUNT" -gt 0 ]; then
     echo "🧹 Killing $ZOMBIE_COUNT leftover agent-browser daemon(s) from previous run..."
@@ -1567,6 +1756,7 @@ for ab_dir in "$HOME/.agent-browser" "/tmp/.agent-browser"; do
         done
     fi
 done
+fi
 
 # PLAT-072: stamp the platform revision into the binary.
 #
@@ -1642,9 +1832,11 @@ if [ "$BACKGROUND_MODE" = true ]; then
     if [ "$WITH_FRONTEND" = true ]; then
         echo "✅ Vite dev server is running in background (PID: $FRONTEND_PID)"
         echo "📝 Frontend logs: $FRONTEND_LOG_PATH"
-        echo "✅ Electron is running in background (PID: $ELECTRON_PID)"
-        echo "📝 Electron logs: $ELECTRON_LOG_PATH"
-        echo "🛑 To stop all, run: kill $SERVER_PID $FRONTEND_PID $ELECTRON_PID${WORKSPACE_PID:+ $WORKSPACE_PID}"
+        if [ -n "$ELECTRON_PID" ]; then
+            echo "✅ Electron is running in background (PID: $ELECTRON_PID)"
+            echo "📝 Electron logs: $ELECTRON_LOG_PATH"
+        fi
+        echo "🛑 To stop all, run: kill $SERVER_PID $FRONTEND_PID${ELECTRON_PID:+ $ELECTRON_PID}${WORKSPACE_PID:+ $WORKSPACE_PID}"
     fi
 elif [ "$WITH_FRONTEND" = true ]; then
     # Foreground + frontend: detach server so we can start frontend after it's healthy,
@@ -1670,8 +1862,8 @@ elif [ "$WITH_FRONTEND" = true ]; then
     echo "✅ All services running:"
     echo "   - Agent server (PID: $SERVER_PID) — $MCP_AGENT_SERVER_URL"
     echo "   - Vite (PID: $FRONTEND_PID) — http://127.0.0.1:${FRONTEND_PORT}"
-    echo "   - Electron (PID: $ELECTRON_PID)"
-    echo "   Logs: $LOG_PATH (server), $FRONTEND_LOG_PATH (vite), $ELECTRON_LOG_PATH (electron)"
+    [ -n "$ELECTRON_PID" ] && echo "   - Electron (PID: $ELECTRON_PID)"
+    echo "   Logs: $LOG_PATH (server), $FRONTEND_LOG_PATH (vite)${ELECTRON_PID:+, $ELECTRON_LOG_PATH (electron)}"
     echo "   Press Ctrl+C to stop all."
     echo ""
     wait "$SERVER_PID"

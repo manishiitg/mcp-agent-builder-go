@@ -167,6 +167,19 @@ export interface AgentQueryRequest {
   // Auto-notification flag: when true, this is a background agent completion notification,
   // not a user-initiated message. Backend treats it as a synthetic turn (doesn't block user input).
   is_auto_notification?: boolean
+  // Force a server-owned turn instead of injecting this message directly into
+  // an idle retained coding CLI. Product surfaces use this when their clean UI
+  // depends on structured progress and completion events for every message.
+  disable_live_input_delivery?: boolean
+  // Immutable generic Agent Profile binding used by product surfaces.
+  agent_profile_id?: string
+  agent_profile_version?: number
+  agent_profile_context?: {
+    project_title: string
+    workspace_description?: string
+    local_datetime?: string
+  }
+  selected_folder?: string
   // True after the user converts an observed schedule/bot run into an
   // interactive chat. Keeps the same session/native conversation identity.
   user_interactive_continuation?: boolean

@@ -19,7 +19,7 @@ import (
 //
 // Normally this is the "medium" tier. Two deliberate per-provider exceptions:
 //   - Cursor CLI: its medium tier defaults to composer-2.5, but this app wants
-//     Cursor's high tier (grok-4.5) instead — composer-2.5 wasn't strong enough
+//     Cursor's high tier (grok-4.6) instead — composer-2.5 wasn't strong enough
 //     for family tutoring use, so we pin the stronger model for Cursor specifically.
 //   - Codex CLI: pinned to gpt-5.6-terra — the catalog's own HIGH tier, not a
 //     tier lookup, so it can't silently drift if the catalog reassigns what

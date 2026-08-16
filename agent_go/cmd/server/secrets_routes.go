@@ -305,12 +305,21 @@ func (api *StreamingAPI) handleListStoredSecrets(w http.ResponseWriter, r *http.
 		return
 	}
 
+	// The encrypted value is returned so this endpoint is a complete read of
+	// the caller's own secrets. Withholding it bought no security -- the same
+	// authenticated session can already POST any blob to /api/secrets/decrypt --
+	// while forcing the client to keep its own parallel copy of every secret it
+	// wanted to display or edit. That copy was the real hazard: it lived in one
+	// browser, so a secret saved anywhere else was invisible, and a secret saved
+	// here survived only until site data was cleared.
 	type entry struct {
-		Name string `json:"name"`
+		ID             string `json:"id,omitempty"`
+		Name           string `json:"name"`
+		EncryptedValue string `json:"encrypted_value,omitempty"`
 	}
 	result := make([]entry, len(secrets))
 	for i, s := range secrets {
-		result[i] = entry{Name: s.Name}
+		result[i] = entry{ID: s.ID, Name: s.Name, EncryptedValue: s.EncryptedValue}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

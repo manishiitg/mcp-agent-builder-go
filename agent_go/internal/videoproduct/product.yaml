@@ -1,0 +1,323 @@
+schema_version: 2
+
+# Product dependencies are installed inside each project workspace. This keeps
+# external capabilities declarative and versioned with the product instead of
+# adding per-product backend code. The agent receives only attached skills;
+# the rest stay in skills/ for progressive disclosure.
+dependencies:
+  skills:
+    - id: hyperframes-skills
+      installer: skills-cli
+      source: heygen-com/hyperframes
+      # Install the official core plus routes used by product-infographic.
+      install:
+        - hyperframes
+        - hyperframes-core
+        - hyperframes-animation
+        - hyperframes-creative
+        - hyperframes-cli
+        - media-use
+        - hyperframes-registry
+        - hyperframes-keyframes
+        - general-video
+        - product-launch-video
+        - faceless-explainer
+        - motion-graphics
+      attach: [hyperframes]
+      refresh_hours: 24
+
+  # npx provides the renderer CLI itself. Verification both fetches the
+  # package on first use and confirms the project's native tooling is ready.
+  cli:
+    - id: hyperframes-cli
+      package:
+        ecosystem: npm
+        name: hyperframes
+        version: latest
+      execution:
+        mode: npx
+        binary: hyperframes
+      verify:
+        args: [doctor, --json]
+        # HyperFrames reports optional TTS/music/Docker failures in JSON while
+        # still returning status zero. Only these local-render prerequisites
+        # block a Video Studio project from starting production.
+        required_json_checks: [Version, Node.js, FFmpeg, FFprobe, Chrome]
+      refresh_hours: 24
+      permissions:
+        network: true
+        write_paths: [work/, outputs/, runs/]
+
+  # Future integrations are declared here. A concrete enabled server is
+  # connected by the shared agent runtime, which resolves environment values
+  # from AgentWorks secrets rather than storing values in this file.
+  mcp_servers: []
+
+prompt:
+  file: prompts/system-prompt.md
+  variables:
+    PRODUCT_NAME: Video Studio
+
+# Declarative product composition. The IDs below reference shared AgentWorks
+# skills/tools and registered product implementations; no executable code lives
+# in this file.
+profile:
+  id: video-studio
+  name: Video Studio
+  version: 2
+  skills:
+    - product-infographic
+    - video-creation
+    - video-editing
+    - video-quality
+    - hyperframes-quality
+    - html-composition
+    - hyperframes
+    - agent-browser
+    - fal-ai
+    - google-ai
+    - video-model-selection
+    - video-cinematography
+    - video-storytelling
+    - generated-video-quality
+  tools:
+    - id: video.show-video
+      # Declares what this tool shows, not how. The frontend renderer
+      # registered for this kind (getPresentationRenderer) and the
+      # tool's own factory (which reads this at construction rather
+      # than hardcoding it) both key off this one value. See
+      # pkg/presentations and docs/design/agent_tool_surface_single_source.md.
+      presentation:
+        kind: media.video
+    # A character reference is pre-production, not a deliverable: it is shown
+    # so the user can reject a face while changing it is still cheap, which is
+    # why it carries no QA gate the way show-video does.
+    - id: video.show-character
+      presentation:
+        kind: media.character
+    # The written artifacts a stage produces — brief, script, shot list — are
+    # what the user actually approves between stages.
+    - id: video.show-document
+      presentation:
+        kind: document.markdown
+  tool_policy:
+    # Video Studio names the tools it needs. Everything AgentWorks registers that
+    # is not listed here never reaches the agent.
+    #
+    # This is an allow list rather than the old `disabled:` deny list because a
+    # deny list silently widens: every new platform tool reaches this product
+    # until someone remembers to block it. Naming the surface also makes the
+    # registered set and what get_api_spec advertises the same thing, which is
+    # what stopped set_workflow_secret from being registered-but-invisible.
+    # See docs/design/agent_tool_surface_single_source.md.
+    #
+    # Not listed, deliberately: AgentWorks provider/model, skill and MCP-server
+    # administration; the shared media/LLM bridge tools; sub-agent orchestration
+    # (delegate, query_agent, list_agents, terminate_agent); every schedule tool;
+    # and human_feedback / notify_user.
+    #
+    # Two surfaces this list does not govern: mcpagent's intrinsic tools
+    # (get_api_spec, get_prompt, get_resource, read_skill), which it injects
+    # itself, and the coding CLI's own native tools under agent_tools.mode
+    # Hybrid — Video Studio also has provider-native tools for workspace work.
+    # Product HTTP APIs still go through the shared shell bridge, because every
+    # provider can call it as an MCP tool. Reaching them from each CLI's OWN
+    # shell was tried and reverted: see
+    # docs/design/product_api_transport_for_coding_agents.md.
+    mode: allowlist
+    enabled:
+      # The product's own control.
+      - show_video
+      # Pre-production surfaces: a character's reference image before shots are
+      # generated from it, and the written artifact a stage just produced.
+      - show_character
+      - show_document
+      # The bridge shell is how product HTTP APIs are called. Every provider can
+      # reach it (Codex only through its JS code-mode sandbox, which has no
+      # network and no env of its own), so it is not redundant with the CLI's
+      # native shell.
+      - execute_shell_command
+      # The guarded structured file edit. Under agent_tools: mcp_only the CLI's
+      # own Read/Write are denied, so without this the agent rewrites files with
+      # shell heredocs. Restored to the platform in "restore workspace patching"
+      # (pkg/workspace/advanced_tools.go) together with its folder-guard
+      # writeTools entry, so edits through it stay path-checked.
+      - diff_patch_workspace_file
+      # Managed browser capability, matching the agent-browser skill above.
+      - agent_browser
+      # Project and user secret CRUD. ui.secrets is required for this product.
+      - list_secrets
+      - set_workflow_secret
+      - delete_workflow_secret
+      - set_user_secret
+      - delete_user_secret
+      # Running the production pipeline and inspecting it.
+      - run_full_workflow
+      - execute_step
+      - query_step
+      - send_step_message
+      - stop_step
+      - stop_all_executions
+      - list_executions
+  # Slash commands this product ships with itself. The platform already has
+  # builtin commands and per-user markdown under commands/custom/, but neither
+  # lets a product carry its own, so Video Studio's opinionated flows had no
+  # way into the command menu.
+  #
+  # Each prompt lives in its own file rather than inline here: they are long,
+  # and they are prompts, which belong next to the system prompt rather than
+  # buried in a manifest. `{{context}}` is replaced with whatever the user
+  # typed before the slash.
+  commands:
+    - name: production
+      description: Start a video production — brief, cost, and characters agreed before anything is generated
+      icon: clapperboard
+      file: commands/production.md
+    - name: characters
+      description: Design a new character, review existing ones, or revise one already in use
+      icon: users
+      file: commands/characters.md
+    - name: plan
+      description: Show the script and shot list, with what the run will cost
+      icon: file-text
+      file: commands/plan.md
+    - name: revise
+      description: Change one shot without rebuilding the video
+      icon: pencil
+      file: commands/revise.md
+    - name: check
+      description: Re-run quality checks on the current cut
+      icon: check
+      file: commands/check.md
+  # Credentials this product's skills read from the environment. Declaring
+  # these is what lets "which key is missing" be answered before a paid run
+  # starts, instead of only after a generation call fails partway through a
+  # production -- see fal-ai and google-ai's Authentication sections for the
+  # SECRET_<NAME> mechanics these names are read through.
+  secrets:
+    - name: FAL_KEY
+      description: fal.ai API key. Unlocks fal.ai's hosted third-party video/image/voice/music models (see the fal-ai skill). Get one at fal.ai.
+      group: generation-provider
+    - name: GEMINI_API_KEY
+      description: Google Gemini API key. Unlocks Google's own video (Veo), image, and narration (TTS) models (see the google-ai skill) -- alone, enough for a complete narrated production. Get one at aistudio.google.com.
+      group: generation-provider
+  runtime:
+    # auto resolves the transport per provider instead of forcing one answer for
+    # all four. It is what video_studio_inside_agentworks.md always specified
+    # ("a tmux-capable runtime for live steering"); the pin to `structured` here
+    # had drifted from that and was load-bearing in the wrong direction.
+    #
+    # Structured transport cannot stream unless the CLI emits partial events, and
+    # only pi-cli does. codex exec --json was probed directly: a 1365-character
+    # answer arrived as ONE item.completed event, so a codex user saw nothing at
+    # all until the turn finished, and live steering is impossible on a transport
+    # with no stdin. The clean non-technical surface does not depend on this
+    # setting -- raw terminal frames are already excluded downstream by
+    # Source != "terminal", not by refusing to run tmux.
+    #
+    # See product_api_transport_for_coding_agents.md, "tmux vs structured".
+    transport: auto
+    provider: claude-code
+    model_id: claude-sonnet-5
+    # mcp_only: the CLI's native Read/Write/Shell are denied; every action —
+    # file work, rendering, product control — goes through the guarded
+    # AgentWorks MCP bridge. See the mode table in
+    # docs/design/video_studio_inside_agentworks.md.
+    #
+    # Chosen over hybrid because hybrid's native tools are NOT constrained by
+    # FolderGuard, which the design doc calls valid only "for a trusted local
+    # developer machine" and says "must never be silently selected for hosted
+    # or multi-user deployments". Under mcp_only every write is guarded.
+    #
+    # This mode is why diff_patch_workspace_file is in the allow list above: the
+    # bridge carries what the CLI cannot do natively, and mcp_only denies the
+    # CLI's own editor. Under hybrid it would be redundant and should come back
+    # out — TestProductToolGateGovernsTheCodingAgentBridgeCatalog pins that.
+    #
+    # An earlier round of "mcp_only is broken" symptoms (native commands
+    # running unblocked, "product shell not connected") turned out not to be
+    # about this setting at all: the structured Cursor CLI adapter never
+    # created a git-root marker in the project working directory, so
+    # cursor-agent walked up to the enclosing monorepo root looking for
+    # .cursor/mcp.json, found none, and silently never connected the api-bridge
+    # MCP server on ANY mode. Fixed in cursorcli_structured_adapter.go.
+    #
+    # Product HTTP APIs go through the bridge shell either way —
+    # api_transport.native_shell is implemented and left OFF; see
+    # docs/design/product_api_transport_for_coding_agents.md.
+    agent_tools:
+      mode: mcp_only
+    approvals:
+      mode: provider_auto
+    # Where this product's artifacts belong, in its own vocabulary, keyed by the
+    # tool the advice is for. Declared here rather than left to the shared
+    # default, which is AgentWorks' layout — plan folders and pulse/goals.html —
+    # for concepts Video Studio does not have.
+    # Keep in step with prompts/system-prompt.md, which tells the agent the same
+    # thing; the tool description is what it re-reads on every get_api_spec.
+    workspace:
+      placement:
+        execute_shell_command:
+          - "Uploaded references live in `uploads/` and are read-only — never modify them."
+          - "Direct-chat work belongs in `work/`; finished exports belong in `outputs/`."
+          - "Workflow steps write inside their own run folder, not at the project root."
+        diff_patch_workspace_file:
+          - "Patch files in `work/` (direct chat) or the step's own run folder (workflow). `uploads/` is read-only — copy a reference into `work/` before changing it."
+    provider_options:
+      - id: claude-code
+        label: Claude Code
+        provider: claude-code
+        model_id: claude-sonnet-5
+        default: true
+      - id: codex
+        label: Codex
+        provider: codex-cli
+        model_id: gpt-5.6-terra
+      - id: cursor
+        label: Cursor
+        provider: cursor-cli
+        model_id: auto
+      - id: pi-cli
+        label: Pi CLI (Gemini)
+        provider: pi-cli
+        model_id: google/gemini-3.7-flash
+    capabilities:
+      # Structured turns are one-shot processes. Follow-ups queue at a safe
+      # boundary; they are never typed into a live terminal prompt.
+      live_input: disabled
+      raw_terminal: disabled
+      warm_session: preferred
+      workflow_execution: required
+      browser: required
+      secrets: required
+  built_in: true
+
+branding:
+  icon: video-studio
+  favicon: /video-studio-favicon.svg
+
+ui:
+  surface: video-studio
+  files_panel: true
+  workflow_panel: true
+  secrets: true
+  streaming: structured
+
+workflows:
+  enabled: [infographic, shortform, longform, quality]
+  selected_skills:
+    - product-infographic
+    - video-creation
+    - video-editing
+    - video-quality
+    - hyperframes-quality
+    - html-composition
+    - hyperframes
+    - agent-browser
+    - fal-ai
+    - google-ai
+    - video-model-selection
+    - video-cinematography
+    - video-storytelling
+    - generated-video-quality
+  browser_mode: auto

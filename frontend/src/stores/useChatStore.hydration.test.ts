@@ -123,6 +123,38 @@ describe('useChatStore hydration bootstrap', () => {
     expect(Object.keys(chatStore.useChatStore.getState().chatTabs)).toHaveLength(2)
   })
 
+  it('keeps Chief of Staff and product-profile project sessions in separate lanes', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-07T10:00:00Z'))
+    const chatStore = await import('./useChatStore')
+    await chatStore.waitForChatStoreHydration()
+
+    const chiefTabId = await chatStore.useChatStore.getState().createChatTab('Chief of Staff', { mode: 'multi-agent' })
+    const firstProjectTabId = await chatStore.useChatStore.getState().createChatTab('Launch film', {
+      mode: 'multi-agent',
+      agentProfileId: 'video-studio',
+      agentProfileVersion: 1,
+      agentProfileWorkspace: 'Chats/Video Studio/projects/launch-film',
+    }, 'video-studio:project:launch-film')
+    const reusedProjectTabId = await chatStore.useChatStore.getState().createChatTab('Launch film', {
+      mode: 'multi-agent',
+      agentProfileId: 'video-studio',
+      agentProfileVersion: 1,
+      agentProfileWorkspace: 'Chats/Video Studio/projects/launch-film',
+    })
+    const secondProjectTabId = await chatStore.useChatStore.getState().createChatTab('Customer story', {
+      mode: 'multi-agent',
+      agentProfileId: 'video-studio',
+      agentProfileVersion: 1,
+      agentProfileWorkspace: 'Chats/Video Studio/projects/customer-story',
+    }, 'video-studio:project:customer-story')
+
+    expect(firstProjectTabId).not.toBe(chiefTabId)
+    expect(reusedProjectTabId).toBe(firstProjectTabId)
+    expect(secondProjectTabId).not.toBe(firstProjectTabId)
+    expect(Object.keys(chatStore.useChatStore.getState().chatTabs)).toHaveLength(3)
+  })
+
   it('restores the existing persisted chat-store envelope', async () => {
     const storage = createMemoryStorage()
     const createdAt = Date.now()
