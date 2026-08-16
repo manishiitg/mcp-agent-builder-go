@@ -44,6 +44,7 @@ const queryClient = new QueryClient();
 const QuickSwitcher = lazy(() => import('./components/QuickSwitcher'))
 const WorkflowsOverviewPage = lazy(() => import('./components/WorkflowsOverviewPage').then(module => ({ default: module.WorkflowsOverviewPage })))
 const VideoStudioSurface = lazy(() => import('./products/video-studio/VideoStudioSurface').then(module => ({ default: module.VideoStudioSurface })))
+const ChiefOfStaffSurface = lazy(() => import('./products/chief-of-staff/ChiefOfStaffSurface').then(module => ({ default: module.ChiefOfStaffSurface })))
 
 const FileSurfaceFallback = () => (
   <div className="flex h-full min-h-40 items-center justify-center text-muted-foreground">
@@ -1242,6 +1243,8 @@ function App() {
         <AuthWrapper>
         {productSurface === 'video-studio' ? (
           <Suspense fallback={<FileSurfaceFallback />}><VideoStudioSurface /></Suspense>
+        ) : productSurface === 'chief-of-staff' ? (
+          <Suspense fallback={<FileSurfaceFallback />}><ChiefOfStaffSurface /></Suspense>
         ) : (
         <TooltipProvider>
         <UpdateProgressToast />

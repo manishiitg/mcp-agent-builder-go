@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
-export type ProductSurface = 'agentworks' | 'video-studio'
+export type ProductSurface = 'agentworks' | 'video-studio' | 'chief-of-staff'
 
 interface ProductSurfaceState {
   productSurface: ProductSurface
