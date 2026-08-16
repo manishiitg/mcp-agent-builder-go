@@ -675,6 +675,20 @@ export const agentApi = {
     })
   },
 
+  getMainTerminal: async (
+    sessionId: string,
+    options?: { content?: 'screen' | 'history'; lines?: number },
+  ): Promise<TerminalSnapshot> => {
+    const params: Record<string, string | number> = {}
+    if (options?.content) params.content = options.content
+    if (options?.lines) params.lines = options.lines
+    const response = await api.get(`/api/sessions/${encodeURIComponent(sessionId)}/main-terminal`, {
+      params,
+      timeout: RUNTIME_READ_TIMEOUT_MS,
+    })
+    return response.data
+  },
+
   getTerminal: async (
     terminalId: string,
     options?: { content?: 'stored' | 'screen' | 'history' | 'tmux' | 'deep'; lines?: number; debug?: boolean; debugSource?: string },

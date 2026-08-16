@@ -25,7 +25,6 @@ import WorkflowSelectionDialog from './WorkflowSelectionDialog'
 import { isChatCompatiblePhase } from '../utils/chatSubmitHelpers'
 import { useWorkflowStore } from '../stores/useWorkflowStore'
 import { useWorkflowManifestStore } from '../stores/useWorkflowManifestStore'
-import { useCapabilitiesStore } from '../stores/useCapabilitiesStore'
 import { startRestoredTransportTerminal } from '../utils/restoredTerminal'
 import { chromeCdpInstallCommand, chromeCdpLaunchCommand, chromeCdpVerifyCommand, chromeCdpZipUrl } from '../utils/cdpSetup'
 import { CHAT_TOOL_COMMAND_EVENT, chatToolCommandFromEvent } from '../utils/chatToolEvents'
@@ -34,8 +33,6 @@ import { hasActiveSessionWork } from '../utils/activitySessions'
 import { shouldClearAcceptedChatDraft } from '../utils/chatSubmissionDraft'
 import { liveTerminalControlKey } from '../utils/liveTerminalKeys'
 import { normalizeEventViewMode } from '../stores/useChatStore'
-
-const RUNTIME_DIAGNOSTICS_ENABLED = import.meta.env.VITE_RUNTIME_DEBUG === '1'
 
 const removePasteMarkersFromText = (text: string, markers: string[]) => {
   return markers.reduce((next, marker) => {
@@ -566,8 +563,10 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   const activeTab = useChatStore(state =>
     activeTabId ? state.chatTabs[activeTabId] : undefined
   )
-  const serverRuntimeDiagnosticsEnabled = useCapabilitiesStore(state => state.capabilities?.runtime_debug === true)
-  const terminalDiagnosticsAvailable = RUNTIME_DIAGNOSTICS_ENABLED && serverRuntimeDiagnosticsEnabled && !!activeTab?.sessionId
+  // Main tmux is a first-class alternate view of this chat. Child-terminal
+  // inspection is still developer-only, but opening the main pane must not
+  // require a diagnostic flag.
+  const mainTerminalAvailable = !!activeTab?.sessionId
   const terminalViewSelected = normalizeEventViewMode(activeTab?.viewMode) === 'terminal'
   const tabModeCategory = activeTab?.metadata?.mode
   const isWorkflowMode = tabModeCategory === 'workflow' || selectedModeCategory === 'workflow'
@@ -4045,7 +4044,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                     </div>
                   ) : (
                     <div data-tour="chat-send-controls" data-testid="tour-chat-send-controls" className="flex items-center gap-1">
-                      {terminalDiagnosticsAvailable && activeTabId && (
+                      {mainTerminalAvailable && activeTabId && (
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <Button
@@ -4079,7 +4078,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                             data-testid="chat-command-menu-button"
                             aria-label="Browse commands"
                           >
-                            <Terminal className="w-4 h-4" />
+                            <Wand2 className="w-4 h-4" />
                           </Button>
                         </TooltipTrigger>
                         <TooltipContent>

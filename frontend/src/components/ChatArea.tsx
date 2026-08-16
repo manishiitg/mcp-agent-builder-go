@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useRef, useCallback, forwardRef, useImperativeHandle, useMemo, useState, type ComponentType, type ForwardedRef, type ReactNode } from 'react'
+import { useEffect, useRef, useCallback, forwardRef, useImperativeHandle, useMemo, useState, type ComponentType, type ForwardedRef, type ReactNode } from 'react'
 import { normalizeEventViewMode } from '../stores/useChatStore'
 import { useRenderLogger, useMemoLogger } from '../utils/renderLogger'
 import { chatSubmissionLane } from '../utils/promiseLane'
@@ -16,12 +16,12 @@ import type { PollingEvent, ExtendedLLMConfiguration, SSEEventMessage, SSEStatus
 import type { AgentMode } from '../stores/types'
 import { ChatInput } from './ChatInput'
 import { TerminalEventTranscript } from './TerminalEventTranscript'
+import { MainAgentTerminal } from './MainAgentTerminal'
 import { WorkflowModeHandler, type WorkflowModeHandlerRef, signalPlanModified } from './workflow'
 import { ToastContainer } from './ui/Toast'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useWorkflowStore } from '../stores/useWorkflowStore'
 import { useAppStore, useLLMStore, useMCPStore, useChatStore, useGlobalPresetStore } from '../stores'
-import { useCapabilitiesStore } from '../stores/useCapabilitiesStore'
 import { useModeStore, type ModeCategory } from '../stores/useModeStore'
 import { PreviousChatHistoryPanel } from './PreviousChatHistoryPanel'
 import { resolveChatSurface, resolveWorkflowChatSurface } from './resolveChatSurface'
@@ -59,14 +59,6 @@ const STALE_STREAMING_RECOVERY_GRACE_MS = 10000
 // than probing the internal tmux terminal inventory.
 const RESUME_SETTLE_MS = 10000
 const STREAMING_EVENT_TYPES = new Set(['streaming_start', 'streaming_chunk', 'streaming_end'])
-// Terminal inspection is developer diagnostics, not product navigation. Keep it
-// explicitly opt-in so ordinary Chat/Schedule tabs never mount the terminal rail
-// or its snapshot/execution-tree polling. The server independently gates those
-// endpoints with AGENTWORKS_RUNTIME_DEBUG.
-const RUNTIME_DIAGNOSTICS_ENABLED = import.meta.env.VITE_RUNTIME_DEBUG === '1'
-// Keep xterm, pane capture, and terminal-tree code out of the normal product
-// bundle/runtime. This module is loaded only after both debug gates opt in.
-const RuntimeDiagnosticsPanel = lazy(() => import('./TerminalCenter').then(module => ({ default: module.TerminalCenter })))
 
 type RuntimeEventScope = {
   kind: 'session' | 'delegation' | 'workshop'
@@ -678,10 +670,8 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
   // Session-specific selector: only re-renders when the ACTIVE session's events change
   // (not when any other session gets events)
   const activeSessionId = activeTab?.sessionId
-  const serverRuntimeDiagnosticsEnabled = useCapabilitiesStore(state => state.capabilities?.runtime_debug === true)
-  const runtimeDiagnosticsAvailable = RUNTIME_DIAGNOSTICS_ENABLED && serverRuntimeDiagnosticsEnabled
   const activeEventViewMode = normalizeEventViewMode(activeTab?.viewMode)
-  const showRuntimeDiagnostics = runtimeDiagnosticsAvailable && activeEventViewMode === 'terminal'
+  const showMainTerminal = activeEventViewMode === 'terminal'
 
   // processEventsResponse runs for every polled session and does not carry
   // activeSessionId in its dependency array, so reading it through a ref keeps
@@ -3312,8 +3302,8 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
                 conversation as a normal chat. The terminal rail exists only
                 in explicitly enabled runtime diagnostics. */}
             {visibleWorkflowSurface === 'active' && activeTab?.sessionId && (
-              showRuntimeDiagnostics
-                ? <Suspense fallback={<div className="p-4 text-sm text-neutral-500">Loading runtime diagnostics…</div>}><RuntimeDiagnosticsPanel currentSessionId={activeTab.sessionId} compact={false} /></Suspense>
+              showMainTerminal
+                ? <MainAgentTerminal sessionId={activeTab.sessionId} />
                 : <TerminalEventTranscript events={displayEvents} terminal={null} streamingText={activeStreamingText} streamingStatus={streamingStatus} />
             )}
 
@@ -3356,8 +3346,8 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
             {/* The product chat is event-backed. Internal terminal inspection
                 is available only through the explicit developer flag. */}
             {multiAgentSurface === 'active' && activeTab?.sessionId && (
-              showRuntimeDiagnostics
-                ? <Suspense fallback={<div className="p-4 text-sm text-neutral-500">Loading runtime diagnostics…</div>}><RuntimeDiagnosticsPanel currentSessionId={activeTab.sessionId} compact={false} /></Suspense>
+              showMainTerminal
+                ? <MainAgentTerminal sessionId={activeTab.sessionId} />
                 : <TerminalEventTranscript events={displayEvents} terminal={null} streamingText={activeStreamingText} streamingStatus={streamingStatus} />
             )}
           </>

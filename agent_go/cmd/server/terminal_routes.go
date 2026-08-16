@@ -130,6 +130,49 @@ type terminalPaneRuntimeStats struct {
 	ScrollPosition string
 }
 
+// handleGetMainTerminal returns only the active chat's main coding-agent
+// terminal. It is the normal product-facing raw tmux view: child terminals
+// remain available exclusively through the runtime-diagnostics endpoints.
+// GET /api/sessions/{session_id}/main-terminal?content=screen|history
+func (api *StreamingAPI) handleGetMainTerminal(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if api.terminalStore == nil {
+		http.Error(w, "Main terminal not found", http.StatusNotFound)
+		return
+	}
+
+	sessionID := strings.TrimSpace(mux.Vars(r)["session_id"])
+	if sessionID == "" || !api.canAccessTerminalSession(r, sessionID) {
+		http.Error(w, "Main terminal not found", http.StatusNotFound)
+		return
+	}
+	for _, snapshot := range api.terminalStore.List(sessionID) {
+		if !terminalSnapshotIsMainAgent(snapshot) {
+			continue
+		}
+		// Reuse the canonical capture/enrichment path. The selected terminal id
+		// is internal to this handler, so the client can neither enumerate nor
+		// request a child terminal through this product endpoint.
+		r = mux.SetURLVars(r, map[string]string{"terminal_id": snapshot.TerminalID})
+		api.handleGetTerminal(w, r)
+		return
+	}
+	http.Error(w, "Main terminal not found", http.StatusNotFound)
+}
+
+func terminalSnapshotIsMainAgent(snapshot terminals.Snapshot) bool {
+	kind := strings.ToLower(strings.TrimSpace(snapshot.ExecutionKind))
+	scope := strings.ToLower(strings.TrimSpace(snapshot.Scope))
+	ownerID := strings.ToLower(strings.TrimSpace(snapshot.OwnerID))
+	return kind == "main_agent" || kind == "main" || kind == "chat" ||
+		scope == "main_agent" || scope == "main" || scope == "chat" ||
+		strings.HasPrefix(ownerID, "main:")
+}
+
 // handleListTerminals returns current view-only terminal snapshots.
 // GET /api/terminals?session_id=<session>
 func (api *StreamingAPI) handleListTerminals(w http.ResponseWriter, r *http.Request) {
