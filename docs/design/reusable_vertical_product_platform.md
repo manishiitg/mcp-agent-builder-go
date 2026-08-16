@@ -23,6 +23,148 @@ The current family server is useful evidence for which infrastructure should be
 extracted, but it should become a consumer of that infrastructure rather than a
 template to duplicate.
 
+## Decision record — SparkQuill does not migrate to `product.yaml` (2026-08-16)
+
+**Question asked:** produce a plan to move SparkQuill onto the
+`product.yaml` / `agentprofiles.Profile` format that Video Studio and Chief
+of Staff now use.
+
+**Decision: do not migrate SparkQuill.** Keep it a separate application.
+Let the *next* product be the one built against a platform boundary.
+
+This does not contradict the architecture above — it applies it. This
+document already says a dedicated product is "a full application, not a
+data-only manifest", and records `Configuration-only fit: no`.
+`agentprofiles.Profile` is precisely a data-only manifest, and is not the
+platform this document proposes.
+
+### Why
+
+**1. The child-safety boundary would regress.** This alone decides it.
+`StrictAllowlist: true` appears in exactly two places in the repo, both in
+`cmd/family-server/shell_tool.go` (child `:103`, parent `:187`).
+`cmd/server/**` never sets it, and never sets `AllowNetwork`. The child's
+shell today is deny-by-default, scoped to one activity folder, with no
+network and no secrets; the main server's shell is allow-by-default with
+`SECRET_*` injected and unrestricted network. `product_tool_gate.go` cannot
+close that gap — `Admit(name string) bool` sees a tool *name*, filters once
+at registration, and is fail-open without `mode: allowlist`; its only lever
+is removing `execute_shell_command` entirely, which is worse than a jailed
+shell. `agent_tools: mode: hybrid` (Video Studio's setting) additionally
+hands the model the CLI's own unsandboxed `Bash`/`Read`/`Write`, which the
+gate never sees. Concretely: injected text from an uploaded worksheet today
+lands in a sandbox with a one-folder blast radius; post-migration it would
+land next to `~/.ssh` and the open internet.
+
+**2. Risk is borne entirely by the mature product.** SparkQuill is stable
+and in daily real-family use. The benefit of a platform accrues to products
+#3+, which would inherit it instead of copying `cmd/family-server`.
+SparkQuill gains nothing it lacks today and absorbs all the regression risk.
+
+**3. Near-zero characterization coverage to migrate against.** 12 test
+files / 23 test functions, one skipped by default. Zero direct tests for
+`chat.go` (772), `whatsapp_bot.go` (1,379), `conversation_store.go` (447),
+`parent_tools.go` (405), `child.go` (347), `shell_tool.go` (209),
+`handoff.go`, `child_workspace.go`, `whatsapp_routing.go`. Step 1 of the
+migration sequence below remains unstarted, and it is a precondition.
+
+**4. The Video Studio precedent does not transfer.** Video Studio was
+absorbed successfully (`d4efd631`, 2026-08-08, "remove the standalone Video
+Studio application", −11,072 lines; `cmd/video-server` + `frontend/video-app`
+deleted after the product surface worked). But
+`video_studio_inside_agentworks.md` step 8 states its standalone data was
+"disposable development data and does not require migration" — the sentence
+carrying the whole argument, and false for SparkQuill's real activity
+history, attempts, memory files, and WhatsApp session. Video Studio was also
+migrated while being built, not while stable: standalone backend ~3,700
+lines vs family-server's 12,104. Only the frontends are comparable
+(`video-app` 5,731 vs `learning-app` ~6,300–7,900), and Video Studio had no
+Electron shell or native voice helper to consolidate.
+
+**5. This document's own criteria justify a separate app.** "A separate app
+is justified by a different user experience, trust boundary, permission
+model, release lifecycle, or always-on service topology." SparkQuill has all
+five: children vs. professionals; a child-safety trust boundary enforced by
+an in-process filesystem sandbox; a PIN/no-auth model vs. three auth modes
+and JWT; its own `sparkquill-v*` release cadence; and a server deliberately
+kept alive when the window closes, for Pulse and WhatsApp.
+
+**6. It would define the boundary against one consumer** — which the reuse
+rule forbids, and which "Open contradictions" below already flags.
+
+### The root cause worth naming
+
+Three of the largest blockers are single-tenancy in three costumes: global
+mutable state (`familyState.Child` is a single pointer with no ID field;
+`currentActivityDir()` takes no session parameter yet scopes the child
+sandbox), process-global env collisions (`MCP_API_URL`/`MCP_API_TOKEN` are
+`os.Setenv`'d by both `cmd/server/server.go:1787-1789` and
+`internal/agentsession/agentsession.go:453,474-476`; last writer wins), and
+one-warm-CLI-session-per-process (`agentsession.go:349-366`). They share one
+root: **`internal/agentsession` configures MCP through `os.Setenv`.** Until
+that is fixed, "SparkQuill as a profile" means either a mutex serializing
+every user in the server, or a race on process-global credentials.
+SparkQuill already holds that global turn lock for minutes at a time
+(`chat.go:444-453` records an 8-minute hold and a 207s wait).
+
+This is step 4 of the migration sequence below ("move generic
+bridge/session/resume behavior out of the family-only `internal/agentsession`
+adapter") — acknowledged there, still not done.
+
+### What to do instead
+
+1. **Set `agentsession.Config.Skills`.** family-server never sets it
+   (verified: zero assignments in the package), and instead hand-copies
+   embedded skills to disk each boot (`skills.go:39-63`) and instructs the
+   model to `cat skills/<name>/SKILL.md` (`chat.go:192-201`). mcpagent
+   already projects `SKILL.md` for coding-CLI transports and exposes
+   `read_skill` plus an "Available Skills" prompt listing. This deletes
+   `skills.go` and gains progressive disclosure. `skills/_shared/*.md` needs
+   a home either way — `skillIDPattern` rejects `_shared`.
+2. **Fix the `reservedTopLevel` footgun.** `activity.go:59-72` omits
+   `_users`, `Workflow`, `pulse`, and `memories`; `archiveStaleActivities()`
+   `os.Rename`s any non-reserved top-level dir idle for 7 days into
+   `archive/`. A misconfigured `FAMILY_DATA_DIR` would silently relocate the
+   main server's `Workflow/` and `pulse/` trees. Live today.
+3. **Reconcile the folder-guard docs with the code.**
+   `docs/core/folder_guard_system.md:42` states the `_users/` directory
+   "(which contains authentication data, OAuth tokens, and session history)
+   is **strictly blocked** from all read and write access."
+   `agent_go/cmd/server/tool_setup.go:556` and `:753` both set
+   `protectedFolders := []string{}` with the comment "No protected folders —
+   all users share the same filesystem", which makes the `isPathProtected`
+   checks at `:598` and `:660` inert. A grep for an explicit `_users` block
+   elsewhere in Go finds none; the only cross-user rejection found is in
+   `workspace/handlers/query.go:43`, which covers document/query access, not
+   the shell folder guard. **Whether any layer actually enforces the
+   documented guarantee was not established** — resolve it in one direction
+   or the other, because a reviewer trusting this doc would approve an
+   unsafe change. Independent of the SparkQuill question.
+4. **Add characterization tests** for parent chat, child chat, handoff,
+   activity isolation, streaming, and WhatsApp routing — valuable on their
+   own merits for a product families use daily, and the precondition for any
+   future extraction.
+5. **Do not consolidate voice yet.** The main server's `pkg/voicestt` looks
+   stronger on paper (per-connection streams, JWT auth, capability gating,
+   and `RuntimeCapabilities.Voice` already wired) versus family-server's
+   Apple-Silicon-only stack with no auth on 12 endpoints and one speaker
+   server-wide. But `PLAT-117` is `implemented_pending_live_reverify` with no
+   confirmed pass on real human speech, and `voicestt` cannot decode audio
+   containers, so WhatsApp voice notes have no path. Verify before acting.
+   Note the frontend went the other way — `frontend/src/voice/` is an
+   explicit port *from* learning-app, so two dictation implementations (356
+   vs 958 lines) are now diverging.
+
+### Revisit trigger
+
+Reopen this decision when **either**: (a) `internal/agentsession` no longer
+configures MCP via process-global env, removing the single-tenancy root
+cause; or (b) a second product is built against the platform boundary and
+independently demonstrates the seams — at which point SparkQuill becomes a
+candidate for adoption rather than the specimen the boundary is shaped
+around. Absent either, a migration plan is premature regardless of how the
+manifest format evolves.
+
 ## Evidence (measured 2026-08-02)
 
 This is not an anticipatory generalization. Two measurements make the case.
