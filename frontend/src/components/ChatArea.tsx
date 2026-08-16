@@ -1,4 +1,8 @@
 import { Suspense, lazy, useEffect, useRef, useCallback, forwardRef, useImperativeHandle, useMemo, useState, type ComponentType, type ForwardedRef, type ReactNode } from 'react'
+import { isLiveWorkflowTerminal } from '../utils/workflowTerminalActivity'
+import { requestTerminalRefreshBurst } from '../utils/terminalRefresh'
+import { useSessionTerminals } from '../hooks/useSessionTerminals'
+import { normalizeEventViewMode } from '../stores/useChatStore'
 import { useRenderLogger, useMemoLogger } from '../utils/renderLogger'
 import { chatSubmissionLane } from '../utils/promiseLane'
 import {
@@ -423,6 +427,7 @@ interface ChatAreaProps {
   // Compact mode for smaller font sizes (used in workflow layout)
   compact?: boolean
   // Suppress terminal content while the parent renders an idle/history state.
+  suppressTerminalPane?: boolean
   // Tab ID - if provided, use this tab's session ID (works for both chat and workflow modes).
   // Pass null explicitly to disable all active behavior (SSE, polling, queue) — used when
   // this ChatArea instance is hidden behind another instance for the same tab.
@@ -878,6 +883,22 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     const status = (session.status || '').toLowerCase()
     return status === 'running' || status === 'paused'
   })
+  const activeEventViewMode = normalizeEventViewMode(activeTab?.viewMode)
+  // Probe the same terminal list that decides TerminalCenter's "No terminals
+  // yet" empty state; a present terminal means the resumed tab's surface is the
+  // terminal pane. Without this the surface flips from the restored terminal to
+  // the previous-chats landing once the settle window elapses.
+  const shouldProbeSessionTerminals =
+    !!activeSessionId &&
+    (
+      activeTabHasRestoredConversation ||
+      (selectedModeCategory === 'workflow' && activeEventViewMode === 'terminal')
+    )
+  const { data: sessionTerminals, isFetched: sessionTerminalsFetched } = useSessionTerminals(
+    activeSessionId,
+    shouldProbeSessionTerminals,
+  )
+  const restoredSessionTerminals = sessionTerminals?.terminals || []
   const hasLiveWorkflowTerminal = selectedModeCategory === 'workflow' && restoredSessionTerminals.some(isLiveWorkflowTerminal)
   const terminalProbeSettledEmpty =
     shouldProbeSessionTerminals &&
@@ -3336,7 +3357,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
             {visibleWorkflowSurface === 'active' && activeTab?.sessionId && (
               showRuntimeDiagnostics
                 ? <Suspense fallback={<div className="p-4 text-sm text-neutral-500">Loading runtime diagnostics…</div>}><RuntimeDiagnosticsPanel currentSessionId={activeTab.sessionId} compact={false} /></Suspense>
-                : <TerminalEventTranscript events={displayEvents} terminal={null} streamingText={streamingText} streamingStatus={streamingStatus} />
+                : <TerminalEventTranscript events={displayEvents} terminal={null} streamingText={activeStreamingText} streamingStatus={streamingStatus} />
             )}
 
             {/* landing — fresh automation chat. Prefer the previous-chats panel
@@ -3380,7 +3401,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
             {multiAgentSurface === 'active' && activeTab?.sessionId && (
               showRuntimeDiagnostics
                 ? <Suspense fallback={<div className="p-4 text-sm text-neutral-500">Loading runtime diagnostics…</div>}><RuntimeDiagnosticsPanel currentSessionId={activeTab.sessionId} compact={false} /></Suspense>
-                : <TerminalEventTranscript events={displayEvents} terminal={null} streamingText={streamingText} streamingStatus={streamingStatus} />
+                : <TerminalEventTranscript events={displayEvents} terminal={null} streamingText={activeStreamingText} streamingStatus={streamingStatus} />
             )}
           </>
         )}
