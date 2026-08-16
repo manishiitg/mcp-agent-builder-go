@@ -2291,7 +2291,6 @@ func (api *StreamingAPI) executeSyntheticTurn(sessionID, syntheticMsg string, pa
 		parentExecutionID = api.currentConversationTurnExecutionID(sessionID)
 	}
 	syntheticExecutionID := "synthetic-turn:" + newSteerMessageID()
-	api.trackSyntheticConversationTurnStart(syntheticExecutionID, sessionID, parentExecutionID, syntheticMsg)
 
 	// Synthetic turns share the same full-turn lane as user-created turns. This
 	// prevents an old completion turn and a resumed user turn from concurrently
@@ -2299,9 +2298,16 @@ func (api *StreamingAPI) executeSyntheticTurn(sessionID, syntheticMsg string, pa
 	releaseInputLane := api.lockSessionInputLane(sessionID)
 	if api.autoNotificationSessionUnreachable(sessionID) {
 		releaseInputLane()
-		api.completeTrackedExecution(syntheticExecutionID, trackedExecutionStatusCanceled, "session stopped before synthetic turn started", nil)
 		return false
 	}
+
+	// PLAT-113 step 2: register only AFTER the lane is held. A turn parked on
+	// lockSessionInputLane has not started, and registering first made it count
+	// in the parent's running_children — so the parent was judging its own
+	// liveness by counting children that were blocked on the parent, and the
+	// idle-wait watchdog killed healthy runs. Nothing above this point needs a
+	// tracked execution: the unreachable branch returns before any work.
+	api.trackSyntheticConversationTurnStart(syntheticExecutionID, sessionID, parentExecutionID, syntheticMsg)
 
 	// Get stored query request for user ID context
 	api.lastQueryMu.RLock()

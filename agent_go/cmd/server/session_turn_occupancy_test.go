@@ -1,6 +1,47 @@
 package server
 
-import "testing"
+import (
+	"os"
+	"strings"
+	"testing"
+)
+
+// PLAT-113 step 2. executeSyntheticTurn must acquire the input lane BEFORE it
+// registers the execution. Registering first meant a synthetic turn parked on
+// the lane counted in the parent's running_children — so the parent judged its
+// own liveness by counting children that were blocked on the parent, and the
+// idle-wait watchdog killed runs that were working.
+//
+// This is a source-order assertion rather than a runtime one: reaching that code
+// requires a fully constructed LLMAgentWrapper for the session, so a unit test
+// cannot drive the two calls without reimplementing the turn. The ordering is
+// the invariant, so the ordering is what is pinned.
+func TestSyntheticTurnRegistersOnlyAfterAcquiringTheLane(t *testing.T) {
+	source, err := os.ReadFile("background_agents.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(source)
+
+	start := strings.Index(body, "func (api *StreamingAPI) executeSyntheticTurn(")
+	if start < 0 {
+		t.Fatal("executeSyntheticTurn not found; update this test with the new name")
+	}
+	fn := body[start:]
+	if end := strings.Index(fn, "\nfunc "); end > 0 {
+		fn = fn[:end]
+	}
+
+	lockAt := strings.Index(fn, "lockSessionInputLane(")
+	trackAt := strings.Index(fn, "trackSyntheticConversationTurnStart(")
+	if lockAt < 0 || trackAt < 0 {
+		t.Fatalf("expected both calls in executeSyntheticTurn: lock=%d track=%d", lockAt, trackAt)
+	}
+	if trackAt < lockAt {
+		t.Fatal("executeSyntheticTurn registers the execution before acquiring the input lane; " +
+			"a turn blocked on the lane would again be counted as a running child of the turn blocking it")
+	}
+}
 
 // PLAT-113. Auto-notifications are supposed to queue while a turn is running and
 // be delivered afterwards in one batch. The gate that decides this read

@@ -4,7 +4,7 @@
 
 | Field | Value |
 |---|---|
-| Status | `open` — root cause traced to a live 2026-08-15 social-media run; step 1 fix specified |
+| Status | `partially implemented` — steps 1 and 2 landed 2026-08-16; step 3 (demote `sessionBusy`) pending, and neither step is runtime-verified |
 | Priority | P0 |
 | Owner | session turn occupancy and auto-notification queueing |
 | Reported | 2026-08-16 |
@@ -142,7 +142,7 @@ identity) and [PLAT-108](plat-108.md) (working directory vs Codex thread ID):
 
 ## Required repair
 
-### Step 1 — make the lane authoritative for occupancy (this ticket)
+### Step 1 — make the lane authoritative for occupancy ✅ landed 2026-08-16
 
 `sessionInputLane` is not a signal *about* occupancy; it *is* occupancy — a turn
 occupies the session exactly when it holds that mutex. Add a read-only accessor
@@ -152,11 +152,13 @@ existing checks, so the change can only cause more queueing, never less.
 Effect: workflow turns queue their auto-notifications like chat turns already
 do, and the pileup cannot form.
 
-### Step 2 — register after acquiring, not before
+### Step 2 — register after acquiring, not before ✅ landed 2026-08-16
 
-Move `trackSyntheticConversationTurnStart` after `lockSessionInputLane` returns.
-A turn blocked on the lane has not started and must not be counted as a running
-child of the turn blocking it.
+`trackSyntheticConversationTurnStart` now runs after `lockSessionInputLane`
+returns. A turn blocked on the lane has not started and is no longer counted as
+a running child of the turn blocking it. The unreachable-session branch returns
+before registering, so it no longer completes an execution that was never
+started; every path after registration still completes it.
 
 ### Step 3 — demote `sessionBusy` to display only
 
