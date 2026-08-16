@@ -167,7 +167,7 @@ export function ChiefOfStaffSurface() {
     <div className="flex h-screen min-h-0 flex-col overflow-hidden bg-slate-50 dark:bg-slate-950">
       <ChiefOfStaffHeader tabId={tabId} uiPanels={uiPanels} />
       <div className="grid min-h-0 flex-1 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
-        <main className="flex min-h-0 flex-col overflow-hidden bg-white dark:bg-slate-950">
+        <main className="flex min-h-0 min-w-0 flex-col overflow-hidden bg-white dark:bg-slate-950">
           {tabId ? (
             <ChatArea
               tabId={tabId}
@@ -180,7 +180,7 @@ export function ChiefOfStaffSurface() {
             <div className="grid h-full place-items-center text-xs text-slate-400">Connecting…</div>
           )}
         </main>
-        <aside className="hidden min-h-0 border-l border-slate-200 bg-slate-50 lg:flex lg:flex-col dark:border-slate-800 dark:bg-slate-900/40">
+        <aside className="hidden min-h-0 min-w-0 border-l border-slate-200 bg-slate-50 lg:flex lg:flex-col dark:border-slate-800 dark:bg-slate-900/40">
           <div className="flex h-14 shrink-0 items-center border-b border-slate-200 px-3 dark:border-slate-800">
             {panelTabs.map(({ key, label, icon: Icon }) => (
               <button
