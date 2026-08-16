@@ -1,0 +1,114 @@
+schema_version: 2
+
+# Chief of Staff has no per-project workspace to provision -- it is global
+# (profile.scope: global below), operating across the user's whole workspace
+# rather than one project folder. Unlike Video Studio, there is nothing to
+# install here.
+dependencies: {}
+
+prompt:
+  # This file is a short placeholder, not the real prompt. Chief of Staff
+  # deliberately keeps its live system prompt on the dynamic path
+  # (GetMultiAgentDelegationInstructionsWithUser in
+  # cmd/server/virtual-tools/delegation_tools.go), which needs per-request
+  # parameters -- chatsFolder, spawn capabilities, delegation-tier config, the
+  # full reference surface -- that a static product.yaml template cannot
+  # express. This file exists only to satisfy agentprofiles.Validate()'s
+  # requirement that a profile declare a non-empty, parseable system prompt;
+  # it is never actually rendered into a live conversation. See
+  # cmd/server/server.go's prompt assembly step 1, which checks
+  # isGlobalScopedProfile before deciding which prompt source to use.
+  file: prompts/system-prompt.md
+  variables: {}
+
+profile:
+  id: chief-of-staff
+  name: Chief of Staff
+  version: 1
+  # The load-bearing field. Every other product profile is project-scoped by
+  # default (empty Scope == "project"); Chief of Staff is the first to declare
+  # "global" -- no single project workspace, keeps the same chat-wide grants
+  # (including org-owned pulse/ writes) and workspace description a
+  # profile-less multi-agent turn already has. See
+  # agentprofiles.Profile.EffectiveScope and its callers in
+  # cmd/server/agent_profile_runtime.go / server.go.
+  scope: global
+  # No commands, no embedded skills: Chief of Staff's skill/reference surface
+  # stays fully dynamic via AttachReferenceSurface (same as today's
+  # profile-less chat), not a static declared list.
+  skills: []
+  # get_activity_status and update_chief_of_staff_notifications are
+  # registered as ToolFactory entries at server startup
+  # (chief_of_staff_tool_factories.go) -- their handlers are deeply coupled to
+  # *StreamingAPI internals (scheduler, chat store, notification config), the
+  # same reason Video Studio's own tools live in a factory rather than being
+  # inlined here. Binding them here is what makes registerAgentProfileTools
+  # actually build and register them for a chief-of-staff chat; the legacy
+  # no-profile chat keeps getting them through the separate manual
+  # isChiefOfStaffChat block in server.go, unaffected by this list.
+  #
+  # create_workflow is deliberately NOT bound here: this profile is read-only
+  # over Workflow/ (see "Core purpose" in
+  # docs/design/chief_of_staff_as_product.md), and creating a workflow is a
+  # write. The legacy no-profile chat still has it, unaffected.
+  tools:
+    - id: chief-of-staff.activity-status
+    - id: chief-of-staff.update-notifications
+  # tool_policy is deliberately OMITTED, not "allowlist". Chief of Staff's
+  # tool surface is the platform's broadest and still evolving (delegate,
+  # schedules, notify_user, secrets, workflow admin, activity status...);
+  # hand-maintaining an allowlist for a surface this dynamic would be exactly
+  # the deny-list drift problem the allowlist pattern (see Video Studio's own
+  # tool_policy comment) was built to avoid, applied to a case it doesn't fit.
+  # Empty mode is the existing legacy behavior: every platform tool reaches
+  # the agent except an explicit Disabled list, which stays empty too --
+  # identical to what a profile-less chat already gets today.
+  runtime:
+    # Single pinned model, like Video Studio -- Chief of Staff drops its old
+    # High/Medium/Low delegation-tier routing (DelegationTierConfigModal,
+    # ChiefOfStaffLLM cascade) in favor of one model for the whole product,
+    # the same runtime.provider/model_id mechanism Video Studio already uses.
+    provider: claude-code
+    model_id: claude-sonnet-5
+    # transport, agent_tools, approvals, api_transport, capabilities, and
+    # provider_options are all deliberately left unset. Chief of Staff should
+    # behave exactly like today's profile-less multi-agent chat for every
+    # facet this profile doesn't explicitly opt into -- an empty/zero value
+    # here is what makes every downstream branch that reads
+    # resolvedProfile.Definition.Runtime fall through to the same behavior a
+    # nil profile already gets, not a narrower one.
+  built_in: true
+
+branding:
+  # No bespoke mark exists for Chief of Staff the way Video Studio has
+  # VideoStudioMark -- reuse the existing lucide Users identity already used
+  # at frontend/src/constants/modeInfo.tsx for the 'multi-agent' mode card.
+  icon: chief-of-staff
+  favicon: ""
+
+ui:
+  surface: chief-of-staff
+  # No project concept, so no per-project files/workflow panels -- the
+  # automations-oversight dashboard (a later, separate piece of work) is the
+  # product's home screen, not a files/workflow panel bolted onto the chat.
+  files_panel: false
+  workflow_panel: false
+  secrets: true
+  streaming: structured
+
+# Chief of Staff dispatches to workflows the user runs manually -- it does
+# not ship or run any fixed pipeline of its own (unlike Video Studio's four
+# production pipelines). Its own system prompt already says as much: "Chief
+# of Staff does not run workflows directly right now." Left empty rather than
+# omitted so the intent is explicit, not accidental.
+workflows:
+  enabled: []
+  selected_skills: []
+  browser_mode: ""
+
+# No schedules declared yet. The built-in Org Pulse job is being removed
+# entirely (it was goal-alignment-centric end to end, and goals are dropped),
+# not ported here -- Chief of Staff ships with zero declared schedules for
+# now. The schedules: product.yaml capability itself is being built as a
+# generally useful addition regardless (see the schedules-capability task),
+# independent of whether this profile uses it on day one.

@@ -6,7 +6,7 @@ import (
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/agentprofiles"
 )
 
-func TestRegisterChiefOfStaffToolFactoriesBuildsAllThreeTools(t *testing.T) {
+func TestRegisterChiefOfStaffToolFactoriesBuildsBothTools(t *testing.T) {
 	registry := agentprofiles.NewRegistry()
 	api := &StreamingAPI{}
 	if err := api.registerChiefOfStaffToolFactories(registry); err != nil {
@@ -18,7 +18,6 @@ func TestRegisterChiefOfStaffToolFactoriesBuildsAllThreeTools(t *testing.T) {
 		toolName  string
 		category  string
 	}{
-		{ChiefOfStaffToolFactoryCreateWorkflow, "create_workflow", "workflow_creator"},
 		{ChiefOfStaffToolFactoryActivityStatus, "get_activity_status", "activity_status"},
 		{ChiefOfStaffToolFactoryUpdateNotifications, "update_chief_of_staff_notifications", "notification_tools"},
 	}

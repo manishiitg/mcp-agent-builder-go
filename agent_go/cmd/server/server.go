@@ -25,6 +25,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
+	"github.com/manishiitg/coding-agent-loop/agent_go/internal/chiefofstaffproduct"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/events"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/inspector"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/videoproduct"
@@ -1623,6 +1624,15 @@ func runServer(cmd *cobra.Command, args []string) {
 	}
 	if err := videoproduct.RegisterAgentProfileRuntime(profileRegistry, getWorkspaceAPIURL()); err != nil {
 		log.Fatalf("Failed to register Video Studio agent profile runtime: %v", err)
+	}
+	// Chief of Staff has no embedded skills and no product-owned tool
+	// factories to register here (its three tools register separately, once
+	// api exists -- see registerChiefOfStaffToolFactories below), so this is
+	// just the profile itself.
+	for _, profile := range chiefofstaffproduct.BuiltinAgentProfiles() {
+		if err := profileRegistry.RegisterProfile(profile); err != nil {
+			log.Fatalf("Failed to register Chief of Staff agent profile: %v", err)
+		}
 	}
 
 	api := &StreamingAPI{
@@ -5389,7 +5399,16 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 
 			// 1. OPERATING MODE — the agent's core behavior (delegate everything vs work directly).
 			//    This MUST come first so it takes precedence over reference material.
-			if resolvedProfile != nil {
+			//
+			// A global-scoped profile (Chief of Staff) deliberately takes the
+			// dynamic branch below, not its own resolvedProfile.Prompt. That
+			// prompt only exists to satisfy agentprofiles.Validate(); the real
+			// prompt is GetMultiAgentDelegationInstructionsWithUser, which needs
+			// per-request params (chatsFolder, spawn capabilities, delegation-tier
+			// config, the full reference surface) a static product.yaml template
+			// cannot express. A project-scoped profile like Video Studio is
+			// unaffected -- it still gets its own rendered prompt exactly as before.
+			if resolvedProfile != nil && !isGlobalScopedProfile(resolvedProfile) {
 				if err := llmAgent.ResetInstructions(resolvedProfile.Prompt); err != nil {
 					sendError(fmt.Sprintf("Failed to apply agent profile prompt: %v", err), true)
 					return
