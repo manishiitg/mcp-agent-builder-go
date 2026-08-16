@@ -113,6 +113,35 @@ func resolveProfileRuntimeModel(runtime agentprofiles.RuntimePolicy, requestedPr
 	return provider, modelID
 }
 
+// lookupAgentProfileDefinition returns the profile a request is bound to
+// WITHOUT running its runtime initializer and without mutating the request.
+//
+// resolveAgentProfileForQuery is not a resolver: it calls
+// agentProfiles.Initialize, which for a product like Video Studio seeds the
+// workspace, writes a plan refresh, initializes the workflow DB, and runs
+// productdeps.Ensure (which can shell out to `npx skills add`). It also rewrites
+// the request's provider, model, skills, and secrets. That is correct once per
+// turn and wrong for a caller that only needs to read the declared surface —
+// delegation ran the whole initializer again for every sub-agent.
+//
+// Use this wherever the profile is being consulted rather than entered. It
+// keeps the same authorization boundary: Resolve is what enforces ownership of
+// a non-built-in profile.
+func (api *StreamingAPI) lookupAgentProfileDefinition(req *QueryRequest, userID string) (*resolvedAgentProfile, error) {
+	profileID := strings.TrimSpace(req.AgentProfileID)
+	if profileID == "" {
+		return nil, nil
+	}
+	if api.agentProfiles == nil {
+		return nil, fmt.Errorf("agent profiles are unavailable")
+	}
+	profile, err := api.agentProfiles.Resolve(profileID, req.AgentProfileVersion, userID)
+	if err != nil {
+		return nil, err
+	}
+	return &resolvedAgentProfile{Definition: profile}, nil
+}
+
 func (api *StreamingAPI) resolveAgentProfileForQuery(ctx context.Context, req *QueryRequest, userID, sessionID string) (*resolvedAgentProfile, error) {
 	profileID := strings.TrimSpace(req.AgentProfileID)
 	if profileID == "" {

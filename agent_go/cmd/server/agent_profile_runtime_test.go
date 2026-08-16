@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
@@ -65,6 +66,92 @@ func TestResolveAgentProfileForQueryPinsVersionAndSkills(t *testing.T) {
 	}
 	if got := agentProfileRuntimeWorkspace("user-1", req.SelectedFolder); got != "_users/user-1/Chats/Video Studio/projects/launch" {
 		t.Fatalf("runtime folder = %q", got)
+	}
+}
+
+// Delegation consults the profile to build its tool gate; it does not enter the
+// product. resolveAgentProfileForQuery runs agentProfiles.Initialize, which for
+// a real product seeds the workspace, writes a plan refresh, initializes the
+// workflow DB, and runs productdeps.Ensure — work that must happen once per
+// turn, not once per sub-agent.
+func TestLookupAgentProfileDefinitionDoesNotRunTheRuntimeInitializer(t *testing.T) {
+	registry := agentprofiles.NewRegistry()
+	profile := agentprofiles.Profile{
+		ID: "video-studio", Name: "Video Studio", Version: 1, BuiltIn: true,
+		SystemPromptTemplate: "{{.ProjectTitle}}",
+		ToolPolicy: agentprofiles.ToolPolicy{
+			Mode:    agentprofiles.ToolPolicyModeAllowlist,
+			Enabled: []string{"show_video"},
+		},
+		Runtime: agentprofiles.RuntimePolicy{Transport: "auto"},
+	}
+	if err := registry.RegisterProfile(profile); err != nil {
+		t.Fatal(err)
+	}
+	initializerCalls := 0
+	if err := registry.RegisterInitializer("video-studio", func(context.Context, agentprofiles.RuntimeContext) error {
+		initializerCalls++
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	api := &StreamingAPI{agentProfiles: registry}
+	req := QueryRequest{
+		AgentMode: "multi-agent", AgentProfileID: "video-studio",
+		SelectedFolder:      "Chats/Video Studio/projects/launch",
+		AgentProfileContext: agentprofiles.PromptContext{ProjectTitle: "Launch"},
+	}
+
+	// The per-turn path enters the product, so it initializes exactly once.
+	if _, err := api.resolveAgentProfileForQuery(context.Background(), &req, "user-1", "session-1"); err != nil {
+		t.Fatal(err)
+	}
+	if initializerCalls != 1 {
+		t.Fatalf("resolveAgentProfileForQuery ran the initializer %d times, want 1", initializerCalls)
+	}
+
+	// The delegation path only reads the declared surface, so it must not.
+	before := req
+	resolved, err := api.lookupAgentProfileDefinition(&req, "user-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if initializerCalls != 1 {
+		t.Fatalf("lookupAgentProfileDefinition ran the initializer (total %d); delegation would re-seed the workspace per sub-agent", initializerCalls)
+	}
+
+	// It must still return what the tool gate consumes...
+	if resolved == nil || resolved.Definition.ID != "video-studio" ||
+		len(resolved.Definition.ToolPolicy.Enabled) != 1 || resolved.Definition.ToolPolicy.Enabled[0] != "show_video" {
+		t.Fatalf("lookup did not return the declared tool surface: %+v", resolved)
+	}
+	if gate := newProductToolGate(resolved); !gate.enforcing() {
+		t.Fatal("tool gate built from the lookup is not enforcing; delegation would get a wider surface than the product declared")
+	}
+
+	// ...without rewriting the caller's request the way the per-turn path does.
+	if req.Provider != before.Provider || req.ModelID != before.ModelID || len(req.SelectedSkills) != len(before.SelectedSkills) {
+		t.Fatalf("lookup mutated the request: provider=%q model=%q skills=%v", req.Provider, req.ModelID, req.SelectedSkills)
+	}
+}
+
+// The check above proves the helper is cheap; it does not prove delegation uses
+// it. Without this, reverting the call site to resolveAgentProfileForQuery
+// passes every assertion above while restoring the per-sub-agent initializer.
+func TestDelegationUsesTheReadOnlyProfileLookup(t *testing.T) {
+	source, err := os.ReadFile("delegation.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(source), "resolveAgentProfileForQuery(") {
+		t.Fatal("delegation calls resolveAgentProfileForQuery, which re-runs the product runtime initializer " +
+			"(workspace seeding, plan refresh, workflow DB init, productdeps.Ensure) for every sub-agent; " +
+			"it needs only Definition.ToolPolicy, so use lookupAgentProfileDefinition")
+	}
+	if !strings.Contains(string(source), "lookupAgentProfileDefinition(") {
+		t.Fatal("delegation no longer resolves the parent profile at all; the sub-agent would get a wider " +
+			"tool surface than the product declared")
 	}
 }
 
