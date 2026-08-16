@@ -224,7 +224,7 @@ export const WorkflowChatTabs: React.FC<WorkflowChatTabsProps> = ({ onNewChat, e
 
     void closeTab(tabId, false).then(() => {
       if (nextWorkflowTabId) {
-        useChatStore.getState().switchTab(nextWorkflowTabId)
+        activateTab(nextWorkflowTabId)
       }
     })
   }, [activeTabId, activeWorkflowTabs, closeTab])

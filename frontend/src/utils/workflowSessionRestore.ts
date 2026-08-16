@@ -2,21 +2,21 @@ import { activateTab } from './activateTab'
 import { restoreSession } from './sessionRestore'
 import { agentApi } from '../services/api'
 import type { ActiveSessionInfo, RunningWorkflowInfo } from '../services/api-types'
-import { useAppStore } from '../stores/useAppStore'
 import { useChatStore, type ChatTab } from '../stores/useChatStore'
 import { useGlobalPresetStore } from '../stores/useGlobalPresetStore'
-import { useModeStore } from '../stores/useModeStore'
 import { useRunningWorkflowsStore } from '../stores/useRunningWorkflowsStore'
 import { useWorkflowStore } from '../stores/useWorkflowStore'
 import type { CustomPreset, PredefinedPreset } from '../types/preset'
 import { isInternalChildSession, isScheduledSession } from './workflowSessionKinds'
 import { isVisibleActivitySession } from './activitySessions'
 import { openWorkflowInDefaultPreview } from './reportPreviewPreference'
+import { activateWorkflowTab, beginWorkflowNavigation, isCurrentWorkflowNavigation, selectWorkflowPreset } from './workflowNavigation'
 
 type RestoreWorkflowSessionOptions = {
   preset?: CustomPreset | PredefinedPreset
   runningWorkflow?: RunningWorkflowInfo
   scrollToBottom?: boolean
+  navigationGeneration?: number
 }
 
 type OpenWorkflowPresetPageOptions = {
@@ -25,6 +25,10 @@ type OpenWorkflowPresetPageOptions = {
   title?: string
   source?: string
   scrollToBottom?: boolean
+}
+
+function isPresetStillActive(presetId?: string | null): boolean {
+  return !presetId || useGlobalPresetStore.getState().activePresetIds.workflow === presetId
 }
 
 
@@ -269,9 +273,6 @@ function requestChatScrollToBottom(): void {
 }
 
 function revealWorkflowChat(tabId: string, workspacePath?: string | null): void {
-  const chatStore = useChatStore.getState()
-  chatStore.setTabViewMode(tabId, 'formatted')
-
   openWorkflowInDefaultPreview(workspacePath)
 
   const workflowStore = useWorkflowStore.getState()
@@ -291,12 +292,10 @@ export async function restoreWorkflowSessionChat(
 
   useRunningWorkflowsStore.getState().setIsRestoringWorkflow(true)
   try {
-    useAppStore.getState().setShowWorkflowsOverview(false)
-    useModeStore.getState().setModeCategory('workflow')
     if (resolvedPreset) {
-      useGlobalPresetStore.getState().applyPreset(resolvedPreset, 'workflow')
+      selectWorkflowPreset(resolvedPreset)
     } else if (presetId) {
-      useGlobalPresetStore.getState().setActivePreset('workflow', presetId)
+      selectWorkflowPreset(presetId)
     }
 
     const chatStore = useChatStore.getState()
@@ -335,11 +334,14 @@ export async function restoreWorkflowSessionChat(
       presetQueryId: presetId,
     }, session.session_id)
 
+    // Tab creation can yield while the user selects another workflow. Keep the
+    // cached tab, but never let the stale restore activate it over the newer
+    // report/workspace selection.
+    if (!isPresetStillActive(presetId)) return tabId
+
     if (builderTab?.sessionId !== session.session_id) {
       latestChatStore.updateTabSessionId(tabId, session.session_id)
     }
-    latestChatStore.setTabViewMode(tabId, 'formatted')
-
     const hasExistingEvents = latestChatStore.getTabEvents(session.session_id).length > 0
     // Fast path for switching back to an already-open running workflow:
     // keep the in-memory event buffer and SSE connection intact. Re-fetching
@@ -348,7 +350,9 @@ export async function restoreWorkflowSessionChat(
     if (builderTab?.sessionId === session.session_id && hasExistingEvents) {
       latestChatStore.setTabStreaming(tabId, isActive)
       latestChatStore.setTabCompleted(tabId, !isActive)
-      activateTab(tabId)
+      activateWorkflowTab(tabId, {
+        expectedGeneration: options.navigationGeneration,
+      })
       revealWorkflowChat(tabId, workspacePath)
       if (options.scrollToBottom !== false) requestChatScrollToBottom()
       return tabId
@@ -359,7 +363,9 @@ export async function restoreWorkflowSessionChat(
     // the tree/debug view lazy-loads events only when the user opens it.
     latestChatStore.setTabStreaming(tabId, isActive)
     latestChatStore.setTabCompleted(tabId, !isActive)
-    activateTab(tabId)
+    activateWorkflowTab(tabId, {
+      expectedGeneration: options.navigationGeneration,
+    })
     revealWorkflowChat(tabId, workspacePath)
     if (options.scrollToBottom !== false) requestChatScrollToBottom()
 
@@ -412,10 +418,8 @@ export async function openWorkflowPresetPage(
   preset: CustomPreset | PredefinedPreset,
   options: OpenWorkflowPresetPageOptions = {},
 ): Promise<void> {
-  useAppStore.getState().setShowWorkflowsOverview(false)
-  useModeStore.getState().setModeCategory('workflow')
-  useGlobalPresetStore.getState().applyPreset(preset, 'workflow')
-  useWorkflowStore.getState().setShowChatArea(true)
+  const navigationGeneration = beginWorkflowNavigation(preset.id)
+  selectWorkflowPreset(preset)
 
   const title = options.title || preset.label || 'Automation'
   const chatStore = useChatStore.getState()
@@ -425,11 +429,14 @@ export async function openWorkflowPresetPage(
       runningWorkflow: options.runningWorkflow,
       title,
       source: options.source,
+      navigationGeneration,
     })
     return
   }
 
   const activeSession = pickWorkflowActiveSession(await chatStore.getActiveSessions(), preset, useChatStore.getState().chatTabs)
+
+  if (!isCurrentWorkflowNavigation(navigationGeneration, preset.id)) return
 
   if (activeSession) {
     await openActiveSession(activeSession, {
@@ -437,17 +444,20 @@ export async function openWorkflowPresetPage(
       runningWorkflow: options.runningWorkflow,
       title,
       source: options.source,
+      navigationGeneration,
     })
     return
   }
 
   const runningWorkflow = options.runningWorkflow || await findRunningWorkflowForPreset(preset)
+  if (!isCurrentWorkflowNavigation(navigationGeneration, preset.id)) return
   if (runningWorkflow?.session_id) {
     await openActiveSession(sessionFromRunningWorkflow(runningWorkflow), {
       preset,
       runningWorkflow,
       title,
       source: options.source,
+      navigationGeneration,
     })
     return
   }
@@ -463,7 +473,9 @@ export async function openWorkflowPresetPage(
     presetQueryId: preset.id,
   })
 
-  activateTab(tabId)
+  if (!isCurrentWorkflowNavigation(navigationGeneration, preset.id)) return
+
+  activateWorkflowTab(tabId, { expectedGeneration: navigationGeneration })
   useWorkflowStore.getState().setShowChatArea(true)
   if (options.scrollToBottom !== false) requestChatScrollToBottom()
 }
@@ -483,14 +495,11 @@ async function restoreReadOnlyWorkflowRunChat(
 
   useRunningWorkflowsStore.getState().setIsRestoringWorkflow(true)
   try {
-  useAppStore.getState().setShowWorkflowsOverview(false)
-  useModeStore.getState().setModeCategory('workflow')
   if (resolvedPreset) {
-    useGlobalPresetStore.getState().applyPreset(resolvedPreset, 'workflow')
+    selectWorkflowPreset(resolvedPreset)
   } else if (presetId) {
-    useGlobalPresetStore.getState().setActivePreset('workflow', presetId)
+    selectWorkflowPreset(presetId)
   }
-  useWorkflowStore.getState().setShowChatArea(true)
 
   const chatStore = useChatStore.getState()
   const metadata = {
@@ -511,7 +520,9 @@ async function restoreReadOnlyWorkflowRunChat(
   // monitor would spawn a duplicate 'Schedule' tab for the same session.
   const interactiveTab = findTabForSession(chatStore.chatTabs, session.session_id)
   if (interactiveTab && !interactiveTab.metadata?.isViewOnly) {
-    activateTab(interactiveTab.tabId)
+    activateWorkflowTab(interactiveTab.tabId, {
+      expectedGeneration: options.navigationGeneration,
+    })
     revealWorkflowChat(interactiveTab.tabId, workspacePath)
     if (options.scrollToBottom !== false) requestChatScrollToBottom()
     return interactiveTab.tabId
@@ -534,8 +545,8 @@ async function restoreReadOnlyWorkflowRunChat(
   const existingTab = findReadOnlyRunTabForSession(chatStore.chatTabs, session.session_id, metadata)
 
   const tabId = existingTab?.tabId ?? await chatStore.createChatTab(desiredName, metadata, session.session_id)
+  if (!isPresetStillActive(presetId)) return tabId
   chatStore.setTabMetadata(tabId, metadata)
-  chatStore.setTabViewMode(tabId, 'formatted')
   if (existingTab && existingTab.name !== desiredName) {
     useChatStore.setState((state) => {
       const tab = state.chatTabs[tabId]
@@ -551,7 +562,9 @@ async function restoreReadOnlyWorkflowRunChat(
   const isActive = isActiveWorkflowSession(session)
   chatStore.setTabStreaming(tabId, isActive)
   chatStore.setTabCompleted(tabId, !isActive)
-  activateTab(tabId)
+  activateWorkflowTab(tabId, {
+    expectedGeneration: options.navigationGeneration,
+  })
   revealWorkflowChat(tabId, workspacePath)
   window.dispatchEvent(new CustomEvent('workflow-readonly-run-restored', {
     detail: { presetId, tabId, workspacePath }
@@ -574,16 +587,16 @@ async function restoreReadOnlyWorkflowRunChat(
 // sessions activate their existing tab or restore a fresh one.
 export async function openActiveSession(
   session: ActiveSessionInfo,
-  options: { preset?: CustomPreset | PredefinedPreset; runningWorkflow?: RunningWorkflowInfo; title?: string; source?: string } = {},
+  options: { preset?: CustomPreset | PredefinedPreset; runningWorkflow?: RunningWorkflowInfo; title?: string; source?: string; navigationGeneration?: number } = {},
 ): Promise<void> {
   const isWorkflow = (session.agent_mode || '').toLowerCase().includes('workflow')
   if (isWorkflow) {
     if (isScheduledWorkflowSession(session, options.runningWorkflow)) {
-      await restoreScheduledWorkflowRunChat(session, { preset: options.preset, runningWorkflow: options.runningWorkflow })
+      await restoreScheduledWorkflowRunChat(session, { preset: options.preset, runningWorkflow: options.runningWorkflow, navigationGeneration: options.navigationGeneration })
     } else if (isBotWorkflowSession(session, options.runningWorkflow)) {
-      await restoreBotWorkflowRunChat(session, { preset: options.preset, runningWorkflow: options.runningWorkflow })
+      await restoreBotWorkflowRunChat(session, { preset: options.preset, runningWorkflow: options.runningWorkflow, navigationGeneration: options.navigationGeneration })
     } else {
-      await restoreWorkflowSessionChat(session, { preset: options.preset, runningWorkflow: options.runningWorkflow })
+      await restoreWorkflowSessionChat(session, { preset: options.preset, runningWorkflow: options.runningWorkflow, navigationGeneration: options.navigationGeneration })
     }
     return
   }

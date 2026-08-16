@@ -1,0 +1,139 @@
+import { useAppStore } from '../stores/useAppStore'
+import { normalizeEventViewMode, useChatStore, type EventViewMode } from '../stores/useChatStore'
+import { useGlobalPresetStore } from '../stores/useGlobalPresetStore'
+import { useModeStore } from '../stores/useModeStore'
+import { useWorkflowStore } from '../stores/useWorkflowStore'
+import type { CustomPreset, PredefinedPreset } from '../types/preset'
+
+export type WorkflowNavigationContext = {
+  workflowId: string | null
+  tabId: string | null
+  sessionId: string | null
+  viewMode: EventViewMode
+  generation: number
+}
+
+let context: WorkflowNavigationContext = {
+  workflowId: null,
+  tabId: null,
+  sessionId: null,
+  viewMode: 'formatted',
+  generation: 0,
+}
+
+/** Begin an asynchronous workflow navigation and invalidate older lookups. */
+export function beginWorkflowNavigation(workflowId: string): number {
+  const viewMode = normalizeEventViewMode(useChatStore.getState().eventViewModePreference)
+  context = {
+    workflowId,
+    tabId: null,
+    sessionId: null,
+    viewMode,
+    generation: context.generation + 1,
+  }
+  return context.generation
+}
+
+export function isCurrentWorkflowNavigation(generation: number, workflowId: string): boolean {
+  return generation === context.generation &&
+    context.workflowId === workflowId &&
+    useGlobalPresetStore.getState().activePresetIds.workflow === workflowId
+}
+
+export function getWorkflowNavigationContext(): Readonly<WorkflowNavigationContext> {
+  return context
+}
+
+/** Project workflow selection into the existing report/workspace stores. */
+export function selectWorkflowPreset(presetOrId: CustomPreset | PredefinedPreset | string): boolean {
+  const presetStore = useGlobalPresetStore.getState()
+  const workflowId = typeof presetOrId === 'string' ? presetOrId : presetOrId.id
+  if (!workflowId) return false
+
+  // Re-activating a tab inside the current workflow must not re-run the preset
+  // application lifecycle (which saves and reloads workflow settings).
+  if (presetStore.activePresetIds.workflow !== workflowId) {
+    const applied = presetStore.applyPreset(presetOrId, 'workflow')
+    if (!applied.success) {
+      // Old tabs can be restored before the manifest list finishes loading.
+      // Preserve their ownership immediately; the normal preset hydration will
+      // fill in query/tool/folder metadata once manifests are available.
+      presetStore.setActivePreset('workflow', workflowId)
+      useWorkflowStore.getState().switchToPreset(workflowId)
+    }
+  }
+
+  useAppStore.getState().setShowWorkflowsOverview(false)
+  if (useModeStore.getState().selectedModeCategory !== 'workflow') {
+    useModeStore.getState().setModeCategory('workflow')
+  }
+  useWorkflowStore.getState().setShowChatArea(true)
+  return true
+}
+
+/**
+ * Atomically project one workflow navigation decision into the legacy stores.
+ * Report/workspace selection, chat tab, session, and view mode must never be
+ * written independently by a visible-navigation entry point.
+ */
+export function activateWorkflowTab(
+  tabId: string,
+  options: { expectedGeneration?: number; viewMode?: EventViewMode } = {},
+): boolean {
+  const chatStore = useChatStore.getState()
+  const tab = chatStore.chatTabs[tabId]
+  const workflowId = tab?.metadata?.presetQueryId
+  if (!tab || tab.metadata?.mode !== 'workflow' || !workflowId) return false
+
+  if (
+    options.expectedGeneration !== undefined &&
+    (options.expectedGeneration !== context.generation || context.workflowId !== workflowId)
+  ) return false
+
+  const crossingWorkflowBoundary = context.workflowId !== workflowId ||
+    useGlobalPresetStore.getState().activePresetIds.workflow !== workflowId
+
+  if (crossingWorkflowBoundary) {
+    // A direct tab click is a newer navigation intent and cancels any older
+    // asynchronous workflow lookup.
+    context = {
+      workflowId,
+      tabId: null,
+      sessionId: null,
+      viewMode: normalizeEventViewMode(chatStore.eventViewModePreference),
+      generation: context.generation + 1,
+    }
+  }
+
+  selectWorkflowPreset(workflowId)
+
+  const viewMode = normalizeEventViewMode(
+    options.viewMode ||
+    (options.expectedGeneration !== undefined
+      ? context.viewMode
+      : crossingWorkflowBoundary
+        ? chatStore.eventViewModePreference
+        : tab.viewMode)
+  )
+  chatStore.setTabViewMode(tabId, viewMode)
+  chatStore.switchTab(tabId)
+
+  context = {
+    workflowId,
+    tabId,
+    sessionId: tab.sessionId,
+    viewMode,
+    generation: context.generation,
+  }
+  return true
+}
+
+export function resetWorkflowNavigationForTests(): void {
+  context = {
+    workflowId: null,
+    tabId: null,
+    sessionId: null,
+    viewMode: 'formatted',
+    generation: 0,
+  }
+}

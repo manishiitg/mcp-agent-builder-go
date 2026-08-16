@@ -8,7 +8,6 @@ import {
   shouldRefreshSessionEventStream,
   shouldUseRetainedLiveInput,
 } from '../utils/liveInputSubmission'
-import { isInternalAutoNotificationEvent } from '../utils/internalChatEvents'
 import { eventBelongsToSession, sessionOwnsGlobalChatIndicators } from '../utils/sessionEventWorkingSet'
 import { useShallow } from 'zustand/react/shallow'
 import { agentApi, resetSessionId, getSessionId } from '../services/api'
@@ -46,6 +45,8 @@ import {
 } from '../utils/chatSubmitHelpers'
 import { resolveDelegationMainModel } from '../utils/workflowLLMTierDefaults'
 import { shouldKeepWorkflowSessionSubscribed } from '../utils/workflowSessionSubscription'
+import { activateTab } from '../utils/activateTab'
+import { selectWorkflowPreset } from '../utils/workflowNavigation'
 
 // Stable empty array to avoid infinite re-render loops in Zustand selectors
 // (a new [] on every selector call breaks referential equality checks)
@@ -730,28 +731,15 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     }
 
     const filtered = tabEvents.filter(event => {
-      // These drive the live streaming text buffer. They are transport-level
-      // chunks, not durable conversation records; rendering retained chunks
-      // creates one "Unknown Event Type" JSON card per packet after a page
-      // refresh or when the main terminal is opened in Formatted view.
+      // See the Formatted View Visibility Contract in
+      // utils/terminalEventTranscript.ts. Streaming packets drive the transient
+      // live buffer; they are not durable conversation records.
       if (isStreamingEventType(event.type)) return false
 
-      // Synthetic auto-notifications are orchestration input for the agent, not
-      // human chat. Keep them in the session/event store for sequencing and
-      // history, but do not replay dozens of internal prompts when a read-only
-      // scheduled run is converted to an interactive chat. Background-agent
-      // start/completion events remain visible as the user-facing status UI.
-      //
-      // A product surface supplying its own contentRenderer is exempt: it
-      // renders its own conversation from these events and already has a
-      // dedicated treatment for them (buildCleanConversationItems maps the
-      // [AUTO-NOTIFICATION] prefix to role 'notification', which
-      // CleanConversationSurface draws as a labelled notice). Filtering here
-      // made that path unreachable, so a workflow step completing showed only
-      // the agent's reply with nothing saying what prompted it.
-      if (!ContentRenderer && isInternalAutoNotificationEvent(event)) return false
+      // Auto-notifications deliberately pass through and are compacted by the
+      // transcript according to the shared visibility contract.
 
-      // Hide Total Token Usage and Context Offloading events
+      // Usage visibility is also defined by the shared contract.
       if (event.type === 'token_usage' && !showConversationUsage) {
         const agentEvent = event.data as { data?: Record<string, unknown> } | undefined
         const payload = agentEvent?.data || event.data as Record<string, unknown> | undefined
@@ -790,7 +778,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     // Output actually changed — cache the new array for next comparison
     displayEventsRef.current = filtered
     return filtered
-  }, [tabEvents, showConversationUsage, ContentRenderer, activeSessionId])
+  }, [tabEvents, showConversationUsage, activeSessionId])
 
   // Durable chat history is deliberately fetched in bounded tail-first pages.
   // Keeping older pages locally avoids polluting the live event working set,
@@ -1270,7 +1258,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
   const handleWorkflowPresetSelected = useCallback(async (presetId: string, presetContent: string) => {
     // Apply the preset using the global preset store
     // File context is now preset-specific (from preset.selectedFolder), no need to clear
-    applyPreset(presetId, 'workflow')
+    selectWorkflowPreset(presetId)
     setCurrentWorkflowQueryId(presetId) // Store the preset query ID for workflow approval
 
     try {
@@ -3144,7 +3132,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     }
 
     if (targetTab) {
-      chatStore.switchTab(targetTab.tabId)
+      activateTab(targetTab.tabId)
       chatStore.resetTabChat(targetTab.tabId)
       chatStore.setTabConfig(targetTab.tabId, {
         queuedMessages: [],
