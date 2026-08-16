@@ -58,6 +58,8 @@ diagnostic mode.
    block product navigation.
 5. Restored and newly opened workflow chats explicitly select formatted mode.
    The developer-only terminal rail remains available only with both flags set.
+   `./run_server_with_logging.sh --enable-chat-terminal-debugs --with-frontend`
+   enables both flags for a local diagnostic run.
 
 ## Verification and P0 coverage
 

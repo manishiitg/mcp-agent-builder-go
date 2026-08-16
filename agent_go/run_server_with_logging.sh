@@ -44,6 +44,7 @@ WITH_FRONTEND=false
 ONLY_FRONTEND=false
 UPDATE_MMX_CLI=false
 FRONTEND_BUILD_MODE=false
+ENABLE_CHAT_TERMINAL_DEBUGS=false
 MCP_SERVER_API_TOKEN_ARG=""
 MCP_SERVER_API_TOKEN_ARG_SET=false
 EXPECT_MCP_SERVER_API_TOKEN_VALUE=false
@@ -76,6 +77,9 @@ for arg in "$@"; do
         --build)
             FRONTEND_BUILD_MODE=true
             ;;
+        --enable-chat-terminal-debugs)
+            ENABLE_CHAT_TERMINAL_DEBUGS=true
+            ;;
         --update)
             UPDATE_MMX_CLI=true
             ;;
@@ -104,6 +108,15 @@ fi
 
 if [ "$MCP_SERVER_API_TOKEN_ARG_SET" = true ]; then
     export MCP_SERVER_API_TOKEN="$MCP_SERVER_API_TOKEN_ARG"
+fi
+
+# Terminal panes, child-agent rails, and execution trees are engineering
+# diagnostics. Keep them off for normal product runs; this explicit startup
+# switch enables the matching server and Vite gates for one invocation.
+if [ "$ENABLE_CHAT_TERMINAL_DEBUGS" = true ]; then
+    export AGENTWORKS_RUNTIME_DEBUG=1
+    export VITE_RUNTIME_DEBUG=1
+    echo "🔬 Chat terminal diagnostics enabled for this run"
 fi
 
 # Every server launched by this script owns an isolated tmux socket. Coding
@@ -749,6 +762,13 @@ elif [ -f ".env" ]; then
     echo "✅ Environment variables loaded (including Langfuse configuration)"
 else
     echo "⚠️  No .env file found. Langfuse tracing will be disabled."
+fi
+
+# A sourced .env may contain an older value. The explicit command-line switch
+# always wins for every child process started by this script.
+if [ "$ENABLE_CHAT_TERMINAL_DEBUGS" = true ]; then
+    export AGENTWORKS_RUNTIME_DEBUG=1
+    export VITE_RUNTIME_DEBUG=1
 fi
 
 ensure_local_auth_secret
