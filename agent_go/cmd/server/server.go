@@ -4156,20 +4156,28 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 		if credentialErr != nil {
 			logfWithContext(queryLogCtx.WithWorkflow(workflowPhaseFolder), "[WORKFLOW_AUTH] Failed to load provider credentials: %v", credentialErr)
 		}
-	} else if req.LLMConfig != nil && req.LLMConfig.APIKeys != nil {
-		// resolveAgentProfileForQuery already resolved a project-scoped credential
-		// for a product surface (e.g. Video Studio) and overlaid it onto this same
-		// MergedProviderAPIKeys base — req.LLMConfig.APIKeys is the only place that
-		// happens. Recomputing mergedAPIKeys from scratch below would silently
-		// discard it: NewLLMAgentWrapper reads mergedAPIKeys, not req.LLMConfig.
+	} else if resolvedProfile != nil && resolvedProfile.APIKeys != nil {
+		// resolveAgentProfileForQuery resolved a project-scoped credential for a
+		// product surface (e.g. Video Studio) from the encrypted per-workspace
+		// store. Recomputing mergedAPIKeys from scratch below would discard it:
+		// NewLLMAgentWrapper reads mergedAPIKeys, not req.LLMConfig.
+		//
+		// The credential is read from the RESOLVER'S RESULT, never from
+		// req.LLMConfig. req is deserialized from the client body — `llm_config`
+		// is `json:"llm_config,omitempty"` and every ProviderAPIKeys field except
+		// ClaudeCodeOAuthToken is JSON-visible — so keying this branch off the
+		// request would (a) let any authenticated caller replace the turn's
+		// provider keys, including pointing Azure.Endpoint at a host they control,
+		// and (b) fire on ordinary chats, because the frontend always sends
+		// `api_keys: {}` and an empty JSON object unmarshals to a NON-NIL pointer,
+		// wiping every server-resolved key.
 		//
 		// This branch is deliberately narrower than "any chat with SelectedFolder
 		// set": an ordinary multi-agent chat that merely references a workflow
 		// folder must not inherit that workflow's credential (see delegation.go's
 		// workflowOwnedDelegation check, which enforces the same rule for
-		// sub-agents) — only a chat resolveAgentProfileForQuery actually bound to
-		// an agent profile reaches this branch, because only it sets this field.
-		mergedAPIKeys = req.LLMConfig.APIKeys
+		// sub-agents).
+		mergedAPIKeys = resolvedProfile.APIKeys
 	}
 
 	queryInputLaneRelease := releaseInputLane

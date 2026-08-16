@@ -12,11 +12,19 @@ import (
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/agentprofiles"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator"
 	unifiedevents "github.com/manishiitg/mcpagent/events"
+	"github.com/manishiitg/mcpagent/llm"
 )
 
 type resolvedAgentProfile struct {
 	Definition agentprofiles.Profile
 	Prompt     string
+	// APIKeys carries the project-scoped credential this resolver loaded from the
+	// encrypted per-user/workspace store. It is returned on the resolver's own
+	// result rather than handed back through req.LLMConfig so the query path can
+	// never take a credential from the request body: LLMConfig is deserialized
+	// from client JSON, and every field of ProviderAPIKeys except
+	// ClaudeCodeOAuthToken is JSON-visible. nil when no profile is bound.
+	APIKeys *llm.ProviderAPIKeys
 }
 
 // cleanAgentProfileWorkspace validates the client-supplied selected_folder for
@@ -199,6 +207,7 @@ func (api *StreamingAPI) resolveAgentProfileForQuery(ctx context.Context, req *Q
 			req.BrowserMode = "auto"
 		}
 	}
+	var resolvedKeys *llm.ProviderAPIKeys
 	if provider, modelID := resolveProfileRuntimeModel(profile.Runtime, req.Provider, req.ModelID); provider != "" && modelID != "" {
 		// A profile-owned model binding is authoritative over the user's global
 		// AgentWorks chat selection, while still using the shared provider adapter,
@@ -219,13 +228,16 @@ func (api *StreamingAPI) resolveAgentProfileForQuery(ctx context.Context, req *Q
 			if credentialErr != nil {
 				return nil, fmt.Errorf("load agent profile %s credential: %w", provider, credentialErr)
 			}
-			req.LLMConfig.APIKeys = keys
+			// Returned on resolvedAgentProfile, NOT written back onto req.LLMConfig.
+			// The query path reads the resolver's result, so a credential can never
+			// originate from the request body.
+			resolvedKeys = keys
 		}
 	}
 	if strings.TrimSpace(req.SessionTitle) == "" {
 		req.SessionTitle = promptContext.ProjectTitle
 	}
-	return &resolvedAgentProfile{Definition: profile, Prompt: rendered}, nil
+	return &resolvedAgentProfile{Definition: profile, Prompt: rendered, APIKeys: resolvedKeys}, nil
 }
 
 func profileRuntimeEventType(event any) string {

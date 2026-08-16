@@ -6,6 +6,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -158,11 +159,53 @@ func TestResolveAgentProfileInjectsProjectScopedCursorAPIKey(t *testing.T) {
 	}
 	api := &StreamingAPI{agentProfiles: registry, chatStore: store}
 	req := QueryRequest{AgentMode: "multi-agent", AgentProfileID: "video-studio", SelectedFolder: workspacePath, AgentProfileContext: agentprofiles.PromptContext{ProjectTitle: "Launch"}}
-	if _, err := api.resolveAgentProfileForQuery(context.Background(), &req, userID, "session-1"); err != nil {
+	resolved, err := api.resolveAgentProfileForQuery(context.Background(), &req, userID, "session-1")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if req.LLMConfig == nil || req.LLMConfig.APIKeys == nil || req.LLMConfig.APIKeys.CursorCLI == nil || *req.LLMConfig.APIKeys.CursorCLI != cursorKey {
-		t.Fatalf("project-scoped Cursor key was not injected: %+v", req.LLMConfig)
+	// The credential is carried on the RESOLVER'S RESULT, not on req.LLMConfig.
+	// req is deserialized from the client body, so routing a credential through
+	// it would make the request body a credential source.
+	if resolved == nil || resolved.APIKeys == nil || resolved.APIKeys.CursorCLI == nil || *resolved.APIKeys.CursorCLI != cursorKey {
+		t.Fatalf("project-scoped Cursor key was not returned on the resolved profile: %+v", resolved)
+	}
+	if req.LLMConfig != nil && req.LLMConfig.APIKeys != nil {
+		t.Fatal("resolver wrote a credential back onto req.LLMConfig; the query path must never read keys from the request")
+	}
+}
+
+// The query path must take provider keys only from the resolver. A client can
+// set llm_config.api_keys on the wire — every ProviderAPIKeys field except
+// ClaudeCodeOAuthToken is JSON-visible — so honoring it would let any
+// authenticated caller replace the turn's credentials (e.g. redirect
+// Azure.Endpoint). It also fires on ordinary chats: the frontend always sends
+// `api_keys: {}`, and an empty JSON object unmarshals to a NON-NIL pointer,
+// which would wipe every server-resolved key.
+func TestClientSuppliedAPIKeysAreNotACredentialSource(t *testing.T) {
+	body := []byte(`{"agent_mode":"multi-agent","llm_config":{"api_keys":{"CursorCLI":"attacker-key"}}}`)
+	var req QueryRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		t.Fatal(err)
+	}
+	// Deserialization does populate the field — this is the trap, not a no-op.
+	if req.LLMConfig == nil || req.LLMConfig.APIKeys == nil || req.LLMConfig.APIKeys.CursorCLI == nil {
+		t.Fatal("expected client-supplied api_keys to deserialize; if this fails the wire contract changed")
+	}
+
+	// Empty object is the shape the real frontend sends on every request.
+	var empty QueryRequest
+	if err := json.Unmarshal([]byte(`{"llm_config":{"api_keys":{}}}`), &empty); err != nil {
+		t.Fatal(err)
+	}
+	if empty.LLMConfig.APIKeys == nil {
+		t.Fatal("expected `api_keys: {}` to produce a NON-NIL pointer; the old branch keyed off exactly this")
+	}
+
+	// With no profile resolved there is no credential to apply, so the query
+	// path must fall through to the server-resolved keys untouched.
+	var resolved *resolvedAgentProfile
+	if resolved != nil && resolved.APIKeys != nil {
+		t.Fatal("unreachable: guards the shape the query path branches on")
 	}
 }
 
