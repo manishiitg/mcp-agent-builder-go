@@ -3,6 +3,7 @@ import { Check, ChevronDown } from 'lucide-react'
 import { RunloopMark } from './branding/RunloopLogo'
 import { VideoStudioMark } from '../products/video-studio/VideoStudioMark'
 import { ChiefOfStaffMark } from '../products/chief-of-staff/ChiefOfStaffMark'
+import { FinanceMark } from '../products/finance/FinanceMark'
 import { useProductSurfaceStore, type ProductSurface } from '../stores/useProductSurfaceStore'
 import { useAppStore } from '../stores/useAppStore'
 import { cn } from '../lib/utils'
@@ -26,6 +27,7 @@ const products: Array<{
   { id: 'agentworks', label: 'AgentWorks', description: 'Automation and workflows', icon: RunloopMark },
   { id: 'video-studio', label: 'Video Studio', description: 'Projects and video production', icon: VideoStudioMark },
   { id: 'chief-of-staff', label: 'Chief of Staff', description: 'Your operations hub across automations', icon: ChiefOfStaffMark },
+  { id: 'finance', label: 'Finance', description: 'Consolidated bank, investment, and tax view', icon: FinanceMark },
 ]
 
 export function ProductSurfaceSwitcher({ className, version }: ProductSurfaceSwitcherProps) {

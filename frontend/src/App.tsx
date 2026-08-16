@@ -45,6 +45,7 @@ const QuickSwitcher = lazy(() => import('./components/QuickSwitcher'))
 const WorkflowsOverviewPage = lazy(() => import('./components/WorkflowsOverviewPage').then(module => ({ default: module.WorkflowsOverviewPage })))
 const VideoStudioSurface = lazy(() => import('./products/video-studio/VideoStudioSurface').then(module => ({ default: module.VideoStudioSurface })))
 const ChiefOfStaffSurface = lazy(() => import('./products/chief-of-staff/ChiefOfStaffSurface').then(module => ({ default: module.ChiefOfStaffSurface })))
+const FinanceSurface = lazy(() => import('./products/finance/FinanceSurface').then(module => ({ default: module.FinanceSurface })))
 
 const FileSurfaceFallback = () => (
   <div className="flex h-full min-h-40 items-center justify-center text-muted-foreground">
@@ -1199,6 +1200,8 @@ function App() {
           <Suspense fallback={<FileSurfaceFallback />}><VideoStudioSurface /></Suspense>
         ) : productSurface === 'chief-of-staff' ? (
           <Suspense fallback={<FileSurfaceFallback />}><ChiefOfStaffSurface /></Suspense>
+        ) : productSurface === 'finance' ? (
+          <Suspense fallback={<FileSurfaceFallback />}><FinanceSurface /></Suspense>
         ) : (
         <TooltipProvider>
         <UpdateProgressToast />
