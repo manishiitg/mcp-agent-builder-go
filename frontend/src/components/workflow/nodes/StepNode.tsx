@@ -86,15 +86,13 @@ export const StepNode = memo(({ data, selected }: StepNodeProps) => {
     : ''
   const hasLearningObjective = learningObjective.length > 0
   const learningLocked = agentConfig?.lock_learnings === true
-  const hasExplicitLearningAccess = learningAccess === 'read' || learningAccess === 'read-write' || learningAccess === 'none'
+  const hasExplicitLearningAccess = learningAccess === 'read' || learningAccess === 'read-write'
   const showLearningMetadata = hasLearningObjective || learningLocked || hasExplicitLearningAccess
   const learningAccessLabel = learningAccess === 'read-write'
     ? 'Read/write'
     : learningAccess === 'read'
       ? 'Read'
-      : learningAccess === 'none'
-        ? 'Off'
-        : hasLearningObjective
+      : hasLearningObjective
           ? 'Objective'
           : 'Learning'
   const learningHeading = hasLearningObjective
@@ -118,7 +116,7 @@ export const StepNode = memo(({ data, selected }: StepNodeProps) => {
     ? agentConfig.knowledgebase_contribution.trim()
     : ''
   const hasKnowledgebaseContribution = knowledgebaseContribution.length > 0
-  const hasExplicitKnowledgebaseAccess = knowledgebaseAccess === 'read' || knowledgebaseAccess === 'write' || knowledgebaseAccess === 'read-write' || knowledgebaseAccess === 'none'
+  const hasExplicitKnowledgebaseAccess = knowledgebaseAccess === 'read' || knowledgebaseAccess === 'write' || knowledgebaseAccess === 'read-write'
   const showKnowledgebaseMetadata = hasKnowledgebaseContribution || hasExplicitKnowledgebaseAccess || referencesKnowledgebase
   const knowledgebaseAccessLabel = knowledgebaseAccess === 'read-write'
     ? 'Read/write'
@@ -126,11 +124,9 @@ export const StepNode = memo(({ data, selected }: StepNodeProps) => {
       ? 'Write'
       : knowledgebaseAccess === 'read'
         ? 'Read'
-        : knowledgebaseAccess === 'none'
-          ? 'Off'
-          : referencesKnowledgebase
-            ? 'Referenced'
-            : 'KB'
+        : referencesKnowledgebase
+          ? 'Referenced'
+          : 'KB'
   const knowledgebaseHeading = hasKnowledgebaseContribution
     ? 'KB contribution'
     : referencesKnowledgebase
@@ -150,7 +146,7 @@ export const StepNode = memo(({ data, selected }: StepNodeProps) => {
               ? 'Reads from and writes back to the knowledgebase.'
               : 'Knowledgebase metadata is enabled for this step.'
   const dbAccess = agentConfig?.db_access
-  const hasExplicitDbAccess = dbAccess === 'read' || dbAccess === 'write' || dbAccess === 'read-write' || dbAccess === 'none'
+  const hasExplicitDbAccess = dbAccess === 'read' || dbAccess === 'write' || dbAccess === 'read-write'
   const showDbMetadata = hasExplicitDbAccess || referencesDatabase
   const dbAccessLabel = 'Read/write'
   const dbDisplayText = referencesDatabase && !hasExplicitDbAccess

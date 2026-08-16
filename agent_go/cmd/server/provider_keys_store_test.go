@@ -197,9 +197,9 @@ func TestSelectPiAPIKeyForModelUsesModelProviderPrefix(t *testing.T) {
 		want    string
 	}{
 		{modelID: "google/gemini-3.5-flash", want: "gemini-key"},
-		{modelID: "zai/glm-5.2", want: "zai-key"},
-		{modelID: "zai-coding-cn/glm-5.2", want: "zai-cn-key"},
-		{modelID: "kimi-coding/k2p7", want: "kimi-key"},
+		{modelID: "zai/glm-5.3", want: "zai-key"},
+		{modelID: "zai-coding-cn/glm-5.3", want: "zai-cn-key"},
+		{modelID: "kimi-coding/k3", want: "kimi-key"},
 		{modelID: "deepseek/deepseek-v4-pro", want: "deepseek-key"},
 		{modelID: "openrouter/minimax/minimax-m3-20260531", want: "openrouter-key"},
 	}

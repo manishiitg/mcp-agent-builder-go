@@ -314,18 +314,16 @@ function estimateNodeHeight(node: WorkflowNode): number {
       learningObjective.length > 0 ||
       learningConfig?.lock_learnings === true ||
       learningAccess === 'read' ||
-      learningAccess === 'read-write' ||
-      learningAccess === 'none'
+      learningAccess === 'read-write'
     )
     const hasKnowledgebaseMetadata = (
       knowledgebaseContribution.length > 0 ||
       knowledgebaseAccess === 'read' ||
       knowledgebaseAccess === 'write' ||
       knowledgebaseAccess === 'read-write' ||
-      knowledgebaseAccess === 'none' ||
       referencesKnowledgebase
     )
-    const hasDbMetadata = dbAccess === 'read' || dbAccess === 'write' || dbAccess === 'read-write' || dbAccess === 'none' || referencesDatabase
+    const hasDbMetadata = dbAccess === 'read' || dbAccess === 'write' || dbAccess === 'read-write' || referencesDatabase
     const metadataRowCount = [hasLearningMetadata, hasKnowledgebaseMetadata, hasDbMetadata].filter(Boolean).length
     if (metadataRowCount > 0) {
       contentHeight += (hasLearningMetadata ? 44 : 0) + (hasKnowledgebaseMetadata ? 44 : 0) + (hasDbMetadata ? 28 : 0) +

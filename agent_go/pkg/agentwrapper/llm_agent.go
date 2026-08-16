@@ -1086,9 +1086,11 @@ func (w *LLMAgentWrapper) StreamWithEvents(ctx context.Context, prompt string) (
 		if w.config.SessionID != "" {
 			unregisterHTTPToolHook = toolcalllog.RegisterHook(w.config.SessionID, toolcalllog.Hook{
 				OnStart: func(tc toolcalllog.StartedCall) {
-					if w.agent == nil {
-						return
-					}
+					// The HTTP bridge owns the authoritative arguments for coding
+					// agents. Provider stream events can have empty ToolArgs even
+					// though the command is about to run. Emitting through the tracer
+					// does not require the in-memory Agent pointer, which may be
+					// swapped during native resume; do not discard this detail.
 					ev := events.NewToolCallStartEventWithCorrelation(
 						1,
 						tc.Name,
@@ -1101,9 +1103,6 @@ func (w *LLMAgentWrapper) StreamWithEvents(ctx context.Context, prompt string) (
 					w.emitEvent(ev)
 				},
 				OnEnd: func(tc toolcalllog.CompletedCall) {
-					if w.agent == nil {
-						return
-					}
 					duration := time.Duration(0)
 					if !tc.StartedAt.IsZero() {
 						duration = tc.CompletedAt.Sub(tc.StartedAt)

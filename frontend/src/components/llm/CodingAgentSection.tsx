@@ -86,6 +86,13 @@ function piAuthSpecForModel(modelId: string): PiAuthSpec {
         envNames: ['DEEPSEEK_API_KEY'],
         help: 'Used by Pi for DeepSeek models.',
       }
+    case 'xai':
+      return {
+        providerKey: 'xai',
+        label: 'xAI (Grok) API key',
+        envNames: ['XAI_API_KEY'],
+        help: 'Used by Pi for xAI Grok models.',
+      }
     case 'zai':
       return {
         providerKey: 'zai',
