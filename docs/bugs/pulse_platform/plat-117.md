@@ -68,7 +68,7 @@ than hardcoded to Video Studio:
 
 - **No confirmed end-to-end pass with real human speech.** Every real-mic
   attempt on the reporter's machine has returned `rms=0.0000` — tracked
-  separately as [PLAT-116](plat-116.md), which blocks this ticket's own
+  separately as [PLAT-119](plat-119.md), which blocks this ticket's own
   closure.
 - Live text appearing in the banner as real speech streams, and the final
   transcript landing in the chat composer on stop, are both implemented per
@@ -78,4 +78,4 @@ than hardcoded to Video Studio:
 
 - A user speaks into a real microphone; partial text appears live in the
   banner as they talk; stopping delivers the final transcript into the
-  composer input. Currently blocked on PLAT-116.
+  composer input. Currently blocked on PLAT-119.

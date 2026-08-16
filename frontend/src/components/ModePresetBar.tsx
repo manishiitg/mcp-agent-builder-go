@@ -194,11 +194,10 @@ export const ModePresetBar: React.FC = () => {
   const setShowFileContent = useWorkspaceStore(state => state.setShowFileContent)
   const isOrganizationView = showWorkflowsOverview
 
-  // GlobalActivityMonitor deliberately excludes the current session from its
-  // pills so the same workflow doesn't render twice, but that left the one
-  // workflow the user is looking at as the one whose live state is least
-  // visible: the selector below only ever showed a static green dot, never
-  // the running/needs-input/idle state the pills carry for everything else.
+  // GlobalActivityMonitor excludes only the current session from its pills.
+  // A simultaneous scheduled run for the same workflow remains a separate
+  // activity, while this selector gives the current session its own live
+  // running/needs-input/idle status.
   // This mirrors GlobalActivityMonitor's own currentSessionId derivation so
   // the two stay in agreement about which session is "current".
   const activeSessionsCache = useChatStore(state => state.activeSessionsCache)

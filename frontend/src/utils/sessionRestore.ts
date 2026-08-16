@@ -230,14 +230,18 @@ function makeRestoredEvent(
   } as PollingEvent
 }
 
-function conversationToRestoredEvents(conversation: ChatHistoryConversation): PollingEvent[] {
+export function conversationToRestoredEvents(conversation: ChatHistoryConversation): PollingEvent[] {
   const sessionId = conversation.session_id
   const messages = conversation.conversation_history || []
+  // Page identity is durable across "Load earlier" requests. Without this,
+  // every page restarts at restored-…-0 and the event store/UI deduplicates
+  // distinct older turns as if they were the newest page.
+  const eventIndexBase = Math.max(0, conversation.history_pagination?.start_turn ?? 0) * 2
   const events: PollingEvent[] = [
     makeRestoredEvent(sessionId, 'conversation_resumed', {
       previous_event_count: messages.length,
       restored_from: 'workspace_chat_history',
-    }, 0),
+    }, eventIndexBase),
   ]
 
   let turn = 0
@@ -254,7 +258,7 @@ function conversationToRestoredEvents(conversation: ChatHistoryConversation): Po
       content: pendingAssistant,
       result: pendingAssistant,
       turns: turn,
-    }, events.length))
+    }, eventIndexBase + events.length))
     pendingAssistant = ''
   }
 
@@ -273,7 +277,7 @@ function conversationToRestoredEvents(conversation: ChatHistoryConversation): Po
         content,
         role: 'user',
         turn,
-      }, events.length))
+      }, eventIndexBase + events.length))
     } else if (role === 'ai' || role === 'assistant') {
       const normalized = content.trim().toLowerCase()
       if (normalized.startsWith('[previous tool call:') || normalized.startsWith('[previous tool result:')) {
@@ -352,7 +356,16 @@ async function hydrateTabEventsFromChatHistory(sessionId: string, workspacePath?
 
   chatStore.setTabEvents(sessionId, events)
   chatStore.setTabLastEventIndex(sessionId, events.length - 1)
-  chatStore.setTabHasMoreOlderEvents(sessionId, false)
+  chatStore.setTabHasMoreOlderEvents(sessionId, conversation.history_pagination?.has_more ?? false)
+  chatStore.setTabHistoryPagination(
+    sessionId,
+    conversation.history_pagination
+      ? {
+          hasMore: conversation.history_pagination.has_more,
+          nextOffset: conversation.history_pagination.next_offset,
+        }
+      : null,
+  )
   console.info(`${TAG} Hydrated persisted conversation`, {
     sessionId,
     eventCount: events.length,
@@ -419,6 +432,9 @@ export async function hydrateTabEvents(
 
   if (response.events.length > 0) {
     chatStore.setTabEvents(sessionId, response.events)
+    // This is a live event window, not a paged durable conversation. A cursor
+    // left over from an earlier resume must not offer unrelated history here.
+    chatStore.setTabHistoryPagination(sessionId, null)
     const lastIndex = response.last_processed_index ?? (response.events.length - 1)
     chatStore.setTabLastEventIndex(sessionId, lastIndex)
     if (response.has_more !== undefined) {

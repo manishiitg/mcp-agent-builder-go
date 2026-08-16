@@ -191,11 +191,22 @@ describe('selectTerminalEvents — owned terminal (workflow step, message-sequen
     expect(selectTerminalEvents(events, t).map(e => e.id)).toEqual(['task-work', 'completion'])
   })
 
-  it('returns a full session transcript when no terminal is supplied', () => {
+  it('returns the product main transcript when no terminal is supplied', () => {
     const events = [evt({ id: 'a', session_id: 's1', execution_id: 'exec-1' })]
     expect(selectTerminalEvents(events, terminal({ session_id: 's1', owner_id: '' }))).toEqual([])
     expect(selectTerminalEvents(events, null).map(event => event.id)).toEqual(['a'])
     expect(selectTerminalEvents(undefined, terminal({ session_id: 's1', owner_id: 'exec-1' }))).toEqual([])
+  })
+
+  it('keeps explicit child step output out of the product main transcript', () => {
+    const events = [
+      evt({ id: 'main', session_id: 's1', execution_id: 'main:s1', execution_kind: 'main_agent', type: 'llm_generation_end' }),
+      evt({
+        id: 'step', session_id: 's1', execution_id: 'workflow-step:run-1:review-measure', execution_kind: 'workflow_step',
+        type: 'pre_validation_failed', data: { data: { metadata: { current_step_id: 'review-measure' } } } as never,
+      }),
+    ]
+    expect(selectTerminalEvents(events, null).map(event => event.id)).toEqual(['main'])
   })
 })
 

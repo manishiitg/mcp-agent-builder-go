@@ -155,3 +155,61 @@ func TestProjectChatHistoryConversationForResumeLimitsByUserTurn(t *testing.T) {
 		t.Fatalf("first retained turn = %q, want two", firstText)
 	}
 }
+
+func TestProjectChatHistoryConversationForResumePageMovesCursorTowardEarlierTurns(t *testing.T) {
+	message := func(role, text string) map[string]interface{} {
+		return map[string]interface{}{"role": role, "parts": []map[string]string{{"text": text}}}
+	}
+	raw, _ := json.Marshal(map[string]interface{}{
+		"conversation_history": []map[string]interface{}{
+			message("user", "one"), message("assistant", "answer one"),
+			message("user", "two"), message("assistant", "answer two"),
+			message("user", "three"), message("assistant", "answer three"),
+		},
+	})
+
+	var newest struct {
+		History    []json.RawMessage `json:"conversation_history"`
+		Pagination struct {
+			HasMore    bool `json:"has_more"`
+			NextOffset int  `json:"next_offset"`
+			StartTurn  int  `json:"start_turn"`
+			TotalTurns int  `json:"total_turns"`
+		} `json:"history_pagination"`
+	}
+	if err := json.Unmarshal(projectChatHistoryConversationForResumePage(raw, 2, 0), &newest); err != nil {
+		t.Fatal(err)
+	}
+	if len(newest.History) != 4 {
+		t.Fatalf("newest page has %d messages, want two turns", len(newest.History))
+	}
+	_, text := chatHistoryMessageRoleAndText(newest.History[0])
+	if text != "two" {
+		t.Fatalf("newest page starts %q, want two", text)
+	}
+	if !newest.Pagination.HasMore || newest.Pagination.NextOffset != 2 || newest.Pagination.StartTurn != 1 || newest.Pagination.TotalTurns != 3 {
+		t.Fatalf("unexpected newest pagination: %+v", newest.Pagination)
+	}
+
+	var older struct {
+		History    []json.RawMessage `json:"conversation_history"`
+		Pagination struct {
+			HasMore    bool `json:"has_more"`
+			NextOffset int  `json:"next_offset"`
+			StartTurn  int  `json:"start_turn"`
+		} `json:"history_pagination"`
+	}
+	if err := json.Unmarshal(projectChatHistoryConversationForResumePage(raw, 2, newest.Pagination.NextOffset), &older); err != nil {
+		t.Fatal(err)
+	}
+	if len(older.History) != 2 {
+		t.Fatalf("older page has %d messages, want one turn", len(older.History))
+	}
+	_, text = chatHistoryMessageRoleAndText(older.History[0])
+	if text != "one" {
+		t.Fatalf("older page starts %q, want one", text)
+	}
+	if older.Pagination.HasMore || older.Pagination.NextOffset != 3 || older.Pagination.StartTurn != 0 {
+		t.Fatalf("unexpected older pagination: %+v", older.Pagination)
+	}
+}

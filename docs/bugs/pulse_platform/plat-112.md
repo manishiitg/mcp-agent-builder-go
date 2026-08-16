@@ -34,6 +34,11 @@ Production should show only product-facing concepts:
 - a scheduled run when one is active or selected;
 - human decisions, workflow status, and concise run progress.
 
+The active main chat additionally has two intentional views: **Formatted** and
+**Main terminal**. Selecting Main terminal is an explicit request for that
+chat's own raw tmux pane; it is not diagnostic mode and must not reveal or
+poll any child terminal.
+
 Individual tmux panes, child terminals, raw structured event streams, pane
 screenshots, and execution-tree debug nodes belong to an explicit engineering
 diagnostic mode.
@@ -63,6 +68,11 @@ diagnostic mode.
    The developer-only terminal rail remains available only with both flags set.
    `./run_server_with_logging.sh --enable-chat-terminal-debugs --with-frontend`
    enables both flags for a local diagnostic run.
+6. `/sessions/{session_id}/main-terminal` is the sole normal-mode raw terminal
+   endpoint. It resolves one `main_agent` snapshot server-side and reuses the
+   canonical tmux capture path; it never lists child terminals. The endpoint
+   is mounted only after the user chooses Main terminal, so Formatted view has
+   no terminal polling or pane capture.
 
 ## Verification and P0 coverage
 
@@ -70,8 +80,9 @@ diagnostic mode.
    The UI shows Chat/Schedule status only; no terminal rail or raw-pane tab is
    present.
 2. Instrument the terminal discovery, capture, runtime-projection, and
-   terminal-event endpoints. In the flag-off test they receive **zero** calls
-   after initial product-runtime hydration.
+   terminal-event endpoints. In Formatted view they receive **zero** calls
+   after initial product-runtime hydration. Switching to Main terminal may
+   call only that session's focused main-terminal endpoint.
 3. With the flag enabled, the same workflow shows the diagnostic rail and can
    inspect a selected child terminal without changing normal Chat/Schedule
    selection.

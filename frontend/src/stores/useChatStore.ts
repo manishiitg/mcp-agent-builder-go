@@ -493,6 +493,10 @@ interface ChatState extends StoreActions {
   tabEvents: Record<string, PollingEvent[]>  // sessionId -> events
   tabEventIndices: Record<string, number>  // sessionId -> lastEventIndex
   tabHasMoreOlderEvents: Record<string, boolean>  // sessionId -> hasMoreOlderEvents (from initial fetch)
+  // Cursor for durable conversation-history paging. The live event stream has
+  // its own index; this cursor only applies to the formatted transcript's
+  // older, persisted conversation pages.
+  tabHistoryPagination: Record<string, { hasMore: boolean; nextOffset: number }>
   // Stash for the latest human message around Terminal view mode. This
   // remains as a fallback for optimistic input while Tree catches up from
   // poll-based backfill.
@@ -588,6 +592,8 @@ interface ChatState extends StoreActions {
       setTabLastEventIndex: (sessionId: string, index: number) => void
       getTabHasMoreOlderEvents: (sessionId: string) => boolean
       setTabHasMoreOlderEvents: (sessionId: string, hasMore: boolean) => void
+      getTabHistoryPagination: (sessionId: string) => { hasMore: boolean; nextOffset: number } | undefined
+      setTabHistoryPagination: (sessionId: string, pagination: { hasMore: boolean; nextOffset: number } | null) => void
   
   // User message actions
   setCurrentUserMessage: (message: string) => void
@@ -831,6 +837,7 @@ export const useChatStore = create<ChatState>()(
       tabEvents: {},
       tabEventIndices: {},
       tabHasMoreOlderEvents: {},
+      tabHistoryPagination: {},
       currentUserMessage: '',
       showUserMessage: true,
       sessionId: null,
@@ -1178,6 +1185,8 @@ export const useChatStore = create<ChatState>()(
           delete newTabEventIndices[sessionId]
           const newTabHasMoreOlderEvents = { ...state.tabHasMoreOlderEvents }
           delete newTabHasMoreOlderEvents[sessionId]
+          const newTabHistoryPagination = { ...state.tabHistoryPagination }
+          delete newTabHistoryPagination[sessionId]
           const newStreamingText = { ...state.streamingText }
           delete newStreamingText[sessionId]
           const newStreamingStatus = { ...state.streamingStatus }
@@ -1209,6 +1218,7 @@ export const useChatStore = create<ChatState>()(
             tabEvents: newTabEvents,
             tabEventIndices: newTabEventIndices,
             tabHasMoreOlderEvents: newTabHasMoreOlderEvents,
+            tabHistoryPagination: newTabHistoryPagination,
             streamingText: newStreamingText,
             streamingStatus: newStreamingStatus,
             streamingTerminalText: newStreamingTerminalText,
@@ -1258,12 +1268,14 @@ export const useChatStore = create<ChatState>()(
         const newTabEvents = { ...state.tabEvents }
         const newTabEventIndices = { ...state.tabEventIndices }
         const newTabHasMore = { ...state.tabHasMoreOlderEvents }
+        const newTabHistoryPagination = { ...state.tabHistoryPagination }
 
         for (const sessionId of Object.keys(state.tabEvents)) {
           if (!activeSessionIds.has(sessionId)) {
             delete newTabEvents[sessionId]
             delete newTabEventIndices[sessionId]
             delete newTabHasMore[sessionId]
+            delete newTabHistoryPagination[sessionId]
             tabEventIdSets.delete(sessionId)
             orphanCount++
           }
@@ -1274,7 +1286,8 @@ export const useChatStore = create<ChatState>()(
           set({
             tabEvents: newTabEvents,
             tabEventIndices: newTabEventIndices,
-            tabHasMoreOlderEvents: newTabHasMore
+            tabHasMoreOlderEvents: newTabHasMore,
+            tabHistoryPagination: newTabHistoryPagination
           })
         }
       },
@@ -1308,6 +1321,25 @@ export const useChatStore = create<ChatState>()(
             [sessionId]: hasMore
           }
         }))
+      },
+
+      getTabHistoryPagination: (sessionId: string) => get().tabHistoryPagination[sessionId],
+
+      setTabHistoryPagination: (sessionId, pagination) => {
+        const current = get().tabHistoryPagination[sessionId]
+        if (
+          (pagination === null && current === undefined) ||
+          (pagination !== null && current?.hasMore === pagination.hasMore && current?.nextOffset === pagination.nextOffset)
+        ) return
+        set((state) => {
+          const next = { ...state.tabHistoryPagination }
+          if (pagination === null) {
+            delete next[sessionId]
+          } else {
+            next[sessionId] = pagination
+          }
+          return { tabHistoryPagination: next }
+        })
       },
 
       // User message actions
@@ -1808,6 +1840,7 @@ export const useChatStore = create<ChatState>()(
           const newTabEvents = { ...s.tabEvents }
           const newTabEventIndices = { ...s.tabEventIndices }
           const newTabHasMore = { ...s.tabHasMoreOlderEvents }
+          const newTabHistoryPagination = { ...s.tabHistoryPagination }
           const newStreamingText = { ...s.streamingText }
           const newStreamingStatus = { ...s.streamingStatus }
           const newStreamingTerminalText = { ...s.streamingTerminalText }
@@ -1822,6 +1855,7 @@ export const useChatStore = create<ChatState>()(
             delete newTabEvents[oldSessionId]
             delete newTabEventIndices[oldSessionId]
             delete newTabHasMore[oldSessionId]
+            delete newTabHistoryPagination[oldSessionId]
             delete newStreamingText[oldSessionId]
             delete newStreamingStatus[oldSessionId]
             delete newStreamingTerminalText[oldSessionId]
@@ -1856,6 +1890,7 @@ export const useChatStore = create<ChatState>()(
             tabEvents: newTabEvents,
             tabEventIndices: newTabEventIndices,
             tabHasMoreOlderEvents: newTabHasMore,
+            tabHistoryPagination: newTabHistoryPagination,
             streamingText: newStreamingText,
             streamingStatus: newStreamingStatus,
             streamingTerminalText: newStreamingTerminalText,
@@ -2091,6 +2126,7 @@ export const useChatStore = create<ChatState>()(
           let newTabEvents = state.tabEvents
           let newTabEventIndices = state.tabEventIndices
           let newTabHasMore = state.tabHasMoreOlderEvents
+          let newTabHistoryPagination = state.tabHistoryPagination
 
           // Update previous active tab's lastViewedEventCounts before switching
           if (state.activeTabId && state.activeTabId !== tabId) {
@@ -2134,10 +2170,12 @@ export const useChatStore = create<ChatState>()(
                 newTabEvents = { ...newTabEvents }
                 newTabEventIndices = { ...newTabEventIndices }
                 newTabHasMore = { ...newTabHasMore }
+                newTabHistoryPagination = { ...newTabHistoryPagination }
               }
               delete newTabEvents[sessionId]
               delete newTabEventIndices[sessionId]
               delete newTabHasMore[sessionId]
+              delete newTabHistoryPagination[sessionId]
               logger.debug('TabStore', `Cleaned up orphaned events for session ${sessionId}`)
             }
           }
@@ -2147,7 +2185,8 @@ export const useChatStore = create<ChatState>()(
             chatTabs: { ...state.chatTabs, ...updates },
             tabEvents: newTabEvents,
             tabEventIndices: newTabEventIndices,
-            tabHasMoreOlderEvents: newTabHasMore
+            tabHasMoreOlderEvents: newTabHasMore,
+            tabHistoryPagination: newTabHistoryPagination
           }
         })
       },
@@ -2282,6 +2321,10 @@ export const useChatStore = create<ChatState>()(
           const newHasMore = { ...state.tabHasMoreOlderEvents }
           delete newHasMore[tab.sessionId]
           updates.tabHasMoreOlderEvents = newHasMore
+
+          const newHistoryPagination = { ...state.tabHistoryPagination }
+          delete newHistoryPagination[tab.sessionId]
+          updates.tabHistoryPagination = newHistoryPagination
         }
 
         // Clean up tab session status (always — this is keyed by tabId, not sessionId)
@@ -2424,6 +2467,7 @@ export const useChatStore = create<ChatState>()(
               const oldEvents = state.tabEvents[oldSessionId]
               const oldEventIndex = state.tabEventIndices[oldSessionId]
               const oldHasMore = state.tabHasMoreOlderEvents[oldSessionId]
+              const oldHistoryPagination = state.tabHistoryPagination[oldSessionId]
 
               updates.tabEvents = {
                 ...state.tabEvents,
@@ -2441,6 +2485,12 @@ export const useChatStore = create<ChatState>()(
                   [newSessionId]: oldHasMore
                 }
               }
+              if (oldHistoryPagination !== undefined) {
+                updates.tabHistoryPagination = {
+                  ...state.tabHistoryPagination,
+                  [newSessionId]: oldHistoryPagination,
+                }
+              }
             }
 
             // Clean up old sessionId entries (always, for both modes)
@@ -2455,6 +2505,10 @@ export const useChatStore = create<ChatState>()(
             const newTabHasMore = { ...(updates.tabHasMoreOlderEvents || state.tabHasMoreOlderEvents) }
             delete newTabHasMore[oldSessionId]
             updates.tabHasMoreOlderEvents = newTabHasMore
+
+            const newHistoryPagination = { ...(updates.tabHistoryPagination || state.tabHistoryPagination) }
+            delete newHistoryPagination[oldSessionId]
+            updates.tabHistoryPagination = newHistoryPagination
           }
 
           return updates

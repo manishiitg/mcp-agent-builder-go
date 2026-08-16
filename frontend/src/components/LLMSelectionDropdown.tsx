@@ -83,7 +83,7 @@ export default function LLMSelectionDropdown({
   inModal = false,
   openDirection = 'down', // Default to downward
   title = 'Select Primary LLM', // Default title
-  placeholder
+  placeholder,
 }: LLMSelectionDropdownProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');

@@ -97,6 +97,36 @@ func TestTerminalSizeHintResizesLiveTerminalsForSession(t *testing.T) {
 	}
 }
 
+func TestGetMainTerminalReturnsOnlyMainAgentPane(t *testing.T) {
+	store := terminals.NewStore()
+	api := &StreamingAPI{terminalStore: store}
+	sessionID := "session-main-terminal-product-view"
+
+	store.HandleEvent(sessionID, terminalRouteChunkEvent(sessionID, "workflow-step:child", "tmux-child", "child output", 1))
+	main := terminalRouteChunkEvent(sessionID, "main:"+sessionID, "tmux-main", "main output", 1)
+	main.ExecutionKind = "main_agent"
+	chunk := main.Data.Data.(*agentevents.StreamingChunkEvent)
+	chunk.Metadata["execution_kind"] = "main_agent"
+	chunk.Metadata["scope"] = "main_agent"
+	chunk.Metadata["current_step_id"] = "main_agent:" + sessionID
+	store.HandleEvent(sessionID, main)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/sessions/"+sessionID+"/main-terminal", nil)
+	req = mux.SetURLVars(req, map[string]string{"session_id": sessionID})
+	rec := httptest.NewRecorder()
+	api.handleGetMainTerminal(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("main terminal status = %d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	var response terminals.Snapshot
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode main terminal response: %v", err)
+	}
+	if response.TmuxSession != "tmux-main" || response.Content != "main output" {
+		t.Fatalf("main terminal = tmux=%q content=%q, want main pane", response.TmuxSession, response.Content)
+	}
+}
+
 func TestTerminalSizeHintIgnoresTinyGeometry(t *testing.T) {
 	store := terminals.NewStore()
 	api := &StreamingAPI{terminalStore: store}

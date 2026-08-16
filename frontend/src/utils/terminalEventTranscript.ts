@@ -45,6 +45,7 @@ const NON_TRANSCRIPT_TYPES = new Set([
 // a "Full Run [Group / Iteration 0]" row restating the panel header above it
 // before the first thing that actually happened.
 const CONTAINER_EXECUTION_KINDS = new Set(['full_run'])
+const MAIN_AGENT_EXECUTION_KINDS = new Set(['main_agent', 'main', 'chat'])
 const TOOL_CALL_TYPES = new Set([
   'tool_call_start',
   'tool_call_end',
@@ -434,6 +435,42 @@ function isTranscriptEvent(event: PollingEvent): boolean {
   return true
 }
 
+// The normal Formatted surface is the main conversation, not a flattened log
+// of every workflow step. Without the old terminal rail, retaining every
+// session event here made step prevalidation JSON and child results appear as
+// though the main agent had said them. Keep events with no execution ownership
+// (ordinary user messages and main-session notices), but hide anything that
+// explicitly belongs to a child execution. The raw details remain available in
+// the selected main tmux view and in developer diagnostics.
+function isProductMainConversationEvent(event: PollingEvent): boolean {
+  if (!isTranscriptEvent(event)) return false
+  const fields = eventFields(event)
+  const metadata = fields.metadata && typeof fields.metadata === 'object'
+    ? fields.metadata as Record<string, unknown>
+    : undefined
+  const kind = (textField(event.execution_kind) || textField(fields.execution_kind) || textField(metadata?.execution_kind))
+    .toLowerCase()
+  if (kind && !MAIN_AGENT_EXECUTION_KINDS.has(kind)) return false
+
+  const executionID = (
+    textField(event.execution_id) ||
+    textField(fields.execution_id) ||
+    textField(metadata?.execution_id)
+  ).toLowerCase()
+  if (executionID &&
+    !executionID.startsWith('main:') &&
+    !executionID.startsWith('session:') &&
+    (executionID.startsWith('workflow-step:') ||
+      executionID.startsWith('delegation-') ||
+      executionID.startsWith('background-') ||
+      executionID.startsWith('workflow-full-'))) {
+    return false
+  }
+
+  const stepID = textField(metadata?.current_step_id) || textField(metadata?.workflow_step_id) || textField(metadata?.step_id)
+  return !stepID || stepID.startsWith('main_agent:')
+}
+
 function isToolBatchEvent(event: PollingEvent): boolean {
   const type = event.type || ''
   if (type === 'llm_generation_end') return isEmptyGenerationEnd(event)
@@ -530,14 +567,14 @@ export function selectTerminalEvents(
 ): PollingEvent[] {
   if (!events || events.length === 0) return []
 
-  // The normal Chat/Schedule product surface is a session transcript, not a
-  // terminal inspector. In that mode no terminal metadata is loaded at all:
-  // retain every user-relevant event and use the same ordering/filtering as a
-  // terminal transcript. TerminalCenter still passes a terminal and keeps the
-  // owner scoping below for developer diagnostics.
+  // The normal Chat/Schedule product surface is the main conversation, not a
+  // terminal inspector. It intentionally excludes workflow-step and child
+  // execution payloads while keeping user messages and main-agent outcomes.
+  // TerminalCenter still passes a terminal and keeps the owner scoping below
+  // for developer diagnostics.
   if (!terminal) {
     return events
-      .filter(isTranscriptEvent)
+      .filter(isProductMainConversationEvent)
       .map((event, index) => ({ event, index }))
       .sort((a, b) => {
         const compared = compareTerminalEvents(a.event, b.event)

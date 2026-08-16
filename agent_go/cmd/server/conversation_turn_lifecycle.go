@@ -303,7 +303,8 @@ func (api *StreamingAPI) waitForConversationTurnTree(ctx context.Context, sessio
 				lastProgressAt = time.Now()
 				return false, nil
 			}
-			return true, fmt.Errorf("%w: execution %s made no progress for %s (running_children=%d)", errWorkshopIdleWaitTimeout, rootExecutionID, maxInactivity, state.RunningChildren)
+			timeoutErr := fmt.Errorf("%w: execution %s made no progress for %s (running_children=%d)", errWorkshopIdleWaitTimeout, rootExecutionID, maxInactivity, state.RunningChildren)
+			return true, api.diagnoseAndCleanupStalledConversationTurn(sessionID, rootExecutionID, waitStartedAt, timeoutErr)
 		}
 		return false, nil
 	}

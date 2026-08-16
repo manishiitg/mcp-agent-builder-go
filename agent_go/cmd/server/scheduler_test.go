@@ -2420,6 +2420,17 @@ func TestPostRunMonitorUsesLightweightFinalizeRequiresRealEvidence(t *testing.T)
 // content contract of the periodic-mode per-run finalizer: it must forbid
 // Gate/reviewers/Fixer, must not present old findings as new, and must mark
 // publish skipped with a stated reason rather than silently omitting it.
+// TestLightweightFinalizeStepNeverRunsGateOrPublishesFindings pins the
+// content contract of the periodic-mode per-run finalizer: it must forbid
+// Gate/reviewers/Fixer and must not present old findings as new. Publish is
+// deliberately NOT a blanket skip: a "report" (or any non-"pulse") target is
+// this run's own execution output, fresh regardless of whether Pulse
+// reviewed anything, and must still publish normally — only the "pulse"
+// target specifically has nothing new this pass. An earlier version of this
+// prompt skipped publish unconditionally, which would have left a
+// report-publishing workflow's public dashboard stale for the entire gap
+// between periodic Pulse passes — the exact kind of staleness this feature
+// was never meant to introduce.
 func TestLightweightFinalizeStepNeverRunsGateOrPublishesFindings(t *testing.T) {
 	steps := postRunMonitorLightweightFinalizeStep("pulse-test")
 	if len(steps) != 1 || steps[0].label != "finalize" {
@@ -2429,7 +2440,9 @@ func TestLightweightFinalizeStepNeverRunsGateOrPublishesFindings(t *testing.T) {
 	for _, want := range []string{
 		"Do not run Gate, reviewers, or Fixer",
 		"not a failure or a skip due to missing evidence",
-		"mark publish skipped",
+		"publish it normally",
+		"is fresh this run regardless of whether Pulse reviewed anything",
+		"The \"pulse\" target specifically has nothing new this pass",
 		"do not include a Pulse findings/fixes section",
 	} {
 		if !strings.Contains(query, want) {

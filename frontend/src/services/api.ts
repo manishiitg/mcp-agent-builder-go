@@ -737,6 +737,22 @@ export const agentApi = {
     return response.data
   },
 
+  // Product-facing raw view: the backend resolves only this chat's main
+  // coding-agent pane. It never enables terminal-rail enumeration.
+  getMainTerminal: async (
+    sessionId: string,
+    options?: { content?: 'stored' | 'screen' | 'history'; lines?: number },
+  ): Promise<TerminalSnapshot> => {
+    const params: Record<string, string | number> = {}
+    if (options?.content && options.content !== 'stored') params.content = options.content
+    if (options?.lines) params.lines = options.lines
+    const response = await api.get(`/api/sessions/${encodeURIComponent(sessionId)}/main-terminal`, {
+      params,
+      timeout: RUNTIME_READ_TIMEOUT_MS,
+    })
+    return response.data
+  },
+
   dismissTerminal: async (terminalId: string): Promise<void> => {
     await api.delete(`/api/terminals/${encodeURIComponent(terminalId)}`)
   },
@@ -826,8 +842,9 @@ export const agentApi = {
   // Formatted Resume needs conversational turns, not the archived terminal/UI
   // trace. The server projects the persisted history to bounded user/final-
   // assistant pairs so reopening a large coding-agent chat stays lightweight.
-  getChatHistoryResumeConversation: async (sessionId: string, workspacePath?: string, resumeTurns = 100): Promise<ChatHistoryConversation> => {
+  getChatHistoryResumeConversation: async (sessionId: string, workspacePath?: string, resumeTurns = 100, resumeOffset = 0): Promise<ChatHistoryConversation> => {
     const params: Record<string, string> = { resume_turns: String(resumeTurns) }
+    if (resumeOffset > 0) params.resume_offset = String(resumeOffset)
     if (workspacePath) params.workspace_path = workspacePath
     const response = await api.get(`/api/chat-history/sessions/${sessionId}`, { params })
     return response.data
@@ -933,6 +950,19 @@ export const agentApi = {
     if (rows && rows > 0) url.searchParams.set('rows', String(Math.floor(rows)))
     if (tmuxSession) url.searchParams.set('tmux_session', tmuxSession)
     if (sessionId) url.searchParams.set('session_id', sessionId)
+    const token = getAuthToken()
+    if (token) url.searchParams.set('token', token)
+    return url.toString()
+  },
+
+  getMainTerminalStreamUrl: (sessionId: string, cols?: number, rows?: number, tmuxSession?: string): string => {
+    const httpBase = getApiBaseUrl() || (typeof window !== 'undefined' ? window.location.origin : '')
+    const wsBase = httpBase.replace(/^http/i, 'ws')
+    const url = new URL(`/api/sessions/${encodeURIComponent(sessionId)}/main-terminal/stream`, wsBase)
+    if (cols && cols > 0) url.searchParams.set('cols', String(Math.floor(cols)))
+    if (rows && rows > 0) url.searchParams.set('rows', String(Math.floor(rows)))
+    if (tmuxSession) url.searchParams.set('tmux_session', tmuxSession)
+    url.searchParams.set('session_id', sessionId)
     const token = getAuthToken()
     if (token) url.searchParams.set('token', token)
     return url.toString()

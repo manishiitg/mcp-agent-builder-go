@@ -1,7 +1,4 @@
-import { Suspense, lazy, useEffect, useRef, useCallback, forwardRef, useImperativeHandle, useMemo, useState, type ComponentType, type ForwardedRef, type ReactNode } from 'react'
-import { isLiveWorkflowTerminal } from '../utils/workflowTerminalActivity'
-import { requestTerminalRefreshBurst } from '../utils/terminalRefresh'
-import { useSessionTerminals } from '../hooks/useSessionTerminals'
+import { useEffect, useRef, useCallback, forwardRef, useImperativeHandle, useMemo, useState, type ComponentType, type ForwardedRef, type ReactNode } from 'react'
 import { normalizeEventViewMode } from '../stores/useChatStore'
 import { useRenderLogger, useMemoLogger } from '../utils/renderLogger'
 import { chatSubmissionLane } from '../utils/promiseLane'
@@ -19,12 +16,12 @@ import type { PollingEvent, ExtendedLLMConfiguration, SSEEventMessage, SSEStatus
 import type { AgentMode } from '../stores/types'
 import { ChatInput } from './ChatInput'
 import { TerminalEventTranscript } from './TerminalEventTranscript'
+import { MainAgentTerminal } from './MainAgentTerminal'
 import { WorkflowModeHandler, type WorkflowModeHandlerRef, signalPlanModified } from './workflow'
 import { ToastContainer } from './ui/Toast'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useWorkflowStore } from '../stores/useWorkflowStore'
 import { useAppStore, useLLMStore, useMCPStore, useChatStore, useGlobalPresetStore } from '../stores'
-import { useCapabilitiesStore } from '../stores/useCapabilitiesStore'
 import { useModeStore, type ModeCategory } from '../stores/useModeStore'
 import { PreviousChatHistoryPanel } from './PreviousChatHistoryPanel'
 import { resolveChatSurface, resolveWorkflowChatSurface } from './resolveChatSurface'
@@ -32,7 +29,7 @@ import { PresetSelectionOverlay } from './PresetSelectionOverlay'
 import { ModeSwitchDialog } from './ui/ModeSwitchDialog'
 import type { ChatTab } from '../stores/useChatStore'
 import type { CustomPreset } from '../types/preset'
-import { restoreSession } from '../utils/sessionRestore'
+import { conversationToRestoredEvents, restoreSession } from '../utils/sessionRestore'
 import { logger } from '../utils/logger'
 import { secretsApi } from '../api/secrets'
 import { useSecretsStore } from '../stores'
@@ -62,14 +59,6 @@ const STALE_STREAMING_RECOVERY_GRACE_MS = 10000
 // than probing the internal tmux terminal inventory.
 const RESUME_SETTLE_MS = 10000
 const STREAMING_EVENT_TYPES = new Set(['streaming_start', 'streaming_chunk', 'streaming_end'])
-// Terminal inspection is developer diagnostics, not product navigation. Keep it
-// explicitly opt-in so ordinary Chat/Schedule tabs never mount the terminal rail
-// or its snapshot/execution-tree polling. The server independently gates those
-// endpoints with AGENTWORKS_RUNTIME_DEBUG.
-const RUNTIME_DIAGNOSTICS_ENABLED = import.meta.env.VITE_RUNTIME_DEBUG === '1'
-// Keep xterm, pane capture, and terminal-tree code out of the normal product
-// bundle/runtime. This module is loaded only after both debug gates opt in.
-const RuntimeDiagnosticsPanel = lazy(() => import('./TerminalCenter').then(module => ({ default: module.TerminalCenter })))
 
 type RuntimeEventScope = {
   kind: 'session' | 'delegation' | 'workshop'
@@ -426,8 +415,6 @@ interface ChatAreaProps {
   hideInput?: boolean
   // Compact mode for smaller font sizes (used in workflow layout)
   compact?: boolean
-  // Suppress terminal content while the parent renders an idle/history state.
-  suppressTerminalPane?: boolean
   // Tab ID - if provided, use this tab's session ID (works for both chat and workflow modes).
   // Pass null explicitly to disable all active behavior (SSE, polling, queue) — used when
   // this ChatArea instance is hidden behind another instance for the same tab.
@@ -480,7 +467,7 @@ let globalHasRestored = false
 
 // Inner component for chat area
 const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAreaRef>) => {
-  const { onNewChat, hideInput = false, compact = false, suppressTerminalPane = false, tabId, previousChatsCompact = false, workflowPreviousChatsPanel, landingContent, contentRenderer: ContentRenderer, inputVariant = 'default', fullTurnStreaming = false, showConversationUsage = false } = props
+  const { onNewChat, hideInput = false, compact = false, tabId, previousChatsCompact = false, workflowPreviousChatsPanel, landingContent, contentRenderer: ContentRenderer, inputVariant = 'default', fullTurnStreaming = false, showConversationUsage = false } = props
   // null means "inactive — don't subscribe to any tab or run any effects"
   const isInactive = tabId === null
 
@@ -683,8 +670,8 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
   // Session-specific selector: only re-renders when the ACTIVE session's events change
   // (not when any other session gets events)
   const activeSessionId = activeTab?.sessionId
-  const serverRuntimeDiagnosticsEnabled = useCapabilitiesStore(state => state.capabilities?.runtime_debug === true)
-  const showRuntimeDiagnostics = RUNTIME_DIAGNOSTICS_ENABLED && serverRuntimeDiagnosticsEnabled
+  const activeEventViewMode = normalizeEventViewMode(activeTab?.viewMode)
+  const showMainTerminal = activeEventViewMode === 'terminal'
 
   // processEventsResponse runs for every polled session and does not carry
   // activeSessionId in its dependency array, so reading it through a ref keeps
@@ -704,6 +691,15 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
   const streamingStatus = useChatStore((state) =>
     activeSessionId ? state.streamingStatus[activeSessionId] || '' : ''
   )
+  const historyPagination = useChatStore((state) =>
+    activeSessionId ? state.tabHistoryPagination[activeSessionId] : undefined
+  )
+  const [olderHistory, setOlderHistory] = useState<{
+    sessionId?: string
+    events: PollingEvent[]
+    loading: boolean
+    error?: string
+  }>({ events: [], loading: false })
 
   // Get active preset for workflow mode
   const activeWorkflowPreset = getActivePreset('workflow')
@@ -796,6 +792,60 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     return filtered
   }, [tabEvents, showConversationUsage, ContentRenderer, activeSessionId])
 
+  // Durable chat history is deliberately fetched in bounded tail-first pages.
+  // Keeping older pages locally avoids polluting the live event working set,
+  // while the stable server cursor prevents loading the same page twice.
+  const transcriptEvents = useMemo(() => (
+    olderHistory.sessionId === activeSessionId && olderHistory.events.length > 0
+      ? [...olderHistory.events, ...displayEvents]
+      : displayEvents
+  ), [activeSessionId, displayEvents, olderHistory.events, olderHistory.sessionId])
+
+  const loadOlderConversationPage = useCallback(async () => {
+    if (!activeSessionId || !historyPagination?.hasMore || olderHistory.loading) return
+
+    const sessionId = activeSessionId
+    setOlderHistory((current) => ({
+      sessionId,
+      events: current.sessionId === sessionId ? current.events : [],
+      loading: true,
+      error: undefined,
+    }))
+    try {
+      const conversation = await agentApi.getChatHistoryResumeConversation(
+        sessionId,
+        activeTab?.metadata?.agentProfileWorkspace,
+        100,
+        historyPagination.nextOffset,
+      )
+      // The page marker is useful only when initially hydrating an otherwise
+      // empty transcript. Do not repeat it between real user/assistant pages.
+      const olderEvents = conversationToRestoredEvents(conversation)
+        .filter((event) => event.type !== 'conversation_resumed')
+      const pagination = conversation.history_pagination
+      const chatStore = useChatStore.getState()
+      chatStore.setTabHistoryPagination(
+        sessionId,
+        pagination ? { hasMore: pagination.has_more, nextOffset: pagination.next_offset } : null,
+      )
+      chatStore.setTabHasMoreOlderEvents(sessionId, pagination?.has_more ?? false)
+      setOlderHistory((current) => ({
+        sessionId,
+        events: current.sessionId === sessionId
+          ? [...olderEvents, ...current.events]
+          : olderEvents,
+        loading: false,
+      }))
+    } catch (error) {
+      setOlderHistory((current) => ({
+        sessionId,
+        events: current.sessionId === sessionId ? current.events : [],
+        loading: false,
+        error: error instanceof Error ? error.message : 'Could not load earlier messages',
+      }))
+    }
+  }, [activeSessionId, activeTab?.metadata?.agentProfileWorkspace, historyPagination?.hasMore, historyPagination?.nextOffset, olderHistory.loading])
+
   const hasConversationContent = useMemo(() => {
     return displayEvents.some(event =>
       event.type === 'user_message' ||
@@ -878,45 +928,6 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
   // Cancel button. Display state needs a signal that stays true for the whole
   // turn; the composer keeps the volatile one.
   const activeTabBusy = activeTabStreaming || !!activeTab?.hasRunningBgAgents
-  const activeTabHasRunningBackendSession = !!activeTab?.sessionId && activeSessionsCache.some(session => {
-    if (session.session_id !== activeTab.sessionId) return false
-    const status = (session.status || '').toLowerCase()
-    return status === 'running' || status === 'paused'
-  })
-  const activeEventViewMode = normalizeEventViewMode(activeTab?.viewMode)
-  // Probe the same terminal list that decides TerminalCenter's "No terminals
-  // yet" empty state; a present terminal means the resumed tab's surface is the
-  // terminal pane. Without this the surface flips from the restored terminal to
-  // the previous-chats landing once the settle window elapses.
-  const shouldProbeSessionTerminals =
-    !!activeSessionId &&
-    (
-      activeTabHasRestoredConversation ||
-      (selectedModeCategory === 'workflow' && activeEventViewMode === 'terminal')
-    )
-  const { data: sessionTerminals, isFetched: sessionTerminalsFetched } = useSessionTerminals(
-    activeSessionId,
-    shouldProbeSessionTerminals,
-  )
-  const restoredSessionTerminals = sessionTerminals?.terminals || []
-  const hasLiveWorkflowTerminal = selectedModeCategory === 'workflow' && restoredSessionTerminals.some(isLiveWorkflowTerminal)
-  const terminalProbeSettledEmpty =
-    shouldProbeSessionTerminals &&
-    sessionTerminalsFetched &&
-    restoredSessionTerminals.length === 0
-  const terminalActivityStillPlausible =
-    !terminalProbeSettledEmpty ||
-    activeTab?.metadata?.isViewOnly !== true
-  // The terminal empty-state copy is narrower still: "Starting terminal / Your
-  // message was sent" is only true for a live submitted/running turn, not merely
-  // because an opened/restored workflow tab has historical conversation events.
-  // Read-only Schedule/Bot runs can stay "running" in the backend after their
-  // terminal pane is gone; once the terminal probe has settled empty, do not keep
-  // forcing a dead "Starting terminal" surface.
-  const hasPendingTerminalActivity = !suppressTerminalPane && (
-    (activeTabStreaming && terminalActivityStillPlausible) ||
-    (activeTabHasRunningBackendSession && terminalActivityStillPlausible)
-  )
   // Resume give-up TIMER only. A resume that never produces a terminal/content may
   // eventually fall to 'landing'; resumeGaveUp flips true after RESUME_SETTLE_MS so
   // a genuinely-dead resume isn't stuck on a spinner forever. This is purely a
@@ -2898,7 +2909,6 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
         const sid = response.session_id || tabSessionId
         chatStore.setTabStreaming(currentTab.tabId, true)
         chatStore.setTabCompleted(currentTab.tabId, false)
-        requestTerminalRefreshBurst()
         if (sid && shouldRefreshSessionEventStream(
           fullTurnStreaming,
           Boolean(useChatStore.getState().sseConnections[sid]),
@@ -3355,9 +3365,19 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
                 conversation as a normal chat. The terminal rail exists only
                 in explicitly enabled runtime diagnostics. */}
             {visibleWorkflowSurface === 'active' && activeTab?.sessionId && (
-              showRuntimeDiagnostics
-                ? <Suspense fallback={<div className="p-4 text-sm text-neutral-500">Loading runtime diagnostics…</div>}><RuntimeDiagnosticsPanel currentSessionId={activeTab.sessionId} compact={false} /></Suspense>
-                : <TerminalEventTranscript events={displayEvents} terminal={null} streamingText={activeStreamingText} streamingStatus={streamingStatus} />
+              showMainTerminal
+                ? <MainAgentTerminal sessionId={activeTab.sessionId} />
+                : <TerminalEventTranscript
+                    events={transcriptEvents}
+                    terminal={null}
+                    streamingText={activeStreamingText}
+                    streamingStatus={streamingStatus}
+                    hasOlder={historyPagination?.hasMore ?? false}
+                    loadingOlder={olderHistory.sessionId === activeSessionId && olderHistory.loading}
+                    error={olderHistory.sessionId === activeSessionId ? olderHistory.error : undefined}
+                    onLoadOlder={historyPagination?.hasMore ? loadOlderConversationPage : undefined}
+                    onRetry={loadOlderConversationPage}
+                  />
             )}
 
             {/* landing — fresh automation chat. Prefer the previous-chats panel
@@ -3399,9 +3419,19 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
             {/* The product chat is event-backed. Internal terminal inspection
                 is available only through the explicit developer flag. */}
             {multiAgentSurface === 'active' && activeTab?.sessionId && (
-              showRuntimeDiagnostics
-                ? <Suspense fallback={<div className="p-4 text-sm text-neutral-500">Loading runtime diagnostics…</div>}><RuntimeDiagnosticsPanel currentSessionId={activeTab.sessionId} compact={false} /></Suspense>
-                : <TerminalEventTranscript events={displayEvents} terminal={null} streamingText={activeStreamingText} streamingStatus={streamingStatus} />
+              showMainTerminal
+                ? <MainAgentTerminal sessionId={activeTab.sessionId} />
+                : <TerminalEventTranscript
+                    events={transcriptEvents}
+                    terminal={null}
+                    streamingText={activeStreamingText}
+                    streamingStatus={streamingStatus}
+                    hasOlder={historyPagination?.hasMore ?? false}
+                    loadingOlder={olderHistory.sessionId === activeSessionId && olderHistory.loading}
+                    error={olderHistory.sessionId === activeSessionId ? olderHistory.error : undefined}
+                    onLoadOlder={historyPagination?.hasMore ? loadOlderConversationPage : undefined}
+                    onRetry={loadOlderConversationPage}
+                  />
             )}
           </>
         )}

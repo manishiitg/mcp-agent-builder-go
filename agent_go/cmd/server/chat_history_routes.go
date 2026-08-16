@@ -477,7 +477,7 @@ func getChatHistoryConversationHandler(api *StreamingAPI) http.HandlerFunc {
 		// 1.3 MB for a real builder session, nearly all of it ui_events -- and
 		// threw away everything but the last handful of messages client-side.
 		if limit := parsePositiveQueryInt(r, "resume_turns"); limit > 0 {
-			data = projectChatHistoryConversationForResume(data, limit)
+			data = projectChatHistoryConversationForResumePage(data, limit, parseNonNegativeQueryInt(r, "resume_offset"))
 		} else if limit := parsePositiveQueryInt(r, "preview_messages"); limit > 0 {
 			data = trimChatHistoryConversationForPreview(data, limit)
 		}
@@ -496,6 +496,15 @@ func getChatHistoryConversationHandler(api *StreamingAPI) http.HandlerFunc {
 // retaining only that message prevents a resumed chat from looking like a tmux
 // transcript while preserving the user/assistant conversation itself.
 func projectChatHistoryConversationForResume(data []byte, maxTurns int) []byte {
+	return projectChatHistoryConversationForResumePage(data, maxTurns, 0)
+}
+
+// projectChatHistoryConversationForResumePage returns one bounded page of
+// conversational turns. offset counts from the newest end of the transcript:
+// offset=0 is the latest page, and the next cursor moves toward earlier turns.
+// That makes the formatted transcript's "Load earlier" control a real backend
+// pagination action instead of a client-side scroll shortcut.
+func projectChatHistoryConversationForResumePage(data []byte, maxTurns, offset int) []byte {
 	var doc map[string]json.RawMessage
 	if err := json.Unmarshal(data, &doc); err != nil {
 		return data
@@ -537,9 +546,19 @@ func projectChatHistoryConversationForResume(data []byte, maxTurns int) []byte {
 		}
 	}
 
-	if maxTurns > 0 && len(turns) > maxTurns {
-		turns = turns[len(turns)-maxTurns:]
+	totalTurns := len(turns)
+	if offset < 0 {
+		offset = 0
 	}
+	end := totalTurns - offset
+	if end < 0 {
+		end = 0
+	}
+	start := 0
+	if maxTurns > 0 && end > maxTurns {
+		start = end - maxTurns
+	}
+	turns = turns[start:end]
 	projected := make([]json.RawMessage, 0, len(turns)*2+1)
 	if len(turns) == 0 && len(assistantWithoutUser) > 0 {
 		projected = append(projected, assistantWithoutUser)
@@ -555,6 +574,16 @@ func projectChatHistoryConversationForResume(data []byte, maxTurns int) []byte {
 		return data
 	}
 	doc["conversation_history"] = encoded
+	pagination, err := json.Marshal(map[string]interface{}{
+		"has_more":    start > 0,
+		"next_offset": offset + len(turns),
+		"start_turn":  start,
+		"total_turns": totalTurns,
+	})
+	if err != nil {
+		return data
+	}
+	doc["history_pagination"] = pagination
 	return marshalChatHistoryProjectionOrOriginal(doc, data)
 }
 
@@ -632,6 +661,18 @@ func parsePositiveQueryInt(r *http.Request, name string) int {
 	}
 	value, err := strconv.Atoi(raw)
 	if err != nil || value <= 0 {
+		return 0
+	}
+	return value
+}
+
+func parseNonNegativeQueryInt(r *http.Request, name string) int {
+	raw := strings.TrimSpace(r.URL.Query().Get(name))
+	if raw == "" {
+		return 0
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 0 {
 		return 0
 	}
 	return value

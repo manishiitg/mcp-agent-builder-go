@@ -3,14 +3,13 @@ import React, { useRef, useCallback, useMemo, useState, useEffect, useLayoutEffe
 import { useShallow } from 'zustand/react/shallow'
 
 const DBG = '[skill-popup]'
-import { Send, Square, Wand2, Loader2, Globe, Layers, X, History, Bot, Server, Download, Paperclip, CalendarClock, MessageSquare, Terminal } from 'lucide-react'
+import { Send, Wand2, Loader2, Globe, Layers, X, History, Bot, Server, Download, Paperclip, CalendarClock, MessageSquare, Terminal } from 'lucide-react'
 import { Button } from './ui/Button'
 import { Textarea } from './ui/Textarea'
 import FileContextDisplay from './FileContextDisplay'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip'
 import ServerSelectionDropdown from './ServerSelectionDropdown'
 import SkillSelectionDropdown from './skills/SkillSelectionDropdown'
-import LLMSelectionDropdown from './LLMSelectionDropdown'
 import FileSelectionDialog from './FileSelectionDialog'
 import CommandSelectionDialog from './CommandSelectionDialog'
 import { CommandEditorDialog } from './commands/CommandEditorDialog'
@@ -32,8 +31,10 @@ import { loadAgentProfileCapabilityEnabled } from '../utils/agentProfileCapabili
 import { MicButton } from '../voice/MicButton'
 import { resolveDelegationMainModel } from '../utils/workflowLLMTierDefaults'
 import { hasActiveSessionWork } from '../utils/activitySessions'
+import { headerStatusLabel, statusTone } from '../utils/globalActivityMonitorStatus'
 import { shouldClearAcceptedChatDraft } from '../utils/chatSubmissionDraft'
 import { liveTerminalControlKey } from '../utils/liveTerminalKeys'
+import { normalizeEventViewMode } from '../stores/useChatStore'
 
 const removePasteMarkersFromText = (text: string, markers: string[]) => {
   return markers.reduce((next, marker) => {
@@ -565,6 +566,11 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   const activeTab = useChatStore(state =>
     activeTabId ? state.chatTabs[activeTabId] : undefined
   )
+  // Main tmux is a first-class alternate view of this chat. Child-terminal
+  // inspection is still developer-only, but opening the main pane must not
+  // require a diagnostic flag.
+  const mainTerminalAvailable = !!activeTab?.sessionId
+  const terminalViewSelected = normalizeEventViewMode(activeTab?.viewMode) === 'terminal'
   const tabModeCategory = activeTab?.metadata?.mode
   const isWorkflowMode = tabModeCategory === 'workflow' || selectedModeCategory === 'workflow'
   const isMultiAgentMode = !isWorkflowMode && (tabModeCategory === 'multi-agent' || selectedModeCategory === 'multi-agent')
@@ -1203,13 +1209,9 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   const {
     availableLLMs,
     getCurrentLLMOption,
-    refreshAvailableLLMs: onRefreshAvailableLLMs,
-    llmConfigLocked,
   } = useLLMStore(useShallow(state => ({
     availableLLMs: state.availableLLMs,
     getCurrentLLMOption: state.getCurrentLLMOption,
-    refreshAvailableLLMs: state.refreshAvailableLLMs,
-    llmConfigLocked: state.llmConfigLocked,
   })))
 
   const scrollToFile = useWorkspaceStore(state => state.scrollToFile)
@@ -1221,32 +1223,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     openDialog: state.openDialog,
     closeDialog: state.closeDialog,
   })))
-
-  // LLM selection (always update tab config)
-  const onPrimaryLLMSelect = useCallback((llm: LLMOption) => {
-    if (activeTabId) {
-      // Get current config to preserve fallback models and cross-provider fallback
-      const currentConfig = tabConfig?.llmConfig || {
-        provider: 'codex-cli',
-        model_id: 'codex-cli',
-        fallback_models: [],
-        cross_provider_fallback: undefined
-      }
-
-      const newConfig = {
-        ...currentConfig, // ✅ Preserve all existing configuration
-        provider: llm.provider as LLMProvider,
-        model_id: llm.model
-      }
-
-      // CLI providers always require code execution mode
-      if (llm.provider === 'claude-code' || llm.provider === 'codex-cli' || llm.provider === 'cursor-cli' || llm.provider === 'pi-cli') {
-        setTabConfig(activeTabId, { llmConfig: newConfig, useCodeExecutionMode: true })
-      } else {
-        setTabConfig(activeTabId, { llmConfig: newConfig })
-      }
-    }
-  }, [activeTabId, tabConfig?.llmConfig, setTabConfig])
 
   // Computed values - get LLM option from tab config
   const primaryLLM = useMemo(() => {
@@ -1366,6 +1342,38 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     const entry = providerManifest.find(p => p.id === provider)
     return (entry?.integration_kind === 'coding_agent' && !entry.deprecated) || FALLBACK_CODING_AGENT_PROVIDERS.has(provider)
   }, [primaryLLM?.provider, effectiveProviderForSteer, providerManifest])
+
+  // Use the exact same authoritative activity classification as the global
+  // monitor. A retained tmux session is intentionally "idle" there; merely
+  // keeping its process alive must never make this spinner claim the agent is
+  // still working.
+  const mainAgentRuntimeStatus = useMemo(() => {
+    const provider = activeSession?.runtime?.provider?.trim() || primaryLLM?.provider?.trim() || ''
+    const model = activeSession?.runtime?.model_id?.trim() || primaryLLM?.model?.trim() || ''
+    if (!provider) return null
+
+    const tone = activeSession ? statusTone(activeSession) : 'idle'
+    const waiting = tone === 'needs-input'
+    const running = tone === 'running' || tone === 'background'
+    return {
+      label: model && model !== provider ? `${provider} · ${model}` : provider,
+      state: waiting ? 'waiting' as const : running ? 'running' as const : 'ready' as const,
+      activityLabel: activeSession ? headerStatusLabel(activeSession) : 'idle',
+    }
+  }, [
+    activeSession,
+    activeSession?.runtime?.model_id,
+    activeSession?.runtime?.provider,
+    activeSession?.runtime_state?.phase,
+    activeSession?.runtime_state?.waiting_for_user,
+    activeSession?.status,
+    activeSession?.runtime_state?.background_live,
+    activeSession?.has_running_background_agents,
+    activeSession?.running_background_agent_count,
+    activeSession?.needs_user_input,
+    primaryLLM?.model,
+    primaryLLM?.provider,
+  ])
 
   // Preset folder selection
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -1793,7 +1801,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
 
   // Guard: prevent form submit from firing when Stop button click causes a button swap
   // (React re-renders Stop→Send mid-click, causing the browser to dispatch submit on the new button)
-  const justStoppedStreamingRef = useRef(false)
 
   const clearInputState = useCallback(() => {
     setLocalInputText('')
@@ -2703,11 +2710,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   const handleSubmit = useCallback((e: React.FormEvent) => {
     e.preventDefault()
 
-    // Guard: ignore form submit triggered by Stop→Send button swap during a click
-    if (justStoppedStreamingRef.current) {
-      return
-    }
-
     // Check for slash commands
     const trimmedQuery = queryToSubmit?.trim() || ''
     if (executeSlashCommandFromQuery(trimmedQuery)) {
@@ -2948,7 +2950,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
       const latestStore = useChatStore.getState()
       // Resume into the user-facing conversation. The terminal session is still
       // restored below and remains available through the Raw toggle.
-      latestStore.setTabViewMode(activeTabId, 'tree')
+      latestStore.setTabViewMode(activeTabId, 'formatted')
       startRestoredTransportTerminal(
         session.session_id,
         path,
@@ -3555,7 +3557,9 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
       {/* Input Form */}
       <div data-tour="chat-input-area" data-testid="tour-chat-input-area" className={`${inputPadX} ${isProductSurface ? 'py-2' : 'py-2'}`}>
         <form onSubmit={handleSubmit} className="space-y-2">
-          <div className={isProductSurface ? 'space-y-1 rounded-2xl border border-slate-700 bg-slate-900 p-2 shadow-sm transition focus-within:border-violet-500 focus-within:ring-4 focus-within:ring-violet-950/70' : 'space-y-1'}>
+          <div className={isProductSurface
+            ? 'space-y-1 rounded-2xl border border-slate-700 bg-slate-900 p-2 shadow-sm transition focus-within:border-violet-500 focus-within:ring-4 focus-within:ring-violet-950/70'
+            : 'space-y-1 rounded-xl border border-slate-700/80 bg-[#101513] p-1.5 shadow-sm transition focus-within:border-slate-500'}>
             {showLiveDelivery && liveMessageDelivery && (
               <div className={`flex min-w-0 items-center gap-1.5 text-[11px] ${liveDeliveryClass}`}>
                 {liveMessageDelivery.status === 'sending' ? (
@@ -3632,7 +3636,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
               rows={isProductSurface ? 1 : undefined}
               wrap={isProductSurface ? 'off' : undefined}
               placeholder={placeholder}
-              className={`${isProductSurface ? '!min-h-[36px] !max-h-[36px] !border-0 !bg-transparent !px-2 !py-1.5 text-sm text-slate-100 !shadow-none focus-visible:!ring-0 placeholder:text-sm placeholder:text-slate-400 whitespace-nowrap !overflow-x-auto !overflow-y-hidden' : '!min-h-[40px] max-h-[100px] text-xs !py-1 !px-3 placeholder:text-xs'} resize-none overflow-y-auto leading-[1.3] ${
+              className={`${isProductSurface ? '!min-h-[36px] !max-h-[36px] !border-0 !bg-transparent !px-2 !py-1.5 text-sm text-slate-100 !shadow-none focus-visible:!ring-0 placeholder:text-sm placeholder:text-slate-400 whitespace-nowrap !overflow-x-auto !overflow-y-hidden' : '!min-h-[36px] max-h-[100px] !border-0 !bg-transparent !py-1.5 !px-2 text-xs !shadow-none focus-visible:!ring-0 placeholder:text-xs'} resize-none overflow-y-auto leading-[1.3] ${
                 isDraggingFiles ? 'ring-2 ring-blue-500 border-blue-500 bg-blue-50/30 dark:bg-blue-900/10' : ''
               }`}
               disabled={inputDisabled}
@@ -3645,7 +3649,52 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
               </div>
             )}
             <div className="flex justify-between items-center">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5">
+                {mainAgentRuntimeStatus && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <div
+                        className="flex h-7 max-w-[205px] items-center gap-1.5 px-1 font-mono text-[11px] text-muted-foreground"
+                        role="status"
+                        aria-label={`${mainAgentRuntimeStatus.label} — ${mainAgentRuntimeStatus.state}`}
+                      >
+                        {mainAgentRuntimeStatus.state === 'running' ? (
+                          <Loader2 className="h-3 w-3 shrink-0 animate-spin text-lime-300" aria-hidden="true" />
+                        ) : mainAgentRuntimeStatus.state === 'waiting' ? (
+                          <span className="h-2 w-2 shrink-0 rounded-full bg-amber-400" aria-hidden="true" />
+                        ) : (
+                          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-lime-300" aria-hidden="true" />
+                        )}
+                        <span className="truncate">{mainAgentRuntimeStatus.label}</span>
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipContent side="top">
+                      <p>{mainAgentRuntimeStatus.label} — {mainAgentRuntimeStatus.activityLabel}</p>
+                    </TooltipContent>
+                  </Tooltip>
+                )}
+                {mainTerminalAvailable && activeTabId && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        type="button"
+                        variant={terminalViewSelected ? 'secondary' : 'outline'}
+                        size="icon"
+                        onClick={() => useChatStore.getState().setTabViewMode(
+                          activeTabId,
+                          terminalViewSelected ? 'formatted' : 'terminal',
+                        )}
+                        className="h-7 w-7 p-0"
+                        aria-label={terminalViewSelected ? 'Return to conversation' : 'Open tmux terminal'}
+                      >
+                        <Terminal className="w-3.5 h-3.5" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>{terminalViewSelected ? 'Return to conversation' : 'Open tmux terminal'}</p>
+                    </TooltipContent>
+                  </Tooltip>
+                )}
                 {/* Server and LLM Selection — hidden in workflow phase chat (servers come from preset) */}
                 {(
                   <div data-tour="chat-input-tools" data-testid="tour-chat-input-tools" className="flex items-center gap-2">
@@ -3681,27 +3730,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                         )}
                       </>
 
-                    {!hideExtras && !isMultiAgentMode && (
-                      <TooltipProvider>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <div className="flex">
-                              <LLMSelectionDropdown
-                                availableLLMs={availableLLMs}
-                                selectedLLM={primaryLLM}
-                                onLLMSelect={onPrimaryLLMSelect}
-                                onRefresh={onRefreshAvailableLLMs}
-                                disabled={isStreaming || isSummarizing}
-                                openDirection="up"
-                              />
-                            </div>
-                          </TooltipTrigger>
-                          <TooltipContent side="top">
-                            <p>{llmConfigLocked ? 'Select from admin-configured LLMs' : 'Select Primary LLM'}</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                    )}
                     {/* Browser access lives in the Chief of Staff header for multi-agent mode. */}
                     {!hideExtras && !isMultiAgentMode && <button
                       type="button"
@@ -4080,7 +4108,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
               </div>
               {/* Show old buttons */}
               {(
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1">
                   {isSummarizing ? (
                     <div className="flex items-center gap-2 px-3 py-1.5 text-sm text-gray-600 dark:text-gray-400">
                       <Loader2 className="w-4 h-4 animate-spin" />
@@ -4093,14 +4121,14 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                           <Button
                             type="button"
                             variant="outline"
-                            size="sm"
+                            size="icon"
                             disabled={isStreaming || isSummarizing}
                             onClick={openCommandMenu}
-                            className="px-2.5"
+                            className="h-7 w-7 p-0"
                             data-testid="chat-command-menu-button"
                             aria-label="Browse commands"
                           >
-                            <Terminal className="w-4 h-4" />
+                            <Wand2 className="w-3.5 h-3.5" />
                           </Button>
                         </TooltipTrigger>
                         <TooltipContent>
@@ -4112,7 +4140,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                           <Button
                             type="button"
                             variant="outline"
-                            size="sm"
+                            size="icon"
                             disabled={isStreaming || isSummarizing || isUploadingFiles}
                             onClick={() => {
                               const inputEl = fileUploadInputRef.current
@@ -4124,14 +4152,14 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                               console.info('[CHAT_UPLOAD] opening file picker')
                               inputEl.click()
                             }}
-                            className="px-2.5"
+                            className="h-7 w-7 p-0"
                             data-testid="chat-upload-button"
                             aria-label="Attach files"
                           >
                             {isUploadingFiles ? (
-                              <Loader2 className="w-4 h-4 animate-spin" />
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
                             ) : (
-                              <Paperclip className="w-4 h-4" />
+                              <Paperclip className="w-3.5 h-3.5" />
                             )}
                           </Button>
                         </TooltipTrigger>
@@ -4139,30 +4167,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                           <p>{isUploadingFiles ? 'Uploading files...' : isProductSurface ? 'Attach files to this project' : `Upload file(s) to ${uploadTargetFolder}`}</p>
                         </TooltipContent>
                       </Tooltip>
-                      {isTurnInFlight && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              type="button"
-                              variant="destructive"
-                              onClick={() => {
-                                justStoppedStreamingRef.current = true
-                                setTimeout(() => { justStoppedStreamingRef.current = false }, 300)
-                                onStopStreaming()
-                              }}
-                              size="sm"
-                              className="px-3"
-                              data-testid="chat-stop-button"
-                              aria-label="Cancel current response"
-                            >
-                              <Square className="w-4 h-4" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p>Cancel current response</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      )}
                       {(!isStreaming || routeLiveInputToCLI) && (
                         <Tooltip>
                           <TooltipTrigger asChild>
@@ -4170,12 +4174,12 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                               type="button"
                               onClick={handleSendButtonClick}
                               disabled={submitButtonDisabled}
-                              size="sm"
-                              className={isProductSurface ? 'bg-violet-600 px-3 text-white hover:bg-violet-500' : 'px-3'}
+                              size="icon"
+                              className={isProductSurface ? 'h-7 w-7 bg-violet-600 p-0 text-white hover:bg-violet-500' : 'h-7 w-7 p-0'}
                               data-testid="chat-submit-button"
                               aria-label="Send message"
                             >
-                              <Send className="w-4 h-4" />
+                              <Send className="w-3.5 h-3.5" />
                             </Button>
                           </TooltipTrigger>
                           <TooltipContent>

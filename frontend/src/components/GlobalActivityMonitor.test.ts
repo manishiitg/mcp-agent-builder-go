@@ -138,32 +138,29 @@ describe('currentActiveSession', () => {
   })
 })
 
-// PLAT-026: the current session used to be excluded by session_id alone, so
-// a sibling session for the SAME workflow (a background Pulse schedule, a
-// second observing tab) survived into the pill list while the header's
-// current-workflow selector also showed that workflow's status — the one
-// workflow rendered twice at once. These prove the exact scenario a review
-// caught: excluding by session_id only is not sufficient.
 describe('visibleActivitySessions', () => {
-  it('excludes a sibling session for the same workflow as the current one', () => {
+  it('keeps a concurrent schedule distinct from the current chat in the same workflow', () => {
     const currentTabSession = minimalSession({ session_id: 'chat-tab-session', workflow_name: 'rtslatency' })
-    const backgroundPulseSession = minimalSession({ session_id: 'pulse-schedule-session', workflow_name: 'rtslatency' })
+    const backgroundPulseSession = minimalSession({
+      session_id: 'pulse-schedule-session',
+      workflow_name: 'rtslatency',
+      triggered_by: 'cron',
+    })
     const otherWorkflowSession = minimalSession({ session_id: 'other-session', workflow_name: 'upwork' })
 
     const visible = visibleActivitySessions(
       [currentTabSession, backgroundPulseSession, otherWorkflowSession],
       'chat-tab-session',
-      'rtslatency',
     )
 
-    expect(visible.map(s => s.session_id)).toEqual(['other-session'])
+    expect(visible.map(s => s.session_id)).toEqual(['pulse-schedule-session', 'other-session'])
   })
 
   it('still excludes the current session by id when no workflow key is known', () => {
     const currentTabSession = minimalSession({ session_id: 'chat-tab-session' })
     const other = minimalSession({ session_id: 'other-session', workflow_name: 'upwork' })
 
-    const visible = visibleActivitySessions([currentTabSession, other], 'chat-tab-session', '')
+    const visible = visibleActivitySessions([currentTabSession, other], 'chat-tab-session')
 
     expect(visible.map(s => s.session_id)).toEqual(['other-session'])
   })
@@ -174,17 +171,17 @@ describe('visibleActivitySessions', () => {
     const currentTabSession = minimalSession({ session_id: 'chat-tab-session', agent_mode: 'multi-agent', workflow_name: undefined })
     const other = minimalSession({ session_id: 'other-session', agent_mode: 'multi-agent', workflow_name: undefined })
 
-    const visible = visibleActivitySessions([currentTabSession, other], 'chat-tab-session', '')
+    const visible = visibleActivitySessions([currentTabSession, other], 'chat-tab-session')
 
     expect(visible.map(s => s.session_id)).toEqual(['other-session'])
   })
 
-  it('deduplicates two sibling sessions for the same non-current workflow, preferring the retained tmux', () => {
+  it('keeps independent sessions for the same non-current workflow', () => {
     const plain = minimalSession({ session_id: 'plain-session', workflow_name: 'upwork', has_retained_tmux_session: false })
     const retained = minimalSession({ session_id: 'retained-session', workflow_name: 'upwork', has_retained_tmux_session: true })
 
-    const visible = visibleActivitySessions([plain, retained], null, '')
+    const visible = visibleActivitySessions([plain, retained], null)
 
-    expect(visible.map(s => s.session_id)).toEqual(['retained-session'])
+    expect(visible.map(s => s.session_id)).toEqual(['plain-session', 'retained-session'])
   })
 })

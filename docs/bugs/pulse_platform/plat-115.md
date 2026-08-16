@@ -92,6 +92,26 @@ today is expected to say so and stay on `per_run`, the same "keep the
 current model with a stated reason" pattern every other contract upgrade in
 this register already allows.
 
+## Follow-up fix: publish was skipped too broadly
+
+The first version of `postRunMonitorLightweightFinalizeStep` marked `publish`
+skipped unconditionally, mirroring `postRunMonitorNoRunSteps`'s precedent.
+Checking `WorkflowPublishConfig.Targets` and `publish-strategy.md` properly
+(prompted by review) showed that was wrong: `publish` covers two independent
+targets — `"pulse"` (the Pulse findings dashboard, genuinely stale under
+periodic mode's per-run pass) and `"report"` (this run's own execution
+output, fresh every run regardless of Pulse) — and `publish-strategy.md`
+recommends publishing both by default. Blanket-skipping would have left any
+workflow publishing a `"report"` target stale for the entire gap between
+periodic Pulse passes, which has nothing to do with periodic mode's actual
+justification (short Pulse-adjacent sessions) and reintroduces exactly the
+kind of staleness this feature isn't meant to cause.
+
+Fixed: the lightweight finalizer now instructs publishing the `"report"`
+target normally, every run, and skips only the `"pulse"` target specifically
+— the whole command is marked skipped only when `"pulse"` is the sole
+configured target.
+
 ## Not fixed here
 
 - **No real workflow has adopted `"periodic"` mode yet.** This ships the

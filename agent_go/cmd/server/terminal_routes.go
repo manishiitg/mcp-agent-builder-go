@@ -130,6 +130,72 @@ type terminalPaneRuntimeStats struct {
 	ScrollPosition string
 }
 
+// mainTerminalForSession resolves the one product-facing coding-agent pane for
+// a chat. It deliberately does not expose the terminal id to the browser or
+// enumerate child/workflow-step panes; those remain diagnostics-only.
+func (api *StreamingAPI) mainTerminalForSession(w http.ResponseWriter, r *http.Request) (terminals.Snapshot, bool) {
+	if api.terminalStore == nil {
+		http.Error(w, "Main terminal not found", http.StatusNotFound)
+		return terminals.Snapshot{}, false
+	}
+	sessionID := strings.TrimSpace(mux.Vars(r)["session_id"])
+	if sessionID == "" || !api.canAccessTerminalSession(r, sessionID) {
+		http.Error(w, "Main terminal not found", http.StatusNotFound)
+		return terminals.Snapshot{}, false
+	}
+	for _, snapshot := range api.terminalStore.List(sessionID) {
+		if terminalSnapshotIsMainAgent(snapshot) {
+			return snapshot, true
+		}
+	}
+	http.Error(w, "Main terminal not found", http.StatusNotFound)
+	return terminals.Snapshot{}, false
+}
+
+func terminalSnapshotIsMainAgent(snapshot terminals.Snapshot) bool {
+	kind := strings.ToLower(strings.TrimSpace(snapshot.ExecutionKind))
+	scope := strings.ToLower(strings.TrimSpace(snapshot.Scope))
+	ownerID := strings.ToLower(strings.TrimSpace(snapshot.OwnerID))
+	return kind == "main_agent" || kind == "main" || kind == "chat" ||
+		scope == "main_agent" || scope == "main" || scope == "chat" ||
+		strings.HasPrefix(ownerID, "main:")
+}
+
+// withMainTerminalID passes a server-selected main terminal to the mature
+// terminal handlers. Preserve session_id as well because live-attach uses it
+// as an authorization/recovery hint after a backend restart.
+func withMainTerminalID(r *http.Request, terminalID string) *http.Request {
+	vars := mux.Vars(r)
+	copyVars := make(map[string]string, len(vars)+1)
+	for key, value := range vars {
+		copyVars[key] = value
+	}
+	copyVars["terminal_id"] = terminalID
+	return mux.SetURLVars(r, copyVars)
+}
+
+// handleGetMainTerminal is the normal product raw view. It reuses the same
+// capture/enrichment path as the established terminal UI, but can select only
+// the current session's main agent pane.
+func (api *StreamingAPI) handleGetMainTerminal(w http.ResponseWriter, r *http.Request) {
+	snapshot, ok := api.mainTerminalForSession(w, r)
+	if !ok {
+		return
+	}
+	api.handleGetTerminal(w, withMainTerminalID(r, snapshot.TerminalID))
+}
+
+// handleMainTerminalStream is the product counterpart to the diagnostics-only
+// terminal stream. It preserves the existing xterm/tmux live-attach protocol
+// while preventing arbitrary child-terminal access.
+func (api *StreamingAPI) handleMainTerminalStream(w http.ResponseWriter, r *http.Request) {
+	snapshot, ok := api.mainTerminalForSession(w, r)
+	if !ok {
+		return
+	}
+	api.handleTerminalStream(w, withMainTerminalID(r, snapshot.TerminalID))
+}
+
 // handleListTerminals returns current view-only terminal snapshots.
 // GET /api/terminals?session_id=<session>
 func (api *StreamingAPI) handleListTerminals(w http.ResponseWriter, r *http.Request) {
