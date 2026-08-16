@@ -1017,15 +1017,6 @@ function App() {
         restoreMostRecentTabForMode('workflow')
         return
       }
-      // Ctrl/Cmd + 2 for Chat mode
-      if ((event.ctrlKey || event.metaKey) && event.key === '2') {
-        event.preventDefault()
-        const { setModeCategory } = useModeStore.getState()
-        setModeCategory('multi-agent')
-        setShowWorkflowsOverview(false)
-        restoreMostRecentTabForMode('multi-agent')
-        return
-      }
       // Ctrl/Cmd + 3 for Organization view
       if ((event.ctrlKey || event.metaKey) && event.key === '3') {
         event.preventDefault()

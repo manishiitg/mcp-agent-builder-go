@@ -1,6 +1,6 @@
 import React, { lazy, Suspense, useState, useEffect, useCallback, useRef } from 'react'
 import { useShallow } from 'zustand/react/shallow'
-import { Workflow, Users, Settings, Copy, Keyboard, Bot, Building2, HelpCircle, AlertCircle, Clock, Loader2, Pause } from 'lucide-react'
+import { Workflow, Settings, Copy, Keyboard, Bot, Building2, HelpCircle, AlertCircle, Clock, Loader2, Pause } from 'lucide-react'
 import { useModeStore } from '../stores/useModeStore'
 import { useGlobalPresetStore, usePresetApplication, usePresetManagement } from '../stores/useGlobalPresetStore'
 import type { CustomPreset, PredefinedPreset } from '../types/preset'
@@ -42,13 +42,6 @@ const MODE_PILLS = [
     label: 'Automation',
     icon: Workflow,
     activeClasses: 'bg-purple-50 text-purple-700 shadow-sm ring-1 ring-purple-200 dark:bg-purple-500/20 dark:text-purple-100 dark:ring-purple-500/40',
-    inactiveClasses: 'text-gray-500 dark:text-gray-400',
-  },
-  {
-    key: 'multi-agent' as const,
-    label: 'Chief of Staff',
-    icon: Users,
-    activeClasses: 'bg-indigo-50 text-indigo-700 shadow-sm ring-1 ring-indigo-200 dark:bg-indigo-500/20 dark:text-indigo-100 dark:ring-indigo-500/40',
     inactiveClasses: 'text-gray-500 dark:text-gray-400',
   },
 ] as const
@@ -963,7 +956,6 @@ export const ModePresetBar: React.FC = () => {
                   <div className="space-y-1.5">
                     {[
                       ['Automation', 'Ctrl+1'],
-                      ['Chief of Staff', 'Ctrl+2'],
                       ['Organization', 'Ctrl+3'],
                     ].map(([label, key]) => (
                       <div key={key} className="flex items-center justify-between py-1">
@@ -981,7 +973,7 @@ export const ModePresetBar: React.FC = () => {
                     {[
                       ['Minimize Workspace', 'Ctrl+6'],
                       ['Toggle Auto-scroll', 'Ctrl+7'],
-                      ['New Chat (Chief of Staff)', 'Ctrl+N'],
+                      ['New Chat', 'Ctrl+N'],
                     ].map(([label, key]) => (
                       <div key={key} className="flex items-center justify-between py-1">
                         <span className="text-sm text-gray-600 dark:text-gray-300">{label}</span>
