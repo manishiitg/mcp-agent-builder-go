@@ -2044,6 +2044,13 @@ export interface WorkflowCostsResponse {
   run_daily_costs?: WorkflowRunDailyCostsEntry[];
   runs: WorkflowRunCostsEntry[];
   activity_timing?: WorkflowActivityTimingSummary;
+  history?: {
+    days: number;
+    window_from: string;
+    window_to: string;
+    has_more: boolean;
+    next_before?: string;
+  };
 }
 
 export interface ExecutionLogsResponse {

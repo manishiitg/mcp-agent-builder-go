@@ -1856,12 +1856,24 @@ export const agentApi = {
     return response.data
   },
 
-  // Get workspace-scoped cost data (phase + all run costs) for a workflow
-  getCosts: async (workspacePath: string): Promise<WorkflowCostsResponse> => {
-    const response = await api.get('/api/workflow/costs', {
-      params: { workspace_path: workspacePath }
+  // Get workspace-scoped cost data. Cost Analysis uses the bounded summary
+  // view; legacy callers can omit options to retain the full artifact reader.
+  getCosts: async (
+    workspacePath: string,
+    options?: { view?: 'summary'; days?: number; before?: string }
+  ): Promise<WorkflowCostsResponse> => {
+    const key = `workflow-costs:${workspacePath}:${options?.view || 'full'}:${options?.days || ''}:${options?.before || ''}`
+    return dedupedGet(key, async () => {
+      const response = await api.get('/api/workflow/costs', {
+        params: {
+          workspace_path: workspacePath,
+          view: options?.view,
+          days: options?.days,
+          before: options?.before,
+        }
+      })
+      return response.data
     })
-    return response.data
   },
 
   getWorkflowReviewData: async (workspacePath: string, runFolder?: string): Promise<WorkflowReviewDataResponse> => {

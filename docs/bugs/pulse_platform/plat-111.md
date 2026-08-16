@@ -4,7 +4,7 @@
 
 | Field | Value |
 |---|---|
-| Status | `open` — root cause verified in the frontend, API, ledger reader, and retained workspace data; implementation not started |
+| Status | `implemented_pending_live_reverify` — bounded ledger summary, cursor pagination, and removal of the initial log fan-out are implemented; restart and live UI timing remain |
 | Priority | P1 |
 | Owner | Cost Analysis query boundary, cost-ledger rollups, and `CostsPopup` lazy detail loading |
 | Reported | 2026-08-16 |
@@ -167,3 +167,41 @@ HTTP handler and frontend loading contract, not only helper functions.
 4. All-time totals remain exact and reconcile with the canonical ledger.
 5. The P0 scale test prevents an apparently harmless history expansion from
    restoring the current linear slowdown.
+
+## Implementation — 2026-08-16
+
+The initial Cost Analysis path now requests
+`GET /api/workflow/costs?view=summary&days=30`.
+
+- SQLite calculates exact all-time headline totals with one grouped aggregate
+  query instead of decoding every historical event into Go.
+- Only the requested recent date window retains per-day and per-execution
+  detail. The response returns `history.next_before` when older events exist.
+- The frontend offers **Load older days**, merges that bounded page into the
+  daily table, and ignores a response from a workflow that is no longer
+  selected.
+- The authoritative ledger path does not walk cost/timing artifact trees and
+  does not call `/api/workflow/logs` for historical runs.
+- Time is displayed from the ledger's canonical
+  `llm_generation_duration_ms`, labelled **LLM time** rather than presenting it
+  as wall-clock agent time.
+- Workspaces without canonical scoped ledger data keep the previous artifact
+  reader as a compatibility fallback; it is not used by Social Media.
+
+### Verification evidence
+
+- Social Media's old page remained loading beyond 27.8 seconds and hit the
+  frontend's 15-second timeout.
+- Its canonical ledger currently contains 2,570 events across five product
+  scopes. The new all-time grouped SQL aggregate completes in approximately
+  0.01 seconds on the retained database.
+- Cost-ledger overview tests verify exact all-time totals, bounded daily detail,
+  cursor detection, scope/execution attribution, duration, and billing-basis
+  totals.
+- Server tests exercise both the summary loader and real HTTP handler contract.
+- `go build ./...`, the focused Go tests, TypeScript compilation, and the Cost
+  popup unit tests pass.
+
+The existing ETag/revision cache and large controlled P0 fixture remain useful
+hardening work, but they no longer block first paint: the live request is now
+bounded and avoids both recursive artifact walks and the N+1 log calls.

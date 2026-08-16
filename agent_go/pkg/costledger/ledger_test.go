@@ -162,6 +162,49 @@ func TestSummarizeWorkflowGroupsScopeAndChildExecution(t *testing.T) {
 	}
 }
 
+func TestSummarizeWorkflowOverviewKeepsExactTotalsAndBoundsDailyDetails(t *testing.T) {
+	ledger, err := NewSQLiteLedger(filepath.Join(t.TempDir(), "costs.sqlite"))
+	if err != nil {
+		t.Fatalf("NewSQLiteLedger() error = %v", err)
+	}
+	defer ledger.Close()
+
+	entries := []Entry{
+		{EventID: "old-builder", IdempotencyKey: "old-builder", Timestamp: time.Date(2026, 6, 1, 1, 0, 0, 0, time.UTC), WorkflowID: "Workflow/demo", Scope: "builder", ExecutionID: "old-turn", LLMCallCount: 1, LLMGenerationDurationMS: 1000, PromptTokens: 10, TotalCostUSD: 1, BillingBasis: "provider_actual"},
+		{EventID: "recent-pulse", IdempotencyKey: "recent-pulse", Timestamp: time.Date(2026, 8, 10, 1, 0, 0, 0, time.UTC), WorkflowID: "Workflow/demo", Scope: "pulse", ExecutionID: "review", LLMCallCount: 2, LLMGenerationDurationMS: 2000, PromptTokens: 20, TotalCostUSD: 2, BillingBasis: "token_estimate"},
+		{EventID: "recent-run", IdempotencyKey: "recent-run", Timestamp: time.Date(2026, 8, 11, 1, 0, 0, 0, time.UTC), WorkflowID: "Workflow/demo", Scope: "workflow_execution", RunID: "run-1", ExecutionID: "step-1", LLMCallCount: 3, LLMGenerationDurationMS: 3000, PromptTokens: 30, TotalCostUSD: 3, BillingBasis: "subscription_shadow"},
+		{EventID: "other-workflow", IdempotencyKey: "other-workflow", Timestamp: time.Date(2026, 8, 11, 1, 0, 0, 0, time.UTC), WorkflowID: "Workflow/other", Scope: "pulse", LLMCallCount: 99, TotalCostUSD: 99},
+	}
+	for _, entry := range entries {
+		if err := ledger.Append(entry); err != nil {
+			t.Fatalf("Append(%q) error = %v", entry.EventID, err)
+		}
+	}
+
+	summary, hasMore, err := ledger.SummarizeWorkflowOverview("Workflow/demo", "2026-08-01", "2026-08-16")
+	if err != nil {
+		t.Fatalf("SummarizeWorkflowOverview() error = %v", err)
+	}
+	if !hasMore {
+		t.Fatal("hasMore = false, want true for the June event")
+	}
+	if summary.Total.CallCount != 6 || summary.Total.PromptTokens != 60 || summary.Total.TotalCostUSD != 6 || summary.Total.LLMGenerationDurationMS != 6000 {
+		t.Fatalf("all-time total = %#v, want exact totals for all three demo events", summary.Total)
+	}
+	if len(summary.ByDate) != 2 || summary.ByDate["2026-06-01"] != nil {
+		t.Fatalf("ByDate = %#v, want only the bounded August window", summary.ByDate)
+	}
+	if got := summary.ByDate["2026-08-10"].ByScope["pulse"].ByExecution["review"]; got == nil || got.TotalCostUSD != 2 {
+		t.Fatalf("recent execution detail = %#v, want the review child", got)
+	}
+	if got := summary.ByScope["builder"]; got == nil || got.TotalCostUSD != 1 || len(got.ByExecution) != 0 {
+		t.Fatalf("compact all-time builder scope = %#v, want $1 without unbounded execution detail", got)
+	}
+	if summary.Total.ProviderActualCostUSD != 1 || summary.Total.TokenEstimateCostUSD != 2 || summary.Total.SubscriptionShadowUSD != 3 {
+		t.Fatalf("billing totals = %#v, want provider=$1 estimate=$2 shadow=$3", summary.Total)
+	}
+}
+
 func TestSummarizeWorkflowScopeWindowIsolatesOnePulsePass(t *testing.T) {
 	ledger, err := NewSQLiteLedger(filepath.Join(t.TempDir(), "costs.sqlite"))
 	if err != nil {

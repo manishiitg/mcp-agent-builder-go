@@ -183,6 +183,111 @@ func (s *sqliteLedger) summarize(from, to, executionID, workflowID string) (*Sum
 	return s.summarizeWindow(fromInclusive, toExclusive, executionID, workflowID, "")
 }
 
+func (s *sqliteLedger) summarizeWorkflowOverview(from, to, workflowID string) (*Summary, bool, error) {
+	recent, err := s.summarize(from, to, "", workflowID)
+	if err != nil {
+		return nil, false, err
+	}
+	allTime, err := s.summarizeWorkflowTotals(workflowID)
+	if err != nil {
+		return nil, false, err
+	}
+	compactWorkflowOverview(recent, allTime)
+
+	fromInclusive, _, err := costDateBounds(from, "")
+	if err != nil {
+		return nil, false, err
+	}
+	hasMore := false
+	if fromInclusive != "" {
+		err = s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM cost_events WHERE workflow_id = ? AND occurred_at < ? LIMIT 1)`, workflowID, fromInclusive).Scan(&hasMore)
+		if err != nil {
+			return nil, false, fmt.Errorf("costledger: check older workflow events: %w", err)
+		}
+	}
+	return recent, hasMore, nil
+}
+
+func (s *sqliteLedger) summarizeWorkflowTotals(workflowID string) (*Summary, error) {
+	summary := &Summary{
+		ByDate:   make(map[string]*DateAggregate),
+		ByModel:  make(map[string]*Aggregate),
+		ByScope:  make(map[string]*ScopeAggregate),
+		Coverage: Coverage{Source: "sqlite"},
+	}
+	const query = `
+SELECT scope,
+       COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0),
+       COALESCE(SUM(reasoning_tokens), 0), COALESCE(SUM(cache_read_tokens), 0),
+       COALESCE(SUM(cache_write_tokens), 0), COALESCE(SUM(total_cost_usd), 0),
+       COALESCE(SUM(llm_call_count), 0), COALESCE(SUM(llm_generation_duration_ms), 0), COUNT(*),
+       COALESCE(SUM(CASE WHEN llm_call_count > 0 AND billing_basis = 'unpriced' THEN llm_call_count ELSE 0 END), 0),
+       COALESCE(SUM(CASE WHEN billing_basis = 'provider_actual' THEN total_cost_usd ELSE 0 END), 0),
+       COALESCE(SUM(CASE WHEN billing_basis = 'token_estimate' THEN total_cost_usd ELSE 0 END), 0),
+       COALESCE(SUM(CASE WHEN billing_basis = 'subscription_shadow' THEN total_cost_usd ELSE 0 END), 0),
+       COALESCE(SUM(CASE WHEN billing_basis = 'unpriced' THEN prompt_tokens ELSE 0 END), 0),
+       COALESCE(SUM(CASE WHEN billing_basis = 'unpriced' THEN completion_tokens ELSE 0 END), 0),
+       COALESCE(SUM(CASE WHEN billing_basis = 'unpriced' THEN reasoning_tokens ELSE 0 END), 0),
+       COALESCE(SUM(CASE WHEN billing_basis = 'unpriced' THEN cache_read_tokens ELSE 0 END), 0),
+       COALESCE(SUM(CASE WHEN billing_basis = 'unpriced' THEN cache_write_tokens ELSE 0 END), 0)
+FROM cost_events
+WHERE workflow_id = ?
+GROUP BY scope`
+	rows, err := s.db.Query(query, workflowID)
+	if err != nil {
+		return nil, fmt.Errorf("costledger: summarize workflow totals: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var scope string
+		var aggregate Aggregate
+		if err := rows.Scan(
+			&scope,
+			&aggregate.PromptTokens, &aggregate.CompletionTokens,
+			&aggregate.ReasoningTokens, &aggregate.CacheReadTokens,
+			&aggregate.CacheWriteTokens, &aggregate.TotalCostUSD,
+			&aggregate.CallCount, &aggregate.LLMGenerationDurationMS, &aggregate.AccountingEventCount,
+			&aggregate.UnpricedCallCount,
+			&aggregate.ProviderActualCostUSD, &aggregate.TokenEstimateCostUSD, &aggregate.SubscriptionShadowUSD,
+			&aggregate.UnpricedPromptTokens, &aggregate.UnpricedCompletionTokens,
+			&aggregate.UnpricedReasoningTokens, &aggregate.UnpricedCacheReadTokens,
+			&aggregate.UnpricedCacheWriteTokens,
+		); err != nil {
+			return nil, fmt.Errorf("costledger: scan workflow totals: %w", err)
+		}
+		summary.ByScope[scope] = &ScopeAggregate{Aggregate: aggregate}
+		mergeAggregate(&summary.Total, aggregate)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("costledger: iterate workflow totals: %w", err)
+	}
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM cost_event_quarantine`).Scan(&summary.Coverage.QuarantinedEventCount); err != nil {
+		return nil, fmt.Errorf("costledger: count quarantined events: %w", err)
+	}
+	return summary, nil
+}
+
+func mergeAggregate(target *Aggregate, source Aggregate) {
+	target.PromptTokens += source.PromptTokens
+	target.CompletionTokens += source.CompletionTokens
+	target.ReasoningTokens += source.ReasoningTokens
+	target.CacheReadTokens += source.CacheReadTokens
+	target.CacheWriteTokens += source.CacheWriteTokens
+	target.TotalCostUSD += source.TotalCostUSD
+	target.CallCount += source.CallCount
+	target.LLMGenerationDurationMS += source.LLMGenerationDurationMS
+	target.AccountingEventCount += source.AccountingEventCount
+	target.UnpricedCallCount += source.UnpricedCallCount
+	target.ProviderActualCostUSD += source.ProviderActualCostUSD
+	target.TokenEstimateCostUSD += source.TokenEstimateCostUSD
+	target.SubscriptionShadowUSD += source.SubscriptionShadowUSD
+	target.UnpricedPromptTokens += source.UnpricedPromptTokens
+	target.UnpricedCompletionTokens += source.UnpricedCompletionTokens
+	target.UnpricedReasoningTokens += source.UnpricedReasoningTokens
+	target.UnpricedCacheReadTokens += source.UnpricedCacheReadTokens
+	target.UnpricedCacheWriteTokens += source.UnpricedCacheWriteTokens
+}
+
 func (s *sqliteLedger) summarizeWindow(fromInclusive, toExclusive, executionID, workflowID, scope string) (*Summary, error) {
 	summary := &Summary{
 		From: fromInclusive, To: toExclusive,
