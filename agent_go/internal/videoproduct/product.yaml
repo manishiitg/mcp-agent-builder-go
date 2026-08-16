@@ -290,6 +290,10 @@ profile:
       workflow_execution: required
       browser: required
       secrets: required
+      # Streaming mic input. preferred, not required: the composer works fine
+      # by typing, and a user without a mic or on a machine where the STT
+      # model has not finished downloading should not be blocked.
+      voice: preferred
   built_in: true
 
 branding:

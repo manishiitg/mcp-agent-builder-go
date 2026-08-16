@@ -28,6 +28,8 @@ import { useWorkflowManifestStore } from '../stores/useWorkflowManifestStore'
 import { startRestoredTransportTerminal } from '../utils/restoredTerminal'
 import { chromeCdpInstallCommand, chromeCdpLaunchCommand, chromeCdpVerifyCommand, chromeCdpZipUrl } from '../utils/cdpSetup'
 import { CHAT_TOOL_COMMAND_EVENT, chatToolCommandFromEvent } from '../utils/chatToolEvents'
+import { loadAgentProfileCapabilityEnabled } from '../utils/agentProfileCapabilities'
+import { MicButton } from '../voice/MicButton'
 import { resolveDelegationMainModel } from '../utils/workflowLLMTierDefaults'
 import { hasActiveSessionWork } from '../utils/activitySessions'
 import { shouldClearAcceptedChatDraft } from '../utils/chatSubmissionDraft'
@@ -591,6 +593,24 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   // remains scoped to the visible pane instead of the global active chat.
   const isOrganizationAssistant = !!activeTab?.metadata?.isOrganizationAssistant
   const agentProfileWorkspace = activeTab?.metadata?.agentProfileWorkspace
+  const agentProfileId = activeTab?.metadata?.agentProfileId
+  // Mic control is gated per-profile (agentprofiles.RuntimeCapabilities.Voice)
+  // rather than hardcoded to any one product — see agentProfileCapabilities.ts.
+  // Checked only for product surfaces: AgentWorks' own generic chat has no
+  // agentProfileId at all, so this never fires an extra request there.
+  const [voiceCapabilityEnabled, setVoiceCapabilityEnabled] = useState(false)
+  useEffect(() => {
+    if (!isProductSurface || !agentProfileId) {
+      setVoiceCapabilityEnabled(false)
+      return
+    }
+    let cancelled = false
+    void loadAgentProfileCapabilityEnabled(agentProfileId, 'voice').then((enabled) => {
+      if (!cancelled) setVoiceCapabilityEnabled(enabled)
+    })
+    return () => { cancelled = true }
+  }, [isProductSurface, agentProfileId])
+
   // Memoize tabConfig to prevent unnecessary re-renders
   const tabConfig = useMemo(() => activeTab?.config, [activeTab?.config])
 
@@ -644,6 +664,28 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
 
   // Local state for immediate UI updates (prevents Zustand updates on every keystroke)
   const [localInputText, setLocalInputText] = useState(storedInputText)
+
+  // Text already in the composer when dictation STARTED, so each partial
+  // REPLACES only the dictated portion rather than appending on top of itself
+  // (a partial supersedes the previous partial, it does not follow it — the
+  // server sends the growing transcript of the current utterance, not
+  // deltas). A final transcript commits into that base for the next phrase.
+  // Reset explicitly on dictation start (not lazily on first partial): a
+  // lazy null-check would keep the PREVIOUS session's committed text as the
+  // base forever, silently discarding anything the user typed by hand
+  // between two separate mic sessions.
+  const dictationBaseTextRef = useRef(localInputText)
+  const handleDictationStart = useCallback(() => {
+    dictationBaseTextRef.current = localInputText
+  }, [localInputText])
+  const handleVoiceText = useCallback((text: string, final: boolean) => {
+    const base = dictationBaseTextRef.current
+    const joined = base && !base.endsWith(' ') && !base.endsWith('\n') ? `${base} ${text}` : `${base}${text}`
+    setLocalInputText(joined)
+    if (activeTabId) setTabConfig(activeTabId, { inputText: joined })
+    if (final) dictationBaseTextRef.current = joined
+  }, [activeTabId, setTabConfig])
+
   const inputText = localInputText
   const inputOwnerTabIdRef = useRef(activeTabId)
 
@@ -3606,7 +3648,14 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                 {/* Server and LLM Selection — hidden in workflow phase chat (servers come from preset) */}
                 {(
                   <div data-tour="chat-input-tools" data-testid="tour-chat-input-tools" className="flex items-center gap-2">
-
+                      {voiceCapabilityEnabled && agentProfileId && (
+                        <MicButton
+                          profileId={agentProfileId}
+                          onText={handleVoiceText}
+                          onDictationStart={handleDictationStart}
+                          disabled={isStreaming || isSummarizing}
+                        />
+                      )}
                       <>
                         {!hideExtras && !isMultiAgentMode && (
                         <ServerSelectionDropdown

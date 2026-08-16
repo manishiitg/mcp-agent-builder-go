@@ -89,6 +89,12 @@ type RuntimeCapabilities struct {
 	// injection flow for a product agent. Values are never part of the prompt;
 	// selected values are supplied only as shell environment variables.
 	Secrets CapabilityRequirement `json:"secrets,omitempty" yaml:"secrets,omitempty"`
+	// Voice enables the shared AgentWorks streaming speech-to-text service
+	// (/api/voice/stream). Products opt in by declaring a requirement; they
+	// never carry their own STT engine, model, or websocket handling — the
+	// same pattern as Browser. A disabled/empty value hides the composer's mic
+	// control entirely rather than showing a button that would 404.
+	Voice CapabilityRequirement `json:"voice,omitempty" yaml:"voice,omitempty"`
 }
 
 type ToolBinding struct {

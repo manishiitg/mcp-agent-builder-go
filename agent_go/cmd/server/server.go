@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -1989,6 +1990,18 @@ func runServer(cmd *cobra.Command, args []string) {
 	// terminal. Inert (404) only if tmux is too old; see terminal_live_attach.go.
 	apiRouter.HandleFunc("/terminals/{terminal_id}/stream", api.runtimeDiagnosticsHandler(api.handleTerminalStream)).Methods("GET")
 
+	// Streaming speech-to-text (agentprofiles.RuntimeCapabilities.Voice). Gated
+	// per-request by profile_id inside the handler, not by whether this route is
+	// registered — mirroring how Browser/Secrets stay one shared implementation
+	// that products opt into via product.yaml rather than owning a copy.
+	apiRouter.HandleFunc("/voice/stream", api.handleVoiceStream).Methods("GET")
+	// Warm the engine at server startup, not on the first mic click. Loading
+	// blocks for ~1-2s locally with the model already cached, but on a first
+	// run it also downloads ~630MB — caught live: a user clicking the mic
+	// before this warmed sat looking at a silent button for 60+ seconds with
+	// no feedback, indistinguishable from broken.
+	go func() { _, _ = getVoiceEngine() }()
+
 	// LLM Guidance API routes
 	apiRouter.HandleFunc("/sessions/{session_id}/llm-guidance", api.handleSetLLMGuidance).Methods("POST", "OPTIONS")
 
@@ -2824,6 +2837,25 @@ func (w *statusCapturingResponseWriter) Write(data []byte) (int, error) {
 	n, err := w.ResponseWriter.Write(data)
 	w.bytes += n
 	return n, err
+}
+
+// Hijack forwards to the underlying ResponseWriter when it supports hijacking
+// (any real net/http connection does). Required for ANY websocket handler
+// reached through apiRequestLogMiddleware: an embedded http.ResponseWriter
+// INTERFACE field only promotes the methods that interface declares
+// (Header/Write/WriteHeader), not Hijack — so without this,
+// gorilla/websocket's Upgrade() type-asserts for http.Hijacker, fails, and
+// every upgrade attempt returns "response does not implement http.Hijacker"
+// whenever request logging is on, which defaults to true (shouldLogAPIRequests).
+// Caught live: this broke /api/voice/stream's very first non-browser test
+// client, which (unlike a browser) has no Origin header so it sailed past the
+// separate CheckOrigin issue and hit this one instead.
+func (w *statusCapturingResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := w.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("underlying ResponseWriter does not support hijacking")
+	}
+	return hijacker.Hijack()
 }
 
 func (w *statusCapturingResponseWriter) Flush() {

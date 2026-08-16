@@ -89,6 +89,10 @@ require (
 	github.com/googleapis/gax-go/v2 v2.16.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
+	github.com/k2-fsa/sherpa-onnx-go v1.13.5 // indirect
+	github.com/k2-fsa/sherpa-onnx-go-linux v1.13.5 // indirect
+	github.com/k2-fsa/sherpa-onnx-go-macos v1.13.5 // indirect
+	github.com/k2-fsa/sherpa-onnx-go-windows v1.13.5 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
