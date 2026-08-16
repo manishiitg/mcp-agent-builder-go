@@ -1212,6 +1212,30 @@ type sessionInputLane struct {
 	refs int
 }
 
+// sessionTurnInProgress reports whether a turn currently holds — or is already
+// queued for — this session's input lane.
+//
+// The lane is not a signal ABOUT occupancy; it IS occupancy. A turn occupies a
+// session exactly when it holds this mutex, because the mutex is what serializes
+// access to the one tmux pane, the conversation history, and runningAgents.
+//
+// PLAT-113: callers needing "is a turn running" previously read sessionBusy,
+// which is a user-facing display flag deliberately NOT set for workflow turns
+// (see the !isWorkflowPhase guard where it is assigned). Auto-notifications
+// therefore skipped their queue during a workflow run and blocked on this lane
+// instead, piling 25 never-started synthetic turns behind one 5-hour turn until
+// the idle-wait watchdog killed a healthy run. Read the authority, not the
+// display flag.
+func (api *StreamingAPI) sessionTurnInProgress(sessionID string) bool {
+	if api == nil || strings.TrimSpace(sessionID) == "" {
+		return false
+	}
+	api.sessionInputLanesMu.Lock()
+	defer api.sessionInputLanesMu.Unlock()
+	lane := api.sessionInputLanes[sessionID]
+	return lane != nil && lane.refs > 0
+}
+
 func (api *StreamingAPI) lockSessionInputLane(sessionID string) func() {
 	if api == nil || strings.TrimSpace(sessionID) == "" {
 		return func() {}

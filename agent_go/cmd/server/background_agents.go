@@ -990,6 +990,18 @@ func (api *StreamingAPI) clearStaleBusyIfNeeded(sessionID string) bool {
 // notifications. If the busy flag has no active cancel function behind it and
 // has aged out, clear it so the synthetic turn can resume the provider session.
 func (api *StreamingAPI) isSessionBusyForAutoNotification(sessionID string) bool {
+	// PLAT-113: the input lane is the authority for "a turn is occupying this
+	// session"; sessionBusy below is a display flag and is deliberately never set
+	// for workflow turns. Checking the lane FIRST is what makes this queue engage
+	// for scheduled workflow runs — without it, every background-agent completion
+	// during a workflow turn skipped the queue and blocked on the lane instead,
+	// registering as a running child of the very turn that was blocking it.
+	//
+	// This is additive: it can only cause more queueing, never less, so the chat
+	// path keeps its existing behaviour exactly.
+	if api.sessionTurnInProgress(sessionID) {
+		return true
+	}
 	if !api.isSessionBusy(sessionID) {
 		return false
 	}
