@@ -226,6 +226,7 @@ func ensurePulseModuleStateSchema(ctx context.Context, db *sql.DB) error {
 		pulseRunModeSchema,
 		pulseShadowSignalObservationSchema,
 		pulseFinalCommandStateSchema,
+		backgroundAgentLogSchema,
 	}
 	for _, stmt := range stmts {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
@@ -240,6 +241,7 @@ func ensurePulseModuleStateSchema(ctx context.Context, db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_pulse_module_audit_recorded ON pulse_module_audit(workspace_path, recorded_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_pulse_run_mode_recorded ON pulse_run_mode(workspace_path, recorded_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_pulse_shadow_signal_observed ON pulse_shadow_signal_observation(workspace_path, observed_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_background_agent_log_session ON background_agent_log(workspace_path, session_id, started_at)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {

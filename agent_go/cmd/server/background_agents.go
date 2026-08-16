@@ -839,15 +839,19 @@ func (api *StreamingAPI) emitTypedBackgroundEvent(sessionID, agentID, eventType,
 // inference — but every new call site should declare one.
 func (api *StreamingAPI) emitBackgroundAgentStarted(sessionID, agentID, name, instruction, parentExecutionID string, kind orchEvents.ExecutionKind) {
 	now := time.Now()
+	resolvedParentExecutionID := api.backfillParentExecutionID(sessionID, agentID, parentExecutionID)
 	evt := &orchEvents.BackgroundAgentStartedEvent{
 		BaseEventData:     unifiedevents.BaseEventData{Timestamp: now, SessionID: sessionID},
 		AgentID:           agentID,
 		Name:              name,
 		Instruction:       instruction,
 		Kind:              kind,
-		ParentExecutionID: api.backfillParentExecutionID(sessionID, agentID, parentExecutionID),
+		ParentExecutionID: resolvedParentExecutionID,
 	}
 	api.emitTypedBackgroundEvent(sessionID, agentID, string(orchEvents.BackgroundAgentStarted), "", evt)
+	// PLAT-114: durable record, independent of the 200-event ui_events cap
+	// this same completion is also reported through.
+	api.recordBackgroundAgentLogStarted(sessionID, agentID, name, kind, resolvedParentExecutionID, now)
 }
 
 // emitBackgroundAgentCompleted reports a background/delegated agent
@@ -855,6 +859,7 @@ func (api *StreamingAPI) emitBackgroundAgentStarted(sessionID, agentID, name, in
 // "completed" with result, or "failed" with errMsg.
 func (api *StreamingAPI) emitBackgroundAgentCompleted(sessionID, agentID, name, status, result, errMsg, duration string) {
 	now := time.Now()
+	kind := api.backgroundAgentExecutionKind(sessionID, agentID)
 	evt := &orchEvents.BackgroundAgentCompletedEvent{
 		BaseEventData:     unifiedevents.BaseEventData{Timestamp: now, SessionID: sessionID},
 		AgentID:           agentID,
@@ -864,9 +869,12 @@ func (api *StreamingAPI) emitBackgroundAgentCompleted(sessionID, agentID, name, 
 		Error:             errMsg,
 		Duration:          duration,
 		ParentExecutionID: api.backfillParentExecutionID(sessionID, agentID, ""),
-		Kind:              api.backgroundAgentExecutionKind(sessionID, agentID),
+		Kind:              kind,
 	}
 	api.emitTypedBackgroundEvent(sessionID, agentID, string(orchEvents.BackgroundAgentCompleted), "", evt)
+	// PLAT-114: durable record, independent of the 200-event ui_events cap
+	// this same completion is also reported through.
+	api.recordBackgroundAgentLogCompleted(sessionID, agentID, name, string(kind), status, result, errMsg, duration, now)
 }
 
 func (api *StreamingAPI) backgroundAgentExecutionKind(sessionID, agentID string) orchEvents.ExecutionKind {
