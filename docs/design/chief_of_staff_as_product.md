@@ -526,9 +526,25 @@ framing below at face value; it's kept as history, not as a live todo.
   Pulse state; goals would need new backend work) are still valid research,
   not yet acted on.
 - **A `schedules:` product.yaml capability** for a product to declare its
-  own fixed built-in schedules — see "Scheduled tasks" correction above.
-  `DefaultBuiltinSchedules()` stays hardcoded; revisit if a second product
-  needs one.
+  own fixed built-in schedule *content* (like the old Org Pulse: a specific
+  cron cadence + prompt shipped automatically for every user) — see
+  "Scheduled tasks" correction above. `DefaultBuiltinSchedules()` stays
+  hardcoded; revisit only if a real default schedule is wanted for some
+  product. Investigated 2026-08-16: this is narrower than it first sounds.
+  Whether the *agent* can create/update/delete/trigger its own
+  user-created schedules (the actual live concern raised — "the agent
+  should have the capability to add/update schedules") is **already fully
+  solved, not deferred**: `create_multiagent_schedule`/
+  `update_multiagent_schedule`/`delete_multiagent_schedule`/
+  `list_multiagent_schedules`/`trigger_multiagent_schedule`/
+  `get_multiagent_schedule_runs` (`cmd/server/multiagent_schedule_tools.go`)
+  already register through `llmAgent.RegisterCustomToolWithTimeout`, the one
+  chokepoint `productToolGate` (`product_tool_gate.go`) enforces — so a
+  product opts out by declaring `tool_policy: {mode: allowlist}` without
+  these six names in `enabled:`, or gets them for free (as Chief of Staff
+  does) by leaving `tool_policy` unset. No new product.yaml field or code
+  needed for that part. Only the "one product-declared default schedule
+  ships automatically" idea remains actually unbuilt.
 - **MCP servers via product.yaml.** No working precedent exists anywhere in
   the codebase (Video Studio's `dependencies.mcp_servers: []` is an unused
   placeholder; `resolveAgentProfileForQuery` never touches
