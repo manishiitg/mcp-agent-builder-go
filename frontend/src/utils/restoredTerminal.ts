@@ -1,14 +1,5 @@
 import { agentApi } from '../services/api'
-import { requestTerminalRefreshBurst } from './terminalRefresh'
 import { hydrateTabEvents } from './sessionRestore'
-
-function requestRestoredTerminalRefreshes() {
-  requestTerminalRefreshBurst()
-  if (typeof window === 'undefined') return
-  for (const delay of [250, 1000, 2500, 5000]) {
-    window.setTimeout(requestTerminalRefreshBurst, delay)
-  }
-}
 
 // reconnectWorkflowTabs and handleResumePreviousChat can both fire a restore for
 // the same session on page load. Track in-flight restores so the second caller
@@ -37,8 +28,6 @@ export function startRestoredTransportTerminal(
     restoredConversationSessionId: sourceSessionId,
     workspacePath: workspace || undefined,
   })
-  requestRestoredTerminalRefreshes()
-
   // A restored tmux snapshot is only the last visible screen and often uses an
   // alternate buffer with zero scrollback. Hydrate the persisted structured
   // conversation before publishing the terminal so the first useful view is
@@ -63,7 +52,6 @@ export function startRestoredTransportTerminal(
       workspace_path: workspace || undefined,
     }))
     .then((response) => {
-      requestRestoredTerminalRefreshes()
       if (response.started) {
         console.info('[RestoredTerminal] terminal restore started', {
           sessionId: targetSessionId,

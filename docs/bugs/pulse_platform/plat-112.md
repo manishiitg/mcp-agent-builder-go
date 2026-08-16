@@ -52,6 +52,9 @@ diagnostic mode.
    from their durable session/SSE events. They no longer mount `TerminalCenter`,
    request `/terminals`, request `/execution-tree`, or use terminal state to
    choose a restore/landing surface.
+   Resuming an older coding-CLI chat still asks the backend to restore its
+   internal transport, but it no longer schedules terminal refresh bursts or
+   changes the visible conversation to a terminal/tree surface.
 4. Workflow tab badges and “new chat” conflict checks now use ordinary session
    lifecycle fields rather than polling the execution tree or a terminal list.
    A retained-but-idle tmux process is an internal reuse detail, not a reason to

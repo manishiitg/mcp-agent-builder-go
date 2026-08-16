@@ -341,7 +341,7 @@ const WorkflowPreviousChatsPanel: React.FC<{
     // but present its normalized event transcript by default; Raw remains an
     // explicit diagnostic choice rather than the first thing a user sees.
     if (useTerminalRestore || useNativeResume) {
-      chatStore.setTabViewMode(targetTabId, 'tree')
+      chatStore.setTabViewMode(targetTabId, 'formatted')
       chatStore.switchTab(targetTabId)
       setShowChatArea(true)
       startRestoredTransportTerminal(session.session_id, path, session.session_id, workspacePath)
