@@ -247,22 +247,6 @@ func (api *StreamingAPI) handleGetWorkflowPublishSecret(w http.ResponseWriter, r
 	api.writePublishSecretResponse(w, r, workspacePath, manifest.Publish, status, requestedSecretName)
 }
 
-func (api *StreamingAPI) handleGetOrgPublishSecret(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusOK)
-		return
-	}
-	config, _, configErr := readOrgPublishConfig(r.Context())
-	if configErr != nil {
-		log.Printf("[ORG_PUBLISH] Failed to read org publish config: %v", configErr)
-	}
-	status, _, statusErr := readOrgPublishStatus(r.Context())
-	if statusErr != nil {
-		log.Printf("[ORG_PUBLISH] Failed to read org publish status: %v", statusErr)
-	}
-	api.writePublishSecretResponse(w, r, "", config, status, strings.TrimSpace(r.URL.Query().Get("secret_name")))
-}
-
 func (api *StreamingAPI) writePublishSecretResponse(w http.ResponseWriter, r *http.Request, workflowPath string, config *WorkflowPublishConfig, status *WorkflowPublishStatus, requestedSecretName string) {
 	secretName, ok := resolvePublishPasswordSecretName(requestedSecretName, config, status)
 	if !ok {

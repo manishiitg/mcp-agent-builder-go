@@ -309,7 +309,7 @@ Always write publish/status.json.`
       if (ctx.modeCategory === 'multi-agent') {
         const instruction = `Help me set up or review notifications for Chief of Staff.
 - First review the saved Chief of Staff notification configuration. Explain the effective destinations and whether the Slack webhook secret reference is healthy. Never reveal or write a webhook URL to config files, prompts, logs, or ordinary files.
-- Notifications are agentic: Chief of Staff decides when a non-blocking FYI, alert, progress update, or completion notice is useful and chooses the content. Delivery is deterministic: call notify_user and let the backend apply the configured Chief of Staff Slack webhook plus enabled account-level notification channels. Slack is rich Block Kit by default; for structured summaries set slack_title, factual slack_color, slack_fields, slack_sections, and slack_footer on that same call. Never access or post to a webhook URL directly. The same setting applies to interactive Chief chats and scheduled Chief/Org Pulse runs.
+- Notifications are agentic: Chief of Staff decides when a non-blocking FYI, alert, progress update, or completion notice is useful and chooses the content. Delivery is deterministic: call notify_user and let the backend apply the configured Chief of Staff Slack webhook plus enabled account-level notification channels. Slack is rich Block Kit by default; for structured summaries set slack_title, factual slack_color, slack_fields, slack_sections, and slack_footer on that same call. Never access or post to a webhook URL directly. The same setting applies to interactive Chief chats and scheduled Chief of Staff runs.
 - Ask what events should notify and what a useful message should contain. Treat those as agent guidance, not routing. If I explicitly want the preference remembered, confirm it and use the existing Chief of Staff memory mechanism; never put preferences or credentials in the capabilities JSON.
 - To configure Slack, call list_secrets first. If I provide a new Slack Incoming Webhook URL, store it with set_user_secret(name="SLACK_NOTIFICATION_WEBHOOK_URL", value=<url>), then call update_chief_of_staff_notifications(slack_webhook_secret_name="SLACK_NOTIFICATION_WEBHOOK_URL"). The configuration tool validates the encrypted secret. To disable the dedicated webhook, call update_chief_of_staff_notifications(slack_webhook_secret_name="").
 - Gmail is an inherited account-level notification channel.
@@ -332,86 +332,8 @@ Always write publish/status.json.`
     }
   },
   {
-    command: 'org-setup',
-    description: 'Set org goals, align automations, and configure Daily Org Pulse',
-    icon: <Target className="w-4 h-4" />,
-    modes: ['multi-agent'],
-    chiefOfStaffOnly: true,
-    source: 'builtin',
-    execute: (ctx) => {
-      const appStore = ctx.getAppStore()
-      appStore.setWorkspaceMinimized(false)
-      appStore.setMultiAgentRightPanelView?.('org-goals')
-
-      const focus = ctx.beforeSlash.trim()
-      const instruction = `Set up org goals and Daily Org Pulse.
-
-Call read_skill(skills=[{"name":"builder-reference","path":"references/org-goals.md"}]) and follow it. Before writing or changing goals HTML, also call read_skill(skills=[{"name":"builder-reference","path":"references/backup-strategy.md"}]) and back up org-level artifacts using pulse/backup.json and pulse/backup/status.json, then call read_skill(skills=[{"name":"builder-reference","path":"references/org-html.md"}]) and use its Goals skeleton.
-Read pulse/goals.html if it exists.
-Review existing workflows and employees, then classify workflows as aligned, supporting/maintenance, or unaligned.
-
-If goals are missing or vague, ask me only the missing questions needed to make them measurable:
-- outcome
-- horizon
-- KPI targets with quantity: metric name, baseline/current value, target value, unit, direction, and target date
-- source of truth for each target: workflow report, db table, external system, or manual update
-- accountable owner/person
-- contributing workflows or employees
-- review cadence
-
-Do not create vague goals. Each goal should look like a company operating target. Prefer numeric targets; if a goal is qualitative, convert it into dated milestone/checklist acceptance criteria. Do not invent quantities I did not give you — ask for them or mark the goal as needing a target.
-
-If I gave enough detail${focus ? ' in the request above' : ''}, create or update pulse/goals.html now as a self-contained HTML scorecard. Keep prior goal history unless I explicitly ask to remove it.
-
-After goals are saved, ask whether I want to turn on Daily Org Pulse. If I confirm, enable the built-in Org Pulse schedule (builtin-org-pulse). Do not silently enable it without confirmation.
-
-Also ask whether I want to set up org-level backup and publish:
-- backup records config + status in pulse/backup.json and pulse/backup/status.json
-- publish shares pulse/goals.html + pulse/org-pulse.html and records config + status in pulse/publish.json and pulse/publish/status.json`
-
-      ctx.onSubmit(focus ? `${focus}\n\n${instruction}` : instruction)
-    }
-  },
-  {
-    command: 'pulse-setup',
-    description: 'Set up or tune Daily Org Pulse',
-    icon: <Activity className="w-4 h-4" />,
-    modes: ['multi-agent'],
-    chiefOfStaffOnly: true,
-    source: 'builtin',
-    execute: (ctx) => {
-      const appStore = ctx.getAppStore()
-      appStore.setWorkspaceMinimized(false)
-      appStore.setMultiAgentRightPanelView?.('org-pulse')
-
-      const focus = ctx.beforeSlash.trim()
-      const instruction = `Set up Daily Org Pulse.
-
-Call read_skill(skills=[{"name":"builder-reference","path":"references/org-pulse.md"}]) and follow it for what Daily Org Pulse should do. Before writing or changing pulse/org-pulse.html, also call read_skill(skills=[{"name":"builder-reference","path":"references/backup-strategy.md"}]) and confirm org backup status in pulse/backup.json and pulse/backup/status.json, then call read_skill(skills=[{"name":"builder-reference","path":"references/org-html.md"}]) and use its Org Pulse skeleton.
-Read pulse/goals.html if it exists, and read pulse/org-pulse.html if it exists.
-Read pulse/backup.json, pulse/backup/status.json, pulse/publish.json, and pulse/publish/status.json if they exist.
-First call list_multiagent_schedules and find the existing Org Pulse schedule — the built-in builtin-org-pulse AND any other schedule that is really an Org Pulse (its name/description/query mentions "Org Pulse"). Report whether it is enabled, its cron, timezone, and last/next run state.
-To enable or configure Daily Org Pulse, ALWAYS call update_multiagent_schedule on builtin-org-pulse (this owns/materializes the built-in). NEVER call create_multiagent_schedule for Org Pulse — a freshly-minted UUID schedule becomes a duplicate that the Org Pulse pill and the scheduler can disagree about. If a duplicate non-builtin Org Pulse schedule already exists, consolidate: enable builtin-org-pulse and disable (or delete) the duplicate so exactly one Org Pulse schedule remains.
-Before editing any multi-agent schedule file directly, call read_skill(skills=[{"name":"builder-reference","path":"references/schedule-management.md"}]).
-
-If pulse/goals.html is missing or has no measurable goals, explain that Daily Org Pulse can only measure org progress after goals exist. Ask whether I want to run /org-setup first or enable a workflow-health-only pulse temporarily. Do not create goals from this command unless I explicitly ask.
-
-If goals exist, help me choose or confirm:
-- enabled or disabled
-- cadence and timezone
-- whether it should notify only on decision-worthy changes
-- whether the current pulse/org-pulse.html needs to be bootstrapped with the org-html skeleton
-- whether org backup should be enabled before Daily Org Pulse writes goals/pulse/tasks
-- whether org publish should share pulse/goals.html + pulse/org-pulse.html after verified runs
-
-Only enable or change the built-in Org Pulse schedule after I confirm the cadence/timezone. Do not manually run Org Pulse from this command unless I explicitly ask for a one-time run.`
-
-      ctx.onSubmit(focus ? `${focus}\n\n${instruction}` : instruction)
-    }
-  },
-  {
     command: 'org-backup',
-    description: 'Set up or run backup for org goals, pulse, and tasks',
+    description: 'Set up or run backup for Chief of Staff tasks and org config',
     icon: <Cloud className="w-4 h-4" />,
     modes: ['multi-agent'],
     chiefOfStaffOnly: true,
@@ -419,15 +341,12 @@ Only enable or change the built-in Org Pulse schedule after I confirm the cadenc
     execute: (ctx) => {
       const appStore = ctx.getAppStore()
       appStore.setWorkspaceMinimized(false)
-      appStore.setMultiAgentRightPanelView?.('org-pulse')
       const focus = ctx.beforeSlash.trim()
       const instruction = `Help me set up or run org-level backup.
 
 Call read_skill(skills=[{"name":"builder-reference","path":"references/backup-strategy.md"}]) and follow its org-level workflow-style contract. Read pulse/backup.json and pulse/backup/status.json if they exist.
 
 Scope:
-- pulse/goals.html
-- pulse/org-pulse.html
 - pulse/task.html
 - employee/org config files
 - multi-agent schedules/config
@@ -437,36 +356,6 @@ If org backup is NOT configured yet: recommend a private GitHub repository or an
 If org backup IS configured: run a backup now, skip only if pulse/backup/status.json proves the current source hash is unchanged, and report the result.
 
 Always write pulse/backup/status.json. Never write org backup state into any workflow.json or content HTML file, and never back up secrets.`
-
-      ctx.onSubmit(focus ? `${focus}\n\n${instruction}` : instruction)
-    }
-  },
-  {
-    command: 'org-publish',
-    description: 'Set up or publish org goals and Org Pulse pages',
-    icon: <Globe className="w-4 h-4" />,
-    modes: ['multi-agent'],
-    chiefOfStaffOnly: true,
-    source: 'builtin',
-    execute: (ctx) => {
-      const appStore = ctx.getAppStore()
-      appStore.setWorkspaceMinimized(false)
-      appStore.setMultiAgentRightPanelView?.('org-pulse')
-      const focus = ctx.beforeSlash.trim()
-      const instruction = `Help me set up or run org-level publish.
-
-Call read_skill(skills=[{"name":"builder-reference","path":"references/publish-strategy.md"}]) and follow its org-level workflow-style contract. Read pulse/publish.json and pulse/publish/status.json if they exist.
-
-Publish scope:
-- pulse/goals.html as goals.html
-- pulse/org-pulse.html as pulse.html
-- an index.html wrapper with Goals | Pulse navigation
-
-If org publish is NOT configured: ask me which static host to use, default to private visibility with a PUBLISH_PASSWORD secret, write pulse/publish.json, and write pulse/publish/status.json with state "configured_not_verified". Do not do the first/verifying publish until I confirm the destination and visibility.
-
-If org publish IS configured and verified: publish now only if the org HTML changed since the last publish. Stage files outside the workspace, force dark mode, deploy, then come back and update pulse/publish/status.json with state "published", the url, and last_source_hash.
-
-Always write pulse/publish/status.json. Never publish secrets or raw task transcripts. Never write org publish state into any workflow.json or content HTML file.`
 
       ctx.onSubmit(focus ? `${focus}\n\n${instruction}` : instruction)
     }

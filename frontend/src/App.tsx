@@ -5,7 +5,7 @@ import { ThemeProvider } from "./contexts/ThemeContext.tsx";
 import { UpdateProgressToast } from "./components/UpdateProgressToast";
 import { GlobalHumanFeedbackPrompt } from "./components/GlobalHumanFeedbackPrompt";
 import Workspace from "./components/Workspace.tsx";
-import { ChiefTasksPanel, OrgGoalsPanel, OrgPulsePanel } from "./components/org/OrgHtmlPanels";
+import { ChiefTasksPanel } from "./components/org/OrgHtmlPanels";
 import { ORG_HTML_PREVIEW_PREFERENCE_CHANGED_EVENT, getOrgHtmlPreviewDevice, setOrgHtmlPreviewDevice as persistOrgHtmlPreviewDevice, type OrgHtmlPreviewDevice } from "./components/org/orgHtmlPreview";
 import ChatArea, { type ChatAreaRef } from "./components/ChatArea.tsx";
 import { FileContentViewer } from "./components/FileContentViewer";
@@ -1172,22 +1172,6 @@ function App() {
       <div className="inline-flex min-w-0 flex-none items-center gap-0.5 rounded-lg border border-border bg-muted/70 p-0.5 shadow-sm backdrop-blur-sm">
         <button
           type="button"
-          onClick={() => setMultiAgentRightPanelView('org-pulse')}
-          title="Org Pulse"
-          aria-label="Org Pulse"
-          className={multiAgentPanelTabClass(multiAgentRightPanelView === 'org-pulse')}
-        >
-          Pulse
-        </button>
-        <button
-          type="button"
-          onClick={() => setMultiAgentRightPanelView('org-goals')}
-          className={multiAgentPanelTabClass(multiAgentRightPanelView === 'org-goals')}
-        >
-          Goals
-        </button>
-        <button
-          type="button"
           onClick={() => setMultiAgentRightPanelView('tasks')}
           className={multiAgentPanelTabClass(multiAgentRightPanelView === 'tasks')}
         >
@@ -1344,18 +1328,8 @@ function App() {
                                 minimized={false}
                                 onToggleMinimize={toggleMultiAgentPanelMinimize}
                               />
-                            ) : multiAgentRightPanelView === 'org-goals' ? (
-                              <OrgGoalsPanel
-                                toolbarLeading={multiAgentPanelTabs}
-                                onClosePanel={toggleMultiAgentPanelMinimize}
-                              />
-                            ) : multiAgentRightPanelView === 'tasks' ? (
-                              <ChiefTasksPanel
-                                toolbarLeading={multiAgentPanelTabs}
-                                onClosePanel={toggleMultiAgentPanelMinimize}
-                              />
                             ) : (
-                              <OrgPulsePanel
+                              <ChiefTasksPanel
                                 toolbarLeading={multiAgentPanelTabs}
                                 onClosePanel={toggleMultiAgentPanelMinimize}
                               />

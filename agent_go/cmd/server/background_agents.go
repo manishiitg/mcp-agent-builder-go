@@ -1910,41 +1910,12 @@ func workflowRunBackupDirective(snap BackgroundAgentSnapshot) string {
 	return "\n\nThe run is complete - now back up this workflow. Call read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/backup-strategy.md\"}]), read workflow.json.backup, and use it as the backup contract. Perform backup and all Git commands directly in this parent workflow turn. Never delegate them through run_in_background, call_generic_agent, a reviewer, or another sub-agent: delegated agents intentionally cannot write the workflow .git directory. If backup is enabled, perform the configured destinations (git/github, object store, HuggingFace, etc.). If backup is missing or disabled, do not silently skip: set it up with the zero-config local-git default (a local git repo needs no credentials) and back up. Skip the push only when backup/status.json shows the current source is already backed up (unchanged source hash) — i.e. a Pulse pass or an earlier turn already captured this state. Always write backup/status.json with state, last attempt/success timestamps, destination results, errors, and the current source hash; do not write operational backup status into workflow.json."
 }
 
-func workflowRunGoalAlignmentDirective(snap BackgroundAgentSnapshot) string {
-	if snap.Status != BGAgentCompleted || snap.Metadata == nil {
-		return ""
-	}
-	if snap.Kind != "workflow_run_tool" && snap.Metadata["type"] != "workflow_run" {
-		return ""
-	}
-
-	workflowPath := strings.TrimSpace(snap.Metadata["workflow_path"])
-	groupName := strings.TrimSpace(snap.Metadata["group_name"])
-	stepID := strings.TrimSpace(snap.Metadata["step_id"])
-	runEvidencePath := "the latest run folder"
-	if workflowPath != "" && groupName != "" {
-		runEvidencePath = fmt.Sprintf("`%s/runs/iteration-0/%s/`", workflowPath, groupName)
-		if stepID != "" {
-			runEvidencePath = fmt.Sprintf("`%s/runs/iteration-0/%s/execution/%s/`", workflowPath, groupName, stepID)
-		}
-	}
-	workflowRef := strings.TrimSpace(workflowPath)
-	if workflowRef == "" {
-		workflowRef = strings.TrimSpace(snap.Name)
-	}
-	if workflowRef == "" {
-		workflowRef = "this workflow run"
-	}
-	stepNote := ""
-	if stepID != "" {
-		stepNote = fmt.Sprintf(" This was a single-step run for `%s`, so distinguish step evidence from full-workflow evidence.", stepID)
-	}
-
-	return fmt.Sprintf("\n\nAfter backup, do org goal alignment for this run. If `pulse/goals.html` exists, call read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/org-goals.md\"}]), read `pulse/goals.html`, and compare `%s` against any goals whose contributing workflows name this workflow. Use concrete evidence from %s, typed Pulse state from get_pulse_state, `reports/`, and `db/db.sqlite`. In your reply include a short `Org goal alignment` section: goal, status (`on-track`, `at-risk`, `off-track`, or `unknown`), evidence path, gap, and next action.%s If no goal names this workflow, classify it as supporting/maintenance or unaligned. Update `pulse/goals.html` only when this run provides concrete new evidence that changes the scorecard; load read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/org-html.md\"}]) first and preserve goal history. Do not invent proxy metrics.", workflowRef, runEvidencePath, stepNote)
-}
-
+// workflowRunCompletionDirective used to also append a goal-alignment
+// directive (workflowRunGoalAlignmentDirective) reading/writing
+// pulse/goals.html against a workflow's named org goals. Removed alongside
+// the org goals feature -- backup is the only directive left.
 func workflowRunCompletionDirective(snap BackgroundAgentSnapshot) string {
-	return workflowRunBackupDirective(snap) + workflowRunGoalAlignmentDirective(snap)
+	return workflowRunBackupDirective(snap)
 }
 
 // buildAutoNotificationMessage formats the [AUTO-NOTIFICATION] user message for a

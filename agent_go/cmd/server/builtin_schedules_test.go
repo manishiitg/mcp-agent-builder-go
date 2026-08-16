@@ -1,102 +1,19 @@
 package server
 
 import (
-	"strings"
 	"testing"
 )
 
-func TestBuiltinOrgPulseSequenceIsReadOnlyAlignmentReport(t *testing.T) {
-	sched, ok := FindDefaultBuiltinSchedule(builtinOrgPulseID)
-	if !ok {
-		t.Fatal("builtin org pulse schedule not found")
-	}
-	if got := len(sched.Messages); got != 3 {
-		t.Fatalf("builtin org pulse messages = %d, want 3", got)
-	}
+// Org Pulse itself is gone (DefaultBuiltinSchedules returns empty -- see
+// builtin_schedules.go). What's left to test is the degradation path: an
+// existing user whose _users/<id>/multiagent-schedules.json still has a
+// builtin-org-pulse override (or a user-created duplicate) from before this
+// removal must not error or panic -- NormalizeOrgPulseSchedule's
+// FindDefaultBuiltinSchedule lookup now fails (ok=false), so it passes the
+// stale entry through completely unchanged rather than refreshing it to
+// content that no longer exists.
 
-	alignment := sched.Messages[1]
-	for _, want := range []string{
-		"GOALS + WORKFLOW ALIGNMENT",
-		"on-track, at-risk, off-track, or unknown",
-		"aligned, supporting, unaligned, or missing measurement",
-		"Workflow files are strictly read-only",
-		"do not create recommendations, questions, promotions, fixes",
-	} {
-		if !strings.Contains(alignment, want) {
-			t.Fatalf("alignment message missing %q:\n%s", want, alignment)
-		}
-	}
-
-	final := sched.Messages[len(sched.Messages)-1]
-	for _, want := range []string{
-		"DAILY DIGEST",
-		"one factual daily Org Pulse digest",
-		"steady healthy day still gets a calm all-healthy digest",
-		"Report the log, publish, and notification results",
-	} {
-		if !strings.Contains(final, want) {
-			t.Fatalf("final org pulse message missing daily digest requirement %q:\n%s", want, final)
-		}
-	}
-	for _, want := range []string{
-		"one factual daily digest",
-		"Send a calm all-healthy digest on steady days",
-		"Workflow files are strictly read-only",
-	} {
-		if !strings.Contains(builtinOrgPulseQuery, want) {
-			t.Fatalf("single-turn Org Pulse fallback missing %q:\n%s", want, builtinOrgPulseQuery)
-		}
-	}
-	for _, forbidden := range []string{
-		"If nothing has changed, write nothing and stop",
-		"STOP the whole pass",
-		"Org idle since last pulse",
-		"harvest what's worth keeping into your memory",
-		"Harvest what's worth keeping into your shared memory",
-		"GENERATE RECOMMENDATIONS",
-		"LLM + COST AUDIT",
-		"TASK FINDINGS + PROMOTIONS",
-		"create_human_input_request",
-		"data-cos-rec-id",
-	} {
-		if strings.Contains(builtinOrgPulseQuery, forbidden) {
-			t.Fatalf("single-turn Org Pulse fallback should not include skip/no-op gate %q:\n%s", forbidden, builtinOrgPulseQuery)
-		}
-		for _, msg := range sched.Messages {
-			if strings.Contains(msg, forbidden) {
-				t.Fatalf("Org Pulse message should not include skip/no-op gate %q:\n%s", forbidden, msg)
-			}
-		}
-	}
-}
-
-func TestBuiltinOrgPulseUpdatesGoalsScorecard(t *testing.T) {
-	sched, ok := FindDefaultBuiltinSchedule(builtinOrgPulseID)
-	if !ok {
-		t.Fatal("builtin org pulse schedule not found")
-	}
-	if len(sched.Messages) < 2 {
-		t.Fatalf("builtin org pulse messages = %d, want at least 2", len(sched.Messages))
-	}
-
-	evidenceAndGoals := sched.Messages[1]
-	for _, want := range []string{
-		`read_skill(skills=[{"name":"builder-reference","path":"references/org-html.md"}])`,
-		"update pulse/goals.html",
-		"scorecard evidence, status, confidence, freshness, or alignment",
-		"Report the scorecard and alignment table",
-	} {
-		if !strings.Contains(evidenceAndGoals, want) {
-			t.Fatalf("evidence/goals message missing %q:\n%s", want, evidenceAndGoals)
-		}
-	}
-
-	if !strings.Contains(builtinOrgPulseQuery, "Keep pulse/goals.html as the durable current scorecard") {
-		t.Fatalf("single-turn Org Pulse fallback should update goals.html scorecard:\n%s", builtinOrgPulseQuery)
-	}
-}
-
-func TestMergeBuiltinSchedulesRefreshesOrgPulseOverrideMessages(t *testing.T) {
+func TestMergeBuiltinSchedulesPassesThroughStaleOrgPulseOverrideUnchanged(t *testing.T) {
 	resume := true
 	stale := WorkflowSchedule{
 		ID:             builtinOrgPulseID,
@@ -124,27 +41,17 @@ func TestMergeBuiltinSchedulesRefreshesOrgPulseOverrideMessages(t *testing.T) {
 		}
 	}
 	if got == nil {
-		t.Fatal("merged schedules missing org pulse override")
+		t.Fatal("merged schedules missing the stale org pulse override -- it should still pass through, not disappear")
 	}
-
-	if got.Name != stale.Name || got.Description != stale.Description {
-		t.Fatalf("org pulse user-visible fields not preserved: %#v", got)
+	if got.Query != stale.Query || len(got.Messages) != 1 || got.Messages[0] != stale.Messages[0] {
+		t.Fatalf("stale org pulse content should pass through unchanged now that there is no builtin to refresh it against: query=%q messages=%v", got.Query, got.Messages)
 	}
-	if got.ScheduleType != stale.ScheduleType || got.CronExpression != stale.CronExpression || got.Timezone != stale.Timezone || !got.Enabled || !got.ShouldResumePrevious() {
-		t.Fatalf("org pulse scheduling knobs not preserved: %#v", got)
-	}
-	if got.Query == stale.Query || len(got.Messages) != 3 {
-		t.Fatalf("org pulse content was not refreshed: query=%q messages=%d", got.Query, len(got.Messages))
-	}
-	if !strings.Contains(got.Messages[1], "GOALS + WORKFLOW ALIGNMENT") {
-		t.Fatalf("org pulse override did not receive alignment step: %v", got.Messages)
-	}
-	if len(got.CalendarItems) != 1 || len(got.CalendarItems[0].Messages) != 0 {
-		t.Fatalf("calendar item messages should not shadow product-managed org pulse steps: %#v", got.CalendarItems)
+	if len(got.CalendarItems) != 1 || len(got.CalendarItems[0].Messages) != 1 {
+		t.Fatalf("calendar item messages should also pass through unchanged: %#v", got.CalendarItems)
 	}
 }
 
-func TestMergeBuiltinSchedulesRefreshesDuplicateOrgPulseMessages(t *testing.T) {
+func TestMergeBuiltinSchedulesPassesThroughStaleDuplicateOrgPulseUnchanged(t *testing.T) {
 	duplicate := WorkflowSchedule{
 		ID:             "user-created-org-pulse",
 		Name:           "Org Pulse",
@@ -166,13 +73,10 @@ func TestMergeBuiltinSchedulesRefreshesDuplicateOrgPulseMessages(t *testing.T) {
 		}
 	}
 	if got == nil {
-		t.Fatal("merged schedules missing duplicate org pulse")
+		t.Fatal("merged schedules missing the stale duplicate org pulse")
 	}
-	if got.ID != duplicate.ID || got.CronExpression != duplicate.CronExpression || !got.Enabled {
-		t.Fatalf("duplicate org pulse identity/schedule not preserved: %#v", got)
-	}
-	if len(got.Messages) != 3 || !strings.Contains(got.Messages[1], "GOALS + WORKFLOW ALIGNMENT") {
-		t.Fatalf("duplicate org pulse did not receive current builtin sequence: %#v", got.Messages)
+	if got.Query != duplicate.Query || len(got.Messages) != 1 || got.Messages[0] != duplicate.Messages[0] {
+		t.Fatalf("stale duplicate org pulse content should pass through unchanged: query=%q messages=%v", got.Query, got.Messages)
 	}
 }
 

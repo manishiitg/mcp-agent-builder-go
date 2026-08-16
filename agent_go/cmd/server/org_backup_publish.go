@@ -13,10 +13,8 @@ import (
 )
 
 const (
-	orgBackupConfigPath  = "pulse/backup.json"
-	orgBackupStatusPath  = "pulse/backup/status.json"
-	orgPublishConfigPath = "pulse/publish.json"
-	orgPublishStatusPath = "pulse/publish/status.json"
+	orgBackupConfigPath = "pulse/backup.json"
+	orgBackupStatusPath = "pulse/backup/status.json"
 )
 
 func readOrgBackupConfig(ctx context.Context) (*WorkflowBackupConfig, bool, error) {
@@ -46,39 +44,9 @@ func readOrgBackupStatus(ctx context.Context) (*WorkflowBackupStatus, bool, erro
 	return &status, true, nil
 }
 
-func readOrgPublishConfig(ctx context.Context) (*WorkflowPublishConfig, bool, error) {
-	content, exists, err := readFileFromWorkspace(ctx, orgPublishConfigPath)
-	if err != nil || !exists {
-		return nil, exists, err
-	}
-	var config WorkflowPublishConfig
-	if err := json.Unmarshal([]byte(content), &config); err != nil {
-		return nil, true, fmt.Errorf("failed to parse org publish config: %w", err)
-	}
-	return &config, true, nil
-}
-
-func readOrgPublishStatus(ctx context.Context) (*WorkflowPublishStatus, bool, error) {
-	content, exists, err := readFileFromWorkspace(ctx, orgPublishStatusPath)
-	if err != nil || !exists {
-		return nil, exists, err
-	}
-	var status WorkflowPublishStatus
-	if err := json.Unmarshal([]byte(content), &status); err != nil {
-		return nil, true, fmt.Errorf("failed to parse org publish status: %w", err)
-	}
-	if status.Version == 0 {
-		status.Version = workflowPublishStatusVersion
-	}
-	return &status, true, nil
-}
-
 var orgBackupHashFiles = []string{
-	"pulse/goals.html",
-	"pulse/org-pulse.html",
 	"pulse/task.html",
 	"pulse/backup.json",
-	"pulse/publish.json",
 	"org.json",
 }
 
@@ -112,15 +80,6 @@ func computeOrgBackupSourceHash(ctx context.Context) (string, int) {
 	return hashWorkspaceFiles(ctx, files)
 }
 
-func computeOrgPublishSourceHash(ctx context.Context) string {
-	files := map[string]string{
-		"pulse/goals.html":     "pulse/goals.html",
-		"pulse/org-pulse.html": "pulse/org-pulse.html",
-	}
-	hash, _ := hashWorkspaceFiles(ctx, files)
-	return hash
-}
-
 func hashWorkspaceFiles(ctx context.Context, files map[string]string) (string, int) {
 	relPaths := make([]string, 0, len(files))
 	for relPath := range files {
@@ -152,7 +111,7 @@ func hashWorkspaceFiles(ctx context.Context, files map[string]string) (string, i
 
 func shouldSkipOrgHashFile(relPath string) bool {
 	lower := strings.ToLower(strings.TrimPrefix(relPath, "/"))
-	if lower == orgBackupStatusPath || lower == orgPublishStatusPath {
+	if lower == orgBackupStatusPath {
 		return true
 	}
 	if strings.Contains(lower, "/.git/") || strings.HasPrefix(lower, ".git/") {
@@ -200,36 +159,3 @@ func (api *StreamingAPI) handleGetOrgBackup(w http.ResponseWriter, r *http.Reque
 	json.NewEncoder(w).Encode(resp)
 }
 
-func (api *StreamingAPI) handleGetOrgPublish(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusOK)
-		return
-	}
-
-	config, _, configErr := readOrgPublishConfig(r.Context())
-	if configErr != nil {
-		log.Printf("[ORG_PUBLISH] Failed to read org publish config: %v", configErr)
-	}
-	status, _, statusErr := readOrgPublishStatus(r.Context())
-	if statusErr != nil {
-		log.Printf("[ORG_PUBLISH] Failed to read org publish status: %v", statusErr)
-	}
-	sourceHash := computeOrgPublishSourceHash(r.Context())
-	url := ""
-	if status != nil {
-		url = status.URL
-	}
-
-	resp := WorkflowPublishInfoResponse{
-		Success:           true,
-		Config:            config,
-		Status:            status,
-		EffectiveState:    workflowPublishEffectiveState(config, status, sourceHash),
-		URL:               url,
-		CurrentSourceHash: sourceHash,
-		Supported:         supportedWorkflowPublishStrategies(),
-		StatusPath:        orgPublishStatusPath,
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
-}

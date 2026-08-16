@@ -58,7 +58,7 @@ func TestMultiAgentToolDescriptionKeepsAgentWorksLayoutWithoutProfile(t *testing
 	const folder = "_users/default/Chats"
 
 	shell := enhanceToolDescriptionForMultiAgentMode("execute_shell_command", "base.", folder, nil)
-	for _, want := range []string{"pulse/goals.html", "{plan_id}"} {
+	for _, want := range []string{"pulse/task.html", "{plan_id}"} {
 		if !strings.Contains(shell, want) {
 			t.Fatalf("AgentWorks description lost %q:\n%s", want, shell)
 		}

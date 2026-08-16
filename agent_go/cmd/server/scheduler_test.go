@@ -371,21 +371,20 @@ func TestStopBetweenReservationAndDurableClaimPreventsExecution(t *testing.T) {
 	}
 }
 
-func TestTriggerMultiAgentNowFindsBuiltinWithoutScheduleFile(t *testing.T) {
+// Org Pulse itself is gone (DefaultBuiltinSchedules returns empty -- see
+// builtin_schedules.go), so triggering its ID without a persisted schedule
+// entry no longer resolves to a builtin at all -- it is simply not found.
+func TestTriggerMultiAgentNowWithoutScheduleFileReportsNotFound(t *testing.T) {
 	workspace := httptest.NewServer(&mockWorkspaceAPI{files: map[string]string{}})
 	defer workspace.Close()
 	t.Setenv("WORKSPACE_API_URL", workspace.URL)
 
 	svc := NewSchedulerService(nil)
 	userID := "user-without-schedule-file"
-	svc.updateRuntimeState(multiAgentScheduleRuntimeKey(userID, builtinOrgPulseID), func(state *ScheduleRuntimeState) {
-		state.LastStatus = "running"
-		state.LastSessionID = "existing-session"
-	})
 
 	_, err := svc.TriggerMultiAgentNow(userID, builtinOrgPulseID)
-	if err == nil || !strings.Contains(err.Error(), "job is already running") {
-		t.Fatalf("TriggerMultiAgentNow() error = %v, want builtin resolution followed by running guard", err)
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("TriggerMultiAgentNow() error = %v, want not-found now that org pulse has no builtin to resolve", err)
 	}
 }
 

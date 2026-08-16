@@ -65,16 +65,16 @@ func GetWorkspaceMap(docsRoot, chatsFolder string) string {
 	return `
 ## Workspace
 
-**Always use absolute paths in shell commands.** The workspace docs root is: ` + "`" + p.DocsRoot + "`" + `. Every absolute path you reference in a shell command MUST start with this exact prefix. The path guard rejects absolute paths under any other host root (` + "`" + "/Users/..." + "`" + `, ` + "`" + "/home/..." + "`" + `) that are not under the docs root. Do NOT prepend the project root, your home directory, or anything else — always use ` + "`" + p.DocsRoot + "`" + ` as the prefix. When tool descriptions show paths like ` + "`" + "Workflow/<name>/" + "`" + `, ` + "`" + "pulse/goals.html" + "`" + `, or ` + "`" + "Chats/<folder>/" + "`" + `, those are LOCAL paths RELATIVE to the docs root; the absolute equivalent is the docs root + that suffix.
+**Always use absolute paths in shell commands.** The workspace docs root is: ` + "`" + p.DocsRoot + "`" + `. Every absolute path you reference in a shell command MUST start with this exact prefix. The path guard rejects absolute paths under any other host root (` + "`" + "/Users/..." + "`" + `, ` + "`" + "/home/..." + "`" + `) that are not under the docs root. Do NOT prepend the project root, your home directory, or anything else — always use ` + "`" + p.DocsRoot + "`" + ` as the prefix. When tool descriptions show paths like ` + "`" + "Workflow/<name>/" + "`" + `, ` + "`" + "pulse/task.html" + "`" + `, or ` + "`" + "Chats/<folder>/" + "`" + `, those are LOCAL paths RELATIVE to the docs root; the absolute equivalent is the docs root + that suffix.
 
-**Never use WebFetch/raw GitHub URLs for workspace artifacts, skills, or reference docs.** Files such as ` + "`" + "pulse/goals.html" + "`" + `, ` + "`" + "pulse/org-pulse.html" + "`" + `, and ` + "`" + "skills/<name>/SKILL.md" + "`" + ` live on local disk under the docs root above. Read them with the declared local tools/shell, or load canonical reference docs with ` + "`" + "read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/....md\"}])" + "`" + `.
+**Never use WebFetch/raw GitHub URLs for workspace artifacts, skills, or reference docs.** Files such as ` + "`" + "pulse/task.html" + "`" + ` and ` + "`" + "skills/<name>/SKILL.md" + "`" + ` live on local disk under the docs root above. Read them with the declared local tools/shell, or load canonical reference docs with ` + "`" + "read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/....md\"}])" + "`" + `.
 
 **Pulse storage is SQLite-only.** Use the typed Pulse, finding, review, and human-input tools; the Pulse popup is the only workflow Pulse presentation. Older journal artifacts are retired and must be ignored.
 
 | Path | Access | Purpose |
 |------|--------|---------|
 | ` + "`" + p.Chats + "/`" + ` | read/write | Your workspace — save all output files here |
-| ` + "`" + p.Pulse + "/`" + ` | read/write | Org-level goals and Pulse artifacts (` + "`goals.html`" + `, ` + "`org-pulse.html`" + `) |
+| ` + "`" + p.Pulse + "/`" + ` | read/write | Cross-workflow task reports and backup config (` + "`task.html`" + `, ` + "`backup.json`" + `) |
 | ` + "`" + p.Config + "/`" + ` | tool-only | Session config — use dedicated LLM/provider config tools, not raw file reads/writes |
 | ` + "`" + p.ChatHistory + "/`" + ` | read/write | Past conversation histories |
 | ` + "`" + p.Skills + "/`" + ` | read-only | Skill definitions (SKILL.md + supporting files) |
@@ -309,7 +309,7 @@ Each workflow lives in ` + "`" + absWorkflow + `/<name>/` + "`" + ` with:
 - **Reuse global workflow learnings**: ` + "`learnings/_global/SKILL.md`" + ` contains reusable HOW-to-run knowledge for a workflow (how to log into a bank, parsing quirks, tool/API call patterns) — not domain facts or run results. Read it and reuse the guidance in your own delegated tasks for related work.
 - **Reuse saved step scripts**: For ` + "`scripted`" + ` steps, the canonical working script lives at ` + "`learnings/<step-id>/main.py`" + `. Read it to understand what a step does, or borrow patterns into your own scripts.
 - **Inspect recent runs**: ` + "`runs/iteration-0/`" + ` always holds the most recent execution. Older ` + "`runs/iteration-{N}/`" + ` folders are retained history; use them for trends, regressions, and before/after comparisons against typed Pulse timestamps.
-- **Use task and Pulse context**: recurring Chief of Staff task findings live in ` + "`pulse/task.html`" + `; factual org-goal and workflow-alignment history lives in ` + "`pulse/org-pulse.html`" + ` and ` + "`pulse/goals.html`" + `.
+- **Use task context**: recurring Chief of Staff task findings live in ` + "`pulse/task.html`" + `.
 
 ## Pulse and Goal Advisor — When to Use the Tools
 

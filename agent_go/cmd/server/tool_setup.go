@@ -391,7 +391,7 @@ func multiAgentPlacementGuidance(toolName, chatsFolder string, profile *resolved
 	case "diff_patch_workspace_file", "execute_shell_command":
 		return []string{
 			fmt.Sprintf("Save plan outputs inside the plan folder (e.g. '%s/{plan_id}/output.txt').", chatsFolder),
-			"Org-level goals and pulse artifacts belong in `pulse/` (for example `pulse/goals.html` and `pulse/org-pulse.html`).",
+			"Cross-workflow task reports belong in `pulse/` (for example `pulse/task.html`).",
 		}
 	}
 	return nil
