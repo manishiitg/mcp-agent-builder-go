@@ -184,6 +184,28 @@ type Profile struct {
 	// EffectiveScope(), never the raw field, so that equivalence holds
 	// everywhere.
 	Scope string `json:"scope,omitempty" yaml:"scope,omitempty"`
+	// UIPanels declares which optional panels a product's own surface should
+	// offer, so a product's frontend does not have to hardcode what it shows
+	// -- the same "declare it, don't assume it" contract Commands and Secrets
+	// already follow. Unlike each product's own local ui: block (surface,
+	// streaming, etc. -- rendering-mode choices the mounted surface component
+	// already knows), these panel toggles are read over the wire via
+	// GET /api/agent-profiles/{id}, the same response Commands and
+	// Runtime.ProviderOptions travel through.
+	UIPanels UIPanels `json:"ui_panels,omitempty" yaml:"ui_panels,omitempty"`
+}
+
+// UIPanels are optional panels a product's surface can offer. Every field
+// defaults to off: a product opts in explicitly rather than a panel showing
+// up because a field was left unset.
+type UIPanels struct {
+	// Secrets shows the secrets-management button/dropdown in the product's
+	// header, the same control Video Studio already offers.
+	Secrets bool `json:"secrets,omitempty" yaml:"secrets,omitempty"`
+	// Schedules shows a Schedules panel listing this profile's scheduled
+	// runs (enable/disable/trigger/delete), reusing the same list the
+	// AgentWorks schedules popup shows.
+	Schedules bool `json:"schedules,omitempty" yaml:"schedules,omitempty"`
 }
 
 const (

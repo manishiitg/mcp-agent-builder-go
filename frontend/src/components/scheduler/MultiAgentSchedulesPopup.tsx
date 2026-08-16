@@ -88,10 +88,15 @@ function isBuiltInJob(job: ScheduledJob): boolean {
 }
 
 interface MultiAgentSchedulesPopupProps {
-  onClose: () => void
+  onClose?: () => void
+  // Renders as inline panel content (no modal chrome, no title bar/close
+  // button) for embedding directly in a product surface -- e.g. Chief of
+  // Staff's own Schedules tab -- instead of the floating popup AgentWorks
+  // opens from ChatTabs.
+  embedded?: boolean
 }
 
-const MultiAgentSchedulesPopup: React.FC<MultiAgentSchedulesPopupProps> = ({ onClose }) => {
+const MultiAgentSchedulesPopup: React.FC<MultiAgentSchedulesPopupProps> = ({ onClose, embedded = false }) => {
   const [jobs, setJobs] = useState<ScheduledJob[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -268,20 +273,17 @@ const MultiAgentSchedulesPopup: React.FC<MultiAgentSchedulesPopupProps> = ({ onC
     { key: 'all', label: 'All', count: summary.total },
   ]
 
-  return (
-    <ModalPortal>
-    <div
-      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-2 sm:p-4"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
-    >
-      <div className="flex max-h-[calc(100dvh-1rem)] w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-border bg-card text-card-foreground shadow-2xl sm:max-h-[85vh]">
+  const panelContent = (
+    <div className={embedded ? 'flex h-full min-h-0 flex-col' : 'flex max-h-[calc(100dvh-1rem)] w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-border bg-card text-card-foreground shadow-2xl sm:max-h-[85vh]'}>
         {/* Header */}
         <div className="flex flex-shrink-0 items-start justify-between gap-4 border-b border-border px-5 py-4">
           <div className="min-w-0 space-y-2">
-            <div className="flex items-center gap-2">
-              <CalendarDays className="h-5 w-5 text-amber-500" />
-              <h3 className="truncate text-base font-semibold text-foreground">Scheduled Chief of Staff Tasks</h3>
-            </div>
+            {!embedded && (
+              <div className="flex items-center gap-2">
+                <CalendarDays className="h-5 w-5 text-amber-500" />
+                <h3 className="truncate text-base font-semibold text-foreground">Scheduled Chief of Staff Tasks</h3>
+              </div>
+            )}
             {!isLoading && (
               <div className="flex flex-wrap gap-1.5">
                 <span className="rounded-full border border-border bg-background px-2 py-0.5 text-xs text-muted-foreground">
@@ -323,13 +325,15 @@ const MultiAgentSchedulesPopup: React.FC<MultiAgentSchedulesPopupProps> = ({ onC
             >
               <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
             </button>
-            <button
-              onClick={onClose}
-              className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-              aria-label="Close schedules"
-            >
-              <X className="h-4 w-4" />
-            </button>
+            {!embedded && onClose && (
+              <button
+                onClick={onClose}
+                className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                aria-label="Close schedules"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
           </div>
         </div>
 
@@ -521,8 +525,19 @@ const MultiAgentSchedulesPopup: React.FC<MultiAgentSchedulesPopupProps> = ({ onC
             )}
           </div>
         </div>
-      </div>
     </div>
+  )
+
+  if (embedded) return panelContent
+
+  return (
+    <ModalPortal>
+      <div
+        className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-2 sm:p-4"
+        onClick={(e) => { if (e.target === e.currentTarget) onClose?.() }}
+      >
+        {panelContent}
+      </div>
     </ModalPortal>
   )
 }

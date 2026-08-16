@@ -66,12 +66,6 @@ export interface CommandDefinition {
   description: string
   icon: ReactNode
   modes?: ModeCategory[]
-  // True for a command that assumes Chief of Staff concepts (org goals, its
-  // own notification config, building a new workflow) rather than anything
-  // a specific product's agent can act on -- e.g. Video Studio has no
-  // create_workflow or org-Pulse tools, so offering the command there is a
-  // dead end at best. Excluded whenever CommandContext.agentProfileId is set.
-  chiefOfStaffOnly?: boolean
   requiredWorkflowMode?: 'plan' | 'eval' | 'output'
   requiredWorkshopMode?: WorkshopMode | WorkshopMode[]
   validate?: (ctx: CommandContext) => string | null

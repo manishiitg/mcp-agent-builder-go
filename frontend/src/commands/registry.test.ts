@@ -164,44 +164,26 @@ describe('Pulse slash commands', () => {
   })
 })
 
-describe('Product surfaces do not see Chief of Staff-only commands', () => {
-  it('excludes org/notify/workflow-builder commands once a product profile is active', () => {
-    // These assume tools and concepts a product's agent does not have --
-    // Chief of Staff's own notification config, create_workflow.
-    // Reported bug: Video Studio's command menu showed all of AgentWorks'
-    // Chief of Staff commands mixed in with its own five.
-    const chiefOfStaffCommands = getCommands('multi-agent').map(command => command.command)
-    const videoStudioCommands = getCommands('multi-agent', undefined, 'video-studio').map(command => command.command)
-
-    const chiefOfStaffOnly = ['notify', 'org-backup', 'workflow-builder']
-    for (const command of chiefOfStaffOnly) {
-      expect(chiefOfStaffCommands).toContain(command)
-      expect(videoStudioCommands).not.toContain(command)
-    }
-  })
-
-  it('still finds a Chief of Staff command by name outside a product tab', () => {
-    expect(findCommand('org-backup', 'multi-agent')).toBeDefined()
-    expect(findCommand('org-backup', 'multi-agent', 'video-studio')).toBeUndefined()
-  })
-
-  it('still shows a product\'s own commands once registered', async () => {
-    // Only the six Chief of Staff-specific builtins are filtered -- this is
-    // not a blanket "hide all commands from products" switch. There happen
-    // to be no other multi-agent-visible builtins today, so the meaningful
-    // check is that a product's own commands (e.g. Video Studio's) still
-    // come through once registered.
+describe('Product commands are scoped to their own surface', () => {
+  it('shows a product\'s own commands once registered, and clears them when unregistered', async () => {
+    // Chief of Staff's and Video Studio's own commands (notify, org-backup,
+    // production, etc.) all live in product.yaml now, delivered via
+    // setProductCommands from that product's own surface component and
+    // cleared on unmount -- the same mechanism that already scoped Video
+    // Studio's commands away from other products, with no separate
+    // chiefOfStaffOnly flag needed once Chief of Staff's builtins moved out
+    // of the static registry too.
     const { setProductCommands } = await import('./registry')
     setProductCommands([{
       command: 'production', description: 'Start a video production', icon: null,
       modes: ['multi-agent'], source: 'product', execute: () => {},
     } as unknown as import('./types').CommandDefinition])
     try {
-      const videoStudioCommands = getCommands('multi-agent', undefined, 'video-studio').map(command => command.command)
-      expect(videoStudioCommands).toContain('production')
-      expect(videoStudioCommands).not.toContain('org-backup')
+      const commands = getCommands('multi-agent').map(command => command.command)
+      expect(commands).toContain('production')
     } finally {
       setProductCommands([])
     }
+    expect(getCommands('multi-agent').map(command => command.command)).not.toContain('production')
   })
 })

@@ -1,22 +1,12 @@
 import type { ModeCategory } from '../stores/useModeStore'
 import type { CommandDefinition, WorkshopMode } from './types'
 import { builtinCommands } from './builtin-commands'
-import { CHIEF_OF_STAFF_PROFILE_ID } from '../utils/chiefOfStaff'
 
 let userCommands: CommandDefinition[] = []
 let productCommands: CommandDefinition[] = []
 
-function matchesMode(cmd: CommandDefinition, mode?: ModeCategory, workshopMode?: WorkshopMode, agentProfileId?: string): boolean {
+function matchesMode(cmd: CommandDefinition, mode?: ModeCategory, workshopMode?: WorkshopMode): boolean {
   if (cmd.hidden) return false
-  // A command written for Chief of Staff (its own notification config,
-  // create_workflow) assumes tools and concepts a product's agent does not
-  // have. An agentProfileId set to a DIFFERENT product's id means we are
-  // inside that product's tab, not Chief of Staff -- but agentProfileId can
-  // now also be the explicit 'chief-of-staff' id itself (not just absent,
-  // the legacy shape), which must still count as Chief of Staff, not "a
-  // product." See isChiefOfStaffTab (utils/chiefOfStaff.ts) for the same
-  // distinction against a full tab rather than a bare id.
-  if (cmd.chiefOfStaffOnly && agentProfileId && agentProfileId !== CHIEF_OF_STAFF_PROFILE_ID) return false
   if (mode === undefined || mode === null) return true
 
   if (mode === 'workflow') {
@@ -49,13 +39,13 @@ export function setProductCommands(cmds: CommandDefinition[]) {
   productCommands = cmds
 }
 
-export function getCommands(mode?: ModeCategory, workshopMode?: WorkshopMode, agentProfileId?: string): CommandDefinition[] {
-  return [...productCommands, ...builtinCommands, ...userCommands].filter(cmd => matchesMode(cmd, mode, workshopMode, agentProfileId))
+export function getCommands(mode?: ModeCategory, workshopMode?: WorkshopMode): CommandDefinition[] {
+  return [...productCommands, ...builtinCommands, ...userCommands].filter(cmd => matchesMode(cmd, mode, workshopMode))
 }
 
-export function findCommand(name: string, mode?: ModeCategory, agentProfileId?: string): CommandDefinition | undefined {
+export function findCommand(name: string, mode?: ModeCategory): CommandDefinition | undefined {
   return [...productCommands, ...builtinCommands, ...userCommands].find(cmd =>
-    cmd.command === name && matchesMode(cmd, mode, undefined, agentProfileId)
+    cmd.command === name && matchesMode(cmd, mode)
   )
 }
 

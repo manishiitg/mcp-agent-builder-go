@@ -49,6 +49,84 @@ func TestResolveAgentProfileForQueryResolvesGlobalScopeWithoutFolderOrTitle(t *t
 	}
 }
 
+// A global-scoped profile (Chief of Staff) is meant to feel like a
+// profile-less multi-agent chat, where the user's own chat-level model
+// selection (any published LLM) already wins -- unlike a project-scoped
+// product (Video Studio), whose pinned runtime binding is deliberately
+// authoritative. The declared runtime.provider/model_id is only the default
+// for a brand-new chat with no selection yet.
+func TestResolveAgentProfileForQueryGlobalScopeDefersToRequestedModel(t *testing.T) {
+	registry := agentprofiles.NewRegistry()
+	profile := agentprofiles.Profile{
+		ID: "chief-of-staff", Name: "Chief of Staff", Version: 1, BuiltIn: true,
+		SystemPromptTemplate: "placeholder",
+		Scope:                agentprofiles.ProfileScopeGlobal,
+		Runtime:              agentprofiles.RuntimePolicy{Transport: "auto", Provider: "claude-code", ModelID: "claude-sonnet-5"},
+	}
+	if err := registry.RegisterProfile(profile); err != nil {
+		t.Fatal(err)
+	}
+	api := &StreamingAPI{agentProfiles: registry}
+	req := QueryRequest{
+		AgentMode: "multi-agent", AgentProfileID: "chief-of-staff",
+		Provider: "codex-cli", ModelID: "gpt-5.6-terra",
+	}
+	if _, err := api.resolveAgentProfileForQuery(context.Background(), &req, "user-1", "session-1"); err != nil {
+		t.Fatalf("resolveAgentProfileForQuery() error = %v", err)
+	}
+	if req.Provider != "codex-cli" || req.ModelID != "gpt-5.6-terra" {
+		t.Fatalf("expected the request's own model selection to win, got provider=%q model=%q", req.Provider, req.ModelID)
+	}
+}
+
+func TestResolveAgentProfileForQueryGlobalScopeFallsBackToPinnedModelWhenRequestEmpty(t *testing.T) {
+	registry := agentprofiles.NewRegistry()
+	profile := agentprofiles.Profile{
+		ID: "chief-of-staff", Name: "Chief of Staff", Version: 1, BuiltIn: true,
+		SystemPromptTemplate: "placeholder",
+		Scope:                agentprofiles.ProfileScopeGlobal,
+		Runtime:              agentprofiles.RuntimePolicy{Transport: "auto", Provider: "claude-code", ModelID: "claude-sonnet-5"},
+	}
+	if err := registry.RegisterProfile(profile); err != nil {
+		t.Fatal(err)
+	}
+	api := &StreamingAPI{agentProfiles: registry}
+	req := QueryRequest{AgentMode: "multi-agent", AgentProfileID: "chief-of-staff"}
+	if _, err := api.resolveAgentProfileForQuery(context.Background(), &req, "user-1", "session-1"); err != nil {
+		t.Fatalf("resolveAgentProfileForQuery() error = %v", err)
+	}
+	if req.Provider != "claude-code" || req.ModelID != "claude-sonnet-5" {
+		t.Fatalf("expected the declared default when the request had no selection, got provider=%q model=%q", req.Provider, req.ModelID)
+	}
+}
+
+// The project-scoped path must keep its authoritative-pin behavior
+// unchanged: this is what the isGlobalScope gate exists to preserve.
+func TestResolveAgentProfileForQueryProjectScopeStaysAuthoritative(t *testing.T) {
+	registry := agentprofiles.NewRegistry()
+	profile := agentprofiles.Profile{
+		ID: "video-studio", Name: "Video Studio", Version: 1, BuiltIn: true,
+		SystemPromptTemplate: "placeholder",
+		Runtime:              agentprofiles.RuntimePolicy{Transport: "auto", Provider: "claude-code", ModelID: "claude-sonnet-5"},
+	}
+	if err := registry.RegisterProfile(profile); err != nil {
+		t.Fatal(err)
+	}
+	api := &StreamingAPI{agentProfiles: registry}
+	req := QueryRequest{
+		AgentMode: "multi-agent", AgentProfileID: "video-studio",
+		SelectedFolder:      "Chats/Video Studio/projects/demo",
+		AgentProfileContext: agentprofiles.PromptContext{ProjectTitle: "Demo"},
+		Provider:            "codex-cli", ModelID: "gpt-5.6-terra",
+	}
+	if _, err := api.resolveAgentProfileForQuery(context.Background(), &req, "user-1", "session-1"); err != nil {
+		t.Fatalf("resolveAgentProfileForQuery() error = %v", err)
+	}
+	if req.Provider != "claude-code" || req.ModelID != "claude-sonnet-5" {
+		t.Fatalf("expected the project-scoped pin to stay authoritative, got provider=%q model=%q", req.Provider, req.ModelID)
+	}
+}
+
 func TestResolveAgentProfileForQueryRejectsProjectScopeWithoutTitle(t *testing.T) {
 	registry := agentprofiles.NewRegistry()
 	profile := agentprofiles.Profile{

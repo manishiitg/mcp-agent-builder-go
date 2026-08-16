@@ -31,11 +31,14 @@ describe('bot and notification settings separation', () => {
 
   it('exposes the same agentic Notify control at Chief of Staff scope', () => {
     const orgControls = readFileSync('src/components/org/OrgBackupPublishControls.tsx', 'utf8')
-    const commands = readFileSync('src/commands/builtin-commands.tsx', 'utf8')
+    // Chief of Staff's own /notify prompt moved out of builtin-commands.tsx
+    // (workflow-only there now) into its own product.yaml-declared command
+    // file, the same way Video Studio's command prompts live in their own
+    // files rather than inline in a manifest.
+    const chiefOfStaffNotifyPrompt = readFileSync('../agent_go/internal/chiefofstaffproduct/commands/notify.md', 'utf8')
     expect(orgControls).toContain('aria-label="Chief of Staff notify"')
     expect(orgControls).toContain('loadOrgNotificationInfo')
     expect(orgControls).toContain('scopeKind="chief-of-staff"')
-    expect(commands).toContain("modes: ['workflow', 'multi-agent']")
-    expect(commands).toContain('update_chief_of_staff_notifications')
+    expect(chiefOfStaffNotifyPrompt).toContain('update_chief_of_staff_notifications')
   })
 })

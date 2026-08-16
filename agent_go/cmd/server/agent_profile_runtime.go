@@ -272,10 +272,17 @@ func (api *StreamingAPI) resolveAgentProfileForQuery(ctx context.Context, req *Q
 		}
 	}
 	var resolvedKeys *llm.ProviderAPIKeys
+	requestHasExplicitModel := strings.TrimSpace(req.Provider) != "" && strings.TrimSpace(req.ModelID) != ""
 	if provider, modelID := resolveProfileRuntimeModel(profile.Runtime, req.Provider, req.ModelID); provider != "" && modelID != "" {
 		// A profile-owned model binding is authoritative over the user's global
-		// AgentWorks chat selection, while still using the shared provider adapter,
-		// credentials, session registry, and streaming lifecycle.
+		// AgentWorks chat selection for a project-scoped product (Video Studio):
+		// the whole point is a curated, pinned choice. A global-scoped profile
+		// (Chief of Staff) is meant to feel like a profile-less chat -- any
+		// published LLM the user already picked wins; the declared binding is
+		// only the starting default for a brand-new chat with no selection yet.
+		if isGlobalScope && requestHasExplicitModel {
+			provider, modelID = req.Provider, req.ModelID
+		}
 		req.Provider = provider
 		req.ModelID = modelID
 		req.LLMConfig = &orchestrator.LLMConfig{Primary: orchestrator.LLMModel{Provider: provider, ModelID: modelID}}
