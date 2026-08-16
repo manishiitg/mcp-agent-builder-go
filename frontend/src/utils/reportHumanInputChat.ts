@@ -4,6 +4,7 @@ import { useChatStore } from '../stores/useChatStore'
 import { useGlobalPresetStore } from '../stores/useGlobalPresetStore'
 import { useWorkflowStore } from '../stores/useWorkflowStore'
 import { activateTab } from './activateTab'
+import { isInteractiveChiefOfStaffTab } from './chiefOfStaff'
 
 function normalizeWorkspacePath(value?: string | null): string {
   return (value || '').trim().replace(/^\/+|\/+$/g, '').toLowerCase()
@@ -11,14 +12,6 @@ function normalizeWorkspacePath(value?: string | null): string {
 
 function tabRecency(tab: ChatTab): number {
   return tab.lastAccessedAt ?? tab.createdAt ?? 0
-}
-
-function isInteractiveChiefOfStaffTab(tab: ChatTab): boolean {
-  return tab.metadata?.mode === 'multi-agent' &&
-    tab.metadata?.isOrganizationAssistant !== true &&
-    tab.metadata?.isViewOnly !== true &&
-    tab.metadata?.isScheduledRun !== true &&
-    tab.metadata?.isBotRun !== true
 }
 
 function isInteractiveWorkflowTab(tab: ChatTab, presetId: string): boolean {

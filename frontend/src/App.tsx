@@ -12,7 +12,6 @@ import { FileContentViewer } from "./components/FileContentViewer";
 import { resetSessionId, agentApi } from "./services/api";
 import { AuthWrapper } from "./components/AuthWrapper";
 import { findBlockingMultiAgentSession, shouldConfirmForSessionStatus, shouldConfirmNewMultiAgentChat } from "./utils/newChatConfirmation";
-import { isScheduledSession } from "./utils/workflowSessionKinds";
 import { Loader2, PanelRightClose, PanelRightOpen, Smartphone, Laptop } from "lucide-react";
 import { WorkflowLayout } from "./components/workflow";
 import { ModePresetBar } from "./components/ModePresetBar";
@@ -23,7 +22,7 @@ import { useModeStore } from "./stores/useModeStore";
 import { useProductSurfaceStore } from "./stores/useProductSurfaceStore";
 import { useLLMStore } from "./stores/useLLMStore";
 import { normalizeEventViewMode, waitForChatStoreHydration, type ChatTab } from "./stores/useChatStore";
-import { isChiefOfStaffTab } from "./utils/chiefOfStaff";
+import { isChiefOfStaffTab, isChiefOfStaffScheduleTab, isInteractiveChiefOfStaffTab } from "./utils/chiefOfStaff";
 import { useLLMDefaults } from "./hooks/useLLMDefaults";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./components/ui/tooltip";
 import "./App.css";
@@ -75,17 +74,6 @@ const isRecentExplicitReadOnlyWorkflowTab = (tab: ChatTab | null | undefined): t
     typeof restoredAt === 'number' &&
     Date.now() - restoredAt <= READ_ONLY_WORKFLOW_RESTORE_SELECTION_WINDOW_MS
 }
-
-const isChiefOfStaffScheduleTab = (tab: ChatTab): boolean =>
-  isChiefOfStaffTab(tab) && (
-    tab.metadata?.isScheduledRun === true ||
-    isScheduledSession({ sessionId: tab.sessionId })
-  )
-
-const isInteractiveChiefOfStaffTab = (tab: ChatTab): boolean =>
-  isChiefOfStaffTab(tab) &&
-  tab.metadata?.isOrganizationAssistant !== true &&
-  !isChiefOfStaffScheduleTab(tab)
 
 const hasOpenWorkspaceCollapsingPopup = () => {
   if (typeof document === 'undefined') return false
@@ -163,13 +151,7 @@ function App() {
     void waitForChatStoreHydration().then(async () => {
       if (cancelled || useProductSurfaceStore.getState().productSurface !== 'agentworks') return
       const chatStore = useChatStore.getState()
-      const chiefTab = Object.values(chatStore.chatTabs).find((tab) =>
-        isChiefOfStaffTab(tab) &&
-        tab.metadata?.isOrganizationAssistant !== true &&
-        tab.metadata?.isViewOnly !== true &&
-        tab.metadata?.isScheduledRun !== true &&
-        tab.metadata?.isBotRun !== true
-      )
+      const chiefTab = Object.values(chatStore.chatTabs).find(isInteractiveChiefOfStaffTab)
       if (chiefTab) {
         chatStore.switchTab(chiefTab.tabId)
       } else {
