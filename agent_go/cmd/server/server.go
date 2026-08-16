@@ -4784,10 +4784,14 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				// Per-user chat folders replace the legacy global "Chats/" write path.
 				perUserChatsWrite := perUserChatsFolder + "/"
 				perUserChatHistory := strings.TrimSuffix(perUserChatsFolder, "Chats") + "chat_history/"
-				if resolvedProfile != nil {
-					// A product profile is bound to one project. Do not inherit the
-					// Chief-of-Staff chat-wide grants or @context write expansion.
+				if resolvedProfile != nil && !isGlobalScopedProfile(resolvedProfile) {
+					// A project-scoped product profile is bound to one project. Do
+					// not inherit the chat-wide grants or @context write expansion.
 					// Explicit workflow references remain readable, never writable.
+					// A global-scoped profile (Chief of Staff) falls through to the
+					// else branch below instead -- it keeps the same chat-wide
+					// grants, including the pulse/ write grant, a profile-less turn
+					// already has.
 					profileRoot := agentProfileRuntimeWorkspace(currentUserID, req.SelectedFolder)
 					profileWrite := strings.TrimSuffix(profileRoot, "/") + "/"
 					profileReadOnly := append([]string{"skills/", "subagents/", "Downloads/"}, workflowReadOnlyFolders...)
@@ -4944,7 +4948,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			if enableBrowserAccess {
 				browserGuard := func(execs codingAgentToolExecutors) codingAgentToolExecutors {
 					if !isWorkflowPhase {
-						if resolvedProfile != nil {
+						if resolvedProfile != nil && !isGlobalScopedProfile(resolvedProfile) {
 							profileRoot := agentProfileRuntimeWorkspace(currentUserID, req.SelectedFolder)
 							profileReadOnly := append([]string{"skills/", "subagents/", "Downloads/"}, workflowReadOnlyFolders...)
 							return wrapExecutorsWithPlanFolderGuard(execs, profileRoot, profileReadOnly)

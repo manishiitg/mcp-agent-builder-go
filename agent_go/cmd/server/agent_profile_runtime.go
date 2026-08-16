@@ -85,6 +85,19 @@ func appendUniqueStrings(current []string, additions ...string) []string {
 	return out
 }
 
+// isGlobalScopedProfile reports whether the resolved profile declared
+// agentprofiles.ProfileScopeGlobal -- Chief of Staff today, and any future
+// profile with no single project workspace. A global-scoped profile keeps
+// the same chat-wide grants (including the pulse/ write grant) and
+// workspace description a profile-less turn already has; only a
+// project-scoped profile narrows to one project root. Every call site that
+// narrows behavior on bare `resolvedProfile != nil` must also check this, or
+// it silently narrows a global-scoped profile the same way it narrows a
+// project-scoped one.
+func isGlobalScopedProfile(p *resolvedAgentProfile) bool {
+	return p != nil && p.Definition.EffectiveScope() == agentprofiles.ProfileScopeGlobal
+}
+
 func agentProfileRuntimeWorkspace(userID, workspacePath string) string {
 	workspacePath = filepath.ToSlash(filepath.Clean(filepath.FromSlash(workspacePath)))
 	if workspacePath == "Chats" || strings.HasPrefix(workspacePath, "Chats/") {
