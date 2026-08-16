@@ -2758,7 +2758,11 @@ func postRunMonitorLightweightFinalizeStep(pulseRunID string, instructions ...wo
 			"or Fixer, do not read old Pulse findings and present them as new, and do not write builder/improve.html.\n\n"+
 			"Do these in order and record each with record_pulse_result(command=..., result=..., reason=...): "+
 			"(1) run the configured source-hash-gated backup and record its truthful terminal result; "+
-			"(2) mark publish skipped — reason: \"no fresh review this pass under periodic mode; the periodic Pulse pass owns publish\"; "+
+			"(2) read workflow.json's publish.targets. A \"report\" (or any non-\"pulse\") target is this run's own execution "+
+			"output — publish it normally, following publish-strategy.md, exactly as an ordinary run would; it is fresh this "+
+			"run regardless of whether Pulse reviewed anything. The \"pulse\" target specifically has nothing new this pass — "+
+			"no Gate/Review+Fix ran — and must be skipped for that reason alone. If \"pulse\" is the only configured target, "+
+			"mark the whole publish command skipped with that reason. Record one truthful terminal result for publish either way; "+
 			"(3) call notify_user exactly once with notification_kind=\"run_summary\" describing plainly and factually what this run "+
 			"itself did (actions taken, errors, outcome) — do not include a Pulse findings/fixes section, since none ran this pass — "+
 			"then record notify truthfully.%s%s",
