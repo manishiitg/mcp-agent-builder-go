@@ -114,7 +114,6 @@ export const ModeInfoPanel: React.FC<ModeInfoPanelProps> = ({ minimized = false 
                 </h4>
                 <div className="text-xs text-gray-500 dark:text-gray-400 space-y-1">
                   <div>• <kbd className="px-1 py-0.5 bg-gray-200 dark:bg-gray-600 rounded text-xs">Ctrl+1</kbd> Automation</div>
-                  <div>• <kbd className="px-1 py-0.5 bg-gray-200 dark:bg-gray-600 rounded text-xs">Ctrl+2</kbd> Chat</div>
                   <div>• <kbd className="px-1 py-0.5 bg-gray-200 dark:bg-gray-600 rounded text-xs">Ctrl+3</kbd> Organization</div>
                   <div>• <kbd className="px-1 py-0.5 bg-gray-200 dark:bg-gray-600 rounded text-xs">Ctrl+N</kbd> New Chat Tab (Chat mode)</div>
                 </div>
@@ -209,7 +208,6 @@ export const ModeInfoPanel: React.FC<ModeInfoPanelProps> = ({ minimized = false 
             </h4>
             <div className="text-xs text-gray-500 dark:text-gray-400 space-y-1">
               <div>• <kbd className="px-1 py-0.5 bg-gray-200 dark:bg-gray-600 rounded text-xs">Ctrl+1</kbd> Automation</div>
-              <div>• <kbd className="px-1 py-0.5 bg-gray-200 dark:bg-gray-600 rounded text-xs">Ctrl+2</kbd> Chat</div>
               <div>• <kbd className="px-1 py-0.5 bg-gray-200 dark:bg-gray-600 rounded text-xs">Ctrl+3</kbd> Organization</div>
               <div>• <kbd className="px-1 py-0.5 bg-gray-200 dark:bg-gray-600 rounded text-xs">Ctrl+N</kbd> New Chat Tab (Chat mode)</div>
             </div>

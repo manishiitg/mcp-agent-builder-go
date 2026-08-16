@@ -982,7 +982,7 @@ function App() {
     void chatAreaRef.current?.handleNewChat(tabId)
   }, [])
 
-  // After Ctrl+1/Ctrl+2 mode switch, restore the most recently-accessed
+  // After a Ctrl+1 mode switch, restore the most recently-accessed
   // tab matching the new mode. Without this the activeTabId stays on
   // whatever was selected before (often a tab in the *other* mode), so
   // the workflow's chat panel doesn't pick up the running session and
