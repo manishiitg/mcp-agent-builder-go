@@ -308,6 +308,17 @@ function handleLiveStreamingEvent(
 
     const rawIndex = innerData?.chunk_index ?? agentEvent?.chunk_index
     const chunkIndex = typeof rawIndex === 'number' ? rawIndex : -1
+    // is_delta decides how this chunk joins the text so far (verbatim for
+    // fragment streams like pi, newline-separated for block streams like
+    // claude-code); source is the backend's authoritative terminal/clean
+    // classification. Both are carried on StreamingChunkEvent — dropping them
+    // here is what made block-provider output render as one run-on blob.
+    const rawIsDelta = innerData?.is_delta ?? agentEvent?.is_delta
+    const rawSource = innerData?.source ?? agentEvent?.source
+    const chunkMeta = {
+      isDelta: typeof rawIsDelta === 'boolean' ? rawIsDelta : undefined,
+      source: typeof rawSource === 'string' ? rawSource : undefined,
+    }
     if (ownedTerminalKeys.length > 0) {
       return
     } else if (scope.kind === 'delegation' && scope.id) {
@@ -318,7 +329,7 @@ function handleLiveStreamingEvent(
       chatStore.appendExecutionStreamingChunk(actualSessionId, scope.id, chunkIndex, content)
     } else if (scope.kind === 'session') {
       if (chunkIndex === 0 || chunkIndex === 1) chatStore.clearStreamingText(actualSessionId)
-      chatStore.appendStreamingChunk(actualSessionId, chunkIndex, content)
+      chatStore.appendStreamingChunk(actualSessionId, chunkIndex, content, chunkMeta)
     }
     return
   }

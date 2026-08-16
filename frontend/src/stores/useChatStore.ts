@@ -14,7 +14,22 @@ import { MAX_EVENTS_TO_PROCESS, CLEANUP_THRESHOLD } from '../constants/events'
 import { logger } from '../utils/logger'
 import { compareEventsChronologically, compareEventsReverseChronologically } from '../utils/eventOrdering'
 import { getWorkspaceScopedStorageKey } from './useWorkspaceConnectionStore'
-import { looksLikeTerminalScreenText, splitStreamingStatusAndText } from '../utils/streamingStatus'
+import { appendStreamingText, looksLikeTerminalScreenText, splitStreamingStatusAndText } from '../utils/streamingStatus'
+
+/**
+ * Per-chunk metadata carried by streaming_chunk events. `source` is the
+ * backend's authoritative classification (transcript | content | terminal) and
+ * is preferred over the looksLikeTerminalScreenText heuristic whenever present —
+ * the field exists precisely so a no-terminal UI does not have to guess.
+ */
+export interface StreamingChunkMeta {
+  isDelta?: boolean
+  source?: string
+}
+
+/** True when the backend positively identifies this chunk as a raw pane frame. */
+const isTerminalSourceChunk = (meta?: StreamingChunkMeta): boolean =>
+  typeof meta?.source === 'string' && meta.source.trim().toLowerCase() === 'terminal'
 import { createHydrationGate, HydrationBackstopError, type HydrationGateSnapshot } from '../utils/hydrationGate'
 import { createBufferedPersistStorage } from '../utils/bufferedPersistStorage'
 import { retainEventInSessionWorkingSet } from '../utils/sessionEventWorkingSet'
@@ -641,7 +656,7 @@ interface ChatState extends StoreActions {
   stopActiveSessionsPolling: () => void
   
   // Streaming text actions
-  appendStreamingChunk: (sessionId: string, chunkIndex: number, chunk: string) => void
+  appendStreamingChunk: (sessionId: string, chunkIndex: number, chunk: string, meta?: StreamingChunkMeta) => void
   setStreamingTerminalSnapshot: (sessionId: string, chunkIndex: number, chunk: string) => void
   setStreamingTerminalActive: (sessionId: string, active: boolean) => void
   setTerminalOutputOpen: (sessionId: string, open: boolean) => void
@@ -1393,7 +1408,7 @@ export const useChatStore = create<ChatState>()(
 
       // Streaming text actions
       // Only parent agent streaming is processed - sub-agent streaming is filtered out in ChatArea
-      appendStreamingChunk: (sessionId: string, chunkIndex: number, chunk: string) => {
+      appendStreamingChunk: (sessionId: string, chunkIndex: number, chunk: string, meta?: StreamingChunkMeta) => {
         if (typeof chunk !== 'string' || !chunk) return
 
         // Reset inactivity auto-clear timer — if no new chunk arrives in 3s, clear streaming text
@@ -1434,7 +1449,9 @@ export const useChatStore = create<ChatState>()(
           // Mixed chunks are split so raw markers like "api-bridge - execute_shell_command (MCP)"
           // cannot leak into the visible assistant markdown.
           const { statusText, text } = splitStreamingStatusAndText(chunk)
-          const isTerminalScreenText = looksLikeTerminalScreenText(text || chunk)
+          // Trust the backend's own classification when it sent one; only fall
+          // back to sniffing the text when the field is absent.
+          const isTerminalScreenText = isTerminalSourceChunk(meta) || looksLikeTerminalScreenText(text || chunk)
           const safeText = isTerminalScreenText ? '' : text
           const effectiveStatusText = statusText || (isTerminalScreenText ? 'Agent is working' : null)
           if (effectiveStatusText && !safeText) {
@@ -1460,7 +1477,7 @@ export const useChatStore = create<ChatState>()(
           }
 
           const nextStreamingText = { ...state.streamingText }
-          const nextText = currentText + safeText
+          const nextText = appendStreamingText(currentText, safeText, meta?.isDelta)
           if (nextText) {
             nextStreamingText[sessionId] = nextText
           } else {
