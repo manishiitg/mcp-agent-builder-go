@@ -8,7 +8,7 @@
 | Priority | P1 |
 | Owner | coding-agent transcript identity contract and certification |
 | Reported | 2026-08-15 |
-| Related | [PLAT-102](plat-102.md), [PLAT-103](plat-103.md), [PLAT-105](plat-105.md), [PLAT-106](plat-106.md) |
+| Related | [PLAT-102](plat-102.md), [PLAT-103](plat-103.md), [PLAT-105](plat-105.md), [PLAT-106](plat-106.md), [PLAT-116](plat-116.md) |
 
 ## Problem
 
