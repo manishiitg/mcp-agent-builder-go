@@ -6,12 +6,14 @@ import { Button } from './ui/Button'
 
 type MainAgentTerminalProps = {
   sessionId: string
+  runtimeLabel?: string
+  isAgentWorking?: boolean
 }
 
 // The product-facing raw view intentionally knows about one terminal only: the
 // main coding-agent pane for the active chat. It mounts (and starts polling)
 // only after the user switches away from Formatted view.
-export function MainAgentTerminal({ sessionId }: MainAgentTerminalProps) {
+export function MainAgentTerminal({ sessionId, runtimeLabel = '', isAgentWorking = false }: MainAgentTerminalProps) {
   const [snapshot, setSnapshot] = useState<TerminalSnapshot | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -52,8 +54,8 @@ export function MainAgentTerminal({ sessionId }: MainAgentTerminalProps) {
         <div className="flex min-w-0 items-center gap-2 text-sm text-neutral-300">
           <Terminal className="h-4 w-4 text-primary" />
           <span className="font-medium">Main terminal</span>
-          {snapshot?.active && <span className="h-2 w-2 rounded-full bg-lime-300" aria-label="Running" />}
-          {snapshot?.status?.provider_label && <span className="truncate text-xs text-neutral-500">{snapshot.status.provider_label}</span>}
+          {(snapshot?.active || isAgentWorking) && <span className="h-2 w-2 animate-pulse rounded-full bg-lime-300" aria-label="Working" />}
+          <span className="truncate text-xs text-neutral-500">{runtimeLabel || snapshot?.status?.provider_label || 'Waiting for main terminal'}</span>
         </div>
         <Button type="button" variant="ghost" size="sm" onClick={() => void refresh()} aria-label="Refresh main terminal" className="px-2 text-neutral-400 hover:text-white">
           <RefreshCw className={loading ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />

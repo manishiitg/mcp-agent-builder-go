@@ -865,6 +865,20 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
   // Cancel button. Display state needs a signal that stays true for the whole
   // turn; the composer keeps the volatile one.
   const activeTabBusy = activeTabStreaming || !!activeTab?.hasRunningBgAgents
+  const activeSessionRuntime = useChatStore(state =>
+    activeSessionId ? state.activeSessionsCache.find(session => session.session_id === activeSessionId)?.runtime : undefined,
+  )
+  const mainAgentRuntimeLabel = useMemo(() => {
+    const provider = activeSessionRuntime?.provider?.trim() || activeTab?.config?.llmConfig?.provider?.trim() || ''
+    const model = activeSessionRuntime?.model_id?.trim() || activeTab?.config?.llmConfig?.model_id?.trim() || ''
+    if (!provider) return ''
+    return model && model !== provider ? `${provider} · ${model}` : provider
+  }, [activeSessionRuntime?.model_id, activeSessionRuntime?.provider, activeTab?.config?.llmConfig?.model_id, activeTab?.config?.llmConfig?.provider])
+  const mainAgentStatusLabel = activeTabBusy
+    ? activeTabStreaming
+      ? (activeStreamingText ? 'Responding' : streamingStatus || 'Working')
+      : 'Background work running'
+    : 'Waiting for your message'
   // Resume give-up TIMER only. A resume that never produces a terminal/content may
   // eventually fall to 'landing'; resumeGaveUp flips true after RESUME_SETTLE_MS so
   // a genuinely-dead resume isn't stuck on a spinner forever. This is purely a
@@ -3303,8 +3317,8 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
                 in explicitly enabled runtime diagnostics. */}
             {visibleWorkflowSurface === 'active' && activeTab?.sessionId && (
               showMainTerminal
-                ? <MainAgentTerminal sessionId={activeTab.sessionId} />
-                : <TerminalEventTranscript events={displayEvents} terminal={null} streamingText={activeStreamingText} streamingStatus={streamingStatus} />
+                ? <MainAgentTerminal sessionId={activeTab.sessionId} runtimeLabel={mainAgentRuntimeLabel} isAgentWorking={activeTabBusy} />
+                : <TerminalEventTranscript events={displayEvents} terminal={null} streamingText={activeStreamingText} streamingStatus={streamingStatus} runtimeLabel={mainAgentRuntimeLabel} isAgentWorking={activeTabBusy} agentStatusLabel={mainAgentStatusLabel} />
             )}
 
             {/* landing — fresh automation chat. Prefer the previous-chats panel
@@ -3347,8 +3361,8 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
                 is available only through the explicit developer flag. */}
             {multiAgentSurface === 'active' && activeTab?.sessionId && (
               showMainTerminal
-                ? <MainAgentTerminal sessionId={activeTab.sessionId} />
-                : <TerminalEventTranscript events={displayEvents} terminal={null} streamingText={activeStreamingText} streamingStatus={streamingStatus} />
+                ? <MainAgentTerminal sessionId={activeTab.sessionId} runtimeLabel={mainAgentRuntimeLabel} isAgentWorking={activeTabBusy} />
+                : <TerminalEventTranscript events={displayEvents} terminal={null} streamingText={activeStreamingText} streamingStatus={streamingStatus} runtimeLabel={mainAgentRuntimeLabel} isAgentWorking={activeTabBusy} agentStatusLabel={mainAgentStatusLabel} />
             )}
           </>
         )}
