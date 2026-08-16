@@ -716,7 +716,7 @@ func fetchPiCLIModels(full bool) *dynamicModelsResponse {
 		Models:             models,
 		Groups:             dynamicModelGroups(models),
 		SupportsCustom:     true,
-		CustomModelHint:    "Enter any Pi model as provider/model, e.g. google/gemini-3.5-flash, zai/glm-5.2, or openrouter/minimax/minimax-m3-20260531",
+		CustomModelHint:    "Enter any Pi model as provider/model, e.g. google/gemini-3.5-flash, zai/glm-5.3, or openrouter/minimax/minimax-m3-20260531",
 		Source:             source,
 		CacheTTLSeconds:    300,
 		CachedAt:           time.Now().UTC().Format(time.RFC3339),
@@ -874,8 +874,8 @@ func dynamicModelGroups(models []dynamicModelEntry) []string {
 func piFallbackModels() []dynamicModelEntry {
 	additional := []dynamicModelEntry{
 		{
-			ModelID:       "zai-coding-cn/glm-5.2",
-			ModelName:     "GLM-5.2 (CN)",
+			ModelID:       "zai-coding-cn/glm-5.3",
+			ModelName:     "GLM-5.3 (CN)",
 			Group:         "Z.AI",
 			ContextWindow: 1000000,
 			CostInput:     1.4,
@@ -898,10 +898,10 @@ func piFallbackModels() []dynamicModelEntry {
 			CostOutput:    2.4,
 		},
 		{
-			ModelID:       "kimi-coding/k2p7",
-			ModelName:     "Kimi K2.7 Code",
+			ModelID:       "kimi-coding/k3",
+			ModelName:     "Kimi K3",
 			Group:         "Kimi",
-			ContextWindow: 262144,
+			ContextWindow: 1048576,
 		},
 		{
 			ModelID:       "deepseek/deepseek-v4-pro",
@@ -940,11 +940,6 @@ func piFallbackModels() []dynamicModelEntry {
 			Group:     "OpenRouter",
 		},
 		{
-			ModelID:   "openrouter/z-ai/glm-5.2-20260616",
-			ModelName: "GLM-5.2",
-			Group:     "OpenRouter",
-		},
-		{
 			ModelID:   "openrouter/anthropic/claude-4.8-opus-20260528",
 			ModelName: "Claude 4.8 Opus",
 			Group:     "OpenRouter",
@@ -965,8 +960,8 @@ func piFallbackModels() []dynamicModelEntry {
 			Group:     "OpenRouter",
 		},
 		{
-			ModelID:   "openrouter/moonshotai/kimi-k2.7-code-20260612",
-			ModelName: "Kimi K2.7 Code",
+			ModelID:   "openrouter/moonshotai/kimi-k3",
+			ModelName: "Kimi K3",
 			Group:     "OpenRouter",
 		},
 	}

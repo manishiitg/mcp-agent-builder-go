@@ -8,9 +8,9 @@ google         gemini-3.7-flash               1.0M     65.5K    yes       yes
 google         gemini-3.5-flash               1.0M     65.5K    yes       yes
 google         gemma-4-26b-a4b-it             262.1K   32.8K    yes       yes
 google-vertex  gemini-3.5-flash               1.0M     65.5K    yes       yes
-zai            glm-5.2                        1.0M     65.5K    yes       yes
+zai            glm-5.3                        1.0M     65.5K    yes       yes
 minimax        MiniMax-M3                     512K     131K     yes       yes
-kimi-coding    k2p7                           262.1K   32.8K    yes       yes
+kimi-coding    k3                             1.0M     131K     yes       yes
 `
 
 	models := parsePiCLIModelList(output)
@@ -35,14 +35,14 @@ kimi-coding    k2p7                           262.1K   32.8K    yes       yes
 	if models[3].Group != "Google Vertex" {
 		t.Fatalf("group = %q, want Google Vertex", models[3].Group)
 	}
-	if models[4].ModelID != "zai/glm-5.2" || models[4].Group != "Z.AI" {
-		t.Fatalf("zai model = %#v, want zai/glm-5.2 in Z.AI group", models[4])
+	if models[4].ModelID != "zai/glm-5.3" || models[4].Group != "Z.AI" {
+		t.Fatalf("zai model = %#v, want zai/glm-5.3 in Z.AI group", models[4])
 	}
 	if models[5].ModelID != "minimax/MiniMax-M3" || models[5].Group != "MiniMax" {
 		t.Fatalf("minimax model = %#v, want minimax/MiniMax-M3 in MiniMax group", models[5])
 	}
-	if models[6].ModelID != "kimi-coding/k2p7" || models[6].Group != "Kimi" {
-		t.Fatalf("kimi model = %#v, want kimi-coding/k2p7 in Kimi group", models[6])
+	if models[6].ModelID != "kimi-coding/k3" || models[6].Group != "Kimi" {
+		t.Fatalf("kimi model = %#v, want kimi-coding/k3 in Kimi group", models[6])
 	}
 }
 
