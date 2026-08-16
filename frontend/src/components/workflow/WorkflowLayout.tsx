@@ -17,7 +17,7 @@ import { sanitizeDisplayNameForFolder } from '../../utils/workflowUtils'
 import { logger } from '../../utils/logger'
 import { startRestoredTransportTerminal } from '../../utils/restoredTerminal'
 import { isExternalReadOnlyWorkflowSession, isInternalChildSession } from '../../utils/workflowSessionKinds'
-import { workflowRuntimeTabProjection } from './workflowRuntimeTabProjection'
+import { reconcileWorkflowRuntimeTab, workflowRuntimeTabProjection } from './workflowRuntimeTabProjection'
 import {
   PreviousChatHistoryPanel,
   chatHistoryConversationPath,
@@ -42,9 +42,8 @@ const ChatAreaWithObserverId = forwardRef<ChatAreaRef, {
   hideHeader?: boolean
   hideInput?: boolean
   compact?: boolean
-  suppressTerminalPane?: boolean
   workflowPreviousChatsPanel?: React.ReactNode
-}>(({ onNewChat, hideHeader, hideInput, compact, suppressTerminalPane, workflowPreviousChatsPanel }, ref) => {
+}>(({ onNewChat, hideHeader, hideInput, compact, workflowPreviousChatsPanel }, ref) => {
   // Prefer the active workflow tab when one is selected. The tab strip keeps
   // active workflow tabs visible even while preset metadata is catching up
   // after reload; ChatArea must use the same rule or the input area disappears.
@@ -96,7 +95,6 @@ const ChatAreaWithObserverId = forwardRef<ChatAreaRef, {
       hideHeader={hideHeader}
       hideInput={effectiveHideInput}
       compact={compact}
-      suppressTerminalPane={suppressTerminalPane}
       workflowPreviousChatsPanel={workflowPreviousChatsPanel}
       // Pass null (not undefined) when no tab matches the active workflow preset.
       // Otherwise ChatArea falls back to the global activeTabId and can briefly
@@ -113,7 +111,6 @@ import {
   type ExecutionOptions,
   type PollingEvent,
   type RunningWorkflowInfo,
-  type TerminalSnapshot,
 } from '../../services/api-types'
 import { getRawEventData } from '../../generated/event-types'
 import { findOrCreateWorkflowTab, isChatCompatiblePhase } from '../../utils/chatSubmitHelpers'
@@ -124,7 +121,6 @@ import { hydrateTabEvents } from '../../utils/sessionRestore'
 const EMPTY_WORKFLOW_EVENTS: PollingEvent[] = []
 const WORKFLOW_RESTORE_TIMEOUT_MS = 8000
 const WORKFLOW_KILL_AND_START_STOP_TIMEOUT_MS = 30_000
-const WORKFLOW_NEW_CHAT_TERMINAL_LOOKUP_TIMEOUT_MS = 1500
 const WORKFLOW_CHAT_CONTENT_EVENT_TYPES = new Set(['user_message', 'conversation_end', 'unified_completion'])
 // Window during which a freshly-opened read-only Schedule/Bot run tab is
 // protected from auto tab-switching (reconnect/reconcile). Mirrors App.tsx's
@@ -393,34 +389,10 @@ function isLiveWorkflowSessionForPreset(session: ActiveSessionInfo, presetId: st
   )
 }
 
-function isLiveWorkflowTerminalForPath(terminal: TerminalSnapshot, workspacePath?: string | null): boolean {
-  const targetWorkspace = normalizeWorkflowPath(workspacePath)
-  if (!targetWorkspace || normalizeWorkflowPath(terminal.workflow_path) !== targetWorkspace) return false
-
-  const state = (terminal.state || '').toLowerCase().trim()
-  // Any terminal whose backing tmux pane is still alive blocks a new chat
-  // — the CLI process inside the pane holds workspace-scoped registry
-  // leases (e.g. agy-cli's MCP config lease, claudecode CLAUDE.md
-  // restore registry, etc.) for the full idle-retention window after a
-  // turn completes. terminal.active flips to false on turn completion,
-  // and state moves to "idle"/"completed", but the tmux pane is kept
-  // for up to 20 minutes (AGY_CLI_INTERACTIVE_IDLE_TIMEOUT_SECONDS).
-  // A new chat in the same workdir during that window collides on the
-  // lease and fails with "does not support concurrent sessions". So we
-  // treat the presence of a non-empty tmux_session as the authoritative
-  // "this pane is alive" signal, unless the backend has already
-  // detected the pane is dead (state === "stale" or "failed").
-  if (typeof terminal.tmux_session === 'string' && terminal.tmux_session.trim() !== '') {
-    return state !== 'stale' && state !== 'failed'
-  }
-  return state === 'running'
-}
-
 function shouldBlockWorkflowNewChatForSession(
   session: ActiveSessionInfo,
   presetId: string,
   workspacePath?: string | null,
-  terminals?: TerminalSnapshot[],
 ): boolean {
   // The one-chat rule applies only to interactive builder chats. Schedules and
   // bot runs have their own read-only tabs and are allowed to keep running.
@@ -440,14 +412,9 @@ function shouldBlockWorkflowNewChatForSession(
     return true
   }
 
-  if (!terminals) {
-    return true
-  }
-
-  return terminals.some(terminal =>
-    terminal.session_id === session.session_id &&
-    isLiveWorkflowTerminalForPath(terminal, workspacePath)
-  )
+  // Completed/idle sessions remain internally retained for CLI reuse, but they
+  // are not product-visible work and must not trigger a terminal API lookup.
+  return status === 'running' || status === 'active' || status === 'in_progress'
 }
 
 function withWorkflowRestoreTimeout<T>(promise: Promise<T>, label: string, timeoutMs = WORKFLOW_RESTORE_TIMEOUT_MS): Promise<T> {
@@ -727,10 +694,10 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
     description: string
     isStopping: boolean
   }>({ isOpen: false, sessionIdsToStop: [], description: '', isStopping: false })
-  const revealWorkflowTerminal = useCallback((tabId: string) => {
+  const revealWorkflowChat = useCallback((tabId: string) => {
     const chatStore = useChatStore.getState()
     if (chatStore.chatTabs[tabId]) {
-      chatStore.setTabViewMode(tabId, 'terminal')
+      chatStore.setTabViewMode(tabId, 'formatted')
       chatStore.switchTab(tabId)
     }
     try {
@@ -762,12 +729,12 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
         presetId: detail.presetId ?? null,
         tabId: detail.tabId,
       }
-      revealWorkflowTerminal(detail.tabId)
+      revealWorkflowChat(detail.tabId)
     }
 
     window.addEventListener('workflow-readonly-run-restored', handleReadOnlyRestore)
     return () => window.removeEventListener('workflow-readonly-run-restored', handleReadOnlyRestore)
-  }, [revealWorkflowTerminal])
+  }, [revealWorkflowChat])
   // During workflow execution we do not synchronize the file tree event-by-event.
   // The Workspace component marks the view stale after completed workspace work.
 
@@ -1603,7 +1570,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
           (chatStoreForViewMode.activeTabId ? chatStoreForViewMode.chatTabs[chatStoreForViewMode.activeTabId]?.viewMode : undefined) ||
           chatStoreForViewMode.eventViewModePreference
         )
-        const shouldHydrateWorkflowEvents = activeWorkflowViewMode === 'tree'
+        const shouldHydrateWorkflowEvents = activeWorkflowViewMode === 'formatted'
 
         // Only restore sessions that don't have tabs yet
         const sessionsToActuallyRestore = newSessions
@@ -1840,18 +1807,20 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
           }
           if (projection.autoActivate) selectedRunningTabId ||= tabId
 
-          const currentTab = useChatStore.getState().chatTabs[tabId]
-          chatStore.setTabMetadata(tabId, {
-            ...currentTab?.metadata,
-            ...projection.metadata,
+          // Runtime discovery may refresh status for an observed run, but an
+          // explicit Schedule/Bot -> Chat promotion is user-owned state. Apply
+          // both name and metadata atomically so a polling tick cannot turn the
+          // interactive continuation back into a read-only Schedule tab.
+          useChatStore.setState(state => {
+            const tab = state.chatTabs[tabId]
+            if (!tab) return state
+            return {
+              chatTabs: {
+                ...state.chatTabs,
+                [tabId]: reconcileWorkflowRuntimeTab(tab, projection),
+              },
+            }
           })
-          if (currentTab && currentTab.name !== projection.name) {
-            useChatStore.setState(state => {
-              const tab = state.chatTabs[tabId]
-              if (!tab) return state
-              return { chatTabs: { ...state.chatTabs, [tabId]: { ...tab, name: projection.name } } }
-            })
-          }
           chatStore.setTabStreaming(tabId, true)
           chatStore.setTabCompleted(tabId, false)
           chatStore.setTabViewMode(tabId, activeViewMode)
@@ -1945,14 +1914,14 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
         const targetTab = restoredReadOnlyTab || streamingTab || builderTab || interactiveTabs[0] || newPresetTabs[0]
         console.log(`[WorkflowLayout] Switching to tab: ${targetTab.tabId.slice(0,8)} (${newPresetTabs.length} tabs for preset, restoredReadOnly=${!!restoredReadOnlyTab}, streaming=${!!streamingTab}, builder=${!!builderTab})`)
         if (restoredReadOnlyTab) {
-          revealWorkflowTerminal(restoredReadOnlyTab.tabId)
+          revealWorkflowChat(restoredReadOnlyTab.tabId)
         } else {
           chatStore.switchTab(targetTab.tabId)
           setShowChatArea(true)
         }
 
         const targetViewMode = normalizeEventViewMode(targetTab.viewMode || chatStore.eventViewModePreference)
-        const needsHydration = targetViewMode === 'tree' && interactiveTabs.some(tab =>
+        const needsHydration = targetViewMode === 'formatted' && interactiveTabs.some(tab =>
           tab.sessionId && chatStore.getTabEvents(tab.sessionId).length === 0
         )
         if (needsHydration) {
@@ -1976,7 +1945,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
       // Update the ref for non-preset-change re-fires (dep changes only)
       previousPresetIdRef.current = activePresetId
     }
-  }, [activePresetId, minimizeWorkflow, selectedRunFolder, setShowChatArea, setIsRestoringWorkflowSessions, rehydrateWorkflowTabs, createFreshWorkflowBuilderTab, workspacePath, revealWorkflowTerminal])
+  }, [activePresetId, minimizeWorkflow, selectedRunFolder, setShowChatArea, setIsRestoringWorkflowSessions, rehydrateWorkflowTabs, createFreshWorkflowBuilderTab, workspacePath, revealWorkflowChat])
 
   // Note: Query submission is now handled via chatAreaCallbackRef when ChatArea mounts
   // No need for useEffect with setTimeout - callback ref is the proper React pattern
@@ -2125,47 +2094,22 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
       setFocusedPane('chat')
       setShowChatArea(true)
 
-      const [sessionsResult, terminalsResult] = await Promise.allSettled([
+      const sessionsResult = await Promise.allSettled([
         useChatStore.getState().getActiveSessions(true),
-        Promise.race([
-          agentApi.listTerminals(undefined, 'none', { activeOnly: true }),
-          new Promise<undefined>(resolve => {
-            window.setTimeout(() => resolve(undefined), WORKFLOW_NEW_CHAT_TERMINAL_LOOKUP_TIMEOUT_MS)
-          }),
-        ]),
       ])
-      const terminalSnapshots = terminalsResult.status === 'fulfilled' && terminalsResult.value
-        ? (terminalsResult.value.terminals || [])
-        : undefined
 
       const blockingSessionIds: string[] = []
       let blockingSessionLabel = ''
-      if (sessionsResult.status === 'fulfilled') {
-        const runningSession = sessionsResult.value.find(session =>
-          shouldBlockWorkflowNewChatForSession(session, activePresetId, workspacePath, terminalSnapshots)
+      if (sessionsResult[0].status === 'fulfilled') {
+        const runningSession = sessionsResult[0].value.find(session =>
+          shouldBlockWorkflowNewChatForSession(session, activePresetId, workspacePath)
         )
         if (runningSession) {
           blockingSessionIds.push(runningSession.session_id)
           blockingSessionLabel = 'automation chat session'
         }
       } else {
-        logger.warn('WorkflowLayout', 'Failed to check active sessions before starting new workflow chat:', sessionsResult.reason)
-      }
-
-      if (terminalsResult.status === 'fulfilled' && terminalsResult.value) {
-        const runningTerminal = terminalsResult.value.terminals?.find(terminal =>
-          terminal.session_id !== activeSessionId &&
-          !isExternalReadOnlyWorkflowSession({ sessionId: terminal.session_id }) &&
-          isLiveWorkflowTerminalForPath(terminal, workspacePath)
-        )
-        if (runningTerminal && !blockingSessionIds.includes(runningTerminal.session_id)) {
-          blockingSessionIds.push(runningTerminal.session_id)
-          blockingSessionLabel = blockingSessionLabel
-            ? `${blockingSessionLabel} and terminal`
-            : 'terminal session'
-        }
-      } else if (terminalsResult.status === 'rejected') {
-        logger.warn('WorkflowLayout', 'Failed to check active terminals before starting new workflow chat:', terminalsResult.reason)
+        logger.warn('WorkflowLayout', 'Failed to check active sessions before starting new workflow chat:', sessionsResult[0].reason)
       }
 
       if (blockingSessionIds.length > 0) {
@@ -2329,7 +2273,6 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
                 onNewChat={onNewChat}
                 hideHeader
                 compact
-                suppressTerminalPane={showWorkflowPreviousChatsAsPrimary}
                 workflowPreviousChatsPanel={workspacePath ? (
                   <WorkflowPreviousChatsPanel
                     key={`${activePresetId || 'workflow'}:${workspacePath}`}

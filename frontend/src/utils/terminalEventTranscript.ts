@@ -528,7 +528,23 @@ export function selectTerminalEvents(
   terminal: TerminalSnapshot | null | undefined,
   siblingTerminals?: TerminalSnapshot[],
 ): PollingEvent[] {
-  if (!events || events.length === 0 || !terminal) return []
+  if (!events || events.length === 0) return []
+
+  // The normal Chat/Schedule product surface is a session transcript, not a
+  // terminal inspector. In that mode no terminal metadata is loaded at all:
+  // retain every user-relevant event and use the same ordering/filtering as a
+  // terminal transcript. TerminalCenter still passes a terminal and keeps the
+  // owner scoping below for developer diagnostics.
+  if (!terminal) {
+    return events
+      .filter(isTranscriptEvent)
+      .map((event, index) => ({ event, index }))
+      .sort((a, b) => {
+        const compared = compareTerminalEvents(a.event, b.event)
+        return compared !== 0 ? compared : a.index - b.index
+      })
+      .map(entry => entry.event)
+  }
   const sessionId = terminal.session_id?.trim()
   if (!sessionId) return []
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react'
+import React, { useEffect, useState, useMemo, useRef } from 'react'
 import {
   X,
   Loader2,
@@ -175,7 +175,7 @@ interface CombinedDailyCostSummaryEntry {
   pulseCost: number | null
   totalCost: number
   totalTokens: number
-  agentDurationMS: number
+  llmDurationMS: number
   runCount: number
 }
 
@@ -286,7 +286,6 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
   isOpen,
   onClose,
   workspacePath,
-  runFolders,
   selectedRunFolder,
   startedAt,
   embedded = false,
@@ -303,6 +302,9 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
   const [expandedCostModels, setExpandedCostModels] = useState<Set<string>>(new Set())
   const [costViewMode, setCostViewMode] = useState<Record<string, 'step' | 'model'>>({})
   const [expandedDailyDate, setExpandedDailyDate] = useState<string | null>(null)
+  const [costHistory, setCostHistory] = useState<{ hasMore: boolean; nextBefore?: string } | null>(null)
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  const loadGenerationRef = useRef(0)
   const activityBreakdown = useMemo(() => buildCostActivityBreakdown(scopedCosts, activityTiming), [scopedCosts, activityTiming])
   const hasScopedActivity = Object.keys(scopedCosts?.by_scope || {}).length > 0
 
@@ -704,9 +706,14 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
       setExpandedCostModels(new Set())
       setCostViewMode({})
       setExpandedDailyDate(null)
+      setCostHistory(null)
+      setLoadingOlder(false)
+    }
+    return () => {
+      loadGenerationRef.current += 1
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, embedded, workspacePath, runFolders])
+  }, [isOpen, embedded, workspacePath])
 
   // Auto-expand selected run folder when it changes
   useEffect(() => {
@@ -723,12 +730,37 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
   const loadAllCosts = async () => {
     if (!workspacePath) return
 
+    const generation = ++loadGenerationRef.current
     setLoading(true)
     setError(null)
     try {
+      const summaryResponse = await agentApi.getCosts(workspacePath, { view: 'summary', days: 30 })
+      if (generation !== loadGenerationRef.current) return
+      const summaryScopes = summaryResponse.scoped_costs?.by_scope || {}
+      const hasAuthoritativeCosts = ['builder', 'chat', 'pulse', 'workflow_execution', 'evaluation']
+        .some(scope => !!summaryScopes[scope])
+      if (hasAuthoritativeCosts) {
+        setScopedCosts(summaryResponse.scoped_costs ?? null)
+        setActivityTiming(summaryResponse.activity_timing ?? null)
+        setRunCosts([])
+        setPhaseCostSummary(null)
+        setPhaseDailyCostSummaries([])
+        setRunDailyCostSummaries([])
+        setCostHistory({
+          hasMore: summaryResponse.history?.has_more ?? false,
+          nextBefore: summaryResponse.history?.next_before,
+        })
+        setExpandedRunFolders(new Set())
+        return
+      }
+
+      // Compatibility fallback for old workspaces that predate the canonical
+      // event ledger. This deliberately remains off the normal first-paint path.
       const costsResponse = await agentApi.getCosts(workspacePath)
+      if (generation !== loadGenerationRef.current) return
       setScopedCosts(costsResponse.scoped_costs ?? null)
       setActivityTiming(costsResponse.activity_timing ?? null)
+      setCostHistory(null)
       const costEntriesByRunFolder = new Map<string, WorkflowRunCostsEntry>(
         (costsResponse.runs || []).map(entry => [entry.run_folder, entry])
       )
@@ -825,10 +857,41 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
         setExpandedRunFolders(new Set([selectedRunFolder]))
       }
     } catch (err) {
+      if (generation !== loadGenerationRef.current) return
       console.error('Failed to load costs:', err)
       setError('Failed to load cost data')
     } finally {
-      setLoading(false)
+      if (generation === loadGenerationRef.current) setLoading(false)
+    }
+  }
+
+  const loadOlderCosts = async () => {
+    if (!workspacePath || !costHistory?.hasMore || !costHistory.nextBefore || loadingOlder) return
+    setLoadingOlder(true)
+    try {
+      const response = await agentApi.getCosts(workspacePath, {
+        view: 'summary',
+        days: 30,
+        before: costHistory.nextBefore,
+      })
+      if (response.scoped_costs) {
+        setScopedCosts(current => current ? {
+          ...current,
+          by_date: {
+            ...current.by_date,
+            ...response.scoped_costs!.by_date,
+          },
+        } : response.scoped_costs!)
+      }
+      setCostHistory({
+        hasMore: response.history?.has_more ?? false,
+        nextBefore: response.history?.next_before,
+      })
+    } catch (err) {
+      console.error('Failed to load older cost data:', err)
+      setError('Failed to load older cost data')
+    } finally {
+      setLoadingOlder(false)
     }
   }
 
@@ -969,7 +1032,7 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
             evaluationCost: 0,
             totalCost: 0,
             totalTokens: 0,
-            agentDurationMS: 0,
+            llmDurationMS: 0,
             runCount: 0,
             runKeys: new Set<string>(),
           }
@@ -995,8 +1058,8 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
       })
       Object.entries(activityTiming?.by_date || {}).forEach(([date, timing]) => {
         const entry = ensureLegacyEntry(date)
-        entry.agentDurationMS = Object.values(timing.by_scope || {}).reduce(
-          (sum, scopeTiming) => sum + (scopeTiming.duration_ms || 0),
+        entry.llmDurationMS = Object.values(timing.by_scope || {}).reduce(
+          (sum, scopeTiming) => sum + (scopeTiming.llm_duration_ms || 0),
           0,
         )
       })
@@ -1009,8 +1072,6 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
       .map(([date, total]): CombinedDailyCostSummaryEntry => {
         const byScope = total.by_scope || {}
         const costFor = (scope: string) => byScope[scope]?.total_cost_usd || 0
-        const timingScopes = activityTiming?.by_date?.[date]?.by_scope || {}
-        const agentDurationMS = Object.values(timingScopes).reduce((sum, timing) => sum + (timing.duration_ms || 0), 0)
         return {
           date,
           builderCost: costFor('builder') + costFor('chat'),
@@ -1019,7 +1080,7 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
           evaluationCost: costFor('evaluation'),
           totalCost: total.total_cost_usd || 0,
           totalTokens: (total.prompt_tokens || 0) + (total.completion_tokens || 0),
-          agentDurationMS,
+          llmDurationMS: total.llm_generation_duration_ms || 0,
           runCount: total.workflow_run_count || 0,
         }
       })
@@ -1148,7 +1209,7 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
                           <div className="text-right">
                             <div className="font-mono font-semibold text-foreground">{formatUSD(category.total.total_cost_usd)}</div>
                             <div className="text-xs text-muted-foreground">{formatTokens(tokenTotal)} tokens</div>
-                            <div className="text-xs text-muted-foreground">Agent time: {formatDuration(category.timing.duration_ms)}</div>
+                            <div className="text-xs text-muted-foreground">LLM time: {formatDuration(category.total.llm_generation_duration_ms)}</div>
                           </div>
                       </div>
                       )
@@ -1182,7 +1243,7 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
                           <th className="text-right font-medium pb-2">Pulse</th>
                           <th className="text-right font-medium pb-2">Workflow</th>
                           <th className="text-right font-medium pb-2">Evaluation</th>
-                          <th className="text-right font-medium pb-2">Agent time</th>
+                          <th className="text-right font-medium pb-2">LLM time</th>
                           <th className="text-right font-medium pb-2">Tokens</th>
                           <th className="text-right font-medium pb-2">Total</th>
                         </tr>
@@ -1213,7 +1274,7 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
                                 <td className="py-2 text-right font-mono text-muted-foreground">{entry.pulseCost === null ? '—' : formatUSD(entry.pulseCost)}</td>
                                 <td className="py-2 text-right font-mono text-muted-foreground">{formatUSD(entry.workflowCost)}</td>
                                 <td className="py-2 text-right font-mono text-muted-foreground">{formatUSD(entry.evaluationCost)}</td>
-                                <td className="py-2 text-right font-mono text-muted-foreground">{formatDuration(entry.agentDurationMS)}</td>
+                                <td className="py-2 text-right font-mono text-muted-foreground">{formatDuration(entry.llmDurationMS)}</td>
                                 <td className="py-2 text-right font-mono text-muted-foreground">{formatTokens(entry.totalTokens)}</td>
                                 <td className="py-2 text-right font-bold text-green-600 dark:text-green-400">{formatUSD(entry.totalCost)}</td>
                               </tr>
@@ -1235,7 +1296,7 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
                                                   <div className="text-right text-[10px] text-muted-foreground">
                                                     <div className="font-mono text-foreground">{formatUSD(category.total.total_cost_usd)}</div>
                                                     <div>{formatTokens(tokenTotal)} tokens</div>
-                                                    <div>Agent time: {formatDuration(category.timing.duration_ms)}</div>
+                                                    <div>LLM time: {formatDuration(category.total.llm_generation_duration_ms)}</div>
                                                 </div>
                                               </div>
                                               {category.executions.length === 0 ? (
@@ -1246,7 +1307,7 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
                                                     <div key={execution.id} className="flex items-center gap-2 border-b border-border/70 py-2 text-[10px] last:border-0" title={execution.id}>
                                                       <span className="min-w-0 flex-1 truncate text-foreground">{execution.label}</span>
                                                       <span className="shrink-0 font-mono text-muted-foreground">{formatTokens(execution.cost.prompt_tokens + execution.cost.completion_tokens)}</span>
-                                                      <span className="shrink-0 font-mono text-muted-foreground">Agent time: {formatDuration(execution.timing.duration_ms)}</span>
+                                                      <span className="shrink-0 font-mono text-muted-foreground">LLM time: {formatDuration(execution.cost.llm_generation_duration_ms)}</span>
                                                       <span className="shrink-0 font-mono text-foreground">{formatUSD(execution.cost.total_cost_usd)}</span>
                                                     </div>
                                                   ))}
@@ -1266,6 +1327,19 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
                       </tbody>
                     </table>
                   </div>
+                  {costHistory?.hasMore && (
+                    <div className="mt-4 flex justify-center">
+                      <button
+                        type="button"
+                        onClick={loadOlderCosts}
+                        disabled={loadingOlder}
+                        className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {loadingOlder && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                        {loadingOlder ? 'Loading older days…' : 'Load older days'}
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
 

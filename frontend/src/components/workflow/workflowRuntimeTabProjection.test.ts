@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { RunningWorkflowInfo } from '../../services/api-types'
 import type { ChatTab } from '../../stores/useChatStore'
-import { shouldDisplayWorkflowTab, workflowRuntimeTabProjection } from './workflowRuntimeTabProjection'
+import { convertObservedWorkflowTabToInteractive } from './workflowChatTabConversion'
+import {
+  reconcileWorkflowRuntimeTab,
+  shouldDisplayWorkflowTab,
+  workflowRuntimeTabProjection,
+} from './workflowRuntimeTabProjection'
 
 function runtime(overrides: Partial<RunningWorkflowInfo>): RunningWorkflowInfo {
   return {
@@ -49,6 +54,79 @@ describe('workflowRuntimeTabProjection', () => {
       session_id: 'bot-slack-123',
       triggered_by: 'bot-slack',
     }), 'workflow-social')).toBeNull()
+  })
+
+  it('does not turn a converted Schedule back into a read-only tab on later reconciliation ticks', () => {
+    const observed = {
+      tabId: 'schedule-tab',
+      name: 'Schedule',
+      sessionId: 'schedule-manual--daily_123',
+      isStreaming: true,
+      isCompleted: false,
+      hasRunningBgAgents: false,
+      isSyntheticTurn: false,
+      canSteer: true,
+      hideToolCalls: false,
+      viewMode: 'tree',
+      config: {} as ChatTab['config'],
+      createdAt: 1,
+      lastAccessedAt: 1,
+      lastViewedEventCount: 0,
+      lastViewedEventCounts: { micro: 0 },
+      metadata: {
+        mode: 'workflow' as const,
+        presetQueryId: 'workflow-social',
+        isViewOnly: true,
+        isScheduledRun: true,
+        scheduledJobName: 'Daily execution',
+      },
+    } satisfies ChatTab
+    const projection = workflowRuntimeTabProjection(runtime({
+      session_id: observed.sessionId,
+      triggered_by: 'cron',
+      title: 'Daily execution',
+    }), 'workflow-social')
+
+    expect(projection).not.toBeNull()
+    const converted = convertObservedWorkflowTabToInteractive(observed)
+    const firstTick = reconcileWorkflowRuntimeTab(converted, projection!)
+    const secondTick = reconcileWorkflowRuntimeTab(firstTick, projection!)
+
+    expect(secondTick.tabId).toBe(observed.tabId)
+    expect(secondTick.sessionId).toBe(observed.sessionId)
+    expect(secondTick.name).toBe('Automation Builder')
+    expect(secondTick.metadata).toMatchObject({
+      phaseId: 'workflow-builder',
+      phaseName: 'Automation Builder',
+      isViewOnly: false,
+      isScheduledRun: false,
+      userInteractiveContinuation: true,
+    })
+    expect(secondTick.metadata?.scheduledJobName).toBeUndefined()
+  })
+
+  it('continues refreshing ordinary Schedule tabs from runtime state', () => {
+    const tab = {
+      tabId: 'schedule-tab',
+      name: 'Old name',
+      sessionId: 'schedule-manual--daily_123',
+      metadata: { mode: 'workflow' as const, presetQueryId: 'old-preset' },
+    } as ChatTab
+    const projection = workflowRuntimeTabProjection(runtime({
+      session_id: 'schedule-manual--daily_123',
+      triggered_by: 'cron',
+      title: 'Daily execution',
+    }), 'workflow-social')!
+
+    const reconciled = reconcileWorkflowRuntimeTab(tab, projection)
+
+    expect(reconciled.name).toBe('Schedule')
+    expect(reconciled.metadata).toMatchObject({
+      presetQueryId: 'workflow-social',
+      isViewOnly: true,
+      isScheduledRun: true,
+      scheduledJobName: 'Daily execution',
+    })
   })
 })
 

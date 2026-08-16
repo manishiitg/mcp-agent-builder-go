@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { PollingEvent } from '../services/api-types'
-import { eventBelongsToSession, retainEventInSessionWorkingSet } from './sessionEventWorkingSet'
+import {
+  eventBelongsToSession,
+  retainEventInSessionWorkingSet,
+  sessionOwnsGlobalChatIndicators,
+} from './sessionEventWorkingSet'
 
 const sessionId = 'session-1'
 
@@ -81,5 +85,43 @@ describe('session ownership boundary', () => {
     const foreign = ownedEvent('unified_completion', scheduleSession)
     expect(foreign.terminal_id).toBeUndefined()
     expect(retainEventInSessionWorkingSet(sessionId, foreign)).toBe(false)
+  })
+})
+
+// The app-wide isStreaming/isCompleted/hasActiveChat fields are globals, but
+// event responses are processed for every polled session. Without an ownership
+// check a background session overwrote the foreground indicator each poll and
+// the composer alternated between "working" and idle.
+describe('global chat indicator ownership', () => {
+  const foreground = 'chat-visible'
+  const background = 'schedule-cron--background'
+
+  it('lets the session the user is viewing drive the global indicators', () => {
+    expect(sessionOwnsGlobalChatIndicators(foreground, foreground)).toBe(true)
+  })
+
+  it('refuses a background session that is not on screen', () => {
+    expect(sessionOwnsGlobalChatIndicators(background, foreground)).toBe(false)
+  })
+
+  it('refuses a response with no owning session while one is selected', () => {
+    // Ambiguous ownership must not win over a known foreground conversation.
+    expect(sessionOwnsGlobalChatIndicators(undefined, foreground)).toBe(false)
+    expect(sessionOwnsGlobalChatIndicators('   ', foreground)).toBe(false)
+  })
+
+  it('allows any response when no session is selected', () => {
+    // Nothing is on screen to protect, and this preserves first-load behaviour
+    // before a tab has bound its session.
+    expect(sessionOwnsGlobalChatIndicators(background, undefined)).toBe(true)
+    expect(sessionOwnsGlobalChatIndicators(undefined, undefined)).toBe(true)
+  })
+
+  it('does not flip ownership as concurrent sessions interleave', () => {
+    // The reported symptom: alternating polls from two sessions. Only the
+    // foreground one may ever write, regardless of arrival order.
+    const arrivals = [background, foreground, background, background, foreground]
+    const winners = arrivals.filter(id => sessionOwnsGlobalChatIndicators(id, foreground))
+    expect(winners).toEqual([foreground, foreground])
   })
 })

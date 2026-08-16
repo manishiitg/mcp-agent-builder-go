@@ -5,11 +5,12 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `open` — Finalize snapshot landed; comparative UI and durable stage timing remain |
-| Last synchronized | `2026-08-15` |
+| Ticket state | `open` — daily Pulse scope cost exists, but no durable current per-Pulse-run/per-stage cost record exists |
+| Last synchronized | `2026-08-16` |
 
-- **Priority:** P2 — no incorrect behavior; the platform simply cannot report
-  what its own self-improvement loop costs relative to the work it improves.
+- **Priority:** P1 — Pulse can incur substantial reviewer/fixer spend while the
+  product still cannot attribute that spend to a specific Pulse pass and show
+  it beside the result of that pass.
 - **Owner:** Pulse measurement surface (`pulse_agent_metrics` read path,
   `pkg/costledger`, Pulse popup)
 - **Requested by:** the operator, 2026-08-11 — *"we should measure pulse time,
@@ -21,15 +22,39 @@
 
 ## Why this is open rather than merely unbuilt
 
-Three of the four pieces already exist and are wired end to end. The reason
-nothing is visible is a single missing writer, plus one absent dimension:
+The accounting events exist, but the per-Pulse-run measurement does not. This
+distinction matters: fixing the missing surface must read the authoritative
+ledger rather than introduce a second cost counter.
 
 | Piece | State |
 |---|---|
-| Per-call cost with scope (`pulse` / `workflow_execution` / `builder` / `evaluation` / `chat`) | **Exists and correct** — `cost_events` in `workspace-docs/_system/costs.sqlite`, accurate as of PLAT-088 |
-| `pulse_agent_metrics` table, `LoadPulseAgentMetrics`, `/api/workflow/pulse-agent-metrics`, `PulseWorkspace.tsx` panel | **Exists, reads an empty table** |
-| The writer that filled that table (`RecordPulseAgentMetric`) | **Has zero callers** since `aad50dfb0` (2026-08-08) |
+| Per-call cost with scope (`pulse` / `workflow_execution` / `builder` / `evaluation` / `chat`) | **Exists and is populated** — `cost_events` in `workspace-docs/_system/costs.sqlite`, accurate as of PLAT-088 |
+| Cost Analysis daily Pulse column | **Exists** — reads `Summary.ByDate[date].ByScope["pulse"]`, including background agents, but it is only a date/workflow aggregate |
+| `pulse_agent_metrics` table, `LoadPulseAgentMetrics`, `/api/workflow/pulse-agent-metrics`, `PulseWorkspace.tsx` panel | **Structurally exists but is stale/incomplete** — several workflows retain historical rows, while current runs have no production writer |
+| The writer intended to fill that table (`RecordPulseAgentMetric`) | **Has zero production callers** since `aad50dfb0` (2026-08-08) |
 | Pulse/workflow stage durations | **Logged only** — never persisted anywhere queryable |
+
+## 2026-08-16 live verification — what “Pulse cost is not captured” means
+
+The central ledger currently contains 494 `scope=pulse` events totalling
+$1,947.8569. Recent workflow examples include Upwork (85 events, $590.9842),
+Build in Public (118 events, $326.1655), Social Media (95 events, $290.5045),
+and Tectonicus USA Day Trading (86 events, $280.1095). This proves that the
+LLM calls themselves, including background reviewers/fixers when attributed
+correctly, are not disappearing from accounting.
+
+What is still missing is the useful product record:
+
+- no durable row says which exact `pulse_run_id` incurred which total;
+- Gate, Review+Fix, Finalize, reviewer, and fixer amounts/durations cannot be
+  reconstructed as one stable per-pass hierarchy in the UI;
+- the Finalizer receives a backend-measured Review+Fix window as prompt text,
+  but that snapshot is not persisted as a typed per-run cost metric;
+- historical `pulse_agent_metrics` rows do not solve the gap because the
+  current architecture no longer calls their writer.
+
+Therefore a daily Pulse number in Cost Analysis and a per-Pulse-run cost are
+not equivalent. The former exists; the latter remains the open defect.
 
 ## Why the writer has no callers — and why simply restoring it is wrong
 
@@ -59,14 +84,16 @@ no per-stage execution identity.
 
 ## Design
 
-**1. Read from the ledger, not the dead table.** Repoint
-`LoadPulseAgentMetrics` (or add a sibling) at `cost_events`, aggregating by
-`workflow_id` + `scope` + time window rather than by a per-module
-`execution_id` that no longer exists. This makes the existing endpoint and the
-existing `PulseWorkspace.tsx` panel work again with no frontend change, and it
-answers the actual question — Pulse spend versus workflow spend — which the
-old table never could, since it only ever held Pulse rows and had nothing to
-compare them against.
+**1. Derive a typed Pulse-pass summary from the ledger.** At Pulse start and
+each stage boundary, persist the stable `pulse_run_id`, stage name, and exact
+UTC window. Aggregate `cost_events` for that workflow, `scope=pulse`, and
+window, retaining the background execution breakdown. Persist or expose that
+derived summary idempotently by `pulse_run_id`; do not ask an agent to copy a
+dollar amount out of prompt text.
+
+`LoadPulseAgentMetrics` can be replaced or repointed to this read model. It
+must not treat the old execution-keyed rows as current merely because some
+historical rows remain in workflow databases.
 
 **2. Persist stage durations.** The scheduler already knows each Pulse stage's
 start and end (it logs `step "gate" done`, `step "review-fix" done`,
@@ -74,9 +101,10 @@ start and end (it logs `step "gate" done`, `step "review-fix" done`,
 time is queryable, not just greppable. Workflow-side timing already exists in
 `run_metadata.json` and per-step `*-timing.json`.
 
-**3. Report the comparison per run and as a trend.** Pulse time and cost
-against workflow time and cost, plus goal progress from eval scores — which is
-PLAT-069's ask, now on a foundation that can support it.
+**3. Report the comparison per run and as a trend.** Show one Pulse pass with
+Gate, Review+Fix, background reviewers/fixer, and Finalize; then compare its
+time and cost with the workflow run it reviewed and the verified outcomes it
+produced. This is PLAT-069's ask on a foundation that can support it.
 
 ## Deliberately not in scope
 
@@ -92,7 +120,12 @@ PLAT-069's ask, now on a foundation that can support it.
 
 - The Pulse popup shows, for a given run: Pulse cost and duration beside
   workflow cost and duration, rather than an empty panel.
+- The per-run Pulse total includes the main Pulse turns and every background
+  reviewer/fixer cost exactly once, with an expandable stage/execution
+  breakdown.
 - The figures reconcile with `cost_events` for the same run and window.
+- A Finalize interruption cannot erase the already-measured Pulse cost, and a
+  Finalize retry cannot double-count it.
 - Any trend view states the date from which its data is trustworthy instead of
   charting across the PLAT-088 attribution change as if it were a real trend.
 
@@ -113,5 +146,8 @@ backend query. A pass that skips Review+Fix reports `$0.00`; a stage that ran
 without matching ledger events reports a measurement gap rather than a false
 zero. Regression coverage proves the time-window and scope isolation.
 
-This does not close PLAT-090. The Pulse popup comparison and durable Gate /
-Review+Fix / Finalize wall-clock timing remain to be implemented.
+This does not close PLAT-090. The Review+Fix value is supplied only as
+Finalizer context for one notification; it is not the durable typed
+per-`pulse_run_id` record required by the Cost Analysis/Pulse UI. The per-pass
+comparison and durable Gate / Review+Fix / Finalize timing remain to be
+implemented.

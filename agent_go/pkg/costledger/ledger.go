@@ -219,6 +219,7 @@ type sqliteStore interface {
 	append(Entry) error
 	summarize(from, to, executionID, workflowID string) (*Summary, error)
 	summarizeWindow(fromInclusive, toExclusive, executionID, workflowID, scope string) (*Summary, error)
+	summarizeWorkflowOverview(from, to, workflowID string) (*Summary, bool, error)
 	migrateLegacyJSONL(path string) (MigrationReport, error)
 	close() error
 }
@@ -385,6 +386,44 @@ func (l *Ledger) SummarizeWorkflow(workflowID string) (*Summary, error) {
 		return l.db.summarize("", "", "", workflowID)
 	}
 	return l.summarizeLegacy("", "", "", workflowID)
+}
+
+// SummarizeWorkflowOverview returns exact all-time headline totals together
+// with a bounded daily/detail window. The SQLite path aggregates the all-time
+// totals in SQL and decodes only rows inside the requested window, so UI first
+// paint does not grow with retained history. hasMore reports whether an older
+// event exists before the requested from date.
+func (l *Ledger) SummarizeWorkflowOverview(workflowID, from, to string) (*Summary, bool, error) {
+	if l == nil {
+		return nil, false, fmt.Errorf("costledger: nil ledger")
+	}
+	workflowID = strings.TrimSpace(workflowID)
+	if workflowID == "" {
+		return nil, false, fmt.Errorf("costledger: workflow id is required")
+	}
+	if l.db != nil {
+		return l.db.summarizeWorkflowOverview(from, to, workflowID)
+	}
+
+	recent, err := l.summarizeLegacy(from, to, "", workflowID)
+	if err != nil {
+		return nil, false, err
+	}
+	allTime, err := l.summarizeLegacy("", "", "", workflowID)
+	if err != nil {
+		return nil, false, err
+	}
+	compactWorkflowOverview(recent, allTime)
+	hasMore := false
+	if strings.TrimSpace(from) != "" {
+		for date := range allTime.ByDate {
+			if date < from {
+				hasMore = true
+				break
+			}
+		}
+	}
+	return recent, hasMore, nil
 }
 
 // SummarizeWorkflowScopeWindow returns cost events for one workflow and scope
@@ -580,6 +619,21 @@ func addEntryToSummary(summary *Summary, date string, e Entry) {
 		summary.ByModel[modelID] = mb
 	}
 	mb.add(e)
+}
+
+func compactWorkflowOverview(recent, allTime *Summary) {
+	if recent == nil || allTime == nil {
+		return
+	}
+	recent.Total = allTime.Total
+	recent.Coverage = allTime.Coverage
+	recent.ByScope = make(map[string]*ScopeAggregate, len(allTime.ByScope))
+	for scope, aggregate := range allTime.ByScope {
+		if aggregate == nil {
+			continue
+		}
+		recent.ByScope[scope] = &ScopeAggregate{Aggregate: aggregate.Aggregate}
+	}
 }
 
 // SortedDates returns the date keys from a summary in ascending order.
