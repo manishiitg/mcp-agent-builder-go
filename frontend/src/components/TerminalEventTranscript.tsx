@@ -1,6 +1,6 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
-import { CheckCircle2, ChevronDown, ChevronRight, CircleDashed, LoaderCircle, XCircle } from 'lucide-react'
+import { CheckCircle2, ChevronDown, ChevronRight, CircleDashed, XCircle } from 'lucide-react'
 import { EventDispatcher } from './events/EventDispatcher'
 import { ConversationMarkdownRenderer } from './ui/MarkdownRenderer'
 import {
@@ -356,10 +356,6 @@ interface TerminalEventTranscriptProps {
    * individual protocol events, but belongs in the readable live transcript. */
   streamingText?: string
   streamingStatus?: string
-  /** Stable identity/status of the main chat agent. */
-  runtimeLabel?: string
-  isAgentWorking?: boolean
-  agentStatusLabel?: string
 }
 
 const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
@@ -375,9 +371,6 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
   onRetry,
   streamingText = '',
   streamingStatus = '',
-  runtimeLabel = '',
-  isAgentWorking = false,
-  agentStatusLabel = '',
 }) => {
   const scrollerRef = useRef<HTMLElement | Window | null>(null)
   const virtuosoRef = useRef<VirtuosoHandle | null>(null)
@@ -537,17 +530,6 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
       className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[#0d100f]"
       onWheelCapture={handleWheelCapture}
     >
-      {runtimeLabel && (
-        <div className="flex shrink-0 items-center gap-2 border-b border-neutral-800/80 bg-[#0b0e0d] px-5 py-2 text-[11px] text-neutral-500">
-          {isAgentWorking
-            ? <LoaderCircle className="h-3.5 w-3.5 animate-spin text-cyan-400" aria-label="Working" />
-            : <CircleDashed className="h-3.5 w-3.5 text-neutral-600" aria-label="Waiting" />}
-          <span className="font-mono text-neutral-400">{runtimeLabel}</span>
-          <span className={isAgentWorking ? 'text-cyan-300' : 'text-neutral-500'}>
-            {agentStatusLabel || (isAgentWorking ? 'Working' : 'Ready')}
-          </span>
-        </div>
-      )}
       {showEarlierMessagesControl && (
         <div className={`flex shrink-0 items-center border-b px-3 py-1.5 text-[11px] ${
           error

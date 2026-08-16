@@ -874,11 +874,6 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     if (!provider) return ''
     return model && model !== provider ? `${provider} · ${model}` : provider
   }, [activeSessionRuntime?.model_id, activeSessionRuntime?.provider, activeTab?.config?.llmConfig?.model_id, activeTab?.config?.llmConfig?.provider])
-  const mainAgentStatusLabel = activeTabBusy
-    ? activeTabStreaming
-      ? (activeStreamingText ? 'Responding' : streamingStatus || 'Working')
-      : 'Background work running'
-    : 'Waiting for your message'
   // Resume give-up TIMER only. A resume that never produces a terminal/content may
   // eventually fall to 'landing'; resumeGaveUp flips true after RESUME_SETTLE_MS so
   // a genuinely-dead resume isn't stuck on a spinner forever. This is purely a
@@ -3318,7 +3313,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
             {visibleWorkflowSurface === 'active' && activeTab?.sessionId && (
               showMainTerminal
                 ? <MainAgentTerminal sessionId={activeTab.sessionId} runtimeLabel={mainAgentRuntimeLabel} isAgentWorking={activeTabBusy} />
-                : <TerminalEventTranscript events={displayEvents} terminal={null} streamingText={activeStreamingText} streamingStatus={streamingStatus} runtimeLabel={mainAgentRuntimeLabel} isAgentWorking={activeTabBusy} agentStatusLabel={mainAgentStatusLabel} />
+                : <TerminalEventTranscript events={displayEvents} terminal={null} streamingText={activeStreamingText} streamingStatus={streamingStatus} />
             )}
 
             {/* landing — fresh automation chat. Prefer the previous-chats panel
@@ -3362,7 +3357,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
             {multiAgentSurface === 'active' && activeTab?.sessionId && (
               showMainTerminal
                 ? <MainAgentTerminal sessionId={activeTab.sessionId} runtimeLabel={mainAgentRuntimeLabel} isAgentWorking={activeTabBusy} />
-                : <TerminalEventTranscript events={displayEvents} terminal={null} streamingText={activeStreamingText} streamingStatus={streamingStatus} runtimeLabel={mainAgentRuntimeLabel} isAgentWorking={activeTabBusy} agentStatusLabel={mainAgentStatusLabel} />
+                : <TerminalEventTranscript events={displayEvents} terminal={null} streamingText={activeStreamingText} streamingStatus={streamingStatus} />
             )}
           </>
         )}

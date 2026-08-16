@@ -1330,6 +1330,22 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     return (entry?.integration_kind === 'coding_agent' && !entry.deprecated) || FALLBACK_CODING_AGENT_PROVIDERS.has(provider)
   }, [primaryLLM?.provider, effectiveProviderForSteer, providerManifest])
 
+  // Keep the active main agent's identity and state beside the composer
+  // controls. This is deliberately independent from terminal rendering: the
+  // formatted conversation remains the default, but users can still tell which
+  // model is selected and whether it is actively handling a turn.
+  const mainAgentRuntimeLabel = useMemo(() => {
+    const provider = activeSession?.runtime?.provider?.trim() || primaryLLM?.provider?.trim() || ''
+    const model = activeSession?.runtime?.model_id?.trim() || primaryLLM?.model?.trim() || ''
+    if (!provider) return ''
+    return model && model !== provider ? `${provider} · ${model}` : provider
+  }, [activeSession?.runtime?.model_id, activeSession?.runtime?.provider, primaryLLM?.model, primaryLLM?.provider])
+  const mainAgentActivityLabel = isStreaming
+    ? 'Working'
+    : activeTab?.hasRunningBgAgents
+      ? 'Background work'
+      : 'Waiting'
+
   // Preset folder selection
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileUploadInputRef = useRef<HTMLInputElement>(null)
@@ -4044,6 +4060,31 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                     </div>
                   ) : (
                     <div data-tour="chat-send-controls" data-testid="tour-chat-send-controls" className="flex items-center gap-1">
+                      {mainAgentRuntimeLabel && (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <div
+                              className={`flex h-8 max-w-[220px] items-center gap-1.5 rounded-md border px-2 text-[11px] transition-colors ${
+                                isTurnInFlight
+                                  ? 'border-cyan-500/35 bg-cyan-500/10 text-cyan-200'
+                                  : 'border-border bg-muted/20 text-muted-foreground'
+                              }`}
+                              aria-label={`${mainAgentRuntimeLabel}: ${mainAgentActivityLabel}`}
+                            >
+                              {isTurnInFlight ? (
+                                <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-cyan-400" aria-hidden="true" />
+                              ) : (
+                                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-neutral-500" aria-hidden="true" />
+                              )}
+                              <span className="truncate font-mono">{mainAgentRuntimeLabel}</span>
+                              <span className="shrink-0 text-[10px] opacity-75">{mainAgentActivityLabel}</span>
+                            </div>
+                          </TooltipTrigger>
+                          <TooltipContent side="top">
+                            <p>{mainAgentRuntimeLabel} — {mainAgentActivityLabel.toLowerCase()}</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      )}
                       {mainTerminalAvailable && activeTabId && (
                         <Tooltip>
                           <TooltipTrigger asChild>
