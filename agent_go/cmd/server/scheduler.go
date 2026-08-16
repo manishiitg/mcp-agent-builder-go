@@ -2734,6 +2734,16 @@ func postRunMonitorUsesLightweightFinalize(reviewEvidenceAvailable, pulseOnly bo
 // postRunMonitorNoRunSteps's precedent — there is no fresh review this pass
 // to publish, and the periodic pass is what owns publish once it reviews the
 // accumulated backlog.
+//
+// A fourth, ongoing responsibility rides along here rather than living only
+// in the one-time migration turn: the review schedule's cadence is a
+// judgment call about actual run volume, and actual run volume can drift
+// after the cadence was first chosen. Re-checking it on every lightweight
+// pass — cheaply, since the evidence (this workflow's own schedules and
+// recent run history) is already right there — means a workflow that starts
+// running much more (or less) often does not silently outgrow a stale
+// review interval; the one-time setup decision keeps being re-earned instead
+// of just being trusted forever.
 func postRunMonitorLightweightFinalizeStep(pulseRunID string, instructions ...workflowNotificationContentInstructions) []postRunMonitorStep {
 	ownerInstructions := workflowNotificationContentInstructions{}
 	if len(instructions) > 0 {
@@ -2765,7 +2775,13 @@ func postRunMonitorLightweightFinalizeStep(pulseRunID string, instructions ...wo
 			"mark the whole publish command skipped with that reason. Record one truthful terminal result for publish either way; "+
 			"(3) call notify_user exactly once with notification_kind=\"run_summary\" describing plainly and factually what this run "+
 			"itself did (actions taken, errors, outcome) — do not include a Pulse findings/fixes section, since none ran this pass — "+
-			"then record notify truthfully.%s%s",
+			"then record notify truthfully; "+
+			"(4) reconsider the review schedule's cadence. Read this workflow's own enabled run schedules, recent get_schedule_runs "+
+			"history, and the current pulse_review_only schedule's cron_expression. If actual run volume has drifted enough that the "+
+			"interval no longer makes sense — producing materially more runs between reviews than run_retention_count preserves, or "+
+			"reviewing so often that passes routinely find nothing new — call update_schedule on the review schedule with a better "+
+			"cron_expression. This is genuinely optional: most passes change nothing, and that is the expected outcome, not a missed "+
+			"step. Record the outcome either way (adjusted, or left unchanged with why) with record_pulse_result.%s%s",
 		pulseRunID, routing, content,
 	)}}
 }
