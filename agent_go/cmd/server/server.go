@@ -1689,6 +1689,16 @@ func runServer(cmd *cobra.Command, args []string) {
 		stoppedSessions:                        make(map[string]bool),
 		interruptedTurns:                       make(map[string]bool),
 	}
+	// Chief-of-Staff-only tool factories close over api itself (their handlers
+	// are *StreamingAPI methods), so they register once api exists rather than
+	// alongside the profile-only registration above. The manual isChiefOfStaffChat
+	// registration block later in this file still exists and still serves the
+	// legacy no-profile Chief of Staff chat unchanged; these factories become
+	// reachable once a chief-of-staff product.yaml profile declares them in
+	// profile.tools[], which is registered separately once that profile exists.
+	if err := api.registerChiefOfStaffToolFactories(profileRegistry); err != nil {
+		log.Fatalf("Failed to register Chief of Staff tool factories: %v", err)
+	}
 	// Terminal Center's Formatted view and the runtime coordinator now consume
 	// the same accepted structured events. The terminal observer updates the
 	// durable pane snapshot first; retained-turn reconciliation then uses that
