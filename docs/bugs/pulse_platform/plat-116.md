@@ -238,6 +238,48 @@ success:
      restarts. Every step is idempotent, so nothing breaks if the originally
      stuck goroutine ever does unblock and runs its own cleanup afterward.
 
+## Formalized as a required P0 contract, not left as two one-off adapters
+
+Raised directly: two adapters happening to have `DiagnoseTurnCompletion`
+because I wrote them proves nothing about the *next* adapter, or about Pi
+CLI staying without one indefinitely. `multi-llm-provider-go` already has a
+mature capability-flag → required-certification framework
+(`coding_agent_contract.go` + `coding_agent_certification.go`) — exactly the
+mechanism PLAT-108's own unfinished "Layer 3 — certify it" plan called for
+generally. Extended it rather than inventing something new:
+
+- **`CodingAgentProviderContract.SupportsStalledTurnDiagnosis`** — a new
+  capability flag, `true` only for `ProviderClaudeCode` and `ProviderCodexCLI`
+  today (Pi CLI and Cursor's rationale for staying `false` is documented
+  inline, same as the "not Codex-specific" section above).
+- **`CertStalledTurnDiagnosis`** — a new certification ID, added to the
+  `codingAgentCapabilityCertifications` gating table (so
+  `TestAllCodingAgentCapabilityClaimsHaveRegisteredCertification` enforces
+  every provider claiming the flag has a registered proof) and promoted to
+  P0 wherever claimed, in both `CodingAgentCertificationPriorityForID` and
+  `RequiredP0CodingAgentCertificationIDs` — the identical pattern already
+  used for `CertStructuredStreaming`. A false "made no progress" timeout on
+  a turn that actually succeeded is release-blocking, not a nice-to-have.
+- **Real live E2E certs, not synthetic fixtures** —
+  `codexcli_stalled_turn_diagnosis_live_test.go` and
+  `claudecode_stalled_turn_diagnosis_live_test.go`: each runs one genuine
+  CLI turn to completion (real tmux, real API), then calls
+  `DiagnoseTurnCompletion` with **no turn in flight** and proves it
+  independently rediscovers that exact turn's real completion text and
+  timing. This is a materially different proof than the deterministic
+  fixture tests already covering the parsing logic — it certifies the
+  function against a genuine provider transcript, not a hand-written one.
+  **Actually run live** (`-coding-cli-p0-live`) against real `codex` and
+  `claude` CLIs on this machine, both passed (10.3s and 8.3s), both tmux
+  sessions confirmed cleanly torn down afterward — not just written and
+  assumed, per this codebase's own standing rule that this class of bug has
+  repeatedly passed unit suites while broken.
+- Every existing contract/certification drift test reverified passing
+  after the change, including the strictest one
+  (`TestActiveCodingAgentProvidersSatisfyP0Contract`, which independently
+  checks `Priority == P0`, `RealE2E == true`, and the exact live-gate `Env`
+  for every ID `RequiredP0CodingAgentCertificationIDs` returns).
+
 ## Deliberately still deferred, not fixed here
 
 The deeper question — why the bridge (`textChan`/`Session.Run`) stalls in
