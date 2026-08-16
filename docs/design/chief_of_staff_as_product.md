@@ -1,8 +1,12 @@
 # Chief of Staff as a standalone product
 
-Status: **requirements draft** — architecture prerequisites investigated and
-largely settled; UI scope intentionally still open, captured below as
-questions rather than decisions.
+Status: **shipped (MVP scope), as of 2026-08-16.** This document was
+originally written as a pre-implementation requirements draft; several of its
+"Decided" calls changed shape once actual implementation started (most
+notably the UI scope and the LLM-selection model — see the corrections
+inline below each affected section, and "What actually shipped" at the
+bottom). Treat sections marked **as-shipped** as the current source of truth
+over the original plan prose above them.
 
 ## Why
 
@@ -62,27 +66,47 @@ already grants today, not a new permission model.
   (`delegation_tools.go:697,717,728`) and `org-goals.md`/parts of
   `org-html.md` become dead prompt content to prune, not functionality to
   preserve.
-- **Single pinned LLM, like Video Studio — no more High/Medium/Low tiers.**
-  Chief of Staff drops its whole tier-routing concept and pins one model via
-  `profile.runtime.provider`/`model_id`, the same field Video Studio already
-  uses. This has real reach, more than it first looks like:
-  - `DelegationTierConfigModal.tsx` (already on the "delete entirely" list
-    above) is now doubly confirmed — not just relocated out of AgentWorks,
-    genuinely unnecessary, since there's no tier concept left to configure.
-  - The `ChiefOfStaffLLM` field and `ResolveProviderProfileChiefOfStaffConfig`
-    cascade (`pkg/workflowtypes/types.go`) become dead code specific to
-    Chief of Staff — remove alongside the tier UI, not leave unused.
-  - `llmConfigSourceScheduledChiefOfStaff` (`server.go:1201-1209`) — the
-    scheduled-run LLM-config source — now confirmed dead code, not just
-    "likely": the built-in Org Pulse job is being removed fully (see
-    "Scheduled tasks" above), so there's no scheduled Chief-of-Staff run left
-    that needs it at all.
-  - **Resolved: drop `reasoning_level` for now, keep it simple.**
-    `delegate(reasoning_level)` currently selects *which tier's model*
-    handles a sub-agent — with tiers gone and one pinned model, there's
-    nothing left for it to select. Not building a reasoning-effort-on-one-model
-    variant as part of this migration; can be added later if it turns out to
-    matter.
+- ~~**Single pinned LLM, like Video Studio — no more High/Medium/Low
+  tiers.**~~ **Superseded by what actually shipped, see below.** The
+  Chief-of-Staff-*specific* tier override was removed, but "single pinned
+  LLM like Video Studio" was NOT what got built — it went the opposite
+  direction, toward *more* flexibility, not less:
+  - **As-shipped:** `profile.runtime.provider`/`model_id` in
+    `chiefofstaffproduct/product.yaml` is a *starting default for a
+    brand-new chat only*, not an authoritative pin. Chief of Staff uses the
+    same full published-LLM-catalog picker every multi-agent chat already
+    has in `ChatInput.tsx` — because a resolved profile's pinned model used
+    to unconditionally override whatever the user picked in chat (right for
+    Video Studio's project-scoped profile, wrong for Chief of Staff's
+    global one), `resolveAgentProfileForQuery`
+    (`agent_profile_runtime.go`) now scope-gates this: still authoritative
+    for a project-scoped profile, only a default for a global-scoped one
+    when the request already carries an explicit selection. See
+    `TestResolveAgentProfileForQueryGlobalScopeDefersToRequestedModel` and
+    its sibling tests. `provider_options` (the mechanism that would curate
+    and pin a small fixed list, as Video Studio uses it) is deliberately
+    NOT declared for this profile — the opposite of what Chief of Staff
+    wants.
+  - `DelegationTierConfigModal.tsx` was **kept**, not deleted — it turned
+    out to be shared infrastructure, not Chief-of-Staff-exclusive: the same
+    `virtualtools.DelegationTierConfig` / `workflowtypes.PresetLLMConfig`
+    data model also backs Pulse and Goal-Advisor (Maintenance) LLM routing
+    for workflows. Its only *UI trigger* happened to live in
+    Chief-of-Staff-only chrome (`ChatTabs.tsx`), which made it look
+    CoS-scoped, but the modal itself isn't. Only the `chief_of_staff`
+    slot/field was removed from the tier config; Main/High/Medium/Low/custom
+    tiers and the modal stayed intact.
+  - The `ChiefOfStaffLLM` field and
+    `ResolveProviderProfileChiefOfStaffConfig` cascade
+    (`pkg/workflowtypes/types.go`) — removed, confirmed dead once the
+    CoS-specific tier slot was gone.
+  - `llmConfigSourceScheduledChiefOfStaff` (`server.go`) — confirmed dead
+    and removed: the built-in Org Pulse job (the only scheduled
+    Chief-of-Staff run that needed it) was removed fully alongside goals
+    (see "Scheduled tasks" below). Scheduled Chief of Staff runs now resolve
+    their model the same way interactive chats do.
+  - `reasoning_level` on `delegate(...)` was left alone — moot once tiers
+    weren't collapsed to one pinned model.
 - **`multi-agent` mode is untouched.** This is not a new mode. It is the
   shared execution substrate every product already runs on — Chief of Staff,
   the workflow-builder chat, and Video Studio all execute through
@@ -95,24 +119,59 @@ already grants today, not a new permission model.
   to Chief of Staff specifically; a fossil proves its age —
   `normalizeAgentMode` still maps the legacy value `"simple"` →
   `"multi-agent"` at the request boundary.
-- **A genuinely new UI, like Video Studio's.** Not a thin wrapper around the
-  existing `ChatArea`. Video Studio's surface
-  (`frontend/src/products/video-studio/VideoStudioSurface.tsx`, ~1,100 lines)
-  has real structure worth using as the template:
-  - A **home screen** listing projects as cards (`ProjectCard`,
-    `CreateProjectDialog`) — the landing view before you're inside any one
-    project.
-  - A **project workspace** (`ProjectWorkspace`) combining a persistent chat
-    (`VideoStudioConversation`) with a **production panel**
-    (`ProductionPanel`) of collapsible sections (`VideosSection`,
-    `CharactersSection`, `DocumentsSection`), plus `FilesPanel` and
-    `WorkflowPanel`.
-  - Custom presentation rendering for domain content inline in chat
-    (`MediaVideoPresentation`).
+- ~~**A genuinely new UI, like Video Studio's**~~, with a bespoke home
+  screen, custom domain-object panels, and inline presentation rendering —
+  **this did not happen.** What actually shipped
+  (`frontend/src/products/chief-of-staff/ChiefOfStaffSurface.tsx`) is much
+  closer to a thin wrapper than the original plan intended, and
+  deliberately so once the MVP framing ("Core purpose" above) was taken
+  literally:
+  - **No home screen, no project list.** There's exactly one singleton
+    Chief-of-Staff conversation, not a list to choose from — the surface
+    finds-or-creates that one tab and adopts a legacy no-profile tab in
+    place if one already exists, rather than presenting a Video-Studio-style
+    landing screen.
+  - **Chat left, a tabbed utility aside right** — `ChatArea` directly
+    (`fullTurnStreaming`, `showConversationUsage`) in a
+    `grid-cols-[minmax(0,2fr)_minmax(0,3fr)]` layout (chat gets 40%), with an
+    `<aside>` holding Tasks (always on), and Schedules / Secrets / Files
+    panels shown when the profile's `ui_panels.{schedules,secrets,files}`
+    say so. This mirrors Video Studio's own chat-left/panel-right shape at
+    the layout level, but the panels themselves are **reused generic
+    components**, not bespoke Chief-of-Staff domain UI:
+    - Tasks → `ChiefTasksPanel` (`components/org/OrgHtmlPanels.tsx`), the
+      same HTML-report iframe viewer that predates this product split.
+    - Schedules → `MultiAgentSchedulesPopup`, given a new `embedded` prop so
+      it renders inline instead of only as a modal — the same
+      list/CRUD/enable-disable-trigger-delete component AgentWorks already
+      had.
+    - Files → `Workspace` (unscoped — no `scopedWorkspacePath`, since Chief
+      of Staff has no single project), the same file browser AgentWorks'
+      own multi-agent files view already used.
+    - Secrets → `SecretSelectionDropdown` + `SecretsManagerModal`, the same
+      controls Video Studio's header already offers.
+  - **No custom domain objects got built.** None of "Domain concepts a
+    custom UI could be built around" below (a live delegation roster, a
+    structured goals view, a bespoke automations-oversight dashboard, a
+    scheduled-work timeline) shipped — see "Deferred" at the bottom.
+  - Every one of these panels is gated by a genuinely wire-exposed
+    `agentprofiles.Profile.UIPanels` field (`Secrets`/`Schedules`/`Files`
+    bools, serialized via `GET /api/agent-profiles/{id}` under
+    `profile.ui_panels:`), *not* each product's older per-product-local
+    `ui:` block (`files_panel`/`workflow_panel`/`secrets`/`streaming` in
+    `product_config.go`) — that block was discovered to be **vestigial**:
+    parsed for manifest-identity validation only, never read by any
+    endpoint or frontend consumer. It's why `chiefofstaffproduct/
+    product.yaml`'s own `ui.files_panel: false` looks stale next to a real
+    Files panel that ships and works — that field is dead, `ui_panels.files:
+    true` is what actually drives it.
 
-  Chief of Staff's equivalent structure is not yet decided (see Open
-  questions) but should follow this same shape: a home view plus a workspace
-  view, not just a chat.
+  This is a real, acknowledged scope reduction from the original plan, not
+  an oversight: chat access across every workflow was the stated MVP (see
+  "Core purpose"), and reusing already-correct, already-tested generic
+  components got that shipped with far less risk than designing bespoke
+  domain UI up front. The bespoke-UI ambition isn't abandoned, just deferred
+  — see "Deferred" at the bottom.
 
 ## Backend architecture (investigated, holds regardless of UI scope)
 
@@ -145,7 +204,7 @@ was verified against the live code:
   corrected from an earlier draft, which recommended leaving them manually
   registered in `server.go` since `newProductToolGate` gates them correctly
   regardless of registration path. True but beside the point: the actual
-  requirement (see "Old Chief-of-Staff code must be removed") is getting
+  requirement (see "Old Chief-of-Staff code in AgentWorks") is getting
   CoS-specific code out of `server.go`, not just correct gating. Checked and
   confirmed feasible: `ToolRuntimeContext` (`agentprofiles/types.go:216-225`)
   already carries `UserID`/`SessionID` — everything
@@ -171,6 +230,28 @@ was verified against the live code:
   `product.yaml` prompt template — it depends on runtime parameters the
   static-template model can't express. Manifest's `prompt.file` is a short
   placeholder satisfying validation only.
+- **As-shipped, two more real mechanisms not in the original plan:**
+  - `profile.commands:` — Chief of Staff's own slash commands (`/notify`,
+    `/org-backup`) moved out of the old `chiefOfStaffOnly`-gated entries in
+    `frontend/src/commands/builtin-commands.tsx` into
+    `chiefofstaffproduct/product.yaml`'s `commands:` section, each with its
+    own prompt file under `commands/`, resolved by the existing
+    `agentprofiles.ResolveCommandPrompts` — the same mechanism Video Studio
+    already used, just newly reused here rather than invented.
+    `/workflow-builder` was **not** migrated — deleted outright, since this
+    profile is read-only over `Workflow/` (no `create_workflow` tool bound).
+    This also made the old `chiefOfStaffOnly` command-filtering flag in
+    `frontend/src/commands/types.ts`/`registry.ts` fully dead code, removed:
+    `setProductCommands`'s existing per-surface scoping (only one product
+    surface is ever mounted at a time) already did the job once
+    Chief-of-Staff's own commands moved into that same dynamic mechanism.
+  - `agentprofiles.Profile.UIPanels` (`Secrets`/`Schedules`/`Files` bools,
+    `json:"ui_panels"`) — a new, genuinely wire-exposed field (serialized
+    via `GET /api/agent-profiles/{id}`) letting a product declare which
+    optional panels its surface should offer, read by the frontend instead
+    of hardcoded. See "A genuinely new UI" above for why this exists
+    alongside (and is distinct from) each product's older, vestigial
+    per-product `ui:` block.
 
 Full technical detail (exact file:line changes, the widened condition at every
 call site, test plan) lives in the implementation plan at
@@ -188,48 +269,76 @@ returning `[]WorkflowSchedule`, entirely separate from `agentprofiles`/
 nothing in the product system today lets a product *declare* a built-in
 schedule; it's Chief-of-Staff-specific special-casing.
 
-**Decided: add this as a real product.yaml capability**, not keep it as a
-one-off. A `schedules:` section (mirroring how `workflows:` already declares
-fixed pipelines) — cron, name, description, default-enabled, and a
-prompt/message-sequence — with generic registration replacing the hardcoded
-function, the same way `videoproduct.BuiltinAgentProfiles()` is a generic
-registration point today. This makes scheduling available to any future
-product, not just Chief of Staff.
+~~**Decided: add this as a real product.yaml capability**~~ — **not built.**
+`DefaultBuiltinSchedules()` (`agent_go/cmd/server/builtin_schedules.go`)
+stays a hardcoded Go function, unchanged in shape from before this
+migration; it now simply returns `[]WorkflowSchedule{}` since Org Pulse (the
+only builtin it ever returned) was removed. A generic `schedules:`
+product.yaml section, mirroring `workflows:`, was never built — there was no
+second product needing it yet to justify the generalization, and Chief of
+Staff itself ships with zero built-in schedules, so the immediate need
+disappeared along with Org Pulse. `chiefofstaffproduct/product.yaml` has a
+comment recording this explicitly as a real, deliberately-not-yet-built gap,
+distinct from the (separately shipped) `ui_panels.schedules` panel, which
+just lists whatever a user has actually scheduled — it doesn't require a
+product to declare any schedule of its own. Revisit if a second product ever
+wants a built-in schedule.
 
-**Resolved: remove the built-in Org Pulse job fully**, not rewrite or defer
-it. `builtinOrgPulseQuery`/`builtinOrgPulseMessages`
-(`agent_go/cmd/server/builtin_schedules.go`) is goal-alignment-centric end to
-end — every step reads/writes `pulse/goals.html`, compares workflows against
-org goals. With goals dropped, there's nothing left to salvage by rewriting
-it; it goes away entirely, consistent with the goals decision above. The
-`schedules:` product.yaml capability itself stays as a real, generally
-useful addition — this just means Chief of Staff ships with zero declared
-schedules initially, not that the capability was pointless to build.
+**Resolved and shipped: remove the built-in Org Pulse job fully**, not
+rewrite or defer it. `builtinOrgPulseQuery`/`builtinOrgPulseMessages`
+(`agent_go/cmd/server/builtin_schedules.go`) was goal-alignment-centric end
+to end — every step read/wrote `pulse/goals.html`, compared workflows
+against org goals. With goals dropped, there was nothing left to salvage by
+rewriting it; it was removed entirely, consistent with the goals decision
+above — `DefaultBuiltinSchedules()` now just returns an empty slice (see the
+correction directly above: the `schedules:` product.yaml capability itself
+was *not* built, so this isn't "ships with zero declared schedules for now"
+so much as "the declaring mechanism doesn't exist yet at all").
 
-## Not a reassembly of existing AgentWorks UI
+## Not a reassembly of existing AgentWorks UI — reversed by what shipped
 
-Rejected direction: relocating the existing scattered `Org*` components
-(`OrgDashboard`, `OrgHtmlPanels`/`OrgGoalsPanel`/`OrgPulsePanel`/
-`ChiefTasksPanel`, `OrgPulseControl`, `OrgBackupPublishControls`,
-`WorkflowNotificationPopup`, `MultiAgentSchedulesPopup`,
-`DelegationTierConfigModal`) into a new host component. That's still
-AgentWorks UI, just re-parented — not a custom product.
+The rejected direction, as originally planned: relocating the existing
+scattered `Org*` components (`OrgDashboard`, `OrgHtmlPanels`/
+`OrgGoalsPanel`/`OrgPulsePanel`/`ChiefTasksPanel`, `OrgPulseControl`,
+`OrgBackupPublishControls`, `WorkflowNotificationPopup`,
+`MultiAgentSchedulesPopup`, `DelegationTierConfigModal`) into a new host
+component — still AgentWorks UI, just re-parented, not a custom product.
 
-The actual requirement: Chief of Staff moves toward the same model Video
-Studio established — a `product.yaml`-defined product with a genuinely
-custom UI, purpose-built around its own domain concepts, the way Video
-Studio's UI is built around *projects → videos/characters/documents* rather
-than reusing some generic AgentWorks file browser.
+**What actually shipped is much closer to that rejected direction than the
+plan intended** (see "A genuinely new UI" above): `ChiefTasksPanel`,
+`MultiAgentSchedulesPopup`, and the unscoped `Workspace` file browser are
+literally reused as Chief of Staff's Tasks/Schedules/Files panels, not
+reimplemented. This wasn't a change of heart on custom domain UI being
+better — it's that the recurring investigation pattern below made "relocate
+into a new host" and "reuse in place, unmodified" converge into nearly the
+same outcome once it turned out most of these components were never
+Chief-of-Staff-exclusive to begin with.
 
-**What can still be reused** is the data/API layer underneath those
-components (`agentApi.getBuilderDoc`, `schedulerApi.*`, the `pulse/*.html`
-read paths) — that's plumbing, not UI. The presentation layer is what needs
-to be designed fresh, grounded in what Chief of Staff actually does (per its
-own system prompt: track org goals, oversee automations, delegate to
-sub-agents, notify proactively, run on schedules) rather than in what
-AgentWorks' generic chat/org chrome happens to already render.
+**Recurring pattern found during implementation — verify before deleting
+"old Chief of Staff UI":** the original removal task list (below) was
+written early, before deep investigation, and repeatedly assumed things were
+Chief-of-Staff/goals/Org-Pulse-exclusive when they weren't:
+`chief-task-report`/`ChiefTasksPanel`, `DelegationTierConfigModal.tsx`, and
+`OrgDashboard.tsx`/`MultiAgentSchedulesPopup.tsx` all turned out to be
+general-purpose infrastructure still needed elsewhere in AgentWorks. In each
+case the component's only *UI trigger* happened to live in
+Chief-of-Staff-only chrome, which made it look CoS-scoped, but the
+underlying data/feature wasn't. See "Old Chief-of-Staff code must be
+removed" below for the corrected, as-shipped disposition of each item.
+
+The custom-domain-UI ambition (goals/automations-oversight/delegation
+roster as purpose-built views, not reused generic components) isn't
+abandoned — it's deferred, see the bottom of this document. **What can still
+be reused** is the data/API layer underneath those components
+(`agentApi.getBuilderDoc`, `schedulerApi.*`, the `pulse/*.html` read paths)
+if and when that custom UI gets built.
 
 ### Domain concepts a custom UI could be built around
+
+**None of these shipped.** The MVP UI reuses existing generic components
+instead (see "A genuinely new UI" above). This section is preserved as-is
+below as a starting point for the deferred custom-UI work, not as a record
+of what exists today.
 
 Video Studio's structure exists because video production has real, distinct
 objects (a project, its videos, its characters, its documents). Chief of
@@ -299,39 +408,79 @@ already made the same HTML-card → SQLite-backed-typed-state move. Goals is
 the one piece of org-level state that never got that migration — this
 finishes it rather than inventing a fifth approach.
 
-## Old Chief-of-Staff code must be removed from AgentWorks, not orphaned
+## Old Chief-of-Staff code in AgentWorks — as-shipped disposition
 
-Explicit requirement, not incidental cleanup: once Chief of Staff has its own
-product surface, the AgentWorks-side code that used to serve it gets
-**deleted**, not left present-but-unused. This splits into two buckets:
+The original plan (below, struck through per item) called for deleting most
+of this outright. **What actually happened was much narrower**, per the
+recurring pattern noted above: almost everything on the original "delete
+entirely" list turned out to be general-purpose AgentWorks infrastructure
+that Chief of Staff's *old* chrome merely triggered, not owned. Investigate
+before deleting anything here further — don't trust the "delete entirely"
+framing below at face value; it's kept as history, not as a live todo.
 
-**Chief-of-Staff-specific — delete entirely:**
-- `frontend/src/components/org/OrgDashboard.tsx`
-- `frontend/src/components/org/OrgHtmlPanels.tsx` (`OrgGoalsPanel`,
-  `OrgPulsePanel`, `ChiefTasksPanel`, the shared `OrgHtmlPanel` primitive —
-  all Chief-of-Staff-only)
-- `frontend/src/components/OrgPulseControl.tsx`
-- `frontend/src/components/org/OrgBackupPublishControls.tsx`
-- `frontend/src/components/scheduler/MultiAgentSchedulesPopup.tsx`
-- `frontend/src/components/DelegationTierConfigModal.tsx`
-- The "Organization" sidebar section inside `EmployeeDashboard.tsx`
-- The "Chief of Staff" and "Org" pills in `ModePresetBar.tsx`
-- The multi-agent right-panel split-view logic in `App.tsx` (`files`/
-  `org-goals`/`tasks`/`org-pulse` tab cycling beside the old chat lane)
-- The Chief-of-Staff-specific toolbar wiring in `ChatTabs.tsx` — it stops
-  being reached for Chief of Staff at all once the product branches before it
-  (`App.tsx:1243`'s `productSurface === 'video-studio'` split is the proven
-  shape: Chief of Staff gets the same kind of branch, bypassing `ChatTabs`/
-  `ModePresetBar` entirely, same as Video Studio does today)
+**Confirmed genuinely Chief-of-Staff-specific — removed:**
+- `frontend/src/components/OrgPulseControl.tsx` — deleted (org-pulse
+  feature dropped).
+- `OrgGoalsPanel` / `OrgPulsePanel` inside
+  `frontend/src/components/org/OrgHtmlPanels.tsx` — deleted (goals/pulse
+  dropped). The file itself, and its `ChiefTasksPanel` export plus the
+  shared `OrgHtmlPanel` primitive, were **not** deleted — see below.
+- The "Chief of Staff" mode pill and its Ctrl+2 shortcut in
+  `ModePresetBar.tsx`/`App.tsx` — deleted; this was the actual legacy
+  affordance for switching AgentWorks itself into multi-agent mode.
+- `ChiefOfStaffLLM`/tier-cascade backend code — see "Single pinned LLM"
+  correction above.
+- Org Goals / Org Pulse / org-publish end to end: backend routes, handlers,
+  reference docs, prompt text; frontend slash commands, panels,
+  `OrgPulseControl`, publish UI — all removed together as one pass.
 
-**Generic/shared — keep the component, remove only the Chief-of-Staff call
-site:**
+**Turned out to be shared/general-purpose — kept, not deleted:**
+- ~~`frontend/src/components/org/OrgDashboard.tsx`~~ **kept** — still used
+  by `EmployeeDashboard.tsx`'s "Organization" sidebar section in AgentWorks'
+  own Automations overview. Not goals/Org-Pulse-coupled; a working
+  cross-workflow health/cost dashboard in its own right.
+- ~~`ChiefTasksPanel` / the shared `OrgHtmlPanel` primitive~~ **kept, and
+  actively reused** — this is Chief of Staff's own new Tasks panel (see "A
+  genuinely new UI" above), not orphaned AgentWorks chrome. `App.tsx`'s
+  legacy `multiAgentRightPanelView` toggle (below) also still renders it for
+  old tabs.
+- ~~`frontend/src/components/org/OrgBackupPublishControls.tsx`~~ **kept** —
+  still used by `ChatTabs.tsx`'s legacy Chief-of-Staff toolbar (below).
+- ~~`frontend/src/components/scheduler/MultiAgentSchedulesPopup.tsx`~~
+  **kept, and actively reused** — general-purpose, not
+  goals/Org-Pulse-coupled; gained a new `embedded` prop (skips modal
+  chrome) so it can render inline in Chief of Staff's Schedules tab, while
+  `ChatTabs.tsx` keeps using it as a modal for legacy tabs. Its dangling
+  `/pulse-setup` reference for the now-stale `builtin-org-pulse` entry was
+  fixed in passing (now just an ordinary toggleable built-in schedule
+  entry, not special-cased).
+- ~~`frontend/src/components/DelegationTierConfigModal.tsx`~~ **kept** —
+  shared infra backing Pulse/Goal-Advisor LLM routing too; see "Single
+  pinned LLM" correction above.
+- ~~The "Organization" sidebar section inside `EmployeeDashboard.tsx`~~
+  **kept** — it's `OrgDashboard`'s only mount point, and `OrgDashboard`
+  itself is general-purpose (see above).
+- ~~The multi-agent right-panel split-view logic in `App.tsx`~~ **kept
+  deliberately, as backward-compat plumbing** — an already-open legacy
+  multi-agent tab (no `agentProfileId`, i.e. created before this product
+  split) still renders through `App.tsx`'s original
+  `multiAgentRightPanelView` files/tasks toggle. A *new* tab opened via the
+  product switcher takes the `productSurface === 'chief-of-staff'` branch
+  (`App.tsx`) instead, bypassing this entirely — the same
+  `productSurface === 'video-studio'` split the original plan called for,
+  it just coexists with the old path rather than replacing it outright.
+- ~~The Chief-of-Staff-specific toolbar wiring in `ChatTabs.tsx`~~ **kept
+  deliberately, same reason** — serves an already-open legacy multi-agent
+  tab; a new Chief-of-Staff tab never reaches `ChatTabs.tsx` at all.
+
+**Generic/shared, unaffected either way:**
 - `frontend/src/components/WorkflowNotificationPopup.tsx` — also used by
   `WorkflowToolbar.tsx` with `scopeKind="workflow"`; stays, loses its
-  `scopeKind="chief-of-staff"` usage
+  `scopeKind="chief-of-staff"` usage (moved to `OrgBackupPublishControls.tsx`
+  via the /notify command, see product.yaml `commands:`).
 - Backend Pulse/scheduler/notification machinery Chief of Staff uses but
   doesn't own (`scheduler.go`, `multiagent_notifications.go`,
-  `report_human_inputs.go`) — unaffected, still serves other callers
+  `report_human_inputs.go`) — unaffected, still serves other callers.
 
 ## Resolved questions (kept for history, not currently open)
 
@@ -342,25 +491,44 @@ site:**
 2. ~~Is chat primary or secondary?~~ **Resolved: primary.** "Mainly purpose
    of chief of staff can be a chat interface... like video studio, not
    agentworks" — `ChatArea`-direct, no right-panel split.
-3. ~~Which scattered org components get absorbed?~~ **Resolved: none.** Not
-   a reassembly of existing AgentWorks UI — see that section above. They get
-   removed, not relocated (see "Old Chief-of-Staff code must be removed").
+3. ~~Which scattered org components get absorbed?~~ **Resolved, then
+   reversed by implementation: several, reused in place rather than
+   removed.** The plan was "none — not a reassembly of existing AgentWorks
+   UI," but `ChiefTasksPanel`, `MultiAgentSchedulesPopup`, and the unscoped
+   `Workspace` file browser all ended up directly powering Chief of Staff's
+   Tasks/Schedules/Files panels. See "Not a reassembly... — reversed by what
+   shipped" and "Old Chief-of-Staff code... as-shipped disposition" above.
 4. ~~Multi-tab or single view?~~ **Resolved: single, like Video Studio.**
    `ChatTabs.tsx` is bypassed entirely for Chief of Staff, same
    `productSurface`-level branch shape as Video Studio
    (`App.tsx:1243`) — confirmed Video Studio never imports `ChatTabs`.
-5. ~~How does chat relate structurally to the dashboard?~~ **Resolved: the
-   dashboard is the home screen** — the same two-screen shape as Video
-   Studio (home → workspace), just with no "list" step in between, since
-   there's one singleton Chief-of-Staff chat to enter rather than a list of
-   projects to choose from. Doesn't contradict "chat is primary" above —
-   that was about build priority/core value, not which screen renders
-   first. Video Studio's own home (project list) isn't the product's core
-   value either; the workspace is. Same relationship here: dashboard is the
-   front door, chat is what's behind it.
+5. ~~How does chat relate structurally to the dashboard?~~ **Superseded —
+   there is no dashboard yet, and no separate screen at all.** The plan
+   called for the dashboard as a home screen in front of chat, two-screen
+   like Video Studio. What shipped instead: chat is the *only* screen — a
+   single view, chat on the left and a tabbed utility aside (Tasks/
+   Schedules/Secrets/Files) on the right, no home/workspace split, no
+   project-list step, nothing to enter before you're chatting. The
+   automations-oversight dashboard remains deferred (see bottom); if it
+   ships later, this question should be revisited then, not assumed
+   resolved by this answer.
 
 ## Deferred (deliberately, not forgotten — revisit later)
 
+- **A real automations-oversight dashboard as Chief of Staff's home
+  screen.** The single biggest deferred item from the original plan — see
+  "A genuinely new UI" and "Domain concepts a custom UI could be built
+  around" above. Chat is the MVP surface; this is a later enhancement on
+  top, not a blocker (per "Core purpose"). `OrgDashboard.tsx` is flagged as
+  a plausible starting point since it's already a working cross-workflow
+  health/cost dashboard, reused elsewhere in AgentWorks. The "Data-source
+  findings" above (automations-oversight data already exists via typed
+  Pulse state; goals would need new backend work) are still valid research,
+  not yet acted on.
+- **A `schedules:` product.yaml capability** for a product to declare its
+  own fixed built-in schedules — see "Scheduled tasks" correction above.
+  `DefaultBuiltinSchedules()` stays hardcoded; revisit if a second product
+  needs one.
 - **MCP servers via product.yaml.** No working precedent exists anywhere in
   the codebase (Video Studio's `dependencies.mcp_servers: []` is an unused
   placeholder; `resolveAgentProfileForQuery` never touches
@@ -371,11 +539,40 @@ site:**
   nothing writes anymore — see Data-source findings). Real, independent of
   this migration, but not blocking it. Revisit separately.
 
-## Status
+## What actually shipped (summary)
 
-All open design questions are resolved except the two intentionally
-deferred items above (MCP servers, the stale `OrgDashboard` bug). This
-requirements pass is complete — ready to move into a proper implementation
-plan (rewriting/superseding the frontend section of
-`~/.claude/plans/iridescent-snuggling-starfish.md`, whose backend section
-still holds).
+- Core scaffolding: `agentprofiles.Profile.Scope = global`,
+  `chiefofstaffproduct/` package, `ChiefOfStaffSurface.tsx`, widened
+  `isChiefOfStaffChat` covering both legacy no-profile and new
+  profile-resolved tabs, skills registered individually.
+- Org Goals / Org Pulse / org-publish removed entirely, backend and
+  frontend, as planned.
+- Chief-of-Staff-specific LLM tier override removed; scheduled CoS runs
+  resolve their model the same way interactive chats do. LLM *selection*
+  itself went to a full published-LLM-catalog picker with the profile's
+  pinned model as only a starting default — not the single-pin design
+  originally planned (see "Single pinned LLM" correction above).
+  `DelegationTierConfigModal.tsx` kept as shared infra.
+- `/notify`/`/org-backup` moved into `product.yaml`'s `commands:`;
+  `/workflow-builder` deleted outright, not migrated.
+- UI: chat-left/tabbed-utility-aside-right (Tasks always on; Schedules,
+  Secrets, Files gated by the new `agentprofiles.Profile.UIPanels`), built
+  by reusing `ChiefTasksPanel`, `MultiAgentSchedulesPopup` (new `embedded`
+  prop), and the unscoped `Workspace` file browser — not the bespoke
+  domain-object UI originally planned (see "A genuinely new UI" and "Not a
+  reassembly" corrections above).
+- Old-AgentWorks-side cleanup was much narrower than planned: most
+  components on the original "delete entirely" list turned out to be
+  general-purpose infrastructure and were kept — see "Old Chief-of-Staff
+  code — as-shipped disposition" above for the full corrected list.
+- Remaining, deliberately deferred: the automations-oversight dashboard
+  (this document's biggest open item), the `schedules:` product.yaml
+  capability, MCP servers via product.yaml, and the stale `OrgDashboard`
+  bug.
+
+This document is the current source of truth for the actual state of the
+Chief of Staff product split. The original implementation plan at
+`~/.claude/plans/iridescent-snuggling-starfish.md` is now historical —
+its backend section matches what shipped; its frontend section does not
+(superseded by "A genuinely new UI" above) and should not be used to plan
+further work without checking this document first.
