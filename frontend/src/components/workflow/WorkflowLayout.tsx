@@ -17,7 +17,7 @@ import { sanitizeDisplayNameForFolder } from '../../utils/workflowUtils'
 import { logger } from '../../utils/logger'
 import { startRestoredTransportTerminal } from '../../utils/restoredTerminal'
 import { isExternalReadOnlyWorkflowSession, isInternalChildSession } from '../../utils/workflowSessionKinds'
-import { workflowRuntimeTabProjection } from './workflowRuntimeTabProjection'
+import { reconcileWorkflowRuntimeTab, workflowRuntimeTabProjection } from './workflowRuntimeTabProjection'
 import {
   PreviousChatHistoryPanel,
   chatHistoryConversationPath,
@@ -1840,18 +1840,20 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
           }
           if (projection.autoActivate) selectedRunningTabId ||= tabId
 
-          const currentTab = useChatStore.getState().chatTabs[tabId]
-          chatStore.setTabMetadata(tabId, {
-            ...currentTab?.metadata,
-            ...projection.metadata,
+          // Runtime discovery may refresh status for an observed run, but an
+          // explicit Schedule/Bot -> Chat promotion is user-owned state. Apply
+          // both name and metadata atomically so a polling tick cannot turn the
+          // interactive continuation back into a read-only Schedule tab.
+          useChatStore.setState(state => {
+            const tab = state.chatTabs[tabId]
+            if (!tab) return state
+            return {
+              chatTabs: {
+                ...state.chatTabs,
+                [tabId]: reconcileWorkflowRuntimeTab(tab, projection),
+              },
+            }
           })
-          if (currentTab && currentTab.name !== projection.name) {
-            useChatStore.setState(state => {
-              const tab = state.chatTabs[tabId]
-              if (!tab) return state
-              return { chatTabs: { ...state.chatTabs, [tabId]: { ...tab, name: projection.name } } }
-            })
-          }
           chatStore.setTabStreaming(tabId, true)
           chatStore.setTabCompleted(tabId, false)
           chatStore.setTabViewMode(tabId, activeViewMode)

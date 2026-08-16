@@ -42,6 +42,38 @@ export function eventBelongsToSession(sessionId: string, event: PollingEvent): b
   return owner === sessionId.trim()
 }
 
+/**
+ * sessionOwnsGlobalChatIndicators decides whether a polled response may drive
+ * the APP-WIDE chat indicators (`isStreaming`, `isCompleted`, `hasActiveChat`).
+ *
+ * Those three are global store fields, distinct from the per-tab
+ * `ChatTab.isStreaming` / `.isCompleted`. They drive the composer for whatever
+ * the user is looking at right now.
+ *
+ * Event responses are processed for EVERY polled session, not just the visible
+ * one — background workflows keep streaming so their events are not lost while
+ * the user is elsewhere. When no tab matched a response, the handler fell back
+ * to writing these globals with no check of which session produced them, so a
+ * background session's status overwrote the foreground indicator. With several
+ * sessions polling concurrently the value flipped every cycle and the composer
+ * visibly alternated between "working" and idle.
+ *
+ * Same ownership class as eventBelongsToSession: state scoped to one session
+ * must not be written from another session's data. That one is about events;
+ * this is about UI status.
+ */
+export function sessionOwnsGlobalChatIndicators(
+  responseSessionId: string | null | undefined,
+  activeSessionId: string | null | undefined,
+): boolean {
+  const owner = responseSessionId?.trim()
+  const active = activeSessionId?.trim()
+  // With no session selected there is no foreground conversation to protect.
+  if (!active) return true
+  if (!owner) return false
+  return owner === active
+}
+
 // Low-volume lifecycle and workflow-control events remain session-scoped for
 // status, canvas, badges, and completion handling. Legacy events without a
 // canonical terminal identity fail open so an older retained run is never

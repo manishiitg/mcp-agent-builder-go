@@ -3,7 +3,7 @@ import { useRenderLogger, useMemoLogger } from '../utils/renderLogger'
 import { chatSubmissionLane } from '../utils/promiseLane'
 import { liveInputSubmissionCoordinator, shouldAppendOptimisticLiveInputMessage } from '../utils/liveInputSubmission'
 import { isInternalAutoNotificationEvent } from '../utils/internalChatEvents'
-import { eventBelongsToSession } from '../utils/sessionEventWorkingSet'
+import { eventBelongsToSession, sessionOwnsGlobalChatIndicators } from '../utils/sessionEventWorkingSet'
 import { useShallow } from 'zustand/react/shallow'
 import { agentApi, resetSessionId, getSessionId } from '../services/api'
 import type { PollingEvent, ExtendedLLMConfiguration, SSEEventMessage, SSEStatusMessage, ExecutionOptions } from '../services/api-types'
@@ -647,6 +647,14 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
   const tabEvents = useChatStore((state) =>
     activeSessionId ? state.tabEvents[activeSessionId] || EMPTY_EVENTS : EMPTY_EVENTS
   )
+
+  // processEventsResponse runs for every polled session and does not carry
+  // activeSessionId in its dependency array, so reading it through a ref keeps
+  // the foreground-ownership check current instead of closing over a stale one.
+  const activeSessionIdRef = useRef<string | undefined>(activeSessionId)
+  useEffect(() => {
+    activeSessionIdRef.current = activeSessionId
+  }, [activeSessionId])
 
   // Get active preset for workflow mode
   const activeWorkflowPreset = getActivePreset('workflow')
@@ -1403,7 +1411,14 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       chatStore.setTabHasRunningBgAgents(tab.tabId, hasBgAgents)
       setTabSyntheticTurn(tab.tabId, isSyntheticTurn)
       setTabCanSteer(tab.tabId, canSteer)
-    } else if (!tab && sessionStatus) {
+    } else if (
+      !tab &&
+      sessionStatus &&
+      sessionOwnsGlobalChatIndicators(actualSessionId, activeSessionIdRef.current)
+    ) {
+      // Only the session the user is actually viewing may drive the app-wide
+      // indicators below. They are globals, and responses arrive here for every
+      // polled session — see sessionOwnsGlobalChatIndicators.
       const hasBgAgents = response.has_running_background_agents ?? false
       const isSyntheticTurn = response.is_synthetic_turn ?? false
       const canSteer = response.can_steer ?? false
