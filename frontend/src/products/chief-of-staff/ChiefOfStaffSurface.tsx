@@ -166,7 +166,7 @@ export function ChiefOfStaffSurface() {
   return (
     <div className="flex h-screen min-h-0 flex-col overflow-hidden bg-slate-50 dark:bg-slate-950">
       <ChiefOfStaffHeader tabId={tabId} uiPanels={uiPanels} />
-      <div className="grid min-h-0 flex-1 lg:grid-cols-[minmax(440px,1fr)_420px]">
+      <div className="grid min-h-0 flex-1 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
         <main className="flex min-h-0 flex-col overflow-hidden bg-white dark:bg-slate-950">
           {tabId ? (
             <ChatArea
