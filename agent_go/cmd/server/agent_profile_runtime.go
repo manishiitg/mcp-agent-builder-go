@@ -156,20 +156,39 @@ func (api *StreamingAPI) resolveAgentProfileForQuery(ctx context.Context, req *Q
 	if req.AgentMode != "multi-agent" {
 		return nil, fmt.Errorf("agent profiles currently require agent_mode=multi-agent")
 	}
-	workspacePath, err := cleanAgentProfileWorkspace(req.SelectedFolder, userID)
+
+	// Resolve before validating workspace/project fields: a global-scoped
+	// profile (Chief of Staff) has no single project workspace, so whether
+	// those fields are required at all depends on what this profile declares.
+	profile, err := api.agentProfiles.Resolve(profileID, req.AgentProfileVersion, userID)
+	if err != nil {
+		return nil, err
+	}
+	isGlobalScope := profile.EffectiveScope() == agentprofiles.ProfileScopeGlobal
+
+	selectedFolder := strings.TrimSpace(req.SelectedFolder)
+	if isGlobalScope && selectedFolder == "" {
+		// "Chats" is the same alias agentProfileRuntimeWorkspace already
+		// rewrites to perUserChatsFolderFor(userID) -- the exact folder a
+		// profile-less multi-agent turn already uses today.
+		selectedFolder = "Chats"
+	}
+	workspacePath, err := cleanAgentProfileWorkspace(selectedFolder, userID)
 	if err != nil {
 		return nil, err
 	}
 	req.SelectedFolder = workspacePath
 
-	profile, err := api.agentProfiles.Resolve(profileID, req.AgentProfileVersion, userID)
-	if err != nil {
-		return nil, err
-	}
 	promptContext := req.AgentProfileContext
 	promptContext.ProjectTitle = strings.TrimSpace(promptContext.ProjectTitle)
 	if promptContext.ProjectTitle == "" {
-		return nil, fmt.Errorf("agent_profile_context.project_title is required")
+		if isGlobalScope {
+			// A global profile has no per-turn project; its own declared Name
+			// is the only sensible constant "title" for its prompt context.
+			promptContext.ProjectTitle = profile.Name
+		} else {
+			return nil, fmt.Errorf("agent_profile_context.project_title is required")
+		}
 	}
 	if strings.TrimSpace(promptContext.LocalDateTime) == "" {
 		now := time.Now()
@@ -201,13 +220,16 @@ func (api *StreamingAPI) resolveAgentProfileForQuery(ctx context.Context, req *Q
 		req.DecryptedSecrets = nil
 		noGlobalSecrets := []string{}
 		req.SelectedGlobalSecrets = &noGlobalSecrets
-	} else if api.chatStore != nil && userID != "" {
+	} else if !isGlobalScope && api.chatStore != nil && userID != "" {
 		// A product project owns its workflow-scoped secrets. Attach their names
 		// automatically for every direct-chat turn so native coding-agent tools
 		// receive SECRET_<NAME> without the model ever seeing a value. User-wide
 		// secrets remain opt-in through the existing selected-secret mechanism;
 		// a project secret with the same name deliberately resolves to the
-		// project value.
+		// project value. Skipped for a global-scoped profile: there is no
+		// single project secret bucket to attach, and req.DecryptedSecrets /
+		// req.SelectedGlobalSecrets are left exactly as the client sent them --
+		// identical to today's profile-less behavior.
 		stored, secretErr := api.chatStore.ListWorkflowSecrets(ctx, userID, workspacePath)
 		if secretErr != nil {
 			log.Printf("[SECRETS] Failed to list product workspace secrets for %s (%s): %v", userID, workspacePath, secretErr)

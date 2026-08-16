@@ -16,6 +16,59 @@ import (
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator"
 )
 
+func TestResolveAgentProfileForQueryResolvesGlobalScopeWithoutFolderOrTitle(t *testing.T) {
+	registry := agentprofiles.NewRegistry()
+	profile := agentprofiles.Profile{
+		ID: "chief-of-staff", Name: "Chief of Staff", Version: 1, BuiltIn: true,
+		SystemPromptTemplate: "placeholder",
+		Scope:                agentprofiles.ProfileScopeGlobal,
+		Runtime:              agentprofiles.RuntimePolicy{Transport: "auto"},
+	}
+	if err := registry.RegisterProfile(profile); err != nil {
+		t.Fatal(err)
+	}
+	api := &StreamingAPI{agentProfiles: registry}
+	// No SelectedFolder, no AgentProfileContext.ProjectTitle -- exactly what a
+	// global-scoped profile must resolve without, unlike a project-scoped one.
+	req := QueryRequest{AgentMode: "multi-agent", AgentProfileID: "chief-of-staff"}
+	resolved, err := api.resolveAgentProfileForQuery(context.Background(), &req, "user-1", "session-1")
+	if err != nil {
+		t.Fatalf("global-scoped profile should resolve without selected_folder/project_title, got: %v", err)
+	}
+	if resolved == nil {
+		t.Fatal("expected a resolved profile")
+	}
+	if req.SelectedFolder != "Chats" {
+		t.Fatalf("expected the Chats alias to be defaulted, got %q", req.SelectedFolder)
+	}
+	if req.AgentProfileContext.ProjectTitle != "Chief of Staff" {
+		t.Fatalf("expected project_title to default to the profile Name, got %q", req.AgentProfileContext.ProjectTitle)
+	}
+	if got := agentProfileRuntimeWorkspace("user-1", req.SelectedFolder); got != "_users/user-1/Chats" {
+		t.Fatalf("runtime folder = %q, want the same folder a profile-less turn already uses", got)
+	}
+}
+
+func TestResolveAgentProfileForQueryRejectsProjectScopeWithoutTitle(t *testing.T) {
+	registry := agentprofiles.NewRegistry()
+	profile := agentprofiles.Profile{
+		ID: "video-studio", Name: "Video Studio", Version: 1, BuiltIn: true,
+		SystemPromptTemplate: "placeholder",
+		Runtime:              agentprofiles.RuntimePolicy{Transport: "auto"},
+	}
+	if err := registry.RegisterProfile(profile); err != nil {
+		t.Fatal(err)
+	}
+	api := &StreamingAPI{agentProfiles: registry}
+	req := QueryRequest{
+		AgentMode: "multi-agent", AgentProfileID: "video-studio",
+		SelectedFolder: "Chats/Video Studio/projects/launch",
+	}
+	if _, err := api.resolveAgentProfileForQuery(context.Background(), &req, "user-1", "session-1"); err == nil || !strings.Contains(err.Error(), "project_title") {
+		t.Fatalf("expected project-scoped profile to still require project_title, got: %v", err)
+	}
+}
+
 func TestResolveAgentProfileForQueryPinsVersionAndSkills(t *testing.T) {
 	registry := agentprofiles.NewRegistry()
 	profile := agentprofiles.Profile{
