@@ -172,6 +172,9 @@ func CreateWorkflowDBToolRegistry(workspaceURL, userID, fallbackSessionID string
 		}
 		result, err := client.QueryAuthorizedWorkflowDB(ctx, workspace.QueryWorkflowDBParams{DBPath: dbPath, SQL: sqlText, Params: workflowDBParams(args), MaxRows: maxRows})
 		if err != nil {
+			if workflowDBUnrecognizedSigilPattern.MatchString(err.Error()) {
+				return "", workflowDBUnquotedBindSigilHint(err)
+			}
 			// A bare "no such column: input_id" tells the caller only that its guess
 			// was wrong, so it guesses again — one overnight run spent 18 tool calls
 			// inventing column names and finished on `x`. Answer with the real
@@ -238,7 +241,7 @@ func CreateWorkflowDBToolRegistry(workspaceURL, userID, fallbackSessionID string
 		}
 		result, err := client.MutateAuthorizedWorkflowDB(ctx, workspace.MutateWorkflowDBParams{DBPath: dbPath, Statements: payload.Statements})
 		if err != nil {
-			return "", err
+			return "", workflowDBUnquotedBindSigilHint(err)
 		}
 		encoded, err := json.Marshal(result)
 		if err != nil {
@@ -392,6 +395,50 @@ func workflowDBSchemaHintError(ctx context.Context, queryErr error, sqlText stri
 	}
 	return fmt.Errorf("%w. Tables and views in this database: %s. %s", queryErr, workflowDBJoinWithinBudget(names), nextStep)
 }
+
+// workflowDBUnquotedBindSigilHint recognizes SQLite's "unrecognized token"
+// error for a bare $ or @, and explains the actual mistake instead of leaving
+// the caller to reverse-engineer a parser error.
+//
+// SQLite reserves $, @, :, and ? to introduce a bind parameter ($name, @name,
+// :name) directly in SQL text. A string literal that was written unquoted and
+// happens to start with $ or @ is not a parameter reference at all, but
+// SQLite cannot tell that -- it tries to lex a parameter name, the next
+// character breaks that (most often "." from a JSON path, or a closing
+// paren), and it reports the sigil itself as the unrecognized token.
+//
+// The dominant instance (19 of 22 occurrences the day this was diagnosed) is
+// json_extract(col, $.field) instead of json_extract(col, '$.field') -- the
+// path argument to every json_* function must be a quoted string, and SQLite
+// gives no hint that the fix is quoting rather than a different path. A
+// second instance is a literal like @ or $ passed unquoted to a string
+// function, e.g. ltrim(handle, @) meant to strip a leading "@". A generic "no
+// such function" or "syntax error" would at least suggest what to search for;
+// "unrecognized token: \"$\"" does not, and 22 identical failures on one
+// workflow in one day is 22 tool calls that told the caller nothing about
+// what to change.
+func workflowDBUnquotedBindSigilHint(err error) error {
+	if err == nil {
+		return nil
+	}
+	match := workflowDBUnrecognizedSigilPattern.FindStringSubmatch(err.Error())
+	if match == nil {
+		return err
+	}
+	sigil := match[1]
+	return fmt.Errorf(
+		"%w. SQLite reports the bare %s itself as the unrecognized token because %s introduces a bind parameter (%sname) in SQL text -- it is not being read as a string. "+
+			"If this is a JSON path argument to json_extract/json_set/json_remove/json_insert/json_replace/json_patch/json_type/json_valid, quote it: json_extract(col, '%s.field'), not json_extract(col, %s.field). "+
+			"If this is meant to be a literal character or string, quote it the same way: '%s', not bare %s.",
+		err, sigil, sigil, sigil, sigil, sigil, sigil, sigil,
+	)
+}
+
+// workflowDBUnrecognizedSigilPattern matches SQLite's own rendering of this
+// specific failure, e.g. `unrecognized token: "$"` or `unrecognized token: @`
+// (quoting varies by how far the error text has been JSON-re-encoded on its
+// way back through the HTTP envelope).
+var workflowDBUnrecognizedSigilPattern = regexp.MustCompile(`(?i)unrecognized token:\s*\\*"?(\$|@)\\*"?`)
 
 // workflowDBMissingSchemaKind classifies a failed query as naming a column that
 // does not exist, a table that does not exist, or neither. The workspace service
