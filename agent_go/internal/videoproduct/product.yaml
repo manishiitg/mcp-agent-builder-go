@@ -77,6 +77,7 @@ profile:
     - agent-browser
     - fal-ai
     - google-ai
+    - seeddance-api
     - video-provider-capabilities
     - kling-video
     - seedance-video
@@ -208,6 +209,9 @@ profile:
       group: generation-provider
     - name: GEMINI_API_KEY
       description: Google Gemini API key. Unlocks Google's own video (Veo), image, and narration (TTS) models (see the google-ai skill) -- alone, enough for a complete narrated production. Get one at aistudio.google.com.
+      group: generation-provider
+    - name: SEEDANCE_API_KEY
+      description: Direct Seeddance API key. Unlocks Seedance video generation through seeddance.io independently of fal.ai (see the seeddance-api skill).
       group: generation-provider
   runtime:
     # auto resolves the transport per provider instead of forcing one answer for

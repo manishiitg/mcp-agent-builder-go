@@ -122,17 +122,15 @@ capabilities against the provider's own live reference before calling
 anything, per "Never invent a model ID" in `fal-ai` and `google-ai`. Do not
 extend this list from memory in a later session; re-check instead.
 
-- **Video, hosted on fal.ai**: Seedance 2.5 (`bytedance/seedance-2.5/text-to-video`,
-  `.../image-to-video`, `.../reference-to-video`) supersedes 2.0 -- native
-  30-second generation in one pass (relevant to the shot-count arithmetic
-  above: fewer, longer calls to cover the same total long-form runtime than
-  a model capped at 5-8s per call), up to 50 multimodal references in one
-  generation, native audio co-processed in the same latent space as the
-  visuals so it's synchronized without a post layering pass, and roughly
-  double 2.0's native ceiling -- for image-to-video this shows up most as
-  materially better subject/character consistency across the whole clip
-  (see `video-cinematography`'s consistency section), which matters more,
-  not less, the longer a character's arc runs across a production. MiniMax
+- **Video, hosted on fal.ai**: Seedance 2.5 is live under
+  `bytedance/seedance-2.5/text-to-video`, `.../image-to-video`, and
+  `.../reference-to-video`. Current schemas expose `auto` or 4-30 second
+  clips, native synchronized audio, first/last frames on image-to-video, and
+  up to 30 images, 10 videos, and 10 audio references (50 total) on the
+  reference route. Seedance 2.0 remains available in Standard and Fast route
+  families and can be the better choice for its separate price, latency, and
+  current 4K options. Compare the exact live schemas rather than treating 2.5
+  as a universal replacement. MiniMax
   H3 (`minimax/hailuo-03/text-to-video`, `.../image-to-video`,
   `.../reference-to-video`)
   is the notable open-weights option -- self-hostable/fine-tunable, not
@@ -173,6 +171,12 @@ capability -- fal.ai gives one unified surface across many vendors' models
 under one key; going direct to Google skips that layer for Google's own
 models specifically.
 
+Seedance also has two provider paths in this product. fal.ai hosts Seedance
+under its aggregator key; the independent Seeddance API uses its own key and
+direct model IDs such as `seedance-2.5`. Read `seeddance-api` before choosing
+the direct path. The same model family name does not make schemas, account
+access, pricing, task IDs, or credentials portable between those providers.
+
 ## Prompt length and structure are model-specific
 
 Once a model is chosen, `video-cinematography`'s five-aspect formula
@@ -212,11 +216,16 @@ shifted with newer versions):
 - Use `google-ai` when the brief specifically calls for a Google-native
   model -- Gemini image generation, Veo, or Gemini TTS -- rather than a
   third-party one.
+- Use `seeddance-api` when the brief selects Seedance and the direct service's
+  account access, price, or limits are preferable to fal. It generates
+  Seedance video only; image creation, narration, and music still require an
+  appropriate additional provider.
 - **Which credentials actually exist is part of this decision.** Confirm
   which provider keys are configured before planning a production around
-  one: either provider alone covers video, image, and narration, so a
-  single key is enough for a complete piece. Only a generated music bed is
-  fal.ai-only (see `google-ai`'s note on music). Plan within the keys
+  one. fal.ai or Google alone covers video, image, and narration, so either
+  key can carry a complete piece; the direct Seeddance key covers only its
+  Seedance video surface. Only a generated music bed is fal.ai-only (see
+  `google-ai`'s note on music). Plan within the keys
   available, or say plainly which key is missing and what it would add --
   do not design a production around a provider the user cannot call.
 - The same production can legitimately use both: e.g. Google's model for a
@@ -228,7 +237,8 @@ shifted with newer versions):
 ## Record the decision, not just the output
 
 For every shot, write down in `production.json`: the resolved model ID, the
-provider (`fal-ai` or `google-ai`), the exact input/arguments used, and why
+provider (`fal-ai`, `google-ai`, or `seeddance-api`), the exact input/arguments
+used, and why
 that model was chosen over alternatives if the choice was non-obvious. A
 revision to one shot should not have to re-derive this reasoning from
 scratch, and a viewer noticing an inconsistency between two shots (different
@@ -243,6 +253,7 @@ the model-per-shot record already exists.
 - Use this skill to choose a model per shot.
 - Use `video-cinematography` to turn the creative intent for that shot into
   the actual prompt/camera/lighting direction handed to the chosen model.
-- Use `fal-ai` or `google-ai` (per the chosen provider) to make the call.
+- Use `fal-ai`, `google-ai`, or `seeddance-api` (per the chosen provider) to
+  make the call.
 - Use `video-editing` to assemble the results, `video-quality` before
   presenting any version as complete.

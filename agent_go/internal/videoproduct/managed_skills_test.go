@@ -100,14 +100,14 @@ func TestInfographicWorkflowCarriesDurableArtifactsForward(t *testing.T) {
 	}
 }
 
-// fal-ai and google-ai are product-owned skills (embedded via profileSkills,
+// Generation provider skills are product-owned (embedded via profileSkills,
 // not the managed HyperFrames dependency source), and neither is part of the
 // infographic pipeline's own stages -- product-infographic never routes to
 // them. They exist so a chat session can generate AI video/image/voice/music
 // for a long-form production the infographic route does not cover, one per
-// provider (fal.ai's hosted third-party models vs. Google's own Gemini/Veo).
-// This pins that both register and read back cleanly, and that adding them
-// did not silently pull either into every infographic stage's attach list.
+// provider (fal.ai's hosted models, Google's own Gemini/Veo, and direct
+// Seeddance video). This pins that they register and read back cleanly, and
+// that adding them did not pull any into the infographic stages.
 func TestGenerationSkillsRegisterAndStayOutOfTheInfographicPipeline(t *testing.T) {
 	if err := RegisterProductSkills(); err != nil {
 		t.Fatalf("RegisterProductSkills: %v", err)
@@ -119,14 +119,15 @@ func TestGenerationSkillsRegisterAndStayOutOfTheInfographicPipeline(t *testing.T
 	}{
 		{"fal-ai", []string{"SECRET_FAL_KEY", "Never invent a model ID", "@fal-ai/client"}},
 		{"google-ai", []string{"SECRET_GEMINI_API_KEY", "Never invent a model ID", "@google/genai"}},
+		{"seeddance-api", []string{"SECRET_SEEDANCE_API_KEY", "/v1/videos/generations", "task_id", "show_video"}},
 		{"longform-cinematic-video", []string{"longform-sequence-plan.json", "longform-edit-decision-list.json", "longform-seam-report.json", "one film"}},
 		{"video-provider-capabilities", []string{"official API", "capability record", "pending_user_review", "continuity-plan.json", "generation-ledger.json"}},
 		{"kling-video", []string{"multi_prompt", "@Element1", "motion-transfer", "show_video"}},
-		{"seedance-video", []string{"@Image1", "reference-to-video", "native audio", "show_video"}},
+		{"seedance-video", []string{"@Image1", "bytedance/seedance-2.0", "bytedance/seedance-2.5", "30-second", "show_video"}},
 		{"veo-video", []string{"first plus last frame", "previously generated Veo", "long-running", "show_video"}},
 		{"minimax-h3-video", []string{"minimax/hailuo-03", "native stereo audio", "reference ledger", "show_video"}},
 		{"gemini-omni-video", []string{"google/gemini-omni-flash", "<IMAGE_REF_0>", "fal-ai", "show_video"}},
-		{"video-model-selection", []string{"video-cinematography", "fal-ai", "google-ai", "Shot count vs. budget"}},
+		{"video-model-selection", []string{"video-cinematography", "fal-ai", "google-ai", "seeddance-api", "Shot count vs. budget"}},
 		{"video-cinematography", []string{"dolly is not zoom", "reference-image conditioning", "video-model-selection"}},
 		{"video-storytelling", []string{"video-cinematography", "video-model-selection", "But-therefore, not and-then", "Scaling to true long-form"}},
 		{"generated-video-quality", []string{"character_consistency", "generation_artifacts", "temporal_coherence", "video-quality"}},
@@ -163,7 +164,7 @@ func TestGenerationSkillsRegisterAndStayOutOfTheInfographicPipeline(t *testing.T
 			t.Fatalf("video-provider-capabilities supporting file %q missing %q: %v", path, requiredText, supporting)
 		}
 	}
-	for _, name := range []string{"longform-cinematic-video", "kling-video", "seedance-video", "veo-video", "minimax-h3-video", "gemini-omni-video"} {
+	for _, name := range []string{"longform-cinematic-video", "kling-video", "seedance-video", "seeddance-api", "veo-video", "minimax-h3-video", "gemini-omni-video"} {
 		attached := skills.LoadAttachable("", []string{name})
 		if len(attached) != 1 || len(attached[0].SupportingFiles) != 1 || attached[0].SupportingFiles[0].RelPath != "agents/openai.yaml" {
 			t.Fatalf("%s must carry its generated UI metadata: %+v", name, attached)
@@ -184,7 +185,7 @@ func TestGenerationSkillsRegisterAndStayOutOfTheInfographicPipeline(t *testing.T
 		}
 	}
 
-	generationSkillNames := map[string]bool{"fal-ai": true, "google-ai": true, "longform-cinematic-video": true, "video-provider-capabilities": true, "kling-video": true, "seedance-video": true, "veo-video": true, "minimax-h3-video": true, "gemini-omni-video": true, "video-model-selection": true, "video-cinematography": true, "video-storytelling": true, "generated-video-quality": true}
+	generationSkillNames := map[string]bool{"fal-ai": true, "google-ai": true, "seeddance-api": true, "longform-cinematic-video": true, "video-provider-capabilities": true, "kling-video": true, "seedance-video": true, "veo-video": true, "minimax-h3-video": true, "gemini-omni-video": true, "video-model-selection": true, "video-cinematography": true, "video-storytelling": true, "generated-video-quality": true}
 	for _, stage := range infographicPipeline.Stages {
 		for _, name := range stage.Skills {
 			if generationSkillNames[name] {
@@ -195,7 +196,7 @@ func TestGenerationSkillsRegisterAndStayOutOfTheInfographicPipeline(t *testing.T
 }
 
 func TestGenerationPipelinesAttachCapabilityDiscoveryBeforePaidVideo(t *testing.T) {
-	requiredSkills := []string{"video-provider-capabilities", "kling-video", "seedance-video", "veo-video", "minimax-h3-video", "gemini-omni-video"}
+	requiredSkills := []string{"video-provider-capabilities", "kling-video", "seedance-video", "seeddance-api", "veo-video", "minimax-h3-video", "gemini-omni-video"}
 	for _, pipeline := range []*Pipeline{longformPipeline, shortformPipeline} {
 		for _, stageID := range []string{pipeline.ID + "-brief", pipeline.ID + "-shotlist", pipeline.ID + "-generate"} {
 			var stage *PipelineStage

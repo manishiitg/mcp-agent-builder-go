@@ -89,8 +89,8 @@ func TestVideoStudioManifestDrivesProfileAndWorkflowCapabilities(t *testing.T) {
 	if manifest.UI.Surface != "video-studio" || !manifest.UI.Secrets || manifest.Branding.Favicon != "/video-studio-favicon.svg" {
 		t.Fatalf("unexpected UI/branding definition: %+v %+v", manifest.UI, manifest.Branding)
 	}
-	if manifest.Profile.Runtime.Transport != "structured" {
-		t.Fatalf("Video Studio runtime transport = %q, want structured", manifest.Profile.Runtime.Transport)
+	if manifest.Profile.Runtime.Transport != "auto" {
+		t.Fatalf("Video Studio runtime transport = %q, want auto", manifest.Profile.Runtime.Transport)
 	}
 	if manifest.Profile.Runtime.AgentTools.Mode != "mcp_only" || manifest.Profile.Runtime.Approvals.Mode != "provider_auto" {
 		t.Fatalf("Video Studio native-tool policy = %+v %+v, want mcp_only/provider_auto", manifest.Profile.Runtime.AgentTools, manifest.Profile.Runtime.Approvals)

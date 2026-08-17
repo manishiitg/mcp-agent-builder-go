@@ -104,7 +104,7 @@ func TestLongformStagesKeepTheirLoadBearingOrder(t *testing.T) {
 // turns into a slideshow.
 func TestGenerationPipelinesUseGenerationSkillsOnly(t *testing.T) {
 	generationSkills := map[string]bool{}
-	for _, name := range []string{"fal-ai", "google-ai", "longform-cinematic-video", "video-model-selection", "video-cinematography", "video-storytelling"} {
+	for _, name := range []string{"fal-ai", "google-ai", "seeddance-api", "longform-cinematic-video", "video-model-selection", "video-cinematography", "video-storytelling"} {
 		generationSkills[name] = true
 	}
 
