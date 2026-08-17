@@ -6,7 +6,9 @@ description: Choose which fal.ai or Google Gemini/Veo model fits one shot's requ
 # Choosing a generation model
 
 `fal-ai` and `google-ai` teach how to call a model once you've picked one.
-This skill teaches how to pick it. Neither this skill nor either of those
+This skill teaches how to pick it. Read `references/cost-guidance.md` whenever
+the user compares models, asks about price, or must approve a paid plan.
+Neither this skill nor either of those
 pins a model catalog or a "best model for X" table -- both providers'
 catalogs, capabilities, and pricing change independently and on their own
 schedule, and a fixed ranking here would go stale exactly the way a fixed
@@ -53,6 +55,27 @@ Ask these as part of `video-creation`'s existing request-understanding pass,
 not as a second separate interview later.
 Write the resolved answers into `production.json` so a revision does not
 re-ask what was already decided.
+
+## Present a costed choice before spending
+
+Before the first paid generation, give the user at most three viable model
+choices. For each, state in plain language: provider and exact model, why it
+fits the shot, output duration/resolution, live billing unit and rate, planned
+cost, and the maximum cost after the approved retry allowance. Recommend one
+choice; price alone must not override continuity or required control.
+
+Use `references/cost-guidance.md` for the calculation, published anchors, and
+provider-specific price lookup. A static table is only orientation. fal prices
+must be resolved from the current account-facing pricing API for the exact
+endpoint; Google prices must be rechecked on the official pricing page; direct
+Seeddance estimates must use its available credit information. If a provider
+does not expose enough information for a reliable dollar estimate, say that
+plainly and offer a bounded low-cost test instead of converting credits by
+guesswork.
+
+Record the comparison and the user's approved option in `production.json` and
+the generation ledger. A user approving a storyboard is not approving an
+unbounded spend increase caused by a different model or retry count.
 
 ## Decide by requirement, not by brand loyalty
 

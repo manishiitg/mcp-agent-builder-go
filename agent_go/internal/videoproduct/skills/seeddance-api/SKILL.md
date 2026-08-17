@@ -1,6 +1,6 @@
 ---
 name: seeddance-api
-description: Generate Seedance video through the independent Seeddance API at seeddance.io using the deployment's SEEDANCE_API_KEY, separately from fal.ai. Use when choosing between direct Seeddance and fal, checking direct account credits or model access, or submitting, polling, downloading, retrying, and reviewing Seedance 2.0 or 2.5 video tasks. Read with seedance-video, video-provider-capabilities, and video-cinematography before paid generation.
+description: Generate supported Seedance video through the independent Seeddance API at seeddance.io using the deployment's SEEDANCE_API_KEY, separately from fal.ai. Use when choosing between direct Seeddance and fal, checking direct account credits or model access, or submitting, polling, downloading, retrying, and reviewing direct Seedance video tasks. Read with seedance-video, video-provider-capabilities, and video-cinematography before paid generation.
 ---
 
 # Call the direct Seeddance API safely
@@ -42,7 +42,6 @@ seedance-1.5-pro
 seedance-2.0
 seedance-2.0-fast
 seedance-2.0-mini
-seedance-2.5
 ```
 
 Re-read the live catalog and create schema before every production. Store the
@@ -50,10 +49,11 @@ chosen direct model ID, allowed duration, quality, aspect ratio, media limits,
 audio support, price, and plan entitlement in the capability record. Never use
 a fal model ID such as `bytedance/seedance-2.5/text-to-video` here.
 
-Current direct documentation describes Seedance 2.5 as accepting 4–30-second
-jobs, 480p or 720p quality, up to 30 images, 10 videos, and 10 audio references.
-These limits differ from fal's callable schema, which is exactly why provider
-capabilities must remain separate.
+As checked on 2026-08-17, the direct public documentation says Seedance 2.5 is
+not yet available there and requests for `seedance-2.5` return
+`422 model_not_available`. Do not send a direct 2.5 request just because fal
+exposes a 2.5 endpoint. Recheck the direct model catalog at selection time;
+provider availability, schema, and pricing are separate contracts.
 
 ## Construct exactly one generation request
 

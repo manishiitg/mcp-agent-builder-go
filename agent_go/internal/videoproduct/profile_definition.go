@@ -48,7 +48,7 @@ var profileSkills = []struct{ name, description, path string }{
 	{"html-composition", "Design video frames as HTML/CSS and render them with headless Chrome and ffmpeg.", "skills/html-composition/SKILL.md"},
 	{"fal-ai", "Generate AI video, image, voice, and music clips via fal.ai's Node.js client for long-form narrative productions.", "skills/fal-ai/SKILL.md"},
 	{"google-ai", "Generate AI video, image, and narration (TTS) via Google's own Gemini API (Node.js client) -- Gemini image models, Veo, and Gemini TTS. Covers a whole production except its music bed.", "skills/google-ai/SKILL.md"},
-	{"seeddance-api", "Generate Seedance 2.0 and 2.5 video through the direct Seeddance API with durable task recovery and credential-safe server calls.", "skills/seeddance-api/SKILL.md"},
+	{"seeddance-api", "Generate supported Seedance video through the direct Seeddance API with durable task recovery and credential-safe server calls.", "skills/seeddance-api/SKILL.md"},
 	{"video-provider-capabilities", "Resolve a selected video endpoint's current official schema into a durable request, continuity, cost, retry, and review plan before any paid generation.", "skills/video-provider-capabilities/SKILL.md"},
 	{"kling-video", "Use current Kling endpoint controls effectively for text, frames, references, elements, structured multi-shot video, continuity, and native audio.", "skills/kling-video/SKILL.md"},
 	{"seedance-video", "Use current Seedance 2.0 and 2.5 endpoint controls effectively for text, frames, multimodal references, editing, continuity, and synchronized audio.", "skills/seedance-video/SKILL.md"},

@@ -55,6 +55,9 @@ func TestSystemPromptMatchesTheProductItDescribes(t *testing.T) {
 	if !strings.Contains(strings.ToLower(text), "approval of a storyboard is not approval to spend") {
 		t.Fatal("the system prompt no longer warns that an approved plan is not approval to spend")
 	}
+	if !strings.Contains(text, "project base estimate") || !strings.Contains(text, "approved retry allowance") {
+		t.Fatal("the system prompt no longer requires a costed model choice before paid generation")
+	}
 
 	// Chat and run_full_workflow are two different contracts: chat pauses at
 	// checkpoints, the workflow runs end to end unattended. Losing this line

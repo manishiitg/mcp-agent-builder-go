@@ -1,13 +1,14 @@
 ---
 name: seedance-video
-description: Plan and generate Seedance video effectively through current Seedance 2.0 and 2.5 endpoints on fal.ai or the separately authenticated Seeddance direct API. Use when a production selects or considers Seedance for text-to-video, image-to-video, first/last-frame control, multimodal reference-to-video, multiple character or product images, reference video or audio, native synchronized audio, multi-shot scenes, editing, extension, or fewer longer clips. Read with video-provider-capabilities, video-cinematography, and the selected provider skill before any paid call.
+description: Plan and generate Seedance video effectively through current Seedance 2.0 and 2.5 endpoints on fal.ai, or supported direct Seeddance models through its separately authenticated API. Use when a production selects or considers Seedance for text-to-video, image-to-video, first/last-frame control, multimodal reference-to-video, multiple character or product images, reference video or audio, native synchronized audio, multi-shot scenes, editing, extension, or fewer longer clips. Read with video-provider-capabilities, video-cinematography, and the selected provider skill before any paid call.
 ---
 
 # Use Seedance's multimodal controls
 
 Read `video-provider-capabilities`, `video-cinematography`, and exactly one
 provider skill before constructing a request: `fal-ai` for fal-hosted routes or
-`seeddance-api` for the independent direct service. Provider credentials,
+`seeddance-api` for the independent direct service. fal exposes Seedance 2.5;
+as checked on 2026-08-17, Seeddance direct does not. Provider credentials,
 endpoint IDs, schemas, jobs, and billing are not interchangeable.
 
 Current official fal starting points:

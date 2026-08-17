@@ -28,7 +28,8 @@ Capture:
 - extension/edit modes and what source artifact they require;
 - mutually exclusive fields and mode-dependent fields;
 - asynchronous submit/status/result shapes, terminal states, and output URLs;
-- cost or cost-estimate mechanism, billing unit, and relevant rate limits;
+- pricing source and timestamp, currency, billing unit, unit price, base
+  estimate, retry reserve, maximum approved cost, and relevant rate limits;
 - provider-side adjustment/coercion behavior and structured validation errors.
 
 Probe beyond the basic prompt/duration fields. Useful discovery terms include
@@ -53,7 +54,8 @@ When two endpoints fit, compare only production-relevant dimensions:
 - native or reference audio and lip-sync needs;
 - output resolution/aspect ratio;
 - edit/extension capability;
-- estimated paid calls, cost, latency, and retry exposure.
+- estimated paid calls, base cost, approved maximum cost, latency, and retry
+  exposure.
 
 Prefer the endpoint that satisfies the continuity plan with fewer independent
 generations. Do not downgrade merely because an older endpoint is easier to

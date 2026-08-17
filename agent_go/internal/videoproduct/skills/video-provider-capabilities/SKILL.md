@@ -19,6 +19,8 @@ Read these bundled references when their phase begins:
 - `references/continuity-planning.md` before writing the shot list or request.
 - `references/execution-review.md` before spending, retrying, assembling, or
   presenting outputs.
+- `video-model-selection/references/cost-guidance.md` when comparing models or
+  giving a user a costed choice.
 
 ## Required artifacts
 
@@ -56,7 +58,7 @@ capability record begins with:
     "output_contract": {}
   },
   "request_shape": {"exact field names": "copied from the official schema"},
-  "pricing": {"source": "", "estimate_available": false},
+  "pricing": {"source": "", "checked_at": "", "currency": "", "unit": "", "unit_price": null, "base_estimate": null, "retry_reserve": null, "maximum_approved_cost": null, "estimate_available": false},
   "continuity_fit": {"strategy": "...", "why": "..."}
 }
 ```
@@ -105,7 +107,9 @@ roles, mutually exclusive inputs, output type, duration, ratio, resolution,
 audio behavior, safety constraints, and estimated cost where the provider
 offers it. Reuse uploaded handles instead of uploading the same asset for
 every call. Obtain the user's approval when the planned paid-call count or
-cost exceeds the approved production budget.
+cost exceeds the approved production budget. The approval must name both the
+base estimate and the maximum including the agreed quality-retry allowance;
+never present a per-second rate without the actual project total.
 
 After completion, download the output and verify it locally with `ffprobe` and
 visual evidence. Show every newly generated clip with `show_video` as a
