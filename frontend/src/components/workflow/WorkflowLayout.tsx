@@ -17,6 +17,8 @@ import { sanitizeDisplayNameForFolder } from '../../utils/workflowUtils'
 import { logger } from '../../utils/logger'
 import { startRestoredTransportTerminal } from '../../utils/restoredTerminal'
 import { isExternalReadOnlyWorkflowSession, isInternalChildSession } from '../../utils/workflowSessionKinds'
+import { activeWorkflowTabIdForPreset } from '../../utils/workflowTabOwnership'
+import { activateTab } from '../../utils/activateTab'
 import { reconcileWorkflowRuntimeTab, workflowRuntimeTabProjection } from './workflowRuntimeTabProjection'
 import {
   PreviousChatHistoryPanel,
@@ -50,39 +52,12 @@ const ChatAreaWithObserverId = forwardRef<ChatAreaRef, {
   // Legacy/restored builder tabs may not have presetQueryId, so allow those
   // when there is no exact tab for the active preset.
   const currentPresetId = useGlobalPresetStore(state => state.activePresetIds.workflow)
-  const workflowTabId = useChatStore(state => {
-    const tabId = state.activeTabId
-    const tab = tabId ? state.chatTabs[tabId] : null
-    if (tab?.metadata?.mode !== 'workflow') return undefined
-    const tabPresetId = tab.metadata?.presetQueryId
-    if (tabPresetId === currentPresetId) return tabId
-    if (tabId === state.activeTabId) return tabId
-    if (!tabPresetId && tab.metadata?.phaseId === 'workflow-builder') {
-      const hasExactPresetTab = Object.values(state.chatTabs).some(candidate =>
-        candidate.metadata?.mode === 'workflow' &&
-        candidate.metadata?.presetQueryId === currentPresetId &&
-        (candidate.sessionId || candidate.isStreaming)
-      )
-      if (!hasExactPresetTab) return tabId
-    }
-    return undefined
-  })
+  const workflowTabId = useChatStore(state =>
+    activeWorkflowTabIdForPreset(state.activeTabId, currentPresetId, state.chatTabs)
+  )
   const activePhaseId = useChatStore(state => {
-    const tabId = state.activeTabId
-    const tab = tabId ? state.chatTabs[tabId] : null
-    if (tab?.metadata?.mode !== 'workflow') return undefined
-    const tabPresetId = tab.metadata?.presetQueryId
-    if (tabPresetId === currentPresetId) return tab?.metadata?.phaseId
-    if (tabId === state.activeTabId) return tab?.metadata?.phaseId
-    if (!tabPresetId && tab.metadata?.phaseId === 'workflow-builder') {
-      const hasExactPresetTab = Object.values(state.chatTabs).some(candidate =>
-        candidate.metadata?.mode === 'workflow' &&
-        candidate.metadata?.presetQueryId === currentPresetId &&
-        (candidate.sessionId || candidate.isStreaming)
-      )
-      if (!hasExactPresetTab) return tab?.metadata?.phaseId
-    }
-    return undefined
+    const tabId = activeWorkflowTabIdForPreset(state.activeTabId, currentPresetId, state.chatTabs)
+    return tabId ? state.chatTabs[tabId]?.metadata?.phaseId : undefined
   })
 
   // Show chat input for chat-compatible phases
@@ -122,23 +97,6 @@ const EMPTY_WORKFLOW_EVENTS: PollingEvent[] = []
 const WORKFLOW_RESTORE_TIMEOUT_MS = 8000
 const WORKFLOW_KILL_AND_START_STOP_TIMEOUT_MS = 30_000
 const WORKFLOW_CHAT_CONTENT_EVENT_TYPES = new Set(['user_message', 'conversation_end', 'unified_completion'])
-// Window during which a freshly-opened read-only Schedule/Bot run tab is
-// protected from auto tab-switching (reconnect/reconcile). Mirrors App.tsx's
-// READ_ONLY_WORKFLOW_RESTORE_SELECTION_WINDOW_MS so all auto-selectors agree:
-// clicking a running schedule from the monitor/Ctrl+K must STAY on that run and
-// not bounce to a builder/empty chat. A stale persisted read-only tab (old
-// timestamp) is NOT protected, so a page reload still reconnects normally.
-const READ_ONLY_RUN_SELECTION_WINDOW_MS = 60 * 1000
-const isRecentlyOpenedReadOnlyRunTab = (tab: ChatTab | null | undefined): boolean => {
-  const restoredAt = tab?.metadata?.readOnlyRestoredAt
-  return !!tab &&
-    tab.metadata?.mode === 'workflow' &&
-    tab.metadata?.isViewOnly === true &&
-    (tab.metadata?.isScheduledRun === true || tab.metadata?.isBotRun === true) &&
-    typeof restoredAt === 'number' &&
-    Date.now() - restoredAt <= READ_ONLY_RUN_SELECTION_WINDOW_MS
-}
-
 function normalizeWorkflowPath(path?: string | null): string {
   return (path || '').replace(/\/+$/, '')
 }
@@ -342,7 +300,7 @@ const WorkflowPreviousChatsPanel: React.FC<{
     // explicit diagnostic choice rather than the first thing a user sees.
     if (useTerminalRestore || useNativeResume) {
       chatStore.setTabViewMode(targetTabId, 'formatted')
-      chatStore.switchTab(targetTabId)
+      activateTab(targetTabId)
       setShowChatArea(true)
       startRestoredTransportTerminal(session.session_id, path, session.session_id, workspacePath)
     }
@@ -698,7 +656,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
     const chatStore = useChatStore.getState()
     if (chatStore.chatTabs[tabId]) {
       chatStore.setTabViewMode(tabId, 'formatted')
-      chatStore.switchTab(tabId)
+      activateTab(tabId)
     }
     try {
       const activeWorkspacePath = useGlobalPresetStore.getState().getActivePreset('workflow')?.selectedFolder?.filepath ?? null
@@ -925,7 +883,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
       setShowWorkspacePane(true)
       setFocusedPane('chat')
     }
-    chatStore.switchTab(tabId)
+    activateTab(tabId)
     setShowChatArea(true)
 
     if (oldTabs.length > 0) {
@@ -1369,7 +1327,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
       // Without this, chatTabs is empty and dedup fails → duplicate tabs.
       await waitForChatStoreHydration()
       try {
-        const { closeTab, createChatTab, switchTab, getTabEvents, setTabStreaming } = useChatStore.getState()
+        const { closeTab, createChatTab, getTabEvents, setTabStreaming } = useChatStore.getState()
         const { getPhaseById } = useWorkflowStore.getState()
         const getExistingWorkflowTabsForPreset = () =>
           Object.values(useChatStore.getState().chatTabs)
@@ -1668,19 +1626,12 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
           lastTabId = tabId
         }
 
-        // The user may have just opened a read-only scheduled/bot run from the
-        // Global Activity Monitor / Ctrl+K. That activates the run tab AND applies
-        // its preset, which is exactly what triggered THIS reconnect. Switching the
-        // active tab away (the builder/empty-chat fallbacks below) is the "running
-        // schedule bounces to an empty chat" bug. If the active tab is a freshly-
-        // opened read-only run, leave it selected — just show the chat area. (Tabs
-        // for other sessions were still created above; we only refuse to steal the
-        // active selection from the run the user clicked. The recency window means a
-        // stale persisted read-only tab on reload still reconnects normally.)
+        // Reconnect may create/update tabs, but the active tab is user-owned.
+        // Preserve any valid tab for this workflow—Chat, Schedule, or Bot—and
+        // auto-select only when the current tab belongs elsewhere or is absent.
         {
           const store = useChatStore.getState()
-          const activeReadOnlyTab = store.activeTabId ? store.chatTabs[store.activeTabId] : undefined
-          if (isRecentlyOpenedReadOnlyRunTab(activeReadOnlyTab)) {
+          if (activeWorkflowTabIdForPreset(store.activeTabId, activePresetId, store.chatTabs)) {
             setShowChatArea(true)
             return
           }
@@ -1688,7 +1639,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
 
         // 5. Show the chat area with the last tab
         if (lastTabId) {
-          switchTab(lastTabId)
+          activateTab(lastTabId)
           setShowChatArea(true)
         }
 
@@ -1705,22 +1656,22 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
               phaseName: 'Automation Builder',
               presetQueryId: activePresetId
             })
-            switchTab(defaultTabId)
+            activateTab(defaultTabId)
             setShowChatArea(true)
           } else {
             const streamingTab = interactiveExistingWorkflowTabs.find(t => t.isStreaming || store.getTabStreamingStatus(t.tabId))
             if (streamingTab) {
-              switchTab(streamingTab.tabId)
+              activateTab(streamingTab.tabId)
               setShowChatArea(true)
               return
             } else {
               const builderTab = interactiveExistingWorkflowTabs.find(t => t.metadata?.phaseId === 'workflow-builder')
               if (builderTab) {
-                switchTab(builderTab.tabId)
+                activateTab(builderTab.tabId)
                 setShowChatArea(true)
                 return
               }
-              switchTab(interactiveExistingWorkflowTabs[0].tabId)
+              activateTab(interactiveExistingWorkflowTabs[0].tabId)
               setShowChatArea(true)
               return
             }
@@ -1761,34 +1712,10 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
         const chatStore = useChatStore.getState()
         const activeTab = chatStore.activeTabId ? chatStore.chatTabs[chatStore.activeTabId] : undefined
         const activeViewMode = normalizeEventViewMode(activeTab?.viewMode || chatStore.eventViewModePreference)
-        const activeTabIsStreaming = activeTab
-          ? activeTab.isStreaming || chatStore.getTabStreamingStatus(activeTab.tabId)
-          : false
-        const activeIsBuilderForPreset =
-          activeTab?.metadata?.mode === 'workflow' &&
-          activeTab.metadata?.phaseId === 'workflow-builder' &&
-          (activeTab.metadata?.presetQueryId === activePresetId || !activeTab.metadata?.presetQueryId)
-        const activeIsCompletedWorkflowForPreset =
-          activeTab?.metadata?.mode === 'workflow' &&
-          activeTab.metadata?.presetQueryId === activePresetId &&
-          !activeTabIsStreaming
-        const latestInteractiveRunning = projectedRunningWorkflows.find(item => item.projection.autoActivate)?.running
-        // Never auto-switch away from a read-only scheduled/bot run the user just
-        // opened — that's the schedule→empty-chat bounce. They can still pick
-        // another tab manually; this reconcile just must not stomp the run they
-        // clicked. Recency-gated (matches App.tsx) so it doesn't pin the user on a
-        // stale read-only tab forever.
-        const activeIsReadOnlyRunView = isRecentlyOpenedReadOnlyRunTab(activeTab)
-        const shouldSwitch =
-          !activeIsReadOnlyRunView && (
-            !activeTab ||
-            activeTab.metadata?.mode !== 'workflow' ||
-            (
-              latestInteractiveRunning != null &&
-              activeTab.sessionId !== latestInteractiveRunning.session_id &&
-              (activeViewMode === 'terminal' || activeIsBuilderForPreset || activeIsCompletedWorkflowForPreset)
-            )
-          )
+        const activeTabOwnedByPreset = Boolean(
+          activeWorkflowTabIdForPreset(chatStore.activeTabId, activePresetId, chatStore.chatTabs)
+        )
+        const shouldSwitch = !activeTabOwnedByPreset
 
         let selectedRunningTabId: string | null = null
         for (const { running, projection } of projectedRunningWorkflows) {
@@ -1828,7 +1755,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
         }
 
         if (shouldSwitch && selectedRunningTabId) {
-          chatStore.switchTab(selectedRunningTabId)
+          activateTab(selectedRunningTabId)
           setShowChatArea(true)
         } else if (activeTab?.sessionId && projectedRunningWorkflows.some(item => item.running.session_id === activeTab.sessionId)) {
           setShowChatArea(true)
@@ -1916,11 +1843,14 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
         if (restoredReadOnlyTab) {
           revealWorkflowChat(restoredReadOnlyTab.tabId)
         } else {
-          chatStore.switchTab(targetTab.tabId)
+          // The navigation coordinator carries the user's explicit Formatted
+          // or Terminal preference across workflows while changing ownership.
+          activateTab(targetTab.tabId)
           setShowChatArea(true)
         }
 
-        const targetViewMode = normalizeEventViewMode(targetTab.viewMode || chatStore.eventViewModePreference)
+        const selectedTarget = useChatStore.getState().chatTabs[targetTab.tabId]
+        const targetViewMode = normalizeEventViewMode(selectedTarget?.viewMode || chatStore.eventViewModePreference)
         const needsHydration = targetViewMode === 'formatted' && interactiveTabs.some(tab =>
           tab.sessionId && chatStore.getTabEvents(tab.sessionId).length === 0
         )
@@ -2058,7 +1988,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
           .sort((a, b) => workflowTabSortTimestamp(b) - workflowTabSortTimestamp(a))
         if (workflowTabs.length > 0) {
           const builderTab = workflowTabs.find(t => t.metadata?.phaseId === 'workflow-builder')
-          chatStore.switchTab((builderTab || workflowTabs[0]).tabId)
+          activateTab((builderTab || workflowTabs[0]).tabId)
         }
       }
     }

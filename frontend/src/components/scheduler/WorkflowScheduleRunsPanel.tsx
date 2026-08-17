@@ -11,6 +11,7 @@ import { agentApi } from '../../services/api'
 import { useGlobalPresetStore } from '../../stores/useGlobalPresetStore'
 import { useChatStore } from '../../stores/useChatStore'
 import { activateTab } from '../../utils/activateTab'
+import { selectWorkflowPreset } from '../../utils/workflowNavigation'
 import { useWorkflowStore } from '../../stores/useWorkflowStore'
 import { useModeStore } from '../../stores/useModeStore'
 import type { ScheduledJob, ScheduledJobRun, SchedulerConfig, RunFolderInfo, RunMetadataModels, TokenUsageFile } from '../../services/api-types'
@@ -1268,7 +1269,7 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
     }
 
     if (effectivePresetQueryId) {
-      useGlobalPresetStore.getState().setActivePreset('workflow', effectivePresetQueryId)
+      selectWorkflowPreset(effectivePresetQueryId)
     }
     useModeStore.getState().setModeCategory('workflow')
     useWorkflowStore.getState().setShowChatArea(true)

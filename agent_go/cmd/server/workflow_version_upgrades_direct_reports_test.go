@@ -16,7 +16,7 @@ func TestWorkflowVersionUpgradePlanFrom122MigratesReportsThenScheduledRoutes(t *
 	if plan[1].label != "upgrade-schedule-execution-model" || plan[1].to != workflowContractScheduleExecutionModelVersion {
 		t.Fatalf("plan[1] = %+v, want schedule execution-model migration to %s", plan[1], workflowContractScheduleExecutionModelVersion)
 	}
-	if plan[2].label != "upgrade-periodic-pulse-review" || plan[2].to != WorkflowContractCurrentVersion {
+	if plan[2].label != "upgrade-periodic-pulse-review-handoff" || plan[2].to != WorkflowContractCurrentVersion {
 		t.Fatalf("plan[2] = %+v, want periodic-pulse-review migration to current", plan[2])
 	}
 }

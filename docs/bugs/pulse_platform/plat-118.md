@@ -1,52 +1,266 @@
 [← Pulse platform issue index](../pulse_platform_issue_register.md)
 
-# PLAT-118 — split SparkQuill into its own release process
+# PLAT-118 — Linux `execute_shell_command` is unusable on rootless AppArmor-hardened hosts because the platform unconditionally requires a privileged mount namespace
 
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `implemented` — CI-verified, no further work identified |
-| Last synchronized | `2026-08-16` |
+| Ticket state | `new` — reproduced on the deployed Video Studio EC2 host; no platform repair exists yet |
+| Last synchronized | `2026-08-17` |
 
-- **Priority:** P3
-- **Owner:** `.github/workflows/sparkquill-desktop.yml`,
-  `.github/workflows/desktop-release.yml`
+- **Priority:** P1 — every `execute_shell_command` call fails before the user's
+  command starts, including `echo` and `whoami`. Products that depend on the
+  bridge shell cannot inspect files, render media, or call providers such as
+  fal.ai. The failure is total on affected Linux deployments, but does not
+  affect macOS or Linux hosts that grant mount-namespace capability.
+- **Owner:** shared workspace shell sandbox (`workspace/security/isolator.go`),
+  shell execution boundary (`workspace/handlers/shell.go` and
+  `agent_go/pkg/workspace/execute_shell_command.go`), and Linux deployment
+  preflight/health reporting.
 
-## Problem (as originally raised)
+## Symptom
 
-SparkQuill (the family-learning desktop app) and AgentWorks Desktop shipped
-through the same release pipeline, risking one app's change blocking or
-re-releasing the other.
+In the public Video Studio deployment, Claude Code correctly reaches the
+AgentWorks MCP bridge and calls `execute_shell_command`, but every call returns
+a tool failure before the requested program runs. A request to test fal.ai
+therefore reports that the shell is unavailable; it provides no evidence about
+the fal.ai credential itself.
 
-## Current state
+The smallest user-visible reproduction is:
 
-This is already done, contrary to how it was carried on the task list.
-`sparkquill-desktop.yml` exists as a fully separate workflow:
+```json
+{"command":"whoami"}
+```
 
-- Its own tag namespace (`sparkquill-v*`, distinct from AgentWorks' `v*`) —
-  git history shows this was itself a bug fix
-  (`bf5b8fca Fix SparkQuill release publishing to use its own tag namespace`).
-- Path-scoped PR triggers (`desktop-sparkquill/**`,
-  `agent_go/cmd/family-server/**`, `frontend/learning-app/**`, its own
-  workflow file) so unrelated AgentWorks changes don't trigger it.
-- A comment in the file states the intent directly: *"Separate from 'Desktop
-  DMG' (AgentWorks) on purpose: the two apps ship independently, on their own
-  tags, and neither should be blocked or re-released by a change to the
-  other."*
-- The 5 most recent `main`-branch CI runs are green (`gh run list
-  --workflow=sparkquill-desktop.yml`), most recent success
-  2026-08-16T08:31:42Z.
+The bridge returns `exit_code=1` with no command output. `echo test`, file
+inspection, and provider test scripts fail identically.
 
-An earlier flaky failure (an unrelated Swift voice-helper cache issue that
-blocked PR #182) was transient — not evidence the split itself is incomplete.
+## Confirmed platform call chain
+
+`agent_go/pkg/workspace/execute_shell_command.go` resolves and validates the
+Folder Guard, then the workspace service constructs a `security.Isolator`.
+`Isolator.ExecuteIsolated` selects its backend only by operating system:
+
+```go
+if runtime.GOOS == "darwin" {
+    return iso.executeIsolatedMacOS(ctx, command, args)
+}
+return iso.executeIsolatedLinux(ctx, command, args)
+```
+
+The Linux backend then unconditionally executes:
+
+```go
+exec.CommandContext(ctx, "unshare", "-m", "--propagation", "private", "sh", scriptPath)
+```
+
+There is no capability probe, supported rootless backend, or actionable startup
+failure. Consequently this is shared platform behavior: any AgentWorks product
+using `execute_shell_command` on the same host policy fails, not only Video
+Studio.
+
+## Live evidence — Video Studio EC2, 2026-08-17
+
+The deployed instance is a non-root installation running as `video-studio` on
+an AWS Linux kernel with Landlock and AppArmor enabled:
+
+```text
+kernel=6.17.0-1019-aws
+kernel.apparmor_restrict_unprivileged_userns=1
+```
+
+Running the exact namespace primitive used by the platform as the service user
+produces:
+
+```text
+$ /usr/bin/unshare -m --propagation private sh -c 'echo platform-shell-ok'
+unshare: unshare failed: Operation not permitted
+exit=1
+```
+
+`kernel.unprivileged_userns_clone=1` and a nonzero
+`/proc/sys/user/max_user_namespaces` do not make this operation legal: the
+AppArmor policy still prevents the unprivileged namespace setup. Adding
+`--user --map-root-user` was also tested and fails while writing
+`/proc/self/uid_map`.
+
+The same host reports `landlock` in `/sys/kernel/security/lsm`, so a rootless
+kernel-enforced filesystem sandbox is available without changing the host-wide
+AppArmor policy.
+
+## Root cause
+
+The platform treats "Linux" as equivalent to "the service may create a mount
+namespace." That capability is not guaranteed for a non-root process and is
+intentionally denied by common hardened distributions. The deployment is
+rootless by design, while the selected Linux sandbox backend requires a
+privilege the service does not have.
+
+The bug has two layers:
+
+1. **Execution:** Linux has no rootless sandbox backend, even when the kernel
+   exposes Landlock.
+2. **Diagnosis:** startup succeeds and all services report healthy; the
+   incompatibility is discovered only after an agent calls the shell, and the
+   bridge reduces the cause to a generic tool failure.
+
+## Required repair
+
+### 1. Add a rootless Linux sandbox backend
+
+Implement Landlock as the preferred backend when its required ABI and access
+rights are available. Apply the restriction in a dedicated child launcher
+before `exec`, with `no_new_privs`, so the Go server process itself is not
+restricted and the policy is inherited irreversibly by the command and all of
+its descendants.
+
+The backend must preserve the existing `Isolator` contract:
+
+- `ReadPaths` are readable but not writable;
+- `WritePaths` are readable and writable;
+- `BlockedPaths` deny both reads and writes and take precedence;
+- `BlockedWritePaths` remain readable but reject writes;
+- `WorkDir` is usable without granting its parent tree accidentally;
+- symlink/canonical-path escapes remain denied;
+- only the minimal system paths required to load and execute programs are
+  readable/executable;
+- the safe environment and secret-injection boundary remain unchanged.
+
+Network policy must remain explicit. Landlock filesystem rules must not
+silently change current connectivity, and any Landlock network rules should be
+applied only from the platform's declared `AllowNetwork` policy.
+
+### 2. Detect capabilities instead of assuming them
+
+Select a Linux backend from verified runtime capabilities, not only `GOOS`:
+
+1. use Landlock when the necessary ABI is present;
+2. use mount-namespace isolation only when a harmless preflight proves it is
+   permitted for the service identity;
+3. otherwise fail closed with a typed `SANDBOX_UNAVAILABLE` error.
+
+Never fall back to executing the command directly.
+
+### 3. Make deployment health truthful
+
+The Linux deployment preflight must run a sandboxed no-op using the same
+service identity and backend that real shell calls use. Service health should
+report the shell capability separately from HTTP process liveness. The UI/tool
+error should state which sandbox backend failed and why, without exposing
+secrets or host paths.
+
+## Independent code review (2026-08-17)
+
+Every code claim above was checked against the source rather than taken from the
+report. All of them hold:
+
+| Claim | Verified |
+|---|---|
+| `ExecuteIsolated` selects a backend only from `GOOS` | `workspace/security/isolator.go:139-145`, verbatim |
+| Linux is an unconditional `unshare -m --propagation private` | `workspace/security/isolator.go:169`, verbatim |
+| No capability probe exists | `unshare` appears only in `isolator.go` — four comments and one `exec`, nothing that tests permission |
+| No Landlock support anywhere | zero matches across `workspace/` and `agent_go/` |
+| Shared platform behaviour, not Video Studio-specific | four call sites: `workspace/handlers/shell.go:159`, `agent_go/cmd/family-server/browser_backend.go:220`, `agent_go/cmd/family-server/shell_tool.go:107` and `:196` |
+
+Three additions the report does not cover.
+
+**The diagnosis layer may be less broken than stated — check before rebuilding
+it.** `ExecuteIsolated` returns an error only for *setup* failure (writing the
+mount script). The `unshare` denial happens later, at `cmd.Run()`, so
+`unshare: unshare failed: Operation not permitted` lands in `stderrBuf` and
+should reach the caller through the normal exit-code path. The report says the
+bridge returned `exit_code=1` with no output, which suggests that stderr is
+being dropped somewhere between the handler and the tool result. Establish which
+of the two it is first: if the stderr already surfaces, "make deployment health
+truthful" is a much smaller change than section 3 implies; if it does not, that
+is a separate reporting defect that deserves its own line rather than being
+absorbed into the sandbox work.
+
+**An unsandboxed execution path already exists.** `workspace/handlers/shell.go`
+runs `exec.CommandContext(ctx, "sh", "-c", fullCommand)` with no isolator in the
+`else` branch taken when no Folder Guard is supplied. That is not the
+capability-triggered fallback the non-fixes section forbids, but anyone
+implementing "fail closed" must know it is there — otherwise fail-closed looks
+already-guaranteed when it is only guaranteed for guarded calls.
+
+**Keep the `--user` finding prominent.** The current call creates a mount
+namespace with `-m` and no `--user`. The live evidence records that
+`--user --map-root-user` was also tested and fails while writing
+`/proc/self/uid_map`. That single line forecloses the obvious "just add
+`--user`" patch, and it should stay visible to whoever picks this up.
+
+### On the proposed repair
+
+The shape is right — Landlock preferred, namespace only when a preflight proves
+it, otherwise typed `SANDBOX_UNAVAILABLE`, never unsandboxed. Two cautions:
+
+- **Landlock is not a translation of the current contract.** It has no
+  equivalent of `BlockedWritePaths` *precedence*; the same effect is produced by
+  simply never granting write on that subtree. The rule set has to be rewritten
+  in Landlock's own terms and re-argued against the acceptance list, not mapped
+  across mechanically. The ticket also says "when the necessary ABI is present"
+  without pinning which: filesystem rules need ABI 1+, network rules ABI 4+, and
+  the two should be probed separately so a kernel with filesystem-only support
+  is still usable.
+- **The test boundary is the strongest section of this ticket** and should be
+  treated as binding. It already states the rule this register keeps relearning
+  — exercise the product path, never construct a successful backend result. That
+  rule was violated again on the same day this ticket was written: PLAT-117's
+  first fix passed its tests while not matching any record that occurs in
+  production, because the test built the record shape the fix expected. A
+  Landlock backend is exactly the kind of change where a constructed-success
+  test would certify nothing.
+
+### Not attempted here
+
+No code change is proposed. This is Linux-deployment behaviour that cannot be
+meaningfully verified from a macOS workstation, and the ticket's own acceptance
+criteria require the hardened EC2 host. Reviewing it from here without that host
+would produce precisely the constructed-evidence result the test boundary warns
+against.
+
+## Explicit non-fixes
+
+- Do not run the workspace service as root.
+- Do not grant `CAP_SYS_ADMIN` to the service or `unshare` binary.
+- Do not disable AppArmor or set
+  `kernel.apparmor_restrict_unprivileged_userns=0` host-wide.
+- Do not bypass `Isolator` or rely only on command-string/path validation.
+- Do not silently run unsandboxed when capability detection fails.
+
+Those options either violate the deployment's rootless contract or weaken the
+entire host to make one platform primitive work.
 
 ## Acceptance
 
-- A SparkQuill-only change triggers only `sparkquill-desktop.yml`. ✅ (path
-  filters)
-- A SparkQuill tag never collides with or is blocked by an AgentWorks
-  release. ✅ (separate tag namespace, separate concurrency group)
-- Recent CI history is green. ✅
+- On a Linux host with
+  `kernel.apparmor_restrict_unprivileged_userns=1`, running as an ordinary
+  non-root service user, `execute_shell_command({"command":"echo test"})`
+  succeeds through a kernel-enforced sandbox.
+- An allowed project file can be read; an allowed output file can be created.
+- A read-only path rejects modification while remaining readable.
+- A blocked path and a symlink escape are unreadable and unwritable.
+- Deployment credentials, other projects, and the service user's private files
+  are inaccessible from the child command.
+- A command that requires declared network access can reach its provider; a
+  network-denied command cannot establish an outbound connection.
+- If neither Landlock nor a proven namespace backend is available, startup or
+  the shell capability check fails closed with `SANDBOX_UNAVAILABLE`; the user
+  never receives a misleading provider-key diagnosis.
+- macOS `sandbox-exec` behavior and existing Folder Guard tests remain green.
+- The deployed Video Studio instance passes, in order: `echo`, project
+  read/write, blocked-path denial, and a fal.ai authentication-only probe that
+  does not print the credential.
 
-No further action identified; closing candidate pending anyone spotting a gap
-this pass missed.
+## Test boundary
+
+Focused tests must exercise the product path, not construct a successful
+backend result directly:
+
+1. start the workspace service as a non-root user under an AppArmor policy that
+   rejects unprivileged user namespaces;
+2. call the real `/api/shell` route with an enabled Folder Guard;
+3. assert the allowed/denied filesystem and network cases above;
+4. force backend capability absence and assert the typed fail-closed error;
+5. deploy the resulting binaries rootlessly and repeat the live Video Studio
+   shell probe before moving this ticket to `runtime_reverify` or `done`.

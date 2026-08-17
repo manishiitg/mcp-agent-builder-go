@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `implemented` — platform capability shipped and tested; not yet adopted by any real workflow |
+| Ticket state | `implemented` — periodic mode is now mandatory for every workflow (policy change, see below); bootstrap is owned by Gate's own normal pass, not a dedicated migration turn |
 | Last synchronized | `2026-08-16` |
 
 - **Priority:** P2 — not a bug fix, a structural option. Adopting it on a
@@ -92,6 +92,67 @@ today is expected to say so and stay on `per_run`, the same "keep the
 current model with a stated reason" pattern every other contract upgrade in
 this register already allows.
 
+## Policy change, same day: periodic mode is mandatory, not opt-in
+
+Everything above described the original design: a per-workflow, frequency-
+gated agentic decision, rolled out through a dedicated contract-upgrade
+migration turn. Both halves of that changed after the first real migration
+ran and revealed the problem directly.
+
+**What actually happened when the migration ran.** All three real workflows
+that reached the rung (social-media, build-in-public, upwork) independently
+decided to stay on `per_run` — every one of their schedules tops out at a
+handful of runs a day, below the "roughly hourly or more" bar the upgrade
+prompt used. That decision was faithful to the rule as written. But it
+exposed that the rule itself used the wrong signal: **PLAT-113's original
+5-hour deadlocked session — the incident that motivated building this whole
+feature — happened on a workflow that doesn't run hourly either.** The real
+risk was never "how often does the cron fire"; it's "can this session end up
+staying open or reused for a long time regardless of cron frequency"
+(background agents, deadlocks, a stalled platform bridge per PLAT-116). Cron
+frequency was measuring the wrong thing, so a frequency-gated opt-in was
+never going to protect the workflows actually at risk.
+
+**Decision: periodic mode is now mandatory for every workflow, no
+exceptions.** A normal scheduled run does backup, publish, and notify —
+nothing else. Gate, Review+Fix, and Finalize never run inline with a normal
+scheduled run again, regardless of how rarely that workflow runs.
+`per_run` stops being a valid end-state for any real workflow going forward.
+
+**The rollout mechanism changed too, not just the policy.** The original
+design used a dedicated contract-upgrade migration turn
+(`upgrade-periodic-pulse-review`) to make and apply this decision once per
+workflow. That is now redundant: the lightweight per-run finalizer already
+re-checks the review schedule's cadence on an ongoing basis (see below), but
+it can only do that once a workflow is *already* periodic — it can't
+bootstrap a `per_run` workflow into periodic mode by itself. Rather than keep
+a separate version-gated migration turn around for that one-time transition,
+the bootstrap moved into **Gate's own normal-run flow**
+(`pulse-gate.md`, "Bootstrapping periodic mode"): the first time Gate runs a
+normal `per_run` pass for a workflow not yet on `"periodic"`, it creates the
+review schedule and flips the mode itself, as part of that same pass, then
+finishes the rest of the pass exactly as any other `per_run` run — one more
+full run, then periodic from then on. No dedicated migration turn is needed
+at all; the old rung (`workflow_version_upgrades.go`,
+`upgradePeriodicPulseReviewHandoff`) is now a trivial version stamp kept
+alive only because `scheduledWorkshopTurns` requires every workflow below
+current to have a complete upgrade path — its own content explicitly says
+Gate owns this now, not the migration.
+
+**A fourth, ongoing responsibility rides along in the lightweight
+finalizer.** The review interval chosen at bootstrap (or at `/pulse-setup`
+time for new workflows) is a judgment call about actual run volume, and
+volume can drift after that choice was made. Every lightweight
+backup+publish+notify pass now also cheaply re-checks the review schedule's
+cron against the workflow's own recent `get_schedule_runs` history and
+adjusts it via `update_schedule` when warranted — explicitly optional, most
+passes change nothing, so a workflow that starts running much more or less
+often doesn't silently outgrow a stale interval forever.
+
+`/pulse-setup` (`workflow-tools.md`) was updated to match: a brand-new
+workflow gets both schedules created together, unconditionally, at setup
+time — no frequency judgment offered there either.
+
 ## Follow-up fix: publish was skipped too broadly
 
 The first version of `postRunMonitorLightweightFinalizeStep` marked `publish`
@@ -114,18 +175,24 @@ configured target.
 
 ## Not fixed here
 
-- **No real workflow has adopted `"periodic"` mode yet.** This ships the
-  capability; nothing has exercised it under a real, frequent schedule.
+- **No real workflow has been bootstrapped into `"periodic"` mode yet.**
+  Social-media, build-in-public, and upwork all still show
+  `post_run_monitor_mode: null` as of this writing — the bootstrap fires
+  inside Gate's next normal `per_run` pass, which hasn't happened again
+  since this policy change landed. This is a prompt-guidance change, not
+  something applied directly to any live workflow's state.
 - **Retention and cadence are not automatically kept in sync.** Gate's
-  self-check surfaces a mismatch as a `workflow_review`/`llm_ops_review`
-  finding for the normal Fixer path to correct; nothing enforces it
-  directly.
+  self-check (and now the lightweight finalizer's ongoing re-check) surfaces
+  a mismatch as a `workflow_review`/`llm_ops_review` finding, or adjusts the
+  schedule directly via `update_schedule`; nothing enforces a floor beyond
+  that agentic judgment.
 - **A workflow's own `post_run_monitor_mode` and its schedules'
-  `PulseReviewOnly` markers can be set independently and inconsistently** —
-  e.g. `"periodic"` with no `PulseReviewOnly` schedule, or vice versa.
-  Nothing currently detects or flags that specific combination outside of
-  the upgrade rung's own atomic pairing at setup time.
-- **`update_workflow_config`'s new field has no dedicated unit test** — it
+  `PulseReviewOnly` markers can still be set independently and
+  inconsistently** — e.g. `"periodic"` with no `PulseReviewOnly` schedule.
+  Gate's bootstrap pairs them atomically when it fires, but nothing detects
+  or repairs a mismatch that arises some other way (manual edit, a schedule
+  deleted later).
+- **`update_workflow_config`'s field has no dedicated unit test** — it
   follows the exact same manual-JSON-manipulation pattern as its
   already-untested sibling `post_run_monitor` in the same file; the
   underlying read-side logic it writes (`PostRunMonitorIsPeriodic`) is
@@ -145,10 +212,17 @@ configured target.
   `TestCreateAndUpdatePulseReviewOnlyScheduleSkipsGroupNamesRequirement`
   (against the real `CreateSchedule`/`UpdateSchedule` implementations, not
   just the tool-layer guard — this is what caught the `ValidateManifest`
-  gap), `TestUpgradePeriodicPulseReviewPromptShape`, and
+  gap), `TestUpgradePeriodicPulseReviewHandoffPromptShape`, and
   `TestUpgradeQueriesNeverNamePlatTickets`.
 - Every existing `workflowVersionUpgradePlan`-dependent test updated for the
   new terminal rung and reverified passing.
+- **Policy-change verification (same day)**: `TestLightweightFinalizeStepReconsidersReviewScheduleCadence`
+  pins the fourth, ongoing cadence-recheck responsibility; the handoff-rung
+  test above pins that the migration prompt no longer offers `per_run` as an
+  option and explicitly names the Gate handoff instead of re-implementing
+  the migration itself. Full suite reverified after this change: the same
+  23 pre-existing failures as the baseline captured earlier in this session,
+  byte-for-byte identical — zero new failures.
 - Full suite reverified after every part: 26 failures throughout, byte-for-byte
   identical to the baseline captured before this work started — zero new
   failures introduced by any of six incremental changes.
@@ -172,7 +246,9 @@ configured target.
 ## Acceptance
 
 - An unmodified workflow (no `post_run_monitor_mode` set) is byte-for-byte
-  unaffected — proven by the fail-safe test on the mode-reading accessor.
+  unaffected until its next normal Gate pass — proven by the fail-safe test
+  on the mode-reading accessor; the transition to `"periodic"` happens
+  inside that pass, not before.
 - A `"periodic"` workflow's normal run schedule never runs Gate, reviewers,
   or Fixer, in any session.
 - The periodic review pass reviews the real current backlog, decided by
@@ -181,5 +257,9 @@ configured target.
 - Creating or updating a `PulseReviewOnly` schedule never requires
   `group_names`, at the tool layer, the Go implementation, and manifest
   validation alike.
-- The upgrade rung never leaves a workflow in `"periodic"` mode without a
-  paired review schedule, or vice versa.
+- Gate's bootstrap never leaves a workflow in `"periodic"` mode without a
+  paired review schedule, or vice versa, the same atomic pairing the
+  original migration rung enforced.
+- No live prompt (the Gate bootstrap, the handoff rung, `/pulse-setup`)
+  offers staying on `per_run` as a legitimate outcome — periodic is
+  mandatory for every workflow, not a frequency-based judgment call.

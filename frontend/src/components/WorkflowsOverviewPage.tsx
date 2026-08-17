@@ -2,13 +2,13 @@ import React, { useEffect, useState, useCallback } from 'react'
 import { Loader2, ChevronRight, ChevronDown, FileText, DollarSign, Clock, AlertCircle, X, CheckCircle2, PlayCircle, Circle, Timer, Zap } from 'lucide-react'
 import { agentApi } from '../services/api'
 import { usePresetApplication } from '../stores/useGlobalPresetStore'
-import { useModeStore } from '../stores/useModeStore'
 import ExecutionLogsPopup from './workflow/ExecutionLogsPopup'
 import EvaluationPopup from './workflow/EvaluationPopup'
 import CostsPopup from './workflow/CostsPopup'
 import { EmployeeDashboard } from './EmployeeDashboard'
 import type { CustomPreset, PredefinedPreset } from '../types/preset'
 import type { RunFolderInfo, EvaluationReportsResponse, RunMetadataModels } from '../services/api-types'
+import { openWorkflowPresetPage } from '../utils/workflowSessionRestore'
 
 interface RunFolderDetail {
   folder: RunFolderInfo
@@ -561,17 +561,19 @@ export const WorkflowsOverviewPage: React.FC = () => {
 // Popup/dialog version
 export const WorkflowsOverviewPopup: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, onClose }) => {
   const { rows, loading, loadData } = useWorkflowRows()
-  const { applyPreset } = usePresetApplication()
-  const { setModeCategory, selectedModeCategory } = useModeStore()
   const popups = usePopupState()
 
   useEffect(() => { if (isOpen) loadData() }, [isOpen, loadData])
 
   const handleOpenWorkflow = useCallback((preset: CustomPreset | PredefinedPreset) => {
-    if (selectedModeCategory !== 'workflow') setModeCategory('workflow')
-    applyPreset(preset, 'workflow')
     onClose()
-  }, [applyPreset, onClose, selectedModeCategory, setModeCategory])
+    void openWorkflowPresetPage(preset, {
+      title: preset.label,
+      source: 'workflow-overview',
+    }).catch(error => {
+      console.error('Failed to open automation:', error)
+    })
+  }, [onClose])
 
   if (!isOpen) return null
 

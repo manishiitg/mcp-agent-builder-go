@@ -12,6 +12,8 @@ import { FileContentViewer } from "./components/FileContentViewer";
 import { resetSessionId, agentApi } from "./services/api";
 import { AuthWrapper } from "./components/AuthWrapper";
 import { findBlockingMultiAgentSession, shouldConfirmForSessionStatus, shouldConfirmNewMultiAgentChat } from "./utils/newChatConfirmation";
+import { isScheduledSession } from "./utils/workflowSessionKinds";
+import { activateTab } from "./utils/activateTab";
 import { Loader2, PanelRightClose, PanelRightOpen, Smartphone, Laptop } from "lucide-react";
 import { WorkflowLayout } from "./components/workflow";
 import { ModePresetBar } from "./components/ModePresetBar";
@@ -22,7 +24,7 @@ import { useModeStore } from "./stores/useModeStore";
 import { useProductSurfaceStore } from "./stores/useProductSurfaceStore";
 import { useLLMStore } from "./stores/useLLMStore";
 import { normalizeEventViewMode, waitForChatStoreHydration, type ChatTab } from "./stores/useChatStore";
-import { isChiefOfStaffTab, isChiefOfStaffScheduleTab, isInteractiveChiefOfStaffTab } from "./utils/chiefOfStaff";
+import { CHIEF_OF_STAFF_PROFILE_ID, isChiefOfStaffTab, isChiefOfStaffScheduleTab, isInteractiveChiefOfStaffTab } from "./utils/chiefOfStaff";
 import { useLLMDefaults } from "./hooks/useLLMDefaults";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./components/ui/tooltip";
 import "./App.css";
@@ -157,7 +159,13 @@ function App() {
       if (chiefTab) {
         chatStore.switchTab(chiefTab.tabId)
       } else {
-        await chatStore.createChatTab('Chief of Staff', { mode: 'multi-agent' })
+        await chatStore.createChatTab('Chief of Staff', {
+          mode: 'multi-agent',
+          agentProfileId: CHIEF_OF_STAFF_PROFILE_ID,
+          agentProfileVersion: 1,
+          agentProfileWorkspace: 'Chats',
+          agentProfileProjectTitle: 'Chief of Staff',
+        })
       }
     })
     return () => { cancelled = true }
@@ -634,7 +642,13 @@ function App() {
       try {
         // This effect only runs for multi-agent mode (guarded above); workflow
         // tabs are created by WorkflowLayout.
-        await chatStore.createChatTab('Chief of Staff', { mode: 'multi-agent' })
+        await chatStore.createChatTab('Chief of Staff', {
+          mode: 'multi-agent',
+          agentProfileId: CHIEF_OF_STAFF_PROFILE_ID,
+          agentProfileVersion: 1,
+          agentProfileWorkspace: 'Chats',
+          agentProfileProjectTitle: 'Chief of Staff',
+        })
       } catch (error) {
         console.error('Failed to create default tab:', error)
         // Reset flag on error so it can retry
@@ -721,7 +735,7 @@ function App() {
 
         if (targetWorkflowTab) {
           if (!hasValidActiveTab || activeTabId !== targetWorkflowTab.tabId) {
-            chatStore.switchTab(targetWorkflowTab.tabId)
+            activateTab(targetWorkflowTab.tabId)
           }
 
           const shouldShowWorkflowChat =
@@ -916,7 +930,13 @@ function App() {
           .filter(isInteractiveChiefOfStaffTab)
           .sort((a, b) => workflowTabSortTimestamp(b) - workflowTabSortTimestamp(a))[0] || null
         if (!activeTab) {
-          const tabId = await chatStore.createChatTab('Chief of Staff', { mode: 'multi-agent' })
+          const tabId = await chatStore.createChatTab('Chief of Staff', {
+            mode: 'multi-agent',
+            agentProfileId: CHIEF_OF_STAFF_PROFILE_ID,
+            agentProfileVersion: 1,
+            agentProfileWorkspace: 'Chats',
+            agentProfileProjectTitle: 'Chief of Staff',
+          })
           activeTab = chatStore.getTab(tabId) || null
         }
         if (!activeTab) return
@@ -1005,7 +1025,7 @@ function App() {
     const mostRecent = candidates.reduce((best, t) =>
       workflowTabSortTimestamp(t) > workflowTabSortTimestamp(best) ? t : best
     , candidates[0])
-    chatStore.switchTab(mostRecent.tabId)
+    activateTab(mostRecent.tabId)
   }, [])
 
   useEffect(() => {

@@ -34,4 +34,3 @@ export * from './orchestrator'
 export * from './workflow'
 
 // Background agents status bar
-export { BackgroundAgentsStatusBar } from './BackgroundAgentsStatusBar'

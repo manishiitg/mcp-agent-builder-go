@@ -10,6 +10,7 @@ import {
   chatHistoryWorkshopModeLabel,
 } from '../components/PreviousChatHistoryPanel'
 import { startRestoredTransportTerminal } from '../utils/restoredTerminal'
+import { CHIEF_OF_STAFF_PROFILE_ID } from '../utils/chiefOfStaff'
 
 /**
  * Shared resume handler for multi-agent chat history.
@@ -31,7 +32,13 @@ export function useResumePreviousChat() {
     let targetTab = targetTabId ? chatStore.chatTabs[targetTabId] : undefined
 
     if (!targetTab || targetTab.metadata?.mode !== 'multi-agent') {
-      targetTabId = await chatStore.createChatTab('Chief of Staff', { mode: 'multi-agent' })
+      targetTabId = await chatStore.createChatTab('Chief of Staff', {
+        mode: 'multi-agent',
+        agentProfileId: CHIEF_OF_STAFF_PROFILE_ID,
+        agentProfileVersion: 1,
+        agentProfileWorkspace: 'Chats',
+        agentProfileProjectTitle: 'Chief of Staff',
+      })
       targetTab = useChatStore.getState().chatTabs[targetTabId]
     }
 

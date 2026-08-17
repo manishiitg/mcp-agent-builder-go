@@ -53,47 +53,70 @@ type ToolCallRecord struct {
 
 // BackgroundAgent represents a background agent running asynchronously
 type BackgroundAgent struct {
-	ID                   string                `json:"id"`
-	ParentExecutionID    string                `json:"parent_execution_id,omitempty"`
-	Name                 string                `json:"name"`
-	SessionID            string                `json:"session_id"`
-	Instruction          string                `json:"instruction"`
-	Kind                 string                `json:"kind,omitempty"`
-	Status               BackgroundAgentStatus `json:"status"`
-	Result               string                `json:"result,omitempty"`
-	Error                string                `json:"error,omitempty"`
-	CreatedAt            time.Time             `json:"created_at"`
-	CompletedAt          *time.Time            `json:"completed_at,omitempty"`
-	ReasoningLevel       string                `json:"reasoning_level,omitempty"`
-	ModelID              string                `json:"model_id,omitempty"`
-	Metadata             map[string]string     `json:"metadata,omitempty"` // arbitrary key-value pairs (e.g. workshop_mode, lock_code)
-	cancel               context.CancelFunc
-	mu                   sync.RWMutex
-	startNotified        bool
-	notified             bool
-	notificationInFlight bool
-	terminalNotified     bool             // a terminal event (background_agent_terminated) has been emitted; prevents duplicates across OnExecutionTerminated / OnExecutionComplete
-	getHistory           HistoryFunc      // returns last N conversation entries from the running sub-agent
-	toolCalls            []ToolCallRecord // tracked tool calls with timing
-	activeToolCall       map[string]int   // toolCallID → index in toolCalls (for matching start/end)
+	ID                string                `json:"id"`
+	ParentExecutionID string                `json:"parent_execution_id,omitempty"`
+	Name              string                `json:"name"`
+	SessionID         string                `json:"session_id"`
+	Instruction       string                `json:"instruction"`
+	Kind              string                `json:"kind,omitempty"`
+	Status            BackgroundAgentStatus `json:"status"`
+	Result            string                `json:"result,omitempty"`
+	Error             string                `json:"error,omitempty"`
+	CreatedAt         time.Time             `json:"created_at"`
+	CompletedAt       *time.Time            `json:"completed_at,omitempty"`
+	ReasoningLevel    string                `json:"reasoning_level,omitempty"`
+	ModelID           string                `json:"model_id,omitempty"`
+	Metadata          map[string]string     `json:"metadata,omitempty"` // arbitrary key-value pairs (e.g. workshop_mode, lock_code)
+	cancel            context.CancelFunc
+	mu                sync.RWMutex
+	startNotified     bool
+	// completionNotification replaces the former notified/notificationInFlight
+	// boolean pair (PLAT-117). Those two encoded one lifecycle — none → in
+	// flight → delivered — as two independent flags, which made illegal
+	// combinations (both set, or in-flight after delivery) representable and
+	// meant every reader had to remember to consult both. Deliberately NOT
+	// merged with startNotified or terminalNotified: those are separate axes,
+	// not stages of this one.
+	completionNotification completionNotificationState
+	terminalNotified       bool             // a terminal event (background_agent_terminated) has been emitted; prevents duplicates across OnExecutionTerminated / OnExecutionComplete
+	getHistory             HistoryFunc      // returns last N conversation entries from the running sub-agent
+	toolCalls              []ToolCallRecord // tracked tool calls with timing
+	activeToolCall         map[string]int   // toolCallID → index in toolCalls (for matching start/end)
 }
+
+// completionNotificationState is the lifecycle of a background agent's
+// completion notification: it has not been attempted, an attempt is in flight,
+// or it was delivered. Delivered is terminal — a delivered notification is
+// never re-attempted.
+type completionNotificationState uint8
+
+const (
+	completionNotificationNone completionNotificationState = iota
+	completionNotificationInFlight
+	completionNotificationDelivered
+)
 
 func (a *BackgroundAgent) beginCompletionNotification() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.notified || a.notificationInFlight {
+	if a.completionNotification != completionNotificationNone {
 		return false
 	}
-	a.notificationInFlight = true
+	a.completionNotification = completionNotificationInFlight
 	return true
 }
 
 func (a *BackgroundAgent) finishCompletionNotification(delivered bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.notificationInFlight = false
 	if delivered {
-		a.notified = true
+		a.completionNotification = completionNotificationDelivered
+		return
+	}
+	// A failed attempt returns to "not attempted" so the retry/sweep paths can
+	// pick it up again; it must not linger as in-flight.
+	if a.completionNotification == completionNotificationInFlight {
+		a.completionNotification = completionNotificationNone
 	}
 }
 
@@ -301,6 +324,55 @@ type BackgroundAgentSnapshot struct {
 	CompletionNotified bool `json:"-"`
 }
 
+// IsProgressMirror reports whether this record is a per-step workflow PROGRESS
+// MIRROR rather than work in its own right (PLAT-117).
+//
+// workflowProgressBridge (planning_exports.go) turns each workflow step's
+// start/end progress events into a background-agent record so the UI can show
+// per-step progress, and workshopExecutionBgNotifier registers it expressly "so
+// that HasRunningAgents() returns true and the frontend keeps polling". That is
+// a DISPLAY concern, and best-effort is fine for it: the same work is already
+// recorded twice more reliably — the run's own durable per-step files on disk
+// (runs/<iteration>/<group>/execution/<step>/session.json, which is what Pulse
+// Gate actually reads), and the parent workflow-full-<id> agent, registered for
+// the whole run.
+//
+// It is NOT fine for deciding whether a turn may finish, which is why this
+// predicate exists. These records come from event pairing: a start mints an id
+// cached under agentType:stepIndex:agentName, and only a matching end closes it,
+// so any dropped or mismatched end leaves one open forever. Counting those as
+// live children made terminal() unreachable — social-media 2026-08-16 left two
+// step-0 mirrors open, so a turn whose real work had finished (a post landed and
+// was verified) was structurally guaranteed to time out, and the operator was
+// emailed that the workflow never ran.
+//
+// Callers that ask the DISPLAY question (HasRunningAgents and its call sites)
+// deliberately keep counting these. Callers that ask whether a turn may finish
+// must not.
+//
+// Classification DELEGATES to isWorkflowStepTrackingExecution rather than
+// checking Kind alone, and that distinction is the whole point.
+//
+// OnExecutionStart resolves a record's Kind as "a declared kind always wins",
+// falling back to the workflow_step override only when the creator declared
+// nothing. The per-step progress records in question declare "orchestrator", so
+// the override never fires for them and their Kind is NOT workflow_step — while
+// their ids (workflow-full-<parent>-step-<n>-<token>) are exactly what
+// isWorkflowStepTrackingExecution recognises.
+//
+// An earlier version of this predicate matched Kind=="workflow_step" only. It
+// therefore did not match the very records that caused this bug, and its test
+// passed because the test constructed Kind:"workflow_step" instead of using the
+// kind production actually stores — the same "reach the state through the
+// product path, never construct it" rule this register keeps relearning. The
+// live durable log settled it: both stuck orphans are stored kind=orchestrator.
+func (s BackgroundAgentSnapshot) IsProgressMirror() bool {
+	if strings.TrimSpace(s.Kind) == "workflow_step" {
+		return true
+	}
+	return isWorkflowStepTrackingExecution(s.ID, s.Name, s.Metadata)
+}
+
 // GetSnapshot returns a snapshot of the agent state (thread-safe)
 func (a *BackgroundAgent) GetSnapshot() BackgroundAgentSnapshot {
 	a.mu.RLock()
@@ -319,7 +391,7 @@ func (a *BackgroundAgent) GetSnapshot() BackgroundAgentSnapshot {
 		ReasoningLevel:     a.ReasoningLevel,
 		ModelID:            a.ModelID,
 		Metadata:           a.Metadata,
-		CompletionNotified: a.notified,
+		CompletionNotified: a.completionNotification == completionNotificationDelivered,
 	}
 	if a.CompletedAt != nil {
 		t := *a.CompletedAt
@@ -478,6 +550,18 @@ func (r *BackgroundAgentRegistry) ReconcileOrphanedProgressChildren(sessionID, p
 			continue
 		}
 		agent.SetError(reason)
+		// Settle COMPLETELY (PLAT-117). SetError alone leaves notified=false,
+		// and an unnotified terminal child is deliberately reported as running
+		// by conversationTurnTreeSnapshot — so settling the status without the
+		// flag left the record live anyway, which is how two orphaned mirrors
+		// made a turn permanently unable to reach terminal() on social-media
+		// 2026-08-16.
+		//
+		// There is genuinely nothing to deliver here: this runs precisely
+		// because the parent already finished, so no synthetic continuation is
+		// owed to anyone. Marking it delivered is a statement about the
+		// notification, not about the work.
+		agent.finishCompletionNotification(true)
 		settled = append(settled, agent.ID)
 	}
 	return settled
@@ -588,6 +672,15 @@ const hasRunningAgentsGracePeriod = 8 * time.Second
 
 // HasRunningAgents returns true if the session has any running agents, or if any agent
 // completed within the 8-second grace period.
+// HasRunningAgents answers the DISPLAY question: is there background activity
+// worth keeping the UI polling for? It deliberately counts per-step progress
+// mirrors (BackgroundAgentSnapshot.IsProgressMirror), which is what they were
+// registered for in the first place.
+//
+// It is NOT the question "may this turn finish?" — that one must exclude
+// progress mirrors, because a single dropped progress event would otherwise
+// block completion forever (PLAT-117). conversationTurnTreeSnapshot owns that
+// question and filters accordingly; do not substitute this call for it.
 func (r *BackgroundAgentRegistry) HasRunningAgents(sessionID string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -1256,7 +1349,7 @@ func (api *StreamingAPI) filterUnsentStartNotifications(sessionID string, agentI
 		snap := agent.GetSnapshot()
 		agent.mu.RLock()
 		alreadySent := agent.startNotified
-		completionNotified := agent.notified
+		completionNotified := agent.completionNotification == completionNotificationDelivered
 		agent.mu.RUnlock()
 		if !alreadySent && !completionNotified && !isTerminalBackgroundAgentStatus(snap.Status) {
 			filtered = append(filtered, agentID)
@@ -1449,7 +1542,7 @@ func (api *StreamingAPI) requeueUnnotifiedCompletions(sessionID string) {
 			continue
 		}
 		agent.mu.RLock()
-		notifiedOrInFlight := agent.notified || agent.notificationInFlight
+		notifiedOrInFlight := agent.completionNotification != completionNotificationNone
 		agent.mu.RUnlock()
 		if notifiedOrInFlight {
 			continue

@@ -238,6 +238,107 @@ success:
      restarts. Every step is idempotent, so nothing breaks if the originally
      stuck goroutine ever does unblock and runs its own cleanup afterward.
 
+## Formalized as a required P0 contract, not left as two one-off adapters
+
+Raised directly: two adapters happening to have `DiagnoseTurnCompletion`
+because I wrote them proves nothing about the *next* adapter, or about Pi
+CLI staying without one indefinitely. `multi-llm-provider-go` already has a
+mature capability-flag → required-certification framework
+(`coding_agent_contract.go` + `coding_agent_certification.go`) — exactly the
+mechanism PLAT-108's own unfinished "Layer 3 — certify it" plan called for
+generally. Extended it rather than inventing something new:
+
+- **`CodingAgentProviderContract.SupportsStalledTurnDiagnosis`** — a new
+  capability flag, `true` only for `ProviderClaudeCode` and `ProviderCodexCLI`
+  today (Pi CLI and Cursor's rationale for staying `false` is documented
+  inline, same as the "not Codex-specific" section above).
+- **`CertStalledTurnDiagnosis`** — a new certification ID, added to the
+  `codingAgentCapabilityCertifications` gating table (so
+  `TestAllCodingAgentCapabilityClaimsHaveRegisteredCertification` enforces
+  every provider claiming the flag has a registered proof) and promoted to
+  P0 wherever claimed, in both `CodingAgentCertificationPriorityForID` and
+  `RequiredP0CodingAgentCertificationIDs` — the identical pattern already
+  used for `CertStructuredStreaming`. A false "made no progress" timeout on
+  a turn that actually succeeded is release-blocking, not a nice-to-have.
+- **Real live E2E certs, not synthetic fixtures** —
+  `codexcli_stalled_turn_diagnosis_live_test.go` and
+  `claudecode_stalled_turn_diagnosis_live_test.go`: each runs one genuine
+  CLI turn to completion (real tmux, real API), then calls
+  `DiagnoseTurnCompletion` with **no turn in flight** and proves it
+  independently rediscovers that exact turn's real completion text and
+  timing. This is a materially different proof than the deterministic
+  fixture tests already covering the parsing logic — it certifies the
+  function against a genuine provider transcript, not a hand-written one.
+  **Actually run live** (`-coding-cli-p0-live`) against real `codex` and
+  `claude` CLIs on this machine, both passed (10.3s and 8.3s), both tmux
+  sessions confirmed cleanly torn down afterward — not just written and
+  assumed, per this codebase's own standing rule that this class of bug has
+  repeatedly passed unit suites while broken.
+- Every existing contract/certification drift test reverified passing
+  after the change, including the strictest one
+  (`TestActiveCodingAgentProvidersSatisfyP0Contract`, which independently
+  checks `Priority == P0`, `RealE2E == true`, and the exact live-gate `Env`
+  for every ID `RequiredP0CodingAgentCertificationIDs` returns).
+
+## Confirmed live, same day: the bug recurs, and the first cleanup pass was incomplete
+
+A real social-media schedule run reproduced this exact class of bug the same
+day the fix shipped — with a materially worse consequence than the original
+report: the underlying execution had **genuinely succeeded** (a real post
+landed and was independently verified — `task_complete` at 19:20:44 UTC:
+*"Done — the pinned execution route ran exclusively... One original post
+landed and was verified..."*), but the platform's bridge never observed that
+completion, the scheduler's idle-wait declared it failed 12 minutes later,
+and Pulse's "workflow did not start" fallback path produced a **false**
+summary claiming nothing happened — directly contradicting the real,
+verified evidence sitting in the same rollout.
+
+**The diagnostic itself didn't help here**, and the reason is instructive:
+`codexcli.DiagnoseTurnCompletion` locates a rollout by "newest file matching
+this working directory" — deliberately accepted as a known-imprecise
+fallback in the original design (see "Most likely mechanism" above). This
+run had `running_children=2` — other Codex sessions genuinely active in the
+same social-media working directory at the same moment — so the lookup most
+likely grabbed a *different* concurrent session's rollout instead of the
+root turn's own. This is exactly the ambiguity PLAT-108 already named and
+warned would keep recurring wherever a lookup uses proximity instead of
+identity; it is not fixed by this ticket.
+
+**The cleanup half had a real, separate gap, found by checking the live UI
+directly.** The session's `status` was correctly set to `"error"` (confirmed
+in `server_debug.log`), but Global Monitor and the workflow selector
+(`ModePresetBar.tsx`, `currentSessionTone`) kept showing the workflow as
+actively running for hours afterward. Neither surface actually reads session
+`status` for this — they read `api.sessionBusy[sessionID]` and the
+`TrackedWorkflowExecution` record for the root query, and the first version
+of `cleanupOrphanedConversationTurnSession` cleared neither. `sessionBusy` is
+only ever cleared by the normal completion path (`server.go:4236`), which —
+being the exact path permanently blocked on `for chunk := range textChan` —
+never ran. Fixed: the cleanup now also calls `setSessionBusy(sessionID,
+false)` and `completeTrackedExecution(rootExecutionID,
+trackedExecutionStatusFailed, ...)`, both idempotent alongside the rest of
+the function. Verified failing before the fix (both UI-relevant test
+assertions fail with the sessionBusy/tracked-execution lines reverted) and
+passing after.
+
+**Incidental finding, not fixed here**: while tracing this, PLAT-114's
+durable `background_agent_log` was checked directly and showed two rows for
+this same run permanently stuck at `status='running', completed_at=NULL`
+(`workflow-full-msvyee8q01-step-0-msvyijui03`,
+`-step-0-msw3jq3i0f`), even though `server_debug.log` explicitly records
+them being settled: *"Settled 2 orphaned progress child(ren) of finished
+execution..."* (`delegation.go`'s `ReconcileOrphanedProgressChildren`,
+PLAT-091). That function correctly transitions the *live* in-memory
+`BackgroundAgent` to `BGAgentFailed` with a real `CompletedAt` via
+`agent.SetError` — confirmed this is NOT the cause of the live "still
+running" symptom above, since `HasRunningAgents`'s grace period had long
+expired by the time this was checked. But it calls `SetError` directly
+instead of `emitBackgroundAgentCompleted`, so it never reaches PLAT-114's
+durable-log completion hook. A background agent settled this way stays
+`running` in the durable log forever, which would read as a real anomaly to
+anyone (or any future agent) auditing that table directly. Not fixed in this
+pass — flagged here since PLAT-114 owns that log's completeness.
+
 ## Deliberately still deferred, not fixed here
 
 The deeper question — why the bridge (`textChan`/`Session.Run`) stalls in
@@ -261,11 +362,20 @@ pursued; this pass deliberately did not chase it further.
   test fails with the exact live symptom — status stays `"running"` —
   restored it, confirmed the test passes). Cleanup idempotency and the
   no-running-agent early-return are covered separately.
+- **Follow-up (same day)**: both `TestCleanupOrphanedConversationTurnSessionClearsActiveSessionAndQueryIndex`
+  and `TestWaitForConversationTurnTreeIdleTimeoutRunsOrphanCleanup` extended
+  to also assert `sessionBusy` clears and the `TrackedWorkflowExecution`
+  reaches `trackedExecutionStatusFailed` — the two fields the workflow
+  selector and Global Monitor actually key off. Fail-before/pass-after
+  reverified the same way as the original fix.
+- **Now live-reverified**, not just unit-tested: this exact class of bug
+  reproduced on a real social-media schedule run the same day, independent
+  of any test — traced end-to-end through real rollout evidence
+  (`~/.codex/sessions/...`), `server_debug.log`, and PLAT-114's durable
+  background-agent log, confirming both the false-failure report and the
+  stuck-spinner UI symptom this ticket describes.
 - Full existing suite reverified after the change: the only failures present
   (23, across `cmd/server/guidance` Pulse/prompt-content tests and one
   unrelated `schedule_execution_history_test.go` pair) are pre-existing and
   untouched by any file this change modified — zero new failures introduced.
-- Not yet done: a live reverify on a real stuck schedule turn. This class of
-  bug has, per PLAT-108's own history, repeatedly passed unit suites while
-  broken — only a real tmux-driven run exercises the actual poll loop this
   fix reads from.

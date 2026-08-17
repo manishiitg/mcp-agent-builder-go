@@ -2732,6 +2732,16 @@ func postRunMonitorUsesLightweightFinalize(reviewEvidenceAvailable, pulseOnly bo
 // postRunMonitorNoRunSteps's precedent — there is no fresh review this pass
 // to publish, and the periodic pass is what owns publish once it reviews the
 // accumulated backlog.
+//
+// A fourth, ongoing responsibility rides along here rather than living only
+// in the one-time migration turn: the review schedule's cadence is a
+// judgment call about actual run volume, and actual run volume can drift
+// after the cadence was first chosen. Re-checking it on every lightweight
+// pass — cheaply, since the evidence (this workflow's own schedules and
+// recent run history) is already right there — means a workflow that starts
+// running much more (or less) often does not silently outgrow a stale
+// review interval; the one-time setup decision keeps being re-earned instead
+// of just being trusted forever.
 func postRunMonitorLightweightFinalizeStep(pulseRunID string, instructions ...workflowNotificationContentInstructions) []postRunMonitorStep {
 	ownerInstructions := workflowNotificationContentInstructions{}
 	if len(instructions) > 0 {
@@ -2763,7 +2773,13 @@ func postRunMonitorLightweightFinalizeStep(pulseRunID string, instructions ...wo
 			"mark the whole publish command skipped with that reason. Record one truthful terminal result for publish either way; "+
 			"(3) call notify_user exactly once with notification_kind=\"run_summary\" describing plainly and factually what this run "+
 			"itself did (actions taken, errors, outcome) — do not include a Pulse findings/fixes section, since none ran this pass — "+
-			"then record notify truthfully.%s%s",
+			"then record notify truthfully; "+
+			"(4) reconsider the review schedule's cadence. Read this workflow's own enabled run schedules, recent get_schedule_runs "+
+			"history, and the current pulse_review_only schedule's cron_expression. If actual run volume has drifted enough that the "+
+			"interval no longer makes sense — producing materially more runs between reviews than run_retention_count preserves, or "+
+			"reviewing so often that passes routinely find nothing new — call update_schedule on the review schedule with a better "+
+			"cron_expression. This is genuinely optional: most passes change nothing, and that is the expected outcome, not a missed "+
+			"step. Record the outcome either way (adjusted, or left unchanged with why) with record_pulse_result.%s%s",
 		pulseRunID, routing, content,
 	)}}
 }
@@ -3211,6 +3227,7 @@ func (s *SchedulerService) executeWorkshopJob(ctx context.Context, sctx *Schedul
 				s.sessionLogf(sctx, sessionID, "[SCHEDULER] Pre-run decision drain could not start (continuing to the run): %v", err)
 				continue
 			}
+			s.preserveRunEvidenceAfterFailedTurn(ctx, sctx, sessionID, invocationStartedAt)
 			return sessionID, runFolder, fmt.Errorf("workshop turn %d/%d (%s) failed: %w", i+1, len(turns), turn.label, err)
 		}
 
@@ -3316,11 +3333,44 @@ func runFolderNameSet(folders []RunFolderInfo) map[string]bool {
 	return names
 }
 
-// workshopRunProducedEvidence reports whether this invocation actually ran the
-// workflow. A new run folder is evidence. A pre-existing folder also counts
-// when its independently written metadata says it started during this
-// invocation, which covers workflows configured to reuse iteration-0. Status is
-// intentionally irrelevant: failed runs are valuable Pulse evidence too.
+// preserveRunEvidenceAfterFailedTurn consults the durable record before a failed
+// turn returns, so Pulse is never told "the workflow did not run" merely because
+// the session stopped progressing.
+//
+// This is PLAT-071 restored. It shipped 2026-08-10 in the dedicated
+// waitForWorkshopIdle failure branch, was extended by PLAT-084 the next day, and
+// was dropped whole on 2026-08-13 when that branch was replaced by
+// waitForConversationTurnTree — leaving workshopRunStartedDuringInvocation as
+// dead code and both its unit tests still green, because they call that helper
+// directly instead of driving this path. social-media then lost a second run to
+// the identical bug on 2026-08-16: a post landed and was verified, the idle wait
+// expired anyway, and the operator was emailed that nothing had run.
+//
+// It sits on the generic turn-failure return rather than an idle-wait-specific
+// branch, which widens it deliberately: "did a run actually start?" is answered
+// by the run's own metadata regardless of how the session died. Widening is safe
+// because workshopRunStartedDuringInvocation demands a real timestamp at or after
+// the invocation began and counts an unreadable record as nothing, so no failure
+// mode here can manufacture evidence that does not exist.
+func (s *SchedulerService) preserveRunEvidenceAfterFailedTurn(ctx context.Context, sctx *ScheduleContext, sessionID string, since time.Time) {
+	if s == nil || s.api == nil || sctx == nil || sctx.ProducedRunEvidence {
+		return
+	}
+	// Deliberately the baseline-free check: the pre-run snapshot can itself be
+	// lost (PLAT-070), and an empty baseline would make every folder look new
+	// and answer "evidence" unconditionally — the opposite error.
+	if folders, listErr := s.api.loadRunFoldersInternal(ctx, sctx.WorkspacePath); listErr == nil &&
+		workshopRunStartedDuringInvocation(folders, since) {
+		sctx.ProducedRunEvidence = true
+		s.sessionLogf(sctx, sessionID, "[SCHEDULER] turn failed for %s, but a full workflow run started during this invocation and its own metadata is the authority; preserving run evidence for Pulse", sctx.Schedule.ID)
+		return
+	}
+	if s.scheduledWorkflowStepProducedEvidence(sessionID, since) {
+		sctx.ProducedRunEvidence = true
+		s.sessionLogf(sctx, sessionID, "[SCHEDULER] turn failed for %s, but scheduled workflow steps started during this invocation; preserving run evidence for Pulse", sctx.Schedule.ID)
+	}
+}
+
 // workshopRunStartedDuringInvocation reports whether any run's own metadata says
 // it started during this invocation, using only the durable record.
 //

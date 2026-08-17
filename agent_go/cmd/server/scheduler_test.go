@@ -2451,6 +2451,32 @@ func TestLightweightFinalizeStepNeverRunsGateOrPublishesFindings(t *testing.T) {
 	}
 }
 
+// TestLightweightFinalizeStepReconsidersReviewScheduleCadence pins the
+// fourth, ongoing responsibility added alongside mandatory periodic mode: a
+// review interval chosen once at migration time can go stale as actual run
+// volume drifts, so every lightweight pass re-checks it cheaply against the
+// same evidence (this workflow's own schedules + get_schedule_runs) and
+// adjusts via update_schedule only when warranted — explicitly optional,
+// not a step that must always change something.
+func TestLightweightFinalizeStepReconsidersReviewScheduleCadence(t *testing.T) {
+	steps := postRunMonitorLightweightFinalizeStep("pulse-test")
+	if len(steps) != 1 {
+		t.Fatalf("steps = %+v, want exactly one step", steps)
+	}
+	query := steps[0].query
+	for _, want := range []string{
+		"reconsider the review schedule's cadence",
+		"get_schedule_runs",
+		"pulse_review_only schedule's cron_expression",
+		"call update_schedule on the review schedule",
+		"This is genuinely optional",
+	} {
+		if !strings.Contains(query, want) {
+			t.Fatalf("lightweight finalize prompt missing cadence-reconsideration step %q:\n%s", want, query)
+		}
+	}
+}
+
 // TestPulseReviewBacklogSummaryExcludesNonTerminalIterationZero pins PLAT-115:
 // iteration-0 is the live/reused slot, never a stable identity across time,
 // so Gate must never be handed it while it might still be mid-run. Rotated

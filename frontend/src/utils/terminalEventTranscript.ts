@@ -3,6 +3,40 @@ import { isMainAgentTerminal } from './terminalIdentity'
 import type { PollingEvent, TerminalSnapshot } from '../services/api-types'
 import { compareTerminalEvents } from './terminalEventPage'
 
+// FORMATTED VIEW VISIBILITY CONTRACT
+//
+// This file is the single source of truth for what the normal Chat/Schedule
+// Formatted view shows. Keep changes to event visibility documented here and
+// covered by terminalEventTranscript.test.ts.
+//
+// Always visible:
+//   - human messages and the main agent's answers;
+//   - main-agent errors and failed tool calls;
+//   - automatic notifications, rendered as compact collapsed updates;
+//   - main-agent tool calls, grouped into an expandable “N tool calls” row;
+//   - long task/user messages, collapsed behind an explicit disclosure.
+//
+// Hidden from the main conversation:
+//   - raw streaming packets and provider/system lifecycle telemetry;
+//   - conversation token totals unless the caller explicitly enables usage;
+//   - large-output bookkeeping markers (the owning tool call remains visible);
+//   - workflow-step/background-child payloads, including their internal tools,
+//     validation data, and errors. Their product-facing boundary is the compact
+//     main-session auto-notification plus the main agent's resulting summary.
+//     Runtime diagnostics may expose the raw child transcript when explicitly
+//     enabled, but normal product correctness must not depend on that surface.
+//
+// Deduplicated rather than semantically hidden:
+//   - repeated final-answer carriers;
+//   - duplicate lifecycle start/completion events;
+//   - wrapper/container lifecycle records;
+//   - an execution prompt already present on its richer start event;
+//   - successful empty completions that only settle transport state.
+//
+// If a child failure cannot be understood from its main-session notification,
+// fix that notification boundary or add a compact product failure projection;
+// do not silently depend on the disabled child-terminal rail.
+//
 // Pure selection/grouping logic for the terminal clean view.
 //
 // Deliberately free of React and component imports so it can be tested on its
@@ -435,13 +469,10 @@ function isTranscriptEvent(event: PollingEvent): boolean {
   return true
 }
 
-// The normal Formatted surface is the main conversation, not a flattened log
-// of every workflow step. Without the old terminal rail, retaining every
-// session event here made step prevalidation JSON and child results appear as
-// though the main agent had said them. Keep events with no execution ownership
-// (ordinary user messages and main-session notices), but hide anything that
-// explicitly belongs to a child execution. The raw details remain available in
-// the selected main tmux view and in developer diagnostics.
+// Apply the child-execution boundary from the Formatted View Visibility
+// Contract above. The main conversation must not flatten child payloads as if
+// the main agent said them, and product correctness must not depend on the
+// diagnostics-only child-terminal rail.
 function isProductMainConversationEvent(event: PollingEvent): boolean {
   if (!isTranscriptEvent(event)) return false
   const fields = eventFields(event)

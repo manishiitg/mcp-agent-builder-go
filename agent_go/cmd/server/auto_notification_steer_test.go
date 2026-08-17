@@ -116,7 +116,7 @@ func TestSteerBackgroundAgentCompletionFallsBackForFailedLiveDelivery(t *testing
 	// Failed live delivery is not definitive, so the completion must not be
 	// flagged notified. The caller's queue/drain backstop will redeliver it later.
 	bg.mu.RLock()
-	notified := bg.notified
+	notified := bg.completionNotification == completionNotificationDelivered
 	bg.mu.RUnlock()
 	if notified {
 		t.Fatal("agent.notified = true after queued injection; want false so the queue path can retry")
@@ -144,7 +144,7 @@ func TestSteerBackgroundAgentCompletionFallsBackWhenNoRunningAgent(t *testing.T)
 		t.Fatal("steerBackgroundAgentCompletion = true with no running agent; want false so caller queues")
 	}
 	bg.mu.RLock()
-	notified := bg.notified
+	notified := bg.completionNotification == completionNotificationDelivered
 	bg.mu.RUnlock()
 	if notified {
 		t.Fatal("agent.notified = true after a declined steer; the queue path must still own delivery")
@@ -182,7 +182,7 @@ func TestSteerBackgroundAgentCompletionDefersPlainDelegation(t *testing.T) {
 	}
 
 	bg.mu.RLock()
-	notified := bg.notified
+	notified := bg.completionNotification == completionNotificationDelivered
 	bg.mu.RUnlock()
 	if notified {
 		t.Fatal("plain delegation completion was marked notified before the synthetic turn")
