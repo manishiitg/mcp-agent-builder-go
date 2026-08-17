@@ -150,9 +150,6 @@ func TestFocusedScheduledPulseReferencesStayComplete(t *testing.T) {
 	tests := map[string]struct {
 		wants []string
 	}{
-		"pulse-archive": {
-			wants: []string{"still needed to understand the", "strictly older than 15 calendar days", "undated history is never", "temporary files", "appears exactly once", "Never truncate"},
-		},
 		"pulse-gate": {
 			wants: []string{
 				"progressive evidence scan", "CONCERNS:", "record_pulse_worklist", "one decision for every",
@@ -205,9 +202,13 @@ func TestManualPulseCommandsKeepRunSetupReviewAndFixBoundariesSeparate(t *testin
 		"strategy-auditor": {
 			"STANDALONE STRATEGY AUDITOR",
 			"without running Pulse Gate, Goal Advisor",
-			"READ-ONLY REVIEW",
+			// aad50dfb0 "stabilize pulse orchestration and scheduled sessions"
+			// renamed this dispatch instruction from "READ-ONLY REVIEW" to
+			// "READ-ONLY STRATEGY AUDIT".
+			"READ-ONLY STRATEGY AUDIT",
 			"one primary classification",
-			`data-module="strategy_auditor"`,
+			// data-module="strategy_auditor" was builder/improve.html dashboard
+			// markup, retired along with the rest of that doc.
 			"Do not launch `/goal-advisor` automatically",
 		},
 		"engineering-review": {
@@ -235,9 +236,10 @@ func TestManualPulseCommandsKeepRunSetupReviewAndFixBoundariesSeparate(t *testin
 	if err != nil {
 		t.Fatalf("render goal-advisor: %v", err)
 	}
-	if !strings.Contains(advisor, "a user can also invoke it manually") {
-		t.Fatal("goal-advisor must describe its one-off manual path")
-	}
+	// The positive "describes its one-off manual path" assertion that used to
+	// sit here was removed by 0174b6aff "simplify Pulse workflow reviews"
+	// (2026-08-08); goal-advisor no longer mentions manual invocation at all.
+	// The negative invariant below still holds and is still worth keeping.
 	if strings.Contains(advisor, "update_workflow_config(post_run_monitor=true)") {
 		t.Fatal("goal-advisor must not configure recurring Pulse")
 	}
@@ -589,22 +591,9 @@ func TestPulseGuidanceRejudgesActiveExperimentCadenceFromCurrentEvidence(t *test
 		}
 	}
 
-	advisor, err := renderFromRegistry("goal-advisor", tmplData{}, allKinds)
-	if err != nil {
-		t.Fatalf("render goal-advisor: %v", err)
-	}
-	for _, want := range []string{
-		"verify its fair-test state from current evidence",
-		"actual runtime control",
-		"zero valid outcome-bearing runs is not a fair test",
-		"recommend the smallest unblock or a strategy-level revision",
-		"recommend retiring or replacing it",
-		"runtime-path",
-	} {
-		if !strings.Contains(advisor, want) {
-			t.Fatalf("goal advisor missing active-experiment lifecycle contract %q", want)
-		}
-	}
+	// The goal-advisor-specific active-experiment lifecycle assertions that
+	// used to follow here were removed by 0174b6aff "simplify Pulse workflow
+	// reviews" (2026-08-08); goal-advisor no longer carries this content.
 }
 
 func TestStrategyAuditorGuidanceRequiresLongitudinalEvidenceAndReadOnlyHandoff(t *testing.T) {
@@ -774,23 +763,11 @@ func TestLLMOpsGuidanceReviewsExactPinsWithoutSilentUpgrade(t *testing.T) {
 
 }
 
-func TestGoalAdvisorPrioritizesStrategyOverHTMLFormatting(t *testing.T) {
-	advisor, err := renderFromRegistry("goal-advisor", tmplData{}, allKinds)
-	if err != nil {
-		t.Fatalf("render goal-advisor: %v", err)
-	}
-	for _, want := range []string{
-		"Spend the run on goal evidence, strategy, alternatives, and experiment judgment",
-		"Do not audit its CSS, visual design, unrelated historical cards, or overall format",
-		"one targeted in-place update",
-		"do not perform an HTML design or migration pass",
-		"skip the HTML write",
-	} {
-		if !strings.Contains(advisor, want) {
-			t.Fatalf("goal advisor missing analysis-first reporting contract %q", want)
-		}
-	}
-}
+// TestGoalAdvisorPrioritizesStrategyOverHTMLFormatting asserted an
+// analysis-first-over-HTML-formatting contract goal-advisor.md no longer
+// carries -- removed by 0174b6aff "simplify Pulse workflow reviews"
+// (2026-08-08). All 5 of its phrases confirmed absent by rendering the
+// current template, not by grepping stale expectations. Removed 2026-08-17.
 
 func TestPulseCardsKeepTechnicalEvidenceOutOfUserTimeline(t *testing.T) {
 	monitor := readPulseDesignSpec(t)
@@ -825,73 +802,53 @@ func TestPulseRunsEveryDueReviewerAndWritesAttributedResults(t *testing.T) {
 		}
 	}
 
-	setup, err := renderFromRegistry("pulse-setup", tmplData{}, allKinds)
-	if err != nil {
-		t.Fatalf("render pulse-setup: %v", err)
-	}
-	for _, want := range []string{
-		"evaluation health",
-		"Ops Review",
-		"builder/improve.html",
-		"only the current machine-readable scheduler/UI mirror",
-	} {
-		if !strings.Contains(setup, want) {
-			t.Fatalf("pulse-setup missing complete module/source-of-truth contract %q", want)
-		}
-	}
+	// The pulse-setup module/source-of-truth contract that used to be checked
+	// here was builder/improve.html guidance; improve.html is fully retired
+	// and pulse-setup no longer mentions any of these phrases, confirmed by
+	// rendering it. Removed 2026-08-17.
 
+	// "data-pulse-section"/"data-module" were builder/improve.html dashboard
+	// markup, dropped along with the rest of the retired doc; confirmed absent
+	// from every template on disk, not specific to these two kinds.
 	for _, kind := range []string{"ops-review", "strategy-auditor"} {
 		review, renderErr := renderFromRegistry(kind, tmplData{}, allKinds)
 		if renderErr != nil {
 			t.Fatalf("render %s: %v", kind, renderErr)
 		}
-		for _, want := range []string{"data-pulse-section", "data-module", "Do not truncate"} {
-			if !strings.Contains(review, want) {
-				t.Fatalf("%s missing standalone report contract %q", kind, want)
-			}
+		if !strings.Contains(review, "Do not truncate") {
+			t.Fatalf("%s missing standalone report contract %q", kind, "Do not truncate")
 		}
 	}
 }
 
-func TestPulseRelatedGuidanceUsesFourPartSectionOwnership(t *testing.T) {
-	cases := map[string][]string{
-		"design-plan":           {`data-pulse-section="signals"`, "data-module` set per the attribution rule above", "never discard findings"},
-		"ops-review":            {`data-pulse-section="signals"`, `data-module="llm_ops_review"`, "Every finding"},
-		"review-artifact-drift": {`data-pulse-section="signals"`, `data-module="artifact_review"`},
-		"improve-evaluation":    {`data-pulse-section="signals"`, `data-module="eval_health"`},
-		"define-success":        {`data-pulse-section="reflection"`, `data-module="run_summary"`, "do not copy the Goal"},
-		"pulse-setup":           {`data-pulse-section="improvements"`, `data-module="pulse_fixer"`, "do not seed or refresh a Goal/Profile card"},
-		"strategy-auditor":      {`data-pulse-section="signals"`, `data-module="strategy_auditor"`, "Do not launch `/goal-advisor` automatically"},
-		"goal-advisor":          {`data-pulse-section="improvements"`, `data-module="goal_advisor"`, "do not duplicate the pending question"},
-	}
+// TestPulseRelatedGuidanceUsesFourPartSectionOwnership asserted a
+// `data-pulse-section="..."` / `data-module="..."` HTML-attribute scheme —
+// builder/improve.html dashboard markup. improve.html is fully retired; the
+// scheme is confirmed absent from every template on disk
+// (`grep -rc "data-pulse-section\|data-module=" cmd/server/guidance/templates`
+// returns nothing). Removed 2026-08-17.
 
-	for kind, wants := range cases {
-		rendered, err := renderFromRegistry(kind, tmplData{}, allKinds)
-		if err != nil {
-			t.Fatalf("render %s: %v", kind, err)
-		}
-		for _, want := range wants {
-			if !strings.Contains(rendered, want) {
-				t.Fatalf("%s missing four-part Pulse contract %q", kind, want)
-			}
-		}
-	}
-}
-
+// The five improve-* docs below were consolidated into shared "ENGINEERING
+// REVIEW — <lens> LENS" headers, dispatched through the "normal Engineering/Ops
+// background executor" rather than each carrying its own standalone
+// "READ-ONLY <X> HEALTH REVIEW" title and call_generic_agent dispatch.
+// review-artifact-drift's own dispatch was separately renamed
+// call_generic_agent -> run_in_background by aad50dfb0 "stabilize pulse
+// orchestration and scheduled sessions". Confirmed by rendering each
+// template, not by grepping stale expectations.
 func TestMaintenanceImproveGuidanceIsReadOnlyForPulseFixerHandoff(t *testing.T) {
 	cases := map[string][]string{
 		"review-artifact-drift": {
 			"read-only audit checklist",
-			"call_generic_agent",
+			"run_in_background",
 			"Never launch another reviewer",
 			"Pulse Fixer",
 			"mark_changelog_artifact_reviewed",
 		},
 		"improve-learnings": {
-			"READ-ONLY LEARNING HEALTH REVIEW",
+			"ENGINEERING REVIEW — STORES HEALTH / LEARNINGS LENS",
 			"generic read-only reviewer",
-			"no separate learning-maintenance tool",
-			"call_generic_agent",
+			"background executor",
 			"Pulse Fixer",
 			"recommended_fix",
 			// Structure review is skipped unless the output contract forces it:
@@ -908,10 +865,9 @@ func TestMaintenanceImproveGuidanceIsReadOnlyForPulseFixerHandoff(t *testing.T) 
 			"Do not sample references",
 		},
 		"improve-knowledge": {
-			"READ-ONLY KNOWLEDGEBASE HEALTH REVIEW",
+			"ENGINEERING REVIEW — STORES HEALTH / KNOWLEDGEBASE LENS",
 			"generic read-only reviewer",
-			"no separate KB-maintenance tool",
-			"call_generic_agent",
+			"background executor",
 			"Pulse Fixer",
 			"recommended_fix",
 			// Same reason as improve-learnings: a topic note reached ~100 KB of
@@ -924,10 +880,9 @@ func TestMaintenanceImproveGuidanceIsReadOnlyForPulseFixerHandoff(t *testing.T) 
 			"No content-bearing note file may be omitted",
 		},
 		"improve-database": {
-			"READ-ONLY DATABASE HEALTH REVIEW",
+			"ENGINEERING REVIEW — STORES HEALTH / DATABASE LENS",
 			"generic read-only reviewer",
-			"no separate DB-maintenance tool",
-			"call_generic_agent",
+			"background executor",
 			"Pulse Fixer",
 			"verification commands",
 			"`db_ownership_manifest`",
@@ -936,13 +891,13 @@ func TestMaintenanceImproveGuidanceIsReadOnlyForPulseFixerHandoff(t *testing.T) 
 			"one semantic item, one authoritative owner",
 		},
 		"improve-report": {
-			"READ-ONLY REPORT HEALTH REVIEW",
+			"ENGINEERING REVIEW — REPORT LENS",
 			"do not edit or ask from the reviewer",
 			"Pulse Fixer",
 			"recommended_fix",
 		},
 		"improve-evaluation": {
-			"READ-ONLY EVALUATION HEALTH REVIEW",
+			"ENGINEERING REVIEW — EVALUATION LENS",
 			"The reviewer does not edit or run anything",
 			"Pulse Fixer",
 			"GOAL_SEMANTIC",
@@ -967,31 +922,33 @@ func TestMaintenanceImproveGuidanceIsReadOnlyForPulseFixerHandoff(t *testing.T) 
 // improve.html itself no longer exists for any of them to hand findings off
 // to. What each specialist still owns — a structured finding packet it
 // returns rather than writing HTML directly — is unchanged.
+//
+// goal-advisor no longer fits this pattern at all (0174b6aff "simplify Pulse
+// workflow reviews" moved it to a different content model entirely — none of
+// finding_id/target_key/recommended_fix/verification/user_judgment_required
+// survive in it) and was removed from kinds. ops-review, strategy-auditor,
+// and review-artifact-drift deliberately dropped finding_id/target_key in
+// favor of "no invented identifier" — a real design decision, not drift —
+// while keeping the rest of the packet contract; they get their own want-list.
 func TestPulseSpecialistsReturnStructuredPacketsAndParentOwnsHTML(t *testing.T) {
-	kinds := []string{
-		"design-plan",
-		"ops-review",
-		"strategy-auditor",
-		"review-artifact-drift",
-		"improve-learnings",
-		"improve-knowledge",
-		"improve-database",
-		"improve-evaluation",
-		"improve-report",
-		"goal-advisor",
+	commonWants := []string{"recommended_fix", "verification", "user_judgment_required"}
+	kinds := map[string][]string{
+		"design-plan":           append([]string{"finding_id", "target_key"}, commonWants...),
+		"ops-review":            append([]string{"no invented identifier"}, commonWants...),
+		"strategy-auditor":      append([]string{"no invented identifier"}, commonWants...),
+		"review-artifact-drift": append([]string{"no invented identifier"}, commonWants...),
+		"improve-learnings":     append([]string{"finding_id", "target_key"}, commonWants...),
+		"improve-knowledge":     append([]string{"finding_id", "target_key"}, commonWants...),
+		"improve-database":      append([]string{"finding_id", "target_key"}, commonWants...),
+		"improve-evaluation":    append([]string{"finding_id", "target_key"}, commonWants...),
+		"improve-report":        append([]string{"finding_id", "target_key"}, commonWants...),
 	}
-	for _, kind := range kinds {
+	for kind, wants := range kinds {
 		rendered, err := renderFromRegistry(kind, tmplData{}, allKinds)
 		if err != nil {
 			t.Fatalf("render %s: %v", kind, err)
 		}
-		for _, want := range []string{
-			"finding_id",
-			"target_key",
-			"recommended_fix",
-			"verification",
-			"user_judgment_required",
-		} {
+		for _, want := range wants {
 			if !strings.Contains(rendered, want) {
 				t.Fatalf("%s missing structured specialist handoff %q", kind, want)
 			}
@@ -1024,12 +981,14 @@ func TestStandalonePulseReviewCommandsUsePersistedReviewerPipeline(t *testing.T)
 	}
 }
 
+// goal-advisor no longer links assumption-audit at all (0174b6aff "simplify
+// Pulse workflow reviews" moved it to a different content model); every
+// other kind below still does, confirmed by rendering each one.
 func TestImprovementAndPlanGuidanceIncludesAssumptionAudit(t *testing.T) {
 	for _, kind := range []string{
 		"design-plan",
 		"review-artifact-drift",
 		"strategy-auditor",
-		"goal-advisor",
 		"improve-evaluation",
 		"improve-report",
 		"improve-knowledge",
@@ -1054,12 +1013,13 @@ func TestImprovementAndPlanGuidanceIncludesAssumptionAudit(t *testing.T) {
 		"dependent artifacts",
 		"VISUAL MAP",
 		"PRIORITIES",
-		"never discard findings",
 	} {
 		if !strings.Contains(designPlan, want) {
 			t.Fatalf("combined design-plan guidance missing %q", want)
 		}
 	}
+	// "never discard findings" was removed from design-plan by 0174b6aff
+	// "simplify Pulse workflow reviews" (2026-08-08).
 	if _, exists := allKinds["review-plan"]; exists {
 		t.Fatal("review-plan must remain merged into design-plan")
 	}
@@ -1089,78 +1049,30 @@ func TestImprovementAndPlanGuidanceIncludesAssumptionAudit(t *testing.T) {
 		"Current design choice",
 		"Agent-inferred assumption",
 		"SQLite-backed Pulse lifecycle",
-		"Do not add an assumptions panel",
 		"Do not turn targeted maintenance into a full audit",
 	} {
 		if !strings.Contains(audit, want) {
 			t.Fatalf("assumption-audit missing %q", want)
 		}
 	}
+	// "Do not add an assumptions panel" was removed from assumption-audit.md
+	// by 0174b6aff "simplify Pulse workflow reviews" (2026-08-08) -- another
+	// builder/improve.html-dashboard-specific instruction that no longer
+	// applies now that improve.html is retired.
 }
 
-func TestGoalAdvisorTreatsCleanAbstentionAsStrategyEvidence(t *testing.T) {
-	rendered, err := renderFromRegistry("goal-advisor", tmplData{}, allKinds)
-	if err != nil {
-		t.Fatalf("render goal-advisor: %v", err)
-	}
-	for _, want := range []string{
-		"NON-NEGOTIABLE STRATEGY-FIRST PASS",
-		"strategy_ceiling",
-		"highest_leverage_thesis",
-		"why_not_incremental_repair",
-		"is not a valid Goal Advisor result",
-		"an operational defect must not consume the Goal Advisor run",
-		"A green answer to the first question must not mask",
-		"broader criteria within explicit user boundaries",
-		"Never recommend violating an explicit user exclusion",
-		"opportunity supply or conversion",
-		"less-frequent blank-sheet opportunity",
-		"Judge evidence reliability directly",
-		"never wait for or consume another reviewer's conclusion",
-		"include an alternative growth path",
-		"Check optimization headroom even when every success criterion is currently",
-		"Treat a numeric target as a floor",
-		"preserve the successful baseline and propose a bounded",
-		"PHASE 1B - ACTIVE STRATEGY EXPERIMENT LIFECYCLE",
-		"Exactly one **strategy** experiment may be active for a workflow",
-		`data-experiment-kind="instrumentation"`,
-		`data-experiment-kind="strategy"`,
-		"Instrumentation is supporting work",
-		"Apply a 10x counterfactual as a thinking lens, not a promise",
-		`class="entry decision major advisor-experiment"`,
-		"Current strategy ceiling",
-		"PHASE 1A - MEASUREMENT DESIGN",
-		"one normal `regular`",
-		"timestamped, group/run-scoped rows",
-		"Measurement plan",
-		"Rollback condition",
-		"record_pulse_finding",
-		"non-trackable conclusion",
-	} {
-		if !strings.Contains(rendered, want) {
-			t.Fatalf("goal-advisor guidance missing %q:\n%s", want, rendered)
-		}
-	}
-}
+// TestGoalAdvisorTreatsCleanAbstentionAsStrategyEvidence asserted an
+// elaborate strategy-first-pass / active-experiment-lifecycle apparatus
+// (PHASE 1A/1B, data-experiment-kind, advisor-experiment cards) removed by
+// 0174b6aff "simplify Pulse workflow reviews" (2026-08-08). All 32 phrases
+// confirmed absent by rendering the current template. Removed 2026-08-17.
 
+// The goal-advisor half of this test (a metrics-subsystem-abstention
+// contract) was removed by 0174b6aff "simplify Pulse workflow reviews"
+// (2026-08-08); all 6 of its phrases confirmed absent by rendering the
+// current template. The improve-report handoff it hands off to is unchanged
+// except one phrase, also removed by the same commit.
 func TestGoalAdvisorMetricsFlowUsesPlanAndReportHandoff(t *testing.T) {
-	advisor, err := renderFromRegistry("goal-advisor", tmplData{}, allKinds)
-	if err != nil {
-		t.Fatalf("render goal-advisor: %v", err)
-	}
-	for _, want := range []string{
-		"does not revive a generic metrics subsystem",
-		"not the Advisor outcome and not an Advisor experiment by itself",
-		"decision it informs",
-		"normal `regular` measurement step",
-		"db/db.sqlite",
-		"Report Health as due after the first trustworthy rows exist",
-	} {
-		if !strings.Contains(advisor, want) {
-			t.Fatalf("goal-advisor measurement guidance missing %q", want)
-		}
-	}
-
 	report, err := renderFromRegistry("improve-report", tmplData{}, allKinds)
 	if err != nil {
 		t.Fatalf("render improve-report: %v", err)
@@ -1170,7 +1082,6 @@ func TestGoalAdvisorMetricsFlowUsesPlanAndReportHandoff(t *testing.T) {
 		"An unapproved metric proposal is not report data",
 		"window.report.query",
 		"not measured yet",
-		"Report Health must not create workflow steps itself",
 	} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("improve-report measurement handoff missing %q", want)
@@ -1186,12 +1097,9 @@ func TestPlanReviewAndGoalAdvisorPreferCoherentAgenticSteps(t *testing.T) {
 			"first work turn the complete outcome",
 			"one-message-per-routine-action sequences",
 		},
-		"goal-advisor": {
-			"Modern agentic models can own a substantial end-to-end outcome",
-			"fewest durable steps",
-			"give the first work turn the whole outcome",
-			"Do not replace regular-step fragmentation",
-		},
+		// goal-advisor was checked here too until 0174b6aff "simplify Pulse
+		// workflow reviews" (2026-08-08) removed this content from it; every
+		// other kind below still carries it, confirmed by rendering each one.
 		"plan-design": {
 			"Give the work turn the complete outcome",
 			"do not create one item per checklist line",
@@ -1232,15 +1140,8 @@ func TestDeterministicFetchersFeedLargeAgenticProcessors(t *testing.T) {
 				"10+-run evidence bar is only for *freezing*",
 			},
 		},
-		"goal-advisor": {
-			registry: allKinds,
-			wants: []string{
-				"Separate deterministic acquisition from agentic processing",
-				"fetcher steps with explicit outputs",
-				"large downstream `message_sequence`",
-				"Do not keep fixed API/CLI retrieval inside LLM turns",
-			},
-		},
+		// goal-advisor carried this too until 0174b6aff "simplify Pulse
+		// workflow reviews" (2026-08-08); every other kind below still does.
 		"plan-design": {
 			registry: referenceKinds,
 			wants: []string{
@@ -1337,15 +1238,8 @@ func TestSharedContextSpansOwnProofValidationAndRepair(t *testing.T) {
 				"builder must decide this from the workflow semantics",
 			},
 		},
-		"goal-advisor": {
-			registry: allKinds,
-			wants: []string{
-				"one large `message_sequence` per coherent shared-context span",
-				"run-specific proof/provenance fields",
-				"desire for more validation is not by itself",
-				"Multiple large sequences are appropriate when context should be isolated",
-			},
-		},
+		// goal-advisor carried this too until 0174b6aff "simplify Pulse
+		// workflow reviews" (2026-08-08); every other kind here still does.
 		"optimize-playbook": {
 			registry: referenceKinds,
 			wants: []string{
