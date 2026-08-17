@@ -126,16 +126,26 @@ func (g *gateway) agentToken() (string, error) {
 }
 
 func (g *gateway) serveAgent(w http.ResponseWriter, r *http.Request) {
-	// A caller's explicit bearer token wins. Browser users authenticate through
-	// the HttpOnly password-session cookie, so the gateway supplies the signed
-	// internal token required by the agent API on their behalf.
+	// An explicit bearer token wins. Public file links and browser SSE cannot
+	// attach a custom header, so the agent API also supports ?token=. Preserve
+	// that token as a bearer credential instead of replacing it with the
+	// gateway's service identity; the token determines which user's workspace
+	// the public file handler reads from.
+	//
+	// Browser users without either token authenticate through the HttpOnly
+	// password-session cookie, so the gateway supplies the signed internal
+	// token required by the agent API on their behalf.
 	if r.Header.Get("Authorization") == "" {
-		token, err := g.agentToken()
-		if err != nil {
-			http.Error(w, "Unable to authenticate gateway request", http.StatusInternalServerError)
-			return
+		if token := strings.TrimSpace(r.URL.Query().Get("token")); token != "" {
+			r.Header.Set("Authorization", "Bearer "+token)
+		} else {
+			token, err := g.agentToken()
+			if err != nil {
+				http.Error(w, "Unable to authenticate gateway request", http.StatusInternalServerError)
+				return
+			}
+			r.Header.Set("Authorization", "Bearer "+token)
 		}
-		r.Header.Set("Authorization", "Bearer "+token)
 	}
 	g.agent.ServeHTTP(w, r)
 }

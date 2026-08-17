@@ -5,6 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -40,5 +44,34 @@ func TestAgentTokenIsShortLivedAndSignedWithGatewaySecret(t *testing.T) {
 	untilExpiry := time.Until(time.Unix(claims.ExpiresAt, 0))
 	if untilExpiry <= 0 || untilExpiry > 16*time.Minute {
 		t.Fatalf("unexpected expiration: %d", claims.ExpiresAt)
+	}
+}
+
+func TestServeAgentForwardsQueryTokenAsBearerCredential(t *testing.T) {
+	var gotAuthorization string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuthorization = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+
+	target, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatalf("parse upstream URL: %v", err)
+	}
+	gateway := &gateway{
+		secret: []byte("test-secret-that-is-long-enough"),
+		agent:  httputil.NewSingleHostReverseProxy(target),
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/public/file?token=workspace-user-token", nil)
+	response := httptest.NewRecorder()
+	gateway.serveAgent(response, req)
+
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusNoContent)
+	}
+	if gotAuthorization != "Bearer workspace-user-token" {
+		t.Fatalf("authorization = %q", gotAuthorization)
 	}
 }
