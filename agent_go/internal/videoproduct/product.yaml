@@ -203,21 +203,12 @@ profile:
       description: Google Gemini API key. Unlocks Google's own video (Veo), image, and narration (TTS) models (see the google-ai skill) -- alone, enough for a complete narrated production. Get one at aistudio.google.com.
       group: generation-provider
   runtime:
-    # auto resolves the transport per provider instead of forcing one answer for
-    # all four. It is what video_studio_inside_agentworks.md always specified
-    # ("a tmux-capable runtime for live steering"); the pin to `structured` here
-    # had drifted from that and was load-bearing in the wrong direction.
-    #
-    # Structured transport cannot stream unless the CLI emits partial events, and
-    # only pi-cli does. codex exec --json was probed directly: a 1365-character
-    # answer arrived as ONE item.completed event, so a codex user saw nothing at
-    # all until the turn finished, and live steering is impossible on a transport
-    # with no stdin. The clean non-technical surface does not depend on this
-    # setting -- raw terminal frames are already excluded downstream by
-    # Source != "terminal", not by refusing to run tmux.
-    #
-    # See product_api_transport_for_coding_agents.md, "tmux vs structured".
-    transport: auto
+    # Claude Code runs one structured process per turn. This is deliberately
+    # non-interactive: a deployment-wide setup token is injected on every
+    # launch, rather than relying on a persistent tmux login or terminal UI.
+    # Video Studio already disables live terminal input below, so a retained
+    # interactive session offers no product capability in return.
+    transport: structured
     provider: claude-code
     model_id: claude-sonnet-5
     # mcp_only: the CLI's native Read/Write/Shell are denied; every action —
