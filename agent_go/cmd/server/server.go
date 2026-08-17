@@ -109,6 +109,24 @@ var mcpBridgeCustomToolCategories = map[string]bool{
 
 var mcpBridgeVirtualToolCategories = map[string]bool{}
 
+// productEnabled reports whether a product's profiles and skills should be
+// loaded by this server. An unset AGENT_PRODUCTS preserves the shared-server
+// behaviour of loading every product. Dedicated deployments can set a
+// comma-separated allowlist (for example, "video-studio") so unrelated
+// product startup failures cannot take down their agent API.
+func productEnabled(product string) bool {
+	configured := strings.TrimSpace(os.Getenv("AGENT_PRODUCTS"))
+	if configured == "" {
+		return true
+	}
+	for _, candidate := range strings.Split(configured, ",") {
+		if strings.EqualFold(strings.TrimSpace(candidate), product) {
+			return true
+		}
+	}
+	return false
+}
+
 func normalizeMCPBridgeCategory(name string) string {
 	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(name), "-", "_"))
 }
@@ -1614,24 +1632,28 @@ func runServer(cmd *cobra.Command, args []string) {
 	if err != nil {
 		log.Fatalf("Failed to initialize AgentWorks CLI security store: %v", err)
 	}
-	if err := videoproduct.RegisterProductSkills(); err != nil {
-		log.Fatalf("Failed to register Video Studio skills: %v", err)
-	}
 	profileRegistry := agentprofiles.NewRegistry()
-	for _, profile := range videoproduct.BuiltinAgentProfiles() {
-		if err := profileRegistry.RegisterProfile(profile); err != nil {
-			log.Fatalf("Failed to register Video Studio agent profile: %v", err)
+	if productEnabled("video-studio") {
+		if err := videoproduct.RegisterProductSkills(); err != nil {
+			log.Fatalf("Failed to register Video Studio skills: %v", err)
+		}
+		for _, profile := range videoproduct.BuiltinAgentProfiles() {
+			if err := profileRegistry.RegisterProfile(profile); err != nil {
+				log.Fatalf("Failed to register Video Studio agent profile: %v", err)
+			}
+		}
+		if err := videoproduct.RegisterAgentProfileRuntime(profileRegistry, getWorkspaceAPIURL()); err != nil {
+			log.Fatalf("Failed to register Video Studio agent profile runtime: %v", err)
 		}
 	}
-	if err := videoproduct.RegisterAgentProfileRuntime(profileRegistry, getWorkspaceAPIURL()); err != nil {
-		log.Fatalf("Failed to register Video Studio agent profile runtime: %v", err)
-	}
-	if err := chiefofstaffproduct.RegisterProductSkills(); err != nil {
-		log.Fatalf("Failed to register Chief of Staff skills: %v", err)
-	}
-	for _, profile := range chiefofstaffproduct.BuiltinAgentProfiles() {
-		if err := profileRegistry.RegisterProfile(profile); err != nil {
-			log.Fatalf("Failed to register Chief of Staff agent profile: %v", err)
+	if productEnabled("chief-of-staff") {
+		if err := chiefofstaffproduct.RegisterProductSkills(); err != nil {
+			log.Fatalf("Failed to register Chief of Staff skills: %v", err)
+		}
+		for _, profile := range chiefofstaffproduct.BuiltinAgentProfiles() {
+			if err := profileRegistry.RegisterProfile(profile); err != nil {
+				log.Fatalf("Failed to register Chief of Staff agent profile: %v", err)
+			}
 		}
 	}
 	// No RegisterAgentProfileRuntime equivalent: Chief of Staff's tool
@@ -1639,28 +1661,32 @@ func runServer(cmd *cobra.Command, args []string) {
 	// registerChiefOfStaffToolFactories below -- since their handlers are
 	// *StreamingAPI methods, not a workspace-API-client pattern like Video
 	// Studio's.
-	if err := financeproduct.RegisterProductSkills(); err != nil {
-		log.Fatalf("Failed to register Finance skills: %v", err)
-	}
-	for _, profile := range financeproduct.BuiltinAgentProfiles() {
-		if err := profileRegistry.RegisterProfile(profile); err != nil {
-			log.Fatalf("Failed to register Finance agent profile: %v", err)
+	if productEnabled("finance") {
+		if err := financeproduct.RegisterProductSkills(); err != nil {
+			log.Fatalf("Failed to register Finance skills: %v", err)
 		}
-	}
-	if err := financeproduct.RegisterAgentProfileRuntime(profileRegistry, getWorkspaceAPIURL()); err != nil {
-		log.Fatalf("Failed to register Finance agent profile runtime: %v", err)
+		for _, profile := range financeproduct.BuiltinAgentProfiles() {
+			if err := profileRegistry.RegisterProfile(profile); err != nil {
+				log.Fatalf("Failed to register Finance agent profile: %v", err)
+			}
+		}
+		if err := financeproduct.RegisterAgentProfileRuntime(profileRegistry, getWorkspaceAPIURL()); err != nil {
+			log.Fatalf("Failed to register Finance agent profile runtime: %v", err)
+		}
 	}
 
-	if err := dominionproduct.RegisterProductSkills(); err != nil {
-		log.Fatalf("Failed to register Dominion skills: %v", err)
-	}
-	for _, profile := range dominionproduct.BuiltinAgentProfiles() {
-		if err := profileRegistry.RegisterProfile(profile); err != nil {
-			log.Fatalf("Failed to register Dominion agent profile: %v", err)
+	if productEnabled("dominion") {
+		if err := dominionproduct.RegisterProductSkills(); err != nil {
+			log.Fatalf("Failed to register Dominion skills: %v", err)
 		}
-	}
-	if err := dominionproduct.RegisterAgentProfileRuntime(profileRegistry, getWorkspaceAPIURL()); err != nil {
-		log.Fatalf("Failed to register Dominion agent profile runtime: %v", err)
+		for _, profile := range dominionproduct.BuiltinAgentProfiles() {
+			if err := profileRegistry.RegisterProfile(profile); err != nil {
+				log.Fatalf("Failed to register Dominion agent profile: %v", err)
+			}
+		}
+		if err := dominionproduct.RegisterAgentProfileRuntime(profileRegistry, getWorkspaceAPIURL()); err != nil {
+			log.Fatalf("Failed to register Dominion agent profile runtime: %v", err)
+		}
 	}
 
 	api := &StreamingAPI{
@@ -1734,8 +1760,10 @@ func runServer(cmd *cobra.Command, args []string) {
 	// legacy no-profile Chief of Staff chat unchanged; these factories become
 	// reachable once a chief-of-staff product.yaml profile declares them in
 	// profile.tools[], which is registered separately once that profile exists.
-	if err := api.registerChiefOfStaffToolFactories(profileRegistry); err != nil {
-		log.Fatalf("Failed to register Chief of Staff tool factories: %v", err)
+	if productEnabled("chief-of-staff") {
+		if err := api.registerChiefOfStaffToolFactories(profileRegistry); err != nil {
+			log.Fatalf("Failed to register Chief of Staff tool factories: %v", err)
+		}
 	}
 	// Terminal Center's Formatted view and the runtime coordinator now consume
 	// the same accepted structured events. The terminal observer updates the

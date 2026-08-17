@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -25,6 +26,18 @@ type gateway struct {
 	frontendDir string
 	agent       *httputil.ReverseProxy
 	workspace   *httputil.ReverseProxy
+}
+
+// gatewayClaims deliberately mirrors only the identity fields consumed by the
+// agent API. The password session remains the public-facing authentication
+// boundary; this signed, short-lived token is created server-side solely for
+// the loopback hop from the gateway to the agent API.
+type gatewayClaims struct {
+	UserID    string `json:"user_id"`
+	Username  string `json:"username"`
+	Provider  string `json:"provider"`
+	IssuedAt  int64  `json:"iat"`
+	ExpiresAt int64  `json:"exp"`
 }
 
 func proxyFor(rawURL string) *httputil.ReverseProxy {
@@ -91,6 +104,42 @@ func (g *gateway) validSession(r *http.Request) bool {
 	return subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(want)) == 1
 }
 
+func (g *gateway) agentToken() (string, error) {
+	now := time.Now()
+	claims := gatewayClaims{
+		UserID:    "video-studio",
+		Username:  "video-studio",
+		Provider:  "gateway",
+		IssuedAt:  now.Unix(),
+		ExpiresAt: now.Add(15 * time.Minute).Unix(),
+	}
+	payload, err := json.Marshal(claims)
+	if err != nil {
+		return "", err
+	}
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
+	body := base64.RawURLEncoding.EncodeToString(payload)
+	signingInput := header + "." + body
+	mac := hmac.New(sha256.New, g.secret)
+	_, _ = mac.Write([]byte(signingInput))
+	return signingInput + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil)), nil
+}
+
+func (g *gateway) serveAgent(w http.ResponseWriter, r *http.Request) {
+	// A caller's explicit bearer token wins. Browser users authenticate through
+	// the HttpOnly password-session cookie, so the gateway supplies the signed
+	// internal token required by the agent API on their behalf.
+	if r.Header.Get("Authorization") == "" {
+		token, err := g.agentToken()
+		if err != nil {
+			http.Error(w, "Unable to authenticate gateway request", http.StatusInternalServerError)
+			return
+		}
+		r.Header.Set("Authorization", "Bearer "+token)
+	}
+	g.agent.ServeHTTP(w, r)
+}
+
 func safeNext(next string) string {
 	if strings.HasPrefix(next, "/") && !strings.HasPrefix(next, "//") {
 		return next
@@ -139,7 +188,7 @@ func (g *gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		g.workspace.ServeHTTP(w, r)
 	case strings.HasPrefix(r.URL.Path, "/api"), strings.HasPrefix(r.URL.Path, "/ws"):
-		g.agent.ServeHTTP(w, r)
+		g.serveAgent(w, r)
 	default:
 		g.serveFrontend(w, r)
 	}
