@@ -19,7 +19,7 @@ import { startRestoredTransportTerminal } from '../../utils/restoredTerminal'
 import { isExternalReadOnlyWorkflowSession, isInternalChildSession } from '../../utils/workflowSessionKinds'
 import { activeWorkflowTabIdForPreset } from '../../utils/workflowTabOwnership'
 import { activateTab } from '../../utils/activateTab'
-import { reconcileWorkflowRuntimeTab, workflowRuntimeTabProjection } from './workflowRuntimeTabProjection'
+import { reconcileWorkflowRuntimeTab, reusableScheduleTabId, workflowRuntimeTabProjection } from './workflowRuntimeTabProjection'
 import {
   PreviousChatHistoryPanel,
   chatHistoryConversationPath,
@@ -1730,7 +1730,22 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
 
           let tabId = existingTab?.tabId
           if (!tabId) {
-            tabId = await latestChatStore.createChatTab(projection.name, projection.metadata, running.session_id)
+            // The scheduler holds a per-workflow lease, so only one scheduled
+            // run exists at a time. Take over a finished Schedule lane rather
+            // than opening another tab per run — keying the dedupe purely on
+            // session id meant every run minted a new tab and none was ever
+            // reclaimed.
+            const reusableTabId = reusableScheduleTabId(
+              latestChatStore.chatTabs,
+              activePresetId,
+              running.session_id,
+            )
+            if (reusableTabId) {
+              tabId = reusableTabId
+              latestChatStore.updateTabSessionId(reusableTabId, running.session_id)
+            } else {
+              tabId = await latestChatStore.createChatTab(projection.name, projection.metadata, running.session_id)
+            }
           }
           if (projection.autoActivate) selectedRunningTabId ||= tabId
 

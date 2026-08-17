@@ -1,12 +1,51 @@
 import type { RunningWorkflowInfo } from '../../services/api-types'
 import type { ChatTab } from '../../stores/useChatStore'
 import { isExternalReadOnlyWorkflowSession, isScheduledSession } from '../../utils/workflowSessionKinds'
-import { scheduleTabLabel } from '../../utils/scheduleTabLabel'
 
 export interface WorkflowRuntimeTabProjection {
   name: string
   metadata: NonNullable<ChatTab['metadata']>
   autoActivate: boolean
+}
+
+
+/**
+ * reusableScheduleTabId finds a finished Schedule lane that a newly-discovered
+ * run should take over, instead of opening yet another tab.
+ *
+ * The scheduler holds a durable per-workflow lease — `runningScheduleInSetLocked`
+ * refuses to start a second schedule while one owns the workflow — so at most one
+ * scheduled run per workflow exists at a time. The UI keyed its dedupe purely on
+ * backend session id, and every run mints a new session, so each run opened a
+ * fresh tab and none was ever reclaimed: a workflow scheduled three times a day
+ * accumulated a row of identical "Schedule" tabs for runs that had long finished.
+ *
+ * Only a lane that is genuinely free is reused:
+ *  - it belongs to this workflow (same preset), so runs never cross workflows;
+ *  - it is still a view-only scheduled run. A tab the user promoted to an
+ *    interactive Builder chat is user-owned state and must never be recycled
+ *    underneath them (the same precedence reconcileWorkflowRuntimeTab honours);
+ *  - its own run is over. A streaming lane is a live run, and the lease means a
+ *    new run should not be displacing it.
+ */
+export function reusableScheduleTabId(
+  // Derived from ChatTab rather than restated: a hand-written shape drifted
+  // from the real one (ChatTab.sessionId is string | null, not string).
+  tabs: Record<string, Pick<ChatTab, 'tabId' | 'sessionId' | 'isStreaming' | 'metadata'>>,
+  presetQueryId: string,
+  incomingSessionId: string,
+): string | null {
+  for (const tab of Object.values(tabs)) {
+    if (!tab || tab.sessionId === incomingSessionId) continue
+    const meta = tab.metadata
+    if (!meta || meta.mode !== 'workflow') continue
+    if (!meta.isScheduledRun || !meta.isViewOnly) continue
+    if (meta.userInteractiveContinuation) continue
+    if (meta.presetQueryId !== presetQueryId) continue
+    if (tab.isStreaming) continue
+    return tab.tabId
+  }
+  return null
 }
 
 /**
@@ -77,17 +116,14 @@ export function workflowRuntimeTabProjection(
   if (external && !scheduled) return null
 
   if (scheduled) {
-    const scheduledJobName = running.title || running.preset_name || running.phase_name || 'Schedule'
     return {
-      // Label with the schedule's own name: several scheduled runs can be open
-      // at once and "Schedule" made them indistinguishable without hovering.
-      name: scheduleTabLabel(scheduledJobName),
+      name: 'Schedule',
       metadata: {
         mode: 'workflow',
         presetQueryId,
         isViewOnly: true,
         isScheduledRun: true,
-        scheduledJobName,
+        scheduledJobName: running.title || running.preset_name || running.phase_name || 'Schedule',
       },
       // Runtime discovery must not pull the user away from their live Chat.
       autoActivate: false,

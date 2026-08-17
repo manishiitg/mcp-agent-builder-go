@@ -2,11 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { RunningWorkflowInfo } from '../../services/api-types'
 import type { ChatTab } from '../../stores/useChatStore'
 import { convertObservedWorkflowTabToInteractive } from './workflowChatTabConversion'
-import {
-  reconcileWorkflowRuntimeTab,
-  shouldDisplayWorkflowTab,
-  workflowRuntimeTabProjection,
-} from './workflowRuntimeTabProjection'
+import { reconcileWorkflowRuntimeTab, reusableScheduleTabId, shouldDisplayWorkflowTab, workflowRuntimeTabProjection } from './workflowRuntimeTabProjection'
 
 function runtime(overrides: Partial<RunningWorkflowInfo>): RunningWorkflowInfo {
   return {
@@ -25,9 +21,7 @@ describe('workflowRuntimeTabProjection', () => {
     }), 'workflow-social')
 
     expect(projected).toEqual({
-      // Labelled with the schedule's own name so concurrent runs are
-      // distinguishable; the full name stays in metadata for the tooltip.
-      name: 'Daily execution',
+      name: 'Schedule',
       metadata: {
         mode: 'workflow',
         presetQueryId: 'workflow-social',
@@ -122,7 +116,7 @@ describe('workflowRuntimeTabProjection', () => {
 
     const reconciled = reconcileWorkflowRuntimeTab(tab, projection)
 
-    expect(reconciled.name).toBe('Daily execution')
+    expect(reconciled.name).toBe('Schedule')
     expect(reconciled.metadata).toMatchObject({
       presetQueryId: 'workflow-social',
       isViewOnly: true,
@@ -157,5 +151,43 @@ describe('shouldDisplayWorkflowTab', () => {
         isScheduledRun: true,
       },
     }, 'chat-tab')).toBe(true)
+  })
+})
+
+describe('reusableScheduleTabId', () => {
+  const finishedScheduleTab = {
+    tabId: 'schedule-tab',
+    sessionId: 'schedule-cron--old_1',
+    isStreaming: false,
+    metadata: { mode: 'workflow' as const, isScheduledRun: true, isViewOnly: true, presetQueryId: 'workflow-social' },
+  }
+
+  it('reuses a finished Schedule lane instead of opening another tab per run', () => {
+    expect(reusableScheduleTabId({ a: finishedScheduleTab }, 'workflow-social', 'schedule-cron--new_2'))
+      .toBe('schedule-tab')
+  })
+
+  it('never displaces a live run — the scheduler lease means it still owns the lane', () => {
+    expect(reusableScheduleTabId(
+      { a: { ...finishedScheduleTab, isStreaming: true } }, 'workflow-social', 'schedule-cron--new_2',
+    )).toBeNull()
+  })
+
+  it('never recycles a tab the user promoted to an interactive chat', () => {
+    expect(reusableScheduleTabId(
+      { a: { ...finishedScheduleTab, metadata: { ...finishedScheduleTab.metadata, userInteractiveContinuation: true } } },
+      'workflow-social', 'schedule-cron--new_2',
+    )).toBeNull()
+  })
+
+  it('never crosses workflows', () => {
+    expect(reusableScheduleTabId({ a: finishedScheduleTab }, 'workflow-upwork', 'schedule-cron--new_2')).toBeNull()
+  })
+
+  it('leaves an ordinary Chat tab alone', () => {
+    expect(reusableScheduleTabId(
+      { a: { ...finishedScheduleTab, metadata: { mode: 'workflow' as const } } },
+      'workflow-social', 'schedule-cron--new_2',
+    )).toBeNull()
   })
 })
