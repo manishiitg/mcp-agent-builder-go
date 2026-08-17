@@ -14,6 +14,11 @@ MiniMax H3 is the product name, but the current fal endpoint namespace is
 name. Resolve and record the exact endpoint ID, mode, schema, price, defaults,
 and limits in the production's capability record.
 
+Current H3 output is 2K at 24 FPS for 5–15 second clips. Do not describe an
+H3 route as 768p unless the live endpoint schema explicitly changes this.
+Its live fal billing unit may be `compute seconds`; that is not output seconds,
+so never derive a dollar-per-video-second or a total from clip duration alone.
+
 ## Choose the route by control need
 
 - Use `minimax/hailuo-03/text-to-video` for a new scene without an approved

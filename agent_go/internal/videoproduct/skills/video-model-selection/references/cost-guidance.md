@@ -20,6 +20,15 @@ base = sum(rate × requested output units for every planned successful output)
 maximum = base + cost of the explicitly approved quality-retry allowance
 ```
 
+This calculation is valid only when the provider bills the same unit that the
+plan specifies (for example, output seconds or a completed video). Do not
+substitute output seconds for **compute seconds**, **tokens**, credits, or GPU
+time. Those units have no trustworthy conversion from a requested clip length.
+For such a route, show the live unit rate and mark the production total as
+**not reliably estimable before a bounded test**. Ask for a small dollar cap
+for that test; after it completes, record the billed amount and use that
+observed evidence only for a similar next call, not as a universal rate.
+
 Provider server failures and queue time may be unbilled, but a completed clip
 the user rejects is a paid quality retry. Keep those two cases separate. Do not
 include assembly, QA, download, or local rendering as generation cost.
@@ -51,6 +60,10 @@ curl --fail-with-body --silent --show-error \
 
 The response reports `unit_price`, `unit`, and `currency`; account discounts
 or custom terms apply there. Never print the authorization header or the key.
+Treat `unit` as a contract, not a label: `seconds` supports output-duration
+math only when the endpoint documentation confirms they are output seconds;
+`compute seconds` and `1000 tokens` do not. Never turn either into a
+per-video-second price by assumption.
 For Google, recheck the official pricing page because preview model rates and
 availability can change. For direct Seeddance, the public service bills credits
 based on model, duration, resolution, and settings rather than a stable public

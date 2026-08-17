@@ -64,6 +64,19 @@ fits the shot, output duration/resolution, live billing unit and rate, planned
 cost, and the maximum cost after the approved retry allowance. Recommend one
 choice; price alone must not override continuity or required control.
 
+**A dollar total is allowed only when the live billing unit can be mapped to
+the planned output without guessing.** If fal returns `seconds` for the exact
+endpoint, calculate from the requested output seconds. If it returns `video`,
+calculate from the planned call count. If it returns `compute seconds`,
+`tokens`, credits, GPU time, or another non-output unit, do **not** multiply it
+by the requested video duration and do not present a made-up “base” or “max”
+total. State the live unit rate, say that the provider has not supplied a
+reliable output-duration conversion, and offer a small capped paid test or ask
+for a user-approved dollar cap. This is especially important for the current
+fal MiniMax H3 reference route (compute seconds) and Seedance 2.5 reference
+route (tokens). Never call such a number an estimate, recommendation, or
+price quote.
+
 Use `references/cost-guidance.md` for the calculation, published anchors, and
 provider-specific price lookup. A static table is only orientation. fal prices
 must be resolved from the current account-facing pricing API for the exact
