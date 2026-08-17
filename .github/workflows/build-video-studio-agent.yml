@@ -20,6 +20,13 @@ jobs:
           ref: de7ef672f5e0ce2ffe68e5419ec1928236445a5f
           path: dependencies/mcpagent
 
+      - name: Check out matching LLM runtime
+        uses: actions/checkout@v4
+        with:
+          repository: manishiitg/llm-provider-mcp
+          ref: f32b481c08b1a1d96e75e656c9f36431f1128266
+          path: dependencies/multi-llm-provider-go
+
       - uses: actions/setup-go@v6
         with:
           go-version: '1.25.12'
@@ -34,7 +41,7 @@ jobs:
           # Retained-turn support is in the checked-out MCP runtime, which has
           # not been released in the pinned public module yet.
           go mod edit -replace github.com/manishiitg/mcpagent=../dependencies/mcpagent
-          go mod edit -dropreplace github.com/manishiitg/multi-llm-provider-go
+          go mod edit -replace github.com/manishiitg/multi-llm-provider-go=../dependencies/multi-llm-provider-go
           go mod tidy
           go build -o ../dist/video-studio-agent .
 
