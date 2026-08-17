@@ -95,6 +95,23 @@ This product has its own intentionally empty MCP config:
 Do not copy the generic developer workstation MCP catalog into this host.
 Product tools are provided through the bundled `mcpbridge` binary.
 
+## Agent-to-platform URL
+
+The rootless EC2 agent must call the platform API through its local loopback
+address:
+
+```text
+MCP_API_URL=http://127.0.0.1:8000
+```
+
+This is a deployment setting, not a secret. `deploy-rootless.sh` preserves an
+existing value or writes this default into
+`/var/lib/video-studio/video-studio/.env` before restarting the services.
+Do not set it to `http://host.docker.internal:8000`: that hostname is only
+appropriate when the agent itself runs in Docker and does not resolve on this
+rootless host. A wrong value prevents agent tools such as `show_video` from
+calling the Production API.
+
 ## Post-deploy checks
 
 Run these checks from a machine with the deploy SSH key. They show service
@@ -106,6 +123,9 @@ ssh -i /Users/mipl/.ssh/id_ed25519 video-studio@44.253.29.127 \
 
 ssh -i /Users/mipl/.ssh/id_ed25519 video-studio@44.253.29.127 \
   'awk -F= "/^GLOBAL_SECRET_/ {print \$1}" /var/lib/video-studio/video-studio/.env | sort'
+
+ssh -i /Users/mipl/.ssh/id_ed25519 video-studio@44.253.29.127 \
+  'grep -q "^MCP_API_URL=http://127.0.0.1:8000$" /var/lib/video-studio/video-studio/.env'
 
 curl -fsSI https://video.realtrainingsys.com/
 ```
