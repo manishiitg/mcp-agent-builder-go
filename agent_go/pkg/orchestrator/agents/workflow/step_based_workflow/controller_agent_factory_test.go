@@ -352,6 +352,80 @@ func TestApplyStepConfigToAgentConfigSupportsCodingAgentTmuxKeepAlive(t *testing
 	}
 }
 
+// Confirmed live 2026-08-17 (confida-login's survey-app-and-refresh-knowledge
+// todo-orchestrator session): configureRunConcernSession set up the trusted
+// step identity, but record_run_concern was never in SelectedTools, so a
+// reflection turn that named the tool in its own prompt got "unknown=
+// [record_run_concern]: not registered by any currently connected server".
+// query_workflow_db/mutate_workflow_db only happened to be present because
+// that workflow's own declared tools included them -- nobody would think to
+// manually declare a platform-internal concern-reporting tool. Pins that both
+// SelectedTools-building branches (custom and default) always carry it,
+// mirroring the capability-derived DB tools they sit beside.
+func TestApplyStepConfigToAgentConfigAlwaysIncludesRunConcernTool(t *testing.T) {
+	t.Run("default branch (no step-specific SelectedTools)", func(t *testing.T) {
+		hcpo := newAgentFactoryTestOrchestrator(t)
+		config := agents.NewOrchestratorAgentConfig("step-agent")
+		hcpo.applyStepConfigToAgentConfig(config, &AgentConfigs{}, true)
+		if !slices.Contains(config.SelectedTools, "workflow_db:record_run_concern") {
+			t.Fatalf("expected default SelectedTools to include record_run_concern, got %v", config.SelectedTools)
+		}
+	})
+
+	t.Run("step-specific SelectedTools narrows other tools but not this one", func(t *testing.T) {
+		hcpo := newAgentFactoryTestOrchestrator(t)
+		config := agents.NewOrchestratorAgentConfig("step-agent")
+		hcpo.applyStepConfigToAgentConfig(config, &AgentConfigs{
+			SelectedTools: []string{"api-bridge:execute_shell_command"},
+		}, true)
+		if !slices.Contains(config.SelectedTools, "workflow_db:record_run_concern") {
+			t.Fatalf("expected step-specific SelectedTools to still include record_run_concern, got %v", config.SelectedTools)
+		}
+	})
+}
+
+func TestPrepareCustomToolsDefaultBranchIncludesRunConcernTool(t *testing.T) {
+	base, err := orchestrator.NewBaseOrchestrator(
+		loggerv2.NewNoop(), nil, orchestrator.OrchestratorTypeWorkflow, "", 0,
+		"", nil, nil, false, &orchestrator.LLMConfig{}, 1, nil, nil, nil,
+	)
+	if err != nil {
+		t.Fatalf("NewBaseOrchestrator returned error: %v", err)
+	}
+	tool := func(name string) llmtypes.Tool {
+		return llmtypes.Tool{Type: "function", Function: &llmtypes.FunctionDefinition{Name: name}}
+	}
+	noop := func(context.Context, map[string]interface{}) (string, error) { return "", nil }
+	base.WorkspaceTools = []llmtypes.Tool{
+		tool("execute_shell_command"), tool("query_workflow_db"), tool("record_run_concern"),
+	}
+	base.WorkspaceToolExecutors = map[string]interface{}{
+		"execute_shell_command": noop,
+		"query_workflow_db":     noop,
+		"record_run_concern":    noop,
+	}
+	base.ToolCategories = map[string]string{
+		"execute_shell_command": "workspace_advanced",
+		"query_workflow_db":     "workflow_db",
+		"record_run_concern":    "workflow_db",
+	}
+	hcpo := &StepBasedWorkflowOrchestrator{BaseOrchestrator: base}
+
+	// No EnabledCustomTools -- exercises the "Default: enable only advanced +
+	// human tools" branch, not the EnabledCustomTools branch a few lines above
+	// it (which already force-included this tool before this fix).
+	tools, executors := hcpo.prepareCustomTools(&AgentConfigs{})
+	names := make([]string, 0, len(tools))
+	for _, definition := range tools {
+		if definition.Function != nil {
+			names = append(names, definition.Function.Name)
+		}
+	}
+	if !slices.Contains(names, "record_run_concern") || executors["record_run_concern"] == nil {
+		t.Fatalf("default tool set missing record_run_concern: tools=%v executors=%v", names, executors)
+	}
+}
+
 func TestEnableWorkflowMainCodingAgentKeepAliveEnablesCLIProvider(t *testing.T) {
 	config := agents.NewOrchestratorAgentConfig("workflow-builder-agent")
 	config.LLMConfig.Primary.Provider = string(mcpllm.ProviderCodexCLI)
