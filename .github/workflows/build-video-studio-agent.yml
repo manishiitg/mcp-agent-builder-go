@@ -29,6 +29,7 @@ jobs:
           # Use the pinned upstream modules for the hosted, reproducible build.
           go mod edit -dropreplace github.com/manishiitg/mcpagent
           go mod edit -dropreplace github.com/manishiitg/multi-llm-provider-go
+          go mod tidy
           go build -o ../dist/video-studio-agent .
 
       - name: Upload Linux agent
