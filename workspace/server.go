@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/manishiitg/coding-agent-loop/workspace/handlers"
+	"github.com/manishiitg/coding-agent-loop/workspace/security"
 
 	"github.com/gin-contrib/gzip"
 	"github.com/gin-gonic/gin"
@@ -98,9 +99,10 @@ func runServer(cmd *cobra.Command, args []string) {
 	// Health check endpoint
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
-			"status":   "healthy",
-			"service":  "planner-api",
-			"docs_dir": docsDir,
+			"status":        "healthy",
+			"service":       "planner-api",
+			"docs_dir":      docsDir,
+			"shell_sandbox": security.CurrentSandboxCapability(),
 		})
 	})
 	r.HEAD("/health", func(c *gin.Context) {

@@ -132,8 +132,9 @@ func (iso *Isolator) sandboxAllowedPath(path string) (string, bool) {
 	return canonicalAllowedPath, true
 }
 
-// ExecuteIsolated runs a command with filesystem restrictions
-// Uses unshare on Linux, sandbox-exec on macOS
+// ExecuteIsolated runs a command with filesystem restrictions.
+// Linux selects a verified kernel backend (Landlock first, then a proven mount
+// namespace); macOS uses sandbox-exec.
 // Returns the command, a cleanup function, and an error
 func (iso *Isolator) ExecuteIsolated(ctx context.Context, command string, args []string) (*exec.Cmd, func(), error) {
 	if runtime.GOOS == "darwin" {
@@ -147,6 +148,13 @@ func (iso *Isolator) ExecuteIsolated(ctx context.Context, command string, args [
 
 // executeIsolatedLinux uses unshare for filesystem isolation on Linux
 func (iso *Isolator) executeIsolatedLinux(ctx context.Context, command string, args []string) (*exec.Cmd, func(), error) {
+	return iso.executeIsolatedLinuxPlatform(ctx, command, args)
+}
+
+// executeIsolatedMountNamespace is the legacy Linux mount-namespace backend.
+// Callers must prove that unshare is permitted for the service identity before
+// selecting it; invoking it optimistically is PLAT-118's root cause.
+func (iso *Isolator) executeIsolatedMountNamespace(ctx context.Context, command string, args []string) (*exec.Cmd, func(), error) {
 	// Generate mount script for isolation
 	mountScript := iso.generateMountScript(command, args)
 

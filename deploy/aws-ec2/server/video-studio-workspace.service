@@ -1,0 +1,19 @@
+[Unit]
+Description=Video Studio workspace API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=video-studio
+Group=video-studio
+EnvironmentFile=/opt/video-studio/.env
+Environment=HOME=/var/lib/video-studio
+WorkingDirectory=/opt/video-studio/current
+ExecStart=/opt/video-studio/current/bin/video-studio-workspace server --port 8080 --docs-dir /data/video-studio/docs
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

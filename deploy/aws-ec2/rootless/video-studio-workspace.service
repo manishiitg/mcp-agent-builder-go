@@ -1,0 +1,13 @@
+[Unit]
+Description=Video Studio workspace API (user service)
+
+[Service]
+EnvironmentFile=%h/video-studio/.env
+Environment=HOME=%h
+WorkingDirectory=%h/video-studio/current
+ExecStart=%h/video-studio/current/bin/video-studio-workspace server --port 8080 --docs-dir /data/video-studio/docs
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

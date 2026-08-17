@@ -1,0 +1,15 @@
+[Unit]
+Description=Video Studio cookie-auth gateway (user service)
+After=video-studio-agent.service video-studio-workspace.service
+
+[Service]
+EnvironmentFile=%h/video-studio/.env
+Environment=HOME=%h
+Environment=FRONTEND_DIR=%h/video-studio/current/frontend
+WorkingDirectory=%h/video-studio/current
+ExecStart=%h/video-studio/current/bin/video-studio-gateway
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

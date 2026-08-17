@@ -108,10 +108,11 @@ func TestIsolatorOSDetection(t *testing.T) {
 		}
 		t.Logf("✓ macOS: Using sandbox-exec")
 	} else if runtime.GOOS == "linux" {
-		if cmd.Args[0] != "unshare" {
-			t.Errorf("Expected unshare on Linux, got: %s", cmd.Args[0])
+		backend := filepath.Base(cmd.Args[0])
+		if backend != "unshare" && backend != landlockRunnerName {
+			t.Errorf("Expected a supported Linux sandbox launcher, got: %s", cmd.Args[0])
 		}
-		t.Logf("✓ Linux: Using unshare")
+		t.Logf("✓ Linux: Using %s", backend)
 	}
 
 	// Verify safe environment is set

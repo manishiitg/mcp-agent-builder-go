@@ -4,8 +4,8 @@
 
 | Coordination | Value |
 |---|---|
-| Assigned agent | unassigned |
-| Ticket state | `new` — reproduced on the deployed Video Studio EC2 host; no platform repair exists yet |
+| Assigned agent | Codex |
+| Ticket state | `implemented; core runtime verified` — project-scoped Video Studio shell is fixed on EC2; nested `BlockedWritePaths` and provider-auth acceptance remain open |
 | Last synchronized | `2026-08-17` |
 
 - **Priority:** P1 — every `execute_shell_command` call fails before the user's
@@ -219,6 +219,64 @@ criteria require the hardened EC2 host. Reviewing it from here without that host
 would produce precisely the constructed-evidence result the test boundary warns
 against.
 
+## Implementation and live verification — 2026-08-17
+
+The repair now ships a dedicated `video-studio-landlock-runner`. The workspace
+service writes a mode-0600 policy file, starts the launcher with the existing
+safe environment, and the launcher applies `no_new_privs` plus a Landlock
+filesystem ruleset before replacing itself with the requested command. The
+server process is never restricted. Linux selection is now capability-based:
+Landlock first, a mount namespace only after a successful `unshare` preflight,
+and otherwise a typed `SANDBOX_UNAVAILABLE` setup error. There is no
+capability-triggered unsandboxed fallback.
+
+`/health` now exposes `shell_sandbox` separately from HTTP liveness and caches
+the result of a real sandboxed `/bin/true` launcher preflight. The rootless
+deployment builds and installs the launcher alongside the workspace binary.
+
+The focused Linux regression test calls the real `ExecuteShellCommand` HTTP
+handler and real child launcher. On the hardened EC2 kernel, as uid 999
+`video-studio`, it proved:
+
+- an allowed file is readable and an allowed output file is writable;
+- a read-only path rejects writes;
+- an ungranted path is unreadable; and
+- a symlink inside an allowed path cannot escape to the ungranted file.
+
+The deployed release
+`/var/lib/video-studio/video-studio/releases/8dcda96a6-20260817145736` then
+passed the authenticated production `/api/execute` route with the exact
+project-scoped Video Studio guard for
+`_users/default/Chats/Video Studio/projects/newtest-6570e26d`:
+
+```text
+shell_sandbox.available=true
+shell_sandbox.backend=landlock
+shell_sandbox.detail="filesystem ABI 7; launcher preflight passed"
+pwd=/data/video-studio/docs/_users/default/Chats/Video Studio/projects/newtest-6570e26d
+whoami=video-studio
+project write/create/remove=pass
+parent-directory escape=blocked
+public HTTPS gateway=reachable (HTTP 303 auth redirect)
+exit_code=0
+```
+
+All three rootless user services (`video-studio-agent`,
+`video-studio-workspace`, and `video-studio-gateway`) were active after the
+release switch. Local macOS security/handler tests and Linux amd64 cross-builds
+also pass.
+
+Two acceptance items remain deliberately open rather than being claimed:
+
+1. Landlock rules are additive, so a writable parent plus a nested
+   `BlockedWritePaths` exception cannot preserve the current precedence
+   contract exactly. Such a policy fails closed with `SANDBOX_UNAVAILABLE` on
+   this host instead of weakening the deny. The deployed Video Studio project
+   guard does not use that shape.
+2. DNS/TLS and the public gateway were verified from the guarded child, but a
+   fal.ai authentication-only call was not made. No paid provider request was
+   issued and no credential was printed.
+
 ## Explicit non-fixes
 
 - Do not run the workspace service as root.
@@ -259,7 +317,7 @@ backend result directly:
 
 1. start the workspace service as a non-root user under an AppArmor policy that
    rejects unprivileged user namespaces;
-2. call the real `/api/shell` route with an enabled Folder Guard;
+2. call the real `/api/execute` route with an enabled Folder Guard;
 3. assert the allowed/denied filesystem and network cases above;
 4. force backend capability absence and assert the typed fail-closed error;
 5. deploy the resulting binaries rootlessly and repeat the live Video Studio
