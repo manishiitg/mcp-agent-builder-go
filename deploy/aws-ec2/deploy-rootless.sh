@@ -19,7 +19,7 @@ RELEASE_ID="$(git -C "$REPO_ROOT" rev-parse --short HEAD)-$(date +%Y%m%d%H%M%S)"
 BUILD_DIR="$(mktemp -d)"
 GLOBAL_FILE="$(mktemp)"
 trap 'rm -rf "$BUILD_DIR" "$GLOBAL_FILE"' EXIT
-mkdir -p "$BUILD_DIR/bin" "$BUILD_DIR/frontend" "$BUILD_DIR/configs" "$BUILD_DIR/systemd"
+mkdir -p "$BUILD_DIR/bin" "$BUILD_DIR/frontend" "$BUILD_DIR/configs" "$BUILD_DIR/systemd" "$BUILD_DIR/claude-skills"
 
 if [[ "$REUSE_CURRENT_AGENT" == "1" ]]; then
   rsync -az -e "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -i $SSH_KEY_PATH" \
@@ -39,6 +39,7 @@ install -m 0644 "$SCRIPT_DIR/server/mcp_servers_video_studio.json" "$BUILD_DIR/c
 install -m 0644 "$SCRIPT_DIR/rootless/video-studio-workspace.service" "$BUILD_DIR/systemd/video-studio-workspace.service"
 install -m 0644 "$SCRIPT_DIR/rootless/video-studio-agent.service" "$BUILD_DIR/systemd/video-studio-agent.service"
 install -m 0644 "$SCRIPT_DIR/rootless/video-studio-gateway.service" "$BUILD_DIR/systemd/video-studio-gateway.service"
+cp -R "$REPO_ROOT/agent_go/internal/videoproduct/skills/." "$BUILD_DIR/claude-skills/"
 
 aws_rts secretsmanager get-secret-value --secret-id "$GLOBAL_SECRETS_SECRET_ID" --query SecretString --output text \
   | jq -er 'to_entries[] | select(.key | test("^[A-Z0-9_]+$")) | select(.value | type == "string" and length > 0) | if .key == "CLAUDE_CODE_OAUTH_TOKEN" then "CLAUDE_CODE_OAUTH_TOKEN=\(.value)" else "GLOBAL_SECRET_\(.key)=\(.value)" end' > "$GLOBAL_FILE"
@@ -49,6 +50,6 @@ REMOTE_RELEASE="$REMOTE_APP/releases/$RELEASE_ID"
 "${SSH[@]}" 'test -x /usr/bin/google-chrome; command -v agent-browser >/dev/null'
 rsync -az -e "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -i $SSH_KEY_PATH" "$BUILD_DIR/" "video-studio@$HOST_IP:$REMOTE_RELEASE/"
 rsync -az --chmod=ugo=,u=rw -e "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -i $SSH_KEY_PATH" "$GLOBAL_FILE" "video-studio@$HOST_IP:/var/lib/video-studio/video-studio/.globals-$RELEASE_ID"
-"${SSH[@]}" "set -e; env_file='$REMOTE_APP/.env'; global_file='$REMOTE_APP/.globals-$RELEASE_ID'; awk '!/^GLOBAL_SECRET_|^CLAUDE_CODE_OAUTH_TOKEN=/' \"\$env_file\" > \"\$env_file.next\"; grep -q '^MCP_API_URL=' \"\$env_file.next\" || echo 'MCP_API_URL=http://127.0.0.1:8000' >> \"\$env_file.next\"; cat \"\$global_file\" >> \"\$env_file.next\"; chmod 600 \"\$env_file.next\"; mv \"\$env_file.next\" \"\$env_file\"; rm -f \"\$global_file\"; install -d -m 0755 \"\$HOME/.config/systemd/user\"; install -m 0644 '$REMOTE_RELEASE/systemd/video-studio-workspace.service' \"\$HOME/.config/systemd/user/video-studio-workspace.service\"; install -m 0644 '$REMOTE_RELEASE/systemd/video-studio-agent.service' \"\$HOME/.config/systemd/user/video-studio-agent.service\"; install -m 0644 '$REMOTE_RELEASE/systemd/video-studio-gateway.service' \"\$HOME/.config/systemd/user/video-studio-gateway.service\"; systemctl --user daemon-reload; ln -sfn '$REMOTE_RELEASE' '$REMOTE_APP/current'; systemctl --user restart video-studio-workspace video-studio-agent video-studio-gateway; systemctl --user is-active video-studio-agent video-studio-workspace video-studio-gateway"
+"${SSH[@]}" "set -e; env_file='$REMOTE_APP/.env'; global_file='$REMOTE_APP/.globals-$RELEASE_ID'; awk '!/^GLOBAL_SECRET_|^CLAUDE_CODE_OAUTH_TOKEN=/' \"\$env_file\" > \"\$env_file.next\"; grep -q '^MCP_API_URL=' \"\$env_file.next\" || echo 'MCP_API_URL=http://127.0.0.1:8000' >> \"\$env_file.next\"; cat \"\$global_file\" >> \"\$env_file.next\"; chmod 600 \"\$env_file.next\"; mv \"\$env_file.next\" \"\$env_file\"; rm -f \"\$global_file\"; find /data/video-studio/docs/_users -type d -path '*/Chats/Video Studio/projects/*' -print0 | while IFS= read -r -d '' project; do install -d -m 0755 \"\$project/.claude/skills\"; rsync -a --delete '$REMOTE_RELEASE/claude-skills/' \"\$project/.claude/skills/\"; rm -rf \"\$project/skills/video-studio\"; done; install -d -m 0755 \"\$HOME/.config/systemd/user\"; install -m 0644 '$REMOTE_RELEASE/systemd/video-studio-workspace.service' \"\$HOME/.config/systemd/user/video-studio-workspace.service\"; install -m 0644 '$REMOTE_RELEASE/systemd/video-studio-agent.service' \"\$HOME/.config/systemd/user/video-studio-agent.service\"; install -m 0644 '$REMOTE_RELEASE/systemd/video-studio-gateway.service' \"\$HOME/.config/systemd/user/video-studio-gateway.service\"; systemctl --user daemon-reload; ln -sfn '$REMOTE_RELEASE' '$REMOTE_APP/current'; systemctl --user restart video-studio-workspace video-studio-agent video-studio-gateway; systemctl --user is-active video-studio-agent video-studio-workspace video-studio-gateway"
 
 echo "Rootless Video Studio release deployed: https://video.realtrainingsys.com"

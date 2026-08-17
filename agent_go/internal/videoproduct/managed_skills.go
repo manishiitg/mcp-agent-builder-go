@@ -16,22 +16,17 @@ func syncManagedProductSkills(ctx context.Context, workspacePath string) error {
 	if err := productdeps.Ensure(ctx, workspacePath, mustVideoStudioManifest().Dependencies); err != nil {
 		return err
 	}
-	return syncVisibleProductSkills(workspacePath)
+	return syncClaudeProductSkills(workspacePath)
 }
 
-// syncVisibleProductSkills gives project owners an inspectable copy of the
-// product-owned guidance. These are not the runtime source of truth (the
-// agent uses the embedded copies registered in profile_definition.go), and we
-// deliberately keep them below skills/video-studio so they cannot shadow a
-// user-installed skill with the same name.
-func syncVisibleProductSkills(workspacePath string) error {
-	root := filepath.Join(workspacePath, "skills", "video-studio")
+// syncClaudeProductSkills materializes the product-owned skills in Claude
+// Code's actual discovery location. The embedded copies remain the service
+// source of truth; this makes the same guidance available to Claude Code and
+// visible in the project Files panel without a second, reference-only copy.
+func syncClaudeProductSkills(workspacePath string) error {
+	root := filepath.Join(workspacePath, ".claude", "skills")
 	if err := os.MkdirAll(root, 0o755); err != nil {
-		return fmt.Errorf("create visible Video Studio skills folder: %w", err)
-	}
-	readme := "# Video Studio product skills\n\nThis folder is a read-only-for-reference copy of the guidance built into the Video Studio agent. It is refreshed when the project connects. Do not put project work here; use `work/`, `planning/`, or `outputs/` instead.\n"
-	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte(readme), 0o644); err != nil {
-		return fmt.Errorf("write visible Video Studio skills README: %w", err)
+		return fmt.Errorf("create Claude Code Video Studio skills folder: %w", err)
 	}
 	for _, definition := range profileSkills {
 		sourceRoot := filepath.ToSlash(filepath.Dir(definition.path))
@@ -57,8 +52,15 @@ func syncVisibleProductSkills(workspacePath string) error {
 			}
 			return os.WriteFile(target, content, 0o644)
 		}); err != nil {
-			return fmt.Errorf("materialize visible Video Studio skill %s: %w", strings.TrimSpace(definition.name), err)
+			return fmt.Errorf("materialize Claude Code Video Studio skill %s: %w", strings.TrimSpace(definition.name), err)
 		}
+	}
+	// The previous deployment introduced this product-specific reference mirror.
+	// It is not a user skill namespace, so remove only that exact legacy folder
+	// after the real Claude Code skills have been materialized successfully.
+	legacyRoot := filepath.Join(workspacePath, "skills", "video-studio")
+	if err := os.RemoveAll(legacyRoot); err != nil {
+		return fmt.Errorf("remove legacy Video Studio skills mirror: %w", err)
 	}
 	return nil
 }
@@ -95,8 +97,8 @@ func SyncVisibleSkillsForExistingProjects(docsRoot string) error {
 			if !project.IsDir() {
 				continue
 			}
-			if err := syncVisibleProductSkills(filepath.Join(projectsRoot, project.Name())); err != nil {
-				return fmt.Errorf("sync visible skills for Video Studio project %s: %w", project.Name(), err)
+			if err := syncClaudeProductSkills(filepath.Join(projectsRoot, project.Name())); err != nil {
+				return fmt.Errorf("sync Claude Code skills for Video Studio project %s: %w", project.Name(), err)
 			}
 		}
 	}
