@@ -114,10 +114,10 @@ model explorer, Google's Gemini API model reference), not from memory:
   open-weight option rather than assuming every model is equivalent on this
   axis.
 
-## Notable options as of 2026-08-15 -- a starting point, not a source of truth
+## Notable options as of 2026-08-17 -- a starting point, not a source of truth
 
-This list was checked against real search results and Google's own docs on
-2026-08-15. It will go stale -- confirm the exact model ID and current
+This list was checked against fal.ai's and Google's own docs on 2026-08-17. It
+will go stale -- confirm the exact model ID and current
 capabilities against the provider's own live reference before calling
 anything, per "Never invent a model ID" in `fal-ai` and `google-ai`. Do not
 extend this list from memory in a later session; re-check instead.
@@ -133,7 +133,8 @@ extend this list from memory in a later session; re-check instead.
   materially better subject/character consistency across the whole clip
   (see `video-cinematography`'s consistency section), which matters more,
   not less, the longer a character's arc runs across a production. MiniMax
-  H3 (`minimax/h3/text-to-video`, `.../image-to-video`, `.../reference-to-video`)
+  H3 (`minimax/hailuo-03/text-to-video`, `.../image-to-video`,
+  `.../reference-to-video`)
   is the notable open-weights option -- self-hostable/fine-tunable, not
   only a closed API -- generating 2K, 5-15s clips at 24 FPS with native
   stereo audio and rich multimodal reference input (up to 9 images for
@@ -141,7 +142,11 @@ extend this list from memory in a later session; re-check instead.
   it a strong reference-conditioning option for character consistency. Also
   available: Veo 3.1 / Veo 3.1 Lite (native audio, lip-synced dialogue),
   Kling 3.0 Pro (cinematic, native audio, multilingual lip-sync), Wan 2.6,
-  LTX 2.0.
+  LTX 2.0. Gemini Omni Flash is also hosted on fal.ai under
+  `google/gemini-omni-flash` with image, reference, and edit routes; use
+  `gemini-omni-video` for its current route-specific controls rather than
+  assuming the landing page's multimodal claims appear as fields on every
+  endpoint.
 - **Image, hosted on fal.ai**: FLUX, and Google's Nano Banana models
   re-hosted alongside fal.ai's own catalog.
 - **Voice/audio, hosted on fal.ai**: ElevenLabs (text-to-speech, voice
@@ -149,10 +154,9 @@ extend this list from memory in a later session; re-check instead.
 - **Image, direct via Google's Gemini API**: Nano Banana 2 =
   `gemini-3.1-flash-image` (most versatile); Nano Banana 2 Lite =
   `gemini-3.1-flash-lite-image`.
-- **Video, direct via Google's Gemini API**: Veo 3.1. A newer multimodal
-  option, `gemini-omni-flash-preview`, was reported rolling out with native
-  video generation and conversational editing from text/image/video input,
-  priced comparably to Veo 3.1 Fast.
+- **Video, direct via Google's Gemini API**: Veo 3.1. Do not infer that the
+  fal-hosted `google/gemini-omni-flash` endpoint ID is accepted by Google's
+  direct API; provider routing and model IDs are separate contracts.
 - **Narration/TTS, direct via Google's Gemini API**: Gemini TTS, in preview
   at the time of writing under ids of the shape
   `gemini-3.1-flash-tts-preview` and `gemini-2.5-flash-preview-tts` /

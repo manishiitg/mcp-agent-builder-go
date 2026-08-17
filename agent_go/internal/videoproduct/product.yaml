@@ -80,6 +80,8 @@ profile:
     - kling-video
     - seedance-video
     - veo-video
+    - minimax-h3-video
+    - gemini-omni-video
     - video-model-selection
     - video-cinematography
     - video-storytelling
