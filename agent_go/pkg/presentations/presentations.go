@@ -12,8 +12,9 @@
 // what event announces it) encoded independently at more than one site.
 //
 // A tool factory that presents something should do three things and no
-// more: validate its own domain rules (a video needs a passing QA report;
-// a future kind will have its own rules), build a Presentation, and call
+// more: validate its own domain rules (a video preview needs an existing file;
+// an approved final additionally needs a passing QA report; a future kind will
+// have its own rules), build a Presentation, and call
 // Upsert. Everything about how that becomes a database row and a
 // frontend-visible event lives here, once.
 package presentations

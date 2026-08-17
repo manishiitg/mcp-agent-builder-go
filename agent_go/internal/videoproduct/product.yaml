@@ -90,8 +90,9 @@ profile:
       presentation:
         kind: media.video
     # A character reference is pre-production, not a deliverable: it is shown
-    # so the user can reject a face while changing it is still cheap, which is
-    # why it carries no QA gate the way show-video does.
+    # so the user can reject a face while changing it is still cheap. Video
+    # previews are likewise review material; show-video applies its QA gate
+    # only when the caller supplies a final quality report.
     - id: video.show-character
       presentation:
         kind: media.character
