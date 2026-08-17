@@ -144,6 +144,25 @@ func TestWorkflowProviderAPIKeysAreUserAndWorkflowScoped(t *testing.T) {
 	}
 }
 
+func TestWorkflowProviderAPIKeysPreservesDeploymentClaudeTokenWithoutOverride(t *testing.T) {
+	store, err := chathistory.NewFilesystemStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFilesystemStore() error = %v", err)
+	}
+	api := &StreamingAPI{chatStore: store}
+	globalToken := "deployment-oauth-token"
+
+	keys, err := api.workflowProviderAPIKeys(context.Background(), "alice", "Chats/Video Studio/project", &llm.ProviderAPIKeys{
+		ClaudeCodeOAuthToken: &globalToken,
+	})
+	if err != nil {
+		t.Fatalf("workflowProviderAPIKeys() error = %v", err)
+	}
+	if keys.ClaudeCodeOAuthToken == nil || *keys.ClaudeCodeOAuthToken != globalToken {
+		t.Fatalf("ClaudeCodeOAuthToken = %#v, want deployment token", keys.ClaudeCodeOAuthToken)
+	}
+}
+
 func encryptProviderCredentialForTest(t *testing.T, value, userID string) string {
 	t.Helper()
 	key := deriveSecretsKey()

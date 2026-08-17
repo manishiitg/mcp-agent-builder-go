@@ -294,7 +294,12 @@ func (api *StreamingAPI) workflowProviderAPIKeys(ctx context.Context, userID, wo
 		keys.ClaudeCodeOAuthToken = nil
 		return keys, err
 	}
-	keys.ClaudeCodeOAuthToken = token
+	// A per-workflow setup token takes precedence, but its absence must not
+	// erase the deployment-wide Claude Code setup token carried in base. That
+	// base token is the normal authentication path for Video Studio projects.
+	if token != nil {
+		keys.ClaudeCodeOAuthToken = token
+	}
 
 	// Cursor differs from Claude Code in one way that matters here: the base
 	// keys may already carry a server-wide CURSOR_API_KEY. A workflow-scoped
