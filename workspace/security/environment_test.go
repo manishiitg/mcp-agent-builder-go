@@ -47,6 +47,18 @@ func TestNativeEnvironmentDoesNotExposeWorkspaceExecutionToken(t *testing.T) {
 	}
 }
 
+func TestDockerEnvironmentUsesConfiguredBrowserExecutable(t *testing.T) {
+	t.Setenv("NATIVE_WORKSPACE", "")
+	t.Setenv("AGENT_BROWSER_EXECUTABLE_PATH", "/usr/bin/google-chrome")
+
+	for _, entry := range BuildSafeEnvironment() {
+		if entry == "AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/google-chrome" {
+			return
+		}
+	}
+	t.Fatal("configured browser executable was not preserved in the safe environment")
+}
+
 func pathInList(pathValue, target string) bool {
 	for _, path := range strings.Split(pathValue, ":") {
 		if path == target {

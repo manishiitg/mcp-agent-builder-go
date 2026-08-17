@@ -19,6 +19,7 @@ func BuildSafeEnvironment() []string {
 
 // buildDockerEnvironment returns a strict whitelist for Docker containers.
 func buildDockerEnvironment() []string {
+	browserExecutable := configuredBrowserExecutable()
 	env := []string{
 		// Essential shell variables
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
@@ -30,8 +31,9 @@ func buildDockerEnvironment() []string {
 		"LANG=C.UTF-8",
 		"LC_ALL=C.UTF-8",
 
-		// Browser automation (agent-browser uses system Chromium).
-		"AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium",
+		// Browser automation. This is deployment configuration, not a secret;
+		// preserve the rootless host's Chrome-for-Testing/Google Chrome path.
+		"AGENT_BROWSER_EXECUTABLE_PATH=" + browserExecutable,
 
 		// Python: disable output buffering so stdout/stderr are captured even if the process is killed (timeout/signal)
 		"PYTHONUNBUFFERED=1",
@@ -47,6 +49,13 @@ func buildDockerEnvironment() []string {
 	}
 
 	return env
+}
+
+func configuredBrowserExecutable() string {
+	if configured := strings.TrimSpace(os.Getenv("AGENT_BROWSER_EXECUTABLE_PATH")); configured != "" {
+		return configured
+	}
+	return "/usr/bin/chromium"
 }
 
 // buildNativeEnvironment inherits the host environment but strips secrets.

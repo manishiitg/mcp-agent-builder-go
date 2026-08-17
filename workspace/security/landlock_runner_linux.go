@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"unsafe"
 
@@ -152,13 +153,19 @@ func addLandlockPathRule(rulesetFD int, path string, allowed uint64) error {
 }
 
 func landlockSystemReadPaths() []string {
-	return existingCanonicalPaths([]string{
+	paths := []string{
 		"/bin", "/sbin", "/usr", "/lib", "/lib64",
 		"/etc/ssl", "/etc/ca-certificates", "/etc/resolv.conf", "/etc/hosts",
 		"/etc/nsswitch.conf", "/etc/passwd", "/etc/group", "/etc/localtime",
 		"/etc/ld.so.cache", "/etc/ld.so.conf", "/etc/ld.so.conf.d",
 		"/dev/null", "/dev/zero", "/dev/full", "/dev/random", "/dev/urandom", "/dev/tty",
-	})
+	}
+	if browserPath := strings.TrimSpace(os.Getenv("AGENT_BROWSER_EXECUTABLE_PATH")); browserPath != "" {
+		if resolved, err := filepath.EvalSymlinks(browserPath); err == nil {
+			paths = append(paths, filepath.Dir(resolved))
+		}
+	}
+	return existingCanonicalPaths(paths)
 }
 
 func landlockSystemWritePaths() []string {

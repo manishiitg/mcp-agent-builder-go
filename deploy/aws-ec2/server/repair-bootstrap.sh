@@ -17,3 +17,5 @@ curl -fsSL -o /tmp/google-chrome.deb https://dl.google.com/linux/direct/google-c
 apt-get install -y /tmp/google-chrome.deb
 rm -f /tmp/google-chrome.deb
 npm install -g agent-browser@latest @anthropic-ai/claude-code@latest @earendil-works/pi-coding-agent@latest
+test -x /usr/bin/google-chrome
+command -v agent-browser

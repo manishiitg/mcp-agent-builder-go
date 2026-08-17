@@ -112,31 +112,23 @@ curl -fsSI https://video.realtrainingsys.com/
 
 An unauthenticated HTTP `303` redirect to `/login` is expected.
 
-## Known issue: `execute_shell_command` fails on Linux
+## Browser automation prerequisite
 
-**Current status: unresolved.**
-
-The shell tool wraps commands in Linux `unshare -m` to create a mount namespace
-and enforce the project-folder sandbox. The agent correctly runs as the
-unprivileged `video-studio` user, but this EC2 host rejects mount-namespace
-creation for that user:
+The bootstrap template and repair script install both Google Chrome and the
+`agent-browser` CLI. The rootless runtime uses:
 
 ```text
-unshare: unshare failed: Operation not permitted
+AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/google-chrome
 ```
 
-As a result, even harmless commands such as `pwd`, `whoami`, and `echo` exit
-with code `1` before they begin. This is unrelated to model credentials or
-global secrets.
+This path must remain available to the guarded workspace process; it is not
+interchangeable with `/usr/bin/chromium`. Every normal rootless deploy checks
+for both `/usr/bin/google-chrome` and `agent-browser` before it uploads or
+restarts anything. If either check fails, run the administrator-only bootstrap
+or repair script first, then return to the normal SSH + rsync deploy path.
 
-Do **not** fix this by running the agent as root or by granting broad
-`CAP_SYS_ADMIN` to the runtime. That defeats the non-root deployment model and
-materially weakens host isolation.
-
-The correct follow-up is to replace the per-command `unshare` implementation
-with a sandbox that works for an unprivileged service account, while preserving
-the project-specific filesystem boundary. Until then, product shell execution
-is unavailable; browser and non-shell product tools continue to work.
+The Linux shell sandbox is Landlock-first with a verified mount-namespace
+fallback. Do not run the service as root or grant it `CAP_SYS_ADMIN`.
 
 ## Future SSM option
 
