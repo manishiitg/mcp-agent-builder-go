@@ -22,7 +22,14 @@ jobs:
             mcpagent/go.sum
 
       - name: Build Video Studio agent
-        run: GOWORK="$GITHUB_WORKSPACE/go.work" go build -o dist/video-studio-agent ./mcp-agent-builder-go/agent_go
+        working-directory: agent_go
+        run: |
+          # This repository contains workspace alongside agent_go, but the
+          # development-only sibling checkouts live outside the repository.
+          # Use the pinned upstream modules for the hosted, reproducible build.
+          go mod edit -dropreplace github.com/manishiitg/mcpagent
+          go mod edit -dropreplace github.com/manishiitg/multi-llm-provider-go
+          go build -o ../dist/video-studio-agent .
 
       - name: Upload Linux agent
         uses: actions/upload-artifact@v4
