@@ -13,6 +13,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check out matching MCP bridge runtime
+        uses: actions/checkout@v4
+        with:
+          repository: manishiitg/mcpagent
+          ref: de7ef672f5e0ce2ffe68e5419ec1928236445a5f
+          path: dependencies/mcpagent
+
       - uses: actions/setup-go@v6
         with:
           go-version: '1.25.12'
@@ -24,10 +31,9 @@ jobs:
       - name: Build Video Studio agent
         working-directory: agent_go
         run: |
-          # This repository contains workspace alongside agent_go, but the
-          # development-only sibling checkouts live outside the repository.
-          # Use the pinned upstream modules for the hosted, reproducible build.
-          go mod edit -dropreplace github.com/manishiitg/mcpagent
+          # Retained-turn support is in the checked-out MCP runtime, which has
+          # not been released in the pinned public module yet.
+          go mod edit -replace github.com/manishiitg/mcpagent=../dependencies/mcpagent
           go mod edit -dropreplace github.com/manishiitg/multi-llm-provider-go
           go mod tidy
           go build -o ../dist/video-studio-agent .
