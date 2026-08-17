@@ -1,3 +1,5 @@
+//go:build cgo
+
 // Package voicestt is the shared AgentWorks streaming speech-to-text
 // capability (see agentprofiles.RuntimeCapabilities.Voice). A product opts in
 // by declaring the capability in its product.yaml; it never bundles its own
@@ -100,10 +102,10 @@ func NewEngine(modelDir string) (*Engine, error) {
 		DecodingMethod: "greedy_search",
 		// Endpoint detection lets a caller know a phrase has settled (silence
 		// after speech) without needing its own VAD.
-		EnableEndpoint:             1,
-		Rule1MinTrailingSilence:    2.4,
-		Rule2MinTrailingSilence:    1.2,
-		Rule3MinUtteranceLength:    20,
+		EnableEndpoint:          1,
+		Rule1MinTrailingSilence: 2.4,
+		Rule2MinTrailingSilence: 1.2,
+		Rule3MinUtteranceLength: 20,
 	}
 	recognizer := sherpa.NewOnlineRecognizer(config)
 	if recognizer == nil {
