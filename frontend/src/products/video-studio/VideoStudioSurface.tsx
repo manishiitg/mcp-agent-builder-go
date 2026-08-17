@@ -53,7 +53,9 @@ import { restoreSession } from '../../utils/sessionRestore'
 import {
   VIDEO_PROFILE_ID,
   VIDEO_PROFILE_VERSION,
+  VIDEO_STUDIO_DEFAULT_LLM_CONFIG,
   createVideoProject,
+  isGenericCodexFallback,
   loadVideoAgentProviderOptions,
   loadVideoPresentations,
   loadVideoProductCommands,
@@ -872,6 +874,16 @@ function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: 
           agentProfileWorkspaceDescription: project.description,
         }, project.sessionId)
         projectTab = chatStore.getTab(createdTabId)
+        // createChatTab starts with the shared chat shell's configuration.
+        // Pin this product lane before provider options load so a new project
+        // never inherits Codex as its apparent default.
+        chatStore.setTabConfig(createdTabId, { llmConfig: VIDEO_STUDIO_DEFAULT_LLM_CONFIG })
+        projectTab = chatStore.getTab(createdTabId)
+      } else if (isGenericCodexFallback(projectTab.config.llmConfig)) {
+        // Repair only the shared codex-cli/codex-cli fallback from older tabs.
+        // An explicit Codex choice has its actual model id and is preserved.
+        chatStore.setTabConfig(projectTab.tabId, { llmConfig: VIDEO_STUDIO_DEFAULT_LLM_CONFIG })
+        projectTab = chatStore.getTab(projectTab.tabId)
       }
       if (cancelled || !projectTab) return
       const restoredTabId = await restoreSession(project.sessionId, {

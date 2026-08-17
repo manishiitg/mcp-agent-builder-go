@@ -5,6 +5,19 @@ import { loadWorkspacePresentations, parseWorkspacePresentations, type Workspace
 export const VIDEO_PROJECTS_ROOT = 'Chats/Video Studio/projects'
 export const VIDEO_PROFILE_ID = 'video-studio'
 export const VIDEO_PROFILE_VERSION = 2
+export const VIDEO_STUDIO_DEFAULT_LLM_CONFIG = {
+  provider: 'claude-code' as LLMProvider,
+  model_id: 'claude-sonnet-5',
+  fallback_models: [],
+}
+
+// A generic multi-agent tab starts as Codex when no product binding supplies
+// a configuration. Video Studio must not preserve that platform fallback as a
+// user choice: its product profile defaults to Claude Code. An explicit Codex
+// selection has its real model id (gpt-5.6-terra) and remains intact.
+export function isGenericCodexFallback(config?: { provider?: string; model_id?: string }): boolean {
+  return config?.provider === 'codex-cli' && config?.model_id === 'codex-cli'
+}
 
 // Mirrors the LLMProvider union in api-types.ts. Kept as a Set here (rather
 // than importing one) because there is no runtime-checkable form of a
