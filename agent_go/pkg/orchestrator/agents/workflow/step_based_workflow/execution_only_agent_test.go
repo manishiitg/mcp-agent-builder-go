@@ -143,7 +143,14 @@ func TestReadOnlyExecutionPromptCannotRecommendMutationOrRawSQLite(t *testing.T)
 	if !strings.Contains(prompt, "READ-ONLY workflow evidence") || !strings.Contains(prompt, "query_workflow_db") {
 		t.Fatalf("read-only DB guidance missing:\n%s", prompt)
 	}
-	for _, forbidden := range []string{"mutate_workflow_db", "$DB_PATH", "sqlite3", "INSERT ... ON CONFLICT"} {
+	// Naming the forbidden tool is correct, explicit guidance -- "do not call
+	// mutate_workflow_db" cannot avoid the substring "mutate_workflow_db" and
+	// should not have to. What must never appear is an instruction that
+	// recommends calling it.
+	if !strings.Contains(prompt, "do not call `mutate_workflow_db`") {
+		t.Fatalf("read-only prompt does not explicitly prohibit mutate_workflow_db:\n%s", prompt)
+	}
+	for _, forbidden := range []string{"Use `mutate_workflow_db`", "$DB_PATH", "sqlite3", "INSERT ... ON CONFLICT"} {
 		if strings.Contains(prompt, forbidden) {
 			t.Fatalf("read-only prompt contains %q:\n%s", forbidden, prompt)
 		}

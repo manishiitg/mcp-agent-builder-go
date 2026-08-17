@@ -297,6 +297,7 @@ Rules:
 | [PLAT-125](pulse_platform/plat-125.md) | Every workflow step agent — orchestrator, message_sequence, routing, regular, sub_agent alike — is handed the workshop chat's 41-doc builder reference bundle, so a step holding 8 tools is instructed to call provider-configuration tools it does not have; failing that, it invented provider names, producing 19 further `search_web_llm` errors | unassigned | `implemented` — capability-derived selection shipped with regression tests; live reverify pending | `pkg/orchestrator/agents/workflow/step_based_workflow/supplementary_prompts.go`, `cmd/server/guidance` |
 | [PLAT-126](pulse_platform/plat-126.md) | An unquoted JSON path to `json_extract` (`json_extract(col, $.field)` instead of `json_extract(col, '$.field')`) fails with "unrecognized token: \"$\"", which names the character SQLite choked on but never the fix — 22 identical failures on one workflow in one day, none self-corrected | unassigned | `implemented` — hint shipped with fail-before/pass-after tests against the real production path; live reverify pending | `cmd/server/virtual-tools/workflow_db_tools.go` |
 | [PLAT-127](pulse_platform/plat-127.md) | The tool-error suspect scan flagged two documented successful outcomes as failures — agent_browser's `{"waited":"timeout"}` wait outcome (142 of 524 suspects on one workflow in one day) and get_route_description's route-catalog prose (12 of 12) | unassigned | `implemented` in [manishiitg/mcpagent@2200bad](https://github.com/manishiitg/mcpagent/commit/2200bad) — fail-before/pass-after tests; live reverify pending | `mcpagent/toolerr` (vendored via go.mod replace, no agent_go change) |
+| [PLAT-128](pulse_platform/plat-128.md) | Guidance tests asserted content for review-improve-log and review-code, both deliberately deleted 8 days before ("simplify Pulse workflow reviews") — plus two unrelated test/production drift bugs (a missing DBGuidance template key, an impossible "must never mention the tool it explicitly forbids" check); 5 of a 24-failure baseline fixed | unassigned | `implemented`, 19 pre-existing failures remain (wording drift, out of scope) | `cmd/server/guidance/render_all_test.go`, `pkg/orchestrator/agents/workflow/step_based_workflow` prompt tests |
 
 Assignment reserves the lane; it does not claim that work has started. An agent
 sets its fragment to `in_progress` when it actually begins. PLAT-004, PLAT-008,
@@ -662,6 +663,7 @@ priority and historical run context.
 | [PLAT-116](pulse_platform/plat-116.md) | [PLAT-117](pulse_platform/plat-117.md) | [PLAT-118](pulse_platform/plat-118.md) | [PLAT-119](pulse_platform/plat-119.md) |
 | [PLAT-120](pulse_platform/plat-120.md) | [PLAT-121](pulse_platform/plat-121.md) | [PLAT-122](pulse_platform/plat-122.md) | [PLAT-123](pulse_platform/plat-123.md) |
 | [PLAT-124](pulse_platform/plat-124.md) | [PLAT-125](pulse_platform/plat-125.md) | [PLAT-126](pulse_platform/plat-126.md) | [PLAT-127](pulse_platform/plat-127.md) |
+| [PLAT-128](pulse_platform/plat-128.md) |  |  |  |
 ## Explicitly not platform issues
 
 The following remain workflow-owned or evidence-state items even when they are

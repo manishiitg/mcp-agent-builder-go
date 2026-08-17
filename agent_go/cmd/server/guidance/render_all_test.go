@@ -572,67 +572,6 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 			t.Fatalf("pulse-bug-review missing %q", want)
 		}
 	}
-
-	reviewLog, err := renderFromRegistry("review-improve-log", tmplData{}, referenceKinds)
-	if err != nil {
-		t.Fatalf("render review-improve-log: %v", err)
-	}
-	if !strings.Contains(reviewLog, "Every important brief cell needs visible freshness") {
-		t.Fatal("review-improve-log missing visible freshness contract")
-	}
-	for _, want := range []string{
-		"Needs your decision",
-		"Latest Pulse",
-		"concise material Activity transitions",
-		"Never render `.coverage`",
-		"Do not render `.worksummary`",
-		"Operational detail stays in Pulse",
-		"Hidden agent handoff projection",
-		`#pulse-agent-handoff`,
-		"scheduler conditionally sends a dedicated archive turn",
-		"concise through editorial judgment",
-		"Stage complete active and archive HTML documents",
-		`href="improve-archive/YYYY-MM.html"`,
-		"**Goal:**",
-		"**Issues and reviews:**",
-		"**Decisions and analysis:**",
-		"**Fixes and improvements:**",
-		"Do not add a second active-question card",
-		"What happened",
-		"Why it matters",
-		"Repeated reviewer sightings",
-		"do not create another visible card",
-	} {
-		if !strings.Contains(reviewLog, want) {
-			t.Fatalf("review-improve-log missing archive contract %q", want)
-		}
-	}
-
-	skeleton, err := renderFromRegistry("review-improve-log-skeleton", tmplData{}, referenceKinds)
-	if err != nil {
-		t.Fatalf("render review-improve-log-skeleton: %v", err)
-	}
-	for _, want := range []string{`data-pulse-schema="5"`, `id="pulse-bug-verdict"`, `id="pulse-goal-verdict"`, `class="as"`, `class="brief"`, `id="pulse-agent-handoff"`, `hidden`, `data-pulse-section="signals" data-module="workflow_review"`, `data-pulse-section="reflection" data-module="run_summary"`, `data-pulse-section="improvements" data-module="goal_advisor"`, `Latest Pulse`, `Goal movement`} {
-		if !strings.Contains(skeleton, want) {
-			t.Fatalf("review-improve-log-skeleton missing stable verdict markup %q", want)
-		}
-	}
-	if !strings.Contains(skeleton, `href="improve-archive/YYYY-MM.html"`) {
-		t.Fatal("review-improve-log-skeleton missing archive link example")
-	}
-	if strings.Contains(skeleton, `class="goalcard"`) || strings.Contains(skeleton, `class="entry open"`) || strings.Contains(skeleton, `class="modfields"`) || strings.Contains(skeleton, `class="coverage"`) || strings.Contains(skeleton, `class="assumptions"`) || strings.Contains(skeleton, `class="worksummary"`) {
-		t.Fatal("review-improve-log-skeleton must not duplicate Goal, standing issue cards, or reviewer field dumps")
-	}
-	for _, retired := range []string{`class="technical"`, `class="filters"`, `class="workqueue"`, `class="workitem"`} {
-		if strings.Contains(skeleton, retired) {
-			t.Fatalf("review-improve-log-skeleton still contains retired operational block %q", retired)
-		}
-	}
-	for _, want := range []string{`data-pulse-section="improvements" data-module="goal_advisor"`, `data-status="answered"`, `Question + answer`} {
-		if !strings.Contains(skeleton, want) {
-			t.Fatalf("review-improve-log-skeleton missing historical question/answer contract %q", want)
-		}
-	}
 }
 
 func TestPulseGuidanceRejudgesActiveExperimentCadenceFromCurrentEvidence(t *testing.T) {
@@ -854,17 +793,12 @@ func TestGoalAdvisorPrioritizesStrategyOverHTMLFormatting(t *testing.T) {
 }
 
 func TestPulseCardsKeepTechnicalEvidenceOutOfUserTimeline(t *testing.T) {
-	logGuide, err := renderFromRegistry("review-improve-log", tmplData{}, referenceKinds)
-	if err != nil {
-		t.Fatalf("render review-improve-log: %v", err)
-	}
 	monitor := readPulseDesignSpec(t)
 	checks := map[string]struct {
 		rendered string
 		wants    []string
 	}{
-		"review-improve-log": {logGuide, []string{"SQLite-backed reviewer result", "#pulse-agent-handoff", "no_terminal_packet", "retry_due", "approved_awaiting_evidence", "The review did not finish.", "Pulse will retry.", "Approved; waiting to confirm results.", "Review incomplete"}},
-		"post-run-monitor":   {monitor, []string{"SQLite-backed reviewer records", "structured Pulse state", "must not update `builder/improve.html`", "dedicated Dashboard"}},
+		"post-run-monitor": {monitor, []string{"SQLite-backed reviewer records", "structured Pulse state", "must not update `builder/improve.html`", "dedicated Dashboard"}},
 	}
 	for label, check := range checks {
 		for _, want := range check.wants {
@@ -911,7 +845,7 @@ func TestPulseRunsEveryDueReviewerAndWritesAttributedResults(t *testing.T) {
 		if renderErr != nil {
 			t.Fatalf("render %s: %v", kind, renderErr)
 		}
-		for _, want := range []string{"review-improve-log", "data-pulse-section", "data-module", "Do not truncate"} {
+		for _, want := range []string{"data-pulse-section", "data-module", "Do not truncate"} {
 			if !strings.Contains(review, want) {
 				t.Fatalf("%s missing standalone report contract %q", kind, want)
 			}
@@ -922,7 +856,6 @@ func TestPulseRunsEveryDueReviewerAndWritesAttributedResults(t *testing.T) {
 func TestPulseRelatedGuidanceUsesFourPartSectionOwnership(t *testing.T) {
 	cases := map[string][]string{
 		"design-plan":           {`data-pulse-section="signals"`, "data-module` set per the attribution rule above", "never discard findings"},
-		"review-code":           {`data-pulse-section="signals"`, `data-module="bug_review"`, "every finding"},
 		"ops-review":            {`data-pulse-section="signals"`, `data-module="llm_ops_review"`, "Every finding"},
 		"review-artifact-drift": {`data-pulse-section="signals"`, `data-module="artifact_review"`},
 		"improve-evaluation":    {`data-pulse-section="signals"`, `data-module="eval_health"`},
@@ -1028,12 +961,17 @@ func TestMaintenanceImproveGuidanceIsReadOnlyForPulseFixerHandoff(t *testing.T) 
 	}
 }
 
+// review-code is gone (see the removal note above TestReviewImproveLogMigrationIsExtracted's
+// former location); "builder/improve.html" is gone from every remaining
+// specialist's own handoff text too, confirmed by rendering each one, since
+// improve.html itself no longer exists for any of them to hand findings off
+// to. What each specialist still owns — a structured finding packet it
+// returns rather than writing HTML directly — is unchanged.
 func TestPulseSpecialistsReturnStructuredPacketsAndParentOwnsHTML(t *testing.T) {
 	kinds := []string{
 		"design-plan",
 		"ops-review",
 		"strategy-auditor",
-		"review-code",
 		"review-artifact-drift",
 		"improve-learnings",
 		"improve-knowledge",
@@ -1053,28 +991,10 @@ func TestPulseSpecialistsReturnStructuredPacketsAndParentOwnsHTML(t *testing.T) 
 			"recommended_fix",
 			"verification",
 			"user_judgment_required",
-			"builder/improve.html",
 		} {
 			if !strings.Contains(rendered, want) {
 				t.Fatalf("%s missing structured specialist handoff %q", kind, want)
 			}
-		}
-	}
-
-	logGuidance, err := renderFromRegistry("review-improve-log", tmplData{}, referenceKinds)
-	if err != nil {
-		t.Fatalf("render review-improve-log: %v", err)
-	}
-	for _, want := range []string{
-		"Reviewer/writer boundary",
-		"A specialist is strictly read-only",
-		"the parent validates evidence",
-		"dedicated Dashboard stage is the only HTML",
-		"records terminal module",
-		"specialists never load either presentation reference",
-	} {
-		if !strings.Contains(logGuidance, want) {
-			t.Fatalf("review-improve-log missing parent-only writer contract %q", want)
 		}
 	}
 }
@@ -1107,7 +1027,6 @@ func TestStandalonePulseReviewCommandsUsePersistedReviewerPipeline(t *testing.T)
 func TestImprovementAndPlanGuidanceIncludesAssumptionAudit(t *testing.T) {
 	for _, kind := range []string{
 		"design-plan",
-		"review-code",
 		"review-artifact-drift",
 		"strategy-auditor",
 		"goal-advisor",
@@ -1602,50 +1521,8 @@ func TestNoTemplateNamesARemovedPulseTool(t *testing.T) {
 	}
 }
 
-// The one-time old-format migration was extracted out of review-improve-log
-// into its own reference doc. review-improve-log is read on every Pulse
-// dashboard write and by ten workflow upgrade prompts; the migration detail is
-// needed only when an existing log is actually old-format. Keeping it inline
-// charged every steady-state write for content it never used, on a doc already
-// large enough to matter against the per-result token limit.
-func TestReviewImproveLogMigrationIsExtracted(t *testing.T) {
-	log, err := renderFromRegistry("review-improve-log", tmplData{}, referenceKinds)
-	if err != nil {
-		t.Fatalf("render review-improve-log: %v", err)
-	}
-	migration, err := renderFromRegistry("review-improve-log-migration", tmplData{}, referenceKinds)
-	if err != nil {
-		t.Fatalf("render review-improve-log-migration: %v", err)
-	}
-
-	// The detail lives in the extracted doc.
-	for _, want := range []string{
-		"must be upgraded, not appended",
-		"Improvement Ledger",
-		"Active Improvement Index",
-	} {
-		if !strings.Contains(migration, want) {
-			t.Fatalf("review-improve-log-migration missing %q", want)
-		}
-	}
-
-	// ...and must not drift back into the frequently-read doc.
-	for _, moved := range []string{
-		"must be upgraded, not appended",
-		"Active Improvement Index",
-	} {
-		if strings.Contains(log, moved) {
-			t.Fatalf("review-improve-log should not re-inline extracted migration contract %q", moved)
-		}
-	}
-
-	// A reader that IS on an old-format log still has to be able to find it.
-	if !strings.Contains(log, `read_skill(skills=[{"name":"builder-reference","path":"references/review-improve-log-migration.md"}])`) {
-		t.Fatal("review-improve-log missing pointer to review-improve-log-migration")
-	}
-
-	// The extraction only pays off if the steady-state doc actually got smaller.
-	if len(log) > 44000 {
-		t.Fatalf("review-improve-log is %d bytes; the extraction was supposed to bring it under 44000", len(log))
-	}
-}
+// review-improve-log, its migration doc, and its skeleton were all
+// builder/improve.html guidance. improve.html itself was fully retired
+// (Pulse's own DB-backed findings and the SQLite Pulse popup replaced it);
+// there is no HTML journal left for any of this to describe. Removed
+// 2026-08-17 rather than kept green against a doc that no longer exists.

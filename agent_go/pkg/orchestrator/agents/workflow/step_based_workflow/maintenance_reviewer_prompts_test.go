@@ -39,6 +39,10 @@ func TestReviewPlanPromptPrefersCoherentAgenticSteps(t *testing.T) {
 		"WorkflowSuccessCriteria": "The outcome is verified.",
 		"WorkspacePath":           "Workflow/example",
 		"Focus":                   "",
+		// The real caller, WorkflowPlanReviewAgent.Execute, always sets this
+		// before rendering the same template; the test's hand-built map had
+		// drifted out of sync with it.
+		"DBGuidance": BuildManagedWorkflowDBGuidance(DBAccessRead),
 	})
 	if err != nil {
 		t.Fatalf("render review plan prompt: %v", err)
