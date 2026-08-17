@@ -43,7 +43,7 @@ describe('session restore chat-history fallback', () => {
     vi.restoreAllMocks()
   })
 
-  it('prefers a persisted product transcript over a partial runtime event buffer', async () => {
+  it('prefers the durable transcript over a partial runtime event buffer for every product', async () => {
     getRecentSessionEvents.mockResolvedValue({
       events: [{
         id: 'live-user-only',
@@ -72,15 +72,14 @@ describe('session restore chat-history fallback', () => {
     const workspacePath = 'Chats/Video Studio/projects/launch'
     const tabId = await useChatStore.getState().createChatTab('Launch teaser', {
       mode: 'multi-agent',
-      agentProfileId: 'video-studio',
+      agentProfileId: 'agentworks',
       agentProfileVersion: 1,
       agentProfileWorkspace: workspacePath,
     }, 'video-studio:project:launch')
 
     await expect(restoreSession('video-studio:project:launch', {
-      source: 'video-project-open',
+      source: 'page-refresh',
       workspacePath,
-      preferChatHistory: true,
     })).resolves.toBe(tabId)
 
     expect(getChatHistoryResumeConversation).toHaveBeenCalledWith(
@@ -95,7 +94,7 @@ describe('session restore chat-history fallback', () => {
     expect(useChatStore.getState().chatTabs[tabId]?.isStreaming).toBe(false)
   })
 
-  it('upgrades an in-flight generic restore to the product transcript', async () => {
+  it('shares one durable restore when surface and page refresh race', async () => {
     let resolveLiveEvents: ((value: unknown) => void) | undefined
     getRecentSessionEvents.mockImplementation(() => new Promise((resolve) => {
       resolveLiveEvents = resolve
@@ -123,9 +122,8 @@ describe('session restore chat-history fallback', () => {
       source: 'page-refresh',
     })
     const productRestore = restoreSession('video-studio:project:race', {
-      source: 'video-project-open',
+      source: 'surface-open',
       workspacePath,
-      preferChatHistory: true,
     })
     resolveLiveEvents?.({
       events: [{
@@ -154,7 +152,7 @@ describe('session restore chat-history fallback', () => {
     ])
   })
 
-  it('recovers a product transcript when the live cursor is rejected', async () => {
+  it('recovers a durable transcript when the live cursor is rejected', async () => {
     const { useChatStore, waitForChatStoreHydration } = await import('../stores/useChatStore')
     const { restoreSession } = await import('./sessionRestore')
     await waitForChatStoreHydration()
@@ -172,7 +170,7 @@ describe('session restore chat-history fallback', () => {
       session_id: sessionId,
       event_index: 42,
       timestamp: '2026-08-17T00:00:00Z',
-      data: { content: 'Please show the preview.' },
+      data: { type: 'user_message', data: { content: 'Please show the preview.' } },
     }])
     getSessionEvents.mockRejectedValue(new Error('stale event cursor'))
     getChatHistoryResumeConversation.mockResolvedValue({
@@ -184,9 +182,8 @@ describe('session restore chat-history fallback', () => {
     })
 
     await expect(restoreSession(sessionId, {
-      source: 'video-project-open',
+      source: 'page-refresh',
       workspacePath,
-      preferChatHistory: true,
     })).resolves.toBe(tabId)
 
     expect(getSessionEvents).toHaveBeenCalledWith(sessionId, -1)
@@ -197,7 +194,7 @@ describe('session restore chat-history fallback', () => {
     ])
   })
 
-  it('restores prior assistant replies while the latest product turn is still running', async () => {
+  it('restores prior assistant replies while the latest turn is still running', async () => {
     const { useChatStore, waitForChatStoreHydration } = await import('../stores/useChatStore')
     const { restoreSession } = await import('./sessionRestore')
     await waitForChatStoreHydration()
@@ -215,7 +212,7 @@ describe('session restore chat-history fallback', () => {
       session_id: sessionId,
       event_index: 0,
       timestamp: '2026-08-17T00:00:00Z',
-      data: { content: 'Continue the production.' },
+      data: { type: 'user_message', data: { content: 'Continue the production.' } },
     }])
     getSessionEvents.mockResolvedValue({
       events: [],
@@ -233,9 +230,8 @@ describe('session restore chat-history fallback', () => {
     })
 
     await expect(restoreSession(sessionId, {
-      source: 'video-project-open',
+      source: 'page-refresh',
       workspacePath,
-      preferChatHistory: true,
     })).resolves.toBe(tabId)
 
     expect(useChatStore.getState().getTabEvents(sessionId).map((event) => event.type)).toEqual([

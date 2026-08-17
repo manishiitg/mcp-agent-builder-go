@@ -58,35 +58,11 @@ export async function restoreSession(
     source?: string
     skipConfigRestore?: boolean
     workspacePath?: string
-    /**
-     * Product conversations have a durable, human-readable transcript. Prefer
-     * it over a partial live event buffer when reopening a completed project.
-     */
-    preferChatHistory?: boolean
   }
 ): Promise<string> {
   // Async lock: if already restoring this session, return the existing promise
   const existing = restoreInProgress.get(sessionId)
   if (existing) {
-    // A generic page restore can win the race against a product surface and
-    // hydrate only the volatile live-event tail. Do not let the lock discard
-    // the product's stronger request for its durable transcript: once the
-    // generic restore completes, replace that partial buffer with history.
-    // This is intentionally an upgrade rather than a second parallel restore
-    // so the tab/session state remains single-writer while it is being built.
-    if (options?.preferChatHistory && options.workspacePath) {
-      console.log(`${TAG} Dedup upgrade for ${sessionId} (source=${options.source}), scheduling durable transcript hydration`)
-      return existing.then(async (tabId) => {
-        try {
-          await hydrateTabEventsFromChatHistory(sessionId, options.workspacePath)
-        } catch (error) {
-          // Preserve the generic restore when history is unavailable; it may
-          // be a non-product session or a project whose history was removed.
-          console.error(`${TAG} Failed dedup transcript upgrade for ${sessionId}:`, error)
-        }
-        return tabId
-      })
-    }
     console.log(`${TAG} Dedup hit for ${sessionId} (source=${options?.source}), returning existing promise`)
     return existing
   }
@@ -108,7 +84,6 @@ async function doRestoreSession(
     source?: string
     skipConfigRestore?: boolean
     workspacePath?: string
-    preferChatHistory?: boolean
   }
 ): Promise<string> {
   const src = options?.source || 'unknown'
@@ -161,24 +136,16 @@ async function doRestoreSession(
       if (runtime.events.length > 0) {
         chatStore.addTabEvents(sessionId, runtime.events)
       }
-      if (
-        (options?.workspacePath || existingTab?.metadata?.agentProfileWorkspace) &&
-        (options?.preferChatHistory || !isForegroundStreaming({
-          status: runtime.session_status,
-          hasRunningBackgroundAgents: runtime.has_running_background_agents,
-          isSyntheticTurn: runtime.is_synthetic_turn,
-          canSteer: runtime.can_steer,
-        }))
-      ) {
-        // Product chat needs its complete durable transcript even while the
-        // latest turn is running: retain the runtime streaming status above,
-        // but replace its user-only historical window with real assistant
-        // replies. Generic chats keep the older completed-only behavior.
-        await hydrateTabEventsFromChatHistory(
-          sessionId,
-          options?.workspacePath || existingTab?.metadata?.agentProfileWorkspace,
-        )
-      }
+      // Every chat uses the same recovery contract: the workspace-backed
+      // conversation is the authoritative durable transcript, while the
+      // polling endpoint is only the volatile live tail. Do this for all
+      // products (and while a turn is running) so a refresh cannot leave a
+      // user-only event buffer in the UI. If a legacy session has no durable
+      // transcript, retain the live events already loaded above.
+      await tryHydrateTabEventsFromChatHistory(
+        sessionId,
+        options?.workspacePath || existingTab?.metadata?.agentProfileWorkspace,
+      )
       if (runtime.last_processed_index !== undefined) {
         chatStore.setTabLastEventIndex(sessionId, runtime.last_processed_index)
       }
@@ -190,7 +157,6 @@ async function doRestoreSession(
       const runtime = await hydrateTabEvents(sessionId, {
         workspacePath: options?.workspacePath || existingTab?.metadata?.agentProfileWorkspace,
         fallbackToChatHistory: true,
-        preferChatHistory: options?.preferChatHistory,
       })
       applySessionStatus(tabId, runtime)
       const eventCount = chatStore.getTabEvents(sessionId).length
@@ -198,18 +164,15 @@ async function doRestoreSession(
     }
   } catch (err) {
     const workspacePath = options?.workspacePath || existingTab?.metadata?.agentProfileWorkspace
-    // The volatile event endpoint can reject a persisted cursor after a server
-    // restart (or when its bounded window no longer contains that cursor).
-    // A product reopen explicitly asks for its durable transcript, which is
-    // independent of that live window, so recover it before preserving the
-    // incomplete buffer.
-    if (options?.preferChatHistory && workspacePath) {
-      const restored = await tryHydrateTabEventsFromChatHistory(sessionId, workspacePath)
-      if (restored) {
-        applySessionStatus(tabId, restored)
-        console.log(`${TAG} [${src}] Recovered persisted transcript after runtime sync failure`)
-        return tabId
-      }
+    // A bounded live cursor can be rejected after a server restart. The
+    // durable transcript is independent of that volatile window and applies
+    // equally to every product, so recover it before preserving an incomplete
+    // local cache.
+    const restored = await tryHydrateTabEventsFromChatHistory(sessionId, workspacePath)
+    if (restored) {
+      applySessionStatus(tabId, restored)
+      console.log(`${TAG} [${src}] Recovered persisted transcript after runtime sync failure`)
+      return tabId
     }
     if (isNotFoundError(err) && existingEventCount > 0) {
       console.log(`${TAG} [${src}] Session ${sessionId} no longer in memory; keeping locally restored events`)
@@ -447,19 +410,12 @@ export async function hydrateTabEvents(
   options: {
     workspacePath?: string
     fallbackToChatHistory?: boolean
+    // Kept for callers that explicitly request history. Durable history is
+    // now the default for every session, so this no longer changes behavior.
     preferChatHistory?: boolean
   } = {},
 ): Promise<RuntimeSessionState> {
   const chatStore = useChatStore.getState()
-
-  // Explicitly reopened chats should show the complete durable conversation,
-  // not whichever bounded tail happens to remain in the volatile EventStore.
-  // If the history file was removed or cannot be resolved, fall through to the
-  // live event endpoint so terminal restoration still works.
-  if (options.preferChatHistory) {
-    const restored = await tryHydrateTabEventsFromChatHistory(sessionId, options.workspacePath)
-    if (restored) return restored
-  }
 
   let response
   try {
@@ -471,6 +427,20 @@ export async function hydrateTabEvents(
       if (restored) return restored
     }
     throw error
+  }
+
+  // The event store is a short-lived transport cache and can contain only
+  // prompts after a browser reload. Prefer the durable conversation for every
+  // session, regardless of its owning product. Runtime status remains
+  // authoritative so a currently running turn still renders as streaming.
+  const restored = await tryHydrateTabEventsFromChatHistory(sessionId, options.workspacePath)
+  if (restored) {
+    return {
+      status: response.session_status || restored.status,
+      hasRunningBackgroundAgents: response.has_running_background_agents,
+      isSyntheticTurn: response.is_synthetic_turn,
+      canSteer: response.can_steer,
+    }
   }
 
   if (response.events.length > 0) {

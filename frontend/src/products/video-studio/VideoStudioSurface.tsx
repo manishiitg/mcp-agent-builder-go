@@ -49,7 +49,7 @@ import { useAuthStore } from '../../stores/useAuthStore'
 import { useChatStore, waitForChatStoreHydration } from '../../stores/useChatStore'
 import { useModeStore } from '../../stores/useModeStore'
 import { useProductSurfaceStore } from '../../stores/useProductSurfaceStore'
-import { hydrateTabEvents, restoreSession } from '../../utils/sessionRestore'
+import { restoreSession } from '../../utils/sessionRestore'
 import {
   VIDEO_PROFILE_ID,
   VIDEO_PROFILE_VERSION,
@@ -879,19 +879,6 @@ function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: 
         source: 'video-project-open',
         skipConfigRestore: true,
         workspacePath: project.workspacePath,
-        // A finished production's durable transcript is complete; the live
-        // event cache may contain only user prompts after a browser refresh.
-        preferChatHistory: true,
-      })
-      if (cancelled) return
-      // The generic page restore can race with this surface and retain only
-      // the volatile event tail. Hydrate once more at the product boundary so
-      // an open Video Studio project always renders its durable assistant
-      // replies, while restoreSession keeps the live streaming status intact.
-      await hydrateTabEvents(project.sessionId, {
-        workspacePath: project.workspacePath,
-        fallbackToChatHistory: true,
-        preferChatHistory: true,
       })
       if (cancelled) return
       chatStore.switchTab(restoredTabId)

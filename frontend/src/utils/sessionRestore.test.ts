@@ -60,7 +60,6 @@ describe('hydrateTabEvents restored chat fallback', () => {
     await hydrateTabEvents('restored-session', {
       workspacePath: '/workspace/workflow',
       fallbackToChatHistory: true,
-      preferChatHistory: true,
     })
 
     expect(mocks.getChatHistoryResumeConversation).toHaveBeenCalledWith(
@@ -82,6 +81,6 @@ describe('hydrateTabEvents restored chat fallback', () => {
     expect(mocks.setTabLastEventIndex).toHaveBeenCalledWith('restored-session', 2)
     expect(mocks.setTabHasMoreOlderEvents).toHaveBeenCalledWith('restored-session', false)
     expect(mocks.setTabHistoryPagination).toHaveBeenCalledWith('restored-session', null)
-    expect(mocks.getRecentSessionEvents).not.toHaveBeenCalled()
+    expect(mocks.getRecentSessionEvents).toHaveBeenCalledWith('restored-session')
   })
 })
