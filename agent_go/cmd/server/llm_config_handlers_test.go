@@ -9,6 +9,15 @@ import (
 	"testing"
 )
 
+func TestBuildProviderAPIKeysFromEnvUsesClaudeCodeSetupToken(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "setup-token-for-test")
+
+	keys := buildProviderAPIKeysFromEnv()
+	if keys.ClaudeCodeOAuthToken == nil || *keys.ClaudeCodeOAuthToken != "setup-token-for-test" {
+		t.Fatalf("ClaudeCodeOAuthToken = %#v, want configured setup token", keys.ClaudeCodeOAuthToken)
+	}
+}
+
 func TestLLMDiscoveryHTTPShowsCursorLoginRequired(t *testing.T) {
 	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
 	t.Setenv("SUPPORTED_LLM_PROVIDERS", "cursor-cli")

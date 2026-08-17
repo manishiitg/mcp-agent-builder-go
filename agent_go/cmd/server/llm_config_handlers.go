@@ -272,6 +272,12 @@ func buildProviderAPIKeysFromEnv() *llm.ProviderAPIKeys {
 	setProviderKeyFromEnv(llm.ProviderOpenAI, "OPENAI_API_KEY")
 	setProviderKeyFromEnv(llm.ProviderOpenRouter, "OPENROUTER_API_KEY", "OPEN_ROUTER_API_KEY")
 	setProviderKeyFromEnv(llm.ProviderAnthropic, "ANTHROPIC_API_KEY")
+	// A Claude Code setup token is an OAuth credential for the Claude CLI, not
+	// an Anthropic API key. Keep it on its dedicated field so the adapter can
+	// inject it into the per-project CLI process without exposing it to chat.
+	if s := strings.TrimSpace(os.Getenv("CLAUDE_CODE_OAUTH_TOKEN")); s != "" {
+		keys.ClaudeCodeOAuthToken = &s
+	}
 	setProviderKeyFromEnv(llm.ProviderZAI, "ZAI_API_KEY")
 	setProviderKeyFromEnv(llm.ProviderKimi, "KIMI_API_KEY")
 	if s := os.Getenv("VERTEX_API_KEY"); s != "" {

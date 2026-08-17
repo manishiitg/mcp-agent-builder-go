@@ -376,18 +376,19 @@ func MergedProviderAPIKeys(ctx context.Context) *llm.ProviderAPIKeys {
 		return env
 	}
 	result := &llm.ProviderAPIKeys{
-		OpenRouter: pick(envKeys.OpenRouter, wsKeys.OpenRouter),
-		OpenAI:     pick(envKeys.OpenAI, wsKeys.OpenAI),
-		Anthropic:  pick(envKeys.Anthropic, wsKeys.Anthropic),
-		ZAI:        pick(envKeys.ZAI, wsKeys.ZAI),
-		Kimi:       pick(envKeys.Kimi, wsKeys.Kimi),
-		Vertex:     pick(envKeys.Vertex, wsKeys.Vertex),
-		CodexCLI:   pick(envKeys.CodexCLI, wsKeys.CodexCLI),
-		CursorCLI:  pick(envKeys.CursorCLI, wsKeys.CursorCLI),
-		PiCLI:      pick(envKeys.PiCLI, wsKeys.PiCLI),
-		MiniMax:    pick(envKeys.MiniMax, wsKeys.MiniMax),
-		ElevenLabs: pick(envKeys.ElevenLabs, wsKeys.ElevenLabs),
-		Deepgram:   pick(envKeys.Deepgram, wsKeys.Deepgram),
+		OpenRouter:           pick(envKeys.OpenRouter, wsKeys.OpenRouter),
+		OpenAI:               pick(envKeys.OpenAI, wsKeys.OpenAI),
+		Anthropic:            pick(envKeys.Anthropic, wsKeys.Anthropic),
+		ClaudeCodeOAuthToken: pick(envKeys.ClaudeCodeOAuthToken, wsKeys.ClaudeCodeOAuthToken),
+		ZAI:                  pick(envKeys.ZAI, wsKeys.ZAI),
+		Kimi:                 pick(envKeys.Kimi, wsKeys.Kimi),
+		Vertex:               pick(envKeys.Vertex, wsKeys.Vertex),
+		CodexCLI:             pick(envKeys.CodexCLI, wsKeys.CodexCLI),
+		CursorCLI:            pick(envKeys.CursorCLI, wsKeys.CursorCLI),
+		PiCLI:                pick(envKeys.PiCLI, wsKeys.PiCLI),
+		MiniMax:              pick(envKeys.MiniMax, wsKeys.MiniMax),
+		ElevenLabs:           pick(envKeys.ElevenLabs, wsKeys.ElevenLabs),
+		Deepgram:             pick(envKeys.Deepgram, wsKeys.Deepgram),
 	}
 	result.PiProviderKeys = mergePiProviderKeyMaps(envKeys.PiProviderKeys, wsKeys.PiProviderKeys)
 	// Bedrock / Azure: workspace wins if present, else env
