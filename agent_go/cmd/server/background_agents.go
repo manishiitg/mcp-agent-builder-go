@@ -350,15 +350,27 @@ type BackgroundAgentSnapshot struct {
 // deliberately keep counting these. Callers that ask whether a turn may finish
 // must not.
 //
-// The classification mirrors isWorkflowStepTrackingExecution, which is what
-// assigns the kind at registration: a declared kind wins, with the legacy
-// execution_type metadata as the fallback for records that predate declared
-// kinds.
+// Classification DELEGATES to isWorkflowStepTrackingExecution rather than
+// checking Kind alone, and that distinction is the whole point.
+//
+// OnExecutionStart resolves a record's Kind as "a declared kind always wins",
+// falling back to the workflow_step override only when the creator declared
+// nothing. The per-step progress records in question declare "orchestrator", so
+// the override never fires for them and their Kind is NOT workflow_step — while
+// their ids (workflow-full-<parent>-step-<n>-<token>) are exactly what
+// isWorkflowStepTrackingExecution recognises.
+//
+// An earlier version of this predicate matched Kind=="workflow_step" only. It
+// therefore did not match the very records that caused this bug, and its test
+// passed because the test constructed Kind:"workflow_step" instead of using the
+// kind production actually stores — the same "reach the state through the
+// product path, never construct it" rule this register keeps relearning. The
+// live durable log settled it: both stuck orphans are stored kind=orchestrator.
 func (s BackgroundAgentSnapshot) IsProgressMirror() bool {
 	if strings.TrimSpace(s.Kind) == "workflow_step" {
 		return true
 	}
-	return s.Metadata != nil && strings.TrimSpace(s.Metadata["execution_type"]) == "workflow-step"
+	return isWorkflowStepTrackingExecution(s.ID, s.Name, s.Metadata)
 }
 
 // GetSnapshot returns a snapshot of the agent state (thread-safe)

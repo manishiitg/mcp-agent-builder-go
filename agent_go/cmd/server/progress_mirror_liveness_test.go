@@ -40,7 +40,10 @@ func TestOrphanedProgressMirrorsCannotBlockTurnCompletion(t *testing.T) {
 	} {
 		api.bgAgentRegistry.Register(sessionID, &BackgroundAgent{
 			ID: id, ParentExecutionID: "workflow-full-msvyee8q01", SessionID: sessionID,
-			Kind: "workflow_step", Status: BGAgentRunning, CreatedAt: now,
+			// Production stores these as kind=orchestrator (verified against the
+			// live durable log), NOT workflow_step: OnExecutionStart lets a
+			// declared kind win, so the workflow_step override never fires here.
+			Kind: "orchestrator", Status: BGAgentRunning, CreatedAt: now,
 		})
 	}
 
@@ -115,7 +118,15 @@ func TestProgressMirrorClassificationUsesDeclaredKindAndLegacyMetadata(t *testin
 		snapshot BackgroundAgentSnapshot
 		want     bool
 	}{
-		"declared kind":            {BackgroundAgentSnapshot{Kind: "workflow_step"}, true},
+		"declared kind": {BackgroundAgentSnapshot{Kind: "workflow_step"}, true},
+		"real orphan shape — kind=orchestrator, id says step": {BackgroundAgentSnapshot{
+			ID: "workflow-full-msvyee8q01-step-0-msvyijui03", Kind: "orchestrator"}, true},
+		"parent full-run must NOT match": {BackgroundAgentSnapshot{
+			ID: "workflow-full-msvyee8q01", Kind: "full_run"}, false},
+		"message sequence item is real work": {BackgroundAgentSnapshot{
+			ID: "msgseq-execute-remediate-123", Kind: "message_sequence_item"}, false},
+		"sub agent is real work": {BackgroundAgentSnapshot{
+			ID: "todo-sub-execute-remediate-123", Kind: "sub_agent"}, false},
 		"legacy metadata fallback": {BackgroundAgentSnapshot{Metadata: map[string]string{"execution_type": "workflow-step"}}, true},
 		"real delegation":          {BackgroundAgentSnapshot{Kind: "delegation"}, false},
 		"full workflow parent":     {BackgroundAgentSnapshot{Kind: "full_workflow"}, false},

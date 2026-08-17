@@ -162,6 +162,35 @@ helper directly instead of driving `executeWorkshopJob`.
   product path, not by constructing it — the specific gap that let PLAT-071 be
   deleted with its tests still green.
 
+## Correction (2026-08-17): the first predicate missed the actual records
+
+The first version of `IsProgressMirror` matched `Kind == "workflow_step"` (plus
+the legacy `execution_type` metadata). Checked against the live durable log
+while investigating a later run, **the two orphans that caused this incident are
+stored `kind=orchestrator`** — so the predicate did not match them, and the fix
+did not fix the reported bug.
+
+The cause is a rule stated in `OnExecutionStart` itself: *"a declared kind always
+wins"*. The `workflow_step` override is applied only when the creator declared
+nothing, and these records declare `orchestrator`. Their identity is in their
+ids (`workflow-full-<parent>-step-<n>-<token>`), which is exactly what
+`isWorkflowStepTrackingExecution` already recognises — so the predicate now
+delegates to that canonical classifier instead of re-deciding from `Kind`.
+
+**Why the tests did not catch it, which is the more important part.** The
+reproduction constructed its orphans with `Kind: "workflow_step"` — the value the
+fix expected, not the value production stores. It therefore passed against a
+record shape that never occurs. This is the third time in this register that a
+test certified a fix by building the state it wanted instead of the state the
+product produces (PLAT-105's IC-11, PLAT-071's deleted call site, now this).
+Verified after correcting: reverting the predicate makes the reproduction fail
+with `RunningChildren = 2`, the exact live symptom.
+
+Real kinds observed in production, for anyone extending this later:
+`full_run` (the parent), `orchestrator` (per-step progress records),
+`message_sequence_item` and `sub_agent` (real work — must keep holding a turn
+open), and `workflow_step` (rare, only where nothing was declared).
+
 ## Simplification pass (2026-08-17): what was done, and what was rejected
 
 After the fix landed, the surrounding machinery was reviewed for whether it is

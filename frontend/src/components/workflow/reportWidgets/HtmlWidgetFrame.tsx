@@ -81,6 +81,12 @@ function injectMarkdownStyles(doc: Document) {
   doc.head?.appendChild(style)
 }
 
+// FORWARDED_APP_SHORTCUT_KEYS are the parent app's own global chords (App.tsx's
+// window keydown handler): mode switches 1/2/3, workspace 6, auto-scroll 7,
+// K quick switcher, N new chat. Anything outside this set stays with the
+// browser so normal in-report keys keep working.
+const FORWARDED_APP_SHORTCUT_KEYS = new Set(['1', '2', '3', '6', '7', 'k', 'n'])
+
 // HtmlReportFrame renders an HTML report in a sandboxed iframe and injects a live
 // data API onto the iframe's window as `window.report`, then fires a `report:data`
 // event. The HTML owns ALL rendering (its own charts/tables/branded CSS) — we
@@ -218,6 +224,35 @@ function HtmlReportFrameComponent({
     // `#anchor` link (the report's tab nav) reloads the WHOLE document instead of
     // scrolling. Intercept those clicks and scroll manually. Bound once per loaded
     // document (the flag resets on reload, so a fresh doc re-binds).
+    // The app's global shortcuts (Ctrl/Cmd+K quick switcher, mode switches, …)
+    // are bound on the PARENT window. While focus is inside this iframe the
+    // keydown fires on the iframe's own document and the parent listener never
+    // sees it, so the switcher appeared dead on the reporting dashboard.
+    // Re-dispatch just those shortcuts upward.
+    //
+    // Deliberately an allowlist: forwarding every ctrl/meta chord would hijack
+    // the browser's own in-frame behaviour (Ctrl+C copy, Ctrl+F find, Ctrl+A,
+    // Ctrl+P print), which must keep working while reading a report.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    if (!(doc as any).__appShortcutsBound) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(doc as any).__appShortcutsBound = true
+      doc.addEventListener('keydown', (e: Event) => {
+        const key = e as KeyboardEvent
+        if (!(key.ctrlKey || key.metaKey) || key.altKey) return
+        if (!FORWARDED_APP_SHORTCUT_KEYS.has(key.key.toLowerCase())) return
+        key.preventDefault()
+        window.dispatchEvent(new KeyboardEvent('keydown', {
+          key: key.key,
+          ctrlKey: key.ctrlKey,
+          metaKey: key.metaKey,
+          shiftKey: key.shiftKey,
+          altKey: key.altKey,
+          bubbles: true,
+        }))
+      })
+    }
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     if (!(doc as any).__anchorScrollBound) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
