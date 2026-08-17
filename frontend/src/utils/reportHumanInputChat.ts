@@ -5,6 +5,7 @@ import { useGlobalPresetStore } from '../stores/useGlobalPresetStore'
 import { useWorkflowStore } from '../stores/useWorkflowStore'
 import { activateTab } from './activateTab'
 import { isInteractiveChiefOfStaffTab } from './chiefOfStaff'
+import { selectWorkflowPreset } from './workflowNavigation'
 
 function normalizeWorkspacePath(value?: string | null): string {
   return (value || '').trim().replace(/^\/+|\/+$/g, '').toLowerCase()
@@ -183,8 +184,7 @@ async function sendReportHumanInputMessageToChat({
     const preset = await findWorkflowPreset(workspacePath)
     if (!preset) throw new Error(`Could not find the automation for ${workspacePath}.`)
 
-    const applied = useGlobalPresetStore.getState().applyPreset(preset, 'workflow')
-    if (!applied.success) throw new Error(applied.error || 'Failed to open the automation.')
+    if (!selectWorkflowPreset(preset)) throw new Error('Failed to open the automation.')
 
     const latestChatStore = useChatStore.getState()
     targetTab = selectReportDiscussionTab(

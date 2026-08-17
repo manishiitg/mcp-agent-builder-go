@@ -144,57 +144,19 @@ until index.html has passed validation. Do not run the workflow. If a source is
 missing or the consolidation is ambiguous, report the blocker and do not stamp.
 Otherwise call set_workflow_contract_version(version="1.0.23") and stop.`
 
-const upgradePeriodicPulseReview = `WORKFLOW CONTRACT UPGRADE: PERIODIC PULSE REVIEW.
+const upgradePeriodicPulseReviewHandoff = `WORKFLOW CONTRACT UPGRADE: PERIODIC PULSE REVIEW — HANDLED BY GATE, NOT A MIGRATION.
 
-Today Gate/Review+Fix/Finalize run after every scheduled run, in that run's
-own session. For a workflow that runs frequently, this has caused real bugs:
-long Pulse-adjacent sessions reused across runs deadlocked on their own input
-lane, and evicted their own background agents' completion records once a
-fixed-size event cache filled from later activity in the same session.
-post_run_monitor_mode="periodic" fixes this by splitting every run's own pass
-down to backup+notify only, and running the full review separately, on its
-own cadence, over whatever runs/iteration-N backlog has accumulated.
+Earlier contract versions had a dedicated migration turn decide, per workflow,
+whether to split Gate/Review+Fix/Finalize onto their own separate schedule.
+That decision is no longer made here, and it is no longer optional: every
+workflow moves to post_run_monitor_mode="periodic" with a paired
+pulse_review_only review schedule, unconditionally. Gate itself now bootstraps
+this automatically, the first time it runs a normal Gate/Review+Fix/Finalize
+pass under this workflow's current per_run mode — see pulse-gate.md. Nothing
+for this turn to do except record that this workflow's other, unrelated
+contract migrations are complete.
 
-This is a genuine tradeoff, not a strict upgrade: under periodic mode, a real
-problem now waits up to the review interval before Gate ever sees it. Decide
-from this workflow's actual behavior, not by default.
-
-1. Read every enabled cron schedule on this workflow and its recent
-   get_schedule_runs history to determine its real run frequency — not its
-   nominal cron alone, since drift/backoff can differ from it.
-2. If no schedule runs more than a few times a day, this workflow does not
-   need splitting — per_run's cost was never the problem. Leave
-   post_run_monitor_mode unset (the "per_run" default) and record that
-   decision plainly; do not force periodic mode because the option exists.
-3. If a schedule runs frequently enough that this is a real cost (roughly:
-   hourly or more), do both of the following in the SAME turn, never one
-   without the other — a workflow left in "periodic" mode with no review
-   schedule yet gets a lightweight pass every run and a full review from
-   nothing, ever:
-   - Create the review schedule: create_schedule(pulse_review_only=true,
-     cron_expression=..., ...). Do not set group_names, route_selections, or
-     messages on it — it never runs the workflow. Choose a cron interval that
-     balances review latency against genuinely batched evidence; when in
-     doubt, prefer more frequent over less — Gate's own backlog reasoning
-     already handles reviewing several accumulated runs in one pass cheaply.
-   - Set post_run_monitor_mode="periodic" via update_workflow_config.
-4. Check run_retention_count (workflow.json, default 5) against the review
-   interval you chose. If the workflow could produce more runs between
-   reviews than retention preserves, raise it — a rotated run folder beyond
-   run_retention_count is permanently deleted, and a review pass that runs
-   less often than folders get deleted from under it silently misses real
-   evidence. This is exactly the same reasoning Gate itself is now expected
-   to apply on every periodic pass (see pulse-gate.md); doing it once here at
-   setup time does not remove that ongoing responsibility from Gate.
-5. If this workflow already reviews cheaply (few or no runs since the last
-   Pulse pass, no history suggesting Gate/Review+Fix run long), that is a
-   sound decision to leave it on per_run — state that reasoning rather than
-   defaulting silently.
-
-Do not run the workflow. Re-read workflow.json after any change to confirm it
-persisted. If the right choice is ambiguous, keep per_run with an honest
-rationale rather than guessing. Then call
-set_workflow_contract_version(version="1.0.26") and stop.`
+Do not run the workflow. Call set_workflow_contract_version(version="1.0.26") and stop.`
 
 const upgradeScheduledRoutes = `WORKFLOW CONTRACT UPGRADE: SCHEDULE EXECUTION MODEL (PLAT-086).
 
@@ -271,7 +233,14 @@ func workflowVersionUpgradePlan(manifest *WorkflowManifest) []workflowVersionUpg
 	if rank < 24 {
 		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractScheduleExecutionModelVersion, label: "upgrade-schedule-execution-model", query: upgradeScheduledRoutes})
 	}
-	steps = append(steps, workflowVersionUpgrade{from: version, to: WorkflowContractCurrentVersion, label: "upgrade-periodic-pulse-review", query: upgradePeriodicPulseReview})
+	// This used to be a frequency-based judgment turn deciding whether to
+	// adopt periodic mode. That policy is retired: periodic mode is
+	// mandatory for every workflow, and Gate bootstraps it itself during a
+	// normal pass (pulse-gate.md) rather than through a dedicated migration
+	// turn. What remains here is a trivial version stamp so any workflow
+	// still below current always has a complete upgrade path, per
+	// scheduledWorkshopTurns' requirement.
+	steps = append(steps, workflowVersionUpgrade{from: version, to: WorkflowContractCurrentVersion, label: "upgrade-periodic-pulse-review-handoff", query: upgradePeriodicPulseReviewHandoff})
 	// Attached here rather than at the call site so the turn text is identical
 	// wherever it is built. The version pair used to be added only on the Pulse
 	// delivery path, which meant the blocking preflight — the one that actually

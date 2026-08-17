@@ -30,7 +30,7 @@ func TestWorkflowVersionUpgradePlanSkipsArtifactPurityAlreadyReached(t *testing.
 	if plan[2].label != "upgrade-schedule-execution-model" || plan[2].to != workflowContractScheduleExecutionModelVersion {
 		t.Fatalf("plan[2] = %+v, want scheduled-route migration to %s", plan[2], workflowContractScheduleExecutionModelVersion)
 	}
-	if plan[3].label != "upgrade-periodic-pulse-review" || plan[3].to != WorkflowContractCurrentVersion {
+	if plan[3].label != "upgrade-periodic-pulse-review-handoff" || plan[3].to != WorkflowContractCurrentVersion {
 		t.Fatalf("plan[3] = %+v, want periodic-pulse-review migration reaching current version", plan[3])
 	}
 	for _, label := range []string{"upgrade-current-artifact-contract"} {
@@ -59,7 +59,7 @@ func TestWorkflowVersionUpgradePlanOlderWorkflowGetsBothFinalSteps(t *testing.T)
 	if plan[3].label != "upgrade-schedule-execution-model" || plan[3].to != workflowContractScheduleExecutionModelVersion {
 		t.Fatalf("plan[3] = %+v, want scheduled-route migration to %s", plan[3], workflowContractScheduleExecutionModelVersion)
 	}
-	if plan[4].label != "upgrade-periodic-pulse-review" || plan[4].to != WorkflowContractCurrentVersion {
+	if plan[4].label != "upgrade-periodic-pulse-review-handoff" || plan[4].to != WorkflowContractCurrentVersion {
 		t.Fatalf("plan[4] = %+v, want periodic-pulse-review migration reaching current version", plan[4])
 	}
 }

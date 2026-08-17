@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   setTabEvents: vi.fn(),
   setTabLastEventIndex: vi.fn(),
   setTabHasMoreOlderEvents: vi.fn(),
+  setTabHistoryPagination: vi.fn(),
   getRecentSessionEvents: vi.fn(),
   getChatHistoryConversation: vi.fn(),
   getChatHistoryResumeConversation: vi.fn(),
@@ -15,6 +16,7 @@ vi.mock('../stores/useChatStore', () => ({
       setTabEvents: mocks.setTabEvents,
       setTabLastEventIndex: mocks.setTabLastEventIndex,
       setTabHasMoreOlderEvents: mocks.setTabHasMoreOlderEvents,
+      setTabHistoryPagination: mocks.setTabHistoryPagination,
     }),
   },
 }))
@@ -79,6 +81,7 @@ describe('hydrateTabEvents restored chat fallback', () => {
     )
     expect(mocks.setTabLastEventIndex).toHaveBeenCalledWith('restored-session', 2)
     expect(mocks.setTabHasMoreOlderEvents).toHaveBeenCalledWith('restored-session', false)
+    expect(mocks.setTabHistoryPagination).toHaveBeenCalledWith('restored-session', null)
     expect(mocks.getRecentSessionEvents).not.toHaveBeenCalled()
   })
 })

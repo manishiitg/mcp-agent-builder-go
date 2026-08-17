@@ -115,15 +115,27 @@ func (api *StreamingAPI) diagnoseStalledConversationTurn(sessionID string, since
 
 // cleanupOrphanedConversationTurnSession mirrors the teardown the normal
 // completion path runs (server.go's StreamWithEvents goroutine, ~6600-6620
-// and ~4090-4110) — status, query index, MCP HTTP session, and browser
-// resources. Idempotent: every step here is safe to run again if the
-// orphaned goroutine ever does unblock and runs its own cleanup afterward.
+// and ~4090-4110) — status, busy flag, the tracked execution record itself,
+// query index, MCP HTTP session, and browser resources. Idempotent: every
+// step here is safe to run again if the orphaned goroutine ever does
+// unblock and runs its own cleanup afterward.
+//
+// Reproduced live (PLAT-116 follow-up): the first version of this function
+// cleared only the coarse active-session status, not api.sessionBusy or the
+// TrackedWorkflowExecution record for rootExecutionID. Both of those, not
+// session status, are what the workflow selector's spinner
+// (ModePresetBar.tsx, currentSessionTone) and Global Monitor's runtime_state
+// actually key off, so a stalled turn kept showing as "running" in the UI
+// for hours after the scheduler had already recorded it as errored.
 func (api *StreamingAPI) cleanupOrphanedConversationTurnSession(sessionID, rootExecutionID string) {
 	if api == nil || sessionID == "" {
 		return
 	}
+	rootExecutionID = strings.TrimSpace(rootExecutionID)
 	api.updateSessionStatus(sessionID, "error")
-	api.removeSessionQueryID(sessionID, strings.TrimSpace(rootExecutionID))
+	api.setSessionBusy(sessionID, false)
+	api.completeTrackedExecution(rootExecutionID, trackedExecutionStatusFailed, "workshop idle wait timed out", nil)
+	api.removeSessionQueryID(sessionID, rootExecutionID)
 	mcpagent.CloseHTTPSession(sessionID)
 	api.cleanupBrowserSessions(sessionID)
 }

@@ -3375,7 +3375,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     const botPlatform = activeTab?.metadata?.botPlatform
     return (
       <div data-tour="chat-input-area" data-testid="tour-chat-input-area" className={`${inputPadX} py-2`}>
-        <div className="flex items-center justify-center gap-2 py-1 text-xs text-muted-foreground">
+        <div className="relative flex items-center justify-center gap-2 py-1 text-xs text-muted-foreground">
           <History className="w-3.5 h-3.5" />
           <span>
             {isScheduledRun
@@ -3384,6 +3384,22 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                 ? `${botPlatform || 'Bot'} run — view only`
               : 'View only — restored conversation'}
           </span>
+          {mainTerminalAvailable && activeTabId && (
+            <Button
+              type="button"
+              variant={terminalViewSelected ? 'secondary' : 'ghost'}
+              size="icon"
+              onClick={() => useChatStore.getState().setTabViewMode(
+                activeTabId,
+                terminalViewSelected ? 'formatted' : 'terminal',
+              )}
+              className="absolute right-0 h-7 w-7 p-0"
+              aria-label={terminalViewSelected ? 'Return to conversation' : 'Open tmux terminal'}
+              title={terminalViewSelected ? 'Return to conversation' : 'Open tmux terminal'}
+            >
+              <Terminal className="h-3.5 w-3.5" />
+            </Button>
+          )}
         </div>
       </div>
     )

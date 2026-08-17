@@ -148,7 +148,7 @@ adapter") — acknowledged there, still not done.
    stronger on paper (per-connection streams, JWT auth, capability gating,
    and `RuntimeCapabilities.Voice` already wired) versus family-server's
    Apple-Silicon-only stack with no auth on 12 endpoints and one speaker
-   server-wide. But `PLAT-117` is `implemented_pending_live_reverify` with no
+   server-wide. But `PLAT-120` is `implemented_pending_live_reverify` with no
    confirmed pass on real human speech, and `voicestt` cannot decode audio
    containers, so WhatsApp voice notes have no path. Verify before acting.
    Note the frontend went the other way — `frontend/src/voice/` is an

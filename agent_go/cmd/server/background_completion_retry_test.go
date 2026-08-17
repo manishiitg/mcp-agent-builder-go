@@ -17,7 +17,9 @@ func TestRequeueUnnotifiedCompletions(t *testing.T) {
 
 	mk := func(id string, status BackgroundAgentStatus, notified bool) {
 		a := &BackgroundAgent{ID: id, SessionID: sid, Status: status}
-		a.notified = notified
+		if notified {
+			a.completionNotification = completionNotificationDelivered
+		}
 		api.bgAgentRegistry.Register(sid, a)
 	}
 	mk("done-unnotified", BGAgentCompleted, false) // → requeue

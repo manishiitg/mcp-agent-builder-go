@@ -169,9 +169,14 @@ func (api *StreamingAPI) conversationTurnTreeSnapshot(rootExecutionID string) co
 		state.LastProgressAt = *root.CompletedAt
 	}
 
+	now := time.Now()
 	parents := map[string][]string{}
 	statusByID := map[string]string{root.ExecutionID: root.Status}
 	progressByID := map[string]time.Time{root.ExecutionID: state.LastProgressAt}
+	// Per-step workflow progress records are a UI mirror, not work, and must
+	// never decide whether this turn may finish (PLAT-117). See
+	// BackgroundAgentSnapshot.IsProgressMirror.
+	progressOnly := map[string]bool{}
 	for _, execution := range tracked {
 		if execution == nil || execution.ExecutionID == root.ExecutionID {
 			continue
@@ -200,14 +205,28 @@ func (api *StreamingAPI) conversationTurnTreeSnapshot(rootExecutionID string) co
 				continue
 			}
 			parents[parentID] = append(parents[parentID], snapshot.ID)
+			if snapshot.IsProgressMirror() {
+				progressOnly[snapshot.ID] = true
+			}
 			status := string(snapshot.Status)
 			// A completed child is not finished from the parent's perspective until
 			// its completion has either launched a synthetic continuation or been
 			// explicitly suppressed. Holding it in running closes the otherwise tiny
 			// race between child completion and continuation registration.
+			//
+			// The hold is BOUNDED (PLAT-117). Unbounded, it makes turn completion
+			// depend on notification bookkeeping being perfect, and every path that
+			// leaves a terminal child unnotified becomes a permanent hang rather
+			// than a delay: the orphan settle that caused this ticket, and also the
+			// deliberate discard when a session goes unreachable with completions
+			// still pending. Delivery retries every 5s and re-arms itself while work
+			// remains, so the legitimate hand-off is orders of magnitude inside this
+			// window — and it only ever matters when nothing else in the tree is
+			// running, since a busy session keeps the tree alive on its own.
 			suppressNotification := snapshot.Metadata != nil && snapshot.Metadata["suppress_auto_notification"] == "true"
 			if (snapshot.Status == BGAgentCompleted || snapshot.Status == BGAgentFailed) &&
-				!suppressNotification && !snapshot.CompletionNotified {
+				!suppressNotification && !snapshot.CompletionNotified &&
+				withinContinuationHandoffGrace(snapshot, now) {
 				status = trackedExecutionStatusRunning
 			}
 			statusByID[snapshot.ID] = status
@@ -230,7 +249,7 @@ func (api *StreamingAPI) conversationTurnTreeSnapshot(rootExecutionID string) co
 			}
 			seen[childID] = true
 			queue = append(queue, childID)
-			if statusByID[childID] == trackedExecutionStatusRunning {
+			if statusByID[childID] == trackedExecutionStatusRunning && !progressOnly[childID] {
 				state.RunningChildren++
 			}
 			if progressByID[childID].After(state.LastProgressAt) {
@@ -246,6 +265,35 @@ func (api *StreamingAPI) conversationTurnTreeSnapshot(rootExecutionID string) co
 		state.LastProgressAt = runtime.LastProgressAt
 	}
 	return state
+}
+
+// continuationHandoffGrace bounds how long a finished-but-unnotified child may
+// hold its turn open while its continuation is handed off (PLAT-117).
+//
+// The race it protects is milliseconds wide: a child finishes, and a synthetic
+// turn or steered message is registered immediately afterwards. Delivery is
+// retried every 5s and re-arms while work remains, so two minutes is orders of
+// magnitude more than any legitimate hand-off needs — and the hold only has any
+// effect once nothing else in the tree is running, because a busy session keeps
+// the tree alive by itself.
+//
+// What the bound buys is that no stuck notification flag can make a turn
+// permanently unfinishable. Before it, "terminal but never notified" was a
+// permanent hang, which is what this ticket's orphaned progress mirrors caused,
+// and what a discard-on-unreachable-session would cause too.
+const continuationHandoffGrace = 2 * time.Minute
+
+// withinContinuationHandoffGrace reports whether a terminal child finished
+// recently enough that its continuation may still legitimately be in flight.
+//
+// A terminal child always carries CompletedAt (both SetResult and SetError
+// stamp it), so the nil case is malformed rather than expected; it holds, which
+// preserves the pre-bound behaviour rather than risking a turn ending early.
+func withinContinuationHandoffGrace(snapshot BackgroundAgentSnapshot, now time.Time) bool {
+	if snapshot.CompletedAt == nil {
+		return true
+	}
+	return now.Sub(*snapshot.CompletedAt) < continuationHandoffGrace
 }
 
 // waitForConversationTurnTree is the single completion waiter for scheduled

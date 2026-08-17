@@ -12,6 +12,8 @@ import { FileContentViewer } from "./components/FileContentViewer";
 import { resetSessionId, agentApi } from "./services/api";
 import { AuthWrapper } from "./components/AuthWrapper";
 import { findBlockingMultiAgentSession, shouldConfirmForSessionStatus, shouldConfirmNewMultiAgentChat } from "./utils/newChatConfirmation";
+import { isScheduledSession } from "./utils/workflowSessionKinds";
+import { activateTab } from "./utils/activateTab";
 import { Loader2, PanelRightClose, PanelRightOpen, Smartphone, Laptop } from "lucide-react";
 import { WorkflowLayout } from "./components/workflow";
 import { ModePresetBar } from "./components/ModePresetBar";
@@ -720,7 +722,7 @@ function App() {
 
         if (targetWorkflowTab) {
           if (!hasValidActiveTab || activeTabId !== targetWorkflowTab.tabId) {
-            chatStore.switchTab(targetWorkflowTab.tabId)
+            activateTab(targetWorkflowTab.tabId)
           }
 
           const shouldShowWorkflowChat =
@@ -1004,7 +1006,7 @@ function App() {
     const mostRecent = candidates.reduce((best, t) =>
       workflowTabSortTimestamp(t) > workflowTabSortTimestamp(best) ? t : best
     , candidates[0])
-    chatStore.switchTab(mostRecent.tabId)
+    activateTab(mostRecent.tabId)
   }, [])
 
   useEffect(() => {

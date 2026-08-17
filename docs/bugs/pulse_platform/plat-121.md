@@ -1,6 +1,6 @@
 [← Pulse platform issue index](../pulse_platform_issue_register.md)
 
-# PLAT-118 — split SparkQuill into its own release process
+# PLAT-121 — split SparkQuill into its own release process
 
 | Coordination | Value |
 |---|---|

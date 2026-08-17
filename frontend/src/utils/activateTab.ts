@@ -2,14 +2,17 @@ import { useAppStore } from '../stores/useAppStore'
 import { useChatStore } from '../stores/useChatStore'
 import { useModeStore } from '../stores/useModeStore'
 import { useWorkflowStore } from '../stores/useWorkflowStore'
+import { activateWorkflowTab } from './workflowNavigation'
 
 /**
  * The single sanctioned way to bring an existing tab on-screen.
  *
- * "Show this tab" is really three coupled writes across three stores:
+ * "Show this tab" is three base writes across three stores:
  *   - useAppStore.showWorkflowsOverview  (the overlay that covers everything)
  *   - useModeStore.selectedModeCategory  (workflow pane vs chat pane)
  *   - useChatStore.activeTabId           (which session shows)
+ * plus, for workflow tabs, useGlobalPresetStore.activePresetIds.workflow
+ * (which automation owns the report/workspace pane).
  *
  * Every navigation entry point used to re-implement that sequence by hand, and
  * missing any one step left the selected tab hidden (e.g. behind the Workflows
@@ -36,10 +39,16 @@ export function activateTab(tabId: string): boolean {
 
   // The tab metadata is the source of truth for which pane it belongs to.
   const mode = tab.metadata?.mode ?? 'multi-agent'
+  if (mode === 'workflow' && tab.metadata?.presetQueryId) {
+    return activateWorkflowTab(tabId)
+  }
+
   if (useModeStore.getState().selectedModeCategory !== mode) {
     useModeStore.getState().setModeCategory(mode)
   }
   if (mode === 'workflow') {
+    // Legacy workflow tabs without ownership metadata cannot update the report
+    // selection, but remain renderable during the migration window.
     useWorkflowStore.getState().setShowChatArea(true)
   }
 

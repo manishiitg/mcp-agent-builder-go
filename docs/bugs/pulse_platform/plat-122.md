@@ -1,6 +1,6 @@
 [← Pulse platform issue index](../pulse_platform_issue_register.md)
 
-# PLAT-119 — real microphone reads digital silence through every app on a dev machine
+# PLAT-122 — real microphone reads digital silence through every app on a dev machine
 
 | Coordination | Value |
 |---|---|
@@ -8,7 +8,7 @@
 | Ticket state | `open` — environment-level, not yet root-caused |
 | Last synchronized | `2026-08-16` |
 
-- **Priority:** P1 — blocks live verification of PLAT-117 (Video Studio voice
+- **Priority:** P1 — blocks live verification of PLAT-120 (Video Studio voice
   dictation); not reachable from workflow code, external action required.
 - **Owner:** none (OS/hardware/driver layer) — see
   [`voice_dictation_mic_captures_silence.md`](../voice_dictation_mic_captures_silence.md)
