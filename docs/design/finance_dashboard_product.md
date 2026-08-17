@@ -49,16 +49,31 @@ both cover most of what showed up here. Corrected version:
 
 1. **Native/tmux transport running outside `tool_policy`'s reach is the
    same territory `product_api_transport_for_coding_agents.md` already
-   maps in depth** (its "tmux vs structured" section, and the fact that
-   Video Studio's *shipped* `product.yaml` already pins
-   `transport: structured` for reasons of its own -- see that doc's "Known
-   drift" note). `codingAgentUsesStructuredTransport` returns `true` only
-   for `cursor-cli`; every other provider defaults to native/interactive
-   mode. Confirmed live for this profile specifically: before
-   `transport: structured` was set, a codex-cli finance chat made 12
-   genuine tool calls outside the registered `[query_finance_source
-   read_skill web_fetch web_search]` set. Fixed the same way Video Studio
-   already had: `transport: structured`.
+   maps in depth** (its "tmux vs structured" section). Its "Known drift"
+   note claims Video Studio's *shipped* `product.yaml` already pins
+   `transport: structured` -- **that claim is itself wrong, or at least
+   stale**: checked directly (2026-08-17), `internal/videoproduct/product.yaml`
+   currently has `transport: auto`, not `structured`. This was repeated
+   here uncritically in an earlier version of this doc before being caught
+   and corrected; see the note this replaces in git history if the
+   original wording is needed. `codingAgentUsesStructuredTransport`
+   returns `true` only for `cursor-cli`; every other provider --
+   including codex-cli **and claude-code** -- defaults to native/interactive
+   (tmux) mode under Video Studio's own `transport: auto`. Confirmed live
+   for this profile specifically: before `transport: structured` was set
+   here, a codex-cli finance chat made 12 genuine tool calls outside the
+   registered `[query_finance_source read_skill web_fetch web_search]`
+   set. This means Video Studio's own codex-cli (and claude-code) chat
+   sessions are plausibly running under the same native/tmux mode today,
+   in production -- whether that already matters there wasn't tested here
+   (Video Studio's own `tool_policy` allowlist already includes broad
+   file/shell-adjacent tools like `diff_patch_workspace_file`, so the
+   marginal risk of native tools also being reachable may be smaller than
+   it is for Finance), but it's a real open question about Video Studio's
+   current shipped configuration, not a settled precedent Finance was
+   safely following. Fixed for Finance with an explicit
+   `transport: structured` -- a Finance-specific decision, not a copy of
+   an existing Video Studio choice.
 2. **The second tool the model reached for, `nodeRepl`/`js`, is section
    4 of `hybrid_profile_told_it_has_no_shell.md`, "personal MCP servers
    leak into product sessions" -- not codex's own intrinsic toolset**,
@@ -99,20 +114,29 @@ both cover most of what showed up here. Corrected version:
    than a rediscovery.
 
 **The fix, in the product.yaml `runtime:` block**: `transport: structured`
-(already Video Studio's own shipped choice, applied here for the same
-reason), `agent_tools.mode: mcp_only` (explicit, matching Video Studio's
-own convention -- confirmed not itself the fix for #1 or #2 above, empty
-already resolved to mcp_only), and `provider_options` curated to
-**exactly one** entry, `claude-code` -- not the four-provider list Video
-Studio offers. That narrower curation is a genuine, deliberate departure
-from Video Studio's own precedent, not just copying it: `node_repl` being
-a personal-machine artifact lowers the severity of finding #2, but doesn't
-retroactively prove codex-cli or cursor-cli are safe under a real
-allowlist for a product where the stakes are real financial data rather
-than a video project -- that hasn't been tested, so it isn't assumed.
-**claude-code's own safety here is inferred from Video Studio's existing
-production reliance on it, not independently re-verified live in this
-profile** -- see "Confirmed vs. not yet confirmed" below.
+(a Finance-specific choice, *not* matching Video Studio's own shipped
+`transport: auto` -- see the correction above), `agent_tools.mode:
+mcp_only` (explicit -- this one genuinely does match Video Studio's
+current actual value, confirmed directly, though Video Studio's own
+`tool_policy` comment describes its setting as "Hybrid," contradicting its
+own `agent_tools.mode: mcp_only` a few lines below -- an internal
+documentation drift in Video Studio's own file, not resolved here), and
+`provider_options` curated to **exactly one** entry, `claude-code` -- not
+the four-provider list Video Studio offers. That narrower curation is a
+genuine, deliberate departure from Video Studio's own precedent, not just
+copying it: `node_repl` being a personal-machine artifact lowers the
+severity of finding #2, but doesn't retroactively prove codex-cli or
+cursor-cli are safe under a real allowlist for a product where the stakes
+are real financial data rather than a video project -- that hasn't been
+tested, so it isn't assumed. **claude-code's own safety here is Finance's
+own direct evidence, not inferred from Video Studio's precedent** -- Video
+Studio's own claude-code sessions run under a *different* transport
+(native/tmux, per its `transport: auto`), so its production usage does not
+actually validate the exact combination Finance uses
+(`transport: structured` + `agent_tools: mcp_only`). What actually backs
+this is the live log evidence below: two clean turns, correctly filtered,
+no leak -- not exhaustive, but a direct test of this exact configuration
+rather than an inference from a different one.
 
 ### Confirmed vs. not yet confirmed (2026-08-17)
 

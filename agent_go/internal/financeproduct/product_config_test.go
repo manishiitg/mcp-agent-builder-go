@@ -48,8 +48,13 @@ func TestFinanceManifestDeclaresProjectScopeAndNarrowAllowlist(t *testing.T) {
 	// would hit. Curated to exactly one verified provider anyway, since
 	// that doesn't retroactively prove codex-cli or cursor-cli safe under
 	// a real allowlist for real financial data. See the product.yaml
-	// comment for what "verified" actually means here (inferred from
-	// Video Studio's reliance, not independently re-tested).
+	// comment for what "verified" actually means here: Finance's own
+	// direct live test (two clean turns under this exact transport +
+	// agent_tools combination), NOT inferred from Video Studio's
+	// reliance -- Video Studio's own claude-code sessions run under a
+	// different transport (transport: auto resolves to native/tmux for
+	// claude-code, confirmed directly 2026-08-17), so its production
+	// usage doesn't actually validate this specific combination.
 	if len(manifest.Profile.Runtime.ProviderOptions) != 1 || manifest.Profile.Runtime.ProviderOptions[0].Provider != "claude-code" {
 		t.Fatalf("finance must curate runtime.provider_options to exactly claude-code, got %+v", manifest.Profile.Runtime.ProviderOptions)
 	}
