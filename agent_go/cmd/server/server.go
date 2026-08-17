@@ -1637,6 +1637,9 @@ func runServer(cmd *cobra.Command, args []string) {
 		if err := videoproduct.RegisterProductSkills(); err != nil {
 			log.Fatalf("Failed to register Video Studio skills: %v", err)
 		}
+		if err := videoproduct.SyncVisibleSkillsForExistingProjects(os.Getenv("WORKSPACE_DOCS_PATH")); err != nil {
+			log.Printf("Failed to sync visible Video Studio skills into existing projects: %v", err)
+		}
 		for _, profile := range videoproduct.BuiltinAgentProfiles() {
 			if err := profileRegistry.RegisterProfile(profile); err != nil {
 				log.Fatalf("Failed to register Video Studio agent profile: %v", err)

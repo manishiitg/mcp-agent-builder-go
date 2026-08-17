@@ -2,6 +2,7 @@ package videoproduct
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -57,6 +58,46 @@ func syncVisibleProductSkills(workspacePath string) error {
 			return os.WriteFile(target, content, 0o644)
 		}); err != nil {
 			return fmt.Errorf("materialize visible Video Studio skill %s: %w", strings.TrimSpace(definition.name), err)
+		}
+	}
+	return nil
+}
+
+// SyncVisibleSkillsForExistingProjects upgrades workspaces created before the
+// visible product-skill library existed. It is intentionally limited to the
+// Video Studio project layout and is safe to run at every agent startup.
+func SyncVisibleSkillsForExistingProjects(docsRoot string) error {
+	docsRoot = strings.TrimSpace(docsRoot)
+	if docsRoot == "" {
+		return nil
+	}
+	usersRoot := filepath.Join(docsRoot, "_users")
+	users, err := os.ReadDir(usersRoot)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("list workspace users: %w", err)
+	}
+	for _, user := range users {
+		if !user.IsDir() {
+			continue
+		}
+		projectsRoot := filepath.Join(usersRoot, user.Name(), "Chats", "Video Studio", "projects")
+		projects, err := os.ReadDir(projectsRoot)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("list Video Studio projects for %s: %w", user.Name(), err)
+		}
+		for _, project := range projects {
+			if !project.IsDir() {
+				continue
+			}
+			if err := syncVisibleProductSkills(filepath.Join(projectsRoot, project.Name())); err != nil {
+				return fmt.Errorf("sync visible skills for Video Studio project %s: %w", project.Name(), err)
+			}
 		}
 	}
 	return nil
