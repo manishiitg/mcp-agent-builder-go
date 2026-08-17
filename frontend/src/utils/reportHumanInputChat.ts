@@ -4,7 +4,7 @@ import { useChatStore } from '../stores/useChatStore'
 import { useGlobalPresetStore } from '../stores/useGlobalPresetStore'
 import { useWorkflowStore } from '../stores/useWorkflowStore'
 import { activateTab } from './activateTab'
-import { isInteractiveChiefOfStaffTab } from './chiefOfStaff'
+import { CHIEF_OF_STAFF_PROFILE_ID, isInteractiveChiefOfStaffTab } from './chiefOfStaff'
 import { selectWorkflowPreset } from './workflowNavigation'
 
 function normalizeWorkspacePath(value?: string | null): string {
@@ -177,7 +177,13 @@ async function sendReportHumanInputMessageToChat({
       tabId = targetTab.tabId
       reused = true
     } else {
-      tabId = await chatStore.createChatTab('Chief of Staff', { mode: 'multi-agent' })
+      tabId = await chatStore.createChatTab('Chief of Staff', {
+        mode: 'multi-agent',
+        agentProfileId: CHIEF_OF_STAFF_PROFILE_ID,
+        agentProfileVersion: 1,
+        agentProfileWorkspace: 'Chats',
+        agentProfileProjectTitle: 'Chief of Staff',
+      })
       targetTab = useChatStore.getState().getTab(tabId)
     }
   } else {

@@ -24,7 +24,7 @@ import { useModeStore } from "./stores/useModeStore";
 import { useProductSurfaceStore } from "./stores/useProductSurfaceStore";
 import { useLLMStore } from "./stores/useLLMStore";
 import { normalizeEventViewMode, waitForChatStoreHydration, type ChatTab } from "./stores/useChatStore";
-import { isChiefOfStaffTab, isChiefOfStaffScheduleTab, isInteractiveChiefOfStaffTab } from "./utils/chiefOfStaff";
+import { CHIEF_OF_STAFF_PROFILE_ID, isChiefOfStaffTab, isChiefOfStaffScheduleTab, isInteractiveChiefOfStaffTab } from "./utils/chiefOfStaff";
 import { useLLMDefaults } from "./hooks/useLLMDefaults";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./components/ui/tooltip";
 import "./App.css";
@@ -158,7 +158,13 @@ function App() {
       if (chiefTab) {
         chatStore.switchTab(chiefTab.tabId)
       } else {
-        await chatStore.createChatTab('Chief of Staff', { mode: 'multi-agent' })
+        await chatStore.createChatTab('Chief of Staff', {
+          mode: 'multi-agent',
+          agentProfileId: CHIEF_OF_STAFF_PROFILE_ID,
+          agentProfileVersion: 1,
+          agentProfileWorkspace: 'Chats',
+          agentProfileProjectTitle: 'Chief of Staff',
+        })
       }
     })
     return () => { cancelled = true }
@@ -635,7 +641,13 @@ function App() {
       try {
         // This effect only runs for multi-agent mode (guarded above); workflow
         // tabs are created by WorkflowLayout.
-        await chatStore.createChatTab('Chief of Staff', { mode: 'multi-agent' })
+        await chatStore.createChatTab('Chief of Staff', {
+          mode: 'multi-agent',
+          agentProfileId: CHIEF_OF_STAFF_PROFILE_ID,
+          agentProfileVersion: 1,
+          agentProfileWorkspace: 'Chats',
+          agentProfileProjectTitle: 'Chief of Staff',
+        })
       } catch (error) {
         console.error('Failed to create default tab:', error)
         // Reset flag on error so it can retry
@@ -917,7 +929,13 @@ function App() {
           .filter(isInteractiveChiefOfStaffTab)
           .sort((a, b) => workflowTabSortTimestamp(b) - workflowTabSortTimestamp(a))[0] || null
         if (!activeTab) {
-          const tabId = await chatStore.createChatTab('Chief of Staff', { mode: 'multi-agent' })
+          const tabId = await chatStore.createChatTab('Chief of Staff', {
+            mode: 'multi-agent',
+            agentProfileId: CHIEF_OF_STAFF_PROFILE_ID,
+            agentProfileVersion: 1,
+            agentProfileWorkspace: 'Chats',
+            agentProfileProjectTitle: 'Chief of Staff',
+          })
           activeTab = chatStore.getTab(tabId) || null
         }
         if (!activeTab) return

@@ -172,7 +172,7 @@ import LLMConfigurationModal from './LLMConfigurationModal'
 import type { PlannerFile, LLMProvider, ChatHistorySession } from '../services/api-types'
 import type { LLMOption } from '../types/llm'
 import { useAppStore, useMCPStore, useLLMStore, useChatStore } from '../stores'
-import { isChiefOfStaffTab } from '../utils/chiefOfStaff'
+import { CHIEF_OF_STAFF_PROFILE_ID, isChiefOfStaffTab } from '../utils/chiefOfStaff'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useCommandDialogStore } from '../stores/useCommandDialogStore'
 import { usePresetApplication, useGlobalPresetStore } from '../stores/useGlobalPresetStore'
@@ -1865,7 +1865,13 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     }
 
     try {
-      await chatStore.createChatTab('Chief of Staff', { mode: 'multi-agent' })
+      await chatStore.createChatTab('Chief of Staff', {
+        mode: 'multi-agent',
+        agentProfileId: CHIEF_OF_STAFF_PROFILE_ID,
+        agentProfileVersion: 1,
+        agentProfileWorkspace: 'Chats',
+        agentProfileProjectTitle: 'Chief of Staff',
+      })
       return true
     } catch (error) {
       console.error('Failed to create fallback multi-agent tab:', error)
