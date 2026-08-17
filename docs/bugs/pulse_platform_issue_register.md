@@ -244,6 +244,7 @@ Rules:
 | [PLAT-070](pulse_platform/plat-070.md) | A failed run-folder listing makes the scheduler blame an old failure on today's run | unassigned | `implemented` (runtime reverify pending) | scheduler run-outcome reconciliation, workspace state loading |
 | [PLAT-071](pulse_platform/plat-071.md) | An idle-wait timeout is treated as proof the workflow never ran | unassigned | `implemented` (record corruption); session stall still open | scheduler workshop turn loop |
 | [PLAT-072](pulse_platform/plat-072.md) | `external_action_required` has no exit path, so solved problems keep being re-reported as open | unassigned | `implemented` (sweep tool + version stamping; board 81→75) | Pulse finding lifecycle |
+| [PLAT-073](pulse_platform/plat-073-remaining-board.md) | Working list of the remaining `external_action_required` board that PLAT-072's triage sweep produced — a durable tracking document, not a single defect, kept so the remaining items stay assignable without re-deriving them from `pulse_close_stale.py --list` | unassigned | `open` (tracking document for the post-triage backlog) | `pulse_close_stale.py` + the external_action_required backlog |
 | [PLAT-074](pulse_platform/plat-074.md) | 6 of 16 plan-mutation call sites never fed the changelog writer real diff/snapshot data, collapsing before_ref/after_ref to a meaningless placeholder | unassigned | `implemented` (4 of 6 call sites fixed; runtime reverify pending) | plan changelog writer (`planning_agent.go`) |
 | [PLAT-075](pulse_platform/plat-075.md) | Auto-evaluation starts before its target execution is finalized | Codex | `runtime_reverify` | batch execution / auto-evaluation boundary |
 | [PLAT-076](pulse_platform/plat-076.md) | Learning and scripted metadata record claims instead of runtime facts | Codex | `runtime_reverify` | learning detection and scripted metadata persistence |
@@ -643,7 +644,8 @@ priority and historical run context.
 | [PLAT-058](pulse_platform/plat-058.md) | [PLAT-059](pulse_platform/plat-059.md) | [PLAT-060](pulse_platform/plat-060.md) | [PLAT-061](pulse_platform/plat-061.md) |
 | [PLAT-062](pulse_platform/plat-062.md) | [PLAT-063](pulse_platform/plat-063.md) | [PLAT-064](pulse_platform/plat-064.md) | [PLAT-065](pulse_platform/plat-065.md) |
 | [PLAT-066](pulse_platform/plat-066.md) | [PLAT-067](pulse_platform/plat-067.md) | [PLAT-068](pulse_platform/plat-068.md) | [PLAT-069](pulse_platform/plat-069.md) |
-| [PLAT-070](pulse_platform/plat-070.md) | [PLAT-071](pulse_platform/plat-071.md) | [PLAT-072](pulse_platform/plat-072.md) | [PLAT-074](pulse_platform/plat-074.md) |
+| [PLAT-070](pulse_platform/plat-070.md) | [PLAT-071](pulse_platform/plat-071.md) | [PLAT-072](pulse_platform/plat-072.md) | [PLAT-073](pulse_platform/plat-073-remaining-board.md) |
+| [PLAT-074](pulse_platform/plat-074.md) |  |  |  |
 | [PLAT-075](pulse_platform/plat-075.md) | [PLAT-076](pulse_platform/plat-076.md) | [PLAT-077](pulse_platform/plat-077.md) | [PLAT-078](pulse_platform/plat-078.md) |
 | [PLAT-080](pulse_platform/plat-080.md) | [PLAT-081](pulse_platform/plat-081.md) | [PLAT-082](pulse_platform/plat-082.md) | [PLAT-083](pulse_platform/plat-083.md) |
 | [PLAT-084](pulse_platform/plat-084.md) | [PLAT-085](pulse_platform/plat-085.md) |  |  |
