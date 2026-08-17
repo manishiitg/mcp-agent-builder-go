@@ -212,7 +212,44 @@ atomically in three files (e.g. `server.go:8090`). Extracting a queue type with
 its own mutex would split that lock, trading ~30 lines of trivial map code for a
 concurrency change in the delivery path that just caused a P0. Not worth it.
 
-## Designed, not built: decouple liveness from notification delivery
+## Built: the notification hold is now bounded
+
+The design sketched here first was to close the completion race by *ordering* —
+register the owed continuation as a real tracked execution at completion time,
+so liveness never needs to read notification state. Investigating the delivery
+path before building it showed a simpler answer that is strictly better, so that
+design was dropped in favour of this one.
+
+**What the delivery path actually does:** a queued completion is retried every
+5s by a self-re-arming timer, and is explicitly *discarded* if the session
+becomes unreachable. So the legitimate hand-off window is seconds, and — this is
+the part that decides it — the hold only has any effect once nothing else in the
+tree is running, because a busy session keeps the tree alive on its own.
+
+**So the hold is now bounded rather than replaced.** A finished-but-unnotified
+child still holds its turn open, but only for `continuationHandoffGrace`
+(2 minutes) after it completed. That is orders of magnitude more than any real
+hand-off needs, and it converts *every* stuck-notification path from a permanent
+hang into a bounded delay — including two beyond this ticket's own bug: the
+deliberate discard when a session goes unreachable with completions pending, and
+any future path that marks a child terminal without settling its notification.
+
+**Why this is better than the placeholder design.** The placeholder had to be
+registered on every path that owes a continuation and resolved on every path
+that stops owing one — including the queue-fallback retry, where nothing is
+registered yet. A placeholder that leaks is the same permanent hang in a new
+place, so it would have traded a known bug for an unknown one. The bound needs
+no new state, cannot leak, and fails in the safe direction: worst case a turn
+completes two minutes later than ideal, never earlier than correct.
+
+**Verified** by simulating the old unbounded behaviour (forcing the grace check
+to always pass): `TestUnnotifiedChildHoldsTurnOnlyBriefly` fails on the
+finished-long-ago case with `RunningChildren = 1`, and passes once restored,
+while the just-finished and inside-grace cases keep holding the turn open in
+both — so the race protection is demonstrably intact, not merely asserted.
+
+## Original design, superseded by the bound above
+
 
 The remaining coupling is that `conversationTurnTreeSnapshot` reads notification
 state at all:

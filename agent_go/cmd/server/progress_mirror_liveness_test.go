@@ -157,3 +157,71 @@ func TestReconcileOrphanedProgressChildrenSettlesCompletely(t *testing.T) {
 		t.Fatal("a settled orphan must be marked notified, or the turn snapshot keeps reporting it as running")
 	}
 }
+
+// TestUnnotifiedChildHoldsTurnOnlyBriefly pins both directions of the bounded
+// continuation hand-off (PLAT-117).
+//
+// A child that just finished must still hold the turn open — that is the race
+// the hold exists for. A child that finished long ago and was never notified
+// must NOT, because unbounded that turns every stuck-notification path into a
+// permanently unfinishable turn rather than a delay.
+func TestUnnotifiedChildHoldsTurnOnlyBriefly(t *testing.T) {
+	for name, tc := range map[string]struct {
+		finishedAgo     time.Duration
+		wantRunningKids int
+	}{
+		"just finished — hand-off may be in flight": {time.Second, 1},
+		"finished well inside the grace":            {continuationHandoffGrace / 2, 1},
+		"finished long ago and never notified":      {continuationHandoffGrace + time.Minute, 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			api := lifecycleTestAPI()
+			const sessionID = "session-handoff"
+			start := time.Now().UTC().Add(-2 * continuationHandoffGrace)
+			rootDone := start.Add(time.Second)
+			api.trackedWorkflowExecutions["root"] = &TrackedWorkflowExecution{
+				ExecutionID: "root", SessionID: sessionID, Source: trackedExecutionSourceConversationTurn,
+				Status: trackedExecutionStatusCompleted, StartedAt: start, CompletedAt: &rootDone,
+			}
+			completedAt := time.Now().Add(-tc.finishedAgo)
+			// A real delegation, not a progress mirror: this is the notification
+			// hold under test, not the mirror exclusion.
+			api.bgAgentRegistry.Register(sessionID, &BackgroundAgent{
+				ID: "delegation-child", ParentExecutionID: "root", SessionID: sessionID,
+				Kind: "delegation", Status: BGAgentCompleted, CreatedAt: start, CompletedAt: &completedAt,
+			})
+
+			state := api.conversationTurnTreeSnapshot("root")
+			if state.RunningChildren != tc.wantRunningKids {
+				t.Fatalf("RunningChildren = %d, want %d", state.RunningChildren, tc.wantRunningKids)
+			}
+			if terminal := state.terminal(); terminal != (tc.wantRunningKids == 0) {
+				t.Fatalf("terminal() = %v, want %v", terminal, tc.wantRunningKids == 0)
+			}
+		})
+	}
+}
+
+// TestNotifiedChildNeverHoldsTurn is the control: once the continuation has
+// actually been handed off, the child stops holding the turn immediately,
+// regardless of the grace window.
+func TestNotifiedChildNeverHoldsTurn(t *testing.T) {
+	api := lifecycleTestAPI()
+	const sessionID = "session-notified"
+	now := time.Now().UTC()
+	doneAt := now.Add(time.Second)
+	api.trackedWorkflowExecutions["root"] = &TrackedWorkflowExecution{
+		ExecutionID: "root", SessionID: sessionID, Source: trackedExecutionSourceConversationTurn,
+		Status: trackedExecutionStatusCompleted, StartedAt: now, CompletedAt: &doneAt,
+	}
+	child := &BackgroundAgent{
+		ID: "delegation-child", ParentExecutionID: "root", SessionID: sessionID,
+		Kind: "delegation", Status: BGAgentCompleted, CreatedAt: now, CompletedAt: &doneAt,
+	}
+	child.finishCompletionNotification(true)
+	api.bgAgentRegistry.Register(sessionID, child)
+
+	if state := api.conversationTurnTreeSnapshot("root"); !state.terminal() {
+		t.Fatalf("a notified terminal child must not hold the turn open: %+v", state)
+	}
+}
