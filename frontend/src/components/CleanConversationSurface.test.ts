@@ -44,6 +44,18 @@ describe('buildCleanConversationItems', () => {
     ])
   })
 
+  it('renders assistant replies restored from the shared durable transcript', () => {
+    const items = buildCleanConversationItems([
+      event('restored-user', 'user_message', { content: 'Show the finished video' }),
+      event('restored-answer', 'llm_generation_end', { content: 'The finished video is ready to preview.' }),
+    ])
+
+    expect(items.map((item) => `${item.role}:${item.content}`)).toEqual([
+      'user:Show the finished video',
+      'assistant:The finished video is ready to preview.',
+    ])
+  })
+
   it('keeps structured reasoning separate from the final answer', () => {
     const items = buildCleanConversationItems([
       event('user', 'user_message', { content: 'Create the teaser' }),

@@ -139,8 +139,12 @@ export function buildCleanConversationItems(events: PollingEvent[]): Conversatio
       continue
     }
 
-    if (event.type === 'unified_completion' || event.type === 'conversation_end') {
-      const content = humanReadableAgentResult(firstText(payload.final_result, payload.result))
+    // Durable history is projected into llm_generation_end events by the
+    // shared session restorer. Treat that same final-answer carrier exactly
+    // like the live completion events so product surfaces retain assistant
+    // replies after refresh, not just the user's prompts.
+    if (event.type === 'llm_generation_end' || event.type === 'unified_completion' || event.type === 'conversation_end') {
+      const content = humanReadableAgentResult(firstText(payload.content, payload.final_result, payload.result))
       if (content && content !== lastAssistantContent) {
 				const assistantItem = { id: event.id, role: 'assistant' as const, content, timestamp: event.timestamp }
 				pushUnique(assistantItem)
