@@ -38,15 +38,18 @@ func TestFinanceManifestDeclaresProjectScopeAndNarrowAllowlist(t *testing.T) {
 	if !strings.EqualFold(manifest.Profile.Runtime.AgentTools.Mode, "mcp_only") {
 		t.Fatalf("finance must declare agent_tools.mode: mcp_only explicitly, got %q", manifest.Profile.Runtime.AgentTools.Mode)
 	}
-	// A second real leak, independent of transport: structured -- confirmed
-	// live (2026-08-16) that codex-cli still exposed its own native Node
-	// REPL (tool name `js`, with working fetch and a real filesystem cwd)
-	// even under structured transport. tool_policy cannot see it, the same
-	// way it cannot see codex's native exec. Curated to exactly one
-	// verified provider until every provider's own intrinsic toolset is
-	// checked. See the product.yaml comment for what "verified" actually
-	// means here (inferred from Video Studio's reliance, not independently
-	// re-tested).
+	// A second tool was reached for live (2026-08-16), independent of
+	// transport: structured: `nodeRepl`/`js`, with working fetch and a
+	// real filesystem cwd -- this is docs/bugs/hybrid_profile_told_it_
+	// has_no_shell.md's section 4 ("personal MCP servers leak into
+	// product sessions"), a developer's own ~/.codex/config.toml leaking
+	// in, not codex-cli's own intrinsic toolset -- very likely a
+	// local-dev-machine artifact, not something a real deployed user
+	// would hit. Curated to exactly one verified provider anyway, since
+	// that doesn't retroactively prove codex-cli or cursor-cli safe under
+	// a real allowlist for real financial data. See the product.yaml
+	// comment for what "verified" actually means here (inferred from
+	// Video Studio's reliance, not independently re-tested).
 	if len(manifest.Profile.Runtime.ProviderOptions) != 1 || manifest.Profile.Runtime.ProviderOptions[0].Provider != "claude-code" {
 		t.Fatalf("finance must curate runtime.provider_options to exactly claude-code, got %+v", manifest.Profile.Runtime.ProviderOptions)
 	}

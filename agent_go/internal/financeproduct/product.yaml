@@ -60,33 +60,36 @@ profile:
     # default "auto"/unset falls back to) returns true ONLY for cursor-cli
     # -- every other provider, including codex-cli, defaults to
     # native/interactive (tmux) mode, where the coding CLI runs with its
-    # OWN full built-in tool loop (a real `exec`, not the platform's
-    # execute_shell_command) entirely outside mcpagent's tool registry.
-    # tool_policy above literally does not apply there: confirmed live
-    # (2026-08-16) -- a finance chat on codex-cli made 12 genuine `exec`
-    # tool calls, none of them query_finance_source, while the platform's
-    # own registered-tools list for that session correctly showed only
-    # [query_finance_source read_skill web_fetch web_search]. `structured`
-    # closes that path; provider_options below closes a second, separate
-    # one codex-cli has even under structured transport (see its comment).
+    # OWN full built-in tool loop entirely outside mcpagent's tool
+    # registry, so tool_policy does not apply. This is the same territory
+    # docs/design/product_api_transport_for_coding_agents.md already maps
+    # (Video Studio's own shipped product.yaml already pins
+    # transport: structured for reasons of its own -- see that doc's
+    # "Known drift" note). Confirmed live for this profile (2026-08-16):
+    # before this setting, a finance chat on codex-cli made 12 tool calls
+    # outside the registered [query_finance_source read_skill web_fetch
+    # web_search] set.
     transport: structured
     # Curated to exactly one provider, deliberately -- NOT "any published
     # LLM" the way Chief of Staff's identical-looking runtime.provider is.
-    # A second real leak was found live (2026-08-16), independent of the
-    # transport fix above: even under transport: structured, codex-cli
-    # still exposed its own native Node REPL as a tool named `js` (with
-    # working `fetch` and a real filesystem `cwd`), which the model reached
-    # for once query_finance_source proved hard to invoke -- tool_policy
-    # never saw it, the same way it never saw codex's native `exec`. That
-    # is a second escape hatch structured transport did not close. This
-    # profile's whole reason to exist is that its tool surface is
-    # trustworthy; that guarantee cannot be made per-provider without
-    # testing every provider's own intrinsic toolset, so exactly one
-    # provider is offered -- the same one Video Studio's own security
-    # model already depends on in production. Note: claude-code's safety
-    # here is inferred from that existing reliance, not independently
-    # re-verified live in this exact profile -- a real gap, worth closing
-    # before this ships broadly (see docs/design/finance_dashboard_product.md).
+    # A second tool was reached for live (2026-08-16), independent of the
+    # transport fix above: `nodeRepl`/`js`, with a working `fetch` and a
+    # real filesystem `cwd`. This is docs/bugs/hybrid_profile_told_it_has_
+    # no_shell.md's section 4, "personal MCP servers leak into product
+    # sessions" -- tools.mcp__node_repl__js, sourced from a developer's
+    # personal ~/.codex/config.toml, NOT codex-cli's own intrinsic
+    # toolset. Very likely a local-dev-machine artifact, not something a
+    # real deployed user would hit -- the already-tracked fix
+    # (--ignore-user-config or an isolated CODEX_HOME) is unresolved
+    # platform-wide, not specific to this profile. Even so: that doesn't
+    # retroactively prove codex-cli (or cursor-cli, untested here) is safe
+    # under a real allowlist for a product whose stakes are real financial
+    # data. This profile's whole reason to exist is a trustworthy tool
+    # surface, so exactly one provider is offered -- the same one Video
+    # Studio's own security model already depends on in production. Note:
+    # claude-code's own safety here is inferred from that existing
+    # reliance, not independently re-verified live in this exact profile
+    # -- see docs/design/finance_dashboard_product.md.
     provider_options:
       - id: claude-code
         label: Claude Code

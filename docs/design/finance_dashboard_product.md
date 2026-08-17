@@ -40,61 +40,79 @@ status) so the agent doesn't have to rediscover them the hard way.
 Everything under "Architecture" and "The card types" still describes the
 dashboard; this section is additive.
 
-### Three real security findings, found only by testing against a live turn
+### One already-known class of problem, one genuinely new one
 
-None of these were visible from reading the code or from unit tests --
-each required actually watching a real chat turn run and checking the
-server log, not just the UI.
+Before writing any of this up as a finding, it should have been checked
+against `docs/design/product_api_transport_for_coding_agents.md` and
+`docs/bugs/hybrid_profile_told_it_has_no_shell.md` -- both already exist,
+both cover most of what showed up here. Corrected version:
 
-1. **`transport: structured` is load-bearing, and its absence is silent.**
-   `codingAgentUsesStructuredTransport` returns `true` only for
-   `cursor-cli`; every other provider (codex-cli included) defaults to
-   native/interactive (tmux) mode, where the coding CLI runs its own full
-   built-in tool loop entirely outside mcpagent's tool registry --
-   `tool_policy` never sees it. Confirmed live: a finance chat on codex-cli
-   made 12 genuine `exec` tool calls, zero of them `query_finance_source`,
-   while the platform's own registered-tools list for that session
-   correctly showed only the intended four names. The allowlist was
-   working exactly as designed and it didn't matter, because the CLI never
-   went through it.
-2. **`transport: structured` alone was not sufficient for codex-cli.** Even
-   under structured transport, codex-cli still exposed a second native
-   tool, `js` -- its own Node REPL, with a working `fetch` and a real
-   filesystem `cwd`. The model reached for it once `query_finance_source`
-   proved hard to invoke. `tool_policy` cannot see this tool either, for
-   the same reason it couldn't see `exec`.
-3. **Global scope makes `provider_options` decorative, not authoritative
-   -- by design, not a bug.** `resolveAgentProfileForQuery`'s own logic:
-   `if isGlobalScope && requestHasExplicitModel { provider, modelID =
-   req.Provider, req.ModelID }` -- the user's own chat-level selection
-   always wins for a global-scoped profile, unconditionally. That's
-   exactly right for Chief of Staff (the whole point of its own design) and
-   exactly wrong for Finance, whose entire safety story depends on the
-   provider actually being restricted. Global scope also takes the dynamic
-   multi-agent delegation prompt instead of this profile's own
-   `prompt.file` -- confirmed live that an earlier global-scoped version of
-   this profile never sent `prompts/system-prompt.md` to the model at all.
-   **Finance is `scope: project`, not global**, even though it spans
-   multiple sources the same shape-of-reason Chief of Staff does --
-   project scope's usual narrowing (folder guard collapsed to one root) is
-   a non-issue here since this profile's one tool bypasses `FolderGuard`
-   entirely via its own hardcoded path whitelist.
+1. **Native/tmux transport running outside `tool_policy`'s reach is the
+   same territory `product_api_transport_for_coding_agents.md` already
+   maps in depth** (its "tmux vs structured" section, and the fact that
+   Video Studio's *shipped* `product.yaml` already pins
+   `transport: structured` for reasons of its own -- see that doc's "Known
+   drift" note). `codingAgentUsesStructuredTransport` returns `true` only
+   for `cursor-cli`; every other provider defaults to native/interactive
+   mode. Confirmed live for this profile specifically: before
+   `transport: structured` was set, a codex-cli finance chat made 12
+   genuine tool calls outside the registered `[query_finance_source
+   read_skill web_fetch web_search]` set. Fixed the same way Video Studio
+   already had: `transport: structured`.
+2. **The second tool the model reached for, `nodeRepl`/`js`, is section
+   4 of `hybrid_profile_told_it_has_no_shell.md`, "personal MCP servers
+   leak into product sessions" -- not codex's own intrinsic toolset**,
+   which was the wrong attribution in an earlier version of this doc. The
+   captured tool call's own code read `nodeRepl.write({cwd: nodeRepl.cwd,
+   ...})` -- the exact `tools.mcp__node_repl__js` tool that bug doc
+   already names, sourced from a developer's personal `~/.codex/config.toml`,
+   not from codex-cli itself. That doc's own measurement of codex's actual
+   sealed sandbox (`functions.exec`: `typeof fetch → undefined`, no
+   network, no env) is a *different* tool from `node_repl`, and is why this
+   session's `js` call had a working `fetch` where the bug doc's did not --
+   confirms, not contradicts, that these are two different tools. Practical
+   consequence: **this specific escape is very likely a local-dev-machine
+   artifact** (whichever machine ran this test has a personal `node_repl`
+   MCP server configured), not something a real deployed Finance user would
+   hit unless they too had one configured. The already-tracked fix
+   (`--ignore-user-config` or an isolated `CODEX_HOME`) still applies and
+   is unresolved platform-wide, not specific to Finance.
+3. **This one does appear genuinely new**: global scope makes
+   `provider_options` decorative, not authoritative -- by design, not a
+   bug. `resolveAgentProfileForQuery`'s own logic: `if isGlobalScope &&
+   requestHasExplicitModel { provider, modelID = req.Provider, req.ModelID
+   }` -- the user's own chat-level selection always wins for a
+   global-scoped profile, unconditionally. That's exactly right for Chief
+   of Staff (the whole point of its own design) and exactly wrong for
+   Finance, whose safety story depends on the provider actually being
+   restricted. Global scope also takes the dynamic multi-agent delegation
+   prompt instead of this profile's own `prompt.file` -- confirmed live
+   that an earlier global-scoped version of this profile never sent
+   `prompts/system-prompt.md` to the model at all. **Finance is
+   `scope: project`, not global**, even though it spans multiple sources
+   the same shape-of-reason Chief of Staff does -- project scope's usual
+   narrowing (folder guard collapsed to one root) is a non-issue here
+   since this profile's one tool bypasses `FolderGuard` entirely via its
+   own hardcoded path whitelist. Neither of the two transport docs above
+   covers scope/`provider_options` interaction at all -- this is the one
+   piece of this investigation that earns being called a finding rather
+   than a rediscovery.
 
-**The fix, in the product.yaml `runtime:` block**: `transport: structured`,
-`agent_tools.mode: mcp_only` (explicit, matching Video Studio's own
-convention, though confirmed not itself the fix for finding 1 or 2 --
-empty already resolved to mcp_only), and `provider_options` curated to
+**The fix, in the product.yaml `runtime:` block**: `transport: structured`
+(already Video Studio's own shipped choice, applied here for the same
+reason), `agent_tools.mode: mcp_only` (explicit, matching Video Studio's
+own convention -- confirmed not itself the fix for #1 or #2 above, empty
+already resolved to mcp_only), and `provider_options` curated to
 **exactly one** entry, `claude-code` -- not the four-provider list Video
-Studio offers. That restriction is deliberate, not an oversight: Video
-Studio's own reliance on `codex-cli`/`cursor-cli`/`pi-cli` as safe options
-is not proof those providers are safe under a real allowlist -- it's
-possible Video Studio has the same class of gap and has simply never hit
-it, since Video Studio's blast radius (a video project) is lower-stakes
-than Finance's (real account data). Finance verified codex-cli leaks and
-does not currently offer it. **claude-code's own safety here is inferred
-from Video Studio's existing production reliance on it, not independently
-re-verified live in this profile** -- see "Confirmed vs. not yet confirmed"
-below.
+Studio offers. That narrower curation is a genuine, deliberate departure
+from Video Studio's own precedent, not just copying it: `node_repl` being
+a personal-machine artifact lowers the severity of finding #2, but doesn't
+retroactively prove codex-cli or cursor-cli are safe under a real
+allowlist for a product where the stakes are real financial data rather
+than a video project -- that hasn't been tested, so it isn't assumed.
+**claude-code's own safety here is inferred from Video Studio's existing
+production reliance on it, not independently re-verified live in this
+profile** -- see "Confirmed vs. not yet confirmed" below.
 
 ### Confirmed vs. not yet confirmed (2026-08-17)
 
@@ -410,3 +428,11 @@ sequencing exists to prevent, self-inflicted instead of avoided.
   several trusted sources, read-only, no backend at all in v1.
 - `docs/design/reusable_vertical_product_platform.md` — the reuse rule
   invoked (and explained why it doesn't apply to schema design here) above.
+- `docs/design/product_api_transport_for_coding_agents.md` — the existing,
+  much deeper investigation of native/tmux vs. structured transport across
+  all four providers; check this before writing up any future
+  transport/tool-exposure finding as new.
+- `docs/bugs/hybrid_profile_told_it_has_no_shell.md` — section 4 is the
+  `node_repl`/personal-MCP-server leak this profile also hit; the fix
+  (`--ignore-user-config` or an isolated `CODEX_HOME`) is still unresolved
+  platform-wide, not specific to Finance.
