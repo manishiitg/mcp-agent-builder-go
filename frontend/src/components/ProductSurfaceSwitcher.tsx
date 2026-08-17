@@ -4,6 +4,7 @@ import { RunloopMark } from './branding/RunloopLogo'
 import { VideoStudioMark } from '../products/video-studio/VideoStudioMark'
 import { ChiefOfStaffMark } from '../products/chief-of-staff/ChiefOfStaffMark'
 import { FinanceMark } from '../products/finance/FinanceMark'
+import { DominionMark } from '../products/dominion/DominionMark'
 import { useProductSurfaceStore, type ProductSurface } from '../stores/useProductSurfaceStore'
 import { useAppStore } from '../stores/useAppStore'
 import { cn } from '../lib/utils'
@@ -28,6 +29,7 @@ const products: Array<{
   { id: 'video-studio', label: 'Video Studio', description: 'Projects and video production', icon: VideoStudioMark },
   { id: 'chief-of-staff', label: 'Chief of Staff', description: 'Your operations hub across automations', icon: ChiefOfStaffMark },
   { id: 'finance', label: 'Finance', description: 'Consolidated bank, investment, and tax view', icon: FinanceMark },
+  { id: 'dominion', label: 'Dominion', description: 'Paper-trading watchlist and portfolio', icon: DominionMark },
 ]
 
 export function ProductSurfaceSwitcher({ className, version }: ProductSurfaceSwitcherProps) {

@@ -71,10 +71,16 @@ func TestFinanceManifestDeclaresProjectScopeAndNarrowAllowlist(t *testing.T) {
 	if !manifest.Profile.ToolPolicy.IsAllowlist() {
 		t.Fatal("finance must declare tool_policy.mode: allowlist -- an unrestricted chat over financial data is exactly the gap this profile exists to close")
 	}
-	wantEnabled := map[string]bool{"query_finance_source": false}
+	// execute_shell_command is intentionally included -- it's the platform's
+	// only call path to a custom tool (get_api_spec discovery + curl to
+	// $MCP_CUSTOM/<tool>), the same pattern Video Studio's product.yaml
+	// documents. See the product.yaml comment for why this isn't "general
+	// shell access" in practice, and prompts/system-prompt.md for how the
+	// model is told to scope its use.
+	wantEnabled := map[string]bool{"query_finance_source": false, "execute_shell_command": false}
 	for _, name := range manifest.Profile.ToolPolicy.Enabled {
 		if _, expected := wantEnabled[name]; !expected {
-			t.Fatalf("unexpected tool in allowlist: %q -- finance chat should have no shell, no write, no delegation, no schedule, no workflow-execution tools", name)
+			t.Fatalf("unexpected tool in allowlist: %q -- finance chat should have no write, no delegation, no schedule, no workflow-execution tools beyond query_finance_source and its call path", name)
 		}
 		wantEnabled[name] = true
 	}

@@ -3695,7 +3695,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                     </TooltipContent>
                   </Tooltip>
                 )}
-                {mainTerminalAvailable && activeTabId && (
+                {mainTerminalAvailable && activeTabId && !isProductSurface && (
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <Button
