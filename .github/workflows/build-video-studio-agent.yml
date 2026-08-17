@@ -1,0 +1,33 @@
+name: Build Video Studio agent
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-linux-agent:
+    name: Build Linux amd64 agent
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.12'
+          cache-dependency-path: |
+            go.work.sum
+            mcp-agent-builder-go/agent_go/go.sum
+            mcpagent/go.sum
+
+      - name: Build Video Studio agent
+        run: go build -o dist/video-studio-agent ./mcp-agent-builder-go/agent_go
+
+      - name: Upload Linux agent
+        uses: actions/upload-artifact@v4
+        with:
+          name: video-studio-agent-linux-amd64
+          path: dist/video-studio-agent
+          if-no-files-found: error
+          retention-days: 7

@@ -62,3 +62,26 @@ func TestShowVideoUsesTheDeclaredKindNotAHardcodedDefault(t *testing.T) {
 		t.Fatalf("expected the extension-validation message, got %q", result)
 	}
 }
+
+func TestShowVideoAllowsAnMP4PreviewWithoutAQualityReport(t *testing.T) {
+	spec, err := showVideoFactory("http://unused")(agentprofiles.ToolRuntimeContext{
+		UserID: "u1", SessionID: "s1", WorkspacePath: "Chats/Video Studio/projects/demo",
+		Presentation: &agentprofiles.PresentationBinding{Kind: "media.video"},
+	}, nil)
+	if err != nil {
+		t.Fatalf("building show_video: %v", err)
+	}
+
+	required, ok := spec.Parameters["required"].([]string)
+	if !ok {
+		t.Fatalf("show_video required parameters have unexpected type: %#v", spec.Parameters["required"])
+	}
+	for _, parameter := range required {
+		if parameter == "qa_report_path" {
+			t.Fatalf("qa_report_path must be optional so a review preview can be shown: %v", required)
+		}
+	}
+	if !strings.Contains(strings.ToLower(spec.Description), "reviewable mp4") {
+		t.Fatalf("show_video must tell the agent to present reviewable MP4s, got %q", spec.Description)
+	}
+}

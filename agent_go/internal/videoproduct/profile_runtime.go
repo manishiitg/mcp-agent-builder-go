@@ -382,13 +382,13 @@ func showVideoFactory(workspaceAPIURL string) agentprofiles.ToolFactory {
 		projectRoot := profileWorkspaceRoot(runtime.UserID, runtime.WorkspacePath)
 		return agentprofiles.ToolSpec{
 			Name: "show_video", Category: "presentation_tools",
-			Description: "Present the exact finished video in the product Videos panel after its quality-report.json has passed. Repeating the same path updates the existing presentation.",
+			Description: "Present a playable project video in the Production panel. Call this as soon as a reviewable MP4 exists; include a passing quality-report.json only when marking it as an approved final. Repeating the same path updates the existing presentation.",
 			Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{
 				"path":           map[string]interface{}{"type": "string", "description": "Project-relative path to the exact video"},
-				"qa_report_path": map[string]interface{}{"type": "string", "description": "Project-relative path to quality-report.json"},
+				"qa_report_path": map[string]interface{}{"type": "string", "description": "Optional project-relative passing quality-report.json. Omit for a review preview."},
 				"title":          map[string]interface{}{"type": "string"},
 				"note":           map[string]interface{}{"type": "string"},
-			}, "required": []string{"path", "qa_report_path", "title"}},
+			}, "required": []string{"path", "title"}},
 			Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
 				// The profile must declare this tool's presentation kind in
 				// product.yaml (tools[].presentation.kind). Requiring it here,
@@ -411,9 +411,14 @@ func showVideoFactory(workspaceAPIURL string) agentprofiles.ToolFactory {
 				if title == "" {
 					title = filepath.Base(videoPath)
 				}
-				verdict, err := validateWorkspaceQualityReport(ctx, client, projectRoot, videoPath, reportPath, note)
-				if err != nil {
-					return "Quality assurance has not passed for this video: " + err.Error(), nil
+				verdict := "preview"
+				if strings.TrimSpace(reportPath) != "" {
+					verdict, err = validateWorkspaceQualityReport(ctx, client, projectRoot, videoPath, reportPath, note)
+					if err != nil {
+						return "Quality assurance has not passed for this video: " + err.Error(), nil
+					}
+				} else if _, data, err := resolveWorkspaceEvidence(ctx, client, projectRoot, videoPath, videoPath); err != nil || len(data) == 0 {
+					return "show_video requires an existing, non-empty project video: " + videoPath, nil
 				}
 				event, err := presentations.Upsert(ctx, client, presentations.Presentation{
 					Kind:          runtime.Presentation.Kind,

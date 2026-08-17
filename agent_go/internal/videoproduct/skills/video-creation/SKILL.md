@@ -53,8 +53,8 @@ answer before spending:
    fixed by regenerating all of it.
 4. **Generate one shot, then stop.** The first shot of a new character,
    scene, or model choice is a sample, not a commitment. Generate it alone,
-   show it (`show_video` once it has passed `video-quality`, or describe
-   the local file if a full QA pass does not fit a single sample), and wait
+   show it with `show_video` as a Preview (omit `qa_report_path` until the
+   final quality pass), and wait
    for the user's reaction before generating anything else. If the batch
    has several unrelated shots, one representative sample is enough --
    commit the whole direction on one unapproved guess only when the user
