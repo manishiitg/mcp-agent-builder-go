@@ -1,6 +1,6 @@
 import React, { lazy, Suspense, useState, useEffect, useCallback, useRef } from 'react'
 import { useShallow } from 'zustand/react/shallow'
-import { Workflow, Users, Settings, Copy, Keyboard, Bot, Building2, HelpCircle, AlertCircle, Clock, Loader2, Pause } from 'lucide-react'
+import { Workflow, Users, Settings, Copy, Keyboard, Bot, Building2, HelpCircle } from 'lucide-react'
 import { useModeStore } from '../stores/useModeStore'
 import { useGlobalPresetStore, usePresetApplication, usePresetManagement } from '../stores/useGlobalPresetStore'
 import type { CustomPreset, PredefinedPreset } from '../types/preset'
@@ -32,7 +32,7 @@ import {
   isWorkflowWalkthroughDismissed,
 } from '../utils/onboarding'
 import { openWorkflowPresetPage } from '../utils/workflowSessionRestore'
-import { currentActiveSession, currentSessionId, headerStatusLabel, statusTone } from '../utils/globalActivityMonitorStatus'
+import { currentActiveSession, currentSessionId, headerStatusLabel } from '../utils/globalActivityMonitorStatus'
 
 const WorkflowsOverviewPopup = lazy(() => import('./WorkflowsOverviewPage').then(module => ({ default: module.WorkflowsOverviewPopup })))
 
@@ -214,7 +214,6 @@ export const ModePresetBar: React.FC = () => {
     activeSessionsCache,
     currentSessionId(activeTabId, chatTabs, selectedModeCategory, isOrganizationView),
   )
-  const currentSessionTone = currentSession ? statusTone(currentSession) : null
   const currentSessionStatusLabel = currentSession ? headerStatusLabel(currentSession) : null
   const shouldShowScheduleHeader = selectedModeCategory === 'workflow' || isOrganizationView
   const shouldShowBotConnector = selectedModeCategory === 'multi-agent' || selectedModeCategory === 'workflow' || isOrganizationView
@@ -689,15 +688,11 @@ export const ModePresetBar: React.FC = () => {
                         >
                           {activePreset ? (
                             <>
-                              {currentSessionTone === 'needs-input'
-                                ? <AlertCircle className="w-3 h-3 shrink-0 text-amber-500 dark:text-amber-400" />
-                                : currentSessionTone === 'running' || currentSessionTone === 'background'
-                                  ? <Loader2 className="w-3 h-3 shrink-0 animate-spin opacity-70 text-green-600 dark:text-green-400" />
-                                  : currentSessionTone === 'paused'
-                                    ? <Pause className="w-3 h-3 shrink-0 opacity-50" />
-                                    : currentSessionTone === 'idle'
-                                      ? <Clock className="w-3 h-3 shrink-0 opacity-50" />
-                                      : <div className="w-2 h-2 bg-green-500 rounded-full"></div>}
+                              {/* Live run status is Global Monitor's job, not this
+                                  selector's — it was the same information in two
+                                  places. The status text stays in this button's
+                                  tooltip (title) for anyone who wants it here. */}
+                              <div className="w-2 h-2 bg-green-500 rounded-full"></div>
                               <span className="block max-w-[190px] truncate whitespace-nowrap text-sm font-medium text-gray-700 dark:text-gray-300">
                                 {activePreset.label}
                               </span>
