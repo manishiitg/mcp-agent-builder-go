@@ -28,7 +28,7 @@ import { PresetSelectionOverlay } from './PresetSelectionOverlay'
 import { ModeSwitchDialog } from './ui/ModeSwitchDialog'
 import type { ChatTab } from '../stores/useChatStore'
 import type { CustomPreset } from '../types/preset'
-import { conversationToRestoredEvents, restoreSession } from '../utils/sessionRestore'
+import { conversationToRestoredEvents, hydrateTabEvents, restoreSession } from '../utils/sessionRestore'
 import { logger } from '../utils/logger'
 import { secretsApi } from '../api/secrets'
 import { useSecretsStore } from '../stores'
@@ -686,6 +686,25 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
   const tabEvents = useChatStore((state) =>
     activeSessionId ? state.tabEvents[activeSessionId] || EMPTY_EVENTS : EMPTY_EVENTS
   )
+  const productTranscriptHydratedRef = useRef<string | null>(null)
+  useEffect(() => {
+    const workspacePath = activeTab?.metadata?.agentProfileWorkspace
+    if (
+      activeTab?.metadata?.agentProfileId !== 'video-studio' ||
+      !activeSessionId ||
+      !workspacePath ||
+      productTranscriptHydratedRef.current === activeSessionId
+    ) return
+    productTranscriptHydratedRef.current = activeSessionId
+    void hydrateTabEvents(activeSessionId, {
+      workspacePath,
+      fallbackToChatHistory: true,
+      preferChatHistory: true,
+    }).catch((error) => {
+      productTranscriptHydratedRef.current = null
+      console.error('[SessionRestore] Video Studio transcript hydration failed:', error)
+    })
+  }, [activeSessionId, activeTab?.metadata?.agentProfileId, activeTab?.metadata?.agentProfileWorkspace])
   const activeStreamingText = useChatStore((state) =>
     activeSessionId ? state.streamingText[activeSessionId] || '' : ''
   )
