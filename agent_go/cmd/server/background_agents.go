@@ -301,6 +301,43 @@ type BackgroundAgentSnapshot struct {
 	CompletionNotified bool `json:"-"`
 }
 
+// IsProgressMirror reports whether this record is a per-step workflow PROGRESS
+// MIRROR rather than work in its own right (PLAT-117).
+//
+// workflowProgressBridge (planning_exports.go) turns each workflow step's
+// start/end progress events into a background-agent record so the UI can show
+// per-step progress, and workshopExecutionBgNotifier registers it expressly "so
+// that HasRunningAgents() returns true and the frontend keeps polling". That is
+// a DISPLAY concern, and best-effort is fine for it: the same work is already
+// recorded twice more reliably — the run's own durable per-step files on disk
+// (runs/<iteration>/<group>/execution/<step>/session.json, which is what Pulse
+// Gate actually reads), and the parent workflow-full-<id> agent, registered for
+// the whole run.
+//
+// It is NOT fine for deciding whether a turn may finish, which is why this
+// predicate exists. These records come from event pairing: a start mints an id
+// cached under agentType:stepIndex:agentName, and only a matching end closes it,
+// so any dropped or mismatched end leaves one open forever. Counting those as
+// live children made terminal() unreachable — social-media 2026-08-16 left two
+// step-0 mirrors open, so a turn whose real work had finished (a post landed and
+// was verified) was structurally guaranteed to time out, and the operator was
+// emailed that the workflow never ran.
+//
+// Callers that ask the DISPLAY question (HasRunningAgents and its call sites)
+// deliberately keep counting these. Callers that ask whether a turn may finish
+// must not.
+//
+// The classification mirrors isWorkflowStepTrackingExecution, which is what
+// assigns the kind at registration: a declared kind wins, with the legacy
+// execution_type metadata as the fallback for records that predate declared
+// kinds.
+func (s BackgroundAgentSnapshot) IsProgressMirror() bool {
+	if strings.TrimSpace(s.Kind) == "workflow_step" {
+		return true
+	}
+	return s.Metadata != nil && strings.TrimSpace(s.Metadata["execution_type"]) == "workflow-step"
+}
+
 // GetSnapshot returns a snapshot of the agent state (thread-safe)
 func (a *BackgroundAgent) GetSnapshot() BackgroundAgentSnapshot {
 	a.mu.RLock()
@@ -478,6 +515,18 @@ func (r *BackgroundAgentRegistry) ReconcileOrphanedProgressChildren(sessionID, p
 			continue
 		}
 		agent.SetError(reason)
+		// Settle COMPLETELY (PLAT-117). SetError alone leaves notified=false,
+		// and an unnotified terminal child is deliberately reported as running
+		// by conversationTurnTreeSnapshot — so settling the status without the
+		// flag left the record live anyway, which is how two orphaned mirrors
+		// made a turn permanently unable to reach terminal() on social-media
+		// 2026-08-16.
+		//
+		// There is genuinely nothing to deliver here: this runs precisely
+		// because the parent already finished, so no synthetic continuation is
+		// owed to anyone. Marking it delivered is a statement about the
+		// notification, not about the work.
+		agent.finishCompletionNotification(true)
 		settled = append(settled, agent.ID)
 	}
 	return settled
@@ -588,6 +637,15 @@ const hasRunningAgentsGracePeriod = 8 * time.Second
 
 // HasRunningAgents returns true if the session has any running agents, or if any agent
 // completed within the 8-second grace period.
+// HasRunningAgents answers the DISPLAY question: is there background activity
+// worth keeping the UI polling for? It deliberately counts per-step progress
+// mirrors (BackgroundAgentSnapshot.IsProgressMirror), which is what they were
+// registered for in the first place.
+//
+// It is NOT the question "may this turn finish?" — that one must exclude
+// progress mirrors, because a single dropped progress event would otherwise
+// block completion forever (PLAT-117). conversationTurnTreeSnapshot owns that
+// question and filters accordingly; do not substitute this call for it.
 func (r *BackgroundAgentRegistry) HasRunningAgents(sessionID string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

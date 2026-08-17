@@ -172,6 +172,10 @@ func (api *StreamingAPI) conversationTurnTreeSnapshot(rootExecutionID string) co
 	parents := map[string][]string{}
 	statusByID := map[string]string{root.ExecutionID: root.Status}
 	progressByID := map[string]time.Time{root.ExecutionID: state.LastProgressAt}
+	// Per-step workflow progress records are a UI mirror, not work, and must
+	// never decide whether this turn may finish (PLAT-117). See
+	// BackgroundAgentSnapshot.IsProgressMirror.
+	progressOnly := map[string]bool{}
 	for _, execution := range tracked {
 		if execution == nil || execution.ExecutionID == root.ExecutionID {
 			continue
@@ -200,6 +204,9 @@ func (api *StreamingAPI) conversationTurnTreeSnapshot(rootExecutionID string) co
 				continue
 			}
 			parents[parentID] = append(parents[parentID], snapshot.ID)
+			if snapshot.IsProgressMirror() {
+				progressOnly[snapshot.ID] = true
+			}
 			status := string(snapshot.Status)
 			// A completed child is not finished from the parent's perspective until
 			// its completion has either launched a synthetic continuation or been
@@ -230,7 +237,7 @@ func (api *StreamingAPI) conversationTurnTreeSnapshot(rootExecutionID string) co
 			}
 			seen[childID] = true
 			queue = append(queue, childID)
-			if statusByID[childID] == trackedExecutionStatusRunning {
+			if statusByID[childID] == trackedExecutionStatusRunning && !progressOnly[childID] {
 				state.RunningChildren++
 			}
 			if progressByID[childID].After(state.LastProgressAt) {

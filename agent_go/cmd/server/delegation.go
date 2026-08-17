@@ -969,6 +969,19 @@ func (n *workshopExecutionBgNotifier) OnExecutionComplete(execID, name, result s
 	); len(orphans) > 0 {
 		log.Printf("[BG AGENT] Settled %d orphaned progress child(ren) of finished execution %s in session %s: %v",
 			len(orphans), execID, n.sessionID, orphans)
+		// The registry cannot reach the durable log, so emit each settlement
+		// here (PLAT-117). Without this, a settled orphan stays stored
+		// status='running', completed_at=NULL in PLAT-114's background_agent_log
+		// forever — social-media 2026-08-16 left two such rows, which read as
+		// live work to anyone auditing that table later.
+		reason := fmt.Sprintf("parent execution %s finished without an end event for this step", execID)
+		for _, orphanID := range orphans {
+			name := orphanID
+			if orphan := n.api.bgAgentRegistry.Get(n.sessionID, orphanID); orphan != nil {
+				name = orphan.GetSnapshot().Name
+			}
+			n.api.emitBackgroundAgentCompleted(n.sessionID, orphanID, name, "failed", "", reason, "")
+		}
 	}
 
 	// Signal completion to the notification loop unless the parent is already

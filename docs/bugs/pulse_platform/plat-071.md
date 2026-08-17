@@ -5,13 +5,45 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `reopened` — a second false-terminal-state path was observed on 2026-08-11; underlying phase-staleness remains open |
-| Last synchronized | `2026-08-11` |
+| Ticket state | `reopened` — the 2026-08-10 fix was **silently deleted by a refactor on 2026-08-13** and the bug recurred on 2026-08-16; restored 2026-08-17, see "Regression" below |
+| Last synchronized | `2026-08-17` |
 
 - **Priority:** P1 — Pulse's durable history understates successful runs, and terminal command states are immutable
 - **Owner:** scheduler workshop turn loop (`scheduler.go`)
 - **Found on:** social-media, 2026-08-10, session `schedule-cron--5227790a_1786354253197815000`
 - **Reported by:** the workflow's own Pulse finalizer, which escalated rather than acting — correctly, since this is scheduler behaviour outside its authority
+
+## Regression: the fix was deleted three days after it shipped
+
+The 2026-08-10 fix lived in the `waitForWorkshopIdle` failure branch, and
+PLAT-084 extended it there on 2026-08-11. On 2026-08-13, `d18e071e1` ("Unify
+scheduled turn lifecycle and runtime tab routing") replaced that waiter with
+`waitForConversationTurnTree` and removed the whole branch — taking both fixes
+with it. `workshopRunStartedDuringInvocation` was left in the file with **zero
+callers**, and `ProducedRunEvidence` went back to being computed only on the
+success path, exactly as before this ticket existed.
+
+social-media then lost a second run to the identical bug on 2026-08-16: a post
+landed and was independently verified, the turn failed on an idle-wait timeout
+(see [PLAT-117](plat-117.md) for why it timed out at all), and the operator was
+emailed "Workflow did not start. No results were produced."
+
+**Nothing caught the deletion, and that is the more important finding.** Both
+tests this ticket shipped still pass today, because they call
+`workshopRunStartedDuringInvocation` directly with hand-built folder lists and
+never drive `executeWorkshopJob`. Delete the only caller and they stay green.
+Go does not help either: an unused *function* compiles cleanly, unlike an unused
+variable or import. This is precisely the invariant PLAT-105 already wrote down
+— *a test must reach the state under test through the product path, never by
+constructing it* — written down before this happened, and it happened anyway.
+
+**Restored 2026-08-17** as `preserveRunEvidenceAfterFailedTurn`, called from the
+generic turn-failure return in `executeWorkshopJob`. That placement is
+deliberately wider than the original: "did a run actually start?" is answered by
+the run's own metadata regardless of *how* the session died, and widening is
+safe because `workshopRunStartedDuringInvocation` requires a real timestamp at
+or after the invocation began and treats an unreadable record as nothing, so no
+failure mode can manufacture evidence.
 
 ## What happened
 

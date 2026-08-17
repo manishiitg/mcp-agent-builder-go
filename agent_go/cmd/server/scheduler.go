@@ -3229,6 +3229,7 @@ func (s *SchedulerService) executeWorkshopJob(ctx context.Context, sctx *Schedul
 				s.sessionLogf(sctx, sessionID, "[SCHEDULER] Pre-run decision drain could not start (continuing to the run): %v", err)
 				continue
 			}
+			s.preserveRunEvidenceAfterFailedTurn(ctx, sctx, sessionID, invocationStartedAt)
 			return sessionID, runFolder, fmt.Errorf("workshop turn %d/%d (%s) failed: %w", i+1, len(turns), turn.label, err)
 		}
 
@@ -3334,11 +3335,44 @@ func runFolderNameSet(folders []RunFolderInfo) map[string]bool {
 	return names
 }
 
-// workshopRunProducedEvidence reports whether this invocation actually ran the
-// workflow. A new run folder is evidence. A pre-existing folder also counts
-// when its independently written metadata says it started during this
-// invocation, which covers workflows configured to reuse iteration-0. Status is
-// intentionally irrelevant: failed runs are valuable Pulse evidence too.
+// preserveRunEvidenceAfterFailedTurn consults the durable record before a failed
+// turn returns, so Pulse is never told "the workflow did not run" merely because
+// the session stopped progressing.
+//
+// This is PLAT-071 restored. It shipped 2026-08-10 in the dedicated
+// waitForWorkshopIdle failure branch, was extended by PLAT-084 the next day, and
+// was dropped whole on 2026-08-13 when that branch was replaced by
+// waitForConversationTurnTree — leaving workshopRunStartedDuringInvocation as
+// dead code and both its unit tests still green, because they call that helper
+// directly instead of driving this path. social-media then lost a second run to
+// the identical bug on 2026-08-16: a post landed and was verified, the idle wait
+// expired anyway, and the operator was emailed that nothing had run.
+//
+// It sits on the generic turn-failure return rather than an idle-wait-specific
+// branch, which widens it deliberately: "did a run actually start?" is answered
+// by the run's own metadata regardless of how the session died. Widening is safe
+// because workshopRunStartedDuringInvocation demands a real timestamp at or after
+// the invocation began and counts an unreadable record as nothing, so no failure
+// mode here can manufacture evidence that does not exist.
+func (s *SchedulerService) preserveRunEvidenceAfterFailedTurn(ctx context.Context, sctx *ScheduleContext, sessionID string, since time.Time) {
+	if s == nil || s.api == nil || sctx == nil || sctx.ProducedRunEvidence {
+		return
+	}
+	// Deliberately the baseline-free check: the pre-run snapshot can itself be
+	// lost (PLAT-070), and an empty baseline would make every folder look new
+	// and answer "evidence" unconditionally — the opposite error.
+	if folders, listErr := s.api.loadRunFoldersInternal(ctx, sctx.WorkspacePath); listErr == nil &&
+		workshopRunStartedDuringInvocation(folders, since) {
+		sctx.ProducedRunEvidence = true
+		s.sessionLogf(sctx, sessionID, "[SCHEDULER] turn failed for %s, but a full workflow run started during this invocation and its own metadata is the authority; preserving run evidence for Pulse", sctx.Schedule.ID)
+		return
+	}
+	if s.scheduledWorkflowStepProducedEvidence(sessionID, since) {
+		sctx.ProducedRunEvidence = true
+		s.sessionLogf(sctx, sessionID, "[SCHEDULER] turn failed for %s, but scheduled workflow steps started during this invocation; preserving run evidence for Pulse", sctx.Schedule.ID)
+	}
+}
+
 // workshopRunStartedDuringInvocation reports whether any run's own metadata says
 // it started during this invocation, using only the durable record.
 //
