@@ -14,10 +14,11 @@
       rel="stylesheet"
       href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&display=swap"
     />
+    <!-- Must precede the app bundle: Vite hoists module scripts into <head>. -->
+    <script src="/runtime-config.js"></script>
   </head>
   <body>
     <div id="root"></div>
-    <script src="/runtime-config.js"></script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
