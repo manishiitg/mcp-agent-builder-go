@@ -197,6 +197,20 @@ async function doRestoreSession(
       console.log(`${TAG} [${src}] Hydrated ${eventCount} events`)
     }
   } catch (err) {
+    const workspacePath = options?.workspacePath || existingTab?.metadata?.agentProfileWorkspace
+    // The volatile event endpoint can reject a persisted cursor after a server
+    // restart (or when its bounded window no longer contains that cursor).
+    // A product reopen explicitly asks for its durable transcript, which is
+    // independent of that live window, so recover it before preserving the
+    // incomplete buffer.
+    if (options?.preferChatHistory && workspacePath) {
+      const restored = await tryHydrateTabEventsFromChatHistory(sessionId, workspacePath)
+      if (restored) {
+        applySessionStatus(tabId, restored)
+        console.log(`${TAG} [${src}] Recovered persisted transcript after runtime sync failure`)
+        return tabId
+      }
+    }
     if (isNotFoundError(err) && existingEventCount > 0) {
       console.log(`${TAG} [${src}] Session ${sessionId} no longer in memory; keeping locally restored events`)
       applySessionStatus(tabId, {

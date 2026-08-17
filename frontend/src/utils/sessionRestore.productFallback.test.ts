@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const getRecentSessionEvents = vi.fn()
+const getSessionEvents = vi.fn()
 const getChatHistoryResumeConversation = vi.fn()
 
 vi.mock('../services/api', async (importOriginal) => {
@@ -10,6 +11,7 @@ vi.mock('../services/api', async (importOriginal) => {
     agentApi: {
       ...actual.agentApi,
       getRecentSessionEvents,
+      getSessionEvents,
       getChatHistoryResumeConversation,
     },
   }
@@ -32,6 +34,7 @@ describe('session restore chat-history fallback', () => {
     vi.resetModules()
     vi.stubGlobal('localStorage', createMemoryStorage())
     getRecentSessionEvents.mockReset()
+    getSessionEvents.mockReset()
     getChatHistoryResumeConversation.mockReset()
   })
 
@@ -145,6 +148,49 @@ describe('session restore chat-history fallback', () => {
       workspacePath,
     )
     expect(useChatStore.getState().getTabEvents('video-studio:project:race').map((event) => event.type)).toEqual([
+      'conversation_resumed',
+      'user_message',
+      'llm_generation_end',
+    ])
+  })
+
+  it('recovers a product transcript when the live cursor is rejected', async () => {
+    const { useChatStore, waitForChatStoreHydration } = await import('../stores/useChatStore')
+    const { restoreSession } = await import('./sessionRestore')
+    await waitForChatStoreHydration()
+    const workspacePath = 'Chats/Video Studio/projects/cursor-recovery'
+    const sessionId = 'video-studio:project:cursor-recovery'
+    const tabId = await useChatStore.getState().createChatTab('Cursor recovery', {
+      mode: 'multi-agent',
+      agentProfileId: 'video-studio',
+      agentProfileVersion: 1,
+      agentProfileWorkspace: workspacePath,
+    }, sessionId)
+    useChatStore.getState().setTabEvents(sessionId, [{
+      id: 'stale-live-user',
+      type: 'user_message',
+      session_id: sessionId,
+      event_index: 42,
+      timestamp: '2026-08-17T00:00:00Z',
+      data: { content: 'Please show the preview.' },
+    }])
+    getSessionEvents.mockRejectedValue(new Error('stale event cursor'))
+    getChatHistoryResumeConversation.mockResolvedValue({
+      session_id: sessionId,
+      conversation_history: [
+        { Role: 'user', Parts: [{ Text: 'Please show the preview.' }] },
+        { Role: 'assistant', Parts: [{ Text: 'The preview is available below.' }] },
+      ],
+    })
+
+    await expect(restoreSession(sessionId, {
+      source: 'video-project-open',
+      workspacePath,
+      preferChatHistory: true,
+    })).resolves.toBe(tabId)
+
+    expect(getSessionEvents).toHaveBeenCalledWith(sessionId, -1)
+    expect(useChatStore.getState().getTabEvents(sessionId).map((event) => event.type)).toEqual([
       'conversation_resumed',
       'user_message',
       'llm_generation_end',
