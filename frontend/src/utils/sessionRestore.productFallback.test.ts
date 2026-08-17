@@ -196,4 +196,53 @@ describe('session restore chat-history fallback', () => {
       'llm_generation_end',
     ])
   })
+
+  it('restores prior assistant replies while the latest product turn is still running', async () => {
+    const { useChatStore, waitForChatStoreHydration } = await import('../stores/useChatStore')
+    const { restoreSession } = await import('./sessionRestore')
+    await waitForChatStoreHydration()
+    const workspacePath = 'Chats/Video Studio/projects/running-history'
+    const sessionId = 'video-studio:project:running-history'
+    const tabId = await useChatStore.getState().createChatTab('Running history', {
+      mode: 'multi-agent',
+      agentProfileId: 'video-studio',
+      agentProfileVersion: 1,
+      agentProfileWorkspace: workspacePath,
+    }, sessionId)
+    useChatStore.getState().setTabEvents(sessionId, [{
+      id: 'live-user-only',
+      type: 'user_message',
+      session_id: sessionId,
+      event_index: 0,
+      timestamp: '2026-08-17T00:00:00Z',
+      data: { content: 'Continue the production.' },
+    }])
+    getSessionEvents.mockResolvedValue({
+      events: [],
+      session_status: 'running',
+      has_running_background_agents: false,
+      is_synthetic_turn: false,
+      can_steer: true,
+    })
+    getChatHistoryResumeConversation.mockResolvedValue({
+      session_id: sessionId,
+      conversation_history: [
+        { Role: 'user', Parts: [{ Text: 'Continue the production.' }] },
+        { Role: 'assistant', Parts: [{ Text: 'I am preparing the next scene.' }] },
+      ],
+    })
+
+    await expect(restoreSession(sessionId, {
+      source: 'video-project-open',
+      workspacePath,
+      preferChatHistory: true,
+    })).resolves.toBe(tabId)
+
+    expect(useChatStore.getState().getTabEvents(sessionId).map((event) => event.type)).toEqual([
+      'conversation_resumed',
+      'user_message',
+      'llm_generation_end',
+    ])
+    expect(useChatStore.getState().chatTabs[tabId]?.isStreaming).toBe(true)
+  })
 })

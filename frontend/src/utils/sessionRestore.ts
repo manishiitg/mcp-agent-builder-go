@@ -163,17 +163,17 @@ async function doRestoreSession(
       }
       if (
         (options?.workspacePath || existingTab?.metadata?.agentProfileWorkspace) &&
-        !isForegroundStreaming({
+        (options?.preferChatHistory || !isForegroundStreaming({
           status: runtime.session_status,
           hasRunningBackgroundAgents: runtime.has_running_background_agents,
           isSyntheticTurn: runtime.is_synthetic_turn,
           canSteer: runtime.can_steer,
-        })
+        }))
       ) {
-        // A completed coding-agent turn's live event window often contains an
-        // empty provider tool-start. Replace it with the durable structured
-        // transcript, which is enriched with bridge-authoritative arguments.
-        // This also fixes partial browser caches after a backend restart.
+        // Product chat needs its complete durable transcript even while the
+        // latest turn is running: retain the runtime streaming status above,
+        // but replace its user-only historical window with real assistant
+        // replies. Generic chats keep the older completed-only behavior.
         await hydrateTabEventsFromChatHistory(
           sessionId,
           options?.workspacePath || existingTab?.metadata?.agentProfileWorkspace,
