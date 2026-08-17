@@ -53,47 +53,70 @@ type ToolCallRecord struct {
 
 // BackgroundAgent represents a background agent running asynchronously
 type BackgroundAgent struct {
-	ID                   string                `json:"id"`
-	ParentExecutionID    string                `json:"parent_execution_id,omitempty"`
-	Name                 string                `json:"name"`
-	SessionID            string                `json:"session_id"`
-	Instruction          string                `json:"instruction"`
-	Kind                 string                `json:"kind,omitempty"`
-	Status               BackgroundAgentStatus `json:"status"`
-	Result               string                `json:"result,omitempty"`
-	Error                string                `json:"error,omitempty"`
-	CreatedAt            time.Time             `json:"created_at"`
-	CompletedAt          *time.Time            `json:"completed_at,omitempty"`
-	ReasoningLevel       string                `json:"reasoning_level,omitempty"`
-	ModelID              string                `json:"model_id,omitempty"`
-	Metadata             map[string]string     `json:"metadata,omitempty"` // arbitrary key-value pairs (e.g. workshop_mode, lock_code)
-	cancel               context.CancelFunc
-	mu                   sync.RWMutex
-	startNotified        bool
-	notified             bool
-	notificationInFlight bool
-	terminalNotified     bool             // a terminal event (background_agent_terminated) has been emitted; prevents duplicates across OnExecutionTerminated / OnExecutionComplete
-	getHistory           HistoryFunc      // returns last N conversation entries from the running sub-agent
-	toolCalls            []ToolCallRecord // tracked tool calls with timing
-	activeToolCall       map[string]int   // toolCallID → index in toolCalls (for matching start/end)
+	ID                string                `json:"id"`
+	ParentExecutionID string                `json:"parent_execution_id,omitempty"`
+	Name              string                `json:"name"`
+	SessionID         string                `json:"session_id"`
+	Instruction       string                `json:"instruction"`
+	Kind              string                `json:"kind,omitempty"`
+	Status            BackgroundAgentStatus `json:"status"`
+	Result            string                `json:"result,omitempty"`
+	Error             string                `json:"error,omitempty"`
+	CreatedAt         time.Time             `json:"created_at"`
+	CompletedAt       *time.Time            `json:"completed_at,omitempty"`
+	ReasoningLevel    string                `json:"reasoning_level,omitempty"`
+	ModelID           string                `json:"model_id,omitempty"`
+	Metadata          map[string]string     `json:"metadata,omitempty"` // arbitrary key-value pairs (e.g. workshop_mode, lock_code)
+	cancel            context.CancelFunc
+	mu                sync.RWMutex
+	startNotified     bool
+	// completionNotification replaces the former notified/notificationInFlight
+	// boolean pair (PLAT-117). Those two encoded one lifecycle — none → in
+	// flight → delivered — as two independent flags, which made illegal
+	// combinations (both set, or in-flight after delivery) representable and
+	// meant every reader had to remember to consult both. Deliberately NOT
+	// merged with startNotified or terminalNotified: those are separate axes,
+	// not stages of this one.
+	completionNotification completionNotificationState
+	terminalNotified       bool             // a terminal event (background_agent_terminated) has been emitted; prevents duplicates across OnExecutionTerminated / OnExecutionComplete
+	getHistory             HistoryFunc      // returns last N conversation entries from the running sub-agent
+	toolCalls              []ToolCallRecord // tracked tool calls with timing
+	activeToolCall         map[string]int   // toolCallID → index in toolCalls (for matching start/end)
 }
+
+// completionNotificationState is the lifecycle of a background agent's
+// completion notification: it has not been attempted, an attempt is in flight,
+// or it was delivered. Delivered is terminal — a delivered notification is
+// never re-attempted.
+type completionNotificationState uint8
+
+const (
+	completionNotificationNone completionNotificationState = iota
+	completionNotificationInFlight
+	completionNotificationDelivered
+)
 
 func (a *BackgroundAgent) beginCompletionNotification() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.notified || a.notificationInFlight {
+	if a.completionNotification != completionNotificationNone {
 		return false
 	}
-	a.notificationInFlight = true
+	a.completionNotification = completionNotificationInFlight
 	return true
 }
 
 func (a *BackgroundAgent) finishCompletionNotification(delivered bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.notificationInFlight = false
 	if delivered {
-		a.notified = true
+		a.completionNotification = completionNotificationDelivered
+		return
+	}
+	// A failed attempt returns to "not attempted" so the retry/sweep paths can
+	// pick it up again; it must not linger as in-flight.
+	if a.completionNotification == completionNotificationInFlight {
+		a.completionNotification = completionNotificationNone
 	}
 }
 
@@ -356,7 +379,7 @@ func (a *BackgroundAgent) GetSnapshot() BackgroundAgentSnapshot {
 		ReasoningLevel:     a.ReasoningLevel,
 		ModelID:            a.ModelID,
 		Metadata:           a.Metadata,
-		CompletionNotified: a.notified,
+		CompletionNotified: a.completionNotification == completionNotificationDelivered,
 	}
 	if a.CompletedAt != nil {
 		t := *a.CompletedAt
@@ -1314,7 +1337,7 @@ func (api *StreamingAPI) filterUnsentStartNotifications(sessionID string, agentI
 		snap := agent.GetSnapshot()
 		agent.mu.RLock()
 		alreadySent := agent.startNotified
-		completionNotified := agent.notified
+		completionNotified := agent.completionNotification == completionNotificationDelivered
 		agent.mu.RUnlock()
 		if !alreadySent && !completionNotified && !isTerminalBackgroundAgentStatus(snap.Status) {
 			filtered = append(filtered, agentID)
@@ -1507,7 +1530,7 @@ func (api *StreamingAPI) requeueUnnotifiedCompletions(sessionID string) {
 			continue
 		}
 		agent.mu.RLock()
-		notifiedOrInFlight := agent.notified || agent.notificationInFlight
+		notifiedOrInFlight := agent.completionNotification != completionNotificationNone
 		agent.mu.RUnlock()
 		if notifiedOrInFlight {
 			continue

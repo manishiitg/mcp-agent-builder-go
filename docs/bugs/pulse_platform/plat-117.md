@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `open` — root-caused with live evidence; structural fix designed below |
+| Ticket state | `implemented` — liveness fix shipped and fail-before/pass-after verified; one further decoupling designed but deliberately not built (see last section) |
 | Last synchronized | `2026-08-17` |
 
 - **Priority:** P0 — this is the mechanism behind the social-media false-failure
@@ -161,3 +161,92 @@ helper directly instead of driving `executeWorkshopJob`.
 - Every one of the above is proven by a test that reaches the state through the
   product path, not by constructing it — the specific gap that let PLAT-071 be
   deleted with its tests still green.
+
+## Simplification pass (2026-08-17): what was done, and what was rejected
+
+After the fix landed, the surrounding machinery was reviewed for whether it is
+essential or accidental. `background_agents.go` is 2,642 lines with 36
+notification-related functions, so the question was worth asking properly rather
+than assuming.
+
+**Done — the four notification booleans are now three concerns, not four flags.**
+`notified` and `notificationInFlight` encoded a single lifecycle
+(none → in flight → delivered) as two independent booleans, making illegal
+combinations representable and forcing every reader to consult both. They are
+now one `completionNotificationState`. `startNotified` and `terminalNotified`
+were deliberately left alone: they are separate axes, not stages of the same
+machine, and merging them would have been a worse model, not a simpler one.
+
+**Done — deleted `BackgroundAgentsStatusBar`.** It rendered a pill per background
+agent with a live elapsed timer, built purely by folding
+`background_agent_started`/`completed` events. It was exported from the events
+barrel and imported by nothing. Genuinely dead.
+
+**Rejected — deleting the progress mirrors outright.** Investigated seriously,
+because no UI justification survives: the status bar above was dead, PLAT-112
+turned off the diagnostic rail, and Global Monitor works entirely off
+session-level status and aggregate booleans (`statusTone` →
+`headerStatusLabel`), never per-step records. But two things make deletion the
+wrong move:
+
+1. **They are registered in two stores, not one.** `OnExecutionStart` calls both
+   `bgAgentRegistry.Register` and `trackWorkshopExecutionStart`, and
+   `conversationTurnTreeSnapshot` walks both. Removing the registry half leaves
+   them in `trackedWorkflowExecutions`, still counted as running children, still
+   orphanable — the same bug through the other door.
+2. **PLAT-084 depends on them.** `scheduledWorkflowStepProducedEvidence` reads
+   exactly these records to tell Pulse that an `execute_step`-driven schedule did
+   real work. Deleting them silently removes that evidence signal — the same
+   class of failure this ticket is about.
+
+So they are not legacy code; they are dual-purpose infrastructure of which
+exactly one use (vetoing turn completion) was wrong. Classification plus
+exclusion from liveness is the correct shape, not removal. Recorded here so this
+is not re-opened later as easy cleanup.
+
+**Rejected — merging the two pending queues.** `pendingCompletions` and
+`pendingStartNotifications` have near-identical queue/drain/dedup helpers, which
+looks like an obvious dedup. It is not: `pendingMu` guards both the queue map
+*and* its `completionRetryScheduled` guard map, and the two are read together
+atomically in three files (e.g. `server.go:8090`). Extracting a queue type with
+its own mutex would split that lock, trading ~30 lines of trivial map code for a
+concurrency change in the delivery path that just caused a P0. Not worth it.
+
+## Designed, not built: decouple liveness from notification delivery
+
+The remaining coupling is that `conversationTurnTreeSnapshot` reads notification
+state at all:
+
+```go
+if (Completed || Failed) && !suppressNotification && !CompletionNotified {
+    status = trackedExecutionStatusRunning
+}
+```
+
+This exists to close a real race: a finished child is about to produce a
+continuation (a synthetic turn, or a steered message into a live turn), and
+declaring the tree terminal in that gap would let the scheduler advance to Pulse
+while the agent is still working. Holding the child "running" until its
+notification is confirmed closes the window.
+
+The cost is that turn completion now depends on notification bookkeeping, so any
+path that marks a child terminal without marking it notified hangs the turn
+permanently — which is exactly how this ticket's bug worked.
+
+**The fix is to close the race by ordering rather than by a flag**: when a child
+completes and a continuation is owed, register that continuation in the tree as a
+real tracked execution *at completion time*, and resolve it when the continuation
+actually starts or is suppressed. The steered path already does this
+(`trackSyntheticConversationTurnStart` is called before the child's notification
+hold is released, precisely so "the exact conversation tree can never appear
+terminal in the hand-off gap") — it simply is not the general rule. With a
+placeholder always present, liveness reduces to the two conditions it should
+have: the model gave its final message, and no real work is still running.
+
+**Why it was not built here.** The queue-fallback path is the hard part: when a
+steer fails, the completion returns to the pending queue with a retry owed and no
+continuation registered. Dropping the flag before that path registers a
+placeholder would reopen the race in the *early*-completion direction — ending
+turns before their work is done, which is worse than ending them late. This is
+turn-lifecycle code on every scheduled run and deserves its own change with its
+own tests, not a same-session addition to the fix that was already verified.
