@@ -56,68 +56,77 @@ profile:
     enabled:
       - query_finance_source
   runtime:
-    # Load-bearing, and NOT a case of matching an existing Video Studio
-    # precedent -- checked directly (2026-08-16): Video Studio's own
-    # shipped product.yaml sets transport: auto, not structured. A doc
-    # (product_api_transport_for_coding_agents.md) claimed otherwise; that
-    # claim was wrong (or stale) and was repeated here uncritically before
-    # being caught and corrected. codingAgentUsesStructuredTransport (what
-    # "auto"/unset resolves to) returns true ONLY for cursor-cli -- every
-    # other provider, including codex-cli AND claude-code, defaults under
-    # Video Studio's own config to native/interactive (tmux) mode, where
-    # the coding CLI runs with its own full built-in tool loop entirely
-    # outside mcpagent's tool registry, so tool_policy does not apply.
-    # Whether that already matters for Video Studio in practice (its own
-    # tool_policy allowlist already includes broad file/shell-adjacent
-    # tools like diff_patch_workspace_file, so the blast-radius delta of
-    # native tools additionally being available is smaller there) was not
-    # tested here and is a real open question about Video Studio's own
-    # current configuration, not just Finance's. Confirmed live for this
-    # profile specifically (2026-08-16): before this setting, a finance
-    # chat on codex-cli made 12 tool calls outside the registered
-    # [query_finance_source read_skill web_fetch web_search] set.
+    # NOT the security boundary -- corrected 2026-08-17 after a second
+    # false lead. `agent_tools.mode: mcp_only` below is what actually
+    # contains a coding CLI, transport-independently; this setting is a
+    # separate axis kept for turn-structure/debuggability reasons only.
+    # Two corrections layered on each other here, in order:
+    #   1. (2026-08-16) Believed transport: structured was required
+    #      because a codex-cli finance chat, before this was set, made 12
+    #      tool calls outside the registered [query_finance_source
+    #      read_skill web_fetch web_search] set. Also wrongly claimed
+    #      Video Studio already pinned transport: structured -- checked
+    #      directly, it actually ships transport: auto.
+    #   2. (2026-08-17) Re-tested live with the ACTUAL fix
+    #      (agent_tools.mode: mcp_only, see below) under transport: auto
+    #      (native/tmux) against a fresh codex-cli session: 12 `exec` tool
+    #      calls still occurred, but every one resolved through
+    #      get_api_spec / the code-execution-mode HTTP bridge -- the same
+    #      registered-tool surface tool_policy governs -- not a raw host
+    #      shell. A node_repl attempt was flatly rejected: "unknown=
+    #      [node_repl]: not registered by any currently connected server."
+    #      No unauthorized tool call ever executed. That means the
+    #      original 12-tool-call leak almost certainly happened while this
+    #      profile was still scope: global (see the profile.scope comment
+    #      above) -- global scope was independently confirmed to break
+    #      provider_options/prompt binding, so the REGISTERED tool set
+    #      itself was plausibly broader than intended at the time, not
+    #      that transport let codex bypass a correctly-scoped tool_policy.
+    # transport: structured is kept anyway -- turn-based, easier to
+    # reason about and debug than a long-lived tmux session -- but it is
+    # not doing the security work this comment used to credit it with.
     transport: structured
-    # Curated to exactly one provider, deliberately -- NOT "any published
-    # LLM" the way Chief of Staff's identical-looking runtime.provider is.
-    # A second tool was reached for live (2026-08-16), independent of the
-    # transport fix above: `nodeRepl`/`js`, with a working `fetch` and a
-    # real filesystem `cwd`. This is docs/bugs/hybrid_profile_told_it_has_
-    # no_shell.md's section 4, "personal MCP servers leak into product
-    # sessions" -- tools.mcp__node_repl__js, sourced from a developer's
-    # personal ~/.codex/config.toml, NOT codex-cli's own intrinsic
-    # toolset. Very likely a local-dev-machine artifact, not something a
-    # real deployed user would hit -- the already-tracked fix
-    # (--ignore-user-config or an isolated CODEX_HOME) is unresolved
-    # platform-wide, not specific to this profile. Even so: that doesn't
-    # retroactively prove codex-cli (or cursor-cli, untested here) is safe
-    # under a real allowlist for a product whose stakes are real financial
-    # data. claude-code's own safety under this exact combination
-    # (transport: structured + agent_tools: mcp_only) is Finance's OWN
-    # direct evidence, not inferred from Video Studio -- Video Studio's
-    # own claude-code sessions run under a different transport (native/
-    # tmux, per transport: auto above), so its production usage does not
-    # actually validate this specific combination. What was observed:
-    # PRODUCT_TOOL_GATE correctly admitted only query_finance_source and
-    # filtered 55 other tools across two clean live turns, with no
-    # unauthorized tool call. Two turns is not exhaustive or adversarial
-    # testing -- see docs/design/finance_dashboard_product.md.
+    # Curated to exactly one provider. A second tool was reached for live
+    # (2026-08-16), independent of transport: `nodeRepl`/`js`, with a
+    # working `fetch` and a real filesystem `cwd`. This is docs/bugs/
+    # hybrid_profile_told_it_has_no_shell.md's section 4, "personal MCP
+    # servers leak into product sessions" -- tools.mcp__node_repl__js,
+    # sourced from a developer's personal ~/.codex/config.toml, NOT
+    # codex-cli's own intrinsic toolset. Very likely a local-dev-machine
+    # artifact, not something a real deployed user would hit -- the
+    # already-tracked fix (--ignore-user-config or an isolated CODEX_HOME)
+    # is unresolved platform-wide, not specific to this profile, and did
+    # NOT reproduce in the 2026-08-17 re-test (a fresh machine/session
+    # without that personal server configured). Even so: curated to one
+    # verified provider anyway, since that doesn't retroactively prove
+    # codex-cli/cursor-cli safe under a real allowlist for real financial
+    # data -- untested beyond this one re-test.
     provider_options:
       - id: claude-code
         label: Claude Code
         provider: claude-code
         model_id: claude-sonnet-5
         default: true
-    # This DOES match Video Studio's actual current value (verified
-    # directly, 2026-08-16) -- though Video Studio's own tool_policy
-    # comment describes this setting as "Hybrid", which contradicts its
-    # own runtime.agent_tools.mode: mcp_only a few lines below it. That
-    # internal contradiction in Video Studio's own file was not resolved
-    # here; do not build further reasoning on which of the two is
-    # authoritative without checking again. Confirmed live for Finance
-    # (codex-cli, before the transport fix): mode resolved to mcp_only
-    # (logged hybrid=false) and it still did not stop the native `exec`/
-    # `js` leaks -- mcp_only's enforcement mechanism does not appear to
-    # apply under native/tmux transport, only under structured.
+    # THIS is the real, transport-independent security boundary, verified
+    # live 2026-08-17: mcpagent's mcp_only path calls
+    # WithCodexDisableShellTool() for codex-cli (mcpagent/agent/
+    # coding_agent_integrations.go:146-148), which disables codex's native
+    # shell_tool via codex's own CLI `--disable` flags -- confirmed in the
+    # actual tmux launch command (`--disable shell_tool --disable
+    # unified_exec ... --disable computer_use`). This runs unconditionally
+    # in appendCodexCLIIntegrationOptions regardless of transport. What's
+    # left (codex's code-execution-mode `exec` harness) is itself
+    # constrained to calling only the registered/tool_policy-gated tool
+    # set via the HTTP bridge -- confirmed by the node_repl rejection
+    # above. This DOES match Video Studio's actual current value (verified
+    # directly) -- though Video Studio's own tool_policy comment describes
+    # this setting as "Hybrid", contradicting its own runtime.agent_tools.
+    # mode: mcp_only a few lines below it, an internal doc-drift in Video
+    # Studio's own file, not resolved here. Given this correction, Video
+    # Studio's transport: auto + agent_tools.mode: mcp_only combination is
+    # NOT the live gap an earlier version of this comment flagged it as --
+    # mcp_only appears to correctly contain codex-cli regardless of
+    # transport, matching what was found here.
     agent_tools:
       mode: mcp_only
     provider: claude-code

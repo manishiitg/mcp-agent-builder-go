@@ -27,13 +27,19 @@ func TestFinanceManifestDeclaresProjectScopeAndNarrowAllowlist(t *testing.T) {
 	if manifest.Profile.Runtime.Provider != "claude-code" || manifest.Profile.Runtime.ModelID != "claude-sonnet-5" {
 		t.Fatalf("expected provider=claude-code model_id=claude-sonnet-5, got provider=%q model_id=%q", manifest.Profile.Runtime.Provider, manifest.Profile.Runtime.ModelID)
 	}
-	// Load-bearing: confirmed live (2026-08-16) that leaving transport unset
-	// lets a non-cursor-cli provider (codex-cli was observed) run in
-	// native/interactive mode, where tool_policy's allowlist does not apply
-	// at all -- the CLI's own exec tool ran 12 times, none of them
-	// query_finance_source. See the product.yaml comment.
+	// Kept for debuggability (turn-based, easier to reason about than a
+	// long-lived tmux session), NOT for security -- corrected 2026-08-17.
+	// A codex-cli finance chat once made 12 tool calls outside the
+	// registered set before this was set, but a live re-test under the
+	// ACTUAL security boundary (agent_tools.mode: mcp_only, below) with
+	// transport: auto (native/tmux) restored found those 12 calls all
+	// resolve through the same tool_policy-gated registry via codex's
+	// code-execution-mode bridge -- the original leak almost certainly
+	// traced to this profile still being scope: global at the time (see
+	// the product.yaml comment), not to transport. See the product.yaml
+	// comment for the full correction.
 	if manifest.Profile.Runtime.Transport != "structured" {
-		t.Fatalf("finance must declare runtime.transport: structured -- without it, a non-cursor-cli provider bypasses tool_policy entirely via its own native tools, got transport=%q", manifest.Profile.Runtime.Transport)
+		t.Fatalf("finance must declare runtime.transport: structured, got transport=%q", manifest.Profile.Runtime.Transport)
 	}
 	if !strings.EqualFold(manifest.Profile.Runtime.AgentTools.Mode, "mcp_only") {
 		t.Fatalf("finance must declare agent_tools.mode: mcp_only explicitly, got %q", manifest.Profile.Runtime.AgentTools.Mode)
