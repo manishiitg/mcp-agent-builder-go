@@ -878,6 +878,10 @@ function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: 
         title: project.title,
         source: 'video-project-open',
         skipConfigRestore: true,
+        workspacePath: project.workspacePath,
+        // A finished production's durable transcript is complete; the live
+        // event cache may contain only user prompts after a browser refresh.
+        preferChatHistory: true,
       })
       if (cancelled) return
       chatStore.switchTab(restoredTabId)

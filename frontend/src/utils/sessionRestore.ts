@@ -58,11 +58,35 @@ export async function restoreSession(
     source?: string
     skipConfigRestore?: boolean
     workspacePath?: string
+    /**
+     * Product conversations have a durable, human-readable transcript. Prefer
+     * it over a partial live event buffer when reopening a completed project.
+     */
+    preferChatHistory?: boolean
   }
 ): Promise<string> {
   // Async lock: if already restoring this session, return the existing promise
   const existing = restoreInProgress.get(sessionId)
   if (existing) {
+    // A generic page restore can win the race against a product surface and
+    // hydrate only the volatile live-event tail. Do not let the lock discard
+    // the product's stronger request for its durable transcript: once the
+    // generic restore completes, replace that partial buffer with history.
+    // This is intentionally an upgrade rather than a second parallel restore
+    // so the tab/session state remains single-writer while it is being built.
+    if (options?.preferChatHistory && options.workspacePath) {
+      console.log(`${TAG} Dedup upgrade for ${sessionId} (source=${options.source}), scheduling durable transcript hydration`)
+      return existing.then(async (tabId) => {
+        try {
+          await hydrateTabEventsFromChatHistory(sessionId, options.workspacePath)
+        } catch (error) {
+          // Preserve the generic restore when history is unavailable; it may
+          // be a non-product session or a project whose history was removed.
+          console.error(`${TAG} Failed dedup transcript upgrade for ${sessionId}:`, error)
+        }
+        return tabId
+      })
+    }
     console.log(`${TAG} Dedup hit for ${sessionId} (source=${options?.source}), returning existing promise`)
     return existing
   }
@@ -84,6 +108,7 @@ async function doRestoreSession(
     source?: string
     skipConfigRestore?: boolean
     workspacePath?: string
+    preferChatHistory?: boolean
   }
 ): Promise<string> {
   const src = options?.source || 'unknown'
@@ -137,7 +162,7 @@ async function doRestoreSession(
         chatStore.addTabEvents(sessionId, runtime.events)
       }
       if (
-        options?.workspacePath &&
+        (options?.workspacePath || existingTab?.metadata?.agentProfileWorkspace) &&
         !isForegroundStreaming({
           status: runtime.session_status,
           hasRunningBackgroundAgents: runtime.has_running_background_agents,
@@ -149,7 +174,10 @@ async function doRestoreSession(
         // empty provider tool-start. Replace it with the durable structured
         // transcript, which is enriched with bridge-authoritative arguments.
         // This also fixes partial browser caches after a backend restart.
-        await hydrateTabEventsFromChatHistory(sessionId, options.workspacePath)
+        await hydrateTabEventsFromChatHistory(
+          sessionId,
+          options?.workspacePath || existingTab?.metadata?.agentProfileWorkspace,
+        )
       }
       if (runtime.last_processed_index !== undefined) {
         chatStore.setTabLastEventIndex(sessionId, runtime.last_processed_index)
@@ -160,8 +188,9 @@ async function doRestoreSession(
       console.log(`${TAG} [${src}] Refreshed runtime state for existing tab ${tabId}`)
     } else {
       const runtime = await hydrateTabEvents(sessionId, {
-        workspacePath: existingTab?.metadata?.agentProfileWorkspace,
+        workspacePath: options?.workspacePath || existingTab?.metadata?.agentProfileWorkspace,
         fallbackToChatHistory: true,
+        preferChatHistory: options?.preferChatHistory,
       })
       applySessionStatus(tabId, runtime)
       const eventCount = chatStore.getTabEvents(sessionId).length

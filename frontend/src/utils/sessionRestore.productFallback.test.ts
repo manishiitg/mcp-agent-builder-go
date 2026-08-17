@@ -40,9 +40,16 @@ describe('session restore chat-history fallback', () => {
     vi.restoreAllMocks()
   })
 
-  it('hydrates a persisted product session when runtime events are empty', async () => {
+  it('prefers a persisted product transcript over a partial runtime event buffer', async () => {
     getRecentSessionEvents.mockResolvedValue({
-      events: [],
+      events: [{
+        id: 'live-user-only',
+        type: 'user_message',
+        session_id: 'video-studio:project:launch',
+        event_index: 0,
+        timestamp: '2026-08-17T00:00:00Z',
+        data: { content: 'Create the launch teaser.' },
+      }],
       session_status: 'completed',
       has_running_background_agents: false,
       is_synthetic_turn: false,
@@ -69,6 +76,8 @@ describe('session restore chat-history fallback', () => {
 
     await expect(restoreSession('video-studio:project:launch', {
       source: 'video-project-open',
+      workspacePath,
+      preferChatHistory: true,
     })).resolves.toBe(tabId)
 
     expect(getChatHistoryResumeConversation).toHaveBeenCalledWith(
@@ -81,5 +90,64 @@ describe('session restore chat-history fallback', () => {
       'llm_generation_end',
     ])
     expect(useChatStore.getState().chatTabs[tabId]?.isStreaming).toBe(false)
+  })
+
+  it('upgrades an in-flight generic restore to the product transcript', async () => {
+    let resolveLiveEvents: ((value: unknown) => void) | undefined
+    getRecentSessionEvents.mockImplementation(() => new Promise((resolve) => {
+      resolveLiveEvents = resolve
+    }))
+    getChatHistoryResumeConversation.mockResolvedValue({
+      session_id: 'video-studio:project:race',
+      conversation_history: [
+        { Role: 'user', Parts: [{ Text: 'Show the finished clip.' }] },
+        { Role: 'assistant', Parts: [{ Text: 'Here is the completed video.' }] },
+      ],
+    })
+
+    const { useChatStore, waitForChatStoreHydration } = await import('../stores/useChatStore')
+    const { restoreSession } = await import('./sessionRestore')
+    await waitForChatStoreHydration()
+    const workspacePath = 'Chats/Video Studio/projects/race'
+    const tabId = await useChatStore.getState().createChatTab('Race', {
+      mode: 'multi-agent',
+      agentProfileId: 'video-studio',
+      agentProfileVersion: 1,
+      agentProfileWorkspace: workspacePath,
+    }, 'video-studio:project:race')
+
+    const genericRestore = restoreSession('video-studio:project:race', {
+      source: 'page-refresh',
+    })
+    const productRestore = restoreSession('video-studio:project:race', {
+      source: 'video-project-open',
+      workspacePath,
+      preferChatHistory: true,
+    })
+    resolveLiveEvents?.({
+      events: [{
+        id: 'live-user-only',
+        type: 'user_message',
+        session_id: 'video-studio:project:race',
+        event_index: 0,
+        timestamp: '2026-08-17T00:00:00Z',
+        data: { content: 'Show the finished clip.' },
+      }],
+      session_status: 'completed',
+      has_running_background_agents: false,
+      is_synthetic_turn: false,
+      can_steer: false,
+    })
+
+    await expect(Promise.all([genericRestore, productRestore])).resolves.toEqual([tabId, tabId])
+    expect(getChatHistoryResumeConversation).toHaveBeenCalledWith(
+      'video-studio:project:race',
+      workspacePath,
+    )
+    expect(useChatStore.getState().getTabEvents('video-studio:project:race').map((event) => event.type)).toEqual([
+      'conversation_resumed',
+      'user_message',
+      'llm_generation_end',
+    ])
   })
 })
