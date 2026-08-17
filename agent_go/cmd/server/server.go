@@ -26,8 +26,8 @@ import (
 	"github.com/spf13/viper"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/chiefofstaffproduct"
-	"github.com/manishiitg/coding-agent-loop/agent_go/internal/events"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/dominionproduct"
+	"github.com/manishiitg/coding-agent-loop/agent_go/internal/events"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/financeproduct"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/inspector"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/videoproduct"
@@ -1806,8 +1806,9 @@ func runServer(cmd *cobra.Command, args []string) {
 	// a token read endpoint.
 	api.apiToken = resolveServerAPIToken()
 
-	// Set env vars for code execution mode (mcpagent reads these as fallback)
-	// MCP_API_URL = Docker-reachable URL (for shell commands inside Docker + OpenAPI spec base URLs)
+	// Set env vars for code execution mode (mcpagent reads these as fallback).
+	// MCP_API_URL may be explicitly configured for a rootless deployment; otherwise
+	// GetCodeExecAPIURL selects a sensible Docker/native default.
 	// MCP_BRIDGE_API_URL = host-reachable URL (for mcpbridge binary running on the host)
 	os.Setenv("MCP_API_URL", api.GetCodeExecAPIURL())
 	os.Setenv("MCP_BRIDGE_API_URL", api.GetAPIURL())
@@ -2620,6 +2621,14 @@ func (api *StreamingAPI) GetAPIURL() string {
 // host.docker.internal to reach the Go server on the host.
 // In native mode, shell commands run directly on the host, so they use 127.0.0.1.
 func (api *StreamingAPI) GetCodeExecAPIURL() string {
+	// An explicitly supplied URL wins. A rootless service and the shell commands
+	// it launches share the same host, so its deployment sets this to loopback.
+	// Do this before inferring topology from WORKSPACE_API_URL: localhost there
+	// used to mean "Docker maps a host port", but it also describes a native
+	// rootless workspace service.
+	if configured := strings.TrimRight(strings.TrimSpace(os.Getenv("MCP_API_URL")), "/"); configured != "" {
+		return configured
+	}
 	if common.IsNativeWorkspace() {
 		return fmt.Sprintf("http://127.0.0.1:%d", api.config.Port)
 	}
