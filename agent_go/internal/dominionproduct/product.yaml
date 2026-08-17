@@ -1,0 +1,87 @@
+schema_version: 2
+
+# Dominion has no per-project workspace to provision -- it reads one fixed
+# workflow's database via its one tool, not a project folder.
+dependencies: {}
+
+prompt:
+  file: prompts/system-prompt.md
+  variables: {}
+
+profile:
+  id: dominion
+  name: Dominion
+  version: 1
+  # project scope, not global -- same reasoning as Finance's own profile:
+  # global scope (1) makes provider_options non-authoritative and (2) skips
+  # this profile's own prompt.file in favor of the dynamic multi-agent
+  # delegation prompt. This profile's one tool bypasses FolderGuard entirely
+  # (it queries one fixed, hardcoded db path), so project scope's usual
+  # narrowing costs nothing here.
+  scope: project
+  tools:
+    - id: dominion.query-source
+    # Deliberately ADD-only -- see dominion_watchlist_tool.go's own comment.
+    # Removing or re-tiering a symbol still requires the dashboard; this
+    # tool refuses on a duplicate rather than silently no-op'ing, and there
+    # is no companion remove/edit tool.
+    - id: dominion.add-watchlist-symbol
+  # execute_shell_command is included alongside the product tools -- NOT
+  # for general shell use, but because it's the platform's only call path
+  # to a custom tool: every product's custom tool is reached via
+  # get_api_spec discovery + execute_shell_command + curl to
+  # $MCP_CUSTOM/<tool>, the same pattern Video Studio's own product.yaml
+  # documents ("Product HTTP APIs still go through the shared shell
+  # bridge, because every provider can call it as an MCP tool"). Omitting
+  # it (as this file originally did, copying Finance's identical gap)
+  # makes a custom tool genuinely unreachable via the standard route --
+  # confirmed live: the model's own attempt was rejected with
+  # "tools_unavailable: unknown=[execute_shell_command]". This does widen
+  # the profile beyond a literal read-only-query surface (the shell itself
+  # is not scoped to curl-only), so the system prompt explicitly narrows
+  # its intended use to calling this profile's own tools -- see
+  # prompts/system-prompt.md. No file writes beyond the one add-watchlist
+  # tool, no delegation, no schedules, no workflow execution. mcpagent's
+  # own intrinsic tools (get_api_spec, get_prompt, get_resource,
+  # read_skill) are injected by mcpagent itself and are not governed by
+  # this list.
+  tool_policy:
+    mode: allowlist
+    enabled:
+      - query_dominion_source
+      - add_dominion_watchlist_symbol
+      - execute_shell_command
+  runtime:
+    # Load-bearing -- see Finance's own product.yaml comment. "auto"/unset
+    # resolves to native/tmux mode for claude-code and codex-cli, where the
+    # coding CLI's own built-in tool loop runs entirely outside mcpagent's
+    # registry and tool_policy does not apply. structured is what Finance
+    # confirmed live keeps PRODUCT_TOOL_GATE actually enforced.
+    transport: structured
+    provider_options:
+      - id: claude-code
+        label: Claude Code
+        provider: claude-code
+        model_id: claude-sonnet-5
+        default: true
+    agent_tools:
+      mode: mcp_only
+    provider: claude-code
+    model_id: claude-sonnet-5
+  built_in: true
+
+branding:
+  icon: dominion
+  favicon: ""
+
+ui:
+  surface: dominion
+  files_panel: false
+  workflow_panel: false
+  secrets: false
+  streaming: structured
+
+workflows:
+  enabled: []
+  selected_skills: []
+  browser_mode: ""
