@@ -751,6 +751,50 @@ func TestSetupExecutionFolderGuardGivesGenericReviewerWorkflowWideReadOnlyView(t
 	}
 }
 
+// Every folder-guard builder must grant tool_output_folder. It is where any
+// bridge tool result past its inline cap is spilled (MCP_TOOL_OUTPUT_DIR), so an
+// agent handed "full output saved to <path>" needs a legal way to read it back.
+//
+// setupExecutionFolderGuard has granted it since PLAT-073 cluster F, but the two
+// parallel builders never did, and nothing pinned the parity. Confirmed live
+// 2026-08-17 (confida-login step-5-execute-browser-and-capture-apis, a
+// message_sequence step): its read paths carried no tool_output_folder, and a
+// spilled agent_browser result came back "outside every workspace root" with no
+// recoverable path — a dead end that cost the step a full round trip.
+func TestEveryFolderGuardBuilderGrantsToolOutputFolder(t *testing.T) {
+	newOrch := func() *StepBasedWorkflowOrchestrator {
+		base, err := orchestrator.NewBaseOrchestrator(
+			loggerv2.NewNoop(), nil, orchestrator.OrchestratorTypeWorkflow, "", 0,
+			"", nil, nil, false, &orchestrator.LLMConfig{}, 1, nil, nil, nil,
+		)
+		if err != nil {
+			t.Fatalf("NewBaseOrchestrator returned error: %v", err)
+		}
+		base.SetWorkspacePath("Workflow/testing")
+		return &StepBasedWorkflowOrchestrator{BaseOrchestrator: base, selectedRunFolder: "iteration-0/test-group"}
+	}
+	const want = "Workflow/testing/tool_output_folder"
+
+	t.Run("execution", func(t *testing.T) {
+		readPaths, _ := newOrch().setupExecutionFolderGuard("step-1", "s", KBAccessNone, LearningsAccessNone, DBAccessRead, nil)
+		if !slices.Contains(readPaths, want) {
+			t.Fatalf("read paths missing %q: %v", want, readPaths)
+		}
+	})
+	t.Run("message_sequence", func(t *testing.T) {
+		readPaths, _ := newOrch().setupMessageSequenceFolderGuard("step-1", "s", nil, MessageSequenceWriteAccess{})
+		if !slices.Contains(readPaths, want) {
+			t.Fatalf("read paths missing %q: %v", want, readPaths)
+		}
+	})
+	t.Run("kb_update", func(t *testing.T) {
+		readPaths, _ := newOrch().setupKBUpdateFolderGuard("s", "step-1")
+		if !slices.Contains(readPaths, want) {
+			t.Fatalf("read paths missing %q: %v", want, readPaths)
+		}
+	})
+}
+
 func TestSetupExecutionFolderGuardAddsOnlyConfiguredStores(t *testing.T) {
 	base, err := orchestrator.NewBaseOrchestrator(
 		loggerv2.NewNoop(),

@@ -119,24 +119,83 @@ func TestNormalizeAgentBrowserCommandArgs(t *testing.T) {
 	}
 }
 
-func TestSnapshotResultTooLargeErrorPreservesSmallResultAndRejectsLargeResult(t *testing.T) {
+// An oversized snapshot used to return an error and discard the tree entirely,
+// costing a round trip and forcing the agent to pick a narrower --selector
+// without having seen the page (measured live 2026-08-17 on confida-login: 4
+// blind retries at ~30.4k runes against the 24k cap). It now returns the head
+// with an explicit incompleteness banner. The banner is the load-bearing part:
+// a silently truncated accessibility tree is indistinguishable from a page
+// where the element is genuinely absent, and a QA step must never record that
+// negative from partial evidence.
+func TestOversizedSnapshotReturnsTruncatedHeadWithIncompletenessBanner(t *testing.T) {
+	e := &Executor{}
+
 	short := "- button Submit"
-	if err := snapshotResultTooLargeError(short); err != nil {
-		t.Fatalf("small snapshot error = %v, want nil", err)
+	output := short
+	handled, err := e.handleOversizedSnapshot(&output, false)
+	if err != nil || handled {
+		t.Fatalf("small snapshot: handled=%v err=%v, want handled=false err=nil", handled, err)
+	}
+	if output != short {
+		t.Fatalf("small snapshot was modified: %q", output)
 	}
 
 	large := strings.Repeat("x", maxInlineSnapshotOutputRunes+100)
-	err := snapshotResultTooLargeError(large)
-	if err == nil {
-		t.Fatal("large snapshot error = nil, want explicit retry error")
+	output = large
+	handled, err = e.handleOversizedSnapshot(&output, false)
+	if err != nil || !handled {
+		t.Fatalf("large snapshot: handled=%v err=%v, want handled=true err=nil", handled, err)
 	}
 	for _, want := range []string{
-		"SNAPSHOT_RESULT_TOO_LARGE", "ran exactly as requested", "did not add --compact",
-		"did not", "truncate its evidence", "--selector <css>", "--depth <n>",
+		"SNAPSHOT_TRUNCATED", "THIS TREE IS INCOMPLETE", "do NOT record it as absent",
+		"--selector", "--depth", fullSnapshotFlag,
 	} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("large snapshot error missing %q:\n%s", want, err)
+		if !strings.Contains(output, want) {
+			t.Fatalf("truncated snapshot missing %q:\n%s", want, output[:min(len(output), 600)])
 		}
+	}
+	// The evidence itself must still be there, not just the banner.
+	if !strings.Contains(output, strings.Repeat("x", 100)) {
+		t.Fatal("truncated snapshot dropped the tree content entirely")
+	}
+}
+
+// --full-snapshot is the agent's explicit opt-in to pay the context cost.
+func TestFullSnapshotFlagReturnsWholeTreeAndIsStrippedFromCLIArgs(t *testing.T) {
+	e := &Executor{}
+	large := strings.Repeat("y", maxInlineSnapshotOutputRunes+100)
+	output := large
+	handled, err := e.handleOversizedSnapshot(&output, true)
+	if err != nil || !handled {
+		t.Fatalf("handled=%v err=%v, want handled=true err=nil", handled, err)
+	}
+	if !strings.Contains(output, "SNAPSHOT_FULL") {
+		t.Fatalf("full snapshot missing SNAPSHOT_FULL marker:\n%s", output[:min(len(output), 300)])
+	}
+	if !strings.Contains(output, large) {
+		t.Fatal("full snapshot did not return the complete tree")
+	}
+	if strings.Contains(output, "SNAPSHOT_TRUNCATED") {
+		t.Fatal("full snapshot was truncated despite the explicit opt-in")
+	}
+
+	// agent-browser has no --full-snapshot flag; passing it through would fail
+	// with "Unknown subcommand". It must be consumed by AgentWorks.
+	found, cleaned := extractFullSnapshotArg([]string{"--cdp", "http://localhost:9222", fullSnapshotFlag, "tab", "t12"})
+	if !found {
+		t.Fatal("extractFullSnapshotArg did not detect the flag")
+	}
+	for _, arg := range cleaned {
+		if arg == fullSnapshotFlag {
+			t.Fatalf("flag survived into CLI args: %v", cleaned)
+		}
+	}
+	if len(cleaned) != 4 {
+		t.Fatalf("cleaned args = %v, want the other 4 preserved", cleaned)
+	}
+
+	if found, _ := extractFullSnapshotArg([]string{"tab", "t12"}); found {
+		t.Fatal("extractFullSnapshotArg reported the flag when absent")
 	}
 }
 

@@ -935,7 +935,14 @@ func (hcpo *StepBasedWorkflowOrchestrator) setupKBUpdateFolderGuard(stepID strin
 	stepFolderPath := getExecutionFolderPath(executionWorkspacePath, stepID, stepPath)
 	knowledgebasePath := getKnowledgebasePath(baseWorkspacePath)
 
-	readPaths = []string{executionWorkspacePath, stepFolderPath, knowledgebasePath}
+	// tool_output_folder for the same reason every other guard grants it: any
+	// bridge tool result past its inline cap is spilled there, and an agent told
+	// "full output saved to <path>" needs a legal way to read it back. A KB
+	// update agent reads large step artifacts to summarize them, so it hits this
+	// as readily as an execution step does.
+	toolOutputPath := fmt.Sprintf("%s/tool_output_folder", baseWorkspacePath)
+
+	readPaths = []string{executionWorkspacePath, stepFolderPath, knowledgebasePath, toolOutputPath}
 	writePaths = []string{knowledgebasePath}
 	return readPaths, writePaths
 }

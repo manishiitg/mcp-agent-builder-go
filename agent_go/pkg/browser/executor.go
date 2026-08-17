@@ -25,6 +25,13 @@ const cdpTabListTimeout = 15 * time.Second
 // evidence surface to inspect next.
 const maxInlineSnapshotOutputRunes = 24000
 
+// fullSnapshotFlag is an AgentWorks-level opt-in, not an agent-browser flag. It
+// is stripped from the argument list before the CLI runs. It exists so the
+// agent -- not the runtime -- decides when an oversized tree is worth its
+// context cost, which is the same principle the cap itself was written to
+// protect.
+const fullSnapshotFlag = "--full-snapshot"
+
 // execCmd is an alias so tests can swap it out; defaults to exec.Command.
 var execCmd = exec.Command
 
@@ -259,6 +266,22 @@ type cdpArgInfo struct {
 	port  int
 }
 
+// extractFullSnapshotArg pulls the AgentWorks-only --full-snapshot flag out of
+// the agent-browser argument list. Returns whether it was present and the args
+// with every occurrence removed.
+func extractFullSnapshotArg(args []string) (bool, []string) {
+	found := false
+	cleaned := make([]string, 0, len(args))
+	for _, arg := range args {
+		if strings.TrimSpace(arg) == fullSnapshotFlag {
+			found = true
+			continue
+		}
+		cleaned = append(cleaned, arg)
+	}
+	return found, cleaned
+}
+
 func extractCDPArg(args []string) (cdpArgInfo, []string, error) {
 	var info cdpArgInfo
 	cleaned := make([]string, 0, len(args))
@@ -349,6 +372,11 @@ func (e *Executor) HandleAgentBrowser(ctx context.Context, args map[string]inter
 		return string(statusJSON), nil
 	}
 	argsArray := stringArgs(args["args"])
+	// --full-snapshot is an AgentWorks-level flag, not an agent-browser one: strip
+	// it before the CLI ever sees it, or agent-browser rejects it as an unknown
+	// subcommand. It is the agent's explicit opt-in to receive an oversized
+	// snapshot inline, accepting the context cost, instead of the spill+grep path.
+	fullSnapshotRequested, argsArray := extractFullSnapshotArg(argsArray)
 	cdpArg, argsWithoutCDP, cdpArgErr := extractCDPArg(argsArray)
 	if cdpArgErr != nil {
 		return "", cdpArgErr
@@ -1110,8 +1138,10 @@ func (e *Executor) HandleAgentBrowser(ctx context.Context, args map[string]inter
 		return formatAgentBrowserSkillsOutput(output), nil
 	}
 	if command == "snapshot" {
-		if err := snapshotResultTooLargeError(output); err != nil {
+		if handled, err := e.handleOversizedSnapshot(&output, fullSnapshotRequested); err != nil {
 			return "", err
+		} else if handled {
+			return output, nil
 		}
 		if isCdpMode {
 			if handoff, recording := getCDPRecordingHandoff(cdpPort, cdpOwner); recording && handoff.NeedsSnapshot {
@@ -1127,12 +1157,47 @@ func (e *Executor) HandleAgentBrowser(ctx context.Context, args map[string]inter
 	return output, nil
 }
 
-func snapshotResultTooLargeError(output string) error {
-	runeCount := len([]rune(output))
+// handleOversizedSnapshot applies the inline size cap to a snapshot result.
+//
+// It used to return an error and DISCARD the output, which cost the step a full
+// round trip and left it choosing a narrower --selector/--depth without ever
+// having seen the tree. Measured live 2026-08-17 (confida-login): 4 snapshots at
+// ~30.4k runes against the 24k cap, each one a blind retry.
+//
+// The original rationale is kept intact -- a snapshot must never be SILENTLY
+// narrowed, because a truncated accessibility tree reads exactly like a page
+// where the element is absent, and "not found" is the wrong conclusion to hand a
+// QA step. So the head is returned with a loud, unmissable incompleteness banner
+// rather than quietly. The agent still chooses what to inspect next; it just now
+// chooses with evidence instead of without.
+//
+// Returns handled=true when it has produced the final result for this call.
+func (e *Executor) handleOversizedSnapshot(output *string, fullSnapshotRequested bool) (bool, error) {
+	runeCount := len([]rune(*output))
 	if runeCount <= maxInlineSnapshotOutputRunes {
-		return nil
+		return false, nil
 	}
-	return fmt.Errorf("SNAPSHOT_RESULT_TOO_LARGE: agent-browser returned %d runes (%d bytes), exceeding the %d-rune inline safety limit. The snapshot ran exactly as requested; AgentWorks did not add --compact, alter --depth, select a subtree, or truncate its evidence. No snapshot content was returned inline because the coding CLI could spill it outside the readable workflow sandbox. Retry deliberately with --selector <css> for the needed region or --depth <n> for a smaller tree", runeCount, len(output), maxInlineSnapshotOutputRunes)
+	if fullSnapshotRequested {
+		// Explicit opt-in: hand back the whole tree. Anything past the bridge's
+		// own 128KB result cap is truncated and persisted to tool_output_folder
+		// by mcpbridge, which message_sequence steps can now read (see
+		// setupMessageSequenceFolderGuard).
+		*output = fmt.Sprintf("SNAPSHOT_FULL (%d runes, %d bytes) -- returned inline because %s was requested.\n\n%s",
+			runeCount, len(*output), fullSnapshotFlag, *output)
+		return true, nil
+	}
+	head := string([]rune(*output)[:maxInlineSnapshotOutputRunes])
+	*output = fmt.Sprintf(`SNAPSHOT_TRUNCATED: showing the first %d of %d runes (%d bytes).
+
+*** THIS TREE IS INCOMPLETE. An element missing from the text below may still exist on the page -- do NOT record it as absent, and do not assert a negative from this output. ***
+
+To get what you need, pick one:
+  - agent_browser(command="snapshot", args=[..., "--selector", "<css>"])  -- the region you actually need (cheapest)
+  - agent_browser(command="snapshot", args=[..., "--depth", "<n>"])       -- a shallower tree
+  - agent_browser(command="snapshot", args=[..., "%s"])            -- this exact snapshot in full, inline
+
+%s`, maxInlineSnapshotOutputRunes, runeCount, len(*output), fullSnapshotFlag, head)
+	return true, nil
 }
 
 func formatAgentBrowserSkillsOutput(output string) string {

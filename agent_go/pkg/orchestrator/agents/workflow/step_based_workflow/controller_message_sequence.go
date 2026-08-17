@@ -1200,6 +1200,18 @@ func (hcpo *StepBasedWorkflowOrchestrator) setupMessageSequenceFolderGuard(stepP
 		executionWorkspacePath,
 		fmt.Sprintf("%s/soul", baseWorkspacePath),
 		fmt.Sprintf("%s/builder", baseWorkspacePath),
+		// tool_output_folder is where any bridge tool result past its inline size
+		// cap is spilled (MCP_TOOL_OUTPUT_DIR) -- most often a large agent_browser
+		// snapshot. setupExecutionFolderGuard has granted this since PLAT-073
+		// cluster F; this parallel message_sequence builder never did, so a
+		// message_sequence step told "full output saved to <path>" had no legal
+		// way to read it back. Confirmed live 2026-08-17 (confida-login
+		// step-5-execute-browser-and-capture-apis): its read paths carried no
+		// tool_output_folder, and a spilled agent_browser result came back as
+		// "access denied ... outside every workspace root" with no recoverable
+		// path. Read-only: the spill is written by the bridge process, never by
+		// the step.
+		fmt.Sprintf("%s/tool_output_folder", baseWorkspacePath),
 	}
 	dbAccess := resolveDBAccess(stepConfig)
 	kbAccess := resolveKnowledgebaseAccess(stepConfig, hcpo.UseKnowledgebase())
