@@ -119,6 +119,7 @@ func TestGenerationSkillsRegisterAndStayOutOfTheInfographicPipeline(t *testing.T
 	}{
 		{"fal-ai", []string{"SECRET_FAL_KEY", "Never invent a model ID", "@fal-ai/client"}},
 		{"google-ai", []string{"SECRET_GEMINI_API_KEY", "Never invent a model ID", "@google/genai"}},
+		{"video-provider-capabilities", []string{"official_docs", "capability record", "pending_user_review", "continuity_plan"}},
 		{"video-model-selection", []string{"video-cinematography", "fal-ai", "google-ai", "Shot count vs. budget"}},
 		{"video-cinematography", []string{"dolly is not zoom", "reference-image conditioning", "video-model-selection"}},
 		{"video-storytelling", []string{"video-cinematography", "video-model-selection", "But-therefore, not and-then", "Scaling to true long-form"}},
@@ -153,11 +154,35 @@ func TestGenerationSkillsRegisterAndStayOutOfTheInfographicPipeline(t *testing.T
 		}
 	}
 
-	generationSkillNames := map[string]bool{"fal-ai": true, "google-ai": true, "video-model-selection": true, "video-cinematography": true, "video-storytelling": true, "generated-video-quality": true}
+	generationSkillNames := map[string]bool{"fal-ai": true, "google-ai": true, "video-provider-capabilities": true, "video-model-selection": true, "video-cinematography": true, "video-storytelling": true, "generated-video-quality": true}
 	for _, stage := range infographicPipeline.Stages {
 		for _, name := range stage.Skills {
 			if generationSkillNames[name] {
 				t.Fatalf("infographic stage %q attaches %q; the infographic route stays on HyperFrames composition", stage.ID, name)
+			}
+		}
+	}
+}
+
+func TestGenerationPipelinesAttachCapabilityDiscoveryBeforePaidVideo(t *testing.T) {
+	for _, pipeline := range []*Pipeline{longformPipeline, shortformPipeline} {
+		for _, stageID := range []string{pipeline.ID + "-brief", pipeline.ID + "-shotlist", pipeline.ID + "-generate"} {
+			var stage *PipelineStage
+			for index := range pipeline.Stages {
+				if pipeline.Stages[index].ID == stageID {
+					stage = &pipeline.Stages[index]
+					break
+				}
+			}
+			if stage == nil {
+				t.Fatalf("%s has no %s stage", pipeline.ID, stageID)
+			}
+			found := false
+			for _, skill := range stage.Skills {
+				found = found || skill == "video-provider-capabilities"
+			}
+			if !found {
+				t.Fatalf("%s must attach video-provider-capabilities: %v", stage.ID, stage.Skills)
 			}
 		}
 	}

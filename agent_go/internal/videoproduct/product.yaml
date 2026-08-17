@@ -76,6 +76,7 @@ profile:
     - agent-browser
     - fal-ai
     - google-ai
+    - video-provider-capabilities
     - video-model-selection
     - video-cinematography
     - video-storytelling
