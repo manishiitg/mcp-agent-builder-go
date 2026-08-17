@@ -27,6 +27,7 @@ import (
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/chiefofstaffproduct"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/events"
+	"github.com/manishiitg/coding-agent-loop/agent_go/internal/dominionproduct"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/financeproduct"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/inspector"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/videoproduct"
@@ -1648,6 +1649,18 @@ func runServer(cmd *cobra.Command, args []string) {
 	}
 	if err := financeproduct.RegisterAgentProfileRuntime(profileRegistry, getWorkspaceAPIURL()); err != nil {
 		log.Fatalf("Failed to register Finance agent profile runtime: %v", err)
+	}
+
+	if err := dominionproduct.RegisterProductSkills(); err != nil {
+		log.Fatalf("Failed to register Dominion skills: %v", err)
+	}
+	for _, profile := range dominionproduct.BuiltinAgentProfiles() {
+		if err := profileRegistry.RegisterProfile(profile); err != nil {
+			log.Fatalf("Failed to register Dominion agent profile: %v", err)
+		}
+	}
+	if err := dominionproduct.RegisterAgentProfileRuntime(profileRegistry, getWorkspaceAPIURL()); err != nil {
+		log.Fatalf("Failed to register Dominion agent profile runtime: %v", err)
 	}
 
 	api := &StreamingAPI{
@@ -5534,7 +5547,17 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				}
 				promptCtx.BrowserPointer = browserPrompt
 			}
-			if common.IsCLIProvider(req.Provider) {
+			// Skip the generic hardcoded tool inventory when the profile has its
+			// own tool_policy allowlist -- that product's own system prompt is
+			// already the authoritative source of what tools exist. The generic
+			// text predates per-product custom tools: it names platform tools an
+			// allowlist filters out and never mentions the product's own tool at
+			// all, so a CLI-provider product chat (e.g. Finance, Dominion) can
+			// correctly run its one allowlisted tool and then, in the very same
+			// turn, tell the user it has no working tool because this stale text
+			// contradicted what actually happened.
+			hasProductAllowlist := resolvedProfile != nil && resolvedProfile.Definition.ToolPolicy.IsAllowlist()
+			if common.IsCLIProvider(req.Provider) && !hasProductAllowlist {
 				promptCtx.CLIToolEnvironment = virtualtools.BuildCLIToolEnvironmentPrompt(req.Provider)
 			}
 
