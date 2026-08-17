@@ -25,7 +25,9 @@ describe('workflowRuntimeTabProjection', () => {
     }), 'workflow-social')
 
     expect(projected).toEqual({
-      name: 'Schedule',
+      // Labelled with the schedule's own name so concurrent runs are
+      // distinguishable; the full name stays in metadata for the tooltip.
+      name: 'Daily execution',
       metadata: {
         mode: 'workflow',
         presetQueryId: 'workflow-social',
@@ -120,7 +122,7 @@ describe('workflowRuntimeTabProjection', () => {
 
     const reconciled = reconcileWorkflowRuntimeTab(tab, projection)
 
-    expect(reconciled.name).toBe('Schedule')
+    expect(reconciled.name).toBe('Daily execution')
     expect(reconciled.metadata).toMatchObject({
       presetQueryId: 'workflow-social',
       isViewOnly: true,

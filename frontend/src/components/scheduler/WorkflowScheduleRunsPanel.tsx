@@ -21,6 +21,7 @@ import EvaluationPopup from '../workflow/EvaluationPopup'
 import { ReportViewer } from '../workflow/ReportViewer'
 import SchedulePresetPopup from '../SchedulePresetPopup'
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from '../ui/tooltip'
+import { scheduleTabLabel } from '../../utils/scheduleTabLabel'
 
 interface WorkflowScheduleRunsPanelProps {
   onClose: () => void
@@ -1274,7 +1275,7 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
     useModeStore.getState().setModeCategory('workflow')
     useWorkflowStore.getState().setShowChatArea(true)
 
-    const desiredName = 'Schedule'
+    const desiredName = scheduleTabLabel(jobName)
     const metadata = {
       mode: 'workflow' as const,
       phaseId: undefined,
@@ -2676,6 +2677,17 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                                 )
                                 const currentSessionId =
                                   run.session_id || (run.status === 'running' ? job.last_session_id : undefined)
+                                // iteration-0 is the live slot and is REUSED: every historical
+                                // run records it as its folder, but its contents belong to the
+                                // most recent run alone. Offering logs/eval/report on an older
+                                // run therefore opened today's artifacts under that run's
+                                // timestamp — worse than showing nothing. Rotated folders
+                                // (iteration-N, N>0) are stable per-run identities and stay
+                                // correct. The conversation button is unaffected: run.session_id
+                                // is genuinely per-run.
+                                const runOwnsItsFolder =
+                                  Boolean(effectiveFolder) &&
+                                  (getRunFolderIterationNumber(effectiveFolder) > 0 || runIndex === 0)
                                 return (
                                 <div
                                   key={run.id}
@@ -2787,22 +2799,8 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                                         </TooltipContent>
                                       </Tooltip>
                                     )}
-                                    {/* Stop button for running jobs */}
-                                    {run.status === 'running' && (
-                                      <Tooltip>
-                                        <TooltipTrigger asChild>
-                                          <button
-                                            onClick={() => handleStopRun(job)}
-                                            className="p-1 text-gray-400 hover:text-red-500 transition-colors"
-                                          >
-                                            <Square className="w-3 h-3" />
-                                          </button>
-                                        </TooltipTrigger>
-                                        <TooltipContent side="left">Stop this run</TooltipContent>
-                                      </Tooltip>
-                                    )}
                                     {/* Logs button */}
-                                    {effectiveFolder && run.status !== 'running' && (
+                                    {runOwnsItsFolder && run.status !== 'running' && (
                                       <Tooltip>
                                         <TooltipTrigger asChild>
                                           <button
@@ -2816,7 +2814,7 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                                       </Tooltip>
                                     )}
                                     {/* Evaluation button */}
-                                    {effectiveFolder && run.status !== 'running' && (
+                                    {runOwnsItsFolder && run.status !== 'running' && (
                                       <Tooltip>
                                         <TooltipTrigger asChild>
                                           <button
@@ -2830,7 +2828,7 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                                       </Tooltip>
                                     )}
                                     {/* Report button */}
-                                    {effectiveFolder && run.status !== 'running' && (
+                                    {runOwnsItsFolder && run.status !== 'running' && (
                                       <Tooltip>
                                         <TooltipTrigger asChild>
                                           <button

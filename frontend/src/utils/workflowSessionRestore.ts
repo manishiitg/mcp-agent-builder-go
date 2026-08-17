@@ -11,6 +11,7 @@ import { isInternalChildSession, isScheduledSession } from './workflowSessionKin
 import { isVisibleActivitySession } from './activitySessions'
 import { openWorkflowInDefaultPreview } from './reportPreviewPreference'
 import { activateWorkflowTab, beginWorkflowNavigation, isCurrentWorkflowNavigation, selectWorkflowPreset } from './workflowNavigation'
+import { scheduleTabLabel } from './scheduleTabLabel'
 
 type RestoreWorkflowSessionOptions = {
   preset?: CustomPreset | PredefinedPreset
@@ -387,7 +388,7 @@ export async function restoreScheduledWorkflowRunChat(
 
   return restoreReadOnlyWorkflowRunChat(session, {
     ...options,
-    tabName: 'Schedule',
+    tabName: scheduleTabLabel(jobName),
     metadata: {
       isScheduledRun: true,
       scheduledJobName: jobName,

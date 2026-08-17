@@ -1,6 +1,7 @@
 import type { RunningWorkflowInfo } from '../../services/api-types'
 import type { ChatTab } from '../../stores/useChatStore'
 import { isExternalReadOnlyWorkflowSession, isScheduledSession } from '../../utils/workflowSessionKinds'
+import { scheduleTabLabel } from '../../utils/scheduleTabLabel'
 
 export interface WorkflowRuntimeTabProjection {
   name: string
@@ -76,14 +77,17 @@ export function workflowRuntimeTabProjection(
   if (external && !scheduled) return null
 
   if (scheduled) {
+    const scheduledJobName = running.title || running.preset_name || running.phase_name || 'Schedule'
     return {
-      name: 'Schedule',
+      // Label with the schedule's own name: several scheduled runs can be open
+      // at once and "Schedule" made them indistinguishable without hovering.
+      name: scheduleTabLabel(scheduledJobName),
       metadata: {
         mode: 'workflow',
         presetQueryId,
         isViewOnly: true,
         isScheduledRun: true,
-        scheduledJobName: running.title || running.preset_name || running.phase_name || 'Schedule',
+        scheduledJobName,
       },
       // Runtime discovery must not pull the user away from their live Chat.
       autoActivate: false,
