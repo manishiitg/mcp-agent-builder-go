@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `new` — reproduced from a live salesoutreach Pulse run on 2026-08-17; root cause confirmed in code |
+| Ticket state | `implemented` — root cause was narrower than first written (see Correction); fix shipped with a fail-before/pass-after regression test |
 | Last synchronized | `2026-08-17` |
 
 - **Priority:** P1 — Gate, Review+Fix and Finalize each open with "load this
@@ -29,7 +29,57 @@ and then volunteered this at the end:
 The only reason this is known is that the model chose to say so. Nothing in the
 platform reported it.
 
-## Root cause
+## Correction to the root cause (2026-08-17)
+
+The first version of this ticket blamed session construction: Pulse sessions get
+`selected_skills: sctx.Capabilities.SelectedSkills` and `builder-reference` is a
+platform skill nobody adds, so it was never attached. That reasoning was wrong,
+and the live logs settled it.
+
+`builder-reference` is not a workspace skill and not a name in `selected_skills`
+at all. It is the platform's 44 guidance templates, materialised in memory by
+`guidance.MaterializeReferenceSkill` and attached as an object through
+`guidance.AttachReferenceSurface`. Pulse sessions DO reach that call: they run
+`agent_mode=workflow_phase`, `phase_id=workflow-builder`, which is exactly the
+branch in `workflow_phase_tools.go` that attaches it.
+
+The real defect is that the attach sat INSIDE `if workshopSession != nil`,
+together with workshop tool registration. Workshop creation is deliberately
+skipped when the session is already stopped:
+
+```text
+[WORKFLOW_PHASE] Session schedule-manual--7e4f38af_… was stopped
+                 — aborting workshop creation to prevent orphaned executions
+```
+
+That is a sound guard against orphaning executions. But it silently took the
+agent's PROCEDURES down with its TOOLS. The salesoutreach timeline shows both
+states in one afternoon:
+
+| Time | Session | Workshop created | Reference surface |
+|---|---|---|---|
+| 17:27:43 | social-media run | yes | attached |
+| 17:29:41 | salesoutreach run | yes | attached |
+| 18:21:23 | salesoutreach, terminal died | **aborted — stopped** | **missing** |
+| 18:26:32 | salesoutreach **Pulse/Gate** | **aborted — stopped** | **missing** |
+
+So this is not "Pulse never gets the skill". It is "Pulse loses the skill in
+exactly the circumstance Pulse exists to handle" — a finalizer running after the
+run's own transport has died is precisely a stopped session.
+
+## Fix shipped
+
+`AttachReferenceSurface` moved outside the `workshopSession` guard in
+`workflow_phase_tools.go`. Tools may legitimately be unavailable; the procedure
+describing how to behave must not vanish with them.
+
+`TestReferenceSurfaceAttachesOutsideWorkshopSessionGuard` asserts the structural
+property — that the call is not nested inside that guard — rather than that the
+call exists, because the call existed the whole time and was simply unreachable.
+Verified by moving it back inside: the test fails with the guard line range, and
+passes once restored.
+
+## Original root cause as first written (superseded)
 
 Five Pulse step queries in `scheduler.go` instruct the agent to load the
 platform's own reference skill, e.g. Gate:
