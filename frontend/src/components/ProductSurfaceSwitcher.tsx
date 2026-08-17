@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ComponentType } from 'react'
 import { Check, ChevronDown } from 'lucide-react'
 import { RunloopMark } from './branding/RunloopLogo'
 import { VideoStudioMark } from '../products/video-studio/VideoStudioMark'
+import { ChiefOfStaffMark } from '../products/chief-of-staff/ChiefOfStaffMark'
+import { FinanceMark } from '../products/finance/FinanceMark'
 import { useProductSurfaceStore, type ProductSurface } from '../stores/useProductSurfaceStore'
-import { useChatStore } from '../stores/useChatStore'
+import { useAppStore } from '../stores/useAppStore'
 import { cn } from '../lib/utils'
 
 type ProductSurfaceSwitcherProps = {
@@ -11,14 +13,21 @@ type ProductSurfaceSwitcherProps = {
   version?: string
 }
 
+// RunloopMark/VideoStudioMark render <svg>, ChiefOfStaffMark renders a <div>
+// badge (see its own comment) -- this is the common shape all three actually
+// need, not svg-specific props.
+type ProductMarkComponent = ComponentType<{ className?: string; title?: string }>
+
 const products: Array<{
   id: ProductSurface
   label: string
   description: string
-  icon: typeof RunloopMark
+  icon: ProductMarkComponent
 }> = [
-  { id: 'agentworks', label: 'AgentWorks', description: 'Automation and Chief of Staff', icon: RunloopMark },
+  { id: 'agentworks', label: 'AgentWorks', description: 'Automation and workflows', icon: RunloopMark },
   { id: 'video-studio', label: 'Video Studio', description: 'Projects and video production', icon: VideoStudioMark },
+  { id: 'chief-of-staff', label: 'Chief of Staff', description: 'Your operations hub across automations', icon: ChiefOfStaffMark },
+  { id: 'finance', label: 'Finance', description: 'Consolidated bank, investment, and tax view', icon: FinanceMark },
 ]
 
 export function ProductSurfaceSwitcher({ className, version }: ProductSurfaceSwitcherProps) {
@@ -34,22 +43,11 @@ export function ProductSurfaceSwitcher({ className, version }: ProductSurfaceSwi
     setProductSurface(product)
     if (product !== 'agentworks') return
 
-    // Restore the Chief-of-Staff lane when leaving a product profile. Product
-    // tabs remain durable but must never appear inside the AgentWorks surface.
-    const chatStore = useChatStore.getState()
-    const chiefTab = Object.values(chatStore.chatTabs).find((tab) =>
-      tab.metadata?.mode === 'multi-agent' &&
-      !tab.metadata?.agentProfileId &&
-      tab.metadata?.isOrganizationAssistant !== true &&
-      tab.metadata?.isViewOnly !== true &&
-      tab.metadata?.isScheduledRun !== true &&
-      tab.metadata?.isBotRun !== true
-    )
-    if (chiefTab) {
-      chatStore.switchTab(chiefTab.tabId)
-      return
-    }
-    void chatStore.createChatTab('Chief of Staff', { mode: 'multi-agent' })
+    // AgentWorks means Automations now -- Chief of Staff is its own
+    // top-level product surface, not a lane restored inside this one.
+    const appStore = useAppStore.getState()
+    appStore.setModeCategory('workflow')
+    appStore.setShowWorkflowsOverview(true)
   }
 
   useEffect(() => {

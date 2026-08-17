@@ -27,6 +27,40 @@ func validProfile() Profile {
 	}
 }
 
+func TestEffectiveScopeDefaultsEmptyToProject(t *testing.T) {
+	profile := validProfile()
+	if profile.Scope != "" {
+		t.Fatalf("expected validProfile() to declare no scope, got %q", profile.Scope)
+	}
+	if got := profile.EffectiveScope(); got != ProfileScopeProject {
+		t.Fatalf("expected empty scope to default to %q, got %q", ProfileScopeProject, got)
+	}
+	profile.Scope = ProfileScopeProject
+	if got := profile.EffectiveScope(); got != ProfileScopeProject {
+		t.Fatalf("expected explicit %q to round-trip, got %q", ProfileScopeProject, got)
+	}
+	profile.Scope = ProfileScopeGlobal
+	if got := profile.EffectiveScope(); got != ProfileScopeGlobal {
+		t.Fatalf("expected explicit %q to round-trip, got %q", ProfileScopeGlobal, got)
+	}
+}
+
+func TestValidateRejectsUnknownScope(t *testing.T) {
+	profile := validProfile()
+	profile.Scope = "workspace"
+	if err := Validate(profile); err == nil || !strings.Contains(err.Error(), "scope") {
+		t.Fatalf("expected invalid scope to fail validation, got %v", err)
+	}
+}
+
+func TestValidateAcceptsGlobalScope(t *testing.T) {
+	profile := validProfile()
+	profile.Scope = ProfileScopeGlobal
+	if err := Validate(profile); err != nil {
+		t.Fatalf("expected global scope to validate cleanly, got %v", err)
+	}
+}
+
 func TestValidateRejectsStructuredLiveInput(t *testing.T) {
 	profile := validProfile()
 	profile.Runtime.Transport = "structured"

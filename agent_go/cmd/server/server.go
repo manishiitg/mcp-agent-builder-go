@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -24,7 +25,9 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
+	"github.com/manishiitg/coding-agent-loop/agent_go/internal/chiefofstaffproduct"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/events"
+	"github.com/manishiitg/coding-agent-loop/agent_go/internal/financeproduct"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/inspector"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/videoproduct"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/agentprofiles"
@@ -1194,10 +1197,9 @@ const (
 )
 
 const (
-	llmConfigSourceAgentProfile          = "agent_profile"
-	llmConfigSourceScheduledAutoImprove  = "scheduled_auto_improve"
-	llmConfigSourceScheduledPulse        = "scheduled_pulse"
-	llmConfigSourceScheduledChiefOfStaff = "scheduled_chief_of_staff"
+	llmConfigSourceAgentProfile         = "agent_profile"
+	llmConfigSourceScheduledAutoImprove = "scheduled_auto_improve"
+	llmConfigSourceScheduledPulse       = "scheduled_pulse"
 )
 
 func requestLLMConfigOverridesManifest(req QueryRequest) bool {
@@ -1205,7 +1207,7 @@ func requestLLMConfigOverridesManifest(req QueryRequest) bool {
 		return false
 	}
 	switch strings.TrimSpace(req.LLMConfigSource) {
-	case llmConfigSourceAgentProfile, llmConfigSourceScheduledAutoImprove, llmConfigSourceScheduledPulse, llmConfigSourceScheduledChiefOfStaff:
+	case llmConfigSourceAgentProfile, llmConfigSourceScheduledAutoImprove, llmConfigSourceScheduledPulse:
 		return true
 	default:
 		return false
@@ -1623,6 +1625,30 @@ func runServer(cmd *cobra.Command, args []string) {
 	if err := videoproduct.RegisterAgentProfileRuntime(profileRegistry, getWorkspaceAPIURL()); err != nil {
 		log.Fatalf("Failed to register Video Studio agent profile runtime: %v", err)
 	}
+	if err := chiefofstaffproduct.RegisterProductSkills(); err != nil {
+		log.Fatalf("Failed to register Chief of Staff skills: %v", err)
+	}
+	for _, profile := range chiefofstaffproduct.BuiltinAgentProfiles() {
+		if err := profileRegistry.RegisterProfile(profile); err != nil {
+			log.Fatalf("Failed to register Chief of Staff agent profile: %v", err)
+		}
+	}
+	// No RegisterAgentProfileRuntime equivalent: Chief of Staff's tool
+	// factories are registered separately once api exists -- see
+	// registerChiefOfStaffToolFactories below -- since their handlers are
+	// *StreamingAPI methods, not a workspace-API-client pattern like Video
+	// Studio's.
+	if err := financeproduct.RegisterProductSkills(); err != nil {
+		log.Fatalf("Failed to register Finance skills: %v", err)
+	}
+	for _, profile := range financeproduct.BuiltinAgentProfiles() {
+		if err := profileRegistry.RegisterProfile(profile); err != nil {
+			log.Fatalf("Failed to register Finance agent profile: %v", err)
+		}
+	}
+	if err := financeproduct.RegisterAgentProfileRuntime(profileRegistry, getWorkspaceAPIURL()); err != nil {
+		log.Fatalf("Failed to register Finance agent profile runtime: %v", err)
+	}
 
 	api := &StreamingAPI{
 		config:                             config,
@@ -1687,6 +1713,16 @@ func runServer(cmd *cobra.Command, args []string) {
 		lastWorkshopModeBySession:              make(map[string]string),
 		stoppedSessions:                        make(map[string]bool),
 		interruptedTurns:                       make(map[string]bool),
+	}
+	// Chief-of-Staff-only tool factories close over api itself (their handlers
+	// are *StreamingAPI methods), so they register once api exists rather than
+	// alongside the profile-only registration above. The manual isChiefOfStaffChat
+	// registration block later in this file still exists and still serves the
+	// legacy no-profile Chief of Staff chat unchanged; these factories become
+	// reachable once a chief-of-staff product.yaml profile declares them in
+	// profile.tools[], which is registered separately once that profile exists.
+	if err := api.registerChiefOfStaffToolFactories(profileRegistry); err != nil {
+		log.Fatalf("Failed to register Chief of Staff tool factories: %v", err)
 	}
 	// Terminal Center's Formatted view and the runtime coordinator now consume
 	// the same accepted structured events. The terminal observer updates the
@@ -1993,6 +2029,18 @@ func runServer(cmd *cobra.Command, args []string) {
 	// terminal. Inert (404) only if tmux is too old; see terminal_live_attach.go.
 	apiRouter.HandleFunc("/terminals/{terminal_id}/stream", api.runtimeDiagnosticsHandler(api.handleTerminalStream)).Methods("GET")
 
+	// Streaming speech-to-text (agentprofiles.RuntimeCapabilities.Voice). Gated
+	// per-request by profile_id inside the handler, not by whether this route is
+	// registered — mirroring how Browser/Secrets stay one shared implementation
+	// that products opt into via product.yaml rather than owning a copy.
+	apiRouter.HandleFunc("/voice/stream", api.handleVoiceStream).Methods("GET")
+	// Warm the engine at server startup, not on the first mic click. Loading
+	// blocks for ~1-2s locally with the model already cached, but on a first
+	// run it also downloads ~630MB — caught live: a user clicking the mic
+	// before this warmed sat looking at a silent button for 60+ seconds with
+	// no feedback, indistinguishable from broken.
+	go func() { _, _ = getVoiceEngine() }()
+
 	// LLM Guidance API routes
 	apiRouter.HandleFunc("/sessions/{session_id}/llm-guidance", api.handleSetLLMGuidance).Methods("POST", "OPTIONS")
 
@@ -2253,9 +2301,7 @@ func runServer(cmd *cobra.Command, args []string) {
 	apiRouter.HandleFunc("/workflow/notifications", api.handleGetWorkflowNotifications).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/publish/secret", requireWorkflowWriteAccess(api.handleGetWorkflowPublishSecret)).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/org/backup", api.handleGetOrgBackup).Methods("GET", "OPTIONS")
-	apiRouter.HandleFunc("/org/publish", api.handleGetOrgPublish).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/org/notifications", api.handleGetOrgNotifications).Methods("GET", "OPTIONS")
-	apiRouter.HandleFunc("/org/publish/secret", requireWorkflowWriteAccess(api.handleGetOrgPublishSecret)).Methods("GET", "OPTIONS")
 
 	// Manifest-backed workflow API routes (file-backed workflow definitions)
 	apiRouter.HandleFunc("/workflows/summary", api.handleGetWorkflowsSummary).Methods("GET", "OPTIONS")
@@ -2828,6 +2874,25 @@ func (w *statusCapturingResponseWriter) Write(data []byte) (int, error) {
 	n, err := w.ResponseWriter.Write(data)
 	w.bytes += n
 	return n, err
+}
+
+// Hijack forwards to the underlying ResponseWriter when it supports hijacking
+// (any real net/http connection does). Required for ANY websocket handler
+// reached through apiRequestLogMiddleware: an embedded http.ResponseWriter
+// INTERFACE field only promotes the methods that interface declares
+// (Header/Write/WriteHeader), not Hijack — so without this,
+// gorilla/websocket's Upgrade() type-asserts for http.Hijacker, fails, and
+// every upgrade attempt returns "response does not implement http.Hijacker"
+// whenever request logging is on, which defaults to true (shouldLogAPIRequests).
+// Caught live: this broke /api/voice/stream's very first non-browser test
+// client, which (unlike a browser) has no Origin header so it sailed past the
+// separate CheckOrigin issue and hit this one instead.
+func (w *statusCapturingResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := w.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("underlying ResponseWriter does not support hijacking")
+	}
+	return hijacker.Hijack()
 }
 
 func (w *statusCapturingResponseWriter) Flush() {
@@ -4756,10 +4821,14 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				// Per-user chat folders replace the legacy global "Chats/" write path.
 				perUserChatsWrite := perUserChatsFolder + "/"
 				perUserChatHistory := strings.TrimSuffix(perUserChatsFolder, "Chats") + "chat_history/"
-				if resolvedProfile != nil {
-					// A product profile is bound to one project. Do not inherit the
-					// Chief-of-Staff chat-wide grants or @context write expansion.
+				if resolvedProfile != nil && !isGlobalScopedProfile(resolvedProfile) {
+					// A project-scoped product profile is bound to one project. Do
+					// not inherit the chat-wide grants or @context write expansion.
 					// Explicit workflow references remain readable, never writable.
+					// A global-scoped profile (Chief of Staff) falls through to the
+					// else branch below instead -- it keeps the same chat-wide
+					// grants, including the pulse/ write grant, a profile-less turn
+					// already has.
 					profileRoot := agentProfileRuntimeWorkspace(currentUserID, req.SelectedFolder)
 					profileWrite := strings.TrimSuffix(profileRoot, "/") + "/"
 					profileReadOnly := append([]string{"skills/", "subagents/", "Downloads/"}, workflowReadOnlyFolders...)
@@ -4916,7 +4985,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			if enableBrowserAccess {
 				browserGuard := func(execs codingAgentToolExecutors) codingAgentToolExecutors {
 					if !isWorkflowPhase {
-						if resolvedProfile != nil {
+						if resolvedProfile != nil && !isGlobalScopedProfile(resolvedProfile) {
 							profileRoot := agentProfileRuntimeWorkspace(currentUserID, req.SelectedFolder)
 							profileReadOnly := append([]string{"skills/", "subagents/", "Downloads/"}, workflowReadOnlyFolders...)
 							return wrapExecutorsWithPlanFolderGuard(execs, profileRoot, profileReadOnly)
@@ -5347,7 +5416,16 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 
 			// 1. OPERATING MODE — the agent's core behavior (delegate everything vs work directly).
 			//    This MUST come first so it takes precedence over reference material.
-			if resolvedProfile != nil {
+			//
+			// A global-scoped profile (Chief of Staff) deliberately takes the
+			// dynamic branch below, not its own resolvedProfile.Prompt. That
+			// prompt only exists to satisfy agentprofiles.Validate(); the real
+			// prompt is GetMultiAgentDelegationInstructionsWithUser, which needs
+			// per-request params (chatsFolder, spawn capabilities, delegation-tier
+			// config, the full reference surface) a static product.yaml template
+			// cannot express. A project-scoped profile like Video Studio is
+			// unaffected -- it still gets its own rendered prompt exactly as before.
+			if resolvedProfile != nil && !isGlobalScopedProfile(resolvedProfile) {
 				if err := llmAgent.ResetInstructions(resolvedProfile.Prompt); err != nil {
 					sendError(fmt.Sprintf("Failed to apply agent profile prompt: %v", err), true)
 					return
@@ -5364,12 +5442,21 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 						_ = llmAgent.AddInstructions(tierSection)
 					}
 				}
-				// Attach the full reference surface for multi-agent chat.
+				// Attach the full reference surface for multi-agent chat --
+				// but only for a truly profile-less chat. A resolved profile
+				// that reaches this branch (a global-scoped one, e.g. Chief
+				// of Staff) declares its own reference material individually
+				// in profile.skills[] (registerAgentProfileTools' sibling,
+				// req.SelectedSkills assignment in resolveAgentProfileForQuery)
+				// instead of the mode-gated bundle; attaching both would
+				// duplicate the same content under two different shapes.
 				// mcpagent exposes attached bundles through read_skill on API
 				// and coding-CLI transports; native CLI projection is only an
 				// additional browseable view.
-				if err := guidance.AttachReferenceSurface("multi-agent", llmAgent.AttachSkill); err != nil {
-					logfWithContext(queryLogCtx, "[REFERENCE_DOC] Failed to attach multi-agent reference surface: %v", err)
+				if resolvedProfile == nil {
+					if err := guidance.AttachReferenceSurface("multi-agent", llmAgent.AttachSkill); err != nil {
+						logfWithContext(queryLogCtx, "[REFERENCE_DOC] Failed to attach multi-agent reference surface: %v", err)
+					}
 				}
 			}
 
@@ -7895,7 +7982,6 @@ func resolveDelegationTierConfig(frontendConfig *virtualtools.DelegationTierConf
 				Mode:          "provider_profile",
 				Provider:      strings.TrimSpace(frontendConfig.Provider),
 				Main:          toTierModel(defaults.Builder),
-				ChiefOfStaff:  toTierModel(defaults.ChiefOfStaff),
 				High:          toTierModel(defaults.High),
 				Medium:        toTierModel(defaults.Medium),
 				Low:           toTierModel(defaults.Low),
@@ -7924,10 +8010,6 @@ func resolveDelegationTierConfig(frontendConfig *virtualtools.DelegationTierConf
 	if frontendConfig != nil {
 		if main := sanitizeTierModel(frontendConfig.Main); main != nil {
 			result.Main = main
-			hasAny = true
-		}
-		if chiefOfStaff := sanitizeTierModel(frontendConfig.ChiefOfStaff); chiefOfStaff != nil {
-			result.ChiefOfStaff = chiefOfStaff
 			hasAny = true
 		}
 		if high := sanitizeTierModel(frontendConfig.High); high != nil {

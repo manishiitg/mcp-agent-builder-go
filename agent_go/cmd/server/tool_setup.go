@@ -381,14 +381,17 @@ func enhanceToolDescriptionForWorkflowPhase(toolName, originalDescription, workf
 // the correct answer rather than a reason to fall back: inheriting another
 // product's conventions is the bug this replaced.
 func multiAgentPlacementGuidance(toolName, chatsFolder string, profile *resolvedAgentProfile) []string {
-	if profile != nil {
+	// A global-scoped profile (Chief of Staff) falls through to the same
+	// guidance a profile-less turn gets, including the pulse/ mention --
+	// only a project-scoped profile's own declared placement map applies.
+	if profile != nil && !isGlobalScopedProfile(profile) {
 		return profile.Definition.Runtime.Workspace.Placement[toolName]
 	}
 	switch toolName {
 	case "diff_patch_workspace_file", "execute_shell_command":
 		return []string{
 			fmt.Sprintf("Save plan outputs inside the plan folder (e.g. '%s/{plan_id}/output.txt').", chatsFolder),
-			"Org-level goals and pulse artifacts belong in `pulse/` (for example `pulse/goals.html` and `pulse/org-pulse.html`).",
+			"Cross-workflow task reports belong in `pulse/` (for example `pulse/task.html`).",
 		}
 	}
 	return nil
@@ -416,7 +419,7 @@ func enhanceToolDescriptionForMultiAgentMode(toolName, originalDescription, chat
 		// companion write tool may put things. Only AgentWorks' own layout adds
 		// pulse/ here; a product's writable scope is its project folder.
 		writable := fmt.Sprintf("`%s/`", chatsFolder)
-		if profile == nil {
+		if profile == nil || isGlobalScopedProfile(profile) {
 			writable = fmt.Sprintf("`%s/`, `pulse/`,", chatsFolder)
 		}
 		accessInfo.WriteString(fmt.Sprintf("\n\nYou have READ access to allowed workspace folders. WRITE access is restricted to %s and any explicitly allowed subfolders. Configuration data is available through dedicated tools.", writable))

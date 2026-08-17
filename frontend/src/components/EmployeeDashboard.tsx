@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react'
 import {
   Clock, DollarSign, Loader2, Calendar, FileText, ChevronDown, ChevronRight,
-  Plus, Minus, Database, RefreshCw, AlertCircle, Target, Activity, LayoutDashboard, ListChecks
+  Plus, Minus, Database, RefreshCw, AlertCircle, LayoutDashboard, ListChecks
 } from 'lucide-react'
 import {
   Bar,
@@ -21,7 +21,7 @@ import { WorkflowCanvas } from './workflow/canvas'
 import { useAppStore } from '../stores/useAppStore'
 import { useGlobalPresetStore } from '../stores/useGlobalPresetStore'
 import { MarkdownRenderer } from './ui/MarkdownRenderer'
-import { ChiefTasksPanel, OrgGoalsPanel, OrgPulsePanel } from './org/OrgHtmlPanels'
+import { ChiefTasksPanel } from './org/OrgHtmlPanels'
 import { OrgDashboard } from './org/OrgDashboard'
 
 interface WorkflowSummary {
@@ -607,7 +607,7 @@ export const EmployeeDashboard: React.FC = () => {
   const [loading, setLoading] = useState(true)
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null)
   const [pulseOpenRequestFor, setPulseOpenRequestFor] = useState<string | null>(null)
-  const [orgView, setOrgView] = useState<'workflow' | 'goals' | 'pulse' | 'tasks' | 'dashboard'>('dashboard')
+  const [orgView, setOrgView] = useState<'workflow' | 'tasks' | 'dashboard'>('dashboard')
   const [reviewTab, setReviewTab] = useState<ReviewTab>('report')
   const [reviewState, setReviewState] = useState<WorkflowReviewState>(EMPTY_REVIEW_STATE)
   const [soulDocState, setSoulDocState] = useState<ImproveDocState>(EMPTY_SOUL_DOC_STATE)
@@ -1256,30 +1256,6 @@ export const EmployeeDashboard: React.FC = () => {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setOrgView('goals')}
-                  className={`flex w-full items-center gap-2 px-5 py-3 text-left transition-colors ${
-                    orgView === 'goals'
-                      ? 'border-l-2 border-l-primary bg-primary/10'
-                      : 'border-l-2 border-l-transparent hover:bg-muted/40'
-                  }`}
-                >
-                  <Target className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  <span className="truncate text-sm font-medium text-foreground">Org Goals</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setOrgView('pulse')}
-                  className={`flex w-full items-center gap-2 px-5 py-3 text-left transition-colors ${
-                    orgView === 'pulse'
-                      ? 'border-l-2 border-l-primary bg-primary/10'
-                      : 'border-l-2 border-l-transparent hover:bg-muted/40'
-                  }`}
-                >
-                  <Activity className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  <span className="truncate text-sm font-medium text-foreground">Org Pulse</span>
-                </button>
-                <button
-                  type="button"
                   onClick={() => setOrgView('tasks')}
                   className={`flex w-full items-center gap-2 px-5 py-3 text-left transition-colors ${
                     orgView === 'tasks'
@@ -1358,14 +1334,6 @@ export const EmployeeDashboard: React.FC = () => {
                   workflows={workflows}
                   onOpenDecision={handleOpenPulseDecision}
                 />
-              </div>
-            ) : orgView === 'goals' ? (
-              <div className="h-[calc(100vh-160px)] min-h-[480px] overflow-hidden bg-background">
-                <OrgGoalsPanel fixedDevice="desktop" hideHeader />
-              </div>
-            ) : orgView === 'pulse' ? (
-              <div className="h-[calc(100vh-160px)] min-h-[480px] overflow-hidden bg-background">
-                <OrgPulsePanel fixedDevice="desktop" hideHeader />
               </div>
             ) : orgView === 'tasks' ? (
               <div className="h-[calc(100vh-160px)] min-h-[480px] overflow-hidden bg-background">

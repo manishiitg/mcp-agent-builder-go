@@ -7,7 +7,6 @@ export function hasDelegationTierConfiguration(config: DelegationTierConfig | nu
   return Boolean(
     config.provider ||
     config.main ||
-    config.chief_of_staff ||
     config.high ||
     config.medium ||
     config.low ||

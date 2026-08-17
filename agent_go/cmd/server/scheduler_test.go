@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	virtualtools "github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/terminals"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/costledger"
 	todo_creation_human "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
@@ -371,21 +370,20 @@ func TestStopBetweenReservationAndDurableClaimPreventsExecution(t *testing.T) {
 	}
 }
 
-func TestTriggerMultiAgentNowFindsBuiltinWithoutScheduleFile(t *testing.T) {
+// Org Pulse itself is gone (DefaultBuiltinSchedules returns empty -- see
+// builtin_schedules.go), so triggering its ID without a persisted schedule
+// entry no longer resolves to a builtin at all -- it is simply not found.
+func TestTriggerMultiAgentNowWithoutScheduleFileReportsNotFound(t *testing.T) {
 	workspace := httptest.NewServer(&mockWorkspaceAPI{files: map[string]string{}})
 	defer workspace.Close()
 	t.Setenv("WORKSPACE_API_URL", workspace.URL)
 
 	svc := NewSchedulerService(nil)
 	userID := "user-without-schedule-file"
-	svc.updateRuntimeState(multiAgentScheduleRuntimeKey(userID, builtinOrgPulseID), func(state *ScheduleRuntimeState) {
-		state.LastStatus = "running"
-		state.LastSessionID = "existing-session"
-	})
 
 	_, err := svc.TriggerMultiAgentNow(userID, builtinOrgPulseID)
-	if err == nil || !strings.Contains(err.Error(), "job is already running") {
-		t.Fatalf("TriggerMultiAgentNow() error = %v, want builtin resolution followed by running guard", err)
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("TriggerMultiAgentNow() error = %v, want not-found now that org pulse has no builtin to resolve", err)
 	}
 }
 
@@ -2666,93 +2664,6 @@ func TestApplyPulseLLMToReqMapKeepsWorkflowModelWhenNoProviderDefault(t *testing
 	}
 	if got := primary["model_id"]; got != "gpt-5.4" {
 		t.Fatalf("model_id = %#v, want gpt-5.4", got)
-	}
-}
-
-func TestResolveChiefOfStaffLLMForScheduleUsesExplicitOverride(t *testing.T) {
-	sctx := &ScheduleContext{
-		SourceType: "multi-agent",
-		Capabilities: WorkflowCapabilities{
-			LLMConfig: &workflowtypes.PresetLLMConfig{
-				SchemaVersion: workflowtypes.LLMConfigSchemaVersion,
-				Mode:          workflowtypes.LLMConfigModeProviderProfile,
-				Provider:      "claude-code",
-				ChiefOfStaffLLM: &workflowtypes.AgentLLMConfig{
-					Provider: "codex-cli",
-					ModelID:  "gpt-5.5",
-					Options:  map[string]interface{}{"reasoning_effort": "xhigh"},
-				},
-			},
-		},
-	}
-
-	got := resolveChiefOfStaffLLMForSchedule(context.Background(), sctx)
-	if got == nil {
-		t.Fatal("resolveChiefOfStaffLLMForSchedule() = nil")
-	}
-	if got.Provider != "codex-cli" || got.ModelID != "gpt-5.5" {
-		t.Fatalf("resolveChiefOfStaffLLMForSchedule() = %+v, want codex-cli/gpt-5.5", got)
-	}
-	if got.Options["reasoning_effort"] != "xhigh" {
-		t.Fatalf("reasoning_effort = %#v, want xhigh", got.Options["reasoning_effort"])
-	}
-}
-
-func TestResolveChiefOfStaffLLMForScheduleUsesCodingAgentDefault(t *testing.T) {
-	sctx := &ScheduleContext{
-		SourceType: "multi-agent",
-		Capabilities: WorkflowCapabilities{
-			LLMConfig: &workflowtypes.PresetLLMConfig{
-				SchemaVersion: workflowtypes.LLMConfigSchemaVersion,
-				Mode:          workflowtypes.LLMConfigModeProviderProfile,
-				Provider:      "claude-code",
-			},
-		},
-	}
-
-	got := resolveChiefOfStaffLLMForSchedule(context.Background(), sctx)
-	if got == nil {
-		t.Fatal("resolveChiefOfStaffLLMForSchedule() = nil")
-	}
-	if got.Provider != "claude-code" || got.ModelID != "claude-opus-5" {
-		t.Fatalf("resolveChiefOfStaffLLMForSchedule() = %+v, want claude-code/claude-opus-5", got)
-	}
-	if got.Options["reasoning_effort"] != "medium" {
-		t.Fatalf("reasoning_effort = %#v, want medium", got.Options["reasoning_effort"])
-	}
-}
-
-func TestResolveChiefOfStaffLLMFromDelegationConfigUsesExplicitScheduledModel(t *testing.T) {
-	got := resolveChiefOfStaffLLMFromDelegationConfig(&virtualtools.DelegationTierConfig{
-		ChiefOfStaff: &virtualtools.TierModel{
-			Provider: "codex-cli",
-			ModelID:  "gpt-5.5",
-		},
-		Main: &virtualtools.TierModel{
-			Provider: "claude-code",
-			ModelID:  "claude-code",
-		},
-	})
-	if got == nil {
-		t.Fatal("resolveChiefOfStaffLLMFromDelegationConfig() = nil")
-	}
-	if got.Provider != "codex-cli" || got.ModelID != "gpt-5.5" {
-		t.Fatalf("resolveChiefOfStaffLLMFromDelegationConfig() = %+v, want codex-cli/gpt-5.5", got)
-	}
-}
-
-func TestResolveChiefOfStaffLLMFromDelegationConfigUsesProviderDefault(t *testing.T) {
-	got := resolveChiefOfStaffLLMFromDelegationConfig(&virtualtools.DelegationTierConfig{
-		Main: &virtualtools.TierModel{
-			Provider: "claude-code",
-			ModelID:  "claude-code",
-		},
-	})
-	if got == nil {
-		t.Fatal("resolveChiefOfStaffLLMFromDelegationConfig() = nil")
-	}
-	if got.Provider != "claude-code" || got.ModelID != "claude-opus-5" {
-		t.Fatalf("resolveChiefOfStaffLLMFromDelegationConfig() = %+v, want claude-code/claude-opus-5", got)
 	}
 }
 

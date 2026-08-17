@@ -89,6 +89,12 @@ type RuntimeCapabilities struct {
 	// injection flow for a product agent. Values are never part of the prompt;
 	// selected values are supplied only as shell environment variables.
 	Secrets CapabilityRequirement `json:"secrets,omitempty" yaml:"secrets,omitempty"`
+	// Voice enables the shared AgentWorks streaming speech-to-text service
+	// (/api/voice/stream). Products opt in by declaring a requirement; they
+	// never carry their own STT engine, model, or websocket handling — the
+	// same pattern as Browser. A disabled/empty value hides the composer's mic
+	// control entirely rather than showing a button that would 404.
+	Voice CapabilityRequirement `json:"voice,omitempty" yaml:"voice,omitempty"`
 }
 
 type ToolBinding struct {
@@ -170,6 +176,66 @@ type Profile struct {
 	Runtime              RuntimePolicy    `json:"runtime" yaml:"runtime"`
 	BuiltIn              bool             `json:"built_in" yaml:"built_in"`
 	OwnerID              string           `json:"owner_id,omitempty" yaml:"owner_id,omitempty"`
+	// Scope declares whether this profile is bound to one project workspace
+	// (the default -- every profile before this field existed, including
+	// Video Studio, behaves this way) or operates globally across a user's
+	// whole workspace with no single project folder, e.g. Chief of Staff.
+	// Empty is equivalent to ProfileScopeProject; always read this through
+	// EffectiveScope(), never the raw field, so that equivalence holds
+	// everywhere.
+	Scope string `json:"scope,omitempty" yaml:"scope,omitempty"`
+	// UIPanels declares which optional panels a product's own surface should
+	// offer, so a product's frontend does not have to hardcode what it shows
+	// -- the same "declare it, don't assume it" contract Commands and Secrets
+	// already follow. Unlike each product's own local ui: block (surface,
+	// streaming, etc. -- rendering-mode choices the mounted surface component
+	// already knows), these panel toggles are read over the wire via
+	// GET /api/agent-profiles/{id}, the same response Commands and
+	// Runtime.ProviderOptions travel through.
+	UIPanels UIPanels `json:"ui_panels,omitempty" yaml:"ui_panels,omitempty"`
+}
+
+// UIPanels are optional panels a product's surface can offer. Every field
+// defaults to off: a product opts in explicitly rather than a panel showing
+// up because a field was left unset.
+type UIPanels struct {
+	// Secrets shows the secrets-management button/dropdown in the product's
+	// header, the same control Video Studio already offers.
+	Secrets bool `json:"secrets,omitempty" yaml:"secrets,omitempty"`
+	// Schedules shows a Schedules panel listing this profile's scheduled
+	// runs (enable/disable/trigger/delete), reusing the same list the
+	// AgentWorks schedules popup shows.
+	Schedules bool `json:"schedules,omitempty" yaml:"schedules,omitempty"`
+	// Files shows a Files panel with the same unscoped workspace file
+	// browser AgentWorks' own multi-agent files view uses -- unscoped,
+	// unlike Video Studio's FilesPanel which is pinned to one project.
+	Files bool `json:"files,omitempty" yaml:"files,omitempty"`
+}
+
+const (
+	// ProfileScopeProject is a profile bound to one project workspace --
+	// resolveAgentProfileForQuery requires selected_folder and
+	// agent_profile_context.project_title, and the folder guard collapses to
+	// that one project root. This is the default.
+	ProfileScopeProject = "project"
+	// ProfileScopeGlobal is a profile with no single project workspace: it
+	// keeps the chat-wide grants a profile-less turn already has (including
+	// org-owned pulse/ writes), defaults its workspace to the "Chats" alias,
+	// and defaults its prompt project_title to the profile's own Name.
+	ProfileScopeGlobal = "global"
+)
+
+// EffectiveScope returns the profile's scope, defaulting empty to
+// ProfileScopeProject. Every consumer must call this rather than reading
+// Scope directly, so that an unset field and an explicit "project" are
+// always indistinguishable -- this is what keeps every profile declared
+// before this field existed (Video Studio included) byte-for-byte
+// unaffected.
+func (p Profile) EffectiveScope() string {
+	if strings.TrimSpace(p.Scope) == "" {
+		return ProfileScopeProject
+	}
+	return p.Scope
 }
 
 // ToolPolicy controls generic AgentWorks capabilities a product receives.

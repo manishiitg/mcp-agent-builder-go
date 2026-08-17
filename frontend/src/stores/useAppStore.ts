@@ -4,7 +4,7 @@ import type { AgentMode } from './types'
 import { useModeStore, type ModeCategory } from './useModeStore'
 import { getWorkspaceScopedStorageKey } from './useWorkspaceConnectionStore'
 
-export type MultiAgentRightPanelView = 'files' | 'org-goals' | 'org-pulse' | 'tasks'
+export type MultiAgentRightPanelView = 'files' | 'tasks'
 
 interface AppState {
   // Agent configuration
@@ -215,10 +215,10 @@ export const useAppStore = create<AppState>()(
           }
           state.workspaceMinimized = false
         }
+        // org-goals/org-pulse were removed alongside the dropped goals/Org-Pulse
+        // feature -- a stale persisted value of either falls through to files.
         if (
           state.multiAgentRightPanelView !== 'files' &&
-          state.multiAgentRightPanelView !== 'org-goals' &&
-          state.multiAgentRightPanelView !== 'org-pulse' &&
           state.multiAgentRightPanelView !== 'tasks'
         ) {
           state.multiAgentRightPanelView = 'files'

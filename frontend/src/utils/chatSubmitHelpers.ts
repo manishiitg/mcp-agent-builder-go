@@ -11,6 +11,7 @@ import { useGlobalPresetStore } from '../stores/useGlobalPresetStore'
 import { useWorkflowStore } from '../stores/useWorkflowStore'
 import { useImageGenStore } from '../stores/useImageGenStore'
 import { logger } from './logger'
+import { isChiefOfStaffTab } from './chiefOfStaff'
 
 // Workflow phases that support conversational chat mode instead of blocking human_feedback
 const CHAT_COMPATIBLE_PHASES = new Set([
@@ -231,9 +232,7 @@ export async function resolveOrCreateTab(params: {
 
   if (!currentTab && selectedModeCategory === 'multi-agent') {
     const chatStore = useChatStore.getState()
-    const tabs = Object.values(chatStore.chatTabs).filter(tab =>
-      tab.metadata?.mode === selectedModeCategory && !tab.metadata?.agentProfileId
-    )
+    const tabs = Object.values(chatStore.chatTabs).filter(isChiefOfStaffTab)
 
     if (tabs.length === 0) {
       try {

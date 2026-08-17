@@ -6,7 +6,6 @@ import type { ScheduledJob } from '../../services/api-types'
 import ModalPortal from '../ui/ModalPortal'
 
 const MISSED_SCHEDULE_GRACE_MS = 60_000
-const ORG_PULSE_JOB_ID = 'builtin-org-pulse'
 type JobFilter = 'running' | 'enabled' | 'paused' | 'missed' | 'issues' | 'all'
 
 const isScheduleIssueStatus = (status?: ScheduledJob['last_status']) =>
@@ -84,39 +83,20 @@ function sortJobs(a: ScheduledJob, b: ScheduledJob): number {
   return a.name.localeCompare(b.name)
 }
 
-function isOrgPulseJob(job: ScheduledJob): boolean {
-  if (job.id === ORG_PULSE_JOB_ID) return true
-  const haystack = `${job.name}\n${job.description || ''}\n${job.query || ''}`.toLowerCase()
-  return haystack.includes('org pulse') || haystack.includes('org-pulse')
-}
-
-function getSlashManagedCommand(job: ScheduledJob): string {
-  if (isOrgPulseJob(job)) return '/pulse-setup'
-  if (job.managed_by === 'slash-command') return 'setup command'
-  return ''
-}
-
-function isSlashManagedJob(job: ScheduledJob): boolean {
-  return getSlashManagedCommand(job) !== ''
-}
-
-function managedScheduleError(job: ScheduledJob, action: string): string {
-  const command = getSlashManagedCommand(job)
-  if (command && command !== 'setup command') {
-    return `Use ${command} in Chief of Staff to ${action}.`
-  }
-  return `Use the setup command in Chief of Staff to ${action}.`
-}
-
 function isBuiltInJob(job: ScheduledJob): boolean {
   return !!job.built_in || job.id.startsWith('builtin-')
 }
 
 interface MultiAgentSchedulesPopupProps {
-  onClose: () => void
+  onClose?: () => void
+  // Renders as inline panel content (no modal chrome, no title bar/close
+  // button) for embedding directly in a product surface -- e.g. Chief of
+  // Staff's own Schedules tab -- instead of the floating popup AgentWorks
+  // opens from ChatTabs.
+  embedded?: boolean
 }
 
-const MultiAgentSchedulesPopup: React.FC<MultiAgentSchedulesPopupProps> = ({ onClose }) => {
+const MultiAgentSchedulesPopup: React.FC<MultiAgentSchedulesPopupProps> = ({ onClose, embedded = false }) => {
   const [jobs, setJobs] = useState<ScheduledJob[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -198,10 +178,6 @@ const MultiAgentSchedulesPopup: React.FC<MultiAgentSchedulesPopupProps> = ({ onC
   }, [activeFilter, sortedJobs])
 
   const handleToggle = async (job: ScheduledJob) => {
-    if (isSlashManagedJob(job)) {
-      setError(managedScheduleError(job, 'change this schedule'))
-      return
-    }
     setActionInProgress(job.id)
     try {
       const updated = job.enabled
@@ -216,10 +192,6 @@ const MultiAgentSchedulesPopup: React.FC<MultiAgentSchedulesPopupProps> = ({ onC
   }
 
   const handleTrigger = async (job: ScheduledJob) => {
-    if (isSlashManagedJob(job)) {
-      setError(managedScheduleError(job, 'run this schedule'))
-      return
-    }
     setActionInProgress(job.id)
     try {
       await schedulerApi.triggerJob(job.id)
@@ -245,10 +217,6 @@ const MultiAgentSchedulesPopup: React.FC<MultiAgentSchedulesPopupProps> = ({ onC
   }
 
   const handleDelete = async (job: ScheduledJob) => {
-    if (isSlashManagedJob(job)) {
-      setError(managedScheduleError(job, 'disable or change this schedule'))
-      return
-    }
     if (!window.confirm(`Delete schedule "${job.name}"?`)) return
     setActionInProgress(job.id)
     try {
@@ -305,20 +273,17 @@ const MultiAgentSchedulesPopup: React.FC<MultiAgentSchedulesPopupProps> = ({ onC
     { key: 'all', label: 'All', count: summary.total },
   ]
 
-  return (
-    <ModalPortal>
-    <div
-      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-2 sm:p-4"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
-    >
-      <div className="flex max-h-[calc(100dvh-1rem)] w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-border bg-card text-card-foreground shadow-2xl sm:max-h-[85vh]">
+  const panelContent = (
+    <div className={embedded ? 'flex h-full min-h-0 flex-col' : 'flex max-h-[calc(100dvh-1rem)] w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-border bg-card text-card-foreground shadow-2xl sm:max-h-[85vh]'}>
         {/* Header */}
         <div className="flex flex-shrink-0 items-start justify-between gap-4 border-b border-border px-5 py-4">
           <div className="min-w-0 space-y-2">
-            <div className="flex items-center gap-2">
-              <CalendarDays className="h-5 w-5 text-amber-500" />
-              <h3 className="truncate text-base font-semibold text-foreground">Scheduled Chief of Staff Tasks</h3>
-            </div>
+            {!embedded && (
+              <div className="flex items-center gap-2">
+                <CalendarDays className="h-5 w-5 text-amber-500" />
+                <h3 className="truncate text-base font-semibold text-foreground">Scheduled Chief of Staff Tasks</h3>
+              </div>
+            )}
             {!isLoading && (
               <div className="flex flex-wrap gap-1.5">
                 <span className="rounded-full border border-border bg-background px-2 py-0.5 text-xs text-muted-foreground">
@@ -360,13 +325,15 @@ const MultiAgentSchedulesPopup: React.FC<MultiAgentSchedulesPopupProps> = ({ onC
             >
               <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
             </button>
-            <button
-              onClick={onClose}
-              className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-              aria-label="Close schedules"
-            >
-              <X className="h-4 w-4" />
-            </button>
+            {!embedded && onClose && (
+              <button
+                onClick={onClose}
+                className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                aria-label="Close schedules"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
           </div>
         </div>
 
@@ -431,8 +398,6 @@ const MultiAgentSchedulesPopup: React.FC<MultiAgentSchedulesPopupProps> = ({ onC
                 <div className="divide-y divide-border">
                   {filteredJobs.map((job) => {
                     const missedDelayMs = getMissedScheduleDelayMs(job)
-                    const slashManagedCommand = getSlashManagedCommand(job)
-                    const slashManagedJob = slashManagedCommand !== ''
                     const builtInJob = isBuiltInJob(job)
                     const isRunning = job.last_status === 'running'
 
@@ -459,12 +424,7 @@ const MultiAgentSchedulesPopup: React.FC<MultiAgentSchedulesPopupProps> = ({ onC
                                       Paused
                                     </span>
                                   )}
-                                  {slashManagedCommand && slashManagedCommand !== 'setup command' && (
-                                    <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-300">
-                                      {slashManagedCommand}
-                                    </span>
-                                  )}
-                                  {builtInJob && !slashManagedJob && (
+                                  {builtInJob && (
                                     <span className="rounded-full border border-border bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
                                       Built-in
                                     </span>
@@ -488,8 +448,7 @@ const MultiAgentSchedulesPopup: React.FC<MultiAgentSchedulesPopupProps> = ({ onC
                                   </span>
                                   <span>Last ran {formatLastRunLabel(job.last_run_at)}</span>
                                   <span>{job.run_count} run{job.run_count !== 1 ? 's' : ''}</span>
-                                  {slashManagedJob && <span>Managed in chat</span>}
-                                  {builtInJob && !slashManagedJob && <span>System schedule</span>}
+                                  {builtInJob && <span>System schedule</span>}
                                 </div>
 
                                 {job.query && (
@@ -518,10 +477,6 @@ const MultiAgentSchedulesPopup: React.FC<MultiAgentSchedulesPopupProps> = ({ onC
                                 <Square className="h-3 w-3" />
                                 Stop
                               </button>
-                            ) : slashManagedJob ? (
-                              <span className="rounded-md border border-border bg-muted px-2 py-1 text-xs font-medium text-muted-foreground">
-                                Managed in chat
-                              </span>
                             ) : (
                               <>
                                 <button
@@ -570,8 +525,19 @@ const MultiAgentSchedulesPopup: React.FC<MultiAgentSchedulesPopupProps> = ({ onC
             )}
           </div>
         </div>
-      </div>
     </div>
+  )
+
+  if (embedded) return panelContent
+
+  return (
+    <ModalPortal>
+      <div
+        className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-2 sm:p-4"
+        onClick={(e) => { if (e.target === e.currentTarget) onClose?.() }}
+      >
+        {panelContent}
+      </div>
     </ModalPortal>
   )
 }

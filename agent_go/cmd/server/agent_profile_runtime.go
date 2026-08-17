@@ -85,6 +85,19 @@ func appendUniqueStrings(current []string, additions ...string) []string {
 	return out
 }
 
+// isGlobalScopedProfile reports whether the resolved profile declared
+// agentprofiles.ProfileScopeGlobal -- Chief of Staff today, and any future
+// profile with no single project workspace. A global-scoped profile keeps
+// the same chat-wide grants (including the pulse/ write grant) and
+// workspace description a profile-less turn already has; only a
+// project-scoped profile narrows to one project root. Every call site that
+// narrows behavior on bare `resolvedProfile != nil` must also check this, or
+// it silently narrows a global-scoped profile the same way it narrows a
+// project-scoped one.
+func isGlobalScopedProfile(p *resolvedAgentProfile) bool {
+	return p != nil && p.Definition.EffectiveScope() == agentprofiles.ProfileScopeGlobal
+}
+
 func agentProfileRuntimeWorkspace(userID, workspacePath string) string {
 	workspacePath = filepath.ToSlash(filepath.Clean(filepath.FromSlash(workspacePath)))
 	if workspacePath == "Chats" || strings.HasPrefix(workspacePath, "Chats/") {
@@ -156,20 +169,39 @@ func (api *StreamingAPI) resolveAgentProfileForQuery(ctx context.Context, req *Q
 	if req.AgentMode != "multi-agent" {
 		return nil, fmt.Errorf("agent profiles currently require agent_mode=multi-agent")
 	}
-	workspacePath, err := cleanAgentProfileWorkspace(req.SelectedFolder, userID)
+
+	// Resolve before validating workspace/project fields: a global-scoped
+	// profile (Chief of Staff) has no single project workspace, so whether
+	// those fields are required at all depends on what this profile declares.
+	profile, err := api.agentProfiles.Resolve(profileID, req.AgentProfileVersion, userID)
+	if err != nil {
+		return nil, err
+	}
+	isGlobalScope := profile.EffectiveScope() == agentprofiles.ProfileScopeGlobal
+
+	selectedFolder := strings.TrimSpace(req.SelectedFolder)
+	if isGlobalScope && selectedFolder == "" {
+		// "Chats" is the same alias agentProfileRuntimeWorkspace already
+		// rewrites to perUserChatsFolderFor(userID) -- the exact folder a
+		// profile-less multi-agent turn already uses today.
+		selectedFolder = "Chats"
+	}
+	workspacePath, err := cleanAgentProfileWorkspace(selectedFolder, userID)
 	if err != nil {
 		return nil, err
 	}
 	req.SelectedFolder = workspacePath
 
-	profile, err := api.agentProfiles.Resolve(profileID, req.AgentProfileVersion, userID)
-	if err != nil {
-		return nil, err
-	}
 	promptContext := req.AgentProfileContext
 	promptContext.ProjectTitle = strings.TrimSpace(promptContext.ProjectTitle)
 	if promptContext.ProjectTitle == "" {
-		return nil, fmt.Errorf("agent_profile_context.project_title is required")
+		if isGlobalScope {
+			// A global profile has no per-turn project; its own declared Name
+			// is the only sensible constant "title" for its prompt context.
+			promptContext.ProjectTitle = profile.Name
+		} else {
+			return nil, fmt.Errorf("agent_profile_context.project_title is required")
+		}
 	}
 	if strings.TrimSpace(promptContext.LocalDateTime) == "" {
 		now := time.Now()
@@ -201,13 +233,16 @@ func (api *StreamingAPI) resolveAgentProfileForQuery(ctx context.Context, req *Q
 		req.DecryptedSecrets = nil
 		noGlobalSecrets := []string{}
 		req.SelectedGlobalSecrets = &noGlobalSecrets
-	} else if api.chatStore != nil && userID != "" {
+	} else if !isGlobalScope && api.chatStore != nil && userID != "" {
 		// A product project owns its workflow-scoped secrets. Attach their names
 		// automatically for every direct-chat turn so native coding-agent tools
 		// receive SECRET_<NAME> without the model ever seeing a value. User-wide
 		// secrets remain opt-in through the existing selected-secret mechanism;
 		// a project secret with the same name deliberately resolves to the
-		// project value.
+		// project value. Skipped for a global-scoped profile: there is no
+		// single project secret bucket to attach, and req.DecryptedSecrets /
+		// req.SelectedGlobalSecrets are left exactly as the client sent them --
+		// identical to today's profile-less behavior.
 		stored, secretErr := api.chatStore.ListWorkflowSecrets(ctx, userID, workspacePath)
 		if secretErr != nil {
 			log.Printf("[SECRETS] Failed to list product workspace secrets for %s (%s): %v", userID, workspacePath, secretErr)
@@ -237,10 +272,17 @@ func (api *StreamingAPI) resolveAgentProfileForQuery(ctx context.Context, req *Q
 		}
 	}
 	var resolvedKeys *llm.ProviderAPIKeys
+	requestHasExplicitModel := strings.TrimSpace(req.Provider) != "" && strings.TrimSpace(req.ModelID) != ""
 	if provider, modelID := resolveProfileRuntimeModel(profile.Runtime, req.Provider, req.ModelID); provider != "" && modelID != "" {
 		// A profile-owned model binding is authoritative over the user's global
-		// AgentWorks chat selection, while still using the shared provider adapter,
-		// credentials, session registry, and streaming lifecycle.
+		// AgentWorks chat selection for a project-scoped product (Video Studio):
+		// the whole point is a curated, pinned choice. A global-scoped profile
+		// (Chief of Staff) is meant to feel like a profile-less chat -- any
+		// published LLM the user already picked wins; the declared binding is
+		// only the starting default for a brand-new chat with no selection yet.
+		if isGlobalScope && requestHasExplicitModel {
+			provider, modelID = req.Provider, req.ModelID
+		}
 		req.Provider = provider
 		req.ModelID = modelID
 		req.LLMConfig = &orchestrator.LLMConfig{Primary: orchestrator.LLMModel{Provider: provider, ModelID: modelID}}

@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	virtualtools "github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/contractupgrade"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/costledger"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/fsutil"
@@ -2055,7 +2054,6 @@ func (s *SchedulerService) runChiefTaskReportUpdate(ctx context.Context, sctx *S
 	if sctx.Capabilities.UseCodeExecutionMode {
 		reqMap["use_code_execution_mode"] = true
 	}
-	s.applyChiefOfStaffLLMToReqMap(ctx, reqMap, sctx, sessionID)
 
 	s.sessionLogf(sctx, sessionID, "[TASK_REPORT] updating pulse/task.html for schedule %s run %s", sctx.Schedule.ID, runID)
 	if err := s.api.startSessionInternal(ctx, reqMap, sessionID, sctx.UserID, nil); err != nil {
@@ -3762,7 +3760,6 @@ func (s *SchedulerService) executeMultiAgentJob(ctx context.Context, sctx *Sched
 
 	// Apply LLM config and secrets
 	s.applyLLMAndSecretsToReqMap(ctx, reqMap, sctx)
-	s.applyChiefOfStaffLLMToReqMap(ctx, reqMap, sctx, sessionID)
 
 	// Load user-level secrets if configured
 	if len(sctx.Capabilities.SelectedSecrets) > 0 && sctx.UserID != "" {
@@ -3990,85 +3987,6 @@ func (s *SchedulerService) applyGoalAdvisorLLMToReqMap(reqMap map[string]interfa
 	}
 	reqMap["llm_config_source"] = llmConfigSourceScheduledAutoImprove
 	s.sessionLogf(sctx, sessionID, "[PULSE] using configured Goal Advisor LLM %s/%s", strings.TrimSpace(goalAdvisorLLM.Provider), strings.TrimSpace(goalAdvisorLLM.ModelID))
-}
-
-func (s *SchedulerService) applyChiefOfStaffLLMToReqMap(ctx context.Context, reqMap map[string]interface{}, sctx *ScheduleContext, sessionID string) {
-	if sctx == nil || sctx.SourceType != "multi-agent" {
-		return
-	}
-	chiefOfStaffLLM := resolveChiefOfStaffLLMForSchedule(ctx, sctx)
-	if !applyPrimaryLLMConfigToReqMap(reqMap, chiefOfStaffLLM) {
-		return
-	}
-	reqMap["llm_config_source"] = llmConfigSourceScheduledChiefOfStaff
-	s.sessionLogf(sctx, sessionID, "[SCHEDULER] using configured Chief of Staff LLM %s/%s", strings.TrimSpace(chiefOfStaffLLM.Provider), strings.TrimSpace(chiefOfStaffLLM.ModelID))
-}
-
-func resolveChiefOfStaffLLMForSchedule(ctx context.Context, sctx *ScheduleContext) *workflowtypes.AgentLLMConfig {
-	if sctx == nil {
-		return nil
-	}
-	if llmCfg := sctx.Capabilities.LLMConfig; llmCfg != nil {
-		if llmCfg.ChiefOfStaffLLM != nil {
-			return llmCfg.ChiefOfStaffLLM
-		}
-		if resolved, ok := workflowtypes.ResolveProviderProfileChiefOfStaffConfig(llmCfg); ok {
-			return resolved
-		}
-		return nil
-	}
-
-	tierConfig := LoadAndResolveTierConfig(ctx, nil)
-	return resolveChiefOfStaffLLMFromDelegationConfig(tierConfig)
-}
-
-func resolveChiefOfStaffLLMFromDelegationConfig(tierConfig *virtualtools.DelegationTierConfig) *workflowtypes.AgentLLMConfig {
-	if tierConfig == nil {
-		return nil
-	}
-	if tierConfig.ChiefOfStaff != nil {
-		return agentLLMConfigFromTierModel(tierConfig.ChiefOfStaff)
-	}
-	for _, candidate := range []*virtualtools.TierModel{tierConfig.Main, tierConfig.High} {
-		if cfg := agentLLMConfigFromTierModel(candidate); cfg != nil {
-			if resolved, ok := workflowtypes.ResolveProviderProfileChiefOfStaffConfig(&workflowtypes.PresetLLMConfig{
-				SchemaVersion: workflowtypes.LLMConfigSchemaVersion,
-				Mode:          workflowtypes.LLMConfigModeProviderProfile,
-				Provider:      cfg.Provider,
-			}); ok {
-				return resolved
-			}
-			return cfg
-		}
-	}
-	return nil
-}
-
-func agentLLMConfigFromTierModel(tier *virtualtools.TierModel) *workflowtypes.AgentLLMConfig {
-	if tier == nil || strings.TrimSpace(tier.Provider) == "" || strings.TrimSpace(tier.ModelID) == "" {
-		return nil
-	}
-	cfg := &workflowtypes.AgentLLMConfig{
-		Provider: strings.TrimSpace(tier.Provider),
-		ModelID:  strings.TrimSpace(tier.ModelID),
-		Options:  tier.Options,
-	}
-	if len(tier.Fallbacks) > 0 {
-		cfg.Fallbacks = make([]workflowtypes.AgentLLMFallback, 0, len(tier.Fallbacks))
-		for _, fallback := range tier.Fallbacks {
-			provider := strings.TrimSpace(fallback.Provider)
-			modelID := strings.TrimSpace(fallback.ModelID)
-			if provider == "" || modelID == "" {
-				continue
-			}
-			cfg.Fallbacks = append(cfg.Fallbacks, workflowtypes.AgentLLMFallback{
-				Provider: provider,
-				ModelID:  modelID,
-				Options:  fallback.Options,
-			})
-		}
-	}
-	return cfg
 }
 
 // buildWorkshopRequest creates the base request map for workshop mode execution.

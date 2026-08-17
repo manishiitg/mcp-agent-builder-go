@@ -79,6 +79,7 @@ confirm the failure is actually visible — otherwise a fix cannot be verified.
 
 ## Earlier incidents
 
+- [voice_dictation_mic_captures_silence.md](voice_dictation_mic_captures_silence.md) — **OPEN**, environment-level, not yet root-caused. A dev machine's mic reads real silence through every app (not just this one) despite a correctly-granted, unmuted device; the STT pipeline itself was independently proven correct via a raw WAV file and a synthetic-tone browser test.
 - [session_tool_registry_lifecycle_leak.md](session_tool_registry_lifecycle_leak.md)
 - [auto_unlock_loop_orchestration.md](auto_unlock_loop_orchestration.md)
 - [dependency_update_failure.md](dependency_update_failure.md)

@@ -78,7 +78,6 @@ type DelegationTierConfig struct {
 	Mode          string                      `json:"mode"`
 	Provider      string                      `json:"provider,omitempty"`
 	Main          *TierModel                  `json:"main,omitempty"` // orchestrator/main agent model
-	ChiefOfStaff  *TierModel                  `json:"chief_of_staff,omitempty"`
 	High          *TierModel                  `json:"high,omitempty"`
 	Medium        *TierModel                  `json:"medium,omitempty"`
 	Low           *TierModel                  `json:"low,omitempty"`
@@ -670,7 +669,7 @@ Buckets: **workflow** (scoped to workflow), **user** (reusable), **global** (rea
 	return scheduleInstructions + `
 ## Your Role — Chief of Staff
 
-You are the user's **chief of staff**. Standing work runs as **automations** under ` + "`Workflow/`" + `; each workflow is one capability with a plan, experience (` + "`knowledgebase/`" + ` + ` + "`db/`" + `), Pulse verdicts, and run history (` + "`runs/`" + `). Manage them against org goals, report back, and handle ad-hoc requests by dispatching temporary sub-agents (contractors).
+You are the user's **chief of staff**. Standing work runs as **automations** under ` + "`Workflow/`" + `; each workflow is one capability with a plan, experience (` + "`knowledgebase/`" + ` + ` + "`db/`" + `), Pulse verdicts, and run history (` + "`runs/`" + `). Manage them, report back, and handle ad-hoc requests by dispatching temporary sub-agents (contractors).
 
 For scheduled Chief of Staff tasks, durable context lives in ` + "`pulse/task.html`" + `. Read prior entries for the same task before acting; workflow-specific knowledge stays in that workflow's KB/db.
 
@@ -679,10 +678,6 @@ For scheduled Chief of Staff tasks, durable context lives in ` + "`pulse/task.ht
 Write for a business operator, not for an engineer reading logs. Lead with the outcome, why it matters, whether the relevant goal is on track, and what happens next. Use short sentences and familiar words.
 
 Translate internal states into plain English. Do not expose run/session ids, tool names, database/table names, file paths, hashes, cursors, raw JSON, stack traces, or internal status labels in the normal answer unless the user explicitly asks for technical detail. Keep those details for verification and durable records; when a report needs them, place them in a collapsed ` + "`Agent details`" + ` section. Never make the user decode phrases such as ` + "`no_terminal_packet`" + `, ` + "`retry_due`" + `, or ` + "`approved_awaiting_evidence`" + `.
-
-### Org Goals
-
-Org goals live in the local workspace file ` + "`pulse/goals.html`" + ` (docs root + ` + "`/pulse/goals.html`" + `). Org Pulse lives in local ` + "`pulse/org-pulse.html`" + `. Manage workflows against them using Pulse verdicts, reports, db, and run artifacts. Load ` + "`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/org-goals.md\"}])`" + ` before goal/alignment/performance work, and ` + "`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/org-html.md\"}])`" + ` before editing. Never WebFetch raw GitHub URLs for these files or reference docs.
 
 Mechanically you are an **orchestrator**: you decompose work and dispatch sub-agents, and you use tools directly for simple tasks.
 
@@ -713,8 +708,7 @@ Chief of Staff does **not** run workflows directly right now. The user runs work
 1. Find the workflow path — ` + "`execute_shell_command(command: \"ls Workflow/\")`" + `
 2. Find available groups — ` + "`execute_shell_command(command: \"cat Workflow/<name>/variables/variables.json\")`" + ` and look at the ` + "`groups`" + ` array
 3. Tell the user which workflow/group to run manually and what context or route choice to use.
-4. After the user has run it, inspect the latest output in ` + "`Workflow/<name>/runs/iteration-0/<group>/`" + `.
-5. if local ` + "`pulse/goals.html`" + ` exists under the docs root, load ` + "`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/org-goals.md\"}])`" + ` and produce **Org goal alignment**: goal, workflow/group, status, evidence path, gap, next action. Use run folders, typed Pulse state from ` + "`get_pulse_state`" + `, ` + "`reports/`" + `, and ` + "`db/db.sqlite`" + `. Edit local ` + "`pulse/goals.html`" + ` only for concrete scorecard updates after loading ` + "`org-html`" + `; otherwise classify supporting/unaligned.
+4. After the user has run it, inspect the latest output in ` + "`Workflow/<name>/runs/iteration-0/<group>/`" + `. Report status using run folders, typed Pulse state from ` + "`get_pulse_state`" + `, ` + "`reports/`" + `, and ` + "`db/db.sqlite`" + `.
 
 ### Reading workflow state
 
@@ -728,9 +722,7 @@ When asked what a workflow produced, knows, or should improve, load ` + "`read_s
 - **Runtime evidence:** latest ` + "`runs/iteration-0/<group>/`" + ` outputs/logs/timing, ` + "`costs/`" + `, and typed Pulse verdicts from ` + "`get_pulse_state`" + `.
 - **External capabilities:** selected workflow skills/servers from ` + "`workflow.json`" + `, per-step ` + "`enabled_skills`" + `, and workspace ` + "`skills/<folder>/SKILL.md`" + `.
 
-Org-level goals live in local ` + "`pulse/goals.html`" + ` and are what you manage against.
-
-Read workflow files with shell tools, but **do not modify workflow internals** from Chief of Staff chat. Org Pulse may update only org-owned artifacts under ` + "`pulse/`" + `, including local ` + "`pulse/goals.html`" + ` and ` + "`pulse/org-pulse.html`" + `. It reports goal status and workflow alignment; it does not write recommendations, questions, or findings into workflows.
+Read workflow files with shell tools, but **do not modify workflow internals** from Chief of Staff chat. Writes are confined to org-owned artifacts under ` + "`pulse/`" + ` (e.g. the Tasks page at ` + "`pulse/task.html`" + `) and your own chat history — never recommendations, questions, or findings written into a workflow itself.
 
 ### notify_user — proactively reach the user
 

@@ -77,10 +77,6 @@ type PresetLLMConfig struct {
 	// coding-agent providers may supply a provider-owned Pulse default.
 	PulseLLM *AgentLLMConfig `json:"pulse_llm,omitempty"`
 
-	// Optional scheduled Chief of Staff override. When omitted, coding-agent
-	// providers may supply a provider-owned Chief of Staff default.
-	ChiefOfStaffLLM *AgentLLMConfig `json:"chief_of_staff_llm,omitempty"`
-
 	// Feature toggles.
 	UseKnowledgebase           *bool  `json:"use_knowledgebase,omitempty"`
 	LockKnowledgebase          *bool  `json:"lock_knowledgebase,omitempty"`
@@ -220,11 +216,10 @@ func NormalizePresetLLMConfig(config *PresetLLMConfig) bool {
 			changed = true
 		}
 	} else if config.Mode == LLMConfigModeProviderProfile {
-		if config.BuilderLLM != nil || config.MaintenanceLLM != nil || config.PulseLLM != nil || config.ChiefOfStaffLLM != nil || config.TieredConfig != nil {
+		if config.BuilderLLM != nil || config.MaintenanceLLM != nil || config.PulseLLM != nil || config.TieredConfig != nil {
 			config.BuilderLLM = nil
 			config.MaintenanceLLM = nil
 			config.PulseLLM = nil
-			config.ChiefOfStaffLLM = nil
 			config.TieredConfig = nil
 			changed = true
 		}
@@ -314,31 +309,6 @@ func ResolveCodingAgentMemoryConfig(config *PresetLLMConfig) (*AgentLLMConfig, b
 	return ResolveProviderProfilePulseConfig(config)
 }
 
-func ResolveProviderProfileChiefOfStaffConfig(config *PresetLLMConfig) (*AgentLLMConfig, bool) {
-	if config == nil || config.Provider == "" {
-		return nil, false
-	}
-
-	defaults, ok := llmproviders.GetCodingAgentDefaultTierModels(llmproviders.Provider(config.Provider))
-	if !ok {
-		return nil, false
-	}
-	chiefOfStaff := agentLLMConfigFromCodingAgentRef(defaults.ChiefOfStaff)
-	if chiefOfStaff == nil {
-		chiefOfStaff = agentLLMConfigFromCodingAgentRef(defaults.Maintenance)
-	}
-	if chiefOfStaff == nil {
-		chiefOfStaff = agentLLMConfigFromCodingAgentRef(defaults.Pulse)
-	}
-	if chiefOfStaff == nil {
-		chiefOfStaff = agentLLMConfigFromCodingAgentRef(defaults.High)
-	}
-	if chiefOfStaff == nil {
-		return nil, false
-	}
-	return chiefOfStaff, true
-}
-
 // WorkflowSelectedOption represents a selected option for a workflow phase.
 type WorkflowSelectedOption struct {
 	OptionID    string `json:"option_id"`
@@ -402,9 +372,6 @@ func ValidatePresetLLMConfigPublic(config *PresetLLMConfig) error {
 		return err
 	}
 	if err := validateRequiredPresetAgentLLMConfig(config.PulseLLM, "pulse_llm"); err != nil {
-		return err
-	}
-	if err := validatePresetAgentLLMConfig(config.ChiefOfStaffLLM, "chief_of_staff_llm"); err != nil {
 		return err
 	}
 	return nil

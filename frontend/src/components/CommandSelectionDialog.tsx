@@ -71,7 +71,7 @@ export const CommandSelectionDialog: React.FC<CommandSelectionDialogProps> = ({
 
   // Filter commands based on search query and current mode
   useEffect(() => {
-    const allCommands = getCommands(modeCategory, workshopMode, agentProfileId)
+    const allCommands = getCommands(modeCategory, workshopMode)
 
     if (!searchQuery.trim()) {
       setFilteredCommands(allCommands)

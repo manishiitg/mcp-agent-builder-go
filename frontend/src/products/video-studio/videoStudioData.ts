@@ -51,6 +51,9 @@ type AgentProfileResponse = {
       model_id?: unknown
       default?: unknown
     }>
+    capabilities?: {
+      voice?: unknown
+    }
   }
 }
 

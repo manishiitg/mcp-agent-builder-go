@@ -6,9 +6,54 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/agentprofiles"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/common"
 	todo_creation_human "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
 )
+
+func TestEnhanceToolDescriptionMentionsPulseForGlobalScopeLikeNoProfile(t *testing.T) {
+	const chatsFolder = "_users/user-1/Chats"
+	noProfile := enhanceToolDescriptionForMultiAgentMode("execute_shell_command", "desc", chatsFolder, nil)
+	globalProfile := &resolvedAgentProfile{Definition: agentprofiles.Profile{
+		ID: "chief-of-staff", Scope: agentprofiles.ProfileScopeGlobal,
+	}}
+	global := enhanceToolDescriptionForMultiAgentMode("execute_shell_command", "desc", chatsFolder, globalProfile)
+	projectProfile := &resolvedAgentProfile{Definition: agentprofiles.Profile{ID: "video-studio"}}
+	project := enhanceToolDescriptionForMultiAgentMode("execute_shell_command", "desc", chatsFolder, projectProfile)
+
+	if !strings.Contains(noProfile, "pulse/") {
+		t.Fatalf("expected the no-profile description to mention pulse/, got: %s", noProfile)
+	}
+	if !strings.Contains(global, "pulse/") {
+		t.Fatalf("expected a global-scoped profile's description to mention pulse/ same as no-profile, got: %s", global)
+	}
+	if strings.Contains(project, "pulse/") {
+		t.Fatalf("expected a project-scoped profile's description to stay narrowed (no pulse/ mention), got: %s", project)
+	}
+}
+
+func TestMultiAgentPlacementGuidanceFallsThroughForGlobalScope(t *testing.T) {
+	const chatsFolder = "_users/user-1/Chats"
+	noProfile := multiAgentPlacementGuidance("execute_shell_command", chatsFolder, nil)
+	globalProfile := &resolvedAgentProfile{Definition: agentprofiles.Profile{
+		ID: "chief-of-staff", Scope: agentprofiles.ProfileScopeGlobal,
+	}}
+	global := multiAgentPlacementGuidance("execute_shell_command", chatsFolder, globalProfile)
+	projectProfile := &resolvedAgentProfile{Definition: agentprofiles.Profile{
+		ID: "video-studio",
+		Runtime: agentprofiles.RuntimePolicy{Workspace: agentprofiles.WorkspacePolicy{
+			Placement: map[string][]string{"execute_shell_command": {"project-specific guidance"}},
+		}},
+	}}
+	project := multiAgentPlacementGuidance("execute_shell_command", chatsFolder, projectProfile)
+
+	if !reflect.DeepEqual(global, noProfile) {
+		t.Fatalf("expected global-scoped guidance to match no-profile guidance exactly, got %v vs %v", global, noProfile)
+	}
+	if reflect.DeepEqual(project, noProfile) {
+		t.Fatalf("expected a project-scoped profile's own declared placement to be used, not the no-profile fallback")
+	}
+}
 
 func TestExtractWorkflowContextFolders(t *testing.T) {
 	tests := []struct {

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { Activity, ListChecks, PanelRightClose, RefreshCw, Target } from 'lucide-react'
+import { ListChecks, PanelRightClose, RefreshCw } from 'lucide-react'
 import jetBrainsMonoLatin400Woff2 from '@fontsource/jetbrains-mono/files/jetbrains-mono-latin-400-normal.woff2?url'
 import jetBrainsMonoLatin600Woff2 from '@fontsource/jetbrains-mono/files/jetbrains-mono-latin-600-normal.woff2?url'
 import { agentApi } from '../../services/api'
@@ -13,8 +13,6 @@ import {
   type OrgHtmlPreviewDevice,
 } from './orgHtmlPreview'
 
-const ORG_PULSE_LOG_PATH = 'pulse/org-pulse.html'
-const ORG_GOALS_PATH = 'pulse/goals.html'
 const ORG_TASKS_PATH = 'pulse/task.html'
 
 const ORG_HTML_FONT_STYLE = `
@@ -219,35 +217,6 @@ const ChiefOfStaffQuestions: React.FC = () => {
 		/>
 	)
 }
-
-export const OrgGoalsPanel: React.FC<{ toolbarLeading?: React.ReactNode; onClosePanel?: () => void; fixedDevice?: OrgHtmlPreviewDevice; hideHeader?: boolean }> = ({ toolbarLeading, onClosePanel, fixedDevice, hideHeader }) => (
-  <OrgHtmlPanel
-    title="Org Goals"
-    path={ORG_GOALS_PATH}
-    loadingText="Loading Org Goals..."
-    emptyText="No org goals yet. Ask the Chief of Staff to set org goals."
-    Icon={Target}
-    toolbarLeading={toolbarLeading}
-    onClosePanel={onClosePanel}
-    fixedDevice={fixedDevice}
-    hideHeader={hideHeader}
-  />
-)
-
-export const OrgPulsePanel: React.FC<{ toolbarLeading?: React.ReactNode; onClosePanel?: () => void; fixedDevice?: OrgHtmlPreviewDevice; hideHeader?: boolean }> = ({ toolbarLeading, onClosePanel, fixedDevice, hideHeader }) => (
-  <OrgHtmlPanel
-    title="Org Pulse"
-    path={ORG_PULSE_LOG_PATH}
-    loadingText="Loading Org Pulse..."
-    emptyText="No Org Pulse log yet. Use /pulse-setup in Chief of Staff to configure Daily Org Pulse."
-    Icon={Activity}
-    toolbarLeading={toolbarLeading}
-    onClosePanel={onClosePanel}
-    fixedDevice={fixedDevice}
-    hideHeader={hideHeader}
-    leadingContent={<ChiefOfStaffQuestions />}
-  />
-)
 
 export const ChiefTasksPanel: React.FC<{ toolbarLeading?: React.ReactNode; onClosePanel?: () => void; fixedDevice?: OrgHtmlPreviewDevice; hideHeader?: boolean }> = ({ toolbarLeading, onClosePanel, fixedDevice, hideHeader }) => (
   <OrgHtmlPanel

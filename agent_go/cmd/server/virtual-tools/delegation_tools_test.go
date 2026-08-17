@@ -344,23 +344,6 @@ func TestGetMultiAgentDelegationInstructionsLazyLoadsScheduleAndSecret(t *testin
 	}
 }
 
-func TestGetMultiAgentDelegationInstructionsAnchorsOrgPulseToLocalWorkspace(t *testing.T) {
-	out := GetMultiAgentDelegationInstructionsWithUser("_users/default/Chats", "default")
-
-	mustContain := []string{
-		"Org goals live in the local workspace file `pulse/goals.html`",
-		"Org Pulse lives in local `pulse/org-pulse.html`",
-		"Never WebFetch raw GitHub URLs for these files or reference docs",
-		"if local `pulse/goals.html` exists under the docs root",
-		"Org-level goals live in local `pulse/goals.html`",
-	}
-	for _, s := range mustContain {
-		if !strings.Contains(out, s) {
-			t.Fatalf("delegation prompt missing local org artifact guardrail %q", s)
-		}
-	}
-}
-
 func TestGetMultiAgentDelegationInstructionsRequiresPlainLanguage(t *testing.T) {
 	out := GetMultiAgentDelegationInstructionsWithUser("_users/default/Chats", "default")
 

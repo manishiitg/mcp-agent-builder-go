@@ -25,6 +25,53 @@ func materializedFileContent(t *testing.T, skill *llmtypes.Skill, relPath string
 	return ""
 }
 
+func TestMaterializeReferenceKindsAsSkillsRendersEachIndividually(t *testing.T) {
+	skills, err := MaterializeReferenceKindsAsSkills("multi-agent", []string{"delegation", "secret-management"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(skills) != 2 {
+		t.Fatalf("expected 2 skills, got %d", len(skills))
+	}
+	if skills[0].Name != "delegation" || skills[1].Name != "secret-management" {
+		t.Fatalf("unexpected skill names/order: %q, %q", skills[0].Name, skills[1].Name)
+	}
+	for _, skill := range skills {
+		if strings.TrimSpace(skill.Content) == "" {
+			t.Fatalf("skill %q has empty content", skill.Name)
+		}
+		if strings.TrimSpace(skill.Description) == "" {
+			t.Fatalf("skill %q has empty description", skill.Name)
+		}
+		if skill.Source.Origin != "builtin" {
+			t.Fatalf("skill %q source = %+v, want builtin", skill.Name, skill.Source)
+		}
+	}
+	// Same underlying render as the mode-gated bundle, not duplicated content
+	// under a different implementation -- the individually-named skill and
+	// the bundle's per-kind supporting file should be byte-for-byte the same.
+	bundle := MaterializeReferenceSkill("multi-agent")
+	bundled := materializedFileContent(t, bundle, "references/delegation.md")
+	if skills[0].Content != bundled {
+		t.Fatalf("individually-materialized delegation content diverges from the bundle's own copy")
+	}
+}
+
+func TestMaterializeReferenceKindsAsSkillsRejectsUnknownName(t *testing.T) {
+	if _, err := MaterializeReferenceKindsAsSkills("multi-agent", []string{"not-a-real-kind"}); err == nil {
+		t.Fatal("expected an error for an unknown reference kind")
+	}
+}
+
+func TestMaterializeReferenceKindsAsSkillsRejectsModeNotAllowed(t *testing.T) {
+	// "workflow-tools" is a real referenceKinds entry, but only allowed in
+	// "workshop" mode -- requesting it for "multi-agent" must fail, not
+	// silently render it anyway.
+	if _, err := MaterializeReferenceKindsAsSkills("multi-agent", []string{"workflow-tools"}); err == nil {
+		t.Fatal("expected an error for a kind not allowed in the requested mode")
+	}
+}
+
 func TestMaterializedReferenceSkillIncludesConfigToolOnlyDocs(t *testing.T) {
 	skill := MaterializeReferenceSkill("workshop")
 	if skill == nil {

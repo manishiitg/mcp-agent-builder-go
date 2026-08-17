@@ -11,7 +11,7 @@ func TestRenderResolvedWorkflowLLMRolesIncludesEveryProviderProfileRole(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"builder", "execution_high", "execution_medium", "execution_low", "maintenance", "pulse", "chief_of_staff", "provider_profile:claude-code"} {
+	for _, want := range []string{"builder", "execution_high", "execution_medium", "execution_low", "maintenance", "pulse", "provider_profile:claude-code"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("output missing %q:\n%s", want, got)
 		}
@@ -25,7 +25,7 @@ func TestRenderResolvedWorkflowLLMRolesShowsReasoningSourceAndOverride(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"codex-cli/gpt-5.6", "high", "explicit_override", "unconfigured", "unresolved", "true", "false"} {
+	for _, want := range []string{"codex-cli/gpt-5.6", "high", "explicit_override", "true"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("output missing %q:\n%s", want, got)
 		}

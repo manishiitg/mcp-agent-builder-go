@@ -4,13 +4,18 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/gorilla/mux"
 )
 
-func TestListScheduledJobsIncludesDefaultBuiltinsWithoutScheduleFile(t *testing.T) {
+// Org Pulse itself is gone (DefaultBuiltinSchedules returns empty -- see
+// builtin_schedules.go), so it is no longer synthesized into a listing, or
+// toggle-able, when no schedule file already carries a stale entry for it.
+// These tests cover the resulting graceful-absence behavior in place of the
+// old resurrection tests, mirroring builtin_schedules_test.go's approach.
+
+func TestListScheduledJobsWithoutScheduleFileHasNoSyntheticOrgPulse(t *testing.T) {
 	api := &mockWorkspaceAPI{files: map[string]string{}}
 	server := httptest.NewServer(api)
 	defer server.Close()
@@ -31,86 +36,17 @@ func TestListScheduledJobsIncludesDefaultBuiltinsWithoutScheduleFile(t *testing.
 		t.Fatalf("failed to decode response: %v\n%s", err, rec.Body.String())
 	}
 
-	var foundOrgPulse bool
 	for _, job := range resp.Jobs {
 		if job.ID == deprecatedAutoEnrichMemoryID {
 			t.Fatalf("deprecated auto-enrich memory should not be listed: %+v", resp.Jobs)
 		}
 		if job.ID == builtinOrgPulseID {
-			foundOrgPulse = true
-			if job.Enabled {
-				t.Fatal("builtin org pulse should be listed as disabled by default")
-			}
-			if job.EntityType != "multi-agent" || job.UserID != GetDefaultUserID() {
-				t.Fatalf("unexpected org pulse job metadata: %+v", job)
-			}
-			if !job.BuiltIn || job.ManagedBy != "slash-command" {
-				t.Fatalf("unexpected org pulse management metadata: %+v", job)
-			}
+			t.Fatalf("removed builtin org pulse should not be synthesized without a persisted entry: %+v", resp.Jobs)
 		}
-	}
-	if !foundOrgPulse {
-		t.Fatalf("builtin org pulse was not listed: %+v", resp.Jobs)
 	}
 }
 
-func TestListScheduledJobsReflectsOrgPulseEnabledViaDuplicate(t *testing.T) {
-	// /pulse-setup can leave Org Pulse enabled under a user-created duplicate id
-	// (via create_multiagent_schedule) instead of a same-id builtin override.
-	// The canonical builtin-org-pulse job must still report Enabled=true so the
-	// Org Pulse pill matches what the scheduler actually runs.
-	scheduleFile := `{
-  "schedules": [
-    {
-      "id": "c8261d3e-f999-4260-a58b-98ff28aa5d1e",
-      "name": "Daily Org Pulse",
-      "description": "Daily sweep of all workflows.",
-      "schedule_type": "cron",
-      "cron_expression": "0 9 * * *",
-      "timezone": "Asia/Kolkata",
-      "enabled": true,
-      "mode": "multi-agent",
-      "query": "Perform the Daily Org Pulse sweep."
-    }
-  ]
-}`
-	api := &mockWorkspaceAPI{files: map[string]string{
-		multiAgentSchedulesPath(GetDefaultUserID()): scheduleFile,
-	}}
-	server := httptest.NewServer(api)
-	defer server.Close()
-	t.Setenv("WORKSPACE_API_URL", server.URL)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/scheduler/jobs?mode=multi-agent", nil)
-	rec := httptest.NewRecorder()
-	listScheduledJobsHandler(NewSchedulerService(nil)).ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
-	}
-
-	var resp struct {
-		Jobs []ScheduledJobResponse `json:"jobs"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("failed to decode response: %v\n%s", err, rec.Body.String())
-	}
-
-	var found bool
-	for _, job := range resp.Jobs {
-		if job.ID == builtinOrgPulseID {
-			found = true
-			if !job.Enabled {
-				t.Fatal("builtin-org-pulse should report Enabled=true when an enabled Org Pulse duplicate exists")
-			}
-		}
-	}
-	if !found {
-		t.Fatalf("builtin-org-pulse was not listed: %+v", resp.Jobs)
-	}
-}
-
-func TestEnableBuiltinOrgPulseCreatesPersistedOverrideForDirectToggle(t *testing.T) {
+func TestEnableBuiltinOrgPulseWithoutPersistedEntryIsNotFound(t *testing.T) {
 	api := &mockWorkspaceAPI{files: map[string]string{}}
 	server := httptest.NewServer(api)
 	defer server.Close()
@@ -122,15 +58,8 @@ func TestEnableBuiltinOrgPulseCreatesPersistedOverrideForDirectToggle(t *testing
 
 	enableScheduledJobHandler(NewSchedulerService(nil)).ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s; want 200 for direct Org Pulse toggle", rec.Code, rec.Body.String())
-	}
-
-	api.mu.Lock()
-	written := api.files[multiAgentSchedulesPath(GetDefaultUserID())]
-	api.mu.Unlock()
-	if !strings.Contains(written, `"id": "builtin-org-pulse"`) || !strings.Contains(written, `"enabled": true`) {
-		t.Fatalf("direct toggle did not persist enabled Org Pulse override; wrote:\n%s", written)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, body = %s; want 404 now that org pulse has no builtin to resolve", rec.Code, rec.Body.String())
 	}
 }
 

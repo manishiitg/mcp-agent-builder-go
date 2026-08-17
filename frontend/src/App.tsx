@@ -5,7 +5,7 @@ import { ThemeProvider } from "./contexts/ThemeContext.tsx";
 import { UpdateProgressToast } from "./components/UpdateProgressToast";
 import { GlobalHumanFeedbackPrompt } from "./components/GlobalHumanFeedbackPrompt";
 import Workspace from "./components/Workspace.tsx";
-import { ChiefTasksPanel, OrgGoalsPanel, OrgPulsePanel } from "./components/org/OrgHtmlPanels";
+import { ChiefTasksPanel } from "./components/org/OrgHtmlPanels";
 import { ORG_HTML_PREVIEW_PREFERENCE_CHANGED_EVENT, getOrgHtmlPreviewDevice, setOrgHtmlPreviewDevice as persistOrgHtmlPreviewDevice, type OrgHtmlPreviewDevice } from "./components/org/orgHtmlPreview";
 import ChatArea, { type ChatAreaRef } from "./components/ChatArea.tsx";
 import { FileContentViewer } from "./components/FileContentViewer";
@@ -24,6 +24,7 @@ import { useModeStore } from "./stores/useModeStore";
 import { useProductSurfaceStore } from "./stores/useProductSurfaceStore";
 import { useLLMStore } from "./stores/useLLMStore";
 import { normalizeEventViewMode, waitForChatStoreHydration, type ChatTab } from "./stores/useChatStore";
+import { isChiefOfStaffTab, isChiefOfStaffScheduleTab, isInteractiveChiefOfStaffTab } from "./utils/chiefOfStaff";
 import { useLLMDefaults } from "./hooks/useLLMDefaults";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./components/ui/tooltip";
 import "./App.css";
@@ -45,6 +46,8 @@ const queryClient = new QueryClient();
 const QuickSwitcher = lazy(() => import('./components/QuickSwitcher'))
 const WorkflowsOverviewPage = lazy(() => import('./components/WorkflowsOverviewPage').then(module => ({ default: module.WorkflowsOverviewPage })))
 const VideoStudioSurface = lazy(() => import('./products/video-studio/VideoStudioSurface').then(module => ({ default: module.VideoStudioSurface })))
+const ChiefOfStaffSurface = lazy(() => import('./products/chief-of-staff/ChiefOfStaffSurface').then(module => ({ default: module.ChiefOfStaffSurface })))
+const FinanceSurface = lazy(() => import('./products/finance/FinanceSurface').then(module => ({ default: module.FinanceSurface })))
 
 const FileSurfaceFallback = () => (
   <div className="flex h-full min-h-40 items-center justify-center text-muted-foreground">
@@ -74,18 +77,6 @@ const isRecentExplicitReadOnlyWorkflowTab = (tab: ChatTab | null | undefined): t
     typeof restoredAt === 'number' &&
     Date.now() - restoredAt <= READ_ONLY_WORKFLOW_RESTORE_SELECTION_WINDOW_MS
 }
-
-const isChiefOfStaffScheduleTab = (tab: ChatTab): boolean =>
-  tab.metadata?.mode === 'multi-agent' && !tab.metadata?.agentProfileId && (
-    tab.metadata?.isScheduledRun === true ||
-    isScheduledSession({ sessionId: tab.sessionId })
-  )
-
-const isInteractiveChiefOfStaffTab = (tab: ChatTab): boolean =>
-  tab.metadata?.mode === 'multi-agent' &&
-  !tab.metadata?.agentProfileId &&
-  tab.metadata?.isOrganizationAssistant !== true &&
-  !isChiefOfStaffScheduleTab(tab)
 
 const hasOpenWorkspaceCollapsingPopup = () => {
   if (typeof document === 'undefined') return false
@@ -163,14 +154,7 @@ function App() {
     void waitForChatStoreHydration().then(async () => {
       if (cancelled || useProductSurfaceStore.getState().productSurface !== 'agentworks') return
       const chatStore = useChatStore.getState()
-      const chiefTab = Object.values(chatStore.chatTabs).find((tab) =>
-        tab.metadata?.mode === 'multi-agent' &&
-        !tab.metadata?.agentProfileId &&
-        tab.metadata?.isOrganizationAssistant !== true &&
-        tab.metadata?.isViewOnly !== true &&
-        tab.metadata?.isScheduledRun !== true &&
-        tab.metadata?.isBotRun !== true
-      )
+      const chiefTab = Object.values(chatStore.chatTabs).find(isInteractiveChiefOfStaffTab)
       if (chiefTab) {
         chatStore.switchTab(chiefTab.tabId)
       } else {
@@ -768,8 +752,7 @@ function App() {
       // read-only schedule. Collapse duplicates within each lane, never across
       // lanes, so opening a schedule cannot replace the chat.
       const multiAgentTabs = Object.values(chatStore.chatTabs).filter(tab =>
-        tab.metadata?.mode === 'multi-agent' &&
-        !tab.metadata?.agentProfileId &&
+        isChiefOfStaffTab(tab) &&
         tab.metadata?.isOrganizationAssistant !== true
       )
       const lanes = [
@@ -793,8 +776,7 @@ function App() {
       // Check if activeTabId is null, points to a non-existent tab, or belongs to a different mode
       const activeTab = activeTabId ? chatStore.getTab(activeTabId) : null
       const hasValidActiveTab = activeTab &&
-        activeTab.metadata?.mode === selectedModeCategory &&
-        !activeTab.metadata?.agentProfileId &&
+        isChiefOfStaffTab(activeTab) &&
         activeTab.metadata?.isOrganizationAssistant !== true
 
       if (!hasValidActiveTab && multiAgentTabs.length > 0) {
@@ -1003,7 +985,7 @@ function App() {
     void chatAreaRef.current?.handleNewChat(tabId)
   }, [])
 
-  // After Ctrl+1/Ctrl+2 mode switch, restore the most recently-accessed
+  // After a Ctrl+1 mode switch, restore the most recently-accessed
   // tab matching the new mode. Without this the activeTabId stays on
   // whatever was selected before (often a tab in the *other* mode), so
   // the workflow's chat panel doesn't pick up the running session and
@@ -1036,15 +1018,6 @@ function App() {
         setModeCategory('workflow')
         setShowWorkflowsOverview(false)
         restoreMostRecentTabForMode('workflow')
-        return
-      }
-      // Ctrl/Cmd + 2 for Chat mode
-      if ((event.ctrlKey || event.metaKey) && event.key === '2') {
-        event.preventDefault()
-        const { setModeCategory } = useModeStore.getState()
-        setModeCategory('multi-agent')
-        setShowWorkflowsOverview(false)
-        restoreMostRecentTabForMode('multi-agent')
         return
       }
       // Ctrl/Cmd + 3 for Organization view
@@ -1193,22 +1166,6 @@ function App() {
       <div className="inline-flex min-w-0 flex-none items-center gap-0.5 rounded-lg border border-border bg-muted/70 p-0.5 shadow-sm backdrop-blur-sm">
         <button
           type="button"
-          onClick={() => setMultiAgentRightPanelView('org-pulse')}
-          title="Org Pulse"
-          aria-label="Org Pulse"
-          className={multiAgentPanelTabClass(multiAgentRightPanelView === 'org-pulse')}
-        >
-          Pulse
-        </button>
-        <button
-          type="button"
-          onClick={() => setMultiAgentRightPanelView('org-goals')}
-          className={multiAgentPanelTabClass(multiAgentRightPanelView === 'org-goals')}
-        >
-          Goals
-        </button>
-        <button
-          type="button"
           onClick={() => setMultiAgentRightPanelView('tasks')}
           className={multiAgentPanelTabClass(multiAgentRightPanelView === 'tasks')}
         >
@@ -1243,6 +1200,10 @@ function App() {
         <AuthWrapper>
         {productSurface === 'video-studio' ? (
           <Suspense fallback={<FileSurfaceFallback />}><VideoStudioSurface /></Suspense>
+        ) : productSurface === 'chief-of-staff' ? (
+          <Suspense fallback={<FileSurfaceFallback />}><ChiefOfStaffSurface /></Suspense>
+        ) : productSurface === 'finance' ? (
+          <Suspense fallback={<FileSurfaceFallback />}><FinanceSurface /></Suspense>
         ) : (
         <TooltipProvider>
         <UpdateProgressToast />
@@ -1363,18 +1324,8 @@ function App() {
                                 minimized={false}
                                 onToggleMinimize={toggleMultiAgentPanelMinimize}
                               />
-                            ) : multiAgentRightPanelView === 'org-goals' ? (
-                              <OrgGoalsPanel
-                                toolbarLeading={multiAgentPanelTabs}
-                                onClosePanel={toggleMultiAgentPanelMinimize}
-                              />
-                            ) : multiAgentRightPanelView === 'tasks' ? (
-                              <ChiefTasksPanel
-                                toolbarLeading={multiAgentPanelTabs}
-                                onClosePanel={toggleMultiAgentPanelMinimize}
-                              />
                             ) : (
-                              <OrgPulsePanel
+                              <ChiefTasksPanel
                                 toolbarLeading={multiAgentPanelTabs}
                                 onClosePanel={toggleMultiAgentPanelMinimize}
                               />

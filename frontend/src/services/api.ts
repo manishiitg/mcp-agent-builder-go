@@ -2180,18 +2180,6 @@ export const agentApi = {
     return response.data
   },
 
-  getOrgPublish: async (): Promise<import('./api-types').WorkflowPublishInfoResponse> => {
-    const response = await api.get('/api/org/publish')
-    return response.data
-  },
-
-  getOrgPublishSecret: async (secretName: string): Promise<WorkflowPublishSecretResponse> => {
-    const response = await api.get('/api/org/publish/secret', {
-      params: { secret_name: secretName }
-    })
-    return response.data
-  },
-
   // Test image generation config by attempting to generate a sample image
   testImageGen: async (config: { provider: string; model_id: string; api_key?: string }): Promise<{ valid: boolean; message?: string; error?: string; image_url?: string; image_data?: string }> => {
     const response = await api.post('/api/image-gen/test', config)

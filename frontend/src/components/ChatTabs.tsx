@@ -2,8 +2,8 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { Plus, Globe, DollarSign, CalendarClock, SlidersHorizontal, Square } from 'lucide-react'
 import { useChatStore, type ChatTab } from '../stores/useChatStore'
+import { isChiefOfStaffTab } from '../utils/chiefOfStaff'
 import { useAppStore } from '../stores/useAppStore'
-import { OrgPulseControl } from './OrgPulseControl'
 import { OrgBackupPublishControls } from './org/OrgBackupPublishControls'
 import { useModeStore } from '../stores/useModeStore'
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip'
@@ -115,7 +115,7 @@ export const ChatTabs: React.FC<ChatTabsProps> = ({ onNewChat, onSubmitOrgComman
     tab.metadata?.isScheduledRun === true || isScheduledSession({ sessionId: tab.sessionId }), [])
 
   const chiefOfStaffTabs = useMemo(() => Object.values(chatTabs)
-    .filter(tab => tab.metadata?.mode === 'multi-agent' && !tab.metadata?.agentProfileId && !isHiddenOrganizationTab(tab))
+    .filter(tab => isChiefOfStaffTab(tab) && !isHiddenOrganizationTab(tab))
     .sort((a, b) => {
       const laneOrder = Number(isScheduleTab(a)) - Number(isScheduleTab(b))
       if (laneOrder !== 0) return laneOrder
@@ -271,8 +271,7 @@ export const ChatTabs: React.FC<ChatTabsProps> = ({ onNewChat, onSubmitOrgComman
       const activeTab = chatTabs[activeTabId]
       if (
         activeTab &&
-        activeTab.metadata?.mode === 'multi-agent' &&
-        !activeTab.metadata?.agentProfileId &&
+        isChiefOfStaffTab(activeTab) &&
         !isHiddenOrganizationTab(activeTab)
       ) {
         return
@@ -293,7 +292,7 @@ export const ChatTabs: React.FC<ChatTabsProps> = ({ onNewChat, onSubmitOrgComman
   }
 
   const showHeaderContent =
-    !!activeTab && activeTab.metadata?.mode === 'multi-agent' && !activeTab.metadata?.agentProfileId && !isHiddenOrganizationTab(activeTab)
+    isChiefOfStaffTab(activeTab) && !isHiddenOrganizationTab(activeTab as ChatTab)
   return (
     <>
     <div className="relative flex-shrink-0 flex items-center gap-2 bg-gray-50 dark:bg-gray-800 px-3 py-1.5 border-b border-gray-200 dark:border-gray-700">
@@ -355,9 +354,7 @@ export const ChatTabs: React.FC<ChatTabsProps> = ({ onNewChat, onSubmitOrgComman
       )}
 
       <div className="ml-auto flex items-center gap-1">
-        <OrgPulseControl />
-        {/* Delegation tiers (H/M/L) — CoS-specific config, lives next to Org Pulse
-            so the org-level controls stay grouped together. */}
+        {/* Delegation tiers (H/M/L) — CoS-specific config. */}
         <Tooltip>
           <TooltipTrigger asChild>
             <button

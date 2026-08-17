@@ -12,51 +12,24 @@ import (
 // scheduler calls the check before starting a session; if the check returns
 // false the cron tick is skipped entirely — no LLM session is spawned.
 
+// builtinOrgPulseID is kept as a recognizable constant (not a schedule that
+// exists anymore) purely so IsSlashManagedBuiltinSchedule/IsOrgPulseSchedule/
+// NormalizeOrgPulseSchedule below can still recognize a schedule ID an
+// existing user's persisted _users/<id>/multiagent-schedules.json might still
+// carry from before Org Pulse was removed, and degrade it gracefully (see
+// NormalizeOrgPulseSchedule) rather than erroring on an unrecognized shape.
 const builtinOrgPulseID = "builtin-org-pulse"
 const deprecatedAutoEnrichMemoryID = "builtin-auto-enrich-memory"
 
-const builtinOrgPulseQuery = `You are running the daily Org Pulse — the Chief of Staff's read-only alignment check over the whole org.
-
-The user controls cadence by schedule. Do not skip the pass just because the org looks steady; write a calm steady-state read when there is nothing notable.
-
-Call read_skill(skills=[{"name":"builder-reference","path":"references/org-pulse.md"}]) and follow it exactly. Start by backing up org-level artifacts per read_skill(skills=[{"name":"builder-reference","path":"references/backup-strategy.md"}]) using pulse/backup.json and pulse/backup/status.json. Read pulse/goals.html and targeted current evidence from each workflow, then report whether each org goal is on-track, at-risk, off-track, or unknown and whether each workflow is aligned, supporting, unaligned, or missing measurement. Workflow files are strictly read-only. Do not create recommendations, questions, promotions, fixes, plan changes, workflow runs, model audits, or cost audits. Before updating pulse/goals.html or pulse/org-pulse.html, call read_skill(skills=[{"name":"builder-reference","path":"references/org-html.md"}]). Keep pulse/goals.html as the durable current scorecard and prepend a plain-language alignment entry to pulse/org-pulse.html. If org publishing is already configured and verified, re-publish those two pages and update pulse/publish/status.json. Notify the user with one factual daily digest containing goal status, workflow alignment, stale or missing evidence, and links to the published pages when available. Send a calm all-healthy digest on steady days.`
-
-// builtinOrgPulseMessages runs the daily Org Pulse as a message SEQUENCE — one
-// focused turn per step in a single resumed session, the way workflow Pulse
-// (runPostRunMonitor) does — instead of one giant single-turn prompt. Each step
-// does ONE job and defers the detail to read_skill(skills=[{"name":"builder-reference","path":"references/org-pulse.md"}]).
-// builtinOrgPulseQuery above is kept as the single-turn Query fallback so nothing
-// that references it breaks.
-var builtinOrgPulseMessages = []string{
-	`STEP 1/3 — BACKUP. You are running the daily Org Pulse, the Chief of Staff's read-only alignment check over the whole org. Call read_skill(skills=[{"name":"builder-reference","path":"references/org-pulse.md"}]) and follow it; do only this step, then stop. Back up org-level artifacts per read_skill(skills=[{"name":"builder-reference","path":"references/backup-strategy.md"}]) using pulse/backup.json and pulse/backup/status.json. Report the backup result, then stop.`,
-	`STEP 2/3 — GOALS + WORKFLOW ALIGNMENT. In one efficient batched sweep, read pulse/goals.html and targeted current evidence from every workflow as defined by read_skill(skills=[{"name":"builder-reference","path":"references/org-pulse.md"}]). For each explicit org goal, compare current evidence with baseline, target, and due date; classify it on-track, at-risk, off-track, or unknown with one plain-language reason. Classify every workflow aligned, supporting, unaligned, or missing measurement and cite its freshest evidence. If there are no explicit org goals, say so and do not invent them. Workflow files are strictly read-only: do not create recommendations, questions, promotions, fixes, plan changes, runs, LLM audits, or cost audits. Call read_skill(skills=[{"name":"builder-reference","path":"references/org-html.md"}]), then update pulse/goals.html only when scorecard evidence, status, confidence, freshness, or alignment changed. Report the scorecard and alignment table, then stop.`,
-	`STEP 3/3 — LOG + PUBLISH + DAILY DIGEST. Call read_skill(skills=[{"name":"builder-reference","path":"references/org-html.md"}]), then prepend one compact, dated, plain-language entry to pulse/org-pulse.html covering goal status, workflow alignment, changes since the prior pass, and stale or missing evidence. Do not include recommendations, decisions, task promotions, LLM/model audits, cost audits, or proposed fixes. If org publishing is configured in pulse/publish.json and already verified, re-publish pulse/goals.html and pulse/org-pulse.html per read_skill(skills=[{"name":"builder-reference","path":"references/publish-strategy.md"}]) and update pulse/publish/status.json. Notify the user with one factual daily Org Pulse digest; a steady healthy day still gets a calm all-healthy digest. When email is available, use one compact inline-styled email_html body; do not create a separate plain email body because message_for_user is the automatic fallback. Report the log, publish, and notification results, then stop.`,
-}
-
 // DefaultBuiltinSchedules returns the list of product-provided schedules that
-// run for every user unless overridden.
+// run for every user unless overridden. Empty: Org Pulse (the only builtin
+// this ever returned) was goal-alignment-centric end to end and was removed
+// entirely alongside the org goals feature, not ported -- there was nothing
+// left to salvage by rewriting it once goals were gone. Kept as a function
+// (not deleted) since a future built-in schedule may need this registration
+// point again.
 func DefaultBuiltinSchedules() []WorkflowSchedule {
-	return []WorkflowSchedule{
-		{
-			// Opt-in (Enabled:false): the user turns Org Pulse on via the chat
-			// toggle / Scheduled Tasks popup, which writes a same-ID override with
-			// enabled:true and their chosen cron. Default cadence is once a day; the
-			// pass self-gates agentically (wakes, cheap "anything new?" check, exits
-			// if not) rather than via a Go pre-fire check.
-			ID:             builtinOrgPulseID,
-			Name:           "Org Pulse (daily)",
-			Description:    "The Chief of Staff's daily read-only check of org goals and workflow alignment. Off by default; turn it on to opt in. Default once a day, editable.",
-			CronExpression: "0 8 * * *",
-			Timezone:       "UTC",
-			Enabled:        false,
-			Mode:           "multi-agent",
-			// Org Pulse runs as a message SEQUENCE (one focused turn per step in one
-			// resumed session, like workflow Pulse). Query is kept as the single-turn
-			// fallback for anything that still reads it.
-			Messages: builtinOrgPulseMessages,
-			Query:    builtinOrgPulseQuery,
-		},
-	}
+	return []WorkflowSchedule{}
 }
 
 func FindDefaultBuiltinSchedule(scheduleID string) (WorkflowSchedule, bool) {
