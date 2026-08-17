@@ -277,6 +277,41 @@ Two acceptance items remain deliberately open rather than being claimed:
    fal.ai authentication-only call was not made. No paid provider request was
    issued and no credential was printed.
 
+### Review follow-up after the fix landed (2026-08-17)
+
+Re-checked the shipped implementation against this review's concerns. All of the
+code claims in the section above verify:
+
+- backend selection is capability-based, not `GOOS`-based
+  (`workspace/security/isolator_linux.go:22-36`): Landlock when the ABI probe
+  succeeds, mount namespace only after `mountNamespaceAvailable()` actually runs
+  `unshare -m --propagation private true`, otherwise a typed
+  `SANDBOX_UNAVAILABLE`. There is no capability-triggered unsandboxed path;
+- both probes are real rather than assumed — `landlockABI()` issues a genuine
+  `LANDLOCK_CREATE_RULESET_VERSION` syscall, and the namespace probe executes;
+- `/health` exposes `shell_sandbox` via `security.CurrentSandboxCapability()`
+  (`workspace/server.go:105`), separately from HTTP liveness;
+- the rootless deploy script cross-builds and installs the launcher
+  (`deploy/aws-ec2/deploy-rootless.sh:32`);
+- the focused test drives the real handler and the real launcher, with
+  read/write/blocked/symlink-escape cases — the product path this ticket's own
+  test boundary demands, not a constructed backend result.
+
+The review predicted that Landlock could not express `BlockedWritePaths`
+precedence, because its rules are additive and a narrower rule cannot revoke a
+broader write grant. That is exactly the limit the implementation hit, and it
+was handled the right way: such a policy fails closed with `SANDBOX_UNAVAILABLE`
+rather than silently weakening the deny. Recorded as open rather than claimed.
+
+**Limits of this follow-up.** The EC2 runtime evidence above was not
+independently reproduced here — it cannot be, from a macOS workstation. What was
+verified locally is that the Linux path cross-builds and vets cleanly
+(`GOOS=linux GOARCH=amd64`), and that the macOS security/handler suites still
+pass. The runtime claims are specific and falsifiable (release id, backend,
+`filesystem ABI 7`, service uid, per-case results), which is the right shape for
+a claim someone else must be able to check — but they remain Codex's evidence,
+not this reviewer's.
+
 ## Explicit non-fixes
 
 - Do not run the workspace service as root.
