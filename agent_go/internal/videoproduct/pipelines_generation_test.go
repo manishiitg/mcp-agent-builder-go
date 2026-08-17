@@ -104,7 +104,7 @@ func TestLongformStagesKeepTheirLoadBearingOrder(t *testing.T) {
 // turns into a slideshow.
 func TestGenerationPipelinesUseGenerationSkillsOnly(t *testing.T) {
 	generationSkills := map[string]bool{}
-	for _, name := range []string{"fal-ai", "google-ai", "video-model-selection", "video-cinematography", "video-storytelling"} {
+	for _, name := range []string{"fal-ai", "google-ai", "longform-cinematic-video", "video-model-selection", "video-cinematography", "video-storytelling"} {
 		generationSkills[name] = true
 	}
 
@@ -128,6 +128,51 @@ func TestGenerationPipelinesUseGenerationSkillsOnly(t *testing.T) {
 		}
 		if !sawGenerationSkill {
 			t.Fatalf("%s attaches none of the generation skills it exists to run", pipeline.ID)
+		}
+	}
+}
+
+func TestLongformPipelineOwnsCinematicContinuityAndSeamEvidence(t *testing.T) {
+	requiredSkillStages := map[string]bool{
+		"longform-brief":    true,
+		"longform-script":   true,
+		"longform-shotlist": true,
+		"longform-generate": true,
+		"longform-assemble": true,
+		"longform-check":    true,
+	}
+	requiredArtifacts := map[string][]string{
+		"longform-shotlist": {"longform-sequence-plan.json"},
+		"longform-generate": {"longform-continuity-ledger.json"},
+		"longform-assemble": {"longform-final.mp4", "longform-edit-decision-list.json"},
+		"longform-check":    {"quality-report.json", "longform-seam-report.json"},
+	}
+
+	for _, stage := range longformPipeline.Stages {
+		if requiredSkillStages[stage.ID] {
+			attached := false
+			for _, skill := range stage.Skills {
+				if skill == "longform-cinematic-video" {
+					attached = true
+					break
+				}
+			}
+			if !attached {
+				t.Fatalf("%s must attach longform-cinematic-video: %v", stage.ID, stage.Skills)
+			}
+		}
+
+		for _, required := range requiredArtifacts[stage.ID] {
+			found := false
+			for _, artifact := range stage.Artifacts {
+				if artifact == required {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("%s must require %s: %v", stage.ID, required, stage.Artifacts)
+			}
 		}
 	}
 }

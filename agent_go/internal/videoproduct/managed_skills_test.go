@@ -119,6 +119,7 @@ func TestGenerationSkillsRegisterAndStayOutOfTheInfographicPipeline(t *testing.T
 	}{
 		{"fal-ai", []string{"SECRET_FAL_KEY", "Never invent a model ID", "@fal-ai/client"}},
 		{"google-ai", []string{"SECRET_GEMINI_API_KEY", "Never invent a model ID", "@google/genai"}},
+		{"longform-cinematic-video", []string{"longform-sequence-plan.json", "longform-edit-decision-list.json", "longform-seam-report.json", "one film"}},
 		{"video-provider-capabilities", []string{"official API", "capability record", "pending_user_review", "continuity-plan.json", "generation-ledger.json"}},
 		{"kling-video", []string{"multi_prompt", "@Element1", "motion-transfer", "show_video"}},
 		{"seedance-video", []string{"@Image1", "reference-to-video", "native audio", "show_video"}},
@@ -162,7 +163,7 @@ func TestGenerationSkillsRegisterAndStayOutOfTheInfographicPipeline(t *testing.T
 			t.Fatalf("video-provider-capabilities supporting file %q missing %q: %v", path, requiredText, supporting)
 		}
 	}
-	for _, name := range []string{"kling-video", "seedance-video", "veo-video", "minimax-h3-video", "gemini-omni-video"} {
+	for _, name := range []string{"longform-cinematic-video", "kling-video", "seedance-video", "veo-video", "minimax-h3-video", "gemini-omni-video"} {
 		attached := skills.LoadAttachable("", []string{name})
 		if len(attached) != 1 || len(attached[0].SupportingFiles) != 1 || attached[0].SupportingFiles[0].RelPath != "agents/openai.yaml" {
 			t.Fatalf("%s must carry its generated UI metadata: %+v", name, attached)
@@ -183,7 +184,7 @@ func TestGenerationSkillsRegisterAndStayOutOfTheInfographicPipeline(t *testing.T
 		}
 	}
 
-	generationSkillNames := map[string]bool{"fal-ai": true, "google-ai": true, "video-provider-capabilities": true, "kling-video": true, "seedance-video": true, "veo-video": true, "minimax-h3-video": true, "gemini-omni-video": true, "video-model-selection": true, "video-cinematography": true, "video-storytelling": true, "generated-video-quality": true}
+	generationSkillNames := map[string]bool{"fal-ai": true, "google-ai": true, "longform-cinematic-video": true, "video-provider-capabilities": true, "kling-video": true, "seedance-video": true, "veo-video": true, "minimax-h3-video": true, "gemini-omni-video": true, "video-model-selection": true, "video-cinematography": true, "video-storytelling": true, "generated-video-quality": true}
 	for _, stage := range infographicPipeline.Stages {
 		for _, name := range stage.Skills {
 			if generationSkillNames[name] {

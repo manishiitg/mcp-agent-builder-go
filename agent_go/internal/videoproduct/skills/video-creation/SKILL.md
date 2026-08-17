@@ -89,7 +89,7 @@ to prevent -- it is not a shortcut, it is the checkpoint being skipped.
 - Keep each shot responsible for one idea. Match the visual change to the spoken beat.
 - Put exact wording, logos, UI, prices, and captions into the editing/overlay layer, never into an AI-generated shot.
 - For presenter reels, a reliable pattern is host hook, screenshot-worthy value card while narration continues, host close/CTA, then a short end card.
-- For anything long-form (roughly 8 minutes or more), that single-arc shape does not carry the runtime -- use `video-storytelling` for chapter structure, retention management, and pacing instead.
+- For anything long-form (roughly 8 minutes or more), that single-arc shape does not carry the runtime -- begin with `longform-cinematic-video` so the chapter structure, cinematic contract, generated sequences, continuity, and final edit are designed as one film; it routes narrative structure to `video-storytelling`.
 
 ## Make the work resumable
 
@@ -112,7 +112,7 @@ As a workflow stage, the equivalent record is your stage's own artifact (researc
 - Use local editing for trims, crops, concatenation, audio, captions, and supplied footage.
 - Use programmatic overlays for exact text, branded cards, product UI, or repeatable templates.
 - For product-led explainers, feature breakdowns, and short-form pieces, build from uploaded assets and deterministic HTML/CSS composition (`product-infographic` / HyperFrames) rather than generating footage -- exact wording, UI, and prices belong in that layer, not an AI-generated shot.
-- For narrative long-form video where the brief genuinely calls for AI-generated footage, reference imagery, voice, or music: use `video-storytelling` to structure the narrative arc and pacing first, `video-model-selection` to choose between `fal-ai` (third-party hosted models) and `google-ai` (Google's own Gemini image models, Veo) per shot, `video-cinematography` to turn each beat into camera/lighting/consistency direction, then the chosen provider skill to generate. Prefer uploaded assets and deterministic composition whenever they can carry the brief -- but a narrative long-form piece is a case they usually cannot carry, so route to generation because the brief calls for it, not as a last resort.
+- For narrative long-form video where the brief genuinely calls for AI-generated footage, reference imagery, voice, or music: use `longform-cinematic-video` as the director. It coordinates `video-storytelling`, `video-model-selection`, `video-cinematography`, `video-provider-capabilities`, the selected provider/model skill, and `video-editing` around one sequence plan and seam-review contract. Prefer uploaded assets and deterministic composition whenever they can carry the brief -- but a narrative long-form piece is a case they usually cannot carry, so route to generation because the brief calls for it, not as a last resort.
 - Use the `video-editing` skill for assembly, captions, audio, and exports.
 - Use the `video-quality` skill before presenting a version as complete.
 

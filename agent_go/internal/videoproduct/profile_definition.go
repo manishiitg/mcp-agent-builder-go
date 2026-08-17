@@ -41,6 +41,7 @@ var profileSkillFiles embed.FS
 var profileSkills = []struct{ name, description, path string }{
 	{"product-infographic", "Turn verified product evidence into a clear HyperFrames explainer through an adaptive brief, specialist routing, and production QA.", "skills/product-infographic/SKILL.md"},
 	{"video-creation", "Direct a conversational video project from brief through reproducible production.", "skills/video-creation/SKILL.md"},
+	{"longform-cinematic-video", "Direct one coherent long-form cinematic film through sequence architecture, continuity-controlled generation, editorial stitching, sound, and seam-by-seam review.", "skills/longform-cinematic-video/SKILL.md"},
 	{"video-editing", "Assemble clips, captions, overlays, narration, music, and versioned exports.", "skills/video-editing/SKILL.md"},
 	{"video-quality", "Validate candidate videos technically, visually, and editorially.", "skills/video-quality/SKILL.md"},
 	{"hyperframes-quality", "Gate editable HyperFrames compositions and rendered evidence for layout, timing, contrast, and motion quality.", "skills/hyperframes-quality/SKILL.md"},
