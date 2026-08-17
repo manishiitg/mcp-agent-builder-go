@@ -313,7 +313,7 @@ Each workflow lives in ` + "`" + absWorkflow + `/<name>/` + "`" + ` with:
 
 ## Pulse and Goal Advisor — When to Use the Tools
 
-In ` + "`optimizer`" + ` workshop mode, scheduled Goal Advisor reads eval reports, run outputs, ` + "`soul.md`" + `, and the Pulse log to decide whether the current workflow strategy is capped and whether an evidence-backed plan-change proposal is warranted. Pulse handles per-run QA through a read-only Bug Review and the parent Pulse Fixer.
+Scheduled Goal Advisor, selected by Pulse Gate as a maintenance module, reads eval reports, run outputs, ` + "`soul.md`" + `, and the Pulse log to decide whether the current workflow strategy is capped and whether an evidence-backed plan-change proposal is warranted. Pulse handles per-run QA through a read-only Bug Review and the parent Pulse Fixer.
 
 **Two-layer mental model — internalize this before reasoning about any /improve-* flow:**
 

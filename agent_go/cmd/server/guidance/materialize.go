@@ -176,6 +176,11 @@ type buildMegaSkillSpec struct {
 	Description string
 	Intro       string
 	Render      func(kind string, data tmplData) (string, error)
+
+	// Select overrides mode filtering when non-nil. Step execution selects by
+	// the tools the agent actually holds rather than by mode — see PLAT-124 and
+	// MaterializeStepExecutionReferenceSkill.
+	Select func(kind string, meta kindMeta) bool
 }
 
 // buildMegaSkill assembles one Anthropic-pattern skill from a kind registry:
@@ -189,6 +194,12 @@ func buildMegaSkill(spec buildMegaSkillSpec) *llmtypes.Skill {
 
 	allowed := make([]string, 0, len(kinds))
 	for _, k := range kinds {
+		if spec.Select != nil {
+			if spec.Select(k, spec.Registry[k]) {
+				allowed = append(allowed, k)
+			}
+			continue
+		}
 		if spec.Mode == "" || modeAllowedIn(k, spec.Mode, spec.Registry) {
 			allowed = append(allowed, k)
 		}

@@ -1824,13 +1824,15 @@ func (iwm *InteractiveWorkshopManager) markChangelogArtifactReviewed(ctx context
 // canonicalWorkshopMode keeps this package aligned with server-side chat-history
 // normalization. Legacy editable-mode names all mean the unified Workshop mode.
 func canonicalWorkshopMode(mode string) string {
-	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "workshop", "builder", "optimizer", "reporting", "eval", "output":
-		return "workshop"
+	trimmed := strings.ToLower(strings.TrimSpace(mode))
+	if trimmed == "" {
+		return ""
+	}
+	switch trimmed {
 	case "run", "ask", "debugger", "runner":
 		return "run"
 	default:
-		return ""
+		return "workshop"
 	}
 }
 

@@ -290,7 +290,7 @@ type WorkflowExecutionDefaults struct {
 	DisableParallelToolExecution *bool    `json:"disable_parallel_tool_execution,omitempty"`
 	ExecutionMaxTurns            *int     `json:"execution_max_turns,omitempty"`
 	EnabledCustomTools           []string `json:"enabled_custom_tools,omitempty"`
-	WorkshopMode                 string   `json:"workshop_mode,omitempty"` // Workshop builder mode: "builder", "optimizer", "run" (legacy values "ask"/"debugger"/"runner"/"eval"/"output" auto-migrated by server)
+	WorkshopMode                 string   `json:"workshop_mode,omitempty"` // Session mode: "workshop" or "run". Every retired name (builder, optimizer, reporting, eval, output, ask, debugger, runner) normalizes to one of those two.
 }
 
 // WorkflowSchedule represents a cron or calendar schedule stored in the manifest.
@@ -314,7 +314,7 @@ type WorkflowSchedule struct {
 	// DirectMessagesReason records why a schedule-local conversation is preferable
 	// to a canonical route despite its weaker step-level lifecycle.
 	DirectMessagesReason string `json:"direct_messages_reason,omitempty"`
-	WorkshopMode         string `json:"workshop_mode,omitempty"`   // Workshop builder mode for scheduled runs: "run" (default) or "optimizer" (legacy "ask"/"runner"/"debugger" auto-migrated to "run")
+	WorkshopMode         string `json:"workshop_mode,omitempty"`   // Vestigial. Schedules always run in workshop mode; nothing branches on this value any more. Retained so existing workflow.json files still parse.
 	Query                string `json:"query,omitempty"`           // Message to execute (multi-agent mode)
 	ResumePrevious       *bool  `json:"resume_previous,omitempty"` // Coding-agent CLI only: resume the latest prior thread (same provider) instead of a fresh session each run. nil = default (fresh session); explicit true opts in.
 	// PulseReviewOnly marks this schedule as a workflow's own periodic Pulse

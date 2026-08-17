@@ -3125,17 +3125,6 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 		serverList = strings.Join(selectedServers, ",")
 	}
 
-	if !enforceWorkflowQueryAccess(r, &req) {
-		logfWithContext(queryLogCtx, "[WORKFLOW_PERMISSION] Denied workflow query: agent_mode=%s phase=%s workshop_mode=%s", req.AgentMode, req.PhaseID, func() string {
-			if req.ExecutionOptions == nil {
-				return ""
-			}
-			return req.ExecutionOptions.WorkshopMode
-		}())
-		writeWorkflowPermissionDenied(w, "write")
-		return
-	}
-
 	// SINGLE-ENTRY ROUTING (tmux-transport coding-agent input): the frontend no
 	// longer decides live-input-vs-new-turn from terminal liveness — it always
 	// POSTs /api/query and the backend is the single source of truth. If this
@@ -5724,10 +5713,14 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				// 'ask' / 'debugger' / 'runner' fold into 'run'.
 				if req.ExecutionOptions != nil && req.ExecutionOptions.WorkshopMode != "" {
 					mode := req.ExecutionOptions.WorkshopMode
-					switch mode {
-					case "ask", "debugger", "runner":
+					// Two modes exist: "run" and "workshop". Anything that is
+					// not "run" collapses to "workshop" rather than being
+					// enumerated, so no retired name can slip through into
+					// MaterializeReferenceSkill and yield NO reference surface.
+					switch strings.ToLower(strings.TrimSpace(mode)) {
+					case "run", "ask", "debugger", "runner":
 						mode = "run"
-					case "builder", "optimizer", "reporting", "eval", "output":
+					default:
 						mode = "workshop"
 					}
 					phaseTemplateVars["WorkshopMode"] = mode

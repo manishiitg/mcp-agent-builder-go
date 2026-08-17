@@ -123,7 +123,18 @@ func CreateRunConcernToolRegistry(fallbackSessionID string, record RunConcernRec
 			// Fail loudly rather than filing against an empty step: a concern
 			// with no owner is worse than none, because it still consumes
 			// backlog attention while pointing nowhere.
-			return "", fmt.Errorf("record_run_concern is unavailable: no trusted step identity for session %q", sessionID)
+			//
+			// Name the destination that does exist. Refusing without one is a
+			// dead end, and the caller has already done the expensive part —
+			// on 2026-08-17 a Pulse pass lost a fully-evidenced finding ("the
+			// evaluator grades an older batch, so a stale 20/20 makes an
+			// unevaluated run look fully verified") to this refusal, in a
+			// session that called record_pulse_finding successfully 160 times.
+			// A refusal the caller cannot act on discards the work silently.
+			return "", fmt.Errorf(
+				"record_run_concern is unavailable here: it files against the workflow step that raised the concern, and this session has no step identity — it is a Pulse or maintenance session rather than a step. Do not discard this concern: record it with record_pulse_finding, which owns findings raised outside a step. (session %q)",
+				sessionID,
+			)
 		}
 		payload := map[string]any{}
 		for key, value := range args {

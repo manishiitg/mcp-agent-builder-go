@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	mcpagent "github.com/manishiitg/mcpagent/agent"
+	"strings"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/guidance"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/common"
@@ -24,6 +25,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) appendSupplementaryPrompts(
 	effectiveSkills []string,
 	isolatedSessionID string,
 	attachGlobalLearnings bool,
+	registeredTools []string,
+	scriptedStep bool,
 ) {
 	var identitySkills []*llmtypes.Skill
 	var supplements []string
@@ -31,9 +34,18 @@ func (hcpo *StepBasedWorkflowOrchestrator) appendSupplementaryPrompts(
 	// Coding CLIs additionally project it to disk; API models read it through
 	// mcpagent's intrinsic read_skill tool. The execution role deliberately
 	// receives only the reference corpus, not workflow-commands.
-	if workflowReference := workflowReferenceSkill(); workflowReference != nil {
+	//
+	// The corpus is selected by the tools this agent actually holds, not by a
+	// workshop mode (PLAT-125). Step execution is not a workshop surface: it
+	// previously borrowed the builder's mode and was handed 41 docs describing
+	// tools it does not have, then acted on them.
+	if workflowReference := workflowReferenceSkill(guidance.StepExecutionSignals{
+		ToolNames:         registeredTools,
+		CodeExecutionMode: config != nil && config.UseCodeExecutionMode,
+		ScriptedStep:      scriptedStep,
+	}); workflowReference != nil {
 		identitySkills = append(identitySkills, workflowReference)
-		hcpo.GetLogger().Info(fmt.Sprintf("📚 Attached workflow reference skill (%d supporting docs)", len(workflowReference.SupportingFiles)))
+		hcpo.GetLogger().Info(fmt.Sprintf("📚 Attached workflow reference skill (%d supporting docs, from %d registered tools)", len(workflowReference.SupportingFiles), len(registeredTools)))
 	}
 
 	// 1. Skills — Phase 3 rewire. Load the step's selected skills as
@@ -151,8 +163,8 @@ func usesProjectedReferenceSkills(config *agents.OrchestratorAgentConfig, templa
 	return true
 }
 
-func workflowReferenceSkill() *llmtypes.Skill {
-	return guidance.MaterializeReferenceSkill("workshop")
+func workflowReferenceSkill(signals guidance.StepExecutionSignals) *llmtypes.Skill {
+	return guidance.MaterializeStepExecutionReferenceSkill(signals)
 }
 
 // resolveBrowserConfig resolves the browser configuration for prompt instructions.
@@ -204,4 +216,20 @@ func installedWorkflowSkillResolver(workspacePath string) mcpagent.InstalledSkil
 			AvailableFiles: file.AvailableFiles,
 		}, nil
 	}
+}
+
+// registeredToolNames extracts the tool names actually handed to an agent, so
+// the reference corpus can be selected from what the session holds rather than
+// from a workshop mode (PLAT-125).
+func registeredToolNames(tools []llmtypes.Tool) []string {
+	names := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		if tool.Function == nil {
+			continue
+		}
+		if name := strings.TrimSpace(tool.Function.Name); name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
 }

@@ -1933,7 +1933,7 @@ func (s *SchedulerService) runJob(ctx context.Context, sctx *ScheduleContext, ru
 		if upgradeBlocked {
 			s.sessionLogf(sctx, sessionID, "[PULSE] skipped for %s: the contract-upgrade preflight blocked, so the workflow did not run and there is no evidence to review", schedID)
 		}
-		if !upgradeBlocked && !userInterrupted && runFolder != "" && sctx.Schedule.WorkshopMode != "optimizer" {
+		if !upgradeBlocked && !userInterrupted && runFolder != "" {
 			if manifest, found, mErr := ReadWorkflowManifest(ctx, sctx.WorkspacePath); mErr == nil && found && shouldRunPostRunMonitor(sctx, manifest) {
 				pulseEvidenceStatus := status
 				if sctx.PulseOnly && strings.TrimSpace(sctx.PulseEvidenceRunStatus) != "" {
@@ -2902,45 +2902,6 @@ func pulseWorklistHasDueModule(ctx context.Context, workspacePath, pulseRunID st
 	return false, nil
 }
 
-func optimizerScheduleMessages(_ context.Context, _ string, stored []string, _ []string) []string {
-	messages := compactScheduleMessages(stored)
-	if len(messages) > 0 && !isLegacyGoalAdvisorMessageQueue(messages) {
-		return messages
-	}
-	return []string{
-		"Do not ask for confirmation. This optimizer schedule is no longer the product Goal Advisor loop. Goal Advisor now runs as a Pulse-selected module after normal scheduled workflow runs. Do not modify workflow files. Report that this legacy optimizer schedule should be disabled or converted to an explicit custom optimizer job.",
-	}
-}
-
-func isLegacyOrEmptyOptimizerSchedule(messages []string) bool {
-	messages = compactScheduleMessages(messages)
-	return len(messages) == 0 || isLegacyGoalAdvisorMessageQueue(messages)
-}
-
-func isLegacyGoalAdvisorMessageQueue(messages []string) bool {
-	joined := normalizeLegacyScheduleText(strings.Join(messages, "\n"))
-	if !strings.Contains(joined, "step 1/5") || !strings.Contains(joined, "pre backup") {
-		return false
-	}
-	if !strings.Contains(joined, "step 2/5") {
-		return false
-	}
-	return strings.Contains(joined, "goal advisor") || strings.Contains(joined, "improve")
-}
-
-func normalizeLegacyScheduleText(text string) string {
-	text = strings.ToLower(text)
-	replacer := strings.NewReplacer(
-		"—", " ",
-		"–", " ",
-		"-", " ",
-		"_", " ",
-		"\n", " ",
-		"\t", " ",
-	)
-	return strings.Join(strings.Fields(replacer.Replace(text)), " ")
-}
-
 func compactScheduleMessages(messages []string) []string {
 	out := make([]string, 0, len(messages))
 	for _, msg := range messages {
@@ -3053,8 +3014,7 @@ func scheduledWorkshopMessages(sctx *ScheduleContext) []string {
 		return nil
 	}
 	messages := compactScheduleMessages(sctx.Schedule.Messages)
-	isOptimizer := strings.EqualFold(strings.TrimSpace(sctx.Schedule.WorkshopMode), "optimizer")
-	if len(messages) == 0 && !isOptimizer && !sctx.PulseOnly {
+	if len(messages) == 0 && !sctx.PulseOnly {
 		groups, _ := json.Marshal(sctx.Schedule.GroupNames)
 		instruction := fmt.Sprintf("Run the full workflow once for each configured schedule group %s using run_full_workflow.", string(groups))
 		if len(sctx.Schedule.RouteSelections) > 0 {
@@ -3086,20 +3046,6 @@ func (s *SchedulerService) executeJob(ctx context.Context, sctx *ScheduleContext
 // executeWorkshopJob runs a workflow via the workshop builder path (workflow_phase mode).
 func (s *SchedulerService) executeWorkshopJob(ctx context.Context, sctx *ScheduleContext, runID string) (string, string, error) {
 	messages := scheduledWorkshopMessages(sctx)
-	isOptimizer := strings.EqualFold(strings.TrimSpace(sctx.Schedule.WorkshopMode), "optimizer")
-	if isOptimizer {
-		if isLegacyOrEmptyOptimizerSchedule(messages) {
-			runFolder := "iteration-0"
-			sessionID := s.newScheduleSessionID(sctx)
-			if runID != "" {
-				_ = UpdateScheduleRun(ctx, sctx.WorkspacePath, runID, "running", "", nil, runFolder, sessionID)
-			}
-			if err := s.disableLegacyOptimizerSchedule(ctx, sctx, sessionID); err != nil {
-				return sessionID, runFolder, err
-			}
-			return sessionID, runFolder, nil
-		}
-	}
 	runFolder := "iteration-0"
 	if sctx.PulseOnly && strings.TrimSpace(sctx.PulseEvidenceRunFolder) != "" {
 		runFolder = strings.TrimSpace(sctx.PulseEvidenceRunFolder)
@@ -3463,47 +3409,6 @@ func reconcileWorkshopRunOutcome(before map[string]bool, after []RunFolderInfo) 
 		}
 	}
 	return "", false
-}
-
-func (s *SchedulerService) disableLegacyOptimizerSchedule(ctx context.Context, sctx *ScheduleContext, sessionID string) error {
-	if sctx == nil {
-		return nil
-	}
-	if sctx.SourceType != "" && sctx.SourceType != "workflow" {
-		s.sessionLogf(sctx, sessionID, "[SCHEDULER] legacy optimizer schedule %s is non-workflow source %q; skipping manifest disable", sctx.Schedule.ID, sctx.SourceType)
-		return nil
-	}
-	manifest, found, err := ReadWorkflowManifest(ctx, sctx.WorkspacePath)
-	if err != nil {
-		return fmt.Errorf("disable legacy optimizer schedule: %w", err)
-	}
-	if !found {
-		return fmt.Errorf("disable legacy optimizer schedule: workflow manifest not found at %s", sctx.WorkspacePath)
-	}
-	for i := range manifest.Schedules {
-		if manifest.Schedules[i].ID != sctx.Schedule.ID {
-			continue
-		}
-		if !manifest.Schedules[i].Enabled {
-			s.sessionLogf(sctx, sessionID, "[SCHEDULER] legacy optimizer schedule %s already disabled; no LLM session started", sctx.Schedule.ID)
-			return nil
-		}
-		manifest.Schedules[i].Enabled = false
-		enabled := true
-		// Deliberately migrate the old standalone optimizer loop into Pulse.
-		// Disabling the legacy schedule while leaving Pulse off would silently
-		// remove Goal Advisor from the workflow.
-		manifest.PostRunMonitor = &enabled
-		if err := WriteWorkflowManifest(ctx, sctx.WorkspacePath, manifest); err != nil {
-			return fmt.Errorf("disable legacy optimizer schedule: write workflow.json: %w", err)
-		}
-		if err := s.ReloadSchedule(ctx, sctx.WorkspacePath, sctx.Schedule.ID); err != nil {
-			s.sessionLogf(sctx, sessionID, "[SCHEDULER] legacy optimizer schedule %s disabled but reload failed: %v", sctx.Schedule.ID, err)
-		}
-		s.sessionLogf(sctx, sessionID, "[SCHEDULER] legacy optimizer schedule %s disabled without starting an LLM session; post_run_monitor enabled so Goal Advisor can run inside Pulse", sctx.Schedule.ID)
-		return nil
-	}
-	return fmt.Errorf("disable legacy optimizer schedule: schedule %s not found in %s", sctx.Schedule.ID, sctx.WorkspacePath)
 }
 
 // executeMultiAgentJob runs a multi-agent chat session with the configured query.
@@ -3877,24 +3782,6 @@ func (s *SchedulerService) applyLLMAndSecretsToReqMap(ctx context.Context, reqMa
 			options = builderLLM.Options
 		}
 		llmConfigSource := ""
-		if strings.EqualFold(strings.TrimSpace(sctx.Schedule.WorkshopMode), "optimizer") {
-			maintenanceLLM := llmCfg.MaintenanceLLM
-			if maintenanceLLM == nil {
-				if resolved, ok := workflowtypes.ResolveProviderProfileMaintenanceConfig(llmCfg); ok {
-					maintenanceLLM = resolved
-				}
-			}
-			if maintenanceLLM != nil {
-				maintenanceProvider := strings.TrimSpace(maintenanceLLM.Provider)
-				maintenanceModelID := strings.TrimSpace(maintenanceLLM.ModelID)
-				if maintenanceProvider != "" && maintenanceModelID != "" {
-					provider = maintenanceProvider
-					modelID = maintenanceModelID
-					options = maintenanceLLM.Options
-					llmConfigSource = llmConfigSourceScheduledAutoImprove
-				}
-			}
-		}
 		if provider != "" && modelID != "" {
 			primary := map[string]interface{}{
 				"provider": provider,

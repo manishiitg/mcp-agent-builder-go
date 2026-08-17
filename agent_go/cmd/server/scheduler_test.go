@@ -1878,274 +1878,6 @@ func TestPostRunMonitorFinalStepsIncludesSplitNotificationRouting(t *testing.T) 
 	}
 }
 
-func TestOptimizerScheduleMessagesKeepsCustomMessages(t *testing.T) {
-	stored := []string{`Do not ask for confirmation. Run this custom optimizer audit and stop. Compare with any Auto Improve history already logged.`}
-
-	got := optimizerScheduleMessages(context.Background(), "Workflow/test", stored, []string{"prod"})
-	if len(got) != 1 {
-		t.Fatalf("optimizerScheduleMessages() length = %d, want 1", len(got))
-	}
-	if got[0] != stored[0] {
-		t.Fatalf("optimizerScheduleMessages() = %#v, want stored custom message", got)
-	}
-}
-
-func TestLegacyGoalAdvisorMessageQueueIgnoresCustomTopicMentions(t *testing.T) {
-	stored := []string{`Run a custom optimizer audit for this workflow. Compare the result with Goal Advisor and Auto Improve history, then stop.`}
-	if isLegacyGoalAdvisorMessageQueue(stored) {
-		t.Fatalf("custom optimizer prompt was incorrectly classified as legacy: %q", stored[0])
-	}
-}
-
-func TestOptimizerScheduleMessagesNoopsWhenNoStoredMessage(t *testing.T) {
-	got := optimizerScheduleMessages(context.Background(), "Workflow/test", nil, []string{"group-a"})
-	if len(got) != 1 {
-		t.Fatalf("optimizerScheduleMessages(nil) length = %d, want 1", len(got))
-	}
-	for _, want := range []string{
-		"optimizer schedule is no longer the product Goal Advisor loop",
-		"Goal Advisor now runs as a Pulse-selected module",
-		"legacy optimizer schedule should be disabled",
-	} {
-		if !strings.Contains(got[0], want) {
-			t.Fatalf("optimizer no-op message missing %q:\n%s", want, got[0])
-		}
-	}
-}
-
-func TestExecuteWorkshopJobDisablesLegacyOptimizerBeforeStartingSession(t *testing.T) {
-	ctx := context.Background()
-	workspacePath := "Workflow/demo"
-	manifest := &WorkflowManifest{
-		SchemaVersion: WorkflowManifestSchemaVersion,
-		ID:            "demo",
-		Label:         "Demo",
-		Schedules: []WorkflowSchedule{
-			{
-				ID:             "legacy-optimizer",
-				Name:           "Goal Advisor",
-				CronExpression: "0 23 * * *",
-				Timezone:       "UTC",
-				Enabled:        true,
-				GroupNames:     []string{"group-1"},
-				Mode:           "workshop",
-				WorkshopMode:   "optimizer",
-				Messages: []string{
-					"STEP 1/5 — PRE-BACKUP",
-					"STEP 2/5 — IMPROVE",
-				},
-			},
-		},
-	}
-	manifestJSON, err := json.Marshal(manifest)
-	if err != nil {
-		t.Fatalf("marshal manifest: %v", err)
-	}
-	workspace := httptest.NewServer(&mockWorkspaceAPI{files: map[string]string{
-		workspacePath + "/workflow.json": string(manifestJSON),
-	}})
-	defer workspace.Close()
-	t.Setenv("WORKSPACE_API_URL", workspace.URL)
-
-	s := NewSchedulerService(nil)
-	_, _, err = s.executeWorkshopJob(ctx, &ScheduleContext{
-		WorkspacePath: workspacePath,
-		Schedule:      manifest.Schedules[0],
-		SourceType:    "workflow",
-	}, "")
-	if err != nil {
-		t.Fatalf("executeWorkshopJob() error = %v", err)
-	}
-
-	updated, found, err := ReadWorkflowManifest(ctx, workspacePath)
-	if err != nil || !found {
-		t.Fatalf("read updated manifest: found=%v err=%v", found, err)
-	}
-	if len(updated.Schedules) != 1 || updated.Schedules[0].Enabled {
-		t.Fatalf("legacy optimizer schedule was not disabled: %+v", updated.Schedules)
-	}
-	if !updated.MonitorEnabled() {
-		t.Fatal("legacy optimizer disable should enable Pulse/post_run_monitor")
-	}
-}
-
-func TestOptimizerScheduleMessagesReplacesLegacyGoalAdvisorQueue(t *testing.T) {
-	legacy := []string{
-		"STEP 1/5 — PRE-BACKUP",
-		"STEP 2/5 — IMPROVE",
-		"STEP 3/5 — BACKUP FINAL STATE",
-		"STEP 4/5 — PUBLISH",
-		"STEP 5/5 — NOTIFY",
-	}
-
-	got := optimizerScheduleMessages(context.Background(), "Workflow/test", legacy, nil)
-	if len(got) != 1 {
-		t.Fatalf("optimizerScheduleMessages() length = %d, want 1", len(got))
-	}
-	if strings.Contains(strings.Join(got, "\n"), strings.Join(legacy, "\n")) {
-		t.Fatalf("optimizerScheduleMessages() should replace legacy stored queues, got:\n%s", strings.Join(got, "\n"))
-	}
-	for _, want := range []string{
-		"optimizer schedule is no longer the product Goal Advisor loop",
-		"Pulse-selected module",
-	} {
-		if !strings.Contains(strings.Join(got, "\n"), want) {
-			t.Fatalf("optimizerScheduleMessages() missing %q:\n%s", want, strings.Join(got, "\n"))
-		}
-	}
-}
-
-func TestApplyLLMAndSecretsToReqMapUsesAutoImproveOverrideOnlyForOptimizer(t *testing.T) {
-	builder := &workflowtypes.AgentLLMConfig{Provider: "claude-code", ModelID: "claude-opus-4-6"}
-	maintenance := &workflowtypes.AgentLLMConfig{Provider: "vertex", ModelID: "gemini-2.5-pro"}
-	baseConfig := &workflowtypes.PresetLLMConfig{
-		SchemaVersion:  workflowtypes.LLMConfigSchemaVersion,
-		Mode:           workflowtypes.LLMConfigModeExplicit,
-		BuilderLLM:     builder,
-		MaintenanceLLM: maintenance,
-		PulseLLM:       builder,
-		TieredConfig:   &workflowtypes.TieredLLMConfig{Tier1: maintenance, Tier2: builder, Tier3: builder},
-	}
-
-	tests := []struct {
-		name         string
-		workshopMode string
-		wantProvider string
-		wantModelID  string
-	}{
-		{
-			name:         "normal schedule uses workflow model",
-			workshopMode: "run",
-			wantProvider: "claude-code",
-			wantModelID:  "claude-opus-4-6",
-		},
-		{
-			name:         "optimizer schedule uses Goal Advisor override",
-			workshopMode: "optimizer",
-			wantProvider: "vertex",
-			wantModelID:  "gemini-2.5-pro",
-		},
-		{
-			name:         "optimizer mode is case insensitive",
-			workshopMode: " OPTIMIZER ",
-			wantProvider: "vertex",
-			wantModelID:  "gemini-2.5-pro",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			reqMap := map[string]interface{}{}
-			(&SchedulerService{}).applyLLMAndSecretsToReqMap(context.Background(), reqMap, &ScheduleContext{
-				Schedule: WorkflowSchedule{WorkshopMode: tt.workshopMode},
-				Capabilities: WorkflowCapabilities{
-					LLMConfig: baseConfig,
-				},
-			})
-
-			llmConfig, ok := reqMap["llm_config"].(map[string]interface{})
-			if !ok {
-				t.Fatalf("llm_config missing or wrong type: %#v", reqMap["llm_config"])
-			}
-			primary, ok := llmConfig["primary"].(map[string]interface{})
-			if !ok {
-				t.Fatalf("llm_config.primary missing or wrong type: %#v", llmConfig["primary"])
-			}
-			if got := primary["provider"]; got != tt.wantProvider {
-				t.Fatalf("provider = %#v, want %q", got, tt.wantProvider)
-			}
-			if got := primary["model_id"]; got != tt.wantModelID {
-				t.Fatalf("model_id = %#v, want %q", got, tt.wantModelID)
-			}
-			if tt.workshopMode == "run" {
-				if _, ok := reqMap["llm_config_source"]; ok {
-					t.Fatalf("normal run set llm_config_source: %#v", reqMap["llm_config_source"])
-				}
-			} else if got := reqMap["llm_config_source"]; got != llmConfigSourceScheduledAutoImprove {
-				t.Fatalf("llm_config_source = %#v, want %q", got, llmConfigSourceScheduledAutoImprove)
-			}
-		})
-	}
-}
-
-func TestApplyLLMAndSecretsToReqMapUsesCodingAgentAutoImproveDefaultForOptimizer(t *testing.T) {
-	reqMap := map[string]interface{}{}
-	(&SchedulerService{}).applyLLMAndSecretsToReqMap(context.Background(), reqMap, &ScheduleContext{
-		Schedule: WorkflowSchedule{WorkshopMode: "optimizer"},
-		Capabilities: WorkflowCapabilities{
-			LLMConfig: &workflowtypes.PresetLLMConfig{
-				SchemaVersion: workflowtypes.LLMConfigSchemaVersion,
-				Mode:          workflowtypes.LLMConfigModeProviderProfile,
-				Provider:      "claude-code",
-			},
-		},
-	})
-
-	llmConfig, ok := reqMap["llm_config"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("llm_config missing or wrong type: %#v", reqMap["llm_config"])
-	}
-	primary, ok := llmConfig["primary"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("llm_config.primary missing or wrong type: %#v", llmConfig["primary"])
-	}
-	if got := primary["provider"]; got != "claude-code" {
-		t.Fatalf("provider = %#v, want claude-code", got)
-	}
-	if got := primary["model_id"]; got != "claude-opus-5" {
-		t.Fatalf("model_id = %#v, want claude-opus-5", got)
-	}
-	options, ok := primary["options"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("options missing or wrong type: %#v", primary["options"])
-	}
-	if got := options["reasoning_effort"]; got != "medium" {
-		t.Fatalf("reasoning_effort = %#v, want medium", got)
-	}
-	if got := reqMap["llm_config_source"]; got != llmConfigSourceScheduledAutoImprove {
-		t.Fatalf("llm_config_source = %#v, want %q", got, llmConfigSourceScheduledAutoImprove)
-	}
-}
-
-func TestApplyLLMAndSecretsToReqMapPreservesAutoImproveDefaultOptions(t *testing.T) {
-	reqMap := map[string]interface{}{}
-	(&SchedulerService{}).applyLLMAndSecretsToReqMap(context.Background(), reqMap, &ScheduleContext{
-		Schedule: WorkflowSchedule{WorkshopMode: "optimizer"},
-		Capabilities: WorkflowCapabilities{
-			LLMConfig: &workflowtypes.PresetLLMConfig{
-				SchemaVersion: workflowtypes.LLMConfigSchemaVersion,
-				Mode:          workflowtypes.LLMConfigModeProviderProfile,
-				Provider:      "codex-cli",
-			},
-		},
-	})
-
-	llmConfig, ok := reqMap["llm_config"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("llm_config missing or wrong type: %#v", reqMap["llm_config"])
-	}
-	primary, ok := llmConfig["primary"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("llm_config.primary missing or wrong type: %#v", llmConfig["primary"])
-	}
-	if got := primary["provider"]; got != "codex-cli" {
-		t.Fatalf("provider = %#v, want codex-cli", got)
-	}
-	if got := primary["model_id"]; got != "gpt-5.6-sol" {
-		t.Fatalf("model_id = %#v, want gpt-5.6-sol", got)
-	}
-	options, ok := primary["options"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("options missing or wrong type: %#v", primary["options"])
-	}
-	if got := options["reasoning_effort"]; got != "high" {
-		t.Fatalf("reasoning_effort = %#v, want high", got)
-	}
-	if got := reqMap["llm_config_source"]; got != llmConfigSourceScheduledAutoImprove {
-		t.Fatalf("llm_config_source = %#v, want %q", got, llmConfigSourceScheduledAutoImprove)
-	}
-}
-
 func TestApplyPulseLLMToReqMapUsesPulseOverrideWhenConfigured(t *testing.T) {
 	reqMap := map[string]interface{}{}
 	builder := &workflowtypes.AgentLLMConfig{Provider: "claude-code", ModelID: "claude-opus-4-6"}
@@ -3350,5 +3082,50 @@ func TestWorkshopRunStartedDuringInvocationRejectsOlderAndUnstamped(t *testing.T
 	}
 	if workshopRunStartedDuringInvocation(folders, since) {
 		t.Fatal("older or unstamped runs must not be reported as evidence for this invocation")
+	}
+}
+
+func TestApplyLLMAndSecretsToReqMapUsesTheWorkflowModelForEverySchedule(t *testing.T) {
+	// Every schedule now runs on the workflow's Builder model. The optimizer
+	// workshop mode used to swap in the Maintenance LLM and stamp
+	// llm_config_source; that mode was retired on 2026-08-17, so a schedule
+	// still carrying "optimizer" in workflow.json must behave like any other.
+	builder := &workflowtypes.AgentLLMConfig{Provider: "claude-code", ModelID: "claude-opus-4-6"}
+	maintenance := &workflowtypes.AgentLLMConfig{Provider: "vertex", ModelID: "gemini-2.5-pro"}
+	baseConfig := &workflowtypes.PresetLLMConfig{
+		SchemaVersion:  workflowtypes.LLMConfigSchemaVersion,
+		Mode:           workflowtypes.LLMConfigModeExplicit,
+		BuilderLLM:     builder,
+		MaintenanceLLM: maintenance,
+		PulseLLM:       builder,
+		TieredConfig:   &workflowtypes.TieredLLMConfig{Tier1: maintenance, Tier2: builder, Tier3: builder},
+	}
+
+	for _, workshopMode := range []string{"run", "workshop", "optimizer", " OPTIMIZER ", ""} {
+		t.Run("workshop_mode="+workshopMode, func(t *testing.T) {
+			reqMap := map[string]interface{}{}
+			(&SchedulerService{}).applyLLMAndSecretsToReqMap(context.Background(), reqMap, &ScheduleContext{
+				Schedule:     WorkflowSchedule{WorkshopMode: workshopMode},
+				Capabilities: WorkflowCapabilities{LLMConfig: baseConfig},
+			})
+
+			llmConfig, ok := reqMap["llm_config"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("llm_config missing or wrong type: %#v", reqMap["llm_config"])
+			}
+			primary, ok := llmConfig["primary"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("llm_config.primary missing or wrong type: %#v", llmConfig["primary"])
+			}
+			if got := primary["provider"]; got != "claude-code" {
+				t.Fatalf("provider = %#v, want the Builder model regardless of workshop mode", got)
+			}
+			if got := primary["model_id"]; got != "claude-opus-4-6" {
+				t.Fatalf("model_id = %#v, want the Builder model regardless of workshop mode", got)
+			}
+			if _, ok := reqMap["llm_config_source"]; ok {
+				t.Fatalf("llm_config_source was set: %#v — no schedule overrides the model any more", reqMap["llm_config_source"])
+			}
+		})
 	}
 }

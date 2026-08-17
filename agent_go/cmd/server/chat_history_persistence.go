@@ -1539,17 +1539,19 @@ func parseLocalChatHistorySession(userID, workspaceRoot, workflowPath, fallbackS
 // behave like workshop sessions because the merged tool list is a strict
 // superset of all three pre-merge surfaces.
 func normalizeChatHistoryWorkshopMode(mode string) string {
-	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "workshop", "builder", "optimizer", "reporting":
-		return "workshop"
-	case "run":
-		return "run"
-	case "ask", "debugger", "runner":
-		return "run"
-	case "eval", "output":
-		return "workshop"
-	default:
+	trimmed := strings.ToLower(strings.TrimSpace(mode))
+	if trimmed == "" {
 		return ""
+	}
+	// Only "run" and "workshop" exist. Every retired name — builder,
+	// optimizer, reporting, eval, output, ask, debugger, runner — resolves
+	// to one of them rather than being enumerated, so a session persisted
+	// under any older name still loads.
+	switch trimmed {
+	case "run", "ask", "debugger", "runner":
+		return "run"
+	default:
+		return "workshop"
 	}
 }
 

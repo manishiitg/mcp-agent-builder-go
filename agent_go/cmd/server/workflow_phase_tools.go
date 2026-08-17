@@ -274,7 +274,11 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 			log.Printf("[WORKFLOW_PHASE] Registered evaluation validation tool in %s", workflowPhaseID)
 		}
 
-		if phaseTemplateVars["WorkshopMode"] == "workshop" || phaseTemplateVars["WorkshopMode"] == "builder" || phaseTemplateVars["WorkshopMode"] == "optimizer" || phaseTemplateVars["WorkshopMode"] == "reporting" {
+		// Only "workshop" or "run" can reach phaseTemplateVars: server.go
+		// normalizes every legacy value before this point. Comparing against
+		// the retired names asserted they still occur, which cost real
+		// debugging time while diagnosing PLAT-125.
+		if phaseTemplateVars["WorkshopMode"] == "workshop" {
 			// The HTML report is loaded directly from db/reports/index.html. The
 			// builder edits those files with normal workspace tools and validates
 			// each page; there is no report-plan JSON registry or widget layer.
@@ -362,7 +366,7 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 			// backward compat with persisted sessions that pre-date the
 			// merge.
 			switch phaseTemplateVars["WorkshopMode"] {
-			case "workshop", "optimizer":
+			case "workshop":
 				RegisterAutoImprovementProposerTools(definitionAgent, phaseWorkspacePath, "pulse-fixer", api.logger)
 				log.Printf("[WORKFLOW_PHASE] Registered auto-improvement proposer tools in %s (mode=%s)", workflowPhaseID, phaseTemplateVars["WorkshopMode"])
 			case "run":
