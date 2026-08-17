@@ -35,7 +35,7 @@ type qualityReport struct {
 	RecommendedAction string                        `json:"recommended_action"`
 }
 
-//go:embed skills/*/SKILL.md
+//go:embed skills/*/SKILL.md skills/*/references/*.md
 var profileSkillFiles embed.FS
 
 var profileSkills = []struct{ name, description, path string }{
@@ -47,7 +47,7 @@ var profileSkills = []struct{ name, description, path string }{
 	{"html-composition", "Design video frames as HTML/CSS and render them with headless Chrome and ffmpeg.", "skills/html-composition/SKILL.md"},
 	{"fal-ai", "Generate AI video, image, voice, and music clips via fal.ai's Node.js client for long-form narrative productions.", "skills/fal-ai/SKILL.md"},
 	{"google-ai", "Generate AI video, image, and narration (TTS) via Google's own Gemini API (Node.js client) -- Gemini image models, Veo, and Gemini TTS. Covers a whole production except its music bed.", "skills/google-ai/SKILL.md"},
-	{"video-provider-capabilities", "Resolve a selected video model's current official API schema into a durable capability record and continuity plan before any paid generation.", "skills/video-provider-capabilities/SKILL.md"},
+	{"video-provider-capabilities", "Resolve a selected video endpoint's current official schema into a durable request, continuity, cost, retry, and review plan before any paid generation.", "skills/video-provider-capabilities/SKILL.md"},
 	{"video-model-selection", "Choose which fal.ai or Google model fits one shot's requirements -- input mode, duration, character consistency, native audio, cost -- before generating.", "skills/video-model-selection/SKILL.md"},
 	{"video-cinematography", "Construct the generation prompt for one shot -- the five-aspect formula, camera-movement and lighting vocabulary -- and keep a character or subject consistent across shots.", "skills/video-cinematography/SKILL.md"},
 	{"video-storytelling", "Structure a video's narrative arc and pacing, scaled from a short explainer to a true long-form (8+ minute) piece's chapters, retention curve, and pattern interrupts.", "skills/video-storytelling/SKILL.md"},

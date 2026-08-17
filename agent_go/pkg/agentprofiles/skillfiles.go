@@ -3,6 +3,7 @@ package agentprofiles
 import (
 	"fmt"
 	"io/fs"
+	"path"
 	"strings"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/skills"
@@ -18,10 +19,11 @@ type SkillFileBinding struct {
 	Path        string
 }
 
-// RegisterEmbeddedSkills reads each binding's SKILL.md from fsys, strips its
-// frontmatter, and registers it as a builtin skill. Every product that owns
-// skills did this same three-step loop -- read, strip frontmatter, register
-// -- as its own private copy; this is that loop, written once.
+// RegisterEmbeddedSkills reads each binding's SKILL.md and any embedded files
+// beside it from fsys, strips the frontmatter, and registers the complete
+// bundle as a builtin skill. Supporting files keep product-owned skills on the
+// same progressive-disclosure path as imported skills: SKILL.md stays short,
+// while references/ and scripts/ are projected only for agents that attach it.
 //
 // fsys is a product's own //go:embed'd filesystem (embed.FS satisfies fs.FS),
 // so this has no dependency on any one product's package layout. Call it from
@@ -40,11 +42,31 @@ func RegisterEmbeddedSkills(fsys fs.FS, bindings []SkillFileBinding) error {
 				content = content[end+9:]
 			}
 		}
+		root := path.Dir(binding.Path)
+		var supportingFiles []llmtypes.SkillFile
+		if err := fs.WalkDir(fsys, root, func(filePath string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if entry.IsDir() || filePath == binding.Path {
+				return nil
+			}
+			fileData, err := fs.ReadFile(fsys, filePath)
+			if err != nil {
+				return err
+			}
+			relPath := strings.TrimPrefix(filePath, root+"/")
+			supportingFiles = append(supportingFiles, llmtypes.SkillFile{RelPath: relPath, Content: fileData})
+			return nil
+		}); err != nil {
+			return fmt.Errorf("read supporting files for skill %q: %w", binding.Name, err)
+		}
 		if err := skills.RegisterBuiltin(&llmtypes.Skill{
-			Name:        binding.Name,
-			Description: binding.Description,
-			Content:     content,
-			Source:      llmtypes.SkillSource{Origin: "builtin"},
+			Name:            binding.Name,
+			Description:     binding.Description,
+			Content:         content,
+			SupportingFiles: supportingFiles,
+			Source:          llmtypes.SkillSource{Origin: "builtin"},
 		}); err != nil {
 			return fmt.Errorf("register skill %q: %w", binding.Name, err)
 		}

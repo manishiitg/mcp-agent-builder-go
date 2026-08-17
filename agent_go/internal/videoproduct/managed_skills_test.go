@@ -119,7 +119,7 @@ func TestGenerationSkillsRegisterAndStayOutOfTheInfographicPipeline(t *testing.T
 	}{
 		{"fal-ai", []string{"SECRET_FAL_KEY", "Never invent a model ID", "@fal-ai/client"}},
 		{"google-ai", []string{"SECRET_GEMINI_API_KEY", "Never invent a model ID", "@google/genai"}},
-		{"video-provider-capabilities", []string{"official_docs", "capability record", "pending_user_review", "continuity_plan"}},
+		{"video-provider-capabilities", []string{"official API", "capability record", "pending_user_review", "continuity-plan.json", "generation-ledger.json"}},
 		{"video-model-selection", []string{"video-cinematography", "fal-ai", "google-ai", "Shot count vs. budget"}},
 		{"video-cinematography", []string{"dolly is not zoom", "reference-image conditioning", "video-model-selection"}},
 		{"video-storytelling", []string{"video-cinematography", "video-model-selection", "But-therefore, not and-then", "Scaling to true long-form"}},
@@ -137,6 +137,24 @@ func TestGenerationSkillsRegisterAndStayOutOfTheInfographicPipeline(t *testing.T
 			if !strings.Contains(attached[0].Content, want) {
 				t.Fatalf("%s skill lost required content %q", tc.name, want)
 			}
+		}
+	}
+
+	capabilitySkill := skills.LoadAttachable("", []string{"video-provider-capabilities"})
+	if len(capabilitySkill) != 1 {
+		t.Fatalf("video-provider-capabilities bundle = %v", capabilitySkill)
+	}
+	supporting := map[string]string{}
+	for _, file := range capabilitySkill[0].SupportingFiles {
+		supporting[file.RelPath] = string(file.Content)
+	}
+	for path, requiredText := range map[string]string{
+		"references/capability-record.md":   "Reference manifest",
+		"references/continuity-planning.md": "Boundary-frame chain",
+		"references/execution-review.md":    "Durable job lifecycle",
+	} {
+		if !strings.Contains(supporting[path], requiredText) {
+			t.Fatalf("video-provider-capabilities supporting file %q missing %q: %v", path, requiredText, supporting)
 		}
 	}
 
