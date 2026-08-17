@@ -23,6 +23,11 @@ func TestCleanupOrphanedConversationTurnSessionClearsActiveSessionAndQueryIndex(
 	api.sessionQueryIDs = map[string][]string{
 		sessionID: {"orphaned-query", "other-query"},
 	}
+	api.trackedWorkflowExecutions["orphaned-query"] = &TrackedWorkflowExecution{
+		ExecutionID: "orphaned-query", SessionID: sessionID, Source: trackedExecutionSourceConversationTurn,
+		Status: trackedExecutionStatusRunning, StartedAt: time.Now().UTC(),
+	}
+	api.setSessionBusy(sessionID, true)
 
 	api.cleanupOrphanedConversationTurnSession(sessionID, "orphaned-query")
 
@@ -31,6 +36,20 @@ func TestCleanupOrphanedConversationTurnSessionClearsActiveSessionAndQueryIndex(
 	api.activeSessionsMux.RUnlock()
 	if status != "error" {
 		t.Fatalf("session status = %q, want error after orphaned cleanup", status)
+	}
+
+	// PLAT-116 follow-up: the workflow selector's spinner and Global Monitor's
+	// runtime_state key off sessionBusy and the tracked execution record, not
+	// the coarse active-session status — both were left uncleared originally,
+	// which kept a stalled turn showing "running" in the UI for hours.
+	if api.isSessionBusy(sessionID) {
+		t.Fatal("sessionBusy must be cleared so the workflow selector and Global Monitor stop showing a spinner")
+	}
+	api.trackedWorkflowExecutionsMux.RLock()
+	execStatus := api.trackedWorkflowExecutions["orphaned-query"].Status
+	api.trackedWorkflowExecutionsMux.RUnlock()
+	if execStatus != trackedExecutionStatusFailed {
+		t.Fatalf("tracked execution status = %q, want failed so runtime_state.phase reports terminal", execStatus)
 	}
 
 	api.sessionQueryIDMux.RLock()
@@ -76,6 +95,7 @@ func TestWaitForConversationTurnTreeIdleTimeoutRunsOrphanCleanup(t *testing.T) {
 	api.sessionQueryIDs = map[string][]string{
 		sessionID: {"stuck-turn"},
 	}
+	api.setSessionBusy(sessionID, true)
 
 	err := api.waitForConversationTurnTree(context.Background(), sessionID, "stuck-turn", 10*time.Millisecond)
 	if !errors.Is(err, errWorkshopIdleWaitTimeout) {
@@ -87,6 +107,15 @@ func TestWaitForConversationTurnTreeIdleTimeoutRunsOrphanCleanup(t *testing.T) {
 	api.activeSessionsMux.RUnlock()
 	if status != "error" {
 		t.Fatalf("session status = %q, want the idle-wait timeout to have cleaned up the orphaned session", status)
+	}
+	if api.isSessionBusy(sessionID) {
+		t.Fatal("sessionBusy must be cleared by the idle-wait timeout, not just active-session status")
+	}
+	api.trackedWorkflowExecutionsMux.RLock()
+	execStatus := api.trackedWorkflowExecutions["stuck-turn"].Status
+	api.trackedWorkflowExecutionsMux.RUnlock()
+	if execStatus != trackedExecutionStatusFailed {
+		t.Fatalf("tracked execution status = %q, want failed so the workflow selector and Global Monitor see a terminal state", execStatus)
 	}
 
 	api.sessionQueryIDMux.RLock()
