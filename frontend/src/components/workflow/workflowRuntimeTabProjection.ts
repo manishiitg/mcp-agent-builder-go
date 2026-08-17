@@ -88,14 +88,23 @@ export function reconcileWorkflowRuntimeTab(
 }
 
 /**
- * A Schedule is a first-class parallel lane, not a temporary observer that
- * disappears when Chat becomes active. Keep it in the tab strip until the user
- * closes it. Other read-only lanes retain the old active/running visibility
- * rule so stale bot observations do not accumulate in the toolbar.
+ * A Schedule lane exists to watch a run that is happening. It is shown while
+ * that run is live, and while it is the tab you are actually looking at.
+ *
+ * It used to be shown unconditionally, "until the user closes it", so that
+ * switching to Chat mid-run could not make the lane you were watching vanish.
+ * That intent is preserved by the streaming/bg-agent checks below, but the
+ * unconditional form kept FINISHED runs in the strip forever — and, because
+ * tabs persist for 24h with isStreaming reset to false, brought them back on
+ * every reload. The result was a row of dead Schedule tabs for runs that had
+ * long since ended. The very same comment guarded bot lanes against exactly
+ * that ("so stale bot observations do not accumulate in the toolbar"); a
+ * schedule is no different once its run is over.
+ *
+ * A run you are actively viewing still stays put, because activeTabId wins.
  */
 export function shouldDisplayWorkflowTab(tab: ChatTab, activeTabId: string | null): boolean {
   if (!tab.metadata?.isViewOnly) return true
-  if (tab.metadata?.isScheduledRun) return true
   return tab.tabId === activeTabId || tab.isStreaming || tab.hasRunningBgAgents
 }
 

@@ -723,6 +723,17 @@ const selectDurableChatState = (state: ChatState): DurableChatState => {
       .filter(([, tab]) => {
         const isRelevantMode = tab.metadata?.mode === 'workflow' || tab.metadata?.mode === 'multi-agent'
         if (!isRelevantMode) return false
+        // A view-only scheduled run is an observer of something happening NOW.
+        // Persisting it guaranteed it came back dead: this snapshot forces
+        // isStreaming false, so a restored Schedule tab could never look live
+        // again, and it reappeared on every reload for 24h. The run history
+        // panel is the durable record of past runs; a lane for a run that is
+        // no longer happening is not. A schedule the user promoted to an
+        // interactive chat is a real conversation and is kept.
+        if (tab.metadata?.isScheduledRun && tab.metadata?.isViewOnly &&
+            !tab.metadata?.userInteractiveContinuation) {
+          return false
+        }
         return Date.now() - (tab.createdAt || 0) < 24 * 60 * 60 * 1000
       })
       .map(([tabId, tab]) => [

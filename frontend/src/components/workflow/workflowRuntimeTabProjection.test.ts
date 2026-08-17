@@ -127,30 +127,33 @@ describe('workflowRuntimeTabProjection', () => {
 })
 
 describe('shouldDisplayWorkflowTab', () => {
-  it('keeps a Schedule visible after the user switches to Chat', () => {
-    expect(shouldDisplayWorkflowTab({
-      tabId: 'schedule-tab',
-      name: 'Schedule',
-      sessionId: 'schedule-session',
-      isStreaming: false,
-      isCompleted: false,
-      hasRunningBgAgents: false,
-      isSyntheticTurn: false,
-      canSteer: false,
-      hideToolCalls: true,
-      viewMode: 'terminal',
-      config: {} as ChatTab['config'],
-      createdAt: 1,
-      lastAccessedAt: 1,
-      lastViewedEventCount: 0,
-      lastViewedEventCounts: { micro: 0 },
-      metadata: {
-        mode: 'workflow',
-        presetQueryId: 'workflow-1',
-        isViewOnly: true,
-        isScheduledRun: true,
-      },
-    }, 'chat-tab')).toBe(true)
+  const scheduleTab = (overrides: Partial<ChatTab>): ChatTab => ({
+    tabId: 'schedule-tab', name: 'Daily execution', sessionId: 'schedule-session',
+    isStreaming: false, isCompleted: false, hasRunningBgAgents: false, isSyntheticTurn: false,
+    canSteer: false, hideToolCalls: true, viewMode: 'terminal', config: {} as ChatTab['config'],
+    createdAt: 1, lastAccessedAt: 1, lastViewedEventCount: 0, lastViewedEventCounts: { micro: 0 },
+    metadata: { mode: 'workflow', presetQueryId: 'workflow-1', isViewOnly: true, isScheduledRun: true },
+    ...overrides,
+  })
+
+  // The original reason the lane was made permanent: switching to Chat during a
+  // run must not make the lane you are watching disappear. Still guaranteed.
+  it('keeps a LIVE Schedule visible after the user switches to Chat', () => {
+    expect(shouldDisplayWorkflowTab(scheduleTab({ isStreaming: true }), 'chat-tab')).toBe(true)
+  })
+
+  it('keeps a Schedule whose background agents are still running', () => {
+    expect(shouldDisplayWorkflowTab(scheduleTab({ hasRunningBgAgents: true }), 'chat-tab')).toBe(true)
+  })
+
+  it('keeps the Schedule you are actually looking at, finished or not', () => {
+    expect(shouldDisplayWorkflowTab(scheduleTab({}), 'schedule-tab')).toBe(true)
+  })
+
+  // The accumulation this fixes: finished runs used to stay in the strip
+  // forever, and returned on every reload for 24h.
+  it('drops a finished Schedule you are not looking at', () => {
+    expect(shouldDisplayWorkflowTab(scheduleTab({}), 'chat-tab')).toBe(false)
   })
 })
 

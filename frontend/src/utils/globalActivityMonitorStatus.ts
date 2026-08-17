@@ -95,16 +95,23 @@ export function currentActiveSession(
 }
 
 /**
- * The global monitor renders every visible session except the one currently
+ * The global monitor renders every visible session, including the one currently
  * open in the chat surface. A workflow may have an interactive chat and a
  * scheduled run at the same time; they have independent session IDs,
  * lifecycles, and destinations. Collapsing them by workspace hides real work.
+ *
+ * The current session used to be excluded here, because the workflow selector
+ * carried its own live status indicator and showing both was duplication. That
+ * indicator has been removed — run status belongs in one place — so excluding
+ * the current session left it with no status anywhere: a running workflow you
+ * were looking at appeared to be doing nothing at all. The monitor is now that
+ * one place, so it must be complete.
  */
 export function visibleActivitySessions(
   activeSessions: ActiveSessionInfo[],
-  currentSessionId: string | null,
+  _currentSessionId: string | null,
 ): ActiveSessionInfo[] {
-  return activeSessions.filter(session => session.session_id !== currentSessionId)
+  return activeSessions
 }
 
 export function statusTone(
