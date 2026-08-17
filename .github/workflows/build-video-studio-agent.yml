@@ -43,14 +43,18 @@ jobs:
           go mod edit -replace github.com/manishiitg/mcpagent=../dependencies/mcpagent
           go mod edit -replace github.com/manishiitg/multi-llm-provider-go=../dependencies/multi-llm-provider-go
           go mod tidy
-          # Keep the agent self-contained. The EC2 host does not provide the
-          # optional sherpa shared library required by a CGO-linked binary.
-          CGO_ENABLED=0 go build -o ../dist/video-studio-agent .
+          # Ship the optional speech runtime beside the agent. Its relative
+          # rpath avoids a host-wide library install or sudo.
+          SHERPA_LIB_DIR="$(go env GOPATH)/pkg/mod/github.com/k2-fsa/sherpa-onnx-go-linux@v1.13.5/lib/x86_64-unknown-linux-gnu"
+          test -f "$SHERPA_LIB_DIR/libsherpa-onnx-c-api.so"
+          mkdir -p ../dist/lib
+          cp "$SHERPA_LIB_DIR"/libsherpa-onnx-c-api.so "$SHERPA_LIB_DIR"/libonnxruntime.so ../dist/lib/
+          CGO_LDFLAGS='-Wl,-rpath,$ORIGIN/../lib' go build -o ../dist/video-studio-agent .
 
       - name: Upload Linux agent
         uses: actions/upload-artifact@v4
         with:
           name: video-studio-agent-linux-amd64
-          path: dist/video-studio-agent
+          path: dist/
           if-no-files-found: error
           retention-days: 7
