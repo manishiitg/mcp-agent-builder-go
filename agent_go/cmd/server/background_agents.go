@@ -738,7 +738,7 @@ func (api *StreamingAPI) executeBackgroundDelegatedTask(
 	bgSpec.BackgroundAgentID = agentID
 	bgCtx = virtualtools.WithSubAgentSpec(bgCtx, bgSpec)
 	// The background context intentionally starts from context.Background(),
-	// so carry the Chief of Staff's exact attached skill snapshot explicitly.
+	// so carry the parent AgentWorks chat's exact attached skill snapshot explicitly.
 	bgCtx = copyDelegatedParentSkills(ctx, bgCtx)
 
 	// Propagate per-user Chats folder to background sub-agents so shell commands

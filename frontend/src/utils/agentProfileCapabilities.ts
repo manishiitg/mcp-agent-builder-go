@@ -7,13 +7,50 @@ import { getApiBaseUrl, getAuthToken } from '../services/api'
 // product.yaml, so the frontend must not hardcode which product has which
 // capability — that defeats the point of it being product.yaml-driven.
 
-type AgentProfileCapabilitiesResponse = {
+type AgentProfileResponse = {
   runtime?: {
+    provider?: string
+    model_id?: string
     capabilities?: Record<string, unknown>
   }
 }
 
 const capabilityCache = new Map<string, Promise<boolean>>()
+const profileCache = new Map<string, Promise<AgentProfileResponse>>()
+
+function loadAgentProfile(profileId: string, version?: number): Promise<AgentProfileResponse> {
+  const normalizedVersion = version && version > 0 ? version : undefined
+  const cacheKey = `${profileId}::${normalizedVersion ?? 'latest'}`
+  const cached = profileCache.get(cacheKey)
+  if (cached) return cached
+
+  const token = getAuthToken()
+  const versionQuery = normalizedVersion ? `?version=${normalizedVersion}` : ''
+  const promise = fetch(`${getApiBaseUrl()}/api/agent-profiles/${encodeURIComponent(profileId)}${versionQuery}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  }).then((response) => {
+    if (!response.ok) throw new Error(`Unable to load agent profile ${profileId} (${response.status})`)
+    return response.json() as Promise<AgentProfileResponse>
+  })
+
+  profileCache.set(cacheKey, promise)
+  return promise
+}
+
+export async function loadAgentProfileRuntime(
+  profileId: string,
+  version?: number,
+): Promise<{ provider: string; model_id: string } | null> {
+  if (!profileId) return null
+  try {
+    const profile = await loadAgentProfile(profileId, version)
+    const provider = profile.runtime?.provider?.trim() || ''
+    const modelId = profile.runtime?.model_id?.trim() || ''
+    return provider && modelId ? { provider, model_id: modelId } : null
+  } catch {
+    return null
+  }
+}
 
 /**
  * Resolves whether `profileId` declared `capability` as anything other than
@@ -26,20 +63,13 @@ const capabilityCache = new Map<string, Promise<boolean>>()
  * composer-mount time, and a profile's declared capabilities do not change
  * without a server restart.
  */
-export function loadAgentProfileCapabilityEnabled(profileId: string, capability: string): Promise<boolean> {
+export function loadAgentProfileCapabilityEnabled(profileId: string, capability: string, version?: number): Promise<boolean> {
   if (!profileId) return Promise.resolve(false)
-  const cacheKey = `${profileId}::${capability}`
+  const cacheKey = `${profileId}::${version ?? 'latest'}::${capability}`
   const cached = capabilityCache.get(cacheKey)
   if (cached) return cached
 
-  const token = getAuthToken()
-  const promise = fetch(`${getApiBaseUrl()}/api/agent-profiles/${encodeURIComponent(profileId)}?version=2`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-  })
-    .then((response) => {
-      if (!response.ok) throw new Error(`Unable to load agent profile ${profileId} (${response.status})`)
-      return response.json() as Promise<AgentProfileCapabilitiesResponse>
-    })
+  const promise = loadAgentProfile(profileId, version)
     .then((profile) => {
       const value = profile.runtime?.capabilities?.[capability]
       const asStr = typeof value === 'string' ? value.trim() : ''

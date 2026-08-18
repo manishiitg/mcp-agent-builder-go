@@ -32,7 +32,6 @@ function keepPreviousInputsWhenUnchanged(
 function sourceLabel(source?: string): string {
 	if (source === 'strategy_auditor') return 'Strategy Auditor'
   if (source === 'goal_advisor') return 'Goal Advisor'
-  if (source === 'chief_of_staff') return 'Chief of Staff'
   return 'Pulse'
 }
 

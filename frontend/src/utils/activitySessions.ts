@@ -44,7 +44,7 @@ export function hasActiveSessionWork(
 }
 
 /**
- * Title for a non-workflow activity item. Scheduled Chief of Staff sessions
+ * Title for a non-workflow activity item. Scheduled agent sessions
  * must never expose their scheduler envelope or task prompt as a UI label.
  * New backend sessions provide `title`; the generic fallback covers sessions
  * created by an older backend and restored history that predates that field.
@@ -55,7 +55,7 @@ export function nonWorkflowActivityTitle(
   const explicitTitle = session.current_execution_name?.trim() || session.title?.trim()
   if (explicitTitle) return explicitTitle
   if (isScheduledSession({ sessionId: session.session_id, triggeredBy: session.triggered_by })) {
-    return 'Chief of Staff task'
+    return 'Scheduled agent task'
   }
   return session.query?.trim() || 'Agent chat'
 }

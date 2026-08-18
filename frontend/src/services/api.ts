@@ -8,6 +8,9 @@ import { getActiveWorkspaceProfile, useWorkspaceConnectionStore } from '../store
 import type {
   AgentQueryRequest,
   AgentQueryResponse,
+  AgentProfileChatRequest,
+  AgentProfileConversationRequest,
+  AgentProfileConversationResponse,
   GetEventsResponse,
   TerminalEventsResponse,
   MCPServerConfig,
@@ -86,6 +89,9 @@ import type { PlanStep, AgentConfigs } from '../utils/stepConfigMatching'
 export type {
   AgentQueryRequest,
   AgentQueryResponse,
+  AgentProfileChatRequest,
+  AgentProfileConversationRequest,
+  AgentProfileConversationResponse,
   GetEventsResponse,
   MCPServerConfig,
   ChatSession,
@@ -919,6 +925,38 @@ export const agentApi = {
     }
 
     const response = await api.post('/api/query', request, { headers })
+    return response.data
+  },
+
+  // Product-owned chats use a narrow server-authored profile contract instead
+  // of sending the Workflow Builder / AgentWorks QueryRequest surface.
+  startAgentProfileQuery: async (
+    profileId: string,
+    request: AgentProfileChatRequest,
+    sessionId?: string,
+  ): Promise<AgentQueryResponse> => {
+    const headers: Record<string, string> = {}
+    if (sessionId) headers['X-Session-ID'] = sessionId
+    const response = await api.post(
+      `/api/agent-profiles/${encodeURIComponent(profileId)}/query`,
+      request,
+      { headers },
+    )
+    return response.data
+  },
+
+  resolveAgentProfileConversation: async (
+    profileId: string,
+    request: AgentProfileConversationRequest,
+    existingSessionId?: string,
+  ): Promise<AgentProfileConversationResponse> => {
+    const headers: Record<string, string> = {}
+    if (existingSessionId) headers['X-Session-ID'] = existingSessionId
+    const response = await api.post(
+      `/api/agent-profiles/${encodeURIComponent(profileId)}/conversation`,
+      request,
+      { headers },
+    )
     return response.data
   },
 
@@ -2163,20 +2201,10 @@ export const agentApi = {
     return response.data
   },
 
-  getOrgNotifications: async (): Promise<WorkflowNotificationInfoResponse> => {
-    const response = await api.get('/api/org/notifications')
-    return response.data
-  },
-
   getWorkflowPublishSecret: async (workspacePath: string, secretName: string): Promise<WorkflowPublishSecretResponse> => {
     const response = await api.get('/api/workflow/publish/secret', {
       params: { workspace_path: workspacePath, secret_name: secretName }
     })
-    return response.data
-  },
-
-  getOrgBackup: async (): Promise<WorkflowBackupInfoResponse> => {
-    const response = await api.get('/api/org/backup')
     return response.data
   },
 

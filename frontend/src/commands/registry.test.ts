@@ -3,7 +3,7 @@ import { findCommand, getCommands } from './registry'
 import type { CommandContext } from './types'
 
 describe('Pulse slash commands', () => {
-  it('keeps workflow pulse setup mode-scoped and does not resurrect the removed Org Pulse variant', () => {
+  it('keeps workflow Pulse setup scoped to workflow mode', () => {
     const workflowCommand = findCommand('pulse-setup', 'workflow')
     const orgCommand = findCommand('pulse-setup', 'multi-agent')
 
@@ -155,24 +155,20 @@ describe('Pulse slash commands', () => {
     expect(submitted).toContain('Do not truncate the result to a Top 3')
   })
 
-  it('keeps workspace configuration actions out of the Chief of Staff slash menu', () => {
-    const orgCommands = getCommands('multi-agent').map(command => command.command)
+  it('keeps workflow configuration actions out of the generic chat slash menu', () => {
+    const chatCommands = getCommands('multi-agent').map(command => command.command)
 
     for (const command of ['build-skill', 'add-skill', 'mcp', 'mcp-add', 'models']) {
-      expect(orgCommands).not.toContain(command)
+      expect(chatCommands).not.toContain(command)
     }
   })
 })
 
 describe('Product commands are scoped to their own surface', () => {
   it('shows a product\'s own commands once registered, and clears them when unregistered', async () => {
-    // Chief of Staff's and Video Studio's own commands (notify, org-backup,
-    // production, etc.) all live in product.yaml now, delivered via
-    // setProductCommands from that product's own surface component and
-    // cleared on unmount -- the same mechanism that already scoped Video
-    // Studio's commands away from other products, with no separate
-    // chiefOfStaffOnly flag needed once Chief of Staff's builtins moved out
-    // of the static registry too.
+    // Product commands live in product.yaml and are delivered by the owning
+    // product surface, then cleared on unmount. A profile-less chat does
+    // not inherit those commands.
     const { setProductCommands } = await import('./registry')
     setProductCommands([{
       command: 'production', description: 'Start a video production', icon: null,

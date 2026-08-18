@@ -413,14 +413,14 @@ func (api *StreamingAPI) executeDelegatedTask(ctx context.Context, parentReq Que
 		}
 		log.Printf("[DELEGATION] Added event observers for sub-agent at depth %d", currentDepth)
 
-		// Chief of Staff delegation inherits the root agent's exact attached
+		// AgentWorks delegation inherits the root agent's exact attached
 		// skill bundles. This includes the multi-agent reference surface and
 		// user-selected skills, with supporting files intact for projection
 		// into the child's isolated coding-agent runtime directory.
 		inheritedSkills := delegatedParentSkillsFromContext(ctx)
 		identitySkills := append([]*llmtypes.Skill(nil), inheritedSkills...)
 		// skills=[...] remains an additive override for skills that are not
-		// already attached to the Chief of Staff parent. Attach the combined
+		// already attached to the parent chat. Attach the combined
 		// set once so assembly-time identity also deduplicates correctly before
 		// the wrapper finalizes its immutable mcpagent definition.
 		if len(spec.Skills) > 0 {

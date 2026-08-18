@@ -33,6 +33,7 @@ interface PlannerFileListProps {
   onFileRename?: (file: PlannerFile) => void
   onFolderRename?: (folder: PlannerFile) => void
   onFileDownload?: (file: PlannerFile) => void
+  downloadingFilePath?: string
   hideAddToChat?: boolean
   onExportBackup?: (folderPath: string) => void
   onImportBackup?: (folderPath: string) => void
@@ -74,6 +75,7 @@ export default function PlannerFileList({
   onFileRename,
   onFolderRename,
   onFileDownload,
+  downloadingFilePath,
   hideAddToChat = false,
   onExportBackup,
   onImportBackup,
@@ -91,6 +93,7 @@ export default function PlannerFileList({
 }: PlannerFileListProps) {
   const scrollToFile = useWorkspaceStore(state => state.scrollToFile)
   const [copiedPath, setCopiedPath] = useState<string | null>(null)
+  const [openActionsPath, setOpenActionsPath] = useState<string | null>(null)
   const listRef = useRef<HTMLDivElement | null>(null)
   const [viewport, setViewport] = useState({ scrollTop: 0, height: 0, listTop: 0 })
   const visibleRows = useMemo(
@@ -192,6 +195,8 @@ export default function PlannerFileList({
     // This ensures workspace tool events can highlight files even when paths are adjusted in workflow mode
     const isHighlighted = highlightedFile === file.filepath || highlightedFile === file.originalFilepath
     const isInContext = chatFileContext.some(ctx => ctx.path === file.filepath)
+    const actionMenuPath = file.originalFilepath || file.filepath
+    const isActionMenuOpen = openActionsPath === actionMenuPath
     
     const isSelected = selectedFiles.has(file.filepath)
 
@@ -292,14 +297,17 @@ export default function PlannerFileList({
 
             {/* More actions dropdown for folders */}
             {file.type === 'folder' && (onCreateFolder || onFolderUpload || onFolderMove) && (
-              <div className="relative group">
+              <div className="relative">
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button
                       onClick={(e) => {
                         e.stopPropagation()
-                        // Toggle dropdown - we'll handle this with CSS
+                        setOpenActionsPath(current => current === actionMenuPath ? null : actionMenuPath)
                       }}
+                      aria-label={`More actions for ${fileName}`}
+                      aria-expanded={isActionMenuOpen}
+                      aria-haspopup="menu"
                       className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
                     >
                       <MoreHorizontal className="w-3 h-3" />
@@ -311,12 +319,16 @@ export default function PlannerFileList({
                 </Tooltip>
                 
                 {/* Dropdown menu */}
-                <div className="absolute right-0 top-full mt-1 w-32 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50">
+                <div
+                  role="menu"
+                  className={`absolute right-0 top-full mt-1 w-32 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md shadow-lg z-50 ${isActionMenuOpen ? 'block' : 'hidden'}`}
+                >
                   <div className="py-1">
                     {onCreateFolder && (
                       <button
                         onClick={(e) => {
                           e.stopPropagation()
+                          setOpenActionsPath(null)
                           onCreateFolder(file)
                         }}
                         className="w-full px-3 py-1 text-left text-xs text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
@@ -329,6 +341,7 @@ export default function PlannerFileList({
                       <button
                         onClick={(e) => {
                           e.stopPropagation()
+                          setOpenActionsPath(null)
                           onFolderUpload(file.originalFilepath || file.filepath)
                         }}
                         className="w-full px-3 py-1 text-left text-xs text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
@@ -341,6 +354,7 @@ export default function PlannerFileList({
                       <button
                         onClick={(e) => {
                           e.stopPropagation()
+                          setOpenActionsPath(null)
                           onFolderMove(file)
                         }}
                         className="w-full px-3 py-1 text-left text-xs text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
@@ -353,6 +367,7 @@ export default function PlannerFileList({
                       <button
                         onClick={(e) => {
                           e.stopPropagation()
+                          setOpenActionsPath(null)
                           onFolderRename(file)
                         }}
                         className="w-full px-3 py-1 text-left text-xs text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
@@ -367,8 +382,9 @@ export default function PlannerFileList({
                         <div className="border-t border-gray-200 dark:border-gray-700 my-1"></div>
                         <button
                           onClick={(e) => {
-                            e.stopPropagation()
-                            onExportBackup(file.originalFilepath || file.filepath)
+                          e.stopPropagation()
+                          setOpenActionsPath(null)
+                          onExportBackup(file.originalFilepath || file.filepath)
                           }}
                           disabled={isExporting}
                           className="w-full px-3 py-1 text-left text-xs text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -382,8 +398,9 @@ export default function PlannerFileList({
                         </button>
                         <button
                           onClick={(e) => {
-                            e.stopPropagation()
-                            onImportBackup(file.originalFilepath || file.filepath)
+                          e.stopPropagation()
+                          setOpenActionsPath(null)
+                          onImportBackup(file.originalFilepath || file.filepath)
                           }}
                           disabled={isImporting}
                           className="w-full px-3 py-1 text-left text-xs text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -398,8 +415,9 @@ export default function PlannerFileList({
                         <div className="border-t border-gray-200 dark:border-gray-700 my-1"></div>
                         <button
                           onClick={(e) => {
-                            e.stopPropagation()
-                            onSelectFileAndEnterSelectionMode(file)
+                          e.stopPropagation()
+                          setOpenActionsPath(null)
+                          onSelectFileAndEnterSelectionMode(file)
                           }}
                           className="w-full px-3 py-1 text-left text-xs text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
                         >
@@ -410,8 +428,9 @@ export default function PlannerFileList({
                     )}
                     <button
                       onClick={(e) => {
-                        e.stopPropagation()
-                        const encoded = btoa(unescape(encodeURIComponent(file.originalFilepath || file.filepath)))
+                          e.stopPropagation()
+                          setOpenActionsPath(null)
+                          const encoded = btoa(unescape(encodeURIComponent(file.originalFilepath || file.filepath)))
                         const uid = useAuthStore.getState().user?.id || ''
                         const shareUrl = `${window.location.origin}/folder?path=${encoded}${uid ? `&uid=${encodeURIComponent(uid)}` : ''}`
                         copyToClipboard(shareUrl).then((ok) => {
@@ -432,6 +451,7 @@ export default function PlannerFileList({
                       <button
                         onClick={(e) => {
                           e.stopPropagation()
+                          setOpenActionsPath(null)
                           onDeleteAllFilesInFolder(file)
                         }}
                         className="w-full px-3 py-1 text-left text-xs text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20 flex items-center gap-2"
@@ -443,6 +463,7 @@ export default function PlannerFileList({
                     <button
                       onClick={(e) => {
                         e.stopPropagation()
+                        setOpenActionsPath(null)
                         onFolderDelete(file)
                       }}
                       className="w-full px-3 py-1 text-left text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 flex items-center gap-2"
@@ -457,14 +478,17 @@ export default function PlannerFileList({
 
             {/* More actions dropdown for files */}
             {file.type !== 'folder' && (onFileMove || onFileDownload) && (
-              <div className="relative group">
+              <div className="relative">
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button
                       onClick={(e) => {
                         e.stopPropagation()
-                        // Toggle dropdown - we'll handle this with CSS
+                        setOpenActionsPath(current => current === actionMenuPath ? null : actionMenuPath)
                       }}
+                      aria-label={`More actions for ${fileName}`}
+                      aria-expanded={isActionMenuOpen}
+                      aria-haspopup="menu"
                       className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
                     >
                       <MoreHorizontal className="w-3 h-3" />
@@ -476,24 +500,32 @@ export default function PlannerFileList({
                 </Tooltip>
                 
                 {/* Dropdown menu */}
-                <div className="absolute right-0 top-full mt-1 w-40 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50">
+                <div
+                  role="menu"
+                  className={`absolute right-0 top-full mt-1 w-40 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md shadow-lg z-50 ${isActionMenuOpen ? 'block' : 'hidden'}`}
+                >
                   <div className="py-1">
                     {onFileDownload && (
                       <button
                         onClick={(e) => {
                           e.stopPropagation()
+                          setOpenActionsPath(null)
                           onFileDownload(file)
                         }}
-                        className="w-full px-3 py-1 text-left text-xs text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
+                        disabled={downloadingFilePath === (file.originalFilepath || file.filepath)}
+                        className="w-full px-3 py-1 text-left text-xs text-gray-700 disabled:cursor-wait disabled:opacity-60 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
                       >
-                        <Download className="w-3 h-3" />
-                        Download
+                        {downloadingFilePath === (file.originalFilepath || file.filepath)
+                          ? <><Loader2 className="w-3 h-3 animate-spin" />Downloading…</>
+                          : <><Download className="w-3 h-3" />Download</>
+                        }
                       </button>
                     )}
                     {onFileMove && (
                       <button
                         onClick={(e) => {
                           e.stopPropagation()
+                          setOpenActionsPath(null)
                           onFileMove(file)
                         }}
                         className="w-full px-3 py-1 text-left text-xs text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
@@ -506,6 +538,7 @@ export default function PlannerFileList({
                       <button
                         onClick={(e) => {
                           e.stopPropagation()
+                          setOpenActionsPath(null)
                           onFileRename(file)
                         }}
                         className="w-full px-3 py-1 text-left text-xs text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
@@ -519,8 +552,9 @@ export default function PlannerFileList({
                         <div className="border-t border-gray-200 dark:border-gray-700 my-1"></div>
                         <button
                           onClick={(e) => {
-                            e.stopPropagation()
-                            onSelectFileAndEnterSelectionMode(file)
+                          e.stopPropagation()
+                          setOpenActionsPath(null)
+                          onSelectFileAndEnterSelectionMode(file)
                           }}
                           className="w-full px-3 py-1 text-left text-xs text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
                         >
@@ -531,8 +565,9 @@ export default function PlannerFileList({
                     )}
                     <button
                       onClick={(e) => {
-                        e.stopPropagation()
-                        const encoded = btoa(unescape(encodeURIComponent(file.originalFilepath || file.filepath)))
+                          e.stopPropagation()
+                          setOpenActionsPath(null)
+                          const encoded = btoa(unescape(encodeURIComponent(file.originalFilepath || file.filepath)))
                         const uid = useAuthStore.getState().user?.id || ''
                         const shareUrl = `${window.location.origin}/file?path=${encoded}${uid ? `&uid=${encodeURIComponent(uid)}` : ''}`
                         copyToClipboard(shareUrl).then((ok) => {
@@ -552,6 +587,7 @@ export default function PlannerFileList({
                     <button
                       onClick={(e) => {
                         e.stopPropagation()
+                        setOpenActionsPath(null)
                         onFileDelete(file)
                       }}
                       className="w-full px-3 py-1 text-left text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 flex items-center gap-2"

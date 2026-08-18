@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type ComponentType } from 'react'
 import { Check, ChevronDown } from 'lucide-react'
 import { RunloopMark } from './branding/RunloopLogo'
 import { VideoStudioMark } from '../products/video-studio/VideoStudioMark'
-import { ChiefOfStaffMark } from '../products/chief-of-staff/ChiefOfStaffMark'
 import { FinanceMark } from '../products/finance/FinanceMark'
 import { DominionMark } from '../products/dominion/DominionMark'
 import { useProductSurfaceStore, type ProductSurface } from '../stores/useProductSurfaceStore'
@@ -14,9 +13,8 @@ type ProductSurfaceSwitcherProps = {
   version?: string
 }
 
-// RunloopMark/VideoStudioMark render <svg>, ChiefOfStaffMark renders a <div>
-// badge (see its own comment) -- this is the common shape all three actually
-// need, not svg-specific props.
+// Product marks can render any element; callers only rely on the common
+// className/title surface, not SVG-specific props.
 type ProductMarkComponent = ComponentType<{ className?: string; title?: string }>
 
 const products: Array<{
@@ -27,7 +25,6 @@ const products: Array<{
 }> = [
   { id: 'agentworks', label: 'AgentWorks', description: 'Automation and workflows', icon: RunloopMark },
   { id: 'video-studio', label: 'Video Studio', description: 'Projects and video production', icon: VideoStudioMark },
-  { id: 'chief-of-staff', label: 'Chief of Staff', description: 'Your operations hub across automations', icon: ChiefOfStaffMark },
   { id: 'finance', label: 'Finance', description: 'Consolidated bank, investment, and tax view', icon: FinanceMark },
   { id: 'dominion', label: 'Dominion', description: 'Paper-trading watchlist and portfolio', icon: DominionMark },
 ]
@@ -45,8 +42,7 @@ export function ProductSurfaceSwitcher({ className, version }: ProductSurfaceSwi
     setProductSurface(product)
     if (product !== 'agentworks') return
 
-    // AgentWorks means Automations now -- Chief of Staff is its own
-    // top-level product surface, not a lane restored inside this one.
+    // AgentWorks opens the automation overview; parked products are not exposed here.
     const appStore = useAppStore.getState()
     appStore.setModeCategory('workflow')
     appStore.setShowWorkflowsOverview(true)

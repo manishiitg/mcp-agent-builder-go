@@ -10,7 +10,7 @@ import (
 )
 
 // delegatedParentSkillsContextKey carries the immutable skill snapshot of the
-// Chief of Staff root agent across the async delegation context boundary.
+// AgentWorks root agent across the async delegation context boundary.
 // These definitions are runtime identity, not persisted request configuration.
 type delegatedParentSkillsContextKey struct{}
 
@@ -42,7 +42,7 @@ func copyDelegatedParentSkills(from, to context.Context) context.Context {
 
 // attachMissingDelegatedSkills preserves full skill bundles while avoiding a
 // duplicate when an explicitly requested skill is already attached to the
-// Chief of Staff parent. The coding-agent adapter later projects these exact
+// parent AgentWorks chat. The coding-agent adapter later projects these exact
 // definitions into the delegated agent's dedicated runtime directory.
 func attachMissingDelegatedSkills(subAgent *agent.LLMAgentWrapper, candidates []*llmtypes.Skill) (int, error) {
 	if subAgent == nil || len(candidates) == 0 {

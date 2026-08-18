@@ -11,7 +11,7 @@ import (
 
 func TestDelegatedParentSkillContextPreservesFullBundlesAcrossBackgroundBoundary(t *testing.T) {
 	inherited := []*llmtypes.Skill{{
-		Name:    "chief-specialist",
+		Name:    "chat-specialist",
 		Content: "skill body",
 		SupportingFiles: []llmtypes.SkillFile{{
 			RelPath: "references/brief.md",
@@ -52,7 +52,7 @@ func TestUniqueDelegatedSkillsDeduplicatesInheritedAndExplicitBundles(t *testing
 	}
 }
 
-func TestChiefOfStaffDelegationCarriesParentSkillSnapshotToAsyncChild(t *testing.T) {
+func TestAgentWorksDirectChatDoesNotAttachDelegationContext(t *testing.T) {
 	assertSourceContains := func(filename string, wants ...string) {
 		t.Helper()
 		source, err := os.ReadFile(filename)
@@ -67,15 +67,19 @@ func TestChiefOfStaffDelegationCarriesParentSkillSnapshotToAsyncChild(t *testing
 		}
 	}
 
-	assertSourceContains("server.go",
+	assertSourceContains("server.go", "GetAgentWorksChatInstructionsWithUser(")
+
+	serverSource, err := os.ReadFile("server.go")
+	if err != nil {
+		t.Fatalf("read server.go: %v", err)
+	}
+	for _, forbidden := range []string{
 		"subCtx = withDelegatedParentSkills(subCtx, llmAgent.GetUnderlyingAgent())",
 		"bgCtx = withDelegatedParentSkills(bgCtx, llmAgent.GetUnderlyingAgent())",
-	)
-	assertSourceContains("background_agents.go",
-		"bgCtx = copyDelegatedParentSkills(ctx, bgCtx)",
-	)
-	assertSourceContains("delegation.go",
-		"inheritedSkills := delegatedParentSkillsFromContext(ctx)",
-		"attachMissingDelegatedSkills(subAgent, identitySkills)",
-	)
+		"virtualtools.CreateDelegationTools(",
+	} {
+		if strings.Contains(string(serverSource), forbidden) {
+			t.Errorf("direct chat still contains delegation wiring %q", forbidden)
+		}
+	}
 }

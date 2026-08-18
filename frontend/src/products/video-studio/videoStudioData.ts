@@ -1,46 +1,10 @@
 import { agentApi, getApiBaseUrl, getAuthToken } from '../../services/api'
-import type { LLMProvider, PlannerFile } from '../../services/api-types'
+import type { PlannerFile } from '../../services/api-types'
 import { loadWorkspacePresentations, parseWorkspacePresentations, type WorkspacePresentation } from '../../platform/presentations/presentationData'
 
 export const VIDEO_PROJECTS_ROOT = 'Chats/Video Studio/projects'
 export const VIDEO_PROFILE_ID = 'video-studio'
 export const VIDEO_PROFILE_VERSION = 2
-export const VIDEO_STUDIO_DEFAULT_LLM_CONFIG = {
-  provider: 'claude-code' as LLMProvider,
-  model_id: 'claude-sonnet-5',
-  fallback_models: [],
-}
-
-// A generic multi-agent tab starts as Codex when no product binding supplies
-// a configuration. Video Studio must not preserve that platform fallback as a
-// user choice: its product profile defaults to Claude Code. An explicit Codex
-// selection has its real model id (gpt-5.6-terra) and remains intact.
-export function isGenericCodexFallback(config?: { provider?: string; model_id?: string }): boolean {
-  return config?.provider === 'codex-cli' && config?.model_id === 'codex-cli'
-}
-
-// Mirrors the LLMProvider union in api-types.ts. Kept as a Set here (rather
-// than importing one) because there is no runtime-checkable form of a
-// string-literal union to import -- this is the validation half that has to
-// exist somewhere for a value arriving as untyped server JSON to become a
-// safely-typed LLMProvider.
-const KNOWN_LLM_PROVIDERS = new Set<LLMProvider>([
-  'openrouter', 'bedrock', 'openai', 'vertex', 'anthropic', 'azure', 'z-ai',
-  'kimi', 'claude-code', 'codex-cli', 'cursor-cli', 'agy-cli', 'pi-cli',
-  'minimax', 'minimax-coding-plan', 'elevenlabs', 'deepgram',
-])
-
-function asLLMProvider(value: string): LLMProvider | null {
-  return KNOWN_LLM_PROVIDERS.has(value as LLMProvider) ? (value as LLMProvider) : null
-}
-
-export type VideoAgentProviderOption = {
-  id: string
-  label: string
-  provider: LLMProvider
-  modelId: string
-  isDefault?: boolean
-}
 
 export type VideoProductCommand = {
   name: string
@@ -56,18 +20,6 @@ type AgentProfileResponse = {
     icon?: unknown
     prompt?: unknown
   }>
-  runtime?: {
-    provider_options?: Array<{
-      id?: unknown
-      label?: unknown
-      provider?: unknown
-      model_id?: unknown
-      default?: unknown
-    }>
-    capabilities?: {
-      voice?: unknown
-    }
-  }
 }
 
 // Slash commands the product ships with itself, declared in its product.yaml.
@@ -94,26 +46,6 @@ export async function loadVideoProductCommands(): Promise<VideoProductCommand[]>
   })
   if (!response.ok) throw new Error(`Unable to load Video Studio commands (${response.status})`)
   return parseProductCommands(await response.json() as AgentProfileResponse)
-}
-
-// The profile endpoint returns the server's YAML-loaded profile. This keeps
-// product controls declarative: adding a provider choice requires changing the
-// product YAML, not a separate frontend allow-list.
-export async function loadVideoAgentProviderOptions(): Promise<VideoAgentProviderOption[]> {
-  const token = getAuthToken()
-  const response = await fetch(`${getApiBaseUrl()}/api/agent-profiles/${encodeURIComponent(VIDEO_PROFILE_ID)}?version=${VIDEO_PROFILE_VERSION}`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-  })
-  if (!response.ok) throw new Error(`Unable to load Video Studio agent profile (${response.status})`)
-  const profile = await response.json() as AgentProfileResponse
-  const options = profile.runtime?.provider_options ?? []
-  return options.flatMap((option) => {
-    const id = asString(option.id)
-    const label = asString(option.label)
-    const provider = asLLMProvider(asString(option.provider))
-    const modelId = asString(option.model_id)
-    return id && label && provider && modelId ? [{ id, label, provider, modelId, isDefault: option.default === true }] : []
-  })
 }
 
 export type VideoProject = {

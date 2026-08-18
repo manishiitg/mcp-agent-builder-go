@@ -255,13 +255,21 @@ export function conversationToRestoredEvents(conversation: ChatHistoryConversati
   let pendingAssistant = ''
   const flushAssistant = () => {
     if (!pendingAssistant) return
-    // TerminalCenter's readable transcript treats llm_generation_end as the
-    // canonical assistant message. conversation_end is lifecycle-only there
-    // and intentionally hidden, so using it made resumed replies disappear.
+    // Recreate both answer carriers emitted by a live turn. The developer
+    // transcript reads llm_generation_end, while the product conversation
+    // reads unified_completion. The transcript layer deduplicates matching
+    // carriers when both are displayed together.
     events.push(makeRestoredEvent(sessionId, 'llm_generation_end', {
       status: 'completed',
       question: currentQuestion,
       content: pendingAssistant,
+      result: pendingAssistant,
+      turns: turn,
+    }, eventIndexBase + events.length))
+    events.push(makeRestoredEvent(sessionId, 'unified_completion', {
+      status: 'completed',
+      question: currentQuestion,
+      final_result: pendingAssistant,
       result: pendingAssistant,
       turns: turn,
     }, eventIndexBase + events.length))

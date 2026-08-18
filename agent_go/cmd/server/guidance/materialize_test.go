@@ -26,14 +26,14 @@ func materializedFileContent(t *testing.T, skill *llmtypes.Skill, relPath string
 }
 
 func TestMaterializeReferenceKindsAsSkillsRendersEachIndividually(t *testing.T) {
-	skills, err := MaterializeReferenceKindsAsSkills("multi-agent", []string{"delegation", "secret-management"})
+	skills, err := MaterializeReferenceKindsAsSkills("multi-agent", []string{"backup-strategy", "secret-management"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(skills) != 2 {
 		t.Fatalf("expected 2 skills, got %d", len(skills))
 	}
-	if skills[0].Name != "delegation" || skills[1].Name != "secret-management" {
+	if skills[0].Name != "backup-strategy" || skills[1].Name != "secret-management" {
 		t.Fatalf("unexpected skill names/order: %q, %q", skills[0].Name, skills[1].Name)
 	}
 	for _, skill := range skills {
@@ -51,9 +51,9 @@ func TestMaterializeReferenceKindsAsSkillsRendersEachIndividually(t *testing.T) 
 	// under a different implementation -- the individually-named skill and
 	// the bundle's per-kind supporting file should be byte-for-byte the same.
 	bundle := MaterializeReferenceSkill("multi-agent")
-	bundled := materializedFileContent(t, bundle, "references/delegation.md")
+	bundled := materializedFileContent(t, bundle, "references/backup-strategy.md")
 	if skills[0].Content != bundled {
-		t.Fatalf("individually-materialized delegation content diverges from the bundle's own copy")
+		t.Fatalf("individually-materialized backup content diverges from the bundle's own copy")
 	}
 }
 
@@ -165,7 +165,7 @@ func TestMaterializedReferenceSkillUsesMultiAgentSurface(t *testing.T) {
 		t.Fatalf("skill name = %q, want builder-reference", skill.Name)
 	}
 
-	for _, want := range []string{"Multi-agent chat reference docs", "references/llm-provider-config.md", "references/delegation.md"} {
+	for _, want := range []string{"Product chat reference docs", "references/llm-provider-config.md", "references/secret-management.md"} {
 		if !strings.Contains(skill.Description+skill.Content, want) {
 			t.Fatalf("builder-reference skill should contain %q\nDescription:\n%s\nContent:\n%s", want, skill.Description, skill.Content)
 		}

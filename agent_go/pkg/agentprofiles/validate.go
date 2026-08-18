@@ -150,6 +150,30 @@ func validateRuntime(runtime RuntimePolicy) error {
 	if mode := strings.ToLower(strings.TrimSpace(runtime.APITransport.Mode)); mode != "" && mode != "bridge_shell" && mode != "native_shell" && mode != "disabled" {
 		return fmt.Errorf("invalid runtime api_transport.mode %q", runtime.APITransport.Mode)
 	}
+	conversationMode := strings.ToLower(strings.TrimSpace(runtime.Conversation.Mode))
+	workspaceMode := strings.ToLower(strings.TrimSpace(runtime.Workspace.Mode))
+	if conversationMode != "" {
+		switch conversationMode {
+		case ConversationModeSingleton:
+			if strings.TrimSpace(runtime.Conversation.KeyType) != "" {
+				return fmt.Errorf("runtime conversation singleton cannot declare key_type")
+			}
+			if workspaceMode != WorkspaceModeFixed || strings.TrimSpace(runtime.Workspace.Root) == "" {
+				return fmt.Errorf("runtime conversation singleton requires workspace.mode=%q and workspace.root", WorkspaceModeFixed)
+			}
+		case ConversationModeKeyed:
+			if strings.ToLower(strings.TrimSpace(runtime.Conversation.KeyType)) != ConversationKeyTypeProject {
+				return fmt.Errorf("runtime conversation keyed currently requires key_type=%q", ConversationKeyTypeProject)
+			}
+			if workspaceMode != WorkspaceModeProject || strings.TrimSpace(runtime.Workspace.ProjectsRoot) == "" {
+				return fmt.Errorf("runtime project conversation requires workspace.mode=%q and workspace.projects_root", WorkspaceModeProject)
+			}
+		default:
+			return fmt.Errorf("invalid runtime conversation.mode %q", runtime.Conversation.Mode)
+		}
+	} else if workspaceMode != "" && workspaceMode != WorkspaceModeFixed && workspaceMode != WorkspaceModeProject {
+		return fmt.Errorf("invalid runtime workspace.mode %q", runtime.Workspace.Mode)
+	}
 	if (provider == "") != (modelID == "") {
 		return fmt.Errorf("runtime provider and model_id must be set together")
 	}
@@ -173,6 +197,10 @@ func validateRuntime(runtime RuntimePolicy) error {
 	}
 	if defaultProviderOptions > 1 {
 		return fmt.Errorf("runtime provider_options has more than one default")
+	}
+	credentialScope := strings.ToLower(strings.TrimSpace(runtime.CredentialScope))
+	if credentialScope != "" && credentialScope != CredentialScopeWorkspace && credentialScope != CredentialScopeGlobal {
+		return fmt.Errorf("invalid runtime credential_scope %q", runtime.CredentialScope)
 	}
 
 	values := []struct {

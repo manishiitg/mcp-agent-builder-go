@@ -81,6 +81,58 @@ func TestValidateRequiresCompleteRuntimeModelBinding(t *testing.T) {
 	}
 }
 
+func TestValidateProductConversationPolicies(t *testing.T) {
+	tests := []struct {
+		name         string
+		conversation ConversationPolicy
+		workspace    WorkspacePolicy
+		wantError    string
+	}{
+		{
+			name:         "singleton",
+			conversation: ConversationPolicy{Mode: ConversationModeSingleton},
+			workspace:    WorkspacePolicy{Mode: WorkspaceModeFixed, Root: "Chats"},
+		},
+		{
+			name:         "project keyed",
+			conversation: ConversationPolicy{Mode: ConversationModeKeyed, KeyType: ConversationKeyTypeProject},
+			workspace:    WorkspacePolicy{Mode: WorkspaceModeProject, ProjectsRoot: "Chats/Video Studio/projects"},
+		},
+		{
+			name:         "singleton missing root",
+			conversation: ConversationPolicy{Mode: ConversationModeSingleton},
+			workspace:    WorkspacePolicy{Mode: WorkspaceModeFixed},
+			wantError:    "workspace.root",
+		},
+		{
+			name:         "keyed missing key type",
+			conversation: ConversationPolicy{Mode: ConversationModeKeyed},
+			workspace:    WorkspacePolicy{Mode: WorkspaceModeProject, ProjectsRoot: "Chats/projects"},
+			wantError:    "key_type",
+		},
+		{
+			name:         "keyed with fixed workspace",
+			conversation: ConversationPolicy{Mode: ConversationModeKeyed, KeyType: ConversationKeyTypeProject},
+			workspace:    WorkspacePolicy{Mode: WorkspaceModeFixed, Root: "Chats"},
+			wantError:    "workspace.mode",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			profile := validProfile()
+			profile.Runtime.Conversation = tt.conversation
+			profile.Runtime.Workspace = tt.workspace
+			err := Validate(profile)
+			if tt.wantError == "" && err != nil {
+				t.Fatalf("valid policy rejected: %v", err)
+			}
+			if tt.wantError != "" && (err == nil || !strings.Contains(err.Error(), tt.wantError)) {
+				t.Fatalf("error=%v, want substring %q", err, tt.wantError)
+			}
+		})
+	}
+}
+
 // The exclusion is between the two API transports. native_shell replaces
 // execute_shell_command, so declaring both is ambiguous — but hybrid ALONE must
 // keep the bridge shell available: Codex reaches product APIs only through it

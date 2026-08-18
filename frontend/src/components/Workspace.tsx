@@ -1,6 +1,6 @@
 import { useEffect, useCallback, useRef, useMemo, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
-import { Plus, Upload, FolderPlus, ChevronDown, CheckSquare, X, Trash2, PanelRightClose } from 'lucide-react'
+import { Plus, Upload, FolderPlus, ChevronDown, CheckSquare, X, Trash2, PanelRightClose, Loader2 } from 'lucide-react'
 import { agentApi, workspaceApi } from '../services/api'
 import type { PlannerFile } from '../services/api-types'
 import PlannerFileList from './workspace/PlannerFileList'
@@ -38,6 +38,25 @@ interface WorkspaceProps {
   /** Provider/runtime directories to keep out of a creator-facing file tree. */
   hiddenRootFolders?: string[]
   title?: string
+}
+
+type DownloadStatus = {
+  path: string
+  name: string
+  loaded: number
+  total?: number
+}
+
+function formatTransferSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  const units = ['KB', 'MB', 'GB', 'TB']
+  let value = bytes / 1024
+  let unitIndex = 0
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024
+    unitIndex += 1
+  }
+  return `${value.toFixed(value >= 10 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`
 }
 
 function scopeFilesToWorkspace(files: PlannerFile[], workspacePath: string, hiddenRootFolders: readonly string[] = []): PlannerFile[] {
@@ -149,6 +168,7 @@ export default function Workspace({
   const [uploadProgress, setUploadProgress] = useState<{ current: number; total: number } | null>(null)
   const [uploadResults, setUploadResults] = useState<{ name: string; success: boolean; error?: string }[] | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const [downloadStatus, setDownloadStatus] = useState<DownloadStatus | null>(null)
 
   const {
     files,
@@ -1258,11 +1278,13 @@ export default function Workspace({
 
   // Handle file download
   const handleFileDownload = async (file: PlannerFile) => {
+    let fullFilePath = ''
     try {
       // Use original filepath if available (when path was adjusted for display)
-      const fullFilePath = getOriginalFilePath(file)
+      fullFilePath = getOriginalFilePath(file)
       const fileName = fullFilePath.split('/').pop() || fullFilePath
       const extension = fileName.split('.').pop()?.toLowerCase() || ''
+      setDownloadStatus({ path: fullFilePath, name: fileName, loaded: 0 })
 
       // List of binary file extensions
       const binaryExtensions = ['xls', 'xlsx', 'pdf', 'doc', 'docx', 'ppt', 'pptx', 'zip', 'rar', '7z', 'tar', 'gz', 'exe', 'dll', 'so', 'dylib', 'bin', 'qif', 'webm', 'mp4', 'mov']
@@ -1281,7 +1303,15 @@ export default function Workspace({
           responseType: 'blob',
           headers: {
             'Accept': 'application/octet-stream'
-          }
+          },
+          onDownloadProgress: (progress) => {
+            setDownloadStatus({
+              path: fullFilePath,
+              name: fileName,
+              loaded: progress.loaded,
+              total: progress.total ?? undefined,
+            })
+          },
         })
 
         // Check if we got JSON instead of blob (backend might not have handled download param correctly)
@@ -1336,6 +1366,14 @@ export default function Workspace({
               responseType: 'blob',
               headers: {
                 'Accept': 'application/octet-stream'
+              },
+              onDownloadProgress: (progress) => {
+                setDownloadStatus({
+                  path: fullFilePath,
+                  name: fileName,
+                  loaded: progress.loaded,
+                  total: progress.total ?? undefined,
+                })
               },
               transformResponse: [(data) => data] // Prevent axios from parsing response
             })
@@ -1418,6 +1456,8 @@ export default function Workspace({
     } catch (err) {
       console.error('Failed to download file:', err)
       setError(err instanceof Error ? err.message : 'Failed to download file')
+    } finally {
+      setDownloadStatus((current) => current?.path === fullFilePath ? null : current)
     }
   }
 
@@ -2157,6 +2197,20 @@ export default function Workspace({
           {/* Folder Structure - Full Width */}
           <div ref={workspaceScrollRef} className="h-full overflow-y-auto">
             <div className="p-4">
+              {downloadStatus ? (
+                <div role="status" aria-live="polite" data-testid="workspace-download-progress" className="mb-3 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800 dark:border-blue-900/60 dark:bg-blue-950/30 dark:text-blue-200">
+                  <div className="flex items-center gap-2">
+                    <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+                    <span className="min-w-0 flex-1 truncate font-medium">Downloading {downloadStatus.name}</span>
+                    {downloadStatus.total && downloadStatus.total > 0 ? (
+                      <span className="shrink-0 tabular-nums">{Math.min(100, Math.round((downloadStatus.loaded / downloadStatus.total) * 100))}%</span>
+                    ) : null}
+                  </div>
+                  <p className="mt-1 pl-5 text-[11px] text-blue-700/80 dark:text-blue-300/80">
+                    {formatTransferSize(downloadStatus.loaded)}{downloadStatus.total ? ` of ${formatTransferSize(downloadStatus.total)}` : ' received'}
+                  </p>
+                </div>
+              ) : null}
               <PlannerFileList
                 files={filteredFiles}
                 loading={loading}
@@ -2182,6 +2236,7 @@ export default function Workspace({
                 onFileRename={handleFileRename}
                 onFolderRename={handleFolderRename}
                 onFileDownload={handleFileDownload}
+                downloadingFilePath={downloadStatus?.path}
                 hideAddToChat={selectedModeCategory === 'workflow' && !!effectiveWorkflowFolderPath}
                 onExportBackup={handleExportBackup}
                 onImportBackup={handleImportBackupClick}

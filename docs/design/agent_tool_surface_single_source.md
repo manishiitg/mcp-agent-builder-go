@@ -278,7 +278,7 @@ Steps 1 and 2 independently close a shipped bug class and can land separately.
 
 1. ~~Skills register through `AttachSkill`, a separate method. In scope for the
    gate, or governed separately?~~ **Answered 2026-08-17 by
-   [PLAT-125](../bugs/pulse_platform/plat-124.md): governed separately, and by
+   [PLAT-125](../bugs/pulse_platform/plat-125.md): governed separately, and by
    the same tool set — selected at materialisation time rather than by a
    registration gate.**
 

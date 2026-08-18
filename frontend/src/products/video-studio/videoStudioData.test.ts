@@ -6,16 +6,8 @@ vi.mock('../../services/api', () => ({
   getAuthToken: () => null,
 }))
 import { agentApi } from '../../services/api'
-import { isGenericCodexFallback, loadVideoProjects, parsePresentations, parseProjectManifest, parseWorkflowSteps, projectSlug, relativeTime, toCharacterPresentations, toDocumentPresentations, VIDEO_STUDIO_DEFAULT_LLM_CONFIG } from './videoStudioData'
+import { loadVideoProjects, parsePresentations, parseProjectManifest, parseWorkflowSteps, projectSlug, relativeTime, toCharacterPresentations, toDocumentPresentations } from './videoStudioData'
 import type { WorkspacePresentation } from '../../platform/presentations/presentationData'
-
-describe('Video Studio default coding agent', () => {
-  it('uses Claude Code and recognizes only the shared generic Codex fallback', () => {
-    expect(VIDEO_STUDIO_DEFAULT_LLM_CONFIG).toMatchObject({ provider: 'claude-code', model_id: 'claude-sonnet-5' })
-    expect(isGenericCodexFallback({ provider: 'codex-cli', model_id: 'codex-cli' })).toBe(true)
-    expect(isGenericCodexFallback({ provider: 'codex-cli', model_id: 'gpt-5.6-terra' })).toBe(false)
-  })
-})
 
 describe('Video Studio workspace data', () => {
   it('accepts only a complete Video Studio product manifest', () => {

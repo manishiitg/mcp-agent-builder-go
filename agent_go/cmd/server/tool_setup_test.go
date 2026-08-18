@@ -11,24 +11,21 @@ import (
 	todo_creation_human "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
 )
 
-func TestEnhanceToolDescriptionMentionsPulseForGlobalScopeLikeNoProfile(t *testing.T) {
+func TestEnhanceToolDescriptionTreatsGlobalScopeLikeNoProfile(t *testing.T) {
 	const chatsFolder = "_users/user-1/Chats"
 	noProfile := enhanceToolDescriptionForMultiAgentMode("execute_shell_command", "desc", chatsFolder, nil)
 	globalProfile := &resolvedAgentProfile{Definition: agentprofiles.Profile{
-		ID: "chief-of-staff", Scope: agentprofiles.ProfileScopeGlobal,
+		ID: "global-assistant", Scope: agentprofiles.ProfileScopeGlobal,
 	}}
 	global := enhanceToolDescriptionForMultiAgentMode("execute_shell_command", "desc", chatsFolder, globalProfile)
 	projectProfile := &resolvedAgentProfile{Definition: agentprofiles.Profile{ID: "video-studio"}}
 	project := enhanceToolDescriptionForMultiAgentMode("execute_shell_command", "desc", chatsFolder, projectProfile)
 
-	if !strings.Contains(noProfile, "pulse/") {
-		t.Fatalf("expected the no-profile description to mention pulse/, got: %s", noProfile)
+	if global != noProfile {
+		t.Fatalf("expected global-scoped and profile-less descriptions to match:\nGLOBAL:\n%s\nNO PROFILE:\n%s", global, noProfile)
 	}
-	if !strings.Contains(global, "pulse/") {
-		t.Fatalf("expected a global-scoped profile's description to mention pulse/ same as no-profile, got: %s", global)
-	}
-	if strings.Contains(project, "pulse/") {
-		t.Fatalf("expected a project-scoped profile's description to stay narrowed (no pulse/ mention), got: %s", project)
+	if strings.Contains(project, "{plan_id}") {
+		t.Fatalf("expected a project-scoped profile's description to stay narrowed, got: %s", project)
 	}
 }
 
@@ -36,7 +33,7 @@ func TestMultiAgentPlacementGuidanceFallsThroughForGlobalScope(t *testing.T) {
 	const chatsFolder = "_users/user-1/Chats"
 	noProfile := multiAgentPlacementGuidance("execute_shell_command", chatsFolder, nil)
 	globalProfile := &resolvedAgentProfile{Definition: agentprofiles.Profile{
-		ID: "chief-of-staff", Scope: agentprofiles.ProfileScopeGlobal,
+		ID: "global-assistant", Scope: agentprofiles.ProfileScopeGlobal,
 	}}
 	global := multiAgentPlacementGuidance("execute_shell_command", chatsFolder, globalProfile)
 	projectProfile := &resolvedAgentProfile{Definition: agentprofiles.Profile{
@@ -401,7 +398,7 @@ func TestPlanFolderGuardBlocksConfigWriteByDefault(t *testing.T) {
 	}
 }
 
-func TestChiefOfStaffRecommendationWriteAccessIsImproveLogOnly(t *testing.T) {
+func TestExternalRecommendationWriteAccessIsImproveLogOnly(t *testing.T) {
 	const chatsFolder = "_users/default/Chats"
 	const workflowRoot = "Workflow/rtslatency"
 	const improveLog = workflowRoot + "/builder/improve.html"

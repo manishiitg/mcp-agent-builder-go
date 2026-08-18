@@ -11,6 +11,7 @@ import {
   Film,
   FolderOpen,
   Users,
+  Eye,
   KeyRound,
   Loader2,
   MessageSquareText,
@@ -46,13 +47,11 @@ import { useAuthStore } from '../../stores/useAuthStore'
 import { useChatStore, waitForChatStoreHydration } from '../../stores/useChatStore'
 import { useModeStore } from '../../stores/useModeStore'
 import { useProductSurfaceStore } from '../../stores/useProductSurfaceStore'
-import { restoreSession } from '../../utils/sessionRestore'
+import { hydrateTabEvents, restoreSession } from '../../utils/sessionRestore'
 import {
   VIDEO_PROFILE_ID,
   VIDEO_PROFILE_VERSION,
-  VIDEO_STUDIO_DEFAULT_LLM_CONFIG,
   createVideoProject,
-  isGenericCodexFallback,
   loadVideoPresentations,
   loadVideoProductCommands,
   loadCharacterPresentations,
@@ -331,6 +330,7 @@ function VideosSection({ project, videos }: { project: VideoProject; videos: Vid
   if (!selected) return null
 
   const mediaURL = workspaceMediaURL(`${project.workspacePath}/${selected.path.replace(/^\/+/, '')}`)
+  const isPreview = selected.verdict === 'preview'
   return (
     <ProductionSection id="videos" title="Videos" count={videos.length} icon={<Film className="h-3.5 w-3.5" />} forceOpenKey={videos.length}>
       <div data-testid="video-studio-videos-panel" data-video-count={videos.length}>
@@ -341,7 +341,11 @@ function VideosSection({ project, videos }: { project: VideoProject; videos: Vid
           <div className="min-w-0">
             <h3 className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{selected.title}</h3>
             <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] font-medium">
-              <span className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400"><CheckCircle2 className="h-3 w-3" /> QA {selected.verdict || 'passed'}</span>
+              {isPreview ? (
+                <span className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400"><Eye className="h-3 w-3" /> Preview · QA pending</span>
+              ) : (
+                <span className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400"><CheckCircle2 className="h-3 w-3" /> QA {selected.verdict || 'passed'}</span>
+              )}
               {videoStamp(selected.updatedAt).short ? <span data-testid="video-studio-video-timestamp" title={videoStamp(selected.updatedAt).full} className="text-slate-500 dark:text-slate-400">{videoStamp(selected.updatedAt).short}{selected.revision > 1 ? ` · rev ${selected.revision}` : ''}</span> : null}
             </p>
           </div>
@@ -647,48 +651,54 @@ function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: 
       await waitForChatStoreHydration()
       if (cancelled) return
       const chatStore = useChatStore.getState()
-      let projectTab = Object.values(chatStore.chatTabs).find((tab) =>
+      const existing = Object.values(chatStore.chatTabs).find((tab) =>
         tab.metadata?.agentProfileId === VIDEO_PROFILE_ID &&
-        tab.metadata?.agentProfileWorkspace === project.workspacePath
+        tab.metadata?.agentProfileProjectId === project.id
       )
-      if (projectTab && projectTab.metadata?.agentProfileVersion !== VIDEO_PROFILE_VERSION) {
-        chatStore.setTabMetadata(projectTab.tabId, { agentProfileVersion: VIDEO_PROFILE_VERSION })
-        projectTab = chatStore.getTab(projectTab.tabId)
-      }
-      if (!projectTab) {
-        const createdTabId = await chatStore.createChatTab(project.title, {
-          mode: 'multi-agent',
-          agentProfileId: VIDEO_PROFILE_ID,
-          agentProfileVersion: VIDEO_PROFILE_VERSION,
-          agentProfileWorkspace: project.workspacePath,
-          agentProfileProjectId: project.id,
-          agentProfileProjectTitle: project.title,
-          agentProfileWorkspaceDescription: project.description,
-        }, project.sessionId)
-        projectTab = chatStore.getTab(createdTabId)
-        // createChatTab starts with the shared chat shell's configuration.
-        // Pin this product lane before provider options load so a new project
-        // never inherits Codex as its apparent default.
-        chatStore.setTabConfig(createdTabId, { llmConfig: VIDEO_STUDIO_DEFAULT_LLM_CONFIG })
-        projectTab = chatStore.getTab(createdTabId)
-      } else if (isGenericCodexFallback(projectTab.config.llmConfig)) {
-        // Repair only the shared codex-cli/codex-cli fallback from older tabs.
-        // An explicit Codex choice has its actual model id and is preserved.
-        chatStore.setTabConfig(projectTab.tabId, { llmConfig: VIDEO_STUDIO_DEFAULT_LLM_CONFIG })
-        projectTab = chatStore.getTab(projectTab.tabId)
-      }
+      const conversation = await agentApi.resolveAgentProfileConversation(
+        VIDEO_PROFILE_ID,
+        { conversation_key: project.id },
+        existing?.sessionId ?? project.sessionId,
+      )
+      const createdTabId = await chatStore.createChatTab(project.title, {
+        mode: 'multi-agent',
+        agentProfileId: VIDEO_PROFILE_ID,
+        agentProfileVersion: VIDEO_PROFILE_VERSION,
+        agentProfileWorkspace: project.workspacePath,
+        agentProfileProjectId: project.id,
+        agentProfileProjectTitle: project.title,
+        agentProfileWorkspaceDescription: project.description,
+        agentProfileChatContract: 'profile-v1',
+        agentProfileConversationKey: project.id,
+        agentProfileConversationId: conversation.conversation_id,
+      }, conversation.session_id)
+      const projectTab = chatStore.getTab(createdTabId)
       if (cancelled || !projectTab) return
-      const restoredTabId = await restoreSession(project.sessionId, {
+      const restoredTabId = await restoreSession(conversation.session_id, {
         title: project.title,
         source: 'video-project-open',
         skipConfigRestore: true,
         workspacePath: project.workspacePath,
+        // A finished production's durable transcript is complete; the live
+        // event cache may contain only user prompts after a browser refresh.
+      })
+      if (cancelled) return
+      // The generic page restore can race with this surface and retain only
+      // the volatile event tail. Hydrate once more at the product boundary so
+      // an open Video Studio project always renders its durable assistant
+      // replies, while restoreSession keeps the live streaming status intact.
+      await hydrateTabEvents(conversation.session_id, {
+        workspacePath: project.workspacePath,
+        fallbackToChatHistory: true,
+        preferChatHistory: true,
       })
       if (cancelled) return
       chatStore.switchTab(restoredTabId)
       setTabId(restoredTabId)
     }
-    void prepare()
+    void prepare().catch((error) => {
+      if (!cancelled) setLoadError(error instanceof Error ? error.message : 'Could not open the project conversation.')
+    })
     return () => { cancelled = true }
   }, [project])
 

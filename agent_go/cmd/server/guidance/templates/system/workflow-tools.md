@@ -90,9 +90,7 @@ HTTP URL.
 ## Schedule Management (Workshop mode)
 
 For the operational cheat sheet on creating / editing / deleting schedules
-(cron syntax and workshop run payload shape), see this section. For the
-multi-agent-only schedule cron flow, see
-`read_skill(skills=[{"name":"builder-reference","path":"references/schedule-management.md"}])` instead.
+(cron syntax and workshop run payload shape), see this section.
 
 - **Tools**: `list_schedules`, `create_schedule`, `create_calendar_schedule`, `update_schedule`, `delete_schedule`, `trigger_schedule`, `get_schedule_runs`.
 - To view existing schedules, call `list_schedules`; it includes schedule IDs, type, mode, workshop mode, cron/calendar shape, timezone, enabled state, groups, and recent runtime state. `get_workflow_config` also includes a Schedules section when you are already inspecting broader workflow settings.
@@ -131,8 +129,6 @@ Every schedule in `workflow.json` has a `schedule_type` — `"cron"` (default) o
 - `timezone` (required, IANA — e.g. `Asia/Kolkata`, not `IST`) and `group_names` (required) work exactly as for cron schedules.
 - **Mode is the same as cron**: workflow schedules use `mode="workshop"`. Supply per-item `messages` or a top-level default `messages` array when the default full-workflow run instruction is not specific enough.
 - Past-dated items are skipped — only future items get registered. To change a calendar schedule, update its `calendar_items` (add/remove dates); editing tools (`update_schedule`, `delete_schedule`, `trigger_schedule`, `get_schedule_runs`) work on calendar schedules too.
-
-> The cron flow for **multi-agent chat** schedules (`multiagent-schedules.json`, edited via shell) is separate and cron-only — see `read_skill(skills=[{"name":"builder-reference","path":"references/schedule-management.md"}])`. Calendar schedules are a **workflow-schedule** feature and live in `workflow.json`.
 
 ### How workflow schedules execute
 
@@ -192,7 +188,7 @@ improvement uses normal Run mode plus Pulse.
   - `ls runs/`
   - `cat variables/variables.json`
 - **`human_feedback`** — Open a blocking AgentWorks response card and immediately alert enabled notification channels. Use only for an explicit channel test or urgent, short-lived human-only input such as CAPTCHA, OTP, or immediate approval. In Builder chat, ask ordinary questions in the normal response instead. In bridge-only coding-CLI sessions, invoke its `$MCP_CUSTOM/human_feedback` endpoint with a **foreground curl** and wait for that same call to return the answer. Never use `nohup`, append `&`, delegate/background the call, save its result to a temporary file, poll for completion, or ask the user to send another message after responding. The foreground response resumes the agent automatically; do not set the shell timeout shorter than `human_feedback.timeout_seconds`. Cursor CLI has an approximately 60-second silent MCP-call ceiling, so Cursor agents must use `timeout_seconds <= 45`; after a real expiry, retry only if the input is still required.
-- **`create_human_input_request`** — Non-blocking Pulse/goal-advisor/Chief of Staff question. Workflow questions are stored in the workflow's `db/db.sqlite`; Chief of Staff may use `workspace_path="pulse"` for org-wide questions stored in `pulse/db/db.sqlite`. The user answers in the Runloop Pulse/Chief of Staff report panel.
+- **`create_human_input_request`** — Non-blocking Pulse/goal-advisor question stored in the workflow's `db/db.sqlite`. The user answers in the AgentWorks Pulse/report panel.
 - **`get_human_input_request`** — Read one existing decision by exact `workspace_path` and `input_id`, including its context, selected answer, evidence, and lifecycle status. Use this before applying an answered decision; do not query the backing SQLite table directly.
 - **`answer_human_input_request`** — Record the user's explicit final answer to an existing pending question using the exact decision and option IDs supplied by the UI chat context. Never infer an answer from discussion. This sets the question to `answered`; it does not apply the decision or mark it consumed.
 - **`mark_human_input_consumed`** — Mark an answered report question consumed after using it and recording the outcome through typed Pulse tools. Pending questions are rendered directly from SQLite, not duplicated in a separate presentation artifact.

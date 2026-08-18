@@ -106,7 +106,7 @@ func capacityWaitOutlastsNextRun(wait *stepworkflow.WorkflowCapacityWait, nextRu
 // reused — iteration-0 is the live slot — so a record left by an earlier run in
 // the same folder would otherwise suspend a run that never hit a wall at all.
 func (s *SchedulerService) classifyCapacityWait(ctx context.Context, sctx *ScheduleContext, execErr error, runFolder string, runStartedAt time.Time) (*stepworkflow.WorkflowCapacityWait, bool) {
-	if execErr == nil || sctx == nil || sctx.SourceType == "multi-agent" {
+	if execErr == nil || sctx == nil {
 		return nil, false
 	}
 	if !errors.Is(execErr, stepworkflow.ErrWorkflowWaitingForCapacity) {
@@ -147,7 +147,7 @@ func (s *SchedulerService) resumeDueCapacityWaits(ctx context.Context, now time.
 	var candidates []candidate
 	s.mu.Lock()
 	for _, job := range s.jobs {
-		if job == nil || job.sctx == nil || job.sctx.SourceType == "multi-agent" {
+		if job == nil || job.sctx == nil {
 			continue
 		}
 		// One workflow can carry several schedules; a suspended run belongs to
@@ -250,13 +250,13 @@ func scheduleUsesClaudeCode(sctx *ScheduleContext) bool {
 // Unknown always means proceed: no credential, no cached reading, a stale
 // reading, or a window with no stated reset all fall through to a normal fire.
 func (s *SchedulerService) scheduleQuotaBlock(ctx context.Context, sctx *ScheduleContext, now time.Time) (string, time.Time, bool) {
-	if s == nil || s.api == nil || sctx == nil || sctx.SourceType == "multi-agent" {
+	if s == nil || s.api == nil || sctx == nil {
 		return "", time.Time{}, false
 	}
 	if !scheduleUsesClaudeCode(sctx) {
 		return "", time.Time{}, false
 	}
-	keys, err := s.api.resolveEffectiveAPIKeys(ctx, sctx.UserID, sctx.WorkspacePath, nil)
+	keys, err := s.api.resolveEffectiveAPIKeys(ctx, "", sctx.WorkspacePath, nil)
 	if err != nil || keys == nil || keys.ClaudeCodeOAuthToken == nil {
 		return "", time.Time{}, false
 	}

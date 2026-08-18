@@ -27,9 +27,8 @@ import { useWorkflowManifestStore } from '../stores/useWorkflowManifestStore'
 import { startRestoredTransportTerminal } from '../utils/restoredTerminal'
 import { chromeCdpInstallCommand, chromeCdpLaunchCommand, chromeCdpVerifyCommand, chromeCdpZipUrl } from '../utils/cdpSetup'
 import { CHAT_TOOL_COMMAND_EVENT, chatToolCommandFromEvent } from '../utils/chatToolEvents'
-import { loadAgentProfileCapabilityEnabled } from '../utils/agentProfileCapabilities'
+import { loadAgentProfileCapabilityEnabled, loadAgentProfileRuntime } from '../utils/agentProfileCapabilities'
 import { MicButton } from '../voice/MicButton'
-import { resolveDelegationMainModel } from '../utils/workflowLLMTierDefaults'
 import { hasActiveSessionWork } from '../utils/activitySessions'
 import { headerStatusLabel, statusTone } from '../utils/globalActivityMonitorStatus'
 import { shouldClearAcceptedChatDraft } from '../utils/chatSubmissionDraft'
@@ -172,7 +171,6 @@ import LLMConfigurationModal from './LLMConfigurationModal'
 import type { PlannerFile, LLMProvider, ChatHistorySession } from '../services/api-types'
 import type { LLMOption } from '../types/llm'
 import { useAppStore, useMCPStore, useLLMStore, useChatStore } from '../stores'
-import { CHIEF_OF_STAFF_PROFILE_ID, isChiefOfStaffTab } from '../utils/chiefOfStaff'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useCommandDialogStore } from '../stores/useCommandDialogStore'
 import { usePresetApplication, useGlobalPresetStore } from '../stores/useGlobalPresetStore'
@@ -562,7 +560,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   const activeTabId = scopedTabId === null ? null : (scopedTabId ?? storeActiveTabId)
   // Use the scoped tab as the mode source when ChatInput is embedded. The global
   // mode category can lag behind WorkflowLayout, which would otherwise make a
-  // workflow builder input behave like generic multi-agent chat.
+  // workflow builder input behave like product-profile chat.
   const activeTab = useChatStore(state =>
     activeTabId ? state.chatTabs[activeTabId] : undefined
   )
@@ -601,6 +599,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   const isOrganizationAssistant = !!activeTab?.metadata?.isOrganizationAssistant
   const agentProfileWorkspace = activeTab?.metadata?.agentProfileWorkspace
   const agentProfileId = activeTab?.metadata?.agentProfileId
+  const agentProfileVersion = activeTab?.metadata?.agentProfileVersion
   // Mic control is gated per-profile (agentprofiles.RuntimeCapabilities.Voice)
   // rather than hardcoded to any one product — see agentProfileCapabilities.ts.
   // Checked only for product surfaces: AgentWorks' own generic chat has no
@@ -612,21 +611,31 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
       return
     }
     let cancelled = false
-    void loadAgentProfileCapabilityEnabled(agentProfileId, 'voice').then((enabled) => {
+    void loadAgentProfileCapabilityEnabled(agentProfileId, 'voice', agentProfileVersion).then((enabled) => {
       if (!cancelled) setVoiceCapabilityEnabled(enabled)
     })
     return () => { cancelled = true }
-  }, [isProductSurface, agentProfileId])
+  }, [isProductSurface, agentProfileId, agentProfileVersion])
+
+  // Product-owned chats display the provider/model declared by their profile,
+  // not the stale model config a durable tab may have inherited before the
+  // profile contract existed. The running session still wins below so a real
+  // server-selected fallback remains visible while it is active.
+  const [agentProfileRuntime, setAgentProfileRuntime] = useState<{ provider: string; model_id: string } | null>(null)
+  useEffect(() => {
+    if (!isProductSurface || !agentProfileId) {
+      setAgentProfileRuntime(null)
+      return
+    }
+    let cancelled = false
+    void loadAgentProfileRuntime(agentProfileId, agentProfileVersion).then((runtime) => {
+      if (!cancelled) setAgentProfileRuntime(runtime)
+    })
+    return () => { cancelled = true }
+  }, [agentProfileId, agentProfileVersion, isProductSurface])
 
   // Memoize tabConfig to prevent unnecessary re-renders
   const tabConfig = useMemo(() => activeTab?.config, [activeTab?.config])
-
-  const defaultReasoningLevel = tabConfig?.defaultReasoningLevel ?? null
-  const setDefaultReasoningLevel = useCallback((level: 'high' | 'medium' | 'low' | null) => {
-    if (activeTabId) {
-      useChatStore.getState().setTabConfig(activeTabId, { defaultReasoningLevel: level })
-    }
-  }, [activeTabId])
 
   // CRITICAL: Always use tab's status - never fall back to global to prevent mixing
   // If no active tab, this is an error condition (tabs should always exist)
@@ -646,15 +655,16 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     return state.activeSessionsCache.find(session => session.session_id === tabSessionId)
   })
   const activeSessionRuntime = hasActiveSessionWork(activeSession) ? activeSession?.runtime : undefined
-  const delegationTierConfig = useLLMStore(state => state.delegationTierConfig)
   const {
     providerManifest,
     providerManifestLoaded,
     loadProviderManifest,
+    primaryConfig,
   } = useLLMStore(useShallow(state => ({
     providerManifest: state.providerManifest,
     providerManifestLoaded: state.providerManifestLoaded,
     loadProviderManifest: state.loadProviderManifest,
+    primaryConfig: state.primaryConfig,
   })))
   
   // Note: activeTab may be undefined during initial render before tabs are created
@@ -744,16 +754,24 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
       return { provider: runtimeProvider as LLMProvider, model_id: runtimeModel }
     }
 
-    const configuredMain = resolveDelegationMainModel(delegationTierConfig, providerManifest)
-    if (configuredMain) return configuredMain
+    if (agentProfileRuntime?.provider && agentProfileRuntime.model_id) {
+      return {
+        provider: agentProfileRuntime.provider as LLMProvider,
+        model_id: agentProfileRuntime.model_id,
+      }
+    }
 
+    if (primaryConfig?.provider && primaryConfig.model_id) {
+      return { provider: primaryConfig.provider, model_id: primaryConfig.model_id }
+    }
     return null
   }, [
     activeSessionRuntime?.model_id,
     activeSessionRuntime?.provider,
-    delegationTierConfig,
+    agentProfileRuntime?.model_id,
+    agentProfileRuntime?.provider,
     isMultiAgentMode,
-    providerManifest,
+    primaryConfig,
   ])
 
   const effectiveProviderForSteer = useMemo(() => {
@@ -806,7 +824,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   const [cdpError, setCdpError] = useState<string | null>(null)
   const [cdpChecking, setCdpChecking] = useState(false)
   const [showCdpPopup, setShowCdpPopup] = useState(false)
-  const [showReasoningPopup, setShowReasoningPopup] = useState(false)
   const [isUploadingFiles, setIsUploadingFiles] = useState(false)
   const [isDraggingFiles, setIsDraggingFiles] = useState(false)
   const isCdpDisconnected = browserMode === 'cdp' && cdpConnected === false
@@ -1286,17 +1303,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
       )
     }
 
-    // Do not flash an unrelated stale tab model while the provider manifest is
-    // still loading. The selected profile is already authoritative.
-    if (isMultiAgentMode && delegationTierConfig?.mode === 'provider_profile' && delegationTierConfig.provider) {
-      return {
-        provider: delegationTierConfig.provider as LLMProvider,
-        model: '',
-        label: delegationTierConfig.provider,
-        description: 'Selected coding-agent profile',
-      }
-    }
-
     if (tabConfig?.llmConfig) {
       const config = tabConfig.llmConfig
       const foundLLM = availableLLMs.find(llm =>
@@ -1323,8 +1329,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     multiAgentEffectiveLLMConfig?.model_id,
     multiAgentEffectiveLLMConfig?.provider,
     activeSessionRuntime?.provider,
-    delegationTierConfig?.mode,
-    delegationTierConfig?.provider,
     manifestBuilderLLM,
     workflowPhasePreset,
     providerManifest,
@@ -1352,7 +1356,12 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     const model = activeSession?.runtime?.model_id?.trim() || primaryLLM?.model?.trim() || ''
     if (!provider) return null
 
-    const tone = activeSession ? statusTone(activeSession) : 'idle'
+    // A durable foreground completion settles the turn even when the periodic
+    // activity snapshot has not refreshed yet. This is the same boundary the
+    // global monitor eventually observes, applied immediately to the open chat.
+    const tone = activeTab?.isCompleted && !isTurnInFlight
+      ? 'idle'
+      : activeSession ? statusTone(activeSession) : 'idle'
     const waiting = tone === 'needs-input'
     const running = tone === 'running' || tone === 'background'
     return {
@@ -1371,6 +1380,8 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     activeSession?.has_running_background_agents,
     activeSession?.running_background_agent_count,
     activeSession?.needs_user_input,
+    activeTab?.isCompleted,
+    isTurnInFlight,
     primaryLLM?.model,
     primaryLLM?.provider,
   ])
@@ -1849,58 +1860,13 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     const currentActiveTab = chatStore.activeTabId ? chatStore.chatTabs[chatStore.activeTabId] : null
     if (
       currentActiveTab?.metadata?.mode === 'multi-agent' &&
-      (!!agentProfileWorkspace || !currentActiveTab.metadata?.agentProfileId) &&
+      !!currentActiveTab.metadata?.agentProfileId &&
       currentActiveTab.metadata?.isOrganizationAssistant !== true
     ) {
       return true
     }
-
-    const modeTabs = Object.values(chatStore.chatTabs)
-      .filter(tab => isChiefOfStaffTab(tab) && tab.metadata?.isOrganizationAssistant !== true)
-      .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))
-
-    if (modeTabs.length > 0) {
-      chatStore.switchTab(modeTabs[0].tabId)
-      return true
-    }
-
-    try {
-      await chatStore.createChatTab('Chief of Staff', {
-        mode: 'multi-agent',
-        agentProfileId: CHIEF_OF_STAFF_PROFILE_ID,
-        agentProfileVersion: 1,
-        agentProfileWorkspace: 'Chats',
-        agentProfileProjectTitle: 'Chief of Staff',
-      })
-      return true
-    } catch (error) {
-      console.error('Failed to create fallback multi-agent tab:', error)
-      addToast('Unable to initialize a chat tab right now.', 'error')
-      return false
-    }
-  }, [agentProfileWorkspace, isMultiAgentMode, showWorkflowsOverview, addToast])
-
-  // Select a multi-agent tab on mode entry, not just on input focus. After a
-  // reload or mode switch, activeTabId can be null or point to a non-multi-agent
-  // tab, leaving an existing tab (e.g. "Agent Chat 1") visible but unselected —
-  // so the chat input renders but typing does nothing. Select-only here (never
-  // create) to avoid racing store rehydration / making duplicate tabs.
-  useEffect(() => {
-    if (!isMultiAgentMode || showWorkflowsOverview || isOrganizationAssistant) return
-    const store = useChatStore.getState()
-    const active = store.activeTabId ? store.chatTabs[store.activeTabId] : null
-    const activeIsVisibleMultiAgent =
-      active?.metadata?.mode === 'multi-agent' &&
-      (!!agentProfileWorkspace || !active.metadata?.agentProfileId) &&
-      active.metadata?.isOrganizationAssistant !== true
-    if (activeIsVisibleMultiAgent) return
-    const modeTabs = Object.values(store.chatTabs)
-      .filter(tab => isChiefOfStaffTab(tab) && tab.metadata?.isOrganizationAssistant !== true)
-      .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))
-    if (modeTabs.length > 0) {
-      store.switchTab(modeTabs[0].tabId)
-    }
-  }, [agentProfileWorkspace, isMultiAgentMode, showWorkflowsOverview, isOrganizationAssistant, activeTabId])
+    return false
+  }, [isMultiAgentMode, showWorkflowsOverview])
 
   // If the user has already typed surrounding text, keep pasted content out of
   // the textarea and insert a stable marker the message can refer to.
@@ -3368,9 +3334,8 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
       ? 'text-blue-600 dark:text-blue-300'
       : 'text-emerald-600 dark:text-emerald-300'
 
-  // The multi-agent (Chief of Staff) chat pane aligns its left inset with the
-  // "Chief of Staff" heading (ChatTabs header, px-3); workflow mode keeps the
-  // wider px-4 so its toolbar layout is unchanged.
+  // Product chats use the roomier project layout; workflow mode keeps the
+  // existing toolbar alignment.
   const inputPadX = isProductSurface ? 'px-4 sm:px-6' : isMultiAgentMode ? 'px-3' : 'px-4'
 
   // For view-only (restored) tabs, show a minimal indicator instead of the full input form
@@ -3752,7 +3717,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                         )}
                       </>
 
-                    {/* Browser access lives in the Chief of Staff header for multi-agent mode. */}
+                    {/* Browser access lives in the chat header for multi-agent mode. */}
                     {!hideExtras && !isMultiAgentMode && <button
                       type="button"
                       data-tour="chat-browser-tools"
@@ -4062,64 +4027,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                           className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           {browserMode === 'cdp' && cdpConnected !== true ? (cdpChecking ? 'Checking...' : 'Connect Chrome First') : 'Done'}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Reasoning Level Popup */}
-                {showReasoningPopup && (
-                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowReasoningPopup(false)}>
-                    <div className="bg-gray-900 rounded-xl shadow-2xl border border-gray-700 w-[320px] max-w-[90vw]" onClick={(e) => e.stopPropagation()}>
-                      <div className="flex items-center justify-between px-5 py-4 border-b border-gray-700">
-                        <div className="flex items-center gap-2">
-                          <Bot className="w-5 h-5 text-blue-400" />
-                          <h3 className="text-base font-semibold text-white">Reasoning Level</h3>
-                        </div>
-                        <button onClick={() => setShowReasoningPopup(false)} className="text-gray-400 hover:text-gray-200 transition-colors">
-                          <X className="w-5 h-5" />
-                        </button>
-                      </div>
-                      <div className="px-5 py-4 space-y-2">
-                        <p className="text-xs text-gray-400 mb-3">Sets the default reasoning effort for delegated sub-agent tasks.</p>
-                        {([
-                          { level: 'high',   label: 'High',   desc: 'Deep thinking — complex reasoning, research, planning',   activeClass: 'border-orange-500 bg-orange-950/40', dotClass: 'bg-orange-500' },
-                          { level: 'medium', label: 'Medium', desc: 'Balanced — good for most tasks',                          activeClass: 'border-yellow-500 bg-yellow-950/40', dotClass: 'bg-yellow-400' },
-                          { level: 'low',    label: 'Low',    desc: 'Fast — simple lookups, straightforward actions',          activeClass: 'border-green-500 bg-green-950/40',  dotClass: 'bg-green-500'  },
-                        ] as const).map(({ level, label, desc, activeClass, dotClass }) => (
-                          <label key={level} className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
-                            defaultReasoningLevel === level ? activeClass : 'border-gray-700 hover:bg-gray-800'
-                          }`}>
-                            <input
-                              type="radio"
-                              name="reasoningLevel"
-                              checked={defaultReasoningLevel === level}
-                              onChange={() => setDefaultReasoningLevel(level)}
-                              className="sr-only"
-                            />
-                            <div className={`w-3 h-3 rounded-full mt-0.5 flex-shrink-0 ${defaultReasoningLevel === level ? dotClass : 'bg-gray-600'}`} />
-                            <div>
-                              <div className="text-sm font-medium text-gray-100">{label}</div>
-                              <div className="text-xs text-gray-400 mt-0.5">{desc}</div>
-                            </div>
-                          </label>
-                        ))}
-                      </div>
-                      <div className="flex justify-between gap-2 px-5 py-3 border-t border-gray-700">
-                        <button
-                          type="button"
-                          onClick={() => { setDefaultReasoningLevel(null); setShowReasoningPopup(false) }}
-                          className="px-4 py-2 text-sm text-gray-300 hover:bg-gray-800 rounded-md transition-colors"
-                        >
-                          Clear (Auto)
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setShowReasoningPopup(false)}
-                          className="px-4 py-2 text-sm font-medium bg-blue-600 hover:bg-blue-500 text-white rounded-md transition-colors"
-                        >
-                          Done
                         </button>
                       </div>
                     </div>

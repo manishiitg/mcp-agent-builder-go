@@ -30,6 +30,12 @@ func TestDominionManifestDeclaresProjectScopeAndNarrowAllowlist(t *testing.T) {
 	if manifest.Profile.Runtime.Transport != "structured" {
 		t.Fatalf("dominion must declare runtime.transport: structured -- without it, a non-cursor-cli provider bypasses tool_policy entirely via its own native tools, got transport=%q", manifest.Profile.Runtime.Transport)
 	}
+	if manifest.Profile.Runtime.Workspace.Root != "Chats" {
+		t.Fatalf("dominion profile-chat workspace root = %q, want Chats", manifest.Profile.Runtime.Workspace.Root)
+	}
+	if manifest.Profile.Runtime.Workspace.Mode != agentprofiles.WorkspaceModeFixed || manifest.Profile.Runtime.Conversation.Mode != agentprofiles.ConversationModeSingleton {
+		t.Fatalf("dominion must use one server-owned durable conversation: workspace=%+v conversation=%+v", manifest.Profile.Runtime.Workspace, manifest.Profile.Runtime.Conversation)
+	}
 	if !strings.EqualFold(manifest.Profile.Runtime.AgentTools.Mode, "mcp_only") {
 		t.Fatalf("dominion must declare agent_tools.mode: mcp_only explicitly, got %q", manifest.Profile.Runtime.AgentTools.Mode)
 	}

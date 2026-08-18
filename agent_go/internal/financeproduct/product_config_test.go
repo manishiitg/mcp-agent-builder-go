@@ -16,7 +16,7 @@ func TestFinanceManifestDeclaresProjectScopeAndNarrowAllowlist(t *testing.T) {
 		t.Fatalf("unexpected profile id: %q", manifest.Profile.ID)
 	}
 	// Project, not global, despite spanning multiple sources -- discovered
-	// empirically (2026-08-16), not analogized from Chief of Staff: global
+	// empirically (2026-08-16): global
 	// scope makes provider_options non-authoritative (the user's own
 	// selection always wins, by design) and takes the dynamic delegation
 	// prompt instead of this profile's own prompt.file. Both defeat the
@@ -40,6 +40,11 @@ func TestFinanceManifestDeclaresProjectScopeAndNarrowAllowlist(t *testing.T) {
 	// comment for the full correction.
 	if manifest.Profile.Runtime.Transport != "structured" {
 		t.Fatalf("finance must declare runtime.transport: structured, got transport=%q", manifest.Profile.Runtime.Transport)
+	}
+	if manifest.Profile.Runtime.Workspace.Mode != agentprofiles.WorkspaceModeFixed ||
+		manifest.Profile.Runtime.Workspace.Root != "Chats" ||
+		manifest.Profile.Runtime.Conversation.Mode != agentprofiles.ConversationModeSingleton {
+		t.Fatalf("finance must use one server-owned durable conversation: workspace=%+v conversation=%+v", manifest.Profile.Runtime.Workspace, manifest.Profile.Runtime.Conversation)
 	}
 	if !strings.EqualFold(manifest.Profile.Runtime.AgentTools.Mode, "mcp_only") {
 		t.Fatalf("finance must declare agent_tools.mode: mcp_only explicitly, got %q", manifest.Profile.Runtime.AgentTools.Mode)
@@ -136,7 +141,7 @@ func TestBuiltinAgentProfilesReturnsExactlyOneVersion(t *testing.T) {
 }
 
 func TestRenderPromptSucceedsAgainstAPromptContext(t *testing.T) {
-	// Unlike Chief of Staff's placeholder prompt (global scope, never
+	// Unlike a placeholder global prompt that never
 	// actually sent to the model), this profile's project scope means
 	// prompts/system-prompt.md IS the live prompt a finance chat sees --
 	// confirmed live (2026-08-16) that an earlier global-scoped version of

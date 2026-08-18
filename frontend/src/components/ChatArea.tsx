@@ -28,7 +28,7 @@ import { PresetSelectionOverlay } from './PresetSelectionOverlay'
 import { ModeSwitchDialog } from './ui/ModeSwitchDialog'
 import type { ChatTab } from '../stores/useChatStore'
 import type { CustomPreset } from '../types/preset'
-import { conversationToRestoredEvents, restoreSession } from '../utils/sessionRestore'
+import { conversationToRestoredEvents, hydrateTabEvents, restoreSession } from '../utils/sessionRestore'
 import { logger } from '../utils/logger'
 import { secretsApi } from '../api/secrets'
 import { useSecretsStore } from '../stores'
@@ -38,12 +38,12 @@ import {
   buildLLMConfigWithApiKeys,
   buildQueryRequestPayload,
   applyAgentProfileBinding,
+  buildAgentProfileChatRequest,
   resolveOrCreateTab,
   createUserMessageEvent,
   validateExecutionGroups,
   isChatCompatiblePhase,
 } from '../utils/chatSubmitHelpers'
-import { resolveDelegationMainModel } from '../utils/workflowLLMTierDefaults'
 import { shouldKeepWorkflowSessionSubscribed } from '../utils/workflowSessionSubscription'
 import { activateTab } from '../utils/activateTab'
 import { selectWorkflowPreset } from '../utils/workflowNavigation'
@@ -686,6 +686,25 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
   const tabEvents = useChatStore((state) =>
     activeSessionId ? state.tabEvents[activeSessionId] || EMPTY_EVENTS : EMPTY_EVENTS
   )
+  const productTranscriptHydratedRef = useRef<string | null>(null)
+  useEffect(() => {
+    const workspacePath = activeTab?.metadata?.agentProfileWorkspace
+    if (
+      activeTab?.metadata?.agentProfileId !== 'video-studio' ||
+      !activeSessionId ||
+      !workspacePath ||
+      productTranscriptHydratedRef.current === activeSessionId
+    ) return
+    productTranscriptHydratedRef.current = activeSessionId
+    void hydrateTabEvents(activeSessionId, {
+      workspacePath,
+      fallbackToChatHistory: true,
+      preferChatHistory: true,
+    }).catch((error) => {
+      productTranscriptHydratedRef.current = null
+      console.error('[SessionRestore] Video Studio transcript hydration failed:', error)
+    })
+  }, [activeSessionId, activeTab?.metadata?.agentProfileId, activeTab?.metadata?.agentProfileWorkspace])
   const activeStreamingText = useChatStore((state) =>
     activeSessionId ? state.streamingText[activeSessionId] || '' : ''
   )
@@ -1719,6 +1738,23 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     // writes share no reliable common file event. Mark the view stale after a
     // completed run and let the user choose when to refresh it.
     const isCompletionLike = hasCompletionEvent || newEvents.some(e => e.type === 'background_agent_completed')
+    // A foreground terminal event is the per-turn completion contract. Settle
+    // the chat immediately instead of waiting for a later activity-cache poll;
+    // the retained tmux/session may stay alive for the next user message.
+    if (hasCompletionEvent && tab) {
+      const hasBgAgents = response.has_running_background_agents ?? tab.hasRunningBgAgents
+      chatStore.setTabStreaming(tab.tabId, false)
+      chatStore.setTabCompleted(tab.tabId, !hasBgAgents)
+      chatStore.clearStreamingText(actualSessionId)
+      if (sessionOwnsGlobalChatIndicators(actualSessionId, activeSessionIdRef.current)) {
+        setIsStreaming(false)
+        setIsCompleted(!hasBgAgents)
+        setHasActiveChat(hasBgAgents)
+      }
+      void chatStore.getActiveSessions(true).catch(error => {
+        logger.warn('ChatArea', 'Failed to refresh activity after foreground completion', error)
+      })
+    }
     if (isCompletionLike && hadWorkspaceActivityRef.current && isActivePresetTab !== false) {
       hadWorkspaceActivityRef.current = false
       console.log('[Workspace] Marking files stale after workspace activity')
@@ -2127,11 +2163,19 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
           const chatStore = useChatStore.getState()
           const persistedSessionIds = new Set(
             Object.values(chatStore.chatTabs)
-              .filter(tab => tab.sessionId)
+              // Product surfaces own their restoration contract. In
+              // particular, Video Studio restores the durable transcript;
+              // letting the generic live-event hydrator race it leaves a
+              // user-only cache after refresh.
+              .filter(tab => tab.sessionId && tab.metadata?.agentProfileId !== 'video-studio')
               .map(tab => tab.sessionId!)
           )
           const sessionsToRestore = runningSessions.filter(s =>
-            persistedSessionIds.has(s.session_id) || s.status === 'running'
+            persistedSessionIds.has(s.session_id) || (
+              s.status === 'running' && !Object.values(chatStore.chatTabs).some(tab =>
+                tab.sessionId === s.session_id && tab.metadata?.agentProfileId === 'video-studio'
+              )
+            )
           )
 
           if (sessionsToRestore.length > 0) {
@@ -2160,6 +2204,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
         const tabs = Object.values(chatStore.chatTabs)
         const tabsToHydrate = tabs.filter(tab => {
           if (!tab.sessionId || tab.metadata?.mode === 'workflow') return false
+          if (tab.metadata?.agentProfileId === 'video-studio') return false
           if (restoredSessionIds.has(tab.sessionId)) return false
           return chatStore.getTabEvents(tab.sessionId).length === 0
         })
@@ -2751,24 +2796,10 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
         : (isMultiAgentMode && currentTab?.config?.llmConfig)
           ? currentTab.config.llmConfig
           : llmStore.primaryConfig
-      const tierConfig = llmStore.delegationTierConfig
-      const delegationMainModel = resolveDelegationMainModel(tierConfig, llmStore.providerManifest)
-      // A product surface (Video Studio and friends) picks its provider per
-      // PROJECT, from the manifest's own agent options, and shows that choice in
-      // its header. The global delegation tier is an AgentWorks-wide setting and
-      // must not silently outrank it: it did, so a project whose header read
-      // "Codex" actually ran the tier's pi-cli/gemini — and failed on a Gemini
-      // credential the user never chose to use. Product surfaces are identified
-      // by the same agentProfileId that authorizes the profile server-side.
-      const isProductSurfaceTab = Boolean(currentTab?.metadata?.agentProfileId)
-      const effectiveLLMConfig: ExtendedLLMConfiguration = (isMultiAgentMode && delegationMainModel && !isProductSurfaceTab)
-        ? {
-            ...baseLLMConfig,
-            provider: delegationMainModel.provider as ExtendedLLMConfiguration['provider'],
-            model_id: delegationMainModel.model_id,
-            options: delegationMainModel.options,
-          }
-        : baseLLMConfig
+      // Chat has one primary model. Product profiles may replace it with their
+      // server-owned runtime; delegation tiers no longer participate in normal
+      // chat model selection because chat no longer creates sub-agents.
+      const effectiveLLMConfig: ExtendedLLMConfiguration = baseLLMConfig
 
       const llmConfigWithApiKeys = buildLLMConfigWithApiKeys(effectiveLLMConfig)
 
@@ -2841,7 +2872,13 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       // Set session ID and submit
       chatStore.setSessionId(tabSessionId)
       console.log('[WF_DEBUG] 1. Submitting', { tabId: currentTab.tabId, tabSessionId, eventCount: chatStore.getTabEvents(tabSessionId).length, mode: currentTab.metadata?.mode })
-      const response = await agentApi.startQuery(requestPayload, tabSessionId)
+      const response = currentTab.metadata?.agentProfileChatContract === 'profile-v1' && currentTab.metadata.agentProfileId
+        ? await agentApi.startAgentProfileQuery(
+            currentTab.metadata.agentProfileId,
+            buildAgentProfileChatRequest(requestPayload, currentTab.metadata.agentProfileConversationKey),
+            tabSessionId,
+          )
+        : await agentApi.startQuery(requestPayload, tabSessionId)
       console.log('[WF_DEBUG] 2. Response', { status: response.status, responseSessionId: response.session_id || response.query_id, tabSessionId, match: (response.session_id || response.query_id) === tabSessionId })
 
       if (response.status === 'started' || response.status === 'workflow_started') {
@@ -3102,12 +3139,12 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     const chatStore = useChatStore.getState()
     const targetTab = targetTabId ? chatStore.getTab(targetTabId) : activeTab
     // Stop the previous backend session first (if it exists). This closes any
-    // tmux-backed CLI owner before the tab rotates to a fresh Chief of Staff
+    // tmux-backed CLI owner before the tab rotates to a fresh AgentWorks
     // session, preventing two pi-cli sessions from sharing the Chats cwd.
     const currentSessionId = getSessionId()
     // An explicitly targeted empty chat must not fall back to the globally
     // selected session ID: that ID may belong to the concurrently viewed
-    // Chief of Staff schedule.
+    // scheduled agent session.
     const sessionIdToClear = targetTabId !== undefined
       ? targetTab?.sessionId
       : (targetTab?.sessionId || currentSessionId)

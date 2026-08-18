@@ -68,7 +68,7 @@ func CreateHumanTools() []llmtypes.Tool {
 		"slack_title": map[string]interface{}{
 			"type":        "string",
 			"maxLength":   150,
-			"description": "Optional Block Kit header. Use by default for workflow, Pulse, Chief of Staff, Goal Advisor, and other structured summaries. The backend owns the webhook URL and renders this safely; never post to a webhook directly.",
+			"description": "Optional Block Kit header. Use by default for workflow, Pulse, Goal Advisor, and other structured summaries. The backend owns the webhook URL and renders this safely; never post to a webhook directly.",
 		},
 		"slack_color": map[string]interface{}{
 			"type":        "string",
@@ -185,7 +185,7 @@ var sendRichSlackIncomingWebhook = services.SendRichSlackIncomingWebhook
 // knows where its message will actually land. The always-on web UI connector is
 // not framed as an external channel.
 func buildNotifyDescription() string {
-	base := "Send a non-blocking notification to the human. Use this for FYIs, progress updates, alerts, and completion notices when you do not need to wait for a reply. If the workflow has a Slack Incoming Webhook configured, this tool automatically sends a backend-owned rich Block Kit card there in addition to enabled account-level channels; even a plain message_for_user call receives the safe rich default. For workflow, Pulse, Chief of Staff, Goal Advisor, and other structured summaries, set slack_title, factual slack_color, compact slack_fields, relevant slack_sections, and slack_footer by default. Never access a SECRET_* webhook variable, construct a webhook payload in shell, post with curl, disable notify_user to avoid duplication, or ask for the URL after an encrypted webhook reference is configured—the backend exclusively owns delivery. If you need the human to answer before continuing, use human_feedback instead. Returns a JSON delivery result — status (delivered|partial|failed|no_recipient|no_channels_configured) plus delivered/skipped/failed channel lists. Report it honestly to the user: do NOT claim the message was sent if status is failed or no_channels_configured."
+	base := "Send a non-blocking notification to the human. Use this for FYIs, progress updates, alerts, and completion notices when you do not need to wait for a reply. If the workflow has a Slack Incoming Webhook configured, this tool automatically sends a backend-owned rich Block Kit card there in addition to enabled account-level channels; even a plain message_for_user call receives the safe rich default. For workflow, Pulse, Goal Advisor, and other structured summaries, set slack_title, factual slack_color, compact slack_fields, relevant slack_sections, and slack_footer by default. Never access a SECRET_* webhook variable, construct a webhook payload in shell, post with curl, disable notify_user to avoid duplication, or ask for the URL after an encrypted webhook reference is configured—the backend exclusively owns delivery. If you need the human to answer before continuing, use human_feedback instead. Returns a JSON delivery result — status (delivered|partial|failed|no_recipient|no_channels_configured) plus delivered/skipped/failed channel lists. Report it honestly to the user: do NOT claim the message was sent if status is failed or no_channels_configured."
 
 	var labels []string
 	gmailOn := false

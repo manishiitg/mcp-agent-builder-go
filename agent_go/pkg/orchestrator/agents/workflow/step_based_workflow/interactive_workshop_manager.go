@@ -5594,7 +5594,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// Tool: get_llm_config — show current LLM configuration (read-only)
 	if err := mcpAgent.RegisterCustomTool(
 		"get_llm_config",
-		"Show every effective workflow LLM role (Builder, execution high/medium/low, Maintenance, Pulse, and Chief of Staff), including provider/model, reasoning, inheritance source, override status, and per-step overrides.",
+		"Show every effective workflow LLM role (Builder, execution high/medium/low, Maintenance, and Pulse), including provider/model, reasoning, inheritance source, override status, and per-step overrides.",
 		map[string]interface{}{
 			"type":       "object",
 			"properties": map[string]interface{}{},

@@ -27,7 +27,6 @@ const (
 	ScopeBuilder           = "builder"
 	ScopePulse             = "pulse"
 	ScopeEvaluation        = "evaluation"
-	ScopeChiefOfStaff      = "chief_of_staff"
 	ScopeWorkflowExecution = "workflow_execution"
 	// ScopeUnknown is the last-resort value recorded when a launch path did
 	// not name its scope. Reaching it is a defect and is logged as one.
@@ -328,8 +327,6 @@ func ScopeForScheduledLLMRole(llmConfigSource string) string {
 	switch strings.ToLower(strings.TrimSpace(llmConfigSource)) {
 	case "scheduled_pulse", "scheduled_auto_improve":
 		return ScopePulse
-	case "scheduled_chief_of_staff":
-		return ScopeChiefOfStaff
 	}
 	return ""
 }
@@ -342,8 +339,6 @@ func InferScope(agentMode, phaseID string) string {
 	}
 	mode := strings.ToLower(strings.TrimSpace(agentMode))
 	switch {
-	case strings.Contains(mode, "chief"):
-		return ScopeChiefOfStaff
 	case strings.Contains(mode, "workflow"):
 		return ScopeBuilder
 	default:
@@ -362,9 +357,6 @@ func InferScope(agentMode, phaseID string) string {
 func InferWorkflowScope(agentMode string, hasRunFolder bool, identifiers ...string) string {
 	if scope := matchPhaseScope(identifiers...); scope != "" {
 		return scope
-	}
-	if strings.Contains(strings.ToLower(strings.TrimSpace(agentMode)), "chief") {
-		return ScopeChiefOfStaff
 	}
 	if hasRunFolder {
 		return ScopeWorkflowExecution

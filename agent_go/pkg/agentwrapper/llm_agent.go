@@ -737,11 +737,10 @@ func (w *LLMAgentWrapper) RegisterCustomTool(name, description string, parameter
 // instead silently made it fatal: mcpagent's finalizeDefinition rejects a
 // duplicate name, so the whole agent fails to construct.
 //
-// That is not hypothetical. The Chief of Staff daily pass resumes the previous
-// run's thread (maybeResumeLatestMultiAgentThread) and re-registers delegation
-// tools onto a wrapper that already carries them, so every run after the first
-// died before step 1 with `duplicate direct tool name "delegate"` — 2026-08-03
-// 09:01:00 and 2026-08-04 09:00:18, the whole scheduled pass lost both days.
+// This matters whenever a retained chat definition is assembled again and
+// delegation tools are registered onto a wrapper that already carries them.
+// Without replacement semantics, the next turn dies before step 1 with
+// `duplicate direct tool name "delegate"`.
 //
 // A replacement is logged: last-write-wins is right for re-assembly, but two
 // genuinely different tools claiming one name is a bug worth seeing.

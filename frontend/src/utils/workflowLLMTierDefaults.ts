@@ -13,7 +13,6 @@ type WorkflowTierDefaults = {
   tier3: AgentLLMConfig
   maintenance: AgentLLMConfig
   pulse: AgentLLMConfig
-  chiefOfStaff: AgentLLMConfig
   usesTierDefaults: boolean
 }
 
@@ -50,7 +49,6 @@ function sameModelDefaults(option: LLMOption): WorkflowTierDefaults {
     tier3: builder,
     maintenance: builder,
     pulse: builder,
-    chiefOfStaff: builder,
     usesTierDefaults: false,
   }
 }
@@ -71,11 +69,10 @@ function resolveManifestDefaults(defaults?: ProviderDefaultTierModels) {
     low: defaults.low,
     maintenance,
     pulse: defaults.pulse ?? defaults.high,
-    chiefOfStaff: defaults.chief_of_staff ?? maintenance,
   }
 }
 
-/** Resolve the live Chief of Staff orchestrator model from simple or advanced setup. */
+/** Resolve the live AgentWorks root-chat model from simple or advanced setup. */
 export function resolveDelegationMainModel(
   config: DelegationTierConfig | null | undefined,
   providerManifest: ProviderManifestEntry[] = [],
@@ -124,7 +121,6 @@ export function getWorkflowLLMTierDefaults(
     tier3: toAgentLLMConfigFromRef(option, defaults.low),
     maintenance: toAgentLLMConfigFromRef(option, defaults.maintenance),
     pulse: toAgentLLMConfigFromRef(option, defaults.pulse),
-    chiefOfStaff: toAgentLLMConfigFromRef(option, defaults.chiefOfStaff),
     usesTierDefaults: true,
   }
 }

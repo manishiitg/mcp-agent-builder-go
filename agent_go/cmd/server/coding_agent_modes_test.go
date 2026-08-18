@@ -1427,12 +1427,12 @@ func TestQueryRequestWithEffectiveRuntimeReplacesStaleProviderWithoutMutatingSou
 	}
 }
 
-func TestChiefOfStaffQueriesUseInteractiveInputLane(t *testing.T) {
+func TestAgentWorksChatQueriesUseInteractiveInputLane(t *testing.T) {
 	if !shouldSerializeInteractiveQueryInput(QueryRequest{AgentMode: "multi-agent"}) {
-		t.Fatal("Chief of Staff multi-agent query must use the session input lane")
+		t.Fatal("AgentWorks multi-agent query must use the session input lane")
 	}
 	if !shouldSerializeInteractiveQueryInput(QueryRequest{AgentMode: "simple"}) {
-		t.Fatal("legacy Chief of Staff simple query must use the session input lane")
+		t.Fatal("simple chat query must use the session input lane")
 	}
 	if !shouldSerializeInteractiveQueryInput(QueryRequest{AgentMode: "multi-agent", IsAutoNotification: true}) {
 		t.Fatal("auto-notification turns must share the same full-turn lane")

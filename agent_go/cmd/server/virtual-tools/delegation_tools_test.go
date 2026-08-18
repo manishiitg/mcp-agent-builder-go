@@ -269,34 +269,27 @@ func TestSubAgentSpecContextRoundTrip(t *testing.T) {
 	}
 }
 
-// TestGetMultiAgentDelegationInstructionsLazyLoadsScheduleAndSecret locks in
-// the prompt refactor that moved Schedule and Secret management deep docs
-// into templates/system/{schedule-management,secret-management}.md. The
-// inline prompt should keep brief cheat sheets + read_skill pointers
-// — not the old ~80-line JSON file format / detailed tool description
-// blocks that every chat turn used to carry.
-func TestGetMultiAgentDelegationInstructionsLazyLoadsScheduleAndSecret(t *testing.T) {
+// TestGetMultiAgentDelegationInstructionsLazyLoadsSecret keeps account-secret
+// guidance available without restoring the removed global schedule runtime.
+func TestGetMultiAgentDelegationInstructionsLazyLoadsSecret(t *testing.T) {
 	out := GetMultiAgentDelegationInstructionsWithUser("Chats", "default")
 
-	// Cheat-sheet headers must remain so the agent still knows the
-	// capabilities exist without loading the deep docs.
+	// The secret cheat sheet remains so the chat knows the capability exists
+	// without loading the deep guide on every turn.
 	mustContain := []string{
-		"## Schedule Management (brief)",
 		"## Secret Management (brief)",
-		// Brief Schedule cheat sheet keeps the file path + workflow.
-		"multiagent-schedules.json",
-		`mode: "multi-agent"`,
-		// Brief Secret cheat sheet keeps the three buckets + safety rule.
 		"workflow",
 		"never echo / print / log a plaintext secret",
-		// Pointers to the reference docs — agent needs these to know to
-		// load the deep guide before scheduling / managing secrets.
-		`read_skill(skills=[{"name":"builder-reference","path":"references/schedule-management.md"}])`,
 		`read_skill(skills=[{"name":"builder-reference","path":"references/secret-management.md"}])`,
 	}
 	for _, s := range mustContain {
 		if !strings.Contains(out, s) {
 			t.Errorf("delegation prompt missing required cheat-sheet content: %q", s)
+		}
+	}
+	for _, removed := range []string{"Schedule Management", "multiagent-schedules.json", "schedule-management.md"} {
+		if strings.Contains(out, removed) {
+			t.Errorf("delegation prompt retained removed global schedule guidance: %q", removed)
 		}
 	}
 

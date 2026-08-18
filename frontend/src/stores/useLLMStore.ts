@@ -273,7 +273,6 @@ interface LLMState extends StoreActions {
 
   // Modal state
   showLLMModal: boolean
-  showTierModal: boolean
 
   // Available LLMs for selection
   availableLLMs: LLMOption[]
@@ -331,7 +330,6 @@ interface LLMState extends StoreActions {
   setElevenlabsConfig: (config: ExtendedLLMConfiguration) => void
   setDeepgramConfig: (config: ExtendedLLMConfiguration) => void
   setShowLLMModal: (show: boolean) => void
-  setShowTierModal: (show: boolean) => void
   loadDefaultsFromBackend: () => Promise<void>
   
   // Library management
@@ -500,7 +498,6 @@ export const useLLMStore = create<LLMState>()(
 
         // Modal state
         showLLMModal: false,
-        showTierModal: false,
 
         availableLLMs: [],
         modelMetadataCatalog: [],
@@ -647,10 +644,6 @@ export const useLLMStore = create<LLMState>()(
 
         setShowLLMModal: (show) => {
           set({ showLLMModal: show })
-        },
-
-        setShowTierModal: (show) => {
-          set({ showTierModal: show })
         },
 
         setDelegationTierConfig: (config) => {

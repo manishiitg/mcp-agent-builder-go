@@ -231,6 +231,9 @@ profile:
     transport: auto
     provider: claude-code
     model_id: claude-sonnet-5
+    # Video Studio currently uses the shared server Claude login. Project-level
+    # coding-agent token overrides and their UI are deliberately disabled.
+    credential_scope: global
     # mcp_only: the CLI's native Read/Write/Shell are denied; every action —
     # file work, rendering, product control — goes through the guarded
     # AgentWorks MCP bridge. See the mode table in
@@ -268,6 +271,10 @@ profile:
     # Keep in step with prompts/system-prompt.md, which tells the agent the same
     # thing; the tool description is what it re-reads on every get_api_spec.
     workspace:
+      # A chat supplies a project id, never this project's workspace path. The
+      # server resolves and validates product.json below this owned root.
+      mode: project
+      projects_root: Chats/Video Studio/projects
       placement:
         execute_shell_command:
           - "Uploaded references live in `uploads/` and are read-only — never modify them."
@@ -275,12 +282,11 @@ profile:
           - "Workflow steps write inside their own run folder, not at the project root."
         diff_patch_workspace_file:
           - "Patch files in `work/` (direct chat) or the step's own run folder (workflow). `uploads/` is read-only — copy a reference into `work/` before changing it."
-    provider_options:
-      - id: claude-code
-        label: Claude Code
-        provider: claude-code
-        model_id: claude-sonnet-5
-        default: true
+    conversation:
+      # Each Video Studio project owns one durable conversation. The project
+      # may move or the live CLI may be reaped without changing that identity.
+      mode: keyed
+      key_type: project
     capabilities:
       # Structured turns are one-shot processes. Follow-ups queue at a safe
       # boundary; they are never typed into a live terminal prompt.

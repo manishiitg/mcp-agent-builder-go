@@ -90,6 +90,7 @@ describe('session restore chat-history fallback', () => {
       'conversation_resumed',
       'user_message',
       'llm_generation_end',
+      'unified_completion',
     ])
     expect(useChatStore.getState().chatTabs[tabId]?.isStreaming).toBe(false)
   })
@@ -149,6 +150,7 @@ describe('session restore chat-history fallback', () => {
       'conversation_resumed',
       'user_message',
       'llm_generation_end',
+      'unified_completion',
     ])
   })
 
@@ -191,6 +193,7 @@ describe('session restore chat-history fallback', () => {
       'conversation_resumed',
       'user_message',
       'llm_generation_end',
+      'unified_completion',
     ])
   })
 
@@ -238,6 +241,7 @@ describe('session restore chat-history fallback', () => {
       'conversation_resumed',
       'user_message',
       'llm_generation_end',
+      'unified_completion',
     ])
     expect(useChatStore.getState().chatTabs[tabId]?.isStreaming).toBe(true)
   })

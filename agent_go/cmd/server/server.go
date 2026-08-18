@@ -25,7 +25,6 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
-	"github.com/manishiitg/coding-agent-loop/agent_go/internal/chiefofstaffproduct"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/dominionproduct"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/events"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/financeproduct"
@@ -1649,21 +1648,6 @@ func runServer(cmd *cobra.Command, args []string) {
 			log.Fatalf("Failed to register Video Studio agent profile runtime: %v", err)
 		}
 	}
-	if productEnabled("chief-of-staff") {
-		if err := chiefofstaffproduct.RegisterProductSkills(); err != nil {
-			log.Fatalf("Failed to register Chief of Staff skills: %v", err)
-		}
-		for _, profile := range chiefofstaffproduct.BuiltinAgentProfiles() {
-			if err := profileRegistry.RegisterProfile(profile); err != nil {
-				log.Fatalf("Failed to register Chief of Staff agent profile: %v", err)
-			}
-		}
-	}
-	// No RegisterAgentProfileRuntime equivalent: Chief of Staff's tool
-	// factories are registered separately once api exists -- see
-	// registerChiefOfStaffToolFactories below -- since their handlers are
-	// *StreamingAPI methods, not a workspace-API-client pattern like Video
-	// Studio's.
 	if productEnabled("finance") {
 		if err := financeproduct.RegisterProductSkills(); err != nil {
 			log.Fatalf("Failed to register Finance skills: %v", err)
@@ -1755,18 +1739,6 @@ func runServer(cmd *cobra.Command, args []string) {
 		lastWorkshopModeBySession:              make(map[string]string),
 		stoppedSessions:                        make(map[string]bool),
 		interruptedTurns:                       make(map[string]bool),
-	}
-	// Chief-of-Staff-only tool factories close over api itself (their handlers
-	// are *StreamingAPI methods), so they register once api exists rather than
-	// alongside the profile-only registration above. The manual isChiefOfStaffChat
-	// registration block later in this file still exists and still serves the
-	// legacy no-profile Chief of Staff chat unchanged; these factories become
-	// reachable once a chief-of-staff product.yaml profile declares them in
-	// profile.tools[], which is registered separately once that profile exists.
-	if productEnabled("chief-of-staff") {
-		if err := api.registerChiefOfStaffToolFactories(profileRegistry); err != nil {
-			log.Fatalf("Failed to register Chief of Staff tool factories: %v", err)
-		}
 	}
 	// Terminal Center's Formatted view and the runtime coordinator now consume
 	// the same accepted structured events. The terminal observer updates the
@@ -1881,6 +1853,8 @@ func runServer(cmd *cobra.Command, args []string) {
 
 	apiRouter.HandleFunc("/query", api.handleQuery).Methods("POST", "OPTIONS")
 	AgentProfileRoutes(apiRouter, api.agentProfiles)
+	apiRouter.HandleFunc("/agent-profiles/{id}/query", api.handleAgentProfileChatQuery).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/agent-profiles/{id}/conversation", api.handleResolveAgentProfileConversation).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/health", api.handleHealth).Methods("GET")
 	apiRouter.HandleFunc("/capabilities", api.handleCapabilities).Methods("GET")
 	CLISecurityRoutes(apiRouter, api.cliSecurityStore)
@@ -2030,7 +2004,8 @@ func runServer(cmd *cobra.Command, args []string) {
 	apiRouter.HandleFunc("/published-llms", api.handleSavePublishedLLMs).Methods("PUT", "OPTIONS")
 	apiRouter.HandleFunc("/published-llms", api.handleLoadPublishedLLMs).Methods("GET", "OPTIONS")
 
-	// Delegation tier config (plain JSON file storage, shared by chat and bot connector)
+	// Legacy bot-connector model profile. Direct chat and product chat use their
+	// selected/profile model directly and do not load delegation tiers.
 	apiRouter.HandleFunc("/delegation-tier-config", api.handleSaveDelegationTierConfig).Methods("PUT", "OPTIONS")
 	apiRouter.HandleFunc("/delegation-tier-config", api.handleLoadDelegationTierConfig).Methods("GET", "OPTIONS")
 
@@ -2302,7 +2277,7 @@ func runServer(cmd *cobra.Command, args []string) {
 	apiRouter.HandleFunc("/workflow/active-executions", api.handleGetActiveExecutions).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/builder-session", api.handleGetWorkflowBuilderSession).Methods("GET", "OPTIONS")
 
-	// Per-user multi-agent chat capabilities (skills/servers) — read by bots
+	// Generic AgentWorks chat defaults (skills, servers, secrets, browser).
 	MultiAgentConfigRoutes(apiRouter)
 
 	// Workspace API reverse proxy (auth-protected) — frontend calls /api/wp/* instead of /workspace/*
@@ -2345,9 +2320,6 @@ func runServer(cmd *cobra.Command, args []string) {
 	apiRouter.HandleFunc("/workflow/publish", api.handleGetWorkflowPublish).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/notifications", api.handleGetWorkflowNotifications).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/publish/secret", requireWorkflowWriteAccess(api.handleGetWorkflowPublishSecret)).Methods("GET", "OPTIONS")
-	apiRouter.HandleFunc("/org/backup", api.handleGetOrgBackup).Methods("GET", "OPTIONS")
-	apiRouter.HandleFunc("/org/notifications", api.handleGetOrgNotifications).Methods("GET", "OPTIONS")
-
 	// Manifest-backed workflow API routes (file-backed workflow definitions)
 	apiRouter.HandleFunc("/workflows/summary", api.handleGetWorkflowsSummary).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/workflows/overview", api.handleGetWorkflowsOverview).Methods("GET", "OPTIONS")
@@ -3233,22 +3205,22 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Chief of Staff has one interactive chat lane. Scheduled Chief of Staff
-	// work is a separate lane and may coexist with it, but a second interactive
-	// session must not race through from another browser/tab.
-	claimedChiefOfStaffChat := false
+	// AgentWorks has one interactive root-chat lane per user. Product-profile,
+	// bot, and scheduled sessions use separate lanes, but a second ordinary root
+	// chat must not race through from another browser/tab.
+	claimedAgentWorksChat := false
 	if req.AgentMode == "multi-agent" &&
 		resolvedProfile == nil &&
 		!req.IsAutoNotification &&
 		!isScheduledSessionIdentity(sessionID, req.TriggeredBy) &&
 		strings.TrimSpace(req.BotPlatform) == "" {
-		if blocking := api.claimChiefOfStaffChatSession(sessionID, currentUserID, req.Query, req.TriggeredBy); blocking != nil {
-			logfWithContext(queryLogCtx, "[CHIEF_OF_STAFF_BUSY] Rejected second interactive chat: running session %s", blocking.SessionID)
+		if blocking := api.claimAgentWorksChatSession(sessionID, currentUserID, req.Query, req.TriggeredBy); blocking != nil {
+			logfWithContext(queryLogCtx, "[AGENTWORKS_CHAT_BUSY] Rejected second interactive chat: running session %s", blocking.SessionID)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusConflict)
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"error":   "chief_of_staff_busy",
-				"message": "A Chief of Staff chat is already active. Stop it or use New Chat before starting another.",
+				"error":   "agentworks_chat_busy",
+				"message": "An AgentWorks chat is already active. Stop it or use New Chat before starting another.",
 				"running": map[string]interface{}{
 					"session_id":    blocking.SessionID,
 					"status":        blocking.Status,
@@ -3257,7 +3229,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		claimedChiefOfStaffChat = true
+		claimedAgentWorksChat = true
 	}
 
 	// Chat sessions are in-memory only — tracked via activeSessions map
@@ -3265,7 +3237,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 
 	// Only a real user message may reactivate a stopped/interrupted session.
 	// Cron sequence turns and synthetic auto-notifications are internal work; if
-	// they clear these guards, Pulse/Org Pulse can continue after the user pressed
+	// they clear these guards, Pulse can continue after the user pressed
 	// Stop. startSessionInternal preserves TriggeredBy="cron", so this distinction
 	// also applies to backend-driven turns.
 	if !req.IsAutoNotification && !strings.EqualFold(strings.TrimSpace(req.TriggeredBy), "cron") {
@@ -3276,7 +3248,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Track active session for page refresh recovery (no observer needed)
-	if !claimedChiefOfStaffChat {
+	if !claimedAgentWorksChat {
 		api.trackActiveSession(sessionID, req.AgentMode, req.Query, currentUserID, req.BotPlatform, req.TriggeredBy, req.SessionTitle, req.ParentSessionID, req.SessionKind)
 	}
 	api.activeSessionsMux.Lock()
@@ -4388,22 +4360,8 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Resolve tier config early so provider validation can use it.
-		// Without this, internal callers (scheduler, bots) that don't pass an explicit
-		// provider would fail validation even though the tier config has one.
-		if !isWorkflowPhase && finalProvider == "" {
-			if earlyTierConfig := LoadAndResolveTierConfig(context.Background(), req.DelegationTierConfig); earlyTierConfig != nil {
-				if earlyTierConfig.Main != nil && earlyTierConfig.Main.Provider != "" && earlyTierConfig.Main.ModelID != "" {
-					finalProvider = earlyTierConfig.Main.Provider
-					finalModelID = earlyTierConfig.Main.ModelID
-				} else if earlyTierConfig.High != nil && earlyTierConfig.High.Provider != "" && earlyTierConfig.High.ModelID != "" {
-					finalProvider = earlyTierConfig.High.Provider
-					finalModelID = earlyTierConfig.High.ModelID
-				}
-			}
-		}
-
-		// Validate provider (use finalProvider which reflects LLMConfig.Primary.Provider or tier config)
+		// Validate the one model selected for this chat. Product profiles resolve
+		// their model server-side; ordinary chat sends its primary model directly.
 		providerToValidate := finalProvider
 		if providerToValidate == "" {
 			providerToValidate = req.Provider
@@ -4483,30 +4441,12 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			log.Printf("[CODE_EXECUTION] Code execution mode enabled (always on)")
 		}
 
-		// In plan delegation mode, the orchestrator uses Main (falling back to High)
-		// when no primary chat model was selected. A provider-profile selection is
-		// also authoritative and replaces stale tab-level provider/model fields.
-		// Delegated sub-agents still resolve their tiers when they are spawned.
 		var resolvedPrimaryOptions map[string]interface{}
 		if req.LLMConfig != nil {
 			resolvedPrimaryOptions = req.LLMConfig.Primary.Options
 		}
 		if isWorkflowPhase && workflowPhasePrimaryOptions != nil {
 			resolvedPrimaryOptions = workflowPhasePrimaryOptions
-		}
-		if !isWorkflowPhase {
-			var appliedTier bool
-			finalProvider, finalModelID, fallbacks, appliedTier = applyTopLevelDelegationModel(streamCtx, req, finalProvider, finalModelID, fallbacks)
-			if appliedTier {
-				if tierConfig := LoadAndResolveTierConfig(streamCtx, req.DelegationTierConfig); tierConfig != nil {
-					if tierConfig.Main != nil {
-						resolvedPrimaryOptions = tierConfig.Main.Options
-					} else if tierConfig.High != nil {
-						resolvedPrimaryOptions = tierConfig.High.Options
-					}
-				}
-				log.Printf("[DELEGATION] Orchestrator using tier model: %s/%s", finalProvider, finalModelID)
-			}
 		}
 		if !isPublishedLLMProviderAllowed(finalProvider) {
 			finalProvider, finalModelID = fallbackPublishedLLMProviderAndModel()
@@ -4734,7 +4674,6 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		var refreshMultiAgentDelegationTools func() error
 		var workspaceEnv map[string]string // hoisted so secrets can be injected after allChatSecrets is computed
 		log.Printf("[CHAT_TOOLS_DEBUG] isChatMode=%v agentNonNil=%v enableImageGenPtr=%v", isChatMode, llmAgent.GetUnderlyingAgent() != nil, req.EnableImageGeneration)
 
@@ -4867,7 +4806,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					// A project-scoped product profile is bound to one project. Do
 					// not inherit the chat-wide grants or @context write expansion.
 					// Explicit workflow references remain readable, never writable.
-					// A global-scoped profile (Chief of Staff) falls through to the
+					// A global-scoped profile falls through to the
 					// else branch below instead -- it keeps the same chat-wide
 					// grants, including the pulse/ write grant, a profile-less turn
 					// already has.
@@ -5051,209 +4990,6 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
-			// Register delegation tool for multi-agent chat (all non-workflow-phase simple sessions).
-			if !isWorkflowPhase {
-				// Build delegation tier config early so we can pass it to tool creation (for dynamic enum)
-				tierConfig := resolveDelegationTierConfig(req.DelegationTierConfig)
-				delegationTools := virtualtools.CreateDelegationTools(tierConfig, true)
-				delegationExecutors := virtualtools.CreateDelegationToolExecutors()
-				delegationCategory := virtualtools.GetDelegationToolCategory()
-
-				// Get underlying agent for tool registration
-				delegationAgent := llmAgent.GetUnderlyingAgent()
-				if delegationAgent == nil {
-					logfWithContext(queryLogCtx, "[DELEGATION TOOLS ERROR] Cannot register delegation tools - underlying agent is nil")
-				} else {
-					// Create the delegation execution function that will spawn sub-agents
-					// This function is injected into the context for the delegate tool to use
-					executeDelegatedTask := func(subCtx context.Context, instruction string) (string, error) {
-						subCtx = withDelegatedParentSkills(subCtx, llmAgent.GetUnderlyingAgent())
-						return api.executeDelegatedTask(subCtx, req, sessionID, instruction)
-					}
-
-					// Create workspace client for plan file I/O. Scoped to the per-user Chats folder.
-					planWorkspaceClient := workspace.NewClient(
-						getWorkspaceAPIURL(),
-						workspace.WithFolderGuard(&workspace.FolderGuardConfig{
-							Enabled:      true,
-							WritePaths:   []string{perUserChatsFolder},
-							BlockedPaths: []string{},
-						}),
-						workspace.WithUserID(currentUserID),
-					)
-
-					// Build capabilities context for the delegation tools
-					caps := buildCapabilitiesContext(req)
-
-					// Create background delegate function for async delegation (all modes)
-					bgDelegateFunc := func(bgCtx context.Context, name, instruction string) (string, error) {
-						bgCtx = withDelegatedParentSkills(bgCtx, llmAgent.GetUnderlyingAgent())
-						return api.executeBackgroundDelegatedTask(bgCtx, req, sessionID, name, instruction)
-					}
-					bgQuerier := &bgAgentQuerierImpl{registry: api.bgAgentRegistry}
-
-					// Register all delegation tools (agent decides autonomously what to use).
-					// Keep this as a closure so we can re-install the wrappers after all
-					// generic custom tools are registered. The HTTP code-exec bridge uses the
-					// session-scoped registry; if a later registry refresh leaves raw delegate
-					// executors there, delegate becomes blocking instead of async.
-					registerDelegationTools := func() error {
-						registered := 0
-						for _, tool := range delegationTools {
-							if tool.Function == nil {
-								continue
-							}
-							toolName := tool.Function.Name
-
-							executor, exists := delegationExecutors[toolName]
-							if !exists {
-								continue
-							}
-
-							var params map[string]interface{}
-							if tool.Function.Parameters != nil {
-								paramsBytes, err := json.Marshal(tool.Function.Parameters)
-								if err == nil {
-									json.Unmarshal(paramsBytes, &params)
-								}
-							}
-							if params == nil {
-								logfWithContext(queryLogCtx, "[DELEGATION TOOLS] Warning: Failed to convert parameters for tool %s", toolName)
-								continue
-							}
-
-							// Capture executor for closure.
-							exec := executor
-
-							// Wrap the executor to inject delegation function, workspace client, tier config, and capabilities.
-							wrappedExecutor := func(ctx context.Context, args map[string]interface{}) (string, error) {
-								ctx = context.WithValue(ctx, virtualtools.ExecuteDelegatedTaskKey, virtualtools.ExecuteDelegatedTaskFunc(executeDelegatedTask))
-								ctx = context.WithValue(ctx, virtualtools.WorkspaceClientKey, planWorkspaceClient)
-								ctx = context.WithValue(ctx, virtualtools.SessionEventEmitterKey, &sessionEventEmitter{
-									eventStore: api.eventStore,
-									sessionID:  sessionID,
-								})
-								// Propagate the per-user Chats folder so sub-agents inherit it.
-								ctx = context.WithValue(ctx, virtualtools.ChatsFolderKey, perUserChatsFolder)
-								if tierConfig != nil {
-									ctx = context.WithValue(ctx, virtualtools.DelegationTierConfigKey, tierConfig)
-								}
-								if caps != nil {
-									ctx = context.WithValue(ctx, virtualtools.CapabilitiesContextKey, caps)
-								}
-								// Inject background delegation and agent querier for plan mode.
-								if bgDelegateFunc != nil {
-									ctx = context.WithValue(ctx, virtualtools.BackgroundDelegateKey, virtualtools.BackgroundDelegateFunc(bgDelegateFunc))
-								} else if toolName == "delegate" {
-									logfWithContext(queryLogCtx, "[DELEGATION TOOLS] delegate wrapper has nil background delegate for session %s", sessionID)
-								}
-								if bgQuerier != nil {
-									ctx = context.WithValue(ctx, virtualtools.BGAgentRegistryKey, bgQuerier)
-									ctx = context.WithValue(ctx, virtualtools.BGAgentSessionIDKey, sessionID)
-								}
-								return exec(ctx, args)
-							}
-
-							if err := llmAgent.RegisterCustomToolWithTimeout(
-								toolName,
-								tool.Function.Description,
-								params,
-								wrappedExecutor,
-								0, // No timeout — delegation tools run indefinitely (controlled by parent context).
-								delegationCategory,
-							); err != nil {
-								return fmt.Errorf("failed to register %s: %w", toolName, err)
-							}
-							registered++
-							logfWithContext(queryLogCtx, "[DELEGATION TOOLS] Registered delegation tool: %s (category: %s)", toolName, delegationCategory)
-						}
-						logfWithContext(queryLogCtx, "[DELEGATION TOOLS] Successfully registered %d delegation tools for chat mode", registered)
-						return nil
-					}
-
-					if err := registerDelegationTools(); err != nil {
-						logfWithContext(queryLogCtx, "[DELEGATION TOOLS ERROR] %v", err)
-						sendError(fmt.Sprintf("Failed to register delegation tools: %v", err), true)
-						return
-					}
-					refreshMultiAgentDelegationTools = registerDelegationTools
-
-					// Register workflow schedule tools (list/create/update/delete/trigger/get-runs)
-					schedTools := createWorkflowScheduleTools()
-					schedExecutors := createWorkflowScheduleExecutors(api, currentUserID)
-					for _, tool := range schedTools {
-						if tool.Function == nil {
-							continue
-						}
-						toolName := tool.Function.Name
-						exec, ok := schedExecutors[toolName]
-						if !ok {
-							continue
-						}
-						var params map[string]interface{}
-						if tool.Function.Parameters != nil {
-							paramsBytes, _ := json.Marshal(tool.Function.Parameters)
-							json.Unmarshal(paramsBytes, &params)
-						}
-						capturedExec := exec
-						wrappedExec := func(ctx context.Context, args map[string]interface{}) (string, error) {
-							ctx = context.WithValue(ctx, virtualtools.BGAgentSessionIDKey, sessionID)
-							return capturedExec(ctx, args)
-						}
-						if err := llmAgent.RegisterCustomToolWithTimeout(
-							toolName,
-							tool.Function.Description,
-							params,
-							wrappedExec,
-							0,
-							delegationCategory,
-						); err != nil {
-							logfWithContext(queryLogCtx, "[WORKFLOW_SCHEDULE_TOOLS] Failed to register %s: %v", toolName, err)
-						} else {
-							logfWithContext(queryLogCtx, "[WORKFLOW_SCHEDULE_TOOLS] Registered %s", toolName)
-						}
-					}
-
-					// Register multi-agent (Chief-of-Staff) schedule tools
-					// (list/create/update/delete/trigger/get-runs). These manage the
-					// current user's _users/<id>/multiagent-schedules.json via the store
-					// server-side; the agent must never edit that JSON directly.
-					maSchedTools := createMultiAgentScheduleTools()
-					maSchedExecutors := createMultiAgentScheduleExecutors(api, currentUserID)
-					for _, tool := range maSchedTools {
-						if tool.Function == nil {
-							continue
-						}
-						toolName := tool.Function.Name
-						exec, ok := maSchedExecutors[toolName]
-						if !ok {
-							continue
-						}
-						var params map[string]interface{}
-						if tool.Function.Parameters != nil {
-							paramsBytes, _ := json.Marshal(tool.Function.Parameters)
-							json.Unmarshal(paramsBytes, &params)
-						}
-						capturedExec := exec
-						wrappedExec := func(ctx context.Context, args map[string]interface{}) (string, error) {
-							ctx = context.WithValue(ctx, virtualtools.BGAgentSessionIDKey, sessionID)
-							return capturedExec(ctx, args)
-						}
-						if err := llmAgent.RegisterCustomToolWithTimeout(
-							toolName,
-							tool.Function.Description,
-							params,
-							wrappedExec,
-							0,
-							delegationCategory,
-						); err != nil {
-							logfWithContext(queryLogCtx, "[MULTIAGENT_SCHEDULE_TOOLS] Failed to register %s: %v", toolName, err)
-						} else {
-							logfWithContext(queryLogCtx, "[MULTIAGENT_SCHEDULE_TOOLS] Registered %s", toolName)
-						}
-					}
-				}
-			}
 		}
 
 		// Add custom agent instructions based on agent mode
@@ -5265,7 +5001,6 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			// in a.customTools and was invisible to CLI agents via get_api_spec.
 			allTools, allExecutors, toolCategories := createCustomTools(isWorkflowPhase, currentUserID, sessionID) // session-aware
 
-			// In plan delegation mode (multi-agent), also include human tools (human_feedback)
 			// Register each custom tool with the agent
 			// This updates the custom-tool registry and invalidates affected API specifications.
 			// Note: Workspace tools are already registered above, skip them in allTools
@@ -5279,14 +5014,6 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					case "workspace_tools", virtualtools.GetWorkspaceAdvancedToolCategory(), virtualtools.GetWorkspaceBrowserToolCategory():
 						continue
 					}
-					// Multi-agent chat registers these tools earlier with session-aware
-					// wrappers. Re-registering the raw createCustomTools executors here
-					// replaces async delegate/run behavior with blocking fallback behavior.
-					if !isWorkflowPhase && isPreRegisteredMultiAgentTool(toolName) {
-						log.Printf("[CUSTOM TOOLS] Skipping pre-registered multi-agent tool: %s", toolName)
-						continue
-					}
-
 					if executor, exists := allExecutors[toolName]; exists {
 						// Convert executor to the expected function signature
 						if execFunc, ok := executor.(func(ctx context.Context, args map[string]interface{}) (string, error)); ok {
@@ -5365,7 +5092,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			}
 
 			isToolBackedChat := !isWorkflowPhase
-			isChiefOfStaffChat := isToolBackedChat && resolvedProfile == nil
+			isAgentWorksChat := isToolBackedChat && resolvedProfile == nil
 			if isToolBackedChat {
 				if err := api.registerMultiAgentLLMTools(llmAgent, func(toolName string) bool {
 					return profileDisablesVirtualTool(resolvedProfile, toolName)
@@ -5414,9 +5141,9 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				}
 				logfWithContext(queryLogCtx, "[SECRET TOOLS] Registered multi-agent secret tools (list_secrets, set_user_secret, delete_user_secret; global names read-only)")
 			}
-			if isChiefOfStaffChat {
-				// Chief-of-Staff administration tools intentionally stay out of
-				// product-owned agent profiles.
+			if isAgentWorksChat {
+				// Generic AgentWorks chat can create workflows and inspect live
+				// workflow activity. Product-owned agents opt into their own tools.
 				if err := api.registerWorkflowCreatorTool(llmAgent); err != nil {
 					logfWithContext(queryLogCtx, "[WORKFLOW CREATOR] Failed to register create_workflow tool: %v", err)
 					sendError(fmt.Sprintf("Failed to register create_workflow tool: %v", err), true)
@@ -5431,12 +5158,6 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				}
 				logfWithContext(queryLogCtx, "[ACTIVITY STATUS] Registered get_activity_status tool")
 
-				if err := api.registerMultiAgentNotificationTool(llmAgent, currentUserID); err != nil {
-					logfWithContext(queryLogCtx, "[NOTIFICATION TOOLS] Failed to register Chief of Staff notification tool: %v", err)
-					sendError(fmt.Sprintf("Failed to register Chief of Staff notification tool: %v", err), true)
-					return
-				}
-				logfWithContext(queryLogCtx, "[NOTIFICATION TOOLS] Registered update_chief_of_staff_notifications")
 			}
 
 			// Read session state early for guidance injection.
@@ -5456,17 +5177,11 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 
 			shellRoot := fsutil.WorkspaceShellRoot()
 
-			// 1. OPERATING MODE — the agent's core behavior (delegate everything vs work directly).
+			// 1. OPERATING MODE — the agent's core direct-chat behavior.
 			//    This MUST come first so it takes precedence over reference material.
 			//
-			// A global-scoped profile (Chief of Staff) deliberately takes the
-			// dynamic branch below, not its own resolvedProfile.Prompt. That
-			// prompt only exists to satisfy agentprofiles.Validate(); the real
-			// prompt is GetMultiAgentDelegationInstructionsWithUser, which needs
-			// per-request params (chatsFolder, spawn capabilities, delegation-tier
-			// config, the full reference surface) a static product.yaml template
-			// cannot express. A project-scoped profile like Video Studio is
-			// unaffected -- it still gets its own rendered prompt exactly as before.
+			// Product profiles use their own prompt. Generic AgentWorks chat uses
+			// a small direct-chat prompt with the per-user output path.
 			if resolvedProfile != nil && !isGlobalScopedProfile(resolvedProfile) {
 				if err := llmAgent.ResetInstructions(resolvedProfile.Prompt); err != nil {
 					sendError(fmt.Sprintf("Failed to apply agent profile prompt: %v", err), true)
@@ -5474,20 +5189,10 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				}
 				logfWithContext(queryLogCtx, "[AGENT PROFILE] Applied %s@%d system prompt", resolvedProfile.Definition.ID, resolvedProfile.Definition.Version)
 			} else if !isWorkflowPhase {
-				_ = llmAgent.AddInstructions(virtualtools.GetMultiAgentDelegationInstructionsWithUser(perUserChatsFolder, currentUserID))
-				logfWithContext(queryLogCtx, "[DELEGATION] Added multi-agent delegation instructions to system prompt")
-				if section := virtualtools.BuildSpawnCapabilitiesSection(buildCapabilitiesContext(req)); section != "" {
-					_ = llmAgent.AddInstructions(section)
-				}
-				if delegationTierCfg := resolveDelegationTierConfig(req.DelegationTierConfig); delegationTierCfg != nil {
-					if tierSection := virtualtools.BuildCustomTierPromptSection(delegationTierCfg); tierSection != "" {
-						_ = llmAgent.AddInstructions(tierSection)
-					}
-				}
-				// Attach the full reference surface for multi-agent chat --
-				// but only for a truly profile-less chat. A resolved profile
-				// that reaches this branch (a global-scoped one, e.g. Chief
-				// of Staff) declares its own reference material individually
+				_ = llmAgent.AddInstructions(virtualtools.GetAgentWorksChatInstructionsWithUser(perUserChatsFolder, currentUserID))
+				logfWithContext(queryLogCtx, "[CHAT] Added direct-chat instructions to system prompt")
+				// Attach the full reference surface for generic multi-agent chat.
+				// A resolved global profile declares its own material individually
 				// in profile.skills[] (registerAgentProfileTools' sibling,
 				// req.SelectedSkills assignment in resolveAgentProfileForQuery)
 				// instead of the mode-gated bundle; attaching both would
@@ -5598,16 +5303,6 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			logPromptAssembly(promptCtx, includedSections, skippedSections)
 			if len(resolvedGrants.PromptSections) > 0 {
 				log.Printf("[GRANTS] Appended %d prompt section(s) for active grants: %v", len(resolvedGrants.PromptSections), resolvedGrants.AppliedNames)
-			}
-
-			// Registrations update execution routing immediately. Restore the
-			// delegation wrappers once after the final registration.
-			if refreshMultiAgentDelegationTools != nil {
-				if err := refreshMultiAgentDelegationTools(); err != nil {
-					log.Printf("[DELEGATION TOOLS] Warning: Failed to restore async delegation wrappers after registry rebuild: %v", err)
-				} else {
-					log.Printf("[DELEGATION TOOLS] Restored async delegation wrappers after registry rebuild")
-				}
 			}
 
 			log.Printf("[SYSTEM_PROMPT] Final assembled prompt length=%d chars, hasGuidance=%v", len(llmAgent.AssemblyInstructions()), req.LLMGuidance != "" || llmGuidance != "")
@@ -5739,9 +5434,15 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				// list is a strict superset of all three, and the unified
 				// agent decides phase from workspace state (plan exists?
 				// runs exist? report work requested?).
-				// Legacy aliases: 'builder' / 'optimizer' / 'reporting' /
-				// 'eval' / 'output' all map to 'workshop';
-				// 'ask' / 'debugger' / 'runner' fold into 'run'.
+				// Two modes exist: "run" (products and bot-routed workflow
+				// execution) and "workshop" (everything else). Rather than
+				// enumerating retired names — builder, optimizer, reporting,
+				// eval, output, ask, debugger, runner — anything that is not
+				// "run" collapses to "workshop". An old client or persisted
+				// session cannot introduce a value this misses, which is what
+				// enumeration risked: an unrecognised mode reaches
+				// MaterializeReferenceSkill and yields NO reference surface
+				// at all.
 				if req.ExecutionOptions != nil && req.ExecutionOptions.WorkshopMode != "" {
 					mode := req.ExecutionOptions.WorkshopMode
 					// Two modes exist: "run" and "workshop". Anything that is
@@ -6488,6 +6189,15 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 		// but the on-disk record needs the full conversation; persistedHistory
 		// below merges the pre-change snapshot with the new exchange.
 		finalHistory := llmAgent.GetHistory()
+		if !modeChangedThisTurn && len(historyForAgent) > 0 && !replayHistoryToAgent {
+			// Native coding-agent continuation owns model context, so the prior UI
+			// transcript was intentionally not replayed into this wrapper. Merge it
+			// back only for durable/UI history; otherwise every follow-up replaces
+			// the conversation JSON with the latest turn even though the provider
+			// itself correctly continued the same conversation.
+			finalHistory = mergeNativeContinuationChatHistory(historyForAgent, finalHistory)
+			log.Printf("[CONVERSATION DEBUG] Native continuation merge: retained %d prior messages, final history now %d messages for session %s", len(historyForAgent), len(finalHistory), sessionID)
+		}
 		api.conversationMux.Lock()
 		api.conversationHistory[sessionID] = finalHistory
 		api.conversationMux.Unlock()
@@ -6846,7 +6556,7 @@ func isScheduledSessionIdentity(sessionID, triggeredBy string) bool {
 		strings.Contains(id, "-schedule-")
 }
 
-func chiefOfStaffSessionBlocksNewChat(session *ActiveSessionInfo, userID string) bool {
+func agentWorksSessionBlocksNewChat(session *ActiveSessionInfo, userID string) bool {
 	if session == nil || session.UserID != userID || normalizeAgentMode(session.AgentMode) != "multi-agent" {
 		return false
 	}
@@ -6859,10 +6569,10 @@ func chiefOfStaffSessionBlocksNewChat(session *ActiveSessionInfo, userID string)
 		session.NeedsUserInput
 }
 
-// claimChiefOfStaffChatSession atomically checks and reserves the user's one
-// interactive Chief of Staff chat lane. The same session may continue sending
+// claimAgentWorksChatSession atomically checks and reserves the user's one
+// interactive AgentWorks root-chat lane. The same session may continue sending
 // follow-up messages; a different session is rejected while the lane is live.
-func (api *StreamingAPI) claimChiefOfStaffChatSession(sessionID, userID, query, triggeredBy string) *ActiveSessionInfo {
+func (api *StreamingAPI) claimAgentWorksChatSession(sessionID, userID, query, triggeredBy string) *ActiveSessionInfo {
 	if api.eventStore != nil {
 		api.eventStore.SetSessionOwner(sessionID, userID)
 	}
@@ -6874,7 +6584,7 @@ func (api *StreamingAPI) claimChiefOfStaffChatSession(sessionID, userID, query, 
 		if existingID == sessionID {
 			continue
 		}
-		if chiefOfStaffSessionBlocksNewChat(existing, userID) {
+		if agentWorksSessionBlocksNewChat(existing, userID) {
 			return cloneActiveSessionInfo(existing)
 		}
 	}
@@ -9512,7 +9222,7 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 		CreateSchedule: func(ctx context.Context, workspacePath, name, cronExpr, timezone string, groupNames []string, routeSelections map[string]string, mode string, messages []string, directMessagesReason string, workshopMode string, resumePrevious *bool, pulseReviewOnly bool) (string, error) {
 			mode = scheduleModeOrDefault(mode)
 			if mode == "multi-agent" {
-				return "", fmt.Errorf("workflow schedules must use workshop mode; create multi-agent schedules in the multi-agent schedule store")
+				return "", fmt.Errorf("workflow schedules must use workflow mode")
 			}
 			if err := ValidateCronExpression(cronExpr); err != nil {
 				return "", fmt.Errorf("invalid cron expression %q: %w", cronExpr, err)
@@ -9680,7 +9390,7 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 			if mode != "" || sched.Mode == "" || sched.Mode == "workflow" {
 				normalizedMode := scheduleModeOrDefault(mode)
 				if normalizedMode == "multi-agent" {
-					return "", fmt.Errorf("workflow schedules must use workshop mode; create multi-agent schedules in the multi-agent schedule store")
+					return "", fmt.Errorf("workflow schedules must use workflow mode")
 				}
 				sched.Mode = normalizedMode
 			}

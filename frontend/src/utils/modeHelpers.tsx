@@ -28,7 +28,7 @@ export const getModeIcon = (category: ModeCategory, className?: string) => {
 export const getModeName = (category: ModeCategory) => {
   switch (category) {
     case 'multi-agent':
-      return 'Chief of Staff'
+      return 'Chat'
     case 'workflow':
       return 'Automation Mode'
     default:

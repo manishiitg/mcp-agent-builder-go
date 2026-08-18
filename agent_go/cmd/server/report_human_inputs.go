@@ -707,13 +707,13 @@ func createReportHumanInputTools() ([]llmtypes.Tool, map[string]interface{}, map
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
 			Name:        "create_human_input_request",
-			Description: "Create or refresh a structured non-blocking question for the user. Pulse, Strategy Auditor, and Goal Advisor store workflow questions in that workflow's db/db.sqlite; Chief of Staff may use workspace_path=\"pulse\" for an org-wide question, stored in pulse/db/db.sqlite, or a Workflow/<name> path for a workflow-specific question. The user answers inside Runloop's Pulse/report panel; published static reports should only show the question and tell the user to open Runloop to answer. For an in-strategy business proposal use source=\"strategy_auditor\" and a stable input_id prefixed with \"strategy-proposal-\". For a materially different plan proposal use source=\"goal_advisor\" and a stable input_id prefixed with \"plan-proposal-\". Use approve/reject/defer options and put the exact proposed changes, rationale, expected impact, risk, and evidence in context so a later Pulse pass can apply an approved proposal with normal plan tools.",
+			Description: "Create or refresh a structured non-blocking workflow question for the user. Pulse, Strategy Auditor, and Goal Advisor store questions in that workflow's db/db.sqlite. The user answers inside the Pulse/report panel; published static reports should only show the question and tell the user to open AgentWorks to answer. For an in-strategy business proposal use source=\"strategy_auditor\" and a stable input_id prefixed with \"strategy-proposal-\". For a materially different plan proposal use source=\"goal_advisor\" and a stable input_id prefixed with \"plan-proposal-\". Use approve/reject/defer options and put the exact proposed changes, rationale, expected impact, risk, and evidence in context so a later Pulse pass can apply an approved proposal with normal plan tools.",
 			Parameters: llmtypes.NewParameters(map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
-					"workspace_path": map[string]interface{}{"type": "string", "description": "Workflow-relative path, for example Workflow/social-media. Chief of Staff may use pulse for an org-wide question. Required; requests are stored in that scope's db/db.sqlite."},
+					"workspace_path": map[string]interface{}{"type": "string", "description": "Workflow-relative path, for example Workflow/social-media. Required; requests are stored in that workflow's db/db.sqlite."},
 					"input_id":       map[string]interface{}{"type": "string", "description": "Optional stable id. Reuse this for the same still-open question so Pulse refreshes it instead of duplicating it."},
-					"source":         map[string]interface{}{"type": "string", "enum": []string{"pulse", "strategy_auditor", "goal_advisor", "chief_of_staff"}, "description": "Who is asking. Defaults to pulse."},
+					"source":         map[string]interface{}{"type": "string", "enum": []string{"pulse", "strategy_auditor", "goal_advisor"}, "description": "Who is asking. Defaults to pulse."},
 					"priority":       map[string]interface{}{"type": "string", "enum": []string{"low", "medium", "high"}, "description": "How important the answer is. Defaults to medium."},
 					"question":       map[string]interface{}{"type": "string", "description": "The exact user-facing question in ONE short plain sentence -- the kind a busy operator reads in three seconds, not an analyst's framing of the problem."},
 					"context":        map[string]interface{}{"type": "string", "description": "Short explanation of why this matters and what will happen next, for a non-technical operator, not a technical report. One to three short sentences PER SECTION, plain language, no jargon, no walked-through derivation -- state the single number or fact that matters and the conclusion, not how you got there; the full analysis belongs in the reviewer's findings file, not this question. For plan-change proposals, use newline-separated labeled sections exactly like: Proposal:\n...\nExact intended edits if approved:\n(1) ...\n(2) ...\nRationale:\n...\nExpected impact:\n...\nRisk:\n... -- each section still capped at one to three short sentences. Keep evidence paths in the separate evidence field, never inline citations or file paths in context."},
@@ -746,7 +746,7 @@ func createReportHumanInputTools() ([]llmtypes.Tool, map[string]interface{}, map
 			Parameters: llmtypes.NewParameters(map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
-					"workspace_path": map[string]interface{}{"type": "string", "description": "Exact workflow-relative path, for example Workflow/rtslatency, or pulse for an org-wide Chief of Staff decision."},
+					"workspace_path": map[string]interface{}{"type": "string", "description": "Exact workflow-relative path, for example Workflow/rtslatency."},
 					"input_id":       map[string]interface{}{"type": "string", "description": "Exact decision id supplied by the scheduler, Pulse state, or chat context."},
 				},
 				"required": []string{"workspace_path", "input_id"},
@@ -757,7 +757,7 @@ func createReportHumanInputTools() ([]llmtypes.Tool, map[string]interface{}, map
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
 			Name:        "mark_human_input_consumed",
-			Description: "Mark an answered report human input as consumed after Pulse/Goal Advisor/Chief of Staff has used the answer and recorded the outcome. This keeps history but removes it from the pending-for-agent queue.",
+			Description: "Mark an answered workflow decision as consumed after Pulse or Goal Advisor has used the answer and recorded the outcome. This keeps history but removes it from the pending-for-agent queue.",
 			Parameters: llmtypes.NewParameters(map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -774,11 +774,11 @@ func createReportHumanInputTools() ([]llmtypes.Tool, map[string]interface{}, map
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
 			Name:        "answer_human_input_request",
-			Description: "Record the current user's explicit answer to an existing pending Pulse/report decision. Call this only after the user clearly selects an option or gives a final free-text answer; never infer an answer from discussion. This changes the request to answered so a later Pulse, Goal Advisor, or Chief of Staff run can apply it. It does not apply the decision or mark it consumed.",
+			Description: "Record the current user's explicit answer to an existing pending Pulse/report decision. Call this only after the user clearly selects an option or gives a final free-text answer; never infer an answer from discussion. This changes the request to answered so a later Pulse or Goal Advisor run can apply it. It does not apply the decision or mark it consumed.",
 			Parameters: llmtypes.NewParameters(map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
-					"workspace_path":     map[string]interface{}{"type": "string", "description": "Workflow-relative path, for example Workflow/social-media, or pulse for an org-wide Chief of Staff decision."},
+					"workspace_path":     map[string]interface{}{"type": "string", "description": "Workflow-relative path, for example Workflow/social-media."},
 					"input_id":           map[string]interface{}{"type": "string", "description": "Exact decision id supplied in the chat context."},
 					"selected_option_id": map[string]interface{}{"type": "string", "description": "Exact option id supplied in the chat context when the user selects an option."},
 					"note":               map[string]interface{}{"type": "string", "description": "The user's final free-text answer or optional note. Free text is accepted only when the request allows it."},
@@ -1102,213 +1102,6 @@ func formatAnsweredReportHumanInputsForAgent(ctx context.Context, workspacePath 
 	return strings.TrimSpace(b.String())
 }
 
-// formatAnsweredChiefOfStaffInputsForAgent gathers only Chief of Staff answers
-// across the org-level pulse scope and discovered workflow scopes. Unlike a
-// workflow Pulse pass, Chief of Staff has no single workspace DB, so each line
-// carries the workspace_path required to record the outcome in the same scope.
-func formatChiefOfStaffInputsForAgent(inputs []ReportHumanInput) string {
-	if len(inputs) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	b.WriteString("Answered Chief of Staff questions waiting for this run:\n")
-	for _, input := range inputs {
-		context := strings.TrimSpace(input.Context)
-		if context != "" {
-			context = " context=" + strconv.Quote(context)
-		}
-		b.WriteString(fmt.Sprintf("- workspace_path=%s input_id=%s priority=%s question=%q answer=%q answered_by=%q actor_kind=%s via=%s answered_at=%s evidence=%q%s\n",
-			input.WorkspacePath, input.ID, input.Priority, input.Question, reportHumanInputAnswerForAgent(input), input.AnsweredBy, input.AnsweredByKind, input.AnsweredVia, input.AnsweredAt, input.Evidence, context))
-	}
-	b.WriteString("Use each answer when it is still relevant. Do not mark an answer consumed merely because you read it. After the requested action or a concrete no-action/deferred/stale decision is complete, call mark_human_input_consumed with the same workspace_path and input_id plus a truthful outcome_summary. If the action cannot be completed safely in this run, leave the answer unconsumed so a later Chief of Staff or workflow Pulse pass can handle it.\n")
-	return strings.TrimSpace(b.String())
-}
-
-func claimAnsweredChiefOfStaffInputsForAgent(ctx context.Context, workspacePaths []string, claimToken string) string {
-	claimToken = strings.TrimSpace(claimToken)
-	if claimToken == "" {
-		return ""
-	}
-	seen := make(map[string]struct{}, len(workspacePaths))
-	claimed := make([]ReportHumanInput, 0)
-	for _, workspacePath := range workspacePaths {
-		workspacePath = strings.TrimSpace(workspacePath)
-		if workspacePath == "" {
-			continue
-		}
-		if _, exists := seen[workspacePath]; exists {
-			continue
-		}
-		seen[workspacePath] = struct{}{}
-		_ = releaseExpiredChiefOfStaffInputClaims(ctx, workspacePath)
-		inputs, err := listReportHumanInputs(ctx, workspacePath, "answered", "chief_of_staff")
-		if err != nil {
-			continue
-		}
-		for _, input := range inputs {
-			claimedInput, ok := claimReportHumanInput(ctx, workspacePath, input.ID, claimToken)
-			if ok {
-				claimed = append(claimed, *claimedInput)
-			}
-		}
-	}
-	return formatChiefOfStaffInputsForAgent(claimed)
-}
-
-func claimReportHumanInput(ctx context.Context, workspacePath, inputID, claimToken string) (*ReportHumanInput, bool) {
-	reportHumanInputStoreMu.Lock()
-	defer reportHumanInputStoreMu.Unlock()
-
-	normalized, db, err := openReportHumanInputDB(ctx, workspacePath, false)
-	if err != nil || db == nil {
-		return nil, false
-	}
-	defer db.Close()
-	now := time.Now().UTC()
-	expiresAt := now.Add(6 * time.Hour)
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, false
-	}
-	defer func() { _ = tx.Rollback() }()
-	result, err := tx.ExecContext(ctx, `UPDATE report_human_inputs
-		SET status='claimed', claim_token=?, claimed_at=?, claim_expires_at=?, updated_at=?
-		WHERE id=? AND workspace_path=? AND source='chief_of_staff' AND status='answered'`,
-		claimToken, now.Format(time.RFC3339), expiresAt.Format(time.RFC3339), now.Format(time.RFC3339),
-		strings.TrimSpace(inputID), normalized)
-	if err != nil {
-		return nil, false
-	}
-	affected, _ := result.RowsAffected()
-	if affected != 1 {
-		return nil, false
-	}
-	if err := writeReportHumanInputEvent(ctx, tx, normalized, reportHumanInputEvent{
-		InputID: inputID, EventType: "claimed", Status: "claimed", ActorID: claimToken,
-		ActorKind: "agent", Channel: "chief_of_staff_schedule", SessionID: claimToken,
-		Details: "answer leased for one Chief of Staff run", CreatedAt: now.Format(time.RFC3339),
-	}); err != nil {
-		return nil, false
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, false
-	}
-	input, err := getReportHumanInputByID(ctx, db, normalized, inputID)
-	return input, err == nil && input != nil
-}
-
-func releaseExpiredChiefOfStaffInputClaims(ctx context.Context, workspacePath string) error {
-	reportHumanInputStoreMu.Lock()
-	defer reportHumanInputStoreMu.Unlock()
-	normalized, db, err := openReportHumanInputDB(ctx, workspacePath, false)
-	if err != nil || db == nil {
-		return err
-	}
-	defer db.Close()
-	now := time.Now().UTC().Format(time.RFC3339)
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-	ids, err := reportHumanInputIDs(ctx, tx, `SELECT id FROM report_human_inputs
-		WHERE workspace_path=? AND status='claimed' AND claim_expires_at<>'' AND claim_expires_at<?`, normalized, now)
-	if err != nil {
-		return err
-	}
-	_, err = tx.ExecContext(ctx, `UPDATE report_human_inputs
-		SET status='answered', claim_token='', claimed_at='', claim_expires_at='', updated_at=?
-		WHERE workspace_path=? AND status='claimed' AND claim_expires_at<>'' AND claim_expires_at<?`, now, normalized, now)
-	if err != nil {
-		return err
-	}
-	for _, inputID := range ids {
-		if err := writeReportHumanInputEvent(ctx, tx, normalized, reportHumanInputEvent{
-			InputID: inputID, EventType: "claim_released", Status: "answered", ActorID: "scheduler",
-			ActorKind: "system", Channel: "claim_expiry", Details: "expired claim released", CreatedAt: now,
-		}); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
-}
-
-func releaseChiefOfStaffInputClaims(ctx context.Context, workspacePaths []string, claimToken string) {
-	claimToken = strings.TrimSpace(claimToken)
-	if claimToken == "" {
-		return
-	}
-	seen := make(map[string]struct{}, len(workspacePaths))
-	for _, workspacePath := range workspacePaths {
-		workspacePath = strings.TrimSpace(workspacePath)
-		if workspacePath == "" {
-			continue
-		}
-		if _, exists := seen[workspacePath]; exists {
-			continue
-		}
-		seen[workspacePath] = struct{}{}
-		reportHumanInputStoreMu.Lock()
-		normalized, db, err := openReportHumanInputDB(ctx, workspacePath, false)
-		if err == nil && db != nil {
-			now := time.Now().UTC().Format(time.RFC3339)
-			tx, txErr := db.BeginTx(ctx, nil)
-			if txErr == nil {
-				ids, idsErr := reportHumanInputIDs(ctx, tx, `SELECT id FROM report_human_inputs
-					WHERE workspace_path=? AND status='claimed' AND claim_token=?`, normalized, claimToken)
-				if idsErr != nil {
-					txErr = idsErr
-				} else {
-					_, txErr = tx.ExecContext(ctx, `UPDATE report_human_inputs
-				SET status='answered', claim_token='', claimed_at='', claim_expires_at='', updated_at=?
-				WHERE workspace_path=? AND status='claimed' AND claim_token=?`, now, normalized, claimToken)
-					if txErr == nil {
-						for _, inputID := range ids {
-							txErr = writeReportHumanInputEvent(ctx, tx, normalized, reportHumanInputEvent{
-								InputID: inputID, EventType: "claim_released", Status: "answered", ActorID: claimToken,
-								ActorKind: "agent", Channel: "chief_of_staff_schedule", SessionID: claimToken,
-								Details: "unconsumed answer released for a later run", CreatedAt: now,
-							})
-							if txErr != nil {
-								break
-							}
-						}
-					}
-				}
-				if txErr == nil {
-					txErr = tx.Commit()
-				}
-				if txErr != nil {
-					_ = tx.Rollback()
-				}
-			}
-			_ = db.Close()
-		}
-		reportHumanInputStoreMu.Unlock()
-	}
-}
-
-type reportHumanInputRowsQueryer interface {
-	QueryContext(context.Context, string, ...interface{}) (*sql.Rows, error)
-}
-
-func reportHumanInputIDs(ctx context.Context, queryer reportHumanInputRowsQueryer, query string, args ...interface{}) ([]string, error) {
-	rows, err := queryer.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	return ids, rows.Err()
-}
-
 func reportHumanInputAnswerForAgent(input ReportHumanInput) string {
 	answer := input.Note
 	if input.SelectedOptionID == "" {
@@ -1330,8 +1123,6 @@ func normalizeReportHumanInputSource(source string) string {
 		return "strategy_auditor"
 	case "goal_advisor", "goal-advisor", "goal advisor":
 		return "goal_advisor"
-	case "chief_of_staff", "chief-of-staff", "chief", "org_pulse", "org-pulse":
-		return "chief_of_staff"
 	default:
 		return "pulse"
 	}

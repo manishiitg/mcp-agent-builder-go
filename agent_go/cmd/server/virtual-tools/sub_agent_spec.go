@@ -28,7 +28,7 @@ type SubAgentSpec struct {
 	// inherit all of the parent's servers.
 	Servers []string
 
-	// Skills is an additive explicit skill list. Chief of Staff sub-agents
+	// Skills is an additive explicit skill list. AgentWorks sub-agents
 	// inherit the skills attached to the parent agent; names here attach extra
 	// skills that are not already present.
 	Skills []string

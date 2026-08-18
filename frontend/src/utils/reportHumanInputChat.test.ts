@@ -59,36 +59,6 @@ describe('Pulse decision chat routing', () => {
     )?.tabId).toBe('chat')
   })
 
-  it('never routes a Chief-of-Staff Pulse question to a different product\'s tab', () => {
-    // Regression test: isInteractiveChiefOfStaffTab used to check only
-    // mode/isOrganizationAssistant/isViewOnly/isScheduledRun/isBotRun, never
-    // agentProfileId -- so a normal, fully interactive Video Studio project
-    // chat (also mode: 'multi-agent') could have been selected as the target
-    // for a Chief-of-Staff Pulse question. Fixed by consolidating onto the
-    // shared isInteractiveChiefOfStaffTab (utils/chiefOfStaff.ts), which does
-    // check profile identity.
-    const videoStudioTab = tab('video-studio', {
-      metadata: { mode: 'multi-agent', agentProfileId: 'video-studio', agentProfileWorkspace: 'Chats/Video Studio/projects/launch' },
-    })
-    const chiefOfStaffTab = tab('chief-of-staff', { metadata: { mode: 'multi-agent' } })
-
-    expect(selectReportDiscussionTab(
-      { videoStudioTab, chiefOfStaffTab },
-      { mode: 'multi-agent' },
-    )?.tabId).toBe('chief-of-staff')
-  })
-
-  it('matches the new explicit chief-of-staff profile id the same as the legacy no-profile shape', () => {
-    const explicit = tab('explicit', {
-      metadata: { mode: 'multi-agent', agentProfileId: 'chief-of-staff' },
-    })
-
-    expect(selectReportDiscussionTab(
-      { explicit },
-      { mode: 'multi-agent' },
-    )?.tabId).toBe('explicit')
-  })
-
   it('prefers a running interactive chat when more than one retained tab exists', () => {
     const idle = tab('idle', { createdAt: 20 })
     const running = tab('running', { isStreaming: true, createdAt: 10 })

@@ -19,7 +19,7 @@ import (
 func TestResolveAgentProfileForQueryResolvesGlobalScopeWithoutFolderOrTitle(t *testing.T) {
 	registry := agentprofiles.NewRegistry()
 	profile := agentprofiles.Profile{
-		ID: "chief-of-staff", Name: "Chief of Staff", Version: 1, BuiltIn: true,
+		ID: "global-assistant", Name: "Global Assistant", Version: 1, BuiltIn: true,
 		SystemPromptTemplate: "placeholder",
 		Scope:                agentprofiles.ProfileScopeGlobal,
 		Runtime:              agentprofiles.RuntimePolicy{Transport: "auto"},
@@ -30,7 +30,7 @@ func TestResolveAgentProfileForQueryResolvesGlobalScopeWithoutFolderOrTitle(t *t
 	api := &StreamingAPI{agentProfiles: registry}
 	// No SelectedFolder, no AgentProfileContext.ProjectTitle -- exactly what a
 	// global-scoped profile must resolve without, unlike a project-scoped one.
-	req := QueryRequest{AgentMode: "multi-agent", AgentProfileID: "chief-of-staff"}
+	req := QueryRequest{AgentMode: "multi-agent", AgentProfileID: "global-assistant"}
 	resolved, err := api.resolveAgentProfileForQuery(context.Background(), &req, "user-1", "session-1")
 	if err != nil {
 		t.Fatalf("global-scoped profile should resolve without selected_folder/project_title, got: %v", err)
@@ -41,7 +41,7 @@ func TestResolveAgentProfileForQueryResolvesGlobalScopeWithoutFolderOrTitle(t *t
 	if req.SelectedFolder != "Chats" {
 		t.Fatalf("expected the Chats alias to be defaulted, got %q", req.SelectedFolder)
 	}
-	if req.AgentProfileContext.ProjectTitle != "Chief of Staff" {
+	if req.AgentProfileContext.ProjectTitle != "Global Assistant" {
 		t.Fatalf("expected project_title to default to the profile Name, got %q", req.AgentProfileContext.ProjectTitle)
 	}
 	if got := agentProfileRuntimeWorkspace("user-1", req.SelectedFolder); got != "_users/user-1/Chats" {
@@ -49,7 +49,7 @@ func TestResolveAgentProfileForQueryResolvesGlobalScopeWithoutFolderOrTitle(t *t
 	}
 }
 
-// A global-scoped profile (Chief of Staff) is meant to feel like a
+// A global-scoped profile is meant to feel like a
 // profile-less multi-agent chat, where the user's own chat-level model
 // selection (any published LLM) already wins -- unlike a project-scoped
 // product (Video Studio), whose pinned runtime binding is deliberately
@@ -58,7 +58,7 @@ func TestResolveAgentProfileForQueryResolvesGlobalScopeWithoutFolderOrTitle(t *t
 func TestResolveAgentProfileForQueryGlobalScopeDefersToRequestedModel(t *testing.T) {
 	registry := agentprofiles.NewRegistry()
 	profile := agentprofiles.Profile{
-		ID: "chief-of-staff", Name: "Chief of Staff", Version: 1, BuiltIn: true,
+		ID: "global-assistant", Name: "Global Assistant", Version: 1, BuiltIn: true,
 		SystemPromptTemplate: "placeholder",
 		Scope:                agentprofiles.ProfileScopeGlobal,
 		Runtime:              agentprofiles.RuntimePolicy{Transport: "auto", Provider: "claude-code", ModelID: "claude-sonnet-5"},
@@ -68,7 +68,7 @@ func TestResolveAgentProfileForQueryGlobalScopeDefersToRequestedModel(t *testing
 	}
 	api := &StreamingAPI{agentProfiles: registry}
 	req := QueryRequest{
-		AgentMode: "multi-agent", AgentProfileID: "chief-of-staff",
+		AgentMode: "multi-agent", AgentProfileID: "global-assistant",
 		Provider: "codex-cli", ModelID: "gpt-5.6-terra",
 	}
 	if _, err := api.resolveAgentProfileForQuery(context.Background(), &req, "user-1", "session-1"); err != nil {
@@ -82,7 +82,7 @@ func TestResolveAgentProfileForQueryGlobalScopeDefersToRequestedModel(t *testing
 func TestResolveAgentProfileForQueryGlobalScopeFallsBackToPinnedModelWhenRequestEmpty(t *testing.T) {
 	registry := agentprofiles.NewRegistry()
 	profile := agentprofiles.Profile{
-		ID: "chief-of-staff", Name: "Chief of Staff", Version: 1, BuiltIn: true,
+		ID: "global-assistant", Name: "Global Assistant", Version: 1, BuiltIn: true,
 		SystemPromptTemplate: "placeholder",
 		Scope:                agentprofiles.ProfileScopeGlobal,
 		Runtime:              agentprofiles.RuntimePolicy{Transport: "auto", Provider: "claude-code", ModelID: "claude-sonnet-5"},
@@ -91,7 +91,7 @@ func TestResolveAgentProfileForQueryGlobalScopeFallsBackToPinnedModelWhenRequest
 		t.Fatal(err)
 	}
 	api := &StreamingAPI{agentProfiles: registry}
-	req := QueryRequest{AgentMode: "multi-agent", AgentProfileID: "chief-of-staff"}
+	req := QueryRequest{AgentMode: "multi-agent", AgentProfileID: "global-assistant"}
 	if _, err := api.resolveAgentProfileForQuery(context.Background(), &req, "user-1", "session-1"); err != nil {
 		t.Fatalf("resolveAgentProfileForQuery() error = %v", err)
 	}

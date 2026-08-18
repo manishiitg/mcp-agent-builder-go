@@ -206,7 +206,6 @@ function WorkflowLLMConfigModalContent({ onClose }: { onClose: () => void }) {
           builder_llm: undefined,
           maintenance_llm: undefined,
           pulse_llm: undefined,
-          chief_of_staff_llm: undefined,
           tiered_config: undefined,
         }
       } else {

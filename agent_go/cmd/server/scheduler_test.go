@@ -164,21 +164,11 @@ func TestUpdateRuntimeStateSerializesMutations(t *testing.T) {
 	}
 }
 
-func TestRuntimeStateIsScopedAcrossUsersAndWorkflows(t *testing.T) {
+func TestRuntimeStateIsScopedAcrossWorkflows(t *testing.T) {
 	svc := NewSchedulerService(nil)
-	userOneKey := multiAgentScheduleRuntimeKey("user-1", "builtin-org-pulse")
-	userTwoKey := multiAgentScheduleRuntimeKey("user-2", "builtin-org-pulse")
 	workflowOneKey := workflowScheduleRuntimeKey("Workflow/one", "copied-schedule")
 	workflowTwoKey := workflowScheduleRuntimeKey("Workflow/two", "copied-schedule")
 
-	svc.updateRuntimeState(userOneKey, func(state *ScheduleRuntimeState) {
-		state.LastStatus = "running"
-		state.LastSessionID = "user-1-session"
-	})
-	svc.updateRuntimeState(userTwoKey, func(state *ScheduleRuntimeState) {
-		state.LastStatus = "success"
-		state.LastSessionID = "user-2-session"
-	})
 	svc.updateRuntimeState(workflowOneKey, func(state *ScheduleRuntimeState) {
 		state.LastStatus = "running"
 	})
@@ -186,20 +176,11 @@ func TestRuntimeStateIsScopedAcrossUsersAndWorkflows(t *testing.T) {
 		state.LastStatus = "stopped"
 	})
 
-	if got := svc.getRuntimeStateByKey(userOneKey); got.LastSessionID != "user-1-session" || got.LastStatus != "running" {
-		t.Fatalf("user 1 state = %+v", got)
-	}
-	if got := svc.getRuntimeStateByKey(userTwoKey); got.LastSessionID != "user-2-session" || got.LastStatus != "success" {
-		t.Fatalf("user 2 state = %+v", got)
-	}
 	if got := svc.getRuntimeStateByKey(workflowOneKey); got.LastStatus != "running" {
 		t.Fatalf("workflow one state = %+v", got)
 	}
 	if got := svc.getRuntimeStateByKey(workflowTwoKey); got.LastStatus != "stopped" {
 		t.Fatalf("workflow two state = %+v", got)
-	}
-	if got := svc.GetRuntimeState("builtin-org-pulse"); got.LastStatus != "" {
-		t.Fatalf("ambiguous unscoped state = %+v, want empty", got)
 	}
 }
 
@@ -208,10 +189,6 @@ func TestScheduleStateLockKeyFromRuntimeKey(t *testing.T) {
 	wantWorkflow := strings.Join([]string{"workflow", "/tmp/Workflow/demo"}, scheduleScopeSeparator)
 	if got := scheduleStateLockKeyFromRuntimeKey(workflowKey); got != wantWorkflow {
 		t.Fatalf("workflow lock key = %q, want %q", got, wantWorkflow)
-	}
-	multiAgentKey := multiAgentScheduleRuntimeKey("user-1", "daily")
-	if got := scheduleStateLockKeyFromRuntimeKey(multiAgentKey); got != multiAgentKey {
-		t.Fatalf("multi-agent lock key = %q, want %q", got, multiAgentKey)
 	}
 	pulseKey := workflowScheduleRuntimeKey("/tmp/Workflow/demo", manualWorkflowPulseScheduleID)
 	wantPulse := strings.Join([]string{"workflow-pulse", "/tmp/Workflow/demo"}, scheduleScopeSeparator)
@@ -370,56 +347,8 @@ func TestStopBetweenReservationAndDurableClaimPreventsExecution(t *testing.T) {
 	}
 }
 
-// Org Pulse itself is gone (DefaultBuiltinSchedules returns empty -- see
-// builtin_schedules.go), so triggering its ID without a persisted schedule
-// entry no longer resolves to a builtin at all -- it is simply not found.
-func TestTriggerMultiAgentNowWithoutScheduleFileReportsNotFound(t *testing.T) {
-	workspace := httptest.NewServer(&mockWorkspaceAPI{files: map[string]string{}})
-	defer workspace.Close()
-	t.Setenv("WORKSPACE_API_URL", workspace.URL)
-
-	svc := NewSchedulerService(nil)
-	userID := "user-without-schedule-file"
-
-	_, err := svc.TriggerMultiAgentNow(userID, builtinOrgPulseID)
-	if err == nil || !strings.Contains(err.Error(), "not found") {
-		t.Fatalf("TriggerMultiAgentNow() error = %v, want not-found now that org pulse has no builtin to resolve", err)
-	}
-}
-
-func TestGetRuntimeStateForUserReconcilesStaleRun(t *testing.T) {
-	workspace := httptest.NewServer(&mockWorkspaceAPI{files: map[string]string{}})
-	defer workspace.Close()
-	t.Setenv("WORKSPACE_API_URL", workspace.URL)
-
-	userID := "user-1"
-	scheduleID := "daily"
-	if err := AppendMultiAgentScheduleRun(context.Background(), userID, &ScheduleRunEntry{
-		ID:         "stale-run",
-		ScheduleID: scheduleID,
-		SessionID:  "missing-session",
-		Status:     "running",
-		StartedAt:  time.Now().Add(-time.Minute).UTC(),
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	svc := NewSchedulerService(&StreamingAPI{})
-	state := svc.GetRuntimeStateForUser(userID, scheduleID)
-	if state.LastStatus != "error" || !strings.Contains(state.LastError, "session not active") {
-		t.Fatalf("reconciled state = %+v, want stale run finalized as error", state)
-	}
-	runs, err := ReadMultiAgentScheduleRuns(context.Background(), userID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(runs) != 1 || runs[0].Status != "error" || runs[0].CompletedAt == nil {
-		t.Fatalf("persisted runs = %+v, want finalized stale run", runs)
-	}
-}
-
 func TestScheduleConfigFingerprintChangesWithCapabilities(t *testing.T) {
-	sctx := buildMultiAgentScheduleContext("user-1", WorkflowSchedule{ID: "daily", Enabled: true, CronExpression: "0 9 * * *", Timezone: "UTC"}, WorkflowCapabilities{})
+	sctx := &ScheduleContext{WorkspacePath: "Workflow/demo", Schedule: WorkflowSchedule{ID: "daily", Enabled: true, CronExpression: "0 9 * * *", Timezone: "UTC"}, Capabilities: WorkflowCapabilities{}}
 	first := scheduleConfigFingerprint(sctx)
 	second := scheduleConfigFingerprint(sctx)
 	if first == "" || first != second {
@@ -452,16 +381,16 @@ func TestLoadScheduleReplacesCalendarRegistrations(t *testing.T) {
 	when := time.Now().UTC().Add(24 * time.Hour)
 	item := CalendarScheduleItem{ID: "item-1", Date: when.Format("2006-01-02"), Time: when.Format("15:04"), Messages: []string{"old"}}
 	sched := WorkflowSchedule{ID: "calendar", Name: "Calendar", Enabled: true, ScheduleType: "calendar", Timezone: "UTC", CalendarItems: []CalendarScheduleItem{item}}
-	if err := svc.LoadSchedule(buildMultiAgentScheduleContext("user-1", sched, WorkflowCapabilities{})); err != nil {
+	if err := svc.LoadSchedule(&ScheduleContext{WorkspacePath: "Workflow/demo", Schedule: sched}); err != nil {
 		t.Fatalf("initial load: %v", err)
 	}
 
 	sched.CalendarItems[0].Messages = []string{"new"}
-	if err := svc.LoadSchedule(buildMultiAgentScheduleContext("user-1", sched, WorkflowCapabilities{})); err != nil {
+	if err := svc.LoadSchedule(&ScheduleContext{WorkspacePath: "Workflow/demo", Schedule: sched}); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
 
-	keyPrefix := multiAgentScheduleRuntimeKey("user-1", sched.ID) + "__cal__"
+	keyPrefix := workflowScheduleRuntimeKey("Workflow/demo", sched.ID) + "__cal__"
 	matching := 0
 	for key, job := range svc.jobs {
 		if !strings.HasPrefix(key, keyPrefix) {
@@ -479,9 +408,9 @@ func TestLoadScheduleReplacesCalendarRegistrations(t *testing.T) {
 
 func TestLoadScheduleDoesNotRememberInvalidCronFingerprint(t *testing.T) {
 	svc := NewSchedulerService(nil)
-	sctx := buildMultiAgentScheduleContext("user-1", WorkflowSchedule{
+	sctx := &ScheduleContext{WorkspacePath: "Workflow/demo", Schedule: WorkflowSchedule{
 		ID: "daily", Enabled: true, CronExpression: "not-a-cron", Timezone: "UTC",
-	}, WorkflowCapabilities{})
+	}}
 	runtimeKey := scheduleRuntimeKey(sctx)
 	if err := svc.LoadSchedule(sctx); err == nil {
 		t.Fatal("invalid cron unexpectedly loaded")
@@ -513,34 +442,6 @@ func TestRemoveJobDropsInactiveRuntimeState(t *testing.T) {
 	svc.runtimeStatesMu.RUnlock()
 	if exists {
 		t.Fatal("removed schedule retained inactive runtime state")
-	}
-}
-
-func TestLoadScheduleKeepsSameIDForDifferentUsers(t *testing.T) {
-	svc := NewSchedulerService(nil)
-	for _, userID := range []string{"user-1", "user-2"} {
-		sctx := buildMultiAgentScheduleContext(userID, WorkflowSchedule{
-			ID:             "builtin-org-pulse",
-			Name:           "Org Pulse",
-			Enabled:        true,
-			CronExpression: "0 9 * * *",
-			Timezone:       "UTC",
-			Query:          "Run Org Pulse",
-		}, WorkflowCapabilities{})
-		if err := svc.LoadSchedule(sctx); err != nil {
-			t.Fatalf("LoadSchedule(%s): %v", userID, err)
-		}
-	}
-
-	svc.mu.Lock()
-	defer svc.mu.Unlock()
-	if len(svc.jobs) != 2 {
-		t.Fatalf("len(jobs) = %d, want 2 scoped jobs", len(svc.jobs))
-	}
-	for _, userID := range []string{"user-1", "user-2"} {
-		if _, ok := svc.jobs[multiAgentScheduleRuntimeKey(userID, "builtin-org-pulse")]; !ok {
-			t.Fatalf("missing scoped job for %s", userID)
-		}
 	}
 }
 
@@ -778,80 +679,6 @@ func TestUpdateScheduleClearsMessagesOnlyWhenExplicitlySet(t *testing.T) {
 	})
 }
 
-func TestShouldUpdateChiefTaskReport(t *testing.T) {
-	tests := []struct {
-		name string
-		sctx *ScheduleContext
-		want bool
-	}{
-		{
-			name: "normal chief schedule updates task report",
-			sctx: &ScheduleContext{
-				SourceType: "multi-agent",
-				Schedule: WorkflowSchedule{
-					ID:          "weekly-market-review",
-					Name:        "Weekly market review",
-					Description: "Review three workflows and recommend changes",
-					Query:       "Prepare a cross-workflow recommendation report.",
-				},
-			},
-			want: true,
-		},
-		{
-			name: "workflow schedule does not update chief task report",
-			sctx: &ScheduleContext{
-				SourceType: "workflow",
-				Schedule:   WorkflowSchedule{ID: "daily-run", Name: "Daily run"},
-			},
-			want: false,
-		},
-		{
-			name: "builtin org pulse is excluded",
-			sctx: &ScheduleContext{
-				SourceType: "multi-agent",
-				Schedule:   WorkflowSchedule{ID: builtinOrgPulseID, Name: "Daily Org Pulse"},
-			},
-			want: false,
-		},
-		{
-			name: "org pulse duplicate is excluded",
-			sctx: &ScheduleContext{
-				SourceType: "multi-agent",
-				Schedule:   WorkflowSchedule{ID: "custom-pulse", Name: "Daily Org Pulse scan"},
-			},
-			want: false,
-		},
-		{
-			name: "deprecated builtin memory schedule is excluded",
-			sctx: &ScheduleContext{
-				SourceType: "multi-agent",
-				Schedule:   WorkflowSchedule{ID: deprecatedAutoEnrichMemoryID, Name: "Auto-enrich memory"},
-			},
-			want: false,
-		},
-		{
-			name: "memory-like schedule is excluded",
-			sctx: &ScheduleContext{
-				SourceType: "multi-agent",
-				Schedule: WorkflowSchedule{
-					ID:    "custom-memory",
-					Name:  "Memory enrichment",
-					Query: "Run enrich_memory for recent conversations.",
-				},
-			},
-			want: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := shouldUpdateChiefTaskReport(tt.sctx); got != tt.want {
-				t.Fatalf("shouldUpdateChiefTaskReport() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
 // TestCreateAndUpdatePulseReviewOnlyScheduleSkipsGroupNamesRequirement pins
 // PLAT-115 at the real CreateSchedule/UpdateSchedule implementations (not
 // just the tool-layer guard): a pulse_review_only schedule must not be
@@ -919,87 +746,6 @@ func TestCreateAndUpdatePulseReviewOnlyScheduleSkipsGroupNamesRequirement(t *tes
 	}
 	if !current.Schedules[0].PulseReviewOnly {
 		t.Fatal("pulse_review_only must survive an unrelated update")
-	}
-}
-
-func TestBuildChiefTaskReportUpdateMessageUsesSingleSharedTaskHTML(t *testing.T) {
-	startedAt := time.Date(2026, 7, 4, 10, 15, 0, 0, time.UTC)
-	completedAt := startedAt.Add(2 * time.Minute)
-	sctx := &ScheduleContext{
-		SourceType: "multi-agent",
-		Schedule: WorkflowSchedule{
-			ID:             "weekly-market-review",
-			Name:           "Weekly market review",
-			Description:    "Review three workflows and recommend changes",
-			Query:          "Prepare a cross-workflow recommendation report.",
-			CronExpression: "0 9 * * 1",
-			Timezone:       "Asia/Kolkata",
-		},
-	}
-
-	msg := buildChiefTaskReportUpdateMessage(sctx, "run-123", "success", "", 120000, startedAt, completedAt, "session-abc")
-	for _, want := range []string{
-		`read_skill(skills=[{"name":"builder-reference","path":"references/chief-task-report.md"}])`,
-		"Update the single shared Tasks page at pulse/task.html",
-		"Do not create per-task files",
-		"Do not edit pulse/org-pulse.html, pulse/goals.html",
-		"schedule_id: weekly-market-review",
-		"schedule_name: Weekly market review",
-		"run_id: run-123",
-		"session_id: session-abc",
-		"status: success",
-		"Prepare a cross-workflow recommendation report.",
-		"Prepend one .task-entry",
-		"key findings to reuse",
-		"Treat the metadata above as internal input",
-		"collapsed Agent details",
-		"ordinary language",
-	} {
-		if !strings.Contains(msg, want) {
-			t.Fatalf("task report update message missing %q:\n%s", want, msg)
-		}
-	}
-}
-
-func TestWithChiefTaskRunContextAddsPriorTaskReportInstruction(t *testing.T) {
-	sctx := &ScheduleContext{
-		SourceType: "multi-agent",
-		Schedule: WorkflowSchedule{
-			ID:    "weekly-market-review",
-			Name:  "Weekly market review",
-			Query: "Prepare a cross-workflow recommendation report.",
-		},
-	}
-
-	msg := withChiefTaskRunContext(sctx, sctx.Schedule.Query)
-	for _, want := range []string{
-		"NORMAL CHIEF OF STAFF TASK RUN",
-		"read pulse/task.html if it exists",
-		`data-schedule-id="weekly-market-review"`,
-		"key findings",
-		"durable context",
-		"Do not use or update Chief of Staff memory tools/files",
-		`create_human_input_request(source="chief_of_staff"`,
-		`workspace_path="pulse"`,
-		"do not wait in real time",
-		"mark_human_input_consumed",
-		"Prepare a cross-workflow recommendation report.",
-	} {
-		if !strings.Contains(msg, want) {
-			t.Fatalf("task run context missing %q:\n%s", want, msg)
-		}
-	}
-}
-
-func TestWithChiefTaskRunContextSkipsOrgPulse(t *testing.T) {
-	sctx := &ScheduleContext{
-		SourceType: "multi-agent",
-		Schedule:   WorkflowSchedule{ID: builtinOrgPulseID, Name: "Daily Org Pulse"},
-	}
-
-	const query = "Run Org Pulse."
-	if got := withChiefTaskRunContext(sctx, query); got != query {
-		t.Fatalf("withChiefTaskRunContext() = %q, want original query", got)
 	}
 }
 
@@ -1987,7 +1733,6 @@ func TestBuildWorkshopRequestDisablesLiveInputDeliveryForSchedulerTurns(t *testi
 		WorkspacePath: "Workflow/test",
 		Schedule:      WorkflowSchedule{ID: "daily", Name: "Daily"},
 		Capabilities:  WorkflowCapabilities{},
-		SourceType:    "workflow",
 	}
 
 	reqMap := svc.buildWorkshopRequest(context.Background(), sctx)
@@ -2461,97 +2206,11 @@ func TestMaybeResumeLatestWorkflowThreadIgnoresNormalUserChat(t *testing.T) {
 	}
 }
 
-func TestMaybeResumeLatestMultiAgentThreadUsesPreviousScheduledSessionOnly(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("WORKSPACE_DOCS_PATH", root)
-
-	userID := "default"
-	scheduleID := "schedule-1"
-	writeUserChatRuntime(t, root, userID, "normal-user-chat", "claude-code", true)
-	writeUserChatRuntime(t, root, userID, "previous-schedule-chat", "claude-code", true)
-	writeMultiAgentScheduleRunsForTest(t, root, userID, []ScheduleRunEntry{
-		{
-			ID:         "current-run",
-			ScheduleID: scheduleID,
-			SessionID:  "current-schedule-chat",
-			Status:     "running",
-			StartedAt:  time.Now().UTC(),
-		},
-		{
-			ID:         "previous-run",
-			ScheduleID: scheduleID,
-			SessionID:  "previous-schedule-chat",
-			Status:     "success",
-			StartedAt:  time.Now().Add(-time.Hour).UTC(),
-		},
-	})
-
-	reqMap := map[string]interface{}{}
-	resumed := (&SchedulerService{}).maybeResumeLatestMultiAgentThread(context.Background(), resumeTestMultiAgentScheduleContext(userID, scheduleID), reqMap, "current-schedule-chat")
-	if resumed != "previous-schedule-chat" {
-		t.Fatalf("resumed session = %q, want previous scheduled session", resumed)
-	}
-	if got := reqMap["restored_conversation_session_id"]; got != "previous-schedule-chat" {
-		t.Fatalf("restored_conversation_session_id = %#v, want previous scheduled session", got)
-	}
-}
-
-func TestMaybeResumeLatestMultiAgentThreadIgnoresNormalUserChat(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("WORKSPACE_DOCS_PATH", root)
-
-	userID := "default"
-	scheduleID := "schedule-1"
-	writeUserChatRuntime(t, root, userID, "normal-user-chat", "claude-code", true)
-	writeMultiAgentScheduleRunsForTest(t, root, userID, []ScheduleRunEntry{
-		{
-			ID:         "current-run",
-			ScheduleID: scheduleID,
-			SessionID:  "current-schedule-chat",
-			Status:     "running",
-			StartedAt:  time.Now().UTC(),
-		},
-	})
-
-	reqMap := map[string]interface{}{}
-	resumed := (&SchedulerService{}).maybeResumeLatestMultiAgentThread(context.Background(), resumeTestMultiAgentScheduleContext(userID, scheduleID), reqMap, "current-schedule-chat")
-	if resumed != "" {
-		t.Fatalf("resumed session = %q, want empty because normal user chats are not schedule runs", resumed)
-	}
-	if _, ok := reqMap["restored_conversation_session_id"]; ok {
-		t.Fatalf("restored_conversation_session_id was set for a normal user chat: %#v", reqMap)
-	}
-}
-
 func resumeTestScheduleContext(workspacePath, scheduleID string) *ScheduleContext {
 	resumePrevious := true
 	builder := &workflowtypes.AgentLLMConfig{Provider: "claude-code", ModelID: "claude-opus-4-6"}
 	return &ScheduleContext{
 		WorkspacePath: workspacePath,
-		UserID:        "default",
-		Schedule: WorkflowSchedule{
-			ID:             scheduleID,
-			ResumePrevious: &resumePrevious,
-		},
-		Capabilities: WorkflowCapabilities{
-			LLMConfig: &workflowtypes.PresetLLMConfig{
-				SchemaVersion:  workflowtypes.LLMConfigSchemaVersion,
-				Mode:           workflowtypes.LLMConfigModeExplicit,
-				BuilderLLM:     builder,
-				MaintenanceLLM: builder,
-				PulseLLM:       builder,
-				TieredConfig:   &workflowtypes.TieredLLMConfig{Tier1: builder, Tier2: builder, Tier3: builder},
-			},
-		},
-	}
-}
-
-func resumeTestMultiAgentScheduleContext(userID, scheduleID string) *ScheduleContext {
-	resumePrevious := true
-	builder := &workflowtypes.AgentLLMConfig{Provider: "claude-code", ModelID: "claude-opus-4-6"}
-	return &ScheduleContext{
-		UserID:     userID,
-		SourceType: "multi-agent",
 		Schedule: WorkflowSchedule{
 			ID:             scheduleID,
 			ResumePrevious: &resumePrevious,
@@ -2584,21 +2243,6 @@ func writeScheduleRunsForTest(t *testing.T, root, workspacePath string, runs []S
 	}
 }
 
-func writeMultiAgentScheduleRunsForTest(t *testing.T, root, userID string, runs []ScheduleRunEntry) {
-	t.Helper()
-	dir := filepath.Join(root, "_users", userID)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	data, err := json.MarshalIndent(runs, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "multiagent-schedule-runs.json"), data, 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func writeWorkflowChatRuntime(t *testing.T, root, workspacePath, sessionID, provider string, resumeSupported bool) {
 	t.Helper()
 	convDir := filepath.Join(root, filepath.FromSlash(workspacePath), "builder", "conversation", "2026-05-20")
@@ -2618,33 +2262,6 @@ func writeWorkflowChatRuntime(t *testing.T, root, workspacePath, sessionID, prov
 			"resume_flag":          "--resume",
 			"workspace_path":       workspacePath,
 			"workshop_mode":        "workshop",
-			"agent_session_handle": map[string]interface{}{},
-		},
-	}, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(convDir, "session-"+sessionID+"-conversation.json"), data, 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func writeUserChatRuntime(t *testing.T, root, userID, sessionID, provider string, resumeSupported bool) {
-	t.Helper()
-	convDir := filepath.Join(root, "_users", userID, "chat_history", "2026-05-20")
-	if err := os.MkdirAll(convDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	data, err := json.MarshalIndent(map[string]interface{}{
-		"session_id": sessionID,
-		"agent_mode": "simple",
-		"runtime": map[string]interface{}{
-			"kind":                 "coding_agent",
-			"provider":             provider,
-			"model_id":             "claude-opus-4-6",
-			"external_session_id":  "external-" + sessionID,
-			"resume_supported":     resumeSupported,
-			"resume_flag":          "--resume",
 			"agent_session_handle": map[string]interface{}{},
 		},
 	}, "", "  ")
@@ -3013,7 +2630,7 @@ func TestLatestCronOccurrenceReconcilesInterruptedAttempt(t *testing.T) {
 	}
 	service := NewSchedulerService(nil)
 	service.stateStore = store
-	sctx := &ScheduleContext{WorkspacePath: "Workflow/demo", SourceType: "workflow", Schedule: WorkflowSchedule{ID: "daily"}}
+	sctx := &ScheduleContext{WorkspacePath: "Workflow/demo", Schedule: WorkflowSchedule{ID: "daily"}}
 	got, ok := service.latestCronOccurrence(sctx)
 	if !ok || !got.Equal(scheduledFor) {
 		t.Fatalf("latest occurrence=(%s,%t), want (%s,true)", got, ok, scheduledFor)

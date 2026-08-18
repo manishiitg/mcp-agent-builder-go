@@ -5,7 +5,6 @@ import { describe, expect, it } from 'vitest'
 const CRITICAL_COMPONENTS = [
   'src/App.tsx',
   'src/components/ChatInput.tsx',
-  'src/components/ChatTabs.tsx',
   'src/components/ModePresetBar.tsx',
   'src/components/Workspace.tsx',
   'src/components/workflow/WorkflowLayout.tsx',

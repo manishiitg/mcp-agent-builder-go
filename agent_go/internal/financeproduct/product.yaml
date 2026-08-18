@@ -14,15 +14,12 @@ profile:
   id: finance
   name: Finance
   version: 1
-  # Project-scoped, NOT global -- despite Finance spanning several sources
-  # the same way Chief of Staff spans several workflows. Two reasons this
-  # profile needs project scope specifically, discovered empirically
-  # (2026-08-16), not assumed by analogy to Chief of Staff:
+  # Project-scoped, NOT global. Two reasons this profile needs project scope
+  # specifically, discovered empirically (2026-08-16):
   #   1. Global scope makes provider_options non-authoritative by design
   #      (resolveAgentProfileForQuery: "isGlobalScope && requestHasExplicitModel"
-  #      lets the user's own chat-level selection win outright, always --
-  #      exactly what Chief of Staff wants, and exactly what defeats the
-  #      provider restriction below).
+  #      lets the user's own chat-level selection win outright, which defeats
+  #      the provider restriction below).
   #   2. Global scope takes the dynamic multi-agent delegation prompt
   #      instead of this product's own prompt.file -- confirmed live: an
   #      earlier global-scoped version of this profile never actually sent
@@ -104,6 +101,11 @@ profile:
     # reason about and debug than a long-lived tmux session -- but it is
     # not doing the security work this comment used to credit it with.
     transport: structured
+    workspace:
+      mode: fixed
+      root: Chats
+    conversation:
+      mode: singleton
     # Curated to exactly one provider. A second tool was reached for live
     # (2026-08-16), independent of transport: `nodeRepl`/`js`, with a
     # working `fetch` and a real filesystem `cwd`. This is docs/bugs/

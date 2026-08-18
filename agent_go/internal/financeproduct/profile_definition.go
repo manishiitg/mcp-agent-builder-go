@@ -3,8 +3,7 @@ package financeproduct
 import "github.com/manishiitg/coding-agent-loop/agent_go/pkg/agentprofiles"
 
 // BuiltinAgentProfile returns the finance profile. Brand new, so only one
-// version is ever registered -- same reasoning as Chief of Staff's own
-// BuiltinAgentProfile.
+// version is registered.
 func BuiltinAgentProfile() agentprofiles.Profile {
 	manifest := mustFinanceManifest()
 	profile := manifest.Profile
