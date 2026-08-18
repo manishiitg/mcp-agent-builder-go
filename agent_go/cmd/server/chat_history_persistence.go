@@ -181,6 +181,13 @@ func (api *StreamingAPI) persistChatConversationToPathWithTerminalSession(sessio
 	if convPath == "" {
 		convPath = chatHistoryConversationPath(userID, sessionID, now)
 	}
+	// A rebuild that has fewer user turns than the record on disk is a partial
+	// one, and writing it destroys the fuller history (salesoutreach lost 242
+	// user turns to 2 this way after a restart).
+	if lossy, existingTurns, nextTurns := conversationOverwriteWouldLoseTurns(context.Background(), convPath, persistedHistory); lossy {
+		refuseConversationOverwrite(convPath, existingTurns, nextTurns)
+		return
+	}
 	if err := writeRawFileToWorkspace(context.Background(), convPath, string(convJSON)); err != nil {
 		logfWithContext(logCtx, "[CHAT_HISTORY] Failed to write %s: %v", convPath, err)
 		return

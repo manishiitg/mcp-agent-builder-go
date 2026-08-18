@@ -6307,7 +6307,12 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				if strings.TrimSpace(logPath) == "" {
 					logPath = workflowBuilderConversationLogPath(workflowPhaseFolder, persistSessionID, time.Now())
 				}
-				if err := writeRawFileToWorkspace(context.Background(), logPath, string(convJSON)); err != nil {
+				// Same guard as the shared persist path: a rebuild with fewer
+				// user turns than the file already holds is partial, and
+				// writing it destroys the fuller record.
+				if lossy, existingTurns, nextTurns := conversationOverwriteWouldLoseTurns(context.Background(), logPath, persistedHistoryForDisk); lossy {
+					refuseConversationOverwrite(logPath, existingTurns, nextTurns)
+				} else if err := writeRawFileToWorkspace(context.Background(), logPath, string(convJSON)); err != nil {
 					log.Printf("[BUILDER LOG] Failed to write conversation log: %v", err)
 				} else {
 					log.Printf("[BUILDER LOG] Saved conversation log (%d messages) to %s", len(finalHistory), logPath)
