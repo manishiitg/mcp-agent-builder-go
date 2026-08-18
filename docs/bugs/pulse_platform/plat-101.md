@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `open` — stages 1-2 of 4 implemented (`multi-llm-provider-go@a9fa11a`, `mcpagent@c88bfc0`); stages 3-4 pending. Live reproduction captured 2026-08-18 (rtslatency, see below) |
+| Ticket state | `implemented` — suspend/resume shipped; live reverify pending. Stage 1 `multi-llm-provider-go@a9fa11a`, stage 1c `@e8cbc1e`, stage 2 `mcpagent@c88bfc0`, bounded consume `781d52605`, stage 3 `45ba49660`, per-account cache `@2ca6c02`, schedule gate `f64c54619`. Live reproduction captured 2026-08-18 (rtslatency, see below) |
 | Last synchronized | `2026-08-18` |
 
 - **Priority:** P0 — a workflow can stop midway and remain falsely running for
@@ -407,3 +407,46 @@ classifying the failure correctly.
 ### Stage 4 — UI — not started
 
 Clock instead of spinner, plus Resume now / Use fallback provider / Cancel run.
+
+## What shipped (2026-08-18)
+
+A run that hits a capacity wall is now **suspended, not failed**.
+
+- **Reset times are read, never reconstructed.** The Claude statusline sidecar
+  already carried exact per-window `resets_at`; the failure path was parsing
+  `resets 10am` out of pane text instead. `llmtypes.MostConstrainedReset` exists
+  alongside `EarliestReset` because the sidecar reads 99.x rather than a clean
+  100 at the instant of the wall, so `EarliestReset` returns nothing there and
+  silently demotes an exact instant to a guess.
+- **The zombie is closed.** `executeSyntheticTurn`'s consume loop had one exit —
+  the producer closing the channel — and a pane parked on a limit never closes
+  it. Two bounds now: context cancellation and an idle deadline. A stall is
+  recorded as a failure with its reason rather than as `context canceled`, so it
+  stops being filed as a user stop.
+- **`waiting_for_capacity` is its own run status.** `capacity_wait.json` records
+  which step, of how many, which window, and when it reopens. Durable because a
+  wait outlives the process, and the restart sweep would otherwise convert the
+  pause into a false `interrupted: server restarted`.
+- **The schedule stops firing while a run is suspended**, which is what ends the
+  run storm, and the tick loop resumes the run in place at its reset instant —
+  same run row, same run folder, at the step that could not run.
+- **A schedule-level gate** refuses to start a run into a window already at
+  100%, using a per-account cache of the quota reading the provider already
+  sends on every turn.
+
+Two refusals are deliberate: a wait with no stated reset never wakes on its own,
+and a wall with no record on disk is reported as the failure it effectively is.
+
+## Known gaps
+
+1. **No per-item checkpoint in `message_sequence`.** Resuming a suspended step
+   replays from item 1. Since `message_sequence` is the default step type, a
+   step that posted to Slack at item 2 and died at item 5 will re-post on
+   resume. This is the most consequential remaining gap.
+2. **No per-step preflight.** The orchestrator has no account identity and no
+   StatusLine handle in scope, so only the schedule-level gate exists. Deliberate
+   — a per-step gate cannot predict whether a run FITS in the remaining quota
+   without a cost estimate, and agentic steps vary too much between runs for any
+   such estimate to be safe.
+3. **Live reverify outstanding.** All of the above is code and unit coverage;
+   no capacity wall has been observed end-to-end since the change.
