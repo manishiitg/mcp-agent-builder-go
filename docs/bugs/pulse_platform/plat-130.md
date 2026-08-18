@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `open` — root cause confirmed by tracing every layer in the cancellation chain; fix (locating and wiring the actual dispatch-site cancel func) not started |
+| Ticket state | `implemented` — pre-item/pre-step cancellation gates shipped; live reverify pending. Note the original root cause was partly wrong, see the correction below |
 | Last synchronized | `2026-08-17` |
 
 - **Priority:** P1 — this is not cosmetic. A stopped schedule can continue
@@ -121,3 +121,62 @@ platform is confidently and consistently reporting a state that isn't true.
   identical gap was inferred from its shape (also status-only) but not traced
   with the same rigor as `cancelTrackedExecutionsForSession` — worth
   confirming in the same follow-up rather than assuming symmetry.
+
+## Correction to the analysis above (2026-08-18)
+
+Two claims in the root-cause section did not survive being checked.
+
+**`cancelBackgroundAgents` is not status-only.** The ticket inferred this "from
+its shape ... but not traced with the same rigor". Traced now:
+`BackgroundAgentRegistry.CancelAll` (`background_agents.go:590`) copies the
+session's agents, and for each one that is running it calls `agent.cancel()`
+before `agent.SetCanceled()`. The cancel func is real — `WorkshopExecutionStart`
+carries a `Cancel context.CancelFunc`, the dispatch sites populate it, and
+`workshopExecutionBgNotifier.OnExecutionStart` stores it on the
+`BackgroundAgent`. So the chain from Stop to the worker's context *is* wired.
+
+**The dispatch site did not need locating.** Of the eighteen
+`WorkshopExecutionStart` constructions, thirteen set `Cancel`. The five that do
+not are not dispatch sites: four in `planning_exports.go` mirror progress events
+into the registry as observers, and the one in `controller_message_sequence.go`
+registers a *notification* for an item that runs inline in the caller's
+goroutine — there is no separate goroutine to cancel.
+
+## What was actually wrong
+
+The queue's halting was conditional on someone else's conversion.
+
+`executeMessageSequenceStep` returns on any item error, and cancellation is
+*expected* to arrive as an item error. But that only holds if some layer beneath
+converts a cancelled context into a failure, and session teardown races that
+conversion: a coding-CLI turn whose pane is being killed can return a
+truncated-but-plausible result rather than an error. The queue reads that as
+success and starts the next item — whose side effect is real and outbound.
+
+Nothing in either loop asked the context directly before beginning new work.
+
+## Fix
+
+A pre-item gate in the message_sequence queue and a pre-step gate in the
+workflow step loop. Both refuse to *start* new work once the run's context is
+cancelled, independent of what the previous item or step reported.
+
+Deliberately gates rather than aborts: an item already in flight unwinds through
+its own error path. The guarantee is narrower and more defensible — a cancelled
+run never begins anything new.
+
+## Test coverage, and what is not covered
+
+`messageSequenceHaltedBeforeItem` is directly covered, including the specific
+reported shape: cancel during the first item, assert the second and third never
+start. Verified fail-before/pass-after.
+
+The end-to-end test this ticket originally asked for — driving the real
+`executeMessageSequenceStep` and asserting `executeMessageSequenceUserMessage`
+is never reached — is **not** written. No harness exists to drive that function:
+it requires a constructed orchestrator with plan state, session persistence and
+workspace IO, and the existing message_sequence tests all target smaller units.
+Building that harness is worthwhile but is its own piece of work.
+
+Live reverify remains outstanding: stop a real running schedule mid-sequence and
+confirm no further queued item executes.
