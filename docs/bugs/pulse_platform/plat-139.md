@@ -1,11 +1,11 @@
 [← Pulse platform issue index](../pulse_platform_issue_register.md)
 
-# PLAT-139 — a workflow step held its caller for 65 minutes after its real work finished; cause unknown after the first diagnosis was disproven
+# PLAT-139 — a workflow step held its caller for 65 minutes after its real work finished; root cause confirmed via a second live occurrence
 
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `open` — cause **unknown**. The first diagnosis was investigated, acted on twice, and disproven; this ticket exists so the real cause is found from evidence rather than re-theorised |
+| Ticket state | `fixed` — root cause confirmed live via a production goroutine dump on a second occurrence (`check-form-26as-xspaces`, same day), fixed in `multi-llm-provider-go@6d8e4e9`. Fail-before/pass-after verified against a hermetic reproduction whose failing stack trace matches the production dump exactly, not a guess |
 | Last synchronized | `2026-08-18` |
 
 - **Priority:** P1 — a genuinely successful run reports as stuck/never-completing
@@ -116,13 +116,94 @@ Structured *completion* is covered specifically: each provider's
 one completed and its process exited — so a genuine structured hang would fail
 it. All four P0 enforcement tests pass.
 
+## Root cause, confirmed live (2026-08-18, same day)
+
+A second occurrence — `check-form-26as-xspaces`, `tax-retrieval-sequence` step,
+session `c2cf7954-e686-4a18-818b-3730c56884cf` — reproduced the same shape
+while the server was still running: real work had completed (form 26AS PDFs,
+`tax_summary.json`, `downloads.json` all written 19:06–19:11 IST), the
+session's own completion signal fired correctly at 19:43:26
+(`[RETAINED_TURN] Settled retained main-agent turn from structured
+unified_completion event ... state=completed`), and nothing progressed for
+the next ~13 minutes with no live `pi` process anywhere on the machine.
+
+Rather than theorize again, a **production goroutine dump** was pulled via
+the already-registered pprof endpoint
+(`GET /debug/pprof/goroutine?debug=2` — safe, read-only, does not touch the
+running workflow) and found the exact blocked goroutine:
+
+```
+goroutine 73561 [syscall, 51 minutes]:
+  ...
+  os/exec.(*Cmd).Wait(...)
+  picli.(*PiCLIAdapter).generateContentStructured(...)
+      picli_structured_adapter.go:406   <- cmd.Wait() itself, NOT the earlier stdout wait
+```
+
+A second goroutine, blocked in the **identical `IO wait` shape for the
+identical 51 minutes**, was `os/exec`'s own internal stderr-copy goroutine
+(`writerDescriptor.func1`, an `io.Copy` off a pipe the adapter never had a
+handle to). The code did:
+
+```go
+var stderr bytes.Buffer
+cmd.Stderr = &stderr
+```
+
+That form makes `os/exec` create and own an **internal** pipe; `cmd.Wait()`
+blocks until that pipe's copy goroutine also reaches EOF, not just until the
+process is reaped. This morning's entire investigation (see PLAT-116's
+"structured completion" section) only ever considered **stdout**, via
+`cmd.StdoutPipe()` — stderr, going through the assign-a-`Buffer` form, carried
+the exact same class of risk the whole time and was never examined, because it
+never went through code anyone had reasoned about.
+
+pi's own process was confirmed gone (no PID via `ps`, no zombie/`<defunct>`
+entry) — so this was never "pi is stuck." It was `cmd.Wait()` unable to
+determine that, because it was waiting on an internal pipe that nothing had a
+handle to close.
+
+**Fixed** in `multi-llm-provider-go@6d8e4e9`: switched to `cmd.StderrPipe()`,
+symmetric to stdout — the adapter now owns the pipe, and `os/exec` auto-closes
+it the moment the tracked process itself exits, regardless of what else may
+still hold the write end. `cmd.Wait()` deliberately still has no hard
+timeout — this workflow's tools are allowed up to 90 minutes
+(`TOOL_EXECUTION_TIMEOUT`), so an aggressive kill risks ending legitimate
+work, and there is no way to tell "stuck" from "genuinely still working"
+without a bounded backstop that risks exactly that. What changed instead: an
+abnormal wait now logs a clear, periodic `ERROR`-level line every 30s pointing
+directly at this incident, so a recurrence is visible in `server_debug.log`
+without needing another pprof dump.
+
+**Verified, not guessed.** A new hermetic test
+(`TestPiStructuredTerminatesWhenChildHoldsStderrAfterProcessExits`,
+`picli_structured_process_exit_test.go`) reproduces the mechanism exactly: a
+fake `pi` whose own process exits cleanly (stdout drains normally, matching
+what "stdout already closed" looked like in production) while a lingering
+child holds stderr's write end open. Run against the pre-fix, actually-deployed
+code (`fd00585`), it **times out with the identical stack trace** as the
+production incident (`os/exec.(*Cmd).Wait → ...writerDescriptor.func1 →
+io.Copy → IO wait`) — a reproduction, not a hypothesis. Passes after the fix.
+
+This also explains the original 09:45 ICICI-BANK-PARSING incident that opened
+this ticket: same adapter, same `cmd.Stderr = &bytes.Buffer{}` code, same
+class of hang. The original incident's logs had already rolled over, so its
+exact trigger (what held stderr open that time) is not separately provable —
+but the mechanism now proven live is sufficient to close this ticket rather
+than leave it as an open mystery.
+
 ## What is still true and unexplained
 
-The incident itself is real: work finished at 09:45, the caller was held ~65
-minutes, and the step never reported completion. None of the four explanations
-above accounts for it.
+Not fully closed: **what actually holds stderr's write end open** in the first
+place has not been identified for either occurrence (unlike the earlier,
+disproven MCP-child-inherits-stdout theory, which was checked directly against
+the MCP SDK source and ruled out). Candidates not yet investigated: a
+descendant of a bash-tool-spawned command inheriting fd 2 in some path not yet
+audited, or pi's own runtime under specific conditions. Worth a fresh
+investigation if it recurs, now that the adapter itself won't hang regardless
+of the answer.
 
-## Where to look next
+## Superseded — original "where to look next" (kept for the record)
 
 Untested hypotheses, roughly in order of fit:
 
@@ -158,11 +239,17 @@ unresolved. For the next occurrence, capture before restarting anything:
 
 ## Acceptance
 
-- The 65-minute stall is explained by evidence from a real occurrence, not by
-  theory.
-- Whatever layer is responsible either completes or fails within a bounded,
-  logged time rather than holding its caller indefinitely.
-- A run whose work genuinely finished never reports as permanently `running`.
+- [x] The stall is explained by evidence from a real occurrence, not by
+  theory — a production goroutine dump, and a hermetic test whose
+  pre-fix failure produces the identical stack trace.
+- [x] The layer responsible (`cmd.Wait()` blocked on an internally-owned
+  stderr pipe) either completes or logs clearly instead of holding its
+  caller indefinitely and silently — `cmd.StderrPipe()` fix plus periodic
+  stall logging, `multi-llm-provider-go@6d8e4e9`.
+- [ ] A run whose work genuinely finished never reports as permanently
+  `running` — not addressed here; `run_metadata.json` freezing at
+  `"status": "running"` on a swallowed terminal write is PLAT-116's
+  separate, still-open item.
 
 ## Process note
 
