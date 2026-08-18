@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `open` — design agreed; implementation pending. Live reproduction captured 2026-08-18 (rtslatency, see below) |
+| Ticket state | `open` — stage 1 of 4 implemented (provider, `multi-llm-provider-go@545fb18`); stages 2-4 pending. Live reproduction captured 2026-08-18 (rtslatency, see below) |
 | Last synchronized | `2026-08-18` |
 
 - **Priority:** P0 — a workflow can stop midway and remain falsely running for
@@ -311,3 +311,71 @@ cannot hold a session open on its own.
 executions canceled without stopping the work. This is the inverse: no cancel
 was requested at all, and the work is already finished — only the notification
 turn is stuck.
+
+## Implementation status
+
+Staged so each increment is independently shippable and testable. Current
+state was verified in-repo before starting, not assumed from this document.
+
+### Stage 1 — provider: structured reset time and typed quota error — **DONE**
+
+`multi-llm-provider-go@545fb18`.
+
+What was actually found versus what this ticket predicted:
+
+| the ticket said | verified state |
+|---|---|
+| adapter matches only one exact sentence | confirmed — **two** sites (`detectTmuxFatalStatus`, `isClaudeFatalProgressLine`), and `"You've hit your weekly limit"` genuinely does not contain `"You've hit your limit"` |
+| `resets_at` read for display and discarded | confirmed — `claudeStatusExtras` formats it to `"7d 100% →Fri"` and drops the instant |
+| need a typed quota failure carrying `RetryAt` | `KindQuotaExhausted` already existed; `RetryAt` did not exist anywhere in any of the three repos |
+
+Shipped:
+
+- `IsClaudeUsageLimitText` matches the stable shape of the wording (verb +
+  possessive + optional qualifier + `limit`) instead of one sentence, anchored
+  on hit/reached/exceeded so an agent discussing rate limits in its own output
+  is not misread as a limit wall. Both detection sites now use it.
+- `llmtypes.RateLimitWindow` + `StatusLine.SetRateLimitWindows` /
+  `RateLimitWindows()` carry each window with its reset instant intact, beside
+  (not instead of) the display extras. `EarliestReset` returns the soonest
+  future reset among *exhausted* windows — the instant a caller may retry.
+- `llmerrors.Error` gained `RetryAt` (absolute) and `Window`, with
+  `RetryAtOrZero` / `QuotaWindow` / `IsQuotaExhausted`. `RetryAt` is separate
+  from the existing `RetryAfter` on purpose: a duration is only meaningful
+  relative to when it was computed, so it cannot survive being persisted and
+  reloaded, which is precisely what a suspension has to do.
+
+Throughout, *exhausted with an unknown reset* stays distinguishable from *not
+exhausted* rather than collapsing to one state, so stage 3 can implement this
+ticket's `waiting_for_capacity_unknown` branch instead of inventing a
+timestamp.
+
+14 tests including the status-line JSON quoted above, a JSON round trip (a
+`StatusLine` crosses a process boundary between the adapter that fills it and
+the runtime that reads it), and explicit false-positive coverage for the
+matcher. Full repo suite green.
+
+### Stage 2 — agent: fallbacks, then preserve the typed error — not started
+
+In `mcpagent`: skip same-model retries for `IsQuotaExhausted`, try the
+configured fallback chain immediately, and carry `RetryAt`/`Window` through the
+final `all LLMs failed` error rather than flattening to text. A successful
+fallback means no suspension is ever created, which rescues most runs without
+any of stage 3.
+
+### Stage 3 — runtime: durable suspension and wake-up — not started
+
+The largest stage, and the one with real correctness hazards: durable
+`waiting_for_capacity` state, releasing every live resource, atomic claim so
+two server loops cannot resume once each, restart survival, and preventing the
+next cron occurrence from duplicating a waiting run. Detailed in the repair
+plan above.
+
+Note the additional requirement from the live reproduction: bounding the
+auto-notification consume loop. That defect is independent of the typed error —
+a turn already parked on a channel that never closes is not released by
+classifying the failure correctly.
+
+### Stage 4 — UI — not started
+
+Clock instead of spinner, plus Resume now / Use fallback provider / Cancel run.
