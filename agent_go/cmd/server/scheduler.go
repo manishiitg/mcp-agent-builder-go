@@ -1777,6 +1777,16 @@ func (s *SchedulerService) triggerSchedule(sctx *ScheduleContext, scheduledFor t
 		}
 	}
 	if freshCtx.SourceType == "workflow" && freshCtx.CapacityResumeRunID == "" {
+		if window, resetsAt, blocked := s.scheduleQuotaBlock(ctx, freshCtx, now); blocked {
+			s.runtimeStatesMu.Unlock()
+			// The account's window is at its limit, so this run cannot even
+			// reach step one. Starting it would record a red run and, once
+			// steps begin having side effects, replay them for nothing.
+			reason := fmt.Sprintf("provider %s window is exhausted until %s", window, resetsAt.UTC().Format(time.RFC3339))
+			s.logf(freshCtx, "[SCHEDULER] ⏭️ Skipping %s: %s", schedID, reason)
+			s.recordScheduleFireDecision(ctx, freshCtx, "skipped_waiting_for_capacity", reason, "", startTime)
+			return
+		}
 		if waitingRun, wait := s.outstandingCapacityWait(ctx, freshCtx.WorkspacePath); waitingRun != nil {
 			s.runtimeStatesMu.Unlock()
 			// Firing here is what turned one capacity wall into a run storm: the

@@ -3,7 +3,11 @@ package server
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
+
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workflowtypes"
+	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 
 	stepworkflow "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
 )
@@ -190,4 +194,83 @@ func capacityWaitBelongsToRun(wait *stepworkflow.WorkflowCapacityWait, runStarte
 		return true
 	}
 	return !wait.RecordedAt.Before(runStartedAt)
+}
+
+// scheduleQuotaMaxReadingAge bounds how old a cached quota reading may be
+// before it is treated as no information at all.
+//
+// A stale number looks exactly as confident as a fresh one, and this gate
+// decides whether a scheduled run happens. Refusing to fire on a reading from
+// hours ago would skip runs for a window that has long since reopened.
+const scheduleQuotaMaxReadingAge = 30 * time.Minute
+
+// scheduleUsesClaudeCode reports whether this schedule's builder LLM is Claude
+// Code.
+//
+// The gate below keys on the Claude Code credential, and a workflow can share
+// that deployment-wide credential without ever calling Claude — a Codex or Pi
+// workflow, for instance. Skipping its runs because a Claude window is
+// exhausted would stop a schedule for a limit it never touches, which is a
+// worse failure than the one this gate prevents.
+func scheduleUsesClaudeCode(sctx *ScheduleContext) bool {
+	if sctx == nil || sctx.Capabilities.LLMConfig == nil {
+		return false
+	}
+	builderLLM := sctx.Capabilities.LLMConfig.BuilderLLM
+	if builderLLM == nil {
+		resolved, _, ok := workflowtypes.ResolveProviderProfileConfig(sctx.Capabilities.LLMConfig)
+		if !ok {
+			return false
+		}
+		builderLLM = resolved
+	}
+	if builderLLM == nil {
+		return false
+	}
+	provider := strings.ToLower(strings.TrimSpace(builderLLM.Provider))
+	return provider == claudeCodeProviderID || provider == "claudecode"
+}
+
+// scheduleQuotaBlock reports whether the account this schedule runs under has
+// an exhausted quota window that has not yet reopened.
+//
+// This is the cheap half of the capacity story and it deliberately answers only
+// the question that needs no guesswork: is starting right now definitely
+// pointless? A window at 100% cannot serve step one, so firing would create a
+// run that fails immediately and, before stage 3, would have replayed nothing
+// but still recorded a red run.
+//
+// It does not try to predict whether a run will FIT in the remaining quota.
+// That would need a per-step cost estimate, and steps are agentic — the same
+// step can make three tool calls one day and forty the next, so any predictor
+// would either idle the schedule constantly or fail to protect it. Runs that
+// exhaust their window mid-flight are handled by suspending and resuming, not
+// by refusing to start.
+//
+// Unknown always means proceed: no credential, no cached reading, a stale
+// reading, or a window with no stated reset all fall through to a normal fire.
+func (s *SchedulerService) scheduleQuotaBlock(ctx context.Context, sctx *ScheduleContext, now time.Time) (string, time.Time, bool) {
+	if s == nil || s.api == nil || sctx == nil || sctx.SourceType == "multi-agent" {
+		return "", time.Time{}, false
+	}
+	if !scheduleUsesClaudeCode(sctx) {
+		return "", time.Time{}, false
+	}
+	keys, err := s.api.resolveEffectiveAPIKeys(ctx, sctx.UserID, sctx.WorkspacePath, nil)
+	if err != nil || keys == nil || keys.ClaudeCodeOAuthToken == nil {
+		return "", time.Time{}, false
+	}
+	accountKey := llmtypes.AccountRateLimitKey(*keys.ClaudeCodeOAuthToken)
+	windows, _, ok := llmtypes.AccountRateLimitWindows(accountKey, now, scheduleQuotaMaxReadingAge)
+	if !ok {
+		return "", time.Time{}, false
+	}
+	// EarliestReset is the right question here, not MostConstrainedReset: this
+	// gate only blocks on a window that is genuinely at its limit, and when
+	// several are, the first to reopen is when work can continue.
+	resetsAt, window := llmtypes.EarliestReset(windows, now)
+	if resetsAt.IsZero() {
+		return "", time.Time{}, false
+	}
+	return window, resetsAt, true
 }

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	stepworkflow "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workflowtypes"
 )
 
 // TestCapacityWaitFromAnEarlierRunIsIgnored is the iteration-0 trap.
@@ -66,5 +67,40 @@ func TestCapacityWaitNotificationThresholdFollowsTheSchedule(t *testing.T) {
 	unknown := &stepworkflow.WorkflowCapacityWait{}
 	if !capacityWaitOutlastsNextRun(unknown, nextRun) {
 		t.Error("a wait with no stated reset was treated as short")
+	}
+}
+
+// TestQuotaGateOnlyAppliesToSchedulesThatActuallyUseClaudeCode.
+//
+// The gate keys on the Claude Code credential, and a workflow can share the
+// deployment-wide credential without ever calling Claude. Skipping a Codex or
+// Pi workflow's runs because a Claude window is exhausted would stop a schedule
+// for a limit it never touches — a worse failure than the one the gate prevents.
+func TestQuotaGateOnlyAppliesToSchedulesThatActuallyUseClaudeCode(t *testing.T) {
+	claude := &ScheduleContext{Capabilities: WorkflowCapabilities{LLMConfig: &workflowtypes.PresetLLMConfig{
+		SchemaVersion: workflowtypes.LLMConfigSchemaVersion,
+		Mode:          workflowtypes.LLMConfigModeExplicit,
+		BuilderLLM:    &workflowtypes.AgentLLMConfig{Provider: "claude-code", ModelID: "claude-sonnet-5"},
+	}}}
+	if !scheduleUsesClaudeCode(claude) {
+		t.Error("a claude-code schedule was not recognised by the gate")
+	}
+
+	codex := &ScheduleContext{Capabilities: WorkflowCapabilities{LLMConfig: &workflowtypes.PresetLLMConfig{
+		SchemaVersion: workflowtypes.LLMConfigSchemaVersion,
+		Mode:          workflowtypes.LLMConfigModeExplicit,
+		BuilderLLM:    &workflowtypes.AgentLLMConfig{Provider: "codex", ModelID: "gpt-5"},
+	}}}
+	if scheduleUsesClaudeCode(codex) {
+		t.Error("a codex schedule would be blocked by a Claude window it never touches")
+	}
+
+	// No configuration at all must fall through to a normal fire rather than
+	// being treated as Claude by default.
+	if scheduleUsesClaudeCode(&ScheduleContext{}) {
+		t.Error("a schedule with no LLM config was treated as claude-code")
+	}
+	if scheduleUsesClaudeCode(nil) {
+		t.Error("a nil schedule context was treated as claude-code")
 	}
 }
