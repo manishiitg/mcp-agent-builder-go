@@ -197,3 +197,54 @@ func (hcpo *StepBasedWorkflowOrchestrator) recordWorkflowCapacityWait(
 	hcpo.GetLogger().Info(fmt.Sprintf("⏸️ Step %d hit a provider capacity wall; %s", stepNumber, wait.Describe()))
 	return fmt.Errorf("%w: %s", ErrWorkflowWaitingForCapacity, wait.Describe())
 }
+
+// recordWorkflowCapacityWaitForPacing suspends a run that quota pacing decided
+// should not continue in place.
+//
+// It writes the same record the wall path writes, so everything downstream —
+// the waiting_for_capacity run status, cron suppression, and resume at the
+// reset — behaves identically. The difference is only in how the run got here:
+// this run has NOT failed and has NOT hit the wall, it stepped back before it.
+func (hcpo *StepBasedWorkflowOrchestrator) recordWorkflowCapacityWaitForPacing(
+	ctx context.Context,
+	resetsAt time.Time,
+	window, reason string,
+	stepNumber, totalSteps int,
+	stepID, stepPath, stepTitle string,
+) error {
+	if hcpo == nil {
+		return nil
+	}
+	wait := &WorkflowCapacityWait{
+		SchemaVersion: 1,
+		WorkspacePath: hcpo.GetWorkspacePath(),
+		RunFolder:     hcpo.selectedRunFolder,
+		StepNumber:    stepNumber,
+		StepID:        stepID,
+		StepPath:      stepPath,
+		StepTitle:     stepTitle,
+		TotalSteps:    totalSteps,
+		Window:        window,
+		RetryAt:       resetsAt.UTC(),
+		RecordedAt:    time.Now().UTC(),
+		Reason:        reason,
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	path := WorkflowCapacityWaitPath(wait.WorkspacePath, wait.RunFolder)
+	body, err := json.MarshalIndent(wait, "", "  ")
+	if err != nil {
+		hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Failed to marshal paced capacity wait: %v", err))
+		return nil
+	}
+	if err := hcpo.WriteWorkspaceFile(ctx, path, string(body)); err != nil {
+		// Without the record there is nothing to resume from, so pacing must
+		// not pretend to have suspended. Let the run continue and hit the wall
+		// on its own terms rather than stall with no resume point.
+		hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Failed to persist paced capacity wait to %s: %v", path, err))
+		return nil
+	}
+	hcpo.GetLogger().Info(fmt.Sprintf("⏸️ Pacing suspended the run before step %d: %s", stepNumber, wait.Describe()))
+	return fmt.Errorf("%w: %s", ErrWorkflowWaitingForCapacity, wait.Describe())
+}

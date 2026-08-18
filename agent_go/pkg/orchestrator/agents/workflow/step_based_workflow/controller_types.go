@@ -43,6 +43,14 @@ type ExecutionOptions struct {
 	ResumeFromStep    int    `json:"resume_from_step,omitempty"`    // 1-based step number to resume from (for top-level steps)
 	PlanChangeAction  string `json:"plan_change_action,omitempty"`  // "keep_old_progress" or "delete_old_progress"
 
+	// CapacityAccountKey identifies the provider account this run draws on, as
+	// a hash of its credential. The orchestrator cannot resolve credentials
+	// itself — the scheduler already does, so it passes the key down rather
+	// than duplicating secret access into this layer.
+	CapacityAccountKey string `json:"capacity_account_key,omitempty"`
+	// PaceThresholdPercent > 0 enables quota pacing for this run.
+	PaceThresholdPercent int `json:"pace_threshold_percent,omitempty"`
+
 	// Variable group execution options (for batch execution with multiple groups)
 	EnabledGroupNames []string `json:"enabled_group_names,omitempty"` // Group names to execute (if empty, uses groups' enabled flags)
 

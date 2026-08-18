@@ -3274,6 +3274,13 @@ func (s *SchedulerService) buildWorkshopRequest(ctx context.Context, sctx *Sched
 			execOpts["selected_run_folder"] = sctx.CapacityResumeRunFolder
 		}
 	}
+	// Quota pacing, opt-in per workflow. The orchestrator cannot resolve
+	// credentials, so the account identity is resolved here — where it already
+	// is for the schedule-level gate — and passed down as a hash.
+	if accountKey, threshold := s.quotaPacingForSchedule(ctx, sctx); accountKey != "" && threshold > 0 {
+		execOpts["capacity_account_key"] = accountKey
+		execOpts["pace_threshold_percent"] = threshold
+	}
 	if len(sctx.Schedule.GroupNames) > 0 {
 		execOpts["enabled_group_names"] = sctx.Schedule.GroupNames
 	}

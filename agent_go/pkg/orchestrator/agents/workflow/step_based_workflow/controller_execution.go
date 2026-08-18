@@ -3422,6 +3422,12 @@ func (hcpo *StepBasedWorkflowOrchestrator) runExecutionPhase(
 				i+1, len(breakdownSteps), step.GetTitle(), ctx.Err()))
 			return fmt.Errorf("workflow halted before step %d: %w", i+1, ctx.Err())
 		}
+		// Quota pacing (opt-in per workflow). Spread the run across a window
+		// reset rather than racing into the wall — but only when the account is
+		// actually near it, so a healthy run pays nothing.
+		if pacingErr := hcpo.applyQuotaPacingBeforeStep(ctx, i+1, len(breakdownSteps), step, stepPath); pacingErr != nil {
+			return pacingErr
+		}
 		executionResult, _, err := hcpo.executeSingleStep(
 			ctx,
 			step,

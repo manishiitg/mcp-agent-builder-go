@@ -274,3 +274,32 @@ func (s *SchedulerService) scheduleQuotaBlock(ctx context.Context, sctx *Schedul
 	}
 	return window, resetsAt, true
 }
+
+// quotaPacingForSchedule resolves the account identity and threshold a run
+// should pace against, or ("", 0) when this workflow did not opt in.
+//
+// The account key is resolved here rather than in the orchestrator for the same
+// reason the schedule-level gate resolves it here: credential access belongs to
+// the server layer, and pushing it into the workflow engine would widen that
+// surface for a feature that only needs an opaque identity.
+func (s *SchedulerService) quotaPacingForSchedule(ctx context.Context, sctx *ScheduleContext) (string, int) {
+	if s == nil || s.api == nil || sctx == nil {
+		return "", 0
+	}
+	if !scheduleUsesClaudeCode(sctx) {
+		return "", 0
+	}
+	manifest, found, err := ReadWorkflowManifest(ctx, sctx.WorkspacePath)
+	if err != nil || !found || !manifest.PacingEnabled() {
+		return "", 0
+	}
+	keys, err := s.api.resolveEffectiveAPIKeys(ctx, "", sctx.WorkspacePath, nil)
+	if err != nil || keys == nil || keys.ClaudeCodeOAuthToken == nil {
+		return "", 0
+	}
+	accountKey := llmtypes.AccountRateLimitKey(*keys.ClaudeCodeOAuthToken)
+	if accountKey == "" {
+		return "", 0
+	}
+	return accountKey, manifest.PaceThreshold()
+}

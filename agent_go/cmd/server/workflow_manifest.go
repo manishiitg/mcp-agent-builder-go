@@ -89,6 +89,21 @@ type WorkflowManifest struct {
 	// across scheduled runs caused real bugs (PLAT-113, PLAT-114).
 	PostRunMonitorMode string `json:"post_run_monitor_mode,omitempty"`
 
+	// PaceOnLowQuota spreads a run out rather than racing into a provider
+	// capacity wall. Opt-in per workflow, because it is only ever the right
+	// trade for workflows whose consumption is large relative to the provider
+	// window — everything else pays wall-clock for nothing.
+	//
+	// It does not reduce what a run consumes; it moves consumption across a
+	// window reset. That is why it is a wait-until-reset rather than a fixed
+	// delay: padding every step wastes time when quota is healthy and still
+	// does not save a run whose next step is the one that exhausts the window.
+	PaceOnLowQuota bool `json:"pace_on_low_quota,omitempty"`
+
+	// PaceThresholdPercent is the window usage at or above which the next step
+	// waits. Zero means the default.
+	PaceThresholdPercent int `json:"pace_threshold_percent,omitempty"`
+
 	// Pulse contains owner-approved workflow-specific review lenses. These
 	// specialize the stable reviewer contracts; they never replace them.
 	Pulse *WorkflowPulseConfig `json:"pulse,omitempty"`
@@ -1008,4 +1023,25 @@ func listWorkspaceFolders(ctx context.Context) ([]string, error) {
 	}
 
 	return folders, nil
+}
+
+// defaultPaceThresholdPercent is where "close to the wall" starts.
+//
+// Deliberately not near 100: the whole point is to cross a reset BEFORE the
+// window is exhausted, and a step can consume several percent on its own, so a
+// threshold at 98 would routinely be overtaken mid-step by the very run it is
+// meant to protect.
+const defaultPaceThresholdPercent = 85
+
+// PaceThreshold returns the configured usage threshold, or the default.
+func (m *WorkflowManifest) PaceThreshold() int {
+	if m == nil || m.PaceThresholdPercent <= 0 || m.PaceThresholdPercent > 100 {
+		return defaultPaceThresholdPercent
+	}
+	return m.PaceThresholdPercent
+}
+
+// PacingEnabled reports whether this workflow opted into quota pacing.
+func (m *WorkflowManifest) PacingEnabled() bool {
+	return m != nil && m.PaceOnLowQuota
 }
