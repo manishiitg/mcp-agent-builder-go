@@ -1570,6 +1570,16 @@ type toolCallTelemetry struct {
 var (
 	toolCallsMu  sync.Mutex
 	openToolCall = map[string]map[string]*toolCallTelemetry{} // sessionID -> toolCallID
+	// settleInFlight stops one turn from scheduling two settle passes. A turn
+	// emits BOTH agent_end and unified_completion, so the handler started a
+	// goroutine for each. The event stream stayed correct — the first pass
+	// removed the calls it settled, so the second found none and emitted
+	// nothing — but the LOG became unreadable: at 21:23:23 the same session
+	// reported "5 of 5 tool call(s) never reported after 5s -- settling" and
+	// "all 5 open tool call(s) reported within the grace window" in the same
+	// second. Diagnosing this bug from those two lines is impossible, which is
+	// the whole reason the logging exists.
+	settleInFlight = map[string]bool{}
 )
 
 func (es *EventStore) logToolCallTelemetry(sessionID string, event Event) {
@@ -1612,6 +1622,15 @@ func (es *EventStore) logToolCallTelemetry(sessionID string, event Event) {
 			pending[id] = tc
 		}
 		toolCallsMu.Unlock()
+		toolCallsMu.Lock()
+		alreadySettling := settleInFlight[sessionID]
+		if len(pending) > 0 && !alreadySettling {
+			settleInFlight[sessionID] = true
+		}
+		toolCallsMu.Unlock()
+		if alreadySettling {
+			return
+		}
 		if len(pending) > 0 {
 			names := make([]string, 0, len(pending))
 			for id, tc := range pending {
@@ -1666,6 +1685,7 @@ func (es *EventStore) settleAfterGrace(sessionID string, turnEnd Event, pending 
 	time.Sleep(toolCallSettleGrace)
 
 	toolCallsMu.Lock()
+	delete(settleInFlight, sessionID)
 	stuck := make(map[string]*toolCallTelemetry, len(pending))
 	for id, tc := range pending {
 		// Still open means the end never arrived; anything that landed during
