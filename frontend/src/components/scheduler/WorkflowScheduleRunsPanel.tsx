@@ -950,7 +950,14 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
             if (!isMissedSchedule(job)) return false
             break
           case 'issues':
-            if (job.last_status !== 'error') return false
+            // The Issues badge counts error, partial AND interrupted
+            // (isScheduleIssueStatus), so filtering to 'error' alone made a
+            // schedule that ended partial contribute to the count and then
+            // vanish when the count was clicked — the badge said 1, the list
+            // said nothing. hetzner-ssh hit exactly this: its workflow
+            // succeeded, Pulse finalized partial, and the schedule became
+            // unfindable.
+            if (!isScheduleIssueStatus(job.last_status)) return false
             break
           case 'all':
           default:
