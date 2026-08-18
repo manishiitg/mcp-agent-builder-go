@@ -2812,7 +2812,7 @@ export interface ScheduledJob {
   last_run_at?: string
   next_run_at?: string
   last_session_id?: string
-  last_status?: 'success' | 'error' | 'running' | 'partial' | 'stopped' | 'interrupted'
+  last_status?: 'success' | 'error' | 'running' | 'partial' | 'stopped' | 'interrupted' | 'waiting_for_capacity'
   last_error?: string
   last_duration_ms?: number
   run_count: number
@@ -2885,7 +2885,7 @@ export interface ScheduledJobRun {
   job_id: string
   run_folder?: string
   session_id?: string
-  status: 'running' | 'success' | 'error'
+  status: 'running' | 'success' | 'error' | 'waiting_for_capacity'
   error?: string
   duration_ms?: number
   group_names?: string[]

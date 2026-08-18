@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import ReactDOM from 'react-dom'
 import cronstrue from 'cronstrue'
 import {
-  X, Play, Trash2, Clock, CheckCircle, XCircle, Minus, Loader,
+  X, Play, Trash2, Clock, CheckCircle, XCircle, PauseCircle, Minus, Loader,
   Terminal, Pause, Calendar, ClipboardCheck, AlertTriangle,
   ChevronDown, ChevronLeft, ChevronRight, RefreshCw, Square, Radio, Search, FileText, MessageSquare
 } from 'lucide-react'
@@ -2703,6 +2703,12 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                                     <Loader className="w-3 h-3 text-amber-500 animate-spin flex-shrink-0" />
                                   ) : run.status === 'success' ? (
                                     <CheckCircle className="w-3 h-3 text-green-500 flex-shrink-0" />
+                                  ) : run.status === 'waiting_for_capacity' ? (
+                                    /* Suspended, not failed: the run holds completed steps and
+                                       resumes itself when the provider window reopens. A red
+                                       cross here reads as a defect and invites a manual re-run
+                                       that would replay those steps' side effects. */
+                                    <PauseCircle className="w-3 h-3 text-amber-500 flex-shrink-0" />
                                   ) : (
                                     <XCircle className="w-3 h-3 text-red-500 flex-shrink-0" />
                                   )}
@@ -2773,6 +2779,11 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                                   )}
 
                                   {/* Error (truncated) */}
+                                  {run.status === 'waiting_for_capacity' && run.error && (
+                                    <span className="text-amber-500 truncate flex-1" title={run.error}>
+                                      {run.error}
+                                    </span>
+                                  )}
                                   {run.status === 'error' && run.error && (
                                     <span className="text-red-400 truncate flex-1" title={run.error}>
                                       {run.error.length > 50 ? run.error.slice(0, 50) + '...' : run.error}

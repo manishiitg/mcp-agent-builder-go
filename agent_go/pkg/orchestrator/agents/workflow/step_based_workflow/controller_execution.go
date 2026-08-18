@@ -3430,6 +3430,21 @@ func (hcpo *StepBasedWorkflowOrchestrator) runExecutionPhase(
 			nil,                      // orchestrationRoutes - nil for regular steps (not sub-agents)
 		)
 		if err != nil {
+			// A provider capacity wall is not a step failure. The steps before
+			// this one completed and did real work; the remaining ones will
+			// succeed once the window reopens. Recording a durable wait and
+			// returning it typed lets the scheduler suspend this run at exactly
+			// this step instead of marking it failed and letting the next cron
+			// tick replay the completed steps' side effects (PLAT-101).
+			stepTitleForWait := step.GetTitle()
+			stepIDForWait := step.GetID()
+			if stepIDForWait == "" {
+				stepIDForWait = fmt.Sprintf("step-%d", i+1)
+			}
+			if waitErr := hcpo.recordWorkflowCapacityWait(ctx, err, i+1, len(breakdownSteps), stepIDForWait, stepPath, stepTitleForWait); waitErr != nil {
+				hcpo.GetLogger().Info(fmt.Sprintf("⏸️ Step %d suspended on provider capacity: %v", i+1, waitErr))
+				return waitErr
+			}
 			hcpo.GetLogger().Error(fmt.Sprintf("❌ Step %d execution failed: %v", i+1, err), nil)
 			// Emit step_progress_updated (failed) event
 			stepTitle := step.GetTitle()

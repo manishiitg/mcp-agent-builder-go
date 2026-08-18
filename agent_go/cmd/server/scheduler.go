@@ -18,6 +18,7 @@ import (
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/contractupgrade"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/costledger"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/fsutil"
+	stepworkflow "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/schedulerstate"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workflowtypes"
 	"github.com/robfig/cron/v3"
@@ -59,6 +60,15 @@ type ScheduleContext struct {
 	// should review. A preflight abort against a pre-existing, untouched run
 	// folder (e.g. a workflow reusing iteration-0) did not.
 	ProducedRunEvidence bool
+
+	// CapacityResume* carry a run that was suspended on a provider capacity
+	// wall back into execution (PLAT-101). The run is resumed in place — same
+	// run row, same run folder, starting at the step that could not run —
+	// because the steps before it already completed and did real work that must
+	// not be replayed.
+	CapacityResumeRunID     string
+	CapacityResumeRunFolder string
+	CapacityResumeFromStep  int
 }
 
 const manualWorkflowPulseScheduleID = "manual-pulse"
@@ -463,6 +473,11 @@ func (s *SchedulerService) tickLoop(ctx context.Context) {
 				s.mu.Unlock()
 				go s.triggerSchedule(due.job.sctx, due.scheduledFor)
 			}
+
+			// Suspended runs wake on their own reset time rather than on a
+			// cron occurrence, so they are evaluated every tick alongside the
+			// schedules (PLAT-101).
+			go s.resumeDueCapacityWaits(context.Background(), t.UTC())
 
 			lastTick = t
 		}
@@ -1697,6 +1712,15 @@ func (s *SchedulerService) triggerSchedule(sctx *ScheduleContext, scheduledFor t
 	}
 	freshCtx.TriggerSource = "cron"
 	freshCtx.ScheduledFor = scheduledFor.UTC()
+	// The reload above rebuilds the context from the manifest, so a resume's
+	// identity has to be carried across explicitly or it is silently dropped
+	// and the run restarts from step 1 (PLAT-101).
+	freshCtx.CapacityResumeRunID = sctx.CapacityResumeRunID
+	freshCtx.CapacityResumeRunFolder = sctx.CapacityResumeRunFolder
+	freshCtx.CapacityResumeFromStep = sctx.CapacityResumeFromStep
+	if freshCtx.CapacityResumeRunID != "" {
+		freshCtx.TriggerSource = "capacity_resume"
+	}
 
 	// Built-in pre-fire check: if the built-in registered a gating function and
 	// it returns false, skip this tick entirely. No LLM session is spawned.
@@ -1713,6 +1737,11 @@ func (s *SchedulerService) triggerSchedule(sctx *ScheduleContext, scheduledFor t
 	// global runtime-state mutex.
 	startTime := time.Now().UTC()
 	runID := uuid.NewString()
+	if freshCtx.CapacityResumeRunID != "" {
+		// Continue the suspended run's own identity so history shows one run
+		// that waited, not a failed run followed by an unrelated new one.
+		runID = freshCtx.CapacityResumeRunID
+	}
 	runtimeKey = scheduleRuntimeKey(freshCtx)
 	s.runtimeStatesMu.Lock()
 	state := s.getRuntimeStateLocked(runtimeKey)
@@ -1744,6 +1773,19 @@ func (s *SchedulerService) triggerSchedule(sctx *ScheduleContext, scheduledFor t
 			s.logf(freshCtx, "[SCHEDULER] ⏭️ Chief of Staff already has running schedule %s (session: %s), skipping schedule %s",
 				otherKey, otherSession, schedID)
 			s.recordScheduleFireDecision(ctx, freshCtx, "skipped_busy", "another Chief of Staff schedule is running", "", startTime)
+			return
+		}
+	}
+	if freshCtx.SourceType == "workflow" && freshCtx.CapacityResumeRunID == "" {
+		if waitingRun, wait := s.outstandingCapacityWait(ctx, freshCtx.WorkspacePath); waitingRun != nil {
+			s.runtimeStatesMu.Unlock()
+			// Firing here is what turned one capacity wall into a run storm: the
+			// new run restarts from step 1, replays the completed steps' side
+			// effects, and hits the same wall — every tick until the window
+			// happens to reopen. The suspended run resumes itself instead.
+			reason := "a run is suspended on provider capacity: " + wait.Describe()
+			s.logf(freshCtx, "[SCHEDULER] ⏭️ Skipping %s: %s", schedID, reason)
+			s.recordScheduleFireDecision(ctx, freshCtx, "skipped_waiting_for_capacity", reason, waitingRun.ID, startTime)
 			return
 		}
 	}
@@ -1827,6 +1869,14 @@ func (s *SchedulerService) runJob(ctx context.Context, sctx *ScheduleContext, ru
 		if err := AppendMultiAgentScheduleRun(ctx, sctx.UserID, run); err != nil {
 			s.logf(sctx, "[SCHEDULER] Failed to create multi-agent run entry for %s: %v", schedID, err)
 		}
+	} else if sctx.CapacityResumeRunID != "" {
+		// A resumed run continues its own history row rather than opening a
+		// second one. Two rows would read as two runs, when what happened is one
+		// run that waited — and it would leave the first row reporting
+		// waiting_for_capacity forever, which suppresses the schedule.
+		if err := UpdateScheduleRun(ctx, sctx.WorkspacePath, sctx.CapacityResumeRunID, "running", "", nil, sctx.CapacityResumeRunFolder, ""); err != nil {
+			s.logf(sctx, "[SCHEDULER] Failed to reopen waiting run entry %s: %v", sctx.CapacityResumeRunID, err)
+		}
 	} else {
 		if err := AppendScheduleRun(ctx, sctx.WorkspacePath, run); err != nil {
 			s.logf(sctx, "[SCHEDULER] Failed to create run entry for %s: %v", schedID, err)
@@ -1862,6 +1912,13 @@ func (s *SchedulerService) runJob(ctx context.Context, sctx *ScheduleContext, ru
 			execErr = errWorkshopSequenceInterrupted
 		}
 		s.sessionLogf(sctx, sessionID, "[SCHEDULER] %s stopped by user after %dms", schedID, durationMs)
+	} else if wait, waiting := s.classifyCapacityWait(ctx, sctx, execErr, runFolder, startTime); waiting {
+		// Not a failure. The run stopped because the provider has no capacity
+		// left, holds completed steps whose side effects must not be replayed,
+		// and continues from the same step once the window reopens (PLAT-101).
+		status = scheduleRunStatusWaitingForCapacity
+		errMsg = wait.Describe()
+		s.sessionLogf(sctx, sessionID, "[SCHEDULER] ⏸️ %s suspended after %dms: %s", schedID, durationMs, errMsg)
 	} else if execErr != nil {
 		status = "error"
 		errMsg = execErr.Error()
@@ -3915,6 +3972,17 @@ func (s *SchedulerService) buildWorkshopRequest(ctx context.Context, sctx *Sched
 		// same mode as the user's interactive sessions, so it natively resumes
 		// the workflow's latest thread (same-mode) with no special handling.
 		"workshop_mode": "workshop",
+	}
+	if sctx.CapacityResumeFromStep > 0 {
+		// Resume exactly where the capacity wall stopped this run. Resume-from-step
+		// cleans step N and everything after it, which is precisely the right
+		// scope: step N never completed and no later step started, while steps
+		// 1..N-1 completed and are preserved.
+		execOpts["execution_strategy"] = stepworkflow.ExecutionStrategyResumeFromStepNoHuman
+		execOpts["resume_from_step"] = sctx.CapacityResumeFromStep
+		if sctx.CapacityResumeRunFolder != "" {
+			execOpts["selected_run_folder"] = sctx.CapacityResumeRunFolder
+		}
 	}
 	if len(sctx.Schedule.GroupNames) > 0 {
 		execOpts["enabled_group_names"] = sctx.Schedule.GroupNames
