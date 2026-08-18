@@ -1607,23 +1607,77 @@ func (es *EventStore) logToolCallTelemetry(sessionID string, event Event) {
 	// A turn that ends with calls still open is the spinning-chip case.
 	if event.Type == "agent_end" || event.Type == "unified_completion" {
 		toolCallsMu.Lock()
-		stuck := make(map[string]*toolCallTelemetry, len(openToolCall[sessionID]))
+		pending := make(map[string]*toolCallTelemetry, len(openToolCall[sessionID]))
 		for id, tc := range openToolCall[sessionID] {
-			stuck[id] = tc
+			pending[id] = tc
 		}
-		delete(openToolCall, sessionID)
 		toolCallsMu.Unlock()
-		if len(stuck) > 0 {
-			names := make([]string, 0, len(stuck))
-			for id, tc := range stuck {
+		if len(pending) > 0 {
+			names := make([]string, 0, len(pending))
+			for id, tc := range pending {
 				names = append(names, tc.name+"("+id+")")
 			}
 			sort.Strings(names)
-			log.Printf("[TOOL] session=%s turn ended with %d tool call(s) STILL OPEN -- settling them: %s",
-				sessionID, len(stuck), strings.Join(names, ", "))
-			es.settleOpenToolCalls(sessionID, event, stuck)
+			log.Printf("[TOOL] session=%s turn ended with %d tool call(s) open -- waiting %s for late results: %s",
+				sessionID, len(pending), toolCallSettleGrace, strings.Join(names, ", "))
+			go es.settleAfterGrace(sessionID, event, pending)
+		} else {
+			toolCallsMu.Lock()
+			delete(openToolCall, sessionID)
+			toolCallsMu.Unlock()
 		}
 	}
+}
+
+// toolCallSettleGrace is how long a turn-end waits for tool results that are
+// already on their way.
+//
+// The turn-end signal and the tool-end events reach this store from different
+// places — the CLI's own completion versus the bridge callback that runs the
+// tool — and they are not ordered against each other. Measured on
+// tectonicusadaytrading 2026-08-18: the turn ended at 20:34:28 and the tool's
+// completion was processed at 20:34:29. Settling the instant the turn ends
+// therefore condemns calls that are one second from landing, which is how
+// fourteen completed shell commands were reported as never having reported.
+//
+// The native transcript for that session shows 215 tool_use and 215
+// tool_result: the model received everything. Nothing is lost here except the
+// UI's copy, so the grace window only needs to cover the gap between two
+// pipelines, not any real tool latency.
+var toolCallSettleGrace = 5 * time.Second
+
+// settleAfterGrace closes only the calls that are still missing once late
+// results have had time to arrive.
+func (es *EventStore) settleAfterGrace(sessionID string, turnEnd Event, pending map[string]*toolCallTelemetry) {
+	time.Sleep(toolCallSettleGrace)
+
+	toolCallsMu.Lock()
+	stuck := make(map[string]*toolCallTelemetry, len(pending))
+	for id, tc := range pending {
+		// Still open means the end never arrived; anything that landed during
+		// the grace window removed itself from the map on the way through.
+		if _, open := openToolCall[sessionID][id]; open {
+			stuck[id] = tc
+			delete(openToolCall[sessionID], id)
+		}
+	}
+	if len(openToolCall[sessionID]) == 0 {
+		delete(openToolCall, sessionID)
+	}
+	toolCallsMu.Unlock()
+
+	if len(stuck) == 0 {
+		log.Printf("[TOOL] session=%s all %d open tool call(s) reported within the grace window", sessionID, len(pending))
+		return
+	}
+	names := make([]string, 0, len(stuck))
+	for id, tc := range stuck {
+		names = append(names, tc.name+"("+id+")")
+	}
+	sort.Strings(names)
+	log.Printf("[TOOL] session=%s %d of %d tool call(s) never reported after %s -- settling: %s",
+		sessionID, len(stuck), len(pending), toolCallSettleGrace, strings.Join(names, ", "))
+	es.settleOpenToolCalls(sessionID, turnEnd, stuck)
 }
 
 // settleOpenToolCalls closes chips whose tool call never reported an end.
