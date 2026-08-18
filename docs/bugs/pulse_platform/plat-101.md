@@ -5,8 +5,8 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `open` — design agreed; implementation and live reproduction test pending |
-| Last synchronized | `2026-08-13` |
+| Ticket state | `open` — design agreed; implementation pending. Live reproduction captured 2026-08-18 (rtslatency, see below) |
+| Last synchronized | `2026-08-18` |
 
 - **Priority:** P0 — a workflow can stop midway and remain falsely running for
   hours after its coding-agent account reaches a usage limit.
@@ -227,3 +227,87 @@ The safety buffer prevents waking exactly on a provider boundary. Controls:
   never repeated.
 - The run reaches its normal terminal stages only after the recovered workflow
   itself finishes.
+
+## Live reproduction, 2026-08-18 (rtslatency)
+
+The first captured instance of this defect in the wild, found while
+diagnosing an unrelated UI report. Recorded here because the ticket's state
+was "live reproduction pending", and because it identifies a specific
+mechanism the analysis above does not name.
+
+**What the operator saw.** `rtslatency` sat in the global activity monitor
+with a live spinner and would not go away across page refreshes. The account's
+Claude limit had been reached mid-run.
+
+**What the runtime actually held**, from `/api/sessions/active` more than three
+hours after the last real work finished:
+
+```json
+{
+  "session_id": "schedule-cron--42eca39a_1787009443095002000",
+  "created_at":    "2026-08-18T05:16:47+05:30",
+  "last_activity": "2026-08-18T08:30:48+05:30",
+  "runtime_state": {
+    "phase": "running",
+    "reason": "foreground turn is active",
+    "raw_session_status": "error",
+    "foreground_turn": { "busy": false, "can_steer": true, "synthetic": true },
+    "background_live": false
+  }
+}
+```
+
+Nothing was executing: the foreground turn was not busy, no background agent
+was live, and every real child had finished. A sibling session in the same
+response carried `phase: "failed", reason: "provider usage/rate limit reached"`,
+confirming the trigger.
+
+**The mechanism that kept it `running`.** Five `synthetic-turn:steer-message-*`
+child executions were still `running`, started 00:00:09, 00:00:22 (×2),
+00:29:31 (×2) UTC and never settled. Each one had been spawned by a child
+*failing*, within milliseconds:
+
+| failed child completed_at | stuck synthetic turn started_at | gap |
+|---|---|---|
+| 00:00:09.478 (`bg-pulse-engineering+ops-backlog`) | 00:00:09.483 | 5 ms |
+| 00:00:22.548 (`msgseq-daily-latency-report`) | 00:00:22.581 | 33 ms |
+| 00:00:22.561 (`exec-daily-latency-collect-dev`) | 00:00:22.688 | 127 ms |
+| 00:29:31.416 (`msgseq-security-sweep-reflection`) | 00:29:31.451 | 35 ms |
+| 00:29:31.430 (`exec-daily-security-sweep`) | 00:29:31.558 | 128 ms |
+
+The correlation is total and runs both ways in the same session: **5 of 5**
+children that failed produced a permanently-stuck notification turn, while
+**4 of 4** children that completed produced notification turns that settled
+normally in 14–17 s.
+
+**Why those turns never settle.** `executeSyntheticTurn`
+(`cmd/server/background_agents.go`) always settles its tracked execution from a
+`defer`, so a turn stuck `running` means the goroutine never reached that
+defer. It is parked in the stream-consume loop:
+
+```go
+textChan, err := llmAgent.StreamWithEvents(agentCtx, syntheticMsg)
+...
+for range textChan {          // no deadline
+    ...
+}
+```
+
+`agentCtx` is `context.WithCancel(context.Background())` — no timeout and no
+deadline. When the provider is rate-limited and its stream never closes the
+channel, this loop blocks forever, the deferred `completeTrackedExecution`
+never runs, and the session keeps reporting a live foreground turn
+indefinitely. That is the concrete path by which "falsely running for hours"
+happens, and it is downstream of every layer the repair plan above addresses:
+even a correct typed quota error does not release a turn already parked on a
+channel that will never close.
+
+Implication for the repair: alongside the typed error, durable suspension, and
+wake-up, the auto-notification consume loop needs a bound (deadline or
+cancellation tied to the provider failure) so a stream that never terminates
+cannot hold a session open on its own.
+
+**Not the same bug as PLAT-130.** That ticket covers a cancel path that marks
+executions canceled without stopping the work. This is the inverse: no cancel
+was requested at all, and the work is already finished — only the notification
+turn is stuck.
