@@ -2490,19 +2490,38 @@ func (api *StreamingAPI) executeSyntheticTurn(sessionID, syntheticMsg string, pa
 
 		// Stream already started above; events flow through already-attached
 		// EventObservers (in-memory + DB). Consume text chunks and save history.
-		for range textChan {
+		//
+		// Bounded rather than a bare range: a coding-agent CLI parked on a
+		// usage-limit wall stops producing without closing the channel, and an
+		// unbounded consume there blocks this goroutine — and the deferred
+		// cleanup below it — forever (PLAT-101).
+		abandonReason, streamStalled := drainSyntheticTurnStream(agentCtx, textChan, func(string) {
 			api.conversationMux.Lock()
 			api.conversationHistory[sessionID] = llmAgent.GetHistory()
 			api.conversationMux.Unlock()
+		})
+		if abandonReason != "" {
+			log.Printf("[BG AGENT] Abandoning synthetic turn stream on session %s: %s", sessionID, abandonReason)
+			// Cancel first so the producer stops, then read the channel to
+			// close so it is not left blocked on a send nobody receives.
+			agentCancel()
+			discardAbandonedSyntheticStream(sessionID, textChan)
 		}
 
 		// A stopped/canceled synthetic turn must not "complete" afterward, otherwise
 		// it can resurrect the stored agent and reopen stateful MCP connections after Esc/stop.
 		if agentCtx.Err() != nil || api.isSessionStoppedOrInactive(sessionID) {
 			syntheticStatus = trackedExecutionStatusCanceled
-			if agentCtx.Err() != nil {
+			switch {
+			case streamStalled:
+				// We cancelled this turn ourselves because it went silent, so
+				// the context error below would describe our own reaction
+				// rather than the cause. A stall is a failure, not a user stop.
+				syntheticStatus = trackedExecutionStatusFailed
+				syntheticError = abandonReason
+			case agentCtx.Err() != nil:
 				syntheticError = agentCtx.Err().Error()
-			} else {
+			default:
 				syntheticError = "session stopped"
 			}
 			log.Printf("[BG AGENT] Synthetic turn aborted for session %s after stream end (ctx_err=%v stopped=%v)",
