@@ -430,7 +430,7 @@ interface ChatAreaProps {
   // the list. When present, ChatArea renders it as the primary surface (mirroring
   // the multi-agent landing panel) and suppresses its own workflow empty states.
   workflowPreviousChatsPanel?: React.ReactNode
-  // Product surfaces can replace the Chief-of-Staff previous-chat landing
+  // Product surfaces can replace the default previous-chat landing
   // without forking the shared stream, terminal, event, and composer stack.
   landingContent?: React.ReactNode
   // Product surfaces can replace the developer-facing terminal presentation

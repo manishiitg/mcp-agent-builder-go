@@ -4,7 +4,7 @@ import "testing"
 
 func TestProductEnabled(t *testing.T) {
 	t.Setenv("AGENT_PRODUCTS", "")
-	if !productEnabled("video-studio") || !productEnabled("chief-of-staff") {
+	if !productEnabled("video-studio") || !productEnabled("dominion") {
 		t.Fatal("an unset product allowlist must preserve shared-server behavior")
 	}
 
@@ -12,7 +12,7 @@ func TestProductEnabled(t *testing.T) {
 	if !productEnabled("video-studio") || !productEnabled("finance") {
 		t.Fatal("configured products must be enabled case-insensitively")
 	}
-	if productEnabled("chief-of-staff") {
+	if productEnabled("dominion") {
 		t.Fatal("unlisted product must not be registered")
 	}
 }

@@ -2096,7 +2096,7 @@ func chatHistoryTerminalSnapshotFromUIEvent(sessionID string, runtime *ChatHisto
 		"claude_code_interactive_session",
 		"gemini_interactive_session",
 	)
-	// A tmux_session is no longer required: multi-agent / Chief-of-Staff chats
+	// A tmux_session is no longer required: multi-agent chats
 	// stream their coding-agent terminal over a non-tmux transport, so those
 	// terminal events carry no tmux_session. Reconstruct them anyway (keyed by
 	// session) so the last capture is restorable from ui_events on sessions

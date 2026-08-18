@@ -12,7 +12,7 @@ import (
 
 // applySharedLLMAgentTuning fills the LLMAgentConfig fields whose resolution
 // must be identical for the root chat agent (handleQuery) and delegated
-// sub-agents (executeDelegatedTask): tool timeout, context summarization,
+// sub-agents: tool timeout, context summarization,
 // context editing, large-output offloading, and parallel tool execution.
 //
 // Priority for each field: request > preset (when non-nil) > environment >

@@ -4592,7 +4592,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			APIKeys:            mergedAPIKeys,
 			// Tool timeout, context summarization/editing, large-output offloading,
 			// and parallel tool execution are set by applySharedLLMAgentTuning below
-			// (shared with sub-agent creation in executeDelegatedTask).
+			// (shared with sub-agent creation).
 			// MCP session ID for stateful connection reuse.
 			// Use the chat session ID so all agents in the same session share MCP connections
 			SessionID: sessionID,
