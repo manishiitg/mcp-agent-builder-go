@@ -1653,9 +1653,16 @@ func (es *EventStore) settleOpenToolCalls(sessionID string, turnEnd Event, stuck
 		if name == "" {
 			name = "unknown_tool"
 		}
+		// tool_call_error, not tool_call_end. An end event renders as a
+		// successful completion — green tick, "Command Completed", the settle
+		// note shown as if it were the tool's own output. That is worse than the
+		// spinner it replaced: a spinner is visibly unresolved, whereas a green
+		// tick asserts something that did not happen. The tool never reported,
+		// so the record has to say so in the shape the UI already reads as
+		// failure.
 		es.AddEvent(sessionID, Event{
 			ID:                fmt.Sprintf("settle-%s-%d", id, now.UnixNano()),
-			Type:              "tool_call_end",
+			Type:              string(events.ToolCallError),
 			Timestamp:         now,
 			SessionID:         sessionID,
 			ExecutionID:       turnEnd.ExecutionID,
@@ -1663,17 +1670,17 @@ func (es *EventStore) settleOpenToolCalls(sessionID string, turnEnd Event, stuck
 			ExecutionKind:     turnEnd.ExecutionKind,
 			TerminalOwnerID:   turnEnd.TerminalOwnerID,
 			Data: &events.AgentEvent{
-				Type:      events.EventType("tool_call_end"),
+				Type:      events.ToolCallError,
 				Timestamp: now,
 				SessionID: sessionID,
-				Data: &events.ToolCallEndEvent{
+				Data: &events.ToolCallErrorEvent{
 					ToolName:   name,
 					ToolCallID: id,
 					Duration:   now.Sub(tc.startedAt),
-					Result:     "tool call did not report a result before the turn ended; settled by the event store so the UI does not show it as still running",
+					Error:      "tool call never reported a result; the turn ended without it",
 				},
 			},
-			Error: "unsettled at turn end",
+			Error: "tool call never reported a result; the turn ended without it",
 		})
 	}
 }

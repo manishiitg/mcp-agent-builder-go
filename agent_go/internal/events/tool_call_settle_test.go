@@ -28,10 +28,13 @@ func toolEndIDs(t *testing.T, store *EventStore, sessionID string) []string {
 	t.Helper()
 	ids := []string{}
 	for _, e := range store.GetEvents(sessionID, GetEventsOptions{}).Events {
-		if e.Type != "tool_call_end" || e.Data == nil {
+		if e.Data == nil {
 			continue
 		}
-		if d, ok := e.Data.Data.(*events.ToolCallEndEvent); ok {
+		switch d := e.Data.Data.(type) {
+		case *events.ToolCallEndEvent:
+			ids = append(ids, d.ToolCallID)
+		case *events.ToolCallErrorEvent:
 			ids = append(ids, d.ToolCallID)
 		}
 	}
@@ -91,12 +94,18 @@ func TestSettledCallSaysItWasNotAReportedResult(t *testing.T) {
 	store.AddEvent(sessionID, turnEndEvent(sessionID))
 
 	for _, e := range store.GetEvents(sessionID, GetEventsOptions{}).Events {
-		if e.Type == "tool_call_end" {
+		if e.Type == string(events.ToolCallError) {
 			if e.Error == "" {
 				t.Error("settled call is indistinguishable from a real completion")
 			}
+			if _, ok := e.Data.Data.(*events.ToolCallErrorEvent); !ok {
+				t.Error("settled call was emitted as a successful end event — the UI renders that as a green tick")
+			}
 			return
 		}
+		if e.Type == "tool_call_end" {
+			t.Fatal("settled call emitted as tool_call_end; the UI shows that as Command Completed")
+		}
 	}
-	t.Fatal("no tool_call_end was emitted at all")
+	t.Fatal("no settle event was emitted at all")
 }
