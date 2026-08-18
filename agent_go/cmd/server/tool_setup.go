@@ -314,27 +314,6 @@ func createCustomTools(workflowMode bool, sessionInfo ...string) ([]llmtypes.Too
 	return allTools, allExecutors, toolCategories
 }
 
-// enhanceToolDescriptionForChatMode enhances a tool description with chat-mode-specific directory access information.
-// chatsFolder is the full per-user path (e.g. "_users/default/Chats").
-func enhanceToolDescriptionForChatMode(toolName, originalDescription, chatsFolder string) string {
-	writeTools := map[string]bool{
-		"diff_patch_workspace_file": true,
-		"execute_shell_command":     true,
-	}
-
-	var accessInfo strings.Builder
-	accessInfo.WriteString("\n\n📁 **DIRECTORY ACCESS RESTRICTIONS (CHAT MODE):**")
-
-	if writeTools[toolName] {
-		accessInfo.WriteString(fmt.Sprintf("\n\n⚠️ **IMPORTANT:** You can ONLY write/modify files in '%s/'. All other folders are read-only.", chatsFolder))
-		accessInfo.WriteString(fmt.Sprintf("\nExample: '%s/output.txt', '%s/data.json'.", chatsFolder, chatsFolder))
-	} else {
-		accessInfo.WriteString(fmt.Sprintf("\n\nYou have READ access to all workspace folders (Workflow/, skills/, etc.), but you can only WRITE to '%s/'.", chatsFolder))
-	}
-
-	return originalDescription + accessInfo.String()
-}
-
 // enhanceToolDescriptionForWorkflowPhase augments workspace tool descriptions for
 // workflow-builder/run/optimizer sessions. Workflow phase is not normal chat output:
 // durable artifacts belong under the active workflow folder, not _users/.../Chats.

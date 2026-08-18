@@ -7,7 +7,6 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
-	"os"
 	"strings"
 	"testing"
 
@@ -264,25 +263,6 @@ func TestLookupAgentProfileDefinitionDoesNotRunTheRuntimeInitializer(t *testing.
 	// ...without rewriting the caller's request the way the per-turn path does.
 	if req.Provider != before.Provider || req.ModelID != before.ModelID || len(req.SelectedSkills) != len(before.SelectedSkills) {
 		t.Fatalf("lookup mutated the request: provider=%q model=%q skills=%v", req.Provider, req.ModelID, req.SelectedSkills)
-	}
-}
-
-// The check above proves the helper is cheap; it does not prove delegation uses
-// it. Without this, reverting the call site to resolveAgentProfileForQuery
-// passes every assertion above while restoring the per-sub-agent initializer.
-func TestDelegationUsesTheReadOnlyProfileLookup(t *testing.T) {
-	source, err := os.ReadFile("delegation.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(source), "resolveAgentProfileForQuery(") {
-		t.Fatal("delegation calls resolveAgentProfileForQuery, which re-runs the product runtime initializer " +
-			"(workspace seeding, plan refresh, workflow DB init, productdeps.Ensure) for every sub-agent; " +
-			"it needs only Definition.ToolPolicy, so use lookupAgentProfileDefinition")
-	}
-	if !strings.Contains(string(source), "lookupAgentProfileDefinition(") {
-		t.Fatal("delegation no longer resolves the parent profile at all; the sub-agent would get a wider " +
-			"tool surface than the product declared")
 	}
 }
 

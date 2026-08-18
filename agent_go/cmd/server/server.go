@@ -167,12 +167,6 @@ var (
 	stepDelegationMap = make(map[string][]string) // workshopStepCorrelationID → []delegationID
 )
 
-func registerStepDelegation(workshopStepCorrelationID, delegationID string) {
-	stepDelegationMu.Lock()
-	defer stepDelegationMu.Unlock()
-	stepDelegationMap[workshopStepCorrelationID] = append(stepDelegationMap[workshopStepCorrelationID], delegationID)
-}
-
 func getStepDelegations(workshopStepCorrelationID string) []string {
 	stepDelegationMu.RLock()
 	defer stepDelegationMu.RUnlock()

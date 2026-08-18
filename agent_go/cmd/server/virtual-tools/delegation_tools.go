@@ -634,14 +634,12 @@ func GetMultiAgentDelegationInstructions(chatsFolder string) string {
 	return GetMultiAgentDelegationInstructionsWithUser(chatsFolder, "")
 }
 
-func GetMultiAgentDelegationInstructionsWithUser(chatsFolder string, userID string) string {
+// userID is retained in the signature for callers that still pass it; the
+// instructions themselves no longer vary by user, so it is not read.
+func GetMultiAgentDelegationInstructionsWithUser(chatsFolder string, _ string) string {
 	if chatsFolder == "" {
 		chatsFolder = ChatsFolderPath
 	}
-	if userID == "" {
-		userID = "default"
-	}
-
 	// Secret management is a rare-path topic, so keep only a brief pointer in
 	// the always-loaded prompt and load the full reference on demand.
 	capabilityInstructions := `
