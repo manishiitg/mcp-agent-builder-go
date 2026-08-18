@@ -9,6 +9,58 @@ function debugReportFrame(event: string, title: string, detail?: Record<string, 
   console.debug('[ReportFrame]', event, { title, ...detail })
 }
 
+// The data API is injected at iframe onLoad — i.e. AFTER the report's own inline
+// <script> has already parsed and run. So `window.report` does not exist while a
+// report's top-level script executes, and every report had to invent its own way
+// of waiting for it. They invented it badly and differently: hand-rolled
+// `setInterval` polls that give up after N tries and run anyway, `DOMContentLoaded`
+// handlers that double-fire alongside the poll, and `load().then(...)` chains with
+// no `.catch()`. A report whose script then threw showed its "Loading…"
+// placeholders forever — indistinguishable from still-working — because nothing
+// surfaced the error. Measured across this workspace: 4 of 5 reports had no error
+// handling at all.
+//
+// Prepending this stub makes `window.report.ready(fn)` available from the report's
+// FIRST line, before any data exists. Callbacks queue until the real API is
+// injected, then run — and re-run on every subsequent data refresh, so a report
+// never needs to know about `report:data` or about injection timing at all. Errors
+// thrown inside the callback (sync or async) are routed to the frame's error
+// surface instead of vanishing.
+//
+// This is deliberately platform-owned rather than documented guidance: the report
+// HTML is authored per workflow by an agent that never renders its own output, so
+// a bootstrap it must write correctly every time is a bug generator. A bootstrap
+// it inherits cannot be got wrong.
+const REPORT_BOOTSTRAP = `<script>(function(){
+  if (window.report && window.report.ready) return;
+  var queued = [];
+  var api = window.report || {};
+  api.ready = function(fn){
+    if (typeof fn !== 'function') return;
+    queued.push(fn);
+    if (window.__reportApiReady) window.__runReportCallback(fn);
+  };
+  window.__reportQueuedCallbacks = queued;
+  window.report = api;
+})();</script>`
+
+// Placed immediately after <head> when present so it precedes any author script;
+// falls back to prepending for a fragment without a full document shell.
+export function withReportBootstrap(html: string): string {
+  if (html.includes('window.__reportQueuedCallbacks')) return html
+  const headOpen = html.match(/<head[^>]*>/i)
+  if (headOpen?.index !== undefined) {
+    const at = headOpen.index + headOpen[0].length
+    return html.slice(0, at) + REPORT_BOOTSTRAP + html.slice(at)
+  }
+  const htmlOpen = html.match(/<html[^>]*>/i)
+  if (htmlOpen?.index !== undefined) {
+    const at = htmlOpen.index + htmlOpen[0].length
+    return html.slice(0, at) + REPORT_BOOTSTRAP + html.slice(at)
+  }
+  return REPORT_BOOTSTRAP + html
+}
+
 // App theme tokens (HSL triplets) exposed to the HTML report as CSS variables so
 // it can match the app palette via hsl(var(--…)) and switch with light/dark. Read
 // from the (themed) iframe host element so report-theme overrides are included.
@@ -159,7 +211,7 @@ function HtmlReportFrameComponent({
     appliedThemeRef.current = null
     loadedDocumentRef.current = null
     debugReportFrame('srcdoc assigned', title, { bytes: html.length })
-    frame.srcdoc = html
+    frame.srcdoc = withReportBootstrap(html)
   }, [html, title])
 
   // Mirror the APP's light/dark theme onto the iframe document (the agent's HTML
@@ -198,13 +250,35 @@ function HtmlReportFrameComponent({
     const frame = iframeRef.current
     const doc = frame?.contentDocument
     if (!frame || !doc) return
+    // `documentElement.scrollHeight` can never report LESS than the iframe's own
+    // viewport height — the root element fills the viewport by definition. So
+    // measuring it while the frame is already tall reads back the frame's own
+    // height, and the result ratchets: once a report is measured tall (a wide
+    // table before layout settles, a long panel that is later hidden, content
+    // that shrinks after data loads) the frame stays that tall forever, leaving
+    // a long empty scroll below the real content that no report author can fix
+    // from inside their HTML.
+    //
+    // Collapsing the frame before measuring breaks that feedback loop: the root
+    // element then has no inflated viewport to report, so scrollHeight reflects
+    // real content and the frame is free to shrink as well as grow. The collapse
+    // and the re-set happen in the same synchronous block, so the browser never
+    // paints the intermediate state and there is no flicker.
+    const previousHeight = frame.style.height
+    frame.style.height = '0px'
     const content = Math.max(doc.documentElement?.scrollHeight || 0, doc.body?.scrollHeight || 0)
-    if (content <= 0) return
+    if (content <= 0) {
+      frame.style.height = previousHeight
+      return
+    }
     const nextHeight = `${content}px`
-    if (frame.style.height === nextHeight) return
+    if (previousHeight === nextHeight) {
+      frame.style.height = previousHeight
+      return
+    }
     // The outer report pane owns scrolling. Let the frame reach its actual content
     // height so an HTML report never creates a second, nested scroll surface.
-    debugReportFrame('height changed', frame.title, { from: frame.style.height, to: nextHeight })
+    debugReportFrame('height changed', frame.title, { from: previousHeight, to: nextHeight })
     frame.style.height = nextHeight
   }, [autoHeight])
 
@@ -285,8 +359,105 @@ function HtmlReportFrameComponent({
       })
     }
 
+    // A report's own script failing used to be completely silent: nothing here
+    // listened for `error` or `unhandledrejection`, so a throw inside the page's
+    // render left its "Loading…" placeholders on screen forever with no clue why
+    // — the report looked like it was still working, indefinitely. Reports are
+    // agent-authored per workflow (the `upgrade-direct-html-reports` migration
+    // composes them), and validate_report_html is purely static — it parses the
+    // markup and checks that scripted element ids exist, but never executes the
+    // page, so it cannot catch a script that dies before it writes anything.
+    // That combination made a broken report indistinguishable from a slow one.
+    //
+    // Surfacing the error in place of the spinner is deliberately done in the
+    // host rather than in each report: it fixes every existing report at once
+    // and cannot be forgotten by whatever authors the next one.
+    const showReportError = (message: string, source?: string) => {
+      const text = String(message || 'Unknown error').slice(0, 400)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if ((doc as any).__reportErrorShown) return
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ;(doc as any).__reportErrorShown = true
+        debugReportFrame('report script error', title, { message: text, source })
+        const banner = doc.createElement('div')
+        banner.setAttribute('data-report-error', '1')
+        banner.style.cssText = [
+          'margin:12px',
+          'padding:12px 14px',
+          'border:1px solid #ef4444',
+          'border-left-width:4px',
+          'border-radius:6px',
+          'background:rgba(239,68,68,0.08)',
+          'color:#b91c1c',
+          'font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace',
+          'white-space:pre-wrap',
+          'word-break:break-word',
+        ].join(';')
+        banner.textContent =
+          'This report failed to render.\n\n' +
+          text +
+          (source ? `\n\n(${source})` : '') +
+          '\n\nData loaded through window.report is unavailable, so any "Loading…" ' +
+          'text below is stale rather than in progress.'
+        try {
+          doc.body?.insertBefore(banner, doc.body.firstChild)
+        } catch {
+          /* document may have navigated away mid-error */
+        }
+      }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    if (!(doc as any).__reportErrorBound) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(doc as any).__reportErrorBound = true
+      win.addEventListener('error', (e: Event) => {
+        const err = e as ErrorEvent
+        showReportError(
+          err?.error?.stack || err?.message || 'Script error',
+          err?.filename ? `${err.filename}:${err.lineno}` : undefined,
+        )
+      })
+      win.addEventListener('unhandledrejection', (e: Event) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const reason = (e as any)?.reason
+        showReportError(
+          reason?.stack || reason?.message || String(reason ?? 'Unhandled promise rejection'),
+          'unhandled promise rejection',
+        )
+      })
+    }
+
+    // Run one report.ready() callback with its errors surfaced rather than
+    // swallowed. A callback may be sync or return a promise; both are covered,
+    // which is the specific gap that made `load().then(...)` with no `.catch()`
+    // fail silently.
+    const runReportCallback = (fn: unknown) => {
+      if (typeof fn !== 'function') return
+      try {
+        const result = (fn as () => unknown)()
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const maybe = result as any
+        if (maybe && typeof maybe.then === 'function') {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          maybe.catch((err: any) =>
+            showReportError(err?.stack || err?.message || String(err), 'report.ready()'),
+          )
+        }
+      } catch (err) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const e = err as any
+        showReportError(e?.stack || e?.message || String(e), 'report.ready()')
+      }
+    }
+    win.__runReportCallback = runReportCallback
+
     if (dataApi) {
       win.report = {
+        ready: (fn: unknown) => {
+          if (typeof fn !== 'function') return
+          const queue = win.__reportQueuedCallbacks
+          if (Array.isArray(queue) && !queue.includes(fn)) queue.push(fn)
+          runReportCallback(fn)
+        },
         workspacePath: dataApi.workspacePath,
         query: dataApi.query,
         get: dataApi.get,
@@ -312,10 +483,25 @@ function HtmlReportFrameComponent({
           refreshRequested,
           refreshToken,
         })
+        // Mark the API live BEFORE flushing, so a ready() registered from inside
+        // a callback runs immediately rather than waiting for the next refresh.
+        win.__reportApiReady = true
         try {
           win.dispatchEvent(new win.Event('report:data'))
         } catch {
           /* iframe may have navigated/reloaded */
+        }
+        // Run everything the page queued via report.ready() before the API
+        // existed, and re-run it on each subsequent refresh — the same contract
+        // as the report:data listener, but without the page having to know that
+        // event exists or that injection is asynchronous. Iterated over a copy:
+        // a callback may register another ready() while running.
+        const queued = Array.isArray(win.__reportQueuedCallbacks)
+          ? [...win.__reportQueuedCallbacks]
+          : []
+        if (queued.length > 0) {
+          debugReportFrame('report.ready callbacks flushed', title, { count: queued.length })
+          queued.forEach(runReportCallback)
         }
       }
     }

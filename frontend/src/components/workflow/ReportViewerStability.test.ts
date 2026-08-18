@@ -26,7 +26,14 @@ describe('open report stability', () => {
     expect(frame).toContain('export const HtmlReportFrame = memo(HtmlReportFrameComponent)')
     expect(frame).toContain('const refreshRequested = injectedRefreshTokenRef.current !== refreshToken')
     expect(frame).toContain('useLayoutEffect(() => {')
-    expect(frame).toContain('frame.srcdoc = html')
+    // The invariant is that srcDoc is assigned IMPERATIVELY (so an outer polling
+    // re-render cannot make Chromium treat it as a navigation and restart the
+    // report), not that the assigned expression is the bare `html` variable —
+    // it is now wrapped by withReportBootstrap() to prepend the report.ready()
+    // stub. Assert the imperative assignment and the absence of the declarative
+    // prop, which is what actually protects against the remount.
+    expect(frame).toContain('frame.srcdoc = ')
+    expect(frame).toContain('withReportBootstrap(html)')
     expect(frame).not.toContain('srcDoc={html}')
   })
 
