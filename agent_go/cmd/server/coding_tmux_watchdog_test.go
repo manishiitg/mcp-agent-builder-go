@@ -289,3 +289,17 @@ func TestCodingWatchdogRateLimitEvidenceIgnoresOldScrollback(t *testing.T) {
 		t.Fatalf("old scrollback evidence = %q, want empty", got)
 	}
 }
+
+func TestCodingWatchdogRateLimitEvidenceRecognizesClaudeLimitMenu(t *testing.T) {
+	content := "What do you want to do?\n\n❯ 1. Stop and wait for limit to reset\n  2. Upgrade your plan\n\nEnter to confirm · Esc to cancel"
+	if got := codingWatchdogRateLimitEvidence(content); got == "" {
+		t.Fatal("Claude usage-limit menu was not recognized as rate-limit evidence")
+	}
+}
+
+func TestCodingWatchdogLimitReasonNamesProviderAndRecovery(t *testing.T) {
+	reason := codingWatchdogLimitReason(terminals.Snapshot{Status: terminals.Status{ProviderLabel: "Claude Code"}})
+	if !strings.Contains(reason, "Claude Code has reached its usage limit") || !strings.Contains(reason, "Try again after") {
+		t.Fatalf("limit reason = %q", reason)
+	}
+}

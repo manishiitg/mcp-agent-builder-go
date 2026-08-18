@@ -1,11 +1,14 @@
 package server
 
 import (
+	"fmt"
 	"log"
 	"strings"
 	"time"
 
+	"github.com/manishiitg/coding-agent-loop/agent_go/internal/events"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/terminals"
+	unifiedevents "github.com/manishiitg/mcpagent/events"
 )
 
 // reconcileUnexpectedTerminalExit propagates an unexpected provider-process
@@ -34,6 +37,7 @@ func (api *StreamingAPI) reconcileUnexpectedTerminalExit(snapshot terminals.Snap
 			return false
 		}
 		log.Printf("[TERMINAL RECONCILE] failing main session=%s terminal=%s reason=%q", snapshot.SessionID, snapshot.TerminalID, reason)
+		api.emitMainTerminalFailure(snapshot.SessionID, reason)
 		api.updateSessionStatus(snapshot.SessionID, "error")
 		api.cancelSessionRuntimeWork(snapshot.SessionID, reason, runtimePhaseFailed)
 		return true
@@ -61,6 +65,30 @@ func (api *StreamingAPI) reconcileUnexpectedTerminalExit(snapshot terminals.Snap
 			snapshot.SessionID, snapshot.TerminalID, candidates)
 	}
 	return reconciled
+}
+
+// emitMainTerminalFailure publishes the same durable completion/error event
+// consumed by every product's conversation surface. It intentionally lives at
+// terminal-owner reconciliation rather than inside a product UI, because any
+// tmux-backed coding provider can park at a provider limit wall.
+func (api *StreamingAPI) emitMainTerminalFailure(sessionID, reason string) {
+	if api == nil || api.eventStore == nil || strings.TrimSpace(sessionID) == "" {
+		return
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return
+	}
+	failure := unifiedevents.NewUnifiedCompletionEventWithError("coding-cli", "chat", "", reason, 0, 0)
+	agentEvent := unifiedevents.NewAgentEvent(failure)
+	agentEvent.SessionID = sessionID
+	api.eventStore.AddEvent(sessionID, events.Event{
+		ID:        fmt.Sprintf("coding_cli_failure_%d", time.Now().UnixNano()),
+		Type:      string(unifiedevents.EventTypeUnifiedCompletion),
+		Timestamp: time.Now(),
+		Data:      agentEvent,
+		SessionID: sessionID,
+	})
 }
 
 func (api *StreamingAPI) failTrackedExecutionOwnedByTerminal(snapshot terminals.Snapshot, executionID, reason string) bool {
