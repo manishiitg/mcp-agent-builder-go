@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `open` — stage 1 of 4 implemented (provider, `multi-llm-provider-go@545fb18`); stages 2-4 pending. Live reproduction captured 2026-08-18 (rtslatency, see below) |
+| Ticket state | `open` — stages 1-2 of 4 implemented (`multi-llm-provider-go@a9fa11a`, `mcpagent@c88bfc0`); stages 3-4 pending. Live reproduction captured 2026-08-18 (rtslatency, see below) |
 | Last synchronized | `2026-08-18` |
 
 - **Priority:** P0 — a workflow can stop midway and remain falsely running for
@@ -319,7 +319,7 @@ state was verified in-repo before starting, not assumed from this document.
 
 ### Stage 1 — provider: structured reset time and typed quota error — **DONE**
 
-`multi-llm-provider-go@545fb18`.
+`multi-llm-provider-go@545fb18`, wiring completed in `a9fa11a`.
 
 What was actually found versus what this ticket predicted:
 
@@ -355,15 +355,43 @@ timestamp.
 the runtime that reads it), and explicit false-positive coverage for the
 matcher. Full repo suite green.
 
-### Stage 2 — agent: fallbacks, then preserve the typed error — not started
+### Stage 2 — agent: fallbacks, then preserve the typed error — **DONE**
 
-In `mcpagent`: skip same-model retries for `IsQuotaExhausted`, try the
-configured fallback chain immediately, and carry `RetryAt`/`Window` through the
-final `all LLMs failed` error rather than flattening to text. A successful
-fallback means no suspension is ever created, which rescues most runs without
-any of stage 3.
+`mcpagent@c88bfc0`.
+
+Most of what this stage asked for already existed and simply never fired:
+`isQuotaExhaustedError` checks `llmerrors.KindOf` before its string fallbacks,
+so once stage 1b returned a typed error, a Claude weekly limit already skipped
+same-model retries and moved to the fallback chain. Prior to that the same wall
+classified as transient throttling and was retried against a window that
+reopens in hours.
+
+What was genuinely missing was *time*. `quotaExhaustedModels` was a
+`map[string]bool`, which can only express "never try this again":
+
+- a five-hour window that reopened mid-run left that model benched for the
+  agent's entire lifetime, because nothing recorded that it would return;
+- the terminal `all models are quota-exhausted` error was a plain string, so no
+  caller could learn when capacity comes back — the single fact a workflow
+  needs to suspend rather than lose a partially-executed run.
+
+The map now stores the reset instant, taken from the typed provider error
+rather than re-parsed from text at this layer. A model whose window has
+reopened is removed and retried. When every model is out, the returned error is
+a typed `KindQuotaExhausted` carrying the soonest reset among them — which is
+what stage 3 will schedule its resume on.
+
+A zero reset keeps its meaning end to end: exhausted, no reliable time. Such a
+model is skipped like any other, contributes no resume time, and is never
+retried on a guessed schedule. `model_not_found` shares this map and is stored
+with a zero reset deliberately — a missing model is a config error, not a
+window that reopens.
 
 ### Stage 3 — runtime: durable suspension and wake-up — not started
+
+Both inputs this stage needs now exist and are correct: `IsQuotaExhausted` to
+decide, and `RetryAtOrZero` to schedule. Neither was usable before stages 1-2 —
+every limit looked like transient throttling and carried no time.
 
 The largest stage, and the one with real correctness hazards: durable
 `waiting_for_capacity` state, releasing every live resource, atomic claim so
