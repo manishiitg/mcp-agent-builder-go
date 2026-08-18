@@ -5,24 +5,89 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `open` — designed, deliberately not implemented (see "Why this was not landed with the fix") |
+| Ticket state | `closed / not a defect` — the premise was disproven 2026-08-18. The bug this ticket said the contract "failed to catch" did not exist, and the coverage it said was missing is present. Kept for the record, not for action. |
 | Last synchronized | `2026-08-18` |
 
-- **Priority:** P2 — nothing is broken today and the bug that exposed this is
-  fixed. This is about the *next* occurrence: the mechanism that was supposed
-  to catch it did not, and still would not.
+- **Priority:** — (closed)
 - **Owner:** `multi-llm-provider-go` — `coding_agent_certification.go`,
   `coding_agent_contract.go`, `coding_agent_contract_test.go`
-- **Related:** [PLAT-116](plat-116.md) (its deferred Pi CLI exclusion, closed
-  2026-08-18 by `multi-llm-provider-go@da13e17`, is what exposed this)
+- **Related:** [PLAT-116](plat-116.md) (its Pi structured section documents the
+  disproven diagnosis), [PLAT-139](plat-139.md) (the still-unexplained incident)
+
+## Closed 2026-08-18 — premise disproven
+
+This ticket argued that the P0 contract "enforces that a certification has a
+registered proof, but never that the proof tests what the certification
+claims", citing as evidence that a Pi CLI structured hang had "sailed through"
+a contract that already required the property.
+
+**Both halves of that are wrong.**
+
+**1. There was no Pi hang for the contract to catch.** The claim rested on
+*"pi 0.84.2 does not emit `agent_settled` — 0 occurrences against 57
+`agent_end`"*, which was a **logging artifact**: the adapter *handled*
+`agent_settled` in a `case` arm that logs nothing, while `agent_end` fell to the
+`default:` arm that exists to log unhandled types. Running the real CLI shows
+`agent_settled` emitted as the final event of every run, with pi exiting on its
+own and leaving no stale processes. Full evidence in
+[PLAT-139](plat-139.md) §"What this is NOT".
+
+**2. The coverage this ticket said was missing is present.** The concern was
+that `RequiredP0CodingAgentCertificationIDs` early-returns `nil` for
+`Transport != tmux`, leaving structured transport uncertified. But **no provider
+is registered with `Transport: structured`** — that field is a provider's
+*primary* transport, and all four run tmux primary / structured secondary, with
+structured behaviour gated on capability flags instead. Executing the function
+rather than reading it:
+
+```
+provider=claude-code  transport=tmux  requiredP0=17  [structured_streaming structured_multi_turn]
+provider=codex-cli    transport=tmux  requiredP0=17  [structured_streaming structured_multi_turn]
+provider=cursor-cli   transport=tmux  requiredP0=16  [structured_streaming structured_multi_turn]
+provider=pi-cli       transport=tmux  requiredP0=16  [structured_streaming structured_multi_turn]
+```
+
+**3. The "resume-only proofs don't test termination" argument inverts itself.**
+This ticket's central table complained that Codex, Cursor and Pi registered
+resume-only proofs against `CertStructuredMultiTurn`, whose contract says the
+session must "survive process exit". But a two-turn resume test **cannot pass
+unless turn one completed and its process exited** — there would be nothing to
+resume. Those proofs do test termination, by construction. All are `RealE2E`
+and live-gated (`-coding-cli-p0-live`), e.g. `TestPiCLIStructuredTwoTurnResume`.
+
+All four P0 enforcement tests pass:
+`TestActiveCodingAgentProvidersSatisfyP0Contract`,
+`TestAllCodingAgentCapabilityClaimsHaveRegisteredCertification`,
+`TestCodingAgentCertificationReferencesExistingTests`,
+`TestPersistentProviderP0RequiresBothTransportMultiTurnProofs`.
+
+## Is there anything worth salvaging?
+
+The *abstract* observation — a contract checks that a proof is registered, not
+that it proves the stated property — remains a fair thing to want. But it was
+argued entirely from an example that turned out to be false, and acting on it
+would have meant adding a certification for a property that is neither broken
+nor uncovered. If it is ever revived, it needs a real instance of
+under-covering to justify it. It does not have one.
+
+## Original analysis (retained for the record — premise now known false)
 
 ## What happened
 
-`multi-llm-provider-go@da13e17` fixed a Pi CLI hang: the structured adapter's
-only teardown trigger was `agent_settled`, which pi 0.84.2 no longer emits
-(0 occurrences across a day of production logs vs 57 `agent_end`). Any run
-where pi did not exit on its own blocked forever with no timeout — live, a
-workflow step held its caller 65 minutes after finishing its real work.
+**Historical note — every factual claim below this line was disproven on
+2026-08-18; see "Closed 2026-08-18 — premise disproven" at the top of this
+ticket. Retained only to show what was believed and why.** An initial
+fix attempt (`multi-llm-provider-go@6609765`) added `agent_end` as a second
+teardown trigger alongside `agent_settled` for a Pi CLI hang: the structured
+adapter's only teardown trigger was `agent_settled`, which pi 0.84.2 no longer
+emits (0 occurrences across a day of production logs vs 57 `agent_end`). Any
+run where pi did not exit on its own blocked forever with no timeout — live, a
+workflow step held its caller 65 minutes after finishing its real work. That
+fix was reverted the same day (`@fd00585`) after it caused a live regression —
+`agent_end` fires per model turn, not once per run, so treating it as terminal
+killed a still-working process. The rest of this section describes the P0
+contract gap that fix exposed; the gap analysis still holds even though the
+specific fix that motivated it does not.
 
 The interesting part is not the bug. It is that **the P0 contract already
 required a certification covering exactly this property, and passed anyway.**
@@ -127,3 +192,4 @@ occurrence, and it degrades badly if rushed.
   nightly — or never.
 - Ideally: a registered proof can no longer silently under-cover its
   certification's stated intent.
+

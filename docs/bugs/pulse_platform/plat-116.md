@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `partially implemented` — diagnostic + leak fix shipped and tested; Pi CLI's deferred exclusion closed 2026-08-18 (see the last section); the deeper root cause (why the bridge stalls in the first place) is still not pinned, deliberately deferred |
+| Ticket state | `partially implemented` — diagnostic + leak fix shipped and tested; the Pi structured-transport "hang" investigated 2026-08-18 and found to be **not a defect** (the claim rested on a logging artifact; see the last section) — no adapter change survives, all attempts reverted/abandoned; the deeper root cause of the original tmux-mode bridge stall is still not pinned, deliberately deferred; the live ICICI incident is unexplained again and tracked in [PLAT-139](plat-139.md) |
 | Last synchronized | `2026-08-18` |
 
 - **Priority:** P1 — silently turns real successes into false `error` schedule
@@ -380,67 +380,108 @@ pursued; this pass deliberately did not chase it further.
   untouched by any file this change modified — zero new failures introduced.
   fix reads from.
 
-## Pi CLI's exclusion closed by a different route (2026-08-18)
+## Pi CLI structured completion: investigated, NOT a defect (2026-08-18)
 
-This ticket deferred Pi CLI twice, and both notes were reasoning about the
-wrong mechanism.
+An earlier version of this section claimed Pi's structured adapter had a
+terminal-event bug and that it was fixed. **Both claims were wrong.** The
+section is rewritten here rather than deleted, because the false claim was
+acted on twice and caused a production regression, and because the way it was
+reached is the actually-useful lesson.
 
-The completion-oracle table above records Pi's signal as *"an `agent_end`
-marker from Pi's own embedded JS harness … the sole completion signal"* — true
-of the **interactive** adapter. The **structured** adapter
-(`pi --print --mode json`, which is what every workflow step actually uses:
-`workflow step transport: structured JSON for CLI provider 'pi-cli'`) never
-looked at `agent_end` at all. It waited on `agent_settled`, and explicitly
-discarded `agent_end` in its `default:` branch.
+### The claim that was wrong
 
-The corroboration work was then skipped for Pi because its marker file *"lives
-in a per-session temp directory only known to its internal live-session
-registry, with no OS-standard path an external caller can scan"*, needing
-*"exporting registry-level lookup first — a real, separate piece of work"*.
-That is accurate about building an **external** oracle like Codex's rollout
-scan. But no external oracle was ever needed: Pi already emits its terminal
-event **on the stream the adapter is reading**. The fix was one case arm, not a
-registry export.
+> *"pi 0.84.2 does not emit `agent_settled` at all — measured over a full day
+> of production logs, 0 occurrences against 57 `agent_end`."*
 
-**Why it mattered.** The structured adapter was verified against pi 0.80.10,
-whose stream ended `agent_end -> agent_settled`. pi 0.84.2 does not emit
-`agent_settled` at all — measured over a full day of production logs, 0
-occurrences against 57 `agent_end`. So its only teardown trigger was dead code
-against the installed binary. Harmless while pi exits on its own (stdout
-closes, `<-scannerDone` unblocks); fatal when pi stays alive, notably a
-continued native session between turns — nothing tore the process down, stdout
-never closed, and there is **no timeout anywhere on that path**.
+`agent_settled` **is** emitted by pi 0.84.2, as the final event of every run.
+The "0 occurrences" was a **logging artifact created by the measurement
+itself**: the structured adapter *handled* `agent_settled` in its own `case`
+arm, which logs nothing, while `agent_end` fell through to the `default:` arm,
+whose only job is to `Debugf("pi: unhandled event type=%q")`. Grepping the logs
+therefore compared a deliberately-silent handled event against a deliberately-
+logged unhandled one, and read the silence as absence.
 
-**Live incident.** 2026-08-18, `ICICI-BANK-PARSING-v2` group `manishiitg`,
-step `statement-download`: real work finished at 09:45 (statements downloaded,
-`logout_verified: true`), `agent_end` emitted, then the caller was held for
-**65 minutes** until the stack was stopped by hand. The scheduler sat polling
-`query_step(execution_id: workflow-full-msy44vw303)` for a completion that
-could not arrive. Same shape and almost the same duration as the codex stall
-`codexcli_structured_adapter.go` already documents.
+### Verified directly against the real CLI
 
-Note this stall is *invisible* in the usual place: because the shutdown killed
-the workspace server before the orchestrator flushed terminal status, the
-failed write was swallowed and `run_metadata.json` is still frozen at
-`"status": "running"` — the run reads as live rather than failed. That
-swallowed-terminal-write behaviour is a separate defect, not covered here.
+Run with a real Gemini key, a real stdio MCP server configured through
+`.pi/mcp.json`, and the exact flags the adapter builds
+(`--print --mode json --no-builtin-tools -e npm:pi-mcp-adapter --approve`):
 
-**Fixed** in `multi-llm-provider-go@da13e17`: accept `agent_end` *and*
-`agent_settled`, so an older pi still terminates on the event it does emit
-rather than trading one hard version dependency for another. Also stops
-discarding `sawTerminal` (`_ = sawTerminal`), which had made "pi told us it
-finished" indistinguishable from "pi's stdout happened to close" — i.e. a
-truncated run reported as a clean answer. Tests install a fake pi that emits a
-fixed stream then stays alive, reproducing the continued-session case;
-fail-before/pass-after verified (reverted, the `agent_end` test times out at
-60s with the goroutine parked in `bufio.(*Scanner).Scan`).
+```
+=== event types seen ===
+   1 "type":"agent_start"    1 "type":"turn_start"
+   1 "type":"turn_end"       1 "type":"agent_end"
+   1 "type":"agent_settled"          <-- emitted, and last
+>>> pi EXITED on its own after ~5s
+```
 
-**Still open, deliberately.** The fix removes this *known* trigger but not the
-class: a future pi that renames or drops `agent_end` would hang exactly the
-same way, because the path still has no backstop. Codex has `teardownOnce` +
-an independent poller; Pi now has neither. An idle timeout is the obvious
-generic guard and was **not** added here on purpose — Pi emits no events
-between `tool_execution_start` and `tool_execution_end`, and this workflow runs
-with `TOOL_EXECUTION_TIMEOUT=90m`, so a naive idle timer would kill legitimate
-long tool calls. Doing it safely means only arming the timer outside an
-in-flight tool execution, which deserves its own change and its own tests.
+`agent_settled` fires, it is the terminal event, and pi exits on its own
+afterwards **with the MCP extension loaded and an MCP server running**. No
+stale process, no held stdout, no hang.
+
+### Why `agent_settled` is the correct signal (and `agent_end` is not)
+
+From pi's own source (`dist/core/agent-session.js`):
+
+```js
+async _runAgentPrompt(messages) {
+    this._isAgentRunActive = true;
+    try {
+        await this.agent.prompt(messages);
+        while (await this._handlePostAgentRun()) {
+            await this.agent.continue();   // tool loops + auto-retries run HERE
+        }
+    } finally {
+        await this._emitAgentSettled();    // once, guaranteed, after the loop
+    }
+}
+```
+
+- `agent_settled` is emitted from a **`finally` block** — it cannot be skipped
+  on success, error, or abort — **once per run**, *after* the
+  `while (_handlePostAgentRun())` loop that drives multi-step tool use and
+  retries has fully drained. It also flips `_isAgentRunActive = false` and
+  resolves the internal idle-wait promise; it is the same signal pi's own
+  `waitForIdle()` is built on.
+- `agent_end` fires **inside** that loop — once per agent pass, many times per
+  run.
+
+So the original adapter (`case "agent_settled"`) was correct by construction.
+Swapping in `agent_end` replaced a guaranteed-once terminal event with one
+guaranteed to fire repeatedly *mid-run*.
+
+### What that mistake cost
+
+`multi-llm-provider-go@6609765` added `agent_end` as a teardown trigger. Within
+hours it killed a healthy, still-working pi process — its 3s natural-exit grace
+expired while pi was legitimately mid-run:
+
+```
+11:56:27 [SHUTDOWN] natural-exit grace (3s) expired for pid 67763
+11:56:27 [SHUTDOWN] SIGTERM attempt 1/3 to pgrp 67763
+11:56:27 [SHUTDOWN] process 67763 exited after SIGTERM #1
+```
+
+surfacing to the user as `pi run failed: exit status 143` (pi's print-mode
+SIGTERM handler is literally `process.exit(143)`). Reverted in
+`multi-llm-provider-go@fd00585`. A second follow-up attempt — reworking all
+four structured adapters to drive completion from a concurrent `cmd.Wait()`
+instead of a parsed event, on a theory that a child process inherits and holds
+pi's stdout — was **abandoned before commit** once the premise above collapsed.
+That theory was independently disproven too: the MCP SDK spawns stdio servers
+with `stdio: ['pipe','pipe', stderr]`, so an MCP child gets its **own** pipes
+and never inherits the parent's stdout. Commit `da13e17`, cited in earlier
+versions of this note, is a dangling rebase object reachable from no branch.
+
+### The lesson worth keeping
+
+Absence of a log line is not absence of an event — especially when the code
+being investigated is what decides whether that event gets logged. Two live CLI
+runs (~2 minutes) would have refuted the claim before any code changed; instead
+it was defended through three successive rounds of source-reading and theory.
+
+### What remains unexplained
+
+The live incident is real and its cause is now **unknown again** — see
+[PLAT-139](plat-139.md), which carries the evidence and the ruled-out
+hypotheses so this ground is not re-tread.
