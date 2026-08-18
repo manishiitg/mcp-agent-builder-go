@@ -68,30 +68,40 @@ func (api *StreamingAPI) cancelSessionRuntimeWork(sessionID, closeReason string,
 	if api == nil || strings.TrimSpace(sessionID) == "" {
 		return
 	}
+	log.Printf("[STOP] session=%s begin runtime cancel (reason=%q phase=%s)", sessionID, closeReason, terminalPhase)
 	api.markSessionStoppedAs(sessionID, terminalPhase, closeReason)
 
 	api.agentCancelMux.Lock()
+	turnCanceled := false
 	if cancelFunc, exists := api.agentCancelFuncs[sessionID]; exists {
 		cancelFunc()
 		delete(api.agentCancelFuncs, sessionID)
+		turnCanceled = true
 	}
 	api.agentCancelMux.Unlock()
+	log.Printf("[STOP] session=%s active turn context canceled=%v", sessionID, turnCanceled)
 
 	api.sessionQueryIDMux.Lock()
 	queryIDs := api.sessionQueryIDs[sessionID]
 	delete(api.sessionQueryIDs, sessionID)
 	api.sessionQueryIDMux.Unlock()
 
+	orchestratorCanceled := 0
 	if len(queryIDs) > 0 {
 		api.workflowOrchestratorContextMux.Lock()
 		for _, queryID := range queryIDs {
 			if cancelFunc, exists := api.workflowOrchestratorContexts[queryID]; exists {
 				cancelFunc()
 				delete(api.workflowOrchestratorContexts, queryID)
+				orchestratorCanceled++
 			}
 		}
 		api.workflowOrchestratorContextMux.Unlock()
 	}
+	// This is the context the workflow step loop and the message_sequence queue
+	// actually run under, so zero here with a live run means Stop reached
+	// nothing that matters.
+	log.Printf("[STOP] session=%s orchestrator contexts: queries=%d canceled=%d", sessionID, len(queryIDs), orchestratorCanceled)
 
 	api.cancelBackgroundAgents(sessionID)
 	api.cancelTrackedExecutionsForSession(sessionID)
@@ -441,7 +451,13 @@ func (api *StreamingAPI) cancelBackgroundAgents(sessionID string) {
 		return
 	}
 	if api.bgAgentRegistry != nil {
-		api.bgAgentRegistry.CancelAll(sessionID)
+		canceled, missingCancel, alreadyDone := api.bgAgentRegistry.CancelAll(sessionID)
+		log.Printf("[STOP] session=%s background agents: canceled=%d no_cancel_func=%d already_done=%d",
+			sessionID, canceled, missingCancel, alreadyDone)
+		if missingCancel > 0 {
+			log.Printf("[STOP] session=%s WARNING %d background agent(s) had no cancel func — marked canceled but never told to stop (PLAT-130 shape)",
+				sessionID, missingCancel)
+		}
 	}
 }
 

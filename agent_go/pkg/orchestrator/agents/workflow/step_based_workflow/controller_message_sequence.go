@@ -368,6 +368,12 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeMessageSequenceStep(
 		// of an error. A cancelled run must never START another item, whatever
 		// the previous one reported (PLAT-130).
 		if haltErr := messageSequenceHaltedBeforeItem(ctx, sequenceStep.GetID(), item.ID); haltErr != nil {
+			// The line a live reverify greps for: it names the item that was NOT
+			// sent, which is the whole claim Stop makes (PLAT-130).
+			if hcpo.GetLogger() != nil {
+				hcpo.GetLogger().Info(fmt.Sprintf("[STOP] message_sequence step %q: refusing to start item %q (%d of %d) — run is canceled: %v",
+					sequenceStep.GetID(), item.ID, len(session.Entries)+1, len(plannedItems), ctx.Err()))
+			}
 			session.Status = "failed"
 			session.UpdatedAt = time.Now()
 			if isRoute {

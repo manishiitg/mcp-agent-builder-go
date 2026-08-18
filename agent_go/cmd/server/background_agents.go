@@ -587,12 +587,19 @@ func (r *BackgroundAgentRegistry) CancelAgent(sessionID, agentID string) error {
 }
 
 // CancelAll cancels all running background agents in a session
-func (r *BackgroundAgentRegistry) CancelAll(sessionID string) {
+// CancelAll cancels every running agent for a session and reports how many it
+// cancelled, how many carried no cancel func, and how many were already done.
+//
+// The counts exist because PLAT-130 was diagnosed twice from the same silent
+// teardown. "Stop was clicked and nothing visibly happened" is consistent with
+// three different failures — no agents registered, agents registered without a
+// cancel func, or agents already finished — and they need opposite fixes.
+func (r *BackgroundAgentRegistry) CancelAll(sessionID string) (canceled, missingCancel, alreadyDone int) {
 	r.mu.RLock()
 	sessionAgents, ok := r.agents[sessionID]
 	if !ok {
 		r.mu.RUnlock()
-		return
+		return 0, 0, 0
 	}
 	// Copy the slice to avoid holding lock during cancel
 	agents := make([]*BackgroundAgent, 0, len(sessionAgents))
@@ -602,13 +609,22 @@ func (r *BackgroundAgentRegistry) CancelAll(sessionID string) {
 	r.mu.RUnlock()
 
 	for _, agent := range agents {
-		if agent.GetStatus() == BGAgentRunning {
-			if agent.cancel != nil {
-				agent.cancel()
-			}
-			agent.SetCanceled()
+		if agent.GetStatus() != BGAgentRunning {
+			alreadyDone++
+			continue
 		}
+		if agent.cancel != nil {
+			agent.cancel()
+			canceled++
+		} else {
+			// An agent registered without a cancel func can be marked canceled
+			// but never actually told to stop. That is the exact shape of
+			// PLAT-130, so it is counted rather than passed over.
+			missingCancel++
+		}
+		agent.SetCanceled()
 	}
+	return canceled, missingCancel, alreadyDone
 }
 
 // NotifyCompletion sends a completion notification for a session.

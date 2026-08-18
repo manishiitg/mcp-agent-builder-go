@@ -3418,7 +3418,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) runExecutionPhase(
 		// (PLAT-130). A step failing for its own reasons already aborts the loop;
 		// this covers the case where cancellation never became an error.
 		if ctx != nil && ctx.Err() != nil {
-			hcpo.GetLogger().Info(fmt.Sprintf("⏹️ Workflow halted before step %d: %v", i+1, ctx.Err()))
+			hcpo.GetLogger().Info(fmt.Sprintf("[STOP] refusing to start step %d of %d (%q) — run is canceled: %v",
+				i+1, len(breakdownSteps), step.GetTitle(), ctx.Err()))
 			return fmt.Errorf("workflow halted before step %d: %w", i+1, ctx.Err())
 		}
 		executionResult, _, err := hcpo.executeSingleStep(

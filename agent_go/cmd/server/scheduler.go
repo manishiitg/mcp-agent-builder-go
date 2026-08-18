@@ -1237,6 +1237,7 @@ func (s *SchedulerService) stopRunningJob(runtimeKey, scheduleID string) {
 		return
 	}
 
+	scheduleLogf("[STOP] ===== stop requested: schedule=%s run=%s session=%s =====", scheduleID, runID, sessionID)
 	scheduleLogf("[SCHEDULER] Stopping running job %s (session: %s)", scheduleID, sessionID)
 	if isScheduledSession(sessionID) {
 		s.api.markSessionTurnInterrupted(sessionID)
@@ -1244,6 +1245,9 @@ func (s *SchedulerService) stopRunningJob(runtimeKey, scheduleID string) {
 	s.cancelScheduledSessionWork(sessionID, "scheduled job stopped by user", runtimePhaseCanceled)
 
 	scheduleLogf("[SCHEDULER] Stopped job %s (session: %s)", scheduleID, sessionID)
+	// Closing bracket for the trace. Everything Stop did sits between this and
+	// the "stop requested" line above, so one grep gives the whole story.
+	scheduleLogf("[STOP] ===== stop teardown complete: schedule=%s session=%s =====", scheduleID, sessionID)
 }
 
 // cancelScheduledSessionWork stops agent, workflow, background, and tmux work
