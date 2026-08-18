@@ -306,9 +306,7 @@ export function PulseWorkspace({
         // that ignore each other.
         .filter((finding) => (
           !moduleFilter
-          || (moduleFilter === 'product'
-            ? ['strategy_auditor', 'goal_advisor'].includes(normalizePulseWorkspaceModule(finding.module))
-            : normalizePulseWorkspaceModule(finding.module) === moduleFilter)
+          || normalizePulseWorkspaceModule(finding.module) === moduleFilter
         ))
         .sort((a, b) => {
           const rank: Record<PulseFindingQueue, number> = {
@@ -357,7 +355,9 @@ export function PulseWorkspace({
       regressed: currentAssessments.filter((item) => item.verdict === 'regressed').length,
       inconclusive: currentAssessments.filter((item) => ['inconclusive', 'confounded'].includes(item.verdict)).length,
       awaiting: impact.interventions.filter((item) => ['awaiting_evidence', 'proposed', 'approved', 'running', 'measuring', 'blocked'].includes(item.status)).length,
-      strategyExperiment: impact.interventions.find((item) => item.kind === 'strategy_experiment') || null,
+      strategyExperiments: impact.interventions
+        .filter((item) => item.kind === 'strategy_experiment')
+        .sort((left, right) => (right.updated_at || '').localeCompare(left.updated_at || '')),
       latest: Array.from(latestBySeries.values()).slice(0, 4),
     }
   }, [impact])
@@ -522,19 +522,18 @@ export function PulseWorkspace({
               tone: 'text-violet-600 dark:text-violet-300',
             },
             {
-              id: 'product',
-              title: 'Product improvements',
+              id: 'strategic_review',
+              title: 'Strategic review',
               icon: Lightbulb,
-              description: 'Strategy recommendations and blank-sheet opportunities for the goal',
+              description: 'Hidden strategic mechanisms and materially different opportunities for the goal',
               tone: 'text-amber-600 dark:text-amber-300',
             },
           ].map((area) => {
-            const areaModules = area.id === 'product'
-              ? moduleSummaries.filter((module) => ['strategy_auditor', 'goal_advisor'].includes(module.id))
-              : moduleSummaries.filter((module) => module.id === area.id)
+            const areaModules = moduleSummaries.filter((module) => module.id === area.id)
             const decisions = areaModules.reduce((sum, module) => sum + module.awaitingUser, 0)
             const proposals = areaModules.reduce((sum, module) => sum + module.proposals, 0)
-            const actionable = area.id === 'product'
+            const strategic = area.id === 'strategic_review'
+            const actionable = strategic
               ? decisions + proposals
               : areaModules.reduce((sum, module) => sum + module.active + module.fixing + module.queuedForEngineering, 0)
             const waiting = areaModules.reduce((sum, module) => (
@@ -545,21 +544,18 @@ export function PulseWorkspace({
             const latest = [...areaModules]
               .sort((a, b) => (b.latestReview?.recorded_at || '').localeCompare(a.latestReview?.recorded_at || ''))[0]
               ?.latestReview
-            const moduleID = area.id === 'product' ? null : area.id
+            const moduleID = area.id
             return (
               <button
                 key={area.id}
                 type="button"
                 onClick={() => {
-                  if (moduleID) {
-                    setSelectedModule(moduleID)
-                    setModuleFilter(moduleID)
-                    setShowCompleteBacklog(false)
-                  } else {
+                  setSelectedModule(moduleID)
+                  setModuleFilter(moduleID)
+                  if (strategic && (decisions > 0 || proposals > 0)) {
                     setFocus(decisions > 0 ? 'decisions' : 'proposals')
-                    setModuleFilter('product')
-                    setShowCompleteBacklog(false)
                   }
+                  setShowCompleteBacklog(false)
                 }}
                 className="min-w-0 bg-background p-4 text-left transition-colors hover:bg-muted/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40"
               >
@@ -573,12 +569,12 @@ export function PulseWorkspace({
                   </div>
                   {actionable > 0 && (
                     <span className="rounded-full border border-red-500/25 bg-red-500/5 px-2 py-0.5 text-[9px] font-semibold text-red-700 dark:text-red-300">
-                      {actionable} {area.id === 'product' ? 'recommendations' : 'to fix'}
+                      {actionable} {strategic ? 'recommendations' : 'to fix'}
                     </span>
                   )}
                 </div>
                 <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
-                  {area.id === 'product' ? (
+                  {strategic ? (
                     <>
                       <span><span className="font-semibold text-foreground">{proposals}</span> ideas</span>
                       <span><span className="font-semibold text-foreground">{decisions}</span> decisions</span>
@@ -771,12 +767,12 @@ export function PulseWorkspace({
         <div className="border-b px-4 py-3">
           <h3 className="text-sm font-semibold text-foreground">Pulse activity</h3>
           <p className="mt-0.5 text-[11px] text-muted-foreground">
-            What Gate ran or skipped, why it made that choice, and whether a Fixer ran
+            What Gate selected, which review and repair turns ran, and how each sequence closed
           </p>
 		  {latestPassMetrics && (
 		    <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-muted-foreground" title={latestPassMetrics.pulseRunID}>
 		      <span className="font-medium text-foreground">Latest measured pass</span>
-		      <span>{latestPassMetrics.reviewers} review turn{latestPassMetrics.reviewers === 1 ? '' : 's'}{latestPassMetrics.fixers > 0 ? ` + ${latestPassMetrics.fixers} fixer` : ' · no fixer needed'}</span>
+		      <span>{latestPassMetrics.reviewers} review turn{latestPassMetrics.reviewers === 1 ? '' : 's'}{latestPassMetrics.fixers > 0 ? ` + ${latestPassMetrics.fixers} repair turn${latestPassMetrics.fixers === 1 ? '' : 's'}` : ' · no repair turn needed'}</span>
 		      <span>{formatAgentDuration(latestPassMetrics.wallTimeMS)} wall</span>
 		      <span>{formatAgentDuration(latestPassMetrics.agentTimeMS)} agent time</span>
 		      <span>{latestPassMetrics.calls} calls</span>
@@ -788,7 +784,7 @@ export function PulseWorkspace({
 		    </div>
 		  )}
         </div>
-        <div className="grid gap-px bg-border sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-px bg-border sm:grid-cols-2 xl:grid-cols-3">
           {moduleSummaries.map((module) => {
             const state = moduleStateByID.get(module.id)
             const active = selectedModule === module.id
@@ -900,22 +896,29 @@ export function PulseWorkspace({
             <span className="rounded-full border px-2 py-1 text-muted-foreground">{impactSummary.awaiting} awaiting evidence</span>
           </div>
         </div>
-        {impactSummary.strategyExperiment && (
-          <div className="border-b px-4 py-3 text-xs">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <div className="font-semibold text-foreground">Strategy experiment: {impactSummary.strategyExperiment.title}</div>
-                <div className="mt-1 text-[11px] text-muted-foreground">
-                  {readable(impactSummary.strategyExperiment.status)} · {readable(impactSummary.strategyExperiment.metric)} · checkpoint {readable(impactSummary.strategyExperiment.checkpoint)}
+        {impactSummary.strategyExperiments.length > 0 && (
+          <div className="divide-y border-b">
+            {impactSummary.strategyExperiments.map((experiment) => (
+              <div key={experiment.intervention_id} className="px-4 py-3 text-xs">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <div className="font-semibold text-foreground">Strategy experiment: {experiment.title}</div>
+                    <div className="mt-1 text-[11px] text-muted-foreground">
+                      {readable(experiment.metric)} · checkpoint {readable(experiment.checkpoint)}
+                    </div>
+                  </div>
+                  <span className={`rounded-full border px-2 py-1 text-[10px] font-semibold ${statusTone(experiment.status)}`}>
+                    {readable(experiment.status)}
+                  </span>
                 </div>
+                {experiment.interference_domains?.length ? (
+                  <div className="mt-2 text-[10px] leading-4 text-muted-foreground">Interference: {experiment.interference_domains.join(' · ')}</div>
+                ) : null}
+                {experiment.guardrails?.length ? (
+                  <div className="mt-1 text-[10px] leading-4 text-muted-foreground">Guardrails: {experiment.guardrails.join(' · ')}</div>
+                ) : null}
               </div>
-              <span className={`rounded-full border px-2 py-1 text-[10px] font-semibold ${statusTone(impactSummary.strategyExperiment.status)}`}>
-                {readable(impactSummary.strategyExperiment.status)}
-              </span>
-            </div>
-            {impactSummary.strategyExperiment.guardrails?.length ? (
-              <div className="mt-2 text-[10px] leading-4 text-muted-foreground">Guardrails: {impactSummary.strategyExperiment.guardrails.join(' · ')}</div>
-            ) : null}
+            ))}
           </div>
         )}
         {impactSummary.latest.length === 0 ? (

@@ -8,13 +8,11 @@ export type ReportHumanInputContextSection = {
 
 export function reportHumanInputStatusLabel(input: ReportHumanInput): string {
 	if (input.status === 'answered') {
-		if (input.source === 'strategy_auditor') return 'Waiting for Strategy Auditor'
-		if (input.source === 'goal_advisor') return 'Waiting for Goal Advisor'
+		if (['strategic_review', 'strategy_auditor', 'goal_advisor'].includes(input.source)) return 'Waiting for Strategic Review'
 		return 'Waiting for Pulse'
 	}
 	if (input.status === 'claimed') {
-		if (input.source === 'strategy_auditor') return 'Strategy Auditor is working'
-		if (input.source === 'goal_advisor') return 'Goal Advisor is working'
+		if (['strategic_review', 'strategy_auditor', 'goal_advisor'].includes(input.source)) return 'Strategic Review is working'
 		return 'Pulse is working'
 	}
   if (input.status === 'consumed') return 'Action completed'

@@ -41,8 +41,13 @@ type Module struct {
 const (
 	WorkflowReviewID  = "workflow_review"
 	LLMOpsReviewID    = "llm_ops_review"
-	StrategyAuditorID = "strategy_auditor"
-	GoalAdvisorID     = "goal_advisor"
+	StrategicReviewID = "strategic_review"
+
+	// Legacy advisor IDs are accepted only at persistence/read boundaries so
+	// existing workflow databases can be migrated into StrategicReviewID. New
+	// worklists, receipts, findings, and UI projections must never emit them.
+	LegacyStrategyAuditorID = "strategy_auditor"
+	LegacyGoalAdvisorID     = "goal_advisor"
 )
 
 // HTML-only classifications. They are not scheduled review modules.
@@ -70,27 +75,25 @@ var All = []Module{
 		Aliases:   []string{"ops", "operations"},
 	},
 	{
-		// Strategy Auditor improves the selected strategy by finding missing
-		// causal stages, weak assumptions, concentration, saturation, and other
-		// plan-versus-goal gaps. It is independent from Goal Advisor, which uses
-		// a blank-sheet lens to propose materially different approaches.
-		ID:        StrategyAuditorID,
-		Label:     "Strategy Auditor",
-		StepLabel: "strategy-auditor",
-		Aliases:   []string{"strategy", "strategy_review", "plan_effectiveness"},
-	},
-	{
-		ID:        GoalAdvisorID,
-		Label:     "Goal Advisor",
-		StepLabel: "goal-advisor",
-		Aliases:   []string{"advisor"},
+		// Strategic Review owns both causal criticism of the current strategy
+		// and, when Gate evidence warrants it, independent discovery of a
+		// materially different approach. Keeping those as turns in one sequence
+		// lets the critic compare alternatives against the same evidence without
+		// creating two competing durable module identities.
+		ID:        StrategicReviewID,
+		Label:     "Strategic review",
+		StepLabel: "strategic-review",
+		Aliases: []string{
+			"strategy", "strategy_review", "plan_effectiveness", "advisor",
+			LegacyStrategyAuditorID, LegacyGoalAdvisorID,
+		},
 	},
 }
 
 // PseudoIDs are data-module values that appear in builder/improve.html but are
 // not scheduled review modules. run_summary covers Gate and run rows; fixes
-// and decisions belong to their actual Engineering, Operations, Strategy, or
-// Goal Advisor source rather than a synthetic "Pulse fixer" lane.
+// and decisions belong to their actual Engineering, Operations, or Strategic
+// Review source rather than a synthetic "Pulse fixer" lane.
 var PseudoIDs = []string{PseudoRunSummaryID}
 
 // IDs returns the canonical module IDs in worklist order.
@@ -112,8 +115,9 @@ func IsValid(id string) bool {
 	return false
 }
 
-// Normalize maps current shorthand and loosely-cased spellings onto a canonical
-// ID. Retired module identities are deliberately not translated.
+// Normalize maps current shorthand, loosely-cased spellings, and the two
+// retired advisor identities onto a canonical ID. Callers accept the old
+// values for migration only; all output uses the canonical ID.
 func Normalize(module string) string {
 	module = strings.ToLower(strings.TrimSpace(module))
 	module = strings.ReplaceAll(module, "-", "_")

@@ -764,11 +764,12 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 		"Read the durable Gate worklist",
 		"PULSE REVIEW + FIX DISPATCH",
 		"run_in_background",
-		"one executor message sequence",
-		"Engineering Review → Stores Health",
-		"every later message_sequence item a non-empty message",
-		"Strategy Auditor and Goal Advisor as separate executor agents",
-		"The runtime tracks registered children and waits",
+		"Engineering executor is one message sequence",
+		"Stores Health only when Gate selected",
+		"each later turn in message_sequence with a non-empty message",
+		"Strategic executor is one message sequence",
+		"The runtime waits for registered children",
+		"final message in each child sequence owns durable typed writes",
 	} {
 		if !strings.Contains(reviewFix, want) {
 			t.Fatalf("review-fix prompt missing %q:\n%s", want, reviewFix)
@@ -1263,8 +1264,9 @@ func TestPulseEvalGuidanceSeparatesCorrectnessRepairsFromSemanticApproval(t *tes
 
 	advisorGuidance := read("agent_go/cmd/server/guidance/templates/improve/goal-advisor.md")
 	for _, want := range []string{
-		"strategy-first review",
-		"At most one strategy experiment may be active",
+		"strategy-first",
+		"Multiple experiments may be `running` or `measuring`",
+		"interference domains do not overlap",
 		"record_pulse_impact(interventions=[...])",
 		"human_input_id whenever",
 	} {
@@ -1525,25 +1527,25 @@ func TestValidatePulseDueModuleResultsRequiresAgentReceipts(t *testing.T) {
 	workspacePath := "Workflow/demo"
 	pulseRunID := "pulse-run-results"
 	if _, err := recordPulseWorklist(ctx, workspacePath, pulseRunID, completePulseWorklistDecisions(map[string]PulseWorklistDecision{
-		pulseModuleWorkflowReview: {Module: pulseModuleWorkflowReview, Due: true, Reason: "Operational evidence."},
-		pulseModuleGoalAdvisor:    {Module: pulseModuleGoalAdvisor, Due: true, Reason: "Goal evidence."},
+		pulseModuleWorkflowReview:  {Module: pulseModuleWorkflowReview, Due: true, Reason: "Operational evidence."},
+		pulseModuleStrategicReview: {Module: pulseModuleStrategicReview, Due: true, Reason: "Strategic evidence."},
 	})); err != nil {
 		t.Fatalf("record worklist: %v", err)
 	}
-	if err := validatePulseDueModuleResults(ctx, workspacePath, pulseRunID); err == nil || !strings.Contains(err.Error(), "workflow_review, goal_advisor") {
+	if err := validatePulseDueModuleResults(ctx, workspacePath, pulseRunID); err == nil || !strings.Contains(err.Error(), "workflow_review, strategic_review") {
 		t.Fatalf("missing-result validation error = %v", err)
 	}
 	if _, err := markPulseModuleResultFromAgent(ctx, workspacePath, pulseModuleWorkflowReview, pulseRunID, "done", "Clean review.", []string{"pulse_review_log:run:workflow_review"}); err != nil {
 		t.Fatalf("mark bug review: %v", err)
 	}
-	if _, err := markPulseModuleResultFromAgent(ctx, workspacePath, pulseModuleGoalAdvisor, pulseRunID, "done", "Advisor review complete.", []string{"pulse_review_log:run:goal_advisor"}); err != nil {
+	if _, err := markPulseModuleResultFromAgent(ctx, workspacePath, pulseModuleStrategicReview, pulseRunID, "done", "Strategic review complete.", []string{"pulse_review_log:run:strategic_review"}); err != nil {
 		t.Fatalf("mark goal advisor: %v", err)
 	}
 	if err := validatePulseDueModuleResults(ctx, workspacePath, pulseRunID); err == nil || !strings.Contains(err.Error(), "terminal current-run review receipts") {
 		t.Fatalf("missing typed-review validation error = %v", err)
 	}
 	seedPulseReviewLogRow(ctx, t, workspacePath, pulseModuleWorkflowReview, pulseRunID, "completed", "Clean review.")
-	seedPulseReviewLogRow(ctx, t, workspacePath, pulseModuleGoalAdvisor, pulseRunID, "completed", "Advisor review complete.")
+	seedPulseReviewLogRow(ctx, t, workspacePath, pulseModuleStrategicReview, pulseRunID, "completed", "Strategic review complete.")
 	if err := validatePulseDueModuleResults(ctx, workspacePath, pulseRunID); err != nil {
 		t.Fatalf("terminal validation: %v", err)
 	}
@@ -1554,8 +1556,8 @@ func TestValidatePulseDueModuleResultsRequiresAgentReceipts(t *testing.T) {
 	if got := worklist[pulseModuleWorkflowReview].LastResult; got != "done" {
 		t.Fatalf("existing completed module was overwritten: %q", got)
 	}
-	if got := worklist[pulseModuleGoalAdvisor].LastResult; got != "done" {
-		t.Fatalf("goal advisor result = %q, want done", got)
+	if got := worklist[pulseModuleStrategicReview].LastResult; got != "done" {
+		t.Fatalf("strategic review result = %q, want done", got)
 	}
 }
 
@@ -1848,11 +1850,11 @@ func TestPostRunMonitorStepsUseOneTurnInactivityBoundary(t *testing.T) {
 func TestReviewFixContinuationIsParentReceiptReconciliationOnly(t *testing.T) {
 	step := postRunMonitorReviewFixContinuationStep("pulse-test", errors.New("workflow_review receipt missing"))
 	for _, want := range []string{
-		"one parent reconciliation turn, not a second fixer",
-		"do not restart completed reviews",
-		"do not restart completed reviews, automatically create a duplicate recovery/Fixer agent, re-run a child, or mutate workflow artifacts",
-		"A separately scoped repair agent remains available when a later parent turn deliberately chooses one",
-		"record_pulse_result exactly once",
+		"PULSE REVIEW + FIX RECEIPT CHECK",
+		"Do not reconstruct findings or fixes",
+		"Validate the receipts already persisted by each sequence",
+		"Resolve only a genuine cross-module ownership conflict",
+		"do not infer or invent its findings, restart it automatically, or mutate workflow artifacts",
 	} {
 		if !strings.Contains(step.query, want) {
 			t.Fatalf("continuation prompt missing %q:\n%s", want, step.query)

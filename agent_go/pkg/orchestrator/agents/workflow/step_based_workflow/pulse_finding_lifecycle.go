@@ -501,10 +501,10 @@ func migrateRunConcernPlatformVersionColumn(ctx context.Context, db pulseFinding
 	present := false
 	for rows.Next() {
 		var (
-			cid                        int
-			name, colType              string
-			notNull, primaryKey        int
-			defaultValue               sql.NullString
+			cid                 int
+			name, colType       string
+			notNull, primaryKey int
+			defaultValue        sql.NullString
 		)
 		if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultValue, &primaryKey); err != nil {
 			return err
@@ -538,6 +538,11 @@ func ensurePulseFindingLifecycleSchema(ctx context.Context, db pulseFindingLifec
 		}
 	}
 	if err := migrateRunConcernPlatformVersionColumn(ctx, db); err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE run_concerns SET step_id=?
+		WHERE phase=? AND step_id IN (?, ?)`, pulsemodules.StrategicReviewID,
+		ConcernPhaseReview, pulsemodules.LegacyStrategyAuditorID, pulsemodules.LegacyGoalAdvisorID); err != nil {
 		return err
 	}
 	if err := migratePreValidationConcernGranularity(ctx, db); err != nil {
@@ -1264,7 +1269,7 @@ func RecordPulseFindingDispositionsTx(
 		if err := validateFindingDisposition(disposition); err != nil {
 			return err
 		}
-		if (module == pulsemodules.StrategyAuditorID || module == pulsemodules.GoalAdvisorID) &&
+		if module == pulsemodules.StrategicReviewID &&
 			disposition.Disposition == FindingDispositionProposalOnly && disposition.NextCheck == "" {
 			return fmt.Errorf("%s finding %q cannot use proposal_only without next_check: proposal_only is reserved for a recommendation waiting on a named future evidence boundary; create a pending human decision and use awaiting_user for an actionable strategy/goal change, or route a safe technical prerequisite to the Fixer",
 				module, disposition.FindingID)
@@ -1377,11 +1382,8 @@ func RecordPulseFindingDispositionsTx(
 				return fmt.Errorf("awaiting_user finding %q references human input %q with status %q; a finding can only wait on a pending decision", findingID, disposition.HumanInputID, inputStatus)
 			}
 			expectedSource, expectedPrefix := "", ""
-			switch module {
-			case pulsemodules.StrategyAuditorID:
-				expectedSource, expectedPrefix = pulsemodules.StrategyAuditorID, "strategy-proposal-"
-			case pulsemodules.GoalAdvisorID:
-				expectedSource, expectedPrefix = pulsemodules.GoalAdvisorID, "plan-proposal-"
+			if module == pulsemodules.StrategicReviewID {
+				expectedSource, expectedPrefix = pulsemodules.StrategicReviewID, "strategic-proposal-"
 			}
 			if expectedSource != "" {
 				if strings.TrimSpace(inputSource) != expectedSource {

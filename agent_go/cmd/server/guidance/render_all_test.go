@@ -131,10 +131,10 @@ func TestFocusedScheduledPulseReferencesStayComplete(t *testing.T) {
 		},
 		"pulse-review-fixer": {
 			wants: []string{
-				"exactly once", "durable evidence", "automatic completion notifications", `get_pulse_state(view="backlog")`,
+				"exactly once", "durable evidence", "automatic-notification prose", `get_pulse_state(view="backlog")`,
 				"normal Workflow Builder tools", "terminal", "cannot erase or block other due work", "priority-ordered Fix queue",
 				"one reconciled `ownership_manifest`", "`kb_purity_manifest`", "`db_ownership_manifest`", "Lock recommendations",
-				"proposal_only", "exact non-empty `next_check`", "strategy-proposal-", "plan-proposal-",
+				"proposal_only", "exact non-empty `next_check`", "strategy-proposal-", "final sequence message owns",
 			},
 		},
 		"pulse-finalizer": {
@@ -591,8 +591,8 @@ func TestStrategyAuditorGuidanceRequiresLongitudinalEvidenceAndReadOnlyHandoff(t
 		"Missing target/source/outcome linkage",
 		"in_plan_recommendation",
 		"Never edit workflow files or databases directly",
-		"does not wait for Bug Review",
-		"normally runs more frequently than",
+		"independent audit conclusion before the opportunity phase",
+		"does not wait for Engineering/Ops conclusions",
 		"bounded in-plan recommendation",
 		"record_pulse_finding",
 		"non-trackable conclusion",
@@ -607,15 +607,15 @@ func TestStrategyAuditorGuidanceRequiresLongitudinalEvidenceAndReadOnlyHandoff(t
 		t.Fatalf("render pulse-gate: %v", err)
 	}
 	for _, want := range []string{
-		"`strategy_auditor`",
+		"`strategic_review`",
 		"activity and outcomes diverge",
 		"Missing telemetry is",
 		"Never make one reviewer due merely because another reviewer",
 		"Select **at most two** due modules",
-		"Strategy Auditor and Goal Advisor must not consume each",
-		"Strategy Auditor more frequently than Goal Advisor",
-		"Goal Advisor selectively",
-		"independent blank-sheet",
+		"Strategic Review combines the former Strategy Auditor and Goal Advisor",
+		"Strategic Review for business usefulness or strategic headroom",
+		"opportunity phase runs only when",
+		"materially different approaches",
 	} {
 		if !strings.Contains(gate, want) {
 			t.Fatalf("pulse-gate missing Strategy Auditor routing %q:\n%s", want, gate)
@@ -627,11 +627,11 @@ func TestStrategyAuditorGuidanceRequiresLongitudinalEvidenceAndReadOnlyHandoff(t
 		t.Fatalf("render pulse-review-fixer: %v", err)
 	}
 	for _, want := range []string{
-		"Strategy Auditor and Goal Advisor are independent",
-		"parallel batch",
-		"Do not finish this Review+Fix turn until their evidence has been consolidated",
-		"bounded improvements within the current strategic shape",
-		"blank-sheet opportunity",
+		"Strategic Review is one product/business sequence",
+		"separate ordered sequence with fresh phase contexts",
+		"final sequence message owns the",
+		"without inheriting the",
+		"materially different",
 	} {
 		if !strings.Contains(reviewer, want) {
 			t.Fatalf("pulse-review-fixer missing Strategy Auditor boundary %q:\n%s", want, reviewer)

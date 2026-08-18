@@ -252,6 +252,13 @@ func ensureReportHumanInputSchema(ctx context.Context, db *sql.DB) error {
 		WHERE answered_by<>'' AND answered_by_kind=''`); err != nil {
 		return err
 	}
+	// Preserve pending/answered decisions while moving their attribution to the
+	// single live Strategic Review module. IDs remain stable historical keys;
+	// only new decisions use the strategic-proposal- namespace.
+	if _, err := db.ExecContext(ctx, `UPDATE report_human_inputs SET source='strategic_review'
+		WHERE source IN ('strategy_auditor', 'goal_advisor')`); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -707,13 +714,13 @@ func createReportHumanInputTools() ([]llmtypes.Tool, map[string]interface{}, map
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
 			Name:        "create_human_input_request",
-			Description: "Create or refresh a structured non-blocking workflow question for the user. Pulse, Strategy Auditor, and Goal Advisor store questions in that workflow's db/db.sqlite. The user answers inside the Pulse/report panel; published static reports should only show the question and tell the user to open AgentWorks to answer. For an in-strategy business proposal use source=\"strategy_auditor\" and a stable input_id prefixed with \"strategy-proposal-\". For a materially different plan proposal use source=\"goal_advisor\" and a stable input_id prefixed with \"plan-proposal-\". Use approve/reject/defer options and put the exact proposed changes, rationale, expected impact, risk, and evidence in context so a later Pulse pass can apply an approved proposal with normal plan tools.",
+			Description: "Create or refresh a structured non-blocking workflow question for the user. Pulse and Strategic Review store questions in that workflow's db/db.sqlite. The user answers inside the Pulse/report panel; published static reports should only show the question and tell the user to open AgentWorks to answer. For a strategic proposal use source=\"strategic_review\" and a stable input_id prefixed with \"strategic-proposal-\". Use approve/reject/defer options and put the exact proposed changes, rationale, expected impact, risk, and evidence in context so a later Pulse pass can apply an approved proposal with normal plan tools.",
 			Parameters: llmtypes.NewParameters(map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
 					"workspace_path": map[string]interface{}{"type": "string", "description": "Workflow-relative path, for example Workflow/social-media. Required; requests are stored in that workflow's db/db.sqlite."},
 					"input_id":       map[string]interface{}{"type": "string", "description": "Optional stable id. Reuse this for the same still-open question so Pulse refreshes it instead of duplicating it."},
-					"source":         map[string]interface{}{"type": "string", "enum": []string{"pulse", "strategy_auditor", "goal_advisor"}, "description": "Who is asking. Defaults to pulse."},
+					"source":         map[string]interface{}{"type": "string", "enum": []string{"pulse", "strategic_review"}, "description": "Who is asking. Defaults to pulse."},
 					"priority":       map[string]interface{}{"type": "string", "enum": []string{"low", "medium", "high"}, "description": "How important the answer is. Defaults to medium."},
 					"question":       map[string]interface{}{"type": "string", "description": "The exact user-facing question in ONE short plain sentence -- the kind a busy operator reads in three seconds, not an analyst's framing of the problem."},
 					"context":        map[string]interface{}{"type": "string", "description": "Short explanation of why this matters and what will happen next, for a non-technical operator, not a technical report. One to three short sentences PER SECTION, plain language, no jargon, no walked-through derivation -- state the single number or fact that matters and the conclusion, not how you got there; the full analysis belongs in the reviewer's findings file, not this question. For plan-change proposals, use newline-separated labeled sections exactly like: Proposal:\n...\nExact intended edits if approved:\n(1) ...\n(2) ...\nRationale:\n...\nExpected impact:\n...\nRisk:\n... -- each section still capped at one to three short sentences. Keep evidence paths in the separate evidence field, never inline citations or file paths in context."},
@@ -1119,10 +1126,10 @@ func reportHumanInputAnswerForAgent(input ReportHumanInput) string {
 
 func normalizeReportHumanInputSource(source string) string {
 	switch strings.ToLower(strings.TrimSpace(source)) {
-	case "strategy_auditor", "strategy-auditor", "strategy auditor":
-		return "strategy_auditor"
-	case "goal_advisor", "goal-advisor", "goal advisor":
-		return "goal_advisor"
+	case "strategic_review", "strategic-review", "strategic review",
+		"strategy_auditor", "strategy-auditor", "strategy auditor",
+		"goal_advisor", "goal-advisor", "goal advisor":
+		return "strategic_review"
 	default:
 		return "pulse"
 	}

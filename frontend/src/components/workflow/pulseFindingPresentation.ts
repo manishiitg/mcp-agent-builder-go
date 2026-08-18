@@ -239,7 +239,7 @@ export function pulseFindingPresentation(finding: PulseFindingLifecycle): PulseF
 
   const advisorModule = finding.step_id || finding.module
   const advisorFinding = finding.phase === 'review'
-    && ['strategy_auditor', 'goal_advisor'].includes(advisorModule || '')
+    && ['strategic_review', 'strategy_auditor', 'goal_advisor'].includes(advisorModule || '')
   if (advisorFinding && finding.details?.recommended_route !== 'fixer_handoff') {
     if (finding.details?.recommended_route === 'evidence_wait') {
       return {

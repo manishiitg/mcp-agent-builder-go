@@ -13,11 +13,12 @@ import (
 	"github.com/gorilla/mux"
 )
 
-func TestNormalizeReportHumanInputSourcePreservesReviewerIdentity(t *testing.T) {
+func TestNormalizeReportHumanInputSourceMergesLegacyAdvisorIdentity(t *testing.T) {
 	for input, want := range map[string]string{
-		"strategy-auditor": "strategy_auditor",
-		"Strategy Auditor": "strategy_auditor",
-		"goal-advisor":     "goal_advisor",
+		"strategic-review": "strategic_review",
+		"strategy-auditor": "strategic_review",
+		"Strategy Auditor": "strategic_review",
+		"goal-advisor":     "strategic_review",
 		"unknown":          "pulse",
 	} {
 		if got := normalizeReportHumanInputSource(input); got != want {
@@ -84,7 +85,7 @@ func TestReportHumanInputsUseWorkflowLocalDB(t *testing.T) {
 
 	created, err := createReportHumanInput(ctx, workspacePath, ReportHumanInputCreateRequest{
 		InputID:       "choose-cadence",
-		Source:        "goal_advisor",
+		Source:        "strategic_review",
 		Priority:      "high",
 		Question:      "Should Goal Advisor run daily until recovery?",
 		Context:       "The workflow missed the goal three times.",
@@ -99,7 +100,7 @@ func TestReportHumanInputsUseWorkflowLocalDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if created.WorkspacePath != workspacePath || created.Source != "goal_advisor" || created.Status != "pending" {
+	if created.WorkspacePath != workspacePath || created.Source != "strategic_review" || created.Status != "pending" {
 		t.Fatalf("created input mismatch: %+v", created)
 	}
 	if _, err := os.Stat(dbPath); err != nil {

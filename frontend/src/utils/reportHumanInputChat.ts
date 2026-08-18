@@ -49,8 +49,7 @@ export function selectReportDiscussionTab(
 }
 
 function sourceName(source: string): string {
-  if (source === 'strategy_auditor') return 'Strategy Auditor'
-  if (source === 'goal_advisor') return 'Goal Advisor'
+  if (['strategic_review', 'strategy_auditor', 'goal_advisor'].includes(source)) return 'Strategic Review'
   return 'Pulse'
 }
 

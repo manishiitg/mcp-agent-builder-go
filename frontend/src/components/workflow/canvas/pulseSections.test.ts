@@ -7,8 +7,7 @@ describe('Pulse workspace registry', () => {
     expect(moduleIds).toEqual([
       'workflow_review',
       'llm_ops_review',
-      'strategy_auditor',
-      'goal_advisor',
+      'strategic_review',
     ])
     expect(new Set(moduleIds).size).toBe(moduleIds.length)
   })
@@ -19,8 +18,10 @@ describe('Pulse workspace registry', () => {
     expect(new Set(commandIds).size).toBe(commandIds.length)
   })
 
-  it('keeps Strategy Auditor before Goal Advisor escalation', () => {
+  it('exposes one combined strategic lifecycle', () => {
     const moduleIds = PULSE_MODULE_COMMANDS.map(module => module.id)
-    expect(moduleIds.indexOf('strategy_auditor')).toBeLessThan(moduleIds.indexOf('goal_advisor'))
+    expect(moduleIds.filter(module => module === 'strategic_review')).toHaveLength(1)
+    expect(moduleIds).not.toContain('strategy_auditor')
+    expect(moduleIds).not.toContain('goal_advisor')
   })
 })

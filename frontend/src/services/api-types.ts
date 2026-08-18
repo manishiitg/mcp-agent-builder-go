@@ -387,7 +387,7 @@ export interface ReportHumanInputOption {
 export interface ReportHumanInput {
   id: string
   workspace_path: string
-  source: 'pulse' | 'strategy_auditor' | 'goal_advisor' | string
+  source: 'pulse' | 'strategic_review' | 'strategy_auditor' | 'goal_advisor' | string
   priority: 'low' | 'medium' | 'high' | string
   question: string
   context?: string
@@ -521,6 +521,7 @@ export interface PulseIntervention {
   kind?: 'fix_bundle' | 'strategy_experiment' | string
   guardrails?: string[]
   rollback_condition?: string
+  interference_domains?: string[]
   human_input_id?: string
   terminal_outcome?: string
   created_at?: string

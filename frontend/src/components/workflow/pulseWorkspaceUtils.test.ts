@@ -12,6 +12,7 @@ import {
 const definitions = [
   { id: 'workflow_review', label: 'Engineering review', description: 'Correctness' },
   { id: 'llm_ops_review', label: 'Ops review', description: 'Operations' },
+  { id: 'strategic_review', label: 'Strategic review', description: 'Strategy' },
 ]
 
 function finding(
@@ -47,7 +48,8 @@ function review(module: string, recordedAt: string): PulseReviewRecord {
 describe('Pulse workspace model', () => {
   it('keeps only canonical module identities', () => {
     expect(normalizePulseWorkspaceModule('workflow_review')).toBe('workflow_review')
-    expect(normalizePulseWorkspaceModule('strategy_auditor')).toBe('strategy_auditor')
+    expect(normalizePulseWorkspaceModule('strategy_auditor')).toBe('strategic_review')
+    expect(normalizePulseWorkspaceModule('goal_advisor')).toBe('strategic_review')
   })
 
   it('summarizes module lifecycle state and keeps the latest review', () => {

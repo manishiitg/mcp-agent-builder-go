@@ -51,6 +51,38 @@ func TestTypedReviewPersistsOnlyCompactReceipt(t *testing.T) {
 	}
 }
 
+func TestPulseReviewLogMigratesLegacyAdvisorModules(t *testing.T) {
+	ws := concernsWorkspace(t)
+	ctx := context.Background()
+	db, err := openRunConcernsDB(ctx, ws, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.ExecContext(ctx, pulseReviewLogSchema); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO pulse_review_log
+		(module, review_run_id, pulse_run_id, verdict, status, recorded_at) VALUES
+		('strategy_auditor','review-a','pulse-a','audit','completed','2026-08-17T01:00:00Z'),
+		('goal_advisor','review-b','pulse-b','opportunity','completed','2026-08-17T02:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensurePulseReviewLogSchema(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	var canonical, legacy int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pulse_review_log WHERE module='strategic_review'`).Scan(&canonical); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pulse_review_log WHERE module IN ('strategy_auditor','goal_advisor')`).Scan(&legacy); err != nil {
+		t.Fatal(err)
+	}
+	if canonical != 2 || legacy != 0 {
+		t.Fatalf("review migration canonical=%d legacy=%d", canonical, legacy)
+	}
+}
+
 func TestLegacyReviewTableDropsNarrativeColumns(t *testing.T) {
 	ws := concernsWorkspace(t)
 	ctx := context.Background()

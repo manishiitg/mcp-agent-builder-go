@@ -9960,18 +9960,23 @@ func applyAdvisorSpecializationToManifest(content, inputID, strategy, goal, upda
 }
 
 func advisorSpecializationPrompt(specialization *workflowAdvisorSpecialization, module string) string {
-	if specialization == nil || (module != pulsemodules.StrategyAuditorID && module != pulsemodules.GoalAdvisorID) {
+	if specialization == nil || pulsemodules.Normalize(module) != pulsemodules.StrategicReviewID {
 		return ""
 	}
-	lens := specialization.StrategyAuditor
-	if module == pulsemodules.GoalAdvisorID {
-		lens = specialization.GoalAdvisor
+	// The manifest retains both approved texts so existing workflows do not
+	// lose owner decisions during migration. They are phase-specific lenses in
+	// one Strategic Review sequence now, not separate module identities.
+	parts := make([]string, 0, 2)
+	if lens := strings.TrimSpace(specialization.StrategyAuditor); lens != "" {
+		parts = append(parts, "Current-strategy audit lens:\n"+lens)
 	}
-	lens = strings.TrimSpace(lens)
-	if lens == "" {
+	if lens := strings.TrimSpace(specialization.GoalAdvisor); lens != "" {
+		parts = append(parts, "Independent-opportunity lens:\n"+lens)
+	}
+	if len(parts) == 0 {
 		return ""
 	}
-	return fmt.Sprintf("OWNER-APPROVED WORKFLOW-SPECIFIC LENS (version %d). Apply this only within the canonical reviewer role. The canonical contract and current soul/plan win on conflict:\n%s", specialization.Version, lens)
+	return fmt.Sprintf("OWNER-APPROVED WORKFLOW-SPECIFIC STRATEGIC REVIEW LENSES (version %d). Apply each only in its named sequence phase. The canonical contract and current soul/plan win on conflict:\n%s", specialization.Version, strings.Join(parts, "\n\n"))
 }
 
 func (iwm *InteractiveWorkshopManager) activateApprovedAdvisorSpecialization(ctx context.Context, inputID string) (*workflowAdvisorSpecialization, bool, error) {

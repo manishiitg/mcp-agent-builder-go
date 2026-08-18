@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,88 @@ import (
 	step_based_workflow "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
 	mcpexecutor "github.com/manishiitg/mcpagent/executor"
 )
+
+func TestPulseModuleSchemaMigratesLegacyAdvisorsToNewestStrategicState(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	workspacePath := "Workflow/legacy-strategy"
+	dbPath := filepath.Join(root, workspacePath, "db", "db.sqlite")
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, pulseModuleStateSchema); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, pulseModuleAuditSchema); err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range []struct {
+		module, runID, reason, at string
+	}{
+		{module: "strategy_auditor", runID: "pulse-old", reason: "older audit", at: "2026-08-17T01:00:00Z"},
+		{module: pulseModuleStrategicReview, runID: "pulse-canonical-old", reason: "older canonical", at: "2026-08-17T02:00:00Z"},
+		{module: "goal_advisor", runID: "pulse-new", reason: "newest opportunity", at: "2026-08-18T03:00:00Z"},
+	} {
+		if _, err := db.ExecContext(ctx, `INSERT INTO pulse_module_state
+			(workspace_path,module,last_pulse_run_id,last_reason,updated_at) VALUES (?,?,?,?,?)`,
+			workspacePath, row.module, row.runID, row.reason, row.at); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx, `INSERT INTO pulse_module_audit
+			(workspace_path,module,pulse_run_id,result,reason,recorded_at) VALUES (?,?,?,?,?,?)`,
+			workspacePath, row.module, row.runID, "done", row.reason, row.at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	states, err := getPulseModuleStates(ctx, workspacePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var strategic *PulseModuleState
+	for i := range states {
+		if states[i].Module == "strategy_auditor" || states[i].Module == "goal_advisor" {
+			t.Fatalf("legacy live module survived migration: %#v", states[i])
+		}
+		if states[i].Module == pulseModuleStrategicReview {
+			strategic = &states[i]
+		}
+	}
+	if strategic == nil || strategic.LastPulseRunID != "pulse-new" || strategic.LastReason != "newest opportunity" {
+		t.Fatalf("newest legacy state did not become canonical: %#v", strategic)
+	}
+
+	_, db, err = openPulseModuleStateDB(ctx, workspacePath, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var legacyState, legacyAudit int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pulse_module_state WHERE module IN ('strategy_auditor','goal_advisor')`).Scan(&legacyState); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pulse_module_audit WHERE module IN ('strategy_auditor','goal_advisor')`).Scan(&legacyAudit); err != nil {
+		t.Fatal(err)
+	}
+	if legacyState != 0 || legacyAudit != 0 {
+		t.Fatalf("legacy rows remain: state=%d audit=%d", legacyState, legacyAudit)
+	}
+	var canonicalAudits int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pulse_module_audit WHERE module=?`, pulseModuleStrategicReview).Scan(&canonicalAudits); err != nil {
+		t.Fatal(err)
+	}
+	if canonicalAudits != 3 {
+		t.Fatalf("canonical audit history=%d, want 3", canonicalAudits)
+	}
+}
 
 func TestValidateReviewerVerificationDispositionsRequiresLifecycleApplication(t *testing.T) {
 	review := []step_based_workflow.PulseReviewVerificationResult{{
@@ -255,7 +338,7 @@ func TestPulseWorklistLetsGateSelectTheEvidenceJustifiedModules(t *testing.T) {
 	decisions := completePulseWorklistDecisions(map[string]PulseWorklistDecision{
 		pulseModuleWorkflowReview:  {Module: pulseModuleWorkflowReview, Due: true, Reason: "Engineering evidence requires review."},
 		pulseModuleLLMOpsReview:    {Module: pulseModuleLLMOpsReview, Due: true, Reason: "Operational evidence requires review."},
-		pulseModuleStrategyAuditor: {Module: pulseModuleStrategyAuditor, Due: true, Reason: "Strategy evidence requires review."},
+		pulseModuleStrategicReview: {Module: pulseModuleStrategicReview, Due: true, Reason: "Strategy evidence requires review."},
 	})
 	if _, err := recordPulseWorklist(ctx, "Workflow/example", "pulse-run-agentic-selection", decisions); err != nil {
 		t.Fatalf("Gate's three evidence-justified modules were rejected: %v", err)
@@ -878,8 +961,8 @@ func TestHandleGetPulseModuleState(t *testing.T) {
 	workspacePath := "Workflow/example"
 
 	if _, err := recordPulseWorklist(ctx, workspacePath, "pulse-run-1", completePulseWorklistDecisions(map[string]PulseWorklistDecision{
-		pulseModuleGoalAdvisor: {
-			Module: pulseModuleGoalAdvisor,
+		pulseModuleStrategicReview: {
+			Module: pulseModuleStrategicReview,
 			Due:    true,
 			Reason: "Goal trend is below target for two runs.",
 		},

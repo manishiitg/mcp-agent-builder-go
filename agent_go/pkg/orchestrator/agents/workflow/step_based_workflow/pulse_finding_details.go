@@ -263,7 +263,7 @@ const (
 
 func isPulseAdvisorModule(module string) bool {
 	module = pulsemodules.Normalize(module)
-	return module == pulsemodules.StrategyAuditorID || module == pulsemodules.GoalAdvisorID
+	return module == pulsemodules.StrategicReviewID
 }
 
 // validatePulseAdvisorFindingRoutes makes the advisor-to-lifecycle handoff a

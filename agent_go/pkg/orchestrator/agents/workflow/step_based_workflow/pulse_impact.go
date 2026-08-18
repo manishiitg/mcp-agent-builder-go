@@ -28,6 +28,7 @@ const pulseInterventionsSchema = `CREATE TABLE IF NOT EXISTS pulse_interventions
 	kind TEXT NOT NULL DEFAULT 'fix_bundle',
 	guardrails_json TEXT NOT NULL DEFAULT '[]',
 	rollback_condition TEXT NOT NULL DEFAULT '',
+	interference_domains_json TEXT NOT NULL DEFAULT '[]',
 	human_input_id TEXT NOT NULL DEFAULT '',
 	terminal_outcome TEXT NOT NULL DEFAULT '',
 	created_at TEXT NOT NULL,
@@ -80,22 +81,28 @@ type PulseInterventionSource struct {
 }
 
 type PulseIntervention struct {
-	InterventionID      string                    `json:"intervention_id"`
-	PulseRunID          string                    `json:"pulse_run_id,omitempty"`
-	Title               string                    `json:"title"`
-	CriterionID         string                    `json:"criterion_id"`
-	ImpactType          string                    `json:"impact_type"`
-	Metric              string                    `json:"metric"`
-	ExpectedDirection   string                    `json:"expected_direction"`
-	Scope               []string                  `json:"scope,omitempty"`
-	Provenance          string                    `json:"provenance,omitempty"`
-	BaselineWindow      string                    `json:"baseline_window,omitempty"`
-	Checkpoint          string                    `json:"checkpoint,omitempty"`
-	MinimumEvidenceRuns int                       `json:"minimum_evidence_runs"`
-	Status              string                    `json:"status"`
-	Kind                string                    `json:"kind,omitempty"`
-	Guardrails          []string                  `json:"guardrails,omitempty"`
-	RollbackCondition   string                    `json:"rollback_condition,omitempty"`
+	InterventionID      string   `json:"intervention_id"`
+	PulseRunID          string   `json:"pulse_run_id,omitempty"`
+	Title               string   `json:"title"`
+	CriterionID         string   `json:"criterion_id"`
+	ImpactType          string   `json:"impact_type"`
+	Metric              string   `json:"metric"`
+	ExpectedDirection   string   `json:"expected_direction"`
+	Scope               []string `json:"scope,omitempty"`
+	Provenance          string   `json:"provenance,omitempty"`
+	BaselineWindow      string   `json:"baseline_window,omitempty"`
+	Checkpoint          string   `json:"checkpoint,omitempty"`
+	MinimumEvidenceRuns int      `json:"minimum_evidence_runs"`
+	Status              string   `json:"status"`
+	Kind                string   `json:"kind,omitempty"`
+	Guardrails          []string `json:"guardrails,omitempty"`
+	RollbackCondition   string   `json:"rollback_condition,omitempty"`
+	// InterferenceDomains names the goal criterion, control surface,
+	// channel/cohort, metric stream, shared resource, or contamination boundary
+	// an experiment can affect. Use stable values such as "control:reply-copy"
+	// or "metric:qualified-replies". Running experiments may coexist only when
+	// these sets do not overlap.
+	InterferenceDomains []string                  `json:"interference_domains,omitempty"`
 	HumanInputID        string                    `json:"human_input_id,omitempty"`
 	TerminalOutcome     string                    `json:"terminal_outcome,omitempty"`
 	CreatedAt           string                    `json:"created_at,omitempty"`
@@ -185,11 +192,12 @@ func ensurePulseInterventionColumns(ctx context.Context, db pulseFindingLifecycl
 		return err
 	}
 	for name, definition := range map[string]string{
-		"kind":               "TEXT NOT NULL DEFAULT 'fix_bundle'",
-		"guardrails_json":    "TEXT NOT NULL DEFAULT '[]'",
-		"rollback_condition": "TEXT NOT NULL DEFAULT ''",
-		"human_input_id":     "TEXT NOT NULL DEFAULT ''",
-		"terminal_outcome":   "TEXT NOT NULL DEFAULT ''",
+		"kind":                      "TEXT NOT NULL DEFAULT 'fix_bundle'",
+		"guardrails_json":           "TEXT NOT NULL DEFAULT '[]'",
+		"rollback_condition":        "TEXT NOT NULL DEFAULT ''",
+		"interference_domains_json": "TEXT NOT NULL DEFAULT '[]'",
+		"human_input_id":            "TEXT NOT NULL DEFAULT ''",
+		"terminal_outcome":          "TEXT NOT NULL DEFAULT ''",
 	} {
 		if existing[name] {
 			continue
@@ -279,6 +287,7 @@ func RecordPulseImpactUpdate(ctx context.Context, workspacePath string, update P
 		intervention.ExpectedDirection = strings.TrimSpace(intervention.ExpectedDirection)
 		intervention.Kind = strings.TrimSpace(intervention.Kind)
 		intervention.RollbackCondition = strings.TrimSpace(intervention.RollbackCondition)
+		intervention.InterferenceDomains = normalizedLifecycleStrings(intervention.InterferenceDomains)
 		intervention.HumanInputID = strings.TrimSpace(intervention.HumanInputID)
 		intervention.TerminalOutcome = strings.TrimSpace(intervention.TerminalOutcome)
 		if intervention.Title == "" || intervention.CriterionID == "" || intervention.Metric == "" {
@@ -323,16 +332,36 @@ func RecordPulseImpactUpdate(ctx context.Context, workspacePath string, update P
 			return nil, fmt.Errorf("interventions[%d] has invalid status %q for %s. Must be one of: %s", index, intervention.Status, intervention.Kind, pulseAllowed(allowed))
 		}
 		if intervention.Kind == "strategy_experiment" {
+			intervention.InterferenceDomains = normalizedLifecycleStrings(intervention.InterferenceDomains)
 			if intervention.BaselineWindow == "" || intervention.Checkpoint == "" || len(normalizedLifecycleStrings(intervention.Guardrails)) == 0 || intervention.RollbackCondition == "" {
 				return nil, fmt.Errorf("strategy experiment interventions[%d] require baseline_window, checkpoint, at least one guardrail, and rollback_condition", index)
 			}
 			if isActiveStrategyExperimentStatus(intervention.Status) {
-				var activeCount int
-				if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM pulse_interventions WHERE kind='strategy_experiment' AND intervention_id<>? AND status IN ('proposed', 'approved', 'running', 'measuring', 'blocked')`, intervention.InterventionID).Scan(&activeCount); err != nil {
+				if len(intervention.InterferenceDomains) == 0 {
+					return nil, fmt.Errorf("running strategy experiment interventions[%d] requires interference_domains so concurrent experiments can be checked for contamination", index)
+				}
+				rows, err := tx.QueryContext(ctx, `SELECT intervention_id, interference_domains_json FROM pulse_interventions
+					WHERE kind='strategy_experiment' AND intervention_id<>? AND status IN ('running', 'measuring')`, intervention.InterventionID)
+				if err != nil {
 					return nil, err
 				}
-				if activeCount > 0 {
-					return nil, fmt.Errorf("strategy experiment interventions[%d] would create a second active strategy experiment; retire, reject, adopt, or defer the existing experiment first", index)
+				for rows.Next() {
+					var otherID, rawDomains string
+					if err := rows.Scan(&otherID, &rawDomains); err != nil {
+						rows.Close()
+						return nil, err
+					}
+					if conflicts := overlappingPulseDomains(intervention.InterferenceDomains, decodePulseImpactStrings(rawDomains)); len(conflicts) > 0 {
+						rows.Close()
+						return nil, fmt.Errorf("strategy experiment interventions[%d] conflicts with running experiment %q on interference domains: %s", index, otherID, strings.Join(conflicts, ", "))
+					}
+				}
+				if err := rows.Err(); err != nil {
+					rows.Close()
+					return nil, err
+				}
+				if err := rows.Close(); err != nil {
+					return nil, err
 				}
 			}
 			if (intervention.Status == "adopted" || intervention.Status == "rejected" || intervention.Status == "retired") && intervention.TerminalOutcome == "" {
@@ -342,8 +371,8 @@ func RecordPulseImpactUpdate(ctx context.Context, workspacePath string, update P
 		if _, err := tx.ExecContext(ctx, `INSERT INTO pulse_interventions
 			(intervention_id, pulse_run_id, title, criterion_id, impact_type, metric, expected_direction,
 			 scope_json, provenance, baseline_window, checkpoint, minimum_evidence_runs, status, kind,
-			 guardrails_json, rollback_condition, human_input_id, terminal_outcome, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 guardrails_json, rollback_condition, interference_domains_json, human_input_id, terminal_outcome, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(intervention_id) DO UPDATE SET
 			 pulse_run_id=excluded.pulse_run_id, title=excluded.title, criterion_id=excluded.criterion_id,
 			 impact_type=excluded.impact_type, metric=excluded.metric, expected_direction=excluded.expected_direction,
@@ -351,13 +380,14 @@ func RecordPulseImpactUpdate(ctx context.Context, workspacePath string, update P
 			 baseline_window=excluded.baseline_window, checkpoint=excluded.checkpoint,
 			 minimum_evidence_runs=excluded.minimum_evidence_runs, status=excluded.status, kind=excluded.kind,
 			 guardrails_json=excluded.guardrails_json, rollback_condition=excluded.rollback_condition,
+			 interference_domains_json=excluded.interference_domains_json,
 			 human_input_id=excluded.human_input_id, terminal_outcome=excluded.terminal_outcome, updated_at=excluded.updated_at`,
 			intervention.InterventionID, strings.TrimSpace(intervention.PulseRunID), intervention.Title,
 			intervention.CriterionID, intervention.ImpactType, intervention.Metric,
 			intervention.ExpectedDirection, pulseImpactJSON(intervention.Scope), strings.TrimSpace(intervention.Provenance),
 			strings.TrimSpace(intervention.BaselineWindow), strings.TrimSpace(intervention.Checkpoint),
 			intervention.MinimumEvidenceRuns, strings.TrimSpace(intervention.Status), intervention.Kind,
-			pulseImpactJSON(intervention.Guardrails), intervention.RollbackCondition, intervention.HumanInputID,
+			pulseImpactJSON(intervention.Guardrails), intervention.RollbackCondition, pulseImpactJSON(intervention.InterferenceDomains), intervention.HumanInputID,
 			intervention.TerminalOutcome, now, now); err != nil {
 			return nil, err
 		}
@@ -486,11 +516,25 @@ func RecordPulseImpactUpdate(ctx context.Context, workspacePath string, update P
 
 func isActiveStrategyExperimentStatus(status string) bool {
 	switch status {
-	case "proposed", "approved", "running", "measuring", "blocked":
+	case "running", "measuring":
 		return true
 	default:
 		return false
 	}
+}
+
+func overlappingPulseDomains(left, right []string) []string {
+	seen := make(map[string]bool, len(left))
+	for _, domain := range normalizedLifecycleStrings(left) {
+		seen[domain] = true
+	}
+	var overlap []string
+	for _, domain := range normalizedLifecycleStrings(right) {
+		if seen[domain] {
+			overlap = append(overlap, domain)
+		}
+	}
+	return overlap
 }
 
 func nullableFloat(value *float64) interface{} {
@@ -528,24 +572,25 @@ func LoadPulseImpactLedger(ctx context.Context, workspacePath string, limit int)
 
 	rows, err := db.QueryContext(ctx, `SELECT intervention_id, pulse_run_id, title, criterion_id, impact_type, metric,
 		expected_direction, scope_json, provenance, baseline_window, checkpoint, minimum_evidence_runs,
-		status, kind, guardrails_json, rollback_condition, human_input_id, terminal_outcome, created_at, updated_at
+		status, kind, guardrails_json, rollback_condition, interference_domains_json, human_input_id, terminal_outcome, created_at, updated_at
 		FROM pulse_interventions ORDER BY updated_at DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}
 	for rows.Next() {
 		var item PulseIntervention
-		var scopeJSON, guardrailsJSON string
+		var scopeJSON, guardrailsJSON, interferenceDomainsJSON string
 		if err := rows.Scan(&item.InterventionID, &item.PulseRunID, &item.Title, &item.CriterionID,
 			&item.ImpactType, &item.Metric, &item.ExpectedDirection, &scopeJSON, &item.Provenance,
 			&item.BaselineWindow, &item.Checkpoint, &item.MinimumEvidenceRuns, &item.Status, &item.Kind,
-			&guardrailsJSON, &item.RollbackCondition, &item.HumanInputID, &item.TerminalOutcome,
+			&guardrailsJSON, &item.RollbackCondition, &interferenceDomainsJSON, &item.HumanInputID, &item.TerminalOutcome,
 			&item.CreatedAt, &item.UpdatedAt); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		item.Scope = decodePulseImpactStrings(scopeJSON)
 		item.Guardrails = decodePulseImpactStrings(guardrailsJSON)
+		item.InterferenceDomains = decodePulseImpactStrings(interferenceDomainsJSON)
 		sourceRows, sourceErr := db.QueryContext(ctx, `SELECT source_type, source_id FROM pulse_intervention_sources WHERE intervention_id=? ORDER BY source_type, source_id`, item.InterventionID)
 		if sourceErr != nil {
 			rows.Close()

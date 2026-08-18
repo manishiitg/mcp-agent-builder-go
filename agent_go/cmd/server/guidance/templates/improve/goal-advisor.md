@@ -1,6 +1,7 @@
-Run Goal Advisor as an independent, strategy-first review. It is not routine
-Pulse maintenance: Strategy Auditor improves the current plan; Goal Advisor
-searches for a materially different approach the plan has not considered.{{if .Focus}}
+Run the opportunity phase of Strategic Review as a fresh, strategy-first
+message after the current-strategy audit checkpoint exists. It is not routine
+Pulse maintenance: challenge the audit and search for a materially different
+approach only when evidence indicates strategic headroom or a ceiling.{{if .Focus}}
 
 Focus especially on: {{.Focus}}{{end}}
 
@@ -42,15 +43,20 @@ it is novel.
 
 ## Proposal and experiment lifecycle
 
-At most one strategy experiment may be active for a workflow. Its typed record
-must retain a stable id, status (`proposed`, `deferred`, `approved`, `running`,
+Experiments are optional. Multiple experiments may be `running` or `measuring`
+only when their declared interference domains do not overlap. Proposed or
+approved-but-not-started experiments do not consume an active slot. Each typed
+record must retain a stable id, status (`proposed`, `deferred`, `approved`, `running`,
 `measuring`, `blocked`, `adopted`, `rejected`, or `retired`), baseline, metric,
-guardrails, evidence checkpoint, and terminal outcome.
+guardrails, evidence checkpoint, interference domains, and terminal outcome.
 
 Persist that record with `record_pulse_impact(interventions=[...])`, using
 `kind="strategy_experiment"`, `impact_type="direct_goal"`, baseline_window,
 checkpoint, guardrails, and rollback_condition. Link human_input_id whenever
-you ask for approval. Do not use an ordinary fix-bundle intervention as a
+you ask for approval. A running/measuring experiment must declare stable
+interference domains for every applicable goal criterion, control surface,
+channel/cohort, metric stream, shared resource, and contamination boundary.
+Do not use an ordinary fix-bundle intervention as a
 substitute for an experiment.
 
 If user/business judgment is required, create one `create_human_input_request`

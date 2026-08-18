@@ -675,7 +675,7 @@ func TestAdvisorProposalRoutingRequiresEvidenceOrDecision(t *testing.T) {
 	workspacePath := concernsWorkspace(t)
 	pulseRunID := "pulse-advisor-routing"
 	nextCheck := "after three completed outcome-bearing runs, compare follower growth with the current baseline"
-	concern := filedAdvisorConcern(t, workspacePath, pulseRunID, pulsemodules.StrategyAuditorID,
+	concern := filedAdvisorConcern(t, workspacePath, pulseRunID, pulsemodules.LegacyStrategyAuditorID,
 		"current allocation over-concentrates on reciprocal engagement", pulseFindingRouteEvidenceWait, nextCheck)
 	db, err := openRunConcernsDB(ctx, workspacePath, false)
 	if err != nil || db == nil {
@@ -700,13 +700,13 @@ func TestAdvisorProposalRoutingRequiresEvidenceOrDecision(t *testing.T) {
 		Disposition: FindingDispositionProposalOnly,
 		Summary:     "Reserve more allocation for reach-bearing tactics.",
 	}
-	if err := RecordPulseFindingDispositionsTx(ctx, db, pulsemodules.StrategyAuditorID, pulseRunID,
+	if err := RecordPulseFindingDispositionsTx(ctx, db, pulsemodules.LegacyStrategyAuditorID, pulseRunID,
 		[]PulseFindingDisposition{proposal}, ""); err == nil || !strings.Contains(err.Error(), "without next_check") {
 		t.Fatalf("actionable advisor proposal was silently parked without a decision: %v", err)
 	}
 
 	proposal.NextCheck = nextCheck
-	if err := RecordPulseFindingDispositionsTx(ctx, db, pulsemodules.StrategyAuditorID, pulseRunID,
+	if err := RecordPulseFindingDispositionsTx(ctx, db, pulsemodules.LegacyStrategyAuditorID, pulseRunID,
 		[]PulseFindingDisposition{proposal}, ""); err != nil {
 		t.Fatalf("evidence-waiting advisor proposal was rejected: %v", err)
 	}
@@ -716,7 +716,7 @@ func TestAdvisorAwaitingUserRequiresOwnedDecision(t *testing.T) {
 	ctx := context.Background()
 	workspacePath := concernsWorkspace(t)
 	pulseRunID := "pulse-goal-decision"
-	concern := filedAdvisorConcern(t, workspacePath, pulseRunID, pulsemodules.GoalAdvisorID,
+	concern := filedAdvisorConcern(t, workspacePath, pulseRunID, pulsemodules.LegacyGoalAdvisorID,
 		"a new distribution channel could materially increase reach", pulseFindingRouteDecisionRequired, "")
 	db, err := openRunConcernsDB(ctx, workspacePath, false)
 	if err != nil || db == nil {
@@ -735,9 +735,9 @@ func TestAdvisorAwaitingUserRequiresOwnedDecision(t *testing.T) {
 		t.Fatalf("create human inputs table: %v", err)
 	}
 	if _, err := db.ExecContext(ctx, `INSERT INTO report_human_inputs (id, source, status) VALUES
-		('plan-proposal-new-channel', 'strategy_auditor', 'pending'),
-		('strategy-proposal-new-channel', 'goal_advisor', 'pending'),
-		('plan-proposal-owned-channel', 'goal_advisor', 'pending')`); err != nil {
+		('strategic-proposal-wrong-owner', 'pulse', 'pending'),
+		('plan-proposal-wrong-prefix', 'strategic_review', 'pending'),
+		('strategic-proposal-owned-channel', 'strategic_review', 'pending')`); err != nil {
 		t.Fatalf("seed decisions: %v", err)
 	}
 
@@ -746,42 +746,42 @@ func TestAdvisorAwaitingUserRequiresOwnedDecision(t *testing.T) {
 		FindingID:    "GOAL-1",
 		Disposition:  FindingDispositionAwaitingUser,
 		Summary:      "Ask whether to test a new distribution channel.",
-		HumanInputID: "plan-proposal-new-channel",
+		HumanInputID: "strategic-proposal-wrong-owner",
 	}
-	if err := RecordPulseFindingDispositionsTx(ctx, db, pulsemodules.GoalAdvisorID, pulseRunID,
-		[]PulseFindingDisposition{disposition}, ""); err == nil || !strings.Contains(err.Error(), `source "strategy_auditor"`) {
-		t.Fatalf("Goal Advisor accepted another module's decision: %v", err)
-	}
-
-	disposition.HumanInputID = "strategy-proposal-new-channel"
-	if err := RecordPulseFindingDispositionsTx(ctx, db, pulsemodules.GoalAdvisorID, pulseRunID,
-		[]PulseFindingDisposition{disposition}, ""); err == nil || !strings.Contains(err.Error(), `must start with "plan-proposal-"`) {
-		t.Fatalf("Goal Advisor accepted the wrong decision id namespace: %v", err)
+	if err := RecordPulseFindingDispositionsTx(ctx, db, pulsemodules.StrategicReviewID, pulseRunID,
+		[]PulseFindingDisposition{disposition}, ""); err == nil || !strings.Contains(err.Error(), `source "pulse"`) {
+		t.Fatalf("Strategic Review accepted another module's decision: %v", err)
 	}
 
-	disposition.HumanInputID = "plan-proposal-owned-channel"
-	if err := RecordPulseFindingDispositionsTx(ctx, db, pulsemodules.GoalAdvisorID, pulseRunID,
+	disposition.HumanInputID = "plan-proposal-wrong-prefix"
+	if err := RecordPulseFindingDispositionsTx(ctx, db, pulsemodules.StrategicReviewID, pulseRunID,
+		[]PulseFindingDisposition{disposition}, ""); err == nil || !strings.Contains(err.Error(), `must start with "strategic-proposal-"`) {
+		t.Fatalf("Strategic Review accepted the wrong decision id namespace: %v", err)
+	}
+
+	disposition.HumanInputID = "strategic-proposal-owned-channel"
+	if err := RecordPulseFindingDispositionsTx(ctx, db, pulsemodules.StrategicReviewID, pulseRunID,
 		[]PulseFindingDisposition{disposition}, ""); err != nil {
-		t.Fatalf("Goal Advisor's real pending decision was rejected: %v", err)
+		t.Fatalf("Strategic Review's real pending decision was rejected: %v", err)
 	}
 
 	resolved := disposition
 	resolved.Disposition = FindingDispositionRejected
 	resolved.HumanInputID = ""
 	resolved.Summary = "The answered decision rejected this experiment."
-	if err := RecordPulseFindingDispositionsTx(ctx, db, pulsemodules.GoalAdvisorID, "pulse-goal-decision-2",
+	if err := RecordPulseFindingDispositionsTx(ctx, db, pulsemodules.StrategicReviewID, "pulse-goal-decision-2",
 		[]PulseFindingDisposition{resolved}, "2026-08-07T13:00:00Z"); err == nil || !strings.Contains(err.Error(), `status "pending"`) {
-		t.Fatalf("Goal Advisor closed a decision before it was answered: %v", err)
+		t.Fatalf("Strategic Review closed a decision before it was answered: %v", err)
 	}
-	if _, err := db.ExecContext(ctx, `UPDATE report_human_inputs SET status='answered' WHERE id='plan-proposal-owned-channel'`); err != nil {
+	if _, err := db.ExecContext(ctx, `UPDATE report_human_inputs SET status='answered' WHERE id='strategic-proposal-owned-channel'`); err != nil {
 		t.Fatal(err)
 	}
-	if err := RecordPulseFindingDispositionsTx(ctx, db, pulsemodules.GoalAdvisorID, "pulse-goal-decision-2",
+	if err := RecordPulseFindingDispositionsTx(ctx, db, pulsemodules.StrategicReviewID, "pulse-goal-decision-2",
 		[]PulseFindingDisposition{resolved}, "2026-08-07T13:00:00Z"); err != nil {
-		t.Fatalf("Goal Advisor could not apply an answered decision: %v", err)
+		t.Fatalf("Strategic Review could not apply an answered decision: %v", err)
 	}
 	var status string
-	if err := db.QueryRowContext(ctx, `SELECT status FROM report_human_inputs WHERE id='plan-proposal-owned-channel'`).Scan(&status); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT status FROM report_human_inputs WHERE id='strategic-proposal-owned-channel'`).Scan(&status); err != nil {
 		t.Fatal(err)
 	}
 	if status != "consumed" {

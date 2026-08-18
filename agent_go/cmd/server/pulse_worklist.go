@@ -25,11 +25,10 @@ const (
 	// prevalidation fitness, schema/description drift). These checks need one
 	// agentic judgment pass over the same runtime and goal evidence.
 	pulseModuleLLMOpsReview = pulsemodules.LLMOpsReviewID
-	// pulseModuleStrategyAuditor owns read-only improvement of the current
-	// strategy across retained runs. Goal Advisor independently explores
-	// materially different approaches outside the current plan.
-	pulseModuleStrategyAuditor = pulsemodules.StrategyAuditorID
-	pulseModuleGoalAdvisor     = pulsemodules.GoalAdvisorID
+	// pulseModuleStrategicReview owns both hidden-mechanism review of the
+	// current strategy and conditional discovery of materially different
+	// approaches. Those are sequence turns, not independent modules.
+	pulseModuleStrategicReview = pulsemodules.StrategicReviewID
 )
 
 // Derived from the canonical registry — see pkg/pulsemodules. Do not restate
@@ -236,6 +235,9 @@ func ensurePulseModuleStateSchema(ctx context.Context, db *sql.DB) error {
 	if err := ensurePulseModuleStateColumns(ctx, db); err != nil {
 		return err
 	}
+	if err := migrateMergedStrategicReviewRows(ctx, db); err != nil {
+		return err
+	}
 	stmts = []string{
 		`CREATE INDEX IF NOT EXISTS idx_pulse_module_state_run ON pulse_module_state(last_pulse_run_id, last_decision)`,
 		`CREATE INDEX IF NOT EXISTS idx_pulse_module_audit_recorded ON pulse_module_audit(workspace_path, recorded_at DESC)`,
@@ -249,6 +251,65 @@ func ensurePulseModuleStateSchema(ctx context.Context, db *sql.DB) error {
 		}
 	}
 	return nil
+}
+
+// migrateMergedStrategicReviewRows collapses the two retired advisor lanes
+// into the one live Strategic Review identity. The newest state wins when an
+// old workflow database has both rows; audit history preserves one receipt per
+// Pulse run, which is the new module contract.
+func migrateMergedStrategicReviewRows(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	legacyStrategy := pulsemodules.LegacyStrategyAuditorID
+	legacyGoal := pulsemodules.LegacyGoalAdvisorID
+	if _, err := tx.ExecContext(ctx, `INSERT INTO pulse_module_state (
+		workspace_path, module, last_pulse_run_id, last_checked_at, last_ran_at,
+		last_decision, last_reason, last_gate_decision, last_result, last_result_reason,
+		next_check_at, next_check_after_run_id, cooldown_runs, evidence_json, updated_at)
+		SELECT workspace_path, ?, last_pulse_run_id, last_checked_at, last_ran_at,
+		last_decision, last_reason, last_gate_decision, last_result, last_result_reason,
+		next_check_at, next_check_after_run_id, cooldown_runs, evidence_json, updated_at
+		FROM pulse_module_state old
+		WHERE module IN (?, ?)
+		AND updated_at=(SELECT MAX(updated_at) FROM pulse_module_state newer
+			WHERE newer.workspace_path=old.workspace_path AND newer.module IN (?, ?))
+		ORDER BY updated_at DESC
+		ON CONFLICT(workspace_path, module) DO UPDATE SET
+			last_pulse_run_id=excluded.last_pulse_run_id,
+			last_checked_at=excluded.last_checked_at,
+			last_ran_at=excluded.last_ran_at,
+			last_decision=excluded.last_decision,
+			last_reason=excluded.last_reason,
+			last_gate_decision=excluded.last_gate_decision,
+			last_result=excluded.last_result,
+			last_result_reason=excluded.last_result_reason,
+			next_check_at=excluded.next_check_at,
+			next_check_after_run_id=excluded.next_check_after_run_id,
+			cooldown_runs=excluded.cooldown_runs,
+			evidence_json=excluded.evidence_json,
+			updated_at=excluded.updated_at
+		WHERE excluded.updated_at > pulse_module_state.updated_at`, pulsemodules.StrategicReviewID, legacyStrategy, legacyGoal, legacyStrategy, legacyGoal); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM pulse_module_state WHERE module IN (?, ?)`, legacyStrategy, legacyGoal); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO pulse_module_audit (
+		workspace_path, module, pulse_run_id, result, reason, evidence_json,
+		changed_files_json, verification_json, before_refs_json, after_refs_json, recorded_at)
+		SELECT workspace_path, ?, pulse_run_id, result, reason, evidence_json,
+		changed_files_json, verification_json, before_refs_json, after_refs_json, recorded_at
+		FROM pulse_module_audit WHERE module IN (?, ?) ORDER BY recorded_at DESC`,
+		pulsemodules.StrategicReviewID, legacyStrategy, legacyGoal); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM pulse_module_audit WHERE module IN (?, ?)`, legacyStrategy, legacyGoal); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func migratePulseModuleStateSchema(ctx context.Context, db *sql.DB) error {
@@ -1299,7 +1360,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
 			Name:        "record_pulse_worklist",
-			Description: fmt.Sprintf("Record the dynamic Pulse worklist for this run in the workflow's db/db.sqlite. Pulse Gate must call this exactly once after choosing the agent-owned pass mode and deciding which perspectives are due or skipped. backlog_drain verifies and repairs retained issues without broad discovery; discovery investigates materially new evidence; strategy is for selected product/goal work; observe runs no reviewer or fixer. Go validates the declared mode but never selects it. The decisions array must contain exactly one entry for each current Pulse module: %s. Select only the work justified by evidence and expected value; explicitly defer lower-priority lenses with a reason and next-check boundary. workflow_review is Engineering Review and conditionally covers execution, report/eval implementation, plan-change/artifact consistency, and store-integrity evidence. When store integrity is selected, name the specific Stores Health lens (learnings, knowledgebase, and/or DB) in the workflow_review reason/evidence; the later Engineering sequence then runs that distinct internal turn before fixing. llm_ops_review owns efficiency and runtime operations. strategy_auditor owns product/business adequacy inside the current strategy; goal_advisor owns materially different approaches. Engineering and Ops may share one selected-perspective sequence; Strategy and Goal remain independent agents. Do not pass retired artifact-named modules and never make one reviewer depend on another. Every skipped module must include next_check_at, next_check_after_run_id, or a positive cooldown_runs value.", strings.Join(pulseModuleOrder, ", ")),
+			Description: fmt.Sprintf("Record the dynamic Pulse worklist for this run in the workflow's db/db.sqlite. Pulse Gate must call this exactly once after choosing the agent-owned pass mode and deciding which perspectives are due or skipped. backlog_drain verifies and repairs retained issues without broad discovery; discovery investigates materially new evidence; strategy is for selected product/goal work; observe runs no reviewer or fixer. Go validates the declared mode but never selects it. The decisions array must contain exactly one entry for each current Pulse module: %s. Select only work justified by evidence and expected value; explicitly defer lower-priority lenses with a reason and next-check boundary. workflow_review is Engineering Review and conditionally covers execution, report/eval implementation, plan-change/artifact consistency, and store-integrity evidence. When store integrity is selected, name the Stores Health lens (learnings, knowledgebase, and/or DB) in the workflow_review reason/evidence. llm_ops_review owns efficiency and runtime operations. strategic_review owns both adequacy of the current strategy and conditional discovery of materially different approaches as turns in one sequence. Engineering and Ops share one ordered sequence; Strategic Review uses a separate ordered sequence. Do not pass retired module names. Every skipped module must include next_check_at, next_check_after_run_id, or a positive cooldown_runs value.", strings.Join(pulseModuleOrder, ", ")),
 			Parameters: llmtypes.NewParameters(map[string]interface{}{
 				"type":                 "object",
 				"additionalProperties": false,
@@ -1360,7 +1421,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 			Description: fmt.Sprintf("Record one Pulse outcome in the workflow's db/db.sqlite. Pass exactly one of module or command.\n"+
 				"module (%s): the terminal result of a selected Pulse module after its review and Fixer work complete — done, changed, blocked, failed, or skipped. This writes the module audit and per-finding lifecycle atomically. For result=changed, changed_files, verification, and finding_dispositions are required.\n"+
 				"command (%s): the live or final status of one Pulse final command — running, done, skipped, blocked, or failed. The combined Pulse finalizer marks each command running before work and then terminal immediately after it finishes.\n"+
-				"Fix attempts are opened by the backend from the disposition itself; there is no separate attempt tool and no attempt_id to carry. A fixed_verified finding needs changed_files plus only passed post-change checks. changed_unverified needs an inconclusive check plus next_check naming the run, table, or artifact whose arrival settles it, and remains open awaiting that evidence; the next review verifies it against that evidence rather than re-attempting the fix. queued_for_engineering means a safe workflow repair exists but was deliberately not attempted in this pass; it requires next_check naming the next Engineering/Pulse pass and remains in Gate's active queue. external_action_required permanently removes a diagnosed real finding from Pulse's active queue and requires external_owner, reason_code, and reopen_condition; use it only when workflow tools cannot act. A failed check reopens the concern. awaiting_run is a real finding waiting only on a scheduled run to produce its evidence — no fix applied, nobody stuck — and requires next_check naming that run. Use it rather than blocked whenever the answer is \"the data does not exist yet\". blocked means there is genuinely no safe action at all; never use it merely because work was deferred, deprioritized, or not selected in this pass. awaiting_user requires human_input_id naming a still-pending create_human_input_request, so a finding cannot wait on a decision the operator was never asked for; escalate only when the goal does not already settle it and the cost of deciding is real, otherwise decide and record the reasoning. For strategy_auditor and goal_advisor, proposal_only is accepted only with a concrete next_check evidence boundary; an actionable recommendation must use awaiting_user linked to that module's pending decision, while safe technical prerequisites use the normal Fixer lifecycle. before_refs and after_refs are paired agent-supplied audit references; the backend preserves them but does not recompute arbitrary textual checks. The lifecycle is machine-validated for finding/module linkage and required evidence shape, not for the truth of an agent-authored verdict. Put exact technical failures in reason.",
+				"Fix attempts are opened by the backend from the disposition itself; there is no separate attempt tool and no attempt_id to carry. A fixed_verified finding needs changed_files plus only passed post-change checks. changed_unverified needs an inconclusive check plus next_check naming the run, table, or artifact whose arrival settles it, and remains open awaiting that evidence; the next review verifies it against that evidence rather than re-attempting the fix. queued_for_engineering means a safe workflow repair exists but was deliberately not attempted in this pass; it requires next_check naming the next Engineering/Pulse pass and remains in Gate's active queue. external_action_required permanently removes a diagnosed real finding from Pulse's active queue and requires external_owner, reason_code, and reopen_condition; use it only when workflow tools cannot act. A failed check reopens the concern. awaiting_run is a real finding waiting only on a scheduled run to produce its evidence — no fix applied, nobody stuck — and requires next_check naming that run. Use it rather than blocked whenever the answer is \"the data does not exist yet\". blocked means there is genuinely no safe action at all; never use it merely because work was deferred, deprioritized, or not selected in this pass. awaiting_user requires human_input_id naming a still-pending create_human_input_request, so a finding cannot wait on a decision the operator was never asked for; escalate only when the goal does not already settle it and the cost of deciding is real, otherwise decide and record the reasoning. For strategic_review, proposal_only is accepted only with a concrete next_check evidence boundary; an actionable recommendation must use awaiting_user linked to a pending strategic_review decision, while safe technical prerequisites use the normal Fixer lifecycle. before_refs and after_refs are paired agent-supplied audit references; the backend preserves them but does not recompute arbitrary textual checks. The lifecycle is machine-validated for finding/module linkage and required evidence shape, not for the truth of an agent-authored verdict. Put exact technical failures in reason.",
 				strings.Join(pulseModuleOrder, ", "), strings.Join(pulseFinalCommandOrder, ", ")),
 			Parameters: llmtypes.NewParameters(map[string]interface{}{
 				"type": "object",
