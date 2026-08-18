@@ -244,11 +244,11 @@ export function workflowSessionBotPlatform(
   return undefined
 }
 
-export function isBotWorkflowSession(session: ActiveSessionInfo, runningWorkflow?: RunningWorkflowInfo): boolean {
+function isBotWorkflowSession(session: ActiveSessionInfo, runningWorkflow?: RunningWorkflowInfo): boolean {
   return !!workflowSessionBotPlatform(session, runningWorkflow)
 }
 
-export function findWorkflowPresetForSession(
+function findWorkflowPresetForSession(
   session: ActiveSessionInfo,
   runningWorkflow?: RunningWorkflowInfo,
 ): CustomPreset | PredefinedPreset | undefined {
@@ -282,7 +282,7 @@ function revealWorkflowChat(tabId: string, workspacePath?: string | null): void 
   workflowStore.setFocusedPane('chat')
 }
 
-export async function restoreWorkflowSessionChat(
+async function restoreWorkflowSessionChat(
   session: ActiveSessionInfo,
   options: RestoreWorkflowSessionOptions = {},
 ): Promise<string> {
@@ -376,7 +376,7 @@ export async function restoreWorkflowSessionChat(
   }
 }
 
-export async function restoreScheduledWorkflowRunChat(
+async function restoreScheduledWorkflowRunChat(
   session: ActiveSessionInfo,
   options: RestoreWorkflowSessionOptions = {},
 ): Promise<string> {
@@ -398,7 +398,7 @@ export async function restoreScheduledWorkflowRunChat(
   })
 }
 
-export async function restoreBotWorkflowRunChat(
+async function restoreBotWorkflowRunChat(
   session: ActiveSessionInfo,
   options: RestoreWorkflowSessionOptions = {},
 ): Promise<string> {
@@ -586,7 +586,7 @@ async function restoreReadOnlyWorkflowRunChat(
 // to an existing tab, closes a stale builder tab, applies the preset, switches to
 // workflow mode, clears the Workflows Overview, and scrolls to bottom. Plain chat
 // sessions activate their existing tab or restore a fresh one.
-export async function openActiveSession(
+async function openActiveSession(
   session: ActiveSessionInfo,
   options: { preset?: CustomPreset | PredefinedPreset; runningWorkflow?: RunningWorkflowInfo; title?: string; source?: string; navigationGeneration?: number } = {},
 ): Promise<void> {
