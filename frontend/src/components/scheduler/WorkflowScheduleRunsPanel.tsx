@@ -37,6 +37,13 @@ type ActivePopup = 'costs' | 'logs' | 'eval' | 'report' | null
 type JobFilter = 'running' | 'enabled' | 'paused' | 'missed' | 'issues' | 'all'
 type SchedulePanelView = 'overview' | 'calendar' | 'by-workflow' | 'schedules'
 
+// RUN_HISTORY_VISIBLE_ROWS is how many rows fit in the run-history scroll box
+// (max-h-48 = 12rem, ~27px per row). It only drives the "scroll for all" hint
+// and the bottom fade, so being a row out either way costs nothing — but with
+// no affordance at all the list reads as truncated, which is how a correct
+// count of 10 alongside 7 visible rows looked like a bug.
+const RUN_HISTORY_VISIBLE_ROWS = 7
+
 const isScheduleIssueStatus = (status?: ScheduledJob['last_status']) =>
   status === 'error' || status === 'partial' || status === 'interrupted'
 
@@ -2665,9 +2672,17 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                         ) : (
                           <div className="space-y-1">
                             <div className="text-xs text-gray-400 dark:text-gray-500 mb-1.5">
-                              Run history ({runs.length} runs):
+                              Run history ({runs.length} runs
+                              {runs.length > RUN_HISTORY_VISIBLE_ROWS && (
+                                <span className="text-gray-400 dark:text-gray-500"> · scroll for all {runs.length}</span>
+                              )}
+                              ):
                             </div>
-                            <div className="space-y-1 max-h-48 overflow-y-auto">
+                            {/* The list scrolls inside a fixed height, which with no
+                                affordance reads as a truncated list — the count said 10
+                                while 7 were visible and nothing indicated the rest. */}
+                            <div className="relative">
+                              <div className="space-y-1 max-h-48 overflow-y-auto">
                               {runs.map((run, runIndex) => {
                                 const effectiveFolder = getResolvedRunFolder(
                                   run,
@@ -2856,6 +2871,10 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                                 </div>
                                 )
                               })}
+                            </div>
+                              {runs.length > RUN_HISTORY_VISIBLE_ROWS && (
+                                <div className="pointer-events-none absolute inset-x-0 bottom-0 h-6 bg-gradient-to-t from-white to-transparent dark:from-gray-900" />
+                              )}
                             </div>
                           </div>
                         )}
