@@ -1,0 +1,83 @@
+[← Pulse platform issue index](../pulse_platform_issue_register.md)
+
+# PLAT-141 — tool results that arrive in 41ms never become tool_call_end events, so the UI shows a completed command as unresolved
+
+| Coordination | Value |
+|---|---|
+| Assigned agent | unassigned |
+| Ticket state | `open` — cause measured, pairing hypothesis not yet proven; no fix attempted |
+| Last synchronized | `2026-08-18` |
+
+- **Priority:** P2 — display only. No work is lost and no decision is made on
+  missing data, but the chat misreports completed commands, and the compensating
+  code added on 2026-08-18 fabricates durations while doing so.
+- **Owner:** whatever converts a coding-agent turn's tool activity into
+  `tool_call_start` / `tool_call_end` store events, plus
+  `internal/events/event_store.go` (the settle that currently papers over it).
+
+## Measured
+
+`tectonicusadaytrading`, 2026-08-18, tool call `toolu_01GTECvgs77yocXxYx1nbfpb`:
+
+| source | fact |
+|---|---|
+| Claude Code transcript `598f5b59` | `tool_use` at `15:52:26.430Z`, `tool_result` at `15:52:26.471Z`, 71-char result |
+| our event store | `START` logged `21:22:26` (= `15:52:26Z`); **no `END` ever logged, under any session** |
+| our UI | chip settled at `21:23:23`, displayed duration **45.4s** |
+
+**The command completed in 41 milliseconds.** The result has been in the
+transcript ever since. Our store never produced an end event for it, and the
+duration shown to the user is start-to-settle, not the tool's real duration.
+
+Earlier in the same session, 117 tool calls started and 103 ended — the ones
+that fail to pair are a minority and are not distinguished by tool name
+(`execute_shell_command` appears on both sides of the split).
+
+## What is proven
+
+1. The tool ran and returned promptly; nothing failed, nothing was lost.
+2. No `tool_call_end` event entered the store for these calls. This is not
+   lateness — a longer wait cannot recover an event that is never produced.
+3. The 5-second grace window added on 2026-08-18 (`3c527c9d4`) does not address
+   this population. It was sized on a genuinely-late case measured on a
+   different session (turn end `20:34:28`, tool end `20:34:29`) and helps there.
+4. The settle's displayed duration is fabricated relative to the tool's real
+   duration (45.4s shown, 41ms actual).
+
+## What is NOT proven
+
+The tools are dispatched under **sub-session identifiers** while the store
+tracks open calls under the parent schedule session. Three appear in the same
+minute:
+
+    session_id=msgseq-iteration-0-default-step-1-place-paper-trades
+    session_id=schedule-manual--cd0655e9_1787068265820483000
+    session_id=sub-exec-eval-signal-freshness-1787068341244552000
+
+A plausible reading is that the start is attributed to the schedule session and
+the completion is produced under the step's own session, so the two never pair.
+**This has not been demonstrated** — no `END` was found under any session id for
+the affected call, which is equally consistent with the end never being emitted
+at all. Both readings must be tested before a fix is chosen; picking one on
+plausibility is how the wrong cause got shipped twice already today.
+
+## Candidate fixes
+
+1. **Attribute both events to the same session.** Correct at source if the
+   pairing hypothesis holds. Touches session routing that other work is
+   currently editing.
+2. **Backfill from the transcript.** The result and its true duration are on
+   disk. `readClaudeTranscriptMessages` already parses this shape in
+   `multi-llm-provider-go`'s `claudecode` package, but is unexported. This fixes
+   the display regardless of which reading above is right, and repairs the
+   fabricated durations.
+
+Option 2 also lets the grace window and the settle placeholder be **deleted**
+rather than kept — both exist only to make this gap survivable.
+
+## Acceptance
+
+- A `message_sequence` step's tool calls pair start-to-end in the store.
+- A settled chip, if any remain, shows the tool's real duration.
+- The grace window and `(output not captured)` placeholder are removed once the
+  underlying events are complete.
