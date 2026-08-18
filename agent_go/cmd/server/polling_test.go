@@ -188,3 +188,103 @@ func TestAutoNotificationDoesNotClearStaleBusyWhenCodingTmuxLooksBusy(t *testing
 		t.Fatal("auto-notification busy check should not clear busy while tmux pane looks active")
 	}
 }
+
+// PLAT-131. A running scheduled Pulse session resolved its own identity at
+// registration (server.go sets WorkspacePath and derives WorkflowName from it
+// together), but enrichment then overwrote PresetQueryID/PresetName/
+// WorkspacePath unconditionally from a tracked execution. A workflow-builder
+// background execution legitimately carries none of those, so all three were
+// erased while WorkflowName — guarded by `if active.PresetName != ""` — stayed.
+//
+// The live rtslatency session showed exactly that asymmetry:
+//
+//	workflow_name: "rtslatency"   (survived)
+//	workspace_path: absent        (erased)
+//	preset_query_id: absent       (erased)
+//
+// The frontend resolves a session's workflow by preset_query_id or
+// workspace_path (findWorkflowPresetForSession). With both erased, resolution
+// returned undefined, the canonical workflow-navigation path was skipped, and
+// clicking the activity pill opened a Schedule tab under whichever workflow
+// was already on screen instead of switching to rtslatency.
+func TestBuildActiveSessionInfoSummaryKeepsSessionIdentityWhenTrackedExecutionOmitsIt(t *testing.T) {
+	const sessionID = "schedule-cron--identity_1787009443095002000"
+
+	api := &StreamingAPI{
+		runtimeCoordinator: NewRuntimeCoordinator(),
+		activeSessions:     map[string]*ActiveSessionInfo{},
+		trackedWorkflowExecutions: map[string]*TrackedWorkflowExecution{
+			// A workflow-builder background execution: running, but carrying no
+			// preset or workspace identity of its own.
+			"bg-pulse-review": {
+				ExecutionID: "bg-pulse-review", SessionID: sessionID,
+				Source: trackedExecutionSourceWorkshopBackground, Kind: "workflow_builder_task",
+				Status: trackedExecutionStatusRunning, StartedAt: time.Now().Add(-time.Minute).UTC(),
+			},
+		},
+	}
+
+	summary := api.buildActiveSessionInfoSummary(&ActiveSessionInfo{
+		SessionID:     sessionID,
+		Status:        "running",
+		CreatedAt:     time.Now(),
+		AgentMode:     "workflow_phase",
+		WorkspacePath: "Workflow/rtslatency",
+		PresetQueryID: "wf_rtslatency",
+		PresetName:    "rtslatency",
+		WorkflowName:  "rtslatency",
+		WorkflowLabel: "rtslatency",
+	})
+
+	if summary.WorkspacePath != "Workflow/rtslatency" {
+		t.Fatalf("workspace_path = %q, want it preserved: the frontend cannot resolve the workflow without it", summary.WorkspacePath)
+	}
+	if summary.PresetQueryID != "wf_rtslatency" {
+		t.Fatalf("preset_query_id = %q, want it preserved: it is the primary preset-resolution key", summary.PresetQueryID)
+	}
+	if summary.PresetName != "rtslatency" {
+		t.Fatalf("preset_name = %q, want it preserved", summary.PresetName)
+	}
+	if summary.WorkflowName != "rtslatency" {
+		t.Fatalf("workflow_name = %q, want it preserved", summary.WorkflowName)
+	}
+}
+
+// The guard must not become "never update": a tracked execution that DOES
+// carry identity is still the more specific record and must win.
+func TestBuildActiveSessionInfoSummaryStillAdoptsTrackedExecutionIdentityWhenPresent(t *testing.T) {
+	const sessionID = "session-tracked-identity-wins"
+
+	api := &StreamingAPI{
+		runtimeCoordinator: NewRuntimeCoordinator(),
+		activeSessions:     map[string]*ActiveSessionInfo{},
+		trackedWorkflowExecutions: map[string]*TrackedWorkflowExecution{
+			"workflow-run": {
+				ExecutionID: "workflow-run", SessionID: sessionID,
+				Source: trackedExecutionSourceWorkflowRun, Kind: "workflow",
+				Status: trackedExecutionStatusRunning, StartedAt: time.Now().Add(-time.Minute).UTC(),
+				PresetQueryID: "wf_actual", PresetName: "Actual Workflow",
+				WorkspacePath: "Workflow/actual",
+			},
+		},
+	}
+
+	summary := api.buildActiveSessionInfoSummary(&ActiveSessionInfo{
+		SessionID:     sessionID,
+		Status:        "running",
+		CreatedAt:     time.Now(),
+		WorkspacePath: "Workflow/stale",
+		PresetQueryID: "wf_stale",
+		PresetName:    "Stale",
+	})
+
+	if summary.WorkspacePath != "Workflow/actual" {
+		t.Fatalf("workspace_path = %q, want the tracked execution's value to win", summary.WorkspacePath)
+	}
+	if summary.PresetQueryID != "wf_actual" {
+		t.Fatalf("preset_query_id = %q, want the tracked execution's value to win", summary.PresetQueryID)
+	}
+	if summary.PresetName != "Actual Workflow" {
+		t.Fatalf("preset_name = %q, want the tracked execution's value to win", summary.PresetName)
+	}
+}

@@ -393,9 +393,24 @@ func (api *StreamingAPI) buildActiveSessionInfoSummary(session *ActiveSessionInf
 	api.trackedWorkflowExecutionsMux.RLock()
 	if exec := api.runningWorkflowExecutionBySessionLocked(session.SessionID); exec != nil {
 		active := trackedExecutionToActive(exec)
-		enriched.PresetQueryID = active.PresetQueryID
-		enriched.PresetName = active.PresetName
-		enriched.WorkspacePath = active.WorkspacePath
+		// Enrichment must not clobber identity the session already resolved.
+		// A tracked execution is a narrower record than the session: a
+		// workflow-builder/background execution can legitimately carry no
+		// workspace path or preset, and overwriting unconditionally erased
+		// both from a running scheduled session (PLAT-131). The frontend
+		// resolves a session's workflow by preset_query_id or workspace_path,
+		// so erasing them made a live pill unable to switch workflows at all —
+		// it opened a tab under whichever workflow happened to be on screen.
+		// TriggeredBy below was already guarded this way; these three were not.
+		if active.PresetQueryID != "" {
+			enriched.PresetQueryID = active.PresetQueryID
+		}
+		if active.PresetName != "" {
+			enriched.PresetName = active.PresetName
+		}
+		if active.WorkspacePath != "" {
+			enriched.WorkspacePath = active.WorkspacePath
+		}
 		if active.TriggeredBy != "" {
 			enriched.TriggeredBy = active.TriggeredBy
 		}
@@ -422,9 +437,24 @@ func (api *StreamingAPI) buildActiveSessionInfoSummary(session *ActiveSessionInf
 		}
 	} else if exec := api.runningTrackedExecutionBySessionLocked(session.SessionID); exec != nil {
 		active := trackedExecutionToActive(exec)
-		enriched.PresetQueryID = active.PresetQueryID
-		enriched.PresetName = active.PresetName
-		enriched.WorkspacePath = active.WorkspacePath
+		// Enrichment must not clobber identity the session already resolved.
+		// A tracked execution is a narrower record than the session: a
+		// workflow-builder/background execution can legitimately carry no
+		// workspace path or preset, and overwriting unconditionally erased
+		// both from a running scheduled session (PLAT-131). The frontend
+		// resolves a session's workflow by preset_query_id or workspace_path,
+		// so erasing them made a live pill unable to switch workflows at all —
+		// it opened a tab under whichever workflow happened to be on screen.
+		// TriggeredBy below was already guarded this way; these three were not.
+		if active.PresetQueryID != "" {
+			enriched.PresetQueryID = active.PresetQueryID
+		}
+		if active.PresetName != "" {
+			enriched.PresetName = active.PresetName
+		}
+		if active.WorkspacePath != "" {
+			enriched.WorkspacePath = active.WorkspacePath
+		}
 		if active.TriggeredBy != "" {
 			enriched.TriggeredBy = active.TriggeredBy
 		}
