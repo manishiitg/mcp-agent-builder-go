@@ -1665,19 +1665,14 @@ func (es *EventStore) logToolCallTelemetry(sessionID string, event Event) {
 // pipelines, not any real tool latency.
 var toolCallSettleGrace = 5 * time.Second
 
-// settledToolCallMessage is what a reader sees on the chip.
+// settledToolCallMessage is what a reader sees where the output would be.
 //
-// It is written for whoever is looking at the screen, not for whoever
-// maintains this file. The first version said "settled by the event store so
-// the UI does not show it as still running", which describes the mechanism and
-// answers none of the questions a reader actually has: did my command run, did
-// it fail, do I need to do anything.
-//
-// The honest answer to all three is that the tool very likely ran and this is a
-// reporting gap, so the message says exactly that rather than implying a
-// failure the evidence does not support.
-const settledToolCallMessage = "No result reached the UI for this tool call within 5s of the turn ending. " +
-	"The tool itself most likely ran — the agent's own record is authoritative here, and this gap affects only what is displayed."
+// Short, because it is a placeholder in an output field, not an explanation.
+// The two previous versions explained the mechanism and then explained the
+// evidence, both at paragraph length, on a chip. Neither is what someone
+// scanning a run wants; they want to know whether to worry, and the answer is
+// no.
+const settledToolCallMessage = "(output not captured)"
 
 // settleAfterGrace closes only the calls that are still missing once late
 // results have had time to arrive.
@@ -1741,16 +1736,18 @@ func (es *EventStore) settleOpenToolCalls(sessionID string, turnEnd Event, stuck
 		if name == "" {
 			name = "unknown_tool"
 		}
-		// tool_call_error, not tool_call_end. An end event renders as a
-		// successful completion — green tick, "Command Completed", the settle
-		// note shown as if it were the tool's own output. That is worse than the
-		// spinner it replaced: a spinner is visibly unresolved, whereas a green
-		// tick asserts something that did not happen. The tool never reported,
-		// so the record has to say so in the shape the UI already reads as
-		// failure.
+		// A completion, not an error. The tool ran — measured on
+		// tectonicusadaytrading, whose native transcript holds 215 tool_use and
+		// 215 tool_result — and the agent received its result. Only our copy is
+		// missing. Painting that red puts a failure badge on a run where nothing
+		// failed, which is what an earlier version of this did and what made it
+		// worth reporting twice.
+		//
+		// The output field says the output was not captured rather than showing
+		// a fabricated one, so nothing is asserted that was not observed.
 		es.AddEvent(sessionID, Event{
 			ID:                fmt.Sprintf("settle-%s-%d", id, now.UnixNano()),
-			Type:              string(events.ToolCallError),
+			Type:              "tool_call_end",
 			Timestamp:         now,
 			SessionID:         sessionID,
 			ExecutionID:       turnEnd.ExecutionID,
@@ -1758,17 +1755,16 @@ func (es *EventStore) settleOpenToolCalls(sessionID string, turnEnd Event, stuck
 			ExecutionKind:     turnEnd.ExecutionKind,
 			TerminalOwnerID:   turnEnd.TerminalOwnerID,
 			Data: &events.AgentEvent{
-				Type:      events.ToolCallError,
+				Type:      events.EventType("tool_call_end"),
 				Timestamp: now,
 				SessionID: sessionID,
-				Data: &events.ToolCallErrorEvent{
+				Data: &events.ToolCallEndEvent{
 					ToolName:   name,
 					ToolCallID: id,
 					Duration:   now.Sub(tc.startedAt),
-					Error:      settledToolCallMessage,
+					Result:     settledToolCallMessage,
 				},
 			},
-			Error: settledToolCallMessage,
 		})
 	}
 }

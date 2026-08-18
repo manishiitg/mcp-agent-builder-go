@@ -103,17 +103,20 @@ func TestSettledCallSaysItWasNotAReportedResult(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	for _, e := range store.GetEvents(sessionID, GetEventsOptions{}).Events {
-		if e.Type == string(events.ToolCallError) {
-			if e.Error == "" {
-				t.Error("settled call is indistinguishable from a real completion")
+		if e.Type == "tool_call_end" {
+			d, ok := e.Data.Data.(*events.ToolCallEndEvent)
+			if !ok {
+				t.Fatal("settle emitted the wrong payload type")
 			}
-			if _, ok := e.Data.Data.(*events.ToolCallErrorEvent); !ok {
-				t.Error("settled call was emitted as a successful end event — the UI renders that as a green tick")
+			// Not an error — the tool ran and the agent got its result; only our
+			// copy is missing. But the output must not be fabricated either.
+			if d.Result != settledToolCallMessage {
+				t.Errorf("settled call presents an output it never observed: %q", d.Result)
+			}
+			if e.Error != "" {
+				t.Errorf("settled call carries an error (%q) for a tool that did not fail", e.Error)
 			}
 			return
-		}
-		if e.Type == "tool_call_end" {
-			t.Fatal("settled call emitted as tool_call_end; the UI shows that as Command Completed")
 		}
 	}
 	t.Fatal("no settle event was emitted at all")
@@ -155,8 +158,11 @@ func TestLateToolResultIsNotSettled(t *testing.T) {
 	time.Sleep(700 * time.Millisecond)
 
 	for _, e := range store.GetEvents(sessionID, GetEventsOptions{}).Events {
-		if e.Type == string(events.ToolCallError) {
-			t.Fatal("a tool call that reported one second late was settled as never having reported")
+		if e.Type != "tool_call_end" || e.Data == nil {
+			continue
+		}
+		if d, ok := e.Data.Data.(*events.ToolCallEndEvent); ok && d.Result == settledToolCallMessage {
+			t.Fatal("a tool call that reported one second late was settled with a placeholder instead of its real output")
 		}
 	}
 }
