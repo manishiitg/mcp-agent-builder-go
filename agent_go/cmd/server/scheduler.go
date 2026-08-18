@@ -1540,6 +1540,13 @@ func (s *SchedulerService) runJob(ctx context.Context, sctx *ScheduleContext, ru
 			execErr = errWorkshopSequenceInterrupted
 		}
 		s.sessionLogf(sctx, sessionID, "[SCHEDULER] %s stopped by user after %dms", schedID, durationMs)
+	} else if wait, waiting := s.turnLevelCapacityWait(ctx, sctx, execErr, runFolder, time.Now().UTC()); waiting {
+		// The wall landed before any step ran, so no step recorded where to
+		// resume from. Suspend anyway: the run executed nothing, so restarting
+		// it from the top when capacity returns is safe.
+		status = scheduleRunStatusWaitingForCapacity
+		errMsg = wait.Describe()
+		s.sessionLogf(sctx, sessionID, "[SCHEDULER] ⏸️ %s suspended before any step ran: %s", schedID, errMsg)
 	} else if wait, waiting := s.classifyCapacityWait(ctx, sctx, execErr, runFolder, startTime); waiting {
 		// Not a failure. The run stopped because the provider has no capacity
 		// left, holds completed steps whose side effects must not be replayed,
@@ -2711,6 +2718,7 @@ func (s *SchedulerService) executeWorkshopJob(ctx context.Context, sctx *Schedul
 			}
 		}
 
+		turnStartedAt := time.Now().UTC()
 		if err := s.api.startSessionInternal(ctx, reqMap, sessionID, "", nil); err != nil {
 			// A decision drain that cannot start must not cost the operator the
 			// run itself. The decisions stay answered-and-unapplied, exactly as
@@ -2722,6 +2730,21 @@ func (s *SchedulerService) executeWorkshopJob(ctx context.Context, sctx *Schedul
 			}
 			s.preserveRunEvidenceAfterFailedTurn(ctx, sctx, sessionID, invocationStartedAt)
 			return sessionID, runFolder, fmt.Errorf("workshop turn %d/%d (%s) failed: %w", i+1, len(turns), turn.label, err)
+		}
+		// A turn can dispatch cleanly and still produce nothing: every LLM
+		// attempt fails, the failure is recorded as events, the session status
+		// stays "completed", and no error reaches here. Without this check the
+		// run is recorded success — hetzner-ssh did exactly that on 2026-08-18,
+		// failing both turns on quota_exhausted in 8.1 seconds and being filed
+		// as a successful security audit.
+		//
+		// A decision drain is exempt for the same reason its dispatch failure
+		// is: it must not cost the operator the run itself (PLAT-093).
+		if !turn.decisionDrain {
+			if failure := scheduledTurnFailure(s.api.eventStore, sessionID, turnStartedAt); failure != "" {
+				s.preserveRunEvidenceAfterFailedTurn(ctx, sctx, sessionID, invocationStartedAt)
+				return sessionID, runFolder, fmt.Errorf("workshop turn %d/%d (%s) produced no response: %s", i+1, len(turns), turn.label, failure)
+			}
 		}
 
 		// First message of the workshop sequence — stamp schedule name on

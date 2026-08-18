@@ -303,3 +303,64 @@ func (s *SchedulerService) quotaPacingForSchedule(ctx context.Context, sctx *Sch
 	}
 	return accountKey, manifest.PaceThreshold()
 }
+
+// quotaExhaustedMarker is how llmerrors renders a permanently exhausted quota
+// inside a wrapped provider failure.
+const quotaExhaustedMarker = "[quota_exhausted]"
+
+// turnLevelCapacityWait recognises a run that hit the wall before any step ran.
+//
+// The step loop writes capacity_wait.json and returns a typed wait, so a wall
+// mid-run suspends cleanly. A wall on the orchestrator's OWN first turn reaches
+// neither: no step started, so nothing recorded where to resume from, and the
+// run would be filed as a plain error. hetzner-ssh on 2026-08-18 20:06 did
+// exactly that — both turns failed on quota_exhausted in 8.1 seconds, before
+// step 1.
+//
+// The reset instant comes from the account's cached quota reading rather than
+// from the error, because the failure text that survives the turn boundary is a
+// formatted string and a formatted string cannot carry an instant. When the
+// cache has nothing fresh the wait is recorded with no reset — honest, and it
+// waits for a person rather than waking on a guess.
+func (s *SchedulerService) turnLevelCapacityWait(ctx context.Context, sctx *ScheduleContext, execErr error, runFolder string, now time.Time) (*stepworkflow.WorkflowCapacityWait, bool) {
+	if execErr == nil || sctx == nil {
+		return nil, false
+	}
+	if !strings.Contains(execErr.Error(), quotaExhaustedMarker) {
+		return nil, false
+	}
+	wait := &stepworkflow.WorkflowCapacityWait{
+		SchemaVersion: 1,
+		WorkspacePath: sctx.WorkspacePath,
+		RunFolder:     runFolder,
+		// Step 0: the wall landed before the first step, so there is no step to
+		// resume AT — the run restarts from the beginning, which is safe
+		// precisely because nothing executed and nothing has side effects yet.
+		StepNumber: 0,
+		RecordedAt: now.UTC(),
+		Reason:     execErr.Error(),
+	}
+	if accountKey, _ := s.quotaPacingAccount(ctx, sctx); accountKey != "" {
+		if windows, _, ok := llmtypes.AccountRateLimitWindows(accountKey, now, scheduleQuotaMaxReadingAge); ok {
+			if resetsAt, window := llmtypes.MostConstrainedReset(windows, now); !resetsAt.IsZero() {
+				wait.RetryAt = resetsAt
+				wait.Window = window
+			}
+		}
+	}
+	return wait, true
+}
+
+// quotaPacingAccount resolves just the account identity, without requiring the
+// workflow to have opted into pacing. A capacity wall needs the account's reset
+// time whether or not the workflow asked to be paced.
+func (s *SchedulerService) quotaPacingAccount(ctx context.Context, sctx *ScheduleContext) (string, error) {
+	if s == nil || s.api == nil || sctx == nil || !scheduleUsesClaudeCode(sctx) {
+		return "", nil
+	}
+	keys, err := s.api.resolveEffectiveAPIKeys(ctx, "", sctx.WorkspacePath, nil)
+	if err != nil || keys == nil || keys.ClaudeCodeOAuthToken == nil {
+		return "", err
+	}
+	return llmtypes.AccountRateLimitKey(*keys.ClaudeCodeOAuthToken), nil
+}
