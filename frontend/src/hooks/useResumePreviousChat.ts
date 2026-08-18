@@ -10,14 +10,14 @@ import {
   chatHistoryWorkshopModeLabel,
 } from '../components/PreviousChatHistoryPanel'
 import { startRestoredTransportTerminal } from '../utils/restoredTerminal'
-import { CHIEF_OF_STAFF_PROFILE_ID } from '../utils/chiefOfStaff'
 
 /**
- * Shared resume handler for multi-agent chat history.
+ * Shared resume handler for product-owned chat history.
  *
- * Used by both the empty-landing "Previous chats" panel (ChatArea) and the
- * in-chat History slide-out (ChatTabs) so the two stay identical and can't
- * drift. Mirrors the workflow builder's resume flow: attach the prior
+ * Product surfaces create and own their profile-bound tab before rendering
+ * ChatArea. This handler only attaches history to that existing tab; it must
+ * never manufacture the removed profile-less AgentWorks Chat. It mirrors the
+ * workflow builder's resume flow: attach the prior
  * conversation (native CLI resume / tmux terminal restore, or a file-context
  * fallback) so the next turn continues that chat.
  *
@@ -28,22 +28,11 @@ import { CHIEF_OF_STAFF_PROFILE_ID } from '../utils/chiefOfStaff'
 export function useResumePreviousChat() {
   return useCallback(async (session: ChatHistorySession) => {
     const chatStore = useChatStore.getState()
-    let targetTabId = chatStore.activeTabId || undefined
-    let targetTab = targetTabId ? chatStore.chatTabs[targetTabId] : undefined
+    const targetTabId = chatStore.activeTabId || undefined
+    const targetTab = targetTabId ? chatStore.chatTabs[targetTabId] : undefined
 
-    if (!targetTab || targetTab.metadata?.mode !== 'multi-agent') {
-      targetTabId = await chatStore.createChatTab('Chief of Staff', {
-        mode: 'multi-agent',
-        agentProfileId: CHIEF_OF_STAFF_PROFILE_ID,
-        agentProfileVersion: 1,
-        agentProfileWorkspace: 'Chats',
-        agentProfileProjectTitle: 'Chief of Staff',
-      })
-      targetTab = useChatStore.getState().chatTabs[targetTabId]
-    }
-
-    if (!targetTabId || !targetTab) {
-      useChatStore.getState().addToast('Failed to resume previous chat', 'error')
+    if (!targetTabId || targetTab?.metadata?.mode !== 'multi-agent' || !targetTab.metadata.agentProfileId) {
+      useChatStore.getState().addToast('Open the product chat before resuming its history.', 'error')
       return
     }
 

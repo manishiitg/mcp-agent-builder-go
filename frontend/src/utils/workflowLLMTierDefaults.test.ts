@@ -22,7 +22,6 @@ const codexManifest: ProviderManifestEntry = {
     medium: { provider: 'codex-cli', model_id: 'gpt-5.6-terra', options: { reasoning_effort: 'medium' } },
     low: { provider: 'codex-cli', model_id: 'gpt-5.6-luna', options: { reasoning_effort: 'medium' } },
     maintenance: { provider: 'codex-cli', model_id: 'gpt-5.6-sol', options: { reasoning_effort: 'high' } },
-    chief_of_staff: { provider: 'codex-cli', model_id: 'gpt-5.6-sol', options: { reasoning_effort: 'high' } },
   },
   models: [],
   capabilities: [],

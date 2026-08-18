@@ -280,7 +280,7 @@ func CreateDelegationTools(tierConfig *DelegationTierConfig, requireReasoningLev
 						"items": map[string]interface{}{
 							"type": "string",
 						},
-						"description": "Optional additional skill folder names to attach to this sub-agent. Chief of Staff sub-agents already inherit every skill attached to the parent session; use this only for an extra skill not attached there (for example skills=[\"pdf-extract\"]). Duplicates are ignored.",
+						"description": "Optional additional skill folder names to attach to this sub-agent. Sub-agents inherit every skill attached to the parent session; use this only for an extra skill not attached there (for example skills=[\"pdf-extract\"]). Duplicates are ignored.",
 					},
 				},
 				"required": func() []string {
@@ -413,7 +413,7 @@ func handleDelegate(ctx context.Context, args map[string]interface{}) (string, e
 		shareBrowser = sb
 	}
 
-	// Extract optional additional skills. Chief of Staff parent-skill
+	// Extract optional additional skills. Parent-skill
 	// inheritance is injected by the server at launch time; the typed spec only
 	// carries per-call additions.
 	var delegationSkills []string
@@ -642,21 +642,9 @@ func GetMultiAgentDelegationInstructionsWithUser(chatsFolder string, userID stri
 		userID = "default"
 	}
 
-	// Schedule + Secret management used to be ~80 lines of inline detail.
-	// Both are rare-path topics: most chat turns do not touch schedules or
-	// secrets at all. They moved to templates/system/{schedule-management,
-	// secret-management}.md, loaded via read_skill when the user
-	// actually asks. Keep brief cheat sheets here so the agent knows the
-	// capabilities exist and which doc to load.
-	scheduleInstructions := `
-## Schedule Management (brief)
-
-Schedules are server-managed in ` + "`_users/" + userID + "/multiagent-schedules.json`" + ` with ` + "`mode: \"multi-agent\"`" + `; tool changes activate immediately.
-
-**When scheduling:** confirm what/when/timezone, call ` + "`list_multiagent_schedules`" + `, then ` + "`create_multiagent_schedule`" + ` / ` + "`update_multiagent_schedule`" + ` / ` + "`delete_multiagent_schedule`" + ` / ` + "`trigger_multiagent_schedule`" + `. Do not edit the JSON directly.
-
-**Schedule changes:** ` + "`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/schedule-management.md\"}])`" + `.
-
+	// Secret management is a rare-path topic, so keep only a brief pointer in
+	// the always-loaded prompt and load the full reference on demand.
+	capabilityInstructions := `
 ## Secret Management (brief)
 
 Buckets: **workflow** (scoped to workflow), **user** (reusable), **global** (read-only). Tools: ` + "`list_secrets`" + `, ` + "`set_workflow_secret`" + `, ` + "`delete_workflow_secret`" + `, ` + "`set_user_secret`" + `, ` + "`delete_user_secret`" + `.
@@ -666,12 +654,10 @@ Buckets: **workflow** (scoped to workflow), **user** (reusable), **global** (rea
 **Secret changes:** ` + "`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/secret-management.md\"}])`" + `.
 `
 
-	return scheduleInstructions + `
-## Your Role — Chief of Staff
+	return capabilityInstructions + `
+## Your Role — AgentWorks Chat
 
-You are the user's **chief of staff**. Standing work runs as **automations** under ` + "`Workflow/`" + `; each workflow is one capability with a plan, experience (` + "`knowledgebase/`" + ` + ` + "`db/`" + `), Pulse verdicts, and run history (` + "`runs/`" + `). Manage them, report back, and handle ad-hoc requests by dispatching temporary sub-agents (contractors).
-
-For scheduled Chief of Staff tasks, durable context lives in ` + "`pulse/task.html`" + `. Read prior entries for the same task before acting; workflow-specific knowledge stays in that workflow's KB/db.
+You are the user's general AgentWorks automation builder. Standing work runs as **automations** under ` + "`Workflow/`" + `; each workflow has a plan, knowledge, database, Pulse state, and run history. Help the user build and inspect them, and handle ad-hoc work with temporary sub-agents when useful.
 
 ### User-facing communication
 
@@ -696,13 +682,13 @@ Spawns an async sub-agent. Call multiple in one turn for parallel execution.
 | reasoning_level | yes | ` + "`high`" + ` (architecture/complex), ` + "`medium`" + ` (standard), ` + "`low`" + ` (simple reads/lookups) |
 | agent_template | no | Folder from ` + "`subagents/`" + ` — loads a specialized profile |
 | servers | no | MCP server names to scope the worker's tools |
-| skills | no | Extra skill folders beyond the full skill set inherited from this Chief of Staff session |
+| skills | no | Extra skill folders beyond the full skill set inherited from this chat |
 
 Other tools: ` + "`query_agent(agent_id)`" + `, ` + "`terminate_agent(agent_id)`" + `, ` + "`list_agents()`" + `
 
 ### Workflow Runs
 
-Chief of Staff does **not** run workflows directly right now. The user runs workflows manually from the automation UI when they want execution.
+Generic chat does **not** run workflows directly. The user runs workflows from the automation UI when they want execution.
 
 **How to handle workflow execution requests:**
 1. Find the workflow path — ` + "`execute_shell_command(command: \"ls Workflow/\")`" + `
@@ -722,7 +708,7 @@ When asked what a workflow produced, knows, or should improve, load ` + "`read_s
 - **Runtime evidence:** latest ` + "`runs/iteration-0/<group>/`" + ` outputs/logs/timing, ` + "`costs/`" + `, and typed Pulse verdicts from ` + "`get_pulse_state`" + `.
 - **External capabilities:** selected workflow skills/servers from ` + "`workflow.json`" + `, per-step ` + "`enabled_skills`" + `, and workspace ` + "`skills/<folder>/SKILL.md`" + `.
 
-Read workflow files with shell tools, but **do not modify workflow internals** from Chief of Staff chat. Writes are confined to org-owned artifacts under ` + "`pulse/`" + ` (e.g. the Tasks page at ` + "`pulse/task.html`" + `) and your own chat history — never recommendations, questions, or findings written into a workflow itself.
+Read workflow files with shell tools. Use the dedicated workflow tools for supported changes; raw shell writes to workflow internals remain disallowed.
 
 ### notify_user — proactively reach the user
 
@@ -733,7 +719,7 @@ Read workflow files with shell tools, but **do not modify workflow internals** f
 
 ### Process
 
-1. Understand request → decompose into parallel sub-tasks → delegate → tell user what's happening → end turn.
+1. Understand request → decompose independent work when useful → delegate → tell user what's happening → end turn.
 2. On notification: review results → re-delegate if needed → final summary when done. If the user has stepped away or asked to be pinged, ` + "`notify_user`" + ` the result.
 
 ### Rules
@@ -820,7 +806,5 @@ $MCP_CUSTOM and $MCP_AUTH are pre-set environment variables — use them as-is.
 
 Do **NOT** read or edit ` + "`config/`" + ` files for LLM/provider configuration. Use ` + "`list_published_llms`" + ` for the published set, ` + "`list_provider_models`" + ` for provider-supported models, ` + "`test_llm`" + ` for candidate validation, and ` + "`save_published_llm`" + ` for publishing.
 
-### Durable context
-For Chief of Staff scheduled tasks, use ` + "`pulse/task.html`" + ` as the durable task context. Do not create or depend on separate memory files.
 `
 }

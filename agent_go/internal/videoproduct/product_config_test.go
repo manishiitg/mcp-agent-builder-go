@@ -9,6 +9,19 @@ import (
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/agentprofiles"
 )
 
+func TestVideoStudioConversationPolicyValidates(t *testing.T) {
+	profile := BuiltinAgentProfile()
+	if err := agentprofiles.Validate(profile); err != nil {
+		t.Fatalf("Video Studio profile failed validation: %v", err)
+	}
+	if profile.Runtime.Workspace.Mode != agentprofiles.WorkspaceModeProject ||
+		profile.Runtime.Workspace.ProjectsRoot != "Chats/Video Studio/projects" ||
+		profile.Runtime.Conversation.Mode != agentprofiles.ConversationModeKeyed ||
+		profile.Runtime.Conversation.KeyType != agentprofiles.ConversationKeyTypeProject {
+		t.Fatalf("Video Studio must bind one durable conversation to each server-resolved project: workspace=%+v conversation=%+v", profile.Runtime.Workspace, profile.Runtime.Conversation)
+	}
+}
+
 func TestVideoStudioManifestDrivesProfileAndWorkflowCapabilities(t *testing.T) {
 	manifest, err := VideoStudioManifest()
 	if err != nil {
@@ -95,7 +108,6 @@ func TestVideoStudioManifestDrivesProfileAndWorkflowCapabilities(t *testing.T) {
 	if manifest.Profile.Runtime.AgentTools.Mode != "mcp_only" || manifest.Profile.Runtime.Approvals.Mode != "provider_auto" {
 		t.Fatalf("Video Studio native-tool policy = %+v %+v, want mcp_only/provider_auto", manifest.Profile.Runtime.AgentTools, manifest.Profile.Runtime.Approvals)
 	}
-
 	if manifest.Workflows.BrowserMode != "auto" || len(manifest.Workflows.SelectedSkills) == 0 {
 		t.Fatalf("unexpected workflow definition: %+v", manifest.Workflows)
 	}
@@ -112,6 +124,22 @@ func TestVideoStudioManifestDrivesProfileAndWorkflowCapabilities(t *testing.T) {
 		if len(manifest.Profile.Runtime.Workspace.Placement[writer]) == 0 {
 			t.Fatalf("%s is exposed but declares no runtime.workspace.placement: %+v", writer, manifest.Profile.Runtime.Workspace)
 		}
+	}
+}
+
+func TestVideoStudioIsPinnedToClaudeCodeWithoutProviderChoices(t *testing.T) {
+	manifest, err := VideoStudioManifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Profile.Runtime.Provider != "claude-code" || manifest.Profile.Runtime.ModelID != DefaultClaudeModel {
+		t.Fatalf("Video Studio runtime = %s/%s, want claude-code/%s", manifest.Profile.Runtime.Provider, manifest.Profile.Runtime.ModelID, DefaultClaudeModel)
+	}
+	if manifest.Profile.Runtime.CredentialScope != agentprofiles.CredentialScopeGlobal {
+		t.Fatalf("Video Studio credential scope = %q, want global", manifest.Profile.Runtime.CredentialScope)
+	}
+	if len(manifest.Profile.Runtime.ProviderOptions) != 0 {
+		t.Fatalf("Video Studio exposes provider choices despite its Claude-only contract: %+v", manifest.Profile.Runtime.ProviderOptions)
 	}
 }
 

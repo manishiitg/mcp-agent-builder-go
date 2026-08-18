@@ -14,10 +14,9 @@ import (
 //go:embed product.yaml prompts/system-prompt.md
 var productConfigFiles embed.FS
 
-// ProductManifest mirrors videoproduct.ProductManifest's and
-// chiefofstaffproduct.ProductManifest's shape so all three stay decodable
-// the same way, even though Finance leaves most sections empty (no
-// dependencies, no fixed workflows, no commands, no ui panels).
+// ProductManifest mirrors videoproduct.ProductManifest's shape, even though
+// Finance leaves most sections empty (no dependencies, fixed workflows,
+// commands, or UI panels).
 type ProductManifest struct {
 	SchemaVersion int                  `yaml:"schema_version"`
 	Dependencies  productdeps.Manifest `yaml:"dependencies"`

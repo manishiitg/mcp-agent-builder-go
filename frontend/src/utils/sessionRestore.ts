@@ -1,8 +1,6 @@
 import { useChatStore } from '../stores/useChatStore'
-import { useModeStore } from '../stores/useModeStore'
 import { agentApi } from '../services/api'
 import type { ChatHistoryConversation, ChatHistoryMessage, PollingEvent } from '../services/api-types'
-import { truncateTabTitle } from './textUtils'
 import axios from 'axios'
 
 const TAG = '[SessionRestore]'
@@ -58,11 +56,35 @@ export async function restoreSession(
     source?: string
     skipConfigRestore?: boolean
     workspacePath?: string
+    /**
+     * Product conversations have a durable, human-readable transcript. Prefer
+     * it over a partial live event buffer when reopening a completed project.
+     */
+    preferChatHistory?: boolean
   }
 ): Promise<string> {
   // Async lock: if already restoring this session, return the existing promise
   const existing = restoreInProgress.get(sessionId)
   if (existing) {
+    // A generic page restore can win the race against a product surface and
+    // hydrate only the volatile live-event tail. Do not let the lock discard
+    // the product's stronger request for its durable transcript: once the
+    // generic restore completes, replace that partial buffer with history.
+    // This is intentionally an upgrade rather than a second parallel restore
+    // so the tab/session state remains single-writer while it is being built.
+    if (options?.preferChatHistory && options.workspacePath) {
+      console.log(`${TAG} Dedup upgrade for ${sessionId} (source=${options.source}), scheduling durable transcript hydration`)
+      return existing.then(async (tabId) => {
+        try {
+          await hydrateTabEventsFromChatHistory(sessionId, options.workspacePath)
+        } catch (error) {
+          // Preserve the generic restore when history is unavailable; it may
+          // be a non-product session or a project whose history was removed.
+          console.error(`${TAG} Failed dedup transcript upgrade for ${sessionId}:`, error)
+        }
+        return tabId
+      })
+    }
     console.log(`${TAG} Dedup hit for ${sessionId} (source=${options?.source}), returning existing promise`)
     return existing
   }
@@ -84,6 +106,7 @@ async function doRestoreSession(
     source?: string
     skipConfigRestore?: boolean
     workspacePath?: string
+    preferChatHistory?: boolean
   }
 ): Promise<string> {
   const src = options?.source || 'unknown'
@@ -102,25 +125,15 @@ async function doRestoreSession(
     }
   }
 
-  // Chat sessions are in-memory on the backend now — there is no persisted
-  // session metadata to fetch. Tab state (title, config) is the frontend's
-  // responsibility; session status comes from the polling API.
-  const tabMode = 'multi-agent' as const
-  useModeStore.getState().setModeCategory('multi-agent')
-
-  let tabId: string
-  if (existingTab) {
-    tabId = existingTab.tabId
-    console.log(`${TAG} [${src}] Reusing existing tab ${tabId}`)
-  } else {
-    const title = truncateTabTitle(options?.title || 'Chat')
-    tabId = await chatStore.createChatTab(
-      title,
-      { mode: tabMode, isRestored: false },
-      sessionId,
-    )
-    console.log(`${TAG} [${src}] Created tab ${tabId} mode=${tabMode}`)
+  // Product sessions are in-memory on the backend, while their profile,
+  // workspace and permissions live on the product-owned tab. Reconstructing a
+  // profile-less tab here silently drops that contract, so restoration must
+  // attach only to a tab created by the owning product surface.
+  if (!existingTab) {
+    throw new Error(`Cannot restore session ${sessionId} without its product-owned tab`)
   }
+  const tabId = existingTab.tabId
+  console.log(`${TAG} [${src}] Reusing existing tab ${tabId}`)
 
   // Step 7: Sync runtime state / events
   try {
@@ -137,19 +150,22 @@ async function doRestoreSession(
         chatStore.addTabEvents(sessionId, runtime.events)
       }
       if (
-        options?.workspacePath &&
-        !isForegroundStreaming({
+        (options?.workspacePath || existingTab?.metadata?.agentProfileWorkspace) &&
+        (options?.preferChatHistory || !isForegroundStreaming({
           status: runtime.session_status,
           hasRunningBackgroundAgents: runtime.has_running_background_agents,
           isSyntheticTurn: runtime.is_synthetic_turn,
           canSteer: runtime.can_steer,
-        })
+        }))
       ) {
-        // A completed coding-agent turn's live event window often contains an
-        // empty provider tool-start. Replace it with the durable structured
-        // transcript, which is enriched with bridge-authoritative arguments.
-        // This also fixes partial browser caches after a backend restart.
-        await hydrateTabEventsFromChatHistory(sessionId, options.workspacePath)
+        // Product chat needs its complete durable transcript even while the
+        // latest turn is running: retain the runtime streaming status above,
+        // but replace its user-only historical window with real assistant
+        // replies. Generic chats keep the older completed-only behavior.
+        await hydrateTabEventsFromChatHistory(
+          sessionId,
+          options?.workspacePath || existingTab?.metadata?.agentProfileWorkspace,
+        )
       }
       if (runtime.last_processed_index !== undefined) {
         chatStore.setTabLastEventIndex(sessionId, runtime.last_processed_index)
@@ -160,14 +176,29 @@ async function doRestoreSession(
       console.log(`${TAG} [${src}] Refreshed runtime state for existing tab ${tabId}`)
     } else {
       const runtime = await hydrateTabEvents(sessionId, {
-        workspacePath: existingTab?.metadata?.agentProfileWorkspace,
+        workspacePath: options?.workspacePath || existingTab?.metadata?.agentProfileWorkspace,
         fallbackToChatHistory: true,
+        preferChatHistory: options?.preferChatHistory,
       })
       applySessionStatus(tabId, runtime)
       const eventCount = chatStore.getTabEvents(sessionId).length
       console.log(`${TAG} [${src}] Hydrated ${eventCount} events`)
     }
   } catch (err) {
+    const workspacePath = options?.workspacePath || existingTab?.metadata?.agentProfileWorkspace
+    // The volatile event endpoint can reject a persisted cursor after a server
+    // restart (or when its bounded window no longer contains that cursor).
+    // A product reopen explicitly asks for its durable transcript, which is
+    // independent of that live window, so recover it before preserving the
+    // incomplete buffer.
+    if (options?.preferChatHistory && workspacePath) {
+      const restored = await tryHydrateTabEventsFromChatHistory(sessionId, workspacePath)
+      if (restored) {
+        applySessionStatus(tabId, restored)
+        console.log(`${TAG} [${src}] Recovered persisted transcript after runtime sync failure`)
+        return tabId
+      }
+    }
     if (isNotFoundError(err) && existingEventCount > 0) {
       console.log(`${TAG} [${src}] Session ${sessionId} no longer in memory; keeping locally restored events`)
       applySessionStatus(tabId, {
@@ -249,13 +280,22 @@ export function conversationToRestoredEvents(conversation: ChatHistoryConversati
   let pendingAssistant = ''
   const flushAssistant = () => {
     if (!pendingAssistant) return
-    // TerminalCenter's readable transcript treats llm_generation_end as the
-    // canonical assistant message. conversation_end is lifecycle-only there
-    // and intentionally hidden, so using it made resumed replies disappear.
+    // Recreate both answer carriers emitted by a live turn. The developer
+    // transcript reads llm_generation_end, while the product conversation
+    // reads unified_completion. Emitting only the former made a correctly
+    // persisted assistant reply disappear whenever a product was reopened.
+    // The transcript layer already deduplicates these matching carriers.
     events.push(makeRestoredEvent(sessionId, 'llm_generation_end', {
       status: 'completed',
       question: currentQuestion,
       content: pendingAssistant,
+      result: pendingAssistant,
+      turns: turn,
+    }, eventIndexBase + events.length))
+    events.push(makeRestoredEvent(sessionId, 'unified_completion', {
+      status: 'completed',
+      question: currentQuestion,
+      final_result: pendingAssistant,
       result: pendingAssistant,
       turns: turn,
     }, eventIndexBase + events.length))

@@ -30,7 +30,7 @@ all groups and runs; build new steps when the plan needs extending.
 and build on previous progress.
 
 Also read typed Pulse state and saved review history before improvement decisions.
-Chief of Staff recommendations are external open findings: verify their evidence
+External recommendations are open findings: verify their evidence
 against current runs/eval/soul.md, then choose the normal builder
 path (Pulse Bug Review/Fixer, Goal Advisor proposal/approved plan change, targeted config/plan
 tool, or no action with rationale).

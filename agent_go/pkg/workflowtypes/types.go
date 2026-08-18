@@ -65,8 +65,8 @@ type PresetLLMConfig struct {
 	Mode          string `json:"mode"`
 
 	// Provider is stored only in provider_profile mode. The provider package
-	// owns the Builder, execution-tier, Maintenance, Pulse, and Chief of Staff
-	// defaults and can evolve them when the application is updated.
+	// owns the Builder, execution-tier, Maintenance, and Pulse defaults and can
+	// evolve them when the application is updated.
 	Provider string `json:"provider,omitempty"`
 
 	// Explicit mode pins each workflow role directly.
@@ -304,7 +304,7 @@ func ResolveProviderProfilePulseConfig(config *PresetLLMConfig) (*AgentLLMConfig
 
 // ResolveCodingAgentMemoryConfig returns the model used by scheduled memory
 // enrichment. Memory follows the Pulse default because it is frequent,
-// report-free background maintenance rather than strategic Chief of Staff work.
+// report-free background maintenance.
 func ResolveCodingAgentMemoryConfig(config *PresetLLMConfig) (*AgentLLMConfig, bool) {
 	return ResolveProviderProfilePulseConfig(config)
 }

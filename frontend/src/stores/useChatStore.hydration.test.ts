@@ -100,36 +100,22 @@ describe('useChatStore hydration bootstrap', () => {
     expect(chatStore.useChatStore.getState().activeTabId).toBe(secondTab)
   })
 
-  it('keeps the Chief of Staff chat independent from a running schedule tab', async () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(new Date('2026-08-04T09:30:00Z'))
+  it('rejects the removed profile-less AgentWorks chat lane', async () => {
     const chatStore = await import('./useChatStore')
     await chatStore.waitForChatStoreHydration()
 
-    const scheduleTabId = await chatStore.useChatStore.getState().createChatTab('Schedule', {
+    await expect(chatStore.useChatStore.getState().createChatTab('Chat', {
       mode: 'multi-agent',
-      isViewOnly: true,
-      isScheduledRun: true,
-    })
-    const interactiveTabId = await chatStore.useChatStore.getState().createChatTab('Chief of Staff', {
-      mode: 'multi-agent',
-    })
-    const reusedInteractiveTabId = await chatStore.useChatStore.getState().createChatTab('Chief of Staff', {
-      mode: 'multi-agent',
-    })
-
-    expect(interactiveTabId).not.toBe(scheduleTabId)
-    expect(reusedInteractiveTabId).toBe(interactiveTabId)
-    expect(Object.keys(chatStore.useChatStore.getState().chatTabs)).toHaveLength(2)
+    })).rejects.toThrow('Profile-less AgentWorks Chat has been removed')
+    expect(Object.keys(chatStore.useChatStore.getState().chatTabs)).toHaveLength(0)
   })
 
-  it('keeps Chief of Staff and product-profile project sessions in separate lanes', async () => {
+  it('keeps product-profile project sessions in separate lanes', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-08-07T10:00:00Z'))
     const chatStore = await import('./useChatStore')
     await chatStore.waitForChatStoreHydration()
 
-    const chiefTabId = await chatStore.useChatStore.getState().createChatTab('Chief of Staff', { mode: 'multi-agent' })
     const firstProjectTabId = await chatStore.useChatStore.getState().createChatTab('Launch film', {
       mode: 'multi-agent',
       agentProfileId: 'video-studio',
@@ -149,10 +135,43 @@ describe('useChatStore hydration bootstrap', () => {
       agentProfileWorkspace: 'Chats/Video Studio/projects/customer-story',
     }, 'video-studio:project:customer-story')
 
-    expect(firstProjectTabId).not.toBe(chiefTabId)
     expect(reusedProjectTabId).toBe(firstProjectTabId)
     expect(secondProjectTabId).not.toBe(firstProjectTabId)
-    expect(Object.keys(chatStore.useChatStore.getState().chatTabs)).toHaveLength(3)
+    expect(Object.keys(chatStore.useChatStore.getState().chatTabs)).toHaveLength(2)
+  })
+
+  it('reuses a keyed product conversation across profile upgrades and workspace moves', async () => {
+    const chatStore = await import('./useChatStore')
+    await chatStore.waitForChatStoreHydration()
+
+    const originalTabId = await chatStore.useChatStore.getState().createChatTab('Launch film', {
+      mode: 'multi-agent',
+      agentProfileId: 'video-studio',
+      agentProfileVersion: 1,
+      agentProfileWorkspace: 'Chats/Video Studio/projects/old-location',
+      agentProfileProjectId: 'launch-2026',
+      agentProfileConversationKey: 'launch-2026',
+      agentProfileConversationId: 'conversation-launch',
+      agentProfileChatContract: 'profile-v1',
+    }, 'canonical-session')
+    const resumedTabId = await chatStore.useChatStore.getState().createChatTab('Launch film', {
+      mode: 'multi-agent',
+      agentProfileId: 'video-studio',
+      agentProfileVersion: 2,
+      agentProfileWorkspace: 'Chats/Video Studio/projects/new-location',
+      agentProfileProjectId: 'launch-2026',
+      agentProfileConversationKey: 'launch-2026',
+      agentProfileConversationId: 'conversation-launch',
+      agentProfileChatContract: 'profile-v1',
+    }, 'canonical-session')
+
+    expect(resumedTabId).toBe(originalTabId)
+    expect(chatStore.useChatStore.getState().getTab(originalTabId)?.metadata).toMatchObject({
+      agentProfileVersion: 2,
+      agentProfileWorkspace: 'Chats/Video Studio/projects/new-location',
+      agentProfileConversationKey: 'launch-2026',
+    })
+    expect(Object.keys(chatStore.useChatStore.getState().chatTabs)).toHaveLength(1)
   })
 
   it('restores the existing persisted chat-store envelope', async () => {

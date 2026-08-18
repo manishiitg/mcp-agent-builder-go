@@ -4,7 +4,6 @@ import { useChatStore } from '../stores/useChatStore'
 import { useGlobalPresetStore } from '../stores/useGlobalPresetStore'
 import { useWorkflowStore } from '../stores/useWorkflowStore'
 import { activateTab } from './activateTab'
-import { CHIEF_OF_STAFF_PROFILE_ID, isInteractiveChiefOfStaffTab } from './chiefOfStaff'
 import { selectWorkflowPreset } from './workflowNavigation'
 
 function normalizeWorkspacePath(value?: string | null): string {
@@ -30,12 +29,10 @@ function isInteractiveWorkflowTab(tab: ChatTab, presetId: string): boolean {
  */
 export function selectReportDiscussionTab(
   tabs: Record<string, ChatTab>,
-  target: { mode: 'workflow'; presetId: string } | { mode: 'multi-agent' },
+  target: { mode: 'workflow'; presetId: string },
   activeTabId?: string | null,
 ): ChatTab | undefined {
-  const candidates = Object.values(tabs).filter(tab => target.mode === 'workflow'
-    ? isInteractiveWorkflowTab(tab, target.presetId)
-    : isInteractiveChiefOfStaffTab(tab))
+  const candidates = Object.values(tabs).filter(tab => isInteractiveWorkflowTab(tab, target.presetId))
 
   return candidates.sort((left, right) => {
     const leftRunning = left.isStreaming || left.hasRunningBgAgents
@@ -52,8 +49,7 @@ export function selectReportDiscussionTab(
 }
 
 function sourceName(source: string): string {
-  if (source === 'chief_of_staff') return 'Chief of Staff'
-	if (source === 'strategy_auditor') return 'Strategy Auditor'
+  if (source === 'strategy_auditor') return 'Strategy Auditor'
   if (source === 'goal_advisor') return 'Goal Advisor'
   return 'Pulse'
 }
@@ -171,45 +167,28 @@ async function sendReportHumanInputMessageToChat({
   let tabId: string
   let reused = false
 
-  if (input.source === 'chief_of_staff') {
-    targetTab = selectReportDiscussionTab(chatStore.chatTabs, { mode: 'multi-agent' }, chatStore.activeTabId)
-    if (targetTab) {
-      tabId = targetTab.tabId
-      reused = true
-    } else {
-      tabId = await chatStore.createChatTab('Chief of Staff', {
-        mode: 'multi-agent',
-        agentProfileId: CHIEF_OF_STAFF_PROFILE_ID,
-        agentProfileVersion: 1,
-        agentProfileWorkspace: 'Chats',
-        agentProfileProjectTitle: 'Chief of Staff',
-      })
-      targetTab = useChatStore.getState().getTab(tabId)
-    }
+  const preset = await findWorkflowPreset(workspacePath)
+  if (!preset) throw new Error(`Could not find the automation for ${workspacePath}.`)
+
+  if (!selectWorkflowPreset(preset)) throw new Error('Failed to open the automation.')
+
+  const latestChatStore = useChatStore.getState()
+  targetTab = selectReportDiscussionTab(
+    latestChatStore.chatTabs,
+    { mode: 'workflow', presetId: preset.id },
+    latestChatStore.activeTabId,
+  )
+  if (targetTab) {
+    tabId = targetTab.tabId
+    reused = true
   } else {
-    const preset = await findWorkflowPreset(workspacePath)
-    if (!preset) throw new Error(`Could not find the automation for ${workspacePath}.`)
-
-    if (!selectWorkflowPreset(preset)) throw new Error('Failed to open the automation.')
-
-    const latestChatStore = useChatStore.getState()
-    targetTab = selectReportDiscussionTab(
-      latestChatStore.chatTabs,
-      { mode: 'workflow', presetId: preset.id },
-      latestChatStore.activeTabId,
-    )
-    if (targetTab) {
-      tabId = targetTab.tabId
-      reused = true
-    } else {
-      tabId = await latestChatStore.createChatTab('Automation Builder', {
-        mode: 'workflow',
-        phaseId: 'workflow-builder',
-        phaseName: 'Automation Builder',
-        presetQueryId: preset.id,
-      })
-      targetTab = useChatStore.getState().getTab(tabId)
-    }
+    tabId = await latestChatStore.createChatTab('Automation Builder', {
+      mode: 'workflow',
+      phaseId: 'workflow-builder',
+      phaseName: 'Automation Builder',
+      presetQueryId: preset.id,
+    })
+    targetTab = useChatStore.getState().getTab(tabId)
   }
 
   if (!targetTab) throw new Error('Failed to open a chat for this question.')
@@ -217,14 +196,14 @@ async function sendReportHumanInputMessageToChat({
   // Background agents do not block a new foreground turn; ChatArea only holds
   // the queue while the foreground tab itself is streaming.
   const queuedBehindRunningTurn = targetTab.isStreaming
-  const latestChatStore = useChatStore.getState()
-  const existingQueue = latestChatStore.getTabConfig(tabId)?.queuedMessages || []
-  latestChatStore.setTabConfig(tabId, {
+  const finalChatStore = useChatStore.getState()
+  const existingQueue = finalChatStore.getTabConfig(tabId)?.queuedMessages || []
+  finalChatStore.setTabConfig(tabId, {
     inputText: '',
     queuedMessages: [...existingQueue, message],
   })
-  latestChatStore.setTabViewMode(tabId, 'terminal')
-  latestChatStore.setAutoScroll(true)
+  finalChatStore.setTabViewMode(tabId, 'terminal')
+  finalChatStore.setAutoScroll(true)
   activateTab(tabId)
 
   if (targetTab.metadata?.mode === 'workflow') {

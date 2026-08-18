@@ -341,7 +341,6 @@ export interface ChatTabConfig {
   pastedAttachments?: PastedAttachment[]  // Long pastes captured as attachment chips, prepended on send
   isQueueProcessing?: boolean  // Lock to prevent multiple ChatArea instances from double-processing the queue
   autoRun?: boolean  // Automatically run the chat when tab is loaded
-  defaultReasoningLevel?: 'high' | 'medium' | 'low' | null  // Preferred reasoning level for delegated tasks in multi-agent mode
   enableImageGeneration?: boolean  // Enable/disable image generation virtual tool
 }
 
@@ -404,6 +403,15 @@ export interface ChatTab {
     agentProfileProjectId?: string
     agentProfileProjectTitle?: string
     agentProfileWorkspaceDescription?: string
+    // Stable product-domain identity used by the server conversation registry.
+    // Singleton products omit it; keyed products use a project/resource id.
+    agentProfileConversationKey?: string
+    // Server-issued logical conversation identity. This remains stable even
+    // if a future runtime migration rotates the underlying agent session.
+    agentProfileConversationId?: string
+    // Opts a product into the narrow /agent-profiles/{id}/query contract.
+    // Kept on the product-owned tab so ChatArea remains product-agnostic.
+    agentProfileChatContract?: 'profile-v1'
     userInteractiveContinuation?: boolean // Observed run promoted to an interactive chat without changing session ID
   }
 }
@@ -723,6 +731,17 @@ const selectDurableChatState = (state: ChatState): DurableChatState => {
       .filter(([, tab]) => {
         const isRelevantMode = tab.metadata?.mode === 'workflow' || tab.metadata?.mode === 'multi-agent'
         if (!isRelevantMode) return false
+        // A view-only scheduled run is an observer of something happening NOW.
+        // Persisting it guaranteed it came back dead: this snapshot forces
+        // isStreaming false, so a restored Schedule tab could never look live
+        // again, and it reappeared on every reload for 24h. The run history
+        // panel is the durable record of past runs; a lane for a run that is
+        // no longer happening is not. A schedule the user promoted to an
+        // interactive chat is a real conversation and is kept.
+        if (tab.metadata?.isScheduledRun && tab.metadata?.isViewOnly &&
+            !tab.metadata?.userInteractiveContinuation) {
+          return false
+        }
         return Date.now() - (tab.createdAt || 0) < 24 * 60 * 60 * 1000
       })
       .map(([tabId, tab]) => [
@@ -1994,9 +2013,13 @@ export const useChatStore = create<ChatState>()(
         const timestamp = Date.now()
         const mode = metadata?.mode || 'multi-agent'
 
-        // Chief of Staff has one interactive tab. Product agent profiles have
-        // one tab per immutable profile/workspace binding. Never reuse one lane
-        // for the other merely because both use AgentWorks multi-agent runtime.
+        if (mode === 'multi-agent' && !metadata?.agentProfileId) {
+          throw new Error('Profile-less AgentWorks Chat has been removed; multi-agent tabs must be owned by a product profile')
+        }
+
+        // Product agent profiles have one tab per durable product conversation.
+        // The conversation key is authoritative when present; workspace paths
+        // and profile versions may change without creating a second chat.
         if (
           mode === 'multi-agent' &&
           !metadata?.isOrganizationAssistant &&
@@ -2004,20 +2027,39 @@ export const useChatStore = create<ChatState>()(
           !metadata?.isScheduledRun &&
           !metadata?.isBotRun
         ) {
-          const requestedProfileKey = metadata?.agentProfileId && metadata?.agentProfileWorkspace
-            ? `${metadata.agentProfileId}:${metadata.agentProfileVersion || 0}:${metadata.agentProfileWorkspace}`
-            : ''
           const existing = Object.values(get().chatTabs).find(t =>
             t.metadata?.mode === 'multi-agent' &&
             !t.metadata?.isOrganizationAssistant &&
             t.metadata?.isViewOnly !== true &&
             t.metadata?.isScheduledRun !== true &&
             t.metadata?.isBotRun !== true &&
-            (requestedProfileKey
-              ? `${t.metadata?.agentProfileId || ''}:${t.metadata?.agentProfileVersion || 0}:${t.metadata?.agentProfileWorkspace || ''}` === requestedProfileKey
-              : !t.metadata?.agentProfileId)
+            t.metadata?.agentProfileId === metadata.agentProfileId &&
+            (metadata.agentProfileConversationKey
+              ? (
+                  t.metadata?.agentProfileConversationKey === metadata.agentProfileConversationKey ||
+                  (!t.metadata?.agentProfileConversationKey && (
+                    metadata.agentProfileProjectId
+                      ? t.metadata?.agentProfileProjectId === metadata.agentProfileProjectId
+                      : true
+                  ))
+                )
+              : metadata.agentProfileWorkspace
+                ? t.metadata?.agentProfileWorkspace === metadata.agentProfileWorkspace
+                : true)
           )
           if (existing) {
+            // Product manifests can opt an existing durable tab into a newer
+            // chat contract. Merge the declarative binding on reuse so users
+            // keep their existing conversation when a product is upgraded.
+            set(state => ({
+              chatTabs: {
+                ...state.chatTabs,
+                [existing.tabId]: {
+                  ...state.chatTabs[existing.tabId],
+                  metadata: { ...state.chatTabs[existing.tabId].metadata, ...metadata },
+                },
+              },
+            }))
             // Restore binds the single tab to a specific backend session.
             if (existingObserverId && existingObserverId !== existing.sessionId) {
               get().updateTabSessionId(existing.tabId, existingObserverId)
@@ -2031,7 +2073,7 @@ export const useChatStore = create<ChatState>()(
         const tabIdBase = mode === 'workflow' && metadata?.phaseId
           ? `phase_${metadata.phaseId}_${timestamp}`
           : `chat_${timestamp}`
-        // Two independent lanes (for example Schedule + Chief of Staff chat)
+        // Two independent lanes (for example Schedule + a product chat)
         // can be created in the same millisecond. Preserve the readable ID
         // shape while guaranteeing that the second tab cannot overwrite the
         // first in the chatTabs record.

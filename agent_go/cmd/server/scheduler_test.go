@@ -164,21 +164,11 @@ func TestUpdateRuntimeStateSerializesMutations(t *testing.T) {
 	}
 }
 
-func TestRuntimeStateIsScopedAcrossUsersAndWorkflows(t *testing.T) {
+func TestRuntimeStateIsScopedAcrossWorkflows(t *testing.T) {
 	svc := NewSchedulerService(nil)
-	userOneKey := multiAgentScheduleRuntimeKey("user-1", "builtin-org-pulse")
-	userTwoKey := multiAgentScheduleRuntimeKey("user-2", "builtin-org-pulse")
 	workflowOneKey := workflowScheduleRuntimeKey("Workflow/one", "copied-schedule")
 	workflowTwoKey := workflowScheduleRuntimeKey("Workflow/two", "copied-schedule")
 
-	svc.updateRuntimeState(userOneKey, func(state *ScheduleRuntimeState) {
-		state.LastStatus = "running"
-		state.LastSessionID = "user-1-session"
-	})
-	svc.updateRuntimeState(userTwoKey, func(state *ScheduleRuntimeState) {
-		state.LastStatus = "success"
-		state.LastSessionID = "user-2-session"
-	})
 	svc.updateRuntimeState(workflowOneKey, func(state *ScheduleRuntimeState) {
 		state.LastStatus = "running"
 	})
@@ -186,20 +176,11 @@ func TestRuntimeStateIsScopedAcrossUsersAndWorkflows(t *testing.T) {
 		state.LastStatus = "stopped"
 	})
 
-	if got := svc.getRuntimeStateByKey(userOneKey); got.LastSessionID != "user-1-session" || got.LastStatus != "running" {
-		t.Fatalf("user 1 state = %+v", got)
-	}
-	if got := svc.getRuntimeStateByKey(userTwoKey); got.LastSessionID != "user-2-session" || got.LastStatus != "success" {
-		t.Fatalf("user 2 state = %+v", got)
-	}
 	if got := svc.getRuntimeStateByKey(workflowOneKey); got.LastStatus != "running" {
 		t.Fatalf("workflow one state = %+v", got)
 	}
 	if got := svc.getRuntimeStateByKey(workflowTwoKey); got.LastStatus != "stopped" {
 		t.Fatalf("workflow two state = %+v", got)
-	}
-	if got := svc.GetRuntimeState("builtin-org-pulse"); got.LastStatus != "" {
-		t.Fatalf("ambiguous unscoped state = %+v, want empty", got)
 	}
 }
 
@@ -208,10 +189,6 @@ func TestScheduleStateLockKeyFromRuntimeKey(t *testing.T) {
 	wantWorkflow := strings.Join([]string{"workflow", "/tmp/Workflow/demo"}, scheduleScopeSeparator)
 	if got := scheduleStateLockKeyFromRuntimeKey(workflowKey); got != wantWorkflow {
 		t.Fatalf("workflow lock key = %q, want %q", got, wantWorkflow)
-	}
-	multiAgentKey := multiAgentScheduleRuntimeKey("user-1", "daily")
-	if got := scheduleStateLockKeyFromRuntimeKey(multiAgentKey); got != multiAgentKey {
-		t.Fatalf("multi-agent lock key = %q, want %q", got, multiAgentKey)
 	}
 	pulseKey := workflowScheduleRuntimeKey("/tmp/Workflow/demo", manualWorkflowPulseScheduleID)
 	wantPulse := strings.Join([]string{"workflow-pulse", "/tmp/Workflow/demo"}, scheduleScopeSeparator)
@@ -370,56 +347,8 @@ func TestStopBetweenReservationAndDurableClaimPreventsExecution(t *testing.T) {
 	}
 }
 
-// Org Pulse itself is gone (DefaultBuiltinSchedules returns empty -- see
-// builtin_schedules.go), so triggering its ID without a persisted schedule
-// entry no longer resolves to a builtin at all -- it is simply not found.
-func TestTriggerMultiAgentNowWithoutScheduleFileReportsNotFound(t *testing.T) {
-	workspace := httptest.NewServer(&mockWorkspaceAPI{files: map[string]string{}})
-	defer workspace.Close()
-	t.Setenv("WORKSPACE_API_URL", workspace.URL)
-
-	svc := NewSchedulerService(nil)
-	userID := "user-without-schedule-file"
-
-	_, err := svc.TriggerMultiAgentNow(userID, builtinOrgPulseID)
-	if err == nil || !strings.Contains(err.Error(), "not found") {
-		t.Fatalf("TriggerMultiAgentNow() error = %v, want not-found now that org pulse has no builtin to resolve", err)
-	}
-}
-
-func TestGetRuntimeStateForUserReconcilesStaleRun(t *testing.T) {
-	workspace := httptest.NewServer(&mockWorkspaceAPI{files: map[string]string{}})
-	defer workspace.Close()
-	t.Setenv("WORKSPACE_API_URL", workspace.URL)
-
-	userID := "user-1"
-	scheduleID := "daily"
-	if err := AppendMultiAgentScheduleRun(context.Background(), userID, &ScheduleRunEntry{
-		ID:         "stale-run",
-		ScheduleID: scheduleID,
-		SessionID:  "missing-session",
-		Status:     "running",
-		StartedAt:  time.Now().Add(-time.Minute).UTC(),
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	svc := NewSchedulerService(&StreamingAPI{})
-	state := svc.GetRuntimeStateForUser(userID, scheduleID)
-	if state.LastStatus != "error" || !strings.Contains(state.LastError, "session not active") {
-		t.Fatalf("reconciled state = %+v, want stale run finalized as error", state)
-	}
-	runs, err := ReadMultiAgentScheduleRuns(context.Background(), userID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(runs) != 1 || runs[0].Status != "error" || runs[0].CompletedAt == nil {
-		t.Fatalf("persisted runs = %+v, want finalized stale run", runs)
-	}
-}
-
 func TestScheduleConfigFingerprintChangesWithCapabilities(t *testing.T) {
-	sctx := buildMultiAgentScheduleContext("user-1", WorkflowSchedule{ID: "daily", Enabled: true, CronExpression: "0 9 * * *", Timezone: "UTC"}, WorkflowCapabilities{})
+	sctx := &ScheduleContext{WorkspacePath: "Workflow/demo", Schedule: WorkflowSchedule{ID: "daily", Enabled: true, CronExpression: "0 9 * * *", Timezone: "UTC"}, Capabilities: WorkflowCapabilities{}}
 	first := scheduleConfigFingerprint(sctx)
 	second := scheduleConfigFingerprint(sctx)
 	if first == "" || first != second {
@@ -452,16 +381,16 @@ func TestLoadScheduleReplacesCalendarRegistrations(t *testing.T) {
 	when := time.Now().UTC().Add(24 * time.Hour)
 	item := CalendarScheduleItem{ID: "item-1", Date: when.Format("2006-01-02"), Time: when.Format("15:04"), Messages: []string{"old"}}
 	sched := WorkflowSchedule{ID: "calendar", Name: "Calendar", Enabled: true, ScheduleType: "calendar", Timezone: "UTC", CalendarItems: []CalendarScheduleItem{item}}
-	if err := svc.LoadSchedule(buildMultiAgentScheduleContext("user-1", sched, WorkflowCapabilities{})); err != nil {
+	if err := svc.LoadSchedule(&ScheduleContext{WorkspacePath: "Workflow/demo", Schedule: sched}); err != nil {
 		t.Fatalf("initial load: %v", err)
 	}
 
 	sched.CalendarItems[0].Messages = []string{"new"}
-	if err := svc.LoadSchedule(buildMultiAgentScheduleContext("user-1", sched, WorkflowCapabilities{})); err != nil {
+	if err := svc.LoadSchedule(&ScheduleContext{WorkspacePath: "Workflow/demo", Schedule: sched}); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
 
-	keyPrefix := multiAgentScheduleRuntimeKey("user-1", sched.ID) + "__cal__"
+	keyPrefix := workflowScheduleRuntimeKey("Workflow/demo", sched.ID) + "__cal__"
 	matching := 0
 	for key, job := range svc.jobs {
 		if !strings.HasPrefix(key, keyPrefix) {
@@ -479,9 +408,9 @@ func TestLoadScheduleReplacesCalendarRegistrations(t *testing.T) {
 
 func TestLoadScheduleDoesNotRememberInvalidCronFingerprint(t *testing.T) {
 	svc := NewSchedulerService(nil)
-	sctx := buildMultiAgentScheduleContext("user-1", WorkflowSchedule{
+	sctx := &ScheduleContext{WorkspacePath: "Workflow/demo", Schedule: WorkflowSchedule{
 		ID: "daily", Enabled: true, CronExpression: "not-a-cron", Timezone: "UTC",
-	}, WorkflowCapabilities{})
+	}}
 	runtimeKey := scheduleRuntimeKey(sctx)
 	if err := svc.LoadSchedule(sctx); err == nil {
 		t.Fatal("invalid cron unexpectedly loaded")
@@ -513,34 +442,6 @@ func TestRemoveJobDropsInactiveRuntimeState(t *testing.T) {
 	svc.runtimeStatesMu.RUnlock()
 	if exists {
 		t.Fatal("removed schedule retained inactive runtime state")
-	}
-}
-
-func TestLoadScheduleKeepsSameIDForDifferentUsers(t *testing.T) {
-	svc := NewSchedulerService(nil)
-	for _, userID := range []string{"user-1", "user-2"} {
-		sctx := buildMultiAgentScheduleContext(userID, WorkflowSchedule{
-			ID:             "builtin-org-pulse",
-			Name:           "Org Pulse",
-			Enabled:        true,
-			CronExpression: "0 9 * * *",
-			Timezone:       "UTC",
-			Query:          "Run Org Pulse",
-		}, WorkflowCapabilities{})
-		if err := svc.LoadSchedule(sctx); err != nil {
-			t.Fatalf("LoadSchedule(%s): %v", userID, err)
-		}
-	}
-
-	svc.mu.Lock()
-	defer svc.mu.Unlock()
-	if len(svc.jobs) != 2 {
-		t.Fatalf("len(jobs) = %d, want 2 scoped jobs", len(svc.jobs))
-	}
-	for _, userID := range []string{"user-1", "user-2"} {
-		if _, ok := svc.jobs[multiAgentScheduleRuntimeKey(userID, "builtin-org-pulse")]; !ok {
-			t.Fatalf("missing scoped job for %s", userID)
-		}
 	}
 }
 
@@ -778,80 +679,6 @@ func TestUpdateScheduleClearsMessagesOnlyWhenExplicitlySet(t *testing.T) {
 	})
 }
 
-func TestShouldUpdateChiefTaskReport(t *testing.T) {
-	tests := []struct {
-		name string
-		sctx *ScheduleContext
-		want bool
-	}{
-		{
-			name: "normal chief schedule updates task report",
-			sctx: &ScheduleContext{
-				SourceType: "multi-agent",
-				Schedule: WorkflowSchedule{
-					ID:          "weekly-market-review",
-					Name:        "Weekly market review",
-					Description: "Review three workflows and recommend changes",
-					Query:       "Prepare a cross-workflow recommendation report.",
-				},
-			},
-			want: true,
-		},
-		{
-			name: "workflow schedule does not update chief task report",
-			sctx: &ScheduleContext{
-				SourceType: "workflow",
-				Schedule:   WorkflowSchedule{ID: "daily-run", Name: "Daily run"},
-			},
-			want: false,
-		},
-		{
-			name: "builtin org pulse is excluded",
-			sctx: &ScheduleContext{
-				SourceType: "multi-agent",
-				Schedule:   WorkflowSchedule{ID: builtinOrgPulseID, Name: "Daily Org Pulse"},
-			},
-			want: false,
-		},
-		{
-			name: "org pulse duplicate is excluded",
-			sctx: &ScheduleContext{
-				SourceType: "multi-agent",
-				Schedule:   WorkflowSchedule{ID: "custom-pulse", Name: "Daily Org Pulse scan"},
-			},
-			want: false,
-		},
-		{
-			name: "deprecated builtin memory schedule is excluded",
-			sctx: &ScheduleContext{
-				SourceType: "multi-agent",
-				Schedule:   WorkflowSchedule{ID: deprecatedAutoEnrichMemoryID, Name: "Auto-enrich memory"},
-			},
-			want: false,
-		},
-		{
-			name: "memory-like schedule is excluded",
-			sctx: &ScheduleContext{
-				SourceType: "multi-agent",
-				Schedule: WorkflowSchedule{
-					ID:    "custom-memory",
-					Name:  "Memory enrichment",
-					Query: "Run enrich_memory for recent conversations.",
-				},
-			},
-			want: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := shouldUpdateChiefTaskReport(tt.sctx); got != tt.want {
-				t.Fatalf("shouldUpdateChiefTaskReport() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
 // TestCreateAndUpdatePulseReviewOnlyScheduleSkipsGroupNamesRequirement pins
 // PLAT-115 at the real CreateSchedule/UpdateSchedule implementations (not
 // just the tool-layer guard): a pulse_review_only schedule must not be
@@ -919,87 +746,6 @@ func TestCreateAndUpdatePulseReviewOnlyScheduleSkipsGroupNamesRequirement(t *tes
 	}
 	if !current.Schedules[0].PulseReviewOnly {
 		t.Fatal("pulse_review_only must survive an unrelated update")
-	}
-}
-
-func TestBuildChiefTaskReportUpdateMessageUsesSingleSharedTaskHTML(t *testing.T) {
-	startedAt := time.Date(2026, 7, 4, 10, 15, 0, 0, time.UTC)
-	completedAt := startedAt.Add(2 * time.Minute)
-	sctx := &ScheduleContext{
-		SourceType: "multi-agent",
-		Schedule: WorkflowSchedule{
-			ID:             "weekly-market-review",
-			Name:           "Weekly market review",
-			Description:    "Review three workflows and recommend changes",
-			Query:          "Prepare a cross-workflow recommendation report.",
-			CronExpression: "0 9 * * 1",
-			Timezone:       "Asia/Kolkata",
-		},
-	}
-
-	msg := buildChiefTaskReportUpdateMessage(sctx, "run-123", "success", "", 120000, startedAt, completedAt, "session-abc")
-	for _, want := range []string{
-		`read_skill(skills=[{"name":"builder-reference","path":"references/chief-task-report.md"}])`,
-		"Update the single shared Tasks page at pulse/task.html",
-		"Do not create per-task files",
-		"Do not edit pulse/org-pulse.html, pulse/goals.html",
-		"schedule_id: weekly-market-review",
-		"schedule_name: Weekly market review",
-		"run_id: run-123",
-		"session_id: session-abc",
-		"status: success",
-		"Prepare a cross-workflow recommendation report.",
-		"Prepend one .task-entry",
-		"key findings to reuse",
-		"Treat the metadata above as internal input",
-		"collapsed Agent details",
-		"ordinary language",
-	} {
-		if !strings.Contains(msg, want) {
-			t.Fatalf("task report update message missing %q:\n%s", want, msg)
-		}
-	}
-}
-
-func TestWithChiefTaskRunContextAddsPriorTaskReportInstruction(t *testing.T) {
-	sctx := &ScheduleContext{
-		SourceType: "multi-agent",
-		Schedule: WorkflowSchedule{
-			ID:    "weekly-market-review",
-			Name:  "Weekly market review",
-			Query: "Prepare a cross-workflow recommendation report.",
-		},
-	}
-
-	msg := withChiefTaskRunContext(sctx, sctx.Schedule.Query)
-	for _, want := range []string{
-		"NORMAL CHIEF OF STAFF TASK RUN",
-		"read pulse/task.html if it exists",
-		`data-schedule-id="weekly-market-review"`,
-		"key findings",
-		"durable context",
-		"Do not use or update Chief of Staff memory tools/files",
-		`create_human_input_request(source="chief_of_staff"`,
-		`workspace_path="pulse"`,
-		"do not wait in real time",
-		"mark_human_input_consumed",
-		"Prepare a cross-workflow recommendation report.",
-	} {
-		if !strings.Contains(msg, want) {
-			t.Fatalf("task run context missing %q:\n%s", want, msg)
-		}
-	}
-}
-
-func TestWithChiefTaskRunContextSkipsOrgPulse(t *testing.T) {
-	sctx := &ScheduleContext{
-		SourceType: "multi-agent",
-		Schedule:   WorkflowSchedule{ID: builtinOrgPulseID, Name: "Daily Org Pulse"},
-	}
-
-	const query = "Run Org Pulse."
-	if got := withChiefTaskRunContext(sctx, query); got != query {
-		t.Fatalf("withChiefTaskRunContext() = %q, want original query", got)
 	}
 }
 
@@ -1878,274 +1624,6 @@ func TestPostRunMonitorFinalStepsIncludesSplitNotificationRouting(t *testing.T) 
 	}
 }
 
-func TestOptimizerScheduleMessagesKeepsCustomMessages(t *testing.T) {
-	stored := []string{`Do not ask for confirmation. Run this custom optimizer audit and stop. Compare with any Auto Improve history already logged.`}
-
-	got := optimizerScheduleMessages(context.Background(), "Workflow/test", stored, []string{"prod"})
-	if len(got) != 1 {
-		t.Fatalf("optimizerScheduleMessages() length = %d, want 1", len(got))
-	}
-	if got[0] != stored[0] {
-		t.Fatalf("optimizerScheduleMessages() = %#v, want stored custom message", got)
-	}
-}
-
-func TestLegacyGoalAdvisorMessageQueueIgnoresCustomTopicMentions(t *testing.T) {
-	stored := []string{`Run a custom optimizer audit for this workflow. Compare the result with Goal Advisor and Auto Improve history, then stop.`}
-	if isLegacyGoalAdvisorMessageQueue(stored) {
-		t.Fatalf("custom optimizer prompt was incorrectly classified as legacy: %q", stored[0])
-	}
-}
-
-func TestOptimizerScheduleMessagesNoopsWhenNoStoredMessage(t *testing.T) {
-	got := optimizerScheduleMessages(context.Background(), "Workflow/test", nil, []string{"group-a"})
-	if len(got) != 1 {
-		t.Fatalf("optimizerScheduleMessages(nil) length = %d, want 1", len(got))
-	}
-	for _, want := range []string{
-		"optimizer schedule is no longer the product Goal Advisor loop",
-		"Goal Advisor now runs as a Pulse-selected module",
-		"legacy optimizer schedule should be disabled",
-	} {
-		if !strings.Contains(got[0], want) {
-			t.Fatalf("optimizer no-op message missing %q:\n%s", want, got[0])
-		}
-	}
-}
-
-func TestExecuteWorkshopJobDisablesLegacyOptimizerBeforeStartingSession(t *testing.T) {
-	ctx := context.Background()
-	workspacePath := "Workflow/demo"
-	manifest := &WorkflowManifest{
-		SchemaVersion: WorkflowManifestSchemaVersion,
-		ID:            "demo",
-		Label:         "Demo",
-		Schedules: []WorkflowSchedule{
-			{
-				ID:             "legacy-optimizer",
-				Name:           "Goal Advisor",
-				CronExpression: "0 23 * * *",
-				Timezone:       "UTC",
-				Enabled:        true,
-				GroupNames:     []string{"group-1"},
-				Mode:           "workshop",
-				WorkshopMode:   "optimizer",
-				Messages: []string{
-					"STEP 1/5 — PRE-BACKUP",
-					"STEP 2/5 — IMPROVE",
-				},
-			},
-		},
-	}
-	manifestJSON, err := json.Marshal(manifest)
-	if err != nil {
-		t.Fatalf("marshal manifest: %v", err)
-	}
-	workspace := httptest.NewServer(&mockWorkspaceAPI{files: map[string]string{
-		workspacePath + "/workflow.json": string(manifestJSON),
-	}})
-	defer workspace.Close()
-	t.Setenv("WORKSPACE_API_URL", workspace.URL)
-
-	s := NewSchedulerService(nil)
-	_, _, err = s.executeWorkshopJob(ctx, &ScheduleContext{
-		WorkspacePath: workspacePath,
-		Schedule:      manifest.Schedules[0],
-		SourceType:    "workflow",
-	}, "")
-	if err != nil {
-		t.Fatalf("executeWorkshopJob() error = %v", err)
-	}
-
-	updated, found, err := ReadWorkflowManifest(ctx, workspacePath)
-	if err != nil || !found {
-		t.Fatalf("read updated manifest: found=%v err=%v", found, err)
-	}
-	if len(updated.Schedules) != 1 || updated.Schedules[0].Enabled {
-		t.Fatalf("legacy optimizer schedule was not disabled: %+v", updated.Schedules)
-	}
-	if !updated.MonitorEnabled() {
-		t.Fatal("legacy optimizer disable should enable Pulse/post_run_monitor")
-	}
-}
-
-func TestOptimizerScheduleMessagesReplacesLegacyGoalAdvisorQueue(t *testing.T) {
-	legacy := []string{
-		"STEP 1/5 — PRE-BACKUP",
-		"STEP 2/5 — IMPROVE",
-		"STEP 3/5 — BACKUP FINAL STATE",
-		"STEP 4/5 — PUBLISH",
-		"STEP 5/5 — NOTIFY",
-	}
-
-	got := optimizerScheduleMessages(context.Background(), "Workflow/test", legacy, nil)
-	if len(got) != 1 {
-		t.Fatalf("optimizerScheduleMessages() length = %d, want 1", len(got))
-	}
-	if strings.Contains(strings.Join(got, "\n"), strings.Join(legacy, "\n")) {
-		t.Fatalf("optimizerScheduleMessages() should replace legacy stored queues, got:\n%s", strings.Join(got, "\n"))
-	}
-	for _, want := range []string{
-		"optimizer schedule is no longer the product Goal Advisor loop",
-		"Pulse-selected module",
-	} {
-		if !strings.Contains(strings.Join(got, "\n"), want) {
-			t.Fatalf("optimizerScheduleMessages() missing %q:\n%s", want, strings.Join(got, "\n"))
-		}
-	}
-}
-
-func TestApplyLLMAndSecretsToReqMapUsesAutoImproveOverrideOnlyForOptimizer(t *testing.T) {
-	builder := &workflowtypes.AgentLLMConfig{Provider: "claude-code", ModelID: "claude-opus-4-6"}
-	maintenance := &workflowtypes.AgentLLMConfig{Provider: "vertex", ModelID: "gemini-2.5-pro"}
-	baseConfig := &workflowtypes.PresetLLMConfig{
-		SchemaVersion:  workflowtypes.LLMConfigSchemaVersion,
-		Mode:           workflowtypes.LLMConfigModeExplicit,
-		BuilderLLM:     builder,
-		MaintenanceLLM: maintenance,
-		PulseLLM:       builder,
-		TieredConfig:   &workflowtypes.TieredLLMConfig{Tier1: maintenance, Tier2: builder, Tier3: builder},
-	}
-
-	tests := []struct {
-		name         string
-		workshopMode string
-		wantProvider string
-		wantModelID  string
-	}{
-		{
-			name:         "normal schedule uses workflow model",
-			workshopMode: "run",
-			wantProvider: "claude-code",
-			wantModelID:  "claude-opus-4-6",
-		},
-		{
-			name:         "optimizer schedule uses Goal Advisor override",
-			workshopMode: "optimizer",
-			wantProvider: "vertex",
-			wantModelID:  "gemini-2.5-pro",
-		},
-		{
-			name:         "optimizer mode is case insensitive",
-			workshopMode: " OPTIMIZER ",
-			wantProvider: "vertex",
-			wantModelID:  "gemini-2.5-pro",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			reqMap := map[string]interface{}{}
-			(&SchedulerService{}).applyLLMAndSecretsToReqMap(context.Background(), reqMap, &ScheduleContext{
-				Schedule: WorkflowSchedule{WorkshopMode: tt.workshopMode},
-				Capabilities: WorkflowCapabilities{
-					LLMConfig: baseConfig,
-				},
-			})
-
-			llmConfig, ok := reqMap["llm_config"].(map[string]interface{})
-			if !ok {
-				t.Fatalf("llm_config missing or wrong type: %#v", reqMap["llm_config"])
-			}
-			primary, ok := llmConfig["primary"].(map[string]interface{})
-			if !ok {
-				t.Fatalf("llm_config.primary missing or wrong type: %#v", llmConfig["primary"])
-			}
-			if got := primary["provider"]; got != tt.wantProvider {
-				t.Fatalf("provider = %#v, want %q", got, tt.wantProvider)
-			}
-			if got := primary["model_id"]; got != tt.wantModelID {
-				t.Fatalf("model_id = %#v, want %q", got, tt.wantModelID)
-			}
-			if tt.workshopMode == "run" {
-				if _, ok := reqMap["llm_config_source"]; ok {
-					t.Fatalf("normal run set llm_config_source: %#v", reqMap["llm_config_source"])
-				}
-			} else if got := reqMap["llm_config_source"]; got != llmConfigSourceScheduledAutoImprove {
-				t.Fatalf("llm_config_source = %#v, want %q", got, llmConfigSourceScheduledAutoImprove)
-			}
-		})
-	}
-}
-
-func TestApplyLLMAndSecretsToReqMapUsesCodingAgentAutoImproveDefaultForOptimizer(t *testing.T) {
-	reqMap := map[string]interface{}{}
-	(&SchedulerService{}).applyLLMAndSecretsToReqMap(context.Background(), reqMap, &ScheduleContext{
-		Schedule: WorkflowSchedule{WorkshopMode: "optimizer"},
-		Capabilities: WorkflowCapabilities{
-			LLMConfig: &workflowtypes.PresetLLMConfig{
-				SchemaVersion: workflowtypes.LLMConfigSchemaVersion,
-				Mode:          workflowtypes.LLMConfigModeProviderProfile,
-				Provider:      "claude-code",
-			},
-		},
-	})
-
-	llmConfig, ok := reqMap["llm_config"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("llm_config missing or wrong type: %#v", reqMap["llm_config"])
-	}
-	primary, ok := llmConfig["primary"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("llm_config.primary missing or wrong type: %#v", llmConfig["primary"])
-	}
-	if got := primary["provider"]; got != "claude-code" {
-		t.Fatalf("provider = %#v, want claude-code", got)
-	}
-	if got := primary["model_id"]; got != "claude-opus-5" {
-		t.Fatalf("model_id = %#v, want claude-opus-5", got)
-	}
-	options, ok := primary["options"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("options missing or wrong type: %#v", primary["options"])
-	}
-	if got := options["reasoning_effort"]; got != "medium" {
-		t.Fatalf("reasoning_effort = %#v, want medium", got)
-	}
-	if got := reqMap["llm_config_source"]; got != llmConfigSourceScheduledAutoImprove {
-		t.Fatalf("llm_config_source = %#v, want %q", got, llmConfigSourceScheduledAutoImprove)
-	}
-}
-
-func TestApplyLLMAndSecretsToReqMapPreservesAutoImproveDefaultOptions(t *testing.T) {
-	reqMap := map[string]interface{}{}
-	(&SchedulerService{}).applyLLMAndSecretsToReqMap(context.Background(), reqMap, &ScheduleContext{
-		Schedule: WorkflowSchedule{WorkshopMode: "optimizer"},
-		Capabilities: WorkflowCapabilities{
-			LLMConfig: &workflowtypes.PresetLLMConfig{
-				SchemaVersion: workflowtypes.LLMConfigSchemaVersion,
-				Mode:          workflowtypes.LLMConfigModeProviderProfile,
-				Provider:      "codex-cli",
-			},
-		},
-	})
-
-	llmConfig, ok := reqMap["llm_config"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("llm_config missing or wrong type: %#v", reqMap["llm_config"])
-	}
-	primary, ok := llmConfig["primary"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("llm_config.primary missing or wrong type: %#v", llmConfig["primary"])
-	}
-	if got := primary["provider"]; got != "codex-cli" {
-		t.Fatalf("provider = %#v, want codex-cli", got)
-	}
-	if got := primary["model_id"]; got != "gpt-5.6-sol" {
-		t.Fatalf("model_id = %#v, want gpt-5.6-sol", got)
-	}
-	options, ok := primary["options"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("options missing or wrong type: %#v", primary["options"])
-	}
-	if got := options["reasoning_effort"]; got != "high" {
-		t.Fatalf("reasoning_effort = %#v, want high", got)
-	}
-	if got := reqMap["llm_config_source"]; got != llmConfigSourceScheduledAutoImprove {
-		t.Fatalf("llm_config_source = %#v, want %q", got, llmConfigSourceScheduledAutoImprove)
-	}
-}
-
 func TestApplyPulseLLMToReqMapUsesPulseOverrideWhenConfigured(t *testing.T) {
 	reqMap := map[string]interface{}{}
 	builder := &workflowtypes.AgentLLMConfig{Provider: "claude-code", ModelID: "claude-opus-4-6"}
@@ -2255,7 +1733,6 @@ func TestBuildWorkshopRequestDisablesLiveInputDeliveryForSchedulerTurns(t *testi
 		WorkspacePath: "Workflow/test",
 		Schedule:      WorkflowSchedule{ID: "daily", Name: "Daily"},
 		Capabilities:  WorkflowCapabilities{},
-		SourceType:    "workflow",
 	}
 
 	reqMap := svc.buildWorkshopRequest(context.Background(), sctx)
@@ -2729,97 +2206,11 @@ func TestMaybeResumeLatestWorkflowThreadIgnoresNormalUserChat(t *testing.T) {
 	}
 }
 
-func TestMaybeResumeLatestMultiAgentThreadUsesPreviousScheduledSessionOnly(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("WORKSPACE_DOCS_PATH", root)
-
-	userID := "default"
-	scheduleID := "schedule-1"
-	writeUserChatRuntime(t, root, userID, "normal-user-chat", "claude-code", true)
-	writeUserChatRuntime(t, root, userID, "previous-schedule-chat", "claude-code", true)
-	writeMultiAgentScheduleRunsForTest(t, root, userID, []ScheduleRunEntry{
-		{
-			ID:         "current-run",
-			ScheduleID: scheduleID,
-			SessionID:  "current-schedule-chat",
-			Status:     "running",
-			StartedAt:  time.Now().UTC(),
-		},
-		{
-			ID:         "previous-run",
-			ScheduleID: scheduleID,
-			SessionID:  "previous-schedule-chat",
-			Status:     "success",
-			StartedAt:  time.Now().Add(-time.Hour).UTC(),
-		},
-	})
-
-	reqMap := map[string]interface{}{}
-	resumed := (&SchedulerService{}).maybeResumeLatestMultiAgentThread(context.Background(), resumeTestMultiAgentScheduleContext(userID, scheduleID), reqMap, "current-schedule-chat")
-	if resumed != "previous-schedule-chat" {
-		t.Fatalf("resumed session = %q, want previous scheduled session", resumed)
-	}
-	if got := reqMap["restored_conversation_session_id"]; got != "previous-schedule-chat" {
-		t.Fatalf("restored_conversation_session_id = %#v, want previous scheduled session", got)
-	}
-}
-
-func TestMaybeResumeLatestMultiAgentThreadIgnoresNormalUserChat(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("WORKSPACE_DOCS_PATH", root)
-
-	userID := "default"
-	scheduleID := "schedule-1"
-	writeUserChatRuntime(t, root, userID, "normal-user-chat", "claude-code", true)
-	writeMultiAgentScheduleRunsForTest(t, root, userID, []ScheduleRunEntry{
-		{
-			ID:         "current-run",
-			ScheduleID: scheduleID,
-			SessionID:  "current-schedule-chat",
-			Status:     "running",
-			StartedAt:  time.Now().UTC(),
-		},
-	})
-
-	reqMap := map[string]interface{}{}
-	resumed := (&SchedulerService{}).maybeResumeLatestMultiAgentThread(context.Background(), resumeTestMultiAgentScheduleContext(userID, scheduleID), reqMap, "current-schedule-chat")
-	if resumed != "" {
-		t.Fatalf("resumed session = %q, want empty because normal user chats are not schedule runs", resumed)
-	}
-	if _, ok := reqMap["restored_conversation_session_id"]; ok {
-		t.Fatalf("restored_conversation_session_id was set for a normal user chat: %#v", reqMap)
-	}
-}
-
 func resumeTestScheduleContext(workspacePath, scheduleID string) *ScheduleContext {
 	resumePrevious := true
 	builder := &workflowtypes.AgentLLMConfig{Provider: "claude-code", ModelID: "claude-opus-4-6"}
 	return &ScheduleContext{
 		WorkspacePath: workspacePath,
-		UserID:        "default",
-		Schedule: WorkflowSchedule{
-			ID:             scheduleID,
-			ResumePrevious: &resumePrevious,
-		},
-		Capabilities: WorkflowCapabilities{
-			LLMConfig: &workflowtypes.PresetLLMConfig{
-				SchemaVersion:  workflowtypes.LLMConfigSchemaVersion,
-				Mode:           workflowtypes.LLMConfigModeExplicit,
-				BuilderLLM:     builder,
-				MaintenanceLLM: builder,
-				PulseLLM:       builder,
-				TieredConfig:   &workflowtypes.TieredLLMConfig{Tier1: builder, Tier2: builder, Tier3: builder},
-			},
-		},
-	}
-}
-
-func resumeTestMultiAgentScheduleContext(userID, scheduleID string) *ScheduleContext {
-	resumePrevious := true
-	builder := &workflowtypes.AgentLLMConfig{Provider: "claude-code", ModelID: "claude-opus-4-6"}
-	return &ScheduleContext{
-		UserID:     userID,
-		SourceType: "multi-agent",
 		Schedule: WorkflowSchedule{
 			ID:             scheduleID,
 			ResumePrevious: &resumePrevious,
@@ -2852,21 +2243,6 @@ func writeScheduleRunsForTest(t *testing.T, root, workspacePath string, runs []S
 	}
 }
 
-func writeMultiAgentScheduleRunsForTest(t *testing.T, root, userID string, runs []ScheduleRunEntry) {
-	t.Helper()
-	dir := filepath.Join(root, "_users", userID)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	data, err := json.MarshalIndent(runs, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "multiagent-schedule-runs.json"), data, 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func writeWorkflowChatRuntime(t *testing.T, root, workspacePath, sessionID, provider string, resumeSupported bool) {
 	t.Helper()
 	convDir := filepath.Join(root, filepath.FromSlash(workspacePath), "builder", "conversation", "2026-05-20")
@@ -2886,33 +2262,6 @@ func writeWorkflowChatRuntime(t *testing.T, root, workspacePath, sessionID, prov
 			"resume_flag":          "--resume",
 			"workspace_path":       workspacePath,
 			"workshop_mode":        "workshop",
-			"agent_session_handle": map[string]interface{}{},
-		},
-	}, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(convDir, "session-"+sessionID+"-conversation.json"), data, 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func writeUserChatRuntime(t *testing.T, root, userID, sessionID, provider string, resumeSupported bool) {
-	t.Helper()
-	convDir := filepath.Join(root, "_users", userID, "chat_history", "2026-05-20")
-	if err := os.MkdirAll(convDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	data, err := json.MarshalIndent(map[string]interface{}{
-		"session_id": sessionID,
-		"agent_mode": "simple",
-		"runtime": map[string]interface{}{
-			"kind":                 "coding_agent",
-			"provider":             provider,
-			"model_id":             "claude-opus-4-6",
-			"external_session_id":  "external-" + sessionID,
-			"resume_supported":     resumeSupported,
-			"resume_flag":          "--resume",
 			"agent_session_handle": map[string]interface{}{},
 		},
 	}, "", "  ")
@@ -3281,7 +2630,7 @@ func TestLatestCronOccurrenceReconcilesInterruptedAttempt(t *testing.T) {
 	}
 	service := NewSchedulerService(nil)
 	service.stateStore = store
-	sctx := &ScheduleContext{WorkspacePath: "Workflow/demo", SourceType: "workflow", Schedule: WorkflowSchedule{ID: "daily"}}
+	sctx := &ScheduleContext{WorkspacePath: "Workflow/demo", Schedule: WorkflowSchedule{ID: "daily"}}
 	got, ok := service.latestCronOccurrence(sctx)
 	if !ok || !got.Equal(scheduledFor) {
 		t.Fatalf("latest occurrence=(%s,%t), want (%s,true)", got, ok, scheduledFor)
@@ -3350,5 +2699,50 @@ func TestWorkshopRunStartedDuringInvocationRejectsOlderAndUnstamped(t *testing.T
 	}
 	if workshopRunStartedDuringInvocation(folders, since) {
 		t.Fatal("older or unstamped runs must not be reported as evidence for this invocation")
+	}
+}
+
+func TestApplyLLMAndSecretsToReqMapUsesTheWorkflowModelForEverySchedule(t *testing.T) {
+	// Every schedule now runs on the workflow's Builder model. The optimizer
+	// workshop mode used to swap in the Maintenance LLM and stamp
+	// llm_config_source; that mode was retired on 2026-08-17, so a schedule
+	// still carrying "optimizer" in workflow.json must behave like any other.
+	builder := &workflowtypes.AgentLLMConfig{Provider: "claude-code", ModelID: "claude-opus-4-6"}
+	maintenance := &workflowtypes.AgentLLMConfig{Provider: "vertex", ModelID: "gemini-2.5-pro"}
+	baseConfig := &workflowtypes.PresetLLMConfig{
+		SchemaVersion:  workflowtypes.LLMConfigSchemaVersion,
+		Mode:           workflowtypes.LLMConfigModeExplicit,
+		BuilderLLM:     builder,
+		MaintenanceLLM: maintenance,
+		PulseLLM:       builder,
+		TieredConfig:   &workflowtypes.TieredLLMConfig{Tier1: maintenance, Tier2: builder, Tier3: builder},
+	}
+
+	for _, workshopMode := range []string{"run", "workshop", "optimizer", " OPTIMIZER ", ""} {
+		t.Run("workshop_mode="+workshopMode, func(t *testing.T) {
+			reqMap := map[string]interface{}{}
+			(&SchedulerService{}).applyLLMAndSecretsToReqMap(context.Background(), reqMap, &ScheduleContext{
+				Schedule:     WorkflowSchedule{WorkshopMode: workshopMode},
+				Capabilities: WorkflowCapabilities{LLMConfig: baseConfig},
+			})
+
+			llmConfig, ok := reqMap["llm_config"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("llm_config missing or wrong type: %#v", reqMap["llm_config"])
+			}
+			primary, ok := llmConfig["primary"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("llm_config.primary missing or wrong type: %#v", llmConfig["primary"])
+			}
+			if got := primary["provider"]; got != "claude-code" {
+				t.Fatalf("provider = %#v, want the Builder model regardless of workshop mode", got)
+			}
+			if got := primary["model_id"]; got != "claude-opus-4-6" {
+				t.Fatalf("model_id = %#v, want the Builder model regardless of workshop mode", got)
+			}
+			if _, ok := reqMap["llm_config_source"]; ok {
+				t.Fatalf("llm_config_source was set: %#v — no schedule overrides the model any more", reqMap["llm_config_source"])
+			}
+		})
 	}
 }

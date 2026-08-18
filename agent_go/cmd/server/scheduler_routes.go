@@ -19,7 +19,7 @@ type ScheduledJobResponse struct {
 	ID                   string                 `json:"id"`
 	Name                 string                 `json:"name"`
 	Description          string                 `json:"description"`
-	EntityType           string                 `json:"entity_type"` // "workflow" or "multi-agent"
+	EntityType           string                 `json:"entity_type"`
 	WorkspacePath        string                 `json:"workspace_path"`
 	WorkflowID           string                 `json:"workflow_id,omitempty"`
 	WorkflowLabel        string                 `json:"workflow_label,omitempty"`
@@ -27,13 +27,11 @@ type ScheduledJobResponse struct {
 	TriggerPayload       json.RawMessage        `json:"trigger_payload,omitempty"`
 	GroupNames           []string               `json:"group_names,omitempty"`
 	RouteSelections      map[string]string      `json:"route_selections,omitempty"`
-	Mode                 string                 `json:"mode,omitempty"`     // "workshop" for workflow schedules, or "multi-agent"
+	Mode                 string                 `json:"mode,omitempty"`
 	Messages             []string               `json:"messages,omitempty"` // Predefined messages for workshop schedules
 	DirectMessagesReason string                 `json:"direct_messages_reason,omitempty"`
 	WorkshopMode         string                 `json:"workshop_mode,omitempty"`   // run (default) or optimizer
-	Query                string                 `json:"query,omitempty"`           // Message to execute (multi-agent mode)
 	ResumePrevious       bool                   `json:"resume_previous,omitempty"` // Coding-agent CLI only: opt in to resume latest prior thread instead of fresh session
-	UserID               string                 `json:"user_id,omitempty"`         // User context (multi-agent mode)
 	ScheduleType         string                 `json:"schedule_type,omitempty"`
 	CalendarItems        []CalendarScheduleItem `json:"calendar_items,omitempty"`
 	CronExpression       string                 `json:"cron_expression"`
@@ -52,8 +50,6 @@ type ScheduledJobResponse struct {
 	MissedRunReason      string                 `json:"missed_run_reason,omitempty"`
 	CreatedAt            string                 `json:"created_at,omitempty"`
 	UpdatedAt            string                 `json:"updated_at,omitempty"`
-	BuiltIn              bool                   `json:"built_in,omitempty"`
-	ManagedBy            string                 `json:"managed_by,omitempty"`
 }
 
 // CreateScheduleRequest is the request body for creating a schedule.
@@ -69,11 +65,10 @@ type CreateScheduleRequest struct {
 	TriggerPayload       json.RawMessage        `json:"trigger_payload,omitempty"`
 	GroupNames           []string               `json:"group_names,omitempty"`
 	RouteSelections      map[string]string      `json:"route_selections,omitempty"`
-	Mode                 string                 `json:"mode,omitempty"`     // "workshop" for workflow schedules, or "multi-agent"
+	Mode                 string                 `json:"mode,omitempty"`
 	Messages             []string               `json:"messages,omitempty"` // Predefined messages for workshop schedules
 	DirectMessagesReason string                 `json:"direct_messages_reason,omitempty"`
 	WorkshopMode         string                 `json:"workshop_mode,omitempty"`   // run (default) or optimizer
-	Query                string                 `json:"query,omitempty"`           // Message to execute (multi-agent mode)
 	ResumePrevious       *bool                  `json:"resume_previous,omitempty"` // Coding-agent CLI only: explicit true resumes latest prior thread; nil/false starts fresh
 }
 
@@ -89,11 +84,10 @@ type UpdateScheduleRequest struct {
 	TriggerPayload       json.RawMessage        `json:"trigger_payload,omitempty"`
 	GroupNames           []string               `json:"group_names,omitempty"`
 	RouteSelections      map[string]string      `json:"route_selections,omitempty"`
-	Mode                 string                 `json:"mode,omitempty"`     // "workshop" for workflow schedules, or "multi-agent"
+	Mode                 string                 `json:"mode,omitempty"`
 	Messages             []string               `json:"messages,omitempty"` // Predefined messages for workshop schedules
 	DirectMessagesReason *string                `json:"direct_messages_reason,omitempty"`
 	WorkshopMode         string                 `json:"workshop_mode,omitempty"`   // run (default) or optimizer
-	Query                string                 `json:"query,omitempty"`           // Message to execute (multi-agent mode)
 	ResumePrevious       *bool                  `json:"resume_previous,omitempty"` // Coding-agent CLI only: explicit true resumes latest prior thread; nil/false starts fresh
 }
 
@@ -140,100 +134,11 @@ func buildJobResponse(workspacePath string, manifest *WorkflowManifest, sched Wo
 	}
 }
 
-func buildMultiAgentJobResponse(userID string, sched WorkflowSchedule, state ScheduleRuntimeState) ScheduledJobResponse {
-	sched = NormalizeBuiltinSchedule(sched)
-
-	builtIn := IsDefaultBuiltinSchedule(sched.ID)
-	managedBy := ""
-	if builtIn {
-		managedBy = "built-in"
-	}
-	if IsSlashManagedBuiltinSchedule(sched.ID) {
-		managedBy = "slash-command"
-	}
-	return ScheduledJobResponse{
-		ID:                  sched.ID,
-		Name:                sched.Name,
-		Description:         sched.Description,
-		EntityType:          "multi-agent",
-		WorkspacePath:       "_users/" + userID,
-		Mode:                "multi-agent",
-		Query:               sched.Query,
-		ResumePrevious:      sched.ShouldResumePrevious(),
-		UserID:              userID,
-		ScheduleType:        scheduleTypeOrDefault(sched.ScheduleType),
-		CalendarItems:       sched.CalendarItems,
-		CronExpression:      sched.CronExpression,
-		Timezone:            sched.Timezone,
-		Enabled:             sched.Enabled,
-		LastRunAt:           state.LastRunAt,
-		NextRunAt:           state.NextRunAt,
-		LastSessionID:       state.LastSessionID,
-		LastStatus:          state.LastStatus,
-		LastError:           state.LastError,
-		LastDurationMs:      state.LastDurationMs,
-		RunCount:            state.RunCount,
-		ConsecutiveFailures: state.ConsecutiveFailures,
-		BuiltIn:             builtIn,
-		ManagedBy:           managedBy,
-	}
-}
-
 func runtimeStateForScheduleResult(svc *SchedulerService, result *ScheduleSearchResult, scheduleID string) ScheduleRuntimeState {
 	if svc == nil || result == nil {
 		return ScheduleRuntimeState{}
 	}
-	if result.SourceType == "multi-agent" {
-		return svc.GetRuntimeStateForUser(result.UserID, scheduleID)
-	}
 	return svc.GetRuntimeStateForWorkflow(result.WorkspacePath, scheduleID)
-}
-
-// buildMultiAgentJobResponsesWithOrgPulse builds job responses for a user's
-// merged multi-agent schedules, applying the effective Org Pulse enabled state.
-//
-// The Org Pulse pill (and the scheduler's own intent) treats Org Pulse as a
-// single logical thing keyed by builtin-org-pulse. But /pulse-setup can leave
-// Org Pulse enabled under a different id (a user-created duplicate) instead of a
-// same-id builtin override. When that happens the canonical builtin-org-pulse
-// entry stays at its disabled default, so the pill — which reads that id — shows
-// OFF even though the scheduler is actually running Org Pulse. Here we detect any
-// enabled Org Pulse schedule and surface its effective ON state (plus run info)
-// on the canonical builtin-org-pulse job so the pill matches reality.
-func buildMultiAgentJobResponsesWithOrgPulse(svc *SchedulerService, userID string, merged []WorkflowSchedule, enabledFilter string) []ScheduledJobResponse {
-	orgPulseOn := false
-	var orgPulseRun ScheduleRuntimeState
-	for _, sched := range merged {
-		if sched.Enabled && sched.ID != builtinOrgPulseID && IsOrgPulseSchedule(sched) {
-			orgPulseOn = true
-			orgPulseRun = svc.GetRuntimeStateForUser(userID, sched.ID)
-		}
-	}
-
-	var out []ScheduledJobResponse
-	for _, sched := range merged {
-		state := svc.GetRuntimeStateForUser(userID, sched.ID)
-		resp := buildMultiAgentJobResponse(userID, sched, state)
-		if resp.ID == builtinOrgPulseID && !resp.Enabled && orgPulseOn {
-			resp.Enabled = true
-			if resp.LastRunAt == nil {
-				resp.LastRunAt = orgPulseRun.LastRunAt
-			}
-			if resp.NextRunAt == nil {
-				resp.NextRunAt = orgPulseRun.NextRunAt
-			}
-		}
-		// Filter on the EFFECTIVE enabled state so the canonical Org Pulse job is
-		// not dropped from an enabled-only listing when it is on via a duplicate.
-		if enabledFilter != "" {
-			wantEnabled := enabledFilter == "true" || enabledFilter == "1"
-			if resp.Enabled != wantEnabled {
-				continue
-			}
-		}
-		out = append(out, resp)
-	}
-	return out
 }
 
 func validateScheduleRequest(scheduleType string, cronExpr string, calendarItems []CalendarScheduleItem) error {
@@ -384,52 +289,6 @@ func triggerWorkflowPulseHandler(svc *SchedulerService) http.HandlerFunc {
 	}
 }
 
-func findScheduleByIDAnyOrCurrentUserBuiltin(ctx context.Context, scheduleID string) (*ScheduleSearchResult, error) {
-	result, err := findScheduleByIDAny(ctx, scheduleID)
-	if err == nil {
-		return result, nil
-	}
-	return findBuiltinMultiAgentScheduleForUser(ctx, GetUserIDFromContext(ctx), scheduleID)
-}
-
-func writeBuiltinMultiAgentScheduleOverride(ctx context.Context, userID, scheduleID string, mutate func(*WorkflowSchedule)) (*MultiAgentScheduleFile, int, error) {
-	if strings.TrimSpace(userID) == "" {
-		userID = GetDefaultUserID()
-	}
-	sched, ok := FindDefaultBuiltinSchedule(scheduleID)
-	if !ok {
-		return nil, -1, fmt.Errorf("built-in schedule %s not found", scheduleID)
-	}
-
-	f, _, err := ReadMultiAgentSchedules(ctx, userID)
-	if err != nil {
-		return nil, -1, err
-	}
-
-	idx := -1
-	for i := range f.Schedules {
-		if f.Schedules[i].ID == scheduleID {
-			idx = i
-			break
-		}
-	}
-	if idx < 0 {
-		f.Schedules = append(f.Schedules, sched)
-		idx = len(f.Schedules) - 1
-	}
-
-	if mutate != nil {
-		mutate(&f.Schedules[idx])
-	}
-	f.Schedules[idx] = NormalizeBuiltinSchedule(f.Schedules[idx])
-	f.Schedules[idx].Mode = "multi-agent"
-
-	if err := WriteMultiAgentSchedules(ctx, userID, f); err != nil {
-		return nil, -1, err
-	}
-	return f, idx, nil
-}
-
 func listScheduledJobsHandler(svc *SchedulerService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "OPTIONS" {
@@ -452,15 +311,14 @@ func listScheduledJobsHandler(svc *SchedulerService) http.HandlerFunc {
 
 		enabledFilter := r.URL.Query().Get("enabled")
 
-		modeFilter := r.URL.Query().Get("mode")              // "workflow", "multi-agent", or "" for all
-		entityTypeFilter := r.URL.Query().Get("entity_type") // "workflow", "multi-agent", "chat", or "" for all
-		includeWorkflowJobs := entityTypeFilter == "" || entityTypeFilter == "workflow"
-		includeMultiAgentJobs := entityTypeFilter == "" || entityTypeFilter == "multi-agent"
+		modeFilter := r.URL.Query().Get("mode")
+		entityTypeFilter := r.URL.Query().Get("entity_type")
 
 		var allJobs []ScheduledJobResponse
 		missedResolver := newWorkflowMissedStatusResolver(r.Context())
 
-		if includeWorkflowJobs && (modeFilter == "" || modeFilter == "workflow" || modeFilter == "workshop") {
+		if (entityTypeFilter == "" || entityTypeFilter == "workflow") &&
+			(modeFilter == "" || modeFilter == "workflow" || modeFilter == "workshop") {
 			// Discover all workflows and collect schedules. This is workspace-API
 			// backed, so keep a short cache for repeated UI polling.
 			workflows, err := svc.DiscoverWorkflowManifestsCached(r.Context(), 5*time.Second)
@@ -484,30 +342,6 @@ func listScheduledJobsHandler(svc *SchedulerService) http.HandlerFunc {
 					state := svc.GetRuntimeStateForWorkflow(dw.WorkspacePath, sched.ID)
 					missed := missedResolver.get(dw.WorkspacePath, sched)
 					allJobs = append(allJobs, buildJobResponse(dw.WorkspacePath, dw.Manifest, sched, state, missed))
-				}
-			}
-		}
-
-		// Discover multi-agent schedules — filtered by current user
-		if includeMultiAgentJobs && (modeFilter == "" || modeFilter == "multi-agent") {
-			currentUserID := GetUserIDFromContext(r.Context())
-			userIDFilter := r.URL.Query().Get("user_id")
-			if userIDFilter == "" {
-				userIDFilter = currentUserID
-			}
-
-			// If a specific user is requested, read just their file; otherwise scan all
-			if userIDFilter != "" {
-				f, _, fErr := ReadMultiAgentSchedules(r.Context(), userIDFilter)
-				if fErr == nil {
-					allJobs = append(allJobs, buildMultiAgentJobResponsesWithOrgPulse(svc, userIDFilter, MergeBuiltinSchedules(f.Schedules), enabledFilter)...)
-				}
-			} else {
-				maScheds, maErr := DiscoverMultiAgentSchedules(r.Context())
-				if maErr == nil {
-					for _, ma := range maScheds {
-						allJobs = append(allJobs, buildMultiAgentJobResponsesWithOrgPulse(svc, ma.UserID, MergeBuiltinSchedules(ma.ScheduleFile.Schedules), enabledFilter)...)
-					}
 				}
 			}
 		}
@@ -556,69 +390,12 @@ func createScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if req.Mode != "multi-agent" {
-			messagesForValidation := append([]string(nil), req.Messages...)
-			for _, item := range req.CalendarItems {
-				messagesForValidation = append(messagesForValidation, item.Messages...)
-			}
-			if err := validateScheduleMessages(messagesForValidation, req.DirectMessagesReason); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
+		messagesForValidation := append([]string(nil), req.Messages...)
+		for _, item := range req.CalendarItems {
+			messagesForValidation = append(messagesForValidation, item.Messages...)
 		}
-
-		// Multi-agent schedule creation
-		if req.Mode == "multi-agent" {
-			if scheduleTypeOrDefault(req.ScheduleType) != "cron" {
-				http.Error(w, "multi-agent schedules only support schedule_type='cron'", http.StatusBadRequest)
-				return
-			}
-			userID := GetUserIDFromContext(r.Context())
-			if strings.TrimSpace(req.Query) == "" {
-				http.Error(w, "query is required for multi-agent schedules", http.StatusBadRequest)
-				return
-			}
-
-			f, _, err := ReadMultiAgentSchedules(r.Context(), userID)
-			if err != nil {
-				http.Error(w, "failed to read multi-agent schedules: "+err.Error(), http.StatusInternalServerError)
-				return
-			}
-
-			newSched := WorkflowSchedule{
-				ID:             uuid.New().String(),
-				Name:           req.Name,
-				Description:    req.Description,
-				ScheduleType:   scheduleTypeOrDefault(req.ScheduleType),
-				CronExpression: req.CronExpression,
-				Timezone:       req.Timezone,
-				CalendarItems:  normalizeCalendarScheduleItems(req.CalendarItems),
-				Enabled:        req.Enabled,
-				Mode:           "multi-agent",
-				Query:          req.Query,
-				ResumePrevious: req.ResumePrevious,
-			}
-
-			f.Schedules = append(f.Schedules, newSched)
-
-			if err := WriteMultiAgentSchedules(r.Context(), userID, f); err != nil {
-				http.Error(w, "failed to write multi-agent schedules: "+err.Error(), http.StatusInternalServerError)
-				return
-			}
-
-			if newSched.Enabled {
-				sctx := buildMultiAgentScheduleContext(userID, newSched, f.Capabilities)
-				if err := svc.LoadSchedule(sctx); err != nil {
-					scheduleLogf("[SCHEDULER] Failed to load new multi-agent schedule %s: %v", newSched.ID, err)
-				}
-			}
-
-			state := svc.GetRuntimeStateForUser(userID, newSched.ID)
-			resp := buildMultiAgentJobResponse(userID, newSched, state)
-
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusCreated)
-			json.NewEncoder(w).Encode(resp)
+		if err := validateScheduleMessages(messagesForValidation, req.DirectMessagesReason); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 
@@ -628,10 +405,6 @@ func createScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 			return
 		}
 		mode := scheduleModeOrDefault(req.Mode)
-		if mode == "multi-agent" {
-			http.Error(w, "workflow schedules must use workshop mode", http.StatusBadRequest)
-			return
-		}
 
 		// Read manifest
 		manifest, found, err := ReadWorkflowManifest(r.Context(), req.WorkspacePath)
@@ -699,21 +472,16 @@ func getScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 		}
 
 		id := mux.Vars(r)["id"]
-		result, err := findScheduleByIDAnyOrCurrentUserBuiltin(r.Context(), id)
+		result, err := findScheduleByIDAny(r.Context(), id)
 		if err != nil {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
 
 		state := runtimeStateForScheduleResult(svc, result, id)
-		var resp ScheduledJobResponse
-		if result.SourceType == "multi-agent" {
-			resp = buildMultiAgentJobResponse(result.UserID, result.ScheduleFile.Schedules[result.Index], state)
-		} else {
-			missedResolver := newWorkflowMissedStatusResolver(r.Context())
-			sched := result.Manifest.Schedules[result.Index]
-			resp = buildJobResponse(result.WorkspacePath, result.Manifest, sched, state, missedResolver.get(result.WorkspacePath, sched))
-		}
+		missedResolver := newWorkflowMissedStatusResolver(r.Context())
+		sched := result.Manifest.Schedules[result.Index]
+		resp := buildJobResponse(result.WorkspacePath, result.Manifest, sched, state, missedResolver.get(result.WorkspacePath, sched))
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
@@ -745,58 +513,6 @@ func updateScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 		result, err := findScheduleByIDAny(r.Context(), id)
 		if err != nil {
 			http.Error(w, "not found", http.StatusNotFound)
-			return
-		}
-
-		if result.SourceType == "multi-agent" {
-			sched := &result.ScheduleFile.Schedules[result.Index]
-			if req.Name != "" {
-				sched.Name = req.Name
-			}
-			if req.Description != "" {
-				sched.Description = req.Description
-			}
-			if req.ScheduleType != "" {
-				if scheduleTypeOrDefault(req.ScheduleType) != "cron" {
-					http.Error(w, "multi-agent schedules only support schedule_type='cron'", http.StatusBadRequest)
-					return
-				}
-				sched.ScheduleType = req.ScheduleType
-			}
-			if req.CronExpression != "" {
-				sched.CronExpression = req.CronExpression
-			}
-			if req.Timezone != "" {
-				sched.Timezone = req.Timezone
-			}
-			if req.Enabled != nil {
-				sched.Enabled = *req.Enabled
-			}
-			if req.Query != "" {
-				sched.Query = req.Query
-			}
-			if req.ResumePrevious != nil {
-				sched.ResumePrevious = req.ResumePrevious
-			}
-			if err := validateScheduleRequest(scheduleTypeOrDefault(sched.ScheduleType), sched.CronExpression, sched.CalendarItems); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-
-			if err := WriteMultiAgentSchedules(r.Context(), result.UserID, result.ScheduleFile); err != nil {
-				http.Error(w, "failed to write multi-agent schedules: "+err.Error(), http.StatusInternalServerError)
-				return
-			}
-
-			if err := svc.ReloadMultiAgentSchedule(r.Context(), result.UserID, id); err != nil {
-				scheduleLogf("[SCHEDULER] Failed to reload multi-agent schedule %s after update: %v", id, err)
-			}
-
-			state := svc.GetRuntimeStateForUser(result.UserID, id)
-			resp := buildMultiAgentJobResponse(result.UserID, *sched, state)
-
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
 			return
 		}
 
@@ -843,10 +559,6 @@ func updateScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 		}
 		if req.Mode != "" || sched.Mode == "" || sched.Mode == "workflow" {
 			mode := scheduleModeOrDefault(req.Mode)
-			if mode == "multi-agent" {
-				http.Error(w, "workflow schedules must use workshop mode", http.StatusBadRequest)
-				return
-			}
 			sched.Mode = mode
 		}
 		candidateDefaultMessages := sched.Messages
@@ -920,52 +632,18 @@ func deleteScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 
 		result, err := findScheduleByIDAny(r.Context(), id)
 		if err != nil {
-			if IsDefaultBuiltinSchedule(id) && (!IsSlashManagedBuiltinSchedule(id) || CanDirectlyToggleBuiltinSchedule(id)) {
-				userID := GetUserIDFromContext(r.Context())
-				if _, _, writeErr := writeBuiltinMultiAgentScheduleOverride(r.Context(), userID, id, func(s *WorkflowSchedule) {
-					s.Enabled = false
-				}); writeErr != nil {
-					http.Error(w, "failed to write multi-agent schedules: "+writeErr.Error(), http.StatusInternalServerError)
-					return
-				}
-				_ = svc.RemoveMultiAgentJob(userID, id)
-				w.WriteHeader(http.StatusNoContent)
-				return
-			}
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
 
-		if result.SourceType == "multi-agent" {
-			if IsSlashManagedBuiltinSchedule(id) && !CanDirectlyToggleBuiltinSchedule(id) {
-				http.Error(w, SlashManagedBuiltinError(id, "disable or change"), http.StatusConflict)
-				return
-			}
-			_ = svc.RemoveMultiAgentJob(result.UserID, id)
-			if IsDefaultBuiltinSchedule(id) {
-				result.ScheduleFile.Schedules[result.Index].Enabled = false
-				if err := WriteMultiAgentSchedules(r.Context(), result.UserID, result.ScheduleFile); err != nil {
-					http.Error(w, "failed to write multi-agent schedules: "+err.Error(), http.StatusInternalServerError)
-					return
-				}
-				w.WriteHeader(http.StatusNoContent)
-				return
-			}
-			result.ScheduleFile.Schedules = append(result.ScheduleFile.Schedules[:result.Index], result.ScheduleFile.Schedules[result.Index+1:]...)
-			if err := WriteMultiAgentSchedules(r.Context(), result.UserID, result.ScheduleFile); err != nil {
-				http.Error(w, "failed to write multi-agent schedules: "+err.Error(), http.StatusInternalServerError)
-				return
-			}
-		} else {
-			_ = svc.RemoveWorkflowJob(result.WorkspacePath, id)
-			manifest := result.Manifest
-			manifest.Schedules = append(manifest.Schedules[:result.Index], manifest.Schedules[result.Index+1:]...)
-			if err := WriteWorkflowManifest(r.Context(), result.WorkspacePath, manifest); err != nil {
-				http.Error(w, "failed to write manifest: "+err.Error(), http.StatusInternalServerError)
-				return
-			}
-			svc.InvalidateWorkflowManifestCache()
+		_ = svc.RemoveWorkflowJob(result.WorkspacePath, id)
+		manifest := result.Manifest
+		manifest.Schedules = append(manifest.Schedules[:result.Index], manifest.Schedules[result.Index+1:]...)
+		if err := WriteWorkflowManifest(r.Context(), result.WorkspacePath, manifest); err != nil {
+			http.Error(w, "failed to write manifest: "+err.Error(), http.StatusInternalServerError)
+			return
 		}
+		svc.InvalidateWorkflowManifestCache()
 
 		w.WriteHeader(http.StatusNoContent)
 	}
@@ -982,59 +660,23 @@ func enableScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 
 		result, err := findScheduleByIDAny(r.Context(), id)
 		if err != nil {
-			if IsDefaultBuiltinSchedule(id) && (!IsSlashManagedBuiltinSchedule(id) || CanDirectlyToggleBuiltinSchedule(id)) {
-				userID := GetUserIDFromContext(r.Context())
-				f, idx, writeErr := writeBuiltinMultiAgentScheduleOverride(r.Context(), userID, id, func(s *WorkflowSchedule) {
-					s.Enabled = true
-				})
-				if writeErr != nil {
-					http.Error(w, "failed to write multi-agent schedules: "+writeErr.Error(), http.StatusInternalServerError)
-					return
-				}
-				if err := svc.ReloadMultiAgentSchedule(r.Context(), userID, id); err != nil {
-					scheduleLogf("[SCHEDULER] Failed to reload built-in multi-agent schedule %s after enable: %v", id, err)
-				}
-				state := svc.GetRuntimeStateForUser(userID, id)
-				w.Header().Set("Content-Type", "application/json")
-				json.NewEncoder(w).Encode(buildMultiAgentJobResponse(userID, f.Schedules[idx], state))
-				return
-			}
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
 
-		var resp ScheduledJobResponse
-
-		if result.SourceType == "multi-agent" {
-			if IsSlashManagedBuiltinSchedule(id) && !CanDirectlyToggleBuiltinSchedule(id) {
-				http.Error(w, SlashManagedBuiltinError(id, "change"), http.StatusConflict)
-				return
-			}
-			result.ScheduleFile.Schedules[result.Index].Enabled = true
-			if err := WriteMultiAgentSchedules(r.Context(), result.UserID, result.ScheduleFile); err != nil {
-				http.Error(w, "failed to write multi-agent schedules: "+err.Error(), http.StatusInternalServerError)
-				return
-			}
-			if err := svc.ReloadMultiAgentSchedule(r.Context(), result.UserID, id); err != nil {
-				scheduleLogf("[SCHEDULER] Failed to reload multi-agent schedule %s after enable: %v", id, err)
-			}
-			state := svc.GetRuntimeStateForUser(result.UserID, id)
-			resp = buildMultiAgentJobResponse(result.UserID, result.ScheduleFile.Schedules[result.Index], state)
-		} else {
-			result.Manifest.Schedules[result.Index].Enabled = true
-			if err := WriteWorkflowManifest(r.Context(), result.WorkspacePath, result.Manifest); err != nil {
-				http.Error(w, "failed to write manifest: "+err.Error(), http.StatusInternalServerError)
-				return
-			}
-			svc.InvalidateWorkflowManifestCache()
-			if err := svc.ReloadSchedule(r.Context(), result.WorkspacePath, id); err != nil {
-				scheduleLogf("[SCHEDULER] Failed to reload schedule %s after enable: %v", id, err)
-			}
-			state := svc.GetRuntimeStateForWorkflow(result.WorkspacePath, id)
-			missedResolver := newWorkflowMissedStatusResolver(r.Context())
-			sched := result.Manifest.Schedules[result.Index]
-			resp = buildJobResponse(result.WorkspacePath, result.Manifest, sched, state, missedResolver.get(result.WorkspacePath, sched))
+		result.Manifest.Schedules[result.Index].Enabled = true
+		if err := WriteWorkflowManifest(r.Context(), result.WorkspacePath, result.Manifest); err != nil {
+			http.Error(w, "failed to write manifest: "+err.Error(), http.StatusInternalServerError)
+			return
 		}
+		svc.InvalidateWorkflowManifestCache()
+		if err := svc.ReloadSchedule(r.Context(), result.WorkspacePath, id); err != nil {
+			scheduleLogf("[SCHEDULER] Failed to reload schedule %s after enable: %v", id, err)
+		}
+		state := svc.GetRuntimeStateForWorkflow(result.WorkspacePath, id)
+		missedResolver := newWorkflowMissedStatusResolver(r.Context())
+		sched := result.Manifest.Schedules[result.Index]
+		resp := buildJobResponse(result.WorkspacePath, result.Manifest, sched, state, missedResolver.get(result.WorkspacePath, sched))
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
@@ -1052,52 +694,21 @@ func disableScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 
 		result, err := findScheduleByIDAny(r.Context(), id)
 		if err != nil {
-			if IsDefaultBuiltinSchedule(id) && !IsSlashManagedBuiltinSchedule(id) {
-				userID := GetUserIDFromContext(r.Context())
-				f, idx, writeErr := writeBuiltinMultiAgentScheduleOverride(r.Context(), userID, id, func(s *WorkflowSchedule) {
-					s.Enabled = false
-				})
-				if writeErr != nil {
-					http.Error(w, "failed to write multi-agent schedules: "+writeErr.Error(), http.StatusInternalServerError)
-					return
-				}
-				_ = svc.RemoveMultiAgentJob(userID, id)
-				state := svc.GetRuntimeStateForUser(userID, id)
-				w.Header().Set("Content-Type", "application/json")
-				json.NewEncoder(w).Encode(buildMultiAgentJobResponse(userID, f.Schedules[idx], state))
-				return
-			}
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
 
 		state := runtimeStateForScheduleResult(svc, result, id)
-		var resp ScheduledJobResponse
-
-		if result.SourceType == "multi-agent" {
-			if IsSlashManagedBuiltinSchedule(id) {
-				http.Error(w, SlashManagedBuiltinError(id, "change"), http.StatusConflict)
-				return
-			}
-			_ = svc.RemoveMultiAgentJob(result.UserID, id)
-			result.ScheduleFile.Schedules[result.Index].Enabled = false
-			if err := WriteMultiAgentSchedules(r.Context(), result.UserID, result.ScheduleFile); err != nil {
-				http.Error(w, "failed to write multi-agent schedules: "+err.Error(), http.StatusInternalServerError)
-				return
-			}
-			resp = buildMultiAgentJobResponse(result.UserID, result.ScheduleFile.Schedules[result.Index], state)
-		} else {
-			_ = svc.RemoveWorkflowJob(result.WorkspacePath, id)
-			result.Manifest.Schedules[result.Index].Enabled = false
-			if err := WriteWorkflowManifest(r.Context(), result.WorkspacePath, result.Manifest); err != nil {
-				http.Error(w, "failed to write manifest: "+err.Error(), http.StatusInternalServerError)
-				return
-			}
-			svc.InvalidateWorkflowManifestCache()
-			missedResolver := newWorkflowMissedStatusResolver(r.Context())
-			sched := result.Manifest.Schedules[result.Index]
-			resp = buildJobResponse(result.WorkspacePath, result.Manifest, sched, state, missedResolver.get(result.WorkspacePath, sched))
+		_ = svc.RemoveWorkflowJob(result.WorkspacePath, id)
+		result.Manifest.Schedules[result.Index].Enabled = false
+		if err := WriteWorkflowManifest(r.Context(), result.WorkspacePath, result.Manifest); err != nil {
+			http.Error(w, "failed to write manifest: "+err.Error(), http.StatusInternalServerError)
+			return
 		}
+		svc.InvalidateWorkflowManifestCache()
+		missedResolver := newWorkflowMissedStatusResolver(r.Context())
+		sched := result.Manifest.Schedules[result.Index]
+		resp := buildJobResponse(result.WorkspacePath, result.Manifest, sched, state, missedResolver.get(result.WorkspacePath, sched))
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
@@ -1113,27 +724,11 @@ func triggerScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 
 		id := mux.Vars(r)["id"]
 
-		if IsSlashManagedBuiltinSchedule(id) {
-			http.Error(w, SlashManagedBuiltinError(id, "run"), http.StatusConflict)
-			return
-		}
-
-		result, err := findScheduleByIDAnyOrCurrentUserBuiltin(r.Context(), id)
+		result, err := findScheduleByIDAny(r.Context(), id)
 		if err != nil {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
-		if result.SourceType == "multi-agent" {
-			trigResult, triggerErr := svc.TriggerMultiAgentNow(result.UserID, id)
-			if triggerErr != nil {
-				http.Error(w, triggerErr.Error(), http.StatusInternalServerError)
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]string{"session_id": trigResult})
-			return
-		}
-
 		trigResult, err := svc.TriggerNow(result.WorkspacePath, id)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1153,7 +748,7 @@ func stopScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 		}
 
 		id := mux.Vars(r)["id"]
-		result, err := findScheduleByIDAnyOrCurrentUserBuiltin(r.Context(), id)
+		result, err := findScheduleByIDAny(r.Context(), id)
 		if err != nil {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
@@ -1166,12 +761,7 @@ func stopScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 		}
 
 		runtimeKey := workflowScheduleRuntimeKey(result.WorkspacePath, id)
-		if result.SourceType == "multi-agent" {
-			runtimeKey = multiAgentScheduleRuntimeKey(result.UserID, id)
-			svc.StopRunningJobForUser(result.UserID, id)
-		} else {
-			svc.StopRunningJobForWorkflow(result.WorkspacePath, id)
-		}
+		svc.StopRunningJobForWorkflow(result.WorkspacePath, id)
 
 		durationMs := int64(0)
 		svc.updateRuntimeState(runtimeKey, func(state *ScheduleRuntimeState) {
@@ -1183,40 +773,23 @@ func stopScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 			state.LastDurationMs = &durationMs
 		})
 
-		// Update latest run entry in the same resolved scope.
-		if result.SourceType == "multi-agent" {
-			runs, err := ReadMultiAgentScheduleRuns(r.Context(), result.UserID)
-			if err == nil {
+		// Update the latest workflow run entry in the same resolved scope.
+		if result.WorkspacePath != "" {
+			runs, err := ReadScheduleRuns(r.Context(), result.WorkspacePath)
+			if err == nil && len(runs) > 0 {
 				for i := range runs {
 					if runs[i].ScheduleID == id && runs[i].Status == "running" {
-						_ = UpdateMultiAgentScheduleRun(r.Context(), result.UserID, runs[i].ID, "stopped", "stopped by user", &durationMs, "")
+						_ = UpdateScheduleRun(r.Context(), result.WorkspacePath, runs[i].ID, "stopped", "stopped by user", &durationMs, "", "")
 						break
-					}
-				}
-			}
-		} else {
-			if result.WorkspacePath != "" {
-				runs, err := ReadScheduleRuns(r.Context(), result.WorkspacePath)
-				if err == nil && len(runs) > 0 {
-					for i := range runs {
-						if runs[i].ScheduleID == id && runs[i].Status == "running" {
-							_ = UpdateScheduleRun(r.Context(), result.WorkspacePath, runs[i].ID, "stopped", "stopped by user", &durationMs, "", "")
-							break
-						}
 					}
 				}
 			}
 		}
 
 		updatedState := runtimeStateForScheduleResult(svc, result, id)
-		var resp ScheduledJobResponse
-		if result.SourceType == "multi-agent" {
-			resp = buildMultiAgentJobResponse(result.UserID, result.ScheduleFile.Schedules[result.Index], updatedState)
-		} else {
-			missedResolver := newWorkflowMissedStatusResolver(r.Context())
-			sched := result.Manifest.Schedules[result.Index]
-			resp = buildJobResponse(result.WorkspacePath, result.Manifest, sched, updatedState, missedResolver.get(result.WorkspacePath, sched))
-		}
+		missedResolver := newWorkflowMissedStatusResolver(r.Context())
+		sched := result.Manifest.Schedules[result.Index]
+		resp := buildJobResponse(result.WorkspacePath, result.Manifest, sched, updatedState, missedResolver.get(result.WorkspacePath, sched))
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
@@ -1245,37 +818,17 @@ func getScheduledJobRunsHandler(svc *SchedulerService) http.HandlerFunc {
 			}
 		}
 
-		var runs []ScheduleRunEntry
-		var total int
-		var err error
-
-		// Check if it's a multi-agent schedule
-		userID := svc.GetUserForSchedule(id)
-		if userID != "" {
-			_ = svc.reconcileMultiAgentScheduleRuns(r.Context(), userID, id)
-			runs, total, err = ListMultiAgentScheduleRuns(r.Context(), userID, id, limit, offset)
-		} else {
-			// Find workspace path for workflow schedule
-			workspacePath := svc.GetWorkspaceForSchedule(id)
-			if workspacePath == "" {
-				result, findErr := findScheduleByIDAny(r.Context(), id)
-				if findErr != nil {
-					http.Error(w, "not found", http.StatusNotFound)
-					return
-				}
-				if result.SourceType == "multi-agent" {
-					_ = svc.reconcileMultiAgentScheduleRuns(r.Context(), result.UserID, id)
-					runs, total, err = ListMultiAgentScheduleRuns(r.Context(), result.UserID, id, limit, offset)
-				} else {
-					workspacePath = result.WorkspacePath
-					_ = svc.reconcileWorkflowScheduleRuns(r.Context(), workspacePath, id)
-					runs, total, err = ListScheduleRuns(r.Context(), workspacePath, id, limit, offset)
-				}
-			} else {
-				_ = svc.reconcileWorkflowScheduleRuns(r.Context(), workspacePath, id)
-				runs, total, err = ListScheduleRuns(r.Context(), workspacePath, id, limit, offset)
+		workspacePath := svc.GetWorkspaceForSchedule(id)
+		if workspacePath == "" {
+			result, findErr := findScheduleByIDAny(r.Context(), id)
+			if findErr != nil {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
 			}
+			workspacePath = result.WorkspacePath
 		}
+		_ = svc.reconcileWorkflowScheduleRuns(r.Context(), workspacePath, id)
+		runs, total, err := ListScheduleRuns(r.Context(), workspacePath, id, limit, offset)
 
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)

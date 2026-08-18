@@ -29,7 +29,6 @@ interface WorkflowNotificationPopupProps {
   workspacePath: string | null
   onStateLoaded?: (state: WorkflowNotificationState) => void
   loadInfo?: () => Promise<WorkflowNotificationInfo>
-  scopeKind?: 'workflow' | 'chief-of-staff'
   onSetup?: () => void
 }
 
@@ -168,9 +167,9 @@ const stateBadgeClass = (state: WorkflowNotificationState): string => {
   }
 }
 
-const summaryFor = (info: WorkflowNotificationInfo, scopeKind: 'workflow' | 'chief-of-staff'): string => {
-  const destination = scopeKind === 'chief-of-staff' ? 'Chief of Staff’s Slack webhook' : 'this workflow’s Slack webhook'
-  const unconfigured = scopeKind === 'chief-of-staff' ? 'Chief of Staff Slack destination' : 'workflow-specific Slack destination'
+const summaryFor = (info: WorkflowNotificationInfo): string => {
+  const destination = 'this workflow’s Slack webhook'
+  const unconfigured = 'workflow-specific Slack destination'
   switch (info.effectiveState) {
     case 'ready': {
       const readyDestinations = [
@@ -194,7 +193,6 @@ export default function WorkflowNotificationPopup({
   workspacePath,
   onStateLoaded,
   loadInfo,
-  scopeKind = 'workflow',
   onSetup,
 }: WorkflowNotificationPopupProps) {
   const [loading, setLoading] = useState(false)
@@ -253,8 +251,8 @@ export default function WorkflowNotificationPopup({
   // either way, which is the part worth stating outright.
   const gmailDefault = info?.gmail?.default_recipient?.trim() || ''
   const gmailBlocked = info?.gmail?.blocked_recipients || []
-  const scopeName = info?.scopeLabel || workspacePath?.split('/').filter(Boolean).pop() || (scopeKind === 'chief-of-staff' ? 'Chief of Staff' : 'Workflow')
-  const scopeLabel = scopeKind === 'chief-of-staff' ? 'Chief of Staff' : 'workflow'
+  const scopeName = info?.scopeLabel || workspacePath?.split('/').filter(Boolean).pop() || 'Workflow'
+  const scopeLabel = 'workflow'
   const instructionsDirty = runInstructions.trim() !== (info?.runSummaryInstructions || '').trim()
     || pulseInstructions.trim() !== (info?.pulseSummaryInstructions || '').trim()
     || JSON.stringify(runChannels) !== JSON.stringify(info?.runSummaryChannels || [])
@@ -274,7 +272,7 @@ export default function WorkflowNotificationPopup({
   }
 
   const saveInstructions = async () => {
-    if (!workspacePath || scopeKind !== 'workflow' || savingInstructions) return
+    if (!workspacePath || savingInstructions) return
     setSavingInstructions(true)
     setError(null)
     try {
@@ -348,7 +346,7 @@ export default function WorkflowNotificationPopup({
                         </span>
                       </div>
                       <h3 className="mt-2 text-base font-semibold text-foreground">Agentic notification delivery</h3>
-                      <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{summaryFor(info, scopeKind)}</p>
+                      <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{summaryFor(info)}</p>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
                       <button onClick={() => { void load() }} disabled={loading} className={iconButtonClass} aria-label="Refresh notification status">
@@ -388,7 +386,7 @@ export default function WorkflowNotificationPopup({
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
                           <Webhook className="h-3.5 w-3.5 text-muted-foreground" />
-                          <span className="text-sm font-medium text-foreground">{scopeKind === 'chief-of-staff' ? 'Chief of Staff Slack webhook' : 'Workflow Slack webhook'}</span>
+                          <span className="text-sm font-medium text-foreground">Workflow Slack webhook</span>
                         </div>
                         <p className="mt-1 text-xs text-muted-foreground">
                           {info.slackWebhook.secret_name
@@ -408,7 +406,7 @@ export default function WorkflowNotificationPopup({
                         </div>
                         <p className="mt-1 text-xs text-muted-foreground">
                           {gmailReady
-                            ? `Available to ${scopeKind === 'chief-of-staff' ? 'Chief of Staff' : 'this workflow'}. The agent may supply specific recipients when explicitly configured.`
+                            ? 'Available to this workflow. The agent may supply specific recipients when explicitly configured.'
                             : info.gmail?.summary || 'Not ready at account level. Configure and test Gmail from Notification channels.'}
                         </p>
                         {(gmailDefault || gmailBlocked.length > 0) && (
@@ -481,8 +479,7 @@ export default function WorkflowNotificationPopup({
                   </div>
                 </section>
 
-                {scopeKind === 'workflow' && (
-                  <section className="rounded-md border border-border">
+                <section className="rounded-md border border-border">
                     <div className="border-b border-border px-4 py-3">
                       <h3 className="text-sm font-semibold text-foreground">Notification content and recipients</h3>
                       <p className="mt-0.5 text-xs text-muted-foreground">Set separate content, delivery channels, and email recipients for the workflow result and Pulse's review.</p>
@@ -561,8 +558,7 @@ export default function WorkflowNotificationPopup({
                         </button>
                       </div>
                     </div>
-                  </section>
-                )}
+                </section>
 
                 <div className="rounded-md border border-blue-500/20 bg-blue-500/5 px-4 py-3 text-xs text-muted-foreground">
                   Configure notification intent, the Slack destination, channel opt-outs, and blocked recipients through <code className="text-foreground">/notify</code>. This does not add a routing step. Short-lived questions that require an answer still use <code className="text-foreground">human_feedback</code> instead.

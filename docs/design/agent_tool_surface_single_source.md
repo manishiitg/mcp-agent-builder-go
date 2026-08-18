@@ -1,6 +1,11 @@
 # Agent tool surface: one source of truth
 
-**Status:** Proposed
+**Status:** Partly implemented — stale header corrected 2026-08-17. Step 1 has
+landed for the product surfaces: `videoproduct`, `financeproduct` and
+`dominionproduct` all carry `tool_policy.mode: allowlist` with an `enabled:`
+list. The AgentWorks (Workflow Builder) half — deleting gate 2 — has not been
+done, and `GetToolsForWorkshopMode` still exists. Open question 1 is answered
+below; 2 and 3 remain open.
 **Date:** 2026-08-08
 **Supersedes:** [product_tool_registration_and_visibility.md](product_tool_registration_and_visibility.md)
 **Related:** [canonical_agent_definition_construction.md](../refactor/canonical_agent_definition_construction.md)
@@ -271,8 +276,38 @@ Steps 1 and 2 independently close a shipped bug class and can land separately.
 
 ## Open questions
 
-1. Skills register through `AttachSkill`, a separate method. In scope for the
-   gate, or governed separately?
+1. ~~Skills register through `AttachSkill`, a separate method. In scope for the
+   gate, or governed separately?~~ **Answered 2026-08-17 by
+   [PLAT-124](../bugs/pulse_platform/plat-124.md): governed separately, and by
+   the same tool set — selected at materialisation time rather than by a
+   registration gate.**
+
+   The reference bundle reaches the agent through `AttachSkill`, so it sat
+   outside every gate this document describes, and drifted in the direction
+   this document does not cover. Its rules address a **registered tool the
+   agent cannot see**; PLAT-124 is the inverse — an **unregistered tool the
+   agent is told to call**. A step agent holding eight tools was handed the
+   workshop chat's 41-doc bundle, followed `llm-provider-config`, called
+   `list_published_llms`, and on failing invented provider names.
+
+   Two consequences for this document's rules, worth keeping in view before
+   anyone implements the rest of it:
+
+   - Rule 2, *never filter the catalog*, does not transfer. Making the prose
+     honest by registering the tools it names would give a step agent authority
+     over provider auth. The rule holds within one agent role, which is what
+     Video Studio's 19-tool allowlist actually is; it is not a licence to widen
+     a role.
+   - Rule 3, *mode discipline moves to the system prompt*, assumes prose is the
+     safe place because tools are the dangerous one. Prose drifts the same way
+     and fails more quietly — there is no error when guidance names a tool that
+     does not exist, only an agent quietly improvising.
+
+   `kindMeta.Tools` in `cmd/server/guidance` now names the tools each reference
+   doc explains, and step execution selects docs by the tools its session
+   actually registered. Discovery is never removed for a tool the agent holds,
+   so the asymmetry this document is built on ("you can always take away, you
+   can never add") is respected.
 2. Provider-native tools (`agent_tools: mode: hybrid`) never reach this
    registrar — the CLI supplies its own file/shell tools. They stay governed by
    `approvals`. Confirm no product expects the list to cover them.

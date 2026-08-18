@@ -77,9 +77,15 @@ describe('hydrateTabEvents restored chat fallback', () => {
             data: expect.objectContaining({ content: 'Hi there', result: 'Hi there' }),
           }),
         }),
+        expect.objectContaining({
+          type: 'unified_completion',
+          data: expect.objectContaining({
+            data: expect.objectContaining({ final_result: 'Hi there', result: 'Hi there' }),
+          }),
+        }),
       ]),
     )
-    expect(mocks.setTabLastEventIndex).toHaveBeenCalledWith('restored-session', 2)
+    expect(mocks.setTabLastEventIndex).toHaveBeenCalledWith('restored-session', 3)
     expect(mocks.setTabHasMoreOlderEvents).toHaveBeenCalledWith('restored-session', false)
     expect(mocks.setTabHistoryPagination).toHaveBeenCalledWith('restored-session', null)
     expect(mocks.getRecentSessionEvents).not.toHaveBeenCalled()

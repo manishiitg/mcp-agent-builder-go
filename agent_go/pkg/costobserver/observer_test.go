@@ -62,7 +62,7 @@ func TestInferScope(t *testing.T) {
 		{"chat", "post_run_monitor", ScopePulse},
 		{"chat", "pulse-fixer", ScopePulse},
 		{"chat", "evaluation", ScopeEvaluation},
-		{"chief-of-staff", "", ScopeChiefOfStaff},
+		{"multi-agent", "", ScopeChat},
 		{"workflow", "", ScopeBuilder},
 	}
 	for _, tc := range tests {
@@ -105,12 +105,6 @@ func TestInferWorkflowScope(t *testing.T) {
 			agentMode:   "simple",
 			identifiers: []string{"generic-agent-refresh-docs-1785", "Background: Generic agent - refresh-docs", ""},
 			want:        ScopeBuilder,
-		},
-		{
-			name:        "chief of staff",
-			agentMode:   "chief-of-staff",
-			identifiers: []string{"planning", "planner", ""},
-			want:        ScopeChiefOfStaff,
 		},
 	}
 	for _, tc := range tests {

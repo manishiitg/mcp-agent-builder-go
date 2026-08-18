@@ -290,6 +290,7 @@ Rules:
 | [PLAT-120](pulse_platform/plat-120.md) | Video Studio voice dictation (sherpa-onnx-go + Nemotron streaming STT, capability-gated via `agentprofiles.RuntimeCapabilities.Voice`, SparkQuill-parity UX) shipped and passed two independent non-mic proofs (WAV file, synthetic tone), but no real-speech end-to-end pass has succeeded on the one machine it's been tested on | unassigned | `implemented_pending_live_reverify` (blocked on PLAT-122) | `pkg/voicestt`, `cmd/server/voice_stt_routes.go`, `frontend/src/voice/*` |
 | [PLAT-121](pulse_platform/plat-121.md) | SparkQuill's release process was already split into its own CI workflow with its own tag namespace and path-scoped triggers, contrary to how it was carried as open on the task list; 5 most recent `main` CI runs are green | unassigned | `implemented` (CI-verified; no further work identified) | `.github/workflows/sparkquill-desktop.yml` |
 | [PLAT-122](pulse_platform/plat-122.md) | A dev machine's real microphone reads exact digital silence (`rms=0.0000`) through every app, not just this one — full elimination chain ruled out the STT pipeline, wrong device, browser-automation fake device, SparkQuill holding the device, and third-party audio HAL drivers | unassigned | `open` (environment-level, not code-owned; blocks PLAT-120's live reverify) | none identified yet — OS/driver layer; see `voice_dictation_mic_captures_silence.md` |
+| [PLAT-134](pulse_platform/plat-134.md) | Ordinary and product chat were assembled as a generic multi-agent orchestrator, constructing delegation, schedule and tier-selection machinery even when product profiles explicitly forbade those capabilities; the live path is now direct prompt + skills + tools + conversation, with compatibility naming/dead-code extraction still open | Codex | `partially_implemented` (runtime simplified and automated checks pass; live reverify plus compatibility cleanup pending) | direct/product chat request and runtime construction + chat UI model/config projection |
 
 Assignment reserves the lane; it does not claim that work has started. An agent
 sets its fragment to `in_progress` when it actually begins. PLAT-004, PLAT-008,
@@ -653,6 +654,7 @@ priority and historical run context.
 | [PLAT-112](pulse_platform/plat-112.md) | [PLAT-113](pulse_platform/plat-113.md) | [PLAT-114](pulse_platform/plat-114.md) | [PLAT-115](pulse_platform/plat-115.md) |
 | [PLAT-116](pulse_platform/plat-116.md) | [PLAT-117](pulse_platform/plat-117.md) | [PLAT-118](pulse_platform/plat-118.md) | [PLAT-120](pulse_platform/plat-120.md) |
 | [PLAT-121](pulse_platform/plat-121.md) | [PLAT-122](pulse_platform/plat-122.md) |  |  |
+| [PLAT-134](pulse_platform/plat-134.md) |  |  |  |
 ## Explicitly not platform issues
 
 The following remain workflow-owned or evidence-state items even when they are

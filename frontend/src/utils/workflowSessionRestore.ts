@@ -1,5 +1,4 @@
 import { activateTab } from './activateTab'
-import { restoreSession } from './sessionRestore'
 import { agentApi } from '../services/api'
 import type { ActiveSessionInfo, RunningWorkflowInfo } from '../services/api-types'
 import { useChatStore, type ChatTab } from '../stores/useChatStore'
@@ -7,7 +6,7 @@ import { useGlobalPresetStore } from '../stores/useGlobalPresetStore'
 import { useRunningWorkflowsStore } from '../stores/useRunningWorkflowsStore'
 import { useWorkflowStore } from '../stores/useWorkflowStore'
 import type { CustomPreset, PredefinedPreset } from '../types/preset'
-import { isInternalChildSession, isScheduledSession } from './workflowSessionKinds'
+import { isInternalChildSession } from './workflowSessionKinds'
 import { isVisibleActivitySession } from './activitySessions'
 import { openWorkflowInDefaultPreview } from './reportPreviewPreference'
 import { activateWorkflowTab, beginWorkflowNavigation, isCurrentWorkflowNavigation, selectWorkflowPreset } from './workflowNavigation'
@@ -583,8 +582,8 @@ async function restoreReadOnlyWorkflowRunChat(
 //
 // Workflow sessions go through the thorough restore family, which already: jumps
 // to an existing tab, closes a stale builder tab, applies the preset, switches to
-// workflow mode, clears the Workflows Overview, and scrolls to bottom. Plain chat
-// sessions activate their existing tab or restore a fresh one.
+// workflow mode, clears the Workflows Overview, and scrolls to bottom. Product
+// chat sessions can only activate the profile-bound tab their product owns.
 export async function openActiveSession(
   session: ActiveSessionInfo,
   options: { preset?: CustomPreset | PredefinedPreset; runningWorkflow?: RunningWorkflowInfo; title?: string; source?: string; navigationGeneration?: number } = {},
@@ -601,31 +600,6 @@ export async function openActiveSession(
     return
   }
 
-  const isChiefOfStaffSchedule = (session.agent_mode || '').toLowerCase().includes('multi-agent') &&
-    isScheduledSession({
-      sessionId: session.session_id,
-      triggeredBy: session.triggered_by,
-      botPlatform: session.bot_platform,
-    })
-
-  if (isChiefOfStaffSchedule) {
-    const tabId = await restoreSession(session.session_id, {
-      title: options.title || session.preset_name || session.title || 'Schedule',
-      source: options.source,
-    })
-    const chatStore = useChatStore.getState()
-    chatStore.setTabMetadata(tabId, {
-      mode: 'multi-agent',
-      isViewOnly: true,
-      isScheduledRun: true,
-      scheduledJobName: session.preset_name || session.title || options.title || 'Scheduled task',
-      readOnlyRestoredAt: Date.now(),
-    })
-    activateTab(tabId)
-    requestChatScrollToBottom()
-    return
-  }
-
   const chatStore = useChatStore.getState()
   const existingTab = findTabForSession(chatStore.chatTabs, session.session_id)
   if (existingTab) {
@@ -633,9 +607,7 @@ export async function openActiveSession(
     requestChatScrollToBottom()
     return
   }
-  const tabId = await restoreSession(session.session_id, { title: options.title, source: options.source })
-  activateTab(tabId)
-  requestChatScrollToBottom()
+  chatStore.addToast('Open the owning product before viewing this chat session.', 'info')
 }
 
 // Global workflow navigation is workflow-scoped, not child-execution-scoped.

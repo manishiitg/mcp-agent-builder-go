@@ -48,29 +48,3 @@ export async function loadWorkflowNotificationInfo(workspacePath: string): Promi
     blockRecipients: response.block_recipients || [],
   }
 }
-
-export async function loadOrgNotificationInfo(): Promise<WorkflowNotificationInfo> {
-  const response = await agentApi.getOrgNotifications()
-  const slackWebhook = response.destinations.find(destination => destination.type === 'slack_webhook') || {
-    id: 'chief-of-staff-slack-webhook',
-    type: 'slack_webhook',
-    label: 'Chief of Staff Slack webhook',
-    state: response.effective_state,
-  }
-  return {
-    scopeLabel: response.scope_label || 'Chief of Staff',
-    effectiveState: response.effective_state,
-    slackWebhook,
-    gmail: response.account_channels.find(channel => channel.id === 'gmail') || null,
-    runSummaryInstructions: response.run_summary_instructions || '',
-    pulseSummaryInstructions: response.pulse_summary_instructions || '',
-    runSummaryChannels: response.run_summary_channels || [],
-    pulseSummaryChannels: response.pulse_summary_channels || [],
-    runSummaryRecipients: response.run_summary_recipients || [],
-    pulseSummaryRecipients: response.pulse_summary_recipients || [],
-    runSummarySlackWebhooks: response.run_summary_slack_webhooks || [],
-    pulseSummarySlackWebhooks: response.pulse_summary_slack_webhooks || [],
-    excludeChannels: response.exclude_channels || [],
-    blockRecipients: response.block_recipients || [],
-  }
-}

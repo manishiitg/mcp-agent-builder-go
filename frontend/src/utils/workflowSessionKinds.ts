@@ -15,7 +15,7 @@ export function isInternalChildSession(identity: WorkflowSessionIdentity): boole
 
 /**
  * Scheduled sessions are an independent read-only lane. This applies to both
- * workflow schedules and Chief of Staff schedules.
+ * workflow schedules and generic scheduled agent sessions.
  */
 export function isScheduledSession(identity: WorkflowSessionIdentity): boolean {
   const trigger = (identity.triggeredBy || '').toLowerCase()

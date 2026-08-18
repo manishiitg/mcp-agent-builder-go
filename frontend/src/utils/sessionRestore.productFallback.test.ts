@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const getRecentSessionEvents = vi.fn()
+const getSessionEvents = vi.fn()
 const getChatHistoryResumeConversation = vi.fn()
 
 vi.mock('../services/api', async (importOriginal) => {
@@ -10,6 +11,7 @@ vi.mock('../services/api', async (importOriginal) => {
     agentApi: {
       ...actual.agentApi,
       getRecentSessionEvents,
+      getSessionEvents,
       getChatHistoryResumeConversation,
     },
   }
@@ -32,6 +34,7 @@ describe('session restore chat-history fallback', () => {
     vi.resetModules()
     vi.stubGlobal('localStorage', createMemoryStorage())
     getRecentSessionEvents.mockReset()
+    getSessionEvents.mockReset()
     getChatHistoryResumeConversation.mockReset()
   })
 
@@ -40,9 +43,16 @@ describe('session restore chat-history fallback', () => {
     vi.restoreAllMocks()
   })
 
-  it('hydrates a persisted product session when runtime events are empty', async () => {
+  it('prefers a persisted product transcript over a partial runtime event buffer', async () => {
     getRecentSessionEvents.mockResolvedValue({
-      events: [],
+      events: [{
+        id: 'live-user-only',
+        type: 'user_message',
+        session_id: 'video-studio:project:launch',
+        event_index: 0,
+        timestamp: '2026-08-17T00:00:00Z',
+        data: { content: 'Create the launch teaser.' },
+      }],
       session_status: 'completed',
       has_running_background_agents: false,
       is_synthetic_turn: false,
@@ -69,6 +79,8 @@ describe('session restore chat-history fallback', () => {
 
     await expect(restoreSession('video-studio:project:launch', {
       source: 'video-project-open',
+      workspacePath,
+      preferChatHistory: true,
     })).resolves.toBe(tabId)
 
     expect(getChatHistoryResumeConversation).toHaveBeenCalledWith(
@@ -79,7 +91,169 @@ describe('session restore chat-history fallback', () => {
       'conversation_resumed',
       'user_message',
       'llm_generation_end',
+      'unified_completion',
+    ])
+    const { buildCleanConversationItems } = await import('./cleanConversation')
+    expect(buildCleanConversationItems(
+      useChatStore.getState().getTabEvents('video-studio:project:launch'),
+    ).map(({ role, content }) => ({ role, content }))).toEqual([
+      { role: 'user', content: 'Create the launch teaser.' },
+      { role: 'assistant', content: 'The finished teaser is ready.' },
     ])
     expect(useChatStore.getState().chatTabs[tabId]?.isStreaming).toBe(false)
+  })
+
+  it('upgrades an in-flight generic restore to the product transcript', async () => {
+    let resolveLiveEvents: ((value: unknown) => void) | undefined
+    getRecentSessionEvents.mockImplementation(() => new Promise((resolve) => {
+      resolveLiveEvents = resolve
+    }))
+    getChatHistoryResumeConversation.mockResolvedValue({
+      session_id: 'video-studio:project:race',
+      conversation_history: [
+        { Role: 'user', Parts: [{ Text: 'Show the finished clip.' }] },
+        { Role: 'assistant', Parts: [{ Text: 'Here is the completed video.' }] },
+      ],
+    })
+
+    const { useChatStore, waitForChatStoreHydration } = await import('../stores/useChatStore')
+    const { restoreSession } = await import('./sessionRestore')
+    await waitForChatStoreHydration()
+    const workspacePath = 'Chats/Video Studio/projects/race'
+    const tabId = await useChatStore.getState().createChatTab('Race', {
+      mode: 'multi-agent',
+      agentProfileId: 'video-studio',
+      agentProfileVersion: 1,
+      agentProfileWorkspace: workspacePath,
+    }, 'video-studio:project:race')
+
+    const genericRestore = restoreSession('video-studio:project:race', {
+      source: 'page-refresh',
+    })
+    const productRestore = restoreSession('video-studio:project:race', {
+      source: 'video-project-open',
+      workspacePath,
+      preferChatHistory: true,
+    })
+    resolveLiveEvents?.({
+      events: [{
+        id: 'live-user-only',
+        type: 'user_message',
+        session_id: 'video-studio:project:race',
+        event_index: 0,
+        timestamp: '2026-08-17T00:00:00Z',
+        data: { content: 'Show the finished clip.' },
+      }],
+      session_status: 'completed',
+      has_running_background_agents: false,
+      is_synthetic_turn: false,
+      can_steer: false,
+    })
+
+    await expect(Promise.all([genericRestore, productRestore])).resolves.toEqual([tabId, tabId])
+    expect(getChatHistoryResumeConversation).toHaveBeenCalledWith(
+      'video-studio:project:race',
+      workspacePath,
+    )
+    expect(useChatStore.getState().getTabEvents('video-studio:project:race').map((event) => event.type)).toEqual([
+      'conversation_resumed',
+      'user_message',
+      'llm_generation_end',
+      'unified_completion',
+    ])
+  })
+
+  it('recovers a product transcript when the live cursor is rejected', async () => {
+    const { useChatStore, waitForChatStoreHydration } = await import('../stores/useChatStore')
+    const { restoreSession } = await import('./sessionRestore')
+    await waitForChatStoreHydration()
+    const workspacePath = 'Chats/Video Studio/projects/cursor-recovery'
+    const sessionId = 'video-studio:project:cursor-recovery'
+    const tabId = await useChatStore.getState().createChatTab('Cursor recovery', {
+      mode: 'multi-agent',
+      agentProfileId: 'video-studio',
+      agentProfileVersion: 1,
+      agentProfileWorkspace: workspacePath,
+    }, sessionId)
+    useChatStore.getState().setTabEvents(sessionId, [{
+      id: 'stale-live-user',
+      type: 'user_message',
+      session_id: sessionId,
+      event_index: 42,
+      timestamp: '2026-08-17T00:00:00Z',
+      data: { content: 'Please show the preview.' },
+    }])
+    getSessionEvents.mockRejectedValue(new Error('stale event cursor'))
+    getChatHistoryResumeConversation.mockResolvedValue({
+      session_id: sessionId,
+      conversation_history: [
+        { Role: 'user', Parts: [{ Text: 'Please show the preview.' }] },
+        { Role: 'assistant', Parts: [{ Text: 'The preview is available below.' }] },
+      ],
+    })
+
+    await expect(restoreSession(sessionId, {
+      source: 'video-project-open',
+      workspacePath,
+      preferChatHistory: true,
+    })).resolves.toBe(tabId)
+
+    expect(getSessionEvents).toHaveBeenCalledWith(sessionId, -1)
+    expect(useChatStore.getState().getTabEvents(sessionId).map((event) => event.type)).toEqual([
+      'conversation_resumed',
+      'user_message',
+      'llm_generation_end',
+      'unified_completion',
+    ])
+  })
+
+  it('restores prior assistant replies while the latest product turn is still running', async () => {
+    const { useChatStore, waitForChatStoreHydration } = await import('../stores/useChatStore')
+    const { restoreSession } = await import('./sessionRestore')
+    await waitForChatStoreHydration()
+    const workspacePath = 'Chats/Video Studio/projects/running-history'
+    const sessionId = 'video-studio:project:running-history'
+    const tabId = await useChatStore.getState().createChatTab('Running history', {
+      mode: 'multi-agent',
+      agentProfileId: 'video-studio',
+      agentProfileVersion: 1,
+      agentProfileWorkspace: workspacePath,
+    }, sessionId)
+    useChatStore.getState().setTabEvents(sessionId, [{
+      id: 'live-user-only',
+      type: 'user_message',
+      session_id: sessionId,
+      event_index: 0,
+      timestamp: '2026-08-17T00:00:00Z',
+      data: { content: 'Continue the production.' },
+    }])
+    getSessionEvents.mockResolvedValue({
+      events: [],
+      session_status: 'running',
+      has_running_background_agents: false,
+      is_synthetic_turn: false,
+      can_steer: true,
+    })
+    getChatHistoryResumeConversation.mockResolvedValue({
+      session_id: sessionId,
+      conversation_history: [
+        { Role: 'user', Parts: [{ Text: 'Continue the production.' }] },
+        { Role: 'assistant', Parts: [{ Text: 'I am preparing the next scene.' }] },
+      ],
+    })
+
+    await expect(restoreSession(sessionId, {
+      source: 'video-project-open',
+      workspacePath,
+      preferChatHistory: true,
+    })).resolves.toBe(tabId)
+
+    expect(useChatStore.getState().getTabEvents(sessionId).map((event) => event.type)).toEqual([
+      'conversation_resumed',
+      'user_message',
+      'llm_generation_end',
+      'unified_completion',
+    ])
+    expect(useChatStore.getState().chatTabs[tabId]?.isStreaming).toBe(true)
   })
 })

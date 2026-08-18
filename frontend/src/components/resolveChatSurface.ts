@@ -1,5 +1,5 @@
 // resolveChatSurface — the single, pure 3-state resolver for the chat-pane
-// surface. Shared by BOTH the multi-agent (Chief of Staff) and the workflow
+// surface. Shared by BOTH product-profile chats and the workflow
 // render branches in ChatArea so the "which surface shows" decision lives in
 // exactly one place.
 //

@@ -333,7 +333,7 @@ func TestStoreNestedMessageSequenceEndSettlesAndNextTurnReactivates(t *testing.T
 }
 
 func TestStoreUnifiesBackgroundDelegationContentWithItsLifecycleTerminal(t *testing.T) {
-	// A delegate-tool background agent (e.g. Chief of Staff's "delegate" tool)
+	// A delegate-tool background agent from an AgentWorks chat
 	// has two disjoint event sources for the SAME logical execution: the
 	// lifecycle wrapper (background_agent_started/completed, tagged with
 	// agent_id) and the real content (tool calls, messages), forwarded by

@@ -687,6 +687,17 @@ func mergeRestoredChatHistory(existing, incoming []llmtypes.MessageContent) []ll
 	if chatHistoryHasPrefix(incoming, existing) {
 		return incoming
 	}
+	// Rendered system prompts contain turn-local data such as the current time.
+	// Their text can differ while the human/assistant body is a true cumulative
+	// continuation. Compare that body independently and keep only the newest
+	// runtime prompt; otherwise every save appends the full conversation again.
+	if existing[0].Role == llmtypes.ChatMessageTypeSystem && incoming[0].Role == llmtypes.ChatMessageTypeSystem {
+		body := mergeRestoredChatHistory(existing[1:], incoming[1:])
+		merged := make([]llmtypes.MessageContent, 0, len(body)+1)
+		merged = append(merged, incoming[0])
+		merged = append(merged, body...)
+		return merged
+	}
 	maxOverlap := len(existing)
 	if len(incoming) < maxOverlap {
 		maxOverlap = len(incoming)
@@ -710,6 +721,38 @@ func mergeRestoredChatHistory(existing, incoming []llmtypes.MessageContent) []ll
 	merged = append(merged, existing...)
 	merged = append(merged, incoming...)
 	return merged
+}
+
+// mergeNativeContinuationChatHistory keeps the durable/UI transcript
+// cumulative when a coding provider owns conversational context through its
+// native continuation handle. In that mode the new Agent wrapper correctly
+// does not replay existing UI history, so GetHistory contains only the current
+// turn (and its freshly rendered system prompt). Persisting it directly would
+// silently replace every earlier turn.
+//
+// A system prompt is runtime identity, not a user-visible turn. Keep the newest
+// one and join the prior and current human/assistant exchanges around it.
+func mergeNativeContinuationChatHistory(existing, current []llmtypes.MessageContent) []llmtypes.MessageContent {
+	if len(existing) == 0 {
+		return current
+	}
+	if len(current) == 0 {
+		return existing
+	}
+	if chatHistoryHasPrefix(current, existing) {
+		return current
+	}
+	if existing[0].Role == llmtypes.ChatMessageTypeSystem && current[0].Role == llmtypes.ChatMessageTypeSystem {
+		// Native providers may return either only the new exchange or their
+		// cumulative exchange history. Compare the conversational body without
+		// the regenerated system prompt so both shapes merge without duplicates.
+		body := mergeRestoredChatHistory(existing[1:], current[1:])
+		merged := make([]llmtypes.MessageContent, 0, len(body)+1)
+		merged = append(merged, current[0])
+		merged = append(merged, body...)
+		return merged
+	}
+	return mergeRestoredChatHistory(existing, current)
 }
 
 // boundedChatHistoryTail returns the newest messages that fit the supplied
@@ -941,7 +984,7 @@ func listChatHistorySessionsFromDisk(userID, workspaceRoot, workflowPath string,
 		return nil, true, err
 	}
 
-	scheduleIDBySessionID := multiAgentScheduleIDBySessionID(userID)
+	var scheduleIDBySessionID map[string]string
 	filesBySession := make(map[string]localChatHistoryFile)
 	for _, entry := range entries {
 		if !entry.IsDir() {
@@ -1320,20 +1363,12 @@ func workflowScheduleIDBySessionID(workflowPath string) map[string]string {
 	return scheduleIDBySessionIDFromRuns(runs)
 }
 
-func multiAgentScheduleIDBySessionID(userID string) map[string]string {
-	runs, ok, err := readLocalMultiAgentScheduleRuns(userID)
-	if err != nil || !ok {
-		return nil
-	}
-	return scheduleIDBySessionIDFromRuns(runs)
-}
-
-func chatHistoryScheduleIDBySessionID(userID, workspacePath string) map[string]string {
+func chatHistoryScheduleIDBySessionID(_ string, workspacePath string) map[string]string {
 	workspacePath = normalizeChatHistoryWorkspacePath(workspacePath)
 	if workspacePath != "" {
 		return workflowScheduleIDBySessionID(workspacePath)
 	}
-	return multiAgentScheduleIDBySessionID(userID)
+	return nil
 }
 
 func scheduleIDBySessionIDFromRuns(runs []ScheduleRunEntry) map[string]string {
@@ -1539,17 +1574,19 @@ func parseLocalChatHistorySession(userID, workspaceRoot, workflowPath, fallbackS
 // behave like workshop sessions because the merged tool list is a strict
 // superset of all three pre-merge surfaces.
 func normalizeChatHistoryWorkshopMode(mode string) string {
-	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "workshop", "builder", "optimizer", "reporting":
-		return "workshop"
-	case "run":
-		return "run"
-	case "ask", "debugger", "runner":
-		return "run"
-	case "eval", "output":
-		return "workshop"
-	default:
+	trimmed := strings.ToLower(strings.TrimSpace(mode))
+	if trimmed == "" {
 		return ""
+	}
+	// Only "run" and "workshop" exist. Every retired name — builder,
+	// optimizer, reporting, eval, output, ask, debugger, runner — resolves
+	// to one of them rather than being enumerated, so a session persisted
+	// under any older name still loads.
+	switch trimmed {
+	case "run", "ask", "debugger", "runner":
+		return "run"
+	default:
+		return "workshop"
 	}
 }
 

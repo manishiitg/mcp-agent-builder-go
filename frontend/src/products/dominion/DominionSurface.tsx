@@ -3,6 +3,7 @@ import { MessageCircle, Plus, TrendingUp } from 'lucide-react'
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import ChatArea from '../../components/ChatArea'
 import { ProductSurfaceSwitcher } from '../../components/ProductSurfaceSwitcher'
+import { agentApi } from '../../services/api'
 import { useAppStore } from '../../stores/useAppStore'
 import { useChatStore, waitForChatStoreHydration } from '../../stores/useChatStore'
 import { useModeStore } from '../../stores/useModeStore'
@@ -53,21 +54,29 @@ function useDominionChatTab() {
       await waitForChatStoreHydration()
       if (cancelled) return
       const chatStore = useChatStore.getState()
+      const existing = Object.values(chatStore.chatTabs).find((tab) => tab.metadata?.agentProfileId === DOMINION_PROFILE_ID)
+      const conversation = await agentApi.resolveAgentProfileConversation(
+        DOMINION_PROFILE_ID,
+        { conversation_key: 'main' },
+        existing?.sessionId ?? undefined,
+      )
 
-      let tab = Object.values(chatStore.chatTabs).find((t) => t.metadata?.agentProfileId === DOMINION_PROFILE_ID)
-      if (!tab) {
-        const createdTabId = await chatStore.createChatTab('Dominion', {
-          mode: 'multi-agent',
-          agentProfileId: DOMINION_PROFILE_ID,
-          agentProfileVersion: 1,
-          agentProfileWorkspace: 'Chats',
-          agentProfileProjectTitle: 'Dominion',
-        })
-        tab = chatStore.getTab(createdTabId)
-      }
+      // createChatTab reuses the durable singleton and merges the current
+      // profile binding, upgrading pre-contract Dominion tabs in place.
+      const createdTabId = await chatStore.createChatTab('Dominion', {
+        mode: 'multi-agent',
+        agentProfileId: DOMINION_PROFILE_ID,
+        agentProfileVersion: 1,
+        agentProfileWorkspace: 'Chats',
+        agentProfileProjectTitle: 'Dominion',
+        agentProfileChatContract: 'profile-v1',
+        agentProfileConversationKey: 'main',
+        agentProfileConversationId: conversation.conversation_id,
+      }, conversation.session_id)
+      const tab = chatStore.getTab(createdTabId)
       if (cancelled || !tab) return
 
-      const restoredTabId = await restoreSession(tab.sessionId ?? tab.tabId, {
+      const restoredTabId = await restoreSession(conversation.session_id, {
         title: 'Dominion',
         source: 'dominion-open',
         skipConfigRestore: true,
@@ -76,7 +85,9 @@ function useDominionChatTab() {
       chatStore.switchTab(restoredTabId)
       setTabId(restoredTabId)
     }
-    void prepare()
+    void prepare().catch((error) => {
+      if (!cancelled) useChatStore.getState().addToast(error instanceof Error ? error.message : 'Unable to open Dominion conversation', 'error')
+    })
     return () => { cancelled = true }
   }, [])
 

@@ -1,6 +1,6 @@
 # Publish strategy — share HTML artifacts at a public URL
 
-You publish a workflow's (or the org's) **HTML artifacts** to a **public URL** on a static
+You publish a workflow's **HTML artifacts** to a **public URL** on a static
 host. This is the share-twin of backup: backup keeps things safe; publish makes them visible.
 You are **provider-agnostic** — you deploy to whatever static host the config names, using its
 CLI / git / file-sync, and you record the resulting URL. Never invent a destination; the
@@ -14,15 +14,9 @@ the Pulse log just because the saved `publish.targets` only lists the dashboard 
 should go out, **update `targets` to include both** before you build. Deploy `dashboard.html`
 AND `pulse.html`; if only one file ends up on the host, you did it wrong.
 
-For **org-level Chief of Staff / Org Pulse**, publish **BOTH org pages**:
-`pulse/goals.html` as `goals.html` and `pulse/org-pulse.html` as `pulse.html`, plus an
-`index.html` wrapper with Goals | Pulse navigation. There is no workflow dashboard for the
-org-level publish path unless the user explicitly asks for one.
-
 Use the same workflow-style config/status split:
 
 - workflow publish config/status: `workflow.json.publish` + `publish/status.json`
-- org publish config/status: `pulse/publish.json` + `pulse/publish/status.json`
 
 - **Reporting dashboard** (`reports/`) — **live** HTML: it calls `window.report.query(sql)`
   against `db/db.sqlite` inside the app, which doesn't exist on a static host. **Generate a
@@ -32,8 +26,7 @@ Use the same workflow-style config/status split:
 
 For workflow publish, deploy three files: `dashboard.html`, `pulse.html`, and an
 **`index.html` wrapper** with a **top nav** (Dashboard | Pulse) over a single iframe —
-clicking a tab swaps the iframe's source. For org publish, use the same wrapper pattern with
-Goals | Pulse and point the first tab at `goals.html`. This gives each view full width, avoids
+clicking a tab swaps the iframe's source. This gives each view full width, avoids
 the double-scroll / collapse problems of a side-by-side embed, and never modifies the two
 inner pages:
 

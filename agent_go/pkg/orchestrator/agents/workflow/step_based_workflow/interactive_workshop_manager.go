@@ -1824,13 +1824,15 @@ func (iwm *InteractiveWorkshopManager) markChangelogArtifactReviewed(ctx context
 // canonicalWorkshopMode keeps this package aligned with server-side chat-history
 // normalization. Legacy editable-mode names all mean the unified Workshop mode.
 func canonicalWorkshopMode(mode string) string {
-	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "workshop", "builder", "optimizer", "reporting", "eval", "output":
-		return "workshop"
+	trimmed := strings.ToLower(strings.TrimSpace(mode))
+	if trimmed == "" {
+		return ""
+	}
+	switch trimmed {
 	case "run", "ask", "debugger", "runner":
 		return "run"
 	default:
-		return ""
+		return "workshop"
 	}
 }
 
@@ -5592,7 +5594,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// Tool: get_llm_config — show current LLM configuration (read-only)
 	if err := mcpAgent.RegisterCustomTool(
 		"get_llm_config",
-		"Show every effective workflow LLM role (Builder, execution high/medium/low, Maintenance, Pulse, and Chief of Staff), including provider/model, reasoning, inheritance source, override status, and per-step overrides.",
+		"Show every effective workflow LLM role (Builder, execution high/medium/low, Maintenance, and Pulse), including provider/model, reasoning, inheritance source, override status, and per-step overrides.",
 		map[string]interface{}{
 			"type":       "object",
 			"properties": map[string]interface{}{},

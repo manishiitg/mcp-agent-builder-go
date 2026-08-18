@@ -43,6 +43,17 @@ type kindMeta struct {
 	Group       string // builder | review | improve | report | kb | learning | db
 	Description string // shown to the agent in the kind enum
 	Modes       []string
+
+	// Tools names the runtime tools this doc explains. It is the selection key
+	// for surfaces that choose references by capability instead of by mode —
+	// today that is step execution (see MaterializeStepExecutionReferenceSkill).
+	//
+	// PLAT-124: a step agent holding eight tools was handed the workshop chat's
+	// 41-doc builder bundle, including llm-provider-config, and duly called
+	// list_published_llms — which its session never registered. Left empty, a
+	// doc is simply never selected by capability, which is the safe default for
+	// the builder- and Pulse-facing docs that no runtime tool corresponds to.
+	Tools []string
 }
 
 // allKinds is the canonical registry of guided flows. Adding a new kind:
@@ -113,7 +124,7 @@ var allKinds = map[string]kindMeta{
 var referenceKinds = map[string]kindMeta{
 	// Workflow-scoped reference docs (workshop / run modes).
 	"code-authoring":        {Group: "system", Description: "Detailed main.py authoring rules and patterns (env access, sys.argv contract, data authenticity, patching discipline)", Modes: []string{"workshop"}},
-	"stores":                {Group: "system", Description: "Persistent store design contract: skill vs knowledgebase vs db, when to write to which", Modes: []string{"multi-agent", "workshop", "run"}},
+	"stores":                {Group: "system", Description: "Persistent store design contract: skill vs knowledgebase vs db, when to write to which", Modes: []string{"multi-agent", "workshop", "run"}, Tools: []string{"query_workflow_db", "mutate_workflow_db"}},
 	"assumption-audit":      {Group: "system", Description: "Bounded cross-artifact check that separates explicit user constraints and verified external facts from revisable design choices and agent-inferred assumptions; prevents plan/eval/report/KB/learnings/DB/code from freezing an outdated approach", Modes: []string{"workshop", "run"}},
 	"pulse-gate":            {Group: "system", Description: "Focused scheduler Pulse Gate contract: progressive evidence scan, concerns and cadence classification, complete four-perspective worklist, compact durable handoff, and no review/fix/finalizer work.", Modes: []string{"workshop", "run"}},
 	"pulse-review-fixer":    {Group: "system", Description: "Agent-owned Review+Fix contract: read Gate's durable worklist, choose the cheapest sufficient analysis, reconcile existing findings before discovery, own any specialist children, apply compatible repairs, verify prior changes, and record one terminal typed receipt for every due perspective.", Modes: []string{"workshop", "run"}},
@@ -137,23 +148,23 @@ var referenceKinds = map[string]kindMeta{
 	"llm-provider-config":   {Group: "system", Description: "Model Library and provider-auth management for multi-agent chat and workflow workshop: discover provider models, validate candidates, optionally save reusable provider/model/options configurations, preserve reasoning_effort, and never read or edit config/ files directly. Load when the user asks which LLMs exist, wants a reusable saved configuration, or needs provider auth.", Modes: []string{"multi-agent", "workshop"}},
 	"llm-selection":         {Group: "system", Description: "Choosing the LLM that runs workflow work: provider-profile vs explicit Builder/Maintenance/Pulse/high/medium/low roles via set_workflow_llm_config, per-step overrides (execution_tier, execution_llm, validation_llm), precedence rules, cost review tools, and provider auth. Load when picking, pinning, or changing which model executes a workflow step (not media generation — see workspace-media-tools for that).", Modes: []string{"workshop"}},
 	"skill-management":      {Group: "system", Description: "Install skills and wire them into workflows: find (list_skills/search_skills), install (install_skill/import_skill), select for workflow/builder context (update_workflow_config add_skills), enable at runtime per step (update_step_config enabled_skills), the no-cascade attachment model, learnings/_global/SKILL.md as shared-know-how home, remove/uninstall, and troubleshooting. Load before installing a skill or wiring skills onto a workflow or step.", Modes: []string{"multi-agent", "workshop"}},
-	"chief-task-report":     {Group: "system", Description: "Chief of Staff scheduled task report contract: after a normal non-system multi-agent schedule completes, update the single shared pulse/task.html Tasks page with colorful task-dashboard widgets, run summary, decisions/recommendations, evidence, next action, and key findings to reuse next time. Separate from Org Pulse; never create per-task report files.", Modes: []string{"multi-agent"}},
-	"delegation":            {Group: "system", Description: "Multi-agent chat delegation contract: the four tools (delegate/query_agent/terminate_agent/list_agents), delegate parameters (name, instruction, reasoning_level, agent_template, servers, skills, share_browser), async background execution model, the max-depth-3 hierarchy (root→child→grandchild), Chief of Staff parent-skill inheritance with additive per-call skills, and what subagents/ templates actually apply at runtime (default_reasoning_level + body only — frontmatter skills/servers are NOT applied). Load before delegating work to sub-agents in chat.", Modes: []string{"multi-agent"}},
 
-	// Multi-agent chat reference docs (rare-path topics — schedule/secret
-	// management — that don't warrant always-loaded prompt space).
-	"schedule-management": {Group: "system", Description: "Schedule cron, edit, update, or remove multi-agent scheduled tasks via _users/<id>/multiagent-schedules.json", Modes: []string{"multi-agent"}},
-	"secret-management":   {Group: "system", Description: "Manage workflow / user / global secrets via list_secrets, set_workflow_secret, set_user_secret, delete_workflow_secret, delete_user_secret — buckets, naming rules, attach-after-store discipline", Modes: []string{"multi-agent", "workshop"}},
+	// Multi-agent chat reference docs for rare-path secret management.
+	// "run" is load-bearing: product profiles register the secret tools
+	// (Video Studio's allowlist carries all five) but were denied the doc that
+	// describes them — the mirror of PLAT-124, where a step agent gets a doc for
+	// tools it does not hold.
+	"secret-management": {Group: "system", Description: "Manage workflow / user / global secrets via list_secrets, set_workflow_secret, set_user_secret, delete_workflow_secret, delete_user_secret — buckets, naming rules, attach-after-store discipline", Modes: []string{"multi-agent", "workshop", "run"}},
 
 	// Cross-mode operational reference docs (browser and code-execution bridge).
 	// Currently duplicated in the always-on system-prompt sections;
 	// adding them as skills lets the agent load deep details on-demand and
 	// sets up the eventual prompt-trim.
 	"html-output":           {Group: "system", Description: "High-quality self-contained HTML report guide: when to use HTML vs JSON vs Markdown, layout baseline with dark-mode styles, summary box, sticky nav, inline bar chart (no CDN), badge classes for pass/fail/warn, quality checklist. Load before writing any .html output file.", Modes: []string{"multi-agent", "workshop", "run"}},
-	"browser-usage":         {Group: "system", Description: "Browser automation deep guide: agent_browser HTTP API, CDP vs headless modes, macOS CDP installation and additional port/profile setup, snapshot/click/fill workflow, tab management, file uploads, session limits, common mistakes. Load when installing or driving a CDP browser, scraping pages, automating logins, or uploading files via a web form.", Modes: []string{"multi-agent", "workshop", "run"}},
+	"browser-usage":         {Group: "system", Description: "Browser automation deep guide: agent_browser HTTP API, CDP vs headless modes, macOS CDP installation and additional port/profile setup, snapshot/click/fill workflow, tab management, file uploads, session limits, common mistakes. Load when installing or driving a CDP browser, scraping pages, automating logins, or uploading files via a web form.", Modes: []string{"multi-agent", "workshop", "run"}, Tools: []string{"agent_browser"}},
 	"mcp-bridge":            {Group: "system", Description: "MCP HTTP bridge mechanics: $MCP_API_URL / $MCP_API_TOKEN env vars, curl pattern for calling MCP tools, response envelope, $VAR_* / $SECRET_* variable rules, single-call discipline. Load before writing scripts that call MCP tools via the bridge, or when debugging bridge errors.", Modes: []string{"multi-agent", "workshop", "run"}},
 	"workflow-tools":        {Group: "system", Description: "Full reference for workshop / workflow tools: step execution & inspection (execute_step, query_step, debug_step, run_full_workflow), step config and read-only review tools, plan modification (add/update/delete step tools, todo_task routes, versioning), Goal Advisor proposal workflow, variables & MCP server config, schedule management, shell, skills, and secrets. Load when you need a tool's exact signature, parameters, or when-to-use rules and the inline cheat sheet doesn't suffice.", Modes: []string{"workshop"}},
-	"workspace-media-tools": {Group: "system", Description: "Workspace-level provider-backed tools: text generation (generate_text_llm, search_web_llm), image generation + editing (image_gen, image_edit), video generation (generate_video — Vertex AI vs Gemini API model routing), audio + music (text_to_speech, speech_to_text, generate_music), image reading (read_image), capability discovery (list_llm_capabilities, estimate_llm_cost, set_provider_auth). Full path / provider / model_id contracts, default providers per capability, provider-setup discipline. Load before generating media, reading non-text files, or wiring provider auth.", Modes: []string{"multi-agent", "workshop", "run"}},
+	"workspace-media-tools": {Group: "system", Description: "Workspace-level provider-backed tools: text generation (generate_text_llm, search_web_llm), image generation + editing (image_gen, image_edit), video generation (generate_video — Vertex AI vs Gemini API model routing), audio + music (text_to_speech, speech_to_text, generate_music), image reading (read_image), capability discovery (list_llm_capabilities, estimate_llm_cost, set_provider_auth). Full path / provider / model_id contracts, default providers per capability, provider-setup discipline. Load before generating media, reading non-text files, or wiring provider auth.", Modes: []string{"multi-agent", "workshop", "run"}, Tools: []string{"search_web_llm", "generate_text_llm", "image_gen", "image_edit", "generate_video", "text_to_speech", "speech_to_text", "generate_music"}},
 	"execution-policy":      {Group: "system", Description: "Per-group sequential execution policy for run_full_workflow on multi-group workflows: why per-group by default (cleaner failure signal, fixes propagate forward, avoids resource contention, earlier abort, correct iteration rotation), the recipe pattern, exceptions where parallel is appropriate, and how to handle ambiguous 'run the workflow' requests. Load before kicking off a multi-group run or when the user asks about parallel/sequential execution.", Modes: []string{"workshop", "run"}},
 	"deployed-channel":      {Group: "system", Description: "Deployed channel runtime: handling Slack/WhatsApp/bot-channel-routed workflow requests — group identification from message, runtime context grounding (soul.md/learnings/KB/db), direct answer vs run_full_workflow vs execute_step decision, channel-context plumbing through human_inputs, in-channel result summarization, and Run-vs-Workshop boundary rules. Load when a chat or message arrives via a deployed channel route.", Modes: []string{"workshop", "run"}},
 	"reporting-policy":      {Group: "system", Description: "HTML-only report contract: db/reports/index.html owns the complete reporting experience and any internal navigation. HTML reads db/db.sqlite through window.report. Covers authoring, scrolling, refresh, diagnosis, and the Run-mode boundary. Load when the user mentions reports, dashboards, themes, or layouts.", Modes: []string{"workshop", "run"}},
@@ -475,7 +486,19 @@ Call the right discovery tool above before guessing. Hallucinated tool names or 
 
 func buildConfigurationAccessGuidance(mode string) string {
 	var parts []string
-	parts = append(parts, "LLM/provider configuration is tool-managed. For published chat models and provider auth, use `list_published_llms`, `list_provider_models`, `test_llm`, `save_published_llm`, and `set_provider_auth` as appropriate. Do not read or edit `config/` files with shell or file tools; load `read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/llm-provider-config.md\"}])` before publishing or changing provider auth.")
+
+	// The prohibition is a guardrail and holds in every mode. The tool
+	// recommendation must not: `llm-provider-config`'s registry entry decides
+	// which modes manage provider configuration, and only those modes register
+	// list_published_llms/list_provider_models/test_llm/save_published_llm/
+	// set_provider_auth. Naming them unconditionally told `run`-mode sessions —
+	// every scheduled workflow run and every Pulse pass — to call tools that
+	// mode never registers, producing `tools_unavailable` and sending agents off
+	// to guess provider names instead.
+	parts = append(parts, "LLM/provider configuration is tool-managed. Do not read or edit `config/` files with shell or file tools.")
+	if modeAllowedIn("llm-provider-config", mode, referenceKinds) {
+		parts = append(parts, "For published chat models and provider auth, use `list_published_llms`, `list_provider_models`, `test_llm`, `save_published_llm`, and `set_provider_auth` as appropriate; load `read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/llm-provider-config.md\"}])` before publishing or changing provider auth.")
+	}
 
 	if modeAllowedIn("llm-selection", mode, referenceKinds) {
 		parts = append(parts, "For workflow execution tiers and per-step model choices, use `get_llm_config` and `set_workflow_llm_config`; load `read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/llm-selection.md\"}])` before changing workflow execution models.")

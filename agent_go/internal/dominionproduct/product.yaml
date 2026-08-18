@@ -66,6 +66,15 @@ profile:
         default: true
     agent_tools:
       mode: mcp_only
+    workspace:
+      # Dominion has no selectable project. The dedicated profile-chat API
+      # resolves this server-side so the browser sends only the user message.
+      mode: fixed
+      root: Chats
+    conversation:
+      # One durable conversation per user. The server registry keeps this
+      # identity stable across browser tabs, backend restarts, and CLI reaping.
+      mode: singleton
     provider: claude-code
     model_id: claude-sonnet-5
   built_in: true

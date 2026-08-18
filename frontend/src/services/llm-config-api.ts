@@ -79,7 +79,6 @@ export interface ProviderDefaultTierModels {
   low: ProviderTierModelRef
   maintenance?: ProviderTierModelRef
   pulse?: ProviderTierModelRef
-  chief_of_staff?: ProviderTierModelRef
   // Read-only compatibility for a backend that is still restarting during a
   // desktop update. New provider manifests never emit these fields.
   main?: ProviderTierModelRef

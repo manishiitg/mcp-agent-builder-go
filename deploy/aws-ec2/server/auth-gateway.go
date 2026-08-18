@@ -57,7 +57,7 @@ func (g *gateway) serveFrontend(w http.ResponseWriter, r *http.Request) {
 		// Release deployments swap the frontend directory behind a stable URL.
 		// The HTML entry point selects hashed JS assets, so it must never be
 		// served from a previous browser cache after a release.
-		if filepath.Base(path) == "index.html" {
+		if filepath.Base(path) == "index.html" || filepath.Base(path) == "runtime-config.js" {
 			w.Header().Set("Cache-Control", "no-cache")
 		}
 		http.ServeFile(w, r, path)

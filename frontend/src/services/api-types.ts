@@ -230,6 +230,23 @@ export interface AgentQueryResponse {
   provider?: string
 }
 
+// Minimal product-chat wire contract. Profile-owned model, prompt, tools,
+// skills and workspace configuration are deliberately absent.
+export interface AgentProfileChatRequest {
+  message: string
+  conversation_key?: string
+}
+
+export interface AgentProfileConversationRequest {
+  conversation_key?: string
+}
+
+export interface AgentProfileConversationResponse {
+  conversation_id: string
+  conversation_key: string
+  session_id: string
+}
+
 // LLM Defaults Configuration Response
 export interface LLMDefaultsResponse {
   primary_config: LLMConfiguration
@@ -370,7 +387,7 @@ export interface ReportHumanInputOption {
 export interface ReportHumanInput {
   id: string
   workspace_path: string
-  source: 'pulse' | 'strategy_auditor' | 'goal_advisor' | 'chief_of_staff' | string
+  source: 'pulse' | 'strategy_auditor' | 'goal_advisor' | string
   priority: 'low' | 'medium' | 'high' | string
   question: string
   context?: string
@@ -1662,8 +1679,6 @@ export interface PresetLLMConfig {
   builder_llm?: AgentLLMConfig
   maintenance_llm?: AgentLLMConfig
   pulse_llm?: AgentLLMConfig
-  chief_of_staff_llm?: AgentLLMConfig   // Optional scheduled Chief of Staff override
-
   // Feature toggles
   use_knowledgebase?: boolean           // nil/true = enabled (default), false = disabled
   enable_context_summarization?: boolean // nil/true = enabled (default), false = disabled

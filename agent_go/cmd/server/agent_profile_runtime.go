@@ -86,7 +86,7 @@ func appendUniqueStrings(current []string, additions ...string) []string {
 }
 
 // isGlobalScopedProfile reports whether the resolved profile declared
-// agentprofiles.ProfileScopeGlobal -- Chief of Staff today, and any future
+// agentprofiles.ProfileScopeGlobal -- any future global product profile
 // profile with no single project workspace. A global-scoped profile keeps
 // the same chat-wide grants (including the pulse/ write grant) and
 // workspace description a profile-less turn already has; only a
@@ -171,7 +171,7 @@ func (api *StreamingAPI) resolveAgentProfileForQuery(ctx context.Context, req *Q
 	}
 
 	// Resolve before validating workspace/project fields: a global-scoped
-	// profile (Chief of Staff) has no single project workspace, so whether
+	// global profile has no single project workspace, so whether
 	// those fields are required at all depends on what this profile declares.
 	profile, err := api.agentProfiles.Resolve(profileID, req.AgentProfileVersion, userID)
 	if err != nil {
@@ -277,7 +277,7 @@ func (api *StreamingAPI) resolveAgentProfileForQuery(ctx context.Context, req *Q
 		// A profile-owned model binding is authoritative over the user's global
 		// AgentWorks chat selection for a project-scoped product (Video Studio):
 		// the whole point is a curated, pinned choice. A global-scoped profile
-		// (Chief of Staff) is meant to feel like a profile-less chat -- any
+		// global profile is meant to feel like a profile-less chat -- any
 		// published LLM the user already picked wins; the declared binding is
 		// only the starting default for a brand-new chat with no selection yet.
 		if isGlobalScope && requestHasExplicitModel {
@@ -287,7 +287,12 @@ func (api *StreamingAPI) resolveAgentProfileForQuery(ctx context.Context, req *Q
 		req.ModelID = modelID
 		req.LLMConfig = &orchestrator.LLMConfig{Primary: orchestrator.LLMModel{Provider: provider, ModelID: modelID}}
 		req.LLMConfigSource = llmConfigSourceAgentProfile
-		if api.chatStore != nil {
+		if strings.EqualFold(strings.TrimSpace(profile.Runtime.CredentialScope), agentprofiles.CredentialScopeGlobal) {
+			// Some products intentionally use the server-wide coding-agent login.
+			// Do not layer a previously saved project credential when the profile
+			// makes that choice, or the effective account would disagree with the UI.
+			resolvedKeys = MergedProviderAPIKeys(ctx)
+		} else if api.chatStore != nil {
 			// Product workspaces use the same encrypted per-project credential store
 			// as AgentWorks workflows (Claude Code's setup token, Cursor's API key).
 			// It stays scoped to this user/workspace and is injected only into the

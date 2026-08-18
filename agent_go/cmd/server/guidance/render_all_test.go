@@ -119,33 +119,6 @@ func TestAllGuidanceUsesAttachedSkillReader(t *testing.T) {
 	}
 }
 
-// org-pulse, org-goals, and org-html were removed alongside the dropped
-// goals/Org-Pulse feature (see builtin_schedules.go); chief-task-report is
-// unrelated (any user-created scheduled multi-agent task, not the removed
-// builtin) and stays.
-func TestChiefOfStaffGuidanceKeepsTechnicalDetailsOutOfVisibleOutput(t *testing.T) {
-	tests := map[string][]string{
-		"chief-task-report": {
-			"Write the visible page for a business operator",
-			"Keep schedule/run/session ids",
-			`<summary>Agent details</summary>`,
-			"`success` becomes \"Completed\"",
-		},
-	}
-
-	for kind, wants := range tests {
-		rendered, err := renderFromRegistry(kind, tmplData{}, referenceKinds)
-		if err != nil {
-			t.Fatalf("render %s: %v", kind, err)
-		}
-		for _, want := range wants {
-			if !strings.Contains(rendered, want) {
-				t.Fatalf("%s guidance missing plain-language contract %q", kind, want)
-			}
-		}
-	}
-}
-
 func TestFocusedScheduledPulseReferencesStayComplete(t *testing.T) {
 	tests := map[string]struct {
 		wants []string

@@ -11,7 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-//go:embed product.yaml prompts/system-prompt.md commands/*.md
+//go:embed product.yaml prompts/system-prompt.md
 var productConfigFiles embed.FS
 
 // ProductManifest mirrors videoproduct.ProductManifest's shape so the two
@@ -72,16 +72,6 @@ func ChiefOfStaffManifest() (ProductManifest, error) {
 		}
 		if err := productdeps.Validate(productManifest.Dependencies); err != nil {
 			productManifestErr = fmt.Errorf("invalid Chief of Staff dependencies: %w", err)
-			return
-		}
-		// Slash-command prompts live in their own files so they read as prompts
-		// rather than as manifest data; the shared resolver reads each one and
-		// fills in Prompt so everything downstream -- including the profile the
-		// frontend fetches -- sees a command that already carries its text. A
-		// declared command whose file is missing is a broken product, not a
-		// command to quietly drop.
-		if err := agentprofiles.ResolveCommandPrompts(productConfigFiles, productManifest.Profile.Commands); err != nil {
-			productManifestErr = fmt.Errorf("Chief of Staff %w", err)
 			return
 		}
 	})

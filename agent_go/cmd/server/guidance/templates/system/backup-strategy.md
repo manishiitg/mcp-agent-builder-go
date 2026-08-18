@@ -1,4 +1,4 @@
-## Backup Strategy — Workflow And Org Git + Large-File Storage
+## Backup Strategy — Workflow Git + Large-File Storage
 
 Each workflow has (or should have) its own remote git repository for
 text/code/config plus a separate object store for large binary artifacts.
@@ -16,8 +16,7 @@ healthy off-device protection.
 
 ## App contract: config vs status
 
-The app reads backup configuration and backup health separately. Keep these separate, same
-for workflows and org-level Chief of Staff artifacts.
+The app reads workflow backup configuration and backup health separately. Keep these separate.
 
 For a **workflow**:
 
@@ -33,21 +32,7 @@ For a **workflow**:
   (`python3 -c "import json; json.load(open('workflow.json'))"`) — a malformed workflow.json
   drops the workflow's config and can hide the workflow from the UI.
 
-For **org-level Chief of Staff / Org Pulse artifacts**, use the same workflow-style config
-vs status contract, rooted under `pulse/`:
-
-- `pulse/backup.json` is the declarative contract: enabled, mode, triggers, destinations,
-  coverage, notes.
-- `pulse/backup/status.json` is the operational result of the latest org backup attempt.
-- Back up `pulse/goals.html`, `pulse/org-pulse.html`, `pulse/task.html`, org config, and
-  multi-agent schedule/config files. Do not back up secrets.
-- Do not write org backup status into any workflow's `workflow.json` or into the HTML files.
-- Recommend a private remote Git repository for these org-level text artifacts. A zero-config
-  local Git repo/commit may be created as a temporary checkpoint while remote setup awaits the
-  user's account/org, visibility, and naming decision, but it remains `local_only` in the app.
-
-Recommended backup config shape (`workflow.json.backup` for workflows, `pulse/backup.json`
-for org):
+Recommended backup config shape (`workflow.json.backup`):
 
 ```json
 {
@@ -127,10 +112,7 @@ Use git when content is small, mostly text, benefits from per-line diffs,
 and needs to be cheap to clone:
 
 - `workflow.json`, `planning/plan.json`, `planning/step_config.json`
-- Org Goals/Pulse/Tasks config and content: `pulse/goals.html`, `pulse/org-pulse.html`, `pulse/task.html`,
-  `pulse/backup.json`, `pulse/publish.json`
 - `knowledgebase/`, `learnings/`, `subagents/`, `skills/`
-- Chief of Staff org config files
 - Small JSON metadata in `db/` (post records, run summaries)
 - Documentation and notes
 - Source code, scripts, configs
@@ -378,9 +360,6 @@ config file directly from a secret.
 |-------------------------------------------------|--------------------------|
 | `workflow.json`, `planning/`, `knowledgebase/`  | git (per-workflow repo)  |
 | `learnings/`, `skills/`, `subagents/`           | git                      |
-| `pulse/goals.html`, `pulse/org-pulse.html`, `pulse/task.html` | git                      |
-| `pulse/backup.json`, `pulse/publish.json`       | git                      |
-| Chief of Staff org config                       | git                      |
 | Small JSON metadata in `db/`                    | git                      |
 | Generated images, audio, video                  | HF dataset (or S3/R2/B2) |
 | Conversation dumps, per-iteration run logs      | HF dataset, or skip      |

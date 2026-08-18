@@ -143,7 +143,6 @@ func TestWorkflowScheduleTrackingWindowStartSurvivesEmptySchedulerState(t *testi
 	service := NewSchedulerService(nil)
 	sctx := &ScheduleContext{
 		WorkspacePath: workspacePath,
-		SourceType:    "workflow",
 		Schedule:      sched,
 	}
 	if err := service.LoadSchedule(sctx); err != nil {

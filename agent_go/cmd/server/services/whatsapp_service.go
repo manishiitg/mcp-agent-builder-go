@@ -1118,7 +1118,7 @@ func (w *WhatsAppService) handleWorkflowCommand(ctx context.Context, text, chatJ
 
 	case "switch":
 		if strings.TrimSpace(arg) == "" {
-			w.sendWorkflowCommandReply(ctx, chatJID, "Use: @switch 3 [run|optimize|builder]")
+			w.sendWorkflowCommandReply(ctx, chatJID, "Use: @switch 3 [run|workshop]")
 			return true
 		}
 		workflowQuery, mode, modeErr := parseWhatsAppSwitchArg(arg)
@@ -1242,7 +1242,7 @@ func parseWhatsAppWorkflowCommand(text string) (cmd, arg string, ok bool) {
 func parseWhatsAppSwitchArg(arg string) (workflowQuery, mode string, err error) {
 	fields := strings.Fields(strings.TrimSpace(arg))
 	if len(fields) == 0 {
-		return "", "", fmt.Errorf("Use: @switch <workflow> [run|optimize|builder]")
+		return "", "", fmt.Errorf("Use: @switch <workflow> [run|workshop]")
 	}
 	mode = "run"
 	if len(fields) > 1 {
@@ -1250,12 +1250,12 @@ func parseWhatsAppSwitchArg(arg string) (workflowQuery, mode string, err error) 
 			mode = parsedMode
 			fields = fields[:len(fields)-1]
 		} else if looksLikeWhatsAppRouteMode(fields[len(fields)-1]) {
-			return "", "", fmt.Errorf("Unknown mode %q. Use run, optimize, or builder.", fields[len(fields)-1])
+			return "", "", fmt.Errorf("Unknown mode %q. Use run or workshop.", fields[len(fields)-1])
 		}
 	}
 	workflowQuery = strings.TrimSpace(strings.Join(fields, " "))
 	if workflowQuery == "" {
-		return "", "", fmt.Errorf("Use: @switch <workflow> [run|optimize|builder]")
+		return "", "", fmt.Errorf("Use: @switch <workflow> [run|workshop]")
 	}
 	return workflowQuery, mode, nil
 }
@@ -1264,10 +1264,8 @@ func normalizeWhatsAppRouteMode(raw string) (string, bool) {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "", "run", "r":
 		return "run", true
-	case "optimize", "optimizer", "optimiser", "opt":
-		return "optimizer", true
-	case "builder", "build", "b":
-		return "builder", true
+	case "workshop", "w":
+		return "workshop", true
 	default:
 		return "", false
 	}
@@ -1276,17 +1274,13 @@ func normalizeWhatsAppRouteMode(raw string) (string, bool) {
 func looksLikeWhatsAppRouteMode(raw string) bool {
 	s := strings.ToLower(strings.TrimSpace(raw))
 	return strings.HasPrefix("run", s) ||
-		strings.HasPrefix("optimize", s) ||
-		strings.HasPrefix("optimizer", s) ||
-		strings.HasPrefix("builder", s)
+		strings.HasPrefix("workshop", s)
 }
 
 func formatWhatsAppRouteMode(mode string) string {
 	switch mode {
-	case "optimizer":
-		return "optimize"
-	case "builder":
-		return "builder"
+	case "workshop":
+		return "workshop"
 	default:
 		return "run"
 	}
@@ -1413,7 +1407,7 @@ func formatWhatsAppWorkflowList(candidates []whatsappWorkflowCandidate) string {
 		}
 		sb.WriteString(fmt.Sprintf("%d. %s\n", c.Number, c.Label))
 	}
-	sb.WriteString("\n@switch 3 [run|optimize|builder]\n@status | @full | @concise | @done | @off")
+	sb.WriteString("\n@switch 3 [run|workshop]\n@status | @full | @concise | @done | @off")
 	return strings.TrimSpace(sb.String())
 }
 

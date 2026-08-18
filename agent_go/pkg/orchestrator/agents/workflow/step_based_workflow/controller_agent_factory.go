@@ -1396,7 +1396,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 	// Inject supplementary prompts (skills, browser isolation, secrets, browser instructions)
 	isolatedSessionID, _ := ctx.Value(virtualtools.SubAgentIsolatedSessionIDKey).(string)
 	attachGlobalLearnings := !hcpo.isEvaluationMode && learningsAccess != LearningsAccessNone
-	hcpo.appendSupplementaryPrompts(ctx, baseAgent, config, effectiveSkills, isolatedSessionID, attachGlobalLearnings)
+	hcpo.appendSupplementaryPrompts(ctx, baseAgent, config, effectiveSkills, isolatedSessionID, attachGlobalLearnings, registeredToolNames(toolsToRegister), isScriptedExecutionModeConfig(stepConfig))
 
 	// Apply post-setup configuration (folder guard paths and optional registry update)
 	if err := hcpo.applyPostSetupToAgent(agent, agentName); err != nil {
@@ -1830,7 +1830,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createTodoTaskOrchestratorAgent(ctx c
 	if baseAgent := agent.GetBaseAgent(); baseAgent != nil {
 		if baseAgent.Agent() != nil {
 			attachGlobalLearnings := !hcpo.isEvaluationMode && resolveLearningsAccess(stepConfig) != LearningsAccessNone
-			hcpo.appendSupplementaryPrompts(ctx, baseAgent, config, effectiveSkills, "", attachGlobalLearnings)
+			hcpo.appendSupplementaryPrompts(ctx, baseAgent, config, effectiveSkills, "", attachGlobalLearnings, registeredToolNames(toolsToRegister), isScriptedExecutionModeConfig(stepConfig))
 			if inherited := backgroundAgentSkillsFromContext(ctx); len(inherited) > 0 {
 				if err := applyInheritedBackgroundSkills(ctx, baseAgent, inherited); err != nil {
 					return nil, fmt.Errorf("apply inherited background orchestrator skills: %w", err)

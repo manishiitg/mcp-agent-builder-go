@@ -532,7 +532,6 @@ const PresetModal: React.FC<PresetModalProps> = React.memo(({
             builder_llm: undefined,
             maintenance_llm: undefined,
             pulse_llm: undefined,
-            chief_of_staff_llm: undefined,
             tiered_config: undefined,
           };
         } else {

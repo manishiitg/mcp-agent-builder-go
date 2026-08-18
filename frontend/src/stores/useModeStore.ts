@@ -34,7 +34,7 @@ export const useModeStore = create<ModeState>()(
 
         return {
           // Initial state
-          selectedModeCategory: 'multi-agent',
+          selectedModeCategory: 'workflow',
           hasCompletedInitialSetup: true,
           lastSelectedPreset: {
             'workflow': null,
@@ -113,7 +113,7 @@ export const useModeStore = create<ModeState>()(
 
           resetModeSelection: () => {
             set({
-              selectedModeCategory: 'multi-agent',
+              selectedModeCategory: 'workflow',
               hasCompletedInitialSetup: true,
               lastSelectedPreset: {
                 'workflow': null,
@@ -149,14 +149,17 @@ export const useModeStore = create<ModeState>()(
       },
       {
         name: getWorkspaceScopedStorageKey('mode-store'),
-        version: 2,
+        version: 3,
         partialize: (state) => ({
           selectedModeCategory: state.selectedModeCategory,
           hasCompletedInitialSetup: state.hasCompletedInitialSetup,
           lastSelectedPreset: state.lastSelectedPreset
         }),
-        migrate: (persistedState: unknown) => {
-          const state = persistedState as ModeState
+        migrate: (persistedState: unknown, version: number) => {
+          const state = persistedState as Partial<ModeState>
+          if (version < 3 && state.selectedModeCategory === 'multi-agent') {
+            return { ...state, selectedModeCategory: 'workflow' }
+          }
           return state
         }
       }

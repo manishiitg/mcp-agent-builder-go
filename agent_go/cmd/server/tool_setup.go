@@ -381,9 +381,7 @@ func enhanceToolDescriptionForWorkflowPhase(toolName, originalDescription, workf
 // the correct answer rather than a reason to fall back: inheriting another
 // product's conventions is the bug this replaced.
 func multiAgentPlacementGuidance(toolName, chatsFolder string, profile *resolvedAgentProfile) []string {
-	// A global-scoped profile (Chief of Staff) falls through to the same
-	// guidance a profile-less turn gets, including the pulse/ mention --
-	// only a project-scoped profile's own declared placement map applies.
+	// Only a project-scoped profile's own declared placement map applies.
 	if profile != nil && !isGlobalScopedProfile(profile) {
 		return profile.Definition.Runtime.Workspace.Placement[toolName]
 	}
@@ -391,7 +389,6 @@ func multiAgentPlacementGuidance(toolName, chatsFolder string, profile *resolved
 	case "diff_patch_workspace_file", "execute_shell_command":
 		return []string{
 			fmt.Sprintf("Save plan outputs inside the plan folder (e.g. '%s/{plan_id}/output.txt').", chatsFolder),
-			"Cross-workflow task reports belong in `pulse/` (for example `pulse/task.html`).",
 		}
 	}
 	return nil

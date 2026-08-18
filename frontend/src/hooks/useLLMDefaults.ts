@@ -8,9 +8,7 @@ import { useLLMStore } from '../stores/useLLMStore'
 export function useLLMDefaults() {
   const {
     defaultsLoaded,
-    delegationTierDefaultsStatus,
     loadDefaultsFromBackend,
-    loadDelegationTierDefaults,
     error,
   } = useLLMStore()
 
@@ -19,12 +17,6 @@ export function useLLMDefaults() {
       void loadDefaultsFromBackend()
     }
   }, [defaultsLoaded, loadDefaultsFromBackend])
-
-  useEffect(() => {
-    if (delegationTierDefaultsStatus === 'idle') {
-      void loadDelegationTierDefaults()
-    }
-  }, [delegationTierDefaultsStatus, loadDelegationTierDefaults])
 
   return {
     defaultsLoaded,
