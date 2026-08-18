@@ -108,6 +108,14 @@ func (hcpo *StepBasedWorkflowOrchestrator) rotatePairedIterationZero(ctx context
 		if err := hcpo.archiveEvaluationScoreRunFolder(ctx, "iteration-0", backupName); err != nil {
 			hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Could not update archived evaluation paths for %s: %v", backupName, err))
 		}
+		// Run history is the third thing that names this folder, and the only
+		// one that was never repointed. Cost and evaluation records above follow
+		// the rotation; the history entry kept claiming iteration-0, so the
+		// schedule popup looked every historical run's cost up against the live
+		// slot and showed the current run's spend on every row.
+		if err := hcpo.ArchiveScheduleRunFolder(ctx, "iteration-0", backupName); err != nil {
+			hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Could not update run history folder for %s: %v", backupName, err))
+		}
 	}
 
 	hcpo.pruneOldIterations(ctx, runsPath, keep)
