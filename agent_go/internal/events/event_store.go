@@ -1646,6 +1646,20 @@ func (es *EventStore) logToolCallTelemetry(sessionID string, event Event) {
 // pipelines, not any real tool latency.
 var toolCallSettleGrace = 5 * time.Second
 
+// settledToolCallMessage is what a reader sees on the chip.
+//
+// It is written for whoever is looking at the screen, not for whoever
+// maintains this file. The first version said "settled by the event store so
+// the UI does not show it as still running", which describes the mechanism and
+// answers none of the questions a reader actually has: did my command run, did
+// it fail, do I need to do anything.
+//
+// The honest answer to all three is that the tool very likely ran and this is a
+// reporting gap, so the message says exactly that rather than implying a
+// failure the evidence does not support.
+const settledToolCallMessage = "No result reached the UI for this tool call within 5s of the turn ending. " +
+	"The tool itself most likely ran — the agent's own record is authoritative here, and this gap affects only what is displayed."
+
 // settleAfterGrace closes only the calls that are still missing once late
 // results have had time to arrive.
 func (es *EventStore) settleAfterGrace(sessionID string, turnEnd Event, pending map[string]*toolCallTelemetry) {
@@ -1731,10 +1745,10 @@ func (es *EventStore) settleOpenToolCalls(sessionID string, turnEnd Event, stuck
 					ToolName:   name,
 					ToolCallID: id,
 					Duration:   now.Sub(tc.startedAt),
-					Error:      "tool call never reported a result; the turn ended without it",
+					Error:      settledToolCallMessage,
 				},
 			},
-			Error: "tool call never reported a result; the turn ended without it",
+			Error: settledToolCallMessage,
 		})
 	}
 }
