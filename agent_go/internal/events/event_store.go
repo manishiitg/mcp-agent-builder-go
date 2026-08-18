@@ -2,7 +2,9 @@ package events
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -735,7 +737,7 @@ func (es *EventStore) AddEvent(sessionID string, event Event) {
 	}
 
 	logStreamingChunkTelemetry(sessionID, event)
-	logToolCallTelemetry(sessionID, event)
+	es.logToolCallTelemetry(sessionID, event)
 
 	// Notify SSE subscribers (non-blocking send; drop if buffer full)
 	es.subscribersMu.RLock()
@@ -1570,7 +1572,7 @@ var (
 	openToolCall = map[string]map[string]*toolCallTelemetry{} // sessionID -> toolCallID
 )
 
-func logToolCallTelemetry(sessionID string, event Event) {
+func (es *EventStore) logToolCallTelemetry(sessionID string, event Event) {
 	if event.Data == nil {
 		return
 	}
@@ -1605,15 +1607,73 @@ func logToolCallTelemetry(sessionID string, event Event) {
 	// A turn that ends with calls still open is the spinning-chip case.
 	if event.Type == "agent_end" || event.Type == "unified_completion" {
 		toolCallsMu.Lock()
-		stuck := make([]string, 0, len(openToolCall[sessionID]))
+		stuck := make(map[string]*toolCallTelemetry, len(openToolCall[sessionID]))
 		for id, tc := range openToolCall[sessionID] {
-			stuck = append(stuck, tc.name+"("+id+")")
+			stuck[id] = tc
 		}
 		delete(openToolCall, sessionID)
 		toolCallsMu.Unlock()
 		if len(stuck) > 0 {
-			log.Printf("[TOOL] session=%s turn ended with %d tool call(s) STILL OPEN -- their UI chips will spin forever: %s",
-				sessionID, len(stuck), strings.Join(stuck, ", "))
+			names := make([]string, 0, len(stuck))
+			for id, tc := range stuck {
+				names = append(names, tc.name+"("+id+")")
+			}
+			sort.Strings(names)
+			log.Printf("[TOOL] session=%s turn ended with %d tool call(s) STILL OPEN -- settling them: %s",
+				sessionID, len(stuck), strings.Join(names, ", "))
+			es.settleOpenToolCalls(sessionID, event, stuck)
 		}
+	}
+}
+
+// settleOpenToolCalls closes chips whose tool call never reported an end.
+//
+// The condition was already detected here and logged verbatim as "their UI
+// chips will spin forever" — accurately, and then nothing was done about it. A
+// user watching a chat sees a spinner that outlives the turn and reasonably
+// concludes the agent is still working; on salesoutreach that produced a chat
+// that looked busy for as long as it stayed open, while the session had
+// genuinely completed.
+//
+// The synthetic end is deliberately marked as such rather than dressed up as a
+// normal completion. The tool really did not report a result, and a chip that
+// silently turns green would replace a visible wrong state with an invisible
+// one — the same trade this codebase refuses elsewhere.
+//
+// Safe to call from AddEvent: the store mutex is already released by this
+// point, and the events emitted are ToolCallEnd, which cannot re-enter this
+// branch.
+func (es *EventStore) settleOpenToolCalls(sessionID string, turnEnd Event, stuck map[string]*toolCallTelemetry) {
+	if es == nil {
+		return
+	}
+	for id, tc := range stuck {
+		now := time.Now()
+		name := tc.name
+		if name == "" {
+			name = "unknown_tool"
+		}
+		es.AddEvent(sessionID, Event{
+			ID:                fmt.Sprintf("settle-%s-%d", id, now.UnixNano()),
+			Type:              "tool_call_end",
+			Timestamp:         now,
+			SessionID:         sessionID,
+			ExecutionID:       turnEnd.ExecutionID,
+			ParentExecutionID: turnEnd.ParentExecutionID,
+			ExecutionKind:     turnEnd.ExecutionKind,
+			TerminalOwnerID:   turnEnd.TerminalOwnerID,
+			Data: &events.AgentEvent{
+				Type:      events.EventType("tool_call_end"),
+				Timestamp: now,
+				SessionID: sessionID,
+				Data: &events.ToolCallEndEvent{
+					ToolName:   name,
+					ToolCallID: id,
+					Duration:   now.Sub(tc.startedAt),
+					Result:     "tool call did not report a result before the turn ended; settled by the event store so the UI does not show it as still running",
+				},
+			},
+			Error: "unsettled at turn end",
+		})
 	}
 }
