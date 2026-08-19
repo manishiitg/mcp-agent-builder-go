@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `partially implemented` — diagnostic + leak fix shipped and tested; the Pi structured-transport "hang" investigated 2026-08-18 and found to be **not a defect** (the claim rested on a logging artifact; see the last section) — no adapter change survives, all attempts reverted/abandoned; the deeper root cause of the original tmux-mode bridge stall is still not pinned, deliberately deferred; the live ICICI incident is unexplained again and tracked in [PLAT-139](plat-139.md) |
+| Ticket state | `partially implemented` — diagnostic + leak fix shipped and tested; the Pi structured-transport "hang" was investigated twice, 2026-08-18/19. First theory (stdout, `agent_settled` never firing) was disproven — a logging artifact — and every adapter change built on it was reverted/abandoned. A second, real occurrence then confirmed a genuine defect in a different mechanism entirely (stderr, not stdout) and it is now fixed — see the last section and [PLAT-139](plat-139.md). A 2026-08-19 Build-in-Public recurrence separately confirmed the original tmux-mode Codex completion-bridge gap is still live; the deeper root cause there is still not pinned, deliberately deferred |
 | Last synchronized | `2026-08-19` |
 
 - **Priority:** P1 — silently turns real successes into false `error` schedule
@@ -420,7 +420,7 @@ pursued; this pass deliberately did not chase it further.
   untouched by any file this change modified — zero new failures introduced.
   fix reads from.
 
-## Pi CLI structured completion: investigated, NOT a defect (2026-08-18)
+## Pi CLI structured completion: two theories, one wrong, one real (2026-08-18/19)
 
 An earlier version of this section claimed Pi's structured adapter had a
 terminal-event bug and that it was fixed. **Both claims were wrong.** The
@@ -507,11 +507,12 @@ SIGTERM handler is literally `process.exit(143)`). Reverted in
 `multi-llm-provider-go@fd00585`. A second follow-up attempt — reworking all
 four structured adapters to drive completion from a concurrent `cmd.Wait()`
 instead of a parsed event, on a theory that a child process inherits and holds
-pi's stdout — was **abandoned before commit** once the premise above collapsed.
-That theory was independently disproven too: the MCP SDK spawns stdio servers
-with `stdio: ['pipe','pipe', stderr]`, so an MCP child gets its **own** pipes
-and never inherits the parent's stdout. Commit `da13e17`, cited in earlier
-versions of this note, is a dangling rebase object reachable from no branch.
+pi's **stdout** — was **abandoned before commit** once that specific premise
+collapsed. That theory was independently disproven too: the MCP SDK spawns
+stdio servers with `stdio: ['pipe','pipe', stderr]`, so an MCP child gets its
+**own** pipes and never inherits the parent's stdout. Commit `da13e17`, cited
+in earlier versions of this note, is a dangling rebase object reachable from
+no branch.
 
 ### The lesson worth keeping
 
@@ -520,8 +521,23 @@ being investigated is what decides whether that event gets logged. Two live CLI
 runs (~2 minutes) would have refuted the claim before any code changed; instead
 it was defended through three successive rounds of source-reading and theory.
 
-### What remains unexplained
+### What actually explained it: stderr, not stdout
 
-The live incident is real and its cause is now **unknown again** — see
-[PLAT-139](plat-139.md), which carries the evidence and the ruled-out
-hypotheses so this ground is not re-tread.
+Abandoning the stdout theory did not mean the incident was fictional — the
+65-minute hang was real, on both the original occurrence and a second one the
+next day. **[PLAT-139](plat-139.md)** found the real mechanism, live, via a
+production goroutine dump: `cmd.Wait()` itself was blocked, not on stdout (it
+had already closed cleanly) but on `os/exec`'s own internal stderr-copy
+goroutine — the adapter used `cmd.Stderr = &bytes.Buffer{}`, which hands
+`os/exec` a pipe the adapter never had a handle to close. Fixed via
+`cmd.StderrPipe()`, symmetric to stdout, in
+`multi-llm-provider-go@6d8e4e9`. Full account, including the hermetic
+reproduction whose pre-fix failure produces the identical stack trace as the
+production incident, is in [PLAT-139](plat-139.md).
+
+The stdout theory's own abandonment is what made room to find this: it was
+wrong specifically about *which pipe*, not about there being a pipe held open
+past the process's own exit. The two follow-on lessons from this ticket's
+history compound cleanly — verify against the real CLI before theorizing
+further (this section), and when a theory is disproven, keep looking rather
+than concluding the underlying incident was never real (the next section).
