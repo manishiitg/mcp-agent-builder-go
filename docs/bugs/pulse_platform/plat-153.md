@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `fixed` — hard turn ceiling shipped, with a real group-kill bug found and fixed while proving it |
+| Ticket state | `fixed and confirmed live` — hard turn ceiling shipped, a real group-kill bug found and fixed while proving it, and the ceiling has now fired on a real same-day production recurrence exactly as designed |
 | Last synchronized | `2026-08-19` |
 
 - **Priority:** P1 — a workflow step can occupy a group indefinitely with no
@@ -128,10 +128,25 @@ the caller's own context — now reaps the whole group.
 - Full `picli` + `utils` suites pass; zero zombies, zero leaked processes after
   the run (`ps aux | grep sleep` / zombie count both checked directly, not
   assumed).
-- **Not yet verified live in production** — needs a server restart to pick up
-  `multi-llm-provider-go@07a083f`, and then a real recurrence (or a deliberate
-  one) to confirm the ceiling actually fires and reaps cleanly outside a test
-  harness.
+- **Verified live in production, 2026-08-19, same-day recurrence.** A fresh
+  `excellence` pi wedged again after the fix shipped (same signature: zero
+  tool calls, `terminal_event_seen=false`, growing `stream_silent_for`).
+  Confirmed by process evidence from BOTH sides of the pipe, not inference
+  from one side: a native `sample` of pi itself showed a completely idle Node
+  event loop (main thread parked in `uv__io_poll`/`kevent`, no thread in any
+  syscall), and a native `sample` of `mcpbridge` showed it correctly idle
+  too — two threads blocked in `read()` waiting for pi's next request, **no
+  thread blocked in `write()`** — ruling out "our own bridge silently failed
+  to deliver a response" as an alternative explanation for the same symptom.
+  `mcpbridge.log` confirmed the bridge's last real tool call succeeded
+  (`status=200`) well before the wedge began.
+
+  The ceiling fired at exactly the configured default:
+  `LLM RESPONSE RECEIVED - Duration: 45m0.029002916s`. The group-kill reaped
+  the wedged process, the failed turn was reported back to the orchestrator,
+  its retry logic started a fresh pi call immediately (`20:56:39`), which
+  completed normally in 1m9s, and the group resumed executing tool calls
+  within two minutes of the wedge being cut loose.
 
 ## Deliberately out of scope
 
@@ -150,6 +165,6 @@ the caller's own context — now reaps the whole group.
       caller's context does or does not bound.
 - [x] Recovery from the ceiling firing reaps the whole process group, not just
       the tracked pid.
-- [ ] Confirmed live in production: the ceiling fires on a real recurrence (or
-      a deliberate test) after the next restart, and no orphaned grandchild
-      remains afterward.
+- [x] Confirmed live in production: the ceiling fired on a real recurrence at
+      exactly 45m0.029s, group-killed cleanly, and the retry path recovered
+      the workflow within two minutes.
