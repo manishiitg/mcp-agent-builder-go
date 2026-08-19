@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `open` — cause measured, pairing hypothesis not yet proven; no fix attempted |
+| Ticket state | `implemented` — pairing hypothesis disproven, transcript recovery shipped (`multi-llm-provider-go@291b2ea`, `633c97d19`); live reverify pending |
 | Last synchronized | `2026-08-18` |
 
 - **Priority:** P2 — display only. No work is lost and no decision is made on
@@ -44,7 +44,39 @@ that fail to pair are a minority and are not distinguished by tool name
 4. The settle's displayed duration is fabricated relative to the tool's real
    duration (45.4s shown, 41ms actual).
 
-## What is NOT proven
+## Hypothesis resolved (2026-08-19)
+
+The pairing theory below is **wrong**. The store's telemetry logs every
+`ToolCallEndEvent` added under any session, and `END id=toolu_01GTECvg…` returns
+zero lines. The end is not mis-routed to a sub-session; it is **never emitted at
+all**. The sub-session identifiers are real but incidental.
+
+## Fix shipped
+
+`claudecode.ToolResultsFromTranscript` reads completed calls out of the CLI's own
+transcript, keyed by tool-call id, returning the real output and the real
+runtime. The settle asks for them before closing a chip, so a 41ms command now
+reads as 41ms and shows what it printed.
+
+The event store does not know any of this. It calls a resolver that `cmd/server`
+installs — a package that models events should not know which CLI wrote them —
+so the native session id, working directory and transcript shape stay on the
+server side, where the live handle already is.
+
+Every path that cannot answer returns not-found rather than a guess: a session
+already torn down, a non-Claude provider, an empty result, a missing or
+unreadable transcript. The chip then closes blank, as it did before.
+
+### Still to do
+
+- **Live reverify**: confirm recovered chips show real output and real durations.
+- **Delete the compensating code** once verified. The 5s grace window helps a
+  genuinely-late population measured on a different session and can stay for
+  now, but the blank settle exists only for this gap.
+- A session torn down before the settle cannot be recovered — the native id
+  lives on the live handle. If that proves common, the id needs persisting.
+
+## What was NOT proven (superseded by the resolution above)
 
 The tools are dispatched under **sub-session identifiers** while the store
 tracks open calls under the parent schedule session. Three appear in the same
