@@ -4,6 +4,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/manishiitg/mcpagent/toolcalllog"
+
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator"
 )
 
@@ -38,9 +40,32 @@ func TestOrphanedEntryIsTheOnlyShapeTouched(t *testing.T) {
 // follow-up rather than guessing at their transcript shape.
 func TestBackfillDoesNothingWithoutALiveClaudeCodeHandle(t *testing.T) {
 	calls := []orchestrator.ToolCallEntry{{ToolCallID: "a"}}
-	backfillMissingToolResults(calls, nil)
+	backfillMissingToolResults("some-session", calls, nil)
 	if calls[0].Result != "" {
 		t.Error("a nil executionAgent produced a result out of nowhere")
 	}
-	backfillMissingToolResults(nil, nil)
+	backfillMissingToolResults("some-session", nil, nil)
+}
+
+// TestBackfillRecoversFromToolcalllogWithoutNeedingAnAgentAtAll is PLAT-143:
+// toolcalllog is keyed by the same session id the orphaned entry already
+// carries, so a nil executionAgent — no live handle, no transcript needed —
+// must not block this source the way it blocks the Claude-transcript fallback.
+func TestBackfillRecoversFromToolcalllogWithoutNeedingAnAgentAtAll(t *testing.T) {
+	const sessionID = "backfill-toolcalllog-test"
+	toolcalllog.Clear(sessionID)
+	t.Cleanup(func() { toolcalllog.Clear(sessionID) })
+
+	started := time.Now()
+	id := toolcalllog.RecordStart(sessionID, "execute_shell_command", `{}`)
+	toolcalllog.RecordEnd(sessionID, id, "execute_shell_command", `{}`, "real output", started)
+
+	calls := []orchestrator.ToolCallEntry{{
+		ToolCallID: "toolu_01someRealClaudeID", ToolName: "execute_shell_command", StartedAt: started,
+	}}
+	backfillMissingToolResults(sessionID, calls, nil)
+
+	if calls[0].Result != "real output" {
+		t.Errorf("result = %q, want the toolcalllog-recovered output, no agent handle needed", calls[0].Result)
+	}
 }

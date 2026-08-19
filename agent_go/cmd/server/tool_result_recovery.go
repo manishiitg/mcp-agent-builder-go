@@ -5,6 +5,7 @@ import (
 	"time"
 
 	storeevents "github.com/manishiitg/coding-agent-loop/agent_go/internal/events"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/toolcallrecovery"
 	mcpagent "github.com/manishiitg/mcpagent/agent"
 	"github.com/manishiitg/mcpagent/llm"
 	"github.com/manishiitg/multi-llm-provider-go/pkg/adapters/claudecode"
@@ -27,11 +28,25 @@ func (api *StreamingAPI) installToolResultRecovery() {
 
 // recoverToolResult resolves one tool call against its session's provider
 // record. Returns ok=false whenever the answer would be a guess.
-func (api *StreamingAPI) recoverToolResult(sessionID, toolCallID string) (string, time.Duration, bool) {
+func (api *StreamingAPI) recoverToolResult(sessionID, toolCallID, toolName string, startedAt time.Time) (string, time.Duration, bool) {
 	if api == nil || strings.TrimSpace(sessionID) == "" || strings.TrimSpace(toolCallID) == "" {
 		return "", 0, false
 	}
-	// Every live coding-agent handle is a candidate, not just the one under the
+
+	// Tried first: toolcalllog is fed by every provider's HTTP bridge handler
+	// identically and is essentially perfect (1 of 36 unpaired measured live).
+	// No live agent handle, no transcript, no provider check needed — it is
+	// already keyed by the same session id the orphaned event arrived under
+	// (PLAT-143).
+	if result, duration, ok := toolcallrecovery.Recover(sessionID, toolcallrecovery.Candidate{
+		ToolName: toolName, StartedAt: startedAt,
+	}); ok {
+		return result, duration, true
+	}
+
+	// Fall back to the Claude-specific transcript recovery (PLAT-141/142) for
+	// whatever toolcalllog does not cover. Every live coding-agent handle is a
+	// candidate, not just the one under the
 	// event's own session id.
 	//
 	// A workflow step runs in its own private working directory, so Claude Code

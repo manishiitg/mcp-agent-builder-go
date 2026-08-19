@@ -775,8 +775,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) saveExecutionConversationLogs(
 	attemptCompletedAt time.Time,
 	attemptDuration time.Duration,
 ) error {
-	// Recover any orphaned tool call before this evidence is written (PLAT-142).
-	backfillMissingToolResults(toolCalls, executionAgent)
+	// Recover any orphaned tool call before this evidence is written (PLAT-142/143).
+	backfillMissingToolResults(hcpo.sessionID, toolCalls, executionAgent)
 
 	// Use background context so saves succeed even when execution was canceled/stopped by user
 	saveCtx := context.Background()

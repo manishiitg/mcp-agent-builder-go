@@ -181,7 +181,7 @@ func TestLateToolResultIsNotSettled(t *testing.T) {
 func TestSettleRecoversTheRealResultWhenTheProviderHasIt(t *testing.T) {
 	restore := shortenSettleGrace(t)
 	defer restore()
-	SetToolResultResolver(func(sessionID, toolCallID string) (string, time.Duration, bool) {
+	SetToolResultResolver(func(sessionID, toolCallID, name string, startedAt time.Time) (string, time.Duration, bool) {
 		if toolCallID == "call-1" {
 			return "yfinance 1.2.2\nnews items: 10", 41 * time.Millisecond, true
 		}
@@ -217,7 +217,7 @@ func TestSettleRecoversTheRealResultWhenTheProviderHasIt(t *testing.T) {
 func TestSettleStaysBlankWhenTheProviderHasNothing(t *testing.T) {
 	restore := shortenSettleGrace(t)
 	defer restore()
-	SetToolResultResolver(func(string, string) (string, time.Duration, bool) { return "", 0, false })
+	SetToolResultResolver(func(string, string, string, time.Time) (string, time.Duration, bool) { return "", 0, false })
 	defer SetToolResultResolver(nil)
 
 	store := NewEventStore(500)

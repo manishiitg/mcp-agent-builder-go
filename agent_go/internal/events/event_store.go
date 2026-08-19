@@ -1687,8 +1687,11 @@ var toolCallSettleGrace = 5 * time.Second
 // settleAfterGrace closes only the calls that are still missing once late
 // results have had time to arrive.
 // ToolResultResolver recovers a tool call the live stream never completed.
-// Returns ok=false when the provider has no record of it either.
-type ToolResultResolver func(sessionID, toolCallID string) (result string, duration time.Duration, ok bool)
+// name and startedAt are the caller's own record of the orphaned call, passed
+// through so a resolver correlating against a different id space (PLAT-143)
+// has what it needs to match on. Returns ok=false when nothing has a record
+// of it either.
+type ToolResultResolver func(sessionID, toolCallID, name string, startedAt time.Time) (result string, duration time.Duration, ok bool)
 
 // SetToolResultResolver installs the recovery path used when a tool call
 // produces no end event.
@@ -1698,14 +1701,14 @@ func SetToolResultResolver(resolver ToolResultResolver) {
 	toolResultResolverMu.Unlock()
 }
 
-func resolveToolResult(sessionID, toolCallID string) (string, time.Duration, bool) {
+func resolveToolResult(sessionID, toolCallID, name string, startedAt time.Time) (string, time.Duration, bool) {
 	toolResultResolverMu.RLock()
 	resolver := toolResultResolver
 	toolResultResolverMu.RUnlock()
 	if resolver == nil {
 		return "", 0, false
 	}
-	return resolver(sessionID, toolCallID)
+	return resolver(sessionID, toolCallID, name, startedAt)
 }
 
 func (es *EventStore) settleAfterGrace(sessionID string, turnEnd Event, pending map[string]*toolCallTelemetry) {
@@ -1779,7 +1782,7 @@ func (es *EventStore) settleOpenToolCalls(sessionID string, turnEnd Event, stuck
 		// has no record either.
 		result := ""
 		duration := now.Sub(tc.startedAt)
-		if recovered, realDuration, ok := resolveToolResult(sessionID, id); ok {
+		if recovered, realDuration, ok := resolveToolResult(sessionID, id, name, tc.startedAt); ok {
 			result = recovered
 			if realDuration > 0 {
 				duration = realDuration
