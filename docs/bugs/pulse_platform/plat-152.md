@@ -1,11 +1,11 @@
 [← Pulse platform issue index](../pulse_platform_issue_register.md)
 
-# PLAT-152 — Pi CLI's interactive adapter emits native tool-call chunks; Claude Code's and Codex CLI's do not
+# PLAT-152 — NOT A DEFECT: every interactive adapter emits tool-call chunks; the original finding grepped only one file per package
 
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `filed` — confirmed from source across all three adapters; no code change in this ticket |
+| Ticket state | `closed / not a defect` — the asymmetry does not exist. Verified 2026-08-19 across all four providers; see "Correction" below. No code change was made, and none should be: acting on the original finding would have introduced duplicate tool-call chunks. |
 | Last synchronized | `2026-08-19` |
 
 - **Priority:** P2 — not itself a user-visible bug (PLAT-149 already ships a
@@ -15,6 +15,85 @@
   layer.
 - **Owner:** `multi-llm-provider-go/pkg/adapters/{claudecode,codexcli,picli}`
   interactive adapters.
+
+## Correction (2026-08-19): the asymmetry does not exist
+
+**Every interactive adapter emits tool-call chunks.** Counting emission sites
+per PACKAGE rather than per file:
+
+| provider | structured transport | interactive/tmux transport |
+|---|---|---|
+| picli | `picli_structured_adapter.go` | `picli_interactive_adapter.go` |
+| claudecode | `claudecode_structured_adapter.go` | `claudecode_transcript_stream.go` |
+| codexcli | `codexcli_structured_adapter.go` | `codexcli_transcript_stream.go` |
+| cursorcli | `cursorcli_structured_adapter.go` | `cursorcli_transcript_stream.go` |
+
+Four `StreamChunkTypeToolCall*` sites in each of the four packages. Concrete
+line references, read directly rather than inferred:
+
+- `claudecode_transcript_stream.go:211` (`ToolCallEnd`), `:220` (`ToolCallStart`)
+- `codexcli_transcript_stream.go:142` (`ToolCallEnd`), `:152` (`ToolCallStart`)
+- `cursorcli_transcript_stream.go:258` (`ToolCallStart`), `:261` (`ToolCallEnd`)
+
+These are **live**, not end-of-turn reconstruction: `streamClaudeTranscript`
+"tails the claude-code JSONL transcript" on a `time.NewTicker`
+(`claudecode_transcript_stream.go:57,72,98`), and codex's tailer parses
+`ToolName`/`ToolCallID`/`IsToolEnd` with per-`ToolCallID` dedup as rollout rows
+are appended. So the open design question this ticket posed — live per-chunk
+(Pi's shape) versus end-of-turn reconstruction (Claude/Codex's shape) — rests
+on a distinction that is not there. Both are live per-chunk.
+
+### What went wrong in the original analysis
+
+The method was to grep `*_interactive_adapter.go` and conclude the capability
+was absent from the **provider**. The evidence gathered was accurate — Claude's
+and Codex's interactive adapter files genuinely contain zero
+`StreamChunkTypeToolCall*` references — but the inference from "not in this
+file" to "not in this provider" is what fails: the code lives in a sibling file
+in the same package. The ticket even hedged carefully about inline construction
+*within the grepped file*, which is why the gap looked closed rather than
+unexamined.
+
+Pi is the odd one only in **file layout**, not behavior: it emits inline from
+its interactive adapter because pi's embedded JS harness gives it a structured
+marker side-channel (`marker.Type == "tool_execution_start"`), whereas the
+other three tail a JSONL transcript/rollout from a dedicated file. Same
+contract, different source of truth.
+
+**Cursor CLI is the tell.** It was not examined by the original analysis at
+all, yet has the identical `*_transcript_stream.go` structure. Three of four
+providers sharing one pattern is a consistent design, not two providers missing
+something.
+
+### Consequence
+
+Acting on the original finding would have caused a regression, in either
+direction it proposed: adding chunk emission to Claude/Codex/Cursor would have
+**duplicated** every tool-call chunk, and "standardizing Pi to match" would have
+meant moving working code for no behavioral gain.
+
+The stated acceptance criterion — "a consumer of any interactive adapter's
+`StreamChan` sees the same contract regardless of provider" — is **already
+met**.
+
+### Worth keeping
+
+One framing point from the original ticket is off independently of the above:
+it attributes this to "mcpagent's stated job." A single adapter's stream
+contract is Layer 1 (`multi-llm-provider-go`); mcpagent is Layer 2
+(orchestration above it). The ticket's own Owner field already points at
+`multi-llm-provider-go/pkg/adapters/...`, so only the prose disagrees.
+
+If a future ticket does find a genuine per-provider stream-contract gap, the
+enforcement mechanism already exists and should be used rather than a one-off
+reconciliation: `multi-llm-provider-go/coding_agent_certification.go` (capability
+flag -> required certification -> real E2E proof), with `CertStructuredStreaming`
+as the direct precedent. That matters because silent drift in exactly this area
+has happened before — the structured adapters' own `"structured_cli"` transport
+label was orphaned in a refactor precisely because nothing tested that a real
+adapter still declared it.
+
+## Original analysis (retained for the record — conclusion now known false)
 
 ## How it was found
 
@@ -77,7 +156,7 @@ prevent.
   brought in line with the transcript-reconstruction approach instead — is
   the actual fix decision for whoever picks this up, not resolved here.
 
-## Acceptance
+## Acceptance (already met — see Correction)
 
 - A decision is recorded on which shape is the platform's real adapter
   contract for tool-call reporting: live per-chunk (Pi's shape) or
