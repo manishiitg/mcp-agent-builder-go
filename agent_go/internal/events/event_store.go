@@ -1665,14 +1665,17 @@ func (es *EventStore) logToolCallTelemetry(sessionID string, event Event) {
 // pipelines, not any real tool latency.
 var toolCallSettleGrace = 5 * time.Second
 
-// settledToolCallMessage is what a reader sees where the output would be.
+// A settled call carries no message at all.
 //
-// Short, because it is a placeholder in an output field, not an explanation.
-// The two previous versions explained the mechanism and then explained the
-// evidence, both at paragraph length, on a chip. Neither is what someone
-// scanning a run wants; they want to know whether to worry, and the answer is
-// no.
-const settledToolCallMessage = "(output not captured)"
+// Three versions of a message were tried here — the mechanism, then the
+// evidence, then a short placeholder — and every one of them put a diagnostic
+// in front of someone reading a chat. The gap is ours: the tool ran, the agent
+// used its result, and only our copy is missing (PLAT-141 measures one such
+// call completing in 41ms). None of that is the reader's problem to interpret,
+// so it belongs in the server log, where it now is, and nowhere else.
+//
+// The event is still emitted, because without an end the chip spins forever —
+// which is the bug this whole line of work started from.
 
 // settleAfterGrace closes only the calls that are still missing once late
 // results have had time to arrive.
@@ -1704,7 +1707,12 @@ func (es *EventStore) settleAfterGrace(sessionID string, turnEnd Event, pending 
 		names = append(names, tc.name+"("+id+")")
 	}
 	sort.Strings(names)
-	log.Printf("[TOOL] session=%s %d of %d tool call(s) never reported after %s -- settling: %s",
+	// The whole diagnostic lives here rather than on screen. PLAT-141: these
+	// calls complete promptly — one measured at 41ms — and their results simply
+	// never become events, so the durations below are open-to-settle, not tool
+	// runtime, and should not be read as slow tools.
+	log.Printf("[TOOL] session=%s PLAT-141: %d of %d tool call(s) produced no end event within %s; closing their UI chips with no output. "+
+		"open-to-settle (NOT tool runtime): %s",
 		sessionID, len(stuck), len(pending), toolCallSettleGrace, strings.Join(names, ", "))
 	es.settleOpenToolCalls(sessionID, turnEnd, stuck)
 }
@@ -1762,7 +1770,7 @@ func (es *EventStore) settleOpenToolCalls(sessionID string, turnEnd Event, stuck
 					ToolName:   name,
 					ToolCallID: id,
 					Duration:   now.Sub(tc.startedAt),
-					Result:     settledToolCallMessage,
+					Result:     "",
 				},
 			},
 		})

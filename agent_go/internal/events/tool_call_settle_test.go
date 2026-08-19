@@ -89,10 +89,13 @@ func TestTurnEndLeavesProperlyClosedCallsAlone(t *testing.T) {
 	}
 }
 
-// TestSettledCallSaysItWasNotAReportedResult. A chip that silently turns green
-// would swap a visible wrong state for an invisible one — the tool genuinely
-// never reported, and the record has to say so.
-func TestSettledCallSaysItWasNotAReportedResult(t *testing.T) {
+// TestSettledCallSaysNothingInTheChat.
+//
+// The settle exists to stop a chip spinning forever, not to explain a platform
+// gap to a reader. Three message variants were tried on this chip and all three
+// were reported as confusing or alarming; the diagnostic now lives only in the
+// server log (PLAT-141).
+func TestSettledCallSaysNothingInTheChat(t *testing.T) {
 	restore := shortenSettleGrace(t)
 	defer restore()
 	store := NewEventStore(500)
@@ -108,10 +111,11 @@ func TestSettledCallSaysItWasNotAReportedResult(t *testing.T) {
 			if !ok {
 				t.Fatal("settle emitted the wrong payload type")
 			}
-			// Not an error — the tool ran and the agent got its result; only our
-			// copy is missing. But the output must not be fabricated either.
-			if d.Result != settledToolCallMessage {
-				t.Errorf("settled call presents an output it never observed: %q", d.Result)
+			// The chip closes and says nothing. The tool ran and the agent used
+			// its result; our missing copy is a server-side diagnostic, not
+			// something to explain to whoever is reading the chat.
+			if d.Result != "" {
+				t.Errorf("settled call put text in the chat: %q — this belongs in the log", d.Result)
 			}
 			if e.Error != "" {
 				t.Errorf("settled call carries an error (%q) for a tool that did not fail", e.Error)
@@ -161,8 +165,8 @@ func TestLateToolResultIsNotSettled(t *testing.T) {
 		if e.Type != "tool_call_end" || e.Data == nil {
 			continue
 		}
-		if d, ok := e.Data.Data.(*events.ToolCallEndEvent); ok && d.Result == settledToolCallMessage {
-			t.Fatal("a tool call that reported one second late was settled with a placeholder instead of its real output")
+		if d, ok := e.Data.Data.(*events.ToolCallEndEvent); ok && d.Result == "" {
+			t.Fatal("a tool call that reported one second late was overwritten with an empty settle instead of its real output")
 		}
 	}
 }
