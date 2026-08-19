@@ -237,9 +237,9 @@ func PhaseChatSystemPrompt(phaseId string, templateVars map[string]string) strin
 // This avoids importing database/scheduler packages in the workshop package.
 type SchedulerCallbacks struct {
 	ListSchedules          func(ctx context.Context, workspacePath string) (string, error)
-	CreateSchedule         func(ctx context.Context, workspacePath, name, cronExpr, timezone string, groupNames []string, routeSelections map[string]string, mode string, messages []string, directMessagesReason string, workshopMode string, resumePrevious *bool, pulseReviewOnly bool) (string, error)
+	CreateSchedule         func(ctx context.Context, workspacePath, name, cronExpr, timezone string, groupNames []string, routeSelections map[string]string, mode string, messages []string, directMessagesReason string, workshopMode string, resumePrevious *bool, pulseReviewOnly bool, policy ScheduleRuntimePolicy) (string, error)
 	CreateCalendarSchedule func(ctx context.Context, workspacePath, name, timezone string, groupNames []string, calendarItemsJSON string, mode string, messages []string, directMessagesReason string, workshopMode string) (string, error)
-	UpdateSchedule         func(ctx context.Context, jobID, name, cronExpr, timezone string, groupNames []string, setGroupNames bool, routeSelections map[string]string, setRouteSelections bool, enabled *bool, mode string, messages []string, setMessages bool, directMessagesReason *string, workshopMode string, resumePrevious *bool, pulseReviewOnly *bool) (string, error)
+	UpdateSchedule         func(ctx context.Context, jobID, name, cronExpr, timezone string, groupNames []string, setGroupNames bool, routeSelections map[string]string, setRouteSelections bool, enabled *bool, mode string, messages []string, setMessages bool, directMessagesReason *string, workshopMode string, resumePrevious *bool, pulseReviewOnly *bool, policy *ScheduleRuntimePolicy) (string, error)
 	DeleteSchedule         func(ctx context.Context, jobID string) error
 	TriggerSchedule        func(ctx context.Context, jobID string) (string, error)
 	GetScheduleRuns        func(ctx context.Context, jobID string, limit int) (string, error)
@@ -249,6 +249,29 @@ type SchedulerCallbacks struct {
 
 	// NextContractUpgrade returns the next migration owed by the workflow.
 	NextContractUpgrade func(ctx context.Context, workspacePath string) (target string, label string, err error)
+}
+
+// ScheduleRuntimePolicy carries typed scheduling behavior that must be
+// enforced by the runtime rather than inferred from a natural-language
+// message or a conveniently spaced cron expression.
+type ScheduleRuntimePolicy struct {
+	ExecutionMode        string
+	CollisionPolicy      string
+	MaxStartDelayMinutes int
+	AfterScheduleID      string
+	AfterTerminalStatus  string
+	AfterDelayMinutes    int
+	DependencyDeadline   string
+	// Set* is used only by update_schedule. It distinguishes an omitted field
+	// from an explicit empty/zero value, so changing one policy does not erase
+	// the other three.
+	SetExecutionMode        bool
+	SetCollisionPolicy      bool
+	SetMaxStartDelayMinutes bool
+	SetAfterScheduleID      bool
+	SetAfterTerminalStatus  bool
+	SetAfterDelayMinutes    bool
+	SetDependencyDeadline   bool
 }
 
 // SkillCallbacks provides skill management operations via callbacks from server.go.

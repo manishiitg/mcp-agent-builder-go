@@ -6,7 +6,7 @@
 |---|---|
 | Assigned agent | unassigned |
 | Ticket state | `partially implemented` — diagnostic + leak fix shipped and tested; the Pi structured-transport "hang" investigated 2026-08-18 and found to be **not a defect** (the claim rested on a logging artifact; see the last section) — no adapter change survives, all attempts reverted/abandoned; the deeper root cause of the original tmux-mode bridge stall is still not pinned, deliberately deferred; the live ICICI incident is unexplained again and tracked in [PLAT-139](plat-139.md) |
-| Last synchronized | `2026-08-18` |
+| Last synchronized | `2026-08-19` |
 
 - **Priority:** P1 — silently turns real successes into false `error` schedule
   runs, and permanently leaks the session/goroutine so the UI keeps showing it
@@ -128,6 +128,26 @@ the provider-specific tracker is entirely provider-agnostic:
   provider-agnostic by construction — it has no idea which provider is
   running underneath it, which is exactly why it can only ever produce a
   generic "made no progress" failure instead of a real diagnosis.
+
+## 2026-08-19 Build-in-Public recurrence: completion miss reproduced; next-turn failure is separate
+
+Build-in-Public Pulse-only session
+`schedule-cron--af5a941f_1787078711034693000` reproduced this ticket on the
+current binary. Gate durably wrote its worklist and the bound Codex rollout
+reached terminal completion, but AgentWorks did not observe it. At 00:25:14 IST
+the idle-timeout path marked the session `error` and ran `CloseHTTPSession`.
+
+That evidence keeps the deeper completion-bridge root open: diagnostic cleanup
+prevents one kind of leaked activity, but it does not make provider completion
+reach the canonical turn lifecycle.
+
+The scheduler then attempted Review+Fix in the same continuing Pulse
+conversation and hung because it reused the session that cleanup had just
+closed. That second boundary is tracked separately as
+[PLAT-148](plat-148.md). PLAT-116 owns why Gate required orphan cleanup;
+PLAT-148 owns why cleanup destroyed the conversation needed by the next
+sequence message. They require coordinated P0 coverage but must not be
+collapsed into one ambiguous fix.
 
 Checked each interactive-capable adapter directly rather than assuming
 parity from the provider contract table. First pass wrongly claimed Claude

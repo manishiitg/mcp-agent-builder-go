@@ -50,6 +50,9 @@ const isScheduleIssueStatus = (status?: ScheduledJob['last_status']) =>
 const isSchedulePartialStatus = (status?: ScheduledJob['last_status']) =>
   status === 'partial' || status === 'interrupted'
 
+const isScheduleWaitingStatus = (status?: ScheduledJob['last_status']) =>
+  status === 'waiting_for_workflow' || status === 'waiting_for_capacity'
+
 const WORKFLOW_SCHEDULE_PANEL_LIMIT = 10_000
 
 type WorkflowScheduleGroup = {
@@ -1469,6 +1472,7 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
     const cronDesc = describeCron(job.cron_expression)
     const localizedJobName = getLocalizedJobName(job)
     const isRunningJob = job.last_status === 'running'
+    const isWaitingJob = isScheduleWaitingStatus(job.last_status)
     const isMissedJob = isMissedSchedule(job)
     const missedDelayMs = getMissedScheduleDelayMs(job)
     const missedReason = isMissedJob ? formatMissedScheduleReason(job) : ''
@@ -1481,6 +1485,7 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
             <div className="flex items-start gap-3">
               <div className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${
                 isRunningJob ? 'bg-amber-500 animate-pulse' :
+                isWaitingJob ? 'bg-sky-500 animate-pulse' :
                 isMissedJob ? 'bg-amber-500' :
                 job.last_status === 'error' ? 'bg-red-500' :
                 isSchedulePartialStatus(job.last_status) ? 'bg-amber-500' :
@@ -1494,6 +1499,13 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                   {isRunningJob && (
                     <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-300">
                       Running
+                    </span>
+                  )}
+                  {isWaitingJob && (
+                    <span className="rounded-full border border-sky-500/30 bg-sky-500/10 px-1.5 py-0.5 text-[11px] font-medium text-sky-700 dark:text-sky-300">
+                      {job.last_status === 'waiting_for_capacity'
+                        ? 'Waiting for capacity'
+                        : `Queued${job.queued_occurrences && job.queued_occurrences > 1 ? ` · ${job.queued_occurrences} combined` : ''}`}
                     </span>
                   )}
                   {isMissedJob && (
@@ -1538,7 +1550,11 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                     </span>
                   )}
                   <span title={formatExactDateTime(job.last_run_at)}>
-                    {isRunningJob
+                    {isWaitingJob
+                      ? job.waiting_until
+                        ? `Waiting until ${formatLocalScheduleTime(job.waiting_until)}`
+                        : 'Waiting to start'
+                      : isRunningJob
                       ? job.last_run_at
                         ? `Running since ${formatLocalScheduleTime(job.last_run_at)}`
                         : 'Running now'
@@ -1566,6 +1582,11 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                     title={job.last_error}
                   >
                     {job.last_error}
+                  </div>
+                )}
+                {isWaitingJob && job.waiting_reason && (
+                  <div className="mt-1 truncate text-xs text-sky-700 dark:text-sky-300" title={job.waiting_reason}>
+                    {job.waiting_reason}
                   </div>
                 )}
               </div>
@@ -2389,6 +2410,7 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                 const isLoadingThis = !!loadingRunIds[job.id]
                 const previousJob = index > 0 ? jobsList[index - 1] : null
                 const isRunningJob = job.last_status === 'running'
+                const isWaitingJob = isScheduleWaitingStatus(job.last_status)
                 const isMissedJob = isMissedSchedule(job)
                 const missedDelayMs = getMissedScheduleDelayMs(job)
                 const missedReason = isMissedJob ? formatMissedScheduleReason(job) : ''
@@ -2447,6 +2469,7 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                       {/* Status dot */}
                       <div className={`mt-1 w-2 h-2 rounded-full flex-shrink-0 ${
                         job.last_status === 'running' ? 'bg-amber-500 animate-pulse' :
+                        isWaitingJob ? 'bg-sky-500 animate-pulse' :
                         isMissedJob ? 'bg-amber-500' :
                         job.enabled ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-600'
                       }`} />
@@ -2474,6 +2497,13 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                           {isMissedJob && (
                             <span className="text-xs px-1.5 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300">
                               Missed
+                            </span>
+                          )}
+                          {isWaitingJob && (
+                            <span className="text-xs px-1.5 py-0.5 rounded-full bg-sky-100 dark:bg-sky-900/30 text-sky-700 dark:text-sky-300">
+                              {job.last_status === 'waiting_for_capacity'
+                                ? 'Waiting for capacity'
+                                : `Queued${job.queued_occurrences && job.queued_occurrences > 1 ? ` · ${job.queued_occurrences} combined` : ''}`}
                             </span>
                           )}
                           {!job.enabled && (
@@ -2514,6 +2544,8 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                           <span className="flex items-center gap-1" title={formatExactDateTime(job.last_run_at)}>
                             {job.last_status === 'running' ? (
                               <Loader className="w-3 h-3 text-amber-500 animate-spin" />
+                            ) : isWaitingJob ? (
+                              <Clock className="w-3 h-3 text-sky-500" />
                             ) : job.last_status === 'success' ? (
                               <CheckCircle className="w-3 h-3 text-green-500" />
                             ) : job.last_status === 'error' ? (
@@ -2525,7 +2557,11 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                             ) : (
                               <Minus className="w-3 h-3" />
                             )}
-                            {job.last_status === 'running'
+                            {isWaitingJob
+                              ? job.waiting_until
+                                ? `Waiting until ${formatLocalScheduleTime(job.waiting_until)}`
+                                : 'Waiting to start'
+                              : job.last_status === 'running'
                               ? job.last_run_at
                                 ? `Running since ${formatLocalScheduleTime(job.last_run_at)} (${timeAgo(job.last_run_at)})`
                                 : 'Running...'
@@ -2555,6 +2591,11 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                         {(isScheduleIssueStatus(job.last_status) || job.last_status === 'stopped') && job.last_error && (
                           <div className={`mt-1 text-xs truncate max-w-lg ${job.last_status === 'error' ? 'text-red-500' : isSchedulePartialStatus(job.last_status) ? 'text-amber-600 dark:text-amber-400' : 'text-gray-500'}`} title={job.last_error}>
                             ✗ {job.last_error}
+                          </div>
+                        )}
+                        {isWaitingJob && job.waiting_reason && (
+                          <div className="mt-1 text-xs truncate max-w-lg text-sky-700 dark:text-sky-300" title={job.waiting_reason}>
+                            {job.waiting_reason}
                           </div>
                         )}
                       </div>

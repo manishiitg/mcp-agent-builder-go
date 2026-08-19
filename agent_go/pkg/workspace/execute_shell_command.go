@@ -95,10 +95,37 @@ func redactShellCommandForLog(command string) string {
 // command (heredoc/quoted data is stripped before this runs).
 var gitPushRe = regexp.MustCompile(`(?m)\bgit\b[^\n;&|]*\bpush\b`)
 
+// gitBundleCreateRe extracts the output path from ordinary `git bundle create`
+// commands. A bundle is a snapshot of the repository; writing it back inside
+// that same repository and then tracking it recursively embeds the previous
+// repository in every later snapshot (PLAT-147).
+var gitBundleCreateRe = regexp.MustCompile(`(?m)\bgit\b[^\n;&|]*\bbundle\s+create\s+("[^"]+"|'[^']+'|[^\s;&|]+)`)
+
 // isGitPushCommand reports whether cmd runs `git push` as an executable (not as
 // quoted/heredoc data — e.g. echo "git push" or a script that merely mentions it).
 func isGitPushCommand(cmd string) bool {
 	return gitPushRe.MatchString(stripShellDataRegions(cmd))
+}
+
+func gitBundleCreateDestination(cmd string) (string, bool) {
+	match := gitBundleCreateRe.FindStringSubmatch(cmd)
+	if len(match) != 2 {
+		return "", false
+	}
+	destination := strings.Trim(strings.TrimSpace(match[1]), `"'`)
+	return destination, destination != ""
+}
+
+func canonicalProspectivePath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	parent, err := filepath.EvalSymlinks(filepath.Dir(abs))
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(parent, filepath.Base(abs)), nil
 }
 
 // isWorkflowSecretPath identifies the workflow's own secret files. Kept in sync
@@ -216,6 +243,46 @@ func (c *Client) blockSecretPushToPublicRepo(ctx context.Context, params Execute
 			"Non-secret content can still be pushed.",
 		owner, repo, strings.Join(secrets, ", "), owner, repo,
 	)
+}
+
+// blockRecursiveGitBundle rejects repository snapshots whose destination is
+// ambiguous or lives inside the source repository. Requiring an absolute,
+// external destination makes the containment decision explicit and prevents a
+// tracked bundle from recursively inflating .git. Plain local Git commits are
+// the supported zero-configuration checkpoint and do not need a bundle.
+func (c *Client) blockRecursiveGitBundle(ctx context.Context, params ExecuteShellCommandParams) error {
+	destination, ok := gitBundleCreateDestination(params.Command)
+	if !ok {
+		return nil
+	}
+	if strings.ContainsAny(destination, "$`") || !filepath.IsAbs(destination) {
+		return fmt.Errorf(
+			"access denied: git bundle output must be an absolute path outside the source repository; refusing ambiguous destination %q. "+
+				"Never write or track a backup bundle inside the workflow. Use the local Git commit as the local-only checkpoint, or configure an off-device destination",
+			destination,
+		)
+	}
+	repoRoot := c.gitOutputInDir(ctx, params.WorkingDirectory, "git rev-parse --show-toplevel 2>/dev/null")
+	if repoRoot == "" {
+		return nil
+	}
+	root, err := filepath.EvalSymlinks(repoRoot)
+	if err != nil {
+		return nil
+	}
+	target, err := canonicalProspectivePath(destination)
+	if err != nil {
+		return nil
+	}
+	rel, err := filepath.Rel(root, target)
+	if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf(
+			"access denied: refusing git bundle destination %q because it is inside source repository %q. "+
+				"A tracked in-repo bundle recursively embeds earlier repository history and can grow without bound",
+			destination, root,
+		)
+	}
+	return nil
 }
 
 // ExecuteShellCommand executes a shell command using the REST API: POST /api/execute
@@ -380,6 +447,10 @@ func (c *Client) ExecuteShellCommand(ctx context.Context, params ExecuteShellCom
 	// full backups (incl. secrets to a private repo) are never blocked.
 	if err := c.blockSecretPushToPublicRepo(ctx, params); err != nil {
 		log.Printf("[SECRET_PUSH_GUARD] Blocked secret push to public repo: %s", redactedCommandForLog)
+		return ShellCommandResult{}, err
+	}
+	if err := c.blockRecursiveGitBundle(ctx, params); err != nil {
+		log.Printf("[BACKUP_CONTAINMENT_GUARD] Blocked recursive git bundle: %s", redactedCommandForLog)
 		return ShellCommandResult{}, err
 	}
 

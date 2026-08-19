@@ -119,6 +119,38 @@ func TestValidateManifestRejectsEquivalentMCPServerAliases(t *testing.T) {
 	}
 }
 
+func TestValidateManifestRejectsScheduleDependencyCycle(t *testing.T) {
+	manifest := NewWorkflowManifest("Dependency cycle")
+	manifest.Schedules = []WorkflowSchedule{
+		{ID: "close", Mode: "multi-agent", ScheduleType: "cron", CronExpression: "0 16 * * 1-5", AfterScheduleID: "pulse"},
+		{ID: "pulse", Mode: "multi-agent", ScheduleType: "cron", CronExpression: "5 16 * * 1-5", AfterScheduleID: "close"},
+	}
+	err := ValidateManifest(manifest)
+	if err == nil || !strings.Contains(err.Error(), "dependency cycle") {
+		t.Fatalf("expected dependency cycle to be rejected, got %v", err)
+	}
+}
+
+func TestValidateManifestAcceptsTypedDependencyAndCollisionPolicies(t *testing.T) {
+	manifest := NewWorkflowManifest("Dependent schedules")
+	manifest.Schedules = []WorkflowSchedule{
+		{ID: "close", Mode: "multi-agent", ScheduleType: "cron", CronExpression: "55 15 * * 1-5", CollisionPolicy: "queue_latest"},
+		{
+			ID: "pulse", Mode: "multi-agent", ScheduleType: "cron", CronExpression: "10 16 * * 1-5",
+			AfterScheduleID: "close", AfterTerminalStatus: "completed", AfterDelayMinutes: 10,
+			DependencyDeadline: "17:30", CollisionPolicy: "coalesce", MaxStartDelayMinutes: 80,
+		},
+	}
+	if err := ValidateManifest(manifest); err != nil {
+		t.Fatalf("valid dependency policy rejected: %v", err)
+	}
+
+	manifest.Schedules[1].DependencyDeadline = "tomorrow"
+	if err := ValidateManifest(manifest); err == nil || !strings.Contains(err.Error(), "HH:MM") {
+		t.Fatalf("invalid dependency deadline should be rejected, got %v", err)
+	}
+}
+
 func TestNewWorkflowManifestDefaultsGlobalSecretsToNone(t *testing.T) {
 	manifest := NewWorkflowManifest("Test workflow")
 	if manifest.Version != WorkflowContractCurrentVersion {

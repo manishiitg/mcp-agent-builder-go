@@ -45,6 +45,17 @@ type ScheduledJobResponse struct {
 	LastDurationMs       *int64                 `json:"last_duration_ms,omitempty"`
 	RunCount             int                    `json:"run_count"`
 	ConsecutiveFailures  int                    `json:"consecutive_failures"`
+	ExecutionMode        string                 `json:"execution_mode,omitempty"`
+	CollisionPolicy      string                 `json:"collision_policy,omitempty"`
+	MaxStartDelayMinutes int                    `json:"max_start_delay_minutes,omitempty"`
+	AfterScheduleID      string                 `json:"after_schedule_id,omitempty"`
+	AfterTerminalStatus  string                 `json:"after_terminal_status,omitempty"`
+	AfterDelayMinutes    int                    `json:"after_delay_minutes,omitempty"`
+	DependencyDeadline   string                 `json:"dependency_deadline,omitempty"`
+	WaitingSince         *time.Time             `json:"waiting_since,omitempty"`
+	WaitingUntil         *time.Time             `json:"waiting_until,omitempty"`
+	WaitingReason        string                 `json:"waiting_reason,omitempty"`
+	QueuedOccurrences    int                    `json:"queued_occurrences,omitempty"`
 	MissedRunCount       int                    `json:"missed_run_count,omitempty"`
 	LatestMissedRunAt    *time.Time             `json:"latest_missed_run_at,omitempty"`
 	MissedRunReason      string                 `json:"missed_run_reason,omitempty"`
@@ -70,6 +81,13 @@ type CreateScheduleRequest struct {
 	DirectMessagesReason string                 `json:"direct_messages_reason,omitempty"`
 	WorkshopMode         string                 `json:"workshop_mode,omitempty"`   // run (default) or optimizer
 	ResumePrevious       *bool                  `json:"resume_previous,omitempty"` // Coding-agent CLI only: explicit true resumes latest prior thread; nil/false starts fresh
+	ExecutionMode        string                 `json:"execution_mode,omitempty"`
+	CollisionPolicy      string                 `json:"collision_policy,omitempty"`
+	MaxStartDelayMinutes int                    `json:"max_start_delay_minutes,omitempty"`
+	AfterScheduleID      string                 `json:"after_schedule_id,omitempty"`
+	AfterTerminalStatus  string                 `json:"after_terminal_status,omitempty"`
+	AfterDelayMinutes    int                    `json:"after_delay_minutes,omitempty"`
+	DependencyDeadline   string                 `json:"dependency_deadline,omitempty"`
 }
 
 // UpdateScheduleRequest is the request body for updating a schedule.
@@ -89,6 +107,13 @@ type UpdateScheduleRequest struct {
 	DirectMessagesReason *string                `json:"direct_messages_reason,omitempty"`
 	WorkshopMode         string                 `json:"workshop_mode,omitempty"`   // run (default) or optimizer
 	ResumePrevious       *bool                  `json:"resume_previous,omitempty"` // Coding-agent CLI only: explicit true resumes latest prior thread; nil/false starts fresh
+	ExecutionMode        *string                `json:"execution_mode,omitempty"`
+	CollisionPolicy      *string                `json:"collision_policy,omitempty"`
+	MaxStartDelayMinutes *int                   `json:"max_start_delay_minutes,omitempty"`
+	AfterScheduleID      *string                `json:"after_schedule_id,omitempty"`
+	AfterTerminalStatus  *string                `json:"after_terminal_status,omitempty"`
+	AfterDelayMinutes    *int                   `json:"after_delay_minutes,omitempty"`
+	DependencyDeadline   *string                `json:"dependency_deadline,omitempty"`
 }
 
 type TriggerPulseRequest struct {
@@ -126,6 +151,17 @@ func buildJobResponse(workspacePath string, manifest *WorkflowManifest, sched Wo
 		LastDurationMs:       state.LastDurationMs,
 		RunCount:             state.RunCount,
 		ConsecutiveFailures:  state.ConsecutiveFailures,
+		ExecutionMode:        sched.ExecutionMode,
+		CollisionPolicy:      sched.CollisionPolicy,
+		MaxStartDelayMinutes: sched.MaxStartDelayMinutes,
+		AfterScheduleID:      sched.AfterScheduleID,
+		AfterTerminalStatus:  sched.AfterTerminalStatus,
+		AfterDelayMinutes:    sched.AfterDelayMinutes,
+		DependencyDeadline:   sched.DependencyDeadline,
+		WaitingSince:         state.WaitingSince,
+		WaitingUntil:         state.WaitingUntil,
+		WaitingReason:        state.WaitingReason,
+		QueuedOccurrences:    state.QueuedOccurrences,
 		MissedRunCount:       missed.MissedRunCount,
 		LatestMissedRunAt:    missed.LatestMissedRunAt,
 		MissedRunReason:      missed.MissedRunReason,
@@ -436,9 +472,20 @@ func createScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 			DirectMessagesReason: req.DirectMessagesReason,
 			WorkshopMode:         req.WorkshopMode,
 			ResumePrevious:       req.ResumePrevious,
+			ExecutionMode:        strings.TrimSpace(req.ExecutionMode),
+			CollisionPolicy:      strings.TrimSpace(req.CollisionPolicy),
+			MaxStartDelayMinutes: req.MaxStartDelayMinutes,
+			AfterScheduleID:      strings.TrimSpace(req.AfterScheduleID),
+			AfterTerminalStatus:  strings.TrimSpace(req.AfterTerminalStatus),
+			AfterDelayMinutes:    req.AfterDelayMinutes,
+			DependencyDeadline:   strings.TrimSpace(req.DependencyDeadline),
 		}
 
 		manifest.Schedules = append(manifest.Schedules, newSched)
+		if err := ValidateManifest(manifest); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 
 		if err := WriteWorkflowManifest(r.Context(), req.WorkspacePath, manifest); err != nil {
 			http.Error(w, "failed to write manifest: "+err.Error(), http.StatusInternalServerError)
@@ -591,6 +638,27 @@ func updateScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 		if req.ResumePrevious != nil {
 			sched.ResumePrevious = req.ResumePrevious
 		}
+		if req.ExecutionMode != nil {
+			sched.ExecutionMode = strings.TrimSpace(*req.ExecutionMode)
+		}
+		if req.CollisionPolicy != nil {
+			sched.CollisionPolicy = strings.TrimSpace(*req.CollisionPolicy)
+		}
+		if req.MaxStartDelayMinutes != nil {
+			sched.MaxStartDelayMinutes = *req.MaxStartDelayMinutes
+		}
+		if req.AfterScheduleID != nil {
+			sched.AfterScheduleID = strings.TrimSpace(*req.AfterScheduleID)
+		}
+		if req.AfterTerminalStatus != nil {
+			sched.AfterTerminalStatus = strings.TrimSpace(*req.AfterTerminalStatus)
+		}
+		if req.AfterDelayMinutes != nil {
+			sched.AfterDelayMinutes = *req.AfterDelayMinutes
+		}
+		if req.DependencyDeadline != nil {
+			sched.DependencyDeadline = strings.TrimSpace(*req.DependencyDeadline)
+		}
 		validGroupNames, err := validateScheduleGroupNamesForWorkspace(r.Context(), workspacePath, sched.GroupNames)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -598,6 +666,10 @@ func updateScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 		}
 		sched.GroupNames = validGroupNames
 		if err := validateScheduleRequest(scheduleTypeOrDefault(sched.ScheduleType), sched.CronExpression, sched.CalendarItems); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := ValidateManifest(manifest); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}

@@ -343,6 +343,33 @@ type WorkflowSchedule struct {
 	// pass to backup+notify; this schedule is what performs the deferred
 	// review, on its own cadence.
 	PulseReviewOnly bool `json:"pulse_review_only,omitempty"`
+	// ExecutionMode is a typed, runtime-enforced operating mode for a scheduled
+	// invocation. It is deliberately separate from Messages: safety must not
+	// depend on an agent interpreting prose or on the wall clock happening to be
+	// inside the expected cron window. Empty means the normal workflow mode.
+	ExecutionMode string `json:"execution_mode,omitempty"`
+	// CollisionPolicy controls what happens when the workflow is already owned
+	// by another scheduled/execution run. Empty/"skip" preserves the default;
+	// "queue_latest" durably retains the newest occurrence for a later retry.
+	CollisionPolicy string `json:"collision_policy,omitempty"`
+	// MaxStartDelayMinutes bounds a queued occurrence. Zero uses the platform
+	// default. It prevents a stale market-hours or notification run from firing
+	// much later with obsolete assumptions.
+	MaxStartDelayMinutes int `json:"max_start_delay_minutes,omitempty"`
+	// AfterScheduleID expresses a completion dependency without encoding it as
+	// a fragile clock offset. The dependent occurrence is bound to the named
+	// schedule's durable occurrence on the same local calendar date.
+	AfterScheduleID string `json:"after_schedule_id,omitempty"`
+	// AfterTerminalStatus controls which prerequisite outcomes release this
+	// schedule. Empty/"completed" requires a successful completion; any_terminal
+	// permits failed, partial, stopped, or interrupted prerequisites too.
+	AfterTerminalStatus string `json:"after_terminal_status,omitempty"`
+	// AfterDelayMinutes delays release after the prerequisite's terminal receipt.
+	AfterDelayMinutes int `json:"after_delay_minutes,omitempty"`
+	// DependencyDeadline is an optional HH:MM local-time deadline. A prerequisite
+	// that has not released this occurrence by then expires visibly instead of
+	// leaking into the next operating day.
+	DependencyDeadline string `json:"dependency_deadline,omitempty"`
 }
 
 // ShouldResumePrevious reports whether a scheduled run should resume the
@@ -359,6 +386,43 @@ type CalendarScheduleItem struct {
 	Description    string          `json:"description,omitempty"`
 	TriggerPayload json.RawMessage `json:"trigger_payload,omitempty"`
 	Messages       []string        `json:"messages,omitempty"`
+}
+
+func validateScheduleRuntimePolicy(schedule WorkflowSchedule) error {
+	switch strings.TrimSpace(schedule.ExecutionMode) {
+	case "", "close_only":
+	default:
+		return fmt.Errorf("execution_mode must be empty or close_only")
+	}
+	switch strings.TrimSpace(schedule.CollisionPolicy) {
+	case "", "skip", "queue_latest", "retry", "coalesce":
+	default:
+		return fmt.Errorf("collision_policy must be skip, queue_latest, retry, or coalesce")
+	}
+	if schedule.MaxStartDelayMinutes < 0 {
+		return fmt.Errorf("max_start_delay_minutes cannot be negative")
+	}
+	if strings.TrimSpace(schedule.AfterScheduleID) == schedule.ID {
+		return fmt.Errorf("after_schedule_id cannot reference itself")
+	}
+	switch strings.TrimSpace(schedule.AfterTerminalStatus) {
+	case "", "completed", "any_terminal":
+	default:
+		return fmt.Errorf("after_terminal_status must be completed or any_terminal")
+	}
+	if schedule.AfterDelayMinutes < 0 {
+		return fmt.Errorf("after_delay_minutes cannot be negative")
+	}
+	if deadline := strings.TrimSpace(schedule.DependencyDeadline); deadline != "" {
+		if _, err := time.Parse("15:04", deadline); err != nil {
+			return fmt.Errorf("dependency_deadline must be HH:MM in the schedule timezone")
+		}
+	}
+	if strings.TrimSpace(schedule.AfterScheduleID) == "" &&
+		(strings.TrimSpace(schedule.AfterTerminalStatus) != "" || schedule.AfterDelayMinutes != 0 || strings.TrimSpace(schedule.DependencyDeadline) != "") {
+		return fmt.Errorf("after_terminal_status, after_delay_minutes, and dependency_deadline require after_schedule_id")
+	}
+	return nil
 }
 
 // --- Validation ---
@@ -442,6 +506,12 @@ func ValidateManifest(m *WorkflowManifest) error {
 	}
 
 	// Validate schedules
+	scheduleIDs := make(map[string]struct{}, len(m.Schedules))
+	for _, schedule := range m.Schedules {
+		if id := strings.TrimSpace(schedule.ID); id != "" {
+			scheduleIDs[id] = struct{}{}
+		}
+	}
 	for i, sched := range m.Schedules {
 		if sched.ID == "" {
 			return fmt.Errorf("schedules[%d].id is required", i)
@@ -457,6 +527,31 @@ func ValidateManifest(m *WorkflowManifest) error {
 		// workflow, so it has no group to run.
 		if sched.Mode != "multi-agent" && !sched.PulseReviewOnly && len(normalizeScheduleGroupNames(sched.GroupNames)) == 0 {
 			return fmt.Errorf("schedules[%d].group_names is required", i)
+		}
+		if err := validateScheduleRuntimePolicy(sched); err != nil {
+			return fmt.Errorf("schedules[%d]: %w", i, err)
+		}
+		if dependencyID := strings.TrimSpace(sched.AfterScheduleID); dependencyID != "" {
+			if _, ok := scheduleIDs[dependencyID]; !ok {
+				return fmt.Errorf("schedules[%d].after_schedule_id references unknown schedule %q", i, dependencyID)
+			}
+		}
+	}
+	// Dependencies form a directed graph. Reject cycles at authoring time so a
+	// pair (or longer chain) of queue_latest schedules cannot wait forever.
+	dependencies := make(map[string]string, len(m.Schedules))
+	for _, sched := range m.Schedules {
+		if dependencyID := strings.TrimSpace(sched.AfterScheduleID); dependencyID != "" {
+			dependencies[sched.ID] = dependencyID
+		}
+	}
+	for scheduleID := range dependencies {
+		seen := map[string]bool{}
+		for current := scheduleID; current != ""; current = dependencies[current] {
+			if seen[current] {
+				return fmt.Errorf("schedule dependency cycle includes %q", current)
+			}
+			seen[current] = true
 		}
 	}
 

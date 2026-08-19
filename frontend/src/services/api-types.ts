@@ -2828,11 +2828,22 @@ export interface ScheduledJob {
   last_run_at?: string
   next_run_at?: string
   last_session_id?: string
-  last_status?: 'success' | 'error' | 'running' | 'partial' | 'stopped' | 'interrupted' | 'waiting_for_capacity'
+  last_status?: 'success' | 'error' | 'running' | 'partial' | 'stopped' | 'interrupted' | 'waiting_for_capacity' | 'waiting_for_workflow'
   last_error?: string
   last_duration_ms?: number
   run_count: number
   consecutive_failures: number
+  execution_mode?: 'close_only'
+  collision_policy?: 'skip' | 'queue_latest' | 'retry' | 'coalesce'
+  max_start_delay_minutes?: number
+  after_schedule_id?: string
+  after_terminal_status?: 'completed' | 'any_terminal'
+  after_delay_minutes?: number
+  dependency_deadline?: string
+  waiting_since?: string
+  waiting_until?: string
+  waiting_reason?: string
+  queued_occurrences?: number
   missed_run_count?: number
   latest_missed_run_at?: string
   missed_run_reason?: string
@@ -2855,6 +2866,13 @@ export interface CreateScheduledJobRequest {
   workshop_mode?: 'run' | 'optimizer'
   query?: string
   resume_previous?: boolean
+  execution_mode?: 'close_only'
+  collision_policy?: 'skip' | 'queue_latest' | 'retry' | 'coalesce'
+  max_start_delay_minutes?: number
+  after_schedule_id?: string
+  after_terminal_status?: 'completed' | 'any_terminal'
+  after_delay_minutes?: number
+  dependency_deadline?: string
   schedule_type?: 'cron' | 'calendar'
   calendar_items?: CalendarScheduleItem[]
   cron_expression?: string
@@ -2873,6 +2891,13 @@ export interface UpdateScheduledJobRequest {
   workshop_mode?: 'run' | 'optimizer'
   query?: string
   resume_previous?: boolean
+  execution_mode?: 'close_only' | ''
+  collision_policy?: 'skip' | 'queue_latest' | 'retry' | 'coalesce'
+  max_start_delay_minutes?: number
+  after_schedule_id?: string
+  after_terminal_status?: 'completed' | 'any_terminal'
+  after_delay_minutes?: number
+  dependency_deadline?: string
   schedule_type?: 'cron' | 'calendar'
   calendar_items?: CalendarScheduleItem[]
   cron_expression?: string

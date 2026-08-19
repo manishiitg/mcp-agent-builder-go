@@ -6,7 +6,7 @@
 |---|---|
 | Assigned agent | `Unassigned` |
 | Ticket state | `reproduced; implementation boundary open` |
-| Last synchronized | `2026-08-15` |
+| Last synchronized | `2026-08-19` |
 
 > Claim this ticket in this file before implementation. During active work,
 > update this fragment rather than the shared index; synchronize the index
@@ -111,3 +111,48 @@ the exact Upwork state: terminal module result plus `pulse_review_log=running`.
 
 This closes the `pulse_review_log` completion-boundary half. The independent
 `run_metadata.json` half described above remains open.
+
+## Fresh terminal-reconciliation reproduction — 2026-08-18 (Tectonic USA Day Trading)
+
+Manual signals session
+`schedule-manual--9db4dc39_1787065226955186000` completed its workflow/agent
+work at approximately 20:39 IST. The workspace backend on port 18744 was
+unavailable when the scheduler attempted the final listing/status write, so
+that projection could not be persisted. When the server restarted at 21:07,
+startup reconciliation rewrote the run as:
+
+```text
+status=error
+error="interrupted: server restarted"
+completed_at=null
+```
+
+This is current-binary evidence for the still-open core of PLAT-017. A restart
+was treated as evidence that the run was interrupted even though provider and
+workflow evidence already showed terminal completion.
+
+### RCA
+
+Terminal truth is split across in-memory scheduler state, provider completion,
+workflow artifacts, and `schedule-runs.json`. The final projection write can
+fail independently. Startup reconciliation currently gives process restart
+greater authority than already-durable terminal evidence and therefore
+manufactures an interruption instead of reconciling the projections.
+
+### Fix reasoning
+
+Persist one durable terminal event keyed by `run_id` and `turn_id` before
+best-effort projections. On restart, reconcile in this order:
+
+1. canonical terminal event;
+2. bound provider completion evidence;
+3. workflow run metadata/artifact receipts;
+4. only then, absence of all terminal evidence permits `interrupted`.
+
+Projection writes must be retryable/idempotent. A temporarily unavailable
+workspace backend should leave `terminal_projection_pending`, not overwrite a
+proved completion with `interrupted`.
+
+Extend acceptance with a fixture that completes the provider/workflow turn,
+fails the final workspace projection, restarts the server, and proves every
+projection converges on the original terminal result and completion time.

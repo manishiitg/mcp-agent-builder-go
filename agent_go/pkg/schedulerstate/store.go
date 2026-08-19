@@ -30,9 +30,10 @@ const (
 )
 
 var (
-	ErrRunAlreadyActive  = errors.New("schedule run already active for scope")
-	ErrRunNotFound       = errors.New("schedule run not found")
-	ErrInvalidTransition = errors.New("invalid schedule run transition")
+	ErrRunAlreadyActive         = errors.New("schedule run already active for scope")
+	ErrRunNotFound              = errors.New("schedule run not found")
+	ErrPendingOccurrenceMissing = errors.New("pending schedule occurrence not found")
+	ErrInvalidTransition        = errors.New("invalid schedule run transition")
 )
 
 var allowedTransitions = map[State]map[State]bool{
@@ -72,6 +73,7 @@ type Run struct {
 	LockKey         string
 	ScheduleID      string
 	TriggerSource   string
+	ScheduledFor    time.Time
 	State           State
 	StartedAt       time.Time
 	UpdatedAt       time.Time
@@ -103,6 +105,23 @@ type FireDecision struct {
 	RunID         string
 	ScheduledFor  time.Time
 	FiredAt       time.Time
+}
+
+// PendingOccurrence is the durable queue entry for a schedule occurrence that
+// could not start because its workflow was owned or a dependency had not yet
+// completed. One row per schedule implements queue_latest semantics.
+type PendingOccurrence struct {
+	ScopeType          string
+	ScopeID            string
+	ScheduleID         string
+	ScheduledFor       time.Time
+	LatestScheduledFor time.Time
+	QueuedAt           time.Time
+	ExpiresAt          time.Time
+	TriggerSource      string
+	Policy             string
+	OccurrenceCount    int
+	Reason             string
 }
 
 type Event struct {
@@ -164,6 +183,7 @@ func (s *Store) init(ctx context.Context) error {
 			lock_key TEXT NOT NULL,
 			schedule_id TEXT NOT NULL,
 			trigger_source TEXT NOT NULL,
+			scheduled_for TEXT NOT NULL DEFAULT '',
 			state TEXT NOT NULL,
 			started_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL,
@@ -210,6 +230,22 @@ func (s *Store) init(ctx context.Context) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_schedule_fire_scope_time
 			ON schedule_fire_decisions(scope_type, scope_id, schedule_id, fired_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS schedule_pending_occurrences (
+			scope_type TEXT NOT NULL,
+			scope_id TEXT NOT NULL,
+			schedule_id TEXT NOT NULL,
+			scheduled_for TEXT NOT NULL,
+			latest_scheduled_for TEXT NOT NULL DEFAULT '',
+			queued_at TEXT NOT NULL,
+			expires_at TEXT NOT NULL,
+			trigger_source TEXT NOT NULL,
+			policy TEXT NOT NULL DEFAULT 'queue_latest',
+			occurrence_count INTEGER NOT NULL DEFAULT 1,
+			reason TEXT NOT NULL DEFAULT '',
+			PRIMARY KEY(scope_type, scope_id, schedule_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_schedule_pending_expiry
+			ON schedule_pending_occurrences(expires_at, queued_at)`,
 	}
 	for _, statement := range statements {
 		if _, err := s.db.ExecContext(ctx, statement); err != nil {
@@ -220,6 +256,24 @@ func (s *Store) init(ctx context.Context) error {
 	// from fired_at, which was the only timestamp previously retained.
 	if err := ensureColumn(ctx, s.db, "schedule_fire_decisions", "scheduled_for", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return fmt.Errorf("initialize schedule state: %w", err)
+	}
+	if err := ensureColumn(ctx, s.db, "schedule_runs", "scheduled_for", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return fmt.Errorf("initialize schedule state: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE schedule_runs SET scheduled_for=started_at WHERE scheduled_for=''`); err != nil {
+		return fmt.Errorf("backfill schedule run occurrence: %w", err)
+	}
+	if err := ensureColumn(ctx, s.db, "schedule_pending_occurrences", "latest_scheduled_for", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return fmt.Errorf("initialize schedule state: %w", err)
+	}
+	if err := ensureColumn(ctx, s.db, "schedule_pending_occurrences", "policy", "TEXT NOT NULL DEFAULT 'queue_latest'"); err != nil {
+		return fmt.Errorf("initialize schedule state: %w", err)
+	}
+	if err := ensureColumn(ctx, s.db, "schedule_pending_occurrences", "occurrence_count", "INTEGER NOT NULL DEFAULT 1"); err != nil {
+		return fmt.Errorf("initialize schedule state: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE schedule_pending_occurrences SET latest_scheduled_for=scheduled_for WHERE latest_scheduled_for=''`); err != nil {
+		return fmt.Errorf("backfill pending latest occurrence: %w", err)
 	}
 	if _, err := s.db.ExecContext(ctx, `UPDATE schedule_fire_decisions SET scheduled_for=fired_at WHERE scheduled_for=''`); err != nil {
 		return fmt.Errorf("backfill schedule fire occurrence: %w", err)
@@ -260,6 +314,17 @@ func ensureColumn(ctx context.Context, db *sql.DB, table, column, definition str
 }
 
 func (s *Store) BeginRun(ctx context.Context, run Run) error {
+	return s.beginRun(ctx, run, false)
+}
+
+// BeginQueuedRun atomically consumes the durable pending occurrence and claims
+// its workflow lease. If the lease insert fails, SQLite rolls the deletion
+// back, so a busy workflow or process crash cannot lose queued work.
+func (s *Store) BeginQueuedRun(ctx context.Context, run Run) error {
+	return s.beginRun(ctx, run, true)
+}
+
+func (s *Store) beginRun(ctx context.Context, run Run, consumePending bool) error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("schedule state store is unavailable")
 	}
@@ -269,7 +334,11 @@ func (s *Store) BeginRun(ctx context.Context, run Run) error {
 	if run.StartedAt.IsZero() {
 		run.StartedAt = time.Now().UTC()
 	}
+	if run.ScheduledFor.IsZero() {
+		run.ScheduledFor = run.StartedAt
+	}
 	run.StartedAt = run.StartedAt.UTC()
+	run.ScheduledFor = run.ScheduledFor.UTC()
 	if run.State == "" {
 		run.State = StateStarting
 	}
@@ -278,12 +347,26 @@ func (s *Store) BeginRun(ctx context.Context, run Run) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if consumePending {
+		result, deleteErr := tx.ExecContext(ctx, `DELETE FROM schedule_pending_occurrences
+			WHERE scope_type=? AND scope_id=? AND schedule_id=?`, run.ScopeType, run.ScopeID, run.ScheduleID)
+		if deleteErr != nil {
+			return deleteErr
+		}
+		deleted, rowsErr := result.RowsAffected()
+		if rowsErr != nil {
+			return rowsErr
+		}
+		if deleted != 1 {
+			return fmt.Errorf("%w: %s/%s/%s", ErrPendingOccurrenceMissing, run.ScopeType, run.ScopeID, run.ScheduleID)
+		}
+	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO schedule_runs (
 		run_id, scope_type, scope_id, lock_key, schedule_id, trigger_source,
-		state, started_at, updated_at, active_session_id, run_folder, error_message
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		scheduled_for, state, started_at, updated_at, active_session_id, run_folder, error_message
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		run.RunID, run.ScopeType, run.ScopeID, run.LockKey, run.ScheduleID, run.TriggerSource,
-		run.State, formatTime(run.StartedAt), formatTime(run.StartedAt), run.ActiveSessionID, run.RunFolder, run.ErrorMessage)
+		formatTime(run.ScheduledFor), run.State, formatTime(run.StartedAt), formatTime(run.StartedAt), run.ActiveSessionID, run.RunFolder, run.ErrorMessage)
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique constraint") {
 			return fmt.Errorf("%w: %s", ErrRunAlreadyActive, run.LockKey)
@@ -541,14 +624,204 @@ func (s *Store) LatestFireDecision(ctx context.Context, scopeType, scopeID, sche
 	return decision, err
 }
 
+func (s *Store) UpsertPendingOccurrence(ctx context.Context, pending PendingOccurrence) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("schedule state store is unavailable")
+	}
+	if strings.TrimSpace(pending.ScopeType) == "" || strings.TrimSpace(pending.ScopeID) == "" || strings.TrimSpace(pending.ScheduleID) == "" {
+		return fmt.Errorf("scope_type, scope_id, and schedule_id are required")
+	}
+	if pending.QueuedAt.IsZero() {
+		pending.QueuedAt = time.Now().UTC()
+	}
+	if pending.ScheduledFor.IsZero() {
+		pending.ScheduledFor = pending.QueuedAt
+	}
+	if pending.LatestScheduledFor.IsZero() {
+		pending.LatestScheduledFor = pending.ScheduledFor
+	}
+	if pending.OccurrenceCount < 1 {
+		pending.OccurrenceCount = 1
+	}
+	if strings.TrimSpace(pending.Policy) == "" {
+		pending.Policy = "queue_latest"
+	}
+	if pending.ExpiresAt.IsZero() {
+		return fmt.Errorf("expires_at is required")
+	}
+	base := `INSERT INTO schedule_pending_occurrences (
+		scope_type, scope_id, schedule_id, scheduled_for, latest_scheduled_for, queued_at,
+		expires_at, trigger_source, policy, occurrence_count, reason
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	conflict := ` ON CONFLICT(scope_type, scope_id, schedule_id) DO UPDATE SET
+		scheduled_for=excluded.scheduled_for, latest_scheduled_for=excluded.latest_scheduled_for,
+		queued_at=excluded.queued_at, expires_at=excluded.expires_at,
+		trigger_source=excluded.trigger_source, policy=excluded.policy,
+		occurrence_count=excluded.occurrence_count, reason=excluded.reason`
+	switch pending.Policy {
+	case "retry":
+		// Preserve the first blocked occurrence and its deadline. Later cron
+		// occurrences remain visible in fire decisions but do not replace the
+		// exact occurrence being retried.
+		conflict = ` ON CONFLICT(scope_type, scope_id, schedule_id) DO UPDATE SET
+			reason=excluded.reason`
+	case "coalesce":
+		// Preserve the first occurrence/deadline while recording the newest
+		// occurrence and the number folded into the eventual catch-up run.
+		conflict = ` ON CONFLICT(scope_type, scope_id, schedule_id) DO UPDATE SET
+			latest_scheduled_for=excluded.latest_scheduled_for,
+			occurrence_count=schedule_pending_occurrences.occurrence_count + 1,
+			reason=excluded.reason`
+	}
+	_, err := s.db.ExecContext(ctx, base+conflict,
+		pending.ScopeType, pending.ScopeID, pending.ScheduleID, formatTime(pending.ScheduledFor),
+		formatTime(pending.LatestScheduledFor), formatTime(pending.QueuedAt), formatTime(pending.ExpiresAt),
+		pending.TriggerSource, pending.Policy, pending.OccurrenceCount, pending.Reason)
+	return err
+}
+
+func (s *Store) ListPendingOccurrences(ctx context.Context) ([]PendingOccurrence, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("schedule state store is unavailable")
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT scope_type, scope_id, schedule_id,
+		scheduled_for, latest_scheduled_for, queued_at, expires_at, trigger_source, policy, occurrence_count, reason
+		FROM schedule_pending_occurrences ORDER BY queued_at ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var pending []PendingOccurrence
+	for rows.Next() {
+		var item PendingOccurrence
+		var scheduledFor, latestScheduledFor, queuedAt, expiresAt string
+		if err := rows.Scan(&item.ScopeType, &item.ScopeID, &item.ScheduleID, &scheduledFor,
+			&latestScheduledFor, &queuedAt, &expiresAt, &item.TriggerSource, &item.Policy, &item.OccurrenceCount, &item.Reason); err != nil {
+			return nil, err
+		}
+		if item.ScheduledFor, err = parseTime(scheduledFor); err != nil {
+			return nil, err
+		}
+		if item.QueuedAt, err = parseTime(queuedAt); err != nil {
+			return nil, err
+		}
+		if item.LatestScheduledFor, err = parseTime(latestScheduledFor); err != nil {
+			return nil, err
+		}
+		if item.ExpiresAt, err = parseTime(expiresAt); err != nil {
+			return nil, err
+		}
+		pending = append(pending, item)
+	}
+	return pending, rows.Err()
+}
+
+func (s *Store) GetPendingOccurrence(ctx context.Context, scopeType, scopeID, scheduleID string) (PendingOccurrence, error) {
+	if s == nil || s.db == nil {
+		return PendingOccurrence{}, fmt.Errorf("schedule state store is unavailable")
+	}
+	var item PendingOccurrence
+	var scheduledFor, latestScheduledFor, queuedAt, expiresAt string
+	err := s.db.QueryRowContext(ctx, `SELECT scope_type, scope_id, schedule_id,
+		scheduled_for, latest_scheduled_for, queued_at, expires_at, trigger_source, policy, occurrence_count, reason
+		FROM schedule_pending_occurrences WHERE scope_type=? AND scope_id=? AND schedule_id=?`,
+		scopeType, scopeID, scheduleID).Scan(&item.ScopeType, &item.ScopeID, &item.ScheduleID,
+		&scheduledFor, &latestScheduledFor, &queuedAt, &expiresAt, &item.TriggerSource,
+		&item.Policy, &item.OccurrenceCount, &item.Reason)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PendingOccurrence{}, ErrRunNotFound
+	}
+	if err != nil {
+		return PendingOccurrence{}, err
+	}
+	if item.ScheduledFor, err = parseTime(scheduledFor); err != nil {
+		return PendingOccurrence{}, err
+	}
+	if item.LatestScheduledFor, err = parseTime(latestScheduledFor); err != nil {
+		return PendingOccurrence{}, err
+	}
+	if item.QueuedAt, err = parseTime(queuedAt); err != nil {
+		return PendingOccurrence{}, err
+	}
+	if item.ExpiresAt, err = parseTime(expiresAt); err != nil {
+		return PendingOccurrence{}, err
+	}
+	return item, nil
+}
+
+func (s *Store) DeletePendingOccurrence(ctx context.Context, scopeType, scopeID, scheduleID string) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("schedule state store is unavailable")
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM schedule_pending_occurrences
+		WHERE scope_type=? AND scope_id=? AND schedule_id=?`, scopeType, scopeID, scheduleID)
+	return err
+}
+
+// LatestRunForSchedule returns the most recently started run for a schedule.
+func (s *Store) LatestRunForSchedule(ctx context.Context, scopeType, scopeID, scheduleID string) (Run, error) {
+	var run Run
+	var scheduledFor, startedAt, updatedAt, completedAt string
+	err := s.db.QueryRowContext(ctx, `SELECT run_id, scope_type, scope_id, lock_key, schedule_id,
+		trigger_source, scheduled_for, state, started_at, updated_at, COALESCE(completed_at, ''), active_session_id,
+		run_folder, error_message FROM schedule_runs
+		WHERE scope_type=? AND scope_id=? AND schedule_id=? ORDER BY started_at DESC LIMIT 1`,
+		scopeType, scopeID, scheduleID).Scan(
+		&run.RunID, &run.ScopeType, &run.ScopeID, &run.LockKey, &run.ScheduleID, &run.TriggerSource,
+		&scheduledFor, &run.State, &startedAt, &updatedAt, &completedAt, &run.ActiveSessionID, &run.RunFolder, &run.ErrorMessage)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Run{}, ErrRunNotFound
+	}
+	if err != nil {
+		return Run{}, err
+	}
+	if run.StartedAt, err = parseTime(startedAt); err != nil {
+		return Run{}, err
+	}
+	if run.ScheduledFor, err = parseTime(scheduledFor); err != nil {
+		return Run{}, err
+	}
+	if run.UpdatedAt, err = parseTime(updatedAt); err != nil {
+		return Run{}, err
+	}
+	if completedAt != "" {
+		completed, parseErr := parseTime(completedAt)
+		if parseErr != nil {
+			return Run{}, parseErr
+		}
+		run.CompletedAt = &completed
+	}
+	return run, nil
+}
+
+// RunForScheduleOccurrence returns the run linked to the latest accepted fire
+// decision inside [start,end). The durable scheduled_for→run_id link prevents a
+// different manual or same-day run from releasing a dependent occurrence.
+func (s *Store) RunForScheduleOccurrence(ctx context.Context, scopeType, scopeID, scheduleID string, start, end time.Time) (Run, error) {
+	var runID string
+	err := s.db.QueryRowContext(ctx, `SELECT run_id FROM schedule_fire_decisions
+		WHERE scope_type=? AND scope_id=? AND schedule_id=? AND run_id<>''
+		  AND decision='started'
+		  AND scheduled_for>=? AND scheduled_for<?
+		ORDER BY scheduled_for DESC, fired_at DESC LIMIT 1`,
+		scopeType, scopeID, scheduleID, formatTime(start), formatTime(end)).Scan(&runID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Run{}, ErrRunNotFound
+	}
+	if err != nil {
+		return Run{}, err
+	}
+	return s.GetRun(ctx, runID)
+}
+
 func (s *Store) GetRun(ctx context.Context, runID string) (Run, error) {
 	var run Run
-	var startedAt, updatedAt, completedAt string
+	var scheduledFor, startedAt, updatedAt, completedAt string
 	err := s.db.QueryRowContext(ctx, `SELECT run_id, scope_type, scope_id, lock_key, schedule_id,
-		trigger_source, state, started_at, updated_at, COALESCE(completed_at, ''), active_session_id,
+		trigger_source, scheduled_for, state, started_at, updated_at, COALESCE(completed_at, ''), active_session_id,
 		run_folder, error_message FROM schedule_runs WHERE run_id = ?`, runID).Scan(
 		&run.RunID, &run.ScopeType, &run.ScopeID, &run.LockKey, &run.ScheduleID, &run.TriggerSource,
-		&run.State, &startedAt, &updatedAt, &completedAt, &run.ActiveSessionID, &run.RunFolder, &run.ErrorMessage)
+		&scheduledFor, &run.State, &startedAt, &updatedAt, &completedAt, &run.ActiveSessionID, &run.RunFolder, &run.ErrorMessage)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Run{}, ErrRunNotFound
 	}
@@ -556,6 +829,10 @@ func (s *Store) GetRun(ctx context.Context, runID string) (Run, error) {
 		return Run{}, err
 	}
 	run.StartedAt, err = parseTime(startedAt)
+	if err != nil {
+		return Run{}, err
+	}
+	run.ScheduledFor, err = parseTime(scheduledFor)
 	if err != nil {
 		return Run{}, err
 	}

@@ -9,10 +9,28 @@ is the wrong tool.
 If the workflow does not yet have a remote git repo configured, recommend a
 private GitHub repository (or another off-device destination) first, then ask
 the operator before initialising one — repo creation is a one-time setup
-decision (account/org, visibility, naming). A local Git repo, bundle, ZIP, or
-copy is useful as a temporary rollback checkpoint, but it is not a durable
-backup because it is lost with the laptop. Never describe local-only backup as
-healthy off-device protection.
+decision (account/org, visibility, naming). A local Git commit is the ordinary
+temporary rollback checkpoint, but it is not a durable backup because it is
+lost with the laptop. Never describe local-only backup as healthy off-device
+protection.
+
+### Local snapshot containment (mandatory)
+
+The zero-configuration local checkpoint is the **Git commit itself**. Do not
+create a Git bundle, ZIP, tarball, or other snapshot inside the workflow/source
+repository. In particular, never write `backup/*.bundle` and then add it to the
+same repository: each later bundle contains the earlier repository history, so
+tracking it creates a recursive growth loop. The shell guard rejects relative
+or in-repository `git bundle create` destinations.
+
+Do not create a standalone repository archive merely because backup is due.
+If an operator explicitly asks for one, resolve both paths first and require
+the destination to be an absolute path under the platform backup root and
+outside the source repository. Generate to a temporary external path, run
+`git bundle verify`, then atomically replace the previous verified artifact.
+Never stage or commit it in the source repository. Otherwise, record the local
+commit as `local_only` and configure a real off-device destination for
+durability.
 
 ## App contract: config vs status
 
@@ -97,8 +115,9 @@ for org):
 
 Status values:
 
-- `local_only`: local Git, bundle, ZIP, or copy exists, but no off-device
-  destination is configured. The app intentionally shows this in red.
+- `local_only`: a local Git commit (or an explicitly requested external local
+  recovery artifact) exists, but no off-device destination is configured. The
+  app intentionally shows this in red.
 - `healthy`: all required configured destinations succeeded.
 - `partial`: at least one configured destination succeeded and at least one
   failed or was skipped.
@@ -178,11 +197,20 @@ cd <workflow_root>
 git status -sb
 git log --oneline -5
 
-# Always pull before push — another laptop / CI may have advanced origin
-git pull --no-edit
+# Fetch before integrating — another laptop / CI may have advanced origin
+git fetch origin
+
+# If origin advanced, integrate it before creating the backup commit. Do not
+# pull/rebase over an unexplained dirty tree; preserve and inspect user changes.
+git rebase origin/<branch>
 
 # Stage explicit paths, not git add -A (avoids accidental binary/secret)
 git add planning/plan.json knowledgebase/notes/<file>.md
+
+# Inspect exactly what will enter history. Backup archives (*.bundle, *.zip,
+# *.tar, *.tgz) must never appear here.
+git diff --cached --stat
+git diff --cached --name-only
 
 # Commit message: imperative subject + why (1-2 sentences in body)
 git commit -m "knowledgebase: add reddit-post recipe
@@ -213,10 +241,10 @@ Prefer one commit per logical unit of work, not one giant catch-all:
   `git add` and finish the merge. Workflow JSONs (plan, step_config,
   workflow.json) are structurally sensitive.
 - If `git push` is rejected because the local branch is behind, pull
-  first (with `--no-edit`), resolve any conflicts, then push. Never
-  `git push --force` to a shared branch without `--force-with-lease`,
-  and never force-push if other machines/processes commit to the same
-  branch concurrently.
+  the remote refs with `git fetch`, then rebase only the unpublished local
+  backup commit(s) onto `origin/<branch>`, resolve any conflicts, re-run the
+  backup verification, and push. Never use `git reset --hard`, discard a dirty
+  tree, or force-push a shared workflow branch.
 - If multiple processes write to the same workflow folder, batch their
   commits — frequent tiny commits from a sync loop can create the same
   "race" merges that plagued the old shared workspace-docs repo.

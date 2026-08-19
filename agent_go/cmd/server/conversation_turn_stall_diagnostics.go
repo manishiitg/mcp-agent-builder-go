@@ -29,14 +29,12 @@ import (
 //     succeeded, since the platform genuinely never processed its result
 //     (history, persistence, and downstream steps never ran for it either
 //     way).
-//  2. Cleanup: regardless of what the diagnosis finds, the session this turn
-//     was running in is now orphaned — the goroutine that owns its
-//     active-session tracking, HTTP session, and browser resources is
-//     permanently blocked on the provider response and will never run its
-//     own completion cleanup. Tear all of that down here so the session
-//     stops presenting as "running" forever, the exact symptom PLAT-116
-//     reproduced live (a browser tab still polling a session's terminal
-//     minutes after the underlying tmux pane was already gone).
+//  2. Cleanup: regardless of what the diagnosis finds, the exact turn is now
+//     orphaned. Cancel and settle that turn, but do not close the reusable
+//     conversation, its MCP tools, or its browser binding. Scheduled Pulse is
+//     a sequence of turns in one conversation; tearing down the session here
+//     made a reconciled Gate timeout poison the following Review+Fix turn
+//     (PLAT-148).
 func (api *StreamingAPI) diagnoseAndCleanupStalledConversationTurn(sessionID, rootExecutionID string, since time.Time, baseErr error) error {
 	if api == nil || baseErr == nil {
 		return baseErr
@@ -45,7 +43,7 @@ func (api *StreamingAPI) diagnoseAndCleanupStalledConversationTurn(sessionID, ro
 	if evidence := api.diagnoseStalledConversationTurn(sessionID, since); evidence != "" {
 		baseErr = fmt.Errorf("%w; provider-side completion evidence: %s", baseErr, evidence)
 	}
-	api.cleanupOrphanedConversationTurnSession(sessionID, rootExecutionID)
+	api.cleanupOrphanedConversationTurn(sessionID, rootExecutionID)
 	return baseErr
 }
 
@@ -113,12 +111,12 @@ func (api *StreamingAPI) diagnoseStalledConversationTurn(sessionID string, since
 	}
 }
 
-// cleanupOrphanedConversationTurnSession mirrors the teardown the normal
-// completion path runs (server.go's StreamWithEvents goroutine, ~6600-6620
-// and ~4090-4110) — status, busy flag, the tracked execution record itself,
-// query index, MCP HTTP session, and browser resources. Idempotent: every
-// step here is safe to run again if the orphaned goroutine ever does
-// unblock and runs its own cleanup afterward.
+// cleanupOrphanedConversationTurn settles one foreground turn. The input lane
+// guarantees a session has at most one such turn, so the session-keyed cancel
+// function is the cancel function for rootExecutionID. The durable mcpagent
+// Session intentionally survives: it is conversation state, not turn state.
+// Closing its HTTP session or browser resources here is a conversation-level
+// stop and is reserved for cancelSessionRuntimeWork/handleStopSession.
 //
 // Reproduced live (PLAT-116 follow-up): the first version of this function
 // cleared only the coarse active-session status, not api.sessionBusy or the
@@ -127,15 +125,19 @@ func (api *StreamingAPI) diagnoseStalledConversationTurn(sessionID string, since
 // (ModePresetBar.tsx, currentSessionTone) and Global Monitor's runtime_state
 // actually key off, so a stalled turn kept showing as "running" in the UI
 // for hours after the scheduler had already recorded it as errored.
-func (api *StreamingAPI) cleanupOrphanedConversationTurnSession(sessionID, rootExecutionID string) {
+func (api *StreamingAPI) cleanupOrphanedConversationTurn(sessionID, rootExecutionID string) {
 	if api == nil || sessionID == "" {
 		return
 	}
 	rootExecutionID = strings.TrimSpace(rootExecutionID)
+	api.agentCancelMux.Lock()
+	turnCancel := api.agentCancelFuncs[sessionID]
+	api.agentCancelMux.Unlock()
+	if turnCancel != nil {
+		turnCancel()
+	}
 	api.updateSessionStatus(sessionID, "error")
 	api.setSessionBusy(sessionID, false)
 	api.completeTrackedExecution(rootExecutionID, trackedExecutionStatusFailed, "workshop idle wait timed out", nil)
 	api.removeSessionQueryID(sessionID, rootExecutionID)
-	mcpagent.CloseHTTPSession(sessionID)
-	api.cleanupBrowserSessions(sessionID)
 }

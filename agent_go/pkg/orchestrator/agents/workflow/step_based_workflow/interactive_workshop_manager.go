@@ -7788,6 +7788,34 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					"type":        "boolean",
 					"description": "Creates this workflow's own periodic Pulse review schedule instead of a workflow-execution schedule. On its own cadence it reviews the accumulated runs/iteration-N backlog and runs Gate/Review+Fix/Finalize — it never runs the workflow itself, so group_names/route_selections/messages do not apply. Pairs with update_workflow_config(post_run_monitor_mode=\"periodic\"), which shortens every normal run's own pass to backup+notify only, deferring the full review to this schedule. Omit or false for an ordinary workflow-execution schedule.",
 				},
+				"execution_mode": map[string]interface{}{
+					"type": "string", "enum": []string{"close_only"},
+					"description": "Optional backend-enforced operating mode. Use close_only for a run that may manage/close existing state but must never create new entries.",
+				},
+				"collision_policy": map[string]interface{}{
+					"type": "string", "enum": []string{"skip", "queue_latest", "retry", "coalesce"},
+					"description": "What to do if this workflow is already running: skip discards; queue_latest keeps only the newest; retry preserves the first blocked occurrence; coalesce combines repeated occurrences into one catch-up run.",
+				},
+				"max_start_delay_minutes": map[string]interface{}{
+					"type": "integer", "minimum": 1,
+					"description": "Maximum age of a queued occurrence before it expires.",
+				},
+				"after_schedule_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Optional prerequisite schedule ID. This schedule binds to that schedule's durable occurrence on the same local date.",
+				},
+				"after_terminal_status": map[string]interface{}{
+					"type": "string", "enum": []string{"completed", "any_terminal"},
+					"description": "Which prerequisite result releases this schedule. completed is the safe default; any_terminal also releases after failure, partial, stop, or interruption.",
+				},
+				"after_delay_minutes": map[string]interface{}{
+					"type": "integer", "minimum": 0,
+					"description": "Optional delay after the prerequisite terminal receipt before this schedule may start.",
+				},
+				"dependency_deadline": map[string]interface{}{
+					"type":        "string",
+					"description": "Optional local HH:MM deadline after which this dependent occurrence expires instead of running stale.",
+				},
 			},
 			"required": []string{"name", "cron_expression", "timezone"},
 		},
@@ -7854,7 +7882,19 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			if pulseReviewOnly && (len(groupNames) > 0 || len(routeSelections) > 0 || len(messages) > 0) {
 				return "pulse_review_only does not run the workflow — it must not set group_names, route_selections, or messages.", nil
 			}
-			return iwm.schedulerFuncs.CreateSchedule(ctx, iwm.schedulerWorkspacePath, name, cronExpr, timezone, groupNames, routeSelections, mode, messages, directMessagesReason, workshopMode, resumePrevious, pulseReviewOnly)
+			policy := ScheduleRuntimePolicy{}
+			policy.ExecutionMode, _ = args["execution_mode"].(string)
+			policy.CollisionPolicy, _ = args["collision_policy"].(string)
+			policy.AfterScheduleID, _ = args["after_schedule_id"].(string)
+			policy.AfterTerminalStatus, _ = args["after_terminal_status"].(string)
+			policy.DependencyDeadline, _ = args["dependency_deadline"].(string)
+			if value, ok := args["max_start_delay_minutes"].(float64); ok {
+				policy.MaxStartDelayMinutes = int(value)
+			}
+			if value, ok := args["after_delay_minutes"].(float64); ok {
+				policy.AfterDelayMinutes = int(value)
+			}
+			return iwm.schedulerFuncs.CreateSchedule(ctx, iwm.schedulerWorkspacePath, name, cronExpr, timezone, groupNames, routeSelections, mode, messages, directMessagesReason, workshopMode, resumePrevious, pulseReviewOnly, policy)
 		},
 		"workflow",
 	); err != nil {
@@ -8011,6 +8051,27 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					"type":        "boolean",
 					"description": "Converts this schedule between a workflow-execution schedule and this workflow's periodic Pulse review schedule (PLAT-115). true: this schedule stops running the workflow and instead runs Gate/Review+Fix/Finalize over the accumulated backlog on its own cadence. false: converts it back to an ordinary workflow-execution schedule. Omit to leave the current setting unchanged.",
 				},
+				"execution_mode": map[string]interface{}{
+					"type": "string", "description": "Set close_only, or an empty string to clear the backend-enforced execution mode.",
+				},
+				"collision_policy": map[string]interface{}{
+					"type": "string", "description": "Set skip, queue_latest, retry, or coalesce. Empty resets to the default skip behavior.",
+				},
+				"max_start_delay_minutes": map[string]interface{}{
+					"type": "integer", "minimum": 0, "description": "Maximum queued age. Zero restores the platform default.",
+				},
+				"after_schedule_id": map[string]interface{}{
+					"type": "string", "description": "Prerequisite schedule ID, or an empty string to clear the dependency.",
+				},
+				"after_terminal_status": map[string]interface{}{
+					"type": "string", "description": "Set completed or any_terminal. Empty restores completed.",
+				},
+				"after_delay_minutes": map[string]interface{}{
+					"type": "integer", "minimum": 0, "description": "Delay after prerequisite completion. Zero clears it.",
+				},
+				"dependency_deadline": map[string]interface{}{
+					"type": "string", "description": "Local HH:MM deadline, or an empty string to clear it.",
+				},
 			},
 			"required": []string{"job_id"},
 		},
@@ -8104,7 +8165,49 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			if pulseReviewOnly != nil && *pulseReviewOnly && (setGroupNames || setRouteSelections || setMessages) {
 				return "pulse_review_only=true does not run the workflow — do not combine it with group_names, route_selections, or messages in the same call.", nil
 			}
-			return iwm.schedulerFuncs.UpdateSchedule(ctx, jobID, name, cronExpr, timezone, groupNames, setGroupNames, routeSelections, setRouteSelections, enabled, mode, messages, setMessages, directMessagesReason, workshopMode, resumePrevious, pulseReviewOnly)
+			var policy *ScheduleRuntimePolicy
+			if _, ok1 := args["execution_mode"]; ok1 {
+				policy = &ScheduleRuntimePolicy{}
+			}
+			if _, ok2 := args["collision_policy"]; ok2 && policy == nil {
+				policy = &ScheduleRuntimePolicy{}
+			}
+			if _, ok3 := args["max_start_delay_minutes"]; ok3 && policy == nil {
+				policy = &ScheduleRuntimePolicy{}
+			}
+			if _, ok4 := args["after_schedule_id"]; ok4 && policy == nil {
+				policy = &ScheduleRuntimePolicy{}
+			}
+			if _, ok5 := args["after_terminal_status"]; ok5 && policy == nil {
+				policy = &ScheduleRuntimePolicy{}
+			}
+			if _, ok6 := args["after_delay_minutes"]; ok6 && policy == nil {
+				policy = &ScheduleRuntimePolicy{}
+			}
+			if _, ok7 := args["dependency_deadline"]; ok7 && policy == nil {
+				policy = &ScheduleRuntimePolicy{}
+			}
+			if policy != nil {
+				_, policy.SetExecutionMode = args["execution_mode"]
+				_, policy.SetCollisionPolicy = args["collision_policy"]
+				_, policy.SetMaxStartDelayMinutes = args["max_start_delay_minutes"]
+				_, policy.SetAfterScheduleID = args["after_schedule_id"]
+				_, policy.SetAfterTerminalStatus = args["after_terminal_status"]
+				_, policy.SetAfterDelayMinutes = args["after_delay_minutes"]
+				_, policy.SetDependencyDeadline = args["dependency_deadline"]
+				policy.ExecutionMode, _ = args["execution_mode"].(string)
+				policy.CollisionPolicy, _ = args["collision_policy"].(string)
+				policy.AfterScheduleID, _ = args["after_schedule_id"].(string)
+				policy.AfterTerminalStatus, _ = args["after_terminal_status"].(string)
+				policy.DependencyDeadline, _ = args["dependency_deadline"].(string)
+				if value, ok := args["max_start_delay_minutes"].(float64); ok {
+					policy.MaxStartDelayMinutes = int(value)
+				}
+				if value, ok := args["after_delay_minutes"].(float64); ok {
+					policy.AfterDelayMinutes = int(value)
+				}
+			}
+			return iwm.schedulerFuncs.UpdateSchedule(ctx, jobID, name, cronExpr, timezone, groupNames, setGroupNames, routeSelections, setRouteSelections, enabled, mode, messages, setMessages, directMessagesReason, workshopMode, resumePrevious, pulseReviewOnly, policy)
 		},
 		"workflow",
 	); err != nil {

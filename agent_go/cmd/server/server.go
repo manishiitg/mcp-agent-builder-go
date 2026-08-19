@@ -3758,6 +3758,9 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			secretEnvVars["SECRET_"+s.Name] = s.Value
 		}
 		sessionAwareExecutors, workspaceEnv := virtualtools.CreateWorkspaceAdvancedToolExecutorsWithSessionAndEnv(currentUserID, sessionID, secretEnvVars)
+		if mode := validatedWorkflowExecutionMode(req.ExecutionOptions); mode != "" {
+			workspaceEnv["WORKFLOW_EXECUTION_MODE"] = mode
+		}
 		for name, executor := range sessionAwareExecutors {
 			allExecutors[name] = executor
 		}
@@ -9064,6 +9067,9 @@ func (api *StreamingAPI) buildWorkshopConfig(
 		secretEnvVars["SECRET_"+s.Name] = s.Value
 	}
 	sessionAwareExecutors, workspaceEnv := virtualtools.CreateWorkspaceAdvancedToolExecutorsWithSessionAndEnv(currentUserID, sessionID, secretEnvVars)
+	if mode := validatedWorkflowExecutionMode(req.ExecutionOptions); mode != "" {
+		workspaceEnv["WORKFLOW_EXECUTION_MODE"] = mode
+	}
 	for name, executor := range sessionAwareExecutors {
 		allExecutors[name] = executor
 	}
@@ -9224,7 +9230,7 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 			}
 			return sb.String(), nil
 		},
-		CreateSchedule: func(ctx context.Context, workspacePath, name, cronExpr, timezone string, groupNames []string, routeSelections map[string]string, mode string, messages []string, directMessagesReason string, workshopMode string, resumePrevious *bool, pulseReviewOnly bool) (string, error) {
+		CreateSchedule: func(ctx context.Context, workspacePath, name, cronExpr, timezone string, groupNames []string, routeSelections map[string]string, mode string, messages []string, directMessagesReason string, workshopMode string, resumePrevious *bool, pulseReviewOnly bool, policy todo_creation_human.ScheduleRuntimePolicy) (string, error) {
 			mode = scheduleModeOrDefault(mode)
 			if mode == "multi-agent" {
 				return "", fmt.Errorf("workflow schedules must use workflow mode")
@@ -9266,8 +9272,21 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 				WorkshopMode:         workshopMode,
 				ResumePrevious:       resumePrevious,
 				PulseReviewOnly:      pulseReviewOnly,
+				ExecutionMode:        strings.TrimSpace(policy.ExecutionMode),
+				CollisionPolicy:      strings.TrimSpace(policy.CollisionPolicy),
+				MaxStartDelayMinutes: policy.MaxStartDelayMinutes,
+				AfterScheduleID:      strings.TrimSpace(policy.AfterScheduleID),
+				AfterTerminalStatus:  strings.TrimSpace(policy.AfterTerminalStatus),
+				AfterDelayMinutes:    policy.AfterDelayMinutes,
+				DependencyDeadline:   strings.TrimSpace(policy.DependencyDeadline),
+			}
+			if err := validateScheduleRuntimePolicy(newSched); err != nil {
+				return "", err
 			}
 			manifest.Schedules = append(manifest.Schedules, newSched)
+			if err := ValidateManifest(manifest); err != nil {
+				return "", err
+			}
 			if err := WriteWorkflowManifest(ctx, workspacePath, manifest); err != nil {
 				return "", fmt.Errorf("failed to write manifest: %w", err)
 			}
@@ -9354,7 +9373,7 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 			}
 			return result, nil
 		},
-		UpdateSchedule: func(ctx context.Context, jobID, name, cronExpr, timezone string, groupNames []string, setGroupNames bool, routeSelections map[string]string, setRouteSelections bool, enabled *bool, mode string, messages []string, setMessages bool, directMessagesReason *string, workshopMode string, resumePrevious *bool, pulseReviewOnly *bool) (string, error) {
+		UpdateSchedule: func(ctx context.Context, jobID, name, cronExpr, timezone string, groupNames []string, setGroupNames bool, routeSelections map[string]string, setRouteSelections bool, enabled *bool, mode string, messages []string, setMessages bool, directMessagesReason *string, workshopMode string, resumePrevious *bool, pulseReviewOnly *bool, policy *todo_creation_human.ScheduleRuntimePolicy) (string, error) {
 			if cronExpr != "" {
 				if err := ValidateCronExpression(cronExpr); err != nil {
 					return "", fmt.Errorf("invalid cron expression %q: %w", cronExpr, err)
@@ -9427,6 +9446,32 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 			if pulseReviewOnly != nil {
 				sched.PulseReviewOnly = *pulseReviewOnly
 			}
+			if policy != nil {
+				if policy.SetExecutionMode {
+					sched.ExecutionMode = strings.TrimSpace(policy.ExecutionMode)
+				}
+				if policy.SetCollisionPolicy {
+					sched.CollisionPolicy = strings.TrimSpace(policy.CollisionPolicy)
+				}
+				if policy.SetMaxStartDelayMinutes {
+					sched.MaxStartDelayMinutes = policy.MaxStartDelayMinutes
+				}
+				if policy.SetAfterScheduleID {
+					sched.AfterScheduleID = strings.TrimSpace(policy.AfterScheduleID)
+				}
+				if policy.SetAfterTerminalStatus {
+					sched.AfterTerminalStatus = strings.TrimSpace(policy.AfterTerminalStatus)
+				}
+				if policy.SetAfterDelayMinutes {
+					sched.AfterDelayMinutes = policy.AfterDelayMinutes
+				}
+				if policy.SetDependencyDeadline {
+					sched.DependencyDeadline = strings.TrimSpace(policy.DependencyDeadline)
+				}
+				if err := validateScheduleRuntimePolicy(*sched); err != nil {
+					return "", err
+				}
+			}
 			// PLAT-115: a PulseReviewOnly schedule carries no GroupNames — same
 			// reason CreateSchedule skips the group-name requirement for it.
 			if !sched.PulseReviewOnly {
@@ -9435,6 +9480,9 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 					return "", err
 				}
 				sched.GroupNames = validGroupNames
+			}
+			if err := ValidateManifest(manifest); err != nil {
+				return "", err
 			}
 			if err := WriteWorkflowManifest(ctx, workspacePath, manifest); err != nil {
 				return "", fmt.Errorf("failed to write manifest: %w", err)

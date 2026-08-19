@@ -530,7 +530,10 @@ interface ChatState extends StoreActions {
   // Loading states
   isLoadingHistory: boolean
   isApprovingWorkflow: boolean
-  isRestoringWorkflowSessions: boolean
+  // Restore ownership is session-scoped. A single global boolean made an
+  // unrelated workflow switch replace the active chat with a restore screen.
+  // Counts make overlapping hydrations for the same session race-safe.
+  restoringWorkflowSessions: Record<string, number>
   
   // Session management
   sessionState: 'loading' | 'active' | 'completed' | 'not_found' | 'error'
@@ -624,7 +627,8 @@ interface ChatState extends StoreActions {
   // Loading actions
   setIsLoadingHistory: (loading: boolean) => void
   setIsApprovingWorkflow: (loading: boolean) => void
-  setIsRestoringWorkflowSessions: (restoring: boolean) => void
+  beginWorkflowSessionRestore: (sessionId: string) => void
+  endWorkflowSessionRestore: (sessionId: string) => void
   
   // Session management actions
   setSessionState: (state: 'loading' | 'active' | 'completed' | 'not_found' | 'error') => void
@@ -868,7 +872,7 @@ export const useChatStore = create<ChatState>()(
       isCompleted: false,
       isLoadingHistory: false,
       isApprovingWorkflow: false,
-      isRestoringWorkflowSessions: false,
+      restoringWorkflowSessions: {},
       sessionState: 'loading',
       isCheckingActiveSessions: false,
       currentWorkflowPhase: 'planning' as WorkflowPhase,
@@ -1421,8 +1425,32 @@ export const useChatStore = create<ChatState>()(
         set({ isApprovingWorkflow: loading })
       },
 
-      setIsRestoringWorkflowSessions: (restoring) => {
-        set({ isRestoringWorkflowSessions: restoring })
+      beginWorkflowSessionRestore: (sessionId) => {
+        if (!sessionId) return
+        set((state) => ({
+          restoringWorkflowSessions: {
+            ...state.restoringWorkflowSessions,
+            [sessionId]: (state.restoringWorkflowSessions[sessionId] ?? 0) + 1,
+          },
+        }))
+      },
+
+      endWorkflowSessionRestore: (sessionId) => {
+        if (!sessionId) return
+        set((state) => {
+          const current = state.restoringWorkflowSessions[sessionId] ?? 0
+          if (current <= 1) {
+            const next = { ...state.restoringWorkflowSessions }
+            delete next[sessionId]
+            return { restoringWorkflowSessions: next }
+          }
+          return {
+            restoringWorkflowSessions: {
+              ...state.restoringWorkflowSessions,
+              [sessionId]: current - 1,
+            },
+          }
+        })
       },
 
       // Session management actions
@@ -1960,7 +1988,7 @@ export const useChatStore = create<ChatState>()(
           isCompleted: false,
           isLoadingHistory: false,
           isApprovingWorkflow: false,
-          isRestoringWorkflowSessions: false,
+          restoringWorkflowSessions: {},
           sessionState: 'loading',
           isCheckingActiveSessions: false,
           currentWorkflowPhase: 'planning' as WorkflowPhase,

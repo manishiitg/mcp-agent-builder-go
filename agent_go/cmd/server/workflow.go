@@ -697,6 +697,23 @@ type ExecutionOptions struct {
 
 	// Workshop mode override (builder/optimizer/runner) — sent from frontend toggle
 	WorkshopMode string `json:"workshop_mode,omitempty"`
+
+	// ExecutionMode is a backend-validated schedule operating mode propagated
+	// to workflow tools as WORKFLOW_EXECUTION_MODE. It is not a free-form user
+	// environment variable.
+	ExecutionMode string `json:"execution_mode,omitempty"`
+}
+
+func validatedWorkflowExecutionMode(options *ExecutionOptions) string {
+	if options == nil {
+		return ""
+	}
+	switch strings.TrimSpace(options.ExecutionMode) {
+	case "close_only":
+		return "close_only"
+	default:
+		return ""
+	}
 }
 
 // AgentLLMConfig represents LLM configuration for an agent (matches controller type)

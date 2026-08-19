@@ -640,10 +640,10 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
   const lastProcessedEventIndexRef = useRef<Map<string, number>>(new Map())
   // Store pending query to submit after ChatArea mounts
   const pendingQueryRef = useRef<{ query: string; executionOptions?: ExecutionOptions } | null>(null)
-  // Loading state for session restoration (shown between chat tabs and chat area).
-  // Lifted into useChatStore so ChatArea can render an in-panel spinner during restore.
-  const isRestoringWorkflowSessions = useChatStore(state => state.isRestoringWorkflowSessions)
-  const setIsRestoringWorkflowSessions = useChatStore(state => state.setIsRestoringWorkflowSessions)
+  const isActiveWorkflowSessionRestoring = useChatStore(state => {
+    const tab = state.activeTabId ? state.chatTabs[state.activeTabId] : undefined
+    return !!tab?.sessionId && (state.restoringWorkflowSessions[tab.sessionId] ?? 0) > 0
+  })
   // Kill-and-start confirmation when "+ new chat" hits a running workflow session.
   // Holds the session ID(s) to stop and a human-readable description for the dialog.
   const [killAndStartState, setKillAndStartState] = useState<{
@@ -668,14 +668,6 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
     setShowWorkspacePane(true)
     setFocusedPane('chat')
   }, [setFocusedPane, setShowChatArea, setShowWorkspacePane])
-  useEffect(() => {
-    if (!isRestoringWorkflowSessions) return
-    const timeout = window.setTimeout(() => {
-      console.warn('[WorkflowReconnect] Restore indicator timed out; clearing stuck restoring state')
-      setIsRestoringWorkflowSessions(false)
-    }, WORKFLOW_RESTORE_TIMEOUT_MS + 2000)
-    return () => window.clearTimeout(timeout)
-  }, [isRestoringWorkflowSessions, setIsRestoringWorkflowSessions])
   // Track the previous preset ID for auto-minimize on preset switch
   const previousPresetIdRef = useRef<string | null>(null)
   const pendingReadOnlyRestoreRef = useRef<{ presetId: string | null; tabId: string } | null>(null)
@@ -755,6 +747,8 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
 
     for (const tab of tabsToHydrate) {
       if (!tab.sessionId) continue
+      const restoreStore = useChatStore.getState()
+      restoreStore.beginWorkflowSessionRestore(tab.sessionId)
       try {
         await withWorkflowRestoreTimeout(
           restoreWorkflowStateFromEvents(tab.sessionId, currentWorkspacePath, true),
@@ -771,6 +765,8 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
         }
       } catch (err) {
         console.warn('[WorkflowReconnect] Failed to rehydrate events for persisted tab', tab.sessionId, err)
+      } finally {
+        useChatStore.getState().endWorkflowSessionRestore(tab.sessionId)
       }
     }
 
@@ -1537,10 +1533,6 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
           tab.sessionId && getTabEvents(tab.sessionId).length === 0
         )
 
-        if (sessionsToActuallyRestore.length > 0 || needsTabHydration) {
-          setIsRestoringWorkflowSessions(true)
-        }
-
         // 3a. Rehydrate events for persisted tabs whose event buffer was lost on refresh.
         if (needsTabHydration) {
           await rehydrateWorkflowTabs(interactiveExistingWorkflowTabs, workspacePath)
@@ -1610,6 +1602,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
             setTabStreaming(tabId, session.isActive)
             useChatStore.getState().setTabCompleted(tabId, !session.isActive)
           } else if (shouldHydrateWorkflowEvents) {
+            useChatStore.getState().beginWorkflowSessionRestore(session.sessionId)
             try {
               await restoreWorkflowStateFromEvents(session.sessionId)
               if (session.isActive || session.status === 'running') {
@@ -1617,6 +1610,8 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
               }
             } catch (err) {
               console.warn('[WorkflowReconnect] Failed to load events for', session.sessionId, err)
+            } finally {
+              useChatStore.getState().endWorkflowSessionRestore(session.sessionId)
             }
           } else {
             setTabStreaming(tabId, session.isActive || session.status === 'running')
@@ -1679,14 +1674,12 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
         }
       } catch (error) {
         console.warn('[WorkflowReconnect] Failed to reconnect workflow tabs:', error)
-      } finally {
-        setIsRestoringWorkflowSessions(false)
       }
     }
 
     const timeoutId = setTimeout(reconnectWorkflowTabs, 500)
     return () => clearTimeout(timeoutId)
-  }, [activePresetId, workspacePath, setShowChatArea, setIsRestoringWorkflowSessions, rehydrateWorkflowTabs, createFreshWorkflowBuilderTab])
+  }, [activePresetId, workspacePath, setShowChatArea, rehydrateWorkflowTabs, createFreshWorkflowBuilderTab])
 
   useEffect(() => {
     if (!activePresetId || selectedModeCategory !== 'workflow') return
@@ -1870,10 +1863,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
           tab.sessionId && chatStore.getTabEvents(tab.sessionId).length === 0
         )
         if (needsHydration) {
-          setIsRestoringWorkflowSessions(true)
-          void rehydrateWorkflowTabs(interactiveTabs, workspacePath).finally(() => {
-            setIsRestoringWorkflowSessions(false)
-          })
+          void rehydrateWorkflowTabs(interactiveTabs, workspacePath)
         }
       } else {
         console.log(`[WorkflowLayout] No tabs for new preset, clearing activeTabId`)
@@ -1890,7 +1880,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
       // Update the ref for non-preset-change re-fires (dep changes only)
       previousPresetIdRef.current = activePresetId
     }
-  }, [activePresetId, minimizeWorkflow, selectedRunFolder, setShowChatArea, setIsRestoringWorkflowSessions, rehydrateWorkflowTabs, createFreshWorkflowBuilderTab, workspacePath, revealWorkflowChat])
+  }, [activePresetId, minimizeWorkflow, selectedRunFolder, setShowChatArea, rehydrateWorkflowTabs, createFreshWorkflowBuilderTab, workspacePath, revealWorkflowChat])
 
   // Note: Query submission is now handled via chatAreaCallbackRef when ChatArea mounts
   // No need for useEffect with setTimeout - callback ref is the proper React pattern
@@ -2200,7 +2190,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
             {/* WorkflowChatTabs now renders inline in the WorkflowToolbar (chatTabsSlot
                 on canvasElement above) so the tabs + status + tools share one bar. */}
 
-            {isRestoringWorkflowSessions && (
+            {isActiveWorkflowSessionRestoring && (
               <div className="flex items-center gap-2 border-b border-blue-100 bg-blue-50 px-3 py-1.5 dark:border-blue-800/50 dark:bg-blue-900/20">
                 <div className="h-3 w-3 animate-spin rounded-full border-2 border-gray-300 border-t-blue-600 dark:border-gray-600 dark:border-t-blue-400"></div>
                 <span className="text-xs text-blue-600 dark:text-blue-400">Restoring previous session...</span>

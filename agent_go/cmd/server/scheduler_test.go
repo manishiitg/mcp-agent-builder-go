@@ -222,6 +222,154 @@ func TestPulseAndWorkflowScheduleUseSeparateDurableLanes(t *testing.T) {
 	}
 }
 
+func TestDurableScheduleRunProjectionRecoversCompletedRun(t *testing.T) {
+	store, err := schedulerstate.Open(filepath.Join(t.TempDir(), "schedule-state.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	now := time.Now().UTC()
+	run := schedulerstate.Run{
+		RunID: "run-completed", ScopeType: "workflow", ScopeID: "Workflow/demo",
+		LockKey: "workflow:Workflow/demo", ScheduleID: "daily", StartedAt: now,
+	}
+	if err := store.BeginRun(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ForceTerminal(context.Background(), schedulerstate.Transition{
+		RunID: run.RunID, To: schedulerstate.StateCompleted, Reason: "terminal receipt persisted", At: now.Add(time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewSchedulerService(nil)
+	svc.stateStore = store
+	status, errMsg, completedAt, ok := svc.durableScheduleRunProjection(context.Background(), run.RunID)
+	if !ok || status != "success" || errMsg != "" || completedAt == nil {
+		t.Fatalf("projection = status=%q error=%q completed=%v ok=%t", status, errMsg, completedAt, ok)
+	}
+}
+
+func TestRecordOrQueueBlockedScheduleRetainsLatestOccurrence(t *testing.T) {
+	store, err := schedulerstate.Open(filepath.Join(t.TempDir(), "schedule-state.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	svc := NewSchedulerService(nil)
+	svc.stateStore = store
+	sctx := buildScheduleContext("Workflow/demo", &WorkflowManifest{ID: "demo"}, WorkflowSchedule{
+		ID: "daily", CollisionPolicy: "queue_latest", MaxStartDelayMinutes: 30,
+	})
+	first := time.Now().UTC()
+	sctx.ScheduledFor = first
+	if !svc.recordOrQueueBlockedSchedule(context.Background(), sctx, "busy", first) {
+		t.Fatal("first occurrence was not queued")
+	}
+	second := first.Add(5 * time.Minute)
+	sctx.ScheduledFor = second
+	if !svc.recordOrQueueBlockedSchedule(context.Background(), sctx, "still busy", second) {
+		t.Fatal("second occurrence was not queued")
+	}
+	rows, err := store.ListPendingOccurrences(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || !rows[0].ScheduledFor.Equal(second) {
+		t.Fatalf("queue_latest rows = %+v, want one occurrence at %s", rows, second)
+	}
+}
+
+func TestScheduleDependencyDispositionUsesMatchingOccurrenceAndPolicy(t *testing.T) {
+	newFixture := func(t *testing.T, terminal schedulerstate.State) (*SchedulerService, *ScheduleContext, time.Time, time.Time) {
+		t.Helper()
+		store, err := schedulerstate.Open(filepath.Join(t.TempDir(), "schedule-state.sqlite"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = store.Close() })
+		svc := NewSchedulerService(nil)
+		svc.stateStore = store
+
+		location, err := time.LoadLocation("America/New_York")
+		if err != nil {
+			t.Fatal(err)
+		}
+		parentOccurrence := time.Date(2026, 8, 19, 15, 55, 0, 0, location).UTC()
+		dependentOccurrence := time.Date(2026, 8, 19, 16, 10, 0, 0, location).UTC()
+		parent := schedulerstate.Run{
+			RunID: "close-run", ScopeType: "workflow", ScopeID: "Workflow/trading",
+			LockKey: "workflow:Workflow/trading", ScheduleID: "market-close", TriggerSource: "cron",
+			ScheduledFor: parentOccurrence, StartedAt: parentOccurrence,
+		}
+		if err := store.BeginRun(context.Background(), parent); err != nil {
+			t.Fatal(err)
+		}
+		for _, state := range []schedulerstate.State{schedulerstate.StateWorkflowRunning, schedulerstate.StateWorkflowFinished, terminal} {
+			if err := store.Transition(context.Background(), schedulerstate.Transition{
+				RunID: parent.RunID, To: state, At: parentOccurrence.Add(20 * time.Minute),
+			}); err != nil {
+				t.Fatalf("transition to %s: %v", state, err)
+			}
+		}
+		if err := store.RecordFireDecision(context.Background(), schedulerstate.FireDecision{
+			DecisionID: "close-fire", ScopeType: "workflow", ScopeID: "Workflow/trading",
+			ScheduleID: "market-close", TriggerSource: "cron", Decision: "started", RunID: parent.RunID,
+			ScheduledFor: parentOccurrence, FiredAt: parentOccurrence,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		manifest := &WorkflowManifest{ID: "trading"}
+		sctx := buildScheduleContext("Workflow/trading", manifest, WorkflowSchedule{
+			ID: "daily-pulse", Timezone: "America/New_York", AfterScheduleID: "market-close",
+		})
+		sctx.ScheduledFor = dependentOccurrence
+		return svc, sctx, parentOccurrence.Add(20 * time.Minute), dependentOccurrence
+	}
+
+	t.Run("completed parent releases the dependent occurrence", func(t *testing.T) {
+		svc, sctx, completedAt, _ := newFixture(t, schedulerstate.StateCompleted)
+		got, reason := svc.scheduleDependencyDisposition(context.Background(), sctx, completedAt.Add(time.Second))
+		if got != scheduleDependencyReady {
+			t.Fatalf("disposition=%v reason=%q, want ready", got, reason)
+		}
+	})
+
+	t.Run("failed parent is visible and blocked by completed-only policy", func(t *testing.T) {
+		svc, sctx, completedAt, _ := newFixture(t, schedulerstate.StateFailed)
+		got, reason := svc.scheduleDependencyDisposition(context.Background(), sctx, completedAt.Add(time.Second))
+		if got != scheduleDependencyBlocked || !strings.Contains(reason, "completed is required") {
+			t.Fatalf("disposition=%v reason=%q, want explicit completed-only block", got, reason)
+		}
+	})
+
+	t.Run("any-terminal policy releases after a failed parent", func(t *testing.T) {
+		svc, sctx, completedAt, _ := newFixture(t, schedulerstate.StateFailed)
+		sctx.Schedule.AfterTerminalStatus = "any_terminal"
+		got, reason := svc.scheduleDependencyDisposition(context.Background(), sctx, completedAt.Add(time.Second))
+		if got != scheduleDependencyReady {
+			t.Fatalf("disposition=%v reason=%q, want ready", got, reason)
+		}
+	})
+
+	t.Run("configured delay waits from the durable terminal timestamp", func(t *testing.T) {
+		svc, sctx, completedAt, _ := newFixture(t, schedulerstate.StateCompleted)
+		sctx.Schedule.AfterDelayMinutes = 10
+		got, reason := svc.scheduleDependencyDisposition(context.Background(), sctx, completedAt.Add(5*time.Minute))
+		if got != scheduleDependencyWaiting || !strings.Contains(reason, "configured delay") {
+			t.Fatalf("disposition=%v reason=%q, want delay wait", got, reason)
+		}
+	})
+
+	t.Run("deadline expires a dependency that never released", func(t *testing.T) {
+		svc, sctx, _, dependentOccurrence := newFixture(t, schedulerstate.StateCompleted)
+		sctx.Schedule.DependencyDeadline = "16:00"
+		got, reason := svc.scheduleDependencyDisposition(context.Background(), sctx, dependentOccurrence)
+		if got != scheduleDependencyBlocked || !strings.Contains(reason, "deadline") {
+			t.Fatalf("disposition=%v reason=%q, want deadline block", got, reason)
+		}
+	})
+}
+
 func TestStopRunningJobCancelsBeforeSessionStarts(t *testing.T) {
 	store, err := schedulerstate.Open(filepath.Join(t.TempDir(), "schedule-state.sqlite"))
 	if err != nil {
@@ -629,7 +777,7 @@ func TestUpdateScheduleClearsMessagesOnlyWhenExplicitlySet(t *testing.T) {
 
 	t.Run("omitting messages leaves existing messages untouched", func(t *testing.T) {
 		callbacks, currentMessages := setup(t)
-		if _, err := callbacks.UpdateSchedule(context.Background(), "run-schedule", "", "", "", nil, false, nil, false, nil, "", nil, false, nil, "", nil, nil); err != nil {
+		if _, err := callbacks.UpdateSchedule(context.Background(), "run-schedule", "", "", "", nil, false, nil, false, nil, "", nil, false, nil, "", nil, nil, nil); err != nil {
 			t.Fatalf("UpdateSchedule() error = %v", err)
 		}
 		if got := currentMessages(); len(got) != 1 {
@@ -646,7 +794,7 @@ func TestUpdateScheduleClearsMessagesOnlyWhenExplicitlySet(t *testing.T) {
 	// indistinguishable from "omitted".
 	t.Run("explicit empty array clears messages (nil-slice parsing shape)", func(t *testing.T) {
 		callbacks, currentMessages := setup(t)
-		if _, err := callbacks.UpdateSchedule(context.Background(), "run-schedule", "", "", "", nil, false, nil, false, nil, "", nil, true, nil, "", nil, nil); err != nil {
+		if _, err := callbacks.UpdateSchedule(context.Background(), "run-schedule", "", "", "", nil, false, nil, false, nil, "", nil, true, nil, "", nil, nil, nil); err != nil {
 			t.Fatalf("UpdateSchedule() error = %v", err)
 		}
 		if got := currentMessages(); len(got) != 0 {
@@ -660,7 +808,7 @@ func TestUpdateScheduleClearsMessagesOnlyWhenExplicitlySet(t *testing.T) {
 	// UpdateSchedule must trust either way.
 	t.Run("explicit empty array clears messages (non-nil empty-slice parsing shape)", func(t *testing.T) {
 		callbacks, currentMessages := setup(t)
-		if _, err := callbacks.UpdateSchedule(context.Background(), "run-schedule", "", "", "", nil, false, nil, false, nil, "", []string{}, true, nil, "", nil, nil); err != nil {
+		if _, err := callbacks.UpdateSchedule(context.Background(), "run-schedule", "", "", "", nil, false, nil, false, nil, "", []string{}, true, nil, "", nil, nil, nil); err != nil {
 			t.Fatalf("UpdateSchedule() error = %v", err)
 		}
 		if got := currentMessages(); len(got) != 0 {
@@ -670,7 +818,7 @@ func TestUpdateScheduleClearsMessagesOnlyWhenExplicitlySet(t *testing.T) {
 
 	t.Run("explicit null clears messages", func(t *testing.T) {
 		callbacks, currentMessages := setup(t)
-		if _, err := callbacks.UpdateSchedule(context.Background(), "run-schedule", "", "", "", nil, false, nil, false, nil, "", nil, true, nil, "", nil, nil); err != nil {
+		if _, err := callbacks.UpdateSchedule(context.Background(), "run-schedule", "", "", "", nil, false, nil, false, nil, "", nil, true, nil, "", nil, nil, nil); err != nil {
 			t.Fatalf("UpdateSchedule() error = %v", err)
 		}
 		if got := currentMessages(); len(got) != 0 {
@@ -721,7 +869,7 @@ func TestCreateAndUpdatePulseReviewOnlyScheduleSkipsGroupNamesRequirement(t *tes
 	}
 
 	if _, err := callbacks.CreateSchedule(context.Background(), workspacePath, "Periodic Pulse Review", "0 3 * * *", "Asia/Kolkata",
-		nil, nil, "workshop", nil, "", "run", nil, true); err != nil {
+		nil, nil, "workshop", nil, "", "run", nil, true, todo_creation_human.ScheduleRuntimePolicy{}); err != nil {
 		t.Fatalf("CreateSchedule(pulseReviewOnly=true) error = %v, want success without group_names", err)
 	}
 	current := readManifest()
@@ -737,7 +885,7 @@ func TestCreateAndUpdatePulseReviewOnlyScheduleSkipsGroupNamesRequirement(t *tes
 	jobID := current.Schedules[0].ID
 
 	newCron := "0 4 * * *"
-	if _, err := callbacks.UpdateSchedule(context.Background(), jobID, "", newCron, "", nil, false, nil, false, nil, "", nil, false, nil, "", nil, nil); err != nil {
+	if _, err := callbacks.UpdateSchedule(context.Background(), jobID, "", newCron, "", nil, false, nil, false, nil, "", nil, false, nil, "", nil, nil, nil); err != nil {
 		t.Fatalf("UpdateSchedule() on an existing pulse_review_only schedule, changing only cron, error = %v", err)
 	}
 	current = readManifest()

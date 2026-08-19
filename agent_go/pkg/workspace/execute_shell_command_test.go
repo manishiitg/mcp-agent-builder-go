@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -144,6 +146,50 @@ func TestExecuteShellCommand_BlocksRawChromeCDPAccess(t *testing.T) {
 	}
 	if !strings.Contains(result.Stderr, "Raw Chrome CDP access") || !strings.Contains(result.Stderr, "agent_browser") {
 		t.Fatalf("expected actionable raw CDP error, got %q", result.Stderr)
+	}
+}
+
+func TestExecuteShellCommandBlocksRelativeGitBundleDestination(t *testing.T) {
+	client := NewClient("http://127.0.0.1:1")
+	_, err := client.ExecuteShellCommand(context.Background(), ExecuteShellCommandParams{
+		Command:          `git bundle create backup/wf-backup.bundle --all`,
+		WorkingDirectory: "/tmp/workflow",
+	})
+	if err == nil {
+		t.Fatal("expected an in-repository relative bundle destination to be blocked")
+	}
+	if !strings.Contains(err.Error(), "outside the source repository") {
+		t.Fatalf("expected actionable containment error, got %v", err)
+	}
+}
+
+func TestExecuteShellCommandBlocksAbsoluteBundleInsideCanonicalRepo(t *testing.T) {
+	repoRoot := t.TempDir()
+	destination := filepath.Join(repoRoot, "backup", "workflow.bundle")
+	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var params ExecuteShellCommandParams
+		_ = json.NewDecoder(r.Body).Decode(&params)
+		stdout := "ok"
+		if strings.Contains(params.Command, "rev-parse --show-toplevel") {
+			stdout = repoRoot
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"data":    map[string]interface{}{"stdout": stdout, "exit_code": 0},
+		})
+	}))
+	defer server.Close()
+
+	_, err := NewClient(server.URL).ExecuteShellCommand(context.Background(), ExecuteShellCommandParams{
+		Command:          fmt.Sprintf("git bundle create %q --all", destination),
+		WorkingDirectory: repoRoot,
+	})
+	if err == nil || !strings.Contains(err.Error(), "inside source repository") {
+		t.Fatalf("absolute in-repository bundle should be blocked, got %v", err)
 	}
 }
 

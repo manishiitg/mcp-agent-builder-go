@@ -896,9 +896,13 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
 
   // State for session restoration loading
   const [isRestoringChatSessions, setIsRestoringChatSessions] = useState(false)
-  // Workflow-mode restore flag is owned by WorkflowLayout via useChatStore so we can show
-  // an in-panel spinner here while reconnectWorkflowTabs() is replaying events.
-  const isRestoringWorkflowSessions = useChatStore(state => state.isRestoringWorkflowSessions)
+  // Only the active session can put this pane into a restoring state. Other
+  // workflows may hydrate concurrently without blanking the chat the user is
+  // currently reading (PLAT-143).
+  const isRestoringWorkflowSession = useChatStore(state => {
+    const sessionId = activeTab?.sessionId
+    return !!sessionId && (state.restoringWorkflowSessions[sessionId] ?? 0) > 0
+  })
   // A resumed chat sets restoredConversationPath on the tab (cleared by New Chat's
   // resetTabChat). We no longer hard-hide the list on this marker alone — an empty
   // or stale resume (terminal restore that yielded nothing) would otherwise leave a
@@ -3232,7 +3236,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     isReadOnlyRunView,
   })
   const workflowSurface = resolveWorkflowChatSurface({
-    isRestoring: isRestoringWorkflowSessions,
+    isRestoring: isRestoringWorkflowSession,
     resumeSettling: resumePending,
     hasContent: displayEvents.length > 0,
     isStreaming: activeTabStreaming,
