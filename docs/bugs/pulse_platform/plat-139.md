@@ -5,8 +5,8 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `fixed` — root cause confirmed live via a production goroutine dump on a second occurrence (`check-form-26as-xspaces`, same day), fixed in `multi-llm-provider-go@6d8e4e9`. Fail-before/pass-after verified against a hermetic reproduction whose failing stack trace matches the production dump exactly, not a guess |
-| Last synchronized | `2026-08-18` |
+| Ticket state | `fixed` — but the ORIGINAL diagnosis in this ticket was wrong and is corrected inline (see the ⚠️ CORRECTION block). The stderr-pipe defect it found is real and its fix (`multi-llm-provider-go@6d8e4e9`) is retained, but it did not explain this incident: pi's process was NOT gone, it was alive and failing to exit. Real cause and fix: the deleted `agent_settled` teardown, restored in `multi-llm-provider-go@3d9bcc6` |
+| Last synchronized | `2026-08-19` |
 
 - **Priority:** P1 — a genuinely successful run reports as stuck/never-completing
   and holds its caller indefinitely. Unattended paths (Pulse, schedules,
@@ -116,7 +116,7 @@ Structured *completion* is covered specifically: each provider's
 one completed and its process exited — so a genuine structured hang would fail
 it. All four P0 enforcement tests pass.
 
-## Root cause, confirmed live (2026-08-18, same day)
+## First root-cause attempt, confirmed live (2026-08-18) — real defect, WRONG incident
 
 A second occurrence — `check-form-26as-xspaces`, `tax-retrieval-sequence` step,
 session `c2cf7954-e686-4a18-818b-3730c56884cf` — reproduced the same shape
@@ -125,7 +125,9 @@ while the server was still running: real work had completed (form 26AS PDFs,
 session's own completion signal fired correctly at 19:43:26
 (`[RETAINED_TURN] Settled retained main-agent turn from structured
 unified_completion event ... state=completed`), and nothing progressed for
-the next ~13 minutes with no live `pi` process anywhere on the machine.
+the next ~13 minutes with, it was believed, no live `pi` process anywhere on
+the machine. **That last part was false** — see the CORRECTION below; the
+search used could not match pi, which runs as `COMM=pi`.
 
 Rather than theorize again, a **production goroutine dump** was pulled via
 the already-registered pprof endpoint
@@ -158,10 +160,58 @@ process is reaped. This morning's entire investigation (see PLAT-116's
 the exact same class of risk the whole time and was never examined, because it
 never went through code anyone had reasoned about.
 
-pi's own process was confirmed gone (no PID via `ps`, no zombie/`<defunct>`
-entry) — so this was never "pi is stuck." It was `cmd.Wait()` unable to
-determine that, because it was waiting on an internal pipe that nothing had a
-handle to close.
+**⚠️ CORRECTION (2026-08-19): the sentence that used to sit here was wrong, and
+it was load-bearing for this ticket's conclusion.** It read:
+
+> *"pi's own process was confirmed gone (no PID via `ps`, no zombie/`<defunct>`
+> entry) — so this was never 'pi is stuck.'"*
+
+pi's process was **not** confirmed gone. That check was
+`ps aux | grep -E "[n]ode.*pi"`, which cannot match: **pi runs as `COMM=pi`,
+not as a node process.** The search was incapable of finding what it claimed
+was absent, so "no PID" was an artifact of the query, not a fact about the
+system.
+
+Verified the correct way on 2026-08-19 — listing the server's actual children
+(`ps -eo pid,ppid,stat,etime,comm | awk '$2==<server pid>'`) — during a live
+recurrence:
+
+```
+  PID   PPID  STAT   ELAPSED  COMM
+ 4697  91384  S        27:49  pi     <- matched the "24m0s" stall warning
+96976  91384  S      01:05:38  pi    <- matched the "1h1m30s" stall warning
+```
+
+Both alive, elapsed times matching the stall warnings almost exactly, **zero
+zombies**. So `cmd.Wait()` was blocked in `syscall.Wait4` for the correct
+reason: the child genuinely was still running. This was "pi is stuck" after
+all — the exact reading this ticket ruled out.
+
+The stderr-pipe defect described above is real and the fix for it is correct
+and retained. What is wrong is the claim that it explained *this* incident.
+
+The actual mechanism, established on 2026-08-19: pi finishes its work and then
+fails to **exit**. Its print mode returns without `process.exit()` and relies on
+Node's event loop draining, and pi's own source warns that extensions can keep
+a one-shot command alive. The MCP extension spawns `mcpbridge`, whose live
+process handle keeps that loop from draining, while `mcpbridge` sits waiting on
+a stdin pi never closes (mcp-go's stdio server does exit on EOF, so it is
+genuinely waiting, not broken). Neither side breaks the deadlock. Confirmed on
+the live processes above: idle, each with a live `mcpbridge` child, and **no
+open network sockets** — so not waiting on the model API either.
+
+The mechanism that breaks it is the `agent_settled` teardown
+(`GracefulAfterNaturalExit`, 3s grace), which had been deleted from the pi
+adapter and is restored in `multi-llm-provider-go@3d9bcc6`. Killing a stuck pi
+by hand has the same effect — `cmd.Wait()` unblocks and the held run completes
+instead of hanging — which is what the teardown now does automatically.
+
+Not pi-specific in mechanism: `claudecode` (`:366` on `result`), `codexcli`
+(`:316` on `turn.completed`) and `cursorcli` (`:578` on `result`) all arm the
+same teardown on their own terminal events and were untouched. Only pi's copy
+had been removed, which is why only pi hung — across both
+`check-form-26as-xspaces` and `ICICI-BANK-PARSING-v2` (171 and 81 stall
+warnings respectively), one bug rather than two.
 
 **Fixed** in `multi-llm-provider-go@6d8e4e9`: switched to `cmd.StderrPipe()`,
 symmetric to stdout — the adapter now owns the pipe, and `os/exec` auto-closes
@@ -240,12 +290,18 @@ unresolved. For the next occurrence, capture before restarting anything:
 ## Acceptance
 
 - [x] The stall is explained by evidence from a real occurrence, not by
-  theory — a production goroutine dump, and a hermetic test whose
-  pre-fix failure produces the identical stack trace.
-- [x] The layer responsible (`cmd.Wait()` blocked on an internally-owned
-  stderr pipe) either completes or logs clearly instead of holding its
-  caller indefinitely and silently — `cmd.StderrPipe()` fix plus periodic
-  stall logging, `multi-llm-provider-go@6d8e4e9`.
+  theory. NOTE: satisfied only on the second attempt. The first explanation
+  (stderr pipe) came with a goroutine dump and a matching hermetic test and
+  was still wrong about THIS incident, because one input to it — "pi's
+  process is gone" — was never checked with a query capable of finding pi.
+  Evidence being real does not make the conclusion right if a premise is
+  false.
+- [x] The layer responsible either completes or logs clearly instead of
+  holding its caller indefinitely and silently — the `agent_settled` teardown
+  restored in `@3d9bcc6` (the mechanism that actually ends a stuck pi), plus
+  the `cmd.StderrPipe()` fix in `@6d8e4e9` (a real, separate defect), plus
+  stall logging that now records the pid and whether the terminal event was
+  seen (`@000b917`) so the two cases cannot be confused again.
 - [ ] A run whose work genuinely finished never reports as permanently
   `running` — not addressed here; `run_metadata.json` freezing at
   `"status": "running"` on a swallowed terminal write is PLAT-116's
