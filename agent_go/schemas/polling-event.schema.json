@@ -5791,6 +5791,9 @@
         "tool_call_id": {
           "type": "string"
         },
+        "synthetic_settle": {
+          "type": "boolean"
+        },
         "context_usage_percent": {
           "type": "number"
         },

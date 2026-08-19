@@ -240,11 +240,18 @@ const GenericToolCallEndEventDisplay: React.FC<ToolCallEndEventProps> = ({ event
 
   const theme = isRetrieval ? 'blue' : 'green'
 
-  const bgColor = isError ? 'bg-red-50 dark:bg-red-950/25' : theme === 'blue' ? 'bg-blue-50 dark:bg-blue-900/20' : 'bg-green-50 dark:bg-green-900/20'
-  const borderColor = isError ? 'border-red-300 dark:border-red-800' : theme === 'blue' ? 'border-blue-200 dark:border-blue-800' : 'border-green-200 dark:border-green-800'
-  const textColor = isError ? 'text-red-700 dark:text-red-300' : theme === 'blue' ? 'text-blue-700 dark:text-blue-300' : 'text-green-700 dark:text-green-300'
-  const textSecondaryColor = isError ? 'text-red-600 dark:text-red-400' : theme === 'blue' ? 'text-blue-600 dark:text-blue-400' : 'text-green-600 dark:text-green-400'
-  const hoverBgColor = isError ? 'hover:bg-red-100 dark:hover:bg-red-900/40' : theme === 'blue' ? 'hover:bg-blue-200 dark:hover:bg-blue-800' : 'hover:bg-green-200 dark:hover:bg-green-800'
+  // A synthetic settle is the platform closing a chip whose tool call never
+  // reported an end (PLAT-141) — not a completion the provider actually sent.
+  // It gets neutral grey rather than success green: the tool may well have
+  // succeeded, but nothing here observed that, and painting it green asserts
+  // an outcome no one measured. Red would be equally wrong — nothing failed.
+  const isSyntheticSettle = event.synthetic_settle === true
+
+  const bgColor = isError ? 'bg-red-50 dark:bg-red-950/25' : isSyntheticSettle ? 'bg-gray-50 dark:bg-gray-800/40' : theme === 'blue' ? 'bg-blue-50 dark:bg-blue-900/20' : 'bg-green-50 dark:bg-green-900/20'
+  const borderColor = isError ? 'border-red-300 dark:border-red-800' : isSyntheticSettle ? 'border-gray-300 dark:border-gray-700' : theme === 'blue' ? 'border-blue-200 dark:border-blue-800' : 'border-green-200 dark:border-green-800'
+  const textColor = isError ? 'text-red-700 dark:text-red-300' : isSyntheticSettle ? 'text-gray-700 dark:text-gray-300' : theme === 'blue' ? 'text-blue-700 dark:text-blue-300' : 'text-green-700 dark:text-green-300'
+  const textSecondaryColor = isError ? 'text-red-600 dark:text-red-400' : isSyntheticSettle ? 'text-gray-500 dark:text-gray-400' : theme === 'blue' ? 'text-blue-600 dark:text-blue-400' : 'text-green-600 dark:text-green-400'
+  const hoverBgColor = isError ? 'hover:bg-red-100 dark:hover:bg-red-900/40' : isSyntheticSettle ? 'hover:bg-gray-100 dark:hover:bg-gray-700' : theme === 'blue' ? 'hover:bg-blue-200 dark:hover:bg-blue-800' : 'hover:bg-green-200 dark:hover:bg-green-800'
 
   // Single-line layout following design guidelines
   return (
@@ -254,12 +261,19 @@ const GenericToolCallEndEventDisplay: React.FC<ToolCallEndEventProps> = ({ event
         <div className="flex items-center gap-3 min-w-0 flex-1">
           <div className="min-w-0 flex-1">
             <div className={`text-sm font-medium ${textColor} flex items-center gap-2`}>
-              {isError ? '✗ Tool Call Failed' : 'Tool Call End'}{' '}
+              {isError ? '✗ Tool Call Failed' : isSyntheticSettle ? 'Tool Call — no result reported' : 'Tool Call End'}{' '}
               <span className={`text-xs font-normal ${textSecondaryColor}`}>
-                {event.turn != null && `• Turn: ${event.turn}`}
+                {/* Turn is meaningless on a synthetic settle: the fabricated
+                    event carries no turn number, so it always renders 0. */}
+                {!isSyntheticSettle && event.turn != null && `• Turn: ${event.turn}`}
                 {event.tool_name && ` • Tool: ${event.tool_name}`}
                 {event.server_name && ` • Server: ${event.server_name}`}
-                {event.duration != null && ` • Duration: ${formatDuration(event.duration)}`}
+                {/* On a synthetic settle this is open-to-settle time, NOT how
+                    long the tool ran — labelling it "Duration" told readers the
+                    tools were slow when nothing had measured that. */}
+                {event.duration != null && (isSyntheticSettle
+                  ? ` • Open for: ${formatDuration(event.duration)} (not tool runtime)`
+                  : ` • Duration: ${formatDuration(event.duration)}`)}
               </span>
               {/* Context completion indicator */}
               {contextUsagePercent !== undefined && contextUsagePercent > 0 && (

@@ -1817,6 +1817,11 @@ func (es *EventStore) settleOpenToolCalls(sessionID string, turnEnd Event, stuck
 					ToolCallID: id,
 					Duration:   duration,
 					Result:     result,
+					// Duration here is open-to-settle, not tool runtime (see the
+					// log line above, which says so verbatim). Flagging it lets a
+					// consumer label it honestly instead of presenting it as a
+					// measured runtime it is not.
+					SyntheticSettle: true,
 				},
 			},
 		})

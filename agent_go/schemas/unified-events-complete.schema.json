@@ -3565,6 +3565,9 @@
         "span_id": {
           "type": "string"
         },
+        "synthetic_settle": {
+          "type": "boolean"
+        },
         "timestamp": {
           "format": "date-time",
           "type": "string"
