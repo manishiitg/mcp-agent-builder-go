@@ -33,10 +33,6 @@ const (
 	TierSelectionRequiredKey subAgentContextKey = "tier_selection_required"
 	// SubAgentLLMContextKey is the context key for direct LLM override for sub-agents (works in both tiered and manual modes)
 	SubAgentLLMContextKey subAgentContextKey = "sub_agent_llm"
-	// SubAgentShareBrowserKey is the context key for controlling browser session isolation in sub-agents
-	SubAgentShareBrowserKey subAgentContextKey = "share_browser"
-	// SubAgentIsolatedSessionIDKey is the context key for the isolated MCP session ID (set when share_browser=false)
-	SubAgentIsolatedSessionIDKey subAgentContextKey = "isolated_session_id"
 	// SubAgentMessageSequenceRestartKey is the context key for forcing a message_sequence route to start fresh.
 	SubAgentMessageSequenceRestartKey subAgentContextKey = "message_sequence_restart"
 	// GenericAgentMessageSequenceKey carries optional ordered follow-up turns for
@@ -53,9 +49,9 @@ const (
 )
 
 // GetSubAgentConversationFunc is the function signature for retrieving sub-agent conversation history.
-// todoID identifies the sub-agent call, fromLastX is how many entries to return,
+// executionID identifies the exact sub-agent call, fromLastX is how many entries to return,
 // offsetLastX skips that many entries from the tail before applying fromLastX (for paging).
-type GetSubAgentConversationFunc func(ctx context.Context, todoID string, fromLastX, offsetLastX int) (string, error)
+type GetSubAgentConversationFunc func(ctx context.Context, executionID string, fromLastX, offsetLastX int) (string, error)
 
 // QuerySubAgentFunc returns the current state of one execution owned by this orchestrator.
 type QuerySubAgentFunc func(ctx context.Context, executionID string) (string, error)
@@ -116,19 +112,15 @@ func CreateSubAgentTools() []llmtypes.Tool {
 	callSubAgentProperties := map[string]interface{}{
 		"route_id": map[string]interface{}{
 			"type":        "string",
-			"description": "The ID of the predefined route/agent to execute (from the available routes in your context)",
+			"description": "Parent-side selector for the predefined route to execute (from the available routes in your context). The runtime resolves it; do not repeat it inside instructions.",
 		},
 		"todo_id": map[string]interface{}{
 			"type":        "string",
-			"description": "The ID of the todo task this execution is for (for tracking and event emission)",
+			"description": "Existing durable todo ID this execution advances. Used by the parent runtime for task tracking and artifact naming; it is not child task context and should not be repeated inside instructions.",
 		},
 		"instructions": map[string]interface{}{
 			"type":        "string",
 			"description": "Detailed instructions for what the sub-agent should accomplish. Be specific about inputs, expected outputs, and any constraints.",
-		},
-		"share_browser": map[string]interface{}{
-			"type":        "boolean",
-			"description": "Whether the sub-agent shares the parent's agent-browser session or gets an isolated browser. Default: true (shared). Set to false for parallel browsing, different auth contexts, or to avoid state interference.",
 		},
 		"preferred_tier": map[string]interface{}{
 			"type":        "integer",
@@ -159,7 +151,7 @@ func CreateSubAgentTools() []llmtypes.Tool {
 	callGenericAgentProperties := map[string]interface{}{
 		"todo_id": map[string]interface{}{
 			"type":        "string",
-			"description": "The ID of the todo task this execution is for (for tracking and event emission)",
+			"description": "Existing durable todo ID this execution advances. Used by the parent runtime for task tracking and artifact naming; it is not child task context and should not be repeated inside instructions.",
 		},
 		"instructions": map[string]interface{}{
 			"type":        "string",
@@ -179,10 +171,6 @@ func CreateSubAgentTools() []llmtypes.Tool {
 				},
 				"required": []string{"id", "message"},
 			},
-		},
-		"share_browser": map[string]interface{}{
-			"type":        "boolean",
-			"description": "Whether the sub-agent shares the parent's agent-browser session or gets an isolated browser. Default: true (shared). Set to false for parallel browsing, different auth contexts, or to avoid state interference.",
 		},
 	}
 	callGenericAgentProperties["preferred_tier"] = map[string]interface{}{
@@ -252,9 +240,9 @@ func CreateSubAgentTools() []llmtypes.Tool {
 			Parameters: llmtypes.NewParameters(map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
-					"todo_id": map[string]interface{}{
+					"execution_id": map[string]interface{}{
 						"type":        "string",
-						"description": "Required. The task ID that was delegated (e.g. 'task-003').",
+						"description": "Required. The exact execution_id returned by call_sub_agent or call_generic_agent.",
 					},
 					"from_last_x": map[string]interface{}{
 						"type":        "integer",
@@ -265,7 +253,7 @@ func CreateSubAgentTools() []llmtypes.Tool {
 						"description": "Optional. Skip this many entries from the tail before applying from_last_x. Use to page backwards. Default 0.",
 					},
 				},
-				"required": []string{"todo_id", "from_last_x"},
+				"required": []string{"execution_id", "from_last_x"},
 			}),
 		},
 	}
@@ -276,7 +264,7 @@ func CreateSubAgentTools() []llmtypes.Tool {
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
 			Name:        "get_route_description",
-			Description: "Get the full description and instructions for a predefined sub-agent route. Call this before delegating to understand what the route does, what instructions to pass, and whether it is a message_sequence route with resume/restart behavior.",
+			Description: "Get details for one predefined route when its short catalog entry is not enough to decide whether or how to use it. Do not call it routinely for an already-clear route.",
 			Parameters: llmtypes.NewParameters(map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -362,10 +350,6 @@ func handleCallSubAgent(ctx context.Context, args map[string]interface{}) (strin
 		ctx = context.WithValue(ctx, PreferredTierContextKey, int(preferredTierF))
 	}
 
-	// Extract share_browser param (defaults to true — shared browser)
-	if sb, ok := args["share_browser"].(bool); ok && !sb {
-		ctx = context.WithValue(ctx, SubAgentShareBrowserKey, false)
-	}
 	if restart, ok := args["message_sequence_restart"].(bool); ok && restart {
 		ctx = context.WithValue(ctx, SubAgentMessageSequenceRestartKey, true)
 	}
@@ -444,11 +428,6 @@ func handleCallGenericAgent(ctx context.Context, args map[string]interface{}) (s
 	}
 	if validTier {
 		ctx = context.WithValue(ctx, PreferredTierContextKey, int(preferredTierF))
-	}
-
-	// Extract share_browser param (defaults to true — shared browser)
-	if sb, ok := args["share_browser"].(bool); ok && !sb {
-		ctx = context.WithValue(ctx, SubAgentShareBrowserKey, false)
 	}
 
 	// Get the execution function from context
@@ -590,11 +569,13 @@ func handleGetRouteDescription(ctx context.Context, args map[string]interface{})
 
 // handleGetSubAgentConversation retrieves the internal conversation of a previous sub-agent call
 func handleGetSubAgentConversation(ctx context.Context, args map[string]interface{}) (string, error) {
-	// Extract todo_id (required)
-	todoID, ok := args["todo_id"].(string)
-	if !ok || todoID == "" {
-		return "", fmt.Errorf("todo_id is required")
+	// Inspect one exact call. A todo can be retried or delegated more than once,
+	// so todo_id is not a unique conversation identity.
+	executionID, ok := args["execution_id"].(string)
+	if !ok || strings.TrimSpace(executionID) == "" {
+		return "", fmt.Errorf("execution_id is required")
 	}
+	executionID = strings.TrimSpace(executionID)
 
 	// Extract from_last_x (required, must be > 0)
 	fromLastXRaw, ok := args["from_last_x"].(float64)
@@ -621,5 +602,5 @@ func handleGetSubAgentConversation(ctx context.Context, args map[string]interfac
 		return "", fmt.Errorf("get_sub_agent_conversation function not available in context - this tool can only be used within a todo task orchestrator after a sub-agent has been called")
 	}
 
-	return getConvFunc(ctx, todoID, fromLastX, offsetLastX)
+	return getConvFunc(ctx, executionID, fromLastX, offsetLastX)
 }

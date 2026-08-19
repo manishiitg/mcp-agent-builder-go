@@ -107,6 +107,9 @@ type PulseReviewFindingInput struct {
 	IssueID string `json:"issue_id,omitempty"`
 	Concern string `json:"concern"`
 	Module  string `json:"module"`
+	// HumanInputID links a decision_required finding to the pending decision
+	// created by the reviewer before filing it.
+	HumanInputID string `json:"human_input_id,omitempty"`
 	PulseFindingDetails
 }
 
@@ -135,6 +138,12 @@ func validateTypedPulseReviewFinding(input PulseReviewFindingInput) (pulseFindin
 	}
 	if marker.IssueKind == IssueKindHarness && (marker.TargetKey == "" || marker.Reproduction.Expected == "" || marker.Reproduction.Observed == "") {
 		return marker, fmt.Errorf("%s requires target_key and reproduction.expected/reproduction.observed", IssueKindHarness)
+	}
+	if marker.RecommendedRoute == pulseFindingRouteDecisionRequired && strings.TrimSpace(input.HumanInputID) == "" {
+		return marker, fmt.Errorf("recommended_route=decision_required requires human_input_id from a pending create_human_input_request; create the decision before filing the finding")
+	}
+	if marker.RecommendedRoute != pulseFindingRouteDecisionRequired && strings.TrimSpace(input.HumanInputID) != "" {
+		return marker, fmt.Errorf("human_input_id is valid only with recommended_route=decision_required")
 	}
 	if isPulseAdvisorModule(marker.Module) {
 		switch marker.RecommendedRoute {
@@ -169,9 +178,16 @@ func RecordPulseReviewFinding(ctx context.Context, workspacePath, pulseRunID, re
 	if err := ensurePulseFindingLifecycleSchema(ctx, db); err != nil {
 		return PulseReviewFindingRecord{}, err
 	}
+	if marker.RecommendedRoute == pulseFindingRouteDecisionRequired {
+		if err := validatePulseReviewDecisionLink(ctx, db, marker.Module, strings.TrimSpace(input.HumanInputID)); err != nil {
+			return PulseReviewFindingRecord{}, err
+		}
+	}
 	observedAt := time.Now().UTC().Format(time.RFC3339Nano)
 	fingerprint := ""
 	stepID := marker.Module
+	promotedObservation := false
+	promotedIssueID := ""
 	if issueID := strings.TrimSpace(input.IssueID); issueID != "" {
 		existing, lookupErr := ResolvePulseFindingIssueID(ctx, workspacePath, issueID)
 		if lookupErr != nil {
@@ -179,6 +195,8 @@ func RecordPulseReviewFinding(ctx context.Context, workspacePath, pulseRunID, re
 		}
 		fingerprint = existing.Fingerprint
 		stepID = existing.StepID
+		promotedObservation = !IsPulseIssue(existing)
+		promotedIssueID = NewPulseIssue(existing).ID
 		// A PUL id is a reference to the existing lifecycle row, never a new
 		// semantic key. Preserve the established stable detail ID when present.
 		if marker.FindingID == "" {
@@ -207,7 +225,39 @@ func RecordPulseReviewFinding(ctx context.Context, workspacePath, pulseRunID, re
 	if err := recordPulseFindingDetailAt(ctx, db, workspacePath, reviewRunID, marker.Module, marker, fingerprint, observedAt); err != nil {
 		return PulseReviewFindingRecord{}, err
 	}
-	findings, loadErr := LoadPulseFindingLifecycles(ctx, workspacePath, marker.Module, -1)
+	if marker.RecommendedRoute == pulseFindingRouteDecisionRequired {
+		issueID := pulseIssueID(PulseFindingLifecycle{Fingerprint: fingerprint})
+		if err := RecordPulseFindingDispositionsTx(ctx, db, marker.Module, pulseRunID, []PulseFindingDisposition{{
+			Fingerprint:  fingerprint,
+			FindingID:    issueID,
+			Disposition:  FindingDispositionAwaitingUser,
+			Summary:      "Waiting for the operator decision linked by the reviewer.",
+			HumanInputID: strings.TrimSpace(input.HumanInputID),
+		}}, ""); err != nil {
+			return PulseReviewFindingRecord{}, err
+		}
+	}
+	if promotedObservation {
+		metadata, _ := json.Marshal(map[string]string{
+			"module":        marker.Module,
+			"review_run_id": reviewRunID,
+		})
+		if _, err := db.ExecContext(ctx, `INSERT INTO pulse_finding_events
+			(fingerprint, finding_id, pulse_run_id, event_type, summary, metadata_json, recorded_at)
+			VALUES (?, ?, ?, 'promoted_to_issue', ?, ?, ?)
+			ON CONFLICT(fingerprint, pulse_run_id, attempt_id, event_type) DO NOTHING`,
+			fingerprint, promotedIssueID, pulseRunID,
+			"Reviewer accepted workflow observation as a canonical Pulse issue.", string(metadata), observedAt); err != nil {
+			return PulseReviewFindingRecord{}, err
+		}
+	}
+	// An issue_id can point at a finding originally raised by a workflow step,
+	// while this observation comes from workflow_review. Reloading through the
+	// current reviewer's module filter hides that legitimate cross-module row
+	// and makes a successful write look like a failure. The fingerprint is
+	// already the exact internal identity, so verify it against the unfiltered
+	// lifecycle view.
+	findings, loadErr := LoadPulseFindingLifecycles(ctx, workspacePath, "", -1)
 	if loadErr != nil {
 		return PulseReviewFindingRecord{}, loadErr
 	}
@@ -217,6 +267,43 @@ func RecordPulseReviewFinding(ctx context.Context, workspacePath, pulseRunID, re
 		}
 	}
 	return PulseReviewFindingRecord{}, fmt.Errorf("recorded Pulse finding could not be reloaded by its internal lifecycle identity")
+}
+
+func pulseReviewDecisionOwnership(module string) (source, prefix string) {
+	switch pulsemodules.Normalize(module) {
+	case pulsemodules.WorkflowReviewID:
+		return "engineering_review", "engineering-decision-"
+	case pulsemodules.LLMOpsReviewID:
+		return "ops_review", "ops-decision-"
+	case pulsemodules.StrategicReviewID:
+		return "strategic_review", "strategic-proposal-"
+	default:
+		return "pulse", "pulse-decision-"
+	}
+}
+
+func validatePulseReviewDecisionLink(ctx context.Context, db pulseFindingLifecycleDB, module, inputID string) error {
+	if strings.TrimSpace(inputID) == "" {
+		return fmt.Errorf("decision_required finding requires human_input_id")
+	}
+	var status, source string
+	if err := db.QueryRowContext(ctx, `SELECT status, COALESCE(source, '') FROM report_human_inputs WHERE id=?`, inputID).Scan(&status, &source); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("decision_required finding references human input %q, which does not exist", inputID)
+		}
+		return err
+	}
+	if status != "pending" {
+		return fmt.Errorf("decision_required finding references human input %q with status %q; the linked decision must still be pending", inputID, status)
+	}
+	expectedSource, expectedPrefix := pulseReviewDecisionOwnership(module)
+	if source != expectedSource {
+		return fmt.Errorf("decision_required %s finding references human input %q with source %q; create it with source=%q", pulsemodules.Normalize(module), inputID, source, expectedSource)
+	}
+	if !strings.HasPrefix(inputID, expectedPrefix) {
+		return fmt.Errorf("decision_required %s finding references human input %q; decision ids for this module must start with %q", pulsemodules.Normalize(module), inputID, expectedPrefix)
+	}
+	return nil
 }
 
 func normalizePulseFindingDetails(details PulseFindingDetails) PulseFindingDetails {

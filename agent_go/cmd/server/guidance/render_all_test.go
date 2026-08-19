@@ -84,12 +84,12 @@ func TestAllGuidanceTemplatesRender(t *testing.T) {
 	}
 }
 
-func TestEngineeringReviewReplacesStandalonePulseFixerCommand(t *testing.T) {
+func TestEngineeringReviewAndPulseFixerAreSeparateCommands(t *testing.T) {
 	if _, ok := allKinds["engineering-review"]; !ok {
 		t.Fatal("engineering-review guidance is not registered")
 	}
-	if _, ok := allKinds["pulse-fixer"]; ok {
-		t.Fatal("retired standalone pulse-fixer guidance is still registered")
+	if _, ok := allKinds["pulse-fixer"]; !ok {
+		t.Fatal("independent pulse-fixer guidance is not registered")
 	}
 }
 
@@ -131,7 +131,7 @@ func TestFocusedScheduledPulseReferencesStayComplete(t *testing.T) {
 		},
 		"pulse-review-fixer": {
 			wants: []string{
-				"exactly once", "durable evidence", "automatic-notification prose", `get_pulse_state(view="backlog")`,
+				"exactly once", "durable evidence", "automatic-notification prose", `get_pulse_state(view="backlog", detail="compact")`,
 				"normal Workflow Builder tools", "terminal", "cannot erase or block other due work", "priority-ordered Fix queue",
 				"one reconciled `ownership_manifest`", "`kb_purity_manifest`", "`db_ownership_manifest`", "Lock recommendations",
 				"proposal_only", "exact non-empty `next_check`", "strategy-proposal-", "final sequence message owns",
@@ -139,7 +139,7 @@ func TestFocusedScheduledPulseReferencesStayComplete(t *testing.T) {
 		},
 		"pulse-finalizer": {
 			wants: []string{
-				"Never treat missing as skipped/successful", "dedicated Dashboard stage", "do not rewrite them",
+				"Never treat missing as skipped/successful", "shown in the Pulse popup", "Do not write a separate presentation artifact",
 				"directly in this parent", "Publish", "Notify", "record_pulse_result",
 			},
 		},
@@ -162,12 +162,16 @@ func TestManualPulseCommandsKeepRunSetupReviewAndFixBoundariesSeparate(t *testin
 	tests := map[string][]string{
 		"pulse-setup": {
 			"Set up recurring workflow runs with dynamic Pulse",
-			"update_workflow_config(post_run_monitor=true)",
 			"Create or update one normal workshop Run-mode schedule",
+			"Create or update one enabled `pulse_review_only` schedule",
 		},
 		"ops-review": {
 			"STANDALONE LLM AND OPERATIONS REVIEW",
 			"must not edit files or config",
+			"Container necessity",
+			"owned children as one execution unit",
+			"fully prescribed child set and order",
+			"not automatically waste",
 			"material goal criterion is below target",
 			"Missing evidence means keep the tier",
 			"before `/engineering-review` can apply them",
@@ -185,11 +189,21 @@ func TestManualPulseCommandsKeepRunSetupReviewAndFixBoundariesSeparate(t *testin
 			"Do not launch `/goal-advisor` automatically",
 		},
 		"engineering-review": {
-			"ENGINEERING AND OPERATIONS REVIEW WITH FIXES",
+			"ENGINEERING AND OPERATIONS REVIEW",
 			"continuing Workflow Builder conversation",
+			`"name":"workflow-commands","path":"references/ops-review.md"`,
+			"Standalone Operations Review",
 			"Own the review yourself",
-			"normal Workflow Builder tools",
-			"one terminal module result for Engineering and one for Operations",
+			"link it to an existing issue, promote it with evidence, or reject it",
+			"Do not apply repairs",
+			"run `/pulse-fixer` next",
+		},
+		"pulse-fixer": {
+			"INDEPENDENT PULSE FIXER",
+			"Do not rerun Engineering",
+			"Workflow observations are evidence",
+			"one highest-value coherent canonical repair objective",
+			"exactly one terminal result for each due Engineering/Operations module",
 		},
 	}
 
@@ -213,8 +227,88 @@ func TestManualPulseCommandsKeepRunSetupReviewAndFixBoundariesSeparate(t *testin
 	// sit here was removed by 0174b6aff "simplify Pulse workflow reviews"
 	// (2026-08-08); goal-advisor no longer mentions manual invocation at all.
 	// The negative invariant below still holds and is still worth keeping.
-	if strings.Contains(advisor, "update_workflow_config(post_run_monitor=true)") {
+	if strings.Contains(advisor, "pulse_review_only=true") {
 		t.Fatal("goal-advisor must not configure recurring Pulse")
+	}
+}
+
+func TestStandaloneOpsReviewRunsDirectlyAndRequiresTypedCompletion(t *testing.T) {
+	raw, err := os.ReadFile("templates/review/ops-review.md")
+	if err != nil {
+		t.Fatalf("read ops-review template: %v", err)
+	}
+	prompt := string(raw)
+	for _, want := range []string{
+		"Perform the review in this current background agent",
+		"record_pulse_finding",
+		"record_pulse_verification",
+		`source="ops_review"`,
+		`human_input_id`,
+		"Never emit `decision_required` without this question",
+		"complete_pulse_review",
+		"modules=[\"llm_ops_review\"]",
+		"returning prose without it leaves",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("standalone ops-review missing direct typed-completion contract %q", want)
+		}
+	}
+	if strings.Contains(prompt, "run_in_background(") || strings.Contains(prompt, "Read the child completion") {
+		t.Fatal("standalone ops-review still delegates to a redundant nested reviewer")
+	}
+}
+
+func TestStandaloneStrategyAuditRunsDirectlyAndRequiresTypedCompletion(t *testing.T) {
+	raw, err := os.ReadFile("templates/review/strategy-auditor.md")
+	if err != nil {
+		t.Fatalf("read strategy-auditor template: %v", err)
+	}
+	prompt := string(raw)
+	for _, want := range []string{
+		"Perform the review in this current background agent",
+		"record_pulse_finding",
+		"record_pulse_verification",
+		"complete_pulse_review",
+		"modules=[\"strategic_review\"]",
+		"returning prose without it leaves",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("standalone strategy audit missing direct typed-completion contract %q", want)
+		}
+	}
+	if strings.Contains(prompt, "run_in_background(") || strings.Contains(prompt, "Read the child completion") {
+		t.Fatal("standalone strategy audit still delegates to a redundant nested reviewer")
+	}
+}
+
+func TestTodoTaskEligibilityStaysConsistentAcrossGuidance(t *testing.T) {
+	canonical, err := renderFromRegistry("design-plan", tmplData{}, allKinds)
+	if err != nil {
+		t.Fatalf("render design-plan: %v", err)
+	}
+	for _, want := range []string{
+		"real runtime orchestration decision",
+		"A fixed child set and order does not justify `todo_task`",
+		"supporting properties after this eligibility gate",
+		"known independent fixed work belongs in explicit plan steps/dependencies",
+	} {
+		if !containsNormalizedText(canonical, want) {
+			t.Fatalf("canonical design-plan guidance missing %q", want)
+		}
+	}
+
+	for _, kind := range []string{"plan-design", "todo-task", "optimize-playbook", "workflow-patterns"} {
+		doc := RenderSystemDoc(kind)
+		if !containsNormalizedText(doc, "fixed child set and order does not justify `todo_task`") {
+			t.Fatalf("%s guidance weakened the canonical fixed-child invariant", kind)
+		}
+	}
+
+	for _, kind := range []string{"todo-task", "optimize-playbook"} {
+		doc := RenderSystemDoc(kind)
+		if !strings.Contains(doc, "already-justified orchestrator") {
+			t.Fatalf("%s scripted fast-path guidance can be mistaken for todo_task eligibility", kind)
+		}
 	}
 }
 
@@ -494,6 +588,9 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 		t.Fatalf("render pulse-fixer-practices: %v", err)
 	}
 	for _, want := range []string{
+		"targeted evidence",
+		"`query_step`/`get_step_prompts`",
+		"Never recursively print an entire",
 		"Separate symptom from root cause",
 		"Map the contract boundary",
 		"Schema and artifact contract repair",
@@ -629,7 +726,7 @@ func TestStrategyAuditorGuidanceRequiresLongitudinalEvidenceAndReadOnlyHandoff(t
 	for _, want := range []string{
 		"Strategic Review is one product/business sequence",
 		"separate ordered sequence with fresh phase contexts",
-		"final sequence message owns the",
+		"final sequence message owns typed",
 		"without inheriting the",
 		"materially different",
 	} {

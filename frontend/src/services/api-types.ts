@@ -387,7 +387,7 @@ export interface ReportHumanInputOption {
 export interface ReportHumanInput {
   id: string
   workspace_path: string
-  source: 'pulse' | 'strategic_review' | 'strategy_auditor' | 'goal_advisor' | string
+  source: 'pulse' | 'engineering_review' | 'ops_review' | 'strategic_review' | 'strategy_auditor' | 'goal_advisor' | string
   priority: 'low' | 'medium' | 'high' | string
   question: string
   context?: string
@@ -676,6 +676,11 @@ export interface PulseIssue {
 export interface PulseFindingLifecycle {
   /** Compact user-facing issue. Remaining fields are lifecycle internals. */
   issue?: PulseIssue
+  /**
+   * `observation` is workflow evidence awaiting reviewer classification;
+   * `issue` has been accepted into Pulse's repair lifecycle.
+   */
+  kind?: 'issue' | 'observation'
   fingerprint: string
   finding_id?: string
   module?: string
@@ -2962,7 +2967,6 @@ export interface WorkflowManifest {
   created_at?: string
   updated_at?: string
   run_retention_count?: number
-  post_run_monitor?: boolean
   pulse?: WorkflowPulseConfig
   backup?: WorkflowBackupConfig
 }
@@ -3033,6 +3037,7 @@ export interface WorkflowScheduleEntry {
   workshop_mode?: 'run' | 'optimizer' | string
   query?: string
   resume_previous?: boolean
+  pulse_review_only?: boolean
 }
 
 export interface DiscoveredWorkflow {
@@ -3069,7 +3074,6 @@ export interface UpdateWorkflowManifestRequest {
   schedules?: WorkflowScheduleEntry[]
   workshop_mode?: string // Standalone patch — avoids zeroing out other execution_defaults fields
   run_retention_count?: number
-  post_run_monitor?: boolean
   run_notification_instructions?: string
   pulse_notification_instructions?: string
   run_notification_channels?: string[]

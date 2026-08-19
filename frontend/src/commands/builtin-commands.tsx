@@ -17,19 +17,36 @@ function submitGuidedWorkflowCommand(
   }
   const guidanceCall = `get_workflow_command_guidance(${args.join(', ')})`
 
-  // Read-only reviews run as a background task so the chat stays responsive. The
-  // parent presents the complete result after the completion notification.
+  // Expensive review/fix passes run as a background task so the chat stays
+  // responsive. completion_mode=present_result is a backend-carried contract:
+  // the synthetic parent turn only presents the returned receipt and must not
+  // repeat the child's Pulse/SQLite/workspace reads.
   if (options.background) {
+    const isFixer = kind === 'pulse-fixer'
+    const taskLabel = isFixer ? 'fix pass' : 'review'
+    const completionContract = isFixer
+      ? 'then present the selected repair objective, changes made, verification proof, lifecycle outcomes, and the remaining canonical queue.'
+      : 'then present a short executive summary followed by every finding and recommendation in severity order. Do not truncate the result to a Top 3.'
     const outputContract = ctx.workshopMode === 'run'
       ? 'Return findings in chat only; do not write or edit any workspace file.'
-      : 'Persist findings, recommendations, decisions, and repairs through the typed Pulse tools required by the returned guidance; do not write a separate review file.'
+      : isFixer
+        ? 'Persist repairs, proof, and lifecycle outcomes through the typed Pulse tools required by the returned guidance; do not write a separate review file.'
+        : 'Persist findings, recommendations, decisions, and verification judgments through the typed Pulse tools required by the returned guidance; do not modify implementation files or write a separate review file.'
     const instruction =
       `Call ${guidanceCall} and follow the returned instructions verbatim. ${outputContract} ` +
       `Treat focus as the request context before the slash command. The tool returns the canonical guided-flow text; do not paraphrase or skip its steps.`
+    const requiredReviewModule = kind === 'ops-review'
+      ? 'llm_ops_review'
+      : kind === 'strategy-auditor'
+        ? 'strategic_review'
+        : null
+    const requiredReviewReceipt = requiredReviewModule
+      ? `, required_pulse_review_modules=[${JSON.stringify(requiredReviewModule)}]`
+      : ''
     ctx.onSubmit(
-      `Run the /${kind} review as a BACKGROUND task so this chat stays responsive. ` +
-      `If the run_in_background tool is available: call run_in_background(name=${JSON.stringify(kind + ' review')}, instruction=${JSON.stringify(instruction)}) and do NOT perform the review yourself this turn — you'll get a completion notification, then present a short executive summary followed by every finding and recommendation in severity order. Do not truncate the result to a Top 3. ` +
-      `If run_in_background is not available, perform the review inline this turn instead.`
+      `Run the /${kind} ${taskLabel} as a BACKGROUND task so this chat stays responsive. ` +
+      `If the run_in_background tool is available: call run_in_background(name=${JSON.stringify(kind + ' ' + taskLabel)}, instruction=${JSON.stringify(instruction)}, completion_mode="present_result"${requiredReviewReceipt}) and do NOT perform the ${taskLabel} yourself this turn — you'll get a presentation-only completion notification, ${completionContract} Do not call tools, reload state, or independently revalidate after that notification. ` +
+      `If run_in_background is not available, perform the ${taskLabel} inline this turn instead.`
     )
     return
   }
@@ -168,7 +185,8 @@ export const builtinCommands: CommandDefinition[] = [
       const focus = ctx.beforeSlash.trim()
       ctx.onSubmit(
         `Consolidate the durable Pulse backlog${focus ? ` with this focus: ${focus}` : ''}. ` +
-        `Load get_pulse_state(view="backlog") first. Work only in the typed Pulse lifecycle: do not edit workflow artifacts, run steps, or create a Markdown report. ` +
+        `Load get_pulse_state(view="backlog", detail="compact") exactly once first. Work only in the typed Pulse lifecycle: do not edit workflow artifacts, run steps, or create a Markdown report. ` +
+        `Request detail="full" only for the bounded issue_ids whose semantic identity is genuinely uncertain; never reload the complete backlog merely to filter it differently. ` +
         `Group issues by semantic root cause, repair owner, and verification boundary—not wording, module, evidence path, or repeated symptom. ` +
         `For each proven duplicate group, call merge_pulse_issues with one canonical PUL issue ID and the duplicate PUL IDs. Do not merge uncertain cases. ` +
         `Then give a compact receipt: active count before and after, duplicates merged, distinct root causes retained, and any ambiguous groups left for a later review.`
@@ -215,7 +233,7 @@ export const builtinCommands: CommandDefinition[] = [
   },
   {
     command: 'engineering-review',
-    description: 'Review Engineering and Ops, then apply and verify safe fixes in one sequence',
+    description: 'Review Engineering and Ops and classify evidence into canonical issues',
     icon: <CheckCircle className="w-4 h-4" />,
     modes: ['workflow'],
     requiredWorkflowMode: 'plan',
@@ -223,7 +241,20 @@ export const builtinCommands: CommandDefinition[] = [
     source: 'builtin',
     execute: (ctx) => {
       const runFolder = ctx.getWorkflowStore().selectedRunFolder
-      submitGuidedWorkflowCommand(ctx, 'engineering-review', { runFolder })
+      submitGuidedWorkflowCommand(ctx, 'engineering-review', { runFolder, background: true })
+    }
+  },
+  {
+    command: 'pulse-fixer',
+    description: 'Independently repair one coherent objective from reviewed Pulse issues',
+    icon: <RefreshCw className="w-4 h-4" />,
+    modes: ['workflow'],
+    requiredWorkflowMode: 'plan',
+    requiredWorkshopMode: 'workshop',
+    source: 'builtin',
+    execute: (ctx) => {
+      const runFolder = ctx.getWorkflowStore().selectedRunFolder
+      submitGuidedWorkflowCommand(ctx, 'pulse-fixer', { runFolder, background: true })
     }
   },
   {
@@ -236,18 +267,6 @@ export const builtinCommands: CommandDefinition[] = [
     source: 'builtin',
     execute: (ctx) => {
       submitGuidedWorkflowCommand(ctx, 'goal-advisor', { background: true })
-    }
-  },
-  {
-    command: 'specialize-advisors',
-    description: 'Propose workflow-specific Strategy Auditor and Goal Advisor lenses for approval',
-    icon: <Target className="w-4 h-4" />,
-    modes: ['workflow'],
-    requiredWorkflowMode: 'plan',
-    requiredWorkshopMode: 'workshop',
-    source: 'builtin',
-    execute: (ctx) => {
-      submitGuidedWorkflowCommand(ctx, 'specialize-advisors')
     }
   },
   {

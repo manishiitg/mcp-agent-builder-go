@@ -279,19 +279,26 @@ When the user asks to enable scripted execution for a step, use: update_step_con
 - Boundary: if you can describe the instruction as one concrete file/topic transformation, use `targeted`. If the justification depends on comparing multiple steps, runs, or topic files, use `cross_step`.
 
 ### 9. Orchestrator (Sub-Workflow / Pipeline) — For Dynamic Delegation
-Use `todo_task` when runtime work genuinely needs dynamic task discovery, independent specialist agents, parallel delegation, or separately recoverable task domains. Several routine actions do not by themselves justify an orchestrator.
+The `plan-design` reference owns step-type eligibility. Use `todo_task` only
+when the parent makes a real runtime orchestration decision the static plan
+cannot directly express. Several routine actions do not justify an orchestrator.
 
 **When to use todo_task:**
 - Runtime evidence determines which or how many specialist tasks are needed
-- Sub-tasks need **different tools/skills/servers** (e.g., browser for login, code-exec for processing)
-- Sub-tasks should **learn independently** — a login pattern shouldn't be mixed with data extraction learnings
-- You want **parallel execution** — todo_task supports running sub-agents in parallel
-- You need **granular debugging** — each sub-agent can be individually re-run and hardened
+- The parent conditionally selects or fans out workers
+- The parent coordinates material runtime parallelism or adaptive retry/recovery
+- An approval boundary or interim synthesis changes subsequent delegation
+
+Different tools/skills/servers, separate learnings, progress visibility, and
+granular debugging can help choose boundaries **after** eligibility is proven;
+none is sufficient by itself. **A fixed child set and order does not justify
+`todo_task`.**
 
 **When NOT to use todo_task:**
 - Fixed API/SDK/CLI/data acquisition and stable transforms — use coherent scripted regular fetchers
 - One substantial reasoning outcome with same-context verification and repair — use one large message_sequence
 - A known linear checklist whose items share one output/retry boundary — keep it inside the owning step rather than delegating micro-tasks
+- Known independent fixed work that can be expressed as explicit plan steps and dependencies
 - The task is **trivial** — a one-line action that doesn't benefit from learning
 
 **Sub-agent design:**
@@ -308,6 +315,10 @@ Use `todo_task` when runtime work genuinely needs dynamic task discovery, indepe
 ### 9a. Orchestrator scripted mode (deterministic delegation, 0 LLM tokens)
 
 When a todo_task orchestrator's flow is **stable and deterministic** — the set of sub-agent calls is known in advance and branches only on success/failure — you may author a `main.py` and mark the step `declared_execution_mode=scripted` when the user explicitly asks for this fast path (never auto-promote on your own). 10+ successful runs across the relevant scenarios/groups proving the route behavior is stable are the bar for freezing it with `lock_code`, not for creating the user-requested scripted route. At runtime the script runs first; any failure falls back to the normal LLM orchestrator with a fresh start.
+
+This scripted mode optimizes an already-justified orchestrator after its
+delegation stabilizes; it does not make a fixed child sequence eligible for a
+new `todo_task`.
 
 **Unlike regular-step scripted, the orchestrator path is read-only at runtime**: Workshop writes `learnings/{step-id}/main.py` once, and the runtime never repairs or rewrites it. There is no fix loop, no save-back. Script failures are surfaced so Workshop can regenerate `main.py` manually if needed.
 

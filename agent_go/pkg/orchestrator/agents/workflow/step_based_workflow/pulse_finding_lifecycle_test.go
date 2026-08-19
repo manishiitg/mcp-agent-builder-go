@@ -251,6 +251,103 @@ func TestPulseFindingIssueIDUpdatesOneRootCauseAndMergePreservesDuplicateHistory
 	t.Fatalf("merged duplicate %s not found", second.IssueID)
 }
 
+func TestPulseFindingIssueIDUpdateReloadsExistingStepFindingAcrossReviewerModule(t *testing.T) {
+	ctx := context.Background()
+	workspacePath := concernsWorkspace(t)
+	const concern = "The evaluator replaces managed DB truth with a retired JSON fallback."
+	if _, err := RecordRunConcerns(ctx, workspacePath, "execution-1", "", "eval-workflow-success", ConcernPhaseReview, "CONCERNS: "+concern); err != nil {
+		t.Fatalf("record step finding: %v", err)
+	}
+
+	findings, err := LoadPulseFindingLifecycles(ctx, workspacePath, "", -1)
+	if err != nil || len(findings) != 1 {
+		t.Fatalf("load step finding: findings=%+v err=%v", findings, err)
+	}
+	issueID := NewPulseIssue(findings[0]).ID
+
+	record, err := RecordPulseReviewFinding(ctx, workspacePath, "pulse-2", "review-2", PulseReviewFindingInput{
+		IssueID: issueID,
+		Concern: "Current evidence confirms the same evaluator source-of-truth defect.",
+		Module:  pulsemodules.WorkflowReviewID,
+		PulseFindingDetails: PulseFindingDetails{
+			IssueKind:      "workflow_issue",
+			Classification: "correctness_bug",
+			Severity:       "high",
+			Summary:        "Evaluator source-of-truth is inconsistent.",
+			Impact:         "A successful run can receive a false zero score.",
+			Evidence:       []string{"evaluation/runs/iteration-0/default/evaluation_report.json"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("update existing step finding through reviewer module: %v", err)
+	}
+	if record.IssueID != issueID {
+		t.Fatalf("updated issue id=%q, want %q", record.IssueID, issueID)
+	}
+
+	findings, err = LoadPulseFindingLifecycles(ctx, workspacePath, "", -1)
+	if err != nil || len(findings) != 1 {
+		t.Fatalf("reload updated step finding: findings=%+v err=%v", findings, err)
+	}
+	if findings[0].StepID != "eval-workflow-success" || findings[0].SeenCount != 2 {
+		t.Fatalf("cross-module update changed identity or recurrence: %+v", findings[0])
+	}
+	if findings[0].Details == nil || findings[0].Details.Summary != "Evaluator source-of-truth is inconsistent." {
+		t.Fatalf("typed evidence was not attached to existing step finding: %+v", findings[0])
+	}
+}
+
+func TestWorkflowObservationBecomesIssueOnlyWhenReviewerPromotesIt(t *testing.T) {
+	ctx := context.Background()
+	workspacePath := concernsWorkspace(t)
+	const concern = "The execution step emitted a broad shell scan without a bounded target."
+	if _, err := RecordRunConcerns(ctx, workspacePath, "execution-1", "default", "collect-signals", ConcernPhaseExecution, "CONCERNS: "+concern); err != nil {
+		t.Fatalf("record workflow observation: %v", err)
+	}
+
+	findings, err := LoadPulseFindingLifecycles(ctx, workspacePath, "", -1)
+	if err != nil || len(findings) != 1 {
+		t.Fatalf("load workflow observation: findings=%+v err=%v", findings, err)
+	}
+	if findings[0].Kind != PulseFindingKindObservation || IsPulseIssue(findings[0]) {
+		t.Fatalf("raw workflow evidence was projected as a canonical issue: %+v", findings[0])
+	}
+	issueID := findings[0].Issue.ID
+
+	if _, err := RecordPulseReviewFinding(ctx, workspacePath, "pulse-2", "review-2", PulseReviewFindingInput{
+		IssueID: issueID,
+		Concern: concern,
+		Module:  pulsemodules.WorkflowReviewID,
+		PulseFindingDetails: PulseFindingDetails{
+			IssueKind:      IssueKindWorkflow,
+			Classification: "efficiency_bug",
+			Severity:       "medium",
+			Summary:        "Execution repeatedly performs an unbounded discovery scan.",
+			Impact:         "The run spends most of its time rediscovering the same inputs.",
+			Evidence:       []string{"runs/iteration-0/default/execution/collect-signals/tool_calls.json"},
+		},
+	}); err != nil {
+		t.Fatalf("promote workflow observation: %v", err)
+	}
+
+	findings, err = LoadPulseFindingLifecycles(ctx, workspacePath, "", -1)
+	if err != nil || len(findings) != 1 {
+		t.Fatalf("reload promoted issue: findings=%+v err=%v", findings, err)
+	}
+	if findings[0].Kind != PulseFindingKindIssue || !IsPulseIssue(findings[0]) {
+		t.Fatalf("reviewer promotion did not enter canonical issue lifecycle: %+v", findings[0])
+	}
+	foundPromotion := false
+	for _, event := range findings[0].Events {
+		if event.EventType == "promoted_to_issue" {
+			foundPromotion = true
+		}
+	}
+	if !foundPromotion {
+		t.Fatalf("promotion audit event missing: %+v", findings[0].Events)
+	}
+}
+
 func TestPulseFindingLifecycleLoadsStructuredHarnessReproduction(t *testing.T) {
 	ctx := context.Background()
 	workspacePath := concernsWorkspace(t)

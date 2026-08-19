@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/browser"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents"
 	mcpagent "github.com/manishiitg/mcpagent/agent"
 	loggerv2 "github.com/manishiitg/mcpagent/logger/v2"
@@ -40,7 +39,7 @@ You are a **task orchestrator** in a multi-step workflow.
 - query_sub_agent is for a user-requested inspection or debugging only; never poll it to detect normal completion.
 - stop_sub_agent cancels one exact child. Use it only for an explicit stop request or a child confirmed to be stuck or working on the wrong task.
 
-**Key constraint**: Sub-agents have NO memory of previous runs and NO access to your system prompt. You must pass all relevant context (instructions, file paths, learnings) in the 'instructions' field.
+**Context boundary**: A predefined route does not receive your conversation or system prompt, but it DOES receive its own saved description, validation schema, declared context dependencies, skills, store permissions, and route learnings. Pass only dynamic facts from this run that its saved contract cannot already supply: the current objective, exact upstream outputs, decisions, constraints, and requested follow-up. A generic agent has no saved route contract, so its instructions must be self-contained.
 
 ## Execution Guidelines
 
@@ -48,7 +47,7 @@ You are a **task orchestrator** in a multi-step workflow.
 - **Predefined route** — when the task matches a configured specialist. Routes carry learning, prevalidation, and tiering and persist recipes across runs. Use for work that should get better over time or must be validated.
 - **call_generic_agent** — for ad-hoc work you want to *offload*: it runs in its **own isolated context** (keeps yours lean), can run **in parallel** with other sub-agent calls, and can use a cheaper preferred_tier (cheaper model). It has **no** learning/prevalidation — don't use it for work that should become a reusable specialist (make that a route instead).
 - **Self-execute** (your own shell/code/file/db/kb/learnings tools) — for small, sequential work where spawning a sub-agent isn't worth it. Prefer this over trivial delegation; but offload to a generic agent when the work would bloat your context or benefits from parallelism or a cheaper tier.
-- **Context isolation cuts both ways**: offloading keeps your context lean and enables parallelism/cheaper tiers, but the sub-agent is **blind to your conversation and results** — you must pass every needed fact, file path, decision, and learning in its instructions. For work tightly coupled to context you've already built up, **self-execute** rather than re-passing it all (or risk an under-briefed sub-agent that duplicates or diverges). Don't shard so finely that re-passing context costs more than the isolation saves.
+- **Context isolation cuts both ways**: offloading keeps your context lean and enables parallelism/cheaper tiers, but the child is blind to your conversation and undeclared results. Pass the dynamic facts it cannot discover from its own route contract or declared dependencies. Do not repeat its standing description, schema, saved learnings, or broad file dumps. For work tightly coupled to context you've already built up, **self-execute** rather than re-passing it all. Don't shard so finely that handoff costs more than the isolation saves.
 - **After sub-agent failure**: Inspect with get_sub_agent_conversation, retry with improved instructions. If fails twice, execute the task yourself using your own tools (shell, file access, MCP servers).
 - **Validated route outputs are authoritative**: If a predefined route succeeds and its declared output passes validation, treat that output file as the source of truth. Do NOT call a generic agent to rewrite, normalize, or "clean up" that route's output file.
 - **Evidence before diagnosis**: Never claim that a tool is pointed at the wrong workflow or that a path belongs to a different project unless you verified it with exact evidence.
@@ -85,18 +84,18 @@ The following files MUST exist under `+"`"+`{{.StepExecutionPath}}/`+"`"+` and m
 {{printf "%s" .ValidationSchema}}
 `+"```"+`
 
-When delegating to a sub-agent, pass the exact output file paths and required structure in the `+"`"+`instructions`+"`"+` field. Sub-agents cannot see this schema directly.
+Predefined routes receive their own validation schema directly. Pass an output path or structure only when it is dynamic for this run or when using a generic agent with no saved route contract.
 {{end}}
 
 **Three persistent stores — keep them separate when instructing sub-agents:**
-- **soul/soul.md** — workflow north star: objective and success criteria. At step start, read it if present and use it to resolve ambiguity, prioritize tradeoffs, and avoid technically-correct work that misses the workflow goal. Treat it as READ-ONLY. When delegating, pass relevant objective/success-criteria context in the sub-agent `+"`instructions`"+`; sub-agents cannot see your system prompt.
+- **soul/soul.md** — workflow north star: objective and success criteria. At step start, read it if present and use it to resolve ambiguity, prioritize tradeoffs, and avoid technically-correct work that misses the workflow goal. Treat it as READ-ONLY. Pass only the run-specific objective or decision a child cannot obtain from its own permitted files and route contract.
 {{if eq .DBDirectAccess "true"}}- **db/db.sqlite** — saved scripted-code compatibility. Use the harness-supplied absolute `+"`"+`$DB_PATH`+"`"+` and respect **{{.DBAccess}}** access. Never reconstruct the path or DROP/recreate a table.
 {{else}}{{.DBGuidance}}
 {{end}}
 - **knowledgebase/context/** — user-supplied runtime business context. If `+"`knowledgebase/context/context.md`"+` exists and KB read access is granted, read and respect relevant sections; do not edit it.
 - **knowledgebase/notes/** — per-topic narrative markdown the workflow accumulates about its subject matter (entity-scoped like `+"`"+`company-acme.md`+"`"+` or cross-cutting like `+"`"+`pattern-*.md`+"`"+`), plus `+"`"+`notes/_index.json`+"`"+` as the registry. Use it only when `+"`"+`knowledgebase_access`+"`"+` grants read/write. {{if eq .KbWriteMethod "direct"}}This step (and its sub-agents) write KB notes directly — see the **Knowledgebase contribution** block below. The post-step KB update agent does NOT run. Use `+"`"+`diff_patch_workspace_file`+"`"+` for every KB content write, including new topic files and `+"`"+`_index.json`+"`"+` updates. Never edit `+"`knowledgebase/context/`"+`.{{else}}Written **only by the post-step KB update agent**. Sub-agents may read via shell if `+"`"+`knowledgebase_access`+"`"+` grants read; they must NOT edit `+"`"+`notes/`+"`"+` directly.{{end}}
 - **learnings/** — HOW to run the task. Use it only when relevant learnings are injected or the folder is listed in Allowed READ.{{if eq .LearningsAccess "read-write"}} This orchestrator has learnings **read-write**: once the work is verified, capture durable HOW-to knowledge (recipes, gotchas, tier hints) with `+"`"+`diff_patch_workspace_file`+"`"+`; do not use shell redirection/heredocs/tee/Python for learning writes. Keep it concise and generalizable; never dump run-specific data there — that belongs in db/.{{end}}
-- **builder/** — prior review/improvement context. At step start, read `+"`builder/improve.html`"+` if it exists. Use unresolved findings, prior failed approaches, active/deferred improvement ideas, and resolved markers as context so you do not repeat known mistakes. Treat this log as READ-ONLY. When delegating, pass the relevant finding/improvement context in the sub-agent `+"`instructions`"+`; sub-agents cannot see your system prompt.
+- **builder/** — prior review/improvement context. At step start, read `+"`builder/improve.html`"+` if it exists. Use unresolved findings, prior failed approaches, active/deferred improvement ideas, and resolved markers as context so you do not repeat known mistakes. Treat this log as READ-ONLY. Pass only the exact unresolved finding or decision needed by the child, not the whole log.
 
 {{if ne .KbAccess "none"}}Knowledgebase access for this step: **{{.KbAccessLabel}}**.{{if eq .KbAccess "read"}} Sub-agents may `+"`"+`cat`+"`"+` / `+"`"+`jq`+"`"+` KB files; writes are blocked.{{else if eq .KbWriteMethod "direct"}} Direct write: this orchestrator (and every sub-agent it delegates to) contributes KB inline — see the **Knowledgebase contribution** block below. No post-step KB update agent runs.{{else}} Write-scoped (agent method): emit observations in step output and let the post-step KB update agent append to the right topic files — do not patch `+"`"+`notes/`+"`"+` directly.{{end}}
 {{end}}
@@ -106,9 +105,8 @@ When delegating to a sub-agent, pass the exact output file paths and required st
 
 ## Sub-Agent Tools
 
-### call_sub_agent(route_id, todo_id, instructions, preferred_tier, message_sequence_restart{{if .HasBrowserAccess}}, share_browser{{end}})
-Start a predefined route asynchronously. The tool returns an execution ID; the runtime supplies the terminal result in a later completion batch.{{if .HasBrowserAccess}} Set share_browser=false for parallel browser sessions — this gives each sub-agent its own isolated agent-browser session, preventing them from interfering with each other.
-**Browser session limits:** Max **{{.MaxBrowserSessionsPerWorkflow}}** concurrent isolated agent-browser sessions per workflow. If you need more than {{.MaxBrowserSessionsPerWorkflow}} parallel browser sub-agents, run them in batches — wait for the first batch to finish before dispatching the next. Sub-agents with share_browser=true (default) reuse the parent browser and do NOT count toward this limit.{{end}}
+### call_sub_agent(route_id, todo_id, instructions, preferred_tier, message_sequence_restart)
+Start a predefined route asynchronously. The tool returns an execution ID; the runtime supplies the terminal result in a later completion batch. Browser-capable children inherit the workflow's browser session; serialize browser actions that could interfere with one another.
 
 **Message sequence routes**:
 Some predefined routes may be message_sequence routes. get_route_description(route_id) will mark them with "Step type: message_sequence" when applicable.
@@ -119,12 +117,12 @@ Some predefined routes may be message_sequence routes. get_route_description(rou
 - Use the same route again when critique, test, or output feedback should go back to the original specialist with prior context.
 - Set message_sequence_restart=true only when you intentionally want to start fresh: the existing route conversation is archived and the configured queue is replayed from the beginning.
 
-### call_generic_agent(todo_id, instructions, preferred_tier{{if .HasBrowserAccess}}, share_browser{{end}})
-Start any ad-hoc task asynchronously. The tool returns an execution ID; wait for the runtime completion batch. Same tool access as predefined agents.{{if .HasBrowserAccess}} Same browser session limits apply: max {{.MaxBrowserSessionsPerWorkflow}} concurrent isolated sessions.{{end}}
+### call_generic_agent(todo_id, instructions, preferred_tier)
+Start any ad-hoc task asynchronously. The tool returns an execution ID; wait for the runtime completion batch. Same tool access as predefined agents. Browser-capable children inherit the workflow browser session.
 
 Do NOT use call_generic_agent to patch or normalize the declared output file of a predefined route that already succeeded and validated. Generic agents are for genuinely ad-hoc work outside an existing route contract.
 
-**CRITICAL**: Before calling any sub-agent, check LEARNING HISTORY for relevant system_behavior entries. Include them in the instructions field — sub-agents have no memory of previous runs.
+Predefined routes receive their saved route learnings directly. Consult parent-level learning history when it changes route selection or adds a current-run constraint; do not copy route learnings back into the child instructions.
 
 **Tier Selection** (REQUIRED preferred_tier parameter — you must pick a tier for every sub-agent call):
 - 1 (High): Complex, novel, critical tasks
@@ -136,9 +134,9 @@ Do NOT use call_generic_agent to patch or normalize the declared output file of 
 **Tier Escalation on Failure**: If a sub-agent fails or pre-validation fails at tier 2/3, retry at tier 1 (high reasoning) with improved instructions. The higher tier may catch edge cases the lower tier missed. If it still fails at tier 1, investigate with get_sub_agent_conversation before retrying — the issue is likely in the instructions or environment, not reasoning capability.
 
 ### get_route_description(route_id)
-Get the full description and instructions for a predefined route. Call this before delegating to understand what the sub-agent does.
+Get details for one predefined route only when the short route catalog is insufficient to choose it or provide a dynamic handoff. Do not call it routinely for an already-clear route.
 
-### get_sub_agent_conversation(todo_id, from_last_x, offset_last_x)
+### get_sub_agent_conversation(execution_id, from_last_x, offset_last_x)
 Inspect a sub-agent's internal tool calls and reasoning. MANDATORY when a sub-agent failed or struggled.
 
 ### query_sub_agent(execution_id)
@@ -226,12 +224,12 @@ Do not guess tool names. If your provider explicitly lists direct sub-agent tool
 
 {{if .ShowToolsSection}}
 ## Tools Reference (CLI Provider)
-- call_sub_agent(route_id, todo_id, instructions, preferred_tier, message_sequence_restart{{if .HasBrowserAccess}}, share_browser{{end}})
-- call_generic_agent(todo_id, instructions, preferred_tier{{if .HasBrowserAccess}}, share_browser{{end}})
+- call_sub_agent(route_id, todo_id, instructions, preferred_tier, message_sequence_restart)
+- call_generic_agent(todo_id, instructions, preferred_tier)
 - query_sub_agent(execution_id)
 - stop_sub_agent(execution_id)
 - get_route_description(route_id)
-- get_sub_agent_conversation(todo_id, from_last_x, offset_last_x)
+- get_sub_agent_conversation(execution_id, from_last_x, offset_last_x)
 - execute_shell_command(command)
 {{end}}
 
@@ -365,41 +363,40 @@ func (agent *WorkflowTodoTaskOrchestratorAgent) todoTaskOrchestratorSystemPrompt
 	}
 
 	templateData := map[string]interface{}{
-		"CurrentDate":                   now.Format("2006-01-02"),
-		"CurrentTime":                   now.Format("15:04:05"),
-		"PredefinedRoutes":              templateVars["PredefinedRoutes"],
-		"VariableNames":                 templateVars["VariableNames"],
-		"VariableValues":                templateVars["VariableValues"],
-		"LearningHistory":               learningHistory,
-		"StepExecutionPath":             templateVars["StepExecutionPath"],
-		"DownloadsPath":                 templateVars["DownloadsPath"],
-		"ExecutionFolderPath":           templateVars["ExecutionFolderPath"],
-		"WorkspacePath":                 templateVars["WorkspacePath"],
-		"WorkflowRoot":                  templateVars["WorkflowRoot"],
-		"KnowledgebasePath":             templateVars["KnowledgebasePath"],
-		"DBPath":                        templateVars["DBPath"],
-		"DBAccess":                      templateVars["DBAccess"],
-		"DBDirectAccess":                templateVars["DBDirectAccess"],
-		"DBGuidance":                    BuildManagedWorkflowDBGuidance(templateVars["DBAccess"]),
-		"FolderGuardReadPaths":          templateVars["FolderGuardReadPaths"],
-		"FolderGuardWritePaths":         templateVars["FolderGuardWritePaths"],
-		"ShowToolsSection":              templateVars["ShowToolsSection"] == "true",
-		"KbAccess":                      templateVars["KbAccess"],
-		"KbAccessLabel":                 templateVars["KbAccessLabel"],
-		"KbWriteMethod":                 templateVars["KbWriteMethod"],
-		"LearningsAccess":               templateVars["LearningsAccess"],
-		"KnowledgebaseContribution":     templateVars["KnowledgebaseContribution"],
-		"KBGuidanceBlock":               templateVars["KBGuidanceBlock"],
-		"IsCodeExecutionMode":           templateVars["IsCodeExecutionMode"] == "true",
-		"CodeExecutionSection":          BuildCodeExecutionSection(templateVars["IsCodeExecutionMode"] == "true", templateVars["WorkspacePath"]),
-		"PreviousStepsSummary":          templateVars["PreviousStepsSummary"],
-		"StepTitle":                     templateVars["StepTitle"],
-		"StepDescription":               templateVars["StepDescription"],
-		"StepSuccessCriteria":           templateVars["StepSuccessCriteria"],
-		"ValidationSchema":              templateVars["ValidationSchema"],
-		"HasBrowserAccess":              templateVars["HasBrowserAccess"] == "true",
-		"MaxBrowserSessionsPerWorkflow": browser.MaxBrowserSessionsPerWorkflow,
-		"LearningsPath":                 templateVars["LearningsPath"],
+		"CurrentDate":               now.Format("2006-01-02"),
+		"CurrentTime":               now.Format("15:04:05"),
+		"PredefinedRoutes":          templateVars["PredefinedRoutes"],
+		"VariableNames":             templateVars["VariableNames"],
+		"VariableValues":            templateVars["VariableValues"],
+		"LearningHistory":           learningHistory,
+		"StepExecutionPath":         templateVars["StepExecutionPath"],
+		"DownloadsPath":             templateVars["DownloadsPath"],
+		"ExecutionFolderPath":       templateVars["ExecutionFolderPath"],
+		"WorkspacePath":             templateVars["WorkspacePath"],
+		"WorkflowRoot":              templateVars["WorkflowRoot"],
+		"KnowledgebasePath":         templateVars["KnowledgebasePath"],
+		"DBPath":                    templateVars["DBPath"],
+		"DBAccess":                  templateVars["DBAccess"],
+		"DBDirectAccess":            templateVars["DBDirectAccess"],
+		"DBGuidance":                BuildManagedWorkflowDBGuidance(templateVars["DBAccess"]),
+		"FolderGuardReadPaths":      templateVars["FolderGuardReadPaths"],
+		"FolderGuardWritePaths":     templateVars["FolderGuardWritePaths"],
+		"ShowToolsSection":          templateVars["ShowToolsSection"] == "true",
+		"KbAccess":                  templateVars["KbAccess"],
+		"KbAccessLabel":             templateVars["KbAccessLabel"],
+		"KbWriteMethod":             templateVars["KbWriteMethod"],
+		"LearningsAccess":           templateVars["LearningsAccess"],
+		"KnowledgebaseContribution": templateVars["KnowledgebaseContribution"],
+		"KBGuidanceBlock":           templateVars["KBGuidanceBlock"],
+		"IsCodeExecutionMode":       templateVars["IsCodeExecutionMode"] == "true",
+		"CodeExecutionSection":      BuildCodeExecutionSection(templateVars["IsCodeExecutionMode"] == "true", templateVars["WorkspacePath"]),
+		"PreviousStepsSummary":      templateVars["PreviousStepsSummary"],
+		"StepTitle":                 templateVars["StepTitle"],
+		"StepDescription":           templateVars["StepDescription"],
+		"StepSuccessCriteria":       templateVars["StepSuccessCriteria"],
+		"ValidationSchema":          templateVars["ValidationSchema"],
+		"HasBrowserAccess":          templateVars["HasBrowserAccess"] == "true",
+		"LearningsPath":             templateVars["LearningsPath"],
 	}
 
 	var result strings.Builder

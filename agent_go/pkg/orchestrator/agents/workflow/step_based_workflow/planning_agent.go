@@ -28,7 +28,6 @@ type PlanOrchestrationRoute struct {
 	Condition     string            `json:"condition"`                 // Condition description (e.g., "If error is authentication-related")
 	SubAgentStep  PlanStepInterface `json:"sub_agent_step"`            // The sub-agent step to execute (private, not in main workflow) - must have "type" field
 	OrphanStepRef string            `json:"orphan_step_ref,omitempty"` // Optional: reference to a reusable orphan step definition in the same plan
-	ContextToPass string            `json:"context_to_pass,omitempty"` // Optional: specific context to pass to sub-agent
 }
 
 // MarshalJSON implements custom marshaling for PlanOrchestrationRoute
@@ -40,7 +39,6 @@ func (r PlanOrchestrationRoute) MarshalJSON() ([]byte, error) {
 		Condition     string          `json:"condition"`
 		SubAgentStep  json.RawMessage `json:"sub_agent_step,omitempty"`
 		OrphanStepRef string          `json:"orphan_step_ref,omitempty"`
-		ContextToPass string          `json:"context_to_pass,omitempty"`
 	}
 
 	result := routeJSON{
@@ -48,7 +46,6 @@ func (r PlanOrchestrationRoute) MarshalJSON() ([]byte, error) {
 		RouteName:     r.RouteName,
 		Condition:     r.Condition,
 		OrphanStepRef: r.OrphanStepRef,
-		ContextToPass: r.ContextToPass,
 	}
 
 	// For reusable orphan step references, persist only the reference in plan.json.
@@ -75,7 +72,6 @@ func (r *PlanOrchestrationRoute) UnmarshalJSON(data []byte) error {
 		Condition     string          `json:"condition"`
 		SubAgentStep  json.RawMessage `json:"sub_agent_step"`
 		OrphanStepRef string          `json:"orphan_step_ref,omitempty"`
-		ContextToPass string          `json:"context_to_pass,omitempty"`
 	}
 
 	if err := json.Unmarshal(data, &temp); err != nil {
@@ -87,7 +83,6 @@ func (r *PlanOrchestrationRoute) UnmarshalJSON(data []byte) error {
 	r.RouteName = temp.RouteName
 	r.Condition = temp.Condition
 	r.OrphanStepRef = temp.OrphanStepRef
-	r.ContextToPass = temp.ContextToPass
 
 	// Unmarshal nested SubAgentStep
 	if len(temp.SubAgentStep) > 0 {
@@ -602,7 +597,6 @@ func (t *TodoTaskPlanStep) UnmarshalJSON(data []byte) error {
 			Condition     string          `json:"condition"`
 			SubAgentStep  json.RawMessage `json:"sub_agent_step"`
 			OrphanStepRef string          `json:"orphan_step_ref,omitempty"`
-			ContextToPass string          `json:"context_to_pass,omitempty"`
 		} `json:"predefined_routes,omitempty"`
 		NextStepID string                `json:"next_step_id,omitempty"`
 		Messages   []MessageSequenceItem `json:"messages,omitempty"`
@@ -654,7 +648,6 @@ func (t *TodoTaskPlanStep) UnmarshalJSON(data []byte) error {
 			t.PredefinedRoutes[i].RouteName = route.RouteName
 			t.PredefinedRoutes[i].Condition = route.Condition
 			t.PredefinedRoutes[i].OrphanStepRef = route.OrphanStepRef
-			t.PredefinedRoutes[i].ContextToPass = route.ContextToPass
 
 			// Unmarshal nested sub_agent_step
 			if len(route.SubAgentStep) > 0 && string(route.SubAgentStep) != "null" {
@@ -1767,7 +1760,7 @@ func getAddTodoTaskRouteSchema() string {
 							"title": {"type": "string", "description": "REQUIRED: Title of the sub-agent step"},
 							"description": {"type": "string", "description": "REQUIRED: What this specialized agent does AND its standing brief. This IS EXECUTED as the agent's opening instruction (turn 0) on the first call — the orchestrator's per-call call_sub_agent instructions are added on top. Write it as an actionable brief, not throwaway metadata."},
 							"items": {"type": "array", "description": "REQUIRED when type='message_sequence'. Ordered user_message, prevalidation, or foreach turns.", "items": {"type": "object"}},
-							"context_dependencies": {"type": "array", "items": {"type": "string"}},
+							"context_dependencies": {"type": "array", "items": {"type": "string"}, "description": "Exact durable file outputs this child consumes. The runtime resolves and injects these files. Use [] when the child reads durable state from managed DB/KB tools instead."},
 							"context_output": {"type": "string", "description": "OPTIONAL: Context file this step creates. Omit when the step writes to the db (validate via validation_schema.db)."},
 							"todo_task_step": {"type": "object", "description": "When type='todo_task': the nested orchestrator's inner regular step metadata."},
 							"predefined_routes": {"type": "array", "description": "When type='todo_task': predefined routes for the nested orchestrator. Conversational children use message_sequence; deterministic scripted children may use regular. Another todo_task layer is not allowed."},
@@ -1777,10 +1770,6 @@ func getAddTodoTaskRouteSchema() string {
 							}
 						},
 						"required": ["type", "id", "title"]
-					},
-					"context_to_pass": {
-						"type": "string",
-						"description": "OPTIONAL: Specific context to pass to the sub-agent"
 					}
 				},
 				"required": ["route_id", "route_name", "condition"]
@@ -1828,17 +1817,13 @@ func getUpdateTodoTaskRouteSchema() string {
 					"title": {"type": "string"},
 					"description": {"type": "string"},
 					"items": {"type": "array", "description": "Required when type='message_sequence'.", "items": {"type": "object"}},
-					"context_dependencies": {"type": "array", "items": {"type": "string"}},
+					"context_dependencies": {"type": "array", "items": {"type": "string"}, "description": "Exact durable file outputs this child consumes. The runtime resolves and injects these files. Use [] when the child reads durable state from managed DB/KB tools instead."},
 					"context_output": {"type": "string"},
 					"todo_task_step": {"type": "object", "description": "When type='todo_task': nested orchestrator inner step metadata."},
 					"predefined_routes": {"type": "array", "description": "When type='todo_task': nested routes may use message_sequence or scripted regular, but not another todo_task layer."},
 						"validation_schema": {"type": "object"}
 				},
 				"required": ["type", "id", "title"]
-			},
-			"context_to_pass": {
-				"type": "string",
-				"description": "OPTIONAL: Updated context to pass to the sub-agent."
 			},
 			"reason": {
 				"type": "string",
@@ -3042,14 +3027,6 @@ func updateSingleStep(plan *PlanningResponse, partialUpdate PartialPlanStep, fie
 							NewValue: newRoute.Condition,
 						})
 					}
-					if oldRoute.ContextToPass != newRoute.ContextToPass {
-						*fieldChanges = append(*fieldChanges, PlanFieldChange{
-							StepID:   partialUpdate.ExistingStepID,
-							Field:    routePrefix + ".context_to_pass",
-							OldValue: oldRoute.ContextToPass,
-							NewValue: newRoute.ContextToPass,
-						})
-					}
 					// Compare nested sub-agent step
 					if oldRoute.SubAgentStep != nil && newRoute.SubAgentStep != nil {
 						compareNestedStepFields(oldRoute.SubAgentStep, newRoute.SubAgentStep, partialUpdate.ExistingStepID, routePrefix+".sub_agent_step", fieldChanges)
@@ -3470,7 +3447,7 @@ func buildTodoTaskRouteArtifactReviewNotice(parentStepID, routeID, action string
 	case "deleted":
 		b.WriteString("- Route cleanup: remove stale step_config, learnings/" + routeID + ", scripted main.py, DB/KB/report/eval references, and downstream context dependencies for the removed nested agent.\n")
 	default:
-		b.WriteString("- Route update: review route condition/context_to_pass/sub-agent description against prevalidation, learnings, DB, KB, scripts, reports/evals, and downstream dependencies.\n")
+		b.WriteString("- Route update: review route condition, sub-agent description, declared context_dependencies, prevalidation, learnings, DB, KB, scripts, reports/evals, and downstream dependencies.\n")
 	}
 	b.WriteString("- Before marking the plan done, run get_workflow_command_guidance(kind=\"review-artifact-drift\", focus=\"" + parentStepID + "\").")
 	return b.String()
@@ -5424,10 +5401,6 @@ func createUpdateTodoTaskRouteExecutor(workspacePath string, logger loggerv2.Log
 
 		if condition, ok := args["condition"].(string); ok && condition != "" {
 			routeToUpdate.Condition = condition
-		}
-
-		if contextToPass, ok := args["context_to_pass"].(string); ok {
-			routeToUpdate.ContextToPass = contextToPass
 		}
 
 		if orphanStepRef, ok := args["orphan_step_ref"].(string); ok {

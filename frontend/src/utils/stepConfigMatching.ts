@@ -280,7 +280,6 @@ export interface PlanRoutingRoute {
   condition: string;                  // Condition description
   sub_agent_step?: PlanStep;           // The sub-agent step to execute
   orphan_step_ref?: string;           // Optional reference to a reusable orphan step in the same plan
-  context_to_pass?: string;           // Optional: specific context to pass to sub-agent
 }
 
 // PlanningResponse interface for plan.json

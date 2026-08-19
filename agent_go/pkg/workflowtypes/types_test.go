@@ -4,15 +4,14 @@ import "testing"
 
 func testExplicitConfig() *PresetLLMConfig {
 	builder := &AgentLLMConfig{Provider: "claude-code", ModelID: "claude-sonnet-5"}
-	maintenance := &AgentLLMConfig{Provider: "claude-code", ModelID: "claude-opus-4-8"}
+	high := &AgentLLMConfig{Provider: "claude-code", ModelID: "claude-opus-4-8"}
 	return &PresetLLMConfig{
-		SchemaVersion:  LLMConfigSchemaVersion,
-		Mode:           LLMConfigModeExplicit,
-		BuilderLLM:     builder,
-		MaintenanceLLM: maintenance,
-		PulseLLM:       builder,
+		SchemaVersion: LLMConfigSchemaVersion,
+		Mode:          LLMConfigModeExplicit,
+		BuilderLLM:    builder,
+		PulseLLM:      builder,
 		TieredConfig: &TieredLLMConfig{
-			Tier1: maintenance,
+			Tier1: high,
 			Tier2: builder,
 			Tier3: &AgentLLMConfig{Provider: "claude-code", ModelID: "claude-haiku-4-5-20251001"},
 		},
@@ -43,7 +42,6 @@ func TestNormalizePresetLLMConfigMigratesLegacyExplicitShape(t *testing.T) {
 		LegacyPhaseLLM:          legacyBuilder,
 		LegacyAutoImproveLLM:    legacyMaintenance,
 		LegacyLLMAllocationMode: "tiered",
-		PulseLLM:                legacyBuilder,
 		TieredConfig:            &TieredLLMConfig{Tier1: legacyMaintenance, Tier2: legacyBuilder, Tier3: legacyBuilder},
 	}
 
@@ -53,8 +51,8 @@ func TestNormalizePresetLLMConfigMigratesLegacyExplicitShape(t *testing.T) {
 	if cfg.SchemaVersion != LLMConfigSchemaVersion || cfg.Mode != LLMConfigModeExplicit {
 		t.Fatalf("normalized schema/mode = %d/%q", cfg.SchemaVersion, cfg.Mode)
 	}
-	if cfg.BuilderLLM != legacyBuilder || cfg.MaintenanceLLM != legacyMaintenance {
-		t.Fatalf("normalized roles = builder:%+v maintenance:%+v", cfg.BuilderLLM, cfg.MaintenanceLLM)
+	if cfg.BuilderLLM != legacyBuilder || cfg.PulseLLM != legacyMaintenance {
+		t.Fatalf("normalized roles = builder:%+v pulse:%+v", cfg.BuilderLLM, cfg.PulseLLM)
 	}
 	if cfg.Provider != "" || cfg.LegacyPhaseLLM != nil || cfg.LegacyAutoImproveLLM != nil || cfg.LegacyLLMAllocationMode != "" {
 		t.Fatalf("legacy fields not cleared: %+v", cfg)
@@ -92,7 +90,7 @@ func TestResolveProviderProfileConfigUsesBuilderDefaults(t *testing.T) {
 		model    string
 		effort   string
 	}{
-		{provider: "claude-code", model: "claude-opus-5", effort: "medium"},
+		{provider: "claude-code", model: "claude-sonnet-5", effort: "high"},
 		{provider: "codex-cli", model: "gpt-5.6-sol", effort: "high"},
 	}
 	for _, tt := range tests {
@@ -108,26 +106,6 @@ func TestResolveProviderProfileConfigUsesBuilderDefaults(t *testing.T) {
 				t.Fatalf("reasoning_effort = %#v, want %q", got, tt.effort)
 			}
 		})
-	}
-}
-
-func TestResolveProviderProfileMaintenanceConfigUsesProviderDefault(t *testing.T) {
-	got, ok := ResolveProviderProfileMaintenanceConfig(providerProfile("claude-code"))
-	if !ok || got.Provider != "claude-code" || got.ModelID != "claude-opus-5" {
-		t.Fatalf("ResolveProviderProfileMaintenanceConfig() = %+v, %v", got, ok)
-	}
-	if got.Options["reasoning_effort"] != "medium" {
-		t.Fatalf("reasoning_effort = %#v, want medium", got.Options["reasoning_effort"])
-	}
-}
-
-func TestResolveProviderProfileMaintenanceConfigPreservesProviderOptions(t *testing.T) {
-	got, ok := ResolveProviderProfileMaintenanceConfig(providerProfile("codex-cli"))
-	if !ok || got.Provider != "codex-cli" || got.ModelID != "gpt-5.6-sol" {
-		t.Fatalf("ResolveProviderProfileMaintenanceConfig() = %+v, %v", got, ok)
-	}
-	if got.Options["reasoning_effort"] != "high" {
-		t.Fatalf("reasoning_effort = %#v, want high", got.Options["reasoning_effort"])
 	}
 }
 

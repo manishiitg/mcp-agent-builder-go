@@ -4,10 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -1048,6 +1050,9 @@ func TestHandleGetPulseFindingsReturnsFiledLifecycle(t *testing.T) {
 	if finding.Status != step_based_workflow.ConcernStatusOpen || finding.Module != pulseModuleWorkflowReview {
 		t.Fatalf("finding identity/status mismatch: %+v", finding)
 	}
+	if finding.Kind != step_based_workflow.PulseFindingKindIssue {
+		t.Fatalf("reviewer finding kind=%q, want canonical issue", finding.Kind)
+	}
 	if finding.Issue.ID == "" || finding.Issue.Title != "selector keeps targeting the same accounts" ||
 		finding.Issue.Status != "backlog" || finding.Issue.Priority != "none" {
 		t.Fatalf("compact issue projection missing: %+v", finding.Issue)
@@ -1057,6 +1062,155 @@ func TestHandleGetPulseFindingsReturnsFiledLifecycle(t *testing.T) {
 	}
 	if len(finding.Events) != 1 || finding.Events[0].EventType != "filed" {
 		t.Fatalf("filed lifecycle event missing: %+v", finding.Events)
+	}
+}
+
+func TestPulseBacklogSummaryDoesNotCountObservationsAsIssues(t *testing.T) {
+	issues := []step_based_workflow.PulseFindingLifecycle{
+		{Status: step_based_workflow.ConcernStatusOpen},
+		{Status: step_based_workflow.ConcernStatusResolved},
+	}
+	observations := []step_based_workflow.PulseFindingLifecycle{
+		{Status: step_based_workflow.ConcernStatusOpen},
+		{Status: step_based_workflow.ConcernStatusOpen},
+		{Status: step_based_workflow.ConcernStatusRejected},
+	}
+	summary := pulseBacklogSummary(issues, observations)
+	if got := summary["active_count"]; got != 1 {
+		t.Fatalf("active canonical issues=%v, want 1", got)
+	}
+	if got := summary["active_observation_count"]; got != 2 {
+		t.Fatalf("active observations=%v, want 2", got)
+	}
+}
+
+func TestPulseBacklogViewKeepsWorkflowObservationsOutOfFixerFeed(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+	workspacePath := "Workflow/example"
+	if _, err := step_based_workflow.RecordRunConcerns(ctx, workspacePath, "execution-1", "default", "collect", step_based_workflow.ConcernPhaseExecution,
+		"CONCERNS: broad collector scan repeats on every run"); err != nil {
+		t.Fatalf("record observation: %v", err)
+	}
+	if _, err := step_based_workflow.RecordRunConcerns(ctx, workspacePath, "review-1", "", pulseModuleWorkflowReview, step_based_workflow.ConcernPhaseReview,
+		"CONCERNS: collector silently drops failed records"); err != nil {
+		t.Fatalf("record canonical issue: %v", err)
+	}
+
+	raw, err := readPulseBacklogView(ctx, workspacePath, "")
+	if err != nil {
+		t.Fatalf("read backlog: %v", err)
+	}
+	var payload struct {
+		Issues           []map[string]interface{} `json:"issues"`
+		Observations     []map[string]interface{} `json:"observations"`
+		IssueTotal       int                      `json:"issue_total"`
+		ObservationTotal int                      `json:"observation_total"`
+		Detail           string                   `json:"detail"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatalf("decode backlog: %v", err)
+	}
+	if payload.Detail != "compact" || payload.IssueTotal != 1 || len(payload.Issues) != 1 {
+		t.Fatalf("Fixer feed should contain exactly the canonical issue: %+v", payload)
+	}
+	if payload.ObservationTotal != 1 || len(payload.Observations) != 1 {
+		t.Fatalf("review evidence should contain exactly the workflow observation: %+v", payload)
+	}
+	if got := payload.Observations[0]["kind"]; got != step_based_workflow.PulseFindingKindObservation {
+		t.Fatalf("observation kind=%v", got)
+	}
+	if _, leaked := payload.Issues[0]["fingerprint"]; leaked {
+		t.Fatalf("internal fingerprint leaked into Fixer feed: %+v", payload.Issues[0])
+	}
+	var rawMap map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &rawMap); err != nil {
+		t.Fatalf("decode compact map: %v", err)
+	}
+	if _, duplicated := rawMap["findings"]; duplicated {
+		t.Fatal("compact backlog duplicated canonical issues under legacy findings alias")
+	}
+}
+
+func TestPulseBacklogFullDetailRequiresAndFiltersPublicIDs(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+	workspacePath := "Workflow/example"
+	largeEvidence := "unique-large-evidence-marker-" + strings.Repeat("evidence ", 40000)
+	if _, err := step_based_workflow.RecordRunConcerns(ctx, workspacePath, "review-large", "", pulseModuleWorkflowReview, step_based_workflow.ConcernPhaseReview,
+		"CONCERNS: "+largeEvidence); err != nil {
+		t.Fatalf("record large canonical issue: %v", err)
+	}
+	if _, err := step_based_workflow.RecordRunConcerns(ctx, workspacePath, "review-other", "", pulseModuleWorkflowReview, step_based_workflow.ConcernPhaseReview,
+		"CONCERNS: unrelated second issue"); err != nil {
+		t.Fatalf("record second canonical issue: %v", err)
+	}
+
+	compact, err := readPulseBacklogViewWithOptions(ctx, workspacePath, "", "compact", nil)
+	if err != nil {
+		t.Fatalf("read compact backlog: %v", err)
+	}
+	if strings.Contains(compact, largeEvidence) || len(compact) > 20_000 {
+		t.Fatalf("compact backlog leaked full lifecycle text: bytes=%d", len(compact))
+	}
+	var index struct {
+		Issues []struct {
+			IssueID string `json:"issue_id"`
+		} `json:"issues"`
+	}
+	if err := json.Unmarshal([]byte(compact), &index); err != nil || len(index.Issues) != 2 {
+		t.Fatalf("decode compact issue index: issues=%d err=%v", len(index.Issues), err)
+	}
+	largeIssueID := ""
+	var compactPayload struct {
+		Issues []map[string]interface{} `json:"issues"`
+	}
+	if err := json.Unmarshal([]byte(compact), &compactPayload); err != nil {
+		t.Fatalf("decode compact cards: %v", err)
+	}
+	for _, card := range compactPayload.Issues {
+		if strings.Contains(fmt.Sprint(card["summary"]), "unique-large-evidence-marker") {
+			largeIssueID = fmt.Sprint(card["issue_id"])
+			break
+		}
+	}
+	if largeIssueID == "" {
+		t.Fatalf("large issue missing from compact index: %+v", compactPayload.Issues)
+	}
+
+	if _, err := readPulseBacklogViewWithOptions(ctx, workspacePath, "", "full", nil); err == nil || !strings.Contains(err.Error(), "requires") {
+		t.Fatalf("broad full-history read should be rejected, got %v", err)
+	}
+	full, err := readPulseBacklogViewWithOptions(ctx, workspacePath, "", "full", []string{largeIssueID})
+	if err != nil {
+		t.Fatalf("read targeted full detail: %v", err)
+	}
+	var detail struct {
+		Detail  string                                      `json:"detail"`
+		Records []step_based_workflow.PulseFindingLifecycle `json:"records"`
+	}
+	if err := json.Unmarshal([]byte(full), &detail); err != nil {
+		t.Fatalf("decode targeted detail: %v", err)
+	}
+	if detail.Detail != "full" || len(detail.Records) != 1 {
+		t.Fatalf("targeted response = %+v, want one full record", detail)
+	}
+	if !strings.Contains(detail.Records[0].Text, "unique-large-evidence-marker") {
+		t.Fatalf("targeted record omitted requested evidence: %+v", detail.Records[0])
+	}
+	if detail.Records[0].Fingerprint != "" {
+		t.Fatalf("targeted response leaked internal fingerprint: %+v", detail.Records[0])
+	}
+}
+
+func TestPulseBacklogTargetedDetailRejectsAmbiguousPublicID(t *testing.T) {
+	findings := []step_based_workflow.PulseFindingLifecycle{
+		{Fingerprint: "abcdef12-first-full-fingerprint"},
+		{Fingerprint: "abcdef12-second-full-fingerprint"},
+	}
+	selected, missing, ambiguous := selectPulseLifecyclesByIssueID(findings, []string{"PUL-ABCDEF12"})
+	if len(selected) != 0 || len(missing) != 0 || !reflect.DeepEqual(ambiguous, []string{"PUL-ABCDEF12"}) {
+		t.Fatalf("selected=%+v missing=%+v ambiguous=%+v", selected, missing, ambiguous)
 	}
 }
 

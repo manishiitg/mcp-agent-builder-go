@@ -65,13 +65,12 @@ type PresetLLMConfig struct {
 	Mode          string `json:"mode"`
 
 	// Provider is stored only in provider_profile mode. The provider package
-	// owns the Builder, execution-tier, Maintenance, and Pulse defaults and can
+	// owns the Builder, execution-tier, and Pulse defaults and can
 	// evolve them when the application is updated.
 	Provider string `json:"provider,omitempty"`
 
 	// Explicit mode pins each workflow role directly.
-	BuilderLLM     *AgentLLMConfig `json:"builder_llm,omitempty"`
-	MaintenanceLLM *AgentLLMConfig `json:"maintenance_llm,omitempty"`
+	BuilderLLM *AgentLLMConfig `json:"builder_llm,omitempty"`
 
 	// Optional Pulse Gate/routine post-run QA override. When omitted,
 	// coding-agent providers may supply a provider-owned Pulse default.
@@ -187,38 +186,29 @@ func NormalizePresetLLMConfig(config *PresetLLMConfig) bool {
 			}
 			changed = true
 		}
-		defaultMaintenance := config.BuilderLLM
+		defaultPulse := config.BuilderLLM
 		if config.TieredConfig != nil && config.TieredConfig.Tier1 != nil {
-			defaultMaintenance = config.TieredConfig.Tier1
+			defaultPulse = config.TieredConfig.Tier1
 		}
-		if config.MaintenanceLLM == nil {
+		if config.PulseLLM == nil {
 			if config.LegacyAutoImproveLLM != nil {
-				config.MaintenanceLLM = config.LegacyAutoImproveLLM
+				config.PulseLLM = config.LegacyAutoImproveLLM
 			} else if providerDefaults != nil {
-				config.MaintenanceLLM = agentLLMConfigFromCodingAgentRef(providerDefaults.Maintenance)
-			} else {
-				config.MaintenanceLLM = defaultMaintenance
-			}
-			if config.MaintenanceLLM != nil {
-				changed = true
-			}
-		}
-		if config.PulseLLM == nil && defaultMaintenance != nil {
-			if providerDefaults != nil {
 				config.PulseLLM = agentLLMConfigFromCodingAgentRef(providerDefaults.Pulse)
 			} else {
-				config.PulseLLM = defaultMaintenance
+				config.PulseLLM = defaultPulse
 			}
-			changed = true
+			if config.PulseLLM != nil {
+				changed = true
+			}
 		}
 		if config.Provider != "" {
 			config.Provider = ""
 			changed = true
 		}
 	} else if config.Mode == LLMConfigModeProviderProfile {
-		if config.BuilderLLM != nil || config.MaintenanceLLM != nil || config.PulseLLM != nil || config.TieredConfig != nil {
+		if config.BuilderLLM != nil || config.PulseLLM != nil || config.TieredConfig != nil {
 			config.BuilderLLM = nil
-			config.MaintenanceLLM = nil
 			config.PulseLLM = nil
 			config.TieredConfig = nil
 			changed = true
@@ -262,25 +252,6 @@ func ResolveProviderProfileConfig(config *PresetLLMConfig) (*AgentLLMConfig, *Ti
 		return builder, nil, true
 	}
 	return builder, tiered, true
-}
-
-func ResolveProviderProfileMaintenanceConfig(config *PresetLLMConfig) (*AgentLLMConfig, bool) {
-	if config == nil || config.Provider == "" {
-		return nil, false
-	}
-
-	defaults, ok := llmproviders.GetCodingAgentDefaultTierModels(llmproviders.Provider(config.Provider))
-	if !ok {
-		return nil, false
-	}
-	maintenance := agentLLMConfigFromCodingAgentRef(defaults.Maintenance)
-	if maintenance == nil {
-		maintenance = agentLLMConfigFromCodingAgentRef(defaults.High)
-	}
-	if maintenance == nil {
-		return nil, false
-	}
-	return maintenance, true
 }
 
 func ResolveProviderProfilePulseConfig(config *PresetLLMConfig) (*AgentLLMConfig, bool) {
@@ -367,9 +338,6 @@ func ValidatePresetLLMConfigPublic(config *PresetLLMConfig) error {
 				return fmt.Errorf("invalid provider for %s: %w", tierConfig.name, err)
 			}
 		}
-	}
-	if err := validateRequiredPresetAgentLLMConfig(config.MaintenanceLLM, "maintenance_llm"); err != nil {
-		return err
 	}
 	if err := validateRequiredPresetAgentLLMConfig(config.PulseLLM, "pulse_llm"); err != nil {
 		return err

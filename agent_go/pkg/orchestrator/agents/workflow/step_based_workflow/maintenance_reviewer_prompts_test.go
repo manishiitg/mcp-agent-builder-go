@@ -31,8 +31,8 @@ func TestMaintenanceSpecialistSystemPromptsAreReadOnly(t *testing.T) {
 func TestReviewPlanPromptPrefersCoherentAgenticSteps(t *testing.T) {
 	prompt, err := ExecuteTemplate("reviewPlanAgentSystem", map[string]string{
 		"AbsWorkspacePath":        "/app/workspace-docs/Workflow/example",
-		"PlanJSON":                `{}`,
-		"StepConfigSummary":       "",
+		"PlanJSON":                `SHOULD_NOT_BE_INJECTED`,
+		"StepConfigSummary":       "SHOULD_NOT_BE_SUMMARIZED_BY_GO",
 		"TargetRunFolder":         "",
 		"WorkflowObjective":       "Complete the workflow outcome.",
 		"WorkflowSelectedSkills":  "",
@@ -47,8 +47,18 @@ func TestReviewPlanPromptPrefersCoherentAgenticSteps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render review plan prompt: %v", err)
 	}
+	for _, forbidden := range []string{"SHOULD_NOT_BE_INJECTED", "SHOULD_NOT_BE_SUMMARIZED_BY_GO", "## CURRENT PLAN", "## STEP CONFIG SUMMARY"} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("review plan prompt still injects controller-generated plan context %q", forbidden)
+		}
+	}
 
 	for _, want := range []string{
+		"Read the workflow's source artifacts yourself",
+		"targeted `jq` queries",
+		"do not dump the full plan",
+		"workflow.json",
+		"planning/step_config.json",
 		"one large `message_sequence` per coherent shared-context span",
 		"fewest durable steps",
 		"substantial end-to-end outcome",

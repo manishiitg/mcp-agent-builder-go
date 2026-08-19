@@ -1,7 +1,8 @@
 ## Pulse agent-owned review and fixing
 
-Use only after Gate. This is the Review+Fix turn in the same main-agent
-conversation that received Gate and will later receive Finalize.
+Use only after Gate. Pulse uses two ordered parent turns in the same main-agent
+conversation: Review first, then Fix. Reviewers and the Fixer are separate
+background agents. A reviewer never repairs its own finding.
 
 Read `get_pulse_state(view="module", pulse_run_id=<current Pulse run>)` before
 dispatching any child. Its `gate_mode` is the contract for this pass:
@@ -24,9 +25,9 @@ Gate decides separately whether `workflow_review` (Engineering Review),
 durable worklist yourself. Go does not choose reviewers or automatically
 launch a residual Fixer/recovery agent.
 
-## Dispatch model
+## Review dispatch
 
-The first Review+Fix turn is a launcher, not a long-running parent review.
+The Review turn is a launcher, not a long-running parent review.
 Use `run_in_background` for every selected child. When Engineering and/or
 Operations are due, use one `agent_type="executor"` child with one ordered
 `message_sequence`. Give it the exact run-scoped checkpoint path from the
@@ -39,6 +40,17 @@ with a non-empty `message`; IDs and labels are optional diagnostics.
 1. **Prior verification + Engineering Review** — verify every retained repair
    whose evidence boundary arrived, then inspect runtime correctness,
    plan/artifact drift, and report/evaluation implementation selected by Gate.
+   Start from typed SQLite backlog/attempt state, then read the current run's
+   checkpoint if it already exists. Do not rediscover prior analysis merely
+   because this is a new Pulse run: read the newest relevant earlier
+   `runs/pulse/*/engineering-review.md` checkpoint only when the preceding
+   review was interrupted or missed its terminal receipt, an active finding
+   points to reasoning/evidence held there, or the current evidence suggests a
+   recurrence whose earlier repair context is not recoverable from SQLite.
+   Treat that prior checkpoint as an investigation pointer, never authority:
+   re-check its claims against current artifacts and runtime evidence, copy no
+   raw output, and carry forward only compact evidence references and reasoning
+   that remain valid into the current checkpoint.
    Closure requires the real runtime path, a post-change producing run that
    exercised it, expected behavior, and no regression. Persist the truthful
    verdict: `fixed_verified`, `changed_unverified` with
@@ -49,10 +61,16 @@ with a non-empty `message`; IDs and labels are optional diagnostics.
    ownership or contract issue. Load the learnings, knowledgebase, and database
    evidence packs as needed. This is a distinct second turn in the same
    conversation, not a `stores_health` module or separate receipt.
-3. **Operations Review** — only when `llm_ops_review` is due.
-4. **Fix and verify** — apply safe owned repairs and run proportional proof.
-5. **Persist and close** — write typed findings, dispositions, verification,
-   attempts, and exactly one terminal receipt for each due module.
+3. **Operations Review** — only when `llm_ops_review` is due. Load
+   `read_skill(skills=[{"name":"workflow-commands","path":"references/ops-review.md"}])`
+   and apply its evidence and structural checklist in this existing executor
+   sequence. The parent sequence overrides only the reference's standalone
+   dispatch/read-only wrapper; do not launch another Operations reviewer.
+4. **Classify observations** — for every selected workflow observation, link it
+   to an existing issue, promote it with evidence, or reject it as non-issue.
+5. **Persist review state** — write typed findings and verification evidence,
+   but do not modify implementation files and do not write the Engineering or
+   Operations terminal module receipt. The independent Fix turn owns it.
 
 Do not add a consolidation turn. Every later message continuously updates the
 checkpoint's canonical root causes and merges semantic duplicates while it
@@ -78,22 +96,50 @@ their declared interference domains do not overlap; proposed or approved but
 not started experiments do not consume an active slot.
 
 Give each child the Pulse run ID, selected lens, Gate evidence, checkpoint
-path, and clear normal builder authority. The final sequence message owns the
-typed SQLite writes and receipts because it has the complete sequence context.
+path, and clear read/review authority. The final sequence message owns typed
+review writes because it has the complete sequence context. Strategic Review
+may write its own terminal receipt because no later Fixer mutates its work.
 Launch all selected children, then end the parent turn without polling. The
 runtime waits for registered children. The next parent turn only validates
-receipts and resolves genuine cross-module ownership conflicts; it must not
-reconstruct findings from truncated automatic-notification prose. If a child
-dies before persistence, record that module as incomplete instead of inventing
-its findings.
+saved review state and selects repair work; it must not reconstruct findings
+from truncated automatic-notification prose. If a child dies before
+persistence, record that module as incomplete instead of inventing findings.
 
-Read module/worklist state, `get_pulse_state(view="backlog")`, and saved SQLite reviewer results. On recovery inspect
+## Independent Fix dispatch
+
+After every registered reviewer finishes, reload the Gate worklist, canonical
+issues, saved reviewer records, and the Engineering checkpoint. Workflow
+observations are evidence, not Fixer work. Select at most one highest-value
+coherent repair objective from canonical issues. Several issues may share the
+objective only when they have one root cause, compatible targets, and one proof
+boundary.
+
+Launch one fresh `agent_type="executor"` Fixer with `run_in_background`. Never
+reuse a reviewer conversation. The Fixer may modify safe owned targets, records
+exact attempts and dispositions, runs proportional proof, updates the compact
+checkpoint, and writes exactly one terminal receipt for each due Engineering
+or Operations module. Unselected issues remain durable. If no safe canonical
+objective exists, the parent records a truthful done or blocked receipt from
+reviewer evidence without launching a Fixer. Do not repeat Strategic Review.
+
+Read module/worklist state, `get_pulse_state(view="backlog", detail="compact")`
+once, and saved SQLite reviewer results. Choose relevant public PUL ids from
+that bounded index, then use `detail="full"` only for those ids. On recovery inspect
 current target/runtime and verification evidence; never trust HTML or blindly
-reapply partial work. Preserve `changed_unverified` until its evidence boundary.
-For the due module, work the complete active retained backlog **before** new
-discovery. For each relevant issue, verify the next-check boundary if it has
-arrived, repair it when a safe bounded repair exists, or record its concrete
-blocker/decision/evidence boundary. Also load `suppressed_concerns`: an
+reapply partial work. A prior run-scoped checkpoint may explain an interrupted
+review or repair, but it cannot close, reopen, or disposition an issue; reconcile
+it with typed SQLite state and current evidence first. Preserve
+`changed_unverified` until its evidence boundary.
+For the due module, inventory the complete active retained backlog **before**
+new discovery, then choose one highest-value coherent repair objective for this
+pass. That objective may cover many findings when they share one root cause,
+compatible targets, and one proof boundary; it must not become an instruction
+to empty every unrelated active root in one agent turn. First verify any
+`changed_unverified` issue selected by Gate whose next-check boundary arrived,
+then rank actionable roots by correctness/safety impact, recurrence, available
+proof, and owner decisions. Keep every unselected issue durable and explicitly
+checkpoint the remaining ordered queue for a future Pulse pass. Also load
+`suppressed_concerns`: an
 unchanged externally owned issue is not a new finding, while materially changed
 evidence/target identity is a reopen candidate. A new finding is justified only
 by a genuinely distinct root cause with a different repair, owner, or
@@ -341,6 +387,14 @@ findings, and must not be converted into duplicate issues.
 `create_human_input_request`, passed as `human_input_id`. Create the decision
 first: a finding marked awaiting_user with no question leaves the operator told
 that something needs them and given nothing to answer.
+Attribute the question to the reviewer that actually asks it:
+`workflow_review` uses `source="engineering_review"` with an
+`engineering-decision-...` id, `llm_ops_review` uses `source="ops_review"`
+with an `ops-decision-...` id, and `strategic_review` uses
+`source="strategic_review"` with a `strategic-proposal-...` id. Pass that id as
+`human_input_id` on the corresponding `record_pulse_finding` call so the
+finding and pending decision are linked at creation; never leave
+`recommended_route="decision_required"` as an unlinked label for a later turn.
 For `strategic_review`, the question source must be `strategic_review` and its
 id must start `strategy-proposal-`. The backend rejects a strategic
 `proposal_only` disposition with no `next_check`, so every accepted
@@ -356,27 +410,33 @@ constraints, correctness/data integrity, preserved goal meaning, strategy
 improvement, then cost. If evidence cannot decide, create one focused decision,
 block affected modules, and do not mutate that target.
 
-The Engineering/Ops executor first calls `get_pulse_state(view="backlog")` without a module filter
-and freezes the complete active starting manifest. Due reviewer modules decide
-which reviews ran; they do not narrow the executor's retained
-backlog. Include every owning module represented by that manifest in the executor
-instructions and lifecycle close-out. It then builds one compact,
-priority-ordered Fix queue. Each queue item is a coherent repair bundle. Group findings only when
+The Engineering/Ops executor first calls
+`get_pulse_state(view="backlog", detail="compact")` without a module filter and
+freezes the complete active starting manifest. It does not reload that index to
+filter a handful of IDs; it requests targeted full detail for selected IDs. Due
+reviewer modules decide which reviews ran; they do not hide retained work from
+the inventory. It then builds one compact, priority-ordered Fix queue and
+selects one coherent repair objective that it can carry through mutation and
+honest proof in this pass. Each queue item is a coherent repair bundle. Group findings only when
 they share the same root cause, require compatible changes to the same target,
 and have one verification condition. Cross-reviewer grouping is allowed;
 conflicts remain separate. Waiting-on-run, waiting-on-user, proposal-only, and
 externally owned findings stay visible but do not enter the actionable queue.
-There is no arbitrary queue cap and no finding may disappear. Process bundles
-sequentially and checkpoint/disposition one bundle before beginning the next; the
-backend opens the durable fix-attempt record from the disposition you write, so
-there is nothing to declare before mutating.
+Coherence, impact, and available proof choose the objective—not an arbitrary
+top-N issue count. No finding may disappear: checkpoint the exact unselected
+queue, but do not re-file or manufacture a current-pass disposition for issues
+the executor did not investigate. Process and disposition the selected bundle
+before considering any inseparable follow-up; the backend opens the durable
+fix-attempt record from the disposition you write, so there is nothing to
+declare before mutating.
 Before mutation capture targets, time, hashes/versions, and baseline. Load
 `read_skill(skills=[{"name":"builder-reference","path":"references/pulse-fixer-practices.md"},{"name":"builder-reference","path":"references/fix-verification.md"}])`;
 follow the engineering-practices reference to diagnose and bundle the root cause,
-including its **Full-backlog drain contract**, then the verification reference
+including its **Bounded backlog progress contract**, then the verification reference
 to establish proof. Maintain the exact remaining visible issue-ID list
-throughout the pass and reconcile it with a final unfiltered
-`get_pulse_state(view="backlog")` read;
+throughout the pass and reconcile it with a final compact
+`get_pulse_state(view="backlog", detail="compact")` read only when mutation may
+have changed lifecycle state;
 old artifacts or successful writes are not proof. If proof
 needs a future run, record `changed_unverified` / `awaiting_next_valid_run`.
 
@@ -386,14 +446,17 @@ and changed step configs after mutation. A smaller `SKILL.md`, valid Markdown,
 or content moved into `references/` is not proof; semantic purity and correct
 objective/access pairing are the postcondition.
 Re-read `get_pulse_state(view="module")` and map each actionable finding to the
-visible `issue.id` from `get_pulse_state(view="backlog")`. Send that one ID back
+visible `issue_id` from the compact backlog index. Send that one ID back
 as `issue_id`; the backend resolves its fingerprint and current attempt. IDs
 address records but never decide semantic sameness. If a finding lacks an issue
 ID, block it as a reviewer-contract failure instead of making an untracked change.
 
-Reconcile every starting issue ID to one disposition or one
-checked, still-unmet waiting/external boundary; missing/duplicates block its
-module and the executor must not claim completion. Strategy or model-routing changes need exact valid approval. Preserve each
+Reconcile every selected issue ID to one disposition or one checked,
+still-unmet waiting/external boundary. Confirm that every unselected starting ID
+remains in the durable backlog or is linked to an independently recorded
+lifecycle transition; do not touch it merely to satisfy accounting. A selected
+issue missing from close-out blocks its module, but a truthful remaining queue
+does not. Strategy or model-routing changes need exact valid approval. Preserve each
 reviewer's conclusion under its owning module. Strategic Review may conclude
 keep, improve, propose an alternative, run an approved bounded experiment, or
 wait for named evidence. Operational observations

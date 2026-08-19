@@ -428,7 +428,7 @@ func (e *Executor) HandleAgentBrowser(ctx context.Context, args map[string]inter
 	}
 
 	// Get agent-level and workflow-level session IDs from context.
-	// agentSessionID = isolated ID for share_browser=false, parent ID for share_browser=true.
+	// agentSessionID identifies the workflow/browser owner.
 	// workflowSessionID = always the parent/root workflow session ID.
 	agentSessionID := ""
 	if sid, ok := ctx.Value(common.ChatSessionIDKey).(string); ok {

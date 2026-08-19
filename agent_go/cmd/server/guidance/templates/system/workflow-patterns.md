@@ -6,6 +6,10 @@ Each pattern lists: industry-alignment line (for users with prior vocabulary), t
 
 The builder's primitives referenced below: `regular`, `todo_task`, `routing`, `human_input`, `message_sequence`.
 
+The `plan-design` reference is authoritative for step-type eligibility; these
+patterns do not override it. A fixed child set and order does not justify
+`todo_task`, even when separate tools, learnings, or debugging would be useful.
+
 ---
 
 ### 1. Phase Router

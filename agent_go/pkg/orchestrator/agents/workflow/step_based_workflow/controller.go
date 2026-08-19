@@ -117,8 +117,8 @@ type StepBasedWorkflowOrchestrator struct {
 	executionOptions *ExecutionOptions
 
 	// Preset-level agent defaults (used when step config doesn't specify)
-	presetPhaseLLM       *AgentLLMConfig // Default for lightweight phase agents (planning, evaluation setup, builder chat helpers).
-	presetMaintenanceLLM *AgentLLMConfig // Default for expensive background maintenance/advisor agents.
+	presetPhaseLLM *AgentLLMConfig // Default for lightweight phase agents (planning, evaluation setup, builder chat helpers).
+	presetPulseLLM *AgentLLMConfig // Default for reviews, audits, KB upkeep, and Pulse agents.
 
 	// Preset-level feature toggles
 	useKnowledgebase  bool   // Whether to create and reference knowledgebase folder (default: true)
@@ -190,7 +190,7 @@ func NewStepBasedWorkflowOrchestrator(
 	customToolExecutors map[string]interface{},
 	toolCategories map[string]string, // NEW: tool category map
 	presetPhaseLLM *AgentLLMConfig, // Optional preset default for lightweight phase agents
-	presetMaintenanceLLM *AgentLLMConfig, // Optional preset default for expensive background maintenance/advisor agents
+	presetPulseLLM *AgentLLMConfig, // Optional preset default for review, maintenance, and Pulse agents
 	useKnowledgebase bool, // Whether to create and reference knowledgebase folder (default: true)
 	tieredConfig *TieredLLMConfig, // Tiered LLM config (nil when not using tiered allocation)
 ) (*StepBasedWorkflowOrchestrator, error) {
@@ -228,12 +228,12 @@ func NewStepBasedWorkflowOrchestrator(
 	logger.Info(fmt.Sprintf("🔗 Set MCP session ID for workflow: %s (will be overridden with actual group name in batch execution)", workflowSessionID))
 
 	hcpo := &StepBasedWorkflowOrchestrator{
-		BaseOrchestrator:     baseOrchestrator,
-		sessionID:            workflowSessionID, // Use the same session ID set on BaseOrchestrator for MCP connection sharing
-		workflowID:           fmt.Sprintf("workflow_%d", time.Now().UnixNano()),
-		presetPhaseLLM:       presetPhaseLLM,
-		presetMaintenanceLLM: presetMaintenanceLLM,
-		useKnowledgebase:     useKnowledgebase,
+		BaseOrchestrator: baseOrchestrator,
+		sessionID:        workflowSessionID, // Use the same session ID set on BaseOrchestrator for MCP connection sharing
+		workflowID:       fmt.Sprintf("workflow_%d", time.Now().UnixNano()),
+		presetPhaseLLM:   presetPhaseLLM,
+		presetPulseLLM:   presetPulseLLM,
+		useKnowledgebase: useKnowledgebase,
 	}
 
 	// Set up tiered LLM allocation mode
@@ -250,8 +250,8 @@ func NewStepBasedWorkflowOrchestrator(
 		} else {
 			logger.Info("🏷️ WARNING: No Phase LLM configured - phase agents will fail")
 		}
-		if hcpo.presetMaintenanceLLM != nil {
-			logger.Info(fmt.Sprintf("🏷️ Maintenance LLM (independent): %s/%s", hcpo.presetMaintenanceLLM.Provider, hcpo.presetMaintenanceLLM.ModelID))
+		if hcpo.presetPulseLLM != nil {
+			logger.Info(fmt.Sprintf("🏷️ Pulse LLM (independent): %s/%s", hcpo.presetPulseLLM.Provider, hcpo.presetPulseLLM.ModelID))
 		}
 		logger.Info(fmt.Sprintf("🏷️ Tiered LLM allocation mode enabled - Tier1: %s, Tier2: %s, Tier3: %s",
 			formatTierAgentLLM(tieredConfig.Tier1),

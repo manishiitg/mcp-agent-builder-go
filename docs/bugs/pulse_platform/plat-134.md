@@ -6,7 +6,7 @@
 |---|---|
 | Assigned agent | Codex |
 | Ticket state | `partially_implemented` — live chat runtime simplified and covered; compatibility naming and unreachable legacy implementation remain to be extracted/deleted |
-| Last synchronized | `2026-08-18` |
+| Last synchronized | `2026-08-19` |
 
 - **Priority:** P1 — ordinary and product chat are simple conversational
   sessions, but their runtime was assembled as a generic multi-agent
@@ -81,6 +81,12 @@ The live runtime now follows the direct-chat contract:
   carries the unused delegated-task reasoning popup.
 - The delegation reference entry/template was removed from the chat guidance
   surface.
+- Product mode now installs one shared `ProductChatSurface` automatically.
+  Existing `agent_error`, `conversation_error`, failed completion, and cancel
+  carriers normalize into a single product failure state; retryable failures
+  can replay the last human turn and raw provider text remains collapsed under
+  technical details. New products receive this behavior through
+  `inputVariant="product"` without product-specific event parsing.
 
 The focused backend contract asserts that the direct-chat path contains no
 delegation or schedule registration. `go build ./...`, the focused backend
@@ -128,6 +134,9 @@ The behavior is simplified, but the source tree is not yet fully reduced:
   constrained to their declared profile capabilities.
 - Chat startup performs no delegation-tier API request and has no delegated-task
   reasoning control.
+- Every product chat stops its working state and renders a normalized failure
+  for both explicit error events and terminal completion text such as
+  `all LLMs failed`; retry does not require product-specific code.
 - Workflow Builder `run_in_background` / `call_sub_agent`, scheduled workflow
   children and Pulse background reviewers continue working unchanged.
 - A later source cleanup can delete the unreachable chat delegation

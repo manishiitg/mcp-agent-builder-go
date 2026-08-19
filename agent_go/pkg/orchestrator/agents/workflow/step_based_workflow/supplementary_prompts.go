@@ -15,15 +15,14 @@ import (
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 )
 
-// appendSupplementaryPrompts injects skills, secrets, browser isolation,
-// and browser instructions into the agent's system prompt.
+// appendSupplementaryPrompts injects skills, secrets, and browser instructions
+// into the agent's system prompt.
 // This is the standard post-setup injection used by execution and todo-task agents.
 func (hcpo *StepBasedWorkflowOrchestrator) appendSupplementaryPrompts(
 	ctx context.Context,
 	baseAgent *agents.BaseAgent,
 	config *agents.OrchestratorAgentConfig,
 	effectiveSkills []string,
-	isolatedSessionID string,
 	attachGlobalLearnings bool,
 	registeredTools []string,
 	scriptedStep bool,
@@ -91,20 +90,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) appendSupplementaryPrompts(
 		}
 	}
 
-	// 2. Browser isolation (agent-browser session override)
-	if isolatedSessionID != "" {
-		for _, skill := range effectiveSkills {
-			if skill == "agent-browser" {
-				supplements = append(supplements, fmt.Sprintf(
-					"## Browser Isolation\nYou have an isolated browser session. When using the agent_browser tool, use session name %q instead of \"default\" to avoid sharing browser state with other agents.",
-					isolatedSessionID,
-				))
-				hcpo.GetLogger().Info("Added browser isolation guidance to agent system prompt for agent-browser")
-				break
-			}
-		}
-	}
-
 	// 3. Secrets
 	effectiveSecrets := GetEffectiveSecrets(hcpo.BaseOrchestrator)
 	if len(effectiveSecrets) > 0 {
@@ -117,7 +102,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) appendSupplementaryPrompts(
 
 	// 4. Browser instructions (mode-specific)
 	browserCfg := hcpo.resolveBrowserConfig(config.ServerNames, effectiveSkills)
-	browserCfg.IsIsolated = isolatedSessionID != ""
 	browserPrompt := browserinstructions.BuildBrowserInstructions(browserCfg)
 	if isCodingCLIConfig(config) {
 		browserPrompt = browserinstructions.BuildBrowserRuntimeInstructions(browserCfg)

@@ -6,7 +6,7 @@
 |---|---|
 | Assigned agent | unassigned |
 | Ticket state | `implemented` — suspend/resume shipped; live reverify pending. Stage 1 `multi-llm-provider-go@a9fa11a`, stage 1c `@e8cbc1e`, stage 2 `mcpagent@c88bfc0`, bounded consume `781d52605`, stage 3 `45ba49660`, per-account cache `@2ca6c02`, schedule gate `f64c54619`. Live reproduction captured 2026-08-18 (rtslatency, see below) |
-| Last synchronized | `2026-08-18` |
+| Last synchronized | `2026-08-19` |
 
 - **Priority:** P0 — a workflow can stop midway and remain falsely running for
   hours after its coding-agent account reaches a usage limit.
@@ -407,6 +407,13 @@ classifying the failure correctly.
 ### Stage 4 — UI — not started
 
 Clock instead of spinner, plus Resume now / Use fallback provider / Cancel run.
+
+This refers to the durable **workflow-run** capacity controls. Direct product
+chat now separately normalizes quota failures into the shared product failure
+card, stops the working indicator, shows a retry action, and preserves an exact
+`retry_at` when the event carries one. That frontend improvement does not mark
+this workflow stage complete: Global Monitor still needs the clock and the
+three run-level controls above.
 
 ## What shipped (2026-08-18)
 

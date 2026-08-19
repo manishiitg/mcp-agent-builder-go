@@ -259,16 +259,16 @@ boilerplate copied verbatim, only identifiers change):
    for this profile (`agentProfileWorkspace`/`agentProfileProjectTitle` set
    — required for `scope: project` to resolve); `<ProductSurfaceSwitcher/>`
    in the header.
-2. **Pass `inputVariant="product"` to `<ChatArea>`.** This existing prop
-   (`surfaceVariant` internally in `ChatInput.tsx`) drives ~20 UI-chrome
-   decisions — placeholder text, padding, hiding the live-delivery status
-   line, upload-button styling, and (as of the Dominion fix) the tmux
-   terminal toggle. No product surface passed it before Dominion, which is
-   why every profile-bound chat tab showed Video Studio's literal
-   placeholder text ("Describe the video you want to make…",
-   `ChatInput.tsx`'s hardcoded fallback for any tab with
-   `agentProfileWorkspace` set) regardless of which product it actually
-   was. Pass it.
+2. **Pass `inputVariant="product"` to `<ChatArea>`.** This is the product-chat
+   boundary, not only a styling flag. It installs the shared
+   `ProductChatSurface` automatically: durable human/assistant history,
+   streaming state, normalized `agent_error` / `conversation_error` / failed
+   completion handling, safe technical details, and retry of the last human
+   turn. It also drives the product composer decisions — placeholder text,
+   padding, hidden live-delivery status, upload styling, and no tmux terminal
+   toggle. A domain-specific `contentRenderer` may replace the visual layer,
+   but must keep the shared renderer props and failure adapter; do not parse
+   provider error strings inside a product surface.
 3. `<Name>Mark.tsx` — a gradient badge wrapping a lucide icon; 27 lines,
    copy `FinanceMark.tsx` and swap the icon/gradient.
 4. Registration — exactly three files: `useProductSurfaceStore.ts`'s
@@ -304,3 +304,7 @@ manifest parses. They do not prove the chat works. Verify live:
 - [ ] Open the chat composer and confirm the placeholder text and provider
       chip look product-appropriate, not leftover AgentWorks/Video Studio
       defaults.
+- [ ] Force one provider failure (quota/auth/configuration or an unavailable
+      test provider). Confirm the spinner stops, the product shows actionable
+      copy, raw provider output is collapsed under **Technical details**, and
+      **Retry** resubmits the last human message when the failure is retryable.

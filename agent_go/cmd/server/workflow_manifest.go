@@ -25,7 +25,7 @@ const WorkflowManifestSchemaVersion = 1
 // contract version. Unlike schema_version, this gates agent-run workflow
 // upgrades: Pulse can add version-specific messages and stamp this value only
 // after the workflow has been checked or migrated.
-const WorkflowContractCurrentVersion = "1.0.26"
+const WorkflowContractCurrentVersion = "1.0.27"
 
 const workflowContractInitialVersion = "1.0.0"
 const workflowContractMessageSequenceCodeVersion = "1.0.10"
@@ -44,6 +44,7 @@ const workflowContractDirectHTMLReportsVersion = "1.0.23"
 const workflowContractScheduledRouteVersion = "1.0.24"
 const workflowContractScheduleExecutionModelVersion = "1.0.25"
 const workflowContractPeriodicPulseReviewVersion = "1.0.26"
+const workflowContractDedicatedPulseScheduleVersion = "1.0.27"
 
 const (
 	DefaultRunRetentionCount = 5
@@ -70,24 +71,6 @@ type WorkflowManifest struct {
 	// guidance, dual-mode declarations) belongs in semantic workflow artifacts
 	// and typed Pulse records; prose captures nuance that enums cannot.
 	OversightMode OversightMode `json:"oversight_mode,omitempty"`
-
-	// PostRunMonitor opts this workflow into the post-run monitor: a compact
-	// evidence scan that runs after each scheduled run and records Bug +
-	// Goal verdicts (and any silent-failure / drift finding) into the workflow
-	// log. It is a deliberate choice — the user or the builder agent enables it
-	// for workflows where silent breakage matters (QA, production, monitoring,
-	// compliance). Unset/false = off (no monitor pass, no extra cost).
-	PostRunMonitor *bool `json:"post_run_monitor,omitempty"`
-
-	// PostRunMonitorMode selects when Gate/Review+Fix/Finalize actually run.
-	// "" or "per_run" (default): today's behavior — the full pass runs after
-	// every scheduled run, in that run's own session. "periodic": every run
-	// gets only a lightweight backup+notify pass; the full pass runs on its
-	// own separately-scheduled cadence (a WorkflowSchedule with
-	// PulseReviewOnly set), decoupled from any single run's session. See
-	// PLAT-115 — this exists because long Pulse-adjacent sessions reused
-	// across scheduled runs caused real bugs (PLAT-113, PLAT-114).
-	PostRunMonitorMode string `json:"post_run_monitor_mode,omitempty"`
 
 	// PaceOnLowQuota spreads a run out rather than racing into a provider
 	// capacity wall. Opt-in per workflow, because it is only ever the right
@@ -138,19 +121,20 @@ type WorkflowAdvisorSpecialization struct {
 	UpdatedAt       string `json:"updated_at,omitempty"`
 }
 
-// MonitorEnabled reports whether the post-run monitor should run for this
-// workflow. It is opt-in: only an explicit true enables it.
-func (m *WorkflowManifest) MonitorEnabled() bool {
-	return m != nil && m.PostRunMonitor != nil && *m.PostRunMonitor
-}
-
-// PostRunMonitorIsPeriodic reports whether Gate/Review+Fix/Finalize run on
-// their own separately-scheduled cadence instead of after every run. Any
-// value other than exactly "periodic" — including empty, unrecognized, or
-// legacy — is treated as "per_run", so an unknown future value fails safe to
-// today's behavior rather than silently skipping review on every run.
-func (m *WorkflowManifest) PostRunMonitorIsPeriodic() bool {
-	return m != nil && strings.TrimSpace(m.PostRunMonitorMode) == "periodic"
+// HasEnabledPulseReviewSchedule reports whether recurring Pulse is configured.
+// The schedule is the single source of truth: normal workflow schedules never
+// run Gate/Review+Fix inline, while the dedicated schedule reviews accumulated
+// evidence on its own cadence.
+func (m *WorkflowManifest) HasEnabledPulseReviewSchedule() bool {
+	if m == nil {
+		return false
+	}
+	for _, schedule := range m.Schedules {
+		if schedule.Enabled && schedule.PulseReviewOnly {
+			return true
+		}
+	}
+	return false
 }
 
 type WorkflowBackupConfig struct {
@@ -332,16 +316,14 @@ type WorkflowSchedule struct {
 	WorkshopMode         string `json:"workshop_mode,omitempty"`   // Vestigial. Schedules always run in workshop mode; nothing branches on this value any more. Retained so existing workflow.json files still parse.
 	Query                string `json:"query,omitempty"`           // Message to execute (multi-agent mode)
 	ResumePrevious       *bool  `json:"resume_previous,omitempty"` // Coding-agent CLI only: resume the latest prior thread (same provider) instead of a fresh session each run. nil = default (fresh session); explicit true opts in.
-	// PulseReviewOnly marks this schedule as a workflow's own periodic Pulse
-	// review pass (PLAT-115), not a workflow-execution schedule: when it
+	// PulseReviewOnly marks this schedule as a workflow's own Pulse review
+	// pass, not a workflow-execution schedule: when it
 	// fires, the workflow does not run — Gate/Review+Fix/Finalize run over
 	// whatever runs/iteration-N/ backlog has accumulated since Gate's own
 	// last_checked_at, the same way the manual "Run Pulse now" trigger
 	// (ScheduleContext.PulseOnly) already reviews retained evidence without
-	// executing the workflow. Pairs with a workflow's own
-	// post_run_monitor_mode="periodic": that setting shortens every run's own
-	// pass to backup+notify; this schedule is what performs the deferred
-	// review, on its own cadence.
+	// executing the workflow. Its enabled presence is the complete recurring
+	// Pulse configuration; there is no second workflow-level enable/mode flag.
 	PulseReviewOnly bool `json:"pulse_review_only,omitempty"`
 	// ExecutionMode is a typed, runtime-enforced operating mode for a scheduled
 	// invocation. It is deliberately separate from Messages: safety must not

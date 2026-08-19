@@ -7,7 +7,9 @@ import (
 )
 
 func histEntry(role string) map[string]interface{} { return map[string]interface{}{"role": role} }
-func msg(role string) llmtypes.MessageContent      { return llmtypes.MessageContent{Role: llmtypes.ChatMessageType(role)} }
+func msg(role string) llmtypes.MessageContent {
+	return llmtypes.MessageContent{Role: llmtypes.ChatMessageType(role)}
+}
 
 // TestUserTurnsAreTheInvariantWorthGuarding.
 //

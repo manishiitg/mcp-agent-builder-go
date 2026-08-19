@@ -217,11 +217,10 @@ func TestProviderManifestPublishesCodexGPT56Defaults(t *testing.T) {
 			model  string
 			effort string
 		}{
-			"high":        {model: "gpt-5.6-terra", effort: "medium"},
-			"medium":      {model: "gpt-5.6-luna", effort: "high"},
-			"low":         {model: "gpt-5.6-luna", effort: "low"},
-			"maintenance": {model: "gpt-5.6-sol", effort: "high"},
-			"pulse":       {model: "gpt-5.6-terra", effort: "xhigh"},
+			"high":   {model: "gpt-5.6-terra", effort: "medium"},
+			"medium": {model: "gpt-5.6-luna", effort: "high"},
+			"low":    {model: "gpt-5.6-luna", effort: "medium"},
+			"pulse":  {model: "gpt-5.6-terra", effort: "high"},
 		} {
 			got := provider.DefaultTierModels[tier]
 			if got.ModelID != want.model || got.Options["reasoning_effort"] != want.effort {

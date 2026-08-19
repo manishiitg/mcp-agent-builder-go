@@ -77,13 +77,12 @@ func TestWorkshopResolveLLMConfigExpandsCodingAgentMode(t *testing.T) {
 	if !ok {
 		t.Fatal("expected Claude Code coding-agent defaults")
 	}
-	if defaults.Builder.ModelID != "claude-opus-5" ||
+	if defaults.Builder.ModelID != "claude-sonnet-5" ||
 		defaults.High.ModelID == "claude-fable-5" ||
 		defaults.Medium.ModelID == "claude-fable-5" ||
 		defaults.Low.ModelID == "claude-fable-5" ||
-		defaults.Maintenance.ModelID != "claude-opus-5" ||
 		defaults.Pulse.ModelID != "claude-sonnet-5" {
-		t.Fatalf("opus 5 should be builder/maintenance default and sonnet 5 should remain the pulse default, got defaults: %+v", defaults)
+		t.Fatalf("sonnet 5 should be the builder and pulse default, got defaults: %+v", defaults)
 	}
 
 	builder, tiered := workshopResolveLLMConfig(&workflowtypes.PresetLLMConfig{
@@ -101,16 +100,16 @@ func TestWorkshopResolveLLMConfigExpandsCodingAgentMode(t *testing.T) {
 	if got := builder.Options["reasoning_effort"]; got != defaults.Builder.Options["reasoning_effort"] {
 		t.Fatalf("builder reasoning_effort = %#v, want %#v", got, defaults.Builder.Options["reasoning_effort"])
 	}
-	maintenance := workshopResolveMaintenanceLLMConfig(&workflowtypes.PresetLLMConfig{
+	pulse := workshopResolvePulseLLMConfig(&workflowtypes.PresetLLMConfig{
 		SchemaVersion: workflowtypes.LLMConfigSchemaVersion,
 		Mode:          workflowtypes.LLMConfigModeProviderProfile,
 		Provider:      "claude-code",
 	})
-	if maintenance == nil {
-		t.Fatal("expected coding agent maintenance/advisor LLM")
+	if pulse == nil {
+		t.Fatal("expected coding agent Pulse LLM")
 	}
-	if maintenance.Provider != defaults.Maintenance.Provider || maintenance.ModelID != defaults.Maintenance.ModelID {
-		t.Fatalf("unexpected maintenance config: %+v", maintenance)
+	if pulse.Provider != defaults.Pulse.Provider || pulse.ModelID != defaults.Pulse.ModelID {
+		t.Fatalf("unexpected Pulse config: %+v", pulse)
 	}
 	if tiered == nil || tiered.Tier1 == nil || tiered.Tier2 == nil || tiered.Tier3 == nil {
 		t.Fatalf("expected full tiered config, got %+v", tiered)

@@ -236,6 +236,9 @@ func TestPulseReviewFixerDocsAreNamedAndLoadable(t *testing.T) {
 	if !strings.Contains(prompt, "references/pulse-fixer-practices.md") {
 		t.Fatal("pulse-review-fixer does not require the canonical Fixer practices reference")
 	}
+	if !strings.Contains(prompt, `"name":"workflow-commands","path":"references/ops-review.md"`) {
+		t.Fatal("pulse-review-fixer does not load the canonical Operations checklist from its actual bundle")
+	}
 
 	// The docs are split across bundles — review-artifact-drift is in
 	// workflow-commands, the rest in builder-reference — so the whole surface
@@ -249,7 +252,7 @@ func TestPulseReviewFixerDocsAreNamedAndLoadable(t *testing.T) {
 	}
 	for _, kind := range []string{
 		"fix-verification", "pulse-fixer-practices", "strategy-auditor", "pulse-bug-review",
-		"llm-selection", "review-artifact-drift",
+		"llm-selection", "review-artifact-drift", "ops-review",
 	} {
 		want := "references/" + kind + ".md"
 		found := false
@@ -266,7 +269,7 @@ func TestPulseReviewFixerDocsAreNamedAndLoadable(t *testing.T) {
 	}
 }
 
-func TestEngineeringReviewUsesTheCanonicalReviewAndFixSequence(t *testing.T) {
+func TestEngineeringReviewUsesTheCanonicalReviewOnlySequence(t *testing.T) {
 	raw, err := os.ReadFile("templates/improve/engineering-review.md")
 	if err != nil {
 		t.Fatalf("read engineering-review template: %v", err)
@@ -274,35 +277,38 @@ func TestEngineeringReviewUsesTheCanonicalReviewAndFixSequence(t *testing.T) {
 	prompt := string(raw)
 	for _, want := range []string{
 		"continuing Workflow Builder conversation",
+		`"name":"workflow-commands","path":"references/ops-review.md"`,
+		"Standalone Operations Review",
 		"pulse_run_id=\"current\"",
 		"Own the review yourself",
-		"Persist typed findings and verification",
-		"normal Workflow Builder tools",
-		"one terminal module result for Engineering and one for Operations",
+		"Persist typed findings and matured verification",
+		"Do not apply repairs",
+		"`/pulse-fixer` owns both",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("engineering-review prompt is missing canonical sequence contract %q", want)
 		}
 	}
-	for _, forbidden := range []string{"STANDALONE PULSE FIXER", `role="fixer"`, `review_lanes=[`} {
+	for _, forbidden := range []string{"apply safe bounded fixes", "normal Workflow Builder tools", "one terminal module result for Engineering", `role="fixer"`} {
 		if strings.Contains(prompt, forbidden) {
 			t.Errorf("engineering-review retained obsolete standalone Fixer contract %q", forbidden)
 		}
 	}
 }
 
-func TestPulseFixerPracticesRequireExhaustiveAgenticDrain(t *testing.T) {
+func TestPulseFixerPracticesRequireBoundedAgenticProgress(t *testing.T) {
 	raw, err := os.ReadFile("templates/system/pulse-fixer-practices.md")
 	if err != nil {
 		t.Fatalf("read pulse-fixer-practices template: %v", err)
 	}
 	practices := string(raw)
 	for _, want := range []string{
-		"Full-backlog drain contract",
+		"Bounded backlog progress contract",
 		"Freeze a starting manifest",
-		"Classify every manifest item",
+		"Rank from compact lifecycle evidence",
 		"Maintain an explicit remaining list",
 		"Reconcile before completion",
+		"A pass may complete while the durable backlog remains",
 		`record_pulse_result`,
 	} {
 		if !strings.Contains(practices, want) {
@@ -313,9 +319,10 @@ func TestPulseFixerPracticesRequireExhaustiveAgenticDrain(t *testing.T) {
 	scheduled := RenderSystemDoc("pulse-review-fixer")
 	for _, want := range []string{
 		"complete active starting manifest",
-		"do not narrow the executor's retained",
-		"Full-backlog drain contract",
-		"must not claim completion",
+		"do not hide retained work",
+		"Bounded backlog progress contract",
+		"one coherent repair objective",
+		"truthful remaining queue",
 	} {
 		if !strings.Contains(scheduled, want) {
 			t.Errorf("scheduled Fixer prompt missing exhaustive-drain rule %q", want)

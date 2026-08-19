@@ -4,9 +4,9 @@
 
 | Coordination | Value |
 |---|---|
-| Assigned agent | unassigned |
-| Ticket state | `implemented` — wiring shipped; `llm_ops_review` re-enabled 2026-08-10, so verification is now possible on the next passes |
-| Last synchronized | `2026-08-10` |
+| Assigned agent | Codex |
+| Ticket state | `implemented` — container review plus direct standalone execution and typed completion enforcement shipped; live slash-command verification pending |
+| Last synchronized | `2026-08-19` |
 
 - **Priority:** P2 — no incorrect behaviour; an entire review dimension simply never runs
 - **Owner:** Pulse guidance templates (`review/ops-review.md`, `builder/design-plan.md`)
@@ -71,3 +71,111 @@ The Gate block now makes `workflow_review` and `llm_ops_review` the two selectab
 - A Pulse pass with `llm_ops_review` due produces step-type/shape findings where warranted, citing trace evidence, not just tier/model findings.
 - The reachable-but-unused `declared_execution_mode` path in `pulse-fixer-practices.md` becomes reachable.
 - Verification is blocked until `llm_ops_review` is re-enabled at the Gate; record that rather than claiming verification from a pass that never invoked the lens.
+
+## Live recurrence and extension (2026-08-19)
+
+The original checklist wiring shipped, but a real Social Media plan showed that
+the coverage was still too narrow. Its top-level `step-execution-pipeline` is a
+`todo_task` whose description prescribes exactly ten named routes in an exact
+order. The parent therefore has little or no dynamic selection to perform, yet
+it adds its own model context, reads, tool calls, failure surface, and handoff
+cost. By contrast, the nested `execute-actions` todo genuinely selects work at
+runtime from the action queue, so removing every todo container would also be
+wrong. Ops Review had enough evidence to make this distinction but never asked
+the parent-necessity question and did not surface the issue.
+
+The extension now requires Ops Review to assess every cost/time-material
+container and its children as one execution unit, name the real decision the
+parent makes, and distinguish a fixed prescribed child set/order from genuine
+dynamic selection, conditional fan-out, retry/recovery, concurrency,
+human/approval boundaries, or necessary synthesis. Repeated broad reads across
+the parent and children are evidence of a weak handoff, while an independent
+clean-room verification read is not automatically waste. The reviewer uses
+agent judgment—there is no Go semantic classifier, numeric cutoff, or automatic
+plan rewrite.
+
+The same canonical checklist is now explicitly loaded by both the standalone
+`/ops-review` command and the Operations portion of `/engineering-review` and
+scheduled Pulse Review+Fix. The latter two override only the standalone
+dispatch/read-only wrapper and retain the normal typed finding and bounded
+Fixer ownership. The Social Media plan was deliberately left unchanged so the
+operator can verify that the slash-command reviewer discovers and recommends
+the structural change itself.
+
+Extended acceptance:
+
+- A material todo/routing/sequence container is reviewed as parent plus children,
+  not as an isolated parent step.
+- The finding states the runtime decision that justifies retaining the parent,
+  or identifies that the plan already prescribes the complete child set/order.
+- `/engineering-review` loads the same Ops structural checklist rather than
+  relying on an implicit ownership claim.
+- Running the slash command against the unchanged Social Media plan surfaces a
+  justified recommendation (or cites contrary runtime evidence); verification
+  remains pending until that live run.
+
+## Authoring-guidance consolidation (2026-08-19)
+
+The recurrence also exposed conflicting emphasis in the builder references.
+The canonical plan checklist required dynamic orchestration, while
+`optimize-playbook.md` and `plan-design.md` listed different tools, independent
+learnings, progress tracking, and easier debugging under “when to use
+todo_task.” Those are useful properties of an already-justified delegation
+boundary, but none proves that an LLM parent adds value. Read literally, the
+secondary guides could recreate exactly the fixed ten-route parent that Ops is
+now expected to flag.
+
+The guidance now shares one eligibility rule: use `todo_task` only when the
+parent makes a real runtime orchestration decision the static plan cannot
+directly express—dynamic discovery, conditional selection/fan-out, material
+runtime parallel coordination, adaptive retry/recovery, an approval boundary,
+or an interim synthesis decision that changes subsequent delegation. A fixed
+child set/order is explicitly insufficient. Different tools, separate
+learnings, progress visibility, and easier debugging are supporting properties
+only after that gate. Known same-context work maps to `message_sequence`, known
+deterministic work to scripted steps, known independent fixed work to explicit
+plan steps/dependencies, and a fixed exclusive branch to `routing`.
+
+`plan-design.md` is now named as the authoritative authoring reference;
+`todo-task.md`, `optimize-playbook.md`, `workflow-patterns.md`, and the Ops
+checklist preserve the same negative invariant. The scripted-orchestrator fast
+path is explicitly an optimization of an already-justified orchestrator, not a
+back door for creating one around a fixed sequence. A focused regression test
+renders every relevant guide and fails if this invariant drifts again.
+
+## Standalone slash-command lifecycle recurrence — 2026-08-19
+
+A live `/ops-review` exposed a separate defect in the standalone wrapper. The
+main chat had already launched `ops-review review` as an isolated background
+agent, but `review/ops-review.md` instructed that agent to launch a second
+`Standalone Operations Review`. The outer agent collected evidence for roughly
+ten minutes, then attempted the nested dispatch through a large shell/curl
+heredoc. Shell quoting failed before `run_in_background` was called, so no child
+execution existed. The outer agent nevertheless returned prose claiming the
+review had been dispatched, and the generic background lifecycle marked that
+normal LLM return completed. No `llm_ops_review` receipt or findings existed.
+
+The standalone contract now makes the first background agent the authoritative
+reviewer. It performs the review directly, records typed findings and matured
+verifications, and must call `complete_pulse_review` once for
+`modules=["llm_ops_review"]`. The slash dispatcher declares
+`required_pulse_review_modules=["llm_ops_review"]`; after the LLM returns, the
+backend reads the receipt by the exact child MCP session ID and refuses to mark
+the execution successful when the receipt is missing, failed, or belongs to a
+different session. Presentation prose is no longer completion authority.
+
+Focused tests cover direct/no-nested guidance, slash dispatch, and missing,
+failed, and completed SQLite receipt states. Live `/ops-review` verification
+after a backend restart remains the final acceptance step.
+
+### Decision record — standalone Ops execution boundary
+
+| Question | Decision and reasoning |
+|---|---|
+| What evidence forced the decision? | The outer background agent ran for about ten minutes, its shell-wrapped nested launch failed before creating any child, no finding or review receipt was stored, yet ordinary assistant prose caused the outer execution to be presented as completed. |
+| Keep the nested reviewer and only fix shell quoting? | Rejected. A direct tool call would remove the quoting failure but retain two agents, duplicated context/cost, two completion authorities, and no product value: the first agent is already isolated and owns the complete review contract. |
+| Let the backend infer success from prose or finding count? | Rejected. Prose is not a lifecycle receipt, and a legitimate clean review may record zero findings. Neither proves the review reached its terminal persistence boundary. |
+| Detect Ops reviews from the background task name? | Rejected. User-visible names and labels are presentation data and can change; they are not a durable execution contract. |
+| Selected design | The slash dispatcher explicitly declares `required_pulse_review_modules=["llm_ops_review"]`. The existing background agent reviews directly. The backend validates a completed receipt written by that exact child MCP session before reporting success. |
+| Why may a read-only reviewer write this receipt? | Read-only protects workflow artifacts and configuration. Typed Pulse findings, verifications, and the terminal receipt are audit metadata and are required to make the read-only judgment durable. |
+| What would justify revisiting it? | Evidence that the first background agent lacks a capability that only an independently isolated reviewer can safely provide. Any reintroduction must retain one unambiguous receipt owner and prove the additional isolation benefit exceeds its cost and failure surface. |

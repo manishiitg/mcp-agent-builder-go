@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | Codex |
-| Ticket state | `implemented` — automated contract verification passed; live post-restart/compaction verification pending |
+| Ticket state | `implemented` — merged lifecycle plus direct standalone execution and typed completion enforcement shipped; live post-restart/compaction verification pending |
 | Last synchronized | `2026-08-18` |
 
 - **Priority:** P1 — Pulse pays for two overlapping strategic reviews, yet
@@ -154,6 +154,11 @@ Use one writer per normal strategic review:
   truthful incomplete review; it does not invent findings from partial output.
 - Go validates and stores typed tool calls; it does not choose the strategic
   conclusion.
+- A strategic conclusion that genuinely requires operator approval first
+  creates a typed `strategic_review` approve/reject/defer request, then links
+  that exact request as the finding's `human_input_id`. A decision-required
+  finding without a pending request is rejected, so the advisor cannot leave
+  an invisible human dependency in SQLite.
 
 This removes the current contradictory reviewer-versus-parent normal write
 contract while keeping recovery truthful.
@@ -245,3 +250,37 @@ Strategic Review to mutate workflow implementation.
 - Focused Go tests, the frontend TypeScript build and the repository Go build
   pass. A live Pulse run after server restart, including a forced context
   compaction, remains required before closing the ticket.
+
+## Standalone slash-command lifecycle recurrence — 2026-08-19
+
+The retained scheduled Strategic Review sequence was canonicalized, but the
+manual `/strategy-auditor` wrapper still used the former two-layer pattern. The
+slash command first launched `strategy-auditor review` in the background, then
+its guidance told that already-isolated agent to launch another `Standalone
+Strategy Audit` and return the child's completion. It also still emitted the
+retired `strategy_auditor` module label and had no backend-enforced terminal
+receipt, so a failed or absent nested dispatch could be presented as a clean
+completion from prose alone—the same failure class reproduced by Ops Review.
+
+The manual command now performs the audit directly in its first background
+agent, persists findings and matured verifications under the canonical
+`strategic_review` module, and calls `complete_pulse_review` exactly once for
+that module. Its dispatch carries
+`required_pulse_review_modules=["strategic_review"]`, and the generic background
+completion boundary validates the exact child-session SQLite receipt before
+reporting success. Missing and failed receipts produce a failed/incomplete
+background execution rather than a false strategy result.
+
+Focused guidance, frontend dispatch, and canonical strategic-receipt tests
+pass. Live `/strategy-auditor` verification after restart remains pending.
+
+### Decision record — standalone Strategic Review execution boundary
+
+| Question | Decision and reasoning |
+|---|---|
+| What evidence forced the decision? | The manual Strategy slash path still had the same two-agent topology as the failed Ops reproduction: an already-isolated background reviewer was instructed to launch another reviewer, while no typed terminal receipt was required. It also emitted the retired `strategy_auditor` identity after PLAT-137 had merged the lifecycle into `strategic_review`. |
+| Keep a separate nested Strategy Auditor for independence? | Rejected. The slash-created background agent already has an isolated conversation. A second identical-role agent adds cost and another failure boundary without adding a critic phase or independent evidence source. Independence needed inside the strategic reasoning belongs in the retained review sequence, not another lifecycle owner. |
+| Continue accepting the legacy `strategy_auditor` module? | Rejected for new writes. Legacy IDs remain migration inputs only; emitting them again would recreate split cadence, history, and ownership after the explicit merge into `strategic_review`. |
+| Infer completion from a strategy recommendation? | Rejected. `no_material_problem` is a valid result, and an agent can produce plausible recommendations before finishing verification or persistence. Only the terminal receipt proves completion. |
+| Selected design | `/strategy-auditor` remains the human-facing command alias, but it dispatches one direct reviewer that persists under `strategic_review`. The slash call declares `required_pulse_review_modules=["strategic_review"]`, and the backend accepts completion only from that exact child-session receipt. |
+| What would justify revisiting it? | A product decision to expose a genuinely separate strategic role with a distinct question, evidence boundary, cadence, and receipt—not merely a renamed duplicate. Historical migration compatibility alone is not sufficient. |

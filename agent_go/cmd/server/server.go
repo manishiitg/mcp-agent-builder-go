@@ -1209,9 +1209,8 @@ const (
 )
 
 const (
-	llmConfigSourceAgentProfile         = "agent_profile"
-	llmConfigSourceScheduledAutoImprove = "scheduled_auto_improve"
-	llmConfigSourceScheduledPulse       = "scheduled_pulse"
+	llmConfigSourceAgentProfile   = "agent_profile"
+	llmConfigSourceScheduledPulse = "scheduled_pulse"
 )
 
 func requestLLMConfigOverridesManifest(req QueryRequest) bool {
@@ -1219,7 +1218,7 @@ func requestLLMConfigOverridesManifest(req QueryRequest) bool {
 		return false
 	}
 	switch strings.TrimSpace(req.LLMConfigSource) {
-	case llmConfigSourceAgentProfile, llmConfigSourceScheduledAutoImprove, llmConfigSourceScheduledPulse:
+	case llmConfigSourceAgentProfile, llmConfigSourceScheduledPulse:
 		return true
 	default:
 		return false
@@ -9002,7 +9001,7 @@ func (api *StreamingAPI) buildWorkshopConfig(
 				log.Printf("[WORKSHOP] LLMConfig details: mode=%q tieredConfig=%v providerProfile=%q",
 					llmCfg.Mode, llmCfg.TieredConfig != nil, llmCfg.Provider)
 				cfg.PresetPhaseLLM, cfg.TieredConfig = workshopResolveLLMConfig(llmCfg)
-				cfg.PresetMaintenanceLLM = workshopResolveMaintenanceLLMConfig(llmCfg)
+				cfg.PresetPulseLLM = workshopResolvePulseLLMConfig(llmCfg)
 
 				if llmCfg.UseKnowledgebase != nil {
 					cfg.UseKnowledgebase = *llmCfg.UseKnowledgebase
@@ -9036,8 +9035,8 @@ func (api *StreamingAPI) buildWorkshopConfig(
 					log.Printf("[WORKSHOP] Updated image tool executors (provider=%s model=%s)", imgCfg.Provider, imgCfg.ModelID)
 				}
 
-				log.Printf("[WORKSHOP] LLM config loaded: phase=%v maintenance=%v tiered=%v kb=%v kbLock=%v",
-					cfg.PresetPhaseLLM != nil, cfg.PresetMaintenanceLLM != nil, cfg.TieredConfig != nil, cfg.UseKnowledgebase, cfg.LockKnowledgebase)
+				log.Printf("[WORKSHOP] LLM config loaded: phase=%v pulse=%v tiered=%v kb=%v kbLock=%v",
+					cfg.PresetPhaseLLM != nil, cfg.PresetPulseLLM != nil, cfg.TieredConfig != nil, cfg.UseKnowledgebase, cfg.LockKnowledgebase)
 			}
 		}
 	}
@@ -10666,15 +10665,15 @@ func workshopResolveLLMConfig(config *workflowtypes.PresetLLMConfig) (*todo_crea
 	return builder, tiered
 }
 
-func workshopResolveMaintenanceLLMConfig(config *workflowtypes.PresetLLMConfig) *todo_creation_human.AgentLLMConfig {
+func workshopResolvePulseLLMConfig(config *workflowtypes.PresetLLMConfig) *todo_creation_human.AgentLLMConfig {
 	if config == nil {
 		return nil
 	}
-	if resolved, ok := workflowtypes.ResolveProviderProfileMaintenanceConfig(config); ok {
+	if resolved, ok := workflowtypes.ResolveProviderProfilePulseConfig(config); ok {
 		return workshopConvertAgentLLMConfig(resolved)
 	}
-	if config.MaintenanceLLM != nil && config.MaintenanceLLM.Provider != "" && config.MaintenanceLLM.ModelID != "" {
-		return workshopConvertAgentLLMConfig(config.MaintenanceLLM)
+	if config.PulseLLM != nil && config.PulseLLM.Provider != "" && config.PulseLLM.ModelID != "" {
+		return workshopConvertAgentLLMConfig(config.PulseLLM)
 	}
 	return nil
 }

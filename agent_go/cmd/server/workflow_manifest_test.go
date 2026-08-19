@@ -284,27 +284,20 @@ func TestReadWorkflowManifestPrunesRetiredExecutionDefaultsField(t *testing.T) {
 	}
 }
 
-// TestPostRunMonitorIsPeriodicFailsSafeToPerRun pins PLAT-115: every
-// existing workflow has no post_run_monitor_mode set at all, and must keep
-// running Gate/Review+Fix/Finalize after every run exactly as before. Only
-// the exact value "periodic" opts out of that — anything else (empty,
-// whitespace, an unrecognized future value, or a nil manifest) fails safe to
-// today's per-run behavior rather than silently skipping review.
-func TestPostRunMonitorIsPeriodicFailsSafeToPerRun(t *testing.T) {
+func TestEnabledPulseReviewScheduleIsRecurringPulseSourceOfTruth(t *testing.T) {
 	var nilManifest *WorkflowManifest
-	if nilManifest.PostRunMonitorIsPeriodic() {
-		t.Fatal("nil manifest must not be periodic")
+	if nilManifest.HasEnabledPulseReviewSchedule() {
+		t.Fatal("nil manifest must not have recurring Pulse")
 	}
-	for _, mode := range []string{"", "   ", "per_run", "unknown_future_value"} {
-		m := &WorkflowManifest{PostRunMonitorMode: mode}
-		if m.PostRunMonitorIsPeriodic() {
-			t.Fatalf("mode %q must not be treated as periodic", mode)
-		}
+	manifest := &WorkflowManifest{Schedules: []WorkflowSchedule{
+		{Name: "ordinary", Enabled: true},
+		{Name: "disabled Pulse", Enabled: false, PulseReviewOnly: true},
+	}}
+	if manifest.HasEnabledPulseReviewSchedule() {
+		t.Fatal("a disabled Pulse schedule must not enable recurring Pulse")
 	}
-	if m := (&WorkflowManifest{PostRunMonitorMode: "periodic"}); !m.PostRunMonitorIsPeriodic() {
-		t.Fatal("mode \"periodic\" must be treated as periodic")
-	}
-	if m := (&WorkflowManifest{PostRunMonitorMode: "  periodic  "}); !m.PostRunMonitorIsPeriodic() {
-		t.Fatal("mode \"periodic\" with surrounding whitespace must still be treated as periodic")
+	manifest.Schedules = append(manifest.Schedules, WorkflowSchedule{Name: "Pulse", Enabled: true, PulseReviewOnly: true})
+	if !manifest.HasEnabledPulseReviewSchedule() {
+		t.Fatal("an enabled Pulse review schedule must enable recurring Pulse")
 	}
 }

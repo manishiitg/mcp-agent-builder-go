@@ -70,9 +70,13 @@ describe('report human input context formatting', () => {
   it('uses lifecycle labels that distinguish waiting from completed action', () => {
     expect(reportHumanInputStatusLabel(input('pending'))).toBe('Needs answer')
     expect(reportHumanInputStatusLabel(input('answered'))).toBe('Waiting for Pulse')
+    expect(reportHumanInputStatusLabel({ ...input('answered'), source: 'engineering_review' })).toBe('Waiting for Engineering Review')
+    expect(reportHumanInputStatusLabel({ ...input('answered'), source: 'ops_review' })).toBe('Waiting for Operations Review')
     expect(reportHumanInputStatusLabel({ ...input('answered'), source: 'goal_advisor' })).toBe('Waiting for Strategic Review')
 		expect(reportHumanInputStatusLabel({ ...input('answered'), source: 'strategy_auditor' })).toBe('Waiting for Strategic Review')
     expect(reportHumanInputStatusLabel({ ...input('claimed'), source: 'goal_advisor' })).toBe('Strategic Review is working')
+		expect(reportHumanInputStatusLabel({ ...input('claimed'), source: 'engineering_review' })).toBe('Engineering Review is working')
+		expect(reportHumanInputStatusLabel({ ...input('claimed'), source: 'ops_review' })).toBe('Operations Review is working')
 		expect(reportHumanInputStatusLabel({ ...input('claimed'), source: 'strategy_auditor' })).toBe('Strategic Review is working')
     expect(reportHumanInputStatusLabel(input('consumed'))).toBe('Action completed')
     expect(reportHumanInputStatusLabel(input('dismissed'))).toBe('Dismissed')

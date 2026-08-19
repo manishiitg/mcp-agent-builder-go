@@ -122,15 +122,17 @@ export type PulseModuleActivity = PulseFindingEvent & {
 }
 
 /**
- * `run_concerns` holds two species. Pulse reviewer findings carry
- * `phase === 'review'`; everything else was filed by the workflow's own steps
- * during a run and is Gate evidence, not Pulse's queue — the backend lifecycle
- * makes the same distinction at pulse_finding_lifecycle.go.
+ * `run_concerns` holds two species. The backend now projects their explicit
+ * lifecycle kind: observations are workflow evidence; issues were accepted by
+ * a reviewer or entered repair lifecycle work. Phase remains only a backwards-
+ * compatibility fallback for an older backend.
  *
  * An absent phase is treated as Pulse-owned so an older backend that does not
  * send the field keeps showing its findings rather than silently hiding them.
  */
 export function isPulseOwnedFinding(finding: PulseFindingLifecycle): boolean {
+  if (finding.kind === 'issue') return true
+  if (finding.kind === 'observation') return false
   const phase = (finding.phase || '').trim()
   return phase === '' || phase === 'review'
 }

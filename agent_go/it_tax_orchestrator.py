@@ -34,7 +34,6 @@ def call_route(route_id: str, todo_id: str, instructions: str, preferred_tier: i
         "todo_id": todo_id,
         "instructions": instructions,
         "preferred_tier": preferred_tier,
-        "share_browser": True,
     }
     log(f"[CALL] {route_id} ({todo_id})")
     resp = requests.post(

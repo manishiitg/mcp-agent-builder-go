@@ -280,4 +280,14 @@ describe('workflow-reported concerns are not Pulse’s queue', () => {
     expect(summary.open).toBe(1)
     expect(summary.workflowReported).toBe(0)
   })
+
+  it('uses explicit lifecycle kind before the historical phase heuristic', () => {
+    const summary = summarizePulseModule([
+      finding({ fingerprint: 'promoted-step', kind: 'issue', phase: 'execution' }),
+      finding({ fingerprint: 'raw-review-import', kind: 'observation', phase: 'review' }),
+    ])
+
+    expect(summary.open).toBe(1)
+    expect(summary.workflowReported).toBe(1)
+  })
 })

@@ -10,6 +10,40 @@
 | Reported | 2026-08-14 |
 | Related | [PLAT-020](plat-020.md), [PLAT-035](plat-035.md), [PLAT-099](plat-099.md), [PLAT-102](plat-102.md), [PLAT-103](plat-103.md) |
 
+## Blocking live regression — Claude interim `tool_use` text ended the turn early
+
+The 2026-08-19 Sales Outreach chat proves the per-turn contract also fails in
+the opposite direction from the Social Media reproduction below. Instead of
+losing a real completion, mcpagent emitted completion too early.
+
+For AgentWorks session `c2b1bb4c-5a4d-4fd1-9709-ad7329c34a7b`, Claude Code
+emitted “Let me check what sequence the workflow actually defines.” as text on
+a message whose native `stop_reason` was `tool_use`. The retained Session's
+generic transcript reader returned that in-progress text, and mcpagent emitted
+`source=mcpagent_session` `unified_completion` at `11:15:47` IST. AgentWorks
+truthfully settled what it was given. Claude then ran three more tool rounds
+and committed its real `stop_reason=end_turn` answer at `11:16:10`; tmux showed
+that answer, but the already-settled Formatted turn could not receive it.
+
+This narrows the producer defect: Claude's retained completion path uses
+`readClaudeTranscriptMessages` (an in-progress tool-trail reader) instead of
+the existing `completedAssistantResponseFromTranscript` end-of-turn oracle.
+It is not a frontend spinner, polling, or deduplication defect.
+
+The mandatory P0 must therefore cover both terminal-signal directions:
+
+1. no completion may be emitted for assistant text attached to `tool_use`;
+2. exactly one matching completion must be emitted after `end_turn`;
+3. the final answer must be visible, busy must clear only then, and the same
+   Session must remain reusable.
+
+The Claude producer half is now repaired in `multi-llm-provider-go`: retained
+completion reads only a committed `stop_reason=end_turn`, with a regression
+test based on this live transcript. PLAT-105 remains P0 blocking until the
+restarted product path proves the canonical completion reaches AgentWorks once,
+settles busy at the correct boundary, and leaves the Session reusable; the
+older missing-completion direction is also still independently open.
+
 ## Blocking live regression — final response captured, turn never settled
 
 The 2026-08-15 Social Media backlog-audit chat provides a concrete production

@@ -52,6 +52,20 @@ payload='{"arg1":"value1"}'
 curl --fail-with-body -sS --json "$payload" -H "$MCP_AUTH" "$MCP_MCP/{server_name}/{tool_name}"
 ```
 
+The literal form above is only for fixed, simple values. For SQL, multiline
+text, JSON paths, or any argument containing quotes, keep the value in a shell
+variable and let `jq` encode the request:
+
+```bash
+sql="SELECT json_extract(data, '$.field') FROM events"
+payload="$(jq -cn --arg sql "$sql" '{sql:$sql}')"
+curl --fail-with-body -sS --json "$payload" -H "$MCP_AUTH" "$MCP_CUSTOM/query_workflow_db"
+```
+
+Never put SQL containing single quotes inside an outer single-quoted JSON
+literal. Shell single quotes do not nest, so the inner quotes are removed even
+when the command text appears to contain the correct SQL.
+
 `$MCP_AUTH` is already the complete `Authorization: Bearer ...` header. Never
 prepend another header or Bearer prefix. `--json` already selects POST and
 Content-Type, so do not add `-X POST`, another Content-Type header, or `--data`.
@@ -80,6 +94,20 @@ server allowlist.
 
 **Response envelope:** `{"success": true|false, "result": ..., "error": "..."}`.
 Always check `success` before treating `result` as authoritative.
+Custom Go tools commonly return JSON text inside the envelope's `result`
+string. Decode that string exactly once; do not guess that the outer envelope
+is the tool payload and do not repeat the tool call while rediscovering its
+shape:
+
+```bash
+response="$(curl --fail-with-body -sS --json "$payload" -H "$MCP_AUTH" "$MCP_CUSTOM/get_pulse_state")"
+jq -e '.success == true' >/dev/null <<<"$response"
+result="$(jq -r '.result' <<<"$response")"
+jq '.' <<<"$result"
+```
+
+For a large result, save or filter the already-decoded `result` variable. Never
+repeat the same read merely to apply a different local `jq` expression.
 
 For retries, backoff, or structured logging, write a small helper in the
 language of your choice. For reusable helpers saved to `main.py`

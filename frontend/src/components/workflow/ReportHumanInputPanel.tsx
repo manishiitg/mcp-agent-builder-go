@@ -30,6 +30,8 @@ function keepPreviousInputsWhenUnchanged(
 }
 
 function sourceLabel(source?: string): string {
+	if (source === 'engineering_review') return 'Engineering Review'
+	if (source === 'ops_review') return 'Operations Review'
 	if (source && ['strategic_review', 'strategy_auditor', 'goal_advisor'].includes(source)) return 'Strategic Review'
   return 'Pulse'
 }

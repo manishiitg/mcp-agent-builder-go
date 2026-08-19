@@ -271,10 +271,6 @@ func CreateDelegationTools(tierConfig *DelegationTierConfig, requireReasoningLev
 						},
 						"description": "Optional list of MCP server names for this sub-agent. When specified, the sub-agent only connects to these servers instead of all available ones. Use this to give the worker only the tools it needs, reducing noise and improving efficiency.",
 					},
-					"share_browser": map[string]interface{}{
-						"type":        "boolean",
-						"description": "Whether the sub-agent shares the parent's agent-browser session or gets an isolated browser. Default: true (shared). Set to false for parallel browsing, different auth contexts, or to avoid state interference.",
-					},
 					"skills": map[string]interface{}{
 						"type": "array",
 						"items": map[string]interface{}{
@@ -407,12 +403,6 @@ func handleDelegate(ctx context.Context, args map[string]interface{}) (string, e
 		}
 	}
 
-	// Extract share_browser param (defaults to true — shared browser)
-	shareBrowser := true
-	if sb, ok := args["share_browser"].(bool); ok {
-		shareBrowser = sb
-	}
-
 	// Extract optional additional skills. Parent-skill
 	// inheritance is injected by the server at launch time; the typed spec only
 	// carries per-call additions.
@@ -439,7 +429,6 @@ func handleDelegate(ctx context.Context, args map[string]interface{}) (string, e
 		AgentTemplate:  agentTemplate,
 		Servers:        delegationServers,
 		Skills:         delegationSkills,
-		ShareBrowser:   shareBrowser,
 	}
 
 	// --- ASYNC PATH: Background delegation (plan/multi-agent mode) ---

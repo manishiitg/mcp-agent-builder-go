@@ -467,6 +467,7 @@ The shared event contract should include at least:
 message_started
 message_delta
 message_completed
+message_failed
 tool_started
 tool_completed
 tool_failed
@@ -484,6 +485,15 @@ format. SparkQuill's `status|delta|tool_call` SSE stream and AgentWorks' generat
 event inventory need adapters into this contract before components are shared.
 The first extraction should therefore be API clients, reducers/state machines,
 and React hooks; visual components are optional consumers.
+
+In the current AgentWorks frontend, `ProductChatSurface` is the canonical
+consumer of that normalized conversation contract. `ChatArea` installs it
+automatically whenever a product selects `inputVariant="product"`. Its adapter
+maps the existing `agent_error`, `conversation_error`, failed completion, and
+cancel events into one `message_failed` state with a stable code, safe user
+copy, retryability, optional retry time, and collapsed technical details. A
+product may replace the visual renderer, but it must consume this shared state
+rather than parsing provider strings or inventing a product-local error event.
 
 Suggested frontend structure:
 
@@ -678,6 +688,7 @@ Every product must run the same platform conformance suite:
 - agent construction and prompt/skill visibility;
 - MCP bridge tool discovery and invocation;
 - streaming, steering, completion, and resume;
+- normalized message failure, retry, and safe technical-detail rendering;
 - tool-success and tool-failure rendering;
 - large-output truncation plus full-artifact retention;
 - folder-guard and secret boundaries;

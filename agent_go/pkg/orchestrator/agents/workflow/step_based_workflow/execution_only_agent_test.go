@@ -74,6 +74,8 @@ func TestExecutionOnlyPromptUsesManagedWorkflowDBTools(t *testing.T) {
 	requiredSnippets := []string{
 		"Use `query_workflow_db` for schema discovery and reads",
 		"`mutate_workflow_db` for transactional INSERT/UPDATE/DELETE operations",
+		`jq -n --arg sql "$sql"`,
+		"never place SQL containing single quotes",
 		"persist results with `mutate_workflow_db`",
 	}
 	for _, snippet := range requiredSnippets {

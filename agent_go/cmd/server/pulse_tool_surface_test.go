@@ -403,7 +403,7 @@ func TestRecordPulseResultRejectionsNameBothTargets(t *testing.T) {
 // this covers the prompts the scheduler builds in Go.
 func TestSchedulerPulsePromptsNameNoRemovedTool(t *testing.T) {
 	prompts := map[string]string{}
-	for _, step := range postRunMonitorSteps() {
+	for _, step := range pulseLifecycleSteps() {
 		prompts[step.label] = step.query
 	}
 	// Contract-upgrade turns are delivered by the pre-run preflight, not by

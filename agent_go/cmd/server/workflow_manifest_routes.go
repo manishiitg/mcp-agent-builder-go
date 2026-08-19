@@ -154,7 +154,6 @@ type UpdateWorkflowManifestRequest struct {
 	Schedules         *[]WorkflowSchedule        `json:"schedules,omitempty"`
 	WorkshopMode      *string                    `json:"workshop_mode,omitempty"` // Standalone patch — avoids zeroing out other ExecutionDefaults fields
 	RunRetentionCount *int                       `json:"run_retention_count,omitempty"`
-	PostRunMonitor    *bool                      `json:"post_run_monitor,omitempty"` // Opt-in to the post-run monitor pass
 	// Notification instruction fields are standalone patches so the Notify
 	// popup can update content guidance without replacing workflow capabilities.
 	RunNotificationInstructions   *string   `json:"run_notification_instructions,omitempty"`
@@ -253,9 +252,6 @@ func (api *StreamingAPI) handleUpdateWorkflowManifest(w http.ResponseWriter, r *
 	}
 	if req.RunRetentionCount != nil {
 		manifest.RunRetentionCount = req.RunRetentionCount
-	}
-	if req.PostRunMonitor != nil {
-		manifest.PostRunMonitor = req.PostRunMonitor
 	}
 	if req.RunNotificationInstructions != nil || req.PulseNotificationInstructions != nil ||
 		req.RunNotificationChannels != nil || req.PulseNotificationChannels != nil ||

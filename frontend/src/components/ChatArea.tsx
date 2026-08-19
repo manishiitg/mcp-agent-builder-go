@@ -47,6 +47,8 @@ import {
 import { shouldKeepWorkflowSessionSubscribed } from '../utils/workflowSessionSubscription'
 import { activateTab } from '../utils/activateTab'
 import { selectWorkflowPreset } from '../utils/workflowNavigation'
+import { ProductChatSurface } from '../platform/chat/ProductChatSurface'
+import { WORKFLOW_LOG_REFRESH_EVENT } from './workflow/workflowEvents'
 
 // Stable empty array to avoid infinite re-render loops in Zustand selectors
 // (a new [] on every selector call breaks referential equality checks)
@@ -189,6 +191,24 @@ function getUserMessageContent(event: PollingEvent): string {
 function getDisplaySafeUserMessageContent(content: string): string {
   const markerIndex = content.indexOf(RESTORED_CONVERSATION_CONTEXT_MARKER)
   return (markerIndex >= 0 ? content.slice(0, markerIndex) : content).trim()
+}
+
+function createSubmissionErrorEvent(sessionId: string, error: unknown): PollingEvent {
+  const message = typeof error === 'string'
+    ? error
+    : error instanceof Error
+      ? error.message
+      : 'The request could not be started.'
+  return {
+    id: `conversation-error-${globalThis.crypto.randomUUID()}`,
+    type: 'conversation_error',
+    timestamp: new Date().toISOString(),
+    session_id: sessionId,
+    data: {
+      type: 'conversation_error',
+      data: { error: message },
+    } as PollingEvent['data'],
+  }
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -405,6 +425,7 @@ export interface ChatContentRendererProps {
   isRestoring: boolean
   streamingText: string
   landingContent?: ReactNode
+  onRetryLastMessage?: () => void | Promise<void>
 }
 
 interface ChatAreaProps {
@@ -469,6 +490,11 @@ let globalHasRestored = false
 // Inner component for chat area
 const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAreaRef>) => {
   const { onNewChat, hideInput = false, compact = false, tabId, previousChatsCompact = false, workflowPreviousChatsPanel, landingContent, contentRenderer: ContentRenderer, inputVariant = 'default', fullTurnStreaming = false, showConversationUsage = false } = props
+  // Product mode is a complete shared surface, not just a simplified composer.
+  // Products may still supply a renderer for domain-specific presentation, but
+  // every new product gets the durable transcript and normalized error UI by
+  // default simply by selecting inputVariant="product".
+  const EffectiveContentRenderer = ContentRenderer ?? (inputVariant === 'product' ? ProductChatSurface : undefined)
   // null means "inactive — don't subscribe to any tab or run any effects"
   const isInactive = tabId === null
 
@@ -1742,6 +1768,15 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     // writes share no reliable common file event. Mark the view stale after a
     // completed run and let the user choose when to refresh it.
     const isCompletionLike = hasCompletionEvent || newEvents.some(e => e.type === 'background_agent_completed')
+    // Reviewer/fixer turns can create typed Pulse findings, decisions, review
+    // receipts, and changelog entries without touching a workspace file. Those
+    // panels intentionally do not poll while empty, so completion is the
+    // canonical point to refresh their lightweight API projections. Limit the
+    // event to the active workflow preset; background work for another preset
+    // must not perturb the workflow currently on screen.
+    if (isCompletionLike && selectedModeCategory === 'workflow' && isActivePresetTab !== false) {
+      window.dispatchEvent(new CustomEvent(WORKFLOW_LOG_REFRESH_EVENT))
+    }
     // A foreground terminal event is the per-turn completion contract. Settle
     // the chat immediately instead of waiting for a later activity-cache poll;
     // the retained tmux/session may stay alive for the next user message.
@@ -2890,6 +2925,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
         if (!responseSessionId) {
           console.log('[WF_DEBUG] ERROR: No sessionId in response')
           logger.error('ChatArea', 'No sessionId in response')
+          chatStore.addTabEvents(tabSessionId, [createSubmissionErrorEvent(tabSessionId, 'The server started the request without returning a session identifier.')])
           resetStreamingState(currentTab.tabId)
           return false
         }
@@ -2957,12 +2993,14 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       } else {
         console.log('[WF_DEBUG] ERROR: Backend non-started response', { status: response.status, message: response.message, response })
         logger.error('ChatArea', 'Backend error:', response)
+        chatStore.addTabEvents(tabSessionId, [createSubmissionErrorEvent(tabSessionId, response.message || `The server returned ${response.status || 'an error'}.`)])
         resetStreamingState(currentTab.tabId)
         return false
       }
     } catch (error) {
       console.log('[WF_DEBUG] ERROR: Submit exception', { error })
       logger.error('ChatArea', 'Failed to submit query:', error)
+      chatStore.addTabEvents(tabSessionId, [createSubmissionErrorEvent(tabSessionId, error)])
       resetStreamingState(currentTab.tabId)
       return false
     }
@@ -2995,6 +3033,17 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     }
     return submit()
   }, [activeTab, selectedModeCategory, submitQueryImmediately, fullTurnStreaming])
+
+  const retryLastProductMessage = useCallback(async () => {
+    const lastUserMessage = [...displayEvents]
+      .reverse()
+      .find((event) => event.type === 'user_message' && !getUserMessageContent(event).startsWith(AUTO_NOTIFICATION_PREFIX))
+    const content = lastUserMessage
+      ? getDisplaySafeUserMessageContent(getUserMessageContent(lastUserMessage))
+      : ''
+    if (!content) return
+    await submitQueryWithQuery(content, undefined, { sourceTabId: activeTab?.tabId })
+  }, [activeTab?.tabId, displayEvents, submitQueryWithQuery])
 
   // If the active tab is stuck in streaming state, ChatInput queues the user's text
   // instead of calling /api/query. Force-refresh active sessions so the store can
@@ -3294,7 +3343,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     (selectedModeCategory === 'multi-agent' && multiAgentSurface === 'active')
   // A product-supplied content renderer owns the whole pane, so it is always
   // full height regardless of which transcript surface is active.
-  const shouldUseFullHeightContent = !!ContentRenderer || hasActiveTranscript || showNormalPreviousChatsPanel || showWorkflowPreviousChatsPanel
+  const shouldUseFullHeightContent = !!EffectiveContentRenderer || hasActiveTranscript || showNormalPreviousChatsPanel || showWorkflowPreviousChatsPanel
 
   return (
     <div className="flex flex-col h-full min-w-0" data-testid="chat-area-container">
@@ -3331,7 +3380,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
 
         <div className={`min-w-0 ${shouldUseFullHeightContent ? 'flex h-full flex-col' : 'min-h-full'} ${compact ? 'px-2 pb-2' : 'px-3 pb-4'}`}>
           {/* Loading indicator for historical events */}
-          {!ContentRenderer && isLoadingHistory && (
+          {!EffectiveContentRenderer && isLoadingHistory && (
             <div className={`flex items-center justify-center ${compact ? 'py-4' : 'py-8'}`}>
               <div className="flex items-center gap-3 text-gray-600 dark:text-gray-400">
                 <div className={`${compact ? 'w-4 h-4' : 'w-5 h-5'} border-2 border-gray-300 dark:border-gray-600 border-t-blue-600 dark:border-t-blue-400 rounded-full animate-spin`}></div>
@@ -3341,7 +3390,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
           )}
 
           {/* Loading indicator for active session checking */}
-          {!ContentRenderer && isCheckingActiveSessions && (
+          {!EffectiveContentRenderer && isCheckingActiveSessions && (
             <div className={`flex items-center justify-center ${compact ? 'py-4' : 'py-8'}`}>
               <div className="flex items-center gap-3 text-gray-600 dark:text-gray-400">
                 <div className={`${compact ? 'w-4 h-4' : 'w-5 h-5'} border-2 border-gray-300 dark:border-gray-600 border-t-green-600 dark:border-t-green-400 rounded-full animate-spin`}></div>
@@ -3351,7 +3400,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
           )}
 
           {/* Active session indicator */}
-          {!ContentRenderer && sessionState === 'active' && (
+          {!EffectiveContentRenderer && sessionState === 'active' && (
             <div className={`flex items-center justify-center ${compact ? 'py-2' : 'py-4'}`}>
               <div className={`flex items-center gap-2 ${compact ? 'px-2 py-1' : 'px-3 py-2'} bg-green-100 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg`}>
                 <div className={`${compact ? 'w-1.5 h-1.5' : 'w-2 h-2'} bg-green-500 rounded-full animate-pulse`}></div>
@@ -3361,7 +3410,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
           )}
 
           {/* Session error indicator */}
-          {!ContentRenderer && sessionState === 'error' && (
+          {!EffectiveContentRenderer && sessionState === 'error' && (
             <div className={`flex items-center justify-center ${compact ? 'py-2' : 'py-4'}`}>
               <div className={`flex items-center gap-2 ${compact ? 'px-2 py-1' : 'px-3 py-2'} bg-red-100 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg`}>
                 <svg className={`${compact ? 'w-3 h-3' : 'w-4 h-4'} text-red-600 dark:text-red-400`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -3372,13 +3421,14 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
             </div>
           )}
 
-        {ContentRenderer && selectedModeCategory !== 'workflow' ? (
-          <ContentRenderer
+        {EffectiveContentRenderer && selectedModeCategory !== 'workflow' ? (
+          <EffectiveContentRenderer
             events={displayEvents}
             isStreaming={activeTabBusy}
             isRestoring={multiAgentSurface === 'restoring'}
             streamingText={activeStreamingText}
             landingContent={landingContent}
+            onRetryLastMessage={retryLastProductMessage}
           />
         ) : selectedModeCategory === 'workflow' ? (
           <WorkflowModeHandler

@@ -121,4 +121,15 @@ describe('Pulse decision chat routing', () => {
     expect(message).toContain('Do not mark the decision consumed yourself.')
     expect(message).toContain('Archive older entries [option_id=archive] — Nothing is lost.')
   })
+
+  it('names the reviewer that created the decision', () => {
+    const input = {
+      id: 'ops-decision-one', workspace_path: 'Workflow/example', source: 'ops_review', status: 'pending',
+      priority: 'medium', question: 'Replace the fixed orchestrator?', options: [], allow_free_text: true,
+      created_at: '2026-08-19T08:22:00Z', updated_at: '2026-08-19T08:22:00Z',
+    } as ReportHumanInput
+
+    expect(buildReportHumanInputDelegatedActionMessage(input, 'Workflow/example'))
+      .toContain('pending Operations Review decision')
+  })
 })

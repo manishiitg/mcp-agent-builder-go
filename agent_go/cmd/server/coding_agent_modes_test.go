@@ -1107,11 +1107,6 @@ func TestRequestLLMConfigOverridesManifestOnlyForScheduledSources(t *testing.T) 
 		t.Fatal("scheduled Pulse LLM config should override workflow manifest phase LLM")
 	}
 
-	req.LLMConfigSource = llmConfigSourceScheduledAutoImprove
-	if !requestLLMConfigOverridesManifest(req) {
-		t.Fatal("scheduled Goal Advisor LLM config should override the workflow Builder model")
-	}
-
 	req.LLMConfigSource = "manual"
 	if requestLLMConfigOverridesManifest(req) {
 		t.Fatal("manual request LLM config should keep workflow manifest as source of truth")

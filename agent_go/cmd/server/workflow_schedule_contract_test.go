@@ -53,7 +53,7 @@ func TestWorkflowVersionUpgradePlanAddsScheduledRoutesAfterDirectReports(t *test
 	if len(plan) != 2 || plan[0].label != "upgrade-schedule-execution-model" || plan[0].to != workflowContractScheduleExecutionModelVersion {
 		t.Fatalf("unexpected upgrade plan: %+v", plan)
 	}
-	if plan[1].label != "upgrade-periodic-pulse-review-handoff" || plan[1].to != WorkflowContractCurrentVersion {
+	if plan[1].label != "upgrade-dedicated-pulse-schedule" || plan[1].to != WorkflowContractCurrentVersion {
 		t.Fatalf("unexpected final upgrade step: %+v", plan[1])
 	}
 }
@@ -68,22 +68,18 @@ func TestWorkflowVersionUpgradePlanReauditsEarlierRouteOnlyContract(t *testing.T
 			t.Errorf("choice-aware migration prompt missing %q", want)
 		}
 	}
-	if plan[1].label != "upgrade-periodic-pulse-review-handoff" || plan[1].to != WorkflowContractCurrentVersion {
+	if plan[1].label != "upgrade-dedicated-pulse-schedule" || plan[1].to != WorkflowContractCurrentVersion {
 		t.Fatalf("unexpected final upgrade step: %+v", plan[1])
 	}
 }
 
-// TestUpgradePeriodicPulseReviewHandoffPromptShape pins that this rung is now
-// a trivial version stamp, not a migration turn: periodic-Pulse bootstrap
-// moved to Gate's own normal-run flow (pulse-gate.md), so this prompt must
-// name that handoff and must NOT re-introduce a per-workflow frequency
-// judgment or ask the agent to create schedules itself.
-func TestUpgradePeriodicPulseReviewHandoffPromptShape(t *testing.T) {
-	normalized := strings.Join(strings.Fields(upgradePeriodicPulseReviewHandoff), " ")
+func TestUpgradeDedicatedPulseSchedulePromptShape(t *testing.T) {
+	normalized := strings.Join(strings.Fields(upgradeDedicatedPulseSchedule), " ")
 	for _, want := range []string{
-		"pulse-gate.md",
-		"unconditionally",
-		`set_workflow_contract_version(version="1.0.26")`,
+		"enabled pulse_review_only schedule",
+		"single source of truth",
+		"Normal workflow schedules never run Gate/Review+Fix inline",
+		`set_workflow_contract_version(version="1.0.27")`,
 	} {
 		if !strings.Contains(normalized, want) {
 			t.Errorf("periodic-pulse-review handoff prompt missing %q", want)
@@ -92,7 +88,6 @@ func TestUpgradePeriodicPulseReviewHandoffPromptShape(t *testing.T) {
 	for _, mustNotContain := range []string{
 		"Leave post_run_monitor_mode unset",
 		"leave it on per_run",
-		"create_schedule(pulse_review_only=true",
 	} {
 		if strings.Contains(normalized, mustNotContain) {
 			t.Errorf("periodic-pulse-review handoff prompt should not re-implement the migration Gate now owns: %q", mustNotContain)
@@ -100,8 +95,18 @@ func TestUpgradePeriodicPulseReviewHandoffPromptShape(t *testing.T) {
 	}
 }
 
+func TestVersion126ReceivesDedicatedPulseScheduleMigration(t *testing.T) {
+	plan := workflowVersionUpgradePlan(&WorkflowManifest{Version: workflowContractPeriodicPulseReviewVersion})
+	if len(plan) != 1 {
+		t.Fatalf("1.0.26 upgrade plan = %+v, want one migration", plan)
+	}
+	if plan[0].label != "upgrade-dedicated-pulse-schedule" || plan[0].to != WorkflowContractCurrentVersion {
+		t.Fatalf("1.0.26 upgrade = %+v, want dedicated Pulse schedule migration", plan[0])
+	}
+}
+
 // TestUpgradeQueriesNeverNamePlatTickets guards a real mistake made while
-// writing upgradePeriodicPulseReviewHandoff and workflow-tools.md's
+// writing upgradeDedicatedPulseSchedule and workflow-tools.md's
 // periodic-Pulse guidance: this text runs live on operators' own workflows,
 // on their own machines — an internal ticket number in it is meaningless
 // noise to them, not useful context. Scoped to the upgrade query constants
@@ -110,11 +115,11 @@ func TestUpgradePeriodicPulseReviewHandoffPromptShape(t *testing.T) {
 func TestUpgradeQueriesNeverNamePlatTickets(t *testing.T) {
 	platTicket := regexp.MustCompile(`PLAT-\d+`)
 	queries := map[string]string{
-		"upgradeMessageSequenceCode":        upgradeMessageSequenceCode,
-		"upgradeCurrentArtifactContract":    upgradeCurrentArtifactContract,
-		"upgradeLearningsLockAudit":         upgradeLearningsLockAudit,
-		"upgradeDirectHTMLReports":          upgradeDirectHTMLReports,
-		"upgradePeriodicPulseReviewHandoff": upgradePeriodicPulseReviewHandoff,
+		"upgradeMessageSequenceCode":     upgradeMessageSequenceCode,
+		"upgradeCurrentArtifactContract": upgradeCurrentArtifactContract,
+		"upgradeLearningsLockAudit":      upgradeLearningsLockAudit,
+		"upgradeDirectHTMLReports":       upgradeDirectHTMLReports,
+		"upgradeDedicatedPulseSchedule":  upgradeDedicatedPulseSchedule,
 	}
 	for name, query := range queries {
 		if match := platTicket.FindString(query); match != "" {

@@ -1,6 +1,10 @@
 # STANDALONE LLM AND OPERATIONS REVIEW
 
-Run the same unified, agentic, read-only Ops Review used by Pulse. It owns cost,
+Run the same unified, agentic Ops Review used by Pulse. You are the
+**Standalone Operations Review**; do the review directly in this agent rather
+than dispatching another reviewer. The review is read-only with respect to
+workflow artifacts and configuration, while typed Pulse finding, verification,
+and terminal-review receipts are required. It owns cost,
 timing, LLM selection, tool calling, runtime operations, setup, and plan-design
 hygiene. Do not change models, tiers, fallbacks, schedules, notification
 recipients, backup, publish, or credentials in this command.{{if .Focus}}
@@ -11,8 +15,8 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
 
 1. Load `read_skill(skills=[{"name":"builder-reference","path":"references/pulse-review-fixer.md"}])` and
    `read_skill(skills=[{"name":"builder-reference","path":"references/llm-selection.md"}])`.
-   These references belong to the parent. Do not pass presentation work to the
-   reviewer; findings are persisted through typed Pulse tools.
+   Work from these references yourself. Findings are persisted through typed
+   Pulse tools; do not create a Markdown or HTML review artifact.
 2. Inspect the current trustworthy Goal verdict, resolved workflow/step/eval
    LLM configuration, actual model/tier use, fallbacks, cost ledgers, token
    usage, timing summaries, representative conversation/tool traces, retained
@@ -24,15 +28,14 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
    only for the differing or suspicious step/attempt. If fewer comparable runs
    remain, state that limitation. Do not open every trace. Use retained evidence, not
    provider assumptions or generic best practices.
-3. Launch exactly one reviewer with
-   `run_in_background(name="Standalone Operations Review", instruction="READ-ONLY OPERATIONS REVIEW ...", agent_type="executor")`.
-   The reviewer must not edit files or config,
-   create questions, publish, notify, run the workflow, call Pulse module-state
-   tools, or launch another agent. It may read only matching
-   LLM/Ops/open-finding records from the Pulse backlog; it must not format or
-   write any presentation. `run_in_background` returns an `execution_id` immediately;
-   end the current turn and resume only from the automatic completion
-   notification.
+3. Perform the review in this current background agent. Do not call
+   `run_in_background`, launch another reviewer, publish,
+   notify, or run the workflow; you must not edit files or config. Read only the matching LLM/Ops/open-finding
+   evidence needed for this review. Record each evidence-backed finding with
+   `record_pulse_finding` and each matured verification with
+   `record_pulse_verification` as soon as its judgment is established. A real
+   operator decision is typed lifecycle state, not a workflow mutation: create
+   it through `create_human_input_request` as described below.
 4. Require the reviewer to check all of the following agentically:
    event correlation; nested JSON/MCP/shell-envelope interpretation; argument
    identity; failure-status precedence; errors hidden in nominal success; HTTP
@@ -81,6 +84,21 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
      evidence, never the description alone. Judgment, synthesis, adaptive
      discovery, and browser/UI work stay agentic; do not propose scripting them
      to save cost.
+   - **Container necessity.** For every cost- or time-material `todo_task`,
+     `routing`, or `message_sequence` container, inspect the parent and its
+     owned children as one execution unit. Read the targeted plan definition and
+     representative parent/child traces, then state the actual runtime decision
+     the parent makes. A fully prescribed child set and order is a structural
+     review candidate: do not accept "coordination" as value when the plan has
+     already enumerated the work. Preserve the container when evidence shows
+     genuine runtime selection, conditional fan-out, adaptive retry/recovery,
+     concurrency, a user or approval boundary, or synthesis that cannot live in
+     declared dependencies and a final aggregation step. Treat repeated
+     source/schema/data discovery across the parent, retries, and children as
+     evidence of a weak handoff; an independent clean-room verification read is
+     not automatically waste. Use agent judgment, not numeric thresholds or a
+     Go-authored classifier, and recommend only—this read-only review must never
+     rewrite the plan itself.
    - **Sequence shape.** Establish where a step's time actually goes before
      recommending anything, measuring four things separately rather than
      collapsing them into one: **model turns** (a recorded tool call is not
@@ -151,9 +169,22 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
    arguments, paths, credentials, IDs, and data remain workflow findings. A
    harness issue is platform-owned, not a user-decision request, unless the
    remaining question is genuinely product policy.
-9. Read the child completion and validate its evidence against the actual
-   artifacts. Do not write Pulse lifecycle state, apply recommendations, or
-   create approval requests in this read-only command.
+9. Before filing any finding with `recommended_route="decision_required"`,
+   prove that the goal does not already settle the choice and that the tradeoff
+   materially affects reliability, cost, quality, real users, or workflow
+   meaning. Create or refresh one stable
+   `create_human_input_request(source="ops_review", input_id="ops-decision-...", options=[approve,reject,defer])`
+   with the exact proposed change, expected benefit, alternative, risk, and
+   evidence. Then pass that returned id as `human_input_id` on
+   `record_pulse_finding`; the typed write links the finding as `awaiting_user`.
+   Never emit `decision_required` without this question. Safe technical work
+   uses `fixer_handoff`, and missing future evidence uses `evidence_wait`.
+10. Reconcile your findings against the actual artifacts, then call
+   `complete_pulse_review` exactly once with `modules=["llm_ops_review"]`, a
+   non-empty evidence-grounded verdict, and the truthful terminal status. This
+   typed receipt is the completion boundary: returning prose without it leaves
+   the background execution incomplete. Do not apply recommendations in this
+   read-only command; creating and linking a durable decision is allowed.
 
 Include reflection-turn cost as a first-class cost line. Each contributing step
 runs one post-completion reflection turn, and it is not free: a measured Social

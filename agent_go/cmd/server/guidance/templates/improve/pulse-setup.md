@@ -15,10 +15,12 @@ update a separate Pulse HTML journal.{{if .Focus}} Focus especially on: {{.Focus
 
 ## Setup
 
-1. Enable Pulse with `update_workflow_config(post_run_monitor=true)`.
-2. Create or update one normal workshop Run-mode schedule for recurring
+1. Create or update one normal workshop Run-mode schedule for recurring
    workflow execution. Do not create a separate optimizer or Goal Advisor
    schedule.
+2. Create or update one enabled `pulse_review_only` schedule for recurring
+   Pulse. That schedule is the single source of truth for Pulse enablement and
+   cadence; never add a second workflow-level toggle.
 3. If an old optimizer schedule duplicates Pulse, disable it (do not delete it
    unless requested) and record the reason as a typed Pulse outcome.
 4. Let Gate select review modules from durable typed state, current run
@@ -27,6 +29,6 @@ update a separate Pulse HTML journal.{{if .Focus}} Focus especially on: {{.Focus
 
 ## Close-out
 
-Report the schedule, Pulse enabled state, disabled duplicate schedules, and
+Report both schedules, disabled duplicate schedules, and
 what Gate will decide on future runs. Persist findings or decisions through the
 typed tools only.

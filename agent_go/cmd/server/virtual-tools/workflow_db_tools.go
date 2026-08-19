@@ -62,7 +62,7 @@ func workflowDBQueryToolDefinition() llmtypes.Tool {
 			"properties": map[string]any{
 				"action":   map[string]any{"type": "string", "enum": []string{"describe", "query", "integrity_check"}, "description": "Optional. Omit it and pass sql to run a statement. Use describe to list schemas or columns; integrity_check runs the fixed guarded SQLite integrity check."},
 				"table":    map[string]any{"type": "string", "description": "Optional table name for action=describe. Omit to list all table/view definitions."},
-				"sql":      map[string]any{"type": "string", "description": "One SELECT, read-only WITH/EXPLAIN, or allowlisted read-only PRAGMA statement. Supported integrity checks include PRAGMA integrity_check, quick_check[(N)], and foreign_key_check[(table)]. This is the normal way to use the tool."},
+				"sql":      map[string]any{"type": "string", "description": "One SELECT, read-only WITH/EXPLAIN, or allowlisted read-only PRAGMA statement. Supported integrity checks include PRAGMA integrity_check, quick_check[(N)], and foreign_key_check[(table)]. This is the normal way to use the tool. Through the shell HTTP bridge, put SQL in a variable and JSON-encode it with jq -n --arg sql \"$sql\" '{sql:$sql}'; never inline SQL containing single quotes inside an outer single-quoted JSON literal."},
 				"params":   map[string]any{"type": "array", "description": "Optional positional values for ? placeholders in sql."},
 				"query":    map[string]any{"type": "string", "description": "Compatibility alias for sql. Prefer sql. If both are supplied they must be identical."},
 				"max_rows": map[string]any{"type": "integer", "minimum": 1, "maximum": 1000, "description": "Maximum rows to return for action=query. Default 500."},
@@ -89,7 +89,7 @@ func workflowDBMutateToolDefinition() llmtypes.Tool {
 						"required": []string{"sql"},
 					},
 				},
-				"sql":    map[string]any{"type": "string", "description": "One INSERT, UPDATE, or DELETE statement for the single-statement form. Same shape as query_workflow_db. Use ? placeholders for values."},
+				"sql":    map[string]any{"type": "string", "description": "One INSERT, UPDATE, or DELETE statement for the single-statement form. Same shape as query_workflow_db. Use ? placeholders for values. Through the shell HTTP bridge, keep SQL in a variable and JSON-encode it with jq -n --arg; never inline quoted SQL inside a single-quoted JSON literal."},
 				"params": map[string]any{"type": "array", "description": "Optional positional values for the ? placeholders in sql."},
 			},
 		}),

@@ -317,15 +317,11 @@ func matchPhaseScope(values ...string) string {
 // scheduled Pulse turn runs in the same session, with the same agent mode and
 // the same workflow-builder phase id, as the workflow-orchestration turns that
 // precede it — so neither the mode nor the phase can tell them apart. The
-// scheduler already stamps this field when it swaps in the Pulse/maintenance
+// scheduler already stamps this field when it swaps in the Pulse
 // LLM, so the intent is known at the source and only needs to be honored here.
-//
-// scheduled_auto_improve maps to Pulse deliberately: Goal Advisor and Strategy
-// Auditor are Pulse modules that happen to run on the maintenance LLM, so their
-// spend belongs in the Pulse total rather than in a bucket of its own.
 func ScopeForScheduledLLMRole(llmConfigSource string) string {
 	switch strings.ToLower(strings.TrimSpace(llmConfigSource)) {
-	case "scheduled_pulse", "scheduled_auto_improve":
+	case "scheduled_pulse":
 		return ScopePulse
 	}
 	return ""

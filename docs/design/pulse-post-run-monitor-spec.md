@@ -1,6 +1,6 @@
 <!-- STATUS: design spec, NOT loaded at runtime. -->
 
-# Pulse post-run monitor — design spec
+# Pulse scheduled review lifecycle — historical design spec
 
 **This document is not delivered to any agent.** It was a `builder-reference`
 reference doc until 2026-08-05; it is now a design spec kept for humans and for
@@ -28,14 +28,27 @@ it from this path.
 
 ---
 
-## Pulse — Dynamic Post-Run Steward
+## Current scheduling invariant (PLAT-158)
+
+Recurring Pulse is configured only by an enabled `pulse_review_only` schedule.
+Ordinary workflow schedules never run Gate or Review+Fix inline; they retain
+only the short backup, report-publication, and run-summary finalizer. The
+workflow-level `post_run_monitor` and `post_run_monitor_mode` fields were
+removed. A manual Pulse launch and a dedicated Pulse schedule both run the full
+review lifecycle against retained workflow evidence.
+
+The material below is retained for historical review-policy contract tests. Its
+references to running after every workflow execution and its old dashboard
+stage are not current scheduler behavior.
+
+## Pulse — Dynamic Scheduled Steward
 
 This is the comprehensive/manual Pulse playbook. Scheduled Pulse runs load the
 focused stage references instead so no individual scheduler message or tool
 result carries the entire contract: `pulse-archive`, `pulse-gate`,
 `pulse-review-fixer`, `review-improve-log`, and `pulse-finalizer`.
 
-Pulse runs after a scheduled workflow run. It is not a fixed checklist. It is a small sequence with one mandatory intelligence turn:
+Pulse reviews retained workflow evidence on its own schedule. It is not a fixed checklist. It is a small sequence with one mandatory intelligence turn:
 
 1. **Gate / Worklist** — read the evidence and call `record_pulse_worklist`; Gate writes no HTML or workflow artifacts.
 2. **Selected modules only** — the scheduler runs the modules Gate marked `due`.
@@ -781,6 +794,17 @@ needed for Bug Review when the Ops pass discovers a correctness defect.
 Inspect resolved provider/model/options/fallback configuration and actual step/eval tier use. Inventory every exact model pin in explicit workflow roles and planning/evaluation step config (`execution_llm`, `validation_llm`, and orchestrator overrides). Call `list_provider_models` once for each pinned provider and use its catalog plus `default_tier_models` as the authoritative current comparison. Classify a pin as unavailable/deprecated, still supported but different from the provider-owned role/tier default, or current. Never infer recency by sorting model names. Provider-profile workflows inherit current defaults and must not be reported as stale merely because their resolved model changed after an app update. Check whether high, medium, and low are configured and used sensibly; whether repeated low-risk validation, extraction, formatting, or summarization uses an unnecessarily expensive tier; whether eval/verification would benefit from provider diversity; whether Pulse and Maintenance models are sensible; and whether fallbacks exist. Also check report publishing/password protection, notification instructions/setup, backup status, and workflow-version readiness.
 
 This module also owns plan-design hygiene — engineering correctness, not strategy. Load `get_workflow_command_guidance(kind="design-plan")` as a read-only structural checklist and apply it to the current plan: step-type fitness (is each step the right type — scripted, message_sequence, routing, todo_task, orphan), prevalidation fitness (an unjustified or redundant `prevalidation` item that just restates the step's own final gate), schema/description drift (a `validation_schema` demanding a field the description never asks the agent to produce, or a non-nullable field the step's own branching logic can legitimately leave absent, forcing a fabricated value), and the rest of that doc's integrity checks and design lenses. Do not judge whether the plan's tactic is good — that is Strategy Auditor's job; judge only whether the plan is built correctly given whatever tactic it already has. Findings here follow the same evidence-backed, bounded-fix-or-decision-request path as the rest of this module.
+
+For every cost- or time-material `todo_task`, `routing`, or
+`message_sequence`, review the parent and its children as one execution unit.
+State what decision the parent actually makes. A fixed, prescribed child set and
+order is a structural review candidate; dynamic selection, conditional fan-out,
+adaptive retry/recovery, concurrency, user/approval boundaries, or necessary
+synthesis may justify the container. Repeated source/schema/data discovery
+across parent and children is evidence of a weak handoff, while an independent
+clean-room verification read is not automatically duplication. This remains an
+agentic evidence judgment: there is no numeric threshold, Go classifier, or
+automatic plan rewrite.
 
 Goal quality outranks tier savings. When any material success criterion is
 trustworthily below target, do not recommend lowering the model or reasoning tier

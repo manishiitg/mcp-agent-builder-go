@@ -425,26 +425,31 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
     })
   }, [activeWorkspaceView, workspacePath, workspaceViewDefinitions])
 
-  // Post-run monitor opt-in (workflow.json::post_run_monitor). When on, Pulse
-  // Gate runs after each scheduled run, records Bug + Goal verdicts, and selects
-  // any deeper maintenance/Goal Advisor modules that are due.
-  const monitorOn = useWorkflowManifestStore((s) => {
+  // PLAT-158: the enabled dedicated review schedule is the only recurring
+  // Pulse switch. Ordinary workflow runs never launch Gate/Review+Fix inline.
+  const pulseReviewSchedule = useWorkflowManifestStore((s) => {
     const wf = s.workflows.find((w) => w.workspace_path === workspacePath)
-    return !!wf?.manifest.post_run_monitor
+    return wf?.manifest.schedules?.find((schedule) => schedule.pulse_review_only)
   })
-  const updateWorkflowManifest = useWorkflowManifestStore((s) => s.updateWorkflow)
+  const monitorOn = !!pulseReviewSchedule?.enabled
+  const refreshWorkflowManifests = useWorkflowManifestStore((s) => s.refreshWorkflows)
   const [monitorSaving, setMonitorSaving] = useState(false)
   const toggleMonitor = useCallback(async () => {
-    if (!workspacePath || monitorSaving) return
+    if (!workspacePath || !pulseReviewSchedule || monitorSaving) return
     setMonitorSaving(true)
     try {
-      await updateWorkflowManifest(workspacePath, { post_run_monitor: !monitorOn })
+      if (monitorOn) {
+        await schedulerApi.disableJob(pulseReviewSchedule.id)
+      } else {
+        await schedulerApi.enableJob(pulseReviewSchedule.id)
+      }
+      await refreshWorkflowManifests()
     } catch (err) {
-      console.error('[WorkflowToolbar] Failed to toggle post-run monitor:', err)
+      console.error('[WorkflowToolbar] Failed to toggle Pulse review schedule:', err)
     } finally {
       setMonitorSaving(false)
     }
-  }, [workspacePath, monitorOn, monitorSaving, updateWorkflowManifest])
+  }, [workspacePath, pulseReviewSchedule, monitorOn, monitorSaving, refreshWorkflowManifests])
   const [showMonitorHelp, setShowMonitorHelp] = useState(false)
   const [pulseModuleStates, setPulseModuleStates] = useState<PulseModuleState[]>([])
   const [pulseFinalCommandStates, setPulseFinalCommandStates] = useState<PulseFinalCommandState[]>([])
@@ -1234,15 +1239,15 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                   role="switch"
                   aria-checked={monitorOn}
                   onClick={() => { void toggleMonitor() }}
-                  disabled={monitorSaving}
+                  disabled={monitorSaving || !pulseReviewSchedule}
                   className={`relative inline-flex h-5 w-9 flex-none items-center rounded-full p-0 transition-colors disabled:opacity-50 ${monitorOn ? 'bg-primary' : 'bg-muted-foreground/30'}`}
                   aria-label="Toggle Pulse"
                 >
                   <span className={`inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${monitorOn ? 'translate-x-[18px]' : 'translate-x-[2px]'}`} />
                 </button>
                 <div className="min-w-0">
-                  <div className="text-xs font-medium text-foreground">{monitorOn ? 'Reviewing scheduled runs' : 'Scheduled review is off'}</div>
-                  <div className="truncate text-[11px] text-muted-foreground">Pulse findings, fixes, decisions, and history are here.</div>
+                  <div className="text-xs font-medium text-foreground">{monitorOn ? 'Reviewing on its own schedule' : pulseReviewSchedule ? 'Scheduled review is off' : 'No Pulse review schedule'}</div>
+                  <div className="truncate text-[11px] text-muted-foreground">{pulseReviewSchedule ? 'Pulse findings, fixes, decisions, and history are here.' : 'Run /pulse-setup in chat to create one.'}</div>
                 </div>
               </div>
               <div className="inline-flex h-8 items-center overflow-hidden rounded-lg border border-border bg-muted/30">

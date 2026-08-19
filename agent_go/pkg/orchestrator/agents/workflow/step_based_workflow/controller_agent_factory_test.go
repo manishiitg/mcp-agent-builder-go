@@ -108,6 +108,39 @@ func TestWorkshopToolAgentBridgeSessionOverridesParentRouting(t *testing.T) {
 	}
 }
 
+func TestSelectPulseLLMUsesPulseConfigInsteadOfPhaseConfig(t *testing.T) {
+	base, err := orchestrator.NewBaseOrchestrator(
+		loggerv2.NewNoop(), nil, orchestrator.OrchestratorTypeWorkflow, "", 0,
+		"", nil, nil, false, &orchestrator.LLMConfig{}, 1, nil, nil, nil,
+	)
+	if err != nil {
+		t.Fatalf("NewBaseOrchestrator returned error: %v", err)
+	}
+	hcpo := &StepBasedWorkflowOrchestrator{
+		BaseOrchestrator: base,
+		presetPhaseLLM: &AgentLLMConfig{
+			Provider: "phase-provider",
+			ModelID:  "phase-model",
+		},
+		presetPulseLLM: &AgentLLMConfig{
+			Provider: "pulse-provider",
+			ModelID:  "pulse-model",
+			Options:  map[string]interface{}{"reasoning_effort": "high"},
+		},
+	}
+
+	got := hcpo.selectPulseLLM("review agent")
+	if got == nil {
+		t.Fatal("selectPulseLLM returned nil")
+	}
+	if got.Primary.Provider != "pulse-provider" || got.Primary.ModelID != "pulse-model" {
+		t.Fatalf("review selected %s/%s, want pulse-provider/pulse-model", got.Primary.Provider, got.Primary.ModelID)
+	}
+	if got.Primary.Options["reasoning_effort"] != "high" {
+		t.Fatalf("review lost Pulse options: %+v", got.Primary.Options)
+	}
+}
+
 func TestKBMaintenanceAgentsGetQueryButNotMutation(t *testing.T) {
 	base, err := orchestrator.NewBaseOrchestrator(
 		loggerv2.NewNoop(), nil, orchestrator.OrchestratorTypeWorkflow, "", 0,

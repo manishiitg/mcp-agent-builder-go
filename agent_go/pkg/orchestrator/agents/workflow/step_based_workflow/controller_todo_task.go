@@ -1339,6 +1339,7 @@ func cloneStepWithDelegationOverrides(
 func (hcpo *StepBasedWorkflowOrchestrator) executeRoutedSubAgentStep(
 	ctx context.Context,
 	stepToExecute PlanStepInterface,
+	delegationInstructions string,
 	stepIndex int,
 	subAgentStepPath string,
 	progress *StepProgress,
@@ -1411,9 +1412,10 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeRoutedSubAgentStep(
 			localExecCtx,
 			allSteps,
 			messageSequenceCallOptions{
-				Source:         "orchestrator_reentry",
-				ReentryMessage: reentryMessage,
-				Restart:        messageSequenceRestart,
+				Source:              "orchestrator_reentry",
+				ReentryMessage:      reentryMessage,
+				ContinuationMessage: strings.TrimSpace(delegationInstructions),
+				Restart:             messageSequenceRestart,
 			},
 		)
 		return executionResult, capturedHistory, err
@@ -1574,6 +1576,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executePredefinedSubAgent(
 	executionResult, capturedHistory, err := hcpo.executeRoutedSubAgentStep(
 		subAgentCtx,
 		stepToExecute,
+		response.InstructionsToSubAgent,
 		stepIndex,
 		subAgentStepPath,
 		progress,

@@ -16,11 +16,10 @@ type RoutingEvaluationCount map[string]int
 
 // OrchestrationRoute represents a possible route/sub-agent (private to orchestration step)
 type OrchestrationRoute struct {
-	RouteID       string            `json:"route_id"`                  // Unique ID for this route
-	RouteName     string            `json:"route_name"`                // Human-readable name
-	Condition     string            `json:"condition"`                 // Condition description (e.g., "If error is authentication-related")
-	SubAgentStep  PlanStepInterface `json:"sub_agent_step"`            // The sub-agent step to execute (private, not in main workflow)
-	ContextToPass string            `json:"context_to_pass,omitempty"` // Optional: specific context to pass to sub-agent
+	RouteID      string            `json:"route_id"`       // Unique ID for this route
+	RouteName    string            `json:"route_name"`     // Human-readable name
+	Condition    string            `json:"condition"`      // Condition description (e.g., "If error is authentication-related")
+	SubAgentStep PlanStepInterface `json:"sub_agent_step"` // The sub-agent step to execute (private, not in main workflow)
 }
 
 // StepProgress tracks which steps have been completed

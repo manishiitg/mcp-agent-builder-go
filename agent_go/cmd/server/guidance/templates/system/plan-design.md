@@ -58,11 +58,19 @@ Every step reads from prior steps and writes for downstream steps:
 
 **Note:** Users may refer to todo_task steps as "Orchestrators", "orchestrators", "sub-workflows", or "pipelines", and to the routes/sub-agent steps within them as "sub-agents". These are all the same concept — the internal type name is todo_task.
 
-**Use todo_task only when the step must manage independently delegated tasks**, especially when:
+**Eligibility gate:** use `todo_task` only when the parent makes a real runtime
+orchestration decision the static plan cannot directly express. Examples are:
 - Runtime evidence determines which or how many independent tasks must run
-- Different tasks need **different tools or servers** (e.g., one sub-agent uses browser, another uses API)
-- Tasks benefit from **independent learning** — each sub-agent accumulates its own patterns
-- You need **progress tracking** — todo_task shows which tasks are done, pending, failed
+- The parent conditionally selects or fans out workers
+- The parent coordinates material runtime parallelism or adaptive retry/recovery
+- An approval boundary or interim synthesis changes subsequent delegation
+
+**A fixed child set and order does not justify `todo_task`.** Different tools,
+separate learnings, progress visibility, and easier debugging are supporting
+properties after the eligibility gate, not reasons to add an orchestrator by
+themselves. Use explicit plan steps/dependencies for known independent fixed
+work; use one `message_sequence` for known same-context work; use scripted
+steps for known deterministic work; use `routing` for a fixed exclusive branch.
 
 **Create predefined sub-agents (routes)** for tasks that are:
 - **Predictable** — same pattern every run, even if inputs change
@@ -134,7 +142,7 @@ Step-level `success_criteria` is deprecated. Rely on a strong `description` plus
 
 - **Message Sequence** (type: "message_sequence") — **the default for conversational work**: a single-agent ordered conversation with `items`. Do the whole coherent job, then **verify and fix it in focused follow-up user_message items** in the same context. Supports foreach turns and intermediate prevalidation gates. Its top-level validation_schema is automatically enforced as the final gate with same-conversation repair retries. Deterministic code is always a separate regular scripted step with explicit file dependencies and outputs. As a top-level step the queue runs once; as a todo_task route it can be re-entered during the same workflow run and receive new instructions without replaying the queue.
 - **Regular** (type: "regular"): an explicitly scripted deterministic boundary for fixed API/CLI/data work. New regular steps are automatically declared `scripted`; use `message_sequence` for every conversational or judgment-heavy step, including one-turn work.
-- **Orchestrator / Todo Task / Sub-Workflow** (type: "todo_task"): Also called "orchestrator" by users. Manages a dynamic todo list. Has a **todo_task_step** (orchestrator) and **predefined_routes**. Each route can either define an inline **sub_agent_step** or reuse a plan-local orphan definition via **orphan_step_ref**. Conversational route sub-agents use **message_sequence** (including one-turn work), **regular** is reserved for explicitly scripted deterministic routes, and **todo_task** provides one nested orchestration layer. Only one nested todo_task layer is allowed: top-level todo_task -> nested todo_task is valid, but a nested todo_task must not contain another nested todo_task.
+- **Orchestrator / Todo Task / Sub-Workflow** (type: "todo_task"): Also called "orchestrator" by users. Manages runtime delegation only after the Step 4 eligibility gate is met; a fixed child set/order is not enough. Has a **todo_task_step** (orchestrator) and **predefined_routes**. Each route can either define an inline **sub_agent_step** or reuse a plan-local orphan definition via **orphan_step_ref**. Conversational route sub-agents use **message_sequence** (including one-turn work), **regular** is reserved for explicitly scripted deterministic routes, and **todo_task** provides one nested orchestration layer. Only one nested todo_task layer is allowed: top-level todo_task -> nested todo_task is valid, but a nested todo_task must not contain another nested todo_task.
 - **Routing** (type: "routing"): N-way deterministic branching. Reads `route_selection.json` (or caller `route_selections`) and picks exactly one **routes[]** entry. Each route has **route_id**, **condition**, and **next_step_id** (pointer to an existing step). Optional **default_route_id** is a missing-file fallback. Optional **route_source_file** points at a prior step's route file.
 - **Human Input** (type: "human_input"): Asks a question to the user and blocks until response. Supports: 'text', 'yesno', 'multiple_choice'. Can route based on response.
 - **Orphan** (is_orphan: true): Not part of the main execution flow. Orphan steps are plan-local reusable definitions and manual utility agents. Use them for data checks, environment validation, one-off investigations, or shared sub-agent definitions that multiple orchestrators in the same plan may reuse. Reuse is explicit: an orphan step must declare `shared_with.orchestrator_ids`, and a todo_task route must point to it with `orphan_step_ref`. Do not assume every orphan step is shared with every orchestrator.

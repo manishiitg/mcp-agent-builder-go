@@ -1845,7 +1845,7 @@ func (api *StreamingAPI) processBackgroundAgentCompletion(sessionID, agentID str
 // workflowRunBackupDirective returns the directive that backs up an interactive
 // workflow run/step after it completes, or "" when this completion is not a
 // workflow run. This is the interactive arm of post-run backup: for scheduled
-// runs the Pulse pass (scheduler.go runPostRunMonitor, step 4) owns backup.
+// runs the dedicated Pulse lifecycle (scheduler.go runPulseLifecycle) owns backup.
 // Both arms share ONE backup contract — same default (zero-config local git),
 // same source-hash skip — so a run backed up by one is recognized as current by
 // the other (no double push). Keep this text in sync with Pulse's backup step.
@@ -1900,6 +1900,15 @@ func (api *StreamingAPI) buildAutoNotificationMessage(sessionID string, snap Bac
 	}
 	isFailed := snap.Status == BGAgentFailed
 	actionHint := buildWorkshopActionHint(workshopMode, isLockCode, isLockLearnings, lockCodeConsecutiveFailures, lockCodeNeedsReview, isFailed)
+	presentationOnly := snap.Metadata != nil && snap.Metadata["completion_mode"] == "present_result"
+	if presentationOnly {
+		// A guided review/fix child already owns evidence collection and durable
+		// writes. Letting the synthetic parent turn treat its receipt as a fresh
+		// investigation caused seven repeated 2.92 MB backlog reads in one live
+		// Engineering Review. The parent still gets one natural-language turn to
+		// present the result, but no follow-up work is part of that contract.
+		actionHint = ""
+	}
 
 	// Iteration and group go inline alongside id/status to keep the header
 	// to a single line — cursor-cli's tmux paste-compression collapses any
@@ -1909,6 +1918,9 @@ func (api *StreamingAPI) buildAutoNotificationMessage(sessionID string, snap Bac
 	syntheticMsg := fmt.Sprintf(
 		"[AUTO-NOTIFICATION] Agent '%s' completed — status=%s%s.\nResult: %s%s%s",
 		strings.TrimSpace(snap.Name), snap.Status, contextInfo, resultText, actionHint, workflowRunCompletionDirective(snap))
+	if presentationOnly {
+		syntheticMsg += "\n\n[PRESENTATION-ONLY COMPLETION] The background agent above is the authoritative owner of this task's evidence collection and durable writes. Present its result to the user now. Do not call any tool, reload Pulse/SQLite/workspace state, inspect the child conversation, or independently revalidate the result. Do not start more work."
+	}
 
 	// Bot connector sessions (slack / whatsapp / discord / telegram / etc.): the
 	// builder's reply is forwarded verbatim to a chat thread, so a faithful echo

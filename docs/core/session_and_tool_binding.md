@@ -133,12 +133,9 @@ In practice that controls:
 - `ChatSessionIDKey` for the agent-level session
 - `WorkflowSessionIDKey` for the root workflow/chat session
 
-That split matters for `share_browser=false`.
-
-With browser isolation:
-
-- the sub-agent gets its own agent-level session
-- the workflow-level session still stays attached for per-workflow limits and cleanup
+Delegated agents inherit the workflow browser session. The two keys remain
+useful because browser accounting and cleanup are workflow-scoped even when a
+tool request already carries an agent-level session.
 
 Relevant code:
 
@@ -233,19 +230,16 @@ Relevant code:
 
 - [controller.go](../../agent_go/pkg/orchestrator/agents/workflow/step_based_workflow/controller.go#L283)
 
-## Sub-Agents And `share_browser`
+## Sub-Agent Browser Sessions
 
-Sub-agents default to reusing the parent session.
-
-If `share_browser=false`, the runtime creates an isolated sub-agent session ID:
-
-- MCP/tool session is isolated
-- browser session can be isolated
-- root workflow session still exists separately for per-workflow tracking
+Sub-agents reuse the parent workflow browser session. Folder guards, workflow
+DB bindings, and other tool permissions still use dedicated tool sessions where
+required; that security isolation does not create or advertise a second browser
+ownership mode. Distinct browser identities use explicitly configured CDP
+profiles or browser session names rather than a delegation flag.
 
 Relevant code:
 
-- [server.go](../../agent_go/cmd/server/server.go#L7543)
 - [workspace_browser_tools.go](../../agent_go/cmd/server/virtual-tools/workspace_browser_tools.go#L42)
 
 ## What Survives A New Turn

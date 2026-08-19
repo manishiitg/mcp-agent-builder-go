@@ -44,8 +44,7 @@ const (
 	//   - chat mode  → "Chats"  (wrapExecutorsWithChatModeFolderGuard)
 	DefaultWorkingDirKey ContextKey = "default_working_dir"
 	// ChatSessionIDKey is the context key for the agent-level session ID.
-	// For share_browser=false sub-agents this is the isolated session ID;
-	// for share_browser=true (default), this is the parent workflow session ID.
+	// Delegated agents inherit the parent workflow browser session.
 	// Used by browser session tracker for per-agent limits.
 	ChatSessionIDKey ContextKey = "chat_session_id"
 	// WorkflowSessionIDKey is the context key for the root workflow/chat session ID.

@@ -2,7 +2,7 @@
 
 Load this when Engineering Review is due and runtime/logic evidence is selected.
 It is the deep read-only execution evidence pack used by Engineering Review and
-the Review+Fix sequence. Gate does not load it — Gate only decides whether
+the Review sequence before the independent Fix turn. Gate does not load it — Gate only decides whether
 `workflow_review` is due from the durable worklist recorded by Pulse Gate. The reviewer inspects and advises;
 only the Pulse Fixer applies bounded repairs, and only for confirmed
 `correctness_bug` findings.

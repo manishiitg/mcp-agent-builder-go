@@ -281,7 +281,13 @@ type PulseFindingEvent struct {
 }
 
 type PulseFindingLifecycle struct {
-	Issue           PulseIssue                 `json:"issue"`
+	Issue PulseIssue `json:"issue"`
+	// Kind is the durable projection boundary between evidence emitted by a
+	// workflow step and an issue Pulse has actually accepted for lifecycle
+	// work. Both species intentionally share the same ledger so promotion keeps
+	// the original evidence history; callers must not flatten them into one
+	// backlog count.
+	Kind            string                     `json:"kind"`
 	Fingerprint     string                     `json:"fingerprint"`
 	FindingID       string                     `json:"finding_id,omitempty"`
 	Module          string                     `json:"module,omitempty"`
@@ -303,6 +309,49 @@ type PulseFindingLifecycle struct {
 	Attempts        []PulseFixAttempt          `json:"fix_attempts"`
 	Verification    []PulseFindingVerification `json:"verifications"`
 	Events          []PulseFindingEvent        `json:"events"`
+}
+
+const (
+	PulseFindingKindIssue       = "issue"
+	PulseFindingKindObservation = "observation"
+)
+
+// PulseFindingKindForLifecycle classifies the projection, not the underlying
+// row. A workflow observation becomes an issue only when a reviewer explicitly
+// promotes it, Pulse starts lifecycle work on it, or it originated from a
+// reviewer. This preserves a single auditable history without making every
+// CONCERNS line a repair ticket.
+func PulseFindingKindForLifecycle(finding PulseFindingLifecycle) string {
+	if finding.Phase == ConcernPhaseReview || len(finding.Attempts) > 0 {
+		return PulseFindingKindIssue
+	}
+	for _, event := range finding.Events {
+		switch strings.TrimSpace(event.EventType) {
+		case "promoted_to_issue", "duplicates_merged", "fix_started", "updated",
+			"closed", "verification_failed", "verification_inconclusive",
+			"proposal_recorded", "awaiting_user", "queued_for_engineering",
+			"blocked", "awaiting_run", "external_action_required", "reopened":
+			return PulseFindingKindIssue
+		}
+	}
+	return PulseFindingKindObservation
+}
+
+func IsPulseIssue(finding PulseFindingLifecycle) bool {
+	return PulseFindingKindForLifecycle(finding) == PulseFindingKindIssue
+}
+
+func SplitPulseFindingLifecycles(findings []PulseFindingLifecycle) (issues, observations []PulseFindingLifecycle) {
+	issues = make([]PulseFindingLifecycle, 0, len(findings))
+	observations = make([]PulseFindingLifecycle, 0, len(findings))
+	for _, finding := range findings {
+		if IsPulseIssue(finding) {
+			issues = append(issues, finding)
+		} else {
+			observations = append(observations, finding)
+		}
+	}
+	return issues, observations
 }
 
 // ResolvePulseFindingIssueID translates the one public Pulse identity into the
@@ -1843,6 +1892,7 @@ func LoadPulseFindingLifecycles(ctx context.Context, workspacePath, module strin
 			out[index].Events = append(out[index].Events, event)
 		}
 		eventRows.Close()
+		out[index].Kind = PulseFindingKindForLifecycle(out[index])
 		out[index].Issue = NewPulseIssue(out[index])
 		// Ordinary and migrated concerns predate reviewer-assigned IDs. Expose
 		// the deterministic compact issue ID through the legacy lifecycle field

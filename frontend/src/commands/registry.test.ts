@@ -15,11 +15,11 @@ describe('Pulse slash commands', () => {
     const workflowCommands = getCommands('workflow', 'workshop').map(command => command.command)
     const orgCommands = getCommands('multi-agent').map(command => command.command)
 
-    for (const command of ['pulse', 'pulse-backlog', 'ops-review', 'strategy-auditor', 'engineering-review', 'goal-advisor', 'specialize-advisors']) {
+    for (const command of ['pulse', 'pulse-backlog', 'ops-review', 'strategy-auditor', 'engineering-review', 'pulse-fixer', 'goal-advisor']) {
       expect(workflowCommands).toContain(command)
       expect(orgCommands).not.toContain(command)
     }
-    for (const retiredCommand of ['bug-review', 'review-speed', 'review-cost', 'llm-ops-review', 'pulse-fixer']) {
+    for (const retiredCommand of ['bug-review', 'review-speed', 'review-cost', 'llm-ops-review', 'specialize-advisors']) {
       expect(workflowCommands).not.toContain(retiredCommand)
     }
   })
@@ -33,26 +33,13 @@ describe('Pulse slash commands', () => {
       workshopMode: 'workshop',
     } as CommandContext)
 
-    expect(submitted).toContain('get_pulse_state(view="backlog")')
+    expect(submitted).toContain('get_pulse_state(view="backlog", detail="compact")')
+    expect(submitted).toContain('detail="full" only for the bounded issue_ids')
     expect(submitted).toContain('merge_pulse_issues')
     expect(submitted).toContain('do not edit workflow artifacts')
   })
 
-  it('routes advisor specialization through canonical approval guidance', () => {
-    const command = findCommand('specialize-advisors', 'workflow')
-    let submitted = ''
-
-    command?.execute({
-      beforeSlash: 'emphasize acquisition concentration and novel channels',
-      onSubmit: (message: string) => { submitted = message },
-      workshopMode: 'workshop',
-    } as CommandContext)
-
-    expect(submitted).toContain('kind="specialize-advisors"')
-    expect(submitted).toContain('emphasize acquisition concentration and novel channels')
-  })
-
-  it('routes Engineering Review to the single review-and-fix sequence', () => {
+  it('routes Engineering Review to an independent background reviewer', () => {
     const command = findCommand('engineering-review', 'workflow')
     let submitted = ''
 
@@ -63,9 +50,29 @@ describe('Pulse slash commands', () => {
       getWorkflowStore: () => ({ selectedRunFolder: 'iteration-9/default' }),
     } as CommandContext)
 
-    expect(submitted).toContain('kind="engineering-review"')
+    expect(submitted).toContain('kind=\\"engineering-review\\"')
+    expect(submitted).toContain('BACKGROUND task')
+		expect(submitted).toContain('completion_mode="present_result"')
+		expect(submitted).toContain('Do not call tools, reload state, or independently revalidate')
     expect(submitted).toContain('iteration-9/default')
     expect(submitted).toContain('prioritize failed evaluation writes')
+  })
+
+  it('routes Pulse Fixer to a separate background agent after review', () => {
+    const command = findCommand('pulse-fixer', 'workflow')
+    let submitted = ''
+
+    command?.execute({
+      beforeSlash: 'repair the highest-impact canonical issue',
+      onSubmit: (message: string) => { submitted = message },
+      workshopMode: 'workshop',
+      getWorkflowStore: () => ({ selectedRunFolder: 'iteration-9/default' }),
+    } as CommandContext)
+
+    expect(submitted).toContain('kind=\\"pulse-fixer\\"')
+    expect(submitted).toContain('BACKGROUND task')
+		expect(submitted).toContain('completion_mode="present_result"')
+    expect(submitted).toContain('iteration-9/default')
   })
 
   it('routes the unified Ops Review command to the canonical backend guidance', () => {
@@ -81,6 +88,7 @@ describe('Pulse slash commands', () => {
 
     expect(submitted).toContain('Run the /ops-review review as a BACKGROUND task')
     expect(submitted).toContain('kind=\\"ops-review\\"')
+    expect(submitted).toContain('required_pulse_review_modules=["llm_ops_review"]')
     expect(submitted).toContain('iteration-8/default')
     expect(submitted).toContain('check failed tool calls')
   })
@@ -98,6 +106,7 @@ describe('Pulse slash commands', () => {
 
     expect(submitted).toContain('Run the /strategy-auditor review as a BACKGROUND task')
     expect(submitted).toContain('kind=\\"strategy-auditor\\"')
+    expect(submitted).toContain('required_pulse_review_modules=["strategic_review"]')
     expect(submitted).toContain('iteration-7/group-a')
     expect(submitted).toContain('focus on repeated targets')
   })

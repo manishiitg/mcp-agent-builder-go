@@ -66,9 +66,17 @@ type messageSequenceEntry struct {
 }
 
 type messageSequenceCallOptions struct {
-	Source         string
-	ReentryMessage string
-	Restart        bool
+	Source              string
+	ReentryMessage      string
+	ContinuationMessage string
+	Restart             bool
+}
+
+func messageSequenceContinuationMessage(opts messageSequenceCallOptions) string {
+	if msg := strings.TrimSpace(opts.ContinuationMessage); msg != "" {
+		return msg
+	}
+	return strings.TrimSpace(opts.ReentryMessage)
 }
 
 const normalizedRegularSequenceItemID = "execute-and-verify"
@@ -310,7 +318,10 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeMessageSequenceStep(
 	if hasExisting {
 		// Route re-entry: continue the in-memory conversation with one new user message.
 		session = existing
-		msg := strings.TrimSpace(opts.ReentryMessage)
+		// The opening route description is already in this conversation. Send only
+		// the new instruction supplied by the parent orchestrator; replaying the full
+		// durable description wastes context and duplicates instructions every call.
+		msg := messageSequenceContinuationMessage(opts)
 		if msg == "" {
 			return "", session.ConversationHistory, fmt.Errorf("message_sequence route %q already has an active conversation; provide a re-entry message or restart", sequenceStep.GetID())
 		}

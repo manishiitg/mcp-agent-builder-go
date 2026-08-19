@@ -898,33 +898,39 @@ func TestCreateAndUpdatePulseReviewOnlyScheduleSkipsGroupNamesRequirement(t *tes
 }
 
 func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
-	steps := postRunMonitorSteps()
-	if got := len(steps); got != 3 {
-		t.Fatalf("postRunMonitorSteps() length = %d, want 3", got)
+	steps := pulseLifecycleSteps()
+	if got := len(steps); got != 4 {
+		t.Fatalf("postRunMonitorSteps() length = %d, want 4", got)
 	}
-	for i, want := range []string{"gate", "review-fix", "finalize"} {
+	for i, want := range []string{"gate", "review", "fix", "finalize"} {
 		if got := steps[i].label; got != want {
 			t.Fatalf("postRunMonitorSteps()[%d].label = %q, want %q", i, got, want)
 		}
 	}
-	reviewFix := steps[1].query
+	review := steps[1].query
 	for _, want := range []string{
 		"Read the durable Gate worklist",
-		"PULSE REVIEW + FIX DISPATCH",
+		"PULSE REVIEW DISPATCH",
 		"run_in_background",
-		"Engineering executor is one message sequence",
+		"Engineering reviewer is one message sequence",
 		"Stores Health only when Gate selected",
 		"each later turn in message_sequence with a non-empty message",
-		"Strategic executor is one message sequence",
+		"Strategic reviewer is one message sequence",
 		"The runtime waits for registered children",
-		"final message in each child sequence owns durable typed writes",
+		"must not modify workflow/platform implementation files",
 	} {
-		if !strings.Contains(reviewFix, want) {
-			t.Fatalf("review-fix prompt missing %q:\n%s", want, reviewFix)
+		if !strings.Contains(review, want) {
+			t.Fatalf("review prompt missing %q:\n%s", want, review)
 		}
 	}
-	if !strings.Contains(steps[2].query, "PULSE FINALIZER") || strings.Contains(steps[2].query, "PULSE DASHBOARD") {
-		t.Fatal("only the finalizer must remain after Review+Fix")
+	fix := steps[2].query
+	for _, want := range []string{"PULSE INDEPENDENT FIX DISPATCH", "canonical issues only", "one fresh executor Fixer", "never reuse a reviewer conversation"} {
+		if !strings.Contains(fix, want) {
+			t.Fatalf("fix prompt missing %q:\n%s", want, fix)
+		}
+	}
+	if !strings.Contains(steps[3].query, "PULSE FINALIZER") || strings.Contains(steps[3].query, "PULSE DASHBOARD") {
+		t.Fatal("only the finalizer must remain after Review and Fix")
 	}
 	return
 
@@ -1730,7 +1736,7 @@ func TestValidatePulseDueModuleResultsRejectsRunningReviewReceipt(t *testing.T) 
 }
 
 func TestPulseFinalBackupRunsOnlyInParentTurn(t *testing.T) {
-	finalizer := pulseStepQueryByLabel(t, postRunMonitorFinalSteps("pulse-run-1"), "finalize")
+	finalizer := pulseStepQueryByLabel(t, pulseLifecycleFinalSteps("pulse-run-1"), "finalize")
 	if !strings.Contains(finalizer, `read_skill(skills=[{"name":"builder-reference","path":"references/pulse-finalizer.md"}])`) {
 		t.Fatalf("finalizer does not load its focused contract: %s", finalizer)
 	}
@@ -1748,7 +1754,7 @@ func TestPulseFinalBackupRunsOnlyInParentTurn(t *testing.T) {
 func TestPostRunMonitorFinalStepsIncludesOwnerNotificationInstructions(t *testing.T) {
 	runInstructions := "Include delivered outputs and the primary metric."
 	pulseInstructions := "Put decisions and material fixes first."
-	finalizer := pulseStepQueryByLabel(t, postRunMonitorFinalSteps("pulse-run-1", workflowNotificationContentInstructions{
+	finalizer := pulseStepQueryByLabel(t, pulseLifecycleFinalSteps("pulse-run-1", workflowNotificationContentInstructions{
 		runSummary: runInstructions, pulseSummary: pulseInstructions,
 	}), "finalize")
 	for _, required := range []string{"WORKFLOW RUN SUMMARY INSTRUCTIONS", runInstructions, "PULSE REVIEW SUMMARY INSTRUCTIONS", pulseInstructions, "recipients, channels, secrets, permissions"} {
@@ -1756,14 +1762,14 @@ func TestPostRunMonitorFinalStepsIncludesOwnerNotificationInstructions(t *testin
 			t.Fatalf("finalizer missing notification instruction guard %q: %s", required, finalizer)
 		}
 	}
-	withoutInstructions := pulseStepQueryByLabel(t, postRunMonitorFinalSteps("pulse-run-1"), "finalize")
+	withoutInstructions := pulseStepQueryByLabel(t, pulseLifecycleFinalSteps("pulse-run-1"), "finalize")
 	if strings.Contains(withoutInstructions, "SUMMARY INSTRUCTIONS") {
 		t.Fatalf("finalizer included owner instructions when none were configured: %s", withoutInstructions)
 	}
 }
 
 func TestPostRunMonitorFinalStepsIncludesSplitNotificationRouting(t *testing.T) {
-	finalizer := pulseStepQueryByLabel(t, postRunMonitorFinalSteps("pulse-run-1", workflowNotificationContentInstructions{
+	finalizer := pulseStepQueryByLabel(t, pulseLifecycleFinalSteps("pulse-run-1", workflowNotificationContentInstructions{
 		runSummaryChannels:   []string{"slack"},
 		pulseSummaryChannels: []string{"gmail"},
 	}), "finalize")
@@ -1781,11 +1787,10 @@ func TestApplyPulseLLMToReqMapUsesPulseOverrideWhenConfigured(t *testing.T) {
 		Schedule: WorkflowSchedule{WorkshopMode: "run"},
 		Capabilities: WorkflowCapabilities{
 			LLMConfig: &workflowtypes.PresetLLMConfig{
-				SchemaVersion:  workflowtypes.LLMConfigSchemaVersion,
-				Mode:           workflowtypes.LLMConfigModeExplicit,
-				BuilderLLM:     builder,
-				MaintenanceLLM: builder,
-				TieredConfig:   &workflowtypes.TieredLLMConfig{Tier1: builder, Tier2: builder, Tier3: builder},
+				SchemaVersion: workflowtypes.LLMConfigSchemaVersion,
+				Mode:          workflowtypes.LLMConfigModeExplicit,
+				BuilderLLM:    builder,
+				TieredConfig:  &workflowtypes.TieredLLMConfig{Tier1: builder, Tier2: builder, Tier3: builder},
 				PulseLLM: &workflowtypes.AgentLLMConfig{
 					Provider: "codex-cli",
 					ModelID:  "gpt-5.5",
@@ -1825,54 +1830,6 @@ func TestApplyPulseLLMToReqMapUsesPulseOverrideWhenConfigured(t *testing.T) {
 	}
 	if got := reqMap["llm_config_source"]; got != llmConfigSourceScheduledPulse {
 		t.Fatalf("llm_config_source = %#v, want %q", got, llmConfigSourceScheduledPulse)
-	}
-}
-
-func TestApplyGoalAdvisorLLMToReqMapUsesAdvisorOverrideWhenConfigured(t *testing.T) {
-	reqMap := map[string]interface{}{}
-	builder := &workflowtypes.AgentLLMConfig{Provider: "claude-code", ModelID: "claude-sonnet-5"}
-	sctx := &ScheduleContext{
-		Schedule: WorkflowSchedule{WorkshopMode: "run"},
-		Capabilities: WorkflowCapabilities{
-			LLMConfig: &workflowtypes.PresetLLMConfig{
-				SchemaVersion: workflowtypes.LLMConfigSchemaVersion,
-				Mode:          workflowtypes.LLMConfigModeExplicit,
-				BuilderLLM:    builder,
-				MaintenanceLLM: &workflowtypes.AgentLLMConfig{
-					Provider: "claude-code",
-					ModelID:  "claude-opus-4-8",
-					Options:  map[string]interface{}{"reasoning_effort": "high"},
-				},
-				PulseLLM: &workflowtypes.AgentLLMConfig{
-					Provider: "claude-code",
-					ModelID:  "claude-sonnet-5",
-					Options:  map[string]interface{}{"reasoning_effort": "high"},
-				},
-				TieredConfig: &workflowtypes.TieredLLMConfig{Tier1: builder, Tier2: builder, Tier3: builder},
-			},
-		},
-	}
-
-	svc := &SchedulerService{}
-	svc.applyLLMAndSecretsToReqMap(context.Background(), reqMap, sctx)
-	svc.applyGoalAdvisorLLMToReqMap(reqMap, sctx, "test-session")
-
-	llmConfig, ok := reqMap["llm_config"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("llm_config missing or wrong type: %#v", reqMap["llm_config"])
-	}
-	primary, ok := llmConfig["primary"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("llm_config.primary missing or wrong type: %#v", llmConfig["primary"])
-	}
-	if got := primary["provider"]; got != "claude-code" {
-		t.Fatalf("provider = %#v, want claude-code", got)
-	}
-	if got := primary["model_id"]; got != "claude-opus-4-8" {
-		t.Fatalf("model_id = %#v, want claude-opus-4-8", got)
-	}
-	if got := reqMap["llm_config_source"]; got != llmConfigSourceScheduledAutoImprove {
-		t.Fatalf("llm_config_source = %#v, want %q", got, llmConfigSourceScheduledAutoImprove)
 	}
 }
 
@@ -1988,15 +1945,15 @@ func TestPostRunMonitorStepsUseOneTurnInactivityBoundary(t *testing.T) {
 		schedulerWorkshopMaxInactivity = oldNormal
 	}()
 
-	for _, label := range []string{"gate", "review-fix", "review-fix-continuation", "dashboard", "finalize"} {
-		if got := (postRunMonitorStep{label: label}).idleMaxInactivity(); got != 10*time.Minute {
+	for _, label := range []string{"gate", "review", "fix", "review-fix-continuation", "dashboard", "finalize"} {
+		if got := (pulseLifecycleStep{label: label}).idleMaxInactivity(); got != 10*time.Minute {
 			t.Fatalf("%s max inactivity = %s, want 10m", label, got)
 		}
 	}
 }
 
 func TestReviewFixContinuationIsParentReceiptReconciliationOnly(t *testing.T) {
-	step := postRunMonitorReviewFixContinuationStep("pulse-test", errors.New("workflow_review receipt missing"))
+	step := pulseLifecycleReviewFixContinuationStep("pulse-test", errors.New("workflow_review receipt missing"))
 	for _, want := range []string{
 		"PULSE REVIEW + FIX RECEIPT CHECK",
 		"Do not reconstruct findings or fixes",
@@ -2010,34 +1967,25 @@ func TestReviewFixContinuationIsParentReceiptReconciliationOnly(t *testing.T) {
 	}
 }
 
-// TestPostRunMonitorUsesLightweightFinalizeRequiresRealEvidence pins PLAT-115:
-// the lightweight backup+notify-only finalizer only ever applies to a run
-// that produced real evidence under an explicitly "periodic" workflow. Every
-// other combination — no evidence, the periodic review pass itself
-// (PulseOnly), an unset/legacy/unrecognized mode — must fall through to the
-// existing behavior unchanged.
-func TestPostRunMonitorUsesLightweightFinalizeRequiresRealEvidence(t *testing.T) {
-	periodic := &WorkflowManifest{PostRunMonitorMode: "periodic"}
-	perRun := &WorkflowManifest{}
-
+// TestScheduledRunUsesLightweightFinalizeRequiresRealEvidence pins the
+// separated lifecycle: an ordinary run with evidence gets the short
+// backup/publish/notify finalizer; a dedicated/manual Pulse pass never does.
+func TestScheduledRunUsesLightweightFinalizeRequiresRealEvidence(t *testing.T) {
 	tests := []struct {
 		name                    string
 		reviewEvidenceAvailable bool
 		pulseOnly               bool
-		manifest                *WorkflowManifest
 		want                    bool
 	}{
-		{"periodic, evidence, not the review pass itself", true, false, periodic, true},
-		{"periodic, but no evidence this invocation", false, false, periodic, false},
-		{"periodic, but this IS the periodic review pass (PulseOnly)", true, true, periodic, false},
-		{"per_run (default) manifest, with evidence", true, false, perRun, false},
-		{"nil manifest fails safe to per_run", true, false, nil, false},
+		{"ordinary run with evidence", true, false, true},
+		{"ordinary run without evidence", false, false, false},
+		{"dedicated or manual Pulse pass", true, true, false},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := postRunMonitorUsesLightweightFinalize(test.reviewEvidenceAvailable, test.pulseOnly, test.manifest); got != test.want {
-				t.Fatalf("postRunMonitorUsesLightweightFinalize(%v, %v, %+v) = %v, want %v",
-					test.reviewEvidenceAvailable, test.pulseOnly, test.manifest, got, test.want)
+			if got := scheduledRunUsesLightweightFinalize(test.reviewEvidenceAvailable, test.pulseOnly); got != test.want {
+				t.Fatalf("scheduledRunUsesLightweightFinalize(%v, %v) = %v, want %v",
+					test.reviewEvidenceAvailable, test.pulseOnly, got, test.want)
 			}
 		})
 	}
@@ -2059,14 +2007,14 @@ func TestPostRunMonitorUsesLightweightFinalizeRequiresRealEvidence(t *testing.T)
 // between periodic Pulse passes — the exact kind of staleness this feature
 // was never meant to introduce.
 func TestLightweightFinalizeStepNeverRunsGateOrPublishesFindings(t *testing.T) {
-	steps := postRunMonitorLightweightFinalizeStep("pulse-test")
+	steps := scheduledRunFinalizeStep("run-test")
 	if len(steps) != 1 || steps[0].label != "finalize" {
 		t.Fatalf("steps = %+v, want exactly one \"finalize\" step", steps)
 	}
 	query := steps[0].query
 	for _, want := range []string{
 		"Do not run Gate, reviewers, or Fixer",
-		"not a failure or a skip due to missing evidence",
+		"This is normal, not a missing Pulse pass",
 		"publish it normally",
 		"is fresh this run regardless of whether Pulse reviewed anything",
 		"The \"pulse\" target specifically has nothing new this pass",
@@ -2078,28 +2026,22 @@ func TestLightweightFinalizeStepNeverRunsGateOrPublishesFindings(t *testing.T) {
 	}
 }
 
-// TestLightweightFinalizeStepReconsidersReviewScheduleCadence pins the
-// fourth, ongoing responsibility added alongside mandatory periodic mode: a
-// review interval chosen once at migration time can go stale as actual run
-// volume drifts, so every lightweight pass re-checks it cheaply against the
-// same evidence (this workflow's own schedules + get_schedule_runs) and
-// adjusts via update_schedule only when warranted — explicitly optional,
-// not a step that must always change something.
-func TestLightweightFinalizeStepReconsidersReviewScheduleCadence(t *testing.T) {
-	steps := postRunMonitorLightweightFinalizeStep("pulse-test")
+// The ordinary run finalizer must remain bounded to run-owned side effects.
+// Review cadence belongs to the explicit Pulse schedule and must not be
+// reconsidered or mutated after every workflow execution.
+func TestLightweightFinalizeStepDoesNotMutatePulseSchedule(t *testing.T) {
+	steps := scheduledRunFinalizeStep("run-test")
 	if len(steps) != 1 {
 		t.Fatalf("steps = %+v, want exactly one step", steps)
 	}
 	query := steps[0].query
-	for _, want := range []string{
-		"reconsider the review schedule's cadence",
+	for _, forbidden := range []string{
 		"get_schedule_runs",
-		"pulse_review_only schedule's cron_expression",
-		"call update_schedule on the review schedule",
-		"This is genuinely optional",
+		"update_schedule",
+		"cron_expression",
 	} {
-		if !strings.Contains(query, want) {
-			t.Fatalf("lightweight finalize prompt missing cadence-reconsideration step %q:\n%s", want, query)
+		if strings.Contains(query, forbidden) {
+			t.Fatalf("lightweight finalize prompt must not contain schedule mutation %q:\n%s", forbidden, query)
 		}
 	}
 }
@@ -2160,7 +2102,7 @@ func TestPulseReviewBacklogSummaryExcludesNonTerminalIterationZero(t *testing.T)
 // get_pulse_state's last_checked_at itself — Go must never pre-filter "what's
 // new" or silently assume every listed folder is unreviewed.
 func TestBacklogGateStepDefersWhatsNewReasoningToGate(t *testing.T) {
-	step := postRunMonitorBacklogGateStep("pulse-test", "- iteration-5 (status=completed, started_at=..., completed_at=...)")
+	step := pulseLifecycleBacklogGateStep("pulse-test", "- iteration-5 (status=completed, started_at=..., completed_at=...)")
 	for _, want := range []string{
 		"periodic Pulse review pass",
 		"last_checked_at",
@@ -2185,7 +2127,7 @@ func TestPostRunMonitorFinalStepClassification(t *testing.T) {
 		{label: "finalize", finalStep: true},
 	}
 	for _, test := range tests {
-		if got := isPostRunMonitorFinalStep(test.label); got != test.finalStep {
+		if got := isPulseLifecycleFinalStep(test.label); got != test.finalStep {
 			t.Fatalf("final-step classification for %q = %v, want %v", test.label, got, test.finalStep)
 		}
 	}
@@ -2264,12 +2206,11 @@ func TestApplyPulseLLMToReqMapKeepsWorkflowModelWhenNoProviderDefault(t *testing
 		Schedule: WorkflowSchedule{WorkshopMode: "run"},
 		Capabilities: WorkflowCapabilities{
 			LLMConfig: &workflowtypes.PresetLLMConfig{
-				SchemaVersion:  workflowtypes.LLMConfigSchemaVersion,
-				Mode:           workflowtypes.LLMConfigModeExplicit,
-				BuilderLLM:     builder,
-				MaintenanceLLM: builder,
-				PulseLLM:       builder,
-				TieredConfig:   &workflowtypes.TieredLLMConfig{Tier1: builder, Tier2: builder, Tier3: builder},
+				SchemaVersion: workflowtypes.LLMConfigSchemaVersion,
+				Mode:          workflowtypes.LLMConfigModeExplicit,
+				BuilderLLM:    builder,
+				PulseLLM:      builder,
+				TieredConfig:  &workflowtypes.TieredLLMConfig{Tier1: builder, Tier2: builder, Tier3: builder},
 			},
 		},
 	}
@@ -2367,12 +2308,11 @@ func resumeTestScheduleContext(workspacePath, scheduleID string) *ScheduleContex
 		},
 		Capabilities: WorkflowCapabilities{
 			LLMConfig: &workflowtypes.PresetLLMConfig{
-				SchemaVersion:  workflowtypes.LLMConfigSchemaVersion,
-				Mode:           workflowtypes.LLMConfigModeExplicit,
-				BuilderLLM:     builder,
-				MaintenanceLLM: builder,
-				PulseLLM:       builder,
-				TieredConfig:   &workflowtypes.TieredLLMConfig{Tier1: builder, Tier2: builder, Tier3: builder},
+				SchemaVersion: workflowtypes.LLMConfigSchemaVersion,
+				Mode:          workflowtypes.LLMConfigModeExplicit,
+				BuilderLLM:    builder,
+				PulseLLM:      builder,
+				TieredConfig:  &workflowtypes.TieredLLMConfig{Tier1: builder, Tier2: builder, Tier3: builder},
 			},
 		},
 	}
@@ -2538,14 +2478,14 @@ func TestRunFolderNameSetSkipsEmptyNames(t *testing.T) {
 }
 
 func TestPostRunMonitorModuleStepsReserveHTMLForDashboard(t *testing.T) {
-	steps := postRunMonitorSteps()
+	steps := pulseLifecycleSteps()
 	checked := 0
 	for _, step := range steps {
-		if step.label != "review-fix" {
+		if step.label != "review" && step.label != "fix" {
 			continue
 		}
 		checked++
-		for _, want := range []string{"Do not render the dashboard", "durable Gate worklist"} {
+		for _, want := range []string{"render the dashboard", "durable Gate worklist"} {
 			if !strings.Contains(step.query, want) {
 				t.Fatalf("module step %q missing single-renderer guard %q:\n%s", step.label, want, step.query)
 			}
@@ -2554,14 +2494,14 @@ func TestPostRunMonitorModuleStepsReserveHTMLForDashboard(t *testing.T) {
 			t.Fatalf("module step %q still loads the presentation contract:\n%s", step.label, step.query)
 		}
 	}
-	if checked != 1 {
-		t.Fatalf("checked %d Review+Fix steps, want 1", checked)
+	if checked != 2 {
+		t.Fatalf("checked %d Review/Fix steps, want 2", checked)
 	}
 }
 
 // pulseStepQueryByLabel selects a stage by label so these assertions survive
 // new stages being added to the final sequence.
-func pulseStepQueryByLabel(t *testing.T, steps []postRunMonitorStep, label string) string {
+func pulseStepQueryByLabel(t *testing.T, steps []pulseLifecycleStep, label string) string {
 	t.Helper()
 	for _, st := range steps {
 		if st.label == label {
@@ -2589,7 +2529,7 @@ func pulseStepQueryByLabel(t *testing.T, steps []postRunMonitorStep, label strin
 // return partway through that function (a concurrent, unrelated in-progress
 // edit — see the go vet "unreachable code" flag at this file's line 787).
 func TestPulseHasNoDashboardStage(t *testing.T) {
-	for _, step := range postRunMonitorSteps() {
+	for _, step := range pulseLifecycleSteps() {
 		if step.label == "dashboard" || strings.Contains(step.query, "PULSE DASHBOARD") {
 			t.Fatalf("retired HTML dashboard leaked into Pulse stage: %+v", step)
 		}
@@ -2691,7 +2631,7 @@ func TestScheduledWorkflowStepProducedEvidenceUsesLinkedStepExecutions(t *testin
 
 func TestNoRunFinalizerSkipsEvidenceStagesAndReportsReason(t *testing.T) {
 	reason := `workflow upgrade preflight upgrade-1.0.18 did not stamp required version "1.0.18"; normal schedule message was not started`
-	steps := postRunMonitorNoRunSteps("pulse-run-1", reason, workflowNotificationContentInstructions{
+	steps := pulseLifecycleNoRunSteps("pulse-run-1", reason, workflowNotificationContentInstructions{
 		runSummaryChannels:   []string{"electron", "slack"},
 		runSummaryRecipients: []string{"owner@example.com"},
 	})
@@ -2735,7 +2675,7 @@ func TestNoRunFinalizerSkipsEvidenceStagesAndReportsReason(t *testing.T) {
 		t.Fatal("no-run finalizer must not instruct the agent to record_pulse_result an invalid \"dashboard\" command")
 	}
 
-	fallback := postRunMonitorNoRunSteps("pulse-run-2", "   ")[0].query
+	fallback := pulseLifecycleNoRunSteps("pulse-run-2", "   ")[0].query
 	if !strings.Contains(fallback, "no workflow run was started or resumed") {
 		t.Fatal("empty scheduler error must still produce a truthful explanation")
 	}
@@ -2854,18 +2794,17 @@ func TestWorkshopRunStartedDuringInvocationRejectsOlderAndUnstamped(t *testing.T
 
 func TestApplyLLMAndSecretsToReqMapUsesTheWorkflowModelForEverySchedule(t *testing.T) {
 	// Every schedule now runs on the workflow's Builder model. The optimizer
-	// workshop mode used to swap in the Maintenance LLM and stamp
+	// workshop mode used to swap in a separate maintenance model and stamp
 	// llm_config_source; that mode was retired on 2026-08-17, so a schedule
 	// still carrying "optimizer" in workflow.json must behave like any other.
 	builder := &workflowtypes.AgentLLMConfig{Provider: "claude-code", ModelID: "claude-opus-4-6"}
-	maintenance := &workflowtypes.AgentLLMConfig{Provider: "vertex", ModelID: "gemini-2.5-pro"}
+	high := &workflowtypes.AgentLLMConfig{Provider: "vertex", ModelID: "gemini-2.5-pro"}
 	baseConfig := &workflowtypes.PresetLLMConfig{
-		SchemaVersion:  workflowtypes.LLMConfigSchemaVersion,
-		Mode:           workflowtypes.LLMConfigModeExplicit,
-		BuilderLLM:     builder,
-		MaintenanceLLM: maintenance,
-		PulseLLM:       builder,
-		TieredConfig:   &workflowtypes.TieredLLMConfig{Tier1: maintenance, Tier2: builder, Tier3: builder},
+		SchemaVersion: workflowtypes.LLMConfigSchemaVersion,
+		Mode:          workflowtypes.LLMConfigModeExplicit,
+		BuilderLLM:    builder,
+		PulseLLM:      builder,
+		TieredConfig:  &workflowtypes.TieredLLMConfig{Tier1: high, Tier2: builder, Tier3: builder},
 	}
 
 	for _, workshopMode := range []string{"run", "workshop", "optimizer", " OPTIMIZER ", ""} {

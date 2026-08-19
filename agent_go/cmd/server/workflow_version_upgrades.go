@@ -45,6 +45,7 @@ func workflowContractVersionRank(version string) (int, bool) {
 		workflowContractScheduledRouteVersion,
 		workflowContractScheduleExecutionModelVersion,
 		workflowContractPeriodicPulseReviewVersion,
+		workflowContractDedicatedPulseScheduleVersion,
 	}
 	for rank, candidate := range known {
 		if version == candidate {
@@ -144,19 +145,25 @@ until index.html has passed validation. Do not run the workflow. If a source is
 missing or the consolidation is ambiguous, report the blocker and do not stamp.
 Otherwise call set_workflow_contract_version(version="1.0.23") and stop.`
 
-const upgradePeriodicPulseReviewHandoff = `WORKFLOW CONTRACT UPGRADE: PERIODIC PULSE REVIEW — HANDLED BY GATE, NOT A MIGRATION.
+const upgradeDedicatedPulseSchedule = `WORKFLOW CONTRACT UPGRADE: DEDICATED PULSE REVIEW SCHEDULE.
 
-Earlier contract versions had a dedicated migration turn decide, per workflow,
-whether to split Gate/Review+Fix/Finalize onto their own separate schedule.
-That decision is no longer made here, and it is no longer optional: every
-workflow moves to post_run_monitor_mode="periodic" with a paired
-pulse_review_only review schedule, unconditionally. Gate itself now bootstraps
-this automatically, the first time it runs a normal Gate/Review+Fix/Finalize
-pass under this workflow's current per_run mode — see pulse-gate.md. Nothing
-for this turn to do except record that this workflow's other, unrelated
-contract migrations are complete.
+Recurring Pulse is represented only by an enabled pulse_review_only schedule;
+that schedule is the single source of truth for enablement and cadence.
+Normal workflow schedules never run Gate/Review+Fix inline. Legacy
+post_run_monitor and post_run_monitor_mode fields are obsolete and ignored;
+remove them if present. If recurring Pulse was enabled previously and no
+pulse_review_only schedule exists, create one at a cadence justified by the
+enabled run schedules and retained run history. Do not add group_names,
+route_selections, or messages to that review schedule.
 
-Do not run the workflow. Call set_workflow_contract_version(version="1.0.26") and stop.`
+Read the raw workflow.json before changing anything so a legacy
+post_run_monitor=true can be distinguished from an absent/false field. If it
+was true and no dedicated schedule exists, create the schedule. If it was
+false/absent and no dedicated schedule exists, do not enable Pulse. Calling
+set_workflow_contract_version rewrites the manifest through the current schema
+and removes the retired fields.
+
+Do not run the workflow. Call set_workflow_contract_version(version="1.0.27") and stop.`
 
 const upgradeScheduledRoutes = `WORKFLOW CONTRACT UPGRADE: SCHEDULE EXECUTION MODEL (PLAT-086).
 
@@ -233,14 +240,7 @@ func workflowVersionUpgradePlan(manifest *WorkflowManifest) []workflowVersionUpg
 	if rank < 24 {
 		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractScheduleExecutionModelVersion, label: "upgrade-schedule-execution-model", query: upgradeScheduledRoutes})
 	}
-	// This used to be a frequency-based judgment turn deciding whether to
-	// adopt periodic mode. That policy is retired: periodic mode is
-	// mandatory for every workflow, and Gate bootstraps it itself during a
-	// normal pass (pulse-gate.md) rather than through a dedicated migration
-	// turn. What remains here is a trivial version stamp so any workflow
-	// still below current always has a complete upgrade path, per
-	// scheduledWorkshopTurns' requirement.
-	steps = append(steps, workflowVersionUpgrade{from: version, to: WorkflowContractCurrentVersion, label: "upgrade-periodic-pulse-review-handoff", query: upgradePeriodicPulseReviewHandoff})
+	steps = append(steps, workflowVersionUpgrade{from: version, to: WorkflowContractCurrentVersion, label: "upgrade-dedicated-pulse-schedule", query: upgradeDedicatedPulseSchedule})
 	// Attached here rather than at the call site so the turn text is identical
 	// wherever it is built. The version pair used to be added only on the Pulse
 	// delivery path, which meant the blocking preflight — the one that actually

@@ -2,11 +2,26 @@ package virtualtools
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/common"
 )
+
+func TestWorkflowDBToolDefinitionsExplainSafeShellPayloadEncoding(t *testing.T) {
+	for _, tool := range []any{workflowDBQueryToolDefinition(), workflowDBMutateToolDefinition()} {
+		raw, err := json.Marshal(tool)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{"jq -n --arg", "single-quoted JSON literal"} {
+			if !strings.Contains(string(raw), want) {
+				t.Fatalf("tool definition missing safe shell-payload guidance %q: %s", want, raw)
+			}
+		}
+	}
+}
 
 func TestWorkflowDBToolRegistryExposesQueryAndMutation(t *testing.T) {
 	registry := CreateWorkflowDBToolRegistry("http://127.0.0.1:1", "", "session")

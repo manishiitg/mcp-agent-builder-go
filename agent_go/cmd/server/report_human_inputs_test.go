@@ -15,11 +15,13 @@ import (
 
 func TestNormalizeReportHumanInputSourceMergesLegacyAdvisorIdentity(t *testing.T) {
 	for input, want := range map[string]string{
-		"strategic-review": "strategic_review",
-		"strategy-auditor": "strategic_review",
-		"Strategy Auditor": "strategic_review",
-		"goal-advisor":     "strategic_review",
-		"unknown":          "pulse",
+		"engineering-review": "engineering_review",
+		"Operations Review":  "ops_review",
+		"strategic-review":   "strategic_review",
+		"strategy-auditor":   "strategic_review",
+		"Strategy Auditor":   "strategic_review",
+		"goal-advisor":       "strategic_review",
+		"unknown":            "pulse",
 	} {
 		if got := normalizeReportHumanInputSource(input); got != want {
 			t.Fatalf("normalizeReportHumanInputSource(%q) = %q, want %q", input, got, want)

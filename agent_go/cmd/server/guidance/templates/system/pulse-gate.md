@@ -48,42 +48,10 @@ executed step/item's compact final for `CONCERNS:`: `execution-final-summary.jso
 step/item and evidence path; completion does not erase it, but it is not
 automatic run failure.
 
-### Bootstrapping periodic mode (still on `per_run`)
+### Dedicated review passes (a listed backlog, not one run)
 
-Gate/Review+Fix/Finalize running inline with a normal scheduled run is
-retired. Every workflow moves to `post_run_monitor_mode="periodic"`, with its
-own separately-scheduled review pass, unconditionally — this is no longer a
-per-workflow frequency judgment. If this workflow's `post_run_monitor_mode`
-is not yet `"periodic"`, the pass you are running right now — inline with the
-scheduled run that just completed — is this workflow's last one under the
-old shape. Do both of the following as part of THIS pass, in the same turn,
-never one without the other — a workflow left in `"periodic"` mode with no
-review schedule yet gets a lightweight pass every run and a full review from
-nothing, ever:
-
-1. Create the review schedule: `create_schedule(pulse_review_only=true,
-   cron_expression=..., ...)`. Do not set `group_names`, `route_selections`,
-   or `messages` on it — it never runs the workflow. Read this workflow's
-   enabled run schedules and recent `get_schedule_runs` history to choose the
-   review INTERVAL — that remains your judgment call, balancing review
-   latency against genuinely batched evidence; when in doubt, prefer more
-   frequent over less, since your own backlog reasoning already handles
-   reviewing several accumulated runs in one pass cheaply. Whether to create
-   this schedule at all is not a judgment call: always do it.
-2. Set `post_run_monitor_mode="periodic"` via `update_workflow_config`.
-
-Then check `run_retention_count` against the review interval you chose, the
-same reasoning as the periodic self-check below. Finish the rest of this
-pass — Review+Fix, Finalize, backup, publish, notify — exactly as any other
-`per_run` pass; only future runs change shape, not this one, since it already
-started before the switch. From the next run onward the lightweight per-run
-finalizer keeps re-checking the review interval as actual run volume
-changes, so this is not the only time the interval gets reconsidered.
-
-### Periodic review passes (a listed backlog, not one run)
-
-A workflow using `post_run_monitor_mode="periodic"` defers Gate entirely to
-its own separately-scheduled review pass, which reviews a *listed backlog* of
+An enabled `pulse_review_only` schedule is the single source of truth for
+recurring Pulse. It reviews a *listed backlog* of
 currently-existing run folders instead of one just-completed run. On that
 pass, reason about what's actually new yourself: compare each listed folder's
 `started_at`/`completed_at` against `get_pulse_state`'s `last_checked_at` per
@@ -206,7 +174,7 @@ not treat the proposed lens as active before the config tool succeeds.
 
 Within the two-module cap, select the modules with actionable
 repair/verification work or genuinely new trigger evidence. The next main-agent
-Review+Fix turn owns every selected lens, any useful independent specialist
+The later Review and independent Fix turns own every selected lens, any useful independent specialist
 children, consolidation, repair, verification, and terminal receipts. There is
 no scheduler-launched residual or recovery Fixer.
 When work must wait for a real evidence/user/external boundary, record that

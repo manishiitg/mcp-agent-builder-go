@@ -51,6 +51,63 @@ func TestTypedReviewPersistsOnlyCompactReceipt(t *testing.T) {
 	}
 }
 
+func TestTypedReviewDecisionRequiredCreatesNoOrphanFinding(t *testing.T) {
+	ws := concernsWorkspace(t)
+	ctx := context.Background()
+	input := PulseReviewFindingInput{
+		Concern: "the fixed pipeline has no runtime orchestration choice", Module: "llm_ops_review",
+		PulseFindingDetails: PulseFindingDetails{
+			IssueKind: "workflow_issue", Classification: "step_type_fitness", Severity: "medium",
+			Summary: "A fixed sequence uses an unnecessary orchestrator.", Impact: "It adds cost and hides lifecycle state.",
+			Evidence: []string{"planning/plan.json"}, RecommendedRoute: pulseFindingRouteDecisionRequired,
+		},
+	}
+	if _, err := RecordPulseReviewFinding(ctx, ws, "pulse-1", "review-1", input); err == nil || !strings.Contains(err.Error(), "requires human_input_id") {
+		t.Fatalf("decision_required finding was accepted without a decision: %v", err)
+	}
+	db, err := openRunConcernsDB(ctx, ws, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS report_human_inputs (id TEXT PRIMARY KEY, source TEXT, status TEXT)`); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO report_human_inputs (id, source, status) VALUES
+		('ops-decision-fixed-pipeline-wrong-source', 'pulse', 'pending'),
+		('ops-decision-fixed-pipeline', 'ops_review', 'pending')`); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	db.Close()
+
+	input.HumanInputID = "ops-decision-fixed-pipeline-wrong-source"
+	if _, err := RecordPulseReviewFinding(ctx, ws, "pulse-1", "review-1", input); err == nil || !strings.Contains(err.Error(), `source "pulse"`) {
+		t.Fatalf("Ops Review accepted a generic Pulse decision: %v", err)
+	}
+	input.HumanInputID = "ops-decision-fixed-pipeline"
+	record, err := RecordPulseReviewFinding(ctx, ws, "pulse-1", "review-1", input)
+	if err != nil {
+		t.Fatalf("record linked decision finding: %v", err)
+	}
+	if record.Status != ConcernStatusAcknowledged {
+		t.Fatalf("linked decision status = %q, want %q", record.Status, ConcernStatusAcknowledged)
+	}
+	db, err = openRunConcernsDB(ctx, ws, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var linkedID string
+	if err := db.QueryRowContext(ctx, `SELECT json_extract(metadata_json, '$.human_input_id')
+		FROM pulse_finding_events WHERE fingerprint=? AND event_type='awaiting_user'`, record.Fingerprint).Scan(&linkedID); err != nil {
+		t.Fatalf("load awaiting_user link: %v", err)
+	}
+	if linkedID != input.HumanInputID {
+		t.Fatalf("linked decision id = %q, want %q", linkedID, input.HumanInputID)
+	}
+}
+
 func TestPulseReviewLogMigratesLegacyAdvisorModules(t *testing.T) {
 	ws := concernsWorkspace(t)
 	ctx := context.Background()
@@ -185,5 +242,39 @@ func TestLoadPulseReviewReceiptsNegativeLimitReturnsCompleteHistory(t *testing.T
 	}
 	if len(preview) != 10 || len(complete) != 27 {
 		t.Fatalf("preview=%d complete=%d", len(preview), len(complete))
+	}
+}
+
+func TestRequiredBackgroundPulseReviewReceiptControlsCompletion(t *testing.T) {
+	ctx := context.Background()
+	workspacePath := t.TempDir()
+	const reviewRunID = "background-review-session"
+
+	err := requireBackgroundPulseReviewReceipts(ctx, workspacePath, reviewRunID, []string{"llm_ops_review"})
+	if err == nil || !strings.Contains(err.Error(), "required llm_ops_review receipt") {
+		t.Fatalf("missing receipt error=%v", err)
+	}
+
+	if err := CompletePulseReview(ctx, workspacePath, []string{"llm_ops_review"}, reviewRunID, reviewRunID, "Review failed before reconciliation.", "failed"); err != nil {
+		t.Fatalf("seed failed review receipt: %v", err)
+	}
+	err = requireBackgroundPulseReviewReceipts(ctx, workspacePath, reviewRunID, []string{"llm_ops_review"})
+	if err == nil || !strings.Contains(err.Error(), "status failed") {
+		t.Fatalf("failed receipt error=%v", err)
+	}
+
+	if err := CompletePulseReview(ctx, workspacePath, []string{"llm_ops_review"}, reviewRunID, reviewRunID, "Review completed with typed evidence.", "completed"); err != nil {
+		t.Fatalf("seed completed review receipt: %v", err)
+	}
+	if err := requireBackgroundPulseReviewReceipts(ctx, workspacePath, reviewRunID, []string{"llm_ops_review"}); err != nil {
+		t.Fatalf("completed receipt rejected: %v", err)
+	}
+
+	const strategyRunID = "background-strategy-session"
+	if err := CompletePulseReview(ctx, workspacePath, []string{"strategic_review"}, strategyRunID, strategyRunID, "Strategy review completed with typed evidence.", "completed"); err != nil {
+		t.Fatalf("seed strategic review receipt: %v", err)
+	}
+	if err := requireBackgroundPulseReviewReceipts(ctx, workspacePath, strategyRunID, []string{"strategic_review"}); err != nil {
+		t.Fatalf("completed strategic receipt rejected: %v", err)
 	}
 }

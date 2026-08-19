@@ -1,5 +1,10 @@
 import type { PollingEvent } from '../services/api-types'
 import { humanReadableAgentResult } from '../components/events/system/eventDisplayUtils'
+import {
+  looksLikeProductChatFailure,
+  normalizeProductChatFailure,
+  type ProductChatFailure,
+} from '../platform/chat/productChatFailure'
 import { pairToolCalls } from './terminalEventTranscript'
 
 export type ConversationItem = {
@@ -8,6 +13,7 @@ export type ConversationItem = {
   content: string
   timestamp?: string
   usage?: ConversationUsage
+  failure?: ProductChatFailure
 }
 
 export type ConversationUsage = {
@@ -47,6 +53,27 @@ function firstText(...values: unknown[]): string {
 
 function finiteNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+function failureHints(payload: Record<string, unknown>) {
+  const metadata = asRecord(payload.metadata)
+  const error = asRecord(payload.error)
+  return {
+    code: firstText(payload.code, payload.error_code, error?.code, error?.kind, metadata?.code, metadata?.error_code),
+    provider: firstText(payload.provider, payload.llm_provider, error?.provider, metadata?.provider),
+    retryAt: payload.retry_at ?? payload.resume_after ?? error?.retry_at ?? error?.retryAt ?? metadata?.retry_at ?? metadata?.resume_after,
+  }
+}
+
+function productFailureItem(event: PollingEvent, payload: Record<string, unknown>, raw: string): ConversationItem {
+  const failure = normalizeProductChatFailure(raw, failureHints(payload))
+  return {
+    id: event.id,
+    role: 'error',
+    content: failure.message,
+    timestamp: event.timestamp,
+    failure,
+  }
 }
 
 // A completed native structured turn emits its conversation-total usage just
@@ -145,14 +172,16 @@ export function buildCleanConversationItems(events: PollingEvent[]): Conversatio
     // replies after refresh, not just the user's prompts.
     if (event.type === 'llm_generation_end' || event.type === 'unified_completion' || event.type === 'conversation_end') {
       const content = humanReadableAgentResult(firstText(payload.content, payload.final_result, payload.result))
-      if (content && content !== lastAssistantContent) {
+			const rawError = firstText(payload.error, asRecord(payload.error)?.message)
+			const failureText = rawError || (looksLikeProductChatFailure(content) ? content : '')
+			if (failureText) {
+				pushUnique(productFailureItem(event, payload, failureText))
+				completedAssistantAwaitingUsage = undefined
+			} else if (content && content !== lastAssistantContent) {
 				const assistantItem = { id: event.id, role: 'assistant' as const, content, timestamp: event.timestamp }
 				pushUnique(assistantItem)
         completedAssistantAwaitingUsage = assistantItem
         lastAssistantContent = content
-      } else if (!content) {
-        const error = firstText(payload.error)
-				if (error) pushUnique({ id: event.id, role: 'error', content: error, timestamp: event.timestamp })
       }
       continue
     }
@@ -163,14 +192,14 @@ export function buildCleanConversationItems(events: PollingEvent[]): Conversatio
       continue
     }
 
-    if (event.type === 'conversation_error') {
-      const content = firstText(payload.error, payload.context, 'The request could not be completed.')
-			pushUnique({ id: event.id, role: 'error', content, timestamp: event.timestamp })
+    if (event.type === 'conversation_error' || event.type === 'agent_error') {
+      const content = firstText(payload.error, asRecord(payload.error)?.message, payload.context, 'The request could not be completed.')
+			pushUnique(productFailureItem(event, payload, content))
       continue
     }
 
     if (event.type === 'context_cancelled') {
-			pushUnique({ id: event.id, role: 'error', content: 'The current response was cancelled.', timestamp: event.timestamp })
+			pushUnique(productFailureItem(event, { ...payload, code: 'cancelled' }, 'The current response was cancelled.'))
     }
   }
 

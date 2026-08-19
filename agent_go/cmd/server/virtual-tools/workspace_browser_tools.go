@@ -51,20 +51,11 @@ func CreateWorkspaceBrowserToolExecutorsWithRuntime(sessionID string, runtime *b
 	browserClient := browser.NewClient(getWorkspaceAPIURL())
 	browserExecutor := browser.NewExecutor(browserClient, browser.WithBrowserRuntimeConfig(runtime))
 
-	// Wrap executor to inject session IDs into context.
-	// - ChatSessionIDKey = agent-level ID (isolated for share_browser=false, parent otherwise)
-	// - WorkflowSessionIDKey = always the parent workflow session ID
+	// Wrap executor to inject the workflow session ID. Delegated agents inherit
+	// this browser session; tool-session isolation does not fork browser state.
 	executors["agent_browser"] = func(ctx context.Context, args map[string]interface{}) (string, error) {
-		// If the context already has an isolated session ID (set by share_browser=false),
-		// use it as the agent-level session. Otherwise use the parent sessionID.
-		if isolatedID, ok := ctx.Value(SubAgentIsolatedSessionIDKey).(string); ok && isolatedID != "" {
-			ctx = context.WithValue(ctx, common.ChatSessionIDKey, isolatedID)
-			log.Printf("[BROWSER_TOOLS] Using isolated agent session: %s (parent workflow: %s)", isolatedID, sessionID)
-		} else if existingID, ok := ctx.Value(common.ChatSessionIDKey).(string); ok && existingID != "" {
+		if existingID, ok := ctx.Value(common.ChatSessionIDKey).(string); ok && existingID != "" {
 			// Preserve the session injected by /s/{session_id}/tools/... routes.
-			// For share_browser=false code-exec sub-agents this is the isolated
-			// sub-agent session; overwriting it with the parent would collapse
-			// browser isolation.
 			log.Printf("[BROWSER_TOOLS] Preserving context agent session: %s (parent workflow: %s)", existingID, sessionID)
 		} else if sessionID != "" {
 			ctx = context.WithValue(ctx, common.ChatSessionIDKey, sessionID)

@@ -5,8 +5,8 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `implemented` — hint shipped with fail-before/pass-after tests against the real production path; live reverify pending |
-| Last synchronized | `2026-08-17` |
+| Ticket state | `implemented` — SQLite hint and shell-safe HTTP-bridge payload contract shipped; current binary verified the hint, restart/runtime reverify remains for the prevention guidance |
+| Last synchronized | `2026-08-19` |
 
 - **Priority:** P2 — no data is lost or corrupted; a read or a write simply
   fails, repeatedly, without the caller ever learning why.
@@ -108,3 +108,53 @@ pre-existing failures before this change, 24 after — zero new, zero fixed.
   `record_run_concern` identity refusal, `tools_unavailable`'s own message) —
   name the destination or the fix precisely, never guess on the caller's
   behalf.
+
+## 2026-08-19 live follow-up — the shell corrupted correct-looking SQL before HTTP
+
+The manual Social Media schedule
+`schedule-manual--5227790a_1787115853755603000`, Intent Queue child
+`msgseq-iteration-0-default-default-step-6-sub-execute-intent-queue-...`,
+reproduced the failure after the original fix was live. This time the command
+text visibly contained the correct SQL form:
+
+```bash
+curl --json '{"sql":"SELECT json_extract(v.value,'$.signal_id') ..."}' ...
+```
+
+There is one runtime path: agent -> `execute_shell_command` -> curl -> HTTP
+bridge -> `query_workflow_db`. The request JSON and inner SQL string both used
+shell single quotes. Single quotes do not nest in POSIX shells, so the shell
+removed the quotes around `$.signal_id` before curl built the HTTP request. The
+DB tool received the same invalid bare path as before. The production handler
+returned PLAT-126's enhanced explanation in 1.3 ms, proving the diagnostic fix
+was deployed, but the agent repeated the command because its source still
+appeared quoted.
+
+The failed outer `execute_shell_command` also lacked a matching UI `END`
+receipt. That separate receipt defect remains PLAT-141 and is not owned here.
+
+### Follow-up fix
+
+The single HTTP-bridge contract now defines one safe encoding rule: quoted,
+multiline, SQL, JSON-path, and other nontrivial values stay in shell variables
+and `jq -n --arg` performs JSON escaping. The rule is exposed consistently in:
+
+- mcpagent's universal code-execution prompt;
+- every workflow step's managed-DB prompt, without requiring an optional
+  reference read;
+- the `sql` parameter descriptions returned by `get_api_spec` for both DB
+  tools;
+- the MCP bridge and persistent-store reference docs.
+
+Canonical call:
+
+```bash
+sql="SELECT json_extract(v.value, '$.signal_id') FROM critic_signals"
+payload="$(jq -cn --arg sql "$sql" '{sql:$sql}')"
+curl --fail-with-body -sS --json "$payload" -H "$MCP_AUTH" "$MCP_CUSTOM/query_workflow_db"
+```
+
+The backend does not rewrite SQL or guess lost quotes. It cannot safely recover
+characters removed before HTTP. The prevention fix preserves the exact SQL
+bytes the agent authored before the request reaches existing validation and
+permission checks.

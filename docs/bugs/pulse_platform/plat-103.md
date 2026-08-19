@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | `implemented` — runtime reverify pending |
+| Status | `fix implemented; runtime reverify pending` — the 2026-08-19 Claude premature-completion regression is now guarded by a captured-transcript test; a restarted backend must still prove the real Sales Outreach path |
 | Priority | P0 |
 | Owner | coding-agent retained-turn output contract |
 | Reported | 2026-08-14 |
@@ -16,6 +16,54 @@ not show it. The backend's retained-turn watcher emitted a synthetic
 `unified_completion` containing lifecycle metadata only; it omitted
 `final_result`. Successful empty completions are intentionally not rendered as
 assistant messages, so the UI could remain on a spinner or show no reply.
+
+## Reopened — Sales Outreach live reproduction (2026-08-19)
+
+The same user-visible failure recurred in the Sales Outreach Chat session
+`c2b1bb4c-5a4d-4fd1-9709-ad7329c34a7b`, backed by Claude Code native session
+`87de1833-360c-4df8-9bfb-db7d10b014ad`.
+
+The evidence pins a premature completion rather than a frontend repaint issue:
+
+- `11:15:40` IST — the retained message was accepted;
+- `11:15:45` — Claude emitted the interim text “Let me check what sequence the
+  workflow actually defines.” with `stop_reason=tool_use`;
+- `11:15:47` — AgentWorks consumed `source=mcpagent_session`
+  `unified_completion` and marked the retained turn completed;
+- Claude continued executing tools through `11:15:56`;
+- `11:16:10` — Claude committed the real answer with
+  `stop_reason=end_turn`, visible in tmux but absent from Formatted mode.
+
+The exact wiring defect is now confirmed. `mcpagent/agent/retainedturn` asks
+`ReadCodingAgentRetainedTurnMessages` for a final response. Claude's adapter
+implements that call with `readClaudeTranscriptMessages`, which intentionally
+returns the entire in-progress tool loop. The selector then chooses the latest
+textual assistant block without checking its stop reason. Claude already has
+`completedAssistantResponseFromTranscript`, which accepts only a committed
+`stop_reason=end_turn`, but the retained Session completion path does not use
+it.
+
+This runtime evidence invalidates the prior `implemented; runtime reverify
+pending` status. The repair must return no retained final response while Claude
+has only `tool_use` messages, then emit exactly one non-empty completion after
+the matching `end_turn` is committed.
+
+### Implemented repair
+
+Claude's `ReadRetainedTurnMessages` now calls the existing
+`completedAssistantResponseFromTranscript` oracle. It returns no messages while
+the transcript contains only `tool_use`, and returns one AI message only after
+Claude commits a non-empty `end_turn` response. The generic tool-trail reader
+remains available for observability but no longer decides retained completion.
+
+`TestReadRetainedTurnMessagesWaitsForEndTurn` uses the captured production
+shape: interim text plus multiple tool rows first, followed later by the
+thinking and text rows for one `end_turn` message. It proves the first read is
+empty and the completed read contains only the real final answer. The complete
+Claude adapter package, AgentWorks retained-settlement tests, and the retained
+P0 assertion tests pass. Runtime re-verification still requires rebuilding and
+restarting AgentWorks because its Go module replaces the provider dependency
+with this local checkout at build time.
 
 ## Root cause
 

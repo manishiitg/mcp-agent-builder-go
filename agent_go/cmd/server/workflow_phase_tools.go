@@ -148,8 +148,8 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 						log.Printf("[WORKFLOW_PHASE] Refresh LLMConfig details: mode=%q tieredConfig=%v",
 							caps.LLMConfig.Mode, caps.LLMConfig.TieredConfig != nil)
 						phaseLLM, refreshedTiered := workshopResolveLLMConfig(caps.LLMConfig)
-						maintenanceLLM := workshopResolveMaintenanceLLMConfig(caps.LLMConfig)
-						workshopSession.UpdatePresetLLMConfigs(phaseLLM, maintenanceLLM)
+						pulseLLM := workshopResolvePulseLLMConfig(caps.LLMConfig)
+						workshopSession.UpdatePresetLLMConfigs(phaseLLM, pulseLLM)
 
 						if refreshedTiered != nil {
 							workshopSession.UpdateTieredConfig(refreshedTiered)

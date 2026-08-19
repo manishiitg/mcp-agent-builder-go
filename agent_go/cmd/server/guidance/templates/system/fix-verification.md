@@ -1,8 +1,8 @@
 ## Fix verification — a successful write is never proof
 
 The single contract for verifying that a bounded repair actually worked. It is
-the same standard whether the fix is applied inside a Pulse module turn, a
-manual `/engineering-review` sequence, or a Goal Advisor measurement change. Load it
+the same standard whether the fix is applied inside scheduled Pulse, a manual
+`/pulse-fixer` pass, or an approved measurement change. Load it
 before applying any fix, and judge every "fixed" claim against it.
 
 ### Post-change evidence boundary

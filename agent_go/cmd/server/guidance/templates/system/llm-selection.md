@@ -10,14 +10,13 @@ A workflow always resolves these roles:
 - **High execution**: first-time, ambiguous, or difficult step work.
 - **Medium execution**: established work with useful context and learnings.
 - **Low execution**: deterministic validation and mature routine work.
-- **Maintenance**: expensive Pulse modules such as Goal Advisor, Bug Review,
-  Ops Review, Stores Health, and report/eval improvement.
-- **Pulse**: the gate, worklist, report update, and notification coordinator turns.
+- **Pulse**: reviews, audits, knowledgebase maintenance, Gate, worklist,
+  report updates, and notification turns.
 
 The config has two modes:
 
 - **`provider_profile` (simple)** stores only a coding-agent `provider`. The provider package supplies current defaults for every role at runtime, so an app update can improve those defaults without rewriting the workflow.
-- **`explicit` (advanced)** pins `builder_llm`, `maintenance_llm`, `pulse_llm`, and all three entries under `tiered_config`. Every entry has a direct `provider` + `model_id`, optional provider `options` such as `reasoning_effort`, and optional ordered `fallbacks`.
+- **`explicit` (advanced)** pins `builder_llm`, `pulse_llm`, and all three entries under `tiered_config`. Every entry has a direct `provider` + `model_id`, optional provider `options` such as `reasoning_effort`, and optional ordered `fallbacks`.
 
 Saved configurations are reusable shortcuts for exact provider/model/options combinations. They are not required before a provider or model can be selected.
 
@@ -26,7 +25,7 @@ Saved configurations are reusable shortcuts for exact provider/model/options com
 - `list_published_llms` — optional saved model configurations that may be reused as shortcuts.
 - `test_llm` — smoke-test a provider/model before committing to it.
 - `set_workflow_llm_config(mode="provider_profile", provider="...")` — follow the provider's current role defaults.
-- `set_workflow_llm_config(mode="explicit", builder_llm=..., maintenance_llm=..., pulse_llm=..., tier_1=..., tier_2=..., tier_3=...)` — pin the complete advanced role configuration. Do NOT edit `workflow.json` by hand.
+- `set_workflow_llm_config(mode="explicit", builder_llm=..., pulse_llm=..., tier_1=..., tier_2=..., tier_3=...)` — pin the complete advanced role configuration. Do NOT edit `workflow.json` by hand.
 - `get_llm_config` / `get_workflow_config` — inspect the current workflow roles and per-step overrides.
 
 ### Per-step overrides (use sparingly)

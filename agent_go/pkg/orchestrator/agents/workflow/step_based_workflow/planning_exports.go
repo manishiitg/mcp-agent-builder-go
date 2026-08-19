@@ -592,16 +592,16 @@ type WorkshopConfig struct {
 	ToolCategories       map[string]string
 	// BrowserRuntime stores configured intent (auto/cdp/headless + candidate
 	// ports). The executor resolves live CDP reachability at tool-call time.
-	BrowserRuntime       *browser.BrowserRuntimeConfig
-	LLMConfig            *orchestrator.LLMConfig
-	PresetPhaseLLM       *AgentLLMConfig
-	PresetMaintenanceLLM *AgentLLMConfig
-	UseKnowledgebase     bool
-	LockKnowledgebase    bool
-	LLMAllocationMode    string
-	TieredConfig         *TieredLLMConfig
-	Logger               loggerv2.Logger
-	EventBridge          mcpagent.AgentEventListener
+	BrowserRuntime    *browser.BrowserRuntimeConfig
+	LLMConfig         *orchestrator.LLMConfig
+	PresetPhaseLLM    *AgentLLMConfig
+	PresetPulseLLM    *AgentLLMConfig
+	UseKnowledgebase  bool
+	LockKnowledgebase bool
+	LLMAllocationMode string
+	TieredConfig      *TieredLLMConfig
+	Logger            loggerv2.Logger
+	EventBridge       mcpagent.AgentEventListener
 	// Session tracking — needed for MCP connection sharing and session cleanup
 	SessionID string
 	// Secrets for step execution (merged global + user secrets)
@@ -655,8 +655,8 @@ func NewWorkshopChatSession(ctx context.Context, cfg *WorkshopConfig) (*Workshop
 	if cfg.PresetPhaseLLM != nil {
 		logger.Info(fmt.Sprintf("[WORKSHOP] presetPhaseLLM=%s/%s", cfg.PresetPhaseLLM.Provider, cfg.PresetPhaseLLM.ModelID))
 	}
-	if cfg.PresetMaintenanceLLM != nil {
-		logger.Info(fmt.Sprintf("[WORKSHOP] presetMaintenanceLLM=%s/%s", cfg.PresetMaintenanceLLM.Provider, cfg.PresetMaintenanceLLM.ModelID))
+	if cfg.PresetPulseLLM != nil {
+		logger.Info(fmt.Sprintf("[WORKSHOP] presetPulseLLM=%s/%s", cfg.PresetPulseLLM.Provider, cfg.PresetPulseLLM.ModelID))
 	}
 	if cfg.TieredConfig != nil {
 		logger.Info(fmt.Sprintf("[WORKSHOP] tiered: T1=%s T2=%s T3=%s",
@@ -694,7 +694,7 @@ func NewWorkshopChatSession(ctx context.Context, cfg *WorkshopConfig) (*Workshop
 		cfg.CustomToolExecutors,
 		cfg.ToolCategories,
 		cfg.PresetPhaseLLM,
-		cfg.PresetMaintenanceLLM,
+		cfg.PresetPulseLLM,
 		cfg.UseKnowledgebase,
 		cfg.TieredConfig,
 	)
@@ -832,12 +832,12 @@ func formatTierAgentLLM(cfg *AgentLLMConfig) string {
 // UpdatePresetLLMConfigs refreshes the controller's preset LLM configs.
 // Called when reusing a cached workshop session to pick up any LLM config changes
 // the user made in the workflow editor since the session was first created.
-func (s *WorkshopChatSession) UpdatePresetLLMConfigs(phaseLLM *AgentLLMConfig, maintenanceLLM *AgentLLMConfig) {
+func (s *WorkshopChatSession) UpdatePresetLLMConfigs(phaseLLM *AgentLLMConfig, pulseLLM *AgentLLMConfig) {
 	s.controller.presetPhaseLLM = phaseLLM
-	s.controller.presetMaintenanceLLM = maintenanceLLM
+	s.controller.presetPulseLLM = pulseLLM
 	if s.config != nil {
 		s.config.PresetPhaseLLM = phaseLLM
-		s.config.PresetMaintenanceLLM = maintenanceLLM
+		s.config.PresetPulseLLM = pulseLLM
 	}
 }
 
@@ -1411,7 +1411,7 @@ func RegisterRunFullEvaluationTool(
 					cfg.CustomToolExecutors,
 					cfg.ToolCategories,
 					cfg.PresetPhaseLLM,
-					cfg.PresetMaintenanceLLM,
+					cfg.PresetPulseLLM,
 					cfg.UseKnowledgebase,
 					cfg.TieredConfig,
 				)
@@ -2113,7 +2113,7 @@ func RegisterRunFullWorkflowTool(
 					cfg.CustomToolExecutors,
 					cfg.ToolCategories,
 					cfg.PresetPhaseLLM,
-					cfg.PresetMaintenanceLLM,
+					cfg.PresetPulseLLM,
 					cfg.UseKnowledgebase,
 					cfg.TieredConfig,
 				)

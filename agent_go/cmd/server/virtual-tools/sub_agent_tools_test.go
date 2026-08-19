@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -193,4 +194,48 @@ func TestQueryAndStopSubAgentHandlersDispatchByExecutionID(t *testing.T) {
 	if _, err := handleQuerySubAgent(context.Background(), map[string]interface{}{"execution_id": "child-1"}); err == nil {
 		t.Fatal("query handler succeeded without an orchestrator-owned function")
 	}
+}
+
+func TestGetSubAgentConversationDispatchesByExecutionID(t *testing.T) {
+	ctx := context.WithValue(context.Background(), GetSubAgentConversationKey, GetSubAgentConversationFunc(
+		func(_ context.Context, executionID string, fromLastX, offsetLastX int) (string, error) {
+			return fmt.Sprintf("%s:%d:%d", executionID, fromLastX, offsetLastX), nil
+		},
+	))
+
+	result, err := handleGetSubAgentConversation(ctx, map[string]interface{}{
+		"execution_id":  "child-123",
+		"from_last_x":   float64(20),
+		"offset_last_x": float64(5),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "child-123:20:5" {
+		t.Fatalf("result=%q", result)
+	}
+	if _, err := handleGetSubAgentConversation(ctx, map[string]interface{}{
+		"todo_id":     "todo-1",
+		"from_last_x": float64(20),
+	}); err == nil || !strings.Contains(err.Error(), "execution_id is required") {
+		t.Fatalf("legacy ambiguous todo_id unexpectedly accepted: %v", err)
+	}
+}
+
+func TestGetSubAgentConversationSchemaRequiresExecutionID(t *testing.T) {
+	for _, tool := range CreateSubAgentTools() {
+		if tool.Function == nil || tool.Function.Name != "get_sub_agent_conversation" {
+			continue
+		}
+		encoded, err := json.Marshal(tool.Function.Parameters)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(encoded)
+		if !strings.Contains(text, `"execution_id"`) || strings.Contains(text, `"todo_id"`) {
+			t.Fatalf("conversation lookup schema must use exact execution identity: %s", text)
+		}
+		return
+	}
+	t.Fatal("get_sub_agent_conversation tool not found")
 }
