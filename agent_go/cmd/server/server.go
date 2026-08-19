@@ -6120,8 +6120,10 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 
 		// Stream response chunks with enhanced error handling
 		chunkCount := 0
+		streamWaitStartedAt := time.Now()
 
 		log.Printf("[AGENT DEBUG] Entering streaming loop for query %s", queryID)
+		log.Printf("[COMPLETION_TRACE] stage=agentworks_stream_wait_started session=%q query=%q", sessionID, queryID)
 		for chunk := range textChan {
 			log.Printf("[AGENT DEBUG] raw chunk (len=%d): %s", len(chunk), chunk)
 			chunkCount++
@@ -6174,6 +6176,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			default:
 			}
 		}
+		log.Printf("[COMPLETION_TRACE] stage=agentworks_stream_closed session=%q query=%q chunks=%d elapsed=%s", sessionID, queryID, chunkCount, time.Since(streamWaitStartedAt).Round(time.Millisecond))
 		log.Printf("[STREAMING_LIFECYCLE] StreamWithEvents completed | session=%s chunks=%d duration=%dms", sessionID, chunkCount, time.Since(startTime).Milliseconds())
 		log.Printf("[AGENT DEBUG] After streaming loop, streamCtx.Err(): %v", streamCtx.Err())
 

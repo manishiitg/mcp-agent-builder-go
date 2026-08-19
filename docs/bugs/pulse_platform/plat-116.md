@@ -149,6 +149,26 @@ PLAT-148 owns why cleanup destroyed the conversation needed by the next
 sequence message. They require coordinated P0 coverage but must not be
 collapsed into one ambiguous fix.
 
+### Focused completion tracing added for the next reproduction
+
+The previous logs stopped at AgentWorks entering `for chunk := range textChan`,
+so they could prove the bridge was stuck but could not identify which boundary
+lost completion. Focused, content-free `[COMPLETION_TRACE]` checkpoints now
+record the correlation chain needed to pin the root cause on the next live run:
+
+- AgentWorks session/query begins waiting on the stream, and records when that
+  stream actually closes;
+- mcpagent records when its provider call starts and returns, including the
+  provider-native session ID;
+- the Codex adapter records the owner session, tmux session, bound Codex thread
+  and exact rollout path, then the native turn ID and offset where
+  `task_complete` was observed;
+- the adapter records its wait return and its stream-channel close.
+
+No prompt, response, tool arguments, or tool output is included. This is
+diagnostic instrumentation only: it deliberately does not change completion
+semantics or mark PLAT-116 resolved.
+
 Checked each interactive-capable adapter directly rather than assuming
 parity from the provider contract table. First pass wrongly claimed Claude
 Code has no JSON completion signal — corrected after review found
