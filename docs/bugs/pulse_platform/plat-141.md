@@ -1,12 +1,30 @@
 [← Pulse platform issue index](../pulse_platform_issue_register.md)
 
-# PLAT-141 — tool results that arrive in 41ms never become tool_call_end events, so the UI shows a completed command as unresolved
+# PLAT-141 — no interactive (tmux) adapter emits a tool-call end, on any provider, so completed commands show as unresolved
 
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `implemented` — pairing hypothesis disproven, transcript recovery shipped (`multi-llm-provider-go@291b2ea`, `633c97d19`); live reverify pending |
+| Ticket state | `partially implemented` — recovery shipped for Claude Code only (`multi-llm-provider-go@291b2ea`, `633c97d19`); the same gap exists on codexcli, cursorcli and picli interactive transports. Live reverify pending |
 | Last synchronized | `2026-08-18` |
+
+- **Scope correction (2026-08-19):** this is **not** a Claude Code bug. It is a
+  property of the interactive transport, and every provider has it:
+
+  | provider | structured adapter | interactive adapter |
+  |---|---|---|
+  | claudecode | emits `ToolCallEndEvent` | **never** |
+  | codexcli | emits | **never** |
+  | cursorcli | emits | **never** |
+  | picli | emits | **never** |
+
+  It is inherent rather than an oversight. An interactive adapter scrapes a
+  terminal pane, and a pane carries no structured tool events, so there is
+  nothing to emit an end *from*. That is why "make the adapter emit it properly"
+  is not available as a fix, and why recovery from the provider's own record is
+  the shape this has to take.
+
+  The affected workflow (`tectonicusadaytrading`) runs `transport: tmux`.
 
 - **Priority:** P2 — display only. No work is lost and no decision is made on
   missing data, but the chat misreports completed commands, and the compensating
@@ -69,7 +87,18 @@ unreadable transcript. The chip then closes blank, as it did before.
 
 ### Still to do
 
-- **Live reverify**: confirm recovered chips show real output and real durations.
+- **Live reverify**: confirm recovered chips show real output and real durations
+  on Claude Code before replicating anything.
+- **The other three providers.** `SetToolResultResolver` is already
+  provider-agnostic; only the implementation is Claude-specific. Each package
+  already carries transcript readers to build on — codexcli has five files
+  including a rollout binding and a completion reader, cursorcli two, picli one
+  — so each is a `ToolResultsFromTranscript` plus a case in `recoverToolResult`.
+  Deliberately not done yet: replicating an unverified fix three times is how one
+  wrong assumption becomes four.
+- **Measure the blast radius first.** If most workflows run structured, this is
+  narrow and three more readers are not worth their maintenance; if most run
+  tmux, it is the opposite. That count should drive the decision, not symmetry.
 - **Delete the compensating code** once verified. The 5s grace window helps a
   genuinely-late population measured on a different session and can stay for
   now, but the blank settle exists only for this gap.
