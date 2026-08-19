@@ -31,33 +31,52 @@ func (api *StreamingAPI) recoverToolResult(sessionID, toolCallID string) (string
 	if api == nil || strings.TrimSpace(sessionID) == "" || strings.TrimSpace(toolCallID) == "" {
 		return "", 0, false
 	}
+	// Every live coding-agent handle is a candidate, not just the one under the
+	// event's own session id.
+	//
+	// A workflow step runs in its own private working directory, so Claude Code
+	// writes that step's transcript under a temp mlp-cli-session project slug
+	// rather than the workflow's workspace. The tool events, however, are
+	// recorded against the PARENT schedule session. Resolving only that parent's
+	// handle therefore looks in the workflow's own transcript and misses every
+	// step-issued call — measured on rtslatency, 10 of 10 settled calls lived in
+	// a temp directory the parent handle does not name.
+	//
+	// Tool-call ids are unique, so trying each live handle is safe: a hit can
+	// only come from the transcript that actually recorded the call.
 	api.runningAgentsMux.RLock()
-	agent := api.runningAgents[sessionID]
+	agents := make([]*mcpagent.Agent, 0, len(api.runningAgents)+1)
+	if own := api.runningAgents[sessionID]; own != nil {
+		agents = append(agents, own)
+	}
+	for id, agent := range api.runningAgents {
+		if id != sessionID && agent != nil {
+			agents = append(agents, agent)
+		}
+	}
 	api.runningAgentsMux.RUnlock()
-	if agent == nil {
-		// The session has already been torn down. Its transcript still exists,
-		// but nothing here knows which one it is — the native id lives on the
-		// live handle.
-		return "", 0, false
+
+	for _, agent := range agents {
+		handle := mcpagent.SnapshotAgentSession(agent)
+		if handle == nil || handle.Provider.Empty() {
+			continue
+		}
+		provider := strings.ToLower(strings.TrimSpace(handle.Provider.Provider))
+		if provider != strings.ToLower(string(llm.ProviderClaudeCode)) && provider != "claudecode" {
+			// Only Claude Code's transcript shape is understood here. Other
+			// providers fall back to an empty settle rather than a wrong one;
+			// their interactive transports have the same gap (PLAT-141).
+			continue
+		}
+		nativeSessionID := strings.TrimSpace(handle.Provider.NativeSessionID)
+		if nativeSessionID == "" {
+			continue
+		}
+		entry, ok := claudecode.ToolResultsFromTranscript(nativeSessionID, strings.TrimSpace(handle.Provider.WorkingDir))[toolCallID]
+		if !ok || strings.TrimSpace(entry.Result) == "" {
+			continue
+		}
+		return entry.Result, entry.Duration(), true
 	}
-	handle := mcpagent.SnapshotAgentSession(agent)
-	if handle == nil || handle.Provider.Empty() {
-		return "", 0, false
-	}
-	provider := strings.ToLower(strings.TrimSpace(handle.Provider.Provider))
-	if provider != strings.ToLower(string(llm.ProviderClaudeCode)) && provider != "claudecode" {
-		// Only Claude Code's transcript shape is understood here. Other
-		// providers fall back to an empty settle rather than a wrong one.
-		return "", 0, false
-	}
-	nativeSessionID := strings.TrimSpace(handle.Provider.NativeSessionID)
-	workingDir := strings.TrimSpace(handle.Provider.WorkingDir)
-	if nativeSessionID == "" {
-		return "", 0, false
-	}
-	entry, ok := claudecode.ToolResultsFromTranscript(nativeSessionID, workingDir)[toolCallID]
-	if !ok || strings.TrimSpace(entry.Result) == "" {
-		return "", 0, false
-	}
-	return entry.Result, entry.Duration(), true
+	return "", 0, false
 }
