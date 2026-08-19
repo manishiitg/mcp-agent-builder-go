@@ -170,3 +170,69 @@ func TestLateToolResultIsNotSettled(t *testing.T) {
 		}
 	}
 }
+
+// TestSettleRecoversTheRealResultWhenTheProviderHasIt is the PLAT-141 fix.
+//
+// The live stream produces no end for some calls — one measured completing in
+// 41ms with no end event under any session — so the chip closed blank and the
+// only duration available was how long we had waited (45.4s on screen for a
+// 41ms command). The provider's own transcript has both, so the settle asks for
+// them instead of inventing either.
+func TestSettleRecoversTheRealResultWhenTheProviderHasIt(t *testing.T) {
+	restore := shortenSettleGrace(t)
+	defer restore()
+	SetToolResultResolver(func(sessionID, toolCallID string) (string, time.Duration, bool) {
+		if toolCallID == "call-1" {
+			return "yfinance 1.2.2\nnews items: 10", 41 * time.Millisecond, true
+		}
+		return "", 0, false
+	})
+	defer SetToolResultResolver(nil)
+
+	store := NewEventStore(500)
+	const sessionID = "session-recovered"
+	store.AddEvent(sessionID, startEvent(sessionID, "call-1", "execute_shell_command"))
+	store.AddEvent(sessionID, turnEndEvent(sessionID))
+	time.Sleep(300 * time.Millisecond)
+
+	for _, e := range store.GetEvents(sessionID, GetEventsOptions{}).Events {
+		d, ok := e.Data.Data.(*events.ToolCallEndEvent)
+		if !ok || d.ToolCallID != "call-1" {
+			continue
+		}
+		if d.Result != "yfinance 1.2.2\nnews items: 10" {
+			t.Errorf("result = %q, want the output recovered from the provider", d.Result)
+		}
+		if d.Duration != 41*time.Millisecond {
+			t.Errorf("duration = %v, want the tool's real 41ms rather than how long we waited", d.Duration)
+		}
+		return
+	}
+	t.Fatal("no settle event was emitted")
+}
+
+// TestSettleStaysBlankWhenTheProviderHasNothing. A resolver that cannot find
+// the call must not cause an empty string to be presented as the tool's output
+// with a fabricated runtime; the chip closes with nothing, as before.
+func TestSettleStaysBlankWhenTheProviderHasNothing(t *testing.T) {
+	restore := shortenSettleGrace(t)
+	defer restore()
+	SetToolResultResolver(func(string, string) (string, time.Duration, bool) { return "", 0, false })
+	defer SetToolResultResolver(nil)
+
+	store := NewEventStore(500)
+	const sessionID = "session-unrecovered"
+	store.AddEvent(sessionID, startEvent(sessionID, "call-1", "execute_shell_command"))
+	store.AddEvent(sessionID, turnEndEvent(sessionID))
+	time.Sleep(300 * time.Millisecond)
+
+	for _, e := range store.GetEvents(sessionID, GetEventsOptions{}).Events {
+		if d, ok := e.Data.Data.(*events.ToolCallEndEvent); ok && d.ToolCallID == "call-1" {
+			if d.Result != "" {
+				t.Errorf("result = %q, want empty when the provider has no record", d.Result)
+			}
+			return
+		}
+	}
+	t.Fatal("no settle event was emitted")
+}

@@ -1570,6 +1570,13 @@ type toolCallTelemetry struct {
 var (
 	toolCallsMu  sync.Mutex
 	openToolCall = map[string]map[string]*toolCallTelemetry{} // sessionID -> toolCallID
+	// toolResultResolver, when set, recovers a tool call's real output and
+	// runtime from the provider's own record. Injected rather than imported so
+	// this package stays free of provider knowledge; cmd/server owns the
+	// Claude Code implementation (PLAT-141).
+	toolResultResolver   ToolResultResolver
+	toolResultResolverMu sync.RWMutex
+
 	// settleInFlight stops one turn from scheduling two settle passes. A turn
 	// emits BOTH agent_end and unified_completion, so the handler started a
 	// goroutine for each. The event stream stayed correct — the first pass
@@ -1679,6 +1686,28 @@ var toolCallSettleGrace = 5 * time.Second
 
 // settleAfterGrace closes only the calls that are still missing once late
 // results have had time to arrive.
+// ToolResultResolver recovers a tool call the live stream never completed.
+// Returns ok=false when the provider has no record of it either.
+type ToolResultResolver func(sessionID, toolCallID string) (result string, duration time.Duration, ok bool)
+
+// SetToolResultResolver installs the recovery path used when a tool call
+// produces no end event.
+func SetToolResultResolver(resolver ToolResultResolver) {
+	toolResultResolverMu.Lock()
+	toolResultResolver = resolver
+	toolResultResolverMu.Unlock()
+}
+
+func resolveToolResult(sessionID, toolCallID string) (string, time.Duration, bool) {
+	toolResultResolverMu.RLock()
+	resolver := toolResultResolver
+	toolResultResolverMu.RUnlock()
+	if resolver == nil {
+		return "", 0, false
+	}
+	return resolver(sessionID, toolCallID)
+}
+
 func (es *EventStore) settleAfterGrace(sessionID string, turnEnd Event, pending map[string]*toolCallTelemetry) {
 	time.Sleep(toolCallSettleGrace)
 
@@ -1744,6 +1773,20 @@ func (es *EventStore) settleOpenToolCalls(sessionID string, turnEnd Event, stuck
 		if name == "" {
 			name = "unknown_tool"
 		}
+		// The provider's own record is complete where ours is not, so recover
+		// the real output and the real runtime rather than closing the chip
+		// blank (PLAT-141). Falls through to an empty settle when the provider
+		// has no record either.
+		result := ""
+		duration := now.Sub(tc.startedAt)
+		if recovered, realDuration, ok := resolveToolResult(sessionID, id); ok {
+			result = recovered
+			if realDuration > 0 {
+				duration = realDuration
+			}
+			log.Printf("[TOOL] session=%s PLAT-141: recovered %s(%s) from the provider transcript — %d bytes, real runtime %s",
+				sessionID, name, id, len(recovered), realDuration.Round(time.Millisecond))
+		}
 		// A completion, not an error. The tool ran — measured on
 		// tectonicusadaytrading, whose native transcript holds 215 tool_use and
 		// 215 tool_result — and the agent received its result. Only our copy is
@@ -1769,8 +1812,8 @@ func (es *EventStore) settleOpenToolCalls(sessionID string, turnEnd Event, stuck
 				Data: &events.ToolCallEndEvent{
 					ToolName:   name,
 					ToolCallID: id,
-					Duration:   now.Sub(tc.startedAt),
-					Result:     "",
+					Duration:   duration,
+					Result:     result,
 				},
 			},
 		})

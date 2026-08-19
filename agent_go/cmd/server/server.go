@@ -1743,6 +1743,12 @@ func runServer(cmd *cobra.Command, args []string) {
 		api.observeRetainedMainTurnEvent(sessionID, event)
 	})
 
+	// Some tool calls never produce a tool_call_end on the live stream, which
+	// left the chat showing a finished command as unresolved. The provider's own
+	// transcript has the result and the real runtime; this lets the event store
+	// ask for them (PLAT-141).
+	api.installToolResultRecovery()
+
 	// BG-001: Wire the onDropped callback so a full notification channel re-queues
 	// the completion instead of silently losing it permanently.
 	api.bgAgentRegistry.onDropped = func(sessionID, agentID string) {
