@@ -47,66 +47,9 @@ const removePasteMarkersFromText = (text: string, markers: string[]) => {
   }, text)
 }
 
-const CLIPBOARD_IMAGE_EXTENSIONS: Record<string, string> = {
-  'image/png': 'png',
-  'image/jpeg': 'jpg',
-  'image/jpg': 'jpg',
-  'image/webp': 'webp',
-  'image/gif': 'gif',
-  'image/bmp': 'bmp',
-  'image/svg+xml': 'svg',
-  'image/tiff': 'tiff',
-}
+// Clipboard image helpers live in ./clipboardImages so they can be unit
+// tested without importing this component (which pulls the whole app graph).
 
-const CLIPBOARD_IMAGE_FILE_EXTENSION_PATTERN = /\.(png|jpe?g|webp|gif|bmp|svg|tiff?)$/i
-
-const isClipboardImageFile = (file: File): boolean => {
-  return file.type.toLowerCase().startsWith('image/')
-    || CLIPBOARD_IMAGE_FILE_EXTENSION_PATTERN.test(file.name)
-}
-
-const clipboardImageExtension = (file: File): string => {
-  const mimeExtension = CLIPBOARD_IMAGE_EXTENSIONS[file.type.toLowerCase()]
-  if (mimeExtension) return mimeExtension
-
-  const nameExtension = file.name.match(/\.([a-z0-9]{1,8})$/i)?.[1]?.toLowerCase()
-  return nameExtension || 'png'
-}
-
-const pastedImageFileName = (file: File, index: number): string => {
-  const timestamp = new Date()
-    .toISOString()
-    .replace(/[-:]/g, '')
-    .replace(/\.\d{3}Z$/, 'Z')
-  const suffix = index > 0 ? `-${index + 1}` : ''
-  return `pasted-image-${timestamp}${suffix}.${clipboardImageExtension(file)}`
-}
-
-const getClipboardImageFiles = (clipboardData?: DataTransfer | null): File[] => {
-  if (!clipboardData) return []
-
-  const images: File[] = []
-  const seen = new Set<string>()
-  const addFile = (file: File | null) => {
-    if (!file || !isClipboardImageFile(file)) return
-    const key = `${file.name}:${file.type}:${file.size}:${file.lastModified}`
-    if (seen.has(key)) return
-    seen.add(key)
-    images.push(file)
-  }
-
-  Array.from(clipboardData.files || []).forEach(addFile)
-  Array.from(clipboardData.items || []).forEach(item => {
-    if (item.kind === 'file') {
-      addFile(item.getAsFile())
-    }
-  })
-
-  return images.map((file, index) => new File([file], pastedImageFileName(file, index), {
-    type: file.type || 'image/png',
-    lastModified: Date.now(),
-  }))
-}
 
 const getHttpErrorStatus = (err: unknown): number | undefined => {
   return (err as { response?: { status?: number } } | undefined)?.response?.status
@@ -179,6 +122,7 @@ import { agentApi } from '../services/api'
 import { skillsApi } from '../api/skills'
 import type { Skill } from '../types/skills'
 import { chatHistorySupportsNativeResume, chatHistoryUsesTerminalRestore } from './PreviousChatHistoryPanel'
+import { getClipboardImageFiles } from './clipboardImages'
 
 const AUTO_NOTIFICATION_PREFIX = '[AUTO-NOTIFICATION]'
 const FALLBACK_CODING_AGENT_PROVIDERS = new Set(['claude-code', 'codex-cli', 'cursor-cli', 'pi-cli'])
