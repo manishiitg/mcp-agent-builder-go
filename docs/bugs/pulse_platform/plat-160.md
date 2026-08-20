@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `partially implemented` — the settled timestamp and the shell-command settle presentation are both fixed; the architectural fix this ticket is actually about (promote `toolcalllog` to primary) is scoped larger than first filed, see "Scope correction" below, and remains unstarted |
+| Ticket state | `partially implemented` — the settled timestamp, the shell-command settle presentation, and the transcript tailers' turn-end read race are all fixed; the architectural fix this ticket is actually about (promote `toolcalllog` to primary) remains unstarted and out of scope for a same-pass fix, see "Scope correction" and "Final-read fix" below |
 | Last synchronized | `2026-08-20` |
 
 - **Priority:** P1 — this is the actual reason tool calls go missing for
@@ -314,3 +314,61 @@ this file has several other tool-specific branches (`get_api_spec`, a few
 code-discovery renderers further down) that still don't check
 `synthetic_settle`. Not fixed here; flagged so the next person doesn't
 assume full coverage from this pass.
+
+## Final-read fix: the transcript tailers' turn-end race is closed for Claude and Codex
+
+Asked directly whether to attempt the full "promote toolcalllog to primary"
+architecture in this same pass. Declined that specific piece — it needs a
+working live path built first (fix or bypass the noop tracer, register the
+hook on `base_agent.go`), then a way to reconcile it against the polling
+tailer without rendering every tool call twice; that's real design work
+against a live event pipeline every session depends on, not something to
+rush through alongside smaller fixes. Instead, implemented the one item
+from this ticket's original "what a real fix looks like" list that is
+small, low-risk, and directly closes the confirmed root cause:
+
+`cursorcli`'s transcript tailer already did a final flush on `ctx.Done()`
+using `context.Background()` for the send (so it doesn't race the same
+cancellation that triggered it) — confirmed by reading it before writing
+anything. `claudecode`'s and `codexcli`'s did not; both returned
+immediately on cancellation, which is the exact mechanism this ticket
+already confirmed live in production.
+
+- `claudecode_transcript_stream.go`: extracted the per-tick read+send into
+  a `poll(sendCtx)` closure so the `ctx.Done()` branch calls
+  `poll(context.Background())` once before returning — same shape as
+  `cursorcli`. New test cancels the context ~20ms after starting the
+  tailer (well under its 250ms poll interval, so its own ticker cannot
+  have fired), and asserts a tool-call row already on disk before the
+  tailer started is still delivered. Fail-before/pass-after: reverted to
+  the immediate return, confirmed the new test times out; restored,
+  confirmed it passes. Full `claudecode` package suite (180+ tests)
+  re-verified passing.
+- `codexcli_interactive_adapter.go`: codex's tailer polls inline inside
+  the main response-wait loop's ticker branch (its own existing comment
+  already notes polling must happen before the completion check, so a
+  normal end-of-turn tick is covered) — but its `ctx.Done()` branch
+  returned without polling at all. Added the same
+  `poll(context.Background(), streamChan)` call there. The full
+  response-wait loop isn't unit-testable in isolation without mocking the
+  tmux pane-capture machinery, so the new test instead exercises
+  `codexTranscriptStreamState.poll` directly with
+  `context.Background()` against a tool-call row already on disk — the
+  exact call that was added, proving it delivers. Full `codexcli` package
+  suite re-verified passing.
+
+Both changes are additive and self-contained to the two files above — no
+tracer, dedup, or cross-repo wiring touched, so the duplication risk that
+makes the toolcalllog-promotion piece genuinely risky does not apply here.
+
+### Still open, unchanged by this fix
+
+- **toolcalllog live delivery** still goes through the noop tracer and is
+  absent from workflow-step (`base_agent.go`) agents — the architectural
+  fix this ticket is actually named for.
+- **Other specialized tool renderers** (`get_api_spec`, code-discovery
+  branches in `CodeExecutionToolCallEndDisplay.tsx`) still bypass
+  `synthetic_settle`.
+- **The Output-toggle control** still renders on an empty synthetic settle
+  even though there is nothing to expand — a small, real, low-risk gap in
+  the presentation fix, not yet addressed.
