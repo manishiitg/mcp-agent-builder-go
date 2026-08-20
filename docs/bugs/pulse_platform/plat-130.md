@@ -5,8 +5,8 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `implemented` — pre-item/pre-step cancellation gates shipped; live reverify pending. Note the original root cause was partly wrong, see the correction below |
-| Last synchronized | `2026-08-17` |
+| Ticket state | `implemented` — the requested live reverify (2026-08-20) found the bug still reproduces, from a THIRD, previously undocumented mechanism; that one is now also gated. Live reverify of this newest fix is itself still pending |
+| Last synchronized | `2026-08-20` |
 
 - **Priority:** P1 — this is not cosmetic. A stopped schedule can continue
   executing side-effecting work (e.g. posting) after the UI, the run history,
@@ -180,3 +180,80 @@ Building that harness is worthwhile but is its own piece of work.
 
 Live reverify remains outstanding: stop a real running schedule mid-sequence and
 confirm no further queued item executes.
+
+## Live reverify (2026-08-20): reproduced again, from a third mechanism
+
+The requested live reverify happened — the user stopped the `upwork` schedule
+twice while it was mid-`message_sequence` — and the bug still reproduced. Real
+work ran after both stops: Step 2 (`run_full_workflow(group_name="daily-bid",
+...)`) executed to completion, 22 seconds of real Claude Code activity, after
+the session had already been marked stopped.
+
+Reconstructed second-by-second from `server_debug.log` for session
+`schedule-cron--78ba88d0_1787198353286401000`:
+
+```
+09:32:10  first Stop click. ACTIVE_SESSION -> stopped. Log itself flags the
+          gap: "WARNING 1 background agent(s) had no cancel func — marked
+          canceled but never told to stop (PLAT-130 shape)". Same second:
+          Step 2's query is logged as the next item to run — a race between
+          the stop and the next item already being in flight.
+09:32:11  Stop's own cleanup closes the tmux-backed coding-CLI session.
+09:32:14  second Stop click. ACTIVE_SESSION -> stopped again. WORKFLOW_PHASE
+          correctly aborts workshop creation for this session (a working
+          guard). Immediately after: [CHAT_HISTORY] Active-tab auto-resume:
+          session ... tmux is gone; routing through --resume re-launch +
+          materialize.
+09:32:22  A brand-new Claude Code tmux session is launched.
+          StreamWithEvents starts.
+09:32:45  It completes normally, 22.231s elapsed, having actually run the
+          daily-bid step. [COMPLETION] Preserving terminal status "stopped"
+          for the session the entire time — no visible sign in the UI that
+          this happened.
+```
+
+This is not the mechanism the shipped fix (the message_sequence pre-item gate
+and workflow step pre-step gate) covers — those gate *starting the next
+queue item*. The mechanism that actually fired here is upstream of the
+queue entirely: `handleQuery`'s "Active-tab auto-resume" and "Materialize
+guard" blocks (`cmd/server/server.go`, ~5977-6027), which exist to relaunch
+a coding-agent's tmux pane when it's gone because of idle-reap or a stale
+frontend view. Neither block checked whether the tmux was gone *because Stop
+had just killed it*, so an already-in-flight `handleQuery` call for a
+message_sequence item that raced the Stop click saw "tmux is gone" and
+relaunched it — reviving a session Stop had already terminated twice.
+
+### Fix
+
+Both blocks now also gate on `!api.isSessionMarkedStopped(sessionID)`. This
+reuses the exact "STOP-RACE GUARD" pattern already shipped and proven for the
+analogous `workflow_phase_tools.go` case (the 2026-04-04 "can't stop" bug —
+same shape, different call site: a goroutine in flight when Stop lands,
+creating orphaned work).
+
+Confirmed this cannot block a legitimate user resume: earlier in the same
+`handleQuery` call, `clearSessionStopped(sessionID)` already runs whenever
+the request is a real user message (not `IsAutoNotification` and not
+`TriggeredBy == "cron"`). So by the time either relaunch block is reached,
+`isSessionMarkedStopped` is still `true` only when the request is an
+internal cron/auto-notification continuation of a session nobody has
+un-stopped — exactly the shape of this incident's Step 2 query, and never
+the shape of an explicit Resume click.
+
+### What this does not fix
+
+- The underlying race that let Step 2's query begin at all while Stop was
+  being processed (line 1 of the trace above) is not addressed here — this
+  fix stops the *relaunch*, not the race that queued the item in the first
+  place. If a future incident shows real work executing without ever
+  hitting a "tmux is gone" relaunch, that earlier race needs its own fix.
+- No automated regression test. The two gated blocks live deep inside
+  `handleQuery`, the same giant HTTP handler this ticket's own prior test
+  section already noted has no existing harness for driving its internals
+  in isolation ("no harness exists to drive that function... its own piece
+  of work"). The fix mirrors an already-tested pattern
+  (`workflow_phase_tools.go`'s STOP-RACE GUARD, covered by existing tests
+  for that call site) rather than inventing new coverage for this one.
+- Live reverify of *this* fix — stop a real schedule mid-sequence again and
+  confirm no tmux relaunch happens — is itself still outstanding, same as
+  every prior round of this ticket.

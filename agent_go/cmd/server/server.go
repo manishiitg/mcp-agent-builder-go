@@ -5989,13 +5989,27 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					// "no live tmux" so a genuinely live session is never disrupted by a
 					// spurious relaunch (its existing pane keeps streaming via the seeded
 					// PiSessionID/--resume without a re-launch).
-					if currentRuntime != nil && !api.sessionHasLiveMainCodingTmux(sessionID) {
+					//
+					// PLAT-130: also gated on isSessionMarkedStopped. A stopped session's
+					// tmux is gone because Stop just killed it, not because it idled out —
+					// relaunching here reproduced the "Stop doesn't stop" bug live: a
+					// message_sequence's next item was already in this same handleQuery
+					// call when Stop landed, saw "tmux is gone", and this block relaunched
+					// a fresh coding-agent session that ran a real run_full_workflow turn
+					// to completion after the session had already been marked stopped
+					// twice. A genuine user resume already cleared isSessionMarkedStopped
+					// earlier in this same request (see the clearSessionStopped call
+					// above), so this check cannot block a real resume — only an internal
+					// continuation of a session nobody has un-stopped yet.
+					if currentRuntime != nil && !api.sessionHasLiveMainCodingTmux(sessionID) && !api.isSessionMarkedStopped(sessionID) {
 						restoredRuntime = currentRuntime
 						if forceStructuredCodingAgent {
 							logfWithContext(queryLogCtx, "[CHAT_HISTORY] Active-tab auto-resume: session %s is routing through native structured continuation", sessionID)
 						} else {
 							logfWithContext(queryLogCtx, "[CHAT_HISTORY] Active-tab auto-resume: session %s tmux is gone; routing through --resume re-launch + materialize", sessionID)
 						}
+					} else if currentRuntime != nil && api.isSessionMarkedStopped(sessionID) {
+						logfWithContext(queryLogCtx, "[CHAT_HISTORY] Active-tab auto-resume: session %s is stopped; refusing to relaunch its coding-agent tmux (PLAT-130)", sessionID)
 					}
 				}
 			}
@@ -6014,9 +6028,12 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			// route through the SAME FIX B re-launch + materialize as an explicit
 			// Resume. Gated on a native-resume handle (it IS a coding agent mid-session)
 			// AND "no live tmux" so a genuinely live session is never disrupted by a
-			// spurious relaunch.
+			// spurious relaunch. Also gated on isSessionMarkedStopped, same PLAT-130
+			// reasoning as the auto-resume block above — this is the second of the two
+			// blocks that reproduced the live "Stop doesn't stop" incident.
 			if !forceStructuredCodingAgent && !restoredNativeCodingResume && !modeChangedThisTurn && restoredRuntime == nil &&
-				codingAgentHasNativeResume(finalProvider, underlyingAgent) && !api.sessionHasLiveMainCodingTmux(sessionID) {
+				codingAgentHasNativeResume(finalProvider, underlyingAgent) && !api.sessionHasLiveMainCodingTmux(sessionID) &&
+				!api.isSessionMarkedStopped(sessionID) {
 				if runtime, ok, err := ReadChatHistoryRuntimeForSession(currentUserID, sessionID, workflowPhaseFolder); err != nil {
 					logfWithContext(queryLogCtx, "[CHAT_HISTORY] Materialize guard: failed to read runtime for session %s: %v", sessionID, err)
 				} else if ok && runtime != nil && restoredRuntimeUsesLaunchableTerminalTransport(runtime) {
