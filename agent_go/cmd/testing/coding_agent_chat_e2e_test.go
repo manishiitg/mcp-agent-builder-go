@@ -175,6 +175,7 @@ func TestExtractUnifiedCompletionFinalUsesDocumentedShape(st *stdtesting.T) {
 }
 
 func TestRetainedWindowAssertionsRequireOneCanonicalToolAndFinal(st *stdtesting.T) {
+	const turnID = "turn-retained-p0"
 	events := []map[string]interface{}{
 		{
 			"type": "streaming_chunk",
@@ -183,23 +184,29 @@ func TestRetainedWindowAssertionsRequireOneCanonicalToolAndFinal(st *stdtesting.
 			}},
 		},
 		{
-			"type": "tool_call_start",
+			"type":    "tool_call_start",
+			"turn_id": turnID,
 			"data": map[string]interface{}{"data": map[string]interface{}{
 				"tool_name": "execute_shell_command", "tool_call_id": "call-1",
 				"tool_params": map[string]interface{}{"arguments": `{"command":"printf RECEIPT_TOKEN"}`},
 			}},
 		},
 		{
-			"type": "tool_call_end",
+			"type":    "tool_call_end",
+			"turn_id": turnID,
 			"data": map[string]interface{}{"data": map[string]interface{}{
 				"tool_name": "execute_shell_command", "tool_call_id": "call-1",
 				"result": "RECEIPT_TOKEN", "duration": float64(12000000),
 			}},
 		},
 		{
-			"type": "unified_completion",
+			"type":    "unified_completion",
+			"turn_id": turnID,
 			"data": map[string]interface{}{"data": map[string]interface{}{
 				"final_result": "FINAL_TOKEN",
+				"metadata": map[string]interface{}{
+					"turn_id": turnID, "canonical_turn_completion": true,
+				},
 			}},
 		},
 	}
@@ -208,6 +215,9 @@ func TestRetainedWindowAssertionsRequireOneCanonicalToolAndFinal(st *stdtesting.
 	}
 	if err := assertOneRetainedCompletion(events, "FINAL_TOKEN"); err != nil {
 		st.Fatalf("completion: %v", err)
+	}
+	if err := assertCanonicalRetainedTurnIdentity(events, "execute_shell_command"); err != nil {
+		st.Fatalf("canonical turn identity: %v", err)
 	}
 	if err := assertRetainedCompletionAfterTool(events, "execute_shell_command"); err != nil {
 		st.Fatalf("lifecycle order: %v", err)
@@ -231,6 +241,35 @@ func TestRetainedWindowAssertionsRequireOneCanonicalToolAndFinal(st *stdtesting.
 	earlyCompletion := []map[string]interface{}{events[0], events[3], events[1], events[2]}
 	if err := assertRetainedCompletionAfterTool(earlyCompletion, "execute_shell_command"); err == nil {
 		st.Fatalf("completion before the tool receipt was accepted")
+	}
+
+	missingTurnID := append([]map[string]interface{}{}, events...)
+	missingTurnID[1] = map[string]interface{}{
+		"type": "tool_call_start",
+		"data": events[1]["data"],
+	}
+	if err := assertCanonicalRetainedTurnIdentity(missingTurnID, "execute_shell_command"); err == nil {
+		st.Fatalf("tool event without turn_id was accepted")
+	}
+
+	wrongTurnID := append([]map[string]interface{}{}, events...)
+	wrongTurnID[2] = map[string]interface{}{
+		"type": "tool_call_end", "turn_id": "different-turn",
+		"data": events[2]["data"],
+	}
+	if err := assertCanonicalRetainedTurnIdentity(wrongTurnID, "execute_shell_command"); err == nil {
+		st.Fatalf("cross-turn tool event was accepted")
+	}
+
+	missingCanonicalMarker := append([]map[string]interface{}{}, events...)
+	missingCanonicalMarker[3] = map[string]interface{}{
+		"type": "unified_completion", "turn_id": turnID,
+		"data": map[string]interface{}{"data": map[string]interface{}{
+			"final_result": "FINAL_TOKEN", "metadata": map[string]interface{}{"turn_id": turnID},
+		}},
+	}
+	if err := assertCanonicalRetainedTurnIdentity(missingCanonicalMarker, "execute_shell_command"); err == nil {
+		st.Fatalf("completion without canonical marker was accepted")
 	}
 }
 

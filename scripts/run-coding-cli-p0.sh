@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MULTI_LLM_DIR="$(cd "$ROOT_DIR/../multi-llm-provider-go" && pwd)"
+MCPAGENT_DIR="$(cd "$ROOT_DIR/../mcpagent" && pwd)"
 PROVIDERS="claude-code,codex-cli,cursor-cli,pi-cli"
 SERVER_URL="http://localhost:18743"
 WORKSPACE_API_URL="http://127.0.0.1:18744"
@@ -21,6 +22,7 @@ Options:
   --workspace-api URL    Live workspace API (default: http://127.0.0.1:18744)
   --workspace-docs PATH  Absolute workspace-docs path
   --multi-llm-dir PATH   multi-llm-provider-go checkout path
+  --mcpagent-dir PATH    mcpagent checkout path
   -h, --help             Show this help
 EOF
 }
@@ -45,6 +47,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --multi-llm-dir)
       MULTI_LLM_DIR="$(cd "${2:?--multi-llm-dir requires a value}" && pwd)"
+      shift 2
+      ;;
+    --mcpagent-dir)
+      MCPAGENT_DIR="$(cd "${2:?--mcpagent-dir requires a value}" && pwd)"
       shift 2
       ;;
     -h|--help)
@@ -122,6 +128,12 @@ p0_test_regex codex-cli pkg/adapters/codexcli >/dev/null
 p0_test_regex cursor-cli pkg/adapters/cursorcli >/dev/null
 p0_test_regex pi-cli pkg/adapters/picli >/dev/null
 
+# IC-12 is provider-neutral and credential-free. Run it before spending any
+# live-provider capacity so a missing turn ID or duplicate/missing canonical
+# completion blocks the release immediately.
+run_required_go_tests go -C "$MCPAGENT_DIR" test -json ./agent \
+  -run '^TestP0CanonicalTurnContract$' -count=1
+
 IFS=',' read -r -a provider_list <<< "$PROVIDERS"
 for raw_provider in "${provider_list[@]}"; do
   provider="$(printf '%s' "$raw_provider" | tr '[:upper:]' '[:lower:]' | xargs)"
@@ -160,11 +172,12 @@ for raw_provider in "${provider_list[@]}"; do
     --server-url "$SERVER_URL" --workspace-docs "$WORKSPACE_DOCS" \
     --provider "$provider" --timeout 8m
 
-  # IC-11: cross the AgentWorks -> mcpagent boundary after a real first turn
+  # IC-11 + IC-12: cross the AgentWorks -> mcpagent boundary after a real first turn
   # has completed and the provider tmux is retained. This proves the warm
   # follow-up uses the durable Session, returns one authoritative tool receipt
   # (arguments/result/duration), persists exactly one final response, avoids
-  # Agent reconstruction, and leaves the tmux reusable.
+  # Agent reconstruction, requires stable same-turn IDs plus the canonical
+  # completion marker, and leaves the tmux reusable.
   go -C "$ROOT_DIR/agent_go" run . test coding-agent-chat-e2e \
     --server-url "$SERVER_URL" --provider "$provider" \
     --selected-folder "_users/default/Chats" \

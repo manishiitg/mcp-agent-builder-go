@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `implemented_pending_restarted_ui_reverify` — the Codex cross-session lock inversion is fixed, and `mcpagent` now owns a provider-neutral stable turn ID plus exactly-once unified completion. The shared real retained-session contract passed for Codex, Claude Code, Cursor, and Pi; real concurrent Codex completion and race tests passed. A restarted AgentWorks Social Media run is the remaining production/UI reverify. |
+| Ticket state | `implemented_pending_restarted_ui_reverify` — the Codex cross-session lock inversion is fixed, and `mcpagent` now owns a provider-neutral stable turn ID plus exactly-once unified completion. IC-12 makes that lifecycle a mandatory deterministic CI and live per-provider release gate. The shared real retained-session contract passed for Codex, Claude Code, Cursor, and Pi; real concurrent Codex completion and race tests passed. A restarted AgentWorks Social Media run is the remaining production/UI reverify. |
 | Last synchronized | `2026-08-20` |
 
 - **Priority:** P1 — silently turns real successes into false `error` schedule
@@ -105,6 +105,18 @@ definition of success:
 This contract now passes live for all four coding CLIs. Product closure still
 requires a restarted AgentWorks run because the currently running server does
 not contain the new `mcpagent` and wrapper code.
+
+### Mandatory release enforcement
+
+The architectural contract above is now canonical IC-12 in
+`agent_go/docs/cross_repo_integration_contract.md`, not advisory prose in this
+ticket. Every PR runs mcpagent's credential-free P0 lifecycle test. The live
+coding-CLI P0 additionally rejects a retained turn unless its tool receipts and
+single `unified_completion` carry the same stable `turn_id`, the completion is
+explicitly marked canonical, the final answer is visible, and the underlying
+session remains reusable. New adapters and production product profiles inherit
+the same contract through mcpagent rather than defining provider-specific
+completion behavior.
 
 ## Why this ticket exists
 

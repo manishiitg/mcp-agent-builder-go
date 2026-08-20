@@ -85,6 +85,13 @@ jobs:
           go -C ../multi-llm-provider-go test ./pkg/adapters/picli -run '^TestPiBoundedCleanupUsesSharedTmuxKillDelay$' -count=1
           go -C ../mcpagent test ./agent -run '^TestFinishStreamingTerminalEndIncludesRetentionMetadata$' -count=1
 
+      - name: Verify mandatory canonical turn lifecycle
+        working-directory: coding-agent-loop
+        run: >-
+          go -C ../mcpagent test ./agent
+          -run '^TestP0CanonicalTurnContract$'
+          -count=1
+
       - name: Verify deterministic delivery and notification contracts
         working-directory: coding-agent-loop
         run: >-

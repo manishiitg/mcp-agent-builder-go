@@ -428,7 +428,7 @@ func (c *codingAgentChatE2EClient) startQueryWithResponse(ctx context.Context, s
 
 const retainedWindowP0DeliveryLimit = time.Second
 
-// runRetainedWindowP0 is the IC-11 cross-repository contract. It deliberately
+// runRetainedWindowP0 is the IC-11 and IC-12 cross-repository contract. It deliberately
 // reaches the retained window by letting the preceding real CLI turn finish;
 // it never deletes a registration or injects a completion event to manufacture
 // the state under test.
@@ -484,6 +484,9 @@ func (c *codingAgentChatE2EClient) runRetainedWindowP0(ctx context.Context, sess
 	if err := assertOneRetainedCompletion(events, rememberedToken); err != nil {
 		return err
 	}
+	if err := assertCanonicalRetainedTurnIdentity(events, "execute_shell_command"); err != nil {
+		return err
+	}
 	if err := assertOneRetainedToolReceipt(events, "execute_shell_command", toolToken); err != nil {
 		return err
 	}
@@ -497,6 +500,61 @@ func (c *codingAgentChatE2EClient) runRetainedWindowP0(ctx context.Context, sess
 	}
 	if err := c.assertRetainedTmuxLive(ctx, sessionID); err != nil {
 		return fmt.Errorf("provider process was not reusable after retained turn: %w", err)
+	}
+	return nil
+}
+
+// assertCanonicalRetainedTurnIdentity enforces the provider-neutral turn
+// lifecycle contract at the real AgentWorks -> mcpagent boundary. A retained
+// session may outlive many turns, but every event belonging to one turn must
+// carry the same non-empty identity and its sole completion must be marked as
+// the canonical lifecycle owner.
+func assertCanonicalRetainedTurnIdentity(events []map[string]interface{}, toolName string) error {
+	completionTurnID := ""
+	completionCount := 0
+	for _, event := range events {
+		if fmt.Sprint(event["type"]) != "unified_completion" {
+			continue
+		}
+		completionCount++
+		completionTurnID = strings.TrimSpace(eventPayloadString(event, "turn_id"))
+		if completionTurnID == "" {
+			return fmt.Errorf("retained unified_completion has no stable turn_id")
+		}
+		metadata := eventPayloadMap(event, "metadata")
+		canonical, ok := metadata["canonical_turn_completion"].(bool)
+		if !ok || !canonical {
+			return fmt.Errorf("retained unified_completion is not marked canonical_turn_completion")
+		}
+	}
+	if completionCount != 1 {
+		return fmt.Errorf("retained turn emitted %d unified completions, want exactly 1", completionCount)
+	}
+
+	starts, ends := 0, 0
+	for _, event := range events {
+		if eventPayloadString(event, "tool_name") != toolName {
+			continue
+		}
+		eventType := fmt.Sprint(event["type"])
+		if eventType != "tool_call_start" && eventType != "tool_call_end" {
+			continue
+		}
+		turnID := strings.TrimSpace(eventPayloadString(event, "turn_id"))
+		if turnID == "" {
+			return fmt.Errorf("retained %s %s has no stable turn_id", toolName, eventType)
+		}
+		if turnID != completionTurnID {
+			return fmt.Errorf("retained %s %s turn_id=%q, completion turn_id=%q", toolName, eventType, turnID, completionTurnID)
+		}
+		if eventType == "tool_call_start" {
+			starts++
+		} else {
+			ends++
+		}
+	}
+	if starts != 1 || ends != 1 {
+		return fmt.Errorf("retained %s lifecycle events start=%d end=%d, want exactly one of each", toolName, starts, ends)
 	}
 	return nil
 }
