@@ -1,18 +1,19 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { BrainCircuit, ChevronLeft, Download, KeyRound, MoreHorizontal, ServerCog, WandSparkles, X } from 'lucide-react'
+import { BrainCircuit, ChevronLeft, Download, KeyRound, MoreHorizontal, Plug, WandSparkles, X } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip'
 import LlmModalHost from './topbar/LlmModalHost'
 import RuntimeHealthControl from './topbar/RuntimeHealthControl'
 import NotificationsControl from './topbar/NotificationsControl'
 import AccountControl from './topbar/AccountControl'
+import ConnectionsControl from './topbar/ConnectionsControl'
 import { iconButtonClass } from './ui/IconPopover'
-import MCPServersSection from './sidebar/MCPServersSection'
+import { ConnectionsModal } from './connections'
 import { SkillsSection } from './skills'
 import { SecretsSection } from './secrets'
 import { useLLMStore } from '../stores'
 import { useIsElectron } from './topbar/useIsElectron'
 
-type ToolPanel = 'mcp' | 'skills' | 'secrets'
+type ToolPanel = 'skills' | 'secrets'
 
 function ToolMenuItem({
   icon,
@@ -52,11 +53,6 @@ function FloatingToolPanel({
   onClose: () => void
 }) {
   const config = {
-    mcp: {
-      title: 'MCP Servers',
-      icon: <ServerCog className="h-4 w-4" />,
-      content: <MCPServersSection />,
-    },
     skills: {
       title: 'Skills',
       icon: <WandSparkles className="h-4 w-4" />,
@@ -107,6 +103,7 @@ function FloatingToolPanel({
 export default function WorkspaceTopBarControls() {
   const [menuOpen, setMenuOpen] = useState(false)
   const [activePanel, setActivePanel] = useState<ToolPanel | null>(null)
+  const [connectionsOpen, setConnectionsOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const setShowLLMModal = useLLMStore(s => s.setShowLLMModal)
   const llmCount = useLLMStore(s => s.savedLLMs.length)
@@ -142,6 +139,10 @@ export default function WorkspaceTopBarControls() {
       <LlmModalHost />
       <div className="flex items-center gap-1.5">
         <RuntimeHealthControl />
+        <ConnectionsControl
+          active={connectionsOpen}
+          onClick={() => setConnectionsOpen(prev => !prev)}
+        />
         <NotificationsControl />
         <AccountControl />
 
@@ -176,10 +177,13 @@ export default function WorkspaceTopBarControls() {
                   }}
                 />
                 <ToolMenuItem
-                  icon={<ServerCog className="h-4 w-4" />}
-                  label="MCP Servers"
-                  detail="Connected tool servers"
-                  onClick={() => openPanel('mcp')}
+                  icon={<Plug className="h-4 w-4" />}
+                  label="Connections"
+                  detail="Gmail, Slack, GitHub, and more"
+                  onClick={() => {
+                    setMenuOpen(false)
+                    setConnectionsOpen(true)
+                  }}
                 />
                 <ToolMenuItem
                   icon={<WandSparkles className="h-4 w-4" />}
@@ -215,6 +219,7 @@ export default function WorkspaceTopBarControls() {
           )}
         </div>
       </div>
+      {connectionsOpen && <ConnectionsModal onClose={() => setConnectionsOpen(false)} />}
       {activePanel && (
         <FloatingToolPanel
           panel={activePanel}

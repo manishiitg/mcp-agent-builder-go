@@ -1,0 +1,191 @@
+{
+  "version": 1,
+  "integrations": [
+    {
+      "id": "notion",
+      "server_name": "notion",
+      "name": "Notion",
+      "tagline": "Pages, databases, and docs",
+      "description": "Let agents search your Notion workspace, read pages, and create or update content.",
+      "category": "productivity",
+      "icon": "notion",
+      "brand_color": "#000000",
+      "status": "available",
+      "auth": "dcr",
+      "url": "https://mcp.notion.com/mcp",
+      "docs_url": "https://developers.notion.com/docs/mcp",
+      "capabilities": [
+        "Search pages and databases",
+        "Read page content",
+        "Create and update pages",
+        "Query database rows"
+      ],
+      "sensitive_actions": [
+        "Create or edit pages in your workspace"
+      ]
+    },
+    {
+      "id": "github",
+      "server_name": "github",
+      "name": "GitHub",
+      "tagline": "Repos, issues, and pull requests",
+      "description": "Let agents read repositories, triage issues, and review pull requests.",
+      "category": "development",
+      "icon": "github",
+      "brand_color": "#181717",
+      "status": "available",
+      "auth": "dcr",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "docs_url": "https://docs.github.com/en/copilot/customizing-copilot/using-model-context-protocol",
+      "capabilities": [
+        "Search code and repositories",
+        "Read and comment on issues",
+        "Read pull requests and diffs",
+        "Create issues and pull requests"
+      ],
+      "sensitive_actions": [
+        "Create issues, comments, or pull requests"
+      ]
+    },
+    {
+      "id": "linear",
+      "server_name": "linear",
+      "name": "Linear",
+      "tagline": "Issues, projects, and cycles",
+      "description": "Let agents read and update Linear issues, projects, and cycles.",
+      "category": "productivity",
+      "icon": "linear",
+      "brand_color": "#5E6AD2",
+      "status": "available",
+      "auth": "dcr",
+      "url": "https://mcp.linear.app/mcp",
+      "docs_url": "https://linear.app/docs/mcp",
+      "capabilities": [
+        "Search and read issues",
+        "Create and update issues",
+        "Read projects and cycles"
+      ],
+      "sensitive_actions": [
+        "Create or update issues assigned to your team"
+      ]
+    },
+    {
+      "id": "sentry",
+      "server_name": "sentry",
+      "name": "Sentry",
+      "tagline": "Errors and performance issues",
+      "description": "Let agents inspect Sentry issues, stack traces, and release health.",
+      "category": "development",
+      "icon": "sentry",
+      "brand_color": "#362D59",
+      "status": "available",
+      "auth": "dcr",
+      "url": "https://mcp.sentry.dev/mcp",
+      "docs_url": "https://docs.sentry.io/product/sentry-mcp/",
+      "capabilities": [
+        "List and search issues",
+        "Read stack traces and event details",
+        "Inspect release health"
+      ],
+      "sensitive_actions": []
+    },
+    {
+      "id": "google-workspace",
+      "server_name": "google-workspace",
+      "name": "Google Workspace",
+      "tagline": "Gmail, Drive, and Calendar",
+      "description": "One connection covering Gmail, Google Drive, and Google Calendar.",
+      "category": "productivity",
+      "icon": "google",
+      "brand_color": "#4285F4",
+      "status": "available",
+      "auth": "oauth_app",
+      "url": "https://gmailmcp.googleapis.com/mcp/v1",
+      "docs_url": "https://developers.google.com/workspace/guides/create-credentials",
+      "auth_url": "https://accounts.google.com/o/oauth2/v2/auth",
+      "token_url": "https://oauth2.googleapis.com/token",
+      "client_id_env": "GOOGLE_OAUTH_CLIENT_ID",
+      "client_secret_env": "GOOGLE_OAUTH_CLIENT_SECRET",
+      "scopes": [
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/drive.readonly",
+        "https://www.googleapis.com/auth/calendar.readonly"
+      ],
+      "capabilities": [
+        "Read and search Gmail messages",
+        "List and read Drive files",
+        "Read Calendar events"
+      ],
+      "sensitive_actions": [
+        "Read the contents of your email"
+      ],
+      "setup_hint": "An administrator needs to set GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET on the server. Google does not support automatic client registration."
+    },
+    {
+      "id": "microsoft-365",
+      "server_name": "microsoft-365",
+      "name": "Microsoft 365",
+      "tagline": "Outlook, OneDrive, and Calendar",
+      "description": "One connection covering Outlook mail, OneDrive files, and Microsoft Calendar.",
+      "category": "productivity",
+      "icon": "microsoft",
+      "brand_color": "#0078D4",
+      "status": "coming_soon",
+      "auth": "oauth_app",
+      "docs_url": "https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app",
+      "auth_url": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+      "token_url": "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+      "client_id_env": "MICROSOFT_OAUTH_CLIENT_ID",
+      "client_secret_env": "MICROSOFT_OAUTH_CLIENT_SECRET",
+      "scopes": [
+        "offline_access",
+        "Mail.Read",
+        "Files.Read",
+        "Calendars.Read"
+      ],
+      "capabilities": [
+        "Read Outlook mail",
+        "List and read OneDrive files",
+        "Read Calendar events"
+      ],
+      "sensitive_actions": [
+        "Read the contents of your email"
+      ],
+      "setup_hint": "Set the Microsoft 365 remote MCP server URL in connections_catalog.json, then set MICROSOFT_OAUTH_CLIENT_ID and MICROSOFT_OAUTH_CLIENT_SECRET on the server."
+    },
+    {
+      "id": "slack",
+      "server_name": "slack",
+      "name": "Slack",
+      "tagline": "Channels, messages, and search",
+      "description": "Let agents read Slack channels, search history, and post messages.",
+      "category": "communication",
+      "icon": "slack",
+      "brand_color": "#4A154B",
+      "status": "available",
+      "auth": "token",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-slack"
+      ],
+      "docs_url": "https://api.slack.com/authentication/token-types#bot",
+      "token_label": "Slack bot token",
+      "token_placeholder": "xoxb-...",
+      "token_env_var": "SLACK_BOT_TOKEN",
+      "extra_env": {
+        "SLACK_TEAM_ID": ""
+      },
+      "capabilities": [
+        "List channels and members",
+        "Read channel history",
+        "Search messages",
+        "Post messages and replies"
+      ],
+      "sensitive_actions": [
+        "Post messages to your Slack workspace"
+      ],
+      "setup_hint": "Slack does not offer an OAuth remote MCP server yet. Create a Slack app, install it to your workspace, and paste its bot token (xoxb-...)."
+    }
+  ]
+}
