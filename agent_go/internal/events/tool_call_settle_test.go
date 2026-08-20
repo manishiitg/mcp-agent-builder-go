@@ -281,3 +281,58 @@ func TestSettleStaysBlankWhenTheProviderHasNothing(t *testing.T) {
 	}
 	t.Fatal("no settle event was emitted")
 }
+
+// TestErroredToolCallIsNotSweptIntoSyntheticSettle is the regression for a
+// bug found live 2026-08-20 on a pi-cli session (group=mahima,
+// check-form-26as-xspaces): a tool call that failed with a real, specific
+// error -- "Working directory does not exist", and separately an ACCESS
+// DENIED write to the wrong scoped folder -- still turned up inside a later
+// "N of N tool call(s) produced no end event" settle, shown in the UI as "no
+// result reported" alongside genuinely silent calls.
+//
+// The cause was structural, not pi-specific: logToolCallTelemetry's switch
+// only cleared openToolCall on *events.ToolCallEndEvent. A
+// *events.ToolCallErrorEvent -- which DID report an outcome, just a failing
+// one -- was never removed, so it sat "open" until turn end and was settled
+// exactly like a call nobody ever heard back from. Provider-agnostic: any
+// adapter whose tool call errors is exposed, not only pi's.
+func TestErroredToolCallIsNotSweptIntoSyntheticSettle(t *testing.T) {
+	restore := shortenSettleGrace(t)
+	defer restore()
+	store := NewEventStore(500)
+	const sessionID = "session-errored"
+
+	store.AddEvent(sessionID, startEvent(sessionID, "call-1", "execute_shell_command"))
+	store.AddEvent(sessionID, Event{
+		Type: "tool_call_error", Timestamp: time.Now(), SessionID: sessionID,
+		Data: &events.AgentEvent{
+			Type: events.EventType("tool_call_error"), Timestamp: time.Now(), SessionID: sessionID,
+			Data: &events.ToolCallErrorEvent{ToolName: "execute_shell_command", ToolCallID: "call-1", Error: "working directory does not exist"},
+		},
+	})
+	store.AddEvent(sessionID, turnEndEvent(sessionID))
+	time.Sleep(200 * time.Millisecond)
+
+	var sawError, sawSyntheticSettle bool
+	for _, e := range store.GetEvents(sessionID, GetEventsOptions{}).Events {
+		if e.Data == nil {
+			continue
+		}
+		switch d := e.Data.Data.(type) {
+		case *events.ToolCallErrorEvent:
+			if d.ToolCallID == "call-1" {
+				sawError = true
+			}
+		case *events.ToolCallEndEvent:
+			if d.ToolCallID == "call-1" && d.SyntheticSettle {
+				sawSyntheticSettle = true
+			}
+		}
+	}
+	if !sawError {
+		t.Fatal("the original error event went missing")
+	}
+	if sawSyntheticSettle {
+		t.Error("an errored call was ALSO settled as if it had never reported -- it reported an error, which is a real outcome, not silence")
+	}
+}

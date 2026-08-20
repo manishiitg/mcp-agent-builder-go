@@ -1620,6 +1620,34 @@ func (es *EventStore) logToolCallTelemetry(sessionID string, event Event) {
 		}
 		log.Printf("[TOOL] session=%s END id=%s name=%s duration=%s result_len=%d open=%d",
 			sessionID, d.ToolCallID, started.name, time.Since(started.startedAt).Truncate(time.Millisecond), len(d.Result), open)
+	case *events.ToolCallErrorEvent:
+		// A tool call that fails still REPORTED — with a real error, not
+		// silence. Before this case existed, only ToolCallEndEvent cleared an
+		// entry, so an errored call stayed in openToolCall forever and, at
+		// turn end, was indistinguishable from a call that got no response at
+		// all: settleOpenToolCalls swept it into the same synthetic-settle
+		// bucket and the UI showed "no result reported" for a call that had
+		// in fact reported a specific, real error.
+		//
+		// Confirmed live 2026-08-20 on a pi-cli session: two real errors
+		// ("Working directory does not exist", then an ACCESS DENIED write to
+		// the wrong scoped folder) both left their ToolCallID stuck open, and
+		// both later turned up inside a "N of N tool call(s) produced no end
+		// event" settle alongside genuinely unreported calls.
+		toolCallsMu.Lock()
+		started := openToolCall[sessionID][d.ToolCallID]
+		if started != nil {
+			delete(openToolCall[sessionID], d.ToolCallID)
+		}
+		open := len(openToolCall[sessionID])
+		toolCallsMu.Unlock()
+		if started == nil {
+			log.Printf("[TOOL] session=%s ERROR id=%s name=%s UNPAIRED (no matching START id) error_len=%d open=%d",
+				sessionID, d.ToolCallID, d.ToolName, len(d.Error), open)
+			return
+		}
+		log.Printf("[TOOL] session=%s ERROR id=%s name=%s duration=%s error_len=%d open=%d",
+			sessionID, d.ToolCallID, started.name, time.Since(started.startedAt).Truncate(time.Millisecond), len(d.Error), open)
 	}
 	// A turn that ends with calls still open is the spinning-chip case.
 	if event.Type == "agent_end" || event.Type == "unified_completion" {

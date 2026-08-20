@@ -5,8 +5,8 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `partially implemented` — recovery shipped for Claude Code only (`multi-llm-provider-go@291b2ea`, `633c97d19`); the same gap exists on codexcli, cursorcli and picli interactive transports. Live reverify pending |
-| Last synchronized | `2026-08-18` |
+| Ticket state | `partially implemented` — Claude Code interactive-transport recovery shipped, live reverify pending; the same interactive-adapter gap still exists on codexcli, cursorcli, picli. Separately, a THIRD mechanism (agent_go ignoring ToolCallErrorEvent in its own settle bookkeeping, provider/transport-agnostic) found and fixed 2026-08-20, tested fail-before/pass-after |
+| Last synchronized | `2026-08-20` |
 
 - **Scope correction (2026-08-19):** this is **not** a Claude Code bug. It is a
   property of the interactive transport, and every provider has it:
@@ -84,6 +84,43 @@ server side, where the live handle already is.
 Every path that cannot answer returns not-found rather than a guess: a session
 already torn down, a non-Claude provider, an empty result, a missing or
 unreadable transcript. The chip then closes blank, as it did before.
+
+## A third, distinct mechanism found and fixed (2026-08-20, pi structured)
+
+Not the interactive-adapter gap this ticket was originally about, and not
+[PLAT-160](plat-160.md)'s polling-tailer race either — both of those are about
+an adapter never emitting a signal at all. This one is about `agent_go` itself
+ignoring a signal the adapter DID emit correctly.
+
+Found live on a **structured** pi-cli turn (`pi --print --mode json`, group
+`mahima`, `check-form-26as-xspaces`) — a transport this ticket's own table
+already lists as reliably emitting `ToolCallEndEvent`. Two tool calls failed
+with real, specific errors ("Working directory does not exist"; separately an
+ACCESS DENIED write to the wrong scoped folder), each correctly reported as a
+`ToolCallErrorEvent`. Both still turned up minutes later inside a "N of N tool
+call(s) produced no end event" settle, shown in the UI (after `48bea2f0`'s
+`SyntheticSettle` labeling fix, shipped earlier the same day) as "no result
+reported" — indistinguishable from a call that genuinely got no response.
+
+Root cause: `logToolCallTelemetry`'s `openToolCall` bookkeeping
+(`event_store.go:1596`) only had a case for `*events.ToolCallEndEvent`. A
+`*events.ToolCallErrorEvent` — which reported an outcome, just a failing one —
+was never removed from the pending map, so it sat "open" until turn end and
+was settled exactly like true silence.
+
+This is **provider- and transport-agnostic**: it lives in `agent_go`'s own
+telemetry tracker, not any CLI adapter, so every provider whose tool calls can
+error is exposed, structured or interactive alike. Unlike the interactive-only
+gap above, it doesn't require a missing adapter capability to reproduce — any
+real tool failure triggers it.
+
+Fixed by adding the missing case, mirroring the existing `ToolCallEndEvent`
+handling exactly (clear the pending entry, log start/duration). Verified
+fail-before/pass-after with `TestErroredToolCallIsNotSweptIntoSyntheticSettle`
+(`tool_call_settle_test.go`): reverting the new case reproduces the exact
+production log line —
+`PLAT-141: 1 of 1 tool call(s) produced no end event within 20ms` — for a call
+that had, in fact, reported a specific error a moment earlier.
 
 ### Still to do
 
