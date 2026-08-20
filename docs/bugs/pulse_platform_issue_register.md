@@ -336,6 +336,7 @@ Rules:
 | [PLAT-157](pulse_platform/plat-157.md) | `call_sub_agent` guidance made parents repeat contracts predefined children already receive, stateful routes replayed that combined contract on continuation, and conversation inspection used ambiguous `todo_id` instead of exact `execution_id` | Codex | `implemented` — contract simplified and focused tests pass; live reverify pending | workflow todo-task sub-agent contract |
 | [PLAT-158](pulse_platform/plat-158.md) | Legacy `post_run_monitor` remained a second Pulse trigger beside a dedicated review schedule, so ordinary workflow runs still launched Gate/Review+Fix inline and could spend hours doing review work at the wrong cadence | Codex | `implemented` — dedicated `pulse_review_only` schedule is now the sole recurring-Pulse authority; restart/live reverify pending | manifest + scheduler Pulse lifecycle dispatch |
 | [PLAT-159](pulse_platform/plat-159.md) | Scheduler/cron `workflow_phase` sessions set WorkflowLabel/PresetName from the raw workspace folder name instead of the workflow's configured `label`, so the Global Activity Monitor could show a session's own workflow as a different one running elsewhere (folder `social-media`, configured label `twitter-automation`) | unassigned | `implemented` — fail-before/pass-after; live reverify pending | `cmd/server/server.go`, `cmd/server/polling.go` |
+| [PLAT-160](pulse_platform/plat-160.md) | Interactive tool-call completion is reconstructed by polling the CLI's transcript file, whose loop exits on turn-end without a final read and can lose the last event; PLAT-149 already proved a synchronous, reliable signal exists (the bridge-execution hook) but only uses it for after-the-fact recovery, never as the primary live source | unassigned | `filed` — consolidates PLAT-141/149/152's findings into one root cause and fix direction; no code change | `multi-llm-provider-go` interactive transcript tailers, `agent_go/pkg/agentwrapper/llm_agent.go` |
 
 Assignment reserves the lane; it does not claim that work has started. An agent
 sets its fragment to `in_progress` when it actually begins. PLAT-004, PLAT-008,
@@ -709,7 +710,7 @@ priority and historical run context.
 | [PLAT-146](pulse_platform/plat-146.md) | [PLAT-147](pulse_platform/plat-147.md) | [PLAT-148](pulse_platform/plat-148.md) | [PLAT-149](pulse_platform/plat-149.md) |
 | [PLAT-150](pulse_platform/plat-150.md) | [PLAT-151](pulse_platform/plat-151.md) | [PLAT-152](pulse_platform/plat-152.md) | [PLAT-153](pulse_platform/plat-153.md) |
 | [PLAT-154](pulse_platform/plat-154.md) | [PLAT-155](pulse_platform/plat-155.md) | [PLAT-156](pulse_platform/plat-156.md) | [PLAT-157](pulse_platform/plat-157.md) |
-| [PLAT-158](pulse_platform/plat-158.md) | [PLAT-159](pulse_platform/plat-159.md) |  |  |
+| [PLAT-158](pulse_platform/plat-158.md) | [PLAT-159](pulse_platform/plat-159.md) | [PLAT-160](pulse_platform/plat-160.md) |  |
 ## Explicitly not platform issues
 
 The following remain workflow-owned or evidence-state items even when they are

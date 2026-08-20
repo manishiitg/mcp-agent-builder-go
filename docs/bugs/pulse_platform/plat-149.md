@@ -115,7 +115,13 @@ settle, or a genuinely different gap).
   unlocated, so nothing was removed — the duplication (two events per call)
   is still happening; only the orphaned-result symptom is now covered by a
   second, more reliable source. Suppressing it properly is the actual
-  architectural fix and needs the site found first.
+  architectural fix and needs the site found first. **Update (2026-08-20):**
+  the site is found — [PLAT-152](plat-152.md)'s investigation confirmed the
+  interactive transcript tailers this ticket's own "ruled out" section
+  suspected are in fact live in production. [PLAT-160](plat-160.md)
+  consolidates that with this ticket's own reliable mechanism into a fix
+  direction: promote `toolcalllog` from recovery-only to the primary live
+  signal.
 - **Does not touch mcpagent's `Agent.emitTypedEvent` fan-out.** The originally
   scoped "one reconciliation point reaching every consumer identically" idea
   from PLAT-142 is not what shipped — this is two call sites sharing one

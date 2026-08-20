@@ -87,6 +87,11 @@ unreadable transcript. The chip then closes blank, as it did before.
 
 ### Still to do
 
+- **Root cause and fix direction now consolidated**: [PLAT-160](plat-160.md)
+  connects this ticket's compensating recovery to why the loss happens at all
+  (the interactive transcript tailer's poll loop can lose the final event at
+  turn-end) and to PLAT-149's already-proven synchronous alternative. This
+  ticket's recovery mechanism stays as the necessary backstop either way.
 - **Live reverify**: confirm recovered chips show real output and real durations
   on Claude Code before replicating anything.
 - **The other three providers.** `SetToolResultResolver` is already

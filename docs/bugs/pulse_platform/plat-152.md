@@ -156,6 +156,15 @@ prevent.
   brought in line with the transcript-reconstruction approach instead — is
   the actual fix decision for whoever picks this up, not resolved here.
 
+## Incidental finding this correction fed forward
+
+Confirming these tailers are live in production (not opt-in/family-server-only
+as PLAT-149 had believed) turned out to matter for a different reason than
+this ticket's own topic: it means the tailers' unfixed
+`ctx.Done()`-without-a-final-read race — a real gap, orthogonal to whether
+Pi is "the odd one out" — is an active production exposure, not a
+theoretical one. [PLAT-160](plat-160.md) picks that up.
+
 ## Acceptance (already met — see Correction)
 
 - A decision is recorded on which shape is the platform's real adapter
