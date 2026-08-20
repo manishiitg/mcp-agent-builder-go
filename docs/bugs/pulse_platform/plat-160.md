@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `filed` — consolidates a root cause and a fix direction that were each partially found across three other tickets; no code change in this ticket |
+| Ticket state | `partially implemented` — the immediate live symptom (settled timestamp) is fixed; the architectural fix this ticket is actually about (promote `toolcalllog` to primary) is scoped larger than first filed, see "Scope correction" below, and remains unstarted |
 | Last synchronized | `2026-08-20` |
 
 - **Priority:** P1 — this is the actual reason tool calls go missing for
@@ -145,3 +145,64 @@ found.
   of ticket.
 - [PLAT-141](plat-141.md)'s settle/backfill path still exists as a backstop
   and its existing tests still pass, but fires measurably less often.
+
+## Scope correction: `toolcalllog`'s own live path is itself non-functional today
+
+Checked directly rather than assumed, while scoping how to implement the
+"promote `toolcalllog` to primary" direction above: its live-emission path
+does not currently reach any real consumer in production, for a different
+reason than the polling race this ticket opened with.
+
+`LLMAgentWrapper`'s registered hook (`agent_go/pkg/agentwrapper/llm_agent.go:1143`)
+emits via `w.emitEvent(ev)` → `w.tracer.EmitEvent(event)`. `w.tracer` is
+whatever `cmd/server/server.go:3044` constructed:
+`tracer := observability.GetTracer(tracingProvider)`, where `tracingProvider`
+defaults to `"noop"` (`TRACING_PROVIDER` is not set in normal deployment).
+Confirmed live: `grep`ing a full day's `server_debug.log` for `toolcalllog`'s
+own id shape (`toolu_<decimal>`) found zero occurrences, live or recovered,
+despite real interactive sessions running the whole time. Separately,
+`base_agent.go` — the path workflow-step sessions actually run through, not
+`LLMAgentWrapper` — never registers this hook at all.
+
+So "promote to primary" is not a priority flip. It needs:
+1. A working live path from the hook to the platform's real event consumers
+   (EventStore / Pulse evidence) — either fixing `w.tracer` to not be a noop
+   in this context, or having the hook call something that reaches
+   `a.listeners` directly instead of the tracer.
+2. The same hook registered in `base_agent.go`, which does not have it today.
+3. Only then does suppressing/reconciling the polling tailer (the original
+   "what a real fix looks like" list, items 1-2) become safe to do without
+   losing live display entirely for workflow-step sessions.
+
+What *is* confirmed working regardless of the above: `toolcalllog.RecordStart`/
+`RecordEnd` themselves run unconditionally on every bridge tool call, on every
+provider, independent of the hook or the tracer — this is exactly what
+[PLAT-141](plat-141.md)'s recovery already queries successfully via
+`toolcalllog.Snapshot`. The data is reliable; only the *live* delivery path
+built on top of it is currently dead.
+
+## What shipped: the immediate live symptom
+
+The concrete complaint that led to this investigation — a batch of settled
+tool-call chips all displaying the identical clock time despite different
+real recovered durations — is fixed. `EventStore.settleOpenToolCalls`
+(`internal/events/event_store.go`) stamped every settled event's
+`Timestamp` with the settle-batch's `now`, even when a real duration had
+been recovered from the provider transcript. Now, when a real duration is
+recovered, the displayed timestamp is computed as `startedAt + realDuration`
+— the call's own real completion time — instead of the moment the batch
+happened to run. When nothing is recovered, the settle moment remains the
+only signal available and is used exactly as before.
+
+`TestSettledTimestampReflectsRealCompletionNotSettleMoment`
+(`internal/events/tool_call_settle_test.go`): fail-before/pass-after,
+reverted the fix and confirmed the test fails with a ~168ms drift between
+the displayed timestamp and the real completion time, consistent with the
+live symptom; restored, confirmed it passes with the timestamp within 5ms
+of the expected value. Full existing settle-test suite re-verified passing
+alongside it.
+
+This does not touch the architectural question above — it is the smallest
+fix that matches what a recovered event is already capable of reporting
+correctly (it already has the real duration; it just wasn't using it to
+compute the displayed time).

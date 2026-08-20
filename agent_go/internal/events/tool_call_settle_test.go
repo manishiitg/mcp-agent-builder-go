@@ -211,6 +211,51 @@ func TestSettleRecoversTheRealResultWhenTheProviderHasIt(t *testing.T) {
 	t.Fatal("no settle event was emitted")
 }
 
+// TestSettledTimestampReflectsRealCompletionNotSettleMoment (PLAT-160).
+//
+// Several tool calls settled in the same batch, each with a different real
+// recovered duration, were observed live all displaying the identical clock
+// time — the moment the settle batch ran, not when each one actually
+// finished. The recovered duration was already correct; only the displayed
+// timestamp used "now" instead of startedAt+duration.
+func TestSettledTimestampReflectsRealCompletionNotSettleMoment(t *testing.T) {
+	restore := shortenSettleGrace(t)
+	defer restore()
+	const recoveredDuration = 5 * time.Millisecond
+	SetToolResultResolver(func(sessionID, toolCallID, name string, startedAt time.Time) (string, time.Duration, bool) {
+		if toolCallID == "call-1" {
+			return "ok", recoveredDuration, true
+		}
+		return "", 0, false
+	})
+	defer SetToolResultResolver(nil)
+
+	store := NewEventStore(500)
+	const sessionID = "session-timestamp"
+	startedAt := time.Now()
+	store.AddEvent(sessionID, startEvent(sessionID, "call-1", "execute_shell_command"))
+	// A real wait before the turn ends and the settle batch runs, standing in
+	// for the live symptom: several calls sitting in the store for different
+	// lengths of time before one settle pass closes all of them together.
+	time.Sleep(150 * time.Millisecond)
+	store.AddEvent(sessionID, turnEndEvent(sessionID))
+	time.Sleep(300 * time.Millisecond)
+
+	for _, e := range store.GetEvents(sessionID, GetEventsOptions{}).Events {
+		d, ok := e.Data.Data.(*events.ToolCallEndEvent)
+		if !ok || d.ToolCallID != "call-1" {
+			continue
+		}
+		wantTimestamp := startedAt.Add(recoveredDuration)
+		if diff := e.Timestamp.Sub(wantTimestamp); diff < -5*time.Millisecond || diff > 5*time.Millisecond {
+			t.Errorf("settled timestamp = %v, want close to startedAt+recoveredDuration (%v) — got a diff of %v, consistent with using the settle moment instead",
+				e.Timestamp, wantTimestamp, diff)
+		}
+		return
+	}
+	t.Fatal("no settle event was emitted")
+}
+
 // TestSettleStaysBlankWhenTheProviderHasNothing. A resolver that cannot find
 // the call must not cause an empty string to be presented as the tool's output
 // with a fabricated runtime; the chip closes with nothing, as before.

@@ -1782,10 +1782,18 @@ func (es *EventStore) settleOpenToolCalls(sessionID string, turnEnd Event, stuck
 		// has no record either.
 		result := ""
 		duration := now.Sub(tc.startedAt)
+		// displayTimestamp defaults to the settle moment -- the only signal
+		// available when nothing is recovered. When a real duration IS
+		// recovered, the settle moment is not this call's completion time; it
+		// is whenever the batch happened to run, which is why several settled
+		// calls with different real durations could all display the identical
+		// clock time. Use the call's own real start+duration instead.
+		displayTimestamp := now
 		if recovered, realDuration, ok := resolveToolResult(sessionID, id, name, tc.startedAt); ok {
 			result = recovered
 			if realDuration > 0 {
 				duration = realDuration
+				displayTimestamp = tc.startedAt.Add(realDuration)
 			}
 			log.Printf("[TOOL] session=%s PLAT-141: recovered %s(%s) from the provider transcript — %d bytes, real runtime %s",
 				sessionID, name, id, len(recovered), realDuration.Round(time.Millisecond))
@@ -1802,7 +1810,7 @@ func (es *EventStore) settleOpenToolCalls(sessionID string, turnEnd Event, stuck
 		es.AddEvent(sessionID, Event{
 			ID:                fmt.Sprintf("settle-%s-%d", id, now.UnixNano()),
 			Type:              "tool_call_end",
-			Timestamp:         now,
+			Timestamp:         displayTimestamp,
 			SessionID:         sessionID,
 			ExecutionID:       turnEnd.ExecutionID,
 			ParentExecutionID: turnEnd.ParentExecutionID,
@@ -1810,7 +1818,7 @@ func (es *EventStore) settleOpenToolCalls(sessionID string, turnEnd Event, stuck
 			TerminalOwnerID:   turnEnd.TerminalOwnerID,
 			Data: &events.AgentEvent{
 				Type:      events.EventType("tool_call_end"),
-				Timestamp: now,
+				Timestamp: displayTimestamp,
 				SessionID: sessionID,
 				Data: &events.ToolCallEndEvent{
 					ToolName:   name,
