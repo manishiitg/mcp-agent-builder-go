@@ -561,6 +561,7 @@ func (w *LLMAgentWrapper) InvokeWithHistory(ctx context.Context, messages []llmt
 	// Start tracking metrics
 	startTime := time.Now()
 	w.updateRequestMetrics()
+	turnID := newPlatformTurnID()
 
 	// Emit server selection event
 	if w.agent != nil {
@@ -584,6 +585,7 @@ func (w *LLMAgentWrapper) InvokeWithHistory(ctx context.Context, messages []llmt
 			source,
 			"", // query will be extracted from messages if needed
 		)
+		attachTurnID(serverSelectionEvent, turnID)
 
 		// Emit the event
 		w.emitEvent(serverSelectionEvent)
@@ -602,7 +604,7 @@ func (w *LLMAgentWrapper) InvokeWithHistory(ctx context.Context, messages []llmt
 	if runtimeSession == nil {
 		return "", errors.New("agent session is not initialized")
 	}
-	result, err := runtimeSession.Run(timeoutCtx, mcpagent.Turn{History: messages})
+	result, err := runtimeSession.Run(timeoutCtx, mcpagent.Turn{ID: turnID, History: messages})
 	response := result.Text
 	updatedMessages := result.History
 	duration := time.Since(startTime)
@@ -1054,8 +1056,26 @@ func (w *LLMAgentWrapper) emitEvent(eventData events.EventData) {
 	w.tracer.EmitEvent(event)
 }
 
+func attachTurnID(eventData events.EventData, turnID string) {
+	if eventData == nil || turnID == "" {
+		return
+	}
+	if base, ok := eventData.(interface{ GetBaseEventData() *events.BaseEventData }); ok {
+		data := base.GetBaseEventData()
+		if data.Metadata == nil {
+			data.Metadata = make(map[string]interface{})
+		}
+		data.Metadata["turn_id"] = turnID
+	}
+}
+
+func newPlatformTurnID() string {
+	return "turn_" + events.GenerateEventID()
+}
+
 func buildSessionTurn(prompt string, history []llmtypes.MessageContent, policy mcpagent.ToolPolicy, streamingCallback func(llmtypes.StreamChunk)) mcpagent.Turn {
 	return mcpagent.Turn{
+		ID:                newPlatformTurnID(),
 		Input:             prompt,
 		History:           history,
 		ToolPolicy:        policy,
@@ -1137,6 +1157,7 @@ func (w *LLMAgentWrapper) StreamWithEvents(ctx context.Context, prompt string) (
 			w.logger.Info(fmt.Sprintf("[CANCEL_DEBUG] Sanitized CLI history before AskWithHistory | provider=%s msgs_before=%d msgs_after=%d",
 				w.config.Provider, before, len(messages)))
 		}
+		turn := buildSessionTurn(prompt, messages, mcpagent.ToolPolicy{}, streamingCallback)
 
 		w.logger.Info(fmt.Sprintf("[CANCEL_DEBUG] AskWithHistory starting | history_msgs=%d", len(messages)))
 
@@ -1158,6 +1179,7 @@ func (w *LLMAgentWrapper) StreamWithEvents(ctx context.Context, prompt string) (
 						string(w.traceID),
 					)
 					ev.ToolCallID = tc.ID
+					attachTurnID(ev, turn.ID)
 					w.emitEvent(ev)
 				},
 				OnEnd: func(tc toolcalllog.CompletedCall) {
@@ -1176,6 +1198,7 @@ func (w *LLMAgentWrapper) StreamWithEvents(ctx context.Context, prompt string) (
 						w.config.ModelID,
 					)
 					ev.ToolCallID = tc.ID
+					attachTurnID(ev, turn.ID)
 					w.emitEvent(ev)
 				},
 			})
@@ -1201,7 +1224,7 @@ func (w *LLMAgentWrapper) StreamWithEvents(ctx context.Context, prompt string) (
 		// synthetic background-agent notification. ToolPolicy is empty here
 		// because this branch derives the tool surface at registration instead
 		// (6c4a8908), so there is no per-turn policy to thread.
-		result, err := runtimeSession.Run(ctx, buildSessionTurn(prompt, messages, mcpagent.ToolPolicy{}, streamingCallback))
+		result, err := runtimeSession.Run(ctx, turn)
 		response := result.Text
 		updatedMessages := result.History
 
