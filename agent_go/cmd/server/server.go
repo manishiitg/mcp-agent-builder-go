@@ -1976,6 +1976,16 @@ func runServer(cmd *cobra.Command, args []string) {
 	apiRouter.HandleFunc("/mcp-config/status", api.handleGetMCPConfigStatus).Methods("GET")
 	apiRouter.HandleFunc("/mcp-config/logs", api.handleGetServerLogs).Methods("GET")
 
+	// Connections API routes (from connections_routes.go) - user-facing layer
+	// over MCP servers. Registered before the {id} routes so "catalog" is not
+	// swallowed by the path variable.
+	apiRouter.HandleFunc("/connections/catalog", api.handleGetConnectionsCatalog).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/connections", api.handleGetConnections).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/connections/{id}/connect", api.handleConnectIntegration).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/connections/{id}/disconnect", api.handleDisconnectConnection).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/connections/{id}/test", api.handleTestConnection).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/connections/{id}", api.handleRemoveConnection).Methods("DELETE", "OPTIONS")
+
 	// Secrets encryption API routes (from secrets_routes.go)
 	apiRouter.HandleFunc("/secrets/encrypt", api.handleEncryptSecret).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/secrets/decrypt", api.handleDecryptSecret).Methods("POST", "OPTIONS")
