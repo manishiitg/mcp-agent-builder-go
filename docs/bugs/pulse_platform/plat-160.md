@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `partially implemented` — the immediate live symptom (settled timestamp) is fixed; the architectural fix this ticket is actually about (promote `toolcalllog` to primary) is scoped larger than first filed, see "Scope correction" below, and remains unstarted |
+| Ticket state | `partially implemented` — the settled timestamp and the shell-command settle presentation are both fixed; the architectural fix this ticket is actually about (promote `toolcalllog` to primary) is scoped larger than first filed, see "Scope correction" below, and remains unstarted |
 | Last synchronized | `2026-08-20` |
 
 - **Priority:** P1 — this is the actual reason tool calls go missing for
@@ -206,3 +206,111 @@ This does not touch the architectural question above — it is the smallest
 fix that matches what a recovered event is already capable of reporting
 correctly (it already has the real duration; it just wasn't using it to
 compute the displayed time).
+
+## Review after the partial implementation (2026-08-20)
+
+**Verdict: the timestamp patch is correct and tested, but PLAT-160 is not yet
+the fix for the user-visible receipt problem that motivated it.** The ticket
+must remain `partially implemented`.
+
+### What the current patch genuinely fixes
+
+- `EventStore.settleOpenToolCalls` no longer assigns one settlement-batch
+  timestamp to every recovered call. When recovery supplies a real duration,
+  the event is dated at `startedAt + realDuration`.
+- `TestSettledTimestampReflectsRealCompletionNotSettleMoment` is a meaningful
+  fail-before/pass-after regression test for that behavior.
+
+### What the live reproduction proves is still broken
+
+The Social Media allocator displayed a group of green cards labelled
+`Command Completed`, all with `Turn: 0`, empty/meaningless output controls,
+and durations such as 13.3m, 3.0m, and 1.1m. Server telemetry for that same
+session explicitly recorded the relevant calls as PLAT-141 synthetic settles:
+their end events did not arrive within the grace window and the reported
+open-to-settle duration was **not tool runtime**.
+
+The generic frontend renderer already handles this honestly, but shell calls
+bypass it:
+
+1. `ToolCallEndEventDisplay` classifies `execute_shell_command` as a code
+   execution tool.
+2. It routes the event to
+   `CodeExecutionToolCallEndDisplay` before the generic renderer's
+   `synthetic_settle` handling runs.
+3. The specialized shell renderer ignores `synthetic_settle` and always
+   presents a non-error event as green `Command Completed`, includes the
+   meaningless `Turn: 0`, labels open-to-settle time as `Duration`, and offers
+   an output toggle even when no output was recovered.
+
+Therefore the timestamp patch will make recovered timestamps more truthful
+after restart, but it will not stop the screenshot's misleading completion
+cards.
+
+### Required completion work
+
+1. **Fix presentation now:** make every specialized tool renderer honor the
+   same synthetic-settle contract as the generic renderer. A synthetic shell
+   settle must be neutral, omit `Turn: 0`, label unrecovered elapsed time as
+   open/unverified rather than runtime, and hide the output control when there
+   is no output. When start arguments are available, show a short command
+   summary instead of an anonymous `Command Completed` label.
+2. **Fix live delivery at the platform boundary:** connect the synchronous
+   bridge `toolcalllog` hook to EventStore/Pulse consumers without going
+   through the default noop tracer, and register it for the `base_agent.go`
+   workflow-step path as well as `LLMAgentWrapper`.
+3. **Reconcile identity once:** bridge-generated and provider-native tool-call
+   IDs must either become one canonical ID or be correlated at one central
+   boundary. Consumers should receive one start and one terminal receipt, not
+   competing duplicate streams.
+4. **Retain transcript safety:** add a final transcript read on cancellation
+   and keep PLAT-141 settlement as a last-resort backstop, not the ordinary
+   completion path.
+5. **Prove it live:** run a real interactive workflow-step session and assert
+   that every displayed tool start has exactly one terminal receipt, real
+   results retain their output and duration, synthetic settlement is rare and
+   never shown as success, and Pulse sees the same receipts as formatted chat.
+
+### Wording correction for future implementers
+
+The reliable artifact that already exists is `toolcalllog`'s synchronous
+`RecordStart`/`RecordEnd` data. Its **live delivery path is not reliable or
+operational yet**. Describing the hook itself as an already-working live
+signal obscures the noop-tracer and missing-`base_agent` work discovered while
+implementing this ticket.
+
+## Presentation item 1 done: shell-command renderer now honors synthetic_settle
+
+Verified the review's core claim directly against the code before fixing it:
+`ToolCallEndEvent.tsx` (the generic renderer) already special-cases
+`synthetic_settle`, but `execute_shell_command` — the tool behind the
+screenshot that started this whole investigation — is routed to
+`CodeExecutionToolCallEndDisplay.tsx` first, which had zero references to
+`synthetic_settle` anywhere. Its status line was hardcoded to
+`isError ? '❌ Command Failed' : '✅ Command Completed'`, with
+`Turn: ${event.turn}` always shown — and a settled event carries no turn
+number, so it always rendered `Turn: 0`, exactly matching the screenshot.
+
+Fixed the `execute_shell_command` branch to match the generic renderer's
+contract: on a synthetic settle, the icon and status text are neutral (not a
+green checkmark), `Turn` is omitted, and the duration is labelled based on
+whether a real result was recovered — `Runtime (recovered): Xms` when the
+backend found real output via PLAT-141's transcript recovery (this is a real
+measured duration now, not open-to-settle time), or `Open for: Xs (not tool
+runtime)` when nothing was recovered at all. Existing error detection
+(exit-code/traceback sniffing on the recovered output) is unchanged, so a
+settle that recovered a genuine failure still renders as a failure, not
+neutral.
+
+`CodeExecutionToolCallEndDisplay.test.tsx`: two new tests, fail-before/
+pass-after (temporarily forced `isSyntheticSettle = false`, confirmed both
+new tests fail with the exact live symptom — unconditional "Command
+Completed" and "Turn: 0" — restored, confirmed both pass). Full
+`src/components/events/` suite and `tsc -b` re-verified clean.
+
+**Scope note:** this fixes the one branch that produced the reported
+screenshot. The review's item 1 said "every specialized tool renderer" —
+this file has several other tool-specific branches (`get_api_spec`, a few
+code-discovery renderers further down) that still don't check
+`synthetic_settle`. Not fixed here; flagged so the next person doesn't
+assume full coverage from this pass.
