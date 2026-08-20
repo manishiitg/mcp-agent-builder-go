@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -4863,6 +4864,30 @@ func registerPlanModificationTools(
 		return fmt.Errorf("failed to register create_plan tool: %w", err)
 	}
 
+	if err := mcpAgent.RegisterCustomTool(
+		"validate_plan_change",
+		"Validate the concrete invariants of a completed plan change without running the workflow. The agent remains responsible for deciding the intended design; this tool proves the declared result against the persisted plan and its known dependent artifacts. Supply every removed step id or obsolete path as forbidden_references, and the exact context_dependencies expected for each changed consumer. A structural decision must not be consumed unless this returns passed=true.",
+		map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"forbidden_references": map[string]interface{}{
+					"type":        "array",
+					"items":       map[string]interface{}{"type": "string"},
+					"description": "Exact removed step ids, obsolete artifact path prefixes, or retired field names that must no longer occur in current workflow artifacts.",
+				},
+				"expected_context_dependencies": map[string]interface{}{
+					"type":                 "object",
+					"additionalProperties": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
+					"description":          "Map of changed step id to its exact expected context_dependencies array. Extra or missing dependencies fail validation.",
+				},
+			},
+		},
+		createValidatePlanChangeExecutor(workspacePath, readFile),
+		"workflow",
+	); err != nil {
+		return fmt.Errorf("failed to register validate_plan_change tool: %w", err)
+	}
+
 	migrateSequenceCodeParams, err := parseSchemaForToolParameters(`{"type":"object","properties":{}}`)
 	if err != nil {
 		return fmt.Errorf("failed to parse migrate_message_sequence_code_items schema: %w", err)
@@ -5153,6 +5178,205 @@ func registerPlanModificationTools(
 	}
 
 	return nil
+}
+
+type planChangeDependencyMismatch struct {
+	StepID   string   `json:"step_id"`
+	Expected []string `json:"expected"`
+	Actual   []string `json:"actual,omitempty"`
+	Reason   string   `json:"reason"`
+}
+
+func createValidatePlanChangeExecutor(
+	workspacePath string,
+	readFile func(context.Context, string) (string, error),
+) func(context.Context, map[string]interface{}) (string, error) {
+	return func(ctx context.Context, args map[string]interface{}) (string, error) {
+		forbidden, err := stringSliceToolArg(args["forbidden_references"], "forbidden_references")
+		if err != nil {
+			return "", err
+		}
+		expectedDependencies, err := stringSliceMapToolArg(args["expected_context_dependencies"], "expected_context_dependencies")
+		if err != nil {
+			return "", err
+		}
+		if len(forbidden) == 0 && len(expectedDependencies) == 0 {
+			return "", fmt.Errorf("provide forbidden_references and/or expected_context_dependencies")
+		}
+
+		plan, err := readPlanFromFile(ctx, workspacePath, readFile)
+		if err != nil {
+			return "", err
+		}
+		if err := ValidatePlanStructure(plan); err != nil {
+			return "", err
+		}
+
+		steps := make(map[string]PlanStepInterface)
+		var collect func([]PlanStepInterface)
+		collect = func(items []PlanStepInterface) {
+			for _, step := range items {
+				if step == nil {
+					continue
+				}
+				steps[step.GetID()] = step
+				if todo, ok := step.(*TodoTaskPlanStep); ok {
+					for _, route := range todo.PredefinedRoutes {
+						if route.SubAgentStep != nil {
+							collect([]PlanStepInterface{route.SubAgentStep})
+						}
+					}
+				}
+			}
+		}
+		collect(plan.Steps)
+		collect(plan.OrphanSteps)
+
+		mismatches := make([]planChangeDependencyMismatch, 0)
+		stepIDs := make([]string, 0, len(expectedDependencies))
+		for stepID := range expectedDependencies {
+			stepIDs = append(stepIDs, stepID)
+		}
+		sort.Strings(stepIDs)
+		for _, stepID := range stepIDs {
+			expected := normalizedStringSet(expectedDependencies[stepID])
+			step, ok := steps[stepID]
+			if !ok {
+				mismatches = append(mismatches, planChangeDependencyMismatch{StepID: stepID, Expected: expected, Reason: "step not found"})
+				continue
+			}
+			actual := normalizedStringSet(step.GetContextDependencies())
+			if !planChangeEqualStringSlices(expected, actual) {
+				mismatches = append(mismatches, planChangeDependencyMismatch{StepID: stepID, Expected: expected, Actual: actual, Reason: "context_dependencies differ"})
+			}
+		}
+
+		artifactPaths := []string{
+			"planning/plan.json",
+			"planning/step_config.json",
+			"planning/variables.json",
+			"evaluation/evaluation_plan.json",
+			"db/reports/index.html",
+			"db/README.md",
+			"workflow.json",
+			"soul/soul.md",
+			"learnings/_global/SKILL.md",
+			"knowledgebase/_index.json",
+		}
+		hits := make(map[string][]string)
+		scanned := make([]string, 0, len(artifactPaths))
+		for _, relativePath := range artifactPaths {
+			path := normalizePathForWorkspaceAPI(relativePath, workspacePath)
+			content, readErr := readFile(ctx, path)
+			if readErr != nil {
+				continue
+			}
+			scanned = append(scanned, relativePath)
+			for _, reference := range forbidden {
+				if strings.Contains(content, reference) {
+					hits[reference] = append(hits[reference], relativePath)
+				}
+			}
+		}
+
+		issues := make([]string, 0, len(hits)+len(mismatches))
+		for _, reference := range forbidden {
+			if paths := hits[reference]; len(paths) > 0 {
+				issues = append(issues, fmt.Sprintf("forbidden reference %q remains in %s", reference, strings.Join(paths, ", ")))
+			}
+		}
+		for _, mismatch := range mismatches {
+			issues = append(issues, fmt.Sprintf("step %q: %s", mismatch.StepID, mismatch.Reason))
+		}
+		result := map[string]interface{}{
+			"passed":                        len(issues) == 0,
+			"plan_structure":                "passed",
+			"scanned_artifacts":             scanned,
+			"forbidden_reference_hits":      hits,
+			"context_dependency_mismatches": mismatches,
+			"issues":                        issues,
+		}
+		encoded, err := json.Marshal(result)
+		if err != nil {
+			return "", err
+		}
+		return string(encoded), nil
+	}
+}
+
+func stringSliceToolArg(raw interface{}, name string) ([]string, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	items, ok := raw.([]interface{})
+	if !ok {
+		if typed, typedOK := raw.([]string); typedOK {
+			return normalizedStringSet(typed), nil
+		}
+		return nil, fmt.Errorf("%s must be an array of strings", name)
+	}
+	values := make([]string, 0, len(items))
+	for _, item := range items {
+		value, ok := item.(string)
+		if !ok || strings.TrimSpace(value) == "" {
+			return nil, fmt.Errorf("%s must contain only non-empty strings", name)
+		}
+		values = append(values, value)
+	}
+	return normalizedStringSet(values), nil
+}
+
+func stringSliceMapToolArg(raw interface{}, name string) (map[string][]string, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	object, ok := raw.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("%s must be an object keyed by step id", name)
+	}
+	values := make(map[string][]string, len(object))
+	for rawStepID, rawDependencies := range object {
+		stepID := strings.TrimSpace(rawStepID)
+		if stepID == "" {
+			return nil, fmt.Errorf("%s contains an empty step id", name)
+		}
+		dependencies, err := stringSliceToolArg(rawDependencies, name+"["+stepID+"]")
+		if err != nil {
+			return nil, err
+		}
+		values[stepID] = dependencies
+	}
+	return values, nil
+}
+
+func normalizedStringSet(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, raw := range values {
+		value := strings.TrimSpace(raw)
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func planChangeEqualStringSlices(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func withPlanMutationWriteAccess(workspacePath string, writeFile func(context.Context, string, string) error) func(context.Context, string, string) error {

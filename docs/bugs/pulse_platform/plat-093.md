@@ -5,8 +5,8 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `implemented` — pre-run decision drain shipped; runtime reverify pending |
-| Last synchronized | `2026-08-12` |
+| Ticket state | `implemented` — pre-run drain and structural-impact contract shipped; runtime reverify pending |
+| Last synchronized | `2026-08-20` |
 
 - **Priority:** P1 — the operator's decision lands a full cycle late, and for a
   cadence decision that means the problem they asked to fix repeats every run
@@ -85,6 +85,62 @@ Safety boundaries, all pinned by tests:
   applied to a plan that has moved. 21 of the 26 carry a `run_id`; the 5 that
   do not have no staleness anchor and should be read rather than auto-applied.
 
+The applied action and its later effect are now one visible lifecycle rather
+than two unrelated records. `mark_human_input_consumed.outcome_summary` remains
+the authority for **what action was taken**. When that action has a defensible
+metric, the same agent also opens a `pulse_interventions` record linked by the
+decision's `human_input_id`, with an honest baseline, expected direction,
+checkpoint, and evidence threshold. It starts as awaiting evidence or
+measuring; application never claims success. Later Pulse passes append
+observations and an assessment after comparable evidence matures. The Pulse UI
+joins those existing records and shows `decision → action taken → impact`,
+including improved, unchanged, regressed, inconclusive, or confounded. Pure
+rejections and administrative changes do not get invented metrics.
+
+## 2026-08-20 live regression: safe proof was mistaken for future evidence
+
+Social Media exposed a narrower but expensive hole in the original contract.
+The operator approved `ops-decision-flatten-execution-pipeline`, which replaced
+a predetermined outer `todo_task` with explicit ordered steps. The pre-run
+drain read the answer but left it unapplied because a **non-producing structural
+fixture** had not run. It then allowed the old outer orchestrator to execute.
+That run spent roughly $94 of its $112 total on orchestration overhead before
+the topology was repaired later by an unrelated workflow-builder turn.
+
+The deferral was wrong. A static check, dry-run, schema validator, plan review,
+or non-producing fixture is proof the pre-run agent can perform itself. It is
+not future evidence. Only proof that inherently requires a production run or an
+external side effect may be deferred.
+
+The same repair also revealed why "change the next-step links" is insufficient
+for structural decisions. The flattened Social Media plan still retained old
+nested allocator paths, incomplete `context_dependencies`, and an obsolete step
+id in promoted consumers. Because iteration folders are reused, those stale
+references can bind a new flattened run to artifacts from the old nested run.
+
+`scheduledDecisionDrainTurn` now requires a structural impact audit for changes
+to topology, routes, ids, dependencies, paths, or orchestration shape:
+
+- migrate **control flow and data flow** together;
+- declare exact `context_dependencies` for promoted consumers;
+- update step config, evaluation, report, schedule, validation, and prompt
+  references;
+- search for removed step ids and obsolete path prefixes;
+- test old/new artifact coexistence so stale output cannot win;
+- re-read and validate the resulting plan; and
+- leave the decision unconsumed if any unexplained old reference or failed
+  proof remains.
+
+The agent now closes that audit with `validate_plan_change`. This is a typed,
+non-producing validator, not a Go design heuristic: the agent declares the
+removed identifiers/path prefixes and the exact dependency contract it intends,
+then the validator proves those invariants against the persisted plan, step
+config, evaluation, report, DB contract, workflow config, soul, global learning,
+and KB index. It also runs the ordinary plan graph validator. The receipt fails
+when a forbidden reference remains, a changed step is absent, or its dependency
+set differs. It does not decide which topology is best and does not replace a
+decision-specific fixture.
+
 ## Not fixed here
 
 - The 26 existing stranded decisions are still stranded. The next scheduled run
@@ -97,10 +153,14 @@ Safety boundaries, all pinned by tests:
 ## Verification
 
 - `go build ./...` clean.
-- Four new tests (`plat093_decision_drain_preflight_test.go`): no turn when
+- Decision-drain tests (`plat093_decision_drain_preflight_test.go`): no turn when
   nothing is pending; the operator's selected option travels with each id; the
   prompt forbids running the workflow and forbids consuming what was not
-  applied; and the turn sits after upgrades and before schedule messages.
+  applied; the turn sits after upgrades and before schedule messages; and safe
+  structural proof is performed during application rather than deferred.
+- Two typed-validator tests (`plan_change_validation_test.go`): a coherent
+  migration produces `passed=true`; stale references plus dependency drift
+  produce a failing receipt with each concrete mismatch.
 - Full suite: 24 failures, all accounted for (22 known baseline + 2 from
   another session's in-flight work), zero unexplained.
 - **Not yet reverified live** — needs a restart, then a scheduled run on a
@@ -113,3 +173,5 @@ Safety boundaries, all pinned by tests:
 - A drain that cannot apply a decision leaves it with a stated reason and never
   fails the run.
 - An ordinary run with no answered decisions runs no extra turn.
+- Applied decisions show the truthful action immediately and, when measurable,
+  show an awaiting-evidence checkpoint followed by Pulse's latest assessment.

@@ -496,7 +496,7 @@ export function PulseWorkspace({
         )}
       </section>
 
-      <ReportHumanInputPanel workspacePath={workspacePath} contentMode="pending" />
+      <ReportHumanInputPanel workspacePath={workspacePath} contentMode="all" providedImpact={impact} />
 
       <section className="overflow-hidden rounded-xl border bg-background">
         <div className="border-b px-4 py-3">
