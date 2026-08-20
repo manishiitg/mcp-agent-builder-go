@@ -34,19 +34,41 @@ var supportedLLMProviders = []string{
 	"pi-cli",
 }
 
+// deprecatedAPIModelProviders were deprecated 2026-08-20: see
+// docs/design/api_transport_vs_pi_tradeoff.md. Direct API transport
+// duplicates per-provider tool-calling translation that MCP already solves
+// once (pi and the other coding CLIs); the day's own certification work
+// showed the duplication wasn't keeping pace (azure: 0 test files, minimax:
+// no live E2E — though minimax itself is an audio_provider here, not one of
+// these five, and is unaffected).
+//
+// Soft deprecation, not removal: `Deprecated: true` hides these from new
+// setup in the LLM config modal (LLMConfigurationModal.tsx already filters on
+// this field); an existing configuration keeps working exactly as before.
+var deprecatedAPIModelProviders = map[string]bool{
+	"openai":    true,
+	"anthropic": true,
+	"vertex":    true,
+	"bedrock":   true,
+	"azure":     true,
+}
+
 func isDeprecatedLLMProvider(provider string) bool {
-	_ = strings.ToLower(strings.TrimSpace(provider))
-	return false
+	return deprecatedAPIModelProviders[strings.ToLower(strings.TrimSpace(provider))]
 }
 
 func providerDeprecationReason(provider string) string {
-	_ = strings.ToLower(strings.TrimSpace(provider))
-	return ""
+	if !isDeprecatedLLMProvider(provider) {
+		return ""
+	}
+	return "Direct API transport is being phased out in favor of MCP-routed coding CLIs. See docs/design/api_transport_vs_pi_tradeoff.md. Existing configurations remain runnable."
 }
 
 func providerReplacementProvider(provider string) string {
-	_ = strings.ToLower(strings.TrimSpace(provider))
-	return ""
+	if !isDeprecatedLLMProvider(provider) {
+		return ""
+	}
+	return "pi-cli"
 }
 
 func isPublishedLLMProviderAllowed(provider string) bool {

@@ -295,3 +295,84 @@ func TestPiCLIIsPublishedAsCodingAgent(t *testing.T) {
 		t.Fatalf("options = %v, want OpenRouter MiniMax top model", candidate.Options)
 	}
 }
+
+// TestProviderManifestMarksDeprecatedAPIModelProviders is the regression for
+// the 2026-08-20 direct-API-transport deprecation
+// (docs/design/api_transport_vs_pi_tradeoff.md). Uses the real HTTP handler,
+// matching TestProviderManifestMarksDeprecatedCodingAgents's pattern.
+func TestProviderManifestMarksDeprecatedAPIModelProviders(t *testing.T) {
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+	t.Setenv("SUPPORTED_LLM_PROVIDERS", "openai,anthropic,vertex,bedrock,azure,minimax,pi-cli")
+	t.Setenv("PATH", t.TempDir())
+
+	api := &StreamingAPI{}
+	req := httptest.NewRequest(http.MethodGet, "/api/llm-config/providers", nil)
+	rec := httptest.NewRecorder()
+	api.handleGetProviderManifest(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("manifest status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Providers []struct {
+			ID                  string `json:"id"`
+			Deprecated          bool   `json:"deprecated"`
+			DeprecationReason   string `json:"deprecation_reason"`
+			ReplacementProvider string `json:"replacement_provider"`
+			IntegrationKind     string `json:"integration_kind"`
+		} `json:"providers"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode manifest: %v", err)
+	}
+
+	byID := map[string]struct {
+		Deprecated          bool
+		DeprecationReason   string
+		ReplacementProvider string
+		IntegrationKind     string
+	}{}
+	for _, p := range resp.Providers {
+		byID[p.ID] = struct {
+			Deprecated          bool
+			DeprecationReason   string
+			ReplacementProvider string
+			IntegrationKind     string
+		}{p.Deprecated, p.DeprecationReason, p.ReplacementProvider, p.IntegrationKind}
+	}
+
+	for _, id := range []string{"openai", "anthropic", "vertex", "bedrock", "azure"} {
+		got, ok := byID[id]
+		if !ok {
+			t.Fatalf("%s missing from manifest entirely", id)
+		}
+		if !got.Deprecated {
+			t.Errorf("%s deprecated = false, want true", id)
+		}
+		if got.ReplacementProvider != "pi-cli" {
+			t.Errorf("%s replacement_provider = %q, want %q", id, got.ReplacementProvider, "pi-cli")
+		}
+		if strings.TrimSpace(got.DeprecationReason) == "" {
+			t.Errorf("%s deprecation_reason is empty", id)
+		}
+	}
+
+	// minimax shares this deprecation set's shape of concern (a direct-API
+	// provider) but is integration_kind=audio_provider here, a different
+	// capability (speech/music), not one of the five text-LLM api_model
+	// providers this deprecation targets. Confirming it is untouched guards
+	// against a future edit widening the deprecated set by copy-paste.
+	if got, ok := byID["minimax"]; ok {
+		if got.IntegrationKind != "audio_provider" {
+			t.Fatalf("minimax integration_kind = %q, want %q (test assumption stale)", got.IntegrationKind, "audio_provider")
+		}
+		if got.Deprecated {
+			t.Error("minimax (audio_provider) unexpectedly marked deprecated")
+		}
+	}
+
+	// pi-cli is the replacement, not another casualty.
+	if got, ok := byID["pi-cli"]; ok && got.Deprecated {
+		t.Error("pi-cli unexpectedly marked deprecated")
+	}
+}

@@ -19,7 +19,18 @@ type PublishedLLMMetadataSnapshot = {
 
 const DEFAULT_CHAT_PROVIDER: LLMProvider = 'codex-cli'
 const DEFAULT_CHAT_MODEL = 'codex-cli'
-const FRONTEND_DEPRECATED_PROVIDER_IDS = new Set<string>(['agy-cli'])
+// 2026-08-20: direct API transport (openai/anthropic/vertex/bedrock/azure) --
+// see docs/design/api_transport_vs_pi_tradeoff.md. minimax is deliberately
+// excluded: it is an audio_provider here (speech/music), not one of these
+// five text-LLM api_model providers.
+const FRONTEND_DEPRECATED_PROVIDER_IDS = new Set<string>([
+  'agy-cli',
+  'openai',
+  'anthropic',
+  'vertex',
+  'bedrock',
+  'azure',
+])
 const MASKED_PROVIDER_KEY_PREFIX = '********'
 const SUPPORTED_PROVIDERS_FALLBACK: LLMProvider[] = [
   'bedrock',
