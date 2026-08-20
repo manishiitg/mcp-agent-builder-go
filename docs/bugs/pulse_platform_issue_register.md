@@ -172,6 +172,13 @@ Rules:
    The index is synchronized once at handoff, review, or completion—not on every
    working update. Create another incident document only when large raw
    evidence would make the ticket fragment unreadable.
+6. When new evidence changes a ticket's diagnosis, scope, or implementation
+   choice, preserve a **Decision history** in the ticket fragment. Each entry
+   records the date, the decision made, the evidence/reason, and whether it
+   supersedes an earlier belief. Do not silently rewrite the old conclusion:
+   future reviewers need to distinguish an abandoned approach from a regression
+   of the current one. Routine code edits that do not change the reasoning do
+   not need another entry.
 
 ### Active ownership lanes
 

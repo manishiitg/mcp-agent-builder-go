@@ -69,6 +69,16 @@ schedule message.
 Ordering is deliberate — an upgrade can rewrite the very artifacts a decision
 edits, so upgrades go first.
 
+## Decision history
+
+| Date | Decision | Evidence and reason |
+|---|---|---|
+| 2026-08-18 | Let the post-run Review+Fix pass consume answered decisions. | This closed the original PLAT-092 loop, but runtime evidence showed the decision only affected the following run; the run it was intended to change had already used the old behavior. Superseded for application timing. |
+| 2026-08-20 | Add an agentic pre-run decision drain after contract upgrades and before schedule messages. Do not classify decisions mechanically in Go. | Decision context is prose and the required typed workflow tools already belong to the agent. Trying each answered decision is safer than inventing an `apply_timing` field or keyword rules. This remains the current ownership model. |
+| 2026-08-20 | Treat safe static proof as part of application, not future evidence. | Social Media's approved flattening was deferred because a non-producing fixture had not run, causing the expensive old topology to execute again. Only proof requiring a producing run or external side effect may be deferred. |
+| 2026-08-20 | Require `validate_plan_change` after structural decisions. | The first flattening repair changed control flow but left stale allocator paths, incomplete dependencies, and obsolete identifiers. The agent still chooses the design; the typed validator proves the invariants it declares. |
+| 2026-08-20 | Link measurable applied decisions to Pulse impact using `human_input_id`, and show the joined lifecycle in the Pulse UI. | `outcome_summary` already records the action and the impact ledger already records interventions and assessments. Joining those canonical records avoids a second UI-only status and lets users see decision → action → later measured result. Rejections and non-measurable administrative changes do not fabricate impact. |
+
 Safety boundaries, all pinned by tests:
 
 - **It cannot cost the run.** If the drain fails to start or fails to settle,
