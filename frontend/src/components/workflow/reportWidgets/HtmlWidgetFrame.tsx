@@ -249,33 +249,39 @@ function HtmlReportFrameComponent({
     if (!autoHeight) return
     const frame = iframeRef.current
     const doc = frame?.contentDocument
-    if (!frame || !doc) return
-    // `documentElement.scrollHeight` can never report LESS than the iframe's own
-    // viewport height — the root element fills the viewport by definition. So
-    // measuring it while the frame is already tall reads back the frame's own
-    // height, and the result ratchets: once a report is measured tall (a wide
-    // table before layout settles, a long panel that is later hidden, content
-    // that shrinks after data loads) the frame stays that tall forever, leaving
-    // a long empty scroll below the real content that no report author can fix
-    // from inside their HTML.
+    if (!frame || !doc || !doc.body) return
+    // PLAT-160-adjacent. `documentElement.scrollHeight`/`body.scrollHeight` can
+    // never report LESS than the iframe's own viewport height — the root
+    // element fills the viewport by definition — so measuring while the frame
+    // is already tall reads back the frame's own height and ratchets upward
+    // forever. The previous fix collapsed the frame to 0px before measuring to
+    // break that loop, but doing so changes the report's OWN viewport, and any
+    // `vh`-sized content inside it — most concretely a report embedding its
+    // own nested iframe sized with `min-height: calc(100vh - Npx)` — collapses
+    // along with it. Measured live on salesoutreach's reporting dashboard: its
+    // GTM-strategy tab's nested iframe genuinely renders at ~1884px, but
+    // dropped to ~152px during the collapse window, so the outer frame was
+    // sized to a small fraction of the real content with nothing left to
+    // scroll to reach the rest — not a slow report, an invisible one.
     //
-    // Collapsing the frame before measuring breaks that feedback loop: the root
-    // element then has no inflated viewport to report, so scrollHeight reflects
-    // real content and the frame is free to shrink as well as grow. The collapse
-    // and the re-set happen in the same synchronous block, so the browser never
-    // paints the intermediate state and there is no flicker.
+    // Measuring the bottom of each of body's direct children via
+    // getBoundingClientRect instead avoids the viewport-floor problem
+    // entirely — an element's own laid-out position reflects real content,
+    // not the "root fills viewport" guarantee that requires collapsing
+    // anything to sidestep. No frame-height mutation happens before the
+    // measurement, so nothing inside the report ever sees an artificial
+    // viewport change.
+    const scrollY = doc.defaultView?.scrollY ?? 0
+    let maxBottom = 0
+    for (const child of Array.from(doc.body.children)) {
+      const bottom = child.getBoundingClientRect().bottom + scrollY
+      if (bottom > maxBottom) maxBottom = bottom
+    }
+    const content = Math.ceil(maxBottom)
+    if (content <= 0) return
     const previousHeight = frame.style.height
-    frame.style.height = '0px'
-    const content = Math.max(doc.documentElement?.scrollHeight || 0, doc.body?.scrollHeight || 0)
-    if (content <= 0) {
-      frame.style.height = previousHeight
-      return
-    }
     const nextHeight = `${content}px`
-    if (previousHeight === nextHeight) {
-      frame.style.height = previousHeight
-      return
-    }
+    if (previousHeight === nextHeight) return
     // The outer report pane owns scrolling. Let the frame reach its actual content
     // height so an HTML report never creates a second, nested scroll surface.
     debugReportFrame('height changed', frame.title, { from: previousHeight, to: nextHeight })
