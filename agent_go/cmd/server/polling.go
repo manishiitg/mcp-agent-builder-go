@@ -500,6 +500,23 @@ func workflowNameFromWorkspacePath(workspacePath string) string {
 	return parts[len(parts)-1]
 }
 
+// workflowDisplayLabel returns the name a session should present to the user
+// for its workflow — the configured workflow.json label when one is known,
+// the raw workspace-folder name otherwise. A workflow's folder name (its
+// stable identity, e.g. "social-media") and its display label (e.g.
+// "twitter-automation") can differ; using the folder name as the label made
+// the same running session look like a different workflow wherever the UI
+// reads the label instead of the folder name (the Global Activity Monitor
+// pill, in particular).
+func workflowDisplayLabel(workspacePath string, manifest *WorkflowManifest) string {
+	if manifest != nil {
+		if label := strings.TrimSpace(manifest.Label); label != "" {
+			return label
+		}
+	}
+	return workflowNameFromWorkspacePath(workspacePath)
+}
+
 func (api *StreamingAPI) deriveSessionUserInputState(sessionID string) (bool, string, *time.Time, string) {
 	if api == nil || api.eventStore == nil || sessionID == "" {
 		return false, "", nil, ""

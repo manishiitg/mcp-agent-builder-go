@@ -3408,24 +3408,36 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			resolvedWPath = req.SelectedFolder
 			logfWithContext(queryLogCtx.WithWorkflow(resolvedWPath), "[WORKFLOW_PHASE] Using selected_folder as workspace path: %s", resolvedWPath)
 		}
+		var resolvedManifest *WorkflowManifest
+		if resolvedWPath != "" {
+			if manifest, found, mErr := ReadWorkflowManifest(context.Background(), resolvedWPath); mErr == nil && found {
+				resolvedManifest = manifest
+			}
+		}
 		if resolvedWPath != "" {
 			api.activeSessionsMux.Lock()
 			if sess, ok := api.activeSessions[sessionID]; ok {
+				// PLAT-159: WorkflowLabel/PresetName used to get the raw folder
+				// name too, same as WorkflowName. That made the same running
+				// session look like a different workflow wherever the UI reads
+				// the label instead of the folder name (the Global Activity
+				// Monitor pill, in particular) — see workflowDisplayLabel.
 				workflowName := workflowNameFromWorkspacePath(resolvedWPath)
+				displayLabel := workflowDisplayLabel(resolvedWPath, resolvedManifest)
 				sess.PresetQueryID = req.PresetQueryID
 				sess.WorkspacePath = resolvedWPath
 				sess.WorkflowName = workflowName
-				sess.WorkflowLabel = workflowName
-				sess.PresetName = workflowName
+				sess.WorkflowLabel = displayLabel
+				sess.PresetName = displayLabel
 				if workflowPhaseID != "" {
 					sess.CurrentExecutionName = workflowPhaseID
 				}
 			}
 			api.activeSessionsMux.Unlock()
 		}
-		if resolvedWPath != "" {
-			manifest, found, mErr := ReadWorkflowManifest(context.Background(), resolvedWPath)
-			if mErr == nil && found {
+		if resolvedWPath != "" && resolvedManifest != nil {
+			manifest := resolvedManifest
+			{
 				phaseManifestLoaded = true
 				workflowPhaseFolder = resolvedWPath
 				logfWithContext(queryLogCtx.WithWorkflow(resolvedWPath), "[WORKFLOW_PHASE] Loaded config from manifest at %s", resolvedWPath)
