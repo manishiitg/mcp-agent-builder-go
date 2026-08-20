@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `implemented` — the requested live reverify (2026-08-20) found the bug still reproduces, from a THIRD, previously undocumented mechanism; that one is now also gated. Live reverify of this newest fix is itself still pending |
+| Ticket state | `implemented` — live-reverified 2026-08-20 (second attempt). The isSessionMarkedStopped gate holds: no auto-resume/materialize relaunch fired on a real stop, the in-flight turn cancelled cleanly, nothing ran afterward |
 | Last synchronized | `2026-08-20` |
 
 - **Priority:** P1 — this is not cosmetic. A stopped schedule can continue
@@ -257,3 +257,38 @@ the shape of an explicit Resume click.
 - Live reverify of *this* fix — stop a real schedule mid-sequence again and
   confirm no tmux relaunch happens — is itself still outstanding, same as
   every prior round of this ticket.
+
+## Live reverify, second attempt (2026-08-20): clean
+
+After the `isSessionMarkedStopped` gate shipped, the user stopped a second
+real schedule (`schedule-manual--46a9b350_1787203163133842000`, `upwork`
+group `toptal-bid`) mid-turn — two Stop clicks, one second apart, while its
+one in-flight query was still running. This time, verified directly from
+`server_debug.log`, not just the UI:
+
+```
+10:49:37  first Stop click. Agent execution context canceled. Session ->
+          stopped. 0 background agents to cancel (none running yet).
+10:49:39  second Stop click. Same result. Workshop sessions closed.
+10:49:47  the in-flight Claude Code tmux is discarded on its own:
+          "did not return to prompt after context cancellation: context
+          deadline exceeded". COMPLETION_TRACE records outcome=error,
+          elapsed=24.366s. StreamWithEvents completes with that error.
+10:49:47  [COMPLETION] Preserving terminal status "stopped".
+```
+
+No `[CHAT_HISTORY] Active-tab auto-resume` or `Materialize guard` line
+appears anywhere in this session's trace — the exact lines that fired and
+relaunched a live tmux in the first (upwork daily-bid) reproduction. Nothing
+ran after the stop. The UI showed the same thing independently: "Context
+cancelled ... conversation cancelled after LLM generation: context
+canceled," a real, honest cancellation instead of a silently-completed
+turn.
+
+This case didn't have a queued `message_sequence` next item racing the stop
+(it was a single-message manual run), so it's a narrower confirmation than
+the original incident — it proves the turn-in-flight cancellation path and
+the relaunch guard both hold, not that every possible race this ticket has
+ever described is closed. Still, it's the first time in this ticket's
+history that a live stop-mid-run has been reverified clean rather than
+reproducing.
