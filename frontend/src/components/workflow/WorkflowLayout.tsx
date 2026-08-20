@@ -29,6 +29,7 @@ import {
   chatHistoryUsesTerminalRestore,
   chatHistoryWorkshopModeLabel,
 } from '../PreviousChatHistoryPanel'
+import { chatHistoryOpenDisposition } from '../../utils/chatHistoryOpenDisposition'
 import {
   DEFAULT_REPORT_PREVIEW_DEVICE,
   REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT,
@@ -225,6 +226,59 @@ const WorkflowPreviousChatsPanel: React.FC<{
   const addToast = useChatStore(state => state.addToast)
 
   const handleResumePreviousChat = useCallback(async (session: ChatHistorySession) => {
+    const disposition = chatHistoryOpenDisposition(session)
+    if (disposition === 'read-only-schedule') {
+      const chatStore = useChatStore.getState()
+      const existingTab = Object.values(chatStore.chatTabs).find(tab =>
+        tab.metadata?.mode === 'workflow' &&
+        tab.metadata?.isScheduledRun === true &&
+        tab.sessionId === session.session_id
+      )
+      const scheduleMetadata: NonNullable<ChatTab['metadata']> = {
+        mode: 'workflow',
+        presetQueryId: activePresetId || undefined,
+        isViewOnly: true,
+        isScheduledRun: true,
+        scheduledJobName: 'Schedule',
+        readOnlyRestoredAt: Date.now(),
+        userInteractiveContinuation: false,
+      }
+      const targetTabId = existingTab?.tabId || await chatStore.createChatTab('Schedule', scheduleMetadata)
+
+      if (existingTab) chatStore.setTabMetadata(targetTabId, scheduleMetadata)
+      chatStore.updateTabSessionId(targetTabId, session.session_id)
+      chatStore.setTabViewMode(targetTabId, 'formatted')
+      chatStore.setTabStreaming(targetTabId, false)
+      chatStore.setTabCompleted(targetTabId, true)
+      chatStore.setTabHasRunningBgAgents(targetTabId, false)
+      chatStore.setTabSyntheticTurn(targetTabId, false)
+      chatStore.setTabCanSteer(targetTabId, false)
+
+      try {
+        const runtime = await hydrateTabEvents(session.session_id, {
+          workspacePath,
+          fallbackToChatHistory: true,
+          preferChatHistory: true,
+        })
+        chatStore.setTabStreaming(targetTabId, runtime.status === 'running')
+        chatStore.setTabCompleted(targetTabId, runtime.status !== 'running')
+        chatStore.setTabHasRunningBgAgents(targetTabId, runtime.hasRunningBackgroundAgents ?? false)
+        chatStore.setTabSyntheticTurn(targetTabId, runtime.isSyntheticTurn ?? false)
+        chatStore.setTabCanSteer(targetTabId, false)
+      } catch (error) {
+        logger.warn('WorkflowLayout', 'Failed to restore scheduled-run transcript', {
+          sessionId: session.session_id,
+          error,
+        })
+        addToast('Failed to open the saved schedule transcript', 'error')
+        return
+      }
+
+      activateTab(targetTabId)
+      setShowChatArea(true)
+      return
+    }
+
     if (!activeTabId) {
       addToast('No active automation chat to resume in', 'error')
       return
@@ -268,8 +322,8 @@ const WorkflowPreviousChatsPanel: React.FC<{
     chatStore.updateTabSessionId(targetTabId, session.session_id)
 
     const path = chatHistoryConversationPath(session)
-    const useTerminalRestore = chatHistoryUsesTerminalRestore(session)
-    const useNativeResume = chatHistorySupportsNativeResume(session)
+    const useTerminalRestore = disposition === 'interactive-transport' && chatHistoryUsesTerminalRestore(session)
+    const useNativeResume = disposition === 'interactive-transport' && chatHistorySupportsNativeResume(session)
     const existingContext = useChatStore.getState().getTabConfig(targetTabId)?.fileContext || []
     const shouldAttachFileFallback = !useTerminalRestore && !useNativeResume
     const nextFileContext = shouldAttachFileFallback
@@ -311,7 +365,7 @@ const WorkflowPreviousChatsPanel: React.FC<{
       workspacePath={workspacePath}
       activeSessionId={activeSessionId ?? undefined}
       title="Previous automation chats"
-      actionLabel="Resume"
+      actionLabel="Open"
       emptyText="No previous automation chats yet."
       onHasChatsChange={onHasChatsChange}
       onSelectSession={handleResumePreviousChat}

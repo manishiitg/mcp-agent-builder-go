@@ -208,10 +208,13 @@ export function ReportHumanInputPanel({
   const answerInput = async (input: ReportHumanInput) => {
     const draft = drafts[input.id] || { selectedOptionId: '', note: '' }
     const selectedOptionId = draft.selectedOptionId || ''
-    const note = draft.note.trim()
+    // Option-backed decisions are deliberately closed-choice. Free text is
+    // reserved for questions that have no options at all, so it cannot become
+    // an implicit fourth answer that bypasses the reviewed decision contract.
+    const note = input.options.length === 0 && input.allow_free_text ? draft.note.trim() : ''
     if (!selectedOptionId && !note) {
       const message = input.options.length > 0
-        ? (input.allow_free_text ? 'Choose an option or write your own answer.' : 'Choose an option before answering.')
+        ? 'Choose an option before answering.'
         : 'Write an answer before submitting.'
       useChatStore.getState().addToast(message, 'error')
       return
@@ -518,11 +521,11 @@ export function ReportHumanInputPanel({
                   Selected: {input.options.find(option => option.id === draft.selectedOptionId)?.title || draft.selectedOptionId}. Save the answer to confirm it.
                 </div>
               )}
-              {input.allow_free_text && (
+              {input.allow_free_text && input.options.length === 0 && (
                 <textarea
                   value={draft.note}
                   onChange={event => updateDraft(input.id, { note: event.target.value })}
-                  placeholder={input.options.length > 0 ? 'Write a different answer or add a note' : 'Write your answer'}
+                  placeholder="Write your answer"
                   className="mt-3 min-h-20 w-full resize-y rounded-md border border-border bg-background px-2.5 py-2 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-cyan-400"
                 />
               )}
@@ -602,7 +605,9 @@ export function ReportHumanInputPanel({
                 <button
                   type="button"
                   onClick={() => void answerInput(input)}
-                  disabled={busy}
+                  disabled={busy || (input.options.length > 0
+                    ? !draft.selectedOptionId
+                    : !draft.note.trim())}
                   className="inline-flex h-8 items-center gap-1.5 rounded-md border border-cyan-400/40 bg-cyan-400/15 px-3 text-xs font-semibold text-cyan-100 hover:bg-cyan-400/25 disabled:opacity-50"
                 >
                   {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}

@@ -8,6 +8,7 @@ import {
   type ChatHistorySession,
 } from '../services/api-types'
 import { useChatStore } from '../stores/useChatStore'
+import { isScheduledChatHistorySession } from '../utils/chatHistoryOpenDisposition'
 import { ConversationMarkdownRenderer } from './ui/MarkdownRenderer'
 import {
   CHAT_HISTORY_CLEANUP_AGE_OPTIONS,
@@ -167,7 +168,7 @@ const isSessionOlderThanDays = (session: ChatHistorySession, days: number): bool
 }
 
 const getChatKind = (session: ChatHistorySession): PreviousChatKind => {
-  if (session.session_id.startsWith('schedule-') || session.session_id.startsWith('sched_')) return 'schedule'
+  if (isScheduledChatHistorySession(session)) return 'schedule'
   if (session.session_id.startsWith('bot-')) return 'bot'
   return 'chat'
 }

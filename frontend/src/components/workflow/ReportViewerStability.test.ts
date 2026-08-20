@@ -52,4 +52,11 @@ describe('open report stability', () => {
     expect(panel).toContain('loadInputs(undefined, false)')
     expect(panel).toContain('if (showLoading) setLoading(true)')
   })
+
+  it('does not offer an arbitrary fourth answer for option-backed decisions', () => {
+    const panel = readFileSync('src/components/workflow/ReportHumanInputPanel.tsx', 'utf8')
+
+    expect(panel).toContain('input.allow_free_text && input.options.length === 0')
+    expect(panel).not.toContain('Write a different answer or add a note')
+  })
 })

@@ -4,6 +4,7 @@ import { agentApi } from '../services/api'
 import type { ChatHistoryConversation, ChatHistoryMessage, PollingEvent } from '../services/api-types'
 import { truncateTabTitle } from './textUtils'
 import axios from 'axios'
+import { isProviderTranscriptArtifact } from './restoredConversationFilter'
 
 const TAG = '[SessionRestore]'
 
@@ -293,10 +294,7 @@ export function conversationToRestoredEvents(conversation: ChatHistoryConversati
         turn,
       }, eventIndexBase + events.length))
     } else if (role === 'ai' || role === 'assistant') {
-      const normalized = content.trim().toLowerCase()
-      if (normalized.startsWith('[previous tool call:') || normalized.startsWith('[previous tool result:')) {
-        continue
-      }
+      if (isProviderTranscriptArtifact(content)) continue
       // Coding providers persist commentary and tool markers as separate AI
       // messages. The final ordinary AI message before the next user message
       // is the completed reply that belongs in the resumed chat.
