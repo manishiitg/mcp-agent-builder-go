@@ -15,6 +15,7 @@ import {
 import { Button } from '../ui/Button'
 import { useLLMStore } from '../../stores'
 import { llmConfigService, type ModelMetadata, type ProviderManifestEntry } from '../../services/llm-config-api'
+import { nonDeprecatedProviders } from '../../utils/providerCatalogFilter'
 import type { SavedLLM } from '../../services/api-types'
 import {
   getProviderDisplayInfo,
@@ -155,16 +156,17 @@ export function LibraryTab({ providers, onSelectProvider, isProviderLocked }: Li
   }
 
   const normalizedSearch = searchQuery.trim().toLowerCase()
+  const visibleProviders = useMemo(() => nonDeprecatedProviders(providers), [providers])
   const filteredProviders = useMemo(() => {
-    if (!normalizedSearch) return providers
-    return providers.filter(provider => [
+    if (!normalizedSearch) return visibleProviders
+    return visibleProviders.filter(provider => [
       provider.display_name,
       provider.id,
       provider.description,
       provider.default_model_id,
       providerTierSummary(provider),
     ].some(value => value?.toLowerCase().includes(normalizedSearch)))
-  }, [normalizedSearch, providers])
+  }, [normalizedSearch, visibleProviders])
   const filteredSavedLLMs = useMemo(() => {
     if (!normalizedSearch) return savedLLMs
     return savedLLMs.filter(llm => [llm.name, llm.provider, llm.model_id]
