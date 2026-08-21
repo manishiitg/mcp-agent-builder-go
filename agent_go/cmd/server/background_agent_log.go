@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -51,6 +53,53 @@ type BackgroundAgentLogEntry struct {
 	StartedAt         string `json:"started_at,omitempty"`
 	CompletedAt       string `json:"completed_at,omitempty"`
 	UpdatedAt         string `json:"updated_at"`
+	// TranscriptPath and TranscriptStatus are PLAT-164: a reference to this
+	// agent's durable structured transcript (see pkg/orchestrator/events'
+	// BackgroundAgentTranscriptPath), and whether writing it actually
+	// succeeded. TranscriptStatus is the visible signal requirement 5 asks
+	// for — a write failure must show up here rather than this row silently
+	// implying a fully auditable transcript exists just because the agent
+	// itself completed.
+	TranscriptPath   string `json:"transcript_path,omitempty"`
+	TranscriptStatus string `json:"transcript_status,omitempty"`
+}
+
+// ensureBackgroundAgentLogColumns adds the PLAT-164 transcript-reference
+// columns to background_agent_log for databases created before this ticket.
+// CREATE TABLE IF NOT EXISTS does not retroactively add columns to an
+// existing table, so this mirrors ensureReportHumanInputColumn's
+// PRAGMA-table_info-then-ALTER-TABLE pattern.
+func ensureBackgroundAgentLogColumns(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(background_agent_log)`)
+	if err != nil {
+		return err
+	}
+	cols := map[string]bool{}
+	for rows.Next() {
+		var cid, notNull, pkIndex int
+		var name, colType string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultValue, &pkIndex); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		cols[name] = true
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, col := range []string{"transcript_path", "transcript_status"} {
+		if cols[col] {
+			continue
+		}
+		if _, err := db.ExecContext(ctx, fmt.Sprintf(`ALTER TABLE background_agent_log ADD COLUMN %s TEXT NOT NULL DEFAULT ''`, col)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // backgroundAgentLogWorkspacePath resolves which workflow's database a
@@ -133,6 +182,39 @@ func (api *StreamingAPI) recordBackgroundAgentLogCompleted(sessionID, agentID, n
 	}
 }
 
+// recordBackgroundAgentTranscriptPath durably records a background agent's
+// transcript reference (PLAT-164 requirement 4) and whether persisting it
+// succeeded (requirement 5). Best-effort/swallowed on write failure, same
+// rationale as recordBackgroundAgentLogStarted: this is itself an
+// observability record, not a gate on the agent it describes. Callers pass
+// status="ok" on a successful write or a short "error: ..." string
+// otherwise — never leave it implying success by omission.
+func (api *StreamingAPI) recordBackgroundAgentTranscriptPath(sessionID, agentID, transcriptPath, status string) {
+	workspacePath := api.backgroundAgentLogWorkspacePath(sessionID)
+	if workspacePath == "" {
+		return
+	}
+	ctx := context.Background()
+	_, db, err := openPulseModuleStateDB(ctx, workspacePath, true)
+	if err != nil || db == nil {
+		if err != nil {
+			log.Printf("[BG_AGENT_LOG] failed to open db for %s: %v", workspacePath, err)
+		}
+		return
+	}
+	defer db.Close()
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := db.ExecContext(ctx, `INSERT INTO background_agent_log
+		(workspace_path, session_id, agent_id, status, transcript_path, transcript_status, updated_at)
+		VALUES (?, ?, ?, 'running', ?, ?, ?)
+		ON CONFLICT(workspace_path, session_id, agent_id) DO UPDATE SET
+			transcript_path=excluded.transcript_path, transcript_status=excluded.transcript_status, updated_at=excluded.updated_at`,
+		workspacePath, sessionID, agentID, transcriptPath, status, now,
+	); err != nil {
+		log.Printf("[BG_AGENT_LOG] failed to record transcript reference for session=%s agent=%s: %v", sessionID, agentID, err)
+	}
+}
+
 // backgroundAgentLogForSession reads every background agent durably recorded
 // for one session, oldest first. Used to answer "what did this Pulse run's
 // (or workflow run's) background agents actually do" without depending on
@@ -149,11 +231,11 @@ func backgroundAgentLogForSession(ctx context.Context, workspacePath, sessionID 
 	defer db.Close()
 
 	rows, err := db.QueryContext(ctx, `SELECT workspace_path, session_id, agent_id, name, kind, parent_execution_id,
-		status, result, error, duration, started_at, completed_at, updated_at
+		status, result, error, duration, started_at, completed_at, updated_at, transcript_path, transcript_status
 		FROM background_agent_log WHERE workspace_path = ? AND session_id = ?
 		ORDER BY started_at ASC, updated_at ASC`, workspacePath, sessionID)
 	if err != nil {
-		if isMissingTableError(err) {
+		if isMissingTableError(err) || isMissingColumnError(err) {
 			return nil, nil
 		}
 		return nil, err
@@ -165,7 +247,7 @@ func backgroundAgentLogForSession(ctx context.Context, workspacePath, sessionID 
 		var entry BackgroundAgentLogEntry
 		if err := rows.Scan(&entry.WorkspacePath, &entry.SessionID, &entry.AgentID, &entry.Name, &entry.Kind,
 			&entry.ParentExecutionID, &entry.Status, &entry.Result, &entry.Error, &entry.Duration,
-			&entry.StartedAt, &entry.CompletedAt, &entry.UpdatedAt); err != nil {
+			&entry.StartedAt, &entry.CompletedAt, &entry.UpdatedAt, &entry.TranscriptPath, &entry.TranscriptStatus); err != nil {
 			return nil, err
 		}
 		out = append(out, entry)
@@ -175,4 +257,13 @@ func backgroundAgentLogForSession(ctx context.Context, workspacePath, sessionID 
 
 func isMissingTableError(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "no such table")
+}
+
+// isMissingColumnError guards backgroundAgentLogForSession's read path,
+// which opens with create=false and so does not run
+// ensureBackgroundAgentLogColumns. A workspace whose database predates the
+// PLAT-164 transcript columns and has had no write since (which would have
+// migrated it) should read back as "no rows" rather than error.
+func isMissingColumnError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "no such column")
 }

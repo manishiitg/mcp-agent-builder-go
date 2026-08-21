@@ -801,6 +801,9 @@ func (api *StreamingAPI) emitBackgroundAgentStarted(sessionID, agentID, name, in
 	// PLAT-114: durable record, independent of the 200-event ui_events cap
 	// this same completion is also reported through.
 	api.recordBackgroundAgentLogStarted(sessionID, agentID, name, kind, resolvedParentExecutionID, now)
+	// PLAT-164: durable structured transcript, created before the child's
+	// first provider turn so a setup failure still leaves a diagnostic record.
+	api.createBackgroundAgentTranscript(sessionID, agentID, name, string(kind), resolvedParentExecutionID, now)
 }
 
 // emitBackgroundAgentCompleted reports a background/delegated agent
@@ -824,6 +827,9 @@ func (api *StreamingAPI) emitBackgroundAgentCompleted(sessionID, agentID, name, 
 	// PLAT-114: durable record, independent of the 200-event ui_events cap
 	// this same completion is also reported through.
 	api.recordBackgroundAgentLogCompleted(sessionID, agentID, name, string(kind), status, result, errMsg, duration, now)
+	// PLAT-164: mark the structured transcript terminal exactly once, at the
+	// same point the lifecycle summary above reaches a terminal state.
+	api.finalizeBackgroundAgentTranscript(sessionID, agentID, status, errMsg, now)
 }
 
 func (api *StreamingAPI) backgroundAgentExecutionKind(sessionID, agentID string) orchEvents.ExecutionKind {
@@ -849,6 +855,15 @@ func (api *StreamingAPI) emitBackgroundAgentTerminated(sessionID, agentID, name,
 		ParentExecutionID: api.backfillParentExecutionID(sessionID, agentID, ""),
 	}
 	api.emitTypedBackgroundEvent(sessionID, agentID, string(orchEvents.BackgroundAgentTerminated), "", evt)
+	// PLAT-164: a terminated/canceled agent never reaches
+	// emitBackgroundAgentCompleted, so this is the only terminal signal its
+	// transcript gets. Mark it terminal here rather than leaving it "running"
+	// forever.
+	terminalStatus := status
+	if terminalStatus == "" {
+		terminalStatus = "canceled"
+	}
+	api.finalizeBackgroundAgentTranscript(sessionID, agentID, terminalStatus, "", now)
 }
 
 // emitSyntheticTurnReady notifies the main agent that background work

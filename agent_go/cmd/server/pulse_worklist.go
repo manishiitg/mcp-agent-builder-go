@@ -235,6 +235,9 @@ func ensurePulseModuleStateSchema(ctx context.Context, db *sql.DB) error {
 	if err := ensurePulseModuleStateColumns(ctx, db); err != nil {
 		return err
 	}
+	if err := ensureBackgroundAgentLogColumns(ctx, db); err != nil {
+		return err
+	}
 	if err := migrateMergedStrategicReviewRows(ctx, db); err != nil {
 		return err
 	}
