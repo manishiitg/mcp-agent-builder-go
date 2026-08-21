@@ -79,7 +79,32 @@ Before the first paid generation, give the user at most three viable model
 choices. For each, state in plain language: provider and exact model, why it
 fits the shot, output duration/resolution, live billing unit and rate, planned
 cost, and the maximum cost after the approved retry allowance. Recommend one
-choice; price alone must not override continuity or required control.
+choice. Recommend the least-expensive option that satisfies the shot's hard
+requirements; do not treat a premium tier, a newer version number, or the word
+"cinematic" as a reason by itself. Price must not override a required
+continuity, lip-sync, reference, duration, or resolution capability, but an
+optional quality preference must not silently override the user's budget
+either. State the exact capability that justifies every price increase.
+
+Use this practical routing order after checking the live endpoint schemas:
+
+1. Start with a budget-capable endpoint such as Veo 3.1 Lite when it satisfies
+   the shot's duration, resolution, reference, and synchronized-audio needs.
+2. Move to Kling Standard or Pro only when its structured multi-shot prompts,
+   custom character/object elements, longer take, voice control, or output
+   resolution materially benefits this shot. Try Standard before Pro when its
+   controls are sufficient.
+3. Move to Seedance 2.5 when a 15--30 second continuous take or its large mixed
+   image/video/audio reference set avoids costly seams or continuity failures.
+   Do not use it as the default for ordinary short shots.
+4. Use Veo Fast/Standard, 4K routes, or another premium endpoint only for a
+   requirement the cheaper viable routes cannot meet.
+
+This is a routing heuristic, not a frozen ranking. A recurring character does
+not automatically require Kling, and lip-sync alone does not automatically
+require Kling: compare every current endpoint that supports the approved
+speech design. Read `references/cost-guidance.md` for the maintained comparison
+and recheck all rates before presenting them.
 
 **A dollar total is allowed only when the live billing unit can be mapped to
 the planned output without guessing.** If fal returns `seconds` for the exact
