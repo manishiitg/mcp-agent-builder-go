@@ -259,6 +259,30 @@ func buildReflectionKBSection(in StepReflectionTurnInput) string {
 	b.WriteString("Topic ids: entity-scoped narrative uses the entity slug (`company-acme.md`); a cross-cutting pattern uses `pattern-<slug>`. ")
 	b.WriteString("Write every change with `diff_patch_workspace_file`, including registry updates.\n\n")
 	b.WriteString("Do not write to `knowledgebase/context/` — that store is user-owned.\n\n")
+
+	// ---- Anti-append (PLAT-173). ----
+	// The learnings half of this same turn states these duties at length; the KB
+	// half stated none of them, and the omission produced exactly the failure
+	// they prevent. confida-login's app-structure.md passed every stated
+	// threshold because each survey cycle appended a fresh dated section rather
+	// than correcting the existing one — the step's own flag named the pattern:
+	// "each appending a new dated per-cycle section instead of updating in
+	// place". A step that is only told where to write and what to contribute
+	// has been given no reason to do anything else.
+	b.WriteString("**Update the existing section in place; do not append a new dated one.** Before you write, `cat` and read the whole topic file. ")
+	b.WriteString("If a section already covers what you observed, correct or strengthen it — including replacing a claim this run disproved. ")
+	b.WriteString("Adding a new dated section that restates, contradicts, or supersedes an existing one without reconciling it is the defect: a reader going top-to-bottom lands on the stale claim as if it were current. ")
+	b.WriteString("A date is metadata on an entry (`last verified 2026-07-02`), never the identity of one.\n\n")
+
+	// stores.md told steps that notes "compact themselves when they exceed 20KB
+	// or 30 sections". No such mechanism exists anywhere in the platform: the
+	// post-step KB agent that once could compact is retired for this path, and
+	// /improve-knowledge is a workshop-mode skill nobody triggers per-cycle. A
+	// step told compaction is automatic has a positive reason to keep appending.
+	b.WriteString("**Nothing compacts these files for you.** No automatic pass condenses old sections, and no separate agent cleans up behind this turn — ")
+	b.WriteString("if a file you touch has accumulated near-duplicate sections across runs, fold them into one current entry now, as part of this turn, even when your own addition is small. ")
+	b.WriteString("Demote genuinely superseded point-in-time observations into a `## Historical context` block, keeping their dates, rather than deleting them outright.\n\n")
+
 	b.WriteString("**Your contribution contract:**\n")
 	b.WriteString(strings.TrimSpace(in.KBContribution))
 	b.WriteString("\n\nDo not invent facts this step did not establish; partial coverage beats fabricated coverage.\n\n")
