@@ -42,7 +42,25 @@ the same production.
 
 ## Choose speech deliberately
 
-Classify every spoken beat before selecting a model. When a character or
+When a piece contains people or characters and spoken content, do not infer
+whether they speak. Before selecting a video model, show the user three bounded
+speech-design routes:
+
+1. **Visible native dialogue** — lip-synced performance generated with the
+   video; strongest for character-led scenes, but restricts the model choice
+   and may vary voice/performance between independent clips.
+2. **Off-camera TTS voiceover** — one consistent narrator over non-speaking
+   performances; easiest to time and revise, but the characters do not talk.
+3. **Hybrid** — native dialogue for key character moments and voiceover for
+   B-roll or transitions; expressive and flexible, but more complex to plan,
+   cost, and mix.
+
+Explain the viable model family, performance and lip-sync result, voice
+continuity, cost, and edit complexity for each. Recommend one and obtain the
+user's explicit choice. An endpoint without native audio is a constraint to
+disclose, not permission to silently convert dialogue into narration.
+
+After that decision, classify every spoken beat. When a character or
 presenter visibly speaks, prefer a video endpoint that creates the picture,
 performance, dialogue, and synchronized audio together. Generating a separate
 voice and trying to manufacture lip sync afterward is less reliable. Keep the
@@ -77,10 +95,7 @@ shot. The generation report records whether each clip contains native dialogue,
 ambience/effects, or no usable audio. The render report lists the actual voice,
 music, ambience, effects, and caption sources used in the final export.
 
-If the user has not chosen a material direction, offer at most three viable
-choices, explain the tone and cost consequence, recommend one, and wait for the
-choice before paid generation. Do not ask again about a choice already settled
-in the conversation.
+Do not ask again about a choice already settled in the conversation.
 
 ## Build around real narration timing
 

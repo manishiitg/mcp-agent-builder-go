@@ -79,7 +79,7 @@ func TestShortformStagesPutDirectionAndMeasuredNarrationBeforeShots(t *testing.T
 	}
 
 	lookSound := shortformPipeline.Stages[index["shortform-look-sound"]].Description
-	for _, required := range []string{"Locations and backgrounds", "Wardrobe, props, and continuity", "Lighting and visual palette", "Speech and voices", "Music", "Ambience and sound effects", "Captions", "off-camera voiceover", "visible on-camera dialogue", "synchronized native audio", "Separate TTS is for off-camera voiceover", "Never silently turn"} {
+	for _, required := range []string{"Locations and backgrounds", "Wardrobe, props, and continuity", "Lighting and visual palette", "Speech and voices", "Music", "Ambience and sound effects", "Captions", "BEFORE committing the video model", "visible lip-synced dialogue", "off-camera TTS voiceover", "hybrid with native dialogue", "cost", "edit-complexity tradeoff", "explicit choice", "audio-incapable model silently decide", "synchronized native audio", "Separate TTS is for off-camera voiceover", "Never silently turn"} {
 		if !strings.Contains(lookSound, required) {
 			t.Fatalf("short-form look/sound step is missing %q", required)
 		}

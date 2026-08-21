@@ -141,15 +141,24 @@ model explorer, Google's Gemini API model reference), not from memory:
 - **Native audio**: some video models generate synchronized audio (dialogue,
   ambience, SFX) directly; others produce silent video that needs a separate
   voice/music generation pass (see `fal-ai`'s and `google-ai`'s audio
-  capabilities) plus assembly in `video-editing`. Decide this per shot
+  capabilities) plus assembly in `video-editing`. Before selecting between
+  them for a production with people/characters and spoken content, use
+  `video-look-sound` to present visible native dialogue, off-camera TTS voiceover,
+  and hybrid as explicit user choices. Explain their lip-sync,
+  voice-continuity, cost, model, and edit-complexity tradeoffs. An endpoint
+  without native audio must never silently turn a speaking character into a
+  non-speaking performance with narration. Decide the resulting audio mode per shot
   rather than once for the whole production, since a narrated hook and a
   silent B-roll cutaway may want different models -- but only for shots
   with no recurring character or subject in them. Any shot featuring a
   recurring subject is bound to that subject's committed model and provider
   (see "Keep the whole character arc on one model and provider" in
-  `video-cinematography`); when that model's audio support is wrong for the
-  shot, generate it silent on the committed model and add the audio in
-  `video-editing` rather than switching models for one shot.
+  `video-cinematography`). Confirm audio support before committing that model.
+  If the user later changes an approved recurring character from voiceover to
+  visible dialogue and its committed model cannot produce synchronized speech,
+  revisit the model choice and obtain explicit approval for the continuity,
+  cost, and regeneration consequences; do not manufacture lip sync or silently
+  keep the character mute.
 - **Cost and generation time**: video generation is priced and timed very
   differently from image generation, and cost typically scales with
   duration and resolution. Confirm current per-call pricing before
