@@ -4,7 +4,6 @@ import {
   Copy,
   Check,
   MoreHorizontal,
-  Trash2,
   Activity,
   PlugZap,
   Plug,
@@ -15,7 +14,6 @@ import ConnectionIcon from './ConnectionIcon'
 import HealthBadge from './HealthBadge'
 import ErrorNotice from './ErrorNotice'
 import ToolGroup from './ToolGroup'
-import ConfirmationDialog from '../ui/ConfirmationDialog'
 import {
   connectionsApi,
   ConnectionError,
@@ -32,7 +30,6 @@ interface ConnectionDetailProps {
   isTesting?: boolean
   onConnect: () => void
   onDisconnect: () => void
-  onRemove: () => void
   onTest: () => void
 }
 
@@ -48,7 +45,6 @@ export default function ConnectionDetail({
   isTesting = false,
   onConnect,
   onDisconnect,
-  onRemove,
   onTest,
 }: ConnectionDetailProps) {
   const id = entry?.id ?? connection?.id ?? ''
@@ -68,7 +64,6 @@ export default function ConnectionDetail({
   const [expanded, setExpanded] = useState({ read_only: true, write: true })
   const [copied, setCopied] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
-  const [confirmRemove, setConfirmRemove] = useState(false)
 
   const loadTools = useCallback(async () => {
     if (!id || !isConnected) return
@@ -238,17 +233,6 @@ export default function ConnectionDetail({
                       )}
                       Test connection
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setMenuOpen(false)
-                        setConfirmRemove(true)
-                      }}
-                      className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-red-600 transition-colors hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-                      Remove
-                    </button>
                   </div>
                 </>
               )}
@@ -391,19 +375,6 @@ export default function ConnectionDetail({
           </>
         )}
       </section>
-
-      <ConfirmationDialog
-        isOpen={confirmRemove}
-        onClose={() => setConfirmRemove(false)}
-        onConfirm={() => {
-          setConfirmRemove(false)
-          onRemove()
-        }}
-        title={`Remove ${name}?`}
-        message={`This deletes the saved sign-in and the connection settings for ${name}. Agents will lose access immediately. To sign out but keep the connection, use Disconnect instead.`}
-        confirmText="Remove"
-        type="danger"
-      />
     </div>
   )
 }

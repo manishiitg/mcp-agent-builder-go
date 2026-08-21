@@ -56,7 +56,6 @@ export default function ConnectionsModal({ onClose }: ConnectionsModalProps) {
     loadConnections,
     connect,
     disconnect,
-    remove,
     test,
     clearActionError,
   } = useConnectionsStore()
@@ -273,11 +272,6 @@ export default function ConnectionsModal({ onClose }: ConnectionsModalProps) {
                 isTesting={testingId === detailId}
                 onConnect={() => startConnect(detailId)}
                 onDisconnect={() => disconnect(detailId)}
-                onRemove={() => {
-                  remove(detailId)
-                  setView('list')
-                  setDetailId(null)
-                }}
                 onTest={() => handleTest(detailId)}
               />
             ) : view === 'custom' ? (
@@ -397,7 +391,6 @@ export default function ConnectionsModal({ onClose }: ConnectionsModalProps) {
                       isTesting={testingId === row.id}
                       onConnect={() => startConnect(row.id)}
                       onDisconnect={() => disconnect(row.id)}
-                      onRemove={() => remove(row.id)}
                       onTest={() => handleTest(row.id)}
                       onOpen={() => {
                         setDetailId(row.id)
