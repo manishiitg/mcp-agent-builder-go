@@ -200,3 +200,84 @@ unrelated guidance/markdown-template failures reproduce identically on both).
 - `background_agent_log`'s own pre-existing gap (the terminate/cancel path
   never sets that table's `status`/`completed_at`) was left as found; only the
   transcript itself was made to correctly reach a terminal state on that path.
+
+## Scope-fix follow-up (2026-08-21)
+
+A user question — "does Pulse's engineering review actually look at workflow
+step children?" — sent this back into the code and surfaced a real bug in the
+scoping this ticket shipped with.
+
+**What ops-review (`llm_ops_review`) already needs.** `ops-review.md` item 7
+("Container necessity") explicitly requires inspecting "the parent and its
+owned children as one execution unit" for every `todo_task`/`routing`/
+`message_sequence` container, plus "representative parent/child traces" more
+generally. That evidence already existed before this ticket:
+`controller_todo_task.go` writes a full `<attempt>-conversation.json` +
+`<attempt>-timing.json` per child execution (complete `conversation_history`,
+`llm_calls`, `tool_calls`), and `controller_execution.go` does the same for
+plain step attempts. Neither of those pre-existing mechanisms is this
+ticket's concern or was touched by it.
+
+**The bug.** `HandleEvent`'s scoping condition for the transcript-append path
+was `hasExecutionOwner && !strings.HasPrefix(executionOwnerID,
+"workflow-step:")` — reusing a pre-existing classification block (commit
+`ec8ad1eb`, 2026-07-15) that this ticket assumed correctly excluded
+step-owned executions. It does not: grepping the whole codebase, **nothing
+anywhere constructs an id with a literal `"workflow-step:"` colon prefix.**
+The real conventions are `workflow-step-<n>-...` (hyphen) and bare
+`exec-<step-id>-<timestamp>`, and the latter is exactly the
+`ParentExecutionIDKey` value `controller_todo_task.go` and
+`controller_execution.go` set for message-sequence/todo-task step-level and
+child-agent contexts. The prefix check has therefore probably never matched
+anything, before or after this ticket.
+
+The consequence: because `AppendBackgroundAgentTranscriptEvent`
+(`pkg/orchestrator/base_orchestrator_background_transcript.go`) fabricated a
+fresh transcript on the fly whenever no header existed yet — reasoning that a
+genuine background agent's granular event could legitimately race ahead of
+cmd/server's own header write — it had no way to tell a real background
+agent's id apart from a workflow step's own id. In practice this meant the
+bridge was also creating spurious, orphaned, never-terminal transcript files
+under `builder/conversation/background/` for plain step/message-sequence/
+todo-task step-level executions that already have their own proper trace via
+the mechanisms above, and that were never registered in
+`background_agent_log` at all.
+
+**The fix.** `emitBackgroundAgentStarted` (`cmd/server`) is the *only* writer
+that creates a transcript header, and it does so synchronously at background-
+agent registration — before the agent it registers can produce any provider
+event. So a missing header when the bridge tries to append is not a race to
+tolerate; it reliably means this `ParentExecutionIDKey` was never registered
+as a background agent. `AppendBackgroundAgentTranscriptEvent` now skips
+(returns `nil`, no write) instead of fabricating a transcript when no header
+exists — "does a registered header already exist" is what actually
+distinguishes a background agent from a step execution, not the id's shape.
+A registered-but-corrupt header now returns an error instead of being
+silently replaced (protects requirement 5 the same way this matters for a
+missing write). The `execution_kind` metadata classification itself (used
+elsewhere, e.g. UI/cost attribution) was left untouched — fixing that
+pre-existing dead prefix check is a separate, broader concern outside this
+ticket's scope.
+
+**Accepted trade-off.** Every event on every workflow step/message-sequence/
+todo-task execution — not just genuine background agents — now costs one
+`ReadWorkspaceFile` round trip that resolves to "not a background agent, skip"
+before this fix even engages. That is strictly cheaper than before (no
+fabricated write on top of it), and it runs async/best-effort off the
+persistence goroutine already used for every other event, so it does not add
+latency to a user-facing turn. If this proves material under real load, the
+efficient fix is a synchronous local signal (no network call) to identify a
+registered background agent before hitting the bridge at all — not built
+here.
+
+**Verified:** `go build ./...` clean. New tests in
+`pkg/orchestrator/plat164_scope_fix_test.go` pin the three cases directly
+against `BaseOrchestrator.AppendBackgroundAgentTranscriptEvent` with a fake
+workspace-documents API: no header → skip, no write; header exists → appends
+correctly and preserves header metadata; corrupt header → returns an error
+without silently overwriting it. `go test ./pkg/orchestrator/...
+./cmd/server/...` — zero new failures; the ones present (in
+`cmd/server`, `cmd/server/guidance`, and
+`pkg/orchestrator/agents/workflow/step_based_workflow`) were individually
+verified to reproduce identically on a clean pre-PLAT-164 `origin/main`
+(`77d184de3`), unrelated to this ticket.
