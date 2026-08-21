@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Check, Loader2, MoreHorizontal, Trash2, Activity, AlertTriangle } from 'lucide-react'
+import { Loader2, MoreHorizontal, Trash2, Activity, AlertTriangle } from 'lucide-react'
 import ConnectionIcon from './ConnectionIcon'
 import ConfirmationDialog from '../ui/ConfirmationDialog'
 import type { CatalogEntry, Connection, ConnectionTransport } from '../../services/connectionsApi'
@@ -109,21 +109,16 @@ export default function ConnectionRow({
           {blockedLabel ? (
             <span className="text-xs text-gray-400 dark:text-gray-500">{blockedLabel}</span>
           ) : isConnected ? (
-            <>
-              <Check
-                className="h-4 w-4 text-green-600 dark:text-green-400"
-                aria-label={`${name} is connected`}
-              />
-              {/* Always visible: signing out is a primary action, not something
-                  the user should have to hover to discover. */}
-              <button
-                type="button"
-                onClick={onDisconnect}
-                className="rounded-md border border-gray-300 px-2.5 py-1 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-100 dark:border-slate-600 dark:text-gray-300 dark:hover:bg-slate-700"
-              >
-                Disconnect
-              </button>
-            </>
+            // "Disconnect" already says the connection is live, so no tick
+            // beside it. Always visible: signing out is a primary action, not
+            // something the user should have to hover to discover.
+            <button
+              type="button"
+              onClick={onDisconnect}
+              className="rounded-md border border-gray-300 px-2.5 py-1 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-100 dark:border-slate-600 dark:text-gray-300 dark:hover:bg-slate-700"
+            >
+              Disconnect
+            </button>
           ) : (
             <button
               type="button"
