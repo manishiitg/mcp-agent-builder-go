@@ -82,14 +82,14 @@ func stageExecuteItem() map[string]interface{} {
 }
 
 // managedSkillPolicy splits a stage's declared skills by how the product says
-// each one reaches the agent. product.yaml installs twelve HyperFrames skills
-// but declares `attach: [hyperframes]`; the rest are, in productdeps' own
-// words, "ordinary files for progressive disclosure" — product-infographic
-// routes the agent to read them by path (`skills/<name>/SKILL.md`).
+// each one reaches the agent. product.yaml installs the HyperFrames production
+// stack but declares `attach: [hyperframes]`; the rest are, in productdeps' own
+// words, "ordinary files for progressive disclosure" and cinematic stages
+// read only the parts needed by an explicitly planned insert.
 //
 // One field was doing both jobs. Every stage asked to ATTACH all of them,
 // which failed silently before the loader became workspace-aware and would now
-// succeed and load eleven specialist skills nobody asked for — the exact thing
+// succeed and load specialist skills nobody asked for — the exact thing
 // the product prompt says not to do. So attachment gets the skills declared
 // attachable, and the remainder get a read path instead.
 func managedSkillPolicy() (installed map[string]bool, attachable map[string]bool) {
