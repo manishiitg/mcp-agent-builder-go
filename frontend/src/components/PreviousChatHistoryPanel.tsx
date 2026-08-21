@@ -12,6 +12,7 @@ import {
 } from '../services/api-types'
 import { useChatStore } from '../stores/useChatStore'
 import { isScheduledChatHistorySession } from '../utils/chatHistoryOpenDisposition'
+import { scheduleRunSlotLabel } from '../utils/scheduleRunSlot'
 import { ConversationMarkdownRenderer } from './ui/MarkdownRenderer'
 import {
   CHAT_HISTORY_CLEANUP_AGE_OPTIONS,
@@ -995,6 +996,7 @@ export const PreviousChatHistoryPanel: React.FC<PreviousChatHistoryPanelProps> =
                             const startedWith = scheduleRunStartMessage(job, session)
                             const latestAgentUpdate = scheduleRunLatestAgentMessage(session)
                             const outcome = latestAgentUpdate || presentation.detail
+                            const slotLabel = scheduleRunSlotLabel(job, run)
                             return (
                               <div key={run.id} className="space-y-2.5 px-3 py-3">
                                 <div className="flex items-start gap-2">
@@ -1011,6 +1013,7 @@ export const PreviousChatHistoryPanel: React.FC<PreviousChatHistoryPanelProps> =
                                           : duration ? `Stopped after ${duration}` : 'Run stopped'}
                                     </div>
                                     <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
+                                      {slotLabel && <span className="font-medium text-foreground/75">{slotLabel}</span>}
                                       <span>Started {formatChatTime(run.started_at)}</span>
                                       {run.completed_at && <span>ended {formatChatTime(run.completed_at)}</span>}
                                       {run.group_names?.length ? <span>{run.group_names.join(', ')}</span> : null}

@@ -330,7 +330,7 @@ func TestPulseFixerPracticesRequireBoundedAgenticProgress(t *testing.T) {
 		"complete active starting manifest",
 		"do not hide retained work",
 		"Bounded backlog progress contract",
-		"one coherent repair objective",
+		"bounded repair batch",
 		"truthful remaining queue",
 	} {
 		if !strings.Contains(scheduled, want) {

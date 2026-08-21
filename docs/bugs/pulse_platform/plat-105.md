@@ -44,6 +44,34 @@ restarted product path proves the canonical completion reaches AgentWorks once,
 settles busy at the correct boundary, and leaves the Session reusable; the
 older missing-completion direction is also still independently open.
 
+### 2026-08-21 Video Studio recurrence — ordinary interactive turn used a two-second competing clock
+
+Video Studio session `5e79aae3-d8f8-45d4-a29d-12258dba0d1e` reproduced the
+same terminal-signal violation outside the retained-turn reader. Claude Code
+successfully completed three `api-bridge` tool calls and its tmux pane displayed
+final-looking character-generation narration. The native JSONL transcript still
+contained only `stop_reason=tool_use`; no current-turn `end_turn` had committed.
+The ordinary interactive adapter treated pane readiness as completion, waited a
+fixed two-second transcript grace, raised `current turn has no completed
+end_turn response`, and discarded the persistent tmux session.
+
+This was not an MCP, shell, credential, or frontend failure. The retained-turn
+repair described above already used the correct completion oracle, but
+`ClaudeCodeInteractiveAdapter.GenerateContent` still had a second completion
+clock: `waitForMarkedResponse` followed by `claudeTranscriptCommitGrace`.
+
+The shared provider repair removes that fixed grace. Once a transcript exists,
+the adapter now waits for its authoritative non-empty `stop_reason=end_turn`
+until the owning turn context is cancelled. Pane readiness remains a transport
+hint and cannot terminate an active tool loop. Context cancellation is returned
+as cancellation rather than being rewritten as a transcript-protocol error.
+Regression coverage delays the final `end_turn` beyond the former two-second
+boundary and separately proves that turn cancellation still bounds the wait.
+
+Focused provider tests pass. This ticket remains open until the restarted Video
+Studio path proves the final answer is visible, exactly one canonical completion
+settles busy, and the same Claude session remains reusable.
+
 ## Blocking live regression — final response captured, turn never settled
 
 The 2026-08-15 Social Media backlog-audit chat provides a concrete production

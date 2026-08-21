@@ -1060,6 +1060,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) createKBConsolidateAgent(ctx context.
 	stepPath := "builder-consolidate"
 
 	readPaths, writePaths := hcpo.setupKBUpdateFolderGuard(stepID, stepPath)
+	if err := hcpo.materializeWorkflowGuardPaths(readPaths, writePaths); err != nil {
+		return nil, err
+	}
 	subAgentSessionID := hcpo.setupSubAgentSessionGuard("kb-consolidate", stepID, readPaths, writePaths)
 	configureWorkflowDBSession(subAgentSessionID, hcpo.GetWorkspacePath(), DBAccessRead, false)
 	hcpo.SetWorkspacePathForFolderGuard(readPaths, writePaths)
@@ -1119,6 +1122,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) createKBReorganizeAgent(ctx context.C
 	stepPath := "builder-reorganize"
 
 	readPaths, writePaths := hcpo.setupKBUpdateFolderGuard(stepID, stepPath)
+	if err := hcpo.materializeWorkflowGuardPaths(readPaths, writePaths); err != nil {
+		return nil, err
+	}
 	subAgentSessionID := hcpo.setupSubAgentSessionGuard("kb-reorganize", stepID, readPaths, writePaths)
 	configureWorkflowDBSession(subAgentSessionID, hcpo.GetWorkspacePath(), DBAccessRead, false)
 	hcpo.SetWorkspacePathForFolderGuard(readPaths, writePaths)
@@ -1251,6 +1257,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 		skillReadPaths, _ := BuildSkillFolderGuardPaths(effectiveSkills)
 		readPaths = append(readPaths, skillReadPaths...)
 		hcpo.GetLogger().Info(fmt.Sprintf("🎯 Added skill folder paths to folder guard: %v", skillReadPaths))
+	}
+	if err := hcpo.materializeWorkflowGuardPaths(readPaths, writePaths); err != nil {
+		return nil, err
 	}
 
 	// NOTE: We no longer call hcpo.SetWorkspacePathForFolderGuard here.

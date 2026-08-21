@@ -144,10 +144,13 @@ persistence, record that module as incomplete instead of inventing findings.
 
 After every registered reviewer finishes, reload the Gate worklist, canonical
 issues, saved reviewer records, and the Technical Review checkpoint. Workflow
-observations are evidence, not Fixer work. Select at most one highest-value
-coherent repair objective from canonical issues. Several issues may share the
-objective only when they have one root cause, compatible targets, and one proof
-boundary.
+observations are evidence, not Fixer work. Select a bounded repair batch from
+canonical issues. Start with the highest-value coherent bundle; several issues
+may share it only when they have one root cause, compatible targets, and one
+proof boundary. Add a separate bundle only when it is low-risk, requires no
+broad rediscovery, has an independently clear proof boundary, and fits the
+same context window plus targeted evidence. Do not batch different public-action
+risk, user-decision, route-context, or unresolved-design work.
 
 Launch one fresh `agent_type="executor"` Fixer with `run_in_background`. Never
 reuse a reviewer conversation. The Fixer may modify safe owned targets, records
@@ -167,9 +170,11 @@ review or repair, but it cannot close, reopen, or disposition an issue; reconcil
 it with typed SQLite state and current evidence first. Preserve
 `changed_unverified` until its evidence boundary.
 For the due module, inventory the complete active retained backlog **before**
-new discovery, then choose one highest-value coherent repair objective for this
-pass. That objective may cover many findings when they share one root cause,
-compatible targets, and one proof boundary; it must not become an instruction
+new discovery, then choose a bounded repair batch for this pass. Start with the
+highest-value coherent bundle, which may cover many findings when they share one
+root cause, compatible targets, and one proof boundary. Add further independent
+bundles only when each is low-risk, needs no broad rediscovery, has clear
+separate proof, and fits the current context; it must not become an instruction
 to empty every unrelated active root in one agent turn. First verify any
 `changed_unverified` issue selected by Gate whose next-check boundary arrived,
 then rank actionable roots by correctness/safety impact, recurrence, available
@@ -452,19 +457,23 @@ freezes the complete active starting manifest. It does not reload that index to
 filter a handful of IDs; it requests targeted full detail for selected IDs. Due
 reviewer modules decide which reviews ran; they do not hide retained work from
 the inventory. It then builds one compact, priority-ordered Fix queue and
-selects one coherent repair objective that it can carry through mutation and
-honest proof in this pass. Each queue item is a coherent repair bundle. Group findings only when
-they share the same root cause, require compatible changes to the same target,
-and have one verification condition. Cross-reviewer grouping is allowed;
-conflicts remain separate. Waiting-on-run, waiting-on-user, proposal-only, and
-externally owned findings stay visible but do not enter the actionable queue.
-Coherence, impact, and available proof choose the objective—not an arbitrary
-top-N issue count. No finding may disappear: checkpoint the exact unselected
-queue, but do not re-file or manufacture a current-pass disposition for issues
-the executor did not investigate. Process and disposition the selected bundle
-before considering any inseparable follow-up; the backend opens the durable
-fix-attempt record from the disposition you write, so there is nothing to
-declare before mutating.
+selects a bounded repair batch that it can carry through mutation and honest
+proof in this pass. Each queue item is a coherent repair bundle. Start with the
+highest-value bundle, then add an independent bundle only if it is low-risk,
+requires no broad rediscovery, has its own clear proof boundary, and fits the
+current context plus targeted evidence. Group findings only when they share the
+same root cause, require compatible changes to the same target, and have one
+verification condition. Cross-reviewer grouping is allowed; conflicts remain
+separate. Different public-action risks, user decisions, route contexts, and
+unresolved design investigations stay separate. Waiting-on-run, waiting-on-user,
+proposal-only, and externally owned findings stay visible but do not enter the
+actionable queue. Coherence, impact, and available proof choose the batch—not an
+arbitrary top-N issue count. No finding may disappear: checkpoint the exact
+unselected queue with defer reasons, but do not re-file or manufacture a
+current-pass disposition for issues the executor did not investigate. Process
+and disposition each selected bundle before the next; the backend opens the
+durable fix-attempt record from the disposition you write, so there is nothing
+to declare before mutating.
 Before mutation capture targets, time, hashes/versions, and baseline. Load
 `read_skill(skills=[{"name":"builder-reference","path":"references/pulse-fixer-practices.md"},{"name":"builder-reference","path":"references/fix-verification.md"}])`;
 follow the engineering-practices reference to diagnose and bundle the root cause,

@@ -790,7 +790,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) resolveScriptedShellGuard(
 	stepPath string,
 	stepExecutionRelPath string,
 	includeCodeDir bool,
-) *workspace.FolderGuardConfig {
+) (*workspace.FolderGuardConfig, error) {
 	stepConfig := getAgentConfigs(step)
 	kbAccess := resolveKnowledgebaseAccess(stepConfig, hcpo.UseKnowledgebase())
 	learningsAccess := resolveLearningsAccess(stepConfig)
@@ -800,12 +800,15 @@ func (hcpo *StepBasedWorkflowOrchestrator) resolveScriptedShellGuard(
 		writePaths = append(writePaths, writePaths[0]+"/code")
 	}
 	readPaths = common.DeduplicateStrings(append(readPaths, writePaths...))
+	if err := hcpo.materializeWorkflowGuardPaths(readPaths, writePaths); err != nil {
+		return nil, err
+	}
 
 	return &workspace.FolderGuardConfig{
 		Enabled:    true,
 		ReadPaths:  readPaths,
 		WritePaths: writePaths,
-	}
+	}, nil
 }
 
 // execScriptedScript runs python3 <mainPy> <args...> via the workspace shell API.
@@ -848,7 +851,10 @@ func (hcpo *StepBasedWorkflowOrchestrator) execScriptedScript(
 	}
 
 	includeCodeDir := workDirRel == stepExecutionRelPath+"/code"
-	guard := hcpo.resolveScriptedShellGuard(ctx, step, stepIndex, stepPath, stepExecutionRelPath, includeCodeDir)
+	guard, guardErr := hcpo.resolveScriptedShellGuard(ctx, step, stepIndex, stepPath, stepExecutionRelPath, includeCodeDir)
+	if guardErr != nil {
+		return "", -1, guardErr
+	}
 
 	// ExtraEnv: merge workspace env (SECRET_*, MCP_API_URL) with STEP_OUTPUT_DIR and STEP_EXECUTION_DIR.
 	stepExecutionAbsPath := filepath.Dir(stepOutputAbsPath)

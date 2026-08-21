@@ -148,8 +148,9 @@ reviewer's diagnosis cannot silently become its own proof.
 2. A reviewer can promote an observation by visible ID; the same lifecycle row
    becomes an issue and retains its complete evidence history.
 3. Gate receives canonical issue and workflow observation counts separately.
-4. Fixer receives only canonical issues and at most one coherent repair
-   objective per pass.
+4. Fixer receives only canonical issues and selects a bounded repair batch per
+   pass: one primary coherent bundle plus compatible independent low-risk
+   bundles with separately clear proof boundaries.
 5. Reviewer and Fixer execute as separate background agents; a reviewer never
    repairs or verifies its own newly diagnosed implementation change.
 6. The UI prefers explicit `kind` and uses the old phase heuristic only with an

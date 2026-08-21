@@ -14,8 +14,10 @@ Choose the first supported strategy that fits:
    prompt sequence for intentional cuts inside one coherent scene.
 3. **Video extension/edit:** continue the accepted source clip while retaining
    its motion and scene state.
-4. **Boundary-frame chain:** extract the accepted clip's final clean frame and
-   use it as the next start frame; optionally provide a designed end frame.
+4. **Boundary-frame chain:** choose the accepted clip's last usable stable
+   frame at the intended cut point and use it as the next start frame;
+   optionally provide a designed end frame. Do not blindly use the literal
+   final decoded frame: it may be blurred, mid-action, a blink, or an artifact.
 5. **Reference-driven continuation:** reuse the accepted video plus approved
    character/location/object/audio references.
 6. **Independent generation:** only for a deliberate discontinuity approved in
@@ -55,7 +57,11 @@ silently import another person's identity, trademarks, or exact composition.
   internal shot advance the same scene. Do not concatenate numbered prose if
   the API expects an array.
 - At a chained seam, repeat an overlapping action: end clip A during an action
-  and start clip B from the same action and state.
+  and start clip B from the same action and state. Carry forward the outgoing
+  camera side, framing height, lens/movement direction, eyeline, lighting,
+  object positions, and audio environment. If the next shot deliberately
+  changes angle, specify a motivated cut-on-action, reaction, insert, or
+  cutaway rather than describing it as uninterrupted movement.
 - Use positive visual direction where the endpoint lacks a negative-prompt
   field. Never invent a negative-prompt parameter.
 

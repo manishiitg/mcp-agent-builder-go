@@ -202,7 +202,7 @@ func TestManualPulseCommandsKeepRunSetupReviewAndFixBoundariesSeparate(t *testin
 			"INDEPENDENT PULSE FIXER",
 			"Do not rerun Technical Review",
 			"Workflow observations are evidence",
-			"one highest-value coherent canonical repair objective",
+			"bounded canonical **repair batch**",
 			"Review completion and repair",
 		},
 	}

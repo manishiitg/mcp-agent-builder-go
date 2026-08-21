@@ -51,13 +51,15 @@ For each actionable finding:
 
 ## Bounded backlog progress contract
 
-A Pulse pass is one complete, evidence-backed repair objective—not an attempt to
+A Pulse pass is one bounded, evidence-backed **repair batch**—not an attempt to
 zero every unrelated backlog root in one context window. Every Fixer pass must
-see the complete active backlog that existed when the pass began, select the
-highest-value coherent objective agentically, finish its lifecycle honestly,
-and leave an exact ordered queue for later passes. This is not an arbitrary
-top-N issue cap: one objective may carry many issue IDs when they truly share a
-root cause, compatible targets, and one verification condition.
+see the complete active backlog that existed when the pass began, select its
+batch agentically, finish every selected bundle honestly, and leave an exact
+ordered queue for later passes. This is not an arbitrary top-N issue cap: a
+bundle may carry many issue IDs when they truly share a root cause, compatible
+targets, and one verification condition; a batch may carry more than one
+bundle when each can be safely completed and independently proven in the same
+context window.
 
 1. **Freeze a starting manifest.** Call
    `get_pulse_state(view="backlog", detail="compact")` exactly once with no
@@ -72,12 +74,17 @@ root cause, compatible targets, and one verification condition.
    work. Request `detail="full"` only for the bounded `issue_ids` that could
    become this pass's objective; do not perform a forensic reread of every row
    merely to restate the backlog.
-3. **Select and bundle semantically.** Choose the highest-value objective that
-   can reach a truthful proof boundary in this pass. Group actionable items only by shared root cause,
-   compatible targets, and one verification condition. One repair may carry
-   many finding links, but no finding may disappear inside a bundle.
+3. **Select a bounded batch, then bundle semantically.** Choose the
+   highest-value bundle that can reach a truthful proof boundary in this pass.
+   Add a next independent bundle only when it is low-risk, needs no broad
+   rediscovery, has its own clear proof boundary, and can finish from the
+   current context plus targeted evidence. Group items only by shared root
+   cause, compatible targets, and one verification condition. Never batch
+   different public-action risks, user decisions, routes that need separate
+   context, or an unresolved design investigation. A repair may carry many
+   finding links, but no finding may disappear inside a bundle.
 4. **Maintain an explicit remaining list.** Prepare a lifecycle disposition for
-   every issue linked to the selected objective and remove only those exact IDs
+   every issue linked to every selected bundle and remove only those exact IDs
    from the working queue. Preserve all other IDs, in priority order, in the
    run-scoped checkpoint. Untouched findings retain their existing lifecycle;
    do not generate no-op attempts or current-pass dispositions for them.
@@ -98,11 +105,13 @@ root cause, compatible targets, and one verification condition.
    `record_pulse_result` calls and record the terminal module receipts.
 
 If a selected item is unaccounted for, continue the pass. If a tool, evidence,
-approval, or runtime failure blocks the selected objective, record that exact
-boundary and report it truthfully; do not jump to unrelated queue items to make
-the pass look productive. A pass may complete while the durable backlog remains
-non-empty. Findings first created while the frozen pass is running belong to the
-next pass unless they are inseparable consequences of the selected repair.
+approval, or runtime failure blocks one selected bundle, record that exact
+boundary and report it truthfully; the agent may continue only with a later
+bundle that was already selected and remains independent of the blocker. Do
+not jump to unrelated queue items merely to make the pass look productive.
+A pass may complete while the durable backlog remains non-empty. Findings first
+created while the frozen pass is running belong to the next pass unless they
+are inseparable consequences of a selected repair.
 
 ## Evidence hierarchy
 

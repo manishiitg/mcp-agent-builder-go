@@ -911,31 +911,35 @@ func getScheduledJobRunsHandler(svc *SchedulerService) http.HandlerFunc {
 
 		// Map to response format compatible with frontend ScheduledJobRun
 		type RunResponse struct {
-			ID          string     `json:"id"`
-			JobID       string     `json:"job_id"`
-			RunFolder   string     `json:"run_folder,omitempty"`
-			SessionID   string     `json:"session_id,omitempty"`
-			Status      string     `json:"status"`
-			Error       string     `json:"error,omitempty"`
-			DurationMs  *int64     `json:"duration_ms,omitempty"`
-			GroupNames  []string   `json:"group_names,omitempty"`
-			StartedAt   time.Time  `json:"started_at"`
-			CompletedAt *time.Time `json:"completed_at,omitempty"`
+			ID            string     `json:"id"`
+			JobID         string     `json:"job_id"`
+			TriggerSource string     `json:"trigger_source,omitempty"`
+			ScheduledFor  *time.Time `json:"scheduled_for,omitempty"`
+			RunFolder     string     `json:"run_folder,omitempty"`
+			SessionID     string     `json:"session_id,omitempty"`
+			Status        string     `json:"status"`
+			Error         string     `json:"error,omitempty"`
+			DurationMs    *int64     `json:"duration_ms,omitempty"`
+			GroupNames    []string   `json:"group_names,omitempty"`
+			StartedAt     time.Time  `json:"started_at"`
+			CompletedAt   *time.Time `json:"completed_at,omitempty"`
 		}
 
 		var respRuns []RunResponse
 		for _, run := range runs {
 			respRuns = append(respRuns, RunResponse{
-				ID:          run.ID,
-				JobID:       id,
-				RunFolder:   run.RunFolder,
-				SessionID:   run.SessionID,
-				Status:      run.Status,
-				Error:       run.Error,
-				DurationMs:  run.DurationMs,
-				GroupNames:  run.GroupNames,
-				StartedAt:   run.StartedAt,
-				CompletedAt: run.CompletedAt,
+				ID:            run.ID,
+				JobID:         id,
+				TriggerSource: run.TriggerSource,
+				ScheduledFor:  run.ScheduledFor,
+				RunFolder:     run.RunFolder,
+				SessionID:     run.SessionID,
+				Status:        run.Status,
+				Error:         run.Error,
+				DurationMs:    run.DurationMs,
+				GroupNames:    run.GroupNames,
+				StartedAt:     run.StartedAt,
+				CompletedAt:   run.CompletedAt,
 			})
 		}
 
