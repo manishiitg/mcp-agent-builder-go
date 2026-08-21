@@ -171,6 +171,44 @@ func isWorkflowStepTrackingExecution(id, name string, meta map[string]string) bo
 		(strings.HasPrefix(trimmedID, "workflow-full-") && strings.Contains(trimmedID, "-step-"))
 }
 
+// suppressRepeatedChildFailureNotification marks an enclosing execution silent
+// when it failed only because a direct message-sequence child already reported
+// the same root error. The child remains the authoritative notification; the
+// parent is still recorded and emitted as a terminal execution event, but it
+// must not create a second synthetic user turn containing the same failure.
+// Keeping this at the backend notification boundary makes the behavior
+// consistent for every product and every client.
+func suppressRepeatedChildFailureNotification(registry *BackgroundAgentRegistry, sessionID string, parent *BackgroundAgent) bool {
+	if registry == nil || parent == nil {
+		return false
+	}
+	parentSnapshot := parent.GetSnapshot()
+	if parentSnapshot.Status != BGAgentFailed || strings.TrimSpace(parentSnapshot.Error) == "" {
+		return false
+	}
+	for _, candidate := range registry.GetAll(sessionID) {
+		if candidate == nil || candidate == parent {
+			continue
+		}
+		child := candidate.GetSnapshot()
+		if strings.TrimSpace(child.ParentExecutionID) != parentSnapshot.ID || child.Status != BGAgentFailed {
+			continue
+		}
+		isMessageSequenceItem := child.Kind == "message_sequence_item" ||
+			(child.Metadata != nil && child.Metadata["execution_type"] == "message-sequence-item")
+		childError := strings.TrimSpace(child.Error)
+		if !isMessageSequenceItem || childError == "" || !strings.Contains(parentSnapshot.Error, childError) {
+			continue
+		}
+		parent.SetMetadata(map[string]string{
+			"suppress_auto_notification": "true",
+			"notification_suppression":   "repeated-message-sequence-child-failure",
+		})
+		return true
+	}
+	return false
+}
+
 func (n *workshopExecutionBgNotifier) OnExecutionComplete(execID, name, result string, meta map[string]string, err error) {
 	if n.api.autoNotificationSessionUnreachable(n.sessionID) {
 		n.api.completeTrackedExecution(execID, trackedExecutionStatusCanceled, "session stopped", meta)
@@ -221,6 +259,10 @@ func (n *workshopExecutionBgNotifier) OnExecutionComplete(execID, name, result s
 		n.api.completeTrackedExecution(execID, trackedExecutionStatusCompleted, "", meta)
 		displayResult := workshopCompletionDisplayResult(n.workspacePath, result, meta)
 		n.api.emitBackgroundAgentCompleted(n.sessionID, execID, name, "completed", displayResult, "", duration.Truncate(time.Second).String())
+	}
+
+	if err != nil && suppressRepeatedChildFailureNotification(n.api.bgAgentRegistry, n.sessionID, agent) {
+		log.Printf("[BG AGENT] Suppressed repeated parent failure notification for %s; direct message-sequence child already owns the same error", execID)
 	}
 
 	// A finished parent cannot still have live progress children. Settle any it

@@ -312,19 +312,20 @@ func TestMessageSequenceItemReportedFailure(t *testing.T) {
 	}
 }
 
-func TestMessageSequenceItemGetsDBWriteButCannotEscalateOtherStores(t *testing.T) {
+func TestMessageSequenceItemUsesManagedDBToolsWithoutRawDBFilesystemAccess(t *testing.T) {
 	hcpo := newMessageSequenceClosingTestOrchestrator(t)
 	config := &AgentConfigs{
 		KnowledgebaseAccess: KBAccessRead,
 		LearningsAccess:     LearningsAccessRead,
 	}
-	_, writePaths := hcpo.setupMessageSequenceFolderGuard("step-1", "readonly", config, MessageSequenceWriteAccess{
+	readPaths, writePaths := hcpo.setupMessageSequenceFolderGuard("step-1", "readonly", config, MessageSequenceWriteAccess{
 		DB: true, Knowledgebase: true, Learnings: true,
 	})
-	joined := strings.Join(writePaths, "\n")
-	if !strings.Contains(joined, "/db") {
-		t.Fatalf("message-sequence item missing uniform DB write access: %v", writePaths)
+	allPaths := strings.Join(append(append([]string{}, readPaths...), writePaths...), "\n")
+	if strings.Contains(allPaths, "/db") {
+		t.Fatalf("message-sequence item unexpectedly received raw DB filesystem access: %v", writePaths)
 	}
+	joined := strings.Join(writePaths, "\n")
 	for _, forbidden := range []string{"/knowledgebase/notes", "/learnings/_global"} {
 		if strings.Contains(joined, forbidden) {
 			t.Fatalf("read-only non-DB store unexpectedly received write access to %s: %v", forbidden, writePaths)

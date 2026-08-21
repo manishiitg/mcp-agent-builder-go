@@ -1034,6 +1034,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) getMessageSequenceRuntime(ctx context
 		sessionID = strings.TrimSpace(session.runtime.SessionID)
 	}
 	session.RuntimeSessionID = sessionID
+	if err := hcpo.materializeWorkflowGuardPaths(readPaths, writePaths); err != nil {
+		return nil, ctx, err
+	}
 	hcpo.configureSubAgentSessionGuard(sessionID, "message-sequence", step.GetID(), readPaths, writePaths)
 	hcpo.setMessageSequenceShellEnv(sessionID, stepPath, step.GetID())
 
@@ -1266,10 +1269,13 @@ func (hcpo *StepBasedWorkflowOrchestrator) setupMessageSequenceFolderGuard(stepP
 		// the step.
 		fmt.Sprintf("%s/tool_output_folder", baseWorkspacePath),
 	}
-	dbAccess := resolveDBAccess(stepConfig)
 	kbAccess := resolveKnowledgebaseAccess(stepConfig, hcpo.UseKnowledgebase())
 	learningsAccess := resolveLearningsAccess(stepConfig)
-	readPaths = append(readPaths, getDBPath(baseWorkspacePath))
+	// message_sequence agents use query_workflow_db/mutate_workflow_db. Do not
+	// also grant raw db/ filesystem access: configureWorkflowDBSession blocks
+	// db.sqlite for managed agents, and Landlock cannot represent a broad parent
+	// allow with a narrower child deny because its rules are additive. The old
+	// pair made every shell/browser call fail before it ran (PLAT-169 follow-up).
 	if kbAccessAllowsRead(kbAccess) {
 		readPaths = append(readPaths, getKnowledgebasePath(baseWorkspacePath))
 	}
@@ -1277,9 +1283,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) setupMessageSequenceFolderGuard(stepP
 		readPaths = appendLearningReadPaths(readPaths, baseWorkspacePath, stepID)
 	}
 	writePaths = []string{stepFolderPath, downloadsPath}
-	if dbAccess == DBAccessReadWrite {
-		writePaths = append(writePaths, getDBPath(baseWorkspacePath))
-	}
 	if itemWriteAccess.Knowledgebase && kbAccessAllowsWrite(kbAccess) {
 		writePaths = append(writePaths, filepath.Join(getKnowledgebasePath(baseWorkspacePath), "notes"))
 	}
