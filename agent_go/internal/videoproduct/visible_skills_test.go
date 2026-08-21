@@ -37,6 +37,10 @@ func TestSyncClaudeProductSkillsMaterializesEmbeddedGuidance(t *testing.T) {
 	if err != nil || !strings.Contains(string(cost), "Video cost guidance") {
 		t.Fatalf("cost guidance = %q, %v", cost, err)
 	}
+	capabilities, err := os.ReadFile(filepath.Join(root, "video-model-selection", "references", "model-capabilities.md"))
+	if err != nil || !strings.Contains(string(capabilities), "fal-ai/veo3.1/lite/image-to-video") || !strings.Contains(string(capabilities), "`4s`, `6s`, `8s`") {
+		t.Fatalf("model capabilities = %q, %v", capabilities, err)
+	}
 }
 
 func TestSyncVisibleSkillsForExistingProjectsUpgradesOnlyVideoStudioProjects(t *testing.T) {

@@ -51,7 +51,7 @@ quality benchmark: fal hosts the models and publishes the cited comparisons.
 
 | Route | Current measurable advantage | Current measurable limitation | Published 720p audio rate |
 | --- | --- | --- | --- |
-| fal Veo 3.1 Lite image-to-video | Lowest-cost synchronized-audio starting point; 720p or 1080p | Shorter, simpler reference/control surface than the continuity-heavy routes | $0.05/s at 720p |
+| fal Veo 3.1 Lite image-to-video | Lowest-cost synchronized-audio starting point; 4s, 6s, or 8s at 720p or 1080p | Eight-second maximum and a simpler reference/control surface than the continuity-heavy routes | $0.05/s at 720p |
 | fal Kling V3 Standard | Structured multi-shot generation and native audio at a lower Kling tier | Confirm that Standard has every element/reference control the shot needs | $0.126/s |
 | fal Kling V3 Pro image-to-video | Up to 15 seconds, custom elements, structured multi-shot prompts, 1080p, native audio and optional voice control | Costs more than Lite; Pro is unjustified when Standard or Lite meets the shot | $0.168/s; $0.196/s with voice control |
 | fal Seedance 2.5 reference-to-video | One continuous 4--30 second take; up to 30 images, 10 videos and 10 audio references; synchronized audio | 480p/720p only and expensive for ordinary short shots | about $0.4730/s at 720p; token formula is authoritative |

@@ -1,22 +1,27 @@
 ---
 name: veo-video
-description: Plan and generate Google Veo video effectively through the current Gemini API or Vertex AI contract. Use when a production selects or considers Veo for text-to-video, image-to-video, first/last-frame interpolation, reference-image identity or product guidance, Veo video extension, portrait video, high resolution, native audio, or long-running generation operations. Read with video-provider-capabilities and google-ai before any paid Veo call.
+description: Plan and generate Google Veo video effectively through current fal.ai, Gemini API, or Vertex AI contracts. Use when a production selects or considers Veo for text-to-video, image-to-video, first/last-frame interpolation, reference-image identity or product guidance, Veo video extension, portrait video, high resolution, native audio, or long-running generation operations. Read with video-provider-capabilities and the selected provider skill before any paid Veo call.
 ---
 
 # Use Veo by mode, not by name alone
 
-Read `video-provider-capabilities`, `google-ai`, `video-cinematography`, and the
-official docs for the exact API surface first:
+Read `video-provider-capabilities`, `video-cinematography`, and exactly one
+provider skill: `fal-ai` for `fal-ai/veo...` routes or `google-ai` for Gemini
+API/Vertex. Then read the official docs for the exact API surface:
 
+- fal Veo 3.1 Lite image-to-video:
+  `https://fal.ai/models/fal-ai/veo3.1/lite/image-to-video/api`
+- fal Veo 3.1 image-to-video:
+  `https://fal.ai/models/fal-ai/veo3.1/image-to-video/api`
 - Gemini API: `https://ai.google.dev/gemini-api/docs/video`
 - Vertex first/last frames:
   `https://cloud.google.com/vertex-ai/generative-ai/docs/video/generate-videos-from-first-and-last-frames`
 - Vertex prompt guide:
   `https://cloud.google.com/vertex-ai/generative-ai/docs/video/video-gen-prompt-guide`
 
-Do not combine a Gemini model ID/request shape with a Vertex endpoint. Resolve
-the current model variant, availability, mode, limits, field nesting, and
-price on the surface actually configured by `google-ai`.
+Do not combine fal, Gemini, or Vertex model IDs and request shapes. Resolve the
+current model variant, availability, mode, limits, field nesting, and price on
+the surface actually configured for the production.
 
 ## Select one generation mode
 
@@ -50,6 +55,13 @@ family-wide value:
 Current Gemini documentation, for example, requires eight seconds for several
 advanced Veo 3.1 modes and limits extensions to 720p Veo footage. These are
 schema-discovery hints, not permission to reuse the values without checking.
+
+As checked on 2026-08-21, fal Veo 3.1 Lite image-to-video accepts only `4s`,
+`6s`, or `8s`; 8 seconds is its maximum, not 10. It exposes 720p or 1080p,
+`auto`/16:9/9:16, one starting image, and optional native audio. The non-Lite
+fal image-to-video route has the same duration enum but also exposes 4K. Treat
+these as dated discovery hints: copy the exact selected route's live enum into
+the capability record before building or costing a shot list.
 
 ## Prompt for picture and sound
 

@@ -6,8 +6,10 @@ description: Choose which fal.ai or Google Gemini/Veo model fits one shot's requ
 # Choosing a generation model
 
 `fal-ai` and `google-ai` teach how to call a model once you've picked one.
-This skill teaches how to pick it. Read `references/cost-guidance.md` whenever
-the user compares models, asks about price, or must approve a paid plan.
+This skill teaches how to pick it. Read `references/model-capabilities.md`
+whenever quoting model duration, resolution, aspect ratio, audio, language, or
+reference support. Read `references/cost-guidance.md` whenever the user
+compares models, asks about price, or must approve a paid plan.
 Neither this skill nor either of those
 pins a model catalog or a "best model for X" table -- both providers'
 catalogs, capabilities, and pricing change independently and on their own
@@ -105,6 +107,14 @@ not automatically require Kling, and lip-sync alone does not automatically
 require Kling: compare every current endpoint that supports the approved
 speech design. Read `references/cost-guidance.md` for the maintained comparison
 and recheck all rates before presenting them.
+
+Do the capability check before presenting the shot count or total runtime, not
+after the user approves the plan. Convert the exact route's allowed duration
+enum into the shot plan. For example, a route limited to 4, 6, or 8 seconds
+cannot be represented as seven 10-second calls; choose supported durations,
+re-space the beats, and show the resulting call count and cost before approval.
+Never quote a family-wide limit when the selected mode or tier has a narrower
+contract.
 
 **A dollar total is allowed only when the live billing unit can be mapped to
 the planned output without guessing.** If fal returns `seconds` for the exact
