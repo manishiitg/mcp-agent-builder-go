@@ -357,14 +357,14 @@ export default function ConnectionsModal({ onClose }: ConnectionsModalProps) {
                 </div>
 
                 {/* Table */}
-                <div className="grid grid-cols-[1fr_6rem_10rem] items-center gap-4 border-b border-gray-200 px-3 pb-2 dark:border-slate-700">
+                <div className="grid grid-cols-[minmax(0,1fr)_11rem_11rem] items-center gap-4 border-b border-gray-200 px-3 pb-2 dark:border-slate-700">
                   <span className="text-xs font-medium text-gray-500 dark:text-gray-400">
                     Connector
                   </span>
                   <span className="text-xs font-medium text-gray-500 dark:text-gray-400">
                     Type
                   </span>
-                  <span className="text-right text-xs font-medium text-gray-500 dark:text-gray-400">
+                  <span className="text-xs font-medium text-gray-500 dark:text-gray-400">
                     Status
                   </span>
                 </div>
