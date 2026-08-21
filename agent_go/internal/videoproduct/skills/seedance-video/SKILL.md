@@ -40,8 +40,9 @@ model page and its generated request schema win over stale index text. Recheck
 the exact page at selection time instead of copying these fields by memory.
 
 Current fal 2.5 schemas expose `auto` or 4–30-second duration, synchronized
-native audio through `generate_audio`, and 480p, 720p, and 1080p resolution
-enums. Text and reference routes expose `auto`, 21:9, 16:9, 4:3, 1:1, 3:4, and
+native audio through `generate_audio`, and only 480p and 720p resolution enums.
+Do not promise 1080p or 4K from Seedance 2.5 merely because Seedance 2.0 offers
+them. Text and reference routes expose `auto`, 21:9, 16:9, 4:3, 1:1, 3:4, and
 9:16 aspect ratios. Image-to-video derives aspect ratio from the image and can
 accept `end_image_url`. If landing-page prose and the live schema disagree,
 record the discrepancy and use only values the callable schema accepts.
