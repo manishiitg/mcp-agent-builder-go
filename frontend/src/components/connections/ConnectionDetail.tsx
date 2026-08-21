@@ -168,6 +168,28 @@ export default function ConnectionDetail({
               {entry.tagline}
             </p>
           )}
+
+          {url && (
+            // Sized to the URL rather than the column, so the copy button sits
+            // against the text it copies instead of across the panel from it.
+            <div className="mt-1.5 flex max-w-full items-center gap-1">
+              <code className="min-w-0 truncate rounded bg-gray-100 px-2 py-1 font-mono text-xs text-gray-600 dark:bg-slate-800 dark:text-gray-400">
+                {url}
+              </code>
+              <button
+                type="button"
+                onClick={copyUrl}
+                className="shrink-0 rounded-md p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-slate-700"
+                aria-label="Copy server URL"
+              >
+                {copied ? (
+                  <Check className="h-3.5 w-3.5 text-green-600 dark:text-green-400" />
+                ) : (
+                  <Copy className="h-3.5 w-3.5" />
+                )}
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Actions stack so each reads as its own choice rather than hiding
@@ -216,26 +238,6 @@ export default function ConnectionDetail({
         </div>
       </div>
 
-      {url && (
-        <div className="flex items-center gap-2">
-          <code className="min-w-0 flex-1 truncate rounded bg-gray-50 px-2 py-1 font-mono text-xs text-gray-600 dark:bg-slate-800 dark:text-gray-400">
-            {url}
-          </code>
-          <button
-            type="button"
-            onClick={copyUrl}
-            className="rounded-md p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-slate-700"
-            aria-label="Copy server URL"
-          >
-            {copied ? (
-              <Check className="h-3.5 w-3.5 text-green-600 dark:text-green-400" />
-            ) : (
-              <Copy className="h-3.5 w-3.5" />
-            )}
-          </button>
-        </div>
-      )}
-
       {connection?.error && (
         <ErrorNotice
           error={connection.error}
@@ -247,7 +249,7 @@ export default function ConnectionDetail({
       )}
 
       {/* Tool permissions */}
-      <section>
+      <section className="mx-auto w-full max-w-2xl">
         <div className="mb-1 flex items-center justify-between gap-2">
           <h4 className="text-sm font-medium text-gray-900 dark:text-gray-100">
             Tool permissions

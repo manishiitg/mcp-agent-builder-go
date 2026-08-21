@@ -209,14 +209,15 @@ func displayTitle(serverName, toolName, annotationTitle string) string {
 		return toolName
 	}
 
-	// Sentence case: capitalise the first word, leave the rest lowercase.
-	first := []rune(words[0])
-	first[0] = []rune(strings.ToUpper(string(first[0])))[0]
-	out := string(first)
-	if len(words) > 1 {
-		out += " " + strings.Join(words[1:], " ")
+	// Title case every word, so the label reads as a name rather than a
+	// sentence fragment: "notion-create-pages" -> "Create Pages".
+	titled := make([]string, 0, len(words))
+	for _, w := range words {
+		r := []rune(w)
+		r[0] = []rune(strings.ToUpper(string(r[0])))[0]
+		titled = append(titled, string(r))
 	}
-	return out
+	return strings.Join(titled, " ")
 }
 
 type setConnectionToolsRequest struct {

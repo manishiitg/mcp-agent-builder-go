@@ -450,12 +450,12 @@ func TestDisplayTitle(t *testing.T) {
 		want   string
 	}{
 		// The server name is redundant on its own page, so it is dropped.
-		{"notion", "notion-create-pages", "Create pages"},
+		{"notion", "notion-create-pages", "Create Pages"},
 		{"notion", "notion-search", "Search"},
-		{"gmail", "get_email_message", "Get email message"},
-		{"gmail", "listDraftEmails", "List draft emails"},
+		{"gmail", "get_email_message", "Get Email Message"},
+		{"gmail", "listDraftEmails", "List Draft Emails"},
 		// A name that merely starts with similar letters is not a prefix match.
-		{"notion", "notionalvalue_get", "Notionalvalue get"},
+		{"notion", "notionalvalue_get", "Notionalvalue Get"},
 		// Nothing left after dropping the prefix means the prefix is kept.
 		{"notion", "notion", "Notion"},
 	}
