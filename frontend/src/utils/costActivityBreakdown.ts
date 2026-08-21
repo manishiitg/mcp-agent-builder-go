@@ -77,6 +77,17 @@ const executionLabel = (id: string) => {
     .trim() || id
 }
 
+// phaseLabel prettifies a costledger.Entry.Phase value for display (PLAT-166,
+// generalized per-message-sequence-item in PLAT-167). Unlike executionLabel,
+// this is not an id-grouping key — it is shown verbatim as a sub-line label
+// under an execution row, so it stays a plain string→string function.
+export const phaseLabel = (phase: string) => {
+  if (phase === 'execution_only') return 'Execution'
+  if (phase === 'reflection') return 'Reflection'
+  if (phase.startsWith('item:')) return phase.slice('item:'.length).replace(/[-_]+/g, ' ').trim() || phase
+  return phase.replace(/[-_]+/g, ' ').trim() || phase
+}
+
 const executionGroup = (category: CostActivityCategory['id'], scope: string, id: string) => {
   if (category === 'builder') {
     return scope === 'chat' ? 'interactive workflow chat' : 'workflow builder'

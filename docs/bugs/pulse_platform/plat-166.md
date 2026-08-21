@@ -266,3 +266,46 @@ unrelated earlier in this same session (PLAT-164's verification pass).
 **Not done:** live reverify against a real step with reflection enabled,
 confirming the sub-line actually renders correctly in the running UI —
 flagged per the Verification section above, not claimed.
+
+## Scope-fix (2026-08-21, same day)
+
+Caught by review before this shipped further: every `costobserver.Observer`
+defaulted its `phase` field to `PhaseExecutionOnly` at construction. That
+meant **every** execution — chat, builder, Pulse, evaluation, every plain
+workflow step, not only ones that ever run a reflection turn — grew a
+`by_phase.execution_only` entry that just duplicated its own top-level total,
+in every Cost Analysis API response, forever. Harmless to the UI (which only
+ever rendered something when a *second*, non-default phase was also
+present), but a real, permanent payload-size regression, and one directly
+relevant to [PLAT-111](plat-111.md)'s already-tracked Cost Analysis
+first-paint/payload problem.
+
+**Fix:** `Observer.phase` now starts empty (`""`). `addEntryToExecutionBucket`
+already only writes a `ByPhase` entry when `Entry.Phase != ""`, so an
+observer nobody ever calls `SetPhase` on now correctly produces no `by_phase`
+at all — not a redundant single-key one. The reflection-turn bracket
+(`reflection_turn_run.go`) now resets to `""` after the turn instead of back
+to `PhaseExecutionOnly`, so a lingering "execution_only" stamp can't cause
+the same duplication for whatever runs after it. `PhaseExecutionOnly` itself
+stays defined (still a reasonable explicit value, and
+`frontend/costActivityBreakdown.ts`'s `phaseLabel` still recognizes it) — it
+is simply never written as a default anymore.
+
+`CostsPopup.tsx`'s render condition updated to match: since `by_phase` can
+now legitimately hold exactly one entry that does *not* equal the row's
+whole total (e.g. `{"reflection": Y}` with real untagged execution work
+alongside it), the show/hide check is no longer "more than one key present"
+— it is "more than one key, OR exactly one key whose token count is less
+than the row's own total token count" (tokens compared as exact integers,
+not float cost, to avoid floating-point-summation false positives).
+
+Also folded into this same pass, ahead of shipping it as a separate defect:
+[PLAT-167](plat-167.md) reuses this exact mechanism for
+message_sequence-item-level breakdown and needed the corrected default and
+render condition from the start — see that ticket for what it adds on top.
+
+Verified: `pkg/costobserver/plat166_phase_test.go`'s default-phase test
+rewritten to assert no tag (was asserting `PhaseExecutionOnly`); full
+`go build ./...` / relevant `go test` / `npx tsc --noEmit` / `npx vitest run`
+rerun clean, zero new failures versus the same pre-existing baseline noted
+above.

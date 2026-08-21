@@ -19,7 +19,7 @@ import {
   classifyPhase,
   formatPhaseTitle,
 } from '../../utils/dailyCostBreakdown'
-import { buildCostActivityBreakdown } from '../../utils/costActivityBreakdown'
+import { buildCostActivityBreakdown, phaseLabel as costPhaseLabel } from '../../utils/costActivityBreakdown'
 import type {
   CostSummary,
   TokenUsageFile,
@@ -1304,18 +1304,29 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
                                               ) : (
                                                 <div className="max-h-48 overflow-y-auto px-3">
                                                   {category.executions.map(execution => {
-                                                    // PLAT-166: a workflow step's reflection turn shares the step's own
-                                                    // execution row (same ExecutionID) but carries a separate phase
-                                                    // breakdown when the backend recorded one. Only show the sub-line
-                                                    // when there is real reflection activity to report — most
-                                                    // executions (chat, builder, evaluation, Pulse, steps with no
-                                                    // reflection turn) never populate by_phase at all.
-                                                    const reflection = execution.cost.by_phase?.reflection
-                                                    const hasReflection = !!reflection && (
-                                                      reflection.total_cost_usd > 0 ||
-                                                      reflection.prompt_tokens + reflection.completion_tokens > 0 ||
-                                                      (reflection.llm_generation_duration_ms || 0) > 0
-                                                    )
+                                                    // PLAT-166/PLAT-167: an execution row's own combined total can hide a
+                                                    // phase breakdown underneath — a workflow step's reflection turn
+                                                    // sharing the step's execution id, or a message_sequence step's
+                                                    // individual items each tagged with their own "item:<id>" phase.
+                                                    // Most executions (chat, builder, evaluation, Pulse, a step with no
+                                                    // reflection turn) never populate by_phase at all — the backend
+                                                    // only writes an entry for a turn it explicitly tagged, not a
+                                                    // catch-all "the rest" bucket (PLAT-166 scope-fix).
+                                                    const phaseEntries = Object.entries(execution.cost.by_phase || {})
+                                                      .filter(([, phaseCost]) => (
+                                                        phaseCost.total_cost_usd > 0 ||
+                                                        phaseCost.prompt_tokens + phaseCost.completion_tokens > 0 ||
+                                                        (phaseCost.llm_generation_duration_ms || 0) > 0
+                                                      ))
+                                                      .sort(([, a], [, b]) => b.total_cost_usd - a.total_cost_usd)
+                                                    // Show the breakdown whenever it has more than one tagged phase
+                                                    // (e.g. several message_sequence items), or exactly one tagged
+                                                    // phase that doesn't already account for the row's whole total
+                                                    // (e.g. a reflection turn alongside untagged execution work) —
+                                                    // comparing token counts rather than float cost to stay exact.
+                                                    const taggedTokens = phaseEntries.reduce((sum, [, c]) => sum + c.prompt_tokens + c.completion_tokens, 0)
+                                                    const totalTokens = execution.cost.prompt_tokens + execution.cost.completion_tokens
+                                                    const showPhaseBreakdown = phaseEntries.length > 1 || (phaseEntries.length === 1 && taggedTokens < totalTokens)
                                                     return (
                                                       <React.Fragment key={execution.id}>
                                                         <div className="flex items-center gap-2 border-b border-border/70 py-2 text-[10px] last:border-0" title={execution.id}>
@@ -1324,14 +1335,14 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
                                                           <span className="shrink-0 font-mono text-muted-foreground">LLM time: {formatDuration(execution.cost.llm_generation_duration_ms)}</span>
                                                           <span className="shrink-0 font-mono text-foreground">{formatUSD(execution.cost.total_cost_usd)}</span>
                                                         </div>
-                                                        {hasReflection && reflection && (
-                                                          <div className="flex items-center gap-2 border-b border-border/70 py-1 pl-4 text-[10px] text-muted-foreground last:border-0" title="Post-completion reflection turn cost, included in the total above">
-                                                            <span className="min-w-0 flex-1 truncate">↳ Reflection</span>
-                                                            <span className="shrink-0 font-mono">{formatTokens(reflection.prompt_tokens + reflection.completion_tokens)}</span>
-                                                            <span className="shrink-0 font-mono">LLM time: {formatDuration(reflection.llm_generation_duration_ms)}</span>
-                                                            <span className="shrink-0 font-mono">{formatUSD(reflection.total_cost_usd)}</span>
+                                                        {showPhaseBreakdown && phaseEntries.map(([phase, phaseCost]) => (
+                                                          <div key={phase} className="flex items-center gap-2 border-b border-border/70 py-1 pl-4 text-[10px] text-muted-foreground last:border-0" title="Included in the total above">
+                                                            <span className="min-w-0 flex-1 truncate">↳ {costPhaseLabel(phase)}</span>
+                                                            <span className="shrink-0 font-mono">{formatTokens(phaseCost.prompt_tokens + phaseCost.completion_tokens)}</span>
+                                                            <span className="shrink-0 font-mono">LLM time: {formatDuration(phaseCost.llm_generation_duration_ms)}</span>
+                                                            <span className="shrink-0 font-mono">{formatUSD(phaseCost.total_cost_usd)}</span>
                                                           </div>
-                                                        )}
+                                                        ))}
                                                       </React.Fragment>
                                                     )
                                                   })}

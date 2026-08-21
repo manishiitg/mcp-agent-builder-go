@@ -6,28 +6,33 @@ import (
 	unifiedevents "github.com/manishiitg/mcpagent/events"
 )
 
-// TestObserverDefaultsToExecutionOnlyPhase pins PLAT-166: a freshly
-// constructed observer attributes its entries to the execution turn until
-// told otherwise — this is the state a step's own (non-reflection) work runs
-// under for its entire lifetime unless a reflection turn later toggles it.
-func TestObserverDefaultsToExecutionOnlyPhase(t *testing.T) {
+// TestObserverDefaultsToNoPhase pins the PLAT-166 scope-fix: a freshly
+// constructed observer tags nothing by default. Defaulting to
+// PhaseExecutionOnly (the original PLAT-166 shape) meant every execution —
+// chat, builder, Pulse, evaluation, every plain workflow step, not just ones
+// that ever run a reflection turn — grew a by_phase.execution_only entry
+// that just duplicated its own top-level total in every Cost Analysis API
+// response. An empty phase writes no ByPhase entry at all
+// (addEntryToExecutionBucket), so the default costs nothing.
+func TestObserverDefaultsToNoPhase(t *testing.T) {
 	observer := New(nil, "sess-1", "user-1", "simple",
 		WithAttribution(ScopeWorkflowExecution, "Workflow/demo", "", "sess-1:review-measure"),
 	)
-	if got := observer.Phase(); got != PhaseExecutionOnly {
-		t.Fatalf("Phase() = %q, want %q", got, PhaseExecutionOnly)
+	if got := observer.Phase(); got != "" {
+		t.Fatalf("Phase() = %q, want empty", got)
 	}
 	entry := observer.baseEntry(&unifiedevents.AgentEvent{})
-	if entry.Phase != PhaseExecutionOnly {
-		t.Fatalf("baseEntry().Phase = %q, want %q", entry.Phase, PhaseExecutionOnly)
+	if entry.Phase != "" {
+		t.Fatalf("baseEntry().Phase = %q, want empty", entry.Phase)
 	}
 }
 
-// TestObserverSetPhaseTogglesEntryAttribution pins the reflection-turn
-// bracket pattern (reflection_turn_run.go): SetPhase changes what every
-// subsequent entry from this SAME observer instance carries, and a later
-// SetPhase back restores the default — since the reflection turn reuses the
-// step's own agent/observer rather than getting a fresh one.
+// TestObserverSetPhaseTogglesEntryAttribution pins the reflection-turn /
+// message_sequence-item bracket pattern (reflection_turn_run.go,
+// controller_message_sequence.go): SetPhase changes what every subsequent
+// entry from this SAME observer instance carries, and a later SetPhase("")
+// restores the untagged default — since both reuse the step's own
+// agent/observer rather than getting a fresh one.
 func TestObserverSetPhaseTogglesEntryAttribution(t *testing.T) {
 	observer := New(nil, "sess-1", "user-1", "simple",
 		WithAttribution(ScopeWorkflowExecution, "Workflow/demo", "", "sess-1:review-measure"),
@@ -42,12 +47,26 @@ func TestObserverSetPhaseTogglesEntryAttribution(t *testing.T) {
 		t.Fatalf("entry during reflection: Phase = %q, want %q", reflectionEntry.Phase, PhaseReflection)
 	}
 
-	observer.SetPhase(PhaseExecutionOnly)
-	if got := observer.Phase(); got != PhaseExecutionOnly {
-		t.Fatalf("Phase() after restoring = %q, want %q", got, PhaseExecutionOnly)
+	observer.SetPhase("")
+	if got := observer.Phase(); got != "" {
+		t.Fatalf("Phase() after restoring = %q, want empty", got)
 	}
 	restoredEntry := observer.baseEntry(&unifiedevents.AgentEvent{})
-	if restoredEntry.Phase != PhaseExecutionOnly {
-		t.Fatalf("entry after restore: Phase = %q, want %q", restoredEntry.Phase, PhaseExecutionOnly)
+	if restoredEntry.Phase != "" {
+		t.Fatalf("entry after restore: Phase = %q, want empty", restoredEntry.Phase)
+	}
+}
+
+// TestObserverSetPhaseSupportsArbitraryMessageSequenceItemTags pins PLAT-167:
+// SetPhase is not limited to the two PLAT-166 constants — a message_sequence
+// item's own identity works exactly the same way.
+func TestObserverSetPhaseSupportsArbitraryMessageSequenceItemTags(t *testing.T) {
+	observer := New(nil, "sess-1", "user-1", "simple",
+		WithAttribution(ScopeWorkflowExecution, "Workflow/demo", "", "sess-1:outreach-sequence"),
+	)
+	observer.SetPhase("item:draft-message")
+	entry := observer.baseEntry(&unifiedevents.AgentEvent{})
+	if entry.Phase != "item:draft-message" {
+		t.Fatalf("entry.Phase = %q, want %q", entry.Phase, "item:draft-message")
 	}
 }

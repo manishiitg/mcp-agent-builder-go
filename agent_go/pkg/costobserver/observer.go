@@ -116,7 +116,15 @@ func New(ledger *costledger.Ledger, sessionID, userID, agentMode string, opts ..
 		sessionID: sessionID,
 		userID:    userID,
 		agentMode: agentMode,
-		phase:     PhaseExecutionOnly,
+		// phase deliberately starts empty, not PhaseExecutionOnly (PLAT-166
+		// scope-fix). Every observer used to default to PhaseExecutionOnly,
+		// which meant EVERY execution — chat, builder, Pulse, evaluation,
+		// every plain workflow step — grew a `by_phase.execution_only` entry
+		// that just duplicated its own top-level total, in every Cost
+		// Analysis API response, forever. Only a phase the caller explicitly
+		// sets via SetPhase (reflection, a message_sequence item) is worth
+		// naming; addEntryToExecutionBucket already skips ByPhase entirely
+		// for an empty phase, so leaving this unset costs nothing.
 	}
 	for _, opt := range opts {
 		opt(observer)
@@ -151,12 +159,16 @@ func (o *Observer) ExecutionID() string {
 }
 
 // SetPhase updates the phase every entry this observer writes from now on
-// carries, until changed again (PLAT-166). A reflection turn reuses the same
-// agent — and therefore the same Observer instance — as the step's own
-// execution turn, so this is how the two get told apart in the ledger:
-// bracket the reflection turn with SetPhase(PhaseReflection) and a deferred
-// SetPhase(PhaseExecutionOnly), mirroring
-// ContextAwareEventBridge.PushContext/PopContext's bracket right next to it.
+// carries, until changed again (PLAT-166). A reflection turn — or, per
+// PLAT-167, a message_sequence item's own turn — reuses the same agent, and
+// therefore the same Observer instance, as whatever ran before it. Bracket
+// the turn with SetPhase(PhaseReflection) (or "item:<id>") and a deferred
+// SetPhase(""), mirroring ContextAwareEventBridge.PushContext/PopContext's
+// bracket right next to it. Reset to "" (not PhaseExecutionOnly): an empty
+// phase writes no ByPhase entry at all (addEntryToExecutionBucket), so any
+// turn that follows and was never explicitly tagged stays invisible in
+// by_phase instead of manufacturing a redundant duplicate-of-the-total entry
+// for it.
 func (o *Observer) SetPhase(phase string) {
 	if o == nil {
 		return

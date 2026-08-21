@@ -191,13 +191,15 @@ func (hcpo *StepBasedWorkflowOrchestrator) runStepReflectionTurn(
 		// Analysis UI actually reads) is fed by a completely separate
 		// AgentEventListener — the cost observer attached to this same agent
 		// back when its execution turn started. Toggle its phase here too, or
-		// this turn's cost silently lands in the step's `execution_only`
-		// bucket in the ledger even though the bridge correctly tagged it
-		// `reflection`. Deferred for the same reason as cab.PopContext above.
+		// this turn's cost silently lands untagged in the ledger even though
+		// the bridge correctly tagged it `reflection`. Deferred for the same
+		// reason as cab.PopContext above. Resets to "" (not
+		// PhaseExecutionOnly): see SetPhase's doc for why an untagged default
+		// beats a named-but-redundant one.
 		for _, observer := range ba.Observers() {
 			if costObserver, ok := observer.(*costobserver.Observer); ok {
 				costObserver.SetPhase(costobserver.PhaseReflection)
-				defer costObserver.SetPhase(costobserver.PhaseExecutionOnly)
+				defer costObserver.SetPhase("")
 			}
 		}
 		reflectionStartedAt := time.Now().UTC()

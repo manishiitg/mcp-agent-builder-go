@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/common"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/costobserver"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents"
 
@@ -872,6 +873,26 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeMessageSequenceUserMessage(ctx
 	}
 	session.ExecutionTurnCount++
 	turnNumber := session.ExecutionTurnCount
+	// PLAT-167: tag this item's cost-ledger entries with its own identity, so
+	// Cost Analysis can break a message_sequence step's spend out per item
+	// instead of merging every item into one combined row. Reuses PLAT-166's
+	// generic phase mechanism verbatim (Entry.Phase / ExecutionAggregate.ByPhase
+	// already accept any string) — no new ledger plumbing. runtime.Agent is
+	// created once and reused for every item in this step
+	// (getMessageSequenceRuntime), so — exactly like the reflection turn —
+	// this must toggle the already-attached observer's phase rather than
+	// attaching a new one.
+	if ba := runtime.Agent.GetBaseAgent(); ba != nil {
+		for _, observer := range ba.Observers() {
+			if costObserver, ok := observer.(*costobserver.Observer); ok {
+				costObserver.SetPhase("item:" + item.ID)
+				// Resets to "" (not costobserver.PhaseExecutionOnly): see
+				// Observer.SetPhase's doc — an untagged turn writes no
+				// by_phase entry at all, instead of a named-but-redundant one.
+				defer costObserver.SetPhase("")
+			}
+		}
+	}
 	attemptStartedAt := time.Now().UTC()
 	result, history, err := hcpo.withWorkshopMessageTarget(turnCtx, step.GetID(), "message-sequence:"+item.ID, runtime.Agent, func() (string, []llmtypes.MessageContent, error) {
 		return runtime.Agent.Execute(turnCtx, templateVars, session.ConversationHistory)
