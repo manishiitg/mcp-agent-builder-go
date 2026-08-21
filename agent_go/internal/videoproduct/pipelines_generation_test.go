@@ -79,14 +79,14 @@ func TestShortformStagesPutDirectionAndMeasuredNarrationBeforeShots(t *testing.T
 	}
 
 	lookSound := shortformPipeline.Stages[index["shortform-look-sound"]].Description
-	for _, required := range []string{"locations and backgrounds", "wardrobe", "lighting", "palette", "accent", "music", "ambience", "sound-effects", "captions", "separate TTS narration", "Never silently turn"} {
+	for _, required := range []string{"Locations and backgrounds", "Wardrobe, props, and continuity", "Lighting and visual palette", "Speech and voices", "Music", "Ambience and sound effects", "Captions", "off-camera voiceover", "visible on-camera dialogue", "synchronized native audio", "Separate TTS is for off-camera voiceover", "Never silently turn"} {
 		if !strings.Contains(lookSound, required) {
 			t.Fatalf("short-form look/sound step is missing %q", required)
 		}
 	}
 
 	narration := shortformPipeline.Stages[index["shortform-narration"]].Description
-	for _, required := range []string{"ffprobe", "REAL measured duration", "Missing, unreadable, silent, or unmeasured", "Instructional narration is not optional"} {
+	for _, required := range []string{"ffprobe", "REAL measured duration", "Missing, unreadable, silent, or unmeasured", "visible native dialogue", "Off-camera instructional voiceover is not optional"} {
 		if !strings.Contains(narration, required) {
 			t.Fatalf("short-form narration step is missing %q", required)
 		}
@@ -100,7 +100,7 @@ func TestShortformStagesPutDirectionAndMeasuredNarrationBeforeShots(t *testing.T
 	}
 
 	assemble := shortformPipeline.Stages[index["shortform-assemble"]].Description
-	for _, required := range []string{"required narration segment", "Cut visuals to the measured narration timeline", "music, ambience, sound effects, and captions"} {
+	for _, required := range []string{"required narration segment", "Cut visuals to the measured narration timeline", "music, ambience, sound effects, and captions", "selected background/look decisions", "native-dialogue source per beat"} {
 		if !strings.Contains(assemble, required) {
 			t.Fatalf("short-form assembly is missing %q", required)
 		}

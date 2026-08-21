@@ -131,7 +131,7 @@ func TestGenerationSkillsRegisterAndStayOutOfTheInfographicPipeline(t *testing.T
 		{"video-cinematography", []string{"dolly is not zoom", "reference-image conditioning", "video-model-selection"}},
 		{"video-storytelling", []string{"video-cinematography", "video-model-selection", "But-therefore, not and-then", "Scaling to true long-form"}},
 		{"generated-video-quality", []string{"character_consistency", "generation_artifacts", "temporal_coherence", "video-quality"}},
-		{"video-look-sound", []string{"locations and backgrounds", "separate TTS narration", "ffprobe", "silent visual preview", "not_applicable"}},
+		{"video-look-sound", []string{"Locations and backgrounds", "visible native dialogue", "Use separate TTS only for off-camera voiceover", "ffprobe", "silent visual preview", "not_applicable", "render report"}},
 	}
 	for _, tc := range cases {
 		if !skills.IsBuiltinSkill(tc.name) {
