@@ -6,22 +6,20 @@ import {
   ChevronLeft,
   ChevronDown,
   Loader2,
-  CheckCircle2,
   Code2,
   Plug,
 } from 'lucide-react'
 import ModalPortal from '../ui/ModalPortal'
-import ConnectionRow from './ConnectionRow'
-import ConnectionDetail from './ConnectionDetail'
+import ConnectionRow, { CONNECTION_GRID } from './ConnectionRow'
 import PopularCard from './PopularCard'
 import ConnectFlowModal from './ConnectFlowModal'
 import ErrorNotice from './ErrorNotice'
 import MCPServersSection from '../sidebar/MCPServersSection'
 import { useConnectionsStore } from '../../stores/useConnectionsStore'
 import { buildRows, filterRows, pickPopular, type ConnectionFilter } from './connectionsTableUtils'
-import type { CatalogEntry, TestResult } from '../../services/connectionsApi'
+import type { CatalogEntry } from '../../services/connectionsApi'
 
-type View = 'list' | 'custom' | 'detail'
+type View = 'list' | 'custom'
 
 const FILTERS: { id: ConnectionFilter; label: string }[] = [
   { id: 'all', label: 'All' },
@@ -54,25 +52,22 @@ export default function ConnectionsModal({ onClose }: ConnectionsModalProps) {
     isLoadingCatalog,
     isLoadingConnections,
     connectingId,
-    testingId,
+    disconnectingId,
     loadError,
     actionError,
     refresh,
     loadConnections,
     connect,
     disconnect,
-    test,
     clearActionError,
   } = useConnectionsStore()
 
   const [view, setView] = useState<View>('list')
-  const [detailId, setDetailId] = useState<string | null>(null)
   const [filter, setFilter] = useState<ConnectionFilter>('all')
   const [query, setQuery] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
   const [addOpen, setAddOpen] = useState(false)
   const [flowEntry, setFlowEntry] = useState<CatalogEntry | null>(null)
-  const [testToast, setTestToast] = useState<TestResult | null>(null)
   const searchRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -110,14 +105,6 @@ export default function ConnectionsModal({ onClose }: ConnectionsModalProps) {
     else connect(id)
   }
 
-  const handleTest = async (id: string) => {
-    const result = await test(id)
-    if (result) {
-      setTestToast(result)
-      window.setTimeout(() => setTestToast(null), 5000)
-    }
-  }
-
   const isLoading = isLoadingCatalog || isLoadingConnections
 
   return (
@@ -140,7 +127,6 @@ export default function ConnectionsModal({ onClose }: ConnectionsModalProps) {
                 type="button"
                 onClick={() => {
                   setView('list')
-                  setDetailId(null)
                   loadConnections()
                 }}
                 className="-ml-1 flex items-center gap-1.5 rounded-md px-2 py-1 text-lg font-semibold text-gray-900 hover:bg-gray-100 dark:text-gray-100 dark:hover:bg-slate-800"
@@ -269,17 +255,7 @@ export default function ConnectionsModal({ onClose }: ConnectionsModalProps) {
 
           {/* Body */}
           <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-            {view === 'detail' && detailId ? (
-              <ConnectionDetail
-                entry={catalogById.get(detailId)}
-                connection={connectionById.get(detailId)}
-                isConnecting={connectingId === detailId}
-                isTesting={testingId === detailId}
-                onConnect={() => startConnect(detailId)}
-                onDisconnect={() => disconnect(detailId)}
-                onTest={() => handleTest(detailId)}
-              />
-            ) : view === 'custom' ? (
+            {view === 'custom' ? (
               <div className="space-y-3">
                 <p className="rounded-md bg-gray-50 p-3 text-xs text-gray-600 dark:bg-slate-800 dark:text-gray-400">
                   Connect a Streamable HTTP or local stdio MCP server directly, and inspect
@@ -307,18 +283,6 @@ export default function ConnectionsModal({ onClose }: ConnectionsModalProps) {
                     />
                   </div>
                 )}
-                {testToast && (
-                  <div className="mb-4 flex items-start gap-2 rounded-md border border-green-200 bg-green-50 p-2.5 dark:border-green-900/50 dark:bg-green-900/20">
-                    <CheckCircle2
-                      className="mt-0.5 h-4 w-4 shrink-0 text-green-600 dark:text-green-400"
-                      aria-hidden="true"
-                    />
-                    <p className="text-xs text-green-800 dark:text-green-300">
-                      {testToast.message}
-                    </p>
-                  </div>
-                )}
-
                 {/* Popular */}
                 {popular.length > 0 && (
                   <section className="mb-6">
@@ -357,7 +321,7 @@ export default function ConnectionsModal({ onClose }: ConnectionsModalProps) {
                 </div>
 
                 {/* Table */}
-                <div className="grid grid-cols-[minmax(0,1fr)_11rem_11rem] items-center gap-4 border-b border-gray-200 px-3 pb-2 dark:border-slate-700">
+                <div className={`grid ${CONNECTION_GRID} items-center gap-4 border-b border-gray-200 px-3 pb-2 dark:border-slate-700`}>
                   <span className="text-xs font-medium text-gray-500 dark:text-gray-400">
                     Connector
                   </span>
@@ -366,6 +330,9 @@ export default function ConnectionsModal({ onClose }: ConnectionsModalProps) {
                   </span>
                   <span className="text-xs font-medium text-gray-500 dark:text-gray-400">
                     Status
+                  </span>
+                  <span className="text-xs font-medium text-gray-500 dark:text-gray-400">
+                    Action
                   </span>
                 </div>
 
@@ -393,11 +360,9 @@ export default function ConnectionsModal({ onClose }: ConnectionsModalProps) {
                       entry={row.entry}
                       connection={row.connection}
                       isConnecting={connectingId === row.id}
+                      isDisconnecting={disconnectingId === row.id}
                       onConnect={() => startConnect(row.id)}
-                      onOpen={() => {
-                        setDetailId(row.id)
-                        setView('detail')
-                      }}
+                      onDisconnect={() => disconnect(row.id)}
                     />
                   ))}
                 </div>

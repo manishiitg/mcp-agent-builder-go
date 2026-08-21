@@ -53,6 +53,8 @@ interface ConnectionsState {
   connectingId: string | null
   /** Catalog/connection id currently being tested. */
   testingId: string | null
+  /** Catalog/connection id currently being disconnected. */
+  disconnectingId: string | null
 
   loadError: FriendlyError | null
   actionError: FriendlyError | null
@@ -156,6 +158,7 @@ export const useConnectionsStore = create<ConnectionsState>((set, get) => ({
   isLoadingConnections: false,
   connectingId: null,
   testingId: null,
+  disconnectingId: null,
 
   loadError: null,
   actionError: null,
@@ -244,13 +247,14 @@ export const useConnectionsStore = create<ConnectionsState>((set, get) => ({
   },
 
   disconnect: async id => {
-    set({ actionError: null })
+    set({ disconnectingId: id, actionError: null })
     try {
       await connectionsApi.disconnect(id)
       await get().loadConnections()
+      set({ disconnectingId: null })
       return true
     } catch (err) {
-      set({ actionError: toFriendly(err) })
+      set({ disconnectingId: null, actionError: toFriendly(err) })
       return false
     }
   },

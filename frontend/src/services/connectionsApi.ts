@@ -116,27 +116,6 @@ export interface ConnectResult {
   resource?: string;
 }
 
-export interface ConnectionTool {
-  name: string;
-  /** Readable label for the row; the raw name stays available for identification. */
-  title: string;
-  description?: string;
-  enabled: boolean;
-  /** Tools that only observe, separated from ones that change or delete. */
-  read_only: boolean;
-  /** 'annotation' when the server declared it; 'inferred' when read off the name. */
-  source: 'annotation' | 'inferred';
-}
-
-export interface ConnectionToolsResponse {
-  server_name: string;
-  tools: ConnectionTool[];
-  total: number;
-  enabled_count: number;
-  /** False when any tool's group had to be guessed from its name. */
-  groups_from_annotations: boolean;
-}
-
 export interface TestResult {
   status: string;
   server_name: string;
@@ -264,22 +243,6 @@ export class ConnectionsApi {
   async disconnect(id: string): Promise<{ status: string; message: string }> {
     return request(`/api/connections/${encodeURIComponent(id)}/disconnect`, {
       method: 'POST',
-    });
-  }
-
-  /** Tools this connection exposes, each with its on/off state. */
-  async getTools(id: string): Promise<ConnectionToolsResponse> {
-    return request(`/api/connections/${encodeURIComponent(id)}/tools`);
-  }
-
-  /**
-   * Saves which tools are switched OFF. Only the off switches are sent, so
-   * anything omitted stays enabled and tools added later work by default.
-   */
-  async setDisabledTools(id: string, disabled: string[]): Promise<{ status: string }> {
-    return request(`/api/connections/${encodeURIComponent(id)}/tools`, {
-      method: 'PUT',
-      body: JSON.stringify({ disabled }),
     });
   }
 
