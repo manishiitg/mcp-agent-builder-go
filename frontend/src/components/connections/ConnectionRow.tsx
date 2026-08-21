@@ -1,4 +1,4 @@
-import { Loader2, Check, Plug, PlugZap } from 'lucide-react'
+import { Loader2, Plug, PlugZap } from 'lucide-react'
 import ConnectionIcon from './ConnectionIcon'
 import type { CatalogEntry, Connection, ConnectionTransport } from '../../services/connectionsApi'
 
@@ -8,7 +8,7 @@ const TRANSPORT_LABELS: Record<ConnectionTransport, string> = {
 }
 
 /** Shared column template, so the header and every row stay aligned. */
-export const CONNECTION_GRID = 'grid-cols-[minmax(0,1fr)_6rem_9rem_8rem]'
+export const CONNECTION_GRID = 'grid-cols-[minmax(0,1fr)_7rem_9rem]'
 
 interface ConnectionRowProps {
   /** Catalog metadata. Absent for custom MCP servers the user added by hand. */
@@ -22,9 +22,9 @@ interface ConnectionRowProps {
 }
 
 /**
- * One row of the connections table: identity, transport, the state it is in,
- * and the action available from that state. The row is the whole surface for a
- * connector — there is no separate page behind it.
+ * One row of the connections table: identity, transport, and a single button
+ * that both reports the state and changes it. The row is the whole surface for
+ * a connector — there is no separate page behind it.
  */
 export default function ConnectionRow({
   entry,
@@ -72,25 +72,12 @@ export default function ConnectionRow({
         {TRANSPORT_LABELS[transport]}
       </span>
 
-      {/* Status — states where the connection is, and nothing else */}
-      <div className="min-w-0">
+      {/* Status — the button IS the state: what it says is what this row is
+          not, and pressing it is how you change that. */}
+      <div className="flex items-center justify-start">
         {blockedLabel ? (
           <span className="text-sm text-gray-400 dark:text-gray-500">{blockedLabel}</span>
         ) : isConnected ? (
-          <span className="flex items-center gap-1.5 text-sm text-green-600 dark:text-green-400">
-            <Check className="h-4 w-4 shrink-0" aria-hidden="true" />
-            Connected
-          </span>
-        ) : health === 'needs_reconnect' ? (
-          <span className="text-sm text-amber-600 dark:text-amber-400">Needs reconnect</span>
-        ) : (
-          <span className="text-sm text-gray-500 dark:text-gray-400">Not connected</span>
-        )}
-      </div>
-
-      {/* Action — the one thing to do from that state */}
-      <div className="flex items-center justify-start">
-        {blockedLabel ? null : isConnected ? (
           <button
             type="button"
             onClick={onDisconnect}
