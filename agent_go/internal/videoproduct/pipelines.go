@@ -121,15 +121,16 @@ func qualityReviewDescription(candidateSource, markdownOutput string) string {
 // route and answer anything. Names must be flat and hyphenated — the builtin
 // registry rejects slashes, so layered names wait on nested discovery.
 
-// pipelineRegistry holds every pipeline the product can run. Routing picks one.
-// Order matters: the router's default is the first entry, and the product's
-// default route stays the infographic explainer because it is the only one
-// that cannot spend the user's money.
-var pipelineRegistry = []*Pipeline{infographicPipeline, shortformPipeline, longformPipeline, qualityPipeline}
+// pipelineRegistry holds every pipeline the product can run. Video Studio is
+// deliberately cinematic-only; HyperFrames remains a technique available
+// inside these pipelines, not a separate product/infographic route.
+var pipelineRegistry = []*Pipeline{shortformPipeline, longformPipeline, qualityPipeline}
 
 func init() {
 	// Attach descriptions by stage id so the definitions above stay scannable.
-	for _, pipeline := range pipelineRegistry {
+	// Keep the retired infographic definition initialized only so legacy-plan
+	// migration tests and upgrades can still recognize it. It is not registered.
+	for _, pipeline := range append([]*Pipeline{infographicPipeline}, pipelineRegistry...) {
 		for i := range pipeline.Stages {
 			if pipeline.Stages[i].Description != "" {
 				continue
@@ -151,4 +152,4 @@ func init() {
 }
 
 // DefaultPipeline is the branch a run takes when nothing selects one.
-func DefaultPipeline() *Pipeline { return infographicPipeline }
+func DefaultPipeline() *Pipeline { return shortformPipeline }

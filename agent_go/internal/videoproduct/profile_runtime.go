@@ -261,8 +261,9 @@ func shouldRefreshGeneratedVideoStudioPlan(content string) bool {
 		return true
 	}
 	hasInfographicRoute := strings.Contains(content, `"route_id": "infographic"`) || strings.Contains(content, `"route_id":"infographic"`)
-	if !hasInfographicRoute ||
-		!strings.Contains(content, `"infographic-research"`) {
+	hasCinematicRoutes := (strings.Contains(content, `"route_id": "shortform"`) || strings.Contains(content, `"route_id":"shortform"`)) &&
+		(strings.Contains(content, `"route_id": "longform"`) || strings.Contains(content, `"route_id":"longform"`))
+	if !hasInfographicRoute && !hasCinematicRoutes {
 		return false
 	}
 	// A plan this product generated that the platform will not load is worse
@@ -283,7 +284,7 @@ func shouldRefreshGeneratedVideoStudioPlan(content string) bool {
 	if strings.Contains(content, `"type": "todo_task"`) || strings.Contains(content, `"type":"todo_task"`) {
 		return true
 	}
-	required := []string{`"infographic-render-critique"`, `"shortform-characters"`, `"shortform-look-sound"`, `"shortform-narration"`}
+	required := []string{`"shortform-characters"`, `"shortform-look-sound"`, `"shortform-narration"`, `"longform-shotlist"`}
 	for _, marker := range required {
 		if !strings.Contains(content, marker) {
 			return true

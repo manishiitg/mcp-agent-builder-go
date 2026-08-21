@@ -9,7 +9,8 @@ dependencies:
     - id: hyperframes-skills
       installer: skills-cli
       source: heygen-com/hyperframes
-      # Install the official core plus routes used by product-infographic.
+      # Keep HyperFrames as a cinematic production technique for exact UI,
+      # titles, diagrams, overlays, transitions, and compositing.
       install:
         - hyperframes
         - hyperframes-core
@@ -19,10 +20,6 @@ dependencies:
         - media-use
         - hyperframes-registry
         - hyperframes-keyframes
-        - general-video
-        - product-launch-video
-        - faceless-explainer
-        - motion-graphics
       attach: [hyperframes]
       refresh_hours: 24
 
@@ -66,7 +63,6 @@ profile:
   name: Video Studio
   version: 2
   skills:
-    - product-infographic
     - video-creation
     - video-look-sound
     - longform-cinematic-video
@@ -315,9 +311,8 @@ ui:
   streaming: structured
 
 workflows:
-  enabled: [infographic, shortform, longform, quality]
+  enabled: [shortform, longform, quality]
   selected_skills:
-    - product-infographic
     - video-creation
     - video-look-sound
     - video-editing

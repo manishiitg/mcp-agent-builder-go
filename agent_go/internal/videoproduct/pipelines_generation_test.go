@@ -72,9 +72,9 @@ func TestShortformStagesPutDirectionAndMeasuredNarrationBeforeShots(t *testing.T
 		}
 	}
 	generate := shortformPipeline.Stages[index["shortform-generate"]].Description
-	for _, forbidden := range []string{"HyperFrames", "HTML panels", "infographic route"} {
-		if !strings.Contains(generate, forbidden) {
-			t.Fatalf("short-form generation does not explicitly reject %q", forbidden)
+	for _, required := range []string{"explicitly classified as a HyperFrames insert", "do not introduce unplanned HyperFrames scenes", "photoreal footage"} {
+		if !strings.Contains(generate, required) {
+			t.Fatalf("short-form generation is missing selective HyperFrames rule %q", required)
 		}
 	}
 
@@ -196,11 +196,10 @@ func TestLongformStagesKeepTheirLoadBearingOrder(t *testing.T) {
 	}
 }
 
-// Both generation pipelines route to skills the product owns, and neither may
-// reach for the HyperFrames composition stack -- that is the infographic
-// route's job, and pulling it in here is how a footage production quietly
-// turns into a slideshow.
-func TestGenerationPipelinesUseGenerationSkillsOnly(t *testing.T) {
+// Both cinematic pipelines retain real footage generation while permitting
+// HyperFrames only in the planning, creation, assembly, and QA steps where an
+// explicitly planned deterministic insert can be made and verified.
+func TestCinematicPipelinesScopeHyperFramesToPlannedInserts(t *testing.T) {
 	generationSkills := map[string]bool{}
 	for _, name := range []string{"fal-ai", "google-ai", "seeddance-api", "longform-cinematic-video", "video-model-selection", "video-cinematography", "video-storytelling"} {
 		generationSkills[name] = true
@@ -209,9 +208,10 @@ func TestGenerationPipelinesUseGenerationSkillsOnly(t *testing.T) {
 	for _, pipeline := range []*Pipeline{longformPipeline, shortformPipeline} {
 		sawGenerationSkill := false
 		for _, stage := range pipeline.Stages {
+			allowsHyperFrames := strings.HasSuffix(stage.ID, "-shotlist") || strings.HasSuffix(stage.ID, "-generate") || strings.HasSuffix(stage.ID, "-assemble") || strings.HasSuffix(stage.ID, "-check")
 			for _, skill := range stage.Skills {
-				if strings.HasPrefix(skill, "hyperframes") {
-					t.Fatalf("%s/%s attaches %q; generation pipelines produce footage, not HyperFrames compositions", pipeline.ID, stage.ID, skill)
+				if strings.HasPrefix(skill, "hyperframes") && !allowsHyperFrames {
+					t.Fatalf("%s/%s attaches %q outside the planned insert lifecycle", pipeline.ID, stage.ID, skill)
 				}
 				if generationSkills[skill] {
 					sawGenerationSkill = true
@@ -226,6 +226,12 @@ func TestGenerationPipelinesUseGenerationSkillsOnly(t *testing.T) {
 		}
 		if !sawGenerationSkill {
 			t.Fatalf("%s attaches none of the generation skills it exists to run", pipeline.ID)
+		}
+		shotlist := pipeline.Stages[len(pipeline.Stages)-4].Description
+		for _, marker := range []string{"HyperFrames insert", "never use it"} {
+			if !strings.Contains(shotlist, marker) {
+				t.Fatalf("%s shot list is missing %q", pipeline.ID, marker)
+			}
 		}
 	}
 }
@@ -306,10 +312,9 @@ func TestNarrationIsNotLockedToOneProvider(t *testing.T) {
 	}
 }
 
-// Routing is what makes the new pipelines reachable at all; without a route
-// the stages sit in plan.json and never execute. The default deliberately
-// stays on the pipeline that cannot spend money.
-func TestGenerationPipelinesAreRoutableAndNotTheDefault(t *testing.T) {
+// Video Studio exposes cinematic production only. Short-form is the default;
+// HyperFrames is a technique inside it, never a separate route.
+func TestCinematicPipelinesAreTheOnlyCreativeRoutes(t *testing.T) {
 	plan := planForAll(pipelineRegistry)
 	steps := plan["steps"].([]map[string]interface{})
 	if len(steps) == 0 || steps[0]["type"] != "routing" {
@@ -321,7 +326,7 @@ func TestGenerationPipelinesAreRoutableAndNotTheDefault(t *testing.T) {
 	for _, route := range routes {
 		routed[route["route_id"].(string)] = route["next_step_id"].(string)
 	}
-	for _, want := range []string{"longform", "shortform", "infographic", "quality"} {
+	for _, want := range []string{"longform", "shortform", "quality"} {
 		if routed[want] == "" {
 			t.Fatalf("no route reaches the %s pipeline: %+v", want, routed)
 		}
@@ -329,11 +334,13 @@ func TestGenerationPipelinesAreRoutableAndNotTheDefault(t *testing.T) {
 	if routed["longform"] != "longform-brief" || routed["shortform"] != "shortform-brief" {
 		t.Fatalf("generation routes must enter at their brief stage, got %+v", routed)
 	}
-	if got := steps[0]["default_route_id"]; got != "infographic" {
-		t.Fatalf("default route = %v, want infographic -- the default must not be a pipeline that spends money", got)
+	if routed["infographic"] != "" {
+		t.Fatalf("product infographic remains exposed as a route: %+v", routed)
 	}
-
-	if DefaultPipeline().ID != "infographic" {
-		t.Fatalf("DefaultPipeline() = %s, want infographic", DefaultPipeline().ID)
+	if got := steps[0]["default_route_id"]; got != "shortform" {
+		t.Fatalf("default route = %v, want shortform", got)
+	}
+	if DefaultPipeline().ID != "shortform" {
+		t.Fatalf("DefaultPipeline() = %s, want shortform", DefaultPipeline().ID)
 	}
 }

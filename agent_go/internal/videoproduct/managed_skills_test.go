@@ -23,9 +23,14 @@ func TestVideoStudioDeclaresManagedHyperFramesSkills(t *testing.T) {
 	for _, name := range source.Install {
 		installed[name] = true
 	}
-	for _, required := range []string{"hyperframes", "hyperframes-core", "hyperframes-animation", "hyperframes-creative", "hyperframes-cli", "media-use", "hyperframes-registry", "hyperframes-keyframes", "general-video", "product-launch-video", "faceless-explainer", "motion-graphics"} {
+	for _, required := range []string{"hyperframes", "hyperframes-core", "hyperframes-animation", "hyperframes-creative", "hyperframes-cli", "media-use", "hyperframes-registry", "hyperframes-keyframes"} {
 		if !installed[required] {
 			t.Fatalf("HyperFrames installed skills omit %q: %+v", required, source.Install)
+		}
+	}
+	for _, retiredRoute := range []string{"general-video", "product-launch-video", "faceless-explainer", "motion-graphics"} {
+		if installed[retiredRoute] {
+			t.Fatalf("retired standalone HyperFrames route %q remains installed: %+v", retiredRoute, source.Install)
 		}
 	}
 	if len(source.Attach) != 1 || source.Attach[0] != "hyperframes" {

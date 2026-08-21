@@ -1,6 +1,6 @@
 ---
 name: fal-ai
-description: Generate AI video, image, voice/TTS, and music clips via fal.ai's Node.js client for long-form narrative video productions. Use when a brief calls for footage, reference imagery, narration, or a music bed that cannot come from uploaded assets or deterministic HTML/CSS composition. Not for short product-led explainers -- those stay on HyperFrames typography/composition (see hyperframes, product-infographic).
+description: Generate AI video, image, voice/TTS, and music clips via fal.ai's Node.js client for cinematic video productions. Use when a brief calls for footage, reference imagery, narration, or a music bed that cannot come from uploaded assets or a selective deterministic HyperFrames insert.
 ---
 
 # fal.ai generation

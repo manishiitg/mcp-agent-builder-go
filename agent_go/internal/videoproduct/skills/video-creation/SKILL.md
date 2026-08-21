@@ -118,7 +118,7 @@ As a workflow stage, the equivalent record is your stage's own artifact (researc
 - Use local editing for trims, crops, concatenation, audio, captions, and supplied footage.
 - Use programmatic overlays for exact text, branded cards, product UI, or repeatable templates.
 - Use `longform-cinematic-video` as the director for every new production. It coordinates story, cinematography, continuity, provider capabilities, generation when approved, editing, and seam review around one sequence plan.
-- A cinematic treatment can still be deterministic: use uploaded assets and HyperFrames for exact wording, UI, prices, typography, camera motion, and compositing. Route to `product-infographic` only when the user explicitly wants infographic/UI-led visual language or those exact product elements are the central subject.
+- Keep every production cinematic. HyperFrames may be used selectively inside it for exact wording, UI, prices, typography, diagrams, camera motion over supplied assets, overlays, transitions, and compositing when the user wants that treatment or the approved shot list calls for it. It is not a separate route and must never replace a photoreal character, performance, location, or continuity-critical generated shot.
 - Use the `video-editing` skill for assembly, captions, audio, and exports.
 - Use the `video-quality` skill before presenting a version as complete.
 

@@ -50,8 +50,8 @@ func TestSystemPromptMatchesTheProductItDescribes(t *testing.T) {
 		t.Fatal("the system prompt no longer tells the agent where finished work appears")
 	}
 
-	// These pipelines bill the user per call, unlike the infographic route.
-	// The prompt has to say so, because the agent decides when to start.
+	// Paid generation bills the user per call. HyperFrames can be used for a
+	// deterministic insert without becoming a separate product route.
 	if !strings.Contains(strings.ToLower(text), "approval of a storyboard is not approval to spend") {
 		t.Fatal("the system prompt no longer warns that an approved plan is not approval to spend")
 	}
@@ -62,8 +62,16 @@ func TestSystemPromptMatchesTheProductItDescribes(t *testing.T) {
 	if strings.Contains(text, "run_full_workflow") || !strings.Contains(text, "execute_step") {
 		t.Fatal("Video Studio must describe individual stage execution only")
 	}
-	if !strings.Contains(strings.ToLower(text), "default for every new production") || !strings.Contains(text, "longform-cinematic-video") {
+	if !strings.Contains(strings.ToLower(text), "only creative product") || !strings.Contains(text, "longform-cinematic-video") {
 		t.Fatal("the system prompt no longer defaults fresh productions to cinematic direction")
+	}
+	if strings.Contains(text, "The available stage plans are `infographic`") || !strings.Contains(text, "optional technique inside a cinematic production") {
+		t.Fatal("the system prompt must keep HyperFrames inside cinematic production rather than exposing an infographic product")
+	}
+	for _, skill := range manifest.Profile.Skills {
+		if skill == "product-infographic" {
+			t.Fatal("product-infographic remains exposed in the Video Studio profile")
+		}
 	}
 	for _, audioContract := range []string{
 		"For both direct chat and individual workflow steps",

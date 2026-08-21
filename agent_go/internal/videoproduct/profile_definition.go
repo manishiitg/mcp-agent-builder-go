@@ -39,15 +39,14 @@ type qualityReport struct {
 var profileSkillFiles embed.FS
 
 var profileSkills = []struct{ name, description, path string }{
-	{"product-infographic", "Turn verified product evidence into a clear HyperFrames explainer through an adaptive brief, specialist routing, and production QA.", "skills/product-infographic/SKILL.md"},
 	{"video-creation", "Direct a conversational video project from brief through reproducible production.", "skills/video-creation/SKILL.md"},
 	{"video-look-sound", "Lock a production's visual world, voice, music, ambience, sound-effects, and caption direction before narration or footage is generated.", "skills/video-look-sound/SKILL.md"},
 	{"longform-cinematic-video", "Direct one coherent long-form cinematic film through sequence architecture, continuity-controlled generation, editorial stitching, sound, and seam-by-seam review.", "skills/longform-cinematic-video/SKILL.md"},
 	{"video-editing", "Assemble clips, captions, overlays, narration, music, and versioned exports.", "skills/video-editing/SKILL.md"},
 	{"video-quality", "Validate candidate videos technically, visually, and editorially.", "skills/video-quality/SKILL.md"},
 	{"hyperframes-quality", "Gate editable HyperFrames compositions and rendered evidence for layout, timing, contrast, and motion quality.", "skills/hyperframes-quality/SKILL.md"},
-	{"html-composition", "Design video frames as HTML/CSS and render them with headless Chrome and ffmpeg.", "skills/html-composition/SKILL.md"},
-	{"fal-ai", "Generate AI video, image, voice, and music clips via fal.ai's Node.js client for long-form narrative productions.", "skills/fal-ai/SKILL.md"},
+	{"html-composition", "Design deterministic cinematic inserts as HTML/CSS and render them with headless Chrome and ffmpeg.", "skills/html-composition/SKILL.md"},
+	{"fal-ai", "Generate AI video, image, voice, and music clips via fal.ai's Node.js client for cinematic productions.", "skills/fal-ai/SKILL.md"},
 	{"google-ai", "Generate AI video, image, and narration (TTS) via Google's own Gemini API (Node.js client) -- Gemini image models, Veo, and Gemini TTS. Covers a whole production except its music bed.", "skills/google-ai/SKILL.md"},
 	{"seeddance-api", "Generate supported Seedance video through the direct Seeddance API with durable task recovery and credential-safe server calls.", "skills/seeddance-api/SKILL.md"},
 	{"video-provider-capabilities", "Resolve a selected video endpoint's current official schema into a durable request, continuity, cost, retry, and review plan before any paid generation.", "skills/video-provider-capabilities/SKILL.md"},
