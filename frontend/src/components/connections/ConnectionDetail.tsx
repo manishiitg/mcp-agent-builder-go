@@ -3,7 +3,6 @@ import {
   Loader2,
   Copy,
   Check,
-  MoreHorizontal,
   Activity,
   PlugZap,
   Plug,
@@ -63,7 +62,6 @@ export default function ConnectionDetail({
   const [groupsFromAnnotations, setGroupsFromAnnotations] = useState(true)
   const [expanded, setExpanded] = useState({ read_only: true, write: true })
   const [copied, setCopied] = useState(false)
-  const [menuOpen, setMenuOpen] = useState(false)
 
   const loadTools = useCallback(async () => {
     if (!id || !isConnected) return
@@ -172,12 +170,14 @@ export default function ConnectionDetail({
           )}
         </div>
 
-        <div className="flex shrink-0 items-center gap-1">
+        {/* Actions stack so each reads as its own choice rather than hiding
+            behind a menu. */}
+        <div className="flex w-40 shrink-0 flex-col gap-1.5">
           {isConnected ? (
             <button
               type="button"
               onClick={onDisconnect}
-              className="flex items-center gap-1.5 rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-800 transition-colors hover:bg-gray-100 dark:border-slate-600 dark:text-gray-200 dark:hover:bg-slate-700"
+              className="flex items-center justify-center gap-1.5 rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-800 transition-colors hover:bg-gray-100 dark:border-slate-600 dark:text-gray-200 dark:hover:bg-slate-700"
             >
               <PlugZap className="h-3.5 w-3.5" aria-hidden="true" />
               Disconnect
@@ -187,7 +187,7 @@ export default function ConnectionDetail({
               type="button"
               onClick={onConnect}
               disabled={isConnecting}
-              className="flex items-center gap-1.5 rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
+              className="flex items-center justify-center gap-1.5 rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
             >
               {isConnecting ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
@@ -199,44 +199,19 @@ export default function ConnectionDetail({
           )}
 
           {connection && (
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => setMenuOpen(v => !v)}
-                className="rounded-md p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-slate-700"
-                aria-label={`More actions for ${name}`}
-                aria-expanded={menuOpen}
-              >
-                <MoreHorizontal className="h-4 w-4" />
-              </button>
-              {menuOpen && (
-                <>
-                  <div
-                    className="fixed inset-0 z-10"
-                    onClick={() => setMenuOpen(false)}
-                    aria-hidden="true"
-                  />
-                  <div className="absolute right-0 z-20 mt-1 w-44 overflow-hidden rounded-md border border-gray-200 bg-white py-1 shadow-lg dark:border-slate-700 dark:bg-slate-800">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setMenuOpen(false)
-                        onTest()
-                      }}
-                      disabled={isTesting}
-                      className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-gray-700 transition-colors hover:bg-gray-100 disabled:opacity-50 dark:text-gray-300 dark:hover:bg-slate-700"
-                    >
-                      {isTesting ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-                      ) : (
-                        <Activity className="h-3.5 w-3.5" aria-hidden="true" />
-                      )}
-                      Test connection
-                    </button>
-                  </div>
-                </>
+            <button
+              type="button"
+              onClick={onTest}
+              disabled={isTesting}
+              className="flex items-center justify-center gap-1.5 rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100 disabled:opacity-50 dark:border-slate-600 dark:text-gray-300 dark:hover:bg-slate-700"
+            >
+              {isTesting ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+              ) : (
+                <Activity className="h-3.5 w-3.5" aria-hidden="true" />
               )}
-            </div>
+              Test connection
+            </button>
           )}
         </div>
       </div>

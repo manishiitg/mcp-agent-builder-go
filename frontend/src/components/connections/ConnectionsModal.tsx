@@ -388,10 +388,7 @@ export default function ConnectionsModal({ onClose }: ConnectionsModalProps) {
                       entry={row.entry}
                       connection={row.connection}
                       isConnecting={connectingId === row.id}
-                      isTesting={testingId === row.id}
                       onConnect={() => startConnect(row.id)}
-                      onDisconnect={() => disconnect(row.id)}
-                      onTest={() => handleTest(row.id)}
                       onOpen={() => {
                         setDetailId(row.id)
                         setView('detail')
