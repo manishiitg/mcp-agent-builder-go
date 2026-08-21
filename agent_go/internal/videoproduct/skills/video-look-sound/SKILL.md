@@ -28,7 +28,7 @@ script explicitly calls for that change.
 
 Record all audible and readable layers:
 
-- speech mode: separate narration, native dialogue, or explicitly no speech;
+- speech mode per beat: off-camera voiceover, visible native dialogue, or explicitly no speech;
 - voice provider/model or recorded source, voice ID, language, accent,
   warmth, energy, pacing, pronunciation notes, and performance references;
 - music role, genre, tempo range, emotional arc, instrumentation, and where it yields;
@@ -42,17 +42,40 @@ the same production.
 
 ## Choose speech deliberately
 
-For instructional, tutorial, and explainer videos with spoken guidance, use
-separate TTS narration by default. Exact wording, a consistent voice,
-replaceable corrections, and reliable timing matter more than the convenience
-of model-native speech. Only use native model dialogue when visible lip-synced
-performance or natural interaction is part of the creative requirement and
-the selected endpoint can reliably support it.
+Classify every spoken beat before selecting a model. When a character or
+presenter visibly speaks, prefer a video endpoint that creates the picture,
+performance, dialogue, and synchronized audio together. Generating a separate
+voice and trying to manufacture lip sync afterward is less reliable. Keep the
+exact dialogue in the script and verify both wording and lip sync.
 
-Native model audio remains useful for natural dialogue, ambience, Foley, and
-location sound. It does not make required narration optional. Never turn a
-spoken instructional brief into a silent video because a generated visual clip
+Use separate TTS only for off-camera voiceover. For instructional, tutorial,
+and explainer voiceover, exact wording, a consistent voice, replaceable
+corrections, and reliable timing matter more than native speech. Generate that
+voiceover before visuals and use its measured duration as the edit clock.
+
+Native model audio also remains useful for ambience, Foley, and location sound.
+It does not make required off-camera voiceover optional. Never turn a spoken
+instructional brief into a silent video because a generated visual clip
 arrived without an audio stream.
+
+## Make the direction visible in documents
+
+The direction document must use explicit sections for:
+
+- `Locations and backgrounds`;
+- `Wardrobe, props, and continuity`;
+- `Lighting and visual palette`;
+- `Camera grammar`;
+- `Speech and voices`;
+- `Music`;
+- `Ambience and sound effects`;
+- `Captions`.
+
+Carry those decisions forward instead of hiding them in prompts. The shot list
+records the relevant background, look anchors, speech mode, and audio intent per
+shot. The generation report records whether each clip contains native dialogue,
+ambience/effects, or no usable audio. The render report lists the actual voice,
+music, ambience, effects, and caption sources used in the final export.
 
 If the user has not chosen a material direction, offer at most three viable
 choices, explain the tone and cost consequence, recommend one, and wait for the
