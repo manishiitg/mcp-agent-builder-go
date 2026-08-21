@@ -252,12 +252,33 @@ function MediaVideoPresentation({ presentation, workspacePath }: PresentationRen
   const videoRef = useRef<HTMLVideoElement>(null)
   const [loading, setLoading] = useState(true)
   const [playbackError, setPlaybackError] = useState('')
+  const [playingMuted, setPlayingMuted] = useState(false)
   const relativePath = typeof presentation.payload.path === 'string' ? presentation.payload.path.replace(/^\/+/, '') : ''
+  const mediaURL = relativePath ? workspaceMediaURL(`${workspacePath}/${relativePath}`) : ''
+  // A show_video presentation is an instruction to bring the clip to the
+  // creator, not merely add another item they must discover in the panel. Try
+  // normal playback first so its mix is preserved. Browsers that block audible
+  // autoplay still permit muted playback; make that fallback explicit instead
+  // of silently leaving a new clip paused.
+  useEffect(() => {
+    let active = true
+    const video = videoRef.current
+    if (!video) return () => { active = false }
+    setPlayingMuted(false)
+    void video.play().catch(() => {
+      if (!active) return
+      video.muted = true
+      void video.play().then(() => {
+        if (active) setPlayingMuted(true)
+      }).catch(() => {})
+    })
+    return () => { active = false }
+  }, [mediaURL, presentation.id, presentation.revision])
   if (!relativePath) return <div className="grid aspect-video place-items-center bg-slate-950 text-xs text-slate-400">Video path is unavailable.</div>
-  const mediaURL = workspaceMediaURL(`${workspacePath}/${relativePath}`)
   const retryPlayback = () => {
     setPlaybackError('')
     setLoading(true)
+    setPlayingMuted(false)
     videoRef.current?.load()
   }
   return (
@@ -269,6 +290,7 @@ function MediaVideoPresentation({ presentation, workspacePath }: PresentationRen
         data-presentation-id={presentation.id}
         data-presentation-revision={presentation.revision}
         controls
+        autoPlay
         playsInline
         preload="auto"
         className="h-full w-full bg-black object-contain"
@@ -284,6 +306,7 @@ function MediaVideoPresentation({ presentation, workspacePath }: PresentationRen
         Your browser does not support video playback.
       </video>
       {loading && !playbackError ? <div className="pointer-events-none absolute inset-0 grid place-items-center bg-black/25 text-xs font-medium text-white/80"><span className="flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Loading video…</span></div> : null}
+      {playingMuted && !loading && !playbackError ? <div className="pointer-events-none absolute bottom-2 left-2 rounded-md bg-black/70 px-2 py-1 text-[10px] font-medium text-white">Playing muted — use the player controls to unmute</div> : null}
       {playbackError ? <div className="absolute inset-0 grid place-items-center bg-slate-950/95 p-6 text-center"><div><AlertCircle className="mx-auto h-6 w-6 text-amber-400" /><p className="mt-2 max-w-xs text-xs leading-5 text-slate-300">{playbackError}</p><button type="button" onClick={retryPlayback} className="mt-3 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-900 hover:bg-slate-100">Reload video</button></div></div> : null}
     </div>
   )
@@ -322,11 +345,16 @@ function ProductionSection({ id, title, count, icon, children, forceOpenKey }: {
 
 function VideosSection({ project, videos }: { project: VideoProject; videos: VideoPresentation[] }) {
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const latestVideoKey = videos[0] ? `${videos[0].id}:${videos[0].revision}:${videos[0].updatedAt}` : ''
+  const previousLatestVideoKey = useRef(latestVideoKey)
   const selected = videos.find((video) => video.id === selectedId) || videos[0]
   useEffect(() => {
     if (videos.length === 0) setSelectedId(null)
-    else if (!videos.some((video) => video.id === selectedId)) setSelectedId(videos[0].id)
-  }, [selectedId, videos])
+    else if (previousLatestVideoKey.current !== latestVideoKey) {
+      previousLatestVideoKey.current = latestVideoKey
+      setSelectedId(videos[0].id)
+    } else if (!videos.some((video) => video.id === selectedId)) setSelectedId(videos[0].id)
+  }, [latestVideoKey, selectedId, videos])
   if (!selected) return null
 
   const mediaURL = workspaceMediaURL(`${project.workspacePath}/${selected.path.replace(/^\/+/, '')}`)
