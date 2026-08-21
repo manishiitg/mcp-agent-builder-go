@@ -90,6 +90,25 @@ func IdentityFromKey(key string) string {
 	return "presentation-" + hex.EncodeToString(hash[:8])
 }
 
+// workspaceDatabasePath converts the server's canonical, user-scoped runtime
+// path back to the user-relative path accepted by the workspace database API.
+//
+// Agent profile runtimes use _users/<id>/... so their native folder guards are
+// rooted at the physical workspace. The workspace API already receives the
+// same identity through X-User-ID and deliberately rejects caller-supplied
+// _users/ paths. Passing the runtime path through unchanged therefore lets
+// file validation succeed but makes every presentation fail at the final DB
+// upsert. Keep this transport-boundary conversion here so every product
+// presentation uses the same rule.
+func workspaceDatabasePath(workspacePath string) string {
+	clean := strings.TrimPrefix(filepath.ToSlash(filepath.Clean(strings.TrimSpace(workspacePath))), "/")
+	parts := strings.Split(clean, "/")
+	if len(parts) >= 3 && parts[0] == "_users" && strings.TrimSpace(parts[1]) != "" {
+		clean = strings.Join(parts[2:], "/")
+	}
+	return filepath.ToSlash(filepath.Join(clean, "db/db.sqlite"))
+}
+
 // Upsert writes one presentation row to <WorkspacePath>/db/db.sqlite and
 // returns the Event to emit. On a repeat call with the same IdentityKey, the
 // row updates in place and Revision increments; it does not create a
@@ -145,7 +164,7 @@ func Upsert(ctx context.Context, client *workspace.Client, p Presentation) (Even
 		return Event{}, fmt.Errorf("marshal presentation actions: %w", err)
 	}
 
-	dbPath := filepath.ToSlash(filepath.Join(workspacePath, "db/db.sqlite"))
+	dbPath := workspaceDatabasePath(workspacePath)
 	_, err = client.MutateAuthorizedWorkflowDB(ctx, workspace.MutateWorkflowDBParams{
 		DBPath: dbPath,
 		Statements: []workspace.WorkflowDBMutationStatement{{

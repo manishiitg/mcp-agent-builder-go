@@ -91,6 +91,18 @@ func TestUpsertIsStableForTheSameIdentity(t *testing.T) {
 	}
 }
 
+func TestWorkspaceDatabasePathStripsCanonicalUserScope(t *testing.T) {
+	tests := map[string]string{
+		"_users/default/Chats/Video Studio/projects/demo": "Chats/Video Studio/projects/demo/db/db.sqlite",
+		"Chats/Video Studio/projects/demo":                "Chats/Video Studio/projects/demo/db/db.sqlite",
+	}
+	for input, want := range tests {
+		if got := workspaceDatabasePath(input); got != want {
+			t.Errorf("workspaceDatabasePath(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 func TestUpsertRequiresEveryField(t *testing.T) {
 	server, _ := capturingWorkspaceServer(t)
 	defer server.Close()
