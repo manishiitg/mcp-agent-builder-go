@@ -30,7 +30,7 @@ func knownWorkshopRegisteredToolNamesOutsideWorkflowPool() map[string]string {
 	// 385c95158 without a matching entry here, which left this invariant red.
 	add("LLM capability discovery tools", "list_llm_capabilities")
 	add("workshop plan tools",
-		"create_plan", "migrate_message_sequence_code_items",
+		"create_plan", "validate_plan_change", "migrate_message_sequence_code_items",
 		"add_scripted_step", "add_message_sequence_step", "add_routing_step",
 		"add_human_input_step", "add_todo_task_step", "add_todo_task_route",
 		"update_scripted_step", "update_message_sequence_step", "update_routing_step",

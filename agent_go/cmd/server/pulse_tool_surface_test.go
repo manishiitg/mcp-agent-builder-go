@@ -12,7 +12,8 @@ import (
 
 // pulseConsolidatedToolNames is the established Pulse state/fixer surface.
 //
-// Eight tools became four. The naming rule is derivable and exhaustive: a Pulse
+// The lifecycle surface was consolidated, and the naming rule remains
+// derivable and exhaustive: a Pulse
 // tool is `get_pulse_*` when it reads and `record_pulse_*` when it writes, and
 // there is no third verb. The eight-tool surface had `get_`, `start_`, `mark_`,
 // and `record_` for four concepts, and the agent guessed across it — inventing
@@ -26,6 +27,8 @@ var pulseConsolidatedToolNames = []string{
 	"record_pulse_worklist",
 	"record_pulse_result",
 	"record_pulse_impact",
+	"get_pulse_review_focus_agenda",
+	"record_pulse_review_focus",
 }
 
 var pulseReviewerWriteToolNames = []string{
@@ -91,7 +94,7 @@ func TestPulseToolSurfaceIncludesTypedReviewerWrites(t *testing.T) {
 		}
 	}
 
-	// The surface is the four consolidated lifecycle tools, typed reviewer
+	// The surface is the consolidated lifecycle/coverage tools, typed reviewer
 	// writes, and resolve_run_concern. merge_pulse_issues is intentionally the
 	// one semantic maintenance verb: calling it record_* would conceal that it
 	// retires duplicate queue entries while preserving their history.
@@ -175,19 +178,19 @@ func TestGetPulseStateViewsReturnWhatTheirPredecessorsReturned(t *testing.T) {
 		t.Fatalf(`get_pulse_state(view="backlog"): %v`, err)
 	}
 	var backlogView struct {
-		Findings []step_based_workflow.PulseFindingLifecycle `json:"findings"`
-		Total    int                                         `json:"total"`
-		Summary  map[string]interface{}                      `json:"summary"`
-		Note     string                                      `json:"note"`
+		Issues  []map[string]interface{} `json:"issues"`
+		Total   int                      `json:"total"`
+		Summary map[string]interface{}   `json:"summary"`
+		Note    string                   `json:"note"`
 	}
 	if err := json.Unmarshal([]byte(raw), &backlogView); err != nil {
 		t.Fatalf("decode backlog view: %v", err)
 	}
-	if backlogView.Total != 1 || len(backlogView.Findings) != 1 || backlogView.Note == "" || backlogView.Summary["active_count"] != float64(1) {
+	if backlogView.Total != 1 || len(backlogView.Issues) != 1 || backlogView.Note == "" || backlogView.Summary["active_count"] != float64(1) {
 		t.Fatalf(`view="backlog" did not return the durable issue backlog: %s`, raw)
 	}
-	if backlogView.Findings[0].Issue.ID == "" || backlogView.Findings[0].Fingerprint != "" {
-		t.Fatalf(`view="backlog" must expose PUL issue id but not lifecycle fingerprint: %+v`, backlogView.Findings[0])
+	if issueID, _ := backlogView.Issues[0]["issue_id"].(string); issueID == "" {
+		t.Fatalf(`view="backlog" must expose PUL issue id: %+v`, backlogView.Issues[0])
 	}
 	if strings.Contains(raw, `"fingerprint"`) || strings.Contains(raw, `"finding_id"`) || strings.Contains(raw, `"attempt_id"`) {
 		t.Fatalf(`view="backlog" leaked an internal lifecycle identity: %s`, raw)

@@ -89,5 +89,13 @@ export function retainEventInSessionWorkingSet(sessionId: string, event: Polling
 
   const ownerId = event.terminal_owner_id?.trim()
   const isMain = ownerId === `main:${sessionId}` || terminalId === `${sessionId}:main:${sessionId}`
-  return isMain || !CHILD_TRANSCRIPT_DETAIL_EVENT_TYPES.has(event.type || '')
+  // A restored schedule explicitly requests the compact persisted trace. It
+  // is bounded server-side and is the only retained record of a child agent's
+  // messages/tool calls after restart, so do not discard it as if it were a
+  // live unopened terminal's high-volume stream.
+  const nested = event.data && typeof event.data === 'object'
+    ? (event.data as { data?: { metadata?: Record<string, unknown> } }).data
+    : undefined
+  const isPersistedRestoreTrace = nested?.metadata?.restored_persisted_trace === true
+  return isMain || isPersistedRestoreTrace || !CHILD_TRANSCRIPT_DETAIL_EVENT_TYPES.has(event.type || '')
 }

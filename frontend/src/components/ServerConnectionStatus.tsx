@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { Loader2, ServerOff, RefreshCw } from 'lucide-react'
 import { getApiBaseUrl } from '../services/api'
+import { GATEWAY_LOGIN_HEADER, gatewayLoginTarget, redirectToGatewayLogin } from '../utils/gatewayAuth'
 
 const RETRY_MS = { min: 1000, max: 5000 }
 const TIMEOUT_MS = 5000
 
 type State = 'connecting' | 'connected' | 'error'
+type HealthResult = 'healthy' | 'failed' | 'authentication-required'
 
 export default function ServerConnectionStatus({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<State>('connecting')
@@ -15,7 +17,7 @@ export default function ServerConnectionStatus({ children }: { children: React.R
   const mounted = useRef(true)
   const displayApiBaseUrl = getApiBaseUrl()
 
-  const checkHealth = useCallback(async (): Promise<boolean> => {
+  const checkHealth = useCallback(async (): Promise<HealthResult> => {
     const ac = new AbortController()
     const t = setTimeout(() => ac.abort(), TIMEOUT_MS)
     const apiBaseUrl = getApiBaseUrl()
@@ -28,24 +30,27 @@ export default function ServerConnectionStatus({ children }: { children: React.R
       })
       const res = await fetch(healthUrl, { signal: ac.signal })
       clearTimeout(t)
+      const loginTarget = gatewayLoginTarget(res.status, res.headers.get(GATEWAY_LOGIN_HEADER))
+      if (redirectToGatewayLogin(loginTarget)) return 'authentication-required'
       if (!res.ok) {
         setError(`Server returned ${res.status}`)
-        return false
+        return 'failed'
       }
       const data = await res.json().catch(() => ({}))
-      return data.status === 'healthy'
+      return data.status === 'healthy' ? 'healthy' : 'failed'
     } catch (e) {
       clearTimeout(t)
       setError(e instanceof Error ? (e.name === 'AbortError' ? 'Connection timed out' : e.message) : 'Connection failed')
-      return false
+      return 'failed'
     }
   }, [])
 
   const tryConnect = useCallback(async () => {
     if (!mounted.current) return
-    const ok = await checkHealth()
+    const result = await checkHealth()
     if (!mounted.current) return
-    if (ok) {
+    if (result === 'authentication-required') return
+    if (result === 'healthy') {
       setState('connected')
       setRetryCount(0)
       setError(null)

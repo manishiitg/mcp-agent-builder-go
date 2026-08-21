@@ -2,7 +2,13 @@ import { describe, expect, it } from 'vitest'
 import type { RunningWorkflowInfo } from '../../services/api-types'
 import type { ChatTab } from '../../stores/useChatStore'
 import { convertObservedWorkflowTabToInteractive } from './workflowChatTabConversion'
-import { reconcileWorkflowRuntimeTab, reusableScheduleTabId, shouldDisplayWorkflowTab, workflowRuntimeTabProjection } from './workflowRuntimeTabProjection'
+import {
+  reconcileWorkflowRuntimeTab,
+  reusableScheduleTabId,
+  shouldCatchUpRunningWorkflowTranscript,
+  shouldDisplayWorkflowTab,
+  workflowRuntimeTabProjection,
+} from './workflowRuntimeTabProjection'
 
 function runtime(overrides: Partial<RunningWorkflowInfo>): RunningWorkflowInfo {
   return {
@@ -123,6 +129,17 @@ describe('workflowRuntimeTabProjection', () => {
       isScheduledRun: true,
       scheduledJobName: 'Daily execution',
     })
+  })
+})
+
+describe('shouldCatchUpRunningWorkflowTranscript', () => {
+  it('loads already-emitted events when a running tab appears in formatted mode', () => {
+    expect(shouldCatchUpRunningWorkflowTranscript('formatted', 0)).toBe(true)
+  })
+
+  it('leaves a hydrated transcript and terminal restoration alone', () => {
+    expect(shouldCatchUpRunningWorkflowTranscript('formatted', 1)).toBe(false)
+    expect(shouldCatchUpRunningWorkflowTranscript('terminal', 0)).toBe(false)
   })
 })
 

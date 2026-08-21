@@ -477,13 +477,89 @@ func getChatHistoryConversationHandler(api *StreamingAPI) http.HandlerFunc {
 		// 1.3 MB for a real builder session, nearly all of it ui_events -- and
 		// threw away everything but the last handful of messages client-side.
 		if limit := parsePositiveQueryInt(r, "resume_turns"); limit > 0 {
+			includeUIEvents := r.URL.Query().Get("include_ui_events") == "1"
+			var rawUIEvents []byte
+			if includeUIEvents {
+				rawUIEvents = chatHistoryUIEvents(data)
+			}
 			data = projectChatHistoryConversationForResumePage(data, limit, parseNonNegativeQueryInt(r, "resume_offset"))
+			// A scheduled run is restored as a read-only conversation, so its
+			// saved UI-event tail is the only existing record of its child-agent
+			// messages and tool calls. Keep the normal resume projection small by
+			// default, but return the compact, displayable trace when the caller
+			// explicitly asks to reconstruct that run.
+			if includeUIEvents {
+				data = attachChatHistoryUIEventsForResume(data, rawUIEvents)
+			}
 		} else if limit := parsePositiveQueryInt(r, "preview_messages"); limit > 0 {
 			data = trimChatHistoryConversationForPreview(data, limit)
 		}
 
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(data)
+	}
+}
+
+// mustReadChatHistoryUIEvents extracts the durable UI-event tail from the
+// original conversation document. Resume first projects messages to a bounded
+// view, then this helper attaches only events the formatted conversation can
+// use. Keeping this opt-in avoids making ordinary chat restore download the
+// high-volume terminal/stream trace.
+func chatHistoryUIEvents(data []byte) []byte {
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return nil
+	}
+	return doc["ui_events"]
+}
+
+func attachChatHistoryUIEventsForResume(projected, rawUIEvents []byte) []byte {
+	if len(rawUIEvents) == 0 {
+		return projected
+	}
+	var events []json.RawMessage
+	if err := json.Unmarshal(rawUIEvents, &events); err != nil {
+		return projected
+	}
+	kept := make([]json.RawMessage, 0, len(events))
+	for _, event := range events {
+		var header struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(event, &header) == nil && isFormattedResumeUIEventType(header.Type) {
+			kept = append(kept, event)
+		}
+	}
+	if len(kept) == 0 {
+		return projected
+	}
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(projected, &doc); err != nil {
+		return projected
+	}
+	encoded, err := json.Marshal(kept)
+	if err != nil {
+		return projected
+	}
+	doc["ui_events"] = encoded
+	return marshalChatHistoryProjectionOrOriginal(doc, projected)
+}
+
+// isFormattedResumeUIEventType intentionally excludes system prompts, token
+// counters, raw terminal frames, and streaming chunks. Final messages and
+// paired tool calls are enough to reconstruct what happened without turning a
+// read-only schedule restore into a terminal dump.
+func isFormattedResumeUIEventType(eventType string) bool {
+	switch eventType {
+	case "user_message", "llm_generation_end", "llm_generation_error", "unified_completion",
+		"tool_call_start", "tool_call_end", "tool_call_error",
+		"background_agent_started", "background_agent_completed", "background_agent_failed", "background_agent_terminated",
+		"orchestrator_agent_start", "orchestrator_agent_end",
+		"agent_start", "agent_end", "agent_error", "conversation_error", "workflow_error",
+		"request_human_feedback", "blocking_human_feedback", "plan_approval":
+		return true
+	default:
+		return false
 	}
 }
 

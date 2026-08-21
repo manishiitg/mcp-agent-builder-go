@@ -129,6 +129,39 @@ func TestProjectChatHistoryConversationForResumeKeepsRealTurnsOnly(t *testing.T)
 	}
 }
 
+func TestAttachChatHistoryUIEventsForResumeKeepsOnlyFormattedTrace(t *testing.T) {
+	raw, _ := json.Marshal(map[string]interface{}{
+		"session_id": "schedule-1",
+		"conversation_history": []map[string]interface{}{
+			{"Role": "human", "Parts": []map[string]string{{"Text": "run it"}}},
+		},
+		"ui_events": []map[string]interface{}{
+			{"id": "prompt", "type": "user_message", "timestamp": "2026-08-21T01:00:00Z"},
+			{"id": "tool", "type": "tool_call_start", "timestamp": "2026-08-21T01:00:01Z"},
+			{"id": "answer", "type": "unified_completion", "timestamp": "2026-08-21T01:00:02Z"},
+			{"id": "stream", "type": "streaming_chunk", "timestamp": "2026-08-21T01:00:03Z"},
+			{"id": "prompt", "type": "system_prompt", "timestamp": "2026-08-21T01:00:04Z"},
+		},
+	})
+	projected := projectChatHistoryConversationForResume(raw, 20)
+	out := attachChatHistoryUIEventsForResume(projected, chatHistoryUIEvents(raw))
+	var got struct {
+		Events []struct {
+			ID   string `json:"id"`
+			Type string `json:"type"`
+		} `json:"ui_events"`
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Events) != 3 {
+		t.Fatalf("kept %d events, want user/tool/final only: %#v", len(got.Events), got.Events)
+	}
+	if got.Events[0].Type != "user_message" || got.Events[1].Type != "tool_call_start" || got.Events[2].Type != "unified_completion" {
+		t.Fatalf("unexpected restored trace: %#v", got.Events)
+	}
+}
+
 func TestProjectChatHistoryConversationForResumeLimitsByUserTurn(t *testing.T) {
 	message := func(role, text string) map[string]interface{} {
 		return map[string]interface{}{"role": role, "parts": []map[string]string{{"text": text}}}

@@ -3,6 +3,7 @@ import type { ActiveSessionInfo } from '../services/api-types'
 import {
   currentActiveSession,
   currentSessionId,
+  GLOBAL_ACTIVITY_REFRESH_MS,
   headerStatusLabel,
   statusTone,
   visibleActivitySessions,
@@ -67,6 +68,10 @@ function retainedWorkflowWithRuntime(phase: 'running' | 'completed'): ActiveSess
 }
 
 describe('global activity monitor status', () => {
+  it('refreshes live activity quickly enough not to leave a running workflow on an idle clock', () => {
+    expect(GLOBAL_ACTIVITY_REFRESH_MS).toBeLessThanOrEqual(5_000)
+  })
+
   it('shows a clock for the completed rtslatency session with a retained idle CLI', () => {
     const session = retainedWorkflowWithRuntime('completed')
 

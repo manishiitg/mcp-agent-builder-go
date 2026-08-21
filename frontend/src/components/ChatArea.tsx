@@ -470,6 +470,10 @@ interface ChatAreaProps {
   // final response. The shared AgentWorks surface keeps this internal by
   // default to avoid changing its transcript density.
   showConversationUsage?: boolean
+  // Product deployments with one fixed runtime can omit a redundant badge.
+  hideRuntimeStatus?: boolean
+  // Product chats otherwise have no generic header in which to start fresh.
+  showNewChatAction?: boolean
 }
 
 // Ref interface for ChatArea component
@@ -489,7 +493,7 @@ let globalHasRestored = false
 
 // Inner component for chat area
 const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAreaRef>) => {
-  const { onNewChat, hideInput = false, compact = false, tabId, previousChatsCompact = false, workflowPreviousChatsPanel, landingContent, contentRenderer: ContentRenderer, inputVariant = 'default', fullTurnStreaming = false, showConversationUsage = false } = props
+  const { onNewChat, hideInput = false, compact = false, tabId, previousChatsCompact = false, workflowPreviousChatsPanel, landingContent, contentRenderer: ContentRenderer, inputVariant = 'default', fullTurnStreaming = false, showConversationUsage = false, hideRuntimeStatus = false, showNewChatAction = false } = props
   // Product mode is a complete shared surface, not just a simplified composer.
   // Products may still supply a renderer for domain-specific presentation, but
   // every new product gets the durable transcript and normalized error UI by
@@ -3526,9 +3530,12 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
         <ChatInput
           onSubmit={(query, options) => submitQueryWithQuery(query, undefined, options)}
           onStopStreaming={stopStreaming}
+          onNewChat={() => void handleNewChat(targetTabId ?? undefined)}
           tabId={targetTabId}
           restoredConversationPending={resumePending && !hasRestoredLiveContent}
           surfaceVariant={inputVariant}
+          hideRuntimeStatus={hideRuntimeStatus}
+          showNewChatAction={showNewChatAction}
         />
       )}
 

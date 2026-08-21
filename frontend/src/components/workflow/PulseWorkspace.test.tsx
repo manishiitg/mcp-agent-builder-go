@@ -18,6 +18,7 @@ describe('PulseWorkspace information hierarchy', () => {
         moduleStates={[]}
         finalCommandStates={[]}
         gateMode={null}
+        reviewFocuses={[]}
         statusLoading={false}
         statusError={null}
         onRefresh={() => undefined}
@@ -37,7 +38,7 @@ describe('PulseWorkspace information hierarchy', () => {
     expect(impact).toBeGreaterThan(activity)
     expect(html).toContain('Engineering issues')
     expect(html).toContain('Operations')
-    expect(html).toContain('Product improvements')
+    expect(html).toContain('Strategic review')
     expect(html).not.toContain('Report Health')
     expect(html).not.toContain('Eval Health')
     expect(html).not.toContain('Stores Health')

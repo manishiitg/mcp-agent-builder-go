@@ -239,6 +239,13 @@ func (n *workshopExecutionBgNotifier) OnExecutionComplete(execID, name, result s
 		// live work to anyone auditing that table later.
 		reason := fmt.Sprintf("parent execution %s finished without an end event for this step", execID)
 		for _, orphanID := range orphans {
+			// ReconcileOrphanedProgressChildren owns the background-agent
+			// registry, while Global Monitor reads the unified execution
+			// tracker. Settle both copies of the same progress mirror. Leaving
+			// the tracker running makes the authoritative runtime snapshot busy
+			// even though the foreground turn, terminal, parent execution, and
+			// durable schedule run have all finished (PLAT-117).
+			n.api.completeTrackedExecution(orphanID, trackedExecutionStatusFailed, reason, nil)
 			name := orphanID
 			if orphan := n.api.bgAgentRegistry.Get(n.sessionID, orphanID); orphan != nil {
 				name = orphan.GetSnapshot().Name

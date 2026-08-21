@@ -90,4 +90,57 @@ describe('hydrateTabEvents restored chat fallback', () => {
     expect(mocks.setTabHistoryPagination).toHaveBeenCalledWith('restored-session', null)
     expect(mocks.getRecentSessionEvents).toHaveBeenCalledWith('restored-session')
   })
+
+  it('uses the saved formatted trace when a read-only schedule explicitly requests it', async () => {
+    mocks.getRecentSessionEvents.mockResolvedValue({
+      events: [],
+      session_status: 'completed',
+      last_processed_index: -1,
+      has_more: false,
+    })
+    mocks.getChatHistoryResumeConversation.mockResolvedValue({
+      session_id: 'schedule-session',
+      conversation_history: [{ Role: 'human', Parts: [{ Text: 'truncated summary' }] }],
+      ui_events: [
+        {
+          id: 'child-tool',
+          type: 'tool_call_start',
+          timestamp: '2026-08-21T01:00:00Z',
+          session_id: 'schedule-session',
+          terminal_id: 'schedule-session:child',
+          terminal_owner_id: 'child',
+          data: { data: { tool_name: 'query_workflow_db' } },
+        },
+        {
+          id: 'child-answer',
+          type: 'unified_completion',
+          timestamp: '2026-08-21T01:00:01Z',
+          session_id: 'schedule-session',
+          data: { data: { final_result: 'Fixer result' } },
+        },
+      ],
+    })
+
+    await hydrateTabEvents('schedule-session', {
+      workspacePath: '/workspace/workflow',
+      fallbackToChatHistory: true,
+      includeUiEvents: true,
+    })
+
+    expect(mocks.getChatHistoryResumeConversation).toHaveBeenCalledWith(
+      'schedule-session',
+      '/workspace/workflow',
+      100,
+      0,
+      true,
+    )
+    expect(mocks.setTabEvents).toHaveBeenCalledWith(
+      'schedule-session',
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'conversation_resumed' }),
+        expect.objectContaining({ id: 'child-tool', type: 'tool_call_start' }),
+        expect.objectContaining({ id: 'child-answer', type: 'unified_completion' }),
+      ]),
+    )
+  })
 })

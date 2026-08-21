@@ -37,6 +37,7 @@ import type {
   PulseFinalCommandState,
   PulseModuleState,
   PulseRunMode,
+  PulseReviewFocus,
   PulseShadowSignalObservation,
   ScheduledJob,
   VariablesManifest,
@@ -454,6 +455,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
   const [pulseModuleStates, setPulseModuleStates] = useState<PulseModuleState[]>([])
   const [pulseFinalCommandStates, setPulseFinalCommandStates] = useState<PulseFinalCommandState[]>([])
   const [pulseGateMode, setPulseGateMode] = useState<PulseRunMode | null>(null)
+  const [pulseReviewFocuses, setPulseReviewFocuses] = useState<PulseReviewFocus[]>([])
   const [pulseLoopClosureObservation, setPulseLoopClosureObservation] = useState<PulseShadowSignalObservation | null>(null)
   const [pulseStatusLoading, setPulseStatusLoading] = useState(false)
   const [pulseStatusError, setPulseStatusError] = useState<string | null>(null)
@@ -503,6 +505,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
       setPulseModuleStates([])
       setPulseFinalCommandStates([])
       setPulseGateMode(null)
+      setPulseReviewFocuses([])
       setPulseLoopClosureObservation(null)
       setPulseStatusError(null)
       return
@@ -517,6 +520,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
       setPulseModuleStates(resp.modules || [])
       setPulseFinalCommandStates(resp.commands || [])
       setPulseGateMode(resp.gate_mode || null)
+      setPulseReviewFocuses(resp.review_focus_history || [])
       setPulseLoopClosureObservation(
         (resp.shadow_signal_observations || []).find(observation => observation.detector === 'loop_closure') || null
       )
@@ -1220,6 +1224,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                     moduleStates={pulseModuleStates}
                     finalCommandStates={pulseFinalCommandStates}
                     gateMode={pulseGateMode}
+                    reviewFocuses={pulseReviewFocuses}
                     statusLoading={pulseStatusLoading}
                     statusError={pulseStatusError}
                     onRefresh={() => {

@@ -169,6 +169,62 @@ func TestReconcileOrphanedProgressChildrenSettlesCompletely(t *testing.T) {
 	}
 }
 
+// TestParentCompletionRemovesOrphanedProgressMirrorFromGlobalMonitor reproduces
+// the Social Media 2026-08-20 incident through the product completion path.
+// The background-agent and terminal copies of the child were terminal, but its
+// unified tracked-execution copy stayed running, so /api/workflow/running and
+// the authoritative runtime snapshot continued to report the workflow busy.
+func TestParentCompletionRemovesOrphanedProgressMirrorFromGlobalMonitor(t *testing.T) {
+	api := lifecycleTestAPI()
+	const (
+		sessionID = "schedule-manual--social-media"
+		parentID  = "workflow-full-mt12p13b01"
+		orphanID  = "workflow-full-mt12p13b01-step-0-mt17a9lh09"
+	)
+	now := time.Now().UTC()
+
+	api.bgAgentRegistry.Register(sessionID, &BackgroundAgent{
+		ID: parentID, Name: "full workflow", SessionID: sessionID,
+		Kind: "full_workflow", Status: BGAgentRunning, CreatedAt: now,
+	})
+	api.bgAgentRegistry.Register(sessionID, &BackgroundAgent{
+		ID: orphanID, ParentExecutionID: parentID, Name: "[Execute] Run Today's Actions",
+		SessionID: sessionID, Kind: "orchestrator", Status: BGAgentRunning, CreatedAt: now,
+	})
+	api.trackExecutionStart(&TrackedWorkflowExecution{
+		ExecutionID: parentID, SessionID: sessionID,
+		Source: trackedExecutionSourceWorkshopBackground, Kind: "full_workflow",
+		WorkspacePath: "Workflow/social-media", Status: trackedExecutionStatusRunning,
+		StartedAt: now,
+	})
+	api.trackExecutionStart(&TrackedWorkflowExecution{
+		ExecutionID: orphanID, SessionID: sessionID,
+		Source: trackedExecutionSourceWorkshopBackground, Kind: "workflow_builder_task",
+		Name: "[Execute] Run Today's Actions", WorkspacePath: "Workflow/social-media",
+		Status: trackedExecutionStatusRunning, StartedAt: now,
+	})
+
+	before := api.listRunningWorkflowExecutions("")
+	foundOrphan := false
+	for _, exec := range before {
+		foundOrphan = foundOrphan || exec.QueryID == orphanID
+	}
+	if len(before) != 2 || !foundOrphan {
+		t.Fatalf("precondition: Global Monitor running entries = %#v, want parent plus orphan %q", before, orphanID)
+	}
+
+	notifier := &workshopExecutionBgNotifier{api: api, sessionID: sessionID}
+	notifier.OnExecutionComplete(parentID, "full workflow", "done", nil, nil)
+
+	tracked := api.trackedWorkflowExecutions[orphanID]
+	if tracked == nil || tracked.Status != trackedExecutionStatusFailed || tracked.CompletedAt == nil {
+		t.Fatalf("orphan tracked execution was not settled: %#v", tracked)
+	}
+	if got := api.listRunningWorkflowExecutions(""); len(got) != 0 {
+		t.Fatalf("Global Monitor still reports completed workflow as running: %#v", got)
+	}
+}
+
 // TestUnnotifiedChildHoldsTurnOnlyBriefly pins both directions of the bounded
 // continuation hand-off (PLAT-117).
 //

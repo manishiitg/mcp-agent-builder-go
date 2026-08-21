@@ -19,7 +19,6 @@ import CostsPopup from '../workflow/CostsPopup'
 import ExecutionLogsPopup from '../workflow/ExecutionLogsPopup'
 import EvaluationPopup from '../workflow/EvaluationPopup'
 import { ReportViewer } from '../workflow/ReportViewer'
-import SchedulePresetPopup from '../SchedulePresetPopup'
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from '../ui/tooltip'
 import { scheduleTabLabel } from '../../utils/scheduleTabLabel'
 
@@ -628,7 +627,6 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
 
   const [triggering, setTriggering] = useState<string | null>(null)
   const [popupState, setPopupState] = useState<JobPopupState | null>(null)
-  const [editingJob, setEditingJob] = useState<ScheduledJob | null>(null)
   // Run history per job
   const [jobRuns, setJobRuns] = useState<Record<string, ScheduledJobRun[]>>({})
   const [loadingRunIds, setLoadingRunIds] = useState<Record<string, boolean>>({})
@@ -1589,6 +1587,10 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                     {job.waiting_reason}
                   </div>
                 )}
+                <div className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <MessageSquare className="h-3.5 w-3.5" />
+                  <span>To change this schedule, ask the automation agent in Chat.</span>
+                </div>
               </div>
             </div>
           </div>
@@ -1654,17 +1656,6 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                 <TooltipContent side="bottom">Resume cron schedule</TooltipContent>
               </Tooltip>
             )}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  onClick={() => setEditingJob(job)}
-                  className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-blue-500"
-                >
-                  <Clock className="h-3.5 w-3.5" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">Edit schedule</TooltipContent>
-            </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
@@ -2598,6 +2589,10 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                             {job.waiting_reason}
                           </div>
                         )}
+                        <div className="mt-2 flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
+                          <MessageSquare className="w-3.5 h-3.5" />
+                          <span>To change this schedule, ask the automation agent in Chat.</span>
+                        </div>
                       </div>
 
                       {/* Actions */}
@@ -2668,17 +2663,6 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                             <TooltipContent side="bottom">Resume — re-enable cron schedule</TooltipContent>
                           </Tooltip>
                         )}
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <button
-                              onClick={() => setEditingJob(job)}
-                              className="p-1.5 rounded-md text-gray-400 hover:text-blue-500 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
-                            >
-                              <Clock className="w-3.5 h-3.5" />
-                            </button>
-                          </TooltipTrigger>
-                          <TooltipContent side="bottom">Edit schedule</TooltipContent>
-                        </Tooltip>
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <button
@@ -2982,21 +2966,6 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
           workspacePath={popupState.workspacePath}
         />
       )}
-
-      {/* Edit schedule popup */}
-      {editingJob && (() => {
-        const preset = presetMap.get(editingJob.preset_query_id ?? '')
-        return (
-          <SchedulePresetPopup
-            presetQueryId={editingJob.preset_query_id ?? null}
-            presetLabel={preset?.label ?? editingJob.name}
-            entityType="workflow"
-            jobId={editingJob.id}
-            workspacePath={editingJob.workspace_path || preset?.workspacePath || undefined}
-            onClose={() => { setEditingJob(null); loadJobs() }}
-          />
-        )
-      })()}
 
     </div>
     </TooltipProvider>,

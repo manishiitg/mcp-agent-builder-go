@@ -6,7 +6,7 @@
 |---|---|
 | Assigned agent | unassigned |
 | Ticket state | `reopened` — the 2026-08-10 fix was **silently deleted by a refactor on 2026-08-13** and the bug recurred on 2026-08-16; restored 2026-08-17, see "Regression" below |
-| Last synchronized | `2026-08-17` |
+| Last synchronized | `2026-08-20` |
 
 - **Priority:** P1 — Pulse's durable history understates successful runs, and terminal command states are immutable
 - **Owner:** scheduler workshop turn loop (`scheduler.go`)
@@ -110,6 +110,35 @@ The fix does not touch that state machine. At the point where the loop is alread
 - **The underlying phase staleness**: why the runtime snapshot `Phase` fails to leave busy when a turn completes. This fix reconciles the symptom at one call site; PLAT-065's `abortIfTurnStillBusy` reads the same stale signal and is not covered by it.
 - **Historical records stay wrong.** Terminal Pulse command states are immutable by design, so the two runs already recorded as non-runs cannot be corrected. This ticket stops new ones; it does not repair the history. The reporting agent noted an identical earlier occurrence, making this at least the second.
 - **Recurrence count.** The reporting agent called this "the eighth idle-timeout in this series". Not independently verified here — the log was truncated by the 12:26 restart — but the two corroborated occurrences are enough to treat it as recurring rather than incidental.
+
+## 2026-08-20 recurrence: successful reused nested run was outside the dashboard cap
+
+LinkedIn Engage completed normally in `runs/iteration-0/engage`: its durable
+metadata records `started_at=2026-08-20T13:10:18Z`,
+`completed_at=2026-08-20T13:36:34Z`, and `status=completed`. The scheduler still
+set `ProducedRunEvidence=false` and sent the no-run Finalizer, which emailed the
+operator that the workflow did not start.
+
+This was the success-path counterpart of the same broken invariant. The primary
+detector reused the dashboard-oriented run-folder loader. That loader sorts by
+iteration number and truncates to ten folders *before* loading metadata. Because
+LinkedIn already had iterations 16 through 25, the newly restarted
+`iteration-0/engage` folder was absent from the returned list and its current
+timestamp could never be examined. The existing fallback recognized only
+`execute_step` workflow-step receipts; it ignored the session-linked `full_run`
+receipt that `run_full_workflow` had already emitted for this exact invocation.
+
+**Fix:** scheduler evidence now treats both declared `full_run` receipts and
+declared `workflow_step` receipts created under the exact schedule session after
+the invocation boundary as authoritative evidence. Generic background agents and
+receipts older than the invocation remain excluded. The capped folder listing is
+only a secondary compatibility signal, so UI pagination can no longer decide
+whether Pulse believes a workflow ran.
+
+Focused regression coverage proves a completed session-linked `full_run` counts,
+the existing direct workflow-step case still counts, unrelated background work
+does not count, and an older full-run receipt cannot manufacture evidence for a
+new invocation.
 
 ## Reopened: watchdog stamps failed finalizer commands before the Finalizer runs (2026-08-11)
 

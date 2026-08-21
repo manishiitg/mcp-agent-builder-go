@@ -1,5 +1,5 @@
 import { activateTab } from './activateTab'
-import { restoreSession } from './sessionRestore'
+import { hydrateTabEvents, restoreSession } from './sessionRestore'
 import { agentApi } from '../services/api'
 import type { ActiveSessionInfo, RunningWorkflowInfo } from '../services/api-types'
 import { useChatStore, type ChatTab } from '../stores/useChatStore'
@@ -556,10 +556,20 @@ async function restoreReadOnlyWorkflowRunChat(
     })
   }
 
-  // Do not hydrate event history on workflow switch. Scheduled/bot workflow runs
-  // can have large histories, and opening them from the header activity monitor
-  // should focus terminal/report/previous-chats immediately. Tree/debug view
-  // lazy-loads events when explicitly opened.
+  // A scheduled run is read-only, but it is still a conversation. Hydrate its
+  // bounded persisted event tail so restored schedules show the main-agent and
+  // child-agent work that already happened rather than an empty placeholder.
+  // The API strips raw terminal/stream events; this remains far smaller than a
+  // terminal restore and does not start polling.
+  try {
+    await hydrateTabEvents(session.session_id, {
+      workspacePath: workspacePath || undefined,
+      fallbackToChatHistory: true,
+      includeUiEvents: true,
+    })
+  } catch (error) {
+    console.warn('[WorkflowSessionRestore] could not hydrate saved schedule transcript', error)
+  }
   const isActive = isActiveWorkflowSession(session)
   chatStore.setTabStreaming(tabId, isActive)
   chatStore.setTabCompleted(tabId, !isActive)

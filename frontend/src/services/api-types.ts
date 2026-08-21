@@ -464,6 +464,20 @@ export interface PulseRunMode {
   recorded_at: string
 }
 
+export interface PulseReviewFocus {
+  workspace_path: string
+  module: string
+  focus_key: string
+  last_pulse_run_id?: string
+  last_reviewed_at?: string
+  last_verdict?: string
+  last_selection_reason?: string
+  next_check_at?: string
+  next_check_reason?: string
+  updated_at: string
+  deferred_focuses?: string[]
+}
+
 export interface PulseLoopClosureFinding {
   kind: 'answer_not_applied' | 'decision_waiting_on_user' | 'concern_keeps_recurring' | string
   severity: 'high' | 'medium' | string
@@ -491,6 +505,7 @@ export interface PulseModuleStateResponse {
   modules: PulseModuleState[]
   commands: PulseFinalCommandState[]
   gate_mode?: PulseRunMode | null
+  review_focus_history?: PulseReviewFocus[]
   shadow_signal_observations?: PulseShadowSignalObservation[]
   shadow_signal_coverage?: {
     status: string
@@ -2861,6 +2876,9 @@ export interface ScheduledJob {
   missed_run_count?: number
   latest_missed_run_at?: string
   missed_run_reason?: string
+  // Pulse schedules synthesize their run-specific messages from current
+  // evidence; they intentionally do not persist ordinary messages[].
+  pulse_review_only?: boolean
   created_at?: string
   updated_at?: string
   built_in?: boolean
@@ -2940,7 +2958,7 @@ export interface ScheduledJobRun {
   job_id: string
   run_folder?: string
   session_id?: string
-  status: 'running' | 'success' | 'error' | 'waiting_for_capacity'
+  status: 'running' | 'success' | 'error' | 'failed' | 'partial' | 'stopped' | 'interrupted' | 'waiting_for_capacity' | 'waiting_for_workflow'
   error?: string
   duration_ms?: number
   group_names?: string[]

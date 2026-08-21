@@ -36,6 +36,20 @@ ending, so context compaction cannot erase evidence or decisions. SQLite is
 still authoritative; the checkpoint is compact working memory, not a second
 issue database. Pass an opening `instruction`, then explicit follow-up items
 with a non-empty `message`; IDs and labels are optional diagnostics.
+At the top of each checkpoint, keep the exact `pulse_run_id` and an explicit
+UTC `checkpoint_updated_at` timestamp. The opaque run-id suffix is not the
+authoritative clock; durable SQLite `recorded_at` values remain the final
+timeline for lifecycle decisions.
+
+Before each due Engineering or Operations deep review, read
+`get_pulse_review_focus_agenda` for that module. Do a lightweight safety scan
+for critical regressions, matured verification, and answered unapplied
+decisions, then choose exactly one coherent deep focus. Rotation is agentic:
+the compact agenda informs judgment but does not require blind round-robin.
+When that module's review is complete, call `record_pulse_review_focus` exactly
+once with the focus key, priority class, selection reason, compact evidence
+references, and deferred focus keys. This is durable coverage history for the
+next Pulse pass; the Markdown checkpoint remains only this run's notebook.
 
 1. **Prior verification + Engineering Review** — verify every retained repair
    whose evidence boundary arrived, then inspect runtime correctness,

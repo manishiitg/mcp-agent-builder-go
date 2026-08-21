@@ -8,6 +8,19 @@ export interface WorkflowRuntimeTabProjection {
   autoActivate: boolean
 }
 
+/**
+ * A runtime-projected tab can be discovered after its session has already
+ * emitted events. Formatted mode needs an explicit history catch-up before its
+ * live SSE subscription can take over; terminal mode has its own retained
+ * terminal restoration path.
+ */
+export function shouldCatchUpRunningWorkflowTranscript(
+  viewMode: ChatTab['viewMode'],
+  eventCount: number,
+): boolean {
+  return viewMode === 'formatted' && eventCount === 0
+}
+
 
 /**
  * reusableScheduleTabId finds a finished Schedule lane that a newly-discovered

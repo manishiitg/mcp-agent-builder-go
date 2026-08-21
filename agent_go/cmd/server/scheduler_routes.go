@@ -59,6 +59,7 @@ type ScheduledJobResponse struct {
 	MissedRunCount       int                    `json:"missed_run_count,omitempty"`
 	LatestMissedRunAt    *time.Time             `json:"latest_missed_run_at,omitempty"`
 	MissedRunReason      string                 `json:"missed_run_reason,omitempty"`
+	PulseReviewOnly      bool                   `json:"pulse_review_only,omitempty"`
 	CreatedAt            string                 `json:"created_at,omitempty"`
 	UpdatedAt            string                 `json:"updated_at,omitempty"`
 }
@@ -165,6 +166,7 @@ func buildJobResponse(workspacePath string, manifest *WorkflowManifest, sched Wo
 		MissedRunCount:       missed.MissedRunCount,
 		LatestMissedRunAt:    missed.LatestMissedRunAt,
 		MissedRunReason:      missed.MissedRunReason,
+		PulseReviewOnly:      sched.PulseReviewOnly,
 		CreatedAt:            manifest.CreatedAt,
 		UpdatedAt:            manifest.UpdatedAt,
 	}

@@ -19,7 +19,12 @@ import { startRestoredTransportTerminal } from '../../utils/restoredTerminal'
 import { isExternalReadOnlyWorkflowSession, isInternalChildSession } from '../../utils/workflowSessionKinds'
 import { activeWorkflowTabIdForPreset } from '../../utils/workflowTabOwnership'
 import { activateTab } from '../../utils/activateTab'
-import { reconcileWorkflowRuntimeTab, reusableScheduleTabId, workflowRuntimeTabProjection } from './workflowRuntimeTabProjection'
+import {
+  reconcileWorkflowRuntimeTab,
+  reusableScheduleTabId,
+  shouldCatchUpRunningWorkflowTranscript,
+  workflowRuntimeTabProjection,
+} from './workflowRuntimeTabProjection'
 import {
   PreviousChatHistoryPanel,
   chatHistoryConversationPath,
@@ -364,7 +369,10 @@ const WorkflowPreviousChatsPanel: React.FC<{
     <PreviousChatHistoryPanel
       workspacePath={workspacePath}
       activeSessionId={activeSessionId ?? undefined}
-      title="Previous automation chats"
+      // The active tab is the conversation workspace. The panel beneath it
+      // is only a selector for recent conversations / schedules / bots, so a
+      // second "Previous automation chats" heading just repeated the tab.
+      title=""
       actionLabel="Open"
       emptyText="No previous automation chats yet."
       onHasChatsChange={onHasChatsChange}
@@ -484,11 +492,11 @@ async function restoreWorkflowStateFromEvents(
     const { addTabEvents, setTabEvents, setTabLastEventIndex, getTabLastEventIndex, getTabEvents } = useChatStore.getState()
     const workflowStore = useWorkflowStore.getState()
 
-    // Skip if batch progress is already active (avoid overwriting live state)
-    if (workflowStore.batchProgress?.isActive) {
-      logger.debug('WorkflowLayout', 'Batch progress already active, skipping restore')
-      return
-    }
+    // Transcript hydration and canvas-state restoration are separate concerns.
+    // Another workflow may already own the singleton canvas batch-progress
+    // state, but that must never prevent this session's conversation events
+    // from being loaded into its tab.
+    const shouldRestoreCanvasState = !workflowStore.batchProgress?.isActive
 
     let events: PollingEvent[] = []
     let lastIndex = -1
@@ -529,6 +537,14 @@ async function restoreWorkflowStateFromEvents(
     const currentIndex = getTabLastEventIndex(sessionId)
     if (lastIndex > currentIndex) {
       setTabLastEventIndex(sessionId, lastIndex)
+    }
+
+    if (!shouldRestoreCanvasState) {
+      logger.debug('WorkflowLayout', 'Hydrated workflow transcript without replacing active batch progress', {
+        sessionId,
+        eventCount: events.length,
+      })
+      return
     }
 
     // Scan events to find batch context, current step, and step statuses
@@ -1813,6 +1829,25 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
           chatStore.setTabStreaming(tabId, true)
           chatStore.setTabCompleted(tabId, false)
           chatStore.setTabViewMode(tabId, activeViewMode)
+
+          // This reconciler often discovers a scheduled run after it has
+          // already emitted its opening message and several tool/stream
+          // events. SSE only guarantees delivery from the live subscription
+          // point onward, so explicitly catch up the formatted transcript
+          // before relying on the stream for future events.
+          if (shouldCatchUpRunningWorkflowTranscript(
+            activeViewMode,
+            useChatStore.getState().getTabEvents(running.session_id).length,
+          )) {
+            useChatStore.getState().beginWorkflowSessionRestore(running.session_id)
+            try {
+              await restoreWorkflowStateFromEvents(running.session_id, workspacePath)
+            } catch (error) {
+              logger.warn('WorkflowLayout', 'Failed to hydrate newly discovered running workflow tab:', error)
+            } finally {
+              useChatStore.getState().endWorkflowSessionRestore(running.session_id)
+            }
+          }
 
         }
 

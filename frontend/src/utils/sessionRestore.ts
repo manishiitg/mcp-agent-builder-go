@@ -247,9 +247,21 @@ export function conversationToRestoredEvents(conversation: ChatHistoryConversati
   const events: PollingEvent[] = [
     makeRestoredEvent(sessionId, 'conversation_resumed', {
       previous_event_count: messages.length,
+      has_more_history: conversation.history_pagination?.has_more === true,
       restored_from: 'workspace_chat_history',
     }, eventIndexBase),
   ]
+
+  // Scheduled read-only restore may request the parent's compact persisted UI
+  // trace. It preserves the actual child-agent prompts, answers and paired
+  // tools that the conversational summary intentionally omits. Do not add a
+  // synthetic second copy of the user/final messages in that case.
+  if (conversation.ui_events && conversation.ui_events.length > 0) {
+    return [
+      ...events,
+      ...conversation.ui_events.map((event, index) => markPersistedRestoreTrace(event as PollingEvent, sessionId, eventIndexBase + index + 1)),
+    ]
+  }
 
   let turn = 0
   let currentQuestion = ''
@@ -306,6 +318,27 @@ export function conversationToRestoredEvents(conversation: ChatHistoryConversati
   return events
 }
 
+function markPersistedRestoreTrace(event: PollingEvent, parentSessionId: string, eventIndex: number): PollingEvent {
+  const outer = event.data && typeof event.data === 'object' ? event.data as Record<string, unknown> : {}
+  const nested = outer.data && typeof outer.data === 'object' ? outer.data as Record<string, unknown> : {}
+  const metadata = nested.metadata && typeof nested.metadata === 'object' ? nested.metadata as Record<string, unknown> : {}
+  return {
+    ...event,
+    // Persisted UI events are recorded under the parent session even when the
+    // nested event belongs to a background child. Preserve that ownership so
+    // one restored schedule remains one tab/timeline.
+    session_id: event.session_id || parentSessionId,
+    event_index: typeof event.event_index === 'number' ? event.event_index : eventIndex,
+    data: {
+      ...outer,
+      data: {
+        ...nested,
+        metadata: { ...metadata, restored_persisted_trace: true },
+      },
+    },
+  } as PollingEvent
+}
+
 // Coding-provider stream events can reach persistence with an empty
 // tool_params.arguments, while the same conversation's structured tool-call
 // message has the complete arguments. Retain the raw event's timing/result and
@@ -353,7 +386,7 @@ function restoreToolArgumentsFromConversation(
   })
 }
 
-async function hydrateTabEventsFromChatHistory(sessionId: string, workspacePath?: string): Promise<RuntimeSessionState> {
+async function hydrateTabEventsFromChatHistory(sessionId: string, workspacePath?: string, includeUiEvents = false): Promise<RuntimeSessionState> {
   const chatStore = useChatStore.getState()
   // getChatHistoryResumeConversation (not the unbounded preview variant) keeps
   // this lightweight, and conversationToRestoredEvents does the real work of
@@ -362,7 +395,9 @@ async function hydrateTabEventsFromChatHistory(sessionId: string, workspacePath?
   // empty tool_params.arguments even though the structured conversation_history
   // has them, so restoreToolArgumentsFromConversation patches those back in
   // regardless of which path built the underlying events.
-  const conversation = await agentApi.getChatHistoryResumeConversation(sessionId, workspacePath)
+  const conversation = includeUiEvents
+    ? await agentApi.getChatHistoryResumeConversation(sessionId, workspacePath, 100, 0, true)
+    : await agentApi.getChatHistoryResumeConversation(sessionId, workspacePath)
   const rawEvents = conversationToRestoredEvents(conversation)
   const events = restoreToolArgumentsFromConversation(rawEvents, conversation)
 
@@ -381,7 +416,7 @@ async function hydrateTabEventsFromChatHistory(sessionId: string, workspacePath?
   console.info(`${TAG} Hydrated persisted conversation`, {
     sessionId,
     eventCount: events.length,
-    source: 'conversation_history',
+    source: includeUiEvents ? 'conversation_history + persisted_ui_events' : 'conversation_history',
   })
 
   return {
@@ -395,9 +430,10 @@ async function hydrateTabEventsFromChatHistory(sessionId: string, workspacePath?
 async function tryHydrateTabEventsFromChatHistory(
   sessionId: string,
   workspacePath?: string,
+  includeUiEvents = false,
 ): Promise<RuntimeSessionState | null> {
   try {
-    return await hydrateTabEventsFromChatHistory(sessionId, workspacePath)
+    return await hydrateTabEventsFromChatHistory(sessionId, workspacePath, includeUiEvents)
   } catch (error) {
     if (isNotFoundError(error)) {
       return null
@@ -419,6 +455,9 @@ export async function hydrateTabEvents(
     // Kept for callers that explicitly request history. Durable history is
     // now the default for every session, so this no longer changes behavior.
     preferChatHistory?: boolean
+    // Read-only schedule restore asks for its bounded persisted UI trace so
+    // background child work remains inspectable after server restart.
+    includeUiEvents?: boolean
   } = {},
 ): Promise<RuntimeSessionState> {
   const chatStore = useChatStore.getState()
@@ -429,7 +468,7 @@ export async function hydrateTabEvents(
   } catch (error) {
     if (isNotFoundError(error)) {
       console.log(`${TAG} Polling session ${sessionId} not found; restoring from workspace chat history`)
-      const restored = await tryHydrateTabEventsFromChatHistory(sessionId, options.workspacePath)
+      const restored = await tryHydrateTabEventsFromChatHistory(sessionId, options.workspacePath, options.includeUiEvents)
       if (restored) return restored
     }
     throw error
@@ -439,7 +478,7 @@ export async function hydrateTabEvents(
   // prompts after a browser reload. Prefer the durable conversation for every
   // session, regardless of its owning product. Runtime status remains
   // authoritative so a currently running turn still renders as streaming.
-  const restored = await tryHydrateTabEventsFromChatHistory(sessionId, options.workspacePath)
+  const restored = await tryHydrateTabEventsFromChatHistory(sessionId, options.workspacePath, options.includeUiEvents)
   if (restored) {
     return {
       status: response.session_status || restored.status,
@@ -465,7 +504,7 @@ export async function hydrateTabEvents(
     // tell us whether the durable transcript exists. The caller only enables
     // this fallback for an explicitly restored chat, so prefer its persisted
     // history whenever the volatile event buffer has no events.
-    const restored = await tryHydrateTabEventsFromChatHistory(sessionId, options.workspacePath)
+    const restored = await tryHydrateTabEventsFromChatHistory(sessionId, options.workspacePath, options.includeUiEvents)
     if (restored) {
       return {
         status: response.session_status || restored.status,

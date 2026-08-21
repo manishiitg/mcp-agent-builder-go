@@ -19,6 +19,7 @@ import (
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/costledger"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/fsutil"
 	stepworkflow "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
+	orchestratorevents "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/events"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/schedulerstate"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workflowtypes"
 	"github.com/robfig/cron/v3"
@@ -3273,9 +3274,9 @@ func (s *SchedulerService) executeWorkshopJob(ctx context.Context, sctx *Schedul
 	// "success" for a run that fully failed at its first posting step).
 	postRunFolders, postRunFoldersErr := s.api.loadRunFoldersInternal(ctx, sctx.WorkspacePath)
 	sctx.ProducedRunEvidence = workshopRunProducedEvidence(preRunFolderNames, postRunFolders, invocationStartedAt)
-	if !sctx.ProducedRunEvidence && s.scheduledWorkflowStepProducedEvidence(sessionID, invocationStartedAt) {
+	if !sctx.ProducedRunEvidence && s.scheduledWorkflowExecutionProducedEvidence(sessionID, invocationStartedAt) {
 		sctx.ProducedRunEvidence = true
-		s.sessionLogf(sctx, sessionID, "[SCHEDULER] scheduled workflow-step executions are this invocation's authoritative Pulse evidence")
+		s.sessionLogf(sctx, sessionID, "[SCHEDULER] the schedule's linked workflow execution receipt is this invocation's authoritative Pulse evidence")
 	}
 	if !sctx.ProducedRunEvidence {
 		s.sessionLogf(sctx, sessionID, "[SCHEDULER] no run folder was created or restarted during this invocation for %s; Pulse evidence-dependent stages will be skipped", sctx.Schedule.ID)
@@ -3342,9 +3343,9 @@ func (s *SchedulerService) preserveRunEvidenceAfterFailedTurn(ctx context.Contex
 		s.sessionLogf(sctx, sessionID, "[SCHEDULER] turn failed for %s, but a full workflow run started during this invocation and its own metadata is the authority; preserving run evidence for Pulse", sctx.Schedule.ID)
 		return
 	}
-	if s.scheduledWorkflowStepProducedEvidence(sessionID, since) {
+	if s.scheduledWorkflowExecutionProducedEvidence(sessionID, since) {
 		sctx.ProducedRunEvidence = true
-		s.sessionLogf(sctx, sessionID, "[SCHEDULER] turn failed for %s, but scheduled workflow steps started during this invocation; preserving run evidence for Pulse", sctx.Schedule.ID)
+		s.sessionLogf(sctx, sessionID, "[SCHEDULER] turn failed for %s, but a linked workflow execution started during this invocation; preserving run evidence for Pulse", sctx.Schedule.ID)
 	}
 }
 
@@ -3395,13 +3396,16 @@ func workshopRunProducedEvidence(before map[string]bool, after []RunFolderInfo, 
 	return false
 }
 
-// scheduledWorkflowStepProducedEvidence recognizes a schedule that deliberately
-// invokes workflow steps with execute_step instead of run_full_workflow. Those
-// executions are attached to the schedule's own session, so they are the same
-// invocation boundary—not a second synthetic workflow run. A generic background
-// agent does not count: only a declared workflow step can make Pulse review the
-// resulting workflow evidence.
-func (s *SchedulerService) scheduledWorkflowStepProducedEvidence(sessionID string, since time.Time) bool {
+// scheduledWorkflowExecutionProducedEvidence uses the execution receipt linked
+// to this exact schedule session as the authoritative invocation boundary. This
+// covers both run_full_workflow's full-run container and execute_step's declared
+// workflow-step execution.
+//
+// The run-folder listing is intentionally only a secondary signal: it is capped
+// for dashboard performance, so a workflow that reuses iteration-0/group after
+// ten newer iterations exist can be absent even though its run_metadata.json was
+// just completed. A generic background agent still does not count.
+func (s *SchedulerService) scheduledWorkflowExecutionProducedEvidence(sessionID string, since time.Time) bool {
 	if s == nil || s.api == nil || s.api.bgAgentRegistry == nil || strings.TrimSpace(sessionID) == "" {
 		return false
 	}
@@ -3413,7 +3417,11 @@ func (s *SchedulerService) scheduledWorkflowStepProducedEvidence(sessionID strin
 		if snapshot.CreatedAt.Before(since) {
 			continue
 		}
-		if snapshot.Kind == "workflow_step" || snapshot.Metadata["execution_type"] == "workflow-step" {
+		kind := orchestratorevents.ExecutionKind(snapshot.Kind)
+		if kind == orchestratorevents.ExecutionKindFullRun ||
+			kind == orchestratorevents.ExecutionKindWorkflowStep ||
+			snapshot.Metadata["execution_type"] == "full-workflow" ||
+			snapshot.Metadata["execution_type"] == "workflow-step" {
 			return true
 		}
 	}

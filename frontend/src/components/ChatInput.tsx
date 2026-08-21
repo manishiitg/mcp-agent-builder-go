@@ -3,7 +3,7 @@ import React, { useRef, useCallback, useMemo, useState, useEffect, useLayoutEffe
 import { useShallow } from 'zustand/react/shallow'
 
 const DBG = '[skill-popup]'
-import { Send, Wand2, Loader2, Globe, Layers, X, History, Bot, Server, Download, Paperclip, CalendarClock, MessageSquare, Terminal } from 'lucide-react'
+import { Send, Wand2, Loader2, Globe, Layers, X, History, Bot, Server, Download, Paperclip, CalendarClock, MessageSquare, Terminal, Plus } from 'lucide-react'
 import { Button } from './ui/Button'
 import { Textarea } from './ui/Textarea'
 import FileContextDisplay from './FileContextDisplay'
@@ -246,6 +246,7 @@ interface ChatInputProps {
     options?: { preferLiveInput?: boolean; sourceTabId?: string }
   ) => boolean | void | Promise<boolean | void>
   onStopStreaming: () => void
+  onNewChat?: () => void
   // Optional tab scope for embedded chat panes, such as WorkflowLayout. When
   // omitted, ChatInput uses the globally active chat tab.
   tabId?: string | null
@@ -256,6 +257,8 @@ interface ChatInputProps {
   // Product surfaces keep the shared transport but hide developer/provider
   // controls and render a simple customer-facing composer.
   surfaceVariant?: 'default' | 'product'
+  showNewChatAction?: boolean
+  hideRuntimeStatus?: boolean
 }
 
 function isAutoNotificationMessage(msg: string): boolean {
@@ -487,6 +490,9 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   tabId: scopedTabId,
   restoredConversationPending = true,
   surfaceVariant = 'default',
+  showNewChatAction = false,
+  hideRuntimeStatus = false,
+  onNewChat,
 }) => {
   const isProductSurface = surfaceVariant === 'product'
   // Store subscriptions
@@ -3581,7 +3587,21 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             )}
             <div className="flex justify-between items-center">
               <div className="flex items-center gap-1.5">
-                {mainAgentRuntimeStatus && (
+                {showNewChatAction && onNewChat ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={onNewChat}
+                    disabled={isTurnInFlight}
+                    className="h-7 gap-1.5 px-2 text-[11px] text-muted-foreground"
+                    aria-label="Start a new chat"
+                    title={isTurnInFlight ? 'Wait for the current response or stop it first' : 'Start a new chat'}
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    New chat
+                  </Button>
+                ) : null}
+                {!hideRuntimeStatus && mainAgentRuntimeStatus && (
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <div

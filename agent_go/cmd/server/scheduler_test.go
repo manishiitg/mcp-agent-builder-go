@@ -2588,9 +2588,22 @@ func TestWorkshopRunProducedEvidence(t *testing.T) {
 	}
 }
 
-func TestScheduledWorkflowStepProducedEvidenceUsesLinkedStepExecutions(t *testing.T) {
+func TestScheduledWorkflowExecutionProducedEvidenceUsesLinkedReceipts(t *testing.T) {
 	since := time.Date(2026, 8, 11, 0, 0, 0, 0, time.UTC)
 	registry := NewBackgroundAgentRegistry()
+	registry.Register("schedule-session", &BackgroundAgent{
+		ID:        "workflow-full-engage-1",
+		SessionID: "schedule-session",
+		Kind:      "full_run",
+		Status:    BGAgentCompleted,
+		CreatedAt: since.Add(30 * time.Second),
+		Metadata:  map[string]string{"execution_type": "full-workflow", "group_name": "engage"},
+	})
+	service := &SchedulerService{api: &StreamingAPI{bgAgentRegistry: registry}}
+	if !service.scheduledWorkflowExecutionProducedEvidence("schedule-session", since) {
+		t.Fatal("run_full_workflow's session-linked full-run receipt must be Pulse evidence even when a capped folder listing omits its reused run folder")
+	}
+
 	registry.Register("schedule-session", &BackgroundAgent{
 		ID:        "exec-daily-report-1",
 		SessionID: "schedule-session",
@@ -2599,8 +2612,7 @@ func TestScheduledWorkflowStepProducedEvidenceUsesLinkedStepExecutions(t *testin
 		CreatedAt: since.Add(time.Minute),
 		Metadata:  map[string]string{"execution_type": "workflow-step"},
 	})
-	service := &SchedulerService{api: &StreamingAPI{bgAgentRegistry: registry}}
-	if !service.scheduledWorkflowStepProducedEvidence("schedule-session", since) {
+	if !service.scheduledWorkflowExecutionProducedEvidence("schedule-session", since) {
 		t.Fatal("a workflow step launched by this schedule must be Pulse evidence")
 	}
 
@@ -2611,7 +2623,7 @@ func TestScheduledWorkflowStepProducedEvidenceUsesLinkedStepExecutions(t *testin
 		Status:    BGAgentCompleted,
 		CreatedAt: since.Add(2 * time.Minute),
 	})
-	if !service.scheduledWorkflowStepProducedEvidence("schedule-session", since) {
+	if !service.scheduledWorkflowExecutionProducedEvidence("schedule-session", since) {
 		t.Fatal("unrelated background work must not erase linked workflow-step evidence")
 	}
 
@@ -2624,8 +2636,21 @@ func TestScheduledWorkflowStepProducedEvidenceUsesLinkedStepExecutions(t *testin
 		CreatedAt: since.Add(time.Minute),
 	})
 	otherService := &SchedulerService{api: &StreamingAPI{bgAgentRegistry: otherRegistry}}
-	if otherService.scheduledWorkflowStepProducedEvidence("schedule-session", since) {
+	if otherService.scheduledWorkflowExecutionProducedEvidence("schedule-session", since) {
 		t.Fatal("generic background work must not manufacture workflow evidence")
+	}
+
+	staleRegistry := NewBackgroundAgentRegistry()
+	staleRegistry.Register("schedule-session", &BackgroundAgent{
+		ID:        "workflow-full-old",
+		SessionID: "schedule-session",
+		Kind:      "full_run",
+		Status:    BGAgentCompleted,
+		CreatedAt: since.Add(-time.Minute),
+	})
+	staleService := &SchedulerService{api: &StreamingAPI{bgAgentRegistry: staleRegistry}}
+	if staleService.scheduledWorkflowExecutionProducedEvidence("schedule-session", since) {
+		t.Fatal("a full-run receipt from before this invocation must not manufacture current evidence")
 	}
 }
 

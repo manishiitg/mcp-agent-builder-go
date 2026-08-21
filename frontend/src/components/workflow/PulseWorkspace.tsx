@@ -22,6 +22,7 @@ import type {
   PulseModuleState,
   PulseRunMode,
   PulseReviewRecord,
+  PulseReviewFocus,
 } from '../../services/api-types'
 import { ReportHumanInputPanel } from './ReportHumanInputPanel'
 import { SoulViewer } from './SoulViewer'
@@ -136,6 +137,7 @@ export function PulseWorkspace({
   moduleStates,
   finalCommandStates,
   gateMode,
+  reviewFocuses,
   statusLoading,
   statusError,
   onRefresh,
@@ -145,6 +147,7 @@ export function PulseWorkspace({
   moduleStates: PulseModuleState[]
   finalCommandStates: PulseFinalCommandState[]
   gateMode: PulseRunMode | null
+  reviewFocuses: PulseReviewFocus[]
   statusLoading: boolean
   statusError: string | null
   onRefresh: () => void
@@ -544,6 +547,9 @@ export function PulseWorkspace({
             const latest = [...areaModules]
               .sort((a, b) => (b.latestReview?.recorded_at || '').localeCompare(a.latestReview?.recorded_at || ''))[0]
               ?.latestReview
+            const latestFocus = reviewFocuses
+              .filter((item) => normalizePulseWorkspaceModule(item.module) === area.id && item.last_reviewed_at)
+              .sort((a, b) => (b.last_reviewed_at || '').localeCompare(a.last_reviewed_at || ''))[0]
             const moduleID = area.id
             return (
               <button
@@ -595,6 +601,15 @@ export function PulseWorkspace({
                   <span className="line-clamp-2">
                     {latest ? latest.verdict || 'Review recorded' : 'No stored review yet'}
                   </span>
+                  {!strategic && latestFocus && (
+                    <div className="mt-1.5 text-[10px] text-muted-foreground">
+                      <span className="font-medium text-foreground">Deep focus:</span>{' '}
+                      {readable(latestFocus.focus_key)} · {formatDate(latestFocus.last_reviewed_at)}
+                      {latestFocus.last_selection_reason && (
+                        <span className="mt-0.5 block line-clamp-2">{latestFocus.last_selection_reason}</span>
+                      )}
+                    </div>
+                  )}
                 </div>
               </button>
             )

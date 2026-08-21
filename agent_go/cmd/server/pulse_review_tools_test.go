@@ -22,6 +22,7 @@ func TestTypedPulseReviewerToolsPersistFindingAndCompactReceipt(t *testing.T) {
 	_, executors, _ := createPulseWorklistTools()
 	recordFinding := executors["record_pulse_finding"].(func(context.Context, map[string]interface{}) (string, error))
 	completeReview := executors["complete_pulse_review"].(func(context.Context, map[string]interface{}) (string, error))
+	recordFocus := executors["record_pulse_review_focus"].(func(context.Context, map[string]interface{}) (string, error))
 	raw, err := recordFinding(ctx, map[string]interface{}{
 		"workspace_path": workspacePath, "pulse_run_id": pulseRunID,
 		"module": pulseModuleWorkflowReview, "concern": "collector silently drops failed rows",
@@ -57,6 +58,18 @@ func TestTypedPulseReviewerToolsPersistFindingAndCompactReceipt(t *testing.T) {
 	}); err == nil || !strings.Contains(err.Error(), "non-empty verdict") {
 		t.Fatalf("blank verdict error=%v", err)
 	}
+	if _, err := completeReview(ctx, map[string]interface{}{
+		"workspace_path": workspacePath, "pulse_run_id": pulseRunID,
+		"modules": []interface{}{pulseModuleWorkflowReview}, "verdict": "One correctness issue.", "status": "completed",
+	}); err == nil || !strings.Contains(err.Error(), "requires record_pulse_review_focus") {
+		t.Fatalf("missing focus error=%v", err)
+	}
+	if _, err := recordFocus(ctx, map[string]interface{}{
+		"workspace_path": workspacePath, "pulse_run_id": pulseRunID, "module": pulseModuleWorkflowReview,
+		"focus_key": "state_correctness", "priority_class": "critical_regression", "selection_reason": "The retained correctness issue was the highest-priority evidence.",
+	}); err != nil {
+		t.Fatalf("record_pulse_review_focus: %v", err)
+	}
 
 	if _, err := completeReview(ctx, map[string]interface{}{
 		"workspace_path": workspacePath, "pulse_run_id": pulseRunID,
@@ -75,6 +88,42 @@ func TestTypedPulseReviewerToolsPersistFindingAndCompactReceipt(t *testing.T) {
 	findings, err := step_based_workflow.LoadPulseFindingLifecycles(context.Background(), workspacePath, pulseModuleWorkflowReview, -1)
 	if err != nil || len(findings) != 1 || findings[0].SeenCount != 1 || findings[0].Details == nil || findings[0].Details.Summary != "Failed rows disappear" {
 		t.Fatalf("unexpected lifecycle: %#v err=%v", findings, err)
+	}
+}
+
+func TestPulseReviewFocusToolsPersistDurableAgenda(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	const workspacePath = "Workflow/focus-history"
+	const pulseRunID = "focus-session"
+	ctx := mcpexecutor.WithSessionID(context.Background(), pulseRunID)
+	_, executors, _ := createPulseWorklistTools()
+	record := executors["record_pulse_review_focus"].(func(context.Context, map[string]interface{}) (string, error))
+	agenda := executors["get_pulse_review_focus_agenda"].(func(context.Context, map[string]interface{}) (string, error))
+
+	raw, err := record(ctx, map[string]interface{}{
+		"workspace_path": workspacePath, "pulse_run_id": pulseRunID, "module": pulseModuleLLMOpsReview,
+		"focus_key": "completion_tracking", "priority_class": "overdue", "selection_reason": "This lens has not been reviewed since the timeout recurrence.",
+		"verdict": "Observer now has a targeted recheck.", "evidence": []interface{}{"runs/iteration-0/execution/attempt.json"},
+		"issue_ids": []interface{}{"PUL-AB12CD34"}, "deferred_focuses": []interface{}{"tool_payload_efficiency"},
+		"next_check_at": "2026-08-21T00:00:00Z", "next_check_reason": "next producing run",
+	})
+	if err != nil {
+		t.Fatalf("record focus: %v", err)
+	}
+	var stored PulseReviewFocus
+	if err := json.Unmarshal([]byte(raw), &stored); err != nil || stored.LastReviewedAt == "" || stored.FocusKey != "completion_tracking" {
+		t.Fatalf("stored focus=%#v decode_err=%v raw=%s", stored, err, raw)
+	}
+	raw, err = agenda(ctx, map[string]interface{}{"workspace_path": workspacePath, "module": pulseModuleLLMOpsReview})
+	if err != nil {
+		t.Fatalf("read agenda: %v", err)
+	}
+	var response struct {
+		Focuses []PulseReviewFocus `json:"focuses"`
+	}
+	if err := json.Unmarshal([]byte(raw), &response); err != nil || len(response.Focuses) != 2 || response.Focuses[0].FocusKey != "tool_payload_efficiency" || response.Focuses[1].DeferredFocuses[0] != "tool_payload_efficiency" {
+		t.Fatalf("agenda=%#v decode_err=%v raw=%s", response, err, raw)
 	}
 }
 

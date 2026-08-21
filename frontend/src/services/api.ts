@@ -5,6 +5,7 @@ import type { AxiosInstance, InternalAxiosRequestConfig } from 'axios'
 import { useChatStore } from '../stores/useChatStore'
 import { useModeStore } from '../stores/useModeStore'
 import { getActiveWorkspaceProfile, useWorkspaceConnectionStore } from '../stores/useWorkspaceConnectionStore'
+import { GATEWAY_LOGIN_HEADER, gatewayLoginTarget, redirectToGatewayLogin } from '../utils/gatewayAuth'
 import type {
   AgentQueryRequest,
   AgentQueryResponse,
@@ -534,9 +535,18 @@ function is401DueToBadToken(error: unknown): boolean {
   return msg.includes('expired') || msg.includes('invalid')
 }
 
+function redirectOnGatewayAuthenticationRequired(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const response = (error as { response?: { status?: number; headers?: Record<string, unknown> & { get?: (name: string) => unknown } } }).response
+  const headers = response?.headers
+  const headerValue = headers?.get?.(GATEWAY_LOGIN_HEADER) ?? headers?.[GATEWAY_LOGIN_HEADER.toLowerCase()]
+  return redirectToGatewayLogin(gatewayLoginTarget(response?.status, headerValue))
+}
+
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
+    if (redirectOnGatewayAuthenticationRequired(error)) return Promise.reject(error)
     if (is401DueToBadToken(error)) {
       clearAuthToken()
     }
@@ -588,6 +598,7 @@ workspaceApi.interceptors.request.use((config) => {
 workspaceApi.interceptors.response.use(
   (response) => response,
   async (error) => {
+    if (redirectOnGatewayAuthenticationRequired(error)) return Promise.reject(error)
     if (is401DueToBadToken(error)) {
       clearAuthToken()
     }
@@ -848,9 +859,10 @@ export const agentApi = {
   // Formatted Resume needs conversational turns, not the archived terminal/UI
   // trace. The server projects the persisted history to bounded user/final-
   // assistant pairs so reopening a large coding-agent chat stays lightweight.
-  getChatHistoryResumeConversation: async (sessionId: string, workspacePath?: string, resumeTurns = 100, resumeOffset = 0): Promise<ChatHistoryConversation> => {
+  getChatHistoryResumeConversation: async (sessionId: string, workspacePath?: string, resumeTurns = 100, resumeOffset = 0, includeUiEvents = false): Promise<ChatHistoryConversation> => {
     const params: Record<string, string> = { resume_turns: String(resumeTurns) }
     if (resumeOffset > 0) params.resume_offset = String(resumeOffset)
+    if (includeUiEvents) params.include_ui_events = '1'
     if (workspacePath) params.workspace_path = workspacePath
     const response = await api.get(`/api/chat-history/sessions/${sessionId}`, { params })
     return response.data

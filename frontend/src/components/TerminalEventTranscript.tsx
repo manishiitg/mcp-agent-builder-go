@@ -403,10 +403,13 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
   const followedUserMessageKeyRef = useRef(latestUserMessageKey)
   const followCurrentTurnRef = useRef(true)
   // Do not reserve a permanent header for history. The user reaches this
-  // control by scrolling to the oldest currently-loaded item; it only exists
-  // when another page can actually be fetched from the backend.
+  // control at the oldest currently-loaded item; it only exists when another
+  // page can actually be fetched from the backend. A short restored transcript
+  // can fit entirely in the viewport, which means it starts at item zero and
+  // has no physical scroll gesture to make. Treat that as "at the top" too —
+  // otherwise a reader can see "Previous conversation" but has no way to load
+  // the older durable page.
   const [isAtTranscriptStart, setIsAtTranscriptStart] = useState(false)
-  const hasNavigatedFromTailRef = useRef(false)
   const showEarlierMessagesControl = Boolean(
     error || (isAtTranscriptStart && (hasOlder || loadingOlder) && onLoadOlder),
   )
@@ -456,7 +459,6 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
     if (!(scroller instanceof HTMLElement) || event.deltaY === 0) return
     if (event.deltaY < 0) {
       followCurrentTurnRef.current = false
-      hasNavigatedFromTailRef.current = true
     }
 
     let target = event.target instanceof HTMLElement ? event.target : null
@@ -569,11 +571,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
         className="custom-scrollbar min-h-0 flex-1"
         scrollerRef={ref => { scrollerRef.current = ref }}
         rangeChanged={({ startIndex }) => {
-          // `startIndex === 0` is also true for a brand-new short transcript.
-          // Do not show paging chrome just because it mounted there; it is an
-          // action the reader reaches by navigating back toward the beginning.
-          if (startIndex > 0) hasNavigatedFromTailRef.current = true
-          setIsAtTranscriptStart(startIndex === 0 && hasNavigatedFromTailRef.current)
+          setIsAtTranscriptStart(startIndex === 0)
         }}
         followOutput="smooth"
         initialTopMostItemIndex={Math.max(0, items.length - 1)}
