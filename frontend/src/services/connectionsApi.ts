@@ -116,6 +116,19 @@ export interface ConnectResult {
   resource?: string;
 }
 
+export interface ConnectionTool {
+  name: string;
+  description?: string;
+  enabled: boolean;
+}
+
+export interface ConnectionToolsResponse {
+  server_name: string;
+  tools: ConnectionTool[];
+  total: number;
+  enabled_count: number;
+}
+
 export interface TestResult {
   status: string;
   server_name: string;
@@ -250,6 +263,22 @@ export class ConnectionsApi {
   async remove(id: string): Promise<{ status: string; message: string }> {
     return request(`/api/connections/${encodeURIComponent(id)}`, {
       method: 'DELETE',
+    });
+  }
+
+  /** Tools this connection exposes, each with its on/off state. */
+  async getTools(id: string): Promise<ConnectionToolsResponse> {
+    return request(`/api/connections/${encodeURIComponent(id)}/tools`);
+  }
+
+  /**
+   * Saves which tools are switched OFF. Only the off switches are sent, so
+   * anything omitted stays enabled and tools added later work by default.
+   */
+  async setDisabledTools(id: string, disabled: string[]): Promise<{ status: string }> {
+    return request(`/api/connections/${encodeURIComponent(id)}/tools`, {
+      method: 'PUT',
+      body: JSON.stringify({ disabled }),
     });
   }
 

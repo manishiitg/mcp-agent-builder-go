@@ -20,6 +20,7 @@ interface ConnectionRowProps {
   onDisconnect: () => void
   onRemove: () => void
   onTest: () => void
+  onOpen: () => void
 }
 
 /**
@@ -35,6 +36,7 @@ export default function ConnectionRow({
   onDisconnect,
   onRemove,
   onTest,
+  onOpen,
 }: ConnectionRowProps) {
   const [menuOpen, setMenuOpen] = useState(false)
   const [confirmRemove, setConfirmRemove] = useState(false)
@@ -61,8 +63,12 @@ export default function ConnectionRow({
   return (
     <>
       <div className="group grid grid-cols-[1fr_auto_auto] items-center gap-4 rounded-lg px-3 py-2.5 transition-colors hover:bg-gray-50 dark:hover:bg-slate-700/40">
-        {/* Connector */}
-        <div className="flex min-w-0 items-center gap-3">
+        {/* Connector — opens the connection's own page */}
+        <button
+          type="button"
+          onClick={onOpen}
+          className="flex min-w-0 items-center gap-3 text-left"
+        >
           <ConnectionIcon icon={icon} brandColor={brandColor} size="sm" />
           <div className="min-w-0">
             <div className="flex items-center gap-2">
@@ -91,7 +97,7 @@ export default function ConnectionRow({
               </span>
             ) : null}
           </div>
-        </div>
+        </button>
 
         {/* Type */}
         <span className="w-16 text-sm text-gray-500 dark:text-gray-400">
@@ -108,11 +114,12 @@ export default function ConnectionRow({
                 className="h-4 w-4 text-green-600 dark:text-green-400"
                 aria-label={`${name} is connected`}
               />
-              {/* Disconnect stays hidden until hover so a healthy table reads calm. */}
+              {/* Always visible: signing out is a primary action, not something
+                  the user should have to hover to discover. */}
               <button
                 type="button"
                 onClick={onDisconnect}
-                className="rounded-md px-2 py-1 text-xs font-medium text-gray-600 opacity-0 transition-opacity hover:text-gray-900 focus:opacity-100 group-hover:opacity-100 dark:text-gray-400 dark:hover:text-gray-200"
+                className="rounded-md border border-gray-300 px-2.5 py-1 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-100 dark:border-slate-600 dark:text-gray-300 dark:hover:bg-slate-700"
               >
                 Disconnect
               </button>
