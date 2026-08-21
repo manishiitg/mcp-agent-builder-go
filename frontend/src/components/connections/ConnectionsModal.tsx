@@ -29,8 +29,13 @@ const FILTERS: { id: ConnectionFilter; label: string }[] = [
   { id: 'not_connected', label: 'Not connected' },
 ]
 
-/** Featured in the Popular strip, in this order, when present in the catalog. */
-const POPULAR_IDS = ['google-workspace', 'slack', 'notion']
+/**
+ * Featured in the Popular strip, in this order, when present in the catalog.
+ * All three register their own OAuth client, so each is genuinely one click —
+ * featuring an entry that needs server credentials would put a blocked card in
+ * the most prominent place on the screen.
+ */
+const POPULAR_IDS = ['notion', 'linear', 'atlassian']
 
 interface ConnectionsModalProps {
   onClose: () => void
