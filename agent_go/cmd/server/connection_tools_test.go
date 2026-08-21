@@ -311,17 +311,20 @@ func TestSetConnectionToolsRejectsBadBody(t *testing.T) {
 	}
 }
 
-func TestGetConnectionToolsMarksDisabledOnes(t *testing.T) {
+func TestGetConnectionToolsMarksDisabledOnesAndGroups(t *testing.T) {
 	withTempHome(t)
 	api, router := newTestAPI(t)
 	router.HandleFunc("/api/connections/{id}/tools", api.handleGetConnectionTools).Methods("GET")
 
-	api.toolStatus = map[string]ToolStatus{
-		"notion": {Name: "notion", Tools: []mcpclient.ToolDetail{
-			{Name: "search", Description: "Search pages"},
-			{Name: "delete_page", Description: "Delete a page"},
-		}},
+	// Seed the grouping cache so the handler does not open a live connection.
+	toolGroupCacheMu.Lock()
+	toolGroupCache["notion"] = []ConnectionTool{
+		{Name: "search", Description: "Search pages", ReadOnly: true, Source: "annotation"},
+		{Name: "delete_page", Description: "Delete a page", ReadOnly: false, Source: "annotation"},
 	}
+	toolGroupCacheMu.Unlock()
+	t.Cleanup(func() { forgetServerTools("notion") })
+
 	if err := saveToolPrefs(GetDefaultUserID(), &toolPrefs{
 		Disabled: map[string][]string{"notion": {"delete_page"}},
 	}); err != nil {
@@ -340,14 +343,127 @@ func TestGetConnectionToolsMarksDisabledOnes(t *testing.T) {
 	if resp.Total != 2 || resp.EnabledCount != 1 {
 		t.Errorf("total=%d enabled=%d, want 2 and 1", resp.Total, resp.EnabledCount)
 	}
-	byName := map[string]bool{}
-	for _, tool := range resp.Tools {
-		byName[tool.Name] = tool.Enabled
+	if !resp.GroupsFromAnnotations {
+		t.Error("every tool declared an annotation, so grouping must be reported as authoritative")
 	}
-	if !byName["search"] {
+
+	byName := map[string]ConnectionTool{}
+	for _, tool := range resp.Tools {
+		byName[tool.Name] = tool
+	}
+	if !byName["search"].Enabled {
 		t.Error("search must be enabled")
 	}
-	if byName["delete_page"] {
+	if byName["delete_page"].Enabled {
 		t.Error("delete_page must be reported as disabled")
+	}
+	if !byName["search"].ReadOnly || byName["delete_page"].ReadOnly {
+		t.Error("groups must follow the server's annotations")
+	}
+}
+
+func TestGetConnectionToolsFlagsInferredGrouping(t *testing.T) {
+	withTempHome(t)
+	api, router := newTestAPI(t)
+	router.HandleFunc("/api/connections/{id}/tools", api.handleGetConnectionTools).Methods("GET")
+
+	toolGroupCacheMu.Lock()
+	toolGroupCache["notion"] = []ConnectionTool{
+		{Name: "list_pages", ReadOnly: true, Source: "inferred"},
+	}
+	toolGroupCacheMu.Unlock()
+	t.Cleanup(func() { forgetServerTools("notion") })
+
+	rec, _ := doJSON(t, router, "GET", "/api/connections/notion/tools", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	var resp connectionToolsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// A guessed grouping must never be presented as if the server declared it.
+	if resp.GroupsFromAnnotations {
+		t.Error("inferred grouping must not be reported as authoritative")
+	}
+}
+
+func TestForgetServerToolsClearsCache(t *testing.T) {
+	toolGroupCacheMu.Lock()
+	toolGroupCache["notion"] = []ConnectionTool{{Name: "search"}}
+	toolGroupCacheMu.Unlock()
+
+	forgetServerTools("notion")
+
+	toolGroupCacheMu.RLock()
+	_, ok := toolGroupCache["notion"]
+	toolGroupCacheMu.RUnlock()
+	if ok {
+		// A disconnect or removal must not leave a stale tool list behind.
+		t.Error("cached tools must be dropped")
+	}
+}
+
+func TestInferReadOnly(t *testing.T) {
+	readOnly := []string{
+		"get_email", "list-labels", "search_threads", "notion-fetch",
+		"read_page", "downloadAttachment", "view", "query_database",
+	}
+	for _, name := range readOnly {
+		if !inferReadOnly(name) {
+			t.Errorf("inferReadOnly(%q) = false, want true", name)
+		}
+	}
+
+	write := []string{
+		"create_page", "delete-message", "update_row", "send_email",
+		"notion-create-pages", "archive_thread", "move_file", "trash_message",
+	}
+	for _, name := range write {
+		if inferReadOnly(name) {
+			t.Errorf("inferReadOnly(%q) = true, want false", name)
+		}
+	}
+
+	// A write verb anywhere in the name wins, so a mutating tool is never
+	// filed under read-only just because it also mentions "search".
+	if inferReadOnly("update_search_index") {
+		t.Error("update_search_index must be treated as a write tool")
+	}
+
+	// Unrecognised names fall to the safer side.
+	if inferReadOnly("frobnicate") {
+		t.Error("an unknown verb must be treated as a write tool")
+	}
+}
+
+func TestSplitToolName(t *testing.T) {
+	tests := []struct {
+		name string
+		want []string
+	}{
+		{"get_email_message", []string{"get", "email", "message"}},
+		{"notion-create-pages", []string{"notion", "create", "pages"}},
+		// camelCase is common in MCP servers and must split too.
+		{"downloadAttachment", []string{"download", "attachment"}},
+		{"listDraftEmails", []string{"list", "draft", "emails"}},
+		// A run of capitals stays one word until a lowercase resumes.
+		{"HTTPRequest", []string{"http", "request"}},
+		{"search", []string{"search"}},
+	}
+
+	for _, tc := range tests {
+		got := splitToolName(tc.name)
+		if len(got) != len(tc.want) {
+			t.Errorf("splitToolName(%q) = %v, want %v", tc.name, got, tc.want)
+			continue
+		}
+		for i := range tc.want {
+			if got[i] != tc.want[i] {
+				t.Errorf("splitToolName(%q) = %v, want %v", tc.name, got, tc.want)
+				break
+			}
+		}
 	}
 }

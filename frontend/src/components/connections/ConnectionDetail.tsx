@@ -9,10 +9,12 @@ import {
   PlugZap,
   Plug,
   Search,
+  Info,
 } from 'lucide-react'
 import ConnectionIcon from './ConnectionIcon'
 import HealthBadge from './HealthBadge'
 import ErrorNotice from './ErrorNotice'
+import ToolGroup from './ToolGroup'
 import ConfirmationDialog from '../ui/ConfirmationDialog'
 import {
   connectionsApi,
@@ -62,6 +64,8 @@ export default function ConnectionDetail({
   const [toolsError, setToolsError] = useState<FriendlyError | null>(null)
   const [saving, setSaving] = useState(false)
   const [query, setQuery] = useState('')
+  const [groupsFromAnnotations, setGroupsFromAnnotations] = useState(true)
+  const [expanded, setExpanded] = useState({ read_only: true, write: true })
   const [copied, setCopied] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [confirmRemove, setConfirmRemove] = useState(false)
@@ -73,6 +77,7 @@ export default function ConnectionDetail({
     try {
       const result = await connectionsApi.getTools(id)
       setTools(result.tools)
+      setGroupsFromAnnotations(result.groups_from_annotations)
     } catch (err) {
       setToolsError(
         err instanceof ConnectionError
@@ -127,7 +132,10 @@ export default function ConnectionDetail({
   const toggleTool = (toolName: string) =>
     persist(tools.map(t => (t.name === toolName ? { ...t, enabled: !t.enabled } : t)))
 
-  const setAll = (enabled: boolean) => persist(tools.map(t => ({ ...t, enabled })))
+  // Bulk switch scoped to one group, so "turn off everything that writes" is a
+  // single action.
+  const setGroup = (readOnly: boolean, enabled: boolean) =>
+    persist(tools.map(t => (t.read_only === readOnly ? { ...t, enabled } : t)))
 
   const visibleTools = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -336,45 +344,42 @@ export default function ConnectionDetail({
                   <span className="shrink-0 text-xs text-gray-500 dark:text-gray-400">
                     {enabledCount}/{tools.length} on
                   </span>
-                  <button
-                    type="button"
-                    onClick={() => setAll(enabledCount !== tools.length)}
-                    className="shrink-0 rounded-md px-2 py-1 text-xs font-medium text-blue-600 transition-colors hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/20"
-                  >
-                    {enabledCount === tools.length ? 'Turn all off' : 'Turn all on'}
-                  </button>
                 </div>
 
-                <div className="divide-y divide-gray-100 rounded-md border border-gray-200 dark:divide-slate-800 dark:border-slate-700">
-                  {visibleTools.length === 0 && (
-                    <p className="p-4 text-center text-xs text-gray-500 dark:text-gray-400">
-                      No tools match &ldquo;{query}&rdquo;
-                    </p>
-                  )}
-                  {visibleTools.map(tool => (
-                    <label
-                      key={tool.name}
-                      className="flex cursor-pointer items-start gap-3 p-2.5 transition-colors hover:bg-gray-50 dark:hover:bg-slate-700/40"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={tool.enabled}
-                        onChange={() => toggleTool(tool.name)}
-                        className="mt-0.5 h-4 w-4 shrink-0 rounded border-gray-300 text-blue-600 focus:ring-2 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700"
-                      />
-                      <span className="min-w-0">
-                        <span className="block truncate font-mono text-xs text-gray-900 dark:text-gray-100">
-                          {tool.name}
-                        </span>
-                        {tool.description && (
-                          <span className="line-clamp-2 text-xs text-gray-500 dark:text-gray-400">
-                            {tool.description}
-                          </span>
-                        )}
-                      </span>
-                    </label>
-                  ))}
+                {!groupsFromAnnotations && (
+                  <p className="mb-2 flex items-start gap-1.5 text-xs text-gray-500 dark:text-gray-400">
+                    <Info className="mt-0.5 h-3 w-3 shrink-0" aria-hidden="true" />
+                    This server does not declare which tools are read-only, so the grouping
+                    below is read from the tool names. Check before relying on it.
+                  </p>
+                )}
+
+                <div className="space-y-2">
+                  <ToolGroup
+                    kind="read_only"
+                    tools={visibleTools.filter(t => t.read_only)}
+                    expanded={expanded.read_only}
+                    onToggleExpanded={() =>
+                      setExpanded(e => ({ ...e, read_only: !e.read_only }))
+                    }
+                    onToggleTool={toggleTool}
+                    onSetAll={enabled => setGroup(true, enabled)}
+                  />
+                  <ToolGroup
+                    kind="write"
+                    tools={visibleTools.filter(t => !t.read_only)}
+                    expanded={expanded.write}
+                    onToggleExpanded={() => setExpanded(e => ({ ...e, write: !e.write }))}
+                    onToggleTool={toggleTool}
+                    onSetAll={enabled => setGroup(false, enabled)}
+                  />
                 </div>
+
+                {visibleTools.length === 0 && (
+                  <p className="p-4 text-center text-xs text-gray-500 dark:text-gray-400">
+                    No tools match &ldquo;{query}&rdquo;
+                  </p>
+                )}
               </>
             )}
 

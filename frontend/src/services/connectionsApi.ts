@@ -120,6 +120,10 @@ export interface ConnectionTool {
   name: string;
   description?: string;
   enabled: boolean;
+  /** Tools that only observe, separated from ones that change or delete. */
+  read_only: boolean;
+  /** 'annotation' when the server declared it; 'inferred' when read off the name. */
+  source: 'annotation' | 'inferred';
 }
 
 export interface ConnectionToolsResponse {
@@ -127,6 +131,8 @@ export interface ConnectionToolsResponse {
   tools: ConnectionTool[];
   total: number;
   enabled_count: number;
+  /** False when any tool's group had to be guessed from its name. */
+  groups_from_annotations: boolean;
 }
 
 export interface TestResult {

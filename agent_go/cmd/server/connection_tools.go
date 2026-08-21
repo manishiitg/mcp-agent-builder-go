@@ -8,10 +8,12 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/manishiitg/mcpagent/mcpclient"
 )
 
 // Per-connection tool permissions. A connection brings a whole toolset with it;
@@ -71,11 +73,19 @@ func disabledToolSet(userID, serverName string) map[string]bool {
 	return set
 }
 
-// ConnectionTool is one tool of a connection, with its on/off state.
+// ConnectionTool is one tool of a connection, with its on/off state and which
+// group it belongs to.
 type ConnectionTool struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	Enabled     bool   `json:"enabled"`
+	// ReadOnly separates tools that only observe from ones that change or
+	// delete things, so a user can act on the risky half in one move.
+	ReadOnly bool `json:"read_only"`
+	// Source is "annotation" when the server declared readOnlyHint itself, and
+	// "inferred" when it did not and the name had to be read instead. The UI
+	// says so rather than presenting a guess as fact.
+	Source string `json:"source"`
 }
 
 type connectionToolsResponse struct {
@@ -83,6 +93,83 @@ type connectionToolsResponse struct {
 	Tools        []ConnectionTool `json:"tools"`
 	Total        int              `json:"total"`
 	EnabledCount int              `json:"enabled_count"`
+	// True when every tool's group came from the server's own annotations.
+	GroupsFromAnnotations bool `json:"groups_from_annotations"`
+}
+
+// readOnlyVerbs and writeVerbs back the fallback used only when a server omits
+// MCP tool annotations. Checked as name prefixes and separated words, never as
+// bare substrings, so "update_search_index" is not read as read-only.
+var readOnlyVerbs = []string{
+	"get", "list", "search", "read", "fetch", "view", "query", "find",
+	"describe", "show", "download", "export", "check", "count",
+}
+
+var writeVerbs = []string{
+	"create", "update", "delete", "remove", "write", "append", "insert",
+	"archive", "move", "send", "post", "patch", "put", "set", "add",
+	"upload", "rename", "duplicate", "merge", "close", "trash", "restore",
+}
+
+// inferReadOnly guesses a tool's group from its name. Used only when the server
+// declares no annotations. Unknown names are treated as write tools: putting a
+// mutating tool in the read-only group is the more damaging mistake.
+func inferReadOnly(name string) bool {
+	words := splitToolName(name)
+	for _, w := range words {
+		for _, v := range writeVerbs {
+			if w == v {
+				return false
+			}
+		}
+	}
+	for _, w := range words {
+		for _, v := range readOnlyVerbs {
+			if w == v {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// splitToolName breaks a tool name into lowercase words. Separators and
+// camelCase boundaries both count, since MCP servers use snake_case,
+// kebab-case and camelCase interchangeably ("downloadAttachment" has to yield
+// "download" for the fallback to see it at all).
+func splitToolName(name string) []string {
+	var words []string
+	var current strings.Builder
+
+	flush := func() {
+		if current.Len() > 0 {
+			words = append(words, strings.ToLower(current.String()))
+			current.Reset()
+		}
+	}
+
+	runes := []rune(name)
+	for i, r := range runes {
+		switch {
+		case r == '_' || r == '-' || r == '.' || r == ' ' || r == ':' || r == '/':
+			flush()
+		case r >= 'A' && r <= 'Z':
+			// A capital starts a new word, except inside a run of capitals
+			// ("HTTPRequest" -> "http", "request").
+			if i > 0 {
+				prev := runes[i-1]
+				nextIsLower := i+1 < len(runes) && runes[i+1] >= 'a' && runes[i+1] <= 'z'
+				if (prev >= 'a' && prev <= 'z') || (prev >= '0' && prev <= '9') || nextIsLower {
+					flush()
+				}
+			}
+			current.WriteRune(r)
+		default:
+			current.WriteRune(r)
+		}
+	}
+	flush()
+	return words
 }
 
 type setConnectionToolsRequest struct {
@@ -90,35 +177,78 @@ type setConnectionToolsRequest struct {
 	Disabled []string `json:"disabled"`
 }
 
-// serverToolDetails returns a server's tools, preferring the discovery cache and
-// falling back to a live connection the first time a server is inspected.
-func (api *StreamingAPI) serverToolDetails(ctx context.Context, serverName string) ([]ConnectionTool, error) {
-	api.toolStatusMux.RLock()
-	cached, ok := api.toolStatus[serverName]
-	api.toolStatusMux.RUnlock()
+// toolGroupCache remembers each server's tool grouping. Grouping needs the MCP
+// annotations, which the shared discovery cache does not carry, so it comes
+// from a live ListTools; caching it keeps reopening this screen cheap.
+var (
+	toolGroupCache   = map[string][]ConnectionTool{}
+	toolGroupCacheMu sync.RWMutex
+)
 
-	if ok && len(cached.Tools) > 0 {
-		tools := make([]ConnectionTool, 0, len(cached.Tools))
-		for _, t := range cached.Tools {
-			tools = append(tools, ConnectionTool{Name: t.Name, Description: t.Description})
-		}
-		return tools, nil
+// serverToolDetails returns a server's tools along with the group each belongs
+// to.
+//
+// This connects and calls ListTools rather than reading the shared discovery
+// cache, because that cache stores mcpclient.ToolDetail, which drops the MCP
+// readOnlyHint/destructiveHint annotations. Those annotations are what make the
+// read-only/write split trustworthy instead of a guess about names.
+func (api *StreamingAPI) serverToolDetails(ctx context.Context, serverName string) ([]ConnectionTool, error) {
+	toolGroupCacheMu.RLock()
+	cached, ok := toolGroupCache[serverName]
+	toolGroupCacheMu.RUnlock()
+	if ok {
+		return cached, nil
 	}
 
-	status, err := api.discoverServerToolsDetailed(ctx, serverName)
+	config, err := mcpclient.LoadMergedConfig(api.mcpConfigPath, api.logger)
+	if err != nil {
+		return nil, err
+	}
+	serverConfig, err := config.GetServer(serverName)
+	if err != nil {
+		return nil, fmt.Errorf("server not found: %s", serverName)
+	}
+	if serverConfig.OAuth != nil {
+		serverConfig.OAuth.TokenFile = getUserTokenFilePath(GetUserIDFromContext(ctx), serverName)
+	}
+
+	client := mcpclient.New(serverConfig, api.logger)
+	if err := client.Connect(ctx); err != nil {
+		return nil, err
+	}
+	defer client.Close()
+
+	listed, err := client.ListTools(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	api.toolStatusMux.Lock()
-	api.toolStatus[serverName] = *status
-	api.toolStatusMux.Unlock()
-
-	tools := make([]ConnectionTool, 0, len(status.Tools))
-	for _, t := range status.Tools {
-		tools = append(tools, ConnectionTool{Name: t.Name, Description: t.Description})
+	tools := make([]ConnectionTool, 0, len(listed))
+	for _, t := range listed {
+		tool := ConnectionTool{Name: t.Name, Description: t.Description}
+		if hint := t.Annotations.ReadOnlyHint; hint != nil {
+			tool.ReadOnly = *hint
+			tool.Source = "annotation"
+		} else {
+			tool.ReadOnly = inferReadOnly(t.Name)
+			tool.Source = "inferred"
+		}
+		tools = append(tools, tool)
 	}
+
+	toolGroupCacheMu.Lock()
+	toolGroupCache[serverName] = tools
+	toolGroupCacheMu.Unlock()
+
 	return tools, nil
+}
+
+// forgetServerTools drops a server's cached grouping, so a reconnect or a
+// removal cannot leave a stale tool list behind.
+func forgetServerTools(serverName string) {
+	toolGroupCacheMu.Lock()
+	delete(toolGroupCache, serverName)
+	toolGroupCacheMu.Unlock()
 }
 
 // handleGetConnectionTools handles GET /api/connections/{id}/tools
@@ -141,8 +271,15 @@ func (api *StreamingAPI) handleGetConnectionTools(w http.ResponseWriter, r *http
 
 	disabled := disabledToolSet(GetUserIDFromContext(r.Context()), serverName)
 
-	resp := connectionToolsResponse{ServerName: serverName, Tools: []ConnectionTool{}}
+	resp := connectionToolsResponse{
+		ServerName:            serverName,
+		Tools:                 []ConnectionTool{},
+		GroupsFromAnnotations: true,
+	}
 	for _, t := range tools {
+		if t.Source != "annotation" {
+			resp.GroupsFromAnnotations = false
+		}
 		t.Enabled = !disabled[t.Name]
 		if t.Enabled {
 			resp.EnabledCount++

@@ -1,6 +1,7 @@
 export { default as ConnectionsModal } from './ConnectionsModal'
 export { default as ConnectionRow } from './ConnectionRow'
 export { default as ConnectionDetail } from './ConnectionDetail'
+export { default as ToolGroup } from './ToolGroup'
 export { default as PopularCard } from './PopularCard'
 export { default as ConnectFlowModal } from './ConnectFlowModal'
 export { default as ConnectionIcon } from './ConnectionIcon'
