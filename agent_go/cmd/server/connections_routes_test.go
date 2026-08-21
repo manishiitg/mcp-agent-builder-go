@@ -87,6 +87,65 @@ func TestEntrySetupRequired(t *testing.T) {
 	if entrySetupRequired(present) {
 		t.Error("oauth_app entry with client id env set must not require setup")
 	}
+
+	// A client id the provider publishes for general use leaves nothing to set up.
+	published := &CatalogEntry{
+		Auth:        authOAuthApp,
+		URL:         "https://mcp.slack.com/mcp",
+		ClientID:    "1601185624273.8899143856786",
+		ClientIDEnv: "TEST_UNSET_CLIENT_ID",
+	}
+	if entrySetupRequired(published) {
+		t.Error("a published public client id must not require setup")
+	}
+}
+
+func TestBuildServerConfigUsesPublishedClientID(t *testing.T) {
+	entry := &CatalogEntry{
+		ID:          "slack",
+		Auth:        authOAuthApp,
+		URL:         "https://mcp.slack.com/mcp",
+		AuthURL:     "https://slack.com/oauth/v2_user/authorize",
+		TokenURL:    "https://slack.com/api/oauth.v2.user.access",
+		ClientID:    "published-id",
+		ClientIDEnv: "TEST_UNSET_SLACK_ID",
+	}
+
+	cfg, err := buildServerConfig(entry, "~/tokens/slack.json", "")
+	if err != nil {
+		t.Fatalf("a published client id must be enough on its own: %v", err)
+	}
+	if cfg.OAuth.ClientID != "published-id" {
+		t.Errorf("client id = %q, want the published one", cfg.OAuth.ClientID)
+	}
+	if !cfg.OAuth.UsePKCE {
+		t.Error("a public client must use PKCE, having no secret to prove itself with")
+	}
+	if cfg.OAuth.ClientSecret != "" {
+		t.Error("a published public client must not carry a secret")
+	}
+}
+
+func TestBuildServerConfigPrefersOperatorClientIDOverPublished(t *testing.T) {
+	t.Setenv("TEST_SLACK_OWN_ID", "operators-own-app")
+
+	entry := &CatalogEntry{
+		ID:          "slack",
+		Auth:        authOAuthApp,
+		URL:         "https://mcp.slack.com/mcp",
+		ClientID:    "published-id",
+		ClientIDEnv: "TEST_SLACK_OWN_ID",
+	}
+
+	cfg, err := buildServerConfig(entry, "~/tokens/slack.json", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// An operator's own app must win, so the consent screen can carry their
+	// name rather than the published client's.
+	if cfg.OAuth.ClientID != "operators-own-app" {
+		t.Errorf("client id = %q, want the operator's own", cfg.OAuth.ClientID)
+	}
 }
 
 func TestBuildServerConfigDCRUsesAutoDiscovery(t *testing.T) {
