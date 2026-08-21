@@ -2190,8 +2190,8 @@ func TestApplyPulseLLMToReqMapUsesCodingAgentPulseDefaultWhenUnset(t *testing.T)
 	if got := primary["provider"]; got != "claude-code" {
 		t.Fatalf("provider = %#v, want claude-code", got)
 	}
-	if got := primary["model_id"]; got != "claude-sonnet-5" {
-		t.Fatalf("model_id = %#v, want claude-sonnet-5", got)
+	if got := primary["model_id"]; got != "claude-opus-5" {
+		t.Fatalf("model_id = %#v, want claude-opus-5", got)
 	}
 	options, ok := primary["options"].(map[string]interface{})
 	if !ok {
