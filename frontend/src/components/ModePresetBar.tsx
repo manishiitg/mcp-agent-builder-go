@@ -10,7 +10,7 @@ import WorkflowScheduleRunsPanel from './scheduler/WorkflowScheduleRunsPanel'
 import BotConnectorModal from './settings/BotConnectorModal'
 import { schedulerApi } from '../api/scheduler'
 import { agentApi, workflowManifestApi } from '../services/api'
-import { TooltipProvider } from './ui/tooltip'
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from './ui/tooltip'
 import ModalPortal from './ui/ModalPortal'
 import { useChatStore } from '../stores'
 import { useMCPStore } from '../stores/useMCPStore'
@@ -376,30 +376,11 @@ export const ModePresetBar: React.FC = () => {
       })
     }
 
-    items.push(
-      {
-        id: 'shortcuts',
-        icon: <Keyboard className="w-4 h-4" />,
-        label: 'Keyboard shortcuts',
-        detail: 'Every shortcut in one place',
-        onClick: () => setShowShortcuts(true),
-      },
-      {
-        id: 'walkthrough',
-        icon: <HelpCircle className="w-4 h-4" />,
-        label: 'Walkthrough',
-        detail: 'Guided tour of the interface',
-        onClick: openWorkflowWalkthrough,
-        dataTestid: 'open-walkthrough-button',
-      }
-    )
-
     return [{ id: 'workspace', title: 'Workspace', items }]
   }, [
     shouldShowBotConnector,
     shouldShowScheduleHeader,
     openBotConnector,
-    openWorkflowWalkthrough,
     workflowScheduleSummary.runningWorkflows,
     workflowScheduleTooltip,
   ])
@@ -897,8 +878,37 @@ export const ModePresetBar: React.FC = () => {
             <div className="flex shrink-0 items-center gap-2">
               <GlobalActivityMonitor />
 
-              {/* Every tool that used to be its own unlabelled icon now lives
-                  behind this one button, in the Workspace Tools drawer. */}
+              {/* Help sits in the bar rather than the drawer: someone who is
+                  lost should not have to open a panel to find the way out. */}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={() => setShowShortcuts(true)}
+                    aria-label="Keyboard shortcuts"
+                    className="p-1.5 rounded-md text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-gray-700 dark:hover:text-gray-200 transition-colors"
+                  >
+                    <Keyboard className="w-4 h-4" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Keyboard shortcuts</TooltipContent>
+              </Tooltip>
+
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={openWorkflowWalkthrough}
+                    data-testid="open-walkthrough-button"
+                    aria-label="Open walkthrough"
+                    className="p-1.5 rounded-md text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-gray-700 dark:hover:text-gray-200 transition-colors"
+                  >
+                    <HelpCircle className="w-4 h-4" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Walkthrough</TooltipContent>
+              </Tooltip>
+
+              {/* The rest — bots, schedules, connections, models, skills,
+                  secrets — live behind this one button. */}
               <WorkspaceTopBarControls sections={workspaceToolSections} />
 
             </div>
