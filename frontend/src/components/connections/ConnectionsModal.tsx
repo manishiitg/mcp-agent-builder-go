@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 import ModalPortal from '../ui/ModalPortal'
 import ConnectionRow from './ConnectionRow'
+import ConnectionDetail from './ConnectionDetail'
 import PopularCard from './PopularCard'
 import ConnectFlowModal from './ConnectFlowModal'
 import ErrorNotice from './ErrorNotice'
@@ -20,7 +21,7 @@ import { useConnectionsStore } from '../../stores/useConnectionsStore'
 import { buildRows, filterRows, pickPopular, type ConnectionFilter } from './connectionsTableUtils'
 import type { CatalogEntry, TestResult } from '../../services/connectionsApi'
 
-type View = 'list' | 'custom'
+type View = 'list' | 'custom' | 'detail'
 
 const FILTERS: { id: ConnectionFilter; label: string }[] = [
   { id: 'all', label: 'All' },
@@ -61,6 +62,7 @@ export default function ConnectionsModal({ onClose }: ConnectionsModalProps) {
   } = useConnectionsStore()
 
   const [view, setView] = useState<View>('list')
+  const [detailId, setDetailId] = useState<string | null>(null)
   const [filter, setFilter] = useState<ConnectionFilter>('all')
   const [query, setQuery] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
@@ -129,14 +131,18 @@ export default function ConnectionsModal({ onClose }: ConnectionsModalProps) {
         >
           {/* Header */}
           <div className="flex shrink-0 items-center gap-3 border-b border-gray-200 px-5 py-3.5 dark:border-slate-700">
-            {view === 'custom' ? (
+            {view !== 'list' ? (
               <button
                 type="button"
-                onClick={() => setView('list')}
+                onClick={() => {
+                  setView('list')
+                  setDetailId(null)
+                  loadConnections()
+                }}
                 className="-ml-1 flex items-center gap-1.5 rounded-md px-2 py-1 text-lg font-semibold text-gray-900 hover:bg-gray-100 dark:text-gray-100 dark:hover:bg-slate-800"
               >
                 <ChevronLeft className="h-5 w-5" aria-hidden="true" />
-                Custom MCP
+                {view === 'custom' ? 'Custom MCP' : 'Connections'}
               </button>
             ) : (
               <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
@@ -259,7 +265,22 @@ export default function ConnectionsModal({ onClose }: ConnectionsModalProps) {
 
           {/* Body */}
           <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-            {view === 'custom' ? (
+            {view === 'detail' && detailId ? (
+              <ConnectionDetail
+                entry={catalogById.get(detailId)}
+                connection={connectionById.get(detailId)}
+                isConnecting={connectingId === detailId}
+                isTesting={testingId === detailId}
+                onConnect={() => startConnect(detailId)}
+                onDisconnect={() => disconnect(detailId)}
+                onRemove={() => {
+                  remove(detailId)
+                  setView('list')
+                  setDetailId(null)
+                }}
+                onTest={() => handleTest(detailId)}
+              />
+            ) : view === 'custom' ? (
               <div className="space-y-3">
                 <p className="rounded-md bg-gray-50 p-3 text-xs text-gray-600 dark:bg-slate-800 dark:text-gray-400">
                   Connect a Streamable HTTP or local stdio MCP server directly, and inspect
@@ -378,6 +399,10 @@ export default function ConnectionsModal({ onClose }: ConnectionsModalProps) {
                       onDisconnect={() => disconnect(row.id)}
                       onRemove={() => remove(row.id)}
                       onTest={() => handleTest(row.id)}
+                      onOpen={() => {
+                        setDetailId(row.id)
+                        setView('detail')
+                      }}
                     />
                   ))}
                 </div>
