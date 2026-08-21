@@ -76,7 +76,10 @@ func disabledToolSet(userID, serverName string) map[string]bool {
 // ConnectionTool is one tool of a connection, with its on/off state and which
 // group it belongs to.
 type ConnectionTool struct {
-	Name        string `json:"name"`
+	Name string `json:"name"`
+	// Title is what the row shows. The raw name stays available so a tool can
+	// still be identified exactly.
+	Title       string `json:"title"`
 	Description string `json:"description,omitempty"`
 	Enabled     bool   `json:"enabled"`
 	// ReadOnly separates tools that only observe from ones that change or
@@ -172,6 +175,50 @@ func splitToolName(name string) []string {
 	return words
 }
 
+// displayTitle produces the label shown next to a tool.
+//
+// The server's own title annotation wins when it sets one. Most do not, so the
+// fallback rewrites the raw name into something readable: the server's own name
+// is dropped as a prefix, since the whole screen is already about that one
+// connection, and the rest becomes a sentence.
+func displayTitle(serverName, toolName, annotationTitle string) string {
+	if annotationTitle != "" {
+		return annotationTitle
+	}
+
+	words := splitToolName(toolName)
+	serverWords := splitToolName(serverName)
+
+	// Drop a leading repeat of the server name ("notion-create-pages").
+	for len(serverWords) > 0 && len(words) > len(serverWords) {
+		match := true
+		for i, sw := range serverWords {
+			if words[i] != sw {
+				match = false
+				break
+			}
+		}
+		if !match {
+			break
+		}
+		words = words[len(serverWords):]
+		break
+	}
+
+	if len(words) == 0 {
+		return toolName
+	}
+
+	// Sentence case: capitalise the first word, leave the rest lowercase.
+	first := []rune(words[0])
+	first[0] = []rune(strings.ToUpper(string(first[0])))[0]
+	out := string(first)
+	if len(words) > 1 {
+		out += " " + strings.Join(words[1:], " ")
+	}
+	return out
+}
+
 type setConnectionToolsRequest struct {
 	// Only the OFF switches travel; everything omitted is enabled.
 	Disabled []string `json:"disabled"`
@@ -225,7 +272,11 @@ func (api *StreamingAPI) serverToolDetails(ctx context.Context, serverName strin
 
 	tools := make([]ConnectionTool, 0, len(listed))
 	for _, t := range listed {
-		tool := ConnectionTool{Name: t.Name, Description: t.Description}
+		tool := ConnectionTool{
+			Name:        t.Name,
+			Title:       displayTitle(serverName, t.Name, t.Annotations.Title),
+			Description: t.Description,
+		}
 		if hint := t.Annotations.ReadOnlyHint; hint != nil {
 			tool.ReadOnly = *hint
 			tool.Source = "annotation"

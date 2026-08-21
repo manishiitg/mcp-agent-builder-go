@@ -129,8 +129,8 @@ export default function ConnectionDetail({
     }
   }
 
-  const toggleTool = (toolName: string) =>
-    persist(tools.map(t => (t.name === toolName ? { ...t, enabled: !t.enabled } : t)))
+  const setTool = (toolName: string, enabled: boolean) =>
+    persist(tools.map(t => (t.name === toolName ? { ...t, enabled } : t)))
 
   // Bulk switch scoped to one group, so "turn off everything that writes" is a
   // single action.
@@ -141,9 +141,7 @@ export default function ConnectionDetail({
     const q = query.trim().toLowerCase()
     if (!q) return tools
     return tools.filter(
-      t =>
-        t.name.toLowerCase().includes(q) ||
-        (t.description ?? '').toLowerCase().includes(q)
+      t => t.name.toLowerCase().includes(q) || t.title.toLowerCase().includes(q)
     )
   }, [tools, query])
 
@@ -292,7 +290,9 @@ export default function ConnectionDetail({
       {/* Tool permissions */}
       <section>
         <div className="mb-1 flex items-center justify-between gap-2">
-          <h4 className="text-sm font-medium text-gray-900 dark:text-gray-100">Tools</h4>
+          <h4 className="text-sm font-medium text-gray-900 dark:text-gray-100">
+            Tool permissions
+          </h4>
           {saving && (
             <span className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
               <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
@@ -301,8 +301,8 @@ export default function ConnectionDetail({
           )}
         </div>
         <p className="mb-3 text-xs text-gray-500 dark:text-gray-400">
-          Choose which tools agents may use from this connection. Turned-off tools are
-          never offered to an agent.
+          Choose which tools agents are allowed to use. Disabled tools are never
+          offered to an agent.
         </p>
 
         {!isConnected ? (
@@ -362,7 +362,7 @@ export default function ConnectionDetail({
                     onToggleExpanded={() =>
                       setExpanded(e => ({ ...e, read_only: !e.read_only }))
                     }
-                    onToggleTool={toggleTool}
+                    onSetTool={setTool}
                     onSetAll={enabled => setGroup(true, enabled)}
                   />
                   <ToolGroup
@@ -370,7 +370,7 @@ export default function ConnectionDetail({
                     tools={visibleTools.filter(t => !t.read_only)}
                     expanded={expanded.write}
                     onToggleExpanded={() => setExpanded(e => ({ ...e, write: !e.write }))}
-                    onToggleTool={toggleTool}
+                    onSetTool={setTool}
                     onSetAll={enabled => setGroup(false, enabled)}
                   />
                 </div>

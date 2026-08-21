@@ -118,6 +118,8 @@ export interface ConnectResult {
 
 export interface ConnectionTool {
   name: string;
+  /** Readable label for the row; the raw name stays available for identification. */
+  title: string;
   description?: string;
   enabled: boolean;
   /** Tools that only observe, separated from ones that change or delete. */
