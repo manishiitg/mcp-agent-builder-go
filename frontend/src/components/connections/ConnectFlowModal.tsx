@@ -271,8 +271,8 @@ export default function ConnectFlowModal({ entry, onClose }: ConnectFlowModalPro
                   Waiting for you to approve access
                 </p>
                 <p className="max-w-xs text-xs text-gray-500 dark:text-gray-400">
-                  A {entry.name} sign-in window opened in a new tab. Approve the requested
-                  access there, and this page will continue automatically.
+                  A {entry.name} sign-in window opened. Approve the requested access
+                  there — the window closes itself and you land back here.
                 </p>
               </div>
             )}
