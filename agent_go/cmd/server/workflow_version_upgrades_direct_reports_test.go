@@ -7,8 +7,8 @@ import (
 
 func TestWorkflowVersionUpgradePlanFrom122MigratesReportsThenScheduledRoutes(t *testing.T) {
 	plan := workflowVersionUpgradePlan(&WorkflowManifest{Version: "1.0.22"})
-	if len(plan) != 3 {
-		t.Fatalf("plan from 1.0.22 = %d steps, want direct-report, scheduled-route, then periodic-pulse-review migrations: %+v", len(plan), plan)
+	if len(plan) != 4 {
+		t.Fatalf("plan from 1.0.22 = %d steps, want direct-report, scheduled-route, dedicated-Pulse, then schedule-prompt migrations: %+v", len(plan), plan)
 	}
 	if plan[0].label != "upgrade-direct-html-reports" || plan[0].to != "1.0.23" {
 		t.Fatalf("plan[0] = %+v, want direct-report migration to 1.0.23", plan[0])
@@ -16,8 +16,11 @@ func TestWorkflowVersionUpgradePlanFrom122MigratesReportsThenScheduledRoutes(t *
 	if plan[1].label != "upgrade-schedule-execution-model" || plan[1].to != workflowContractScheduleExecutionModelVersion {
 		t.Fatalf("plan[1] = %+v, want schedule execution-model migration to %s", plan[1], workflowContractScheduleExecutionModelVersion)
 	}
-	if plan[2].label != "upgrade-dedicated-pulse-schedule" || plan[2].to != WorkflowContractCurrentVersion {
-		t.Fatalf("plan[2] = %+v, want periodic-pulse-review migration to current", plan[2])
+	if plan[2].label != "upgrade-dedicated-pulse-schedule" || plan[2].to != workflowContractDedicatedPulseScheduleVersion {
+		t.Fatalf("plan[2] = %+v, want dedicated-Pulse migration", plan[2])
+	}
+	if plan[3].label != "upgrade-schedule-prompt-contract" || plan[3].to != WorkflowContractCurrentVersion {
+		t.Fatalf("plan[3] = %+v, want schedule-prompt migration to current", plan[3])
 	}
 }
 

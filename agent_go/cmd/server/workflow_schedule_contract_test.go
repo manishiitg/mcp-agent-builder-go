@@ -50,17 +50,20 @@ func TestValidateScheduleMessagesRequiresReasonForSequentialConversation(t *test
 
 func TestWorkflowVersionUpgradePlanAddsScheduledRoutesAfterDirectReports(t *testing.T) {
 	plan := workflowVersionUpgradePlan(&WorkflowManifest{Version: workflowContractDirectHTMLReportsVersion})
-	if len(plan) != 2 || plan[0].label != "upgrade-schedule-execution-model" || plan[0].to != workflowContractScheduleExecutionModelVersion {
+	if len(plan) != 3 || plan[0].label != "upgrade-schedule-execution-model" || plan[0].to != workflowContractScheduleExecutionModelVersion {
 		t.Fatalf("unexpected upgrade plan: %+v", plan)
 	}
-	if plan[1].label != "upgrade-dedicated-pulse-schedule" || plan[1].to != WorkflowContractCurrentVersion {
-		t.Fatalf("unexpected final upgrade step: %+v", plan[1])
+	if plan[1].label != "upgrade-dedicated-pulse-schedule" || plan[1].to != workflowContractDedicatedPulseScheduleVersion {
+		t.Fatalf("unexpected dedicated Pulse step: %+v", plan[1])
+	}
+	if plan[2].label != "upgrade-schedule-prompt-contract" || plan[2].to != WorkflowContractCurrentVersion {
+		t.Fatalf("unexpected final upgrade step: %+v", plan[2])
 	}
 }
 
 func TestWorkflowVersionUpgradePlanReauditsEarlierRouteOnlyContract(t *testing.T) {
 	plan := workflowVersionUpgradePlan(&WorkflowManifest{Version: workflowContractScheduledRouteVersion})
-	if len(plan) != 2 || plan[0].label != "upgrade-schedule-execution-model" || plan[0].to != workflowContractScheduleExecutionModelVersion {
+	if len(plan) != 3 || plan[0].label != "upgrade-schedule-execution-model" || plan[0].to != workflowContractScheduleExecutionModelVersion {
 		t.Fatalf("1.0.24 workflow did not receive choice-aware schedule audit: %+v", plan)
 	}
 	for _, want := range []string{"EQUIVALENT ROUTE EXISTS", "DURABLE WORKFLOW BEHAVIOR", "GENUINELY SCHEDULE-SPECIFIC CONVERSATION", "direct_messages_reason"} {
@@ -68,8 +71,11 @@ func TestWorkflowVersionUpgradePlanReauditsEarlierRouteOnlyContract(t *testing.T
 			t.Errorf("choice-aware migration prompt missing %q", want)
 		}
 	}
-	if plan[1].label != "upgrade-dedicated-pulse-schedule" || plan[1].to != WorkflowContractCurrentVersion {
-		t.Fatalf("unexpected final upgrade step: %+v", plan[1])
+	if plan[1].label != "upgrade-dedicated-pulse-schedule" || plan[1].to != workflowContractDedicatedPulseScheduleVersion {
+		t.Fatalf("unexpected dedicated Pulse step: %+v", plan[1])
+	}
+	if plan[2].label != "upgrade-schedule-prompt-contract" || plan[2].to != WorkflowContractCurrentVersion {
+		t.Fatalf("unexpected final upgrade step: %+v", plan[2])
 	}
 }
 
@@ -97,11 +103,31 @@ func TestUpgradeDedicatedPulseSchedulePromptShape(t *testing.T) {
 
 func TestVersion126ReceivesDedicatedPulseScheduleMigration(t *testing.T) {
 	plan := workflowVersionUpgradePlan(&WorkflowManifest{Version: workflowContractPeriodicPulseReviewVersion})
-	if len(plan) != 1 {
-		t.Fatalf("1.0.26 upgrade plan = %+v, want one migration", plan)
+	if len(plan) != 2 {
+		t.Fatalf("1.0.26 upgrade plan = %+v, want dedicated Pulse then schedule prompt migrations", plan)
 	}
-	if plan[0].label != "upgrade-dedicated-pulse-schedule" || plan[0].to != WorkflowContractCurrentVersion {
+	if plan[0].label != "upgrade-dedicated-pulse-schedule" || plan[0].to != workflowContractDedicatedPulseScheduleVersion {
 		t.Fatalf("1.0.26 upgrade = %+v, want dedicated Pulse schedule migration", plan[0])
+	}
+	if plan[1].label != "upgrade-schedule-prompt-contract" || plan[1].to != WorkflowContractCurrentVersion {
+		t.Fatalf("1.0.26 final upgrade = %+v, want schedule prompt migration", plan[1])
+	}
+}
+
+func TestVersion127ReceivesSchedulePromptContractMigration(t *testing.T) {
+	plan := workflowVersionUpgradePlan(&WorkflowManifest{Version: workflowContractDedicatedPulseScheduleVersion})
+	if len(plan) != 1 || plan[0].label != "upgrade-schedule-prompt-contract" || plan[0].to != WorkflowContractCurrentVersion {
+		t.Fatalf("1.0.27 upgrade plan = %+v, want the schedule prompt migration", plan)
+	}
+	for _, want := range []string{
+		"dated incidents",
+		"Evaluation ownership must remain correct",
+		"Do not weaken concrete backup behavior",
+		`set_workflow_contract_version(version="1.0.28")`,
+	} {
+		if !strings.Contains(plan[0].query, want) {
+			t.Errorf("schedule prompt migration missing %q", want)
+		}
 	}
 }
 
@@ -120,6 +146,7 @@ func TestUpgradeQueriesNeverNamePlatTickets(t *testing.T) {
 		"upgradeLearningsLockAudit":      upgradeLearningsLockAudit,
 		"upgradeDirectHTMLReports":       upgradeDirectHTMLReports,
 		"upgradeDedicatedPulseSchedule":  upgradeDedicatedPulseSchedule,
+		"upgradeSchedulePromptContract":  upgradeSchedulePromptContract,
 	}
 	for name, query := range queries {
 		if match := platTicket.FindString(query); match != "" {

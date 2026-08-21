@@ -46,6 +46,7 @@ func workflowContractVersionRank(version string) (int, bool) {
 		workflowContractScheduleExecutionModelVersion,
 		workflowContractPeriodicPulseReviewVersion,
 		workflowContractDedicatedPulseScheduleVersion,
+		workflowContractSchedulePromptContractVersion,
 	}
 	for rank, candidate := range known {
 		if version == candidate {
@@ -165,6 +166,52 @@ and removes the retired fields.
 
 Do not run the workflow. Call set_workflow_contract_version(version="1.0.27") and stop.`
 
+const upgradeSchedulePromptContract = `WORKFLOW CONTRACT UPGRADE: CURRENT SCHEDULE INSTRUCTIONS.
+
+Do only this one-time schedule migration. It cleans recurring schedule messages;
+it does not run, redesign, pause, delete, or create any schedule.
+
+Read workflow.json and inspect every schedule before changing anything. Preserve
+each schedule's ID, name, cron/calendar timing, timezone, enabled state, groups,
+route selections, execution mode, and every domain safety boundary. Do not change
+a route, step, public-action policy, or backup destination in this migration.
+
+Remove historical implementation debris from normal workflow schedule messages
+and direct_messages_reason: dated incidents, previous failure counts, old operator
+decisions, ticket references, watchdog/idle-wait stories, implementation folder
+or database probes, and old workaround narratives. A recurring prompt must state
+the current contract, not narrate why an older platform version needed it.
+
+Evaluation ownership must remain correct:
+1. If a schedule currently owns a routine evaluation, keep that behavior as one
+   concise instruction immediately after the selected work completes. Do not
+   turn it into a conditional probe/retry of an undocumented automatic pass.
+2. If a higher-frequency schedule deliberately skips evaluation because one
+   designated daily/closing schedule owns it, preserve that division plainly.
+3. Do not add evaluation to a schedule that did not already own it, and do not
+   remove a routine evaluation merely to shorten the message.
+
+Keep a schedule message only when it carries genuinely schedule-specific work
+that cannot be represented by its existing groups and route selections. Make it
+one concise current-state instruction. A route-backed schedule whose message only
+restates running the selected route should have no message. Do not turn ordinary
+workflow behavior into a schedule-local procedure.
+
+Do not weaken concrete backup behavior in this migration. Preserve the existing
+configured backup contract; only remove historical dates or rationale that do
+not change what must be backed up or how success is reported. Do not replace a
+working concrete backup procedure with a promise that some other component will
+handle it.
+
+Use the schedule-management tools to make any required schedule updates. Re-read
+workflow.json afterwards. Confirm every retained message is concise and current,
+no retained schedule prose contains a historical incident date or workaround,
+and normal workflow schedules do not perform Pulse Gate/Review/Fix inline. Do
+not run the workflow. If any change would make evaluation, backup, safety, or a
+public action ambiguous, preserve that schedule unchanged, report the blocker,
+and do not stamp. Otherwise call
+set_workflow_contract_version(version="1.0.28") and stop.`
+
 const upgradeScheduledRoutes = `WORKFLOW CONTRACT UPGRADE: SCHEDULE EXECUTION MODEL (PLAT-086).
 
 Workflow schedules support two valid execution models. A route-based schedule
@@ -210,7 +257,7 @@ func workflowVersionUpgradePlan(manifest *WorkflowManifest) []workflowVersionUpg
 		return nil
 	}
 
-	steps := make([]workflowVersionUpgrade, 0, 7)
+	steps := make([]workflowVersionUpgrade, 0, 8)
 	if rank < 10 {
 		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractMessageSequenceCodeVersion, label: "upgrade-message-sequence-code", query: upgradeMessageSequenceCode})
 	}
@@ -240,7 +287,12 @@ func workflowVersionUpgradePlan(manifest *WorkflowManifest) []workflowVersionUpg
 	if rank < 24 {
 		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractScheduleExecutionModelVersion, label: "upgrade-schedule-execution-model", query: upgradeScheduledRoutes})
 	}
-	steps = append(steps, workflowVersionUpgrade{from: version, to: WorkflowContractCurrentVersion, label: "upgrade-dedicated-pulse-schedule", query: upgradeDedicatedPulseSchedule})
+	if rank < 26 {
+		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractDedicatedPulseScheduleVersion, label: "upgrade-dedicated-pulse-schedule", query: upgradeDedicatedPulseSchedule})
+	}
+	if rank < 27 {
+		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractSchedulePromptContractVersion, label: "upgrade-schedule-prompt-contract", query: upgradeSchedulePromptContract})
+	}
 	// Attached here rather than at the call site so the turn text is identical
 	// wherever it is built. The version pair used to be added only on the Pulse
 	// delivery path, which meant the blocking preflight — the one that actually
