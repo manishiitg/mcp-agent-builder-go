@@ -282,7 +282,7 @@ func shouldRefreshGeneratedVideoStudioPlan(content string) bool {
 	if strings.Contains(content, `"type": "todo_task"`) || strings.Contains(content, `"type":"todo_task"`) {
 		return true
 	}
-	required := []string{`"infographic-render-critique"`, `"shortform-characters"`}
+	required := []string{`"infographic-render-critique"`, `"shortform-characters"`, `"shortform-look-sound"`, `"shortform-narration"`}
 	for _, marker := range required {
 		if !strings.Contains(content, marker) {
 			return true

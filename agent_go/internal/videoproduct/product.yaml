@@ -68,6 +68,7 @@ profile:
   skills:
     - product-infographic
     - video-creation
+    - video-look-sound
     - longform-cinematic-video
     - video-editing
     - video-quality
@@ -318,6 +319,7 @@ workflows:
   selected_skills:
     - product-infographic
     - video-creation
+    - video-look-sound
     - video-editing
     - video-quality
     - hyperframes-quality

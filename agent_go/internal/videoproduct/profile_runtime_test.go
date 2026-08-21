@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/common"
@@ -71,7 +72,8 @@ func TestGeneratedVideoStudioPlanRefreshesWhenCritiqueGatesAreMissing(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if shouldRefreshGeneratedVideoStudioPlan(string(plan)) {
+	currentPlan := strings.ReplaceAll(string(plan), `"route_id":"infographic"`, `"route_id": "infographic"`)
+	if shouldRefreshGeneratedVideoStudioPlan(currentPlan) {
 		t.Fatal("the current critique-gated product plan should not refresh repeatedly")
 	}
 
@@ -90,6 +92,15 @@ func TestGeneratedVideoStudioPlanRefreshesWhenCritiqueGatesAreMissing(t *testing
 		`{"id":"infographic-render-critique"}]}`
 	if !shouldRefreshGeneratedVideoStudioPlan(preCharacterStep) {
 		t.Fatal("a Video Studio plan without the short-form character gate should upgrade")
+	}
+
+	preAudioDirection := strings.ReplaceAll(currentPlan, `"shortform-look-sound"`, `"legacy-shortform-look-sound"`)
+	if !shouldRefreshGeneratedVideoStudioPlan(preAudioDirection) {
+		t.Fatal("a Video Studio plan without the short-form look/sound stage should upgrade")
+	}
+	preNarration := strings.ReplaceAll(currentPlan, `"shortform-narration"`, `"legacy-shortform-narration"`)
+	if !shouldRefreshGeneratedVideoStudioPlan(preNarration) {
+		t.Fatal("a Video Studio plan without the short-form narration stage should upgrade")
 	}
 
 	// The case marker-matching cannot see: every current identifier is present,
