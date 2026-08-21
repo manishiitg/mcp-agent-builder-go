@@ -65,6 +65,20 @@ func TestSystemPromptMatchesTheProductItDescribes(t *testing.T) {
 	if !strings.Contains(strings.ToLower(text), "default for every new production") || !strings.Contains(text, "longform-cinematic-video") {
 		t.Fatal("the system prompt no longer defaults fresh productions to cinematic direction")
 	}
+	for _, audioContract := range []string{
+		"For both direct chat and individual workflow steps",
+		"video-look-sound",
+		"locations/backgrounds",
+		"native synchronized dialogue",
+		"Use separate TTS only for off-camera voiceover",
+		"measure its real duration",
+		"build the shot list around the measured audio",
+		"without its promised audio",
+	} {
+		if !strings.Contains(text, audioContract) {
+			t.Fatalf("the system prompt lost the direct-chat look/sound contract: missing %q", audioContract)
+		}
+	}
 	for _, contract := range []string{"specialist skills", "context dependencies", "validation schema", "human_input", "Do not ask the user for a step ID or group name"} {
 		if !strings.Contains(text, contract) {
 			t.Fatalf("the system prompt no longer explains execute_step's recipe contract: missing %q", contract)
