@@ -1,14 +1,14 @@
 [← Pulse platform issue index](../pulse_platform_issue_register.md)
 
-# PLAT-163 — Pulse reviews have no durable focus rotation or coverage history, so expensive passes can repeat familiar analysis while important themes remain unreviewed
+# PLAT-163 — Pulse technical and strategic reviews need durable focus rotation, one canonical technical identity, and visible coverage history
 
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `partially implemented` — SQLite focus state/history, compact agenda/read-write tools, reviewer guidance, terminal-write enforcement, and current-focus UI shipped; richer timeline UI and live Pulse verification remain |
-| Last synchronized | `2026-08-20` |
+| Ticket state | `implemented` — canonical `technical_review` migration, technical/strategic focus catalogs, durable review counts, slash/scheduled parity, and visible focus coverage shipped; live Pulse verification remains |
+| Last synchronized | `2026-08-21` |
 
-- **Priority:** P1 — Engineering and Operations reviews are expensive, yet the
+- **Priority:** P1 — technical and strategic reviews are expensive, yet the
   platform cannot currently explain which deep theme a pass selected, why it
   took priority, what evidence it inspected, which themes it deferred, or when
   each theme was last reviewed deeply.
@@ -21,7 +21,7 @@
 
 ## Problem
 
-Engineering Review and Operations Review cannot inspect every meaningful
+Technical Review and Strategic Review cannot inspect every meaningful
 concern deeply on every pass without becoming slow, expensive, repetitive, and
 compaction-prone. PLAT-138 correctly bounded a pass to one agent-chosen
 coherent objective, but the platform still has no durable coverage model behind
@@ -44,9 +44,38 @@ while `pulse_review_log` stores a terminal module receipt. Neither records
 coverage within a module. Reusing either row as an overloaded focus ledger
 would destroy its current meaning.
 
+## 2026-08-21 architecture decision
+
+Engineering Review and Operations Review were separate durable module names
+even though PLAT-138 already ran them as one retained sequence. That split
+created duplicate Gate decisions, receipts, focus histories, and slash-command
+behavior for one technical lifecycle. The canonical model is now:
+
+- `technical_review`: one module, one retained reviewer sequence, one focus,
+  and one terminal receipt. Engineering correctness, Stores Health, operations,
+  tool/runtime reliability, orchestration, models, cost, schedules, and
+  efficiency are lenses inside it.
+- `strategic_review`: a separate module because goal/measurement validity,
+  feedback loops, alternative headroom, and experiments have a different
+  evidence and decision lifecycle.
+
+Legacy `workflow_review` and `llm_ops_review` data is migrated into
+`technical_review` across module state/audit, review receipts, focus
+state/history, findings/attempts, and metrics. New prompts and tools must not
+dual-write the old names. Historical engineering/ops human-input sources remain
+readable but new technical decisions use `source=technical_review` and a
+`technical-decision-...` identity.
+
+Gate may skip technical review, strategic review, or both when no useful
+evidence has matured, but every skip records the next evidence/time/run
+boundary. Every selected reviewer performs a lightweight urgent-evidence scan
+and exactly one deep focus. Review completion belongs to the reviewer; the
+independent Fixer owns mutations and repair outcome and never rewrites the
+review receipt.
+
 ## Desired review model
 
-Each Engineering or Operations pass has two deliberately different depths:
+Each technical or strategic pass has two deliberately different depths:
 
 1. **Lightweight safety scan.** Inspect only the compact lifecycle agenda for
    new critical regressions, matured verification work, and answered but
@@ -55,12 +84,15 @@ Each Engineering or Operations pass has two deliberately different depths:
    it thoroughly with targeted evidence. It records why that theme won and
    which other themes were deferred.
 
-Example Engineering themes include state correctness, tools/API contracts,
-database and artifact lifecycle, reports, validation/tests, and scheduler
-lifecycle. Example Operations themes include model/tier choice, step versus
-orchestrator shape, tool/payload efficiency, timeout/completion behavior, cost
-attribution, schedule/runtime design, and reflection yield. These are an
-extensible vocabulary, not a hardcoded Go decision tree.
+The technical catalog is: `execution_correctness`,
+`plan_contract_integrity`, `store_integrity`, `report_eval_truth`,
+`safety_permissions`, `execution_efficiency`, `tool_runtime_reliability`,
+`orchestration_fitness`, `model_tier_fitness`, `cost_attribution`, and
+`schedule_capacity_recovery`. The strategic catalog is:
+`goal_measurement_validity`, `strategy_effectiveness`,
+`feedback_loops_bias`, `concentration_saturation`, `alternative_headroom`, and
+`experiment_impact`. Go stores these stable coverage identities but does not
+choose their semantic priority; the agent does.
 
 ## Priority and rotation semantics
 
@@ -165,21 +197,24 @@ Pulse review schedule. It must not add a hidden recurring job, revive
 
 ### PLAT-137 — strategic review
 
-The first implementation covers Engineering and Operations review. Strategic
-Review already has its own cross-workflow lifecycle and experiment semantics;
-it must not be silently folded into these engineering/operations themes.
+Strategic Review remains separate, but now uses the same focus-state/history
+contract. This does not undo PLAT-137's merged Strategy+Goal sequence or fold
+strategic work into technical themes.
 
 ## Implementation slices
 
 1. **Shipped:** focus-state/history schema, migrations, and focused repository tests.
 2. **Shipped:** compact agenda read/write tools with strict workspace/module scoping.
-3. **Shipped:** Engineering and Operations review guidance to run the safety scan,
+3. **Shipped:** Technical and Strategic review guidance to run the safety scan,
    choose one focus agentically, read targeted evidence, and persist the
    selection/defer reasons.
 4. **Shipped:** the terminal-write invariant: a completed review cannot report success
    without its focus-history entry and existing review receipt.
-5. **Partially shipped:** work-area cards show the current focus, why selected,
-   and last-reviewed time. A richer related-issues/next-due/recent-focus timeline
+5. **Shipped:** work-area cards show the last focus, why selected,
+   last-reviewed time, review count, and next candidates. Before the first
+   recorded review they show the next eligible focus candidates rather than an
+   empty state. A richer
+   related-issues/next-due/recent-focus timeline
    remains presentation work; it does not block the rotation lifecycle.
 
 ## Acceptance
@@ -189,7 +224,7 @@ it must not be silently folded into these engineering/operations themes.
   requires a persisted urgent/verification reason.
 - A critical regression, matured verification, or answered unapplied decision
   can preempt normal rotation and the preemption is visible in history.
-- Each completed Engineering/Operations review has exactly one deep-focus
+- Each completed Technical/Strategic review has exactly one deep-focus
   history entry plus its existing `pulse_review_log` receipt.
 - Review prompts receive a compact agenda and selectors, not full plan/history
   payloads.

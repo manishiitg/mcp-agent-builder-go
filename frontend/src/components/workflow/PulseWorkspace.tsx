@@ -4,7 +4,6 @@ import {
   AlertTriangle,
   CheckCircle2,
   Clock3,
-  Cpu,
   Lightbulb,
   Loader2,
   RefreshCw,
@@ -56,7 +55,8 @@ function formatDate(value?: string): string {
 }
 
 function readable(value?: string): string {
-  return (value || '').trim().replaceAll('_', ' ') || 'No data'
+  const text = (value || '').trim().replaceAll('_', ' ')
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : 'No data'
 }
 
 const compactMetricNumber = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 })
@@ -508,21 +508,14 @@ export function PulseWorkspace({
             What Pulse found, who owns the next move, and the latest judgment
           </p>
         </div>
-        <div className="grid gap-px bg-border lg:grid-cols-3">
+        <div className="grid gap-px bg-border lg:grid-cols-2">
           {[
             {
-              id: 'workflow_review',
-              title: 'Engineering issues',
+              id: 'technical_review',
+              title: 'Technical review',
               icon: Wrench,
-              description: 'Execution, reports, evaluations, plan consistency, and data integrity',
+              description: 'Correctness, stores, runtime, orchestration, tools, models, cost, and execution efficiency',
               tone: 'text-sky-600 dark:text-sky-300',
-            },
-            {
-              id: 'llm_ops_review',
-              title: 'Operations',
-              icon: Cpu,
-              description: 'Cost, latency, model and tool use, retries, timeouts, and reliability',
-              tone: 'text-violet-600 dark:text-violet-300',
             },
             {
               id: 'strategic_review',
@@ -550,6 +543,15 @@ export function PulseWorkspace({
             const latestFocus = reviewFocuses
               .filter((item) => normalizePulseWorkspaceModule(item.module) === area.id && item.last_reviewed_at)
               .sort((a, b) => (b.last_reviewed_at || '').localeCompare(a.last_reviewed_at || ''))[0]
+            const upcomingFocuses = reviewFocuses
+              .filter((item) => (
+                normalizePulseWorkspaceModule(item.module) === area.id
+                && item.focus_key !== latestFocus?.focus_key
+              ))
+              .slice(0, 3)
+            const nextFocusKeys = latestFocus?.deferred_focuses?.length
+              ? latestFocus.deferred_focuses.slice(0, 3)
+              : upcomingFocuses.map((item) => item.focus_key)
             const moduleID = area.id
             return (
               <button
@@ -601,15 +603,28 @@ export function PulseWorkspace({
                   <span className="line-clamp-2">
                     {latest ? latest.verdict || 'Review recorded' : 'No stored review yet'}
                   </span>
-                  {!strategic && latestFocus && (
+                  {latestFocus ? (
                     <div className="mt-1.5 text-[10px] text-muted-foreground">
-                      <span className="font-medium text-foreground">Deep focus:</span>{' '}
+                      <span className="font-medium text-foreground">Last focus:</span>{' '}
                       {readable(latestFocus.focus_key)} · {formatDate(latestFocus.last_reviewed_at)}
+                      {(latestFocus.review_count || 0) > 0 && (
+                        <span> · reviewed {latestFocus.review_count} {latestFocus.review_count === 1 ? 'time' : 'times'}</span>
+                      )}
                       {latestFocus.last_selection_reason && (
                         <span className="mt-0.5 block line-clamp-2">{latestFocus.last_selection_reason}</span>
                       )}
+                      {nextFocusKeys.length > 0 && (
+                        <span className="mt-0.5 block line-clamp-2">
+                          Next focus candidates: {nextFocusKeys.map(readable).join(', ')}
+                        </span>
+                      )}
                     </div>
-                  )}
+                  ) : upcomingFocuses.length > 0 ? (
+                    <div className="mt-1.5 text-[10px] text-muted-foreground">
+                      <span className="font-medium text-foreground">Next focus candidates:</span>{' '}
+                      {upcomingFocuses.map((item) => readable(item.focus_key)).join(', ')}
+                    </div>
+                  ) : null}
                 </div>
               </button>
             )

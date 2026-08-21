@@ -88,7 +88,7 @@ describe('Pulse slash commands', () => {
 
     expect(submitted).toContain('Run the /ops-review review as a BACKGROUND task')
     expect(submitted).toContain('kind=\\"ops-review\\"')
-    expect(submitted).toContain('required_pulse_review_modules=["llm_ops_review"]')
+    expect(submitted).toContain('required_pulse_review_modules=["technical_review"]')
     expect(submitted).toContain('iteration-8/default')
     expect(submitted).toContain('check failed tool calls')
   })

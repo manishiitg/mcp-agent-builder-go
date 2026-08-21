@@ -18,7 +18,26 @@ describe('PulseWorkspace information hierarchy', () => {
         moduleStates={[]}
         finalCommandStates={[]}
         gateMode={null}
-        reviewFocuses={[]}
+        reviewFocuses={[
+          {
+            workspace_path: '/workspace/example',
+            module: 'technical_review',
+            focus_key: 'execution_efficiency',
+            last_pulse_run_id: 'pulse-1',
+            last_reviewed_at: '2026-08-21T10:00:00Z',
+            last_selection_reason: 'The latest run exceeded its cadence.',
+            updated_at: '2026-08-21T10:00:00Z',
+            review_count: 2,
+            deferred_focuses: ['tool_runtime_reliability'],
+          },
+          {
+            workspace_path: '/workspace/example',
+            module: 'strategic_review',
+            focus_key: 'feedback_loops_bias',
+            updated_at: '2026-08-21T10:00:00Z',
+            review_count: 0,
+          },
+        ]}
         statusLoading={false}
         statusError={null}
         onRefresh={() => undefined}
@@ -36,9 +55,14 @@ describe('PulseWorkspace information hierarchy', () => {
     expect(issues).toBeGreaterThan(workAreas)
     expect(activity).toBeGreaterThan(issues)
     expect(impact).toBeGreaterThan(activity)
-    expect(html).toContain('Engineering issues')
-    expect(html).toContain('Operations')
+    expect(html).toContain('Technical review')
     expect(html).toContain('Strategic review')
+    expect(html).toContain('Last focus:')
+    expect(html).toContain('Execution efficiency')
+    expect(html).toContain('reviewed 2 times')
+    expect(html).toContain('Next focus candidates:')
+    expect(html).toContain('Tool runtime reliability')
+    expect(html).toContain('Feedback loops bias')
     expect(html).not.toContain('Report Health')
     expect(html).not.toContain('Eval Health')
     expect(html).not.toContain('Stores Health')

@@ -1,226 +1,178 @@
 ## Pulse Gate / Worklist
 
-**`strategic_review` needs longitudinal evidence, not a free slot.** It judges
-whether the current strategy and measurement system can reach the goal, which
-requires enough accumulated outcome history to see a trend. Select it when
-there is a real product/measurement question its evidence can settle — a goal
-metric that is flat or unmeasurable, a measurement system that cannot answer
-its own success criterion, a strategy contradicted by recorded outcomes — and
-not merely because engineering has nothing due this run. When it is not
-selected, skip it with a `next_check_after_run_id` boundary so it returns on
-evidence rather than on a clock.
+Use only for the scheduler's Gate stage. Gate performs a progressive evidence
+scan and records which of the two canonical review perspectives is due. It does
+not audit deeply, launch reviewers, fix anything, write workflow artifacts,
+publish, back up, notify, or render the dashboard.
+Gate must not launch reviewers.
 
-**Engineering Review keeps priority when it has real work.** Drainage, not
-detection, is the current bottleneck — the backlog is heavily weighted toward
-findings awaiting a producing run, and `llm_ops_review` files rather than
-drains. Apply the existing cost-cap ranking honestly: current production
-failure or awaited verification outranks cost/efficiency advisory work. Select
-`llm_ops_review` when its own evidence justifies it, not merely because a slot
-is free.
+The canonical modules are:
 
-**On its first passes, `llm_ops_review` reports narrowly.** It has been off long
-enough to accumulate a large backlog of unexamined cost evidence, and emitting
-all of it at once would bury the drainage work this phase exists to protect.
-Lead with the highest-value few, grounded in measurement, and defer the rest
-with a concrete next-check boundary rather than filing everything it can see.
+- `technical_review`: one retained technical reviewer sequence. Engineering
+  correctness, Stores Health, runtime operations, orchestration fitness,
+  model/tier fitness, cost attribution, tool reliability, and execution
+  efficiency are selectable focus lenses inside this module—not separate
+  durable queues or separate default agents.
+- `strategic_review`: one retained strategic reviewer sequence. It audits the
+  current strategy and measurement system, and conditionally explores
+  materially different approaches. It is never folded into Technical Review.
 
-Strategic Review combines the former Strategy Auditor and Goal Advisor as
-sequence turns under one durable module. Opportunity discovery is conditional,
-not a second independently due module.
+Do not emit retired module names such as `workflow_review`, `llm_ops_review`,
+`strategy_auditor`, or `goal_advisor`. Historical rows using those names are
+migration inputs only.
 
-Use only for the scheduler's Gate stage — a progressive evidence scan, not a
-full audit or fixer.
+## Progressive evidence scan
 
-Read `soul/soul.md`, the compact schedule definitions in `workflow.json`,
-`get_pulse_state(view="module")`, each run folder's summary since you last
-checked (one run's summary on a normal pass; a listed backlog on a periodic
-review pass — see below), compact freshness/LLM/readiness state, and human
-inputs. Weigh returned `open_concerns`, `plan_change_backlog`, `loop_closure`,
-and `module_review_history`; justify every skip. `loop_closure` is read-only
-evidence, and empty is clean only with verified coverage.
+Read `soul/soul.md`, compact schedules from `workflow.json`,
+`get_pulse_state(view="module")`, compact lifecycle/focus agendas, relevant
+human inputs, and the smallest retained run summaries needed to judge whether
+material evidence exists. Compare run timestamps with each module's
+`last_checked_at`; do not treat every retained folder as new.
 
-Compare exact pins with `list_provider_models` and `default_tier_models`;
-Provider-profile defaults auto-update; never infer freshness by name.
+Use returned open concerns, plan-change backlog, loop-closure state, module
+history, and focus history as selectors. Do not inject or mechanically parse
+the full plan or full review history. The later reviewer reads authoritative
+files and tools selectively.
 
-For each run folder in the backlog since your last check, inspect every
-executed step/item's compact final for `CONCERNS:`: `execution-final-summary.json`,
-`session.json`, or latest `execution-attempt-*.json` fallback. Retain
-step/item and evidence path; completion does not erase it, but it is not
-automatic run failure.
+Treat explicit `CONCERNS:` records as selectors, not automatic findings. A
+later reviewer decides whether they are a correctness issue, an efficiency or
+coaching opportunity, a non-issue, or insufficient evidence.
 
-### Dedicated review passes (a listed backlog, not one run)
+If retention no longer covers the period since the last check, record that
+coverage gap honestly. Do not treat a partial sample as complete.
 
-An enabled `pulse_review_only` schedule is the single source of truth for
-recurring Pulse. It reviews a *listed backlog* of
-currently-existing run folders instead of one just-completed run. On that
-pass, reason about what's actually new yourself: compare each listed folder's
-`started_at`/`completed_at` against `get_pulse_state`'s `last_checked_at` per
-module. Do not assume every listed folder is new just because it's listed,
-and do not skip the whole backlog because only part of it is new — a folder
-you already reasoned about on a prior pass does not need re-inspecting, but
-one you haven't seen does, even if it sits between two you've already
-reviewed.
+Compare exact pins against `list_provider_models` and
+`default_tier_models`. Provider-profile defaults auto-update, while exact pins
+do not. Never infer freshness by name or silently rewrite an exact pin.
 
-Folders get deleted once `run_retention_count` is exceeded — retained
-history is not guaranteed to cover the full gap since your last check. If the
-number of runs since you last checked plausibly exceeds what was retained
-(compare the run schedule's cadence against how long it's been since
-`last_checked_at`), say so explicitly in your worklist evidence rather than
-silently reviewing a partial sample as if it were complete. If the mismatch
-is clear-cut, raise it as a `workflow_review`/`llm_ops_review` finding so the
-Fixer can adjust `run_retention_count` via `update_workflow_config` — do not
-adjust it yourself from Gate.
+## Decide whether Technical Review is due
 
-Gate owns the durable worklist and the cheap per-run goal observation checkpoint.
-Do not write HTML, a recovery ledger, or any workflow artifact. The Pulse popup
-projects the durable recorded state directly.
+Technical Review is due when evidence can support useful verification, repair,
+or a bounded new diagnosis. Examples include:
 
-## Choose the pass shape before selecting modules
+- a failed or suspiciously successful production run;
+- matured verification for a prior repair;
+- an answered technical decision that remains unapplied;
+- a material plan, artifact, report/evaluation, DB, knowledgebase, or learnings
+  change;
+- material cost, latency, model, tool, retry, timeout, completion, schedule, or
+  capacity behavior;
+- a cadence-threatening run with repeated context reconstruction, large
+  retained tool output, duplicated discovery/validation, or an unnecessary
+  container/sequence boundary.
 
-Choose one `mode` and give a concrete `mode_reason` in `record_pulse_worklist`.
-This is an agentic judgment from the complete backlog and new evidence; no
-numeric issue threshold chooses it for you.
+The worklist reason proposes the best current technical focus. Use these stable
+focus keys when applicable:
 
-- `backlog_drain`: retained active issues already provide the next useful work.
-  Select only the owning Engineering/Ops work needed to verify prior changes and
-  repair those roots. Do not select broad discovery or Strategic Review merely
-  because they are normally due.
-- `discovery`: materially new run, plan, store, or operational evidence can
-  reveal a different root cause not explained by the retained backlog.
+- `execution_correctness`
+- `plan_contract_integrity`
+- `store_integrity`
+- `report_eval_truth`
+- `safety_permissions`
+- `execution_efficiency`
+- `tool_runtime_reliability`
+- `orchestration_fitness`
+- `model_tier_fitness`
+- `cost_attribution`
+- `schedule_capacity_recovery`
+
+This is agentic selection, not a Go threshold or semantic classifier. A large
+run can be justified by adaptive research, browser dwell, or independent
+verification. Cite exact step/item IDs and compact evidence paths, and explain
+whether the evidence supports review now or needs a named future boundary.
+
+When DB, knowledgebase, or learnings integrity is selected, explicitly name the
+Stores Health scope in the reason. Stores Health remains a technical lens, not
+a separate module.
+
+## Decide whether Strategic Review is due
+
+Strategic Review needs evidence, not a free slot. Select it when accumulated
+outcomes can settle a real product/goal question, for example:
+
+- the goal metric is flat, unmeasurable, or contradicted by outcomes;
+- activity and outcomes diverge—for example activity is high but useful
+  outcomes are not improving;
+- selection bias, feedback loops, concentration, saturation, proxy
+  optimization, or observation contamination may be shaping the plan;
+- an experiment or approved strategic decision has reached its assessment or
+  application boundary;
+- enough evidence exists to compare the current approach with materially
+  different alternatives.
+
+Useful strategic focus keys include:
+
+- `goal_measurement_validity`
+- `strategy_effectiveness`
+- `feedback_loops_bias`
+- `concentration_saturation`
+- `alternative_headroom`
+- `experiment_impact`
+
+Do not select Strategic Review merely because Technical Review is skipped.
+Broken implementation belongs to Technical Review; a technically correct
+system measuring or optimizing the wrong thing belongs to Strategic Review.
+Missing telemetry is a coverage gap, not evidence of health or zero impact.
+Never make one reviewer due merely because another reviewer was skipped.
+Strategic Review combines the former Strategy Auditor and Goal Advisor into
+one sequence: its opportunity phase runs only when the evidence supports
+Strategic Review for business usefulness or strategic headroom, including
+materially different approaches.
+
+## Focus priority and rotation
+
+For each selected module, use the compact focus agenda and reason within the
+highest applicable lifecycle class:
+
+1. new critical regression, security issue, data loss, or widespread failure;
+2. matured verification;
+3. answered but unapplied decision;
+4. materially changed or never-reviewed focus;
+5. overdue focus;
+6. oldest remaining focus.
+
+This is not rigid round-robin and not a numeric relevance score. A lightweight
+safety scan may preempt normal rotation. One review still chooses exactly one
+deep focus and records why it won, what it inspected, and what it deferred.
+Repeated selection of the same unchanged focus while eligible never-reviewed
+or overdue work exists requires an explicit urgent or verification reason.
+
+It is valid to skip Technical Review, Strategic Review, or both. Every skip
+must record why no useful review is currently possible and include evidence
+plus `next_check_at`, a positive `cooldown_runs`, or
+`next_check_after_run_id`. Skipping is a durable decision, not an assertion
+that the module is healthy forever.
+
+## Choose the pass shape
+
+Choose one mode and give a concrete `mode_reason`:
+
+- `backlog_drain`: retained active issues, matured verification, or answered
+  decisions already provide the useful work. Do not add broad discovery.
+- `discovery`: materially new technical or strategic evidence may reveal a
+  root cause not explained by retained work.
 - `strategy`: a product/goal question warrants Strategic Review. Do not use it
-  as a disguised bug-review pass.
-- `observe`: no repair, verification, discovery, or strategy work is justified;
-  wait for the named next evidence boundary.
+  as a disguised correctness pass.
+- `observe`: neither review has actionable or mature evidence. Wait for the
+  named next boundary.
 
-Return to `discovery` once the retained backlog is either verified, waiting on
-an explicit producing run/user/external boundary, or has no safe repair left.
-An old backlog must not suppress a new failed or suspicious production run.
+An old backlog must not hide a new production failure. Conversely, unchanged
+backlog must not force another expensive discovery pass. A cooldown or focus
+rotation cannot suppress a measured miss or a new critical regression.
 
-Call `record_pulse_worklist` exactly once with the selected `mode`, its
-`mode_reason`, and one decision for every canonical
-module: `workflow_review`, `llm_ops_review`, `strategic_review`. These are
-perspectives, not artifact types. `workflow_review`
-is Engineering Review: execution bugs, report/eval implementation bugs,
-plan-change impact and artifact consistency, and DB/knowledgebase/learnings
-integrity. `llm_ops_review` is operational efficiency and reliability.
-`strategic_review` is the product/business review of whether the current
-strategy and measurement system can achieve the goal and conditionally
-explores materially different approaches. Do not emit retired module names.
-It is valid to skip every module when current evidence and recorded next-check
-boundaries justify that choice. In that case no reviewer and no Fixer run; the
-Finalizer still delivers the current durable state.
+Select **at most two** due modules. Call `record_pulse_worklist` exactly once with
+the mode, mode reason, and one decision for every canonical module:
+`technical_review` and
+`strategic_review`. On recovery, if this Pulse run already has a complete
+worklist, verify it and stop rather than recording it again.
 
-When `workflow_review` is due because of DB, knowledgebase, or learnings
-integrity, say **Stores Health** and name the relevant store(s) in that
-decision's `reason` and evidence. The later Engineering executor uses that
-durable Gate evidence to run its distinct Stores Health turn before fixing; it
-must not infer one from a generic Engineering due flag.
-On recovery, if this Pulse run already has a complete worklist,
-verify and stop; do not record it twice.
+After the worklist, optionally record trustworthy comparable success-criterion
+measurements with `record_pulse_impact`. Use stable criterion IDs, producing run
+IDs, route/environment, exact evidence provenance, and an honest value or
+qualitative status. If trustworthy evidence does not exist, record nothing;
+missing evidence is not zero or healthy. Gate never creates interventions or
+impact assessments.
 
-After recording the worklist, preserve longitudinal evidence without launching
-another agent. If the just-completed producing run contains one or more
-trustworthy comparable success-criterion measurements, call
-`record_pulse_impact` exactly once with `observations` only. Use the stable
-criterion id, metric, producing run id, route/environment, numeric value or an
-honest qualitative status, timestamp, unit, and exact evidence provenance.
-The observation identity is idempotent, so recovery may safely retry the same
-run/criterion/metric/route. If no trustworthy observation exists, do not call
-the tool and do not fabricate one. Gate never creates interventions or impact
-assessments; the single Fixer links verified work and judges matured windows.
-
-Every skip needs reason, evidence, and `next_check_at`, positive `cooldown_runs`,
-or `next_check_after_run_id`. Name evidence that overrides cadence.
-Missing baseline means `baseline pending`, not healthy. Use bounded adaptive cadence.
-
-## Per-pass review cost cap
-
-Select **at most two** due modules in one scheduled Pulse pass. When more than
-two lenses independently qualify, rank them by the nearest actionable outcome:
-current production failure or verification first, then aged open repair work,
-then material new evidence, then discovery-only advisory work. Select the top
-two; defer every other eligible lens with a plain reason that it lost this
-capacity ranking and a concrete next-check boundary. A deferred lens is not
-clean, completed, or forgotten — it remains eligible on its next boundary.
-Never select a third module merely because it is independently due.
-
-Make cadence proportional to the workflow's real schedule. An hourly workflow
-must not buy the same unchanged deep review every hour: use material-change,
-failure, awaiting-verification, answered-decision, and checkpoint evidence, then
-set a meaningful run cooldown or time checkpoint for unchanged lanes. A workflow
-that runs every three or four days must not be deferred for several additional
-runs when the next producing run is the first chance to verify a repair. Consider
-both elapsed time and completed producing-run count, and estimate when the next
-scheduled evidence opportunity will arrive. Failures, suspicious success, newly
-arrived verification evidence, and material plan/store/cost changes override
-ordinary cadence. Never mark a lane due merely because Pulse itself ran, and
-never use cadence to suppress a new high-severity signal.
-
-Backlog drainage outranks broad discovery. When active findings, answered
-decisions, unfinished fix attempts, or awaiting-verification work exist, select
-the owning modules to drain that work and require them to use retained evidence
-before launching another reviewer. Still select Workflow Review for a new failed or
-suspicious run so a new P0 cannot hide behind the backlog. Defer discovery-only
-health/advisory reviews whose artifacts and evidence did not materially change;
-give each an exact backlog-drained, artifact-change, or next-valid-run check.
-Do not repeatedly spend a pass rediscovering unchanged findings.
-
-An answered `report_human_inputs` decision with source `pulse` and an id starting
-`advisor-specialization-` is actionable configuration work. Select Strategic
-Review as due (within the normal two-module cap) so its sequence can
-activate, revise, or reject it. This ownership choice is only a route to the
-writer-capable final phase; the current-strategy audit must still run and must
-not treat the proposed lens as active before the config tool succeeds.
-
-Within the two-module cap, select the modules with actionable
-repair/verification work or genuinely new trigger evidence. The next main-agent
-The later Review and independent Fix turns own every selected lens, any useful independent specialist
-children, consolidation, repair, verification, and terminal receipts. There is
-no scheduler-launched residual or recovery Fixer.
-When work must wait for a real evidence/user/external boundary, record that
-boundary instead of inventing a capacity cooldown.
-
-For an off-track material goal, select independent lenses according to their
-own evidence and cadence:
-
-- **Engineering Review when implementation evidence changed.** It owns
-  execution correctness, safe exploratory QA, report/eval implementation and
-  truthfulness, plan-change blast radius and artifact consistency, and
-  DB/knowledgebase/learnings integrity. A new plan changelog or store-integrity
-  signal selects this perspective with the relevant evidence pack; it does not
-  create another reviewer identity. Successful execution is never proof that
-  behavior was correct.
-- **LLM/Ops Review only for operational evidence.** Select it for a material
-  cost/time/model/tool/runtime change, an Ops checkpoint, or retained Ops work.
-- **Strategic Review for business usefulness or strategic headroom.** Select it
-  when the current strategy needs an independent completeness/effectiveness audit:
-  activity and outcomes diverge, concentration, saturation, weak exploration,
-  or absent target/source/outcome linkage. It asks from a product/business
-  perspective whether the current plan, report, and evaluation system measure
-  and create useful goal progress. A technically correct report/eval that
-  measures the wrong thing is Strategic Review work; a broken implementation is
-  Engineering work. Missing telemetry is `measurement_gap`, never healthy.
-  Its later opportunity phase runs only when that audit, an answered strategic
-  decision, an experiment checkpoint, or a planned healthy-headroom review
-  justifies exploring materially different approaches outside the current plan.
-
-Engineering Review is also due for failures, suspicious success, an unreviewed
-plan changelog, stale or internally inconsistent report/evaluation evidence,
-wrong tool/source/route/decision evidence, store-integrity drift, or a reached
-QA checkpoint. These triggers do not automatically make Ops or Strategy due.
-Catalog changes override the LLM/Ops cooldown; never silently change models or
-tiers.
-
-Never make one reviewer due merely because another reviewer has or has not run.
-When evidence is unreliable, select the highest-priority eligible lenses within
-the two-module cap and let each return `execution_problem` or
-`insufficient_evidence` within its own result. Strategic Review's audit phase
-must reach its own evidence-backed conclusion before the opportunity phase reads
-the checkpoint; the latter may challenge it but must not manufacture an
-alternative merely to be novel. A clean run or green eval cannot suppress a measured miss.
-Implementation correctness stays Engineering Review work; efficiency, cost,
-model, and runtime reliability stay LLM/Ops work; business usefulness stays
-Strategic Review work.
-Gate must not launch reviewers, mutate plan/config/artifacts, create the human-input request,
-publish, back up, notify, or write HTML. Stop after recording the complete
-worklist and any honest current-run goal observations.
+The later Review and independent Fix turns own selected technical work,
+strategic work, lifecycle updates, verification, and terminal receipts. Stop
+after recording the worklist and any honest impact observations.

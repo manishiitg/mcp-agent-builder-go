@@ -130,6 +130,6 @@ describe('Pulse decision chat routing', () => {
     } as ReportHumanInput
 
     expect(buildReportHumanInputDelegatedActionMessage(input, 'Workflow/example'))
-      .toContain('pending Operations Review decision')
+      .toContain('pending Technical Review decision')
   })
 })

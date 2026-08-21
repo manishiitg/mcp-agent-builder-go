@@ -7,7 +7,7 @@ update any presentation artifact, create questions, or mark module state. Any la
 wording such as improve, apply, edit, fix, update, reorder, add, remove, or
 resolve means **recommend the exact change to the Pulse Fixer**.
 
-Return only: `module=workflow_review`, `verdict`, `next_check`, and ordered
+Return only: `module=technical_review`, `verdict`, `next_check`, and ordered
 `findings`. Every finding includes stable `finding_id`, `target_key`, severity,
 plain-language summary, precise `evidence`, bounded `recommended_fix` with
 before/after intent, exact `verification`, and `user_judgment_required` with

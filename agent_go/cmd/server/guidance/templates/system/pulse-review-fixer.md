@@ -20,16 +20,18 @@ dispatching any child. Its `gate_mode` is the contract for this pass:
   not turn it into an Engineering discovery pass.
 - In `observe`, do not launch a reviewer or fixer; record the required skipped
   receipts and wait for the named evidence boundary.
-Gate decides separately whether `workflow_review` (Engineering Review),
-`llm_ops_review`, and `strategic_review` are due. Read that
-durable worklist yourself. Go does not choose reviewers or automatically
-launch a residual Fixer/recovery agent.
+Gate decides separately whether the canonical `technical_review` and
+`strategic_review` modules are due. Engineering correctness, Stores Health,
+operations, cost, tool/runtime reliability, scheduling, and model-tier fitness
+are focus lenses inside `technical_review`; they are not independent modules or
+receipts. Read that durable worklist yourself. Go does not choose reviewers or
+automatically launch a residual Fixer/recovery agent.
 
 ## Review dispatch
 
 The Review turn is a launcher, not a long-running parent review.
-Use `run_in_background` for every selected child. When Engineering and/or
-Operations are due, use one `agent_type="executor"` child with one ordered
+Use `run_in_background` for every selected child. When `technical_review` is
+due, use one `agent_type="executor"` child with one ordered
 `message_sequence`. Give it the exact run-scoped checkpoint path from the
 dispatch message. Every turn reads that file first and updates it before
 ending, so context compaction cannot erase evidence or decisions. SQLite is
@@ -41,23 +43,31 @@ UTC `checkpoint_updated_at` timestamp. The opaque run-id suffix is not the
 authoritative clock; durable SQLite `recorded_at` values remain the final
 timeline for lifecycle decisions.
 
-Before each due Engineering or Operations deep review, read
+Before each due technical or strategic deep review, read
 `get_pulse_review_focus_agenda` for that module. Do a lightweight safety scan
 for critical regressions, matured verification, and answered unapplied
 decisions, then choose exactly one coherent deep focus. Rotation is agentic:
 the compact agenda informs judgment but does not require blind round-robin.
+For `technical_review`, use `execution_efficiency` as that focus when Gate cites
+a cadence-threatening run or evidence of repeated context, payload, retry, or
+sequence overhead. The focus requires a causal diagnosis of exact plan items,
+not a generic cost summary. If the smallest safe repair changes plan topology,
+step type, route ownership, retry semantics, public-action ordering, or a
+safety boundary, the Operations turn creates a durable approval request; the
+Fixer must not make that structural choice on its own.
 When that module's review is complete, call `record_pulse_review_focus` exactly
 once with the focus key, priority class, selection reason, compact evidence
 references, and deferred focus keys. This is durable coverage history for the
 next Pulse pass; the Markdown checkpoint remains only this run's notebook.
 
-1. **Prior verification + Engineering Review** — verify every retained repair
+1. **Prior verification + Technical Review** — verify every retained repair
    whose evidence boundary arrived, then inspect runtime correctness,
    plan/artifact drift, and report/evaluation implementation selected by Gate.
    Start from typed SQLite backlog/attempt state, then read the current run's
    checkpoint if it already exists. Do not rediscover prior analysis merely
    because this is a new Pulse run: read the newest relevant earlier
-   `runs/pulse/*/engineering-review.md` checkpoint only when the preceding
+   `runs/pulse/*/technical-review.md` checkpoint (or legacy
+   `engineering-review.md`) only when the preceding
    review was interrupted or missed its terminal receipt, an active finding
    points to reasoning/evidence held there, or the current evidence suggests a
    recurrence whose earlier repair context is not recoverable from SQLite.
@@ -70,12 +80,12 @@ next Pulse pass; the Markdown checkpoint remains only this run's notebook.
    verdict: `fixed_verified`, `changed_unverified` with
    `awaiting_next_valid_run`, `reopened`, `still_active`, `blocked`, or
    `inconclusive`.
-2. **Stores Health** — only when the `workflow_review` Gate evidence names
+2. **Stores Health lens** — only when the `technical_review` Gate evidence names
    store integrity, or the first turn finds a likely learnings/knowledgebase/DB
    ownership or contract issue. Load the learnings, knowledgebase, and database
    evidence packs as needed. This is a distinct second turn in the same
    conversation, not a `stores_health` module or separate receipt.
-3. **Operations Review** — only when `llm_ops_review` is due. Load
+3. **Operations lens** — only when the selected technical focus needs it. Load
    `read_skill(skills=[{"name":"workflow-commands","path":"references/ops-review.md"}])`
    and apply its evidence and structural checklist in this existing executor
    sequence. The parent sequence overrides only the reference's standalone
@@ -83,8 +93,10 @@ next Pulse pass; the Markdown checkpoint remains only this run's notebook.
 4. **Classify observations** — for every selected workflow observation, link it
    to an existing issue, promote it with evidence, or reject it as non-issue.
 5. **Persist review state** — write typed findings and verification evidence,
-   but do not modify implementation files and do not write the Engineering or
-   Operations terminal module receipt. The independent Fix turn owns it.
+   record exactly one selected focus, and write exactly one terminal
+   `technical_review` receipt. Do not modify implementation files. The
+   independent Fix turn owns mutations and repair outcome, never review
+   completion.
 
 Do not add a consolidation turn. Every later message continuously updates the
 checkpoint's canonical root causes and merges semantic duplicates while it
@@ -92,8 +104,9 @@ works.
 
 When `strategic_review` is due, launch one separate executor sequence:
 
-1. **Prior verification + hidden-mechanism audit** — verify retained strategic
-   work, then test for feedback loops, selection bias, observation
+1. **Focus + prior verification** — read the strategic focus agenda, do the
+   lightweight safety/evidence scan, choose exactly one deep focus, verify
+   retained strategic work, then test the selected area for feedback loops, selection bias, observation
    contamination, proxy optimization, concentration, saturation, and local
    optima across comparable runs.
 2. **Independent opportunity discovery** — only when Gate evidence warrants
@@ -101,8 +114,9 @@ When `strategic_review` is due, launch one separate executor sequence:
    Omit this message in audit-only and backlog-drain passes.
 3. **Critic and conclusion** — choose exactly one of `keep`, `improve`,
    `propose_alternative`, `experiment`, or `evidence_wait`.
-4. **Persist** — write typed strategic findings/decisions/impact records and
-   the terminal `strategic_review` receipt.
+4. **Persist** — record exactly one strategic focus, write typed strategic
+   findings/decisions/impact records, then write the terminal
+   `strategic_review` receipt.
 
 The Strategic sequence also receives one run-scoped checkpoint. An experiment
 is optional. Multiple running/measuring experiments may coexist only when
@@ -122,7 +136,7 @@ persistence, record that module as incomplete instead of inventing findings.
 ## Independent Fix dispatch
 
 After every registered reviewer finishes, reload the Gate worklist, canonical
-issues, saved reviewer records, and the Engineering checkpoint. Workflow
+issues, saved reviewer records, and the Technical Review checkpoint. Workflow
 observations are evidence, not Fixer work. Select at most one highest-value
 coherent repair objective from canonical issues. Several issues may share the
 objective only when they have one root cause, compatible targets, and one proof
@@ -130,11 +144,12 @@ boundary.
 
 Launch one fresh `agent_type="executor"` Fixer with `run_in_background`. Never
 reuse a reviewer conversation. The Fixer may modify safe owned targets, records
-exact attempts and dispositions, runs proportional proof, updates the compact
-checkpoint, and writes exactly one terminal receipt for each due Engineering
-or Operations module. Unselected issues remain durable. If no safe canonical
-objective exists, the parent records a truthful done or blocked receipt from
-reviewer evidence without launching a Fixer. Do not repeat Strategic Review.
+exact attempts and dispositions, runs proportional proof, and updates the compact
+checkpoint. It must not write or replace the reviewer's terminal
+`technical_review` receipt: review completion and repair outcome are separate
+facts. Unselected issues remain durable. If no safe canonical objective exists,
+do not launch a Fixer and preserve the truthful reviewer receipt. Do not repeat
+Strategic Review.
 
 Read module/worklist state, `get_pulse_state(view="backlog", detail="compact")`
 once, and saved SQLite reviewer results. Choose relevant public PUL ids from
@@ -401,10 +416,10 @@ findings, and must not be converted into duplicate issues.
 `create_human_input_request`, passed as `human_input_id`. Create the decision
 first: a finding marked awaiting_user with no question leaves the operator told
 that something needs them and given nothing to answer.
-Attribute the question to the reviewer that actually asks it:
-`workflow_review` uses `source="engineering_review"` with an
-`engineering-decision-...` id, `llm_ops_review` uses `source="ops_review"`
-with an `ops-decision-...` id, and `strategic_review` uses
+Attribute the question to the reviewer that actually asks it. New technical
+questions use `source="technical_review"` with a stable
+`technical-decision-...` id; legacy engineering/ops sources remain readable
+history but must not be emitted by new reviews. `strategic_review` uses
 `source="strategic_review"` with a `strategic-proposal-...` id. Pass that id as
 `human_input_id` on the corresponding `record_pulse_finding` call so the
 finding and pending decision are linked at creation; never leave

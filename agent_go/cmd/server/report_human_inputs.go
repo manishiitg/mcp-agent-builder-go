@@ -714,13 +714,13 @@ func createReportHumanInputTools() ([]llmtypes.Tool, map[string]interface{}, map
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
 			Name:        "create_human_input_request",
-			Description: "Create or refresh a structured non-blocking workflow question for the user. Review decisions are stored in that workflow's db/db.sqlite and answered inside the Pulse/report panel. Attribute the request to the reviewer that actually asked: source=\"engineering_review\", \"ops_review\", or \"strategic_review\"; reserve source=\"pulse\" for generic Pulse coordination. Use a stable reviewer-owned input_id, approve/reject/defer options, and put the exact proposed changes, rationale, expected impact, risk, and evidence in context so a later review/fixer pass can apply an approved proposal with normal workflow tools.",
+			Description: "Create or refresh a structured non-blocking workflow question for the user. Review decisions are stored in that workflow's db/db.sqlite and answered inside the Pulse/report panel. Attribute new review requests to source=\"technical_review\" or \"strategic_review\"; reserve source=\"pulse\" for generic Pulse coordination. Legacy engineering_review and ops_review rows remain readable history but are not new-write identities. Use a stable reviewer-owned input_id, approve/reject/defer options, and put the exact proposed changes, rationale, expected impact, risk, and evidence in context so a later review/fixer pass can apply an approved proposal with normal workflow tools.",
 			Parameters: llmtypes.NewParameters(map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
 					"workspace_path": map[string]interface{}{"type": "string", "description": "Workflow-relative path, for example Workflow/social-media. Required; requests are stored in that workflow's db/db.sqlite."},
 					"input_id":       map[string]interface{}{"type": "string", "description": "Optional stable id. Reuse this for the same still-open question so Pulse refreshes it instead of duplicating it."},
-					"source":         map[string]interface{}{"type": "string", "enum": []string{"pulse", "engineering_review", "ops_review", "strategic_review"}, "description": "Who is asking. Use the exact reviewer identity; defaults to pulse only for generic Pulse coordination."},
+					"source":         map[string]interface{}{"type": "string", "enum": []string{"pulse", "technical_review", "strategic_review"}, "description": "Who is asking. Use the canonical reviewer identity; defaults to pulse only for generic Pulse coordination."},
 					"priority":       map[string]interface{}{"type": "string", "enum": []string{"low", "medium", "high"}, "description": "How important the answer is. Defaults to medium."},
 					"question":       map[string]interface{}{"type": "string", "description": "The exact user-facing question in ONE short plain sentence -- the kind a busy operator reads in three seconds, not an analyst's framing of the problem."},
 					"context":        map[string]interface{}{"type": "string", "description": "Short explanation of why this matters and what will happen next, for a non-technical operator, not a technical report. One to three short sentences PER SECTION, plain language, no jargon, no walked-through derivation -- state the single number or fact that matters and the conclusion, not how you got there; the full analysis belongs in the reviewer's findings file, not this question. For plan-change proposals, use newline-separated labeled sections exactly like: Proposal:\n...\nExact intended edits if approved:\n(1) ...\n(2) ...\nRationale:\n...\nExpected impact:\n...\nRisk:\n... -- each section still capped at one to three short sentences. Keep evidence paths in the separate evidence field, never inline citations or file paths in context."},
@@ -1127,9 +1127,11 @@ func reportHumanInputAnswerForAgent(input ReportHumanInput) string {
 func normalizeReportHumanInputSource(source string) string {
 	switch strings.ToLower(strings.TrimSpace(source)) {
 	case "engineering_review", "engineering-review", "engineering review":
-		return "engineering_review"
+		return "technical_review"
 	case "ops_review", "ops-review", "ops review", "operations_review", "operations-review", "operations review":
-		return "ops_review"
+		return "technical_review"
+	case "technical_review", "technical-review", "technical review":
+		return "technical_review"
 	case "strategic_review", "strategic-review", "strategic review",
 		"strategy_auditor", "strategy-auditor", "strategy auditor",
 		"goal_advisor", "goal-advisor", "goal advisor":

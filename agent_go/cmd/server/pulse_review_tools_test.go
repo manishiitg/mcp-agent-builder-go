@@ -102,27 +102,27 @@ func TestPulseReviewFocusToolsPersistDurableAgenda(t *testing.T) {
 	agenda := executors["get_pulse_review_focus_agenda"].(func(context.Context, map[string]interface{}) (string, error))
 
 	raw, err := record(ctx, map[string]interface{}{
-		"workspace_path": workspacePath, "pulse_run_id": pulseRunID, "module": pulseModuleLLMOpsReview,
-		"focus_key": "completion_tracking", "priority_class": "overdue", "selection_reason": "This lens has not been reviewed since the timeout recurrence.",
+		"workspace_path": workspacePath, "pulse_run_id": pulseRunID, "module": pulseModuleTechnicalReview,
+		"focus_key": "schedule_capacity_recovery", "priority_class": "overdue", "selection_reason": "This lens has not been reviewed since the timeout recurrence.",
 		"verdict": "Observer now has a targeted recheck.", "evidence": []interface{}{"runs/iteration-0/execution/attempt.json"},
-		"issue_ids": []interface{}{"PUL-AB12CD34"}, "deferred_focuses": []interface{}{"tool_payload_efficiency"},
+		"issue_ids": []interface{}{"PUL-AB12CD34"}, "deferred_focuses": []interface{}{"tool_runtime_reliability"},
 		"next_check_at": "2026-08-21T00:00:00Z", "next_check_reason": "next producing run",
 	})
 	if err != nil {
 		t.Fatalf("record focus: %v", err)
 	}
 	var stored PulseReviewFocus
-	if err := json.Unmarshal([]byte(raw), &stored); err != nil || stored.LastReviewedAt == "" || stored.FocusKey != "completion_tracking" {
+	if err := json.Unmarshal([]byte(raw), &stored); err != nil || stored.LastReviewedAt == "" || stored.FocusKey != "schedule_capacity_recovery" {
 		t.Fatalf("stored focus=%#v decode_err=%v raw=%s", stored, err, raw)
 	}
-	raw, err = agenda(ctx, map[string]interface{}{"workspace_path": workspacePath, "module": pulseModuleLLMOpsReview})
+	raw, err = agenda(ctx, map[string]interface{}{"workspace_path": workspacePath, "module": pulseModuleTechnicalReview})
 	if err != nil {
 		t.Fatalf("read agenda: %v", err)
 	}
 	var response struct {
 		Focuses []PulseReviewFocus `json:"focuses"`
 	}
-	if err := json.Unmarshal([]byte(raw), &response); err != nil || len(response.Focuses) != 2 || response.Focuses[0].FocusKey != "tool_payload_efficiency" || response.Focuses[1].DeferredFocuses[0] != "tool_payload_efficiency" {
+	if err := json.Unmarshal([]byte(raw), &response); err != nil || len(response.Focuses) != len(pulseReviewFocusCatalog[pulseModuleTechnicalReview]) || response.Focuses[0].LastReviewedAt != "" {
 		t.Fatalf("agenda=%#v decode_err=%v raw=%s", response, err, raw)
 	}
 }

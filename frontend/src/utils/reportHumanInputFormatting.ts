@@ -13,14 +13,12 @@ export type ReportHumanInputContextSection = {
 
 export function reportHumanInputStatusLabel(input: ReportHumanInput): string {
 	if (input.status === 'answered') {
-		if (input.source === 'engineering_review') return 'Waiting for Engineering Review'
-		if (input.source === 'ops_review') return 'Waiting for Operations Review'
+		if (['technical_review', 'engineering_review', 'ops_review'].includes(input.source)) return 'Waiting for Technical Review'
 		if (['strategic_review', 'strategy_auditor', 'goal_advisor'].includes(input.source)) return 'Waiting for Strategic Review'
 		return 'Waiting for Pulse'
 	}
 	if (input.status === 'claimed') {
-		if (input.source === 'engineering_review') return 'Engineering Review is working'
-		if (input.source === 'ops_review') return 'Operations Review is working'
+		if (['technical_review', 'engineering_review', 'ops_review'].includes(input.source)) return 'Technical Review is working'
 		if (['strategic_review', 'strategy_auditor', 'goal_advisor'].includes(input.source)) return 'Strategic Review is working'
 		return 'Pulse is working'
 	}

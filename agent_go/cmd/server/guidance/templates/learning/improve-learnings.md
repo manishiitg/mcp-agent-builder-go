@@ -23,7 +23,7 @@ module envelope, final artifact, or module state from this turn.
 
 Return only this compact contract:
 
-- `module`: workflow_review
+- `module`: technical_review
 - `verdict`: clean | needs_fix | blocked
 - `index_shape`: **required, measure it — do not estimate.** Report
   `SKILL.md` line count, how many of those lines are links to `references/`

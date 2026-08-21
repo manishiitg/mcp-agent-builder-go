@@ -39,7 +39,7 @@ Only pass a lock field when you are explicitly changing it — passing `lock_lea
 
 ### Ops-owned decisions need a stated reason (PLAT-060)
 
-Three fields are cost decisions owned by `llm_ops_review`, and each **requires a
+Three fields are cost decisions owned by the `technical_review` model-tier or cost focus, and each **requires a
 paired reason — `update_step_config` rejects the change without it**:
 
 | Field | Required reason | The consequence the reason must acknowledge |
@@ -48,7 +48,7 @@ paired reason — `update_step_config` rejects the change without it**:
 | `execution_llm` | `execution_llm_reason` | A pin **outranks `execution_tier` entirely** and will not follow provider-profile updates |
 | `declared_execution_mode` | `declared_execution_mode_reason` | Scripted freezes behaviour into `main.py`; agentic pays for judgment every run |
 
-Cite the owning `llm_ops_review` finding id, the current state, and the evidence
+Cite the owning `technical_review` finding id, the current state, and the evidence
 — and the `human_input_id` when the change was user-approved. Clearing a field
 clears its reason; clearing never requires one.
 

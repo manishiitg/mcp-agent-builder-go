@@ -387,7 +387,7 @@ export interface ReportHumanInputOption {
 export interface ReportHumanInput {
   id: string
   workspace_path: string
-  source: 'pulse' | 'engineering_review' | 'ops_review' | 'strategic_review' | 'strategy_auditor' | 'goal_advisor' | string
+  source: 'pulse' | 'technical_review' | 'strategic_review' | 'engineering_review' | 'ops_review' | 'strategy_auditor' | 'goal_advisor' | string
   priority: 'low' | 'medium' | 'high' | string
   question: string
   context?: string
@@ -475,6 +475,7 @@ export interface PulseReviewFocus {
   next_check_at?: string
   next_check_reason?: string
   updated_at: string
+  review_count?: number
   deferred_focuses?: string[]
 }
 

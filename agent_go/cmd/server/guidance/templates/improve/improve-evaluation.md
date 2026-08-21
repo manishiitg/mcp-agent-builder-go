@@ -8,7 +8,7 @@ remove, update, resolve, or run means **recommend the exact change to the Pulse
 Fixer**. The Pulse Fixer may automatically apply correctness-preserving repairs;
 semantic changes still require an exact approved human-input request.
 
-Return only: `module=workflow_review`, `verdict`, `next_check`, and ordered findings
+Return only: `module=technical_review`, `verdict`, `next_check`, and ordered findings
 tagged `CORRECTNESS_REPAIR`, `OPERATIONAL`, or `GOAL_SEMANTIC`. Every finding
 includes stable `finding_id`, `target_key`, severity, plain-language summary,
 precise `evidence`, bounded `recommended_fix`, score-continuity impact, exact
@@ -138,7 +138,7 @@ When you finish, return:
 - any proposed rubric-change Decision entry
 
 The parent records every evaluation-lens result through the typed Pulse finding
-tools with `module=workflow_review`. A later verified repair is a typed disposition
+tools with `module=technical_review`. A later verified repair is a typed disposition
 and verification record on that finding.
 
 If you recommend a proposed but not-yet-applied eval change as an open finding, give it a short anchor id only so the parent can record it and a later decision can mark it resolved.

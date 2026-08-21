@@ -30,6 +30,7 @@ export type PulseWorkspaceModuleSummary = PulseWorkspaceModuleDefinition & {
 
 export function normalizePulseWorkspaceModule(module?: string): string {
   const value = (module || '').trim()
+  if (value === 'workflow_review' || value === 'llm_ops_review') return 'technical_review'
   if (value === 'strategy_auditor' || value === 'goal_advisor') return 'strategic_review'
   return value
 }

@@ -35,8 +35,8 @@ function submitGuidedWorkflowCommand(
     const instruction =
       `Call ${guidanceCall} and follow the returned instructions verbatim. ${outputContract} ` +
       `Treat focus as the request context before the slash command. The tool returns the canonical guided-flow text; do not paraphrase or skip its steps.`
-    const requiredReviewModule = kind === 'ops-review'
-      ? 'llm_ops_review'
+    const requiredReviewModule = kind === 'ops-review' || kind === 'engineering-review'
+      ? 'technical_review'
       : kind === 'strategy-auditor'
         ? 'strategic_review'
         : null
@@ -207,7 +207,7 @@ export const builtinCommands: CommandDefinition[] = [
   },
   {
     command: 'ops-review',
-    description: 'Agentically review cost, timing, tool/runtime reliability, model routing, and setup',
+    description: 'Run Technical Review with an operations and execution-efficiency focus',
     icon: <Cpu className="w-4 h-4" />,
     modes: ['workflow'],
     requiredWorkflowMode: 'plan',
@@ -233,7 +233,7 @@ export const builtinCommands: CommandDefinition[] = [
   },
   {
     command: 'engineering-review',
-    description: 'Review Engineering and Ops and classify evidence into canonical issues',
+    description: 'Run one focused Technical Review and classify evidence into canonical issues',
     icon: <CheckCircle className="w-4 h-4" />,
     modes: ['workflow'],
     requiredWorkflowMode: 'plan',

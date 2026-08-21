@@ -271,10 +271,8 @@ func RecordPulseReviewFinding(ctx context.Context, workspacePath, pulseRunID, re
 
 func pulseReviewDecisionOwnership(module string) (source, prefix string) {
 	switch pulsemodules.Normalize(module) {
-	case pulsemodules.WorkflowReviewID:
-		return "engineering_review", "engineering-decision-"
-	case pulsemodules.LLMOpsReviewID:
-		return "ops_review", "ops-decision-"
+	case pulsemodules.TechnicalReviewID:
+		return "technical_review", "technical-decision-"
 	case pulsemodules.StrategicReviewID:
 		return "strategic_review", "strategic-proposal-"
 	default:
@@ -297,10 +295,13 @@ func validatePulseReviewDecisionLink(ctx context.Context, db pulseFindingLifecyc
 		return fmt.Errorf("decision_required finding references human input %q with status %q; the linked decision must still be pending", inputID, status)
 	}
 	expectedSource, expectedPrefix := pulseReviewDecisionOwnership(module)
-	if source != expectedSource {
+	acceptedLegacyDecision := pulsemodules.Normalize(module) == pulsemodules.TechnicalReviewID &&
+		((source == "engineering_review" && strings.HasPrefix(inputID, "engineering-decision-")) ||
+			(source == "ops_review" && strings.HasPrefix(inputID, "ops-decision-")))
+	if source != expectedSource && !acceptedLegacyDecision {
 		return fmt.Errorf("decision_required %s finding references human input %q with source %q; create it with source=%q", pulsemodules.Normalize(module), inputID, source, expectedSource)
 	}
-	if !strings.HasPrefix(inputID, expectedPrefix) {
+	if !strings.HasPrefix(inputID, expectedPrefix) && !acceptedLegacyDecision {
 		return fmt.Errorf("decision_required %s finding references human input %q; decision ids for this module must start with %q", pulsemodules.Normalize(module), inputID, expectedPrefix)
 	}
 	return nil

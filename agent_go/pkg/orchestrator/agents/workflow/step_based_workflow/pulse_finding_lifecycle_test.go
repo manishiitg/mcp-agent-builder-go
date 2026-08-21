@@ -188,7 +188,7 @@ func TestPulseFindingLifecycleKeepsUnverifiedChangeOpenAndFailedProofReopens(t *
 func TestPulseFindingIssueIDUpdatesOneRootCauseAndMergePreservesDuplicateHistory(t *testing.T) {
 	ctx := context.Background()
 	workspacePath := concernsWorkspace(t)
-	module := pulsemodules.WorkflowReviewID
+	module := pulsemodules.TechnicalReviewID
 	first, err := RecordPulseReviewFinding(ctx, workspacePath, "pulse-1", "review-1", PulseReviewFindingInput{
 		Concern: "collector silently drops failed rows", Module: module,
 		PulseFindingDetails: PulseFindingDetails{
@@ -268,7 +268,7 @@ func TestPulseFindingIssueIDUpdateReloadsExistingStepFindingAcrossReviewerModule
 	record, err := RecordPulseReviewFinding(ctx, workspacePath, "pulse-2", "review-2", PulseReviewFindingInput{
 		IssueID: issueID,
 		Concern: "Current evidence confirms the same evaluator source-of-truth defect.",
-		Module:  pulsemodules.WorkflowReviewID,
+		Module:  pulsemodules.TechnicalReviewID,
 		PulseFindingDetails: PulseFindingDetails{
 			IssueKind:      "workflow_issue",
 			Classification: "correctness_bug",
@@ -317,7 +317,7 @@ func TestWorkflowObservationBecomesIssueOnlyWhenReviewerPromotesIt(t *testing.T)
 	if _, err := RecordPulseReviewFinding(ctx, workspacePath, "pulse-2", "review-2", PulseReviewFindingInput{
 		IssueID: issueID,
 		Concern: concern,
-		Module:  pulsemodules.WorkflowReviewID,
+		Module:  pulsemodules.TechnicalReviewID,
 		PulseFindingDetails: PulseFindingDetails{
 			IssueKind:      IssueKindWorkflow,
 			Classification: "efficiency_bug",

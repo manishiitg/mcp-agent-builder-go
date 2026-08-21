@@ -1,7 +1,7 @@
 # INDEPENDENT PULSE FIXER
 
-Run only after `/engineering-review` has classified current workflow evidence.
-Do not rerun Engineering, Operations, Stores, Strategic Review, or broad
+Run only after Technical Review (`/engineering-review`) has classified current workflow evidence.
+Do not rerun Technical Review, Strategic Review, or broad
 discovery. Do not treat raw workflow observations as repair issues.{{if .Focus}}
 
 Focus especially on: {{.Focus}}. The focus affects priority only; it cannot
@@ -15,7 +15,7 @@ selected issue's proof boundary.{{end}}
    `get_pulse_state(view="backlog", detail="compact")` exactly once. Select the
    coherent objective from that index, then request `detail="full"` only for
    its exact issue IDs. Read its typed review records, attempts, verification,
-   and the current Engineering checkpoint. The compact backlog's `issues` feed
+   and the current Technical Review checkpoint. The compact backlog's `issues` feed
    is the repair queue. Workflow observations are evidence
    from reviewers and must not be repaired unless a reviewer already promoted them.
 3. Select at most one highest-value coherent canonical repair objective. It may
@@ -25,9 +25,9 @@ selected issue's proof boundary.{{end}}
    Record exact changed targets, attempts, dispositions, and proportional
    post-change proof. Use `changed_unverified` when the real evidence boundary
    requires a future producing run.
-5. Record exactly one terminal result for each due Engineering/Operations module.
-   If no safe canonical objective exists, record a truthful done or
-   blocked result without manufacturing a repair. Do not touch Strategic
-   Review's receipt.
+5. Record the repair attempt and each issue disposition, but do not write or
+   replace either reviewer's terminal receipt. Review completion and repair
+   outcome are separate facts. If no safe canonical objective exists, preserve
+   the truthful review receipts without manufacturing a repair.
 6. Finish with a concise statement of the selected objective, changes, proof,
    lifecycle outcomes, and the remaining canonical queue.

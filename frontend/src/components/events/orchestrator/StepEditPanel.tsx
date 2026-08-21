@@ -1156,12 +1156,12 @@ export const StepEditPanel: React.FC<StepEditPanelProps> = ({
 	                    /* PLAT-060: the tier setter was removed deliberately. Pinning a tier also
 	                       disables adaptive tiering for this step — it stops promoting high→medium
 	                       automatically after 3 stable runs — so it is a cost decision, not a
-	                       preference. It now arrives from an llm_ops_review recommendation carrying
+	                       preference. It now arrives from a Technical Review recommendation carrying
 	                       its evidence, and the runtime requires a stated reason. State stays
 	                       visible here; change it via Pulse. */
 	                    <p className="text-xs text-gray-900 dark:text-gray-100">
 	                      {agentConfigs.execution_tier
-	                        ? `${agentConfigs.execution_tier} (pinned by Ops Review)`
+	                        ? `${agentConfigs.execution_tier} (pinned by Technical Review)`
 	                        : 'Auto (adaptive)'}
 	                    </p>
 	                  )}

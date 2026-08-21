@@ -166,7 +166,7 @@ func TestManualPulseCommandsKeepRunSetupReviewAndFixBoundariesSeparate(t *testin
 			"Create or update one enabled `pulse_review_only` schedule",
 		},
 		"ops-review": {
-			"STANDALONE LLM AND OPERATIONS REVIEW",
+			"STANDALONE TECHNICAL REVIEW — OPERATIONS FOCUS",
 			"must not edit files or config",
 			"Container necessity",
 			"owned children as one execution unit",
@@ -189,7 +189,7 @@ func TestManualPulseCommandsKeepRunSetupReviewAndFixBoundariesSeparate(t *testin
 			"Do not launch `/goal-advisor` automatically",
 		},
 		"engineering-review": {
-			"ENGINEERING AND OPERATIONS REVIEW",
+			"TECHNICAL REVIEW",
 			"continuing Workflow Builder conversation",
 			`"name":"workflow-commands","path":"references/ops-review.md"`,
 			"Standalone Operations Review",
@@ -200,10 +200,10 @@ func TestManualPulseCommandsKeepRunSetupReviewAndFixBoundariesSeparate(t *testin
 		},
 		"pulse-fixer": {
 			"INDEPENDENT PULSE FIXER",
-			"Do not rerun Engineering",
+			"Do not rerun Technical Review",
 			"Workflow observations are evidence",
 			"one highest-value coherent canonical repair objective",
-			"exactly one terminal result for each due Engineering/Operations module",
+			"Review completion and repair",
 		},
 	}
 
@@ -242,12 +242,15 @@ func TestStandaloneOpsReviewRunsDirectlyAndRequiresTypedCompletion(t *testing.T)
 		"Perform the review in this current background agent",
 		"record_pulse_finding",
 		"record_pulse_verification",
-		`source="ops_review"`,
+		`source="technical_review"`,
 		`human_input_id`,
 		"Never emit `decision_required` without this question",
 		"complete_pulse_review",
-		"modules=[\"llm_ops_review\"]",
+		"modules=[\"technical_review\"]",
 		"returning prose without it leaves",
+		"Execution-efficiency diagnosis",
+		"repeated context reconstruction",
+		"ops-decision-execution-efficiency-",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("standalone ops-review missing direct typed-completion contract %q", want)
@@ -1028,22 +1031,38 @@ func TestPulseSpecialistsReturnStructuredPacketsAndParentOwnsHTML(t *testing.T) 
 
 func TestStandalonePulseReviewCommandsUsePersistedReviewerPipeline(t *testing.T) {
 	for kind, module := range map[string]string{
-		"ops-review":            "llm_ops_review",
-		"strategy-auditor":      "strategy_auditor",
+		"ops-review":            "technical_review",
+		"strategy-auditor":      "strategic_review",
 		"review-artifact-drift": "artifact_review",
 	} {
 		rendered, err := renderFromRegistry(kind, tmplData{}, allKinds)
 		if err != nil {
 			t.Fatalf("render %s: %v", kind, err)
 		}
-		for _, want := range []string{
-			"call_generic_agent",
-			`module="` + module + `"`,
-			"Do not pass `pulse_run_id` or `review_run_id`",
+		wants := []string{
+			`module=` + module,
 			"SQLite",
 			"structured finding lifecycle",
 			`get_pulse_state(view="review")`,
-		} {
+		}
+		if kind == "ops-review" {
+			wants = []string{
+				"do the review directly in this agent",
+				"typed Pulse finding, verification",
+				`module=technical_review`,
+				"complete_pulse_review",
+			}
+		} else if kind == "strategy-auditor" {
+			wants = []string{
+				"perform the review directly",
+				"typed Pulse finding",
+				`module=strategic_review`,
+				"complete_pulse_review",
+			}
+		} else {
+			wants = append(wants, "Do not pass `pulse_run_id` or `review_run_id`", "call_generic_agent")
+		}
+		for _, want := range wants {
 			if !strings.Contains(rendered, want) {
 				t.Fatalf("%s missing persisted standalone-review contract %q", kind, want)
 			}

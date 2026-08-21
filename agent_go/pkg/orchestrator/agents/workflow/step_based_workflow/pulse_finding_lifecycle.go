@@ -594,6 +594,15 @@ func ensurePulseFindingLifecycleSchema(ctx context.Context, db pulseFindingLifec
 		ConcernPhaseReview, pulsemodules.LegacyStrategyAuditorID, pulsemodules.LegacyGoalAdvisorID); err != nil {
 		return err
 	}
+	if _, err := db.ExecContext(ctx, `UPDATE run_concerns SET step_id=?
+		WHERE phase=? AND step_id IN (?, ?)`, pulsemodules.TechnicalReviewID,
+		ConcernPhaseReview, pulsemodules.LegacyWorkflowReviewID, pulsemodules.LegacyLLMOpsReviewID); err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE pulse_fix_attempts SET module=? WHERE module IN (?, ?)`,
+		pulsemodules.TechnicalReviewID, pulsemodules.LegacyWorkflowReviewID, pulsemodules.LegacyLLMOpsReviewID); err != nil {
+		return err
+	}
 	if err := migratePreValidationConcernGranularity(ctx, db); err != nil {
 		return err
 	}

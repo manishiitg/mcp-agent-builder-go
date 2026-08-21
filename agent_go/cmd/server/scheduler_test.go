@@ -1129,6 +1129,9 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 		"execution-attempt-*.json",
 		"session.json",
 		"not automatic run failure",
+		"Execution-efficiency trigger",
+		"execution_efficiency",
+		"cadence-threatening run",
 	} {
 		if !strings.Contains(gate, want) {
 			t.Fatalf("gate step missing %q:\n%s", want, gate)

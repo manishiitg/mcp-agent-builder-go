@@ -39,13 +39,15 @@ type Module struct {
 // Canonical module IDs. Consumers that need compile-time constants must alias
 // these values rather than restating their string literals.
 const (
-	WorkflowReviewID  = "workflow_review"
-	LLMOpsReviewID    = "llm_ops_review"
+	TechnicalReviewID = "technical_review"
 	StrategicReviewID = "strategic_review"
 
-	// Legacy advisor IDs are accepted only at persistence/read boundaries so
-	// existing workflow databases can be migrated into StrategicReviewID. New
-	// worklists, receipts, findings, and UI projections must never emit them.
+	// Legacy review IDs are accepted only at persistence/read boundaries so
+	// existing workflow databases can be migrated into the canonical review
+	// identities. New worklists, receipts, findings, and UI projections must
+	// never emit them.
+	LegacyWorkflowReviewID  = "workflow_review"
+	LegacyLLMOpsReviewID    = "llm_ops_review"
 	LegacyStrategyAuditorID = "strategy_auditor"
 	LegacyGoalAdvisorID     = "goal_advisor"
 )
@@ -59,20 +61,18 @@ const (
 // and is part of the contract — the scheduler and UI both rely on it.
 var All = []Module{
 	{
-		// WorkflowReviewID is retained as the durable identity for Engineering
-		// Review. Artifact names are evidence packs, not reviewer perspectives:
-		// execution, report/eval implementation, plan-change impact, artifact
-		// consistency, and store-integrity defects all belong here.
-		ID:        WorkflowReviewID,
-		Label:     "Engineering review",
-		StepLabel: "workflow-review",
-		Aliases:   []string{"workflow", "review", "engineering", "engineering_review", "correctness", "correctness_review"},
-	},
-	{
-		ID:        LLMOpsReviewID,
-		Label:     "LLM & operations",
-		StepLabel: "llm-ops-review",
-		Aliases:   []string{"ops", "operations"},
+		// Technical Review is one retained reviewer sequence with an agent-chosen
+		// deep lens. Engineering correctness, store integrity, runtime operations,
+		// model/tier fitness, orchestration shape, and execution efficiency are
+		// lenses within this module rather than competing durable identities.
+		ID:        TechnicalReviewID,
+		Label:     "Technical review",
+		StepLabel: "technical-review",
+		Aliases: []string{
+			"technical", "engineering", "engineering_review", "correctness",
+			"correctness_review", "ops", "operations",
+			LegacyWorkflowReviewID, LegacyLLMOpsReviewID,
+		},
 	},
 	{
 		// Strategic Review owns both causal criticism of the current strategy
@@ -92,7 +92,7 @@ var All = []Module{
 
 // PseudoIDs are data-module values that appear in builder/improve.html but are
 // not scheduled review modules. run_summary covers Gate and run rows; fixes
-// and decisions belong to their actual Engineering, Operations, or Strategic
+// and decisions belong to their actual Technical or Strategic
 // Review source rather than a synthetic "Pulse fixer" lane.
 var PseudoIDs = []string{PseudoRunSummaryID}
 
@@ -115,8 +115,8 @@ func IsValid(id string) bool {
 	return false
 }
 
-// Normalize maps current shorthand, loosely-cased spellings, and the two
-// retired advisor identities onto a canonical ID. Callers accept the old
+// Normalize maps current shorthand, loosely-cased spellings, and retired
+// review identities onto a canonical ID. Callers accept the old
 // values for migration only; all output uses the canonical ID.
 func Normalize(module string) string {
 	module = strings.ToLower(strings.TrimSpace(module))

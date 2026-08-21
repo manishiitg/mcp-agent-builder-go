@@ -1,9 +1,9 @@
 ## Pulse Bug Review — read-only QA and execution-trace contract
 
-Load this when Engineering Review is due and runtime/logic evidence is selected.
-It is the deep read-only execution evidence pack used by Engineering Review and
+Load this when the Technical Review runtime/logic focus is selected.
+It is the deep read-only execution evidence pack used by Technical Review and
 the Review sequence before the independent Fix turn. Gate does not load it — Gate only decides whether
-`workflow_review` is due from the durable worklist recorded by Pulse Gate. The reviewer inspects and advises;
+`technical_review` is due from the durable worklist recorded by Pulse Gate. The reviewer inspects and advises;
 only the Pulse Fixer applies bounded repairs, and only for confirmed
 `correctness_bug` findings.
 
@@ -190,9 +190,8 @@ inputs as a harness issue.
 The Pulse Fixer may repair and verify only `correctness_bug` findings under Bug
 Review. It must not rewrite a step merely because another tool might have been
 faster or stylistically preferable. Route `efficiency_or_coaching` findings to
-the `llm_ops_review` evidence set: if that module is due in the current worklist,
-pass the finding to its reviewer; otherwise record one deduplicated evidence
-pointer and next-check trigger through typed Pulse tools so the next Gate makes
-LLM/Ops due. Record `no_issue` as reviewed with no action. Keep
+the `technical_review` execution-efficiency or orchestration-fitness focus. If
+that focus is not selected now, record one deduplicated evidence pointer and
+next-check trigger so a later Gate can prioritize it. Record `no_issue` as reviewed with no action. Keep
 `insufficient_evidence` visible only when it is consequential, with a concrete
 way to obtain the missing evidence.

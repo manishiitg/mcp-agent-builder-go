@@ -267,6 +267,15 @@ func TestPulseReviewFixerDocsAreNamedAndLoadable(t *testing.T) {
 			t.Errorf("no attached skill carries %s, which pulse-review-fixer tells the agent to read", want)
 		}
 	}
+	for _, want := range []string{
+		"execution_efficiency",
+		"cadence-threatening run",
+		"durable approval request",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("pulse-review-fixer is missing execution-efficiency handoff %q", want)
+		}
+	}
 }
 
 func TestEngineeringReviewUsesTheCanonicalReviewOnlySequence(t *testing.T) {
@@ -278,12 +287,12 @@ func TestEngineeringReviewUsesTheCanonicalReviewOnlySequence(t *testing.T) {
 	for _, want := range []string{
 		"continuing Workflow Builder conversation",
 		`"name":"workflow-commands","path":"references/ops-review.md"`,
-		"Standalone Operations Review",
+		"standalone wrapper",
 		"pulse_run_id=\"current\"",
 		"Own the review yourself",
 		"Persist typed findings and matured verification",
 		"Do not apply repairs",
-		"`/pulse-fixer` owns both",
+		"`/pulse-fixer` owns later mutations",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("engineering-review prompt is missing canonical sequence contract %q", want)

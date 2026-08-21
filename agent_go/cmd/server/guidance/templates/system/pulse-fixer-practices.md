@@ -200,7 +200,7 @@ consumer contract.
 
 Use this whenever a finding asks you to change `execution_tier`,
 `execution_llm`, or `declared_execution_mode`. These are cost decisions
-`llm_ops_review` owns; it is read-only, so you are the writer.
+the selected `technical_review` focus owns; it is read-only, so you are the writer.
 
 1. **Never apply one without an owning Ops finding.** These fields are not
    yours to tune opportunistically. If no finding recommends the change, the

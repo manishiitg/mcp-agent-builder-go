@@ -6,12 +6,17 @@
 |---|---|
 | Assigned agent | Codex |
 | Ticket state | `implemented` — merged lifecycle plus direct standalone execution and typed completion enforcement shipped; live post-restart/compaction verification pending |
-| Last synchronized | `2026-08-18` |
+| Last synchronized | `2026-08-21` |
 
 - **Priority:** P1 — Pulse pays for two overlapping strategic reviews, yet
   neither consistently performs the intended strategic-intelligence job:
   discovering hidden mechanisms that make the current strategy misleading and
   discovering materially better approaches outside the current plan.
+
+> **2026-08-21 focus-history extension:** PLAT-163 now applies the common
+> lightweight-scan + one-deep-focus persistence contract to
+> `strategic_review`. This does not merge Strategy into Technical Review or
+> change this ticket's strategic sequence and experiment ownership.
 - **Owner:** Pulse module registry and Gate, Review+Fix dispatch, strategic
   guidance, typed Pulse persistence, advisor experiment lifecycle, and Pulse UI
   module projection.

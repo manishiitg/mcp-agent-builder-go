@@ -100,6 +100,115 @@ func TestPulseModuleSchemaMigratesLegacyAdvisorsToNewestStrategicState(t *testin
 	}
 }
 
+func TestPulseModuleSchemaMergesLegacyEngineeringAndOpsIntoTechnicalReview(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	workspacePath := "Workflow/legacy-technical"
+	dbPath := filepath.Join(root, workspacePath, "db", "db.sqlite")
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, schema := range []string{pulseModuleStateSchema, pulseModuleAuditSchema, pulseReviewFocusStateSchema, pulseReviewFocusHistorySchema} {
+		if _, err := db.ExecContext(ctx, schema); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, row := range []struct {
+		module, runID, reason, at string
+	}{
+		{module: pulseModuleWorkflowReview, runID: "pulse-shared", reason: "engineering evidence", at: "2026-08-17T01:00:00Z"},
+		{module: pulseModuleTechnicalReview, runID: "pulse-technical-old", reason: "older canonical", at: "2026-08-17T02:00:00Z"},
+		{module: pulseModuleLLMOpsReview, runID: "pulse-shared", reason: "newest runtime evidence", at: "2026-08-18T03:00:00Z"},
+	} {
+		if _, err := db.ExecContext(ctx, `INSERT INTO pulse_module_state
+			(workspace_path,module,last_pulse_run_id,last_reason,updated_at) VALUES (?,?,?,?,?)`,
+			workspacePath, row.module, row.runID, row.reason, row.at); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx, `INSERT INTO pulse_module_audit
+			(workspace_path,module,pulse_run_id,result,reason,recorded_at) VALUES (?,?,?,?,?,?)`,
+			workspacePath, row.module, row.runID, "done", row.reason, row.at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO pulse_review_focus_state
+		(workspace_path,module,focus_key,last_pulse_run_id,last_reviewed_at,last_verdict,last_selection_reason,updated_at)
+		VALUES (?,?,?,?,?,?,?,?),(?,?,?,?,?,?,?,?)`,
+		workspacePath, pulseModuleWorkflowReview, "execution_correctness", "pulse-shared", "2026-08-17T01:00:00Z", "finding", "engineering selected it", "2026-08-17T01:00:00Z",
+		workspacePath, pulseModuleLLMOpsReview, "execution_correctness", "pulse-shared", "2026-08-18T03:00:00Z", "finding", "ops selected it later", "2026-08-18T03:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO pulse_review_focus_history
+		(workspace_path,module,pulse_run_id,focus_key,priority_class,selection_reason,recorded_at)
+		VALUES (?,?,?,?,?,?,?),(?,?,?,?,?,?,?)`,
+		workspacePath, pulseModuleWorkflowReview, "pulse-shared", "execution_correctness", "material_change", "engineering history", "2026-08-17T01:00:00Z",
+		workspacePath, pulseModuleLLMOpsReview, "pulse-shared", "execution_efficiency", "overdue", "ops history", "2026-08-18T03:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	states, err := getPulseModuleStates(ctx, workspacePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var technical *PulseModuleState
+	for i := range states {
+		if states[i].Module == pulseModuleWorkflowReview || states[i].Module == pulseModuleLLMOpsReview {
+			t.Fatalf("legacy technical module survived migration: %#v", states[i])
+		}
+		if states[i].Module == pulseModuleTechnicalReview {
+			technical = &states[i]
+		}
+	}
+	if technical == nil || technical.LastPulseRunID != "pulse-shared" || technical.LastReason != "newest runtime evidence" {
+		t.Fatalf("newest legacy technical state did not become canonical: %#v", technical)
+	}
+
+	_, db, err = openPulseModuleStateDB(ctx, workspacePath, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for table, want := range map[string]int{
+		"pulse_module_state":         1,
+		"pulse_module_audit":         2,
+		"pulse_review_focus_state":   1,
+		"pulse_review_focus_history": 2,
+	} {
+		var got int
+		query := fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE module=?`, table)
+		if err := db.QueryRowContext(ctx, query, pulseModuleTechnicalReview).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Fatalf("%s canonical rows=%d, want %d", table, got, want)
+		}
+	}
+	var focusRun, focusReason string
+	if err := db.QueryRowContext(ctx, `SELECT last_pulse_run_id,last_selection_reason FROM pulse_review_focus_state
+		WHERE workspace_path=? AND module=? AND focus_key='execution_correctness'`, workspacePath, pulseModuleTechnicalReview).Scan(&focusRun, &focusReason); err != nil {
+		t.Fatal(err)
+	}
+	if focusRun != "pulse-shared" || focusReason != "ops selected it later" {
+		t.Fatalf("newest focus state was not preserved: run=%q reason=%q", focusRun, focusReason)
+	}
+	var auditReason string
+	if err := db.QueryRowContext(ctx, `SELECT reason FROM pulse_module_audit
+		WHERE workspace_path=? AND module=? AND pulse_run_id='pulse-shared'`, workspacePath, pulseModuleTechnicalReview).Scan(&auditReason); err != nil {
+		t.Fatal(err)
+	}
+	if auditReason != "newest runtime evidence" {
+		t.Fatalf("newest same-run audit was not preserved: %q", auditReason)
+	}
+}
+
 func TestValidateReviewerVerificationDispositionsRequiresLifecycleApplication(t *testing.T) {
 	review := []step_based_workflow.PulseReviewVerificationResult{{
 		FindingID: "ISS-9", Fingerprint: "fp-9", AttemptID: "fix-9",
@@ -188,8 +297,8 @@ func TestPulseWorklistUsesWorkflowLocalDB(t *testing.T) {
 	}
 
 	recorded, err := recordPulseWorklist(ctx, workspacePath, "pulse-run-1", completePulseWorklistDecisions(map[string]PulseWorklistDecision{
-		pulseModuleWorkflowReview: {
-			Module:       pulseModuleWorkflowReview,
+		pulseModuleTechnicalReview: {
+			Module:       pulseModuleTechnicalReview,
 			Due:          true,
 			Reason:       "Latest run skipped a required step.",
 			Evidence:     []string{"runs/iteration-0/logs/step-a"},
@@ -213,11 +322,11 @@ func TestPulseWorklistUsesWorkflowLocalDB(t *testing.T) {
 	if !ok {
 		t.Fatal("get worklist ok=false, want true")
 	}
-	if got := worklist[pulseModuleWorkflowReview].LastDecision; got != "due" {
+	if got := worklist[pulseModuleTechnicalReview].LastDecision; got != "due" {
 		t.Fatalf("workflow review decision = %q, want due", got)
 	}
 
-	updated, err := markPulseModuleResult(ctx, workspacePath, pulseModuleWorkflowReview, "pulse-run-1", "changed", "Bug Review fixed the skipped step.", []string{"builder/improve.html#decision"})
+	updated, err := markPulseModuleResult(ctx, workspacePath, pulseModuleTechnicalReview, "pulse-run-1", "changed", "Bug Review fixed the skipped step.", []string{"builder/improve.html#decision"})
 	if err != nil {
 		t.Fatalf("mark result: %v", err)
 	}
@@ -225,7 +334,7 @@ func TestPulseWorklistUsesWorkflowLocalDB(t *testing.T) {
 		t.Fatalf("updated state mismatch: %+v", updated)
 	}
 
-	timedOut, err := markPulseModuleResult(ctx, workspacePath, pulseModuleWorkflowReview, "pulse-run-1", "timed_out", "Bug Review exceeded the scheduler wait limit.", []string{"scheduler timeout"})
+	timedOut, err := markPulseModuleResult(ctx, workspacePath, pulseModuleTechnicalReview, "pulse-run-1", "timed_out", "Bug Review exceeded the scheduler wait limit.", []string{"scheduler timeout"})
 	if err != nil {
 		t.Fatalf("mark timed-out result: %v", err)
 	}

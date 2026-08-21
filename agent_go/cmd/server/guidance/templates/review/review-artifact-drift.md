@@ -81,7 +81,7 @@ Load `read_skill(skills=[{"name":"builder-reference","path":"references/assumpti
 
 Return one compact review package containing:
 
-- `module=workflow_review`, `verdict`, and `next_check`
+- `module=technical_review`, `verdict`, and `next_check`
 - cursor before and proposed cursor after
 - changelog files and zero-based entry indexes fully inspected
 - affected steps inspected

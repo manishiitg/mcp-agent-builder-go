@@ -186,6 +186,10 @@ func ensurePulseReviewLogSchema(ctx context.Context, db pulseFindingLifecycleDB)
 		pulsemodules.StrategicReviewID, pulsemodules.LegacyStrategyAuditorID, pulsemodules.LegacyGoalAdvisorID); err != nil {
 		return err
 	}
+	if _, err := db.ExecContext(ctx, `UPDATE pulse_review_log SET module=? WHERE module IN (?, ?)`,
+		pulsemodules.TechnicalReviewID, pulsemodules.LegacyWorkflowReviewID, pulsemodules.LegacyLLMOpsReviewID); err != nil {
+		return err
+	}
 	return nil
 }
 
