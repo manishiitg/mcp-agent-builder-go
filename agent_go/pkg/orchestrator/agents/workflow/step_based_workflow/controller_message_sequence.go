@@ -1274,8 +1274,11 @@ func (hcpo *StepBasedWorkflowOrchestrator) setupMessageSequenceFolderGuard(stepP
 	// message_sequence agents use query_workflow_db/mutate_workflow_db, so
 	// db/db.sqlite itself stays off the filesystem grant: configureWorkflowDBSession
 	// blocks it for managed agents, and Landlock cannot represent a broad parent
-	// allow with a narrower child deny because its rules are additive (PLAT-169
-	// follow-up). db/assets/ is a sibling of db.sqlite, not a child of it, so
+	// allow with a narrower child deny because its rules are additive (introduced
+	// in commit a960df20 -- no PLAT ticket was filed for it; an earlier version
+	// of this comment mislabeled it "PLAT-169 follow-up", a real but unrelated
+	// ticket about MCP server checkbox spelling, corrected here as part of
+	// PLAT-175). db/assets/ is a sibling of db.sqlite, not a child of it, so
 	// granting it directly doesn't reopen that conflict -- and it has to be
 	// granted, because it's the only durable location a step can write an
 	// arbitrary file to (stores.md), and mutate_workflow_db is SQL-only and

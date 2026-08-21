@@ -322,11 +322,13 @@ func TestMessageSequenceItemUsesManagedDBToolsWithoutRawDBFilesystemAccess(t *te
 		DB: true, Knowledgebase: true, Learnings: true,
 	})
 	allPaths := strings.Join(append(append([]string{}, readPaths...), writePaths...), "\n")
-	// PLAT-169's actual concern was db/db.sqlite reachable via shell (Landlock
-	// can't allow the parent and deny just that one file). db/assets/ is a
-	// sibling, not a child, of db.sqlite, and is deliberately granted below
-	// (PLAT-175) -- so the guard here is specifically the sqlite file and any
-	// other db/ path OUTSIDE assets/, not "db/" as a substring.
+	// The actual concern (commit a960df20, not PLAT-169 -- that ticket is
+	// unrelated, an earlier version of this comment mislabeled it) was
+	// db/db.sqlite reachable via shell (Landlock can't allow the parent and
+	// deny just that one file). db/assets/ is a sibling, not a child, of
+	// db.sqlite, and is deliberately granted below (PLAT-175) -- so the guard
+	// here is specifically the sqlite file and any other db/ path OUTSIDE
+	// assets/, not "db/" as a substring.
 	if strings.Contains(allPaths, "db.sqlite") {
 		t.Fatalf("message-sequence item unexpectedly received raw db.sqlite filesystem access: %v", writePaths)
 	}
@@ -349,7 +351,7 @@ func TestMessageSequenceItemUsesManagedDBToolsWithoutRawDBFilesystemAccess(t *te
 // .source_sha to compare, then add/overwrite/remove files and rewrite
 // .source_sha and _manifest.json. mutate_workflow_db is SQL-only and cannot
 // do this. Before this fix, setupMessageSequenceFolderGuard granted nothing
-// under db/ at all (PLAT-169's follow-up dropped the whole folder instead of
+// under db/ at all (commit a960df20 dropped the whole folder instead of
 // narrowing to just db.sqlite), so this step had no legal path to do the one
 // thing its own instructions require every run -- silently, since nothing
 // upstream had changed on the runs where it was checked.

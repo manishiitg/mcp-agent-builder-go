@@ -14,9 +14,14 @@
   first, as a concern, before any file operation failed loudly.
 - **Owner:** `pkg/orchestrator/agents/workflow/step_based_workflow/controller_message_sequence.go`
   (`setupMessageSequenceFolderGuard`).
-- **Related:** [PLAT-169](plat-169.md) (the original fix this over-corrects
-  from — its own issue was real and stays fixed; only the collateral scope
-  is narrowed here).
+- **Related:** none filed. The code comment this fix rewrites cited
+  "PLAT-169 follow-up" as the origin of the `db/` block being narrowed here
+  — that citation was wrong. [PLAT-169](plat-169.md) is a real, unrelated
+  ticket (MCP server checkbox spelling/dedup). The actual `db/` block was
+  introduced by commit `a960df20` ("Fix message sequence sandbox and
+  duplicate failures", 2026-08-21), which has no PLAT ticket of its own —
+  the mislabel is corrected in both the code comment and here, rather than
+  leaving a false cross-reference for the next reader to trust.
 
 ## The incident
 
@@ -53,11 +58,11 @@ to both read and (when write-eligible) write paths — this covers
 under `db/` at all. Its own comment explained why, correctly, for one specific
 concern: `configureWorkflowDBSession` blocks raw `db.sqlite` filesystem
 access for managed agents, and Landlock's rules are additive, so it cannot
-express "allow the `db/` parent, deny only the `db.sqlite` child" — PLAT-169's
-follow-up therefore dropped the parent grant (`db/`) entirely to sidestep
+express "allow the `db/` parent, deny only the `db.sqlite` child" — commit
+`a960df20` therefore dropped the parent grant (`db/`) entirely to sidestep
 that conflict.
 
-That fix was correct about `db.sqlite`. It was too broad about `db/`:
+That change was correct about `db.sqlite`. It was too broad about `db/`:
 `db/assets/` is a **sibling** of `db.sqlite`, not a child of it — granting
 `db/assets/` directly does not require also allowing `db.sqlite`, so it never
 needed to be part of the same trade-off. Dropping the whole `db/` grant to
@@ -71,13 +76,14 @@ unintended collateral, for every `message_sequence` step, not just this one.
 `readPaths` and `writePaths`, unconditionally (matching `resolveDBAccess`'s
 existing uniform-access design: every step gets managed DB read-write, so
 there is no separate access level to gate this on). `db.sqlite` itself
-remains ungranted; PLAT-169's actual fix is untouched.
+remains ungranted; commit `a960df20`'s actual fix (blocking raw `db.sqlite`
+filesystem access) is untouched.
 
 ## Deliberately not done
 
 - **Not restoring full `db/` filesystem access for message_sequence steps.**
-  That would reopen exactly the conflict PLAT-169 fixed. `db/assets/` is
-  narrow enough to avoid it because it never shared a Landlock rule with
+  That would reopen exactly the Landlock conflict `a960df20` fixed. `db/assets/`
+  is narrow enough to avoid it because it never shared a Landlock rule with
   `db.sqlite` in the first place.
 - **Not writing up this asymmetry in a design doc as part of this pass.**
   Checked `docs/workflow/persistent_stores_design.md` §3 and
@@ -96,10 +102,11 @@ remains ungranted; PLAT-169's actual fix is untouched.
   reverting only the production change via a scoped `git stash` and
   re-running.
 - `TestMessageSequenceItemUsesManagedDBToolsWithoutRawDBFilesystemAccess` —
-  existing PLAT-169 regression test, narrowed from a blanket `"/db"` substring
-  check (which would now incorrectly flag the legitimate `db/assets/` grant)
-  to specifically checking for `db.sqlite` and any `db/` path outside
-  `assets/`. Still passes, still catches the original PLAT-169 failure mode.
+  existing regression test for commit `a960df20`'s `db.sqlite` block, narrowed
+  from a blanket `"/db"` substring check (which would now incorrectly flag the
+  legitimate `db/assets/` grant) to specifically checking for `db.sqlite` and
+  any `db/` path outside `assets/`. Still passes, still catches the original
+  failure mode.
 - Full `message_sequence`-prefixed test set (31 tests) and the full
   `step_based_workflow` package pass, with the one pre-existing, unrelated
   failure already tracked elsewhere in this register
@@ -114,7 +121,7 @@ upstream context repo has genuinely changed.
 
 - [x] `message_sequence` steps can read and write `db/assets/` via shell.
 - [x] `message_sequence` steps still cannot reach `db/db.sqlite` via shell
-      (PLAT-169's guarantee holds).
+      (commit `a960df20`'s guarantee holds).
 - [ ] Live: `survey-app-and-refresh-knowledge` successfully syncs
       `db/assets/business-context/` on a cycle where the upstream repo
       actually changed.
