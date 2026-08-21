@@ -19,6 +19,7 @@ func TestEverySpendingStageCarriesTheApprovalGate(t *testing.T) {
 		"longform-narration":   true,
 		"longform-generate":    true,
 		"shortform-characters": true,
+		"shortform-narration":  true,
 		"shortform-generate":   true,
 	}
 
@@ -45,15 +46,19 @@ func TestEverySpendingStageCarriesTheApprovalGate(t *testing.T) {
 	}
 }
 
-func TestShortformStagesPutApprovedCharactersBeforeShots(t *testing.T) {
+func TestShortformStagesPutDirectionAndMeasuredNarrationBeforeShots(t *testing.T) {
 	index := map[string]int{}
 	for i, stage := range shortformPipeline.Stages {
 		index[stage.ID] = i
 	}
 	for _, ordered := range [][2]string{
 		{"shortform-script", "shortform-characters"},
-		{"shortform-characters", "shortform-shotlist"},
+		{"shortform-characters", "shortform-look-sound"},
+		{"shortform-look-sound", "shortform-narration"},
+		{"shortform-narration", "shortform-shotlist"},
 		{"shortform-shotlist", "shortform-generate"},
+		{"shortform-generate", "shortform-assemble"},
+		{"shortform-assemble", "shortform-check"},
 	} {
 		before, after := ordered[0], ordered[1]
 		if index[before] >= index[after] {
@@ -70,6 +75,41 @@ func TestShortformStagesPutApprovedCharactersBeforeShots(t *testing.T) {
 	for _, forbidden := range []string{"HyperFrames", "HTML panels", "infographic route"} {
 		if !strings.Contains(generate, forbidden) {
 			t.Fatalf("short-form generation does not explicitly reject %q", forbidden)
+		}
+	}
+
+	lookSound := shortformPipeline.Stages[index["shortform-look-sound"]].Description
+	for _, required := range []string{"locations and backgrounds", "wardrobe", "lighting", "palette", "accent", "music", "ambience", "sound-effects", "captions", "separate TTS narration", "Never silently turn"} {
+		if !strings.Contains(lookSound, required) {
+			t.Fatalf("short-form look/sound step is missing %q", required)
+		}
+	}
+
+	narration := shortformPipeline.Stages[index["shortform-narration"]].Description
+	for _, required := range []string{"ffprobe", "REAL measured duration", "Missing, unreadable, silent, or unmeasured", "Instructional narration is not optional"} {
+		if !strings.Contains(narration, required) {
+			t.Fatalf("short-form narration step is missing %q", required)
+		}
+	}
+
+	shotlist := shortformPipeline.Stages[index["shortform-shotlist"]].Description
+	for _, required := range []string{"shortform-look-sound.md", "shortform-narration.md", "MEASURED", "Never fit narration"} {
+		if !strings.Contains(shotlist, required) {
+			t.Fatalf("short-form shot list is missing %q", required)
+		}
+	}
+
+	assemble := shortformPipeline.Stages[index["shortform-assemble"]].Description
+	for _, required := range []string{"required narration segment", "Cut visuals to the measured narration timeline", "music, ambience, sound effects, and captions"} {
+		if !strings.Contains(assemble, required) {
+			t.Fatalf("short-form assembly is missing %q", required)
+		}
+	}
+
+	check := shortformPipeline.Stages[index["shortform-check"]].Description
+	for _, required := range []string{"missing or silent narration is a deterministic failure", "may not be marked not_applicable", "narration_alignment"} {
+		if !strings.Contains(check, required) {
+			t.Fatalf("short-form QA is missing %q", required)
 		}
 	}
 }
