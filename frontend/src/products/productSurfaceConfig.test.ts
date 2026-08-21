@@ -12,22 +12,24 @@ afterEach(() => {
 
 describe('product surface deployment configuration', () => {
   it('keeps the complete product suite when no deployment allowlist is configured', () => {
-    expect(enabledProductSurfaces()).toEqual(['agentworks', 'video-studio', 'finance'])
+    expect(enabledProductSurfaces()).toEqual(['agentworks', 'video-studio', 'finance', 'dominion'])
     expect(deploymentDefaultProductSurface()).toBe('agentworks')
     expect(isSingleProductDeployment()).toBe(false)
   })
 
-  it('constrains a Video Studio host to Video Studio and ignores an invalid default', () => {
+  it('constrains the dedicated host to AgentWorks and Video Studio', () => {
     vi.stubGlobal('window', {
       __APP_RUNTIME_CONFIG__: {
-        defaultProductSurface: 'finance',
-        enabledProductSurfaces: ['video-studio'],
+        defaultProductSurface: 'video-studio',
+        enabledProductSurfaces: ['agentworks', 'video-studio'],
       },
     })
 
-    expect(enabledProductSurfaces()).toEqual(['video-studio'])
+    expect(enabledProductSurfaces()).toEqual(['agentworks', 'video-studio'])
     expect(deploymentDefaultProductSurface()).toBe('video-studio')
-    expect(isEnabledProductSurface('agentworks')).toBe(false)
-    expect(isSingleProductDeployment()).toBe(true)
+    expect(isEnabledProductSurface('agentworks')).toBe(true)
+    expect(isEnabledProductSurface('finance')).toBe(false)
+    expect(isEnabledProductSurface('dominion')).toBe(false)
+    expect(isSingleProductDeployment()).toBe(false)
   })
 })

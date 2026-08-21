@@ -1,6 +1,10 @@
 # Video Studio — Linux / EC2 Deployment Runbook
 
-This is the isolated public Video Studio deployment.
+This is the isolated public Video Studio deployment. It has one fixed product
+contract: the shared AgentWorks platform and the Video Studio surface are
+always present; Finance, Dominion, and other product surfaces are not exposed,
+and only the `video-studio` backend product is loaded. The release script
+validates both allowlists before every deployment.
 
 - URL: `https://video.realtrainingsys.com`
 - Region: `us-west-2`

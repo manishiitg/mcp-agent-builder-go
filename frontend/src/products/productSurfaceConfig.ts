@@ -1,4 +1,4 @@
-export const PRODUCT_SURFACES = ['agentworks', 'video-studio', 'finance'] as const
+export const PRODUCT_SURFACES = ['agentworks', 'video-studio', 'finance', 'dominion'] as const
 
 export type ProductSurface = (typeof PRODUCT_SURFACES)[number]
 

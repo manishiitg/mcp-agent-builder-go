@@ -15,6 +15,7 @@ import { ModePresetBar } from "./components/ModePresetBar";
 import { useAppStore, useMCPStore, useGlobalPresetStore, useWorkflowStore, useChatStore } from "./stores";
 import { useModeStore } from "./stores/useModeStore";
 import { useProductSurfaceStore } from "./stores/useProductSurfaceStore";
+import { deploymentDefaultProductSurface, isEnabledProductSurface } from "./products/productSurfaceConfig";
 import { useLLMStore } from "./stores/useLLMStore";
 import { normalizeEventViewMode, waitForChatStoreHydration, type ChatTab } from "./stores/useChatStore";
 import { useLLMDefaults } from "./hooks/useLLMDefaults";
@@ -90,6 +91,16 @@ const hasOpenWorkspaceCollapsingPopup = () => {
 
 function App() {
   const productSurface = useProductSurfaceStore(state => state.productSurface)
+  const setProductSurface = useProductSurfaceStore(state => state.setProductSurface)
+
+  // A dedicated deployment is an allowlist, not a visual preference. Correct
+  // persisted desktop selections before rendering so a stale Finance or
+  // Dominion choice cannot expose a product disabled on this host.
+  useEffect(() => {
+    if (!isEnabledProductSurface(productSurface)) {
+      setProductSurface(deploymentDefaultProductSurface())
+    }
+  }, [productSurface, setProductSurface])
 
   // Store subscriptions
   const { hasCompletedInitialSetup, selectedModeCategory, setModeCategory, completeInitialSetup } = useModeStore(useShallow(state => ({

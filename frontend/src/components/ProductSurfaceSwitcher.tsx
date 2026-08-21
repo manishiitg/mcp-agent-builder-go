@@ -6,6 +6,7 @@ import { FinanceMark } from '../products/finance/FinanceMark'
 import { DominionMark } from '../products/dominion/DominionMark'
 import { useProductSurfaceStore, type ProductSurface } from '../stores/useProductSurfaceStore'
 import { useAppStore } from '../stores/useAppStore'
+import { isEnabledProductSurface } from '../products/productSurfaceConfig'
 import { cn } from '../lib/utils'
 
 type ProductSurfaceSwitcherProps = {
@@ -29,12 +30,18 @@ const products: Array<{
   { id: 'dominion', label: 'Dominion', description: 'Paper-trading watchlist and portfolio', icon: DominionMark },
 ]
 
+export function visibleProductSurfaceIDs(): ProductSurface[] {
+  return products.filter((product) => isEnabledProductSurface(product.id)).map((product) => product.id)
+}
+
 export function ProductSurfaceSwitcher({ className, version }: ProductSurfaceSwitcherProps) {
   const productSurface = useProductSurfaceStore((state) => state.productSurface)
   const setProductSurface = useProductSurfaceStore((state) => state.setProductSurface)
   const [open, setOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
-  const currentProduct = products.find((product) => product.id === productSurface) ?? products[0]
+  const visibleProductIDs = visibleProductSurfaceIDs()
+  const visibleProducts = products.filter((product) => visibleProductIDs.includes(product.id))
+  const currentProduct = visibleProducts.find((product) => product.id === productSurface) ?? visibleProducts[0] ?? products[0]
   const CurrentIcon = currentProduct.icon
 
   const activateProduct = (product: ProductSurface) => {
@@ -84,7 +91,7 @@ export function ProductSurfaceSwitcher({ className, version }: ProductSurfaceSwi
       </button>
       {open ? (
         <div role="menu" aria-label="Products" className="absolute left-0 top-[calc(100%+8px)] z-50 w-64 rounded-2xl border border-slate-200 bg-white p-1.5 shadow-2xl shadow-slate-950/15 dark:border-slate-700 dark:bg-slate-900">
-          {products.map((product) => {
+          {visibleProducts.map((product) => {
             const active = productSurface === product.id
             const Icon = product.icon
             return (
