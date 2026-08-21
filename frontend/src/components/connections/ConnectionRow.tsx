@@ -48,7 +48,7 @@ export default function ConnectionRow({
 
   return (
     <>
-      <div className="group grid grid-cols-[1fr_auto_auto] items-center gap-4 rounded-lg px-3 py-2.5 transition-colors hover:bg-gray-50 dark:hover:bg-slate-700/40">
+      <div className="group grid grid-cols-[1fr_6rem_10rem] items-center gap-4 rounded-lg px-3 py-2.5 transition-colors hover:bg-gray-50 dark:hover:bg-slate-700/40">
         {/* Connector — opens the connection's own page */}
         <button
           type="button"
@@ -67,14 +67,14 @@ export default function ConnectionRow({
         </button>
 
         {/* Type */}
-        <span className="w-16 text-sm text-gray-500 dark:text-gray-400">
+        <span className="text-sm text-gray-500 dark:text-gray-400">
           {TRANSPORT_LABELS[transport]}
         </span>
 
         {/* Status / action */}
-        <div className="flex w-36 items-center justify-end gap-1">
+        <div className="flex items-center justify-end">
           {blockedLabel ? (
-            <span className="text-xs text-gray-400 dark:text-gray-500">{blockedLabel}</span>
+            <span className="text-sm text-gray-400 dark:text-gray-500">{blockedLabel}</span>
           ) : isConnected ? (
             // The Status column states the state; Disconnect lives in the
             // overflow menu so this column stays readable down the page.
