@@ -56,6 +56,23 @@ not as a second separate interview later.
 Write the resolved answers into `production.json` so a revision does not
 re-ask what was already decided.
 
+## Character references: the user chooses before the first image
+
+When a recurring character, presenter, or product needs a generated reference,
+do not treat the general provider preference as permission to choose its model.
+Before the reference-image call, present at most three live-verified choices
+that can actually condition later video shots on the reference. For each give
+the exact provider/model, why it fits the subject, the relevant controls or
+limits, and current billing evidence. Recommend one, but wait for the user to
+select a named option and approve the reference-pack spend. Record that choice,
+the pack size, retry allowance, and billing evidence alongside the character.
+
+The selected provider/model is the character arc's default: every later shot
+with that subject uses it and the approved reference unless the user explicitly
+approves a change. This is deliberately before shot planning and before any
+paid media generation; a reference made on an unchosen model is already sunk
+cost and can lock the production into the wrong continuity path.
+
 ## Present a costed choice before spending
 
 Before the first paid generation, give the user at most three viable model

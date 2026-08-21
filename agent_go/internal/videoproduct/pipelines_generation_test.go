@@ -61,7 +61,7 @@ func TestShortformStagesPutApprovedCharactersBeforeShots(t *testing.T) {
 		}
 	}
 	characters := shortformPipeline.Stages[index["shortform-characters"]].Description
-	for _, required := range []string{"budget", "recommended", "premium", "explicitly approved", "separately from video-per-second cost"} {
+	for _, required := range []string{"budget", "recommended", "premium", "explicitly approved", "separately from video-per-second cost", "NEVER silently select it", "selected provider/model"} {
 		if !strings.Contains(characters, required) {
 			t.Fatalf("short-form character step is missing %q", required)
 		}
@@ -70,6 +70,34 @@ func TestShortformStagesPutApprovedCharactersBeforeShots(t *testing.T) {
 	for _, forbidden := range []string{"HyperFrames", "HTML panels", "infographic route"} {
 		if !strings.Contains(generate, forbidden) {
 			t.Fatalf("short-form generation does not explicitly reject %q", forbidden)
+		}
+	}
+}
+
+func TestCharacterModelIsUserSelectedBeforeAnyReferenceSpend(t *testing.T) {
+	for _, pipeline := range []*Pipeline{longformPipeline, shortformPipeline} {
+		var characters, shotlist string
+		for _, stage := range pipeline.Stages {
+			switch stage.ID {
+			case pipeline.ID + "-characters":
+				characters = stage.Description
+			case pipeline.ID + "-shotlist":
+				shotlist = stage.Description
+			}
+		}
+		for _, required := range []string{
+			"live-verified viable character-model choices",
+			"NEVER silently select it",
+			"selected provider/model",
+			"explicit approval to spend",
+			"show_character",
+		} {
+			if !strings.Contains(characters, required) {
+				t.Fatalf("%s character stage is missing %q", pipeline.ID, required)
+			}
+		}
+		if !strings.Contains(shotlist, "explicitly approves its displayed reference") {
+			t.Fatalf("%s shot list can proceed without explicit approval of the displayed character reference", pipeline.ID)
 		}
 	}
 }

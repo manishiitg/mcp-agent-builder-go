@@ -36,12 +36,18 @@ do, and running in chat does not mean skipping what those gates are for. It
 means you hold them yourself. Stop at each checkpoint and let the user
 answer before spending:
 
-1. **Before the first paid call**, resolve the production-level unknowns in
-   `video-model-selection`: which provider keys actually exist, whether any
-   character or product must recur across shots, roughly how many paid calls
-   the piece implies and any cost ceiling, and how many re-prompts a
-   disappointing shot gets. Ask these together, once, in plain language --
-   this is the one place a short interview is worth more than a good guess.
+1. **Before the first paid call, choose characters first.** Resolve whether
+   any character, presenter, or product must recur across shots. If so, write
+   its visual spec, then present at most three live-verified character-model
+   choices from `video-model-selection`. State the exact provider/model,
+   why it fits the subject, relevant controls, and current billing evidence.
+   Recommend one but do not choose silently: wait for the user to name a
+   model and approve the stated reference-pack spend. That model/provider is
+   then committed to the subject's whole arc unless the user explicitly
+   changes it. In the same compact question resolve which provider keys
+   actually exist, the cost ceiling or maximum paid calls, and the retry
+   allowance. If no subject recurs, record that characters are not applicable
+   rather than inventing one.
 2. **Show the plan before building it.** When the script and shot list
    exist, call `show_document` for each so the user reads what they are
    paying for. A shot list is cheap to change and expensive to regret.
