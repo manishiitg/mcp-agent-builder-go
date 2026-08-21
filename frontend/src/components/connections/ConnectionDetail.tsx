@@ -249,7 +249,7 @@ export default function ConnectionDetail({
       )}
 
       {/* Tool permissions */}
-      <section className="mx-auto w-full max-w-2xl">
+      <section>
         <div className="mb-1 flex items-center justify-between gap-2">
           <h4 className="text-sm font-medium text-gray-900 dark:text-gray-100">
             Tool permissions
