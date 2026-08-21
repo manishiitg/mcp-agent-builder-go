@@ -76,6 +76,12 @@ type CatalogEntry struct {
 	Headers map[string]string `json:"headers,omitempty"`
 
 	// OAuth (auth=oauth_app)
+	//
+	// ClientID is a PUBLIC, pre-registered client id that the provider itself
+	// publishes for general use — Slack ships one with its own MCP plugin. It
+	// removes the setup step entirely. It is never a secret: anything requiring
+	// confidentiality belongs in ClientSecretEnv.
+	ClientID        string   `json:"client_id,omitempty"`
 	AuthURL         string   `json:"auth_url,omitempty"`
 	TokenURL        string   `json:"token_url,omitempty"`
 	Scopes          []string `json:"scopes,omitempty"`
@@ -237,6 +243,10 @@ func transportKind(url, command string) string {
 // before this entry can be connected at all.
 func entrySetupRequired(e *CatalogEntry) bool {
 	if e.Auth != authOAuthApp {
+		return false
+	}
+	// A client id published by the provider needs no setup from anyone.
+	if e.ClientID != "" {
 		return false
 	}
 	if e.ClientIDEnv == "" {
@@ -510,7 +520,12 @@ func buildServerConfig(entry *CatalogEntry, userTokenFile string, token string) 
 		cfg.Env = env
 
 	case authOAuthApp:
+		// An operator's own app takes precedence, so a deployment can present
+		// its own name on the consent screen instead of the published client's.
 		clientID := os.Getenv(entry.ClientIDEnv)
+		if clientID == "" {
+			clientID = entry.ClientID
+		}
 		if clientID == "" {
 			return cfg, fmt.Errorf("setup_required: %s is not configured on this server", entry.ClientIDEnv)
 		}
