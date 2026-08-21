@@ -20,10 +20,11 @@ Use `{{.RunFolder}}` as the primary retained run.{{end}}
    chat. Call `record_pulse_worklist` exactly once with `mode="backlog_drain"`
    and a concrete `mode_reason`: `technical_review` is due and
    `strategic_review` is deferred with an explicit next-check boundary. Read
-   `get_pulse_review_focus_agenda(module="technical_review")`, perform a
-   lightweight scan for critical regressions, matured verification, and
-   answered decisions, and choose exactly one deep technical focus using
-   priority plus durable rotation history. Then read the retained backlog, pending verification,
+   `get_pulse_review_focus_agenda(module="technical_review", route_scope=<relevant route>)`, perform a
+   lightweight scan for critical regressions, matured verification, answered
+   decisions, plan routes, and retained run selectors, then choose the smallest
+   sufficient route-aware technical focus set using priority plus durable
+   rotation history. Route size is evidence, not a mechanical quota. Then read the retained backlog, pending verification,
    `get_pulse_state(view="backlog", detail="compact")` exactly once, plus the
    latest meaningful run evidence, plan/store state, and cost/runtime evidence.
    Select relevant issue/observation IDs from that bounded index, then request

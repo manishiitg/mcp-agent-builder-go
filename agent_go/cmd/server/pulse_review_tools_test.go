@@ -103,7 +103,8 @@ func TestPulseReviewFocusToolsPersistDurableAgenda(t *testing.T) {
 
 	raw, err := record(ctx, map[string]interface{}{
 		"workspace_path": workspacePath, "pulse_run_id": pulseRunID, "module": pulseModuleTechnicalReview,
-		"focus_key": "schedule_capacity_recovery", "priority_class": "overdue", "selection_reason": "This lens has not been reviewed since the timeout recurrence.",
+		"route_scope": "daily-execution/small-route",
+		"focus_key":   "schedule_capacity_recovery", "priority_class": "overdue", "selection_reason": "This lens has not been reviewed since the timeout recurrence.",
 		"verdict": "Observer now has a targeted recheck.", "evidence": []interface{}{"runs/iteration-0/execution/attempt.json"},
 		"issue_ids": []interface{}{"PUL-AB12CD34"}, "deferred_focuses": []interface{}{"tool_runtime_reliability"},
 		"next_check_at": "2026-08-21T00:00:00Z", "next_check_reason": "next producing run",
@@ -115,15 +116,36 @@ func TestPulseReviewFocusToolsPersistDurableAgenda(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &stored); err != nil || stored.LastReviewedAt == "" || stored.FocusKey != "schedule_capacity_recovery" {
 		t.Fatalf("stored focus=%#v decode_err=%v raw=%s", stored, err, raw)
 	}
-	raw, err = agenda(ctx, map[string]interface{}{"workspace_path": workspacePath, "module": pulseModuleTechnicalReview})
+	if stored.RouteScope != "daily-execution/small-route" {
+		t.Fatalf("stored route scope = %q", stored.RouteScope)
+	}
+	if _, err := record(ctx, map[string]interface{}{
+		"workspace_path": workspacePath, "pulse_run_id": pulseRunID, "module": pulseModuleTechnicalReview,
+		"route_scope": "daily-execution/large-route",
+		"focus_key":   "execution_efficiency", "priority_class": "new_or_changed", "selection_reason": "The larger route has distinct payload amplification evidence.",
+		"verdict": "The large route needs a bounded repair.", "evidence": []interface{}{"runs/iteration-1/costs/execution.json"},
+	}); err != nil {
+		t.Fatalf("record second route focus: %v", err)
+	}
+	raw, err = agenda(ctx, map[string]interface{}{"workspace_path": workspacePath, "module": pulseModuleTechnicalReview, "route_scope": "daily-execution/small-route"})
 	if err != nil {
 		t.Fatalf("read agenda: %v", err)
 	}
 	var response struct {
 		Focuses []PulseReviewFocus `json:"focuses"`
 	}
-	if err := json.Unmarshal([]byte(raw), &response); err != nil || len(response.Focuses) != len(pulseReviewFocusCatalog[pulseModuleTechnicalReview]) || response.Focuses[0].LastReviewedAt != "" {
+	if err := json.Unmarshal([]byte(raw), &response); err != nil || len(response.Focuses) != len(pulseReviewFocusCatalog[pulseModuleTechnicalReview]) {
 		t.Fatalf("agenda=%#v decode_err=%v raw=%s", response, err, raw)
+	}
+	counts := map[string][2]int{}
+	for _, focus := range response.Focuses {
+		counts[focus.FocusKey] = [2]int{focus.ReviewCount, focus.RouteReviewCount}
+	}
+	if counts["schedule_capacity_recovery"] != [2]int{1, 1} {
+		t.Fatalf("small-route schedule counts = %v", counts["schedule_capacity_recovery"])
+	}
+	if counts["execution_efficiency"] != [2]int{1, 0} {
+		t.Fatalf("small-route execution counts = %v", counts["execution_efficiency"])
 	}
 }
 

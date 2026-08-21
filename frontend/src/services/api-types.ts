@@ -472,10 +472,12 @@ export interface PulseReviewFocus {
   last_reviewed_at?: string
   last_verdict?: string
   last_selection_reason?: string
+  route_scope?: string
   next_check_at?: string
   next_check_reason?: string
   updated_at: string
   review_count?: number
+  route_review_count?: number
   deferred_focuses?: string[]
 }
 
@@ -507,6 +509,7 @@ export interface PulseModuleStateResponse {
   commands: PulseFinalCommandState[]
   gate_mode?: PulseRunMode | null
   review_focus_history?: PulseReviewFocus[]
+  review_focus_selections?: PulseReviewFocus[]
   shadow_signal_observations?: PulseShadowSignalObservation[]
   shadow_signal_coverage?: {
     status: string

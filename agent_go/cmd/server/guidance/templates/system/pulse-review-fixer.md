@@ -44,9 +44,10 @@ authoritative clock; durable SQLite `recorded_at` values remain the final
 timeline for lifecycle decisions.
 
 Before each due technical or strategic deep review, read
-`get_pulse_review_focus_agenda` for that module. Do a lightweight safety scan
-for critical regressions, matured verification, and answered unapplied
-decisions, then choose exactly one coherent deep focus. Rotation is agentic:
+`get_pulse_review_focus_agenda` for that module and each materially relevant
+route scope. Do a lightweight safety scan for critical regressions, matured
+verification, answered unapplied decisions, plan routes, and retained run
+selectors, then choose the smallest sufficient coherent focus set. Rotation is agentic:
 the compact agenda informs judgment but does not require blind round-robin.
 For `technical_review`, use `execution_efficiency` as that focus when Gate cites
 a cadence-threatening run or evidence of repeated context, payload, retry, or
@@ -55,10 +56,15 @@ not a generic cost summary. If the smallest safe repair changes plan topology,
 step type, route ownership, retry semantics, public-action ordering, or a
 safety boundary, the Operations turn creates a durable approval request; the
 Fixer must not make that structural choice on its own.
-When that module's review is complete, call `record_pulse_review_focus` exactly
-once with the focus key, priority class, selection reason, compact evidence
-references, and deferred focus keys. This is durable coverage history for the
-next Pulse pass; the Markdown checkpoint remains only this run's notebook.
+When that module's review is complete, call `record_pulse_review_focus` once for
+every focus actually investigated, including its stable route/group/sub-workflow
+scope unless the conclusion is genuinely workflow-wide. Record the priority
+class, selection reason, compact evidence references, and deferred focus keys.
+There is no mechanical focus quota: a small route may justify one, while
+distinct large routes may justify several. Stop when another focus would repeat
+evidence or could not change a decision, repair, or next check. This is durable
+coverage history for the next Pulse pass; the Markdown checkpoint remains only
+this run's notebook.
 
 1. **Prior verification + Technical Review** — verify every retained repair
    whose evidence boundary arrived, then inspect runtime correctness,
@@ -93,7 +99,7 @@ next Pulse pass; the Markdown checkpoint remains only this run's notebook.
 4. **Classify observations** — for every selected workflow observation, link it
    to an existing issue, promote it with evidence, or reject it as non-issue.
 5. **Persist review state** — write typed findings and verification evidence,
-   record exactly one selected focus, and write exactly one terminal
+   record every selected route-aware focus, and write exactly one terminal
    `technical_review` receipt. Do not modify implementation files. The
    independent Fix turn owns mutations and repair outcome, never review
    completion.
@@ -104,8 +110,9 @@ works.
 
 When `strategic_review` is due, launch one separate executor sequence:
 
-1. **Focus + prior verification** — read the strategic focus agenda, do the
-   lightweight safety/evidence scan, choose exactly one deep focus, verify
+1. **Focus + prior verification** — read the strategic focus agenda for the
+   relevant route scopes, do the lightweight safety/evidence scan, choose the
+   smallest sufficient focus set, verify
    retained strategic work, then test the selected area for feedback loops, selection bias, observation
    contamination, proxy optimization, concentration, saturation, and local
    optima across comparable runs.
@@ -114,7 +121,7 @@ When `strategic_review` is due, launch one separate executor sequence:
    Omit this message in audit-only and backlog-drain passes.
 3. **Critic and conclusion** — choose exactly one of `keep`, `improve`,
    `propose_alternative`, `experiment`, or `evidence_wait`.
-4. **Persist** — record exactly one strategic focus, write typed strategic
+4. **Persist** — record every investigated strategic focus with route scope, write typed strategic
    findings/decisions/impact records, then write the terminal
    `strategic_review` receipt.
 

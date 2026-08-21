@@ -18,11 +18,13 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
    `read_skill(skills=[{"name":"builder-reference","path":"references/llm-selection.md"}])`.
    Work from these references yourself. Findings are persisted through typed
    Pulse tools; do not create a Markdown or HTML review artifact.
-   Read `get_pulse_review_focus_agenda(module="technical_review")`, perform a
-   lightweight scan for critical regressions, matured verification, and
-   answered decisions, then select exactly one deep technical focus. The
-   `/ops-review` alias suggests an operations focus, but a higher-priority
-   technical signal may preempt it.
+   Read `get_pulse_review_focus_agenda(module="technical_review", route_scope=<relevant route>)`, perform a
+   lightweight scan for critical regressions, matured verification, answered
+   decisions, plan routes, and retained run selectors, then select the smallest
+   sufficient route-aware technical focus set. A small route may need one;
+   distinct large routes may justify several when each has separate evidence
+   and decision value. The `/ops-review` alias suggests an operations focus,
+   but a higher-priority technical signal may preempt it.
 2. Inspect the current trustworthy Goal verdict, resolved workflow/step/eval
    LLM configuration, actual model/tier use, fallbacks, cost ledgers, token
    usage, timing summaries, representative conversation/tool traces, retained
@@ -220,8 +222,9 @@ may use `fixer_handoff` instead.
    Never emit `decision_required` without this question. Safe technical work
    uses `fixer_handoff`, and missing future evidence uses `evidence_wait`.
 10. Reconcile your findings against the actual artifacts, call
-   `record_pulse_review_focus(module="technical_review", ...)` exactly once
-   with the chosen focus, selection reason, evidence, and deferred focuses,
+   `record_pulse_review_focus(module="technical_review", ...)` once per focus
+   actually investigated, including `route_scope`, selection reason, evidence,
+   and deferred focuses,
    then call
    `complete_pulse_review` exactly once with `modules=["technical_review"]`, a
    non-empty evidence-grounded verdict, and the truthful terminal status. This

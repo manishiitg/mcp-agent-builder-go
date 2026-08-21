@@ -132,10 +132,14 @@ highest applicable lifecycle class:
 6. oldest remaining focus.
 
 This is not rigid round-robin and not a numeric relevance score. A lightweight
-safety scan may preempt normal rotation. One review still chooses exactly one
-deep focus and records why it won, what it inspected, and what it deferred.
-Repeated selection of the same unchanged focus while eligible never-reviewed
-or overdue work exists requires an explicit urgent or verification reason.
+safety scan may preempt normal rotation. Map evidence to stable
+route/group/sub-workflow scopes first, then let the reviewer choose the smallest
+sufficient focus set. A small route often needs one focus; materially distinct
+large routes may justify several. Every additional focus must have distinct
+evidence, risk, decision, or repair value. Record what won, what it inspected,
+and what it deferred. Repeated selection of the same unchanged focus while
+eligible never-reviewed or overdue work exists requires an explicit urgent or
+verification reason.
 
 It is valid to skip Technical Review, Strategic Review, or both. Every skip
 must record why no useful review is currently possible and include evidence

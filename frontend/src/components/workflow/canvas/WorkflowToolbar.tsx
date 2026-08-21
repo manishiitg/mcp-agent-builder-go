@@ -456,6 +456,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
   const [pulseFinalCommandStates, setPulseFinalCommandStates] = useState<PulseFinalCommandState[]>([])
   const [pulseGateMode, setPulseGateMode] = useState<PulseRunMode | null>(null)
   const [pulseReviewFocuses, setPulseReviewFocuses] = useState<PulseReviewFocus[]>([])
+  const [pulseReviewFocusSelections, setPulseReviewFocusSelections] = useState<PulseReviewFocus[]>([])
   const [pulseLoopClosureObservation, setPulseLoopClosureObservation] = useState<PulseShadowSignalObservation | null>(null)
   const [pulseStatusLoading, setPulseStatusLoading] = useState(false)
   const [pulseStatusError, setPulseStatusError] = useState<string | null>(null)
@@ -506,6 +507,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
       setPulseFinalCommandStates([])
       setPulseGateMode(null)
       setPulseReviewFocuses([])
+      setPulseReviewFocusSelections([])
       setPulseLoopClosureObservation(null)
       setPulseStatusError(null)
       return
@@ -521,6 +523,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
       setPulseFinalCommandStates(resp.commands || [])
       setPulseGateMode(resp.gate_mode || null)
       setPulseReviewFocuses(resp.review_focus_history || [])
+      setPulseReviewFocusSelections(resp.review_focus_selections || [])
       setPulseLoopClosureObservation(
         (resp.shadow_signal_observations || []).find(observation => observation.detector === 'loop_closure') || null
       )
@@ -1225,6 +1228,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                     finalCommandStates={pulseFinalCommandStates}
                     gateMode={pulseGateMode}
                     reviewFocuses={pulseReviewFocuses}
+                    reviewFocusSelections={pulseReviewFocusSelections}
                     statusLoading={pulseStatusLoading}
                     statusError={pulseStatusError}
                     onRefresh={() => {

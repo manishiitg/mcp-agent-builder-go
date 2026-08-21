@@ -138,6 +138,7 @@ export function PulseWorkspace({
   finalCommandStates,
   gateMode,
   reviewFocuses,
+  reviewFocusSelections,
   statusLoading,
   statusError,
   onRefresh,
@@ -148,6 +149,7 @@ export function PulseWorkspace({
   finalCommandStates: PulseFinalCommandState[]
   gateMode: PulseRunMode | null
   reviewFocuses: PulseReviewFocus[]
+  reviewFocusSelections: PulseReviewFocus[]
   statusLoading: boolean
   statusError: string | null
   onRefresh: () => void
@@ -540,17 +542,23 @@ export function PulseWorkspace({
             const latest = [...areaModules]
               .sort((a, b) => (b.latestReview?.recorded_at || '').localeCompare(a.latestReview?.recorded_at || ''))[0]
               ?.latestReview
-            const latestFocus = reviewFocuses
+            const reviewedFocuses = reviewFocusSelections
               .filter((item) => normalizePulseWorkspaceModule(item.module) === area.id && item.last_reviewed_at)
-              .sort((a, b) => (b.last_reviewed_at || '').localeCompare(a.last_reviewed_at || ''))[0]
+              .sort((a, b) => (b.last_reviewed_at || '').localeCompare(a.last_reviewed_at || ''))
+            const latestFocus = reviewedFocuses[0]
+            const latestFocuses = latestFocus?.last_pulse_run_id
+              ? reviewedFocuses.filter((item) => item.last_pulse_run_id === latestFocus.last_pulse_run_id)
+              : latestFocus ? [latestFocus] : []
+            const latestFocusKeys = new Set(latestFocuses.map((item) => item.focus_key))
             const upcomingFocuses = reviewFocuses
               .filter((item) => (
                 normalizePulseWorkspaceModule(item.module) === area.id
-                && item.focus_key !== latestFocus?.focus_key
+                && !latestFocusKeys.has(item.focus_key)
               ))
               .slice(0, 3)
-            const nextFocusKeys = latestFocus?.deferred_focuses?.length
-              ? latestFocus.deferred_focuses.slice(0, 3)
+            const deferredFocuses = latestFocuses.flatMap((item) => item.deferred_focuses || [])
+            const nextFocusKeys = deferredFocuses.length
+              ? [...new Set(deferredFocuses)].slice(0, 3)
               : upcomingFocuses.map((item) => item.focus_key)
             const moduleID = area.id
             return (
@@ -603,15 +611,17 @@ export function PulseWorkspace({
                   <span className="line-clamp-2">
                     {latest ? latest.verdict || 'Review recorded' : 'No stored review yet'}
                   </span>
-                  {latestFocus ? (
+                  {latestFocuses.length > 0 ? (
                     <div className="mt-1.5 text-[10px] text-muted-foreground">
-                      <span className="font-medium text-foreground">Last focus:</span>{' '}
-                      {readable(latestFocus.focus_key)} · {formatDate(latestFocus.last_reviewed_at)}
-                      {(latestFocus.review_count || 0) > 0 && (
-                        <span> · reviewed {latestFocus.review_count} {latestFocus.review_count === 1 ? 'time' : 'times'}</span>
+                      <span className="font-medium text-foreground">Last {latestFocuses.length === 1 ? 'focus' : 'focuses'}:</span>{' '}
+                      {latestFocuses.map((item) => (
+                        `${readable(item.focus_key)}${item.route_scope ? ` · ${readable(item.route_scope)}` : ''}`
+                      )).join(', ')} · {formatDate(latestFocuses[0].last_reviewed_at)}
+                      {latestFocuses.length === 1 && (latestFocuses[0].review_count || 0) > 0 && (
+                        <span> · reviewed {latestFocuses[0].review_count} {latestFocuses[0].review_count === 1 ? 'time' : 'times'}</span>
                       )}
-                      {latestFocus.last_selection_reason && (
-                        <span className="mt-0.5 block line-clamp-2">{latestFocus.last_selection_reason}</span>
+                      {latestFocuses[0].last_selection_reason && (
+                        <span className="mt-0.5 block line-clamp-2">{latestFocuses[0].last_selection_reason}</span>
                       )}
                       {nextFocusKeys.length > 0 && (
                         <span className="mt-0.5 block line-clamp-2">

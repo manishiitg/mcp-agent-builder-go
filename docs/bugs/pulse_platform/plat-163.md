@@ -69,7 +69,8 @@ readable but new technical decisions use `source=technical_review` and a
 Gate may skip technical review, strategic review, or both when no useful
 evidence has matured, but every skip records the next evidence/time/run
 boundary. Every selected reviewer performs a lightweight urgent-evidence scan
-and exactly one deep focus. Review completion belongs to the reviewer; the
+and agentically chooses the smallest sufficient route-aware deep-focus set.
+Review completion belongs to the reviewer; the
 independent Fixer owns mutations and repair outcome and never rewrites the
 review receipt.
 
@@ -80,9 +81,12 @@ Each technical or strategic pass has two deliberately different depths:
 1. **Lightweight safety scan.** Inspect only the compact lifecycle agenda for
    new critical regressions, matured verification work, and answered but
    unapplied human decisions. This prevents rotation from hiding urgent work.
-2. **One deep focus.** The reviewer chooses one coherent theme and investigates
-   it thoroughly with targeted evidence. It records why that theme won and
-   which other themes were deferred.
+2. **Agentic deep-focus set.** The reviewer maps relevant evidence to stable
+   route/group/sub-workflow scopes, then chooses the smallest set of coherent
+   themes worth investigating. A small route often needs one focus; a large or
+   multi-route workflow may justify several when each has distinct evidence,
+   risk, decision, or repair value. It records why each theme won and which
+   other themes were deferred. There is no fixed numerical quota.
 
 The technical catalog is: `execution_correctness`,
 `plan_contract_integrity`, `store_integrity`, `report_eval_truth`,
@@ -108,9 +112,11 @@ highest applicable lifecycle class:
 6. the oldest remaining focus.
 
 This is not rigid round-robin and is not a numeric relevance score. Go may
-enforce lifecycle invariants and the one-focus boundary, but it must not choose
-the semantic review subject. The reviewer owns that judgment and must persist
-its reason.
+enforce lifecycle invariants and require at least one focus for a completed due
+review, but it must not choose the semantic subjects or their count. The
+reviewer owns that judgment, must persist each reason and route scope, and must
+stop when another focus would repeat evidence or could not change a decision,
+repair, or next check.
 
 ## Durable model
 
@@ -124,6 +130,7 @@ One current row per `(workspace_path, module, focus_key)` containing:
 
 - last deep-review time, review run ID, and `pulse_run_id`;
 - last verdict and targeted evidence selectors;
+- last reviewed route scope plus route-specific coverage counts in the agenda;
 - related canonical issue IDs and verification IDs;
 - next-check time/run/evidence condition and reason;
 - a source-change fingerprint or equivalent invalidation marker;
@@ -134,6 +141,7 @@ One current row per `(workspace_path, module, focus_key)` containing:
 Append-only entries containing:
 
 - module, focus key, review run ID, and `pulse_run_id`;
+- stable route/group/sub-workflow scope (empty only for workflow-wide evidence);
 - lifecycle class and agent-authored selection reason;
 - compact scope and evidence references, not copied evidence bodies;
 - verdict, canonical finding IDs, and verification IDs;
@@ -148,10 +156,10 @@ it must not become a second backlog or history database.
 
 1. Build a compact agenda from focus state, canonical issues, matured
    verification conditions, answered decisions, and relevant source changes.
-2. Let the reviewer perform the lightweight safety scan and select one deep
-   focus.
+2. Let the reviewer perform the lightweight safety scan and select the smallest
+   sufficient route-aware deep-focus set.
 3. Load only targeted authoritative evidence through existing files/tools.
-4. Persist one focus-history entry and update focus state.
+4. Persist one focus-history entry per investigated focus and update focus state.
 5. Write the existing `pulse_review_log` terminal receipt for the module.
 6. Hand canonical repair work to the independent Fixer defined by PLAT-155;
    the reviewer does not repair its own findings.
@@ -161,8 +169,10 @@ it must not become a second backlog or history database.
 ### PLAT-138 — bounded, agent-chosen review objectives
 
 This ticket complements PLAT-138; it does not reopen the unbounded backlog.
-One pass still receives at most one coherent deep objective. Rotation gives the
-agent a compact durable agenda and records its choice; it must never instruct a
+One pass still receives a bounded coherent review objective, but its agent may
+cover multiple route-scoped focuses when each adds distinct decision value.
+Rotation gives the agent a compact durable agenda and records its choices; it
+must never instruct a
 single review to process every due focus.
 
 ### PLAT-155 — observations are not the canonical repair queue
@@ -210,7 +220,8 @@ strategic work into technical themes.
    selection/defer reasons.
 4. **Shipped:** the terminal-write invariant: a completed review cannot report success
    without its focus-history entry and existing review receipt.
-5. **Shipped:** work-area cards show the last focus, why selected,
+5. **Shipped:** work-area cards show all focuses selected in the latest review,
+   their route scope, why selected,
    last-reviewed time, review count, and next candidates. Before the first
    recorded review they show the next eligible focus candidates rather than an
    empty state. A richer
@@ -224,8 +235,9 @@ strategic work into technical themes.
   requires a persisted urgent/verification reason.
 - A critical regression, matured verification, or answered unapplied decision
   can preempt normal rotation and the preemption is visible in history.
-- Each completed Technical/Strategic review has exactly one deep-focus
-  history entry plus its existing `pulse_review_log` receipt.
+- Each completed Technical/Strategic review has one or more route-aware
+  deep-focus history entries, chosen agentically, plus exactly one existing
+  `pulse_review_log` receipt.
 - Review prompts receive a compact agenda and selectors, not full plan/history
   payloads.
 - Raw observations remain distinct from canonical issues, and review remains
