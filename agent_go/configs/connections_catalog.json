@@ -509,8 +509,8 @@
       "sensitive_actions": [
         "Post messages to your Slack workspace"
       ],
-      "setup_hint": "Uses the public client that Slack publishes with its own MCP plugin, so no setup is needed. Set SLACK_OAUTH_CLIENT_ID to use your own Slack app instead, which is what makes the consent screen show your name.",
-      "client_id": "1601185624273.8899143856786"
+      "setup_hint": "Slack hosts an official MCP server, but the client id it publishes belongs to Claude Code's own app and only accepts that app's callback. Create a Slack app of your own, add http://127.0.0.1:18743/api/oauth/callback as a redirect URL, then set SLACK_OAUTH_CLIENT_ID and SLACK_OAUTH_CLIENT_SECRET on the server. Once set, every user connects in one click.",
+      "client_secret_env": "SLACK_OAUTH_CLIENT_SECRET"
     },
     {
       "id": "google-workspace",
