@@ -105,7 +105,9 @@ const executionGroup = (category: CostActivityCategory['id'], scope: string, id:
     return run ? `evaluation:${run}` : id.replace(/-\d{16,}$/, '')
   }
   if (category === 'pulse') {
-    if (/engineering-review|workflow-review/i.test(id)) return 'engineering review and fix'
+    // Historical executions retain the engineering-review ID, but the product
+    // presents this consolidated technical pass as Pulse Review.
+    if (/engineering-review|workflow-review/i.test(id)) return 'pulse review and fix'
     if (/strategy-auditor/i.test(id)) return 'strategy auditor'
     if (/goal-advisor/i.test(id)) return 'goal advisor'
     if (/pulse-fixer|fixer/i.test(id)) return 'pulse fixer'
