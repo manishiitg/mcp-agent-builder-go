@@ -260,7 +260,8 @@ func shouldRefreshGeneratedVideoStudioPlan(content string) bool {
 		strings.Contains(content, `Build each panel in HTML/CSS`) {
 		return true
 	}
-	if !strings.Contains(content, `"route_id": "infographic"`) ||
+	hasInfographicRoute := strings.Contains(content, `"route_id": "infographic"`) || strings.Contains(content, `"route_id":"infographic"`)
+	if !hasInfographicRoute ||
 		!strings.Contains(content, `"infographic-research"`) {
 		return false
 	}

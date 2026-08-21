@@ -72,9 +72,13 @@ func TestGeneratedVideoStudioPlanRefreshesWhenCritiqueGatesAreMissing(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	currentPlan := strings.ReplaceAll(string(plan), `"route_id":"infographic"`, `"route_id": "infographic"`)
+	currentPlan := string(plan)
 	if shouldRefreshGeneratedVideoStudioPlan(currentPlan) {
 		t.Fatal("the current critique-gated product plan should not refresh repeatedly")
+	}
+	prettyCurrentPlan := strings.ReplaceAll(currentPlan, `"route_id":"infographic"`, `"route_id": "infographic"`)
+	if shouldRefreshGeneratedVideoStudioPlan(prettyCurrentPlan) {
+		t.Fatal("the current pretty-printed product plan should not refresh repeatedly")
 	}
 
 	preCritiquePlan := `{"routes":[{"route_id": "infographic"}],"steps":[{"id":"infographic-research"}]}`
