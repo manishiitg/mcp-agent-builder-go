@@ -158,6 +158,18 @@ func landlockSystemReadPaths() []string {
 		"/etc/ssl", "/etc/ca-certificates", "/etc/resolv.conf", "/etc/hosts",
 		"/etc/nsswitch.conf", "/etc/passwd", "/etc/group", "/etc/localtime",
 		"/etc/ld.so.cache", "/etc/ld.so.conf", "/etc/ld.so.conf.d",
+		// Headless Chromium needs font metadata and a small set of read-only
+		// kernel/cpu facts during startup. Keep these entries narrow: granting
+		// all of /proc would let a guarded command inspect other processes'
+		// environments, including service credentials.
+		"/etc/fonts", "/usr/share/fonts",
+		// /proc/self is bound to the already-sanitized launcher process. The
+		// launcher execs Chromium in place, so this does not expose unrelated
+		// service processes or their environments.
+		"/proc/self", "/proc/thread-self",
+		"/proc/cpuinfo", "/proc/meminfo", "/proc/stat",
+		"/proc/sys/fs/inotify/max_user_watches",
+		"/sys/devices", "/sys/bus/pci/devices",
 		"/dev/null", "/dev/zero", "/dev/full", "/dev/random", "/dev/urandom", "/dev/tty",
 	}
 	if browserPath := strings.TrimSpace(os.Getenv("AGENT_BROWSER_EXECUTABLE_PATH")); browserPath != "" {

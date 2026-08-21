@@ -75,3 +75,78 @@ func TestServeAgentForwardsQueryTokenAsBearerCredential(t *testing.T) {
 		t.Fatalf("authorization = %q", gotAuthorization)
 	}
 }
+
+func TestUnauthenticatedAPIRequestReturnsExplicitLoginSignal(t *testing.T) {
+	gateway := &gateway{secret: []byte("test-secret-that-is-long-enough")}
+	req := httptest.NewRequest(http.MethodGet, "/api/health?full=1", nil)
+	req.Header.Set("Referer", "https://example.com/projects/123?tab=chat")
+	response := httptest.NewRecorder()
+
+	gateway.ServeHTTP(response, req)
+
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusUnauthorized)
+	}
+	if got := response.Header().Get(authRequiredHeader); got != "/login?next=%2Fprojects%2F123%3Ftab%3Dchat" {
+		t.Fatalf("login header = %q", got)
+	}
+	if got := strings.TrimSpace(response.Body.String()); got != `{"error":"authentication_required"}` {
+		t.Fatalf("body = %q", got)
+	}
+}
+
+func TestUnauthenticatedAPIRequestIgnoresExternalReferer(t *testing.T) {
+	gateway := &gateway{secret: []byte("test-secret-that-is-long-enough")}
+	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	req.Header.Set("Referer", "https://attacker.example/steal")
+	response := httptest.NewRecorder()
+
+	gateway.ServeHTTP(response, req)
+
+	if got := response.Header().Get(authRequiredHeader); got != "/login?next=%2F" {
+		t.Fatalf("login header = %q", got)
+	}
+}
+
+func TestUnauthenticatedFrontendRequestStillRedirectsToLogin(t *testing.T) {
+	gateway := &gateway{secret: []byte("test-secret-that-is-long-enough")}
+	req := httptest.NewRequest(http.MethodGet, "/projects/123", nil)
+	response := httptest.NewRecorder()
+
+	gateway.ServeHTTP(response, req)
+
+	if response.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusSeeOther)
+	}
+	if got := response.Header().Get("Location"); got != "/login?next=%2Fprojects%2F123" {
+		t.Fatalf("location = %q", got)
+	}
+}
+
+func TestAuthenticatedRequestRefreshesSessionNearExpiry(t *testing.T) {
+	gateway := &gateway{
+		secret:      []byte("test-secret-that-is-long-enough"),
+		frontendDir: t.TempDir(),
+	}
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: gateway.signedSession(time.Now().Add(time.Hour))})
+	response := httptest.NewRecorder()
+
+	gateway.ServeHTTP(response, req)
+
+	result := response.Result()
+	defer result.Body.Close()
+	var refreshed *http.Cookie
+	for _, cookie := range result.Cookies() {
+		if cookie.Name == sessionCookie {
+			refreshed = cookie
+			break
+		}
+	}
+	if refreshed == nil {
+		t.Fatal("expected a refreshed session cookie")
+	}
+	if remaining := time.Until(refreshed.Expires); remaining < 11*time.Hour || remaining > 13*time.Hour {
+		t.Fatalf("refreshed session lifetime = %s", remaining)
+	}
+}

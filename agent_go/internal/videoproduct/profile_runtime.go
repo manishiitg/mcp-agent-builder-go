@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strconv"
 	"strings"
 	"time"
 
@@ -183,7 +182,12 @@ func ensureIntegratedProject(ctx context.Context, workspaceAPIURL string, runtim
 		return errors.New("product.json is not a valid Video Studio project manifest")
 	}
 
-	for _, folder := range []string{"uploads", "work", "outputs", "planning", "variables", "soul", "db"} {
+	// Every path granted to the step Folder Guard must exist before Landlock
+	// constructs its ruleset. builder/ is read-only execution context and may be
+	// empty on a new product project, but omitting the directory makes the whole
+	// shell sandbox unavailable on hosts that fail closed for missing policy
+	// paths.
+	for _, folder := range integratedProjectFolders() {
 		if err := client.CreateFolder(ctx, filepath.ToSlash(filepath.Join(runtime.WorkspacePath, folder))); err != nil && !strings.Contains(strings.ToLower(err.Error()), "exist") {
 			return fmt.Errorf("create %s folder: %w", folder, err)
 		}
@@ -241,6 +245,10 @@ func ensureIntegratedProject(ctx context.Context, workspaceAPIURL string, runtim
 	})
 }
 
+func integratedProjectFolders() []string {
+	return []string{"uploads", "work", "outputs", "planning", "variables", "soul", "builder", "db"}
+}
+
 func shouldRefreshGeneratedVideoStudioPlan(content string) bool {
 	// Old product generations used one of these legacy signatures. The current
 	// product plan is also deliberately upgraded when it lacks the critic gates;
@@ -268,13 +276,13 @@ func shouldRefreshGeneratedVideoStudioPlan(content string) bool {
 	}
 	// Structural upgrades belong here for the same reason the critic gates do:
 	// a plan generated before one of them exists is missing a required part of
-	// the workflow, and nothing else brings it forward. The orchestrator id is
-	// read from the pipeline rather than written out, so renaming the block
-	// cannot leave this fingerprint silently checking for a stale name.
-	required := []string{`"infographic-render-critique"`}
-	if infographicPipeline.Orchestrated != nil {
-		required = append(required, strconv.Quote(infographicPipeline.Orchestrated.ID))
+	// the workflow, and nothing else brings it forward. Video Studio now exposes
+	// every production task as one message_sequence; refresh the older todo_task
+	// plans rather than leaving a hidden orchestrator in existing projects.
+	if strings.Contains(content, `"type": "todo_task"`) || strings.Contains(content, `"type":"todo_task"`) {
+		return true
 	}
+	required := []string{`"infographic-render-critique"`, `"shortform-characters"`}
 	for _, marker := range required {
 		if !strings.Contains(content, marker) {
 			return true

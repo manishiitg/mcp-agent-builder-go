@@ -160,8 +160,8 @@ profile:
       - delete_workflow_secret
       - set_user_secret
       - delete_user_secret
-      # Running the production pipeline and inspecting it.
-      - run_full_workflow
+      # Run only the individual stage the user chooses. Video Studio does not
+      # expose unattended full-workflow execution.
       - execute_step
       - query_step
       - send_step_message

@@ -132,23 +132,43 @@ curl -fsSI https://video.realtrainingsys.com/
 
 An unauthenticated HTTP `303` redirect to `/login` is expected.
 
-## Browser automation prerequisite
+The gateway treats browser pages and API calls differently when the shared
+login session expires: pages redirect to `/login`, while `/api` and `/ws`
+return `401` with an `X-AgentWorks-Login` header. The shared frontend follows
+that explicit signal instead of reporting a healthy backend as unavailable.
+Authenticated sessions are renewed when they are within six hours of expiry,
+so regular use does not repeatedly prompt for the password; an idle session
+still expires after twelve hours.
 
-The bootstrap template and repair script install both Google Chrome and the
-`agent-browser` CLI. The rootless runtime uses:
+## Headless browser prerequisite
+
+The bootstrap template, repair script, and every normal rootless deploy install
+HyperFrames' pinned Chrome Headless Shell under the unprivileged
+`video-studio` account. The server does not need or install desktop Google
+Chrome. `agent-browser` remains the browser-control CLI, while both it and
+HyperFrames receive the same managed executable path:
 
 ```text
-AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/google-chrome
+AGENT_BROWSER_EXECUTABLE_PATH=/var/lib/video-studio/.cache/hyperframes/chrome/<platform-version>/chrome-headless-shell-linux64/agentworks-chrome-headless
+HYPERFRAMES_BROWSER_PATH=<same path, injected into guarded commands>
 ```
 
-This path must remain available to the guarded workspace process; it is not
-interchangeable with `/usr/bin/chromium`. Every normal rootless deploy checks
-for both `/usr/bin/google-chrome` and `agent-browser` before it uploads or
-restarts anything. If either check fails, run the administrator-only bootstrap
-or repair script first, then return to the normal SSH + rsync deploy path.
+The wrapper adds the single-process and shared-memory flags required by the
+Landlock filesystem policy. The deployment verifies the managed binary and
+`agent-browser` before switching releases, and rewrites the runtime path on
+every restart so it survives reboots and upgrades. Do not replace it with
+`/usr/bin/google-chrome` or `/usr/bin/chromium`.
 
 The Linux shell sandbox is Landlock-first with a verified mount-namespace
-fallback. Do not run the service as root or grant it `CAP_SYS_ADMIN`.
+fallback. It grants Chromium only its own `/proc/self` view plus read-only font
+and hardware metadata—not all of `/proc`. Do not run the service as root, grant
+it `CAP_SYS_ADMIN`, or broaden `/proc`, because doing so could expose other
+service processes' environments.
+
+Post-deploy, validate the actual guarded path (not only direct SSH) by running
+`npm run check` through `/api/execute` with Folder Guard enabled in a Video
+Studio production. A direct SSH browser test is insufficient because it does
+not exercise Landlock or the sanitized command environment.
 
 ## Future SSM option
 

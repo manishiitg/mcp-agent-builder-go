@@ -5,11 +5,21 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/common"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workspace"
 )
+
+func TestIntegratedProjectCreatesEveryFolderGuardBaseline(t *testing.T) {
+	folders := integratedProjectFolders()
+	for _, required := range []string{"builder", "soul", "planning", "db"} {
+		if !slices.Contains(folders, required) {
+			t.Fatalf("integrated project folders omit Folder Guard baseline %q: %v", required, folders)
+		}
+	}
+}
 
 func TestProfileWorkspaceRootMatchesSessionFolderGuard(t *testing.T) {
 	const sessionID = "video-studio:test"
@@ -57,7 +67,7 @@ func TestProfileWorkspaceRootDoesNotDoublePrefixCanonicalPath(t *testing.T) {
 }
 
 func TestGeneratedVideoStudioPlanRefreshesWhenCritiqueGatesAreMissing(t *testing.T) {
-	plan, err := json.Marshal(planForAll([]*Pipeline{infographicPipeline}))
+	plan, err := json.Marshal(planForAll(pipelineRegistry))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,21 +85,17 @@ func TestGeneratedVideoStudioPlanRefreshesWhenCritiqueGatesAreMissing(t *testing
 		t.Fatal("an unrelated user-authored video plan must be preserved")
 	}
 
-	// A plan seeded after the critic gates landed but before pre-production was
-	// orchestrated satisfies every older fingerprint, so nothing upgraded it and
-	// the project kept a linear plan with no orchestrator — which is what the
-	// running instance actually showed.
-	preOrchestrator := `{"steps":[{"id":"route","routes":[{"route_id": "infographic"}]},` +
+	preCharacterStep := `{"steps":[{"id":"route","routes":[{"route_id": "infographic"}]},` +
 		`{"id":"infographic-research"},{"id":"infographic-creative-critique"},` +
 		`{"id":"infographic-render-critique"}]}`
-	if !shouldRefreshGeneratedVideoStudioPlan(preOrchestrator) {
-		t.Fatal("a pre-orchestrator Video Studio infographic plan should upgrade")
+	if !shouldRefreshGeneratedVideoStudioPlan(preCharacterStep) {
+		t.Fatal("a Video Studio plan without the short-form character gate should upgrade")
 	}
 
 	// The case marker-matching cannot see: every current identifier is present,
 	// so no fingerprint fires, but the stored plan is one the platform refuses
-	// to load. This is what a project seeded between the orchestrator landing
-	// and its next_step_id fix actually held, and run_full_workflow failed with
+	// to load. This is what a project seeded between the old orchestrator landing
+	// and its next_step_id fix held, and workflow execution failed with
 	// "plan.json uses an invalid or legacy format" rather than running.
 	invalidButCurrent := `{"steps":[{"type":"routing","id":"route","routes":[{"route_id": "infographic","next_step_id":"infographic-preproduction"}]},` +
 		`{"type":"todo_task","id":"infographic-preproduction","title":"Brief","description":"d",` +

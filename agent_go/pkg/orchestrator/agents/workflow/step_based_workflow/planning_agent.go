@@ -1283,7 +1283,7 @@ func getUpdateMessageSequenceStepSchema() string {
 	return `{
 		"type": "object",
 		"properties": {
-			"existing_step_id": {"type": "string", "description": "REQUIRED: ID of the message_sequence step to update. Legacy non-scripted regular steps are accepted and atomically upgraded to message_sequence because that is already their effective runtime type."},
+			"existing_step_id": {"type": "string", "minLength": 1, "description": "REQUIRED: ID of the message_sequence step to update. Legacy non-scripted regular steps are accepted and atomically upgraded to message_sequence because that is already their effective runtime type."},
 			"title": {"type": "string"},
 			"description": {"type": "string"},
 			"context_dependencies": {"type": "array", "items": {"type": "string"}},
@@ -4880,6 +4880,10 @@ func registerPlanModificationTools(
 					"additionalProperties": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
 					"description":          "Map of changed step id to its exact expected context_dependencies array. Extra or missing dependencies fail validation.",
 				},
+			},
+			"anyOf": []interface{}{
+				map[string]interface{}{"required": []interface{}{"forbidden_references"}},
+				map[string]interface{}{"required": []interface{}{"expected_context_dependencies"}},
 			},
 		},
 		createValidatePlanChangeExecutor(workspacePath, readFile),

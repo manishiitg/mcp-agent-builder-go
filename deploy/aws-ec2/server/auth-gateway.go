@@ -18,7 +18,12 @@ import (
 	"time"
 )
 
-const sessionCookie = "video_studio_session"
+const (
+	sessionCookie        = "video_studio_session"
+	sessionDuration      = 12 * time.Hour
+	sessionRefreshWindow = 6 * time.Hour
+	authRequiredHeader   = "X-AgentWorks-Login"
+)
 
 type gateway struct {
 	secret      []byte
@@ -87,21 +92,49 @@ func (g *gateway) signedSession(expires time.Time) string {
 	return payload + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
-func (g *gateway) validSession(r *http.Request) bool {
+func (g *gateway) sessionExpiry(r *http.Request) (time.Time, bool) {
 	cookie, err := r.Cookie(sessionCookie)
 	if err != nil {
-		return false
+		return time.Time{}, false
 	}
 	parts := strings.Split(cookie.Value, ".")
 	if len(parts) != 2 {
-		return false
+		return time.Time{}, false
 	}
 	expires, err := strconv.ParseInt(parts[0], 10, 64)
 	if err != nil || time.Now().After(time.Unix(expires, 0)) {
-		return false
+		return time.Time{}, false
 	}
-	want := g.signedSession(time.Unix(expires, 0))
-	return subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(want)) == 1
+	expiresAt := time.Unix(expires, 0)
+	want := g.signedSession(expiresAt)
+	if subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(want)) != 1 {
+		return time.Time{}, false
+	}
+	return expiresAt, true
+}
+
+func (g *gateway) setSessionCookie(w http.ResponseWriter, expires time.Time) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookie,
+		Value:    g.signedSession(expires),
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
+		Expires:  expires,
+	})
+}
+
+func isGatewayAPIRoute(path string) bool {
+	return path == "/api" || strings.HasPrefix(path, "/api/") || path == "/ws" || strings.HasPrefix(path, "/ws/")
+}
+
+func apiLoginURL(r *http.Request) string {
+	next := "/"
+	if referer, err := url.Parse(r.Referer()); err == nil && referer.Host == r.Host {
+		next = safeNext(referer.RequestURI())
+	}
+	return "/login?next=" + url.QueryEscape(next)
 }
 
 func (g *gateway) agentToken() (string, error) {
@@ -161,8 +194,8 @@ func (g *gateway) login(w http.ResponseWriter, r *http.Request) {
 	next := safeNext(r.URL.Query().Get("next"))
 	if r.Method == http.MethodPost {
 		if err := r.ParseForm(); err == nil && subtle.ConstantTimeCompare([]byte(r.Form.Get("password")), g.password) == 1 {
-			expires := time.Now().Add(12 * time.Hour)
-			http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: g.signedSession(expires), Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, Expires: expires})
+			expires := time.Now().Add(sessionDuration)
+			g.setSessionCookie(w, expires)
 			http.Redirect(w, r, safeNext(r.Form.Get("next")), http.StatusSeeOther)
 			return
 		}
@@ -186,9 +219,25 @@ func (g *gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
-	if !g.validSession(r) {
-		http.Redirect(w, r, "/login?next="+url.QueryEscape(r.URL.RequestURI()), http.StatusSeeOther)
+	expiresAt, authenticated := g.sessionExpiry(r)
+	if !authenticated {
+		if isGatewayAPIRoute(r.URL.Path) {
+			loginURL := apiLoginURL(r)
+			w.Header().Set(authRequiredHeader, loginURL)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = fmt.Fprint(w, `{"error":"authentication_required"}`)
+			return
+		}
+		loginURL := "/login?next=" + url.QueryEscape(r.URL.RequestURI())
+		http.Redirect(w, r, loginURL, http.StatusSeeOther)
 		return
+	}
+	// Renew an active browser session before it expires. This prevents regular
+	// users from being asked for the shared password repeatedly while still
+	// allowing an idle browser to expire normally.
+	if time.Until(expiresAt) < sessionRefreshWindow {
+		g.setSessionCookie(w, time.Now().Add(sessionDuration))
 	}
 	switch {
 	case strings.HasPrefix(r.URL.Path, "/api/wp"):

@@ -13,9 +13,8 @@ curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
 apt-get update
 apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin nodejs
 systemctl enable --now docker
-curl -fsSL -o /tmp/google-chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
-apt-get install -y /tmp/google-chrome.deb
-rm -f /tmp/google-chrome.deb
 npm install -g agent-browser@latest @anthropic-ai/claude-code@latest @earendil-works/pi-coding-agent@latest
-test -x /usr/bin/google-chrome
+id -u video-studio >/dev/null 2>&1 || useradd --system --create-home --home-dir /var/lib/video-studio --shell /usr/sbin/nologin video-studio
+runuser -u video-studio -- env HOME=/var/lib/video-studio npx --yes hyperframes@0.8.6 browser ensure
+test -x "$(runuser -u video-studio -- env HOME=/var/lib/video-studio npx --yes hyperframes@0.8.6 browser path | tail -n 1)"
 command -v agent-browser

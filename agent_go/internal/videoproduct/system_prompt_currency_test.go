@@ -59,10 +59,20 @@ func TestSystemPromptMatchesTheProductItDescribes(t *testing.T) {
 		t.Fatal("the system prompt no longer requires a costed model choice before paid generation")
 	}
 
-	// Chat and run_full_workflow are two different contracts: chat pauses at
-	// checkpoints, the workflow runs end to end unattended. Losing this line
-	// is how chat quietly turns into a silent workflow run.
-	if !strings.Contains(text, "run_full_workflow") || !strings.Contains(strings.ToLower(text), "not friction to minimize") {
-		t.Fatal("the system prompt no longer distinguishes chat's checkpoints from run_full_workflow's unattended mode")
+	if strings.Contains(text, "run_full_workflow") || !strings.Contains(text, "execute_step") {
+		t.Fatal("Video Studio must describe individual stage execution only")
+	}
+	if !strings.Contains(strings.ToLower(text), "default for every new production") || !strings.Contains(text, "longform-cinematic-video") {
+		t.Fatal("the system prompt no longer defaults fresh productions to cinematic direction")
+	}
+	for _, contract := range []string{"specialist skills", "context dependencies", "validation schema", "human_input", "Do not ask the user for a step ID or group name"} {
+		if !strings.Contains(text, contract) {
+			t.Fatalf("the system prompt no longer explains execute_step's recipe contract: missing %q", contract)
+		}
+	}
+	for _, source := range []string{"planning/plan.json", "planning/step_config.json", "validation_schema.files", "enabled_skills"} {
+		if !strings.Contains(text, source) {
+			t.Fatalf("the system prompt no longer gives the agent a source-of-truth step discovery query: missing %q", source)
+		}
 	}
 }

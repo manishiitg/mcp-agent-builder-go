@@ -11,6 +11,15 @@ if ! id -u video-studio >/dev/null 2>&1; then
   useradd --system --create-home --home-dir /var/lib/video-studio --shell /usr/sbin/nologin video-studio
 fi
 
+runuser -u video-studio -- env HOME=/var/lib/video-studio npx --yes hyperframes@0.8.6 browser ensure >/dev/null
+browser_path="$(runuser -u video-studio -- env HOME=/var/lib/video-studio npx --yes hyperframes@0.8.6 browser path | tail -n 1)"
+case "$browser_path" in
+  /var/lib/video-studio/.cache/hyperframes/chrome/*/chrome-headless-shell) ;;
+  *) echo "Unexpected HyperFrames browser path: $browser_path" >&2; exit 1 ;;
+esac
+browser_wrapper="$(dirname "$browser_path")/agentworks-chrome-headless"
+install -m 0755 "$RELEASE_DIR/server/chrome-headless-wrapper.sh" "$browser_wrapper"
+
 install -d -m 0755 /opt/video-studio /data/video-studio/{docs,workspace-db,agent-db,logs,caddy-data,caddy-config}
 install -d -o video-studio -g video-studio -m 0755 /var/lib/video-studio
 # Releases contain executable code and static configuration only. Make the
@@ -49,7 +58,7 @@ printf '%s\n' \
   'WORKSPACE_DOCS_PATH=/data/video-studio/docs' \
   'DB_PATH=/data/video-studio/workspace-db/workspace.db' \
   'DOCS_DIR=/data/video-studio/docs' \
-  'AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/google-chrome' \
+  "AGENT_BROWSER_EXECUTABLE_PATH=$browser_wrapper" \
   'AGENT_PROVIDER=openai' \
   'AGENT_MODEL=gpt-5.2' \
   "AUTH_SECRET=$auth_secret" \

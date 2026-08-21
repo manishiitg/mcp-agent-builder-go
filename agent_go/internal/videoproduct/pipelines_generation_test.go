@@ -15,10 +15,11 @@ func TestEverySpendingStageCarriesTheApprovalGate(t *testing.T) {
 	const gateMarker = "ONLY from the human input for THIS stage"
 
 	wantGated := map[string]bool{
-		"longform-characters": true,
-		"longform-narration":  true,
-		"longform-generate":   true,
-		"shortform-generate":  true,
+		"longform-characters":  true,
+		"longform-narration":   true,
+		"longform-generate":    true,
+		"shortform-characters": true,
+		"shortform-generate":   true,
 	}
 
 	for _, pipeline := range []*Pipeline{longformPipeline, shortformPipeline} {
@@ -41,6 +42,35 @@ func TestEverySpendingStageCarriesTheApprovalGate(t *testing.T) {
 	// that is exactly how an approved storyboard becomes an unapproved bill.
 	if !strings.Contains(generationSpendGate("x"), "Approval of an earlier stage") {
 		t.Fatal("the spend gate no longer rejects approval inherited from an earlier stage")
+	}
+}
+
+func TestShortformStagesPutApprovedCharactersBeforeShots(t *testing.T) {
+	index := map[string]int{}
+	for i, stage := range shortformPipeline.Stages {
+		index[stage.ID] = i
+	}
+	for _, ordered := range [][2]string{
+		{"shortform-script", "shortform-characters"},
+		{"shortform-characters", "shortform-shotlist"},
+		{"shortform-shotlist", "shortform-generate"},
+	} {
+		before, after := ordered[0], ordered[1]
+		if index[before] >= index[after] {
+			t.Fatalf("%s must run before %s", before, after)
+		}
+	}
+	characters := shortformPipeline.Stages[index["shortform-characters"]].Description
+	for _, required := range []string{"budget", "recommended", "premium", "explicitly approved", "separately from video-per-second cost"} {
+		if !strings.Contains(characters, required) {
+			t.Fatalf("short-form character step is missing %q", required)
+		}
+	}
+	generate := shortformPipeline.Stages[index["shortform-generate"]].Description
+	for _, forbidden := range []string{"HyperFrames", "HTML panels", "infographic route"} {
+		if !strings.Contains(generate, forbidden) {
+			t.Fatalf("short-form generation does not explicitly reject %q", forbidden)
+		}
 	}
 }
 

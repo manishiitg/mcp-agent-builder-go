@@ -1,6 +1,6 @@
 ---
 name: longform-cinematic-video
-description: Direct a coherent long-form cinematic video from story architecture through generated sequences, continuity-controlled clips, editorial stitching, sound, and final seam review. Use for films, documentaries, narrative explainers, commercials, or any multi-scene AI-video production where clips must feel like one continuous authored film rather than separate generations. Read before long-form scripting, shot planning, generation, assembly, or revision.
+description: Direct a coherent cinematic video of any duration from story architecture through deterministic or generated sequences, continuity-controlled clips, editorial stitching, sound, and final seam review. Use as the default director for every new Video Studio production so scenes feel like one continuous authored film rather than separate generations.
 ---
 
 # Direct one film, not a collection of clips

@@ -31,9 +31,10 @@ func buildDockerEnvironment() []string {
 		"LANG=C.UTF-8",
 		"LC_ALL=C.UTF-8",
 
-		// Browser automation. This is deployment configuration, not a secret;
-		// preserve the rootless host's Chrome-for-Testing/Google Chrome path.
+		// Browser automation and HyperFrames must resolve the same deployment-
+		// managed headless binary. These are paths, not credentials.
 		"AGENT_BROWSER_EXECUTABLE_PATH=" + browserExecutable,
+		"HYPERFRAMES_BROWSER_PATH=" + browserExecutable,
 
 		// Python: disable output buffering so stdout/stderr are captured even if the process is killed (timeout/signal)
 		"PYTHONUNBUFFERED=1",
