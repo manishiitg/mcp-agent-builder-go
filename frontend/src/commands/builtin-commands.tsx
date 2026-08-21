@@ -1,11 +1,11 @@
 import React from 'react'
-import { FileText, Server, Cpu, Bot, Layers, RefreshCw, GitBranch, CheckCircle, BookOpen, Activity, BellRing, Cloud, Globe, Target } from 'lucide-react'
+import { FileText, Server, Bot, Layers, RefreshCw, GitBranch, CheckCircle, BookOpen, Activity, BellRing, Cloud, Globe, Target } from 'lucide-react'
 import type { CommandContext, CommandDefinition } from './types'
 
 function submitGuidedWorkflowCommand(
   ctx: CommandContext,
   kind: string,
-  options: { runFolder?: string | null; background?: boolean } = {}
+  options: { runFolder?: string | null; background?: boolean; displayName?: string } = {}
 ) {
   const focus = ctx.beforeSlash.trim()
   const args = [
@@ -24,6 +24,10 @@ function submitGuidedWorkflowCommand(
   if (options.background) {
     const isFixer = kind === 'pulse-fixer'
     const taskLabel = isFixer ? 'fix pass' : 'review'
+    const displayName = options.displayName || kind
+    const taskIntro = options.displayName
+      ? `Run /${displayName} as a BACKGROUND task so this chat stays responsive. `
+      : `Run the /${kind} ${taskLabel} as a BACKGROUND task so this chat stays responsive. `
     const completionContract = isFixer
       ? 'then present the selected repair objective, changes made, verification proof, lifecycle outcomes, and the remaining canonical queue.'
       : 'then present a short executive summary followed by every finding and recommendation in severity order. Do not truncate the result to a Top 3.'
@@ -35,7 +39,7 @@ function submitGuidedWorkflowCommand(
     const instruction =
       `Call ${guidanceCall} and follow the returned instructions verbatim. ${outputContract} ` +
       `Treat focus as the request context before the slash command. The tool returns the canonical guided-flow text; do not paraphrase or skip its steps.`
-    const requiredReviewModule = kind === 'ops-review' || kind === 'engineering-review'
+    const requiredReviewModule = kind === 'engineering-review'
       ? 'technical_review'
       : kind === 'strategy-auditor'
         ? 'strategic_review'
@@ -44,8 +48,8 @@ function submitGuidedWorkflowCommand(
       ? `, required_pulse_review_modules=[${JSON.stringify(requiredReviewModule)}]`
       : ''
     ctx.onSubmit(
-      `Run the /${kind} ${taskLabel} as a BACKGROUND task so this chat stays responsive. ` +
-      `If the run_in_background tool is available: call run_in_background(name=${JSON.stringify(kind + ' ' + taskLabel)}, instruction=${JSON.stringify(instruction)}, completion_mode="present_result"${requiredReviewReceipt}) and do NOT perform the ${taskLabel} yourself this turn — you'll get a presentation-only completion notification, ${completionContract} Do not call tools, reload state, or independently revalidate after that notification. ` +
+      taskIntro +
+      `If the run_in_background tool is available: call run_in_background(name=${JSON.stringify(displayName + ' ' + taskLabel)}, instruction=${JSON.stringify(instruction)}, completion_mode="present_result"${requiredReviewReceipt}) and do NOT perform the ${taskLabel} yourself this turn — you'll get a presentation-only completion notification, ${completionContract} Do not call tools, reload state, or independently revalidate after that notification. ` +
       `If run_in_background is not available, perform the ${taskLabel} inline this turn instead.`
     )
     return
@@ -206,19 +210,6 @@ export const builtinCommands: CommandDefinition[] = [
     }
   },
   {
-    command: 'ops-review',
-    description: 'Run Technical Review with an operations and execution-efficiency focus',
-    icon: <Cpu className="w-4 h-4" />,
-    modes: ['workflow'],
-    requiredWorkflowMode: 'plan',
-    requiredWorkshopMode: 'workshop',
-    source: 'builtin',
-    execute: (ctx) => {
-      const runFolder = ctx.getWorkflowStore().selectedRunFolder
-      submitGuidedWorkflowCommand(ctx, 'ops-review', { runFolder, background: true })
-    }
-  },
-  {
     command: 'strategy-auditor',
     description: 'Diagnose whether the current plan is moving the goal using cross-run evidence',
     icon: <Target className="w-4 h-4" />,
@@ -232,8 +223,8 @@ export const builtinCommands: CommandDefinition[] = [
     }
   },
   {
-    command: 'engineering-review',
-    description: 'Run one focused Technical Review and classify evidence into canonical issues',
+    command: 'pulse-review',
+    description: 'Review technical and execution evidence, then classify the issues Pulse should fix',
     icon: <CheckCircle className="w-4 h-4" />,
     modes: ['workflow'],
     requiredWorkflowMode: 'plan',
@@ -241,7 +232,13 @@ export const builtinCommands: CommandDefinition[] = [
     source: 'builtin',
     execute: (ctx) => {
       const runFolder = ctx.getWorkflowStore().selectedRunFolder
-      submitGuidedWorkflowCommand(ctx, 'engineering-review', { runFolder, background: true })
+      // Keep the mature backend guidance key and technical_review receipt
+      // contract stable; only the user-facing manual command is renamed.
+      submitGuidedWorkflowCommand(ctx, 'engineering-review', {
+        runFolder,
+        background: true,
+        displayName: 'pulse-review',
+      })
     }
   },
   {

@@ -724,7 +724,7 @@ priority and historical run context.
 | [PLAT-158](pulse_platform/plat-158.md) | [PLAT-159](pulse_platform/plat-159.md) | [PLAT-160](pulse_platform/plat-160.md) | [PLAT-161](pulse_platform/plat-161.md) |
 | [PLAT-164](pulse_platform/plat-164.md) | [PLAT-166](pulse_platform/plat-166.md) | [PLAT-167](pulse_platform/plat-167.md) | [PLAT-168](pulse_platform/plat-168.md) |
 | [PLAT-162](pulse_platform/plat-162.md) | [PLAT-163](pulse_platform/plat-163.md) | [PLAT-165](pulse_platform/plat-165.md) | [PLAT-169](pulse_platform/plat-169.md) |
-| [PLAT-170](pulse_platform/plat-170.md) | [PLAT-171](pulse_platform/plat-171.md) |  |  |
+| [PLAT-170](pulse_platform/plat-170.md) | [PLAT-171](pulse_platform/plat-171.md) | [PLAT-172](pulse_platform/plat-172.md) |  |
 
 ## Explicitly not platform issues
 
