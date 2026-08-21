@@ -135,3 +135,28 @@ func TestUpdateScheduleRunRejectsMissingRunAndCompletesStoppedRun(t *testing.T) 
 		t.Fatalf("updated run = %+v, want stopped with completed_at", runs[0])
 	}
 }
+
+func TestScheduleRunPreservesOccurrenceIdentity(t *testing.T) {
+	_, _ = newScheduleRunWorkspaceStub(t)
+	ctx := context.Background()
+	scheduledFor := time.Date(2026, time.August, 21, 9, 30, 0, 0, time.UTC)
+	run := &ScheduleRunEntry{
+		ID:            "run-cron-1",
+		ScheduleID:    "schedule-1",
+		TriggerSource: "cron",
+		ScheduledFor:  &scheduledFor,
+		Status:        "running",
+		StartedAt:     scheduledFor.Add(45 * time.Second),
+	}
+	if err := AppendScheduleRun(ctx, "Workflow/test", run); err != nil {
+		t.Fatal(err)
+	}
+
+	runs, err := ReadScheduleRuns(ctx, "Workflow/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 || runs[0].TriggerSource != "cron" || runs[0].ScheduledFor == nil || !runs[0].ScheduledFor.Equal(scheduledFor) {
+		t.Fatalf("persisted run = %+v, want cron occurrence at %s", runs, scheduledFor)
+	}
+}

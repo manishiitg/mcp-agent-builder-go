@@ -304,6 +304,18 @@ This preserves agentic prioritization and causal bundling while making Pulse a
 repeatable progress loop instead of a single attempt to zero every unrelated
 root in one context window.
 
+## Batch-sizing refinement — 2026-08-21
+
+The one-objective rule made the fixer safe but unnecessarily slow for a backlog
+containing several small, independently provable repairs. A fixer now selects a
+bounded **repair batch** rather than one hard-capped objective: it starts with
+the highest-value coherent bundle, then may add a separate bundle only when it
+is low-risk, needs no broad rediscovery, has its own clear proof boundary, and
+fits the same context window with targeted evidence. It does not batch public
+action risks, user decisions, route-specific contexts, or unresolved design
+work. This remains agentic sizing, not a fixed issue count, and each bundle
+still receives its own disposition and proof before the next begins.
+
 The same live child also returned 47 KB and 36 KB shell results while locating
 single schema/plan fields. The Fixer practices now direct agents to
 `query_step`/`get_step_prompts`, projected managed-DB reads, and field/path-

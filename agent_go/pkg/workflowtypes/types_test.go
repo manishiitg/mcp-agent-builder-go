@@ -111,14 +111,14 @@ func TestResolveProviderProfileConfigUsesBuilderDefaults(t *testing.T) {
 
 func TestResolveProviderProfilePulseConfigUsesProviderDefault(t *testing.T) {
 	got, ok := ResolveProviderProfilePulseConfig(providerProfile("claude-code"))
-	if !ok || got.Provider != "claude-code" || got.ModelID != "claude-sonnet-5" {
+	if !ok || got.Provider != "claude-code" || got.ModelID != "claude-opus-5" || got.Options["reasoning_effort"] != "high" {
 		t.Fatalf("ResolveProviderProfilePulseConfig() = %+v, %v", got, ok)
 	}
 }
 
 func TestResolveCodingAgentMemoryConfigUsesPulseDefault(t *testing.T) {
 	got, ok := ResolveCodingAgentMemoryConfig(providerProfile("claude-code"))
-	if !ok || got.Provider != "claude-code" || got.ModelID != "claude-sonnet-5" {
+	if !ok || got.Provider != "claude-code" || got.ModelID != "claude-opus-5" || got.Options["reasoning_effort"] != "high" {
 		t.Fatalf("ResolveCodingAgentMemoryConfig() = %+v, %v", got, ok)
 	}
 }

@@ -66,6 +66,7 @@ profile:
     - video-creation
     - video-look-sound
     - longform-cinematic-video
+    - video-stitching
     - video-editing
     - video-quality
     - hyperframes-quality
@@ -315,6 +316,7 @@ workflows:
   selected_skills:
     - video-creation
     - video-look-sound
+    - video-stitching
     - video-editing
     - video-quality
     - hyperframes-quality

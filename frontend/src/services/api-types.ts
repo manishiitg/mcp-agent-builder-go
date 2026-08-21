@@ -2960,6 +2960,8 @@ export interface ListScheduledJobsResponse {
 export interface ScheduledJobRun {
   id: string
   job_id: string
+  trigger_source?: 'manual' | 'cron' | 'calendar' | string
+  scheduled_for?: string
   run_folder?: string
   session_id?: string
   status: 'running' | 'success' | 'error' | 'failed' | 'partial' | 'stopped' | 'interrupted' | 'waiting_for_capacity' | 'waiting_for_workflow'

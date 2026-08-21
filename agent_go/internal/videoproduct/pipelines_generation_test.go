@@ -57,7 +57,8 @@ func TestShortformStagesPutDirectionAndMeasuredNarrationBeforeShots(t *testing.T
 		{"shortform-look-sound", "shortform-narration"},
 		{"shortform-narration", "shortform-shotlist"},
 		{"shortform-shotlist", "shortform-generate"},
-		{"shortform-generate", "shortform-assemble"},
+		{"shortform-generate", "shortform-stitch-plan"},
+		{"shortform-stitch-plan", "shortform-assemble"},
 		{"shortform-assemble", "shortform-check"},
 	} {
 		before, after := ordered[0], ordered[1]
@@ -93,21 +94,38 @@ func TestShortformStagesPutDirectionAndMeasuredNarrationBeforeShots(t *testing.T
 	}
 
 	shotlist := shortformPipeline.Stages[index["shortform-shotlist"]].Description
-	for _, required := range []string{"shortform-look-sound.md", "shortform-narration.md", "MEASURED", "Never fit narration"} {
+	for _, required := range []string{"shortform-look-sound.md", "shortform-narration.md", "MEASURED", "Never fit narration", "seam-generation route", "last usable stable frame", "motivated camera-angle cut"} {
 		if !strings.Contains(shotlist, required) {
 			t.Fatalf("short-form shot list is missing %q", required)
 		}
 	}
+	for _, required := range []string{"seam-generation route", "extension/reference-video continuation", "last usable stable frame", "camera-angle change"} {
+		if !strings.Contains(generate, required) {
+			t.Fatalf("short-form generation is missing follow-up-shot guidance %q", required)
+		}
+	}
+
+	stitchPlan := shortformPipeline.Stages[index["shortform-stitch-plan"]]
+	for _, required := range []string{"video-stitching", "every seam", "show_document", "meaningful plain-language editorial options", "Do not render"} {
+		if !strings.Contains(stitchPlan.Description, required) {
+			t.Fatalf("short-form stitch plan is missing %q", required)
+		}
+	}
+	for _, skill := range []string{"video-stitching", "video-editing"} {
+		if !containsSkill(stitchPlan.Skills, skill) {
+			t.Fatalf("short-form stitch plan does not attach %s: %v", skill, stitchPlan.Skills)
+		}
+	}
 
 	assemble := shortformPipeline.Stages[index["shortform-assemble"]].Description
-	for _, required := range []string{"required narration segment", "Cut visuals to the measured narration timeline", "music, ambience, sound effects, and captions", "selected background/look decisions", "native-dialogue source per beat"} {
+	for _, required := range []string{"shortform-stitch-plan.json", "video-stitching", "required narration segment", "Cut visuals to the measured narration timeline", "music, ambience, sound effects, and captions", "selected background/look decisions", "native-dialogue source per beat"} {
 		if !strings.Contains(assemble, required) {
 			t.Fatalf("short-form assembly is missing %q", required)
 		}
 	}
 
 	check := shortformPipeline.Stages[index["shortform-check"]].Description
-	for _, required := range []string{"missing or silent narration is a deterministic failure", "may not be marked not_applicable", "narration_alignment"} {
+	for _, required := range []string{"missing or silent narration is a deterministic failure", "may not be marked not_applicable", "narration_alignment", "shortform-seam-report.json", "EVERY edit boundary"} {
 		if !strings.Contains(check, required) {
 			t.Fatalf("short-form QA is missing %q", required)
 		}
@@ -181,7 +199,8 @@ func TestLongformStagesKeepTheirLoadBearingOrder(t *testing.T) {
 		{"longform-script", "longform-narration"},
 		{"longform-narration", "longform-shotlist"},
 		{"longform-shotlist", "longform-generate"},
-		{"longform-generate", "longform-assemble"},
+		{"longform-generate", "longform-stitch-plan"},
+		{"longform-stitch-plan", "longform-assemble"},
 		{"longform-assemble", "longform-check"},
 	} {
 		before, after := ordered[0], ordered[1]
@@ -191,8 +210,16 @@ func TestLongformStagesKeepTheirLoadBearingOrder(t *testing.T) {
 	}
 
 	shotlist := longformPipeline.Stages[index["longform-shotlist"]].Description
-	if !strings.Contains(shotlist, "MEASURED") {
-		t.Fatal("the shot list stage no longer derives durations from measured narration, which is what stops visuals being cut to an estimate")
+	for _, required := range []string{"MEASURED", "seam-generation route", "last usable stable frame", "camera handoff"} {
+		if !strings.Contains(shotlist, required) {
+			t.Fatalf("long-form shot list is missing %q", required)
+		}
+	}
+	generate := longformPipeline.Stages[index["longform-generate"]].Description
+	for _, required := range []string{"recorded seam-generation route", "extension/reference-video continuation", "last usable stable frame", "planned camera-angle cut"} {
+		if !strings.Contains(generate, required) {
+			t.Fatalf("long-form generation is missing follow-up-shot guidance %q", required)
+		}
 	}
 }
 
@@ -227,7 +254,12 @@ func TestCinematicPipelinesScopeHyperFramesToPlannedInserts(t *testing.T) {
 		if !sawGenerationSkill {
 			t.Fatalf("%s attaches none of the generation skills it exists to run", pipeline.ID)
 		}
-		shotlist := pipeline.Stages[len(pipeline.Stages)-4].Description
+		var shotlist string
+		for _, stage := range pipeline.Stages {
+			if stage.ID == pipeline.ID+"-shotlist" {
+				shotlist = stage.Description
+			}
+		}
 		for _, marker := range []string{"HyperFrames insert", "never use it"} {
 			if !strings.Contains(shotlist, marker) {
 				t.Fatalf("%s shot list is missing %q", pipeline.ID, marker)
@@ -238,18 +270,20 @@ func TestCinematicPipelinesScopeHyperFramesToPlannedInserts(t *testing.T) {
 
 func TestLongformPipelineOwnsCinematicContinuityAndSeamEvidence(t *testing.T) {
 	requiredSkillStages := map[string]bool{
-		"longform-brief":    true,
-		"longform-script":   true,
-		"longform-shotlist": true,
-		"longform-generate": true,
-		"longform-assemble": true,
-		"longform-check":    true,
+		"longform-brief":       true,
+		"longform-script":      true,
+		"longform-shotlist":    true,
+		"longform-generate":    true,
+		"longform-stitch-plan": true,
+		"longform-assemble":    true,
+		"longform-check":       true,
 	}
 	requiredArtifacts := map[string][]string{
-		"longform-shotlist": {"longform-sequence-plan.json"},
-		"longform-generate": {"longform-continuity-ledger.json"},
-		"longform-assemble": {"longform-final.mp4", "longform-edit-decision-list.json"},
-		"longform-check":    {"quality-report.json", "longform-seam-report.json"},
+		"longform-shotlist":    {"longform-sequence-plan.json"},
+		"longform-generate":    {"longform-continuity-ledger.json"},
+		"longform-stitch-plan": {"longform-stitch-plan.json"},
+		"longform-assemble":    {"longform-final.mp4", "longform-edit-decision-list.json"},
+		"longform-check":       {"quality-report.json", "longform-seam-report.json"},
 	}
 
 	for _, stage := range longformPipeline.Stages {
@@ -279,6 +313,15 @@ func TestLongformPipelineOwnsCinematicContinuityAndSeamEvidence(t *testing.T) {
 			}
 		}
 	}
+}
+
+func containsSkill(skills []string, want string) bool {
+	for _, skill := range skills {
+		if skill == want {
+			return true
+		}
+	}
+	return false
 }
 
 // A user with only one provider's key must still be able to finish a whole

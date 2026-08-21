@@ -42,6 +42,7 @@ var profileSkills = []struct{ name, description, path string }{
 	{"video-creation", "Direct a conversational video project from brief through reproducible production.", "skills/video-creation/SKILL.md"},
 	{"video-look-sound", "Lock a production's visual world, voice, music, ambience, sound-effects, and caption direction before narration or footage is generated.", "skills/video-look-sound/SKILL.md"},
 	{"longform-cinematic-video", "Direct one coherent long-form cinematic film through sequence architecture, continuity-controlled generation, editorial stitching, sound, and seam-by-seam review.", "skills/longform-cinematic-video/SKILL.md"},
+	{"video-stitching", "Plan, execute, and verify the seam-by-seam cinematic stitching of approved clips into one coherent film.", "skills/video-stitching/SKILL.md"},
 	{"video-editing", "Assemble clips, captions, overlays, narration, music, and versioned exports.", "skills/video-editing/SKILL.md"},
 	{"video-quality", "Validate candidate videos technically, visually, and editorially.", "skills/video-quality/SKILL.md"},
 	{"hyperframes-quality", "Gate editable HyperFrames compositions and rendered evidence for layout, timing, contrast, and motion quality.", "skills/hyperframes-quality/SKILL.md"},

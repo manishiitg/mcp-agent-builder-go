@@ -1901,12 +1901,23 @@ func (s *SchedulerService) runJob(ctx context.Context, sctx *ScheduleContext, ru
 	if strings.TrimSpace(runID) == "" {
 		runID = uuid.New().String()
 	}
+	triggerSource := strings.TrimSpace(sctx.TriggerSource)
+	if triggerSource == "" {
+		triggerSource = "cron"
+	}
+	var scheduledFor *time.Time
+	if !sctx.ScheduledFor.IsZero() {
+		value := sctx.ScheduledFor.UTC()
+		scheduledFor = &value
+	}
 	run := &ScheduleRunEntry{
-		ID:         runID,
-		ScheduleID: schedID,
-		Status:     "running",
-		GroupNames: sctx.Schedule.GroupNames,
-		StartedAt:  startTime,
+		ID:            runID,
+		ScheduleID:    schedID,
+		TriggerSource: triggerSource,
+		ScheduledFor:  scheduledFor,
+		Status:        "running",
+		GroupNames:    sctx.Schedule.GroupNames,
+		StartedAt:     startTime,
 	}
 	if sctx.CapacityResumeRunID != "" {
 		// A resumed run continues its own history row rather than opening a
@@ -2141,7 +2152,7 @@ func (s *SchedulerService) runPulseLifecycle(ctx context.Context, sctx *Schedule
 
 	// Pulse is one continuing agent conversation. Go sends four ordered turns:
 	// Gate, Review, Fix, and Finalize. Reviewers classify evidence before an
-	// independent Fixer receives one canonical repair objective. Go preserves
+	// independent Fixer receives a bounded agent-selected repair batch. Go preserves
 	// ordering and validates durable receipts; the agents own semantic choices.
 	pulseContext := "A scheduled run of this workflow just finished"
 	if sctx.PulseOnly {
@@ -2563,7 +2574,7 @@ func pulseLifecycleAgenticFixStep(pulseRunID string) pulseLifecycleStep {
 		label: "fix",
 		query: fmt.Sprintf(`PULSE INDEPENDENT FIX DISPATCH. pulse_run_id=%q. Continue only after registered reviewers finished. Load read_skill(skills=[{"name":"builder-reference","path":"references/pulse-review-fixer.md"}]) and follow its Fix contract. Read the durable Gate worklist, get_pulse_state(view="backlog", detail="compact") once, saved reviewer records, and %q. Fetch full lifecycle evidence only for the exact public PUL ids selected for the coherent repair objective.
 
-		Workflow observations are evidence, not Fixer work. Select at most one highest-value coherent objective from canonical issues only. It may cover several issues only when they share one root cause, compatible targets, and one proof boundary. Use run_in_background to launch one fresh executor Fixer for that objective; never reuse a reviewer conversation. The Fixer applies safe owned changes, records exact attempts/dispositions and proportional verification, and updates the checkpoint. Reviewer receipts describe review completion and are not rewritten by the Fixer; record the separate technical module result from the verified repair outcome. Unselected canonical issues remain durable. If no safe canonical objective exists, record a truthful done/blocked technical result yourself from reviewer evidence without launching a Fixer. Strategic Review owns its own receipt and must not be repeated here.
+		Workflow observations are evidence, not Fixer work. Select a bounded repair batch from canonical issues only. Start with the highest-value coherent bundle; it may cover several issues when they share one root cause, compatible targets, and one proof boundary. Add another independent bundle only when it is low-risk, needs no broad rediscovery, has a separately clear proof boundary, and fits the current context plus targeted evidence. Never batch a different public-action risk, user decision, route context, or unresolved design investigation. Do not use a fixed issue count. Use run_in_background to launch one fresh executor Fixer for the selected batch; never reuse a reviewer conversation. The Fixer applies and verifies every selected bundle before starting the next, records exact attempts/dispositions and proportional proof per bundle, and updates the checkpoint with the deferred queue and reasons. Reviewer receipts describe review completion and are not rewritten by the Fixer; record the separate technical module result from the verified repair outcome. Unselected canonical issues remain durable. If no safe canonical bundle exists, record a truthful done/blocked technical result yourself from reviewer evidence without launching a Fixer. Strategic Review owns its own receipt and must not be repeated here.
 
 		End after dispatch; the runtime waits for the registered Fixer. Do not perform new broad discovery, promote raw observations without reviewer evidence, reconstruct findings from notification prose, render the dashboard, back up, publish, or notify.`, pulseRunID, technicalCheckpoint),
 	}

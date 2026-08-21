@@ -5,13 +5,12 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `implemented`, live-reverify pending on a fresh browser run |
-| Last synchronized | `2026-08-17` |
+| Ticket state | `implementation repaired; live reverify pending` — the read grants shipped, but a 2026-08-21 Linux run proved the granted bridge spill directory was not created before Landlock compiled the policy |
+| Last synchronized | `2026-08-21` |
 
-- **Priority:** P2 — no data loss and no wrong results, but it burns a full agent
-  round trip per occurrence and forces the agent to choose a narrower query
-  having seen nothing. On a browser-testing step, those turns are the scarce
-  resource.
+- **Priority:** P1 — on Linux, a fresh workflow without `tool_output_folder`
+  cannot initialize the sandbox, so both shell and browser execution fail before
+  the step can read inputs or produce outputs.
 - **Owner:** `pkg/browser/executor.go` (snapshot inline cap),
   `controller_message_sequence.go` + `controller_agent_factory.go` (folder guard
   read paths)
@@ -64,6 +63,26 @@ motivating case. But `setupMessageSequenceFolderGuard` and
 `setupKBUpdateFolderGuard` are separate parallel implementations that never
 received it. Measured across the run: every `msgseq-*` session lacked it; only
 `session-group-*` and generic `sub-exec-eval-*` sessions had it.
+
+## 2026-08-21 Video Studio recurrence — a granted path that did not exist
+
+Video Studio's `shortform-script` message-sequence step failed before reading
+its valid `shortform-brief.md` dependency. Both `execute_shell_command` and
+`agent_browser` returned `SANDBOX_UNAVAILABLE (missing tool_output_folder)`.
+The workflow root had no `tool_output_folder` because `mcpbridge` previously
+created it lazily only when an oversized result was first persisted.
+
+The folder-guard parity repair above was therefore necessary but insufficient:
+Landlock compiles its ruleset before the first bridge call and correctly refuses
+to authorize a nonexistent path. A read grant cannot create its own target.
+
+The shared repair belongs in `mcpagent`, where `MCP_TOOL_OUTPUT_DIR` is owned.
+`buildBridgeMCPConfig` now creates the directory with mode `0700` when assigning
+the environment variable, before any coding CLI or guarded tool can run. Setup
+fails with a contextual error if the directory cannot be created; the sandbox
+continues to fail closed rather than silently dropping the grant. Tests prove
+both creation and the failure case. Live acceptance requires retrying the
+Video Studio script step after deploying the rebuilt agent binary.
 
 ## Why the original design was right, and what was kept
 
