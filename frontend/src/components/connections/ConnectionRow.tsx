@@ -48,7 +48,7 @@ export default function ConnectionRow({
 
   return (
     <>
-      <div className="group grid grid-cols-[1fr_6rem_10rem] items-center gap-4 rounded-lg px-3 py-2.5 transition-colors hover:bg-gray-50 dark:hover:bg-slate-700/40">
+      <div className="group grid grid-cols-[minmax(0,1fr)_11rem_11rem] items-center gap-4 rounded-lg px-3 py-2.5 transition-colors hover:bg-gray-50 dark:hover:bg-slate-700/40">
         {/* Connector — opens the connection's own page */}
         <button
           type="button"
@@ -72,7 +72,7 @@ export default function ConnectionRow({
         </span>
 
         {/* Status / action */}
-        <div className="flex items-center justify-end">
+        <div className="flex items-center justify-start">
           {blockedLabel ? (
             <span className="text-sm text-gray-400 dark:text-gray-500">{blockedLabel}</span>
           ) : isConnected ? (
