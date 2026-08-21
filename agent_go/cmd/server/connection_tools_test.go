@@ -438,6 +438,35 @@ func TestInferReadOnly(t *testing.T) {
 	}
 }
 
+func TestDisplayTitle(t *testing.T) {
+	// A server that supplies its own title always wins.
+	if got := displayTitle("gmail", "get_email_message", "Get email message"); got != "Get email message" {
+		t.Errorf("got %q, want the server's own title", got)
+	}
+
+	tests := []struct {
+		server string
+		tool   string
+		want   string
+	}{
+		// The server name is redundant on its own page, so it is dropped.
+		{"notion", "notion-create-pages", "Create pages"},
+		{"notion", "notion-search", "Search"},
+		{"gmail", "get_email_message", "Get email message"},
+		{"gmail", "listDraftEmails", "List draft emails"},
+		// A name that merely starts with similar letters is not a prefix match.
+		{"notion", "notionalvalue_get", "Notionalvalue get"},
+		// Nothing left after dropping the prefix means the prefix is kept.
+		{"notion", "notion", "Notion"},
+	}
+
+	for _, tc := range tests {
+		if got := displayTitle(tc.server, tc.tool, ""); got != tc.want {
+			t.Errorf("displayTitle(%q, %q) = %q, want %q", tc.server, tc.tool, got, tc.want)
+		}
+	}
+}
+
 func TestSplitToolName(t *testing.T) {
 	tests := []struct {
 		name string

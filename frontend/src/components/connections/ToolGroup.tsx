@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Eye, PencilLine } from 'lucide-react'
+import { ChevronDown, ChevronRight, CircleCheck, Ban } from 'lucide-react'
 import type { ConnectionTool } from '../../services/connectionsApi'
 
 interface ToolGroupProps {
@@ -6,45 +6,38 @@ interface ToolGroupProps {
   tools: ConnectionTool[]
   expanded: boolean
   onToggleExpanded: () => void
-  onToggleTool: (name: string) => void
-  /** Turns every tool in this group on or off in one move. */
+  onSetTool: (name: string, enabled: boolean) => void
+  /** Sets every tool in this group at once. */
   onSetAll: (enabled: boolean) => void
 }
 
 const LABELS = {
-  read_only: {
-    title: 'Read-only tools',
-    icon: Eye,
-    hint: 'These only look at your data.',
-  },
-  write: {
-    title: 'Write/delete tools',
-    icon: PencilLine,
-    hint: 'These can change or remove your data.',
-  },
+  read_only: { title: 'Read-only tools', bulkOn: 'Allow all', bulkOff: 'Disable all' },
+  write: { title: 'Write/delete tools', bulkOn: 'Allow all', bulkOff: 'Disable all' },
 } as const
 
 /**
- * One collapsible group of tools with a bulk switch. Splitting read-only from
- * write/delete lets someone act on the risky half without reading 28 names.
+ * A collapsible group of tools. Each row carries the choice itself — allowed or
+ * disabled — as two buttons, so the current state is visible at a glance down
+ * the column rather than having to be read one checkbox at a time.
  */
 export default function ToolGroup({
   kind,
   tools,
   expanded,
   onToggleExpanded,
-  onToggleTool,
+  onSetTool,
   onSetAll,
 }: ToolGroupProps) {
   if (tools.length === 0) return null
 
-  const { title, icon: Icon, hint } = LABELS[kind]
+  const { title, bulkOn, bulkOff } = LABELS[kind]
   const enabledCount = tools.filter(t => t.enabled).length
   const allOn = enabledCount === tools.length
 
   return (
-    <div className="overflow-hidden rounded-md border border-gray-200 dark:border-slate-700">
-      <div className="flex items-center gap-2 bg-gray-50 px-3 py-2 dark:bg-slate-800">
+    <div className="overflow-hidden rounded-lg border border-gray-200 dark:border-slate-700">
+      <div className="flex items-center gap-2 px-3 py-2.5">
         <button
           type="button"
           onClick={onToggleExpanded}
@@ -56,59 +49,74 @@ export default function ToolGroup({
           ) : (
             <ChevronRight className="h-4 w-4 shrink-0 text-gray-500" aria-hidden="true" />
           )}
-          <Icon
-            className={`h-3.5 w-3.5 shrink-0 ${
-              kind === 'write'
-                ? 'text-amber-600 dark:text-amber-400'
-                : 'text-gray-500 dark:text-gray-400'
-            }`}
-            aria-hidden="true"
-          />
           <span className="truncate text-sm font-medium text-gray-900 dark:text-gray-100">
             {title}
           </span>
-          <span className="shrink-0 rounded bg-gray-200 px-1.5 py-0.5 text-xs text-gray-600 dark:bg-slate-700 dark:text-gray-300">
+          <span className="shrink-0 rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-600 dark:bg-slate-700 dark:text-gray-300">
             {tools.length}
           </span>
-          <span className="truncate text-xs text-gray-400 dark:text-gray-500">{hint}</span>
         </button>
 
-        <span className="shrink-0 text-xs text-gray-500 dark:text-gray-400">
-          {enabledCount}/{tools.length} on
-        </span>
         <button
           type="button"
           onClick={() => onSetAll(!allOn)}
-          className="shrink-0 rounded-md px-2 py-1 text-xs font-medium text-blue-600 transition-colors hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/20"
+          className="shrink-0 rounded-md border border-gray-300 px-2.5 py-1 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-100 dark:border-slate-600 dark:text-gray-300 dark:hover:bg-slate-700"
         >
-          {allOn ? 'Turn all off' : 'Turn all on'}
+          {allOn ? bulkOff : bulkOn}
         </button>
       </div>
 
       {expanded && (
         <div className="divide-y divide-gray-100 dark:divide-slate-800">
           {tools.map(tool => (
-            <label
+            <div
               key={tool.name}
-              className="flex cursor-pointer items-start gap-3 p-2.5 transition-colors hover:bg-gray-50 dark:hover:bg-slate-700/40"
+              className="flex items-center gap-3 px-3 py-2 transition-colors hover:bg-gray-50 dark:hover:bg-slate-700/40"
             >
-              <input
-                type="checkbox"
-                checked={tool.enabled}
-                onChange={() => onToggleTool(tool.name)}
-                className="mt-0.5 h-4 w-4 shrink-0 rounded border-gray-300 text-blue-600 focus:ring-2 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700"
-              />
-              <span className="min-w-0">
-                <span className="block truncate font-mono text-xs text-gray-900 dark:text-gray-100">
-                  {tool.name}
-                </span>
-                {tool.description && (
-                  <span className="line-clamp-2 text-xs text-gray-500 dark:text-gray-400">
-                    {tool.description}
-                  </span>
-                )}
+              {/* The raw name stays reachable on hover so a tool can still be
+                  identified exactly without cluttering the row. */}
+              <span
+                title={tool.name}
+                className="min-w-0 flex-1 truncate text-sm text-gray-800 dark:text-gray-200"
+              >
+                {tool.title || tool.name}
               </span>
-            </label>
+
+              <div
+                role="group"
+                aria-label={`Permission for ${tool.title || tool.name}`}
+                className="flex shrink-0 items-center gap-0.5 rounded-lg bg-gray-100 p-0.5 dark:bg-slate-800"
+              >
+                <button
+                  type="button"
+                  onClick={() => onSetTool(tool.name, true)}
+                  aria-pressed={tool.enabled}
+                  title="Allow"
+                  className={`rounded-md p-1.5 transition-colors ${
+                    tool.enabled
+                      ? 'bg-white text-green-600 shadow-sm dark:bg-slate-700 dark:text-green-400'
+                      : 'text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300'
+                  }`}
+                >
+                  <CircleCheck className="h-4 w-4" aria-hidden="true" />
+                  <span className="sr-only">Allow</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onSetTool(tool.name, false)}
+                  aria-pressed={!tool.enabled}
+                  title="Disable"
+                  className={`rounded-md p-1.5 transition-colors ${
+                    !tool.enabled
+                      ? 'bg-white text-red-600 shadow-sm dark:bg-slate-700 dark:text-red-400'
+                      : 'text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300'
+                  }`}
+                >
+                  <Ban className="h-4 w-4" aria-hidden="true" />
+                  <span className="sr-only">Disable</span>
+                </button>
+              </div>
+            </div>
           ))}
         </div>
       )}
