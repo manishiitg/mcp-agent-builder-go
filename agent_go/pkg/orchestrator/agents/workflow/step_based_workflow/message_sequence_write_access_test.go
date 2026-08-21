@@ -322,13 +322,56 @@ func TestMessageSequenceItemUsesManagedDBToolsWithoutRawDBFilesystemAccess(t *te
 		DB: true, Knowledgebase: true, Learnings: true,
 	})
 	allPaths := strings.Join(append(append([]string{}, readPaths...), writePaths...), "\n")
-	if strings.Contains(allPaths, "/db") {
-		t.Fatalf("message-sequence item unexpectedly received raw DB filesystem access: %v", writePaths)
+	// PLAT-169's actual concern was db/db.sqlite reachable via shell (Landlock
+	// can't allow the parent and deny just that one file). db/assets/ is a
+	// sibling, not a child, of db.sqlite, and is deliberately granted below
+	// (PLAT-175) -- so the guard here is specifically the sqlite file and any
+	// other db/ path OUTSIDE assets/, not "db/" as a substring.
+	if strings.Contains(allPaths, "db.sqlite") {
+		t.Fatalf("message-sequence item unexpectedly received raw db.sqlite filesystem access: %v", writePaths)
+	}
+	for _, p := range append(append([]string{}, readPaths...), writePaths...) {
+		if strings.Contains(p, "/db/") && !strings.Contains(p, "/db/assets") {
+			t.Fatalf("message-sequence item received a db/ path outside assets/: %q (full sets: read=%v write=%v)", p, readPaths, writePaths)
+		}
 	}
 	joined := strings.Join(writePaths, "\n")
 	for _, forbidden := range []string{"/knowledgebase/notes", "/learnings/_global"} {
 		if strings.Contains(joined, forbidden) {
 			t.Fatalf("read-only non-DB store unexpectedly received write access to %s: %v", forbidden, writePaths)
+		}
+	}
+}
+
+// PLAT-175. confida-login's survey-app-and-refresh-knowledge step is a
+// message_sequence step instructed, in its own plan description, to sync
+// db/assets/business-context/ via shell every cycle -- read the existing
+// .source_sha to compare, then add/overwrite/remove files and rewrite
+// .source_sha and _manifest.json. mutate_workflow_db is SQL-only and cannot
+// do this. Before this fix, setupMessageSequenceFolderGuard granted nothing
+// under db/ at all (PLAT-169's follow-up dropped the whole folder instead of
+// narrowing to just db.sqlite), so this step had no legal path to do the one
+// thing its own instructions require every run -- silently, since nothing
+// upstream had changed on the runs where it was checked.
+func TestMessageSequenceFolderGuardGrantsDBAssetsReadWrite(t *testing.T) {
+	hcpo := newMessageSequenceClosingTestOrchestrator(t)
+	config := &AgentConfigs{
+		KnowledgebaseAccess: KBAccessRead,
+		LearningsAccess:     LearningsAccessRead,
+	}
+	readPaths, writePaths := hcpo.setupMessageSequenceFolderGuard("step-1", "survey-app-and-refresh-knowledge", config, MessageSequenceWriteAccess{
+		DB: true,
+	})
+	wantAssetsPath := filepath.Join("Workflow", "test-flow", "db", "assets")
+	if !slices.Contains(readPaths, wantAssetsPath) {
+		t.Fatalf("db/assets/ missing from read paths: %v", readPaths)
+	}
+	if !slices.Contains(writePaths, wantAssetsPath) {
+		t.Fatalf("db/assets/ missing from write paths: %v", writePaths)
+	}
+	for _, p := range append(append([]string{}, readPaths...), writePaths...) {
+		if strings.Contains(p, "db.sqlite") {
+			t.Fatalf("db/assets/ grant must not also expose db.sqlite: %q", p)
 		}
 	}
 }

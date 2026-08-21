@@ -1271,18 +1271,27 @@ func (hcpo *StepBasedWorkflowOrchestrator) setupMessageSequenceFolderGuard(stepP
 	}
 	kbAccess := resolveKnowledgebaseAccess(stepConfig, hcpo.UseKnowledgebase())
 	learningsAccess := resolveLearningsAccess(stepConfig)
-	// message_sequence agents use query_workflow_db/mutate_workflow_db. Do not
-	// also grant raw db/ filesystem access: configureWorkflowDBSession blocks
-	// db.sqlite for managed agents, and Landlock cannot represent a broad parent
-	// allow with a narrower child deny because its rules are additive. The old
-	// pair made every shell/browser call fail before it ran (PLAT-169 follow-up).
+	// message_sequence agents use query_workflow_db/mutate_workflow_db, so
+	// db/db.sqlite itself stays off the filesystem grant: configureWorkflowDBSession
+	// blocks it for managed agents, and Landlock cannot represent a broad parent
+	// allow with a narrower child deny because its rules are additive (PLAT-169
+	// follow-up). db/assets/ is a sibling of db.sqlite, not a child of it, so
+	// granting it directly doesn't reopen that conflict -- and it has to be
+	// granted, because it's the only durable location a step can write an
+	// arbitrary file to (stores.md), and mutate_workflow_db is SQL-only and
+	// cannot write one. A prior version of this fix dropped the whole db/ grant
+	// instead of narrowing it, which took db/assets/ down as collateral damage:
+	// confida-login's survey step is instructed to sync db/assets/business-context/
+	// via shell every cycle and had no legal path to do so (PLAT-175).
+	dbAssetsPath := filepath.Join(getDBPath(baseWorkspacePath), DBAssetsFolderName)
+	readPaths = append(readPaths, dbAssetsPath)
 	if kbAccessAllowsRead(kbAccess) {
 		readPaths = append(readPaths, getKnowledgebasePath(baseWorkspacePath))
 	}
 	if learningsAccess != LearningsAccessNone {
 		readPaths = appendLearningReadPaths(readPaths, baseWorkspacePath, stepID)
 	}
-	writePaths = []string{stepFolderPath, downloadsPath}
+	writePaths = []string{stepFolderPath, downloadsPath, dbAssetsPath}
 	if itemWriteAccess.Knowledgebase && kbAccessAllowsWrite(kbAccess) {
 		writePaths = append(writePaths, filepath.Join(getKnowledgebasePath(baseWorkspacePath), "notes"))
 	}
