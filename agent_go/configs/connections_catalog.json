@@ -103,7 +103,8 @@
       ],
       "sensitive_actions": [
         "Create or update items on your boards"
-      ]
+      ],
+      "icon": "monday"
     },
     {
       "id": "sentry",
@@ -201,7 +202,8 @@
       ],
       "sensitive_actions": [
         "Create, alter, or drop database objects"
-      ]
+      ],
+      "icon": "neon"
     },
     {
       "id": "cloudflare-observability",
@@ -569,7 +571,8 @@
       "sensitive_actions": [
         "Read the contents of your email"
       ],
-      "setup_hint": "Set the Microsoft 365 remote MCP server URL in connections_catalog.json, then set MICROSOFT_OAUTH_CLIENT_ID and MICROSOFT_OAUTH_CLIENT_SECRET on the server."
+      "setup_hint": "Set the Microsoft 365 remote MCP server URL in connections_catalog.json, then set MICROSOFT_OAUTH_CLIENT_ID and MICROSOFT_OAUTH_CLIENT_SECRET on the server.",
+      "icon": "microsoft"
     }
   ]
 }

@@ -1,6 +1,7 @@
 import type { CSSProperties } from 'react'
 import { Boxes } from 'lucide-react'
 import { BRAND_PATHS } from './brandPaths'
+import { BRAND_LOGOS } from './brandLogos'
 
 interface ConnectionIconProps {
   /** Catalog `icon` slug, e.g. "notion". */
@@ -40,10 +41,14 @@ function markColorForDarkTheme(brandColor?: string): string | undefined {
 }
 
 /**
- * A connector's mark: the real brand logo when one is vendored for it, and a
- * neutral glyph otherwise. Custom MCP servers and brands with no available mark
- * fall back rather than being given an unrelated icon, which reads as a logo
- * the service does not actually have.
+ * A connector's mark, in three tiers.
+ *
+ * Brands whose logo genuinely carries several colours are drawn in full colour.
+ * Brands that are single-colour by design — Notion, GitHub, Vercel, Linear —
+ * are drawn from a path so the colour can follow the theme, which is what keeps
+ * a near-black mark visible on a dark background. Anything with no published
+ * mark, including custom MCP servers, falls back to a neutral glyph rather than
+ * borrowing an unrelated icon.
  */
 export default function ConnectionIcon({
   icon,
@@ -51,6 +56,7 @@ export default function ConnectionIcon({
   size = 'md',
   className = '',
 }: ConnectionIconProps) {
+  const logo = icon ? BRAND_LOGOS[icon] : undefined
   const path = icon ? BRAND_PATHS[icon] : undefined
   const box = size === 'sm' ? 'h-8 w-8' : 'h-10 w-10'
   const glyph = size === 'sm' ? 'h-4 w-4' : 'h-5 w-5'
@@ -71,7 +77,18 @@ export default function ConnectionIcon({
           : undefined
       }
     >
-      {path ? (
+      {logo ? (
+        <svg
+          viewBox={logo.viewBox}
+          className={glyph}
+          // Non-square marks keep their proportions rather than being stretched
+          // to fill the tile.
+          preserveAspectRatio="xMidYMid meet"
+          aria-hidden="true"
+          focusable="false"
+          dangerouslySetInnerHTML={{ __html: logo.markup }}
+        />
+      ) : path ? (
         <svg
           viewBox="0 0 24 24"
           className={glyph}
