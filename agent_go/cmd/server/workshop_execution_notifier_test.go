@@ -44,6 +44,64 @@ func TestWorkshopExecutionNotifierSuppressesRepeatedMessageSequenceParentFailure
 	}
 }
 
+func TestWorkshopExecutionNotifierSuppressesParentOwnedMessageSequenceSuccess(t *testing.T) {
+	registry := NewBackgroundAgentRegistry()
+	api := &StreamingAPI{bgAgentRegistry: registry}
+	const (
+		sessionID = "message-sequence-child-success"
+		parentID  = "workflow-full-script"
+		childID   = "msgseq-script-execute"
+	)
+	parent := &BackgroundAgent{ID: parentID, Name: "Script [default]", SessionID: sessionID, Status: BGAgentRunning, CreatedAt: time.Now()}
+	child := &BackgroundAgent{
+		ID: childID, ParentExecutionID: parentID, Name: "Message sequence item -> Script / execute-and-verify (user_message)",
+		SessionID: sessionID, Kind: "message_sequence_item", Status: BGAgentRunning, CreatedAt: time.Now(),
+		Metadata: map[string]string{"execution_type": "message-sequence-item"},
+	}
+	registry.Register(sessionID, parent)
+	registry.Register(sessionID, child)
+	completionCh := registry.GetNotificationChannel(sessionID)
+
+	notifier := &workshopExecutionBgNotifier{api: api, sessionID: sessionID}
+	notifier.OnExecutionComplete(childID, child.Name, "script complete", child.Metadata, nil)
+
+	if got := child.GetSnapshot().Metadata["notification_suppression"]; got != "parent-owned-message-sequence-success" {
+		t.Fatalf("notification_suppression = %q, want parent-owned success marker", got)
+	}
+	select {
+	case got := <-completionCh:
+		t.Fatalf("parent-owned message-sequence success queued a duplicate auto-notification for %q", got)
+	default:
+	}
+}
+
+func TestWorkshopExecutionNotifierKeepsStandaloneMessageSequenceSuccess(t *testing.T) {
+	registry := NewBackgroundAgentRegistry()
+	api := &StreamingAPI{bgAgentRegistry: registry}
+	const (
+		sessionID = "standalone-message-sequence-success"
+		childID   = "msgseq-standalone-execute"
+	)
+	child := &BackgroundAgent{
+		ID: childID, ParentExecutionID: "conversation-root-not-in-registry", Name: "Message sequence item -> Script / execute-and-verify (user_message)",
+		SessionID: sessionID, Kind: "message_sequence_item", Status: BGAgentRunning, CreatedAt: time.Now(),
+	}
+	registry.Register(sessionID, child)
+	completionCh := registry.GetNotificationChannel(sessionID)
+
+	notifier := &workshopExecutionBgNotifier{api: api, sessionID: sessionID}
+	notifier.OnExecutionComplete(childID, child.Name, "script complete", nil, nil)
+
+	select {
+	case got := <-completionCh:
+		if got != childID {
+			t.Fatalf("completion id = %q, want %q", got, childID)
+		}
+	default:
+		t.Fatal("standalone message-sequence success notification was suppressed")
+	}
+}
+
 func TestWorkshopExecutionNotifierKeepsDistinctParentFailureNotification(t *testing.T) {
 	registry := NewBackgroundAgentRegistry()
 	api := &StreamingAPI{bgAgentRegistry: registry}
