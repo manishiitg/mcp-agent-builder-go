@@ -796,6 +796,7 @@ func (api *StreamingAPI) handleDisconnectConnection(w http.ResponseWriter, r *ht
 		return
 	}
 
+	forgetServerTools(serverName)
 	api.appendServerLog(serverName, "info", "Disconnected — token removed, configuration kept")
 	api.logger.Info(fmt.Sprintf("Disconnected user %s from %s (config retained)", userID, serverName))
 
@@ -835,6 +836,7 @@ func (api *StreamingAPI) handleRemoveConnection(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	forgetServerTools(serverName)
 	api.logger.Info(fmt.Sprintf("Removed connection %s for user %s", serverName, userID))
 	triggerDiscovery(api)
 
