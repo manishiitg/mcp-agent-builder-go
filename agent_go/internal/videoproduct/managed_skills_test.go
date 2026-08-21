@@ -127,7 +127,7 @@ func TestGenerationSkillsRegisterAndStayOutOfTheInfographicPipeline(t *testing.T
 		{"veo-video", []string{"first plus last frame", "previously generated Veo", "long-running", "show_video"}},
 		{"minimax-h3-video", []string{"minimax/hailuo-03", "native stereo audio", "reference ledger", "show_video"}},
 		{"gemini-omni-video", []string{"google/gemini-omni-flash", "<IMAGE_REF_0>", "fal-ai", "show_video"}},
-		{"video-model-selection", []string{"video-cinematography", "fal-ai", "google-ai", "seeddance-api", "Shot count vs. budget", "Present a costed choice", "maximum cost", "visible native dialogue", "off-camera TTS voiceover", "must never silently turn"}},
+		{"video-model-selection", []string{"video-cinematography", "fal-ai", "google-ai", "seeddance-api", "Shot count vs. budget", "Present a costed choice", "least-expensive option", "Veo 3.1 Lite", "Seedance 2.5", "maximum cost", "visible native dialogue", "off-camera TTS voiceover", "must never silently turn"}},
 		{"video-cinematography", []string{"dolly is not zoom", "reference-image conditioning", "video-model-selection"}},
 		{"video-storytelling", []string{"video-cinematography", "video-model-selection", "But-therefore, not and-then", "Scaling to true long-form"}},
 		{"generated-video-quality", []string{"character_consistency", "generation_artifacts", "temporal_coherence", "video-quality"}},
