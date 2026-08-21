@@ -1278,6 +1278,17 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 	copy(updatedContextFiles, previousContextFiles)
 	artifactStepID, artifactStepPath := getExecutionArtifactIdentity(step.GetID(), stepPath, execCtx)
 
+	// PLAT-174. Everything below reads step.AgentConfigs (folder guard scope,
+	// scripted-mode detection, and eventually the execution agent's LLM), and
+	// until now that field was a snapshot taken exactly once, at run start
+	// (controller.go's populateRuntimeFields sweep over every plan step). A
+	// step_config.json change made mid-run — even minutes before this exact
+	// step began, well after the change landed on disk — never reached it,
+	// because the run was already in flight. "Before this step started" was
+	// never the boundary that mattered; "before the run started" was, and by
+	// the time any step but the first one runs, that boundary has passed.
+	hcpo.refreshStepAgentConfigsBeforeExecution(ctx, step)
+
 	// Emit step_started event (also emits step progress with status="start")
 	hcpo.emitStepStartedEvent(ctx, step, stepIndex, stepPath)
 
@@ -2886,6 +2897,38 @@ func isRoutingStep(step PlanStepInterface) bool {
 func isMessageSequenceStep(step PlanStepInterface) bool {
 	_, ok := step.(*MessageSequencePlanStep)
 	return ok
+}
+
+// refreshStepAgentConfigsBeforeExecution re-reads step_config.json and
+// repopulates this one step's runtime AgentConfigs immediately before it
+// executes, so an update_step_config change made after the run started —
+// but before this step's own dispatch — actually takes effect.
+//
+// PLAT-174. Before this, step_config.json was read exactly once per run
+// (controller.go's populateRuntimeFields sweep, at run start), and every
+// step for the rest of that run carried whatever snapshot existed at that
+// moment. A change landing on disk after the run started never reached a
+// step that had not begun yet, no matter how far ahead of that step's own
+// turn it was made — confirmed live when a pin to execute-browser-and-capture-apis,
+// saved 16 minutes before that step began, still ran on the pre-run-start
+// default for all three of that step's executions.
+//
+// A read failure here (transient I/O, a mid-write file) must not abort step
+// dispatch or blank out config the step already has — it logs and keeps
+// whatever populateRuntimeFields already set at run start, the same
+// fail-open behavior controller.go uses for the run-start read itself.
+func (hcpo *StepBasedWorkflowOrchestrator) refreshStepAgentConfigsBeforeExecution(ctx context.Context, step PlanStepInterface) {
+	if step == nil || strings.TrimSpace(step.GetID()) == "" {
+		return
+	}
+	stepConfigs, err := hcpo.ReadStepConfigs(ctx)
+	if err != nil {
+		hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ [CONFIG_REFRESH] Failed to re-read step_config.json before executing step %s: %v (keeping config from run start)", step.GetID(), err))
+		return
+	}
+	if err := populateRuntimeFields(step, stepConfigs); err != nil {
+		hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ [CONFIG_REFRESH] Failed to refresh runtime config for step %s: %v (keeping config from run start)", step.GetID(), err))
+	}
 }
 
 // getAgentConfigs returns AgentConfigs from a PlanStepInterface
