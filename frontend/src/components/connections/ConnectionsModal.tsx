@@ -331,9 +331,6 @@ export default function ConnectionsModal({ onClose }: ConnectionsModalProps) {
                   <span className="text-xs font-medium text-gray-500 dark:text-gray-400">
                     Status
                   </span>
-                  <span className="text-xs font-medium text-gray-500 dark:text-gray-400">
-                    Action
-                  </span>
                 </div>
 
                 <div className="divide-y divide-gray-100 dark:divide-slate-800">
