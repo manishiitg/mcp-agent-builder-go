@@ -101,4 +101,80 @@ describe('buildCostActivityBreakdown', () => {
     expect(workflow.executions[0].cost.total_cost_usd).toBe(4)
     expect(workflow.executions[0].timing.duration_ms).toBe(30_000)
   })
+
+  // PLAT-166
+  it('carries a by_phase breakdown through into the grouped execution row', () => {
+    const summary: CostSummary = {
+      total: cost(1.25),
+      by_date: {},
+      by_model: {},
+      by_scope: {
+        workflow_execution: {
+          ...cost(1.25),
+          by_execution: {
+            'exec-review-measure': {
+              ...cost(1.25),
+              by_phase: {
+                execution_only: cost(1.0),
+                reflection: cost(0.25),
+              },
+            },
+          },
+        },
+      },
+    }
+
+    const workflow = buildCostActivityBreakdown(summary, null).find(category => category.id === 'workflow')!
+    expect(workflow.executions).toHaveLength(1)
+    const [execution] = workflow.executions
+    expect(execution.cost.total_cost_usd).toBe(1.25)
+    expect(execution.cost.by_phase?.execution_only.total_cost_usd).toBe(1.0)
+    expect(execution.cost.by_phase?.reflection.total_cost_usd).toBe(0.25)
+  })
+
+  // PLAT-166
+  it('sums by_phase per-phase when executionGroup merges dispatched retry ids', () => {
+    const summary: CostSummary = {
+      total: cost(2),
+      by_date: {},
+      by_model: {},
+      by_scope: {
+        workflow_execution: {
+          ...cost(2),
+          by_execution: {
+            'exec-step-fetch-1786495485849093000': {
+              ...cost(1),
+              by_phase: { execution_only: cost(0.8), reflection: cost(0.2) },
+            },
+            'exec-step-fetch-1786495485849093001': {
+              ...cost(1),
+              by_phase: { execution_only: cost(0.7), reflection: cost(0.3) },
+            },
+          },
+        },
+      },
+    }
+
+    const workflow = buildCostActivityBreakdown(summary, null).find(category => category.id === 'workflow')!
+    expect(workflow.executions).toHaveLength(1)
+    const [execution] = workflow.executions
+    expect(execution.cost.total_cost_usd).toBe(2)
+    expect(execution.cost.by_phase?.execution_only.total_cost_usd).toBeCloseTo(1.5)
+    expect(execution.cost.by_phase?.reflection.total_cost_usd).toBeCloseTo(0.5)
+  })
+
+  // PLAT-166
+  it('omits by_phase for an execution that never carried one', () => {
+    const summary: CostSummary = {
+      total: cost(1),
+      by_date: {},
+      by_model: {},
+      by_scope: {
+        chat: { ...cost(1), by_execution: { 'chat-turn': cost(1) } },
+      },
+    }
+
+    const builder = buildCostActivityBreakdown(summary, null).find(category => category.id === 'builder')!
+    expect(builder.executions[0].cost.by_phase).toBeUndefined()
+  })
 })

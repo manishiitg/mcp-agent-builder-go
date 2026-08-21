@@ -1633,8 +1633,17 @@ export interface CostDateAggregate extends CostAggregate {
   workflow_run_count?: number
 }
 
+// CostExecutionAggregate is one runtime execution's cost, with an optional
+// phase breakdown (PLAT-166): a workflow step's own execution-turn cost vs
+// its separate post-completion reflection-turn cost, when the ledger entries
+// making up this execution carried a phase. Absent for executions that never
+// distinguished a phase — the combined total above is unaffected either way.
+export interface CostExecutionAggregate extends CostAggregate {
+  by_phase?: Record<string, CostAggregate>
+}
+
 export interface CostScopeAggregate extends CostAggregate {
-  by_execution?: Record<string, CostAggregate>
+  by_execution?: Record<string, CostExecutionAggregate>
 }
 
 export interface CostSummary {

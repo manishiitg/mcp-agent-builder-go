@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/common"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/costobserver"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents"
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
@@ -23,10 +24,14 @@ import (
 // happen once, with every store the agent must route to reachable at the same
 // moment.
 
-// reflectionCostPhase is the cost-ledger phase the reflection turn attributes
-// to, producing `reflection:<step-id>` keys next to the step's own
-// `execution_only:<step-id>`. Kept as a constant because the cost UI, this
-// package, and any ledger analysis have to agree on the exact string.
+// reflectionCostPhase is the phase the reflection turn pushes onto the
+// ContextAwareEventBridge, producing `reflection:<step-id>` keys next to the
+// step's own `execution_only:<step-id>` in the older per-step token-usage-file
+// system. It is the SAME string as costobserver.PhaseReflection (used below
+// to attribute this turn in the SQLite cost ledger — a separate system, see
+// PLAT-166) but not the same constant; the two are kept deliberately aligned
+// rather than merged, since unifying the two attribution systems is a bigger
+// change than either ticket that touched this file justified.
 const reflectionCostPhase = "reflection"
 
 type stepReflectionTurnResult struct {
@@ -180,6 +185,20 @@ func (hcpo *StepBasedWorkflowOrchestrator) runStepReflectionTurn(
 			// turn can never leave the bridge's context stack unbalanced, which
 			// would misattribute every later step in the run.
 			defer cab.PopContext()
+		}
+		// PLAT-166. The bridge push above only affects the older per-step
+		// token-usage-file system; the SQLite cost ledger (what the Cost
+		// Analysis UI actually reads) is fed by a completely separate
+		// AgentEventListener — the cost observer attached to this same agent
+		// back when its execution turn started. Toggle its phase here too, or
+		// this turn's cost silently lands in the step's `execution_only`
+		// bucket in the ledger even though the bridge correctly tagged it
+		// `reflection`. Deferred for the same reason as cab.PopContext above.
+		for _, observer := range ba.Observers() {
+			if costObserver, ok := observer.(*costobserver.Observer); ok {
+				costObserver.SetPhase(costobserver.PhaseReflection)
+				defer costObserver.SetPhase(costobserver.PhaseExecutionOnly)
+			}
 		}
 		reflectionStartedAt := time.Now().UTC()
 		turnResult, updatedHistory, turnErr := hcpo.withWorkshopMessageTarget(timingCaptureCtx, step.GetID(), "reflection", executionAgent,

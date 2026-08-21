@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS cost_events (
     run_id TEXT NOT NULL DEFAULT '',
     execution_id TEXT NOT NULL DEFAULT '',
     scope TEXT NOT NULL DEFAULT 'unknown',
+    phase TEXT NOT NULL DEFAULT '',
     agent_mode TEXT NOT NULL DEFAULT '',
     component TEXT NOT NULL DEFAULT '',
     correlation_id TEXT NOT NULL DEFAULT '',
@@ -110,6 +111,10 @@ func NewSQLiteLedger(dbPath string) (*Ledger, error) {
 		db.Close()
 		return nil, fmt.Errorf("costledger: migrate duration column: %w", err)
 	}
+	if err := ensureCostEventColumn(db, "phase", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("costledger: migrate phase column: %w", err)
+	}
 	return &Ledger{db: &sqliteLedger{db: db}}, nil
 }
 
@@ -148,15 +153,15 @@ func (s *sqliteLedger) append(e Entry) error {
 	const insertEvent = `
 INSERT OR IGNORE INTO cost_events (
     event_id, idempotency_key, occurred_at, user_id, workflow_id, session_id,
-    run_id, execution_id, scope, agent_mode, component, correlation_id,
+    run_id, execution_id, scope, phase, agent_mode, component, correlation_id,
     requested_provider, requested_model_id, effective_provider, effective_model_id,
     turn_count, llm_call_count, llm_generation_duration_ms, prompt_tokens, completion_tokens, reasoning_tokens,
     cache_read_tokens, cache_write_tokens, total_cost_usd, currency, billing_basis,
     pricing_source, pricing_version, tool_name, operation_metadata_json
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	args := []interface{}{
 		e.EventID, e.IdempotencyKey, e.Timestamp.UTC().Format(time.RFC3339Nano),
-		e.UserID, e.WorkflowID, e.SessionID, e.RunID, e.ExecutionID, e.Scope,
+		e.UserID, e.WorkflowID, e.SessionID, e.RunID, e.ExecutionID, e.Scope, e.Phase,
 		e.AgentMode, e.Component, e.CorrelationID, e.Provider, e.ModelID,
 		e.EffectiveProvider, e.EffectiveModelID, e.TurnCount, e.LLMCallCount, e.LLMGenerationDurationMS,
 		e.PromptTokens, e.CompletionTokens, e.ReasoningTokens, e.CacheReadTokens,
@@ -297,7 +302,7 @@ func (s *sqliteLedger) summarizeWindow(fromInclusive, toExclusive, executionID, 
 	}
 	query := `
 SELECT event_id, idempotency_key, occurred_at, user_id, workflow_id, session_id,
-       run_id, execution_id, scope, agent_mode, component, correlation_id,
+       run_id, execution_id, scope, phase, agent_mode, component, correlation_id,
        requested_provider, requested_model_id, effective_provider, effective_model_id,
        turn_count, llm_call_count, llm_generation_duration_ms, prompt_tokens, completion_tokens, reasoning_tokens,
        cache_read_tokens, cache_write_tokens, total_cost_usd, currency, billing_basis,
@@ -339,7 +344,7 @@ FROM cost_events`
 		var occurredAt, metadataJSON string
 		if err := rows.Scan(
 			&e.EventID, &e.IdempotencyKey, &occurredAt, &e.UserID, &e.WorkflowID,
-			&e.SessionID, &e.RunID, &e.ExecutionID, &e.Scope, &e.AgentMode,
+			&e.SessionID, &e.RunID, &e.ExecutionID, &e.Scope, &e.Phase, &e.AgentMode,
 			&e.Component, &e.CorrelationID, &e.Provider, &e.ModelID,
 			&e.EffectiveProvider, &e.EffectiveModelID, &e.TurnCount, &e.LLMCallCount, &e.LLMGenerationDurationMS,
 			&e.PromptTokens, &e.CompletionTokens, &e.ReasoningTokens,
@@ -456,14 +461,14 @@ func (s *sqliteLedger) migrateLegacyJSONL(path string) (MigrationReport, error) 
 		result, err := tx.Exec(`
 INSERT OR IGNORE INTO cost_events (
     event_id, idempotency_key, occurred_at, user_id, workflow_id, session_id,
-    run_id, execution_id, scope, agent_mode, component, correlation_id,
+    run_id, execution_id, scope, phase, agent_mode, component, correlation_id,
     requested_provider, requested_model_id, effective_provider, effective_model_id,
     turn_count, llm_call_count, llm_generation_duration_ms, prompt_tokens, completion_tokens, reasoning_tokens,
     cache_read_tokens, cache_write_tokens, total_cost_usd, currency, billing_basis,
     pricing_source, pricing_version, tool_name, operation_metadata_json
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			e.EventID, e.IdempotencyKey, e.Timestamp.UTC().Format(time.RFC3339Nano),
-			e.UserID, e.WorkflowID, e.SessionID, e.RunID, e.ExecutionID, e.Scope,
+			e.UserID, e.WorkflowID, e.SessionID, e.RunID, e.ExecutionID, e.Scope, e.Phase,
 			e.AgentMode, e.Component, e.CorrelationID, e.Provider, e.ModelID,
 			e.EffectiveProvider, e.EffectiveModelID, e.TurnCount, e.LLMCallCount, e.LLMGenerationDurationMS,
 			e.PromptTokens, e.CompletionTokens, e.ReasoningTokens, e.CacheReadTokens,

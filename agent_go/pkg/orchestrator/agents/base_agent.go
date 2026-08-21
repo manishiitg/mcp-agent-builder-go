@@ -476,6 +476,14 @@ func (ba *BaseAgent) AddObserver(observer mcpagent.AgentEventListener) error {
 	return nil
 }
 
+// Observers returns every event listener registered on this agent so far
+// (PLAT-166: a reflection turn reusing this same agent needs to find its
+// already-attached cost observer to toggle its phase, rather than attaching
+// a second one).
+func (ba *BaseAgent) Observers() []mcpagent.AgentEventListener {
+	return append([]mcpagent.AgentEventListener(nil), ba.runtime.Observability.Observers...)
+}
+
 func (ba *BaseAgent) finalizeDefinition(ctx context.Context) error {
 	if ba.finalized {
 		return nil

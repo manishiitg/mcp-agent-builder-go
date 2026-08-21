@@ -33,6 +33,20 @@ const (
 	ScopeUnknown = "unknown"
 )
 
+// Cost phases (PLAT-166). A workflow step's execution turn and its separate
+// post-completion reflection turn reuse the same agent and the same Observer
+// instance — SetPhase toggles which one every entry from here on is
+// attributed to. These deliberately reuse the exact phase-string vocabulary
+// the older per-step token-usage-file system already established
+// (pkg/orchestrator/context_aware_bridge.go's attributedPhase =
+// "execution_only", pkg/orchestrator/agents/workflow/step_based_workflow's
+// reflectionCostPhase = "reflection") so an operator cross-referencing both
+// systems isn't learning a second vocabulary for the same concept.
+const (
+	PhaseExecutionOnly = "execution_only"
+	PhaseReflection    = "reflection"
+)
+
 // Observer persists immutable per-LLM-call events. The cumulative token_usage
 // event remains a compatibility fallback for older providers, but is ignored
 // once a per-call completion has been observed.
@@ -51,6 +65,11 @@ type Observer struct {
 
 	mu         sync.Mutex
 	sawPerCall bool
+	// phase is the one attribution field that legitimately changes mid-
+	// lifetime for the same Observer instance (PLAT-166) — everything else in
+	// WithAttribution is fixed at construction because a reflection turn
+	// reuses the step's own agent/observer rather than getting a new one.
+	phase string
 }
 
 // Option configures an Observer at construction time.
@@ -97,6 +116,7 @@ func New(ledger *costledger.Ledger, sessionID, userID, agentMode string, opts ..
 		sessionID: sessionID,
 		userID:    userID,
 		agentMode: agentMode,
+		phase:     PhaseExecutionOnly,
 	}
 	for _, opt := range opts {
 		opt(observer)
@@ -128,6 +148,32 @@ func (o *Observer) ExecutionID() string {
 		return ""
 	}
 	return o.executionID
+}
+
+// SetPhase updates the phase every entry this observer writes from now on
+// carries, until changed again (PLAT-166). A reflection turn reuses the same
+// agent — and therefore the same Observer instance — as the step's own
+// execution turn, so this is how the two get told apart in the ledger:
+// bracket the reflection turn with SetPhase(PhaseReflection) and a deferred
+// SetPhase(PhaseExecutionOnly), mirroring
+// ContextAwareEventBridge.PushContext/PopContext's bracket right next to it.
+func (o *Observer) SetPhase(phase string) {
+	if o == nil {
+		return
+	}
+	o.mu.Lock()
+	o.phase = strings.TrimSpace(phase)
+	o.mu.Unlock()
+}
+
+// Phase reports the phase currently attributed to entries from this observer.
+func (o *Observer) Phase() string {
+	if o == nil {
+		return ""
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.phase
 }
 
 // Name identifies this listener to the agent runtime.
@@ -274,6 +320,9 @@ func (o *Observer) baseEntry(event *unifiedevents.AgentEvent) costledger.Entry {
 		storedEventID = strings.Join([]string{o.sessionID, eventID}, ":")
 		idempotencyKey = storedEventID
 	}
+	o.mu.Lock()
+	phase := o.phase
+	o.mu.Unlock()
 	return costledger.Entry{
 		EventID:        storedEventID,
 		IdempotencyKey: idempotencyKey,
@@ -284,6 +333,7 @@ func (o *Observer) baseEntry(event *unifiedevents.AgentEvent) costledger.Entry {
 		RunID:          o.runID,
 		ExecutionID:    o.executionID,
 		Scope:          o.scope,
+		Phase:          phase,
 		AgentMode:      o.agentMode,
 		Component:      event.Component,
 		CorrelationID:  event.CorrelationID,

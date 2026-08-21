@@ -1303,14 +1303,38 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
                                                 <p className="px-3 py-2 text-[10px] text-muted-foreground">No activity recorded.</p>
                                               ) : (
                                                 <div className="max-h-48 overflow-y-auto px-3">
-                                                  {category.executions.map(execution => (
-                                                    <div key={execution.id} className="flex items-center gap-2 border-b border-border/70 py-2 text-[10px] last:border-0" title={execution.id}>
-                                                      <span className="min-w-0 flex-1 truncate text-foreground">{execution.label}</span>
-                                                      <span className="shrink-0 font-mono text-muted-foreground">{formatTokens(execution.cost.prompt_tokens + execution.cost.completion_tokens)}</span>
-                                                      <span className="shrink-0 font-mono text-muted-foreground">LLM time: {formatDuration(execution.cost.llm_generation_duration_ms)}</span>
-                                                      <span className="shrink-0 font-mono text-foreground">{formatUSD(execution.cost.total_cost_usd)}</span>
-                                                    </div>
-                                                  ))}
+                                                  {category.executions.map(execution => {
+                                                    // PLAT-166: a workflow step's reflection turn shares the step's own
+                                                    // execution row (same ExecutionID) but carries a separate phase
+                                                    // breakdown when the backend recorded one. Only show the sub-line
+                                                    // when there is real reflection activity to report — most
+                                                    // executions (chat, builder, evaluation, Pulse, steps with no
+                                                    // reflection turn) never populate by_phase at all.
+                                                    const reflection = execution.cost.by_phase?.reflection
+                                                    const hasReflection = !!reflection && (
+                                                      reflection.total_cost_usd > 0 ||
+                                                      reflection.prompt_tokens + reflection.completion_tokens > 0 ||
+                                                      (reflection.llm_generation_duration_ms || 0) > 0
+                                                    )
+                                                    return (
+                                                      <React.Fragment key={execution.id}>
+                                                        <div className="flex items-center gap-2 border-b border-border/70 py-2 text-[10px] last:border-0" title={execution.id}>
+                                                          <span className="min-w-0 flex-1 truncate text-foreground">{execution.label}</span>
+                                                          <span className="shrink-0 font-mono text-muted-foreground">{formatTokens(execution.cost.prompt_tokens + execution.cost.completion_tokens)}</span>
+                                                          <span className="shrink-0 font-mono text-muted-foreground">LLM time: {formatDuration(execution.cost.llm_generation_duration_ms)}</span>
+                                                          <span className="shrink-0 font-mono text-foreground">{formatUSD(execution.cost.total_cost_usd)}</span>
+                                                        </div>
+                                                        {hasReflection && reflection && (
+                                                          <div className="flex items-center gap-2 border-b border-border/70 py-1 pl-4 text-[10px] text-muted-foreground last:border-0" title="Post-completion reflection turn cost, included in the total above">
+                                                            <span className="min-w-0 flex-1 truncate">↳ Reflection</span>
+                                                            <span className="shrink-0 font-mono">{formatTokens(reflection.prompt_tokens + reflection.completion_tokens)}</span>
+                                                            <span className="shrink-0 font-mono">LLM time: {formatDuration(reflection.llm_generation_duration_ms)}</span>
+                                                            <span className="shrink-0 font-mono">{formatUSD(reflection.total_cost_usd)}</span>
+                                                          </div>
+                                                        )}
+                                                      </React.Fragment>
+                                                    )
+                                                  })}
                                                 </div>
                                               )}
                                             </div>

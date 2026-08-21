@@ -1,4 +1,4 @@
-import type { CostAggregate, CostSummary, WorkflowActivityTimingAggregate, WorkflowActivityTimingSummary } from '../services/api-types'
+import type { CostAggregate, CostExecutionAggregate, CostSummary, WorkflowActivityTimingAggregate, WorkflowActivityTimingSummary } from '../services/api-types'
 
 export interface ActivityTiming {
   duration_ms: number
@@ -12,7 +12,7 @@ export interface CostActivityCategory {
   description: string
   total: CostAggregate
   timing: ActivityTiming
-  executions: Array<{ id: string; label: string; cost: CostAggregate; timing: ActivityTiming }>
+  executions: Array<{ id: string; label: string; cost: CostExecutionAggregate; timing: ActivityTiming }>
 }
 
 const emptyCost = (): CostAggregate => ({
@@ -36,6 +36,24 @@ const addCost = (target: CostAggregate, source?: Partial<CostAggregate>) => {
   target.total_cost_usd += source.total_cost_usd || 0
   target.call_count += source.call_count || 0
   target.llm_generation_duration_ms = (target.llm_generation_duration_ms || 0) + (source.llm_generation_duration_ms || 0)
+}
+
+const emptyExecutionCost = (): CostExecutionAggregate => emptyCost()
+
+// addExecutionCost merges one execution's cost AND its phase breakdown
+// (PLAT-166) into a running total. Phase merging matters because
+// executionGroup below can fold several raw execution ids (retries/dispatch
+// variants of the same canonical step) into one row — each may carry its own
+// `by_phase`, and those must sum per-phase, not just at the combined total.
+const addExecutionCost = (target: CostExecutionAggregate, source?: CostExecutionAggregate) => {
+  addCost(target, source)
+  if (!source?.by_phase) return
+  if (!target.by_phase) target.by_phase = {}
+  for (const [phase, phaseCost] of Object.entries(source.by_phase)) {
+    const existing = target.by_phase[phase] || emptyCost()
+    addCost(existing, phaseCost)
+    target.by_phase[phase] = existing
+  }
 }
 
 const emptyTiming = (): ActivityTiming => ({ duration_ms: 0, llm_duration_ms: 0, tool_duration_ms: 0 })
@@ -122,7 +140,7 @@ export const buildCostActivityBreakdown = (
   return definitions.map(definition => {
     const total = emptyCost()
     const timing = emptyTiming()
-    const byExecution = new Map<string, CostAggregate>()
+    const byExecution = new Map<string, CostExecutionAggregate>()
     const timingByExecution = new Map<string, ActivityTiming>()
 
     for (const scopeName of definition.scopes) {
@@ -130,8 +148,8 @@ export const buildCostActivityBreakdown = (
       addCost(total, scope)
       for (const [executionID, cost] of Object.entries(scope?.by_execution || {})) {
         const groupID = executionGroup(definition.id, scopeName, executionID)
-        const aggregate = byExecution.get(groupID) || emptyCost()
-        addCost(aggregate, cost)
+        const aggregate = byExecution.get(groupID) || emptyExecutionCost()
+        addExecutionCost(aggregate, cost)
         byExecution.set(groupID, aggregate)
       }
       const scopeTiming = timingByScope[scopeName]
@@ -149,7 +167,7 @@ export const buildCostActivityBreakdown = (
       .map(id => ({
         id,
         label: executionLabel(id),
-        cost: byExecution.get(id) || emptyCost(),
+        cost: byExecution.get(id) || emptyExecutionCost(),
         timing: timingByExecution.get(id) || emptyTiming(),
       }))
       .sort((a, b) => b.cost.total_cost_usd - a.cost.total_cost_usd || b.timing.duration_ms - a.timing.duration_ms)
