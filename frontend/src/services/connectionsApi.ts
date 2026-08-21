@@ -267,13 +267,6 @@ export class ConnectionsApi {
     });
   }
 
-  /** Destructive: removes the token and the underlying server configuration. */
-  async remove(id: string): Promise<{ status: string; message: string }> {
-    return request(`/api/connections/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
-    });
-  }
-
   /** Tools this connection exposes, each with its on/off state. */
   async getTools(id: string): Promise<ConnectionToolsResponse> {
     return request(`/api/connections/${encodeURIComponent(id)}/tools`);

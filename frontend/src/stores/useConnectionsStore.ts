@@ -35,7 +35,6 @@ interface ConnectionsState {
 
   connect: (id: string, payload?: ConnectPayload) => Promise<ConnectOutcome>
   disconnect: (id: string) => Promise<boolean>
-  remove: (id: string) => Promise<boolean>
   test: (id: string) => Promise<TestResult | null>
 
   clearActionError: () => void
@@ -177,18 +176,6 @@ export const useConnectionsStore = create<ConnectionsState>((set, get) => ({
     set({ actionError: null })
     try {
       await connectionsApi.disconnect(id)
-      await get().loadConnections()
-      return true
-    } catch (err) {
-      set({ actionError: toFriendly(err) })
-      return false
-    }
-  },
-
-  remove: async id => {
-    set({ actionError: null })
-    try {
-      await connectionsApi.remove(id)
       await get().loadConnections()
       return true
     } catch (err) {
