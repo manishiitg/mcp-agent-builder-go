@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `fixed` — root cause confirmed live, fix shipped in `multi-llm-provider-go`, build/test verified; live reverify pending |
+| Ticket state | `fixed` — root cause confirmed live, fix confirmed live end-to-end for pi-cli, build/test verified |
 | Last synchronized | `2026-08-22` |
 
 - **Priority:** P0 — silently returns the wrong answer and ends the turn
@@ -13,13 +13,15 @@
   delivery (claude-code, codex-cli, cursor-cli, agy-cli, pi-cli), not one
   provider. A caller has no way to tell a genuinely-final reply from a
   truncated one without independently re-verifying.
-- **Owner:** `multi-llm-provider-go/pkg/adapters/picli/picli_retained_turn.go`
-  (fixed here); the same shape needs auditing in the other three providers'
-  `ReadRetainedTurnMessages` (`claudecodeadapter`, `codexcli`, `cursorcli`) —
-  see Related Work below.
+- **Owner:** `mcpagent/agent/retainedturn/retained_turn.go` (the actual fix);
+  `multi-llm-provider-go/pkg/adapters/picli/picli_transcript.go` (the paired
+  change pi-cli needed to feed that fix real data). claude-code and cursor-cli
+  need the same transcript-preservation audit — see Related Work.
 - **Related:** [PLAT-174](plat-174.md), [PLAT-175](plat-175.md),
   [PLAT-176](plat-176.md) (same investigation session — started as a request
   to validate pi-cli against OpenRouter, surfaced this along the way).
+  [PLAT-180](plat-180.md) (a second, separate defect surfaced once this one
+  was actually fixed and the test could run further).
 
 ## How this surfaced
 
@@ -77,61 +79,82 @@ Traced through both repositories:
       return
   ```
   This loop's own contract — "empty means not done yet, keep polling" — is
-  sound. The defect is what the reader was willing to call non-empty.
+  sound.
 
-- The reader is `multi-llm-provider-go/pkg/adapters/picli/picli_retained_turn.go`'s
-  `ReadRetainedTurnMessages`. Before this fix, it parsed pi's own on-disk
-  transcript (`~/.pi/agent/sessions/*.jsonl`) and returned the last assistant
-  message's text the moment that message had *any* content — with no check
-  for whether the overall exchange was actually finished. pi's interactive
-  session can legitimately write a complete, well-formed assistant message
-  record for intermediate commentary before continuing on to a tool call in
-  the same live turn; the transcript alone cannot distinguish "one message
-  finished" from "the whole exchange is over."
+- The reader is `mcpagent/agent/retainedturn.FinalResponse` →
+  `finalResponse()`, which reads the provider's reconstructed messages (via
+  `ReadCodingAgentRetainedTurnMessages`) and picks the last AI-role message
+  with any non-empty text. Coding-agent providers can legitimately bundle
+  intermediate commentary and the tool call it introduces into ONE assistant
+  message — confirmed live for pi-cli:
+  ```
+  {"role":"assistant","content":[{"type":"text","text":"<progress update>"},
+                                   {"type":"toolCall","id":"call_...",...}]}
+  ```
+  and true by construction for claude-code and cursor-cli too, which group a
+  single LLM call's content blocks into one `MessageContent` the same way.
+  `finalResponse()` only looked at the text; a message that also carried a
+  pending tool call was indistinguishable from a genuinely finished reply.
 
-- The signal that *can* distinguish them already exists and is already
-  trusted elsewhere: pi's own tmux status line reports "idle" when it is
-  genuinely done. The ordinary, non-retained turn flow already uses exactly
-  this (`piPaneReadyForInput`, `picli_interactive_adapter.go:1250`) to decide
-  when a turn has really finished. The retained-turn reader was simply never
-  consulting it — an omission, not a considered design choice; nothing in
-  either file argues retained turns should be exempt from the same check.
+## First fix attempt — reverted, recorded so it isn't retried
+
+The first fix gated `ReadRetainedTurnMessages` (pi-cli only) on the coding
+CLI's own tmux pane reporting "idle" text, reusing `piPaneReadyForInput` — the
+same check the ordinary non-retained turn flow already trusts
+(`picli_interactive_adapter.go:1250`).
+
+**This failed live, in the opposite direction from the original bug.** Watched
+the actual tmux pane in real time while pi genuinely finished — the tool call
+had succeeded, the correct final answer was sitting right there on screen —
+and captured the full pane text: it contained **zero occurrences of the word
+"idle"** anywhere, in this pi CLI build's status line format. The gate never
+fired. The retained turn hung for the full 5-minute test timeout instead of
+completing — worse than the bug it replaced, which at least returned promptly
+with the wrong text. `git commit b71d825` (`multi-llm-provider-go`) shipped
+this; `commit c4ae920` reverted it once the real cause was found.
+
+The deeper lesson: pane-text matching is provider-UI-format-fragile and was
+never how the two *already-correct* providers solved this same problem —
+codex-cli filters on `phase=="final_answer"` and claude-code has an (unwired)
+`stop_reason=="end_turn"` check — both transcript-level facts, neither
+touches a pane. The real fix needed no pane inspection either.
 
 ## Fix
 
-`ReadRetainedTurnMessages` now withholds its result — returns `nil`, which
-`startRetainedCompletionWatch`'s existing loop already treats as "not done,
-keep polling" — until a new `piRetainedTurnPaneReady` check confirms pi's
-pane is genuinely idle:
+`finalResponse()` (`mcpagent/agent/retainedturn/retained_turn.go`) now skips
+any AI-role message that also carries a `ToolCall` part in its `Parts`,
+before checking for text:
 
 ```go
-readyCtx, cancel := context.WithTimeout(context.Background(), piRetainedTurnPaneReadyTimeout)
-defer cancel()
-if !piRetainedTurnPaneReady(readyCtx, tmuxSessionName) {
-    return nil
+if messageHasToolCall(messages[i]) {
+    continue
 }
-return summary.Messages
 ```
 
-`piRetainedTurnPaneReady` reuses `piPaneReadyForInput` — the same check the
-healthy turn path already trusts — rather than inventing a new signal. A
-capture failure (tmux transiently unreachable) fails closed (treated as "not
-ready"): an unconfirmed pane state is not evidence the turn is done, and the
-100ms poll simply tries again next tick.
+This is a **shared, single-point fix** — every retained/live-steer provider's
+reconstruction bundles text+toolCall into one message the same way, so this
+correctly protects claude-code and cursor-cli too, not just pi-cli, without
+duplicating a heuristic per provider.
 
-Deliberately did not touch `mcpagent`'s poll loop — its "empty means not
-done" contract was already correct; the bug was entirely in what the reader
-was willing to report as non-empty.
+It needed one paired change to actually take effect for pi-cli:
+`multi-llm-provider-go/pkg/adapters/picli/picli_transcript.go`'s
+`piTranscriptText` extracted only `"text"`-typed content blocks, silently
+discarding a `"toolCall"` block in the same message — so by the time a
+message reached `finalResponse()`, the very fact this fix needed to see was
+already gone. Replaced with `piTranscriptParts`, which preserves a `toolCall`
+block as a real `llmtypes.ToolCall` (ID + function name only — nothing
+downstream needs to replay the call) alongside any text, in the order they
+appeared in the raw content array.
 
 ## Related work not done in this pass
 
-- **The other three tmux-backed providers.** `ReadRetainedTurnMessages` exists
-  separately for `claudecodeadapter`, `codexcli`, and `cursorcli`
-  (`multi-llm-provider-go/pkg/adapters/{claudecode,codexcli,cursorcli}/`).
-  Whether each already gates on an equivalent idle/ready signal, or shares
-  this same gap, was not audited — pi-cli is the only one confirmed and fixed
-  here, because it is the only one with live reproduction. Worth a dedicated
-  pass given the severity.
+- **claude-code and cursor-cli's own transcript readers were not audited** for
+  the same "does it preserve a ToolCall part in the same message" question
+  pi-cli needed fixed. The shared `finalResponse()` fix protects them only if
+  their readers actually hand it a `ToolCall` part when one exists — claude-code's
+  `readClaudeTranscriptMessages` (used by `ReadRetainedTurnMessages`) appears
+  to via `assistantBlocksToParts` based on a read of the code, but this was
+  not live-verified for either provider, only for pi-cli.
 - **A chat-mode E2E artifact for "structured" transport was written, then
   reverted.** While investigating hypothesis #2, a new
   `--structured-resume-p0-only` test mode was added to
@@ -141,34 +164,41 @@ was willing to report as non-empty.
   legitimately pass through this harness (structured transport is a
   workflow-step-only path, `MetadataKeyStructuredTransport`, never reachable
   via `/api/query`). Reverted rather than left in the tree as a misleading,
-  permanently-failing artifact. A real equivalent, if wanted, belongs in a
-  workflow-step-level harness, not this chat E2E tool.
+  permanently-failing artifact.
+- **A temporary, env-gated test bypass** (`AGENTWORKS_CURSOR_FORCE_TMUX_TEST`,
+  `agent_go/cmd/server/coding_agent_modes.go`) was used to force cursor-cli
+  through the tmux-retained path — which it never takes in real product
+  usage (`codingAgentUsesStructuredTransport` deliberately routes it to
+  structured transport) — specifically to reproduce and confirm this same bug
+  class for cursor-cli. Reverted after use; not a product change.
 
 ## Verification
 
-- `TestReadRetainedTurnMessagesWithholdsResultUntilPaneIsIdle` — new. Fakes a
-  registered pi interactive session and a transcript with non-empty assistant
-  text, overrides `piRetainedTurnPaneReady` to report "busy," and asserts the
-  reader returns nothing; flips the override to "idle" and asserts the same
-  transcript now returns the message. Confirmed failing before the fix
-  (`go build`: undefined symbol, via a scoped `git stash` of only the
-  production file) and passing after.
-- `TestReadRetainedTurnMessagesReturnsNothingWhenPaneCheckFails` — a pane
-  check that can't confirm readiness must fail closed, not be treated as done.
-- Full `pkg/adapters/picli` suite passes (42.8s, includes real-tmux tests).
-- `go build ./...` clean in `multi-llm-provider-go`.
-
-Not yet reverified live: the direct signal is re-running IC-11
-(`--retained-window-p0-only`) against pi-cli end-to-end and confirming the
-retained turn now waits for the actual tool call and final answer instead of
-completing on the progress update.
+- `mcpagent/agent/retainedturn/retained_turn_test.go`:
+  `TestFinalResponseSkipsAnAIMessageThatAlsoHasAToolCall` and
+  `TestFinalResponseReturnsEmptyWhenOnlyMessageHasAPendingToolCall`. The
+  latter is the real regression catcher — confirmed failing before the fix
+  (returned the commentary text instead of empty) and passing after.
+- `multi-llm-provider-go/pkg/adapters/picli/picli_transcript_test.go`:
+  `TestPiTranscriptPartsPreservesAToolCallAlongsideText` and
+  `TestPiTranscriptPartsTextOnlyMessageHasNoToolCall`. Confirmed failing
+  before (`piTranscriptParts` undefined) and passing after.
+- Full `pkg/adapters/picli` suite passes (includes real-tmux tests).
+  `go build ./...` clean in both repositories.
+- **Confirmed live end-to-end for pi-cli**: watched the retained turn via
+  direct tmux pane capture — genuine progress commentary, tool call, then the
+  real final answer — and confirmed via the E2E harness that the turn no
+  longer completes on the commentary. (It now correctly proceeds past this
+  check and hits a second, separate, already-filed defect —
+  [PLAT-180](plat-180.md) — confirming this fix works: the test could not
+  have reached that later check while this one was still broken.)
 
 ## Acceptance
 
 - [x] A retained pi-cli turn does not complete on intermediate commentary
-      alone; it waits for pi's pane to report idle.
-- [x] A pane-check failure fails closed (treated as not-yet-done), not open.
-- [ ] Live: IC-11 passes end-to-end for pi-cli, with the tool call and real
-      final answer both landing before the turn is marked complete.
-- [ ] The same gap audited (and fixed if present) in claude-code, codex-cli,
-      and cursor-cli's `ReadRetainedTurnMessages`.
+      alone; it waits for the actual final (non-tool-call) message.
+- [x] Live: confirmed pi-cli no longer returns the progress-update text as
+      `final_result`.
+- [ ] claude-code and cursor-cli's transcript readers audited to confirm they
+      hand `finalResponse()` a `ToolCall` part when one exists, matching what
+      pi-cli needed.
