@@ -178,14 +178,19 @@ turned out not to be what this specific test failure needed.
 - **Confirmed live end-to-end**, dev server running, real
   `--retained-window-p0-only` runs after restarting the server with the fix:
   ```
-  provider=pi-cli     PASS coding agent retained-window P0
-  provider=codex-cli  PASS coding agent retained-window P0
+  provider=pi-cli      PASS coding agent retained-window P0
+  provider=codex-cli   PASS coding agent retained-window P0
   provider=claude-code PASS coding agent retained-window P0
+  provider=cursor-cli  PASS coding agent retained-window P0
   ```
-  All three use tmux/retained delivery in real product usage (unlike
-  cursor-cli, which the platform deliberately routes to structured transport
-  — see PLAT-179's Related Work for the env-gated test-only bypass used to
-  reproduce this bug class for cursor-cli during that earlier investigation).
+  pi-cli, codex-cli, and claude-code use tmux/retained delivery in real
+  product usage. cursor-cli's product default is structured transport
+  (`codingAgentUsesStructuredTransport`, deliberate) — reproduced and
+  reconfirmed via the same temporary, env-gated `AGENTWORKS_CURSOR_FORCE_TMUX_TEST`
+  bypass PLAT-179's investigation used, restarted with it on, then reverted to
+  a clean `git checkout --` (confirmed zero diff) and the server restarted
+  again on production defaults before continuing. Every one of the four
+  retained-capable providers is now live-confirmed.
   Re-running the exact same command against the unpatched server (before the
   restart) reproduced the original failure identically, confirming the fix —
   not an unrelated server-state change — is what turned it green.
@@ -196,11 +201,6 @@ turned out not to be what this specific test failure needed.
   `tool_call_start`/`tool_call_end`'s `turn_id` in a way that its previous
   absence caused visible harm (versus it being an unused/lightly-used
   bookkeeping field) was not checked.
-- **cursor-cli was not re-confirmed live in this pass** — doing so requires
-  reintroducing the temporary, env-gated tmux-forcing test bypass documented
-  in PLAT-179. The fix is shared, provider-agnostic code with no cursor-cli
-  branch, and three of four retained-capable providers were confirmed live,
-  so there is no structural reason to expect it to differ.
 
 ## Acceptance
 
@@ -213,8 +213,10 @@ turned out not to be what this specific test failure needed.
 - [x] A fix design that resolves the cross-repo (`agent_go`/`mcpagent`)
       boundary cleanly — not a per-provider patch, since the root cause is
       shared, provider-agnostic code.
-- [x] Confirmed for claude-code and codex-cli, not only pi-cli. (cursor-cli
-      not re-confirmed live — see Deliberately out of scope.)
+- [x] Confirmed for claude-code, codex-cli, and cursor-cli, not only pi-cli.
 - [x] Re-run `--retained-window-p0-only` live against a real coding-agent
       session to confirm `assertCanonicalRetainedTurnIdentity` now passes.
+      Done for all four retained-capable providers: pi-cli, codex-cli,
+      claude-code, cursor-cli (the last via the temporary tmux-forcing test
+      bypass, since cleanly reverted).
       Done for pi-cli, codex-cli, and claude-code.
