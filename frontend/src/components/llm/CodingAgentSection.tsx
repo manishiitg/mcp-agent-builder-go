@@ -12,6 +12,12 @@ import { providerKeysApi, type StoredProviderKeys } from '../../api/scheduler'
 interface CodingAgentSectionProps {
   provider: ProviderManifestEntry
   onPublished?: () => void
+  /** Scopes this section to one Pi CLI backend group (e.g. "Gemini") -- the
+   * `provider` prop stays the shared pi-cli manifest entry across every
+   * group tab, so display text and default-model selection must key off
+   * this instead of `provider` fields wherever they'd otherwise say
+   * "Pi CLI" or default to the pi-cli-wide model. */
+  groupFilter?: string
 }
 
 type PiTopLevelProviderKey =
@@ -162,12 +168,16 @@ function piAuthValue(keys: StoredProviderKeys | undefined, spec: PiAuthSpec): st
   return ''
 }
 
-export function CodingAgentSection({ provider, onPublished }: CodingAgentSectionProps) {
+export function CodingAgentSection({ provider, onPublished, groupFilter }: CodingAgentSectionProps) {
   const {
     saveLLM,
     savedLLMs,
   } = useLLMStore()
-  const [selectedModel, setSelectedModel] = useState(provider.default_model_id || provider.id)
+  // A group-scoped tab has no valid pi-cli-wide default to start from --
+  // DynamicModelSelector picks the group's own default once its catalog
+  // loads (see its groupFilter-aware auto-select effect).
+  const [selectedModel, setSelectedModel] = useState(groupFilter ? '' : (provider.default_model_id || provider.id))
+  const displayName = groupFilter || provider.display_name
   const [effortLevel, setEffortLevel] = useState('high')
   const [isPublishing, setIsPublishing] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -245,11 +255,11 @@ export function CodingAgentSection({ provider, onPublished }: CodingAgentSection
     try {
       const response = await llmConfigService.validateAPIKey({
         provider: provider.id as Parameters<typeof llmConfigService.validateAPIKey>[0]['provider'],
-        model_id: selectedModel !== provider.id ? selectedModel : undefined,
+        model_id: selectedModel && selectedModel !== provider.id ? selectedModel : undefined,
         ...(provider.id === 'pi-cli' && piAuthSpec && piAuthKey.trim() ? { api_key: piAuthKey.trim() } : {}),
       })
       if (response.valid) {
-        let successMessage = response.message || `${provider.display_name} is working.`
+        let successMessage = response.message || `${displayName} is working.`
         if (provider.id === 'pi-cli' && piAuthSpec && piAuthKey.trim()) {
           await savePiAuthKey()
           setPiAuthStatus('saved')
@@ -303,7 +313,7 @@ export function CodingAgentSection({ provider, onPublished }: CodingAgentSection
         model_id: selectedModel,
         ...(Object.keys(options).length > 0 ? { options } : {}),
       }
-      const displayModelName = currentModelMetadata?.model_name || provider.display_name
+      const displayModelName = currentModelMetadata?.model_name || displayName
       await saveLLM(llmModel, publishName.trim(), displayModelName, 'none', currentModelMetadata)
       setPublishName('')
       setIsPublishing(false)
@@ -320,15 +330,15 @@ export function CodingAgentSection({ provider, onPublished }: CodingAgentSection
 
   const defaultPublishName = () => {
     const modelName = currentModelMetadata?.model_name || selectedModel
-    if (showEffort) return `${provider.display_name} (${modelName}, ${effortLevel} effort)`
-    if (selectedModel === provider.id) return provider.display_name
-    return `${provider.display_name} — ${modelName}`
+    if (showEffort) return `${displayName} (${modelName}, ${effortLevel} effort)`
+    if (selectedModel === provider.id) return displayName
+    return `${displayName} — ${modelName}`
   }
 
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
-        <h3 className="text-lg font-semibold text-foreground">{provider.display_name}</h3>
+        <h3 className="text-lg font-semibold text-foreground">{displayName}</h3>
       </div>
 
       {/* Info card */}
@@ -336,8 +346,10 @@ export function CodingAgentSection({ provider, onPublished }: CodingAgentSection
         <div className="flex items-start gap-3">
           <Terminal className="w-5 h-5 text-primary mt-0.5 flex-shrink-0" />
           <div className="space-y-1">
-            <h4 className="font-medium text-foreground">{provider.auth_description}</h4>
-            <p className="text-sm text-muted-foreground">{provider.description}</p>
+            <h4 className="font-medium text-foreground">{groupFilter ? 'API key' : provider.auth_description}</h4>
+            <p className="text-sm text-muted-foreground">
+              {groupFilter ? `Uses the latest supported ${groupFilter} models.` : provider.description}
+            </p>
           </div>
         </div>
       </Card>
@@ -350,13 +362,16 @@ export function CodingAgentSection({ provider, onPublished }: CodingAgentSection
         <h4 className="font-medium text-foreground mb-3">Model</h4>
         {provider.id === 'pi-cli' && (
           <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
-            The picker shows our latest supported Gemini, Z.AI, MiniMax, Kimi, and DeepSeek shortlist. Paste any other Pi model id in custom mode.
+            {groupFilter
+              ? `The picker shows our latest supported ${groupFilter} shortlist. Paste any other ${groupFilter} model id in custom mode.`
+              : 'The picker shows our latest supported Gemini, Z.AI, MiniMax, Kimi, and DeepSeek shortlist. Paste any other Pi model id in custom mode.'}
           </p>
         )}
         {isDynamic ? (
           <DynamicModelSelector
             provider={provider.id}
             selectedModelId={selectedModel}
+            groupFilter={groupFilter}
             onSelect={id => {
               setSelectedModel(id)
               setTestStatus('idle')

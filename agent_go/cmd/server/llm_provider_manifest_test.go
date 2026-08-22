@@ -56,7 +56,7 @@ func TestPiFallbackModelsKeepProviderShortlistsSmall(t *testing.T) {
 		counts[group]++
 	}
 
-	for _, group := range []string{"Recommended Gemini", "Z.AI", "MiniMax", "Kimi", "DeepSeek", "OpenRouter"} {
+	for _, group := range []string{"Gemini", "Z.AI", "MiniMax", "Kimi", "DeepSeek", "OpenRouter"} {
 		if counts[group] == 0 {
 			t.Fatalf("Pi shortlist group %q is empty: %#v", group, counts)
 		}

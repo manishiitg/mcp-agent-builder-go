@@ -825,7 +825,7 @@ func piModelDisplayName(provider, model string) string {
 func piModelGroup(provider string) string {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case "google":
-		return "Google"
+		return "Gemini"
 	case "google-vertex":
 		return "Google Vertex"
 	case "anthropic":
@@ -844,6 +844,8 @@ func piModelGroup(provider string) string {
 		return "MiniMax"
 	case "kimi-coding", "moonshotai", "moonshotai-cn":
 		return "Kimi"
+	case "xai":
+		return "xAI"
 	case "nvidia":
 		return "NVIDIA"
 	default:
@@ -977,9 +979,6 @@ func piProviderCatalogModels() []dynamicModelEntry {
 		}
 		provider, _, _ := strings.Cut(model.ModelID, "/")
 		group := piModelGroup(provider)
-		if provider == "google" {
-			group = "Recommended Gemini"
-		}
 		name := strings.TrimSpace(model.ModelName)
 		if strings.HasPrefix(name, "Pi CLI (") && strings.HasSuffix(name, ")") {
 			name = strings.TrimSuffix(strings.TrimPrefix(name, "Pi CLI ("), ")")

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { X, Settings, Lock, ShieldCheck } from 'lucide-react'
+import { X, Settings, Lock } from 'lucide-react'
 import { Button } from './ui/Button'
 import { TooltipProvider } from './ui/tooltip'
 import { useLLMStore, useAppStore } from '../stores'
@@ -9,7 +9,6 @@ import { APIProviderSection } from './llm/APIProviderSection'
 import { APIKeyProviderSection } from './APIKeyProviderSection'
 import { llmConfigService, type ModelMetadata, type ProviderManifestEntry } from '../services/llm-config-api'
 import { LibraryTab } from './llm/LibraryTab'
-import { CLISecuritySection } from './llm/CLISecuritySection'
 import { getProviderDisplayInfo } from '../utils/llmDisplay'
 import ModalPortal from './ui/ModalPortal'
 
@@ -29,7 +28,15 @@ type APIKeyError = Record<APIKeyProviderType, string | null>
 
 type AudioProviderTab = 'audio-gemini' | 'audio-minimax'
 
-type TabType = 'library' | 'cli-security' | LLMProvider | AudioProviderTab
+// Pi CLI routes through several distinct model backends (Gemini, OpenRouter,
+// Z.AI, ...); each gets its own sidebar tab under a synthetic id rather than
+// exposing "Pi CLI" as one opaque option. The manifest still has exactly one
+// 'pi-cli' provider entry -- these ids exist only in the frontend tab list.
+type PiCliGroupTab = `pi-cli::${string}`
+
+type TabType = 'library' | LLMProvider | AudioProviderTab | PiCliGroupTab
+
+const piCliGroupTabId = (group: string): PiCliGroupTab => `pi-cli::${group}`
 
 const CHAT_CAPABILITIES = new Set(['chat', 'text'])
 const AUDIO_CAPABILITIES = new Set(['text_to_speech', 'speech_to_text', 'generate_music', 'audio_generation', 'audio_transcription', 'music_generation'])
@@ -115,6 +122,7 @@ export default function LLMConfigurationModal({ isOpen, onClose }: LLMConfigurat
     testAPIKey,
     defaultsLoaded,
     loadDefaultsFromBackend,
+    getProviderDynamicModels,
     // Supported providers filter
     isProviderSupported,
     llmConfigLocked,
@@ -168,6 +176,39 @@ export default function LLMConfigurationModal({ isOpen, onClose }: LLMConfigurat
       ),
     [manifestProviderEntries]
   )
+
+  // Pi CLI is one manifest entry but routes through several model backends;
+  // fetch its group list once (backend already returns a deduped, ordered
+  // "groups" array) so the sidebar can show one tab per backend instead of a
+  // single opaque "Pi CLI" option.
+  const [piCliGroups, setPiCliGroups] = useState<string[]>([])
+  useEffect(() => {
+    if (!isOpen || !codingAgentProviderEntries.some(entry => entry.id === 'pi-cli')) return
+    let cancelled = false
+    getProviderDynamicModels('pi-cli', false).then(result => {
+      if (cancelled || !result?.groups?.length) return
+      setPiCliGroups(result.groups)
+    })
+    return () => { cancelled = true }
+  }, [isOpen, codingAgentProviderEntries, getProviderDynamicModels])
+
+  const codingAgentSidebarItems = useMemo(() => {
+    return codingAgentProviderEntries.flatMap(entry => {
+      if (entry.id !== 'pi-cli' || piCliGroups.length === 0) {
+        return [{ tabId: entry.id as TabType, displayName: entry.display_name, authDescription: entry.auth_description, entry, groupFilter: undefined as string | undefined }]
+      }
+      // Every group shares the pi-cli entry's auth_description ("Local CLI
+      // (Pi provider API key)") -- generic and correct for the underlying
+      // mechanism, but names "Pi" for a sidebar item that no longer does.
+      return piCliGroups.map(group => ({
+        tabId: piCliGroupTabId(group),
+        displayName: group,
+        authDescription: 'API key',
+        entry,
+        groupFilter: group,
+      }))
+    })
+  }, [codingAgentProviderEntries, piCliGroups])
 
   const audioProviderItems = useMemo(() => {
     if (providerManifest.length === 0) {
@@ -316,8 +357,15 @@ export default function LLMConfigurationModal({ isOpen, onClose }: LLMConfigurat
       setActiveTab('audio-minimax')
       return
     }
+    if (provider.id === 'pi-cli') {
+      // 'pi-cli' alone is no longer a real sidebar tab -- it's split into one
+      // tab per model backend. Land on the first (Gemini, when available).
+      const firstPiTab = codingAgentSidebarItems.find(item => item.entry.id === 'pi-cli')
+      setActiveTab(firstPiTab ? firstPiTab.tabId : piCliGroupTabId('Gemini'))
+      return
+    }
     setActiveTab(provider.id as TabType)
-  }, [])
+  }, [codingAgentSidebarItems])
 
   // Load defaults and manifest when modal opens
   useEffect(() => {
@@ -478,37 +526,24 @@ export default function LLMConfigurationModal({ isOpen, onClose }: LLMConfigurat
                   <Settings className="w-4 h-4" />
                 </button>
 
-                <button
-                  onClick={() => setActiveTab('cli-security')}
-                  className={`w-full flex items-center gap-3 p-3 rounded-md text-left transition-colors ${
-                    activeTab === 'cli-security' ? 'bg-primary text-primary-foreground' : 'hover:bg-secondary'
-                  }`}
-                >
-                  <div className="flex-1">
-                    <div className="font-medium">CLI Security</div>
-                    <div className="text-xs opacity-75">Filesystem access</div>
-                  </div>
-                  <ShieldCheck className="w-4 h-4" />
-                </button>
-
-                {codingAgentProviderEntries.length > 0 && (
+                {codingAgentSidebarItems.length > 0 && (
                   <>
                     <h3 className="text-sm font-medium text-muted-foreground mb-3 mt-6">Coding Agents</h3>
-                    {codingAgentProviderEntries.map((entry) => (
+                    {codingAgentSidebarItems.map((item) => (
                       <button
-                        key={entry.id}
-                        onClick={() => setActiveTab(entry.id as typeof activeTab)}
+                        key={item.tabId}
+                        onClick={() => setActiveTab(item.tabId)}
                         className={`w-full flex items-center gap-3 p-3 rounded-md text-left transition-colors ${
-                          activeTab === entry.id ? 'bg-primary text-primary-foreground' : 'hover:bg-secondary'
+                          activeTab === item.tabId ? 'bg-primary text-primary-foreground' : 'hover:bg-secondary'
                         }`}
                       >
                         <div className="flex-1">
-                          <div className="font-medium">{entry.display_name}</div>
+                          <div className="font-medium">{item.displayName}</div>
                           <div className="text-xs opacity-75">
-                            {isProviderLocked(entry.id) ? 'Configured by admin' : entry.auth_description}
+                            {isProviderLocked(item.entry.id) ? 'Configured by admin' : item.authDescription}
                           </div>
                         </div>
-                        {isProviderLocked(entry.id) && <Lock className="w-4 h-4 opacity-60" />}
+                        {isProviderLocked(item.entry.id) && <Lock className="w-4 h-4 opacity-60" />}
                       </button>
                     ))}
                   </>
@@ -576,7 +611,6 @@ export default function LLMConfigurationModal({ isOpen, onClose }: LLMConfigurat
                   isProviderLocked={isProviderLocked}
                 />
               )}
-              {activeTab === 'cli-security' && <CLISecuritySection />}
 
               {/* Locked provider read-only banner */}
               {(() => {
@@ -710,10 +744,12 @@ export default function LLMConfigurationModal({ isOpen, onClose }: LLMConfigurat
               )}
 
               {/* Coding agent sections — unified component driven by manifest */}
-              {codingAgentProviderEntries.some(entry => entry.id === activeTab) && (() => {
-                const entry = getManifestEntry(activeTab as string)
+              {(() => {
+                const sidebarItem = codingAgentSidebarItems.find(item => item.tabId === activeTab)
+                if (!sidebarItem) return null
+                const entry = getManifestEntry(sidebarItem.entry.id)
                 if (!entry) return <div className="text-sm text-muted-foreground py-8 text-center">Loading provider info...</div>
-                return <CodingAgentSection provider={entry} />
+                return <CodingAgentSection key={sidebarItem.tabId} provider={entry} groupFilter={sidebarItem.groupFilter} />
               })()}
             </div>
           </div>

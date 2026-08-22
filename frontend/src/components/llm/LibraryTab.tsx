@@ -23,6 +23,7 @@ import {
   getProviderIntegrationKind,
   LLM_INTEGRATION_ORDER,
   PROVIDER_ORDER,
+  resolvePiModelGroup,
   shouldShowLLMPricing,
   type LLMIntegrationKind,
 } from '../../utils/llmDisplay'
@@ -92,24 +93,41 @@ const providerOrderRank = (provider: string): number => {
   return index === -1 ? Number.MAX_SAFE_INTEGER : index
 }
 
-const groupSavedLLMsByProvider = (llms: SavedLLM[]): Array<{ provider: string; llms: SavedLLM[] }> => {
+// Pi CLI saves all route through the single 'pi-cli' provider id regardless
+// of which backend (Gemini, OpenRouter, ...) the model actually runs on, so
+// grouping by llm.provider alone would collapse every Pi-routed save into one
+// generic "Pi CLI" bucket. Bucket by the resolved group instead for pi-cli
+// specifically; every other provider groups by its own id, unchanged.
+const savedLLMGroupKey = (llm: SavedLLM): string => {
+  if (llm.provider === 'pi-cli') {
+    const group = resolvePiModelGroup(llm.model_id)
+    if (group) return `pi-cli::${group}`
+  }
+  return llm.provider
+}
+
+const groupSavedLLMsByProvider = (
+  llms: SavedLLM[]
+): Array<{ groupKey: string; provider: string; sampleModelId: string; llms: SavedLLM[] }> => {
   const grouped = llms.reduce((acc, llm) => {
-    const provider = llm.provider
-    if (!acc[provider]) {
-      acc[provider] = []
+    const key = savedLLMGroupKey(llm)
+    if (!acc[key]) {
+      acc[key] = []
     }
-    acc[provider].push(llm)
+    acc[key].push(llm)
     return acc
   }, {} as Record<string, SavedLLM[]>)
 
   return Object.entries(grouped)
     .sort(([left], [right]) => {
-      const rankDelta = providerOrderRank(left) - providerOrderRank(right)
+      const rankDelta = providerOrderRank(left.split('::')[0]) - providerOrderRank(right.split('::')[0])
       if (rankDelta !== 0) return rankDelta
       return left.localeCompare(right)
     })
-    .map(([provider, providerLLMs]) => ({
-      provider,
+    .map(([groupKey, providerLLMs]) => ({
+      groupKey,
+      provider: providerLLMs[0].provider,
+      sampleModelId: providerLLMs[0].model_id,
       llms: [...providerLLMs].sort((left, right) => {
         const nameDelta = left.name.localeCompare(right.name)
         if (nameDelta !== 0) return nameDelta
@@ -297,10 +315,10 @@ export function LibraryTab({ providers, onSelectProvider, isProviderLocked }: Li
 
                 <div className="grid gap-2.5 p-2.5 2xl:grid-cols-2">
                   {providerGroups.map(providerGroup => {
-                    const providerInfo = getProviderDisplayInfo(providerGroup.provider)
+                    const providerInfo = getProviderDisplayInfo(providerGroup.provider, providerGroup.sampleModelId)
 
                     return (
-                      <div key={providerGroup.provider} className="overflow-hidden rounded-md border border-border bg-card">
+                      <div key={providerGroup.groupKey} className="overflow-hidden rounded-md border border-border bg-card">
                         <div className="flex items-center justify-between border-b border-border bg-muted/30 px-2.5 py-1.5">
                           <div className="min-w-0">
                             <div className="truncate text-sm font-semibold text-foreground">{providerInfo.name}</div>

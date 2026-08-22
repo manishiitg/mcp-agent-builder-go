@@ -1,4 +1,5 @@
 import { routeForQueuedMessage, splitQueuedMessages } from '../utils/queuedMessageDelivery'
+import { resolvePiModelGroup } from '../utils/llmDisplay'
 import React, { useRef, useCallback, useMemo, useState, useEffect, useLayoutEffect } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 
@@ -79,7 +80,7 @@ interface LiveMessageDelivery {
   detail?: string
 }
 
-const formatLiveInputProviderLabel = (provider?: string | null) => {
+const formatLiveInputProviderLabel = (provider?: string | null, modelId?: string | null) => {
   const normalized = (provider || '').trim().toLowerCase()
   switch (normalized) {
     case 'claude-code':
@@ -92,8 +93,10 @@ const formatLiveInputProviderLabel = (provider?: string | null) => {
     case 'cursor_cli':
       return 'Cursor CLI'
     case 'pi-cli':
-    case 'pi_cli':
-      return 'Pi CLI'
+    case 'pi_cli': {
+      const group = resolvePiModelGroup(modelId || undefined)
+      return group || 'the coding agent'
+    }
     default:
       return provider ? provider.replace(/[-_]/g, ' ') : 'live agent'
   }
@@ -1791,7 +1794,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     try {
       await agentApi.sendControlKey(tabSessionId, key)
       if (options?.showToast ?? key === 'Escape') {
-        addToast(`Sent ${key} to ${effectiveProviderForSteer || 'CLI'} — Stop button ends the session`, 'info')
+        addToast(`Sent ${key} to ${formatLiveInputProviderLabel(effectiveProviderForSteer, primaryLLM?.model)} — Stop button ends the session`, 'info')
       }
       return true
     } catch (err) {
@@ -1804,7 +1807,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
       }
       return false
     }
-  }, [activeTabId, addToast, effectiveProviderForSteer, supportsLiveCodingAgentInput, tabSessionId])
+  }, [activeTabId, addToast, effectiveProviderForSteer, primaryLLM?.model, supportsLiveCodingAgentInput, tabSessionId])
 
   const ensureMultiAgentTabReady = useCallback(async (): Promise<boolean> => {
     if (!isMultiAgentMode || showWorkflowsOverview) return false
@@ -3263,7 +3266,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     return `Ask anything... (${baseHints})`
   }, [agentProfileWorkspace, isProductSurface, isStreaming, isViewOnly, isMultiAgentMode, isWorkflowPhaseChat, tabSessionId, canBootstrapMultiAgentTab, canBootstrapWorkflowPhaseTab])
 
-  const liveDeliveryProviderLabel = formatLiveInputProviderLabel(liveMessageDelivery?.provider || effectiveProviderForSteer)
+  const liveDeliveryProviderLabel = formatLiveInputProviderLabel(liveMessageDelivery?.provider || effectiveProviderForSteer, primaryLLM?.model)
   const liveDeliveryText = liveMessageDelivery
     ? liveMessageDelivery.status === 'sending'
       ? isProductSurface ? 'Sending message…' : `Sending to ${liveDeliveryProviderLabel}...`
