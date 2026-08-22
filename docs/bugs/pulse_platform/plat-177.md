@@ -1,21 +1,19 @@
 [← Pulse platform issue index](../pulse_platform_issue_register.md)
 
-# PLAT-177 — resumed Claude Code session claimed it lost tool access it demonstrably had; three plausible platform explanations investigated and ruled out
+# PLAT-177 — resumed Claude Code session claimed it lost tool access it demonstrably had; a real stale-scope retry gap found and fixed, exact incident mechanism still unconfirmed
 
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `open` — investigated, no platform root cause confirmed |
+| Ticket state | `fixed` — one confirmed, real gap closed; not proven to be this exact incident's mechanism, live reverify pending |
 | Last synchronized | `2026-08-22` |
 
 - **Priority:** P2 — disruptive when it happens (the agent stops using tools
-  it has and asks the user to re-grant access that was never withdrawn), but
-  not reproduced on demand and not traced to a concrete code defect after a
-  thorough investigation.
+  it has and asks the user to re-grant access that was never withdrawn).
 - **Owner:** native session resume/relaunch path
   (`cmd/server/server.go`'s `seedCodingAgentRuntimeFromRestoredConversation`
-  and the FIX-B materialize guard in `handleQuery`), coding-agent
-  code-execution-mode plumbing (`mcpagent/agent`).
+  and the FIX-B materialize guard in `handleQuery`), virtual-tool scope
+  registry (`mcpagent/agent/codeexec/registry.go`).
 - **Related:** none — this is the first ticket investigating the native
   resume path specifically.
 
@@ -123,45 +121,127 @@ with explicit comments stating this is intentional:
   different from the 13:47:50 traffic without actually being a different
   mode.
 
-## What remains unexplained
+## The actual error, and a fourth hypothesis (confirmed real, fix shipped)
 
-All three concrete, code-level explanations for "the platform told the model
-something different, or gave it less, after the resume" are ruled out by
-direct evidence — the system prompt, tool catalog, and invocation convention
-were identical and complete both before and after the resume. The remaining
-gap is genuinely unclear and was not resolved in this pass: either (a) the
-model itself made an incorrect self-assessment of its own capabilities
-despite having complete, correct instructions in front of it — an
-LLM-response failure rather than a platform defect — possibly triggered by
-something about reconciling resumed conversation history against the
-system prompt; or (b) a mechanism not yet examined in this investigation
-(not ruled out, just not reached): a permission/allowlist gate at the actual
-HTTP-invocation layer distinct from what the prompt describes, or something
-specific to that turn's raw model response (`stream_turn-*.txt` in the same
-prompt-log directory was located but not yet read).
+The three hypotheses above were investigated before the incident's literal
+error text was available. Once obtained, `get_api_spec(tool_name="delete_schedule")`
+had actually failed with:
 
-## Non-goals
+```
+tools_unavailable: unknown=["delete_schedule"]: these names are not registered by
+any currently connected server. Closest registered name(s): [delete_schedule].
+Registered tools for this session: [add_group add_human_input_step ... ~90 workshop
+tool names ... validate_plan_change validate_report_html]
+```
 
-- Not claiming a confirmed root cause. This ticket documents a real symptom
-  and a real resume-boundary correlation, plus three specific ruled-out
-  explanations, honestly — not a fix.
+— a real infrastructure error, not a model misstatement: `get_api_spec`'s own
+handler genuinely could not resolve `delete_schedule` at that moment, even
+though `server_debug.log` independently confirms
+`[Registered session-scoped custom tool] tool=delete_schedule` fired for this
+same session at `13:47:47`. This narrowed the search to a fourth, more
+specific hypothesis: **two independent tool registries can desync — the
+custom-tool HTTP registry cmd/server logs into, versus whatever registry
+`get_api_spec`'s `virtual_tool_handler` actually consults.**
+
+**The literal form of that hypothesis is refuted.** `mcpagent/agent/tool_registry.go`'s
+`canonicalRegistry()` is a per-`Agent`-object cache, but `cmd/server/server.go:4642`
+constructs a **brand-new** `llmAgent` (and underlying `mcpagent.Agent`) on
+*every* `handleQuery` call — fresh, resume, or otherwise; there is no
+cross-turn Agent reuse to go stale. The ~90-107 custom tools are registered
+unconditionally on every such call (`server.go:5016-5085` →
+`llmAgent.RegisterCustomTool`), with no "already registered, skip" guard —
+`registerDirectTool` (`mcpagent/agent/agent.go:3452-3515`) is explicitly
+idempotent by name. This registration block runs, synchronously, *before*
+the resume-seed/FIX-B relaunch block later in the same `handleQuery` call,
+on the same `underlyingAgent` object — nothing reassigns `llmAgent` in
+between. The `[Registered session-scoped custom tool] tool=delete_schedule`
+log line itself (`mcpagent/agent/codeexec/registry.go:672`, fired from
+`agent/agent.go:3613-3617`) only runs *after* the canonical-registry write
+at `agent.go:3505-3515` already succeeded — so that log line firing is
+itself proof the canonical registry had `delete_schedule` at that moment,
+on whatever Agent object logged it.
+
+**A different, real, currently-broken mechanism was found nearby and
+confirmed by direct code read (not the exact hypothesis, but a genuine bug
+in the same neighborhood).** `get_api_spec` is a *virtual* tool, routed
+through `codeexec.CallVirtualToolWithSession`
+(`mcpagent/agent/codeexec/registry.go:522-586`), keyed by a
+`sessionID:vt:traceID` scope string baked into the CLI bridge subprocess's
+env at launch and regenerated fresh on every relaunch
+(`agent/coding_agents_bridge.go:279-281`). Old scope entries in
+`sessionVirtualTools` are never pruned — only superseded by
+`latestVirtualScopeBySession`, whose own comment names exactly this
+incident's shape: *"This lets older restored bridge processes recover when
+they still carry a stale session:vt:\<trace\> scope from before workspace
+tools were registered."* The recovery path exists
+(`CallVirtualToolWithSession` retries against the latest scope when
+`shouldRetryVirtualToolWithLatestScope(err)` is true) — but that function
+only matched the legacy string `"Available servers/categories: []"`, a
+phrasing `get_api_spec`'s current `unavailableToolsError`
+(`agent/code_execution_tools.go:148-217`) no longer produces anywhere.
+Confirmed by direct grep: that exact string appears nowhere in
+`code_execution_tools.go`. **So if a restored bridge process ever does send
+a stale scope ID, the one safety net built to recover from it was silently
+dead** — the model would see the raw `tools_unavailable:` error with no
+retry, which reads exactly like this incident.
+
+**What is and isn't proven:** there is no direct evidence (a captured
+`MCP_VIRTUAL_SCOPE_ID` value from the failing bridge process) that this
+specific incident hit a stale-scope condition rather than some other path
+into `unavailableToolsError`'s healthy-servers/name-genuinely-unregistered
+branch. This is the one concrete, currently-broken recovery path found that
+matches the error shape and is already documented in the code as an
+anticipated resume-adjacent failure mode — not a certainty that it explains
+this exact incident.
+
+## Fix implemented
+
+`shouldRetryVirtualToolWithLatestScope`
+(`mcpagent/agent/codeexec/registry.go`) now also matches the current
+format's unique phrase, `"these names are not registered by any currently
+connected server"` (present only in `unavailableToolsError`'s
+healthy-servers-name-is-unknown branch — the structural analog of the old
+empty-discovery case). Real outage/permission-denial branches of the same
+error function deliberately do not contain either phrase and continue to
+skip the retry, matching the existing test
+`TestCallVirtualToolWithSessionKeepsScopedNonEmptyDiscoveryErrors`'s intent
+that a legitimate, specific error must not be papered over by silently
+trying a different scope.
+
+## Not implemented
+
+- The three originally-investigated hypotheses remain ruled out as stated
+  below — none of them were the cause.
+- Reading the raw streamed model turn (`stream_turn-*.txt` in
+  `logs/agent_prompts/b5e39872-4e4e-4645-8059-6d6e7a1231db/`) to find direct
+  evidence of the actual scope ID sent at the failing call — would be needed
+  to move from "plausible, code-confirmed mechanism" to "confirmed root
+  cause of this exact incident," not done in this pass.
 - Not re-litigating whether CLI providers should honor
-  `use_code_execution_mode: false` from the manifest — the code comments
-  cited above are unambiguous that ignoring it for CLI providers is
-  intentional (CLI providers structurally need the HTTP bridge), and nothing
-  found here contradicts that design choice.
-
-## Suggested next step (not started)
-
-Read the raw streamed model turn for the incident (`stream_turn-*.txt` in
-`logs/agent_prompts/b5e39872-4e4e-4645-8059-6d6e7a1231db/`) to see the
-model's actual reasoning/response verbatim, and check whether it ever
-attempted a `get_api_spec`/tool call that failed at the HTTP layer (as
-opposed to declining to try at all) before concluding this is a model
-self-assessment issue versus an actual invocation-layer failure.
+  `use_code_execution_mode: false` from the manifest — unrelated to the
+  fix above and already settled as intentional in the three hypotheses
+  ruled out above.
 
 ## Verification
 
-Investigation only — no code change in this pass. Every claim above is
-backed by a direct log or source citation; no speculation presented as
-fact.
+- The fix (`mcpagent/agent/codeexec/registry.go`,
+  `shouldRetryVirtualToolWithLatestScope`) is covered by two new tests in
+  `registry_test.go`: one reproducing the incident's actual error text
+  verbatim and confirming the retry now engages and returns the latest
+  scope's result; one confirming a real-outage error in the current format
+  (which explicitly states retrying elsewhere won't help) still does not
+  retry, mirroring the existing
+  `TestCallVirtualToolWithSessionKeepsScopedNonEmptyDiscoveryErrors`'s
+  intent. `go build ./...` and `go test ./agent/...` both clean; the one
+  pre-existing failure (`TestAgentReviewsApproved`) was confirmed present
+  on a clean `origin/main` checkout before this change, unrelated to
+  virtual-tool scoping.
+- Live reverify pending: no confirmation yet that this fix actually closes
+  the user-visible symptom on a real resumed session, since the exact
+  incident mechanism (a stale scope ID reaching this retry path) was never
+  directly proven for this specific occurrence — see "What is and isn't
+  proven" above.
+- The three originally-ruled-out hypotheses were independently re-verified
+  by direct evidence, not implementation: the live prompt log for the exact
+  relaunch, and direct reads of `agent.go`/`server.go`'s agent-construction
+  and code-execution-mode call sites, all cited inline above.
