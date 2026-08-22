@@ -2,7 +2,6 @@ package server
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,7 +11,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/manishiitg/mcpagent/mcpclient"
@@ -666,73 +664,6 @@ func (api *StreamingAPI) handleDisconnectConnection(w http.ResponseWriter, r *ht
 		"status":      "disconnected",
 		"server_name": serverName,
 		"message":     "Signed out. The connection is kept so you can reconnect in one click.",
-	})
-}
-
-// handleTestConnection handles POST /api/connections/{id}/test — connects and
-// lists tools so the user gets a concrete "it works" signal.
-func (api *StreamingAPI) handleTestConnection(w http.ResponseWriter, r *http.Request) {
-	id := mux.Vars(r)["id"]
-	serverName := api.resolveServerName(id)
-	displayName := serverName
-	if entry, err := api.findCatalogEntry(id); err == nil {
-		displayName = entry.Name
-	}
-
-	config, err := mcpclient.LoadMergedConfig(api.mcpConfigPath, api.logger)
-	if err != nil {
-		writeFriendlyError(w, http.StatusInternalServerError, friendlyError(displayName, http.StatusInternalServerError, err.Error()))
-		return
-	}
-
-	serverConfig, err := config.GetServer(serverName)
-	if err != nil {
-		writeFriendlyError(w, http.StatusNotFound, &FriendlyError{
-			Code:    "not_connected",
-			Title:   fmt.Sprintf("%s is not connected", displayName),
-			Message: "Connect the integration before testing it.",
-			Action:  "connect",
-			Raw:     err.Error(),
-		})
-		return
-	}
-
-	userID := GetUserIDFromContext(r.Context())
-	if serverConfig.OAuth != nil {
-		serverConfig.OAuth.TokenFile = getUserTokenFilePath(userID, serverName)
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
-
-	client := mcpclient.New(serverConfig, api.logger)
-	if err := client.Connect(ctx); err != nil {
-		api.appendServerLog(serverName, "error", fmt.Sprintf("Test failed: %v", err))
-		writeFriendlyError(w, http.StatusBadGateway, friendlyError(displayName, 0, err.Error()))
-		return
-	}
-	defer client.Close()
-
-	tools, err := client.ListTools(ctx)
-	if err != nil {
-		api.appendServerLog(serverName, "error", fmt.Sprintf("Test failed listing tools: %v", err))
-		writeFriendlyError(w, http.StatusBadGateway, friendlyError(displayName, 0, err.Error()))
-		return
-	}
-
-	names := make([]string, 0, len(tools))
-	for _, t := range tools {
-		names = append(names, t.Name)
-	}
-	api.appendServerLog(serverName, "info", fmt.Sprintf("Test succeeded: %d tools available", len(names)))
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
-		"status":      "ok",
-		"server_name": serverName,
-		"tool_count":  len(names),
-		"tools":       names,
-		"message":     fmt.Sprintf("%s is working — %d tools available.", displayName, len(names)),
 	})
 }
 

@@ -100,14 +100,6 @@ export interface ConnectResult {
   resource?: string;
 }
 
-export interface TestResult {
-  status: string;
-  server_name: string;
-  tool_count: number;
-  tools: string[];
-  message: string;
-}
-
 export interface ConnectPayload {
   /** Only for the needs_client_id fallback, when a server turns out to lack DCR. */
   client_id?: string;
@@ -229,12 +221,6 @@ export class ConnectionsApi {
     });
   }
 
-  /** Connect and list tools so the user gets a concrete "it works" signal. */
-  async test(id: string): Promise<TestResult> {
-    return request(`/api/connections/${encodeURIComponent(id)}/test`, {
-      method: 'POST',
-    });
-  }
 }
 
 export const connectionsApi = new ConnectionsApi();

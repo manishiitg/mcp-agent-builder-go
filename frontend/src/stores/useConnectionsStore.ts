@@ -7,7 +7,6 @@ import {
   type ConnectionsSummary,
   type ConnectPayload,
   type FriendlyError,
-  type TestResult,
 } from '../services/connectionsApi'
 
 /** How long to wait for the user to finish an OAuth approval before giving up. */
@@ -52,7 +51,6 @@ interface ConnectionsState {
   /** Catalog/connection id currently mid-connect, so its card can show a spinner. */
   connectingId: string | null
   /** Catalog/connection id currently being tested. */
-  testingId: string | null
   /** Catalog/connection id currently being disconnected. */
   disconnectingId: string | null
 
@@ -65,7 +63,6 @@ interface ConnectionsState {
 
   connect: (id: string, payload?: ConnectPayload) => Promise<ConnectOutcome>
   disconnect: (id: string) => Promise<boolean>
-  test: (id: string) => Promise<TestResult | null>
 
   clearActionError: () => void
   getConnection: (id: string) => Connection | undefined
@@ -157,7 +154,6 @@ export const useConnectionsStore = create<ConnectionsState>((set, get) => ({
   isLoadingCatalog: false,
   isLoadingConnections: false,
   connectingId: null,
-  testingId: null,
   disconnectingId: null,
 
   loadError: null,
@@ -256,18 +252,6 @@ export const useConnectionsStore = create<ConnectionsState>((set, get) => ({
     } catch (err) {
       set({ disconnectingId: null, actionError: toFriendly(err) })
       return false
-    }
-  },
-
-  test: async id => {
-    set({ testingId: id, actionError: null })
-    try {
-      const result = await connectionsApi.test(id)
-      set({ testingId: null })
-      return result
-    } catch (err) {
-      set({ testingId: null, actionError: toFriendly(err) })
-      return null
     }
   },
 

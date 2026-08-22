@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react'
-import { X, Loader2, CheckCircle2, ExternalLink, Sparkles } from 'lucide-react'
+import { X, Loader2, CheckCircle2, ExternalLink } from 'lucide-react'
 import ModalPortal from '../ui/ModalPortal'
 import ConnectionIcon from './ConnectionIcon'
 import ErrorNotice from './ErrorNotice'
 import { useConnectionsStore } from '../../stores/useConnectionsStore'
-import type { CatalogEntry, FriendlyError, TestResult } from '../../services/connectionsApi'
+import type { CatalogEntry, FriendlyError } from '../../services/connectionsApi'
 
-type Step = 'review' | 'authenticating' | 'testing' | 'done' | 'error'
+type Step = 'review' | 'authenticating' | 'done' | 'error'
 
 interface ConnectFlowModalProps {
   entry: CatalogEntry
@@ -14,17 +14,15 @@ interface ConnectFlowModalProps {
 }
 
 /**
- * The guided connect flow: review the access being granted, authenticate,
- * verify it works, and land on a success state — without ever showing the user
- * an MCP server or a JSON file.
+ * The guided connect flow: review the access being granted, authenticate, and
+ * land on a success state — without ever showing the user an MCP server or a
+ * JSON file.
  */
 export default function ConnectFlowModal({ entry, onClose }: ConnectFlowModalProps) {
   const connect = useConnectionsStore(s => s.connect)
-  const test = useConnectionsStore(s => s.test)
 
   const [step, setStep] = useState<Step>('review')
   const [error, setError] = useState<FriendlyError | null>(null)
-  const [testResult, setTestResult] = useState<TestResult | null>(null)
 
   // Only used by the needs_client_id fallback, when a server turns out not to
   // support dynamic client registration after all.
@@ -34,7 +32,7 @@ export default function ConnectFlowModal({ entry, onClose }: ConnectFlowModalPro
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       // Escape must not abandon a half-finished authentication silently.
-      if (e.key === 'Escape' && step !== 'authenticating' && step !== 'testing') {
+      if (e.key === 'Escape' && step !== 'authenticating') {
         onClose()
       }
     }
@@ -65,17 +63,7 @@ export default function ConnectFlowModal({ entry, onClose }: ConnectFlowModalPro
       return
     }
 
-    // Connected — verify it actually works before claiming success.
-    setStep('testing')
-    const result = await test(entry.id)
-    if (result) {
-      setTestResult(result)
-      setStep('done')
-    } else {
-      // Auth succeeded but the first call failed; the connection is saved, so
-      // this is a warning rather than a failure.
-      setStep('done')
-    }
+    setStep('done')
   }
 
   const title =
@@ -108,7 +96,7 @@ export default function ConnectFlowModal({ entry, onClose }: ConnectFlowModalPro
             <button
               type="button"
               onClick={onClose}
-              disabled={step === 'authenticating' || step === 'testing'}
+              disabled={step === 'authenticating'}
               className="rounded-md p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 disabled:opacity-40 dark:text-gray-400 dark:hover:bg-slate-700"
               aria-label="Close"
             >
@@ -174,47 +162,15 @@ export default function ConnectFlowModal({ entry, onClose }: ConnectFlowModalPro
               </div>
             )}
 
-            {step === 'testing' && (
-              <div className="flex flex-col items-center gap-3 py-8 text-center">
-                <Loader2 className="h-7 w-7 animate-spin text-blue-600 dark:text-blue-400" />
-                <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                  Testing the connection
-                </p>
-              </div>
-            )}
-
             {step === 'done' && (
-              <div className="space-y-4">
-                <div className="flex flex-col items-center gap-2 py-4 text-center">
-                  <CheckCircle2 className="h-10 w-10 text-green-600 dark:text-green-400" />
-                  <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                    {entry.name} is connected
-                  </p>
-                  {testResult ? (
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                      {testResult.tool_count} action
-                      {testResult.tool_count === 1 ? '' : 's'} are now available to your
-                      agents.
-                    </p>
-                  ) : (
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                      Access was approved. Run a test from the connection card if you want
-                      to verify it.
-                    </p>
-                  )}
-                </div>
-
-                {testResult && testResult.tools.length > 0 && (
-                  <section className="rounded-md bg-gray-50 p-3 dark:bg-slate-700/50">
-                    <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-gray-700 dark:text-gray-300">
-                      <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
-                      Try asking an agent
-                    </h3>
-                    <p className="text-xs text-gray-600 dark:text-gray-400">
-                      &ldquo;use {entry.name}&rdquo;
-                    </p>
-                  </section>
-                )}
+              <div className="flex flex-col items-center gap-2 py-6 text-center">
+                <CheckCircle2 className="h-10 w-10 text-green-600 dark:text-green-400" />
+                <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                  {entry.name} is connected
+                </p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  Its actions are now available to your agents.
+                </p>
               </div>
             )}
 
@@ -246,7 +202,7 @@ export default function ConnectFlowModal({ entry, onClose }: ConnectFlowModalPro
                 <button
                   type="button"
                   onClick={onClose}
-                  disabled={step === 'authenticating' || step === 'testing'}
+                  disabled={step === 'authenticating'}
                   className="rounded-md px-4 py-2 text-sm text-gray-600 transition-colors hover:text-gray-900 disabled:opacity-40 dark:text-gray-400 dark:hover:text-gray-200"
                 >
                   Cancel

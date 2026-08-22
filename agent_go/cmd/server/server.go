@@ -1983,7 +1983,6 @@ func runServer(cmd *cobra.Command, args []string) {
 	apiRouter.HandleFunc("/connections", api.handleGetConnections).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/connections/{id}/connect", api.handleConnectIntegration).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/connections/{id}/disconnect", api.handleDisconnectConnection).Methods("POST", "OPTIONS")
-	apiRouter.HandleFunc("/connections/{id}/test", api.handleTestConnection).Methods("POST", "OPTIONS")
 
 	// Secrets encryption API routes (from secrets_routes.go)
 	apiRouter.HandleFunc("/secrets/encrypt", api.handleEncryptSecret).Methods("POST", "OPTIONS")
