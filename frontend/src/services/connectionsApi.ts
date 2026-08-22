@@ -37,12 +37,12 @@ export type RecoveryAction =
   | 'retry'
   | 'connect'
   | 'enter_token'
-  | 'open_advanced'
   | 'contact_admin';
 
 /**
  * A transport failure rewritten as something a person can act on. `raw` keeps
- * the original text for the Advanced section.
+ * the original text so the error UI can show the technical detail directly,
+ * without a disclosure step.
  */
 export interface FriendlyError {
   code: string;
@@ -54,25 +54,20 @@ export interface FriendlyError {
 
 export interface CatalogEntry {
   id: string;
-  server_name: string;
   name: string;
   tagline?: string;
   description?: string;
   category?: string;
   icon?: string;
-  brand_color?: string;
   docs_url?: string;
   status?: 'available' | 'coming_soon';
   auth: ConnectionAuthType;
   transport: ConnectionTransport;
-  url?: string;
-  command?: string;
   capabilities?: string[];
   sensitive_actions?: string[];
   setup_hint?: string;
   token_label?: string;
   token_placeholder?: string;
-  token_env_var?: string;
   extra_env?: Record<string, string>;
   /** Computed server-side: admin has not supplied credentials yet. */
   setup_required: boolean;
@@ -83,7 +78,6 @@ export interface Connection {
   server_name: string;
   name: string;
   icon?: string;
-  brand_color?: string;
   auth: ConnectionAuthType;
   transport: ConnectionTransport;
   health: ConnectionHealth;
@@ -171,8 +165,8 @@ function fallbackFriendly(status: number, raw: string): FriendlyError {
   return {
     code: 'unknown',
     title: 'Something went wrong',
-    message: 'The request could not be completed. Open Advanced for details.',
-    action: 'open_advanced',
+    message: 'The request could not be completed. Try again.',
+    action: 'retry',
     raw,
   };
 }

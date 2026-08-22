@@ -11,7 +11,6 @@
       "auth": "dcr",
       "url": "https://mcp.notion.com/mcp",
       "icon": "notion",
-      "brand_color": "#000000",
       "docs_url": "https://developers.notion.com/docs/mcp",
       "capabilities": [
         "Search pages and databases",
@@ -32,7 +31,6 @@
       "auth": "dcr",
       "url": "https://mcp.linear.app/mcp",
       "icon": "linear",
-      "brand_color": "#5E6AD2",
       "docs_url": "https://linear.app/docs/mcp",
       "capabilities": [
         "Search and read issues",
@@ -53,7 +51,6 @@
       "auth": "dcr",
       "url": "https://mcp.asana.com/sse",
       "icon": "asana",
-      "brand_color": "#F06A6A",
       "docs_url": "https://developers.asana.com/docs/mcp-server",
       "capabilities": [
         "Search tasks and projects",
@@ -74,7 +71,6 @@
       "auth": "dcr",
       "url": "https://mcp.atlassian.com/v1/sse",
       "icon": "atlassian",
-      "brand_color": "#0052CC",
       "docs_url": "https://support.atlassian.com/atlassian-rovo-mcp-server/",
       "capabilities": [
         "Search Jira issues",
@@ -94,7 +90,6 @@
       "status": "available",
       "auth": "dcr",
       "url": "https://mcp.monday.com/sse",
-      "brand_color": "#FF3D57",
       "docs_url": "https://developer.monday.com/apps/docs/mondaycom-mcp-integration",
       "capabilities": [
         "Read boards and items",
@@ -116,7 +111,6 @@
       "auth": "dcr",
       "url": "https://mcp.sentry.dev/mcp",
       "icon": "sentry",
-      "brand_color": "#362D59",
       "docs_url": "https://docs.sentry.io/product/sentry-mcp/",
       "capabilities": [
         "List and search issues",
@@ -135,7 +129,6 @@
       "auth": "dcr",
       "url": "https://mcp.figma.com/mcp",
       "icon": "figma",
-      "brand_color": "#F24E1E",
       "docs_url": "https://help.figma.com/hc/en-us/articles/32132100833559",
       "capabilities": [
         "Read design files and frames",
@@ -154,7 +147,6 @@
       "auth": "dcr",
       "url": "https://mcp.canva.com/mcp",
       "icon": "canva",
-      "brand_color": "#00C4CC",
       "docs_url": "https://www.canva.dev/docs/apps/mcp-server/",
       "capabilities": [
         "Search and read designs",
@@ -175,7 +167,6 @@
       "auth": "dcr",
       "url": "https://mcp.vercel.com",
       "icon": "vercel",
-      "brand_color": "#000000",
       "docs_url": "https://vercel.com/docs/mcp/vercel-mcp",
       "capabilities": [
         "List projects and deployments",
@@ -193,7 +184,6 @@
       "status": "available",
       "auth": "dcr",
       "url": "https://mcp.neon.tech/sse",
-      "brand_color": "#00E599",
       "docs_url": "https://neon.com/docs/ai/neon-mcp-server",
       "capabilities": [
         "List projects and databases",
@@ -215,7 +205,6 @@
       "auth": "dcr",
       "url": "https://observability.mcp.cloudflare.com/sse",
       "icon": "cloudflare",
-      "brand_color": "#F38020",
       "docs_url": "https://developers.cloudflare.com/agents/model-context-protocol/mcp-servers-for-cloudflare/",
       "capabilities": [
         "Query Workers logs and analytics",
@@ -233,7 +222,6 @@
       "auth": "dcr",
       "url": "https://mcp.webflow.com/sse",
       "icon": "webflow",
-      "brand_color": "#146EF5",
       "docs_url": "https://developers.webflow.com/data/docs/ai-tools",
       "capabilities": [
         "List sites and collections",
@@ -254,7 +242,6 @@
       "auth": "dcr",
       "url": "https://mcp.wix.com/sse",
       "icon": "wix",
-      "brand_color": "#0C6EFC",
       "docs_url": "https://www.wix.com/studio/developers/mcp-server",
       "capabilities": [
         "Read site and store data",
@@ -275,7 +262,6 @@
       "auth": "dcr",
       "url": "https://mcp.stripe.com",
       "icon": "stripe",
-      "brand_color": "#635BFF",
       "docs_url": "https://docs.stripe.com/mcp",
       "capabilities": [
         "Search customers and payments",
@@ -296,7 +282,6 @@
       "auth": "dcr",
       "url": "https://mcp.paypal.com/mcp",
       "icon": "paypal",
-      "brand_color": "#003087",
       "docs_url": "https://developer.paypal.com/tools/mcp-server/",
       "capabilities": [
         "Read orders and transactions",
@@ -317,7 +302,6 @@
       "auth": "dcr",
       "url": "https://mcp.squareup.com/sse",
       "icon": "square",
-      "brand_color": "#3E4348",
       "docs_url": "https://developer.squareup.com/docs/mcp",
       "capabilities": [
         "Read payments and orders",
@@ -337,7 +321,6 @@
       "status": "available",
       "auth": "dcr",
       "url": "https://api.dashboard.plaid.com/mcp/sse",
-      "brand_color": "#000000",
       "docs_url": "https://plaid.com/docs/mcp/",
       "capabilities": [
         "Read linked accounts",
@@ -355,7 +338,6 @@
       "auth": "dcr",
       "url": "https://mcp.intercom.com/mcp",
       "icon": "intercom",
-      "brand_color": "#1F8DED",
       "docs_url": "https://developers.intercom.com/docs/guides/mcp",
       "capabilities": [
         "Search conversations",
@@ -375,7 +357,6 @@
       "status": "available",
       "auth": "dcr",
       "url": "https://mcp.close.com/mcp",
-      "brand_color": "#1289F5",
       "docs_url": "https://developer.close.com/",
       "capabilities": [
         "Search leads and contacts",
@@ -396,7 +377,6 @@
       "auth": "dcr",
       "url": "https://mcp.zapier.com/api/mcp/mcp",
       "icon": "zapier",
-      "brand_color": "#FF4F00",
       "docs_url": "https://help.zapier.com/hc/en-us/articles/36265392843917",
       "capabilities": [
         "Run configured Zapier actions",
@@ -415,7 +395,6 @@
       "status": "available",
       "auth": "dcr",
       "url": "https://api.fireflies.ai/mcp",
-      "brand_color": "#1F1F1F",
       "docs_url": "https://docs.fireflies.ai/",
       "capabilities": [
         "Search meeting transcripts",
@@ -432,7 +411,6 @@
       "status": "available",
       "auth": "dcr",
       "url": "https://mcp.globalping.dev/sse",
-      "brand_color": "#17D4A7",
       "docs_url": "https://globalping.io/docs",
       "capabilities": [
         "Run ping, traceroute, and DNS checks",
@@ -447,7 +425,6 @@
       "tagline": "Repos, issues, and pull requests",
       "category": "development",
       "icon": "github",
-      "brand_color": "#181717",
       "status": "available",
       "auth": "oauth_app",
       "url": "https://api.githubcopilot.com/mcp/",
@@ -480,7 +457,6 @@
       "tagline": "Channels, messages, and search",
       "category": "communication",
       "icon": "slack",
-      "brand_color": "#4A154B",
       "status": "coming_soon",
       "auth": "oauth_app",
       "url": "https://mcp.slack.com/mcp",
@@ -519,7 +495,6 @@
       "tagline": "Gmail, Drive, and Calendar",
       "category": "productivity",
       "icon": "google",
-      "brand_color": "#4285F4",
       "status": "available",
       "auth": "oauth_app",
       "url": "https://gmailmcp.googleapis.com/mcp/v1",
@@ -549,7 +524,6 @@
       "name": "Microsoft 365",
       "tagline": "Outlook, OneDrive, and Calendar",
       "category": "productivity",
-      "brand_color": "#0078D4",
       "status": "coming_soon",
       "auth": "oauth_app",
       "docs_url": "https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app",

@@ -244,8 +244,13 @@ func TestConnectUnknownIntegrationPointsToCustomMCP(t *testing.T) {
 		t.Fatalf("status = %d, want 404", rec.Code)
 	}
 	errObj, _ := body["error"].(map[string]any)
-	if errObj["action"] != "open_advanced" {
-		t.Errorf("action = %v, want %q", errObj["action"], "open_advanced")
+	if errObj["code"] != "not_in_catalog" {
+		t.Errorf("code = %v, want %q", errObj["code"], "not_in_catalog")
+	}
+	// There is no action to offer — the message is what points at Custom MCP.
+	msg, _ := errObj["message"].(string)
+	if !strings.Contains(msg, "Custom MCP") {
+		t.Errorf("message = %q, want it to point at Custom MCP", msg)
 	}
 }
 

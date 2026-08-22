@@ -36,7 +36,6 @@ export default function ConnectionRow({
 }: ConnectionRowProps) {
   const name = entry?.name ?? connection?.name ?? 'Unknown'
   const icon = entry?.icon ?? connection?.icon
-  const brandColor = entry?.brand_color ?? connection?.brand_color
   const transport = entry?.transport ?? connection?.transport ?? 'web'
 
   const health = connection?.health ?? 'not_connected'
@@ -56,7 +55,7 @@ export default function ConnectionRow({
     <div className={`group grid ${CONNECTION_GRID} items-center gap-4 rounded-lg px-3 py-2.5 transition-colors hover:bg-gray-50 dark:hover:bg-slate-700/40`}>
       {/* Connector — identity only; the row's actions live in the last column */}
       <div className="flex min-w-0 items-center gap-3">
-        <ConnectionIcon icon={icon} brandColor={brandColor} size="sm" />
+        <ConnectionIcon icon={icon} size="sm" />
         <span className="truncate text-sm font-medium text-gray-900 dark:text-gray-100">
           {name}
         </span>

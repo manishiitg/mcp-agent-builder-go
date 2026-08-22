@@ -4,7 +4,6 @@ import type { CatalogEntry, Connection } from '../../services/connectionsApi'
 
 function entry(over: Partial<CatalogEntry> & { id: string; name: string }): CatalogEntry {
   return {
-    server_name: over.id,
     auth: 'dcr',
     transport: 'web',
     setup_required: false,

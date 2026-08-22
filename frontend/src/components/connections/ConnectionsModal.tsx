@@ -274,10 +274,9 @@ export default function ConnectionsModal({ onClose }: ConnectionsModalProps) {
                   <div className="mb-4">
                     <ErrorNotice
                       error={actionError}
-                      onAction={action => {
+                      onAction={() => {
                         clearActionError()
-                        if (action === 'open_advanced') setView('custom')
-                        else loadConnections()
+                        loadConnections()
                       }}
                       compact
                     />

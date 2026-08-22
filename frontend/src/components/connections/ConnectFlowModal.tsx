@@ -107,7 +107,7 @@ export default function ConnectFlowModal({ entry, onClose }: ConnectFlowModalPro
           {/* Header */}
           <div className="flex items-start justify-between gap-3 border-b border-gray-200 px-5 py-4 dark:border-slate-700">
             <div className="flex min-w-0 items-center gap-3">
-              <ConnectionIcon icon={entry.icon} brandColor={entry.brand_color} />
+              <ConnectionIcon icon={entry.icon} />
               <div className="min-w-0">
                 <h2 className="truncate text-base font-semibold text-gray-900 dark:text-gray-100">
                   {title}

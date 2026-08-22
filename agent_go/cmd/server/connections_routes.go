@@ -48,10 +48,10 @@ const (
 
 // Connection health states surfaced to the UI.
 const (
-	healthConnected     = "connected"
+	healthConnected      = "connected"
 	healthNeedsReconnect = "needs_reconnect"
-	healthSetupRequired = "setup_required"
-	healthNotConnected  = "not_connected"
+	healthSetupRequired  = "setup_required"
+	healthNotConnected   = "not_connected"
 )
 
 // CatalogEntry is one integration in the curated catalog.
@@ -63,7 +63,6 @@ type CatalogEntry struct {
 	Description string `json:"description,omitempty"`
 	Category    string `json:"category,omitempty"`
 	Icon        string `json:"icon,omitempty"`
-	BrandColor  string `json:"brand_color,omitempty"`
 	DocsURL     string `json:"docs_url,omitempty"`
 	// "available" or "coming_soon". coming_soon renders disabled.
 	Status string `json:"status,omitempty"`
@@ -110,7 +109,8 @@ type connectionsCatalog struct {
 }
 
 // FriendlyError replaces raw transport failures with a recovery path. The raw
-// text is preserved under Raw for the Advanced section.
+// text is preserved under Raw so the error UI can show the technical detail
+// directly, without a disclosure step.
 type FriendlyError struct {
 	Code    string `json:"code"`
 	Title   string `json:"title"`
@@ -125,7 +125,6 @@ type Connection struct {
 	ServerName string         `json:"server_name"`
 	Name       string         `json:"name"`
 	Icon       string         `json:"icon,omitempty"`
-	BrandColor string         `json:"brand_color,omitempty"`
 	Auth       string         `json:"auth"`
 	Transport  string         `json:"transport"`
 	Health     string         `json:"health"`
@@ -282,7 +281,6 @@ func friendlyError(serviceName string, status int, raw string) *FriendlyError {
 			Code:    "not_found",
 			Title:   fmt.Sprintf("%s could not be found", serviceName),
 			Message: "The service address is wrong or the integration has moved. Check the connection settings.",
-			Action:  "open_advanced",
 			Raw:     raw,
 		}
 	case status == http.StatusTooManyRequests || strings.Contains(lower, "429"):
@@ -321,8 +319,8 @@ func friendlyError(serviceName string, status int, raw string) *FriendlyError {
 		return &FriendlyError{
 			Code:    "unknown",
 			Title:   fmt.Sprintf("Could not connect to %s", serviceName),
-			Message: "Something went wrong while connecting. Open Advanced for the technical details.",
-			Action:  "open_advanced",
+			Message: "Something went wrong while connecting. Try again.",
+			Action:  "retry",
 			Raw:     raw,
 		}
 	}
@@ -350,7 +348,7 @@ func (api *StreamingAPI) handleGetConnectionsCatalog(w http.ResponseWriter, r *h
 			Code:    "catalog_unavailable",
 			Title:   "Integration catalog unavailable",
 			Message: "The list of available integrations could not be loaded. Custom MCP still works.",
-			Action:  "open_advanced",
+			Action:  "retry",
 			Raw:     err.Error(),
 		})
 		return
@@ -432,7 +430,6 @@ func (api *StreamingAPI) handleGetConnections(w http.ResponseWriter, r *http.Req
 			conn.ID = entry.ID
 			conn.Name = entry.Name
 			conn.Icon = entry.Icon
-			conn.BrandColor = entry.BrandColor
 		} else {
 			conn.ID = name
 		}
@@ -641,7 +638,6 @@ func (api *StreamingAPI) handleConnectIntegration(w http.ResponseWriter, r *http
 			Code:    "not_in_catalog",
 			Title:   "Integration not available",
 			Message: "This integration is not in the catalog. Use Custom MCP to add it manually.",
-			Action:  "open_advanced",
 			Raw:     err.Error(),
 		})
 		return

@@ -1,5 +1,4 @@
-import { useState } from 'react'
-import { AlertTriangle, ChevronDown, ChevronRight } from 'lucide-react'
+import { AlertTriangle } from 'lucide-react'
 import type { FriendlyError, RecoveryAction } from '../../services/connectionsApi'
 
 const ACTION_LABELS: Record<RecoveryAction, string> = {
@@ -7,7 +6,6 @@ const ACTION_LABELS: Record<RecoveryAction, string> = {
   retry: 'Try again',
   connect: 'Connect',
   enter_token: 'Enter credential',
-  open_advanced: 'Open Advanced',
   contact_admin: 'Contact administrator',
 }
 
@@ -19,14 +17,13 @@ interface ErrorNoticeProps {
 }
 
 /**
- * Renders a failure as a recovery path. The raw transport error stays behind
- * an Advanced disclosure so power users keep their diagnostics.
+ * Renders a failure as a recovery path. The raw transport error is shown
+ * directly — no disclosure step — right under the human-readable summary.
  */
 export default function ErrorNotice({ error, onAction, compact = false }: ErrorNoticeProps) {
-  const [showRaw, setShowRaw] = useState(false)
-
   // contact_admin is informational — there is nothing for the user to click.
   const actionable = error.action && error.action !== 'contact_admin'
+  const raw = error.raw?.trim()
 
   return (
     <div
@@ -49,8 +46,14 @@ export default function ErrorNotice({ error, onAction, compact = false }: ErrorN
             </p>
           )}
 
-          <div className="mt-2 flex flex-wrap items-center gap-3">
-            {actionable && onAction && (
+          {raw && (
+            <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-all rounded bg-amber-100/70 p-2 font-mono text-[11px] text-amber-900 dark:bg-slate-900/60 dark:text-amber-200">
+              {raw}
+            </pre>
+          )}
+
+          {actionable && onAction && (
+            <div className="mt-2">
               <button
                 type="button"
                 onClick={() => onAction(error.action as RecoveryAction)}
@@ -58,29 +61,7 @@ export default function ErrorNotice({ error, onAction, compact = false }: ErrorN
               >
                 {ACTION_LABELS[error.action as RecoveryAction]}
               </button>
-            )}
-
-            {error.raw && (
-              <button
-                type="button"
-                onClick={() => setShowRaw(v => !v)}
-                className="flex items-center gap-1 text-xs text-amber-700 hover:underline dark:text-amber-400"
-                aria-expanded={showRaw}
-              >
-                {showRaw ? (
-                  <ChevronDown className="h-3 w-3" aria-hidden="true" />
-                ) : (
-                  <ChevronRight className="h-3 w-3" aria-hidden="true" />
-                )}
-                Advanced
-              </button>
-            )}
-          </div>
-
-          {showRaw && error.raw && (
-            <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-all rounded bg-amber-100/70 p-2 font-mono text-[11px] text-amber-900 dark:bg-slate-900/60 dark:text-amber-200">
-              {error.raw}
-            </pre>
+            </div>
           )}
         </div>
       </div>

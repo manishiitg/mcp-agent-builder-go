@@ -18,7 +18,7 @@ func TestFriendlyError401MapsToReconnect(t *testing.T) {
 	if fe.Action != "reconnect" {
 		t.Errorf("action = %q, want %q", fe.Action, "reconnect")
 	}
-	// Raw diagnostics must survive for the Advanced section.
+	// The raw transport text must survive so the error UI can show it directly.
 	if !strings.Contains(fe.Raw, "token expired") {
 		t.Errorf("raw = %q, want it to preserve the original error", fe.Raw)
 	}

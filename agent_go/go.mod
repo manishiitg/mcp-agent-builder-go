@@ -15,9 +15,10 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/invopop/jsonschema v0.13.0
 	github.com/joho/godotenv v1.5.1
+	github.com/k2-fsa/sherpa-onnx-go v1.13.5
 	github.com/manishiitg/coding-agent-loop/workspace v0.0.0
 	github.com/manishiitg/mcpagent v1.7.12-0.20260804131515-482f8dcbfeda
-	github.com/manishiitg/multi-llm-provider-go v0.7.4-0.20260815175650-1541b3efeeeb
+	github.com/manishiitg/multi-llm-provider-go v0.7.4-0.20260818043047-a9fa11ac7b48
 	github.com/mark3labs/mcp-go v0.45.0
 	github.com/openai/openai-go/v3 v3.36.0
 	github.com/robfig/cron/v3 v3.0.1
@@ -89,7 +90,6 @@ require (
 	github.com/googleapis/gax-go/v2 v2.16.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/k2-fsa/sherpa-onnx-go v1.13.5 // indirect
 	github.com/k2-fsa/sherpa-onnx-go-linux v1.13.5 // indirect
 	github.com/k2-fsa/sherpa-onnx-go-macos v1.13.5 // indirect
 	github.com/k2-fsa/sherpa-onnx-go-windows v1.13.5 // indirect

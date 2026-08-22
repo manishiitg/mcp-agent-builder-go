@@ -25,7 +25,7 @@ export default function PopularCard({
 
   return (
     <div className="flex min-w-0 items-center gap-2.5 rounded-xl border border-gray-200 bg-white px-3 py-2.5 dark:border-slate-700 dark:bg-slate-800">
-      <ConnectionIcon icon={entry.icon} brandColor={entry.brand_color} size="sm" />
+      <ConnectionIcon icon={entry.icon} size="sm" />
       <span className="min-w-0 flex-1 truncate text-sm font-medium text-gray-900 dark:text-gray-100">
         {entry.name}
       </span>
