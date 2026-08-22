@@ -1073,6 +1073,28 @@ func newPlatformTurnID() string {
 	return "turn_" + events.GenerateEventID()
 }
 
+// currentTurnID resolves the turn ID that owns the session's canonical
+// completion RIGHT NOW, rather than trusting a turn ID captured once when a
+// tool-call hook was registered. A retained (tmux-delivered) delivery never
+// calls AskWithHistory again -- mcpagent's Session mints its own turn
+// lifecycle for it via Session.Send -- so a hook that only ever knew about
+// the turn active at registration time tags every later retained turn's
+// tool-call events with the wrong, stale ID (PLAT-180). Falls back to
+// fallback (the turn ID from registration time) if the session is
+// unavailable or reports no turn active, which preserves prior behavior for
+// the turn that registered the hook.
+func (w *LLMAgentWrapper) currentTurnID(fallback string) string {
+	w.mu.RLock()
+	session := w.session
+	w.mu.RUnlock()
+	if session != nil {
+		if id := session.ActiveTurnID(); id != "" {
+			return id
+		}
+	}
+	return fallback
+}
+
 func buildSessionTurn(prompt string, history []llmtypes.MessageContent, policy mcpagent.ToolPolicy, streamingCallback func(llmtypes.StreamChunk)) mcpagent.Turn {
 	return mcpagent.Turn{
 		ID:                newPlatformTurnID(),
@@ -1179,7 +1201,7 @@ func (w *LLMAgentWrapper) StreamWithEvents(ctx context.Context, prompt string) (
 						string(w.traceID),
 					)
 					ev.ToolCallID = tc.ID
-					attachTurnID(ev, turn.ID)
+					attachTurnID(ev, w.currentTurnID(turn.ID))
 					w.emitEvent(ev)
 				},
 				OnEnd: func(tc toolcalllog.CompletedCall) {
@@ -1198,7 +1220,7 @@ func (w *LLMAgentWrapper) StreamWithEvents(ctx context.Context, prompt string) (
 						w.config.ModelID,
 					)
 					ev.ToolCallID = tc.ID
-					attachTurnID(ev, turn.ID)
+					attachTurnID(ev, w.currentTurnID(turn.ID))
 					w.emitEvent(ev)
 				},
 			})

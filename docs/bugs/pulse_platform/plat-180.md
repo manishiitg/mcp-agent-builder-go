@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `open` — root cause traced to file:line, not fixed; downstream consequence not yet assessed |
+| Ticket state | `fixed` — the two-system mismatch is resolved; downstream consequence still not assessed |
 | Last synchronized | `2026-08-22` |
 
 - **Priority:** P2 — surfaced as a test-contract failure (IC-11's
@@ -94,25 +94,96 @@ not necessarily that the tool-call event's field is a literal empty string.
 The exact string mismatch was not captured verbatim in this pass and is
 worth confirming directly before implementing a fix.)
 
-## What the correct fix looks like, not yet implemented
+## Fix
 
-The two systems should not both exist for this case. The session already
-tracks which turn is currently active (`Session.activeTurn`, set at the start
-of `Send` and cleared on completion) — a tool-call event firing while a
-retained turn is active should ask the session what turn is active *right
-now*, rather than reading a value captured once at an unrelated, earlier
-setup. Concretely, `toolcalllog`'s `OnStart`/`OnEnd` callbacks would need a
-way to look up the session's live `activeTurn.id` at the moment the event
-fires, instead of closing over `turn.ID` from `buildSessionTurn`. This
-crosses the `agent_go` / `mcpagent` boundary — `toolcalllog.RegisterHook` is
-`agent_go`-owned, `activeTurn`/`canonicalTurnLifecycle` are `mcpagent`-owned
-— so it likely needs either a small exported accessor from `mcpagent`'s
-`Session`, or a callback `mcpagent` invokes into `agent_go` at retained-turn
-start with the real ID, rather than `agent_go` trying to read `mcpagent`
-internals directly.
+Implemented exactly as sketched: agent_go's tool-call hook now asks
+mcpagent's `Session` what turn is active *right now*, at the moment each
+event fires, instead of trusting a turn ID captured once when the hook was
+registered.
 
-Not designed further here. This ticket is root-cause documentation from a
-live investigation, not an implementation.
+`mcpagent/agent/turn_session.go` gained a small exported accessor:
+
+```go
+// ActiveTurnID reports the ID of whichever turn owns this session's canonical
+// completion right now -- a Session.Run in flight, or a retained tmux turn
+// started by Send between Runs -- or "" if none is active.
+func (s *Session) ActiveTurnID() string {
+	if s == nil {
+		return ""
+	}
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	if s.activeTurn == nil {
+		return ""
+	}
+	return s.activeTurn.id
+}
+```
+
+`agent_go/pkg/agentwrapper/llm_agent.go` gained the resolving glue and now
+calls it from both `OnStart`/`OnEnd` instead of closing over `turn.ID`:
+
+```go
+func (w *LLMAgentWrapper) currentTurnID(fallback string) string {
+	w.mu.RLock()
+	session := w.session
+	w.mu.RUnlock()
+	if session != nil {
+		if id := session.ActiveTurnID(); id != "" {
+			return id
+		}
+	}
+	return fallback
+}
+```
+
+```go
+attachTurnID(ev, w.currentTurnID(turn.ID))
+```
+
+This needed no per-provider branching — `currentTurnID` doesn't know or care
+which coding-agent provider is running, so it structurally covers
+claude-code, codex-cli, cursor-cli, and pi-cli alike, the same way the
+underlying `activeTurn` mechanism already does for `unified_completion`.
+`w.session` (a `*mcpagent.Session`) was already a field on the wrapper —
+already set by `FinalizeDefinition` before the hook is registered — so no new
+plumbing was needed to reach it; the fix is the resolving call itself, not
+new wiring to the session.
+
+## Verification
+
+- `mcpagent/agent/turn_session_retained_completion_test.go`:
+  `TestActiveTurnIDReflectsTheRetainedTurnNotAnEarlierCachedTurn` drives real
+  `startRetainedCompletionWatch` machinery (no LLM call needed — the lifecycle
+  is set synchronously before the completion-watch goroutine starts) and
+  confirms `ActiveTurnID()` reports the retained turn's own, distinct ID while
+  it's in flight, then `""` once it completes. Confirmed failing before the
+  fix (`session.ActiveTurnID undefined` — a compile failure, since the method
+  did not exist) and passing after.
+- `mcpagent/agent/public_api_golden_test.go`: `TestSessionPublicMethodSurface`
+  is a deliberate migration ratchet pinning `*Session`'s exact public API —
+  updated in the same commit to include `ActiveTurnID`, per its own stated
+  convention.
+- `agent_go/pkg/agentwrapper/llm_agent_turn_id_test.go`:
+  `TestCurrentTurnIDFallsBackWhenSessionIsNil` and
+  `TestCurrentTurnIDFallsBackWhenSessionHasNoActiveTurn` cover the delegation
+  glue itself. Confirmed failing before the fix
+  (`wrapper.currentTurnID undefined`) and passing after.
+- `go build ./...` clean in both repositories. Full `agent`/`retainedturn`
+  suites pass in mcpagent; `agentwrapper` suite passes in agent_go. Three
+  pre-existing, unrelated failures were confirmed present identically with
+  and without this change (`TestAgentReviewsApproved` — a stale local
+  testdata-review gate; `TestWorkshopResolveLLMConfigExpandsCodingAgentMode`,
+  `TestStandalonePulseReviewCommandsUsePersistedReviewerPipeline`,
+  `TestArtifactDriftAuditsTheSchedule` — unrelated LLM-tier-default and
+  guidance-drift checks), not caused by this fix.
+- **Not re-verified live end-to-end in this pass.** No dev server was running
+  at fix time to re-run `--retained-window-p0-only` against a real pi-cli
+  session the way PLAT-179 was confirmed. The fix is exercised through real
+  production code paths at the unit level (genuine `Session.Run`/
+  `startRetainedCompletionWatch` machinery, not a stub), but the original P0
+  contract failure this ticket was filed from has not been re-run to
+  literal green. Worth doing before fully closing this out.
 
 ## Deliberately out of scope in this pass
 
@@ -132,11 +203,18 @@ live investigation, not an implementation.
 
 - [ ] Root cause confirmed with the exact `turn_id` values from both events
       (the first-turn ID vs. the retained-turn's own ID), not inferred from
-      code reading alone.
+      code reading alone. (Still inferred from code reading + unit-level
+      reproduction, not a captured live pair of mismatched values.)
 - [ ] Downstream consumers of `tool_call_start`/`tool_call_end`'s `turn_id`
       identified, and real impact (if any) assessed.
-- [ ] A fix design that resolves the cross-repo (`agent_go`/`mcpagent`)
+- [x] A fix design that resolves the cross-repo (`agent_go`/`mcpagent`)
       boundary cleanly — not a per-provider patch, since the root cause is
-      shared, provider-agnostic code.
+      shared, provider-agnostic code. Shipped as `Session.ActiveTurnID()` +
+      `LLMAgentWrapper.currentTurnID()`.
 - [ ] Confirmed for claude-code and codex-cli, not only pi-cli and
-      cursor-cli.
+      cursor-cli. (Fix is structurally provider-agnostic — see Fix section —
+      but not individually re-run per provider.)
+- [ ] Re-run `--retained-window-p0-only` live against a real coding-agent
+      session to confirm `assertCanonicalRetainedTurnIdentity` now passes,
+      the way PLAT-179's fix was confirmed. Not done in this pass — no dev
+      server was running at fix time.
