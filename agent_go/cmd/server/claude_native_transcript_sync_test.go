@@ -233,3 +233,112 @@ func TestRefreshLatestBuilderConversationFromNativeTranscriptNoOpsWithoutClaudeC
 		t.Fatalf("expected no-op when runtime info is absent, got %d messages", len(refreshed.ConversationHistory))
 	}
 }
+
+func TestMergeBuilderConversationHistoryRecoversRepliesBetweenPersistedLiveInputs(t *testing.T) {
+	persisted := []builderConversationMessage{
+		{Role: "human", Parts: []builderConversationPart{{Text: "first live input"}}},
+		{Role: "human", Parts: []builderConversationPart{{Text: "second live input"}}},
+	}
+	native := []builderConversationMessage{
+		{Role: "human", Parts: []builderConversationPart{{Text: "first live input"}}},
+		{Role: "ai", Parts: []builderConversationPart{{Text: "first reply"}}},
+		{Role: "human", Parts: []builderConversationPart{{Text: "second live input"}}},
+		{Role: "ai", Parts: []builderConversationPart{{Text: "second reply"}}},
+	}
+
+	merged := mergeBuilderConversationHistory(persisted, native)
+	if len(merged) != 4 {
+		t.Fatalf("merged history has %d messages, want 4: %+v", len(merged), merged)
+	}
+	want := []string{"first live input", "first reply", "second live input", "second reply"}
+	for index, text := range want {
+		if got := merged[index].Parts[0].Text; got != text {
+			t.Fatalf("merged[%d] = %q, want %q; full history: %+v", index, got, text, merged)
+		}
+	}
+}
+
+func TestRefreshLatestBuilderConversationIgnoresLiveInputUpdatedAtAsTranscriptCursor(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	workingDir := filepath.Join(home, "workspace-docs", "Workflow", "test")
+	if err := os.MkdirAll(workingDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	nativeSessionID := "native-live-input-session"
+	transcriptDir := filepath.Join(home, ".claude", "projects", claudeNativeTranscriptProjectSlug(workingDir))
+	if err := os.MkdirAll(transcriptDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTranscriptFixture(t, filepath.Join(transcriptDir, nativeSessionID+".jsonl"), []string{
+		`{"type":"user","timestamp":"2026-08-22T08:01:00Z","message":{"role":"user","content":"first live input"}}`,
+		`{"type":"assistant","timestamp":"2026-08-22T08:02:00Z","message":{"role":"assistant","content":[{"type":"text","text":"first reply"}]}}`,
+		`{"type":"user","timestamp":"2026-08-22T08:03:00.500Z","message":{"role":"user","content":"second live input"}}`,
+		`{"type":"assistant","timestamp":"2026-08-22T08:04:00Z","message":{"role":"assistant","content":[{"type":"text","text":"second reply"}]}}`,
+	})
+
+	conv := builderConversationLog{
+		UpdatedAt: "2026-08-22T08:03:00Z", // advanced by persisting the second human message
+		ConversationHistory: []builderConversationMessage{
+			{Role: "human", Parts: []builderConversationPart{{Text: "first live input"}}},
+			{Role: "human", Parts: []builderConversationPart{{Text: "second live input"}}},
+		},
+	}
+	record := map[string]interface{}{
+		"updated_at":           conv.UpdatedAt,
+		"conversation_history": conv.ConversationHistory,
+		"runtime": map[string]interface{}{
+			"provider":            "claude-code",
+			"external_session_id": nativeSessionID,
+			"agent_session_handle": map[string]interface{}{
+				"provider": map[string]interface{}{
+					"provider":          "claude-code",
+					"native_session_id": nativeSessionID,
+					"working_dir":       workingDir,
+				},
+			},
+		},
+	}
+	rawContent, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	refreshed := (&StreamingAPI{}).refreshLatestBuilderConversationFromNativeTranscript(
+		context.Background(), "Workflow/test/builder/conversation/session.json", string(rawContent), conv,
+	)
+	want := []string{"first live input", "first reply", "second live input", "second reply"}
+	if len(refreshed.ConversationHistory) != len(want) {
+		t.Fatalf("refreshed history has %d messages, want %d: %+v", len(refreshed.ConversationHistory), len(want), refreshed.ConversationHistory)
+	}
+	for index, text := range want {
+		if got := refreshed.ConversationHistory[index].Parts[0].Text; got != text {
+			t.Fatalf("refreshed[%d] = %q, want %q; full history: %+v", index, got, text, refreshed.ConversationHistory)
+		}
+	}
+}
+
+func TestMergeBuilderConversationHistoryKeepsPreNativePrefixAndRepeatedMessages(t *testing.T) {
+	persisted := []builderConversationMessage{
+		{Role: "human", Parts: []builderConversationPart{{Text: "older persisted context"}}},
+		{Role: "human", Parts: []builderConversationPart{{Text: "hi"}}},
+		{Role: "human", Parts: []builderConversationPart{{Text: "hi"}}},
+	}
+	native := []builderConversationMessage{
+		{Role: "human", Parts: []builderConversationPart{{Text: "hi"}}},
+		{Role: "ai", Parts: []builderConversationPart{{Text: "hello"}}},
+		{Role: "human", Parts: []builderConversationPart{{Text: "hi"}}},
+		{Role: "ai", Parts: []builderConversationPart{{Text: "hello again"}}},
+	}
+
+	merged := mergeBuilderConversationHistory(persisted, native)
+	want := []string{"older persisted context", "hi", "hello", "hi", "hello again"}
+	if len(merged) != len(want) {
+		t.Fatalf("merged history has %d messages, want %d: %+v", len(merged), len(want), merged)
+	}
+	for index, text := range want {
+		if got := merged[index].Parts[0].Text; got != text {
+			t.Fatalf("merged[%d] = %q, want %q; full history: %+v", index, got, text, merged)
+		}
+	}
+}

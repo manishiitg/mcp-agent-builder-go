@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	virtualtools "github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/common"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator"
@@ -2952,10 +2953,12 @@ func (hcpo *StepBasedWorkflowOrchestrator) archiveSupersededExecutionLogs(ctx co
 		return
 	}
 
-	// Stamp so a third dispatch cannot overwrite the second's archive. Seconds
-	// resolution is sufficient -- two dispatches of the same step cannot both
-	// finish inside one second.
-	stamp := time.Now().UTC().Format("20060102T150405Z")
+	// A timestamp keeps the archive human-readable; the UUID makes the archive
+	// collision-proof even when a fast failure/re-dispatch cycle finishes more
+	// than once inside the same second. The workspace move endpoint rejects an
+	// existing destination, so timestamp-only names can silently lose the newer
+	// dispatch's evidence when the canonical file is subsequently overwritten.
+	stamp := fmt.Sprintf("%s-%s", time.Now().UTC().Format("20060102T150405Z"), uuid.NewString())
 	archived := 0
 	for _, suffix := range executionLogEvidenceSuffixes {
 		src := fmt.Sprintf("%s/%s%s.json", logDir, filenameBase, suffix)

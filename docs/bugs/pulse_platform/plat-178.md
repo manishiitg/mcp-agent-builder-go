@@ -165,12 +165,17 @@ regardless of how it opened — see "Not implemented" below):
    (`~/.claude/projects/<slug>/<session-id>.jsonl`, using the same
    working-directory-to-slug escaping scheme as
    `multi-llm-provider-go/claudecode_transcript_path.go`, duplicated rather
-   than imported since that resolver is unexported), reads every
-   `user`/`assistant` entry timestamped after the snapshot's own
-   `updated_at`, keeps only real chat text (plain-string user content,
-   `text`-typed assistant blocks — `tool_use`/`tool_result`/`thinking` are
-   filtered out as execution detail, not something either party said),
-   appends it to `conversation_history`, and best-effort persists the merge
+   than imported since that resolver is unexported), reads the full native
+   transcript, and sequence-merges it with persisted history. It does **not**
+   use the snapshot's `updated_at` as a transcript cursor: persisting a later
+   live-input human message advances that field before the preceding assistant
+   reply is saved, so a timestamp cutoff can permanently skip the reply and
+   duplicate the later user message. The merge preserves persisted-only prefix
+   messages, uses shared ordered messages as anchors, inserts native-only
+   replies between them, and deduplicates messages present in both sources. It
+   keeps only real chat text (plain-string user content, `text`-typed assistant
+   blocks — `tool_use`/`tool_result`/`thinking` are filtered out as execution
+   detail, not something either party said), and best-effort persists the merge
    back to the same file so later reads see it too. A failed persist (e.g.
    the workspace API being unreachable) is logged but never blocks the
    restore itself — the in-memory catch-up is still served.
@@ -210,6 +215,12 @@ against a real restore).
   messages and confirms the merge appends both in order and advances
   `updated_at` to the transcript's newest timestamp; a no-op test confirms
   non-`claude-code`/missing-runtime snapshots are left untouched.
+- `TestRefreshLatestBuilderConversationIgnoresLiveInputUpdatedAtAsTranscriptCursor`
+  reproduces the real ordering gap: persisted `user1,user2` with `updated_at`
+  after native `assistant1`, and verifies restore returns
+  `user1,assistant1,user2,assistant2` without duplication.
+- Merge-level tests cover missing replies between persisted live inputs and
+  repeated identical user messages with an older persisted-only prefix.
 - `go test ./cmd/server/...`: all new tests pass; the only failures
   (`TestWorkshopResolveLLMConfigExpandsCodingAgentMode`,
   `TestStandalonePulseReviewCommandsUsePersistedReviewerPipeline`,

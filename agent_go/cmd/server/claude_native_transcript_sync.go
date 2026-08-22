@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -42,8 +43,8 @@ type claudeTranscriptContentBlock struct {
 }
 
 // refreshLatestBuilderConversationFromNativeTranscript catches a persisted
-// builder conversation snapshot up with anything the Claude Code CLI's own
-// on-disk transcript has recorded since the snapshot's last save (PLAT-178).
+// builder conversation snapshot up with the Claude Code CLI's own on-disk
+// transcript (PLAT-178).
 //
 // Best-effort throughout: any resolution failure (no runtime info, no
 // matching transcript file, nothing new) returns log unchanged. A
@@ -88,18 +89,28 @@ func (api *StreamingAPI) refreshLatestBuilderConversationFromNativeTranscript(ct
 		return conv
 	}
 
-	since := parseBuilderConversationUpdatedAt(conv.UpdatedAt)
-	newMessages, maxTimestamp, err := readNewClaudeTranscriptMessages(transcriptPath, since)
+	// Do not use conv.UpdatedAt as a transcript cursor. The live-input path
+	// advances updated_at when it persists each human message, but it cannot
+	// persist the corresponding assistant reply. A later human message can
+	// therefore advance updated_at past an earlier missing reply. Reading the
+	// full native transcript and sequence-merging it is what recovers those
+	// interleaved replies without duplicating the already-persisted humans.
+	nativeMessages, maxTimestamp, err := readNewClaudeTranscriptMessages(transcriptPath, time.Time{})
 	if err != nil {
 		log.Printf("[CHAT_HISTORY] Native transcript catch-up: failed to read %s: %v", transcriptPath, err)
 		return conv
 	}
-	if len(newMessages) == 0 {
+	if len(nativeMessages) == 0 {
 		return conv
 	}
 
-	conv.ConversationHistory = append(conv.ConversationHistory, newMessages...)
-	if !maxTimestamp.IsZero() {
+	previousCount := len(conv.ConversationHistory)
+	merged := mergeBuilderConversationHistory(conv.ConversationHistory, nativeMessages)
+	if builderConversationHistoriesEqual(merged, conv.ConversationHistory) {
+		return conv
+	}
+	conv.ConversationHistory = merged
+	if current := parseBuilderConversationUpdatedAt(conv.UpdatedAt); maxTimestamp.After(current) {
 		conv.UpdatedAt = maxTimestamp.Format(time.RFC3339Nano)
 	}
 
@@ -107,14 +118,93 @@ func (api *StreamingAPI) refreshLatestBuilderConversationFromNativeTranscript(ct
 	record["updated_at"] = conv.UpdatedAt
 	if encoded, err := json.MarshalIndent(record, "", "  "); err == nil {
 		if err := writeRawFileToWorkspace(ctx, path, string(encoded)); err != nil {
-			log.Printf("[CHAT_HISTORY] Native transcript catch-up: appended %d message(s) from %s but failed to persist to %s: %v", len(newMessages), transcriptPath, path, err)
+			log.Printf("[CHAT_HISTORY] Native transcript catch-up: merged %d missing message(s) from %s but failed to persist to %s: %v", len(merged)-previousCount, transcriptPath, path, err)
 		} else {
-			log.Printf("[CHAT_HISTORY] Native transcript catch-up: appended %d message(s) to %s from %s (last save %s, native transcript through %s)",
-				len(newMessages), path, transcriptPath, since.Format(time.RFC3339), maxTimestamp.Format(time.RFC3339))
+			log.Printf("[CHAT_HISTORY] Native transcript catch-up: merged %d missing message(s) into %s from %s (native transcript through %s)",
+				len(merged)-previousCount, path, transcriptPath, maxTimestamp.Format(time.RFC3339))
 		}
 	}
 
 	return conv
+}
+
+// mergeBuilderConversationHistory returns a shortest practical union of the
+// persisted and native message sequences. Persisted-only messages are kept;
+// native-only messages (most importantly assistant replies omitted by the
+// asynchronous live-input writer) are inserted at their native position; and
+// matching live-input human messages are not appended a second time.
+//
+// Positions are indexed by a normalized role+text key, so matching is linear
+// apart from binary searches and repeated identical messages retain their
+// multiplicity in sequence order.
+func mergeBuilderConversationHistory(persisted, native []builderConversationMessage) []builderConversationMessage {
+	if len(persisted) == 0 {
+		return append([]builderConversationMessage(nil), native...)
+	}
+	if len(native) == 0 {
+		return append([]builderConversationMessage(nil), persisted...)
+	}
+
+	positions := make(map[string][]int, len(persisted))
+	for index, message := range persisted {
+		positions[builderConversationMessageKey(message)] = append(positions[builderConversationMessageKey(message)], index)
+	}
+
+	// Find the first shared anchor. Persisted history may include conversation
+	// from before the native session began, so that prefix must remain first.
+	firstNative, firstPersisted := -1, -1
+	for nativeIndex, message := range native {
+		if candidates := positions[builderConversationMessageKey(message)]; len(candidates) > 0 {
+			firstNative, firstPersisted = nativeIndex, candidates[0]
+			break
+		}
+	}
+	if firstNative < 0 {
+		merged := append([]builderConversationMessage(nil), persisted...)
+		return append(merged, native...)
+	}
+
+	merged := make([]builderConversationMessage, 0, len(persisted)+len(native))
+	merged = append(merged, persisted[:firstPersisted]...)
+	merged = append(merged, native[:firstNative]...)
+	merged = append(merged, persisted[firstPersisted])
+	persistedCursor := firstPersisted + 1
+
+	for _, message := range native[firstNative+1:] {
+		candidates := positions[builderConversationMessageKey(message)]
+		candidateIndex := sort.SearchInts(candidates, persistedCursor)
+		if candidateIndex < len(candidates) {
+			matchedPersisted := candidates[candidateIndex]
+			merged = append(merged, persisted[persistedCursor:matchedPersisted+1]...)
+			persistedCursor = matchedPersisted + 1
+			continue
+		}
+		merged = append(merged, message)
+	}
+	merged = append(merged, persisted[persistedCursor:]...)
+	return merged
+}
+
+func builderConversationMessageKey(message builderConversationMessage) string {
+	texts := make([]string, 0, len(message.Parts))
+	for _, part := range message.Parts {
+		if text := strings.Join(strings.Fields(part.Text), " "); text != "" {
+			texts = append(texts, text)
+		}
+	}
+	return strings.ToLower(strings.TrimSpace(message.Role)) + "\x00" + strings.Join(texts, "\n")
+}
+
+func builderConversationHistoriesEqual(left, right []builderConversationMessage) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if builderConversationMessageKey(left[index]) != builderConversationMessageKey(right[index]) {
+			return false
+		}
+	}
+	return true
 }
 
 // resolveClaudeNativeTranscriptPath locates Claude Code's own JSONL

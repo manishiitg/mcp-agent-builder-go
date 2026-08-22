@@ -98,8 +98,10 @@ at all.
 Before writing, `saveExecutionConversationLogs` calls a new
 `archiveSupersededExecutionLogs`, which checks whether the canonical result
 file already exists and — only if it does — moves all four evidence files into
-a `superseded/` subfolder of the same log directory, stamped
-`-YYYYMMDDTHHMMSSZ`.
+a `superseded/` subfolder of the same log directory, stamped with both UTC time
+and a UUID (`-YYYYMMDDTHHMMSSZ-<uuid>`). The UUID is required because two
+re-dispatches can archive within the same second and the real workspace move
+API rejects an existing destination rather than overwriting it.
 
 Two deliberate choices:
 
@@ -148,6 +150,10 @@ failing a step because an archive could not be written would be worse.
   fix existed (`go vet`: method undefined) and passing after.
 - `TestArchiveSupersededExecutionLogsIsANoopOnFirstDispatch` — the common case
   (a step that runs once) must not pay a move.
+- `TestArchiveSupersededExecutionLogsUsesCollisionProofDestinations` — archives
+  two dispatches in the same second against a fake workspace API that rejects
+  destination collisions, and proves all eight archived files have distinct
+  destinations.
 - Full `step_based_workflow` package passes, with the one pre-existing,
   unrelated failure already tracked in this register
   (`TestRunInBackgroundPassesBuilderSkillSnapshotToBothAgentKinds`).

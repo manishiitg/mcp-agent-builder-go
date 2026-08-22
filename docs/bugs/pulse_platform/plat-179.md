@@ -121,15 +121,19 @@ touches a pane. The real fix needed no pane inspection either.
 
 ## Fix
 
-`finalResponse()` (`mcpagent/agent/retainedturn/retained_turn.go`) now skips
-any AI-role message that also carries a `ToolCall` part in its `Parts`,
-before checking for text:
+`finalResponse()` (`mcpagent/agent/retainedturn/retained_turn.go`) now treats
+the newest AI-role message as authoritative. If that message also carries a
+`ToolCall` part, the turn is still in progress and the reader returns empty:
 
 ```go
 if messageHasToolCall(messages[i]) {
-    continue
+    return ""
 }
 ```
+
+It must not `continue` scanning older AI messages: an older commentary-only
+message may exist, and returning it would reproduce the premature completion
+under a different transcript shape.
 
 This is a **shared, single-point fix** — every retained/live-steer provider's
 reconstruction bundles text+toolCall into one message the same way, so this
@@ -179,6 +183,10 @@ appeared in the raw content array.
   `TestFinalResponseReturnsEmptyWhenOnlyMessageHasAPendingToolCall`. The
   latter is the real regression catcher — confirmed failing before the fix
   (returned the commentary text instead of empty) and passing after.
+- `TestFinalResponseReturnsEmptyWhenNewestAssistantMessageHasToolCall` proves
+  older progress text is not mistaken for the final answer while the newest
+  assistant message has a pending tool call; a paired test proves text after
+  that tool call completes is returned normally.
 - `multi-llm-provider-go/pkg/adapters/picli/picli_transcript_test.go`:
   `TestPiTranscriptPartsPreservesAToolCallAlongsideText` and
   `TestPiTranscriptPartsTextOnlyMessageHasNoToolCall`. Confirmed failing

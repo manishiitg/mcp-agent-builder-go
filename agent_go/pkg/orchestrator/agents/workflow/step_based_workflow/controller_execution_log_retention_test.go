@@ -69,6 +69,12 @@ func newFakeWorkspaceAPI(t *testing.T, existing ...string) (*orchestrator.BaseOr
 				_, _ = w.Write([]byte(`{"error":"no such file"}`))
 				return
 			}
+			if fake.existing[dst] {
+				fake.mu.Unlock()
+				w.WriteHeader(http.StatusConflict)
+				_, _ = w.Write([]byte(`{"success":false,"error":"destination already exists"}`))
+				return
+			}
 			delete(fake.existing, src)
 			fake.existing[dst] = true
 			fake.moves = append(fake.moves, recordedMove{src: src, dst: dst})
@@ -111,6 +117,14 @@ func (f *fakeWorkspaceAPI) movedSources() []string {
 		out = append(out, m.src)
 	}
 	return out
+}
+
+func (f *fakeWorkspaceAPI) seed(paths ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, path := range paths {
+		f.existing[path] = true
+	}
 }
 
 func TestArchiveSupersededExecutionLogsPreservesAPriorDispatch(t *testing.T) {
@@ -176,5 +190,38 @@ func TestArchiveSupersededExecutionLogsIsANoopOnFirstDispatch(t *testing.T) {
 
 	if moved := fake.movedSources(); len(moved) != 0 {
 		t.Fatalf("first dispatch must not move anything, got: %v", moved)
+	}
+}
+
+func TestArchiveSupersededExecutionLogsUsesCollisionProofDestinations(t *testing.T) {
+	const logDir = "Workflow/test-flow/runs/iteration-0/logs/execute-browser/execution"
+	const base = "execution-attempt-1-iteration-1"
+	canonical := []string{
+		logDir + "/" + base + ".json",
+		logDir + "/" + base + "-conversation.json",
+		logDir + "/" + base + "-timing.json",
+		logDir + "/" + base + "-prompts.json",
+	}
+	bo, fake := newFakeWorkspaceAPI(t, canonical...)
+	hcpo := &StepBasedWorkflowOrchestrator{BaseOrchestrator: bo}
+
+	// Archive twice without waiting for the wall-clock second to change. This
+	// models two rapid failure/re-dispatch cycles; the real workspace endpoint
+	// rejects duplicate destinations, so all eight moves must remain distinct.
+	hcpo.archiveSupersededExecutionLogs(context.Background(), logDir, base)
+	fake.seed(canonical...)
+	hcpo.archiveSupersededExecutionLogs(context.Background(), logDir, base)
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.moves) != 8 {
+		t.Fatalf("expected both dispatches' four files to be preserved, got %d moves: %v", len(fake.moves), fake.moves)
+	}
+	destinations := make(map[string]struct{}, len(fake.moves))
+	for _, move := range fake.moves {
+		if _, duplicate := destinations[move.dst]; duplicate {
+			t.Fatalf("archive destination collided across rapid dispatches: %s", move.dst)
+		}
+		destinations[move.dst] = struct{}{}
 	}
 }
