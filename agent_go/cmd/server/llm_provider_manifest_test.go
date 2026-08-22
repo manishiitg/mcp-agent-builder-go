@@ -1,6 +1,10 @@
 package server
 
-import "testing"
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
 
 func TestParsePiCLIModelList(t *testing.T) {
 	output := `provider       model                          context  max-out  thinking  images
@@ -115,6 +119,56 @@ func TestFetchPiCLIModelsReturnsCuratedShortlist(t *testing.T) {
 	}
 }
 
+// PLAT (OpenRouter free models): confirmed live that fetchPiCLIModels(true)
+// was silently dropping IsFree=true for most OpenRouter models -- pi's own
+// --list-models output can legitimately include the same OpenRouter model
+// IDs with no pricing info at all, and merging it ahead of the live
+// OpenRouter fetch let that pricing-blind duplicate win the
+// mergePiModelEntries dedup (which keeps the first occurrence per ModelID).
+// Drives fetchPiCLIModels(true) itself (not just mergePiModelEntries in
+// isolation) via the two overridable fetch points, with a canned "pi's own
+// listing" result that duplicates a live free model's ID without pricing --
+// exactly the live-observed failure mode.
+func TestFetchPiCLIModelsFullCatalogKeepsLiveOpenRouterPricingOverACLIDuplicate(t *testing.T) {
+	origORURL := openRouterModelsAPIURL
+	origListFn := listPiCLIModelsFn
+	defer func() {
+		openRouterModelsAPIURL = origORURL
+		listPiCLIModelsFn = origListFn
+	}()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[
+			{"id":"dots-studio/dots-3-note-preview","name":"Dots 3 Note Preview","context_length":32768,"pricing":{"prompt":"0","completion":"0"}}
+		]}`))
+	}))
+	defer server.Close()
+	openRouterModelsAPIURL = server.URL
+
+	// pi's own --list-models output never carries pricing/IsFree.
+	listPiCLIModelsFn = func() ([]dynamicModelEntry, error) {
+		return []dynamicModelEntry{
+			{ModelID: "openrouter/dots-studio/dots-3-note-preview", ModelName: "Dots 3 Note Preview", Group: "OpenRouter"},
+		}, nil
+	}
+
+	resp := fetchPiCLIModels(true)
+	var found *dynamicModelEntry
+	for i := range resp.Models {
+		if resp.Models[i].ModelID == "openrouter/dots-studio/dots-3-note-preview" {
+			found = &resp.Models[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("full catalog missing the duplicated free model entirely: %#v", resp.Models)
+	}
+	if !found.IsFree {
+		t.Fatalf("merged entry = %#v, want IsFree true (must not be shadowed by pi's pricing-blind duplicate)", *found)
+	}
+}
+
 func TestParsePiCLIModelListNoMatches(t *testing.T) {
 	if got := parsePiCLIModelList(`No models matching "sonnet"`); len(got) != 0 {
 		t.Fatalf("models len = %d, want 0: %#v", len(got), got)
@@ -146,6 +200,69 @@ func TestMergePiModelEntriesKeepsCuratedModelsFirst(t *testing.T) {
 	}
 	if merged[len(merged)-1].ModelID != "anthropic/claude-sonnet-4-6" {
 		t.Fatalf("last merged model = %#v, want listed non-curated model", merged[len(merged)-1])
+	}
+}
+
+func TestPiFallbackModelsIncludesAPinnedFreeOpenRouterModel(t *testing.T) {
+	models := piFallbackModels()
+	for _, model := range models {
+		if model.ModelID == "openrouter/stealth/ox-alpha" {
+			if !model.IsFree {
+				t.Fatalf("openrouter/stealth/ox-alpha = %#v, want IsFree true", model)
+			}
+			return
+		}
+	}
+	t.Fatalf("Pi shortlist missing pinned free model openrouter/stealth/ox-alpha: %#v", models)
+}
+
+func TestFetchOpenRouterCatalogParsesPricingIntoIsFree(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[
+			{"id":"stealth/ox-alpha","name":"Ox Alpha","context_length":1048576,"pricing":{"prompt":"0","completion":"0"}},
+			{"id":"meta/muse-spark","name":"Muse Spark","context_length":1048576,"pricing":{"prompt":"0.0000001","completion":"0.0000002"}}
+		]}`))
+	}))
+	defer server.Close()
+
+	original := openRouterModelsAPIURL
+	openRouterModelsAPIURL = server.URL
+	defer func() { openRouterModelsAPIURL = original }()
+
+	models, err := fetchOpenRouterCatalog()
+	if err != nil {
+		t.Fatalf("fetchOpenRouterCatalog() error = %v", err)
+	}
+	if len(models) != 2 {
+		t.Fatalf("models = %d, want 2: %#v", len(models), models)
+	}
+	if models[0].ModelID != "openrouter/stealth/ox-alpha" || !models[0].IsFree {
+		t.Fatalf("free model = %#v, want openrouter/stealth/ox-alpha with IsFree true", models[0])
+	}
+	if models[0].Group != "OpenRouter" {
+		t.Fatalf("free model group = %q, want OpenRouter", models[0].Group)
+	}
+	if models[1].ModelID != "openrouter/meta/muse-spark" || models[1].IsFree {
+		t.Fatalf("paid model = %#v, want openrouter/meta/muse-spark with IsFree false", models[1])
+	}
+	if models[1].CostInput <= 0 || models[1].CostOutput <= 0 {
+		t.Fatalf("paid model costs = input:%v output:%v, want both > 0 (per-1M-token conversion)", models[1].CostInput, models[1].CostOutput)
+	}
+}
+
+func TestFetchOpenRouterCatalogReturnsErrorOnNon200(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	original := openRouterModelsAPIURL
+	openRouterModelsAPIURL = server.URL
+	defer func() { openRouterModelsAPIURL = original }()
+
+	if _, err := fetchOpenRouterCatalog(); err == nil {
+		t.Fatal("fetchOpenRouterCatalog() error = nil, want an error for a non-200 response")
 	}
 }
 

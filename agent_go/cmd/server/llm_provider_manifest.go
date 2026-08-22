@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
@@ -78,6 +79,7 @@ type dynamicModelEntry struct {
 	ModelName     string  `json:"model_name"`
 	Group         string  `json:"group,omitempty"`
 	IsDefault     bool    `json:"is_default,omitempty"`
+	IsFree        bool    `json:"is_free,omitempty"`
 	ContextWindow int     `json:"context_window,omitempty"`
 	CostInput     float64 `json:"cost_input,omitempty"`
 	CostOutput    float64 `json:"cost_output,omitempty"`
@@ -693,13 +695,25 @@ func fetchPiCLIModels(full bool) *dynamicModelsResponse {
 	var source string
 
 	if full {
-		cliModels, err := listPiCLIModels()
-		if err == nil && len(cliModels) > 0 {
-			models = mergePiModelEntries(piFallbackModels(), cliModels)
-			source = "cli_full_catalog"
-		} else {
-			models = piFallbackModels()
-			source = "curated_latest_fallback"
+		// Curated shortlist first (keeps pinned picks like the free Ox Alpha
+		// model prominent), then the live OpenRouter catalog -- fetched fresh
+		// from OpenRouter itself, so it carries real pricing/IsFree data --
+		// and only then pi's own --list-models output. Order matters here:
+		// mergePiModelEntries keeps the FIRST occurrence per ModelID, and
+		// pi's own listing can legitimately include the same OpenRouter model
+		// IDs with no pricing info at all (it doesn't know IsFree). Merging
+		// cliModels in last means it can only ever ADD models neither other
+		// source already covered, never silently mask a live-verified
+		// IsFree=true with a pricing-blind duplicate.
+		models = piFallbackModels()
+		source = "curated_latest"
+		if orModels, orErr := fetchOpenRouterCatalog(); orErr == nil && len(orModels) > 0 {
+			models = mergePiModelEntries(models, orModels)
+			source += "+openrouter_live"
+		}
+		if cliModels, err := listPiCLIModelsFn(); err == nil && len(cliModels) > 0 {
+			models = mergePiModelEntries(models, cliModels)
+			source += "+cli_full_catalog"
 		}
 	} else {
 		models = piFallbackModels()
@@ -723,6 +737,79 @@ func fetchPiCLIModels(full bool) *dynamicModelsResponse {
 	}
 	return resp
 }
+
+// openRouterModelsAPIURL is a package-level var (not a const) so a test can
+// point it at an httptest.NewServer instead of the real OpenRouter API.
+var openRouterModelsAPIURL = "https://openrouter.ai/api/v1/models"
+
+type openRouterModelsResponse struct {
+	Data []struct {
+		ID            string `json:"id"`
+		Name          string `json:"name"`
+		ContextLength int    `json:"context_length"`
+		Pricing       struct {
+			Prompt     string `json:"prompt"`
+			Completion string `json:"completion"`
+		} `json:"pricing"`
+	} `json:"data"`
+}
+
+// fetchOpenRouterCatalog fetches OpenRouter's public, unauthenticated model
+// catalog and maps it onto Pi's own "openrouter/<vendor>/<model>" model ID
+// convention (OpenRouter's own id is already "<vendor>/<model>"; Pi's own
+// "openrouter/" prefix is prepended the same way the existing hardcoded
+// OpenRouter entries in piFallbackModels already do). A model is only
+// IsFree when OpenRouter's own pricing reports both prompt and completion
+// cost as exactly zero -- distinct from cost fields simply being unset,
+// which the existing hardcoded shortlist entries mostly are (unknown cost,
+// not confirmed free).
+func fetchOpenRouterCatalog() ([]dynamicModelEntry, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, openRouterModelsAPIURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	client := &http.Client{Timeout: 8 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("openrouter models API returned status %d", resp.StatusCode)
+	}
+
+	var parsed openRouterModelsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return nil, err
+	}
+
+	models := make([]dynamicModelEntry, 0, len(parsed.Data))
+	for _, m := range parsed.Data {
+		if strings.TrimSpace(m.ID) == "" {
+			continue
+		}
+		promptCost, _ := strconv.ParseFloat(m.Pricing.Prompt, 64)
+		completionCost, _ := strconv.ParseFloat(m.Pricing.Completion, 64)
+		models = append(models, dynamicModelEntry{
+			ModelID:       "openrouter/" + m.ID,
+			ModelName:     m.Name,
+			Group:         "OpenRouter",
+			IsFree:        promptCost == 0 && completionCost == 0,
+			ContextWindow: m.ContextLength,
+			CostInput:     promptCost * 1_000_000,
+			CostOutput:    completionCost * 1_000_000,
+		})
+	}
+	return models, nil
+}
+
+// listPiCLIModelsFn is a package-level var (not a direct call) so a test can
+// substitute a canned pi --list-models result without shelling out to a real
+// pi binary.
+var listPiCLIModelsFn = listPiCLIModels
 
 func listPiCLIModels() ([]dynamicModelEntry, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -920,6 +1007,13 @@ func piFallbackModels() []dynamicModelEntry {
 			ContextWindow: 1048576,
 			CostInput:     0.14,
 			CostOutput:    0.28,
+		},
+		{
+			ModelID:       "openrouter/stealth/ox-alpha",
+			ModelName:     "Ox Alpha",
+			Group:         "OpenRouter",
+			IsFree:        true,
+			ContextWindow: 1048576,
 		},
 		{
 			ModelID:   "openrouter/minimax/minimax-m3-20260531",

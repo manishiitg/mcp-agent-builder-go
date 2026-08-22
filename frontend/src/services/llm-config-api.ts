@@ -102,6 +102,7 @@ export interface DynamicModelEntry {
   model_name: string
   group?: string
   is_default?: boolean
+  is_free?: boolean
   context_window?: number
   cost_input?: number
   cost_output?: number

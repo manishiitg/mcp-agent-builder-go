@@ -47,6 +47,7 @@ export function DynamicModelSelector({
   const [showCustomInput, setShowCustomInput] = useState(false)
   const [showFullCatalog, setShowFullCatalog] = useState(false)
   const [loadingFull, setLoadingFull] = useState(false)
+  const [freeOnly, setFreeOnly] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -87,6 +88,8 @@ export function DynamicModelSelector({
     return data.models.filter(m => (m.group || 'Other') === groupFilter)
   }, [data, groupFilter])
 
+  const hasFreeModels = useMemo(() => groupScopedModels.some(m => m.is_free), [groupScopedModels])
+
   // A group-scoped tab (e.g. one Pi CLI backend) has no meaningful
   // provider-wide default to fall back on -- the caller can't know a group's
   // real default model id without this catalog, so pick it here once data
@@ -99,14 +102,15 @@ export function DynamicModelSelector({
   }, [groupFilter, selectedModelId, groupScopedModels, onSelect])
 
   const grouped = useMemo(() => {
+    const base = freeOnly ? groupScopedModels.filter(m => m.is_free) : groupScopedModels
     const q = search.toLowerCase().trim()
     const filtered = q
-      ? groupScopedModels.filter(m =>
+      ? base.filter(m =>
           m.model_id.toLowerCase().includes(q) ||
           m.model_name.toLowerCase().includes(q) ||
           (m.group || '').toLowerCase().includes(q)
         )
-      : groupScopedModels
+      : base
 
     const groups = new Map<string, DynamicModelEntry[]>()
     for (const m of filtered) {
@@ -115,7 +119,7 @@ export function DynamicModelSelector({
       groups.get(g)!.push(m)
     }
     return groups
-  }, [groupScopedModels, search])
+  }, [groupScopedModels, search, freeOnly])
 
   const toggleGroup = (group: string) => {
     setCollapsedGroups(prev => {
@@ -201,6 +205,19 @@ export function DynamicModelSelector({
         />
       </div>
 
+      {hasFreeModels && (
+        <label className="flex items-center gap-2 text-xs text-muted-foreground select-none">
+          <input
+            type="checkbox"
+            checked={freeOnly}
+            onChange={e => setFreeOnly(e.target.checked)}
+            disabled={disabled}
+            className="h-3.5 w-3.5 rounded border-border"
+          />
+          Free only
+        </label>
+      )}
+
       <div className="max-h-64 overflow-y-auto border border-border rounded-md divide-y divide-border">
         {grouped.size === 0 && (
           <div className="px-3 py-4 text-sm text-muted-foreground text-center">
@@ -244,6 +261,9 @@ export function DynamicModelSelector({
                       <span className="truncate">{model.model_name || model.model_id}</span>
                       {model.is_default && (
                         <span className="shrink-0 text-[10px] font-medium bg-primary/10 text-primary px-1.5 py-0.5 rounded">default</span>
+                      )}
+                      {model.is_free && (
+                        <span className="shrink-0 text-[10px] font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 px-1.5 py-0.5 rounded">Free</span>
                       )}
                     </div>
                     {model.context_window ? (
