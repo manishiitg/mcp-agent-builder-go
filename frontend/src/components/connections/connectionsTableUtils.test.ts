@@ -6,7 +6,6 @@ function entry(over: Partial<CatalogEntry> & { id: string; name: string }): Cata
   return {
     auth: 'dcr',
     transport: 'web',
-    setup_required: false,
     ...over,
   }
 }
@@ -80,7 +79,7 @@ describe('filterRows', () => {
     [
       entry({ id: 'notion', name: 'Notion', tagline: 'Pages and databases' }),
       entry({ id: 'github', name: 'GitHub', tagline: 'Repos and issues' }),
-      entry({ id: 'slack', name: 'Slack', category: 'communication' }),
+      entry({ id: 'slack', name: 'Slack', tagline: 'Channels and messages' }),
     ],
     [
       connection({ id: 'notion', name: 'Notion', health: 'connected' }),
@@ -106,9 +105,9 @@ describe('filterRows', () => {
     expect(filterRows(rows, 'all', 'notI').map(r => r.id)).toEqual(['notion'])
   })
 
-  it('searches by tagline and category, not just name', () => {
+  it('searches by tagline, not just name', () => {
     expect(filterRows(rows, 'all', 'repos').map(r => r.id)).toEqual(['github'])
-    expect(filterRows(rows, 'all', 'communication').map(r => r.id)).toEqual(['slack'])
+    expect(filterRows(rows, 'all', 'channels').map(r => r.id)).toEqual(['slack'])
   })
 
   it('ignores surrounding whitespace in the query', () => {

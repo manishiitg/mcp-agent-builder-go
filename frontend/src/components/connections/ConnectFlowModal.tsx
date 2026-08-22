@@ -1,13 +1,5 @@
 import { useEffect, useState } from 'react'
-import {
-  X,
-  ShieldCheck,
-  AlertTriangle,
-  Loader2,
-  CheckCircle2,
-  ExternalLink,
-  Sparkles,
-} from 'lucide-react'
+import { X, Loader2, CheckCircle2, ExternalLink, Sparkles } from 'lucide-react'
 import ModalPortal from '../ui/ModalPortal'
 import ConnectionIcon from './ConnectionIcon'
 import ErrorNotice from './ErrorNotice'
@@ -34,13 +26,10 @@ export default function ConnectFlowModal({ entry, onClose }: ConnectFlowModalPro
   const [error, setError] = useState<FriendlyError | null>(null)
   const [testResult, setTestResult] = useState<TestResult | null>(null)
 
-  // Credential inputs, only used by auth=token and the needs_client_id fallback.
-  const [token, setToken] = useState('')
+  // Only used by the needs_client_id fallback, when a server turns out not to
+  // support dynamic client registration after all.
   const [clientId, setClientId] = useState('')
   const [needsClientId, setNeedsClientId] = useState(false)
-  const [extraEnv, setExtraEnv] = useState<Record<string, string>>(
-    () => ({ ...(entry.extra_env ?? {}) })
-  )
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -53,17 +42,14 @@ export default function ConnectFlowModal({ entry, onClose }: ConnectFlowModalPro
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [step, onClose])
 
-  const needsToken = entry.auth === 'token'
-  const canSubmit = needsToken ? token.trim().length > 0 : !needsClientId || clientId.trim().length > 0
+  const canSubmit = !needsClientId || clientId.trim().length > 0
 
   const handleConnect = async () => {
     setStep('authenticating')
     setError(null)
 
     const outcome = await connect(entry.id, {
-      token: needsToken ? token.trim() : undefined,
       client_id: needsClientId ? clientId.trim() : undefined,
-      env: Object.keys(extraEnv).length ? extraEnv : undefined,
     })
 
     if (outcome.kind === 'needs_client_id') {
@@ -133,99 +119,10 @@ export default function ConnectFlowModal({ entry, onClose }: ConnectFlowModalPro
           <div className="max-h-[70vh] space-y-4 overflow-y-auto px-5 py-4">
             {step === 'review' && (
               <>
-                {entry.description && (
-                  <p className="text-sm text-gray-600 dark:text-gray-300">
-                    {entry.description}
-                  </p>
-                )}
-
-                {/* Plain-language access review — issue #185 asks that users see
-                    what the agent can do before enabling access. */}
-                {entry.capabilities && entry.capabilities.length > 0 && (
-                  <section>
-                    <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
-                      <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
-                      What agents will be able to do
-                    </h3>
-                    <ul className="space-y-1.5">
-                      {entry.capabilities.map(cap => (
-                        <li
-                          key={cap}
-                          className="flex items-start gap-2 text-sm text-gray-700 dark:text-gray-300"
-                        >
-                          <CheckCircle2
-                            className="mt-0.5 h-3.5 w-3.5 shrink-0 text-green-600 dark:text-green-400"
-                            aria-hidden="true"
-                          />
-                          {cap}
-                        </li>
-                      ))}
-                    </ul>
-                  </section>
-                )}
-
-                {entry.sensitive_actions && entry.sensitive_actions.length > 0 && (
-                  <section className="rounded-md border border-amber-200 bg-amber-50 p-3 dark:border-amber-900/50 dark:bg-amber-900/20">
-                    <h3 className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-amber-900 dark:text-amber-200">
-                      <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
-                      Sensitive access
-                    </h3>
-                    <ul className="space-y-1">
-                      {entry.sensitive_actions.map(action => (
-                        <li key={action} className="text-xs text-amber-800 dark:text-amber-300">
-                          {action}
-                        </li>
-                      ))}
-                    </ul>
-                    <p className="mt-2 text-xs text-amber-700 dark:text-amber-400">
-                      Agents ask for confirmation before performing these actions.
-                    </p>
-                  </section>
-                )}
-
-                {needsToken && (
-                  <section className="space-y-2">
-                    <label
-                      htmlFor="connection-token"
-                      className="block text-sm font-medium text-gray-700 dark:text-gray-300"
-                    >
-                      {entry.token_label || 'Access token'}
-                    </label>
-                    <input
-                      id="connection-token"
-                      type="password"
-                      value={token}
-                      onChange={e => setToken(e.target.value)}
-                      placeholder={entry.token_placeholder}
-                      autoComplete="off"
-                      className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:ring-2 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-gray-100"
-                    />
-                    {Object.keys(entry.extra_env ?? {}).map(key => (
-                      <div key={key}>
-                        <label
-                          htmlFor={`env-${key}`}
-                          className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400"
-                        >
-                          {key}
-                        </label>
-                        <input
-                          id={`env-${key}`}
-                          type="text"
-                          value={extraEnv[key] ?? ''}
-                          onChange={e =>
-                            setExtraEnv(prev => ({ ...prev, [key]: e.target.value }))
-                          }
-                          className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:ring-2 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-gray-100"
-                        />
-                      </div>
-                    ))}
-                    {entry.setup_hint && (
-                      <p className="text-xs text-gray-500 dark:text-gray-400">
-                        {entry.setup_hint}
-                      </p>
-                    )}
-                  </section>
-                )}
+                <p className="text-sm text-gray-600 dark:text-gray-300">
+                  Connecting opens {entry.name} in a new window so you can approve
+                  access. Your agents can then use it on your behalf.
+                </p>
 
                 {needsClientId && (
                   <section className="space-y-2">
@@ -314,12 +211,7 @@ export default function ConnectFlowModal({ entry, onClose }: ConnectFlowModalPro
                       Try asking an agent
                     </h3>
                     <p className="text-xs text-gray-600 dark:text-gray-400">
-                      &ldquo;
-                      {entry.capabilities?.[0]
-                        ? entry.capabilities[0].charAt(0).toLowerCase() +
-                          entry.capabilities[0].slice(1)
-                        : `use ${entry.name}`}
-                      &rdquo;
+                      &ldquo;use {entry.name}&rdquo;
                     </p>
                   </section>
                 )}

@@ -41,15 +41,10 @@ export default function ConnectionRow({
   const health = connection?.health ?? 'not_connected'
   const isConnected = health === 'connected'
   const comingSoon = entry?.status === 'coming_soon'
-  const setupRequired = entry?.setup_required ?? health === 'setup_required'
 
-  // Blocked states get muted explanatory text rather than a dead button, so the
-  // user learns why instead of clicking something that cannot work.
-  const blockedLabel = comingSoon
-    ? 'Coming soon'
-    : setupRequired
-      ? 'Setup required'
-      : null
+  // A blocked state gets muted explanatory text rather than a dead button, so
+  // the user learns why instead of clicking something that cannot work.
+  const blockedLabel = comingSoon ? 'Coming soon' : null
 
   return (
     <div className={`group grid ${CONNECTION_GRID} items-center gap-4 rounded-lg px-3 py-2.5 transition-colors hover:bg-gray-50 dark:hover:bg-slate-700/40`}>

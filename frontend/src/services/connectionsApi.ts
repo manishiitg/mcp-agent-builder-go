@@ -19,7 +19,8 @@ function getAuthHeaders(): HeadersInit {
 }
 
 /** How a catalog entry authenticates. */
-export type ConnectionAuthType = 'dcr' | 'oauth_app' | 'token';
+/** Catalog entries are always 'dcr'; the rest are inferred for custom servers. */
+export type ConnectionAuthType = 'dcr' | 'token' | 'none';
 
 /** How a server is reached — shown as the "Type" column. */
 export type ConnectionTransport = 'web' | 'local';
@@ -28,7 +29,6 @@ export type ConnectionTransport = 'web' | 'local';
 export type ConnectionHealth =
   | 'connected'
   | 'needs_reconnect'
-  | 'setup_required'
   | 'not_connected';
 
 /** What the user can do about a failure. */
@@ -36,7 +36,6 @@ export type RecoveryAction =
   | 'reconnect'
   | 'retry'
   | 'connect'
-  | 'enter_token'
   | 'contact_admin';
 
 /**
@@ -56,21 +55,11 @@ export interface CatalogEntry {
   id: string;
   name: string;
   tagline?: string;
-  description?: string;
-  category?: string;
   icon?: string;
   docs_url?: string;
   status?: 'available' | 'coming_soon';
   auth: ConnectionAuthType;
   transport: ConnectionTransport;
-  capabilities?: string[];
-  sensitive_actions?: string[];
-  setup_hint?: string;
-  token_label?: string;
-  token_placeholder?: string;
-  extra_env?: Record<string, string>;
-  /** Computed server-side: admin has not supplied credentials yet. */
-  setup_required: boolean;
 }
 
 export interface Connection {
@@ -99,7 +88,8 @@ export interface ConnectionsListResponse {
 }
 
 export interface ConnectResult {
-  /** 'connected' for token auth; 'oauth' when the user must approve in a popup. */
+  /** 'oauth' when the user must approve in a popup; 'connected' if a server
+   *  ever reports success outright, which the current catalog never does. */
   status: 'connected' | 'oauth' | 'needs_client_id';
   server_name: string;
   auth_url?: string;
@@ -119,9 +109,8 @@ export interface TestResult {
 }
 
 export interface ConnectPayload {
-  token?: string;
+  /** Only for the needs_client_id fallback, when a server turns out to lack DCR. */
   client_id?: string;
-  env?: Record<string, string>;
 }
 
 /**

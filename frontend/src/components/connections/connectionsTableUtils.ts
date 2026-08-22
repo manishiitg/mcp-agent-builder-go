@@ -56,8 +56,7 @@ export function filterRows(
     if (!q) return true
     return (
       row.name.toLowerCase().includes(q) ||
-      (row.entry?.tagline ?? '').toLowerCase().includes(q) ||
-      (row.entry?.category ?? '').toLowerCase().includes(q)
+      (row.entry?.tagline ?? '').toLowerCase().includes(q)
     )
   })
 }

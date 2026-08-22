@@ -25,37 +25,23 @@ const testCatalogJSON = `{
       "icon": "notion",
       "status": "available",
       "auth": "dcr",
-      "url": "https://mcp.notion.com/mcp",
-      "capabilities": ["Search pages"]
+      "url": "https://mcp.notion.com/mcp"
     },
     {
-      "id": "google-workspace",
-      "name": "Google Workspace",
-      "tagline": "Gmail and Drive",
-      "icon": "google",
-      "status": "available",
-      "auth": "oauth_app",
-      "url": "https://example.googleapis.com/mcp",
-      "client_id_env": "TEST_CATALOG_GOOGLE_CLIENT_ID",
-      "setup_hint": "Ask an administrator to configure Google credentials."
+      "id": "linear",
+      "server_name": "linear",
+      "name": "Linear",
+      "tagline": "Issues and projects",
+      "icon": "linear",
+      "auth": "dcr",
+      "url": "https://mcp.linear.app/mcp"
     },
     {
-      "id": "slack",
-      "name": "Slack",
-      "tagline": "Channels and messages",
-      "icon": "slack",
-      "status": "available",
-      "auth": "token",
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-slack"],
-      "token_env_var": "SLACK_BOT_TOKEN"
-    },
-    {
-      "id": "microsoft-365",
-      "name": "Microsoft 365",
+      "id": "not-yet",
+      "name": "Not Yet",
       "status": "coming_soon",
-      "auth": "oauth_app",
-      "client_id_env": "TEST_CATALOG_MS_CLIENT_ID"
+      "auth": "dcr",
+      "url": "https://example.com/mcp"
     }
   ]
 }`
@@ -117,10 +103,7 @@ func doJSON(t *testing.T, r *mux.Router, method, path, body string) (*httptest.R
 	return rec, parsed
 }
 
-func TestCatalogEndpointMarksSetupRequired(t *testing.T) {
-	// Ensure the Google client id is genuinely unset for this test.
-	t.Setenv("TEST_CATALOG_GOOGLE_CLIENT_ID", "")
-
+func TestCatalogEndpointFillsDefaults(t *testing.T) {
 	_, router := newTestAPI(t)
 	rec, body := doJSON(t, router, "GET", "/api/connections/catalog", "")
 
@@ -129,8 +112,8 @@ func TestCatalogEndpointMarksSetupRequired(t *testing.T) {
 	}
 
 	integrations, _ := body["integrations"].([]any)
-	if len(integrations) != 4 {
-		t.Fatalf("got %d integrations, want 4", len(integrations))
+	if len(integrations) != 3 {
+		t.Fatalf("got %d integrations, want 3", len(integrations))
 	}
 
 	byID := map[string]map[string]any{}
@@ -139,91 +122,24 @@ func TestCatalogEndpointMarksSetupRequired(t *testing.T) {
 		byID[e["id"].(string)] = e
 	}
 
-	if byID["google-workspace"]["setup_required"] != true {
-		t.Error("google-workspace must be setup_required when its client id env is unset")
-	}
-	if byID["notion"]["setup_required"] != false {
-		t.Error("DCR entries must never be setup_required")
-	}
-	if byID["slack"]["setup_required"] != false {
-		t.Error("token entries must never be setup_required")
-	}
 	// server_name defaults to the id so config keys stay stable.
 	if byID["notion"]["server_name"] != "notion" {
 		t.Errorf("server_name = %v, want %q", byID["notion"]["server_name"], "notion")
 	}
-}
-
-func TestConnectTokenIntegrationStoresConfigAndReportsConnected(t *testing.T) {
-	api, router := newTestAPI(t)
-
-	rec, body := doJSON(t, router, "POST", "/api/connections/slack/connect",
-		`{"token":"xoxb-test-token","env":{"SLACK_TEAM_ID":"T123"}}`)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200. body: %s", rec.Code, rec.Body.String())
+	// An entry that declares no status is available.
+	if byID["linear"]["status"] != "available" {
+		t.Errorf("status = %v, want %q", byID["linear"]["status"], "available")
 	}
-	if body["status"] != "connected" {
-		t.Errorf("status = %v, want %q", body["status"], "connected")
-	}
-
-	// The credential must land in the user config, not the base config.
-	userCfg, err := mcpclient.LoadConfig(api.getUserConfigPath(), api.logger)
-	if err != nil {
-		t.Fatalf("load user config: %v", err)
-	}
-	slack, ok := userCfg.MCPServers["slack"]
-	if !ok {
-		t.Fatal("slack server was not written to the user config")
-	}
-	if slack.Env["SLACK_BOT_TOKEN"] != "xoxb-test-token" {
-		t.Errorf("token = %q, want the supplied token", slack.Env["SLACK_BOT_TOKEN"])
-	}
-	if slack.Env["SLACK_TEAM_ID"] != "T123" {
-		t.Errorf("extra env = %q, want %q", slack.Env["SLACK_TEAM_ID"], "T123")
-	}
-}
-
-func TestConnectRejectsTokenIntegrationWithoutCredential(t *testing.T) {
-	_, router := newTestAPI(t)
-
-	rec, body := doJSON(t, router, "POST", "/api/connections/slack/connect", `{}`)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", rec.Code)
-	}
-	errObj, _ := body["error"].(map[string]any)
-	if errObj == nil {
-		t.Fatal("expected a friendly error object")
-	}
-	if errObj["action"] != "enter_token" {
-		t.Errorf("action = %v, want %q", errObj["action"], "enter_token")
-	}
-}
-
-func TestConnectSetupRequiredReturnsFriendlyGuidance(t *testing.T) {
-	t.Setenv("TEST_CATALOG_GOOGLE_CLIENT_ID", "")
-	_, router := newTestAPI(t)
-
-	rec, body := doJSON(t, router, "POST", "/api/connections/google-workspace/connect", `{}`)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", rec.Code)
-	}
-	errObj, _ := body["error"].(map[string]any)
-	if errObj["code"] != "setup_required" {
-		t.Errorf("code = %v, want %q", errObj["code"], "setup_required")
-	}
-	// The admin hint from the catalog must reach the user.
-	if msg, _ := errObj["message"].(string); !strings.Contains(msg, "administrator") {
-		t.Errorf("message = %q, want the catalog setup hint", msg)
+	// Transport is computed per request, never read from the file.
+	if byID["notion"]["transport"] != "web" {
+		t.Errorf("transport = %v, want %q", byID["notion"]["transport"], "web")
 	}
 }
 
 func TestConnectComingSoonIsBlocked(t *testing.T) {
 	_, router := newTestAPI(t)
 
-	rec, body := doJSON(t, router, "POST", "/api/connections/microsoft-365/connect", `{}`)
+	rec, body := doJSON(t, router, "POST", "/api/connections/not-yet/connect", `{}`)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
@@ -302,12 +218,15 @@ func TestConnectStillRejectsTrulyUnknownIntegration(t *testing.T) {
 	}
 }
 
-func TestListConnectionsReportsHealthAndSummary(t *testing.T) {
-	_, router := newTestAPI(t)
+func TestListJoinsCatalogMetadataAndSummarises(t *testing.T) {
+	api, router := newTestAPI(t)
 
-	// Provision one token connection so there is something to list.
-	if rec, _ := doJSON(t, router, "POST", "/api/connections/slack/connect", `{"token":"xoxb-abc"}`); rec.Code != http.StatusOK {
-		t.Fatalf("setup connect failed: %s", rec.Body.String())
+	// Provisioned but never authorised: no token file exists yet.
+	if err := api.saveUserServer("notion", mcpclient.MCPServerConfig{
+		URL:   "https://mcp.notion.com/mcp",
+		OAuth: &oauth.OAuthConfig{AutoDiscover: true, UsePKCE: true},
+	}); err != nil {
+		t.Fatalf("save server: %v", err)
 	}
 
 	rec, body := doJSON(t, router, "GET", "/api/connections", "")
@@ -320,23 +239,24 @@ func TestListConnectionsReportsHealthAndSummary(t *testing.T) {
 		t.Fatalf("got %d connections, want 1", len(conns))
 	}
 	c := conns[0].(map[string]any)
-	if c["id"] != "slack" {
-		t.Errorf("id = %v, want %q", c["id"], "slack")
+	if c["id"] != "notion" {
+		t.Errorf("id = %v, want %q", c["id"], "notion")
 	}
-	if c["health"] != "connected" {
-		t.Errorf("health = %v, want %q", c["health"], "connected")
-	}
-	// Catalog metadata must be joined onto the connection for the card.
-	if c["name"] != "Slack" {
-		t.Errorf("name = %v, want %q", c["name"], "Slack")
+	// Catalog metadata must be joined onto the connection for the row.
+	if c["name"] != "Notion" {
+		t.Errorf("name = %v, want %q", c["name"], "Notion")
 	}
 	if c["custom"] != false {
 		t.Error("a catalog-backed connection must not be marked custom")
 	}
+	// Provisioned without a stored token, so it needs reconnecting.
+	if c["health"] != "needs_reconnect" {
+		t.Errorf("health = %v, want %q", c["health"], "needs_reconnect")
+	}
 
 	summary, _ := body["summary"].(map[string]any)
-	if summary["connected"] != float64(1) || summary["total"] != float64(1) {
-		t.Errorf("summary = %v, want 1 connected of 1 total", summary)
+	if summary["needs_attention"] != float64(1) || summary["total"] != float64(1) {
+		t.Errorf("summary = %v, want 1 needing attention of 1 total", summary)
 	}
 }
 
@@ -423,11 +343,14 @@ func TestListInfersTokenAuthForCustomServerWithEnv(t *testing.T) {
 func TestDisconnectKeepsServerConfig(t *testing.T) {
 	api, router := newTestAPI(t)
 
-	if rec, _ := doJSON(t, router, "POST", "/api/connections/slack/connect", `{"token":"xoxb-abc"}`); rec.Code != http.StatusOK {
-		t.Fatalf("setup connect failed: %s", rec.Body.String())
+	if err := api.saveUserServer("notion", mcpclient.MCPServerConfig{
+		URL:   "https://mcp.notion.com/mcp",
+		OAuth: &oauth.OAuthConfig{AutoDiscover: true, UsePKCE: true},
+	}); err != nil {
+		t.Fatalf("save server: %v", err)
 	}
 
-	rec, _ := doJSON(t, router, "POST", "/api/connections/slack/disconnect", "")
+	rec, _ := doJSON(t, router, "POST", "/api/connections/notion/disconnect", "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200. body: %s", rec.Code, rec.Body.String())
 	}
@@ -438,7 +361,7 @@ func TestDisconnectKeepsServerConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load user config: %v", err)
 	}
-	if _, ok := userCfg.MCPServers["slack"]; !ok {
+	if _, ok := userCfg.MCPServers["notion"]; !ok {
 		t.Error("disconnect must keep the server configuration")
 	}
 }
@@ -447,7 +370,7 @@ func TestConnectIsBlockedWhenMCPConfigLocked(t *testing.T) {
 	t.Setenv("MCP_CONFIG_LOCKED", "true")
 	_, router := newTestAPI(t)
 
-	rec, body := doJSON(t, router, "POST", "/api/connections/slack/connect", `{"token":"xoxb-abc"}`)
+	rec, body := doJSON(t, router, "POST", "/api/connections/notion/connect", `{}`)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", rec.Code)
 	}

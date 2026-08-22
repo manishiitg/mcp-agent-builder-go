@@ -5,7 +5,6 @@ const ACTION_LABELS: Record<RecoveryAction, string> = {
   reconnect: 'Reconnect',
   retry: 'Try again',
   connect: 'Connect',
-  enter_token: 'Enter credential',
   contact_admin: 'Contact administrator',
 }
 

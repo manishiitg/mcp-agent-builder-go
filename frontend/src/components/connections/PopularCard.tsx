@@ -21,7 +21,7 @@ export default function PopularCard({
   onConnect,
 }: PopularCardProps) {
   const isConnected = connection?.health === 'connected'
-  const blocked = entry.status === 'coming_soon' || entry.setup_required
+  const comingSoon = entry.status === 'coming_soon'
 
   return (
     <div className="flex min-w-0 items-center gap-2.5 rounded-xl border border-gray-200 bg-white px-3 py-2.5 dark:border-slate-700 dark:bg-slate-800">
@@ -35,9 +35,9 @@ export default function PopularCard({
           <Check className="h-3.5 w-3.5" aria-hidden="true" />
           Connected
         </span>
-      ) : blocked ? (
+      ) : comingSoon ? (
         <span className="whitespace-nowrap px-2 py-1 text-xs text-gray-400 dark:text-gray-500">
-          {entry.status === 'coming_soon' ? 'Coming soon' : 'Setup required'}
+          Coming soon
         </span>
       ) : (
         <button

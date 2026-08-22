@@ -20,22 +20,20 @@ import (
 )
 
 // Connections is the user-facing layer over MCP servers. A "connection" is an
-// approved account (Notion, GitHub, Google Workspace); MCP is the transport
-// underneath it. The catalog turns each integration into a one-click Connect
-// so users never edit mcp.json by hand.
+// approved account (Notion, Linear, Stripe); MCP is the transport underneath
+// it. The catalog turns each integration into a one-click Connect so users
+// never edit mcp.json by hand.
 
-// Auth strategies a catalog entry can use.
+// Auth strategies. Every catalog entry uses DCR; the other two are only ever
+// inferred for custom servers, which the user configures by hand.
 const (
 	// authDCR: the remote server supports Dynamic Client Registration, so the
-	// OAuth client registers itself. Zero setup for both admin and user.
+	// OAuth client registers itself. Zero setup for both admin and user, and the
+	// only strategy the catalog offers.
 	authDCR = "dcr"
-	// authOAuthApp: the provider requires a pre-registered OAuth app. Client
-	// credentials come from server env vars, never from the catalog file.
-	authOAuthApp = "oauth_app"
-	// authToken: no OAuth flow; the user pastes an API/bot token.
+	// authToken: no OAuth flow; the credential is already in the server config.
 	authToken = "token"
-	// authNone: the server needs no credential at all. Only ever inferred for
-	// custom servers; no catalog entry declares it.
+	// authNone: the server needs no credential at all.
 	authNone = "none"
 )
 
@@ -50,57 +48,33 @@ const (
 const (
 	healthConnected      = "connected"
 	healthNeedsReconnect = "needs_reconnect"
-	healthSetupRequired  = "setup_required"
 	healthNotConnected   = "not_connected"
 )
 
 // CatalogEntry is one integration in the curated catalog.
 type CatalogEntry struct {
-	ID          string `json:"id"`
-	ServerName  string `json:"server_name"`
-	Name        string `json:"name"`
-	Tagline     string `json:"tagline,omitempty"`
-	Description string `json:"description,omitempty"`
-	Category    string `json:"category,omitempty"`
-	Icon        string `json:"icon,omitempty"`
-	DocsURL     string `json:"docs_url,omitempty"`
+	ID         string `json:"id"`
+	ServerName string `json:"server_name"`
+	Name       string `json:"name"`
+	Tagline    string `json:"tagline,omitempty"`
+	Icon       string `json:"icon,omitempty"`
+	DocsURL    string `json:"docs_url,omitempty"`
 	// "available" or "coming_soon". coming_soon renders disabled.
 	Status string `json:"status,omitempty"`
-	Auth   string `json:"auth"`
+	// Always "dcr". Kept explicit so a future strategy has somewhere to declare
+	// itself rather than being inferred from the shape of the entry.
+	Auth string `json:"auth"`
 
 	// Transport
-	URL     string            `json:"url,omitempty"`
-	Command string            `json:"command,omitempty"`
-	Args    []string          `json:"args,omitempty"`
-	Headers map[string]string `json:"headers,omitempty"`
+	URL     string   `json:"url,omitempty"`
+	Command string   `json:"command,omitempty"`
+	Args    []string `json:"args,omitempty"`
 
-	// OAuth (auth=oauth_app)
-	//
-	// ClientID is a PUBLIC, pre-registered client id that the provider itself
-	// publishes for general use — Slack ships one with its own MCP plugin. It
-	// removes the setup step entirely. It is never a secret: anything requiring
-	// confidentiality belongs in ClientSecretEnv.
-	ClientID        string   `json:"client_id,omitempty"`
-	AuthURL         string   `json:"auth_url,omitempty"`
-	TokenURL        string   `json:"token_url,omitempty"`
-	Scopes          []string `json:"scopes,omitempty"`
-	ClientIDEnv     string   `json:"client_id_env,omitempty"`
-	ClientSecretEnv string   `json:"client_secret_env,omitempty"`
-
-	// Token entry (auth=token)
-	TokenLabel       string            `json:"token_label,omitempty"`
-	TokenPlaceholder string            `json:"token_placeholder,omitempty"`
-	TokenEnvVar      string            `json:"token_env_var,omitempty"`
-	ExtraEnv         map[string]string `json:"extra_env,omitempty"`
-
-	// Consent copy
-	Capabilities     []string `json:"capabilities,omitempty"`
-	SensitiveActions []string `json:"sensitive_actions,omitempty"`
-	SetupHint        string   `json:"setup_hint,omitempty"`
+	// Scopes requested during dynamic client registration.
+	Scopes []string `json:"scopes,omitempty"`
 
 	// Computed per-request, never read from the catalog file.
-	SetupRequired bool   `json:"setup_required"`
-	Transport     string `json:"transport"`
+	Transport string `json:"transport"`
 }
 
 type connectionsCatalog struct {
@@ -238,22 +212,6 @@ func transportKind(url, command string) string {
 	return transportWeb
 }
 
-// entrySetupRequired reports whether an admin still has to supply credentials
-// before this entry can be connected at all.
-func entrySetupRequired(e *CatalogEntry) bool {
-	if e.Auth != authOAuthApp {
-		return false
-	}
-	// A client id published by the provider needs no setup from anyone.
-	if e.ClientID != "" {
-		return false
-	}
-	if e.ClientIDEnv == "" {
-		return true
-	}
-	return os.Getenv(e.ClientIDEnv) == ""
-}
-
 // friendlyError maps a transport/auth failure onto a recovery path.
 func friendlyError(serviceName string, status int, raw string) *FriendlyError {
 	raw = strings.TrimSpace(raw)
@@ -357,7 +315,6 @@ func (api *StreamingAPI) handleGetConnectionsCatalog(w http.ResponseWriter, r *h
 	entries := make([]CatalogEntry, len(cat.Integrations))
 	copy(entries, cat.Integrations)
 	for i := range entries {
-		entries[i].SetupRequired = entrySetupRequired(&entries[i])
 		entries[i].Transport = transportKind(entries[i].URL, entries[i].Command)
 	}
 
@@ -435,29 +392,15 @@ func (api *StreamingAPI) handleGetConnections(w http.ResponseWriter, r *http.Req
 		}
 
 		switch {
-		case entry != nil && entrySetupRequired(entry):
-			conn.Health = healthSetupRequired
-			conn.Error = &FriendlyError{
-				Code:    "setup_required",
-				Title:   fmt.Sprintf("%s needs administrator setup", conn.Name),
-				Message: entry.SetupHint,
-				Action:  "contact_admin",
-			}
 		case conn.Auth == authNone:
 			// Nothing to authenticate: an open server is healthy as soon as it
 			// is configured. Reporting "needs attention" here would leave a
 			// permanent false alarm in the header count.
 			conn.Health = healthConnected
 		case conn.Auth == authToken:
-			// Token connections are healthy once the credential is present in
-			// the saved server config.
-			hasToken := false
-			if entry != nil && entry.TokenEnvVar != "" {
-				hasToken = serverConfig.Env[entry.TokenEnvVar] != ""
-			} else {
-				hasToken = len(serverConfig.Env) > 0 || len(serverConfig.Headers) > 0
-			}
-			if hasToken {
+			// Only custom servers reach this: the credential is whatever the
+			// user put in the config, so its presence is the whole check.
+			if len(serverConfig.Env) > 0 || len(serverConfig.Headers) > 0 {
 				conn.Health = healthConnected
 			} else {
 				conn.Health = healthNeedsReconnect
@@ -491,69 +434,22 @@ func (api *StreamingAPI) handleGetConnections(w http.ResponseWriter, r *http.Req
 	json.NewEncoder(w).Encode(resp)
 }
 
-// buildServerConfig turns a catalog entry into an MCP server config.
-func buildServerConfig(entry *CatalogEntry, userTokenFile string, token string) (mcpclient.MCPServerConfig, error) {
-	cfg := mcpclient.MCPServerConfig{
+// buildServerConfig turns a catalog entry into an MCP server config. Every
+// entry authenticates through dynamic client registration, so the OAuth client
+// registers itself and nothing has to be supplied up front.
+func buildServerConfig(entry *CatalogEntry, userTokenFile string) mcpclient.MCPServerConfig {
+	return mcpclient.MCPServerConfig{
 		Description: entry.Tagline,
 		URL:         entry.URL,
 		Command:     entry.Command,
 		Args:        entry.Args,
-		Headers:     entry.Headers,
-	}
-
-	switch entry.Auth {
-	case authToken:
-		if token == "" {
-			return cfg, fmt.Errorf("a %s is required", strings.ToLower(defaultString(entry.TokenLabel, "credential")))
-		}
-		env := map[string]string{}
-		for k, v := range entry.ExtraEnv {
-			env[k] = v
-		}
-		if entry.TokenEnvVar == "" {
-			return cfg, fmt.Errorf("catalog entry %q has auth=token but no token_env_var", entry.ID)
-		}
-		env[entry.TokenEnvVar] = token
-		cfg.Env = env
-
-	case authOAuthApp:
-		// An operator's own app takes precedence, so a deployment can present
-		// its own name on the consent screen instead of the published client's.
-		clientID := os.Getenv(entry.ClientIDEnv)
-		if clientID == "" {
-			clientID = entry.ClientID
-		}
-		if clientID == "" {
-			return cfg, fmt.Errorf("setup_required: %s is not configured on this server", entry.ClientIDEnv)
-		}
-		cfg.OAuth = &oauth.OAuthConfig{
-			ClientID:     clientID,
-			ClientSecret: os.Getenv(entry.ClientSecretEnv),
-			AuthURL:      entry.AuthURL,
-			TokenURL:     entry.TokenURL,
-			Scopes:       entry.Scopes,
-			UsePKCE:      true,
-			AutoDiscover: entry.AuthURL == "" || entry.TokenURL == "",
-			TokenFile:    userTokenFile,
-		}
-
-	default: // authDCR
-		cfg.OAuth = &oauth.OAuthConfig{
+		OAuth: &oauth.OAuthConfig{
 			AutoDiscover: true,
 			UsePKCE:      true,
 			Scopes:       entry.Scopes,
 			TokenFile:    userTokenFile,
-		}
+		},
 	}
-
-	return cfg, nil
-}
-
-func defaultString(v, fallback string) string {
-	if v == "" {
-		return fallback
-	}
-	return v
 }
 
 // saveUserServer adds or replaces one server in the user config, leaving every
@@ -603,11 +499,9 @@ func (c *captureWriter) WriteHeader(status int)      { c.status = status }
 func (c *captureWriter) Write(b []byte) (int, error) { return c.body.Write(b) }
 
 type connectRequest struct {
-	// Token for auth=token entries; ClientID for the needs_client_id fallback.
-	Token    string `json:"token,omitempty"`
+	// ClientID for the needs_client_id fallback, used when a server turns out
+	// not to support dynamic client registration after all.
 	ClientID string `json:"client_id,omitempty"`
-	// Optional extra env values (e.g. SLACK_TEAM_ID) collected by the UI.
-	Env map[string]string `json:"env,omitempty"`
 }
 
 // handleConnectIntegration handles POST /api/connections/{id}/connect.
@@ -647,7 +541,7 @@ func (api *StreamingAPI) handleConnectIntegration(w http.ResponseWriter, r *http
 		writeFriendlyError(w, http.StatusBadRequest, &FriendlyError{
 			Code:    "coming_soon",
 			Title:   fmt.Sprintf("%s is not available yet", entry.Name),
-			Message: defaultString(entry.SetupHint, "This integration is still being set up."),
+			Message: "This integration is still being set up.",
 			Action:  "contact_admin",
 		})
 		return
@@ -666,37 +560,7 @@ func (api *StreamingAPI) handleConnectIntegration(w http.ResponseWriter, r *http
 	}
 
 	userTokenFile := getUserTokenFilePath(userID, entry.ServerName)
-	cfg, err := buildServerConfig(entry, userTokenFile, req.Token)
-	if err != nil {
-		if strings.HasPrefix(err.Error(), "setup_required:") {
-			writeFriendlyError(w, http.StatusBadRequest, &FriendlyError{
-				Code:    "setup_required",
-				Title:   fmt.Sprintf("%s needs administrator setup", entry.Name),
-				Message: defaultString(entry.SetupHint, "Credentials for this integration are not configured on the server."),
-				Action:  "contact_admin",
-				Raw:     err.Error(),
-			})
-			return
-		}
-		writeFriendlyError(w, http.StatusBadRequest, &FriendlyError{
-			Code:    "missing_credential",
-			Title:   fmt.Sprintf("%s needs a credential", entry.Name),
-			Message: err.Error(),
-			Action:  "enter_token",
-		})
-		return
-	}
-
-	// Merge any extra env the UI collected (e.g. SLACK_TEAM_ID).
-	for k, v := range req.Env {
-		if v == "" {
-			continue
-		}
-		if cfg.Env == nil {
-			cfg.Env = map[string]string{}
-		}
-		cfg.Env[k] = v
-	}
+	cfg := buildServerConfig(entry, userTokenFile)
 
 	if err := api.saveUserServer(entry.ServerName, cfg); err != nil {
 		api.logger.Error(fmt.Sprintf("Failed to save server config for %s: %v", entry.ServerName, err), err)
@@ -705,20 +569,7 @@ func (api *StreamingAPI) handleConnectIntegration(w http.ResponseWriter, r *http
 	}
 	api.appendServerLog(entry.ServerName, "info", fmt.Sprintf("Connection provisioned from catalog entry %q", entry.ID))
 
-	// Token-based connections are done once the credential is stored.
-	if entry.Auth == authToken {
-		triggerDiscovery(api)
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
-			"status":      "connected",
-			"id":          entry.ID,
-			"server_name": entry.ServerName,
-			"message":     fmt.Sprintf("%s connected", entry.Name),
-		})
-		return
-	}
-
-	// OAuth: delegate to the existing start handler, preserving auth context and
+	// Delegate to the existing OAuth start handler, preserving auth context and
 	// forwarding headers so the redirect URI is derived the same way.
 	body, _ := json.Marshal(OAuthLoginRequest{ServerName: entry.ServerName, ClientID: req.ClientID})
 	delegated := r.Clone(r.Context())
