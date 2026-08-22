@@ -94,7 +94,6 @@ func newTestAPI(t *testing.T) (*StreamingAPI, *mux.Router) {
 	r.HandleFunc("/api/connections", api.handleGetConnections).Methods("GET")
 	r.HandleFunc("/api/connections/{id}/connect", api.handleConnectIntegration).Methods("POST")
 	r.HandleFunc("/api/connections/{id}/disconnect", api.handleDisconnectConnection).Methods("POST")
-	r.HandleFunc("/api/connections/{id}", api.handleRemoveConnection).Methods("DELETE")
 
 	return api, r
 }
@@ -441,50 +440,6 @@ func TestDisconnectKeepsServerConfig(t *testing.T) {
 	}
 	if _, ok := userCfg.MCPServers["slack"]; !ok {
 		t.Error("disconnect must keep the server configuration")
-	}
-}
-
-func TestRemoveDeletesServerConfig(t *testing.T) {
-	api, router := newTestAPI(t)
-
-	if rec, _ := doJSON(t, router, "POST", "/api/connections/slack/connect", `{"token":"xoxb-abc"}`); rec.Code != http.StatusOK {
-		t.Fatalf("setup connect failed: %s", rec.Body.String())
-	}
-
-	rec, _ := doJSON(t, router, "DELETE", "/api/connections/slack", "")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200. body: %s", rec.Code, rec.Body.String())
-	}
-
-	userCfg, err := mcpclient.LoadConfig(api.getUserConfigPath(), api.logger)
-	if err != nil {
-		t.Fatalf("load user config: %v", err)
-	}
-	if _, ok := userCfg.MCPServers["slack"]; ok {
-		t.Error("remove must delete the server configuration")
-	}
-}
-
-func TestRemoveLeavesOtherConnectionsIntact(t *testing.T) {
-	api, router := newTestAPI(t)
-
-	if err := api.saveUserServer("keep-me", mcpclient.MCPServerConfig{URL: "https://keep.example.com/mcp"}); err != nil {
-		t.Fatalf("save: %v", err)
-	}
-	if rec, _ := doJSON(t, router, "POST", "/api/connections/slack/connect", `{"token":"xoxb-abc"}`); rec.Code != http.StatusOK {
-		t.Fatalf("setup connect failed: %s", rec.Body.String())
-	}
-
-	if rec, _ := doJSON(t, router, "DELETE", "/api/connections/slack", ""); rec.Code != http.StatusOK {
-		t.Fatalf("remove failed: %s", rec.Body.String())
-	}
-
-	userCfg, err := mcpclient.LoadConfig(api.getUserConfigPath(), api.logger)
-	if err != nil {
-		t.Fatalf("load user config: %v", err)
-	}
-	if _, ok := userCfg.MCPServers["keep-me"]; !ok {
-		t.Error("removing one connection must not delete the others")
 	}
 }
 

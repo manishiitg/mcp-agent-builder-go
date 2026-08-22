@@ -807,7 +807,6 @@ func (api *StreamingAPI) handleDisconnectConnection(w http.ResponseWriter, r *ht
 		return
 	}
 
-	forgetServerTools(serverName)
 	api.appendServerLog(serverName, "info", "Disconnected — token removed, configuration kept")
 	api.logger.Info(fmt.Sprintf("Disconnected user %s from %s (config retained)", userID, serverName))
 
@@ -816,46 +815,6 @@ func (api *StreamingAPI) handleDisconnectConnection(w http.ResponseWriter, r *ht
 		"status":      "disconnected",
 		"server_name": serverName,
 		"message":     "Signed out. The connection is kept so you can reconnect in one click.",
-	})
-}
-
-// handleRemoveConnection handles DELETE /api/connections/{id}.
-// Destructive: removes the token AND the server config.
-func (api *StreamingAPI) handleRemoveConnection(w http.ResponseWriter, r *http.Request) {
-	if isMCPConfigLocked() {
-		writeFriendlyError(w, http.StatusForbidden, &FriendlyError{
-			Code:    "locked",
-			Title:   "Connections are locked",
-			Message: "An administrator has locked integration settings for this workspace.",
-			Action:  "contact_admin",
-		})
-		return
-	}
-
-	id := mux.Vars(r)["id"]
-	serverName := api.resolveServerName(id)
-	userID := GetUserIDFromContext(r.Context())
-
-	tokenFile := expandPath(getUserTokenFilePath(userID, serverName))
-	if err := os.Remove(tokenFile); err != nil && !os.IsNotExist(err) {
-		api.logger.Warn(fmt.Sprintf("Failed to remove token for %s: %v", serverName, err))
-	}
-
-	if err := api.removeUserServer(serverName); err != nil {
-		api.logger.Error(fmt.Sprintf("Failed to remove server config for %s: %v", serverName, err), err)
-		writeFriendlyError(w, http.StatusInternalServerError, friendlyError(serverName, http.StatusInternalServerError, err.Error()))
-		return
-	}
-
-	forgetServerTools(serverName)
-	api.logger.Info(fmt.Sprintf("Removed connection %s for user %s", serverName, userID))
-	triggerDiscovery(api)
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
-		"status":      "removed",
-		"server_name": serverName,
-		"message":     "Connection removed.",
 	})
 }
 
