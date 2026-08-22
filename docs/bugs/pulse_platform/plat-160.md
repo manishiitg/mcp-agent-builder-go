@@ -5,8 +5,8 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `partially implemented` — the settled timestamp, the shell-command settle presentation, and the transcript tailers' turn-end read race are all fixed; the architectural fix this ticket is actually about (promote `toolcalllog` to primary) remains unstarted and out of scope for a same-pass fix, see "Scope correction" and "Final-read fix" below |
-| Last synchronized | `2026-08-20` |
+| Ticket state | `partially implemented` — the settled timestamp, shell-command settle presentation, and Claude/Codex turn-end transcript read race are fixed. The Claude final-flush channel-ownership regression found live on 2026-08-21 is also fixed and regression-tested. The architectural fix this ticket is actually about (promote `toolcalllog` to primary) remains unstarted and out of scope for a same-pass fix, see "Scope correction" and "Final-read fix" below |
+| Last synchronized | `2026-08-21` |
 
 - **Priority:** P1 — this is the actual reason tool calls go missing for
   interactive (tmux) coding-CLI sessions at all. PLAT-141's settle/recovery
@@ -372,3 +372,52 @@ makes the toolcalllog-promotion piece genuinely risky does not apply here.
 - **The Output-toggle control** still renders on an empty synthetic settle
   even though there is nothing to expand — a small, real, low-risk gap in
   the presentation fix, not yet addressed.
+
+## Final-flush ownership regression — 2026-08-21
+
+The final-read fix above introduced a second, more severe lifecycle requirement
+for Claude Code. `streamClaudeTranscript` intentionally calls its last
+`poll(context.Background())` after cancellation so a transcript row written at
+turn end is not lost. But the tailer was launched as a detached goroutine from
+`ClaudeCodeInteractiveAdapter.generateContentTmuxBody`. The outer
+`llmtypes.WithObservability` wrapper owns `StreamChan` and closes it as soon as
+that body returns. A slow final poll could therefore send into the already
+closed channel and panic the entire AgentWorks process:
+
+```
+panic: send on closed channel
+claudecode.streamClaudeTranscript.func1
+```
+
+This was observed live in a Social Media scheduled run at 20:19 IST. The
+missing background-conversation JSON warning immediately before it was a
+separate best-effort restore warning, not the process crash.
+
+### Correct ownership rule
+
+A producer that deliberately performs a final flush must be stopped **and
+joined** before its channel owner is allowed to close that channel. Cancellation
+alone is not sufficient: it requests the final flush, but does not prove it has
+finished.
+
+### Implemented repair
+
+`multi-llm-provider-go` commit `ed317ca` adds
+`startClaudeTranscriptStream`, which returns an idempotent stop function that
+cancels and waits for the transcript goroutine. The interactive adapter defers
+that stop function, so the body cannot return to `WithObservability` until the
+final poll has completed. This mirrors Cursor's existing stop-and-join
+lifecycle rather than suppressing the useful final transcript read.
+
+`TestClaudeTranscriptStreamStopFlushesBeforeCallerClosesStream` proves that the
+final tool receipt is delivered before the caller closes the stream channel;
+the full Claude adapter package passed. A server restart is required before
+live verification.
+
+### Follow-through
+
+This repair makes the polling fallback safe; it does not change the broader
+PLAT-160 direction. Every provider-side detached live producer should have the
+same explicit ownership rule and a regression test, while the durable
+architecture remains one primary, synchronous `toolcalllog` source reconciled
+at the platform boundary.
