@@ -42,6 +42,11 @@ export default function ConnectFlowModal({ entry, onClose }: ConnectFlowModalPro
 
   const canSubmit = !needsClientId || clientId.trim().length > 0
 
+  // The catalog is server config, but a docs link becomes an href — only
+  // http(s) is allowed so it can never be a javascript: URL.
+  const docsUrl =
+    entry.docs_url && /^https?:\/\//i.test(entry.docs_url) ? entry.docs_url : undefined
+
   const handleConnect = async () => {
     setStep('authenticating')
     setError(null)
@@ -135,9 +140,9 @@ export default function ConnectFlowModal({ entry, onClose }: ConnectFlowModalPro
                   </section>
                 )}
 
-                {entry.docs_url && (
+                {docsUrl && (
                   <a
-                    href={entry.docs_url}
+                    href={docsUrl}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline dark:text-blue-400"

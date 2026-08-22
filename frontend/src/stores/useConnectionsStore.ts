@@ -50,7 +50,6 @@ interface ConnectionsState {
   isLoadingConnections: boolean
   /** Catalog/connection id currently mid-connect, so its card can show a spinner. */
   connectingId: string | null
-  /** Catalog/connection id currently being tested. */
   /** Catalog/connection id currently being disconnected. */
   disconnectingId: string | null
 
@@ -107,6 +106,8 @@ async function waitForConnection(
   let rejection: string | null = null
 
   const onMessage = (event: MessageEvent) => {
+    // Only trust the popup we opened — any other window could forge a result.
+    if (authWindow === null || event.source !== authWindow) return
     if (!isOAuthResult(event.data)) return
     if (event.data.status === 'success') approved = true
     else rejection = event.data.message || 'Access was not granted.'

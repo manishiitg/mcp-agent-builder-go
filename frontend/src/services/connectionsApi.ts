@@ -18,8 +18,10 @@ function getAuthHeaders(): HeadersInit {
   return headers;
 }
 
-/** How a catalog entry authenticates. */
-/** Catalog entries are always 'dcr'; the rest are inferred for custom servers. */
+/**
+ * How a catalog entry authenticates. Catalog entries are always 'dcr';
+ * 'token' and 'none' are inferred for custom servers.
+ */
 export type ConnectionAuthType = 'dcr' | 'token' | 'none';
 
 /** How a server is reached — shown as the "Type" column. */
@@ -220,7 +222,6 @@ export class ConnectionsApi {
       method: 'POST',
     });
   }
-
 }
 
 export const connectionsApi = new ConnectionsApi();
