@@ -3,117 +3,96 @@
   "integrations": [
     {
       "id": "notion",
-      "server_name": "notion",
       "name": "Notion",
       "tagline": "Pages, databases, and docs",
       "status": "available",
       "auth": "dcr",
       "url": "https://mcp.notion.com/mcp",
-      "icon": "notion",
       "docs_url": "https://developers.notion.com/docs/mcp"
     },
     {
       "id": "linear",
-      "server_name": "linear",
       "name": "Linear",
       "tagline": "Issues, projects, and cycles",
       "status": "available",
       "auth": "dcr",
       "url": "https://mcp.linear.app/mcp",
-      "icon": "linear",
       "docs_url": "https://linear.app/docs/mcp"
     },
     {
       "id": "asana",
-      "server_name": "asana",
       "name": "Asana",
       "tagline": "Tasks, projects, and portfolios",
       "status": "available",
       "auth": "dcr",
       "url": "https://mcp.asana.com/sse",
-      "icon": "asana",
       "docs_url": "https://developers.asana.com/docs/mcp-server"
     },
     {
       "id": "atlassian",
-      "server_name": "atlassian",
       "name": "Atlassian",
       "tagline": "Jira issues and Confluence pages",
       "status": "available",
       "auth": "dcr",
       "url": "https://mcp.atlassian.com/v1/sse",
-      "icon": "atlassian",
       "docs_url": "https://support.atlassian.com/atlassian-rovo-mcp-server/"
     },
     {
       "id": "monday",
-      "server_name": "monday",
       "name": "monday.com",
       "tagline": "Boards, items, and updates",
       "status": "available",
       "auth": "dcr",
       "url": "https://mcp.monday.com/sse",
-      "docs_url": "https://developer.monday.com/apps/docs/mondaycom-mcp-integration",
-      "icon": "monday"
+      "docs_url": "https://developer.monday.com/apps/docs/mondaycom-mcp-integration"
     },
     {
       "id": "sentry",
-      "server_name": "sentry",
       "name": "Sentry",
       "tagline": "Errors and performance issues",
       "status": "available",
       "auth": "dcr",
       "url": "https://mcp.sentry.dev/mcp",
-      "icon": "sentry",
       "docs_url": "https://docs.sentry.io/product/sentry-mcp/"
     },
     {
       "id": "figma",
-      "server_name": "figma",
       "name": "Figma",
       "tagline": "Design files and components",
       "status": "available",
       "auth": "dcr",
       "url": "https://mcp.figma.com/mcp",
-      "icon": "figma",
       "docs_url": "https://help.figma.com/hc/en-us/articles/32132100833559"
     },
     {
       "id": "canva",
-      "server_name": "canva",
       "name": "Canva",
       "tagline": "Designs, brand kits, and exports",
       "status": "available",
       "auth": "dcr",
       "url": "https://mcp.canva.com/mcp",
-      "icon": "canva",
       "docs_url": "https://www.canva.dev/docs/apps/mcp-server/"
     },
     {
       "id": "vercel",
-      "server_name": "vercel",
       "name": "Vercel",
       "tagline": "Projects, deployments, and logs",
       "status": "available",
       "auth": "dcr",
       "url": "https://mcp.vercel.com",
-      "icon": "vercel",
       "docs_url": "https://vercel.com/docs/mcp/vercel-mcp"
     },
     {
       "id": "neon",
-      "server_name": "neon",
       "name": "Neon",
       "tagline": "Postgres databases and branches",
       "status": "available",
       "auth": "dcr",
       "url": "https://mcp.neon.tech/sse",
-      "docs_url": "https://neon.com/docs/ai/neon-mcp-server",
-      "icon": "neon"
+      "docs_url": "https://neon.com/docs/ai/neon-mcp-server"
     },
     {
       "id": "cloudflare-observability",
-      "server_name": "cloudflare-observability",
       "name": "Cloudflare Observability",
       "tagline": "Logs, analytics, and errors",
       "status": "available",
@@ -124,62 +103,51 @@
     },
     {
       "id": "webflow",
-      "server_name": "webflow",
       "name": "Webflow",
       "tagline": "Sites, collections, and CMS items",
       "status": "available",
       "auth": "dcr",
       "url": "https://mcp.webflow.com/sse",
-      "icon": "webflow",
       "docs_url": "https://developers.webflow.com/data/docs/ai-tools"
     },
     {
       "id": "wix",
-      "server_name": "wix",
       "name": "Wix",
       "tagline": "Sites, stores, and bookings",
       "status": "available",
       "auth": "dcr",
       "url": "https://mcp.wix.com/sse",
-      "icon": "wix",
       "docs_url": "https://www.wix.com/studio/developers/mcp-server"
     },
     {
       "id": "stripe",
-      "server_name": "stripe",
       "name": "Stripe",
       "tagline": "Payments, customers, and invoices",
       "status": "available",
       "auth": "dcr",
       "url": "https://mcp.stripe.com",
-      "icon": "stripe",
       "docs_url": "https://docs.stripe.com/mcp"
     },
     {
       "id": "paypal",
-      "server_name": "paypal",
       "name": "PayPal",
       "tagline": "Orders, invoices, and payouts",
       "status": "available",
       "auth": "dcr",
       "url": "https://mcp.paypal.com/mcp",
-      "icon": "paypal",
       "docs_url": "https://developer.paypal.com/tools/mcp-server/"
     },
     {
       "id": "square",
-      "server_name": "square",
       "name": "Square",
       "tagline": "Payments, catalog, and customers",
       "status": "available",
       "auth": "dcr",
       "url": "https://mcp.squareup.com/sse",
-      "icon": "square",
       "docs_url": "https://developer.squareup.com/docs/mcp"
     },
     {
       "id": "plaid",
-      "server_name": "plaid",
       "name": "Plaid",
       "tagline": "Bank connections and transactions",
       "status": "available",
@@ -189,18 +157,15 @@
     },
     {
       "id": "intercom",
-      "server_name": "intercom",
       "name": "Intercom",
       "tagline": "Conversations and contacts",
       "status": "available",
       "auth": "dcr",
       "url": "https://mcp.intercom.com/mcp",
-      "icon": "intercom",
       "docs_url": "https://developers.intercom.com/docs/guides/mcp"
     },
     {
       "id": "close",
-      "server_name": "close",
       "name": "Close",
       "tagline": "CRM leads and opportunities",
       "status": "available",
@@ -210,18 +175,15 @@
     },
     {
       "id": "zapier",
-      "server_name": "zapier",
       "name": "Zapier",
       "tagline": "Actions across thousands of apps",
       "status": "available",
       "auth": "dcr",
       "url": "https://mcp.zapier.com/api/mcp/mcp",
-      "icon": "zapier",
       "docs_url": "https://help.zapier.com/hc/en-us/articles/36265392843917"
     },
     {
       "id": "fireflies",
-      "server_name": "fireflies",
       "name": "Fireflies",
       "tagline": "Meeting recordings and transcripts",
       "status": "available",
@@ -231,7 +193,6 @@
     },
     {
       "id": "globalping",
-      "server_name": "globalping",
       "name": "Globalping",
       "tagline": "Network measurements worldwide",
       "status": "available",

@@ -51,12 +51,15 @@ const (
 
 // CatalogEntry is one integration in the curated catalog.
 type CatalogEntry struct {
-	ID         string `json:"id"`
-	ServerName string `json:"server_name"`
-	Name       string `json:"name"`
-	Tagline    string `json:"tagline,omitempty"`
-	Icon       string `json:"icon,omitempty"`
-	DocsURL    string `json:"docs_url,omitempty"`
+	// ID doubles as the MCP server name: the key this integration takes under
+	// mcpServers in the user config, and the name its token file is keyed by.
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Tagline string `json:"tagline,omitempty"`
+	// Brand mark slug, defaulted to the id. It only needs stating when several
+	// entries share one mark.
+	Icon    string `json:"icon,omitempty"`
+	DocsURL string `json:"docs_url,omitempty"`
 	// "available" or "coming_soon". coming_soon renders disabled.
 	Status string `json:"status,omitempty"`
 	// Always "dcr". Kept explicit so a future strategy has somewhere to declare
@@ -152,10 +155,12 @@ func (api *StreamingAPI) loadCatalog() (*connectionsCatalog, error) {
 		return nil, fmt.Errorf("failed to parse connections catalog: %w", err)
 	}
 
-	// Default the MCP server name to the catalog id so config keys stay stable.
 	for i := range cat.Integrations {
-		if cat.Integrations[i].ServerName == "" {
-			cat.Integrations[i].ServerName = cat.Integrations[i].ID
+		// A mark is named after the integration it belongs to unless the entry
+		// says otherwise. An id with no mark of its own resolves to nothing and
+		// renders the neutral glyph, exactly as an empty field would.
+		if cat.Integrations[i].Icon == "" {
+			cat.Integrations[i].Icon = cat.Integrations[i].ID
 		}
 		if cat.Integrations[i].Status == "" {
 			cat.Integrations[i].Status = "available"
@@ -359,7 +364,7 @@ func (api *StreamingAPI) handleGetConnections(w http.ResponseWriter, r *http.Req
 	// Map MCP server name -> catalog entry so custom servers can be told apart.
 	byServer := make(map[string]*CatalogEntry, len(cat.Integrations))
 	for i := range cat.Integrations {
-		byServer[cat.Integrations[i].ServerName] = &cat.Integrations[i]
+		byServer[cat.Integrations[i].ID] = &cat.Integrations[i]
 	}
 
 	resp := connectionsListResponse{Connections: []Connection{}}
@@ -557,19 +562,19 @@ func (api *StreamingAPI) handleConnectIntegration(w http.ResponseWriter, r *http
 		return
 	}
 
-	userTokenFile := getUserTokenFilePath(userID, entry.ServerName)
+	userTokenFile := getUserTokenFilePath(userID, entry.ID)
 	cfg := buildServerConfig(entry, userTokenFile)
 
-	if err := api.saveUserServer(entry.ServerName, cfg); err != nil {
-		api.logger.Error(fmt.Sprintf("Failed to save server config for %s: %v", entry.ServerName, err), err)
+	if err := api.saveUserServer(entry.ID, cfg); err != nil {
+		api.logger.Error(fmt.Sprintf("Failed to save server config for %s: %v", entry.ID, err), err)
 		writeFriendlyError(w, http.StatusInternalServerError, friendlyError(entry.Name, http.StatusInternalServerError, err.Error()))
 		return
 	}
-	api.appendServerLog(entry.ServerName, "info", fmt.Sprintf("Connection provisioned from catalog entry %q", entry.ID))
+	api.appendServerLog(entry.ID, "info", fmt.Sprintf("Connection provisioned from catalog entry %q", entry.ID))
 
 	// Delegate to the existing OAuth start handler, preserving auth context and
 	// forwarding headers so the redirect URI is derived the same way.
-	body, _ := json.Marshal(OAuthLoginRequest{ServerName: entry.ServerName, ClientID: req.ClientID})
+	body, _ := json.Marshal(OAuthLoginRequest{ServerName: entry.ID, ClientID: req.ClientID})
 	delegated := r.Clone(r.Context())
 	delegated.Body = io.NopCloser(bytes.NewReader(body))
 	delegated.ContentLength = int64(len(body))
@@ -580,8 +585,8 @@ func (api *StreamingAPI) handleConnectIntegration(w http.ResponseWriter, r *http
 	if rec.status >= 400 {
 		// Provisioning succeeded but auth could not start — roll the config back
 		// so the card does not linger in a broken half-connected state.
-		if err := api.removeUserServer(entry.ServerName); err != nil {
-			api.logger.Warn(fmt.Sprintf("Failed to roll back server config for %s: %v", entry.ServerName, err))
+		if err := api.removeUserServer(entry.ID); err != nil {
+			api.logger.Warn(fmt.Sprintf("Failed to roll back server config for %s: %v", entry.ID, err))
 		}
 		writeFriendlyError(w, rec.status, friendlyError(entry.Name, rec.status, rec.body.String()))
 		return
@@ -645,8 +650,9 @@ func (api *StreamingAPI) reconnectExistingServer(w http.ResponseWriter, r *http.
 // Removes the stored token but KEEPS the server config, so the card stays in
 // the list showing "needs reconnection" with a one-click Reconnect.
 func (api *StreamingAPI) handleDisconnectConnection(w http.ResponseWriter, r *http.Request) {
-	id := mux.Vars(r)["id"]
-	serverName := api.resolveServerName(id)
+	// The catalog id is the MCP server name, and a custom server is addressed
+	// by that name directly, so no lookup stands between the two.
+	serverName := mux.Vars(r)["id"]
 	userID := GetUserIDFromContext(r.Context())
 
 	tokenFile := expandPath(getUserTokenFilePath(userID, serverName))
@@ -665,13 +671,4 @@ func (api *StreamingAPI) handleDisconnectConnection(w http.ResponseWriter, r *ht
 		"server_name": serverName,
 		"message":     "Signed out. The connection is kept so you can reconnect in one click.",
 	})
-}
-
-// resolveServerName maps a catalog id to its MCP server name, falling back to
-// the id itself so custom servers can use these endpoints too.
-func (api *StreamingAPI) resolveServerName(id string) string {
-	if entry, err := api.findCatalogEntry(id); err == nil {
-		return entry.ServerName
-	}
-	return id
 }
