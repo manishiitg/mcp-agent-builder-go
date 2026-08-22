@@ -227,9 +227,10 @@ func (api *StreamingAPI) restoreLatestBuilderConversation(ctx context.Context, p
 	}
 
 	type candidate struct {
-		path      string
-		log       builderConversationLog
-		updatedAt time.Time
+		path       string
+		log        builderConversationLog
+		rawContent string
+		updatedAt  time.Time
 	}
 	candidates := []candidate{}
 	for _, path := range paths {
@@ -250,7 +251,7 @@ func (api *StreamingAPI) restoreLatestBuilderConversation(ctx context.Context, p
 			continue
 		}
 		updatedAt := parseBuilderConversationUpdatedAt(log.UpdatedAt)
-		candidates = append(candidates, candidate{path: path, log: log, updatedAt: updatedAt})
+		candidates = append(candidates, candidate{path: path, log: log, rawContent: content, updatedAt: updatedAt})
 	}
 
 	if len(candidates) == 0 {
@@ -265,6 +266,15 @@ func (api *StreamingAPI) restoreLatestBuilderConversation(ctx context.Context, p
 	})
 
 	latest := candidates[0]
+	// PLAT-178: conversation_history is only rewritten when a full turn
+	// completes. A resumed session that goes on to exchange further messages
+	// purely through /api/live-input (the normal state right after any
+	// resume, while the tmux pane is still warm) never triggers that
+	// rewrite, so this snapshot can be stale by the time it's the only
+	// source restore has left. Claude Code's own transcript keeps recording
+	// regardless, so catch up from it before trusting this snapshot.
+	latest.log = api.refreshLatestBuilderConversationFromNativeTranscript(ctx, latest.path, latest.rawContent, latest.log)
+	latest.updatedAt = parseBuilderConversationUpdatedAt(latest.log.UpdatedAt)
 	rawEvents := builderConversationToRawEvents(latest.log)
 	if len(rawEvents) == 0 {
 		return nil, nil

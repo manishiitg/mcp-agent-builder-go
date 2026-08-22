@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `open` — root cause fully traced, not implemented |
+| Ticket state | `fixed` — recovery path implemented, live reverify pending |
 | Last synchronized | `2026-08-22` |
 
 - **Priority:** P1 — real conversation data loss, user-visible and
@@ -141,65 +141,89 @@ have that entire stretch of conversation permanently invisible to
 even though Claude Code's own transcript still has it. This is not specific
 to the substack workflow or to this one incident.
 
-## Suggested fix direction (not implemented)
+## Fix implemented
 
-Two independent gaps, either one closing most of the practical impact:
+Two independent gaps were identified; only the second was implemented in
+this pass (chosen as lower-risk and it recovers the loss after the fact
+regardless of how it opened — see "Not implemented" below):
 
-1. **Close the live-input assistant-reply gap** (finding #2): after a
-   successful `/api/live-input` delivery, also capture and append the
-   CLI's resulting assistant reply — not just the outgoing human message —
-   to `conversation_history`, the same way a full turn would. This keeps the
-   snapshot current continuously instead of only at full-turn boundaries.
-2. **Make the `persisted_snapshot` restore tier read the native transcript**
-   (finding #3/#4): for `provider=claude-code` sessions with a resolvable
-   `ExternalSessionID` and workspace path, read
-   `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl` (a workingDir-scoped
-   variant of `readClaudeTranscriptMessages`, currently turn-scoped only)
-   and merge anything newer than the last saved `conversation_history`
-   timestamp before falling back to the stale JSON. This is strictly
-   additive recovery and doesn't touch the deliberate tool-registration-race
-   avoidance already documented at `chat_history_routes.go:141-153`.
+1. ~~Close the live-input assistant-reply gap~~ — **not implemented**, see
+   below.
+2. **Make the workflow-builder restore path read the native transcript**
+   (finding #3/#4) — **implemented**. `restoreLatestBuilderConversation`
+   (`workflow_builder_session_routes.go:215-`, the actual function that
+   serves the stale snapshot to the chat UI when no live in-memory session
+   matches — confirmed to be the real serving path, not the terminal-pane
+   tiers in `chat_history_routes.go`, which restore the separate raw
+   terminal widget) now calls
+   `refreshLatestBuilderConversationFromNativeTranscript`
+   (`claude_native_transcript_sync.go`, new file) on the winning candidate
+   before converting it to display events. For `provider=claude-code`
+   sessions with a resolvable native session ID and working directory (read
+   from the snapshot's own `runtime.agent_session_handle.provider` block),
+   it locates Claude Code's own JSONL transcript
+   (`~/.claude/projects/<slug>/<session-id>.jsonl`, using the same
+   working-directory-to-slug escaping scheme as
+   `multi-llm-provider-go/claudecode_transcript_path.go`, duplicated rather
+   than imported since that resolver is unexported), reads every
+   `user`/`assistant` entry timestamped after the snapshot's own
+   `updated_at`, keeps only real chat text (plain-string user content,
+   `text`-typed assistant blocks — `tool_use`/`tool_result`/`thinking` are
+   filtered out as execution detail, not something either party said),
+   appends it to `conversation_history`, and best-effort persists the merge
+   back to the same file so later reads see it too. A failed persist (e.g.
+   the workspace API being unreachable) is logged but never blocks the
+   restore itself — the in-memory catch-up is still served.
 
-(1) prevents the gap from opening; (2) recovers it after the fact even if it
-does. Doing both is the most robust fix; (2) alone is lower-risk to ship
-first since it only reads an existing file and only activates on the
-already-broken fallback path.
+## Not implemented
 
-## Non-goals
-
-- Not implementing either fix direction in this pass — filed for design +
-  implementation as a follow-up, consistent with how PLAT-171 was filed.
+- **The live-input assistant-reply gap** (fix direction 1): closing this
+  would prevent the gap from ever opening, on top of direction 2 recovering
+  it after the fact. Not done in this pass — `/api/live-input` delivers
+  into a live tmux pane asynchronously with no synchronous return of the
+  CLI's reply, so capturing it would need either a lightweight polling
+  read-back or a streaming hook into the retained session, a larger change
+  than the read-only recovery path shipped here. Worth a follow-up once the
+  read-side fix has been live-verified to actually close the user-visible
+  symptom on its own.
 - Not investigating why the tmux pane died in this specific incident — the
   transcript's own last entry (`<local-command-stdout>Bye!</local-command-stdout>`)
   suggests an intentional `/bye`/exit rather than a crash, but the fix
   needed here is the same regardless of why the pane ends.
-
-## Acceptance tests (once a fix is designed)
-
-1. A session that resumes into a warm tmux state, exchanges several more
-   messages purely through `/api/live-input`, then has its tmux pane
-   deliberately ended — resuming again shows the true latest assistant
-   message, not the last full-turn snapshot.
-2. `conversation_history`'s message count and content, read right after a
-   sequence of live-input exchanges, matches the CLI's own native transcript
-   for the same time window (not just the outgoing human messages).
-3. The existing tool-registration-race avoidance
-   (`chat_history_routes.go:141-153`) is unaffected — restore still defers
-   CLI relaunch to the next `/api/query`, only the conversation content
-   itself becomes current.
+- The existing tool-registration-race avoidance already documented at
+  `chat_history_routes.go:141-153` is untouched — this fix lives entirely
+  in the workflow-builder conversation-display path, a different function
+  than the terminal-pane restore tiers that comment describes.
 
 ## Verification
 
-Root cause traced and independently re-verified by direct evidence, not
-implemented:
-- `conversation_history` JSON's mtime (`13:51:26`) confirmed frozen while
-  the live session continued (CDP browser call at `13:55:04`, terminal
-  polling through `14:31`).
-- `appendLiveInputToPersistedChatHistory`
-  (`chat_history_persistence.go:2934-3009`) read directly, confirmed it only
-  appends the human message.
-- The native Claude Code transcript file was located on disk and read
-  directly: 1774 total lines, 155 entries timestamped after `13:51:26`
-  local (36 user, 63 assistant, 37 attachment, 16 queue-operation, 3
-  system), ending `15:19:59` local — proving the "lost" conversation is
-  fully intact and just unread by the current restore path.
+Build and unit tests only; live reverify pending (an actual resumed
+session exchanging live-input messages then losing its tmux pane, checked
+against a real restore).
+
+- `go build ./...` clean.
+- New tests in `claude_native_transcript_sync_test.go`: working-directory
+  slug encoding matches the real scheme; text extraction correctly keeps
+  plain-string/`.text`-block content and drops `tool_use`/`tool_result`/
+  `thinking`; a fail-before/pass-after style test constructs a snapshot
+  frozen at `13:51:26` plus a native-transcript fixture with two later
+  messages and confirms the merge appends both in order and advances
+  `updated_at` to the transcript's newest timestamp; a no-op test confirms
+  non-`claude-code`/missing-runtime snapshots are left untouched.
+- `go test ./cmd/server/...`: all new tests pass; the only failures
+  (`TestWorkshopResolveLLMConfigExpandsCodingAgentMode`,
+  `TestStandalonePulseReviewCommandsUsePersistedReviewerPipeline`,
+  `TestArtifactDriftAuditsTheSchedule`) are pre-existing on `origin/main`
+  and unrelated to conversation persistence — confirmed by running the same
+  three tests against `origin/main` directly before this change.
+- Root cause itself was independently re-verified by direct evidence before
+  any code was written: `conversation_history` JSON's mtime (`13:51:26`)
+  confirmed frozen while the live session continued (CDP browser call at
+  `13:55:04`, terminal polling through `14:31`);
+  `appendLiveInputToPersistedChatHistory`
+  (`chat_history_persistence.go:2934-3009`) read directly, confirmed it
+  only appends the human message; the native Claude Code transcript file
+  was located on disk and read directly — 1774 total lines, 155 entries
+  timestamped after `13:51:26` local (36 user, 63 assistant, 37 attachment,
+  16 queue-operation, 3 system), ending `15:19:59` local, proving the
+  "lost" conversation was fully intact and just unread by the restore path.
