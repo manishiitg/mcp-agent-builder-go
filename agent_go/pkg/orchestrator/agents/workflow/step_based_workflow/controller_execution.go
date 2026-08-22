@@ -789,6 +789,13 @@ func (hcpo *StepBasedWorkflowOrchestrator) saveExecutionConversationLogs(
 	}
 	logDir := getExecutionFolderPathForLogs(validationWorkspacePath, stepID, stepPath)
 	filenameBase := fmt.Sprintf("execution-attempt-%d-iteration-%d", retryAttempt, loopIterationCount)
+	// PLAT-176. retryAttempt and loopIterationCount are counters LOCAL to one
+	// dispatch of this step -- both restart at 1 every time the step is
+	// dispatched again -- so a re-dispatched step recomputes this exact path and
+	// the writes below silently destroy the previous dispatch's evidence. Move
+	// the prior files aside first; canonical names keep holding the newest
+	// dispatch, so every existing reader is unaffected.
+	hcpo.archiveSupersededExecutionLogs(saveCtx, logDir, filenameBase)
 	if attemptCompletedAt.IsZero() {
 		attemptCompletedAt = time.Now().UTC()
 	}
@@ -2897,6 +2904,74 @@ func isRoutingStep(step PlanStepInterface) bool {
 func isMessageSequenceStep(step PlanStepInterface) bool {
 	_, ok := step.(*MessageSequencePlanStep)
 	return ok
+}
+
+// executionLogEvidenceSuffixes are the four files saveExecutionConversationLogs
+// writes for one dispatch, all sharing a filenameBase.
+var executionLogEvidenceSuffixes = []string{"", "-conversation", "-timing", "-prompts"}
+
+// archiveSupersededExecutionLogs moves a previous dispatch's execution evidence
+// into a `superseded/` subfolder so the imminent write cannot destroy it.
+//
+// PLAT-176. Execution evidence is named
+// `execution-attempt-{retryAttempt}-iteration-{loopIteration}`, and both counters
+// are local to a single dispatch of a step: retryAttempt comes from this
+// function's own `for retryAttempt := 1; ...` loop, and message_sequence passes a
+// literal 1 with a per-entry turn number. Nothing in the name identifies WHICH
+// dispatch produced it, so a step that runs again -- a route re-entry, an
+// operator re-run, a gate sending work back -- recomputes the identical path and
+// overwrites the earlier run in place.
+//
+// Confirmed live on confida-login (2026-08-22): `execute-browser-and-capture-apis`
+// was dispatched 5 times in one run and every dispatch clobbered the last.
+// Reading one timing file minutes apart returned two different runs entirely
+// (2675000ms/21 tool calls, then 104248ms/14 tool calls). The run's own logs
+// could not show the step had run more than once, so a diagnosis built on them
+// was wrong, and the real history had to be recovered from server_debug.log.
+// That is the cost this prevents: a looping run erases the evidence that it
+// looped, defeating exactly the after-the-fact review meant to catch it.
+//
+// Archived copies go into a subfolder rather than a sibling name on purpose:
+// readers list this directory with an `execution-attempt-*` prefix glob
+// (cmd/server/workflow.go) and parse the counters back out with Sscanf, so a
+// stamped sibling would show up as a phantom extra attempt and misparse. A
+// subfolder is invisible to those globs while staying trivially discoverable.
+//
+// Best-effort by design: this is evidence retention, not correctness. A failure
+// here is logged and execution continues -- losing an archive is bad, failing a
+// step because an archive could not be written would be worse.
+func (hcpo *StepBasedWorkflowOrchestrator) archiveSupersededExecutionLogs(ctx context.Context, logDir, filenameBase string) {
+	primary := fmt.Sprintf("%s/%s.json", logDir, filenameBase)
+	exists, err := hcpo.CheckWorkspaceFileExists(ctx, primary)
+	if err != nil {
+		hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ [LOG_RETENTION] Could not check %s before overwrite: %v (proceeding; a prior dispatch's evidence may be lost)", primary, err))
+		return
+	}
+	if !exists {
+		// First dispatch, the overwhelmingly common case: nothing to preserve.
+		return
+	}
+
+	// Stamp so a third dispatch cannot overwrite the second's archive. Seconds
+	// resolution is sufficient -- two dispatches of the same step cannot both
+	// finish inside one second.
+	stamp := time.Now().UTC().Format("20060102T150405Z")
+	archived := 0
+	for _, suffix := range executionLogEvidenceSuffixes {
+		src := fmt.Sprintf("%s/%s%s.json", logDir, filenameBase, suffix)
+		if ok, checkErr := hcpo.CheckWorkspaceFileExists(ctx, src); checkErr != nil || !ok {
+			continue
+		}
+		dst := fmt.Sprintf("%s/superseded/%s%s-%s.json", logDir, filenameBase, suffix, stamp)
+		if moveErr := hcpo.MoveWorkspaceFile(ctx, src, dst); moveErr != nil {
+			hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ [LOG_RETENTION] Failed to preserve %s before overwrite: %v", src, moveErr))
+			continue
+		}
+		archived++
+	}
+	if archived > 0 {
+		hcpo.GetLogger().Info(fmt.Sprintf("📚 [LOG_RETENTION] Step re-dispatched: preserved %d file(s) from the previous dispatch under %s/superseded/ (stamp %s) instead of overwriting them", archived, logDir, stamp))
+	}
 }
 
 // refreshStepAgentConfigsBeforeExecution re-reads step_config.json and
