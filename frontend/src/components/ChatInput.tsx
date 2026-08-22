@@ -1315,7 +1315,10 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     const waiting = tone === 'needs-input'
     const running = tone === 'running' || tone === 'background'
     return {
-      label: model && model !== provider ? `${provider} · ${model}` : provider,
+      // The composer is user-facing: transport names such as "claude-code"
+      // do not add useful context here. Keep the provider only as a fallback
+      // when the runtime has not reported its model yet.
+      label: model || provider,
       state: waiting ? 'waiting' as const : running ? 'running' as const : 'ready' as const,
       activityLabel: activeSession ? headerStatusLabel(activeSession) : 'idle',
     }

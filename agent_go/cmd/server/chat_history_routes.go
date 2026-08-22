@@ -62,10 +62,11 @@ func listChatHistoryHandler(api *StreamingAPI) http.HandlerFunc {
 		}
 
 		workspacePath := r.URL.Query().Get("workspace_path")
+		kind := r.URL.Query().Get("kind")
 
-		sessions, err := ListChatHistorySessions(userID, limit, offset, workspacePath)
+		sessions, err := ListChatHistorySessionsByKind(userID, kind, limit, offset, workspacePath)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 

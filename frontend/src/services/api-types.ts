@@ -1513,6 +1513,8 @@ export interface ChatHistorySession {
   preview_messages?: ChatHistoryPreviewMessage[];
 }
 
+export type ChatHistorySessionKind = 'chat' | 'schedule' | 'bot'
+
 export interface ChatHistoryCleanupResult {
   deleted_count: number;
   deleted_paths: string[];
@@ -2847,6 +2849,10 @@ export interface ScheduledJob {
   workflow_label?: string
   trigger_payload?: Record<string, unknown>
   group_names?: string[]  // undefined/empty = all groups
+  // Deterministic route choices for a workflow schedule. The scheduler passes
+  // these to the canonical full-workflow run; they are useful schedule context
+  // in the history UI too.
+  route_selections?: Record<string, string>
   mode?: 'workshop' | 'multi-agent'
   messages?: string[]  // predefined messages for workflow workshop schedules
   workshop_mode?: 'run' | 'optimizer'  // workflow workshop schedule mode (default: run)

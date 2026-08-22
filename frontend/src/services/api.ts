@@ -868,9 +868,10 @@ export const agentApi = {
     return response.data
   },
 
-  listChatHistorySessions: async (limit = 80, offset = 0, workspacePath?: string): Promise<{ sessions: ChatHistorySession[] }> => {
+  listChatHistorySessions: async (limit = 80, offset = 0, workspacePath?: string, kind?: import('./api-types').ChatHistorySessionKind): Promise<{ sessions: ChatHistorySession[] }> => {
     const params: Record<string, string | number> = { limit, offset }
     if (workspacePath) params.workspace_path = workspacePath
+    if (kind) params.kind = kind
     const response = await api.get('/api/chat-history/sessions', { params })
     return response.data
   },

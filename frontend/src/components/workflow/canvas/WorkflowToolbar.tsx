@@ -24,6 +24,7 @@ import {
   Tablet,
   Laptop,
   MoreHorizontal,
+  Pin,
   PanelRightClose,
   SlidersHorizontal,
   X,
@@ -79,31 +80,32 @@ const WORKFLOW_SCHEDULE_TOOLBAR_LIMIT = 10_000
 
 type WorkspaceView = 'flow' | 'report' | 'files' | 'costs' | 'execution-logs' | 'learnings' | 'knowledgebase' | 'database'
 
-const DEFAULT_QUICK_WORKSPACE_VIEWS: WorkspaceView[] = ['report', 'flow', 'files']
+// These remain stable until the user explicitly pins another destination.
+const DEFAULT_QUICK_WORKSPACE_VIEWS: WorkspaceView[] = ['report', 'costs', 'flow']
 const WORKSPACE_VIEW_IDS = new Set<WorkspaceView>([
   'report', 'flow', 'files', 'costs', 'execution-logs', 'learnings', 'knowledgebase', 'database',
 ])
 
-function quickWorkspaceViewsStorageKey(workspacePath?: string | null): string {
-  return `agentworks:quick-workspace-views:${normalizeWorkspacePath(workspacePath) || 'default'}`
+function pinnedWorkspaceViewsStorageKey(workspacePath?: string | null): string {
+  return `agentworks:pinned-workspace-views:${normalizeWorkspacePath(workspacePath) || 'default'}`
 }
 
-function readQuickWorkspaceViews(workspacePath?: string | null): WorkspaceView[] {
-  if (typeof window === 'undefined') return DEFAULT_QUICK_WORKSPACE_VIEWS
+function readPinnedWorkspaceViews(workspacePath?: string | null): WorkspaceView[] {
+  if (typeof window === 'undefined') return []
   try {
-    const parsed = JSON.parse(window.localStorage.getItem(quickWorkspaceViewsStorageKey(workspacePath)) || '[]')
-    if (!Array.isArray(parsed)) return DEFAULT_QUICK_WORKSPACE_VIEWS
+    const parsed = JSON.parse(window.localStorage.getItem(pinnedWorkspaceViewsStorageKey(workspacePath)) || '[]')
+    if (!Array.isArray(parsed)) return []
     const views = parsed.filter((value): value is WorkspaceView => WORKSPACE_VIEW_IDS.has(value))
-    return Array.from(new Set(views)).slice(0, 3)
+    return Array.from(new Set(views)).filter(view => !DEFAULT_QUICK_WORKSPACE_VIEWS.includes(view))
   } catch {
-    return DEFAULT_QUICK_WORKSPACE_VIEWS
+    return []
   }
 }
 
-function writeQuickWorkspaceViews(workspacePath: string | null | undefined, views: WorkspaceView[]): void {
+function writePinnedWorkspaceViews(workspacePath: string | null | undefined, views: WorkspaceView[]): void {
   if (typeof window === 'undefined') return
   try {
-    window.localStorage.setItem(quickWorkspaceViewsStorageKey(workspacePath), JSON.stringify(views.slice(0, 3)))
+    window.localStorage.setItem(pinnedWorkspaceViewsStorageKey(workspacePath), JSON.stringify(views.filter(view => !DEFAULT_QUICK_WORKSPACE_VIEWS.includes(view))))
   } catch {
     // A blocked localStorage must not make workspace navigation unusable.
   }
@@ -248,25 +250,49 @@ interface CompactToolbarMenuItemProps {
   label: string
   detail?: string
   active?: boolean
+  trailingAction?: {
+    label: string
+    icon: React.ReactNode
+    onClick: () => void
+    active?: boolean
+  }
   'data-testid'?: string
   onClick: () => void
 }
 
-function CompactToolbarMenuItem({ icon, label, detail, active = false, onClick, 'data-testid': dataTestId }: CompactToolbarMenuItemProps) {
+function CompactToolbarMenuItem({ icon, label, detail, active = false, trailingAction, onClick, 'data-testid': dataTestId }: CompactToolbarMenuItemProps) {
   return (
-    <button
-      type="button"
-      data-testid={dataTestId}
-      role="menuitem"
-      onClick={onClick}
-      className={`flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-xs transition-colors ${active ? 'bg-accent text-accent-foreground' : 'text-foreground hover:bg-accent hover:text-accent-foreground'}`}
-    >
-      <span className="flex h-5 w-5 shrink-0 items-center justify-center text-muted-foreground">{icon}</span>
-      <span className="min-w-0 flex-1">
-        <span className="block font-medium">{label}</span>
-        {detail && <span className="mt-0.5 block truncate text-[10px] text-muted-foreground">{detail}</span>}
-      </span>
-    </button>
+    <div className={`flex items-center rounded-md ${active ? 'bg-accent text-accent-foreground' : 'text-foreground hover:bg-accent hover:text-accent-foreground'}`}>
+      <button
+        type="button"
+        data-testid={dataTestId}
+        role="menuitem"
+        onClick={onClick}
+        className="flex min-w-0 flex-1 items-center gap-2.5 px-2.5 py-2 text-left text-xs"
+      >
+        <span className="flex h-5 w-5 shrink-0 items-center justify-center text-muted-foreground">{icon}</span>
+        <span className="min-w-0 flex-1">
+          <span className="block font-medium">{label}</span>
+          {detail && <span className="mt-0.5 block truncate text-[10px] text-muted-foreground">{detail}</span>}
+        </span>
+      </button>
+      {trailingAction && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={trailingAction.onClick}
+              aria-label={trailingAction.label}
+              aria-pressed={trailingAction.active}
+              className={`mr-1.5 flex h-6 w-6 shrink-0 items-center justify-center rounded transition-colors ${trailingAction.active ? 'text-primary hover:bg-primary/10' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`}
+            >
+              {trailingAction.icon}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="left"><p>{trailingAction.label}</p></TooltipContent>
+        </Tooltip>
+      )}
+    </div>
   )
 }
 
@@ -354,7 +380,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
   const setCanvasViewMode = useWorkflowStore(state => state.setCanvasViewMode)
   const setShowWorkspacePane = useWorkflowStore(state => state.setShowWorkspacePane)
   const [previewDevice, setPreviewDeviceState] = useState<ReportPreviewDevice>(() => readReportPreviewPreference(workspacePath))
-  const [recentWorkspaceViews, setRecentWorkspaceViews] = useState<WorkspaceView[]>(() => readQuickWorkspaceViews(workspacePath))
+  const [pinnedWorkspaceViews, setPinnedWorkspaceViews] = useState<WorkspaceView[]>(() => readPinnedWorkspaceViews(workspacePath))
 
   useEffect(() => {
     const sync = () => setPreviewDeviceState(readReportPreviewPreference(workspacePath))
@@ -368,7 +394,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
   }, [workspacePath])
 
   useEffect(() => {
-    setRecentWorkspaceViews(readQuickWorkspaceViews(workspacePath))
+    setPinnedWorkspaceViews(readPinnedWorkspaceViews(workspacePath))
   }, [workspacePath])
 
   const openWorkspaceView = useCallback((view: WorkspaceView) => {
@@ -409,22 +435,21 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
   const quickWorkspaceViews = useMemo(() => {
     const available = new Set<WorkspaceView>(workspaceViewDefinitions.map(([view]) => view))
     const candidates: WorkspaceView[] = [
-      ...recentWorkspaceViews,
       ...DEFAULT_QUICK_WORKSPACE_VIEWS,
-      ...workspaceViewDefinitions.map(([view]) => view),
+      ...pinnedWorkspaceViews,
     ]
-    return Array.from(new Set(candidates)).filter(view => available.has(view)).slice(0, 3)
-  }, [recentWorkspaceViews, workspaceViewDefinitions])
+    return Array.from(new Set(candidates)).filter(view => available.has(view))
+  }, [pinnedWorkspaceViews, workspaceViewDefinitions])
 
-  useEffect(() => {
-    if (!workspacePath || !workspaceViewDefinitions.some(([view]) => view === activeWorkspaceView)) return
-    setRecentWorkspaceViews(current => {
-      if (current[0] === activeWorkspaceView && current.length <= 3) return current
-      const next = [activeWorkspaceView, ...current.filter(view => view !== activeWorkspaceView)].slice(0, 3)
-      writeQuickWorkspaceViews(workspacePath, next)
+  const togglePinnedWorkspaceView = useCallback((view: WorkspaceView) => {
+    setPinnedWorkspaceViews(current => {
+      const next = current.includes(view)
+        ? current.filter(candidate => candidate !== view)
+        : [...current, view]
+      writePinnedWorkspaceViews(workspacePath, next)
       return next
     })
-  }, [activeWorkspaceView, workspacePath, workspaceViewDefinitions])
+  }, [workspacePath])
 
   // PLAT-158: the enabled dedicated review schedule is the only recurring
   // Pulse switch. Ordinary workflow runs never launch Gate/Review+Fix inline.
@@ -911,13 +936,20 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                   {(close) => (
                     <>
                       {workspaceViewDefinitions
-                        .filter(([view]) => !quickWorkspaceViews.includes(view))
                         .map(([view, Icon, label]) => (
                         <CompactToolbarMenuItem
                           key={view}
                           icon={<Icon className="h-3.5 w-3.5" />}
                           label={label}
                           active={workflowWorkspaceView === view}
+                          trailingAction={DEFAULT_QUICK_WORKSPACE_VIEWS.includes(view)
+                            ? undefined
+                            : {
+                                label: pinnedWorkspaceViews.includes(view) ? 'Unpin from shortcuts' : 'Pin to shortcuts',
+                                icon: <Pin className={`h-3.5 w-3.5 ${pinnedWorkspaceViews.includes(view) ? 'fill-current' : ''}`} />,
+                                active: pinnedWorkspaceViews.includes(view),
+                                onClick: () => togglePinnedWorkspaceView(view),
+                              }}
                           onClick={() => {
                             openWorkspaceView(view)
                             close()

@@ -934,6 +934,44 @@ func TestListWorkflowChatHistoryFindsConversationMissingFromCompleteIndex(t *tes
 	}
 }
 
+func TestListChatHistorySessionsByKindFiltersBeforePagination(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+
+	workspacePath := "Workflow/kind-filter"
+	convDir := filepath.Join(root, filepath.FromSlash(workspacePath), "builder", "conversation", "2026-08-22")
+	if err := os.MkdirAll(convDir, 0o755); err != nil {
+		t.Fatalf("mkdir conversation dir: %v", err)
+	}
+	writeConversation := func(sessionID string, modifiedAt time.Time) {
+		t.Helper()
+		conversation := fmt.Sprintf(`{"session_id":%q,"conversation_history":[{"role":"human","parts":[{"type":"text","text":"%s"}]}]}`, sessionID, sessionID)
+		filePath := filepath.Join(convDir, "session-"+sessionID+"-conversation.json")
+		if err := os.WriteFile(filePath, []byte(conversation), 0o600); err != nil {
+			t.Fatalf("write %s: %v", sessionID, err)
+		}
+		if err := os.Chtimes(filePath, modifiedAt, modifiedAt); err != nil {
+			t.Fatalf("set mtime for %s: %v", sessionID, err)
+		}
+	}
+
+	base := time.Date(2026, time.August, 22, 10, 0, 0, 0, time.UTC)
+	// These newer schedule transcripts fill a mixed first page. The ordinary
+	// chat is deliberately older, reproducing the empty Recent tab regression.
+	for i := 0; i < 30; i++ {
+		writeConversation(fmt.Sprintf("schedule-cron--job_%02d", i), base.Add(time.Duration(i)*time.Minute))
+	}
+	writeConversation("ordinary-builder-chat", base.Add(-time.Hour))
+
+	sessions, err := ListChatHistorySessionsByKind("default", "chat", 25, 0, workspacePath)
+	if err != nil {
+		t.Fatalf("list chat sessions by kind: %v", err)
+	}
+	if len(sessions) != 1 || sessions[0].SessionID != "ordinary-builder-chat" {
+		t.Fatalf("chat-kind page = %#v, want ordinary builder chat", sessions)
+	}
+}
+
 func TestPersistChatConversationUpdatesMetadataIndex(t *testing.T) {
 	workspace := &mockWorkspaceAPI{files: map[string]string{}}
 	server := httptest.NewServer(workspace)

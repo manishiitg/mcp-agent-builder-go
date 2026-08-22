@@ -866,6 +866,22 @@ func trimChatHistoryUIEvents(uiEvents []internalevents.Event) []internalevents.E
 
 // ListChatHistorySessions returns persisted session metadata for a user, newest first.
 func ListChatHistorySessions(userID string, limit, offset int, workspacePath string) ([]ChatHistorySession, error) {
+	return listChatHistorySessions(userID, limit, offset, workspacePath, "")
+}
+
+// ListChatHistorySessionsByKind returns a page from one visible history kind.
+// The kind filter must be applied before pagination: a busy schedule can write
+// many newer transcripts than an ordinary builder chat, and paging the mixed
+// list first made the Recent tab incorrectly appear empty.
+func ListChatHistorySessionsByKind(userID, kind string, limit, offset int, workspacePath string) ([]ChatHistorySession, error) {
+	kind = strings.ToLower(strings.TrimSpace(kind))
+	if kind != "" && kind != "chat" && kind != "schedule" && kind != "bot" {
+		return nil, fmt.Errorf("unsupported chat history kind %q", kind)
+	}
+	return listChatHistorySessions(userID, limit, offset, workspacePath, kind)
+}
+
+func listChatHistorySessions(userID string, limit, offset int, workspacePath, kind string) ([]ChatHistorySession, error) {
 	if userID == "" {
 		userID = "default"
 	}
@@ -873,7 +889,7 @@ func ListChatHistorySessions(userID string, limit, offset int, workspacePath str
 	workspacePath = normalizeChatHistoryWorkspacePath(workspacePath)
 
 	if workspacePath != "" {
-		if sessions, ok, err := listWorkflowScopedChatHistorySessionsFromDisk(userID, root, workspacePath, limit, offset); ok || err != nil {
+		if sessions, ok, err := listWorkflowScopedChatHistorySessionsFromDisk(userID, root, workspacePath, limit, offset, kind); ok || err != nil {
 			return sessions, err
 		}
 	}
@@ -936,6 +952,15 @@ func ListChatHistorySessions(userID string, limit, offset int, workspacePath str
 		sessions = sessions[:limit]
 	}
 
+	if kind != "" {
+		filtered := sessions[:0]
+		for _, session := range sessions {
+			if chatHistorySessionMatchesKind(session.SessionID, kind) {
+				filtered = append(filtered, session)
+			}
+		}
+		sessions = filtered
+	}
 	return sessions, nil
 }
 
@@ -1109,7 +1134,7 @@ func chatHistorySessionIDFromWorkspacePath(root, convPath string) (string, bool)
 	return "", false
 }
 
-func listWorkflowScopedChatHistorySessionsFromDisk(userID, chatHistoryRootPath, workflowPath string, limit, offset int) ([]ChatHistorySession, bool, error) {
+func listWorkflowScopedChatHistorySessionsFromDisk(userID, chatHistoryRootPath, workflowPath string, limit, offset int, kind string) ([]ChatHistorySession, bool, error) {
 	all := make([]ChatHistorySession, 0)
 
 	// Workflow builder files are the most precise source for /resume inside a
@@ -1121,7 +1146,7 @@ func listWorkflowScopedChatHistorySessionsFromDisk(userID, chatHistoryRootPath, 
 	if limit > 0 {
 		readBudget = limit + offset
 	}
-	if builderSessions, ok := listWorkflowBuilderHistoryFromDisk(userID, workflowPath, readBudget); ok {
+	if builderSessions, ok := listWorkflowBuilderHistoryFromDisk(userID, workflowPath, readBudget, kind); ok {
 		all = append(all, builderSessions...)
 	}
 
@@ -1133,7 +1158,7 @@ func listWorkflowScopedChatHistorySessionsFromDisk(userID, chatHistoryRootPath, 
 // part — preview building): we stat every file (cheap) and dedupe to the latest
 // display row by filename+mtime WITHOUT reading, sort by mtime, then read only
 // the top readBudget. readBudget<=0 reads all (unlimited list).
-func listWorkflowBuilderHistoryFromDisk(userID, workflowPath string, readBudget int) ([]ChatHistorySession, bool) {
+func listWorkflowBuilderHistoryFromDisk(userID, workflowPath string, readBudget int, kind string) ([]ChatHistorySession, bool) {
 	workflowDir, ok := resolveLocalWorkflowDir(workflowPath)
 	if !ok {
 		return nil, false
@@ -1166,6 +1191,9 @@ func listWorkflowBuilderHistoryFromDisk(userID, workflowPath string, readBudget 
 			continue
 		}
 		sessionID := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(convPath), "session-"), "-conversation.json")
+		if !chatHistorySessionMatchesKind(sessionID, kind) {
+			continue
+		}
 		dedupeKey := workflowBuilderHistoryDisplayKey(sessionID, scheduleIDBySessionID)
 		workspaceConversationPath := workflowRelativeConversationPath(workflowPath, workflowDir, convPath)
 		if cur, ok := latest[dedupeKey]; !ok || info.ModTime().After(cur.modTime) {
@@ -1220,6 +1248,24 @@ func listWorkflowBuilderHistoryFromDisk(userID, workflowPath string, readBudget 
 		return paginateChatHistorySessions(sessions, readBudget, 0), true
 	}
 	return sessions, true
+}
+
+func chatHistorySessionMatchesKind(sessionID, kind string) bool {
+	if kind == "" {
+		return true
+	}
+	isSchedule := strings.HasPrefix(sessionID, "schedule-") || strings.HasPrefix(sessionID, "sched_")
+	isBot := strings.HasPrefix(sessionID, "bot-")
+	switch kind {
+	case "schedule":
+		return isSchedule
+	case "bot":
+		return isBot
+	case "chat":
+		return !isSchedule && !isBot
+	default:
+		return false
+	}
 }
 
 func readLocalChatHistoryIndex(indexPath string) (chatHistoryIndex, bool) {

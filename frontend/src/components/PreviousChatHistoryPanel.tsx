@@ -178,6 +178,20 @@ const formatDuration = (durationMs?: number): string | undefined => {
   return minutes ? `${hours}h ${minutes}m` : `${hours}h`
 }
 
+const scheduleRouteSummary = (routeSelections?: Record<string, string>): string | undefined => {
+  const selectedRoutes = Object.values(routeSelections || {})
+    .map(route => route.trim())
+    .filter(Boolean)
+  if (selectedRoutes.length === 0) return undefined
+  return selectedRoutes.join(' · ')
+}
+
+const scheduleLastRunSummary = (job: ScheduledJob): string | undefined => {
+  if (!job.last_run_at) return undefined
+  const status = job.last_status?.replace(/_/g, ' ').trim()
+  return status ? `last ${formatChatTime(job.last_run_at)} · ${status}` : `last ${formatChatTime(job.last_run_at)}`
+}
+
 const sameWorkspace = (left?: string, right?: string): boolean => {
   const normalize = (value?: string) => (value || '').trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
   return Boolean(normalize(left) && normalize(left) === normalize(right))
@@ -495,10 +509,16 @@ export const PreviousChatHistoryPanel: React.FC<PreviousChatHistoryPanelProps> =
     setLoadingExpandedSessionIds(new Set())
     setIsLoading(true)
 
-    agentApi.listChatHistorySessions(FETCH_LIMIT, 0, workspacePath)
-      .then(response => {
+    // Fetch ordinary chats separately. A schedule-heavy workflow can have many
+    // newer schedule transcripts, so a mixed newest-N page would otherwise
+    // hide every older chat before the Recent filter gets a chance to run.
+    Promise.all([
+      agentApi.listChatHistorySessions(FETCH_LIMIT, 0, workspacePath),
+      agentApi.listChatHistorySessions(FETCH_LIMIT, 0, workspacePath, 'chat'),
+    ])
+      .then(([allResponse, chatResponse]) => {
         if (cancelled) return
-        setSessions(mergeSessions([], response.sessions || []))
+        setSessions(mergeSessions(allResponse.sessions || [], chatResponse.sessions || []))
       })
       .catch(() => {
         if (cancelled) return
@@ -793,8 +813,11 @@ export const PreviousChatHistoryPanel: React.FC<PreviousChatHistoryPanelProps> =
     try {
       const response = await agentApi.cleanupChatHistorySessions(olderThanDays, workspacePath)
       const deletedCount = response.result?.deleted_count ?? 0
-      const refreshed = await agentApi.listChatHistorySessions(FETCH_LIMIT, 0, workspacePath)
-      setSessions(mergeSessions([], refreshed.sessions || []))
+      const [allResponse, chatResponse] = await Promise.all([
+        agentApi.listChatHistorySessions(FETCH_LIMIT, 0, workspacePath),
+        agentApi.listChatHistorySessions(FETCH_LIMIT, 0, workspacePath, 'chat'),
+      ])
+      setSessions(mergeSessions(allResponse.sessions || [], chatResponse.sessions || []))
       setExpandedSessionIds(new Set())
       setExpandedMessagesBySession({})
       expandedMessagesRef.current = {}
@@ -910,6 +933,8 @@ export const PreviousChatHistoryPanel: React.FC<PreviousChatHistoryPanelProps> =
                   const runs = scheduleRunsByJob[job.id] || []
                   const recordedRunCount = scheduleRunTotalsByJob[job.id] ?? job.run_count ?? 0
                   const missedCount = job.missed_run_count || 0
+                  const routeSummary = scheduleRouteSummary(job.route_selections)
+                  const lastRunSummary = scheduleLastRunSummary(job)
 
                   return (
                     <div key={job.id} className="group px-3 py-3 transition-colors hover:bg-muted/20">
@@ -921,7 +946,14 @@ export const PreviousChatHistoryPanel: React.FC<PreviousChatHistoryPanelProps> =
                           </div>
                           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
                             <span>{job.enabled ? 'Enabled' : 'Disabled'}</span>
+                            {!isPulseSchedule && (
+                              <>
+                                <span>group {job.group_names?.length ? job.group_names.join(', ') : 'all'}</span>
+                                {routeSummary && <span>route {routeSummary}</span>}
+                              </>
+                            )}
                             <span>{recordedRunCount} recorded execution{recordedRunCount === 1 ? '' : 's'}</span>
+                            {lastRunSummary && <span>{lastRunSummary}</span>}
                             {job.next_run_at && <span>next {formatChatTime(job.next_run_at)}</span>}
                           </div>
                           {missedCount > 0 && (
