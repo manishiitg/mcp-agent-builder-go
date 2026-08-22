@@ -21,6 +21,25 @@ func TestScheduledWorkshopMessagesPassesDeclaredRouteSelections(t *testing.T) {
 	}
 }
 
+func TestScheduledWorkshopMessagesRunsRouteBeforeCustomFollowUp(t *testing.T) {
+	got := scheduledWorkshopMessages(&ScheduleContext{Schedule: WorkflowSchedule{
+		GroupNames:      []string{"default"},
+		RouteSelections: map[string]string{"step-router": "execution"},
+		Messages:        []string{"After the selected work completes, report the result."},
+	}})
+	if len(got) != 2 {
+		t.Fatalf("messages = %d, want route then follow-up: %v", len(got), got)
+	}
+	for _, want := range []string{"run_full_workflow", `"step-router":"execution"`} {
+		if !strings.Contains(got[0], want) {
+			t.Fatalf("route trigger missing %q: %s", want, got[0])
+		}
+	}
+	if got[1] != "After the selected work completes, report the result." {
+		t.Fatalf("follow-up = %q", got[1])
+	}
+}
+
 func TestValidateScheduleMessagesRequiresReasonForInlineProcedure(t *testing.T) {
 	procedure := []string{"Run sqlite3 db/db.sqlite SELECT * FROM queue"}
 	if err := validateScheduleMessages(procedure, ""); err == nil {
@@ -50,20 +69,23 @@ func TestValidateScheduleMessagesRequiresReasonForSequentialConversation(t *test
 
 func TestWorkflowVersionUpgradePlanAddsScheduledRoutesAfterDirectReports(t *testing.T) {
 	plan := workflowVersionUpgradePlan(&WorkflowManifest{Version: workflowContractDirectHTMLReportsVersion})
-	if len(plan) != 3 || plan[0].label != "upgrade-schedule-execution-model" || plan[0].to != workflowContractScheduleExecutionModelVersion {
+	if len(plan) != 4 || plan[0].label != "upgrade-schedule-execution-model" || plan[0].to != workflowContractScheduleExecutionModelVersion {
 		t.Fatalf("unexpected upgrade plan: %+v", plan)
 	}
 	if plan[1].label != "upgrade-dedicated-pulse-schedule" || plan[1].to != workflowContractDedicatedPulseScheduleVersion {
 		t.Fatalf("unexpected dedicated Pulse step: %+v", plan[1])
 	}
-	if plan[2].label != "upgrade-schedule-prompt-contract" || plan[2].to != WorkflowContractCurrentVersion {
-		t.Fatalf("unexpected final upgrade step: %+v", plan[2])
+	if plan[2].label != "upgrade-schedule-prompt-contract" || plan[2].to != workflowContractSchedulePromptContractVersion {
+		t.Fatalf("unexpected schedule prompt step: %+v", plan[2])
+	}
+	if plan[3].label != "upgrade-schedule-finalizer-ownership" || plan[3].to != WorkflowContractCurrentVersion {
+		t.Fatalf("unexpected final upgrade step: %+v", plan[3])
 	}
 }
 
 func TestWorkflowVersionUpgradePlanReauditsEarlierRouteOnlyContract(t *testing.T) {
 	plan := workflowVersionUpgradePlan(&WorkflowManifest{Version: workflowContractScheduledRouteVersion})
-	if len(plan) != 3 || plan[0].label != "upgrade-schedule-execution-model" || plan[0].to != workflowContractScheduleExecutionModelVersion {
+	if len(plan) != 4 || plan[0].label != "upgrade-schedule-execution-model" || plan[0].to != workflowContractScheduleExecutionModelVersion {
 		t.Fatalf("1.0.24 workflow did not receive choice-aware schedule audit: %+v", plan)
 	}
 	for _, want := range []string{"EQUIVALENT ROUTE EXISTS", "DURABLE WORKFLOW BEHAVIOR", "GENUINELY SCHEDULE-SPECIFIC CONVERSATION", "direct_messages_reason"} {
@@ -74,8 +96,11 @@ func TestWorkflowVersionUpgradePlanReauditsEarlierRouteOnlyContract(t *testing.T
 	if plan[1].label != "upgrade-dedicated-pulse-schedule" || plan[1].to != workflowContractDedicatedPulseScheduleVersion {
 		t.Fatalf("unexpected dedicated Pulse step: %+v", plan[1])
 	}
-	if plan[2].label != "upgrade-schedule-prompt-contract" || plan[2].to != WorkflowContractCurrentVersion {
-		t.Fatalf("unexpected final upgrade step: %+v", plan[2])
+	if plan[2].label != "upgrade-schedule-prompt-contract" || plan[2].to != workflowContractSchedulePromptContractVersion {
+		t.Fatalf("unexpected schedule prompt step: %+v", plan[2])
+	}
+	if plan[3].label != "upgrade-schedule-finalizer-ownership" || plan[3].to != WorkflowContractCurrentVersion {
+		t.Fatalf("unexpected final upgrade step: %+v", plan[3])
 	}
 }
 
@@ -103,21 +128,24 @@ func TestUpgradeDedicatedPulseSchedulePromptShape(t *testing.T) {
 
 func TestVersion126ReceivesDedicatedPulseScheduleMigration(t *testing.T) {
 	plan := workflowVersionUpgradePlan(&WorkflowManifest{Version: workflowContractPeriodicPulseReviewVersion})
-	if len(plan) != 2 {
-		t.Fatalf("1.0.26 upgrade plan = %+v, want dedicated Pulse then schedule prompt migrations", plan)
+	if len(plan) != 3 {
+		t.Fatalf("1.0.26 upgrade plan = %+v, want dedicated Pulse, schedule prompt, then finalizer ownership migrations", plan)
 	}
 	if plan[0].label != "upgrade-dedicated-pulse-schedule" || plan[0].to != workflowContractDedicatedPulseScheduleVersion {
 		t.Fatalf("1.0.26 upgrade = %+v, want dedicated Pulse schedule migration", plan[0])
 	}
-	if plan[1].label != "upgrade-schedule-prompt-contract" || plan[1].to != WorkflowContractCurrentVersion {
+	if plan[1].label != "upgrade-schedule-prompt-contract" || plan[1].to != workflowContractSchedulePromptContractVersion {
 		t.Fatalf("1.0.26 final upgrade = %+v, want schedule prompt migration", plan[1])
+	}
+	if plan[2].label != "upgrade-schedule-finalizer-ownership" || plan[2].to != WorkflowContractCurrentVersion {
+		t.Fatalf("1.0.26 final upgrade = %+v, want finalizer ownership migration", plan[2])
 	}
 }
 
 func TestVersion127ReceivesSchedulePromptContractMigration(t *testing.T) {
 	plan := workflowVersionUpgradePlan(&WorkflowManifest{Version: workflowContractDedicatedPulseScheduleVersion})
-	if len(plan) != 1 || plan[0].label != "upgrade-schedule-prompt-contract" || plan[0].to != WorkflowContractCurrentVersion {
-		t.Fatalf("1.0.27 upgrade plan = %+v, want the schedule prompt migration", plan)
+	if len(plan) != 2 || plan[0].label != "upgrade-schedule-prompt-contract" || plan[0].to != workflowContractSchedulePromptContractVersion {
+		t.Fatalf("1.0.27 upgrade plan = %+v, want schedule prompt then finalizer ownership migration", plan)
 	}
 	for _, want := range []string{
 		"dated incidents",
@@ -127,6 +155,22 @@ func TestVersion127ReceivesSchedulePromptContractMigration(t *testing.T) {
 	} {
 		if !strings.Contains(plan[0].query, want) {
 			t.Errorf("schedule prompt migration missing %q", want)
+		}
+	}
+	if plan[1].label != "upgrade-schedule-finalizer-ownership" || plan[1].to != WorkflowContractCurrentVersion {
+		t.Fatalf("1.0.27 final upgrade = %+v, want finalizer ownership migration", plan[1])
+	}
+}
+
+func TestVersion128ReceivesFinalizerOwnershipMigration(t *testing.T) {
+	plan := workflowVersionUpgradePlan(&WorkflowManifest{Version: workflowContractSchedulePromptContractVersion})
+	if len(plan) != 1 || plan[0].label != "upgrade-schedule-finalizer-ownership" || plan[0].to != WorkflowContractCurrentVersion {
+		t.Fatalf("1.0.28 upgrade plan = %+v, want finalizer ownership migration", plan)
+	}
+	normalized := strings.Join(strings.Fields(plan[0].query), " ")
+	for _, want := range []string{"saved route selection before any retained schedule message", "The platform owns normal run finalization", `set_workflow_contract_version(version="1.0.29")`} {
+		if !strings.Contains(normalized, want) {
+			t.Errorf("migration prompt missing %q", want)
 		}
 	}
 }
@@ -141,12 +185,13 @@ func TestVersion127ReceivesSchedulePromptContractMigration(t *testing.T) {
 func TestUpgradeQueriesNeverNamePlatTickets(t *testing.T) {
 	platTicket := regexp.MustCompile(`PLAT-\d+`)
 	queries := map[string]string{
-		"upgradeMessageSequenceCode":     upgradeMessageSequenceCode,
-		"upgradeCurrentArtifactContract": upgradeCurrentArtifactContract,
-		"upgradeLearningsLockAudit":      upgradeLearningsLockAudit,
-		"upgradeDirectHTMLReports":       upgradeDirectHTMLReports,
-		"upgradeDedicatedPulseSchedule":  upgradeDedicatedPulseSchedule,
-		"upgradeSchedulePromptContract":  upgradeSchedulePromptContract,
+		"upgradeMessageSequenceCode":        upgradeMessageSequenceCode,
+		"upgradeCurrentArtifactContract":    upgradeCurrentArtifactContract,
+		"upgradeLearningsLockAudit":         upgradeLearningsLockAudit,
+		"upgradeDirectHTMLReports":          upgradeDirectHTMLReports,
+		"upgradeDedicatedPulseSchedule":     upgradeDedicatedPulseSchedule,
+		"upgradeSchedulePromptContract":     upgradeSchedulePromptContract,
+		"upgradeScheduleFinalizerOwnership": upgradeScheduleFinalizerOwnership,
 	}
 	for name, query := range queries {
 		if match := platTicket.FindString(query); match != "" {

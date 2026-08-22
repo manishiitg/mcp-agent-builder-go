@@ -47,6 +47,7 @@ func workflowContractVersionRank(version string) (int, bool) {
 		workflowContractPeriodicPulseReviewVersion,
 		workflowContractDedicatedPulseScheduleVersion,
 		workflowContractSchedulePromptContractVersion,
+		workflowContractFinalizerOwnedScheduleVersion,
 	}
 	for rank, candidate := range known {
 		if version == candidate {
@@ -212,6 +213,36 @@ public action ambiguous, preserve that schedule unchanged, report the blocker,
 and do not stamp. Otherwise call
 set_workflow_contract_version(version="1.0.28") and stop.`
 
+const upgradeScheduleFinalizerOwnership = `WORKFLOW CONTRACT UPGRADE: SCHEDULE ROUTE AND FINALIZER OWNERSHIP.
+
+Do only this one-time schedule migration. Do not run, pause, delete, or create
+any schedule.
+
+The scheduler always executes a schedule's saved route selection before any
+retained schedule message. For a route-backed schedule, route_selections own
+what workflow work runs; messages are optional follow-ups only.
+
+The platform owns normal run finalization: backup, execution-report publish,
+and run notification. The enabled pulse_review_only schedule owns Pulse Gate,
+Review, and Fixer. Remove a normal schedule message when it merely tells the
+agent to do any of the following after selected work completes: routine
+evaluation, generic completion reporting, backup/status.json updates, Git
+commit/push, report publishing, notification, or Pulse review/fixing. These
+are platform lifecycle duties and must not be copied into schedule prose.
+
+Preserve genuine schedule-specific work and its safety boundary. In particular,
+do not delete a direct schedule message just because it mentions evaluation or
+backup if its primary purpose is a distinct time-bound procedure that cannot be
+expressed by the selected route (for example a market-close-only operation).
+Remove only the copied generic lifecycle tail, leaving the special procedure
+concise and truthful. A route-backed schedule whose only message is that copied
+lifecycle tail must end with messages empty and no direct_messages_reason.
+
+Read every schedule, update only what this ownership rule requires, re-read
+workflow.json, and confirm all saved route selections, groups, timing, enabled
+states, public-action boundaries, and backup configuration are unchanged. Then
+call set_workflow_contract_version(version="1.0.29") and stop.`
+
 const upgradeScheduledRoutes = `WORKFLOW CONTRACT UPGRADE: SCHEDULE EXECUTION MODEL (PLAT-086).
 
 Workflow schedules support two valid execution models. A route-based schedule
@@ -292,6 +323,9 @@ func workflowVersionUpgradePlan(manifest *WorkflowManifest) []workflowVersionUpg
 	}
 	if rank < 27 {
 		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractSchedulePromptContractVersion, label: "upgrade-schedule-prompt-contract", query: upgradeSchedulePromptContract})
+	}
+	if rank < 28 {
+		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractFinalizerOwnedScheduleVersion, label: "upgrade-schedule-finalizer-ownership", query: upgradeScheduleFinalizerOwnership})
 	}
 	// Attached here rather than at the call site so the turn text is identical
 	// wherever it is built. The version pair used to be added only on the Pulse

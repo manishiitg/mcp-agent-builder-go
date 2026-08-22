@@ -3025,15 +3025,28 @@ func scheduledWorkshopMessages(sctx *ScheduleContext) []string {
 		return nil
 	}
 	messages := compactScheduleMessages(sctx.Schedule.Messages)
-	if len(messages) == 0 && !sctx.PulseOnly {
+	if sctx.PulseOnly {
+		return messages
+	}
+
+	// A saved route is executable configuration, not optional prose.  Older
+	// schedules could carry both route_selections and a follow-up message such
+	// as "after the selected work completes...".  Returning only that message
+	// silently discarded the selected route and left the builder to guess what
+	// (if anything) it should run.  Always put the canonical route turn first;
+	// retained schedule-specific messages are follow-ups, never replacements.
+	if len(sctx.Schedule.RouteSelections) > 0 {
+		groups, _ := json.Marshal(sctx.Schedule.GroupNames)
+		routes, err := json.Marshal(sctx.Schedule.RouteSelections)
+		instruction := fmt.Sprintf("Run the full workflow once for each configured schedule group %s using run_full_workflow.", string(groups))
+		if err == nil {
+			instruction = fmt.Sprintf("Run the full workflow once for each configured schedule group %s using run_full_workflow with route_selections=%s. Do not substitute a schedule-local procedure for the selected plan route.", string(groups), string(routes))
+		}
+		return append([]string{instruction + " " + scheduledBackgroundNoPollingInstruction}, messages...)
+	}
+	if len(messages) == 0 {
 		groups, _ := json.Marshal(sctx.Schedule.GroupNames)
 		instruction := fmt.Sprintf("Run the full workflow once for each configured schedule group %s using run_full_workflow.", string(groups))
-		if len(sctx.Schedule.RouteSelections) > 0 {
-			routes, err := json.Marshal(sctx.Schedule.RouteSelections)
-			if err == nil {
-				instruction = fmt.Sprintf("Run the full workflow once for each configured schedule group %s using run_full_workflow with route_selections=%s. Do not substitute a schedule-local procedure for the selected plan route.", string(groups), string(routes))
-			}
-		}
 		return []string{instruction + " " + scheduledBackgroundNoPollingInstruction}
 	}
 	if mode := strings.TrimSpace(sctx.Schedule.ExecutionMode); mode != "" {

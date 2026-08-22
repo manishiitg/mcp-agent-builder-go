@@ -25,7 +25,7 @@ const WorkflowManifestSchemaVersion = 1
 // contract version. Unlike schema_version, this gates agent-run workflow
 // upgrades: Pulse can add version-specific messages and stamp this value only
 // after the workflow has been checked or migrated.
-const WorkflowContractCurrentVersion = "1.0.28"
+const WorkflowContractCurrentVersion = "1.0.29"
 
 const workflowContractInitialVersion = "1.0.0"
 const workflowContractMessageSequenceCodeVersion = "1.0.10"
@@ -46,6 +46,7 @@ const workflowContractScheduleExecutionModelVersion = "1.0.25"
 const workflowContractPeriodicPulseReviewVersion = "1.0.26"
 const workflowContractDedicatedPulseScheduleVersion = "1.0.27"
 const workflowContractSchedulePromptContractVersion = "1.0.28"
+const workflowContractFinalizerOwnedScheduleVersion = "1.0.29"
 
 const (
 	DefaultRunRetentionCount = 5
