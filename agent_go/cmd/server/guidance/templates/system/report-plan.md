@@ -8,6 +8,9 @@ platform-generated page navigation.
   expandable panels, or one scrolling briefing.
 - Read current durable data through `window.report.query`, `get`, `getText`,
   `getHtml`, `renderMarkdown`, `fileUrl`, and `openFile`.
+- Gate ALL data calls behind `window.report.ready(fn)` — never `DOMContentLoaded`,
+  `window.onload`, or a bare top-level call/await. `window.report` is injected
+  after the page's own script runs, so those fire too early.
 - Keep CSS and JavaScript inline. Use `db/assets/` for durable media.
 - Do not add a workflow step that regenerates the report. Steps update durable
   data; the report reads it live.

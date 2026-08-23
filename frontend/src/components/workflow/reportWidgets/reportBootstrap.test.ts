@@ -40,4 +40,36 @@ describe('withReportBootstrap', () => {
     ;(win.__reportQueuedCallbacks as Array<() => void>).forEach((fn) => fn())
     expect(calls).toEqual(['render'])
   })
+
+  it('queues a query/get/getText/getHtml/fileUrl call made before injection instead of throwing', async () => {
+    const win: Record<string, unknown> = {}
+    const stub = withReportBootstrap('<div></div>').match(/<script>([\s\S]*?)<\/script>/)![1]
+    new Function('window', stub)(win)
+
+    // This is the naive pattern a report can reach for instinctively —
+    // DOMContentLoaded/window.onload/a bare top-level call — running before
+    // the host has injected the real API. Before this fix, window.report.query
+    // was undefined at this point and calling it threw a TypeError.
+    const report = win.report as {
+      query: (sql: string) => Promise<unknown>
+      openFile: (path: string) => void
+    }
+    const resultPromise = report.query('select 1')
+    expect(resultPromise).toBeInstanceOf(Promise)
+    report.openFile('db/a.png')
+
+    const pending = win.__reportPendingCalls as Array<{
+      name: string
+      args: unknown[]
+      resolve: (v: unknown) => void
+      reject: (e: unknown) => void
+    }>
+    expect(pending).toHaveLength(2)
+    expect(pending[0]).toMatchObject({ name: 'query', args: ['select 1'] })
+    expect(pending[1]).toMatchObject({ name: 'openFile', args: ['db/a.png'] })
+
+    // Host replay (what inject() does once the real API exists).
+    pending[0].resolve([{ ok: 1 }])
+    await expect(resultPromise).resolves.toEqual([{ ok: 1 }])
+  })
 })

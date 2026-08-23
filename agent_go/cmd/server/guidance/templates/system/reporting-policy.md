@@ -20,6 +20,27 @@ generation step.
 - After editing, call `validate_report_html()`.
   Open the Report tab to verify visual layout only when requested or needed.
 
+### Data lifecycle: always gate on `window.report.ready(fn)`
+
+`window.report` is injected into the page AFTER the report's own `<script>`
+has already parsed and started running — it does not exist on the page's
+first line. Wrap every use of `window.report.*` in:
+
+```js
+window.report.ready(function () {
+  // window.report.query/get/getText/getHtml/fileUrl are live here.
+  // Runs once on load, and again on every later data refresh.
+});
+```
+
+Do NOT gate data calls on `DOMContentLoaded`, `window.onload`, or a bare
+top-level `(async () => { await window.report.query(...) })()`. All three can
+run before injection, before `window.report.query` is truly live — the single
+most common cause of a report that shows a "data loading error" or is stuck on
+"Loading…" the first time it is opened. `validate_report_html()` cannot catch
+this: it parses the markup, it does not execute the page. `.ready()` is the
+only pattern that is safe regardless of when it runs.
+
 ### Referenced files must live under `db/`
 
 A report may only reference paths under `db/`. That is the durable store the

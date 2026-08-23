@@ -27,6 +27,19 @@ function debugReportFrame(event: string, title: string, detail?: Record<string, 
 // thrown inside the callback (sync or async) are routed to the frame's error
 // surface instead of vanishing.
 //
+// `.ready()` only helps a report that actually calls it. In practice most
+// agent-authored reports reach for a more instinctive pattern instead —
+// `DOMContentLoaded`, `window.onload`, or a bare top-level
+// `(async()=>{ await window.report.query(...) })()` — all of which can run
+// before injection, when `window.report.query` doesn't exist yet. Previously
+// that was a synchronous TypeError (`.query is not a function`). So the stub
+// also predefines `query`/`get`/`getText`/`getHtml`/`fileUrl` itself: called
+// before injection, each one queues its call and returns a pending promise
+// instead of throwing; `inject()` below replays every queued call against the
+// real API once it exists. This makes the wrong-but-instinctive pattern work
+// correctly too, not just the documented one — the report doesn't need to know
+// injection is asynchronous at all, regardless of which lifecycle hook it used.
+//
 // This is deliberately platform-owned rather than documented guidance: the report
 // HTML is authored per workflow by an agent that never renders its own output, so
 // a bootstrap it must write correctly every time is a bug generator. A bootstrap
@@ -34,13 +47,30 @@ function debugReportFrame(event: string, title: string, detail?: Record<string, 
 const REPORT_BOOTSTRAP = `<script>(function(){
   if (window.report && window.report.ready) return;
   var queued = [];
+  var pending = [];
   var api = window.report || {};
   api.ready = function(fn){
     if (typeof fn !== 'function') return;
     queued.push(fn);
     if (window.__reportApiReady) window.__runReportCallback(fn);
   };
+  function queueCall(name){
+    return function(){
+      var args = Array.prototype.slice.call(arguments);
+      return new Promise(function(resolve, reject){
+        pending.push({ name: name, args: args, resolve: resolve, reject: reject });
+      });
+    };
+  }
+  ['query', 'get', 'getText', 'getHtml', 'fileUrl'].forEach(function(name){
+    api[name] = queueCall(name);
+  });
+  api.openFile = function(){
+    pending.push({ name: 'openFile', args: Array.prototype.slice.call(arguments), resolve: function(){}, reject: function(){} });
+  };
+  api.theme = 'light';
   window.__reportQueuedCallbacks = queued;
+  window.__reportPendingCalls = pending;
   window.report = api;
 })();</script>`
 
@@ -474,6 +504,50 @@ function HtmlReportFrameComponent({
         openFile: dataApi.openFile,
         theme: 'light',
       }
+
+      // The bootstrap's stub queued any query/get/getText/getHtml/fileUrl/openFile
+      // call made before this injection (DOMContentLoaded, window.onload, a bare
+      // top-level await — anything that ran before window.report was the real
+      // API). Replay each against the real methods now instead of leaving those
+      // promises pending forever. Runs once per document: the bootstrap's pending
+      // array is drained and cleared here, so it stays empty on every later
+      // re-injection (data refresh, theme change).
+      const realReportMethods: Record<string, ((...args: unknown[]) => unknown) | undefined> = {
+        query: dataApi.query as (...args: unknown[]) => unknown,
+        get: dataApi.get as (...args: unknown[]) => unknown,
+        getText: dataApi.getText as (...args: unknown[]) => unknown,
+        getHtml: dataApi.getHtml as (...args: unknown[]) => unknown,
+        fileUrl: dataApi.fileUrl as (...args: unknown[]) => unknown,
+      }
+      type QueuedReportCall = {
+        name: string
+        args: unknown[]
+        resolve: (value: unknown) => void
+        reject: (reason: unknown) => void
+      }
+      const pendingCalls: QueuedReportCall[] = Array.isArray(win.__reportPendingCalls)
+        ? [...win.__reportPendingCalls]
+        : []
+      win.__reportPendingCalls = []
+      pendingCalls.forEach(({ name, args, resolve, reject }) => {
+        if (name === 'openFile') {
+          try {
+            dataApi.openFile(...(args as Parameters<typeof dataApi.openFile>))
+          } catch {
+            /* best-effort — openFile has no result to resolve */
+          }
+          return
+        }
+        const fn = realReportMethods[name]
+        if (typeof fn !== 'function') {
+          reject(new Error(`window.report.${name} is unavailable`))
+          return
+        }
+        Promise.resolve()
+          .then(() => fn(...args))
+          .then(resolve, reject)
+      })
+
       // Initial theme application is setup, not a theme change. The single
       // report:data event below owns the initial render. This avoids every HTML
       // report doing a full data render once for theme and again for data.
