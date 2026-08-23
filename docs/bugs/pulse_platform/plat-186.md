@@ -301,3 +301,57 @@ strong sequential proof, but cannot expose this race.
 Also update the stale `Agent.bridgeReadyFile` comment in
 `mcpagent/agent/agent.go`, which still documents the previous random,
 per-launch path behavior.
+
+## Follow-up fix implemented (2026-08-23, same day)
+
+Went with the session-owned-handshake direction rather than true
+serialization: a real cross-call Go mutex spanning `buildBridgeMCPConfig`
+(mcpagent) through to the actual readiness wait (a different package,
+`multi-llm-provider-go`'s adapter, reached only via an options callback)
+has no clean synchronous release point, and a lock held too long or
+released on the wrong path risks a deadlock — a strictly worse failure
+mode than the race it would fix.
+
+Instead, `buildBridgeMCPConfig` now tracks, per working directory, which
+`sessionID` most recently received the stable marker path and when
+(`piReadyMarkerLastAcquired`, `piReadyMarkerAcquisition{sessionID,
+acquiredAt}`). A launch reusing the *same* `sessionID` as that directory's
+last acquisition always gets the stable path back, however soon it
+repeats — that stability is the entire point of this ticket's original
+fix, and must never be defeated by the safety guard meant to protect it.
+A *different* (or unidentified/empty) `sessionID` arriving within the
+readiness wait's own window (45s: `codingready.DefaultMCPReadyWait` 30s
+plus a launch-overhead margin) is treated as a plausibly-concurrent,
+different session and falls back to a private, uniquely-named marker for
+that one launch — the original pre-this-ticket behavior, still fully
+safe, just without that one launch's caching benefit.
+
+`Agent.bridgeReadyFile`'s comment in `mcpagent/agent/agent.go` updated to
+describe both the stability change and this concurrency guard.
+
+The suggested live two-concurrent-sessions P0 contract was **not** added —
+scoped as a real, separate live-E2E effort (two genuinely concurrent real
+pi-cli launches, real API cost, real synchronization to hit the race
+window deterministically) rather than bundling it into this same-day
+follow-up. The unit-level test below proves the guard's decision logic
+directly (same-session stability preserved, different-session collision
+avoided, window expiry restores the stable path) without needing a live
+run to do it.
+
+### Verification (follow-up)
+
+- `go build ./...` clean in `mcpagent`.
+- `TestBuildBridgeMCPConfigReadyFileFallsBackToPrivatePathForConcurrentLaunchesInSameWorkingDir`
+  (new) — proves all three cases in one test: same-session repeat stays
+  stable, a different session within the window gets a distinct private
+  path (never colliding with the first), and after the window elapses a
+  third session gets the stable path back. Confirmed this exercises real
+  decision logic, not a tautology: the original (pre-session-aware)
+  version of this fix broke the *existing*
+  `TestBuildBridgeMCPConfigReadyFileIsStableAcrossRepeatedCallsForTheSameIdentity`
+  test by treating that test's own same-agent repeated calls as
+  concurrent — caught and fixed by keying the guard on session identity,
+  not just elapsed time.
+- Full `mcpagent/agent` suite: only the same pre-existing, unrelated
+  `TestAgentReviewsApproved` failure (a manual test-data review gate,
+  confirmed present identically on a clean checkout) — no regressions.
