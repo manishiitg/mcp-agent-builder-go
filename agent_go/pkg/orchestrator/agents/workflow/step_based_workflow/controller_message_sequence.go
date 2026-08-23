@@ -1099,6 +1099,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) setMessageSequenceShellEnv(sessionID,
 		stepOutputAbs,
 		filepath.Dir(stepOutputAbs),
 		"",
+		hcpo.selectedRunFolder,
 		hcpo.snapshotWorkspaceEnv(),
 	)
 	configureWorkflowDBSession(sessionID, hcpo.GetWorkspacePath(), DBAccessReadWrite, false)

@@ -21,7 +21,7 @@ func TestRegisterStepSessionShellEnvProvidesBridgeParity(t *testing.T) {
 	sessionID := "eval-shell-env-test"
 	defer common.ClearSessionShellConfig(sessionID)
 
-	registerStepSessionShellEnv(sessionID, "/workspace/eval/step", "/workspace/eval", "/workspace/db/db.sqlite", map[string]string{
+	registerStepSessionShellEnv(sessionID, "/workspace/eval/step", "/workspace/eval", "/workspace/db/db.sqlite", "iteration-0/eval", map[string]string{
 		"VAR_LOGIN_EMAIL":       "configured@example.com",
 		"SECRET_LOGIN_PASSWORD": "password",
 		"MCP_SESSION_ID":        "stale-parent-session",
@@ -31,6 +31,10 @@ func TestRegisterStepSessionShellEnvProvidesBridgeParity(t *testing.T) {
 		"STEP_OUTPUT_DIR":       "/workspace/eval/step",
 		"STEP_EXECUTION_DIR":    "/workspace/eval",
 		"DB_PATH":               "/workspace/db/db.sqlite",
+		// PLAT-185: a scripted step reading a sibling step's runs/<iteration>/
+		// logs/... folder had no reliable way to know the current run's own
+		// folder name short of hardcoding a guess. RUN_FOLDER removes the guess.
+		"RUN_FOLDER":            "iteration-0/eval",
 		"VAR_LOGIN_EMAIL":       "configured@example.com",
 		"SECRET_LOGIN_PASSWORD": "password",
 	} {
@@ -629,6 +633,7 @@ func TestInjectStepEnvIntoShellExecutor_OverridesStaleMCPSessionEnv(t *testing.T
 		"/tmp/workflow/execution/math-solver",
 		"/tmp/workflow/execution",
 		"/tmp/workflow/db/db.sqlite",
+		"iteration-0/math",
 		"step-session-123",
 		map[string]string{
 			"VAR_LOGIN_EMAIL":       "configured@example.com",
@@ -666,6 +671,9 @@ func TestInjectStepEnvIntoShellExecutor_OverridesStaleMCPSessionEnv(t *testing.T
 	}
 	if got := rawExtraEnv["STEP_EXECUTION_DIR"]; got != "/tmp/workflow/execution" {
 		t.Fatalf("expected STEP_EXECUTION_DIR override, got %#v", got)
+	}
+	if got := rawExtraEnv["RUN_FOLDER"]; got != "iteration-0/math" {
+		t.Fatalf("expected RUN_FOLDER override, got %#v", got)
 	}
 	if got := rawExtraEnv["MCP_SESSION_ID"]; got != "step-session-123" {
 		t.Fatalf("expected MCP_SESSION_ID override, got %#v", got)

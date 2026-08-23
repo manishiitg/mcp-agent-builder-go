@@ -187,7 +187,7 @@ func stepRuntimeEnv(workspaceEnv map[string]string) map[string]string {
 	result := make(map[string]string, len(workspaceEnv))
 	for key, value := range workspaceEnv {
 		switch key {
-		case "STEP_OUTPUT_DIR", "STEP_EXECUTION_DIR", "DB_PATH",
+		case "STEP_OUTPUT_DIR", "STEP_EXECUTION_DIR", "DB_PATH", "RUN_FOLDER",
 			"MCP_SESSION_ID", "MCP_API_URL", "MCP_CUSTOM", "MCP_AUTH", "MCP_VIRTUAL":
 			continue
 		}
@@ -196,7 +196,7 @@ func stepRuntimeEnv(workspaceEnv map[string]string) map[string]string {
 	return result
 }
 
-func injectStepEnvIntoShellExecutor(executors map[string]interface{}, stepOutputAbsPath, stepExecutionAbsPath, dbAbsPath string, mcpSessionID string, workspaceEnv map[string]string) {
+func injectStepEnvIntoShellExecutor(executors map[string]interface{}, stepOutputAbsPath, stepExecutionAbsPath, dbAbsPath, runFolder string, mcpSessionID string, workspaceEnv map[string]string) {
 	if len(executors) == 0 || strings.TrimSpace(stepOutputAbsPath) == "" {
 		return
 	}
@@ -221,6 +221,7 @@ func injectStepEnvIntoShellExecutor(executors map[string]interface{}, stepOutput
 		if strings.TrimSpace(dbAbsPath) != "" {
 			mergedEnv["DB_PATH"] = dbAbsPath
 		}
+		mergedEnv["RUN_FOLDER"] = runFolder
 		if rawExtraEnv, exists := args["extra_env"]; exists {
 			switch typed := rawExtraEnv.(type) {
 			case map[string]interface{}:
@@ -239,6 +240,7 @@ func injectStepEnvIntoShellExecutor(executors map[string]interface{}, stepOutput
 		if strings.TrimSpace(dbAbsPath) != "" {
 			mergedEnv["DB_PATH"] = dbAbsPath
 		}
+		mergedEnv["RUN_FOLDER"] = runFolder
 		if strings.TrimSpace(mcpSessionID) != "" {
 			// Shell/file tools must resolve against the step-local MCP session so the
 			// session-level folder guard matches the prompt's narrow read/write scope.
@@ -262,7 +264,7 @@ func injectStepEnvIntoShellExecutor(executors map[string]interface{}, stepOutput
 	}
 }
 
-func registerStepSessionShellEnv(sessionID, stepOutputAbsPath, stepExecutionAbsPath, dbAbsPath string, workspaceEnv map[string]string) {
+func registerStepSessionShellEnv(sessionID, stepOutputAbsPath, stepExecutionAbsPath, dbAbsPath, runFolder string, workspaceEnv map[string]string) {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
 		return
@@ -276,6 +278,7 @@ func registerStepSessionShellEnv(sessionID, stepOutputAbsPath, stepExecutionAbsP
 	if strings.TrimSpace(dbAbsPath) != "" {
 		env["DB_PATH"] = dbAbsPath
 	}
+	env["RUN_FOLDER"] = runFolder
 	common.SetSessionShellEnv(sessionID, env)
 }
 
@@ -1377,8 +1380,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 			dbAbsPath = filepath.Join(GetPromptDocsRoot(), hcpo.GetWorkspacePath(), DBFolderName, "db.sqlite")
 		}
 		workspaceEnv := hcpo.snapshotWorkspaceEnv()
-		registerStepSessionShellEnv(config.MCPSessionID, stepOutputAbsPath, stepExecutionAbsPath, dbAbsPath, workspaceEnv)
-		injectStepEnvIntoShellExecutor(executorsToUse, stepOutputAbsPath, stepExecutionAbsPath, dbAbsPath, config.MCPSessionID, workspaceEnv)
+		registerStepSessionShellEnv(config.MCPSessionID, stepOutputAbsPath, stepExecutionAbsPath, dbAbsPath, hcpo.selectedRunFolder, workspaceEnv)
+		injectStepEnvIntoShellExecutor(executorsToUse, stepOutputAbsPath, stepExecutionAbsPath, dbAbsPath, hcpo.selectedRunFolder, config.MCPSessionID, workspaceEnv)
 		hcpo.GetLogger().Info(fmt.Sprintf("📂 Injecting step shell env into execute_shell_command for %s: STEP_OUTPUT_DIR=%s MCP_SESSION_ID=%s", stepID, stepOutputAbsPath, config.MCPSessionID))
 	}
 
@@ -1804,8 +1807,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) createTodoTaskOrchestratorAgent(ctx c
 			dbAbsPath = filepath.Join(GetPromptDocsRoot(), hcpo.GetWorkspacePath(), DBFolderName, "db.sqlite")
 		}
 		workspaceEnv := hcpo.snapshotWorkspaceEnv()
-		registerStepSessionShellEnv(config.MCPSessionID, stepOutputAbsPath, stepExecutionAbsPath, dbAbsPath, workspaceEnv)
-		injectStepEnvIntoShellExecutor(executorsToUse, stepOutputAbsPath, stepExecutionAbsPath, dbAbsPath, config.MCPSessionID, workspaceEnv)
+		registerStepSessionShellEnv(config.MCPSessionID, stepOutputAbsPath, stepExecutionAbsPath, dbAbsPath, hcpo.selectedRunFolder, workspaceEnv)
+		injectStepEnvIntoShellExecutor(executorsToUse, stepOutputAbsPath, stepExecutionAbsPath, dbAbsPath, hcpo.selectedRunFolder, config.MCPSessionID, workspaceEnv)
 		hcpo.GetLogger().Info(fmt.Sprintf("📂 Injecting step shell env into execute_shell_command for todo task %s: STEP_OUTPUT_DIR=%s MCP_SESSION_ID=%s", stepID, stepOutputAbsPath, config.MCPSessionID))
 	}
 

@@ -741,7 +741,7 @@ func buildScriptedEnvVarNamesForPrompt(isScriptedMode bool, workspaceEnvRef map[
 	// learnings. Both workarounds are explicitly forbidden by the stores contract,
 	// which insists steps use $DB_PATH and report an open failure as a runtime bug
 	// rather than routing around it. The framework was contradicting itself.
-	fixed := []string{"STEP_OUTPUT_DIR", "STEP_EXECUTION_DIR", "DB_PATH", "MCP_API_URL"}
+	fixed := []string{"STEP_OUTPUT_DIR", "STEP_EXECUTION_DIR", "DB_PATH", "RUN_FOLDER", "MCP_API_URL"}
 	seen := make(map[string]bool, len(fixed)+len(workspaceEnvRef))
 	for _, n := range fixed {
 		seen[n] = true
@@ -884,6 +884,21 @@ func (hcpo *StepBasedWorkflowOrchestrator) execScriptedScript(
 	// fails with "DB_PATH unset and no root found". Set it here to the same absolute
 	// path the agent path uses. Set AFTER the workspace-env merge so it always wins.
 	extraEnv["DB_PATH"] = filepath.Join(docsRoot, hcpo.GetWorkspacePath(), DBFolderName, "db.sqlite")
+
+	// RUN_FOLDER: the workspace-relative "iteration-N/<group>" segment under
+	// runs/, e.g. "iteration-85/confida-staging". PLAT-185: a script that needs
+	// to read a SIBLING step's runs/.../logs/<other-step>/... had no reliable
+	// way to know the current run's own folder name, so it either had to
+	// hardcode a guess (wrong the moment the platform advances past that
+	// iteration) or derive it independently and risk not matching what
+	// setupExecutionFolderGuard actually granted. hcpo.selectedRunFolder is the
+	// orchestrator's own value for this — the same one that already builds
+	// runWorkspacePath for both the write scope and the additional_read_paths
+	// grant — so exposing it directly removes the guess entirely. Empty when no
+	// run folder is selected (setupExecutionFolderGuard falls back to the bare
+	// workspace root in that case too); scripts must treat "" as "not
+	// run-scoped," not assume a folder exists.
+	extraEnv["RUN_FOLDER"] = hcpo.selectedRunFolder
 
 	envKeys := make([]string, 0, len(extraEnv))
 	for k := range extraEnv {

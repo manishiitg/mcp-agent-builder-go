@@ -20,8 +20,8 @@ func TestScriptedEnvVarNamesDeclareEverythingTheRuntimeInjects(t *testing.T) {
 	})
 	lines := strings.Split(got, "\n")
 
-	// execScriptedScript sets these three plus the workspace env; all must appear.
-	for _, want := range []string{"STEP_OUTPUT_DIR", "STEP_EXECUTION_DIR", "DB_PATH", "MCP_API_URL", "VAR_SITE_URL", "SECRET_MEMBER_PASSWORD"} {
+	// execScriptedScript sets these four plus the workspace env; all must appear.
+	for _, want := range []string{"STEP_OUTPUT_DIR", "STEP_EXECUTION_DIR", "DB_PATH", "RUN_FOLDER", "MCP_API_URL", "VAR_SITE_URL", "SECRET_MEMBER_PASSWORD"} {
 		found := false
 		for _, l := range lines {
 			if l == want {
