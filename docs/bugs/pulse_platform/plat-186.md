@@ -254,3 +254,50 @@ issue rather than anything wrong with either test.
   against real Gemini, PASS** — the actual end-to-end proof that
   `pi-mcp-adapter` genuinely activates direct tools given a stable config,
   not just that our own config-building stays byte-identical.
+
+## Post-implementation review — readiness-marker concurrency gap (2026-08-23)
+
+**Verdict:** the direct-tools cache invalidation RCA is correct and the
+sequential live proof demonstrates that the intended native-tool path now
+activates. A P1 follow-up remains before the readiness-marker change can be
+called safe for concurrent agents.
+
+### What remains unsafe
+
+The implementation describes the marker as stable per **(workspace, agent)**
+identity, but the actual path is only per working directory:
+
+```go
+filepath.Join(workingDir, ".mcpbridge-ready.marker")
+```
+
+Two Pi sessions with the same MCP configuration are deliberately allowed to
+run concurrently in one working directory by
+`acquirePiWorkspaceMCPConfigLease`. Each launch calls `os.Remove` on that
+same path before starting its own bridge. Either bridge can then write the
+shared marker after `tools/list`, and either adapter can observe it. A second
+launch can therefore clear or satisfy the first launch's readiness gate; the
+marker no longer proves that *that session's* bridge has connected.
+
+This does **not** invalidate the direct-tools result: both launches retain the
+same config fingerprint, so the cache can still activate native tools. It
+does mean the claimed replacement for the old per-launch readiness guarantee
+is incomplete, and can reintroduce the cold-turn tool-availability race in
+parallel workflow/step execution.
+
+### Required follow-up
+
+Keep the MCP configuration fingerprint stable, but make readiness ownership
+safe too. The fix must either serialize same-workspace Pi bridge startup until
+each session reaches its own ready point, or provide an equivalent
+session-owned readiness handshake that does not add a per-launch value to the
+`pi-mcp-adapter`-hashed MCP config.
+
+Add a live P0 contract which launches two same-config Pi sessions in the same
+working directory concurrently and proves each first prompt waits for its own
+bridge readiness and can call its tool. The existing direct-tools P0 is a
+strong sequential proof, but cannot expose this race.
+
+Also update the stale `Agent.bridgeReadyFile` comment in
+`mcpagent/agent/agent.go`, which still documents the previous random,
+per-launch path behavior.
