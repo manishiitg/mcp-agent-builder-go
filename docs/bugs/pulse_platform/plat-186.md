@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `open` — root cause confirmed at source level across two repos; fix designed, not yet implemented |
+| Ticket state | `fixed` — live-verified against real Gemini; see "Fix implemented" below |
 | Last synchronized | `2026-08-23` |
 
 - **Priority:** P1 — this is the structural reason a whole class of pi-cli
@@ -163,42 +163,94 @@ correctly.
   stable for a given workflow/step identity across repeated launches — not
   flagged as a likely contributor, but not independently proven stable either.
 
-## Proposed fix — not yet implemented
+## Fix implemented
 
-Do not remove the anti-staleness protection `MCP_READY_FILE`'s
-randomization provides; get the same guarantee a different way:
+Did not remove the anti-staleness protection `MCP_READY_FILE`'s
+randomization provided; got the same guarantee a different way, in
+`mcpagent/agent/coding_agents_bridge.go` (`buildBridgeMCPConfig`):
 
-1. Make the ready-file's *path* deterministic per (workspace, agent)
-   identity instead of a fresh random temp path every call.
-2. Immediately before each new launch, have our own Go code delete any
-   leftover file at that fixed path. Since we control both the deletion
-   and the launch ordering, this gives the exact same "a stale marker from
-   a prior run can never satisfy this run's readiness check" guarantee —
+1. The ready-file's *path* is now deterministic per (workspace, agent)
+   identity (`filepath.Join(workingDir, ".mcpbridge-ready.marker")`)
+   instead of a fresh random temp path every call.
+2. Immediately before each new launch, our own Go code deletes any
+   leftover file at that fixed path. We control both the deletion and the
+   launch ordering, so this gives the exact same "a stale marker from a
+   prior run can never satisfy this run's readiness check" guarantee —
    just via "we just cleaned it up" instead of "nobody has used this name
    before."
-3. `mcpagent/cmd/mcpbridge/main.go`'s `makeReadyFileWriter` /
-   `writeReadyFileOnce` (around line 28-47) consumes `MCP_READY_FILE`
-   as-is and needs no change — it doesn't care whether the path is
-   deterministic or random, only that it can create the file there.
+3. Falls back to the original random-path behavior when there's no stable
+   working directory to anchor to (a fresh temp dir never had a prior
+   cache entry to protect either).
+4. `mcpagent/cmd/mcpbridge/main.go`'s `makeReadyFileWriter` /
+   `writeReadyFileOnce` needed no change — it consumes `MCP_READY_FILE`
+   as-is regardless of whether the path is deterministic or random.
 
-After implementing, retest live against a real pi-cli structured run and
-confirm the transcript shows native/direct tool calls (not `"name": "mcp"`)
-for `api-bridge` tools. If it still doesn't activate, trace `MCP_SESSION_ID`
-next using the same method (find where it's set, confirm whether it's
-stable or freshly minted per call).
+`MCP_SESSION_ID` was not found to need the same treatment — the live test
+below passed without touching it, so it was not investigated further.
+
+### A real, provable P0 test — not just "no regression"
+
+The one existing live test exercising `directTools`
+(`TestPiCLIRealMCPBridgeOnlyToolsContract`) tolerates the proxy fallback in
+its own prompt wording, so it would pass whether or not `directTools`
+ever activated — it could not have caught this bug or proven this fix.
+Writing a real one required closing a separate, genuine gap first:
+`StreamChunk.ToolName` is already-recovered by the time a caller sees it
+(PLAT-179's own recovery logic renames a successfully-recovered generic
+`"mcp"` proxy call to look exactly like a real tool name), so tool name
+alone can never distinguish a genuinely native/direct call from a proxy
+call recovery merely renamed. Every other adapter (claude-code, codex-cli,
+cursor-cli, and pi's own *structured* adapter) already populated
+`StreamChunk.ToolArgs` with the raw, pre-recovery args on
+`tool_execution_start`/`tool_execution_end` — pi's *interactive* adapter
+was the one gap. Populated it there too
+(`multi-llm-provider-go/pkg/adapters/picli/picli_interactive_adapter.go`).
+Raw args are the one signal that actually distinguishes the two cases: a
+proxy call's raw args always carry the `{"tool":...,"args":...}` wrapper
+shape; a native call's raw args are the tool's own parameters directly.
+
+`TestPiCLIRealDirectToolsActivateOnRepeatedStableConfig`
+(`multi-llm-provider-go/pkg/adapters/picli/picli_mcp_bridge_real_test.go`)
+runs two real, separate pi-cli launches sharing an identical MCP server
+config with `directTools: true`, and asserts the second launch's
+`report_cwd` tool call carries native args, not the proxy wrapper shape.
+**Live-verified against real Gemini: PASS in ~32s.**
+
+While verifying, also live-confirmed (the hard way, costing two full
+4-minute hangs) that the free `openrouter/stealth/ox-alpha` fallback model
+used elsewhere this session for cost reasons is currently
+unreliable/hanging, independent of this change — re-ran the
+already-proven-working `TestPiCLIRealMCPBridgeToolCallReportsRealToolName`
+reference test with the same model override and it hung the identical
+way, isolating that as an unrelated, pre-existing model-availability
+issue rather than anything wrong with either test.
 
 ## Explicitly out of scope for this ticket
 
-- Implementing the fix itself — this ticket is RCA + design only, per
-  explicit instruction, filed before any code change.
 - Changing `pi-mcp-adapter`'s own cache/hash logic — it's a third-party
   dependency; the fix works entirely within what we control (what we put
   into its declared config).
 - The live-incident symptom fix (surfacing IsError events into the
   returned error) — already shipped separately, `multi-llm-provider-go`
   commit `6d273aa`.
+- Investigating `MCP_SESSION_ID`'s stability — not needed once the live
+  test passed with `MCP_READY_FILE` alone fixed.
 
 ## Verification
 
-None yet — no code changed. This ticket exists to capture a source-level-
-confirmed root cause and a scoped fix design before implementation starts.
+- `go build ./...` clean in both `mcpagent` and `multi-llm-provider-go`.
+- `mcpagent`: two new fail-before/pass-after unit tests
+  (`TestBuildBridgeMCPConfigReadyFileIsStableAcrossRepeatedCallsForTheSameIdentity`,
+  confirmed failing against the prior `os.CreateTemp`-every-call behavior;
+  `TestBuildBridgeMCPConfigReadyFileFallsBackToRandomPathWithoutAWorkingDir`
+  for the no-working-directory fallback) plus the full existing
+  `agent/coding_agents_bridge_test.go` suite, all pass. One pre-existing,
+  unrelated failure (`TestAgentReviewsApproved`, a manual test-data review
+  gate) confirmed present identically on a clean checkout — not a
+  regression.
+- `multi-llm-provider-go`: `go test ./pkg/adapters/picli/... -short`
+  passes in full (no regression from the `ToolArgs` change).
+- `TestPiCLIRealDirectToolsActivateOnRepeatedStableConfig` — **live,
+  against real Gemini, PASS** — the actual end-to-end proof that
+  `pi-mcp-adapter` genuinely activates direct tools given a stable config,
+  not just that our own config-building stays byte-identical.
