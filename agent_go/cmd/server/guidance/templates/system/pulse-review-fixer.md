@@ -49,10 +49,13 @@ route scope. Do a lightweight safety scan for critical regressions, matured
 verification, answered unapplied decisions, plan routes, and retained run
 selectors, then choose the smallest sufficient coherent focus set. Rotation is agentic:
 the compact agenda informs judgment but does not require blind round-robin.
-For `technical_review`, use `execution_efficiency` as that focus when Gate cites
-a cadence-threatening run or evidence of repeated context, payload, retry, or
-sequence overhead. The focus requires a causal diagnosis of exact plan items,
-not a generic cost summary. If the smallest safe repair changes plan topology,
+For `technical_review`, use `execution_health` when Gate cites a cadence-threatening
+run or evidence of incorrect execution, repeated context, payload, retries,
+tool/runtime failure, schedule recovery, or sequence overhead. The focus requires
+a causal diagnosis of exact plan items, not a generic cost summary. Use
+`plan_orchestration_integrity` when the central question is step type, scripted
+versus agentic ownership, dependencies, handoffs, or unnecessary orchestration.
+If the smallest safe repair changes plan topology,
 step type, route ownership, retry semantics, public-action ordering, or a
 safety boundary, the Operations turn creates a durable approval request; the
 Fixer must not make that structural choice on its own.

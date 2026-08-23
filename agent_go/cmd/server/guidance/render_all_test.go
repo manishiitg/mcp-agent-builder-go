@@ -248,7 +248,7 @@ func TestStandaloneOpsReviewRunsDirectlyAndRequiresTypedCompletion(t *testing.T)
 		"complete_pulse_review",
 		"modules=[\"technical_review\"]",
 		"returning prose without it leaves",
-		"Execution-efficiency diagnosis",
+		"Execution-health diagnosis",
 		"repeated context reconstruction",
 		"ops-decision-execution-efficiency-",
 	} {

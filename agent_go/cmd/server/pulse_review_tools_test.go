@@ -104,16 +104,16 @@ func TestPulseReviewFocusToolsPersistDurableAgenda(t *testing.T) {
 	raw, err := record(ctx, map[string]interface{}{
 		"workspace_path": workspacePath, "pulse_run_id": pulseRunID, "module": pulseModuleTechnicalReview,
 		"route_scope": "daily-execution/small-route",
-		"focus_key":   "schedule_capacity_recovery", "priority_class": "overdue", "selection_reason": "This lens has not been reviewed since the timeout recurrence.",
+		"focus_key":   "execution_health", "priority_class": "overdue", "selection_reason": "This lens has not been reviewed since the timeout recurrence.",
 		"verdict": "Observer now has a targeted recheck.", "evidence": []interface{}{"runs/iteration-0/execution/attempt.json"},
-		"issue_ids": []interface{}{"PUL-AB12CD34"}, "deferred_focuses": []interface{}{"tool_runtime_reliability"},
+		"issue_ids": []interface{}{"PUL-AB12CD34"}, "deferred_focuses": []interface{}{"plan_orchestration_integrity"},
 		"next_check_at": "2026-08-21T00:00:00Z", "next_check_reason": "next producing run",
 	})
 	if err != nil {
 		t.Fatalf("record focus: %v", err)
 	}
 	var stored PulseReviewFocus
-	if err := json.Unmarshal([]byte(raw), &stored); err != nil || stored.LastReviewedAt == "" || stored.FocusKey != "schedule_capacity_recovery" {
+	if err := json.Unmarshal([]byte(raw), &stored); err != nil || stored.LastReviewedAt == "" || stored.FocusKey != "execution_health" {
 		t.Fatalf("stored focus=%#v decode_err=%v raw=%s", stored, err, raw)
 	}
 	if stored.RouteScope != "daily-execution/small-route" {
@@ -122,7 +122,7 @@ func TestPulseReviewFocusToolsPersistDurableAgenda(t *testing.T) {
 	if _, err := record(ctx, map[string]interface{}{
 		"workspace_path": workspacePath, "pulse_run_id": pulseRunID, "module": pulseModuleTechnicalReview,
 		"route_scope": "daily-execution/large-route",
-		"focus_key":   "execution_efficiency", "priority_class": "new_or_changed", "selection_reason": "The larger route has distinct payload amplification evidence.",
+		"focus_key":   "plan_orchestration_integrity", "priority_class": "new_or_changed", "selection_reason": "The larger route has distinct payload amplification evidence.",
 		"verdict": "The large route needs a bounded repair.", "evidence": []interface{}{"runs/iteration-1/costs/execution.json"},
 	}); err != nil {
 		t.Fatalf("record second route focus: %v", err)
@@ -141,11 +141,11 @@ func TestPulseReviewFocusToolsPersistDurableAgenda(t *testing.T) {
 	for _, focus := range response.Focuses {
 		counts[focus.FocusKey] = [2]int{focus.ReviewCount, focus.RouteReviewCount}
 	}
-	if counts["schedule_capacity_recovery"] != [2]int{1, 1} {
-		t.Fatalf("small-route schedule counts = %v", counts["schedule_capacity_recovery"])
+	if counts["execution_health"] != [2]int{1, 1} {
+		t.Fatalf("small-route execution-health counts = %v", counts["execution_health"])
 	}
-	if counts["execution_efficiency"] != [2]int{1, 0} {
-		t.Fatalf("small-route execution counts = %v", counts["execution_efficiency"])
+	if counts["plan_orchestration_integrity"] != [2]int{1, 0} {
+		t.Fatalf("small-route plan counts = %v", counts["plan_orchestration_integrity"])
 	}
 }
 

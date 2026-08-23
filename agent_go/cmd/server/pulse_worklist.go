@@ -44,10 +44,8 @@ var pulseModuleOrder = pulsemodules.IDs()
 // Gate and reviewers still use evidence and judgment to choose what is due.
 var pulseReviewFocusCatalog = map[string][]string{
 	pulseModuleTechnicalReview: {
-		"execution_correctness", "plan_contract_integrity", "store_integrity",
-		"report_eval_truth", "safety_permissions", "execution_efficiency",
-		"tool_runtime_reliability", "orchestration_fitness", "model_tier_fitness",
-		"cost_attribution", "schedule_capacity_recovery",
+		"execution_health", "plan_orchestration_integrity", "store_integrity",
+		"report_quality_truth", "evaluation_quality_truth", "model_cost_fitness",
 	},
 	pulseModuleStrategicReview: {
 		"goal_measurement_validity", "strategy_effectiveness", "feedback_loops_bias",
@@ -325,6 +323,9 @@ func ensurePulseModuleStateSchema(ctx context.Context, db *sql.DB) error {
 	if err := migrateMergedTechnicalReviewRows(ctx, db); err != nil {
 		return err
 	}
+	if err := migratePulseReviewFocusCatalog(ctx, db); err != nil {
+		return err
+	}
 	stmts = []string{
 		`CREATE INDEX IF NOT EXISTS idx_pulse_module_state_run ON pulse_module_state(last_pulse_run_id, last_decision)`,
 		`CREATE INDEX IF NOT EXISTS idx_pulse_module_audit_recorded ON pulse_module_audit(workspace_path, recorded_at DESC)`,
@@ -339,6 +340,125 @@ func ensurePulseModuleStateSchema(ctx context.Context, db *sql.DB) error {
 		}
 	}
 	return nil
+}
+
+// migratePulseReviewFocusCatalog preserves the useful coverage history from
+// the original fine-grained catalog while moving the live agenda to the six
+// operator-facing review areas introduced by PLAT-163. Merged lenses retain
+// their newest state and historical counts. The old combined report/evaluation
+// lens is intentionally not copied into both successors: doing so would claim
+// two reviews happened when only one broad review did. Its history remains
+// readable, while both new lenses start due. Safety history is also retained,
+// but safety is not an independently selectable focus in the current catalog.
+func migratePulseReviewFocusCatalog(ctx context.Context, db *sql.DB) error {
+	merged := map[string][]string{
+		"execution_health": {
+			"execution_correctness", "execution_efficiency", "tool_runtime_reliability", "schedule_capacity_recovery",
+		},
+		"plan_orchestration_integrity": {"plan_contract_integrity", "orchestration_fitness"},
+		"model_cost_fitness":           {"model_tier_fitness", "cost_attribution"},
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for canonical, legacyKeys := range merged {
+		for _, legacy := range legacyKeys {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO pulse_review_focus_state (
+				workspace_path,module,focus_key,last_pulse_run_id,last_reviewed_at,last_verdict,
+				last_selection_reason,last_route_scope,next_check_at,next_check_reason,updated_at)
+				SELECT workspace_path,module,?,last_pulse_run_id,last_reviewed_at,last_verdict,
+				last_selection_reason,last_route_scope,next_check_at,next_check_reason,updated_at
+				FROM pulse_review_focus_state WHERE module=? AND focus_key=?
+				ON CONFLICT(workspace_path,module,focus_key) DO UPDATE SET
+					last_pulse_run_id=excluded.last_pulse_run_id,
+					last_reviewed_at=excluded.last_reviewed_at,
+					last_verdict=excluded.last_verdict,
+					last_selection_reason=excluded.last_selection_reason,
+					last_route_scope=excluded.last_route_scope,
+					next_check_at=excluded.next_check_at,
+					next_check_reason=excluded.next_check_reason,
+					updated_at=excluded.updated_at
+				WHERE excluded.updated_at > pulse_review_focus_state.updated_at`, canonical, pulseModuleTechnicalReview, legacy); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE pulse_review_focus_history SET focus_key=? WHERE module=? AND focus_key=?`, canonical, pulseModuleTechnicalReview, legacy); err != nil {
+				return err
+			}
+		}
+	}
+	legacyStateKeys := []string{
+		"execution_correctness", "execution_efficiency", "tool_runtime_reliability", "schedule_capacity_recovery",
+		"plan_contract_integrity", "orchestration_fitness", "model_tier_fitness", "cost_attribution",
+		"report_eval_truth", "safety_permissions",
+	}
+	for _, legacy := range legacyStateKeys {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM pulse_review_focus_state WHERE module=? AND focus_key=?`, pulseModuleTechnicalReview, legacy); err != nil {
+			return err
+		}
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT _id,deferred_focuses_json FROM pulse_review_focus_history WHERE module=?`, pulseModuleTechnicalReview)
+	if err != nil {
+		return err
+	}
+	type deferredRow struct {
+		id      int64
+		encoded string
+	}
+	var deferredRows []deferredRow
+	for rows.Next() {
+		var row deferredRow
+		if err := rows.Scan(&row.id, &row.encoded); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		deferredRows = append(deferredRows, row)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, row := range deferredRows {
+		var keys []string
+		_ = json.Unmarshal([]byte(row.encoded), &keys)
+		encoded, _ := json.Marshal(canonicalPulseDeferredFocuses(keys))
+		if _, err := tx.ExecContext(ctx, `UPDATE pulse_review_focus_history SET deferred_focuses_json=? WHERE _id=?`, string(encoded), row.id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func canonicalPulseDeferredFocuses(keys []string) []string {
+	aliases := map[string][]string{
+		"execution_correctness":      {"execution_health"},
+		"execution_efficiency":       {"execution_health"},
+		"tool_runtime_reliability":   {"execution_health"},
+		"schedule_capacity_recovery": {"execution_health"},
+		"plan_contract_integrity":    {"plan_orchestration_integrity"},
+		"orchestration_fitness":      {"plan_orchestration_integrity"},
+		"model_tier_fitness":         {"model_cost_fitness"},
+		"cost_attribution":           {"model_cost_fitness"},
+		"report_eval_truth":          {"report_quality_truth", "evaluation_quality_truth"},
+		"safety_permissions":         {},
+	}
+	seen := map[string]bool{}
+	out := []string{}
+	for _, key := range keys {
+		key = strings.TrimSpace(key)
+		mapped, legacy := aliases[key]
+		if !legacy {
+			mapped = []string{key}
+		}
+		for _, candidate := range mapped {
+			if candidate == "" || seen[candidate] {
+				continue
+			}
+			seen[candidate] = true
+			out = append(out, candidate)
+		}
+	}
+	return out
 }
 
 // migrateMergedTechnicalReviewRows collapses the retired Engineering and

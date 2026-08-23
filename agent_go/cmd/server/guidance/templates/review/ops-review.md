@@ -153,9 +153,9 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
    real risk — scripting a step that is not actually deterministic breaks it —
    so where the trace does not settle it, say so and leave it agentic.
 
-### Execution-efficiency diagnosis
+### Execution-health diagnosis
 
-When Gate selected `execution_efficiency`, make this a bounded causal review,
+When Gate selected `execution_health`, make this a bounded causal review,
 not a broad list of expensive calls. Read the current `planning/plan.json` and
 the smallest comparable timing/cost/trace evidence needed for the affected
 steps. Produce one compact diagnosis that names:

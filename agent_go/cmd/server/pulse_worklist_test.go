@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -193,7 +194,7 @@ func TestPulseModuleSchemaMergesLegacyEngineeringAndOpsIntoTechnicalReview(t *te
 	}
 	var focusRun, focusReason string
 	if err := db.QueryRowContext(ctx, `SELECT last_pulse_run_id,last_selection_reason FROM pulse_review_focus_state
-		WHERE workspace_path=? AND module=? AND focus_key='execution_correctness'`, workspacePath, pulseModuleTechnicalReview).Scan(&focusRun, &focusReason); err != nil {
+		WHERE workspace_path=? AND module=? AND focus_key='execution_health'`, workspacePath, pulseModuleTechnicalReview).Scan(&focusRun, &focusReason); err != nil {
 		t.Fatal(err)
 	}
 	if focusRun != "pulse-shared" || focusReason != "ops selected it later" {
@@ -1625,4 +1626,21 @@ func completePulseWorklistDecisions(overrides map[string]PulseWorklistDecision) 
 		out = append(out, decision)
 	}
 	return out
+}
+
+func TestPulseReviewFocusCatalogUsesSixTechnicalAreasWithoutSafety(t *testing.T) {
+	want := []string{
+		"execution_health",
+		"plan_orchestration_integrity",
+		"store_integrity",
+		"report_quality_truth",
+		"evaluation_quality_truth",
+		"model_cost_fitness",
+	}
+	if got := pulseReviewFocusCatalog[pulseModuleTechnicalReview]; !slices.Equal(got, want) {
+		t.Fatalf("technical focus catalog = %v, want %v", got, want)
+	}
+	if slices.Contains(want, "safety_permissions") {
+		t.Fatal("safety_permissions must not be an active selectable focus")
+	}
 }

@@ -6,7 +6,7 @@
 |---|---|
 | Assigned agent | unassigned |
 | Ticket state | `implemented` — canonical `technical_review` migration, technical/strategic focus catalogs, durable review counts, slash/scheduled parity, and visible focus coverage shipped; live Pulse verification remains |
-| Last synchronized | `2026-08-21` |
+| Last synchronized | `2026-08-23` |
 
 - **Priority:** P1 — technical and strategic reviews are expensive, yet the
   platform cannot currently explain which deep theme a pass selected, why it
@@ -88,15 +88,33 @@ Each technical or strategic pass has two deliberately different depths:
    risk, decision, or repair value. It records why each theme won and which
    other themes were deferred. There is no fixed numerical quota.
 
-The technical catalog is: `execution_correctness`,
-`plan_contract_integrity`, `store_integrity`, `report_eval_truth`,
-`safety_permissions`, `execution_efficiency`, `tool_runtime_reliability`,
-`orchestration_fitness`, `model_tier_fitness`, `cost_attribution`, and
-`schedule_capacity_recovery`. The strategic catalog is:
+The technical catalog is: `execution_health`,
+`plan_orchestration_integrity`, `store_integrity`, `report_quality_truth`,
+`evaluation_quality_truth`, and `model_cost_fitness`. The strategic catalog is:
 `goal_measurement_validity`, `strategy_effectiveness`,
 `feedback_loops_bias`, `concentration_saturation`, `alternative_headroom`, and
 `experiment_impact`. Go stores these stable coverage identities but does not
 choose their semantic priority; the agent does.
+
+The current operator decision deliberately removes Safety & Permissions as a
+standalone rotating focus. Safety invariants remain enforced by the platform
+and reviewer contracts, but the popup does not offer a separate safety review.
+
+### 2026-08-23 — Catalog consolidation and one-off focused review
+
+- Combined execution correctness, efficiency, tool/runtime reliability, and
+  schedule recovery into `execution_health`.
+- Combined plan contracts and orchestration fitness into
+  `plan_orchestration_integrity`, explicitly including scripted-step fitness.
+- Split report and evaluation truth so each can enforce its own best practices.
+- Combined model/tier fitness and cost attribution into `model_cost_fitness`.
+- Added a focused-review action to the Pulse popup. It reuses or opens the
+  normal interactive automation chat, queues behind an active foreground turn,
+  and sends a curated `/pulse-review` or `/strategy-auditor` request containing
+  the exact canonical focus key. It does not create or modify a schedule.
+- Historical merged focus rows are retained under their canonical successor.
+  The old combined report/evaluation history is kept as legacy history rather
+  than copied into both new focuses and falsely counted twice.
 
 ## Priority and rotation semantics
 

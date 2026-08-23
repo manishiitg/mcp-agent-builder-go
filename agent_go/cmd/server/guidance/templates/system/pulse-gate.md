@@ -64,17 +64,12 @@ or a bounded new diagnosis. Examples include:
 The worklist reason proposes the best current technical focus. Use these stable
 focus keys when applicable:
 
-- `execution_correctness`
-- `plan_contract_integrity`
+- `execution_health` — correctness, efficiency, tool/runtime reliability, and schedule recovery
+- `plan_orchestration_integrity` — plan contracts, dependencies, context/handoffs, step types, scripted-vs-agentic choices, and sequence/todo orchestration fitness
 - `store_integrity`
-- `report_eval_truth`
-- `safety_permissions`
-- `execution_efficiency`
-- `tool_runtime_reliability`
-- `orchestration_fitness`
-- `model_tier_fitness`
-- `cost_attribution`
-- `schedule_capacity_recovery`
+- `report_quality_truth` — report accuracy plus reporting UI, accessibility, and performance practices
+- `evaluation_quality_truth` — evaluator truth, rubrics, thresholds, negative tests, and reproducibility
+- `model_cost_fitness` — model/tier/reasoning/fallback choices, quality-cost fit, and cost attribution
 
 This is agentic selection, not a Go threshold or semantic classifier. A large
 run can be justified by adaptive research, browser dwell, or independent

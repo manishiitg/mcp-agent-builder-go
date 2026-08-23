@@ -6,6 +6,7 @@ import {
   Clock3,
   Lightbulb,
   Loader2,
+  Play,
   RefreshCw,
   ShieldCheck,
   Sparkles,
@@ -142,6 +143,8 @@ export function PulseWorkspace({
   statusLoading,
   statusError,
   onRefresh,
+  onRunFocus,
+  focusRunStarting,
 }: {
   workspacePath: string
   monitorOn: boolean
@@ -153,6 +156,8 @@ export function PulseWorkspace({
   statusLoading: boolean
   statusError: string | null
   onRefresh: () => void
+  onRunFocus?: (module: string, focusKey: string) => Promise<void>
+  focusRunStarting?: string | null
 }) {
   const [findings, setFindings] = useState<PulseFindingLifecycle[]>([])
   const [reviews, setReviews] = useState<PulseReviewRecord[]>([])
@@ -173,6 +178,13 @@ export function PulseWorkspace({
   const [showCompleteBacklog, setShowCompleteBacklog] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [selectedReviewFocus, setSelectedReviewFocus] = useState('')
+
+  useEffect(() => {
+    if (selectedReviewFocus || reviewFocuses.length === 0) return
+    const first = reviewFocuses[0]
+    setSelectedReviewFocus(`${first.module}:${first.focus_key}`)
+  }, [reviewFocuses, selectedReviewFocus])
 
   const load = useCallback(async () => {
     if (!workspacePath) return
@@ -503,6 +515,47 @@ export function PulseWorkspace({
 
       <ReportHumanInputPanel workspacePath={workspacePath} contentMode="all" providedImpact={impact} />
 
+      {onRunFocus && reviewFocuses.length > 0 && (
+        <section className="rounded-xl border bg-background px-4 py-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
+              <h3 className="text-sm font-semibold text-foreground">Focused review</h3>
+              <p className="mt-0.5 text-[11px] text-muted-foreground">
+                Run one deep review now. The recurring Pulse rotation stays unchanged.
+              </p>
+            </div>
+            <div className="flex min-w-0 gap-2">
+              <select
+                value={selectedReviewFocus}
+                onChange={(event) => setSelectedReviewFocus(event.target.value)}
+                className="min-w-0 flex-1 rounded-md border bg-background px-2.5 py-1.5 text-xs text-foreground sm:w-64"
+                aria-label="Pulse review focus"
+              >
+                {reviewFocuses.map((item) => (
+                  <option key={`${item.module}:${item.focus_key}`} value={`${item.module}:${item.focus_key}`}>
+                    {readable(item.module)} · {readable(item.focus_key)}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                disabled={!selectedReviewFocus || Boolean(focusRunStarting)}
+                onClick={() => {
+                  const [module, focusKey] = selectedReviewFocus.split(':', 2)
+                  if (module && focusKey) void onRunFocus(module, focusKey)
+                }}
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {focusRunStarting === selectedReviewFocus
+                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  : <Play className="h-3.5 w-3.5" />}
+                Review now
+              </button>
+            </div>
+          </div>
+        </section>
+      )}
+
       <section className="overflow-hidden rounded-xl border bg-background">
         <div className="border-b px-4 py-3">
           <h3 className="text-sm font-semibold text-foreground">Work areas</h3>
@@ -516,7 +569,7 @@ export function PulseWorkspace({
               id: 'technical_review',
               title: 'Technical review',
               icon: Wrench,
-              description: 'Correctness, stores, runtime, orchestration, tools, models, cost, and execution efficiency',
+              description: 'Execution health, plan integrity, stores, reports, evaluation, and model/cost fitness',
               tone: 'text-sky-600 dark:text-sky-300',
             },
             {

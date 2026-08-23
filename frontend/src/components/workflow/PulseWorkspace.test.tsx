@@ -31,19 +31,19 @@ describe('PulseWorkspace information hierarchy', () => {
           {
             workspace_path: '/workspace/example',
             module: 'technical_review',
-            focus_key: 'execution_efficiency',
+            focus_key: 'execution_health',
             last_pulse_run_id: 'pulse-1',
             last_reviewed_at: '2026-08-21T10:00:00Z',
             last_selection_reason: 'The latest run exceeded its cadence.',
             updated_at: '2026-08-21T10:00:00Z',
             review_count: 2,
             route_scope: 'daily-execution/large-route',
-            deferred_focuses: ['tool_runtime_reliability'],
+            deferred_focuses: ['plan_orchestration_integrity'],
           },
           {
             workspace_path: '/workspace/example',
             module: 'technical_review',
-            focus_key: 'schedule_capacity_recovery',
+            focus_key: 'plan_orchestration_integrity',
             last_pulse_run_id: 'pulse-1',
             last_reviewed_at: '2026-08-21T10:00:00Z',
             last_selection_reason: 'A separate small route missed its schedule.',
@@ -55,6 +55,7 @@ describe('PulseWorkspace information hierarchy', () => {
         statusLoading={false}
         statusError={null}
         onRefresh={() => undefined}
+        onRunFocus={async () => undefined}
       />,
     )
 
@@ -72,11 +73,11 @@ describe('PulseWorkspace information hierarchy', () => {
     expect(html).toContain('Technical review')
     expect(html).toContain('Strategic review')
     expect(html).toContain('Last focuses:')
-    expect(html).toContain('Execution efficiency')
-    expect(html).toContain('Schedule capacity recovery')
+    expect(html).toContain('Execution health')
+    expect(html).toContain('Plan orchestration integrity')
     expect(html).toContain('Daily-execution/large-route')
     expect(html).toContain('Next focus candidates:')
-    expect(html).toContain('Tool runtime reliability')
+    expect(html).toContain('Focused review')
     expect(html).toContain('Feedback loops bias')
     expect(html).not.toContain('Report Health')
     expect(html).not.toContain('Eval Health')

@@ -1129,8 +1129,8 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 		"execution-attempt-*.json",
 		"session.json",
 		"not automatic run failure",
-		"Execution-efficiency trigger",
-		"execution_efficiency",
+		"execution health",
+		"execution_health",
 		"cadence-threatening run",
 	} {
 		if !strings.Contains(gate, want) {

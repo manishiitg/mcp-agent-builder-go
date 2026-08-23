@@ -2,10 +2,24 @@ import { describe, expect, it } from 'vitest'
 import type { ReportHumanInput } from '../services/api-types'
 import type { ChatTab } from '../stores/useChatStore'
 import {
+  buildPulseFocusedReviewChatMessage,
   buildReportHumanInputChatMessage,
   buildReportHumanInputDelegatedActionMessage,
   selectReportDiscussionTab,
 } from './reportHumanInputChat'
+
+describe('buildPulseFocusedReviewChatMessage', () => {
+  it('routes technical and strategic focuses through their normal chat commands', () => {
+    const technical = buildPulseFocusedReviewChatMessage('technical_review', 'execution_health')
+    expect(technical).toContain('/pulse-review')
+    expect(technical).toContain('focus_key="execution_health"')
+    expect(technical).toContain('Do not change the recurring Pulse schedule')
+
+    const strategic = buildPulseFocusedReviewChatMessage('strategic_review', 'feedback_loops_bias')
+    expect(strategic).toContain('/strategy-auditor')
+    expect(strategic).toContain('focus_key="feedback_loops_bias"')
+  })
+})
 
 function tab(tabId: string, overrides: Partial<ChatTab> = {}): ChatTab {
   return {

@@ -268,12 +268,12 @@ func TestPulseReviewFixerDocsAreNamedAndLoadable(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		"execution_efficiency",
-		"cadence-threatening run",
+		"execution_health",
+		"cadence-threatening",
 		"durable approval request",
 	} {
 		if !strings.Contains(prompt, want) {
-			t.Errorf("pulse-review-fixer is missing execution-efficiency handoff %q", want)
+		t.Errorf("pulse-review-fixer is missing execution-health handoff %q", want)
 		}
 	}
 }
