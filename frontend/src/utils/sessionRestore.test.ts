@@ -100,7 +100,12 @@ describe('hydrateTabEvents restored chat fallback', () => {
     })
     mocks.getChatHistoryResumeConversation.mockResolvedValue({
       session_id: 'schedule-session',
-      conversation_history: [{ Role: 'human', Parts: [{ Text: 'truncated summary' }] }],
+      conversation_history: [
+        { Role: 'human', Parts: [{ Text: 'Start the scheduled run' }] },
+        { Role: 'ai', Parts: [{ Text: 'The first stage completed.' }] },
+        { Role: 'human', Parts: [{ Text: 'Continue with the next stage' }] },
+        { Role: 'ai', Parts: [{ Text: 'The scheduled run is complete.' }] },
+      ],
       ui_events: [
         {
           id: 'child-tool',
@@ -138,6 +143,18 @@ describe('hydrateTabEvents restored chat fallback', () => {
       'schedule-session',
       expect.arrayContaining([
         expect.objectContaining({ type: 'conversation_resumed' }),
+        expect.objectContaining({
+          type: 'user_message',
+          data: expect.objectContaining({
+            data: expect.objectContaining({ content: 'Start the scheduled run' }),
+          }),
+        }),
+        expect.objectContaining({
+          type: 'unified_completion',
+          data: expect.objectContaining({
+            data: expect.objectContaining({ final_result: 'The scheduled run is complete.' }),
+          }),
+        }),
         expect.objectContaining({ id: 'child-tool', type: 'tool_call_start' }),
         expect.objectContaining({ id: 'child-answer', type: 'unified_completion' }),
       ]),

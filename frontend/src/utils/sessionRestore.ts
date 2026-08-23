@@ -252,17 +252,6 @@ export function conversationToRestoredEvents(conversation: ChatHistoryConversati
     }, eventIndexBase),
   ]
 
-  // Scheduled read-only restore may request the parent's compact persisted UI
-  // trace. It preserves the actual child-agent prompts, answers and paired
-  // tools that the conversational summary intentionally omits. Do not add a
-  // synthetic second copy of the user/final messages in that case.
-  if (conversation.ui_events && conversation.ui_events.length > 0) {
-    return [
-      ...events,
-      ...conversation.ui_events.map((event, index) => markPersistedRestoreTrace(event as PollingEvent, sessionId, eventIndexBase + index + 1)),
-    ]
-  }
-
   let turn = 0
   let currentQuestion = ''
   let pendingAssistant = ''
@@ -315,7 +304,70 @@ export function conversationToRestoredEvents(conversation: ChatHistoryConversati
   }
   flushAssistant()
 
+  // A scheduled run has two durable representations:
+  //
+  // - conversation_history is the complete parent conversation, with a real
+  //   page cursor for older turns;
+  // - ui_events is a bounded, displayable trace containing tool calls and
+  //   child-agent activity.
+  //
+  // The latter used to replace the former. That meant navigating to a running
+  // workflow from Global Monitor could show only the small retained trace even
+  // though its full parent conversation was on disk. Keep the conversation as
+  // the transcript backbone and append only trace records that do not duplicate
+  // a persisted user/final-answer carrier.
+  if (conversation.ui_events && conversation.ui_events.length > 0) {
+    return mergePersistedUIEvents(
+      events,
+      conversation.ui_events as PollingEvent[],
+      sessionId,
+      eventIndexBase + events.length,
+    )
+  }
+
   return events
+}
+
+function restoredEventText(event: PollingEvent): string {
+  const outer = event.data && typeof event.data === 'object' ? event.data as Record<string, unknown> : {}
+  const nested = outer.data && typeof outer.data === 'object' ? outer.data as Record<string, unknown> : outer
+  for (const field of ['content', 'final_result', 'result']) {
+    const value = nested[field]
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return ''
+}
+
+function transcriptCarrierKey(event: PollingEvent): string | undefined {
+  const type = event.type || ''
+  if (type !== 'user_message' && type !== 'llm_generation_end' && type !== 'unified_completion') return undefined
+  const content = restoredEventText(event).replace(/\s+/g, ' ').trim().toLowerCase()
+  return content ? `${type}:${content}` : undefined
+}
+
+function mergePersistedUIEvents(
+  conversationEvents: PollingEvent[],
+  persistedUIEvents: PollingEvent[],
+  sessionId: string,
+  eventIndexBase: number,
+): PollingEvent[] {
+  const knownIDs = new Set(conversationEvents.map(event => event.id).filter(Boolean))
+  const knownCarriers = new Set(conversationEvents
+    .map(transcriptCarrierKey)
+    .filter((key): key is string => !!key))
+
+  const trace = persistedUIEvents
+    .map((event, index) => markPersistedRestoreTrace(event, sessionId, eventIndexBase + index + 1))
+    .filter((event) => {
+      if (event.id && knownIDs.has(event.id)) return false
+      const carrier = transcriptCarrierKey(event)
+      if (carrier && knownCarriers.has(carrier)) return false
+      if (event.id) knownIDs.add(event.id)
+      if (carrier) knownCarriers.add(carrier)
+      return true
+    })
+
+  return [...conversationEvents, ...trace]
 }
 
 function markPersistedRestoreTrace(event: PollingEvent, parentSessionId: string, eventIndex: number): PollingEvent {
