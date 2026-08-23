@@ -520,9 +520,50 @@ func TestCDPOwnerIDUsesStableBrowserSessionOverride(t *testing.T) {
 	common.SetSessionBrowserSessionID(agentSession, browserSession)
 	defer common.ClearSessionShellConfig(agentSession)
 
-	got := cdpOwnerID(workflowSession, agentSession, "shared-cdp-9222")
+	got := cdpOwnerID(workflowSession, agentSession, "shared-cdp-9222", "shared-cdp-9222")
 	if got != browserSession {
 		t.Fatalf("cdpOwnerID() = %q, want %q", got, browserSession)
+	}
+}
+
+// PLAT-181. When no per-workflow browser session was ever bound (no
+// SetSessionBrowserSessionID call for either candidate), cdpOwnerID must not
+// fall back to returning the shared connection identity that every workflow
+// on the same CDP port has by construction (sharedCDPSessionName) -- doing
+// so pooled unrelated workflows' tabs and cleanup leases under one key.
+func TestCDPOwnerIDNeverReturnsTheSharedConnectionIdentity(t *testing.T) {
+	const sharedIdentity = "shared-cdp-9222"
+
+	got := cdpOwnerID("", "", sharedIdentity, sharedIdentity)
+	if got == sharedIdentity {
+		t.Fatalf("cdpOwnerID() = %q, must never equal the shared connection identity %q", got, sharedIdentity)
+	}
+	if got == "" {
+		t.Fatal("cdpOwnerID() = \"\", must return a non-empty identity even when unresolved")
+	}
+}
+
+// Two calls with no resolvable identity are two different, genuinely
+// unidentified callers as far as this function can tell -- they must not
+// collide with each other either, or the same pooling bug just moves from
+// the shared connection name to a different fixed fallback value.
+func TestCDPOwnerIDUnidentifiedFallbacksDoNotCollideAcrossCalls(t *testing.T) {
+	const sharedIdentity = "shared-cdp-9222"
+
+	first := cdpOwnerID("", "", sharedIdentity, sharedIdentity)
+	second := cdpOwnerID("", "", sharedIdentity, sharedIdentity)
+	if first == second {
+		t.Fatalf("two independently-unidentified callers resolved to the same owner %q, would still pool their tabs together", first)
+	}
+}
+
+// A non-CDP caller's session is a genuine identity, not a shared connection
+// name -- passing "" for sharedConnectionIdentity (as the real non-CDP call
+// site does) must let it through the fallback exactly as before this fix.
+func TestCDPOwnerIDStillUsesSessionAsFallbackOutsideCDPMode(t *testing.T) {
+	got := cdpOwnerID("", "", "headless-session-42", "")
+	if got != "headless-session-42" {
+		t.Fatalf("cdpOwnerID() = %q, want the non-CDP session to still be used as a fallback identity", got)
 	}
 }
 

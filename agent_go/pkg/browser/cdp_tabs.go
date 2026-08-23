@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -53,6 +54,17 @@ type newCDPTabRequest struct {
 
 func sharedCDPSessionName(port int) string {
 	return common.PrefixBrowserSessionID(fmt.Sprintf("shared-cdp-%d", port))
+}
+
+// cdpSharedConnectionIdentityFor returns the value cdpOwnerID must never
+// resolve an owner to, for the given call's mode/port -- see cdpOwnerID's
+// own doc comment. Non-CDP callers get "", since `session` is a genuine
+// identity for them, not a shared connection name.
+func cdpSharedConnectionIdentityFor(isCdpMode bool, port int) string {
+	if !isCdpMode {
+		return ""
+	}
+	return sharedCDPSessionName(port)
 }
 
 func sharedCDPLock(port int) *sync.Mutex {
@@ -449,7 +461,19 @@ func clearCDPActiveTab(port int, tab string) {
 	}
 }
 
-func cdpOwnerID(workflowSessionID, agentSessionID, session string) string {
+// cdpOwnerID resolves the identity that a workflow/agent's CDP tabs and
+// artifacts are tracked under. sharedConnectionIdentity is the value
+// (typically sharedCDPSessionName(port)) that `session` gets deliberately
+// overwritten to for the purpose of choosing which real Chrome to talk to,
+// when the caller is in CDP mode -- pass "" for a non-CDP caller, where
+// `session` is a genuine identity and safe to use as a fallback.
+//
+// session must never be returned as the resolved owner when it equals
+// sharedConnectionIdentity: that string is shared by construction across
+// every workflow using the same CDP port (see sharedCDPSessionName), so
+// treating it as one workflow's owner identity silently pools every such
+// workflow's tabs and cleanup leases under one key (PLAT-181).
+func cdpOwnerID(workflowSessionID, agentSessionID, session, sharedConnectionIdentity string) string {
 	for _, candidate := range []string{agentSessionID, workflowSessionID} {
 		candidate = strings.TrimSpace(candidate)
 		if candidate == "" {
@@ -459,12 +483,33 @@ func cdpOwnerID(workflowSessionID, agentSessionID, session string) string {
 			return resolved
 		}
 	}
+	sharedConnectionIdentity = strings.TrimSpace(sharedConnectionIdentity)
 	for _, candidate := range []string{workflowSessionID, agentSessionID, session} {
-		if trimmed := strings.TrimSpace(candidate); trimmed != "" {
-			return trimmed
+		trimmed := strings.TrimSpace(candidate)
+		if trimmed == "" {
+			continue
 		}
+		if sharedConnectionIdentity != "" && trimmed == sharedConnectionIdentity {
+			continue
+		}
+		return trimmed
 	}
-	return "default"
+	return cdpUnidentifiedOwnerID()
+}
+
+var cdpUnidentifiedOwnerCounter atomic.Int64
+
+// cdpUnidentifiedOwnerID returns a fresh identity for a caller with no
+// resolvable per-workflow session at all -- the old behavior returned the
+// fixed literal "default" here, which collided across every such caller the
+// same way the shared connection identity did (PLAT-181): two genuinely
+// unidentified workflows would still pool their tabs under one key. A
+// unique value per call means quota tracking cannot accumulate across
+// repeat calls from a truly unidentified caller (each looks like a fresh
+// owner with zero tabs), which is the correct, safe direction to fail in --
+// unlike colliding with a stranger's quota, it never blocks unrelated work.
+func cdpUnidentifiedOwnerID() string {
+	return fmt.Sprintf("unidentified-%d-%d", time.Now().UnixNano(), cdpUnidentifiedOwnerCounter.Add(1))
 }
 
 func parseTabSelection(args []string) (tab string, clear bool, err error) {

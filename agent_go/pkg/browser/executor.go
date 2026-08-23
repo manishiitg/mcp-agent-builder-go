@@ -694,7 +694,7 @@ func (e *Executor) HandleAgentBrowser(ctx context.Context, args map[string]inter
 	var uploadPlan *browserUploadPlan
 	commandOpts := opts
 	if folderGuard != nil && folderGuard.Enabled {
-		artifactOwner := cdpOwnerID(workflowSessionID, agentSessionID, session)
+		artifactOwner := cdpOwnerID(workflowSessionID, agentSessionID, session, cdpSharedConnectionIdentityFor(isCdpMode, cdpPort))
 		cloned := *opts
 		optionsChanged := false
 		var artifactErr error
@@ -740,7 +740,7 @@ func (e *Executor) HandleAgentBrowser(ctx context.Context, args map[string]inter
 	recordingOriginalTab := ""
 	recordingPreviousTab := ""
 	if isCdpMode && !isBrowserDocumentationCommand(command) {
-		cdpOwner = cdpOwnerID(workflowSessionID, agentSessionID, session)
+		cdpOwner = cdpOwnerID(workflowSessionID, agentSessionID, session, cdpSharedConnectionIdentityFor(isCdpMode, cdpPort))
 		// Keep delayed ownership cleanup aware of direct Builder/browser calls as
 		// well as orchestrated workflow runs. A surrounding run lease keeps the
 		// owner active; without one, this renews cleanup to one hour after the
