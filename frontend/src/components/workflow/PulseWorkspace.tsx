@@ -444,8 +444,6 @@ export function PulseWorkspace({
         )}
       </section>
 
-      <ReportHumanInputPanel workspacePath={workspacePath} contentMode="all" providedImpact={impact} />
-
       {onRunFocus && reviewFocuses.length > 0 && (
         <section className="rounded-xl border bg-background px-4 py-3">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -486,6 +484,8 @@ export function PulseWorkspace({
           </div>
         </section>
       )}
+
+      <ReportHumanInputPanel workspacePath={workspacePath} contentMode="all" providedImpact={impact} />
 
       <section className="overflow-hidden rounded-xl border bg-background">
         <div className="border-b px-4 py-3">
