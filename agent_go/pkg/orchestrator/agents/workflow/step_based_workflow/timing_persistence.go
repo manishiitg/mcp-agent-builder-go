@@ -162,7 +162,13 @@ func formatRFC3339UTC(t time.Time) string {
 	if t.IsZero() {
 		return ""
 	}
-	return t.UTC().Format(time.RFC3339)
+	// Nanosecond precision, not plain RFC3339's whole-second precision: a
+	// completed_at value written at this resolution is used to order two
+	// dispatches of the same step against each other (loadSingleStepResultFromLogs),
+	// and two genuinely concurrent dispatches finishing within the same
+	// wall-clock second would otherwise tie and fall back to attempt/iteration
+	// counters that are not comparable across dispatches (PLAT-182 review).
+	return t.UTC().Format(time.RFC3339Nano)
 }
 
 //nolint:unused // staged for the run-metadata timing persistence rollout.

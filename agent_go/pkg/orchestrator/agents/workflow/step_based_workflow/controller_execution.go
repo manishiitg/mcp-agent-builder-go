@@ -1051,7 +1051,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) loadSingleStepResultFromLogs(ctx cont
 			var completedAt time.Time
 			var hasCompletedAt bool
 			if raw, ok := executionData["completed_at"].(string); ok {
-				if parsed, parseErr := time.Parse(time.RFC3339, strings.TrimSpace(raw)); parseErr == nil && !parsed.IsZero() {
+				// RFC3339Nano parses a plain-RFC3339 (whole-second) legacy
+				// value fine too, so this covers both old and new files.
+				if parsed, parseErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(raw)); parseErr == nil && !parsed.IsZero() {
 					completedAt = parsed
 					hasCompletedAt = true
 				}
@@ -3086,7 +3088,29 @@ func getRegularPlanStep(step PlanStepInterface) *RegularPlanStep {
 	return nil
 }
 
-// runExecutionPhase executes the plan steps one by one
+// LastExecutedStepOutcome captures the exact in-memory result of the most
+// recently executed step within one runExecutionPhase call. It exists so a
+// caller that dispatched exactly one step (e.g. the workshop's
+// ExecuteStepForWorkshop) can use the result it just produced directly,
+// instead of re-reading the step's log folder afterward -- a re-read has no
+// way to distinguish "the file this exact call just wrote" from a file a
+// concurrent, unrelated dispatch of the same step wrote in the meantime
+// (PLAT-182 review). Found is false when no step that populates
+// previousExecutionResults ran (e.g. only a routing or todo_task step ran,
+// neither of which produces a result string this way) -- the caller must
+// fall back to a log-folder read in that case.
+type LastExecutedStepOutcome struct {
+	StepIndex       int
+	StepID          string
+	ExecutionResult string
+	Found           bool
+}
+
+// runExecutionPhase executes the plan steps one by one. lastOutcome, if
+// non-nil, is populated in place with the final executed step's exact
+// in-memory result -- see LastExecutedStepOutcome. Callers that process a
+// whole plan/group (not a single targeted step) have no use for this and
+// pass nil.
 func (hcpo *StepBasedWorkflowOrchestrator) runExecutionPhase(
 	ctx context.Context,
 	breakdownSteps []PlanStepInterface,
@@ -3094,6 +3118,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) runExecutionPhase(
 	progress *StepProgress,
 	startFromStep int,
 	execCtx *ExecutionContext,
+	lastOutcome *LastExecutedStepOutcome,
 ) error {
 	// Run folder should already be resolved early (after plan approval)
 	if hcpo.selectedRunFolder == "" {
@@ -3516,6 +3541,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) runExecutionPhase(
 			}
 			previousExecutionResults[i] = executionResult
 			hcpo.GetLogger().Info(fmt.Sprintf("💾 Stored execution result for human input step %d (will be used by subsequent steps): %s", i+1, executionResult))
+			if lastOutcome != nil {
+				*lastOutcome = LastExecutedStepOutcome{StepIndex: i, StepID: step.GetID(), ExecutionResult: executionResult, Found: true}
+			}
 
 			// Check if we're in single step mode and should stop
 			if hcpo.runSingleStepOnly && i == hcpo.singleStepTarget {
@@ -3653,6 +3681,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) runExecutionPhase(
 		}
 		previousExecutionResults[i] = executionResult
 		hcpo.GetLogger().Info(fmt.Sprintf("💾 Stored execution result for downstream steps after step %d", i+1))
+		if lastOutcome != nil {
+			*lastOutcome = LastExecutedStepOutcome{StepIndex: i, StepID: step.GetID(), ExecutionResult: executionResult, Found: true}
+		}
 
 		// Check if we're in single step mode and should stop
 		if hcpo.runSingleStepOnly && i == hcpo.singleStepTarget {

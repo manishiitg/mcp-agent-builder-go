@@ -133,7 +133,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) ExecuteEvaluationOnly(ctx context.Con
 	execCtx.SkipHumanInput = true // Ensure execution context also has this set
 
 	// Run execution phase
-	err = hcpo.runExecutionPhase(ctx, breakdownSteps, 1, progress, 0, execCtx)
+	err = hcpo.runExecutionPhase(ctx, breakdownSteps, 1, progress, 0, execCtx, nil)
 	if err != nil {
 		hcpo.GetLogger().Error(fmt.Sprintf("❌ Evaluation execution failed: %v", err), nil)
 		return "", fmt.Errorf("evaluation execution phase failed: %w", err)

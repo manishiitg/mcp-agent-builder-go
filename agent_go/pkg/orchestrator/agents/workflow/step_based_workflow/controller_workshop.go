@@ -302,9 +302,18 @@ func (hcpo *StepBasedWorkflowOrchestrator) ExecuteStepForWorkshop(
 	}
 
 	// 6. Run via the standard execution pipeline.
-	execErr := hcpo.runExecutionPhase(ctx, breakdownSteps, 1, progress, setup.StartFromStep, setup.Context)
+	var lastOutcome LastExecutedStepOutcome
+	execErr := hcpo.runExecutionPhase(ctx, breakdownSteps, 1, progress, setup.StartFromStep, setup.Context, &lastOutcome)
 
-	// 7. Read execution result from logs (runExecutionPhase writes results to log files)
+	// 7. Prefer the exact result this call just produced over a log-folder
+	// re-read: a re-read cannot distinguish this call's own file from one an
+	// unrelated, concurrent dispatch of the same step (a different chat
+	// session or a scheduled run — nothing serializes them against this
+	// path) wrote to the same folder in the meantime (PLAT-182 review). The
+	// log-based paths remain as a fallback for step kinds that never
+	// populate an in-memory result this way (routing, todo_task) and for
+	// the inner-step-override addressing scheme, which this change leaves
+	// untouched.
 	result := ""
 	if execErr == nil {
 		loaded := false
@@ -314,6 +323,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) ExecuteStepForWorkshop(
 				result = r
 				loaded = true
 			}
+		} else if lastOutcome.Found && lastOutcome.StepIndex == targetIndex {
+			result = lastOutcome.ExecutionResult
+			loaded = true
 		}
 		if !loaded {
 			if r, ok := hcpo.loadSingleStepResultFromLogs(ctx, targetIndex+1); ok {

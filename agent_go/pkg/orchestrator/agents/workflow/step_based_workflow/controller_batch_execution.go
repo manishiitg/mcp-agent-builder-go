@@ -385,7 +385,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) runBatchExecution(
 		}
 
 		// Run execution phase for this group
-		err = hcpo.runExecutionPhase(ctx, breakdownSteps, iteration, progress, groupSetup.StartFromStep, groupSetup.Context)
+		err = hcpo.runExecutionPhase(ctx, breakdownSteps, iteration, progress, groupSetup.StartFromStep, groupSetup.Context, nil)
 		persistenceErr := error(nil)
 		if cab, ok := hcpo.GetContextAwareBridge().(*orchestrator.ContextAwareEventBridge); ok {
 			flushCtx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
