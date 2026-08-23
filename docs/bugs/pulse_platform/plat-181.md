@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `open` — mechanism confirmed by code and partial live evidence, exact triggering call site not pinned down |
+| Ticket state | `partially fixed` — defense-in-depth fix shipped (cdpOwnerID can no longer resolve to the shared connection identity), but the original hypothesis was corrected same day: that specific gap does NOT explain the message-sequence/route step path that actually hit the live symptom; true root cause of the live incident is still unproven, see "Correction" below |
 | Last synchronized | `2026-08-23` |
 
 - **Priority:** P1 — a workflow can be permanently blocked from opening its
@@ -124,6 +124,63 @@ tab counts sum together.
   code-confirmed explanation matching the symptom, not a directly observed
   smoking gun for this one incident.
 
+## Correction — the specific gap does NOT fire for the step that actually hit this (2026-08-23, same day)
+
+A follow-up investigation traced the exact session ID `route-generate-illustrations`
+executes under, to check whether it genuinely diverges from what
+`bindWorkshopBrowserSession` binds, as hypothesized above. It does not:
+
+1. **Live evidence of the actual session used**: the step's own execution
+   log (`.../logs/route-generate-illustrations/execution/execution-attempt-1-iteration-1.json`)
+   captures the real call using
+   `session=msgseq-iteration-0-test-run-step-1-sub-route-generate-illustrations-todo-id-route-generate-illustrations`.
+2. That exact string is not an unbound leftover — it is `execSessionID`,
+   built by `messageSequenceRuntimeSessionID(stepPath, stepID)`
+   (`controller_message_sequence.go:1107-1117`), assigned as
+   `session.RuntimeSessionID` (`controller_message_sequence.go:1032-1036`),
+   injected into the agent's context via `messageSequenceRuntimeSessionOverride`
+   (`controller_message_sequence.go:1057-1059`), and consumed as
+   `execSessionID` inside `createExecutionOnlyAgent`
+   (`controller_agent_factory.go:1298-1300`).
+3. **This exact `execSessionID` is what gets bound**, synchronously, before
+   any tool call: `createExecutionOnlyAgent` unconditionally calls
+   `hcpo.bindWorkshopBrowserSession(execSessionID, sharedBrowserSessionID)`
+   (`controller_agent_factory.go:1312-1313`) — not only the group-level
+   session as this ticket originally assumed.
+4. Both delivery paths for `ChatSessionIDKey` (in-process via
+   `base_orchestrator_agent.go:167`/`base_agent.go:336`, and the HTTP/mcpbridge
+   path used by CLI-transport coding agents via `MCP_SESSION_ID` →
+   `X-Session-ID` → `cmd/server/server.go`'s context injection) carry this
+   same `execSessionID` value through to `pkg/browser/executor.go:433-436`'s
+   `agentSessionID`.
+5. So at `cdpOwnerID(workflowSessionID, agentSessionID, session)`
+   (`executor.go:743`), `agentSessionID == execSessionID`, `cdpOwnerID`'s
+   first loop's `common.ResolveBrowserSessionID(agentSessionID, "default")`
+   finds the binding from step 3, resolves to the workflow+group-scoped
+   `workflow-browser-<hash>-<groupName>` identity, and returns immediately —
+   **never reaching the second loop's fallback to the shared `session`
+   value** this ticket originally blamed.
+
+**What this means:** the overwrite-before-ownership-computation shape
+described in "Root cause mechanism" above is real in the code, but for this
+specific call path it is neutralized by `createExecutionOnlyAgent`'s own
+binding call, which this ticket's first pass had not checked closely enough
+before concluding the gap applied here.
+
+**What remains unproven:** the actual mechanism behind the live incident
+(Upwork/Apollo/WhatsApp tabs counting against Instagram's quota) is still
+unknown. `server_debug.log` and its rotated files have no entries for the
+2026-08-23 00:02:15 window (server restarted; already noted above), and
+`schedule.log` for that window contains only heartbeat lines, no per-tool
+session detail — so there is still no direct log evidence of what `cdpOwner`
+actually resolved to at the failing moment. The true cause may be a
+different code path than `createExecutionOnlyAgent`'s message-sequence
+branch (a todo-task or generic background-agent browser call that binds
+differently, or doesn't bind at all), a race/staleness condition not visible
+to a static trace, or something not yet considered. This needs fresh
+investigation from a different angle rather than further scrutiny of the
+mechanism already ruled out above.
+
 ## Why this matters beyond the one incident
 
 Any two workflows sharing a CDP port are at risk whenever the step/route
@@ -133,41 +190,66 @@ message itself actively misleads whoever hits it ("this workflow already
 has 4 labeled tab(s)") since it has no way to say the 4 tabs are actually
 someone else's.
 
-## Suggested fix direction (not implemented)
+## Fix implemented (angle 2 of the original two proposed)
 
-Two independent angles, not mutually exclusive:
+Two independent angles were proposed; only the second was implemented, as
+defense-in-depth that closes the general class of bug regardless of which
+call path turns out to cause the live incident:
 
-1. **Bind the browser session ID at every session ID that can reach
-   `cdpOwnerID`, not only the group-level session.** If step/route execution
-   creates its own session ID distinct from `groupSessionID`, that session
-   also needs its own `bindWorkshopBrowserSession` call (or to inherit the
-   parent's binding) before it can make a CDP browser call.
-2. **Never let `cdpOwnerID` fall back to the shared connection identity.**
-   The second loop in `cdpOwnerID` should not include `session` as a
-   candidate once `session` has already been overwritten to the
-   port-shared name — that fallback exists to handle a genuinely
-   session-less caller, not "the per-workflow binding was missing." A
-   missing per-workflow identity should be a loud, diagnosable error
-   (or fall back to something still empty/unowned, never counted against
-   anyone's quota) rather than silently landing on a value that happens to
-   be shared by construction.
+1. ~~Bind the browser session ID at every session ID that can reach
+   `cdpOwnerID`~~ — **not implemented**. The Correction above shows this
+   path (`createExecutionOnlyAgent`/message-sequence steps) already does
+   this correctly; whatever call path the live incident actually went
+   through has not been identified, so there is nothing concrete to bind
+   yet.
+2. **Never let `cdpOwnerID` fall back to the shared connection identity —
+   implemented.** `cdpOwnerID` (`pkg/browser/cdp_tabs.go`) now takes an
+   explicit `sharedConnectionIdentity` parameter — `sharedCDPSessionName(port)`
+   for CDP-mode callers, `""` for the one non-CDP caller (artifact
+   ownership in `executor.go`, where `session` remains a genuine identity).
+   Its fallback loop skips any candidate equal to that value. The final
+   "nothing resolved at all" fallback no longer returns the fixed literal
+   `"default"` either — that had the identical collision problem across two
+   independently-unidentified callers — and instead generates a fresh,
+   call-unique value (`cdpUnidentifiedOwnerID`), so quota tracking degrades
+   to "doesn't accumulate for this one call" rather than "silently shared
+   with a stranger."
 
-## Acceptance tests (once a fix is designed)
+## Acceptance tests
 
-1. Two different workflows opening labeled tabs on the same CDP port never
-   see each other's tabs counted against their own `MaxCDPTabsPerOwner`
-   quota, even when the step actually issuing the browser call runs under a
-   session ID distinct from its workflow's group-level session.
-2. `guardCDPTabCreation`'s error message, when it does legitimately fire,
-   names tabs that provably belong to the workflow hitting the limit — not
-   an untraceable shared count.
-3. A regression test exercising `cdpOwnerID` directly: given an
-   `agentSessionID`/`workflowSessionID` with no bound shell config, the
-   function does not fall back to a value shared across other workflows.
+Covered by three new tests in `pkg/browser/cdp_tabs_test.go`:
+
+1. `TestCDPOwnerIDNeverReturnsTheSharedConnectionIdentity` — given no bound
+   per-workflow identity and `session` equal to the shared connection name,
+   the returned owner is never that shared value.
+2. `TestCDPOwnerIDUnidentifiedFallbacksDoNotCollideAcrossCalls` — two
+   independent calls with nothing resolvable do not return the same owner.
+3. `TestCDPOwnerIDStillUsesSessionAsFallbackOutsideCDPMode` — confirms the
+   non-CDP artifact-ownership call site is unaffected (empty
+   `sharedConnectionIdentity` lets `session` through exactly as before).
+
+The existing `TestCDPOwnerIDUsesStableBrowserSessionOverride` (the correct,
+bound-identity happy path) still passes unchanged.
+
+## Not implemented / still open
+
+- The actual live-incident mechanism (Upwork/Apollo/WhatsApp tabs counting
+  against Instagram's quota) remains unidentified — see Correction above.
+  This fix makes the specific failure mode it targets impossible going
+  forward, but cannot be claimed to have fixed the observed incident until
+  the true cause is found and matches this shape.
+- `guardCDPTabCreation`'s error message still cannot name which tabs are
+  actually counted against a caller — it reports a count, not identities.
 
 ## Verification
 
-Investigation only — no code change in this pass. Root cause traced to
-file:line; live log evidence supports the shared-connection layer's
-existence but not the exact incident's owner value, honestly noted above
-rather than presented as fully proven.
+- `go build ./...` and `go test ./pkg/browser/...` clean.
+- `go test ./...`: only pre-existing failures unrelated to `pkg/browser`
+  (confirmed independently, matching PLAT-182's own baseline check the same
+  day).
+- The original mechanism was traced to file:line and looked well-evidenced,
+  but a same-day follow-up trace of the actual executing session ID for the
+  step that hit the symptom disproved it for that call path — corrected
+  above rather than left standing as an unverified conclusion. The fix
+  implemented is real and tested, but its relationship to the actual live
+  incident is unconfirmed. Live reverify pending regardless.
