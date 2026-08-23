@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `open` — root cause and migration scope confirmed, fix not designed/implemented |
+| Ticket state | `fixed` — per-workspace ledger shipped (`5552fbe71`, `main`); see "Fix implemented" below for what's covered and what's deliberately still open |
 | Last synchronized | `2026-08-23` |
 
 - **Priority:** P1 — Pulse's own guidance (`pulse-gate.md`) assigns it a
@@ -174,10 +174,77 @@ Not mutually exclusive, and meaningfully different in cost/risk:
    documented landing place under whichever design is chosen — not silently
    dropped or silently misattributed to a workflow that didn't produce it.
 
+## Fix implemented (`5552fbe71`, `main`)
+
+Direction 1 was chosen (per-workspace SQLite ledger), but scoped down at the
+user's explicit direction: **dual-write, no backfill.** The existing 28,276
+rows in `_system/costs.sqlite` are untouched and that ledger stays
+authoritative for the human-facing Cost Analysis UI. Going forward only,
+every cost event attributable to a real `Workflow/<name>` workspace is
+written to *both* the global ledger (unchanged) *and* a new
+`Workflow/<name>/costs/costs.sqlite` (`pkg/costledger/workspace_ledger.go`),
+via a new best-effort `appendToWorkspaceLedger` hook in
+`costobserver.Observer.append` (`pkg/costobserver/observer.go`) that never
+blocks or fails the primary write.
+
+A new read-only tool, `query_workflow_costs`
+(`cmd/server/virtual-tools/workflow_costs_tools.go`), mirrors
+`query_workflow_db`'s shape (raw read-only SQL against one table, `action`
+optional, same schema-hint-on-failure behavior) but resolves to this
+per-workspace file instead of `db/db.sqlite`. It is registered as
+capability-derived — the same "cannot be removed by a custom tool allowlist"
+treatment `query_workflow_db` already gets — at every path a workflow
+step, a Pulse background reviewer, or the interactive Workflow Builder gets
+its tools from
+(`pkg/orchestrator/agents/workflow/step_based_workflow/controller_agent_factory.go`'s
+two `prepareCustomTools` branches, `interactive_workshop_manager.go`'s
+`prepareReadOnlyBackgroundAgentTools` and `GetToolsForWorkshopMode` system
+list, and `cmd/server/tool_setup.go`'s workflow-mode tool merge).
+
+Guidance updated to point at the new tool instead of describing the ledger
+as unreachable: `pulse-gate.md`'s `model_cost_fitness` focus key,
+`file-layout.md`'s file table, and the Workflow Builder's own "answer user
+questions" instruction list in `interactive_workshop_manager.go`.
+
+**Acceptance tests, against the three listed above:**
+1. **Met**, and proven through the real tool-call path, not just storage:
+   `cmd/server/workflow_costs_tool_e2e_test.go`'s
+   `TestQueryWorkflowCostsToolReadsOwnPhaseBreakdownAndIsIsolatedFromAnotherWorkflow`
+   runs the actual MCP-bridge-shaped executor against a real workspace-API
+   HTTP server and two real per-workspace SQLite files, and asserts a
+   session scoped to `Workflow/social-media` gets its own
+   `phase="item:draft-message"` row and never sees Upwork's `9.99`/
+   `item:apply-to-job` row (including when a `db_path` argument naming
+   Upwork's file is smuggled into the call — the tool has no path parameter
+   at all, so it's silently ignored). `pkg/costledger/workspace_ledger_test.go`
+   covers the same isolation property one layer down, at the ledger/storage
+   level.
+2. **Met.** The global ledger and `cost_routes.go`'s cross-workflow reader
+   are unchanged; this fix only adds a second write, it removes nothing.
+3. **Still open, deliberately.** The workspace-less chat/builder writer path
+   (`server.go:5745`, formerly cited at that line number, may have moved)
+   still has no per-workspace ledger to land in — `WorkspaceLedgerPath`
+   returns `""` for any non-`Workflow/<name>` path, so those events continue
+   to reach only the global ledger, exactly as before this fix. This was
+   explicitly out of scope for this pass (the user's instruction was "new is
+   fine" for workflow-scoped events specifically, not a mandate to also
+   resolve pre-existing chat/builder attribution ambiguity) — left as a real
+   open question for a future ticket if it turns out to matter.
+
 ## Verification
 
-Investigation only — no code change in this pass. Every claim above is
-backed by direct code citation or a live query against
-`workspace-docs/_system/costs.sqlite`, including two claims (the empty file,
-the 54% figure) that were initially concerning and are recorded here as
-resolved/ruled out rather than silently dropped.
+`GOWORK=off go build ./...` clean. `go test` across
+`cmd/server/...`, `cmd/server/virtual-tools/...`, `pkg/costledger/...`,
+`pkg/costobserver/...`, and
+`pkg/orchestrator/agents/workflow/step_based_workflow/...` shows zero new
+failures against this session's already-established pre-existing baseline
+(`TestWorkshopResolveLLMConfigExpandsCodingAgentMode`,
+`TestStandalonePulseReviewCommandsUsePersistedReviewerPipeline`,
+`TestArtifactDriftAuditsTheSchedule`,
+`TestRunInBackgroundPassesBuilderSkillSnapshotToBothAgentKinds`,
+`TestWorkshopPromptShellExamplesUseAbsolutePaths`). The workshop tool-set
+invariant tests (`TestToolSetInvariants`,
+`TestEveryRegisteredWorkshopToolIsAllowedInSomeMode`,
+`TestWorkshopSurfaceCoversWhatTheBuilderPromptsPromise`, and siblings) pass,
+confirming `query_workflow_costs` is both registered and reachable in every
+mode that advertises it.
