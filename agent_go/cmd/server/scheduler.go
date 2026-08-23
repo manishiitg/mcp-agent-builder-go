@@ -344,6 +344,9 @@ func (s *SchedulerService) Start(ctx context.Context) error {
 
 	// Wall-clock tick loop: every 60s, evaluate all registered schedules against current time.
 	go s.tickLoop(ctx)
+	// Do not make a durable fast-Pulse request wait for the first tick after a
+	// restart. It still goes through the same dedicated schedule/session path.
+	go s.launchPendingFastPulseRequests(context.Background())
 
 	// Wait for context cancellation
 	<-ctx.Done()
@@ -469,9 +472,52 @@ func (s *SchedulerService) tickLoop(ctx context.Context) {
 			// schedules (PLAT-101).
 			go s.resumeDueCapacityWaits(context.Background(), t.UTC())
 			go s.resumeQueuedScheduleOccurrences(context.Background(), t.UTC())
+			// A workflow finalizer may ask for an earlier Pulse after judging that
+			// its just-finished run materially changed evidence. The request is
+			// durable and coalesced, but it still launches only the configured
+			// PulseReviewOnly schedule in a separate scheduler session.
+			go s.launchPendingFastPulseRequests(context.Background())
 
 			lastTick = t
 		}
+	}
+}
+
+func (s *SchedulerService) launchPendingFastPulseRequests(ctx context.Context) {
+	for _, workflow := range s.discoverWorkflows(ctx) {
+		request, err := pendingFastPulseRequest(ctx, workflow.WorkspacePath)
+		if err != nil {
+			scheduleLogf("[PULSE] failed to read fast Pulse request for %s: %v", workflow.WorkspacePath, err)
+			continue
+		}
+		if request == nil {
+			continue
+		}
+		var pulseSchedule *WorkflowSchedule
+		for i := range workflow.Manifest.Schedules {
+			candidate := &workflow.Manifest.Schedules[i]
+			if candidate.Enabled && candidate.PulseReviewOnly {
+				pulseSchedule = candidate
+				break
+			}
+		}
+		if pulseSchedule == nil {
+			scheduleLogf("[PULSE] fast request for %s remains pending: no enabled pulse_review_only schedule", workflow.WorkspacePath)
+			continue
+		}
+		runID, err := s.TriggerNow(workflow.WorkspacePath, pulseSchedule.ID)
+		if err != nil {
+			// A still-closing workflow or running Pulse is expected to retry on a
+			// later tick. Keep the durable request rather than starting a second
+			// execution lane or silently dropping the agent's decision.
+			scheduleLogf("[PULSE] fast request for %s will retry: %v", workflow.WorkspacePath, err)
+			continue
+		}
+		if err := markFastPulseRequestDelivered(ctx, workflow.WorkspacePath, runID); err != nil {
+			scheduleLogf("[PULSE] fast request for %s started as %s but could not be marked delivered: %v", workflow.WorkspacePath, runID, err)
+			continue
+		}
+		scheduleLogf("[PULSE] fast request delivered for %s as dedicated schedule %s (run %s)", workflow.WorkspacePath, pulseSchedule.ID, runID)
 	}
 }
 
@@ -558,6 +604,29 @@ func shouldRunPulseLifecycle(sctx *ScheduleContext, manifest *WorkflowManifest) 
 		return false
 	}
 	return manifest.HasEnabledPulseReviewSchedule() || (sctx != nil && sctx.ForcePulseReview)
+}
+
+// pulseScheduleTimingSummary supplies facts to the ordinary-run finalizer; it
+// never chooses whether a change is material or rewrites a schedule. That is
+// the finalizer agent's judgment, persisted through record_pulse_fast_request.
+func pulseScheduleTimingSummary(manifest *WorkflowManifest) string {
+	if manifest == nil {
+		return "No enabled dedicated Pulse schedule was found. Do not request a fast Pulse; report the configuration gap truthfully."
+	}
+	var next *time.Time
+	for _, schedule := range manifest.Schedules {
+		if !schedule.Enabled || !schedule.PulseReviewOnly {
+			continue
+		}
+		candidate := getNextRunTime(schedule.CronExpression, schedule.Timezone)
+		if candidate != nil && (next == nil || candidate.Before(*next)) {
+			next = candidate
+		}
+	}
+	if next == nil {
+		return "An enabled dedicated Pulse schedule exists, but its next occurrence could not be determined. Use record_pulse_fast_request only for clear material evidence."
+	}
+	return fmt.Sprintf("The next dedicated Pulse review is scheduled for %s (in about %s).", next.Format(time.RFC3339), time.Until(*next).Round(time.Minute))
 }
 
 // Stop shuts down the scheduler.
@@ -1940,6 +2009,14 @@ func (s *SchedulerService) runJob(ctx context.Context, sctx *ScheduleContext, ru
 		Reason: startReason,
 		At:     time.Now().UTC(),
 	})
+	if sctx.PulseOnly {
+		// A cron/manual Pulse that starts before the tick loop dispatches a
+		// pending fast request already satisfies the request. Coalescing here
+		// prevents a second review of the same evidence one minute later.
+		if err := markFastPulseRequestDelivered(ctx, sctx.WorkspacePath, runID); err != nil {
+			s.logf(sctx, "[PULSE] failed to consume pending fast request: %v", err)
+		}
+	}
 
 	// Execute
 	sessionID, runFolder, execErr := s.executeJob(ctx, sctx, runID)
@@ -2253,7 +2330,7 @@ func (s *SchedulerService) runPulseLifecycle(ctx context.Context, sctx *Schedule
 		steps = pulseLifecycleNoRunSteps(pulseRunID, runFailureReason, notificationInstructionsFromCapabilities(sctx.Capabilities))
 	} else if lightweightFinalizeOnly {
 		s.sessionLogf(sctx, sessionID, "[FINALIZE] running backup/publish/notify only; Gate/Review+Fix belong exclusively to the dedicated Pulse schedule")
-		steps = scheduledRunFinalizeStep(pulseRunID, notificationInstructionsFromCapabilities(sctx.Capabilities))
+		steps = scheduledRunFinalizeStepWithPulseTiming(pulseRunID, pulseScheduleTimingSummary(manifest), notificationInstructionsFromCapabilities(sctx.Capabilities))
 	} else {
 		gateStep := pulseLifecycleGateStep(pulseRunID, runFolder, runStatus)
 		if sctx.Schedule.PulseReviewOnly {
@@ -2719,6 +2796,10 @@ func scheduledRunUsesLightweightFinalize(reviewEvidenceAvailable, pulseOnly bool
 // Execution-report publishing remains valid here; only the Pulse target is
 // skipped because no review ran in the ordinary schedule session.
 func scheduledRunFinalizeStep(runID string, instructions ...workflowNotificationContentInstructions) []pulseLifecycleStep {
+	return scheduledRunFinalizeStepWithPulseTiming(runID, "", instructions...)
+}
+
+func scheduledRunFinalizeStepWithPulseTiming(runID, pulseTiming string, instructions ...workflowNotificationContentInstructions) []pulseLifecycleStep {
 	ownerInstructions := workflowNotificationContentInstructions{}
 	if len(instructions) > 0 {
 		ownerInstructions = instructions[0]
@@ -2734,6 +2815,10 @@ func scheduledRunFinalizeStep(runID string, instructions ...workflowNotification
 	if runInstructions := strings.TrimSpace(ownerInstructions.runSummary); runInstructions != "" {
 		content = "\n\nApply these saved run-summary content instructions without changing the facts:\n" + runInstructions
 	}
+	fastPulseDecision := ""
+	if strings.TrimSpace(pulseTiming) != "" {
+		fastPulseDecision = "\n\nPulse timing context: " + pulseTiming + " After completing the ordinary run finalization, decide whether this run created material new evidence that needs an earlier separate Pulse review. For routine/no-change work, or when waiting for the upcoming scheduled review is sufficient, do nothing. For a meaningful workflow/plan/schema/evaluation change, serious regression, or abnormal cost/runtime evidence where waiting is worse, call record_pulse_fast_request exactly once with this run_id, a concrete reason, and bounded artifact references. That only queues/coalesces the existing dedicated Pulse schedule; it never runs review inline or changes cron."
+	}
 	return []pulseLifecycleStep{{"finalize", fmt.Sprintf(
 		"WORKFLOW RUN FINALIZER — BACKUP, REPORT PUBLISH, AND NOTIFY ONLY. run_id=%q. "+
 			"Gate, reviewers, and Fixer never run after an ordinary workflow run; the enabled pulse_review_only schedule owns "+
@@ -2748,8 +2833,8 @@ func scheduledRunFinalizeStep(runID string, instructions ...workflowNotification
 			"mark the whole publish command skipped with that reason. Record one truthful terminal result for publish either way; "+
 			"(3) call notify_user exactly once with notification_kind=\"run_summary\" describing plainly and factually what this run "+
 			"itself did (actions taken, errors, outcome) — do not include a Pulse findings/fixes section, since none ran this pass — "+
-			"then record notify truthfully.%s%s",
-		runID, routing, content,
+			"then record notify truthfully.%s%s%s",
+		runID, routing, content, fastPulseDecision,
 	)}}
 }
 

@@ -302,6 +302,7 @@ func ensurePulseModuleStateSchema(ctx context.Context, db *sql.DB) error {
 		pulseShadowSignalObservationSchema,
 		pulseFinalCommandStateSchema,
 		backgroundAgentLogSchema,
+		pulseFastRequestSchema,
 	}
 	for _, stmt := range stmts {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
@@ -333,6 +334,7 @@ func ensurePulseModuleStateSchema(ctx context.Context, db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_pulse_review_focus_history_module ON pulse_review_focus_history(workspace_path, module, recorded_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_pulse_shadow_signal_observed ON pulse_shadow_signal_observation(workspace_path, observed_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_background_agent_log_session ON background_agent_log(workspace_path, session_id, started_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_pulse_fast_request_status ON pulse_fast_request(status, requested_at)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
@@ -1872,6 +1874,16 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 			"reason":              map[string]interface{}{"type": "string", "description": "One sentence naming the shared root cause and why one repair covers the duplicates."},
 		}, "required": []string{"workspace_path", "canonical_issue_id", "duplicate_issue_ids", "reason"}}),
 	}}
+	fastRequestTool := llmtypes.Tool{Type: "function", Function: &llmtypes.FunctionDefinition{
+		Name:        "record_pulse_fast_request",
+		Description: "Ask the scheduler to run the already-configured dedicated Pulse review soon, in a separate Pulse-only session. Use only after this workflow run when material new evidence, a meaningful workflow change, or a serious regression makes waiting for the next scheduled Pulse worse. Do not use for routine/no-change runs or merely to restate an existing concern. This queues/coalesces a request; it never runs Gate, reviewers, or Fixer in this conversation and never changes the Pulse cron.",
+		Parameters: llmtypes.NewParameters(map[string]interface{}{"type": "object", "additionalProperties": false, "properties": map[string]interface{}{
+			"workspace_path": map[string]interface{}{"type": "string", "description": "Workflow-relative path, e.g. Workflow/social-media."},
+			"run_id":         map[string]interface{}{"type": "string", "description": "The ordinary workflow run id supplied by the scheduler finalizer prompt."},
+			"reason":         map[string]interface{}{"type": "string", "description": "Concrete reason this run needs earlier separate Pulse review."},
+			"evidence":       map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Bounded exact artifact, result, or change references supporting the request."},
+		}, "required": []string{"workspace_path", "run_id", "reason"}}),
+	}}
 	recordTool := llmtypes.Tool{
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
@@ -2177,6 +2189,14 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		"record_pulse_result": func(ctx context.Context, args map[string]interface{}) (string, error) {
 			return recordPulseResultFromToolArgs(ctx, args)
 		},
+		"record_pulse_fast_request": func(ctx context.Context, args map[string]interface{}) (string, error) {
+			request, err := requestFastPulse(ctx, stringToolArg(args, "workspace_path"), stringToolArg(args, "run_id"), stringToolArg(args, "reason"), stringSliceFromToolArg(args["evidence"]))
+			if err != nil {
+				return "", err
+			}
+			payload, _ := json.Marshal(map[string]interface{}{"status": "queued", "request": request})
+			return string(payload), nil
+		},
 		"record_pulse_impact": impactExecutor,
 	}
 	categories := map[string]string{
@@ -2189,6 +2209,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		"record_pulse_worklist":         "workflow",
 		"get_pulse_state":               "workflow",
 		"record_pulse_result":           "workflow",
+		"record_pulse_fast_request":     "workflow",
 		"record_pulse_impact":           "workflow",
 		"resolve_run_concern":           "workflow",
 	}
@@ -2227,7 +2248,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		return fmt.Sprintf("Issue %s marked %s.", step_based_workflow.NewPulseIssue(finding).ID, status), nil
 	}
 
-	return []llmtypes.Tool{recordFindingTool, recordVerificationTool, focusAgendaTool, recordFocusTool, completeReviewTool, mergeIssuesTool, recordTool, stateTool, resultTool, impactTool, resolveConcernTool}, executors, categories
+	return []llmtypes.Tool{recordFindingTool, recordVerificationTool, focusAgendaTool, recordFocusTool, completeReviewTool, mergeIssuesTool, fastRequestTool, recordTool, stateTool, resultTool, impactTool, resolveConcernTool}, executors, categories
 }
 
 func stringToolArg(args map[string]interface{}, key string) string {
