@@ -64,7 +64,7 @@ or a bounded new diagnosis. Examples include:
 The worklist reason proposes the best current technical focus. Use these stable
 focus keys when applicable:
 
-- `execution_health` — correctness, efficiency, tool/runtime reliability, and schedule recovery
+- `execution_health` — correctness, efficiency, tool/runtime reliability, and schedule recovery. For schedule-fire/capacity-wait history (did a schedule fire on time, was a run suspended for provider capacity, did recent scheduled fires error), read this workflow's own `schedule-runs.json` at the workflow root — it carries status/error/duration per fire that individual run folders don't.
 - `plan_orchestration_integrity` — plan contracts, dependencies, context/handoffs, step types, scripted-vs-agentic choices, and sequence/todo orchestration fitness
 - `store_integrity`
 - `report_quality_truth` — report accuracy plus reporting UI, accessibility, and performance practices
