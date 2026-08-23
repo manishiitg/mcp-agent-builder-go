@@ -497,6 +497,18 @@ func cdpOwnerID(workflowSessionID, agentSessionID, session, sharedConnectionIden
 	return cdpUnidentifiedOwnerID()
 }
 
+// cdpUnidentifiedOwnerPrefix marks an owner value returned when no
+// per-workflow identity could be resolved at all. Callers that enforce a
+// per-owner quota (guardCDPTabCreation) must check isCDPUnidentifiedOwner
+// and refuse the operation outright rather than trust this value as a real
+// owner -- a fresh, never-before-seen key always reads as "zero tabs used,"
+// so treating it as a normal owner silently bypasses the quota it exists to
+// enforce (PLAT-181 review). Fixed diagnostics/cleanup paths that only
+// observe usage (not gate it) may still record against this value; it is
+// still unique per call, so it will not pool with a genuine workflow's
+// count or with another unidentified call's count.
+const cdpUnidentifiedOwnerPrefix = "unidentified-"
+
 var cdpUnidentifiedOwnerCounter atomic.Int64
 
 // cdpUnidentifiedOwnerID returns a fresh identity for a caller with no
@@ -504,12 +516,18 @@ var cdpUnidentifiedOwnerCounter atomic.Int64
 // fixed literal "default" here, which collided across every such caller the
 // same way the shared connection identity did (PLAT-181): two genuinely
 // unidentified workflows would still pool their tabs under one key. A
-// unique value per call means quota tracking cannot accumulate across
-// repeat calls from a truly unidentified caller (each looks like a fresh
-// owner with zero tabs), which is the correct, safe direction to fail in --
-// unlike colliding with a stranger's quota, it never blocks unrelated work.
+// unique value per call means it never collides with anyone else's real
+// count. It must not be treated as a normal, quota-eligible owner by any
+// caller that enforces a limit -- see isCDPUnidentifiedOwner.
 func cdpUnidentifiedOwnerID() string {
-	return fmt.Sprintf("unidentified-%d-%d", time.Now().UnixNano(), cdpUnidentifiedOwnerCounter.Add(1))
+	return fmt.Sprintf("%s%d-%d", cdpUnidentifiedOwnerPrefix, time.Now().UnixNano(), cdpUnidentifiedOwnerCounter.Add(1))
+}
+
+// isCDPUnidentifiedOwner reports whether ownerID came from
+// cdpUnidentifiedOwnerID rather than a real, resolved per-workflow
+// identity.
+func isCDPUnidentifiedOwner(ownerID string) bool {
+	return strings.HasPrefix(ownerID, cdpUnidentifiedOwnerPrefix)
 }
 
 func parseTabSelection(args []string) (tab string, clear bool, err error) {

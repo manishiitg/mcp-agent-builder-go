@@ -149,6 +149,23 @@ func TestGuardCDPTabCreationEnforcesLimit(t *testing.T) {
 	}
 }
 
+// PLAT-181 review. cdpUnidentifiedOwnerID returns a fresh, never-before-seen
+// value on every call so it never collides with a real workflow's count --
+// but that same freshness means countCDPTabAliasesForOwner always reads 0
+// for it, which would silently bypass the limit entirely (unlimited tab
+// creation) rather than merely miscount it, if guardCDPTabCreation trusted
+// it as a normal owner. It must refuse outright instead.
+func TestGuardCDPTabCreationRejectsUnidentifiedOwnerInsteadOfBypassingTheLimit(t *testing.T) {
+	resetCDPRegistryForTest(t)
+
+	for i := 0; i < MaxCDPTabsPerOwner*3; i++ {
+		owner := cdpUnidentifiedOwnerID()
+		if err := guardCDPTabCreation(9222, owner); err == nil {
+			t.Fatalf("call %d: an unidentified owner must be rejected, not silently allowed past the %d-tab limit", i, MaxCDPTabsPerOwner)
+		}
+	}
+}
+
 func TestActiveCDPOwnersSnapshot(t *testing.T) {
 	resetCDPRegistryForTest(t)
 	touchCDPOwner(9222, "workflow-b")
