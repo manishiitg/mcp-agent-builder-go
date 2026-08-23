@@ -1443,6 +1443,8 @@ func GetToolsForWorkshopMode(mode string) []string {
 		"execute_shell_command", "diff_patch_workspace_file",
 		"read_image", "generate_text_llm", "search_web_llm",
 		"query_workflow_db", "mutate_workflow_db",
+		// PLAT-184. This workflow's own per-workspace cost ledger.
+		"query_workflow_costs",
 		"image_gen", "image_edit", "generate_video", "text_to_speech", "speech_to_text", "generate_music",
 		// Secret management tools. Global secrets are read-only; workflow/user
 		// encrypted stores are writable when the corresponding tools are registered.
@@ -2390,7 +2392,7 @@ Run mode is the user-facing runtime surface, including Slack and WhatsApp routes
 1. **Do direct runtime work** when no workflow run is needed: use available tools plus workflow context to answer, look up, analyze, summarize, or take a small operational action. Before acting, ground in the generated skill, KB, and db state: `+"`learnings/_global/SKILL.md`"+` for HOW to operate, `+"`knowledgebase/context/`"+` and targeted `+"`knowledgebase/notes/`"+` for business context, and `+"`db/`"+` plus `+"`db/README.md`"+` for durable facts/results.
 2. **Run the workflow** for one configured group at a time with `+"`run_full_workflow(group_name=\"...\")`"+`.
 3. **Run a specific step or orphan utility step** with `+"`execute_step(step_id=\"...\", group_name=\"...\")`"+` when the user asks for a targeted action, retry, data check, or one-off investigation.
-4. **Answer user questions** from current workflow state, latest run outputs, `+"`db/db.sqlite`"+` (query with `+"`query_workflow_db`"+`), `+"`db/assets/`"+` references, report data, eval reports, Ops Review results, KB context/notes, learnings, saved scripts, and prior step results.
+4. **Answer user questions** from current workflow state, latest run outputs, `+"`db/db.sqlite`"+` (query with `+"`query_workflow_db`"+`), this workflow's own per-run/per-step/per-item cost and token breakdown (query with `+"`query_workflow_costs`"+`, PLAT-184 — not the same store as the global human-facing Cost Analysis dashboard), `+"`db/assets/`"+` references, report data, eval reports, Ops Review results, KB context/notes, learnings, saved scripts, and prior step results.
 5. **Inspect/debug execution** with `+"`list_executions`"+`, `+"`query_step`"+`, `+"`debug_step`"+`, and read-only review tools. Explain the issue and next action; do not mutate plan/config/learnings/KB/report/eval files in Run mode.
 
 ### Runtime context access
@@ -9479,6 +9481,7 @@ func prepareReadOnlyBackgroundAgentTools(base *orchestrator.BaseOrchestrator) ([
 			"workspace_advanced:execute_shell_command",
 			"human_tools:*",
 			"workflow_db:query_workflow_db",
+			"workflow_costs:query_workflow_costs",
 		},
 	)
 }

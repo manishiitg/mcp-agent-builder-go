@@ -835,6 +835,12 @@ func (hcpo *StepBasedWorkflowOrchestrator) prepareCustomTools(stepConfig *AgentC
 		if resolveDBAccess(stepConfig) == DBAccessReadWrite {
 			enabledTools = append(enabledTools, "workflow_db:mutate_workflow_db")
 		}
+		// PLAT-184. This workflow's own cost ledger is capability-derived like
+		// query_workflow_db above: a custom allowlist may narrow other tools,
+		// but every step (including Pulse's Technical Review reviewer, which
+		// runs through this same path) can always read its own workflow's cost
+		// and token breakdown.
+		enabledTools = append(enabledTools, "workflow_costs:query_workflow_costs")
 		// PLAT-055. Every step can raise a structured concern. This is
 		// capability-derived like the DB tools above: a step that observed a
 		// defect must always be able to report it, and a custom allowlist must
@@ -874,6 +880,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) prepareCustomTools(stepConfig *AgentC
 			"workspace_advanced:*",
 			"human_tools:*",
 			"workflow_db:query_workflow_db",
+			// PLAT-184, capability-derived like query_workflow_db above.
+			"workflow_costs:query_workflow_costs",
 			// Capability-derived like query_workflow_db above, not part of the
 			// default/custom distinction this function otherwise draws -- see
 			// the EnabledCustomTools branch's identical inclusion a few lines up.

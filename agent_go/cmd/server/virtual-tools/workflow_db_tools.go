@@ -342,6 +342,20 @@ func resolveWorkflowDBPathFromConfig(sessionID string, cfg *common.SessionShellC
 }
 
 func workflowDBPathFromCandidate(candidate string) string {
+	workspacePath := workflowDBWorkspacePathFromCandidate(candidate)
+	if workspacePath == "" {
+		return ""
+	}
+	return filepath.ToSlash(filepath.Join(workspacePath, "db", "db.sqlite"))
+}
+
+// workflowDBWorkspacePathFromCandidate extracts the owning workflow's own
+// "Workflow/<name>" folder from any path scoped somewhere inside it (a read
+// path, write path, or working dir taken from the session's shell config).
+// Shared by every per-workflow database resolver -- db/db.sqlite here, and
+// costs/costs.sqlite in workflow_costs_tools.go -- so the two tools agree on
+// exactly which workflow folder they're scoped to, from the same session.
+func workflowDBWorkspacePathFromCandidate(candidate string) string {
 	clean := filepath.ToSlash(filepath.Clean(strings.TrimSpace(candidate)))
 	if clean == "." || clean == "" {
 		return ""
@@ -349,7 +363,7 @@ func workflowDBPathFromCandidate(candidate string) string {
 	parts := strings.Split(strings.Trim(clean, "/"), "/")
 	for i := 0; i+1 < len(parts); i++ {
 		if parts[i] == "Workflow" && strings.TrimSpace(parts[i+1]) != "" {
-			return filepath.ToSlash(filepath.Join("Workflow", parts[i+1], "db", "db.sqlite"))
+			return filepath.ToSlash(filepath.Join("Workflow", parts[i+1]))
 		}
 	}
 	return ""

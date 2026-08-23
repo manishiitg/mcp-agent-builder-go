@@ -356,6 +356,34 @@ func (o *Observer) append(entry costledger.Entry) {
 	if err := o.ledger.Append(entry); err != nil {
 		log.Printf("[COST_LEDGER] Failed to append entry: %v", err)
 	}
+	o.appendToWorkspaceLedger(entry)
+}
+
+// appendToWorkspaceLedger records the same entry into the attributed
+// workflow's own per-workspace ledger (PLAT-184), alongside the global one
+// above. The global ledger sits outside every workflow's own folder and is
+// not reachable by any agent's normal read/tool access at all; this copy is
+// what makes a workflow's own cost data -- including the phase/item
+// breakdown PLAT-166/167 added -- actually queryable by that workflow's own
+// Pulse review and Workflow Builder sessions. Best-effort: a failure here
+// must never affect the global ledger write above, which remains the
+// authoritative record the Cost Analysis UI reads.
+func (o *Observer) appendToWorkspaceLedger(entry costledger.Entry) {
+	workspacePath := strings.TrimSpace(o.workflowID)
+	if workspacePath == "" {
+		return
+	}
+	ledger, err := costledger.WorkspaceLedger(workspacePath)
+	if err != nil {
+		log.Printf("[COST_LEDGER] Failed to open workspace ledger for %s: %v", workspacePath, err)
+		return
+	}
+	if ledger == nil {
+		return
+	}
+	if err := ledger.Append(entry); err != nil {
+		log.Printf("[COST_LEDGER] Failed to append entry to workspace ledger for %s: %v", workspacePath, err)
+	}
 }
 
 // matchPhaseScope classifies the scope signals a phase/step identifier can

@@ -273,6 +273,19 @@ func createCustomTools(workflowMode bool, sessionInfo ...string) ([]llmtypes.Too
 			toolCategories[name] = category
 		}
 
+		// PLAT-184. This workflow's own per-workspace cost ledger, readable
+		// through its normal folder-guard-scoped tools -- unlike the global
+		// human-facing Cost Analysis ledger, which sits outside every
+		// workflow's own folder and is not reachable by any agent at all.
+		workflowCostsRegistry := virtualtools.CreateWorkflowCostsToolRegistry(getWorkspaceAPIURL(), userID, sessionID)
+		allTools = append(allTools, workflowCostsRegistry.Tools...)
+		for name, executor := range workflowCostsRegistry.Executors {
+			allExecutors[name] = executor
+		}
+		for name, category := range workflowCostsRegistry.Categories {
+			toolCategories[name] = category
+		}
+
 		reportHumanInputTools, reportHumanInputExecutors, reportHumanInputCategories := createReportHumanInputTools()
 		allTools = append(allTools, reportHumanInputTools...)
 		for name, executor := range reportHumanInputExecutors {

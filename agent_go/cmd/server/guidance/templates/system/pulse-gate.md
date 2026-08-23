@@ -69,7 +69,7 @@ focus keys when applicable:
 - `store_integrity`
 - `report_quality_truth` — report accuracy plus reporting UI, accessibility, and performance practices
 - `evaluation_quality_truth` — evaluator truth, rubrics, thresholds, negative tests, and reproducibility
-- `model_cost_fitness` — model/tier/reasoning/fallback choices, quality-cost fit, and cost attribution
+- `model_cost_fitness` — model/tier/reasoning/fallback choices, quality-cost fit, and cost attribution. Read this workflow's own per-run/per-step/per-item cost and token breakdown with `query_workflow_costs` (PLAT-184) — do not rely on the global Cost Analysis dashboard, which this workflow's own agents cannot reach at all.
 
 This is agentic selection, not a Go threshold or semantic classifier. A large
 run can be justified by adaptive research, browser dwell, or independent
