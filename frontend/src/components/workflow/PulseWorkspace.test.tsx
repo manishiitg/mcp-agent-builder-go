@@ -15,7 +15,6 @@ describe('PulseWorkspace information hierarchy', () => {
       <PulseWorkspace
         workspacePath="/workspace/example"
         monitorOn
-        moduleStates={[]}
         finalCommandStates={[]}
         gateMode={null}
         reviewFocuses={[
@@ -62,14 +61,14 @@ describe('PulseWorkspace information hierarchy', () => {
     const latestOutcome = html.indexOf('Latest outcome')
     const workAreas = html.indexOf('Work areas')
     const issues = html.indexOf('Issues and follow-through')
-    const activity = html.indexOf('Pulse activity')
     const impact = html.indexOf('Impact over time')
 
     expect(latestOutcome).toBeGreaterThan(-1)
     expect(workAreas).toBeGreaterThan(latestOutcome)
     expect(issues).toBeGreaterThan(workAreas)
-    expect(activity).toBeGreaterThan(issues)
-    expect(impact).toBeGreaterThan(activity)
+    expect(impact).toBeGreaterThan(issues)
+    expect(html).not.toContain('Pulse activity')
+    expect(html).not.toContain('Recent fixes and follow-through')
     expect(html).toContain('Technical review')
     expect(html).toContain('Strategic review')
     expect(html).toContain('Last focuses:')

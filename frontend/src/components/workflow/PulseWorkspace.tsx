@@ -9,7 +9,6 @@ import {
   Play,
   RefreshCw,
   ShieldCheck,
-  Sparkles,
   Wrench,
 } from 'lucide-react'
 import { agentApi } from '../../services/api'
@@ -18,8 +17,6 @@ import type {
   PulseFindingLifecycle,
   PulseImpactLedger,
   PulseContextRecord,
-  PulseAgentMetricRecord,
-  PulseModuleState,
   PulseRunMode,
   PulseReviewRecord,
   PulseReviewFocus,
@@ -28,9 +25,6 @@ import { ReportHumanInputPanel } from './ReportHumanInputPanel'
 import { SoulViewer } from './SoulViewer'
 import { PulseModuleInspector } from './PulseModuleInspector'
 import { PulseFindingCard } from './PulseFindingCard'
-import {
-  buildPulseModuleActivity,
-} from './pulseModuleInspectorUtils'
 import { pulseFindingPresentation, type PulseFindingQueue } from './pulseFindingPresentation'
 import {
   buildPulseWorkspaceModuleSummaries,
@@ -60,17 +54,6 @@ function readable(value?: string): string {
   return text ? text.charAt(0).toUpperCase() + text.slice(1) : 'No data'
 }
 
-const compactMetricNumber = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 })
-
-function formatAgentDuration(milliseconds: number): string {
-  if (!Number.isFinite(milliseconds) || milliseconds < 1) return '0s'
-  const seconds = Math.round(milliseconds / 1000)
-  const minutes = Math.floor(seconds / 60)
-  const hours = Math.floor(minutes / 60)
-  if (hours > 0) return `${hours}h ${minutes % 60}m`
-  return minutes > 0 ? `${minutes}m ${seconds % 60}s` : `${seconds}s`
-}
-
 function statusTone(value?: string): string {
   const status = (value || '').toLowerCase().replace(/^last\s+/, '')
   if (['failed', 'blocked', 'timed_out', 'timed out'].includes(status)) {
@@ -83,10 +66,6 @@ function statusTone(value?: string): string {
     return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
   }
   return 'border-border bg-muted text-muted-foreground'
-}
-
-function moduleStateLabel(state?: PulseModuleState): string {
-  return readable(state?.last_result || state?.last_gate_decision || state?.last_decision)
 }
 
 function finalCommandLabel(state?: PulseFinalCommandState): string {
@@ -135,7 +114,6 @@ const FOCUS_HINTS: Record<PulseFocus, string> = {
 export function PulseWorkspace({
   workspacePath,
   monitorOn,
-  moduleStates,
   finalCommandStates,
   gateMode,
   reviewFocuses,
@@ -148,7 +126,6 @@ export function PulseWorkspace({
 }: {
   workspacePath: string
   monitorOn: boolean
-  moduleStates: PulseModuleState[]
   finalCommandStates: PulseFinalCommandState[]
   gateMode: PulseRunMode | null
   reviewFocuses: PulseReviewFocus[]
@@ -161,7 +138,6 @@ export function PulseWorkspace({
 }) {
   const [findings, setFindings] = useState<PulseFindingLifecycle[]>([])
   const [reviews, setReviews] = useState<PulseReviewRecord[]>([])
-  const [agentMetrics, setAgentMetrics] = useState<PulseAgentMetricRecord[]>([])
   const [impact, setImpact] = useState<PulseImpactLedger>({ interventions: [], observations: [], assessments: [] })
   const [contextRecords, setContextRecords] = useState<PulseContextRecord[]>([])
   const [latestRun, setLatestRun] = useState<LatestWorkflowRun | null>(null)
@@ -190,12 +166,11 @@ export function PulseWorkspace({
     if (!workspacePath) return
     setLoading(true)
     setError(null)
-    const [findingResult, reviewResult, impactResult, contextResult, metricResult, runResult] = await Promise.allSettled([
+    const [findingResult, reviewResult, impactResult, contextResult, runResult] = await Promise.allSettled([
       agentApi.getPulseFindings(workspacePath),
       agentApi.getPulseReviews(workspacePath),
       agentApi.getPulseImpact(workspacePath),
       agentApi.getPulseContext(workspacePath),
-      agentApi.getPulseAgentMetrics(workspacePath),
       agentApi.getWorkflowsSummary([workspacePath]),
     ])
     const errors: string[] = []
@@ -239,16 +214,6 @@ export function PulseWorkspace({
           : contextResult.value.error || 'Could not load user context.',
       )
     }
-    if (metricResult.status === 'fulfilled' && metricResult.value.success) {
-      setAgentMetrics(metricResult.value.metrics || [])
-    } else {
-      setAgentMetrics([])
-      errors.push(
-        metricResult.status === 'rejected'
-          ? (metricResult.reason instanceof Error ? metricResult.reason.message : 'Could not load reviewer measurements.')
-          : metricResult.value.error || 'Could not load reviewer measurements.',
-      )
-    }
     if (runResult.status === 'fulfilled' && runResult.value.success) {
       const workflow = runResult.value.workflows.find((item) => item.workspace_path === workspacePath)
         || runResult.value.workflows[0]
@@ -269,7 +234,6 @@ export function PulseWorkspace({
     setSelectedModule(null)
     setFindings([])
     setReviews([])
-    setAgentMetrics([])
     setImpact({ interventions: [], observations: [], assessments: [] })
     setContextRecords([])
     setLatestRun(null)
@@ -301,10 +265,6 @@ export function PulseWorkspace({
     setSelectedModule(selectPulseWorkspaceModule(moduleSummaries))
   }, [moduleSummaries, selectedModule])
 
-  const moduleStateByID = useMemo(
-    () => new Map(moduleStates.map((state) => [normalizePulseWorkspaceModule(state.module), state])),
-    [moduleStates],
-  )
   const finalCommandStateByID = useMemo(
     () => new Map(finalCommandStates.map((state) => [state.command, state])),
     [finalCommandStates],
@@ -353,7 +313,6 @@ export function PulseWorkspace({
       : matchingFindings,
     [focus, matchingFindings, moduleFilter, showCompleteBacklog],
   )
-  const activity = useMemo(() => buildPulseModuleActivity(findings, 8), [findings])
   const impactSummary = useMemo(() => {
     const latestBySeries = new Map<string, PulseImpactLedger['observations'][number]>()
     impact.observations.forEach((observation) => {
@@ -378,34 +337,6 @@ export function PulseWorkspace({
       latest: Array.from(latestBySeries.values()).slice(0, 4),
     }
   }, [impact])
-  const latestPassMetrics = useMemo(() => {
-    const latestPulseRunID = agentMetrics.find((metric) => metric.pulse_run_id)?.pulse_run_id
-    if (!latestPulseRunID) return null
-    const rows = agentMetrics.filter((metric) => metric.pulse_run_id === latestPulseRunID)
-    const captured = rows.filter((metric) => metric.usage_status === 'captured')
-    const started = rows
-      .map((metric) => Date.parse(metric.started_at || ''))
-      .filter(Number.isFinite)
-    const completed = rows
-      .map((metric) => Date.parse(metric.completed_at || ''))
-      .filter(Number.isFinite)
-    return {
-      pulseRunID: latestPulseRunID,
-      reviewers: rows.filter((metric) => metric.role === 'reviewer').length,
-      fixers: rows.filter((metric) => metric.role === 'fixer').length,
-      agentTimeMS: rows.reduce((sum, metric) => sum + metric.duration_ms, 0),
-      wallTimeMS: started.length > 0 && completed.length > 0
-        ? Math.max(...completed) - Math.min(...started)
-        : 0,
-      calls: captured.reduce((sum, metric) => sum + metric.llm_call_count, 0),
-      promptTokens: captured.reduce((sum, metric) => sum + metric.prompt_tokens, 0),
-      cacheReadTokens: captured.reduce((sum, metric) => sum + metric.cache_read_tokens, 0),
-      completionTokens: captured.reduce((sum, metric) => sum + metric.completion_tokens, 0),
-      cost: captured.reduce((sum, metric) => sum + metric.total_cost_usd, 0),
-      unavailable: rows.length - captured.length,
-    }
-  }, [agentMetrics])
-
   const health = queueCounts.needs_action > 0
     ? {
         label: 'Pulse work queued',
@@ -801,39 +732,6 @@ export function PulseWorkspace({
           )}
         </section>
 
-        <section className="overflow-hidden rounded-xl border bg-background">
-          <div className="border-b px-4 py-3">
-            <h3 className="text-sm font-semibold text-foreground">Recent fixes and follow-through</h3>
-            <p className="mt-0.5 text-[11px] text-muted-foreground">What changed after issues were filed</p>
-          </div>
-          {activity.length === 0 ? (
-            <div className="flex min-h-40 items-center justify-center px-5 text-center text-xs text-muted-foreground">
-              Lifecycle activity will appear after findings are filed.
-            </div>
-          ) : (
-            <div className="divide-y">
-              {activity.map((event, index) => (
-                <div key={`${event.fingerprint}-${event.recorded_at}-${index}`} className="flex gap-3 px-4 py-3">
-                  <span className="mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
-                    {event.event_type.includes('fix')
-                      ? <Wrench className="h-3 w-3" />
-                      : event.event_type === 'closed' || event.event_type === 'verified'
-                        ? <CheckCircle2 className="h-3 w-3" />
-                        : <Sparkles className="h-3 w-3" />}
-                  </span>
-                  <div className="min-w-0">
-                    <div className="text-[10px] font-semibold capitalize text-foreground">{readable(event.event_type)}</div>
-                    <div className="mt-0.5 line-clamp-2 text-[11px] leading-4 text-muted-foreground">
-                      {event.summary || event.findingText}
-                    </div>
-                    <div className="mt-1 text-[9px] text-muted-foreground">{formatDate(event.recorded_at)}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-
         {contextRecords.length > 0 && (
           <section className="overflow-hidden rounded-xl border bg-background">
             <div className="border-b px-4 py-3">
@@ -855,100 +753,6 @@ export function PulseWorkspace({
           </section>
         )}
       </div>
-
-      <section className="overflow-hidden rounded-xl border bg-background">
-        <div className="border-b px-4 py-3">
-          <h3 className="text-sm font-semibold text-foreground">Pulse activity</h3>
-          <p className="mt-0.5 text-[11px] text-muted-foreground">
-            What Gate selected, which review and repair turns ran, and how each sequence closed
-          </p>
-		  {latestPassMetrics && (
-		    <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-muted-foreground" title={latestPassMetrics.pulseRunID}>
-		      <span className="font-medium text-foreground">Latest measured pass</span>
-		      <span>{latestPassMetrics.reviewers} review turn{latestPassMetrics.reviewers === 1 ? '' : 's'}{latestPassMetrics.fixers > 0 ? ` + ${latestPassMetrics.fixers} repair turn${latestPassMetrics.fixers === 1 ? '' : 's'}` : ' · no repair turn needed'}</span>
-		      <span>{formatAgentDuration(latestPassMetrics.wallTimeMS)} wall</span>
-		      <span>{formatAgentDuration(latestPassMetrics.agentTimeMS)} agent time</span>
-		      <span>{latestPassMetrics.calls} calls</span>
-		      <span>{compactMetricNumber.format(latestPassMetrics.promptTokens)} input</span>
-		      <span>{compactMetricNumber.format(latestPassMetrics.cacheReadTokens)} cached</span>
-		      <span>{compactMetricNumber.format(latestPassMetrics.completionTokens)} output</span>
-		      <span>${latestPassMetrics.cost.toFixed(2)}</span>
-		      {latestPassMetrics.unavailable > 0 && <span className="text-amber-700 dark:text-amber-300">{latestPassMetrics.unavailable} usage unavailable</span>}
-		    </div>
-		  )}
-        </div>
-        <div className="grid gap-px bg-border sm:grid-cols-2 xl:grid-cols-3">
-          {moduleSummaries.map((module) => {
-            const state = moduleStateByID.get(module.id)
-            const active = selectedModule === module.id
-            const openWork = module.active + module.fixing + module.queuedForEngineering
-            const waitingWork = module.awaitingVerification + module.awaitingRun
-            return (
-              <button
-                key={module.id}
-                type="button"
-                onClick={() => { setSelectedModule(module.id); setModuleFilter(module.id); setShowCompleteBacklog(false) }}
-                aria-pressed={active}
-                className={`min-w-0 bg-background p-3 text-left transition-colors hover:bg-muted/40 ${active ? 'ring-2 ring-inset ring-primary/50' : ''}`}
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <span className="text-xs font-semibold text-foreground">{module.label}</span>
-                  {openWork > 0 && (
-                    <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500/10 px-1.5 text-[9px] font-semibold text-red-700 dark:text-red-300">
-                      {openWork}
-                    </span>
-                  )}
-                </div>
-                <div className="mt-1 line-clamp-2 min-h-8 text-[10px] leading-4 text-muted-foreground">{module.description}</div>
-                <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                  <span className={`rounded-full border px-1.5 py-0.5 text-[9px] font-semibold capitalize ${statusTone(moduleStateLabel(state))}`}>
-                    {moduleStateLabel(state)}
-                  </span>
-                  {module.recurring > 0 && (
-                    <span className="text-[9px] font-medium text-amber-700 dark:text-amber-300">{module.recurring} recurring</span>
-                  )}
-                  {waitingWork > 0 && (
-                    <span className="text-[9px] font-medium text-amber-700 dark:text-amber-300">{waitingWork} waiting</span>
-                  )}
-                  {module.awaitingUser > 0 && (
-                    <span className="text-[9px] font-medium text-fuchsia-700 dark:text-fuchsia-300">{module.awaitingUser} decisions</span>
-                  )}
-                  {module.queuedForEngineering > 0 && (
-                    <span className="text-[9px] font-medium text-sky-700 dark:text-sky-300">{module.queuedForEngineering} queued</span>
-                  )}
-                  {module.blocked > 0 && (
-                    <span className="text-[9px] font-medium text-muted-foreground">{module.blocked} blocked</span>
-                  )}
-                  {module.externalAction > 0 && (
-                    <span className="text-[9px] font-medium text-violet-700 dark:text-violet-300">
-                      {module.externalAction} external
-                    </span>
-                  )}
-                </div>
-                <div className="mt-2 line-clamp-2 text-[10px] leading-4 text-foreground">
-                  {module.latestReview?.verdict || (module.latestReview ? 'Review recorded' : 'No stored review yet')}
-                </div>
-                {(state?.last_result_reason || state?.last_reason) && (
-                  <div className="mt-1 line-clamp-2 text-[9px] leading-4 text-muted-foreground">
-                    {state.last_result_reason || state.last_reason}
-                  </div>
-                )}
-                <div className="mt-1 text-[9px] text-muted-foreground">
-                  {module.latestReview ? formatDate(module.latestReview.recorded_at) : 'Awaiting evidence'}
-                </div>
-				{module.latestReview?.metrics && (
-				  <div className="mt-1 text-[9px] text-muted-foreground">
-				    {formatAgentDuration(module.latestReview.metrics.duration_ms)}
-				    {module.latestReview.metrics.usage_status === 'captured' && (
-				      <> · {compactMetricNumber.format(module.latestReview.metrics.completion_tokens)} output · ${module.latestReview.metrics.total_cost_usd.toFixed(2)}</>
-				    )}
-				  </div>
-				)}
-              </button>
-            )
-          })}
-        </div>
-      </section>
 
       {selectedDefinition && (
         <section className="overflow-hidden rounded-xl border bg-background">

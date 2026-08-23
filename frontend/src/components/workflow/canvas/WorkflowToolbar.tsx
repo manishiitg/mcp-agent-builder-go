@@ -1282,7 +1282,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                   <PulseWorkspace
                     workspacePath={workspacePath}
                     monitorOn={monitorOn}
-                    moduleStates={pulseModuleStates}
                     finalCommandStates={pulseFinalCommandStates}
                     gateMode={pulseGateMode}
                     reviewFocuses={pulseReviewFocuses}
