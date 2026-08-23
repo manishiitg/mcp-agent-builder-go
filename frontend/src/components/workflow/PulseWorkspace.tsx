@@ -23,13 +23,11 @@ import type {
 } from '../../services/api-types'
 import { ReportHumanInputPanel } from './ReportHumanInputPanel'
 import { SoulViewer } from './SoulViewer'
-import { PulseModuleInspector } from './PulseModuleInspector'
 import { PulseFindingCard } from './PulseFindingCard'
 import { pulseFindingPresentation, type PulseFindingQueue } from './pulseFindingPresentation'
 import {
   buildPulseWorkspaceModuleSummaries,
   normalizePulseWorkspaceModule,
-  selectPulseWorkspaceModule,
 } from './pulseWorkspaceUtils'
 import {
   PULSE_FIXED_COMMANDS,
@@ -111,6 +109,24 @@ const FOCUS_HINTS: Record<PulseFocus, string> = {
   workflow_reported: 'Evidence filed by workflow steps, kept separate from Pulse\u2019s repair queue',
 }
 
+// This is the closed, operator-facing review catalog. Historical focus rows
+// remain useful as coverage evidence, but they must never turn into extra
+// choices in the manual-review control.
+const PULSE_REVIEW_OPTIONS = [
+  { module: 'technical_review', focusKey: 'execution_health' },
+  { module: 'technical_review', focusKey: 'plan_orchestration_integrity' },
+  { module: 'technical_review', focusKey: 'store_integrity' },
+  { module: 'technical_review', focusKey: 'report_quality_truth' },
+  { module: 'technical_review', focusKey: 'evaluation_quality_truth' },
+  { module: 'technical_review', focusKey: 'model_cost_fitness' },
+  { module: 'strategic_review', focusKey: 'goal_measurement_validity' },
+  { module: 'strategic_review', focusKey: 'strategy_effectiveness' },
+  { module: 'strategic_review', focusKey: 'feedback_loops_bias' },
+  { module: 'strategic_review', focusKey: 'concentration_saturation' },
+  { module: 'strategic_review', focusKey: 'alternative_headroom' },
+  { module: 'strategic_review', focusKey: 'experiment_impact' },
+] as const
+
 export function PulseWorkspace({
   workspacePath,
   monitorOn,
@@ -141,26 +157,15 @@ export function PulseWorkspace({
   const [impact, setImpact] = useState<PulseImpactLedger>({ interventions: [], observations: [], assessments: [] })
   const [contextRecords, setContextRecords] = useState<PulseContextRecord[]>([])
   const [latestRun, setLatestRun] = useState<LatestWorkflowRun | null>(null)
-  const [selectedModule, setSelectedModule] = useState<string | null>(null)
   const [focus, setFocus] = useState<PulseFocus>('all')
-  // Distinct from selectedModule on purpose. selectedModule always holds a
-  // value because the inspector below needs something to render, and an effect
-  // re-picks a default whenever it is empty — so using it to filter the list
-  // meant Clear filter showed everything for one frame and then snapped back to
-  // one module as that effect re-fired. This is only ever set by an explicit
-  // click, and cleared means cleared.
   const [moduleFilter, setModuleFilter] = useState<string | null>(null)
   const [expandedFinding, setExpandedFinding] = useState<string | null>(null)
   const [showCompleteBacklog, setShowCompleteBacklog] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [selectedReviewFocus, setSelectedReviewFocus] = useState('')
-
-  useEffect(() => {
-    if (selectedReviewFocus || reviewFocuses.length === 0) return
-    const first = reviewFocuses[0]
-    setSelectedReviewFocus(`${first.module}:${first.focus_key}`)
-  }, [reviewFocuses, selectedReviewFocus])
+  const [selectedReviewFocus, setSelectedReviewFocus] = useState(
+    `${PULSE_REVIEW_OPTIONS[0].module}:${PULSE_REVIEW_OPTIONS[0].focusKey}`,
+  )
 
   const load = useCallback(async () => {
     if (!workspacePath) return
@@ -231,7 +236,6 @@ export function PulseWorkspace({
   }, [workspacePath])
 
   useEffect(() => {
-    setSelectedModule(null)
     setFindings([])
     setReviews([])
     setImpact({ interventions: [], observations: [], assessments: [] })
@@ -259,11 +263,6 @@ export function PulseWorkspace({
     () => buildPulseWorkspaceModuleSummaries(PULSE_MODULE_COMMANDS, findings, reviews),
     [findings, reviews],
   )
-  const selectedDefinition = moduleSummaries.find((module) => module.id === selectedModule) || null
-  useEffect(() => {
-    if (selectedModule && moduleSummaries.some((module) => module.id === selectedModule)) return
-    setSelectedModule(selectPulseWorkspaceModule(moduleSummaries))
-  }, [moduleSummaries, selectedModule])
 
   const finalCommandStateByID = useMemo(
     () => new Map(finalCommandStates.map((state) => [state.command, state])),
@@ -444,7 +443,7 @@ export function PulseWorkspace({
         )}
       </section>
 
-      {onRunFocus && reviewFocuses.length > 0 && (
+      {onRunFocus && (
         <section className="rounded-xl border bg-background px-4 py-3">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0">
@@ -460,9 +459,9 @@ export function PulseWorkspace({
                 className="min-w-0 flex-1 rounded-md border bg-background px-2.5 py-1.5 text-xs text-foreground sm:w-64"
                 aria-label="Pulse review focus"
               >
-                {reviewFocuses.map((item) => (
-                  <option key={`${item.module}:${item.focus_key}`} value={`${item.module}:${item.focus_key}`}>
-                    {readable(item.module)} · {readable(item.focus_key)}
+                {PULSE_REVIEW_OPTIONS.map((item) => (
+                  <option key={`${item.module}:${item.focusKey}`} value={`${item.module}:${item.focusKey}`}>
+                    {readable(item.module)} · {readable(item.focusKey)}
                   </option>
                 ))}
               </select>
@@ -550,7 +549,6 @@ export function PulseWorkspace({
                 key={area.id}
                 type="button"
                 onClick={() => {
-                  setSelectedModule(moduleID)
                   setModuleFilter(moduleID)
                   if (strategic && (decisions > 0 || proposals > 0)) {
                     setFocus(decisions > 0 ? 'decisions' : 'proposals')
@@ -724,7 +722,12 @@ export function PulseWorkspace({
                     onToggle={() => setExpandedFinding(
                       expandedFinding === finding.fingerprint ? null : finding.fingerprint,
                     )}
-                    onOpenModule={() => moduleID && setSelectedModule(moduleID)}
+                    onOpenModule={() => {
+                      if (!moduleID) return
+                      setModuleFilter(moduleID)
+                      setFocus('all')
+                      setShowCompleteBacklog(false)
+                    }}
                   />
                 )
               })}
@@ -753,30 +756,6 @@ export function PulseWorkspace({
           </section>
         )}
       </div>
-
-      {selectedDefinition && (
-        <section className="overflow-hidden rounded-xl border bg-background">
-          <div className="border-b px-4 py-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <h3 className="text-sm font-semibold text-foreground">{selectedDefinition.label}</h3>
-                <p className="mt-0.5 text-[11px] text-muted-foreground">{selectedDefinition.description}</p>
-              </div>
-              <span className="text-[10px] text-muted-foreground">
-                {selectedDefinition.findings} finding{selectedDefinition.findings === 1 ? '' : 's'} · {selectedDefinition.closed} closed
-              </span>
-            </div>
-          </div>
-          <PulseModuleInspector
-            workspacePath={workspacePath}
-            module={selectedDefinition.id}
-            label={selectedDefinition.label}
-            reviews={reviews.filter((review) => (
-              normalizePulseWorkspaceModule(review.module) === selectedDefinition.id
-            ))}
-          />
-        </section>
-      )}
 
       <section className="overflow-hidden rounded-xl border bg-background">
         <div className="flex flex-wrap items-start justify-between gap-3 border-b px-4 py-3">
