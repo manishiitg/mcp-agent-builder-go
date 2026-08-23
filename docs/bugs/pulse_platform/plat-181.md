@@ -215,6 +215,25 @@ call path turns out to cause the live incident:
    to "doesn't accumulate for this one call" rather than "silently shared
    with a stranger."
 
+## Review follow-up (same day) — the angle-2 fix itself had a quota-bypass regression
+
+A code review of the fix above caught a real problem it introduced:
+`cdpUnidentifiedOwnerID`'s fresh, never-before-seen value on every call
+means `countCDPTabAliasesForOwner` always reads 0 tabs for it —
+`guardCDPTabCreation` trusted that as a normal owner, so a caller that
+genuinely can't be identified could create **unlimited** tabs, never once
+hitting `MaxCDPTabsPerOwner`. Turning "misattributed to a stranger" into
+"no quota enforcement at all" is a different failure, not a fix.
+
+`guardCDPTabCreation` (`pkg/browser/cdp_registry.go`) now recognizes this
+value via a new `isCDPUnidentifiedOwner` check and refuses the request
+outright, before ever reaching the count comparison — an unenforceable
+quota fails loud (a clear diagnostic naming the missing session context)
+rather than failing open. Two new tests in `cdp_registry_test.go`/
+`cdp_tabs_test.go` cover this: one confirms unlimited calls with an
+unidentified owner are all rejected, proven fail-before/pass-after against
+the prior commit.
+
 ## Acceptance tests
 
 Covered by three new tests in `pkg/browser/cdp_tabs_test.go`:

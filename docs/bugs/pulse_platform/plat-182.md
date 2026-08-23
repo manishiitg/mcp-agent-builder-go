@@ -107,8 +107,70 @@ identical `completed_at`, and (b) the sole ordering signal for legacy files
 that predate `completed_at` being recorded, so no existing evidence becomes
 unreadable.
 
-## Not implemented
+## Review follow-up (same day) — the selection fix alone was not sufficient
 
+A code review of the fix above found the deeper issue it left unaddressed:
+
+> After runExecutionPhase completes, the correct result is discarded and the
+> code searches the shared log directory for the globally newest result.
+> Another schedule/chat executing the same step can finish between those
+> operations, causing the wrong dispatch's response to be returned.
+
+Confirmed real, not theoretical: `controller_workshop.go:305-317`'s re-read
+of `loadSingleStepResultFromLogs` has no way to distinguish "the file this
+exact call just wrote" from a file a genuinely concurrent, unrelated
+dispatch of the same step wrote in between — and nothing serializes those
+two dispatches against each other. Traced two independent gaps that both
+have to hold for two dispatches to collide, and confirmed both are open:
+the session-scoped step registry (`interactive_workshop_manager.go:3089-3098`)
+only guards a second `execute_step` within the *same* chat session (a fresh
+`WorkshopStepRegistry` per `NewWorkshopChatSession`, and scheduled runs get
+their own session ID via `newScheduleSessionID`), and the scheduler's own
+`scheduleStateScope` lock (`scheduler.go:108-115`) is workspace-scoped
+against *other scheduled runs* only — a chat-triggered `execute_step` never
+touches it. Two independent orchestrator instances (a chat session and a
+scheduler tick) can dispatch the identical `stepID` concurrently, each
+writing its own evidence into the same log folder.
+
+A related, smaller point from the same review: `completed_at` was written
+with whole-second `time.RFC3339` precision, so two dispatches finishing in
+the same second would still tie and fall back to the attempt/iteration
+comparison this ticket's own fix established is invalid across dispatches.
+
+### Fix implemented
+
+`runExecutionPhase` (`controller_execution.go`) now takes an optional
+`*LastExecutedStepOutcome` out-parameter, populated in place at both points
+it already stores a step's result into `previousExecutionResults` (the
+human-input and regular/scripted step branches — routing and todo_task
+steps produce no result string this way and leave it unset).
+`controller_workshop.go` passes a pointer and, when the outcome was
+captured and its step index matches the target step, uses that exact
+in-memory string directly — no re-read, no possibility of picking up a
+concurrent dispatch's file. The log-folder read remains as a fallback only
+for step kinds that never populate an in-memory result this way, and the
+pre-existing inner-step-override addressing path is untouched. The other
+two `runExecutionPhase` callers (batch/group execution, evaluation) have no
+use for a single step's result and pass `nil` — zero behavior change for
+them.
+
+`completed_at` was also raised to nanosecond precision
+(`formatRFC3339UTC`, the single shared helper every writer of that field
+uses) to shrink the residual tie window for the read paths that still
+compare timestamps — `loadExecutionResultsFromLogs`' cross-step context
+reads, and this fix's own fallback paths. The real fix is the exact binding
+above; this only tightens what remains for the cases it doesn't cover.
+
+### Not implemented
+
+- No dedicated new test for the exact-binding fix itself:
+  `runExecutionPhase` has no existing test harness to extend (it invokes
+  real step execution internally, including LLM agent calls), and building
+  one from scratch was out of scope for this pass. Verified instead via a
+  full build and the existing regression suite (only pre-existing,
+  independently confirmed-unrelated failures) — a materially weaker
+  verification than the fail-before/pass-after tests the rest of this
+  ticket has. Live reverify is the real proof this needs.
 - Nothing archives or clears a step's prior-dispatch `execution-attempt-*`
   files once a step is re-run — this fix changes which survivor gets
   *selected*, not whether stale ones keep accumulating on disk indefinitely.
@@ -130,6 +192,9 @@ fail-before/pass-after against the actual prior comparison logic:
    — legacy fixture files with no `completed_at` field; asserts the
    attempt/iteration fallback ordering still applies unchanged.
 
+The exact-dispatch-binding follow-up fix has no dedicated test — see "Not
+implemented" above.
+
 ## Verification
 
 - `go build ./...` clean.
@@ -138,6 +203,12 @@ fail-before/pass-after against the actual prior comparison logic:
   (`TestRunInBackgroundPassesBuilderSkillSnapshotToBothAgentKinds`,
   `TestWorkshopPromptShellExamplesUseAbsolutePaths`) confirmed present on a
   clean `origin/main` checkout before this change, unrelated to this fix.
-- Live reverify pending: no confirmation yet against a real re-dispatched
-  step whose log folder already holds files from an earlier, unrelated
-  dispatch.
+- `go test ./...` (full repo, after the review follow-up): same
+  pre-existing failure set as every other check this session
+  (Pulse-module-naming drift in `cmd/server`, plus the two above) —
+  independently confirmed unrelated, no new regressions.
+- Live reverify pending for both the original selection fix and the
+  exact-dispatch-binding follow-up: no confirmation yet against a real
+  re-dispatched step whose log folder already holds files from an earlier,
+  unrelated dispatch, or against two genuinely concurrent dispatches of the
+  same step.
