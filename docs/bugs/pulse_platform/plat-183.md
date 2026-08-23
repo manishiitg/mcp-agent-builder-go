@@ -1,6 +1,6 @@
 [← Pulse platform issue index](../pulse_platform_issue_register.md)
 
-# PLAT-183 — proposal: fold multi-llm-provider-go into mcpagent as an internal package
+# PLAT-183 — proposal: make mcpagent the sole owner of multi-LLM provider code
 
 | Coordination | Value |
 |---|---|
@@ -23,9 +23,12 @@ pseudo-version in `mcpagent/go.mod`) and, directly, by `agent_go` itself. The
 user's observation: maintaining it as a second repository adds coordination
 overhead (a two-repo pull/push/pin cycle for every change to the coding-agent
 adapters) without buying any real isolation, since it has exactly one
-consumer family. Proposed: move `multi-llm-provider-go`'s code into `mcpagent`
-as an internal package (e.g. `mcpagent/llmprovider/...`), retire the standalone
-module, and update every consumer's import path.
+consumer family. Proposed: first make `mcpagent` the sole provider-facing
+contract used by `agent_go`, then move `multi-llm-provider-go`'s code into
+`mcpagent/llmprovider/...`, retire the standalone module after a soak period,
+and update every consumer's import path. Do not place the moved packages under
+Go's specially restricted `internal/` directory while `agent_go` still needs
+to import any of them.
 
 **This ticket documents what has to be taken care of before that move is
 safe. It does not perform the move.**
@@ -71,6 +74,76 @@ safe. It does not perform the move.**
    (documents `go get github.com/manishiitg/multi-llm-provider-go@vX.Y.Z`).
    These need auditing for anything that still assumes the module is
    independently fetchable/taggable after the move.
+
+5. **Local development uses the live checkout, but released builds do not
+   guarantee "latest."** The shared `go.work` and local `replace` directives
+   make local builds use the checked-out `multi-llm-provider-go` source.
+   Released/container builds drop those replacements and use pinned module
+   versions. As of this review, `mcpagent` pins provider commit `99ad881`, while
+   `agent_go` directly pins newer provider commit `6f23e9b`. Go's module
+   selection normally chooses the newer version when building `agent_go`, but
+   building `mcpagent` alone uses its older pin. If the intended invariant is
+   that mcpagent always uses exactly one current provider implementation, the
+   separate modules do not enforce it today.
+
+## Agreed migration strategy — move ownership before moving code
+
+Treat this as a staged, reversible migration. Do not combine the dependency
+boundary change, repository move, and old-repository retirement in one commit.
+
+### Phase 0 — freeze the contract baseline
+
+- [ ] Enumerate the existing P0/real-contract tests for claude-code,
+      codex-cli, cursor-cli, and pi-cli, including streaming, tool-call
+      receipts and payloads, final assistant response, completion, retained
+      session reuse, live input, resume, and tmux behavior.
+- [ ] Run them against the current layout and retain the results as the
+      pre-migration baseline. Tests must not be deleted, weakened, replaced by
+      mocks, or rewritten merely to pass the migration.
+
+### Phase 1 — make mcpagent the only provider boundary
+
+- [ ] Add stable provider-facing contract/facade packages in `mcpagent` that
+      initially alias or delegate to the existing standalone provider module;
+      this phase must not change runtime behavior.
+- [ ] Replace all direct `agent_go -> multi-llm-provider-go` imports with the
+      mcpagent-owned facade. Remove `agent_go`'s direct provider requirement
+      only after the import count reaches zero.
+- [ ] Run the unchanged P0 suite and normal builds. This is an independent
+      commit and rollback point.
+
+### Phase 2 — move the implementation with history and tests
+
+- [ ] Import the provider repository into `mcpagent/llmprovider/...` using a
+      history-preserving method (`git subtree` or a deliberate
+      `git filter-repo` workflow), retaining blame where practical.
+- [ ] Move the existing provider tests, real P0 runners, fixtures, CLI
+      programs, MCP server, packaging, examples, skills, and relevant CI—not
+      only the library `.go` files.
+- [ ] Rewrite mcpagent's facade to use the embedded implementation, then remove
+      its standalone-module dependency.
+- [ ] Run the same unchanged P0 suite again and compare it with Phase 0. A
+      passing compile/unit suite alone is not sufficient.
+
+### Phase 3 — integration cleanup and soak
+
+- [ ] Remove obsolete `go.mod`, `go.work`, Docker, deploy-script, install, and
+      documentation references to the standalone module.
+- [ ] Run full builds/tests in `mcpagent` and `agent_go`, plus at least one live
+      retained-session contract run for each supported coding CLI.
+- [ ] Keep the old repository read-only and recoverable for at least one
+      release/production soak period. Archive it only after the embedded path
+      is proven; deletion is not part of this migration.
+
+### Mandatory stop conditions
+
+- Any missing or weakened P0 coverage blocks the move.
+- Any provider-specific change in structured events, tool payloads, final
+  response, completion, session reuse, or resume behavior blocks the move.
+- Any remaining direct `agent_go` import of the old provider blocks retirement
+  of the standalone module.
+- The migration must remain bisectable: each phase builds, tests, and can be
+  reverted independently.
 
 ## What to take care of before/during the actual migration
 
