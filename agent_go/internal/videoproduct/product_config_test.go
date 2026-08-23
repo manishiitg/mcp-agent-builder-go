@@ -83,11 +83,8 @@ func TestVideoStudioManifestDrivesProfileAndWorkflowCapabilities(t *testing.T) {
 	if showVideoBinding.Presentation == nil || showVideoBinding.Presentation.Kind != "media.video" {
 		t.Fatalf("video.show-video must declare presentation.kind=media.video, got %+v", showVideoBinding.Presentation)
 	}
-	// Under mcp_only the CLI's own Read/Write are denied, so the bridge supplies
-	// the guarded editor. Mode-dependent, not a property of the tool — the
-	// hybrid direction is pinned by
-	// TestProductToolGateGovernsTheCodingAgentBridgeCatalog.
-	if manifest.Profile.Runtime.AgentTools.Mode != "hybrid" && !enabled["diff_patch_workspace_file"] {
+	// Video Studio is MCP-only, so the bridge supplies the guarded editor.
+	if manifest.Profile.Runtime.AgentTools.Mode == "mcp_only" && !enabled["diff_patch_workspace_file"] {
 		t.Fatalf("agent_tools.mode=%q denies native edits; the bridge must carry diff_patch_workspace_file: %+v",
 			manifest.Profile.Runtime.AgentTools.Mode, manifest.Profile.ToolPolicy)
 	}
@@ -109,7 +106,7 @@ func TestVideoStudioManifestDrivesProfileAndWorkflowCapabilities(t *testing.T) {
 		t.Fatalf("Video Studio runtime transport = %q, want auto", manifest.Profile.Runtime.Transport)
 	}
 	if manifest.Profile.Runtime.AgentTools.Mode != "mcp_only" || manifest.Profile.Runtime.Approvals.Mode != "provider_auto" {
-		t.Fatalf("Video Studio native-tool policy = %+v %+v, want mcp_only/provider_auto", manifest.Profile.Runtime.AgentTools, manifest.Profile.Runtime.Approvals)
+		t.Fatalf("Video Studio tool policy = %+v %+v, want mcp_only/provider_auto", manifest.Profile.Runtime.AgentTools, manifest.Profile.Runtime.Approvals)
 	}
 	if manifest.Workflows.BrowserMode != "auto" || len(manifest.Workflows.SelectedSkills) == 0 {
 		t.Fatalf("unexpected workflow definition: %+v", manifest.Workflows)

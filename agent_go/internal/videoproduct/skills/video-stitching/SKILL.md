@@ -10,6 +10,11 @@ Stitching is a distinct editorial decision, not a final export detail. Read
 `longform-cinematic-video` when it applies; this skill owns the seam-by-seam
 handoff between approved clips and the final cut.
 
+For a sequence that still needs clips generated, read
+`multi-clip-cinematic-generation` first. It owns pre-generation transition
+grammar and the reference manifest; this skill owns the editorial plan and
+final seam verification once approved clips exist.
+
 ## Generate for the next seam
 
 Plan every follow-up shot before its generation request. The prior accepted
@@ -19,6 +24,14 @@ range, then select its last **usable stable frame** at the intended edit point
 mid-blink, or a generation artifact). Record that selected frame and the
 outgoing subject, prop, camera, screen-direction, action, lighting, and audio
 state in the continuity ledger.
+
+When the production exposes a reusable **Create the next clip** recipe, run it
+once per clip. Its existing output and ledger are the history from prior runs:
+preserve all earlier entries and append the new attempt. Use the current
+step's human input only to choose or refine this one target shot; it does not
+authorise the remaining shot list. If no accepted predecessor is recorded,
+write a blocked result that names the missing anchor or predecessor instead of
+generating a visually unrelated continuation.
 
 Choose the first live-supported route that preserves the intended continuity:
 

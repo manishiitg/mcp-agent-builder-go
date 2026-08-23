@@ -973,6 +973,17 @@ export const agentApi = {
     return response.data
   },
 
+  startNewAgentProfileConversation: async (
+    profileId: string,
+    request: AgentProfileConversationRequest,
+  ): Promise<AgentProfileConversationResponse> => {
+    const response = await api.post(
+      `/api/agent-profiles/${encodeURIComponent(profileId)}/conversation/new`,
+      request,
+    )
+    return response.data
+  },
+
   // Get server health
   getHealth: async () => {
     const response = await api.get('/api/health')

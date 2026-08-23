@@ -52,12 +52,11 @@ profile:
       - add_dominion_watchlist_symbol
       - execute_shell_command
   runtime:
-    # Load-bearing -- see Finance's own product.yaml comment. "auto"/unset
-    # resolves to native/tmux mode for claude-code and codex-cli, where the
-    # coding CLI's own built-in tool loop runs entirely outside mcpagent's
-    # registry and tool_policy does not apply. structured is what Finance
-    # confirmed live keeps PRODUCT_TOOL_GATE actually enforced.
-    transport: structured
+    # Match Video Studio: Claude Code keeps its tmux session warm between web
+    # turns so conversation context and its project projection (`CLAUDE.md` and
+    # `.claude/skills`) remain available. Tool safety comes from mcp_only below,
+    # not from forcing a one-shot structured transport.
+    transport: auto
     provider_options:
       - id: claude-code
         label: Claude Code

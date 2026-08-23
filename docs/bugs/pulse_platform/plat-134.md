@@ -5,8 +5,8 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | Codex |
-| Ticket state | `partially_implemented` — live chat runtime simplified and covered; compatibility naming and unreachable legacy implementation remain to be extracted/deleted |
-| Last synchronized | `2026-08-19` |
+| Ticket state | `partially_implemented` — direct chat runtime, durable product-chat rotation, and hybrid tool contract are covered; compatibility naming and unreachable legacy implementation remain to be extracted/deleted |
+| Last synchronized | `2026-08-22` |
 
 - **Priority:** P1 — ordinary and product chat are simple conversational
   sessions, but their runtime was assembled as a generic multi-agent
@@ -105,6 +105,61 @@ The bot connector also still owns a legacy model-profile store currently named
 `delegation_tier_config`. Direct/product chat no longer loads it; it must be
 renamed or migrated independently before the store/API can be deleted.
 
+## 2026-08-22 — product chat New Chat and browser tool boundary
+
+Two product-facing details were found while exercising Video Studio. They are
+shared ProductChatSurface/runtime behaviour, not a Video Studio-only UI patch.
+
+### New Chat must rotate the server-owned durable conversation
+
+The old New Chat action called `resetTabChat`, which cleared the tab and minted
+a browser-local random session id. A keyed product project, however, resolves
+its authoritative session from `product.json`, and the product-conversation
+registry returns that same canonical session on the next query. The result was
+a misleading blank screen followed by the old durable transcript returning as
+soon as the user said “hi”.
+
+The client now calls `POST /api/agent-profiles/{id}/conversation/new` before it
+clears a product tab. The server mints a fresh conversation and session,
+replaces the registry entry, and, for a keyed project, updates that project's
+`product.json` `session_id`. The production/artifact workspace is retained and
+the prior transcript is not deleted; it simply ceases to be the active chat.
+If rotation fails, the UI keeps the old conversation rather than pretending a
+new one exists. Singleton products use the same endpoint but only rotate their
+registry binding.
+
+### Browser product uses the guarded MCP surface
+
+Video Studio's `runtime.agent_tools.mode: mcp_only` exposes the guarded MCP
+bridge for all workspace and product work, including
+`execute_shell_command` for product HTTP APIs. This retains the session's
+project-scoped Folder Guard and structured tool progress/results for the web
+client. It does not claim that native CLI tools have the same guard: they are
+not enabled for this browser product.
+
+### Native terminal questions cannot be used by a browser product
+
+Testing native tools exposed a second boundary: Claude Code's native default tool
+surface can open an in-terminal multiple-choice question. The web client cannot
+render or answer that terminal UI, so the provider waits forever and ProductChat
+continues to show `Working`. This is not an LLM latency issue and it is not a
+Folder Guard decision.
+
+Browser products must therefore default to `mcp_only` until native interactive
+questions are either bridged into ProductChat or denied by a provider-specific,
+tested `--disallowed-tools` configuration. Prompt guidance alone is insufficient.
+
+Separately, mcpagent must preserve provider-projected `.claude/skills` and its
+managed `CLAUDE.md` across per-turn `Agent.Close()` calls for persistent native
+sessions. A web turn creates a short-lived Agent, but its tmux CLI session is
+intentionally retained; deleting the files at the former boundary left the
+still-live session with no inspectable project setup.
+
+Dominion AI uses the same `transport: auto` + `agent_tools.mode: mcp_only`
+profile shape as Video Studio. The transport keeps the Claude session and its
+project projection warm; MCP-only keeps terminal-native tools out of the web
+chat path.
+
 ## Remaining compatibility cleanup
 
 The behavior is simplified, but the source tree is not yet fully reduced:
@@ -132,6 +187,10 @@ The behavior is simplified, but the source tree is not yet fully reduced:
   overridden by the browser.
 - Video Studio and Dominion resume the same product conversation and remain
   constrained to their declared profile capabilities.
+- New Chat rotates the durable product conversation server-side; a subsequent
+  product query cannot restore the transcript it just replaced.
+- Browser-product documentation and prompts require the guarded MCP surface
+  and explain why provider-native terminal tools are unavailable there.
 - Chat startup performs no delegation-tier API request and has no delegated-task
   reasoning control.
 - Every product chat stops its working state and renders a normalized failure

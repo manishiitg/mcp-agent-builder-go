@@ -3218,6 +3218,24 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       }
     }
 
+    // Product profiles own their durable conversation identity on the server.
+    // Rotating only this tab's local UUID would be overwritten by the next
+    // product resolve and the prior transcript would reappear.
+    let rotatedConversation: { conversation_id: string; session_id: string } | undefined
+    const profileId = targetTab?.metadata?.agentProfileId
+    const conversationKey = targetTab?.metadata?.agentProfileConversationKey
+    if (profileId && conversationKey) {
+      try {
+        rotatedConversation = await agentApi.startNewAgentProfileConversation(profileId, {
+          conversation_key: conversationKey,
+        })
+      } catch (error) {
+        logger.error('ChatArea', 'Failed to start a new product conversation:', error)
+        addToast('Could not start a new chat. Your existing conversation was kept.', 'error')
+        return
+      }
+    }
+
     // For workflow mode, preserve the selected preset but reset workflow phase
     if (selectedModeCategory === 'workflow' && selectedWorkflowPreset) {
       // Keep the preset selected, just reset the workflow phase to default
@@ -3231,7 +3249,12 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
 
     if (targetTab) {
       activateTab(targetTab.tabId)
-      chatStore.resetTabChat(targetTab.tabId)
+      chatStore.resetTabChat(targetTab.tabId, rotatedConversation?.session_id)
+      if (rotatedConversation) {
+        chatStore.setTabMetadata(targetTab.tabId, {
+          agentProfileConversationId: rotatedConversation.conversation_id,
+        })
+      }
       chatStore.setTabConfig(targetTab.tabId, {
         queuedMessages: [],
         isQueueProcessing: false,
@@ -3253,7 +3276,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     processedCompletionEventsRef.current.clear()
 
 
-  }, [clearWorkflowState, resetChatState, onNewChat, activeTab, selectedModeCategory, selectedWorkflowPreset, setCurrentWorkflowPhase, setLastEventIndex, getActiveSessions])
+  }, [addToast, clearWorkflowState, resetChatState, onNewChat, activeTab, selectedModeCategory, selectedWorkflowPreset, setCurrentWorkflowPhase, setLastEventIndex, getActiveSessions])
 
   // Refresh workflow presets function
   const refreshWorkflowPresets = useCallback(async () => {

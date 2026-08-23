@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -77,6 +78,49 @@ func TestProductConversationRegistrySeparatesUsersAndKeys(t *testing.T) {
 	}
 }
 
+func TestProductConversationRotationChangesProjectSessionAndKeepsNewBinding(t *testing.T) {
+	store, files := memoryProductConversationStore()
+	profile := routeTestProfile("video-studio", true, "")
+	profile.Runtime.Conversation = agentprofiles.ConversationPolicy{
+		Mode: agentprofiles.ConversationModeKeyed, KeyType: agentprofiles.ConversationKeyTypeProject,
+	}
+	const manifestPath = "_users/user-1/Chats/Video Studio/projects/launch/product.json"
+	files[manifestPath] = `{"product":"video-studio","id":"launch","title":"Launch","session_id":"existing-session","unrelated":"preserved"}`
+	binding := productConversationBinding{
+		ConversationKey: "launch", WorkspacePath: "_users/user-1/Chats/Video Studio/projects/launch",
+		ManifestPath: manifestPath, ResourceID: "launch", Title: "Launch", AuthoritativeSessionID: "existing-session",
+	}
+	original, err := store.resolveOrCreate(context.Background(), "user-1", profile, binding, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotated, err := store.rotate(context.Background(), "user-1", profile, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rotated.ConversationID == original.ConversationID || rotated.SessionID == original.SessionID {
+		t.Fatalf("rotation reused the old durable identity: original=%+v rotated=%+v", original, rotated)
+	}
+	var manifest map[string]interface{}
+	if err := json.Unmarshal([]byte(files[manifestPath]), &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest["session_id"] != rotated.SessionID || manifest["unrelated"] != "preserved" {
+		t.Fatalf("manifest not safely updated: %+v", manifest)
+	}
+
+	// A normal later resolve reads the rotated project binding and must not
+	// revive the conversation it replaced.
+	binding.AuthoritativeSessionID = rotated.SessionID
+	resolved, err := store.resolveOrCreate(context.Background(), "user-1", profile, binding, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.ConversationID != rotated.ConversationID || resolved.SessionID != rotated.SessionID {
+		t.Fatalf("resolve revived prior conversation: got=%+v want=%+v", resolved, rotated)
+	}
+}
+
 func TestResolveProductConversationBindingEnforcesDeclaredMode(t *testing.T) {
 	profile := singletonConversationProfile()
 	if _, err := resolveProductConversationBinding(context.Background(), "user-1", profile, "other"); err == nil || !strings.Contains(err.Error(), "singleton") {
@@ -130,6 +174,7 @@ func TestProductConversationP0ProjectKeyResolvesAndResumesOneDurableConversation
 		t.Fatal(err)
 	}
 	if binding.WorkspacePath != "_users/user-1/Chats/Video Studio/projects/launch-film" ||
+		binding.ManifestPath != manifestPath ||
 		binding.AuthoritativeSessionID != "existing-video-session" ||
 		binding.Title != "Launch Film" {
 		t.Fatalf("unexpected server-owned project binding: %+v", binding)

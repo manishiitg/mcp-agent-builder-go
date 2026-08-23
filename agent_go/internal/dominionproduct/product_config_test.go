@@ -24,11 +24,10 @@ func TestDominionManifestDeclaresProjectScopeAndNarrowAllowlist(t *testing.T) {
 	if manifest.Profile.Runtime.Provider != "claude-code" || manifest.Profile.Runtime.ModelID != "claude-sonnet-5" {
 		t.Fatalf("expected provider=claude-code model_id=claude-sonnet-5, got provider=%q model_id=%q", manifest.Profile.Runtime.Provider, manifest.Profile.Runtime.ModelID)
 	}
-	// Load-bearing: see Finance's own test/comment. Leaving transport unset
-	// lets a non-cursor-cli provider run in native/interactive mode, where
-	// tool_policy's allowlist does not apply at all.
-	if manifest.Profile.Runtime.Transport != "structured" {
-		t.Fatalf("dominion must declare runtime.transport: structured -- without it, a non-cursor-cli provider bypasses tool_policy entirely via its own native tools, got transport=%q", manifest.Profile.Runtime.Transport)
+	// Dominion shares Video Studio's persistent Claude session shape. Its
+	// mcp_only tool policy remains the containment boundary.
+	if manifest.Profile.Runtime.Transport != "auto" {
+		t.Fatalf("dominion must declare runtime.transport: auto for persistent Claude sessions, got transport=%q", manifest.Profile.Runtime.Transport)
 	}
 	if manifest.Profile.Runtime.Workspace.Root != "Chats" {
 		t.Fatalf("dominion profile-chat workspace root = %q, want Chats", manifest.Profile.Runtime.Workspace.Root)

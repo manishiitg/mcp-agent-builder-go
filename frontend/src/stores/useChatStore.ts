@@ -702,7 +702,7 @@ interface ChatState extends StoreActions {
   disconnectAllSSE: () => void
 
   // Helper methods
-  resetTabChat: (tabId: string) => void
+  resetTabChat: (tabId: string, nextSessionId?: string) => void
   resetChatState: () => void
   isAtBottom: (element: HTMLDivElement) => boolean
 }
@@ -1869,13 +1869,13 @@ export const useChatStore = create<ChatState>()(
       },
 
       // Reset a single tab's chat session without touching other tabs (used by prototype "New Chat")
-      resetTabChat: (tabId: string) => {
+      resetTabChat: (tabId: string, nextSessionId?: string) => {
         const state = get()
         const tab = state.chatTabs[tabId]
         if (!tab) return
 
         const oldSessionId = tab.sessionId
-        const newSessionId = globalThis.crypto.randomUUID()
+        const newSessionId = nextSessionId || globalThis.crypto.randomUUID()
 
         // Stop any streaming + close SSE for this tab
         if (oldSessionId && state.sseConnections[oldSessionId]) {

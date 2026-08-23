@@ -1854,6 +1854,7 @@ func runServer(cmd *cobra.Command, args []string) {
 	AgentProfileRoutes(apiRouter, api.agentProfiles)
 	apiRouter.HandleFunc("/agent-profiles/{id}/query", api.handleAgentProfileChatQuery).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/agent-profiles/{id}/conversation", api.handleResolveAgentProfileConversation).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/agent-profiles/{id}/conversation/new", api.handleRotateAgentProfileConversation).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/health", api.handleHealth).Methods("GET")
 	apiRouter.HandleFunc("/capabilities", api.handleCapabilities).Methods("GET")
 	CLISecurityRoutes(apiRouter, api.cliSecurityStore)

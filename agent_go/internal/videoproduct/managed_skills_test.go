@@ -126,6 +126,7 @@ func TestGenerationSkillsRegisterAndStayOutOfTheInfographicPipeline(t *testing.T
 		{"google-ai", []string{"SECRET_GEMINI_API_KEY", "Never invent a model ID", "@google/genai"}},
 		{"seeddance-api", []string{"SECRET_SEEDANCE_API_KEY", "/v1/videos/generations", "task_id", "show_video"}},
 		{"longform-cinematic-video", []string{"longform-sequence-plan.json", "longform-edit-decision-list.json", "longform-seam-report.json", "one film"}},
+		{"multi-clip-cinematic-generation", []string{"reference manifest", "orientation", "structured multi-shot", "Cut on action", "HyperFrames"}},
 		{"video-provider-capabilities", []string{"official API", "capability record", "maximum_approved_cost", "pending_user_review", "continuity-plan.json", "generation-ledger.json"}},
 		{"kling-video", []string{"multi_prompt", "@Element1", "motion-transfer", "show_video"}},
 		{"seedance-video", []string{"@Image1", "bytedance/seedance-2.0", "bytedance/seedance-2.5", "30-second", "show_video"}},
@@ -191,7 +192,7 @@ func TestGenerationSkillsRegisterAndStayOutOfTheInfographicPipeline(t *testing.T
 		}
 	}
 
-	generationSkillNames := map[string]bool{"fal-ai": true, "google-ai": true, "seeddance-api": true, "longform-cinematic-video": true, "video-provider-capabilities": true, "kling-video": true, "seedance-video": true, "veo-video": true, "minimax-h3-video": true, "gemini-omni-video": true, "video-model-selection": true, "video-cinematography": true, "video-storytelling": true, "generated-video-quality": true}
+	generationSkillNames := map[string]bool{"fal-ai": true, "google-ai": true, "seeddance-api": true, "longform-cinematic-video": true, "multi-clip-cinematic-generation": true, "video-provider-capabilities": true, "kling-video": true, "seedance-video": true, "veo-video": true, "minimax-h3-video": true, "gemini-omni-video": true, "video-model-selection": true, "video-cinematography": true, "video-storytelling": true, "generated-video-quality": true}
 	for _, stage := range infographicPipeline.Stages {
 		for _, name := range stage.Skills {
 			if generationSkillNames[name] {
@@ -204,7 +205,7 @@ func TestGenerationSkillsRegisterAndStayOutOfTheInfographicPipeline(t *testing.T
 func TestGenerationPipelinesAttachCapabilityDiscoveryBeforePaidVideo(t *testing.T) {
 	requiredSkills := []string{"video-provider-capabilities", "kling-video", "seedance-video", "seeddance-api", "veo-video", "minimax-h3-video", "gemini-omni-video"}
 	for _, pipeline := range []*Pipeline{longformPipeline, shortformPipeline} {
-		for _, stageID := range []string{pipeline.ID + "-brief", pipeline.ID + "-shotlist", pipeline.ID + "-generate"} {
+		for _, stageID := range []string{pipeline.ID + "-brief", pipeline.ID + "-shotlist", pipeline.ID + "-anchor-shot", pipeline.ID + "-next-shot"} {
 			var stage *PipelineStage
 			for index := range pipeline.Stages {
 				if pipeline.Stages[index].ID == stageID {

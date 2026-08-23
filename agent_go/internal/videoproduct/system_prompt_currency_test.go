@@ -62,6 +62,11 @@ func TestSystemPromptMatchesTheProductItDescribes(t *testing.T) {
 	if strings.Contains(text, "run_full_workflow") || !strings.Contains(text, "execute_step") {
 		t.Fatal("Video Studio must describe individual stage execution only")
 	}
+	if !strings.Contains(text, "MCP-only in this browser product") ||
+		!strings.Contains(text, "terminal-style selectors") ||
+		!strings.Contains(text, "exist only through the MCP bridge") {
+		t.Fatal("the system prompt must require the bridge-only browser tool surface")
+	}
 	if !strings.Contains(strings.ToLower(text), "only creative product") || !strings.Contains(text, "longform-cinematic-video") {
 		t.Fatal("the system prompt no longer defaults fresh productions to cinematic direction")
 	}

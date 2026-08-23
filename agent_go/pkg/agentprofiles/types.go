@@ -27,8 +27,9 @@ type RuntimePolicy struct {
 	CredentialScope string              `json:"credential_scope,omitempty" yaml:"credential_scope,omitempty"`
 	Capabilities    RuntimeCapabilities `json:"capabilities" yaml:"capabilities"`
 	// AgentTools selects whether a coding provider receives only AgentWorks MCP
-	// tools (mcp_only) or provider-native tools (hybrid). Hybrid is deliberately
-	// incompatible with execute_shell_command; use APITransport for product APIs.
+	// tools (mcp_only) or provider-native tools (hybrid). Hybrid may retain the
+	// MCP execute_shell_command bridge; only APITransport native_shell is
+	// mutually exclusive with that bridge route.
 	// Empty preserves mcp_only for existing profiles.
 	AgentTools AgentToolsPolicy `json:"agent_tools,omitempty" yaml:"agent_tools,omitempty"`
 	// Approvals controls the native-tool approval policy when AgentTools enables

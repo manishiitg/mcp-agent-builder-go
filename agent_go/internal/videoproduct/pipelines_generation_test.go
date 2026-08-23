@@ -15,12 +15,14 @@ func TestEverySpendingStageCarriesTheApprovalGate(t *testing.T) {
 	const gateMarker = "ONLY from the human input for THIS stage"
 
 	wantGated := map[string]bool{
-		"longform-characters":  true,
-		"longform-narration":   true,
-		"longform-generate":    true,
-		"shortform-characters": true,
-		"shortform-narration":  true,
-		"shortform-generate":   true,
+		"longform-characters":   true,
+		"longform-narration":    true,
+		"longform-anchor-shot":  true,
+		"longform-next-shot":    true,
+		"shortform-characters":  true,
+		"shortform-narration":   true,
+		"shortform-anchor-shot": true,
+		"shortform-next-shot":   true,
 	}
 
 	for _, pipeline := range []*Pipeline{longformPipeline, shortformPipeline} {
@@ -56,8 +58,9 @@ func TestShortformStagesPutDirectionAndMeasuredNarrationBeforeShots(t *testing.T
 		{"shortform-characters", "shortform-look-sound"},
 		{"shortform-look-sound", "shortform-narration"},
 		{"shortform-narration", "shortform-shotlist"},
-		{"shortform-shotlist", "shortform-generate"},
-		{"shortform-generate", "shortform-stitch-plan"},
+		{"shortform-shotlist", "shortform-anchor-shot"},
+		{"shortform-anchor-shot", "shortform-next-shot"},
+		{"shortform-next-shot", "shortform-stitch-plan"},
 		{"shortform-stitch-plan", "shortform-assemble"},
 		{"shortform-assemble", "shortform-check"},
 	} {
@@ -72,10 +75,11 @@ func TestShortformStagesPutDirectionAndMeasuredNarrationBeforeShots(t *testing.T
 			t.Fatalf("short-form character step is missing %q", required)
 		}
 	}
-	generate := shortformPipeline.Stages[index["shortform-generate"]].Description
-	for _, required := range []string{"explicitly classified as a HyperFrames insert", "do not introduce unplanned HyperFrames scenes", "photoreal footage"} {
-		if !strings.Contains(generate, required) {
-			t.Fatalf("short-form generation is missing selective HyperFrames rule %q", required)
+	anchor := shortformPipeline.Stages[index["shortform-anchor-shot"]].Description
+	next := shortformPipeline.Stages[index["shortform-next-shot"]].Description
+	for _, required := range []string{"exactly one approved anchor clip", "Do not batch the remaining shots", "HyperFrames insert", "photoreal footage"} {
+		if !strings.Contains(anchor, required) {
+			t.Fatalf("short-form anchor generation is missing rule %q", required)
 		}
 	}
 
@@ -94,14 +98,14 @@ func TestShortformStagesPutDirectionAndMeasuredNarrationBeforeShots(t *testing.T
 	}
 
 	shotlist := shortformPipeline.Stages[index["shortform-shotlist"]].Description
-	for _, required := range []string{"shortform-look-sound.md", "shortform-narration.md", "MEASURED", "Never fit narration", "seam-generation route", "last usable stable frame", "motivated camera-angle cut"} {
+	for _, required := range []string{"shortform-look-sound.md", "shortform-narration.md", "MEASURED", "Never fit narration", "multi-clip-cinematic-generation", "seam-generation route", "last usable stable frame", "motivated camera-angle cut"} {
 		if !strings.Contains(shotlist, required) {
 			t.Fatalf("short-form shot list is missing %q", required)
 		}
 	}
-	for _, required := range []string{"seam-generation route", "extension/reference-video continuation", "last usable stable frame", "camera-angle change"} {
-		if !strings.Contains(generate, required) {
-			t.Fatalf("short-form generation is missing follow-up-shot guidance %q", required)
+	for _, required := range []string{"exactly one next clip", "multi-clip-cinematic-generation", "durable history from prior runs", "seam-generation route", "extension/reference-video continuation", "last usable stable frame", "orientation/aspect-ratio", "camera-angle change", "cumulatively"} {
+		if !strings.Contains(next, required) {
+			t.Fatalf("short-form next-shot generation is missing follow-up guidance %q", required)
 		}
 	}
 
@@ -195,11 +199,12 @@ func TestLongformStagesKeepTheirLoadBearingOrder(t *testing.T) {
 
 	for _, ordered := range [][2]string{
 		{"longform-script", "longform-characters"},
-		{"longform-characters", "longform-generate"},
+		{"longform-characters", "longform-anchor-shot"},
 		{"longform-script", "longform-narration"},
 		{"longform-narration", "longform-shotlist"},
-		{"longform-shotlist", "longform-generate"},
-		{"longform-generate", "longform-stitch-plan"},
+		{"longform-shotlist", "longform-anchor-shot"},
+		{"longform-anchor-shot", "longform-next-shot"},
+		{"longform-next-shot", "longform-stitch-plan"},
 		{"longform-stitch-plan", "longform-assemble"},
 		{"longform-assemble", "longform-check"},
 	} {
@@ -210,15 +215,71 @@ func TestLongformStagesKeepTheirLoadBearingOrder(t *testing.T) {
 	}
 
 	shotlist := longformPipeline.Stages[index["longform-shotlist"]].Description
-	for _, required := range []string{"MEASURED", "seam-generation route", "last usable stable frame", "camera handoff"} {
+	for _, required := range []string{"MEASURED", "multi-clip-cinematic-generation", "seam-generation route", "last usable stable frame", "camera handoff", "reference manifest"} {
 		if !strings.Contains(shotlist, required) {
 			t.Fatalf("long-form shot list is missing %q", required)
 		}
 	}
-	generate := longformPipeline.Stages[index["longform-generate"]].Description
-	for _, required := range []string{"recorded seam-generation route", "extension/reference-video continuation", "last usable stable frame", "planned camera-angle cut"} {
-		if !strings.Contains(generate, required) {
-			t.Fatalf("long-form generation is missing follow-up-shot guidance %q", required)
+	next := longformPipeline.Stages[index["longform-next-shot"]].Description
+	for _, required := range []string{"exactly one next clip", "multi-clip-cinematic-generation", "durable history from prior runs", "recorded seam-generation route", "extension/reference-video continuation", "last usable stable frame", "orientation/aspect-ratio", "camera-angle cut", "cumulatively"} {
+		if !strings.Contains(next, required) {
+			t.Fatalf("long-form next-shot generation is missing follow-up-shot guidance %q", required)
+		}
+	}
+}
+
+func TestShotCreationUsesAnchorAndReusableNextShotRecipes(t *testing.T) {
+	plan := planForAll([]*Pipeline{longformPipeline, shortformPipeline})
+	steps := map[string]map[string]interface{}{}
+	for _, raw := range plan["steps"].([]map[string]interface{}) {
+		steps[raw["id"].(string)] = raw
+	}
+
+	for _, pipeline := range []*Pipeline{longformPipeline, shortformPipeline} {
+		anchorID := pipeline.ID + "-anchor-shot"
+		nextID := pipeline.ID + "-next-shot"
+		var anchor, next PipelineStage
+		for _, stage := range pipeline.Stages {
+			switch stage.ID {
+			case anchorID:
+				anchor = stage
+			case nextID:
+				next = stage
+			}
+		}
+		if anchor.ID == "" || next.ID == "" {
+			t.Fatalf("%s must expose both anchor and reusable next-shot recipes", pipeline.ID)
+		}
+		for _, required := range []string{"exactly one approved anchor clip", "Do not batch", "show_video"} {
+			if !strings.Contains(anchor.Description, required) {
+				t.Fatalf("%s is missing %q", anchorID, required)
+			}
+		}
+		for _, required := range []string{"exactly one next clip", "human input", "durable history from prior runs", "blocked result", "cumulatively", "show_video"} {
+			if !strings.Contains(next.Description, required) {
+				t.Fatalf("%s is missing %q", nextID, required)
+			}
+		}
+		var shotlist PipelineStage
+		for _, stage := range pipeline.Stages {
+			if stage.ID == pipeline.ID+"-shotlist" {
+				shotlist = stage
+			}
+		}
+		for _, stage := range []PipelineStage{shotlist, anchor, next} {
+			if !containsSkill(stage.Skills, "multi-clip-cinematic-generation") {
+				t.Fatalf("%s must attach multi-clip-cinematic-generation: %v", stage.ID, stage.Skills)
+			}
+		}
+
+		deps := map[string]bool{}
+		for _, name := range steps[nextID]["context_dependencies"].([]string) {
+			deps[name] = true
+		}
+		for _, required := range append([]string{anchor.Output}, anchor.Artifacts...) {
+			if !deps[required] {
+				t.Fatalf("%s cannot read anchor evidence %q: %v", nextID, required, deps)
+			}
 		}
 	}
 }
@@ -235,7 +296,7 @@ func TestCinematicPipelinesScopeHyperFramesToPlannedInserts(t *testing.T) {
 	for _, pipeline := range []*Pipeline{longformPipeline, shortformPipeline} {
 		sawGenerationSkill := false
 		for _, stage := range pipeline.Stages {
-			allowsHyperFrames := strings.HasSuffix(stage.ID, "-shotlist") || strings.HasSuffix(stage.ID, "-generate") || strings.HasSuffix(stage.ID, "-assemble") || strings.HasSuffix(stage.ID, "-check")
+			allowsHyperFrames := strings.HasSuffix(stage.ID, "-shotlist") || strings.HasSuffix(stage.ID, "-anchor-shot") || strings.HasSuffix(stage.ID, "-next-shot") || strings.HasSuffix(stage.ID, "-assemble") || strings.HasSuffix(stage.ID, "-check")
 			for _, skill := range stage.Skills {
 				if strings.HasPrefix(skill, "hyperframes") && !allowsHyperFrames {
 					t.Fatalf("%s/%s attaches %q outside the planned insert lifecycle", pipeline.ID, stage.ID, skill)
@@ -273,14 +334,16 @@ func TestLongformPipelineOwnsCinematicContinuityAndSeamEvidence(t *testing.T) {
 		"longform-brief":       true,
 		"longform-script":      true,
 		"longform-shotlist":    true,
-		"longform-generate":    true,
+		"longform-anchor-shot": true,
+		"longform-next-shot":   true,
 		"longform-stitch-plan": true,
 		"longform-assemble":    true,
 		"longform-check":       true,
 	}
 	requiredArtifacts := map[string][]string{
 		"longform-shotlist":    {"longform-sequence-plan.json"},
-		"longform-generate":    {"longform-continuity-ledger.json"},
+		"longform-anchor-shot": {"longform-continuity-anchor.json"},
+		"longform-next-shot":   {"longform-continuity-ledger.json"},
 		"longform-stitch-plan": {"longform-stitch-plan.json"},
 		"longform-assemble":    {"longform-final.mp4", "longform-edit-decision-list.json"},
 		"longform-check":       {"quality-report.json", "longform-seam-report.json"},

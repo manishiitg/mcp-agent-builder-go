@@ -51,6 +51,7 @@ type productConversationRegistryDocument struct {
 type productConversationBinding struct {
 	ConversationKey        string
 	WorkspacePath          string
+	ManifestPath           string
 	ResourceID             string
 	Title                  string
 	Description            string
@@ -133,6 +134,13 @@ func (store productConversationRegistryStore) resolveOrCreate(
 		existing.ResourceID = binding.ResourceID
 		existing.Title = binding.Title
 		existing.Description = binding.Description
+		// A keyed project manifest owns its session identity. This also makes a
+		// completed conversation rotation resilient to a process crash between
+		// updating the manifest and this registry document.
+		if authoritative := strings.TrimSpace(binding.AuthoritativeSessionID); authoritative != "" && existing.SessionID != authoritative {
+			existing.SessionID = authoritative
+			changed = true
+		}
 		if changed {
 			existing.UpdatedAt = now
 			document.Entries[entryKey] = existing
@@ -169,6 +177,99 @@ func (store productConversationRegistryStore) resolveOrCreate(
 		return ProductConversationRecord{}, err
 	}
 	return record, nil
+}
+
+// rotate starts a fresh durable conversation for a product chat. It retains
+// the product/project and its files; it deliberately does not erase the old
+// chat history, which remains an audit record but is no longer the active
+// conversation for this product resource.
+func (store productConversationRegistryStore) rotate(
+	ctx context.Context,
+	userID string,
+	profile agentprofiles.Profile,
+	binding productConversationBinding,
+) (ProductConversationRecord, error) {
+	path := productConversationRegistryPath(userID)
+	mutex := productConversationRegistryMutex(path)
+	mutex.Lock()
+	defer mutex.Unlock()
+
+	document := productConversationRegistryDocument{
+		Version: productConversationRegistryVersion,
+		Entries: map[string]ProductConversationRecord{},
+	}
+	if raw, exists, err := store.read(ctx, path); err != nil {
+		return ProductConversationRecord{}, fmt.Errorf("read product conversation registry: %w", err)
+	} else if exists && strings.TrimSpace(raw) != "" {
+		if err := json.Unmarshal([]byte(raw), &document); err != nil {
+			return ProductConversationRecord{}, fmt.Errorf("decode product conversation registry: %w", err)
+		}
+		if document.Entries == nil {
+			document.Entries = map[string]ProductConversationRecord{}
+		}
+	}
+
+	now := store.now().UTC().Format(time.RFC3339Nano)
+	entryKey := productConversationRegistryEntryKey(profile.ID, binding.ConversationKey)
+	createdAt := now
+	if existing, ok := document.Entries[entryKey]; ok && strings.TrimSpace(existing.CreatedAt) != "" {
+		createdAt = existing.CreatedAt
+	}
+	record := ProductConversationRecord{
+		ConversationID:  "conversation-" + store.newID(),
+		ConversationKey: binding.ConversationKey,
+		ProfileID:       profile.ID,
+		ProfileVersion:  profile.Version,
+		SessionID:       "product-" + store.newID(),
+		WorkspacePath:   binding.WorkspacePath,
+		ResourceID:      binding.ResourceID,
+		Title:           binding.Title,
+		Description:     binding.Description,
+		CreatedAt:       createdAt,
+		UpdatedAt:       now,
+	}
+
+	// A project manifest is an authoritative runtime binding. Update it before
+	// exposing the new record, so an ordinary resolve after this call cannot
+	// restore the previous project session.
+	if strings.TrimSpace(binding.ManifestPath) != "" {
+		if err := store.writeManifestSessionID(ctx, binding.ManifestPath, record.SessionID); err != nil {
+			return ProductConversationRecord{}, err
+		}
+	}
+	document.Version = productConversationRegistryVersion
+	document.Entries[entryKey] = record
+	if err := store.writeDocument(ctx, path, document); err != nil {
+		return ProductConversationRecord{}, err
+	}
+	return record, nil
+}
+
+func (store productConversationRegistryStore) writeManifestSessionID(ctx context.Context, manifestPath, sessionID string) error {
+	raw, exists, err := store.read(ctx, manifestPath)
+	if err != nil {
+		return fmt.Errorf("read product manifest: %w", err)
+	}
+	if !exists {
+		return fmt.Errorf("product manifest was not found")
+	}
+	var manifest map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &manifest); err != nil {
+		return fmt.Errorf("decode product manifest: %w", err)
+	}
+	encodedSessionID, err := json.Marshal(sessionID)
+	if err != nil {
+		return fmt.Errorf("encode product session id: %w", err)
+	}
+	manifest["session_id"] = encodedSessionID
+	encoded, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode product manifest: %w", err)
+	}
+	if err := store.write(ctx, manifestPath, string(encoded)+"\n"); err != nil {
+		return fmt.Errorf("write product manifest: %w", err)
+	}
+	return nil
 }
 
 func (store productConversationRegistryStore) writeDocument(ctx context.Context, path string, document productConversationRegistryDocument) error {
@@ -275,6 +376,7 @@ func resolveProductProjectBindingWithStore(
 		matched = &productConversationBinding{
 			ConversationKey:        projectID,
 			WorkspacePath:          workspacePath,
+			ManifestPath:           candidate,
 			ResourceID:             projectID,
 			Title:                  strings.TrimSpace(manifest.Title),
 			Description:            strings.TrimSpace(manifest.Description),

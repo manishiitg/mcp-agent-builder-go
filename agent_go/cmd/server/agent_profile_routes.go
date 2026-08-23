@@ -157,6 +157,56 @@ func (api *StreamingAPI) handleResolveAgentProfileConversation(w http.ResponseWr
 	})
 }
 
+// handleRotateAgentProfileConversation is the server-owned implementation of
+// “New chat” for products. A browser cannot safely rotate a product session by
+// inventing an ID because keyed products bind their chat to a durable project
+// manifest; the server updates that binding and the registry together.
+func (api *StreamingAPI) handleRotateAgentProfileConversation(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	decoder := json.NewDecoder(io.LimitReader(r.Body, maxAgentProfileRequestBytes))
+	decoder.DisallowUnknownFields()
+	var input AgentProfileConversationRequest
+	if err := decoder.Decode(&input); err != nil {
+		writeAgentProfileError(w, http.StatusBadRequest, "invalid product conversation request: "+err.Error())
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		writeAgentProfileError(w, http.StatusBadRequest, "invalid product conversation request: expected one JSON object")
+		return
+	}
+	if api.agentProfiles == nil {
+		writeAgentProfileError(w, http.StatusServiceUnavailable, "agent profiles are unavailable")
+		return
+	}
+	userID := GetUserIDFromContext(r.Context())
+	if userID == "" {
+		userID = "default"
+	}
+	profile, err := api.agentProfiles.Resolve(strings.TrimSpace(mux.Vars(r)["id"]), 0, userID)
+	if err != nil {
+		writeAgentProfileError(w, http.StatusNotFound, "agent profile not found")
+		return
+	}
+	binding, err := resolveProductConversationBinding(r.Context(), userID, profile, input.ConversationKey)
+	if err != nil {
+		writeAgentProfileError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	conversation, err := defaultProductConversationRegistryStore().rotate(r.Context(), userID, profile, binding)
+	if err != nil {
+		writeAgentProfileError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	writeAgentProfileJSON(w, http.StatusOK, AgentProfileConversationResponse{
+		ConversationID:  conversation.ConversationID,
+		ConversationKey: conversation.ConversationKey,
+		SessionID:       conversation.SessionID,
+	})
+}
+
 func (api *StreamingAPI) resolveAgentProfileConversation(r *http.Request, profile agentprofiles.Profile, requestedKey string) (ProductConversationRecord, error) {
 	userID := GetUserIDFromContext(r.Context())
 	if userID == "" {

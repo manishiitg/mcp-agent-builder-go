@@ -252,33 +252,16 @@ function MediaVideoPresentation({ presentation, workspacePath }: PresentationRen
   const videoRef = useRef<HTMLVideoElement>(null)
   const [loading, setLoading] = useState(true)
   const [playbackError, setPlaybackError] = useState('')
-  const [playingMuted, setPlayingMuted] = useState(false)
   const relativePath = typeof presentation.payload.path === 'string' ? presentation.payload.path.replace(/^\/+/, '') : ''
   const mediaURL = relativePath ? workspaceMediaURL(`${workspacePath}/${relativePath}`) : ''
-  // A show_video presentation is an instruction to bring the clip to the
-  // creator, not merely add another item they must discover in the panel. Try
-  // normal playback first so its mix is preserved. Browsers that block audible
-  // autoplay still permit muted playback; make that fallback explicit instead
-  // of silently leaving a new clip paused.
-  useEffect(() => {
-    let active = true
-    const video = videoRef.current
-    if (!video) return () => { active = false }
-    setPlayingMuted(false)
-    void video.play().catch(() => {
-      if (!active) return
-      video.muted = true
-      void video.play().then(() => {
-        if (active) setPlayingMuted(true)
-      }).catch(() => {})
-    })
-    return () => { active = false }
-  }, [mediaURL, presentation.id, presentation.revision])
+  // A presentation makes a clip visible in the production panel, but must not
+  // start media merely because React mounted it. Mounts happen on refresh and
+  // reload too, and surprising audible (or muted) playback is especially bad
+  // for a large production asset. Playback is always an explicit user action.
   if (!relativePath) return <div className="grid aspect-video place-items-center bg-slate-950 text-xs text-slate-400">Video path is unavailable.</div>
   const retryPlayback = () => {
     setPlaybackError('')
     setLoading(true)
-    setPlayingMuted(false)
     videoRef.current?.load()
   }
   return (
@@ -290,9 +273,8 @@ function MediaVideoPresentation({ presentation, workspacePath }: PresentationRen
         data-presentation-id={presentation.id}
         data-presentation-revision={presentation.revision}
         controls
-        autoPlay
         playsInline
-        preload="auto"
+        preload="metadata"
         className="h-full w-full bg-black object-contain"
         src={mediaURL}
         onLoadStart={() => { setLoading(true); setPlaybackError('') }}
@@ -306,7 +288,6 @@ function MediaVideoPresentation({ presentation, workspacePath }: PresentationRen
         Your browser does not support video playback.
       </video>
       {loading && !playbackError ? <div className="pointer-events-none absolute inset-0 grid place-items-center bg-black/25 text-xs font-medium text-white/80"><span className="flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Loading video…</span></div> : null}
-      {playingMuted && !loading && !playbackError ? <div className="pointer-events-none absolute bottom-2 left-2 rounded-md bg-black/70 px-2 py-1 text-[10px] font-medium text-white">Playing muted — use the player controls to unmute</div> : null}
       {playbackError ? <div className="absolute inset-0 grid place-items-center bg-slate-950/95 p-6 text-center"><div><AlertCircle className="mx-auto h-6 w-6 text-amber-400" /><p className="mt-2 max-w-xs text-xs leading-5 text-slate-300">{playbackError}</p><button type="button" onClick={retryPlayback} className="mt-3 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-900 hover:bg-slate-100">Reload video</button></div></div> : null}
     </div>
   )
@@ -612,7 +593,7 @@ function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: 
   const [loadingProject, setLoadingProject] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [loadError, setLoadError] = useState('')
-  const videoCountRef = useRef(0)
+  const videoCountRef = useRef<number | null>(null)
 
   // Production panel width: draggable, and remembered per browser rather than
   // reset every visit. Read once on mount rather than on every render -- the
@@ -646,15 +627,15 @@ function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: 
   const refreshProject = useCallback(async (quiet = false) => {
     if (!quiet) setRefreshing(true)
     try {
-      // Loaded together so one refresh reflects the whole production. Only the
-      // video count auto-opens the player; a new character or document should
-      // not yank the user out of whatever they were reading.
+      // Loaded together so one refresh reflects the whole production. A video
+      // that arrives after this project is already open can surface its player;
+      // the initial page load is a baseline, never a “new video” event.
       const [nextVideos, nextCharacters, nextDocuments] = await Promise.all([
         loadVideoPresentations(project),
         loadCharacterPresentations(project),
         loadDocumentPresentations(project),
       ])
-      if (nextVideos.length > videoCountRef.current) setShowVideoPlayer(true)
+      if (videoCountRef.current !== null && nextVideos.length > videoCountRef.current) setShowVideoPlayer(true)
       videoCountRef.current = nextVideos.length
       setVideos(nextVideos)
       setCharacters(nextCharacters)
