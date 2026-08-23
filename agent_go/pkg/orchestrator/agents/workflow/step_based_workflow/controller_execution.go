@@ -1014,6 +1014,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) loadSingleStepResultFromLogs(ctx cont
 
 	var latestExecutionResult string
 	var latestAttempt, latestIteration int
+	var latestCompletedAt time.Time
+	var haveLatestCompletedAt bool
 
 	for attempt := 1; attempt <= 10; attempt++ {
 		for iteration := 0; iteration <= 10; iteration++ {
@@ -1029,18 +1031,57 @@ func (hcpo *StepBasedWorkflowOrchestrator) loadSingleStepResultFromLogs(ctx cont
 				continue
 			}
 
-			if execResult, ok := executionData["execution_result"].(string); ok {
-				if attempt > latestAttempt || (attempt == latestAttempt && iteration > latestIteration) {
-					latestExecutionResult = execResult
-					latestAttempt = attempt
-					latestIteration = iteration
+			execResult, ok := executionData["execution_result"].(string)
+			if !ok {
+				continue
+			}
+
+			// attempt/iteration are counters LOCAL to one dispatch, reset to 1/0
+			// on every fresh run of this step (same shape as PLAT-176) -- across
+			// dispatches they are not a time-ordered sequence, so a superseded
+			// dispatch that happened to reach a higher attempt number than a
+			// later, successful dispatch would otherwise win here and silently
+			// resurrect a stale (and possibly failed) result as if it were
+			// current. completed_at is wall-clock time and is the only field
+			// that is actually comparable across dispatches; the attempt/
+			// iteration pair remains a tie-breaker for same-instant files, and
+			// stays the sole ordering when a legacy file predates completed_at
+			// being recorded (this branch's own value would be its zero time,
+			// which correctly loses to anything with a real timestamp below).
+			var completedAt time.Time
+			var hasCompletedAt bool
+			if raw, ok := executionData["completed_at"].(string); ok {
+				if parsed, parseErr := time.Parse(time.RFC3339, strings.TrimSpace(raw)); parseErr == nil && !parsed.IsZero() {
+					completedAt = parsed
+					hasCompletedAt = true
 				}
+			}
+
+			better := false
+			switch {
+			case hasCompletedAt && haveLatestCompletedAt:
+				better = completedAt.After(latestCompletedAt) ||
+					(completedAt.Equal(latestCompletedAt) && (attempt > latestAttempt || (attempt == latestAttempt && iteration > latestIteration)))
+			case hasCompletedAt && !haveLatestCompletedAt:
+				better = true
+			case !hasCompletedAt && !haveLatestCompletedAt:
+				better = attempt > latestAttempt || (attempt == latestAttempt && iteration > latestIteration)
+			default: // !hasCompletedAt && haveLatestCompletedAt: never prefer an undated file over a dated one
+				better = false
+			}
+
+			if better {
+				latestExecutionResult = execResult
+				latestAttempt = attempt
+				latestIteration = iteration
+				latestCompletedAt = completedAt
+				haveLatestCompletedAt = hasCompletedAt
 			}
 		}
 	}
 
 	if latestExecutionResult != "" {
-		hcpo.GetLogger().Info(fmt.Sprintf("Loaded execution result from logs for step %d (attempt %d, iteration %d)", stepNumber, latestAttempt, latestIteration))
+		hcpo.GetLogger().Info(fmt.Sprintf("Loaded execution result from logs for step %d (attempt %d, iteration %d, completed_at=%s)", stepNumber, latestAttempt, latestIteration, latestCompletedAt.Format(time.RFC3339)))
 		return latestExecutionResult, true
 	}
 	return "", false
