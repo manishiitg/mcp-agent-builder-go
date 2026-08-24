@@ -4,10 +4,14 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import { ShieldCheck, ShieldAlert, Loader2, RefreshCw, Key, X, FolderKey } from 'lucide-react';
+import { Loader2, Key, X } from 'lucide-react';
 import { oauthApi } from '../services/oauthApi';
 import type { OAuthDiscoveryResponse } from '../services/oauthApi';
-import { useAuthStore } from '../stores/useAuthStore';
+import { useChatStore } from '../stores';
+
+/** Toasts are global, so read the action lazily rather than subscribing to the store. */
+const notify = (message: string, type: 'success' | 'info' | 'error') =>
+  useChatStore.getState().addToast(message, type);
 
 interface OAuthStatusBadgeProps {
   serverName: string;
@@ -21,17 +25,9 @@ export const OAuthStatusBadge: React.FC<OAuthStatusBadgeProps> = ({
   onAuthChange
 }) => {
   const [tokenValid, setTokenValid] = useState<boolean>(false);
-  const [expiresIn, setExpiresIn] = useState<string>('');
   const [loading, setLoading] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
   const [hasOAuth, setHasOAuth] = useState<boolean | null>(null);
   const prevTokenValidRef = useRef<boolean | null>(null);
-  const [showTokenPath, setShowTokenPath] = useState(false);
-
-  // Get user ID from auth store for token path display
-  const user = useAuthStore((state) => state.user);
-  const userId = user?.id || 'default';
-  const tokenPath = `~/.config/mcpagent/tokens/${userId}/${serverName}.json`;
 
   // Client ID dialog state
   const [showClientIdDialog, setShowClientIdDialog] = useState(false);
@@ -51,7 +47,6 @@ export const OAuthStatusBadge: React.FC<OAuthStatusBadgeProps> = ({
       const becameValid = status.valid && prevValid !== true;
 
       setTokenValid(status.valid);
-      setExpiresIn(status.expires_in);
       setHasOAuth(true);
       prevTokenValidRef.current = status.valid;
 
@@ -80,16 +75,6 @@ export const OAuthStatusBadge: React.FC<OAuthStatusBadgeProps> = ({
     const interval = setInterval(checkTokenStatus, 10000); // Every 10 seconds
     return () => clearInterval(interval);
   }, [serverName, requiresOAuth, checkTokenStatus]);
-
-  const handleManualRefresh = async () => {
-    setRefreshing(true);
-    console.log(`[OAuthStatusBadge] Manual refresh triggered for ${serverName}`);
-    try {
-      await checkTokenStatus();
-    } finally {
-      setRefreshing(false);
-    }
-  };
 
   const handleLogin = async (clientId?: string) => {
     setLoading(true);
@@ -128,9 +113,9 @@ export const OAuthStatusBadge: React.FC<OAuthStatusBadgeProps> = ({
             clearInterval(pollInterval);
             const wasInvalid = prevTokenValidRef.current === false || prevTokenValidRef.current === null;
             setTokenValid(true);
-            setExpiresIn(status.expires_in);
             setLoading(false);
             prevTokenValidRef.current = true;
+            notify(`Connected to ${serverName}`, 'success');
             // Only trigger refresh if transitioning from invalid to valid
             if (wasInvalid) {
               console.log(`[OAuthStatusBadge] Triggering onAuthChange for ${serverName}`);
@@ -151,6 +136,7 @@ export const OAuthStatusBadge: React.FC<OAuthStatusBadgeProps> = ({
       }, 5 * 60 * 1000);
     } catch (error) {
       console.error('[OAuthStatusBadge] OAuth login failed:', error);
+      notify(`Could not connect to ${serverName}`, 'error');
       setLoading(false);
     }
   };
@@ -174,10 +160,12 @@ export const OAuthStatusBadge: React.FC<OAuthStatusBadgeProps> = ({
     try {
       await oauthApi.logout(serverName);
       setTokenValid(false);
-      setExpiresIn('');
+      prevTokenValidRef.current = false;
+      notify(`Disconnected from ${serverName}`, 'info');
       onAuthChange?.(false);
     } catch (error) {
       console.error('OAuth logout failed:', error);
+      notify(`Could not disconnect from ${serverName}`, 'error');
     } finally {
       setLoading(false);
     }
@@ -276,28 +264,17 @@ export const OAuthStatusBadge: React.FC<OAuthStatusBadgeProps> = ({
           <button
             onClick={() => handleLogin()}
             disabled={loading}
-            className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 hover:bg-orange-200 dark:hover:bg-orange-900/50 rounded-md transition-colors disabled:opacity-50"
-            title="Click to authenticate with OAuth"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 hover:bg-gray-700 dark:hover:bg-gray-300 rounded-md transition-colors disabled:opacity-50"
+            title="Connect this service"
           >
             {loading ? (
               <>
                 <Loader2 className="w-3 h-3 animate-spin" />
-                <span>Authenticating...</span>
+                <span>Connecting...</span>
               </>
             ) : (
-              <>
-                <ShieldAlert className="w-3 h-3" />
-                <span>Login</span>
-              </>
+              <span>Connect</span>
             )}
-          </button>
-          <button
-            onClick={handleManualRefresh}
-            disabled={refreshing || loading}
-            className="p-1 text-xs text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded transition-colors disabled:opacity-50"
-            title="Refresh status"
-          >
-            <RefreshCw className={`w-3 h-3 ${refreshing ? 'animate-spin' : ''}`} />
           </button>
         </div>
       </>
@@ -305,66 +282,23 @@ export const OAuthStatusBadge: React.FC<OAuthStatusBadgeProps> = ({
   }
 
   return (
-    <div className="flex items-center gap-1.5 relative">
-      <div className="flex items-center gap-1 px-2 py-1 text-xs bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 rounded-md">
-        <ShieldCheck className="w-3 h-3" />
-        <span>OAuth</span>
-      </div>
-      <button
-        onClick={() => setShowTokenPath(!showTokenPath)}
-        className="p-1 text-xs text-gray-500 dark:text-gray-400 hover:text-purple-600 dark:hover:text-purple-400 hover:bg-purple-50 dark:hover:bg-purple-900/20 rounded transition-colors"
-        title={`Token stored for user: ${userId}`}
-      >
-        <FolderKey className="w-3 h-3" />
-      </button>
-      <button
-        onClick={handleManualRefresh}
-        disabled={refreshing}
-        className="p-1 text-xs text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded transition-colors disabled:opacity-50"
-        title={`Refresh status - Expires: ${expiresIn}`}
-      >
-        <RefreshCw className={`w-3 h-3 ${refreshing ? 'animate-spin' : ''}`} />
-      </button>
+    <div className="flex items-center gap-1.5">
       <button
         onClick={handleLogout}
         disabled={loading}
-        className="px-2 py-1 text-xs text-gray-600 dark:text-gray-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded transition-colors disabled:opacity-50"
-        title="Logout"
+        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-600 dark:hover:text-red-400 hover:border-red-300 dark:hover:border-red-800 rounded-md transition-colors disabled:opacity-50"
+        title="Disconnect — removes the saved token, you will need to connect again"
+        aria-label={`Disconnect ${serverName}`}
       >
-        {loading ? '...' : '✕'}
+        {loading ? (
+          <>
+            <Loader2 className="w-3 h-3 animate-spin" />
+            <span>Disconnecting...</span>
+          </>
+        ) : (
+          <span>Disconnect</span>
+        )}
       </button>
-
-      {/* Token path popover */}
-      {showTokenPath && (
-        <div className="absolute top-full left-0 mt-1 z-50 p-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg min-w-[300px]">
-          <div className="flex items-center justify-between mb-2">
-            <div className="flex items-center gap-2 text-sm font-medium text-gray-900 dark:text-gray-100">
-              <FolderKey className="w-4 h-4 text-purple-500" />
-              Token Storage
-            </div>
-            <button
-              onClick={() => setShowTokenPath(false)}
-              className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded"
-            >
-              <X className="w-3 h-3" />
-            </button>
-          </div>
-          <div className="space-y-2">
-            <div className="text-xs text-gray-600 dark:text-gray-400">
-              <span className="font-medium">User ID:</span> {userId}
-            </div>
-            <div className="text-xs text-gray-600 dark:text-gray-400">
-              <span className="font-medium">Token Path:</span>
-            </div>
-            <code className="block text-xs bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 px-2 py-1.5 rounded font-mono break-all">
-              {tokenPath}
-            </code>
-            <div className="text-xs text-gray-500 dark:text-gray-500 mt-2">
-              Your OAuth token is stored separately from other users for security.
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };
