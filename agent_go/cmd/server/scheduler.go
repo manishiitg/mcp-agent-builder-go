@@ -609,19 +609,28 @@ func shouldRunPulseLifecycle(sctx *ScheduleContext, manifest *WorkflowManifest) 
 // pulseScheduleTimingSummary supplies facts to the ordinary-run finalizer; it
 // never chooses whether a change is material or rewrites a schedule. That is
 // the finalizer agent's judgment, persisted through record_pulse_fast_request.
+// Returns "" when Pulse is disabled (no enabled pulse_review_only schedule),
+// which the caller uses to omit the Pulse-timing section entirely rather than
+// telling the finalizer not to request a fast Pulse it was never going to be
+// asked about.
 func pulseScheduleTimingSummary(manifest *WorkflowManifest) string {
 	if manifest == nil {
-		return "No enabled dedicated Pulse schedule was found. Do not request a fast Pulse; report the configuration gap truthfully."
+		return ""
 	}
 	var next *time.Time
+	found := false
 	for _, schedule := range manifest.Schedules {
 		if !schedule.Enabled || !schedule.PulseReviewOnly {
 			continue
 		}
+		found = true
 		candidate := getNextRunTime(schedule.CronExpression, schedule.Timezone)
 		if candidate != nil && (next == nil || candidate.Before(*next)) {
 			next = candidate
 		}
+	}
+	if !found {
+		return ""
 	}
 	if next == nil {
 		return "An enabled dedicated Pulse schedule exists, but its next occurrence could not be determined. Use record_pulse_fast_request only for clear material evidence."

@@ -222,6 +222,38 @@ func TestPulseAndWorkflowScheduleUseSeparateDurableLanes(t *testing.T) {
 	}
 }
 
+func TestPulseScheduleTimingSummaryOmitsSectionWhenPulseIsDisabled(t *testing.T) {
+	if got := pulseScheduleTimingSummary(nil); got != "" {
+		t.Fatalf("nil manifest: want empty summary (section omitted), got %q", got)
+	}
+
+	noSchedules := &WorkflowManifest{ID: "demo"}
+	if got := pulseScheduleTimingSummary(noSchedules); got != "" {
+		t.Fatalf("no schedules: want empty summary (section omitted), got %q", got)
+	}
+
+	disabledOnly := &WorkflowManifest{ID: "demo", Schedules: []WorkflowSchedule{
+		{ID: "pulse", PulseReviewOnly: true, Enabled: false, CronExpression: "0 9 * * *", Timezone: "UTC"},
+	}}
+	if got := pulseScheduleTimingSummary(disabledOnly); got != "" {
+		t.Fatalf("disabled pulse_review_only schedule: want empty summary (section omitted), got %q", got)
+	}
+
+	nonPulseEnabled := &WorkflowManifest{ID: "demo", Schedules: []WorkflowSchedule{
+		{ID: "daily", PulseReviewOnly: false, Enabled: true, CronExpression: "0 9 * * *", Timezone: "UTC"},
+	}}
+	if got := pulseScheduleTimingSummary(nonPulseEnabled); got != "" {
+		t.Fatalf("enabled non-pulse schedule: want empty summary (section omitted), got %q", got)
+	}
+
+	enabled := &WorkflowManifest{ID: "demo", Schedules: []WorkflowSchedule{
+		{ID: "pulse", PulseReviewOnly: true, Enabled: true, CronExpression: "0 9 * * *", Timezone: "UTC"},
+	}}
+	if got := pulseScheduleTimingSummary(enabled); got == "" {
+		t.Fatal("enabled pulse_review_only schedule: want a non-empty timing summary")
+	}
+}
+
 func TestDurableScheduleRunProjectionRecoversCompletedRun(t *testing.T) {
 	store, err := schedulerstate.Open(filepath.Join(t.TempDir(), "schedule-state.sqlite"))
 	if err != nil {
