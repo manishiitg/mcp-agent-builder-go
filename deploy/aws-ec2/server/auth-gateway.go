@@ -19,21 +19,31 @@ import (
 )
 
 const (
-	sessionCookie        = "video_studio_session"
 	sessionDuration      = 12 * time.Hour
 	sessionRefreshWindow = 6 * time.Hour
 	authRequiredHeader   = "X-AgentWorks-Login"
 )
 
 type gateway struct {
-	secret      []byte
-	password    []byte
-	frontendDir string
-	appName     string
-	userID      string
-	username    string
-	agent       *httputil.ReverseProxy
-	workspace   *httputil.ReverseProxy
+	secret        []byte
+	password      []byte
+	frontendDir   string
+	appName       string
+	userID        string
+	username      string
+	sessionCookie string
+	agent         *httputil.ReverseProxy
+	workspace     *httputil.ReverseProxy
+}
+
+// sessionCookieName derives a product-namespaced cookie name from the
+// gateway's identity instead of a separate env var, so two gateways sharing
+// a browser origin family never collide on cookie name. The default input
+// "video-studio" reproduces the original hardcoded "video_studio_session"
+// literal byte for byte, so an already-running Video Studio deployment's
+// logged-in sessions survive a redeploy of this now-parameterized binary.
+func sessionCookieName(userID string) string {
+	return strings.ReplaceAll(userID, "-", "_") + "_session"
 }
 
 // gatewayClaims deliberately mirrors only the identity fields consumed by the
@@ -69,15 +79,17 @@ func newGateway() *gateway {
 	if len(secret) < 32 || password == "" {
 		log.Fatal("AUTH_SECRET (32+ chars) and ACCESS_PASSWORD are required")
 	}
+	userID := gatewayEnv("GATEWAY_USER_ID", "video-studio")
 	return &gateway{
-		secret:      []byte(secret),
-		password:    []byte(password),
-		frontendDir: os.Getenv("FRONTEND_DIR"),
-		appName:     gatewayEnv("APP_NAME", "Video Studio"),
-		userID:      gatewayEnv("GATEWAY_USER_ID", "video-studio"),
-		username:    gatewayEnv("GATEWAY_USERNAME", "video-studio"),
-		agent:       proxyFor(gatewayEnv("AGENT_API_URL", "http://127.0.0.1:8000")),
-		workspace:   proxyFor(gatewayEnv("WORKSPACE_API_URL", "http://127.0.0.1:8080")),
+		secret:        []byte(secret),
+		password:      []byte(password),
+		frontendDir:   os.Getenv("FRONTEND_DIR"),
+		appName:       gatewayEnv("APP_NAME", "Video Studio"),
+		userID:        userID,
+		username:      gatewayEnv("GATEWAY_USERNAME", "video-studio"),
+		sessionCookie: sessionCookieName(userID),
+		agent:         proxyFor(gatewayEnv("AGENT_API_URL", "http://127.0.0.1:8000")),
+		workspace:     proxyFor(gatewayEnv("WORKSPACE_API_URL", "http://127.0.0.1:8080")),
 	}
 }
 
@@ -106,7 +118,7 @@ func (g *gateway) signedSession(expires time.Time) string {
 }
 
 func (g *gateway) sessionExpiry(r *http.Request) (time.Time, bool) {
-	cookie, err := r.Cookie(sessionCookie)
+	cookie, err := r.Cookie(g.sessionCookie)
 	if err != nil {
 		return time.Time{}, false
 	}
@@ -128,7 +140,7 @@ func (g *gateway) sessionExpiry(r *http.Request) (time.Time, bool) {
 
 func (g *gateway) setSessionCookie(w http.ResponseWriter, expires time.Time) {
 	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookie,
+		Name:     g.sessionCookie,
 		Value:    g.signedSession(expires),
 		Path:     "/",
 		HttpOnly: true,
@@ -236,7 +248,7 @@ func (g *gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.URL.Path == "/logout" {
-		http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode})
+		http.SetCookie(w, &http.Cookie{Name: g.sessionCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode})
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
