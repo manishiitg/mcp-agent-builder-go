@@ -49,6 +49,7 @@ func workflowContractVersionRank(version string) (int, bool) {
 		workflowContractSchedulePromptContractVersion,
 		workflowContractFinalizerOwnedScheduleVersion,
 		workflowContractReportActivitySectionVersion,
+		workflowContractReportActivityTabVersion,
 	}
 	for rank, candidate := range known {
 		if version == candidate {
@@ -290,6 +291,16 @@ If the report already has an equivalent section under any name, do not duplicate
 
 Call validate_report_html after editing; repair every error. Do not run the workflow. If the required source data is ambiguous or does not exist yet, report the blocker and do not stamp. Otherwise call set_workflow_contract_version(version="1.0.30") and stop.`
 
+const upgradeReportActivityTab = `WORKFLOW CONTRACT UPGRADE: REPORT ACTIVITY SECTION MUST BE A TOP-LEVEL TAB.
+
+This workflow predates the requirement that its "what did this workflow actually do" activity section (added or confirmed by the 1.0.30 migration -- Daily Action, Today's Actions, Recent Activity, or Latest Run, named for the workflow's real run cadence) be a top-level tab specifically, not merely a section, panel, or anchored region within another tab or a single scrolling page.
+
+If db/reports/index.html does not exist, this is a no-op -- do not create a report from scratch in this migration. Otherwise read it in full.
+
+If the report already uses tab-based navigation and the activity section is already one of those top-level tabs, this is already satisfied -- do not restructure anything else. If the activity section exists but is not a top-level tab (e.g. a subsection scrolled past within another tab, as in a report with only "Dashboard" and one or more content tabs), promote it into its own top-level tab, moving its existing markup and live-data wiring (window.report.query calls, ids) intact -- do not rewrite its content or invent new data. If the report currently has no tab structure at all (a single scrolling page, a sidebar, or anchored sections only), add a minimal tab bar and make this the first tab, migrating the rest of the existing content into a second tab (or more, if the report already has other genuinely distinct views) without changing what that other content says.
+
+Call validate_report_html after editing; repair every error. Do not run the workflow. If the required source data is ambiguous or does not exist yet, report the blocker and do not stamp. Otherwise call set_workflow_contract_version(version="1.0.31") and stop.`
+
 // workflowVersionUpgradePlan keeps the retired HTML presentation migrations
 // retired, but preserves the independent behavioral/data migrations older
 // workflows still need. They are deliberately grouped into bounded,
@@ -342,6 +353,9 @@ func workflowVersionUpgradePlan(manifest *WorkflowManifest) []workflowVersionUpg
 	}
 	if rank < 29 {
 		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractReportActivitySectionVersion, label: "upgrade-report-activity-section", query: upgradeReportActivitySection})
+	}
+	if rank < 30 {
+		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractReportActivityTabVersion, label: "upgrade-report-activity-tab", query: upgradeReportActivityTab})
 	}
 	// Attached here rather than at the call site so the turn text is identical
 	// wherever it is built. The version pair used to be added only on the Pulse
