@@ -17,7 +17,6 @@ import { ChatInput } from './ChatInput'
 import { TerminalEventTranscript } from './TerminalEventTranscript'
 import { MainAgentTerminal } from './MainAgentTerminal'
 import { WorkflowModeHandler, type WorkflowModeHandlerRef, signalPlanModified } from './workflow'
-import { ToastContainer } from './ui/Toast'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useWorkflowStore } from '../stores/useWorkflowStore'
 import { useAppStore, useLLMStore, useMCPStore, useChatStore, useGlobalPresetStore } from '../stores'
@@ -659,9 +658,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     currentWorkflowPhase,
     setCurrentWorkflowPhase,
     setCurrentWorkflowQueryId,
-    toasts,
     addToast,
-    removeToast,
     resetChatState,
     isAtBottom,
     switchTab,
@@ -688,9 +685,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     currentWorkflowPhase: state.currentWorkflowPhase,
     setCurrentWorkflowPhase: state.setCurrentWorkflowPhase,
     setCurrentWorkflowQueryId: state.setCurrentWorkflowQueryId,
-    toasts: state.toasts,
     addToast: state.addToast,
-    removeToast: state.removeToast,
     resetChatState: state.resetChatState,
     isAtBottom: state.isAtBottom,
     switchTab: state.switchTab,
@@ -1073,9 +1068,6 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     setPendingModeCategory(null)
   }
 
-
-  // Filter toasts to only include types supported by ToastContainer
-  const filteredToasts = toasts.filter((toast: { type: string }) => toast.type === 'success' || toast.type === 'info' || toast.type === 'error') as Array<{id: string, message: string, type: 'success' | 'info' | 'error'}>
 
   // Handle mode switch dialog confirmation
   const handleModeSwitchConfirm = () => {
@@ -3562,11 +3554,8 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
         />
       )}
 
-      {/* Toast notifications */}
-      <ToastContainer
-        toasts={filteredToasts}
-        onRemoveToast={removeToast}
-      />
+      {/* Toasts render from ToastHost at the app root, so they also appear on
+          surfaces that do not mount a chat. */}
     </div>
   )
 })
