@@ -46,7 +46,7 @@ func TestVideoStudioManifestDrivesProfileAndWorkflowCapabilities(t *testing.T) {
 	// The product controls and the secret CRUD its ui.secrets surface needs.
 	// set_workflow_secret is here because it was registered-but-invisible once.
 	for _, name := range []string{
-		"show_video", "agent_browser",
+		"show_video", "show_reference", "agent_browser",
 		"list_secrets", "set_workflow_secret", "set_user_secret",
 		"execute_step",
 	} {
@@ -68,20 +68,16 @@ func TestVideoStudioManifestDrivesProfileAndWorkflowCapabilities(t *testing.T) {
 	if mode := strings.TrimSpace(manifest.Profile.Runtime.APITransport.Mode); mode == "native_shell" {
 		t.Fatalf("native_shell is intentionally off for now (see docs/design/product_api_transport_for_coding_agents.md); enabling it needs the bridge-shell entry above reconsidered too")
 	}
-	// video.show-video must declare what it presents. Without this the
-	// factory refuses every call (see TestShowVideoRequiresADeclaredPresentationKind)
-	// and the frontend's kind-keyed renderer registry has nothing to dispatch on.
-	var showVideoBinding *agentprofiles.ToolBinding
-	for i := range manifest.Profile.Tools {
-		if manifest.Profile.Tools[i].ID == "video.show-video" {
-			showVideoBinding = &manifest.Profile.Tools[i]
+	for id, wantKind := range map[string]string{"video.show-video": "media.video", "video.show-reference": "media.reference"} {
+		var binding *agentprofiles.ToolBinding
+		for i := range manifest.Profile.Tools {
+			if manifest.Profile.Tools[i].ID == id {
+				binding = &manifest.Profile.Tools[i]
+			}
 		}
-	}
-	if showVideoBinding == nil {
-		t.Fatal("video.show-video is not in manifest.Profile.Tools")
-	}
-	if showVideoBinding.Presentation == nil || showVideoBinding.Presentation.Kind != "media.video" {
-		t.Fatalf("video.show-video must declare presentation.kind=media.video, got %+v", showVideoBinding.Presentation)
+		if binding == nil || binding.Presentation == nil || binding.Presentation.Kind != wantKind {
+			t.Fatalf("%s must declare presentation.kind=%s, got %+v", id, wantKind, binding)
+		}
 	}
 	// Video Studio is MCP-only, so the bridge supplies the guarded editor.
 	if manifest.Profile.Runtime.AgentTools.Mode == "mcp_only" && !enabled["diff_patch_workspace_file"] {

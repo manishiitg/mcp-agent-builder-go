@@ -51,6 +51,19 @@ route can preserve the needed state, change the shot design or regenerate the
 prior source; do not create two unrelated clips and expect a dissolve to solve
 it.
 
+## Prove the newest seam before advancing
+
+After a successor clip is accepted, do not wait until final assembly to learn
+whether it works. Render a short preview containing exactly the predecessor,
+the recorded seam treatment, and the successor. Show it with `show_video` and
+write a seam-proof record with the source versions, selected boundary frames,
+in/out points, transition, audio bridge, review outcome, and pass/fail verdict.
+
+Check identity, wardrobe, props, geography, screen direction, eyeline, action,
+lighting/color, motion, dialogue or voiceover, ambience, and music. If the
+seam fails, regenerate or redesign the affected pair before a third clip is
+made. A final stitch plan may only use joins with passing seam proofs.
+
 ## Plan before rendering
 
 Read the current stage contract, the shot list, measured narration, look and

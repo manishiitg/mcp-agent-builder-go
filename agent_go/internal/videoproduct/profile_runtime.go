@@ -470,6 +470,9 @@ func RegisterAgentProfileRuntime(registry *agentprofiles.Registry, workspaceAPIU
 	if err := registry.RegisterToolFactory("video.show-character", showCharacterFactory(workspaceAPIURL)); err != nil {
 		return err
 	}
+	if err := registry.RegisterToolFactory("video.show-reference", showReferenceFactory(workspaceAPIURL)); err != nil {
+		return err
+	}
 	return registry.RegisterToolFactory("video.show-document", showDocumentFactory(workspaceAPIURL))
 }
 

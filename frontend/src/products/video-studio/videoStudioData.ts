@@ -91,6 +91,20 @@ export type CharacterPresentation = {
   workspacePresentation: WorkspacePresentation
 }
 
+// Visual-development references are approved production constraints, not loose
+// attachments: later footage is conditioned on them to keep backgrounds,
+// wardrobe, props, and sequence boundaries stable.
+export type ReferencePresentation = {
+  id: string
+  title: string
+  path: string
+  role: string
+  note: string
+  revision: number
+  updatedAt: string
+  workspacePresentation: WorkspacePresentation
+}
+
 export type DocumentPresentation = {
   id: string
   title: string
@@ -351,6 +365,27 @@ export function toCharacterPresentations(presentations: WorkspacePresentation[])
 
 export async function loadCharacterPresentations(project: VideoProject): Promise<CharacterPresentation[]> {
   return toCharacterPresentations(await loadWorkspacePresentations(project.workspacePath, ['media.character']))
+}
+
+export function toReferencePresentations(presentations: WorkspacePresentation[]): ReferencePresentation[] {
+  return presentations.flatMap((presentation) => {
+    const path = asString(presentation.payload.path)
+    if (!path) return []
+    return [{
+      id: presentation.id,
+      title: presentation.title || path.split('/').pop() || 'Reference',
+      path,
+      role: asString(presentation.payload.role),
+      note: asString(presentation.payload.note),
+      revision: presentation.revision,
+      updatedAt: presentation.updatedAt,
+      workspacePresentation: presentation,
+    }]
+  })
+}
+
+export async function loadReferencePresentations(project: VideoProject): Promise<ReferencePresentation[]> {
+  return toReferencePresentations(await loadWorkspacePresentations(project.workspacePath, ['media.reference']))
 }
 
 export function toDocumentPresentations(presentations: WorkspacePresentation[]): DocumentPresentation[] {

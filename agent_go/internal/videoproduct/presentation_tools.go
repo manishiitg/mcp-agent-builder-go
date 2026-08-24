@@ -14,6 +14,66 @@ import (
 
 var characterImageExtensions = map[string]bool{".png": true, ".jpg": true, ".jpeg": true, ".webp": true}
 
+// showReferenceFactory exposes the visual-development evidence that a sequence
+// will be conditioned on: locations, wardrobe, props, and planned boundary
+// frames. These are deliberately distinct from characters. A location board is
+// not a character, and presenting it as one made the only review surface lie
+// about what the user was approving.
+func showReferenceFactory(workspaceAPIURL string) agentprofiles.ToolFactory {
+	return func(runtime agentprofiles.ToolRuntimeContext, _ json.RawMessage) (agentprofiles.ToolSpec, error) {
+		client := workspace.NewClient(
+			workspaceAPIURL,
+			workspace.WithUserID(runtime.UserID),
+			workspace.WithExtraEnv(map[string]string{"MCP_SESSION_ID": runtime.SessionID}),
+		)
+		projectRoot := profileWorkspaceRoot(runtime.UserID, runtime.WorkspacePath)
+		return agentprofiles.ToolSpec{
+			Name: "show_reference", Category: "presentation_tools",
+			Description: "Present a reviewable visual-development reference in the Production panel before footage uses it: a location/background, wardrobe/prop board, sequence start frame, or planned end frame. Call it for every generated reference the user must approve. Repeating the same image path updates that presentation.",
+			Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{
+				"path":  map[string]interface{}{"type": "string", "description": "Project-relative path to the generated reference image"},
+				"title": map[string]interface{}{"type": "string", "description": "Human-readable reference title"},
+				"role":  map[string]interface{}{"type": "string", "description": "One of location, wardrobe, prop, start_frame, end_frame, or continuity"},
+				"note":  map[string]interface{}{"type": "string", "description": "What later shots must preserve"},
+			}, "required": []string{"path", "title", "role"}},
+			Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
+				if runtime.Presentation == nil || strings.TrimSpace(runtime.Presentation.Kind) == "" {
+					return "", fmt.Errorf("show_reference: profile did not declare a presentation kind for this tool")
+				}
+				imagePath, err := cleanProjectPath(stringArg(args, "path"))
+				if err != nil || !characterImageExtensions[strings.ToLower(filepath.Ext(imagePath))] {
+					return "show_reference requires a project-relative reference image (.png, .jpg, or .webp).", nil
+				}
+				title := strings.TrimSpace(stringArg(args, "title"))
+				if title == "" {
+					title = filepath.Base(imagePath)
+				}
+				role := strings.TrimSpace(stringArg(args, "role"))
+				if role == "" {
+					return "show_reference requires a reference role.", nil
+				}
+				resolvedPath, data, err := resolveWorkspaceEvidence(ctx, client, projectRoot, imagePath, imagePath)
+				if err != nil || len(data) == 0 {
+					return "The visual reference is missing or empty: " + imagePath, nil
+				}
+				event, err := presentations.Upsert(ctx, client, presentations.Presentation{
+					Kind: runtime.Presentation.Kind, IdentityKey: resolvedPath, Title: title,
+					WorkspacePath: runtime.WorkspacePath, SessionID: runtime.SessionID,
+					Payload:   map[string]interface{}{"path": resolvedPath, "role": role, "note": strings.TrimSpace(stringArg(args, "note"))},
+					Resources: []map[string]string{{"kind": "workspace.file", "path": resolvedPath, "role": "primary"}},
+				})
+				if err != nil {
+					return "", fmt.Errorf("persist visual reference presentation: %w", err)
+				}
+				if runtime.Emit != nil {
+					runtime.Emit(&event)
+				}
+				return fmt.Sprintf("Showing %q in the References panel.", title), nil
+			},
+		}, nil
+	}
+}
+
 // Character specs and their reference images are surfaced by the agent rather
 // than discovered by the UI, and that is the whole point: the same production
 // writes them to work/characters/ in direct chat and into a step's own folder

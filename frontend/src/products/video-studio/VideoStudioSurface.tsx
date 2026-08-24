@@ -55,12 +55,14 @@ import {
   loadVideoPresentations,
   loadVideoProductCommands,
   loadCharacterPresentations,
+  loadReferencePresentations,
   loadDocumentPresentations,
   loadVideoProjects,
   relativeTime,
   workspaceMediaURL,
   type VideoPresentation,
   type CharacterPresentation,
+  type ReferencePresentation,
   type DocumentPresentation,
   type VideoProject,
 } from './videoStudioData'
@@ -381,13 +383,13 @@ function VideosSection({ project, videos }: { project: VideoProject; videos: Vid
 // the written artifacts approved between stages. These were three sibling tabs,
 // which hid the sequence and made Characters something you had to already know
 // to click.
-function ProductionPanel({ project, videos, characters, documents }: { project: VideoProject; videos: VideoPresentation[]; characters: CharacterPresentation[]; documents: DocumentPresentation[] }) {
+function ProductionPanel({ project, videos, characters, references, documents }: { project: VideoProject; videos: VideoPresentation[]; characters: CharacterPresentation[]; references: ReferencePresentation[]; documents: DocumentPresentation[] }) {
   const [isDraggingAssets, setIsDraggingAssets] = useState(false)
   const [uploadingAssets, setUploadingAssets] = useState(false)
   const [uploadMessage, setUploadMessage] = useState('')
   const uploadInputRef = useRef<HTMLInputElement>(null)
   const uploadDestination = `${project.workspacePath.replace(/\/$/, '')}/uploads`
-  const isEmpty = videos.length === 0 && characters.length === 0 && documents.length === 0
+  const isEmpty = videos.length === 0 && characters.length === 0 && references.length === 0 && documents.length === 0
   const panelRef = useRef<HTMLDivElement>(null)
 
   // Sections stack Videos / Characters / Documents in one scroll, so new
@@ -401,7 +403,7 @@ function ProductionPanel({ project, videos, characters, documents }: { project: 
   const knownCounts = useRef<ProductionCounts | null>(null)
   useEffect(() => {
     const previous = knownCounts.current
-    const current = { videos: videos.length, characters: characters.length, documents: documents.length }
+    const current = { videos: videos.length, characters: characters.length, references: references.length, documents: documents.length }
     knownCounts.current = current
     const grew = sectionThatGrew(previous, current)
     if (!grew) return
@@ -410,7 +412,7 @@ function ProductionPanel({ project, videos, characters, documents }: { project: 
     requestAnimationFrame(() => {
       panelRef.current?.querySelector(`[data-section-id="${grew}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     })
-  }, [videos.length, characters.length, documents.length])
+  }, [videos.length, characters.length, references.length, documents.length])
 
   const uploadAssets = async (files: File[]) => {
     if (files.length === 0 || uploadingAssets) return
@@ -457,7 +459,7 @@ function ProductionPanel({ project, videos, characters, documents }: { project: 
   )
 
   return (
-    <div ref={panelRef} data-testid="video-studio-production-panel" data-video-count={videos.length} data-character-count={characters.length} data-document-count={documents.length} className="min-h-0 flex-1 overflow-y-auto">
+    <div ref={panelRef} data-testid="video-studio-production-panel" data-video-count={videos.length} data-character-count={characters.length} data-reference-count={references.length} data-document-count={documents.length} className="min-h-0 flex-1 overflow-y-auto">
       <div className="p-4 pb-3">{uploadDropZone}</div>
       {isEmpty ? (
         <div className="px-8 pb-10 pt-4 text-center">
@@ -469,10 +471,37 @@ function ProductionPanel({ project, videos, characters, documents }: { project: 
         <>
           <VideosSection project={project} videos={videos} />
           <CharactersSection project={project} characters={characters} />
+          <ReferencesSection project={project} references={references} />
           <DocumentsSection documents={documents} />
         </>
       )}
     </div>
+  )
+}
+
+function ReferencesSection({ project, references }: { project: VideoProject; references: ReferencePresentation[] }) {
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const selected = references.find((reference) => reference.id === selectedId) || references[0]
+  useEffect(() => {
+    if (references.length === 0) setSelectedId(null)
+    else if (!references.some((reference) => reference.id === selectedId)) setSelectedId(references[0].id)
+  }, [selectedId, references])
+  if (!selected) return null
+  const imageURL = workspaceMediaURL(`${project.workspacePath}/${selected.path.replace(/^\/+/, '')}`)
+  return (
+    <ProductionSection id="references" title="References" count={references.length} icon={<FileImage className="h-3.5 w-3.5" />} forceOpenKey={references.length}>
+      <div data-testid="video-studio-references-panel" data-reference-count={references.length}>
+        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-100 dark:border-slate-800 dark:bg-slate-900">
+          <img src={imageURL} alt={`Reference image for ${selected.title}`} data-testid="video-studio-reference-image" className="max-h-[22rem] w-full bg-slate-950 object-contain" />
+        </div>
+        <div className="mt-3 flex items-start justify-between gap-3">
+          <div className="min-w-0"><h3 className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{selected.title}</h3><p className="mt-1 text-[10px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">{selected.role || 'visual reference'}</p></div>
+          <a href={imageURL} download className="shrink-0 rounded-lg border border-slate-200 px-2.5 py-1.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">Download</a>
+        </div>
+        {selected.note ? <p className="mt-3 rounded-xl bg-slate-100 p-3 text-xs leading-5 text-slate-600 dark:bg-slate-800 dark:text-slate-300">{selected.note}</p> : null}
+        {references.length > 1 ? <div className="mt-5 grid grid-cols-2 gap-2 border-t border-slate-200 pt-4 sm:grid-cols-3 dark:border-slate-800">{references.map((reference) => <button key={reference.id} type="button" data-testid="video-studio-reference-list-item" data-reference-id={reference.id} data-selected={reference.id === selected.id} onClick={() => setSelectedId(reference.id)} className={`overflow-hidden rounded-xl border text-left ${reference.id === selected.id ? 'border-violet-500/60 shadow-sm' : 'border-slate-200 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800'}`}><img src={workspaceMediaURL(`${project.workspacePath}/${reference.path.replace(/^\/+/, '')}`)} alt="" className="h-20 w-full bg-slate-950 object-cover" /><strong className="block truncate px-2 py-1.5 text-[11px] text-slate-800 dark:text-slate-200">{reference.title}</strong></button>)}</div> : null}
+      </div>
+    </ProductionSection>
   )
 }
 
@@ -588,6 +617,7 @@ function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: 
   const [panel, setPanel] = useState<WorkspacePanel>('production')
   const [videos, setVideos] = useState<VideoPresentation[]>([])
   const [characters, setCharacters] = useState<CharacterPresentation[]>([])
+  const [references, setReferences] = useState<ReferencePresentation[]>([])
   const [documents, setDocuments] = useState<DocumentPresentation[]>([])
   const [showVideoPlayer, setShowVideoPlayer] = useState(false)
   const [loadingProject, setLoadingProject] = useState(true)
@@ -630,15 +660,17 @@ function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: 
       // Loaded together so one refresh reflects the whole production. A video
       // that arrives after this project is already open can surface its player;
       // the initial page load is a baseline, never a “new video” event.
-      const [nextVideos, nextCharacters, nextDocuments] = await Promise.all([
+      const [nextVideos, nextCharacters, nextReferences, nextDocuments] = await Promise.all([
         loadVideoPresentations(project),
         loadCharacterPresentations(project),
+        loadReferencePresentations(project),
         loadDocumentPresentations(project),
       ])
       if (videoCountRef.current !== null && nextVideos.length > videoCountRef.current) setShowVideoPlayer(true)
       videoCountRef.current = nextVideos.length
       setVideos(nextVideos)
       setCharacters(nextCharacters)
+      setReferences(nextReferences)
       setDocuments(nextDocuments)
       setLoadError('')
     } catch (cause) {
@@ -728,7 +760,7 @@ function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: 
   // instead of waiting up to 5s for the poll above. Reuses the SSE stream
   // useChatStore already keeps open for the chat transcript -- see
   // usePresentationEvents for why this does not open a second connection.
-  const presentationEvents = usePresentationEvents(project.sessionId, ['media.video', 'media.character', 'document.markdown'])
+  const presentationEvents = usePresentationEvents(project.sessionId, ['media.video', 'media.character', 'media.reference', 'document.markdown'])
   const handledPresentationEventCountRef = useRef(0)
   useEffect(() => {
     if (presentationEvents.length <= handledPresentationEventCountRef.current) return
@@ -781,7 +813,7 @@ function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: 
           <div className="flex h-14 shrink-0 items-center justify-between border-b border-slate-200 px-3 dark:border-slate-800">
             <div className="flex h-full items-center">
               {(['production', 'files', 'workflow'] as WorkspacePanel[]).map((item) => {
-                const count = item === 'production' ? videos.length + characters.length + documents.length : 0
+                const count = item === 'production' ? videos.length + characters.length + references.length + documents.length : 0
                 return (
                   <button key={item} type="button" onClick={() => setPanel(item)} className={`h-full border-b-2 px-3 text-xs font-semibold capitalize ${panel === item ? 'border-violet-600 text-violet-700 dark:text-violet-300' : 'border-transparent text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'}`}>
                     {item}{count > 0 ? <span className="ml-1 rounded-md bg-violet-100 px-1.5 py-0.5 text-[9px] dark:bg-violet-950">{count}</span> : null}
@@ -805,7 +837,7 @@ function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: 
               <button type="button" onClick={() => void refreshProject()} disabled={refreshing} className="mt-2 inline-flex h-7 items-center rounded-lg bg-amber-600 px-2.5 text-[11px] font-semibold text-white hover:bg-amber-500 disabled:opacity-50">{refreshing ? 'Retrying…' : 'Retry'}</button>
             </div>
           ) : null}
-          {loadingProject ? <div className="grid h-full place-items-center text-xs text-slate-400"><Loader2 className="h-5 w-5 animate-spin" /></div> : panel === 'files' ? <FilesPanel project={project} /> : panel === 'workflow' ? <WorkflowPanel project={project} /> : <ProductionPanel project={project} videos={videos} characters={characters} documents={documents} />}
+          {loadingProject ? <div className="grid h-full place-items-center text-xs text-slate-400"><Loader2 className="h-5 w-5 animate-spin" /></div> : panel === 'files' ? <FilesPanel project={project} /> : panel === 'workflow' ? <WorkflowPanel project={project} /> : <ProductionPanel project={project} videos={videos} characters={characters} references={references} documents={documents} />}
         </aside>
       </div>
       {showVideoPlayer && videos.length > 0 ? (

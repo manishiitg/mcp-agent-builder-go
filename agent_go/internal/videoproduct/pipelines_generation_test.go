@@ -15,14 +15,16 @@ func TestEverySpendingStageCarriesTheApprovalGate(t *testing.T) {
 	const gateMarker = "ONLY from the human input for THIS stage"
 
 	wantGated := map[string]bool{
-		"longform-characters":   true,
-		"longform-narration":    true,
-		"longform-anchor-shot":  true,
-		"longform-next-shot":    true,
-		"shortform-characters":  true,
-		"shortform-narration":   true,
-		"shortform-anchor-shot": true,
-		"shortform-next-shot":   true,
+		"longform-characters":          true,
+		"longform-visual-development":  true,
+		"longform-narration":           true,
+		"longform-anchor-shot":         true,
+		"longform-next-shot":           true,
+		"shortform-characters":         true,
+		"shortform-visual-development": true,
+		"shortform-narration":          true,
+		"shortform-anchor-shot":        true,
+		"shortform-next-shot":          true,
 	}
 
 	for _, pipeline := range []*Pipeline{longformPipeline, shortformPipeline} {
@@ -58,9 +60,12 @@ func TestShortformStagesPutDirectionAndMeasuredNarrationBeforeShots(t *testing.T
 		{"shortform-characters", "shortform-look-sound"},
 		{"shortform-look-sound", "shortform-narration"},
 		{"shortform-narration", "shortform-shotlist"},
+		{"shortform-shotlist", "shortform-visual-development"},
+		{"shortform-visual-development", "shortform-anchor-shot"},
 		{"shortform-shotlist", "shortform-anchor-shot"},
 		{"shortform-anchor-shot", "shortform-next-shot"},
-		{"shortform-next-shot", "shortform-stitch-plan"},
+		{"shortform-next-shot", "shortform-seam-proof"},
+		{"shortform-seam-proof", "shortform-stitch-plan"},
 		{"shortform-stitch-plan", "shortform-assemble"},
 		{"shortform-assemble", "shortform-check"},
 	} {
@@ -98,7 +103,7 @@ func TestShortformStagesPutDirectionAndMeasuredNarrationBeforeShots(t *testing.T
 	}
 
 	shotlist := shortformPipeline.Stages[index["shortform-shotlist"]].Description
-	for _, required := range []string{"shortform-look-sound.md", "shortform-narration.md", "MEASURED", "Never fit narration", "multi-clip-cinematic-generation", "seam-generation route", "last usable stable frame", "motivated camera-angle cut"} {
+	for _, required := range []string{"shortform-look-sound.md", "shortform-narration.md", "MEASURED", "Never fit narration", "multi-clip-cinematic-generation", "live-verified continuity controls", "seam-generation route", "last usable stable frame", "motivated camera-angle cut"} {
 		if !strings.Contains(shotlist, required) {
 			t.Fatalf("short-form shot list is missing %q", required)
 		}
@@ -106,6 +111,18 @@ func TestShortformStagesPutDirectionAndMeasuredNarrationBeforeShots(t *testing.T
 	for _, required := range []string{"exactly one next clip", "multi-clip-cinematic-generation", "durable history from prior runs", "seam-generation route", "extension/reference-video continuation", "last usable stable frame", "orientation/aspect-ratio", "camera-angle change", "cumulatively"} {
 		if !strings.Contains(next, required) {
 			t.Fatalf("short-form next-shot generation is missing follow-up guidance %q", required)
+		}
+	}
+	visualDevelopment := shortformPipeline.Stages[index["shortform-visual-development"]]
+	for _, required := range []string{"real approved reference pack", "show_reference", "start reference", "exit/end-state reference", "shortform-reference-manifest.json"} {
+		if !strings.Contains(visualDevelopment.Description, required) {
+			t.Fatalf("short-form visual-development step is missing %q", required)
+		}
+	}
+	seamProof := shortformPipeline.Stages[index["shortform-seam-proof"]]
+	for _, required := range []string{"two-clip seam-preview MP4", "show_video", "Only a passing proof"} {
+		if !strings.Contains(seamProof.Description, required) {
+			t.Fatalf("short-form seam-proof step is missing %q", required)
 		}
 	}
 
@@ -199,12 +216,16 @@ func TestLongformStagesKeepTheirLoadBearingOrder(t *testing.T) {
 
 	for _, ordered := range [][2]string{
 		{"longform-script", "longform-characters"},
-		{"longform-characters", "longform-anchor-shot"},
+		{"longform-characters", "longform-look-sound"},
+		{"longform-look-sound", "longform-narration"},
 		{"longform-script", "longform-narration"},
 		{"longform-narration", "longform-shotlist"},
+		{"longform-shotlist", "longform-visual-development"},
+		{"longform-visual-development", "longform-anchor-shot"},
 		{"longform-shotlist", "longform-anchor-shot"},
 		{"longform-anchor-shot", "longform-next-shot"},
-		{"longform-next-shot", "longform-stitch-plan"},
+		{"longform-next-shot", "longform-seam-proof"},
+		{"longform-seam-proof", "longform-stitch-plan"},
 		{"longform-stitch-plan", "longform-assemble"},
 		{"longform-assemble", "longform-check"},
 	} {
@@ -215,7 +236,7 @@ func TestLongformStagesKeepTheirLoadBearingOrder(t *testing.T) {
 	}
 
 	shotlist := longformPipeline.Stages[index["longform-shotlist"]].Description
-	for _, required := range []string{"MEASURED", "multi-clip-cinematic-generation", "seam-generation route", "last usable stable frame", "camera handoff", "reference manifest"} {
+	for _, required := range []string{"MEASURED", "multi-clip-cinematic-generation", "live-verified continuity controls", "seam-generation route", "last usable stable frame", "camera handoff", "reference manifest"} {
 		if !strings.Contains(shotlist, required) {
 			t.Fatalf("long-form shot list is missing %q", required)
 		}
@@ -224,6 +245,18 @@ func TestLongformStagesKeepTheirLoadBearingOrder(t *testing.T) {
 	for _, required := range []string{"exactly one next clip", "multi-clip-cinematic-generation", "durable history from prior runs", "recorded seam-generation route", "extension/reference-video continuation", "last usable stable frame", "orientation/aspect-ratio", "camera-angle cut", "cumulatively"} {
 		if !strings.Contains(next, required) {
 			t.Fatalf("long-form next-shot generation is missing follow-up-shot guidance %q", required)
+		}
+	}
+	visualDevelopment := longformPipeline.Stages[index["longform-visual-development"]]
+	for _, required := range []string{"actual visual evidence", "show_reference", "start reference", "exit/end-state reference", "longform-reference-manifest.json"} {
+		if !strings.Contains(visualDevelopment.Description, required) {
+			t.Fatalf("long-form visual-development step is missing %q", required)
+		}
+	}
+	seamProof := longformPipeline.Stages[index["longform-seam-proof"]]
+	for _, required := range []string{"two-clip seam-preview MP4", "show_video", "Only a passing proof"} {
+		if !strings.Contains(seamProof.Description, required) {
+			t.Fatalf("long-form seam-proof step is missing %q", required)
 		}
 	}
 }

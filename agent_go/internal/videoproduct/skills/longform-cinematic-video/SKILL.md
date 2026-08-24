@@ -44,6 +44,15 @@ Create `longform-sequence-plan.json` before paid video generation. Include:
 - planned cut point, transition grammar, handles, and expected seam risk;
 - the reason every independent generation is unavoidable.
 
+Before the first anchor, turn that plan into a user-approved visual-development
+pack: location/background boards, recurring wardrobe and hero-prop references,
+and start/exit references for every continuity sequence. References must be
+real files, not just prompt language; show each one to the user and record its
+role in the manifest. Where the selected endpoint supports multi-image or an
+end-frame control, use the appropriate approved boundary assets. Where it
+doesn't, keep the exit image as an editorial target and choose a compatible
+continuation route rather than inventing a field.
+
 Minimize generations and seams. Prefer one supported longer take or an
 in-model multi-shot sequence when the action is continuous. When a new call is
 necessary, prefer extension or reference-video continuation; otherwise carry
@@ -91,9 +100,12 @@ ambience, score, and J/L cuts; do not restart music or ambience with every
 generated clip. Grade black level, white balance, contrast, saturation, and
 grain consistently without pretending a grade can fix identity or geometry.
 
-Build and review a short assembled sequence early, before rendering the full
-film. This checkpoint tests the continuity strategy and editorial grammar,
-which individual clip approval cannot prove.
+Build and review a short assembled sequence **after every newly generated
+join**, before making another follow-up clip, and before rendering the full
+film. The seam preview must use the selected boundary frames, trim points,
+transition, and audio bridge—not a generic concatenation. This checkpoint
+tests the continuity strategy and editorial grammar, which individual clip
+approval cannot prove.
 
 ## Prove every seam
 
