@@ -7,8 +7,8 @@ import (
 
 func TestWorkflowVersionUpgradePlanFrom122MigratesReportsThenScheduledRoutes(t *testing.T) {
 	plan := workflowVersionUpgradePlan(&WorkflowManifest{Version: "1.0.22"})
-	if len(plan) != 5 {
-		t.Fatalf("plan from 1.0.22 = %d steps, want direct-report, scheduled-route, dedicated-Pulse, schedule-prompt, then finalizer-ownership migrations: %+v", len(plan), plan)
+	if len(plan) != 6 {
+		t.Fatalf("plan from 1.0.22 = %d steps, want direct-report, scheduled-route, dedicated-Pulse, schedule-prompt, finalizer-ownership, then report-activity-section migrations: %+v", len(plan), plan)
 	}
 	if plan[0].label != "upgrade-direct-html-reports" || plan[0].to != "1.0.23" {
 		t.Fatalf("plan[0] = %+v, want direct-report migration to 1.0.23", plan[0])
@@ -22,8 +22,11 @@ func TestWorkflowVersionUpgradePlanFrom122MigratesReportsThenScheduledRoutes(t *
 	if plan[3].label != "upgrade-schedule-prompt-contract" || plan[3].to != workflowContractSchedulePromptContractVersion {
 		t.Fatalf("plan[3] = %+v, want schedule-prompt migration", plan[3])
 	}
-	if plan[4].label != "upgrade-schedule-finalizer-ownership" || plan[4].to != WorkflowContractCurrentVersion {
-		t.Fatalf("plan[4] = %+v, want finalizer-ownership migration to current", plan[4])
+	if plan[4].label != "upgrade-schedule-finalizer-ownership" || plan[4].to != workflowContractFinalizerOwnedScheduleVersion {
+		t.Fatalf("plan[4] = %+v, want finalizer-ownership migration", plan[4])
+	}
+	if plan[5].label != "upgrade-report-activity-section" || plan[5].to != WorkflowContractCurrentVersion {
+		t.Fatalf("plan[5] = %+v, want report-activity-section migration to current", plan[5])
 	}
 }
 

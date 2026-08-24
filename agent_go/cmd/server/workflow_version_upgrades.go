@@ -48,6 +48,7 @@ func workflowContractVersionRank(version string) (int, bool) {
 		workflowContractDedicatedPulseScheduleVersion,
 		workflowContractSchedulePromptContractVersion,
 		workflowContractFinalizerOwnedScheduleVersion,
+		workflowContractReportActivitySectionVersion,
 	}
 	for rank, candidate := range known {
 		if version == candidate {
@@ -277,6 +278,18 @@ message rationale. Do not run the workflow. If route equivalence is ambiguous,
 keep the direct sequence with an honest rationale rather than guessing. Then call
 set_workflow_contract_version(version="1.0.25") and stop.`
 
+const upgradeReportActivitySection = `WORKFLOW CONTRACT UPGRADE: REPORT ACTIVITY SECTION.
+
+This workflow predates the reporting contract's required activity section. Do only this one-time report migration.
+
+If db/reports/index.html does not exist, this is a no-op — do not create a report from scratch in this migration. Otherwise read it in full.
+
+Every report must include one section — its own tab, panel, or anchored region; the overall layout stays the report's own choice — that answers "what did this workflow actually do," in plain, non-technical language: recent runs and the actions taken in each, in the order a non-technical reader would want them, with no raw JSON, internal IDs, or state codes. Name it for the workflow's real run cadence: Daily Action (or Today's Actions) for a workflow that genuinely runs daily, Recent Activity or Latest Run for one that runs hourly, weekly, or on demand.
+
+If the report already has an equivalent section under any name, do not duplicate it; at most rename or lightly adjust it to fit the cadence guidance above. If it is missing, add it as a new section reading live data from db/db.sqlite through window.report.query — do not fabricate content or invent values.
+
+Call validate_report_html after editing; repair every error. Do not run the workflow. If the required source data is ambiguous or does not exist yet, report the blocker and do not stamp. Otherwise call set_workflow_contract_version(version="1.0.30") and stop.`
+
 // workflowVersionUpgradePlan keeps the retired HTML presentation migrations
 // retired, but preserves the independent behavioral/data migrations older
 // workflows still need. They are deliberately grouped into bounded,
@@ -326,6 +339,9 @@ func workflowVersionUpgradePlan(manifest *WorkflowManifest) []workflowVersionUpg
 	}
 	if rank < 28 {
 		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractFinalizerOwnedScheduleVersion, label: "upgrade-schedule-finalizer-ownership", query: upgradeScheduleFinalizerOwnership})
+	}
+	if rank < 29 {
+		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractReportActivitySectionVersion, label: "upgrade-report-activity-section", query: upgradeReportActivitySection})
 	}
 	// Attached here rather than at the call site so the turn text is identical
 	// wherever it is built. The version pair used to be added only on the Pulse

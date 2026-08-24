@@ -15,8 +15,8 @@ import (
 
 func TestWorkflowVersionUpgradePlanSkipsArtifactPurityAlreadyReached(t *testing.T) {
 	plan := workflowVersionUpgradePlan(&WorkflowManifest{Version: "1.0.21"})
-	if len(plan) != 6 {
-		t.Fatalf("plan from 1.0.21 = %d steps, want audit, direct-report, scheduled-route, dedicated-Pulse, schedule-prompt, then finalizer-ownership migration: %+v", len(plan), plan)
+	if len(plan) != 7 {
+		t.Fatalf("plan from 1.0.21 = %d steps, want audit, direct-report, scheduled-route, dedicated-Pulse, schedule-prompt, finalizer-ownership, then report-activity-section migration: %+v", len(plan), plan)
 	}
 	if plan[0].label != "upgrade-learnings-lock-audit" {
 		t.Fatalf("plan[0].label = %q, want upgrade-learnings-lock-audit", plan[0].label)
@@ -36,8 +36,11 @@ func TestWorkflowVersionUpgradePlanSkipsArtifactPurityAlreadyReached(t *testing.
 	if plan[4].label != "upgrade-schedule-prompt-contract" || plan[4].to != workflowContractSchedulePromptContractVersion {
 		t.Fatalf("plan[4] = %+v, want schedule-prompt migration", plan[4])
 	}
-	if plan[5].label != "upgrade-schedule-finalizer-ownership" || plan[5].to != WorkflowContractCurrentVersion {
-		t.Fatalf("plan[5] = %+v, want finalizer-ownership migration reaching current version", plan[5])
+	if plan[5].label != "upgrade-schedule-finalizer-ownership" || plan[5].to != workflowContractFinalizerOwnedScheduleVersion {
+		t.Fatalf("plan[5] = %+v, want finalizer-ownership migration", plan[5])
+	}
+	if plan[6].label != "upgrade-report-activity-section" || plan[6].to != WorkflowContractCurrentVersion {
+		t.Fatalf("plan[6] = %+v, want report-activity-section migration reaching current version", plan[6])
 	}
 	for _, label := range []string{"upgrade-current-artifact-contract"} {
 		for _, step := range plan {
@@ -50,8 +53,8 @@ func TestWorkflowVersionUpgradePlanSkipsArtifactPurityAlreadyReached(t *testing.
 
 func TestWorkflowVersionUpgradePlanOlderWorkflowGetsBothFinalSteps(t *testing.T) {
 	plan := workflowVersionUpgradePlan(&WorkflowManifest{Version: "1.0.20"})
-	if len(plan) != 7 {
-		t.Fatalf("plan from 1.0.20 = %d steps, want artifact-purity, audit, report, scheduled-route, dedicated-Pulse, schedule-prompt, then finalizer-ownership migration: %+v", len(plan), plan)
+	if len(plan) != 8 {
+		t.Fatalf("plan from 1.0.20 = %d steps, want artifact-purity, audit, report, scheduled-route, dedicated-Pulse, schedule-prompt, finalizer-ownership, then report-activity-section migration: %+v", len(plan), plan)
 	}
 	if plan[0].label != "upgrade-current-artifact-contract" || plan[0].to != workflowContractArtifactPurityVersion {
 		t.Fatalf("plan[0] = %+v, want the 1.0.21 purification step first", plan[0])
@@ -71,8 +74,11 @@ func TestWorkflowVersionUpgradePlanOlderWorkflowGetsBothFinalSteps(t *testing.T)
 	if plan[5].label != "upgrade-schedule-prompt-contract" || plan[5].to != workflowContractSchedulePromptContractVersion {
 		t.Fatalf("plan[5] = %+v, want schedule-prompt migration", plan[5])
 	}
-	if plan[6].label != "upgrade-schedule-finalizer-ownership" || plan[6].to != WorkflowContractCurrentVersion {
-		t.Fatalf("plan[6] = %+v, want finalizer-ownership migration reaching current version", plan[6])
+	if plan[6].label != "upgrade-schedule-finalizer-ownership" || plan[6].to != workflowContractFinalizerOwnedScheduleVersion {
+		t.Fatalf("plan[6] = %+v, want finalizer-ownership migration", plan[6])
+	}
+	if plan[7].label != "upgrade-report-activity-section" || plan[7].to != WorkflowContractCurrentVersion {
+		t.Fatalf("plan[7] = %+v, want report-activity-section migration reaching current version", plan[7])
 	}
 }
 

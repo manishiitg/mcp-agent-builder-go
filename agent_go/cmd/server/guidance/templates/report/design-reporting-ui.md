@@ -7,6 +7,17 @@ widget, or platform-generated report navigation.{{if .Focus}}
 
 Focus on: {{.Focus}}.{{end}}
 
+Every report must include one section — its own tab, panel, or anchored
+region; the overall layout is still the HTML's choice — that answers "what
+did this workflow actually do," in plain, non-technical language: recent
+runs and the actions taken in each, in the order a non-technical reader
+would want them, with no raw JSON, internal IDs, or state codes. Name it for
+the workflow's real run cadence: `Daily Action` (or `Today's Actions`) for a
+workflow that genuinely runs daily, `Recent Activity` or `Latest Run` for
+one that runs hourly, weekly, or on demand. This is a content requirement,
+not a widget — build it the same way as any other section, reading from
+`db/db.sqlite` via `window.report.query`.
+
 1. Decide the reader's questions and the durable DB/asset evidence that answers
    them. Design one coherent reporting experience; use internal views only for
    genuinely distinct questions.
@@ -22,5 +33,6 @@ Focus on: {{.Focus}}.{{end}}
    mobile widths and both themes; otherwise stop after validation.
 
 Before writing a large report, briefly state the sections/views you will create
-and what each answers. The report should lead with goal progress and key risks,
-then evidence and detail—not raw JSON or a generic data dump.
+and what each answers, including the required activity/actions section above.
+The report should lead with goal progress and key risks, then evidence and
+detail—not raw JSON or a generic data dump.
