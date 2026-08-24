@@ -62,7 +62,7 @@ func (api *StreamingAPI) appendServerLog(serverName, level, message string) {
 type ToolStatus struct {
 	Name          string                 `json:"name"`
 	Server        string                 `json:"server"`
-	Status        string                 `json:"status"` // "ok", "loading", or "error"
+	Status        string                 `json:"status"` // "ok", "loading", "not_connected" (awaiting OAuth), or "error"
 	Error         string                 `json:"error,omitempty"`
 	Description   string                 `json:"description,omitempty"`
 	ToolsEnabled  int                    `json:"toolsEnabled"`
@@ -177,6 +177,7 @@ func (api *StreamingAPI) discoverServerToolsDetailed(ctx context.Context, server
 		}
 		if discoveryURL != "" {
 			if endpoints := api.tryOAuthDiscovery(ctx, discoveryURL); endpoints != nil {
+				toolStatus.Status = "not_connected"
 				toolStatus.RequiresOAuth = true
 				toolStatus.OAuthEndpoints = endpoints
 				toolStatus.Error = "OAuth authentication required"
@@ -920,10 +921,11 @@ func (api *StreamingAPI) runBackgroundDiscovery() {
 
 			api.toolStatusMux.Lock()
 			api.toolStatus[serverName] = ToolStatus{
-				Name:   serverName,
-				Server: serverName,
-				Status: "error",
-				Error:  "OAuth authentication required — no token available",
+				Name:          serverName,
+				Server:        serverName,
+				Status:        "not_connected",
+				Error:         "OAuth authentication required — no token available",
+				RequiresOAuth: true,
 			}
 			api.toolStatusMux.Unlock()
 			continue
@@ -963,13 +965,19 @@ func (api *StreamingAPI) runBackgroundDiscovery() {
 			continue
 		}
 
-		// Check if discovery returned an error status (e.g. OAuth required, auth failed).
-		// discoverServerToolsDetailed returns (toolStatus, nil) for these — the error
+		// Check if discovery returned a non-ok status (e.g. OAuth required, auth failed).
+		// discoverServerToolsDetailed returns (toolStatus, nil) for these — the outcome
 		// is in result.Status/result.Error, not in the Go error return value.
-		if result.Status == "error" {
+		// "not_connected" means the server is simply awaiting OAuth, not broken; it is
+		// still recorded below so discovery does not retry it until the user connects.
+		if result.Status == "error" || result.Status == "not_connected" {
 			errMsg := result.Error
-			api.appendServerLog(serverName, "error", fmt.Sprintf("Discovery returned error status: %s", errMsg))
-			api.logger.Warn(fmt.Sprintf("⚠️ Server %s discovery returned error: %s", serverName, errMsg))
+			logLevel := "error"
+			if result.Status == "not_connected" {
+				logLevel = "warn"
+			}
+			api.appendServerLog(serverName, logLevel, fmt.Sprintf("Discovery returned %s status: %s", result.Status, errMsg))
+			api.logger.Warn(fmt.Sprintf("⚠️ Server %s discovery returned %s: %s", serverName, result.Status, errMsg))
 
 			if result.RequiresOAuth ||
 				strings.Contains(errMsg, "unauthorized") || strings.Contains(errMsg, "401") ||
@@ -1058,6 +1066,12 @@ func (api *StreamingAPI) getToolStatusForUser(status ToolStatus, userID string) 
 			status.RequiresOAuth = false
 			status.OAuthEndpoints = nil
 			status.Error = ""
+			// A "not_connected" status was recorded before this user authenticated,
+			// so it is now stale — rediscovery is pending. Report it as loading
+			// rather than leaving the UI claiming the server is not connected.
+			if status.Status == "not_connected" {
+				status.Status = "loading"
+			}
 			// Note: The tools may still be empty if discovery failed for other reasons
 		}
 	}

@@ -2,6 +2,160 @@
   "mcpServers": {
     "Parallel Search MCP": {
       "url": "https://search.parallel.ai/mcp"
+    },
+    "Notion": {
+      "url": "https://mcp.notion.com/mcp",
+      "oauth": {
+        "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
+        "token_file": "~/.config/mcpagent/tokens/default/Notion.json"
+      }
+    },
+    "Linear": {
+      "url": "https://mcp.linear.app/mcp",
+      "oauth": {
+        "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
+        "token_file": "~/.config/mcpagent/tokens/default/Linear.json"
+      }
+    },
+    "Asana": {
+      "url": "https://mcp.asana.com/sse",
+      "oauth": {
+        "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
+        "token_file": "~/.config/mcpagent/tokens/default/Asana.json"
+      }
+    },
+    "Atlassian": {
+      "url": "https://mcp.atlassian.com/v1/sse",
+      "oauth": {
+        "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
+        "token_file": "~/.config/mcpagent/tokens/default/Atlassian.json"
+      }
+    },
+    "monday.com": {
+      "url": "https://mcp.monday.com/sse",
+      "oauth": {
+        "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
+        "token_file": "~/.config/mcpagent/tokens/default/monday.com.json"
+      }
+    },
+    "Sentry": {
+      "url": "https://mcp.sentry.dev/mcp",
+      "oauth": {
+        "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
+        "token_file": "~/.config/mcpagent/tokens/default/Sentry.json"
+      }
+    },
+    "Figma": {
+      "url": "https://mcp.figma.com/mcp",
+      "oauth": {
+        "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
+        "token_file": "~/.config/mcpagent/tokens/default/Figma.json"
+      }
+    },
+    "Canva": {
+      "url": "https://mcp.canva.com/mcp",
+      "oauth": {
+        "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
+        "token_file": "~/.config/mcpagent/tokens/default/Canva.json"
+      }
+    },
+    "Vercel": {
+      "url": "https://mcp.vercel.com",
+      "oauth": {
+        "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
+        "token_file": "~/.config/mcpagent/tokens/default/Vercel.json"
+      }
+    },
+    "Neon": {
+      "url": "https://mcp.neon.tech/sse",
+      "oauth": {
+        "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
+        "token_file": "~/.config/mcpagent/tokens/default/Neon.json"
+      }
+    },
+    "Cloudflare Observability": {
+      "url": "https://observability.mcp.cloudflare.com/sse",
+      "oauth": {
+        "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
+        "token_file": "~/.config/mcpagent/tokens/default/Cloudflare Observability.json"
+      }
+    },
+    "Webflow": {
+      "url": "https://mcp.webflow.com/sse",
+      "oauth": {
+        "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
+        "token_file": "~/.config/mcpagent/tokens/default/Webflow.json"
+      }
+    },
+    "Wix": {
+      "url": "https://mcp.wix.com/sse",
+      "oauth": {
+        "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
+        "token_file": "~/.config/mcpagent/tokens/default/Wix.json"
+      }
+    },
+    "Stripe": {
+      "url": "https://mcp.stripe.com",
+      "oauth": {
+        "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
+        "token_file": "~/.config/mcpagent/tokens/default/Stripe.json"
+      }
+    },
+    "PayPal": {
+      "url": "https://mcp.paypal.com/mcp",
+      "oauth": {
+        "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
+        "token_file": "~/.config/mcpagent/tokens/default/PayPal.json"
+      }
+    },
+    "Square": {
+      "url": "https://mcp.squareup.com/sse",
+      "oauth": {
+        "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
+        "token_file": "~/.config/mcpagent/tokens/default/Square.json"
+      }
+    },
+    "Plaid": {
+      "url": "https://api.dashboard.plaid.com/mcp/sse",
+      "oauth": {
+        "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
+        "token_file": "~/.config/mcpagent/tokens/default/Plaid.json"
+      }
+    },
+    "Intercom": {
+      "url": "https://mcp.intercom.com/mcp",
+      "oauth": {
+        "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
+        "token_file": "~/.config/mcpagent/tokens/default/Intercom.json"
+      }
+    },
+    "Close": {
+      "url": "https://mcp.close.com/mcp",
+      "oauth": {
+        "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
+        "token_file": "~/.config/mcpagent/tokens/default/Close.json"
+      }
+    },
+    "Zapier": {
+      "url": "https://mcp.zapier.com/api/mcp/mcp",
+      "oauth": {
+        "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
+        "token_file": "~/.config/mcpagent/tokens/default/Zapier.json"
+      }
+    },
+    "Fireflies": {
+      "url": "https://api.fireflies.ai/mcp",
+      "oauth": {
+        "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
+        "token_file": "~/.config/mcpagent/tokens/default/Fireflies.json"
+      }
+    },
+    "Globalping": {
+      "url": "https://mcp.globalping.dev/sse",
+      "oauth": {
+        "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
+        "token_file": "~/.config/mcpagent/tokens/default/Globalping.json"
+      }
     }
   }
 }

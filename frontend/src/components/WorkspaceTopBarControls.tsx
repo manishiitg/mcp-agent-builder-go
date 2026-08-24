@@ -9,10 +9,10 @@ import { iconButtonClass } from './ui/IconPopover'
 import MCPServersSection from './sidebar/MCPServersSection'
 import { SkillsSection } from './skills'
 import { SecretsSection } from './secrets'
-import { useLLMStore } from '../stores'
+import { useLLMStore, useMCPStore } from '../stores'
 import { useIsElectron } from './topbar/useIsElectron'
 
-type ToolPanel = 'mcp' | 'skills' | 'secrets'
+type ToolPanel = 'skills' | 'secrets'
 
 function ToolMenuItem({
   icon,
@@ -52,11 +52,6 @@ function FloatingToolPanel({
   onClose: () => void
 }) {
   const config = {
-    mcp: {
-      title: 'MCP Servers',
-      icon: <ServerCog className="h-4 w-4" />,
-      content: <MCPServersSection />,
-    },
     skills: {
       title: 'Skills',
       icon: <WandSparkles className="h-4 w-4" />,
@@ -110,6 +105,7 @@ export default function WorkspaceTopBarControls() {
   const menuRef = useRef<HTMLDivElement>(null)
   const setShowLLMModal = useLLMStore(s => s.setShowLLMModal)
   const llmCount = useLLMStore(s => s.savedLLMs.length)
+  const setShowMCPDetails = useMCPStore(s => s.setShowMCPDetails)
   const isElectron = useIsElectron()
 
   useEffect(() => {
@@ -140,6 +136,9 @@ export default function WorkspaceTopBarControls() {
       {/* LlmModalHost renders the LLM modals once; the trigger now lives in the
           compact workspace tools menu. */}
       <LlmModalHost />
+      {/* Connectors modal host — opens straight from the Workspace Tools menu,
+          with no intermediate panel in between. */}
+      <MCPServersSection />
       <div className="flex items-center gap-1.5">
         <RuntimeHealthControl />
         <NotificationsControl />
@@ -177,9 +176,12 @@ export default function WorkspaceTopBarControls() {
                 />
                 <ToolMenuItem
                   icon={<ServerCog className="h-4 w-4" />}
-                  label="MCP Servers"
-                  detail="Connected tool servers"
-                  onClick={() => openPanel('mcp')}
+                  label="Connectors"
+                  detail="Apps and services"
+                  onClick={() => {
+                    setMenuOpen(false)
+                    setShowMCPDetails(true)
+                  }}
                 />
                 <ToolMenuItem
                   icon={<WandSparkles className="h-4 w-4" />}

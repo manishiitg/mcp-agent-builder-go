@@ -759,6 +759,25 @@ func (api *StreamingAPI) handleOAuthLogout(w http.ResponseWriter, r *http.Reques
 
 	api.logger.Info(fmt.Sprintf("Successfully logged out user %s from %s", userID, req.ServerName))
 
+	// /api/tools answers from the discovery cache, so removing the token alone
+	// leaves the connector still reporting "Connected". Drop the cached entry and
+	// the in-memory status, then rediscover — discovery now finds no token file
+	// and records the server as not_connected. Mirrors what the connect path
+	// does after a successful authorization.
+	cacheManager := mcpcache.GetCacheManager(api.logger)
+	if err := cacheManager.InvalidateByServer(api.mcpConfigPath, req.ServerName); err != nil {
+		api.logger.Warn(fmt.Sprintf("Failed to invalidate cache for %s: %v", req.ServerName, err))
+	} else {
+		api.logger.Info(fmt.Sprintf("✅ Cache invalidated for %s after logout", req.ServerName))
+	}
+
+	api.toolStatusMux.Lock()
+	delete(api.toolStatus, req.ServerName)
+	api.toolStatusMux.Unlock()
+
+	api.appendServerLog(req.ServerName, "info", "Disconnected — token removed, rediscovering tools...")
+	go api.startBackgroundDiscovery()
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
 		"status":  "success",
