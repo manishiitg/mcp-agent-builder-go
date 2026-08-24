@@ -22,6 +22,20 @@ func TestIntegratedProjectCreatesEveryFolderGuardBaseline(t *testing.T) {
 	}
 }
 
+func TestVideoStudioProjectsHaveOneHiddenDefaultExecutionGroup(t *testing.T) {
+	manifest := videoStudioDefaultVariablesManifest()
+	if len(manifest.Groups) != 1 {
+		t.Fatalf("default Video Studio manifest has %d groups, want one", len(manifest.Groups))
+	}
+	group := manifest.Groups[0]
+	if group.Name != "default" || !group.Enabled {
+		t.Fatalf("default execution group = %#v, want enabled default", group)
+	}
+	if len(group.Values) != 0 {
+		t.Fatalf("default execution group unexpectedly contains user variables: %#v", group.Values)
+	}
+}
+
 func TestProfileWorkspaceRootMatchesSessionFolderGuard(t *testing.T) {
 	const sessionID = "video-studio:test"
 	root := profileWorkspaceRoot("default", "Chats/Video Studio/projects/demo")

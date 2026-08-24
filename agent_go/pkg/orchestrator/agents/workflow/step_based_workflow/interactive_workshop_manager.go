@@ -2949,7 +2949,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				},
 				"group_name": map[string]interface{}{
 					"type":        "string",
-					"description": "Variable group ID (e.g., 'group-1', 'saurabh'). Required. Read variables/variables.json to see available groups.",
+					"description": "Optional variable group ID. Omit it when this product has one default execution group; otherwise read variables/variables.json and provide a group name.",
 				},
 				"instructions": map[string]interface{}{
 					"type":        "string",
@@ -2973,7 +2973,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					"description": "Workshop mode only. If true, run ONLY the saved learnings/{step-id}/main.py script with no LLM fallback. Fails if no saved script exists, the step is not in scripted mode, or the current workshop mode is Run. Use this to quickly test scripted main.py patches.",
 				},
 			},
-			"required": []string{"step_id", "group_name"},
+			"required": []string{"step_id"},
 		},
 		func(ctx context.Context, args map[string]interface{}) (string, error) {
 			stepIDRaw, ok := args["step_id"]
@@ -2988,23 +2988,22 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			// Extract group_name and other options
 			groupNameRaw, _ := args["group_name"]
 			groupName, _ := groupNameRaw.(string)
-			if groupName == "" {
-				return "group_name is required. Read variables/variables.json to see available groups.", nil
-			}
 
 			// Fallback to session-level group from toolbar selection
 			if groupName == "" && len(iwm.controller.enabledGroupNames) > 0 {
 				groupName = iwm.controller.enabledGroupNames[0]
 			}
 
-			// Validate a group is available — cannot run steps without one
+			// Resolve an execution group when the workspace defines them. Products
+			// with no user-visible variables may omit group_name and supply only a
+			// run folder; this preserves a stable execution scope without forcing a
+			// user to choose workflow machinery.
 			if groupName == "" {
 				iwm.refreshVariablesManifest(ctx)
-				if iwm.controller.variablesManifest == nil || len(iwm.controller.variablesManifest.Groups) == 0 {
-					return "No variable groups exist. Create a group first using add_group before running steps.", nil
+				if iwm.controller.variablesManifest != nil && len(iwm.controller.variablesManifest.Groups) > 0 {
+					// Auto-select the first available group.
+					groupName = iwm.controller.variablesManifest.Groups[0].Name
 				}
-				// Auto-select the first available group
-				groupName = iwm.controller.variablesManifest.Groups[0].Name
 			}
 
 			iteration := "iteration-0"

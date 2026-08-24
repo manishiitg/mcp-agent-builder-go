@@ -51,6 +51,38 @@ func workspaceFileExists(ctx context.Context, client *workspace.Client, path str
 	return err == nil
 }
 
+func videoStudioDefaultVariablesManifest() sbw.VariablesManifest {
+	return sbw.VariablesManifest{
+		Variables:      []sbw.Variable{},
+		Groups:         []sbw.VariableGroup{{Name: "default", Values: map[string]string{}, Enabled: true}},
+		ExtractionDate: time.Now().Format(time.RFC3339),
+	}
+}
+
+// ensureVideoStudioDefaultGroup gives the single-project Video Studio surface a
+// stable execution scope. The shared workflow runtime uses variable groups to
+// name run folders and isolate execution sessions, even when a product has no
+// user-facing variables. Video Studio therefore always has one internal
+// "default" group; it is not a choice presented to the user.
+func ensureVideoStudioDefaultGroup(ctx context.Context, client *workspace.Client, path string) error {
+	file, err := client.ReadWorkspaceFile(ctx, workspace.ReadWorkspaceFileParams{Filepath: path})
+	if err != nil {
+		return err
+	}
+	var manifest sbw.VariablesManifest
+	if err := json.Unmarshal([]byte(file.Content), &manifest); err != nil {
+		return fmt.Errorf("parse variables manifest: %w", err)
+	}
+	if len(manifest.Groups) > 0 {
+		return nil
+	}
+	manifest.Groups = []sbw.VariableGroup{{Name: "default", Values: map[string]string{}, Enabled: true}}
+	if strings.TrimSpace(manifest.ExtractionDate) == "" {
+		manifest.ExtractionDate = time.Now().Format(time.RFC3339)
+	}
+	return updateWorkspaceJSON(ctx, client, path, manifest)
+}
+
 // Profile metadata stores the user-relative workspace path (Chats/...), while
 // the session folder guard is intentionally rooted at the physical user scope
 // (_users/<id>/Chats/...). Go-side profile tools must use the same canonical
@@ -207,7 +239,7 @@ func ensureIntegratedProject(ctx context.Context, workspaceAPIURL string, runtim
 		"planning/plan.json":        planForAll(pipelineRegistry),
 		"planning/step_config.json": integratedStepConfig(),
 		"workflow.json":             integratedWorkflowManifest(product.ID, product.Title),
-		"variables/variables.json":  map[string]interface{}{"variables": []interface{}{}, "groups": []interface{}{}, "extraction_date": time.Now().Format(time.RFC3339)},
+		"variables/variables.json":  videoStudioDefaultVariablesManifest(),
 	}
 	// Upgrade prior generated Video Studio plans too. Besides retiring the old
 	// legacy routes and panel-PNG/FFmpeg contracts, keep product-owned plans in
@@ -228,6 +260,9 @@ func ensureIntegratedProject(ctx context.Context, workspaceAPIURL string, runtim
 		if err := updateWorkspaceJSON(ctx, client, path, value); err != nil {
 			return fmt.Errorf("seed %s: %w", relative, err)
 		}
+	}
+	if err := ensureVideoStudioDefaultGroup(ctx, client, filepath.ToSlash(filepath.Join(runtime.WorkspacePath, "variables/variables.json"))); err != nil {
+		return fmt.Errorf("ensure Video Studio default execution group: %w", err)
 	}
 	if err := reconcileIntegratedLLMConfig(ctx, client, runtime.WorkspacePath); err != nil {
 		return err
