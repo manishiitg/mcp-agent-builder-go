@@ -301,6 +301,41 @@ func kindEnumWithDescriptionsFrom(registry map[string]kindMeta) string {
 	return b.String()
 }
 
+// standaloneReviewLensKinds are guidance kinds whose template text is a
+// read-only Engineering Review lens ("do not record findings yourself, the
+// parent agent records after all reviewers return"). That contract assumes
+// the kind was loaded INSIDE ops-review's Technical Review turn, alongside
+// sibling lenses, with a parent turn recording their combined findings —
+// ops-review reaches these templates only through materialize.go's
+// read_skill bundle (see renderKind's other call site), never through this
+// tool. So any call that reaches this handler for one of these kinds is
+// always a genuine standalone/top-level invocation (a slash command or
+// matched chat intent) with no parent turn — without this notice the
+// reviewer would generate findings exactly as instructed, then discard them
+// when the turn ends, contradicting the kind's own "never a standalone
+// reviewer result" contract.
+var standaloneReviewLensKinds = map[string]bool{
+	"improve-report":     true,
+	"improve-knowledge":  true,
+	"improve-database":   true,
+	"improve-learnings":  true,
+	"improve-evaluation": true,
+}
+
+const standaloneReviewLensRecordingNotice = `
+
+STANDALONE MODE. This checklist is normally loaded as one lens inside a larger Engineering Review turn (ops-review), which records every lens's findings once they all return. You were called directly — there is no such parent turn. Record your own findings before finishing this turn: call record_pulse_review_focus(workspace_path=..., pulse_run_id="current", module="technical_review", focus_key=..., priority_class=..., selection_reason=...) once for the focus you investigated, then record_pulse_finding for each finding above. Do this even though the checklist text above told you not to record — that instruction assumes a parent turn that does not exist here.`
+
+// appendStandaloneReviewLensNotice appends standaloneReviewLensRecordingNotice
+// to text when kind is one of standaloneReviewLensKinds, otherwise returns
+// text unchanged.
+func appendStandaloneReviewLensNotice(kind, text string) string {
+	if !standaloneReviewLensKinds[kind] {
+		return text
+	}
+	return text + standaloneReviewLensRecordingNotice
+}
+
 // RegisterGuidanceTool exposes get_workflow_command_guidance to the agent.
 // The tool returns the rendered prompt for any kind in allKinds. Mode is
 // validated against the kind's allow-list — calling a kind from the wrong
@@ -372,6 +407,7 @@ func RegisterGuidanceTool(agent DefinitionToolRegistrar, currentMode string, log
 		if err != nil {
 			return fmt.Sprintf("error rendering guidance for %q: %v", kind, err), nil
 		}
+		text = appendStandaloneReviewLensNotice(kind, text)
 		// Wrap the rendered guidance in a JSON envelope so the agent sees a
 		// stable shape; the actual prose is the `guidance` field.
 		envelope, _ := json.MarshalIndent(map[string]interface{}{
