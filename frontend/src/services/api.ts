@@ -856,9 +856,9 @@ export const agentApi = {
     return response.data
   },
 
-  // Formatted Resume needs conversational turns, not the archived terminal/UI
-  // trace. The server projects the persisted history to bounded user/final-
-  // assistant pairs so reopening a large coding-agent chat stays lightweight.
+  // Formatted Resume needs the readable conversation plus its compact tool
+  // trace, never raw terminal frames. The server bounds by user turns and
+  // preserves meaningful assistant updates within each turn.
   getChatHistoryResumeConversation: async (sessionId: string, workspacePath?: string, resumeTurns = 100, resumeOffset = 0, includeUiEvents = false): Promise<ChatHistoryConversation> => {
     const params: Record<string, string> = { resume_turns: String(resumeTurns) }
     if (resumeOffset > 0) params.resume_offset = String(resumeOffset)

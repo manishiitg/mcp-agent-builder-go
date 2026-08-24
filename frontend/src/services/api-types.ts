@@ -1420,6 +1420,9 @@ export interface ChatHistoryMessage {
   role?: string;
   Parts?: ChatHistoryMessagePart[];
   parts?: ChatHistoryMessagePart[];
+  /** Stable original position supplied only by the bounded formatted-resume projection. */
+  resume_order?: number;
+  resume_source_message_count?: number;
 }
 
 export interface ChatHistoryConversation {
@@ -1436,6 +1439,7 @@ export interface ChatHistoryConversation {
     start_turn: number;
     total_turns: number;
   };
+  history_source_message_count?: number;
   updated_at?: string;
 }
 

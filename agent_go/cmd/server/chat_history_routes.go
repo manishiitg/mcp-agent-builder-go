@@ -568,10 +568,11 @@ func isFormattedResumeUIEventType(eventType string) bool {
 // turns needed by Formatted mode, without terminal snapshots, UI trace events,
 // system prompts, tool results, or coding-provider tool-call marker messages.
 //
-// Coding CLIs persist many internal AI messages between two user messages. The
-// last ordinary AI message before the next user message is the completed reply;
-// retaining only that message prevents a resumed chat from looking like a tmux
-// transcript while preserving the user/assistant conversation itself.
+// Coding CLIs can persist more than one meaningful assistant update between two
+// user messages. Keep every ordinary text update in its original order: a long
+// tool-heavy turn otherwise restores as only the final answer, even though the
+// operator saw progress and intermediate conclusions while it ran. Function
+// markers and tool results remain out of this conversational projection.
 func projectChatHistoryConversationForResume(data []byte, maxTurns int) []byte {
 	return projectChatHistoryConversationForResumePage(data, maxTurns, 0)
 }
@@ -598,27 +599,31 @@ func projectChatHistoryConversationForResumePage(data []byte, maxTurns, offset i
 		return data
 	}
 
+	type resumeMessage struct {
+		raw   json.RawMessage
+		order int
+	}
 	type turn struct {
-		user      json.RawMessage
-		assistant json.RawMessage
+		user       resumeMessage
+		assistants []resumeMessage
 	}
 	turns := make([]turn, 0)
 	var current *turn
-	var assistantWithoutUser json.RawMessage
-	for _, raw := range history {
+	var assistantWithoutUser resumeMessage
+	for order, raw := range history {
 		role, text := chatHistoryMessageRoleAndText(raw)
 		switch role {
 		case "human", "user":
-			turns = append(turns, turn{user: raw})
+			turns = append(turns, turn{user: resumeMessage{raw: raw, order: order}})
 			current = &turns[len(turns)-1]
 		case "ai", "assistant":
 			if text == "" || isPersistedToolCallMarker(text) {
 				continue
 			}
 			if current != nil {
-				current.assistant = raw
+				current.assistants = append(current.assistants, resumeMessage{raw: raw, order: order})
 			} else {
-				assistantWithoutUser = raw
+				assistantWithoutUser = resumeMessage{raw: raw, order: order}
 			}
 		}
 	}
@@ -637,13 +642,13 @@ func projectChatHistoryConversationForResumePage(data []byte, maxTurns, offset i
 	}
 	turns = turns[start:end]
 	projected := make([]json.RawMessage, 0, len(turns)*2+1)
-	if len(turns) == 0 && len(assistantWithoutUser) > 0 {
-		projected = append(projected, assistantWithoutUser)
+	if len(turns) == 0 && len(assistantWithoutUser.raw) > 0 {
+		projected = append(projected, annotateResumedChatMessage(assistantWithoutUser.raw, assistantWithoutUser.order, len(history)))
 	}
 	for _, item := range turns {
-		projected = append(projected, item.user)
-		if len(item.assistant) > 0 {
-			projected = append(projected, item.assistant)
+		projected = append(projected, annotateResumedChatMessage(item.user.raw, item.user.order, len(history)))
+		for _, assistant := range item.assistants {
+			projected = append(projected, annotateResumedChatMessage(assistant.raw, assistant.order, len(history)))
 		}
 	}
 	encoded, err := json.Marshal(projected)
@@ -651,6 +656,10 @@ func projectChatHistoryConversationForResumePage(data []byte, maxTurns, offset i
 		return data
 	}
 	doc["conversation_history"] = encoded
+	// The formatted client uses these stable source positions only to interleave
+	// readable assistant updates with the persisted tool trace. They are not
+	// terminal events and do not affect the conversation's durable identity.
+	doc["history_source_message_count"], _ = json.Marshal(len(history))
 	pagination, err := json.Marshal(map[string]interface{}{
 		"has_more":    start > 0,
 		"next_offset": offset + len(turns),
@@ -662,6 +671,28 @@ func projectChatHistoryConversationForResumePage(data []byte, maxTurns, offset i
 	}
 	doc["history_pagination"] = pagination
 	return marshalChatHistoryProjectionOrOriginal(doc, data)
+}
+
+func annotateResumedChatMessage(raw json.RawMessage, order, sourceCount int) json.RawMessage {
+	var message map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &message); err != nil {
+		return raw
+	}
+	encodedOrder, err := json.Marshal(order)
+	if err != nil {
+		return raw
+	}
+	encodedSourceCount, err := json.Marshal(sourceCount)
+	if err != nil {
+		return raw
+	}
+	message["resume_order"] = encodedOrder
+	message["resume_source_message_count"] = encodedSourceCount
+	annotated, err := json.Marshal(message)
+	if err != nil {
+		return raw
+	}
+	return annotated
 }
 
 func marshalChatHistoryProjectionOrOriginal(doc map[string]json.RawMessage, original []byte) []byte {

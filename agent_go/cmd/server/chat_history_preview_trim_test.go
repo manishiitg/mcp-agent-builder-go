@@ -71,7 +71,7 @@ func TestTrimChatHistoryConversationForPreviewKeepsShortConversationsWhole(t *te
 	}
 }
 
-func TestProjectChatHistoryConversationForResumeKeepsRealTurnsOnly(t *testing.T) {
+func TestProjectChatHistoryConversationForResumeKeepsReadableAssistantUpdates(t *testing.T) {
 	message := func(role, text string) map[string]interface{} {
 		return map[string]interface{}{
 			"Role":  role,
@@ -114,14 +114,54 @@ func TestProjectChatHistoryConversationForResumeKeepsRealTurnsOnly(t *testing.T)
 	if err := json.Unmarshal(got["conversation_history"], &history); err != nil {
 		t.Fatal(err)
 	}
-	if len(history) != 4 {
-		t.Fatalf("got %d projected messages, want two user/assistant pairs", len(history))
+	if len(history) != 5 {
+		t.Fatalf("got %d projected messages, want both assistant updates in the first turn", len(history))
 	}
 	texts := make([]string, 0, len(history))
 	for _, item := range history {
 		texts = append(texts, item.Parts[0].Text)
 	}
-	want := []string{"first question", "First final answer.", "second question", "Second final answer."}
+	want := []string{"first question", "I will inspect it.", "First final answer.", "second question", "Second final answer."}
+	for index := range want {
+		if texts[index] != want[index] {
+			t.Fatalf("message %d = %q, want %q", index, texts[index], want[index])
+		}
+	}
+}
+
+func TestProjectChatHistoryConversationForResumeKeepsAllTextUpdatesInOneToolHeavyTurn(t *testing.T) {
+	message := func(role, text string) map[string]interface{} {
+		return map[string]interface{}{
+			"Role":  role,
+			"Parts": []map[string]string{{"Text": text}},
+		}
+	}
+	raw, _ := json.Marshal(map[string]interface{}{
+		"conversation_history": []map[string]interface{}{
+			message("human", "review this"),
+			message("ai", "I will inspect the run."),
+			{"Role": "ai", "Parts": []map[string]interface{}{{"Type": "function", "FunctionCall": map[string]string{"Name": "read_file"}}}},
+			message("tool", "tool output"),
+			message("ai", "The first finding is confirmed."),
+			message("ai", "Done — here is the final result."),
+		},
+	})
+
+	var got struct {
+		History []json.RawMessage `json:"conversation_history"`
+	}
+	if err := json.Unmarshal(projectChatHistoryConversationForResume(raw, 100), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.History) != 4 {
+		t.Fatalf("got %d messages, want user plus all three assistant updates", len(got.History))
+	}
+	texts := make([]string, 0, len(got.History))
+	for _, item := range got.History {
+		_, text := chatHistoryMessageRoleAndText(item)
+		texts = append(texts, text)
+	}
+	want := []string{"review this", "I will inspect the run.", "The first finding is confirmed.", "Done — here is the final result."}
 	for index := range want {
 		if texts[index] != want[index] {
 			t.Fatalf("message %d = %q, want %q", index, texts[index], want[index])

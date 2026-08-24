@@ -240,6 +240,27 @@ function makeRestoredEvent(
 export function conversationToRestoredEvents(conversation: ChatHistoryConversation): PollingEvent[] {
   const sessionId = conversation.session_id
   const messages = conversation.conversation_history || []
+  const traceTimes = (conversation.ui_events || [])
+    .map(event => Date.parse(event.timestamp || ''))
+    .filter((timestamp): timestamp is number => Number.isFinite(timestamp))
+  const traceStart = traceTimes.length > 0 ? Math.min(...traceTimes) : undefined
+  const traceEnd = traceTimes.length > 0 ? Math.max(...traceTimes) : undefined
+  const sourceMessageCount = conversation.history_source_message_count || Math.max(
+    messages.length,
+    ...messages.map(message => Number(message.resume_source_message_count) || 0),
+  )
+  // Conversation history does not carry provider timestamps, while its saved
+  // UI trace does. The source order lets a restored user/update/final message
+  // remain in the right place among tool calls instead of appearing after the
+  // whole trace just because it was rebuilt at restore time.
+  const restoredMessageTimestamp = (message: ChatHistoryMessage): string | undefined => {
+    const order = Number(message.resume_order)
+    if (!Number.isFinite(order) || traceStart === undefined || traceEnd === undefined || sourceMessageCount <= 0) {
+      return undefined
+    }
+    const position = Math.max(0, Math.min(1, (order + 1) / (sourceMessageCount + 1)))
+    return new Date(traceStart + ((traceEnd - traceStart) * position)).toISOString()
+  }
   // Page identity is durable across "Load earlier" requests. Without this,
   // every page restarts at restored-…-0 and the event store/UI deduplicates
   // distinct older turns as if they were the newest page.
@@ -254,28 +275,38 @@ export function conversationToRestoredEvents(conversation: ChatHistoryConversati
 
   let turn = 0
   let currentQuestion = ''
-  let pendingAssistant = ''
+  let pendingAssistant: Array<{ content: string; message: ChatHistoryMessage }> = []
   const flushAssistant = () => {
-    if (!pendingAssistant) return
-    // Recreate both answer carriers emitted by a live turn. The developer
-    // transcript reads llm_generation_end, while the product conversation
-    // reads unified_completion. The transcript layer deduplicates matching
-    // carriers when both are displayed together.
-    events.push(makeRestoredEvent(sessionId, 'llm_generation_end', {
-      status: 'completed',
-      question: currentQuestion,
-      content: pendingAssistant,
-      result: pendingAssistant,
-      turns: turn,
-    }, eventIndexBase + events.length))
-    events.push(makeRestoredEvent(sessionId, 'unified_completion', {
-      status: 'completed',
-      question: currentQuestion,
-      final_result: pendingAssistant,
-      result: pendingAssistant,
-      turns: turn,
-    }, eventIndexBase + events.length))
-    pendingAssistant = ''
+    if (pendingAssistant.length === 0) return
+    // A coding CLI can persist several ordinary assistant messages within one
+    // user turn (progress, a finding, then the final reply). Restoring only
+    // the last one made a 183-message chat appear almost empty. Preserve every
+    // readable update; only the last gets the completion carrier that settles
+    // the turn, so the transcript still has exactly one final response.
+    pendingAssistant.forEach(({ content, message }, index) => {
+      const final = index === pendingAssistant.length - 1
+      const timestamp = restoredMessageTimestamp(message)
+      events.push(makeRestoredEvent(sessionId, 'llm_generation_end', {
+        status: 'completed',
+        question: currentQuestion,
+        content,
+        result: content,
+        turns: turn,
+        restored_intermediate_update: !final,
+        ...(timestamp ? { timestamp } : {}),
+      }, eventIndexBase + events.length))
+      if (final) {
+        events.push(makeRestoredEvent(sessionId, 'unified_completion', {
+          status: 'completed',
+          question: currentQuestion,
+          final_result: content,
+          result: content,
+          turns: turn,
+          ...(timestamp ? { timestamp } : {}),
+        }, eventIndexBase + events.length))
+      }
+    })
+    pendingAssistant = []
   }
 
   for (const message of messages) {
@@ -289,17 +320,19 @@ export function conversationToRestoredEvents(conversation: ChatHistoryConversati
       flushAssistant()
       turn += 1
       currentQuestion = content
+      const timestamp = restoredMessageTimestamp(message)
       events.push(makeRestoredEvent(sessionId, 'user_message', {
         content,
         role: 'user',
         turn,
+        ...(timestamp ? { timestamp } : {}),
       }, eventIndexBase + events.length))
     } else if (role === 'ai' || role === 'assistant') {
       if (isProviderTranscriptArtifact(content)) continue
       // Coding providers persist commentary and tool markers as separate AI
       // messages. The final ordinary AI message before the next user message
       // is the completed reply that belongs in the resumed chat.
-      pendingAssistant = content
+      pendingAssistant.push({ content, message })
     }
   }
   flushAssistant()
@@ -438,7 +471,7 @@ function restoreToolArgumentsFromConversation(
   })
 }
 
-async function hydrateTabEventsFromChatHistory(sessionId: string, workspacePath?: string, includeUiEvents = false): Promise<RuntimeSessionState> {
+async function hydrateTabEventsFromChatHistory(sessionId: string, workspacePath?: string, includeUiEvents = true): Promise<RuntimeSessionState> {
   const chatStore = useChatStore.getState()
   // getChatHistoryResumeConversation (not the unbounded preview variant) keeps
   // this lightweight, and conversationToRestoredEvents does the real work of
@@ -482,7 +515,7 @@ async function hydrateTabEventsFromChatHistory(sessionId: string, workspacePath?
 async function tryHydrateTabEventsFromChatHistory(
   sessionId: string,
   workspacePath?: string,
-  includeUiEvents = false,
+  includeUiEvents = true,
 ): Promise<RuntimeSessionState | null> {
   try {
     return await hydrateTabEventsFromChatHistory(sessionId, workspacePath, includeUiEvents)
@@ -507,8 +540,9 @@ export async function hydrateTabEvents(
     // Kept for callers that explicitly request history. Durable history is
     // now the default for every session, so this no longer changes behavior.
     preferChatHistory?: boolean
-    // Read-only schedule restore asks for its bounded persisted UI trace so
-    // background child work remains inspectable after server restart.
+    // Restore the bounded, formatted UI trace for every retained chat. It
+    // supplies tool calls that structured provider history represents only as
+    // function markers; raw terminal frames are never requested.
     includeUiEvents?: boolean
   } = {},
 ): Promise<RuntimeSessionState> {
