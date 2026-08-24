@@ -30,6 +30,8 @@ type gateway struct {
 	password    []byte
 	frontendDir string
 	appName     string
+	userID      string
+	username    string
 	agent       *httputil.ReverseProxy
 	workspace   *httputil.ReverseProxy
 }
@@ -72,6 +74,8 @@ func newGateway() *gateway {
 		password:    []byte(password),
 		frontendDir: os.Getenv("FRONTEND_DIR"),
 		appName:     gatewayEnv("APP_NAME", "Video Studio"),
+		userID:      gatewayEnv("GATEWAY_USER_ID", "video-studio"),
+		username:    gatewayEnv("GATEWAY_USERNAME", "video-studio"),
 		agent:       proxyFor(gatewayEnv("AGENT_API_URL", "http://127.0.0.1:8000")),
 		workspace:   proxyFor(gatewayEnv("WORKSPACE_API_URL", "http://127.0.0.1:8080")),
 	}
@@ -148,9 +152,17 @@ func apiLoginURL(r *http.Request) string {
 
 func (g *gateway) agentToken() (string, error) {
 	now := time.Now()
+	userID := g.userID
+	if userID == "" {
+		userID = "video-studio"
+	}
+	username := g.username
+	if username == "" {
+		username = "video-studio"
+	}
 	claims := gatewayClaims{
-		UserID:    "video-studio",
-		Username:  "video-studio",
+		UserID:    userID,
+		Username:  username,
 		Provider:  "gateway",
 		IssuedAt:  now.Unix(),
 		ExpiresAt: now.Add(15 * time.Minute).Unix(),
