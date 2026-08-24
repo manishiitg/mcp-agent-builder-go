@@ -119,6 +119,7 @@ Every step MUST have a **validation_schema** — the automated gate that pass/fa
 - Include enough checks that stale/leftover files from previous runs can't pass
 - For todo_task steps: validation passing IS the completion signal
 - For message_sequence steps: the runtime automatically runs the step-level schema after the final work turn and repairs failures in the same conversation. Add explicit prevalidation items only for intermediate gates.
+- **When a field's `value_type` is `object`, also add nested `json_checks` for its expected keys** (e.g. `$.semantic_balance.real_journey_count`, not just `$.semantic_balance`). A bare `{"value_type": "object"}` only rejects the wrong outer type — it accepts any shape at all, including one with none of the fields anything downstream actually reads. Worse, it gives the authoring agent no way to know what the object should contain, so it has to guess; a wrong guess (e.g. writing a descriptive string instead, since the field name alone doesn't say "object") then fails validation with no clue what shape was actually expected, and the automatic repair turn that follows has to go searching elsewhere in the workspace for a definition that was never written down. Name every required key up front instead.
 
 Step-level `success_criteria` is deprecated. Rely on a strong `description` plus `validation_schema` instead.
 
