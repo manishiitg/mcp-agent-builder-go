@@ -29,6 +29,7 @@ type gateway struct {
 	secret      []byte
 	password    []byte
 	frontendDir string
+	appName     string
 	agent       *httputil.ReverseProxy
 	workspace   *httputil.ReverseProxy
 }
@@ -53,6 +54,13 @@ func proxyFor(rawURL string) *httputil.ReverseProxy {
 	return httputil.NewSingleHostReverseProxy(target)
 }
 
+func gatewayEnv(name, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+		return value
+	}
+	return fallback
+}
+
 func newGateway() *gateway {
 	secret := os.Getenv("AUTH_SECRET")
 	password := os.Getenv("ACCESS_PASSWORD")
@@ -63,8 +71,9 @@ func newGateway() *gateway {
 		secret:      []byte(secret),
 		password:    []byte(password),
 		frontendDir: os.Getenv("FRONTEND_DIR"),
-		agent:       proxyFor("http://127.0.0.1:8000"),
-		workspace:   proxyFor("http://127.0.0.1:8080"),
+		appName:     gatewayEnv("APP_NAME", "Video Studio"),
+		agent:       proxyFor(gatewayEnv("AGENT_API_URL", "http://127.0.0.1:8000")),
+		workspace:   proxyFor(gatewayEnv("WORKSPACE_API_URL", "http://127.0.0.1:8080")),
 	}
 }
 
@@ -202,7 +211,7 @@ func (g *gateway) login(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprint(w, "<!doctype html><html><head><meta name=viewport content='width=device-width,initial-scale=1'><title>Video Studio</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#101827;color:#eef2ff;font:16px system-ui}main{width:min(360px,calc(100% - 48px));padding:32px;border:1px solid #334155;border-radius:16px;background:#172033}input,button{width:100%;box-sizing:border-box;padding:12px;border-radius:8px;font:inherit}input{border:1px solid #475569;background:#0f172a;color:white;margin:16px 0}button{border:0;background:#38bdf8;color:#082f49;font-weight:700;cursor:pointer}.error{color:#fda4af}</style></head><body><main><h1>Video Studio</h1><p>Enter the shared access password.</p>")
+	fmt.Fprintf(w, "<!doctype html><html><head><meta name=viewport content='width=device-width,initial-scale=1'><title>%s</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#101827;color:#eef2ff;font:16px system-ui}main{width:min(360px,calc(100%% - 48px));padding:32px;border:1px solid #334155;border-radius:16px;background:#172033}input,button{width:100%%;box-sizing:border-box;padding:12px;border-radius:8px;font:inherit}input{border:1px solid #475569;background:#0f172a;color:white;margin:16px 0}button{border:0;background:#38bdf8;color:#082f49;font-weight:700;cursor:pointer}.error{color:#fda4af}</style></head><body><main><h1>%s</h1><p>Enter the shared access password.</p>", g.appName, g.appName)
 	if r.Method == http.MethodPost {
 		fmt.Fprint(w, "<p class=error>Incorrect password. Try again.</p>")
 	}
@@ -254,6 +263,6 @@ func (g *gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	server := &http.Server{Addr: ":8090", Handler: newGateway(), ReadHeaderTimeout: 10 * time.Second}
+	server := &http.Server{Addr: gatewayEnv("GATEWAY_ADDR", ":8090"), Handler: newGateway(), ReadHeaderTimeout: 10 * time.Second}
 	log.Fatal(server.ListenAndServe())
 }
