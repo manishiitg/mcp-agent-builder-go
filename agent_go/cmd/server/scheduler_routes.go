@@ -89,6 +89,7 @@ type CreateScheduleRequest struct {
 	AfterTerminalStatus  string                 `json:"after_terminal_status,omitempty"`
 	AfterDelayMinutes    int                    `json:"after_delay_minutes,omitempty"`
 	DependencyDeadline   string                 `json:"dependency_deadline,omitempty"`
+	PulseReviewOnly      bool                   `json:"pulse_review_only,omitempty"`
 }
 
 // UpdateScheduleRequest is the request body for updating a schedule.
@@ -450,10 +451,15 @@ func createScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 			http.Error(w, "workflow manifest not found at "+req.WorkspacePath, http.StatusBadRequest)
 			return
 		}
-		req.GroupNames, err = validateScheduleGroupNamesForWorkspace(r.Context(), req.WorkspacePath, req.GroupNames)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
+		// PLAT-115: a PulseReviewOnly schedule never runs the workflow, so it has
+		// no group to validate against — the same reason the chat-facing
+		// create_workflow_schedule tool path skips this validation too.
+		if !req.PulseReviewOnly {
+			req.GroupNames, err = validateScheduleGroupNamesForWorkspace(r.Context(), req.WorkspacePath, req.GroupNames)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
 		}
 
 		// Create new schedule
@@ -481,6 +487,7 @@ func createScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 			AfterTerminalStatus:  strings.TrimSpace(req.AfterTerminalStatus),
 			AfterDelayMinutes:    req.AfterDelayMinutes,
 			DependencyDeadline:   strings.TrimSpace(req.DependencyDeadline),
+			PulseReviewOnly:      req.PulseReviewOnly,
 		}
 
 		manifest.Schedules = append(manifest.Schedules, newSched)

@@ -2920,6 +2920,7 @@ export interface CreateScheduledJobRequest {
   cron_expression?: string
   timezone?: string
   enabled?: boolean
+  pulse_review_only?: boolean
 }
 
 export interface UpdateScheduledJobRequest {

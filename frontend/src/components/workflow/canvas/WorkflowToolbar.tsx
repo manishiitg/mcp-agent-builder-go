@@ -462,13 +462,29 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
   const refreshWorkflowManifests = useWorkflowManifestStore((s) => s.refreshWorkflows)
   const [monitorSaving, setMonitorSaving] = useState(false)
   const toggleMonitor = useCallback(async () => {
-    if (!workspacePath || !pulseReviewSchedule || monitorSaving) return
+    if (!workspacePath || monitorSaving) return
     setMonitorSaving(true)
     try {
-      if (monitorOn) {
-        await schedulerApi.disableJob(pulseReviewSchedule.id)
+      if (pulseReviewSchedule) {
+        if (monitorOn) {
+          await schedulerApi.disableJob(pulseReviewSchedule.id)
+        } else {
+          await schedulerApi.enableJob(pulseReviewSchedule.id)
+        }
       } else {
-        await schedulerApi.enableJob(pulseReviewSchedule.id)
+        // PLAT-158: creating the dedicated pulse_review_only schedule IS
+        // enabling Pulse — this is still the single source of truth, just
+        // created lazily from the toolbar toggle instead of /pulse-setup.
+        await schedulerApi.createJob({
+          name: 'Pulse review',
+          entity_type: 'workflow',
+          workspace_path: workspacePath,
+          mode: 'workshop',
+          cron_expression: '0 9 * * *',
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          enabled: true,
+          pulse_review_only: true,
+        })
       }
       await refreshWorkflowManifests()
     } catch (err) {
@@ -1307,15 +1323,15 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                   role="switch"
                   aria-checked={monitorOn}
                   onClick={() => { void toggleMonitor() }}
-                  disabled={monitorSaving || !pulseReviewSchedule}
+                  disabled={monitorSaving}
                   className={`relative inline-flex h-5 w-9 flex-none items-center rounded-full p-0 transition-colors disabled:opacity-50 ${monitorOn ? 'bg-primary' : 'bg-muted-foreground/30'}`}
                   aria-label="Toggle Pulse"
                 >
                   <span className={`inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${monitorOn ? 'translate-x-[18px]' : 'translate-x-[2px]'}`} />
                 </button>
                 <div className="min-w-0">
-                  <div className="text-xs font-medium text-foreground">{monitorOn ? 'Reviewing on its own schedule' : pulseReviewSchedule ? 'Scheduled review is off' : 'No Pulse review schedule'}</div>
-                  <div className="truncate text-[11px] text-muted-foreground">{pulseReviewSchedule ? 'Pulse findings, fixes, decisions, and history are here.' : 'Run /pulse-setup in chat to create one.'}</div>
+                  <div className="text-xs font-medium text-foreground">{monitorOn ? 'Reviewing on its own schedule' : pulseReviewSchedule ? 'Scheduled review is off' : 'Pulse is off'}</div>
+                  <div className="truncate text-[11px] text-muted-foreground">{pulseReviewSchedule ? 'Pulse findings, fixes, decisions, and history are here.' : 'Turn on to review runs daily and track findings here.'}</div>
                 </div>
               </div>
               <div className="inline-flex h-8 items-center overflow-hidden rounded-lg border border-border bg-muted/30">
