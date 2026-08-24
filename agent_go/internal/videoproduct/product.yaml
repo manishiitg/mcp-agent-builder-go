@@ -65,6 +65,7 @@ profile:
   skills:
     - video-creation
     - video-look-sound
+    - cinematic-visual-development
     - longform-cinematic-video
     - multi-clip-cinematic-generation
     - video-stitching
@@ -303,6 +304,7 @@ workflows:
   selected_skills:
     - video-creation
     - video-look-sound
+    - cinematic-visual-development
     - multi-clip-cinematic-generation
     - video-stitching
     - video-editing

@@ -119,6 +119,11 @@ func TestShortformStagesPutDirectionAndMeasuredNarrationBeforeShots(t *testing.T
 			t.Fatalf("short-form visual-development step is missing %q", required)
 		}
 	}
+	for _, id := range []string{"shortform-characters", "shortform-visual-development", "shortform-anchor-shot", "shortform-next-shot"} {
+		if !containsSkill(shortformPipeline.Stages[index[id]].Skills, "cinematic-visual-development") {
+			t.Fatalf("%s must attach cinematic-visual-development", id)
+		}
+	}
 	seamProof := shortformPipeline.Stages[index["shortform-seam-proof"]]
 	for _, required := range []string{"two-clip seam-preview MP4", "show_video", "Only a passing proof"} {
 		if !strings.Contains(seamProof.Description, required) {
@@ -251,6 +256,11 @@ func TestLongformStagesKeepTheirLoadBearingOrder(t *testing.T) {
 	for _, required := range []string{"actual visual evidence", "show_reference", "start reference", "exit/end-state reference", "longform-reference-manifest.json"} {
 		if !strings.Contains(visualDevelopment.Description, required) {
 			t.Fatalf("long-form visual-development step is missing %q", required)
+		}
+	}
+	for _, id := range []string{"longform-characters", "longform-visual-development", "longform-anchor-shot", "longform-next-shot"} {
+		if !containsSkill(longformPipeline.Stages[index[id]].Skills, "cinematic-visual-development") {
+			t.Fatalf("%s must attach cinematic-visual-development", id)
 		}
 	}
 	seamProof := longformPipeline.Stages[index["longform-seam-proof"]]
