@@ -127,7 +127,29 @@ host. A release contains:
 
 The `dominion` account owns Node, Claude Code, and its tool cache under
 `/srv/dominion/tools` and `/srv/dominion/home`. No application process runs as
-root.
+root. Node/npm are already present system-wide on this host; Claude Code CLI
+itself is not, and `dominion-agent` shells out to a bare `claude` on `PATH`
+(`exec.LookPath("claude")` — no configurable override), so a release without
+this step deploys a working agent that fails on its first real turn with
+`claude cli not found in PATH`. Install it into the dominion-owned tool
+prefix, as `dominion`, idempotently on every release:
+
+```bash
+npm install -g --prefix /srv/dominion/tools @anthropic-ai/claude-code
+```
+
+Then ensure `PATH` includes `/srv/dominion/tools/bin` ahead of the system
+default in `/srv/dominion/.env` (`EnvironmentFile` for every service unit),
+and restart `dominion-agent` after installing or upgrading it. Verify with
+`/srv/dominion/tools/bin/claude --version`, and confirm it actually
+authenticates with the deployed `CLAUDE_CODE_OAUTH_TOKEN` — a present-but-
+unauthenticated CLI fails differently, not with the PATH error above:
+
+```bash
+CLAUDE_CODE_OAUTH_TOKEN=... HOME=/srv/dominion/home PATH=/srv/dominion/tools/bin:$PATH \
+  claude -p --output-format json <<< "say OK"
+# expect: {"is_error":false, ..., "result":"OK", ...}
+```
 
 ## Verification
 
@@ -151,15 +173,26 @@ Studio, Finance, workflow execution, or unrelated server data.
 
 ## Current bootstrap state
 
-Completed on the target host:
+Live on the target host, first deployed 2026-08-24:
 
-- `dominion` system account and private directory tree
-- deployment-key access for `dominion` over port `2299`
-- systemd user lingering enabled for `dominion`
+- `dominion` system account, private directory tree, deployment-key SSH
+  access over port `2299`, systemd user lingering enabled
+- `.env` written with `AUTH_SECRET`, `ACCESS_PASSWORD`, `CLAUDE_CODE_OAUTH_TOKEN`,
+  and the gateway/agent product env vars from this doc
+- Claude Code CLI installed under `/srv/dominion/tools`, authenticated via
+  `CLAUDE_CODE_OAUTH_TOKEN`
+- `dominion-agent`, `dominion-workspace`, `dominion-gateway` installed as
+  `systemd --user` units (`~/.config/systemd/user/`, not `/etc/systemd/system/`
+  — no root needed for the app services themselves), enabled and running
+- `Workflow/tectonicusadaytrading/` transferred in full to
+  `/srv/dominion/data/docs/Workflow/tectonicusadaytrading/`
+- Caddy hostname block added for `trader.tectonicmarkets.com` (root step),
+  cert obtained via `tls-alpn-01`, public HTTPS verified
 
-Not yet performed:
+Known follow-up, not yet done:
 
-- create/write the Dominion runtime secret
-- install Dominion-specific user tools and service units
-- transfer the release and workflow data
-- add the Caddy hostname and verify HTTPS
+- Cloudflare SSL/TLS mode is not yet switched to Full (strict) — the DNS
+  record is currently unproxied (DNS-only), which is why certificate
+  issuance worked without any Cloudflare-side change. Flipping to proxied +
+  Full (strict) is optional, not blocking, and is the account owner's call
+  since it changes what protects this hostname.
