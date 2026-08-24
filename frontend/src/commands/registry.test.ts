@@ -3,11 +3,11 @@ import { findCommand, getCommands } from './registry'
 import type { CommandContext } from './types'
 
 describe('Pulse slash commands', () => {
-  it('keeps workflow Pulse setup scoped to workflow mode', () => {
+  it('has no slash command for recurring Pulse setup — it is a toolbar/popup toggle', () => {
     const workflowCommand = findCommand('pulse-setup', 'workflow')
     const orgCommand = findCommand('pulse-setup', 'multi-agent')
 
-    expect(workflowCommand?.description).toContain('recurring workflow run')
+    expect(workflowCommand).toBeUndefined()
     expect(orgCommand).toBeUndefined()
   })
 
@@ -19,7 +19,7 @@ describe('Pulse slash commands', () => {
       expect(workflowCommands).toContain(command)
       expect(orgCommands).not.toContain(command)
     }
-    for (const retiredCommand of ['bug-review', 'review-speed', 'review-cost', 'llm-ops-review', 'ops-review', 'engineering-review', 'specialize-advisors']) {
+    for (const retiredCommand of ['bug-review', 'review-speed', 'review-cost', 'llm-ops-review', 'ops-review', 'engineering-review', 'specialize-advisors', 'pulse-setup']) {
       expect(workflowCommands).not.toContain(retiredCommand)
     }
   })

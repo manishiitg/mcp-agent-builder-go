@@ -198,18 +198,6 @@ export const builtinCommands: CommandDefinition[] = [
     }
   },
   {
-    command: 'pulse-setup',
-    description: 'Enable Pulse and configure the recurring workflow run schedule',
-    icon: <RefreshCw className="w-4 h-4" />,
-    modes: ['workflow'],
-    requiredWorkflowMode: 'plan',
-    requiredWorkshopMode: 'workshop',
-    source: 'builtin',
-    execute: (ctx) => {
-      submitGuidedWorkflowCommand(ctx, 'pulse-setup')
-    }
-  },
-  {
     command: 'strategy-auditor',
     description: 'Diagnose whether the current plan is moving the goal using cross-run evidence',
     icon: <Target className="w-4 h-4" />,

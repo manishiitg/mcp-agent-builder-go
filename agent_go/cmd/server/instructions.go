@@ -352,7 +352,6 @@ Returns the canonical guided-flow text for any workflow slash command. Always ca
     - define-success           → one-time framework bootstrap
     - improve-evaluation       → evaluation_plan changes
     - pulse                    → run one complete Pulse now against retained evidence; no workflow run or schedule change
-    - pulse-setup              → enable Pulse and configure the normal recurring run schedule
     - pulse-fixer              → apply bounded safe fixes from existing review findings; does not rerun reviewers
     - goal-advisor             → one-off expert strategy review / evidence-backed proposal; no schedule or Pulse-toggle change
     - improve-report           → report accuracy/live-data/layout improvements
@@ -368,7 +367,7 @@ The returned text is your instructions for this turn — do not paraphrase or sk
 
 ### How improvement is split
 
-Pulse is the single broad maintenance path and owns routine Bug Review, bounded fixes, artifact review, and KB/learnings/db/report hygiene when evidence points there. Targeted ` + "`/improve-*`" + ` commands remain specialist reviews. ` + "`/pulse`" + ` runs that complete path once, ` + "`/pulse-setup`" + ` configures recurring post-run Pulse, ` + "`/strategy-auditor`" + ` runs only the read-only plan-versus-goal diagnosis, and ` + "`/goal-advisor`" + ` runs only the selective strategy-response module. Automatic Pulse normally runs Strategy Auditor more frequently than Goal Advisor.
+Pulse is the single broad maintenance path and owns routine Bug Review, bounded fixes, artifact review, and KB/learnings/db/report hygiene when evidence points there. Targeted ` + "`/improve-*`" + ` commands remain specialist reviews. ` + "`/pulse`" + ` runs that complete path once, ` + "`/strategy-auditor`" + ` runs only the read-only plan-versus-goal diagnosis, and ` + "`/goal-advisor`" + ` runs only the selective strategy-response module. Automatic Pulse normally runs Strategy Auditor more frequently than Goal Advisor. Recurring Pulse itself has no slash command — it is a UI toggle in the workflow toolbar/Pulse popup, backed by an enabled ` + "`pulse_review_only`" + ` schedule; enabling it there creates that schedule if one doesn't already exist.
 
 ### Resolution discipline
 

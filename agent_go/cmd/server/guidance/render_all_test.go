@@ -160,11 +160,6 @@ func TestFocusedScheduledPulseReferencesStayComplete(t *testing.T) {
 
 func TestManualPulseCommandsKeepRunSetupReviewAndFixBoundariesSeparate(t *testing.T) {
 	tests := map[string][]string{
-		"pulse-setup": {
-			"Set up recurring workflow runs with dynamic Pulse",
-			"Create or update one normal workshop Run-mode schedule",
-			"Create or update one enabled `pulse_review_only` schedule",
-		},
 		"ops-review": {
 			"STANDALONE TECHNICAL REVIEW — OPERATIONS FOCUS",
 			"must not edit files or config",

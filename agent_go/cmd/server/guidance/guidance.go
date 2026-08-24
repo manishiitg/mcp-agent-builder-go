@@ -89,7 +89,6 @@ var allKinds = map[string]kindMeta{
 	// Improvements — evidence-driven reliability and strategy flows
 	"define-success":      {Group: "improve", Description: "Confirm the workflow Goal, success criteria, and operating model", Modes: []string{"workshop"}},
 	"improve-evaluation":  {Group: "improve", Description: "Read-only evaluation coverage and correctness review with fixer recommendations", Modes: []string{"workshop"}},
-	"pulse-setup":         {Group: "improve", Description: "Enable Pulse and set up the normal recurring workflow run schedule", Modes: []string{"workshop"}},
 	"engineering-review":  {Group: "improve", Description: "Run one read-only Engineering and LLM/Ops review sequence, classify workflow observations, and persist a canonical repair queue", Modes: []string{"workshop"}},
 	"pulse-fixer":         {Group: "improve", Description: "Independently apply and verify an agent-selected bounded repair batch from canonical Pulse issues produced by Technical Review", Modes: []string{"workshop"}},
 	"goal-advisor":        {Group: "improve", Description: "Strategy-first expert advisor: identify the current strategy ceiling, challenge it with one materially different high-leverage thesis, and advance one approval-gated strategy experiment through typed Pulse records from proposal through measured outcome; operational repairs remain with Pulse maintenance modules", Modes: []string{"workshop"}},
