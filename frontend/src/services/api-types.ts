@@ -1921,6 +1921,12 @@ export interface VariableGroupsResponse {
 // Execution Logs API types
 export interface ValidationLog {
   attempt: number;
+  // "pre_validation" records are automatic structural checks that can trigger
+  // a message-sequence repair turn; ordinary "validation" is the legacy step
+  // validation format.
+  kind?: 'validation' | 'pre_validation' | string;
+  phase?: string;
+  execution_attempt?: number;
   file_path: string;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   content: any; // Full JSON content of validation log

@@ -260,6 +260,83 @@ const getStepResultPreview = (stepLogs: unknown): string => {
   return ''
 }
 
+type ExecutionOrigin = {
+  label: string
+  detail: string
+  className: string
+}
+
+// A message-sequence execution can be a planned item, a repair injected by
+// automatic final validation, or a reflection. Make that lifecycle visible so
+// "4 attempts" is not mistaken for four orchestrator dispatches.
+const getExecutionOrigin = (execution: unknown, validations: unknown[]): ExecutionOrigin => {
+  const exec = asRecord(execution)
+  const content = asRecord(exec?.content)
+  const result = typeof content?.execution_result === 'string' ? content.execution_result : ''
+  const itemMatch = result.match(/^Message sequence item:\s*([^\s(]+)\s*\(/m)
+  const itemID = itemMatch?.[1] || ''
+  const repairMatch = itemID.match(/^__automatic_final_validation__-repair-(\d+)$/)
+
+  if (repairMatch) {
+    const validationAttempt = Number(repairMatch[1])
+    const trigger = validations
+      .map(asRecord)
+      .find(validation => (
+        validation?.kind === 'pre_validation' &&
+        Number(asRecord(validation.content)?.validation_attempt) === validationAttempt
+      ))
+    const validationContent = asRecord(trigger?.content)
+    const failedChecks = Number(validationContent?.failed_checks)
+    const errors = Array.isArray(validationContent?.errors) ? validationContent.errors.map(asRecord) : []
+    const firstError = errors[0]
+    const failureSummary = typeof firstError?.Message === 'string'
+      ? firstError.Message
+      : typeof firstError?.message === 'string'
+        ? firstError.message
+        : ''
+    const failureCountText = Number.isFinite(failedChecks) && failedChecks > 0
+      ? `${failedChecks} failed check${failedChecks === 1 ? '' : 's'}`
+      : 'a failed final validation'
+
+    return {
+      label: `Auto-validation repair ${validationAttempt}`,
+      detail: `Triggered because the prior automatic final validation had ${failureCountText}.${failureSummary ? ` ${failureSummary}` : ''}`,
+      className: 'border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-300',
+    }
+  }
+
+  if (itemID.includes('reflection')) {
+    return {
+      label: 'Message-sequence reflection',
+      detail: 'This is the sequence’s closing reflection turn, not a workflow retry or another orchestrator dispatch.',
+      className: 'border-teal-500/25 bg-teal-500/10 text-teal-700 dark:text-teal-300',
+    }
+  }
+
+  const retryAttempt = Number(content?.retry_attempt)
+  if (Number.isFinite(retryAttempt) && retryAttempt > 1) {
+    return {
+      label: `Runtime retry ${retryAttempt}`,
+      detail: 'The runtime retried this same execution after a transient failure; it was not a new planned item or orchestrator call.',
+      className: 'border-rose-500/25 bg-rose-500/10 text-rose-700 dark:text-rose-300',
+    }
+  }
+
+  if (itemID) {
+    return {
+      label: 'Planned sequence item',
+      detail: `The plan requested the message-sequence item “${itemID}”.`,
+      className: 'border-sky-500/25 bg-sky-500/10 text-sky-700 dark:text-sky-300',
+    }
+  }
+
+  return {
+    label: 'Execution origin not recorded',
+    detail: 'This historical log does not contain a message-sequence item, validation trigger, or retry marker.',
+    className: 'border-border bg-muted text-muted-foreground',
+  }
+}
+
 const getStepIcon = (type: string) => {
   switch (type) {
     case 'orchestration':
@@ -1021,6 +1098,7 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                   const model = isFastPath ? null : exec.content?.model
                   const fpSuccess = isFastPath ? exec.content?.success === true : null
                   const fpExit = isFastPath ? exec.content?.exit_code : null
+                  const executionOrigin = isFastPath ? null : getExecutionOrigin(exec, validations)
 
                   return (
                     <div key={idx} className={`bg-background rounded border overflow-hidden ${isFastPath ? 'border-indigo-200 dark:border-indigo-800' : 'border-border'}`}>
@@ -1039,6 +1117,11 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                                   ? 'Saved main.py (fast path)'
                                   : <>Attempt {exec.attempt} {exec.iteration > 0 && `(Iteration ${exec.iteration})`}</>}
                               </span>
+                              {executionOrigin && (
+                                <span title={executionOrigin.detail} className={`text-[10px] font-medium px-1.5 py-0.5 rounded border ${executionOrigin.className}`}>
+                                  {executionOrigin.label}
+                                </span>
+                              )}
                               {isFastPath && (
                                 <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded border ${
                                   fpSuccess
@@ -1069,6 +1152,11 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                           {result && (
                             <p className="text-xs text-muted-foreground line-clamp-2 whitespace-pre-wrap">
                               {result}
+                            </p>
+                          )}
+                          {executionOrigin && (
+                            <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground line-clamp-2">
+                              Why it ran: {executionOrigin.detail}
                             </p>
                           )}
                         </div>
@@ -1241,11 +1329,23 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
               <div className="space-y-3">
                 {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
                 {validations.filter(matchesSearch).map((val: any, idx: number) => {
-                  const valId = `${stepId}-val-${val.attempt}`
+                  const valId = `${stepId}-val-${val.kind || 'validation'}-${val.attempt}`
                   const isValExpanded = expandedValidations.has(valId)
                   const valStatus = val.content?.execution_status
+                  const isAutomaticFinalValidation = val.kind === 'pre_validation' && val.phase === 'message-sequence-automatic-final-validation'
+                  const valPassed = val.content?.overall_pass
+                  const passedChecks = val.content?.passed_checks
+                  const failedChecks = val.content?.failed_checks
                   const reasoning = val.content?.reasoning
                   const feedback = (val.content?.feedback || []) as ValidationFeedback[]
+                  const firstError = Array.isArray(val.content?.errors) ? val.content.errors[0] : null
+                  const validationSummary = typeof firstError?.Message === 'string'
+                    ? firstError.Message
+                    : typeof firstError?.message === 'string'
+                      ? firstError.message
+                      : reasoning
+                  const validationSucceeded = valStatus === 'COMPLETED' || valPassed === true
+                  const validationFailed = valStatus === 'FAILED' || valPassed === false
                   
                   return (
                     <div key={idx} className="bg-background rounded border border-border overflow-hidden">
@@ -1253,17 +1353,29 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                         onClick={() => toggleValidation(valId)}
                         className="w-full flex items-start gap-3 p-3 text-left hover:bg-accent/50 transition-colors"
                       >
-                        <div className={`mt-0.5 w-2 h-2 rounded-full flex-shrink-0 ${valStatus === 'COMPLETED' ? 'bg-emerald-500' : valStatus === 'FAILED' ? 'bg-rose-500' : 'bg-slate-400 dark:bg-slate-500'}`} />
+                        <div className={`mt-0.5 w-2 h-2 rounded-full flex-shrink-0 ${validationSucceeded ? 'bg-emerald-500' : validationFailed ? 'bg-rose-500' : 'bg-slate-400 dark:bg-slate-500'}`} />
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center justify-between mb-1">
-                            <span className="text-sm font-medium text-foreground">
-                              Attempt {val.attempt}
-                            </span>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-sm font-medium text-foreground">
+                                {isAutomaticFinalValidation ? `Automatic final validation ${val.attempt}` : `Validation attempt ${val.attempt}`}
+                              </span>
+                              {isAutomaticFinalValidation && (
+                                <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded border ${validationSucceeded ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : validationFailed ? 'border-rose-500/25 bg-rose-500/10 text-rose-700 dark:text-rose-300' : 'border-border bg-muted text-muted-foreground'}`}>
+                                  {validationSucceeded ? 'passed' : validationFailed ? 'failed' : 'recorded'}
+                                </span>
+                              )}
+                            </div>
                             {isValExpanded ? <ChevronDown className="w-3 h-3 text-muted-foreground" /> : <ChevronRight className="w-3 h-3 text-muted-foreground" />}
                           </div>
-                          {reasoning && (
+                          {isAutomaticFinalValidation && (typeof passedChecks === 'number' || typeof failedChecks === 'number') && (
+                            <p className="text-xs text-muted-foreground">
+                              {typeof passedChecks === 'number' ? `${passedChecks} passed` : ''}{typeof passedChecks === 'number' && typeof failedChecks === 'number' ? ' · ' : ''}{typeof failedChecks === 'number' ? `${failedChecks} failed` : ''}
+                            </p>
+                          )}
+                          {validationSummary && (
                             <p className="text-xs text-muted-foreground line-clamp-2">
-                              {reasoning}
+                              {validationSummary}
                             </p>
                           )}
                         </div>

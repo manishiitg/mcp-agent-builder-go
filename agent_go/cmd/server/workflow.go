@@ -3339,7 +3339,9 @@ func (api *StreamingAPI) handleGetExecutionLogs(w http.ResponseWriter, r *http.R
 						childName := filepath.Base(child.FilePath)
 						childIsDir := child.Type == "folder"
 
-						if !childIsDir && strings.HasPrefix(childName, "validation") && strings.HasSuffix(childName, ".json") {
+						isStandardValidation := strings.HasPrefix(childName, "validation") && strings.HasSuffix(childName, ".json")
+						isPreValidation := strings.HasPrefix(childName, "pre_validation") && strings.HasSuffix(childName, ".json")
+						if !childIsDir && (isStandardValidation || isPreValidation) {
 							logPath := child.FilePath
 							if processedPaths[logPath] {
 								continue
@@ -3350,7 +3352,7 @@ func (api *StreamingAPI) handleGetExecutionLogs(w http.ResponseWriter, r *http.R
 							validations, _ := entry["validations"].([]map[string]interface{})
 
 							attempt := 1
-							if childName != "validation.json" {
+							if isStandardValidation && childName != "validation.json" {
 								fmt.Sscanf(childName, "validation-%d.json", &attempt)
 							}
 
@@ -3360,10 +3362,31 @@ func (api *StreamingAPI) handleGetExecutionLogs(w http.ResponseWriter, r *http.R
 								json.Unmarshal([]byte(content), &validationData)
 							}
 
+							validationKind := "validation"
+							validationPhase := ""
+							executionAttempt := 0
+							if isPreValidation {
+								validationKind = "pre_validation"
+								if data, ok := validationData.(map[string]interface{}); ok {
+									if value, ok := data["validation_attempt"].(float64); ok {
+										attempt = int(value)
+									}
+									if value, ok := data["execution_attempt"].(float64); ok {
+										executionAttempt = int(value)
+									}
+									if value, ok := data["validation_phase"].(string); ok {
+										validationPhase = value
+									}
+								}
+							}
+
 							validations = append(validations, map[string]interface{}{
-								"attempt":   attempt,
-								"file_path": logPath,
-								"content":   validationData,
+								"attempt":           attempt,
+								"kind":              validationKind,
+								"phase":             validationPhase,
+								"execution_attempt": executionAttempt,
+								"file_path":         logPath,
+								"content":           validationData,
 							})
 
 							sort.Slice(validations, func(i, j int) bool {

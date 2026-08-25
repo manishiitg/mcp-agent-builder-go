@@ -59,6 +59,58 @@ func TestHandleGetExecutionLogsReturnsSemanticStepLogs(t *testing.T) {
 	}
 }
 
+func TestHandleGetExecutionLogsReturnsAutomaticFinalValidation(t *testing.T) {
+	const workspacePath = "/workspace/Workflow/test"
+	workspace := httptest.NewServer(&mockWorkspaceAPI{files: map[string]string{
+		workspacePath + "/planning/plan.json": `{
+			"steps": [{"id":"compile-package","title":"Compile package","type":"message_sequence"}]
+		}`,
+		workspacePath + "/runs/iteration-0/default/logs/compile-package/execution/execution-attempt-1-iteration-2.json": `{
+			"execution_result":"Message sequence item: __automatic_final_validation__-repair-1 (user_message)"
+		}`,
+		workspacePath + "/runs/iteration-0/default/logs/compile-package/pre_validation_message-sequence-automatic-final-validation_execution_001_attempt_001.json": `{
+			"validation_phase":"message-sequence-automatic-final-validation",
+			"execution_attempt":1,
+			"validation_attempt":1,
+			"overall_pass":false,
+			"passed_checks":21,
+			"failed_checks":2,
+			"errors":[{"Message":"Required field was missing"}]
+		}`,
+	}})
+	t.Cleanup(workspace.Close)
+	t.Setenv("WORKSPACE_API_URL", workspace.URL)
+
+	request := httptest.NewRequest("GET", "/api/workflow/logs?workspace_path="+workspacePath+"&run_folder=iteration-0/default", nil)
+	response := httptest.NewRecorder()
+	(&StreamingAPI{}).handleGetExecutionLogs(response, request)
+	if response.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
+	}
+
+	var body struct {
+		Steps map[string]struct {
+			Validations []struct {
+				Attempt          int    `json:"attempt"`
+				Kind             string `json:"kind"`
+				Phase            string `json:"phase"`
+				ExecutionAttempt int    `json:"execution_attempt"`
+			} `json:"validations"`
+		} `json:"steps"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	validations := body.Steps["compile-package"].Validations
+	if len(validations) != 1 {
+		t.Fatalf("expected one automatic final validation, got %+v", validations)
+	}
+	got := validations[0]
+	if got.Attempt != 1 || got.Kind != "pre_validation" || got.Phase != "message-sequence-automatic-final-validation" || got.ExecutionAttempt != 1 {
+		t.Fatalf("unexpected automatic final validation metadata: %+v", got)
+	}
+}
+
 func executionLogFolder(path string, children ...virtualtools.WorkspaceFolderItem) virtualtools.WorkspaceFolderItem {
 	return virtualtools.WorkspaceFolderItem{
 		FilePath: path,
