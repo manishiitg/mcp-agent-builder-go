@@ -113,6 +113,28 @@ func TestIsExecutionOutputStepItemSupportsSemanticStepIDs(t *testing.T) {
 	}
 }
 
+func TestPopulateStepMetadataLinksPredefinedRouteToParent(t *testing.T) {
+	metadata := make(map[string]map[string]string)
+	populateStepMetadata([]map[string]interface{}{{
+		"id":    "reel-orchestrator",
+		"title": "Master Reel Orchestrator",
+		"type":  "todo_task",
+		"predefined_routes": []interface{}{map[string]interface{}{
+			"route_id": "build-reel",
+			"sub_agent_step": map[string]interface{}{
+				"id":          "build-reel",
+				"title":       "Build Reel",
+				"description": "Render the reel.",
+			},
+		}},
+	}}, metadata)
+
+	child := metadata["build-reel"]
+	if child["parent_step_id"] != "reel-orchestrator" || child["parent_step_title"] != "Master Reel Orchestrator" || child["route_id"] != "build-reel" {
+		t.Fatalf("expected parent and route metadata, got %+v", child)
+	}
+}
+
 func TestHandleGetExecutionLogsUsesMessageSequenceSessionStatus(t *testing.T) {
 	const workspacePath = "/workspace/Workflow/test"
 	workspace := httptest.NewServer(&mockWorkspaceAPI{files: map[string]string{

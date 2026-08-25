@@ -2349,6 +2349,20 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                               )}
                             </>
                           )}
+                          {stepLogs.description?.trim() && (
+                            <StepMetricChip title={`Authored step instructions: ${stepLogs.description.length.toLocaleString()} characters`}>
+                              <FileText className="h-3 w-3" />
+                              {stepLogs.description.length >= 1000
+                                ? `${(stepLogs.description.length / 1000).toFixed(stepLogs.description.length >= 10_000 ? 0 : 1)}k`
+                                : stepLogs.description.length} instr
+                            </StepMetricChip>
+                          )}
+                          {stepLogs.parent_step_title && (
+                            <StepMetricChip title={`This route was dispatched by ${stepLogs.parent_step_title}${stepLogs.route_id ? ` (${stepLogs.route_id})` : ''}`}>
+                              <Split className="h-3 w-3 text-sky-600 dark:text-sky-300" />
+                              ↳ {stepLogs.parent_step_title}
+                            </StepMetricChip>
+                          )}
                           <span className="whitespace-nowrap">
                             {stepLogs.executions.length} exec
                             {hasLearningSignal(stepLogs) && ' • learning'}

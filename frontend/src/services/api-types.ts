@@ -2027,6 +2027,9 @@ export interface StepExecutionLogs {
   type: string;
   title: string;
   description: string;
+  parent_step_id?: string;
+  parent_step_title?: string;
+  route_id?: string;
   success_criteria?: string;
   context_output?: string;  // Expected output filename
   learning_objective?: string;

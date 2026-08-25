@@ -3272,6 +3272,9 @@ func (api *StreamingAPI) handleGetExecutionLogs(w http.ResponseWriter, r *http.R
 			learningsAccess := ""
 			knowledgebaseAccess := ""
 			knowledgebaseContribution := ""
+			parentStepID := ""
+			parentStepTitle := ""
+			routeID := ""
 			if meta != nil {
 				if t := meta["title"]; t != "" {
 					title = t
@@ -3287,6 +3290,9 @@ func (api *StreamingAPI) handleGetExecutionLogs(w http.ResponseWriter, r *http.R
 				learningsAccess = meta["learnings_access"]
 				knowledgebaseAccess = meta["knowledgebase_access"]
 				knowledgebaseContribution = meta["knowledgebase_contribution"]
+				parentStepID = meta["parent_step_id"]
+				parentStepTitle = meta["parent_step_title"]
+				routeID = meta["route_id"]
 			}
 
 			stepsLogs[stepId] = map[string]interface{}{
@@ -3301,6 +3307,9 @@ func (api *StreamingAPI) handleGetExecutionLogs(w http.ResponseWriter, r *http.R
 				"learnings_access":           learningsAccess,
 				"knowledgebase_access":       knowledgebaseAccess,
 				"knowledgebase_contribution": knowledgebaseContribution,
+				"parent_step_id":             parentStepID,
+				"parent_step_title":          parentStepTitle,
+				"route_id":                   routeID,
 				"output_content":             nil, // Will be populated if output file exists
 				"artifacts":                  []map[string]interface{}{},
 				"validations":                []map[string]interface{}{},
@@ -4259,6 +4268,9 @@ func populateStepMetadata(steps []map[string]interface{}, metadata map[string]ma
 			"learnings_access":           learningsAccess,
 			"knowledgebase_access":       knowledgebaseAccess,
 			"knowledgebase_contribution": knowledgebaseContribution,
+			"parent_step_id":             "",
+			"parent_step_title":          "",
+			"route_id":                   "",
 		}
 
 		// Store metadata by multiple keys to ensure it's found
@@ -4274,6 +4286,7 @@ func populateStepMetadata(steps []map[string]interface{}, metadata map[string]ma
 					if subStep, ok := route["sub_agent_step"].(map[string]interface{}); ok {
 						subAgentKey := fmt.Sprintf("%s-sub-agent-%d", stepKey, j+1)
 						subId, _ := subStep["id"].(string)
+						routeID, _ := route["route_id"].(string)
 						subCriteria, _ := subStep["success_criteria"].(string)
 						subAgentConfigs, _ := subStep["agent_configs"].(map[string]interface{})
 						subMeta := map[string]string{
@@ -4286,6 +4299,9 @@ func populateStepMetadata(steps []map[string]interface{}, metadata map[string]ma
 							"learnings_access":           stringFromStepOrAgentConfig(subStep, subAgentConfigs, "learnings_access"),
 							"knowledgebase_access":       stringFromStepOrAgentConfig(subStep, subAgentConfigs, "knowledgebase_access"),
 							"knowledgebase_contribution": stringFromStepOrAgentConfig(subStep, subAgentConfigs, "knowledgebase_contribution"),
+							"parent_step_id":             id,
+							"parent_step_title":          title,
+							"route_id":                   routeID,
 						}
 						metadata[subAgentKey] = subMeta
 						if subId != "" {
