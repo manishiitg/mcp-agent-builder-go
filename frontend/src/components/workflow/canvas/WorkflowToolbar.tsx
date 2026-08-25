@@ -978,20 +978,24 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                   {(close) => (
                     <>
                       {workspaceViewDefinitions
+                        // Already shown as a quick-access icon -- listing it again here
+                        // too is pure duplication.
+                        .filter(([view]) => !quickWorkspaceViews.includes(view))
                         .map(([view, Icon, label]) => (
                         <CompactToolbarMenuItem
                           key={view}
                           icon={<Icon className="h-3.5 w-3.5" />}
                           label={label}
                           active={workflowWorkspaceView === view}
-                          trailingAction={DEFAULT_QUICK_WORKSPACE_VIEWS.includes(view)
-                            ? undefined
-                            : {
-                                label: pinnedWorkspaceViews.includes(view) ? 'Unpin from shortcuts' : 'Pin to shortcuts',
-                                icon: <Pin className={`h-3.5 w-3.5 ${pinnedWorkspaceViews.includes(view) ? 'fill-current' : ''}`} />,
-                                active: pinnedWorkspaceViews.includes(view),
-                                onClick: () => togglePinnedWorkspaceView(view),
-                              }}
+                          // Every item that survives the quickWorkspaceViews filter
+                          // above is by definition not in DEFAULT_QUICK_WORKSPACE_VIEWS
+                          // (a subset of it), so it's always pin-eligible here.
+                          trailingAction={{
+                            label: pinnedWorkspaceViews.includes(view) ? 'Unpin from shortcuts' : 'Pin to shortcuts',
+                            icon: <Pin className={`h-3.5 w-3.5 ${pinnedWorkspaceViews.includes(view) ? 'fill-current' : ''}`} />,
+                            active: pinnedWorkspaceViews.includes(view),
+                            onClick: () => togglePinnedWorkspaceView(view),
+                          }}
                           onClick={() => {
                             openWorkspaceView(view)
                             close()
