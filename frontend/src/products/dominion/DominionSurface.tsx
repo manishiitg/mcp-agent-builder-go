@@ -10,6 +10,7 @@ import { useModeStore } from '../../stores/useModeStore'
 import { restoreSession } from '../../utils/sessionRestore'
 import { AddStockDialog } from './AddStockDialog'
 import { ConfirmDialog } from './ConfirmDialog'
+import { DailyActions } from './DailyActions'
 import { loadEquityCurve, loadLatestSnapshot } from './adapters/portfolio'
 import { loadOpenPositions } from './adapters/positions'
 import { loadRecentTradeIdeas } from './adapters/signals'
@@ -311,6 +312,10 @@ export function DominionSurface() {
                   </div>
                 </div>
               </section>
+
+              {/* Daily Action -- plain-language "what did this workflow actually do"
+                  record: the latest trading session's closed trades and new signals. */}
+              <DailyActions outcomes={outcomes} ideas={ideas} />
 
               {/* Stocks -- everything grouped per symbol: tier, signal, position, recent grades.
                   Click a row for full history; the trash icon removes it from the watchlist. */}
