@@ -126,6 +126,42 @@ func productEnabled(product string) bool {
 	return false
 }
 
+// isSingleProductServerDeployment reports whether this server instance is
+// dedicated to exactly one product surface (Video Studio, Dominion, Finance)
+// via AGENT_PRODUCTS, as opposed to the shared desktop/multi-product server
+// where AGENT_PRODUCTS is unset. Only a genuinely dedicated deployment is
+// eligible for the missing-Claude-Code-token refusal in handleQuery: on the
+// desktop app, falling back to the user's own locally logged-in `claude` CLI
+// is correct, intended behavior, not a bug to guard against.
+func isSingleProductServerDeployment() bool {
+	configured := strings.TrimSpace(os.Getenv("AGENT_PRODUCTS"))
+	if configured == "" {
+		return false
+	}
+	count := 0
+	for _, candidate := range strings.Split(configured, ",") {
+		if strings.TrimSpace(candidate) != "" {
+			count++
+		}
+	}
+	return count == 1
+}
+
+// claudeCodeTokenMissingForSingleProductDeployment reports whether handleQuery
+// must refuse this request: a dedicated single-product server deployment
+// (see isSingleProductServerDeployment) whose resolved provider is
+// claude-code but whose resolved product-profile credential carries no
+// Claude Code token.
+func claudeCodeTokenMissingForSingleProductDeployment(resolvedProfile *resolvedAgentProfile, finalProvider string) bool {
+	if resolvedProfile == nil || !strings.EqualFold(finalProvider, "claude-code") || !isSingleProductServerDeployment() {
+		return false
+	}
+	if resolvedProfile.APIKeys == nil || resolvedProfile.APIKeys.ClaudeCodeOAuthToken == nil {
+		return true
+	}
+	return strings.TrimSpace(*resolvedProfile.APIKeys.ClaudeCodeOAuthToken) == ""
+}
+
 func normalizeMCPBridgeCategory(name string) string {
 	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(name), "-", "_"))
 }
@@ -3358,6 +3394,20 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 		// Fall back to request defaults
 		finalProvider = req.Provider
 		finalModelID = req.ModelID
+	}
+
+	// A dedicated single-product server deployment (Video Studio, Dominion,
+	// Finance) resolving to the claude-code provider with no configured
+	// token must refuse loudly here, before the CLI process is ever spawned.
+	// Left unchecked, provider initialization falls back to "the CLI's own
+	// saved login": on a fresh HOME that hangs on an unattended interactive
+	// login screen nobody can answer; on a HOME shared with a prior `claude
+	// login` it silently authenticates as -- and bills -- that account
+	// instead. The desktop app (AGENT_PRODUCTS unset) is deliberately exempt:
+	// using the operator's own logged-in CLI there is correct, not a bug.
+	if claudeCodeTokenMissingForSingleProductDeployment(resolvedProfile, finalProvider) {
+		http.Error(w, "No Claude Code token configured for this deployment. Set CLAUDE_CODE_OAUTH_TOKEN before starting the service.", http.StatusBadRequest)
+		return
 	}
 
 	// Session config isn't persisted anymore — follow-up messages rely on the
