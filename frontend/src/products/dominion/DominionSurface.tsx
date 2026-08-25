@@ -3,6 +3,7 @@ import { MessageCircle, Plus, TrendingUp } from 'lucide-react'
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import ChatArea from '../../components/ChatArea'
 import { ProductSurfaceSwitcher } from '../../components/ProductSurfaceSwitcher'
+import AccountControl from '../../components/topbar/AccountControl'
 import { agentApi } from '../../services/api'
 import { useAppStore } from '../../stores/useAppStore'
 import { useChatStore, waitForChatStoreHydration } from '../../stores/useChatStore'
@@ -230,6 +231,9 @@ export function DominionSurface() {
     <div className="flex h-screen min-h-0 flex-col overflow-hidden bg-[#05070d]">
       <header className="flex h-[62px] shrink-0 items-center gap-4 border-b border-white/10 bg-[#05070d] px-4">
         <ProductSurfaceSwitcher />
+        <div className="ml-auto flex items-center gap-1">
+          <AccountControl />
+        </div>
       </header>
       <div className="flex min-h-0 flex-1">
         <aside className="flex w-[420px] shrink-0 flex-col border-r border-white/10 bg-[#070a12]">

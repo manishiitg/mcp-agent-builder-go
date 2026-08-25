@@ -62,11 +62,10 @@ function submitGuidedWorkflowCommand(
   )
 }
 
-// Pulse keeps two durable modules, but each has stable review-focus keys. These
-// commands deliberately select one focus without creating a second queue or a
-// special reviewer type: the normal Technical Review or Strategy Auditor still
-// performs its safety scan, records the usual typed receipt, and decides what
-// the evidence means.
+// These commands deliberately select one Technical Review focus without
+// creating a second queue or special reviewer type. Strategy remains one
+// holistic `/strategy-auditor` command: it chooses its own lens set from the
+// evidence, records the usual typed receipt, and decides what it means.
 const focusedPulseReviewCommands: CommandDefinition[] = [
   { command: 'pulse-review-execution-health', description: 'Review runtime reliability, tool behavior, retries, timeouts, and execution efficiency', kind: 'engineering-review', focus: 'execution_health', icon: <Activity className="w-4 h-4" /> },
   { command: 'plan-prompt-bloat', description: 'Review oversized and duplicated plan prompts, shared contracts, and safe consolidation options', kind: 'engineering-review', focus: 'plan_orchestration_integrity', icon: <GitBranch className="w-4 h-4" /> },
@@ -74,12 +73,6 @@ const focusedPulseReviewCommands: CommandDefinition[] = [
   { command: 'pulse-review-report-quality', description: 'Review report truthfulness, live-data wiring, accessibility, and performance', kind: 'engineering-review', focus: 'report_quality_truth', icon: <FileText className="w-4 h-4" /> },
   { command: 'pulse-review-evaluation-quality', description: 'Review evaluation truth, rubrics, validation, and reproducibility', kind: 'engineering-review', focus: 'evaluation_quality_truth', icon: <CheckCircle className="w-4 h-4" /> },
   { command: 'pulse-review-model-cost', description: 'Review model routing, tiers, latency, cost attribution, and provider fitness', kind: 'engineering-review', focus: 'model_cost_fitness', icon: <Bot className="w-4 h-4" /> },
-  { command: 'pulse-review-goal-measurement', description: 'Review whether success criteria, measurements, and evidence can prove goal progress', kind: 'strategy-auditor', focus: 'goal_measurement_validity', icon: <Target className="w-4 h-4" /> },
-  { command: 'pulse-review-strategy-effectiveness', description: 'Review whether the current strategy is working against the stated goal', kind: 'strategy-auditor', focus: 'strategy_effectiveness', icon: <Target className="w-4 h-4" /> },
-  { command: 'pulse-review-feedback-loops', description: 'Review feedback loops, selection bias, proxy optimization, and observation contamination', kind: 'strategy-auditor', focus: 'feedback_loops_bias', icon: <RefreshCw className="w-4 h-4" /> },
-  { command: 'pulse-review-concentration', description: 'Review concentration, saturation, and local-optimum risks', kind: 'strategy-auditor', focus: 'concentration_saturation', icon: <Layers className="w-4 h-4" /> },
-  { command: 'pulse-review-alternative-headroom', description: 'Review whether materially different approaches offer credible headroom', kind: 'strategy-auditor', focus: 'alternative_headroom', icon: <GitBranch className="w-4 h-4" /> },
-  { command: 'pulse-review-experiment-impact', description: 'Review experiment design, intervention impact, and causal evidence', kind: 'strategy-auditor', focus: 'experiment_impact', icon: <Activity className="w-4 h-4" /> },
 ].map(({ command, description, kind, focus, icon }) => ({
   command,
   description,

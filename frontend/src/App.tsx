@@ -831,6 +831,7 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
         <AuthWrapper>
+        <TooltipProvider>
         {productSurface === 'video-studio' ? (
           <Suspense fallback={<FileSurfaceFallback />}><VideoStudioSurface /></Suspense>
         ) : productSurface === 'finance' ? (
@@ -838,7 +839,7 @@ function App() {
         ) : productSurface === 'dominion' ? (
           <Suspense fallback={<FileSurfaceFallback />}><DominionSurface /></Suspense>
         ) : (
-        <TooltipProvider>
+        <>
         <UpdateProgressToast />
         <GlobalHumanFeedbackPrompt />
         <div className="h-screen bg-background flex">
@@ -882,8 +883,9 @@ function App() {
 
         </div>
 
-        </TooltipProvider>
+        </>
         )}
+        </TooltipProvider>
         </AuthWrapper>
       </ThemeProvider>
     </QueryClientProvider>

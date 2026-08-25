@@ -31,6 +31,7 @@ import { ConversationMarkdownRenderer } from '../../components/ui/MarkdownRender
 import { clampPanelWidth, loadStoredPanelWidth, saveStoredPanelWidth } from './panelWidth'
 import { videoStamp } from './videoStamp'
 import { ProductSurfaceSwitcher } from '../../components/ProductSurfaceSwitcher'
+import AccountControl from '../../components/topbar/AccountControl'
 import SecretsManagerModal from '../../components/secrets/SecretsManagerModal'
 import SecretSelectionDropdown from '../../components/secrets/SecretSelectionDropdown'
 import Workspace from '../../components/Workspace'
@@ -86,6 +87,7 @@ function VideoStudioHeader({ children, projectTabId }: { children?: ReactNode; p
         {children}
       </div>
       <div className="flex items-center gap-2">
+        <AccountControl />
         {projectTabId ? (
           <>
             <SecretSelectionDropdown
