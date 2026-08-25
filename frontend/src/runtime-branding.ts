@@ -19,15 +19,19 @@ function safeRuntimeAssetPath(value: unknown): string | null {
   return path
 }
 
+export function getRuntimeAppName(config: RuntimeBrandingConfig | null | undefined): string | null {
+  if (!config || typeof config !== 'object') return null
+  if (typeof config.appName !== 'string') return null
+  const appName = config.appName.trim()
+  if (!appName || appName.length > 120 || hasControlCharacters(appName)) return null
+  return appName
+}
+
 export function applyRuntimeBranding(config: RuntimeBrandingConfig | null | undefined, doc: Document = document) {
   if (!config || typeof config !== 'object') return
 
-  if (typeof config.appName === 'string') {
-    const appName = config.appName.trim()
-    if (appName && appName.length <= 120 && !hasControlCharacters(appName)) {
-      doc.title = appName
-    }
-  }
+  const appName = getRuntimeAppName(config)
+  if (appName) doc.title = appName
 
   const faviconUrl = safeRuntimeAssetPath(config.faviconUrl)
   if (!faviconUrl) return

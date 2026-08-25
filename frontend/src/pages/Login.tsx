@@ -4,9 +4,17 @@ import { Button } from '../components/ui/Button'
 import { Input } from '../components/ui/Input'
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '../components/ui/Card'
 import { Alert, AlertDescription } from '../components/ui/alert'
-import { Loader2, KeyRound, Mail, Lock, AlertCircle } from 'lucide-react'
+import { Loader2, KeyRound, Mail, User, Lock, AlertCircle } from 'lucide-react'
 import type { AuthProvider } from '../services/api'
 import { RunloopMark } from '../components/branding/RunloopLogo'
+import { getRuntimeAppName } from '../runtime-branding'
+
+const runtimeAppName =
+  getRuntimeAppName(
+    typeof window !== 'undefined'
+      ? (window as Window & { __APP_RUNTIME_CONFIG__?: { appName?: unknown } }).__APP_RUNTIME_CONFIG__
+      : undefined
+  ) ?? 'AgentWorks'
 
 // AWS Cognito icon (official mark)
 const CognitoIcon = () => (
@@ -124,6 +132,17 @@ export function Login() {
   const showCredentialsForm = selectedProvider &&
     credentialsProviders.some(p => p.name === selectedProvider)
 
+  // The credentials provider actually in effect right now -- either explicitly
+  // selected, or the sole credentials provider when there's nothing to choose
+  // between. Drives whether the identity field asks for an email or a plain
+  // username (the "simple" AUTH_USERS provider has no email at all).
+  const activeCredentialProviderName = showCredentialsForm
+    ? selectedProvider
+    : credentialsProviders.length === 1
+      ? credentialsProviders[0].name
+      : null
+  const isSimpleCredentialProvider = activeCredentialProviderName === 'simple'
+
   // Loading state
   if (!isMultiUserModeChecked) {
     return (
@@ -165,7 +184,7 @@ export function Login() {
           </div>
           <CardTitle className="text-2xl">Welcome Back</CardTitle>
           <CardDescription className="text-base">
-            Sign in to continue to AgentWorks
+            Sign in to continue to {runtimeAppName}
             {providers.length > 0 && (
               <span className="block text-xs text-muted-foreground/70 mt-1">
                 via {providers.map(p => (providerConfig[p.name]?.displayName || p.name)).join(', ')}
@@ -267,20 +286,24 @@ export function Login() {
               <div className="space-y-4">
                 <div className="space-y-2">
                   <label htmlFor="username" className="text-sm font-medium text-foreground">
-                    Email
+                    {isSimpleCredentialProvider ? 'Username' : 'Email'}
                   </label>
                   <div className="relative">
-                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                    {isSimpleCredentialProvider ? (
+                      <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                    ) : (
+                      <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                    )}
                     <Input
                       id="username"
                       name="username"
-                      type="email"
-                      autoComplete="email"
+                      type={isSimpleCredentialProvider ? 'text' : 'email'}
+                      autoComplete={isSimpleCredentialProvider ? 'username' : 'email'}
                       required
                       value={username}
                       onChange={(e) => setUsername(e.target.value)}
                       className="pl-10 h-11"
-                      placeholder="you@example.com"
+                      placeholder={isSimpleCredentialProvider ? 'Enter your username' : 'you@example.com'}
                     />
                   </div>
                 </div>
