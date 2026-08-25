@@ -1676,6 +1676,7 @@ func runServer(cmd *cobra.Command, args []string) {
 			log.Printf("Failed to sync visible Video Studio skills into existing projects: %v", err)
 		}
 		for _, profile := range videoproduct.BuiltinAgentProfiles() {
+			profile.Product = "video-studio"
 			if err := profileRegistry.RegisterProfile(profile); err != nil {
 				log.Fatalf("Failed to register Video Studio agent profile: %v", err)
 			}
@@ -1689,6 +1690,7 @@ func runServer(cmd *cobra.Command, args []string) {
 			log.Fatalf("Failed to register Finance skills: %v", err)
 		}
 		for _, profile := range financeproduct.BuiltinAgentProfiles() {
+			profile.Product = "finance"
 			if err := profileRegistry.RegisterProfile(profile); err != nil {
 				log.Fatalf("Failed to register Finance agent profile: %v", err)
 			}
@@ -1703,6 +1705,7 @@ func runServer(cmd *cobra.Command, args []string) {
 			log.Fatalf("Failed to register Dominion skills: %v", err)
 		}
 		for _, profile := range dominionproduct.BuiltinAgentProfiles() {
+			profile.Product = "dominion"
 			if err := profileRegistry.RegisterProfile(profile); err != nil {
 				log.Fatalf("Failed to register Dominion agent profile: %v", err)
 			}
@@ -3127,6 +3130,20 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, "Invalid agent profile request: "+err.Error(), http.StatusBadRequest)
 		return
+	}
+	// Per-user workflow access: the list endpoint already hides workflows a
+	// user isn't allowed to see, but that's UX only -- a user who already
+	// knows a workflow's folder name could still open it directly. This is
+	// the actual security boundary. Only the generic (profile-less)
+	// AgentWorks chat path opens a workflow this way; product surfaces like
+	// Dominion never point SelectedFolder at "Workflow/" themselves.
+	if strings.HasPrefix(req.SelectedFolder, "Workflow/") {
+		if manifest, exists, manifestErr := ReadWorkflowManifest(r.Context(), req.SelectedFolder); manifestErr == nil && exists {
+			if !userAllowedWorkflowID(GetUserFromContext(r.Context()), manifest.ID) {
+				http.Error(w, "You don't have access to this workflow", http.StatusForbidden)
+				return
+			}
+		}
 	}
 	// Scheduled/Chief requests may already carry the configured secret name at
 	// this point. Resolve it for backend delivery and strip it from agent env.

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   deploymentDefaultProductSurface,
   enabledProductSurfaces,
+  intersectAllowedProductSurfaces,
   isEnabledProductSurface,
   isSingleProductDeployment,
 } from './productSurfaceConfig'
@@ -31,5 +32,17 @@ describe('product surface deployment configuration', () => {
     expect(isEnabledProductSurface('finance')).toBe(false)
     expect(isEnabledProductSurface('dominion')).toBe(false)
     expect(isSingleProductDeployment()).toBe(false)
+  })
+})
+
+describe('intersectAllowedProductSurfaces', () => {
+  it('passes the deployment list through unchanged when the user is unrestricted', () => {
+    expect(intersectAllowedProductSurfaces(['dominion', 'agentworks'], null)).toEqual(['dominion', 'agentworks'])
+    expect(intersectAllowedProductSurfaces(['dominion', 'agentworks'], undefined)).toEqual(['dominion', 'agentworks'])
+    expect(intersectAllowedProductSurfaces(['dominion', 'agentworks'], [])).toEqual(['dominion', 'agentworks'])
+  })
+
+  it('narrows to the explicit per-user allowlist, case-insensitively', () => {
+    expect(intersectAllowedProductSurfaces(['dominion', 'agentworks'], ['Dominion'])).toEqual(['dominion'])
   })
 })

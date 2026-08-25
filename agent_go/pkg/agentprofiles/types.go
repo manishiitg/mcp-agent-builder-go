@@ -233,6 +233,13 @@ type Profile struct {
 	Runtime              RuntimePolicy    `json:"runtime" yaml:"runtime"`
 	BuiltIn              bool             `json:"built_in" yaml:"built_in"`
 	OwnerID              string           `json:"owner_id,omitempty" yaml:"owner_id,omitempty"`
+	// Product names which product surface this builtin profile belongs to
+	// (e.g. "dominion", "video-studio", "finance") -- set by each product's
+	// registration call in server.go, never by the product package itself.
+	// Empty for non-builtin profiles and for the generic, profile-less
+	// AgentWorks chat path. Used only to key per-user product access checks;
+	// it has no effect on tool/skill resolution.
+	Product string `json:"product,omitempty" yaml:"product,omitempty"`
 	// Scope declares whether this profile is bound to one project workspace
 	// (the default -- every profile before this field existed, including
 	// Video Studio, behaves this way) or operates globally across a user's

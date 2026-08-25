@@ -35,10 +35,12 @@ type UserInfo struct {
 	Username                string `json:"username"`
 	Email                   string `json:"email,omitempty"`
 	Provider                string `json:"provider,omitempty"`
-	WorkflowAccess          string `json:"workflow_access,omitempty"`
-	CanRunWorkflows         bool   `json:"can_run_workflows"`
-	CanWriteWorkflows       bool   `json:"can_write_workflows"`
-	CanManageWorkflowAccess bool   `json:"can_manage_workflow_access"`
+	WorkflowAccess          string   `json:"workflow_access,omitempty"`
+	CanRunWorkflows         bool     `json:"can_run_workflows"`
+	CanWriteWorkflows       bool     `json:"can_write_workflows"`
+	CanManageWorkflowAccess bool     `json:"can_manage_workflow_access"`
+	AllowedProducts         []string `json:"allowed_products,omitempty"`
+	AllowedWorkflowIDs      []string `json:"allowed_workflow_ids,omitempty"`
 }
 
 // AuthModeResponse represents the response for GET /api/auth/mode
@@ -530,6 +532,9 @@ func (api *StreamingAPI) handleGetCurrentUser(w http.ResponseWriter, r *http.Req
 		"is_bot_manager": isBotManager(user.Email),
 	}
 	for key, value := range workflowPermissionResponseFields(workflowPermissionInfoForClaims(user)) {
+		response[key] = value
+	}
+	for key, value := range productAccessResponseFields(user) {
 		response[key] = value
 	}
 	json.NewEncoder(w).Encode(response)

@@ -140,7 +140,7 @@ func resolveProfileRuntimeModel(runtime agentprofiles.RuntimePolicy, requestedPr
 // Use this wherever the profile is being consulted rather than entered. It
 // keeps the same authorization boundary: Resolve is what enforces ownership of
 // a non-built-in profile.
-func (api *StreamingAPI) lookupAgentProfileDefinition(req *QueryRequest, userID string) (*resolvedAgentProfile, error) {
+func (api *StreamingAPI) lookupAgentProfileDefinition(ctx context.Context, req *QueryRequest, userID string) (*resolvedAgentProfile, error) {
 	profileID := strings.TrimSpace(req.AgentProfileID)
 	if profileID == "" {
 		return nil, nil
@@ -151,6 +151,9 @@ func (api *StreamingAPI) lookupAgentProfileDefinition(req *QueryRequest, userID 
 	profile, err := api.agentProfiles.Resolve(profileID, req.AgentProfileVersion, userID)
 	if err != nil {
 		return nil, err
+	}
+	if !userAllowedProduct(GetUserFromContext(ctx), profile.Product) {
+		return nil, fmt.Errorf("you don't have access to the %q product", profile.Product)
 	}
 	return &resolvedAgentProfile{Definition: profile}, nil
 }
@@ -176,6 +179,9 @@ func (api *StreamingAPI) resolveAgentProfileForQuery(ctx context.Context, req *Q
 	profile, err := api.agentProfiles.Resolve(profileID, req.AgentProfileVersion, userID)
 	if err != nil {
 		return nil, err
+	}
+	if !userAllowedProduct(GetUserFromContext(ctx), profile.Product) {
+		return nil, fmt.Errorf("you don't have access to the %q product", profile.Product)
 	}
 	isGlobalScope := profile.EffectiveScope() == agentprofiles.ProfileScopeGlobal
 
