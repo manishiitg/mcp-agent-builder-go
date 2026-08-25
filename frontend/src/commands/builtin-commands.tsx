@@ -68,7 +68,7 @@ function submitGuidedWorkflowCommand(
 // evidence, records the usual typed receipt, and decides what it means.
 const focusedPulseReviewCommands: CommandDefinition[] = [
   { command: 'pulse-review-execution-health', description: 'Review runtime reliability, tool behavior, retries, timeouts, and execution efficiency', kind: 'engineering-review', focus: 'execution_health', icon: <Activity className="w-4 h-4" /> },
-  { command: 'plan-prompt-bloat', description: 'Review oversized and duplicated plan prompts, shared contracts, and safe consolidation options', kind: 'engineering-review', focus: 'plan_orchestration_integrity', icon: <GitBranch className="w-4 h-4" /> },
+  { command: 'plan-prompt-bloat', description: 'Pulse review: oversized and duplicated plan prompts, shared contracts, and safe consolidation options', kind: 'engineering-review', focus: 'plan_orchestration_integrity', icon: <GitBranch className="w-4 h-4" /> },
   { command: 'pulse-review-validation-contract', description: 'Review whether pre-validation is minimal, meaningful, and protecting real workflow outcomes', kind: 'engineering-review', focus: 'validation_contract_health', icon: <CheckCircle className="w-4 h-4" /> },
   { command: 'pulse-review-report-quality', description: 'Review report truthfulness, live-data wiring, accessibility, and performance', kind: 'engineering-review', focus: 'report_quality_truth', icon: <FileText className="w-4 h-4" /> },
   { command: 'pulse-review-evaluation-quality', description: 'Review evaluation truth, rubrics, validation, and reproducibility', kind: 'engineering-review', focus: 'evaluation_quality_truth', icon: <CheckCircle className="w-4 h-4" /> },

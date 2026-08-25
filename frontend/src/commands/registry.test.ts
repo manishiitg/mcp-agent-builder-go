@@ -36,6 +36,12 @@ describe('Pulse slash commands', () => {
     }
   })
 
+  it('makes prompt-bloat review discoverable when searching Pulse commands', () => {
+    const promptBloat = findCommand('plan-prompt-bloat', 'workflow')
+
+    expect(promptBloat?.description.toLowerCase()).toContain('pulse review')
+  })
+
   it('runs backlog consolidation through typed Pulse lifecycle tools only', () => {
     const command = findCommand('pulse-backlog', 'workflow')
     let submitted = ''
