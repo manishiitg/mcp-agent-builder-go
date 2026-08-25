@@ -196,8 +196,18 @@ verify:
 curl -fsSI https://trader.tectonicmarkets.com/login
 ```
 
-The public site must show only Dominion. It must not expose AgentWorks, Video
-Studio, Finance, workflow execution, or unrelated server data.
+By default the public site must show only Dominion and must not expose Video
+Studio, Finance, or unrelated server data. `AGENT_PRODUCTS=dominion` alone
+already guarantees this: it's process-wide and never registers Video
+Studio/Finance profiles on this host at all, regardless of frontend config.
+
+AgentWorks (the generic, profile-less workflow builder) is the one
+deliberate exception: `frontend/current/runtime-config.js`'s
+`enabledProductSurfaces` lists `"agentworks"` alongside `"dominion"` so it
+can render for a user who is explicitly granted it, but every logged-in user
+who is NOT granted it (the default, e.g. `john`) never sees or can reach it
+— see `config/user-product-access.json` below. Confirm this per-user
+boundary after any change here, not just that the page loads.
 
 ## Current bootstrap state
 
@@ -213,9 +223,21 @@ Live on the target host, first deployed 2026-08-24:
   `systemd --user` units (`~/.config/systemd/user/`, not `/etc/systemd/system/`
   — no root needed for the app services themselves), enabled and running
 - `Workflow/tectonicusadaytrading/` transferred in full to
-  `/srv/dominion/data/docs/Workflow/tectonicusadaytrading/`
+  `/srv/dominion/data/docs/Workflow/tectonicusadaytrading/` (its
+  `workflow.json` `id` is `wf_36021393` — the folder name and the manifest
+  ID are different strings; always confirm the real ID via
+  `GET /api/workflows/manifests` rather than assuming they match)
 - Caddy hostname block added for `trader.tectonicmarkets.com` (root step),
   cert obtained via `tls-alpn-01`, public HTTPS verified
+- Per-user product/workflow access control added 2026-08-25:
+  `frontend/current/runtime-config.js`'s `enabledProductSurfaces` widened to
+  `["dominion", "agentworks"]`, and `config/user-product-access.json`
+  written granting `manish` `products: ["dominion", "agentworks"]` scoped to
+  `workflow_ids: ["wf_36021393"]`, and restricting `john` to
+  `products: ["dominion"]`. A user with no entry in that file is
+  unrestricted by design (see `agent_go/cmd/server/user_product_access.go`)
+  — every user this deployment creates going forward needs an explicit
+  entry to stay scoped the way this doc describes.
 
 Known follow-up, not yet done:
 
