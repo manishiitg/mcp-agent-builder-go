@@ -122,8 +122,36 @@ host. A release contains:
 - `dominion-workspace` (workspace API, built for Linux amd64)
 - `mcpbridge`
 - `dominion-gateway`
+- `video-studio-landlock-runner` (yes, that literal filename regardless of
+  product — see below), built from `workspace/cmd/landlock-runner`
 - the built frontend with a runtime configuration exposing only `dominion`
 - `mcp_servers_dominion.json` with an empty `mcpServers` object
+
+### The Landlock launcher is required, not optional (PLAT-118)
+
+`dominion-workspace` resolves its shell sandbox launcher by a hardcoded name,
+`video-studio-landlock-runner` (`workspace/security/landlock_policy.go`),
+first next to its own binary (`filepath.Dir(executable)`), then on `PATH`
+(`exec.LookPath`) — checked regardless of which product is actually running.
+Without it, PLAT-118's fail-closed design means `execute_shell_command`
+refuses every call with `SANDBOX_UNAVAILABLE` rather than running
+unsandboxed — confirmed live: a fresh Dominion deploy's `/health` reported
+`shell_sandbox.available=false`, and the agent's real tool call (Dominion's
+only path to its own custom tools is `execute_shell_command` + curl, per
+this profile's own product.yaml) failed with "Landlock launcher not found."
+
+Build it alongside the other four binaries and place it in the same `bin/`
+directory as `dominion-workspace`:
+
+```bash
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build \
+  -o releases/<release-id>/bin/video-studio-landlock-runner \
+  ./workspace/cmd/landlock-runner
+```
+
+Restart `dominion-workspace` after adding it, then confirm via
+`curl http://127.0.0.1:21001/health` that `shell_sandbox.available=true` and
+`shell_sandbox.backend=landlock` before considering a release complete.
 
 The `dominion` account owns Node, Claude Code, and its tool cache under
 `/srv/dominion/tools` and `/srv/dominion/home`. No application process runs as
