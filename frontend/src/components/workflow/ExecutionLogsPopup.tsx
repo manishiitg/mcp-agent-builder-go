@@ -276,6 +276,10 @@ const getExecutionOrigin = (execution: unknown, validations: unknown[], plannedM
   const result = typeof content?.execution_result === 'string' ? content.execution_result : ''
   const itemMatch = result.match(/^Message sequence item:\s*([^\s(]+)\s*\(/m)
   const itemID = itemMatch?.[1] || ''
+  const plannedItem = plannedMessages
+    .map(asRecord)
+    .find(item => item?.id === itemID)
+  const plannedMessage = typeof plannedItem?.message === 'string' ? plannedItem.message : undefined
   const repairMatch = itemID.match(/^__automatic_final_validation__-repair-(\d+)$/)
 
   if (repairMatch) {
@@ -309,8 +313,11 @@ const getExecutionOrigin = (execution: unknown, validations: unknown[], plannedM
   if (itemID.includes('reflection')) {
     return {
       label: 'Message-sequence reflection',
-      detail: 'This is the sequence’s closing reflection turn, not a workflow retry or another orchestrator dispatch.',
+      detail: plannedMessage
+        ? 'This is the sequence’s closing reflection turn. The planned instruction is shown below.'
+        : 'This is the sequence’s closing reflection turn, not a workflow retry or another orchestrator dispatch. Its exact sent prompt is available when you expand this entry.',
       className: 'border-teal-500/25 bg-teal-500/10 text-teal-700 dark:text-teal-300',
+      plannedMessage,
     }
   }
 
@@ -324,10 +331,6 @@ const getExecutionOrigin = (execution: unknown, validations: unknown[], plannedM
   }
 
   if (itemID) {
-    const plannedItem = plannedMessages
-      .map(asRecord)
-      .find(item => item?.id === itemID)
-    const plannedMessage = typeof plannedItem?.message === 'string' ? plannedItem.message : undefined
     return {
       label: plannedMessage ? 'Planned sequence item' : 'Recorded sequence item',
       detail: plannedMessage
