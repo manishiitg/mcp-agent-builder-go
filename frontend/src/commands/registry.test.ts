@@ -15,11 +15,16 @@ describe('Pulse slash commands', () => {
     const workflowCommands = getCommands('workflow', 'workshop').map(command => command.command)
     const orgCommands = getCommands('multi-agent').map(command => command.command)
 
-    for (const command of ['pulse', 'pulse-backlog', 'pulse-review', 'strategy-auditor', 'pulse-fixer', 'goal-advisor']) {
+    for (const command of [
+      'pulse', 'pulse-backlog', 'pulse-review', 'pulse-fixer', 'goal-advisor',
+      'pulse-review-knowledge', 'pulse-review-learnings', 'pulse-review-database', 'pulse-review-report', 'pulse-review-evaluation',
+      'pulse-review-execution-health', 'pulse-review-plan-orchestration', 'pulse-review-stores', 'pulse-review-report-quality', 'pulse-review-evaluation-quality', 'pulse-review-model-cost',
+      'pulse-review-goal-measurement', 'pulse-review-strategy-effectiveness', 'pulse-review-feedback-loops', 'pulse-review-concentration', 'pulse-review-alternative-headroom', 'pulse-review-experiment-impact',
+    ]) {
       expect(workflowCommands).toContain(command)
       expect(orgCommands).not.toContain(command)
     }
-    for (const retiredCommand of ['bug-review', 'review-speed', 'review-cost', 'llm-ops-review', 'ops-review', 'engineering-review', 'specialize-advisors', 'pulse-setup']) {
+    for (const retiredCommand of ['bug-review', 'review-speed', 'review-cost', 'llm-ops-review', 'ops-review', 'engineering-review', 'specialize-advisors', 'pulse-setup', 'improve-knowledge', 'improve-learnings', 'improve-database', 'improve-report', 'improve-evaluation']) {
       expect(workflowCommands).not.toContain(retiredCommand)
     }
   })
@@ -74,6 +79,32 @@ describe('Pulse slash commands', () => {
     expect(submitted).toContain('BACKGROUND task')
 		expect(submitted).toContain('completion_mode="present_result"')
     expect(submitted).toContain('iteration-9/default')
+  })
+
+  it('routes each manual focus through its canonical Pulse review module', () => {
+    const technical = findCommand('pulse-review-execution-health', 'workflow')
+    const strategic = findCommand('pulse-review-feedback-loops', 'workflow')
+    let submitted = ''
+
+    technical?.execute({
+      beforeSlash: 'check the newest retry spike',
+      onSubmit: (message: string) => { submitted = message },
+      workshopMode: 'workshop',
+      getWorkflowStore: () => ({ selectedRunFolder: 'iteration-9/default' }),
+    } as CommandContext)
+    expect(submitted).toContain('kind=\\"engineering-review\\"')
+    expect(submitted).toContain('Manual Pulse review focus: execution_health')
+    expect(submitted).toContain('required_pulse_review_modules=["technical_review"]')
+
+    strategic?.execute({
+      beforeSlash: '',
+      onSubmit: (message: string) => { submitted = message },
+      workshopMode: 'workshop',
+      getWorkflowStore: () => ({ selectedRunFolder: 'iteration-9/default' }),
+    } as CommandContext)
+    expect(submitted).toContain('kind=\\"strategy-auditor\\"')
+    expect(submitted).toContain('Manual Pulse review focus: feedback_loops_bias')
+    expect(submitted).toContain('required_pulse_review_modules=["strategic_review"]')
   })
 
   it('runs Strategy Auditor as a background guided review anchored to the selected run', () => {
