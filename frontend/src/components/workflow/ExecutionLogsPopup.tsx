@@ -505,6 +505,13 @@ const formatDuration = (durationMs: number): string => {
   return `${seconds}s`
 }
 
+const formatStepStartedAt = (timestampMs: number): string => new Intl.DateTimeFormat(undefined, {
+  month: 'short',
+  day: 'numeric',
+  hour: 'numeric',
+  minute: '2-digit',
+}).format(new Date(timestampMs))
+
 const addCallTokens = (metrics: StepMetrics, call: LogRecord) => {
   metrics.inputTokens += asNumber(call.prompt_tokens)
   metrics.outputTokens += asNumber(call.completion_tokens)
@@ -2272,6 +2279,7 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                   const nestingClass = getStepNestingClass(stepId)
                   const stepMetrics = getStepMetrics(stepLogs.executions || [])
                   const showMetrics = hasStepMetrics(stepMetrics)
+                  const stepStartedAtMs = getStepFirstActivityMs(stepLogs)
 
                   const stepStatus = getStepStatus(stepLogs)
 
@@ -2348,6 +2356,12 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                                 </StepMetricChip>
                               )}
                             </>
+                          )}
+                          {stepStartedAtMs > 0 && (
+                            <StepMetricChip title={`First recorded activity: ${new Date(stepStartedAtMs).toLocaleString()}`}>
+                              <Clock className="h-3 w-3" />
+                              {formatStepStartedAt(stepStartedAtMs)}
+                            </StepMetricChip>
                           )}
                           {stepLogs.description?.trim() && (
                             <StepMetricChip title={`Authored step instructions: ${stepLogs.description.length.toLocaleString()} characters`}>
