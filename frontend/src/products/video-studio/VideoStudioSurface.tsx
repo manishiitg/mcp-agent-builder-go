@@ -791,7 +791,6 @@ function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: 
                 contentRenderer={VideoStudioConversation}
                 inputVariant="product"
                 fullTurnStreaming
-                showConversationUsage
                 hideRuntimeStatus
                 showNewChatAction
               />
