@@ -11,20 +11,28 @@ describe('Pulse slash commands', () => {
     expect(orgCommand).toBeUndefined()
   })
 
-  it('exposes manual Pulse modules only in workflow workshop mode', () => {
+  it('exposes manual Pulse modules in workflow workshop mode', () => {
     const workflowCommands = getCommands('workflow', 'workshop').map(command => command.command)
     const orgCommands = getCommands('multi-agent').map(command => command.command)
 
     for (const command of [
       'pulse', 'pulse-backlog', 'pulse-review', 'pulse-fixer', 'goal-advisor',
       'pulse-review-knowledge', 'pulse-review-learnings', 'pulse-review-database',
-      'pulse-review-execution-health', 'plan-prompt-bloat', 'pulse-review-report-quality', 'pulse-review-evaluation-quality', 'pulse-review-model-cost',
+      'pulse-review-execution-health', 'plan-prompt-bloat', 'pulse-review-validation-contract', 'pulse-review-report-quality', 'pulse-review-evaluation-quality', 'pulse-review-model-cost',
     ]) {
       expect(workflowCommands).toContain(command)
       expect(orgCommands).not.toContain(command)
     }
     for (const retiredCommand of ['bug-review', 'review-speed', 'review-cost', 'llm-ops-review', 'ops-review', 'engineering-review', 'specialize-advisors', 'pulse-setup', 'improve-knowledge', 'improve-learnings', 'improve-database', 'improve-report', 'improve-evaluation', 'pulse-review-stores', 'pulse-review-report', 'pulse-review-evaluation']) {
       expect(workflowCommands).not.toContain(retiredCommand)
+    }
+  })
+
+  it('keeps focused Pulse reviews discoverable from the execution-log run view', () => {
+    const runCommands = getCommands('workflow', 'run').map(command => command.command)
+
+    for (const command of ['pulse-review-execution-health', 'plan-prompt-bloat', 'pulse-review-validation-contract']) {
+      expect(runCommands).toContain(command)
     }
   })
 
