@@ -50,12 +50,12 @@ import { useCommandDialogStore } from '../../../stores/useCommandDialogStore'
 import { agentApi } from '../../../services/api'
 import { schedulerApi } from '../../../api/scheduler'
 import WorkflowBackupPopup from '../WorkflowBackupPopup'
-import { getBackupDotClass, formatBackupStateLabel } from '../backupStatus'
+import { getBackupDotClass } from '../backupStatus'
 import WorkflowPublishPopup from '../WorkflowPublishPopup'
-import { getPublishDotClass, formatPublishStateLabel } from '../publishStatus'
+import { getPublishDotClass } from '../publishStatus'
 import WorkflowNotificationPopup from '../WorkflowNotificationPopup'
 import { PulseWorkspace } from '../PulseWorkspace'
-import { formatNotificationStateLabel, getNotificationDotClass } from '../notificationStatus'
+import { getNotificationDotClass } from '../notificationStatus'
 import { loadWorkflowNotificationInfo, type WorkflowNotificationState } from '../../../services/workflow-notifications'
 import WorkflowAccessPopup from '../WorkflowAccessPopup'
 import WorkflowScheduleRunsPanel from '../../scheduler/WorkflowScheduleRunsPanel'
@@ -82,7 +82,7 @@ const WORKFLOW_SCHEDULE_TOOLBAR_LIMIT = 10_000
 type WorkspaceView = 'flow' | 'report' | 'files' | 'costs' | 'execution-logs' | 'learnings' | 'knowledgebase' | 'database'
 
 // These remain stable until the user explicitly pins another destination.
-const DEFAULT_QUICK_WORKSPACE_VIEWS: WorkspaceView[] = ['report', 'costs', 'flow']
+const DEFAULT_QUICK_WORKSPACE_VIEWS: WorkspaceView[] = ['report', 'costs', 'flow', 'execution-logs', 'learnings']
 const WORKSPACE_VIEW_IDS = new Set<WorkspaceView>([
   'report', 'flow', 'files', 'costs', 'execution-logs', 'learnings', 'knowledgebase', 'database',
 ])
@@ -1144,58 +1144,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                 </TooltipTrigger>
                 <TooltipContent side="bottom"><p>Run Pulse on the latest retained run</p></TooltipContent>
               </Tooltip>
-              <CompactToolbarMenu
-                label="Automation operations"
-                icon={<MoreHorizontal className="h-3.5 w-3.5" />}
-              >
-                  {(close) => (
-                    <>
-                    <CompactToolbarMenuItem
-                      icon={(
-                        <span className="relative">
-                          <Cloud className="h-3.5 w-3.5" />
-                          <span className={`absolute -right-1 -top-1 h-1.5 w-1.5 rounded-full border border-background ${getBackupDotClass(backupState)}`} />
-                        </span>
-                      )}
-                      label="Backup"
-                      detail={formatBackupStateLabel(backupState)}
-                      onClick={() => {
-                        setShowBackupPopup(true)
-                        close()
-                      }}
-                    />
-                    <CompactToolbarMenuItem
-                      icon={(
-                        <span className="relative">
-                          <Globe className="h-3.5 w-3.5" />
-                          <span className={`absolute -right-1 -top-1 h-1.5 w-1.5 rounded-full border border-background ${getPublishDotClass(publishState)}`} />
-                        </span>
-                      )}
-                      label="Publish"
-                      detail={formatPublishStateLabel(publishState)}
-                      onClick={() => {
-                        setShowPublishPopup(true)
-                        close()
-                      }}
-                    />
-                    <CompactToolbarMenuItem
-                      icon={(
-                        <span className="relative">
-                          <BellRing className="h-3.5 w-3.5" />
-                          <span className={`absolute -right-1 -top-1 h-1.5 w-1.5 rounded-full border border-background ${getNotificationDotClass(notificationState)}`} />
-                        </span>
-                      )}
-                      label="Notifications"
-                      data-testid="workflow-notification-settings-button"
-                      detail={formatNotificationStateLabel(notificationState)}
-                      onClick={() => {
-                        setShowNotifications(true)
-                        close()
-                      }}
-                    />
-                  </>
-                )}
-              </CompactToolbarMenu>
             </div>
           )}
 
@@ -1357,6 +1305,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                 <span className="h-4 w-px bg-border" aria-hidden="true" />
                 <button
                   type="button"
+                  data-testid="workflow-notification-settings-button"
                   onClick={() => { setShowMonitorHelp(false); setShowNotifications(true) }}
                   className="relative inline-flex h-full items-center gap-1.5 px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                 >
