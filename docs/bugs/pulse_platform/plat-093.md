@@ -79,6 +79,7 @@ edits, so upgrades go first.
 | 2026-08-20 | Require `validate_plan_change` after structural decisions. | The first flattening repair changed control flow but left stale allocator paths, incomplete dependencies, and obsolete identifiers. The agent still chooses the design; the typed validator proves the invariants it declares. |
 | 2026-08-20 | Link measurable applied decisions to Pulse impact using `human_input_id`, and show the joined lifecycle in the Pulse UI. | `outcome_summary` already records the action and the impact ledger already records interventions and assessments. Joining those canonical records avoids a second UI-only status and lets users see decision → action → later measured result. Rejections and non-measurable administrative changes do not fabricate impact. |
 | 2026-08-25 | Replace generic prose-driven application with reviewer-authored `apply_contract` routing. | Direct setting changes can still apply before the run, but prompt/plan/route/validation/database/tool/cross-artifact changes get a dedicated Targeted Fixer. Unknown legacy prose is not auto-applied. |
+| 2026-08-25 | Make approved Targeted Fixer handoffs mandatory intake for manual `/pulse-fixer`. | A manual Fixer previously selected only `repair_eligible` backlog entries, while an approved decision's linked finding remained `awaiting_user`; it could therefore fix unrelated work and skip the approval. The new durable intake tool resolves answered targeted decisions to their linked PUL issue and makes that bundle first. |
 
 Safety boundaries, all pinned by tests:
 
@@ -135,6 +136,19 @@ the scheduler does not infer a repair from keywords. The reviewer that created
 the decision supplies the durable, typed routing contract instead. A narrow
 one-time migration assigns the proven prompt-contract-consolidation namespace
 to the Targeted Fixer; all other legacy prose stays manual.
+
+### Manual Fixer parity
+
+The same contract now applies when the operator deliberately runs
+`/pulse-fixer`, rather than waiting for a schedule. At startup the command
+reads `list_approved_fixer_decisions` once. Every returned `targeted_fixer` +
+`approve` decision is mandatory first intake, even while its linked finding is
+still `awaiting_user` and therefore absent from the ordinary repair-eligible
+queue. The tool resolves the linked public PUL id from the durable
+`awaiting_user` event, so a reviewer can create the human decision before the
+finding has its PUL id. The Fixer then reads the exact decision and exact PUL
+record, applies only that scope, and leaves the decision unconsumed if proof
+does not pass. It must not substitute other eligible repairs for that handoff.
 
 ## 2026-08-20 live regression: safe proof was mistaken for future evidence
 
@@ -211,6 +225,9 @@ decision-specific fixture.
   that workflow, not after it, by the contract-authorized path.
 - A failed repair follows its explicit policy: normally it leaves the verified
   old plan and continues; only `block_run` prevents the run.
+- Manual `/pulse-fixer` selects an approved Targeted Fixer handoff before any
+  ordinary eligible repair; approval cannot be skipped by its `awaiting_user`
+  lifecycle label.
 - An ordinary run with no answered decisions runs no extra turn.
 - Legacy prose and external-wait decisions never create guessed pre-run edits.
 - Applied decisions show the truthful action immediately and, when measurable,

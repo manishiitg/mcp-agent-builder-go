@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/gorilla/mux"
+	step_based_workflow "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
 )
 
 func TestNormalizeReportHumanInputSourceMergesLegacyAdvisorIdentity(t *testing.T) {
@@ -170,6 +171,60 @@ func TestReportHumanInputPersistsStructuredApplyContract(t *testing.T) {
 		InputID: "bad-contract", Question: "Bad?", ApplyContract: ReportHumanInputApplyContract{Mode: "targeted_fixer"},
 	}); err == nil || !strings.Contains(err.Error(), "approved_scope") {
 		t.Fatalf("targeted fixer without scope error = %v", err)
+	}
+}
+
+func TestApprovedTargetedFixerCandidatesResolveLinkedFinding(t *testing.T) {
+	inputs := []ReportHumanInput{
+		{ID: "approved", WorkspacePath: "Workflow/social-media", Status: "answered", SelectedOptionID: "approve", ApplyContract: ReportHumanInputApplyContract{Mode: "targeted_fixer", ApprovedScope: "Extract one contract."}},
+		{ID: "rejected", WorkspacePath: "Workflow/social-media", Status: "answered", SelectedOptionID: "reject", ApplyContract: ReportHumanInputApplyContract{Mode: "targeted_fixer", ApprovedScope: "Do not apply."}},
+		{ID: "legacy", WorkspacePath: "Workflow/social-media", Status: "answered", SelectedOptionID: "approve"},
+	}
+	finding := step_based_workflow.PulseFindingLifecycle{
+		Fingerprint: "55be3473d3d1fc2c", StepID: "technical_review", Phase: "review", Text: "Shared prompt contract is duplicated.",
+		Events: []step_based_workflow.PulseFindingEvent{{EventType: "awaiting_user", Metadata: map[string]interface{}{"human_input_id": "approved"}}},
+	}
+	candidates := reportHumanInputFixerCandidates(inputs, []step_based_workflow.PulseFindingLifecycle{finding})
+	if len(candidates) != 1 {
+		t.Fatalf("candidates=%+v, want only approved targeted handoff", candidates)
+	}
+	if candidates[0].InputID != "approved" || candidates[0].IssueID != step_based_workflow.NewPulseIssue(finding).ID {
+		t.Fatalf("candidate=%+v, want resolved approved finding", candidates[0])
+	}
+}
+
+func TestListApprovedFixerDecisionsToolReadsOnlyExplicitApprovals(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+	workspacePath := "Workflow/fixer-intake"
+	if _, err := createReportHumanInput(ctx, workspacePath, ReportHumanInputCreateRequest{
+		InputID: "approved", Question: "Apply prompt cleanup?", Options: []ReportHumanInputOption{{ID: "approve", Title: "Approve"}},
+		ApplyContract: ReportHumanInputApplyContract{Mode: "targeted_fixer", ApprovedScope: "Extract one shared contract."},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := createReportHumanInput(ctx, workspacePath, ReportHumanInputCreateRequest{
+		InputID: "direct", Question: "Apply setting?", Options: []ReportHumanInputOption{{ID: "approve", Title: "Approve"}},
+		ApplyContract: ReportHumanInputApplyContract{Mode: "direct_apply"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, inputID := range []string{"approved", "direct"} {
+		if _, err := answerReportHumanInput(ctx, workspacePath, inputID, ReportHumanInputAnswerRequest{SelectedOptionID: "approve", AnsweredBy: "user"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, executors, categories := createReportHumanInputTools()
+	if categories["list_approved_fixer_decisions"] != "human_tools" {
+		t.Fatalf("fixer intake category=%q", categories["list_approved_fixer_decisions"])
+	}
+	list, ok := executors["list_approved_fixer_decisions"].(func(context.Context, map[string]interface{}) (string, error))
+	if !ok {
+		t.Fatal("approved Fixer intake tool is missing")
+	}
+	result, err := list(ctx, map[string]interface{}{"workspace_path": workspacePath})
+	if err != nil || !strings.Contains(result, `"input_id":"approved"`) || strings.Contains(result, `"input_id":"direct"`) {
+		t.Fatalf("fixer intake result=%s err=%v", result, err)
 	}
 }
 
