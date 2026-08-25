@@ -1,0 +1,293 @@
+// Package pulseintake turns durable workflow evidence into small, typed review
+// leads. It does not create Pulse findings, choose a repair, or block a run:
+// those decisions remain with Gate and the relevant reviewer.
+package pulseintake
+
+import (
+	"encoding/json"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/fsutil"
+)
+
+const (
+	DetectorRuntime          = "runtime_artifacts"
+	RuntimeDetectorVersion   = "runtime-artifacts/v1"
+	CoverageVerified         = "verified"
+	CoveragePartial          = "partial"
+	CoverageNotInstrumented  = "not_instrumented"
+	CoverageUnavailable      = "unavailable"
+	maxRetainedRunsToInspect = 20
+	severityHigh             = "high"
+	severityMedium           = "medium"
+)
+
+// Finding is a deterministic fact for Gate to route to an agentic review. It
+// is intentionally not a Pulse issue: the reviewer decides whether the fact
+// matters, is a known/recovered failure, or warrants a durable finding.
+type Finding struct {
+	Kind      string `json:"kind"`
+	Severity  string `json:"severity"`
+	Subject   string `json:"subject"`
+	Detail    string `json:"detail"`
+	Evidence  string `json:"evidence"`
+	RunFolder string `json:"run_folder,omitempty"`
+	StepID    string `json:"step_id,omitempty"`
+	Artifact  string `json:"artifact,omitempty"`
+}
+
+type Result struct {
+	Detector        string    `json:"detector"`
+	DetectorVersion string    `json:"detector_version"`
+	ObservedAt      string    `json:"observed_at"`
+	CoverageStatus  string    `json:"coverage_status"`
+	CoverageReason  string    `json:"coverage_reason,omitempty"`
+	RunsInspected   int       `json:"runs_inspected"`
+	Findings        []Finding `json:"findings"`
+}
+
+type runMetadata struct {
+	Status string `json:"status"`
+}
+
+type timingArtifact struct {
+	StepID       string `json:"step_id"`
+	RetryAttempt int    `json:"retry_attempt"`
+	LLM          struct {
+		ErroredCount  int `json:"errored_count"`
+		CanceledCount int `json:"canceled_count"`
+	} `json:"llm"`
+	Tools struct {
+		ErroredCount int `json:"errored_count"`
+		Calls        []struct {
+			ToolName string          `json:"tool_name"`
+			Status   string          `json:"status"`
+			Result   json.RawMessage `json:"result"`
+		} `json:"calls"`
+	} `json:"tools"`
+}
+
+type runCandidate struct {
+	dir     string
+	rel     string
+	modTime time.Time
+}
+
+// CheckRuntime reads only compact, persisted run metadata and timing receipts.
+// It purposefully does not infer errors from arbitrary natural-language output.
+func CheckRuntime(workspacePath string, now time.Time) Result {
+	result := Result{
+		Detector: DetectorRuntime, DetectorVersion: RuntimeDetectorVersion,
+		ObservedAt: now.UTC().Format(time.RFC3339), Findings: []Finding{},
+	}
+	runsRoot, err := resolveRunsRoot(workspacePath)
+	if err != nil {
+		result.CoverageStatus, result.CoverageReason = CoverageUnavailable, err.Error()
+		return result
+	}
+	candidates, err := retainedRunCandidates(runsRoot)
+	if err != nil {
+		result.CoverageStatus, result.CoverageReason = CoverageUnavailable, err.Error()
+		return result
+	}
+	if len(candidates) == 0 {
+		result.CoverageStatus, result.CoverageReason = CoverageNotInstrumented, "no retained run_metadata.json files"
+		return result
+	}
+	if len(candidates) > maxRetainedRunsToInspect {
+		candidates = candidates[:maxRetainedRunsToInspect]
+		result.CoverageStatus = CoveragePartial
+		result.CoverageReason = fmt.Sprintf("inspected newest %d retained runs", maxRetainedRunsToInspect)
+	} else {
+		result.CoverageStatus = CoverageVerified
+	}
+	for _, run := range candidates {
+		result.RunsInspected++
+		findings, err := inspectRun(run)
+		if err != nil {
+			result.CoverageStatus = CoveragePartial
+			result.CoverageReason = appendReason(result.CoverageReason, fmt.Sprintf("%s: %v", run.rel, err))
+			continue
+		}
+		result.Findings = append(result.Findings, findings...)
+	}
+	sort.SliceStable(result.Findings, func(i, j int) bool {
+		if result.Findings[i].Severity != result.Findings[j].Severity {
+			return result.Findings[i].Severity == severityHigh
+		}
+		return result.Findings[i].Artifact < result.Findings[j].Artifact
+	})
+	return result
+}
+
+func resolveRunsRoot(workspacePath string) (string, error) {
+	workspacePath = strings.Trim(strings.TrimSpace(strings.ReplaceAll(workspacePath, "\\\\", "/")), "/")
+	if workspacePath == "" {
+		return "", fmt.Errorf("workspace_path is required")
+	}
+	cleaned := filepath.Clean(filepath.FromSlash(workspacePath))
+	if filepath.IsAbs(cleaned) || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("workspace_path must stay inside the workspace root")
+	}
+	root, err := filepath.Abs(fsutil.WorkspaceDocsRoot())
+	if err != nil {
+		return "", fmt.Errorf("resolve workspace root: %w", err)
+	}
+	runsRoot, err := filepath.Abs(filepath.Join(root, cleaned, "runs"))
+	if err != nil {
+		return "", fmt.Errorf("resolve runs root: %w", err)
+	}
+	rel, err := filepath.Rel(root, runsRoot)
+	if err != nil || filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("workspace_path escapes the workspace root")
+	}
+	return runsRoot, nil
+}
+
+func retainedRunCandidates(runsRoot string) ([]runCandidate, error) {
+	if _, err := os.Stat(runsRoot); err != nil {
+		if os.IsNotExist(err) {
+			return []runCandidate{}, nil
+		}
+		return nil, err
+	}
+	var out []runCandidate
+	err := filepath.WalkDir(runsRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || entry.Name() != "run_metadata.json" {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		dir := filepath.Dir(path)
+		rel, err := filepath.Rel(runsRoot, dir)
+		if err != nil {
+			return err
+		}
+		out = append(out, runCandidate{dir: dir, rel: filepath.ToSlash(rel), modTime: info.ModTime()})
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].modTime.After(out[j].modTime) })
+	return out, nil
+}
+
+func inspectRun(run runCandidate) ([]Finding, error) {
+	metadataBytes, err := os.ReadFile(filepath.Join(run.dir, "run_metadata.json"))
+	if err != nil {
+		return nil, err
+	}
+	var metadata runMetadata
+	if err := json.Unmarshal(metadataBytes, &metadata); err != nil {
+		return nil, fmt.Errorf("decode run_metadata.json: %w", err)
+	}
+	status := strings.ToLower(strings.TrimSpace(metadata.Status))
+	var findings []Finding
+	if status != "" && status != "completed" && status != "success" {
+		findings = append(findings, Finding{
+			Kind: "run_not_completed", Severity: severityHigh, Subject: "Run did not complete",
+			Detail:   "The retained run has an explicit non-success terminal/runtime status.",
+			Evidence: fmt.Sprintf("run_metadata.status=%q", metadata.Status), RunFolder: run.rel, Artifact: "run_metadata.json",
+		})
+	}
+	if status != "completed" && status != "success" {
+		return findings, nil
+	}
+	err = filepath.WalkDir(filepath.Join(run.dir, "logs"), func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			if os.IsNotExist(walkErr) {
+				return nil
+			}
+			return walkErr
+		}
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), "-timing.json") || !strings.HasPrefix(entry.Name(), "execution-attempt-") {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		var timing timingArtifact
+		if err := json.Unmarshal(data, &timing); err != nil {
+			return fmt.Errorf("decode %s: %w", filepath.ToSlash(path), err)
+		}
+		artifact, _ := filepath.Rel(run.dir, path)
+		artifact = filepath.ToSlash(artifact)
+		if timing.LLM.ErroredCount > 0 || timing.LLM.CanceledCount > 0 || timing.Tools.ErroredCount > 0 {
+			findings = append(findings, Finding{
+				Kind: "runtime_status_disagreement", Severity: severityHigh, StepID: timing.StepID, RunFolder: run.rel, Artifact: artifact,
+				Subject:  "Completed run contains failed child calls",
+				Detail:   "The outer run is completed, but its timing receipt records an errored or canceled LLM/tool call.",
+				Evidence: fmt.Sprintf("llm.errored_count=%d; llm.canceled_count=%d; tools.errored_count=%d", timing.LLM.ErroredCount, timing.LLM.CanceledCount, timing.Tools.ErroredCount),
+			})
+		}
+		for _, call := range timing.Tools.Calls {
+			if strings.ToLower(strings.TrimSpace(call.Status)) != "success" || !structuredToolFailure(call.Result) {
+				continue
+			}
+			findings = append(findings, Finding{
+				Kind: "tool_success_with_structured_failure", Severity: severityHigh, StepID: timing.StepID, RunFolder: run.rel, Artifact: artifact,
+				Subject:  "Successful tool call contains structured failure",
+				Detail:   "The tool-call status is success but its structured result reports a failure.",
+				Evidence: fmt.Sprintf("tool=%q; status=%q; result contains isError=true or non-zero exit_code", call.ToolName, call.Status),
+			})
+		}
+		return nil
+	})
+	return findings, err
+}
+
+func structuredToolFailure(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var decoded interface{}
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return false
+	}
+	object, ok := decoded.(map[string]interface{})
+	if !ok {
+		encoded, isString := decoded.(string)
+		if !isString || json.Unmarshal([]byte(encoded), &object) != nil {
+			return false
+		}
+	}
+	if isError, ok := object["isError"].(bool); ok && isError {
+		return true
+	}
+	if exitCode, ok := numberValue(object["exit_code"]); ok && exitCode != 0 {
+		return true
+	}
+	return false
+}
+
+func numberValue(value interface{}) (int64, bool) {
+	switch v := value.(type) {
+	case float64:
+		return int64(v), v == float64(int64(v))
+	case json.Number:
+		n, err := v.Int64()
+		return n, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func appendReason(existing, next string) string {
+	if existing == "" {
+		return next
+	}
+	return existing + "; " + next
+}

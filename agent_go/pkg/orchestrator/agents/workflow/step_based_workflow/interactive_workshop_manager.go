@@ -1473,7 +1473,7 @@ func GetToolsForWorkshopMode(mode string) []string {
 
 	// Read-only info tools — safe in all modes
 	readOnly := []string{
-		"get_step_prompts", "get_workflow_config", "get_llm_config", "get_cost_summary",
+		"get_step_prompts", "get_plan_prompt_health", "get_workflow_config", "get_llm_config", "get_cost_summary",
 	}
 
 	// Workshop execution tools
@@ -4886,7 +4886,38 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 		logger.Warn(fmt.Sprintf("⚠️ Failed to register update_step_config tool: %v", err))
 	}
 
-	// Tool 5: get_step_prompts — read saved system prompt + user message for a step run
+	// Tool 5: get_plan_prompt_health — compact, deterministic size/duplication
+	// metrics for authored step descriptions. This avoids pasting a whole plan into
+	// a reviewer prompt just to establish whether prompt-contract bloat exists.
+	if err := mcpAgent.RegisterCustomTool(
+		"get_plan_prompt_health",
+		"Measure authored plan-description health without dumping the plan: per-step character counts, 5k/10k/20k thresholds, and long verbatim duplicate paragraphs. This is an objective review signal, not permission to rewrite a workflow automatically.",
+		map[string]interface{}{
+			"type":       "object",
+			"properties": map[string]interface{}{},
+		},
+		func(ctx context.Context, _ map[string]interface{}) (string, error) {
+			if iwm.controller.approvedPlan == nil {
+				if err := iwm.controller.LoadPlanForWorkshop(ctx); err != nil {
+					return "", fmt.Errorf("load plan for prompt-health review: %w", err)
+				}
+			}
+			if iwm.controller.approvedPlan == nil {
+				return "no plan loaded; ensure planning/plan.json exists", nil
+			}
+			report := BuildPromptHealthReport(iwm.controller.approvedPlan.Steps)
+			encoded, err := json.MarshalIndent(report, "", "  ")
+			if err != nil {
+				return "", fmt.Errorf("encode prompt-health report: %w", err)
+			}
+			return string(encoded), nil
+		},
+		"workflow",
+	); err != nil {
+		logger.Warn(fmt.Sprintf("⚠️ Failed to register get_plan_prompt_health tool: %v", err))
+	}
+
+	// Tool 6: get_step_prompts — read saved system prompt + user message for a step run
 	if err := mcpAgent.RegisterCustomTool(
 		"get_step_prompts",
 		"Get the system prompt and user message for a step. Works both during execution (prompts saved at start) and after completion. Useful for debugging what instructions the agent received. For sub-agent steps, pass the inner step ID directly (e.g., 'step-icici-login') or use route_id with the parent step.",
@@ -8816,6 +8847,12 @@ controller deliberately does not paste or summarize them into this prompt:
 - read `+"`workflow.json`"+` for workflow-selected skills and capability settings
 - inspect `+"`planning/plan.json`"+` with targeted `+"`jq`"+` queries, one relevant
   step/route/field set at a time; do not dump the full plan into the conversation
+- call `+"`get_plan_prompt_health`"+` before raising any prompt-contract-bloat
+  finding. Treat its character counts and repeated-paragraph clusters as an
+  objective triage signal, not an automatic defect: inspect the affected step,
+  validation, and shared references before deciding whether a safe extraction
+  exists. Prefer one workflow-level consolidation finding over one finding per
+  oversized step, and never rewrite a broad workflow contract from review alone.
 - inspect `+"`planning/step_config.json`"+` directly for execution modes, tools,
   skills, learning/KB access, locks, and review metadata
 

@@ -59,6 +59,15 @@ If the smallest safe repair changes plan topology,
 step type, route ownership, retry semantics, public-action ordering, or a
 safety boundary, the Operations turn creates a durable approval request; the
 Fixer must not make that structural choice on its own.
+Prompt-contract consolidation follows the same boundary: use
+`plan_orchestration_integrity` when compact prompt-health evidence indicates
+shared policy/DB/browser/validation prose has accumulated. The reviewer first
+decides whether the text is actually extractable; a multi-step migration needs
+an approved `technical-decision-prompt-contract-consolidation-...` request.
+The Fixer may apply only an approved phased extraction, preserving exact step
+inputs, outputs, validation, routes, and side-effect ordering, then waits for a
+post-change producing run. It must never bulk-truncate old prompts to satisfy
+a character threshold.
 When that module's review is complete, call `record_pulse_review_focus` once for
 every focus actually investigated, including its stable route/group/sub-workflow
 scope unless the conclusion is genuinely workflow-wide. Record the priority
