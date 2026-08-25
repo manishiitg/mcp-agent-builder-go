@@ -18,7 +18,7 @@ describe('Pulse slash commands', () => {
     for (const command of [
       'pulse', 'pulse-backlog', 'pulse-review', 'pulse-fixer', 'goal-advisor',
       'pulse-review-knowledge', 'pulse-review-learnings', 'pulse-review-database', 'pulse-review-report', 'pulse-review-evaluation',
-      'pulse-review-execution-health', 'pulse-review-plan-orchestration', 'pulse-review-stores', 'pulse-review-report-quality', 'pulse-review-evaluation-quality', 'pulse-review-model-cost',
+      'pulse-review-execution-health', 'plan-prompt-bloat', 'pulse-review-stores', 'pulse-review-report-quality', 'pulse-review-evaluation-quality', 'pulse-review-model-cost',
       'pulse-review-goal-measurement', 'pulse-review-strategy-effectiveness', 'pulse-review-feedback-loops', 'pulse-review-concentration', 'pulse-review-alternative-headroom', 'pulse-review-experiment-impact',
     ]) {
       expect(workflowCommands).toContain(command)

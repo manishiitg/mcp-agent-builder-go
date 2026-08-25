@@ -69,7 +69,7 @@ function submitGuidedWorkflowCommand(
 // the evidence means.
 const focusedPulseReviewCommands: CommandDefinition[] = [
   { command: 'pulse-review-execution-health', description: 'Review runtime reliability, tool behavior, retries, timeouts, and execution efficiency', kind: 'engineering-review', focus: 'execution_health', icon: <Activity className="w-4 h-4" /> },
-  { command: 'pulse-review-plan-orchestration', description: 'Review plan contracts, routes, dependencies, context handoffs, and orchestration shape', kind: 'engineering-review', focus: 'plan_orchestration_integrity', icon: <GitBranch className="w-4 h-4" /> },
+  { command: 'plan-prompt-bloat', description: 'Review oversized and duplicated plan prompts, shared contracts, and safe consolidation options', kind: 'engineering-review', focus: 'plan_orchestration_integrity', icon: <GitBranch className="w-4 h-4" /> },
   { command: 'pulse-review-stores', description: 'Review database, knowledgebase, and global-learnings integrity and ownership', kind: 'engineering-review', focus: 'store_integrity', icon: <Server className="w-4 h-4" /> },
   { command: 'pulse-review-report-quality', description: 'Review report truthfulness, live-data wiring, accessibility, and performance', kind: 'engineering-review', focus: 'report_quality_truth', icon: <FileText className="w-4 h-4" /> },
   { command: 'pulse-review-evaluation-quality', description: 'Review evaluation truth, rubrics, validation, and reproducibility', kind: 'engineering-review', focus: 'evaluation_quality_truth', icon: <CheckCircle className="w-4 h-4" /> },
