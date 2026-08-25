@@ -633,7 +633,25 @@ const getStepTypeLabel = (type: string): string => {
       return 'Message Sequence'
     case 'regular':
     default:
-      return 'LLM Step'
+      return 'AI Agent Task'
+  }
+}
+
+const getStepTypeDescription = (type: string): string => {
+  switch (type) {
+    case 'todo_task':
+      return 'Orchestrator: decides which delegated tasks to run and tracks their outcomes.'
+    case 'sub-agent':
+      return 'Sub-agent: a child task dispatched by an orchestrator.'
+    case 'message_sequence':
+      return 'Message sequence: one AI agent completing an ordered series of conversation turns.'
+    case 'routing':
+      return 'Routing step: deterministically selects the next workflow branch.'
+    case 'human_input':
+      return 'Human-input step: waits for an operator response before continuing.'
+    case 'regular':
+    default:
+      return 'AI agent task: one standalone task run by an AI agent with its available tools.'
   }
 }
 
@@ -2326,11 +2344,11 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                             
                             <div className="flex flex-col items-start text-left min-w-0">
                               <div className="flex items-center gap-2 flex-wrap">
-                                <span className="flex-shrink-0" title={`Step type: ${stepLogs.type || 'regular'}`}>
+                                <span className="flex-shrink-0" title={getStepTypeDescription(stepLogs.type || 'regular')}>
                                   {getStepIcon(stepLogs.type)}
                                 </span>
                                 <span className="text-sm font-semibold text-foreground truncate">{displayTitle}</span>
-                                <span className={`inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-medium border ${getStepTypeBadgeStyle(stepLogs.type)}`}>
+                                <span title={getStepTypeDescription(stepLogs.type || 'regular')} className={`inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-medium border ${getStepTypeBadgeStyle(stepLogs.type)}`}>
                                   {getStepTypeLabel(stepLogs.type)}
                                 </span>
                               </div>
