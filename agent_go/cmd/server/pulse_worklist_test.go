@@ -1639,9 +1639,10 @@ func completePulseWorklistDecisions(overrides map[string]PulseWorklistDecision) 
 	return out
 }
 
-func TestPulseReviewFocusCatalogUsesSixTechnicalAreasWithoutSafety(t *testing.T) {
+func TestPulseReviewFocusCatalogUsesValidationContractHealthWithoutSafety(t *testing.T) {
 	want := []string{
 		"execution_health",
+		"validation_contract_health",
 		"plan_orchestration_integrity",
 		"store_integrity",
 		"report_quality_truth",

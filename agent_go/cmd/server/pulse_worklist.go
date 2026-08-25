@@ -45,7 +45,7 @@ var pulseModuleOrder = pulsemodules.IDs()
 // Gate and reviewers still use evidence and judgment to choose what is due.
 var pulseReviewFocusCatalog = map[string][]string{
 	pulseModuleTechnicalReview: {
-		"execution_health", "plan_orchestration_integrity", "store_integrity",
+		"execution_health", "validation_contract_health", "plan_orchestration_integrity", "store_integrity",
 		"report_quality_truth", "evaluation_quality_truth", "model_cost_fitness",
 	},
 	pulseModuleStrategicReview: {

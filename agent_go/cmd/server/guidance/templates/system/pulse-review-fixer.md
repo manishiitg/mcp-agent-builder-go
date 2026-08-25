@@ -53,6 +53,19 @@ For `technical_review`, use `execution_health` when Gate cites a cadence-threate
 run or evidence of incorrect execution, repeated context, payload, retries,
 tool/runtime failure, schedule recovery, or sequence overhead. The focus requires
 a causal diagnosis of exact plan items, not a generic cost summary. Use
+`validation_contract_health` when retained `phase="prevalidation"` concerns,
+automatic-validation repairs, or current-run validation records show repeated
+schema failures. Load `pulse-bug-review` for that focus. Review the smallest
+affected producer/consumer contract and keep only checks that prove a real
+downstream requirement, authoritative state change, external side effect,
+route-control boundary, safety requirement, or non-fabricated deliverable.
+Do not treat a large schema, a failed check, or a field name alone as proof that
+the check should remain. Cosmetic metadata, duplicated upstream facts,
+self-asserted success markers, and checks no real consumer reads are removal
+candidates; branch-conditional fields must be optional or conditional rather
+than forcing placeholders. The reviewer recommends a minimal contract; the
+Fixer removes or rewrites a check only after tracing consumers and preserving a
+negative fixture that rejects the original meaningful defect. Use
 `plan_orchestration_integrity` when the central question is step type, scripted
 versus agentic ownership, dependencies, handoffs, or unnecessary orchestration.
 If the smallest safe repair changes plan topology,
