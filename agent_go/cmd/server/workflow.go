@@ -3275,6 +3275,7 @@ func (api *StreamingAPI) handleGetExecutionLogs(w http.ResponseWriter, r *http.R
 			parentStepID := ""
 			parentStepTitle := ""
 			routeID := ""
+			plannedMessages := []map[string]interface{}{}
 			if meta != nil {
 				if t := meta["title"]; t != "" {
 					title = t
@@ -3293,6 +3294,9 @@ func (api *StreamingAPI) handleGetExecutionLogs(w http.ResponseWriter, r *http.R
 				parentStepID = meta["parent_step_id"]
 				parentStepTitle = meta["parent_step_title"]
 				routeID = meta["route_id"]
+				if rawMessages := meta["planned_messages"]; rawMessages != "" {
+					_ = json.Unmarshal([]byte(rawMessages), &plannedMessages)
+				}
 			}
 
 			stepsLogs[stepId] = map[string]interface{}{
@@ -3310,6 +3314,7 @@ func (api *StreamingAPI) handleGetExecutionLogs(w http.ResponseWriter, r *http.R
 				"parent_step_id":             parentStepID,
 				"parent_step_title":          parentStepTitle,
 				"route_id":                   routeID,
+				"planned_messages":           plannedMessages,
 				"output_content":             nil, // Will be populated if output file exists
 				"artifacts":                  []map[string]interface{}{},
 				"validations":                []map[string]interface{}{},
@@ -4254,6 +4259,7 @@ func populateStepMetadata(steps []map[string]interface{}, metadata map[string]ma
 		learningsAccess := stringFromStepOrAgentConfig(step, agentConfigs, "learnings_access")
 		knowledgebaseAccess := stringFromStepOrAgentConfig(step, agentConfigs, "knowledgebase_access")
 		knowledgebaseContribution := stringFromStepOrAgentConfig(step, agentConfigs, "knowledgebase_contribution")
+		plannedMessages := plannedMessageSequenceItemsJSON(step)
 
 		// Handle inner steps for complex types
 		if inner, ok := step["orchestration_step"].(map[string]interface{}); ok {
@@ -4294,6 +4300,7 @@ func populateStepMetadata(steps []map[string]interface{}, metadata map[string]ma
 			"parent_step_id":             "",
 			"parent_step_title":          "",
 			"route_id":                   "",
+			"planned_messages":           plannedMessages,
 		}
 
 		// Store metadata by multiple keys to ensure it's found
@@ -4325,6 +4332,7 @@ func populateStepMetadata(steps []map[string]interface{}, metadata map[string]ma
 							"parent_step_id":             id,
 							"parent_step_title":          title,
 							"route_id":                   routeID,
+							"planned_messages":           plannedMessageSequenceItemsJSON(subStep),
 						}
 						metadata[subAgentKey] = subMeta
 						if subId != "" {
@@ -4335,6 +4343,48 @@ func populateStepMetadata(steps []map[string]interface{}, metadata map[string]ma
 			}
 		}
 	}
+}
+
+// plannedMessageSequenceItemsJSON keeps only the operator-meaningful part of
+// a message sequence. The full runtime prompt can include large injected
+// context, but this is the message explicitly authored in the workflow plan.
+func plannedMessageSequenceItemsJSON(step map[string]interface{}) string {
+	var rawItems []interface{}
+	if sequence, ok := step["message_sequence"].(map[string]interface{}); ok {
+		rawItems, _ = sequence["items"].([]interface{})
+	}
+	if len(rawItems) == 0 {
+		rawItems, _ = step["messages"].([]interface{})
+	}
+
+	items := make([]map[string]string, 0, len(rawItems))
+	for _, rawItem := range rawItems {
+		item, ok := rawItem.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		id, _ := item["id"].(string)
+		message, _ := item["message"].(string)
+		if id == "" || message == "" {
+			continue
+		}
+		itemType, _ := item["type"].(string)
+		kind, _ := item["kind"].(string)
+		items = append(items, map[string]string{
+			"id":      id,
+			"type":    itemType,
+			"kind":    kind,
+			"message": message,
+		})
+	}
+	if len(items) == 0 {
+		return ""
+	}
+	encoded, err := json.Marshal(items)
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
 }
 
 func stringFromStepOrAgentConfig(step map[string]interface{}, agentConfigs map[string]interface{}, key string) string {

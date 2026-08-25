@@ -264,12 +264,13 @@ type ExecutionOrigin = {
   label: string
   detail: string
   className: string
+  plannedMessage?: string
 }
 
 // A message-sequence execution can be a planned item, a repair injected by
 // automatic final validation, or a reflection. Make that lifecycle visible so
 // "4 attempts" is not mistaken for four orchestrator dispatches.
-const getExecutionOrigin = (execution: unknown, validations: unknown[]): ExecutionOrigin => {
+const getExecutionOrigin = (execution: unknown, validations: unknown[], plannedMessages: unknown[] = []): ExecutionOrigin => {
   const exec = asRecord(execution)
   const content = asRecord(exec?.content)
   const result = typeof content?.execution_result === 'string' ? content.execution_result : ''
@@ -323,10 +324,17 @@ const getExecutionOrigin = (execution: unknown, validations: unknown[]): Executi
   }
 
   if (itemID) {
+    const plannedItem = plannedMessages
+      .map(asRecord)
+      .find(item => item?.id === itemID)
+    const plannedMessage = typeof plannedItem?.message === 'string' ? plannedItem.message : undefined
     return {
-      label: 'Planned sequence item',
-      detail: `The plan requested the message-sequence item “${itemID}”.`,
+      label: plannedMessage ? 'Planned sequence item' : 'Recorded sequence item',
+      detail: plannedMessage
+        ? `The plan requested the message-sequence item “${itemID}”.`
+        : `The runtime recorded the message-sequence item “${itemID}”. Its exact sent prompt is available when you expand this entry.`,
       className: 'border-sky-500/25 bg-sky-500/10 text-sky-700 dark:text-sky-300',
+      plannedMessage,
     }
   }
 
@@ -335,6 +343,41 @@ const getExecutionOrigin = (execution: unknown, validations: unknown[]): Executi
     detail: 'This historical log does not contain a message-sequence item, validation trigger, or retry marker.',
     className: 'border-border bg-muted text-muted-foreground',
   }
+}
+
+type SentAgentMessage = {
+  label: string
+  message: string
+}
+
+// Historical runs may pre-date a message_sequence entry in plan.json, but the
+// durable conversation still preserves each human/planner message that was
+// sent to the agent. Keep it separate from the system prompt and tool traffic.
+const getSentAgentMessages = (conversation: string): SentAgentMessage[] => {
+  const data = asRecord(parseJsonLike(conversation))
+  const history = Array.isArray(data?.conversation_history) ? data.conversation_history : []
+
+  return history
+    .map(asRecord)
+    .filter(entry => entry?.Role === 'human' || entry?.role === 'human' || entry?.Role === 'user' || entry?.role === 'user')
+    .map(entry => {
+      const message = (Array.isArray(entry?.Parts) ? entry.Parts : Array.isArray(entry?.parts) ? entry.parts : [])
+        .map(asRecord)
+        .map(part => typeof part?.Text === 'string' ? part.Text : typeof part?.text === 'string' ? part.text : '')
+        .filter(Boolean)
+        .join('\n')
+        .trim()
+      if (!message) return null
+      const label = message.includes('## Learnings Contribution')
+        ? 'Planner learnings-contribution message'
+        : message.includes('## Pre-Validation Failed')
+          ? 'Automatic validation-repair message'
+          : message.startsWith('**DESCRIPTION**:')
+            ? 'Planner execution message'
+            : 'Message sent to agent'
+      return { label, message }
+    })
+    .filter((item): item is SentAgentMessage => item !== null)
 }
 
 const getStepIcon = (type: string) => {
@@ -1098,7 +1141,10 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                   const model = isFastPath ? null : exec.content?.model
                   const fpSuccess = isFastPath ? exec.content?.success === true : null
                   const fpExit = isFastPath ? exec.content?.exit_code : null
-                  const executionOrigin = isFastPath ? null : getExecutionOrigin(exec, validations)
+                  const executionOrigin = isFastPath ? null : getExecutionOrigin(exec, validations, stepLogs.planned_messages || [])
+                  const sentMessages = expandedFiles.has(exec.conversation_path) && fileContents[exec.conversation_path]
+                    ? getSentAgentMessages(fileContents[exec.conversation_path])
+                    : []
 
                   return (
                     <div key={idx} className={`bg-background rounded border overflow-hidden ${isFastPath ? 'border-indigo-200 dark:border-indigo-800' : 'border-border'}`}>
@@ -1159,6 +1205,11 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                               Why it ran: {executionOrigin.detail}
                             </p>
                           )}
+                          {executionOrigin?.plannedMessage && (
+                            <p className="mt-1 text-[11px] leading-relaxed text-sky-700 dark:text-sky-300 line-clamp-2">
+                              Planned message: {executionOrigin.plannedMessage}
+                            </p>
+                          )}
                         </div>
                       </button>
                       
@@ -1210,12 +1261,27 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                                   className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-primary bg-primary/10 hover:bg-primary/20 rounded transition-colors"
                                 >
                                   {loadingFiles.has(exec.conversation_path) ? <Loader2 className="w-3 h-3 animate-spin" /> : <MessageSquare className="w-3 h-3" />}
-                                  {expandedFiles.has(exec.conversation_path) ? 'Hide Conversation' : 'View Full Conversation'}
+                                  {expandedFiles.has(exec.conversation_path) ? 'Hide Message & Conversation' : 'View Message & Conversation'}
                                 </button>
                               </div>
 
                               {expandedFiles.has(exec.conversation_path) && (
                                 <div className="mb-4 bg-background rounded border border-border p-3">
+                                  {sentMessages.length > 0 && (
+                                    <div className="mb-4 rounded border border-sky-500/20 bg-sky-500/[0.04] p-3">
+                                      <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-sky-700 dark:text-sky-300">
+                                        Messages sent to the agent ({sentMessages.length})
+                                      </div>
+                                      <div className="space-y-2">
+                                        {sentMessages.map((sentMessage, messageIndex) => (
+                                          <details key={`${sentMessage.label}-${messageIndex}`} className="rounded border border-sky-500/15 bg-background/70 p-2">
+                                            <summary className="cursor-pointer text-xs font-medium text-foreground">{sentMessage.label}</summary>
+                                            <p className="mt-2 whitespace-pre-wrap text-xs leading-relaxed text-foreground/85">{sentMessage.message}</p>
+                                          </details>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
                                   <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2 border-b border-border pb-1">
                                     Conversation History
                                   </div>
@@ -1234,6 +1300,12 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                               <div className="max-h-[60vh] overflow-y-auto mb-3">
                                 <MarkdownRenderer content={result || ''} className="!text-[11px] [&_p]:!text-[11px] [&_li]:!text-[11px] [&_h1]:!text-base [&_h2]:!text-sm [&_h3]:!text-xs [&_code]:!text-[10px]" />
                               </div>
+                              {executionOrigin?.plannedMessage && (
+                                <div className="mb-3 rounded border border-sky-500/20 bg-sky-500/[0.04] p-3">
+                                  <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-sky-700 dark:text-sky-300">Planned message sent to the agent</div>
+                                  <p className="whitespace-pre-wrap font-sans text-xs leading-relaxed text-foreground">{executionOrigin.plannedMessage}</p>
+                                </div>
+                              )}
                               <StructuredJsonView value={exec.content} />
                             </>
                           )}

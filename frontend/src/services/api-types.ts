@@ -2049,6 +2049,9 @@ export interface StepExecutionLogs {
     status?: 'running' | 'completed' | 'failed' | string;
     entries?: MessageSequenceLogEntry[];
   };
+  // The message text authored in the workflow plan, distinct from the larger
+  // runtime prompt assembled for the agent.
+  planned_messages?: PlannedMessageSequenceItem[];
   output_content?: StepOutputContent;  // Actual output file content
   artifacts?: { file_name: string; file_path: string }[]; // Other output files
   validations: ValidationLog[];
@@ -2069,6 +2072,13 @@ export interface MessageSequenceLogEntry {
   summary?: string;
   started_at?: string;
   ended_at?: string;
+}
+
+export interface PlannedMessageSequenceItem {
+  id: string;
+  type?: string;
+  kind?: string;
+  message: string;
 }
 
 export interface ModelTokenUsage {

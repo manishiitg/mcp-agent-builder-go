@@ -63,7 +63,7 @@ func TestHandleGetExecutionLogsReturnsAutomaticFinalValidation(t *testing.T) {
 	const workspacePath = "/workspace/Workflow/test"
 	workspace := httptest.NewServer(&mockWorkspaceAPI{files: map[string]string{
 		workspacePath + "/planning/plan.json": `{
-			"steps": [{"id":"compile-package","title":"Compile package","type":"message_sequence"}]
+			"steps": [{"id":"compile-package","title":"Compile package","type":"message_sequence","message_sequence":{"items":[{"id":"execute-and-verify","type":"user_message","message":"Compile and verify the package."}]}}]
 		}`,
 		workspacePath + "/runs/iteration-0/default/logs/compile-package/execution/execution-attempt-1-iteration-2.json": `{
 			"execution_result":"Message sequence item: __automatic_final_validation__-repair-1 (user_message)"
@@ -90,6 +90,10 @@ func TestHandleGetExecutionLogsReturnsAutomaticFinalValidation(t *testing.T) {
 
 	var body struct {
 		Steps map[string]struct {
+			PlannedMessages []struct {
+				ID      string `json:"id"`
+				Message string `json:"message"`
+			} `json:"planned_messages"`
 			Validations []struct {
 				Attempt          int    `json:"attempt"`
 				Kind             string `json:"kind"`
@@ -102,6 +106,10 @@ func TestHandleGetExecutionLogsReturnsAutomaticFinalValidation(t *testing.T) {
 		t.Fatalf("decode response: %v", err)
 	}
 	validations := body.Steps["compile-package"].Validations
+	plannedMessages := body.Steps["compile-package"].PlannedMessages
+	if len(plannedMessages) != 1 || plannedMessages[0].ID != "execute-and-verify" || plannedMessages[0].Message != "Compile and verify the package." {
+		t.Fatalf("expected planned message sequence item, got %+v", plannedMessages)
+	}
 	if len(validations) != 1 {
 		t.Fatalf("expected one automatic final validation, got %+v", validations)
 	}
