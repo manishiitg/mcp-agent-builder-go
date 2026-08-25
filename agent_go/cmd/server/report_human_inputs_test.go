@@ -149,6 +149,60 @@ func TestReportHumanInputsUseWorkflowLocalDB(t *testing.T) {
 	}
 }
 
+func TestReportHumanInputPersistsStructuredApplyContract(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+	created, err := createReportHumanInput(ctx, "Workflow/decision-contract", ReportHumanInputCreateRequest{
+		InputID: "technical-decision-prompt-contract", Source: "technical_review", Question: "Approve prompt cleanup?",
+		ApplyContract: ReportHumanInputApplyContract{Mode: "targeted_fixer", IssueID: "PUL-55BE3473", ApprovedScope: "Extract one contract at a time.", PreRunChecks: []string{"validate_plan_change", "validate_plan_change"}, PostRunProof: "one producing run"},
+	})
+	if err != nil {
+		t.Fatalf("create decision contract: %v", err)
+	}
+	if got := created.ApplyContract; got.Mode != "targeted_fixer" || got.IssueID != "PUL-55BE3473" || len(got.PreRunChecks) != 1 || got.FailurePolicy != "continue_unchanged" {
+		t.Fatalf("created contract = %+v", got)
+	}
+	inputs, err := listReportHumanInputs(ctx, "Workflow/decision-contract", "pending", "")
+	if err != nil || len(inputs) != 1 || inputs[0].ApplyContract.ApprovedScope != "Extract one contract at a time." {
+		t.Fatalf("stored contract = %+v, err=%v", inputs, err)
+	}
+	if _, err := createReportHumanInput(ctx, "Workflow/decision-contract", ReportHumanInputCreateRequest{
+		InputID: "bad-contract", Question: "Bad?", ApplyContract: ReportHumanInputApplyContract{Mode: "targeted_fixer"},
+	}); err == nil || !strings.Contains(err.Error(), "approved_scope") {
+		t.Fatalf("targeted fixer without scope error = %v", err)
+	}
+}
+
+func TestPromptContractDecisionMigrationGetsTargetedFixerContract(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	workspacePath := "Workflow/migrated-prompt-contract"
+	if _, err := createReportHumanInput(ctx, workspacePath, ReportHumanInputCreateRequest{
+		InputID: "technical-decision-prompt-contract-consolidation-example", Source: "technical_review", Question: "Approve cleanup?",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(root, "Workflow", "migrated-prompt-contract", "db", "db.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE report_human_inputs SET apply_contract_json='{}'`); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	inputs, err := listReportHumanInputs(ctx, workspacePath, "pending", "")
+	if err != nil || len(inputs) != 1 {
+		t.Fatalf("migrated inputs=%+v err=%v", inputs, err)
+	}
+	if got := inputs[0].ApplyContract; got.Mode != "targeted_fixer" || got.FailurePolicy != "continue_unchanged" || !strings.Contains(got.ApprovedScope, "one versioned") {
+		t.Fatalf("prompt-contract migration = %+v", got)
+	}
+}
+
 func TestAnswerHumanInputRequestToolUsesValidatedDecisionLifecycle(t *testing.T) {
 	ctx := context.Background()
 	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())

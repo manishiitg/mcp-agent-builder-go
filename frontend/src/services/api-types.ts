@@ -384,6 +384,15 @@ export interface ReportHumanInputOption {
   description?: string
 }
 
+export interface ReportHumanInputApplyContract {
+  mode?: 'no_change' | 'direct_apply' | 'targeted_fixer' | 'external_wait' | string
+  issue_id?: string
+  approved_scope?: string
+  pre_run_checks?: string[]
+  post_run_proof?: string
+  failure_policy?: 'continue_unchanged' | 'block_run' | string
+}
+
 export interface ReportHumanInput {
   id: string
   workspace_path: string
@@ -413,6 +422,7 @@ export interface ReportHumanInput {
 	claim_token?: string
 	claimed_at?: string
 	claim_expires_at?: string
+	apply_contract?: ReportHumanInputApplyContract
 }
 
 export interface ReportHumanInputsResponse {

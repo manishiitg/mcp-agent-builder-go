@@ -461,6 +461,19 @@ history but must not be emitted by new reviews. `strategic_review` uses
 `human_input_id` on the corresponding `record_pulse_finding` call so the
 finding and pending decision are linked at creation; never leave
 `recommended_route="decision_required"` as an unlinked label for a later turn.
+
+Every new decision that authorizes a workflow change must include an
+`apply_contract` in `create_human_input_request`. This is the only authority
+pre-run uses; user-facing context is not a machine patch. Use
+`mode="targeted_fixer"` for prompt, plan, route, validation, database, tool,
+model, reporting, or any cross-artifact change, with a bounded
+`approved_scope`, exact `pre_run_checks`, an honest `post_run_proof`, and
+`failure_policy="continue_unchanged"` unless a failed application must block a
+safety/public-action run. `direct_apply` is only for one already-defined
+setting with a known exact check. Use `no_change` for reject/defer outcomes and
+`external_wait` when an external prerequisite must arrive. Do not leave the
+contract empty for a new repair decision; legacy prose-only requests are never
+auto-applied by pre-run.
 For `strategic_review`, the question source must be `strategic_review` and its
 id must start `strategy-proposal-`. The backend rejects a strategic
 `proposal_only` disposition with no `next_check`, so every accepted

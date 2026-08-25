@@ -8,9 +8,33 @@ import (
 func plat093Answered(ids ...string) []ReportHumanInput {
 	out := make([]ReportHumanInput, 0, len(ids))
 	for _, id := range ids {
-		out = append(out, ReportHumanInput{ID: id, Status: "answered", SelectedOptionID: "approve"})
+		out = append(out, ReportHumanInput{ID: id, Status: "answered", SelectedOptionID: "approve", ApplyContract: ReportHumanInputApplyContract{Mode: "direct_apply", FailurePolicy: "continue_unchanged"}})
 	}
 	return out
+}
+
+func TestDecisionPreflightRoutesOnlyStructuredContracts(t *testing.T) {
+	turns := scheduledDecisionPreflightTurns([]ReportHumanInput{
+		{ID: "legacy-prose", Status: "answered", SelectedOptionID: "approve"},
+		{ID: "safe-setting", Status: "answered", SelectedOptionID: "approve", ApplyContract: ReportHumanInputApplyContract{Mode: "direct_apply"}},
+		{ID: "prompt-bloat", WorkspacePath: "Workflow/social-media", Status: "answered", SelectedOptionID: "approve", ApplyContract: ReportHumanInputApplyContract{
+			Mode: "targeted_fixer", IssueID: "PUL-55BE3473", ApprovedScope: "Extract one shared contract.", PreRunChecks: []string{"validate_plan_change"}, PostRunProof: "one producing run",
+		}},
+		{ID: "rejected-prompt-bloat", Status: "answered", SelectedOptionID: "reject", ApplyContract: ReportHumanInputApplyContract{Mode: "targeted_fixer", ApprovedScope: "Must not run."}},
+		{ID: "external-wait", Status: "answered", SelectedOptionID: "approve", ApplyContract: ReportHumanInputApplyContract{Mode: "external_wait"}},
+	})
+	if len(turns) != 2 {
+		t.Fatalf("preflight turns = %d, want direct drain plus targeted fixer", len(turns))
+	}
+	if turns[0].label != "decision-drain-preflight" || !strings.Contains(turns[0].query, "safe-setting") || !strings.Contains(turns[0].query, "rejected-prompt-bloat") || strings.Contains(turns[0].query, "legacy-prose") {
+		t.Fatalf("direct drain must contain only safe direct or rejected target decisions: %+v", turns[0])
+	}
+	fixer := turns[1]
+	for _, want := range []string{"decision-fixer-preflight", "PUL-55BE3473", "Extract one shared contract.", "validate_plan_change", "one producing run", "Do NOT run workflow steps"} {
+		if !(fixer.label == want || strings.Contains(fixer.query, want)) {
+			t.Fatalf("targeted fixer missing %q: %+v", want, fixer)
+		}
+	}
 }
 
 // TestDecisionDrainTurnOnlyExistsWhenThereIsSomethingToApply keeps an ordinary
