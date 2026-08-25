@@ -200,6 +200,10 @@ export function DominionSurface() {
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false)
   const [detailSymbol, setDetailSymbol] = useState<string | null>(null)
   const [removeTarget, setRemoveTarget] = useState<string | null>(null)
+  // Daily Action leads: it answers "what did this workflow actually do" before
+  // the reference views (equity history, full watchlist) — same insight-first
+  // ordering as the platform's own report-authoring guidance.
+  const [activeTab, setActiveTab] = useState<'daily-action' | 'equity' | 'stocks'>('daily-action')
 
   const handleAddSymbol = async (symbol: string, tier: WatchlistTier) => {
     const next = [...effectiveWatchlist, { symbol, tier }]
@@ -274,71 +278,108 @@ export function DominionSurface() {
                 />
               </section>
 
-              {/* Equity curve */}
-              <section>
-                <SectionHeader icon={TrendingUp} title="Equity Curve" />
-                <div className={CARD}>
-                  <div className="h-[320px]">
-                    {chartData.length > 0 ? (
-                      <ResponsiveContainer width="100%" height="100%">
-                        <AreaChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
-                          <defs>
-                            <linearGradient id="dominionEquityFill" x1="0" y1="0" x2="0" y2="1">
-                              <stop offset="0%" stopColor="#818cf8" stopOpacity={0.4} />
-                              <stop offset="100%" stopColor="#818cf8" stopOpacity={0} />
-                            </linearGradient>
-                          </defs>
-                          <CartesianGrid strokeDasharray="3 3" stroke="#ffffff" opacity={0.06} />
-                          <XAxis dataKey="dateLabel" fontSize={12} tick={{ fill: '#64748b' }} axisLine={{ stroke: '#ffffff1a' }} tickLine={false} minTickGap={50} />
-                          <YAxis
-                            domain={equityDomain}
-                            fontSize={12}
-                            tick={{ fill: '#64748b' }}
-                            axisLine={false}
-                            tickLine={false}
-                            tickFormatter={(v) => formatUsd(Number(v), true)}
-                            width={72}
-                          />
-                          <Tooltip
-                            formatter={(value) => formatUsd(Number(value ?? 0))}
-                            contentStyle={{ borderRadius: 8, fontSize: 13, background: '#0d111c', border: '1px solid rgba(255,255,255,0.1)', color: '#e2e8f0' }}
-                          />
-                          <Area type="monotone" dataKey="equity" stroke="#818cf8" strokeWidth={2.5} fill="url(#dominionEquityFill)" activeDot={{ r: 5 }} />
-                        </AreaChart>
-                      </ResponsiveContainer>
-                    ) : (
-                      <div className="grid h-full place-items-center text-sm text-slate-500">No snapshots yet</div>
-                    )}
+              {/* Tabs -- each view is a distinct question (what happened, equity
+                  history, full watchlist); showing one at a time instead of
+                  stacking every section keeps the page from turning into an
+                  ever-scrolling wall. */}
+              <div className="border-b border-white/10">
+                <nav className="-mb-px flex gap-6" role="tablist">
+                  {(
+                    [
+                      { id: 'daily-action', label: 'Daily Action' },
+                      { id: 'equity', label: 'Equity' },
+                      { id: 'stocks', label: 'Stocks', count: stockGroups.length },
+                    ] as const
+                  ).map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={activeTab === tab.id}
+                      onClick={() => setActiveTab(tab.id)}
+                      className={`flex items-center gap-2 border-b-2 px-1 pb-3 text-sm font-medium transition ${
+                        activeTab === tab.id
+                          ? 'border-indigo-400 text-slate-100'
+                          : 'border-transparent text-slate-500 hover:text-slate-300'
+                      }`}
+                    >
+                      {tab.label}
+                      {'count' in tab ? (
+                        <span className="rounded-full bg-white/5 px-2 py-0.5 text-xs font-medium text-slate-400">{tab.count}</span>
+                      ) : null}
+                    </button>
+                  ))}
+                </nav>
+              </div>
+
+              {activeTab === 'equity' && (
+                <section>
+                  <SectionHeader icon={TrendingUp} title="Equity Curve" />
+                  <div className={CARD}>
+                    <div className="h-[320px]">
+                      {chartData.length > 0 ? (
+                        <ResponsiveContainer width="100%" height="100%">
+                          <AreaChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+                            <defs>
+                              <linearGradient id="dominionEquityFill" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="0%" stopColor="#818cf8" stopOpacity={0.4} />
+                                <stop offset="100%" stopColor="#818cf8" stopOpacity={0} />
+                              </linearGradient>
+                            </defs>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#ffffff" opacity={0.06} />
+                            <XAxis dataKey="dateLabel" fontSize={12} tick={{ fill: '#64748b' }} axisLine={{ stroke: '#ffffff1a' }} tickLine={false} minTickGap={50} />
+                            <YAxis
+                              domain={equityDomain}
+                              fontSize={12}
+                              tick={{ fill: '#64748b' }}
+                              axisLine={false}
+                              tickLine={false}
+                              tickFormatter={(v) => formatUsd(Number(v), true)}
+                              width={72}
+                            />
+                            <Tooltip
+                              formatter={(value) => formatUsd(Number(value ?? 0))}
+                              contentStyle={{ borderRadius: 8, fontSize: 13, background: '#0d111c', border: '1px solid rgba(255,255,255,0.1)', color: '#e2e8f0' }}
+                            />
+                            <Area type="monotone" dataKey="equity" stroke="#818cf8" strokeWidth={2.5} fill="url(#dominionEquityFill)" activeDot={{ r: 5 }} />
+                          </AreaChart>
+                        </ResponsiveContainer>
+                      ) : (
+                        <div className="grid h-full place-items-center text-sm text-slate-500">No snapshots yet</div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              </section>
+                </section>
+              )}
 
               {/* Daily Action -- plain-language "what did this workflow actually do"
                   record: the latest trading session's closed trades and new signals. */}
-              <DailyActions outcomes={outcomes} ideas={ideas} />
+              {activeTab === 'daily-action' && <DailyActions outcomes={outcomes} ideas={ideas} />}
 
               {/* Stocks -- everything grouped per symbol: tier, signal, position, recent grades.
                   Click a row for full history; the trash icon removes it from the watchlist. */}
-              <section>
-                <div className="mb-4 flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-indigo-500/10 text-indigo-400">
-                      <TrendingUp className="h-4 w-4" strokeWidth={2.25} />
-                    </span>
-                    <h2 className="text-base font-semibold text-slate-100">Stocks</h2>
-                    <span className="rounded-full bg-white/5 px-2.5 py-0.5 text-xs font-medium text-slate-400">{stockGroups.length}</span>
+              {activeTab === 'stocks' && (
+                <section>
+                  <div className="mb-4 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-indigo-500/10 text-indigo-400">
+                        <TrendingUp className="h-4 w-4" strokeWidth={2.25} />
+                      </span>
+                      <h2 className="text-base font-semibold text-slate-100">Stocks</h2>
+                      <span className="rounded-full bg-white/5 px-2.5 py-0.5 text-xs font-medium text-slate-400">{stockGroups.length}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setIsAddDialogOpen(true)}
+                      className="flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-indigo-500"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      Add Stock
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setIsAddDialogOpen(true)}
-                    className="flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-indigo-500"
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                    Add Stock
-                  </button>
-                </div>
-                <StockTable groups={stockGroups} onSelectSymbol={setDetailSymbol} onRequestRemove={setRemoveTarget} />
-              </section>
+                  <StockTable groups={stockGroups} onSelectSymbol={setDetailSymbol} onRequestRemove={setRemoveTarget} />
+                </section>
+              )}
             </div>
           </div>
         )}
