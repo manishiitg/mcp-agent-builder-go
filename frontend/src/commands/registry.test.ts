@@ -17,13 +17,13 @@ describe('Pulse slash commands', () => {
 
     for (const command of [
       'pulse', 'pulse-backlog', 'pulse-review', 'pulse-fixer', 'goal-advisor',
-      'pulse-review-knowledge', 'pulse-review-learnings', 'pulse-review-database', 'pulse-review-report', 'pulse-review-evaluation',
-      'pulse-review-execution-health', 'plan-prompt-bloat', 'pulse-review-stores', 'pulse-review-report-quality', 'pulse-review-evaluation-quality', 'pulse-review-model-cost',
+      'pulse-review-knowledge', 'pulse-review-learnings', 'pulse-review-database',
+      'pulse-review-execution-health', 'plan-prompt-bloat', 'pulse-review-report-quality', 'pulse-review-evaluation-quality', 'pulse-review-model-cost',
     ]) {
       expect(workflowCommands).toContain(command)
       expect(orgCommands).not.toContain(command)
     }
-    for (const retiredCommand of ['bug-review', 'review-speed', 'review-cost', 'llm-ops-review', 'ops-review', 'engineering-review', 'specialize-advisors', 'pulse-setup', 'improve-knowledge', 'improve-learnings', 'improve-database', 'improve-report', 'improve-evaluation']) {
+    for (const retiredCommand of ['bug-review', 'review-speed', 'review-cost', 'llm-ops-review', 'ops-review', 'engineering-review', 'specialize-advisors', 'pulse-setup', 'improve-knowledge', 'improve-learnings', 'improve-database', 'improve-report', 'improve-evaluation', 'pulse-review-stores', 'pulse-review-report', 'pulse-review-evaluation']) {
       expect(workflowCommands).not.toContain(retiredCommand)
     }
   })
