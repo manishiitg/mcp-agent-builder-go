@@ -25,6 +25,17 @@ describe('pulse finding action lanes', () => {
     })
   })
 
+  it('labels a migrated missing decision request as Pulse-owned repair work', () => {
+    expect(pulseFindingPresentation(finding({
+      status: 'queued_for_engineering',
+      events: [{
+        event_type: 'decision_request_missing',
+        summary: 'Pulse must create and link an answerable decision.',
+        recorded_at: '2026-08-25T00:00:00Z',
+      }],
+    }))).toMatchObject({ queue: 'queued_repair', label: 'Decision request missing' })
+  })
+
   it('renders old deferred blocked records as queued work during migration', () => {
     expect(pulseFindingPresentation(finding({
       status: 'acknowledged',
