@@ -125,7 +125,10 @@ func TestHandleGetExecutionLogsUsesMessageSequenceSessionStatus(t *testing.T) {
 				"messages": [{"id":"send","type":"user_message","message":"send"}]
 			}]
 		}`,
-		workspacePath + "/runs/iteration-0/default/execution/deliver/session.json": `{"status":"failed"}`,
+		workspacePath + "/runs/iteration-0/default/execution/deliver/session.json": `{
+  "status":"failed",
+  "entries":[{"item_id":"deliver-reflection","status":"failed","summary":"Could not write learning"}]
+}`,
 	}})
 	t.Cleanup(workspace.Close)
 	t.Setenv("WORKSPACE_API_URL", workspace.URL)
@@ -138,7 +141,13 @@ func TestHandleGetExecutionLogsUsesMessageSequenceSessionStatus(t *testing.T) {
 	}
 	var body struct {
 		Steps map[string]struct {
-			Status string `json:"message_sequence_status"`
+			Status  string `json:"message_sequence_status"`
+			Session struct {
+				Entries []struct {
+					ItemID string `json:"item_id"`
+					Status string `json:"status"`
+				} `json:"entries"`
+			} `json:"message_sequence"`
 		} `json:"steps"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
@@ -146,5 +155,57 @@ func TestHandleGetExecutionLogsUsesMessageSequenceSessionStatus(t *testing.T) {
 	}
 	if got := body.Steps["deliver"].Status; got != "failed" {
 		t.Fatalf("expected failed message sequence status, got %q", got)
+	}
+	if entries := body.Steps["deliver"].Session.Entries; len(entries) != 1 || entries[0].ItemID != "deliver-reflection" || entries[0].Status != "failed" {
+		t.Fatalf("expected persisted reflection entry, got %+v", entries)
+	}
+}
+
+func TestHandleGetExecutionLogsReturnsRoutingEvaluation(t *testing.T) {
+	const workspacePath = "/workspace/Workflow/test"
+	workspace := httptest.NewServer(&mockWorkspaceAPI{files: map[string]string{
+		workspacePath + "/planning/plan.json": `{
+  "steps": [{"type":"routing","id":"route-job","title":"Route job"}]
+}`,
+		workspacePath + "/runs/iteration-0/default/logs/route-job/routing-evaluation.json": `{
+  "routing_question":"Where should this job go?",
+  "selected_route_id":"research",
+  "routing_reasoning":"The incoming request requires research.",
+  "route_next_steps":{"research":"research-step"},
+  "timestamp":"2026-08-25T00:00:00Z"
+}`,
+	}})
+	t.Cleanup(workspace.Close)
+	t.Setenv("WORKSPACE_API_URL", workspace.URL)
+
+	request := httptest.NewRequest("GET", "/api/workflow/logs?workspace_path="+workspacePath+"&run_folder=iteration-0/default", nil)
+	response := httptest.NewRecorder()
+	(&StreamingAPI{}).handleGetExecutionLogs(response, request)
+	if response.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
+	}
+
+	var body struct {
+		Steps map[string]struct {
+			Orchestration []struct {
+				Type              string `json:"type"`
+				Source            string `json:"source"`
+				RoutingEvaluation struct {
+					SelectedRouteID string            `json:"selected_route_id"`
+					RouteNextSteps  map[string]string `json:"route_next_steps"`
+				} `json:"routing_evaluation"`
+			} `json:"orchestration"`
+		} `json:"steps"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	route, ok := body.Steps["route-job"]
+	if !ok || len(route.Orchestration) != 1 {
+		t.Fatalf("expected routing log in response, got %+v", body.Steps)
+	}
+	entry := route.Orchestration[0]
+	if entry.Type != "routing" || entry.Source != "routing_evaluation" || entry.RoutingEvaluation.SelectedRouteID != "research" || entry.RoutingEvaluation.RouteNextSteps["research"] != "research-step" {
+		t.Fatalf("unexpected routing log: %+v", entry)
 	}
 }

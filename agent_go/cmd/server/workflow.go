@@ -3306,6 +3306,7 @@ func (api *StreamingAPI) handleGetExecutionLogs(w http.ResponseWriter, r *http.R
 				"validations":                []map[string]interface{}{},
 				"executions":                 []map[string]interface{}{},
 				"orchestration":              []map[string]interface{}{},
+				"message_sequence":           nil,
 				"learnings":                  []map[string]interface{}{},
 				"archived_logs":              []map[string]interface{}{}, // Archived logs from previous runs
 				"archived_executions":        []map[string]interface{}{},
@@ -3415,6 +3416,36 @@ func (api *StreamingAPI) handleGetExecutionLogs(w http.ResponseWriter, r *http.R
 									if err := json.Unmarshal([]byte(line), &logEntry); err == nil {
 										orchLogs = append(orchLogs, logEntry)
 									}
+								}
+							}
+							entry["orchestration"] = orchLogs
+						}
+
+						// Routing steps are deterministic now. Their current runtime
+						// evidence is routing-evaluation.json, not the legacy JSONL
+						// orchestration-execution.json artifact above. Treat it as an
+						// orchestration record so routing decisions remain visible in
+						// Execution Logs.
+						if !childIsDir && childName == "routing-evaluation.json" {
+							logPath := child.FilePath
+							if processedPaths[logPath] {
+								continue
+							}
+							processedPaths[logPath] = true
+
+							entry := getStepEntry(stepId)
+							orchLogs, _ := entry["orchestration"].([]map[string]interface{})
+							content, exists, _ := readFileFromWorkspace(r.Context(), logPath)
+							if exists {
+								var routingData map[string]interface{}
+								if err := json.Unmarshal([]byte(content), &routingData); err == nil {
+									orchLogs = append(orchLogs, map[string]interface{}{
+										"type":               "routing",
+										"source":             "routing_evaluation",
+										"file_path":          logPath,
+										"timestamp":          routingData["timestamp"],
+										"routing_evaluation": routingData,
+									})
 								}
 							}
 							entry["orchestration"] = orchLogs
@@ -3724,11 +3755,17 @@ func (api *StreamingAPI) handleGetExecutionLogs(w http.ResponseWriter, r *http.R
 
 							if childName == "session.json" {
 								if content, exists, _ := readFileFromWorkspace(r.Context(), child.FilePath); exists {
-									var session struct {
-										Status string `json:"status"`
-									}
-									if json.Unmarshal([]byte(content), &session) == nil && strings.TrimSpace(session.Status) != "" {
-										entry["message_sequence_status"] = strings.ToLower(strings.TrimSpace(session.Status))
+									var session map[string]interface{}
+									if json.Unmarshal([]byte(content), &session) == nil {
+										status, _ := session["status"].(string)
+										if strings.TrimSpace(status) != "" {
+											entry["message_sequence_status"] = strings.ToLower(strings.TrimSpace(status))
+										}
+										entry["message_sequence"] = map[string]interface{}{
+											"session_path": child.FilePath,
+											"status":       status,
+											"entries":      session["entries"],
+										}
 									}
 								}
 							}
@@ -3984,6 +4021,7 @@ func isExecutionLogStepFolder(
 			continue
 		}
 		if strings.HasPrefix(childName, "validation") ||
+			childName == "routing-evaluation.json" ||
 			childName == "learning-execution.json" ||
 			childName == "orchestration-execution.json" ||
 			childName == "todo-task-execution.json" {

@@ -1946,6 +1946,19 @@ export interface ExecutionAttemptLog {
 export interface OrchestrationLog {
   type: string;
   timestamp: string;
+  source?: 'routing_evaluation' | string;
+  file_path?: string;
+  routing_evaluation?: {
+    routing_question?: string;
+    selected_route_id?: string;
+    routing_reasoning?: string;
+    route_selection?: {
+      source_kind?: string;
+      source_path?: string;
+      raw_value?: string;
+    };
+    route_next_steps?: Record<string, string>;
+  };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   orchestration_response?: any;
   selected_route_id?: string;
@@ -2022,6 +2035,11 @@ export interface StepExecutionLogs {
   knowledgebase_write_method?: string;
   knowledgebase_contribution?: string;
   message_sequence_status?: 'running' | 'completed' | 'failed';
+  message_sequence?: {
+    session_path: string;
+    status?: 'running' | 'completed' | 'failed' | string;
+    entries?: MessageSequenceLogEntry[];
+  };
   output_content?: StepOutputContent;  // Actual output file content
   artifacts?: { file_name: string; file_path: string }[]; // Other output files
   validations: ValidationLog[];
@@ -2031,6 +2049,17 @@ export interface StepExecutionLogs {
   learnings?: LearningLog[];
   archived_logs?: ArchivedLogEntry[];  // Logs from previous runs
   archived_executions?: ArchivedExecutionEntry[];  // Archived execution outputs from previous routing
+}
+
+export interface MessageSequenceLogEntry {
+  entry_id: string;
+  item_id?: string;
+  item_type?: string;
+  source?: string;
+  status: 'running' | 'completed' | 'failed' | string;
+  summary?: string;
+  started_at?: string;
+  ended_at?: string;
 }
 
 export interface ModelTokenUsage {

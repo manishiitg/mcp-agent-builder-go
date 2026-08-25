@@ -596,6 +596,11 @@ const hasKnowledgebaseSignal = (stepLogs: {
   Boolean(stepLogs.knowledgebase_access && stepLogs.knowledgebase_access !== 'none')
 )
 
+const getMessageSequenceReflection = (stepLogs: StepExecutionLogs) => {
+  const entries = stepLogs.message_sequence?.entries || []
+  return entries.find(entry => entry.item_id === `${stepLogs.step_id}-reflection`) || null
+}
+
 const StepMetricChip = ({ title, children }: { title: string; children: React.ReactNode }) => (
   <span
     title={title}
@@ -609,6 +614,8 @@ const getStepTypeLabel = (type: string): string => {
   switch (type) {
     case 'orchestration':
       return 'Orchestration'
+    case 'routing':
+      return 'Routing'
     case 'todo_task':
       return 'Todo Task'
     case 'human_input':
@@ -627,6 +634,8 @@ const getStepTypeBadgeStyle = (type: string): string => {
   switch (type) {
     case 'orchestration':
       return 'bg-purple-500/10 text-purple-600 border-purple-500/20 dark:bg-purple-500/20 dark:text-purple-300'
+    case 'routing':
+      return 'bg-indigo-500/10 text-indigo-600 border-indigo-500/20 dark:bg-indigo-500/20 dark:text-indigo-300'
     case 'todo_task':
       return 'bg-fuchsia-500/10 text-fuchsia-600 border-fuchsia-500/20 dark:bg-fuchsia-500/20 dark:text-fuchsia-300'
     case 'human_input':
@@ -769,7 +778,13 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
       
     } catch (err) {
       console.error('Failed to load execution logs:', err)
-      setError('Failed to load execution logs')
+      const responseBody = (err as { response?: { data?: unknown } })?.response?.data
+      const detail = typeof responseBody === 'string'
+        ? responseBody
+        : responseBody && typeof responseBody === 'object' && 'error' in responseBody && typeof responseBody.error === 'string'
+          ? responseBody.error
+          : err instanceof Error ? err.message : ''
+      setError(detail ? `Failed to load execution logs: ${detail}` : 'Failed to load execution logs')
     } finally {
       if (!options?.silent) setLoading(false)
     }
@@ -920,6 +935,48 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
             description={stepLogs.description} 
             successCriteria={stepLogs.success_criteria}
           />
+
+          {/* A message-sequence session is its own durable execution trace. Its
+              closing Reflection item is intentionally surfaced separately so
+              operators can tell whether the sequence actually reflected, not
+              merely whether the enclosing step completed. */}
+          {stepLogs.message_sequence && (
+            <div className="p-4 bg-teal-500/[0.03] border-b border-teal-500/15">
+              {(() => {
+                const reflection = getMessageSequenceReflection(stepLogs)
+                const sessionEntries = stepLogs.message_sequence.entries || []
+                const reflectionStatus = reflection?.status || 'not run'
+                const reflectionClass = reflectionStatus === 'completed'
+                  ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                  : reflectionStatus === 'failed'
+                    ? 'border-rose-500/25 bg-rose-500/10 text-rose-700 dark:text-rose-300'
+                    : 'border-border bg-muted/40 text-muted-foreground'
+                return (
+                  <>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <MessageSquare className="w-4 h-4 text-teal-600 dark:text-teal-300" />
+                      <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Message sequence</h4>
+                      <span className="rounded border border-teal-500/20 bg-teal-500/10 px-2 py-0.5 text-[10px] font-medium text-teal-700 dark:text-teal-300">
+                        {stepLogs.message_sequence.status || 'recorded'}
+                      </span>
+                      <span className={`rounded border px-2 py-0.5 text-[10px] font-medium ${reflectionClass}`}>
+                        Reflection: {reflectionStatus}
+                      </span>
+                    </div>
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      {sessionEntries.length} recorded turn{sessionEntries.length === 1 ? '' : 's'} in this sequence.
+                    </p>
+                    {reflection?.summary && (
+                      <details className="mt-3 rounded border border-teal-500/15 bg-background/70 p-2.5">
+                        <summary className="cursor-pointer text-xs font-medium text-teal-700 dark:text-teal-300">View reflection result</summary>
+                        <p className="mt-2 whitespace-pre-wrap text-xs leading-relaxed text-foreground/85">{reflection.summary}</p>
+                      </details>
+                    )}
+                  </>
+                )
+              })()}
+            </div>
+          )}
           {/* Executions Section */}
           {stepLogs.executions.filter(matchesSearch).length > 0 && (
             <div className="p-4 bg-background">
@@ -1317,7 +1374,7 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
           {stepLogs.orchestration && stepLogs.orchestration.filter(matchesSearch).length > 0 && (
             <div className="p-4 bg-muted/30 border-t border-border">
               <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3 flex items-center gap-2">
-                <Network className="w-4 h-4" /> Orchestration Logs
+                <Network className="w-4 h-4" /> Orchestration & Routing Logs
               </h4>
               <div className="space-y-6">
                 {Object.entries(
@@ -1367,7 +1424,37 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                               </span>
                             </div>
 
-                            {log.type === 'routing' && log.orchestration_response && (
+                            {log.type === 'routing' && log.routing_evaluation && (
+                              <div className="mt-3 space-y-3">
+                                <div className="rounded border border-indigo-500/20 bg-indigo-500/[0.05] p-3">
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <span className="text-xs font-medium text-foreground">Selected route</span>
+                                    <span className="rounded border border-indigo-500/20 bg-background px-1.5 py-0.5 font-mono text-[10px] text-indigo-700 dark:text-indigo-300">
+                                      {log.routing_evaluation.selected_route_id || 'not recorded'}
+                                    </span>
+                                  </div>
+                                  {log.routing_evaluation.route_next_steps?.[log.routing_evaluation.selected_route_id] && (
+                                    <p className="mt-2 text-xs text-muted-foreground">
+                                      Continues to <span className="font-mono text-foreground">{log.routing_evaluation.route_next_steps[log.routing_evaluation.selected_route_id]}</span>
+                                    </p>
+                                  )}
+                                </div>
+                                {log.routing_evaluation.routing_question && (
+                                  <div className="text-xs">
+                                    <div className="mb-1 font-semibold text-foreground">Routing question</div>
+                                    <p className="text-muted-foreground">{log.routing_evaluation.routing_question}</p>
+                                  </div>
+                                )}
+                                {log.routing_evaluation.routing_reasoning && (
+                                  <div className="text-xs">
+                                    <div className="mb-1 font-semibold text-foreground">Decision reason</div>
+                                    <p className="rounded border border-border bg-muted/30 p-2.5 text-muted-foreground">{log.routing_evaluation.routing_reasoning}</p>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            {log.type === 'routing' && log.orchestration_response && !log.routing_evaluation && (
                               <div className="space-y-3 mt-3">
                                 <div className="flex flex-col gap-2 p-3 bg-primary/5 rounded border border-primary/20">
                                     <div className="flex justify-between items-start">
