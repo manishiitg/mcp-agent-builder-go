@@ -3,6 +3,7 @@ package server
 import (
 	"testing"
 
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/agentprofiles"
 	"github.com/manishiitg/mcpagent/llm"
 )
 
@@ -77,6 +78,36 @@ func TestClaudeCodeTokenMissingForSingleProductDeploymentGatesCorrectly(t *testi
 			resolvedProfile: &resolvedAgentProfile{APIKeys: nil},
 			finalProvider:   "claude-code",
 			wantMissing:     false,
+		},
+		{
+			name:          "profile opts in via require_provider_token even on a shared/desktop server",
+			agentProducts: "",
+			resolvedProfile: &resolvedAgentProfile{
+				Definition: agentprofiles.Profile{Runtime: agentprofiles.RuntimePolicy{RequireProviderToken: true}},
+				APIKeys:    nil,
+			},
+			finalProvider: "claude-code",
+			wantMissing:   true,
+		},
+		{
+			name:          "profile opts in via require_provider_token but a token is present",
+			agentProducts: "",
+			resolvedProfile: &resolvedAgentProfile{
+				Definition: agentprofiles.Profile{Runtime: agentprofiles.RuntimePolicy{RequireProviderToken: true}},
+				APIKeys:    &llm.ProviderAPIKeys{ClaudeCodeOAuthToken: &token},
+			},
+			finalProvider: "claude-code",
+			wantMissing:   false,
+		},
+		{
+			name:          "profile does not opt in and server is shared/desktop -- stays exempt (e.g. Video Studio)",
+			agentProducts: "",
+			resolvedProfile: &resolvedAgentProfile{
+				Definition: agentprofiles.Profile{Runtime: agentprofiles.RuntimePolicy{RequireProviderToken: false}},
+				APIKeys:    nil,
+			},
+			finalProvider: "claude-code",
+			wantMissing:   false,
 		},
 	}
 

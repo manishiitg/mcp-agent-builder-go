@@ -57,6 +57,13 @@ profile:
     # `.claude/skills`) remain available. Tool safety comes from mcp_only below,
     # not from forcing a one-shot structured transport.
     transport: auto
+    # Dominion has no legitimate desktop use case -- it's a fixed-workspace,
+    # single-tenant trading dashboard, only ever run as its own dedicated
+    # server. Declare this explicitly rather than relying solely on the
+    # server's single-product-deployment heuristic, so a turn on this profile
+    # never silently falls back to an ambient `claude` CLI login regardless of
+    # how the server happens to be configured.
+    require_provider_token: true
     provider_options:
       - id: claude-code
         label: Claude Code

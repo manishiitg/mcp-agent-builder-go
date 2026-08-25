@@ -148,12 +148,19 @@ func isSingleProductServerDeployment() bool {
 }
 
 // claudeCodeTokenMissingForSingleProductDeployment reports whether handleQuery
-// must refuse this request: a dedicated single-product server deployment
-// (see isSingleProductServerDeployment) whose resolved provider is
-// claude-code but whose resolved product-profile credential carries no
-// Claude Code token.
+// must refuse this request: an active product profile resolves to the
+// claude-code provider with no configured token, and either (a) this server
+// is a dedicated single-product deployment (see
+// isSingleProductServerDeployment -- the default safety net every product
+// gets for free on such a deployment, no manifest change needed), or (b) the
+// profile itself declares Runtime.RequireProviderToken (product.yaml opt-in
+// for a profile that must never rely on an ambient CLI login regardless of
+// deployment context).
 func claudeCodeTokenMissingForSingleProductDeployment(resolvedProfile *resolvedAgentProfile, finalProvider string) bool {
-	if resolvedProfile == nil || !strings.EqualFold(finalProvider, "claude-code") || !isSingleProductServerDeployment() {
+	if resolvedProfile == nil || !strings.EqualFold(finalProvider, "claude-code") {
+		return false
+	}
+	if !isSingleProductServerDeployment() && !resolvedProfile.Definition.Runtime.RequireProviderToken {
 		return false
 	}
 	if resolvedProfile.APIKeys == nil || resolvedProfile.APIKeys.ClaudeCodeOAuthToken == nil {
