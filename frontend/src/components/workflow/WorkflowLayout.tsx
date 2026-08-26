@@ -390,11 +390,17 @@ const WorkflowPreviousChatsPanel: React.FC<{
     if (!activeTabId || !workspacePath) return
     const store = useChatStore.getState()
     const tab = store.chatTabs[activeTabId]
-    // Only the blank builder tab this panel backs is eligible -- never
-    // hijack a tab the user already pointed at something else (a specific
-    // schedule/bot run, or a session already loaded here).
-    if (!tab || tab.metadata?.mode !== 'workflow' || tab.sessionId) return
+    if (!tab || tab.metadata?.mode !== 'workflow') return
     if (tab.metadata?.isViewOnly || tab.metadata?.isScheduledRun || tab.metadata?.isBotRun) return
+    // Only the blank builder tab this panel backs is eligible -- never
+    // hijack a tab the user already pointed at something else (a session
+    // already loaded here). createChatTab always mints a fresh
+    // crypto.randomUUID() sessionId for a brand-new tab, even one with zero
+    // conversation behind it yet -- so `tab.sessionId` alone is truthy for
+    // the blank builder tab too and can't be used as the "already has
+    // something" signal. The real signal is whether that session has any
+    // actual content, same check activeSessionId above uses.
+    if (tab.sessionId && hasWorkflowChatContent(store.tabEvents[tab.sessionId])) return
 
     // Explicit guard, not just an assumption about effect ordering: skip if
     // ANY other tab for this workflow is actually doing something right now.
@@ -414,8 +420,10 @@ const WorkflowPreviousChatsPanel: React.FC<{
         if (!mostRecent) return
         // Re-check right before applying: this fetch is async, and the
         // reconnect effect may have activated a live tab in the meantime.
-        const latestTab = useChatStore.getState().chatTabs[activeTabId]
-        if (!latestTab || latestTab.sessionId) return
+        const latestStore = useChatStore.getState()
+        const latestTab = latestStore.chatTabs[activeTabId]
+        if (!latestTab) return
+        if (latestTab.sessionId && hasWorkflowChatContent(latestStore.tabEvents[latestTab.sessionId])) return
         await resumeChatSessionIntoTab(mostRecent, activeTabId, chatHistoryOpenDisposition(mostRecent))
       } catch (error) {
         logger.warn('WorkflowLayout', 'Failed to auto-restore the most recent conversation', { workspacePath, error })
