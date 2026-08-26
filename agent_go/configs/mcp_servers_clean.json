@@ -1,8 +1,5 @@
 {
   "mcpServers": {
-    "Parallel Search MCP": {
-      "url": "https://search.parallel.ai/mcp"
-    },
     "Notion": {
       "url": "https://mcp.notion.com/mcp",
       "oauth": {
@@ -17,39 +14,11 @@
         "token_file": "~/.config/mcpagent/tokens/default/Linear.json"
       }
     },
-    "Asana": {
-      "url": "https://mcp.asana.com/sse",
-      "oauth": {
-        "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
-        "token_file": "~/.config/mcpagent/tokens/default/Asana.json"
-      }
-    },
-    "Atlassian": {
-      "url": "https://mcp.atlassian.com/v1/sse",
-      "oauth": {
-        "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
-        "token_file": "~/.config/mcpagent/tokens/default/Atlassian.json"
-      }
-    },
-    "monday.com": {
-      "url": "https://mcp.monday.com/sse",
-      "oauth": {
-        "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
-        "token_file": "~/.config/mcpagent/tokens/default/monday.com.json"
-      }
-    },
     "Sentry": {
       "url": "https://mcp.sentry.dev/mcp",
       "oauth": {
         "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
         "token_file": "~/.config/mcpagent/tokens/default/Sentry.json"
-      }
-    },
-    "Figma": {
-      "url": "https://mcp.figma.com/mcp",
-      "oauth": {
-        "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
-        "token_file": "~/.config/mcpagent/tokens/default/Figma.json"
       }
     },
     "Canva": {
@@ -59,103 +28,113 @@
         "token_file": "~/.config/mcpagent/tokens/default/Canva.json"
       }
     },
-    "Vercel": {
-      "url": "https://mcp.vercel.com",
+    "Airtable": {
+      "url": "https://mcp.airtable.com/mcp",
       "oauth": {
         "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
-        "token_file": "~/.config/mcpagent/tokens/default/Vercel.json"
+        "token_file": "~/.config/mcpagent/tokens/default/Airtable.json"
       }
     },
-    "Neon": {
-      "url": "https://mcp.neon.tech/sse",
+    "PostHog": {
+      "url": "https://mcp.posthog.com/mcp",
       "oauth": {
         "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
-        "token_file": "~/.config/mcpagent/tokens/default/Neon.json"
+        "token_file": "~/.config/mcpagent/tokens/default/PostHog.json"
       }
     },
-    "Cloudflare Observability": {
-      "url": "https://observability.mcp.cloudflare.com/sse",
+    "Grafana": {
+      "url": "https://mcp.grafana.com/mcp",
       "oauth": {
         "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
-        "token_file": "~/.config/mcpagent/tokens/default/Cloudflare Observability.json"
+        "token_file": "~/.config/mcpagent/tokens/default/Grafana.json"
       }
     },
-    "Webflow": {
-      "url": "https://mcp.webflow.com/sse",
+    "Honeycomb": {
+      "url": "https://mcp.honeycomb.io/mcp",
       "oauth": {
         "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
-        "token_file": "~/.config/mcpagent/tokens/default/Webflow.json"
+        "token_file": "~/.config/mcpagent/tokens/default/Honeycomb.json"
       }
     },
-    "Wix": {
-      "url": "https://mcp.wix.com/sse",
+    "MongoDB": {
+      "url": "https://mcp.mongodb.com/mcp",
       "oauth": {
         "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
-        "token_file": "~/.config/mcpagent/tokens/default/Wix.json"
+        "token_file": "~/.config/mcpagent/tokens/default/MongoDB.json"
       }
     },
-    "Stripe": {
-      "url": "https://mcp.stripe.com",
+    "Apify": {
+      "url": "https://mcp.apify.com",
       "oauth": {
         "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
-        "token_file": "~/.config/mcpagent/tokens/default/Stripe.json"
+        "token_file": "~/.config/mcpagent/tokens/default/Apify.json"
       }
     },
-    "PayPal": {
-      "url": "https://mcp.paypal.com/mcp",
+    "WorkOS": {
+      "url": "https://mcp.workos.com/mcp",
       "oauth": {
         "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
-        "token_file": "~/.config/mcpagent/tokens/default/PayPal.json"
+        "token_file": "~/.config/mcpagent/tokens/default/WorkOS.json"
       }
     },
-    "Square": {
-      "url": "https://mcp.squareup.com/sse",
+    "Resend": {
+      "url": "https://mcp.resend.com/mcp",
       "oauth": {
         "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
-        "token_file": "~/.config/mcpagent/tokens/default/Square.json"
+        "token_file": "~/.config/mcpagent/tokens/default/Resend.json"
       }
     },
-    "Plaid": {
-      "url": "https://api.dashboard.plaid.com/mcp/sse",
+    "Paddle": {
+      "url": "https://mcp.paddle.com/mcp",
       "oauth": {
         "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
-        "token_file": "~/.config/mcpagent/tokens/default/Plaid.json"
+        "token_file": "~/.config/mcpagent/tokens/default/Paddle.json"
       }
     },
-    "Intercom": {
-      "url": "https://mcp.intercom.com/mcp",
+    "Port": {
+      "url": "https://mcp.port.io/v1",
       "oauth": {
         "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
-        "token_file": "~/.config/mcpagent/tokens/default/Intercom.json"
+        "token_file": "~/.config/mcpagent/tokens/default/Port.json"
       }
     },
-    "Close": {
-      "url": "https://mcp.close.com/mcp",
+    "Indeed": {
+      "url": "https://mcp.indeed.com/claude/mcp",
       "oauth": {
         "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
-        "token_file": "~/.config/mcpagent/tokens/default/Close.json"
+        "token_file": "~/.config/mcpagent/tokens/default/Indeed.json"
       }
     },
-    "Zapier": {
-      "url": "https://mcp.zapier.com/api/mcp/mcp",
+    "Morningstar": {
+      "url": "https://mcp.morningstar.com/mcp",
       "oauth": {
         "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
-        "token_file": "~/.config/mcpagent/tokens/default/Zapier.json"
+        "token_file": "~/.config/mcpagent/tokens/default/Morningstar.json"
       }
     },
-    "Fireflies": {
-      "url": "https://api.fireflies.ai/mcp",
-      "oauth": {
-        "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
-        "token_file": "~/.config/mcpagent/tokens/default/Fireflies.json"
-      }
+    "Parallel Search MCP": {
+      "url": "https://search.parallel.ai/mcp"
     },
-    "Globalping": {
-      "url": "https://mcp.globalping.dev/sse",
-      "oauth": {
-        "client_id": "https://agentworkshq.com/.well-known/mcp-client.json",
-        "token_file": "~/.config/mcpagent/tokens/default/Globalping.json"
-      }
+    "Hugging Face": {
+      "url": "https://huggingface.co/mcp"
+    },
+    "Cloudflare Docs": {
+      "url": "https://docs.mcp.cloudflare.com/sse"
+    },
+    "AWS Knowledge": {
+      "url": "https://knowledge-mcp.global.api.aws"
+    },
+    "Wolfram": {
+      "url": "https://agenttools.wolfram.com/mcp"
+    },
+    "Exa": {
+      "url": "https://mcp.exa.ai/mcp"
+    },
+    "Browserbase": {
+      "url": "https://mcp.browserbase.com/mcp"
+    },
+    "Cortex": {
+      "url": "https://mcp.cortex.io/mcp"
     }
   }
 }

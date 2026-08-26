@@ -6,8 +6,16 @@ import { BRAND_MARKS } from './brandMarks'
  */
 const SLUG_ALIASES: Record<string, string> = {
   mondaycom: 'monday',
-  cloudflareobservability: 'cloudflare',
+  bitbucket: 'atlassian',
+  awsknowledge: 'amazonaws',
 }
+
+/**
+ * Vendors that publish a family of servers under one brand — "Cloudflare
+ * Radar", "Cloudflare AutoRAG" and six more all carry the Cloudflare mark.
+ * Matched by prefix so a new sibling server needs no alias entry.
+ */
+const SLUG_PREFIXES: string[] = ['cloudflare']
 
 /**
  * Resolves an MCP server's display name to a `BRAND_MARKS` slug.
@@ -19,6 +27,7 @@ const SLUG_ALIASES: Record<string, string> = {
  */
 export function brandSlugFor(serverName: string): string | undefined {
   const normalized = serverName.toLowerCase().replace(/[^a-z0-9]/g, '')
-  const slug = SLUG_ALIASES[normalized] ?? normalized
+  const prefix = SLUG_PREFIXES.find((p) => normalized.startsWith(p))
+  const slug = SLUG_ALIASES[normalized] ?? prefix ?? normalized
   return slug in BRAND_MARKS ? slug : undefined
 }
