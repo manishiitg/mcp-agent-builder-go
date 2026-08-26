@@ -165,13 +165,38 @@ context.
 
 When the report crosses a triage boundary (a step over 20k characters, 30% or
 more of described steps over 5k, or 10k or more repeated description
-characters), assess whether the workflow has accumulated shared database,
-browser, validation, or policy prose that belongs in a versioned reference or
-deterministic script. If so, file **one canonical workflow-level finding**,
-not one finding per large step. Its evidence must name the measured totals and
-the exact affected steps; its recommendation must name the proposed ownership
-split: step-specific decision contract, shared reference, validation schema,
-or script.
+characters), read the flagged steps' full descriptions yourself — the tool
+only measures size and exact-text duplication, it has no sense of content
+quality, so this reading is where the actual judgment happens. For each
+flagged step, ask two separate questions, since either can be true without
+the other:
+
+- **Wrong home.** Does the description carry durable HOW-to-operate
+  knowledge (selectors, API quirks, timing, auth flows) that belongs in
+  `learnings/_global/SKILL.md`; business/domain facts that belong in the
+  knowledgebase; produced data that belongs in `db/db.sqlite`; or shared
+  database, browser, validation, or policy prose duplicated elsewhere that
+  belongs in a versioned reference or deterministic script? A step should
+  reference that store (per its `learnings_access`/`knowledgebase_access`),
+  not restate its contents.
+- **Not concise.** Independent of duplication or wrong-home content, is the
+  step's own instruction itself wordier than the judgment it asks for
+  requires — restating context the model doesn't need, hedging with
+  redundant qualifiers, or spelling out a procedure that could be stated as
+  a precise, unambiguous outcome instead? A step can be long because its
+  task is genuinely complex (safety-critical judgment, adaptive research,
+  browser/UI work) without being imprecise; the question is whether the
+  same precision survives a tighter rewrite, not whether it can be made
+  short.
+
+File **one canonical workflow-level finding**, not one finding per large
+step. Its evidence must name the measured totals and the exact affected
+steps, and say which of the two questions above applies to each one (they
+are not the same defect and can call for different fixes). Its
+recommendation must name the proposed fix per step: which store it should
+move to and what the step should reference instead, a tighter rewrite that
+preserves the same precision, or — when the size is genuinely earned by the
+task — no change.
 
 A migration spanning several steps, shared references, public-action behavior,
 or output ownership is `decision_required`: create a stable
