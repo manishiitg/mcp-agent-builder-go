@@ -2985,6 +2985,67 @@ type scheduledWorkshopTurn struct {
 	// unlike one it is never allowed to fail the run — see the loop in
 	// executeWorkshopJob.
 	decisionDrain bool
+	// failureBlocksRun is set only by an approved decision contract that names
+	// a safety/public-action boundary. Ordinary failed repairs keep the old safe
+	// plan and do not cancel the scheduled run.
+	failureBlocksRun bool
+}
+
+func scheduledDecisionApplyMode(input ReportHumanInput) string {
+	mode := strings.ToLower(strings.TrimSpace(input.ApplyContract.Mode))
+	switch mode {
+	case "no_change", "direct_apply", "targeted_fixer", "external_wait":
+		return mode
+	default:
+		return "legacy_manual"
+	}
+}
+
+func scheduledDecisionIsApproval(input ReportHumanInput) bool {
+	return strings.EqualFold(strings.TrimSpace(input.SelectedOptionID), "approve")
+}
+
+// scheduledDecisionPreflightTurns deterministically routes structured decisions.
+// Legacy prose-only decisions deliberately receive no mutation turn: applying
+// them would recreate the unsafe generic decision-applier path this contract
+// replaces.
+func scheduledDecisionPreflightTurns(pending []ReportHumanInput) []scheduledWorkshopTurn {
+	direct := make([]ReportHumanInput, 0, len(pending))
+	turns := make([]scheduledWorkshopTurn, 0, len(pending))
+	for _, input := range pending {
+		switch scheduledDecisionApplyMode(input) {
+		case "no_change", "direct_apply":
+			direct = append(direct, input)
+		case "targeted_fixer":
+			// The target scope is authorization to repair only after an explicit
+			// approval. A rejection is still sent through the direct decision
+			// handler so it can be truthfully consumed as no change.
+			if scheduledDecisionIsApproval(input) {
+				turns = append(turns, scheduledTargetedDecisionFixerTurn(input))
+			} else {
+				direct = append(direct, input)
+			}
+		}
+	}
+	if drain, ok := scheduledDecisionDrainTurn(direct); ok {
+		turns = append([]scheduledWorkshopTurn{drain}, turns...)
+	}
+	return turns
+}
+
+func scheduledTargetedDecisionFixerTurn(input ReportHumanInput) scheduledWorkshopTurn {
+	contract := input.ApplyContract
+	issueClause := ""
+	if issueID := strings.TrimSpace(contract.IssueID); issueID != "" {
+		issueClause = fmt.Sprintf("Read get_pulse_state(view=\"backlog\", detail=\"full\") only for the linked issue %q before changing anything. ", issueID)
+	}
+	checks, _ := json.Marshal(contract.PreRunChecks)
+	return scheduledWorkshopTurn{
+		label:            "decision-fixer-preflight",
+		decisionDrain:    true,
+		failureBlocksRun: strings.EqualFold(contract.FailurePolicy, "block_run"),
+		query:            fmt.Sprintf("PRE-RUN TARGETED FIXER. The operator answered approve for decision %q in %s. You are the bounded Fixer, not a reviewer and not the normal workflow run. Read it first with get_human_input_request and confirm it is still answered with selected_option_id=approve. Load read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/pulse-review-fixer.md\"},{\"name\":\"builder-reference\",\"path\":\"references/pulse-fixer-practices.md\"},{\"name\":\"builder-reference\",\"path\":\"references/fix-verification.md\"}]). %sApply ONLY this approved scope: %q. Required pre-run checks: %s. Post-run proof requirement: %q. Make the smallest coherent repair, run every required static or side-effect-free proof through the real consumer where possible, re-read the changed artifacts, and call validate_plan_change whenever planning changed. If the static proof passes, persist the truthful Fixer/Pulse lifecycle outcome (fixed_verified or changed_unverified as the evidence permits), then call mark_human_input_consumed with what changed and the remaining proof boundary. If you cannot prove it, do not consume the decision and do not broaden the repair. Do NOT run workflow steps, public actions, broad Pulse review, backup, publish, or notify.", input.ID, input.WorkspacePath, issueClause, contract.ApprovedScope, string(checks), contract.PostRunProof),
+	}
 }
 
 // scheduledDecisionDrainTurn returns the pre-run turn that applies answered
@@ -3033,7 +3094,7 @@ func scheduledDecisionDrainTurn(pending []ReportHumanInput) (scheduledWorkshopTu
 				"Apply them now, BEFORE this run starts, so the run uses what they decided rather than repeating the behavior they already asked you to change.\n\n"+
 				"Answered and unapplied: %s\n\n"+
 				"Read each one with get_human_input_request(workspace_path=<the exact Workflow/... path shown>, input_id=<the exact decision id shown>). Its `context` states what happens if approved, and `selected_option_id` is the operator's actual answer — honor that answer, including a rejection.\n\n"+
-				"For each decision, exactly one of:\n"+
+				"These are only direct_apply/no_change decisions. Never reinterpret their operator-facing prose as authority for a plan, prompt, route, validation, database, tool, or cross-artifact repair; those are routed to a dedicated targeted Fixer turn. For each decision, exactly one of:\n"+
 				"1. APPLY it with the normal typed tools (plan modification, update_step_config, evaluation, schedule, workflow config), confirm the change actually landed by re-reading the artifact, then call mark_human_input_consumed with an outcome_summary naming what changed. Consume only what you truly applied — never to tidy the list.\n"+
 				"2. LEAVE it, when you cannot honestly apply it now: the answer needs evidence from a run that has not happened yet, the premise no longer holds because the plan moved since it was answered (compare its run_id and answered_at against the current plan and changelog), or the intent is ambiguous. Say so plainly in your reply and do not consume it. The post-run Pulse pass will pick it up with fresh evidence.\n\n"+
 				"SAFE VALIDATION IS PART OF APPLYING, NOT A REASON TO DEFER. If an approved change asks for a static check, dry-run, non-producing fixture, schema validation, or plan review, perform that proof in this turn. Only evidence that inherently requires a real production run or external side effect may wait for a later run.\n\n"+
@@ -3242,13 +3303,13 @@ func (s *SchedulerService) executeWorkshopJob(ctx context.Context, sctx *Schedul
 	// is not a reason to skip the run: log it and continue unchanged.
 	if pending, listErr := listReportHumanInputs(ctx, sctx.WorkspacePath, "answered", ""); listErr != nil {
 		s.sessionLogf(sctx, sessionID, "[SCHEDULER] Could not read answered decisions for the pre-run drain (continuing): %v", listErr)
-	} else if drainTurn, ok := scheduledDecisionDrainTurn(pending); ok {
+	} else if decisionTurns := scheduledDecisionPreflightTurns(pending); len(decisionTurns) > 0 {
 		insertAt := upgradeCount
 		if insertAt < 0 || insertAt > len(turns) {
 			insertAt = 0
 		}
-		turns = append(turns[:insertAt], append([]scheduledWorkshopTurn{drainTurn}, turns[insertAt:]...)...)
-		s.sessionLogf(sctx, sessionID, "[SCHEDULER] Draining %d answered operator decision(s) before this run's first schedule message", len(pending))
+		turns = append(turns[:insertAt], append(decisionTurns, turns[insertAt:]...)...)
+		s.sessionLogf(sctx, sessionID, "[SCHEDULER] Running %d structured answered-decision preflight turn(s) before this run's first schedule message", len(decisionTurns))
 	}
 	// Unanswered decisions are not executable instructions and must never be
 	// silently inferred. Surface them to the first normal schedule turn so the
@@ -3300,11 +3361,12 @@ func (s *SchedulerService) executeWorkshopJob(ctx context.Context, sctx *Schedul
 
 		turnStartedAt := time.Now().UTC()
 		if err := s.api.startSessionInternal(ctx, reqMap, sessionID, "", nil); err != nil {
-			// A decision drain that cannot start must not cost the operator the
-			// run itself. The decisions stay answered-and-unapplied, exactly as
-			// before this turn existed, and the post-run Pulse pass still sees
-			// them (PLAT-093).
-			if turn.decisionDrain {
+			// A non-blocking direct decision turn that cannot start must not cost
+			// the operator the run itself. The decisions stay answered-and-
+			// unapplied, exactly as before this turn existed, and the post-run
+			// Pulse pass still sees them (PLAT-093). A targeted Fixer with a
+			// block_run contract is intentionally not exempt.
+			if turn.decisionDrain && !turn.failureBlocksRun {
 				s.sessionLogf(sctx, sessionID, "[SCHEDULER] Pre-run decision drain could not start (continuing to the run): %v", err)
 				continue
 			}
@@ -3318,9 +3380,10 @@ func (s *SchedulerService) executeWorkshopJob(ctx context.Context, sctx *Schedul
 		// failing both turns on quota_exhausted in 8.1 seconds and being filed
 		// as a successful security audit.
 		//
-		// A decision drain is exempt for the same reason its dispatch failure
-		// is: it must not cost the operator the run itself (PLAT-093).
-		if !turn.decisionDrain {
+		// A non-blocking decision turn is exempt for the same reason its
+		// dispatch failure is: it must not cost the operator the run itself
+		// (PLAT-093). A targeted Fixer with block_run is intentionally checked.
+		if !turn.decisionDrain || turn.failureBlocksRun {
 			if failure := scheduledTurnFailure(s.api.eventStore, sessionID, turnStartedAt); failure != "" {
 				s.preserveRunEvidenceAfterFailedTurn(ctx, sctx, sessionID, invocationStartedAt)
 				return sessionID, runFolder, fmt.Errorf("workshop turn %d/%d (%s) produced no response: %s", i+1, len(turns), turn.label, failure)

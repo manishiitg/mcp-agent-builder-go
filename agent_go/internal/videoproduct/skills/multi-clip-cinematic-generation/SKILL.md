@@ -30,10 +30,27 @@ dissolve can join them. If a model lacks the required input control, redesign
 the seam or select a compatible, user-approved model instead of inventing an
 API field.
 
-## Make a reference manifest
+## Make an approved reference pack, then a reference manifest
 
-Before the anchor, create a sequence-level manifest. It is the contract each
-later prompt and request must reuse:
+Before the anchor, create **real visual-development evidence** and a
+sequence-level manifest. A Markdown description such as “warm coffee shop” is
+not an approved reference and is not enough to condition a follow-up shot.
+Generate and present the images the sequence actually needs for review:
+
+- one location/background reference for every returning place, including its
+  return geography, time of day, weather, and practical-light motivation;
+- any recurring wardrobe, hero prop, or vehicle reference that will be visible
+  at a seam;
+- a start reference for each continuity sequence and a planned exit/end-state
+  reference for every sequence that has a successor;
+- an extra bridge frame when the selected endpoint genuinely supports multiple
+  images or an end-frame input. Otherwise it remains a visual/editing target,
+  never an invented request field.
+
+Call `show_reference` for each generated reference and obtain approval before
+footage consumes it. Keep the assets under `references/` and record exact
+paths and semantic roles. The manifest is the contract each later prompt and
+request must reuse:
 
 - delivery aspect ratio and orientation;
 - approved character/identity, wardrobe, prop, location, and lighting
@@ -100,11 +117,18 @@ the matching first action explicitly. Preserve a subject crossing screen left
 to right unless the shot uses an intentional, readable reversal. Do not flip
 orientation, camera side, or gaze direction by accident.
 
-## Generate, review, then advance
+## Generate, prove the join, then advance
 
 Create exactly one clip per generation recipe. Reuse the manifest, approved
 references, and planned handoff in its request. Show and inspect the MP4
 before accepting it. On acceptance, update the continuity ledger with actual
 boundary frames and state; on rejection, record the reason and regenerate or
-redesign the seam before making a successor. Do not batch later clips or let
-an unreviewed clip become continuity evidence.
+redesign the seam before making a successor.
+
+Individual acceptance is necessary but not sufficient. After every successor,
+render a short two-clip seam preview from the recorded trim points and show it
+to the user. The next clip may not be generated until its preceding join has
+a passing seam proof for identity, wardrobe, props, geography, screen
+direction, eyeline, action, lighting, motion, dialogue/voiceover, ambience,
+and music. Do not batch later clips or let an unproved join become continuity
+evidence.

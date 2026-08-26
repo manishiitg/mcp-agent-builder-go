@@ -19,11 +19,15 @@ generation step.
   run results into the document or add a step that regenerates it each run.
 - After editing, call `validate_report_html()`.
   Open the Report tab to verify visual layout only when requested or needed.
-- Always include one section that reports what the workflow actually did,
-  in plain non-technical language (recent runs and the actions taken in
+- Always include one section, as its own top-level tab (not a subsection
+  scrolled past within another tab, and not merely an anchored region on a
+  single scrolling page), that reports what the workflow actually did, in
+  plain non-technical language (recent runs and the actions taken in
   each) — named for the workflow's real run cadence (e.g. `Daily Action`
   for a daily workflow, `Recent Activity` for hourly/weekly/on-demand ones).
-  See the `design-reporting-ui` skill for the full authoring requirement.
+  A report with no other tabs still needs this one; the rest of its content
+  becomes a second tab. See the `design-reporting-ui` skill for the full
+  authoring requirement.
 
 ### Data lifecycle: always gate on `window.report.ready(fn)`
 

@@ -243,7 +243,7 @@ func TestLookupAgentProfileDefinitionDoesNotRunTheRuntimeInitializer(t *testing.
 
 	// The delegation path only reads the declared surface, so it must not.
 	before := req
-	resolved, err := api.lookupAgentProfileDefinition(&req, "user-1")
+	resolved, err := api.lookupAgentProfileDefinition(context.Background(), &req, "user-1")
 	if err != nil {
 		t.Fatal(err)
 	}

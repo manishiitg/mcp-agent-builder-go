@@ -260,6 +260,129 @@ const getStepResultPreview = (stepLogs: unknown): string => {
   return ''
 }
 
+type ExecutionOrigin = {
+  label: string
+  detail: string
+  className: string
+  plannedMessage?: string
+}
+
+// A message-sequence execution can be a planned item, a repair injected by
+// automatic final validation, or a reflection. Make that lifecycle visible so
+// "4 attempts" is not mistaken for four orchestrator dispatches.
+const getExecutionOrigin = (execution: unknown, validations: unknown[], plannedMessages: unknown[] = []): ExecutionOrigin => {
+  const exec = asRecord(execution)
+  const content = asRecord(exec?.content)
+  const result = typeof content?.execution_result === 'string' ? content.execution_result : ''
+  const itemMatch = result.match(/^Message sequence item:\s*([^\s(]+)\s*\(/m)
+  const itemID = itemMatch?.[1] || ''
+  const plannedItem = plannedMessages
+    .map(asRecord)
+    .find(item => item?.id === itemID)
+  const plannedMessage = typeof plannedItem?.message === 'string' ? plannedItem.message : undefined
+  const repairMatch = itemID.match(/^__automatic_final_validation__-repair-(\d+)$/)
+
+  if (repairMatch) {
+    const validationAttempt = Number(repairMatch[1])
+    const trigger = validations
+      .map(asRecord)
+      .find(validation => (
+        validation?.kind === 'pre_validation' &&
+        Number(asRecord(validation.content)?.validation_attempt) === validationAttempt
+      ))
+    const validationContent = asRecord(trigger?.content)
+    const failedChecks = Number(validationContent?.failed_checks)
+    const errors = Array.isArray(validationContent?.errors) ? validationContent.errors.map(asRecord) : []
+    const firstError = errors[0]
+    const failureSummary = typeof firstError?.Message === 'string'
+      ? firstError.Message
+      : typeof firstError?.message === 'string'
+        ? firstError.message
+        : ''
+    const failureCountText = Number.isFinite(failedChecks) && failedChecks > 0
+      ? `${failedChecks} failed check${failedChecks === 1 ? '' : 's'}`
+      : 'a failed final validation'
+
+    return {
+      label: `Auto-validation repair ${validationAttempt}`,
+      detail: `Triggered because the prior automatic final validation had ${failureCountText}.${failureSummary ? ` ${failureSummary}` : ''}`,
+      className: 'border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-300',
+    }
+  }
+
+  if (itemID.includes('reflection')) {
+    return {
+      label: 'Message-sequence reflection',
+      detail: plannedMessage
+        ? 'This is the sequence’s closing reflection turn. The planned instruction is shown below.'
+        : 'This is the sequence’s closing reflection turn, not a workflow retry or another orchestrator dispatch. Its exact sent prompt is available when you expand this entry.',
+      className: 'border-teal-500/25 bg-teal-500/10 text-teal-700 dark:text-teal-300',
+      plannedMessage,
+    }
+  }
+
+  const retryAttempt = Number(content?.retry_attempt)
+  if (Number.isFinite(retryAttempt) && retryAttempt > 1) {
+    return {
+      label: `Runtime retry ${retryAttempt}`,
+      detail: 'The runtime retried this same execution after a transient failure; it was not a new planned item or orchestrator call.',
+      className: 'border-rose-500/25 bg-rose-500/10 text-rose-700 dark:text-rose-300',
+    }
+  }
+
+  if (itemID) {
+    return {
+      label: plannedMessage ? 'Planned sequence item' : 'Recorded sequence item',
+      detail: plannedMessage
+        ? `The plan requested the message-sequence item “${itemID}”.`
+        : `The runtime recorded the message-sequence item “${itemID}”. Its exact sent prompt is available when you expand this entry.`,
+      className: 'border-sky-500/25 bg-sky-500/10 text-sky-700 dark:text-sky-300',
+      plannedMessage,
+    }
+  }
+
+  return {
+    label: 'Execution origin not recorded',
+    detail: 'This historical log does not contain a message-sequence item, validation trigger, or retry marker.',
+    className: 'border-border bg-muted text-muted-foreground',
+  }
+}
+
+type SentAgentMessage = {
+  label: string
+  message: string
+}
+
+// Historical runs may pre-date a message_sequence entry in plan.json, but the
+// durable conversation still preserves each human/planner message that was
+// sent to the agent. Keep it separate from the system prompt and tool traffic.
+const getSentAgentMessages = (conversation: string): SentAgentMessage[] => {
+  const data = asRecord(parseJsonLike(conversation))
+  const history = Array.isArray(data?.conversation_history) ? data.conversation_history : []
+
+  return history
+    .map(asRecord)
+    .filter(entry => entry?.Role === 'human' || entry?.role === 'human' || entry?.Role === 'user' || entry?.role === 'user')
+    .map(entry => {
+      const message = (Array.isArray(entry?.Parts) ? entry.Parts : Array.isArray(entry?.parts) ? entry.parts : [])
+        .map(asRecord)
+        .map(part => typeof part?.Text === 'string' ? part.Text : typeof part?.text === 'string' ? part.text : '')
+        .filter(Boolean)
+        .join('\n')
+        .trim()
+      if (!message) return null
+      const label = message.includes('## Learnings Contribution')
+        ? 'Planner learnings-contribution message'
+        : message.includes('## Pre-Validation Failed')
+          ? 'Automatic validation-repair message'
+          : message.startsWith('**DESCRIPTION**:')
+            ? 'Planner execution message'
+            : 'Message sent to agent'
+      return { label, message }
+    })
+    .filter((item): item is SentAgentMessage => item !== null)
+}
+
 const getStepIcon = (type: string) => {
   switch (type) {
     case 'orchestration':
@@ -505,6 +628,13 @@ const formatDuration = (durationMs: number): string => {
   return `${seconds}s`
 }
 
+const formatStepStartedAt = (timestampMs: number): string => new Intl.DateTimeFormat(undefined, {
+  month: 'short',
+  day: 'numeric',
+  hour: 'numeric',
+  minute: '2-digit',
+}).format(new Date(timestampMs))
+
 const addCallTokens = (metrics: StepMetrics, call: LogRecord) => {
   metrics.inputTokens += asNumber(call.prompt_tokens)
   metrics.outputTokens += asNumber(call.completion_tokens)
@@ -596,6 +726,11 @@ const hasKnowledgebaseSignal = (stepLogs: {
   Boolean(stepLogs.knowledgebase_access && stepLogs.knowledgebase_access !== 'none')
 )
 
+const getMessageSequenceReflection = (stepLogs: StepExecutionLogs) => {
+  const entries = stepLogs.message_sequence?.entries || []
+  return entries.find(entry => entry.item_id === `${stepLogs.step_id}-reflection`) || null
+}
+
 const StepMetricChip = ({ title, children }: { title: string; children: React.ReactNode }) => (
   <span
     title={title}
@@ -609,6 +744,8 @@ const getStepTypeLabel = (type: string): string => {
   switch (type) {
     case 'orchestration':
       return 'Orchestration'
+    case 'routing':
+      return 'Routing'
     case 'todo_task':
       return 'Todo Task'
     case 'human_input':
@@ -619,7 +756,25 @@ const getStepTypeLabel = (type: string): string => {
       return 'Message Sequence'
     case 'regular':
     default:
-      return 'LLM Step'
+      return 'AI Agent Task'
+  }
+}
+
+const getStepTypeDescription = (type: string): string => {
+  switch (type) {
+    case 'todo_task':
+      return 'Orchestrator: decides which delegated tasks to run and tracks their outcomes.'
+    case 'sub-agent':
+      return 'Sub-agent: a child task dispatched by an orchestrator.'
+    case 'message_sequence':
+      return 'Message sequence: one AI agent completing an ordered series of conversation turns.'
+    case 'routing':
+      return 'Routing step: deterministically selects the next workflow branch.'
+    case 'human_input':
+      return 'Human-input step: waits for an operator response before continuing.'
+    case 'regular':
+    default:
+      return 'AI agent task: one standalone task run by an AI agent with its available tools.'
   }
 }
 
@@ -627,6 +782,8 @@ const getStepTypeBadgeStyle = (type: string): string => {
   switch (type) {
     case 'orchestration':
       return 'bg-purple-500/10 text-purple-600 border-purple-500/20 dark:bg-purple-500/20 dark:text-purple-300'
+    case 'routing':
+      return 'bg-indigo-500/10 text-indigo-600 border-indigo-500/20 dark:bg-indigo-500/20 dark:text-indigo-300'
     case 'todo_task':
       return 'bg-fuchsia-500/10 text-fuchsia-600 border-fuchsia-500/20 dark:bg-fuchsia-500/20 dark:text-fuchsia-300'
     case 'human_input':
@@ -769,7 +926,13 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
       
     } catch (err) {
       console.error('Failed to load execution logs:', err)
-      setError('Failed to load execution logs')
+      const responseBody = (err as { response?: { data?: unknown } })?.response?.data
+      const detail = typeof responseBody === 'string'
+        ? responseBody
+        : responseBody && typeof responseBody === 'object' && 'error' in responseBody && typeof responseBody.error === 'string'
+          ? responseBody.error
+          : err instanceof Error ? err.message : ''
+      setError(detail ? `Failed to load execution logs: ${detail}` : 'Failed to load execution logs')
     } finally {
       if (!options?.silent) setLoading(false)
     }
@@ -920,6 +1083,48 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
             description={stepLogs.description} 
             successCriteria={stepLogs.success_criteria}
           />
+
+          {/* A message-sequence session is its own durable execution trace. Its
+              closing Reflection item is intentionally surfaced separately so
+              operators can tell whether the sequence actually reflected, not
+              merely whether the enclosing step completed. */}
+          {stepLogs.message_sequence && (
+            <div className="p-4 bg-teal-500/[0.03] border-b border-teal-500/15">
+              {(() => {
+                const reflection = getMessageSequenceReflection(stepLogs)
+                const sessionEntries = stepLogs.message_sequence.entries || []
+                const reflectionStatus = reflection?.status || 'not run'
+                const reflectionClass = reflectionStatus === 'completed'
+                  ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                  : reflectionStatus === 'failed'
+                    ? 'border-rose-500/25 bg-rose-500/10 text-rose-700 dark:text-rose-300'
+                    : 'border-border bg-muted/40 text-muted-foreground'
+                return (
+                  <>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <MessageSquare className="w-4 h-4 text-teal-600 dark:text-teal-300" />
+                      <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Message sequence</h4>
+                      <span className="rounded border border-teal-500/20 bg-teal-500/10 px-2 py-0.5 text-[10px] font-medium text-teal-700 dark:text-teal-300">
+                        {stepLogs.message_sequence.status || 'recorded'}
+                      </span>
+                      <span className={`rounded border px-2 py-0.5 text-[10px] font-medium ${reflectionClass}`}>
+                        Reflection: {reflectionStatus}
+                      </span>
+                    </div>
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      {sessionEntries.length} recorded turn{sessionEntries.length === 1 ? '' : 's'} in this sequence.
+                    </p>
+                    {reflection?.summary && (
+                      <details className="mt-3 rounded border border-teal-500/15 bg-background/70 p-2.5">
+                        <summary className="cursor-pointer text-xs font-medium text-teal-700 dark:text-teal-300">View reflection result</summary>
+                        <p className="mt-2 whitespace-pre-wrap text-xs leading-relaxed text-foreground/85">{reflection.summary}</p>
+                      </details>
+                    )}
+                  </>
+                )
+              })()}
+            </div>
+          )}
           {/* Executions Section */}
           {stepLogs.executions.filter(matchesSearch).length > 0 && (
             <div className="p-4 bg-background">
@@ -939,6 +1144,10 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                   const model = isFastPath ? null : exec.content?.model
                   const fpSuccess = isFastPath ? exec.content?.success === true : null
                   const fpExit = isFastPath ? exec.content?.exit_code : null
+                  const executionOrigin = isFastPath ? null : getExecutionOrigin(exec, validations, stepLogs.planned_messages || [])
+                  const sentMessages = expandedFiles.has(exec.conversation_path) && fileContents[exec.conversation_path]
+                    ? getSentAgentMessages(fileContents[exec.conversation_path])
+                    : []
 
                   return (
                     <div key={idx} className={`bg-background rounded border overflow-hidden ${isFastPath ? 'border-indigo-200 dark:border-indigo-800' : 'border-border'}`}>
@@ -957,6 +1166,11 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                                   ? 'Saved main.py (fast path)'
                                   : <>Attempt {exec.attempt} {exec.iteration > 0 && `(Iteration ${exec.iteration})`}</>}
                               </span>
+                              {executionOrigin && (
+                                <span title={executionOrigin.detail} className={`text-[10px] font-medium px-1.5 py-0.5 rounded border ${executionOrigin.className}`}>
+                                  {executionOrigin.label}
+                                </span>
+                              )}
                               {isFastPath && (
                                 <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded border ${
                                   fpSuccess
@@ -987,6 +1201,16 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                           {result && (
                             <p className="text-xs text-muted-foreground line-clamp-2 whitespace-pre-wrap">
                               {result}
+                            </p>
+                          )}
+                          {executionOrigin && (
+                            <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground line-clamp-2">
+                              Why it ran: {executionOrigin.detail}
+                            </p>
+                          )}
+                          {executionOrigin?.plannedMessage && (
+                            <p className="mt-1 text-[11px] leading-relaxed text-sky-700 dark:text-sky-300 line-clamp-2">
+                              Planned message: {executionOrigin.plannedMessage}
                             </p>
                           )}
                         </div>
@@ -1040,12 +1264,27 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                                   className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-primary bg-primary/10 hover:bg-primary/20 rounded transition-colors"
                                 >
                                   {loadingFiles.has(exec.conversation_path) ? <Loader2 className="w-3 h-3 animate-spin" /> : <MessageSquare className="w-3 h-3" />}
-                                  {expandedFiles.has(exec.conversation_path) ? 'Hide Conversation' : 'View Full Conversation'}
+                                  {expandedFiles.has(exec.conversation_path) ? 'Hide Message & Conversation' : 'View Message & Conversation'}
                                 </button>
                               </div>
 
                               {expandedFiles.has(exec.conversation_path) && (
                                 <div className="mb-4 bg-background rounded border border-border p-3">
+                                  {sentMessages.length > 0 && (
+                                    <div className="mb-4 rounded border border-sky-500/20 bg-sky-500/[0.04] p-3">
+                                      <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-sky-700 dark:text-sky-300">
+                                        Messages sent to the agent ({sentMessages.length})
+                                      </div>
+                                      <div className="space-y-2">
+                                        {sentMessages.map((sentMessage, messageIndex) => (
+                                          <details key={`${sentMessage.label}-${messageIndex}`} className="rounded border border-sky-500/15 bg-background/70 p-2">
+                                            <summary className="cursor-pointer text-xs font-medium text-foreground">{sentMessage.label}</summary>
+                                            <p className="mt-2 whitespace-pre-wrap text-xs leading-relaxed text-foreground/85">{sentMessage.message}</p>
+                                          </details>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
                                   <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2 border-b border-border pb-1">
                                     Conversation History
                                   </div>
@@ -1064,6 +1303,12 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                               <div className="max-h-[60vh] overflow-y-auto mb-3">
                                 <MarkdownRenderer content={result || ''} className="!text-[11px] [&_p]:!text-[11px] [&_li]:!text-[11px] [&_h1]:!text-base [&_h2]:!text-sm [&_h3]:!text-xs [&_code]:!text-[10px]" />
                               </div>
+                              {executionOrigin?.plannedMessage && (
+                                <div className="mb-3 rounded border border-sky-500/20 bg-sky-500/[0.04] p-3">
+                                  <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-sky-700 dark:text-sky-300">Planned message sent to the agent</div>
+                                  <p className="whitespace-pre-wrap font-sans text-xs leading-relaxed text-foreground">{executionOrigin.plannedMessage}</p>
+                                </div>
+                              )}
                               <StructuredJsonView value={exec.content} />
                             </>
                           )}
@@ -1159,11 +1404,23 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
               <div className="space-y-3">
                 {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
                 {validations.filter(matchesSearch).map((val: any, idx: number) => {
-                  const valId = `${stepId}-val-${val.attempt}`
+                  const valId = `${stepId}-val-${val.kind || 'validation'}-${val.attempt}`
                   const isValExpanded = expandedValidations.has(valId)
                   const valStatus = val.content?.execution_status
+                  const isAutomaticFinalValidation = val.kind === 'pre_validation' && val.phase === 'message-sequence-automatic-final-validation'
+                  const valPassed = val.content?.overall_pass
+                  const passedChecks = val.content?.passed_checks
+                  const failedChecks = val.content?.failed_checks
                   const reasoning = val.content?.reasoning
                   const feedback = (val.content?.feedback || []) as ValidationFeedback[]
+                  const firstError = Array.isArray(val.content?.errors) ? val.content.errors[0] : null
+                  const validationSummary = typeof firstError?.Message === 'string'
+                    ? firstError.Message
+                    : typeof firstError?.message === 'string'
+                      ? firstError.message
+                      : reasoning
+                  const validationSucceeded = valStatus === 'COMPLETED' || valPassed === true
+                  const validationFailed = valStatus === 'FAILED' || valPassed === false
                   
                   return (
                     <div key={idx} className="bg-background rounded border border-border overflow-hidden">
@@ -1171,17 +1428,29 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                         onClick={() => toggleValidation(valId)}
                         className="w-full flex items-start gap-3 p-3 text-left hover:bg-accent/50 transition-colors"
                       >
-                        <div className={`mt-0.5 w-2 h-2 rounded-full flex-shrink-0 ${valStatus === 'COMPLETED' ? 'bg-emerald-500' : valStatus === 'FAILED' ? 'bg-rose-500' : 'bg-slate-400 dark:bg-slate-500'}`} />
+                        <div className={`mt-0.5 w-2 h-2 rounded-full flex-shrink-0 ${validationSucceeded ? 'bg-emerald-500' : validationFailed ? 'bg-rose-500' : 'bg-slate-400 dark:bg-slate-500'}`} />
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center justify-between mb-1">
-                            <span className="text-sm font-medium text-foreground">
-                              Attempt {val.attempt}
-                            </span>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-sm font-medium text-foreground">
+                                {isAutomaticFinalValidation ? `Automatic final validation ${val.attempt}` : `Validation attempt ${val.attempt}`}
+                              </span>
+                              {isAutomaticFinalValidation && (
+                                <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded border ${validationSucceeded ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : validationFailed ? 'border-rose-500/25 bg-rose-500/10 text-rose-700 dark:text-rose-300' : 'border-border bg-muted text-muted-foreground'}`}>
+                                  {validationSucceeded ? 'passed' : validationFailed ? 'failed' : 'recorded'}
+                                </span>
+                              )}
+                            </div>
                             {isValExpanded ? <ChevronDown className="w-3 h-3 text-muted-foreground" /> : <ChevronRight className="w-3 h-3 text-muted-foreground" />}
                           </div>
-                          {reasoning && (
+                          {isAutomaticFinalValidation && (typeof passedChecks === 'number' || typeof failedChecks === 'number') && (
+                            <p className="text-xs text-muted-foreground">
+                              {typeof passedChecks === 'number' ? `${passedChecks} passed` : ''}{typeof passedChecks === 'number' && typeof failedChecks === 'number' ? ' · ' : ''}{typeof failedChecks === 'number' ? `${failedChecks} failed` : ''}
+                            </p>
+                          )}
+                          {validationSummary && (
                             <p className="text-xs text-muted-foreground line-clamp-2">
-                              {reasoning}
+                              {validationSummary}
                             </p>
                           )}
                         </div>
@@ -1317,7 +1586,7 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
           {stepLogs.orchestration && stepLogs.orchestration.filter(matchesSearch).length > 0 && (
             <div className="p-4 bg-muted/30 border-t border-border">
               <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3 flex items-center gap-2">
-                <Network className="w-4 h-4" /> Orchestration Logs
+                <Network className="w-4 h-4" /> Orchestration & Routing Logs
               </h4>
               <div className="space-y-6">
                 {Object.entries(
@@ -1367,7 +1636,37 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                               </span>
                             </div>
 
-                            {log.type === 'routing' && log.orchestration_response && (
+                            {log.type === 'routing' && log.routing_evaluation && (
+                              <div className="mt-3 space-y-3">
+                                <div className="rounded border border-indigo-500/20 bg-indigo-500/[0.05] p-3">
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <span className="text-xs font-medium text-foreground">Selected route</span>
+                                    <span className="rounded border border-indigo-500/20 bg-background px-1.5 py-0.5 font-mono text-[10px] text-indigo-700 dark:text-indigo-300">
+                                      {log.routing_evaluation.selected_route_id || 'not recorded'}
+                                    </span>
+                                  </div>
+                                  {log.routing_evaluation.route_next_steps?.[log.routing_evaluation.selected_route_id] && (
+                                    <p className="mt-2 text-xs text-muted-foreground">
+                                      Continues to <span className="font-mono text-foreground">{log.routing_evaluation.route_next_steps[log.routing_evaluation.selected_route_id]}</span>
+                                    </p>
+                                  )}
+                                </div>
+                                {log.routing_evaluation.routing_question && (
+                                  <div className="text-xs">
+                                    <div className="mb-1 font-semibold text-foreground">Routing question</div>
+                                    <p className="text-muted-foreground">{log.routing_evaluation.routing_question}</p>
+                                  </div>
+                                )}
+                                {log.routing_evaluation.routing_reasoning && (
+                                  <div className="text-xs">
+                                    <div className="mb-1 font-semibold text-foreground">Decision reason</div>
+                                    <p className="rounded border border-border bg-muted/30 p-2.5 text-muted-foreground">{log.routing_evaluation.routing_reasoning}</p>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            {log.type === 'routing' && log.orchestration_response && !log.routing_evaluation && (
                               <div className="space-y-3 mt-3">
                                 <div className="flex flex-col gap-2 p-3 bg-primary/5 rounded border border-primary/20">
                                     <div className="flex justify-between items-start">
@@ -2185,6 +2484,7 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                   const nestingClass = getStepNestingClass(stepId)
                   const stepMetrics = getStepMetrics(stepLogs.executions || [])
                   const showMetrics = hasStepMetrics(stepMetrics)
+                  const stepStartedAtMs = getStepFirstActivityMs(stepLogs)
 
                   const stepStatus = getStepStatus(stepLogs)
 
@@ -2231,11 +2531,11 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                             
                             <div className="flex flex-col items-start text-left min-w-0">
                               <div className="flex items-center gap-2 flex-wrap">
-                                <span className="flex-shrink-0" title={`Step type: ${stepLogs.type || 'regular'}`}>
+                                <span className="flex-shrink-0" title={getStepTypeDescription(stepLogs.type || 'regular')}>
                                   {getStepIcon(stepLogs.type)}
                                 </span>
                                 <span className="text-sm font-semibold text-foreground truncate">{displayTitle}</span>
-                                <span className={`inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-medium border ${getStepTypeBadgeStyle(stepLogs.type)}`}>
+                                <span title={getStepTypeDescription(stepLogs.type || 'regular')} className={`inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-medium border ${getStepTypeBadgeStyle(stepLogs.type)}`}>
                                   {getStepTypeLabel(stepLogs.type)}
                                 </span>
                               </div>
@@ -2261,6 +2561,26 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                                 </StepMetricChip>
                               )}
                             </>
+                          )}
+                          {stepStartedAtMs > 0 && (
+                            <StepMetricChip title={`First recorded activity: ${new Date(stepStartedAtMs).toLocaleString()}`}>
+                              <Clock className="h-3 w-3" />
+                              {formatStepStartedAt(stepStartedAtMs)}
+                            </StepMetricChip>
+                          )}
+                          {stepLogs.description?.trim() && (
+                            <StepMetricChip title={`Authored step instructions: ${stepLogs.description.length.toLocaleString()} characters`}>
+                              <FileText className="h-3 w-3" />
+                              {stepLogs.description.length >= 1000
+                                ? `${(stepLogs.description.length / 1000).toFixed(stepLogs.description.length >= 10_000 ? 0 : 1)}k`
+                                : stepLogs.description.length} instr
+                            </StepMetricChip>
+                          )}
+                          {stepLogs.parent_step_title && (
+                            <StepMetricChip title={`This route was dispatched by ${stepLogs.parent_step_title}${stepLogs.route_id ? ` (${stepLogs.route_id})` : ''}`}>
+                              <Split className="h-3 w-3 text-sky-600 dark:text-sky-300" />
+                              ↳ {stepLogs.parent_step_title}
+                            </StepMetricChip>
                           )}
                           <span className="whitespace-nowrap">
                             {stepLogs.executions.length} exec

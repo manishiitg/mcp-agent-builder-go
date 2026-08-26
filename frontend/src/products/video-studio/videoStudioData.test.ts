@@ -6,7 +6,7 @@ vi.mock('../../services/api', () => ({
   getAuthToken: () => null,
 }))
 import { agentApi } from '../../services/api'
-import { loadVideoProjects, parsePresentations, parseProjectManifest, parseWorkflowSteps, projectSlug, relativeTime, toCharacterPresentations, toDocumentPresentations } from './videoStudioData'
+import { loadVideoProjects, parsePresentations, parseProjectManifest, parseWorkflowSteps, projectSlug, relativeTime, toCharacterPresentations, toDocumentPresentations, toReferencePresentations } from './videoStudioData'
 import type { WorkspacePresentation } from '../../platform/presentations/presentationData'
 
 describe('Video Studio workspace data', () => {
@@ -139,5 +139,14 @@ describe('Video Studio pre-production presentations', () => {
 
     expect(documents).toHaveLength(1)
     expect(documents[0]).toMatchObject({ title: 'longform-script.md', path: 'work/longform-script.md', markdown: '# Script' })
+  })
+
+  it('presents a location or boundary image as a reference, not a character', () => {
+    const references = toReferencePresentations([
+      presentation({ path: 'work/references/cafe-start.png', role: 'start_frame', note: 'Keep the doorway and morning light.' }, { id: 'r1', kind: 'media.reference', title: 'Cafe sequence start' }),
+      presentation({ role: 'location' }, { id: 'r2', kind: 'media.reference' }),
+    ])
+    expect(references).toHaveLength(1)
+    expect(references[0]).toMatchObject({ title: 'Cafe sequence start', path: 'work/references/cafe-start.png', role: 'start_frame' })
   })
 })

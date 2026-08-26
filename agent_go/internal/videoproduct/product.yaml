@@ -65,6 +65,7 @@ profile:
   skills:
     - video-creation
     - video-look-sound
+    - cinematic-visual-development
     - longform-cinematic-video
     - multi-clip-cinematic-generation
     - video-stitching
@@ -103,6 +104,11 @@ profile:
     - id: video.show-character
       presentation:
         kind: media.character
+    # Locations, wardrobe, props, and sequence boundary frames are their own
+    # reviewable evidence. They must not be smuggled into the Characters panel.
+    - id: video.show-reference
+      presentation:
+        kind: media.reference
     # The written artifacts a stage produces — brief, script, shot list — are
     # what the user actually approves between stages.
     - id: video.show-document
@@ -139,6 +145,7 @@ profile:
       # Pre-production surfaces: a character's reference image before shots are
       # generated from it, and the written artifact a stage just produced.
       - show_character
+      - show_reference
       - show_document
       # MCP-only file editing is guarded and reported to the browser, unlike a
       # provider-native terminal edit.
@@ -297,6 +304,7 @@ workflows:
   selected_skills:
     - video-creation
     - video-look-sound
+    - cinematic-visual-development
     - multi-clip-cinematic-generation
     - video-stitching
     - video-editing

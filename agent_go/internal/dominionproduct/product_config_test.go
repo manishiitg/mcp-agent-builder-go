@@ -41,6 +41,12 @@ func TestDominionManifestDeclaresProjectScopeAndNarrowAllowlist(t *testing.T) {
 	if len(manifest.Profile.Runtime.ProviderOptions) != 1 || manifest.Profile.Runtime.ProviderOptions[0].Provider != "claude-code" {
 		t.Fatalf("dominion must curate runtime.provider_options to exactly claude-code, got %+v", manifest.Profile.Runtime.ProviderOptions)
 	}
+	// Dominion has no legitimate desktop use case -- it must never silently
+	// fall back to an ambient `claude` CLI login, regardless of how the
+	// server happens to be configured.
+	if !manifest.Profile.Runtime.RequireProviderToken {
+		t.Fatal("dominion must declare runtime.require_provider_token: true")
+	}
 	if !manifest.Profile.ToolPolicy.IsAllowlist() {
 		t.Fatal("dominion must declare tool_policy.mode: allowlist -- an unrestricted chat over trading data is exactly the gap this profile exists to close")
 	}

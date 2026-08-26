@@ -1535,26 +1535,23 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   const adjustTextareaHeight = useCallback(() => {
     if (textareaRef.current) {
       const textarea = textareaRef.current
-      // Video Studio is a compact, single-line composer. Keep long creative
-      // prompts on one horizontal line rather than growing the product surface
-      // into a terminal-like input box.
-      if (isProductSurface) {
-        textarea.style.height = '36px'
-        return
-      }
-      // Fast path: the box is already at the 2-line floor and the content fits
-      // (no vertical overflow). There is nothing to grow or shrink, so DON'T flip
+      // Product surfaces start one line shorter (36px vs 40px) to stay compact
+      // when empty, but still grow with real wrapped content rather than
+      // scrolling it off-screen horizontally.
+      const floor = isProductSurface ? 36 : 40
+      // Fast path: the box is already at its floor and the content fits (no
+      // vertical overflow). There is nothing to grow or shrink, so DON'T flip
       // height to 'auto' — that forced reflow is what jitters the flex column and
       // fires the terminal's ResizeObserver on every keystroke, even a single
       // character that needs no growth at all.
-      if (textarea.style.height === '40px' && textarea.scrollHeight <= textarea.clientHeight) {
+      if (textarea.style.height === `${floor}px` && textarea.scrollHeight <= textarea.clientHeight) {
         return
       }
       // Reset height to auto to get correct scrollHeight
       textarea.style.height = 'auto'
-      // Calculate new height (min 40px for 2 lines, max 100px)
+      // Calculate new height (min = floor, max 100px)
       // scrollHeight includes padding, so we get the exact content height
-      const newHeight = Math.min(Math.max(textarea.scrollHeight, 40), 100)
+      const newHeight = Math.min(Math.max(textarea.scrollHeight, floor), 100)
       const newHeightPx = `${newHeight}px`
       // Only write when it actually changes so an unchanged height never leaves a
       // pending style mutation / extra layout pass.
@@ -3577,9 +3574,8 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
               onDragLeave={handleTextareaDragLeave}
               onDrop={handleTextareaDrop}
               rows={isProductSurface ? 1 : undefined}
-              wrap={isProductSurface ? 'off' : undefined}
               placeholder={placeholder}
-              className={`${isProductSurface ? '!min-h-[36px] !max-h-[36px] !border-0 !bg-transparent !px-2 !py-1.5 text-sm text-slate-100 !shadow-none focus-visible:!ring-0 placeholder:text-sm placeholder:text-slate-400 whitespace-nowrap !overflow-x-auto !overflow-y-hidden' : '!min-h-[36px] max-h-[100px] !border-0 !bg-transparent !py-1.5 !px-2 text-xs !shadow-none focus-visible:!ring-0 placeholder:text-xs'} resize-none overflow-y-auto leading-[1.3] ${
+              className={`${isProductSurface ? '!min-h-[36px] max-h-[100px] !border-0 !bg-transparent !px-2 !py-1.5 text-sm text-slate-100 !shadow-none focus-visible:!ring-0 placeholder:text-sm placeholder:text-slate-400' : '!min-h-[36px] max-h-[100px] !border-0 !bg-transparent !py-1.5 !px-2 text-xs !shadow-none focus-visible:!ring-0 placeholder:text-xs'} resize-none overflow-y-auto leading-[1.3] ${
                 isDraggingFiles ? 'ring-2 ring-blue-500 border-blue-500 bg-blue-50/30 dark:bg-blue-900/10' : ''
               }`}
               disabled={inputDisabled}

@@ -384,6 +384,15 @@ export interface ReportHumanInputOption {
   description?: string
 }
 
+export interface ReportHumanInputApplyContract {
+  mode?: 'no_change' | 'direct_apply' | 'targeted_fixer' | 'external_wait' | string
+  issue_id?: string
+  approved_scope?: string
+  pre_run_checks?: string[]
+  post_run_proof?: string
+  failure_policy?: 'continue_unchanged' | 'block_run' | string
+}
+
 export interface ReportHumanInput {
   id: string
   workspace_path: string
@@ -413,6 +422,7 @@ export interface ReportHumanInput {
 	claim_token?: string
 	claimed_at?: string
 	claim_expires_at?: string
+	apply_contract?: ReportHumanInputApplyContract
 }
 
 export interface ReportHumanInputsResponse {
@@ -1921,6 +1931,12 @@ export interface VariableGroupsResponse {
 // Execution Logs API types
 export interface ValidationLog {
   attempt: number;
+  // "pre_validation" records are automatic structural checks that can trigger
+  // a message-sequence repair turn; ordinary "validation" is the legacy step
+  // validation format.
+  kind?: 'validation' | 'pre_validation' | string;
+  phase?: string;
+  execution_attempt?: number;
   file_path: string;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   content: any; // Full JSON content of validation log
@@ -1946,6 +1962,19 @@ export interface ExecutionAttemptLog {
 export interface OrchestrationLog {
   type: string;
   timestamp: string;
+  source?: 'routing_evaluation' | string;
+  file_path?: string;
+  routing_evaluation?: {
+    routing_question?: string;
+    selected_route_id?: string;
+    routing_reasoning?: string;
+    route_selection?: {
+      source_kind?: string;
+      source_path?: string;
+      raw_value?: string;
+    };
+    route_next_steps?: Record<string, string>;
+  };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   orchestration_response?: any;
   selected_route_id?: string;
@@ -2014,6 +2043,9 @@ export interface StepExecutionLogs {
   type: string;
   title: string;
   description: string;
+  parent_step_id?: string;
+  parent_step_title?: string;
+  route_id?: string;
   success_criteria?: string;
   context_output?: string;  // Expected output filename
   learning_objective?: string;
@@ -2022,6 +2054,14 @@ export interface StepExecutionLogs {
   knowledgebase_write_method?: string;
   knowledgebase_contribution?: string;
   message_sequence_status?: 'running' | 'completed' | 'failed';
+  message_sequence?: {
+    session_path: string;
+    status?: 'running' | 'completed' | 'failed' | string;
+    entries?: MessageSequenceLogEntry[];
+  };
+  // The message text authored in the workflow plan, distinct from the larger
+  // runtime prompt assembled for the agent.
+  planned_messages?: PlannedMessageSequenceItem[];
   output_content?: StepOutputContent;  // Actual output file content
   artifacts?: { file_name: string; file_path: string }[]; // Other output files
   validations: ValidationLog[];
@@ -2031,6 +2071,24 @@ export interface StepExecutionLogs {
   learnings?: LearningLog[];
   archived_logs?: ArchivedLogEntry[];  // Logs from previous runs
   archived_executions?: ArchivedExecutionEntry[];  // Archived execution outputs from previous routing
+}
+
+export interface MessageSequenceLogEntry {
+  entry_id: string;
+  item_id?: string;
+  item_type?: string;
+  source?: string;
+  status: 'running' | 'completed' | 'failed' | string;
+  summary?: string;
+  started_at?: string;
+  ended_at?: string;
+}
+
+export interface PlannedMessageSequenceItem {
+  id: string;
+  type?: string;
+  kind?: string;
+  message: string;
 }
 
 export interface ModelTokenUsage {

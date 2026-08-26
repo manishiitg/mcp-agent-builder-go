@@ -44,3 +44,20 @@ export function isEnabledProductSurface(surface: ProductSurface): boolean {
 export function isSingleProductDeployment(): boolean {
   return enabledProductSurfaces().length === 1
 }
+
+/**
+ * Narrows a deployment-wide surface list to what one user is allowed to see.
+ * `allowedProducts` is the logged-in user's `allowed_products` from
+ * `/api/auth/me` -- null/undefined (no per-user grant on record) means
+ * unrestricted, so `surfaces` passes through unchanged. This stays a pure
+ * function so `enabledProductSurfaces()` itself doesn't need to know about
+ * auth state; callers intersect at the point they already read both.
+ */
+export function intersectAllowedProductSurfaces(
+  surfaces: ProductSurface[],
+  allowedProducts: string[] | null | undefined,
+): ProductSurface[] {
+  if (!allowedProducts || allowedProducts.length === 0) return surfaces
+  const allowed = new Set(allowedProducts.map((p) => p.toLowerCase()))
+  return surfaces.filter((surface) => allowed.has(surface.toLowerCase()))
+}

@@ -153,12 +153,48 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
    real risk — scripting a step that is not actually deterministic breaks it —
    so where the trace does not settle it, say so and leave it agentic.
 
+### Prompt-contract health
+
+Before making a prompt-bloat judgment, call `get_plan_prompt_health` once.
+It reports authored description sizes and long verbatim duplicate paragraphs
+without injecting the full plan into this review. Inspect only the exact
+affected step definitions, validation schemas, and referenced shared contracts
+afterward. Do not equate a long prompt with a defect: browser/UI work, adaptive
+research, and safety-critical judgment can legitimately need substantial
+context.
+
+When the report crosses a triage boundary (a step over 20k characters, 30% or
+more of described steps over 5k, or 10k or more repeated description
+characters), assess whether the workflow has accumulated shared database,
+browser, validation, or policy prose that belongs in a versioned reference or
+deterministic script. If so, file **one canonical workflow-level finding**,
+not one finding per large step. Its evidence must name the measured totals and
+the exact affected steps; its recommendation must name the proposed ownership
+split: step-specific decision contract, shared reference, validation schema,
+or script.
+
+A migration spanning several steps, shared references, public-action behavior,
+or output ownership is `decision_required`: create a stable
+`technical-decision-prompt-contract-consolidation-...` request with
+approve/reject/defer options and the phased extraction order, preserved
+boundaries, expected benefit, risk, and verification plan. A small local
+deduplication that preserves step inputs, outputs, validation, routes, and
+side-effect order may use `fixer_handoff`. The Fixer changes one bounded
+contract at a time and requires a post-change producing run; it never bulk
+shortens prose merely to meet a numeric target.
+
 ### Execution-health diagnosis
 
 When Gate selected `execution_health`, make this a bounded causal review,
 not a broad list of expensive calls. Read the current `planning/plan.json` and
 the smallest comparable timing/cost/trace evidence needed for the affected
 steps. Produce one compact diagnosis that names:
+
+When a Gate `deterministic_intake.runtime` signal selected this focus, begin
+with its exact `run_folder`, `step_id`, and timing artifact. It proves only a
+status fact; determine whether the failed child call was essential, recovered,
+already represented by a canonical issue, or makes the claimed result
+unreliable. Do not create a separate finding solely because the signal exists.
 
 - the one to three exact step or message-sequence IDs responsible for the
   material delay, with measured turn time, input/context cost, tool-call count,

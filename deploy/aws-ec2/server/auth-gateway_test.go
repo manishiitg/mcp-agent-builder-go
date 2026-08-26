@@ -125,11 +125,12 @@ func TestUnauthenticatedFrontendRequestStillRedirectsToLogin(t *testing.T) {
 
 func TestAuthenticatedRequestRefreshesSessionNearExpiry(t *testing.T) {
 	gateway := &gateway{
-		secret:      []byte("test-secret-that-is-long-enough"),
-		frontendDir: t.TempDir(),
+		secret:        []byte("test-secret-that-is-long-enough"),
+		frontendDir:   t.TempDir(),
+		sessionCookie: sessionCookieName("video-studio"),
 	}
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: gateway.signedSession(time.Now().Add(time.Hour))})
+	req.AddCookie(&http.Cookie{Name: gateway.sessionCookie, Value: gateway.signedSession(time.Now().Add(time.Hour))})
 	response := httptest.NewRecorder()
 
 	gateway.ServeHTTP(response, req)
@@ -138,7 +139,7 @@ func TestAuthenticatedRequestRefreshesSessionNearExpiry(t *testing.T) {
 	defer result.Body.Close()
 	var refreshed *http.Cookie
 	for _, cookie := range result.Cookies() {
-		if cookie.Name == sessionCookie {
+		if cookie.Name == gateway.sessionCookie {
 			refreshed = cookie
 			break
 		}
@@ -148,5 +149,26 @@ func TestAuthenticatedRequestRefreshesSessionNearExpiry(t *testing.T) {
 	}
 	if remaining := time.Until(refreshed.Expires); remaining < 11*time.Hour || remaining > 13*time.Hour {
 		t.Fatalf("refreshed session lifetime = %s", remaining)
+	}
+}
+
+func TestSessionCookieNameNamespacesByGatewayIdentity(t *testing.T) {
+	if got := sessionCookieName("video-studio"); got != "video_studio_session" {
+		t.Errorf("sessionCookieName(%q) = %q, want the original literal so an already-running Video Studio deployment's browser sessions survive a redeploy of this now-parameterized binary", "video-studio", got)
+	}
+	if got := sessionCookieName("dominion"); got != "dominion_session" {
+		t.Errorf("sessionCookieName(%q) = %q, want dominion_session", "dominion", got)
+	}
+}
+
+func TestNewGatewayDerivesSessionCookieFromGatewayUserID(t *testing.T) {
+	t.Setenv("AUTH_SECRET", "test-secret-that-is-long-enough-x")
+	t.Setenv("ACCESS_PASSWORD", "pw")
+	t.Setenv("GATEWAY_USER_ID", "dominion")
+
+	gw := newGateway()
+
+	if gw.sessionCookie != "dominion_session" {
+		t.Errorf("sessionCookie = %q, want dominion_session", gw.sessionCookie)
 	}
 }

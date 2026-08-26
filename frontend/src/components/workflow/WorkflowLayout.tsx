@@ -230,66 +230,17 @@ const WorkflowPreviousChatsPanel: React.FC<{
   const setTabConfig = useChatStore(state => state.setTabConfig)
   const addToast = useChatStore(state => state.addToast)
 
-  const handleResumePreviousChat = useCallback(async (session: ChatHistorySession) => {
-    const disposition = chatHistoryOpenDisposition(session)
-    if (disposition === 'read-only-schedule') {
-      const chatStore = useChatStore.getState()
-      const existingTab = Object.values(chatStore.chatTabs).find(tab =>
-        tab.metadata?.mode === 'workflow' &&
-        tab.metadata?.isScheduledRun === true &&
-        tab.sessionId === session.session_id
-      )
-      const scheduleMetadata: NonNullable<ChatTab['metadata']> = {
-        mode: 'workflow',
-        presetQueryId: activePresetId || undefined,
-        isViewOnly: true,
-        isScheduledRun: true,
-        scheduledJobName: 'Schedule',
-        readOnlyRestoredAt: Date.now(),
-        userInteractiveContinuation: false,
-      }
-      const targetTabId = existingTab?.tabId || await chatStore.createChatTab('Schedule', scheduleMetadata)
-
-      if (existingTab) chatStore.setTabMetadata(targetTabId, scheduleMetadata)
-      chatStore.updateTabSessionId(targetTabId, session.session_id)
-      chatStore.setTabViewMode(targetTabId, 'formatted')
-      chatStore.setTabStreaming(targetTabId, false)
-      chatStore.setTabCompleted(targetTabId, true)
-      chatStore.setTabHasRunningBgAgents(targetTabId, false)
-      chatStore.setTabSyntheticTurn(targetTabId, false)
-      chatStore.setTabCanSteer(targetTabId, false)
-
-      try {
-        const runtime = await hydrateTabEvents(session.session_id, {
-          workspacePath,
-          fallbackToChatHistory: true,
-          preferChatHistory: true,
-        })
-        chatStore.setTabStreaming(targetTabId, runtime.status === 'running')
-        chatStore.setTabCompleted(targetTabId, runtime.status !== 'running')
-        chatStore.setTabHasRunningBgAgents(targetTabId, runtime.hasRunningBackgroundAgents ?? false)
-        chatStore.setTabSyntheticTurn(targetTabId, runtime.isSyntheticTurn ?? false)
-        chatStore.setTabCanSteer(targetTabId, false)
-      } catch (error) {
-        logger.warn('WorkflowLayout', 'Failed to restore scheduled-run transcript', {
-          sessionId: session.session_id,
-          error,
-        })
-        addToast('Failed to open the saved schedule transcript', 'error')
-        return
-      }
-
-      activateTab(targetTabId)
-      setShowChatArea(true)
-      return
-    }
-
-    if (!activeTabId) {
-      addToast('No active automation chat to resume in', 'error')
-      return
-    }
-
-    let targetTabId = activeTabId
+  // Shared by the manual "Resume" click (handleResumePreviousChat below,
+  // starting tab = whatever's active) and the auto-restore-on-open effect
+  // further below (starting tab = the just-created blank builder tab, known
+  // synchronously -- reading activeTabId there would race React's state
+  // batching).
+  const resumeChatSessionIntoTab = useCallback(async (
+    session: ChatHistorySession,
+    startingTabId: string,
+    disposition: ReturnType<typeof chatHistoryOpenDisposition>,
+  ) => {
+    let targetTabId = startingTabId
     const chatStore = useChatStore.getState()
     let targetTab = chatStore.chatTabs[targetTabId]
     const targetPresetId = targetTab?.metadata?.presetQueryId
@@ -363,7 +314,114 @@ const WorkflowPreviousChatsPanel: React.FC<{
       setShowChatArea(true)
       startRestoredTransportTerminal(session.session_id, path, session.session_id, workspacePath)
     }
-  }, [activePresetId, activeTabId, addToast, setShowChatArea, setTabConfig, workspacePath])
+  }, [activePresetId, addToast, setShowChatArea, setTabConfig, workspacePath])
+
+  const handleResumePreviousChat = useCallback(async (session: ChatHistorySession) => {
+    const disposition = chatHistoryOpenDisposition(session)
+    if (disposition === 'read-only-schedule') {
+      const chatStore = useChatStore.getState()
+      const existingTab = Object.values(chatStore.chatTabs).find(tab =>
+        tab.metadata?.mode === 'workflow' &&
+        tab.metadata?.isScheduledRun === true &&
+        tab.sessionId === session.session_id
+      )
+      const scheduleMetadata: NonNullable<ChatTab['metadata']> = {
+        mode: 'workflow',
+        presetQueryId: activePresetId || undefined,
+        isViewOnly: true,
+        isScheduledRun: true,
+        scheduledJobName: 'Schedule',
+        readOnlyRestoredAt: Date.now(),
+        userInteractiveContinuation: false,
+      }
+      const targetTabId = existingTab?.tabId || await chatStore.createChatTab('Schedule', scheduleMetadata)
+
+      if (existingTab) chatStore.setTabMetadata(targetTabId, scheduleMetadata)
+      chatStore.updateTabSessionId(targetTabId, session.session_id)
+      chatStore.setTabViewMode(targetTabId, 'formatted')
+      chatStore.setTabStreaming(targetTabId, false)
+      chatStore.setTabCompleted(targetTabId, true)
+      chatStore.setTabHasRunningBgAgents(targetTabId, false)
+      chatStore.setTabSyntheticTurn(targetTabId, false)
+      chatStore.setTabCanSteer(targetTabId, false)
+
+      try {
+        const runtime = await hydrateTabEvents(session.session_id, {
+          workspacePath,
+          fallbackToChatHistory: true,
+          preferChatHistory: true,
+        })
+        chatStore.setTabStreaming(targetTabId, runtime.status === 'running')
+        chatStore.setTabCompleted(targetTabId, runtime.status !== 'running')
+        chatStore.setTabHasRunningBgAgents(targetTabId, runtime.hasRunningBackgroundAgents ?? false)
+        chatStore.setTabSyntheticTurn(targetTabId, runtime.isSyntheticTurn ?? false)
+        chatStore.setTabCanSteer(targetTabId, false)
+      } catch (error) {
+        logger.warn('WorkflowLayout', 'Failed to restore scheduled-run transcript', {
+          sessionId: session.session_id,
+          error,
+        })
+        addToast('Failed to open the saved schedule transcript', 'error')
+        return
+      }
+
+      activateTab(targetTabId)
+      setShowChatArea(true)
+      return
+    }
+
+    if (!activeTabId) {
+      addToast('No active automation chat to resume in', 'error')
+      return
+    }
+    await resumeChatSessionIntoTab(session, activeTabId, disposition)
+  }, [activeTabId, addToast, resumeChatSessionIntoTab, setShowChatArea, workspacePath, activePresetId])
+
+  // Explicit product decision: opening a workflow with nothing currently
+  // happening for it (no live schedule, no live chat, no bg agents -- the
+  // reconnect effect in WorkflowLayout already prefers activating any of
+  // those over leaving this landing panel showing) should not drop the
+  // operator on a bare browse screen. Auto-restore the most recent real
+  // conversation instead; this landing panel still renders for genuinely
+  // fresh workflows (no chat history at all) and while its own fetch runs.
+  const autoRestoredRef = useRef(false)
+  useEffect(() => {
+    if (autoRestoredRef.current) return
+    if (!activeTabId || !workspacePath) return
+    const store = useChatStore.getState()
+    const tab = store.chatTabs[activeTabId]
+    // Only the blank builder tab this panel backs is eligible -- never
+    // hijack a tab the user already pointed at something else (a specific
+    // schedule/bot run, or a session already loaded here).
+    if (!tab || tab.metadata?.mode !== 'workflow' || tab.sessionId) return
+    if (tab.metadata?.isViewOnly || tab.metadata?.isScheduledRun || tab.metadata?.isBotRun) return
+
+    // Explicit guard, not just an assumption about effect ordering: skip if
+    // ANY other tab for this workflow is actually doing something right now.
+    const somethingElseIsRunning = Object.values(store.chatTabs).some(other =>
+      other.tabId !== activeTabId &&
+      other.metadata?.mode === 'workflow' &&
+      other.metadata?.presetQueryId === activePresetId &&
+      (other.isStreaming || other.hasRunningBgAgents)
+    )
+    if (somethingElseIsRunning) return
+
+    autoRestoredRef.current = true
+    void (async () => {
+      try {
+        const { sessions } = await agentApi.listChatHistorySessions(1, 0, workspacePath, 'chat')
+        const [mostRecent] = sessions
+        if (!mostRecent) return
+        // Re-check right before applying: this fetch is async, and the
+        // reconnect effect may have activated a live tab in the meantime.
+        const latestTab = useChatStore.getState().chatTabs[activeTabId]
+        if (!latestTab || latestTab.sessionId) return
+        await resumeChatSessionIntoTab(mostRecent, activeTabId, chatHistoryOpenDisposition(mostRecent))
+      } catch (error) {
+        logger.warn('WorkflowLayout', 'Failed to auto-restore the most recent conversation', { workspacePath, error })
+      }
+    })()
+  }, [activeTabId, workspacePath, resumeChatSessionIntoTab])
 
   return (
     <PreviousChatHistoryPanel

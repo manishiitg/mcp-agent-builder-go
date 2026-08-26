@@ -637,6 +637,12 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 		// marker without proving the real effect; not every step has a db.
 		"self-asserted marker",
 		"not every step has a db",
+		// Repeated final-gate repairs deserve a bounded contract-health review,
+		// not a blanket schema expansion or deletion pass.
+		"Validation-contract health",
+		"what meaningful bad outcome could pass if this check did not exist?",
+		"boolean and a string pattern",
+		"negative fixture",
 	} {
 		if !strings.Contains(bugReview, want) {
 			t.Fatalf("pulse-bug-review missing %q", want)

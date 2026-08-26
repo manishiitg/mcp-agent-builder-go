@@ -1473,7 +1473,7 @@ func GetToolsForWorkshopMode(mode string) []string {
 
 	// Read-only info tools — safe in all modes
 	readOnly := []string{
-		"get_step_prompts", "get_workflow_config", "get_llm_config", "get_cost_summary",
+		"get_step_prompts", "get_plan_prompt_health", "get_workflow_config", "get_llm_config", "get_cost_summary",
 	}
 
 	// Workshop execution tools
@@ -2949,7 +2949,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				},
 				"group_name": map[string]interface{}{
 					"type":        "string",
-					"description": "Variable group ID (e.g., 'group-1', 'saurabh'). Required. Read variables/variables.json to see available groups.",
+					"description": "Optional variable group ID. Omit it when this product has one default execution group; otherwise read variables/variables.json and provide a group name.",
 				},
 				"instructions": map[string]interface{}{
 					"type":        "string",
@@ -2973,7 +2973,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					"description": "Workshop mode only. If true, run ONLY the saved learnings/{step-id}/main.py script with no LLM fallback. Fails if no saved script exists, the step is not in scripted mode, or the current workshop mode is Run. Use this to quickly test scripted main.py patches.",
 				},
 			},
-			"required": []string{"step_id", "group_name"},
+			"required": []string{"step_id"},
 		},
 		func(ctx context.Context, args map[string]interface{}) (string, error) {
 			stepIDRaw, ok := args["step_id"]
@@ -2988,23 +2988,22 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			// Extract group_name and other options
 			groupNameRaw, _ := args["group_name"]
 			groupName, _ := groupNameRaw.(string)
-			if groupName == "" {
-				return "group_name is required. Read variables/variables.json to see available groups.", nil
-			}
 
 			// Fallback to session-level group from toolbar selection
 			if groupName == "" && len(iwm.controller.enabledGroupNames) > 0 {
 				groupName = iwm.controller.enabledGroupNames[0]
 			}
 
-			// Validate a group is available — cannot run steps without one
+			// Resolve an execution group when the workspace defines them. Products
+			// with no user-visible variables may omit group_name and supply only a
+			// run folder; this preserves a stable execution scope without forcing a
+			// user to choose workflow machinery.
 			if groupName == "" {
 				iwm.refreshVariablesManifest(ctx)
-				if iwm.controller.variablesManifest == nil || len(iwm.controller.variablesManifest.Groups) == 0 {
-					return "No variable groups exist. Create a group first using add_group before running steps.", nil
+				if iwm.controller.variablesManifest != nil && len(iwm.controller.variablesManifest.Groups) > 0 {
+					// Auto-select the first available group.
+					groupName = iwm.controller.variablesManifest.Groups[0].Name
 				}
-				// Auto-select the first available group
-				groupName = iwm.controller.variablesManifest.Groups[0].Name
 			}
 
 			iteration := "iteration-0"
@@ -4887,7 +4886,38 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 		logger.Warn(fmt.Sprintf("⚠️ Failed to register update_step_config tool: %v", err))
 	}
 
-	// Tool 5: get_step_prompts — read saved system prompt + user message for a step run
+	// Tool 5: get_plan_prompt_health — compact, deterministic size/duplication
+	// metrics for authored step descriptions. This avoids pasting a whole plan into
+	// a reviewer prompt just to establish whether prompt-contract bloat exists.
+	if err := mcpAgent.RegisterCustomTool(
+		"get_plan_prompt_health",
+		"Measure authored plan-description health without dumping the plan: per-step character counts, 5k/10k/20k thresholds, and long verbatim duplicate paragraphs. This is an objective review signal, not permission to rewrite a workflow automatically.",
+		map[string]interface{}{
+			"type":       "object",
+			"properties": map[string]interface{}{},
+		},
+		func(ctx context.Context, _ map[string]interface{}) (string, error) {
+			if iwm.controller.approvedPlan == nil {
+				if err := iwm.controller.LoadPlanForWorkshop(ctx); err != nil {
+					return "", fmt.Errorf("load plan for prompt-health review: %w", err)
+				}
+			}
+			if iwm.controller.approvedPlan == nil {
+				return "no plan loaded; ensure planning/plan.json exists", nil
+			}
+			report := BuildPromptHealthReport(iwm.controller.approvedPlan.Steps)
+			encoded, err := json.MarshalIndent(report, "", "  ")
+			if err != nil {
+				return "", fmt.Errorf("encode prompt-health report: %w", err)
+			}
+			return string(encoded), nil
+		},
+		"workflow",
+	); err != nil {
+		logger.Warn(fmt.Sprintf("⚠️ Failed to register get_plan_prompt_health tool: %v", err))
+	}
+
+	// Tool 6: get_step_prompts — read saved system prompt + user message for a step run
 	if err := mcpAgent.RegisterCustomTool(
 		"get_step_prompts",
 		"Get the system prompt and user message for a step. Works both during execution (prompts saved at start) and after completion. Useful for debugging what instructions the agent received. For sub-agent steps, pass the inner step ID directly (e.g., 'step-icici-login') or use route_id with the parent step.",
@@ -8817,6 +8847,12 @@ controller deliberately does not paste or summarize them into this prompt:
 - read `+"`workflow.json`"+` for workflow-selected skills and capability settings
 - inspect `+"`planning/plan.json`"+` with targeted `+"`jq`"+` queries, one relevant
   step/route/field set at a time; do not dump the full plan into the conversation
+- call `+"`get_plan_prompt_health`"+` before raising any prompt-contract-bloat
+  finding. Treat its character counts and repeated-paragraph clusters as an
+  objective triage signal, not an automatic defect: inspect the affected step,
+  validation, and shared references before deciding whether a safe extraction
+  exists. Prefer one workflow-level consolidation finding over one finding per
+  oversized step, and never rewrite a broad workflow contract from review alone.
 - inspect `+"`planning/step_config.json`"+` directly for execution modes, tools,
   skills, learning/KB access, locks, and review metadata
 

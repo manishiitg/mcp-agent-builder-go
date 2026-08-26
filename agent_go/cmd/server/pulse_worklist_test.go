@@ -1511,6 +1511,17 @@ func TestGetPulseModuleStateExposesLoopClosureButNotShadowHistory(t *testing.T) 
 	if got := loopClosure["coverage_status"]; got != loopclosure.CoverageNotInstrumented {
 		t.Fatalf("loop_closure coverage = %#v, want %q", got, loopclosure.CoverageNotInstrumented)
 	}
+	intake, exists := payload["deterministic_intake"].(map[string]interface{})
+	if !exists {
+		t.Fatalf("Gate payload is missing deterministic intake evidence: %s", raw)
+	}
+	runtime, exists := intake["runtime"].(map[string]interface{})
+	if !exists || runtime["coverage_status"] != "not_instrumented" {
+		t.Fatalf("runtime intake = %#v, want not-instrumented evidence", intake["runtime"])
+	}
+	if note, _ := payload["deterministic_intake_note"].(string); !strings.Contains(note, "not an automatic Pulse issue") {
+		t.Fatalf("deterministic_intake_note = %q", note)
+	}
 	note, _ := payload["loop_closure_note"].(string)
 	for _, required := range []string{"do not mandate a module", "authorize mutation", "coverage_status"} {
 		if !strings.Contains(note, required) {
@@ -1628,9 +1639,10 @@ func completePulseWorklistDecisions(overrides map[string]PulseWorklistDecision) 
 	return out
 }
 
-func TestPulseReviewFocusCatalogUsesSixTechnicalAreasWithoutSafety(t *testing.T) {
+func TestPulseReviewFocusCatalogUsesValidationContractHealthWithoutSafety(t *testing.T) {
 	want := []string{
 		"execution_health",
+		"validation_contract_health",
 		"plan_orchestration_integrity",
 		"store_integrity",
 		"report_quality_truth",

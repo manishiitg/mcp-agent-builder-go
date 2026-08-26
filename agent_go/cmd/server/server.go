@@ -126,6 +126,49 @@ func productEnabled(product string) bool {
 	return false
 }
 
+// isSingleProductServerDeployment reports whether this server instance is
+// dedicated to exactly one product surface (Video Studio, Dominion, Finance)
+// via AGENT_PRODUCTS, as opposed to the shared desktop/multi-product server
+// where AGENT_PRODUCTS is unset. Only a genuinely dedicated deployment is
+// eligible for the missing-Claude-Code-token refusal in handleQuery: on the
+// desktop app, falling back to the user's own locally logged-in `claude` CLI
+// is correct, intended behavior, not a bug to guard against.
+func isSingleProductServerDeployment() bool {
+	configured := strings.TrimSpace(os.Getenv("AGENT_PRODUCTS"))
+	if configured == "" {
+		return false
+	}
+	count := 0
+	for _, candidate := range strings.Split(configured, ",") {
+		if strings.TrimSpace(candidate) != "" {
+			count++
+		}
+	}
+	return count == 1
+}
+
+// claudeCodeTokenMissingForSingleProductDeployment reports whether handleQuery
+// must refuse this request: an active product profile resolves to the
+// claude-code provider with no configured token, and either (a) this server
+// is a dedicated single-product deployment (see
+// isSingleProductServerDeployment -- the default safety net every product
+// gets for free on such a deployment, no manifest change needed), or (b) the
+// profile itself declares Runtime.RequireProviderToken (product.yaml opt-in
+// for a profile that must never rely on an ambient CLI login regardless of
+// deployment context).
+func claudeCodeTokenMissingForSingleProductDeployment(resolvedProfile *resolvedAgentProfile, finalProvider string) bool {
+	if resolvedProfile == nil || !strings.EqualFold(finalProvider, "claude-code") {
+		return false
+	}
+	if !isSingleProductServerDeployment() && !resolvedProfile.Definition.Runtime.RequireProviderToken {
+		return false
+	}
+	if resolvedProfile.APIKeys == nil || resolvedProfile.APIKeys.ClaudeCodeOAuthToken == nil {
+		return true
+	}
+	return strings.TrimSpace(*resolvedProfile.APIKeys.ClaudeCodeOAuthToken) == ""
+}
+
 func normalizeMCPBridgeCategory(name string) string {
 	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(name), "-", "_"))
 }
@@ -1633,6 +1676,7 @@ func runServer(cmd *cobra.Command, args []string) {
 			log.Printf("Failed to sync visible Video Studio skills into existing projects: %v", err)
 		}
 		for _, profile := range videoproduct.BuiltinAgentProfiles() {
+			profile.Product = "video-studio"
 			if err := profileRegistry.RegisterProfile(profile); err != nil {
 				log.Fatalf("Failed to register Video Studio agent profile: %v", err)
 			}
@@ -1646,6 +1690,7 @@ func runServer(cmd *cobra.Command, args []string) {
 			log.Fatalf("Failed to register Finance skills: %v", err)
 		}
 		for _, profile := range financeproduct.BuiltinAgentProfiles() {
+			profile.Product = "finance"
 			if err := profileRegistry.RegisterProfile(profile); err != nil {
 				log.Fatalf("Failed to register Finance agent profile: %v", err)
 			}
@@ -1660,6 +1705,7 @@ func runServer(cmd *cobra.Command, args []string) {
 			log.Fatalf("Failed to register Dominion skills: %v", err)
 		}
 		for _, profile := range dominionproduct.BuiltinAgentProfiles() {
+			profile.Product = "dominion"
 			if err := profileRegistry.RegisterProfile(profile); err != nil {
 				log.Fatalf("Failed to register Dominion agent profile: %v", err)
 			}
@@ -3085,6 +3131,20 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid agent profile request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+	// Per-user workflow access: the list endpoint already hides workflows a
+	// user isn't allowed to see, but that's UX only -- a user who already
+	// knows a workflow's folder name could still open it directly. This is
+	// the actual security boundary. Only the generic (profile-less)
+	// AgentWorks chat path opens a workflow this way; product surfaces like
+	// Dominion never point SelectedFolder at "Workflow/" themselves.
+	if strings.HasPrefix(req.SelectedFolder, "Workflow/") {
+		if manifest, exists, manifestErr := ReadWorkflowManifest(r.Context(), req.SelectedFolder); manifestErr == nil && exists {
+			if !userAllowedWorkflowID(GetUserFromContext(r.Context()), manifest.ID) {
+				http.Error(w, "You don't have access to this workflow", http.StatusForbidden)
+				return
+			}
+		}
+	}
 	// Scheduled/Chief requests may already carry the configured secret name at
 	// this point. Resolve it for backend delivery and strip it from agent env.
 	api.resolveNotificationSecretForRequest(r.Context(), currentUserID, req.SelectedFolder, &req)
@@ -3358,6 +3418,20 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 		// Fall back to request defaults
 		finalProvider = req.Provider
 		finalModelID = req.ModelID
+	}
+
+	// A dedicated single-product server deployment (Video Studio, Dominion,
+	// Finance) resolving to the claude-code provider with no configured
+	// token must refuse loudly here, before the CLI process is ever spawned.
+	// Left unchecked, provider initialization falls back to "the CLI's own
+	// saved login": on a fresh HOME that hangs on an unattended interactive
+	// login screen nobody can answer; on a HOME shared with a prior `claude
+	// login` it silently authenticates as -- and bills -- that account
+	// instead. The desktop app (AGENT_PRODUCTS unset) is deliberately exempt:
+	// using the operator's own logged-in CLI there is correct, not a bug.
+	if claudeCodeTokenMissingForSingleProductDeployment(resolvedProfile, finalProvider) {
+		http.Error(w, "No Claude Code token configured for this deployment. Set CLAUDE_CODE_OAUTH_TOKEN before starting the service.", http.StatusBadRequest)
+		return
 	}
 
 	// Session config isn't persisted anymore — follow-up messages rely on the

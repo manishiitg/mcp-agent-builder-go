@@ -53,12 +53,34 @@ For `technical_review`, use `execution_health` when Gate cites a cadence-threate
 run or evidence of incorrect execution, repeated context, payload, retries,
 tool/runtime failure, schedule recovery, or sequence overhead. The focus requires
 a causal diagnosis of exact plan items, not a generic cost summary. Use
+`validation_contract_health` when retained `phase="prevalidation"` concerns,
+automatic-validation repairs, or current-run validation records show repeated
+schema failures. Load `pulse-bug-review` for that focus. Review the smallest
+affected producer/consumer contract and keep only checks that prove a real
+downstream requirement, authoritative state change, external side effect,
+route-control boundary, safety requirement, or non-fabricated deliverable.
+Do not treat a large schema, a failed check, or a field name alone as proof that
+the check should remain. Cosmetic metadata, duplicated upstream facts,
+self-asserted success markers, and checks no real consumer reads are removal
+candidates; branch-conditional fields must be optional or conditional rather
+than forcing placeholders. The reviewer recommends a minimal contract; the
+Fixer removes or rewrites a check only after tracing consumers and preserving a
+negative fixture that rejects the original meaningful defect. Use
 `plan_orchestration_integrity` when the central question is step type, scripted
 versus agentic ownership, dependencies, handoffs, or unnecessary orchestration.
 If the smallest safe repair changes plan topology,
 step type, route ownership, retry semantics, public-action ordering, or a
 safety boundary, the Operations turn creates a durable approval request; the
 Fixer must not make that structural choice on its own.
+Prompt-contract consolidation follows the same boundary: use
+`plan_orchestration_integrity` when compact prompt-health evidence indicates
+shared policy/DB/browser/validation prose has accumulated. The reviewer first
+decides whether the text is actually extractable; a multi-step migration needs
+an approved `technical-decision-prompt-contract-consolidation-...` request.
+The Fixer may apply only an approved phased extraction, preserving exact step
+inputs, outputs, validation, routes, and side-effect ordering, then waits for a
+post-change producing run. It must never bulk-truncate old prompts to satisfy
+a character threshold.
 When that module's review is complete, call `record_pulse_review_focus` once for
 every focus actually investigated, including its stable route/group/sub-workflow
 scope unless the conclusion is genuinely workflow-wide. Record the priority
@@ -439,6 +461,19 @@ history but must not be emitted by new reviews. `strategic_review` uses
 `human_input_id` on the corresponding `record_pulse_finding` call so the
 finding and pending decision are linked at creation; never leave
 `recommended_route="decision_required"` as an unlinked label for a later turn.
+
+Every new decision that authorizes a workflow change must include an
+`apply_contract` in `create_human_input_request`. This is the only authority
+pre-run uses; user-facing context is not a machine patch. Use
+`mode="targeted_fixer"` for prompt, plan, route, validation, database, tool,
+model, reporting, or any cross-artifact change, with a bounded
+`approved_scope`, exact `pre_run_checks`, an honest `post_run_proof`, and
+`failure_policy="continue_unchanged"` unless a failed application must block a
+safety/public-action run. `direct_apply` is only for one already-defined
+setting with a known exact check. Use `no_change` for reject/defer outcomes and
+`external_wait` when an external prerequisite must arrive. Do not leave the
+contract empty for a new repair decision; legacy prose-only requests are never
+auto-applied by pre-run.
 For `strategic_review`, the question source must be `strategic_review` and its
 id must start `strategy-proposal-`. The backend rejects a strategic
 `proposal_only` disposition with no `next_check`, so every accepted

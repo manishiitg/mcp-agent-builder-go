@@ -69,7 +69,7 @@ func TestValidateScheduleMessagesRequiresReasonForSequentialConversation(t *test
 
 func TestWorkflowVersionUpgradePlanAddsScheduledRoutesAfterDirectReports(t *testing.T) {
 	plan := workflowVersionUpgradePlan(&WorkflowManifest{Version: workflowContractDirectHTMLReportsVersion})
-	if len(plan) != 5 || plan[0].label != "upgrade-schedule-execution-model" || plan[0].to != workflowContractScheduleExecutionModelVersion {
+	if len(plan) != 6 || plan[0].label != "upgrade-schedule-execution-model" || plan[0].to != workflowContractScheduleExecutionModelVersion {
 		t.Fatalf("unexpected upgrade plan: %+v", plan)
 	}
 	if plan[1].label != "upgrade-dedicated-pulse-schedule" || plan[1].to != workflowContractDedicatedPulseScheduleVersion {
@@ -81,14 +81,17 @@ func TestWorkflowVersionUpgradePlanAddsScheduledRoutesAfterDirectReports(t *test
 	if plan[3].label != "upgrade-schedule-finalizer-ownership" || plan[3].to != workflowContractFinalizerOwnedScheduleVersion {
 		t.Fatalf("unexpected finalizer-ownership step: %+v", plan[3])
 	}
-	if plan[4].label != "upgrade-report-activity-section" || plan[4].to != WorkflowContractCurrentVersion {
-		t.Fatalf("unexpected final upgrade step: %+v", plan[4])
+	if plan[4].label != "upgrade-report-activity-section" || plan[4].to != workflowContractReportActivitySectionVersion {
+		t.Fatalf("unexpected report-activity-section step: %+v", plan[4])
+	}
+	if plan[5].label != "upgrade-report-activity-tab" || plan[5].to != WorkflowContractCurrentVersion {
+		t.Fatalf("unexpected final upgrade step: %+v", plan[5])
 	}
 }
 
 func TestWorkflowVersionUpgradePlanReauditsEarlierRouteOnlyContract(t *testing.T) {
 	plan := workflowVersionUpgradePlan(&WorkflowManifest{Version: workflowContractScheduledRouteVersion})
-	if len(plan) != 5 || plan[0].label != "upgrade-schedule-execution-model" || plan[0].to != workflowContractScheduleExecutionModelVersion {
+	if len(plan) != 6 || plan[0].label != "upgrade-schedule-execution-model" || plan[0].to != workflowContractScheduleExecutionModelVersion {
 		t.Fatalf("1.0.24 workflow did not receive choice-aware schedule audit: %+v", plan)
 	}
 	for _, want := range []string{"EQUIVALENT ROUTE EXISTS", "DURABLE WORKFLOW BEHAVIOR", "GENUINELY SCHEDULE-SPECIFIC CONVERSATION", "direct_messages_reason"} {
@@ -105,8 +108,11 @@ func TestWorkflowVersionUpgradePlanReauditsEarlierRouteOnlyContract(t *testing.T
 	if plan[3].label != "upgrade-schedule-finalizer-ownership" || plan[3].to != workflowContractFinalizerOwnedScheduleVersion {
 		t.Fatalf("unexpected finalizer-ownership step: %+v", plan[3])
 	}
-	if plan[4].label != "upgrade-report-activity-section" || plan[4].to != WorkflowContractCurrentVersion {
-		t.Fatalf("unexpected final upgrade step: %+v", plan[4])
+	if plan[4].label != "upgrade-report-activity-section" || plan[4].to != workflowContractReportActivitySectionVersion {
+		t.Fatalf("unexpected report-activity-section step: %+v", plan[4])
+	}
+	if plan[5].label != "upgrade-report-activity-tab" || plan[5].to != WorkflowContractCurrentVersion {
+		t.Fatalf("unexpected final upgrade step: %+v", plan[5])
 	}
 }
 
@@ -134,8 +140,8 @@ func TestUpgradeDedicatedPulseSchedulePromptShape(t *testing.T) {
 
 func TestVersion126ReceivesDedicatedPulseScheduleMigration(t *testing.T) {
 	plan := workflowVersionUpgradePlan(&WorkflowManifest{Version: workflowContractPeriodicPulseReviewVersion})
-	if len(plan) != 4 {
-		t.Fatalf("1.0.26 upgrade plan = %+v, want dedicated Pulse, schedule prompt, finalizer ownership, then report-activity-section migrations", plan)
+	if len(plan) != 5 {
+		t.Fatalf("1.0.26 upgrade plan = %+v, want dedicated Pulse, schedule prompt, finalizer ownership, report-activity-section, then report-activity-tab migrations", plan)
 	}
 	if plan[0].label != "upgrade-dedicated-pulse-schedule" || plan[0].to != workflowContractDedicatedPulseScheduleVersion {
 		t.Fatalf("1.0.26 upgrade = %+v, want dedicated Pulse schedule migration", plan[0])
@@ -146,15 +152,18 @@ func TestVersion126ReceivesDedicatedPulseScheduleMigration(t *testing.T) {
 	if plan[2].label != "upgrade-schedule-finalizer-ownership" || plan[2].to != workflowContractFinalizerOwnedScheduleVersion {
 		t.Fatalf("1.0.26 final upgrade = %+v, want finalizer ownership migration", plan[2])
 	}
-	if plan[3].label != "upgrade-report-activity-section" || plan[3].to != WorkflowContractCurrentVersion {
+	if plan[3].label != "upgrade-report-activity-section" || plan[3].to != workflowContractReportActivitySectionVersion {
 		t.Fatalf("1.0.26 final upgrade = %+v, want report-activity-section migration", plan[3])
+	}
+	if plan[4].label != "upgrade-report-activity-tab" || plan[4].to != WorkflowContractCurrentVersion {
+		t.Fatalf("1.0.26 final upgrade = %+v, want report-activity-tab migration", plan[4])
 	}
 }
 
 func TestVersion127ReceivesSchedulePromptContractMigration(t *testing.T) {
 	plan := workflowVersionUpgradePlan(&WorkflowManifest{Version: workflowContractDedicatedPulseScheduleVersion})
-	if len(plan) != 3 || plan[0].label != "upgrade-schedule-prompt-contract" || plan[0].to != workflowContractSchedulePromptContractVersion {
-		t.Fatalf("1.0.27 upgrade plan = %+v, want schedule prompt, finalizer ownership, then report-activity-section migration", plan)
+	if len(plan) != 4 || plan[0].label != "upgrade-schedule-prompt-contract" || plan[0].to != workflowContractSchedulePromptContractVersion {
+		t.Fatalf("1.0.27 upgrade plan = %+v, want schedule prompt, finalizer ownership, report-activity-section, then report-activity-tab migration", plan)
 	}
 	for _, want := range []string{
 		"dated incidents",
@@ -169,15 +178,18 @@ func TestVersion127ReceivesSchedulePromptContractMigration(t *testing.T) {
 	if plan[1].label != "upgrade-schedule-finalizer-ownership" || plan[1].to != workflowContractFinalizerOwnedScheduleVersion {
 		t.Fatalf("1.0.27 final upgrade = %+v, want finalizer ownership migration", plan[1])
 	}
-	if plan[2].label != "upgrade-report-activity-section" || plan[2].to != WorkflowContractCurrentVersion {
+	if plan[2].label != "upgrade-report-activity-section" || plan[2].to != workflowContractReportActivitySectionVersion {
 		t.Fatalf("1.0.27 final upgrade = %+v, want report-activity-section migration", plan[2])
+	}
+	if plan[3].label != "upgrade-report-activity-tab" || plan[3].to != WorkflowContractCurrentVersion {
+		t.Fatalf("1.0.27 final upgrade = %+v, want report-activity-tab migration", plan[3])
 	}
 }
 
 func TestVersion128ReceivesFinalizerOwnershipMigration(t *testing.T) {
 	plan := workflowVersionUpgradePlan(&WorkflowManifest{Version: workflowContractSchedulePromptContractVersion})
-	if len(plan) != 2 || plan[0].label != "upgrade-schedule-finalizer-ownership" || plan[0].to != workflowContractFinalizerOwnedScheduleVersion {
-		t.Fatalf("1.0.28 upgrade plan = %+v, want finalizer ownership then report-activity-section migration", plan)
+	if len(plan) != 3 || plan[0].label != "upgrade-schedule-finalizer-ownership" || plan[0].to != workflowContractFinalizerOwnedScheduleVersion {
+		t.Fatalf("1.0.28 upgrade plan = %+v, want finalizer ownership, report-activity-section, then report-activity-tab migration", plan)
 	}
 	normalized := strings.Join(strings.Fields(plan[0].query), " ")
 	for _, want := range []string{"saved route selection before any retained schedule message", "The platform owns normal run finalization", `set_workflow_contract_version(version="1.0.29")`} {
@@ -185,15 +197,18 @@ func TestVersion128ReceivesFinalizerOwnershipMigration(t *testing.T) {
 			t.Errorf("migration prompt missing %q", want)
 		}
 	}
-	if plan[1].label != "upgrade-report-activity-section" || plan[1].to != WorkflowContractCurrentVersion {
+	if plan[1].label != "upgrade-report-activity-section" || plan[1].to != workflowContractReportActivitySectionVersion {
 		t.Fatalf("1.0.28 final upgrade = %+v, want report-activity-section migration", plan[1])
+	}
+	if plan[2].label != "upgrade-report-activity-tab" || plan[2].to != WorkflowContractCurrentVersion {
+		t.Fatalf("1.0.28 final upgrade = %+v, want report-activity-tab migration", plan[2])
 	}
 }
 
 func TestVersion129ReceivesReportActivitySectionMigration(t *testing.T) {
 	plan := workflowVersionUpgradePlan(&WorkflowManifest{Version: workflowContractFinalizerOwnedScheduleVersion})
-	if len(plan) != 1 || plan[0].label != "upgrade-report-activity-section" || plan[0].to != WorkflowContractCurrentVersion {
-		t.Fatalf("1.0.29 upgrade plan = %+v, want report-activity-section migration", plan)
+	if len(plan) != 2 || plan[0].label != "upgrade-report-activity-section" || plan[0].to != workflowContractReportActivitySectionVersion {
+		t.Fatalf("1.0.29 upgrade plan = %+v, want report-activity-section then report-activity-tab migration", plan)
 	}
 	normalized := strings.Join(strings.Fields(plan[0].query), " ")
 	for _, want := range []string{
@@ -205,6 +220,28 @@ func TestVersion129ReceivesReportActivitySectionMigration(t *testing.T) {
 	} {
 		if !strings.Contains(normalized, want) {
 			t.Errorf("report-activity-section migration prompt missing %q", want)
+		}
+	}
+	if plan[1].label != "upgrade-report-activity-tab" || plan[1].to != WorkflowContractCurrentVersion {
+		t.Fatalf("1.0.29 final upgrade = %+v, want report-activity-tab migration", plan[1])
+	}
+}
+
+func TestVersion130ReceivesReportActivityTabMigration(t *testing.T) {
+	plan := workflowVersionUpgradePlan(&WorkflowManifest{Version: workflowContractReportActivitySectionVersion})
+	if len(plan) != 1 || plan[0].label != "upgrade-report-activity-tab" || plan[0].to != WorkflowContractCurrentVersion {
+		t.Fatalf("1.0.30 upgrade plan = %+v, want report-activity-tab migration", plan)
+	}
+	normalized := strings.Join(strings.Fields(plan[0].query), " ")
+	for _, want := range []string{
+		"top-level tab",
+		"a subsection scrolled past within another tab",
+		"promote it into its own top-level tab",
+		"validate_report_html",
+		`set_workflow_contract_version(version="1.0.31")`,
+	} {
+		if !strings.Contains(normalized, want) {
+			t.Errorf("report-activity-tab migration prompt missing %q", want)
 		}
 	}
 }

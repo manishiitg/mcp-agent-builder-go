@@ -101,24 +101,22 @@ export function reconcileWorkflowRuntimeTab(
 }
 
 /**
- * A Schedule lane exists to watch a run that is happening. It is shown while
- * that run is live, and while it is the tab you are actually looking at.
+ * A tab, once opened, is closed only by the user — never auto-hidden because
+ * its run finished or it fell out of focus.
  *
- * It used to be shown unconditionally, "until the user closes it", so that
- * switching to Chat mid-run could not make the lane you were watching vanish.
- * That intent is preserved by the streaming/bg-agent checks below, but the
- * unconditional form kept FINISHED runs in the strip forever — and, because
- * tabs persist for 24h with isStreaming reset to false, brought them back on
- * every reload. The result was a row of dead Schedule tabs for runs that had
- * long since ended. The very same comment guarded bot lanes against exactly
- * that ("so stale bot observations do not accumulate in the toolbar"); a
- * schedule is no different once its run is over.
- *
- * A run you are actively viewing still stays put, because activeTabId wins.
+ * This was previously conditional for view-only Schedule lanes: hidden once
+ * a run finished unless it was the active tab, streaming, or had running
+ * background agents. That auto-hide was itself a reaction to an earlier,
+ * unconditional "until the user closes it" version that let finished runs
+ * pile up in the strip and reappear on every reload (tabs persist 24h with
+ * isStreaming reset to false). Explicit product decision: revert to
+ * user-closes-only and accept that a workflow scheduled several times a day
+ * accumulates that many tabs until manually closed, including across a
+ * reload — see selectDurableChatState's persistence filter, which no longer
+ * excludes finished Schedule tabs either.
  */
-export function shouldDisplayWorkflowTab(tab: ChatTab, activeTabId: string | null): boolean {
-  if (!tab.metadata?.isViewOnly) return true
-  return tab.tabId === activeTabId || tab.isStreaming || tab.hasRunningBgAgents
+export function shouldDisplayWorkflowTab(_tab: ChatTab, _activeTabId: string | null): boolean {
+  return true
 }
 
 /** Describe the top-level tab for one live workflow execution. */
@@ -138,14 +136,21 @@ export function workflowRuntimeTabProjection(
   if (external && !scheduled) return null
 
   if (scheduled) {
+    const scheduledJobName = running.title || running.preset_name || running.phase_name || 'Schedule'
     return {
-      name: 'Schedule',
+      // The tab label shows the actual schedule's name (e.g. "Daily
+      // execution") rather than the generic "Schedule" -- with several
+      // schedules per workflow, a row of identically-labeled tabs was not
+      // distinguishable at a glance. The scheduled/bot "make interactive"
+      // icon (WorkflowChatTabs) still signals it's a schedule lane
+      // independent of the label.
+      name: scheduledJobName,
       metadata: {
         mode: 'workflow',
         presetQueryId,
         isViewOnly: true,
         isScheduledRun: true,
-        scheduledJobName: running.title || running.preset_name || running.phase_name || 'Schedule',
+        scheduledJobName,
       },
       // Runtime discovery must not pull the user away from their live Chat.
       autoActivate: false,

@@ -6,7 +6,8 @@ import { FinanceMark } from '../products/finance/FinanceMark'
 import { DominionMark } from '../products/dominion/DominionMark'
 import { useProductSurfaceStore, type ProductSurface } from '../stores/useProductSurfaceStore'
 import { useAppStore } from '../stores/useAppStore'
-import { isEnabledProductSurface } from '../products/productSurfaceConfig'
+import { useAuthStore } from '../stores/useAuthStore'
+import { isEnabledProductSurface, intersectAllowedProductSurfaces } from '../products/productSurfaceConfig'
 import { cn } from '../lib/utils'
 
 type ProductSurfaceSwitcherProps = {
@@ -30,16 +31,18 @@ const products: Array<{
   { id: 'dominion', label: 'Dominion', description: 'Paper-trading watchlist and portfolio', icon: DominionMark },
 ]
 
-export function visibleProductSurfaceIDs(): ProductSurface[] {
-  return products.filter((product) => isEnabledProductSurface(product.id)).map((product) => product.id)
+export function visibleProductSurfaceIDs(allowedProducts?: string[] | null): ProductSurface[] {
+  const deploymentSurfaces = products.filter((product) => isEnabledProductSurface(product.id)).map((product) => product.id)
+  return intersectAllowedProductSurfaces(deploymentSurfaces, allowedProducts)
 }
 
 export function ProductSurfaceSwitcher({ className, version }: ProductSurfaceSwitcherProps) {
   const productSurface = useProductSurfaceStore((state) => state.productSurface)
   const setProductSurface = useProductSurfaceStore((state) => state.setProductSurface)
+  const allowedProducts = useAuthStore((state) => state.user?.allowed_products)
   const [open, setOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
-  const visibleProductIDs = visibleProductSurfaceIDs()
+  const visibleProductIDs = visibleProductSurfaceIDs(allowedProducts)
   const visibleProducts = products.filter((product) => visibleProductIDs.includes(product.id))
   const currentProduct = visibleProducts.find((product) => product.id === productSurface) ?? visibleProducts[0] ?? products[0]
   const CurrentIcon = currentProduct.icon

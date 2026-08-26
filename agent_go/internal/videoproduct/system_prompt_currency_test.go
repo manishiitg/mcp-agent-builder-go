@@ -27,7 +27,7 @@ func TestSystemPromptMatchesTheProductItDescribes(t *testing.T) {
 	// the agent when to call. A registered tool nobody is told to use is dead
 	// weight; the character one especially, since its whole value is being
 	// called before generation rather than after.
-	for _, tool := range []string{"show_video", "show_character", "show_document"} {
+	for _, tool := range []string{"show_video", "show_character", "show_reference", "show_document"} {
 		if !strings.Contains(text, tool) {
 			t.Fatalf("the system prompt never mentions %s, so the agent will not call it", tool)
 		}
@@ -91,6 +91,8 @@ func TestSystemPromptMatchesTheProductItDescribes(t *testing.T) {
 		"measure its real duration",
 		"build the shot list around the measured audio",
 		"without its promised audio",
+		"cinematic-visual-development",
+		"text-only location, wardrobe, or subject description is not an approved reference",
 	} {
 		if !strings.Contains(text, audioContract) {
 			t.Fatalf("the system prompt lost the direct-chat look/sound contract: missing %q", audioContract)

@@ -15,7 +15,8 @@ import { ModePresetBar } from "./components/ModePresetBar";
 import { useAppStore, useMCPStore, useGlobalPresetStore, useWorkflowStore, useChatStore } from "./stores";
 import { useModeStore } from "./stores/useModeStore";
 import { useProductSurfaceStore } from "./stores/useProductSurfaceStore";
-import { deploymentDefaultProductSurface, isEnabledProductSurface } from "./products/productSurfaceConfig";
+import { useAuthStore } from "./stores/useAuthStore";
+import { deploymentDefaultProductSurface, isEnabledProductSurface, intersectAllowedProductSurfaces } from "./products/productSurfaceConfig";
 import { useLLMStore } from "./stores/useLLMStore";
 import { normalizeEventViewMode, waitForChatStoreHydration, type ChatTab } from "./stores/useChatStore";
 import { useLLMDefaults } from "./hooks/useLLMDefaults";
@@ -93,15 +94,19 @@ const hasOpenWorkspaceCollapsingPopup = () => {
 function App() {
   const productSurface = useProductSurfaceStore(state => state.productSurface)
   const setProductSurface = useProductSurfaceStore(state => state.setProductSurface)
+  const allowedProducts = useAuthStore(state => state.user?.allowed_products)
 
   // A dedicated deployment is an allowlist, not a visual preference. Correct
   // persisted desktop selections before rendering so a stale Finance or
-  // Dominion choice cannot expose a product disabled on this host.
+  // Dominion choice cannot expose a product disabled on this host -- or, now,
+  // a product this specific logged-in user isn't granted.
   useEffect(() => {
-    if (!isEnabledProductSurface(productSurface)) {
-      setProductSurface(deploymentDefaultProductSurface())
+    const userAllowedSurfaces = intersectAllowedProductSurfaces([productSurface], allowedProducts)
+    if (userAllowedSurfaces.length === 0 || !isEnabledProductSurface(productSurface)) {
+      const fallback = intersectAllowedProductSurfaces([deploymentDefaultProductSurface()], allowedProducts)
+      setProductSurface(fallback[0] ?? deploymentDefaultProductSurface())
     }
-  }, [productSurface, setProductSurface])
+  }, [productSurface, setProductSurface, allowedProducts])
 
   // Store subscriptions
   const { hasCompletedInitialSetup, selectedModeCategory, setModeCategory, completeInitialSetup } = useModeStore(useShallow(state => ({
@@ -832,6 +837,7 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
         <AuthWrapper>
+        <TooltipProvider>
         {/* Mounted above the surface switch so toasts raised from the top bar
             render on every surface, not only the ones that mount a chat. */}
         <ToastHost />
@@ -842,7 +848,7 @@ function App() {
         ) : productSurface === 'dominion' ? (
           <Suspense fallback={<FileSurfaceFallback />}><DominionSurface /></Suspense>
         ) : (
-        <TooltipProvider>
+        <>
         <UpdateProgressToast />
         <GlobalHumanFeedbackPrompt />
         <div className="h-screen bg-background flex">
@@ -886,8 +892,9 @@ function App() {
 
         </div>
 
-        </TooltipProvider>
+        </>
         )}
+        </TooltipProvider>
         </AuthWrapper>
       </ThemeProvider>
     </QueryClientProvider>

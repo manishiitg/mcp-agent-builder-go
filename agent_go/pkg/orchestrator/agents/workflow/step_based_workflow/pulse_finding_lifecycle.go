@@ -612,6 +612,9 @@ func ensurePulseFindingLifecycleSchema(ctx context.Context, db pulseFindingLifec
 	if err := migrateOrphanedPulseFindingEvents(ctx, db); err != nil {
 		return err
 	}
+	if err := migrateUnlinkedAwaitingUserFindings(ctx, db); err != nil {
+		return err
+	}
 	for _, ddl := range []string{
 		`CREATE INDEX IF NOT EXISTS idx_pulse_fix_attempts_module_run ON pulse_fix_attempts(module, pulse_run_id, started_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_pulse_fix_findings_fingerprint ON pulse_fix_attempt_findings(fingerprint, attempt_id)`,
@@ -621,6 +624,104 @@ func ensurePulseFindingLifecycleSchema(ctx context.Context, db pulseFindingLifec
 		`CREATE INDEX IF NOT EXISTS idx_pulse_finding_details_target_key ON pulse_finding_details(target_key) WHERE target_key<>''`,
 	} {
 		if _, err := db.ExecContext(ctx, ddl); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// migrateUnlinkedAwaitingUserFindings repairs the legacy state where Pulse
+// marked a finding as awaiting_user without creating an answerable human-input
+// request. The label is not a request: it must point at a real row before the
+// operator can act. Do not manufacture a question here; only the reviewer that
+// understands the finding may decide what should be asked.
+//
+// This is deliberately idempotent. Once an invalid record is moved back to
+// Pulse's queue, it no longer matches the acknowledged/awaiting_user source
+// state. An answered request is not migrated: it is a real decision awaiting
+// the normal decision-drain turn, not a missing request.
+func migrateUnlinkedAwaitingUserFindings(ctx context.Context, db pulseFindingLifecycleDB) error {
+	var humanInputsTableCount int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master
+		WHERE type='table' AND name='report_human_inputs'`).Scan(&humanInputsTableCount); err != nil {
+		return err
+	}
+	// A workflow can open its lifecycle database before the interactive
+	// human-input feature has ever created its table. There is nothing to
+	// reconcile yet, and treating that as a migration failure would block every
+	// ordinary Pulse read.
+	if humanInputsTableCount == 0 {
+		return nil
+	}
+
+	type legacyDecision struct {
+		fingerprint string
+		findingID   string
+		pulseRunID  string
+		metadata    string
+	}
+	rows, err := db.QueryContext(ctx, `SELECT c.fingerprint, e.finding_id, e.pulse_run_id, e.metadata_json
+		FROM run_concerns c
+		JOIN pulse_finding_events e ON e._id = (
+			SELECT latest._id FROM pulse_finding_events latest
+			WHERE latest.fingerprint=c.fingerprint
+			ORDER BY latest.recorded_at DESC, latest._id DESC
+			LIMIT 1
+		)
+		WHERE c.status=? AND e.event_type=?`, ConcernStatusAcknowledged, FindingDispositionAwaitingUser)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	legacy := []legacyDecision{}
+	for rows.Next() {
+		var item legacyDecision
+		if err := rows.Scan(&item.fingerprint, &item.findingID, &item.pulseRunID, &item.metadata); err != nil {
+			return err
+		}
+		legacy = append(legacy, item)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, item := range legacy {
+		metadata := map[string]interface{}{}
+		_ = json.Unmarshal([]byte(item.metadata), &metadata)
+		humanInputID, _ := metadata["human_input_id"].(string)
+		humanInputID = strings.TrimSpace(humanInputID)
+
+		// A real request may already be answered and waiting for the schedule's
+		// decision-drain turn. Leave that state alone; it is not the historical
+		// missing-request defect this migration repairs.
+		if humanInputID != "" {
+			var requestCount int
+			if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM report_human_inputs WHERE id=?`, humanInputID).Scan(&requestCount); err != nil {
+				return err
+			}
+			if requestCount == 1 {
+				continue
+			}
+		}
+
+		note := "Decision request missing: Pulse must re-review this finding and create a linked, answerable human request only if a decision is still needed."
+		if _, err := db.ExecContext(ctx, `UPDATE run_concerns
+			SET status=?, resolution_note=?, resolved_at='', resolved_by=''
+			WHERE fingerprint=? AND status=?`,
+			ConcernStatusQueuedForEngineering, note, item.fingerprint, ConcernStatusAcknowledged); err != nil {
+			return err
+		}
+		migrationMetadata, _ := json.Marshal(map[string]string{
+			"reason":         "missing_human_input_request",
+			"human_input_id": humanInputID,
+		})
+		if _, err := db.ExecContext(ctx, `INSERT INTO pulse_finding_events
+			(fingerprint, finding_id, pulse_run_id, event_type, summary, metadata_json, recorded_at)
+			VALUES (?, ?, ?, 'decision_request_missing', ?, ?, ?)
+			ON CONFLICT(fingerprint, pulse_run_id, attempt_id, event_type) DO NOTHING`,
+			item.fingerprint, item.findingID, item.pulseRunID, note, string(migrationMetadata), now); err != nil {
 			return err
 		}
 	}

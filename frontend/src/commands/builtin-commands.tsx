@@ -5,9 +5,9 @@ import type { CommandContext, CommandDefinition } from './types'
 function submitGuidedWorkflowCommand(
   ctx: CommandContext,
   kind: string,
-  options: { runFolder?: string | null; background?: boolean; displayName?: string } = {}
+  options: { runFolder?: string | null; background?: boolean; displayName?: string; forcedFocus?: string } = {}
 ) {
-  const focus = ctx.beforeSlash.trim()
+  const focus = [options.forcedFocus?.trim(), ctx.beforeSlash.trim()].filter(Boolean).join('\n\n')
   const args = [
     `kind=${JSON.stringify(kind)}`,
     `focus=${JSON.stringify(focus)}`,
@@ -62,6 +62,37 @@ function submitGuidedWorkflowCommand(
   )
 }
 
+// These commands deliberately select one Technical Review focus without
+// creating a second queue or special reviewer type. Strategy remains one
+// holistic `/strategy-auditor` command: it chooses its own lens set from the
+// evidence, records the usual typed receipt, and decides what it means.
+const focusedPulseReviewCommands: CommandDefinition[] = [
+  { command: 'pulse-review-execution-health', description: 'Review runtime reliability, tool behavior, retries, timeouts, and execution efficiency', kind: 'engineering-review', focus: 'execution_health', icon: <Activity className="w-4 h-4" /> },
+  { command: 'plan-prompt-bloat', description: 'Pulse review: oversized and duplicated plan prompts, shared contracts, and safe consolidation options', kind: 'engineering-review', focus: 'plan_orchestration_integrity', icon: <GitBranch className="w-4 h-4" /> },
+  { command: 'pulse-review-validation-contract', description: 'Review whether pre-validation is minimal, meaningful, and protecting real workflow outcomes', kind: 'engineering-review', focus: 'validation_contract_health', icon: <CheckCircle className="w-4 h-4" /> },
+  { command: 'pulse-review-report-quality', description: 'Review report truthfulness, live-data wiring, accessibility, and performance', kind: 'engineering-review', focus: 'report_quality_truth', icon: <FileText className="w-4 h-4" /> },
+  { command: 'pulse-review-evaluation-quality', description: 'Review evaluation truth, rubrics, validation, and reproducibility', kind: 'engineering-review', focus: 'evaluation_quality_truth', icon: <CheckCircle className="w-4 h-4" /> },
+  { command: 'pulse-review-model-cost', description: 'Review model routing, tiers, latency, cost attribution, and provider fitness', kind: 'engineering-review', focus: 'model_cost_fitness', icon: <Bot className="w-4 h-4" /> },
+].map(({ command, description, kind, focus, icon }) => ({
+  command,
+  description,
+  icon,
+  modes: ['workflow'],
+  requiredWorkflowMode: 'plan',
+  requiredWorkshopMode: 'workshop',
+  showInAllWorkshopModes: true,
+  source: 'builtin',
+  execute: (ctx: CommandContext) => {
+    const runFolder = ctx.getWorkflowStore().selectedRunFolder
+    submitGuidedWorkflowCommand(ctx, kind, {
+      runFolder,
+      background: true,
+      displayName: command,
+      forcedFocus: `Manual Pulse review focus: ${focus}. Prioritize this focus and preserve the normal lightweight safety scan.`,
+    })
+  },
+}))
+
 export const builtinCommands: CommandDefinition[] = [
   {
     command: 'design-plan',
@@ -92,39 +123,39 @@ export const builtinCommands: CommandDefinition[] = [
     }
   },
   {
-    command: 'improve-knowledge',
-    description: 'Improve knowledge notes with targeted cleanup or cross-step consolidation',
+    command: 'pulse-review-knowledge',
+    description: 'Review knowledgebase notes for health, ownership, and safe consolidation candidates',
     icon: <Layers className="w-4 h-4" />,
     modes: ['workflow'],
     requiredWorkflowMode: 'plan',
     requiredWorkshopMode: ['workshop'],
     source: 'builtin',
     execute: (ctx) => {
-      submitGuidedWorkflowCommand(ctx, 'improve-knowledge')
+      submitGuidedWorkflowCommand(ctx, 'improve-knowledge', { displayName: 'pulse-review-knowledge', background: true })
     }
   },
   {
-    command: 'improve-learnings',
-    description: 'Improve global learnings with targeted cleanup or current-plan consolidation',
+    command: 'pulse-review-learnings',
+    description: 'Review global learnings for staleness, duplication, and current-plan fit',
     icon: <BookOpen className="w-4 h-4" />,
     modes: ['workflow'],
     requiredWorkflowMode: 'plan',
     requiredWorkshopMode: ['workshop'],
     source: 'builtin',
     execute: (ctx) => {
-      submitGuidedWorkflowCommand(ctx, 'improve-learnings')
+      submitGuidedWorkflowCommand(ctx, 'improve-learnings', { displayName: 'pulse-review-learnings', background: true })
     }
   },
   {
-    command: 'improve-database',
-    description: 'Improve durable data contracts, schemas, and report compatibility',
+    command: 'pulse-review-database',
+    description: 'Review durable data contracts, schemas, integrity, and report compatibility',
     icon: <Server className="w-4 h-4" />,
     modes: ['workflow'],
     requiredWorkflowMode: 'plan',
     requiredWorkshopMode: ['workshop'],
     source: 'builtin',
     execute: (ctx) => {
-      submitGuidedWorkflowCommand(ctx, 'improve-database')
+      submitGuidedWorkflowCommand(ctx, 'improve-database', { displayName: 'pulse-review-database', background: true })
     }
   },
   {
@@ -137,31 +168,6 @@ export const builtinCommands: CommandDefinition[] = [
     source: 'builtin',
     execute: (ctx) => {
       submitGuidedWorkflowCommand(ctx, 'design-reporting-ui')
-    }
-  },
-  {
-    command: 'improve-report',
-    description: 'Improve the report dashboard for goal tracking, plan context, issues, and live data clarity',
-    icon: <CheckCircle className="w-4 h-4" />,
-    modes: ['workflow'],
-    requiredWorkflowMode: 'plan',
-    requiredWorkshopMode: ['workshop'],
-    source: 'builtin',
-    execute: (ctx) => {
-      submitGuidedWorkflowCommand(ctx, 'improve-report')
-    }
-  },
-  {
-    command: 'improve-evaluation',
-    description: 'Validate evaluation/evaluation_plan.json and improve goal/criteria coverage',
-    icon: <CheckCircle className="w-4 h-4" />,
-    modes: ['workflow'],
-    requiredWorkflowMode: 'plan',
-    requiredWorkshopMode: 'workshop',
-    source: 'builtin',
-    execute: (ctx) => {
-      const runFolder = ctx.getWorkflowStore().selectedRunFolder
-      submitGuidedWorkflowCommand(ctx, 'improve-evaluation', { runFolder })
     }
   },
   {
@@ -242,6 +248,7 @@ export const builtinCommands: CommandDefinition[] = [
       submitGuidedWorkflowCommand(ctx, 'pulse-fixer', { runFolder, background: true })
     }
   },
+  ...focusedPulseReviewCommands,
   {
     command: 'goal-advisor',
     description: 'Run a one-off strategic Goal Advisor review without changing Pulse setup',

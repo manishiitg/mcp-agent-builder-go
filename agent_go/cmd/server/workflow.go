@@ -3272,6 +3272,10 @@ func (api *StreamingAPI) handleGetExecutionLogs(w http.ResponseWriter, r *http.R
 			learningsAccess := ""
 			knowledgebaseAccess := ""
 			knowledgebaseContribution := ""
+			parentStepID := ""
+			parentStepTitle := ""
+			routeID := ""
+			plannedMessages := []map[string]interface{}{}
 			if meta != nil {
 				if t := meta["title"]; t != "" {
 					title = t
@@ -3287,6 +3291,12 @@ func (api *StreamingAPI) handleGetExecutionLogs(w http.ResponseWriter, r *http.R
 				learningsAccess = meta["learnings_access"]
 				knowledgebaseAccess = meta["knowledgebase_access"]
 				knowledgebaseContribution = meta["knowledgebase_contribution"]
+				parentStepID = meta["parent_step_id"]
+				parentStepTitle = meta["parent_step_title"]
+				routeID = meta["route_id"]
+				if rawMessages := meta["planned_messages"]; rawMessages != "" {
+					_ = json.Unmarshal([]byte(rawMessages), &plannedMessages)
+				}
 			}
 
 			stepsLogs[stepId] = map[string]interface{}{
@@ -3301,11 +3311,16 @@ func (api *StreamingAPI) handleGetExecutionLogs(w http.ResponseWriter, r *http.R
 				"learnings_access":           learningsAccess,
 				"knowledgebase_access":       knowledgebaseAccess,
 				"knowledgebase_contribution": knowledgebaseContribution,
+				"parent_step_id":             parentStepID,
+				"parent_step_title":          parentStepTitle,
+				"route_id":                   routeID,
+				"planned_messages":           plannedMessages,
 				"output_content":             nil, // Will be populated if output file exists
 				"artifacts":                  []map[string]interface{}{},
 				"validations":                []map[string]interface{}{},
 				"executions":                 []map[string]interface{}{},
 				"orchestration":              []map[string]interface{}{},
+				"message_sequence":           nil,
 				"learnings":                  []map[string]interface{}{},
 				"archived_logs":              []map[string]interface{}{}, // Archived logs from previous runs
 				"archived_executions":        []map[string]interface{}{},
@@ -3329,7 +3344,9 @@ func (api *StreamingAPI) handleGetExecutionLogs(w http.ResponseWriter, r *http.R
 						childName := filepath.Base(child.FilePath)
 						childIsDir := child.Type == "folder"
 
-						if !childIsDir && strings.HasPrefix(childName, "validation") && strings.HasSuffix(childName, ".json") {
+						isStandardValidation := strings.HasPrefix(childName, "validation") && strings.HasSuffix(childName, ".json")
+						isPreValidation := strings.HasPrefix(childName, "pre_validation") && strings.HasSuffix(childName, ".json")
+						if !childIsDir && (isStandardValidation || isPreValidation) {
 							logPath := child.FilePath
 							if processedPaths[logPath] {
 								continue
@@ -3340,7 +3357,7 @@ func (api *StreamingAPI) handleGetExecutionLogs(w http.ResponseWriter, r *http.R
 							validations, _ := entry["validations"].([]map[string]interface{})
 
 							attempt := 1
-							if childName != "validation.json" {
+							if isStandardValidation && childName != "validation.json" {
 								fmt.Sscanf(childName, "validation-%d.json", &attempt)
 							}
 
@@ -3350,10 +3367,31 @@ func (api *StreamingAPI) handleGetExecutionLogs(w http.ResponseWriter, r *http.R
 								json.Unmarshal([]byte(content), &validationData)
 							}
 
+							validationKind := "validation"
+							validationPhase := ""
+							executionAttempt := 0
+							if isPreValidation {
+								validationKind = "pre_validation"
+								if data, ok := validationData.(map[string]interface{}); ok {
+									if value, ok := data["validation_attempt"].(float64); ok {
+										attempt = int(value)
+									}
+									if value, ok := data["execution_attempt"].(float64); ok {
+										executionAttempt = int(value)
+									}
+									if value, ok := data["validation_phase"].(string); ok {
+										validationPhase = value
+									}
+								}
+							}
+
 							validations = append(validations, map[string]interface{}{
-								"attempt":   attempt,
-								"file_path": logPath,
-								"content":   validationData,
+								"attempt":           attempt,
+								"kind":              validationKind,
+								"phase":             validationPhase,
+								"execution_attempt": executionAttempt,
+								"file_path":         logPath,
+								"content":           validationData,
 							})
 
 							sort.Slice(validations, func(i, j int) bool {
@@ -3415,6 +3453,36 @@ func (api *StreamingAPI) handleGetExecutionLogs(w http.ResponseWriter, r *http.R
 									if err := json.Unmarshal([]byte(line), &logEntry); err == nil {
 										orchLogs = append(orchLogs, logEntry)
 									}
+								}
+							}
+							entry["orchestration"] = orchLogs
+						}
+
+						// Routing steps are deterministic now. Their current runtime
+						// evidence is routing-evaluation.json, not the legacy JSONL
+						// orchestration-execution.json artifact above. Treat it as an
+						// orchestration record so routing decisions remain visible in
+						// Execution Logs.
+						if !childIsDir && childName == "routing-evaluation.json" {
+							logPath := child.FilePath
+							if processedPaths[logPath] {
+								continue
+							}
+							processedPaths[logPath] = true
+
+							entry := getStepEntry(stepId)
+							orchLogs, _ := entry["orchestration"].([]map[string]interface{})
+							content, exists, _ := readFileFromWorkspace(r.Context(), logPath)
+							if exists {
+								var routingData map[string]interface{}
+								if err := json.Unmarshal([]byte(content), &routingData); err == nil {
+									orchLogs = append(orchLogs, map[string]interface{}{
+										"type":               "routing",
+										"source":             "routing_evaluation",
+										"file_path":          logPath,
+										"timestamp":          routingData["timestamp"],
+										"routing_evaluation": routingData,
+									})
 								}
 							}
 							entry["orchestration"] = orchLogs
@@ -3724,11 +3792,17 @@ func (api *StreamingAPI) handleGetExecutionLogs(w http.ResponseWriter, r *http.R
 
 							if childName == "session.json" {
 								if content, exists, _ := readFileFromWorkspace(r.Context(), child.FilePath); exists {
-									var session struct {
-										Status string `json:"status"`
-									}
-									if json.Unmarshal([]byte(content), &session) == nil && strings.TrimSpace(session.Status) != "" {
-										entry["message_sequence_status"] = strings.ToLower(strings.TrimSpace(session.Status))
+									var session map[string]interface{}
+									if json.Unmarshal([]byte(content), &session) == nil {
+										status, _ := session["status"].(string)
+										if strings.TrimSpace(status) != "" {
+											entry["message_sequence_status"] = strings.ToLower(strings.TrimSpace(status))
+										}
+										entry["message_sequence"] = map[string]interface{}{
+											"session_path": child.FilePath,
+											"status":       status,
+											"entries":      session["entries"],
+										}
 									}
 								}
 							}
@@ -3984,6 +4058,7 @@ func isExecutionLogStepFolder(
 			continue
 		}
 		if strings.HasPrefix(childName, "validation") ||
+			childName == "routing-evaluation.json" ||
 			childName == "learning-execution.json" ||
 			childName == "orchestration-execution.json" ||
 			childName == "todo-task-execution.json" {
@@ -4184,6 +4259,7 @@ func populateStepMetadata(steps []map[string]interface{}, metadata map[string]ma
 		learningsAccess := stringFromStepOrAgentConfig(step, agentConfigs, "learnings_access")
 		knowledgebaseAccess := stringFromStepOrAgentConfig(step, agentConfigs, "knowledgebase_access")
 		knowledgebaseContribution := stringFromStepOrAgentConfig(step, agentConfigs, "knowledgebase_contribution")
+		plannedMessages := plannedMessageSequenceItemsJSON(step)
 
 		// Handle inner steps for complex types
 		if inner, ok := step["orchestration_step"].(map[string]interface{}); ok {
@@ -4221,6 +4297,10 @@ func populateStepMetadata(steps []map[string]interface{}, metadata map[string]ma
 			"learnings_access":           learningsAccess,
 			"knowledgebase_access":       knowledgebaseAccess,
 			"knowledgebase_contribution": knowledgebaseContribution,
+			"parent_step_id":             "",
+			"parent_step_title":          "",
+			"route_id":                   "",
+			"planned_messages":           plannedMessages,
 		}
 
 		// Store metadata by multiple keys to ensure it's found
@@ -4236,6 +4316,7 @@ func populateStepMetadata(steps []map[string]interface{}, metadata map[string]ma
 					if subStep, ok := route["sub_agent_step"].(map[string]interface{}); ok {
 						subAgentKey := fmt.Sprintf("%s-sub-agent-%d", stepKey, j+1)
 						subId, _ := subStep["id"].(string)
+						routeID, _ := route["route_id"].(string)
 						subCriteria, _ := subStep["success_criteria"].(string)
 						subAgentConfigs, _ := subStep["agent_configs"].(map[string]interface{})
 						subMeta := map[string]string{
@@ -4248,6 +4329,10 @@ func populateStepMetadata(steps []map[string]interface{}, metadata map[string]ma
 							"learnings_access":           stringFromStepOrAgentConfig(subStep, subAgentConfigs, "learnings_access"),
 							"knowledgebase_access":       stringFromStepOrAgentConfig(subStep, subAgentConfigs, "knowledgebase_access"),
 							"knowledgebase_contribution": stringFromStepOrAgentConfig(subStep, subAgentConfigs, "knowledgebase_contribution"),
+							"parent_step_id":             id,
+							"parent_step_title":          title,
+							"route_id":                   routeID,
+							"planned_messages":           plannedMessageSequenceItemsJSON(subStep),
 						}
 						metadata[subAgentKey] = subMeta
 						if subId != "" {
@@ -4258,6 +4343,48 @@ func populateStepMetadata(steps []map[string]interface{}, metadata map[string]ma
 			}
 		}
 	}
+}
+
+// plannedMessageSequenceItemsJSON keeps only the operator-meaningful part of
+// a message sequence. The full runtime prompt can include large injected
+// context, but this is the message explicitly authored in the workflow plan.
+func plannedMessageSequenceItemsJSON(step map[string]interface{}) string {
+	var rawItems []interface{}
+	if sequence, ok := step["message_sequence"].(map[string]interface{}); ok {
+		rawItems, _ = sequence["items"].([]interface{})
+	}
+	if len(rawItems) == 0 {
+		rawItems, _ = step["messages"].([]interface{})
+	}
+
+	items := make([]map[string]string, 0, len(rawItems))
+	for _, rawItem := range rawItems {
+		item, ok := rawItem.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		id, _ := item["id"].(string)
+		message, _ := item["message"].(string)
+		if id == "" || message == "" {
+			continue
+		}
+		itemType, _ := item["type"].(string)
+		kind, _ := item["kind"].(string)
+		items = append(items, map[string]string{
+			"id":      id,
+			"type":    itemType,
+			"kind":    kind,
+			"message": message,
+		})
+	}
+	if len(items) == 0 {
+		return ""
+	}
+	encoded, err := json.Marshal(items)
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
 }
 
 func stringFromStepOrAgentConfig(step map[string]interface{}, agentConfigs map[string]interface{}, key string) string {

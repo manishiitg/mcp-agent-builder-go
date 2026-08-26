@@ -15,6 +15,7 @@ import (
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/loopclosure"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/pulseintake"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/pulsemodules"
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 )
@@ -44,7 +45,7 @@ var pulseModuleOrder = pulsemodules.IDs()
 // Gate and reviewers still use evidence and judgment to choose what is due.
 var pulseReviewFocusCatalog = map[string][]string{
 	pulseModuleTechnicalReview: {
-		"execution_health", "plan_orchestration_integrity", "store_integrity",
+		"execution_health", "validation_contract_health", "plan_orchestration_integrity", "store_integrity",
 		"report_quality_truth", "evaluation_quality_truth", "model_cost_fitness",
 	},
 	pulseModuleStrategicReview: {
@@ -2328,6 +2329,11 @@ func readPulseModuleStateView(ctx context.Context, workspacePath, pulseRunID str
 	// routing rule. A separate pre-decision snapshot is still retained
 	// when Gate records its worklist so its handling remains auditable.
 	loopClosure := loopclosure.Check(ctx, workspacePath, time.Now().UTC())
+	// Runtime receipts are emitted by the execution engine, but a completed
+	// outer run does not prove every child call succeeded. This collector turns
+	// only explicit status disagreements and structured failures into compact
+	// evidence for Gate; it never promotes them directly to Pulse issues.
+	runtimeIntake := pulseintake.CheckRuntime(workspacePath, time.Now().UTC())
 	impactLedger, impactErr := step_based_workflow.LoadPulseImpactLedger(ctx, workspacePath, 100)
 	if impactErr != nil {
 		log.Printf("[PULSE] get_pulse_state(view=module): impact ledger unavailable for %s: %v", workspacePath, impactErr)
@@ -2367,6 +2373,8 @@ func readPulseModuleStateView(ctx context.Context, workspacePath, pulseRunID str
 		"plan_change_backlog":          planBacklog,
 		"loop_closure":                 loopClosure,
 		"loop_closure_note":            "Read-only deterministic evidence. Gate may weigh verified findings alongside other facts, but they do not mandate a module or authorize mutation. coverage_status must be verified before an empty findings list means clean.",
+		"deterministic_intake":         map[string]interface{}{"runtime": runtimeIntake},
+		"deterministic_intake_note":    "Read-only typed evidence from retained runtime receipts. A signal is a review lead, not an automatic Pulse issue or Fixer authorization. coverage_status must be verified before an empty findings list means clean.",
 		"module_review_history":        reviewHistory,
 		"review_history_note":          "What each reviewer concluded the last few times it ran, most recently run first. A module absent from this list has not run in the retained window at all. Use it to justify each skip: a module that keeps returning real findings is a poor candidate for another cooldown, and one that has come back clean repeatedly is a good one. A verdict here is the reviewer's conclusion, which is not the same as whether anything was then fixed.",
 		"review_focus_history":         focusHistory,

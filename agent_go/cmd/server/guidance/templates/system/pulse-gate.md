@@ -29,10 +29,19 @@ human inputs, and the smallest retained run summaries needed to judge whether
 material evidence exists. Compare run timestamps with each module's
 `last_checked_at`; do not treat every retained folder as new.
 
-Use returned open concerns, plan-change backlog, loop-closure state, module
-history, and focus history as selectors. Do not inject or mechanically parse
+Use returned open concerns, plan-change backlog, loop-closure state,
+`deterministic_intake`, module history, and focus history as selectors. Do not inject or mechanically parse
 the full plan or full review history. The later reviewer reads authoritative
 files and tools selectively.
+
+Use `get_plan_prompt_health` once when deciding whether a materially changed
+plan needs Technical Review. It returns only compact deterministic description
+size and long verbatim-duplication metrics; it is specifically the safe
+alternative to dumping `planning/plan.json`. A triggered report is evidence
+that a **plan-orchestration-integrity** review may be useful, not an automatic
+finding and not authority for Gate to rewrite the workflow. The later Technical
+Review must inspect the affected descriptions, schemas, and shared references
+before it decides whether prompt-contract consolidation is safe.
 
 Treat explicit `CONCERNS:` records as selectors, not automatic findings. A
 later reviewer decides whether they are a correctness issue, an efficiency or
@@ -51,6 +60,8 @@ Technical Review is due when evidence can support useful verification, repair,
 or a bounded new diagnosis. Examples include:
 
 - a failed or suspiciously successful production run;
+- a verified deterministic runtime signal (`run_not_completed`,
+  `runtime_status_disagreement`, or `tool_success_with_structured_failure`);
 - matured verification for a prior repair;
 - an answered technical decision that remains unapplied;
 - a material plan, artifact, report/evaluation, DB, knowledgebase, or learnings
@@ -60,6 +71,10 @@ or a bounded new diagnosis. Examples include:
 - a cadence-threatening run with repeated context reconstruction, large
   retained tool output, duplicated discovery/validation, or an unnecessary
   container/sequence boundary.
+- a triggered compact prompt-health report: one step over 20k description
+  characters, at least 30% of described steps over 5k, or at least 10k
+  extractable verbatim duplicate-description characters. These are objective
+  triage thresholds, not a conclusion that long work is wrong.
 
 The worklist reason proposes the best current technical focus. Use these stable
 focus keys when applicable:
@@ -75,6 +90,17 @@ This is agentic selection, not a Go threshold or semantic classifier. A large
 run can be justified by adaptive research, browser dwell, or independent
 verification. Cite exact step/item IDs and compact evidence paths, and explain
 whether the evidence supports review now or needs a named future boundary.
+
+## Deterministic-intake boundary
+
+Treat a verified deterministic signal as a focused evidence lead, never as an
+automatic finding. The collector proves only an objective fact — for example,
+that a completed outer run contains an errored child call or a success-labelled
+tool result with a non-zero exit code. The Technical reviewer must decide
+whether the failure was essential, safely recovered, already explained by a
+canonical issue, or needs a new durable finding. Do not keyword-scan ordinary
+output for words such as "error" and do not launch a Fixer directly from the
+signal.
 
 When DB, knowledgebase, or learnings integrity is selected, explicitly name the
 Stores Health scope in the reason. Stores Health remains a technical lens, not

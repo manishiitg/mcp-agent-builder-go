@@ -34,6 +34,7 @@ func (api *StreamingAPI) handleListWorkflowManifests(w http.ResponseWriter, r *h
 		http.Error(w, fmt.Sprintf("Failed to discover workflows: %v", err), http.StatusInternalServerError)
 		return
 	}
+	discovered = filterWorkflowManifestsForUser(GetUserFromContext(r.Context()), discovered)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{

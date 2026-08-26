@@ -126,6 +126,7 @@ func TestGenerationSkillsRegisterAndStayOutOfTheInfographicPipeline(t *testing.T
 		{"google-ai", []string{"SECRET_GEMINI_API_KEY", "Never invent a model ID", "@google/genai"}},
 		{"seeddance-api", []string{"SECRET_SEEDANCE_API_KEY", "/v1/videos/generations", "task_id", "show_video"}},
 		{"longform-cinematic-video", []string{"longform-sequence-plan.json", "longform-edit-decision-list.json", "longform-seam-report.json", "one film"}},
+		{"cinematic-visual-development", []string{"Subject type", "Human / presenter", "Animal / pet", "Product / object", "show_reference", "endpoint_input", "seam proof"}},
 		{"multi-clip-cinematic-generation", []string{"reference manifest", "orientation", "structured multi-shot", "Cut on action", "HyperFrames"}},
 		{"video-provider-capabilities", []string{"official API", "capability record", "maximum_approved_cost", "pending_user_review", "continuity-plan.json", "generation-ledger.json"}},
 		{"kling-video", []string{"multi_prompt", "@Element1", "motion-transfer", "show_video"}},

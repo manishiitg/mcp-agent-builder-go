@@ -5,8 +5,8 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `implemented` — pre-run drain and structural-impact contract shipped; runtime reverify pending |
-| Last synchronized | `2026-08-20` |
+| Ticket state | `implemented` — structured pre-run routing and targeted-Fixer contract shipped; runtime reverify pending |
+| Last synchronized | `2026-08-25` |
 
 - **Priority:** P1 — the operator's decision lands a full cycle late, and for a
   cadence decision that means the problem they asked to fix repeats every run
@@ -52,7 +52,7 @@ exceptions identify themselves at attempt time: needs evidence from a run that
 has not happened, premise went stale, or intent is ambiguous. **The attempt is
 the classification.**
 
-## Fix shipped
+## Original fix shipped
 
 `scheduledDecisionDrainTurn` builds a blocking pre-run turn, inserted by
 `executeWorkshopJob` **after** any contract upgrade and **before** the first
@@ -78,6 +78,8 @@ edits, so upgrades go first.
 | 2026-08-20 | Treat safe static proof as part of application, not future evidence. | Social Media's approved flattening was deferred because a non-producing fixture had not run, causing the expensive old topology to execute again. Only proof requiring a producing run or external side effect may be deferred. |
 | 2026-08-20 | Require `validate_plan_change` after structural decisions. | The first flattening repair changed control flow but left stale allocator paths, incomplete dependencies, and obsolete identifiers. The agent still chooses the design; the typed validator proves the invariants it declares. |
 | 2026-08-20 | Link measurable applied decisions to Pulse impact using `human_input_id`, and show the joined lifecycle in the Pulse UI. | `outcome_summary` already records the action and the impact ledger already records interventions and assessments. Joining those canonical records avoids a second UI-only status and lets users see decision → action → later measured result. Rejections and non-measurable administrative changes do not fabricate impact. |
+| 2026-08-25 | Replace generic prose-driven application with reviewer-authored `apply_contract` routing. | Direct setting changes can still apply before the run, but prompt/plan/route/validation/database/tool/cross-artifact changes get a dedicated Targeted Fixer. Unknown legacy prose is not auto-applied. |
+| 2026-08-25 | Make approved Targeted Fixer handoffs mandatory intake for manual `/pulse-fixer`. | A manual Fixer previously selected only `repair_eligible` backlog entries, while an approved decision's linked finding remained `awaiting_user`; it could therefore fix unrelated work and skip the approval. The new durable intake tool resolves answered targeted decisions to their linked PUL issue and makes that bundle first. |
 
 Safety boundaries, all pinned by tests:
 
@@ -106,6 +108,47 @@ observations and an assessment after comparable evidence matures. The Pulse UI
 joins those existing records and shows `decision → action taken → impact`,
 including improved, unchanged, regressed, inconclusive, or confounded. Pure
 rejections and administrative changes do not get invented metrics.
+
+## 2026-08-25 correction — deterministic intake, not "try everything"
+
+The 2026-08-20 decision to attempt every answered decision agentically was a
+necessary bridge, but it placed too much authority in operator-facing prose.
+It is now superseded for new structured decisions. The scheduler reads the
+durable `apply_contract` and routes deterministically **after contract upgrades
+and before the first schedule message**:
+
+| Contract mode | Pre-run behavior |
+|---|---|
+| `no_change` / `direct_apply` | one existing decision-drain turn, limited to the bounded defined change or truthful no-change outcome |
+| `targeted_fixer` + `approve` | one dedicated scope-bounded Fixer turn for that decision, including its issue, static checks, proof boundary, and failure policy |
+| `targeted_fixer` + reject/defer | direct no-change handling; never invoke a Fixer |
+| `external_wait` or legacy prose | no automatic mutation |
+
+The Targeted Fixer may make only the approved repair, must perform the named
+non-producing proof, re-read the changed artifacts, validate planning changes,
+and consumes the decision only when the applied outcome is truthful. It cannot
+run workflow steps, public actions, broad Pulse, backup, publish, or notify.
+The contract explicitly chooses `continue_unchanged` (the normal case) or
+`block_run` for the rare repair whose failure makes the old plan unsafe to run.
+
+This removes the contradiction in the earlier “try, don't classify” rationale:
+the scheduler does not infer a repair from keywords. The reviewer that created
+the decision supplies the durable, typed routing contract instead. A narrow
+one-time migration assigns the proven prompt-contract-consolidation namespace
+to the Targeted Fixer; all other legacy prose stays manual.
+
+### Manual Fixer parity
+
+The same contract now applies when the operator deliberately runs
+`/pulse-fixer`, rather than waiting for a schedule. At startup the command
+reads `list_approved_fixer_decisions` once. Every returned `targeted_fixer` +
+`approve` decision is mandatory first intake, even while its linked finding is
+still `awaiting_user` and therefore absent from the ordinary repair-eligible
+queue. The tool resolves the linked public PUL id from the durable
+`awaiting_user` event, so a reviewer can create the human decision before the
+finding has its PUL id. The Fixer then reads the exact decision and exact PUL
+record, applies only that scope, and leaves the decision unconsumed if proof
+does not pass. It must not substitute other eligible repairs for that handoff.
 
 ## 2026-08-20 live regression: safe proof was mistaken for future evidence
 
@@ -178,10 +221,14 @@ decision-specific fixture.
 
 ## Acceptance
 
-- A decision the operator answered is applied before the next run of that
-  workflow, not after it.
-- A drain that cannot apply a decision leaves it with a stated reason and never
-  fails the run.
+- A structured decision the operator approved is applied before the next run of
+  that workflow, not after it, by the contract-authorized path.
+- A failed repair follows its explicit policy: normally it leaves the verified
+  old plan and continues; only `block_run` prevents the run.
+- Manual `/pulse-fixer` selects an approved Targeted Fixer handoff before any
+  ordinary eligible repair; approval cannot be skipped by its `awaiting_user`
+  lifecycle label.
 - An ordinary run with no answered decisions runs no extra turn.
+- Legacy prose and external-wait decisions never create guessed pre-run edits.
 - Applied decisions show the truthful action immediately and, when measurable,
   show an awaiting-evidence checkpoint followed by Pulse's latest assessment.

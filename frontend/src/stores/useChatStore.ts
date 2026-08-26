@@ -735,17 +735,13 @@ const selectDurableChatState = (state: ChatState): DurableChatState => {
       .filter(([, tab]) => {
         const isRelevantMode = tab.metadata?.mode === 'workflow' || tab.metadata?.mode === 'multi-agent'
         if (!isRelevantMode) return false
-        // A view-only scheduled run is an observer of something happening NOW.
-        // Persisting it guaranteed it came back dead: this snapshot forces
-        // isStreaming false, so a restored Schedule tab could never look live
-        // again, and it reappeared on every reload for 24h. The run history
-        // panel is the durable record of past runs; a lane for a run that is
-        // no longer happening is not. A schedule the user promoted to an
-        // interactive chat is a real conversation and is kept.
-        if (tab.metadata?.isScheduledRun && tab.metadata?.isViewOnly &&
-            !tab.metadata?.userInteractiveContinuation) {
-          return false
-        }
+        // Explicit product decision: a tab, once opened, is closed only by the
+        // user -- including a view-only Schedule lane whose run has finished.
+        // This snapshot forces isStreaming false, so a restored Schedule tab
+        // looks dead (not live) on reload -- that's accepted, not a bug; the
+        // tab still exists as a closable record until the user closes it.
+        // See shouldDisplayWorkflowTab in workflowRuntimeTabProjection.ts for
+        // the matching live-display side of this decision.
         return Date.now() - (tab.createdAt || 0) < 24 * 60 * 60 * 1000
       })
       .map(([tabId, tab]) => [

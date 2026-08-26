@@ -184,6 +184,11 @@ func userInfoWithWorkflowPermissions(info UserInfo) UserInfo {
 	info.CanRunWorkflows = perms.CanRunWorkflows
 	info.CanWriteWorkflows = perms.CanWriteWorkflows
 	info.CanManageWorkflowAccess = perms.CanManageWorkflowAccess
+
+	if productAccess, ok := userProductAccessForIdentity(info.ID, info.Username, info.Email); ok {
+		info.AllowedProducts = productAccess.Products
+		info.AllowedWorkflowIDs = productAccess.WorkflowIDs
+	}
 	return info
 }
 

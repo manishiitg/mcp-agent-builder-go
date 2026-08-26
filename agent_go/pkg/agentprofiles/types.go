@@ -24,8 +24,21 @@ type RuntimePolicy struct {
 	// from. Empty/workspace preserves the historical per-project override;
 	// global uses only the server-wide credential and ignores saved project
 	// overrides. This does not affect product generation secrets.
-	CredentialScope string              `json:"credential_scope,omitempty" yaml:"credential_scope,omitempty"`
-	Capabilities    RuntimeCapabilities `json:"capabilities" yaml:"capabilities"`
+	CredentialScope string `json:"credential_scope,omitempty" yaml:"credential_scope,omitempty"`
+	// RequireProviderToken forces this profile to refuse a claude-code turn
+	// outright when no explicit provider token is resolved, instead of
+	// falling back to whatever `claude` CLI login happens to exist on the
+	// host. Independent of, and in addition to, the server's own
+	// single-product-deployment heuristic (isSingleProductServerDeployment in
+	// cmd/server) -- that heuristic is a deployment-topology default any
+	// product gets for free on a dedicated server without touching this
+	// file; this field is a per-product override for a profile that must
+	// never rely on an ambient CLI login, even in a shared or desktop
+	// context (for example, a fixed-workspace, single-tenant product with no
+	// legitimate desktop use case). False preserves every existing profile's
+	// current behavior.
+	RequireProviderToken bool                `json:"require_provider_token,omitempty" yaml:"require_provider_token,omitempty"`
+	Capabilities         RuntimeCapabilities `json:"capabilities" yaml:"capabilities"`
 	// AgentTools selects whether a coding provider receives only AgentWorks MCP
 	// tools (mcp_only) or provider-native tools (hybrid). Hybrid may retain the
 	// MCP execute_shell_command bridge; only APITransport native_shell is
@@ -220,6 +233,13 @@ type Profile struct {
 	Runtime              RuntimePolicy    `json:"runtime" yaml:"runtime"`
 	BuiltIn              bool             `json:"built_in" yaml:"built_in"`
 	OwnerID              string           `json:"owner_id,omitempty" yaml:"owner_id,omitempty"`
+	// Product names which product surface this builtin profile belongs to
+	// (e.g. "dominion", "video-studio", "finance") -- set by each product's
+	// registration call in server.go, never by the product package itself.
+	// Empty for non-builtin profiles and for the generic, profile-less
+	// AgentWorks chat path. Used only to key per-user product access checks;
+	// it has no effect on tool/skill resolution.
+	Product string `json:"product,omitempty" yaml:"product,omitempty"`
 	// Scope declares whether this profile is bound to one project workspace
 	// (the default -- every profile before this field existed, including
 	// Video Studio, behaves this way) or operates globally across a user's

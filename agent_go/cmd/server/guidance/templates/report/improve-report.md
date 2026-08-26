@@ -36,6 +36,7 @@ The report dashboard should help the user measure and track whether the workflow
 - What changed or is being tried now (current plan, Goal Advisor proposal, active experiment, or important Pulse finding)?
 - What is broken, blocked, stale, expensive, missing, or risky?
 - What evidence supports that conclusion?
+- What did this workflow actually do — in plain, non-technical language, not KPIs alone?
 
 GOAL TRACKING CONTRACT
 Before proposing visual/layout work, translate `soul.md` success criteria into the dashboard's tracked signals using existing evidence:
@@ -102,11 +103,13 @@ queries against `db/db.sqlite` (`sqlite3 db/db.sqlite ".schema"` + `SELECT ... L
 5. **Theme & color.** Does it follow the app's light/dark theme — keying off the `.dark`/`data-theme` and the `report:theme` event, or using the injected `hsl(var(--token))` palette? Is contrast **WCAG AA in BOTH themes**? Use semantic colour only for meaning (ok/attention/fail), not decoration.
 6. **Responsive & self-contained (HTML).** No horizontal overflow at ~480px; wide tables scroll/wrap; multi-column layouts stack on narrow screens; all CSS/JS inline (no CDN); body height NOT pinned (the frame auto-sizes).
 7. **Rendered reality check.** Based on the preview, what actually looks broken, cramped, misleading, empty, or visually weak even if the plan is valid?
+8. **Activity/actions record.** Does the report include one section, as its own top-level tab (not a subsection scrolled past within another tab, and not merely an anchored region on a single scrolling page), that plainly answers "what did this workflow actually do": recent runs and the actions taken in each, in plain non-technical language, with no raw JSON, internal IDs, or state codes? Name it for the workflow's real run cadence (`Daily Action` for a daily workflow, `Recent Activity`/`Latest Run` otherwise). Its absence, its existence-but-not-as-a-top-level-tab, staleness (not reflecting recent runs), or fabricated content is a concrete defect, not a cosmetic nit — flag it the same as a missing goal-tracking band.
 
 Show proposed changes concretely with before/after HTML or plan intent. Do not edit files or ask the user from the reviewer.
 
 Recommend safe, local report-only changes such as:
 - adding a clearer goal-tracking/status band from existing `soul.md`, eval, Pulse, cost/time, workflow, or db data
+- adding the required plain-language activity/actions section (see `design-reporting-ui`/`reporting-policy`) when it is missing or stale
 - reordering sections so goal verdicts/issues come before detailed tables
 - fixing static/stale values to live `window.report` reads
 - fixing bad SQL, missing tabs, broken theme handling, responsive overflow, or low-contrast styling

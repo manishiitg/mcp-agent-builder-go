@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/gorilla/mux"
+	step_based_workflow "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
 )
 
 func TestNormalizeReportHumanInputSourceMergesLegacyAdvisorIdentity(t *testing.T) {
@@ -146,6 +147,114 @@ func TestReportHumanInputsUseWorkflowLocalDB(t *testing.T) {
 	}
 	if block := formatAnsweredReportHumanInputsForAgent(ctx, workspacePath); block != "" {
 		t.Fatalf("consumed answer should not be re-injected, got:\n%s", block)
+	}
+}
+
+func TestReportHumanInputPersistsStructuredApplyContract(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+	created, err := createReportHumanInput(ctx, "Workflow/decision-contract", ReportHumanInputCreateRequest{
+		InputID: "technical-decision-prompt-contract", Source: "technical_review", Question: "Approve prompt cleanup?",
+		ApplyContract: ReportHumanInputApplyContract{Mode: "targeted_fixer", IssueID: "PUL-55BE3473", ApprovedScope: "Extract one contract at a time.", PreRunChecks: []string{"validate_plan_change", "validate_plan_change"}, PostRunProof: "one producing run"},
+	})
+	if err != nil {
+		t.Fatalf("create decision contract: %v", err)
+	}
+	if got := created.ApplyContract; got.Mode != "targeted_fixer" || got.IssueID != "PUL-55BE3473" || len(got.PreRunChecks) != 1 || got.FailurePolicy != "continue_unchanged" {
+		t.Fatalf("created contract = %+v", got)
+	}
+	inputs, err := listReportHumanInputs(ctx, "Workflow/decision-contract", "pending", "")
+	if err != nil || len(inputs) != 1 || inputs[0].ApplyContract.ApprovedScope != "Extract one contract at a time." {
+		t.Fatalf("stored contract = %+v, err=%v", inputs, err)
+	}
+	if _, err := createReportHumanInput(ctx, "Workflow/decision-contract", ReportHumanInputCreateRequest{
+		InputID: "bad-contract", Question: "Bad?", ApplyContract: ReportHumanInputApplyContract{Mode: "targeted_fixer"},
+	}); err == nil || !strings.Contains(err.Error(), "approved_scope") {
+		t.Fatalf("targeted fixer without scope error = %v", err)
+	}
+}
+
+func TestApprovedTargetedFixerCandidatesResolveLinkedFinding(t *testing.T) {
+	inputs := []ReportHumanInput{
+		{ID: "approved", WorkspacePath: "Workflow/social-media", Status: "answered", SelectedOptionID: "approve", ApplyContract: ReportHumanInputApplyContract{Mode: "targeted_fixer", ApprovedScope: "Extract one contract."}},
+		{ID: "rejected", WorkspacePath: "Workflow/social-media", Status: "answered", SelectedOptionID: "reject", ApplyContract: ReportHumanInputApplyContract{Mode: "targeted_fixer", ApprovedScope: "Do not apply."}},
+		{ID: "legacy", WorkspacePath: "Workflow/social-media", Status: "answered", SelectedOptionID: "approve"},
+	}
+	finding := step_based_workflow.PulseFindingLifecycle{
+		Fingerprint: "55be3473d3d1fc2c", StepID: "technical_review", Phase: "review", Text: "Shared prompt contract is duplicated.",
+		Events: []step_based_workflow.PulseFindingEvent{{EventType: "awaiting_user", Metadata: map[string]interface{}{"human_input_id": "approved"}}},
+	}
+	candidates := reportHumanInputFixerCandidates(inputs, []step_based_workflow.PulseFindingLifecycle{finding})
+	if len(candidates) != 1 {
+		t.Fatalf("candidates=%+v, want only approved targeted handoff", candidates)
+	}
+	if candidates[0].InputID != "approved" || candidates[0].IssueID != step_based_workflow.NewPulseIssue(finding).ID {
+		t.Fatalf("candidate=%+v, want resolved approved finding", candidates[0])
+	}
+}
+
+func TestListApprovedFixerDecisionsToolReadsOnlyExplicitApprovals(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+	workspacePath := "Workflow/fixer-intake"
+	if _, err := createReportHumanInput(ctx, workspacePath, ReportHumanInputCreateRequest{
+		InputID: "approved", Question: "Apply prompt cleanup?", Options: []ReportHumanInputOption{{ID: "approve", Title: "Approve"}},
+		ApplyContract: ReportHumanInputApplyContract{Mode: "targeted_fixer", ApprovedScope: "Extract one shared contract."},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := createReportHumanInput(ctx, workspacePath, ReportHumanInputCreateRequest{
+		InputID: "direct", Question: "Apply setting?", Options: []ReportHumanInputOption{{ID: "approve", Title: "Approve"}},
+		ApplyContract: ReportHumanInputApplyContract{Mode: "direct_apply"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, inputID := range []string{"approved", "direct"} {
+		if _, err := answerReportHumanInput(ctx, workspacePath, inputID, ReportHumanInputAnswerRequest{SelectedOptionID: "approve", AnsweredBy: "user"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, executors, categories := createReportHumanInputTools()
+	if categories["list_approved_fixer_decisions"] != "human_tools" {
+		t.Fatalf("fixer intake category=%q", categories["list_approved_fixer_decisions"])
+	}
+	list, ok := executors["list_approved_fixer_decisions"].(func(context.Context, map[string]interface{}) (string, error))
+	if !ok {
+		t.Fatal("approved Fixer intake tool is missing")
+	}
+	result, err := list(ctx, map[string]interface{}{"workspace_path": workspacePath})
+	if err != nil || !strings.Contains(result, `"input_id":"approved"`) || strings.Contains(result, `"input_id":"direct"`) {
+		t.Fatalf("fixer intake result=%s err=%v", result, err)
+	}
+}
+
+func TestPromptContractDecisionMigrationGetsTargetedFixerContract(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	workspacePath := "Workflow/migrated-prompt-contract"
+	if _, err := createReportHumanInput(ctx, workspacePath, ReportHumanInputCreateRequest{
+		InputID: "technical-decision-prompt-contract-consolidation-example", Source: "technical_review", Question: "Approve cleanup?",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(root, "Workflow", "migrated-prompt-contract", "db", "db.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE report_human_inputs SET apply_contract_json='{}'`); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	inputs, err := listReportHumanInputs(ctx, workspacePath, "pending", "")
+	if err != nil || len(inputs) != 1 {
+		t.Fatalf("migrated inputs=%+v err=%v", inputs, err)
+	}
+	if got := inputs[0].ApplyContract; got.Mode != "targeted_fixer" || got.FailurePolicy != "continue_unchanged" || !strings.Contains(got.ApprovedScope, "one versioned") {
+		t.Fatalf("prompt-contract migration = %+v", got)
 	}
 }
 

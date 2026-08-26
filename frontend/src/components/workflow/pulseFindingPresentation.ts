@@ -160,13 +160,17 @@ export function pulseFindingPresentation(finding: PulseFindingLifecycle): PulseF
   }
 
   if (finding.status === 'queued_for_engineering') {
+    const missingDecisionRequest = finding.events.some((event) => (
+      event.event_type === 'decision_request_missing'
+    ))
     return {
-      label: 'Queued for Pulse',
+      label: missingDecisionRequest ? 'Decision request missing' : 'Queued for Pulse',
       queue: 'queued_repair',
-      tone: 'info',
-      nextAction: finding.resolution_note?.trim()
-        || finding.details?.next_check?.trim()
-        || 'Pulse will select this safe repair in a later Engineering pass.',
+      tone: missingDecisionRequest ? 'danger' : 'info',
+      nextAction: finding.resolution_note?.trim() || (missingDecisionRequest
+        ? 'Pulse must re-review this finding and create a linked, answerable decision only if one is still needed.'
+        : finding.details?.next_check?.trim()
+          || 'Pulse will select this safe repair in a later Engineering pass.'),
     }
   }
 

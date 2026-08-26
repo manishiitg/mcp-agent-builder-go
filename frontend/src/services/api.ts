@@ -2310,6 +2310,10 @@ export interface AuthUser {
   can_write_workflows?: boolean
   can_manage_workflow_access?: boolean
   workflow_permissions_enabled?: boolean
+  // null/undefined means unrestricted -- the deployment's own enabledProductSurfaces
+  // (and every workflow) applies. A non-empty array narrows further, per-user.
+  allowed_products?: string[] | null
+  allowed_workflow_ids?: string[] | null
 }
 
 export interface AuthResponse {

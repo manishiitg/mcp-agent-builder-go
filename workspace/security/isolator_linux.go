@@ -45,11 +45,15 @@ func (iso *Isolator) landlockPolicy() (LandlockPolicy, error) {
 	if err != nil {
 		return LandlockPolicy{}, err
 	}
-	blocked, err := iso.canonicalPolicyPaths(iso.BlockedPaths)
+	// Blocked paths are deny rules. A SQLite WAL/SHM sidecar is intentionally
+	// absent until SQLite first writes in WAL mode; a missing deny target cannot
+	// grant access and must not prevent the entire sandbox from starting. We
+	// still fail closed for every required allow path and for other stat errors.
+	blocked, err := iso.canonicalOptionalPolicyPaths(iso.BlockedPaths)
 	if err != nil {
 		return LandlockPolicy{}, err
 	}
-	blockedWrites, err := iso.canonicalPolicyPaths(iso.BlockedWritePaths)
+	blockedWrites, err := iso.canonicalOptionalPolicyPaths(iso.BlockedWritePaths)
 	if err != nil {
 		return LandlockPolicy{}, err
 	}
@@ -79,6 +83,14 @@ func (iso *Isolator) landlockPolicy() (LandlockPolicy, error) {
 }
 
 func (iso *Isolator) canonicalPolicyPaths(paths []string) ([]string, error) {
+	return iso.canonicalPolicyPathsWithMissing(paths, false)
+}
+
+func (iso *Isolator) canonicalOptionalPolicyPaths(paths []string) ([]string, error) {
+	return iso.canonicalPolicyPathsWithMissing(paths, true)
+}
+
+func (iso *Isolator) canonicalPolicyPathsWithMissing(paths []string, allowMissing bool) ([]string, error) {
 	result := make([]string, 0, len(paths))
 	seen := map[string]struct{}{}
 	for _, path := range paths {
@@ -92,6 +104,9 @@ func (iso *Isolator) canonicalPolicyPaths(paths []string) ([]string, error) {
 		}
 		path = resolved
 		if _, err := os.Stat(path); err != nil {
+			if allowMissing && os.IsNotExist(err) {
+				continue
+			}
 			return nil, fmt.Errorf("policy path is unavailable: %w", err)
 		}
 		if _, ok := seen[path]; ok {

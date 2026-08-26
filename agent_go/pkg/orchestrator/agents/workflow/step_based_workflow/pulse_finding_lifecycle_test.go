@@ -767,6 +767,108 @@ func TestAwaitingUserRequiresARealPendingQuestion(t *testing.T) {
 	}
 }
 
+func TestMigrateUnlinkedAwaitingUserFindingsQueuesLegacyDecisionForPulse(t *testing.T) {
+	ctx := context.Background()
+	workspacePath := concernsWorkspace(t)
+	concern := filedReviewConcern(t, workspacePath, "pulse-legacy", "eval_health", "legacy score-scale decision")
+
+	db, err := openRunConcernsDB(ctx, workspacePath, false)
+	if err != nil || db == nil {
+		t.Fatalf("open workflow db: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.ExecContext(ctx, `CREATE TABLE report_human_inputs (
+		id TEXT PRIMARY KEY, status TEXT NOT NULL)`); err != nil {
+		t.Fatalf("create human inputs: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE run_concerns SET status=? WHERE fingerprint=?`,
+		ConcernStatusAcknowledged, concern.Fingerprint); err != nil {
+		t.Fatalf("seed acknowledged finding: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE pulse_finding_events SET recorded_at='2026-07-31T00:00:00Z'
+		WHERE fingerprint=? AND event_type='filed'`, concern.Fingerprint); err != nil {
+		t.Fatalf("age initial filing event: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO pulse_finding_events
+		(fingerprint, finding_id, pulse_run_id, event_type, summary, metadata_json, recorded_at)
+		VALUES (?, 'EVAL-LEGACY', 'pulse-legacy', 'awaiting_user', 'Needs a score-scale decision.', '{}', '2026-08-01T00:00:00Z')`, concern.Fingerprint); err != nil {
+		t.Fatalf("seed legacy event: %v", err)
+	}
+
+	if err := ensurePulseFindingLifecycleSchema(ctx, db); err != nil {
+		t.Fatalf("migrate legacy decision: %v", err)
+	}
+	var status, note string
+	if err := db.QueryRowContext(ctx, `SELECT status, resolution_note FROM run_concerns WHERE fingerprint=?`, concern.Fingerprint).Scan(&status, &note); err != nil {
+		t.Fatalf("load migrated finding: %v", err)
+	}
+	if status != ConcernStatusQueuedForEngineering || !strings.Contains(note, "Decision request missing") {
+		t.Fatalf("legacy decision = status %q, note %q; want queued Pulse repair", status, note)
+	}
+	var migrationEvents int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pulse_finding_events
+		WHERE fingerprint=? AND event_type='decision_request_missing'`, concern.Fingerprint).Scan(&migrationEvents); err != nil {
+		t.Fatalf("count migration events: %v", err)
+	}
+	if migrationEvents != 1 {
+		t.Fatalf("migration events = %d, want 1", migrationEvents)
+	}
+	if err := ensurePulseFindingLifecycleSchema(ctx, db); err != nil {
+		t.Fatalf("rerun migration: %v", err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pulse_finding_events
+		WHERE fingerprint=? AND event_type='decision_request_missing'`, concern.Fingerprint).Scan(&migrationEvents); err != nil {
+		t.Fatalf("count idempotent migration events: %v", err)
+	}
+	if migrationEvents != 1 {
+		t.Fatalf("idempotent migration events = %d, want 1", migrationEvents)
+	}
+}
+
+func TestMigrateUnlinkedAwaitingUserFindingsKeepsLinkedDecision(t *testing.T) {
+	ctx := context.Background()
+	workspacePath := concernsWorkspace(t)
+	concern := filedReviewConcern(t, workspacePath, "pulse-linked", "eval_health", "linked score-scale decision")
+
+	db, err := openRunConcernsDB(ctx, workspacePath, false)
+	if err != nil || db == nil {
+		t.Fatalf("open workflow db: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.ExecContext(ctx, `CREATE TABLE report_human_inputs (
+		id TEXT PRIMARY KEY, status TEXT NOT NULL)`); err != nil {
+		t.Fatalf("create human inputs: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO report_human_inputs (id, status) VALUES ('technical-decision-score-scale', 'pending')`); err != nil {
+		t.Fatalf("seed pending decision: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE run_concerns SET status=? WHERE fingerprint=?`,
+		ConcernStatusAcknowledged, concern.Fingerprint); err != nil {
+		t.Fatalf("seed acknowledged finding: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE pulse_finding_events SET recorded_at='2026-07-31T00:00:00Z'
+		WHERE fingerprint=? AND event_type='filed'`, concern.Fingerprint); err != nil {
+		t.Fatalf("age initial filing event: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO pulse_finding_events
+		(fingerprint, finding_id, pulse_run_id, event_type, summary, metadata_json, recorded_at)
+		VALUES (?, 'EVAL-LINKED', 'pulse-linked', 'awaiting_user', 'Needs a score-scale decision.',
+		'{"human_input_id":"technical-decision-score-scale"}', '2026-08-01T00:00:00Z')`, concern.Fingerprint); err != nil {
+		t.Fatalf("seed linked event: %v", err)
+	}
+
+	if err := ensurePulseFindingLifecycleSchema(ctx, db); err != nil {
+		t.Fatalf("migrate linked decision: %v", err)
+	}
+	var status string
+	if err := db.QueryRowContext(ctx, `SELECT status FROM run_concerns WHERE fingerprint=?`, concern.Fingerprint).Scan(&status); err != nil {
+		t.Fatalf("load linked finding: %v", err)
+	}
+	if status != ConcernStatusAcknowledged {
+		t.Fatalf("linked decision status = %q, want %q", status, ConcernStatusAcknowledged)
+	}
+}
+
 func TestAdvisorProposalRoutingRequiresEvidenceOrDecision(t *testing.T) {
 	ctx := context.Background()
 	workspacePath := concernsWorkspace(t)

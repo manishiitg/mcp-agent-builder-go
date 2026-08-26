@@ -5,8 +5,8 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `implemented` — guidance drain contract shipped; historical backlog still stranded |
-| Last synchronized | `2026-08-12` |
+| Ticket state | `implemented` — structured application contract and conservative legacy handling shipped; runtime reverify pending |
+| Last synchronized | `2026-08-25` |
 
 - **Priority:** P1 — the operator answers a question and nothing happens. This
   is the platform silently discarding human decisions, which is worse than not
@@ -80,6 +80,30 @@ suppressed while its answer is still valid.
 The consumption call requires a real `outcome_summary`, so a consumed decision
 always records what was actually done with it.
 
+## 2026-08-25 routing correction — human approval is not an implementation spec
+
+The first drain contract still gave an agent a decision's operator-facing prose
+and asked it to infer the repair. That is not safe for prompt, plan, route,
+validation, database, tool, or cross-artifact changes. It also made it
+impossible for the scheduler to know whether a failed pre-run repair should
+block the upcoming run or leave the verified old plan in place.
+
+`report_human_inputs` now persists a reviewer-supplied `apply_contract`:
+
+- `no_change` — record the operator's rejection/defer outcome;
+- `direct_apply` — apply one already-defined, bounded setting change;
+- `targeted_fixer` — start a dedicated, scope-bounded pre-run Fixer with the
+  linked issue, approved scope, required checks, post-run proof boundary and
+  explicit failure policy; or
+- `external_wait` — retain the answer until an external prerequisite exists.
+
+Unknown legacy prose has **no automatic mutation path**. A rejected
+`targeted_fixer` contract is recorded as no change, never dispatched as a
+repair. The existing stable namespace for prompt-contract consolidation
+decisions is migrated once to `targeted_fixer`; this includes the outstanding
+Social Media prompt-bloat approval without pretending arbitrary old decisions
+have a machine-readable scope.
+
 ## Not fixed here
 
 - **The 26 existing stranded decisions.** They need a pass per workflow to
@@ -102,3 +126,6 @@ always records what was actually done with it.
 - No answered decision sits unconsumed across more than one Pulse pass without
   a recorded reason.
 - Suppressing a module does not strand decisions it already asked.
+- An approval whose consequence is a nontrivial workflow repair has an explicit
+  application contract; it is never guessed from the prose shown to the
+  operator.

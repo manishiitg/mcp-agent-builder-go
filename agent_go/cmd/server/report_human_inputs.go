@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	step_based_workflow "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
 	mcpexecutor "github.com/manishiitg/mcpagent/executor"
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 	_ "modernc.org/sqlite"
@@ -32,52 +33,66 @@ type ReportHumanInputOption struct {
 	Description string `json:"description"`
 }
 
+// ReportHumanInputApplyContract is the machine-readable handoff for an
+// answered operator decision. Pre-run uses it to route work; it must never
+// infer an implementation from the operator-facing context prose.
+type ReportHumanInputApplyContract struct {
+	Mode          string   `json:"mode,omitempty"`
+	IssueID       string   `json:"issue_id,omitempty"`
+	ApprovedScope string   `json:"approved_scope,omitempty"`
+	PreRunChecks  []string `json:"pre_run_checks,omitempty"`
+	PostRunProof  string   `json:"post_run_proof,omitempty"`
+	FailurePolicy string   `json:"failure_policy,omitempty"`
+}
+
 type ReportHumanInput struct {
-	ID                string                   `json:"id"`
-	WorkspacePath     string                   `json:"workspace_path"`
-	Source            string                   `json:"source"`
-	Priority          string                   `json:"priority"`
-	Question          string                   `json:"question"`
-	Context           string                   `json:"context,omitempty"`
-	Options           []ReportHumanInputOption `json:"options"`
-	AllowFreeText     bool                     `json:"allow_free_text"`
-	Status            string                   `json:"status"`
-	SelectedOptionID  string                   `json:"selected_option_id,omitempty"`
-	Note              string                   `json:"note,omitempty"`
-	RunID             string                   `json:"run_id,omitempty"`
-	Evidence          string                   `json:"evidence,omitempty"`
-	CreatedBy         string                   `json:"created_by,omitempty"`
-	AnsweredBy        string                   `json:"answered_by,omitempty"`
-	AnsweredByKind    string                   `json:"answered_by_kind,omitempty"`
-	AnsweredVia       string                   `json:"answered_via,omitempty"`
-	AnsweredSessionID string                   `json:"answered_session_id,omitempty"`
-	ConsumedBy        string                   `json:"consumed_by,omitempty"`
-	OutcomeSummary    string                   `json:"outcome_summary,omitempty"`
-	CreatedAt         string                   `json:"created_at"`
-	UpdatedAt         string                   `json:"updated_at"`
-	AnsweredAt        string                   `json:"answered_at,omitempty"`
-	ConsumedAt        string                   `json:"consumed_at,omitempty"`
-	DismissedAt       string                   `json:"dismissed_at,omitempty"`
-	ClaimToken        string                   `json:"claim_token,omitempty"`
-	ClaimedAt         string                   `json:"claimed_at,omitempty"`
-	ClaimExpiresAt    string                   `json:"claim_expires_at,omitempty"`
+	ID                string                        `json:"id"`
+	WorkspacePath     string                        `json:"workspace_path"`
+	Source            string                        `json:"source"`
+	Priority          string                        `json:"priority"`
+	Question          string                        `json:"question"`
+	Context           string                        `json:"context,omitempty"`
+	Options           []ReportHumanInputOption      `json:"options"`
+	AllowFreeText     bool                          `json:"allow_free_text"`
+	Status            string                        `json:"status"`
+	SelectedOptionID  string                        `json:"selected_option_id,omitempty"`
+	Note              string                        `json:"note,omitempty"`
+	RunID             string                        `json:"run_id,omitempty"`
+	Evidence          string                        `json:"evidence,omitempty"`
+	CreatedBy         string                        `json:"created_by,omitempty"`
+	AnsweredBy        string                        `json:"answered_by,omitempty"`
+	AnsweredByKind    string                        `json:"answered_by_kind,omitempty"`
+	AnsweredVia       string                        `json:"answered_via,omitempty"`
+	AnsweredSessionID string                        `json:"answered_session_id,omitempty"`
+	ConsumedBy        string                        `json:"consumed_by,omitempty"`
+	OutcomeSummary    string                        `json:"outcome_summary,omitempty"`
+	CreatedAt         string                        `json:"created_at"`
+	UpdatedAt         string                        `json:"updated_at"`
+	AnsweredAt        string                        `json:"answered_at,omitempty"`
+	ConsumedAt        string                        `json:"consumed_at,omitempty"`
+	DismissedAt       string                        `json:"dismissed_at,omitempty"`
+	ClaimToken        string                        `json:"claim_token,omitempty"`
+	ClaimedAt         string                        `json:"claimed_at,omitempty"`
+	ClaimExpiresAt    string                        `json:"claim_expires_at,omitempty"`
+	ApplyContract     ReportHumanInputApplyContract `json:"apply_contract,omitempty"`
 }
 
 type ReportHumanInputCreateRequest struct {
-	WorkspacePath string                   `json:"workspace_path"`
-	InputID       string                   `json:"input_id"`
-	Source        string                   `json:"source"`
-	Priority      string                   `json:"priority"`
-	Question      string                   `json:"question"`
-	Context       string                   `json:"context"`
-	Options       []ReportHumanInputOption `json:"options"`
-	AllowFreeText bool                     `json:"allow_free_text"`
-	RunID         string                   `json:"run_id"`
-	Evidence      string                   `json:"evidence"`
-	CreatedBy     string                   `json:"created_by"`
-	CreatedByKind string                   `json:"-"`
-	CreatedVia    string                   `json:"-"`
-	SessionID     string                   `json:"-"`
+	WorkspacePath string                        `json:"workspace_path"`
+	InputID       string                        `json:"input_id"`
+	Source        string                        `json:"source"`
+	Priority      string                        `json:"priority"`
+	Question      string                        `json:"question"`
+	Context       string                        `json:"context"`
+	Options       []ReportHumanInputOption      `json:"options"`
+	AllowFreeText bool                          `json:"allow_free_text"`
+	RunID         string                        `json:"run_id"`
+	Evidence      string                        `json:"evidence"`
+	CreatedBy     string                        `json:"created_by"`
+	CreatedByKind string                        `json:"-"`
+	CreatedVia    string                        `json:"-"`
+	SessionID     string                        `json:"-"`
+	ApplyContract ReportHumanInputApplyContract `json:"apply_contract"`
 }
 
 type ReportHumanInputAnswerRequest struct {
@@ -207,7 +222,8 @@ func ensureReportHumanInputSchema(ctx context.Context, db *sql.DB) error {
 			dismissed_at TEXT NOT NULL DEFAULT '',
 			claim_token TEXT NOT NULL DEFAULT '',
 			claimed_at TEXT NOT NULL DEFAULT '',
-			claim_expires_at TEXT NOT NULL DEFAULT ''
+			claim_expires_at TEXT NOT NULL DEFAULT '',
+			apply_contract_json TEXT NOT NULL DEFAULT '{}'
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_report_human_inputs_status ON report_human_inputs(status, updated_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_report_human_inputs_source ON report_human_inputs(source, status, updated_at)`,
@@ -239,6 +255,7 @@ func ensureReportHumanInputSchema(ctx context.Context, db *sql.DB) error {
 		"answered_by_kind":    "TEXT NOT NULL DEFAULT ''",
 		"answered_via":        "TEXT NOT NULL DEFAULT ''",
 		"answered_session_id": "TEXT NOT NULL DEFAULT ''",
+		"apply_contract_json": "TEXT NOT NULL DEFAULT '{}'",
 	} {
 		if err := ensureReportHumanInputColumn(ctx, db, name, definition); err != nil {
 			return err
@@ -257,6 +274,23 @@ func ensureReportHumanInputSchema(ctx context.Context, db *sql.DB) error {
 	// only new decisions use the strategic-proposal- namespace.
 	if _, err := db.ExecContext(ctx, `UPDATE report_human_inputs SET source='strategic_review'
 		WHERE source IN ('strategy_auditor', 'goal_advisor')`); err != nil {
+		return err
+	}
+	// Prompt-contract decisions existed before structured apply contracts. Their
+	// stable reviewer-owned namespace is a safe one-time migration boundary;
+	// arbitrary legacy prose remains manual rather than being guessed at.
+	promptContractMigration, _ := json.Marshal(ReportHumanInputApplyContract{
+		Mode:          "targeted_fixer",
+		ApprovedScope: "Extract one versioned shared prompt contract at a time; preserve exact step inputs, outputs, validation, routes, and side-effect ordering.",
+		PreRunChecks:  []string{"validate_plan_change"},
+		PostRunProof:  "one post-change producing run",
+		FailurePolicy: "continue_unchanged",
+	})
+	if _, err := db.ExecContext(ctx, `UPDATE report_human_inputs
+		SET apply_contract_json=?
+		WHERE source='technical_review'
+		  AND id LIKE 'technical-decision-prompt-contract-consolidation-%'
+		  AND (apply_contract_json='' OR apply_contract_json='{}')`, string(promptContractMigration)); err != nil {
 		return err
 	}
 	return nil
@@ -290,6 +324,96 @@ func normalizeReportHumanInputActorKind(kind string) string {
 	default:
 		return "legacy_unattributed"
 	}
+}
+
+func normalizeReportHumanInputApplyContract(contract ReportHumanInputApplyContract) (ReportHumanInputApplyContract, error) {
+	contract.Mode = strings.ToLower(strings.TrimSpace(contract.Mode))
+	contract.IssueID = strings.TrimSpace(contract.IssueID)
+	contract.ApprovedScope = strings.TrimSpace(contract.ApprovedScope)
+	contract.PostRunProof = strings.TrimSpace(contract.PostRunProof)
+	contract.FailurePolicy = strings.ToLower(strings.TrimSpace(contract.FailurePolicy))
+	if contract.Mode == "" {
+		return ReportHumanInputApplyContract{}, nil // legacy/prose-only: never auto-apply.
+	}
+	switch contract.Mode {
+	case "no_change", "direct_apply", "targeted_fixer", "external_wait":
+	default:
+		return ReportHumanInputApplyContract{}, fmt.Errorf("apply_contract.mode must be no_change, direct_apply, targeted_fixer, or external_wait")
+	}
+	if contract.Mode == "targeted_fixer" && contract.ApprovedScope == "" {
+		return ReportHumanInputApplyContract{}, fmt.Errorf("targeted_fixer apply_contract requires approved_scope")
+	}
+	if contract.FailurePolicy == "" {
+		contract.FailurePolicy = "continue_unchanged"
+	}
+	if contract.FailurePolicy != "continue_unchanged" && contract.FailurePolicy != "block_run" {
+		return ReportHumanInputApplyContract{}, fmt.Errorf("apply_contract.failure_policy must be continue_unchanged or block_run")
+	}
+	checks := make([]string, 0, len(contract.PreRunChecks))
+	seen := map[string]bool{}
+	for _, check := range contract.PreRunChecks {
+		check = strings.TrimSpace(check)
+		if check != "" && !seen[check] {
+			seen[check] = true
+			checks = append(checks, check)
+		}
+	}
+	contract.PreRunChecks = checks
+	return contract, nil
+}
+
+// ReportHumanInputFixerCandidate is an explicitly approved repair that must
+// outrank normal generic Fixer queue selection. The linked issue is resolved
+// from the durable awaiting_user event because a reviewer has to create the
+// decision before it can know the finding's public PUL id.
+type ReportHumanInputFixerCandidate struct {
+	InputID       string                        `json:"input_id"`
+	IssueID       string                        `json:"issue_id,omitempty"`
+	WorkspacePath string                        `json:"workspace_path"`
+	ApplyContract ReportHumanInputApplyContract `json:"apply_contract"`
+}
+
+func reportHumanInputFixerCandidates(inputs []ReportHumanInput, findings []step_based_workflow.PulseFindingLifecycle) []ReportHumanInputFixerCandidate {
+	linkedIssues := make(map[string]string)
+	for _, finding := range findings {
+		issueID := step_based_workflow.NewPulseIssue(finding).ID
+		for _, event := range finding.Events {
+			if event.EventType != "awaiting_user" {
+				continue
+			}
+			inputID, _ := event.Metadata["human_input_id"].(string)
+			if inputID != "" && linkedIssues[inputID] == "" {
+				linkedIssues[inputID] = issueID
+			}
+		}
+	}
+	candidates := make([]ReportHumanInputFixerCandidate, 0)
+	for _, input := range inputs {
+		contract := input.ApplyContract
+		if !strings.EqualFold(strings.TrimSpace(contract.Mode), "targeted_fixer") || !strings.EqualFold(strings.TrimSpace(input.SelectedOptionID), "approve") {
+			continue
+		}
+		issueID := linkedIssues[input.ID]
+		if issueID == "" {
+			issueID = strings.ToUpper(strings.TrimSpace(contract.IssueID))
+		}
+		candidates = append(candidates, ReportHumanInputFixerCandidate{
+			InputID: input.ID, IssueID: issueID, WorkspacePath: input.WorkspacePath, ApplyContract: contract,
+		})
+	}
+	return candidates
+}
+
+func listApprovedTargetedFixerCandidates(ctx context.Context, workspacePath string) ([]ReportHumanInputFixerCandidate, error) {
+	inputs, err := listReportHumanInputs(ctx, workspacePath, "answered", "")
+	if err != nil || len(inputs) == 0 {
+		return []ReportHumanInputFixerCandidate{}, err
+	}
+	findings, err := step_based_workflow.LoadPulseFindingLifecycles(ctx, inputs[0].WorkspacePath, "", -1)
+	if err != nil {
+		return nil, err
+	}
+	return reportHumanInputFixerCandidates(inputs, findings), nil
 }
 
 func ensureReportHumanInputColumn(ctx context.Context, db *sql.DB, column, definition string) error {
@@ -361,6 +485,10 @@ func createReportHumanInput(ctx context.Context, workspacePath string, req Repor
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	optionsJSON, _ := json.Marshal(options)
+	applyContract, err := normalizeReportHumanInputApplyContract(req.ApplyContract)
+	if err != nil {
+		return nil, err
+	}
 	input := &ReportHumanInput{
 		ID:            id,
 		WorkspacePath: normalized,
@@ -374,7 +502,9 @@ func createReportHumanInput(ctx context.Context, workspacePath string, req Repor
 		CreatedBy:     strings.TrimSpace(req.CreatedBy),
 		CreatedAt:     now,
 		UpdatedAt:     now,
+		ApplyContract: applyContract,
 	}
+	applyContractJSON, _ := json.Marshal(input.ApplyContract)
 
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -384,17 +514,17 @@ func createReportHumanInput(ctx context.Context, workspacePath string, req Repor
 	eventType := "created"
 	if existing == nil {
 		_, err = tx.ExecContext(ctx, `INSERT INTO report_human_inputs
-			(id, workspace_path, source, priority, question, context, options_json, allow_free_text, status, run_id, evidence, created_by, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)`,
+			(id, workspace_path, source, priority, question, context, options_json, allow_free_text, status, run_id, evidence, created_by, apply_contract_json, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)`,
 			input.ID, input.WorkspacePath, input.Source, input.Priority, input.Question, input.Context, string(optionsJSON), boolToInt(input.AllowFreeText),
-			input.RunID, input.Evidence, input.CreatedBy, input.CreatedAt, input.UpdatedAt)
+			input.RunID, input.Evidence, input.CreatedBy, string(applyContractJSON), input.CreatedAt, input.UpdatedAt)
 	} else {
 		eventType = "refreshed"
 		_, err = tx.ExecContext(ctx, `UPDATE report_human_inputs
-			SET source=?, priority=?, question=?, context=?, options_json=?, allow_free_text=?, run_id=?, evidence=?, created_by=?, updated_at=?
+			SET source=?, priority=?, question=?, context=?, options_json=?, allow_free_text=?, run_id=?, evidence=?, created_by=?, apply_contract_json=?, updated_at=?
 			WHERE id=? AND workspace_path=? AND status='pending'`,
 			input.Source, input.Priority, input.Question, input.Context, string(optionsJSON), boolToInt(input.AllowFreeText),
-			input.RunID, input.Evidence, input.CreatedBy, input.UpdatedAt, input.ID, input.WorkspacePath)
+			input.RunID, input.Evidence, input.CreatedBy, string(applyContractJSON), input.UpdatedAt, input.ID, input.WorkspacePath)
 		input.CreatedAt = existing.CreatedAt
 	}
 	if err != nil {
@@ -437,7 +567,7 @@ func listReportHumanInputs(ctx context.Context, workspacePath, status, source st
 	}
 	query := `SELECT id, workspace_path, source, priority, question, context, options_json, allow_free_text, status,
 		selected_option_id, note, run_id, evidence, created_by, answered_by, answered_by_kind, answered_via, answered_session_id, consumed_by, outcome_summary,
-		created_at, updated_at, answered_at, consumed_at, dismissed_at, claim_token, claimed_at, claim_expires_at
+		created_at, updated_at, answered_at, consumed_at, dismissed_at, claim_token, claimed_at, claim_expires_at, apply_contract_json
 		FROM report_human_inputs WHERE ` + strings.Join(clauses, " AND ") + `
 		ORDER BY CASE status WHEN 'pending' THEN 0 WHEN 'answered' THEN 1 WHEN 'claimed' THEN 2 WHEN 'dismissed' THEN 3 ELSE 4 END,
 			datetime(updated_at) DESC, id DESC`
@@ -672,7 +802,7 @@ func consumeReportHumanInput(ctx context.Context, workspacePath, inputID string,
 func getReportHumanInputByID(ctx context.Context, db *sql.DB, workspacePath, inputID string) (*ReportHumanInput, error) {
 	row := db.QueryRowContext(ctx, `SELECT id, workspace_path, source, priority, question, context, options_json, allow_free_text, status,
 		selected_option_id, note, run_id, evidence, created_by, answered_by, answered_by_kind, answered_via, answered_session_id, consumed_by, outcome_summary,
-		created_at, updated_at, answered_at, consumed_at, dismissed_at, claim_token, claimed_at, claim_expires_at
+		created_at, updated_at, answered_at, consumed_at, dismissed_at, claim_token, claimed_at, claim_expires_at, apply_contract_json
 		FROM report_human_inputs WHERE workspace_path=? AND id=?`, workspacePath, strings.TrimSpace(inputID))
 	input, err := scanReportHumanInput(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -691,13 +821,14 @@ type reportHumanInputScanner interface {
 func scanReportHumanInput(row reportHumanInputScanner) (*ReportHumanInput, error) {
 	var input ReportHumanInput
 	var optionsJSON string
+	var applyContractJSON string
 	var allowFreeText int
 	if err := row.Scan(
 		&input.ID, &input.WorkspacePath, &input.Source, &input.Priority, &input.Question, &input.Context,
 		&optionsJSON, &allowFreeText, &input.Status, &input.SelectedOptionID, &input.Note, &input.RunID,
 		&input.Evidence, &input.CreatedBy, &input.AnsweredBy, &input.AnsweredByKind, &input.AnsweredVia, &input.AnsweredSessionID, &input.ConsumedBy, &input.OutcomeSummary,
 		&input.CreatedAt, &input.UpdatedAt, &input.AnsweredAt, &input.ConsumedAt, &input.DismissedAt,
-		&input.ClaimToken, &input.ClaimedAt, &input.ClaimExpiresAt,
+		&input.ClaimToken, &input.ClaimedAt, &input.ClaimExpiresAt, &applyContractJSON,
 	); err != nil {
 		return nil, err
 	}
@@ -706,6 +837,7 @@ func scanReportHumanInput(row reportHumanInputScanner) (*ReportHumanInput, error
 		input.Options = []ReportHumanInputOption{}
 	}
 	input.AllowFreeText = allowFreeText != 0
+	_ = json.Unmarshal([]byte(applyContractJSON), &input.ApplyContract)
 	return &input, nil
 }
 
@@ -714,7 +846,7 @@ func createReportHumanInputTools() ([]llmtypes.Tool, map[string]interface{}, map
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
 			Name:        "create_human_input_request",
-			Description: "Create or refresh a structured non-blocking workflow question for the user. Review decisions are stored in that workflow's db/db.sqlite and answered inside the Pulse/report panel. Attribute new review requests to source=\"technical_review\" or \"strategic_review\"; reserve source=\"pulse\" for generic Pulse coordination. Legacy engineering_review and ops_review rows remain readable history but are not new-write identities. Use a stable reviewer-owned input_id, approve/reject/defer options, and put the exact proposed changes, rationale, expected impact, risk, and evidence in context so a later review/fixer pass can apply an approved proposal with normal workflow tools.",
+			Description: "Create or refresh a structured non-blocking workflow question for the user. Review decisions are stored in that workflow's db/db.sqlite and answered inside the Pulse/report panel. Attribute new review requests to source=\"technical_review\" or \"strategic_review\"; reserve source=\"pulse\" for generic Pulse coordination. For any decision that authorizes a workflow change, supply apply_contract: pre-run routes it deterministically and never infers a repair from user-facing prose. Use targeted_fixer for prompt, plan, route, validation, database, tool, model, or cross-artifact changes; direct_apply only for a known single setting and exact static check.",
 			Parameters: llmtypes.NewParameters(map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -740,6 +872,14 @@ func createReportHumanInputTools() ([]llmtypes.Tool, map[string]interface{}, map
 					"allow_free_text": map[string]interface{}{"type": "boolean", "description": "Allow the user to write a custom answer instead of selecting an option, or add a note alongside an option. If no options are provided, free text is automatically allowed."},
 					"run_id":          map[string]interface{}{"type": "string", "description": "Optional schedule/run id connected to the request."},
 					"evidence":        map[string]interface{}{"type": "string", "description": "Evidence paths/ids that justify the question."},
+					"apply_contract": map[string]interface{}{"type": "object", "additionalProperties": false, "properties": map[string]interface{}{
+						"mode":           map[string]interface{}{"type": "string", "enum": []string{"no_change", "direct_apply", "targeted_fixer", "external_wait"}, "description": "Deterministic pre-run handling. Omit only for legacy/informational requests that must not be auto-applied."},
+						"issue_id":       map[string]interface{}{"type": "string", "description": "Optional linked canonical PUL issue id when already known."},
+						"approved_scope": map[string]interface{}{"type": "string", "description": "Bounded implementation authority. Required for targeted_fixer."},
+						"pre_run_checks": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Exact static/dry-run checks required before the decision may be consumed."},
+						"post_run_proof": map[string]interface{}{"type": "string", "description": "Evidence a later producing run must provide; this never substitutes for pre-run checks."},
+						"failure_policy": map[string]interface{}{"type": "string", "enum": []string{"continue_unchanged", "block_run"}, "description": "Whether a failed application may continue with the old safe plan or must block this run."},
+					}},
 				},
 				"required": []string{"workspace_path", "question"},
 			}),
@@ -757,6 +897,20 @@ func createReportHumanInputTools() ([]llmtypes.Tool, map[string]interface{}, map
 					"input_id":       map[string]interface{}{"type": "string", "description": "Exact decision id supplied by the scheduler, Pulse state, or chat context."},
 				},
 				"required": []string{"workspace_path", "input_id"},
+			}),
+		},
+	}
+	listApprovedFixerTool := llmtypes.Tool{
+		Type: "function",
+		Function: &llmtypes.FunctionDefinition{
+			Name:        "list_approved_fixer_decisions",
+			Description: "Read the durable queue of answered decisions that explicitly authorize a targeted Pulse Fixer repair. Use this once at the start of /pulse-fixer before ordinary issue selection. Each returned candidate is mandatory intake: use its exact input_id and issue_id, read both canonical records, and never let normal repair_eligible filtering skip it.",
+			Parameters: llmtypes.NewParameters(map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"workspace_path": map[string]interface{}{"type": "string", "description": "Exact workflow-relative path, for example Workflow/social-media."},
+				},
+				"required": []string{"workspace_path"},
 			}),
 		},
 	}
@@ -795,6 +949,22 @@ func createReportHumanInputTools() ([]llmtypes.Tool, map[string]interface{}, map
 		},
 	}
 	executors := map[string]interface{}{
+		"list_approved_fixer_decisions": func(ctx context.Context, args map[string]interface{}) (string, error) {
+			workspacePath, _ := args["workspace_path"].(string)
+			if strings.TrimSpace(workspacePath) == "" {
+				return "", fmt.Errorf("workspace_path is required")
+			}
+			candidates, err := listApprovedTargetedFixerCandidates(ctx, workspacePath)
+			if err != nil {
+				return "", err
+			}
+			payload := map[string]interface{}{
+				"candidates": candidates,
+				"note":       "Each candidate is an explicit approved targeted-Fixer handoff. It overrides normal generic Fixer queue eligibility; leave it unconsumed if the bounded repair cannot be proved.",
+			}
+			encoded, err := json.Marshal(payload)
+			return string(encoded), err
+		},
 		"get_human_input_request": func(ctx context.Context, args map[string]interface{}) (string, error) {
 			workspacePath, _ := args["workspace_path"].(string)
 			inputID, _ := args["input_id"].(string)
@@ -871,12 +1041,13 @@ func createReportHumanInputTools() ([]llmtypes.Tool, map[string]interface{}, map
 		},
 	}
 	categories := map[string]string{
-		"get_human_input_request":    "human_tools",
-		"create_human_input_request": "human_tools",
-		"answer_human_input_request": "human_tools",
-		"mark_human_input_consumed":  "human_tools",
+		"list_approved_fixer_decisions": "human_tools",
+		"get_human_input_request":       "human_tools",
+		"create_human_input_request":    "human_tools",
+		"answer_human_input_request":    "human_tools",
+		"mark_human_input_consumed":     "human_tools",
 	}
-	return []llmtypes.Tool{getTool, createTool, answerTool, consumeTool}, executors, categories
+	return []llmtypes.Tool{getTool, listApprovedFixerTool, createTool, answerTool, consumeTool}, executors, categories
 }
 
 func reportHumanInputCreateRequestFromToolArgs(args map[string]interface{}) (ReportHumanInputCreateRequest, error) {
@@ -889,6 +1060,12 @@ func reportHumanInputCreateRequestFromToolArgs(args map[string]interface{}) (Rep
 	req.Context, _ = args["context"].(string)
 	req.RunID, _ = args["run_id"].(string)
 	req.Evidence, _ = args["evidence"].(string)
+	if raw, ok := args["apply_contract"]; ok {
+		b, _ := json.Marshal(raw)
+		if err := json.Unmarshal(b, &req.ApplyContract); err != nil {
+			return req, fmt.Errorf("apply_contract must be an object")
+		}
+	}
 	req.CreatedBy, _ = args["created_by"].(string)
 	req.AllowFreeText, _ = args["allow_free_text"].(bool)
 	if raw, ok := args["options"]; ok {
