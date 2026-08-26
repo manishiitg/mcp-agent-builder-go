@@ -111,6 +111,15 @@ function hasWorkflowChatContent(events?: PollingEvent[]): boolean {
   return (events || []).some(event => WORKFLOW_CHAT_CONTENT_EVENT_TYPES.has(event.type || ''))
 }
 
+// createChatTab always mints a fresh crypto.randomUUID() sessionId for a
+// brand-new tab, even one with zero conversation behind it -- so a tab's
+// `sessionId` alone is truthy even when nothing has ever been loaded into
+// it. The real "already has something" signal is whether that session has
+// any actual content.
+function workflowTabAlreadyHasContent(tab: ChatTab | undefined, tabEvents: Record<string, PollingEvent[]>): boolean {
+  return Boolean(tab?.sessionId) && hasWorkflowChatContent(tabEvents[tab!.sessionId!])
+}
+
 function workflowTabSortTimestamp(tab: ChatTab): number {
   return tab.lastAccessedAt ?? tab.createdAt ?? 0
 }
@@ -393,14 +402,8 @@ const WorkflowPreviousChatsPanel: React.FC<{
     if (!tab || tab.metadata?.mode !== 'workflow') return
     if (tab.metadata?.isViewOnly || tab.metadata?.isScheduledRun || tab.metadata?.isBotRun) return
     // Only the blank builder tab this panel backs is eligible -- never
-    // hijack a tab the user already pointed at something else (a session
-    // already loaded here). createChatTab always mints a fresh
-    // crypto.randomUUID() sessionId for a brand-new tab, even one with zero
-    // conversation behind it yet -- so `tab.sessionId` alone is truthy for
-    // the blank builder tab too and can't be used as the "already has
-    // something" signal. The real signal is whether that session has any
-    // actual content, same check activeSessionId above uses.
-    if (tab.sessionId && hasWorkflowChatContent(store.tabEvents[tab.sessionId])) return
+    // hijack a tab the user already pointed at something else.
+    if (workflowTabAlreadyHasContent(tab, store.tabEvents)) return
 
     // Explicit guard, not just an assumption about effect ordering: skip if
     // ANY other tab for this workflow is actually doing something right now.
@@ -423,7 +426,7 @@ const WorkflowPreviousChatsPanel: React.FC<{
         const latestStore = useChatStore.getState()
         const latestTab = latestStore.chatTabs[activeTabId]
         if (!latestTab) return
-        if (latestTab.sessionId && hasWorkflowChatContent(latestStore.tabEvents[latestTab.sessionId])) return
+        if (workflowTabAlreadyHasContent(latestTab, latestStore.tabEvents)) return
         await resumeChatSessionIntoTab(mostRecent, activeTabId, chatHistoryOpenDisposition(mostRecent))
       } catch (error) {
         logger.warn('WorkflowLayout', 'Failed to auto-restore the most recent conversation', { workspacePath, error })
