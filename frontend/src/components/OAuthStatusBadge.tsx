@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Loader2, Key, X } from 'lucide-react';
+import { Loader2, Key, X, Plus, Check } from 'lucide-react';
 import { oauthApi } from '../services/oauthApi';
 import type { OAuthDiscoveryResponse } from '../services/oauthApi';
 import { useChatStore } from '../stores';
@@ -17,12 +17,20 @@ interface OAuthStatusBadgeProps {
   serverName: string;
   requiresOAuth?: boolean; // Auto-detected from server discovery
   onAuthChange?: (valid: boolean) => void;
+  /**
+   * `label` renders the wide "Connect"/"Disconnect" buttons used by the server
+   * dropdown and details modal. `icon` renders the compact square control the
+   * connector directory cards use, where the name and description already say
+   * which service the button belongs to.
+   */
+  variant?: 'label' | 'icon';
 }
 
 export const OAuthStatusBadge: React.FC<OAuthStatusBadgeProps> = ({
   serverName,
   requiresOAuth,
-  onAuthChange
+  onAuthChange,
+  variant = 'label'
 }) => {
   const [tokenValid, setTokenValid] = useState<boolean>(false);
   const [loading, setLoading] = useState(false);
@@ -255,6 +263,38 @@ export const OAuthStatusBadge: React.FC<OAuthStatusBadgeProps> = ({
       </div>
     </div>
   );
+
+  if (variant === 'icon') {
+    // Connected reads as a filled green check; hovering swaps it for the X that
+    // disconnects, so the resting state stays as calm as the directory grid.
+    return (
+      <>
+        {clientIdDialog}
+        <button
+          onClick={() => (tokenValid ? handleLogout() : handleLogin())}
+          disabled={loading}
+          className={`group/btn flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition-colors disabled:opacity-50 ${
+            tokenValid
+              ? 'border-green-600/40 bg-green-600/15 text-green-500 hover:border-red-500/40 hover:bg-red-500/15 hover:text-red-400'
+              : 'border-gray-300 text-gray-500 hover:bg-gray-100 hover:text-gray-900 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-100'
+          }`}
+          title={tokenValid ? `Disconnect ${serverName}` : `Connect ${serverName}`}
+          aria-label={tokenValid ? `Disconnect ${serverName}` : `Connect ${serverName}`}
+        >
+          {loading ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : tokenValid ? (
+            <>
+              <Check className="h-4 w-4 group-hover/btn:hidden" />
+              <X className="hidden h-4 w-4 group-hover/btn:block" />
+            </>
+          ) : (
+            <Plus className="h-4 w-4" />
+          )}
+        </button>
+      </>
+    );
+  }
 
   if (!tokenValid) {
     return (
