@@ -1096,7 +1096,7 @@ func getUpdateRegularStepSchema() string {
 						},
 						"description": {
 							"type": "string",
-				"description": "OPTIONAL: Updated deterministic execution contract implemented by learnings/<step-id>/main.py. Only include if you want to change the contract. If omitted, the existing description is preserved."
+				"description": "OPTIONAL: Replaces the deterministic execution contract implemented by learnings/<step-id>/main.py. Specify inputs, target-domain operations, persistence behavior, outputs, idempotency, error handling, and provenance/freshness requirements. Do not copy shared AgentWorks bridge/auth, Folder Guard, managed-tool, tool-discovery, or coding-session mechanics into this field. This is not an LLM prompt; conversational or judgment-heavy work belongs in update_message_sequence_step. Omit to preserve the existing description."
 						},
 						"context_dependencies": {
 							"type": "array",
@@ -1244,7 +1244,7 @@ func getAddMessageSequenceStepSchema() string {
 			"context_output": {"type": "string", "description": "OPTIONAL: Summary/result file for later steps. Omit when the step writes its result to the db (validate via validation_schema.db)."},
 			"items": {
 				"type": "array",
-				"description": "REQUIRED: Ordered queue of follow-up turns (turns 1..N; the step description is turn 0). Turn 0 should own the complete coherent outcome, including its routine sub-actions. Add a user_message only for evidence-based verification, critique, repair, new external input, or a real phase change; do not create one item per checklist line or tool call. Use explicit prevalidation items only for intermediate gates; the top-level validation_schema runs automatically after the final work turn. Deterministic code must be a standalone regular scripted step, never a sequence item. Plain turns inherit step-level DB/KB/learnings writes. Use kind or a non-empty write_access only to narrow a turn to selected stores.",
+				"description": "REQUIRED: Ordered queue of follow-up turns (turns 1..N; the step description is turn 0). Turn 0 should own the complete coherent outcome, including its routine sub-actions. Add a user_message only for evidence-based verification, critique, repair, new external input, or a real phase change; do not create one item per checklist line or tool call. Use explicit prevalidation items only for intermediate gates; the top-level validation_schema runs automatically after the final work turn. Deterministic code must be a standalone regular scripted step, never a sequence item. Plain turns inherit step-level DB/KB/learnings writes. Use kind or a non-empty write_access only to narrow a turn to selected stores. Before authoring more than a single verify/repair turn, load references/message-sequence.md: read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/message-sequence.md\"}]).",
 				"items": {
 					"type": "object",
 					"properties": {
@@ -1284,13 +1284,17 @@ func getUpdateMessageSequenceStepSchema() string {
 		"type": "object",
 		"properties": {
 			"existing_step_id": {"type": "string", "minLength": 1, "description": "REQUIRED: ID of the message_sequence step to update. Legacy non-scripted regular steps are accepted and atomically upgraded to message_sequence because that is already their effective runtime type."},
-			"title": {"type": "string"},
-			"description": {"type": "string"},
-			"context_dependencies": {"type": "array", "items": {"type": "string"}},
-			"context_output": {"type": "string"},
-			"items": {"type": "array", "items": {"type": "object"}, "description": "Replace the ordered item queue."},
-			"next_step_id": {"type": "string"},
-			"validation_schema": {"type": "object"},
+			"title": {"type": "string", "description": "OPTIONAL: New title. Omit to preserve the existing title."},
+			"description": {"type": "string", "description": "OPTIONAL: Replaces the opening instruction AND complete coherent outcome. This IS EXECUTED as the first user turn (turn 0): it leads items[0] inside the same conversation. Write it as an actionable semantic workflow instruction: domain action, inputs, durable result, failure behavior, and verification. Do not copy shared AgentWorks bridge/auth, Folder Guard, managed-tool, tool-discovery, or coding-session mechanics here. Keep routine sub-actions here; reserve items[] (turns 1..N) for decision-useful validation, critique, repair, new input, or real phase changes. Omit to preserve the existing description — do not resend it unchanged just to also change another field."},
+			"context_dependencies": {"type": "array", "items": {"type": "string"}, "description": "OPTIONAL: Replaces the full list of prior context files this sequence depends on. Omit to preserve the existing list."},
+			"context_output": {"type": "string", "description": "OPTIONAL: Replaces the summary/result file for later steps. Omit to preserve the existing value, or to leave the step writing its result to the db (validate via validation_schema.db) instead of a file."},
+			"items": {
+				"type": "array",
+				"description": "OPTIONAL: Replaces the entire ordered queue of follow-up turns (turns 1..N; the step description is turn 0) — this is a full replacement, not a merge, so include every item you want kept. Add a user_message only for evidence-based verification, critique, repair, new external input, or a real phase change; do not create one item per checklist line or tool call. Use explicit prevalidation items only for intermediate gates; the top-level validation_schema runs automatically after the final work turn. Deterministic code must be a standalone regular scripted step, never a sequence item. Plain turns inherit step-level DB/KB/learnings writes; use kind or a non-empty write_access only to narrow a turn to selected stores. Before restructuring items[] into anything beyond a single verify/repair turn, load references/message-sequence.md: read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/message-sequence.md\"}]).",
+				"items": {"type": "object"}
+			},
+			"next_step_id": {"type": "string", "description": "OPTIONAL: Replaces the explicit next step ID, or 'end'. Omit to preserve sequential execution."},
+			"validation_schema": {"type": "object", "description": "OPTIONAL: Replaces the step-level final validation contract. When present, the runtime automatically runs it after the configured work turns and before learning/knowledge closing turns; failures are sent back to the same conversation for repair and retried. Omit to preserve the existing schema. Keep it to the load-bearing checks a downstream step, evaluator, or user actually depends on — not every field the output happens to contain."},
 			"reason": {"type": "string", "description": "REQUIRED: One-sentence rationale for this update."}
 		},
 		"required": ["existing_step_id", "reason"]
@@ -1816,8 +1820,8 @@ func getUpdateTodoTaskRouteSchema() string {
 					"type": {"type": "string", "enum": ["message_sequence", "regular", "todo_task"]},
 					"id": {"type": "string"},
 					"title": {"type": "string"},
-					"description": {"type": "string"},
-					"items": {"type": "array", "description": "Required when type='message_sequence'.", "items": {"type": "object"}},
+					"description": {"type": "string", "description": "OPTIONAL: Replaces what this specialized agent does AND its standing brief. This IS EXECUTED as the agent's opening instruction (turn 0) on the first call — the orchestrator's per-call call_sub_agent instructions are added on top. Write it as an actionable brief, not throwaway metadata. Omit to preserve the existing description."},
+					"items": {"type": "array", "description": "Required when type='message_sequence'. Replaces the entire ordered queue of follow-up turns (turns 1..N; description is turn 0) — a full replacement, not a merge. Add a user_message only for evidence-based verification, critique, repair, new input, or a real phase change. Before restructuring this into anything beyond a single verify/repair turn, load references/message-sequence.md: read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/message-sequence.md\"}]).", "items": {"type": "object"}},
 					"context_dependencies": {"type": "array", "items": {"type": "string"}, "description": "Exact durable file outputs this child consumes. The runtime resolves and injects these files. Use [] when the child reads durable state from managed DB/KB tools instead."},
 					"context_output": {"type": "string"},
 					"todo_task_step": {"type": "object", "description": "When type='todo_task': nested orchestrator inner step metadata."},

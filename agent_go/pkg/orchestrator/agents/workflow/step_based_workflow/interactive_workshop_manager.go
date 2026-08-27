@@ -7709,7 +7709,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// Tool: create_schedule — Create a new cron schedule
 	if err := mcpAgent.RegisterCustomTool(
 		"create_schedule",
-		"Create a new cron schedule for this workflow. Workflow schedules use mode='workshop' with workshop_mode='run'. Messages are optional; when omitted, the scheduler asks Run mode to execute the full workflow. Continuous improvement, including Goal Advisor, is selected dynamically by Pulse after normal scheduled runs; do not create a separate optimizer schedule.",
+		"Create a new cron schedule for this workflow. Workflow schedules use mode='workshop' with workshop_mode='run'. Messages are optional; when omitted, the scheduler asks Run mode to execute the full workflow. Continuous improvement, including Goal Advisor, is selected dynamically by Pulse after normal scheduled runs; do not create a separate optimizer schedule. For the full contract (collision/dependency policy design, when direct messages vs. route_selections is correct, resume_previous tradeoffs): read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/workflow-tools.md\"}]).",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -7878,7 +7878,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// Tool: create_calendar_schedule — Create dated one-time runs for content calendars
 	if err := mcpAgent.RegisterCustomTool(
 		"create_calendar_schedule",
-		"Create a dated calendar schedule for this workflow, such as a full-month Instagram content calendar. Use this when the user provides specific dates/times instead of a repeating cron pattern. Workflow calendar schedules always run through the workshop builder path; omit mode or use mode='workshop'.",
+		"Create a dated calendar schedule for this workflow, such as a full-month Instagram content calendar. Use this when the user provides specific dates/times instead of a repeating cron pattern. Workflow calendar schedules always run through the workshop builder path; omit mode or use mode='workshop'. For the full contract: read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/workflow-tools.md\"}]).",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -7964,7 +7964,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// Tool: update_schedule — Update a schedule
 	if err := mcpAgent.RegisterCustomTool(
 		"update_schedule",
-		"Update an existing schedule. Only provided fields are changed; omitted fields keep their current values.",
+		"Update an existing schedule. Only provided fields are changed; omitted fields keep their current values. For collision/dependency policy design and when direct messages vs. route_selections is correct: read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/workflow-tools.md\"}]).",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -8293,7 +8293,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// Tool: list_skills — List all available skills in the workspace
 	if err := mcpAgent.RegisterCustomTool(
 		"list_skills",
-		"List all available skills in the workspace. Shows both selected skills (used by this workflow) and all discovered skills.",
+		"List all available skills in the workspace. Shows both selected skills (used by this workflow) and all discovered skills. Being listed as selected is not the same as being usable at runtime — a step only receives a skill if it's explicitly listed in that step's enabled_skills.",
 		map[string]interface{}{
 			"type":       "object",
 			"properties": map[string]interface{}{},
@@ -8312,7 +8312,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// Tool: import_skill — Import a skill from GitHub
 	if err := mcpAgent.RegisterCustomTool(
 		"import_skill",
-		"Import a skill from GitHub into the workspace. The skill will be downloaded and available for use in workflows. Use list_skills first to see what's already available.",
+		"Import a skill from GitHub into the workspace. The skill will be downloaded and available for use in workflows. Use list_skills first to see what's already available. Importing alone does not attach it anywhere: call update_workflow_config(add_skills=[\"folder-name\"]) to select it for the workflow, then update_step_config(step_id, enabled_skills=[\"folder-name\"]) on each step that should actually receive it at runtime — step execution does not inherit workflow-selected skills.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -8346,7 +8346,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// Tool: uninstall_skill — Uninstall a skill from the workspace
 	if err := mcpAgent.RegisterCustomTool(
 		"uninstall_skill",
-		"Uninstall a skill from the workspace. Removes skill files and version tracking. Use list_skills first to see available skills and their folder names.",
+		"Uninstall a skill from the workspace. Removes skill files and version tracking. Use list_skills first to see available skills and their folder names. This does not remove the skill from any workflow's add_skills or a step's enabled_skills — clear those references first (update_workflow_config, update_step_config) or the workflow will point at a skill that no longer exists.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -8378,7 +8378,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// Tool: search_skills — Search the skills registry
 	if err := mcpAgent.RegisterCustomTool(
 		"search_skills",
-		"Search for skills in the public skills registry. Returns matching skills with install commands. Use install_skill to install a result.",
+		"Search for skills in the public skills registry. Returns matching skills with install commands. Use install_skill to install a result. Installing is not the same as attaching it to a workflow or step — see install_skill.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -8407,7 +8407,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// Tool: install_skill — Install a skill via the skills CLI
 	if err := mcpAgent.RegisterCustomTool(
 		"install_skill",
-		"Install a skill from the public skills registry using owner/repo@skill-name format. Use search_skills first to find available skills.",
+		"Install a skill from the public skills registry using owner/repo@skill-name format. Use search_skills first to find available skills. Installing alone does not attach it anywhere: call update_workflow_config(add_skills=[\"folder-name\"]) to select it for the workflow, then update_step_config(step_id, enabled_skills=[\"folder-name\"]) on each step that should actually receive it at runtime — step execution does not inherit workflow-selected skills.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{

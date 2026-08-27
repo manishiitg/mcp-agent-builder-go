@@ -74,7 +74,7 @@ func workflowDBQueryToolDefinition() llmtypes.Tool {
 func workflowDBMutateToolDefinition() llmtypes.Tool {
 	return llmtypes.Tool{Type: "function", Function: &llmtypes.FunctionDefinition{
 		Name:        "mutate_workflow_db",
-		Description: "Mutate rows in the current workflow SQLite database. Needs trusted DB write authority. Pass sql (and optional params) for one statement, same shape as query_workflow_db; pass statements with 1-20 entries for an all-or-nothing batch. INSERT, UPDATE, DELETE, optionally WITH CTEs; returns affected-row receipts. Schema changes use migrations.",
+		Description: "Mutate rows in the current workflow SQLite database. Needs trusted DB write authority. Pass sql (and optional params) for one statement, same shape as query_workflow_db; pass statements with 1-20 entries for an all-or-nothing batch. Prefer INSERT ... ON CONFLICT DO UPDATE (upsert by the table's declared primary key) over DELETE or a wholesale overwrite — a table is shared across groups/runs, and deleting/replacing rows can clobber another writer's data. Check db/README.md for the table's primary key and upsert rule before writing; a genuine DELETE is for rows this step itself owns and is retiring, not routine updates. Schema changes use migrations.",
 		Parameters: llmtypes.NewParameters(map[string]any{
 			"type": "object",
 			"properties": map[string]any{
