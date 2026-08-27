@@ -189,9 +189,30 @@ the other:
   same precision survives a tighter rewrite, not whether it can be made
   short.
 
+Apply a third question to `validation_schema`, not only to steps that
+crossed the description-size triage boundary — a schema can be
+over-specified even when its description is short, and `validation_schema`
+now renders into the executing agent's prompt on every attempt (not only on
+retry), so its size is a live prompt cost, not just an authoring artifact.
+`get_plan_prompt_health` gives no schema-size signal, so run a cheap
+`jq`-style scan of `planning/plan.json` for schemas with an unusually high
+check count relative to the step's actual output, then read only those
+schemas in full — this stays a lightweight scan, not a full-plan read:
+
+- **Over-specified schema.** Is every `json_checks`/`files`/`db` entry
+  load-bearing — does it catch a real failure a downstream step, evaluator,
+  or user actually depends on — or does it re-check structure the model
+  gets right by construction, assert on free-form/optional content where
+  cosmetic variation isn't actually wrong, or simply mirror the entire
+  output document field-by-field? A schema this large is not automatically
+  wrong (a genuinely multi-file, multi-field contract earns its size), but
+  each check should survive "what real failure does this catch" — if the
+  honest answer is "none, it's just thorough," that check is bloat and a
+  source of spurious retries, not rigor.
+
 File **one canonical workflow-level finding**, not one finding per large
 step. Its evidence must name the measured totals and the exact affected
-steps, and say which of the two questions above applies to each one (they
+steps, and say which of the three questions above applies to each one (they
 are not the same defect and can call for different fixes). Its
 recommendation must name the proposed fix per step: which store it should
 move to and what the step should reference instead, a tighter rewrite that

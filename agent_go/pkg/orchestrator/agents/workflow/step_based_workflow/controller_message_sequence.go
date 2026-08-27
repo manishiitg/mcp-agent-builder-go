@@ -365,6 +365,11 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeMessageSequenceStep(
 		} else if desc := strings.TrimSpace(sequenceStep.GetDescription()); desc != "" {
 			session.LastRuntimeContext = "Step description (opening instruction):\n" + desc
 		}
+		// Show the validation schema on the opening turn — the same way regular
+		// and todo_task steps already surface it proactively — so a
+		// message_sequence step doesn't have to guess the output shape and only
+		// learn it reactively after a failed pre-validation attempt.
+		session.LastRuntimeContext = appendMessageSequenceValidationSchema(session.LastRuntimeContext, sequenceStep.ValidationSchema)
 		source = "configured_queue"
 	}
 
@@ -1321,6 +1326,35 @@ func firstValidationFileName(schema *ValidationSchema) string {
 		}
 	}
 	return ""
+}
+
+// formatMessageSequenceValidationSchema renders a step's validation_schema for the
+// opening turn, matching the section regular and todo_task steps already render into
+// their system prompts (see execution_only_agent.go / todo_task_orchestrator_agent.go).
+// Returns "" when there is no schema or it fails to marshal.
+func formatMessageSequenceValidationSchema(schema *ValidationSchema) string {
+	if schema == nil {
+		return ""
+	}
+	schemaJSON, err := json.MarshalIndent(schema, "", "  ")
+	if err != nil {
+		return ""
+	}
+	return "## Required Output (Pre-Validation Schema)\nYour output MUST match this structure (it may check files and/or the db):\n```json\n" + string(schemaJSON) + "\n```"
+}
+
+// appendMessageSequenceValidationSchema joins a rendered validation_schema section onto
+// an existing opening-turn runtime context (description and/or reentry instruction),
+// separated by a blank line. Returns runtimeContext unchanged when there is no schema.
+func appendMessageSequenceValidationSchema(runtimeContext string, schema *ValidationSchema) string {
+	schemaSection := formatMessageSequenceValidationSchema(schema)
+	if schemaSection == "" {
+		return runtimeContext
+	}
+	if runtimeContext == "" {
+		return schemaSection
+	}
+	return runtimeContext + "\n\n" + schemaSection
 }
 
 func (hcpo *StepBasedWorkflowOrchestrator) buildMessageSequenceTemplateVars(step *MessageSequencePlanStep, item MessageSequenceItem, stepIndex int, stepPath string, message string, readPaths []string, writePaths []string, writeAccess MessageSequenceWriteAccess) map[string]string {
