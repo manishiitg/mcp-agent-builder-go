@@ -160,7 +160,18 @@ type ModelTokenUsage struct {
 	CacheCost      float64 `json:"cache_cost_usd,omitempty"`       // Total cache cost (read + write)
 	CacheReadCost  float64 `json:"cache_read_cost_usd,omitempty"`  // Cache read cost (discounted rate)
 	CacheWriteCost float64 `json:"cache_write_cost_usd,omitempty"` // Cache write cost (premium rate, 1.25x)
-	TotalCost      float64 `json:"total_cost_usd,omitempty"`
+	// TotalCost has no omitempty: a genuinely zero-cost call and "we have no
+	// rate card for this model" must not collapse into the same absent key.
+	// See Unpriced below for which one this is.
+	TotalCost float64 `json:"total_cost_usd"`
+	// Unpriced is true when no provider rate card was found for this model
+	// (pi-cli's adapter, for example, returns metadata with every
+	// *CostPer1MTokens field unset for every model it serves). All cost
+	// fields above are 0 in that case, but that 0 is "unknown," not "free" --
+	// omitted (false) whenever real pricing was found, so existing readers
+	// that only check for the field's presence see no change for priced
+	// calls.
+	Unpriced bool `json:"unpriced,omitempty"`
 	// Context window tracking
 	ContextWindowUsage  int     `json:"context_window_usage,omitempty"`  // Current tokens used
 	ModelContextWindow  int     `json:"model_context_window,omitempty"`  // Model's context window size
