@@ -1938,6 +1938,13 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 			"workspace_path": map[string]interface{}{"type": "string", "description": "Workflow-relative path, e.g. Workflow/social-media."},
 		}, "required": []string{"workspace_path"}}),
 	}}
+	reconcileActionableBacklogTool := llmtypes.Tool{Type: "function", Function: &llmtypes.FunctionDefinition{
+		Name:        "record_pulse_actionable_backlog_reconciliation",
+		Description: "Run the idempotent actionable-backlog migration for this workflow's Pulse register. It first applies close-on-applied lifecycle reconciliation, then retires untyped legacy observations that were never promoted to canonical findings and hands typed harness issues to the platform register. It preserves all evidence and leaves human decisions and evidence waits visible but outside the workflow repair target. Use only for the workflow-contract v1.0.34 upgrade; it never edits the workflow plan or schedules.",
+		Parameters: llmtypes.NewParameters(map[string]interface{}{"type": "object", "additionalProperties": false, "properties": map[string]interface{}{
+			"workspace_path": map[string]interface{}{"type": "string", "description": "Workflow-relative path, e.g. Workflow/social-media."},
+		}, "required": []string{"workspace_path"}}),
+	}}
 	fastRequestTool := llmtypes.Tool{Type: "function", Function: &llmtypes.FunctionDefinition{
 		Name:        "record_pulse_fast_request",
 		Description: "Ask the scheduler to run the already-configured dedicated Pulse review soon, in a separate Pulse-only session. Use only after this workflow run when material new evidence, a meaningful workflow change, or a serious regression makes waiting for the next scheduled Pulse worse. Do not use for routine/no-change runs or merely to restate an existing concern. This queues/coalesces a request; it never runs Gate, reviewers, or Fixer in this conversation and never changes the Pulse cron.",
@@ -2249,21 +2256,30 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 			payload, _ := json.Marshal(result)
 			return string(payload), nil
 		},
+		"record_pulse_actionable_backlog_reconciliation": func(ctx context.Context, args map[string]interface{}) (string, error) {
+			result, err := step_based_workflow.ReconcilePulseActionableBacklog(ctx, stringToolArg(args, "workspace_path"))
+			if err != nil {
+				return "", err
+			}
+			payload, _ := json.Marshal(result)
+			return string(payload), nil
+		},
 		"record_pulse_impact": impactExecutor,
 	}
 	categories := map[string]string{
-		"record_pulse_finding":                  "workflow",
-		"merge_pulse_issues":                    "workflow",
-		"complete_pulse_review":                 "workflow",
-		"get_pulse_review_focus_agenda":         "workflow",
-		"record_pulse_review_focus":             "workflow",
-		"record_pulse_worklist":                 "workflow",
-		"get_pulse_state":                       "workflow",
-		"record_pulse_result":                   "workflow",
-		"record_pulse_fast_request":             "workflow",
-		"record_pulse_impact":                   "workflow",
-		"resolve_run_concern":                   "workflow",
-		"record_pulse_lifecycle_reconciliation": "workflow",
+		"record_pulse_finding":                           "workflow",
+		"merge_pulse_issues":                             "workflow",
+		"complete_pulse_review":                          "workflow",
+		"get_pulse_review_focus_agenda":                  "workflow",
+		"record_pulse_review_focus":                      "workflow",
+		"record_pulse_worklist":                          "workflow",
+		"get_pulse_state":                                "workflow",
+		"record_pulse_result":                            "workflow",
+		"record_pulse_fast_request":                      "workflow",
+		"record_pulse_impact":                            "workflow",
+		"resolve_run_concern":                            "workflow",
+		"record_pulse_lifecycle_reconciliation":          "workflow",
+		"record_pulse_actionable_backlog_reconciliation": "workflow",
 	}
 	resolveConcernTool := llmtypes.Tool{
 		Type: "function",
@@ -2300,7 +2316,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		return fmt.Sprintf("Issue %s marked %s.", step_based_workflow.NewPulseIssue(finding).ID, status), nil
 	}
 
-	return []llmtypes.Tool{recordFindingTool, focusAgendaTool, recordFocusTool, completeReviewTool, mergeIssuesTool, reconcileLifecycleTool, fastRequestTool, recordTool, stateTool, resultTool, impactTool, resolveConcernTool}, executors, categories
+	return []llmtypes.Tool{recordFindingTool, focusAgendaTool, recordFocusTool, completeReviewTool, mergeIssuesTool, reconcileLifecycleTool, reconcileActionableBacklogTool, fastRequestTool, recordTool, stateTool, resultTool, impactTool, resolveConcernTool}, executors, categories
 }
 
 func stringToolArg(args map[string]interface{}, key string) string {

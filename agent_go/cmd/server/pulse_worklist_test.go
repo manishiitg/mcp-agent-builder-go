@@ -1472,11 +1472,8 @@ func TestPulseBacklogViewKeepsWorkflowObservationsOutOfFixerFeed(t *testing.T) {
 	if payload.Detail != "compact" || payload.IssueTotal != 1 || len(payload.Issues) != 1 {
 		t.Fatalf("Fixer feed should contain exactly the canonical issue: %+v", payload)
 	}
-	if payload.ObservationTotal != 1 || len(payload.Observations) != 1 {
-		t.Fatalf("review evidence should contain exactly the workflow observation: %+v", payload)
-	}
-	if got := payload.Observations[0]["kind"]; got != step_based_workflow.PulseFindingKindObservation {
-		t.Fatalf("observation kind=%v", got)
+	if payload.ObservationTotal != 1 || len(payload.Observations) != 0 {
+		t.Fatalf("workflow observations must remain counted for audit but stay out of the reviewer/fixer feed: %+v", payload)
 	}
 	if _, leaked := payload.Issues[0]["fingerprint"]; leaked {
 		t.Fatalf("internal fingerprint leaked into Fixer feed: %+v", payload.Issues[0])

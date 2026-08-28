@@ -1185,6 +1185,63 @@ func TestLegacyUnfixedWaitReturnsToActiveRegister(t *testing.T) {
 	}
 }
 
+func TestActionableBacklogReconciliationRetiresUntypedAndHandsOffPlatform(t *testing.T) {
+	ctx := context.Background()
+	workspacePath := concernsWorkspace(t)
+	if _, err := RecordRunConcerns(ctx, workspacePath, "run-1", "", "collect", ConcernPhaseExecution,
+		"CONCERNS: historical collector note without reviewer promotion"); err != nil {
+		t.Fatalf("record legacy observation: %v", err)
+	}
+	if _, err := RecordPulseReviewFinding(ctx, workspacePath, "pulse-1", "review-1", PulseReviewFindingInput{
+		Concern: "workflow validation rejects valid data", Module: pulsemodules.TechnicalReviewID,
+		PulseFindingDetails: PulseFindingDetails{
+			IssueKind: IssueKindWorkflow, Classification: "correctness_bug", Severity: "high",
+			Summary: "A workflow validation boundary rejects valid data.", Impact: "The workflow cannot complete valid runs.",
+			Evidence: []string{"runs/iteration-1/result.json"},
+		},
+	}); err != nil {
+		t.Fatalf("record workflow finding: %v", err)
+	}
+	if _, err := RecordPulseReviewFinding(ctx, workspacePath, "pulse-1", "review-1", PulseReviewFindingInput{
+		Concern: "shared tool permission is unavailable", Module: pulsemodules.TechnicalReviewID,
+		PulseFindingDetails: PulseFindingDetails{
+			IssueKind: IssueKindHarness, TargetKey: "platform:tool-permission", Classification: "platform_permission", Severity: "high",
+			Summary: "The shared runtime blocks a required tool.", Impact: "No workflow plan edit can grant the permission.",
+			Evidence:     []string{"runs/iteration-1/result.json"},
+			Reproduction: PulseFindingReproduction{Safe: true, Expected: "tool is available", Observed: "permission denied"},
+		},
+	}); err != nil {
+		t.Fatalf("record harness finding: %v", err)
+	}
+
+	result, err := ReconcilePulseActionableBacklog(ctx, workspacePath)
+	if err != nil {
+		t.Fatalf("reconcile actionable backlog: %v", err)
+	}
+	if result.RetiredLegacyObservations != 1 || result.PlatformHandoffs != 1 || result.ActionableWorkflowIssues != 1 {
+		t.Fatalf("unexpected reconciliation result: %+v", result)
+	}
+	if count, err := CountPulseActionableWorkflowIssues(ctx, workspacePath); err != nil || count != 1 {
+		t.Fatalf("actionable workflow count=%d err=%v, want 1", count, err)
+	}
+	lifecycles, err := LoadPulseFindingLifecycles(ctx, workspacePath, "", -1)
+	if err != nil {
+		t.Fatalf("load reconciled lifecycles: %v", err)
+	}
+	var retiredLegacy, platformHandoff bool
+	for _, finding := range lifecycles {
+		if strings.Contains(finding.Text, "historical collector") {
+			retiredLegacy = finding.Status == ConcernStatusRejected
+		}
+		if finding.Details != nil && finding.Details.IssueKind == IssueKindHarness {
+			platformHandoff = finding.Status == ConcernStatusExternalActionRequired
+		}
+	}
+	if !retiredLegacy || !platformHandoff {
+		t.Fatalf("legacy/platform records were not projected out of repair debt: %+v", lifecycles)
+	}
+}
+
 func TestChangedUnverifiedClosesWithoutSeparateVerificationBoundary(t *testing.T) {
 	base := PulseFindingDisposition{
 		Fingerprint: "fp", FindingID: "BUG-1",

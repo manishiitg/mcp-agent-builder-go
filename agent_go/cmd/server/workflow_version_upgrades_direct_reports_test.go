@@ -7,7 +7,7 @@ import (
 
 func TestWorkflowVersionUpgradePlanFrom122MigratesReportsThenScheduledRoutes(t *testing.T) {
 	plan := workflowVersionUpgradePlan(&WorkflowManifest{Version: "1.0.22"})
-	if len(plan) != 9 {
+	if len(plan) != 10 {
 		t.Fatalf("plan from 1.0.22 = %d steps, want direct-report, scheduled-route, dedicated-Pulse, schedule-prompt, finalizer-ownership, report-activity-section, report-activity-tab, then Pulse lifecycle reconciliation migrations: %+v", len(plan), plan)
 	}
 	if plan[0].label != "upgrade-direct-html-reports" || plan[0].to != "1.0.23" {
@@ -31,7 +31,7 @@ func TestWorkflowVersionUpgradePlanFrom122MigratesReportsThenScheduledRoutes(t *
 	if plan[6].label != "upgrade-report-activity-tab" || plan[6].to != workflowContractReportActivityTabVersion {
 		t.Fatalf("plan[6] = %+v, want report-activity-tab migration", plan[6])
 	}
-	if plan[7].label != "upgrade-pulse-lifecycle-reconciliation" || plan[7].to != workflowContractPulseLifecycleReconciliationVersion || plan[8].label != "upgrade-pulse-backlog-triage" || plan[8].to != WorkflowContractCurrentVersion {
+	if plan[7].label != "upgrade-pulse-lifecycle-reconciliation" || plan[7].to != workflowContractPulseLifecycleReconciliationVersion || plan[8].label != "upgrade-pulse-backlog-triage" || plan[8].to != workflowContractPulseBacklogTriageVersion || plan[9].label != "upgrade-pulse-actionable-backlog" || plan[9].to != WorkflowContractCurrentVersion {
 		t.Fatalf("plan[7] = %+v, want Pulse lifecycle reconciliation migration to current", plan[7])
 	}
 }

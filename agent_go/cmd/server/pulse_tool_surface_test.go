@@ -98,7 +98,11 @@ func TestPulseToolSurfaceIncludesTypedReviewerWrites(t *testing.T) {
 	// writes, and resolve_run_concern. merge_pulse_issues is intentionally the
 	// one semantic maintenance verb: calling it record_* would conceal that it
 	// retires duplicate queue entries while preserving their history.
-	expected := map[string]bool{"resolve_run_concern": true, "record_pulse_lifecycle_reconciliation": true}
+	expected := map[string]bool{
+		"resolve_run_concern":                            true,
+		"record_pulse_lifecycle_reconciliation":          true,
+		"record_pulse_actionable_backlog_reconciliation": true,
+	}
 	for _, name := range pulseConsolidatedToolNames {
 		expected[name] = true
 	}

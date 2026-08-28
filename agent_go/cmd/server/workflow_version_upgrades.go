@@ -52,6 +52,7 @@ func workflowContractVersionRank(version string) (int, bool) {
 		workflowContractReportActivityTabVersion,
 		workflowContractPulseLifecycleReconciliationVersion,
 		workflowContractPulseBacklogTriageVersion,
+		workflowContractPulseActionableBacklogVersion,
 	}
 	for rank, candidate := range known {
 		if version == candidate {
@@ -315,6 +316,12 @@ Do only this platform data migration. Call record_pulse_lifecycle_reconciliation
 
 Do not run a workflow or a Pulse review. If either tool fails, do not stamp. Otherwise call set_workflow_contract_version(version="1.0.33") and stop.`
 
+const upgradePulseActionableBacklog = `WORKFLOW CONTRACT UPGRADE: PULSE ACTIONABLE BACKLOG.
+
+Do only this platform data migration. Call record_pulse_actionable_backlog_reconciliation once. It applies the close-on-applied lifecycle rule, retires historical free-text observations that were never promoted into typed canonical Pulse issues, and moves typed platform/harness findings out of this workflow's repair queue. It preserves all records, decisions, evidence waits, and platform history.
+
+Read the returned counts. Then call get_pulse_state(view="backlog", detail="compact") and confirm the canonical issue register is readable. Pulse's workflow-owned repair target is only the returned actionable_workflow_issues count: do not treat platform issues, human decisions, evidence waits, or retired observations as repair debt. Do not run a workflow or a Pulse review. If either tool fails, do not stamp. Otherwise call set_workflow_contract_version(version="1.0.34") and stop.`
+
 // workflowVersionUpgradePlan keeps the retired HTML presentation migrations
 // retired, but preserves the independent behavioral/data migrations older
 // workflows still need. They are deliberately grouped into bounded,
@@ -376,6 +383,9 @@ func workflowVersionUpgradePlan(manifest *WorkflowManifest) []workflowVersionUpg
 	}
 	if rank < 32 {
 		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractPulseBacklogTriageVersion, label: "upgrade-pulse-backlog-triage", query: upgradePulseBacklogTriage})
+	}
+	if rank < 33 {
+		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractPulseActionableBacklogVersion, label: "upgrade-pulse-actionable-backlog", query: upgradePulseActionableBacklog})
 	}
 	// Attached here rather than at the call site so the turn text is identical
 	// wherever it is built. The version pair used to be added only on the Pulse

@@ -36,15 +36,15 @@ func TestExecutionOnlyPromptIncludesCodeExecutionInstructions(t *testing.T) {
 	}
 }
 
-func TestExecutionOnlyPromptRequiresDurableConcernHandoff(t *testing.T) {
+func TestExecutionOnlyPromptLeavesConsequenceTriageToPulseReview(t *testing.T) {
 	agent := &WorkflowExecutionOnlyAgent{}
 	prompt := agent.executionOnlySystemPromptProcessor(map[string]string{})
 
 	for _, want := range []string{
-		"CONCERNS: <brief evidence-backed concern; include the affected artifact or operation>",
-		"immediately before the STATUS line",
-		"unresolved or consequential run evidence",
-		"completion notification and the durable run summary",
+		"consequential non-fatal evidence",
+		"Pulse Technical Review reads retained outputs",
+		"do not emit a",
+		"line or try to classify/deduplicate the problem yourself",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("execution prompt missing concern handoff %q:\n%s", want, prompt)

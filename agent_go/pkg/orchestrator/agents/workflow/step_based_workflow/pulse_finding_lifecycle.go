@@ -643,6 +643,26 @@ type PulseLifecycleReconciliation struct {
 	RetiredAliases        int `json:"retired_aliases"`
 }
 
+// PulseActionableBacklogReconciliation is the product-level projection used
+// when upgrading the old Pulse register.  Earlier versions let untyped step
+// observations and shared-platform defects remain in the same active count as
+// workflow repairs.  That made a workflow look permanently broken even when
+// Pulse had no workflow artifact it could safely change.
+//
+// The migration never deletes evidence.  It retires only legacy observations
+// that were never promoted into a typed canonical finding, and hands typed
+// harness findings to their platform owner.  Decision and evidence routes are
+// retained as visible non-actionable work for the person or future review that
+// owns them.
+type PulseActionableBacklogReconciliation struct {
+	PulseLifecycleReconciliation
+	RetiredLegacyObservations int `json:"retired_legacy_observations"`
+	PlatformHandoffs          int `json:"platform_handoffs"`
+	ActionableWorkflowIssues  int `json:"actionable_workflow_issues"`
+	HumanDecisions            int `json:"human_decisions"`
+	EvidenceWaits             int `json:"evidence_waits"`
+}
+
 // ReconcilePulseFindingLifecycle runs the compatibility migrations explicitly
 // for one workflow. The workflow-contract upgrade invokes this once; ordinary
 // lifecycle reads retain the same ensure call as a recovery path for restored
@@ -680,6 +700,112 @@ func ReconcilePulseFindingLifecycle(ctx context.Context, workspacePath string) (
 		return PulseLifecycleReconciliation{}, err
 	}
 	return result, nil
+}
+
+// ReconcilePulseActionableBacklog upgrades the durable register to the
+// actionable-work model.  A workflow-owned repair is the only thing that
+// counts toward Pulse's "to fix" target.  Platform work and human decisions
+// remain durable, but are deliberately outside that target.
+func ReconcilePulseActionableBacklog(ctx context.Context, workspacePath string) (PulseActionableBacklogReconciliation, error) {
+	base, err := ReconcilePulseFindingLifecycle(ctx, workspacePath)
+	if err != nil {
+		return PulseActionableBacklogReconciliation{}, err
+	}
+	db, err := openRunConcernsDB(ctx, workspacePath, true)
+	if err != nil || db == nil {
+		return PulseActionableBacklogReconciliation{}, err
+	}
+	defer db.Close()
+
+	result := PulseActionableBacklogReconciliation{PulseLifecycleReconciliation: base}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	// Normal workflow execution used to write free-text CONCERNS rows directly
+	// into run_concerns. Those rows are audit evidence, not accepted issues: a
+	// reviewer never assigned ownership, a route, or a safe repair boundary.
+	// Keep any row that already has an attempt, because it did enter lifecycle
+	// work; otherwise retire it instead of presenting it as a new bug forever.
+	legacy, err := db.ExecContext(ctx, `UPDATE run_concerns SET
+		status=?, resolved_at=?, resolved_by='pulse_actionable_backlog_migration',
+		resolution_note='Retired legacy observation: it was never promoted to a typed canonical Pulse finding.'
+		WHERE status NOT IN (?, ?, ?)
+			AND NOT EXISTS (SELECT 1 FROM pulse_finding_details d WHERE d.fingerprint=run_concerns.fingerprint)
+			AND NOT EXISTS (SELECT 1 FROM pulse_fix_attempt_findings af WHERE af.fingerprint=run_concerns.fingerprint)`,
+		ConcernStatusRejected, now,
+		ConcernStatusResolved, ConcernStatusRejected, ConcernStatusExternalActionRequired)
+	if err != nil {
+		return PulseActionableBacklogReconciliation{}, err
+	}
+	if affected, affectedErr := legacy.RowsAffected(); affectedErr == nil {
+		result.RetiredLegacyObservations = int(affected)
+	}
+
+	// A typed harness issue is explicit evidence that the shared platform owns
+	// the failed boundary. It must not remain eligible for a per-workflow fixer.
+	platform, err := db.ExecContext(ctx, `UPDATE run_concerns SET
+		status=?, resolved_at=?, resolved_by='pulse_platform',
+		resolution_note='Platform-owned finding: retained for the platform register and excluded from this workflow repair backlog.'
+		WHERE status NOT IN (?, ?, ?)
+			AND EXISTS (
+				SELECT 1 FROM pulse_finding_details d
+				WHERE d.fingerprint=run_concerns.fingerprint AND d.issue_kind=?
+			)`, ConcernStatusExternalActionRequired, now,
+		ConcernStatusResolved, ConcernStatusRejected, ConcernStatusExternalActionRequired, IssueKindHarness)
+	if err != nil {
+		return PulseActionableBacklogReconciliation{}, err
+	}
+	if affected, affectedErr := platform.RowsAffected(); affectedErr == nil {
+		result.PlatformHandoffs = int(affected)
+	}
+
+	const active = `c.status NOT IN ('resolved', 'rejected', 'external_action_required')`
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM run_concerns c
+		JOIN pulse_finding_details d ON d.fingerprint=c.fingerprint
+		WHERE `+active+` AND d.issue_kind=?
+			AND COALESCE(json_extract(d.detail_json, '$.recommended_route'), '') NOT IN (?, ?)`,
+		IssueKindWorkflow, pulseFindingRouteDecisionRequired, pulseFindingRouteEvidenceWait,
+	).Scan(&result.ActionableWorkflowIssues); err != nil {
+		return PulseActionableBacklogReconciliation{}, err
+	}
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM run_concerns c
+		JOIN pulse_finding_details d ON d.fingerprint=c.fingerprint
+		WHERE `+active+` AND COALESCE(json_extract(d.detail_json, '$.recommended_route'), '')=?`,
+		pulseFindingRouteDecisionRequired,
+	).Scan(&result.HumanDecisions); err != nil {
+		return PulseActionableBacklogReconciliation{}, err
+	}
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM run_concerns c
+		JOIN pulse_finding_details d ON d.fingerprint=c.fingerprint
+		WHERE `+active+` AND COALESCE(json_extract(d.detail_json, '$.recommended_route'), '')=?`,
+		pulseFindingRouteEvidenceWait,
+	).Scan(&result.EvidenceWaits); err != nil {
+		return PulseActionableBacklogReconciliation{}, err
+	}
+	return result, nil
+}
+
+// CountPulseActionableWorkflowIssues is the scheduler's narrow completion
+// check. It intentionally excludes platform-owned findings, human decisions,
+// and evidence waits: those remain durable work, but cannot be completed by a
+// workflow repair agent in this run.
+func CountPulseActionableWorkflowIssues(ctx context.Context, workspacePath string) (int, error) {
+	db, err := openRunConcernsDB(ctx, workspacePath, true)
+	if err != nil || db == nil {
+		return 0, err
+	}
+	defer db.Close()
+	if err := ensurePulseFindingLifecycleSchema(ctx, db); err != nil {
+		return 0, err
+	}
+	var count int
+	err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM run_concerns c
+		JOIN pulse_finding_details d ON d.fingerprint=c.fingerprint
+		WHERE c.status NOT IN (?, ?, ?)
+			AND d.issue_kind=?
+			AND COALESCE(json_extract(d.detail_json, '$.recommended_route'), '') NOT IN (?, ?)`,
+		ConcernStatusResolved, ConcernStatusRejected, ConcernStatusExternalActionRequired,
+		IssueKindWorkflow, pulseFindingRouteDecisionRequired, pulseFindingRouteEvidenceWait,
+	).Scan(&count)
+	return count, err
 }
 
 // migrateRunConcernIssueIDs introduces a stored public ID without changing a
@@ -749,6 +875,11 @@ func migrateAppliedPulseFixesClosed(ctx context.Context, db pulseFindingLifecycl
 		JOIN pulse_fix_attempts a ON a.attempt_id=af.attempt_id
 		WHERE c.status NOT IN (?, ?, ?) AND af.disposition=?
 			AND a.changed_files_json NOT IN ('', '[]', 'null')
+			AND NOT EXISTS (
+				SELECT 1 FROM pulse_finding_events e
+				WHERE e.fingerprint=c.fingerprint AND e.event_type='reopened'
+					AND e.recorded_at>a.completed_at
+			)
 		ON CONFLICT(fingerprint, pulse_run_id, attempt_id, event_type) DO NOTHING`,
 		now, ConcernStatusResolved, ConcernStatusRejected, ConcernStatusExternalActionRequired, FindingDispositionChangedUnverified); err != nil {
 		return err
@@ -762,6 +893,11 @@ func migrateAppliedPulseFixesClosed(ctx context.Context, db pulseFindingLifecycl
 			WHERE af.fingerprint=run_concerns.fingerprint
 				AND af.disposition=?
 				AND a.changed_files_json NOT IN ('', '[]', 'null')
+				AND NOT EXISTS (
+					SELECT 1 FROM pulse_finding_events e
+					WHERE e.fingerprint=run_concerns.fingerprint AND e.event_type='reopened'
+						AND e.recorded_at>a.completed_at
+				)
 		)`, ConcernStatusResolved, now, ConcernStatusResolved, ConcernStatusRejected, ConcernStatusExternalActionRequired, FindingDispositionChangedUnverified); err != nil {
 		return err
 	}

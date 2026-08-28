@@ -2455,6 +2455,18 @@ func (s *SchedulerService) runPulseLifecycle(ctx context.Context, sctx *Schedule
 					}
 				}
 			}
+			if result.outcome == pulseLifecycleStepCompleted {
+				remaining, countErr := stepworkflow.CountPulseActionableWorkflowIssues(ctx, sctx.WorkspacePath)
+				if countErr != nil {
+					result = pulseLifecycleStepRunResult{outcome: pulseLifecycleStepWaitFailed, err: fmt.Errorf("read actionable Pulse repair backlog: %w", countErr)}
+				} else if remaining > 0 {
+					// A persisted receipt proves the agent finished its turn; it does
+					// not prove it completed the workflow-owned repair objective. Keep
+					// the run partial rather than announcing a successful Pulse pass
+					// while actionable work still exists.
+					result = pulseLifecycleStepRunResult{outcome: pulseLifecycleStepWaitFailed, err: fmt.Errorf("Review+Fix left %d actionable workflow-owned Pulse issue(s); the repair drain is incomplete", remaining)}
+				}
+			}
 		}
 		if st.label == "review-fix" {
 			reviewFixCompletedAt = time.Now().UTC()
@@ -2667,7 +2679,7 @@ func pulseLifecycleAgenticReviewStep(pulseRunID string) pulseLifecycleStep {
 		label: "review-fix",
 		query: fmt.Sprintf(`PULSE SEQUENCED REVIEW + FIX DISPATCH. pulse_run_id=%q. Load read_skill(skills=[{"name":"builder-reference","path":"references/pulse-review-fixer.md"}]) and follow its Sequenced Technical Maintenance contract. Read the durable Gate worklist via get_pulse_state(view="module", pulse_run_id=<this id>) and handle only due modules in the persisted mode.
 
-		When technical_review is due, launch exactly one executor with run_in_background and required_pulse_review_modules=["technical_review"]. Its single retained task instruction must name exact pulse_run_id=%q and checkpoint %q. In that one retained turn: (1) read the compact backlog once, plan routes, retained run selectors, and focus agenda, then perform the lightweight safety scan and choose the smallest sufficient evidence-backed focus set; (2) investigate only selected focuses and exact public PUL ids, classify every selected observation, continuously merge semantic duplicates, and update the checkpoint; (3) select the highest-value bounded canonical repair bundle, apply it only when safe, and proportionally verify it; (4) persist every focus, typed finding, verification, exact repair disposition, terminal technical_review module result, and one completed technical_review receipt before ending. A no-safe-repair outcome must still record a truthful terminal module result and completed receipt. Do not split review and repair into artificial sequence turns, and never launch a fresh Fixer or another technical reviewer.
+		When technical_review is due, launch exactly one executor with run_in_background and required_pulse_review_modules=["technical_review"]. Its single retained task instruction must name exact pulse_run_id=%q and checkpoint %q. In that one retained turn: (1) read the compact backlog once, plan routes, retained run selectors, and focus agenda, then perform the lightweight safety scan and choose the smallest sufficient evidence-backed focus set; (2) investigate only selected focuses and exact public PUL ids, classify every selected observation, continuously merge semantic duplicates, and update the checkpoint; (3) drain every actionable workflow-owned canonical repair root that the compact backlog exposes: apply safe coherent repair bundles, verify them proportionally, and continue to the next bundle until none remain. Platform-owned findings, human decisions, and evidence waits are durable but are not workflow repair debt; classify and route them instead of leaving them in the repair queue. Do not stop after merely the highest-value bundle; (4) persist every focus, typed finding, verification, exact repair disposition, terminal technical_review module result, and one completed technical_review receipt before ending. A no-safe-repair outcome is valid only when no actionable workflow-owned root remains; otherwise record the exact PUL ids and a failed/partial technical result rather than claiming completion. Do not split review and repair into artificial sequence turns, and never launch a fresh Fixer or another technical reviewer.
 
 		When strategic_review is due, launch one separate read-only executor with required_pulse_review_modules=["strategic_review"]. It performs the route-aware scan, selects the smallest sufficient strategic focus set, audits the warranted mechanisms, persists typed findings/decisions/impact plus exactly one strategic_review receipt, and records the terminal strategic_review module result. Every turn updates %q. Audit-only and backlog_drain omit opportunity discovery. Strategic Review never repairs workflow implementation.
 
