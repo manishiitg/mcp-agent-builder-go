@@ -29,11 +29,13 @@ declare global {
     highlightFile?: (filepath: string) => void;
     toggleAutoScroll?: () => void;
     perfDiag?: () => void;
+    apiPerf?: () => void;
   }
 }
 
 import { copyToClipboard } from './utils/textUtils'
 import LazyModalFallback from './components/ui/LazyModalFallback'
+import { summarizeApiTimings } from './utils/apiTiming'
 
 const queryClient = new QueryClient();
 
@@ -467,6 +469,45 @@ function App() {
       console.log('%c Tip: Run perfDiag() again after interacting to see trends', 'color: gray; font-style: italic')
     }
     return () => { delete window.perfDiag }
+  }, [])
+
+  // Expose API response-time diagnostics on window for DevTools console.
+  // Every request through services/api.ts (both the agent and workspace
+  // axios instances) is timed client-side only -- nothing is sent anywhere.
+  useEffect(() => {
+    window.apiPerf = () => {
+      const { aggregates, recent } = summarizeApiTimings()
+
+      console.log('%c === API PERF DIAGNOSTICS ===', 'color: cyan; font-weight: bold; font-size: 14px')
+
+      if (aggregates.length === 0) {
+        console.log('No API calls recorded yet -- interact with the app, then run apiPerf() again.')
+        console.log('%c ============================', 'color: cyan; font-weight: bold')
+        return
+      }
+
+      console.log(`\nBy endpoint (${aggregates.length} distinct, sorted by total time spent):`)
+      console.table(aggregates)
+
+      console.log(`\nMost recent 30 calls, slowest first:`)
+      console.table(recent.map(r => ({
+        method: r.method,
+        path: r.path,
+        status: r.status,
+        durationMs: Math.round(r.durationMs),
+        at: new Date(r.timestamp).toLocaleTimeString(),
+      })))
+
+      const slow = aggregates.filter(a => a.avgMs > 2000)
+      if (slow.length > 0) {
+        console.log('%c \n⚠️  Endpoints averaging over 2s:', 'color: red; font-weight: bold')
+        slow.forEach(a => console.log(`%c  • ${a.endpoint}: avg=${a.avgMs}ms p95=${a.p95Ms}ms (${a.calls} calls)`, 'color: red'))
+      }
+
+      console.log('%c ============================', 'color: cyan; font-weight: bold')
+      console.log('%c Tip: Run apiPerf() again after interacting to see fresh timings', 'color: gray; font-style: italic')
+    }
+    return () => { delete window.apiPerf }
   }, [])
 
   const [showQuickSwitcher, setShowQuickSwitcher] = useState(false)

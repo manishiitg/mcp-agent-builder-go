@@ -6,6 +6,7 @@ import { useChatStore } from '../stores/useChatStore'
 import { useModeStore } from '../stores/useModeStore'
 import { getActiveWorkspaceProfile, useWorkspaceConnectionStore } from '../stores/useWorkspaceConnectionStore'
 import { GATEWAY_LOGIN_HEADER, gatewayLoginTarget, redirectToGatewayLogin } from '../utils/gatewayAuth'
+import { apiTimingPathFor, recordApiTiming } from '../utils/apiTiming'
 import type {
   AgentQueryRequest,
   AgentQueryResponse,
@@ -173,6 +174,26 @@ type AppWindow = Window & {
 
 type RuntimeRetriableRequestConfig = InternalAxiosRequestConfig & {
   __runtimeConfigRetried?: boolean
+}
+
+type TimedRequestConfig = InternalAxiosRequestConfig & {
+  __requestStartedAt?: number
+}
+
+function markRequestStart(config: TimedRequestConfig): TimedRequestConfig {
+  config.__requestStartedAt = performance.now()
+  return config
+}
+
+function recordResponseTiming(config: TimedRequestConfig | undefined, status: number | 'error') {
+  if (!config || config.__requestStartedAt === undefined) return
+  recordApiTiming({
+    method: (config.method || 'get').toUpperCase(),
+    path: apiTimingPathFor(config.url, config.baseURL),
+    status,
+    durationMs: performance.now() - config.__requestStartedAt,
+    timestamp: Date.now(),
+  })
 }
 
 // Resolve API base URL: use build-time env if set; otherwise fallback based on mode
@@ -518,7 +539,7 @@ api.interceptors.request.use((config) => {
     config.headers['Authorization'] = `Bearer ${authToken}`
   }
 
-  return config
+  return markRequestStart(config)
 })
 
 // --- Axios response interceptor to handle 401 errors ---
@@ -544,8 +565,14 @@ function redirectOnGatewayAuthenticationRequired(error: unknown): boolean {
 }
 
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    recordResponseTiming(response.config as TimedRequestConfig, response.status)
+    return response
+  },
   async (error) => {
+    if (axios.isAxiosError(error)) {
+      recordResponseTiming(error.config as TimedRequestConfig, error.response?.status ?? 'error')
+    }
     if (redirectOnGatewayAuthenticationRequired(error)) return Promise.reject(error)
     if (is401DueToBadToken(error)) {
       clearAuthToken()
@@ -592,12 +619,18 @@ workspaceApi.interceptors.request.use((config) => {
     }
   }
 
-  return config
+  return markRequestStart(config)
 })
 
 workspaceApi.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    recordResponseTiming(response.config as TimedRequestConfig, response.status)
+    return response
+  },
   async (error) => {
+    if (axios.isAxiosError(error)) {
+      recordResponseTiming(error.config as TimedRequestConfig, error.response?.status ?? 'error')
+    }
     if (redirectOnGatewayAuthenticationRequired(error)) return Promise.reject(error)
     if (is401DueToBadToken(error)) {
       clearAuthToken()
