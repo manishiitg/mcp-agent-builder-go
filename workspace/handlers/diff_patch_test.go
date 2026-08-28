@@ -716,3 +716,61 @@ func TestApplyAgentGeneratedDiffFallbackOmitsHintWhenFileIsShorterThanTheHunk(t 
 		t.Fatalf("hint claims a closest match that cannot exist: %v", err)
 	}
 }
+
+// PLAT-201: harness:tool:diff_patch_workspace_file:unicode-context-mismatch
+// theorized "silent normalization or transport-level mangling of non-ASCII
+// characters" between the read path and the diff-apply path. Neither
+// applyDiffPatchFlexible nor its fallback matcher do any Unicode folding --
+// context comparison is a plain strings.TrimSpace + == check -- so this
+// proves the apply path itself does not mangle anything: byte-exact
+// Unicode context always applies, and ASCII-folded context (em dash -> "-",
+// curly quotes -> straight quotes, arrow -> "->") is correctly rejected as a
+// genuine mismatch, not silently corrupted. The real-world failure this
+// finding reproduced -- a large hand-copied hunk failing while a
+// difflib-generated diff from the same file succeeded -- is consistent with
+// an agent silently ASCII-folding punctuation while retyping text, a known
+// LLM generation habit, not a platform bug.
+func TestApplyDiffPatchDoesNotMangleUnicodePunctuation(t *testing.T) {
+	original := "Line one\n" +
+		"The system uses a request—response cycle\n" +
+		"Flow: input → output → done\n" +
+		"She said “ok” and left\n" +
+		"Line five\n"
+
+	t.Run("byte-exact unicode context applies cleanly", func(t *testing.T) {
+		diff := "--- a/notes.md\n+++ b/notes.md\n@@ -1,5 +1,5 @@\n" +
+			" Line one\n" +
+			" The system uses a request—response cycle\n" +
+			"-Flow: input → output → done\n" +
+			"+Flow: input → output → DONE\n" +
+			" She said “ok” and left\n" +
+			" Line five\n"
+		out, err := ApplyDiffPatchDirect(original, diff)
+		if err != nil {
+			t.Fatalf("byte-exact unicode context should apply cleanly, got: %v", err)
+		}
+		if !strings.Contains(out, "Flow: input → output → DONE") {
+			t.Fatalf("patch did not apply the expected change:\n%s", out)
+		}
+	})
+
+	t.Run("ascii-folded context is rejected as a mismatch, not silently applied", func(t *testing.T) {
+		// Same logical edit, but every non-ASCII punctuation mark has been
+		// folded to its ASCII look-alike -- exactly what an LLM commonly
+		// does when regenerating text by hand instead of copying it exactly.
+		diff := "--- a/notes.md\n+++ b/notes.md\n@@ -1,5 +1,5 @@\n" +
+			" Line one\n" +
+			" The system uses a request-response cycle\n" +
+			"-Flow: input -> output -> done\n" +
+			"+Flow: input -> output -> DONE\n" +
+			" She said \"ok\" and left\n" +
+			" Line five\n"
+		out, err := ApplyDiffPatchDirect(original, diff)
+		if err == nil {
+			t.Fatalf("ASCII-folded (non-byte-exact) context should be rejected as a mismatch, got success with output=%q", out)
+		}
+		if !strings.Contains(err.Error(), "could not find matching context lines") {
+			t.Fatalf("expected a context-mismatch error, got: %v", err)
+		}
+	})
+}

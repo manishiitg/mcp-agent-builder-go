@@ -140,7 +140,7 @@ func diffPatchToolDef() llmtypes.Tool {
 					},
 					"diff": map[string]interface{}{
 						"type":        "string",
-						"description": "Unified diff patch string to apply.\n\nFormat:\n- Headers: --- a/file and +++ b/file\n- Hunk headers: @@ -startLine,lineCount +startLine,lineCount @@\n- Context lines: ' ' prefix (space + content)\n- Removals: '-' prefix\n- Additions: '+' prefix\n- End with a trailing newline\n\nExample:\n--- a/file\n+++ b/file\n@@ -5,1 +5,1 @@\n-- [ ] task-1\n+- [x] task-1\n",
+						"description": "Unified diff patch string to apply.\n\nFormat:\n- Headers: --- a/file and +++ b/file\n- Hunk headers: @@ -startLine,lineCount +startLine,lineCount @@\n- Context lines: ' ' prefix (space + content)\n- Removals: '-' prefix\n- Additions: '+' prefix\n- End with a trailing newline\n\nExample:\n--- a/file\n+++ b/file\n@@ -5,1 +5,1 @@\n-- [ ] task-1\n+- [x] task-1\n\nContext and removal lines must be byte-exact copies of the current file content, not retyped from memory. If the target text contains em dashes (—), curly quotes (“ ”), or arrows (→), do not hand-copy it — retyping commonly substitutes plain ASCII equivalents (-, \", ->) without you noticing, which this tool will correctly reject as a context mismatch. Read the file first and copy the exact bytes, or generate the diff programmatically from the file you just read.",
 					},
 				},
 				"required": []string{"filepath", "diff"},
