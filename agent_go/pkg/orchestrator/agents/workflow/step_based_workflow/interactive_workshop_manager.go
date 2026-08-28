@@ -1609,7 +1609,6 @@ func GetToolsForWorkshopMode(mode string) []string {
 		"get_pulse_state",
 		"record_pulse_finding",
 		"merge_pulse_issues",
-		"record_pulse_verification",
 		"complete_pulse_review",
 		"record_pulse_worklist",
 		"record_pulse_result",

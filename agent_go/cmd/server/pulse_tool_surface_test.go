@@ -168,7 +168,7 @@ func TestGetPulseStateViewsReturnWhatTheirPredecessorsReturned(t *testing.T) {
 
 	// view="backlog" — what get_pulse_finding_backlog returned.
 	if _, err := step_based_workflow.RecordRunConcerns(
-		ctx, workspacePath, "pulse-view", "", pulseModuleWorkflowReview,
+		ctx, workspacePath, "pulse-view", "", pulseModuleTechnicalReview,
 		step_based_workflow.ConcernPhaseReview, "CONCERNS: the collector writes a null column",
 	); err != nil {
 		t.Fatalf("file concern: %v", err)
@@ -199,7 +199,7 @@ func TestGetPulseStateViewsReturnWhatTheirPredecessorsReturned(t *testing.T) {
 	if _, err := execute(ctx, map[string]interface{}{
 		"workspace_path": workspacePath, "view": "backlog", "module": "bugs",
 	}); err == nil || !strings.Contains(err.Error(), "is not a valid Pulse module") ||
-		!strings.Contains(err.Error(), pulseModuleWorkflowReview) {
+		!strings.Contains(err.Error(), pulseModuleTechnicalReview) {
 		t.Fatalf(`view="backlog" module rejection must name the closed set: %v`, err)
 	}
 
@@ -207,13 +207,13 @@ func TestGetPulseStateViewsReturnWhatTheirPredecessorsReturned(t *testing.T) {
 	// loaded from the lifecycle backlog, never from persisted reviewer prose.
 	const reviewRunID = "2026-08-01T00-00-00.000Z_surface"
 	if err := step_based_workflow.CompletePulseReview(
-		ctx, workspacePath, []string{pulseModuleWorkflowReview}, reviewRunID, "pulse-view", "Clean.", "completed",
+		ctx, workspacePath, []string{pulseModuleTechnicalReview}, reviewRunID, "pulse-view", "Clean.", "completed",
 	); err != nil {
 		t.Fatalf("record review: %v", err)
 	}
 	raw, err = execute(ctx, map[string]interface{}{
 		"workspace_path": workspacePath, "view": "review",
-		"review_run_id": reviewRunID, "module": pulseModuleWorkflowReview,
+		"review_run_id": reviewRunID, "module": pulseModuleTechnicalReview,
 	})
 	if err != nil {
 		t.Fatalf(`get_pulse_state(view="review"): %v`, err)
@@ -239,7 +239,7 @@ func TestGetPulseStateViewsReturnWhatTheirPredecessorsReturned(t *testing.T) {
 	// caller looking for a different id — the identity was validated just above.
 	_, err = execute(ctx, map[string]interface{}{
 		"workspace_path": workspacePath, "view": "review",
-		"review_run_id": "2026-08-01T00-00-00.000Z_missing", "module": pulseModuleWorkflowReview,
+		"review_run_id": "2026-08-01T00-00-00.000Z_missing", "module": pulseModuleTechnicalReview,
 	})
 	if err == nil {
 		t.Fatal("missing review returned no error")
@@ -287,7 +287,7 @@ func TestRecordPulseResultCoversBothFormerResultTypes(t *testing.T) {
 
 	if _, err := recordPulseWorklist(context.Background(), workspacePath, pulseRunID,
 		completePulseWorklistDecisions(map[string]PulseWorklistDecision{
-			pulseModuleWorkflowReview: {Module: pulseModuleWorkflowReview, Due: true, Reason: "A review is required."},
+			pulseModuleTechnicalReview: {Module: pulseModuleTechnicalReview, Due: true, Reason: "A review is required."},
 		})); err != nil {
 		t.Fatalf("record worklist: %v", err)
 	}
@@ -301,7 +301,7 @@ func TestRecordPulseResultCoversBothFormerResultTypes(t *testing.T) {
 	// Module form — what mark_pulse_module_result recorded.
 	raw, err := execute(ctx, map[string]interface{}{
 		"workspace_path": workspacePath, "pulse_run_id": pulseRunID,
-		"module": pulseModuleWorkflowReview, "result": "done",
+		"module": pulseModuleTechnicalReview, "result": "done",
 		"reason": "No finding required a change.",
 	})
 	if err != nil {
@@ -316,7 +316,7 @@ func TestRecordPulseResultCoversBothFormerResultTypes(t *testing.T) {
 	}
 	recorded := false
 	for _, state := range states {
-		if state.Module == pulseModuleWorkflowReview {
+		if state.Module == pulseModuleTechnicalReview {
 			recorded = state.LastResult == "done"
 		}
 	}
@@ -384,15 +384,15 @@ func TestRecordPulseResultRejectionsNameBothTargets(t *testing.T) {
 
 	_, err := execute(ctx, clone(nil))
 	assertRejectionContains(t, err, "exactly one of module or command",
-		"module=missing", "command=missing", pulseModuleWorkflowReview, pulseFinalCommandBackup)
+		"module=missing", "command=missing", pulseModuleTechnicalReview, pulseFinalCommandBackup)
 
 	_, err = execute(ctx, clone(map[string]interface{}{
-		"module": pulseModuleWorkflowReview, "command": pulseFinalCommandBackup,
+		"module": pulseModuleTechnicalReview, "command": pulseFinalCommandBackup,
 	}))
 	assertRejectionContains(t, err, "exactly one of module or command", "module=set", "command=set")
 
 	// Each target still enforces its own result set, and says which one applies.
-	_, err = execute(ctx, clone(map[string]interface{}{"module": pulseModuleWorkflowReview, "result": "running"}))
+	_, err = execute(ctx, clone(map[string]interface{}{"module": pulseModuleTechnicalReview, "result": "running"}))
 	assertRejectionContains(t, err, `result "running" is not valid`, "changed", "skipped")
 
 	_, err = execute(ctx, clone(map[string]interface{}{"command": pulseFinalCommandBackup, "result": "changed"}))

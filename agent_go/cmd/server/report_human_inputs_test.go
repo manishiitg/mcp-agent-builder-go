@@ -16,8 +16,8 @@ import (
 
 func TestNormalizeReportHumanInputSourceMergesLegacyAdvisorIdentity(t *testing.T) {
 	for input, want := range map[string]string{
-		"engineering-review": "engineering_review",
-		"Operations Review":  "ops_review",
+		"engineering-review": "technical_review",
+		"Operations Review":  "technical_review",
 		"strategic-review":   "strategic_review",
 		"strategy-auditor":   "strategic_review",
 		"Strategy Auditor":   "strategic_review",

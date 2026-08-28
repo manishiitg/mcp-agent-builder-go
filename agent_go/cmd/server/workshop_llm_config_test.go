@@ -81,8 +81,8 @@ func TestWorkshopResolveLLMConfigExpandsCodingAgentMode(t *testing.T) {
 		defaults.High.ModelID == "claude-fable-5" ||
 		defaults.Medium.ModelID == "claude-fable-5" ||
 		defaults.Low.ModelID == "claude-fable-5" ||
-		defaults.Pulse.ModelID != "claude-sonnet-5" {
-		t.Fatalf("sonnet 5 should be the builder and pulse default, got defaults: %+v", defaults)
+		defaults.Pulse.ModelID != "claude-opus-5" {
+		t.Fatalf("sonnet 5 should be the builder default and opus 5 the pulse default, got defaults: %+v", defaults)
 	}
 
 	builder, tiered := workshopResolveLLMConfig(&workflowtypes.PresetLLMConfig{

@@ -652,7 +652,7 @@ func TestMarkPulseModuleResultStoresMinimalDurableAudit(t *testing.T) {
 	pulseRunID := "schedule-cron--audit"
 	sessionID := "schedule-cron--audit-session"
 	if _, err := recordPulseWorklist(context.Background(), workspacePath, pulseRunID, completePulseWorklistDecisions(map[string]PulseWorklistDecision{
-		pulseModuleWorkflowReview: {Module: pulseModuleWorkflowReview, Due: true, Reason: "A verified repair is required."},
+		pulseModuleTechnicalReview: {Module: pulseModuleTechnicalReview, Due: true, Reason: "A verified repair is required."},
 	})); err != nil {
 		t.Fatalf("record worklist: %v", err)
 	}
@@ -660,13 +660,13 @@ func TestMarkPulseModuleResultStoresMinimalDurableAudit(t *testing.T) {
 	ctx := mcpexecutor.WithSessionID(context.Background(), sessionID)
 	_, executors, _ := createPulseWorklistTools()
 	if _, err := step_based_workflow.RecordRunConcerns(
-		ctx, workspacePath, pulseRunID, "", pulseModuleWorkflowReview,
+		ctx, workspacePath, pulseRunID, "", pulseModuleTechnicalReview,
 		step_based_workflow.ConcernPhaseReview,
 		"CONCERNS: stale run binding in planning/step_config.json",
 	); err != nil {
 		t.Fatalf("record reviewer finding: %v", err)
 	}
-	findings, err := step_based_workflow.LoadPulseFindingLifecycles(ctx, workspacePath, pulseModuleWorkflowReview, 10)
+	findings, err := step_based_workflow.LoadPulseFindingLifecycles(ctx, workspacePath, pulseModuleTechnicalReview, 10)
 	if err != nil || len(findings) != 1 {
 		t.Fatalf("load reviewer finding: findings=%+v err=%v", findings, err)
 	}
@@ -678,7 +678,7 @@ func TestMarkPulseModuleResultStoresMinimalDurableAudit(t *testing.T) {
 	_, err = execute(ctx, map[string]interface{}{
 		"workspace_path": workspacePath,
 		"pulse_run_id":   pulseRunID,
-		"module":         pulseModuleWorkflowReview,
+		"module":         pulseModuleTechnicalReview,
 		"result":         "changed",
 		"reason":         "Fixed the stale run binding.",
 		"evidence":       []string{"pulse/reviews/audit/workflow_review.md"},
@@ -715,7 +715,7 @@ func TestMarkPulseModuleResultStoresMinimalDurableAudit(t *testing.T) {
 	err = db.QueryRow(`SELECT result, reason, changed_files_json, verification_json,
 		before_refs_json, after_refs_json, recorded_at
 		FROM pulse_module_audit WHERE workspace_path=? AND module=? AND pulse_run_id=?`,
-		workspacePath, pulseModuleWorkflowReview, pulseRunID,
+		workspacePath, pulseModuleTechnicalReview, pulseRunID,
 	).Scan(&result, &reason, &changedFilesJSON, &verificationJSON, &beforeRefsJSON, &afterRefsJSON, &recordedAt)
 	if err != nil {
 		t.Fatalf("read audit: %v", err)
@@ -1129,7 +1129,7 @@ func TestHandleGetPulseFindingsReturnsFiledLifecycle(t *testing.T) {
 	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
 	workspacePath := "Workflow/example"
 	if _, err := step_based_workflow.RecordRunConcerns(
-		ctx, workspacePath, "pulse-run-1", "", pulseModuleWorkflowReview,
+		ctx, workspacePath, "pulse-run-1", "", pulseModuleTechnicalReview,
 		step_based_workflow.ConcernPhaseReview,
 		"CONCERNS: selector keeps targeting the same accounts",
 	); err != nil {
@@ -1138,7 +1138,7 @@ func TestHandleGetPulseFindingsReturnsFiledLifecycle(t *testing.T) {
 
 	req := httptest.NewRequest(
 		http.MethodGet,
-		"/api/workflow/pulse-findings?workspace_path=Workflow/example&module=workflow_review",
+		"/api/workflow/pulse-findings?workspace_path=Workflow/example&module=technical_review",
 		nil,
 	)
 	rec := httptest.NewRecorder()
@@ -1157,7 +1157,7 @@ func TestHandleGetPulseFindingsReturnsFiledLifecycle(t *testing.T) {
 		t.Fatalf("payload = %+v", payload)
 	}
 	finding := payload.Findings[0]
-	if finding.Status != step_based_workflow.ConcernStatusOpen || finding.Module != pulseModuleWorkflowReview {
+	if finding.Status != step_based_workflow.ConcernStatusOpen || finding.Module != pulseModuleTechnicalReview {
 		t.Fatalf("finding identity/status mismatch: %+v", finding)
 	}
 	if finding.Kind != step_based_workflow.PulseFindingKindIssue {

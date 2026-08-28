@@ -44,7 +44,7 @@ func knownWorkshopRegisteredToolNamesOutsideWorkflowPool() map[string]string {
 		"run_full_workflow",
 	)
 	add("workshop review/maintenance tools",
-		"update_step_config", "get_step_prompts",
+		"update_step_config", "get_step_prompts", "get_plan_prompt_health",
 		"review_plan", "mark_changelog_artifact_reviewed",
 		"review_workflow_timing", "review_workflow_costs", "review_step_code",
 		"get_cost_summary",

@@ -1214,7 +1214,7 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 		"report_health",
 		"eval_health",
 		"stores_health",
-		"llm_ops_review",
+		"technical_review",
 		"strategy_auditor",
 		"goal_advisor",
 		"do not launch reviewers",
@@ -1517,7 +1517,7 @@ func TestDesignPlanGuidanceSupportsReadOnlyPulseChecklist(t *testing.T) {
 		"overrides persistence",
 		"do not edit any workspace file",
 		"parent Pulse Fixer remains the only writer",
-		"llm_ops_review",
+		"technical_review",
 		"is this checklist's automated owner",
 	} {
 		if !strings.Contains(guidance, want) {
@@ -1532,7 +1532,7 @@ func TestGateCanRunOpsWithoutEngineering(t *testing.T) {
 	workspacePath := "Workflow/ops-only"
 	pulseRunID := "pulse-ops-only"
 	if _, err := recordPulseWorklist(ctx, workspacePath, pulseRunID, completePulseWorklistDecisions(map[string]PulseWorklistDecision{
-		pulseModuleLLMOpsReview: {Module: pulseModuleLLMOpsReview, Due: true, Reason: "Runtime cost regressed."},
+		pulseModuleTechnicalReview: {Module: pulseModuleTechnicalReview, Due: true, Reason: "Runtime cost regressed."},
 	})); err != nil {
 		t.Fatalf("record ops-only worklist: %v", err)
 	}
@@ -1755,15 +1755,15 @@ func TestValidatePulseDueModuleResultsRequiresAgentReceipts(t *testing.T) {
 	workspacePath := "Workflow/demo"
 	pulseRunID := "pulse-run-results"
 	if _, err := recordPulseWorklist(ctx, workspacePath, pulseRunID, completePulseWorklistDecisions(map[string]PulseWorklistDecision{
-		pulseModuleWorkflowReview:  {Module: pulseModuleWorkflowReview, Due: true, Reason: "Operational evidence."},
+		pulseModuleTechnicalReview: {Module: pulseModuleTechnicalReview, Due: true, Reason: "Operational evidence."},
 		pulseModuleStrategicReview: {Module: pulseModuleStrategicReview, Due: true, Reason: "Strategic evidence."},
 	})); err != nil {
 		t.Fatalf("record worklist: %v", err)
 	}
-	if err := validatePulseDueModuleResults(ctx, workspacePath, pulseRunID); err == nil || !strings.Contains(err.Error(), "workflow_review, strategic_review") {
+	if err := validatePulseDueModuleResults(ctx, workspacePath, pulseRunID); err == nil || !strings.Contains(err.Error(), "technical_review, strategic_review") {
 		t.Fatalf("missing-result validation error = %v", err)
 	}
-	if _, err := markPulseModuleResultFromAgent(ctx, workspacePath, pulseModuleWorkflowReview, pulseRunID, "done", "Clean review.", []string{"pulse_review_log:run:workflow_review"}); err != nil {
+	if _, err := markPulseModuleResultFromAgent(ctx, workspacePath, pulseModuleTechnicalReview, pulseRunID, "done", "Clean review.", []string{"pulse_review_log:run:technical_review"}); err != nil {
 		t.Fatalf("mark bug review: %v", err)
 	}
 	if _, err := markPulseModuleResultFromAgent(ctx, workspacePath, pulseModuleStrategicReview, pulseRunID, "done", "Strategic review complete.", []string{"pulse_review_log:run:strategic_review"}); err != nil {
@@ -1772,7 +1772,7 @@ func TestValidatePulseDueModuleResultsRequiresAgentReceipts(t *testing.T) {
 	if err := validatePulseDueModuleResults(ctx, workspacePath, pulseRunID); err == nil || !strings.Contains(err.Error(), "terminal current-run review receipts") {
 		t.Fatalf("missing typed-review validation error = %v", err)
 	}
-	seedPulseReviewLogRow(ctx, t, workspacePath, pulseModuleWorkflowReview, pulseRunID, "completed", "Clean review.")
+	seedPulseReviewLogRow(ctx, t, workspacePath, pulseModuleTechnicalReview, pulseRunID, "completed", "Clean review.")
 	seedPulseReviewLogRow(ctx, t, workspacePath, pulseModuleStrategicReview, pulseRunID, "completed", "Strategic review complete.")
 	if err := validatePulseDueModuleResults(ctx, workspacePath, pulseRunID); err != nil {
 		t.Fatalf("terminal validation: %v", err)
@@ -1781,7 +1781,7 @@ func TestValidatePulseDueModuleResultsRequiresAgentReceipts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read worklist: %v", err)
 	}
-	if got := worklist[pulseModuleWorkflowReview].LastResult; got != "done" {
+	if got := worklist[pulseModuleTechnicalReview].LastResult; got != "done" {
 		t.Fatalf("existing completed module was overwritten: %q", got)
 	}
 	if got := worklist[pulseModuleStrategicReview].LastResult; got != "done" {
@@ -1796,15 +1796,15 @@ func TestValidatePulseDueModuleResultsRejectsRunningReviewReceipt(t *testing.T) 
 	workspacePath := "Workflow/demo"
 	pulseRunID := "pulse-running-review"
 	if _, err := recordPulseWorklist(ctx, workspacePath, pulseRunID, completePulseWorklistDecisions(map[string]PulseWorklistDecision{
-		pulseModuleWorkflowReview: {Module: pulseModuleWorkflowReview, Due: true, Reason: "Operational evidence."},
+		pulseModuleTechnicalReview: {Module: pulseModuleTechnicalReview, Due: true, Reason: "Operational evidence."},
 	})); err != nil {
 		t.Fatalf("record worklist: %v", err)
 	}
-	if _, err := markPulseModuleResultFromAgent(ctx, workspacePath, pulseModuleWorkflowReview, pulseRunID, "done", "Review turn ended.", []string{"pulse_review_log:run:workflow_review"}); err != nil {
+	if _, err := markPulseModuleResultFromAgent(ctx, workspacePath, pulseModuleTechnicalReview, pulseRunID, "done", "Review turn ended.", []string{"pulse_review_log:run:technical_review"}); err != nil {
 		t.Fatalf("mark review: %v", err)
 	}
-	seedPulseReviewLogRow(ctx, t, workspacePath, pulseModuleWorkflowReview, pulseRunID, "running", "")
-	if err := validatePulseDueModuleResults(ctx, workspacePath, pulseRunID); err == nil || !strings.Contains(err.Error(), "workflow_review (running)") {
+	seedPulseReviewLogRow(ctx, t, workspacePath, pulseModuleTechnicalReview, pulseRunID, "running", "")
+	if err := validatePulseDueModuleResults(ctx, workspacePath, pulseRunID); err == nil || !strings.Contains(err.Error(), "technical_review (running)") {
 		t.Fatalf("running review receipt validation error = %v", err)
 	}
 }
