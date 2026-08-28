@@ -457,6 +457,73 @@ func TestPulseWorklistLetsGateSelectTheEvidenceJustifiedModules(t *testing.T) {
 	}
 }
 
+func TestPulseWorklistRequiresTechnicalReviewForFailedPlanDependencyIntake(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	workspacePath := "Workflow/example"
+	changelogDir := filepath.Join(root, workspacePath, "planning", "changelog")
+	if err := os.MkdirAll(changelogDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := `{"entries":[{"change_id":"change-current","timestamp":"2026-08-28T09:00:00Z","tool":"update_message_sequence_step","reason":"change output","artifact_review":{"done":true}}]}`
+	if err := os.WriteFile(filepath.Join(changelogDir, "changelog-current.json"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	skipped := completePulseWorklistDecisions(nil)
+	if _, err := recordPulseWorklist(context.Background(), workspacePath, "pulse-plan-check-skip", skipped); err == nil ||
+		!strings.Contains(err.Error(), "plan change") || !strings.Contains(err.Error(), "technical_review must be due") {
+		t.Fatalf("failed plan dependency intake was allowed to skip Technical Review: %v", err)
+	}
+
+	due := completePulseWorklistDecisions(map[string]PulseWorklistDecision{
+		pulseModuleTechnicalReview: {Module: pulseModuleTechnicalReview, Due: true, Reason: "Inspect incomplete plan dependency coverage."},
+	})
+	if _, err := recordPulseWorklist(context.Background(), workspacePath, "pulse-plan-check-due", due); err != nil {
+		t.Fatalf("agentic Technical Review routing was rejected: %v", err)
+	}
+}
+
+func TestPulseWorklistRequiresTechnicalReviewForFailedRuntimeIntake(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	workspacePath := "Workflow/example"
+	runDir := filepath.Join(root, workspacePath, "runs", "iteration-0", "default")
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "run_metadata.json"), []byte(`{"status":"failed"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := recordPulseWorklist(context.Background(), workspacePath, "pulse-runtime-check", completePulseWorklistDecisions(nil)); err == nil ||
+		!strings.Contains(err.Error(), "runtime intake") || !strings.Contains(err.Error(), "technical_review must be due") {
+		t.Fatalf("failed runtime intake was allowed to skip Technical Review: %v", err)
+	}
+
+	due := completePulseWorklistDecisions(map[string]PulseWorklistDecision{
+		pulseModuleTechnicalReview: {Module: pulseModuleTechnicalReview, Due: true, Reason: "Review the new runtime failure."},
+	})
+	if _, err := recordPulseWorklist(context.Background(), workspacePath, "pulse-runtime-review", due); err != nil {
+		t.Fatalf("record Technical Review routing: %v", err)
+	}
+	if _, err := recordPulseWorklist(context.Background(), workspacePath, "pulse-runtime-after-review", completePulseWorklistDecisions(nil)); err != nil {
+		t.Fatalf("already-checked retained runtime failure forced another review: %v", err)
+	}
+}
+
+func TestPulseWorklistDecisionRejectsReviewPlanFields(t *testing.T) {
+	_, err := pulseWorklistDecisionsFromArgs([]interface{}{map[string]interface{}{
+		"module":  pulseModuleTechnicalReview,
+		"due":     true,
+		"reason":  "Runtime evidence requires review.",
+		"focuses": []interface{}{"execution_health"},
+	}})
+	if err == nil || !strings.Contains(err.Error(), `unknown field "focuses"`) {
+		t.Fatalf("review-plan field must not be accepted by the small worklist receipt: %v", err)
+	}
+}
+
 func TestTrustedPulseWorklistKeepsFirstCompleteGateDecision(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("WORKSPACE_DOCS_PATH", root)
@@ -1736,6 +1803,10 @@ func TestGetPulseModuleStateExposesLoopClosureButNotShadowHistory(t *testing.T) 
 	runtime, exists := intake["runtime"].(map[string]interface{})
 	if !exists || runtime["coverage_status"] != "not_instrumented" {
 		t.Fatalf("runtime intake = %#v, want not-instrumented evidence", intake["runtime"])
+	}
+	planDependencies, exists := intake["plan_change_dependencies"].(map[string]interface{})
+	if !exists || planDependencies["coverage_status"] != "verified" || planDependencies["failed"] != false {
+		t.Fatalf("plan dependency intake = %#v, want verified clean evidence", intake["plan_change_dependencies"])
 	}
 	if note, _ := payload["deterministic_intake_note"].(string); !strings.Contains(note, "not an automatic Pulse issue") {
 		t.Fatalf("deterministic_intake_note = %q", note)

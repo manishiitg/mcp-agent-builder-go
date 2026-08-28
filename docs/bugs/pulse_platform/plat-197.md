@@ -166,6 +166,11 @@ Implemented:
   unresolved dependencies from disappearing behind a coarse completion stamp;
 - the plan-change backlog exposes change identity, origin, and structured
   review state through the existing Pulse state path; and
+- deterministic intake now validates every current-contract (`change_id`)
+  change even when a caller already set `artifact_review.done=true`; an
+  incomplete six-surface receipt remains pending and the backend requires Gate
+  to route it to agentic Technical Review under
+  `plan_orchestration_integrity`. Legacy reviewed entries are not reopened;
 - measurable effects reuse the existing Pulse impact ledger: guidance requires
   linking interventions back to `change_id` with a typed `review` source.
 

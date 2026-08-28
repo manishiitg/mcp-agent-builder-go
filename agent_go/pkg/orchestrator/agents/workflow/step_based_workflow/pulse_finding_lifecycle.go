@@ -83,17 +83,9 @@ const (
 	FindingDispositionQueuedForEngineering = "queued_for_engineering"
 	FindingDispositionBlocked              = "blocked"
 	FindingDispositionExternalAction       = "external_action_required"
-	// FindingDispositionAwaitingRun is a real finding that no one is stuck on:
-	// the evidence to resolve it simply has not been produced yet, and the next
-	// scheduled run will produce it.
-	//
-	// blocked used to absorb these because changed_unverified requires a fix
-	// attempt with changed files, and nothing was fixed — the data was never
-	// collected. So rtslatency reported 9 blocked when 4 were only waiting: the
-	// security and latency rows were missing because those steps had not run,
-	// and the approved experiment could not ship because the digest step had not
-	// executed since 2026-07-29. Reading those as blockers points the operator at
-	// decisions that do not exist, and hides the ones that do.
+	// FindingDispositionAwaitingRun is retained only to read older reviewer
+	// payloads. It now maps back to an active issue: a future run can rediscover
+	// or clarify the problem, but it is never a closure gate.
 	FindingDispositionAwaitingRun = "awaiting_run"
 	FindingDispositionFailed      = "failed"
 	FindingDispositionRejected    = "rejected"
@@ -643,11 +635,12 @@ func ensurePulseFindingLifecycleSchema(ctx context.Context, db pulseFindingLifec
 // PulseLifecycleReconciliation is the resulting state of the idempotent
 // close-on-applied compatibility pass for one workflow.
 type PulseLifecycleReconciliation struct {
-	TotalIssues     int `json:"total_issues"`
-	ActiveIssues    int `json:"active_issues"`
-	ClosedIssues    int `json:"closed_issues"`
-	AppliedClosures int `json:"applied_closures"`
-	RetiredAliases  int `json:"retired_aliases"`
+	TotalIssues           int `json:"total_issues"`
+	ActiveIssues          int `json:"active_issues"`
+	ClosedIssues          int `json:"closed_issues"`
+	AppliedClosures       int `json:"applied_closures"`
+	ReopenedWaitingIssues int `json:"reopened_waiting_issues"`
+	RetiredAliases        int `json:"retired_aliases"`
 }
 
 // ReconcilePulseFindingLifecycle runs the compatibility migrations explicitly
@@ -675,6 +668,10 @@ func ReconcilePulseFindingLifecycle(ctx context.Context, workspacePath string) (
 	}
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pulse_finding_events
 		WHERE pulse_run_id='migration:close-applied-fixes' AND event_type='fix_applied'`).Scan(&result.AppliedClosures); err != nil {
+		return PulseLifecycleReconciliation{}, err
+	}
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pulse_finding_events
+		WHERE pulse_run_id='migration:reopen-unfixed-waits' AND event_type='reopened_for_review'`).Scan(&result.ReopenedWaitingIssues); err != nil {
 		return PulseLifecycleReconciliation{}, err
 	}
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM run_concerns
@@ -750,31 +747,63 @@ func migrateAppliedPulseFixesClosed(ctx context.Context, db pulseFindingLifecycl
 		FROM run_concerns c
 		JOIN pulse_fix_attempt_findings af ON af.fingerprint=c.fingerprint
 		JOIN pulse_fix_attempts a ON a.attempt_id=af.attempt_id
-		WHERE c.status=? AND af.disposition=?
+		WHERE c.status NOT IN (?, ?, ?) AND af.disposition=?
 			AND a.changed_files_json NOT IN ('', '[]', 'null')
 		ON CONFLICT(fingerprint, pulse_run_id, attempt_id, event_type) DO NOTHING`,
-		now, ConcernStatusAwaitingVerification, FindingDispositionChangedUnverified); err != nil {
+		now, ConcernStatusResolved, ConcernStatusRejected, ConcernStatusExternalActionRequired, FindingDispositionChangedUnverified); err != nil {
 		return err
 	}
 	if _, err := db.ExecContext(ctx, `UPDATE run_concerns SET
 		status=?, resolved_at=?, resolved_by='workflow_builder',
 		resolution_note='Applied repair closed; normal concern recurrence will reopen this issue.'
-		WHERE status=? AND EXISTS (
+		WHERE status NOT IN (?, ?, ?) AND EXISTS (
 			SELECT 1 FROM pulse_fix_attempt_findings af
 			JOIN pulse_fix_attempts a ON a.attempt_id=af.attempt_id
 			WHERE af.fingerprint=run_concerns.fingerprint
 				AND af.disposition=?
 				AND a.changed_files_json NOT IN ('', '[]', 'null')
-		)`, ConcernStatusResolved, now, ConcernStatusAwaitingVerification, FindingDispositionChangedUnverified); err != nil {
+		)`, ConcernStatusResolved, now, ConcernStatusResolved, ConcernStatusRejected, ConcernStatusExternalActionRequired, FindingDispositionChangedUnverified); err != nil {
 		return err
 	}
-	_, err := db.ExecContext(ctx, `UPDATE pulse_fix_attempts SET status='applied'
+	if _, err := db.ExecContext(ctx, `UPDATE pulse_fix_attempts SET status='applied'
 		WHERE status=? AND EXISTS (
 			SELECT 1 FROM pulse_fix_attempt_findings af
 			JOIN run_concerns c ON c.fingerprint=af.fingerprint
 			WHERE af.attempt_id=pulse_fix_attempts.attempt_id
 				AND af.disposition=? AND c.status=?
-		)`, ConcernStatusAwaitingVerification, FindingDispositionChangedUnverified, ConcernStatusResolved)
+		)`, ConcernStatusAwaitingVerification, FindingDispositionChangedUnverified, ConcernStatusResolved); err != nil {
+		return err
+	}
+	// A legacy wait with no applied repair is still an active problem. Keeping
+	// it out of the ordinary queue made old findings wait forever even after
+	// their workflow ran many times. The current lifecycle closes repairs at
+	// application time; it does not use a future run as a second closure gate.
+	if _, err := db.ExecContext(ctx, `INSERT INTO pulse_finding_events
+		(fingerprint, finding_id, pulse_run_id, event_type, summary, metadata_json, recorded_at)
+		SELECT c.fingerprint, c.issue_id, 'migration:reopen-unfixed-waits', 'reopened_for_review',
+			'Legacy wait had no applied repair; returned to the active issue register.',
+			'{"policy":"unfixed_waits_are_active"}', ?
+		FROM run_concerns c
+		WHERE c.status=? AND NOT EXISTS (
+			SELECT 1 FROM pulse_fix_attempt_findings af
+			JOIN pulse_fix_attempts a ON a.attempt_id=af.attempt_id
+			WHERE af.fingerprint=c.fingerprint
+				AND af.disposition=?
+				AND a.changed_files_json NOT IN ('', '[]', 'null')
+		)
+		ON CONFLICT(fingerprint, pulse_run_id, attempt_id, event_type) DO NOTHING`,
+		now, ConcernStatusAwaitingRun, FindingDispositionChangedUnverified); err != nil {
+		return err
+	}
+	_, err := db.ExecContext(ctx, `UPDATE run_concerns SET
+		status=?, resolution_note='Legacy wait had no applied repair; returned to the active issue register.'
+		WHERE status=? AND NOT EXISTS (
+			SELECT 1 FROM pulse_fix_attempt_findings af
+			JOIN pulse_fix_attempts a ON a.attempt_id=af.attempt_id
+			WHERE af.fingerprint=run_concerns.fingerprint
+				AND af.disposition=?
+				AND a.changed_files_json NOT IN ('', '[]', 'null')
+		)`, ConcernStatusOpen, ConcernStatusAwaitingRun, FindingDispositionChangedUnverified)
 	return err
 }
 
@@ -1531,7 +1560,7 @@ func lifecycleStatusForDisposition(disposition string) (status, eventType, resol
 	case FindingDispositionBlocked:
 		return ConcernStatusAcknowledged, "blocked", ""
 	case FindingDispositionAwaitingRun:
-		return ConcernStatusAwaitingRun, "awaiting_run", ""
+		return ConcernStatusOpen, "reopened_for_review", ""
 	case FindingDispositionExternalAction:
 		return ConcernStatusExternalActionRequired, "external_action_required", "pulse"
 	default:

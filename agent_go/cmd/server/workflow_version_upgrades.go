@@ -51,6 +51,7 @@ func workflowContractVersionRank(version string) (int, bool) {
 		workflowContractReportActivitySectionVersion,
 		workflowContractReportActivityTabVersion,
 		workflowContractPulseLifecycleReconciliationVersion,
+		workflowContractPulseBacklogTriageVersion,
 	}
 	for rank, candidate := range known {
 		if version == candidate {
@@ -304,9 +305,15 @@ Call validate_report_html after editing; repair every error. Do not run the work
 
 const upgradePulseLifecycleReconciliation = `WORKFLOW CONTRACT UPGRADE: PULSE CLOSE-ON-APPLIED LIFECYCLE.
 
-Do only this platform data migration. Call record_pulse_lifecycle_reconciliation once. It deterministically closes only legacy issues where a Fixer recorded changed files and no immediate verification failed, retires merged aliases, and preserves every attempt and event. It does not change the plan, schedules, workflow instructions, or human/platform-owned issues.
+Do only this platform data migration. Call record_pulse_lifecycle_reconciliation once. It closes every still-active issue where a Fixer recorded changed files, regardless of its former verification/wait state; it moves legacy waiting-without-a-fix rows back to the active issue register, retires merged aliases, and preserves every attempt and event. It does not change the plan, schedules, workflow instructions, or human/platform-owned issues.
 
 Read the returned counts. Then call get_pulse_state(view="backlog", detail="compact") to confirm the resulting issue register is readable. Do not run a workflow or a Pulse review. If either tool fails, do not stamp. Otherwise call set_workflow_contract_version(version="1.0.32") and stop.`
+
+const upgradePulseBacklogTriage = `WORKFLOW CONTRACT UPGRADE: PULSE BACKLOG TRIAGE.
+
+Do only this platform data migration. Call record_pulse_lifecycle_reconciliation once. It applies the close-on-applied rule and returns legacy unfixed waits to the active register. Then call get_pulse_state(view="backlog", detail="compact") and confirm it is readable. Do not infer that free-text claims such as "passed" close an issue: only typed terminal lifecycle evidence may close automatically. The later bounded Technical Review triages the remaining ambiguous roots.
+
+Do not run a workflow or a Pulse review. If either tool fails, do not stamp. Otherwise call set_workflow_contract_version(version="1.0.33") and stop.`
 
 // workflowVersionUpgradePlan keeps the retired HTML presentation migrations
 // retired, but preserves the independent behavioral/data migrations older
@@ -366,6 +373,9 @@ func workflowVersionUpgradePlan(manifest *WorkflowManifest) []workflowVersionUpg
 	}
 	if rank < 31 {
 		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractPulseLifecycleReconciliationVersion, label: "upgrade-pulse-lifecycle-reconciliation", query: upgradePulseLifecycleReconciliation})
+	}
+	if rank < 32 {
+		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractPulseBacklogTriageVersion, label: "upgrade-pulse-backlog-triage", query: upgradePulseBacklogTriage})
 	}
 	// Attached here rather than at the call site so the turn text is identical
 	// wherever it is built. The version pair used to be added only on the Pulse

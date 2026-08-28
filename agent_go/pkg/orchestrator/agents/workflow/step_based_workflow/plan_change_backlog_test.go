@@ -81,6 +81,52 @@ func TestCollectPlanChangeBacklogNilWhenAllReviewed(t *testing.T) {
 	}
 }
 
+func TestModernReviewedPlanChangeStillFailsWhenDependencyCoverageIsIncomplete(t *testing.T) {
+	modernIncomplete := `{"entries":[{"change_id":"change-modern","timestamp":"2026-08-28T09:00:00Z","tool":"update_message_sequence_step","reason":"change output contract","artifact_review":{"done":true,"surfaces":{"downstream_steps":{"disposition":"updated","evidence":["consumer checked"]}}}}]}`
+	ws := changelogWorkspace(t, map[string]string{"changelog-modern.json": modernIncomplete})
+
+	backlog := CollectPlanChangeBacklog(ws)
+	if backlog == nil || backlog.DependencyCoverageFailureCount != 1 || len(backlog.Changes) != 1 {
+		t.Fatalf("incomplete modern dependency receipt disappeared: %#v", backlog)
+	}
+	problems := strings.Join(backlog.Changes[0].DependencyCoverageProblems, "; ")
+	for _, surface := range []string{"validation", "evaluation", "reporting", "database", "learnings_and_knowledge"} {
+		if !strings.Contains(problems, surface) {
+			t.Fatalf("coverage problems omit %s: %q", surface, problems)
+		}
+	}
+	intake := BuildPlanChangeDependencyIntake(backlog)
+	if !intake.Failed || intake.FailureCount != 1 || len(intake.Findings) != 1 {
+		t.Fatalf("deterministic intake did not fail: %#v", intake)
+	}
+}
+
+func TestModernPlanChangeWithCompleteDependencyCoverageIsClosed(t *testing.T) {
+	modernComplete := `{"entries":[{"change_id":"change-modern","timestamp":"2026-08-28T09:00:00Z","tool":"update_message_sequence_step","reason":"change output contract","artifact_review":{"done":true,"surfaces":{
+		"downstream_steps":{"disposition":"updated","evidence":["consumer contract updated"]},
+		"validation":{"disposition":"already_compatible","evidence":["schema covers the new output"]},
+		"evaluation":{"disposition":"not_applicable","evidence":["no evaluator consumes this field"]},
+		"reporting":{"disposition":"updated","evidence":["report query updated"]},
+		"database":{"disposition":"already_compatible","evidence":["column contract unchanged"]},
+		"learnings_and_knowledge":{"disposition":"not_applicable","evidence":["no reusable guidance changed"]}
+	}}}]}`
+	ws := changelogWorkspace(t, map[string]string{"changelog-modern.json": modernComplete})
+	if backlog := CollectPlanChangeBacklog(ws); backlog != nil {
+		t.Fatalf("complete modern dependency receipt remained pending: %#v", backlog)
+	}
+	if intake := BuildPlanChangeDependencyIntake(nil); intake.Failed || intake.FailureCount != 0 {
+		t.Fatalf("clean deterministic intake = %#v", intake)
+	}
+}
+
+func TestLegacyReviewedPlanChangeIsNotReopenedForMissingModernReceipt(t *testing.T) {
+	legacy := `{"entries":[{"timestamp":"2026-07-01T09:00:00Z","tool":"update_regular_step","reason":"legacy change","artifact_review":{"done":true}}]}`
+	ws := changelogWorkspace(t, map[string]string{"changelog-legacy.json": legacy})
+	if backlog := CollectPlanChangeBacklog(ws); backlog != nil {
+		t.Fatalf("legacy reviewed change was reopened: %#v", backlog)
+	}
+}
+
 func TestCollectPlanChangeBacklogNilWhenNoChangelog(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("WORKSPACE_DOCS_PATH", root)

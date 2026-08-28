@@ -5,8 +5,8 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | Codex |
-| Ticket state | `implemented` — sequenced dispatch, child-session receipt identity, and backend review-phase tool gate pass focused scheduler/runtime tests; live Pulse reverify pending |
-| Last synchronized | `2026-08-28` |
+| Ticket state | `implementation_in_progress` — live Pulse reverify exposed that the receipt-unlock phase split was brittle and unnecessary; it is now one retained Review+Fix task, with deployment reverify remaining |
+| Last synchronized | `2026-08-29` |
 
 - **Priority:** P0 — review, approval, Fixer selection, and later verification
   repeatedly turned one small repair into several expensive Pulse passes.
@@ -24,15 +24,12 @@ route context, and repair reasoning. The Fixer paid to reload them and could
 select a different queue item; approved prompt cleanup therefore remained open
 across repeated Review/Fixer passes.
 
-Pulse now keeps the useful separation as a phase boundary inside one retained
-technical executor:
+Pulse now keeps review and bounded repair in one retained technical task:
 
 ```text
-review messages (read-only)
-  → typed findings/focus + completed child receipt
-  → backend receipt barrier
-  → later repair message (mutation enabled)
-  → immediate proportional proof + module result
+review + bounded safe repair + proportional proof
+  → typed findings/focus + repair disposition + completed child receipt
+  → terminal module result
 ```
 
 This supersedes only the “fresh independent Fixer conversation” decision in
@@ -47,44 +44,83 @@ PLAT-138/155/163. Their still-valid boundaries remain:
 
 ## Backend enforcement
 
-1. `run_in_background` accepts
-   `pulse_phase_contract="technical_review_then_fix"` only with a message
-   sequence, exact parent `pulse_run_id`, and required
-   `technical_review` receipt.
-2. The child tool session starts with read-only evidence access, its exact
-   `runs/pulse/<pulse_run_id>/` checkpoint, and typed review-persistence tools.
-   Plan/config/DB/workflow mutation and `record_pulse_result` are rejected.
-3. The receipt turn must return before repair. The runtime loads a completed
-   `technical_review` receipt for that exact child session; recording a receipt
-   does not unlock tools in the middle of the same model turn.
-4. At least one later sequence turn must remain. Only then are the normal
-   Workflow Builder write paths, DB mutation, repair tools, and module-result
-   persistence restored.
-5. Session-scoped MCP bridge routes consult the same phase gate, so a child
-   cannot bypass it by invoking a tool endpoint from shell code.
-6. Review rows now keep two identities: `pulse_run_id` correlates the parent
+1. `run_in_background` retains the exact child-session review receipt contract
+   through `required_pulse_review_modules=["technical_review"]`.
+2. One retained Technical Maintenance task reviews, selects only a bounded safe
+   repair when warranted, applies it, proportionally verifies it, and persists
+   typed findings, dispositions, terminal module result, and receipt before it
+   ends. It does not need an artificial message-sequence boundary.
+3. The receipt remains required after the task, so incomplete work cannot be
+   presented as successful. It is evidence of completion, not a permission
+   switch.
+4. Existing durable human-decision, tool, folder, and mutation contracts still
+   control what the agent may change. Risky, ambiguous, public-action, and
+   approval-gated work remains out of scope for automatic repair.
+5. Review rows now keep two identities: `pulse_run_id` correlates the parent
    Gate pass, while `review_run_id` is the exact child tool session used by the
-   receipt barrier and review lookup.
+   receipt and review lookup.
+
+## Live verification regression and simplification — 2026-08-29
+
+The scheduled run `schedule-manual--manual-p_1787943151546667000` reached the
+Technical Maintenance child but ended with:
+
+```text
+background Pulse Technical Maintenance ended before its completed review
+receipt unlocked the repair phase
+```
+
+This was not a missing-receipt/session-identity defect (PLAT-196's separate
+diagnostic family). The child never had a chance to write a receipt. In
+code-execution mode it reaches HTTP-backed Pulse tools through the native
+`execute_shell_command` bridge, but the read-only phase gate rejected that
+transport with HTTP 403 before its request ran.
+
+That exposed a deeper design problem: the receipt was required to unlock repair
+even though the same retained agent already had all review context and could
+safely perform a bounded repair. The two-turn permission switch added latency,
+failure modes, and bridge-specific exceptions without adding useful separation.
+No plan, workflow, issue, or repair state changed during the failed run.
+
+The replacement removes `pulse_phase_contract`, the per-session read-only
+phase map, the HTTP phase gate, the inter-turn receipt observer, and the
+required repair follow-up message. Technical Maintenance now performs its
+bounded review and repair in one retained task, then writes the same durable
+receipt and terminal result before completion. The receipt requirement remains
+at task completion, preserving truthful lifecycle and audit evidence without
+creating a permission deadlock.
+
+Targeted test:
+
+```text
+go test ./pkg/orchestrator/agents/workflow/step_based_workflow \
+  -run TestRunInBackgroundPassesBuilderSkillSnapshotToBothAgentKinds -count=1
+```
+
+passes alongside the scheduler and manual-command contract tests. A fresh
+scheduled or manual retained Review+Fix run after deployment must prove this
+end-to-end before the ticket returns to `implemented`.
 
 ## Acceptance
 
 1. A due Technical Review and its bounded repair use one background executor,
    one conversation history, and one MCP session.
-2. No workflow mutation tool can execute before a completed receipt for the
-   same child session, including through session-scoped bridge URLs.
-3. A receipt recorded during a turn unlocks only the next turn.
-4. A sequence that ends on the receipt turn fails rather than claiming repair
-   completion.
-5. The post-receipt turn either applies/verifies a bounded canonical repair or
-   records a truthful no-safe-repair technical result.
+2. The same task may apply only a bounded safe repair while it holds the review
+   context; it records findings, proof, outcome, and receipt before ending.
+3. A task that ends without its receipt fails rather than claiming review or
+   repair completion.
+4. No extra sequence turn, shell transport exception, or receipt-unlock state
+   is required for a normal retained Review+Fix run.
+5. The task either applies/verifies a bounded canonical repair or records a
+   truthful no-safe-repair technical result and completed receipt.
 6. The scheduler no longer launches a separate Fixer stage or fresh Fixer
    background agent.
-7. Strategic Review remains independently receipted and cannot enter the
-   technical repair phase.
+7. Strategic Review remains independently receipted and cannot repair workflow
+   implementation.
 8. The parent scheduler advances to finalization only after due module results
    and reviewer receipts are both durable.
 9. Manual `/pulse-review`, `/plan-prompt-bloat`, and every focused
-   `/pulse-review-*` alias use the same retained child and receipt barrier;
+   `/pulse-review-*` alias use the same retained Review+Fix task;
    store aliases select `store_integrity` plus their knowledgebase, learnings,
    or database lens. The explicit `/pulse-fixer` command remains available for
    repair-only recovery against an already reviewed queue.
@@ -92,15 +128,17 @@ PLAT-138/155/163. Their still-valid boundaries remain:
 ## Decision history
 
 - **2026-08-28:** Replace the fresh Fixer child with one retained Technical
-  Maintenance message sequence. This supersedes the conversation-isolation
-  mechanism, not the review/issue/repair authority boundaries. A backend
-  receipt-gated tool transition is required; prompt wording alone is rejected
-  as insufficient.
+  Maintenance message sequence. This superseded the conversation-isolation
+  mechanism, while initially retaining a backend receipt-gated tool transition.
 - **2026-08-28:** Focused scheduler, background-sequence, typed-receipt, and
   phase-authorization tests pass. Full package suites still contain unrelated
   pre-existing failures tracked outside this ticket; live scheduled-Pulse
   re-verification remains.
-- **2026-08-28:** Extended the same retained receipt-gated Review+Fix contract
-  to all manual Pulse Review slash aliases. A manual child uses its own exact
-  tool-session identity as `pulse_run_id`, keeping worklist, receipt, findings,
-  and repair outcome in one correlation scope.
+- **2026-08-28:** Extended the retained Review+Fix contract to all manual
+  Pulse Review slash aliases. A manual child uses its own exact tool-session
+  identity as `pulse_run_id`, keeping worklist, receipt, findings, and repair
+  outcome in one correlation scope.
+- **2026-08-29:** A live 403 bridge failure showed the receipt-gated transition
+  was an unnecessary dependency between one agent's review and repair. Remove
+  the phase contract and keep the durable receipt as a required end-of-task
+  record instead.

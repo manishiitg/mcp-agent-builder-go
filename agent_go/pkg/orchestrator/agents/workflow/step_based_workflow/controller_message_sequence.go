@@ -457,12 +457,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeMessageSequenceStep(
 	}
 	_ = hcpo.saveMessageSequenceSession(ctx, sessionRelPath, session)
 	finalSummary := hcpo.summarizeMessageSequenceSession(session)
-	// The aggregated summary carries each item's CONCERNS: line prefixed with its
-	// item ID. File them durably here — this is the message-sequence equivalent of
-	// the regular step's composition point.
-	hcpo.recordStepConcerns(ctx, sequenceStep.GetID(), map[string]string{
-		ConcernPhaseMessageSequence: finalSummary,
-	})
+	// Item summaries stay in the retained message-sequence session. Pulse reads
+	// that evidence directly; do not parse prose into observations here.
 	if err := hcpo.saveFinalExecutionSummary(sequenceStep.GetID(), stepPath, finalSummary); err != nil {
 		hcpo.recordRunPersistenceError(context.Background(), sequenceStep.GetID(), err)
 	}
@@ -1597,35 +1593,12 @@ func (hcpo *StepBasedWorkflowOrchestrator) saveMessageSequenceSession(ctx contex
 
 func (hcpo *StepBasedWorkflowOrchestrator) summarizeMessageSequenceSession(session *messageSequenceSession) string {
 	completed := 0
-	var concerns []string
 	for _, entry := range session.Entries {
 		if entry.Status == "completed" {
 			completed++
 		}
-		for _, line := range strings.Split(entry.Summary, "\n") {
-			line = strings.TrimSpace(line)
-			if !strings.HasPrefix(strings.ToUpper(line), "CONCERNS:") {
-				continue
-			}
-			concern := strings.TrimSpace(line[len("CONCERNS:"):])
-			if concern == "" {
-				continue
-			}
-			itemID := strings.TrimSpace(entry.ItemID)
-			if itemID == "" {
-				itemID = strings.TrimSpace(entry.EntryID)
-			}
-			if itemID != "" {
-				concern = fmt.Sprintf("%s: %s", itemID, concern)
-			}
-			concerns = append(concerns, concern)
-		}
 	}
-	summary := fmt.Sprintf("Message sequence %s completed: %d item(s) completed", session.StepID, completed)
-	if len(concerns) > 0 {
-		summary += "\nCONCERNS: " + strings.Join(concerns, "; ")
-	}
-	return summary
+	return fmt.Sprintf("Message sequence %s completed: %d item(s) completed", session.StepID, completed)
 }
 
 // messageSequenceHaltedBeforeItem reports why a message_sequence queue must not

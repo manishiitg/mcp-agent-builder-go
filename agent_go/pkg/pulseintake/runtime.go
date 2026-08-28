@@ -32,14 +32,15 @@ const (
 // is intentionally not a Pulse issue: the reviewer decides whether the fact
 // matters, is a known/recovered failure, or warrants a durable finding.
 type Finding struct {
-	Kind      string `json:"kind"`
-	Severity  string `json:"severity"`
-	Subject   string `json:"subject"`
-	Detail    string `json:"detail"`
-	Evidence  string `json:"evidence"`
-	RunFolder string `json:"run_folder,omitempty"`
-	StepID    string `json:"step_id,omitempty"`
-	Artifact  string `json:"artifact,omitempty"`
+	Kind       string `json:"kind"`
+	Severity   string `json:"severity"`
+	Subject    string `json:"subject"`
+	Detail     string `json:"detail"`
+	Evidence   string `json:"evidence"`
+	ObservedAt string `json:"observed_at,omitempty"`
+	RunFolder  string `json:"run_folder,omitempty"`
+	StepID     string `json:"step_id,omitempty"`
+	Artifact   string `json:"artifact,omitempty"`
 }
 
 type Result struct {
@@ -282,12 +283,13 @@ func inspectRun(run runCandidate) ([]Finding, error) {
 		return nil, fmt.Errorf("decode run_metadata.json: %w", err)
 	}
 	status := strings.ToLower(strings.TrimSpace(metadata.Status))
+	observedAt := run.modTime.UTC().Format(time.RFC3339Nano)
 	var findings []Finding
 	if status != "" && status != "completed" && status != "success" {
 		findings = append(findings, Finding{
 			Kind: "run_not_completed", Severity: severityHigh, Subject: "Run did not complete",
 			Detail:   "The retained run has an explicit non-success terminal/runtime status.",
-			Evidence: fmt.Sprintf("run_metadata.status=%q", metadata.Status), RunFolder: run.rel, Artifact: "run_metadata.json",
+			Evidence: fmt.Sprintf("run_metadata.status=%q", metadata.Status), ObservedAt: observedAt, RunFolder: run.rel, Artifact: "run_metadata.json",
 		})
 	}
 	if status != "completed" && status != "success" {
@@ -316,9 +318,10 @@ func inspectRun(run runCandidate) ([]Finding, error) {
 		if timing.LLM.ErroredCount > 0 || timing.LLM.CanceledCount > 0 || timing.Tools.ErroredCount > 0 {
 			findings = append(findings, Finding{
 				Kind: "runtime_status_disagreement", Severity: severityHigh, StepID: timing.StepID, RunFolder: run.rel, Artifact: artifact,
-				Subject:  "Completed run contains failed child calls",
-				Detail:   "The outer run is completed, but its timing receipt records an errored or canceled LLM/tool call.",
-				Evidence: fmt.Sprintf("llm.errored_count=%d; llm.canceled_count=%d; tools.errored_count=%d", timing.LLM.ErroredCount, timing.LLM.CanceledCount, timing.Tools.ErroredCount),
+				Subject:    "Completed run contains failed child calls",
+				Detail:     "The outer run is completed, but its timing receipt records an errored or canceled LLM/tool call.",
+				Evidence:   fmt.Sprintf("llm.errored_count=%d; llm.canceled_count=%d; tools.errored_count=%d", timing.LLM.ErroredCount, timing.LLM.CanceledCount, timing.Tools.ErroredCount),
+				ObservedAt: observedAt,
 			})
 		}
 		for _, call := range timing.Tools.Calls {
@@ -327,9 +330,10 @@ func inspectRun(run runCandidate) ([]Finding, error) {
 			}
 			findings = append(findings, Finding{
 				Kind: "tool_success_with_structured_failure", Severity: severityHigh, StepID: timing.StepID, RunFolder: run.rel, Artifact: artifact,
-				Subject:  "Successful tool call contains structured failure",
-				Detail:   "The tool-call status is success but its structured result reports a failure.",
-				Evidence: fmt.Sprintf("tool=%q; status=%q; result contains isError=true or non-zero exit_code", call.ToolName, call.Status),
+				Subject:    "Successful tool call contains structured failure",
+				Detail:     "The tool-call status is success but its structured result reports a failure.",
+				Evidence:   fmt.Sprintf("tool=%q; status=%q; result contains isError=true or non-zero exit_code", call.ToolName, call.Status),
+				ObservedAt: observedAt,
 			})
 		}
 		return nil

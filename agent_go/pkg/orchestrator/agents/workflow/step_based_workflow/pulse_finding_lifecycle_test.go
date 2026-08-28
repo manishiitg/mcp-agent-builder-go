@@ -1012,8 +1012,9 @@ func TestAdvisorAwaitingUserRequiresOwnedDecision(t *testing.T) {
 // ship because the digest step had not executed since 2026-07-29. blocked
 // absorbed them because changed_unverified demands a fix attempt with changed
 // files, and nothing was fixed. Reading those as blockers points the operator at
-// decisions that do not exist.
-func TestAwaitingRunSeparatesWaitingFromBlocked(t *testing.T) {
+// decisions that do not exist. The legacy disposition stays accepted for old
+// review payloads, but it is returned to the active issue register.
+func TestAwaitingRunCompatibilityMapsToActiveIssue(t *testing.T) {
 	base := PulseFindingDisposition{
 		Fingerprint: "fp", FindingID: "SEC-1",
 		Disposition: FindingDispositionAwaitingRun,
@@ -1041,13 +1042,13 @@ func TestAwaitingRunSeparatesWaitingFromBlocked(t *testing.T) {
 		t.Fatalf("a genuine wait-for-data finding was rejected: %v", err)
 	}
 
-	// It must not land in the acknowledged bucket that blocked and awaiting_user
-	// share, or the UI cannot tell them apart.
+	// A future run is not a closure gate. Compatibility input must create an
+	// active issue rather than another invisible waiting bucket.
 	status, event, _ := lifecycleStatusForDisposition(FindingDispositionAwaitingRun)
-	if status != ConcernStatusAwaitingRun || status == ConcernStatusAcknowledged {
-		t.Fatalf("awaiting_run mapped to status %q; it must be distinguishable from blocked", status)
+	if status != ConcernStatusOpen {
+		t.Fatalf("awaiting_run compatibility mapped to status %q, want %q", status, ConcernStatusOpen)
 	}
-	if event != "awaiting_run" {
+	if event != "reopened_for_review" {
 		t.Fatalf("awaiting_run event = %q", event)
 	}
 }
@@ -1112,7 +1113,7 @@ func TestLegacyAppliedFixVerificationBacklogMigratesClosed(t *testing.T) {
 		t.Fatalf("open db: %v", err)
 	}
 	defer db.Close()
-	if _, err := db.ExecContext(ctx, `UPDATE run_concerns SET status=? WHERE fingerprint=?`, ConcernStatusAwaitingVerification, concern.Fingerprint); err != nil {
+	if _, err := db.ExecContext(ctx, `UPDATE run_concerns SET status=? WHERE fingerprint=?`, ConcernStatusAwaitingRun, concern.Fingerprint); err != nil {
 		t.Fatalf("restore legacy concern state: %v", err)
 	}
 	if _, err := db.ExecContext(ctx, `UPDATE pulse_fix_attempts SET status=?`, ConcernStatusAwaitingVerification); err != nil {
@@ -1143,6 +1144,44 @@ func TestLegacyAppliedFixVerificationBacklogMigratesClosed(t *testing.T) {
 	}
 	if concernStatus != ConcernStatusResolved || attemptStatus != "applied" {
 		t.Fatalf("legacy applied fix remained active: concern=%q attempt=%q", concernStatus, attemptStatus)
+	}
+}
+
+func TestLegacyUnfixedWaitReturnsToActiveRegister(t *testing.T) {
+	ctx := context.Background()
+	workspacePath := concernsWorkspace(t)
+	concern := filedReviewConcern(t, workspacePath, "pulse-1", "bug_review", "collector output is incomplete")
+
+	db, err := openRunConcernsDB(ctx, workspacePath, false)
+	if err != nil || db == nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE run_concerns SET status=? WHERE fingerprint=?`, ConcernStatusAwaitingRun, concern.Fingerprint); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reconciled, err := ReconcilePulseFindingLifecycle(ctx, workspacePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reconciled.ReopenedWaitingIssues != 1 {
+		t.Fatalf("reconciliation=%+v, want one unfixed wait reopened", reconciled)
+	}
+	db, err = openRunConcernsDB(ctx, workspacePath, false)
+	if err != nil || db == nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer db.Close()
+	var status string
+	if err := db.QueryRowContext(ctx, `SELECT status FROM run_concerns WHERE fingerprint=?`, concern.Fingerprint).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != ConcernStatusOpen {
+		t.Fatalf("unfixed wait status=%q, want %q", status, ConcernStatusOpen)
 	}
 }
 

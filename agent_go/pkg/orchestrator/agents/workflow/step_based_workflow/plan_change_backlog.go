@@ -45,23 +45,38 @@ import (
 
 // UnreviewedPlanChange is one plan-mod call whose blast radius has not been traced.
 type UnreviewedPlanChange struct {
-	ChangeID      string           `json:"change_id,omitempty"`
-	At            string           `json:"at"`
-	Tool          string           `json:"tool"`
-	Reason        string           `json:"reason,omitempty"`
-	StepIDs       []string         `json:"step_ids,omitempty"`
-	FieldsChanged []string         `json:"fields_changed,omitempty"`
-	SourceFile    string           `json:"source_file"`
-	Origin        PlanChangeOrigin `json:"origin"`
+	ChangeID                   string           `json:"change_id,omitempty"`
+	At                         string           `json:"at"`
+	Tool                       string           `json:"tool"`
+	Reason                     string           `json:"reason,omitempty"`
+	StepIDs                    []string         `json:"step_ids,omitempty"`
+	FieldsChanged              []string         `json:"fields_changed,omitempty"`
+	SourceFile                 string           `json:"source_file"`
+	Origin                     PlanChangeOrigin `json:"origin"`
+	DependencyCoverageProblems []string         `json:"dependency_coverage_problems,omitempty"`
 }
 
 // PlanChangeBacklog is the summary handed to Pulse Gate.
 type PlanChangeBacklog struct {
-	UnreviewedCount int                    `json:"unreviewed_count"`
-	OldestAt        string                 `json:"oldest_at,omitempty"`
-	NewestAt        string                 `json:"newest_at,omitempty"`
-	Changes         []UnreviewedPlanChange `json:"changes,omitempty"`
-	Note            string                 `json:"note,omitempty"`
+	UnreviewedCount                int                    `json:"unreviewed_count"`
+	DependencyCoverageFailureCount int                    `json:"dependency_coverage_failure_count"`
+	OldestAt                       string                 `json:"oldest_at,omitempty"`
+	NewestAt                       string                 `json:"newest_at,omitempty"`
+	Changes                        []UnreviewedPlanChange `json:"changes,omitempty"`
+	Note                           string                 `json:"note,omitempty"`
+}
+
+// PlanChangeDependencyIntake is the deterministic half of plan-change review.
+// It proves only whether current-contract changelog entries carry the complete
+// six-surface receipt. A Technical reviewer still decides whether any covered
+// dependency is actually stale and what, if anything, should change.
+type PlanChangeDependencyIntake struct {
+	Detector        string                 `json:"detector"`
+	DetectorVersion string                 `json:"detector_version"`
+	CoverageStatus  string                 `json:"coverage_status"`
+	Failed          bool                   `json:"failed"`
+	FailureCount    int                    `json:"failure_count"`
+	Findings        []UnreviewedPlanChange `json:"findings"`
 }
 
 // maxListedPlanChanges caps the listed entries. The count is always exact; the
@@ -110,7 +125,11 @@ func CollectPlanChangeBacklog(workspacePath string) *PlanChangeBacklog {
 			continue
 		}
 		for _, e := range file.Entries {
-			if e.ArtifactReview != nil && e.ArtifactReview.Done {
+			coverageProblems := planDependencyCoverageProblems(e)
+			// Legacy reviewed entries predate structured dependency receipts. Do
+			// not reopen the historical fleet. Every current-contract mutation has
+			// a change_id, so it must pass the stronger deterministic boundary.
+			if e.ArtifactReview != nil && e.ArtifactReview.Done && (strings.TrimSpace(e.ChangeID) == "" || len(coverageProblems) == 0) {
 				continue
 			}
 			ts, parseErr := time.Parse(time.RFC3339, strings.TrimSpace(e.Timestamp))
@@ -119,7 +138,11 @@ func CollectPlanChangeBacklog(workspacePath string) *PlanChangeBacklog {
 				// dropping an outstanding change because its timestamp is malformed.
 				ts = time.Time{}
 			}
-			pending = append(pending, dated{at: ts.UTC(), change: toUnreviewedPlanChange(e, f.Name())})
+			change := toUnreviewedPlanChange(e, f.Name())
+			if strings.TrimSpace(e.ChangeID) != "" {
+				change.DependencyCoverageProblems = coverageProblems
+			}
+			pending = append(pending, dated{at: ts.UTC(), change: change})
 		}
 	}
 	if len(pending) == 0 {
@@ -131,6 +154,11 @@ func CollectPlanChangeBacklog(workspacePath string) *PlanChangeBacklog {
 		UnreviewedCount: len(pending),
 		NewestAt:        pending[0].change.At,
 		OldestAt:        pending[len(pending)-1].change.At,
+	}
+	for _, p := range pending {
+		if len(p.change.DependencyCoverageProblems) > 0 {
+			backlog.DependencyCoverageFailureCount++
+		}
 	}
 	for i, p := range pending {
 		if i >= maxListedPlanChanges {
@@ -145,6 +173,58 @@ func CollectPlanChangeBacklog(workspacePath string) *PlanChangeBacklog {
 		backlog.Note += fmt.Sprintf(" Showing the %d most recent; the rest are in planning/changelog/.", len(backlog.Changes))
 	}
 	return backlog
+}
+
+// BuildPlanChangeDependencyIntake projects the exact current-contract coverage
+// failures into the deterministic Gate feed without duplicating the changelog
+// scan or promoting them to Pulse issues.
+func BuildPlanChangeDependencyIntake(backlog *PlanChangeBacklog) PlanChangeDependencyIntake {
+	result := PlanChangeDependencyIntake{
+		Detector:        "plan_change_dependencies",
+		DetectorVersion: "plan-change-dependencies/v1",
+		CoverageStatus:  "verified",
+		Findings:        []UnreviewedPlanChange{},
+	}
+	if backlog == nil || backlog.DependencyCoverageFailureCount == 0 {
+		return result
+	}
+	result.Failed = true
+	result.FailureCount = backlog.DependencyCoverageFailureCount
+	for _, change := range backlog.Changes {
+		if len(change.DependencyCoverageProblems) > 0 {
+			result.Findings = append(result.Findings, change)
+		}
+	}
+	return result
+}
+
+func planDependencyCoverageProblems(entry PlanChangelogEntry) []string {
+	if entry.ArtifactReview == nil {
+		return []string{"artifact_review receipt is missing"}
+	}
+	problems := []string{}
+	if !entry.ArtifactReview.Done {
+		problems = append(problems, "artifact_review.done is not true")
+	}
+	for _, surface := range requiredPlanDependencySurfaces {
+		review, exists := entry.ArtifactReview.Surfaces[surface]
+		if !exists {
+			problems = append(problems, surface+": disposition and evidence are missing")
+			continue
+		}
+		switch review.Disposition {
+		case "updated", "already_compatible", "not_applicable", "blocked", "broken":
+		default:
+			problems = append(problems, surface+": disposition is invalid")
+		}
+		if len(normalizedLifecycleStrings(review.Evidence)) == 0 {
+			problems = append(problems, surface+": evidence is missing")
+		}
+		if (review.Disposition == "blocked" || review.Disposition == "broken") && len(normalizedLifecycleStrings(review.IssueIDs)) == 0 {
+			problems = append(problems, surface+": blocked/broken disposition lacks a durable Pulse issue")
+		}
+	}
+	return problems
 }
 
 func toUnreviewedPlanChange(e PlanChangelogEntry, sourceFile string) UnreviewedPlanChange {

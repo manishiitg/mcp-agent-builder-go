@@ -28,9 +28,9 @@ func TestRegisterStepSessionShellEnvProvidesBridgeParity(t *testing.T) {
 	})
 	env := common.GetSessionShellEnv(sessionID)
 	for key, want := range map[string]string{
-		"STEP_OUTPUT_DIR":       "/workspace/eval/step",
-		"STEP_EXECUTION_DIR":    "/workspace/eval",
-		"DB_PATH":               "/workspace/db/db.sqlite",
+		"STEP_OUTPUT_DIR":    "/workspace/eval/step",
+		"STEP_EXECUTION_DIR": "/workspace/eval",
+		"DB_PATH":            "/workspace/db/db.sqlite",
 		// PLAT-185: a scripted step reading a sibling step's runs/<iteration>/
 		// logs/... folder had no reliable way to know the current run's own
 		// folder name short of hardcoding a guess. RUN_FOLDER removes the guess.
@@ -389,23 +389,13 @@ func TestApplyStepConfigToAgentConfigSupportsCodingAgentTmuxKeepAlive(t *testing
 	}
 }
 
-// Confirmed live 2026-08-17 (confida-login's survey-app-and-refresh-knowledge
-// todo-orchestrator session): configureRunConcernSession set up the trusted
-// step identity, but record_run_concern was never in SelectedTools, so a
-// reflection turn that named the tool in its own prompt got "unknown=
-// [record_run_concern]: not registered by any currently connected server".
-// query_workflow_db/mutate_workflow_db only happened to be present because
-// that workflow's own declared tools included them -- nobody would think to
-// manually declare a platform-internal concern-reporting tool. Pins that both
-// SelectedTools-building branches (custom and default) always carry it,
-// mirroring the capability-derived DB tools they sit beside.
-func TestApplyStepConfigToAgentConfigAlwaysIncludesRunConcernTool(t *testing.T) {
+func TestApplyStepConfigToAgentConfigDoesNotExposeRunConcernTool(t *testing.T) {
 	t.Run("default branch (no step-specific SelectedTools)", func(t *testing.T) {
 		hcpo := newAgentFactoryTestOrchestrator(t)
 		config := agents.NewOrchestratorAgentConfig("step-agent")
 		hcpo.applyStepConfigToAgentConfig(config, &AgentConfigs{}, true)
-		if !slices.Contains(config.SelectedTools, "workflow_db:record_run_concern") {
-			t.Fatalf("expected default SelectedTools to include record_run_concern, got %v", config.SelectedTools)
+		if slices.Contains(config.SelectedTools, "workflow_db:record_run_concern") {
+			t.Fatalf("default SelectedTools must not expose retired record_run_concern, got %v", config.SelectedTools)
 		}
 	})
 
@@ -413,15 +403,15 @@ func TestApplyStepConfigToAgentConfigAlwaysIncludesRunConcernTool(t *testing.T) 
 		hcpo := newAgentFactoryTestOrchestrator(t)
 		config := agents.NewOrchestratorAgentConfig("step-agent")
 		hcpo.applyStepConfigToAgentConfig(config, &AgentConfigs{
-			SelectedTools: []string{"api-bridge:execute_shell_command"},
+			SelectedTools: []string{"api-bridge:execute_shell_command", "workflow_db:record_run_concern"},
 		}, true)
-		if !slices.Contains(config.SelectedTools, "workflow_db:record_run_concern") {
-			t.Fatalf("expected step-specific SelectedTools to still include record_run_concern, got %v", config.SelectedTools)
+		if slices.Contains(config.SelectedTools, "workflow_db:record_run_concern") {
+			t.Fatalf("step-specific SelectedTools must not expose retired record_run_concern, got %v", config.SelectedTools)
 		}
 	})
 }
 
-func TestPrepareCustomToolsDefaultBranchIncludesRunConcernTool(t *testing.T) {
+func TestPrepareCustomToolsDefaultBranchExcludesRunConcernTool(t *testing.T) {
 	base, err := orchestrator.NewBaseOrchestrator(
 		loggerv2.NewNoop(), nil, orchestrator.OrchestratorTypeWorkflow, "", 0,
 		"", nil, nil, false, &orchestrator.LLMConfig{}, 1, nil, nil, nil,
@@ -458,8 +448,8 @@ func TestPrepareCustomToolsDefaultBranchIncludesRunConcernTool(t *testing.T) {
 			names = append(names, definition.Function.Name)
 		}
 	}
-	if !slices.Contains(names, "record_run_concern") || executors["record_run_concern"] == nil {
-		t.Fatalf("default tool set missing record_run_concern: tools=%v executors=%v", names, executors)
+	if slices.Contains(names, "record_run_concern") || executors["record_run_concern"] != nil {
+		t.Fatalf("default tool set must exclude retired record_run_concern: tools=%v executors=%v", names, executors)
 	}
 }
 

@@ -988,13 +988,12 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 		"Read the durable Gate worklist",
 		"PULSE SEQUENCED REVIEW + FIX DISPATCH",
 		"run_in_background",
-		`pulse_phase_contract="technical_review_then_fix"`,
+		"single retained task instruction",
 		`required_pulse_review_modules=["technical_review"]`,
-		"backend receipt barrier unlocks mutation tools",
-		"Never launch a fresh Fixer",
-		"one separate read-only executor message sequence",
+		"Do not split review and repair into artificial sequence turns",
+		"never launch a fresh Fixer",
+		"one separate read-only executor",
 		"the runtime waits for registered children",
-		"review turns are backend read-only",
 	} {
 		if !strings.Contains(review, want) {
 			t.Fatalf("review prompt missing %q:\n%s", want, review)

@@ -102,6 +102,16 @@ canonical issue, or needs a new durable finding. Do not keyword-scan ordinary
 output for words such as "error" and do not launch a Fixer directly from the
 signal.
 
+A failed verified deterministic intake cannot be cooled down or skipped: set
+`technical_review.due=true` and route it to the smallest matching technical
+focus. For `plan_change_dependencies`, this means a current-contract change
+with a durable `change_id` lacks a complete receipt across downstream steps,
+validation, evaluation, reporting, database, and learnings/knowledge. Select
+`plan_orchestration_integrity`. The failure proves missing coverage, not that
+all six surfaces need edits; the reviewer must inspect each surface and record
+an evidence-backed disposition. Legacy reviewed entries without `change_id`
+are not reopened by this check.
+
 When DB, knowledgebase, or learnings integrity is selected, explicitly name the
 Stores Health scope in the reason. Stores Health remains a technical lens, not
 a separate module.
@@ -191,6 +201,18 @@ the mode, mode reason, and one decision for every canonical module:
 `strategic_review`. On recovery, if this Pulse run already has a complete
 worklist, verify it and stop rather than recording it again.
 
+### Worklist payload boundary (required)
+
+`record_pulse_worklist.decisions[]` is deliberately a **small scheduling
+receipt**, not a review plan. Each decision may contain only `module`, `due`,
+`reason`, `evidence`, `next_check_at`, `next_check_after_run_id`, and
+`cooldown_runs`. Do **not** put `focuses`, `route_scope`, `issue_ids`,
+`deferred_focuses`, `decision`, or any review-plan field in this call. Explain
+the selected scope in `reason` and `evidence`; the later reviewer records its
+actual focus coverage with `record_pulse_review_focus` after inspecting the
+evidence. An unknown field rejects the whole worklist and prevents all review
+and repair work from starting.
+
 After the worklist, optionally record trustworthy comparable success-criterion
 measurements with `record_pulse_impact`. Use stable criterion IDs, producing run
 IDs, route/environment, exact evidence provenance, and an honest value or
@@ -198,6 +220,6 @@ qualitative status. If trustworthy evidence does not exist, record nothing;
 missing evidence is not zero or healthy. Gate never creates interventions or
 impact assessments.
 
-The later receipt-gated Review+Fix sequence owns selected technical work,
+The later retained Review+Fix task owns selected technical work,
 strategic work, lifecycle updates, verification, and terminal receipts. Stop
 after recording the worklist and any honest impact observations.

@@ -77,7 +77,7 @@ describe('Pulse slash commands', () => {
     expect(submitted).toContain('do not edit workflow artifacts')
   })
 
-  it('routes Pulse Review through one receipt-gated retained review and fix sequence', () => {
+  it('routes Pulse Review through one retained review and fix task', () => {
     const command = findCommand('pulse-review', 'workflow')
     let submitted = ''
 
@@ -92,10 +92,6 @@ describe('Pulse slash commands', () => {
     expect(submitted).toContain('Run /pulse-review as a BACKGROUND task')
     expect(submitted).toContain('BACKGROUND task')
     expect(submitted).toContain('completion_mode="present_result"')
-		expect(submitted).toContain('message_sequence=')
-		expect(submitted).toContain('kind=\\"pulse-fixer\\"')
-		expect(submitted).toContain('pulse_phase_contract="technical_review_then_fix"')
-		expect(submitted).toContain('pulse_run_id="child"')
 		expect(submitted).toContain('required_pulse_review_modules=["technical_review"]')
 		expect(submitted).toContain('Do not call tools, reload state, or independently revalidate')
     expect(submitted).toContain('iteration-9/default')
@@ -132,8 +128,7 @@ describe('Pulse slash commands', () => {
     expect(submitted).toContain('kind=\\"engineering-review\\"')
     expect(submitted).toContain('Manual Pulse review focus: execution_health')
     expect(submitted).toContain('required_pulse_review_modules=["technical_review"]')
-    expect(submitted).toContain('pulse_phase_contract="technical_review_then_fix"')
-    expect(submitted).toContain('message_sequence=')
+		expect(submitted).toContain('bounded Review+Fix')
   })
 
   it('routes store review aliases through store_integrity review and bounded repair', () => {
@@ -149,7 +144,7 @@ describe('Pulse slash commands', () => {
 
       expect(submitted).toContain('kind=\\"engineering-review\\"')
       expect(submitted).toContain('Manual Pulse review focus: store_integrity')
-      expect(submitted).toContain('pulse_phase_contract="technical_review_then_fix"')
+		expect(submitted).toContain('bounded Review+Fix')
       expect(submitted).toContain('iteration-4/default')
     }
   })

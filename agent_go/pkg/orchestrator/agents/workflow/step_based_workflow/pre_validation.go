@@ -223,11 +223,9 @@ func SavePreValidationLog(
 	_ = bo.WriteWorkspaceFile(ctx, historyPath, string(data))
 	_ = bo.WriteWorkspaceFile(ctx, logPath, string(data))
 
-	if !results.OverallPass && strings.TrimSpace(workspaceRoot) != "" {
-		if summary := buildPreValidationConcernSummary(results); summary != "" {
-			_, _ = RecordRunConcerns(ctx, workspaceRoot, runFolder, groupName, stepID, ConcernPhasePreValidation, summary)
-		}
-	}
+	// Failed validation remains in this run's persisted validation receipt for
+	// Pulse's deterministic intake and Technical Review. Do not mirror it into
+	// the observation store: Go must not create or text-deduplicate Pulse work.
 }
 
 func normalizePreValidationAttemptPart(value, fallback string) string {
@@ -241,39 +239,6 @@ func normalizePreValidationAttemptPart(value, fallback string) string {
 		return fallback
 	}
 	return value
-}
-
-// buildPreValidationConcernSummary renders one CONCERNS: line for the step's
-// complete failed gate. Field-level errors are evidence for that one step bug,
-// not independent bugs. RecordRunConcerns gives every prevalidation concern a
-// stable step-level fingerprint, so the detailed text can change from run to
-// run without splitting the lifecycle identity.
-func buildPreValidationConcernSummary(results *WorkspaceVerificationResult) string {
-	if results == nil {
-		return ""
-	}
-	details := make([]string, 0, len(results.Summary.Errors))
-	for _, e := range results.Summary.Errors {
-		location := strings.TrimSpace(strings.TrimSpace(e.File) + " " + strings.TrimSpace(e.Path))
-		message := strings.TrimSpace(e.Message)
-		if message == "" {
-			message = strings.TrimSpace(e.CheckType)
-		}
-		if location == "" && message == "" {
-			continue
-		}
-		detail := location
-		if detail != "" && message != "" {
-			detail += ": "
-		}
-		detail += message
-		details = append(details, detail)
-	}
-	if len(details) == 0 {
-		return ""
-	}
-	return fmt.Sprintf("%s prevalidation gate failed for the step output contract (%d failed checks): %s\n",
-		concernLinePrefix, len(details), strings.Join(details, " | "))
 }
 
 // validateSchemaLimits checks if the schema exceeds resource limits

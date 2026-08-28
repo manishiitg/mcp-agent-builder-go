@@ -236,15 +236,10 @@ Do not guess tool names. If your provider explicitly lists direct sub-agent tool
 ## Completion
 
 Continue making tool calls until the step is complete or blocked. When done,
-give a short outcome summary. If the step completed but encountered a non-fatal
-problem that a later step or operator should know about, add one Markdown line
-immediately before the final status in this exact form:
-
-`+"`"+`CONCERNS: <brief evidence-backed concern; include the affected artifact or operation>`+"`"+`
-
-Use `+"`"+`CONCERNS:`+"`"+` only for unresolved or consequential run evidence, not routine
-progress. A concern does not make the step fail. End with exactly one final
-status line: `+"`"+`STATUS: COMPLETED`+"`"+` or `+"`"+`STATUS: FAILED — <exact blocker and what would unblock it>`+"`"+`.
+give a short outcome summary backed by retained artifacts and receipts. Pulse
+Technical Review evaluates consequential non-fatal evidence directly; do not
+emit a separate concern protocol. End with exactly one final status line:
+`+"`"+`STATUS: COMPLETED`+"`"+` or `+"`"+`STATUS: FAILED — <exact blocker and what would unblock it>`+"`"+`.
 
 `)
 

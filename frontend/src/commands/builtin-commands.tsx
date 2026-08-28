@@ -41,7 +41,7 @@ function submitGuidedWorkflowCommand(
       `Call ${guidanceCall} and follow the returned instructions verbatim. ${outputContract} ` +
       `Treat focus as the request context before the slash command. The tool returns the canonical guided-flow text; do not paraphrase or skip its steps.` +
       (isReviewFix
-        ? ' This is the read-only review phase of one retained Review+Fix sequence. Persist the completed technical_review receipt and end this turn without applying repairs; the backend unlocks repair authority only for the next sequence message.'
+        ? ' This is one retained Review+Fix task. Review, apply only a bounded safe repair when warranted, proportionally verify it, then persist the technical_review receipt and terminal result before ending.'
         : '')
     const requiredReviewModule = kind === 'engineering-review'
       ? 'technical_review'
@@ -51,24 +51,12 @@ function submitGuidedWorkflowCommand(
     const requiredReviewReceipt = requiredReviewModule
       ? `, required_pulse_review_modules=[${JSON.stringify(requiredReviewModule)}]`
       : ''
-    const fixerGuidanceArgs = [
-      `kind=${JSON.stringify('pulse-fixer')}`,
-      `focus=${JSON.stringify(focus)}`,
-    ]
-    if (options.runFolder !== undefined) {
-      fixerGuidanceArgs.push(`run_folder=${JSON.stringify(options.runFolder || '')}`)
-    }
-    const reviewFixContract = isReviewFix
-      ? `, message_sequence=[{"message":${JSON.stringify(
-          `The completed Technical Review receipt has returned control to the runtime. Repair authority is now unlocked for this retained conversation. Call get_workflow_command_guidance(${fixerGuidanceArgs.join(', ')}) and follow the returned Fixer instructions verbatim. Do not rerun review or create another background agent. Apply and proportionally verify the highest-value safe canonical repair bundle, record its exact dispositions and the terminal technical_review module result, and preserve every deferred issue with its reason.`
-        )}}], pulse_phase_contract="technical_review_then_fix", pulse_run_id="child"`
-      : ''
     const backgroundFallback = isReviewFix
-      ? 'If run_in_background is not available, perform only the read-only review inline and do not repair; the backend receipt barrier is required for the combined flow.'
+      ? 'If run_in_background is not available, perform the same bounded Review+Fix inline this turn.'
       : `If run_in_background is not available, perform the ${taskLabel} inline this turn instead.`
     ctx.onSubmit(
       taskIntro +
-      `If the run_in_background tool is available: call run_in_background(name=${JSON.stringify(displayName + ' ' + taskLabel)}, instruction=${JSON.stringify(instruction)}, completion_mode="present_result"${requiredReviewReceipt}${reviewFixContract}) and do NOT perform the ${taskLabel} yourself this turn — you'll get a presentation-only completion notification, ${completionContract} Do not call tools, reload state, or independently revalidate after that notification. ` +
+      `If the run_in_background tool is available: call run_in_background(name=${JSON.stringify(displayName + ' ' + taskLabel)}, instruction=${JSON.stringify(instruction)}, completion_mode="present_result"${requiredReviewReceipt}) and do NOT perform the ${taskLabel} yourself this turn — you'll get a presentation-only completion notification, ${completionContract} Do not call tools, reload state, or independently revalidate after that notification. ` +
       backgroundFallback
     )
     return
@@ -81,8 +69,8 @@ function submitGuidedWorkflowCommand(
   )
 }
 
-// These commands deliberately select one Technical Review focus, then retain
-// that same child across the backend receipt barrier for bounded repair.
+// These commands deliberately select one Technical Review focus and retain
+// that same child for its bounded review and repair.
 // They do not create a second queue or special reviewer type. Strategy remains one
 // holistic `/strategy-auditor` command: it chooses its own lens set from the
 // evidence, records the usual typed receipt, and decides what it means.

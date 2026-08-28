@@ -30,7 +30,14 @@ Use `{{.RunFolder}}` as the primary retained run.{{end}}
    rotation history. Route size is evidence, not a mechanical quota. Then read the retained backlog, pending verification,
    `get_pulse_state(view="backlog", detail="compact")` exactly once, plus the
    latest meaningful run evidence, plan/store state, and cost/runtime evidence.
-   Select relevant issue/observation IDs from that bounded index, then request
+   **Navigate the Pulse store deliberately:** `issues` are the canonical repair
+   register; work from those roots first. `closed_issues` are prior roots to
+   reuse when new evidence is semantically the same. Historical `observations`
+   are audit-only and are not a review queue. Inspect the retained run artifacts
+   and deterministic runtime/validation receipts directly, then use judgment to
+   create, reopen, or reject a canonical issue only when that evidence supports
+   it. Never treat a raw historical observation count as either a clean system
+   or a backlog of confirmed bugs. Then request
    `detail="full"` only for those exact IDs (at most 20 per call). Never reload
    the complete compact index merely to filter or confirm a small ID set.
 3. Own the review yourself. Use a specialist child only when independent focused
@@ -48,7 +55,7 @@ Use `{{.RunFolder}}` as the primary retained run.{{end}}
 4. Deduplicate by root cause and leave one compact, ordered canonical repair
    queue. Do not apply repairs. Record the chosen focus exactly once, then call
    `complete_pulse_review(modules=["technical_review"], ...)` exactly once with
-   the truthful terminal review verdict. The later receipt-gated Fix phase owns
+   the truthful terminal review verdict. The same retained Review+Fix task owns
    mutations and repair outcome; it must not rewrite this review receipt.
 5. Finish with a concise summary of what was reviewed, promoted, linked,
    rejected, already verified, awaiting evidence, or blocked. State whether at

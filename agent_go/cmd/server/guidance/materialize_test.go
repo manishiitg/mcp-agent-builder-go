@@ -292,7 +292,7 @@ func TestEngineeringReviewUsesTheCanonicalReviewOnlySequence(t *testing.T) {
 		"Own the review yourself",
 		"Persist typed findings and matured verification",
 		"Do not apply repairs",
-		"later receipt-gated Fix phase owns",
+		"same retained Review+Fix task owns",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("engineering-review prompt is missing canonical sequence contract %q", want)

@@ -31,19 +31,35 @@ are focus lenses inside `technical_review`; they are not independent modules or
 receipts. Read that durable worklist yourself. Go does not choose reviewers or
 automatically launch a residual Fixer/recovery agent.
 
+## Navigating the Pulse store
+
+`get_pulse_state(view="backlog", detail="compact")` is a navigation index, not
+a command to process every row. Read its three species separately:
+
+- `issues`: the active canonical repair register. Start here; reuse the same
+  public PUL id for the same semantic root cause.
+- `closed_issues`: previously handled roots. New matching evidence reopens the
+  same root rather than creating a duplicate.
+- `observations`: historical audit evidence only. It is not an active queue;
+  inspect retained run artifacts and deterministic receipts directly instead.
+
+Pulse reviews run artifacts and deterministic receipts directly. Use judgment
+to create, reopen, or reject a canonical issue only when that evidence supports
+it. Raw historical observation volume is neither a bug count nor Fixer
+authorization.
+
 ## Sequenced Review + Fix dispatch
 
 The parent turn is a launcher, not a long-running parent review or Fixer.
 Use `run_in_background` for every selected child. When `technical_review` is
-due, use one `agent_type="executor"` child with one ordered
-`message_sequence`. Pass the exact parent `pulse_run_id`,
-`pulse_phase_contract="technical_review_then_fix"`, and
-`required_pulse_review_modules=["technical_review"]`. Give it the exact run-scoped checkpoint path from the
-dispatch message. Every turn reads that file first and updates it before
-ending, so context compaction cannot erase evidence or decisions. SQLite is
-still authoritative; the checkpoint is compact working memory, not a second
-issue database. Pass an opening `instruction`, then explicit follow-up items
-with a non-empty `message`; IDs and labels are optional diagnostics.
+due, use one `agent_type="executor"` child with
+`required_pulse_review_modules=["technical_review"]`. Put the exact parent
+`pulse_run_id` and run-scoped checkpoint path in its instruction. The retained
+child reviews and repairs in the same task; use `message_sequence` only when a
+later reasoning turn is genuinely needed, never as a review-permission gate.
+Every turn reads that checkpoint first and updates it before ending, so context
+compaction cannot erase evidence or decisions. SQLite is still authoritative;
+the checkpoint is compact working memory, not a second issue database.
 At the top of each checkpoint, keep the exact `pulse_run_id` and an explicit
 UTC `checkpoint_updated_at` timestamp. The opaque run-id suffix is not the
 authoritative clock; durable SQLite `recorded_at` values remain the final
@@ -97,8 +113,11 @@ evidence or could not change a decision, repair, or next check. This is durable
 coverage history for the next Pulse pass; the Markdown checkpoint remains only
 this run's notebook.
 
-1. **Prior verification + Technical Review** — verify every retained repair
-   whose evidence boundary arrived, then inspect runtime correctness,
+1. **Prior verification + Technical Review** — an applied repair is closed
+   immediately; a later run may rediscover and reopen the same root, but is not
+   a closure gate. If no repair was applied, keep the issue active or queue it
+   for Engineering with its next action; do not leave it in `awaiting_run`.
+   Then inspect runtime correctness,
    plan/artifact drift, and report/evaluation implementation selected by Gate.
    Start from typed SQLite backlog/attempt state, then read the current run's
    checkpoint if it already exists. Do not rediscover prior analysis merely
@@ -167,21 +186,21 @@ their declared interference domains do not overlap; proposed or approved but
 not started experiments do not consume an active slot.
 
 Give each child the Pulse run ID, selected lens, Gate evidence, checkpoint
-path, and clear read/review authority. The last technical review message owns
-typed review writes because it has the complete review context; at least one
-later message must remain for the receipt-gated repair phase. Strategic Review
-may write its own terminal receipt because no later Fixer mutates its work.
+path, and clear authority. The Technical Maintenance task owns its typed review
+writes, bounded repair, proportional verification, terminal result, and
+completed receipt before it ends. Strategic Review may write its own terminal
+receipt because it never mutates implementation.
 Launch all selected children, then end the parent turn without polling. The
 runtime waits for registered children. The parent validates saved review and
 module-result state after the sequence completes; it must not reconstruct
 findings from truncated automatic-notification prose. If a child dies before
 persistence, record that module as incomplete instead of inventing findings.
 
-## Receipt-gated repair phase
+## Same-task bounded repair
 
-After the retained technical executor returns from its completed receipt turn,
-the backend unlocks the next sequence message. Reload the Gate worklist,
-canonical issues, saved reviewer records, and the Technical Review checkpoint.
+After reviewing the Gate worklist, canonical issues, saved reviewer records,
+and Technical Review checkpoint, select a repair only when it is bounded and
+safe.
 Workflow observations are evidence, not repair work. Select a bounded repair
 batch from canonical issues. Start with the highest-value coherent bundle;
 several issues may share it only when they have one root cause, compatible
@@ -190,13 +209,13 @@ requires no broad rediscovery, has an independently clear proof boundary, and
 fits the retained context plus targeted evidence. Do not batch different
 public-action risk, user-decision, route-context, or unresolved-design work.
 
-Do not launch a fresh Fixer. The same retained executor may now modify safe
-owned targets, record exact attempts and dispositions, run proportional proof,
-and update the compact checkpoint. It must not write or replace its terminal
-`technical_review` receipt: review completion and repair outcome are separate
-facts. Unselected issues remain durable. If no safe canonical objective exists,
-record a truthful terminal technical module result and preserve the reviewer
-receipt. Do not repeat Strategic Review.
+Do not launch a fresh Fixer. The same retained executor may modify safe owned
+targets, record exact attempts and dispositions, run proportional proof, update
+the compact checkpoint, then persist its terminal `technical_review` receipt.
+The receipt and repair outcome remain separate facts, but the receipt is no
+longer a permission switch. Unselected issues remain durable. If no safe
+canonical objective exists, record a truthful terminal technical module result
+and completed receipt. Do not repeat Strategic Review.
 
 Read module/worklist state, `get_pulse_state(view="backlog", detail="compact")`
 once, and saved SQLite reviewer results. Choose relevant public PUL ids from
@@ -384,16 +403,14 @@ Use `external_action_required` only when the finding is real but no workflow
 change can address it. Record `external_owner`, a stable `reason_code`, and an
 evidence/capability/user `reopen_condition`. This removes it from Pulse's active
 queue and suppresses unchanged rediscovery while keeping it visible on the
-external-action board. `awaiting_run` is a real finding waiting only on a scheduled run to produce its
-evidence: no fix was applied and nobody is stuck. It requires `next_check`
-naming that run. Use it rather than `blocked` whenever the answer is "the data
-does not exist yet" — calling that blocked points the operator at a decision
-that does not exist and hides the ones that do.
+external-action board. Do not use `awaiting_run`: legacy waits are returned to
+the active register so they cannot wait silently. If no repair was applied,
+keep the issue open or use `queued_for_engineering` when a safe repair exists.
 `queued_for_engineering` means a safe workflow repair exists but was not chosen
 for this pass. It remains on Gate's active queue and requires `next_check`
 naming the next Engineering/Pulse pass. Never call deferred, deprioritized, or
 unattempted work `blocked`. `blocked` is only for a genuine current condition
-with no safe action at all; `awaiting_run` is for a future run/evidence boundary.
+with no safe action at all.
 
 Dashboard rendering, backup, publishing, and notification are owned by the
 ordered Pulse finalizer. A reviewer or Engineering/Ops executor being forbidden to perform those
@@ -546,10 +563,10 @@ wait for named evidence. Operational observations
 may be cross-referenced to the matching module during consolidation, but never
 rewritten as a dependency or used to suppress that module's result.
 Strategic operational findings remain out-of-scope observations.
-Only the retained Technical Maintenance executor mutates workflow state, and
-only after its receipt barrier opens. It reviews, consolidates, repairs, and
-verifies in its one ordered message sequence; it must not create a duplicate
-Fixer, recovery agent, or separately scoped repair child. The parent continuation only records typed receipts
+Only the retained Technical Maintenance executor mutates workflow state. It
+reviews, consolidates, repairs, and verifies in its one retained task; it must
+not create a duplicate Fixer, recovery agent, or separately scoped repair
+child. The parent continuation only records typed receipts
 from completed children and never mutates workflow artifacts. Neither reviewer
 nor executor writes a separate Pulse presentation artifact; the Pulse popup reads
 the typed records directly.

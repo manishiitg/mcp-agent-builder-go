@@ -94,7 +94,7 @@ func TestMessageSequenceClosingItems(t *testing.T) {
 	}
 	// The routing rule is the whole point of merging; without it the turn is
 	// just the old learnings turn with extra access.
-	for _, want := range []string{"Route each thing to the store that owns it", "record_run_concern", "not a learning"} {
+	for _, want := range []string{"Route each thing to the store that owns it", "Pulse Technical Review", "not a learning"} {
 		if !strings.Contains(items[0].Message, want) {
 			t.Errorf("reflection message missing %q", want)
 		}

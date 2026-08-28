@@ -106,13 +106,13 @@ func TestMessageSequenceSummaryPropagatesItemConcerns(t *testing.T) {
 	}
 
 	got := (&StepBasedWorkflowOrchestrator{}).summarizeMessageSequenceSession(session)
-	for _, want := range []string{
-		"Message sequence publish-sequence completed: 2 item(s) completed",
-		"CONCERNS: publish: analytics receipt was unavailable.",
-	} {
+	for _, want := range []string{"Message sequence publish-sequence completed: 2 item(s) completed"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("message-sequence summary missing %q: %s", want, got)
 		}
+	}
+	if strings.Contains(got, "CONCERNS:") {
+		t.Fatalf("message-sequence summary must not parse item prose into concerns: %s", got)
 	}
 }
 

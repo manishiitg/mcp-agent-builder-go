@@ -1943,19 +1943,6 @@ func runServer(cmd *cobra.Command, args []string) {
 	// and virtual tool categories (e.g. workflow) alongside real MCP servers. Claude Code agents
 	// call them all via /tools/mcp/{server}/{tool}. The routeMCPRequest helper detects these
 	// categories and redirects to the correct handler (custom or virtual).
-	enforcePulseMaintenancePhase := func(w http.ResponseWriter, r *http.Request, tool string) bool {
-		sessionID := strings.TrimSpace(r.Header.Get("X-Session-ID"))
-		if sessionID == "" {
-			sessionID = strings.TrimSpace(mux.Vars(r)["session_id"])
-		}
-		if allowed, reason := todo_creation_human.PulseMaintenanceToolAllowed(sessionID, tool); !allowed {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusForbidden)
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": reason, "phase": "pulse_technical_review"})
-			return false
-		}
-		return true
-	}
 	routeMCPRequest := func(w http.ResponseWriter, r *http.Request, server, tool string) {
 		// Global bridge URLs carry the session in X-Session-ID. Preserve it in
 		// context as well as the request header so workspace tools can resolve
@@ -1963,9 +1950,6 @@ func runServer(cmd *cobra.Command, args []string) {
 		// grants (for example the native Chrome Downloads directory).
 		if sid := strings.TrimSpace(r.Header.Get("X-Session-ID")); sid != "" {
 			r = r.WithContext(context.WithValue(r.Context(), common.ChatSessionIDKey, sid))
-		}
-		if !enforcePulseMaintenancePhase(w, r, tool) {
-			return
 		}
 		if isMCPBridgeCustomToolCategory(server) {
 			log.Printf("[ROUTE] Redirecting /tools/mcp/%s/%s → custom tool handler", server, tool)
@@ -1992,16 +1976,10 @@ func runServer(cmd *cobra.Command, args []string) {
 		if sid := strings.TrimSpace(r.Header.Get("X-Session-ID")); sid != "" {
 			r = r.WithContext(context.WithValue(r.Context(), common.ChatSessionIDKey, sid))
 		}
-		if !enforcePulseMaintenancePhase(w, r, vars["tool"]) {
-			return
-		}
 		executorHandlers.HandlePerToolCustomRequest(w, r, vars["tool"])
 	}).Methods("POST", "OPTIONS")
 	toolsRouter.HandleFunc("/virtual/{tool}", func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
-		if !enforcePulseMaintenancePhase(w, r, vars["tool"]) {
-			return
-		}
 		executorHandlers.HandlePerToolVirtualRequest(w, r, vars["tool"])
 	}).Methods("POST", "OPTIONS")
 
@@ -2030,17 +2008,11 @@ func runServer(cmd *cobra.Command, args []string) {
 		// Inject ChatSessionIDKey so execute_shell_command can look up
 		// the session's working directory and folder guard from the global map.
 		ctx := context.WithValue(r.Context(), common.ChatSessionIDKey, sid)
-		if !enforcePulseMaintenancePhase(w, r, tool) {
-			return
-		}
 		executorHandlers.HandlePerToolCustomRequest(w, r.WithContext(ctx), tool)
 	}).Methods("POST", "OPTIONS")
 	sessionToolsRouter.HandleFunc("/virtual/{tool}", func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
 		r.Header.Set("X-Session-ID", vars["session_id"])
-		if !enforcePulseMaintenancePhase(w, r, vars["tool"]) {
-			return
-		}
 		executorHandlers.HandlePerToolVirtualRequest(w, r, vars["tool"])
 	}).Methods("POST", "OPTIONS")
 

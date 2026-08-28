@@ -722,24 +722,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) applyStepConfigToAgentConfig(config *
 			hcpo.GetLogger().Info(fmt.Sprintf("🔧 Step config found but no SelectedTools specified - using orchestrator defaults: %v", config.SelectedTools))
 		}
 	}
-	// record_run_concern is capability-derived, not model-selected (same
-	// reasoning as prepareCustomTools' EnabledCustomTools branch below): a
-	// step's identity is already set up for it via configureRunConcernSession
-	// at this session (called by the caller just before this function runs),
-	// but neither branch above ever added the tool itself to SelectedTools --
-	// confirmed live (2026-08-17, confida-login) as the reason a reflection
-	// turn reported record_run_concern as unregistered despite the prompt
-	// naming it. Force it in so identity setup and tool availability agree.
-	hasRunConcernTool := false
-	for _, name := range config.SelectedTools {
-		if name == "workflow_db:record_run_concern" {
-			hasRunConcernTool = true
-			break
-		}
-	}
-	if !hasRunConcernTool {
-		config.SelectedTools = append(config.SelectedTools, "workflow_db:record_run_concern")
-	}
+	config.SelectedTools = withoutRetiredRunConcernTool(config.SelectedTools)
 
 	// Determine execution mode: CLI providers and scripted steps always use code execution mode.
 	// scripted steps need code execution mode so the agent gets the tool index and get_api_spec
@@ -844,11 +827,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) prepareCustomTools(stepConfig *AgentC
 		// runs through this same path) can always read its own workflow's cost
 		// and token breakdown.
 		enabledTools = append(enabledTools, "workflow_costs:query_workflow_costs")
-		// PLAT-055. Every step can raise a structured concern. This is
-		// capability-derived like the DB tools above: a step that observed a
-		// defect must always be able to report it, and a custom allowlist must
-		// not be able to silence that channel.
-		enabledTools = append(enabledTools, "workflow_db:record_run_concern")
 
 		// Auto-include workspace_browser:* if agent_browser exists in the workspace tools pool
 		// (present when preset has enable_browser_access: true) and not already listed.
@@ -869,6 +847,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) prepareCustomTools(stepConfig *AgentC
 			}
 		}
 
+		enabledTools = withoutRetiredRunConcernTool(enabledTools)
 		// Filter tools based on unified format (category:tool or category:*)
 		toolsToRegister, executorsToUse = orchestrator.FilterCustomToolsByCategory(
 			hcpo.WorkspaceTools,
@@ -885,10 +864,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) prepareCustomTools(stepConfig *AgentC
 			"workflow_db:query_workflow_db",
 			// PLAT-184, capability-derived like query_workflow_db above.
 			"workflow_costs:query_workflow_costs",
-			// Capability-derived like query_workflow_db above, not part of the
-			// default/custom distinction this function otherwise draws -- see
-			// the EnabledCustomTools branch's identical inclusion a few lines up.
-			"workflow_db:record_run_concern",
 		}
 		if resolveDBAccess(stepConfig) == DBAccessReadWrite {
 			defaultEnabledTools = append(defaultEnabledTools, "workflow_db:mutate_workflow_db")
@@ -901,6 +876,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) prepareCustomTools(stepConfig *AgentC
 				break
 			}
 		}
+		defaultEnabledTools = withoutRetiredRunConcernTool(defaultEnabledTools)
 		toolsToRegister, executorsToUse = orchestrator.FilterCustomToolsByCategory(
 			hcpo.WorkspaceTools,
 			hcpo.WorkspaceToolExecutors,
@@ -910,6 +886,20 @@ func (hcpo *StepBasedWorkflowOrchestrator) prepareCustomTools(stepConfig *AgentC
 	}
 
 	return toolsToRegister, executorsToUse
+}
+
+// withoutRetiredRunConcernTool prevents legacy workflow configuration from
+// re-enabling the retired step-observation writer. Pulse reviews retained step
+// evidence and deterministic receipts directly instead.
+func withoutRetiredRunConcernTool(tools []string) []string {
+	filtered := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		if strings.TrimSpace(tool) == "workflow_db:record_run_concern" {
+			continue
+		}
+		filtered = append(filtered, tool)
+	}
+	return filtered
 }
 
 // prepareWorkspaceToolsOnly prepares minimal tools for KB maintenance agents.
@@ -1315,9 +1305,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 	config.MCPSessionID = execSessionID
 	directDBAccess := isScriptedExecutionModeConfig(stepConfig)
 	configureWorkflowDBSession(execSessionID, hcpo.GetWorkspacePath(), dbAccess, directDBAccess)
-	// PLAT-055. record_run_concern attributes from this trusted identity rather
-	// than from tool arguments, so a step cannot file against another step.
-	hcpo.configureRunConcernSession(execSessionID, stepID, ConcernPhaseExecution)
 	// Bind the per-step tool session to the workflow's browser session. Tool-session
 	// isolation protects folder and DB permissions without creating a second browser.
 	sharedBrowserSessionID := hcpo.resolveWorkshopBrowserSessionID(hcpo.currentGroupName)
@@ -1655,15 +1642,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) createTodoTaskOrchestratorAgent(ctx c
 	dbAccess := resolveEffectiveDBAccess(stepConfig, hcpo.isEvaluationMode, false)
 	directDBAccess := isScriptedExecutionModeConfig(stepConfig)
 	configureWorkflowDBSession(todoSessionID, hcpo.GetWorkspacePath(), dbAccess, directDBAccess)
-	// record_run_concern is registered for every workflow-mode session, so the
-	// orchestrator is offered the tool whether or not it can use it. Without a
-	// trusted identity on this session the call fails with "no trusted step
-	// identity" — the orchestrator sees an advertised tool that always errors,
-	// and its own observations (a route that keeps failing, a sub-agent that
-	// never produced its artifact) have nowhere structured to go. It owns a
-	// dedicated session already, so this attributes to its own step ID and
-	// cannot file against another step.
-	hcpo.configureRunConcernSession(todoSessionID, stepID, ConcernPhaseExecution)
 	if subAgentExecCtx != nil {
 		subAgentExecCtx.ToolSessionID = todoSessionID
 	}
@@ -1694,26 +1672,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) createTodoTaskOrchestratorAgent(ctx c
 	} else {
 		config.SelectedTools = hcpo.GetSelectedTools()
 		hcpo.GetLogger().Info(fmt.Sprintf("🔧 Using orchestrator default todo task orchestrator tools: %v", config.SelectedTools))
-	}
-	// The comment above configureRunConcernSession claims record_run_concern is
-	// "registered for every workflow-mode session" -- that was true of the
-	// underlying tool registry but never actually reflected here: neither
-	// branch above adds it to SelectedTools, so it was advertised nowhere for
-	// this agent (confirmed live: confida-login's survey-app-and-refresh-
-	// knowledge todo-orchestrator session had query_workflow_db/
-	// mutate_workflow_db -- because the workflow's own declared tools happen
-	// to include them -- but never record_run_concern, which nobody would
-	// think to declare manually). Force it in, matching the equivalent
-	// capability-derived force-include for the regular step-execution path.
-	hasRunConcernTool := false
-	for _, name := range config.SelectedTools {
-		if name == "workflow_db:record_run_concern" {
-			hasRunConcernTool = true
-			break
-		}
-	}
-	if !hasRunConcernTool {
-		config.SelectedTools = append(config.SelectedTools, "workflow_db:record_run_concern")
 	}
 
 	// Enable code execution mode for CLI providers that need HTTP bridge tool routing.

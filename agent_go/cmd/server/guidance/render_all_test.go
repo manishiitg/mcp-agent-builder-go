@@ -191,7 +191,7 @@ func TestManualPulseCommandsKeepRunSetupReviewAndFixBoundariesSeparate(t *testin
 			"Own the review yourself",
 			"link it to an existing issue, promote it with evidence, or reject it",
 			"Do not apply repairs",
-			"later receipt-gated Fix phase",
+			"same retained Review+Fix task",
 		},
 		"pulse-fixer": {
 			"PULSE FIX PHASE",

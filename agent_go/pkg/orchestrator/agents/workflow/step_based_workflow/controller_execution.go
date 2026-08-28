@@ -2507,17 +2507,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 							hcpo.GetLogger().Info(fmt.Sprintf("🧠 Reflection completed for step %d (history=%d turns)", stepIndex+1, len(executionConversationHistory)))
 						}
 					}
-					// File any CONCERNS: lines durably BEFORE the summaries are joined.
-					// Phase attribution is free here and nowhere else — once they are
-					// concatenated there is no way to tell a contradiction found while
-					// reflecting from one raised by the task itself. Since PLAT-055
-					// merged the KB and learnings turns, reflection files under the
-					// learnings phase; kb-review remains a valid phase for historical
-					// rows and for concerns raised through record_run_concern.
-					hcpo.recordStepConcerns(ctx, step.GetID(), map[string]string{
-						ConcernPhaseExecution: mainExecutionSummary,
-						ConcernPhaseLearnings: directLearningsSummary,
-					})
+					// Step summaries are retained run evidence. Pulse reviews that
+					// evidence directly; the runtime must not scrape prose into the
+					// Pulse observation store or attempt text-based deduplication.
 
 					if combinedSummary := buildDirectModeCompletionSummary(mainExecutionSummary, "", directLearningsSummary); combinedSummary != "" {
 						executionResult = combinedSummary

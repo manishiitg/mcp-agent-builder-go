@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/common"
 )
 
 // PLAT-055. A step used to have exactly one way to report anything that was not
@@ -30,21 +28,6 @@ import (
 // The difference from RecordPulseReviewFinding is ownership: a step files
 // against its own step ID and execution phase, and never manages the backlog —
 // no issue_id updates, no merges. Steps report; Pulse curates.
-
-// configureRunConcernSession records the trusted step identity that
-// record_run_concern files against, mirroring configureWorkflowDBSession.
-func (hcpo *StepBasedWorkflowOrchestrator) configureRunConcernSession(sessionID, stepID, phase string) {
-	if strings.TrimSpace(sessionID) == "" {
-		return
-	}
-	common.SetRunConcernSessionContext(sessionID, common.RunConcernSessionContext{
-		WorkspacePath: hcpo.GetWorkspacePath(),
-		RunFolder:     hcpo.selectedRunFolder,
-		GroupName:     hcpo.currentGroupName,
-		StepID:        strings.TrimSpace(stepID),
-		Phase:         phase,
-	})
-}
 
 // StepRunConcernInput is one structured concern raised by a step.
 type StepRunConcernInput struct {

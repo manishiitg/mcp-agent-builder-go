@@ -15,7 +15,7 @@ import (
 
 func TestWorkflowVersionUpgradePlanSkipsArtifactPurityAlreadyReached(t *testing.T) {
 	plan := workflowVersionUpgradePlan(&WorkflowManifest{Version: "1.0.21"})
-	if len(plan) != 9 {
+	if len(plan) != 10 {
 		t.Fatalf("plan from 1.0.21 = %d steps, want audit, direct-report, scheduled-route, dedicated-Pulse, schedule-prompt, finalizer-ownership, report-activity-section, report-activity-tab, then Pulse lifecycle migration: %+v", len(plan), plan)
 	}
 	if plan[0].label != "upgrade-learnings-lock-audit" {
@@ -45,7 +45,7 @@ func TestWorkflowVersionUpgradePlanSkipsArtifactPurityAlreadyReached(t *testing.
 	if plan[7].label != "upgrade-report-activity-tab" || plan[7].to != workflowContractReportActivityTabVersion {
 		t.Fatalf("plan[7] = %+v, want report-activity-tab migration", plan[7])
 	}
-	if plan[8].label != "upgrade-pulse-lifecycle-reconciliation" || plan[8].to != WorkflowContractCurrentVersion {
+	if plan[8].label != "upgrade-pulse-lifecycle-reconciliation" || plan[8].to != workflowContractPulseLifecycleReconciliationVersion || plan[9].label != "upgrade-pulse-backlog-triage" || plan[9].to != WorkflowContractCurrentVersion {
 		t.Fatalf("plan[8] = %+v, want Pulse lifecycle migration reaching current version", plan[8])
 	}
 	for _, label := range []string{"upgrade-current-artifact-contract"} {
@@ -59,7 +59,7 @@ func TestWorkflowVersionUpgradePlanSkipsArtifactPurityAlreadyReached(t *testing.
 
 func TestWorkflowVersionUpgradePlanOlderWorkflowGetsBothFinalSteps(t *testing.T) {
 	plan := workflowVersionUpgradePlan(&WorkflowManifest{Version: "1.0.20"})
-	if len(plan) != 10 {
+	if len(plan) != 11 {
 		t.Fatalf("plan from 1.0.20 = %d steps, want artifact-purity, audit, report, scheduled-route, dedicated-Pulse, schedule-prompt, finalizer-ownership, report-activity-section, report-activity-tab, then Pulse lifecycle migration: %+v", len(plan), plan)
 	}
 	if plan[0].label != "upgrade-current-artifact-contract" || plan[0].to != workflowContractArtifactPurityVersion {
@@ -89,7 +89,7 @@ func TestWorkflowVersionUpgradePlanOlderWorkflowGetsBothFinalSteps(t *testing.T)
 	if plan[8].label != "upgrade-report-activity-tab" || plan[8].to != workflowContractReportActivityTabVersion {
 		t.Fatalf("plan[8] = %+v, want report-activity-tab migration", plan[8])
 	}
-	if plan[9].label != "upgrade-pulse-lifecycle-reconciliation" || plan[9].to != WorkflowContractCurrentVersion {
+	if plan[9].label != "upgrade-pulse-lifecycle-reconciliation" || plan[9].to != workflowContractPulseLifecycleReconciliationVersion || plan[10].label != "upgrade-pulse-backlog-triage" || plan[10].to != WorkflowContractCurrentVersion {
 		t.Fatalf("plan[9] = %+v, want Pulse lifecycle migration reaching current version", plan[9])
 	}
 }

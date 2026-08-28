@@ -1,11 +1,11 @@
 ## Pulse Bug Review — read-only QA and execution-trace contract
 
 Load this when the Technical Review runtime/logic focus is selected.
-It is the deep read-only execution evidence pack used by Technical Review and
-the Review sequence before the receipt-gated Fix phase. Gate does not load it — Gate only decides whether
-`technical_review` is due from the durable worklist recorded by Pulse Gate. The reviewer inspects and advises;
-only the Pulse Fixer applies bounded repairs, and only for confirmed
-`correctness_bug` findings.
+It is the deep execution evidence pack used by the retained Technical Review+Fix
+task. Gate does not load it — Gate only decides whether `technical_review` is
+due from the durable worklist recorded by Pulse Gate. The retained reviewer
+inspects, applies only bounded safe repairs for confirmed `correctness_bug`
+findings, and records its evidence and outcome before ending.
 
 The read-only reviewer identifies and scopes the defect from run/eval evidence,
 execution logs, validation, prompts/config, stale artifacts, and evidence-chain

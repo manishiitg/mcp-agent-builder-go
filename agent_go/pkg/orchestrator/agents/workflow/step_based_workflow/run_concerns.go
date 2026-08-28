@@ -536,38 +536,6 @@ func ResolveRunConcern(ctx context.Context, workspacePath, fingerprint, status, 
 	return nil
 }
 
-// recordStepConcerns files concerns from each named phase summary.
-//
-// Best-effort on purpose: a step that completed its work must never be failed by
-// a bookkeeping write. A failure here is logged and the run continues — the
-// concern still appears inline in the completion summary either way, so the
-// worst case is losing recurrence tracking for one occurrence, not the report.
-func (hcpo *StepBasedWorkflowOrchestrator) recordStepConcerns(ctx context.Context, stepID string, summariesByPhase map[string]string) error {
-	workspacePath := strings.TrimSpace(hcpo.GetWorkspacePath())
-	if workspacePath == "" {
-		return nil
-	}
-	var recordErrors []string
-	for phase, summary := range summariesByPhase {
-		if strings.TrimSpace(summary) == "" {
-			continue
-		}
-		n, err := RecordRunConcerns(ctx, workspacePath, hcpo.selectedRunFolder, hcpo.currentGroupName, stepID, phase, summary)
-		if err != nil {
-			hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Failed to record %s concerns for step %s: %v", phase, stepID, err))
-			recordErrors = append(recordErrors, phase+": "+err.Error())
-			continue
-		}
-		if n > 0 {
-			hcpo.GetLogger().Info(fmt.Sprintf("📌 Recorded %d %s concern(s) for step %s", n, phase, stepID))
-		}
-	}
-	if len(recordErrors) > 0 {
-		return fmt.Errorf("record concerns for %s: %s", stepID, strings.Join(recordErrors, "; "))
-	}
-	return nil
-}
-
 // LoadPriorPreValidationFailures returns this step's still-open prevalidation
 // concerns, newest first, so the next run can be told what its last output got
 // wrong.

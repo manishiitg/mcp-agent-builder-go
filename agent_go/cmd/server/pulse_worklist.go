@@ -930,6 +930,9 @@ func recordPulseWorklistWithMode(ctx context.Context, workspacePath, pulseRunID,
 	if err := validatePulseWorklistDecisions(decisions); err != nil {
 		return nil, err
 	}
+	if err := validateDeterministicIntakeRouting(ctx, workspacePath, decisions); err != nil {
+		return nil, err
+	}
 	normalized, db, err := openPulseModuleStateDB(ctx, workspacePath, true)
 	if err != nil {
 		return nil, err
@@ -1012,6 +1015,60 @@ func recordPulseWorklistWithMode(ctx context.Context, workspacePath, pulseRunID,
 		return nil, err
 	}
 	return states, nil
+}
+
+// validateDeterministicIntakeRouting closes the gap between a failed objective
+// check and the agentic review that interprets it. It never creates an issue or
+// authorizes a repair: it only prevents Gate from suppressing Technical Review
+// when retained structured evidence already proves that review is needed.
+func validateDeterministicIntakeRouting(ctx context.Context, workspacePath string, decisions []PulseWorklistDecision) error {
+	reasons := []string{}
+	runtimeResult := pulseintake.CheckRuntime(workspacePath, time.Now().UTC())
+	lastTechnicalCheck := lastPulseModuleCheck(ctx, workspacePath, pulseModuleTechnicalReview)
+	newRuntimeFindings := 0
+	for _, finding := range runtimeResult.Findings {
+		observedAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(finding.ObservedAt))
+		// Module checkpoints are stored at second precision. Compare at that
+		// same precision so a run written earlier in the checkpoint's second is
+		// not misclassified as new forever because its filesystem mtime has nanos.
+		if err != nil || lastTechnicalCheck.IsZero() || observedAt.Truncate(time.Second).After(lastTechnicalCheck) {
+			newRuntimeFindings++
+		}
+	}
+	if newRuntimeFindings > 0 && runtimeResult.CoverageStatus != pulseintake.CoverageUnavailable {
+		reasons = append(reasons, fmt.Sprintf("runtime intake reported %d new structured failure signal(s)", newRuntimeFindings))
+	}
+	planBacklog := step_based_workflow.CollectPlanChangeBacklog(workspacePath)
+	planResult := step_based_workflow.BuildPlanChangeDependencyIntake(planBacklog)
+	if planResult.Failed {
+		reasons = append(reasons, fmt.Sprintf("%d current-contract plan change(s) lack complete dependency coverage", planResult.FailureCount))
+	}
+	if len(reasons) == 0 {
+		return nil
+	}
+	for _, decision := range decisions {
+		if normalizePulseModule(decision.Module) == pulseModuleTechnicalReview && decision.Due {
+			return nil
+		}
+	}
+	return fmt.Errorf("technical_review must be due because deterministic intake failed: %s. Route these facts to an agentic Technical Review; they are not automatic Pulse issues and do not authorize a Fixer", strings.Join(reasons, "; "))
+}
+
+func lastPulseModuleCheck(ctx context.Context, workspacePath, module string) time.Time {
+	states, err := getPulseModuleStates(ctx, workspacePath)
+	if err != nil {
+		return time.Time{}
+	}
+	for _, state := range states {
+		if normalizePulseModule(state.Module) != module {
+			continue
+		}
+		checkedAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(state.LastCheckedAt))
+		if err == nil {
+			return checkedAt
+		}
+	}
+	return time.Time{}
 }
 
 func recordPulseWorklistOnce(ctx context.Context, workspacePath, pulseRunID string, decisions []PulseWorklistDecision) ([]PulseModuleState, error) {
@@ -1876,7 +1933,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 	}}
 	reconcileLifecycleTool := llmtypes.Tool{Type: "function", Function: &llmtypes.FunctionDefinition{
 		Name:        "record_pulse_lifecycle_reconciliation",
-		Description: "Run the idempotent close-on-applied compatibility migration for this workflow's Pulse register. It closes only legacy applied fixes with changed files and no failed immediate check, retires merged aliases, and preserves all history. Use only for the workflow-contract v1.0.32 upgrade; it never edits the workflow plan or schedules.",
+		Description: "Run the idempotent close-on-applied compatibility migration for this workflow's Pulse register. It closes every active issue with a recorded applied repair and changed files, moves legacy unfixed waiting rows back to the active register, retires merged aliases, and preserves all history. Use only for the workflow-contract v1.0.32 upgrade; it never edits the workflow plan or schedules.",
 		Parameters: llmtypes.NewParameters(map[string]interface{}{"type": "object", "additionalProperties": false, "properties": map[string]interface{}{
 			"workspace_path": map[string]interface{}{"type": "string", "description": "Workflow-relative path, e.g. Workflow/social-media."},
 		}, "required": []string{"workspace_path"}}),
@@ -1895,7 +1952,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
 			Name:        "record_pulse_worklist",
-			Description: fmt.Sprintf("Record the dynamic Pulse worklist for this run in the workflow's db/db.sqlite. Pulse Gate must call this exactly once after choosing the agent-owned pass mode and deciding which perspectives are due or skipped. backlog_drain verifies and repairs retained issues without broad discovery; discovery investigates materially new evidence; strategy is for selected product/goal work; observe runs no reviewer or fixer. Go validates the declared mode but never selects it. The decisions array must contain exactly one entry for each current Pulse module: %s. technical_review is one retained reviewer that agentically selects the smallest sufficient route-aware focus set across correctness, stores, reports/evals, safety, runtime/tools, orchestration, model/tier fitness, cost, schedule recovery, or execution efficiency. strategic_review separately owns current-strategy adequacy and conditional discovery of materially different approaches. A small route may justify one focus; a large or multi-route workflow may justify several when each has distinct evidence and decision value. Select only work justified by evidence and expected value; explicitly defer lower-priority lenses with a reason and next-check boundary. Do not pass retired module names. Every skipped module must include next_check_at, next_check_after_run_id, or a positive cooldown_runs value.", strings.Join(pulseModuleOrder, ", ")),
+			Description: fmt.Sprintf("Record the dynamic Pulse worklist for this run in the workflow's db/db.sqlite. Pulse Gate must call this exactly once after choosing the agent-owned pass mode and deciding which perspectives are due or skipped. backlog_drain verifies and repairs retained issues without broad discovery; discovery investigates materially new evidence; strategy is for selected product/goal work; observe runs no reviewer or fixer. Go validates the declared mode but never selects it. The decisions array must contain exactly one entry for each current Pulse module: %s. This is a small scheduling receipt, not a review-plan payload: in each decision use only module, due, reason, evidence, next_check_at, next_check_after_run_id, and cooldown_runs. Never send focuses, route_scope, issue_ids, deferred_focuses, decision, or other review-plan fields; unknown fields reject the whole worklist. State scope and lower-priority deferrals in reason/evidence and the next-check boundary. The later reviewer independently selects and persists actual focus coverage after it has inspected evidence. Do not pass retired module names. Every skipped module must include next_check_at, next_check_after_run_id, or a positive cooldown_runs value.", strings.Join(pulseModuleOrder, ", ")),
 			Parameters: llmtypes.NewParameters(map[string]interface{}{
 				"type":                 "object",
 				"additionalProperties": false,
@@ -2310,6 +2367,7 @@ func readPulseModuleStateView(ctx context.Context, workspacePath, pulseRunID str
 	// already stamps the ones that have been reconciled; nothing counted
 	// the remainder, so Gate had to derive it from the files each run.
 	planBacklog := step_based_workflow.CollectPlanChangeBacklog(workspacePath)
+	planDependencyIntake := step_based_workflow.BuildPlanChangeDependencyIntake(planBacklog)
 	// What each reviewer has actually been finding. Without this the choice
 	// between modules is a guess: nothing distinguished a module that keeps
 	// surfacing real breakage from one that returns clean every time.
@@ -2353,22 +2411,27 @@ func readPulseModuleStateView(ctx context.Context, workspacePath, pulseRunID str
 	payload, _ := json.Marshal(map[string]interface{}{
 		"modules": states,
 		// Backward-compatible aliases now intentionally mean canonical issues.
-		"open_concerns":                pulseLifecycleAgentProjection(issues, "issue_id"),
-		"open_concern_count":           len(issues),
-		"canonical_issues":             pulseLifecycleAgentProjection(issues, "issue_id"),
-		"canonical_issue_count":        len(issues),
-		"concerns_note":                "Complete active canonical issue backlog. These have been accepted by a reviewer or entered lifecycle work; they are not raw step emissions.",
-		"workflow_observations":        pulseLifecycleAgentProjection(observations, "observation_id"),
-		"workflow_observation_count":   len(observations),
-		"workflow_observations_note":   "Unclassified evidence emitted by workflow steps. Gate may select a relevant cluster for review. A reviewer must link, reject, or promote it agentically; recurrence alone does not make it a bug. To promote one, submit its observation_id unchanged as issue_id to record_pulse_finding.",
+		"open_concerns":              pulseLifecycleAgentProjection(issues, "issue_id"),
+		"open_concern_count":         len(issues),
+		"canonical_issues":           pulseLifecycleAgentProjection(issues, "issue_id"),
+		"canonical_issue_count":      len(issues),
+		"concerns_note":              "Complete active canonical issue backlog. These have been accepted by a reviewer or entered lifecycle work; they are not raw step emissions.",
+		"workflow_observations":      []map[string]interface{}{},
+		"workflow_observation_count": len(observations),
+		"workflow_observations_note": "Historical observation rows are retained for audit only and are no longer an active Pulse intake. Technical Review reads retained run artifacts and deterministic receipts directly; do not load or classify these rows as a queue.",
+		"pulse_store_navigation": map[string]string{
+			"issues":                "Canonical repair roots. Reuse the existing public PUL issue_id for the same semantic root cause.",
+			"closed_issues":         "Previously handled roots. Matching new evidence reopens the same root rather than creating a duplicate.",
+			"workflow_observations": "Historical audit evidence only. It is not an active reviewer queue; Technical Review reads retained run artifacts and deterministic receipts directly.",
+		},
 		"suppressed_concerns":          pulseConcernAgentProjection(suppressedConcerns),
 		"suppressed_concern_count":     len(suppressedConcerns),
 		"suppressed_concerns_note":     "Diagnosed real findings owned outside this workflow. Do not report an unchanged fingerprint as a new finding or spend active review effort on it. A materially changed target/evidence creates or reopens an active finding; the recorded reopen condition explains the boundary.",
 		"plan_change_backlog":          planBacklog,
 		"loop_closure":                 loopClosure,
 		"loop_closure_note":            "Read-only deterministic evidence. Gate may weigh verified findings alongside other facts, but they do not mandate a module or authorize mutation. coverage_status must be verified before an empty findings list means clean.",
-		"deterministic_intake":         map[string]interface{}{"runtime": runtimeIntake},
-		"deterministic_intake_note":    "Read-only typed evidence from retained runtime receipts. A signal is a review lead, not an automatic Pulse issue or Fixer authorization. coverage_status must be verified before an empty findings list means clean.",
+		"deterministic_intake":         map[string]interface{}{"runtime": runtimeIntake, "plan_change_dependencies": planDependencyIntake},
+		"deterministic_intake_note":    "Read-only typed evidence from retained runtime receipts and current-contract plan-change dependency receipts. A failed signal requires agentic Technical Review, but is not an automatic Pulse issue or Fixer authorization. coverage_status must be verified before an empty findings list means clean.",
 		"module_review_history":        reviewHistory,
 		"review_history_note":          "What each reviewer concluded the last few times it ran, most recently run first. A module absent from this list has not run in the retained window at all. Use it to justify each skip: a module that keeps returning real findings is a poor candidate for another cooldown, and one that has come back clean repeatedly is a good one. A verdict here is the reviewer's conclusion, which is not the same as whether anything was then fixed.",
 		"review_focus_history":         focusHistory,
@@ -2464,12 +2527,17 @@ func readPulseBacklogViewWithOptions(ctx context.Context, workspacePath, module,
 		"detail":            "compact",
 		"issues":            pulseLifecycleAgentProjection(activeIssues, "issue_id"),
 		"closed_issues":     pulseLifecycleAgentProjection(closedIssues, "issue_id"),
-		"observations":      pulseLifecycleAgentProjection(activeObservations, "observation_id"),
+		"observations":      []map[string]interface{}{},
 		"total":             len(activeIssues),
 		"issue_total":       len(activeIssues),
 		"observation_total": len(activeObservations),
 		"summary":           pulseBacklogSummary(issues, observations),
-		"note":              "Compact issue register: compare new evidence with active and closed issue text, reuse the matching issue_id, and request detail=\"full\" only for candidates. A closed semantic match is reopened; observations remain reviewer evidence until linked, rejected, or promoted.",
+		"note":              "Compact issue register: compare new evidence with active and closed issue text, reuse the matching issue_id, and request detail=\"full\" only for candidates. Historical observations are retained for audit but are not supplied as an active review queue; Technical Review reads retained run artifacts and deterministic receipts directly.",
+		"navigation": map[string]string{
+			"issues":        "Canonical repair roots. Start here and reuse the same PUL issue_id for the same semantic root cause.",
+			"closed_issues": "Previously handled roots. Matching new evidence reopens the same root rather than creating a duplicate.",
+			"observations":  "Historical audit evidence only. It is not an active reviewer queue; Technical Review reads retained run artifacts and deterministic receipts directly.",
+		},
 	})
 	if marshalErr != nil {
 		return "", marshalErr
