@@ -39,9 +39,9 @@ inspect; it may not turn this into Goal Advisor, Engineering, or Ops review.
    configuration, run producing actions, publish, notify, or consume decisions.
    Do not ask a blocking chat question; create a non-blocking typed decision
    only for a genuine `decision_required` proposal. Read workflow SQLite evidence through the managed
-   read tools. Record each evidence-backed finding with `record_pulse_finding`
-   and each matured verification with `record_pulse_verification` as soon as
-   its judgment is established.
+   read tools. Record each evidence-backed finding with `record_pulse_finding`,
+   reusing the existing `issue_id` whenever the issue text and history describe
+   the same semantic root cause.
 5. Require one primary classification: `strategy_flaw`, `execution_bug`,
    `measurement_gap`, `insufficient_evidence`, or `no_material_problem`.
    Require the goal/causal chain, evidence window and exclusions,

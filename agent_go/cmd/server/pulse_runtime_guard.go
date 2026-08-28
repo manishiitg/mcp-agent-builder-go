@@ -46,3 +46,15 @@ func validatePulseToolRunID(ctx context.Context, requestedRunID string) error {
 	}
 	return nil
 }
+
+// pulseReviewRunIDForSession separates the reviewer identity from the parent
+// Pulse run correlation. A background Technical Maintenance sequence writes
+// findings and its receipt under its exact child tool session while retaining
+// the scheduler's pulse_run_id on those rows. In a normal foreground review
+// both values naturally resolve to the same conversation session.
+func pulseReviewRunIDForSession(ctx context.Context, pulseRunID string) string {
+	if sessionID := strings.TrimSpace(mcpexecutor.SessionIDFromContext(ctx)); sessionID != "" {
+		return sessionID
+	}
+	return strings.TrimSpace(pulseRunID)
+}

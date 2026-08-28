@@ -134,7 +134,7 @@ func TestPulseFindingLifecycleClosesOnlyWithVerifiedFixAndReopensOnRecurrence(t 
 	}
 }
 
-func TestPulseFindingLifecycleKeepsUnverifiedChangeOpenAndFailedProofReopens(t *testing.T) {
+func TestPulseFindingLifecycleClosesAppliedChangeAndRecurrenceReopens(t *testing.T) {
 	ctx := context.Background()
 	workspacePath := concernsWorkspace(t)
 	module := "eval_health"
@@ -157,31 +157,20 @@ func TestPulseFindingLifecycleKeepsUnverifiedChangeOpenAndFailedProofReopens(t *
 	if err != nil {
 		t.Fatalf("load awaiting lifecycle: %v", err)
 	}
-	if len(lifecycles) != 1 || lifecycles[0].Status != ConcernStatusAwaitingVerification {
-		t.Fatalf("unverified change was incorrectly closed: %+v", lifecycles)
+	if len(lifecycles) != 1 || lifecycles[0].Status != ConcernStatusResolved {
+		t.Fatalf("applied change did not close its issue: %+v", lifecycles)
 	}
 
-	recordFindingDispositions(t, workspacePath, module, pulseRunID, []PulseFindingDisposition{{
-		Fingerprint: concern.Fingerprint,
-		FindingID:   "EVAL-1",
-		Disposition: FindingDispositionFailed,
-		Summary:     "The next producing run still returned the stale outcome.",
-		Verification: []PulseFindingVerification{{
-			Check:    "new outcome appears in a producing run",
-			Verdict:  VerificationFailed,
-			Expected: "new outcome",
-			Observed: "stale outcome",
-		}},
-	}})
+	if _, err := RecordRunConcerns(ctx, workspacePath, "normal-run-2", "", module,
+		ConcernPhaseReview, "CONCERNS: evaluation uses a stale outcome"); err != nil {
+		t.Fatalf("record recurrence: %v", err)
+	}
 	lifecycles, err = LoadPulseFindingLifecycles(ctx, workspacePath, module, 10)
 	if err != nil {
-		t.Fatalf("reload failed lifecycle: %v", err)
+		t.Fatalf("reload recurring lifecycle: %v", err)
 	}
-	if lifecycles[0].Status != ConcernStatusOpen {
-		t.Fatalf("failed verification did not reopen finding: %+v", lifecycles[0])
-	}
-	if !strings.Contains(lifecycles[0].ResolutionNote, "stale outcome") {
-		t.Fatalf("failed evidence summary missing: %+v", lifecycles[0])
+	if lifecycles[0].Status != ConcernStatusOpen || lifecycles[0].SeenCount != 2 {
+		t.Fatalf("normal recurrence did not reopen applied fix: %+v", lifecycles[0])
 	}
 }
 
@@ -205,6 +194,9 @@ func TestPulseFindingIssueIDUpdatesOneRootCauseAndMergePreservesDuplicateHistory
 	}
 	if !strings.HasPrefix(first.IssueID, "PUL-") {
 		t.Fatalf("public issue identity=%q, want PUL id", first.IssueID)
+	}
+	if first.IssueID == "PUL-"+strings.ToUpper(first.Fingerprint[:8]) {
+		t.Fatalf("public issue identity must be stored, not derived from its legacy fingerprint: %+v", first)
 	}
 	if _, err := RecordPulseReviewFinding(ctx, workspacePath, "pulse-2", "review-2", PulseReviewFindingInput{
 		IssueID: first.IssueID, Concern: "row-level failures vanish before the summary is calculated", Module: module,
@@ -239,6 +231,7 @@ func TestPulseFindingIssueIDUpdatesOneRootCauseAndMergePreservesDuplicateHistory
 	if err != nil || len(findings) != 2 {
 		t.Fatalf("load merged lifecycle: findings=%+v err=%v", findings, err)
 	}
+	foundDuplicate := false
 	for _, finding := range findings {
 		if NewPulseIssue(finding).ID != second.IssueID {
 			continue
@@ -246,9 +239,32 @@ func TestPulseFindingIssueIDUpdatesOneRootCauseAndMergePreservesDuplicateHistory
 		if finding.Status != ConcernStatusResolved || finding.Details == nil || finding.Details.MergedIntoIssueID != first.IssueID {
 			t.Fatalf("duplicate was not retired with its history linked: %+v", finding)
 		}
-		return
+		foundDuplicate = true
 	}
-	t.Fatalf("merged duplicate %s not found", second.IssueID)
+	if !foundDuplicate {
+		t.Fatalf("merged duplicate %s not found", second.IssueID)
+	}
+
+	if _, err := RecordRunConcerns(ctx, workspacePath, "pulse-4", "", module, ConcernPhaseReview,
+		"CONCERNS: summary hides the same failed collector rows"); err != nil {
+		t.Fatalf("record merged-alias recurrence: %v", err)
+	}
+	findings, err = LoadPulseFindingLifecycles(ctx, workspacePath, module, -1)
+	if err != nil || len(findings) != 2 {
+		t.Fatalf("reload alias recurrence: findings=%+v err=%v", findings, err)
+	}
+	for _, finding := range findings {
+		switch NewPulseIssue(finding).ID {
+		case first.IssueID:
+			if finding.Status != ConcernStatusOpen || finding.SeenCount != 3 {
+				t.Fatalf("alias recurrence did not reopen canonical issue: %+v", finding)
+			}
+		case second.IssueID:
+			if finding.Status != ConcernStatusResolved {
+				t.Fatalf("retired alias reopened instead of canonical issue: %+v", finding)
+			}
+		}
+	}
 }
 
 func TestPulseFindingIssueIDUpdateReloadsExistingStepFindingAcrossReviewerModule(t *testing.T) {
@@ -1055,17 +1071,7 @@ func TestQueuedForEngineeringSeparatesDeferredWorkFromBlocked(t *testing.T) {
 	}
 }
 
-// TestVerificationCanCloseAnAttemptFromAnEarlierRun covers the flow the
-// lifecycle mandates and used to block.
-//
-// changed_unverified exists so a fix whose proof needs a future run is recorded
-// now and verified later — fix-verification, post-run-monitor and the Fixer
-// contract all say to record it with reason awaiting_next_valid_run. Requiring
-// the attempt to belong to the closing run made that impossible: the evidence
-// arrives a run later, and the disposition carrying it was rejected as
-// belonging to a previous Pulse run. social-media hit this on 2026-08-01 and
-// preserved the unresolved state rather than forcing a second write.
-func TestVerificationCanCloseAnAttemptFromAnEarlierRun(t *testing.T) {
+func TestAppliedFixNeedsNoLaterVerificationAttempt(t *testing.T) {
 	ctx := context.Background()
 	workspacePath := concernsWorkspace(t)
 	module := "bug_review"
@@ -1085,47 +1091,62 @@ func TestVerificationCanCloseAnAttemptFromAnEarlierRun(t *testing.T) {
 	if err != nil || len(opened) != 1 || len(opened[0].Attempts) != 1 {
 		t.Fatalf("changed_unverified did not open exactly one attempt: %+v err=%v", opened, err)
 	}
-	attemptID := opened[0].Attempts[0].AttemptID
+	if opened[0].Status != ConcernStatusResolved || opened[0].Attempts[0].Status != "applied" {
+		t.Fatalf("applied repair retained a verification backlog: %+v", opened[0])
+	}
+}
 
-	// Run 2 has the evidence and closes the same attempt, without naming it.
+func TestLegacyAppliedFixVerificationBacklogMigratesClosed(t *testing.T) {
+	ctx := context.Background()
+	workspacePath := concernsWorkspace(t)
+	module := "bug_review"
+	concern := filedReviewConcern(t, workspacePath, "pulse-1", module, "collector writes a null column")
+	recordFindingDispositions(t, workspacePath, module, "pulse-1", []PulseFindingDisposition{{
+		Fingerprint: concern.Fingerprint, FindingID: "BUG-1",
+		Disposition: FindingDispositionChangedUnverified, Summary: "Applied.",
+		ChangedFiles: []string{"planning/plan.json"},
+	}})
+
 	db, err := openRunConcernsDB(ctx, workspacePath, false)
 	if err != nil || db == nil {
 		t.Fatalf("open db: %v", err)
 	}
 	defer db.Close()
-	if err := RecordPulseFindingDispositionsTx(ctx, db, module, "pulse-2", []PulseFindingDisposition{{
-		Fingerprint: concern.Fingerprint, FindingID: "BUG-1",
-		Disposition: FindingDispositionFixedVerified, Summary: "Next run produced a non-null column.",
-		ChangedFiles: []string{"planning/plan.json"},
-		Verification: []PulseFindingVerification{{Check: "consumer read", Verdict: VerificationPassed}},
-	}}, ""); err != nil {
-		t.Fatalf("a later run could not verify its own module's earlier attempt: %v", err)
+	if _, err := db.ExecContext(ctx, `UPDATE run_concerns SET status=? WHERE fingerprint=?`, ConcernStatusAwaitingVerification, concern.Fingerprint); err != nil {
+		t.Fatalf("restore legacy concern state: %v", err)
 	}
-	closed, err := LoadPulseFindingLifecycles(ctx, workspacePath, module, 10)
-	if err != nil || len(closed) != 1 || len(closed[0].Attempts) != 1 ||
-		closed[0].Attempts[0].AttemptID != attemptID {
-		t.Fatalf("the later run invented a second attempt instead of settling %q: %+v err=%v", attemptID, closed, err)
+	if _, err := db.ExecContext(ctx, `UPDATE pulse_fix_attempts SET status=?`, ConcernStatusAwaitingVerification); err != nil {
+		t.Fatalf("restore legacy attempt state: %v", err)
 	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy db before explicit reconciliation: %v", err)
+	}
+	reconciled, err := ReconcilePulseFindingLifecycle(ctx, workspacePath)
+	if err != nil {
+		t.Fatalf("run explicit lifecycle reconciliation: %v", err)
+	}
+	if reconciled.AppliedClosures != 1 || reconciled.ClosedIssues == 0 {
+		t.Fatalf("reconciliation result=%+v, want the legacy applied fix closed", reconciled)
+	}
+	db, err = openRunConcernsDB(ctx, workspacePath, false)
+	if err != nil || db == nil {
+		t.Fatalf("reopen reconciled db: %v", err)
+	}
+	defer db.Close()
 
-	// Another module still cannot close it, even naming the attempt directly.
-	if err := RecordPulseFindingDispositionsTx(ctx, db, "strategy_auditor", "pulse-2", []PulseFindingDisposition{{
-		Fingerprint: concern.Fingerprint, FindingID: "BUG-1", AttemptID: attemptID,
-		Disposition: FindingDispositionVerifiedNoChange, Summary: "Not mine to close.",
-		Verification: []PulseFindingVerification{{Check: "x", Verdict: VerificationPassed}},
-	}}, ""); err == nil || !strings.Contains(err.Error(), "belongs to module") {
-		t.Fatalf("another module closed an attempt it did not make: %v", err)
+	var concernStatus, attemptStatus string
+	if err := db.QueryRowContext(ctx, `SELECT status FROM run_concerns WHERE fingerprint=?`, concern.Fingerprint).Scan(&concernStatus); err != nil {
+		t.Fatalf("read migrated concern: %v", err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT status FROM pulse_fix_attempts LIMIT 1`).Scan(&attemptStatus); err != nil {
+		t.Fatalf("read migrated attempt: %v", err)
+	}
+	if concernStatus != ConcernStatusResolved || attemptStatus != "applied" {
+		t.Fatalf("legacy applied fix remained active: concern=%q attempt=%q", concernStatus, attemptStatus)
 	}
 }
 
-// TestChangedUnverifiedMustNameWhatWillSettleIt makes the verification loop
-// closable.
-//
-// A fix awaiting proof is only verifiable if the next reviewer can tell whether
-// the evidence has arrived. Without a named boundary it cannot, so it re-attempts
-// the fix instead of checking it — rtslatency carried a finding at seen_count 4,
-// still awaiting_verification, repaired again on every pass because nothing ever
-// checked the run that had since produced its evidence.
-func TestChangedUnverifiedMustNameWhatWillSettleIt(t *testing.T) {
+func TestChangedUnverifiedClosesWithoutSeparateVerificationBoundary(t *testing.T) {
 	base := PulseFindingDisposition{
 		Fingerprint: "fp", FindingID: "BUG-1",
 		Disposition:  FindingDispositionChangedUnverified,
@@ -1134,15 +1155,8 @@ func TestChangedUnverifiedMustNameWhatWillSettleIt(t *testing.T) {
 		Verification: []PulseFindingVerification{{Check: "consumer read", Verdict: VerificationInconclusive}},
 	}
 
-	if err := validateFindingDisposition(base); err == nil ||
-		!strings.Contains(err.Error(), "requires next_check") {
-		t.Fatalf("a fix awaiting proof was accepted with nothing naming what would settle it: %v", err)
-	}
-
-	settled := base
-	settled.NextCheck = "next dev collection run writes latency_daily_metrics"
-	if err := validateFindingDisposition(settled); err != nil {
-		t.Fatalf("a fix naming its evidence boundary was rejected: %v", err)
+	if err := validateFindingDisposition(base); err != nil {
+		t.Fatalf("an applied fix was incorrectly forced into a verification queue: %v", err)
 	}
 }
 

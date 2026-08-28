@@ -2219,7 +2219,7 @@ func (s *SchedulerService) runJob(ctx context.Context, sctx *ScheduleContext, ru
 }
 
 // runPulseLifecycle continues the scheduled run's main-agent conversation with
-// four conceptual turns: Gate, optional Review, optional Fix, and Finalize.
+// three conceptual turns: Gate, optional Review+Fix, and Finalize.
 // The agent owns reviewer selection, specialist delegation, diagnosis, repair,
 // and verification. Go supplies tools and permissions, preserves turn ordering,
 // and validates the typed durable receipts between turns. Pulse never changes
@@ -2257,10 +2257,11 @@ func (s *SchedulerService) runPulseLifecycle(ctx context.Context, sctx *Schedule
 		return
 	}
 
-	// Pulse is one continuing agent conversation. Go sends four ordered turns:
-	// Gate, Review, Fix, and Finalize. Reviewers classify evidence before an
-	// independent Fixer receives a bounded agent-selected repair batch. Go preserves
-	// ordering and validates durable receipts; the agents own semantic choices.
+	// Pulse is one continuing agent conversation. Go sends three ordered turns:
+	// Gate, Review+Fix, and Finalize. Technical review and repair run as separate
+	// message-sequence turns inside one retained executor; Go keeps repair locked
+	// until that executor persists its completed review receipt. Go preserves ordering
+	// and validates durable receipts; the agents own semantic choices.
 	pulseContext := "A scheduled run of this workflow just finished"
 	if sctx.PulseOnly {
 		pulseContext = "This is a manual Pulse-only review of the latest retained workflow evidence. The workflow was not executed by this action"
@@ -2408,12 +2409,12 @@ func (s *SchedulerService) runPulseLifecycle(ctx context.Context, sctx *Schedule
 		}
 		if gateCompleted {
 			if due, err := pulseWorklistHasDueModule(ctx, sctx.WorkspacePath, pulseRunID); err != nil {
-				s.sessionLogf(sctx, sessionID, "[PULSE] could not inspect due-module receipt after Gate; preserving Review and Fix turns: %v", err)
-				steps = append(steps, pulseLifecycleAgenticReviewStep(pulseRunID), pulseLifecycleAgenticFixStep(pulseRunID))
+				s.sessionLogf(sctx, sessionID, "[PULSE] could not inspect due-module receipt after Gate; preserving the sequenced Review + Fix turn: %v", err)
+				steps = append(steps, pulseLifecycleAgenticReviewStep(pulseRunID))
 			} else if due {
-				steps = append(steps, pulseLifecycleAgenticReviewStep(pulseRunID), pulseLifecycleAgenticFixStep(pulseRunID))
+				steps = append(steps, pulseLifecycleAgenticReviewStep(pulseRunID))
 			} else {
-				s.sessionLogf(sctx, sessionID, "[PULSE] Gate skipped every review perspective; omitting Review and Fix turns")
+				s.sessionLogf(sctx, sessionID, "[PULSE] Gate skipped every review perspective; omitting the Review + Fix turn")
 			}
 			steps = append(steps, pulseLifecycleFinalSteps(pulseRunID, notificationInstructionsFromCapabilities(sctx.Capabilities))...)
 			if len(steps) > 0 && !isPulseLifecycleFinalStep(steps[0].label) {
@@ -2432,7 +2433,7 @@ func (s *SchedulerService) runPulseLifecycle(ctx context.Context, sctx *Schedule
 		// No Pulse turn stamps a contract version, so none of them is granted
 		// one. Revoking after each turn keeps that true even if a future step
 		// starts minting.
-		if st.label == "review" {
+		if st.label == "review-fix" {
 			reviewFixStartedAt = time.Now().UTC()
 		}
 		result := runStep(st)
@@ -2440,7 +2441,7 @@ func (s *SchedulerService) runPulseLifecycle(ctx context.Context, sctx *Schedule
 		if abortIfInterrupted(st, result) {
 			return
 		}
-		if result.outcome == pulseLifecycleStepCompleted && st.label == "fix" {
+		if result.outcome == pulseLifecycleStepCompleted && st.label == "review-fix" {
 			if err := validatePulseDueModuleResults(ctx, sctx.WorkspacePath, pulseRunID); err != nil {
 				s.sessionLogf(sctx, sessionID, "[PULSE] Review/Fix receipt incomplete; asking the same conversation to reconcile it: %v", err)
 				continuation := pulseLifecycleReviewFixContinuationStep(pulseRunID, err)
@@ -2455,7 +2456,7 @@ func (s *SchedulerService) runPulseLifecycle(ctx context.Context, sctx *Schedule
 				}
 			}
 		}
-		if st.label == "fix" {
+		if st.label == "review-fix" {
 			reviewFixCompletedAt = time.Now().UTC()
 		}
 		if result.outcome != pulseLifecycleStepCompleted {
@@ -2582,7 +2583,6 @@ func pulseLifecycleSteps() []pulseLifecycleStep {
 	steps := []pulseLifecycleStep{
 		pulseLifecycleGateStep("<pulse_run_id>", "<run_folder>", "<run_status>"),
 		pulseLifecycleAgenticReviewStep("<pulse_run_id>"),
-		pulseLifecycleAgenticFixStep("<pulse_run_id>"),
 	}
 	steps = append(steps, pulseLifecycleFinalSteps("<pulse_run_id>")...)
 	return steps
@@ -2664,26 +2664,14 @@ func pulseLifecycleAgenticReviewStep(pulseRunID string) pulseLifecycleStep {
 	technicalCheckpoint := fmt.Sprintf("runs/pulse/%s/technical-review.md", pulseRunID)
 	strategicCheckpoint := fmt.Sprintf("runs/pulse/%s/strategic-review.md", pulseRunID)
 	return pulseLifecycleStep{
-		label: "review",
-		query: fmt.Sprintf(`PULSE REVIEW DISPATCH. pulse_run_id=%q. Load read_skill(skills=[{"name":"builder-reference","path":"references/pulse-review-fixer.md"}]) and follow its Review contract. Read the durable Gate worklist via get_pulse_state(view="module", pulse_run_id=<this id>) and handle only due modules in the persisted mode.
+		label: "review-fix",
+		query: fmt.Sprintf(`PULSE SEQUENCED REVIEW + FIX DISPATCH. pulse_run_id=%q. Load read_skill(skills=[{"name":"builder-reference","path":"references/pulse-review-fixer.md"}]) and follow its Sequenced Technical Maintenance contract. Read the durable Gate worklist via get_pulse_state(view="module", pulse_run_id=<this id>) and handle only due modules in the persisted mode.
 
-		Use run_in_background to dispatch at most two ordinary background reviewers. The Technical reviewer is one message sequence, not several agents: (1) perform a lightweight safety scan from get_pulse_state(view="backlog", detail="compact"), plan routes, retained run selectors, and the focus agenda; (2) map relevant evidence to stable route/group/sub-workflow scopes and agentically choose the smallest sufficient set of deep technical focuses using persisted priority and rotation; a small route may need one, while materially distinct large routes may justify several; (3) add a focus only when it has distinct evidence, risk, decision, or repair value, and stop when another focus would only repeat context; (4) request full detail only for selected public PUL ids and authoritative evidence selectors; (5) verify matured retained findings and investigate the selected focuses, loading Stores Health or Operations evidence only when a focus needs it; (6) classify every selected workflow observation by linking it to an existing issue, promoting it, or rejecting it with evidence; (7) record every investigated technical_review focus with its route_scope and persist typed findings, verification evidence, and exactly one terminal technical_review receipt. It must not modify workflow/platform implementation files. Every message reads and updates the same compact checkpoint at %q. It continuously merges semantic duplicates into canonical root causes; do not add a separate consolidation turn. In backlog_drain restrict it to matured verification and classification of retained evidence—no broad discovery.
+		When technical_review is due, launch exactly one executor with run_in_background. Pass pulse_run_id=%q, pulse_phase_contract="technical_review_then_fix", and required_pulse_review_modules=["technical_review"]. Its opening instruction and ordered message_sequence must retain one conversation and use these phases: (1) read the compact backlog once, plan routes, retained run selectors, and focus agenda, then perform the lightweight safety scan and choose the smallest sufficient evidence-backed focus set; (2) investigate only selected focuses and exact public PUL ids, classify every selected observation, continuously merge semantic duplicates, and update %q; (3) persist every focus, typed finding, and verification, then call complete_pulse_review exactly once and end that turn without attempting any repair; (4) after the backend receipt barrier unlocks mutation tools, select the highest-value bounded canonical repair bundle, apply and proportionally verify it, record exact dispositions and the terminal technical_review module result, and update the checkpoint with changes plus deferred reasons. A no-safe-repair outcome still belongs in this post-receipt turn and must record a truthful terminal module result. The review turns are backend read-only except for the run checkpoint and typed review persistence; a prompt cannot override that boundary. Never launch a fresh Fixer or another technical reviewer.
 
-		The Strategic reviewer is one message sequence for the single strategic_review module: (1) perform the same route-aware lightweight scan and agentically choose the smallest sufficient strategic focus set from its agenda; route size alone is not a quota, but distinct goals, audiences, feedback loops, or intervention domains may justify multiple focuses; (2) verify retained strategic findings and audit the selected hidden mechanisms such as feedback loops, selection bias, observation contamination, proxy optimization, concentration, saturation, local optima, goal measurement, or experiment impact; (3) only when Gate evidence warrants opportunity discovery, independently search for materially different approaches; (4) critic/conclusion with exactly one of keep, improve, propose_alternative, experiment, or evidence_wait; (5) record every investigated strategic_review focus with its route_scope, then persist typed findings, decisions, impact records, and exactly one terminal strategic_review receipt. Every turn reads and updates %q. Audit-only and backlog_drain omit opportunity discovery. An experiment is optional, and concurrent running experiments are permitted only when their declared interference domains do not overlap.
+		When strategic_review is due, launch one separate read-only executor message sequence with required_pulse_review_modules=["strategic_review"] and no pulse_phase_contract. It performs the route-aware scan, selects the smallest sufficient strategic focus set, audits the warranted mechanisms, persists typed findings/decisions/impact plus exactly one strategic_review receipt, and records the terminal strategic_review module result. Every turn updates %q. Audit-only and backlog_drain omit opportunity discovery. Strategic Review never repairs workflow implementation.
 
-		The final message in each child sequence owns its typed review writes because it has the full checkpoint and sequence context. Both reviewers record their own terminal review receipt; the later Fixer records repair outcome separately and never rewrites review completion. Automatic-notification prose is only a notification, never a substitute database payload. Give each child the pulse run ID, mode, due modules, Gate evidence, checkpoint path, normal read/review authority, and exact persistence contract. Put the first turn in instruction and each later turn in message_sequence with a non-empty message; IDs are optional. After dispatch, end this turn immediately. The runtime waits for registered children. Do not fix implementation files, render the dashboard, back up, publish, or notify here.`, pulseRunID, technicalCheckpoint, strategicCheckpoint),
-	}
-}
-
-func pulseLifecycleAgenticFixStep(pulseRunID string) pulseLifecycleStep {
-	technicalCheckpoint := fmt.Sprintf("runs/pulse/%s/technical-review.md", pulseRunID)
-	return pulseLifecycleStep{
-		label: "fix",
-		query: fmt.Sprintf(`PULSE INDEPENDENT FIX DISPATCH. pulse_run_id=%q. Continue only after registered reviewers finished. Load read_skill(skills=[{"name":"builder-reference","path":"references/pulse-review-fixer.md"}]) and follow its Fix contract. Read the durable Gate worklist, get_pulse_state(view="backlog", detail="compact") once, saved reviewer records, and %q. Fetch full lifecycle evidence only for the exact public PUL ids selected for the coherent repair objective.
-
-		Workflow observations are evidence, not Fixer work. Select a bounded repair batch from canonical issues only. Start with the highest-value coherent bundle; it may cover several issues when they share one root cause, compatible targets, and one proof boundary. Add another independent bundle only when it is low-risk, needs no broad rediscovery, has a separately clear proof boundary, and fits the current context plus targeted evidence. Never batch a different public-action risk, user decision, route context, or unresolved design investigation. Do not use a fixed issue count. Use run_in_background to launch one fresh executor Fixer for the selected batch; never reuse a reviewer conversation. The Fixer applies and verifies every selected bundle before starting the next, records exact attempts/dispositions and proportional proof per bundle, and updates the checkpoint with the deferred queue and reasons. Reviewer receipts describe review completion and are not rewritten by the Fixer; record the separate technical module result from the verified repair outcome. Unselected canonical issues remain durable. If no safe canonical bundle exists, record a truthful done/blocked technical result yourself from reviewer evidence without launching a Fixer. Strategic Review owns its own receipt and must not be repeated here.
-
-		End after dispatch; the runtime waits for the registered Fixer. Do not perform new broad discovery, promote raw observations without reviewer evidence, reconstruct findings from notification prose, render the dashboard, back up, publish, or notify.`, pulseRunID, technicalCheckpoint),
+		Automatic-notification prose is not persistence. Put the first turn in instruction and later turns in message_sequence with non-empty messages. After dispatch, end this parent turn immediately; the runtime waits for registered children. Do not do review or repair in this parent, render a dashboard, back up, publish, or notify.`, pulseRunID, pulseRunID, technicalCheckpoint, strategicCheckpoint),
 	}
 }
 
@@ -3958,7 +3946,6 @@ func (s *SchedulerService) buildWorkshopRequest(ctx context.Context, sctx *Sched
 	s.applyLLMAndSecretsToReqMap(ctx, reqMap, sctx)
 
 	execOpts := map[string]interface{}{
-		"run_mode":            "use_same_run",
 		"selected_run_folder": "iteration-0",
 		"execution_strategy":  "start_from_beginning_no_human",
 		// Scheduled runs execute the workflow builder exactly like a normal

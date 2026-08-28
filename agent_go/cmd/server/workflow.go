@@ -680,8 +680,7 @@ type StepProgress struct {
 
 // ExecutionOptions represents user-selected execution options from frontend
 type ExecutionOptions struct {
-	RunMode           string `json:"run_mode"`                      // "use_same_run" or "create_new_runs_always"
-	SelectedRunFolder string `json:"selected_run_folder,omitempty"` // If use_same_run and user selected specific folder
+	SelectedRunFolder string `json:"selected_run_folder,omitempty"` // Current run slot (iteration-0) for full workflow runs
 	ExecutionStrategy string `json:"execution_strategy"`            // "start_from_beginning", etc.
 	ResumeFromStep    int    `json:"resume_from_step,omitempty"`    // 1-based step number to resume from
 	PlanChangeAction  string `json:"plan_change_action,omitempty"`  // "keep_old_progress" or "delete_old_progress"

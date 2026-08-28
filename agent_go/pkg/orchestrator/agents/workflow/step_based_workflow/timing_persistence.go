@@ -542,10 +542,10 @@ func workflowRunMetadataPath(runFolder string) string {
 }
 
 //nolint:unused // staged for the run-metadata timing persistence rollout.
-func (hcpo *StepBasedWorkflowOrchestrator) upsertRunMetadata(ctx context.Context, runFolder string, mutate func(map[string]interface{})) {
+func (hcpo *StepBasedWorkflowOrchestrator) upsertRunMetadata(ctx context.Context, runFolder string, mutate func(map[string]interface{})) error {
 	metadataPath := workflowRunMetadataPath(runFolder)
 	if metadataPath == "" {
-		return
+		return fmt.Errorf("run folder is required")
 	}
 
 	writeCtx := ctx
@@ -565,18 +565,23 @@ func (hcpo *StepBasedWorkflowOrchestrator) upsertRunMetadata(ctx context.Context
 
 	data, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
-		hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Failed to marshal run metadata %s: %v", metadataPath, err))
-		return
+		return fmt.Errorf("marshal run metadata %s: %w", metadataPath, err)
 	}
 	if err := hcpo.WriteWorkspaceFile(writeCtx, metadataPath, string(data)); err != nil {
-		hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Failed to write run metadata %s: %v", metadataPath, err))
+		return fmt.Errorf("write run metadata %s: %w", metadataPath, err)
 	}
+	return nil
 }
 
 //nolint:unused // staged for the run-metadata timing persistence rollout.
-func (hcpo *StepBasedWorkflowOrchestrator) markRunMetadataStarted(ctx context.Context, runFolder string) {
+func (hcpo *StepBasedWorkflowOrchestrator) markRunMetadataStarted(ctx context.Context, runFolder string) error {
+	planRevision, err := hcpo.ensureExecutablePlanRevision(ctx)
+	if err != nil {
+		return err
+	}
 	now := time.Now().UTC()
-	hcpo.upsertRunMetadata(ctx, runFolder, func(meta map[string]interface{}) {
+	executionID := fmt.Sprintf("run-%d", now.UnixNano())
+	if err := hcpo.upsertRunMetadata(ctx, runFolder, func(meta map[string]interface{}) {
 		if _, ok := meta["created_at"]; !ok {
 			meta["created_at"] = formatRFC3339UTC(now)
 		}
@@ -584,12 +589,20 @@ func (hcpo *StepBasedWorkflowOrchestrator) markRunMetadataStarted(ctx context.Co
 		delete(meta, "completed_at")
 		delete(meta, "duration_ms")
 		meta["status"] = "running"
-	})
+		// This identity belongs to this producing group execution, not to the
+		// long-lived orchestrator instance or mutable iteration-0 slot.
+		meta["execution_id"] = executionID
+		meta["active_slot_at_start"] = currentWorkflowRunFolder
+		meta["plan_revision"] = planRevision
+	}); err != nil {
+		return fmt.Errorf("persist run identity: %w", err)
+	}
+	return nil
 }
 
 //nolint:unused // staged for the run-metadata timing persistence rollout.
 func (hcpo *StepBasedWorkflowOrchestrator) finalizeRunMetadata(ctx context.Context, runFolder string, status string, startedAt time.Time, completedAt time.Time) {
-	hcpo.upsertRunMetadata(ctx, runFolder, func(meta map[string]interface{}) {
+	if err := hcpo.upsertRunMetadata(ctx, runFolder, func(meta map[string]interface{}) {
 		if _, ok := meta["created_at"]; !ok {
 			meta["created_at"] = formatRFC3339UTC(startedAt)
 		}
@@ -604,14 +617,16 @@ func (hcpo *StepBasedWorkflowOrchestrator) finalizeRunMetadata(ctx context.Conte
 			}
 		}
 		meta["status"] = status
-	})
+	}); err != nil {
+		hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Failed to finalize run metadata %s: %v", runFolder, err))
+	}
 }
 
 func (hcpo *StepBasedWorkflowOrchestrator) recordRunPersistenceError(ctx context.Context, stepID string, persistenceErr error) {
 	if persistenceErr == nil || strings.TrimSpace(hcpo.selectedRunFolder) == "" {
 		return
 	}
-	hcpo.upsertRunMetadata(ctx, hcpo.selectedRunFolder, func(meta map[string]interface{}) {
+	if err := hcpo.upsertRunMetadata(ctx, hcpo.selectedRunFolder, func(meta map[string]interface{}) {
 		entry := map[string]interface{}{
 			"step_id":    stepID,
 			"error":      persistenceErr.Error(),
@@ -619,5 +634,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) recordRunPersistenceError(ctx context
 		}
 		existing, _ := meta["persistence_errors"].([]interface{})
 		meta["persistence_errors"] = append(existing, entry)
-	})
+	}); err != nil {
+		hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Failed to record run persistence error metadata: %v", err))
+	}
 }

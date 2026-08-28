@@ -45,12 +45,14 @@ import (
 
 // UnreviewedPlanChange is one plan-mod call whose blast radius has not been traced.
 type UnreviewedPlanChange struct {
-	At            string   `json:"at"`
-	Tool          string   `json:"tool"`
-	Reason        string   `json:"reason,omitempty"`
-	StepIDs       []string `json:"step_ids,omitempty"`
-	FieldsChanged []string `json:"fields_changed,omitempty"`
-	SourceFile    string   `json:"source_file"`
+	ChangeID      string           `json:"change_id,omitempty"`
+	At            string           `json:"at"`
+	Tool          string           `json:"tool"`
+	Reason        string           `json:"reason,omitempty"`
+	StepIDs       []string         `json:"step_ids,omitempty"`
+	FieldsChanged []string         `json:"fields_changed,omitempty"`
+	SourceFile    string           `json:"source_file"`
+	Origin        PlanChangeOrigin `json:"origin"`
 }
 
 // PlanChangeBacklog is the summary handed to Pulse Gate.
@@ -137,7 +139,7 @@ func CollectPlanChangeBacklog(workspacePath string) *PlanChangeBacklog {
 		backlog.Changes = append(backlog.Changes, p.change)
 	}
 	backlog.Note = fmt.Sprintf(
-		"%d plan-mod change(s) have not been stamped artifact_review.done, so their knock-on effects across downstream steps, evals, the report dashboard, db contracts, KB notes and learnings may not have been reconciled. Evidence, not a verdict: many changes have no blast radius at all. Consider marking artifact_review due so its reviewer can trace each surface against the real artifacts — read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/plan-change-impact.md\"}]) is the procedure. Entries stay listed until mark_changelog_artifact_reviewed stamps them, so deferring loses nothing.",
+		"%d plan-mod change(s) lack a complete structured dependency review, so their knock-on effects across downstream steps, validation, evaluation, reporting, database contracts, and learnings/knowledge may not have been reconciled. Evidence, not a verdict: many changes have no blast radius at all. The reviewer must return an evidence-backed disposition for every surface before mark_changelog_artifact_reviewed can close an entry — read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/plan-change-impact.md\"}]) is the procedure. Entries stay listed until closure, so deferring loses nothing.",
 		len(pending))
 	if len(pending) > len(backlog.Changes) {
 		backlog.Note += fmt.Sprintf(" Showing the %d most recent; the rest are in planning/changelog/.", len(backlog.Changes))
@@ -147,11 +149,13 @@ func CollectPlanChangeBacklog(workspacePath string) *PlanChangeBacklog {
 
 func toUnreviewedPlanChange(e PlanChangelogEntry, sourceFile string) UnreviewedPlanChange {
 	out := UnreviewedPlanChange{
+		ChangeID:   strings.TrimSpace(e.ChangeID),
 		At:         strings.TrimSpace(e.Timestamp),
 		Tool:       strings.TrimSpace(e.Tool),
 		Reason:     strings.TrimSpace(e.Reason),
 		StepIDs:    e.StepIDs,
 		SourceFile: sourceFile,
+		Origin:     e.Origin,
 	}
 	// Field names are what make an entry triageable: they are the surface the
 	// reviewer traces. update_step_config records none today, which is exactly

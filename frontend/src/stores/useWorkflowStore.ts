@@ -837,10 +837,6 @@ export const useWorkflowStore = create<WorkflowStore>()(
 
         // Runs always start from the beginning — resume-from-step logic has been removed.
         const executionStrategy: string = ExecutionStrategy.START_FROM_BEGINNING_NO_HUMAN
-        // Manual runs reuse the user-selected iteration and clear outputs;
-        // scheduled runs create a new iteration in the scheduler.
-        const shouldUseSameRun = true
-
         // Resolve the specific group folder path for phases that need context
         // Uses utility function to consolidate logic
         const resolvedRunFolder = resolveGroupFolderPath({
@@ -851,7 +847,6 @@ export const useWorkflowStore = create<WorkflowStore>()(
         })
 
         const options: ExecutionOptions = {
-          run_mode: shouldUseSameRun ? 'use_same_run' : 'create_new_runs_always',
           selected_run_folder: resolvedRunFolder,
           execution_strategy: executionStrategy,
           workshop_mode: (() => {

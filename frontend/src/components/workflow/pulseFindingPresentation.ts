@@ -75,9 +75,9 @@ export function pulseFindingDisposition(finding: PulseFindingLifecycle): string 
     if (typeof disposition === 'string' && disposition.trim()) return disposition.trim()
   }
   for (const attempt of finding.fix_attempts) {
+    const issueID = finding.issue?.id || finding.finding_id
     const reference = attempt.findings?.find((candidate) => (
-      candidate.fingerprint === finding.fingerprint
-      || (finding.finding_id && candidate.finding_id === finding.finding_id)
+      issueID && candidate.finding_id === issueID
     ))
     if (reference?.disposition?.trim()) return reference.disposition.trim()
   }

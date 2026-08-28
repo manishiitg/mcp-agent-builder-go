@@ -10,6 +10,8 @@ import (
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 )
 
+const currentWorkflowRunFolder = "iteration-0"
+
 // RoutingEvaluationCount tracks how many times a specific route has been selected
 // Key format: "{stepID}:{routeID}"
 type RoutingEvaluationCount map[string]int
@@ -33,11 +35,10 @@ type StepProgress struct {
 	ArchivalCounts          map[int]int            `json:"archival_counts,omitempty"`     // key is stepNumber (1-based), value is archive run count
 }
 
-// ExecutionOptions represents user-selected execution options from frontend
-// When provided, backend will use these options instead of asking interactively
+// ExecutionOptions carries the execution details that remain meaningful after a
+// run is selected. Full workflow runs always use the current run slot.
 type ExecutionOptions struct {
-	RunMode           string `json:"run_mode"`                      // "use_same_run" or "create_new_runs_always"
-	SelectedRunFolder string `json:"selected_run_folder,omitempty"` // If use_same_run and user selected specific folder
+	SelectedRunFolder string `json:"selected_run_folder,omitempty"` // Current run slot (iteration-0) for full workflow runs
 	ExecutionStrategy string `json:"execution_strategy"`            // Execution strategy (see constants below)
 	ResumeFromStep    int    `json:"resume_from_step,omitempty"`    // 1-based step number to resume from (for top-level steps)
 	PlanChangeAction  string `json:"plan_change_action,omitempty"`  // "keep_old_progress" or "delete_old_progress"

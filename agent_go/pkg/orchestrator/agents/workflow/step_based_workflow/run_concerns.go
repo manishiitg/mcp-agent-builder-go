@@ -2,6 +2,7 @@ package step_based_workflow
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -35,6 +36,7 @@ import (
 
 const runConcernsSchema = `CREATE TABLE IF NOT EXISTS run_concerns (
 	fingerprint TEXT PRIMARY KEY,
+	issue_id TEXT NOT NULL DEFAULT '',
 	step_id TEXT NOT NULL DEFAULT '',
 	phase TEXT NOT NULL DEFAULT '',
 	group_name TEXT NOT NULL DEFAULT '',
@@ -84,7 +86,8 @@ const concernLinePrefix = "CONCERNS:"
 
 // RunConcern is one deduplicated concern with its recurrence history.
 type RunConcern struct {
-	Fingerprint    string `json:"fingerprint"`
+	Fingerprint    string `json:"-"`
+	IssueID        string `json:"issue_id"`
 	StepID         string `json:"step_id"`
 	Phase          string `json:"phase"`
 	GroupName      string `json:"group_name,omitempty"`
@@ -98,6 +101,20 @@ type RunConcern struct {
 	ResolvedAt     string `json:"resolved_at,omitempty"`
 	ResolvedBy     string `json:"resolved_by,omitempty"`
 	ResolutionNote string `json:"resolution_note,omitempty"`
+}
+
+// newPulseIssueID creates the durable public address for a newly discovered
+// concern. It must never be derived from the concern wording: wording changes
+// are reviewed semantically and may reopen or merge an existing issue, while
+// the issue ID itself remains stable.
+func newPulseIssueID() string {
+	var bytes [4]byte
+	if _, err := rand.Read(bytes[:]); err == nil {
+		return fmt.Sprintf("PUL-%X", bytes)
+	}
+	// crypto/rand failure is exceptionally rare. The timestamp fallback keeps
+	// recording concerns available rather than making a completed step fail.
+	return fmt.Sprintf("PUL-%X", time.Now().UTC().UnixNano())
 }
 
 // ParseConcernLines pulls the `CONCERNS:` payloads out of a summary blob.
@@ -219,6 +236,11 @@ func RecordRunConcerns(ctx context.Context, workspacePath, runFolder, groupName,
 	}
 	observedAt := time.Now().UTC().Format(time.RFC3339Nano)
 	fingerprints := pulseFindingFingerprintsByConcern(summary, stepID)
+	for concern, fingerprint := range fingerprints {
+		if canonical := canonicalFingerprintForMergedIssue(ctx, db, fingerprint); canonical != "" {
+			fingerprints[concern] = canonical
+		}
+	}
 	recorded, err := recordRunConcernLinesAtWithFingerprints(
 		ctx, db, runFolder, groupName, stepID, phase, lines,
 		observedAt, fingerprints,
@@ -247,6 +269,7 @@ func recordRunConcernLinesAtWithFingerprints(
 	}
 	recorded := 0
 	for _, text := range lines {
+		issueID := newPulseIssueID()
 		normalizedText := strings.ToLower(strings.Join(strings.Fields(text), " "))
 		fp := fingerprints[normalizedText]
 		if phase == ConcernPhasePreValidation {
@@ -258,6 +281,9 @@ func recordRunConcernLinesAtWithFingerprints(
 			if historical := existingCanonicalReviewFingerprint(ctx, db, stepID, text); historical != "" {
 				fp = historical
 			}
+		}
+		if canonical := canonicalFingerprintForMergedIssue(ctx, db, fp); canonical != "" {
+			fp = canonical
 		}
 		previousStatus := ""
 		if err := db.QueryRowContext(ctx, `SELECT status FROM run_concerns WHERE fingerprint=?`, fp).Scan(&previousStatus); err != nil && err != sql.ErrNoRows {
@@ -276,8 +302,8 @@ func recordRunConcernLinesAtWithFingerprints(
 		// observed against", so a recurrence must not overwrite it with a newer
 		// revision — that would erase exactly the signal a staleness sweep reads.
 		_, err := db.ExecContext(ctx, `INSERT INTO run_concerns
-			(fingerprint, step_id, phase, group_name, text, first_seen_run, first_seen_at, last_seen_run, last_seen_at, seen_count, status, first_seen_platform_version)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+			(fingerprint, issue_id, step_id, phase, group_name, text, first_seen_run, first_seen_at, last_seen_run, last_seen_at, seen_count, status, first_seen_platform_version)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
 			ON CONFLICT(fingerprint) DO UPDATE SET
 				text = excluded.text,
 				phase = excluded.phase,
@@ -289,7 +315,7 @@ func recordRunConcernLinesAtWithFingerprints(
 					ELSE 1
 				END,
 				status = CASE WHEN run_concerns.status IN (?, ?, ?) THEN ? ELSE run_concerns.status END`,
-			fp, stepID, phase, groupName, text, runFolder, observedAt, runFolder, observedAt, ConcernStatusOpen, PlatformVersion(),
+			fp, issueID, stepID, phase, groupName, text, runFolder, observedAt, runFolder, observedAt, ConcernStatusOpen, PlatformVersion(),
 			ConcernStatusResolved, ConcernStatusAwaitingVerification, ConcernStatusAwaitingRun, ConcernStatusOpen)
 		if err != nil {
 			return recorded, err
@@ -318,6 +344,27 @@ func recordRunConcernLinesAtWithFingerprints(
 	return recorded, nil
 }
 
+// canonicalFingerprintForMergedIssue keeps retired semantic aliases retired.
+// Merge history stores the canonical public issue_id; a later workflow
+// occurrence of the old symptom must append to and reopen the canonical issue,
+// not recreate the duplicate queue item.
+func canonicalFingerprintForMergedIssue(ctx context.Context, db pulseFindingLifecycleDB, fingerprint string) string {
+	var issueID string
+	err := db.QueryRowContext(ctx, `SELECT COALESCE(json_extract(detail_json, '$.merged_into_issue_id'), '')
+		FROM pulse_finding_details WHERE fingerprint=?`, fingerprint).Scan(&issueID)
+	if err != nil || strings.TrimSpace(issueID) == "" {
+		return ""
+	}
+	var canonical string
+	err = db.QueryRowContext(ctx, `SELECT fingerprint FROM run_concerns
+		WHERE upper(issue_id)=upper(?)
+		ORDER BY first_seen_at ASC LIMIT 1`, strings.TrimSpace(issueID)).Scan(&canonical)
+	if err != nil || canonical == fingerprint {
+		return ""
+	}
+	return canonical
+}
+
 // LoadOpenRunConcerns returns concerns still needing Pulse attention. A negative
 // limit returns the complete active backlog; zero preserves the bounded default
 // for callers that only need a preview.
@@ -334,7 +381,7 @@ func LoadOpenRunConcerns(ctx context.Context, workspacePath string, limit int) (
 	// any one of them recurred. Prevalidation is already one root concern per
 	// step; this clustering remains useful for distinct execution/review concerns
 	// that share a step and should be read together.
-	query := `SELECT c.fingerprint, c.step_id, c.phase, c.group_name, c.text,
+	query := `SELECT c.fingerprint, c.issue_id, c.step_id, c.phase, c.group_name, c.text,
 			c.first_seen_run, c.first_seen_at, c.last_seen_run, c.last_seen_at, c.seen_count, c.status
 		FROM run_concerns c
 		JOIN (
@@ -367,7 +414,7 @@ func LoadOpenRunConcerns(ctx context.Context, workspacePath string, limit int) (
 	var out []RunConcern
 	for rows.Next() {
 		var c RunConcern
-		if err := rows.Scan(&c.Fingerprint, &c.StepID, &c.Phase, &c.GroupName, &c.Text,
+		if err := rows.Scan(&c.Fingerprint, &c.IssueID, &c.StepID, &c.Phase, &c.GroupName, &c.Text,
 			&c.FirstSeenRun, &c.FirstSeenAt, &c.LastSeenRun, &c.LastSeenAt, &c.SeenCount, &c.Status); err != nil {
 			return nil, err
 		}
@@ -386,7 +433,7 @@ func LoadExternallyOwnedRunConcerns(ctx context.Context, workspacePath string) (
 		return nil, err
 	}
 	defer db.Close()
-	rows, err := db.QueryContext(ctx, `SELECT fingerprint, step_id, phase, group_name, text,
+	rows, err := db.QueryContext(ctx, `SELECT fingerprint, issue_id, step_id, phase, group_name, text,
 			first_seen_run, first_seen_at, last_seen_run, last_seen_at, seen_count, status,
 			resolved_at, resolved_by, resolution_note
 		FROM run_concerns
@@ -403,7 +450,7 @@ func LoadExternallyOwnedRunConcerns(ctx context.Context, workspacePath string) (
 	for rows.Next() {
 		var concern RunConcern
 		if err := rows.Scan(
-			&concern.Fingerprint, &concern.StepID, &concern.Phase, &concern.GroupName,
+			&concern.Fingerprint, &concern.IssueID, &concern.StepID, &concern.Phase, &concern.GroupName,
 			&concern.Text, &concern.FirstSeenRun, &concern.FirstSeenAt,
 			&concern.LastSeenRun, &concern.LastSeenAt, &concern.SeenCount,
 			&concern.Status, &concern.ResolvedAt, &concern.ResolvedBy,
@@ -516,7 +563,7 @@ func LoadPriorPreValidationFailures(ctx context.Context, workspacePath, stepID s
 	if limit <= 0 {
 		limit = 10
 	}
-	rows, err := db.QueryContext(ctx, `SELECT fingerprint, step_id, phase, group_name, text,
+	rows, err := db.QueryContext(ctx, `SELECT fingerprint, issue_id, step_id, phase, group_name, text,
 			first_seen_run, first_seen_at, last_seen_run, last_seen_at, seen_count, status,
 			resolved_at, resolved_by, resolution_note
 		FROM run_concerns
@@ -537,7 +584,7 @@ func LoadPriorPreValidationFailures(ctx context.Context, workspacePath, stepID s
 	for rows.Next() {
 		var concern RunConcern
 		if err := rows.Scan(
-			&concern.Fingerprint, &concern.StepID, &concern.Phase, &concern.GroupName,
+			&concern.Fingerprint, &concern.IssueID, &concern.StepID, &concern.Phase, &concern.GroupName,
 			&concern.Text, &concern.FirstSeenRun, &concern.FirstSeenAt,
 			&concern.LastSeenRun, &concern.LastSeenAt, &concern.SeenCount,
 			&concern.Status, &concern.ResolvedAt, &concern.ResolvedBy,

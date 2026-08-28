@@ -1313,7 +1313,7 @@ func RegisterRunFullEvaluationTool(
 			"required": []string{"group_name"},
 		},
 		func(ctx context.Context, args map[string]interface{}) (string, error) {
-			iteration := "iteration-0"
+			iteration := currentWorkflowRunFolder
 			groupName, _ := args["group_name"].(string)
 			if groupName == "" {
 				return "group_name is required — evaluation needs a specific group's execution folder (e.g., 'saurabh', 'xspaces')", nil
@@ -1983,9 +1983,6 @@ func RegisterRunFullWorkflowTool(
 				}
 			}
 
-			// Iteration is always provided — reuse the folder (creates if doesn't exist)
-			runMode := "use_same_run"
-
 			execToken := workflowExecutionIDToken()
 			execID := fmt.Sprintf("workflow-full-%s", execToken)
 			execCtx, cancel := context.WithCancel(session.sessionCtx)
@@ -2160,7 +2157,6 @@ func RegisterRunFullWorkflowTool(
 
 				// Set execution options
 				execOpts := &ExecutionOptions{
-					RunMode:           runMode,
 					SelectedRunFolder: iteration,
 					ExecutionStrategy: strategy,
 					EnabledGroupNames: enabledGroupNames,

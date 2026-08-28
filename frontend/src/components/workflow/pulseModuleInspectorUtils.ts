@@ -74,11 +74,10 @@ export function acknowledgedReason(
 
 /**
  * Compatibility projection for a UI talking to an older backend. New servers
- * provide finding.issue directly; fingerprints remain private matching keys.
+ * provide finding.issue directly; issue_id is the only public identity.
  */
 export function pulseIssueForFinding(finding: PulseFindingLifecycle): PulseIssue {
   if (finding.issue) return finding.issue
-  const fingerprint = finding.fingerprint.toUpperCase().slice(0, 8) || 'UNKNOWN'
   const reason = finding.status === 'acknowledged' ? acknowledgedReason(finding) : 'other'
   const status = finding.status === 'fixing'
     ? 'in_progress'
@@ -103,7 +102,7 @@ export function pulseIssueForFinding(finding: PulseFindingLifecycle): PulseIssue
       : 'none'
   const title = finding.details?.summary?.trim() || finding.text.trim()
   return {
-    id: finding.finding_id || `PUL-${fingerprint}`,
+    id: finding.finding_id || 'PUL-UNKNOWN',
     title,
     description: title === finding.text.trim() ? undefined : finding.text.trim(),
     status,
@@ -116,7 +115,6 @@ export function pulseIssueForFinding(finding: PulseFindingLifecycle): PulseIssue
 }
 
 export type PulseModuleActivity = PulseFindingEvent & {
-  fingerprint: string
   findingID?: string
   findingText: string
 }
@@ -211,8 +209,7 @@ export function buildPulseModuleActivity(
   return findings
     .flatMap((finding) => finding.events.map((event) => ({
       ...event,
-      fingerprint: finding.fingerprint,
-      findingID: finding.finding_id || event.finding_id,
+      findingID: finding.issue?.id || finding.finding_id || event.finding_id,
       findingText: finding.text,
     })))
     .sort((a, b) => b.recorded_at.localeCompare(a.recorded_at))

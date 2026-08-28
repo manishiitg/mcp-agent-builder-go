@@ -1242,6 +1242,43 @@ func TestPulseBacklogViewKeepsWorkflowObservationsOutOfFixerFeed(t *testing.T) {
 	}
 }
 
+func TestPulseBacklogCompactIncludesClosedIssueTextForSemanticReuse(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+	workspacePath := "Workflow/example"
+	const concern = "collector silently drops failed records"
+	if _, err := step_based_workflow.RecordRunConcerns(ctx, workspacePath, "review-1", "", pulseModuleTechnicalReview,
+		step_based_workflow.ConcernPhaseReview, "CONCERNS: "+concern); err != nil {
+		t.Fatalf("record issue: %v", err)
+	}
+	findings, err := step_based_workflow.LoadPulseFindingLifecycles(ctx, workspacePath, "", -1)
+	if err != nil || len(findings) != 1 {
+		t.Fatalf("load issue: findings=%+v err=%v", findings, err)
+	}
+	if err := step_based_workflow.ResolveRunConcern(ctx, workspacePath, findings[0].Fingerprint,
+		step_based_workflow.ConcernStatusResolved, "test", "Fix applied."); err != nil {
+		t.Fatalf("close issue: %v", err)
+	}
+
+	raw, err := readPulseBacklogView(ctx, workspacePath, "")
+	if err != nil {
+		t.Fatalf("read compact register: %v", err)
+	}
+	var payload struct {
+		Issues       []map[string]interface{} `json:"issues"`
+		ClosedIssues []map[string]interface{} `json:"closed_issues"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatalf("decode compact register: %v", err)
+	}
+	if len(payload.Issues) != 0 || len(payload.ClosedIssues) != 1 {
+		t.Fatalf("closed semantic candidate missing: %+v", payload)
+	}
+	if payload.ClosedIssues[0]["summary"] != concern || payload.ClosedIssues[0]["issue_id"] == "" {
+		t.Fatalf("closed candidate lacks issue identity/text: %+v", payload.ClosedIssues[0])
+	}
+}
+
 func TestPulseBacklogFullDetailRequiresAndFiltersPublicIDs(t *testing.T) {
 	ctx := context.Background()
 	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())

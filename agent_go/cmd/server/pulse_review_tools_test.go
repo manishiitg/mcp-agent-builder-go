@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -14,8 +15,8 @@ func TestTypedPulseReviewerToolsPersistFindingAndCompactReceipt(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("WORKSPACE_DOCS_PATH", root)
 	workspacePath := "Workflow/typed-review-tools"
-	const sessionID = "typed-reviewer-session"
-	pulseRunID := sessionID
+	const sessionID = "2026-08-28T12-00-00.000Z_typed-reviewer-session"
+	pulseRunID := "schedule-manual--typed-review"
 	reviewRunID := sessionID
 	ctx := mcpexecutor.WithSessionID(context.Background(), sessionID)
 
@@ -25,7 +26,7 @@ func TestTypedPulseReviewerToolsPersistFindingAndCompactReceipt(t *testing.T) {
 	recordFocus := executors["record_pulse_review_focus"].(func(context.Context, map[string]interface{}) (string, error))
 	raw, err := recordFinding(ctx, map[string]interface{}{
 		"workspace_path": workspacePath, "pulse_run_id": pulseRunID,
-		"module": pulseModuleWorkflowReview, "concern": "collector silently drops failed rows",
+		"module": pulseModuleTechnicalReview, "concern": "collector silently drops failed rows",
 		"issue_kind": "workflow_issue", "classification": "correctness_bug", "severity": "high",
 		"summary": "Failed rows disappear", "impact": "The workflow can report success on incomplete data.",
 		"evidence": []interface{}{"runs/iteration-0/result.json"},
@@ -44,7 +45,7 @@ func TestTypedPulseReviewerToolsPersistFindingAndCompactReceipt(t *testing.T) {
 	// second recurrence in the same review identity.
 	if _, err := recordFinding(ctx, map[string]interface{}{
 		"workspace_path": workspacePath, "pulse_run_id": pulseRunID,
-		"module": pulseModuleWorkflowReview, "concern": "collector silently drops failed rows",
+		"module": pulseModuleTechnicalReview, "concern": "collector silently drops failed rows",
 		"issue_kind": "workflow_issue", "classification": "correctness_bug", "severity": "high",
 		"summary": "Failed rows disappear", "impact": "The workflow can report success on incomplete data.",
 		"evidence": []interface{}{"runs/iteration-0/result.json"},
@@ -54,38 +55,41 @@ func TestTypedPulseReviewerToolsPersistFindingAndCompactReceipt(t *testing.T) {
 
 	if _, err := completeReview(ctx, map[string]interface{}{
 		"workspace_path": workspacePath, "pulse_run_id": pulseRunID,
-		"modules": []interface{}{pulseModuleWorkflowReview}, "verdict": "   ", "status": "completed",
+		"modules": []interface{}{pulseModuleTechnicalReview}, "verdict": "   ", "status": "completed",
 	}); err == nil || !strings.Contains(err.Error(), "non-empty verdict") {
 		t.Fatalf("blank verdict error=%v", err)
 	}
 	if _, err := completeReview(ctx, map[string]interface{}{
 		"workspace_path": workspacePath, "pulse_run_id": pulseRunID,
-		"modules": []interface{}{pulseModuleWorkflowReview}, "verdict": "One correctness issue.", "status": "completed",
+		"modules": []interface{}{pulseModuleTechnicalReview}, "verdict": "One correctness issue.", "status": "completed",
 	}); err == nil || !strings.Contains(err.Error(), "requires record_pulse_review_focus") {
 		t.Fatalf("missing focus error=%v", err)
 	}
 	if _, err := recordFocus(ctx, map[string]interface{}{
-		"workspace_path": workspacePath, "pulse_run_id": pulseRunID, "module": pulseModuleWorkflowReview,
-		"focus_key": "state_correctness", "priority_class": "critical_regression", "selection_reason": "The retained correctness issue was the highest-priority evidence.",
+		"workspace_path": workspacePath, "pulse_run_id": pulseRunID, "module": pulseModuleTechnicalReview,
+		"focus_key": "execution_health", "priority_class": "critical_regression", "selection_reason": "The retained correctness issue was the highest-priority evidence.",
 	}); err != nil {
 		t.Fatalf("record_pulse_review_focus: %v", err)
 	}
 
 	if _, err := completeReview(ctx, map[string]interface{}{
 		"workspace_path": workspacePath, "pulse_run_id": pulseRunID,
-		"modules": []interface{}{pulseModuleWorkflowReview}, "verdict": "One correctness issue.", "status": "completed",
+		"modules": []interface{}{pulseModuleTechnicalReview}, "verdict": "One correctness issue.", "status": "completed",
 	}); err != nil {
 		t.Fatalf("complete_pulse_review: %v", err)
 	}
 
-	receipt, err := step_based_workflow.LoadPulseReviewReceiptForRun(context.Background(), workspacePath, reviewRunID, pulseModuleWorkflowReview)
+	receipt, err := step_based_workflow.LoadPulseReviewReceiptForRun(context.Background(), workspacePath, reviewRunID, pulseModuleTechnicalReview)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if receipt.FindingCount != 1 || receipt.Status != "completed" || receipt.Verdict != "One correctness issue." {
 		t.Fatalf("unexpected receipt: %#v", receipt)
 	}
-	findings, err := step_based_workflow.LoadPulseFindingLifecycles(context.Background(), workspacePath, pulseModuleWorkflowReview, -1)
+	if receipt.PulseRunID != pulseRunID || receipt.ReviewRunID != reviewRunID {
+		t.Fatalf("receipt identities collapsed: pulse_run_id=%q review_run_id=%q", receipt.PulseRunID, receipt.ReviewRunID)
+	}
+	findings, err := step_based_workflow.LoadPulseFindingLifecycles(context.Background(), workspacePath, pulseModuleTechnicalReview, -1)
 	if err != nil || len(findings) != 1 || findings[0].SeenCount != 1 || findings[0].Details == nil || findings[0].Details.Summary != "Failed rows disappear" {
 		t.Fatalf("unexpected lifecycle: %#v err=%v", findings, err)
 	}
@@ -147,6 +151,19 @@ func TestPulseReviewFocusToolsPersistDurableAgenda(t *testing.T) {
 	if counts["plan_orchestration_integrity"] != [2]int{1, 0} {
 		t.Fatalf("small-route plan counts = %v", counts["plan_orchestration_integrity"])
 	}
+	selections, err := getPulseReviewFocusSelections(ctx, workspacePath, 10)
+	if err != nil {
+		t.Fatalf("load review focus selections: %v", err)
+	}
+	for _, selection := range selections {
+		if selection.FocusKey == "execution_health" {
+			if !slices.Contains(selection.IssueIDs, "PUL-AB12CD34") {
+				t.Fatalf("execution-health issue links = %#v", selection.IssueIDs)
+			}
+			return
+		}
+	}
+	t.Fatal("execution-health selection was not returned")
 }
 
 func TestTypedPulseReviewerToolsRequireCurrentConversation(t *testing.T) {

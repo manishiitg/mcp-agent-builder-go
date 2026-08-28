@@ -40,8 +40,8 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
    `run_in_background`, launch another reviewer, publish,
    notify, or run the workflow; you must not edit files or config. Read only the matching LLM/Ops/open-finding
    evidence needed for this review. Record each evidence-backed finding with
-   `record_pulse_finding` and each matured verification with
-   `record_pulse_verification` as soon as its judgment is established. A real
+   `record_pulse_finding`, reusing the existing `issue_id` whenever the issue
+   text and history describe the same root cause. A real
    operator decision is typed lifecycle state, not a workflow mutation: create
    it through `create_human_input_request` as described below.
 4. Require the reviewer to check all of the following agentically:

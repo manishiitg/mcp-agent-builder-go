@@ -975,10 +975,10 @@ func TestCreateAndUpdatePulseReviewOnlyScheduleSkipsGroupNamesRequirement(t *tes
 
 func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 	steps := pulseLifecycleSteps()
-	if got := len(steps); got != 4 {
-		t.Fatalf("postRunMonitorSteps() length = %d, want 4", got)
+	if got := len(steps); got != 3 {
+		t.Fatalf("postRunMonitorSteps() length = %d, want 3", got)
 	}
-	for i, want := range []string{"gate", "review", "fix", "finalize"} {
+	for i, want := range []string{"gate", "review-fix", "finalize"} {
 		if got := steps[i].label; got != want {
 			t.Fatalf("postRunMonitorSteps()[%d].label = %q, want %q", i, got, want)
 		}
@@ -986,27 +986,22 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 	review := steps[1].query
 	for _, want := range []string{
 		"Read the durable Gate worklist",
-		"PULSE REVIEW DISPATCH",
+		"PULSE SEQUENCED REVIEW + FIX DISPATCH",
 		"run_in_background",
-		"Engineering reviewer is one message sequence",
-		"Stores Health only when Gate selected",
-		"each later turn in message_sequence with a non-empty message",
-		"Strategic reviewer is one message sequence",
-		"The runtime waits for registered children",
-		"must not modify workflow/platform implementation files",
+		`pulse_phase_contract="technical_review_then_fix"`,
+		`required_pulse_review_modules=["technical_review"]`,
+		"backend receipt barrier unlocks mutation tools",
+		"Never launch a fresh Fixer",
+		"one separate read-only executor message sequence",
+		"the runtime waits for registered children",
+		"review turns are backend read-only",
 	} {
 		if !strings.Contains(review, want) {
 			t.Fatalf("review prompt missing %q:\n%s", want, review)
 		}
 	}
-	fix := steps[2].query
-	for _, want := range []string{"PULSE INDEPENDENT FIX DISPATCH", "canonical issues only", "one fresh executor Fixer", "never reuse a reviewer conversation"} {
-		if !strings.Contains(fix, want) {
-			t.Fatalf("fix prompt missing %q:\n%s", want, fix)
-		}
-	}
-	if !strings.Contains(steps[3].query, "PULSE FINALIZER") || strings.Contains(steps[3].query, "PULSE DASHBOARD") {
-		t.Fatal("only the finalizer must remain after Review and Fix")
+	if !strings.Contains(steps[2].query, "PULSE FINALIZER") || strings.Contains(steps[2].query, "PULSE DASHBOARD") {
+		t.Fatal("only the finalizer must remain after sequenced Review + Fix")
 	}
 	return
 
@@ -2590,11 +2585,11 @@ func TestPostRunMonitorModuleStepsReserveHTMLForDashboard(t *testing.T) {
 	steps := pulseLifecycleSteps()
 	checked := 0
 	for _, step := range steps {
-		if step.label != "review" && step.label != "fix" {
+		if step.label != "review-fix" {
 			continue
 		}
 		checked++
-		for _, want := range []string{"render the dashboard", "durable Gate worklist"} {
+		for _, want := range []string{"render a dashboard", "durable Gate worklist"} {
 			if !strings.Contains(step.query, want) {
 				t.Fatalf("module step %q missing single-renderer guard %q:\n%s", step.label, want, step.query)
 			}
@@ -2603,8 +2598,8 @@ func TestPostRunMonitorModuleStepsReserveHTMLForDashboard(t *testing.T) {
 			t.Fatalf("module step %q still loads the presentation contract:\n%s", step.label, step.query)
 		}
 	}
-	if checked != 2 {
-		t.Fatalf("checked %d Review/Fix steps, want 2", checked)
+	if checked != 1 {
+		t.Fatalf("checked %d sequenced Review/Fix steps, want 1", checked)
 	}
 }
 

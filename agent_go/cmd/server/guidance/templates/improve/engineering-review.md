@@ -1,4 +1,4 @@
-# TECHNICAL REVIEW
+# TECHNICAL REVIEW PHASE
 
 Run the operational Review contract directly in this continuing Workflow Builder conversation.
 Do not modify implementation files and do not run Pulse Gate,
@@ -14,8 +14,11 @@ Use `{{.RunFolder}}` as the primary retained run.{{end}}
    checklist. This continuing Review command overrides only that reference's
    Standalone Operations Review dispatch and read-only return wrapper: do not launch its
    standalone wrapper. Apply its checks inside this conversation,
-   persist evidence-backed findings, and leave implementation changes to the
-   independent `/pulse-fixer` command.
+   persist evidence-backed findings, and leave implementation changes to a
+   later Fix phase. The caller may attach that phase automatically as the next
+   message in this retained conversation, or the operator may invoke
+   `/pulse-fixer` separately; neither possibility grants mutation authority in
+   this review turn.
 2. Use `pulse_run_id="current"`, which resolves to this current Workflow Builder
    chat. Call `record_pulse_worklist` exactly once with `mode="backlog_drain"`
    and a concrete `mode_reason`: `technical_review` is due and
@@ -45,8 +48,10 @@ Use `{{.RunFolder}}` as the primary retained run.{{end}}
 4. Deduplicate by root cause and leave one compact, ordered canonical repair
    queue. Do not apply repairs. Record the chosen focus exactly once, then call
    `complete_pulse_review(modules=["technical_review"], ...)` exactly once with
-   the truthful terminal review verdict. `/pulse-fixer` owns later mutations
-   and repair outcome; it must not rewrite this review receipt.
+   the truthful terminal review verdict. The later receipt-gated Fix phase owns
+   mutations and repair outcome; it must not rewrite this review receipt.
 5. Finish with a concise summary of what was reviewed, promoted, linked,
-   rejected, already verified, awaiting evidence, or blocked. Tell the operator
-   to run `/pulse-fixer` next when at least one safe canonical issue is actionable.
+   rejected, already verified, awaiting evidence, or blocked. State whether at
+   least one safe canonical issue is actionable for the later Fix phase; do not
+   assume whether the caller attached that phase automatically or the operator
+   will invoke `/pulse-fixer` separately.

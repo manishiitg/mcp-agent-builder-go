@@ -1,8 +1,28 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { findCommand, getCommands } from './registry'
 import type { CommandContext } from './types'
 
+const { runPulseMock } = vi.hoisted(() => ({ runPulseMock: vi.fn() }))
+vi.mock('../api/scheduler', () => ({ schedulerApi: { runPulse: runPulseMock } }))
+
 describe('Pulse slash commands', () => {
+  it('runs the complete manual Pulse lifecycle through the scheduler backend', async () => {
+    runPulseMock.mockResolvedValueOnce({ run_id: 'manual-pulse-1' })
+    const addToast = vi.fn()
+    const command = findCommand('pulse', 'workflow')
+
+    await command?.execute({
+      beforeSlash: '',
+      onSubmit: vi.fn(),
+      workshopMode: 'workshop',
+      getWorkspaceStore: () => ({ activeFolder: 'Workflow/social-media' }),
+      addToast,
+    } as unknown as CommandContext)
+
+    expect(runPulseMock).toHaveBeenCalledWith('Workflow/social-media')
+    expect(addToast).toHaveBeenCalledWith('Pulse started', 'success')
+  })
+
   it('has no slash command for recurring Pulse setup — it is a toolbar/popup toggle', () => {
     const workflowCommand = findCommand('pulse-setup', 'workflow')
     const orgCommand = findCommand('pulse-setup', 'multi-agent')
@@ -57,7 +77,7 @@ describe('Pulse slash commands', () => {
     expect(submitted).toContain('do not edit workflow artifacts')
   })
 
-  it('routes Pulse Review to the consolidated independent technical reviewer', () => {
+  it('routes Pulse Review through one receipt-gated retained review and fix sequence', () => {
     const command = findCommand('pulse-review', 'workflow')
     let submitted = ''
 
@@ -71,7 +91,12 @@ describe('Pulse slash commands', () => {
     expect(submitted).toContain('kind=\\"engineering-review\\"')
     expect(submitted).toContain('Run /pulse-review as a BACKGROUND task')
     expect(submitted).toContain('BACKGROUND task')
-		expect(submitted).toContain('completion_mode="present_result"')
+    expect(submitted).toContain('completion_mode="present_result"')
+		expect(submitted).toContain('message_sequence=')
+		expect(submitted).toContain('kind=\\"pulse-fixer\\"')
+		expect(submitted).toContain('pulse_phase_contract="technical_review_then_fix"')
+		expect(submitted).toContain('pulse_run_id="child"')
+		expect(submitted).toContain('required_pulse_review_modules=["technical_review"]')
 		expect(submitted).toContain('Do not call tools, reload state, or independently revalidate')
     expect(submitted).toContain('iteration-9/default')
     expect(submitted).toContain('prioritize failed evaluation writes')
@@ -94,7 +119,7 @@ describe('Pulse slash commands', () => {
     expect(submitted).toContain('iteration-9/default')
   })
 
-  it('routes a manual technical focus through Technical Review', () => {
+  it('routes a manual technical focus through retained Technical Review and Fix', () => {
     const technical = findCommand('pulse-review-execution-health', 'workflow')
     let submitted = ''
 
@@ -107,6 +132,26 @@ describe('Pulse slash commands', () => {
     expect(submitted).toContain('kind=\\"engineering-review\\"')
     expect(submitted).toContain('Manual Pulse review focus: execution_health')
     expect(submitted).toContain('required_pulse_review_modules=["technical_review"]')
+    expect(submitted).toContain('pulse_phase_contract="technical_review_then_fix"')
+    expect(submitted).toContain('message_sequence=')
+  })
+
+  it('routes store review aliases through store_integrity review and bounded repair', () => {
+    for (const commandName of ['pulse-review-knowledge', 'pulse-review-learnings', 'pulse-review-database']) {
+      const command = findCommand(commandName, 'workflow')
+      let submitted = ''
+      command?.execute({
+        beforeSlash: 'repair confirmed ownership drift',
+        onSubmit: (message: string) => { submitted = message },
+        workshopMode: 'workshop',
+        getWorkflowStore: () => ({ selectedRunFolder: 'iteration-4/default' }),
+      } as CommandContext)
+
+      expect(submitted).toContain('kind=\\"engineering-review\\"')
+      expect(submitted).toContain('Manual Pulse review focus: store_integrity')
+      expect(submitted).toContain('pulse_phase_contract="technical_review_then_fix"')
+      expect(submitted).toContain('iteration-4/default')
+    }
   })
 
   it('runs Strategy Auditor as a background guided review anchored to the selected run', () => {

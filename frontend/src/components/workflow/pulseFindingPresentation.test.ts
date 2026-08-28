@@ -4,7 +4,6 @@ import { pulseFindingPresentation, pulseFindingProgress } from './pulseFindingPr
 
 function finding(overrides: Partial<PulseFindingLifecycle>): PulseFindingLifecycle {
   return {
-    fingerprint: 'fp',
     finding_id: 'PUL-1',
     phase: 'review',
     step_id: 'workflow_review',

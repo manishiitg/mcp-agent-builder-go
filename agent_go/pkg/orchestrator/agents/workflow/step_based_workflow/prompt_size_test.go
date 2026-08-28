@@ -170,6 +170,11 @@ func TestWorkshopPromptShellExamplesUseAbsolutePaths(t *testing.T) {
 		if rest == "" || !isShellVerb(verb) {
 			continue // a bare tool name or a filename noun, not a command
 		}
+		// This is a syntax-pattern label, not a complete shell command and it
+		// neither reads nor writes a filesystem path.
+		if span == "jq -n --arg" {
+			continue
+		}
 		if verb == "cd" {
 			t.Errorf("workshop prompt contains a `cd` command (%q), which the same prompt forbids. "+
 				"Use an absolute path instead.", span)

@@ -489,6 +489,7 @@ export interface PulseReviewFocus {
   review_count?: number
   route_review_count?: number
   deferred_focuses?: string[]
+  issue_ids?: string[]
 }
 
 export interface PulseLoopClosureFinding {
@@ -628,7 +629,6 @@ export interface PulseFindingVerification {
 }
 
 export interface PulseFixFindingRef {
-  fingerprint: string
   finding_id: string
   disposition?: string
   summary?: string
@@ -710,7 +710,6 @@ export interface PulseFindingLifecycle {
    * `issue` has been accepted into Pulse's repair lifecycle.
    */
   kind?: 'issue' | 'observation'
-  fingerprint: string
   finding_id?: string
   module?: string
   step_id: string
@@ -1842,7 +1841,6 @@ export interface CreateRunFolderResponse {
 // Execution options for frontend-controlled execution
 // Note: AgentLLMConfig is already defined above (line ~462)
 export interface ExecutionOptions {
-  run_mode: 'use_same_run' | 'create_new_runs_always';
   selected_run_folder?: string;
   execution_strategy: string;
   resume_from_step?: number;  // 1-based step number (for top-level steps)
@@ -3110,7 +3108,6 @@ export interface WorkflowNotificationConfig {
 }
 
 export interface WorkflowExecutionDefaults {
-  always_use_same_run: boolean
   // Global step overrides (replaces step_override.json)
   disable_learning?: boolean
   disable_parallel_tool_execution?: boolean

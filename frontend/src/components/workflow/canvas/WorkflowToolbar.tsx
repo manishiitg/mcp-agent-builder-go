@@ -73,7 +73,7 @@ import {
   PULSE_FIXED_COMMANDS,
   PULSE_MODULE_COMMANDS,
 } from './pulseSections'
-import { buildPulseFocusedReviewChatMessage, sendWorkflowMessageToChat } from '../../../utils/reportHumanInputChat'
+import { sendWorkflowMessageToChat } from '../../../utils/reportHumanInputChat'
 
 // Execution phase ID - special phase that should be displayed separately
 const EXECUTION_PHASE_ID = 'execution'
@@ -513,7 +513,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
   const [showWorkflowSchedulesPanel, setShowWorkflowSchedulesPanel] = useState(false)
   const [workflowScheduleStats, setWorkflowScheduleStats] = useState<WorkflowScheduleStats>(EMPTY_WORKFLOW_SCHEDULE_STATS)
   const [manualPulseStarting, setManualPulseStarting] = useState(false)
-  const [focusedPulseStarting, setFocusedPulseStarting] = useState<string | null>(null)
 
   const runPulseNow = useCallback(async () => {
     if (!workspacePath || manualPulseStarting) return
@@ -538,30 +537,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
       setManualPulseStarting(false)
     }
   }, [manualPulseStarting, workspacePath])
-
-  const runFocusedPulseNow = useCallback(async (module: string, focusKey: string) => {
-    if (!workspacePath || focusedPulseStarting) return
-    const focusID = `${module}:${focusKey}`
-    setFocusedPulseStarting(focusID)
-    try {
-      const message = buildPulseFocusedReviewChatMessage(module, focusKey)
-      const result = await sendWorkflowMessageToChat({ workspacePath, message })
-      useChatStore.getState().addToast(
-        result.queuedBehindRunningTurn
-          ? 'Focused review queued behind the current chat turn.'
-          : result.reused
-            ? 'Focused review sent to the existing chat.'
-            : 'New chat opened for the focused review.',
-        'success',
-      )
-      setShowMonitorHelp(false)
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : 'Unable to open focused Pulse review in chat'
-      useChatStore.getState().addToast(detail.trim() || 'Unable to start focused Pulse review', 'error')
-    } finally {
-      setFocusedPulseStarting(null)
-    }
-  }, [focusedPulseStarting, workspacePath])
 
   const workflowScheduleLabel = useMemo(
     () => formatWorkflowNameFromPath(workspacePath),
@@ -1249,19 +1224,10 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                 {workspacePath && (
                   <PulseWorkspace
                     workspacePath={workspacePath}
-                    monitorOn={monitorOn}
                     finalCommandStates={pulseFinalCommandStates}
-                    gateMode={pulseGateMode}
                     reviewFocuses={pulseReviewFocuses}
                     reviewFocusSelections={pulseReviewFocusSelections}
-                    statusLoading={pulseStatusLoading}
                     statusError={pulseStatusError}
-                    onRefresh={() => {
-                      window.dispatchEvent(new CustomEvent(WORKFLOW_SOUL_REFRESH_EVENT))
-                      void refreshPulseModuleStates()
-                    }}
-                    onRunFocus={runFocusedPulseNow}
-                    focusRunStarting={focusedPulseStarting}
                   />
                 )}
               </div>

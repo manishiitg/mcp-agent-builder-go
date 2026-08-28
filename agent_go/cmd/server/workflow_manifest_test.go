@@ -239,7 +239,7 @@ func TestReadWorkflowManifestMigratesMissingLabelFromWorkspacePath(t *testing.T)
 	}
 }
 
-func TestReadWorkflowManifestPrunesRetiredExecutionDefaultsField(t *testing.T) {
+func TestReadWorkflowManifestPrunesRetiredExecutionDefaultsFields(t *testing.T) {
 	const workspacePath = "Workflow/linkedin"
 	manifestJSON, err := json.Marshal(map[string]interface{}{
 		"schema_version": 1,
@@ -269,15 +269,15 @@ func TestReadWorkflowManifestPrunesRetiredExecutionDefaultsField(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("ReadWorkflowManifest() found=%v err=%v", found, err)
 	}
-	if manifest.ExecutionDefs.WorkshopMode != "optimizer" || !manifest.ExecutionDefs.AlwaysUseSameRun {
+	if manifest.ExecutionDefs.WorkshopMode != "optimizer" {
 		t.Fatalf("known execution_defaults fields not preserved: %+v", manifest.ExecutionDefs)
 	}
 
 	workspace.mu.Lock()
 	persistedJSON := workspace.files[workspacePath+"/workflow.json"]
 	workspace.mu.Unlock()
-	if strings.Contains(persistedJSON, "global_skill_objective") {
-		t.Fatalf("persisted manifest still contains retired field global_skill_objective: %s", persistedJSON)
+	if strings.Contains(persistedJSON, "global_skill_objective") || strings.Contains(persistedJSON, "always_use_same_run") {
+		t.Fatalf("persisted manifest still contains retired execution defaults: %s", persistedJSON)
 	}
 	if !strings.Contains(persistedJSON, "\"workshop_mode\": \"optimizer\"") {
 		t.Fatalf("persisted manifest lost known field workshop_mode: %s", persistedJSON)

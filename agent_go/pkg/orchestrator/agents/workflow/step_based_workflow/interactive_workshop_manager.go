@@ -112,7 +112,12 @@ func sanitizeWorkshopAgentIdentityPart(value string) string {
 }
 
 func newWorkshopStageAgentIdentity(name string) string {
-	return fmt.Sprintf("%s-%d-%d", sanitizeWorkshopAgentIdentityPart(name), time.Now().UnixNano(), workshopStageAgentIdentityCounter.Add(1))
+	// Pulse review receipts use the child tool-session identity as their
+	// review_run_id. Keep every workshop stage identity valid for that durable
+	// contract instead of minting an unrelated workshop-<kind>-<nanos> value
+	// that cannot be looked up through get_pulse_state(view="review").
+	prefix := time.Now().UTC().Format("2006-01-02T15-04-05.000Z")
+	return fmt.Sprintf("%s_%s-%d", prefix, sanitizeWorkshopAgentIdentityPart(name), workshopStageAgentIdentityCounter.Add(1))
 }
 
 const maxBackgroundMessageSequenceItems = 12
@@ -125,6 +130,59 @@ type backgroundMessageSequenceItem struct {
 	ID      string
 	Title   string
 	Message string
+}
+
+type backgroundPulsePhaseContract struct {
+	Kind       string
+	PulseRunID string
+	Module     string
+}
+
+func resolveBackgroundPulseRunID(requested, childSessionID string) string {
+	requested = strings.TrimSpace(requested)
+	if strings.EqualFold(requested, "child") {
+		return strings.TrimSpace(childSessionID)
+	}
+	return requested
+}
+
+func gateBackgroundPulseToolDefinitions(definitions []mcpagent.ToolDefinition, sessionID string) []mcpagent.ToolDefinition {
+	gated := append([]mcpagent.ToolDefinition(nil), definitions...)
+	for index := range gated {
+		definition := gated[index]
+		if definition.Execute == nil {
+			continue
+		}
+		execute := definition.Execute
+		toolName := definition.Name
+		gated[index].Execute = func(ctx context.Context, args map[string]interface{}) (string, error) {
+			if allowed, reason := PulseMaintenanceToolAllowedWithArgs(sessionID, toolName, args); !allowed {
+				return "", fmt.Errorf("%s", reason)
+			}
+			return execute(ctx, args)
+		}
+	}
+	return gated
+}
+
+func gateBackgroundPulseToolExecutors(executors map[string]interface{}, sessionID string) map[string]interface{} {
+	gated := make(map[string]interface{}, len(executors))
+	for toolName, raw := range executors {
+		execute, ok := raw.(func(context.Context, map[string]interface{}) (string, error))
+		if !ok {
+			gated[toolName] = raw
+			continue
+		}
+		name := toolName
+		fn := execute
+		gated[name] = func(ctx context.Context, args map[string]interface{}) (string, error) {
+			if allowed, reason := PulseMaintenanceToolAllowedWithArgs(sessionID, name, args); !allowed {
+				return "", fmt.Errorf("%s", reason)
+			}
+			return fn(ctx, args)
+		}
+	}
+	return gated
 }
 
 // backgroundWorkshopToolDefinitionDraft collects workshop-native tools before
@@ -1639,7 +1697,7 @@ func (iwm *InteractiveWorkshopManager) registerMarkChangelogArtifactReviewedTool
 	}
 	return mcpAgent.RegisterCustomTool(
 		"mark_changelog_artifact_reviewed",
-		"Mark planning/changelog entries as fully inspected after the parent Pulse/workshop agent has recorded the Artifact Review in builder/improve.html. Generic read-only reviewers must only propose exact marks and must not call this tool. This is the only supported way to set artifact_review.done=true; do not edit changelog JSON directly.",
+		"Mark planning/changelog entries as fully inspected after every dependency surface has an evidence-backed disposition. Generic read-only reviewers must only propose exact marks and must not call this tool. This is the only supported way to set artifact_review.done=true; do not edit changelog JSON directly.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -1658,6 +1716,7 @@ func (iwm *InteractiveWorkshopManager) registerMarkChangelogArtifactReviewedTool
 								"description": "Zero-based indexes in the file's entries array that were fully inspected or cursor-backfilled.",
 								"items":       map[string]interface{}{"type": "integer"},
 							},
+							"surface_reviews": planDependencySurfaceReviewSchema(),
 						},
 						"required": []string{"file", "entry_indexes"},
 					},
@@ -1740,6 +1799,7 @@ func (iwm *InteractiveWorkshopManager) markChangelogArtifactReviewed(ctx context
 	reportEntryID := strings.TrimSpace(asString(args["report_entry_id"]))
 
 	marksByFile := map[string]map[int]bool{}
+	reviewsByFile := map[string]map[int]map[string]PlanDependencySurfaceReview{}
 	for _, raw := range rawMarks {
 		obj, ok := raw.(map[string]interface{})
 		if !ok {
@@ -1755,6 +1815,19 @@ func (iwm *InteractiveWorkshopManager) markChangelogArtifactReviewed(ctx context
 		}
 		if marksByFile[file] == nil {
 			marksByFile[file] = map[int]bool{}
+		}
+		var surfaceReviews map[string]PlanDependencySurfaceReview
+		if result == "cursor-backfill" && obj["surface_reviews"] == nil {
+			surfaceReviews = cursorBackfillSurfaceReviews()
+		} else {
+			var reviewErr error
+			surfaceReviews, reviewErr = parsePlanDependencySurfaceReviews(obj["surface_reviews"])
+			if reviewErr != nil {
+				return fmt.Sprintf("invalid dependency review for %s: %v", file, reviewErr), nil
+			}
+		}
+		if reviewsByFile[file] == nil {
+			reviewsByFile[file] = map[int]map[string]PlanDependencySurfaceReview{}
 		}
 		for _, rawIndex := range rawIndexes {
 			var idx int
@@ -1773,6 +1846,7 @@ func (iwm *InteractiveWorkshopManager) markChangelogArtifactReviewed(ctx context
 				return fmt.Sprintf("entry index %d for %s is negative", idx, file), nil
 			}
 			marksByFile[file][idx] = true
+			reviewsByFile[file][idx] = surfaceReviews
 		}
 	}
 
@@ -1803,6 +1877,7 @@ func (iwm *InteractiveWorkshopManager) markChangelogArtifactReviewed(ctx context
 				ReviewedBy:    "workflow_builder",
 				Result:        result,
 				ReportEntryID: reportEntryID,
+				Surfaces:      reviewsByFile[file][idx],
 			}
 			totalMarked++
 		}
@@ -2032,7 +2107,7 @@ func workshopWritePaths(workspacePath string) []string {
 }
 
 func (iwm *InteractiveWorkshopManager) setupWorkshopToolAgentSession(agentKind string, readPaths []string, writePaths []string) string {
-	sessionID := fmt.Sprintf("workshop-%s-%d", agentKind, time.Now().UnixNano())
+	sessionID := newWorkshopStageAgentIdentity(agentKind)
 	workspacePath := strings.TrimSpace(iwm.controller.GetWorkspacePath())
 
 	common.SetSessionFolderGuard(sessionID, readPaths, writePaths)
@@ -2524,7 +2599,7 @@ This is the one-line-per-category map. For full signatures, parameters, when-to-
 {{if or (eq .WorkshopMode "workshop") (eq .WorkshopMode "run")}}
 - **Step execution & inspection**: `+"`execute_step`"+`, `+"`query_step`"+`, `+"`send_step_message`"+`, `+"`debug_step`"+`, `+"`list_executions`"+`, `+"`stop_step`"+`, `+"`stop_all_executions`"+`, `+"`run_in_background`"+`, `+"`run_full_workflow`"+`. {{if eq .WorkshopMode "workshop"}}Workshop also exposes `+"`execute_step(..., fast_path_only=true)`"+` for scripted main.py fast-path testing.{{end}}
 {{end}}{{if eq .WorkshopMode "workshop"}}
-- **Step config & analysis**: `+"`update_step_config`"+`, read-only improve/review tools, `+"`review_workflow_timing`"+`, `+"`review_workflow_costs`"+`, and `+"`get_cost_summary`"+`. Objective + success criteria live in `+"`soul/soul.md`"+`. Pulse uses ordinary `+"`run_in_background`"+` agents: Engineering/Ops can share one executor message sequence, while Strategy and Goal remain independent. Strategy changes use normal plan tools only after approval or during an explicit bounded manual request.
+- **Step config & analysis**: `+"`update_step_config`"+`, read-only improve/review tools, `+"`review_workflow_timing`"+`, `+"`review_workflow_costs`"+`, and `+"`get_cost_summary`"+`. Objective + success criteria live in `+"`soul/soul.md`"+`. Scheduled Pulse uses ordinary `+"`run_in_background`"+` agents: Technical Maintenance retains one executor across receipt-gated review and repair turns, while Strategic Review remains a separate read-only sequence. Strategy changes use normal plan tools only after approval or during an explicit bounded manual request.
 - **Strategy review & decisions**: use the guided `+"`/goal-advisor`"+` review in the current conversation. Use `+"`create_human_input_request`"+` for durable approval/clarification cards; scheduled Pulse renders them in `+"`builder/improve.html`"+`.
 {{end}}
 - **Read-only info**: `+"`get_step_prompts`"+`, `+"`get_workflow_config`"+`, `+"`get_llm_config`"+`{{if eq .WorkshopMode "workshop"}}, `+"`get_workflow_command_guidance(kind=\"review-artifact-drift\")`"+`{{else}}. Artifact drift reviews belong in Workshop — switch modes and run `+"`/review-artifact-drift`"+` if needed{{end}}.
@@ -3357,9 +3432,18 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					"uniqueItems": true,
 					"items": map[string]interface{}{
 						"type": "string",
-						"enum": []string{"workflow_review", "llm_ops_review", "strategic_review"},
+						"enum": pulsemodules.AcceptedForReviewReceipts(),
 					},
 					"description": "Optional typed completion contract. The background execution succeeds only when its exact child session writes a completed Pulse review receipt for every listed module.",
+				},
+				"pulse_phase_contract": map[string]interface{}{
+					"type":        "string",
+					"enum":        []string{"technical_review_then_fix"},
+					"description": "Optional Pulse-only phase contract. technical_review_then_fix keeps this executor read-only except for typed review persistence until its completed Technical Review receipt is durably observed between sequence turns; only then are repair tools enabled.",
+				},
+				"pulse_run_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Required with pulse_phase_contract. Use the exact parent scheduled Pulse run id whose Gate worklist this child advances, or child for a manual slash-command Review+Fix sequence whose own retained child session is the Pulse correlation id.",
 				},
 			},
 			"required": []string{"name", "instruction"},
@@ -3402,6 +3486,25 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				return "", fmt.Errorf("completion_mode must be continue or present_result")
 			}
 			requiredPulseReviewModules := backgroundStringSliceArg(args["required_pulse_review_modules"])
+			phaseContract := backgroundPulsePhaseContract{
+				Kind:       strings.TrimSpace(asString(args["pulse_phase_contract"])),
+				PulseRunID: strings.TrimSpace(asString(args["pulse_run_id"])),
+			}
+			if phaseContract.Kind != "" {
+				if phaseContract.Kind != "technical_review_then_fix" {
+					return "", fmt.Errorf("unsupported pulse_phase_contract %q", phaseContract.Kind)
+				}
+				if phaseContract.PulseRunID == "" {
+					return "", fmt.Errorf("pulse_run_id is required with pulse_phase_contract")
+				}
+				if len(messageSequence) == 0 {
+					return "", fmt.Errorf("pulse_phase_contract requires a message_sequence with a repair turn after the review receipt")
+				}
+				if len(requiredPulseReviewModules) != 1 || pulsemodules.Normalize(requiredPulseReviewModules[0]) != pulsemodules.TechnicalReviewID {
+					return "", fmt.Errorf("technical_review_then_fix requires required_pulse_review_modules=[%q]", pulsemodules.TechnicalReviewID)
+				}
+				phaseContract.Module = pulsemodules.TechnicalReviewID
+			}
 
 			// Create slug from name for execution ID
 			nameSlug := strings.ToLower(strings.ReplaceAll(name, " ", "-"))
@@ -3505,7 +3608,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				if agentType == "orchestrator" {
 					result, execErr = iwm.runBackgroundTodoTaskAgent(execCtx, name, instruction, inheritedSkills)
 				} else {
-					result, execErr = iwm.runBackgroundTaskAgentSequence(execCtx, name, instruction, messageSequence, inheritedSkills, requiredPulseReviewModules)
+					result, execErr = iwm.runBackgroundTaskAgentSequence(execCtx, name, instruction, messageSequence, inheritedSkills, requiredPulseReviewModules, phaseContract)
 				}
 			}()
 
@@ -6365,7 +6468,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					"type":        "integer",
 					"minimum":     1,
 					"maximum":     maxRunRetentionCount,
-					"description": "Number of backup run/eval iterations to keep, excluding active iteration-0. Defaults to 5 when omitted. Raise this for workflows whose Pulse or Goal Advisor reviews need a wider evidence window.",
+					"description": "Number of backup run/eval iterations to keep, excluding active iteration-0. Defaults to 3 when omitted. Raise this for workflows whose Pulse or Goal Advisor reviews need a wider evidence window.",
 				},
 				"execution_max_turns": map[string]interface{}{
 					"type":        "integer",
@@ -10218,7 +10321,7 @@ func (iwm *InteractiveWorkshopManager) runBackgroundTodoTaskAgent(ctx context.Co
 
 // runBackgroundTaskAgentSequence creates and runs one standalone background
 // agent, optionally preserving it across ordered follow-up turns.
-func (iwm *InteractiveWorkshopManager) runBackgroundTaskAgentSequence(ctx context.Context, name string, instruction string, messageSequence []backgroundMessageSequenceItem, inheritedSkills []*llmtypes.Skill, requiredPulseReviewModules []string) (string, error) {
+func (iwm *InteractiveWorkshopManager) runBackgroundTaskAgentSequence(ctx context.Context, name string, instruction string, messageSequence []backgroundMessageSequenceItem, inheritedSkills []*llmtypes.Skill, requiredPulseReviewModules []string, phaseContract backgroundPulsePhaseContract) (string, error) {
 	logger := iwm.controller.GetLogger()
 
 	// --- Folder guard: same as workshop agent ---
@@ -10236,9 +10339,9 @@ func (iwm *InteractiveWorkshopManager) runBackgroundTaskAgentSequence(ctx contex
 	iwm.controller.SetWorkspacePathForFolderGuard(readPaths, writePaths)
 
 	// --- LLM: generic run_in_background follows the normal workshop/phase model.
-	// Background agents use the same normal workshop phase selection. Pulse
-	// review/fix work is ordinary run_in_background work too; it has no hidden
-	// maintenance runner or model-selection path.
+	// Background agents use the same normal workshop phase selection. Pulse technical
+	// maintenance is ordinary run_in_background work with an explicit receipt gate;
+	// it has no hidden maintenance runner or model-selection path.
 	llmConfigToUse := iwm.controller.selectPhaseLLM("background task agent")
 	if llmConfigToUse == nil && iwm.presetLLM != nil && iwm.presetLLM.Provider != "" && iwm.presetLLM.ModelID != "" {
 		llmConfigToUse = workflowAgentLLMConfig(iwm.presetLLM, iwm.controller.GetFallbacks(), iwm.controller.GetAPIKeys())
@@ -10266,7 +10369,21 @@ func (iwm *InteractiveWorkshopManager) runBackgroundTaskAgentSequence(ctx contex
 	// CLI CWD.
 	config.IsolateCodingAgentWorkspace = true
 	config.CodingAgentKeepAlive = len(messageSequence) > 0
-	defer iwm.configureWorkshopToolAgentSession(config, "background-task", readPaths, writePaths)()
+	toolSessionID, cleanupToolSession := iwm.configureWorkshopToolAgentSessionWithID(config, "background-task", readPaths, writePaths)
+	defer cleanupToolSession()
+	var releasePulsePhase func()
+	if phaseContract.Kind != "" {
+		phaseContract.PulseRunID = resolveBackgroundPulseRunID(phaseContract.PulseRunID, toolSessionID)
+		var phaseErr error
+		releasePulsePhase, phaseErr = BeginPulseMaintenanceReviewPhase(toolSessionID, phaseContract.PulseRunID, phaseContract.Module)
+		if phaseErr != nil {
+			return "", phaseErr
+		}
+		defer releasePulsePhase()
+		checkpointPath := filepath.Join(workspacePath, "runs", "pulse", phaseContract.PulseRunID)
+		common.SetSessionFolderGuard(toolSessionID, readPaths, []string{checkpointPath})
+		configureWorkflowDBSession(toolSessionID, workspacePath, DBAccessRead, false)
+	}
 
 	// The workshop-only tools are native definitions rather than entries in the
 	// workspace tool pool. Collect them before construction, alongside the full
@@ -10274,6 +10391,9 @@ func (iwm *InteractiveWorkshopManager) runBackgroundTaskAgentSequence(ctx contex
 	workshopToolDefinitions, err := iwm.prepareBackgroundWorkshopToolDefinitions(inheritedSkills)
 	if err != nil {
 		return "", err
+	}
+	if phaseContract.Kind != "" {
+		workshopToolDefinitions = gateBackgroundPulseToolDefinitions(workshopToolDefinitions, toolSessionID)
 	}
 	config.DirectTools = workshopToolDefinitions
 
@@ -10288,6 +10408,9 @@ func (iwm *InteractiveWorkshopManager) runBackgroundTaskAgentSequence(ctx contex
 	// category allow-list here.
 	toolsToRegister := iwm.controller.WorkspaceTools
 	executorsToUse := iwm.controller.WorkspaceToolExecutors
+	if phaseContract.Kind != "" {
+		executorsToUse = gateBackgroundPulseToolExecutors(executorsToUse, toolSessionID)
+	}
 
 	createAgentFunc := func(cfg *agents.OrchestratorAgentConfig, log loggerv2.Logger, tracer observability.Tracer, eventBridge mcpagent.AgentEventListener) agents.OrchestratorAgent {
 		return newWorkflowBackgroundTaskAgent(cfg, log, tracer, eventBridge)
@@ -10396,11 +10519,42 @@ func (iwm *InteractiveWorkshopManager) runBackgroundTaskAgentSequence(ctx contex
 
 	// --- Execute ---
 	logger.Info(fmt.Sprintf("🚀 Running background task agent: %q (turns=%d)", name, 1+len(messageSequence)))
-	result, err := executeBackgroundMessageSequence(ctx, agent, templateVars, instruction, messageSequence)
+	var receiptObserved bool
+	observedTurns := 0
+	totalTurns := 1 + len(messageSequence)
+	result, err := executeBackgroundMessageSequenceObserved(ctx, agent, templateVars, instruction, messageSequence, func(_ backgroundMessageSequenceItem, _ string) error {
+		if phaseContract.Kind == "" || receiptObserved {
+			return nil
+		}
+		observedTurns++
+		receipt, receiptErr := LoadPulseReviewReceiptForRun(ctx, workspacePath, toolSessionID, phaseContract.Module)
+		if errors.Is(receiptErr, sql.ErrNoRows) {
+			return nil
+		}
+		if receiptErr != nil {
+			return receiptErr
+		}
+		if receipt == nil || strings.ToLower(strings.TrimSpace(receipt.Status)) != "completed" {
+			return fmt.Errorf("Pulse repair phase requires a completed %s receipt from child session %s", phaseContract.Module, toolSessionID)
+		}
+		if observedTurns >= totalTurns {
+			return fmt.Errorf("Pulse Technical Review receipt was recorded on the final sequence turn; at least one later turn is required for bounded repair and result persistence")
+		}
+		if unlockErr := UnlockPulseMaintenanceRepairPhase(toolSessionID); unlockErr != nil {
+			return unlockErr
+		}
+		common.SetSessionFolderGuard(toolSessionID, readPaths, writePaths)
+		configureWorkflowDBSession(toolSessionID, workspacePath, DBAccessReadWrite, false)
+		receiptObserved = true
+		return nil
+	})
 	if err != nil {
 		return "", fmt.Errorf("background task agent failed: %w", err)
 	}
-	if err := requireBackgroundPulseReviewReceipts(ctx, workspacePath, config.MCPSessionID, requiredPulseReviewModules); err != nil {
+	if phaseContract.Kind != "" && !receiptObserved {
+		return "", fmt.Errorf("background Pulse Technical Maintenance ended before its completed review receipt unlocked the repair phase")
+	}
+	if err := requireBackgroundPulseReviewReceipts(ctx, workspacePath, toolSessionID, requiredPulseReviewModules); err != nil {
 		return "", err
 	}
 	return result, nil

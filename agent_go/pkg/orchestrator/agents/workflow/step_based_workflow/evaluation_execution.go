@@ -44,7 +44,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) ExecuteEvaluationOnly(ctx context.Con
 	// iteration-0 sandbox while still reading artifacts from the requested target run.
 	// Eval always runs against the workflow's current iteration-0. Historical
 	// re-scoring is intentionally not supported — workflow + eval rotate together
-	// in resolveRunFolderWithOptions, so evaluation/runs/iteration-N is paired
+	// in prepareCurrentRun, so evaluation/runs/iteration-N is paired
 	// with runs/iteration-N by construction. We preserve any group suffix the
 	// caller passed (e.g. "iteration-19/manishiitg" -> "iteration-0/manishiitg")
 	// since multi-group runs share an iteration but split per-group inside it.

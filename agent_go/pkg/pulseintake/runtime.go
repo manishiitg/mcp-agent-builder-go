@@ -43,17 +43,40 @@ type Finding struct {
 }
 
 type Result struct {
-	Detector        string    `json:"detector"`
-	DetectorVersion string    `json:"detector_version"`
-	ObservedAt      string    `json:"observed_at"`
-	CoverageStatus  string    `json:"coverage_status"`
-	CoverageReason  string    `json:"coverage_reason,omitempty"`
-	RunsInspected   int       `json:"runs_inspected"`
-	Findings        []Finding `json:"findings"`
+	Detector        string        `json:"detector"`
+	DetectorVersion string        `json:"detector_version"`
+	ObservedAt      string        `json:"observed_at"`
+	CoverageStatus  string        `json:"coverage_status"`
+	CoverageReason  string        `json:"coverage_reason,omitempty"`
+	RunsInspected   int           `json:"runs_inspected"`
+	Findings        []Finding     `json:"findings"`
+	RunIndex        *RunIndex     `json:"run_index,omitempty"`
+	RunIdentities   []RunIdentity `json:"run_identities,omitempty"`
 }
 
 type runMetadata struct {
-	Status string `json:"status"`
+	Status            string `json:"status"`
+	ExecutionID       string `json:"execution_id"`
+	PlanRevision      string `json:"plan_revision"`
+	ActiveSlotAtStart string `json:"active_slot_at_start"`
+}
+
+type RunIndex struct {
+	Version               int      `json:"version"`
+	ActiveIteration       string   `json:"active_iteration"`
+	RetainedIterations    []string `json:"retained_iterations"`
+	LastTransition        string   `json:"last_transition"`
+	FullRunPolicy         string   `json:"full_run_policy"`
+	PartialGroupRunPolicy string   `json:"partial_group_policy"`
+	UpdatedAt             string   `json:"updated_at"`
+}
+
+type RunIdentity struct {
+	RunFolder        string `json:"run_folder"`
+	LifecycleRole    string `json:"lifecycle_role"`
+	ExecutionID      string `json:"execution_id,omitempty"`
+	PlanRevision     string `json:"plan_revision"`
+	ProvenanceStatus string `json:"provenance_status"`
 }
 
 type timingArtifact struct {
@@ -107,8 +130,20 @@ func CheckRuntime(workspacePath string, now time.Time) Result {
 	} else {
 		result.CoverageStatus = CoverageVerified
 	}
+	if index, indexErr := loadRunIndex(runsRoot); indexErr == nil {
+		result.RunIndex = index
+	} else {
+		result.CoverageStatus = CoveragePartial
+		result.CoverageReason = appendReason(result.CoverageReason, "run identity index unavailable: "+indexErr.Error())
+	}
 	for _, run := range candidates {
 		result.RunsInspected++
+		if identity, identityErr := inspectRunIdentity(run, result.RunIndex); identityErr == nil {
+			result.RunIdentities = append(result.RunIdentities, identity)
+		} else {
+			result.CoverageStatus = CoveragePartial
+			result.CoverageReason = appendReason(result.CoverageReason, fmt.Sprintf("%s identity: %v", run.rel, identityErr))
+		}
 		findings, err := inspectRun(run)
 		if err != nil {
 			result.CoverageStatus = CoveragePartial
@@ -124,6 +159,59 @@ func CheckRuntime(workspacePath string, now time.Time) Result {
 		return result.Findings[i].Artifact < result.Findings[j].Artifact
 	})
 	return result
+}
+
+func loadRunIndex(runsRoot string) (*RunIndex, error) {
+	raw, err := os.ReadFile(filepath.Join(runsRoot, "run_index.json"))
+	if err != nil {
+		return nil, err
+	}
+	var index RunIndex
+	if err := json.Unmarshal(raw, &index); err != nil {
+		return nil, err
+	}
+	if index.Version <= 0 || strings.TrimSpace(index.ActiveIteration) == "" {
+		return nil, fmt.Errorf("missing version or active_iteration")
+	}
+	return &index, nil
+}
+
+func inspectRunIdentity(run runCandidate, index *RunIndex) (RunIdentity, error) {
+	raw, err := os.ReadFile(filepath.Join(run.dir, "run_metadata.json"))
+	if err != nil {
+		return RunIdentity{}, err
+	}
+	var metadata runMetadata
+	if err := json.Unmarshal(raw, &metadata); err != nil {
+		return RunIdentity{}, err
+	}
+	topLevel := strings.Split(filepath.ToSlash(run.rel), "/")[0]
+	role := "unknown"
+	if index != nil {
+		if topLevel == index.ActiveIteration {
+			role = "active"
+		} else {
+			for _, retained := range index.RetainedIterations {
+				if topLevel == retained {
+					role = "retained"
+					break
+				}
+			}
+		}
+	}
+	planRevision := strings.TrimSpace(metadata.PlanRevision)
+	status := "verified"
+	if strings.TrimSpace(metadata.ExecutionID) == "" || planRevision == "" {
+		status = "unknown_legacy"
+	}
+	if planRevision == "" {
+		planRevision = "unknown_legacy"
+	}
+	return RunIdentity{
+		RunFolder: run.rel, LifecycleRole: role,
+		ExecutionID: strings.TrimSpace(metadata.ExecutionID), PlanRevision: planRevision,
+		ProvenanceStatus: status,
+	}, nil
 }
 
 func resolveRunsRoot(workspacePath string) (string, error) {

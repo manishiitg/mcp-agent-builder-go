@@ -198,6 +198,6 @@ qualitative status. If trustworthy evidence does not exist, record nothing;
 missing evidence is not zero or healthy. Gate never creates interventions or
 impact assessments.
 
-The later Review and independent Fix turns own selected technical work,
+The later receipt-gated Review+Fix sequence owns selected technical work,
 strategic work, lifecycle updates, verification, and terminal receipts. Stop
 after recording the worklist and any honest impact observations.

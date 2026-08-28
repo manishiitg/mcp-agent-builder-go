@@ -50,6 +50,7 @@ func workflowContractVersionRank(version string) (int, bool) {
 		workflowContractFinalizerOwnedScheduleVersion,
 		workflowContractReportActivitySectionVersion,
 		workflowContractReportActivityTabVersion,
+		workflowContractPulseLifecycleReconciliationVersion,
 	}
 	for rank, candidate := range known {
 		if version == candidate {
@@ -301,6 +302,12 @@ If the report already uses tab-based navigation and the activity section is alre
 
 Call validate_report_html after editing; repair every error. Do not run the workflow. If the required source data is ambiguous or does not exist yet, report the blocker and do not stamp. Otherwise call set_workflow_contract_version(version="1.0.31") and stop.`
 
+const upgradePulseLifecycleReconciliation = `WORKFLOW CONTRACT UPGRADE: PULSE CLOSE-ON-APPLIED LIFECYCLE.
+
+Do only this platform data migration. Call record_pulse_lifecycle_reconciliation once. It deterministically closes only legacy issues where a Fixer recorded changed files and no immediate verification failed, retires merged aliases, and preserves every attempt and event. It does not change the plan, schedules, workflow instructions, or human/platform-owned issues.
+
+Read the returned counts. Then call get_pulse_state(view="backlog", detail="compact") to confirm the resulting issue register is readable. Do not run a workflow or a Pulse review. If either tool fails, do not stamp. Otherwise call set_workflow_contract_version(version="1.0.32") and stop.`
+
 // workflowVersionUpgradePlan keeps the retired HTML presentation migrations
 // retired, but preserves the independent behavioral/data migrations older
 // workflows still need. They are deliberately grouped into bounded,
@@ -356,6 +363,9 @@ func workflowVersionUpgradePlan(manifest *WorkflowManifest) []workflowVersionUpg
 	}
 	if rank < 30 {
 		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractReportActivityTabVersion, label: "upgrade-report-activity-tab", query: upgradeReportActivityTab})
+	}
+	if rank < 31 {
+		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractPulseLifecycleReconciliationVersion, label: "upgrade-pulse-lifecycle-reconciliation", query: upgradePulseLifecycleReconciliation})
 	}
 	// Attached here rather than at the call site so the turn text is identical
 	// wherever it is built. The version pair used to be added only on the Pulse

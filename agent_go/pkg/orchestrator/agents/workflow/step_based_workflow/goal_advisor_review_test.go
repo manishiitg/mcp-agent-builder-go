@@ -96,11 +96,14 @@ func TestWorkshopStageAgentIdentityIsDistinctAndSafe(t *testing.T) {
 		t.Fatalf("stage identities must be unique, got %q", first)
 	}
 	for _, identity := range []string{first, second} {
-		if !strings.HasPrefix(identity, "pulse-reviewer-artifact-review-") {
+		if !strings.Contains(identity, "_pulse-reviewer-artifact-review-") {
 			t.Fatalf("unexpected sanitized stage identity %q", identity)
 		}
-		if strings.ContainsAny(identity, " _/") {
+		if strings.ContainsAny(identity, " /") {
 			t.Fatalf("stage identity contains unsafe separators: %q", identity)
+		}
+		if err := ValidatePulseReviewIdentity(identity, "technical_review"); err != nil {
+			t.Fatalf("stage identity is not receipt-safe: %v", err)
 		}
 	}
 }

@@ -273,7 +273,7 @@ func TestPulseReviewFixerDocsAreNamedAndLoadable(t *testing.T) {
 		"durable approval request",
 	} {
 		if !strings.Contains(prompt, want) {
-		t.Errorf("pulse-review-fixer is missing execution-health handoff %q", want)
+			t.Errorf("pulse-review-fixer is missing execution-health handoff %q", want)
 		}
 	}
 }
@@ -292,7 +292,7 @@ func TestEngineeringReviewUsesTheCanonicalReviewOnlySequence(t *testing.T) {
 		"Own the review yourself",
 		"Persist typed findings and matured verification",
 		"Do not apply repairs",
-		"`/pulse-fixer` owns later mutations",
+		"later receipt-gated Fix phase owns",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("engineering-review prompt is missing canonical sequence contract %q", want)

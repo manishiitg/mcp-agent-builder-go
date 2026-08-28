@@ -1,6 +1,7 @@
-## Fix verification — a successful write is never proof
+## Fix evidence and recurrence monitoring
 
-The single contract for verifying that a bounded repair actually worked. It is
+The single contract for recording the evidence available when a bounded repair
+is applied. It is
 the same standard whether the fix is applied inside scheduled Pulse, a manual
 `/pulse-fixer` pass, or an approved measurement change. Load it
 before applying any fix, and judge every "fixed" claim against it.
@@ -30,8 +31,9 @@ successful write, or rereading an older successful artifact is **not** proof.
 
 ### When proof needs a future run
 
-If proof requires an externally side-effecting run or the next scheduled
-producing run, do **not** trigger that run merely to verify. Record the fix as
-`changed_unverified` with reason `awaiting_next_valid_run`, record the exact
-next evidence boundary, and never claim the finding is fixed until that boundary
-arrives and its evidence confirms the change.
+If stronger proof requires an externally side-effecting run or the next
+scheduled producing run, do **not** trigger that run merely to verify. Record
+the successfully applied repair as `changed_unverified`; the issue closes under
+the issue-register lifecycle. A later normal run that produces the same
+semantic concern must reuse the existing `issue_id`, append its evidence, and
+reopen it. Do not create a verification-only run or a second issue.

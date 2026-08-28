@@ -861,6 +861,7 @@ type PlanFieldChange struct {
 // successful plan-mod tool call appends one entry to the active session file
 // under planning/changelog/.
 type PlanChangelogEntry struct {
+	ChangeID        string                       `json:"change_id"`
 	Timestamp       string                       `json:"timestamp"`                 // ISO 8601 UTC
 	Tool            string                       `json:"tool"`                      // tool name (e.g. "update_scripted_step")
 	Reason          string                       `json:"reason"`                    // mandatory rationale supplied by the agent
@@ -875,6 +876,7 @@ type PlanChangelogEntry struct {
 	NoOp            bool                         `json:"no_op,omitempty"`           // true when BeforeSnapshot/AfterSnapshot were both real and identical
 	Actor           string                       `json:"actor"`                     // managed mutation authority
 	DependencyClass string                       `json:"dependency_class"`          // review domain affected by the mutation
+	Origin          PlanChangeOrigin             `json:"origin"`
 
 	// BeforeSnapshot / AfterSnapshot are the actual target-artifact content
 	// before and after the mutation, captured by the caller. When set, these
@@ -889,11 +891,18 @@ type PlanChangelogEntry struct {
 }
 
 type PlanChangelogArtifactReview struct {
-	Done          bool   `json:"done"`
-	ReviewedAt    string `json:"reviewed_at,omitempty"`
-	ReviewedBy    string `json:"reviewed_by,omitempty"`
-	Result        string `json:"result,omitempty"`
-	ReportEntryID string `json:"report_entry_id,omitempty"`
+	Done          bool                                   `json:"done"`
+	ReviewedAt    string                                 `json:"reviewed_at,omitempty"`
+	ReviewedBy    string                                 `json:"reviewed_by,omitempty"`
+	Result        string                                 `json:"result,omitempty"`
+	ReportEntryID string                                 `json:"report_entry_id,omitempty"`
+	Surfaces      map[string]PlanDependencySurfaceReview `json:"surfaces,omitempty"`
+}
+
+type PlanDependencySurfaceReview struct {
+	Disposition string   `json:"disposition"`
+	Evidence    []string `json:"evidence,omitempty"`
+	IssueIDs    []string `json:"issue_ids,omitempty"`
 }
 
 // PlanChangelog is the per-session changelog file under planning/changelog/.
@@ -974,7 +983,22 @@ func writePlanChangelogEntry(
 	if entry.Timestamp == "" {
 		entry.Timestamp = now.Format(time.RFC3339)
 	}
+	entry.Origin = planChangeOriginFromContext(ctx, workspacePath)
+	if entry.Origin.Type == "pulse_fixer" {
+		entry.Origin.IssueIDs, entry.Origin.FixAttemptID, entry.Origin.HumanInputID = pulseChangeReferences(ctx, workspacePath, entry.Origin.PulseRunID)
+		if entry.Origin.HumanInputID != "" {
+			entry.Origin.Type = "human_decision"
+		}
+	}
 	completePlanChangelogEntry(&entry)
+	if entry.ChangeID == "" {
+		entry.ChangeID = strings.TrimPrefix(artifactContentRef(map[string]interface{}{
+			"timestamp": entry.Timestamp, "tool": entry.Tool, "target": entry.Target,
+			"before_ref": entry.BeforeRef, "after_ref": entry.AfterRef,
+			"session_id": entry.Origin.SessionID,
+		}), "sha256:")[:20]
+		entry.ChangeID = "change-" + entry.ChangeID
+	}
 
 	relPath := filepath.Join("planning", "changelog", planChangelogSessionFile)
 	changelogPath := normalizePathForWorkspaceAPI(relPath, workspacePath)
@@ -4845,6 +4869,7 @@ func registerPlanModificationTools(
 	agentName string, // e.g., "planning agent" or "plan improvement agent"
 	unlockLearningsFunc func(context.Context, string, int) error, // Optional: function to unlock learnings after plan modifications
 ) error {
+	mcpAgent = planChangeOriginRegistrar{DefinitionToolRegistrar: mcpAgent, agentName: agentName}
 	rawWriteFile := writeFile
 	writeFile = withPlanMutationWriteAccess(workspacePath, writeFile)
 

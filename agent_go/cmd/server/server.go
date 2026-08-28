@@ -1943,6 +1943,19 @@ func runServer(cmd *cobra.Command, args []string) {
 	// and virtual tool categories (e.g. workflow) alongside real MCP servers. Claude Code agents
 	// call them all via /tools/mcp/{server}/{tool}. The routeMCPRequest helper detects these
 	// categories and redirects to the correct handler (custom or virtual).
+	enforcePulseMaintenancePhase := func(w http.ResponseWriter, r *http.Request, tool string) bool {
+		sessionID := strings.TrimSpace(r.Header.Get("X-Session-ID"))
+		if sessionID == "" {
+			sessionID = strings.TrimSpace(mux.Vars(r)["session_id"])
+		}
+		if allowed, reason := todo_creation_human.PulseMaintenanceToolAllowed(sessionID, tool); !allowed {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": reason, "phase": "pulse_technical_review"})
+			return false
+		}
+		return true
+	}
 	routeMCPRequest := func(w http.ResponseWriter, r *http.Request, server, tool string) {
 		// Global bridge URLs carry the session in X-Session-ID. Preserve it in
 		// context as well as the request header so workspace tools can resolve
@@ -1950,6 +1963,9 @@ func runServer(cmd *cobra.Command, args []string) {
 		// grants (for example the native Chrome Downloads directory).
 		if sid := strings.TrimSpace(r.Header.Get("X-Session-ID")); sid != "" {
 			r = r.WithContext(context.WithValue(r.Context(), common.ChatSessionIDKey, sid))
+		}
+		if !enforcePulseMaintenancePhase(w, r, tool) {
+			return
 		}
 		if isMCPBridgeCustomToolCategory(server) {
 			log.Printf("[ROUTE] Redirecting /tools/mcp/%s/%s → custom tool handler", server, tool)
@@ -1976,10 +1992,16 @@ func runServer(cmd *cobra.Command, args []string) {
 		if sid := strings.TrimSpace(r.Header.Get("X-Session-ID")); sid != "" {
 			r = r.WithContext(context.WithValue(r.Context(), common.ChatSessionIDKey, sid))
 		}
+		if !enforcePulseMaintenancePhase(w, r, vars["tool"]) {
+			return
+		}
 		executorHandlers.HandlePerToolCustomRequest(w, r, vars["tool"])
 	}).Methods("POST", "OPTIONS")
 	toolsRouter.HandleFunc("/virtual/{tool}", func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
+		if !enforcePulseMaintenancePhase(w, r, vars["tool"]) {
+			return
+		}
 		executorHandlers.HandlePerToolVirtualRequest(w, r, vars["tool"])
 	}).Methods("POST", "OPTIONS")
 
@@ -2008,11 +2030,17 @@ func runServer(cmd *cobra.Command, args []string) {
 		// Inject ChatSessionIDKey so execute_shell_command can look up
 		// the session's working directory and folder guard from the global map.
 		ctx := context.WithValue(r.Context(), common.ChatSessionIDKey, sid)
+		if !enforcePulseMaintenancePhase(w, r, tool) {
+			return
+		}
 		executorHandlers.HandlePerToolCustomRequest(w, r.WithContext(ctx), tool)
 	}).Methods("POST", "OPTIONS")
 	sessionToolsRouter.HandleFunc("/virtual/{tool}", func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
 		r.Header.Set("X-Session-ID", vars["session_id"])
+		if !enforcePulseMaintenancePhase(w, r, vars["tool"]) {
+			return
+		}
 		executorHandlers.HandlePerToolVirtualRequest(w, r, vars["tool"])
 	}).Methods("POST", "OPTIONS")
 
@@ -4111,15 +4139,13 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			if req.ExecutionOptions != nil {
 				// Always run in iteration-0 — controller handles backup of previous iteration-0
 				req.ExecutionOptions.SelectedRunFolder = "iteration-0"
-				req.ExecutionOptions.RunMode = "use_same_run"
 
 				log.Printf("[EXECUTION_OPTIONS_DEBUG] [Backend] Execution options received: %+v", req.ExecutionOptions)
-				log.Printf("[WORKFLOW EXECUTION] Frontend execution options provided: run_mode=%s, strategy=%s, run_folder=%s, resume_from_step=%d, enabled_group_names=%v, save_validation_responses=%v",
-					req.ExecutionOptions.RunMode, req.ExecutionOptions.ExecutionStrategy, req.ExecutionOptions.SelectedRunFolder, req.ExecutionOptions.ResumeFromStep, req.ExecutionOptions.EnabledGroupNames, req.ExecutionOptions.SaveValidationResponses)
+				log.Printf("[WORKFLOW EXECUTION] Frontend execution options provided: strategy=%s, run_folder=%s, resume_from_step=%d, enabled_group_names=%v, save_validation_responses=%v",
+					req.ExecutionOptions.ExecutionStrategy, req.ExecutionOptions.SelectedRunFolder, req.ExecutionOptions.ResumeFromStep, req.ExecutionOptions.EnabledGroupNames, req.ExecutionOptions.SaveValidationResponses)
 
 				// Convert to controller ExecutionOptions and pass to workflow orchestrator
 				controllerOpts := &todo_creation_human.ExecutionOptions{
-					RunMode:           req.ExecutionOptions.RunMode,
 					SelectedRunFolder: req.ExecutionOptions.SelectedRunFolder,
 					ExecutionStrategy: req.ExecutionOptions.ExecutionStrategy,
 					ResumeFromStep:    req.ExecutionOptions.ResumeFromStep,

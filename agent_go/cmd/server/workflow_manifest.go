@@ -25,7 +25,7 @@ const WorkflowManifestSchemaVersion = 1
 // contract version. Unlike schema_version, this gates agent-run workflow
 // upgrades: Pulse can add version-specific messages and stamp this value only
 // after the workflow has been checked or migrated.
-const WorkflowContractCurrentVersion = "1.0.31"
+const WorkflowContractCurrentVersion = "1.0.32"
 
 const workflowContractInitialVersion = "1.0.0"
 const workflowContractMessageSequenceCodeVersion = "1.0.10"
@@ -49,9 +49,10 @@ const workflowContractSchedulePromptContractVersion = "1.0.28"
 const workflowContractFinalizerOwnedScheduleVersion = "1.0.29"
 const workflowContractReportActivitySectionVersion = "1.0.30"
 const workflowContractReportActivityTabVersion = "1.0.31"
+const workflowContractPulseLifecycleReconciliationVersion = "1.0.32"
 
 const (
-	DefaultRunRetentionCount = 5
+	DefaultRunRetentionCount = 3
 	MaxRunRetentionCount     = 50
 )
 
@@ -285,9 +286,9 @@ func (c *WorkflowNotificationConfig) EffectivePulseSummaryInstructions() string 
 	return strings.TrimSpace(c.Instructions)
 }
 
-// WorkflowExecutionDefaults stores toolbar-level defaults for workflow execution.
+// WorkflowExecutionDefaults stores workflow-wide execution settings. Run-folder
+// selection is intentionally absent: full runs always use the current slot.
 type WorkflowExecutionDefaults struct {
-	AlwaysUseSameRun bool `json:"always_use_same_run"`
 	// Global step overrides (replaces step_override.json)
 	DisableLearning              *bool    `json:"disable_learning,omitempty"`
 	DisableParallelToolExecution *bool    `json:"disable_parallel_tool_execution,omitempty"`

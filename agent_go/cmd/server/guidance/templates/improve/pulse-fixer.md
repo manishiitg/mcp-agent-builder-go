@@ -1,6 +1,6 @@
-# INDEPENDENT PULSE FIXER
+# PULSE FIX PHASE
 
-Run only after Technical Review (`/engineering-review`) has classified current workflow evidence.
+Run only after Technical Review (`/engineering-review`) has classified current workflow evidence. This may be an explicit standalone `/pulse-fixer` command or the backend-unlocked later message in one retained Review+Fix sequence.
 Do not rerun Technical Review, Strategic Review, or broad
 discovery. Do not treat raw workflow observations as repair issues.{{if .Focus}}
 
@@ -27,7 +27,9 @@ selected issue's proof boundary.{{end}}
    was an approved candidate, it is the first repair bundle. Otherwise select a
    bounded repair batch from this index, then request `detail="full"` only for
    its exact issue IDs. Read their typed review records, attempts, verification,
-   and the current Technical Review checkpoint. The compact backlog's `issues` feed
+   and the current Technical Review checkpoint when this run has one. Manual
+   slash-command sequences may have only typed review state and no Markdown
+   checkpoint; do not treat that absence as missing review. The compact backlog's `issues` feed
    is the ordinary repair queue. Workflow observations are evidence
    from reviewers and must not be repaired unless a reviewer already promoted them.
 4. Select a bounded canonical **repair batch**. Start with the highest-value
@@ -47,7 +49,10 @@ selected issue's proof boundary.{{end}}
 6. Record the repair attempt and each issue disposition, but do not write or
    replace either reviewer's terminal receipt. Review completion and repair
    outcome are separate facts. If no safe canonical objective exists, preserve
-   the truthful review receipts without manufacturing a repair.
+   the truthful review receipts without manufacturing a repair. When this is
+   the backend-unlocked Fix message of a combined manual Review+Fix sequence,
+   also call `record_pulse_result` exactly once for `technical_review` with
+   `pulse_run_id="current"` and the truthful repair/no-safe-repair outcome.
 7. Finish with a concise statement of the selected repair batch: bundles and
    issue IDs, changes and proof per bundle, lifecycle outcomes, and the
    remaining canonical queue with defer reasons.

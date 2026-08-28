@@ -89,7 +89,7 @@ func TestEngineeringReviewAndPulseFixerAreSeparateCommands(t *testing.T) {
 		t.Fatal("engineering-review guidance is not registered")
 	}
 	if _, ok := allKinds["pulse-fixer"]; !ok {
-		t.Fatal("independent pulse-fixer guidance is not registered")
+		t.Fatal("pulse-fixer guidance is not registered")
 	}
 }
 
@@ -184,17 +184,18 @@ func TestManualPulseCommandsKeepRunSetupReviewAndFixBoundariesSeparate(t *testin
 			"Do not launch `/goal-advisor` automatically",
 		},
 		"engineering-review": {
-			"TECHNICAL REVIEW",
+			"TECHNICAL REVIEW PHASE",
 			"continuing Workflow Builder conversation",
 			`"name":"workflow-commands","path":"references/ops-review.md"`,
 			"Standalone Operations Review",
 			"Own the review yourself",
 			"link it to an existing issue, promote it with evidence, or reject it",
 			"Do not apply repairs",
-			"run `/pulse-fixer` next",
+			"later receipt-gated Fix phase",
 		},
 		"pulse-fixer": {
-			"INDEPENDENT PULSE FIXER",
+			"PULSE FIX PHASE",
+			"backend-unlocked later message",
 			"Do not rerun Technical Review",
 			"Workflow observations are evidence",
 			"bounded canonical **repair batch**",
@@ -236,7 +237,6 @@ func TestStandaloneOpsReviewRunsDirectlyAndRequiresTypedCompletion(t *testing.T)
 	for _, want := range []string{
 		"Perform the review in this current background agent",
 		"record_pulse_finding",
-		"record_pulse_verification",
 		`source="technical_review"`,
 		`human_input_id`,
 		"Never emit `decision_required` without this question",
@@ -265,7 +265,6 @@ func TestStandaloneStrategyAuditRunsDirectlyAndRequiresTypedCompletion(t *testin
 	for _, want := range []string{
 		"Perform the review in this current background agent",
 		"record_pulse_finding",
-		"record_pulse_verification",
 		"complete_pulse_review",
 		"modules=[\"strategic_review\"]",
 		"returning prose without it leaves",

@@ -16,6 +16,7 @@ import type {
   PulseFindingLifecycle as PulseFindingLifecycleRecord,
   PulseFindingVerification,
 } from '../../services/api-types'
+import { pulseIssueForFinding } from './pulseModuleInspectorUtils'
 import { WORKFLOW_LOG_REFRESH_EVENT } from './workflowEvents'
 
 function formatDate(value?: string): string {
@@ -185,12 +186,12 @@ export function PulseFindingLifecycle({
           const status = findingStatus(finding.status)
           const harnessDetails = finding.details?.issue_kind === 'harness_issue' ? finding.details : null
           return (
-            <article key={finding.fingerprint} className="overflow-hidden rounded-lg border bg-background">
+            <article key={pulseIssueForFinding(finding).id} className="overflow-hidden rounded-lg border bg-background">
               <div className="flex flex-wrap items-start justify-between gap-3 border-b px-3 py-3 sm:px-4">
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="font-mono text-[11px] font-semibold text-foreground">
-                      {finding.finding_id || finding.fingerprint}
+                      {pulseIssueForFinding(finding).id}
                     </span>
                     <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${status.className}`}>
                       {status.label}

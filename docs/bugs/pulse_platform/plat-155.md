@@ -2,6 +2,12 @@
 
 # PLAT-155 — Pulse flattens workflow observations into canonical issues and sends the mixed queue to Fixer
 
+> **2026-08-28 sequencing update:** PLAT-199 supersedes this ticket's fresh
+> independent Fixer conversation. The observation→canonical-issue projection
+> remains authoritative. Technical Review still must classify and persist
+> before repair, but the same retained child may repair in a later message only
+> after the backend observes its completed receipt and unlocks mutation tools.
+
 | Coordination | Value |
 |---|---|
 | Assigned agent | Codex |

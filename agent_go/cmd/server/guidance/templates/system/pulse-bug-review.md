@@ -2,7 +2,7 @@
 
 Load this when the Technical Review runtime/logic focus is selected.
 It is the deep read-only execution evidence pack used by Technical Review and
-the Review sequence before the independent Fix turn. Gate does not load it — Gate only decides whether
+the Review sequence before the receipt-gated Fix phase. Gate does not load it — Gate only decides whether
 `technical_review` is due from the durable worklist recorded by Pulse Gate. The reviewer inspects and advises;
 only the Pulse Fixer applies bounded repairs, and only for confirmed
 `correctness_bug` findings.

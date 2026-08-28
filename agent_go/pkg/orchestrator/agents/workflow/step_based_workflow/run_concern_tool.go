@@ -57,7 +57,8 @@ type StepRunConcernInput struct {
 
 // StepRunConcernRecord is what the caller gets back.
 type StepRunConcernRecord struct {
-	Fingerprint string `json:"fingerprint"`
+	IssueID     string `json:"issue_id"`
+	Fingerprint string `json:"-"`
 	Phase       string `json:"phase"`
 	StepID      string `json:"step_id"`
 	Recorded    bool   `json:"recorded"`
@@ -123,10 +124,16 @@ func RecordStepRunConcern(
 
 	observedAt := time.Now().UTC().Format(time.RFC3339Nano)
 	fingerprint := concernFingerprint(marker.Module, marker.Concern)
+	if canonical := canonicalFingerprintForMergedIssue(ctx, db, fingerprint); canonical != "" {
+		fingerprint = canonical
+	}
 	normalizedConcern := strings.ToLower(strings.Join(strings.Fields(marker.Concern), " "))
 	fingerprints := map[string]string{normalizedConcern: fingerprint}
 
-	record := StepRunConcernRecord{Fingerprint: fingerprint, Phase: phase, StepID: marker.Module}
+	record := StepRunConcernRecord{
+		IssueID:     pulseIssueID(PulseFindingLifecycle{Fingerprint: fingerprint}),
+		Fingerprint: fingerprint, Phase: phase, StepID: marker.Module,
+	}
 
 	// A retried turn can replay its tool calls. Filing the same concern twice in
 	// one run must not manufacture recurrence evidence — seen_count is what Gate

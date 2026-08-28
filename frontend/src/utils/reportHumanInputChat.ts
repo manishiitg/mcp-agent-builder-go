@@ -132,18 +132,6 @@ export type ReportHumanInputChatResult = {
   queuedBehindRunningTurn: boolean
 }
 
-export function buildPulseFocusedReviewChatMessage(module: string, focusKey: string): string {
-  const technical = module === 'technical_review'
-  const command = technical ? '/pulse-review' : '/strategy-auditor'
-  return [
-    `Run ${command} now as a focused ${technical ? 'Technical' : 'Strategic'} Review for this automation.`,
-    `Use the exact durable focus key \`${focusKey}\` as the deep-review priority.`,
-    'Still perform the command\'s lightweight critical scan, but do not add unrelated deep focuses unless a critical blocker makes this requested review unsafe or impossible.',
-    `Call record_pulse_review_focus with module=\"${module}\" and focus_key=\"${focusKey}\" before completing the review receipt.`,
-    'This is a review-only chat request. Do not change the recurring Pulse schedule and do not apply fixes; summarize the findings and tell me whether /pulse-fixer is warranted.',
-  ].join('\n')
-}
-
 async function findWorkflowPreset(workspacePath: string) {
   const find = () => {
     const normalizedTarget = normalizeWorkspacePath(workspacePath)
