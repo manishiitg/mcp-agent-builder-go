@@ -257,14 +257,27 @@ func RecordPulseReviewFinding(ctx context.Context, workspacePath, pulseRunID, re
 	// and makes a successful write look like a failure. The fingerprint is
 	// already the exact internal identity, so verify it against the unfiltered
 	// lifecycle view.
-	findings, loadErr := LoadPulseFindingLifecycles(ctx, workspacePath, "", -1)
-	if loadErr != nil {
-		return PulseReviewFindingRecord{}, loadErr
+	//
+	// PLAT-214: this reload used to call the public LoadPulseFindingLifecycles,
+	// which opens its OWN separate database connection/handle rather than
+	// reusing `db` above. Confirmed live on ICICI-BANK-PARSING: an intermittent
+	// false-negative error ("could not be reloaded") on calls updating an
+	// EXISTING issue_id, even though the write had actually landed and was
+	// durably visible moments later through a fresh get_pulse_state read. A
+	// second connection opened right after this one writes is exactly the
+	// shape of a cross-connection SQLite visibility/locking race; reading
+	// back on the SAME connection that performed the write removes that
+	// window by construction, and only needs the one row this check actually
+	// cares about rather than a full backlog scan.
+	var reloadedIssueID, reloadedStatus string
+	err = db.QueryRowContext(ctx, `SELECT issue_id, status FROM run_concerns WHERE fingerprint=?`, fingerprint).
+		Scan(&reloadedIssueID, &reloadedStatus)
+	if err == nil {
+		reloaded := PulseFindingLifecycle{Fingerprint: fingerprint, IssueID: reloadedIssueID, Status: reloadedStatus}
+		return PulseReviewFindingRecord{IssueID: pulseIssueID(reloaded), Fingerprint: fingerprint, Status: reloadedStatus}, nil
 	}
-	for _, finding := range findings {
-		if finding.Fingerprint == fingerprint {
-			return PulseReviewFindingRecord{IssueID: NewPulseIssue(finding).ID, Fingerprint: fingerprint, Status: finding.Status}, nil
-		}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return PulseReviewFindingRecord{}, err
 	}
 	return PulseReviewFindingRecord{}, fmt.Errorf("recorded Pulse finding could not be reloaded by its internal lifecycle identity")
 }
