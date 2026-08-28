@@ -1290,7 +1290,18 @@ func markPulseModuleResultFromAgentWithAuditAndFindings(
 		if readErr != nil {
 			return nil, fmt.Errorf("Pulse module %q is not an unresolved due module for run %q", module, pulseRunID)
 		}
-		if existing.LastPulseRunID == pulseRunID && existing.LastResult == result {
+		// A same-run, same-result call is a completion-turn replay (idempotent
+		// retry). A same-run call with a DIFFERENT result but real dispositions
+		// is the split reviewer/Fixer contract working as designed: the
+		// reviewer's own terminal write ("done", nothing more to review) and
+		// the Fixer's later supplemental write ("changed", files were
+		// modified) are both true facts about the same pulse_run_id, not a
+		// conflict to reject. Either shape records dispositions/audit without
+		// re-writing the module's own last_result/last_result_reason, which
+		// stay the reviewer's original terminal verdict. A same-run call with
+		// a different result AND no dispositions carries no new evidence to
+		// justify a second write, so it still falls through to the error below.
+		if existing.LastPulseRunID == pulseRunID && (existing.LastResult == result || len(dispositions) > 0) {
 			retryTx, err := db.BeginTx(ctx, nil)
 			if err != nil {
 				return nil, err

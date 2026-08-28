@@ -753,6 +753,187 @@ func TestMarkPulseModuleResultStoresMinimalDurableAudit(t *testing.T) {
 	}
 }
 
+// PLAT-206: the split reviewer/Fixer contract legitimately produces two
+// terminal-shaped calls to record_pulse_result for the SAME (module,
+// pulse_run_id) -- the reviewer's own "done" (nothing more to review) and
+// the Fixer's later "changed" (files were modified), dispatched as separate
+// background agents per the pulse-review-fixer split. Before this fix, the
+// retry path only accepted a second call whose result string matched the
+// first exactly, so the Fixer's genuinely different "changed" call was
+// rejected outright as "already terminal or belongs to another run" --
+// confirmed live on confida-login: three real repairs stayed forever
+// mislabelled queued_for_engineering because the Fixer had no channel to
+// record their disposition and fell back to record_pulse_finding
+// (evidence-only, no status mutation).
+func TestRecordPulseResultAcceptsFixerSupplementalDispositionsAfterReviewerTerminal(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	workspacePath := "Workflow/example"
+	pulseRunID := "schedule-cron--split-reviewer-fixer"
+	sessionID := "schedule-cron--split-reviewer-fixer-session"
+	if _, err := recordPulseWorklist(context.Background(), workspacePath, pulseRunID, completePulseWorklistDecisions(map[string]PulseWorklistDecision{
+		pulseModuleTechnicalReview: {Module: pulseModuleTechnicalReview, Due: true, Reason: "A review is required."},
+	})); err != nil {
+		t.Fatalf("record worklist: %v", err)
+	}
+
+	ctx := mcpexecutor.WithSessionID(context.Background(), sessionID)
+	_, executors, _ := createPulseWorklistTools()
+	execute := executors["record_pulse_result"].(func(context.Context, map[string]interface{}) (string, error))
+
+	// The reviewer's own terminal write: nothing more to review this pass.
+	if _, err := execute(ctx, map[string]interface{}{
+		"workspace_path": workspacePath, "pulse_run_id": pulseRunID,
+		"module": pulseModuleTechnicalReview, "result": "done",
+		"reason": "Review complete, findings recorded for a linked decision.",
+	}); err != nil {
+		t.Fatalf("reviewer terminal write: %v", err)
+	}
+
+	// A finding the reviewer recorded, later repaired by a separately
+	// dispatched Fixer background agent -- the split contract this reproduces.
+	if _, err := step_based_workflow.RecordRunConcerns(
+		ctx, workspacePath, pulseRunID, "", pulseModuleTechnicalReview,
+		step_based_workflow.ConcernPhaseReview,
+		"CONCERNS: stale run binding in planning/step_config.json",
+	); err != nil {
+		t.Fatalf("record reviewer finding: %v", err)
+	}
+	findings, err := step_based_workflow.LoadPulseFindingLifecycles(ctx, workspacePath, pulseModuleTechnicalReview, 10)
+	if err != nil || len(findings) != 1 {
+		t.Fatalf("load reviewer finding: findings=%+v err=%v", findings, err)
+	}
+	selected := findings[0]
+
+	// The Fixer's own later, separately-dispatched call: a genuinely
+	// different result ("changed" vs. the reviewer's "done") for the SAME
+	// pulse_run_id, carrying the repair's disposition.
+	if _, err := execute(ctx, map[string]interface{}{
+		"workspace_path": workspacePath, "pulse_run_id": pulseRunID,
+		"module": pulseModuleTechnicalReview, "result": "changed",
+		"reason":        "Fixed the stale run binding.",
+		"changed_files": []string{"planning/step_config.json"},
+		"verification":  []string{"targeted binding test passed"},
+		"before_refs":   []string{"step_config:sha256:before"},
+		"after_refs":    []string{"step_config:sha256:after"},
+		"finding_dispositions": []map[string]interface{}{{
+			"issue_id":      selected.Issue.ID,
+			"disposition":   "fixed_verified",
+			"summary":       "The stale run binding was corrected and the targeted test passed.",
+			"changed_files": []string{"planning/step_config.json"},
+			"before_refs":   []string{"step_config:sha256:before"},
+			"after_refs":    []string{"step_config:sha256:after"},
+			"verification": []map[string]interface{}{{
+				"check":    "targeted binding test",
+				"verdict":  "passed",
+				"expected": "the configured run binding resolves",
+				"observed": "the configured run binding resolved",
+				"evidence": []string{"go test ./cmd/server -run TestRunBinding"},
+			}},
+		}},
+	}); err != nil {
+		t.Fatalf("Fixer supplemental write was rejected: %v", err)
+	}
+
+	// The module's own terminal verdict stays the reviewer's original "done"
+	// -- the Fixer's write records a disposition, it does not relitigate what
+	// the review itself concluded.
+	states, err := getPulseModuleStates(context.Background(), workspacePath)
+	if err != nil {
+		t.Fatalf("get states: %v", err)
+	}
+	found := false
+	for _, state := range states {
+		if state.Module == pulseModuleTechnicalReview {
+			found = true
+			if state.LastResult != "done" {
+				t.Fatalf("module's own terminal result was overwritten: got %q, want %q", state.LastResult, "done")
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("module state missing entirely: %+v", states)
+	}
+
+	// pulse_module_audit is keyed unique on (workspace_path, module,
+	// pulse_run_id) -- it upserts, it is not an append log -- so the Fixer's
+	// write becomes the one row's latest snapshot rather than a second row.
+	// That is a pre-existing property of this table, not something this fix
+	// changes; the load-bearing record for Gate's active queue is the
+	// FINDING's own lifecycle/attempts below, which is append-only.
+	_, db, err := openPulseModuleStateDB(context.Background(), workspacePath, false)
+	if err != nil {
+		t.Fatalf("open state db: %v", err)
+	}
+	defer db.Close()
+	var auditCount int
+	var latestResult string
+	if err := db.QueryRow(`SELECT COUNT(*), MAX(result) FROM pulse_module_audit WHERE workspace_path=? AND module=? AND pulse_run_id=?`,
+		workspacePath, pulseModuleTechnicalReview, pulseRunID,
+	).Scan(&auditCount, &latestResult); err != nil {
+		t.Fatalf("count audit rows: %v", err)
+	}
+	if auditCount != 1 || latestResult != "changed" {
+		t.Fatalf("audit rows = %d (latest result %q), want 1 row upserted to the Fixer's most recent write", auditCount, latestResult)
+	}
+
+	// The repaired finding is no longer stuck at queued_for_engineering --
+	// this is the exact confida-login symptom this fix closes. Its own
+	// lifecycle (unlike the module audit row above) preserves both the
+	// reviewer's original finding and the Fixer's resolving attempt.
+	lifecycles, err := step_based_workflow.LoadPulseFindingLifecycles(ctx, workspacePath, pulseModuleTechnicalReview, 10)
+	if err != nil {
+		t.Fatalf("load finding lifecycles: %v", err)
+	}
+	if len(lifecycles) != 1 || lifecycles[0].Status != step_based_workflow.ConcernStatusResolved {
+		t.Fatalf("Fixer's disposition did not close the finding: %+v", lifecycles)
+	}
+	if len(lifecycles[0].Attempts) != 1 || len(lifecycles[0].Verification) != 1 ||
+		lifecycles[0].Verification[0].Verdict != step_based_workflow.VerificationPassed {
+		t.Fatalf("finding fix evidence missing: %+v", lifecycles[0])
+	}
+}
+
+// The relaxed retry path must not become a general-purpose way to overwrite
+// an already-terminal module: a same-run call with a genuinely different
+// result and NO dispositions carries no new evidence, so it must still be
+// rejected exactly as before this fix.
+func TestRecordPulseResultStillRejectsMismatchedResultWithNoDispositions(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	workspacePath := "Workflow/example"
+	pulseRunID := "schedule-cron--mismatch-no-dispositions"
+	sessionID := "schedule-cron--mismatch-no-dispositions-session"
+	if _, err := recordPulseWorklist(context.Background(), workspacePath, pulseRunID, completePulseWorklistDecisions(map[string]PulseWorklistDecision{
+		pulseModuleTechnicalReview: {Module: pulseModuleTechnicalReview, Due: true, Reason: "A review is required."},
+	})); err != nil {
+		t.Fatalf("record worklist: %v", err)
+	}
+
+	ctx := mcpexecutor.WithSessionID(context.Background(), sessionID)
+	_, executors, _ := createPulseWorklistTools()
+	execute := executors["record_pulse_result"].(func(context.Context, map[string]interface{}) (string, error))
+
+	if _, err := execute(ctx, map[string]interface{}{
+		"workspace_path": workspacePath, "pulse_run_id": pulseRunID,
+		"module": pulseModuleTechnicalReview, "result": "done",
+		"reason": "Review complete.",
+	}); err != nil {
+		t.Fatalf("first terminal write: %v", err)
+	}
+
+	// "blocked" carries no changed_files/dispositions requirement, so this
+	// exercises a genuinely different result with zero dispositions.
+	_, err := execute(ctx, map[string]interface{}{
+		"workspace_path": workspacePath, "pulse_run_id": pulseRunID,
+		"module": pulseModuleTechnicalReview, "result": "blocked",
+		"reason": "Trying to relitigate the module's own verdict with no new evidence.",
+	})
+	if err == nil || !strings.Contains(err.Error(), "already terminal or belongs to another run") {
+		t.Fatalf("mismatched result with no dispositions should still be rejected, got: %v", err)
+	}
+}
+
 func TestMarkPulseModuleChangedRequiresAuditProof(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("WORKSPACE_DOCS_PATH", root)
