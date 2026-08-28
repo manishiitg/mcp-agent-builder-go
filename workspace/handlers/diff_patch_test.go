@@ -774,3 +774,65 @@ func TestApplyDiffPatchDoesNotMangleUnicodePunctuation(t *testing.T) {
 		}
 	})
 }
+
+// PLAT-202: harness:diff_patch_workspace_file (2026-08-23, a JSON registry
+// file) reported the same failure class PLAT-192 later fixed for a
+// different file: applied:true while hunk 2 of a two-hunk diff silently
+// failed to update its target scalar fields AND deleted an unrelated
+// trailing context line ("title") with no replacement. This predates
+// PLAT-192's own harness finding by about a day and matches its description
+// almost exactly -- the same underlying bug class, observed twice.
+//
+// This does not re-derive the internal mechanism (PLAT-192 already
+// documented that as unconfirmed); it reproduces the INCIDENT'S OWN
+// reported before/after content directly and confirms PLAT-192's
+// verifyDiffApplied safety net -- already shipped -- catches this exact
+// shape: the diff claims a net +1 line delta (one covers[] append, one
+// 4-for-4 scalar replacement), but the reported broken result only changed
+// by +0 (scalars left stale, title line vanished).
+func TestVerifyDiffAppliedCatchesTheReportedJSONRegistryIncidentShape(t *testing.T) {
+	original := `      "covers": [
+        "existing-thing"
+      ],
+      "last_updated": "2026-08-06T12:30:25Z",
+      "last_updated_by": "old-agent",
+      "section_count": 19,
+      "size_bytes": 15588,
+      "title": "page-playbook-detail"
+`
+	diff := "--- a/_index.json\n+++ b/_index.json\n" +
+		"@@ -1,7 +1,8 @@\n" +
+		"       \"covers\": [\n" +
+		"         \"existing-thing\",\n" +
+		"+        \"new-thing\"\n" +
+		"       ],\n" +
+		"-      \"last_updated\": \"2026-08-06T12:30:25Z\",\n" +
+		"-      \"last_updated_by\": \"old-agent\",\n" +
+		"-      \"section_count\": 19,\n" +
+		"-      \"size_bytes\": 15588,\n" +
+		"+      \"last_updated\": \"2026-08-23T09:19:02Z\",\n" +
+		"+      \"last_updated_by\": \"new-agent\",\n" +
+		"+      \"section_count\": 20,\n" +
+		"+      \"size_bytes\": 16783,\n" +
+		"       \"title\": \"page-playbook-detail\"\n"
+
+	// As reported: the covers[] append applied, but the scalar fields were
+	// left at their OLD values and the trailing title line was dropped with
+	// no replacement.
+	reportedBrokenResult := `      "covers": [
+        "existing-thing",
+        "new-thing"
+      ],
+      "last_updated": "2026-08-06T12:30:25Z",
+      "last_updated_by": "old-agent",
+      "section_count": 19,
+      "size_bytes": 15588,
+`
+	err := verifyDiffApplied(original, diff, reportedBrokenResult)
+	if err == nil {
+		t.Fatal("verifyDiffApplied did not catch the reported silent-partial-apply shape")
+	}
+	if !strings.Contains(err.Error(), "unexpected line-count change") {
+		t.Fatalf("expected the line-count-mismatch error, got: %v", err)
+	}
+}
