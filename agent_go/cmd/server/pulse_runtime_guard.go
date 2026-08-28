@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 
@@ -19,7 +20,18 @@ var pulseWorklistRecordMu sync.Mutex
 func pulseRunIDForSession(ctx context.Context, requestedRunID string) string {
 	requestedRunID = strings.TrimSpace(requestedRunID)
 	if requestedRunID == "current" {
-		return strings.TrimSpace(mcpexecutor.SessionIDFromContext(ctx))
+		resolved := strings.TrimSpace(mcpexecutor.SessionIDFromContext(ctx))
+		// Diagnostic for PLAT-196: "current" must resolve to the caller's own
+		// MCP session id via ctx. If this ever logs empty, the ctx this tool
+		// call executed under never had a session id attached to it — record
+		// the resolution so a recurrence can be compared against whichever
+		// session id the background/receipt-check side expected.
+		if resolved == "" {
+			log.Printf("[PULSE] pulseRunIDForSession: requested %q resolved to EMPTY session id from ctx", requestedRunID)
+		} else {
+			log.Printf("[PULSE] pulseRunIDForSession: requested %q resolved to session id %q", requestedRunID, resolved)
+		}
+		return resolved
 	}
 	return requestedRunID
 }

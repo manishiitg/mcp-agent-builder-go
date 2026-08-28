@@ -527,6 +527,43 @@ func LoadPulseReviewReceiptForRun(ctx context.Context, workspacePath, reviewRunI
 	return &artifact, nil
 }
 
+// RecentPulseReviewRunIDsForModule is a diagnostic-only read for PLAT-196:
+// when a background task agent's expected receipt is missing, this lists
+// what review_run_ids actually did write a receipt for the module recently,
+// so a recurrence can show directly whether the write landed under a
+// different session id than the one the read side expected.
+func RecentPulseReviewRunIDsForModule(ctx context.Context, workspacePath, module string, limit int) ([]string, error) {
+	db, err := openRunConcernsDB(ctx, workspacePath, false)
+	if err != nil {
+		return nil, err
+	}
+	if db == nil {
+		return nil, nil
+	}
+	defer db.Close()
+	if err := ensurePulseReviewLogSchema(ctx, db); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+	rows, err := db.QueryContext(ctx, `SELECT review_run_id FROM pulse_review_log
+		WHERE module=? ORDER BY _id DESC LIMIT ?`, pulsemodules.Normalize(module), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var runID string
+		if err := rows.Scan(&runID); err != nil {
+			return nil, err
+		}
+		out = append(out, runID)
+	}
+	return out, rows.Err()
+}
+
 func attachPulseReviewMetrics(reviews []PulseReviewReceipt, metrics []PulseAgentMetricRecord) {
 	byReview := make(map[string]*PulseAgentMetricRecord, len(metrics))
 	for i := range metrics {

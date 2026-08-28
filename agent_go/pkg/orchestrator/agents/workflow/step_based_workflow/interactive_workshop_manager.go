@@ -10418,6 +10418,13 @@ func requireBackgroundPulseReviewReceipts(ctx context.Context, workspacePath, re
 		module = strings.TrimSpace(module)
 		receipt, err := LoadPulseReviewReceiptForRun(ctx, workspacePath, reviewRunID, module)
 		if err != nil {
+			// PLAT-196 diagnostic: log which review_run_ids actually did write
+			// a receipt for this module recently, so a recurrence shows
+			// directly whether the write landed under a different session id
+			// than reviewRunID (config.MCPSessionID) expected here.
+			if recent, recentErr := RecentPulseReviewRunIDsForModule(ctx, workspacePath, module, 10); recentErr == nil {
+				log.Printf("[PULSE] [PLAT-196] required %s receipt missing for expected review_run_id=%q; recent review_run_ids seen for this module: %v", module, reviewRunID, recent)
+			}
 			return fmt.Errorf("background Pulse review is incomplete: required %s receipt for child session %s was not recorded: %w", module, reviewRunID, err)
 		}
 		if receipt == nil || receipt.Status != "completed" {

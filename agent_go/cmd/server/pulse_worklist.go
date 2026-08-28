@@ -2107,6 +2107,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 					}
 				}
 			}
+			log.Printf("[PULSE] complete_pulse_review: writing review_run_id=%q modules=%v status=%q", pulseRunID, modules, stringToolArg(args, "status"))
 			if err := step_based_workflow.CompletePulseReview(ctx, workspacePath, modules, pulseRunID, pulseRunID, verdict, stringToolArg(args, "status")); err != nil {
 				return "", err
 			}
