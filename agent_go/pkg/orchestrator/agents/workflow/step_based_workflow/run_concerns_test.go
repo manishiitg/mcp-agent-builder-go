@@ -38,7 +38,7 @@ func TestParseConcernLinesExtractsPayloadOnly(t *testing.T) {
 	}
 }
 
-// PLAT-208: a reviewer's summary sometimes renders the marker as a Markdown
+// PLAT-211: a legacy review/advisor summary can render the marker as a Markdown
 // inline-code span. Live on HDFC-Personal-Accounts, six such findings vanished
 // silently -- no error, review still recorded completed -- because the bare
 // prefix check never matched a line starting with a backtick.

@@ -1,11 +1,11 @@
 [← Pulse platform issue index](../pulse_platform_issue_register.md)
 
-# PLAT-214 — `record_pulse_finding` intermittently reported a false-negative "could not be reloaded" error caused by a separate-connection reload race
+# PLAT-214 — `record_pulse_finding` no longer reloads through a separate connection; live confirmation of the intermittent failure remains pending
 
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `fixed` |
+| Ticket state | `fixed pending live confirmation` |
 | Last synchronized | `2026-08-29` |
 
 - **Priority:** P2 — an agent cannot trust the tool's own success/failure
@@ -28,19 +28,16 @@ underlying write had actually succeeded — confirmed durably visible in a
 identical calls in the same session failed this way; the other 4 succeeded
 cleanly with no error.
 
-## Root cause — confirmed via code read
+## Eliminated failure-prone path — confirmed via code read
 
 `RecordPulseReviewFinding` opens one database handle (`db`) at the top of
 the function and performs every write on it. Its final step — reloading the
 just-written finding to confirm the write landed and return the current
 `issue_id`/status — called the *public* `LoadPulseFindingLifecycles`, which
 opens its **own, separate** database connection (`openRunConcernsDB`) rather
-than reusing `db`. A fresh connection opened immediately after a write on a
-different connection is exactly the shape of a cross-connection SQLite
-visibility/locking race: no fixed reproduction trigger, intermittent by
-timing, and exactly what the finding's own limitations section named as the
-likely mechanism (*"recommend the platform owner check the reload-after-write
-path for a race or serialization inconsistency"*).
+than reusing `db`. That avoidable cross-handle reload is consistent with the
+intermittent symptom, but the observed run does not conclusively prove a
+specific SQLite visibility or locking race.
 
 ## Fix
 
@@ -49,7 +46,7 @@ Replaced the `LoadPulseFindingLifecycles(ctx, workspacePath, "", -1)` call
 more than this check actually needs) with a direct, targeted
 `SELECT issue_id, status FROM run_concerns WHERE fingerprint=?` on the
 **same** `db` handle the write itself used. Reading back on the exact
-connection that performed the write removes the cross-connection race
+connection that performed the write removes the separate-handle reload
 window by construction — SQLite guarantees a connection sees its own
 committed writes — and is simpler and cheaper than the query it replaced,
 since this check only ever needed the one row it was about to confirm, not
@@ -61,10 +58,9 @@ the whole backlog.
   call sites — it remains correct for its actual purpose (a sorted,
   cross-joined backlog view for reviewers/UI), just not reused here where a
   same-connection point lookup is both more correct and cheaper.
-- Did not write a new test attempting to force the cross-connection race
-  directly — it is fundamentally a timing race between separate SQLite
-  connections, not something a sequential single-goroutine unit test can
-  reliably reproduce. Relied instead on the existing
+- Did not write a new test attempting to force the former separate-connection
+  timing failure directly — it is not something a sequential
+  single-goroutine unit test can reliably reproduce. Relied instead on the existing
   `TestPulseFindingIssueIDUpdateReloadsExistingStepFindingAcrossReviewerModule`
   (which already exercises the exact "update an existing issue_id" shape
   end-to-end) continuing to pass as confirmation the replacement query is
@@ -81,6 +77,7 @@ the whole backlog.
 - Full `pkg/orchestrator/agents/workflow/step_based_workflow` suite passes.
 - Full suite: 3 pre-existing failures before and after (`cmd/server/guidance`,
   unrelated content), no regression.
-- Not yet reverified live — this is a timing race; a real recurrence (or
-  its absence) on ICICI-BANK-PARSING's next Pulse pass is the eventual
-  confirmation, not something obtainable from this vantage point.
+- Not yet reverified live. A real recurrence (or its absence) on
+  ICICI-BANK-PARSING's next Pulse pass is the eventual confirmation; until
+  then, do not state the former separate-handle path as conclusively proven
+  to be the exact cause.

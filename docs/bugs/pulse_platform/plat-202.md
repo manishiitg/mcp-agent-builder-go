@@ -1,15 +1,15 @@
 [← Pulse platform issue index](../pulse_platform_issue_register.md)
 
-# PLAT-202 — `harness:diff_patch_workspace_file` (JSON registry file) is the same failure class PLAT-192 fixed; the shipped safety net already catches it
+# PLAT-202 — PLAT-192 catches this reported JSON-registry partial-apply shape; broader partial-apply coverage remains unproven
 
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `resolved` — same incident class as PLAT-192, already covered by its fix; no new code change |
+| Ticket state | `resolved` — the exact reported incident shape is already covered; no broader mechanism claim |
 | Last synchronized | `2026-08-29` |
 
-- **Priority:** P3 — no live gap. Confirms an already-shipped fix covers a
-  second, independently-filed instance of the same defect.
+- **Priority:** P3 — no live gap for this reported result shape. It does not
+  establish that every possible partial apply is caught.
 - **Owner:** N/A — no code change made or needed by this ticket.
 - **Related:** [PLAT-192](plat-192.md)
   (`harness:diff_patch_workspace_file:silent-partial-apply`, first seen
@@ -28,9 +28,10 @@ neither: the four scalar fields stayed at their old pre-patch values, and
 the trailing `title` line was deleted entirely with no replacement — a
 silent content loss the tool never surfaced as a failure.
 
-This is near-verbatim the same shape PLAT-192 fixed for a different
+This resembles the incident shape PLAT-192 guarded for a different
 confida-login file: `applied:true` while a multi-hunk patch silently drops
-part of its intended change and deletes unrelated trailing content.
+part of its intended change and deletes unrelated trailing content. The
+underlying apply mechanism remains unconfirmed.
 
 ## Verified: PLAT-192's shipped fix already catches this
 
@@ -59,7 +60,8 @@ values as fixture data rather than a hand-guessed reproduction.
 ## Explicitly not done
 
 - No code change — PLAT-192's fix, already shipped this session, covers
-  this incident's exact reported shape.
+  this incident's exact reported line-count shape. A corrupt result with the
+  same net line delta is outside what this ticket verified.
 - Did not merge this into PLAT-192's own ticket file — kept as a separate
   record since it was filed as a distinct harness finding with its own
   `target_key` and evidence, and the register's per-finding correction

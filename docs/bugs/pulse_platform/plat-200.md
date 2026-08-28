@@ -5,8 +5,8 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `fixed` |
-| Last synchronized | `2026-08-28` |
+| Ticket state | `fixed` — recovery command corrected after post-fix review |
+| Last synchronized | `2026-08-29` |
 
 - **Priority:** P2 — real evidence loss on every QA/scan step that hits a
   wide page, forcing either a blind narrower retry or a full second-cost
@@ -60,8 +60,13 @@ action-only cases respectively.
 **Persistence (the bigger fix).** `Executor` gained an optional
 `SpillOversized OversizedOutputSpiller` hook (`WithOversizedOutputSpiller`).
 When set, the default truncation path calls it with the full untruncated
-tree; on success the banner points the agent at a `read_workspace_file(...)`
-call for the saved path instead of only offering a `--full-snapshot` re-run.
+tree; on success the banner points the agent at the registered
+`execute_shell_command(command="sed -n '1,240p' <saved-path>")` recovery
+command instead of only offering a `--full-snapshot` re-run. The command can
+read the already-granted `tool_output_folder` in bounded chunks, so the agent
+can request later line ranges without re-running the snapshot. This replaced
+the previous, incorrect reference to the test-only `read_workspace_file`
+helper.
 A nil hook, or a hook that errors, falls back to exactly today's behavior —
 no regression, no crash.
 

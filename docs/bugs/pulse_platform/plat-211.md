@@ -1,18 +1,17 @@
 [← Pulse platform issue index](../pulse_platform_issue_register.md)
 
-# PLAT-211 — `CONCERNS:` markers wrapped in a Markdown inline-code span were silently dropped, losing six real findings with no error anywhere
+# PLAT-211 — retain Markdown-wrapped `CONCERNS:` parsing only for legacy/advisor compatibility; normal workflow-step ingestion is retired
 
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `fixed` |
+| Ticket state | `retained legacy compatibility` |
 | Last synchronized | `2026-08-29` |
 
-- **Priority:** P2 — real, evidence-backed findings vanish with no error
-  and no warning; the review is still recorded `completed`, so nothing
-  downstream has any signal that anything was lost. *"The same silent loss
-  will recur for any reviewer that copies the backtick-rendered form shown
-  in the contract text"* per the finding's own impact note.
+- **Priority:** P3 — this was a real historical loss in parser-backed
+  ingestion. Normal step `CONCERNS:` scraping is now deliberately retired:
+  steps must use explicit, structured Pulse finding routes. The parser remains
+  only for legacy records and strategic-advisor route validation.
 - **Owner:** `agent_go/pkg/orchestrator/agents/workflow/step_based_workflow/run_concerns.go`
   (`ParseConcernLines`).
 - **Related:** `harness:pulse-concerns-parser:backtick-wrapped-marker-silently-ignored`
@@ -40,7 +39,7 @@ whitespace-trimmed line. A line opening with a backtick — `` `CONCERNS: ... ` 
 was silently skipped like any other non-marker line, with no distinction
 between "not a concern" and "a concern the parser failed to recognize."
 
-## Fix
+## Retained compatibility fix
 
 Added `stripMarkdownCodeSpan`, called before the prefix check: removes a
 single matching pair of backtick-run delimiters that wrap the **entire**
@@ -52,6 +51,12 @@ one line, not a single whole-line wrap), leaving those lines untouched
 rather than guessing. A `CONCERNS:` line with an *internal* backtick
 (`` CONCERNS: the `foo` field is stale ``) is unaffected either way, since
 it never starts with a backtick in the first place.
+
+This is intentionally **not** a normal workflow repair path anymore. The
+2026-08-29 Pulse simplification removed Go-side harvesting of ordinary step
+completion summaries and removed `record_run_concern` from normal step tools.
+Keeping this small parser behavior protects historical/legacy artifacts and
+the strategic-advisor validation helper without reviving broad text scraping.
 
 ## Explicitly not done
 

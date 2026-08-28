@@ -1223,7 +1223,11 @@ func (e *Executor) handleOversizedSnapshot(ctx context.Context, output *string, 
 	}
 	recoveryLine := fmt.Sprintf("  - agent_browser(command=\"snapshot\", args=[..., %q])            -- this exact snapshot in full, inline (re-runs the command)", fullSnapshotFlag)
 	if spilledPath != "" {
-		recoveryLine = fmt.Sprintf("  - read_workspace_file(%q) -- the exact full tree above, already saved (no need to re-run the snapshot)", spilledPath)
+		// execute_shell_command is the registered tool that can read the session's
+		// already-granted tool_output_folder. Do not advertise the test-only
+		// read_workspace_file helper here: an unavailable recovery command turns a
+		// successful spill back into an unrecoverable snapshot.
+		recoveryLine = fmt.Sprintf("  - execute_shell_command(command=\"sed -n '1,240p' %q\") -- read this saved tree in chunks; use later line ranges as needed (no re-run)", spilledPath)
 	}
 	*output = fmt.Sprintf(`SNAPSHOT_TRUNCATED: showing the first %d of %d runes (%d bytes).
 

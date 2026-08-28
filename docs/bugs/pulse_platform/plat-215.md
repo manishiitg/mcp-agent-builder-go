@@ -1,78 +1,60 @@
 [← Pulse platform issue index](../pulse_platform_issue_register.md)
 
-# PLAT-215 — `agent_browser`'s `download` command loses the file if the final write path is denied; confirmed third-party, workaround already documented
+# PLAT-215 — guarded `agent_browser download` already uses platform staging; correct the stale external-only diagnosis
 
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `resolved` — confirmed external, no platform fix available this pass; a workaround was already documented before this ticket |
+| Ticket state | `resolved` — current guarded execution prevents the unsafe third-party destination write |
 | Last synchronized | `2026-08-29` |
 
-- **Priority:** P3 — real data-loss failure mode, but self-classified by the
-  harness as `external_action_required` with no workflow-side fix, and a
-  working documented workaround already existed before this pass.
-- **Owner:** N/A — no code change made or needed by this ticket. Root
-  mechanism lives in the third-party `agent-browser` CLI, not this repo.
+- **Priority:** P3 — the original data-loss report was real for a direct
+  third-party destination write, but it is not the current guarded platform
+  behavior.
+- **Owner:** `agent_go/pkg/browser/artifact_broker.go`,
+  `workspace/security/browser_artifact.go`.
 - **Related:** `harness:agent_browser.download` (`Workflow/ICICI-BANK-PARSING`,
-  medium; canonical after `merge_pulse_issues` folded a duplicate,
-  `PUL-8F2C747E`, into it) — the finding this closes. Same "root cause in a
-  third dependency, not ours" shape as PLAT-186/187/188/197/200 this
-  session.
+  medium; canonical after `merge_pulse_issues` folded `PUL-8F2C747E` into it).
 
-## The finding
+## Corrected diagnosis
 
-`agent_browser(command="download", ...)` to a destination outside the
-calling session's write-path allowlist permanently deletes the downloaded
-file with no recoverable copy anywhere, instead of leaving it recoverable
-at whatever staged/temp location it was written to before the final copy
-was rejected.
+The earlier ticket record said `download <selector> <destination>` passed
+straight to the third-party `agent-browser` CLI. That is stale. When the
+session has an enabled folder guard, `Executor.HandleAgentBrowser` calls
+`prepareBrowserArtifact("download", ...)`, replaces the requested destination
+with a fresh path under `/tmp/agentworks-browser-artifacts/`, and sends the
+original destination only as an `ArtifactTransfer` instruction to the trusted
+workspace server.
 
-## Confirmed: platform-owned folder guard does not intercept this path
+The third-party CLI therefore writes only to the managed staging location. On
+successful completion, `FinalizeBrowserArtifact` validates that the original
+destination is inside the workspace, covered by the current write allowlist,
+and not blocked; only then does it atomically publish the staged file. An
+unauthorized destination fails at this platform-owned finalization boundary,
+after the third-party download has safely completed to staging. The platform
+does not ask `agent-browser` to write the unauthorized destination, so its
+cleanup-on-denial behavior is not exercised.
 
-Checked `agent_go/pkg/browser/executor.go` for any code that validates or
-copies a `download` command's destination path before or after invoking
-`agent-browser` — none exists. The `download <sel> <path>` argument passes
-straight through to the third-party `agent-browser` binary, which owns
-staging the browser-downloaded file and writing it to the requested
-destination itself. Any rejection of the final destination (e.g. this
-platform's kernel-level write-deny sandboxing for a path outside the
-session's granted write paths, per `FolderGuardConfig`'s own documented
-mechanism) happens *inside* `agent-browser`'s own write attempt, and its
-error-handling around that failure — not this repo's code — is what
-discards the staged copy instead of leaving it recoverable.
+## Evidence
 
-## Why this stays a closure record, not a fix
+- `TestPrepareBrowserArtifactRewritesDownloadDestination` proves the CLI
+  destination is replaced with managed staging.
+- `TestHandleAgentBrowserBrokersExplicitDownload` proves the outgoing browser
+  command contains only the staging path while the transfer retains the
+  requested destination.
+- `TestExecuteShellBrowserArtifactDestinationIsWorkspaceRelative` proves the
+  trusted workspace server publishes only through the artifact-transfer path.
+- `FinalizeBrowserArtifact` enforces workspace containment, write-path
+  coverage, blocked-path checks, regular non-empty staged files, and atomic
+  publish.
 
-- The harness finding itself already correctly classifies this as
-  `external_action_required`: *"This is a harness/SDK-level defect (the
-  download command's own cleanup-on-rejected-write-path behavior), not
-  something workflow plan/step config can change."*
-- A working documented workaround already existed *before* this pass
-  (`learnings/_global/references/icici-portal.md` line 42: plain
-  click/eval-click on the download control, then copy the browser-saved
-  file out via shell), confirmed still present.
-- A real platform-side fix would mean building a new download-proxy layer
-  ourselves — always downloading to a known-safe location and having our
-  own code perform the folder-guard-validated copy, bypassing
-  `agent-browser`'s built-in destination-writing entirely — a meaningfully
-  sized new feature, not a small patch, and not something to build
-  speculatively against two occurrences without broader confirmation this
-  is a recurring operational cost worth the investment.
+## Scope
 
-## Explicitly not done
+This protection applies to guarded workflow/session calls. Unguarded local
+browser use intentionally keeps direct-path behavior because there is no
+session authorization boundary to enforce. If a new data-loss report occurs,
+first verify whether that call was unguarded or bypassed the `agent_browser`
+executor before treating it as a third-party regression.
 
-- No code change — nothing on this repo's side causes or can cheaply
-  prevent the loss; the mechanism lives inside the third-party binary.
-- Did not design or build a download-proxy feature to work around
-  `agent-browser`'s own behavior — flagged as a real, available option if
-  this recurs often enough to justify it, not ruled out permanently.
-- Did not attempt to patch or file upstream against `agent-browser` itself
-  — out of scope for this repo's own harness register.
-
-## Verification
-
-- Confirmed via direct code read that no platform-side interception of the
-  `download` destination path exists in `pkg/browser/executor.go`.
-- Confirmed the documented workaround (`icici-portal.md`) is present and
-  unchanged.
-- No code changed by this ticket — nothing to build or test.
+No new code is required by this correction; the safe broker was already
+shipped. The previous "no platform fix available" disposition was inaccurate.

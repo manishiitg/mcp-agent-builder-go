@@ -195,8 +195,8 @@ func TestOversizedSnapshotUsesConfiguredSpillerWhenAvailable(t *testing.T) {
 		if !strings.Contains(output, "Workflow/testing/tool_output_folder/agent_browser_snapshot_123.txt") {
 			t.Fatalf("truncated snapshot did not surface the spilled path:\n%s", output[:min(len(output), 600)])
 		}
-		if !strings.Contains(output, "read_workspace_file") {
-			t.Fatalf("truncated snapshot did not tell the agent how to read the spilled file:\n%s", output[:min(len(output), 600)])
+		if !strings.Contains(output, "execute_shell_command") || !strings.Contains(output, "sed -n '1,240p'") {
+			t.Fatalf("truncated snapshot did not advertise the available chunked-read recovery command:\n%s", output[:min(len(output), 600)])
 		}
 	})
 

@@ -123,7 +123,7 @@ func newPulseIssueID() string {
 // is the shape the prompts ask for and the shape the message-sequence aggregator
 // already assumed. Everything after the prefix on that line is the concern.
 //
-// PLAT-208: a reviewer's own summary text sometimes renders the marker as a
+// PLAT-211: a legacy review/advisor summary can render the marker as a
 // Markdown inline-code span -- "`CONCERNS: foo`" instead of a bare
 // "CONCERNS: foo" line. That backtick is real content the model wrote, not
 // whitespace strings.TrimSpace touches, so the bare prefix check silently
