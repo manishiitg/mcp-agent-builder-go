@@ -3494,7 +3494,7 @@ func (s *SchedulerService) executeWorkshopJob(ctx context.Context, sctx *Schedul
 		s.sessionLogf(sctx, sessionID,
 			"[SCHEDULER] skipping run-outcome reconciliation for %s: run-folder listing unavailable (pre-run err=%v, post-run err=%v); this invocation's outcome stands on its session result alone",
 			sctx.Schedule.ID, preRunFoldersErr, postRunFoldersErr)
-	} else if failedFolder, found := reconcileWorkshopRunOutcome(preRunFolderNames, postRunFolders); found {
+	} else if failedFolder, found := reconcileWorkshopRunOutcome(preRunFolderNames, postRunFolders, invocationStartedAt); found {
 		s.sessionLogf(sctx, sessionID, "[SCHEDULER] ⚠️ Workshop session for %s completed normally, but run %s recorded status \"failed\" in its own run_metadata.json", sctx.Schedule.ID, failedFolder)
 		return sessionID, runFolder, fmt.Errorf("workflow run %s failed (its run_metadata.json records status \"failed\"), even though the orchestrating workshop session completed its turns without an infrastructure error", failedFolder)
 	}
@@ -3630,19 +3630,42 @@ func (s *SchedulerService) scheduledWorkflowExecutionProducedEvidence(sessionID 
 	return false
 }
 
-// reconcileWorkshopRunOutcome finds the first run folder created during this
-// workshop invocation (present in after but not in before — a pre-existing
-// run's status must never affect this invocation's own result) whose own
-// run_metadata.json recorded status "failed". Ambiguous states — no metadata,
-// "running", "completed", anything else — are never treated as failure; only
-// an explicit "failed" is, so a transient listing hiccup fails open toward
-// "cannot verify" rather than toward a false failure.
-func reconcileWorkshopRunOutcome(before map[string]bool, after []RunFolderInfo) (failedFolder string, found bool) {
+// reconcileWorkshopRunOutcome finds the run folder this invocation actually
+// touched — either newly created (its name absent from before) or an
+// existing folder whose metadata was (re)started during this invocation's own
+// window, per its StartedAt/CreatedAt versus since — whose own
+// run_metadata.json recorded status "failed".
+//
+// The since-based fallback matters because a workflow that reuses the same
+// run-folder name every cycle (e.g. iteration-0/<group>, confirmed live on
+// confida-login — see PLAT-182) never appears "new" by name after its first
+// cycle: before[folder.Name] is already true every time, so a name-only check
+// would skip inspecting that folder's metadata on every single subsequent
+// invocation, regardless of what it actually recorded. workshopRunProducedEvidence,
+// called moments earlier in the same code path for a different purpose, already
+// carries this same since-based fallback for exactly this reason; this function
+// previously lacked it.
+//
+// Ambiguous states — no metadata, "running", "completed", anything else — are
+// still never treated as failure; only an explicit "failed" is, so a
+// transient listing hiccup, or a workflow genuinely still running in the
+// background, fails open toward "cannot verify" rather than toward a false
+// failure.
+func reconcileWorkshopRunOutcome(before map[string]bool, after []RunFolderInfo, since time.Time) (failedFolder string, found bool) {
 	for _, folder := range after {
-		if folder.Name == "" || before[folder.Name] {
+		if folder.Name == "" || folder.Metadata == nil {
 			continue
 		}
-		if folder.Metadata == nil {
+		touchedThisInvocation := !before[folder.Name]
+		if !touchedThisInvocation {
+			for _, stamp := range []time.Time{folder.Metadata.StartedAt, folder.Metadata.CreatedAt} {
+				if !stamp.IsZero() && !stamp.Before(since) {
+					touchedThisInvocation = true
+					break
+				}
+			}
+		}
+		if !touchedThisInvocation {
 			continue
 		}
 		if strings.EqualFold(strings.TrimSpace(folder.Metadata.Status), "failed") {

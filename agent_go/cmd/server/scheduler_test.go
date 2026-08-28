@@ -2454,12 +2454,42 @@ func TestReconcileWorkshopRunOutcomeDetectsNewFailedRun(t *testing.T) {
 		{Name: "iteration-231", Metadata: &RunMetadata{Status: "completed"}},
 		{Name: "iteration-232", Metadata: &RunMetadata{Status: "failed"}},
 	}
-	failedFolder, found := reconcileWorkshopRunOutcome(before, after)
+	failedFolder, found := reconcileWorkshopRunOutcome(before, after, time.Now())
 	if !found {
 		t.Fatal("expected the new failed run to be found")
 	}
 	if failedFolder != "iteration-232" {
 		t.Fatalf("failedFolder = %q, want iteration-232", failedFolder)
+	}
+}
+
+// TestReconcileWorkshopRunOutcomeDetectsFailureInAReusedFolderName reproduces
+// the confida-login schedule_run_status:aggregation harness finding: a
+// workflow whose runs always land in the same folder name (iteration-0/<group>)
+// never looks "new" by name after its first cycle, so a name-only check
+// would silently skip every subsequent cycle's own metadata regardless of
+// what it recorded — the exact reused-folder-name gap
+// workshopRunProducedEvidence (the sibling function, called moments earlier
+// in the same code path) already guards against via its own since-based
+// fallback, which this function previously lacked.
+func TestReconcileWorkshopRunOutcomeDetectsFailureInAReusedFolderName(t *testing.T) {
+	invocationStart := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
+	before := map[string]bool{"iteration-0/confida-staging": true} // same folder, prior cycle
+	after := []RunFolderInfo{
+		{
+			Name: "iteration-0/confida-staging",
+			Metadata: &RunMetadata{
+				Status:    "failed",
+				StartedAt: invocationStart.Add(1 * time.Minute), // (re)started during THIS invocation
+			},
+		},
+	}
+	failedFolder, found := reconcileWorkshopRunOutcome(before, after, invocationStart)
+	if !found {
+		t.Fatal("expected this invocation's own failure in the reused folder to be found")
+	}
+	if failedFolder != "iteration-0/confida-staging" {
+		t.Fatalf("failedFolder = %q, want iteration-0/confida-staging", failedFolder)
 	}
 }
 
@@ -2472,7 +2502,7 @@ func TestReconcileWorkshopRunOutcomeIgnoresPreexistingFailure(t *testing.T) {
 	after := []RunFolderInfo{
 		{Name: "iteration-231", Metadata: &RunMetadata{Status: "failed"}},
 	}
-	if _, found := reconcileWorkshopRunOutcome(before, after); found {
+	if _, found := reconcileWorkshopRunOutcome(before, after, time.Now()); found {
 		t.Fatal("a pre-existing run's failure must not be attributed to this invocation")
 	}
 }
@@ -2502,7 +2532,7 @@ func TestReconcileWorkshopRunOutcomeMisattributesWhenBaselineIsLost(t *testing.T
 		{Name: "iteration-0", Metadata: &RunMetadata{Status: "completed"}},
 		{Name: "iteration-25", Metadata: &RunMetadata{Status: "failed"}}, // yesterday's
 	}
-	failedFolder, found := reconcileWorkshopRunOutcome(lostBaseline, after)
+	failedFolder, found := reconcileWorkshopRunOutcome(lostBaseline, after, time.Now())
 	if !found || failedFolder != "iteration-25" {
 		t.Fatalf("expected the documented misattribution (iteration-25), got found=%v folder=%q; "+
 			"if the primitive now tolerates an empty baseline this test is obsolete", found, failedFolder)
@@ -2521,7 +2551,7 @@ func TestReconcileWorkshopRunOutcomeIgnoresAmbiguousStates(t *testing.T) {
 		{Name: "iteration-2", Metadata: &RunMetadata{Status: "running"}},
 		{Name: "iteration-3", Metadata: &RunMetadata{Status: "completed"}},
 	}
-	if _, found := reconcileWorkshopRunOutcome(before, after); found {
+	if _, found := reconcileWorkshopRunOutcome(before, after, time.Now()); found {
 		t.Fatal("no folder here is explicitly \"failed\"; none should be flagged")
 	}
 }
@@ -2536,7 +2566,7 @@ func TestReconcileWorkshopRunOutcomeHandlesGroupNestedFolders(t *testing.T) {
 		{Name: "iteration-232/production", Metadata: &RunMetadata{Status: "failed"}},
 		{Name: "iteration-232/staging", Metadata: &RunMetadata{Status: "failed"}},
 	}
-	failedFolder, found := reconcileWorkshopRunOutcome(before, after)
+	failedFolder, found := reconcileWorkshopRunOutcome(before, after, time.Now())
 	if !found {
 		t.Fatal("expected the new group folder's failure to be found")
 	}
