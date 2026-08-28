@@ -630,6 +630,80 @@ func TestApplyAgentGeneratedDiffFallbackDoesNotRecommendAnArbitraryTiedNearMatch
 	}
 }
 
+// TestCountContentLines locks down the two edge cases plain
+// len(strings.Split(content, "\n")) gets wrong: an empty file is 0 lines
+// (not 1), and a trailing newline must not count as an extra blank line.
+// Getting this wrong made verifyDiffApplied reject a legitimate single-line
+// file-creation diff as corrupted (see TestDiffPatchCreationWithControllingTTY).
+func TestCountContentLines(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    int
+	}{
+		{"empty file", "", 0},
+		{"one line, no trailing newline", "hello", 1},
+		{"one line, with trailing newline", "hello\n", 1},
+		{"three lines, with trailing newline", "a\nb\nc\n", 3},
+		{"three lines, no trailing newline", "a\nb\nc", 3},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := countContentLines(tt.content); got != tt.want {
+				t.Errorf("countContentLines(%q) = %d, want %d", tt.content, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestVerifyDiffAppliedCatchesSilentPartialApply reproduces the shape of the
+// confida-login live finding: a two-hunk patch where the first hunk (net +1
+// line) applied correctly, but the second hunk's own changes were silently
+// dropped and an unrelated trailing line was deleted too (net -1) — so the
+// file's real net change (0) does not match what the diff's own +/- lines
+// claim (+1). The specific internal mechanism that produced this isn't
+// reproducible on demand (see PLAT-19x); this test proves the safety net
+// catches the failure SHAPE regardless of which internal path caused it.
+func TestVerifyDiffAppliedCatchesSilentPartialApply(t *testing.T) {
+	original := "line1\nline2\nline3\n"
+	diff := "--- a/f.txt\n+++ b/f.txt\n@@ -1,3 +1,4 @@\n line1\n+added-line\n line2\n line3\n"
+	// Simulates the corrupted result: the addition landed, but an unrelated
+	// trailing line was silently dropped, so the net change is 0, not +1.
+	corruptedResult := "line1\nadded-line\nline2\n"
+
+	err := verifyDiffApplied(original, diff, corruptedResult)
+	if err == nil {
+		t.Fatal("expected verifyDiffApplied to reject a result whose line-count change does not match the diff's claim")
+	}
+	if !strings.Contains(err.Error(), "unexpected line-count change") {
+		t.Errorf("error should name the mismatch, got: %v", err)
+	}
+}
+
+// TestVerifyDiffAppliedAcceptsACorrectApply guards against false positives:
+// a normal, correctly-applied multi-hunk patch must pass verification.
+func TestVerifyDiffAppliedAcceptsACorrectApply(t *testing.T) {
+	original := "line1\nline2\nline3\nline4\nline5\n"
+	diff := "--- a/f.txt\n+++ b/f.txt\n@@ -1,2 +1,3 @@\n line1\n+added-line\n line2\n@@ -4,2 +5,2 @@\n-line4\n+changed-line4\n line5\n"
+	correctResult := "line1\nadded-line\nline2\nline3\nchanged-line4\nline5\n"
+
+	if err := verifyDiffApplied(original, diff, correctResult); err != nil {
+		t.Fatalf("verifyDiffApplied rejected a correctly-applied patch: %v", err)
+	}
+}
+
+// TestDiffClaimedLineDeltaCountsBodyLinesNotHeaders proves the delta is
+// computed from the actual +/- body lines, not the (sometimes wrong,
+// LLM-supplied) @@ header counts — the same signal correctAgentGeneratedDiff
+// already trusts over the header.
+func TestDiffClaimedLineDeltaCountsBodyLinesNotHeaders(t *testing.T) {
+	// Header claims +1,+1 (net 0) but the body has one addition, no removals.
+	diff := "--- a/f.txt\n+++ b/f.txt\n@@ -1,1 +1,1 @@\n line1\n+added-line\n"
+	if got := diffClaimedLineDelta(diff); got != 1 {
+		t.Fatalf("diffClaimedLineDelta = %d, want 1 (from the body's +/- lines, ignoring the header)", got)
+	}
+}
+
 func TestApplyAgentGeneratedDiffFallbackOmitsHintWhenFileIsShorterThanTheHunk(t *testing.T) {
 	currentContent := "only one line"
 	diffContent := "--- a/f.txt\n+++ b/f.txt\n@@ -1,3 +1,3 @@\n line a\n line b\n line c\n"
