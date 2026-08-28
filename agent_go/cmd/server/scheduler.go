@@ -1143,6 +1143,27 @@ func (s *SchedulerService) GetWorkspaceForSchedule(scheduleID string) string {
 	return match
 }
 
+// ListFireDecisions returns the durable tick-loop decision log for one
+// schedule — including occurrences the scheduler correctly skipped
+// (global pause, busy, a queued dependency) and never turned into a
+// schedule_runs row at all. get_schedule_runs's own history only shows
+// actual runs, so a schedule that looks silent for days there can be a
+// scheduler correctly honoring a pause the whole time, not a defect —
+// this is the only read path that can tell the two apart (found live on
+// confida-login: four Technical Review passes theorized a missing
+// misfire-recovery mechanism instead of reading this durable, already-logged
+// decision trail).
+func (s *SchedulerService) ListFireDecisions(ctx context.Context, workspacePath, scheduleID string, limit int) ([]schedulerstate.FireDecision, error) {
+	s.stateStoreMu.RLock()
+	store := s.stateStore
+	s.stateStoreMu.RUnlock()
+	if store == nil {
+		return nil, errors.New("schedule state store is unavailable")
+	}
+	scopeID := filepath.Clean(strings.TrimSpace(workspacePath))
+	return store.ListFireDecisions(ctx, "workflow", scopeID, scheduleID, limit)
+}
+
 // TriggerNow triggers a schedule immediately (for manual trigger API).
 func (s *SchedulerService) TriggerNow(workspacePath string, scheduleID string) (string, error) {
 	return s.TriggerNowFromSession(workspacePath, scheduleID, "")

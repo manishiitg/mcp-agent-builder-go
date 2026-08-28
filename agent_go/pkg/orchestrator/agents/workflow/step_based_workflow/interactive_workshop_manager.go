@@ -8252,7 +8252,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// Tool: get_schedule_runs — Get run history for a schedule
 	if err := mcpAgent.RegisterCustomTool(
 		"get_schedule_runs",
-		"View the execution history for a specific schedule, including status, duration, and errors.",
+		"View the execution history for a specific schedule, including status, duration, and errors. Also returns any recent occurrences the scheduler deliberately did NOT run (global pause, another schedule already owning the workflow, a queued dependency) with the real reason — these never appear in Run History since they never started a run. Before concluding a schedule 'silently skipped' or diagnosing a missing recovery mechanism, check this list first: a schedule with no runs for days is very often a scheduler correctly honoring a pause the whole time, not a defect.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{

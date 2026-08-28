@@ -222,6 +222,50 @@ func TestPulseAndWorkflowScheduleUseSeparateDurableLanes(t *testing.T) {
 	}
 }
 
+// TestListFireDecisionsSurfacesSkippedOccurrences is the regression test for
+// the confida-login live finding: four Technical Review passes theorized a
+// missing scheduler misfire-recovery mechanism because get_schedule_runs
+// only shows actual runs, and a global-pause skip never creates one. This
+// proves the fix — ListFireDecisions must return the skip decision with its
+// real reason, not just "started" occurrences.
+func TestListFireDecisionsSurfacesSkippedOccurrences(t *testing.T) {
+	store, err := schedulerstate.Open(filepath.Join(t.TempDir(), "schedule-state.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	svc := NewSchedulerService(nil)
+	svc.stateStore = store
+	manifest := &WorkflowManifest{ID: "demo"}
+	sctx := buildScheduleContext("Workflow/demo", manifest, WorkflowSchedule{ID: "daily"})
+	scheduledFor := time.Date(2026, 8, 19, 3, 30, 0, 0, time.UTC)
+	sctx.ScheduledFor = scheduledFor
+	firedAt := scheduledFor.Add(59 * time.Second)
+
+	if err := svc.recordScheduleFireDecision(context.Background(), sctx, "skipped_paused", "global scheduler pause is active", "", firedAt); err != nil {
+		t.Fatalf("record skip decision: %v", err)
+	}
+
+	decisions, err := svc.ListFireDecisions(context.Background(), "Workflow/demo", "daily", 10)
+	if err != nil {
+		t.Fatalf("ListFireDecisions: %v", err)
+	}
+	if len(decisions) != 1 {
+		t.Fatalf("got %d decisions, want 1: %+v", len(decisions), decisions)
+	}
+	got := decisions[0]
+	if got.Decision != "skipped_paused" {
+		t.Errorf("decision = %q, want %q", got.Decision, "skipped_paused")
+	}
+	if got.Reason != "global scheduler pause is active" {
+		t.Errorf("reason = %q, want the real skip reason", got.Reason)
+	}
+	if !got.ScheduledFor.Equal(scheduledFor) {
+		t.Errorf("scheduled_for = %v, want %v", got.ScheduledFor, scheduledFor)
+	}
+}
+
 func TestPulseScheduleTimingSummaryOmitsSectionWhenPulseIsDisabled(t *testing.T) {
 	if got := pulseScheduleTimingSummary(nil); got != "" {
 		t.Fatalf("nil manifest: want empty summary (section omitted), got %q", got)

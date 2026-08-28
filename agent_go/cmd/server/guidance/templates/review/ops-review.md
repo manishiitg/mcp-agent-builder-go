@@ -132,6 +132,19 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
      approval boundary, failure behavior, and reuse (especially draft-only
      versus publish routes). Artifact Review owns topology drift; record an Ops
      finding only for measured cost, latency, or runtime impact.
+   - **A schedule with no recent runs is not evidence of a scheduler defect
+     by itself.** `get_schedule_runs` returns both actual runs AND any recent
+     occurrences the scheduler deliberately did not run (global pause, another
+     schedule already owning the workflow, a queued dependency), each with its
+     real reason — call it and read that list before concluding a schedule
+     "silently skipped" or theorizing about a missing misfire-recovery
+     mechanism. Live case: four Technical Review passes across three weeks
+     built an increasingly detailed theory that the platform scheduler has "no
+     durable missed-slot recovery" — the scheduler was in fact evaluating and
+     correctly skipping every single occurrence on time, the whole gap was one
+     multi-day global pause, and the answer was sitting in this same tool the
+     whole time, unread. Only escalate a scheduler-code finding once this list
+     is checked and does not explain the gap.
    - **Reflection yield.** `reflection:<step-id>` is attributed separately from
      `execution_only:<step-id>` in the cost ledger, and `reflection-timing.json`
      sits beside the execution timing files. **A single reflection turn that

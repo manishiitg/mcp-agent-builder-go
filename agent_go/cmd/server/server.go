@@ -40,6 +40,7 @@ import (
 	todo_creation_human "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
 	orchEvents "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/events"
 	orchtypes "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/types"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/schedulerstate"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workflowtypes"
 
 	"github.com/manishiitg/mcpagent/agent/codeexec"
@@ -9659,28 +9660,53 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 			if err != nil {
 				return "", err
 			}
-			if len(runs) == 0 {
-				return "No runs found for this schedule.", nil
-			}
 			var sb strings.Builder
-			sb.WriteString(fmt.Sprintf("## Run History (%d of %d)\n\n", len(runs), total))
-			for _, r := range runs {
-				duration := ""
-				if r.DurationMs != nil {
-					duration = fmt.Sprintf(" (%dms)", *r.DurationMs)
+			if len(runs) == 0 {
+				sb.WriteString("No runs found for this schedule.\n\n")
+			} else {
+				sb.WriteString(fmt.Sprintf("## Run History (%d of %d)\n\n", len(runs), total))
+				for _, r := range runs {
+					duration := ""
+					if r.DurationMs != nil {
+						duration = fmt.Sprintf(" (%dms)", *r.DurationMs)
+					}
+					idPrefix := r.ID
+					if len(idPrefix) > 8 {
+						idPrefix = idPrefix[:8]
+					}
+					sb.WriteString(fmt.Sprintf("- **%s** [%s]%s — %s", idPrefix, r.Status, duration, r.StartedAt.Format("2006-01-02 15:04:05")))
+					if r.RunFolder != "" {
+						sb.WriteString(fmt.Sprintf(" → `%s`", r.RunFolder))
+					}
+					if r.Error != "" {
+						sb.WriteString(fmt.Sprintf("\n  Error: %s", r.Error))
+					}
+					sb.WriteString("\n")
 				}
-				idPrefix := r.ID
-				if len(idPrefix) > 8 {
-					idPrefix = idPrefix[:8]
+			}
+			// Every scheduled occurrence is recorded here, including ones the
+			// scheduler correctly decided NOT to run (a global pause, another
+			// schedule already owning the workflow, a queued dependency) — those
+			// never produce a schedule_runs row above at all. A schedule that
+			// looks silent in Run History can be a scheduler working exactly as
+			// designed the whole time; this is the only way to tell that apart
+			// from an actual missed/dropped occurrence.
+			if api.scheduler != nil {
+				if decisions, decErr := api.scheduler.ListFireDecisions(ctx, workspacePath, jobID, limit); decErr == nil {
+					var skipped []schedulerstate.FireDecision
+					for _, d := range decisions {
+						if d.Decision != "started" {
+							skipped = append(skipped, d)
+						}
+					}
+					if len(skipped) > 0 {
+						sb.WriteString(fmt.Sprintf("\n## Skipped/Non-Run Occurrences (%d)\n\n", len(skipped)))
+						for _, d := range skipped {
+							sb.WriteString(fmt.Sprintf("- scheduled_for=%s decision=%q reason=%q\n",
+								d.ScheduledFor.Format("2006-01-02 15:04:05"), d.Decision, d.Reason))
+						}
+					}
 				}
-				sb.WriteString(fmt.Sprintf("- **%s** [%s]%s — %s", idPrefix, r.Status, duration, r.StartedAt.Format("2006-01-02 15:04:05")))
-				if r.RunFolder != "" {
-					sb.WriteString(fmt.Sprintf(" → `%s`", r.RunFolder))
-				}
-				if r.Error != "" {
-					sb.WriteString(fmt.Sprintf("\n  Error: %s", r.Error))
-				}
-				sb.WriteString("\n")
 			}
 			return sb.String(), nil
 		},
