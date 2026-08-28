@@ -291,6 +291,41 @@ Live on the target host, first deployed 2026-08-24:
   inner app didn't already intend to expose at that boundary. The gateway
   still runs and still routes/serves the frontend/proxies `/api`, `/api/wp`,
   `/ws` — only the password-session check is skipped.
+- Stale local absolute paths in synced workflow state, found and bulk-fixed
+  2026-08-28: the original local→server sync of `Workflow/tectonicusadaytrading/`
+  (see the scheduling-ownership entry above) carried over 221 `builder/`
+  conversation/session files whose `runtime.agent_session_handle.provider.working_dir`
+  still pointed at the local dev machine's absolute path
+  (`/Users/mipl/ai-work/mcp-agent-builder-go/workspace-docs/...`). Resuming
+  any of those native Claude Code sessions failed with `SANDBOX_UNAVAILABLE:
+  ... mkdir /Users: permission denied` (the launcher trying to `mkdir -p` a
+  path that only exists on the original dev machine). Bulk-corrected with a
+  literal string replace across `builder/` to the real server path
+  (`/srv/dominion/data/docs/Workflow/tectonicusadaytrading`). **Any future
+  full workflow-directory sync from a local/dev machine to a server must
+  repeat this check** — grep the synced tree for the source machine's own
+  absolute path before considering the sync complete; this class of bug is
+  silent until a native coding-agent session tries to resume.
+- `kernel.apparmor_restrict_unprivileged_userns` disabled host-wide,
+  2026-08-28 (`/etc/sysctl.d/60-dominion-userns.conf`, applied at
+  `sysctl -w` time and persisted across reboots). Ubuntu 24.04's default of
+  `1` blocks unprivileged mount-namespace creation for any process without
+  an explicit AppArmor profile, even though the underlying
+  `kernel.unprivileged_userns_clone` sysctl is enabled. This host's Landlock
+  fallback path (`workspace/security/isolator_linux.go`,
+  `executeIsolatedMountNamespace`) depends on mount namespaces being
+  available for any Folder Guard policy Landlock's purely-additive rule
+  model can't express on its own — concretely, "write-access to a workflow
+  folder except its `planning/` subfolder" (a real, intentional policy the
+  generic AgentWorks path requests, which Dominion's own narrower profile
+  never happened to trigger). Without the fallback, that combination hard-
+  failed with `SANDBOX_UNAVAILABLE: Landlock cannot represent this Folder
+  Guard policy and mount namespaces are unavailable: blocked-write path
+  overlaps writable path`. **Trade-off, decided explicitly rather than
+  defaulted into**: this is a host-wide toggle affecting every process on
+  this shared VM (not just Dominion's), chosen over a narrower
+  Dominion-only AppArmor profile grant for speed. Revisit if this host ever
+  needs the stricter Ubuntu 24.04 posture back for an unrelated tenant.
 
 Known follow-up, not yet done:
 
