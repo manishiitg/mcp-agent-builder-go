@@ -71,12 +71,31 @@ func WithCdpPorts(ports ...int) ExecutorOption {
 	}
 }
 
+// OversizedOutputSpiller persists content too large to return inline to a
+// location the calling session can read back, returning the workspace-relative
+// path it landed at. It must apply the same "only if this session actually has
+// tool_output_folder read access" check the caller already verified — this
+// type does not itself carry authority to write anywhere.
+type OversizedOutputSpiller func(ctx context.Context, content string) (relPath string, err error)
+
 // Executor handles the execution of browser tool commands
 type Executor struct {
-	Client        *Client
-	CdpPort       int   // Legacy primary port; first entry in CdpPorts when configured.
-	CdpPorts      []int // Explicitly authorized CDP browsers. Empty means headless.
-	RuntimeConfig *BrowserRuntimeConfig
+	Client         *Client
+	CdpPort        int   // Legacy primary port; first entry in CdpPorts when configured.
+	CdpPorts       []int // Explicitly authorized CDP browsers. Empty means headless.
+	RuntimeConfig  *BrowserRuntimeConfig
+	SpillOversized OversizedOutputSpiller // Optional; nil means "no recoverable spill available for this session."
+}
+
+// WithOversizedOutputSpiller wires a session-scoped write path for content that
+// would otherwise be silently discarded when a snapshot exceeds the inline cap.
+// The caller (not this package) is responsible for confirming, via the session's
+// own already-granted folder guard, that the target directory is actually
+// readable back by that session -- see workspace_browser_tools.go.
+func WithOversizedOutputSpiller(spiller OversizedOutputSpiller) ExecutorOption {
+	return func(e *Executor) {
+		e.SpillOversized = spiller
+	}
 }
 
 // NewExecutor creates a new browser executor
@@ -1138,7 +1157,7 @@ func (e *Executor) HandleAgentBrowser(ctx context.Context, args map[string]inter
 		return formatAgentBrowserSkillsOutput(output), nil
 	}
 	if command == "snapshot" {
-		if handled, err := e.handleOversizedSnapshot(&output, fullSnapshotRequested); err != nil {
+		if handled, err := e.handleOversizedSnapshot(ctx, &output, fullSnapshotRequested); err != nil {
 			return "", err
 		} else if handled {
 			return output, nil
@@ -1172,7 +1191,7 @@ func (e *Executor) HandleAgentBrowser(ctx context.Context, args map[string]inter
 // chooses with evidence instead of without.
 //
 // Returns handled=true when it has produced the final result for this call.
-func (e *Executor) handleOversizedSnapshot(output *string, fullSnapshotRequested bool) (bool, error) {
+func (e *Executor) handleOversizedSnapshot(ctx context.Context, output *string, fullSnapshotRequested bool) (bool, error) {
 	runeCount := len([]rune(*output))
 	if runeCount <= maxInlineSnapshotOutputRunes {
 		return false, nil
@@ -1186,17 +1205,43 @@ func (e *Executor) handleOversizedSnapshot(output *string, fullSnapshotRequested
 			runeCount, len(*output), fullSnapshotFlag, *output)
 		return true, nil
 	}
-	head := string([]rune(*output)[:maxInlineSnapshotOutputRunes])
+	full := *output
+	head := string([]rune(full)[:maxInlineSnapshotOutputRunes])
+
+	// PLAT-200: the default truncated path used to just discard everything past
+	// the head -- unlike the --full-snapshot path above, nothing spilled it
+	// anywhere, so the only way to recover the rest was a second, full-cost
+	// snapshot call. If this session's caller has confirmed (via its own
+	// granted folder guard, not a path this package invents) that it can write
+	// somewhere the session can also read back, persist the full tree there so
+	// the agent gets a real recoverable path instead of only a re-run option.
+	spilledPath := ""
+	if e.SpillOversized != nil {
+		if p, err := e.SpillOversized(ctx, full); err == nil && strings.TrimSpace(p) != "" {
+			spilledPath = strings.TrimSpace(p)
+		}
+	}
+	recoveryLine := fmt.Sprintf("  - agent_browser(command=\"snapshot\", args=[..., %q])            -- this exact snapshot in full, inline (re-runs the command)", fullSnapshotFlag)
+	if spilledPath != "" {
+		recoveryLine = fmt.Sprintf("  - read_workspace_file(%q) -- the exact full tree above, already saved (no need to re-run the snapshot)", spilledPath)
+	}
 	*output = fmt.Sprintf(`SNAPSHOT_TRUNCATED: showing the first %d of %d runes (%d bytes).
 
 *** THIS TREE IS INCOMPLETE. An element missing from the text below may still exist on the page -- do NOT record it as absent, and do not assert a negative from this output. ***
 
-To get what you need, pick one:
-  - agent_browser(command="snapshot", args=[..., "--selector", "<css>"])  -- the region you actually need (cheapest)
-  - agent_browser(command="snapshot", args=[..., "--depth", "<n>"])       -- a shallower tree
-  - agent_browser(command="snapshot", args=[..., "%s"])            -- this exact snapshot in full, inline
+To get what you need, pick one -- but choose based on WHY the tree below is
+large, not by trying options in order. --depth only shrinks a tree that is
+large because it is deeply NESTED; on a WIDE/FLAT page (many sibling rows,
+cards, or list items at a similar shallow depth -- look at the indentation
+below), raising or lowering --depth can return a byte-identical result and
+waste the retry, since the size comes from sibling count, not nesting:
+  - agent_browser(command="snapshot", args=[..., "--selector", "<css>"])  -- scope to the region you actually need (cheapest, works for wide OR deep trees)
+  - agent_browser(command="snapshot", args=[..., "--compact"])           -- strip empty structural wrappers (helps on noisy markup)
+  - agent_browser(command="snapshot", args=[..., "--interactive"])       -- only clickable/typeable elements (helps when you only need to act, not read)
+  - agent_browser(command="snapshot", args=[..., "--depth", "<n>"])      -- a shallower tree (only helps if the head below looks deeply nested, not wide)
+%s
 
-%s`, maxInlineSnapshotOutputRunes, runeCount, len(*output), fullSnapshotFlag, head)
+%s`, maxInlineSnapshotOutputRunes, runeCount, len(*output), recoveryLine, head)
 	return true, nil
 }
 
