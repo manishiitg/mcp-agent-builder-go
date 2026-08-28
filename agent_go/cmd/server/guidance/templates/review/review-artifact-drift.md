@@ -30,6 +30,23 @@ Load `read_skill(skills=[{"name":"builder-reference","path":"references/assumpti
      inspect the exact entry; do not rely on a separate presentation cursor.
    - If no cursor exists and more than 100 entries are unreviewed, inspect only the latest 100 and report that the older entries remain unreviewed.
    - Never advance the proposed cursor past an entry that was not fully inspected or safely cursor-backfilled.
+   - **The changelog only records plan mutations** (`update_scripted_step` and
+     the other typed plan-mod tools) — `planning/` is never a granted write
+     path for any other tool, so `plan.json` itself is always fully and
+     truthfully captured here. A direct edit to a step's own code
+     (`learnings/<step-id>/main.py`) or a shared doc (`db/README.md`) made via
+     `diff_patch_workspace_file`/`update_workspace_file` is a different kind
+     of change and does not produce a changelog entry, even when it happens
+     in the same turn as a plan-tool call — the entry that turn produces
+     describes only the plan-tool's own field change. When a changelog entry
+     does flag a step as affected, step 3 below already directs inspecting
+     that step's `main.py` directly, so the code change is still caught. The
+     residual gap is narrower: an isolated code/doc edit with **no**
+     accompanying plan-tool call in the same turn produces no changelog
+     entry at all, so nothing routes that step into this checklist's
+     cursor-selection step in the first place — this is a scope boundary of
+     the changelog cursor, not evidence the checklist itself missed
+     something once a step is in scope.
 3. For each affected step, inspect only relevant current artifacts:
    - `planning/plan.json` and `planning/step_config.json`
    - the workflow's schedules in `workflow.json` — for each schedule, its cron,
