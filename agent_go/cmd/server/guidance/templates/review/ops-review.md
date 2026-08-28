@@ -145,6 +145,26 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
      multi-day global pause, and the answer was sitting in this same tool the
      whole time, unread. Only escalate a scheduler-code finding once this list
      is checked and does not explain the gap.
+   - **A null `lcp_ms` on a shared-CDP browser is not evidence of a capture
+     bug by itself.** CDP mode connects every concurrent workflow session to
+     one real, shared Chrome instance. Largest Contentful Paint is withheld
+     by the browser's own spec-mandated behavior whenever
+     `document.visibilityState` is not `"visible"` at capture time — no
+     page-side script or web-vitals library can work around that. Live-tested
+     directly: `agent_browser`'s own tab-switch command does correctly bring
+     the target tab to the foreground when used in isolation, so a null
+     reading is not the tool silently failing to switch. The gap is
+     concurrency: another session sharing the same CDP port can switch its
+     own tab to the foreground between this session's switch and its actual
+     capture, and creating a dedicated labeled tab does not prevent that race
+     — it only fixes tab *identity* (PLAT-181's concern), not tab
+     *foreground*. Treat a null `lcp_ms` under concurrent CDP sharing as a
+     known, structural limitation of the current shared-browser architecture
+     (see PLAT-181 for the sibling ownership-collision issue on the same
+     root cause), not a new platform bug to keep re-filing every cycle. A
+     real fix requires giving performance-sensitive steps a dedicated,
+     non-shared CDP browser instance — a deliberately out-of-scope
+     architecture change, not a quick patch.
    - **Reflection yield.** `reflection:<step-id>` is attributed separately from
      `execution_only:<step-id>` in the cost ledger, and `reflection-timing.json`
      sits beside the execution timing files. **A single reflection turn that
