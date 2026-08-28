@@ -21,7 +21,19 @@
   (Pulse's broader review/repair/run lifecycle simplification, landed the
   same day this investigation started via a concurrent main-branch rebase)
   — checked whether that already-shipped work covered this specific
-  mechanism before touching anything; it did not.
+  mechanism before touching anything; it did not. **Also checked against
+  PLAT-199** (landed the same rebase): PLAT-199 replaced the *automatic
+  scheduled* review+repair flow with one retained session per its own
+  acceptance criteria — *"the scheduler no longer launches a separate
+  Fixer stage or fresh Fixer background agent"* — so the split-dispatch
+  scenario this ticket fixes no longer occurs on that primary path. This
+  fix is not made moot by that, though: PLAT-199's own doc explicitly
+  keeps `/pulse-fixer` available "for repair-only recovery against an
+  already reviewed queue," and `scheduler.go`'s "PRE-RUN TARGETED FIXER"
+  dispatch (triggered on an approved operator decision) is a second live
+  path that also runs a standalone Fixer against a queue a prior review
+  pass already terminaled. Both hit exactly the mechanism this ticket
+  fixes; neither is a legacy-only, unreachable code path.
 
 ## The finding
 
