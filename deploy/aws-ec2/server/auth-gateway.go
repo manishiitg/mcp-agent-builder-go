@@ -34,6 +34,13 @@ type gateway struct {
 	sessionCookie string
 	agent         *httputil.ReverseProxy
 	workspace     *httputil.ReverseProxy
+	// disablePasswordGate skips the shared-password session entirely,
+	// relying solely on the inner app's own per-user auth. Zero value
+	// (false) preserves the shared-password gate every existing deployment
+	// (Video Studio, and every gateway{...} literal in this package's own
+	// tests) already depends on -- this is opt-in per deployment via
+	// GATEWAY_DISABLE_PASSWORD_GATE, never a default.
+	disablePasswordGate bool
 }
 
 // sessionCookieName derives a product-namespaced cookie name from the
@@ -73,6 +80,13 @@ func gatewayEnv(name, fallback string) string {
 	return fallback
 }
 
+// gatewayBoolEnv defaults to false (unset means "off") so a new opt-in flag
+// can never silently change behavior for a deployment that predates it.
+func gatewayBoolEnv(name string) bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv(name)))
+	return value == "true" || value == "1"
+}
+
 func newGateway() *gateway {
 	secret := os.Getenv("AUTH_SECRET")
 	password := os.Getenv("ACCESS_PASSWORD")
@@ -81,15 +95,16 @@ func newGateway() *gateway {
 	}
 	userID := gatewayEnv("GATEWAY_USER_ID", "video-studio")
 	return &gateway{
-		secret:        []byte(secret),
-		password:      []byte(password),
-		frontendDir:   os.Getenv("FRONTEND_DIR"),
-		appName:       gatewayEnv("APP_NAME", "Video Studio"),
-		userID:        userID,
-		username:      gatewayEnv("GATEWAY_USERNAME", "video-studio"),
-		sessionCookie: sessionCookieName(userID),
-		agent:         proxyFor(gatewayEnv("AGENT_API_URL", "http://127.0.0.1:8000")),
-		workspace:     proxyFor(gatewayEnv("WORKSPACE_API_URL", "http://127.0.0.1:8080")),
+		secret:              []byte(secret),
+		password:            []byte(password),
+		frontendDir:         os.Getenv("FRONTEND_DIR"),
+		appName:             gatewayEnv("APP_NAME", "Video Studio"),
+		userID:              userID,
+		username:            gatewayEnv("GATEWAY_USERNAME", "video-studio"),
+		sessionCookie:       sessionCookieName(userID),
+		agent:               proxyFor(gatewayEnv("AGENT_API_URL", "http://127.0.0.1:8000")),
+		workspace:           proxyFor(gatewayEnv("WORKSPACE_API_URL", "http://127.0.0.1:8080")),
+		disablePasswordGate: gatewayBoolEnv("GATEWAY_DISABLE_PASSWORD_GATE"),
 	}
 }
 
@@ -243,6 +258,14 @@ func (g *gateway) login(w http.ResponseWriter, r *http.Request) {
 }
 
 func (g *gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if g.disablePasswordGate {
+		// No shared-password session to check or renew -- the inner app's
+		// own per-user auth is the sole gate. /login and /logout have
+		// nothing to do in this mode, so they fall through to routing like
+		// any other path (serveFrontend's SPA fallback handles them).
+		g.route(w, r)
+		return
+	}
 	if r.URL.Path == "/login" {
 		g.login(w, r)
 		return
@@ -272,6 +295,10 @@ func (g *gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if time.Until(expiresAt) < sessionRefreshWindow {
 		g.setSessionCookie(w, time.Now().Add(sessionDuration))
 	}
+	g.route(w, r)
+}
+
+func (g *gateway) route(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case strings.HasPrefix(r.URL.Path, "/api/wp"):
 		r.URL.Path = strings.TrimPrefix(r.URL.Path, "/api/wp")

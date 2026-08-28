@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -170,5 +171,87 @@ func TestNewGatewayDerivesSessionCookieFromGatewayUserID(t *testing.T) {
 
 	if gw.sessionCookie != "dominion_session" {
 		t.Errorf("sessionCookie = %q, want dominion_session", gw.sessionCookie)
+	}
+}
+
+func TestNewGatewayKeepsThePasswordGateByDefault(t *testing.T) {
+	t.Setenv("AUTH_SECRET", "test-secret-that-is-long-enough-x")
+	t.Setenv("ACCESS_PASSWORD", "pw")
+
+	gw := newGateway()
+
+	if gw.disablePasswordGate {
+		t.Fatal("disablePasswordGate should default to false so every existing deployment keeps its current behavior")
+	}
+}
+
+func TestNewGatewayCanDisableThePasswordGateExplicitly(t *testing.T) {
+	t.Setenv("AUTH_SECRET", "test-secret-that-is-long-enough-x")
+	t.Setenv("ACCESS_PASSWORD", "pw")
+	t.Setenv("GATEWAY_DISABLE_PASSWORD_GATE", "true")
+
+	gw := newGateway()
+
+	if !gw.disablePasswordGate {
+		t.Fatal("GATEWAY_DISABLE_PASSWORD_GATE=true should disable the password gate")
+	}
+}
+
+func TestDisabledPasswordGateRoutesWithoutAnySessionCookie(t *testing.T) {
+	frontendDir := t.TempDir()
+	if err := os.WriteFile(frontendDir+"/index.html", []byte("<html></html>"), 0o644); err != nil {
+		t.Fatalf("write index.html: %v", err)
+	}
+	gw := &gateway{
+		secret:              []byte("test-secret-that-is-long-enough"),
+		frontendDir:         frontendDir,
+		sessionCookie:       sessionCookieName("dominion"),
+		disablePasswordGate: true,
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/projects/123", nil)
+	response := httptest.NewRecorder()
+
+	gw.ServeHTTP(response, req)
+
+	// No session cookie, and no password gate to reject it: this must reach
+	// serveFrontend's SPA fallback (200, index.html), never the /login
+	// redirect a password-gated deployment would produce here.
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (SPA fallback, no login redirect)", response.Code, http.StatusOK)
+	}
+	if got := response.Header().Get("Location"); got != "" {
+		t.Fatalf("unexpected redirect to %q -- the password gate should be fully bypassed", got)
+	}
+}
+
+func TestDisabledPasswordGateStillProxiesAPIRequestsWithGatewayToken(t *testing.T) {
+	var gotAuthorization string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuthorization = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+	target, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatalf("parse upstream URL: %v", err)
+	}
+
+	gw := &gateway{
+		secret:              []byte("test-secret-that-is-long-enough"),
+		agent:               httputil.NewSingleHostReverseProxy(target),
+		disablePasswordGate: true,
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	response := httptest.NewRecorder()
+
+	gw.ServeHTTP(response, req)
+
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusNoContent)
+	}
+	if !strings.HasPrefix(gotAuthorization, "Bearer ") {
+		t.Fatalf("authorization = %q, want a gateway-minted bearer token as fallback", gotAuthorization)
 	}
 }

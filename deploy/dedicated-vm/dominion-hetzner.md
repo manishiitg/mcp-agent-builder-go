@@ -196,6 +196,25 @@ verify:
 curl -fsSI https://trader.tectonicmarkets.com/login
 ```
 
+The site block must also include `encode zstd gzip`. Caddy does not compress
+responses by default -- a block with no `encode` directive silently ships
+the full, uncompressed frontend bundle (multiple MB) on every page load.
+This was missed on the original 2026-08-24 deploy and confirmed live
+2026-08-28 as the root cause of a real "the server is slow" report: the main
+JS bundle was transferring at its full ~3.7 MB instead of the ~1 MB gzip
+would produce. Fixed by adding the directive to only this site's block in
+the shared host's `/etc/caddy/Caddyfile` (root-only file; back it up before
+editing, `caddy validate` before `systemctl reload caddy`, and never touch
+the other unrelated sites' blocks in the same file). Verify against the real
+bundle, not just the small `/login` page (which compresses trivially either
+way and can look fine even when the real bundle isn't compressed):
+
+```bash
+curl -sS -H "Accept-Encoding: gzip" -D - -o /dev/null \
+  https://trader.tectonicmarkets.com/assets/index-<hash>.js
+# expect: content-encoding: gzip
+```
+
 By default the public site must show only Dominion and must not expose Video
 Studio, Finance, or unrelated server data. `AGENT_PRODUCTS=dominion` alone
 already guarantees this: it's process-wide and never registers Video
@@ -238,6 +257,40 @@ Live on the target host, first deployed 2026-08-24:
   unrestricted by design (see `agent_go/cmd/server/user_product_access.go`)
   — every user this deployment creates going forward needs an explicit
   entry to stay scoped the way this doc describes.
+- `/srv/dominion/home/Downloads` created 2026-08-25 — its absence broke the
+  shell sandbox's Folder Guard policy setup for every session
+  (`SANDBOX_UNAVAILABLE: ... stat /srv/dominion/home/Downloads: no such file
+  or directory`), silently blocking `execute_shell_command` (Dominion's only
+  path to its own custom tools) since the original 2026-08-24 deploy. Any
+  future dedicated-VM product needs this directory created alongside
+  `HOME=/srv/dominion/home` itself, not as an afterthought.
+- Scheduling ownership moved from local dev to this server, 2026-08-28: the
+  local instance's copy of `tectonicusadaytrading`'s 3 schedules were
+  disabled (`enabled: false` in its `workflow.json`) before a one-time
+  `rsync` of the workflow's working files (excluding `.git`) from local into
+  `/srv/dominion/data/docs/Workflow/tectonicusadaytrading/`, overwriting the
+  stale 2026-08-24 copy. The 3 schedules were then re-enabled on the
+  server's copy only. This server is now the sole source of scheduled runs
+  for this workflow — re-enabling them locally would cause duplicate paper
+  trades and duplicate market-data API usage against the same workflow.
+- `encode zstd gzip` added to this site's Caddy block, 2026-08-28 — see the
+  Verification section above. Missing since the original deploy; the main
+  JS bundle now transfers at ~1 MB instead of ~3.7 MB.
+- Gateway shared-password layer disabled, 2026-08-28: `GATEWAY_DISABLE_PASSWORD_GATE=true`
+  added to `/srv/dominion/.env`, with `deploy/aws-ec2/server/auth-gateway.go`
+  changed to make that an explicit per-deployment opt-out (default
+  unchanged everywhere else, including Video Studio). Decision: with real
+  per-user login (`manish`/`john`) already gating the app, the extra shared
+  password was pure friction, not additional real protection for this
+  deployment. Accepted trade-off: a handful of routes the agent API
+  intentionally leaves public for pre-login bootstrap (`/api/health`,
+  `/api/capabilities`, `/api/shared/*`, `/api/auth/*`) are now reachable
+  from the open internet without any password — they were already reachable
+  to anyone who cleared the shared password before, so this is a narrowing
+  of what the shared password protected, not new exposure of anything the
+  inner app didn't already intend to expose at that boundary. The gateway
+  still runs and still routes/serves the frontend/proxies `/api`, `/api/wp`,
+  `/ws` — only the password-session check is skipped.
 
 Known follow-up, not yet done:
 

@@ -132,6 +132,19 @@ ssh -i /Users/mipl/.ssh/id_ed25519 video-studio@44.253.29.127 \
   'grep -q "^MCP_API_URL=http://127.0.0.1:8000$" /var/lib/video-studio/video-studio/.env'
 
 curl -fsSI https://video.realtrainingsys.com/
+
+# Caddy does not compress responses by default -- a site block with no
+# `encode` directive silently ships the full uncompressed frontend bundle
+# (multiple MB) on every page load. Confirmed as the root cause of a real
+# "server is slow" report on the sibling Dominion Hetzner deployment
+# (dominion-hetzner.md), where the fix was adding `encode zstd gzip` to
+# that one site's Caddy block. Verify it here too, against the real JS
+# bundle referenced by the authenticated app shell, not just the small
+# /login page (small responses compress trivially either way and can look
+# fine even when the real bundle isn't compressed):
+curl -sS -H "Accept-Encoding: gzip" -D - -o /dev/null \
+  https://video.realtrainingsys.com/assets/index-*.js
+# expect: content-encoding: gzip
 ```
 
 An unauthenticated HTTP `303` redirect to `/login` is expected.
