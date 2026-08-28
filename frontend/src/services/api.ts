@@ -6,7 +6,7 @@ import { useChatStore } from '../stores/useChatStore'
 import { useModeStore } from '../stores/useModeStore'
 import { getActiveWorkspaceProfile, useWorkspaceConnectionStore } from '../stores/useWorkspaceConnectionStore'
 import { GATEWAY_LOGIN_HEADER, gatewayLoginTarget, redirectToGatewayLogin } from '../utils/gatewayAuth'
-import { apiTimingPathFor, recordApiTiming } from '../utils/apiTiming'
+import { apiTimingPathFor, recordApiTiming, sanitizeApiBody } from '../utils/apiTiming'
 import type {
   AgentQueryRequest,
   AgentQueryResponse,
@@ -185,7 +185,7 @@ function markRequestStart(config: TimedRequestConfig): TimedRequestConfig {
   return config
 }
 
-function recordResponseTiming(config: TimedRequestConfig | undefined, status: number | 'error') {
+function recordResponseTiming(config: TimedRequestConfig | undefined, status: number | 'error', responseData?: unknown) {
   if (!config || config.__requestStartedAt === undefined) return
   recordApiTiming({
     method: (config.method || 'get').toUpperCase(),
@@ -193,6 +193,9 @@ function recordResponseTiming(config: TimedRequestConfig | undefined, status: nu
     status,
     durationMs: performance.now() - config.__requestStartedAt,
     timestamp: Date.now(),
+    requestParams: sanitizeApiBody(config.params),
+    requestBody: sanitizeApiBody(config.data),
+    responseBody: sanitizeApiBody(responseData),
   })
 }
 
@@ -566,12 +569,12 @@ function redirectOnGatewayAuthenticationRequired(error: unknown): boolean {
 
 api.interceptors.response.use(
   (response) => {
-    recordResponseTiming(response.config as TimedRequestConfig, response.status)
+    recordResponseTiming(response.config as TimedRequestConfig, response.status, response.data)
     return response
   },
   async (error) => {
     if (axios.isAxiosError(error)) {
-      recordResponseTiming(error.config as TimedRequestConfig, error.response?.status ?? 'error')
+      recordResponseTiming(error.config as TimedRequestConfig, error.response?.status ?? 'error', error.response?.data)
     }
     if (redirectOnGatewayAuthenticationRequired(error)) return Promise.reject(error)
     if (is401DueToBadToken(error)) {
@@ -624,12 +627,12 @@ workspaceApi.interceptors.request.use((config) => {
 
 workspaceApi.interceptors.response.use(
   (response) => {
-    recordResponseTiming(response.config as TimedRequestConfig, response.status)
+    recordResponseTiming(response.config as TimedRequestConfig, response.status, response.data)
     return response
   },
   async (error) => {
     if (axios.isAxiosError(error)) {
-      recordResponseTiming(error.config as TimedRequestConfig, error.response?.status ?? 'error')
+      recordResponseTiming(error.config as TimedRequestConfig, error.response?.status ?? 'error', error.response?.data)
     }
     if (redirectOnGatewayAuthenticationRequired(error)) return Promise.reject(error)
     if (is401DueToBadToken(error)) {

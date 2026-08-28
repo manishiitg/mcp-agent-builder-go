@@ -30,12 +30,13 @@ declare global {
     toggleAutoScroll?: () => void;
     perfDiag?: () => void;
     apiPerf?: () => void;
+    apiLog?: (filter?: string) => void;
   }
 }
 
 import { copyToClipboard } from './utils/textUtils'
 import LazyModalFallback from './components/ui/LazyModalFallback'
-import { summarizeApiTimings } from './utils/apiTiming'
+import { apiLogEntries, summarizeApiTimings } from './utils/apiTiming'
 
 const queryClient = new QueryClient();
 
@@ -508,6 +509,31 @@ function App() {
       console.log('%c Tip: Run apiPerf() again after interacting to see fresh timings', 'color: gray; font-style: italic')
     }
     return () => { delete window.apiPerf }
+  }, [])
+
+  // Expose per-call API request/response inspection on window for DevTools
+  // console. apiPerf() above is the timing summary; this is the detail view
+  // for a specific endpoint (or the most recent calls if no filter is
+  // given) -- console.table can't usefully render nested request/response
+  // objects, so each call prints as its own expandable group instead.
+  useEffect(() => {
+    window.apiLog = (filter?: string) => {
+      const matches = apiLogEntries(filter)
+      if (matches.length === 0) {
+        console.log(filter ? `No recorded calls matching %c${filter}` : 'No API calls recorded yet -- interact with the app, then run apiLog() again.', 'font-weight: bold')
+        return
+      }
+      console.log(`%c === API LOG${filter ? ` (filter: ${filter})` : ''} — ${matches.length} call(s), most recent last ===`, 'color: cyan; font-weight: bold; font-size: 14px')
+      for (const entry of matches) {
+        const at = new Date(entry.timestamp).toLocaleTimeString()
+        console.groupCollapsed(`${entry.method} ${entry.path} — ${Math.round(entry.durationMs)}ms — ${entry.status} — ${at}`)
+        if (entry.requestParams !== undefined) console.log('request params:', entry.requestParams)
+        if (entry.requestBody !== undefined) console.log('request body:', entry.requestBody)
+        console.log('response body:', entry.responseBody)
+        console.groupEnd()
+      }
+    }
+    return () => { delete window.apiLog }
   }, [])
 
   const [showQuickSwitcher, setShowQuickSwitcher] = useState(false)

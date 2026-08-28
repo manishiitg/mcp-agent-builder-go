@@ -1,8 +1,10 @@
-// Lightweight, in-memory API response-time tracking -- no backend, no
-// third-party analytics, nothing leaves the browser. Mirrors the existing
-// window.perfDiag() console-diagnostic pattern (see App.tsx) rather than
-// adding a dependency: this is for a developer/operator to run in DevTools
-// when a deployment "feels slow", not for aggregate product analytics.
+// Lightweight, in-memory API response-time (and request/response body)
+// tracking -- no backend, no third-party analytics, nothing leaves the
+// browser. Mirrors the existing window.perfDiag() console-diagnostic
+// pattern (see App.tsx) rather than adding a dependency: this is for a
+// developer/operator to run in DevTools when a deployment "feels slow" or
+// they need to see exactly what an endpoint was sent/returned, not for
+// aggregate product analytics.
 
 export interface ApiTimingEntry {
   method: string
@@ -10,10 +12,51 @@ export interface ApiTimingEntry {
   status: number | 'error'
   durationMs: number
   timestamp: number
+  requestParams?: unknown
+  requestBody?: unknown
+  responseBody?: unknown
 }
 
 const MAX_ENTRIES = 500
 const entries: ApiTimingEntry[] = []
+
+// Keys whose values are never stored, regardless of nesting depth --
+// login/credential bodies (password), and any token-shaped field that
+// could otherwise let someone reconstruct a live session from these logs.
+const SENSITIVE_KEY_PATTERN = /password|token|secret|api[-_]?key|authorization|oauth/i
+const MAX_BODY_JSON_CHARS = 4000
+const MAX_REDACT_DEPTH = 6
+
+function redactValue(value: unknown, depth: number): unknown {
+  if (depth > MAX_REDACT_DEPTH) return '[max depth]'
+  if (Array.isArray(value)) return value.map((v) => redactValue(v, depth + 1))
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+      out[key] = SENSITIVE_KEY_PATTERN.test(key) ? '[redacted]' : redactValue(val, depth + 1)
+    }
+    return out
+  }
+  return value
+}
+
+// Redacts sensitive fields and caps the serialized size so one huge
+// payload (a full workflow manifest list, a long chat history) can't blow
+// up memory across up to MAX_ENTRIES retained entries.
+export function sanitizeApiBody(value: unknown): unknown {
+  if (value === undefined || value === null) return value
+  const redacted = redactValue(value, 0)
+  try {
+    const json = JSON.stringify(redacted)
+    if (json === undefined) return redacted
+    if (json.length > MAX_BODY_JSON_CHARS) {
+      return { truncated: true, originalLength: json.length, preview: json.slice(0, MAX_BODY_JSON_CHARS) }
+    }
+    return redacted
+  } catch {
+    return '[unserializable]'
+  }
+}
 
 // Strips the origin and query string so entries group by endpoint shape
 // (e.g. "/api/workflows/manifests"), not by every distinct query/host.
@@ -39,6 +82,16 @@ export function getApiTimings(): ApiTimingEntry[] {
 
 export function clearApiTimings() {
   entries.length = 0
+}
+
+// Entries matching an optional path/method substring, most recent last --
+// the lookup apiLog() in App.tsx uses to show request/response detail
+// (apiPerf()'s console.table rows can't usefully render nested objects).
+export function apiLogEntries(filter?: string, limit = 50): ApiTimingEntry[] {
+  const matching = filter
+    ? entries.filter((e) => e.path.includes(filter) || e.method.includes(filter.toUpperCase()))
+    : entries
+  return matching.slice(-limit)
 }
 
 interface ApiTimingAggregate {
