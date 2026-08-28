@@ -38,6 +38,36 @@ func TestParseConcernLinesExtractsPayloadOnly(t *testing.T) {
 	}
 }
 
+// PLAT-208: a reviewer's summary sometimes renders the marker as a Markdown
+// inline-code span. Live on HDFC-Personal-Accounts, six such findings vanished
+// silently -- no error, review still recorded completed -- because the bare
+// prefix check never matched a line starting with a backtick.
+func TestParseConcernLinesUnwrapsMarkdownCodeSpan(t *testing.T) {
+	summary := "Did the work.\n`CONCERNS: step description says 1% but soul.md says 1.5%`\nSTATUS: COMPLETED"
+	got := ParseConcernLines(summary)
+	if len(got) != 1 || got[0] != "step description says 1% but soul.md says 1.5%" {
+		t.Fatalf("backtick-wrapped marker should still be extracted, got %#v", got)
+	}
+	// Whitespace between the fence and the marker text is normal Markdown and
+	// must not defeat the unwrap.
+	if got := ParseConcernLines("` CONCERNS: extra space inside the span `"); len(got) != 1 || got[0] != "extra space inside the span" {
+		t.Fatalf("got %#v", got)
+	}
+	// A line that merely mentions a backtick, or opens a span it never
+	// closes, must not be misinterpreted -- only a genuine whole-line wrap.
+	if got := ParseConcernLines("CONCERNS: the `foo` field is stale"); len(got) != 1 || got[0] != "the `foo` field is stale" {
+		t.Fatalf("an internal backtick must not be treated as a wrapper, got %#v", got)
+	}
+	if got := ParseConcernLines("`CONCERNS: unterminated span"); len(got) != 0 {
+		t.Fatalf("an unterminated code span must not match the marker, got %#v", got)
+	}
+	// Two adjacent spans on one line ("`a` CONCERNS: `b`") are not a single
+	// whole-line wrap; leave them alone rather than guess which is real.
+	if got := ParseConcernLines("`context` CONCERNS: `detail`"); len(got) != 0 {
+		t.Fatalf("multiple spans on one line must not be unwrapped, got %#v", got)
+	}
+}
+
 // Magnitude is the interesting part of a recurring concern, so two reports that
 // differ only in a number must stay distinct rows.
 func TestConcernFingerprintKeepsDigitsButIgnoresFormatting(t *testing.T) {

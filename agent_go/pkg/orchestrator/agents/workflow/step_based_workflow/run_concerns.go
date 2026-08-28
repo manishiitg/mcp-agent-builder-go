@@ -122,10 +122,21 @@ func newPulseIssueID() string {
 // The marker is matched case-insensitively at the start of a trimmed line, which
 // is the shape the prompts ask for and the shape the message-sequence aggregator
 // already assumed. Everything after the prefix on that line is the concern.
+//
+// PLAT-208: a reviewer's own summary text sometimes renders the marker as a
+// Markdown inline-code span -- "`CONCERNS: foo`" instead of a bare
+// "CONCERNS: foo" line. That backtick is real content the model wrote, not
+// whitespace strings.TrimSpace touches, so the bare prefix check silently
+// dropped it: no error, no warning, the review still recorded as completed,
+// and the finding just never reached run_concerns at all. Confirmed live on
+// HDFC-Personal-Accounts: six such findings vanished with no trace until a
+// later stage's fingerprint lookup came up empty. stripMarkdownCodeSpan
+// removes one matching pair of backtick-run delimiters wrapping the WHOLE
+// line before the prefix check runs.
 func ParseConcernLines(summary string) []string {
 	var out []string
 	for _, line := range strings.Split(summary, "\n") {
-		trimmed := strings.TrimSpace(line)
+		trimmed := stripMarkdownCodeSpan(strings.TrimSpace(line))
 		if !strings.HasPrefix(strings.ToUpper(trimmed), concernLinePrefix) {
 			continue
 		}
@@ -137,6 +148,35 @@ func ParseConcernLines(summary string) []string {
 		out = append(out, body)
 	}
 	return out
+}
+
+// stripMarkdownCodeSpan removes a single matching pair of backtick-run
+// delimiters that wrap an ENTIRE line, e.g. "`CONCERNS: foo`" -> "CONCERNS: foo".
+// Markdown inline code spans open and close with the same run length of one
+// or more backticks (a longer run lets the span contain a shorter run of
+// backticks as literal text). Only a matching open/close run at the very
+// start and end of the line is stripped, so a line that merely mentions a
+// backtick mid-sentence, or opens a span it never closes, is left untouched.
+func stripMarkdownCodeSpan(line string) string {
+	if !strings.HasPrefix(line, "`") {
+		return line
+	}
+	openLen := 0
+	for openLen < len(line) && line[openLen] == '`' {
+		openLen++
+	}
+	closeDelim := strings.Repeat("`", openLen)
+	if len(line) < openLen*2 || !strings.HasSuffix(line, closeDelim) {
+		return line
+	}
+	inner := line[openLen : len(line)-openLen]
+	if strings.Contains(inner, closeDelim) {
+		// The delimiter recurs inside the span -- not actually the closing
+		// fence for THIS span (e.g. "`a` CONCERNS: `b`" is two spans, not one
+		// wrapping the whole line). Leave it alone rather than guess.
+		return line
+	}
+	return strings.TrimSpace(inner)
 }
 
 // concernFingerprint identifies "the same concern raised again".
