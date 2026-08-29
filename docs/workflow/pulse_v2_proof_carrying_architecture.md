@@ -2360,7 +2360,7 @@ key, but it is no longer an agent-facing contract.
   issues before discovery. A new issue needs a distinct repair, owner, or proof
   boundary. There is deliberately **no numeric finding cap**.
 - `get_pulse_state(view="backlog")` reports active, terminal, and merged counts,
-  and `/pulse-backlog` performs a one-time semantic cleanup without editing
+  and `/pulse-merge` performs a one-time semantic cleanup without editing
   workflow artifacts.
 
 This is not automated keyword merging. Causal sameness remains agentic; Go

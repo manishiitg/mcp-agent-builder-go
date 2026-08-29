@@ -224,7 +224,7 @@ export const builtinCommands: CommandDefinition[] = [
     }
   },
   {
-    command: 'pulse-backlog',
+    command: 'pulse-merge',
     description: 'Semantically consolidate the Pulse issue backlog without changing workflow artifacts',
     icon: <Layers className="w-4 h-4" />,
     modes: ['workflow'],
