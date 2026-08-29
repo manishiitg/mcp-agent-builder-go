@@ -175,6 +175,9 @@ func registerEvaluationValidationTools(
 					if err := validateArrayLengthConsistencyChecks(step.PreValidation); err != nil {
 						return "", fmt.Errorf("evaluation step %q has invalid pre_validation consistency checks: %w", step.ID, err)
 					}
+					if err := validateValueTypePatternCompatibility(step.PreValidation); err != nil {
+						return "", fmt.Errorf("evaluation step %q has invalid pre_validation schema: %w", step.ID, err)
+					}
 				}
 			}
 

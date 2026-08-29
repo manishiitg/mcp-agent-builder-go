@@ -2282,6 +2282,43 @@ func validateRegexPatternsInSchema(schema *ValidationSchema) error {
 	return nil
 }
 
+// validateValueTypePatternCompatibility rejects a check that pairs a non-string
+// value_type with a pattern. validatePattern (pre_validation.go) only ever
+// matches string values -- for any other value_type, the actual pattern check
+// always fails regardless of the real data, since a genuinely well-typed
+// boolean/number/array/object value can never also be a string. A schema
+// combining these two constraints on one path is unsatisfiable by
+// construction: no JSON value can ever pass it. PLAT-236 traced two
+// (already independently fixed) Twitter/social-media findings to exactly
+// this shape reaching a live step's validation_schema undetected.
+func validateValueTypePatternCompatibility(schema *ValidationSchema) error {
+	if schema == nil {
+		return nil
+	}
+
+	var errors []string
+	for _, fileRule := range schema.Files {
+		for _, check := range fileRule.JSONChecks {
+			if check.Pattern == "" {
+				continue
+			}
+			valueType := strings.TrimSpace(check.ValueType)
+			if valueType != "" && valueType != "string" {
+				errors = append(errors, fmt.Sprintf(
+					"File '%s': path '%s' sets both value_type=%q and a pattern, but pattern only ever matches string values -- this combination can never pass for any real data. Remove the pattern or drop value_type to \"string\"",
+					fileRule.FileName, check.Path, valueType,
+				))
+			}
+		}
+	}
+
+	if len(errors) > 0 {
+		return fmt.Errorf("validation schema has an unsatisfiable value_type/pattern combination:\n%s", strings.Join(errors, "\n"))
+	}
+
+	return nil
+}
+
 // validateJSONPathSyntax validates that all JSONPaths in the schema are syntactically valid
 func validateJSONPathSyntax(schema *ValidationSchema) error {
 	if schema == nil {
@@ -3298,6 +3335,11 @@ func updateSingleStep(plan *PlanningResponse, partialUpdate PartialPlanStep, fie
 		// Validate array_length consistency checks
 		if err := validateArrayLengthConsistencyChecks(partialUpdate.ValidationSchema); err != nil {
 			return -1, nil, fmt.Errorf("invalid array_length consistency checks in validation schema: %w", err)
+		}
+
+		// Validate value_type/pattern compatibility
+		if err := validateValueTypePatternCompatibility(partialUpdate.ValidationSchema); err != nil {
+			return -1, nil, fmt.Errorf("invalid validation schema: %w", err)
 		}
 	}
 
@@ -4662,6 +4704,11 @@ func createSingleStepAdder(workspacePath string, logger loggerv2.Logger, readFil
 			if err := validateArrayLengthConsistencyChecks(validationSchema); err != nil {
 				return "", fmt.Errorf("invalid array_length consistency checks in validation schema: %w", err)
 			}
+
+			// Validate value_type/pattern compatibility
+			if err := validateValueTypePatternCompatibility(validationSchema); err != nil {
+				return "", fmt.Errorf("invalid validation schema: %w", err)
+			}
 		}
 
 		// Validate step type-specific required fields BEFORE writing to plan
@@ -5897,6 +5944,11 @@ func createUpdateValidationSchemaExecutor(workspacePath string, logger loggerv2.
 		// Validate array_length consistency checks
 		if err := validateArrayLengthConsistencyChecks(updateData.ValidationSchema); err != nil {
 			return "", fmt.Errorf("invalid array_length consistency checks in validation schema: %w", err)
+		}
+
+		// Validate value_type/pattern compatibility
+		if err := validateValueTypePatternCompatibility(updateData.ValidationSchema); err != nil {
+			return "", fmt.Errorf("invalid validation schema: %w", err)
 		}
 
 		// Create PartialPlanStep with only validation schema
