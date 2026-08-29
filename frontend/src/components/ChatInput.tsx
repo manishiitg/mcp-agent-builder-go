@@ -3277,10 +3277,19 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
               ? isProductSurface ? 'Message saved' : 'Saved to queue'
               : isProductSurface ? 'Could not send the message' : 'Could not submit live input'
     : ''
-  // The project chat already echoes an accepted message in the conversation.
-  // Do not leave an extra success banner in the composer; only transient send
-  // and failure states need a separate signal here.
-  const showLiveDelivery = Boolean(liveMessageDelivery && (!isProductSurface || liveMessageDelivery.status === 'sending' || liveMessageDelivery.status === 'failed'))
+  // The chat history already echoes an accepted message as its own bubble
+  // once delivery reaches 'sent_to_cli' or 'next_turn_started' (see
+  // ChatArea's submitQueryImmediately, which appends an optimistic user
+  // message event for exactly those two statuses, on every surface, not
+  // just product chat). Showing the composer banner too for those statuses
+  // duplicated the same text right below the bubble. Queued/local-save
+  // states never get a bubble, so they still need the banner as the only
+  // signal; sending/failed are always transient and always shown.
+  const showLiveDelivery = Boolean(liveMessageDelivery && (
+    liveMessageDelivery.status === 'sending' ||
+    liveMessageDelivery.status === 'failed' ||
+    (!isProductSurface && liveMessageDelivery.status !== 'sent_to_cli' && liveMessageDelivery.status !== 'next_turn_started')
+  ))
   const liveDeliveryClass = liveMessageDelivery?.status === 'failed'
     ? 'text-amber-600 dark:text-amber-300'
     : liveMessageDelivery?.status === 'sending'
