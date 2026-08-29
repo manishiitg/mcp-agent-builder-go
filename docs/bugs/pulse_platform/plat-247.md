@@ -177,7 +177,9 @@ about.
   (`multi-llm-provider-go` commit `7a0e17d`.)
 
 **`image_gen`/`image_edit` native passthrough (codex-cli only —
-cursor-cli/claude-code/agy-cli/vertex not investigated this pass):**
+cursor-cli/claude-code/vertex not investigated this pass; agy-cli was
+fully removed from this repo in this same session — see Follow-up
+(2026-08-29b) below):**
 - `image_gen` worked, but ran under
   `--dangerously-bypass-approvals-and-sandbox` (zero lockdown at all,
   independent of whatever session lockdown was requested). Verified live
@@ -205,5 +207,63 @@ Both fixes shipped with new live tests
 `TestCodexCLIRealImageGeneration`, `TestCodexCLIRealImageEditing` are new)
 and full-package regression sweeps (0 failures) in
 `multi-llm-provider-go`. Not yet done: the same live-verification pass for
-`image_gen`/`image_edit` on `cursor-cli`/`claude-code`/`agy-cli`, and for
-`read_image` on `agy-cli`.
+`image_gen`/`image_edit` on `cursor-cli`/`claude-code`. Also not yet done: a P0 test in this repo
+(`mcp-agent-builder-go`) exercising the actual `read_image`/`image_gen`/
+`image_edit` tool surface end to end (the live verification above covers
+the underlying `multi-llm-provider-go` adapters only, one layer below
+this repo's own tool wrappers in `cmd/server/virtual-tools/`).
+
+## Follow-up (2026-08-29b) — agy-cli fully removed from this repo
+
+While investigating the "not yet checked" providers above, grepping for
+`agy-cli` surfaced ~23 files in this repo still referencing it — despite
+`multi-llm-provider-go` having removed the Agy/Antigravity CLI provider
+entirely back on 2026-07-24 (commit `15636f4dd`, "remove Agy provider"):
+no `ProviderAgyCLI`, no `agycli` adapter package, zero "agy" hits anywhere
+in that module (confirmed via repo-wide grep). Every `agy-cli` reference
+left in this repo — the `image_gen`/`image_edit`/`read_image` tool
+descriptions advertising it as a real option (it would have failed at
+runtime with "image generation not supported for provider: agy-cli"),
+tmux session-prefix detection, statusline provider-label mapping, the
+terminal-lease registry, engine-install-hint text, and several dedicated
+test functions — was leftover from before that removal, most likely
+reintroduced by this same ticket's original restoration (which restored
+image-tool code "verbatim from git history" from a point that still had
+`agy-cli` in it).
+
+Removed entirely, mirroring the July 2026 upstream precedent: all
+`agy-cli`/`AgyCLI` map entries, switch cases, tool-description text, and
+dedicated test functions across `cmd/server/`, `cmd/testing/`,
+`internal/terminals/`, `internal/terminalleases/`, `internal/enginedetect/`,
+`pkg/common/`, and `pkg/orchestrator/agents/workflow/step_based_workflow/`.
+Illustrative-only mentions (tmux session-name examples, doc comments) were
+swapped to a still-live provider (usually `codex-cli`) rather than simply
+deleted, to keep the surrounding tests/comments meaningful. Two
+comments citing agy-cli's specific historical "does not support
+concurrent sessions ... with different MCP configs" error were
+generalized to describe the risk class rather than naming a CLI that no
+longer exists, since the underlying isolation protection they document
+(`config.IsolateCodingAgentWorkspace = true`) is applied unconditionally
+regardless of provider and is still load-bearing.
+
+Also simplified codex-cli's image-generation model list (`imageProviderModels`,
+tool descriptions, `supportedImageProviderSummary`) from
+`{codex-cli, gpt-5.4, gpt-5.4-mini, gpt-5.3-codex, gpt-5.3-codex-spark}` down
+to just `{codex-cli}`: that list was a verbatim copy-paste of the general
+codex-cli text-model list from `multiagent_llm_tools.go`, never curated for
+image use. Verified from the live codex transcript captured investigating
+the sandbox-lockdown question above that `--model` only selects which
+model orchestrates the tool call (cost/latency); the native `image_gen`
+tool itself is identical regardless, so offering those as distinct "image
+models" was misleading. Left `defaultImageAnalysisModelForProvider`'s
+`gpt-5.4-mini` default and `inferImageProviderFromModel`'s recognition of
+all four model-ID strings untouched: the image *analysis* path
+(`read_image`) doesn't validate against `imageProviderModels` at all, and
+`gpt-5.4-mini` is still its real, functioning default.
+
+Verified: `go build ./...` and the full test suites for every touched
+package pass (`cmd/server`, `cmd/server/virtual-tools` — pre-existing
+`agentreview` import failure aside, verified separately by temporarily
+excluding the already-broken files — `cmd/testing`, `internal/terminals`,
+`internal/terminalleases`, `pkg/common`,
+`pkg/orchestrator/agents/workflow/step_based_workflow`), 0 failures.

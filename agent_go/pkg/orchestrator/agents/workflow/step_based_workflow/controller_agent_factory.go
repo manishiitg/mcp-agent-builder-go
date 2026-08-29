@@ -1624,14 +1624,14 @@ func (hcpo *StepBasedWorkflowOrchestrator) createTodoTaskOrchestratorAgent(ctx c
 	// Run the coding-CLI session in a fresh os.MkdirTemp dir instead of
 	// CodingAgentWorkingDir — same protection the regular execution-step
 	// path gets via applyStepConfigToAgentConfig. Without this, a
-	// todo-task orchestrator agent collides with any other agy-cli
+	// todo-task orchestrator agent collides with any other coding-CLI
 	// session already attached to the workflow folder (notably the
-	// workshop chat that triggered the run): agy-cli rejects concurrent
-	// sessions on the same dir with different MCP configs, and the step
-	// fails with "agy-cli does not support concurrent sessions in
-	// working directory ... with different MCP configs". The MCP bridge
-	// remains the authoritative path for any file changes the model
-	// wants to make to the user's actual workspace.
+	// workshop chat that triggered the run): some coding CLIs reject
+	// concurrent sessions on the same dir with different MCP configs,
+	// failing the step with a "does not support concurrent sessions in
+	// working directory ... with different MCP configs"-style error. The
+	// MCP bridge remains the authoritative path for any file changes the
+	// model wants to make to the user's actual workspace.
 	config.IsolateCodingAgentWorkspace = true
 
 	// Give nested todo_task orchestrators their own session-level folder guard just like

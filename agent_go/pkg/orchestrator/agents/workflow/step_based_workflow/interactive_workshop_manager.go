@@ -10264,12 +10264,12 @@ func (iwm *InteractiveWorkshopManager) runBackgroundTaskAgentSequence(ctx contex
 	// the workshop chat's `run_in_background` tool, which means the
 	// workshop chat itself is already attached to the workflow folder
 	// with the chat's MCP config; without isolation, the background
-	// agent's agy-cli session collides with the chat's session on the
-	// same dir with different MCP configs, and the run fails with
-	// "agy-cli does not support concurrent sessions ...". File access to
-	// the user's workspace continues to flow through the MCP api-bridge
-	// tools, which take absolute workspace paths and do not depend on
-	// CLI CWD.
+	// agent's coding-CLI session collides with the chat's session on the
+	// same dir with different MCP configs, and the run fails with a "does
+	// not support concurrent sessions ..."-style error some coding CLIs
+	// raise. File access to the user's workspace continues to flow
+	// through the MCP api-bridge tools, which take absolute workspace
+	// paths and do not depend on CLI CWD.
 	config.IsolateCodingAgentWorkspace = true
 	config.CodingAgentKeepAlive = len(messageSequence) > 0
 	_, cleanupToolSession := iwm.configureWorkshopToolAgentSessionWithID(config, "background-task", readPaths, writePaths)

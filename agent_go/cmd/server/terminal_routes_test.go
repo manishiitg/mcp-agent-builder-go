@@ -1208,7 +1208,7 @@ func TestTerminalRoutesGetTerminalCapturesRunningTmuxVisibleScreen(t *testing.T)
 	api := &StreamingAPI{terminalStore: store}
 	sessionID := "session-terminal-visible"
 	terminalID := sessionID + ":workflow-step:review-plan"
-	tmuxSession := "mlp-agy-cli-int-visible"
+	tmuxSession := "mlp-codex-cli-int-visible"
 	store.HandleEvent(sessionID, terminalRouteChunkEvent(sessionID, "workflow-step:review-plan", tmuxSession, "loading\nold frame", 2))
 
 	var gotArgs []string
@@ -1728,7 +1728,7 @@ func TestTerminalRoutesSendCtrlOKeyUsesTmuxSendKeys(t *testing.T) {
 	api := &StreamingAPI{terminalStore: store}
 	sessionID := "session-terminal-ctrl-o"
 	terminalID := sessionID + ":workflow-step:review-plan"
-	tmuxSession := "mlp-agy-cli-int-test"
+	tmuxSession := "mlp-codex-cli-int-test"
 	store.HandleEvent(sessionID, terminalRouteChunkEvent(sessionID, "workflow-step:review-plan", tmuxSession, "pane", 2))
 
 	var gotArgs []string
