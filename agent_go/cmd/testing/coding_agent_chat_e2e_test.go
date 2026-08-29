@@ -49,7 +49,6 @@ func TestDefaultCodingAgentE2EModelIncludesCodingCLIProviders(st *stdtesting.T) 
 	tests := map[string]string{
 		"codex-cli":   "gpt-5.3-codex-spark",
 		"cursor-cli":  "auto",
-		"agy-cli":     "agy-cli",
 		"claude-code": "claude-sonnet-5",
 	}
 
@@ -66,7 +65,6 @@ func TestProviderSupportsTmuxLossResumeE2EIncludesNativeResumeProviders(st *stdt
 	cases := map[string]bool{
 		"claude-code": true,
 		"codex-cli":   true,
-		"agy-cli":     true,
 		"cursor-cli":  false,
 		"pi-cli":      false,
 	}

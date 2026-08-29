@@ -86,22 +86,25 @@ var (
 )
 
 var mcpBridgeCustomToolCategories = map[string]bool{
-	"workspace":           true,
-	"workspace_tools":     true,
-	"workspace_browser":   true,
-	"workspace_advanced":  true,
-	"human_tools":         true,
-	"delegation_tools":    true,
-	"workflow":            true,
-	"workflow_creator":    true,
-	"knowledgebase_tools": true,
-	"llm_config_tools":    true,
-	"secret_tools":        true,
-	"notification_tools":  true,
-	"skill_tools":         true,
-	"mcp_server_tools":    true,
-	"activity_status":     true,
-	"auto_improvement":    true,
+	"workspace":            true,
+	"workspace_tools":      true,
+	"workspace_browser":    true,
+	"workspace_advanced":   true,
+	"workspace_image":      true,
+	"workspace_image_gen":  true,
+	"workspace_image_edit": true,
+	"human_tools":          true,
+	"delegation_tools":     true,
+	"workflow":             true,
+	"workflow_creator":     true,
+	"knowledgebase_tools":  true,
+	"llm_config_tools":     true,
+	"secret_tools":         true,
+	"notification_tools":   true,
+	"skill_tools":          true,
+	"mcp_server_tools":     true,
+	"activity_status":      true,
+	"auto_improvement":     true,
 }
 
 var mcpBridgeVirtualToolCategories = map[string]bool{}
@@ -6941,8 +6944,6 @@ func retainedCodingAgentProvider(snapshot terminals.Snapshot) string {
 		return string(llm.ProviderCodexCLI)
 	case strings.HasPrefix(tmuxSession, "mlp-cursor-cli"):
 		return string(llm.ProviderCursorCLI)
-	case strings.HasPrefix(tmuxSession, "mlp-agy-cli"):
-		return "agy-cli"
 	case strings.HasPrefix(tmuxSession, "mlp-pi-cli"):
 		return string(llm.ProviderPiCLI)
 	}
@@ -6955,8 +6956,6 @@ func retainedCodingAgentProvider(snapshot terminals.Snapshot) string {
 		return string(llm.ProviderCodexCLI)
 	case strings.Contains(label, "cursor"):
 		return string(llm.ProviderCursorCLI)
-	case strings.Contains(label, "agy") || strings.Contains(label, "antigravity"):
-		return "agy-cli"
 	case strings.Contains(label, "pi-cli") || strings.HasPrefix(label, "pi "):
 		return string(llm.ProviderPiCLI)
 	default:
