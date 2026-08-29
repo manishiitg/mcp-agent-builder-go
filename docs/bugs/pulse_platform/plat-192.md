@@ -128,3 +128,26 @@ which handles both edge cases correctly and is covered by its own test.
   genuinely caught the line-counting bug above before this shipped.
 - Not yet live-verified: no real workflow has hit this new rejection path
   in production since it shipped.
+
+## Independent confirming data point (2026-08-29)
+
+Twitter/social-media `PUL-D66C6684` (filed 2026-08-26, two days before this
+fix shipped): `diff_patch_workspace_file` returned `applied:false`/HTTP 400
+for `posts_multi.json`, but the target file still showed the first hunk's
+insertion already present — the inverse-shaped symptom (failure reported,
+partial write left behind) to the `applied:true`-with-silent-corruption
+shape this ticket addresses, but the same underlying tool and the same
+general "the real file can be mutated before/around the point a failure is
+detected" class of bug.
+
+Read the current `DiffPatchDocument` handler (`workspace/handlers/diff_patch.go`):
+`os.WriteFile` (the only place the real target file is mutated) sits
+strictly after `verifyDiffApplied`, and every failure path — including a
+failed verification — returns before reaching it. Under the current code,
+`PUL-D66C6684`'s exact scenario (failure reported, file still partially
+mutated) is no longer reachable through this handler. Filed as PLAT-192
+follow-up data rather than a new duplicate ticket. Does not change this
+ticket's own honest "partially fixed, root cause unidentified" status —
+this only confirms the *shipped* safety net's write-ordering closes a
+second, independently-reported symptom shape, not that the original
+unreproduced root cause is understood.
