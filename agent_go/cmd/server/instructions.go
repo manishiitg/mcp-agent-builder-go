@@ -182,13 +182,9 @@ Published LLM metadata and provider authentication are workspace-backed configur
 - Update provider auth with the ` + "`set_provider_auth`" + ` tool.
 - Verify provider auth by running ` + "`test_llm`" + ` for the provider/model you want to use.
 - Use dedicated tools for all published LLM and provider-auth operations; raw workspace file tools intentionally do not have ` + "`config/`" + ` access.
-- ` + "`search_web_llm`" + ` selects models from the published LLM set. Its ` + "`provider`" + ` argument is required; ` + "`model_id`" + ` is optional only when accepting a working search-capable model for that provider.
-- Use ` + "`search_role`" + ` to control routing:
-  - ` + "`\"primary\"`" + ` = preferred default search provider
-  - ` + "`\"fallback\"`" + ` = backup search provider
-- Use ` + "`search_priority`" + ` to order providers within the same role. Lower numbers win.
-- If the tool call passes a specific ` + "`provider`" + `, that override wins over ` + "`search_role`" + ` / ` + "`search_priority`" + `.
-- Example: ` + "`{\"id\":\"vertex-search\",\"name\":\"Gemini Search\",\"provider\":\"vertex\",\"model_id\":\"gemini-3.5-flash\",\"search_role\":\"primary\",\"search_priority\":1}`" + `
+- ` + "`search_web_llm`" + ` is MCP-only. Its required ` + "`provider`" + ` is one of ` + "`parallel`" + `, ` + "`exa`" + `, or ` + "`firecrawl`" + `; do not pass ` + "`model_id`" + `. Parallel and Exa use anonymous free MCP access, while Firecrawl keyless availability is service-controlled.
+
+Provider media tools (` + "`read_image`" + `, image/video/audio/music generation and transcription) are deprecated and hidden from agents. Do not call them; the active provider-backed tool surface is ` + "`generate_text_llm`" + ` and ` + "`search_web_llm`" + ` only.
 
 ## Image Generation Defaults
 Image generation defaults are workspace-backed configuration. Provider authentication is managed separately through ` + "`set_provider_auth`" + `.

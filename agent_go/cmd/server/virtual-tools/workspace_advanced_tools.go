@@ -7,7 +7,6 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"sort"
 	"strings"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/services"
@@ -15,6 +14,8 @@ import (
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workspace"
 	mcpagent "github.com/manishiitg/mcpagent/agent"
 	"github.com/manishiitg/mcpagent/llm"
+	loggerv2 "github.com/manishiitg/mcpagent/logger/v2"
+	"github.com/manishiitg/mcpagent/mcpclient"
 	llmproviders "github.com/manishiitg/multi-llm-provider-go"
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 )
@@ -313,13 +314,14 @@ func createSearchWebLLMExecutor(workspaceURL string) func(ctx context.Context, a
 		if modelID == "<nil>" {
 			modelID = ""
 		}
-
-		llmModel, err := createPublishedSearchLLM(ctx, workspaceURL, provider, modelID)
-		if err != nil {
-			return "", err
+		if modelID != "" {
+			return "", fmt.Errorf("search_web_llm is MCP-backed and does not accept model_id")
 		}
-
-		result, err := llm.SearchWeb(ctx, llmModel, query)
+		request, ok := buildMCPWebSearchRequest(provider, query)
+		if !ok {
+			return "", fmt.Errorf("unsupported search_web_llm provider %q; supported providers are parallel, exa, and firecrawl", provider)
+		}
+		result, err := executeMCPWebSearch(ctx, request)
 		if err != nil {
 			return "", fmt.Errorf("search_web_llm failed: %w", err)
 		}
@@ -327,273 +329,77 @@ func createSearchWebLLMExecutor(workspaceURL string) func(ctx context.Context, a
 	}
 }
 
-func isSearchCapableProvider(provider string) bool {
+// mcpWebSearchRequest describes one of the public hosted MCP search surfaces
+// exposed through search_web_llm. They are deliberately routed here instead of
+// being added to the published LLM list: these services are MCP tools, not LLM
+// runtimes, and therefore have neither a model ID nor LLM-provider credentials.
+type mcpWebSearchRequest struct {
+	provider string
+	url      string
+	tool     string
+	args     map[string]interface{}
+}
+
+func buildMCPWebSearchRequest(provider, query string) (mcpWebSearchRequest, bool) {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case string(llm.ProviderClaudeCode), string(llm.ProviderCodexCLI), string(llm.ProviderCursorCLI), string(llm.ProviderPiCLI), string(llm.ProviderVertex):
-		return true
+	case "parallel", "parallel-search":
+		return mcpWebSearchRequest{
+			provider: "parallel",
+			url:      "https://search.parallel.ai/mcp",
+			tool:     "web_search",
+			args: map[string]interface{}{
+				"objective":      query,
+				"search_queries": []string{query},
+			},
+		}, true
+	case "exa", "exa-search":
+		return mcpWebSearchRequest{
+			provider: "exa",
+			url:      "https://mcp.exa.ai/mcp",
+			tool:     "web_search_exa",
+			args: map[string]interface{}{
+				"query":      query,
+				"numResults": 5,
+			},
+		}, true
+	case "firecrawl":
+		return mcpWebSearchRequest{
+			provider: "firecrawl",
+			url:      "https://mcp.firecrawl.dev/v2/mcp",
+			tool:     "firecrawl_search",
+			args: map[string]interface{}{
+				"query":      query,
+				"limit":      5,
+				"highlights": true,
+			},
+		}, true
 	default:
-		return false
+		return mcpWebSearchRequest{}, false
 	}
 }
 
-func isSearchCapablePublishedLLM(entry services.PublishedLLM) bool {
-	provider := strings.ToLower(strings.TrimSpace(entry.Provider))
-	if !isSearchCapableProvider(provider) {
-		return false
-	}
-	if provider != string(llm.ProviderVertex) {
-		return true
-	}
+func executeMCPWebSearch(ctx context.Context, request mcpWebSearchRequest) (string, error) {
+	client := mcpclient.New(mcpclient.MCPServerConfig{
+		Protocol:    mcpclient.ProtocolHTTP,
+		URL:         request.url,
+		Description: request.provider + " hosted web search",
+	}, loggerv2.NewNoop())
+	defer client.Close()
 
-	modelID := strings.ToLower(strings.TrimSpace(entry.ModelID))
-	return strings.HasPrefix(modelID, "gemini")
-}
-
-func hasSearchProviderAuth(provider string, apiKeys *llm.ProviderAPIKeys) bool {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case string(llm.ProviderClaudeCode):
-		return apiKeys != nil && apiKeys.Anthropic != nil && strings.TrimSpace(*apiKeys.Anthropic) != ""
-	case string(llm.ProviderCodexCLI), string(llm.ProviderCursorCLI):
-		return true
-	case string(llm.ProviderPiCLI):
-		return apiKeys != nil && apiKeys.PiCLI != nil && strings.TrimSpace(*apiKeys.PiCLI) != ""
-	case string(llm.ProviderVertex):
-		return apiKeys != nil && apiKeys.Vertex != nil && strings.TrimSpace(*apiKeys.Vertex) != ""
-	default:
-		return false
+	if err := client.Connect(ctx); err != nil {
+		return "", fmt.Errorf("connect %s MCP: %w", request.provider, err)
 	}
-}
-
-func isSearchProviderAvailable(provider string) bool {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case string(llm.ProviderClaudeCode):
-		_, err := exec.LookPath("claude")
-		return err == nil
-	case string(llm.ProviderCodexCLI):
-		_, err := exec.LookPath("codex")
-		return err == nil
-	case string(llm.ProviderCursorCLI):
-		_, err := exec.LookPath("cursor-agent")
-		return err == nil
-	case string(llm.ProviderPiCLI):
-		return piCLIAvailable()
-	case string(llm.ProviderVertex):
-		return true
-	default:
-		return false
-	}
-}
-
-func piCLIAvailable() bool {
-	if explicit := strings.TrimSpace(os.Getenv("PI_BIN")); explicit != "" {
-		if info, err := os.Stat(explicit); err == nil && !info.IsDir() {
-			return true
-		}
-	}
-	if _, err := exec.LookPath("pi"); err == nil {
-		return true
-	}
-	if _, err := exec.LookPath("npx"); err == nil {
-		return true
-	}
-	return false
-}
-
-func publishedSearchProviderSummary(entries []services.PublishedLLM) string {
-	var available []string
-	seen := map[string]bool{}
-	for _, entry := range entries {
-		if !isSearchCapablePublishedLLM(entry) {
-			continue
-		}
-		provider := strings.ToLower(strings.TrimSpace(entry.Provider))
-		modelID := strings.TrimSpace(entry.ModelID)
-		key := provider + "|" + modelID
-		if provider == "" || modelID == "" || seen[key] {
-			continue
-		}
-		seen[key] = true
-		available = append(available, fmt.Sprintf("%s (%s)", provider, modelID))
-	}
-	if len(available) == 0 {
-		return "No published search-capable providers are configured."
-	}
-	sort.Strings(available)
-	return "Published search-capable providers: " + strings.Join(available, ", ")
-}
-
-func searchRoleRank(role string) int {
-	switch strings.ToLower(strings.TrimSpace(role)) {
-	case "primary":
-		return 0
-	case "", "default":
-		return 1
-	case "fallback":
-		return 2
-	default:
-		return 3
-	}
-}
-
-func searchPriorityValue(priority *int) int {
-	if priority == nil {
-		return 1000
-	}
-	return *priority
-}
-
-func preferredSearchModelRank(provider, modelID string) int {
-	provider = strings.ToLower(strings.TrimSpace(provider))
-	modelID = strings.ToLower(strings.TrimSpace(modelID))
-	switch provider {
-	case string(llm.ProviderCodexCLI):
-		switch modelID {
-		case "gpt-5.4-mini":
-			return 0
-		case "gpt-5.4":
-			return 1
-		case "gpt-5.3-codex-spark":
-			return 2
-		case "gpt-5.3-codex":
-			return 3
-		}
-	case string(llm.ProviderCursorCLI):
-		switch modelID {
-		case "cursor-cli":
-			return 0
-		case "gpt-5":
-			return 1
-		case "sonnet-4-thinking":
-			return 2
-		case "sonnet-4":
-			return 3
-		}
-	}
-	return 100
-}
-
-func searchModelAlias(provider, modelID string) string {
-	provider = strings.ToLower(strings.TrimSpace(provider))
-	normalizedModelID := strings.ToLower(strings.TrimSpace(modelID))
-	if normalizedModelID == "" || normalizedModelID == provider {
-		switch provider {
-		case string(llm.ProviderCodexCLI):
-			return "gpt-5.4-mini"
-		case string(llm.ProviderCursorCLI):
-			return "cursor-cli"
-		}
-	}
-	return modelID
-}
-
-func sortPublishedSearchCandidates(candidates []services.PublishedLLM) {
-	sort.SliceStable(candidates, func(i, j int) bool {
-		left := candidates[i]
-		right := candidates[j]
-		leftRole := searchRoleRank(left.SearchRole)
-		rightRole := searchRoleRank(right.SearchRole)
-		if leftRole != rightRole {
-			return leftRole < rightRole
-		}
-		leftPriority := searchPriorityValue(left.SearchPriority)
-		rightPriority := searchPriorityValue(right.SearchPriority)
-		if leftPriority != rightPriority {
-			return leftPriority < rightPriority
-		}
-		leftModelRank := preferredSearchModelRank(left.Provider, left.ModelID)
-		rightModelRank := preferredSearchModelRank(right.Provider, right.ModelID)
-		if leftModelRank != rightModelRank {
-			return leftModelRank < rightModelRank
-		}
-		leftProvider := strings.ToLower(strings.TrimSpace(left.Provider))
-		rightProvider := strings.ToLower(strings.TrimSpace(right.Provider))
-		if leftProvider != rightProvider {
-			return leftProvider < rightProvider
-		}
-		return strings.ToLower(strings.TrimSpace(left.ModelID)) < strings.ToLower(strings.TrimSpace(right.ModelID))
-	})
-}
-
-func loadPublishedSearchProvider(ctx context.Context, workspaceURL string, apiKeys *llm.ProviderAPIKeys, requestedProvider, requestedModelID string) (*services.PublishedLLM, error) {
-	publishedLLMs, exists, err := services.LoadPublishedLLMs(ctx, workspaceURL)
+	result, err := client.CallTool(ctx, request.tool, request.args)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load published LLMs: %w", err)
+		return "", fmt.Errorf("call %s MCP tool %q: %w", request.provider, request.tool, err)
 	}
-	if !exists || len(publishedLLMs) == 0 {
-		return nil, fmt.Errorf("search_web_llm requires a published search-capable provider. Use list_published_llms/save_published_llm to manage the published set")
+	if result == nil {
+		return "", fmt.Errorf("%s MCP tool %q returned no result", request.provider, request.tool)
 	}
-
-	requestedProvider = strings.ToLower(strings.TrimSpace(requestedProvider))
-	if requestedProvider == "" {
-		return nil, fmt.Errorf("provider is required. %s", publishedSearchProviderSummary(publishedLLMs))
+	if result.IsError {
+		return "", fmt.Errorf("%s MCP tool %q: %s", request.provider, request.tool, mcpclient.ToolResultAsString(result))
 	}
-	requestedModelID = strings.TrimSpace(searchModelAlias(requestedProvider, requestedModelID))
-
-	var candidates []services.PublishedLLM
-	for _, entry := range publishedLLMs {
-		provider := strings.ToLower(strings.TrimSpace(entry.Provider))
-		modelID := strings.TrimSpace(entry.ModelID)
-		if requestedProvider != "" && provider != requestedProvider {
-			continue
-		}
-		if requestedModelID != "" && !strings.EqualFold(modelID, requestedModelID) {
-			continue
-		}
-		if !isSearchCapablePublishedLLM(entry) {
-			continue
-		}
-		if !hasSearchProviderAuth(provider, apiKeys) {
-			continue
-		}
-		if !isSearchProviderAvailable(provider) {
-			continue
-		}
-		candidates = append(candidates, entry)
-	}
-	if len(candidates) > 0 {
-		sortPublishedSearchCandidates(candidates)
-		candidate := candidates[0]
-		return &candidate, nil
-	}
-
-	foundProvider := false
-	foundModel := false
-	for _, entry := range publishedLLMs {
-		provider := strings.ToLower(strings.TrimSpace(entry.Provider))
-		modelID := strings.TrimSpace(entry.ModelID)
-		if provider != requestedProvider {
-			continue
-		}
-		foundProvider = true
-		if requestedModelID != "" && !strings.EqualFold(modelID, requestedModelID) {
-			continue
-		}
-		foundModel = true
-		if !isSearchCapablePublishedLLM(entry) {
-			continue
-		}
-		if !hasSearchProviderAuth(provider, apiKeys) {
-			return nil, fmt.Errorf("search_web_llm requires workspace auth for requested provider %q. Use set_provider_auth. %s", entry.Provider, publishedSearchProviderSummary(publishedLLMs))
-		}
-		if !isSearchProviderAvailable(provider) {
-			return nil, fmt.Errorf("search_web_llm cannot use requested provider %q because its runtime dependency is unavailable. %s", entry.Provider, publishedSearchProviderSummary(publishedLLMs))
-		}
-		candidate := entry
-		return &candidate, nil
-	}
-	if !foundProvider {
-		return nil, fmt.Errorf("search_web_llm could not find requested provider %q in the published LLM set. %s", requestedProvider, publishedSearchProviderSummary(publishedLLMs))
-	}
-	if !foundModel {
-		if requestedModelID == "" {
-			return nil, fmt.Errorf("search_web_llm could not find a usable search-capable model under provider %q in the published LLM set. %s", requestedProvider, publishedSearchProviderSummary(publishedLLMs))
-		}
-		return nil, fmt.Errorf("search_web_llm could not find model %q under provider %q in the published LLM set. %s", requestedModelID, requestedProvider, publishedSearchProviderSummary(publishedLLMs))
-	}
-	if requestedModelID == "" {
-		return nil, fmt.Errorf("search_web_llm does not support published provider %q for search yet. %s", requestedProvider, publishedSearchProviderSummary(publishedLLMs))
-	}
-	return nil, fmt.Errorf("search_web_llm does not support published provider %q with model %q for search yet. %s", requestedProvider, requestedModelID, publishedSearchProviderSummary(publishedLLMs))
+	return strings.TrimSpace(mcpclient.ToolResultAsString(result)), nil
 }
 
 func loadWorkspaceTierModel(ctx context.Context, workspaceURL, tier string) (*TierModel, error) {
@@ -774,14 +580,6 @@ func loadWorkspaceProviderAPIKeys(ctx context.Context, workspaceURL string) *llm
 		v := value
 		keys.MiniMax = &v
 	}
-	if value, ok := rawKeys["elevenlabs"].(string); ok && strings.TrimSpace(value) != "" {
-		v := value
-		keys.ElevenLabs = &v
-	}
-	if value, ok := rawKeys["deepgram"].(string); ok && strings.TrimSpace(value) != "" {
-		v := value
-		keys.Deepgram = &v
-	}
 	if value, ok := rawKeys["pi_provider_keys"].(map[string]string); ok && len(value) > 0 {
 		keys.PiProviderKeys = map[string]string{}
 		for provider, key := range value {
@@ -833,41 +631,6 @@ func loadWorkspaceProviderAPIKeys(ctx context.Context, workspaceURL string) *llm
 	}
 
 	return keys
-}
-
-func createPublishedSearchLLM(ctx context.Context, workspaceURL string, requestedProvider, requestedModelID string) (llmtypes.Model, error) {
-	apiKeys := loadWorkspaceProviderAPIKeys(ctx, workspaceURL)
-	publishedLLM, err := loadPublishedSearchProvider(ctx, workspaceURL, apiKeys, requestedProvider, requestedModelID)
-	if err != nil {
-		return nil, err
-	}
-
-	provider := llm.Provider(strings.ToLower(strings.TrimSpace(publishedLLM.Provider)))
-	switch provider {
-	case llm.ProviderCodexCLI:
-		// Codex CLI can use workspace auth, CODEX_API_KEY, or its own stored login state.
-	case llm.ProviderCursorCLI:
-		// Cursor CLI can use workspace auth, CURSOR_API_KEY, or its own stored login state.
-	case llm.ProviderClaudeCode:
-		if apiKeys == nil || apiKeys.Anthropic == nil || strings.TrimSpace(*apiKeys.Anthropic) == "" {
-			return nil, fmt.Errorf("search_web_llm requires Anthropic workspace auth for the published Claude Code provider. Use set_provider_auth")
-		}
-	case llm.ProviderVertex:
-		if apiKeys == nil || apiKeys.Vertex == nil || strings.TrimSpace(*apiKeys.Vertex) == "" {
-			return nil, fmt.Errorf("search_web_llm requires Vertex workspace auth for the published Vertex provider. Use set_provider_auth")
-		}
-	default:
-		return nil, fmt.Errorf("search_web_llm does not support published provider %q yet", publishedLLM.Provider)
-	}
-
-	llmCfg := llm.Config{
-		Provider:   provider,
-		ModelID:    resolveRuntimeModelIDForVirtualTool(provider, publishedLLM.ModelID),
-		Context:    ctx,
-		APIKeys:    apiKeys,
-		MaxRetries: 3,
-	}
-	return llm.InitializeLLM(llmCfg)
 }
 
 func createLLMFromTierModel(ctx context.Context, model *TierModel, apiKeys *llm.ProviderAPIKeys) (llmtypes.Model, error) {

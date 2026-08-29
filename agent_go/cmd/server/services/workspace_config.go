@@ -372,8 +372,6 @@ func LoadProviderKeys(ctx context.Context, workspaceURL string) (map[string]inte
 		CodexCLI       string            `json:"codex_cli,omitempty"`
 		PiCLI          string            `json:"pi_cli,omitempty"`
 		MiniMax        string            `json:"minimax,omitempty"`
-		ElevenLabs     string            `json:"elevenlabs,omitempty"`
-		Deepgram       string            `json:"deepgram,omitempty"`
 		PiProviderKeys map[string]string `json:"pi_provider_keys,omitempty"`
 		Bedrock        *struct {
 			Region string `json:"region"`
@@ -413,12 +411,6 @@ func LoadProviderKeys(ctx context.Context, workspaceURL string) (map[string]inte
 	}
 	if stored.MiniMax != "" {
 		m["minimax"] = stored.MiniMax
-	}
-	if stored.ElevenLabs != "" {
-		m["elevenlabs"] = stored.ElevenLabs
-	}
-	if stored.Deepgram != "" {
-		m["deepgram"] = stored.Deepgram
 	}
 	if len(stored.PiProviderKeys) > 0 {
 		clean := map[string]string{}

@@ -33,8 +33,6 @@ type StoredProviderKeys struct {
 	PiCLI             string               `json:"pi_cli,omitempty"`
 	MiniMax           string               `json:"minimax,omitempty"`
 	MiniMaxCodingPlan string               `json:"minimax_coding_plan,omitempty"`
-	ElevenLabs        string               `json:"elevenlabs,omitempty"`
-	Deepgram          string               `json:"deepgram,omitempty"`
 	PiProviderKeys    map[string]string    `json:"pi_provider_keys,omitempty"`
 	Bedrock           *StoredBedrockConfig `json:"bedrock,omitempty"`
 	Azure             *StoredAzureConfig   `json:"azure,omitempty"`
@@ -100,8 +98,6 @@ func hasStoredProviderKeys(keys *StoredProviderKeys) bool {
 		keys.PiCLI,
 		keys.MiniMax,
 		keys.MiniMaxCodingPlan,
-		keys.ElevenLabs,
-		keys.Deepgram,
 	}
 	for _, value := range stringValues {
 		if isMeaningfulProviderKey(value) {
@@ -193,12 +189,6 @@ func ProviderKeysToAPIKeysMap(keys *StoredProviderKeys) map[string]interface{} {
 	if keys.MiniMax != "" {
 		m["minimax"] = keys.MiniMax
 	}
-	if keys.ElevenLabs != "" {
-		m["elevenlabs"] = keys.ElevenLabs
-	}
-	if keys.Deepgram != "" {
-		m["deepgram"] = keys.Deepgram
-	}
 	if len(keys.PiProviderKeys) > 0 {
 		clean := map[string]string{}
 		for provider, key := range keys.PiProviderKeys {
@@ -269,12 +259,6 @@ func LoadProviderKeysAsLLMKeys(ctx context.Context) *llm.ProviderAPIKeys {
 	if keys.MiniMax != "" {
 		result.MiniMax = &keys.MiniMax
 	}
-	if keys.ElevenLabs != "" {
-		result.ElevenLabs = &keys.ElevenLabs
-	}
-	if keys.Deepgram != "" {
-		result.Deepgram = &keys.Deepgram
-	}
 	if len(keys.PiProviderKeys) > 0 {
 		result.PiProviderKeys = map[string]string{}
 		for provider, key := range keys.PiProviderKeys {
@@ -327,12 +311,6 @@ func LoadProviderKeysAsLLMKeys(ctx context.Context) *llm.ProviderAPIKeys {
 	}
 	if result.MiniMax != nil {
 		loaded = append(loaded, "minimax")
-	}
-	if result.ElevenLabs != nil {
-		loaded = append(loaded, "elevenlabs")
-	}
-	if result.Deepgram != nil {
-		loaded = append(loaded, "deepgram")
 	}
 	if len(result.PiProviderKeys) > 0 {
 		for provider := range result.PiProviderKeys {
@@ -387,8 +365,6 @@ func MergedProviderAPIKeys(ctx context.Context) *llm.ProviderAPIKeys {
 		CursorCLI:            pick(envKeys.CursorCLI, wsKeys.CursorCLI),
 		PiCLI:                pick(envKeys.PiCLI, wsKeys.PiCLI),
 		MiniMax:              pick(envKeys.MiniMax, wsKeys.MiniMax),
-		ElevenLabs:           pick(envKeys.ElevenLabs, wsKeys.ElevenLabs),
-		Deepgram:             pick(envKeys.Deepgram, wsKeys.Deepgram),
 	}
 	result.PiProviderKeys = mergePiProviderKeyMaps(envKeys.PiProviderKeys, wsKeys.PiProviderKeys)
 	// Bedrock / Azure: workspace wins if present, else env
@@ -530,8 +506,6 @@ func mergeStoredProviderKeyValues(existing, incoming *StoredProviderKeys) *Store
 		CursorCLI:  pick(existing.CursorCLI, incoming.CursorCLI),
 		PiCLI:      pick(existing.PiCLI, incoming.PiCLI),
 		MiniMax:    pick(existing.MiniMax, incoming.MiniMax),
-		ElevenLabs: pick(existing.ElevenLabs, incoming.ElevenLabs),
-		Deepgram:   pick(existing.Deepgram, incoming.Deepgram),
 	}
 	merged.PiProviderKeys = mergeStoredPiProviderKeys(existing.PiProviderKeys, incoming.PiProviderKeys)
 	// Bedrock / Azure: incoming wins if present, else keep existing
@@ -632,8 +606,6 @@ func discardMaskedProviderKeys(keys *StoredProviderKeys) *StoredProviderKeys {
 	sanitized.PiCLI = clearMasked(sanitized.PiCLI)
 	sanitized.MiniMax = clearMasked(sanitized.MiniMax)
 	sanitized.MiniMaxCodingPlan = clearMasked(sanitized.MiniMaxCodingPlan)
-	sanitized.ElevenLabs = clearMasked(sanitized.ElevenLabs)
-	sanitized.Deepgram = clearMasked(sanitized.Deepgram)
 	if keys.PiProviderKeys != nil {
 		sanitized.PiProviderKeys = map[string]string{}
 		for provider, key := range keys.PiProviderKeys {
@@ -669,8 +641,6 @@ func maskStoredProviderKeys(keys *StoredProviderKeys) *StoredProviderKeys {
 	masked.PiCLI = maskProviderKey(masked.PiCLI)
 	masked.MiniMax = maskProviderKey(masked.MiniMax)
 	masked.MiniMaxCodingPlan = maskProviderKey(masked.MiniMaxCodingPlan)
-	masked.ElevenLabs = maskProviderKey(masked.ElevenLabs)
-	masked.Deepgram = maskProviderKey(masked.Deepgram)
 	if keys.PiProviderKeys != nil {
 		masked.PiProviderKeys = map[string]string{}
 		for provider, key := range keys.PiProviderKeys {

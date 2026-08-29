@@ -302,7 +302,7 @@ func TestPiCLIIsPublishedAsCodingAgent(t *testing.T) {
 // matching TestProviderManifestMarksDeprecatedCodingAgents's pattern.
 func TestProviderManifestMarksDeprecatedAPIModelProviders(t *testing.T) {
 	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
-	t.Setenv("SUPPORTED_LLM_PROVIDERS", "openai,anthropic,vertex,bedrock,azure,minimax,pi-cli")
+	t.Setenv("SUPPORTED_LLM_PROVIDERS", "openai,anthropic,vertex,bedrock,azure,minimax,elevenlabs,deepgram,pi-cli")
 	t.Setenv("PATH", t.TempDir())
 
 	api := &StreamingAPI{}
@@ -357,17 +357,13 @@ func TestProviderManifestMarksDeprecatedAPIModelProviders(t *testing.T) {
 		}
 	}
 
-	// minimax shares this deprecation set's shape of concern (a direct-API
-	// provider) but is integration_kind=audio_provider here, a different
-	// capability (speech/music), not one of the five text-LLM api_model
-	// providers this deprecation targets. Confirming it is untouched guards
-	// against a future edit widening the deprecated set by copy-paste.
-	if got, ok := byID["minimax"]; ok {
-		if got.IntegrationKind != "audio_provider" {
-			t.Fatalf("minimax integration_kind = %q, want %q (test assumption stale)", got.IntegrationKind, "audio_provider")
-		}
-		if got.Deprecated {
-			t.Error("minimax (audio_provider) unexpectedly marked deprecated")
+	// These were media-tool-only direct providers. They must not come back into
+	// the setup manifest just because an older deployment still lists them in
+	// SUPPORTED_LLM_PROVIDERS. MiniMax remains available as a Pi sub-provider,
+	// not as a top-level provider entry.
+	for _, id := range []string{"minimax", "elevenlabs", "deepgram"} {
+		if _, ok := byID[id]; ok {
+			t.Errorf("retired media provider %q appeared in the setup manifest", id)
 		}
 	}
 

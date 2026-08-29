@@ -81,12 +81,6 @@ func TestLLMBackedToolDefinitionsReferenceCapabilityDiscovery(t *testing.T) {
 			capability: "read_image",
 			wantFields: []string{"provider", "model_id"},
 		},
-		{
-			name:       "search_web_llm",
-			tool:       searchWebLLMToolDef,
-			capability: "search_web",
-			wantFields: []string{"provider", "model_id"},
-		},
 	}
 
 	for _, tt := range tests {

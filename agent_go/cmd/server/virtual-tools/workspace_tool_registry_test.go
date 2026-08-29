@@ -2,7 +2,7 @@ package virtualtools
 
 import "testing"
 
-func TestCreateWorkspaceToolRegistryIncludesProviderMediaTools(t *testing.T) {
+func TestCreateWorkspaceToolRegistryIncludesOnlyActiveTextAndSearchTools(t *testing.T) {
 	t.Setenv("MCP_API_URL", "http://example.test")
 	t.Setenv("MCP_API_TOKEN", "registry-token")
 
@@ -21,15 +21,8 @@ func TestCreateWorkspaceToolRegistryIncludesProviderMediaTools(t *testing.T) {
 	for _, name := range []string{
 		"execute_shell_command",
 		"diff_patch_workspace_file",
-		"read_image",
 		"generate_text_llm",
 		"search_web_llm",
-		"image_gen",
-		"image_edit",
-		"generate_video",
-		"text_to_speech",
-		"speech_to_text",
-		"generate_music",
 	} {
 		if !toolDefs[name] {
 			t.Fatalf("registry tool definitions missing %q", name)
@@ -39,6 +32,14 @@ func TestCreateWorkspaceToolRegistryIncludesProviderMediaTools(t *testing.T) {
 		}
 		if got := registry.Categories[name]; got != GetWorkspaceAdvancedToolCategory() {
 			t.Fatalf("registry category for %q = %q, want %q", name, got, GetWorkspaceAdvancedToolCategory())
+		}
+	}
+	for _, name := range []string{"read_image", "image_gen", "image_edit", "generate_video", "text_to_speech", "speech_to_text", "generate_music"} {
+		if toolDefs[name] {
+			t.Fatalf("deprecated media tool %q must be hidden from the registry", name)
+		}
+		if _, ok := registry.Executors[name]; ok {
+			t.Fatalf("deprecated media tool %q must not have a registry executor", name)
 		}
 	}
 

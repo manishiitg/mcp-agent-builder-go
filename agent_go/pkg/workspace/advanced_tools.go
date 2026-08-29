@@ -101,7 +101,7 @@ func searchWebLLMToolDef() llmtypes.Tool {
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
 			Name:        "search_web_llm",
-			Description: "Search the web using a published search-capable provider. Before choosing provider/model_id, call list_llm_capabilities(capability=\"search_web\", include_models=true). Provider is required. If you pass model_id, pass the matching provider from that capability result; do not pass model_id by itself. model_id can be omitted only when accepting the backend's working default for that provider.",
+			Description: "Search the web through a hosted MCP provider. Provider is required: parallel, exa, or firecrawl. Do not pass model_id. Parallel and Exa use their anonymous free MCP tiers; Firecrawl keyless availability is service-controlled.",
 			Parameters: llmtypes.NewParameters(map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -111,11 +111,7 @@ func searchWebLLMToolDef() llmtypes.Tool {
 					},
 					"provider": map[string]interface{}{
 						"type":        "string",
-						"description": "Required published provider, e.g. vertex, claude-code, codex-cli, cursor-cli, pi-cli, or minimax-coding-plan. Discover usable providers with list_llm_capabilities(capability=\"search_web\", include_models=true).",
-					},
-					"model_id": map[string]interface{}{
-						"type":        "string",
-						"description": "Optional published model_id override. Use a model from list_llm_capabilities(capability=\"search_web\", include_models=true), and pass the matching provider in the same call. If omitted, or if a provider alias such as codex-cli is passed, the tool selects a working model for the provider.",
+						"description": "Required hosted MCP provider: parallel, exa, or firecrawl. Firecrawl keyless availability is service-controlled.",
 					},
 				},
 				"required": []string{"query", "provider"},
@@ -154,7 +150,8 @@ func GetShellToolDefinitions() []llmtypes.Tool {
 	return []llmtypes.Tool{shellToolDef()}
 }
 
-// GetImageToolDefinitions returns image understanding tools.
+// GetImageToolDefinitions returns deprecated image-understanding definitions
+// for explicit compatibility callers. They are not agent-exposed.
 func GetImageToolDefinitions() []llmtypes.Tool {
 	return []llmtypes.Tool{imageToolDef()}
 }
@@ -174,11 +171,12 @@ func GetDiffPatchToolDefinitions() []llmtypes.Tool {
 	return []llmtypes.Tool{diffPatchToolDef()}
 }
 
-// GetAdvancedToolDefinitions returns all advanced workspace tools (shell, image/video, text generation, diff patch).
+// GetAdvancedToolDefinitions returns the active agent-facing tools. Provider
+// media tools are retained in code for compatibility but are deprecated and
+// deliberately hidden while testing focuses on text generation and web search.
 func GetAdvancedToolDefinitions() []llmtypes.Tool {
 	var tools []llmtypes.Tool
 	tools = append(tools, GetShellToolDefinitions()...)
-	tools = append(tools, GetImageToolDefinitions()...)
 	tools = append(tools, GetGenerateTextLLMToolDefinitions()...)
 	tools = append(tools, GetSearchWebLLMToolDefinitions()...)
 	tools = append(tools, GetDiffPatchToolDefinitions()...)

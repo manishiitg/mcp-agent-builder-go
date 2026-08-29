@@ -39,7 +39,6 @@ type TabType = 'library' | LLMProvider | AudioProviderTab | PiCliGroupTab
 const piCliGroupTabId = (group: string): PiCliGroupTab => `pi-cli::${group}`
 
 const CHAT_CAPABILITIES = new Set(['chat', 'text'])
-const AUDIO_CAPABILITIES = new Set(['text_to_speech', 'speech_to_text', 'generate_music', 'audio_generation', 'audio_transcription', 'music_generation'])
 const HIDDEN_CHAT_PROVIDER_TABS = new Set<string>(['openrouter', 'z-ai', 'kimi', 'minimax', 'minimax-coding-plan'])
 const isMiniMaxAudioModel = (modelId: string) => /^(speech|music|audio|voice)[-_]/i.test(modelId)
 const API_KEY_PROVIDER_IDS = new Set<string>(['bedrock', 'openai', 'vertex', 'anthropic', 'azure', 'minimax', 'elevenlabs', 'deepgram'])
@@ -49,38 +48,6 @@ const CODING_AGENT_PROVIDER_RANK = new Map<string, number>(
 )
 const codingAgentProviderRank = (provider: string) =>
   CODING_AGENT_PROVIDER_RANK.get(provider) ?? 999
-
-const FALLBACK_AUDIO_PROVIDER_ITEMS: Array<{
-  tab: LLMProvider | AudioProviderTab
-  provider: APIKeyProviderType
-  name: string
-  placeholder: string
-}> = [
-  {
-    tab: 'audio-gemini',
-    provider: 'vertex',
-    name: 'Gemini',
-    placeholder: 'Select a Gemini audio model',
-  },
-  {
-    tab: 'audio-minimax',
-    provider: 'minimax',
-    name: 'MiniMax',
-    placeholder: 'Select a MiniMax audio model',
-  },
-  {
-    tab: 'elevenlabs',
-    provider: 'elevenlabs',
-    name: 'ElevenLabs',
-    placeholder: 'Select an ElevenLabs media model',
-  },
-  {
-    tab: 'deepgram',
-    provider: 'deepgram',
-    name: 'Deepgram',
-    placeholder: 'Select a Deepgram media model',
-  },
-]
 
 export default function LLMConfigurationModal({ isOpen, onClose }: LLMConfigurationModalProps) {
   // Get current mode from app store
@@ -210,24 +177,9 @@ export default function LLMConfigurationModal({ isOpen, onClose }: LLMConfigurat
     })
   }, [codingAgentProviderEntries, piCliGroups])
 
-  const audioProviderItems = useMemo(() => {
-    if (providerManifest.length === 0) {
-      return FALLBACK_AUDIO_PROVIDER_ITEMS.filter(item => isProviderSupported(item.provider))
-    }
-    const items = manifestProviderEntries
-      .filter(entry => API_KEY_PROVIDER_IDS.has(entry.id) && entryHasCapability(entry, AUDIO_CAPABILITIES))
-      .map(entry => ({
-        tab: entry.id === 'vertex' ? 'audio-gemini' as const : entry.id === 'minimax' ? 'audio-minimax' as const : entry.id as LLMProvider,
-        provider: entry.id as APIKeyProviderType,
-        name: entry.id === 'vertex' ? 'Gemini' : entry.display_name,
-        placeholder: entry.id === 'vertex'
-          ? 'Select a Gemini audio model'
-          : entry.id === 'minimax'
-            ? 'Select a MiniMax audio model'
-            : `Select a ${entry.display_name} media model`,
-      }))
-    return items.length > 0 ? items : FALLBACK_AUDIO_PROVIDER_ITEMS.filter(item => isProviderSupported(item.provider))
-  }, [entryHasCapability, isProviderSupported, manifestProviderEntries, providerManifest.length])
+  // Media tools are retired, so their provider-credential tabs must not be
+  // resurrected by an empty/stale manifest fallback.
+  const audioProviderItems = useMemo(() => [], [])
 
   // Get mode-specific configs
   const modeConfig = getConfigForMode(currentMode)
