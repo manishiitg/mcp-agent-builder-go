@@ -499,6 +499,21 @@ func validateFile(
 	return result
 }
 
+// jsonPathMultiMatchPattern recognizes standard JSONPath syntax that can
+// match more than one location: wildcards (*), recursive descent (..),
+// filter expressions (?( ), and slice/union index groups ([0:2], [0,1]).
+// A plain numeric index ([0]) or a bare field path deliberately does not
+// match -- that names exactly one location, regardless of what type its
+// value happens to be.
+var jsonPathMultiMatchPattern = regexp.MustCompile(`\*|\.\.|\?\(|\[[^\]]*[:,][^\]]*\]`)
+
+// jsonPathHasMultipleMatches reports whether path can name more than one
+// JSON location. See the comment above its one call site for why this
+// distinction is load-bearing rather than cosmetic.
+func jsonPathHasMultipleMatches(path string) bool {
+	return jsonPathMultiMatchPattern.MatchString(path)
+}
+
 // validateJSONCheck validates a single JSON check
 func validateJSONCheck(
 	ctx context.Context,
@@ -541,8 +556,22 @@ func validateJSONCheck(
 	// - If path points to an array field directly (like $.missing_months), jsonpath.Get returns the array itself
 	// - If path uses wildcards/filters, jsonpath.Get returns a slice of matching results
 	// - If path points to a scalar, jsonpath.Get returns the scalar value
+	//
+	// []interface{} is genuinely ambiguous between those first two cases --
+	// PaesslerAG/jsonpath.Get returns that same Go type whether $.notes'
+	// own value is the array [] / ["a"], or $.notes[*] matched zero/one/many
+	// separate locations. check.Path itself is the only place that
+	// ambiguity can be resolved: a definite path (no wildcard/recursive-
+	// descent/filter/slice/union syntax) always names exactly one location,
+	// so whatever jsonpath.Get returns for it IS that location's value,
+	// whatever its type -- never a collection of match results to unwrap.
+	// Treating a definite path's own array value as a multi-match
+	// collection and silently substituting its first element let a $.notes
+	// field actually holding a JSON array pass a value_type=string check
+	// (PUL-61C84987): a non-empty string-containing array's first element
+	// is itself a string, so validateValueType saw a string and passed.
 	var value interface{}
-	if valuesSlice, ok := values.([]interface{}); ok {
+	if valuesSlice, ok := values.([]interface{}); ok && jsonPathHasMultipleMatches(check.Path) {
 		// If we're expecting an array and got a slice, the slice IS the array value
 		// (not a collection of results to take the first element from)
 		if check.ValueType == "array" {
