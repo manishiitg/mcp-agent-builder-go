@@ -84,6 +84,7 @@ import type {
   PulseAgentMetricsResponse,
   PulseImpactResponse,
   PulseContextResponse,
+  PulseEvalResultsResponse,
 } from './api-types'
 import type { PlanStep, AgentConfigs } from '../utils/stepConfigMatching'
 
@@ -1685,6 +1686,13 @@ export const agentApi = {
       params: { workspace_path: workspacePath },
     })
     return response.data as PulseContextResponse
+  },
+
+  getPulseEvalResults: async (workspacePath: string) => {
+    const response = await api.get('/api/workflow/pulse-eval-results', {
+      params: { workspace_path: workspacePath },
+    })
+    return response.data as PulseEvalResultsResponse
   },
 
   answerReportHumanInput: async (

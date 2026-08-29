@@ -3,9 +3,14 @@ package step_based_workflow
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/fsutil"
 )
 
 // Durable, report-queryable copy of each eval step's verdict.
@@ -101,6 +106,104 @@ func (hcpo *StepBasedWorkflowOrchestrator) persistEvalResultsToDB(ctx context.Co
 		}
 	}
 	return nil
+}
+
+// EvalResultRecord is one step's score for one run, joined with that step's
+// title/description from evaluation_plan.json. eval_results itself stores
+// neither (see EvaluationStepScore's doc: the plan is the single source for
+// what a step means, so a UI reads scores and titles from one place instead
+// of two copies drifting apart).
+type EvalResultRecord struct {
+	RunFolder     string  `json:"run_folder"`
+	StepID        string  `json:"step_id"`
+	Title         string  `json:"title,omitempty"`
+	Description   string  `json:"description,omitempty"`
+	Score         float64 `json:"score"`
+	MaxScore      float64 `json:"max_score"`
+	ScoreCaptured bool    `json:"score_captured"`
+	Reasoning     string  `json:"reasoning"`
+	Evidence      string  `json:"evidence"`
+	Skipped       bool    `json:"skipped"`
+	GeneratedAt   string  `json:"generated_at"`
+}
+
+// LoadEvalResults returns the most recent eval_results rows for a workflow,
+// most recent run first, joined against evaluation_plan.json for each step's
+// title and description. The plan read is best-effort: a missing or
+// unparseable plan (e.g. a step later removed from the plan, or a workflow
+// with no evaluation configured) still returns the scores, just without
+// title/description -- the score data is never withheld because of it.
+func LoadEvalResults(ctx context.Context, workspacePath string, limit int) ([]EvalResultRecord, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	db, err := openRunConcernsDB(ctx, workspacePath, false)
+	if err != nil || db == nil {
+		return []EvalResultRecord{}, err
+	}
+	defer db.Close()
+	if _, err := db.ExecContext(ctx, evalResultsSchema); err != nil {
+		return nil, err
+	}
+	if err := ensureEvalResultsScoreCapturedColumn(ctx, db); err != nil {
+		return nil, err
+	}
+
+	rows, err := db.QueryContext(ctx, `SELECT run_folder, step_id, score, max_score, score_captured, reasoning, evidence, skipped, generated_at
+		FROM eval_results ORDER BY generated_at DESC, run_folder DESC, step_id ASC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	records := []EvalResultRecord{}
+	for rows.Next() {
+		var record EvalResultRecord
+		var scoreCaptured, skipped int
+		if err := rows.Scan(&record.RunFolder, &record.StepID, &record.Score, &record.MaxScore, &scoreCaptured, &record.Reasoning, &record.Evidence, &skipped, &record.GeneratedAt); err != nil {
+			return nil, err
+		}
+		record.ScoreCaptured = scoreCaptured != 0
+		record.Skipped = skipped != 0
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	planTitles, planDescriptions := loadEvaluationPlanStepText(workspacePath)
+	for i := range records {
+		records[i].Title = planTitles[records[i].StepID]
+		records[i].Description = planDescriptions[records[i].StepID]
+	}
+	return records, nil
+}
+
+// loadEvaluationPlanStepText reads evaluation/evaluation_plan.json directly
+// off disk (the same workspace-root resolution eval_results_storage.go
+// already uses for db/db.sqlite) and indexes each step's title/description
+// by id. Returns empty maps on any read/parse failure -- there is no
+// evaluation plan to describe for a workflow that never configured one, and
+// that is not an error condition for the caller.
+func loadEvaluationPlanStepText(workspacePath string) (titles, descriptions map[string]string) {
+	titles = map[string]string{}
+	descriptions = map[string]string{}
+	planPath := filepath.Join(fsutil.WorkspaceDocsRoot(), filepath.FromSlash(strings.Trim(strings.TrimSpace(workspacePath), "/")), "evaluation", "evaluation_plan.json")
+	content, err := os.ReadFile(planPath)
+	if err != nil {
+		return titles, descriptions
+	}
+	var plan EvaluationPlan
+	if err := json.Unmarshal(content, &plan); err != nil {
+		return titles, descriptions
+	}
+	for _, step := range plan.Steps {
+		if step == nil || strings.TrimSpace(step.ID) == "" {
+			continue
+		}
+		titles[step.ID] = step.Title
+		descriptions[step.ID] = step.Description
+	}
+	return titles, descriptions
 }
 
 func ensureEvalResultsScoreCapturedColumn(ctx context.Context, db *sql.DB) error {

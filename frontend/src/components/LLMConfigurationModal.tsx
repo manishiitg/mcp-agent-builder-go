@@ -179,7 +179,7 @@ export default function LLMConfigurationModal({ isOpen, onClose }: LLMConfigurat
 
   // Media tools are retired, so their provider-credential tabs must not be
   // resurrected by an empty/stale manifest fallback.
-  const audioProviderItems = useMemo(() => [], [])
+  const audioProviderItems = useMemo((): Array<{ tab: string; provider: string; name: string }> => [], [])
 
   // Get mode-specific configs
   const modeConfig = getConfigForMode(currentMode)
@@ -533,7 +533,7 @@ export default function LLMConfigurationModal({ isOpen, onClose }: LLMConfigurat
                         return (
                     <button
                       key={item.tab}
-                      onClick={() => setActiveTab(item.tab)}
+                      onClick={() => setActiveTab(item.tab as typeof activeTab)}
                       className={`w-full flex items-center gap-3 p-3 rounded-md text-left transition-colors ${
                         activeTab === item.tab ? 'bg-primary text-primary-foreground' : 'hover:bg-secondary'
                       }`}

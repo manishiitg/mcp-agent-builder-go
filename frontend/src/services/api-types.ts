@@ -619,6 +619,26 @@ export interface PulseContextResponse {
   error?: string
 }
 
+export interface EvalResultRecord {
+  run_folder: string
+  step_id: string
+  title?: string
+  description?: string
+  score: number
+  max_score: number
+  score_captured: boolean
+  reasoning: string
+  evidence: string
+  skipped: boolean
+  generated_at: string
+}
+
+export interface PulseEvalResultsResponse {
+  success: boolean
+  results: EvalResultRecord[]
+  error?: string
+}
+
 export interface PulseFindingVerification {
   check: string
   verdict: 'passed' | 'failed' | 'inconclusive' | string

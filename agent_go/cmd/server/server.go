@@ -2130,6 +2130,7 @@ func runServer(cmd *cobra.Command, args []string) {
 	apiRouter.HandleFunc("/workflow/pulse-agent-metrics", api.handleGetPulseAgentMetrics).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/pulse-impact", api.handleGetPulseImpact).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/pulse-context", api.handleGetPulseContext).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/workflow/pulse-eval-results", api.handleGetPulseEvalResults).Methods("GET", "OPTIONS")
 
 	// Workflow running-session API (decoupled from chat session storage).
 	apiRouter.HandleFunc("/workflow/running", api.handleListRunningWorkflows).Methods("GET")

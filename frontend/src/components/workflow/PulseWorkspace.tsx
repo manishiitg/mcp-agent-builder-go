@@ -15,6 +15,7 @@ import type {
   PulseReviewFocus,
 } from '../../services/api-types'
 import { ReportHumanInputPanel } from './ReportHumanInputPanel'
+import { PulseEvalSummary } from './PulseEvalSummary'
 import { SoulViewer } from './SoulViewer'
 import { PulseFindingCard } from './PulseFindingCard'
 import { pulseFindingPresentation, type PulseFindingQueue } from './pulseFindingPresentation'
@@ -424,6 +425,8 @@ export function PulseWorkspace({
           })}
         </div>
       </section>
+
+      <PulseEvalSummary workspacePath={workspacePath} />
 
       {(error || statusError) && (
         <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">

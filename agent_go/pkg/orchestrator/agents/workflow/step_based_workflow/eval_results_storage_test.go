@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/fsutil"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workspace"
 	workspacehandlers "github.com/manishiitg/coding-agent-loop/workspace/handlers"
@@ -144,6 +145,81 @@ func TestPersistEvalResultsToDBReplacesStaleRowsOnRerun(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("expected 1 surviving row after re-run, got %d", count)
+	}
+}
+
+// TestLoadEvalResultsJoinsPlanTitlesAndOrdersNewestRunFirst proves the read
+// path backing the Pulse popup's eval display: newest run first, each row
+// carries its step's title/description from evaluation_plan.json, and a
+// step_id no longer in the plan degrades to an empty title/description
+// instead of failing the whole read.
+func TestLoadEvalResultsJoinsPlanTitlesAndOrdersNewestRunFirst(t *testing.T) {
+	hcpo := newEvalResultsTestOrchestrator(t)
+	ctx := context.Background()
+	workspacePath := hcpo.GetWorkspacePath()
+
+	older := &EvaluationReport{
+		TargetRunFolder: "iteration-1",
+		GeneratedAt:     "2026-07-28T00:00:00Z",
+		StepScores: []*EvaluationStepScore{
+			{StepID: "eval-a", Score: 3, MaxScore: 10, ScoreCaptured: true, Reasoning: "first pass", Evidence: "e"},
+		},
+	}
+	newer := &EvaluationReport{
+		TargetRunFolder: "iteration-2",
+		GeneratedAt:     "2026-07-29T00:00:00Z",
+		StepScores: []*EvaluationStepScore{
+			{StepID: "eval-a", Score: 9, MaxScore: 10, ScoreCaptured: true, Reasoning: "second pass", Evidence: "e"},
+			{StepID: "eval-orphaned", Score: 0, MaxScore: 0, Skipped: true, Reasoning: "route not selected", Evidence: "e"},
+		},
+	}
+	if err := hcpo.persistEvalResultsToDB(ctx, older); err != nil {
+		t.Fatalf("persist older: %v", err)
+	}
+	if err := hcpo.persistEvalResultsToDB(ctx, newer); err != nil {
+		t.Fatalf("persist newer: %v", err)
+	}
+
+	planDir := filepath.Join(fsutil.WorkspaceDocsRoot(), workspacePath, "evaluation")
+	if err := os.MkdirAll(planDir, 0o755); err != nil {
+		t.Fatalf("mkdir evaluation dir: %v", err)
+	}
+	plan := `{"steps":[{"id":"eval-a","title":"Signal accuracy","description":"Checks the signal matches the exchange feed."}]}`
+	if err := os.WriteFile(filepath.Join(planDir, "evaluation_plan.json"), []byte(plan), 0o644); err != nil {
+		t.Fatalf("write evaluation_plan.json: %v", err)
+	}
+
+	results, err := LoadEvalResults(ctx, workspacePath, 0)
+	if err != nil {
+		t.Fatalf("LoadEvalResults: %v", err)
+	}
+	if len(results) != 3 {
+		t.Fatalf("expected 3 rows, got %d: %#v", len(results), results)
+	}
+	if results[0].RunFolder != "iteration-2" {
+		t.Fatalf("expected the newer run first, got %#v", results[0])
+	}
+	if results[2].RunFolder != "iteration-1" {
+		t.Fatalf("expected the older run last, got %#v", results[2])
+	}
+
+	var joined, orphaned *EvalResultRecord
+	for i := range results {
+		switch {
+		case results[i].RunFolder == "iteration-2" && results[i].StepID == "eval-a":
+			joined = &results[i]
+		case results[i].StepID == "eval-orphaned":
+			orphaned = &results[i]
+		}
+	}
+	if joined == nil || joined.Title != "Signal accuracy" || joined.Description != "Checks the signal matches the exchange feed." {
+		t.Fatalf("expected the newer eval-a row joined against the plan, got %#v", joined)
+	}
+	if !joined.ScoreCaptured || joined.Score != 9 {
+		t.Fatalf("expected the newer eval-a score to survive the join, got %#v", joined)
+	}
+	if orphaned == nil || orphaned.Title != "" || orphaned.Description != "" || !orphaned.Skipped {
+		t.Fatalf("expected a step absent from the plan to degrade to an empty title/description, not fail, got %#v", orphaned)
 	}
 }
 
