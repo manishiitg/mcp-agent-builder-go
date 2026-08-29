@@ -313,6 +313,168 @@ func TestPulseFindingIssueIDUpdateReloadsExistingStepFindingAcrossReviewerModule
 	}
 }
 
+// TestDifferentModulesSharingATargetKeyDoNotCollide reproduces Sales
+// Outreach PUL-1E38F625: technical_review and strategic_review independently
+// filed unrelated findings that happened to name the same target_key (a
+// workflow-local location reference, not a deliberately shared identity).
+// Before the fix, the second write silently reused the first module's
+// fingerprint via record_pulse_finding's target_key-based dedup and
+// overwrote its content -- the reload showed strategic_review's original
+// finding replaced by technical_review's, with no error or warning.
+func TestDifferentModulesSharingATargetKeyDoNotCollide(t *testing.T) {
+	ctx := context.Background()
+	workspacePath := concernsWorkspace(t)
+	const sharedTargetKey = "planning/plan.json:step-prepare-linkedin-engagement"
+
+	strategic, err := RecordPulseReviewFinding(ctx, workspacePath, "pulse-1", "review-1", PulseReviewFindingInput{
+		Concern: "Engagement cadence escalates faster than the strategy calls for.",
+		Module:  pulsemodules.StrategicReviewID,
+		PulseFindingDetails: PulseFindingDetails{
+			IssueKind:        IssueKindWorkflow,
+			TargetKey:        sharedTargetKey,
+			RecommendedRoute: pulseFindingRouteFixerHandoff,
+			Classification:   "strategy_drift",
+			Severity:         "medium",
+			Summary:          "Cadence escalation outruns the approved strategy.",
+			Impact:           "Outreach frequency drifts from the plan without a review checkpoint.",
+			Evidence:         []string{"planning/plan.json"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("file strategic_review finding: %v", err)
+	}
+
+	technical, err := RecordPulseReviewFinding(ctx, workspacePath, "pulse-2", "review-2", PulseReviewFindingInput{
+		Concern: "The step's tool allowlist is missing a masking capability it needs.",
+		Module:  pulsemodules.TechnicalReviewID,
+		PulseFindingDetails: PulseFindingDetails{
+			IssueKind:      IssueKindWorkflow,
+			TargetKey:      sharedTargetKey,
+			Classification: "correctness_bug",
+			Severity:       "high",
+			Summary:        "Masking-architecture gap in the engagement step.",
+			Impact:         "PII can reach an unmasked tool call.",
+			Evidence:       []string{"planning/step_config.json"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("file technical_review finding: %v", err)
+	}
+
+	if strategic.IssueID == technical.IssueID {
+		t.Fatalf("two unrelated findings from different modules collapsed onto one issue id %q", strategic.IssueID)
+	}
+	if strategic.Fingerprint == technical.Fingerprint {
+		t.Fatalf("two unrelated findings from different modules collapsed onto one fingerprint %q", strategic.Fingerprint)
+	}
+
+	findings, err := LoadPulseFindingLifecycles(ctx, workspacePath, "", -1)
+	if err != nil || len(findings) != 2 {
+		t.Fatalf("load both findings: findings=%+v err=%v", findings, err)
+	}
+	byIssueID := map[string]PulseFindingLifecycle{}
+	for _, finding := range findings {
+		byIssueID[NewPulseIssue(finding).ID] = finding
+	}
+	strategicFinding, ok := byIssueID[strategic.IssueID]
+	if !ok || strategicFinding.Details == nil || strategicFinding.Details.Summary != "Cadence escalation outruns the approved strategy." {
+		t.Fatalf("strategic_review finding content missing or overwritten: %+v", strategicFinding)
+	}
+	if strategicFinding.StepID != pulsemodules.StrategicReviewID {
+		t.Fatalf("strategic_review finding module attribution changed: %+v", strategicFinding)
+	}
+	technicalFinding, ok := byIssueID[technical.IssueID]
+	if !ok || technicalFinding.Details == nil || technicalFinding.Details.Summary != "Masking-architecture gap in the engagement step." {
+		t.Fatalf("technical_review finding content missing or overwritten: %+v", technicalFinding)
+	}
+	if technicalFinding.StepID != pulsemodules.TechnicalReviewID {
+		t.Fatalf("technical_review finding module attribution changed: %+v", technicalFinding)
+	}
+}
+
+// TestSameModuleTargetKeyStillDedupsAcrossPulseRuns proves the fix did not
+// turn target_key dedup into "always new issue": the SAME module reporting
+// the SAME target_key across two different Pulse runs must still converge on
+// one issue, not create a duplicate per run.
+func TestSameModuleTargetKeyStillDedupsAcrossPulseRuns(t *testing.T) {
+	ctx := context.Background()
+	workspacePath := concernsWorkspace(t)
+	const targetKey = "planning/plan.json:step-collect-signals"
+
+	first, err := RecordPulseReviewFinding(ctx, workspacePath, "pulse-1", "review-1", PulseReviewFindingInput{
+		Concern: "The collect-signals step lacks a bounded retry budget.",
+		Module:  pulsemodules.TechnicalReviewID,
+		PulseFindingDetails: PulseFindingDetails{
+			IssueKind: IssueKindWorkflow, TargetKey: targetKey,
+			Classification: "reliability_bug", Severity: "medium",
+			Summary: "Unbounded retry loop.", Impact: "A flaky source can stall the run indefinitely.",
+			Evidence: []string{"planning/plan.json"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("first technical_review finding: %v", err)
+	}
+	second, err := RecordPulseReviewFinding(ctx, workspacePath, "pulse-2", "review-2", PulseReviewFindingInput{
+		Concern: "Confirmed again: the collect-signals step still has no retry budget.",
+		Module:  pulsemodules.TechnicalReviewID,
+		PulseFindingDetails: PulseFindingDetails{
+			IssueKind: IssueKindWorkflow, TargetKey: targetKey,
+			Classification: "reliability_bug", Severity: "medium",
+			Summary: "Unbounded retry loop, still present.", Impact: "A flaky source can stall the run indefinitely.",
+			Evidence: []string{"planning/plan.json"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("second technical_review finding: %v", err)
+	}
+	if first.IssueID != second.IssueID {
+		t.Fatalf("same module/target_key across runs produced two issues: %q vs %q", first.IssueID, second.IssueID)
+	}
+}
+
+// TestHarnessIssueTargetKeyStillDedupsAcrossModules protects the deliberately
+// preserved module-agnostic behavior for harness_issue findings: this is a
+// shared platform identity, and the module-scoping fix for PUL-1E38F625 must
+// not narrow it.
+func TestHarnessIssueTargetKeyStillDedupsAcrossModules(t *testing.T) {
+	ctx := context.Background()
+	workspacePath := concernsWorkspace(t)
+	const targetKey = "harness:agent_browser:tab-acquisition"
+
+	first, err := RecordPulseReviewFinding(ctx, workspacePath, "pulse-1", "review-1", PulseReviewFindingInput{
+		Concern: "agent_browser network reads the wrong tab under shared CDP.",
+		Module:  pulsemodules.TechnicalReviewID,
+		PulseFindingDetails: PulseFindingDetails{
+			IssueKind: IssueKindHarness, TargetKey: targetKey,
+			Classification: "correctness_bug", Severity: "high",
+			Summary: "Wrong tab under shared CDP.", Impact: "Network capture is attributed to the wrong tab.",
+			Evidence:     []string{"agent_go/pkg/browser/browser_tools.go"},
+			Reproduction: PulseFindingReproduction{Safe: true, Expected: "Correct tab", Observed: "Wrong tab"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("first harness finding: %v", err)
+	}
+	second, err := RecordPulseReviewFinding(ctx, workspacePath, "pulse-2", "review-2", PulseReviewFindingInput{
+		Concern: "Independently confirmed: agent_browser network targets the wrong tab.",
+		Module:  pulsemodules.StrategicReviewID,
+		PulseFindingDetails: PulseFindingDetails{
+			IssueKind: IssueKindHarness, TargetKey: targetKey,
+			RecommendedRoute: pulseFindingRouteFixerHandoff,
+			Classification:   "correctness_bug", Severity: "high",
+			Summary: "Wrong tab under shared CDP, reconfirmed.", Impact: "Network capture is attributed to the wrong tab.",
+			Evidence:     []string{"agent_go/pkg/browser/browser_tools.go"},
+			Reproduction: PulseFindingReproduction{Safe: true, Expected: "Correct tab", Observed: "Wrong tab"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("second harness finding: %v", err)
+	}
+	if first.IssueID != second.IssueID {
+		t.Fatalf("harness_issue target_key dedup across modules regressed: %q vs %q", first.IssueID, second.IssueID)
+	}
+}
+
 func TestWorkflowObservationBecomesIssueOnlyWhenReviewerPromotesIt(t *testing.T) {
 	ctx := context.Background()
 	workspacePath := concernsWorkspace(t)
