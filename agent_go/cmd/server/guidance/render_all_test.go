@@ -339,6 +339,23 @@ func TestEvaluationPlanGuidanceCoversOutcomeBasedDurableJudgmentSteps(t *testing
 	}
 }
 
+func TestEvaluationPlanGuidanceAnchorsSubjectiveRatingScales(t *testing.T) {
+	guidance, err := renderFromRegistry("evaluation-plan", tmplData{}, referenceKinds)
+	if err != nil {
+		t.Fatalf("render evaluation-plan: %v", err)
+	}
+	for _, want := range []string{
+		"Write what every point on the scale looks like, not just the ends",
+		"Extract the facts first, judge second",
+		"leniency drift",
+		"Subjective does not mean lower rigor",
+	} {
+		if !strings.Contains(guidance, want) {
+			t.Fatalf("evaluation guidance missing %q\n\nGuidance:\n%s", want, guidance)
+		}
+	}
+}
+
 func TestPulseCostGuidanceReconcilesRawLedgersWithoutDoubleCounting(t *testing.T) {
 	postRun := readPulseDesignSpec(t)
 	opsReview, err := renderFromRegistry("ops-review", tmplData{}, allKinds)
