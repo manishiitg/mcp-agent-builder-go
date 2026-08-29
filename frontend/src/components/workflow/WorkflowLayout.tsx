@@ -511,6 +511,12 @@ function shouldBlockWorkflowNewChatForSession(
   return status === 'running' || status === 'active' || status === 'in_progress'
 }
 
+// restoreWorkflowStateFromEvents has no timeout of its own (it awaits
+// agentApi.getRecentSessionEvents / hydrateTabEvents directly), so every
+// caller that increments restoringWorkflowSessions via
+// beginWorkflowSessionRestore MUST wrap its restore call in this helper --
+// otherwise a hung request leaves that counter incremented forever and the
+// chat pane stuck on "Restoring previous session..." with no way out.
 function withWorkflowRestoreTimeout<T>(promise: Promise<T>, label: string, timeoutMs = WORKFLOW_RESTORE_TIMEOUT_MS): Promise<T> {
   return new Promise((resolve, reject) => {
     const timeout = window.setTimeout(() => {
@@ -1066,7 +1072,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
   //
   //   mobile  → preview/files 480px column, chat takes the rest (review-style)
   //   tablet  → equal 50/50 split between chat and preview
-  //   laptop  → chat is hidden, report fills the full width
+  //   laptop  → compact mobile-width chat beside the full desktop workspace
   //   default → 50/50 split (no preview pref, or running in non-preview views)
   const isResponsiveWorkspaceCanvas = showChatArea && workspacePaneVisible
   const previewPaneTier: 'mobile' | 'tablet' | 'laptop' | null = isResponsiveWorkspaceCanvas
@@ -1098,21 +1104,20 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
   // The report preview preference drives the outer pane width:
   //   mobile/files → right pane 480px, chat fills the rest (chat is col 1, pane col 2)
   //   tablet → report/flow and chat each take half the available width
-  //   laptop → chat is hidden, report/flow fills the full width
+  //   laptop → mobile-width chat, report/flow takes the remaining width
   //   default → normal split pane
-  const laptopHidesChat = previewPaneTier === 'laptop'
   const splitGridCols = previewPaneTier === 'mobile' ? 'md:grid-cols-[minmax(0,1fr)_480px]'
     : previewPaneTier === 'tablet' ? 'md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]'
-    : previewPaneTier === 'laptop' ? 'md:grid-cols-[minmax(0,1fr)]'
+    : previewPaneTier === 'laptop' ? 'md:grid-cols-[minmax(320px,380px)_minmax(0,1fr)]'
     : 'md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]'
   // Animate the GRID TRACK widths on the container so the chat↔report resize
   // glides — the panes just follow their grid column instead of fighting it with
   // per-tier explicit widths. (grid-template-columns animation is supported by
   // the Electron Chromium runtime.)
-  const splitLayoutClassName = !showChatArea || !workspacePaneVisible || laptopHidesChat
+  const splitLayoutClassName = !showChatArea || !workspacePaneVisible
     ? 'flex-1 min-h-0 flex flex-col'
     : `flex-1 min-h-0 flex flex-col md:grid ${splitGridCols} md:grid-rows-[auto_minmax(0,1fr)] md:transition-[grid-template-columns] md:duration-300 md:ease-in-out`
-  const canvasPaneClassName = !showChatArea || laptopHidesChat
+  const canvasPaneClassName = !showChatArea
     ? 'flex-1 min-h-0 min-w-0'
     : !workspacePaneVisible
       ? 'hidden'
@@ -1753,7 +1758,10 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
           } else if (shouldHydrateWorkflowEvents) {
             useChatStore.getState().beginWorkflowSessionRestore(session.sessionId)
             try {
-              await restoreWorkflowStateFromEvents(session.sessionId)
+              await withWorkflowRestoreTimeout(
+                restoreWorkflowStateFromEvents(session.sessionId),
+                `Restoring workflow events for ${session.sessionId}`
+              )
               if (session.isActive || session.status === 'running') {
                 setTabStreaming(tabId, true)
               }
@@ -1920,7 +1928,10 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
           )) {
             useChatStore.getState().beginWorkflowSessionRestore(running.session_id)
             try {
-              await restoreWorkflowStateFromEvents(running.session_id, workspacePath)
+              await withWorkflowRestoreTimeout(
+                restoreWorkflowStateFromEvents(running.session_id, workspacePath),
+                `Restoring workflow events for ${running.session_id}`
+              )
             } catch (error) {
               logger.warn('WorkflowLayout', 'Failed to hydrate newly discovered running workflow tab:', error)
             } finally {
@@ -2357,7 +2368,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
             data-tour="workflow-chat-pane"
             data-testid="tour-workflow-chat-pane"
             onMouseDownCapture={() => setFocusedPane('chat')}
-            className={`${laptopHidesChat ? 'hidden' : chatPaneVisibilityClass} min-h-0 min-w-0 overflow-hidden flex-col bg-background transition-all duration-300 ${
+            className={`${chatPaneVisibilityClass} min-h-0 min-w-0 overflow-hidden flex-col bg-background transition-all duration-300 ${
             workspacePaneVisible
               ? `border-b border-border md:col-start-1 md:row-start-2 md:border-b-0 md:border-r ${shouldUseMobileReportPane ? 'flex-1 md:flex-[1.35]' : 'flex-1 basis-1/2'}`
               : 'flex-1'
