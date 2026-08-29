@@ -46,7 +46,7 @@ finding also mentions tab creation. Reproduce before linking or closing it.
 | P1 | LinkedIn `PUL-90D1E2C9`; `PUL-E45BE152`; Upwork `PUL-E67413EC` | Repair evaluation run identity, route eligibility, and automatic-trigger behavior independently. |
 | ~~P1~~ done | Sales Outreach `PUL-1E38F625` | [PLAT-222](../bugs/pulse_platform/plat-222.md) shipped the module-scoped fix; see above. |
 | P1 | Upwork `PUL-D7D173FB` | [PLAT-218](../bugs/pulse_platform/plat-218.md) corrects the diagnosis: HTTP preserved the outer object, but nested `approved_scope` and `post_run_proof` used the wrong types and the handler hid that fact behind a false outer-object error. Exact field errors and schema/guidance clarification are implemented. |
-| P1 | Upwork `PUL-EDFF0710` | Align injected `db/README.md` instructions with Folder Guard read grants, or stop injecting a requirement that cannot be met. |
+| ~~P1~~ done | Upwork `PUL-EDFF0710` | [PLAT-223](../bugs/pulse_platform/plat-223.md) reworded the injected instruction to fall back to `query_workflow_db describe` rather than auditing every Folder Guard construction site. |
 | P1 | Upwork `PUL-9CCE9488` | Make `agent_browser network` respect the requested tab in shared-CDP mode. |
 | P1 | Upwork `PUL-A8AB0913`; `PUL-E717A5E1` | Separate agent-role costs and expose usable per-item context/call telemetry. |
 | P1 | Sales Outreach `PUL-AAC278EF` | Preserve command stdout/stderr and distinguish an expected non-zero subcommand or HTTP response from a bridge failure. [PLAT-193](../bugs/pulse_platform/plat-193.md) is related but only fixed JSON-shaped arbitrary stdout misclassification. |
