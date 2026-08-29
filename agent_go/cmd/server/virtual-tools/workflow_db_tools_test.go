@@ -25,10 +25,10 @@ func TestWorkflowDBToolDefinitionsExplainSafeShellPayloadEncoding(t *testing.T) 
 
 func TestWorkflowDBToolRegistryExposesQueryAndMutation(t *testing.T) {
 	registry := CreateWorkflowDBToolRegistry("http://127.0.0.1:1", "", "session")
-	if len(registry.Tools) != 2 {
-		t.Fatalf("tools=%d, want 2", len(registry.Tools))
+	if len(registry.Tools) != 3 {
+		t.Fatalf("tools=%d, want 3", len(registry.Tools))
 	}
-	for _, name := range []string{"query_workflow_db", "mutate_workflow_db"} {
+	for _, name := range []string{"query_workflow_db", "mutate_workflow_db", "apply_workflow_db_migration"} {
 		if registry.Executors[name] == nil {
 			t.Fatalf("missing executor %q", name)
 		}

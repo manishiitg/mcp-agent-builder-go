@@ -20,6 +20,49 @@ const workflowDBAccessEnv = "WORKFLOW_DB_ACCESS"
 
 var safeWorkflowDBTableName = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
 
+// safeMigrationFileName allows only a bare filename (no "/", so no traversal
+// out of the workflow's own db/migrations/ folder is representable at all).
+var safeMigrationFileName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\.sql$`)
+
+// These mirror the workspace service's own allow-list (workspace/handlers/
+// query.go: isManagedMigrationStatement/isDestructiveMigrationStatement) as
+// separate per-shape regexes, not one combined pattern -- CREATE/DROP only
+// anchor a prefix (real DDL has more after "IF NOT/IF EXISTS"), while the
+// ALTER forms anchor the whole statement, so a shared trailing "$" would
+// silently break the CREATE/DROP branches. Kept as a separate copy because
+// agent_go and workspace are different Go modules; this copy exists only to
+// fail closed with a clear per-statement error before the HTTP round trip,
+// not as the authorization boundary -- the workspace service re-validates
+// every statement server-side regardless. PRAGMA and ATTACH are deliberately
+// never part of this set: PRAGMA can change database-wide behavior other
+// concurrent readers/writers depend on, and ATTACH opens an arbitrary
+// filesystem path outside FolderGuard's authorization entirely.
+var (
+	managedWorkflowDBCreateSQL      = regexp.MustCompile(`(?is)^\s*CREATE\s+(?:TABLE|INDEX)\s+IF\s+NOT\s+EXISTS\b`)
+	managedWorkflowDBDropSQL        = regexp.MustCompile(`(?is)^\s*DROP\s+(?:TABLE|INDEX)\s+IF\s+EXISTS\b`)
+	managedWorkflowDBAlterAddColumn = regexp.MustCompile(`(?is)^\s*ALTER\s+TABLE\s+\S.*\s+ADD\s+COLUMN\s+\S.*$`)
+	managedWorkflowDBAlterRename    = regexp.MustCompile(`(?is)^\s*ALTER\s+TABLE\s+\S.*\s+RENAME\s+(?:TO\s+\S+|COLUMN\s+\S+\s+TO\s+\S+)\s*$`)
+	managedWorkflowDBAlterDropCol   = regexp.MustCompile(`(?is)^\s*ALTER\s+TABLE\s+\S.*\s+DROP\s+COLUMN\s+\S+\s*$`)
+)
+
+// isManagedWorkflowDBMigrationStatement reports whether one migration string
+// matches an allow-listed schema-change shape, exactly mirroring the
+// workspace service's own gate.
+func isManagedWorkflowDBMigrationStatement(statement string) bool {
+	return managedWorkflowDBCreateSQL.MatchString(statement) ||
+		managedWorkflowDBDropSQL.MatchString(statement) ||
+		managedWorkflowDBAlterAddColumn.MatchString(statement) ||
+		managedWorkflowDBAlterRename.MatchString(statement) ||
+		managedWorkflowDBAlterDropCol.MatchString(statement)
+}
+
+// workflowDBMigrationEnvelopeStatement recognizes the BEGIN/COMMIT wrapper a
+// migration file conventionally uses for its own transactional intent (see
+// db/migrations/*.sql). InitializeWorkflowDB already applies every migration
+// in the file inside one transaction, so these statements are dropped rather
+// than sent -- the backend's single-statement validator would reject them.
+var workflowDBMigrationEnvelopeStatement = regexp.MustCompile(`(?is)^(BEGIN(\s+(IMMEDIATE|EXCLUSIVE|DEFERRED))?(\s+TRANSACTION)?|COMMIT(\s+TRANSACTION)?|END(\s+TRANSACTION)?)$`)
+
 // workflowDBDescribeAllSQL lists every user table and view. It is the schema
 // source for action=describe and for the schema hint attached to a failed query,
 // so both answer from the same statement.
@@ -74,7 +117,7 @@ func workflowDBQueryToolDefinition() llmtypes.Tool {
 func workflowDBMutateToolDefinition() llmtypes.Tool {
 	return llmtypes.Tool{Type: "function", Function: &llmtypes.FunctionDefinition{
 		Name:        "mutate_workflow_db",
-		Description: "Mutate rows in the current workflow SQLite database. Needs trusted DB write authority. Pass sql (and optional params) for one statement, same shape as query_workflow_db; pass statements with 1-20 entries for an all-or-nothing batch. Prefer INSERT ... ON CONFLICT DO UPDATE (upsert by the table's declared primary key) over DELETE or a wholesale overwrite — a table is shared across groups/runs, and deleting/replacing rows can clobber another writer's data. Check db/README.md for the table's primary key and upsert rule before writing; a genuine DELETE is for rows this step itself owns and is retiring, not routine updates. Schema changes use migrations.",
+		Description: "Mutate rows in the current workflow SQLite database. Needs trusted DB write authority. Pass sql (and optional params) for one statement, same shape as query_workflow_db; pass statements with 1-20 entries for an all-or-nothing batch. Prefer INSERT ... ON CONFLICT DO UPDATE (upsert by the table's declared primary key) over DELETE or a wholesale overwrite — a table is shared across groups/runs, and deleting/replacing rows can clobber another writer's data. Check db/README.md for the table's primary key and upsert rule before writing; a genuine DELETE is for rows this step itself owns and is retiring, not routine updates. Schema changes (new tables/indexes) are not accepted here -- write the migration to db/migrations/ with ordinary file tools, then call apply_workflow_db_migration.",
 		Parameters: llmtypes.NewParameters(map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -94,6 +137,120 @@ func workflowDBMutateToolDefinition() llmtypes.Tool {
 			},
 		}),
 	}}
+}
+
+func workflowDBApplyMigrationToolDefinition() llmtypes.Tool {
+	return llmtypes.Tool{Type: "function", Function: &llmtypes.FunctionDefinition{
+		Name:        "apply_workflow_db_migration",
+		Description: "Apply a schema migration already written to this workflow's db/migrations/<file>.sql to the live workflow database. Needs trusted DB write authority, same as mutate_workflow_db. Pass only the filename (no path) of a file already saved under db/migrations/; this tool never accepts inline SQL. The file may contain CREATE TABLE/INDEX IF NOT EXISTS, DROP TABLE/INDEX IF EXISTS, and ALTER TABLE RENAME TO / RENAME COLUMN / ADD COLUMN / DROP COLUMN statements (an optional BEGIN/COMMIT transaction wrapper around them is fine and is stripped automatically). Every statement runs in one all-or-nothing transaction. CREATE/DROP are idempotent -- re-applying an already-applied migration is a safe no-op; a repeated ALTER instead fails loudly, which is also safe. Any DROP, RENAME, or DROP COLUMN automatically snapshots the database first (VACUUM INTO) since there is no approval gate on this route; the response's backup_path is the recovery point if the migration turns out wrong. PRAGMA and ATTACH are never accepted, in any file. This tool cannot mutate rows -- write the migration file first with ordinary file tools, following the db/migrations/YYYY-MM-DD-slug.sql convention, then call this tool to apply it.",
+		Parameters: llmtypes.NewParameters(map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"migration_file": map[string]any{"type": "string", "description": "Bare filename of the migration under db/migrations/, e.g. \"2026-08-06-action-outcome-measurement.sql\". No path separators."},
+			},
+			"required": []string{"migration_file"},
+		}),
+	}}
+}
+
+// splitSQLStatements splits a SQL script into individual statements on
+// top-level semicolons, tracking quoted text and comments so a semicolon
+// inside a string literal or comment never creates a spurious split.
+func splitSQLStatements(script string) []string {
+	var statements []string
+	var current strings.Builder
+	const (
+		plain = iota
+		single
+		double
+		backtick
+		lineComment
+		blockComment
+	)
+	state := plain
+	runes := []rune(script)
+	for i := 0; i < len(runes); i++ {
+		ch := runes[i]
+		var next rune
+		if i+1 < len(runes) {
+			next = runes[i+1]
+		}
+		switch state {
+		case plain:
+			switch {
+			case ch == '\'':
+				state = single
+			case ch == '"':
+				state = double
+			case ch == '`':
+				state = backtick
+			case ch == '-' && next == '-':
+				state = lineComment
+			case ch == '/' && next == '*':
+				state = blockComment
+			case ch == ';':
+				statements = append(statements, current.String())
+				current.Reset()
+				continue
+			}
+		case single:
+			if ch == '\'' {
+				state = plain
+			}
+		case double:
+			if ch == '"' {
+				state = plain
+			}
+		case backtick:
+			if ch == '`' {
+				state = plain
+			}
+		case lineComment:
+			if ch == '\n' {
+				state = plain
+			}
+		case blockComment:
+			if ch == '*' && next == '/' {
+				state = plain
+			}
+		}
+		current.WriteRune(ch)
+	}
+	if strings.TrimSpace(current.String()) != "" {
+		statements = append(statements, current.String())
+	}
+	return statements
+}
+
+// parseManagedMigrationStatements turns a migration file's contents into the
+// flat []string InitializeWorkflowDB expects: transaction-envelope statements
+// (BEGIN/COMMIT) removed, everything else required to already be an
+// idempotent CREATE TABLE/INDEX IF NOT EXISTS statement. It fails closed and
+// names the offending statement rather than forwarding something the
+// workspace service would reject anyway with a less specific error.
+func parseManagedMigrationStatements(script string) ([]string, error) {
+	var statements []string
+	for _, raw := range splitSQLStatements(script) {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+		if workflowDBMigrationEnvelopeStatement.MatchString(trimmed) {
+			continue
+		}
+		if !isManagedWorkflowDBMigrationStatement(trimmed) {
+			preview := trimmed
+			if len(preview) > 200 {
+				preview = preview[:200] + "..."
+			}
+			return nil, fmt.Errorf("migration statement is not an allowed schema-change shape (CREATE TABLE/INDEX IF NOT EXISTS, DROP TABLE/INDEX IF EXISTS, or ALTER TABLE RENAME TO/RENAME COLUMN/ADD COLUMN/DROP COLUMN): %s", preview)
+		}
+		statements = append(statements, trimmed)
+	}
+	if len(statements) == 0 {
+		return nil, fmt.Errorf("migration file contains no CREATE TABLE/INDEX IF NOT EXISTS statements")
+	}
+	return statements, nil
 }
 
 // CreateWorkflowDBToolRegistry creates one implementation shared by Builder,
@@ -250,16 +407,68 @@ func CreateWorkflowDBToolRegistry(workspaceURL, userID, fallbackSessionID string
 		return string(encoded), nil
 	}
 
-	tools := []llmtypes.Tool{workflowDBQueryToolDefinition(), workflowDBMutateToolDefinition()}
+	migrationExecutor := func(ctx context.Context, args map[string]any) (string, error) {
+		sessionID, cfg, err := resolveWorkflowDBSession(ctx, fallbackSessionID)
+		if err != nil {
+			return "", err
+		}
+		if access := strings.TrimSpace(cfg.Env[workflowDBAccessEnv]); access != "read-write" {
+			return "", fmt.Errorf("workflow database migration denied for session %q: explicit db_access=read-write is required (effective value %q)", sessionID, access)
+		}
+		filename := strings.TrimSpace(fmt.Sprint(args["migration_file"]))
+		if filename == "" || filename == "<nil>" {
+			return "", fmt.Errorf("migration_file is required: the bare filename of a .sql file already saved under db/migrations/")
+		}
+		if !safeMigrationFileName.MatchString(filename) {
+			return "", fmt.Errorf("migration_file must be a bare filename ending in .sql, with no path separators: got %q", filename)
+		}
+		migrationPath, err := resolveWorkflowMigrationFilePath(sessionID, cfg, filename)
+		if err != nil {
+			return "", err
+		}
+		dbPath, err := resolveWorkflowDBPathFromConfig(sessionID, cfg)
+		if err != nil {
+			return "", err
+		}
+		file, err := client.ReadWorkspaceFile(ctx, workspace.ReadWorkspaceFileParams{Filepath: migrationPath})
+		if err != nil {
+			return "", fmt.Errorf("read migration file %q: %w", migrationPath, err)
+		}
+		statements, err := parseManagedMigrationStatements(file.Content)
+		if err != nil {
+			return "", fmt.Errorf("migration file %q: %w", migrationPath, err)
+		}
+		result, err := client.InitializeWorkflowDB(ctx, workspace.InitializeWorkflowDBParams{DBPath: dbPath, Migrations: statements})
+		if err != nil {
+			return "", fmt.Errorf("apply migration %q: %w", migrationPath, err)
+		}
+		response := map[string]any{
+			"applied_file":       migrationPath,
+			"statements_applied": len(statements),
+		}
+		if result.BackupPath != "" {
+			response["backup_path"] = result.BackupPath
+			response["note"] = "a destructive statement (DROP/RENAME/DROP COLUMN) was applied; backup_path is a pre-migration snapshot to recover from if this turns out wrong"
+		}
+		encoded, err := json.Marshal(response)
+		if err != nil {
+			return "", fmt.Errorf("encode migration result: %w", err)
+		}
+		return string(encoded), nil
+	}
+
+	tools := []llmtypes.Tool{workflowDBQueryToolDefinition(), workflowDBMutateToolDefinition(), workflowDBApplyMigrationToolDefinition()}
 	return WorkflowDBToolRegistry{
 		Tools: tools,
 		Executors: map[string]func(context.Context, map[string]any) (string, error){
-			"query_workflow_db":  queryExecutor,
-			"mutate_workflow_db": mutationExecutor,
+			"query_workflow_db":           queryExecutor,
+			"mutate_workflow_db":          mutationExecutor,
+			"apply_workflow_db_migration": migrationExecutor,
 		},
 		Categories: map[string]string{
-			"query_workflow_db":  WorkflowDBToolCategory,
-			"mutate_workflow_db": WorkflowDBToolCategory,
+			"query_workflow_db":           WorkflowDBToolCategory,
+			"mutate_workflow_db":          WorkflowDBToolCategory,
+			"apply_workflow_db_migration": WorkflowDBToolCategory,
 		},
 	}
 }
@@ -289,7 +498,7 @@ func workflowDBParams(args map[string]any) []interface{} {
 }
 
 func WorkflowDBToolNames() map[string]bool {
-	return map[string]bool{"query_workflow_db": true, "mutate_workflow_db": true}
+	return map[string]bool{"query_workflow_db": true, "mutate_workflow_db": true, "apply_workflow_db_migration": true}
 }
 
 func resolveCurrentWorkflowDBPath(ctx context.Context, fallbackSessionID string) (string, error) {
@@ -318,8 +527,32 @@ func resolveWorkflowDBSession(ctx context.Context, fallbackSessionID string) (st
 }
 
 func resolveWorkflowDBPathFromConfig(sessionID string, cfg *common.SessionShellConfig) (string, error) {
-	if dbPath := workflowDBPathFromCandidate(cfg.Env["DB_PATH"]); dbPath != "" {
-		return dbPath, nil
+	folder, err := resolveWorkflowWorkspaceFolder(sessionID, cfg)
+	if err != nil {
+		return "", err
+	}
+	return filepath.ToSlash(filepath.Join(folder, "db", "db.sqlite")), nil
+}
+
+// resolveWorkflowMigrationFilePath resolves a bare migration filename (already
+// validated against safeMigrationFileName by the caller) to that workflow's
+// own db/migrations/<filename>, scoped by the same session context as the
+// live database path. The model never supplies a directory.
+func resolveWorkflowMigrationFilePath(sessionID string, cfg *common.SessionShellConfig, filename string) (string, error) {
+	folder, err := resolveWorkflowWorkspaceFolder(sessionID, cfg)
+	if err != nil {
+		return "", err
+	}
+	return filepath.ToSlash(filepath.Join(folder, "db", "migrations", filename)), nil
+}
+
+// resolveWorkflowWorkspaceFolder finds the owning "Workflow/<name>" folder for
+// the trusted session, from DB_PATH or, failing that, its read/write paths and
+// working dir. Shared by every resolver that needs to address a location
+// inside that workflow's own db/ tree from the session context alone.
+func resolveWorkflowWorkspaceFolder(sessionID string, cfg *common.SessionShellConfig) (string, error) {
+	if folder := workflowDBWorkspacePathFromCandidate(cfg.Env["DB_PATH"]); folder != "" {
+		return folder, nil
 	}
 	candidates := append([]string{}, cfg.ReadPaths...)
 	candidates = append(candidates, cfg.WritePaths...)
@@ -327,9 +560,9 @@ func resolveWorkflowDBPathFromConfig(sessionID string, cfg *common.SessionShellC
 	seen := map[string]bool{}
 	var matches []string
 	for _, candidate := range candidates {
-		if dbPath := workflowDBPathFromCandidate(candidate); dbPath != "" && !seen[dbPath] {
-			seen[dbPath] = true
-			matches = append(matches, dbPath)
+		if folder := workflowDBWorkspacePathFromCandidate(candidate); folder != "" && !seen[folder] {
+			seen[folder] = true
+			matches = append(matches, folder)
 		}
 	}
 	if len(matches) == 1 {
@@ -339,14 +572,6 @@ func resolveWorkflowDBPathFromConfig(sessionID string, cfg *common.SessionShellC
 		return "", fmt.Errorf("workflow database context is ambiguous for session %q", sessionID)
 	}
 	return "", fmt.Errorf("workflow database context is unavailable for session %q", sessionID)
-}
-
-func workflowDBPathFromCandidate(candidate string) string {
-	workspacePath := workflowDBWorkspacePathFromCandidate(candidate)
-	if workspacePath == "" {
-		return ""
-	}
-	return filepath.ToSlash(filepath.Join(workspacePath, "db", "db.sqlite"))
 }
 
 // workflowDBWorkspacePathFromCandidate extracts the owning workflow's own

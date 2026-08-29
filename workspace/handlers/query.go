@@ -34,7 +34,71 @@ const (
 	maximumPragmaErrors = 1_000
 )
 
-var managedMigrationSQL = regexp.MustCompile(`(?is)^\s*CREATE\s+(?:TABLE|INDEX)\s+IF\s+NOT\s+EXISTS\b`)
+// Managed migration statements are schema-only DDL, individually allow-listed
+// by shape rather than parsed. SQLite itself is still the final authority on
+// whether a statement that matches one of these shapes is actually valid.
+//
+// CREATE/DROP are required to be idempotent (IF NOT EXISTS / IF EXISTS) so
+// re-applying a migration file is always a safe no-op. ALTER has no such
+// idempotent form in SQLite, so an ALTER that has already been applied fails
+// loudly on retry instead of silently doing nothing -- safe, just not a
+// no-op. PRAGMA and ATTACH are deliberately never allow-listed here: PRAGMA
+// can change database-wide behavior other concurrent readers/writers depend
+// on (e.g. journal_mode), and ATTACH opens an arbitrary filesystem path
+// outside FolderGuard's authorization entirely.
+var (
+	managedCreateSQL      = regexp.MustCompile(`(?is)^\s*CREATE\s+(?:TABLE|INDEX)\s+IF\s+NOT\s+EXISTS\b`)
+	managedDropSQL        = regexp.MustCompile(`(?is)^\s*DROP\s+(?:TABLE|INDEX)\s+IF\s+EXISTS\b`)
+	managedAlterAddColumn = regexp.MustCompile(`(?is)^\s*ALTER\s+TABLE\s+\S.*\s+ADD\s+COLUMN\s+\S.*$`)
+	managedAlterRename    = regexp.MustCompile(`(?is)^\s*ALTER\s+TABLE\s+\S.*\s+RENAME\s+(?:TO\s+\S+|COLUMN\s+\S+\s+TO\s+\S+)\s*$`)
+	managedAlterDropCol   = regexp.MustCompile(`(?is)^\s*ALTER\s+TABLE\s+\S.*\s+DROP\s+COLUMN\s+\S+\s*$`)
+)
+
+// isManagedMigrationStatement reports whether one migration string matches an
+// allow-listed schema-change shape.
+func isManagedMigrationStatement(statement string) bool {
+	return managedCreateSQL.MatchString(statement) ||
+		managedDropSQL.MatchString(statement) ||
+		managedAlterAddColumn.MatchString(statement) ||
+		managedAlterRename.MatchString(statement) ||
+		managedAlterDropCol.MatchString(statement)
+}
+
+// isDestructiveMigrationStatement reports whether a statement can remove an
+// existing table, column, or the name a caller resolves it by. ADD COLUMN is
+// excluded: it can only add data, never remove or rename it.
+func isDestructiveMigrationStatement(statement string) bool {
+	return managedDropSQL.MatchString(statement) ||
+		managedAlterRename.MatchString(statement) ||
+		managedAlterDropCol.MatchString(statement)
+}
+
+// backupDatabaseBeforeDestructiveMigration writes a transactionally
+// consistent VACUUM INTO snapshot of fullPath before a destructive migration
+// runs. There is no human-approval gate in front of InitializeWorkflowDB, so
+// this snapshot is the only recovery path if a DROP/RENAME/DROP COLUMN turns
+// out to be wrong.
+func backupDatabaseBeforeDestructiveMigration(ctx context.Context, fullPath string) (string, error) {
+	backupDir := filepath.Join(filepath.Dir(fullPath), "migrations", ".backups")
+	if err := os.MkdirAll(backupDir, 0o755); err != nil {
+		return "", fmt.Errorf("create migration backup folder: %w", err)
+	}
+	// Nanosecond epoch, not a second-resolution timestamp: two destructive
+	// migrations applied back to back in the same second would otherwise
+	// collide on this filename, and VACUUM INTO refuses to overwrite an
+	// existing file.
+	backupPath := filepath.Join(backupDir, fmt.Sprintf("%d-pre-migration.sqlite", time.Now().UTC().UnixNano()))
+	db, err := openMutationDB(fullPath)
+	if err != nil {
+		return "", fmt.Errorf("open database for pre-migration backup: %w", err)
+	}
+	defer db.Close()
+	quoted := "'" + strings.ReplaceAll(backupPath, "'", "''") + "'"
+	if _, err := db.ExecContext(ctx, "VACUUM INTO "+quoted); err != nil {
+		return "", fmt.Errorf("snapshot database before destructive migration: %w", err)
+	}
+	return backupPath, nil
+}
 
 // dbTablesSampleRows is how many sample rows the inspector returns per table.
 const dbTablesSampleRows = 50
@@ -87,9 +151,18 @@ func openMutationDB(fullPath string) (*sql.DB, error) {
 }
 
 // InitializeWorkflowDB is the generic, trusted database-template primitive.
-// It creates only a workspace-relative db.sqlite and accepts only idempotent
-// CREATE TABLE/INDEX migrations. Normal UI reads still use /api/query and
-// agent-owned row writes still use the authorized /api/mutate route.
+// It creates only a workspace-relative db.sqlite and accepts a bounded set of
+// schema-only migration statements -- idempotent CREATE TABLE/INDEX IF NOT
+// EXISTS, idempotent DROP TABLE/INDEX IF EXISTS, and ALTER TABLE RENAME
+// TO/RENAME COLUMN/ADD COLUMN/DROP COLUMN. There is no human-approval gate on
+// this route, so any destructive statement (DROP, RENAME, DROP COLUMN --
+// never ADD COLUMN, which cannot lose data) triggers an automatic VACUUM INTO
+// snapshot of the database before the migration runs; its path is returned so
+// the caller can recover from it. PRAGMA and ATTACH remain out of scope
+// entirely: PRAGMA can change database-wide behavior other concurrent
+// readers/writers depend on, and ATTACH opens an arbitrary filesystem path
+// outside FolderGuard's authorization. Normal UI reads still use /api/query
+// and agent-owned row writes still use the authorized /api/mutate route.
 func InitializeWorkflowDB(c *gin.Context) {
 	var req models.InitializeDatabaseRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -105,10 +178,14 @@ func InitializeWorkflowDB(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse[any]{Success: false, Message: "Invalid db_path", Error: "managed databases must use <workspace>/db/db.sqlite"})
 		return
 	}
+	destructive := false
 	for index, migration := range req.Migrations {
-		if len(migration) > maximumMutationSQL || !managedMigrationSQL.MatchString(migration) || strings.Contains(migration, ";") {
-			c.JSON(http.StatusBadRequest, models.APIResponse[any]{Success: false, Message: "Migration rejected", Error: fmt.Sprintf("migration %d must be one idempotent CREATE TABLE/INDEX statement", index+1)})
+		if len(migration) > maximumMutationSQL || !isManagedMigrationStatement(migration) || strings.Contains(migration, ";") {
+			c.JSON(http.StatusBadRequest, models.APIResponse[any]{Success: false, Message: "Migration rejected", Error: fmt.Sprintf("migration %d must be one CREATE TABLE/INDEX IF NOT EXISTS, DROP TABLE/INDEX IF EXISTS, or ALTER TABLE RENAME TO/RENAME COLUMN/ADD COLUMN/DROP COLUMN statement", index+1)})
 			return
+		}
+		if isDestructiveMigrationStatement(migration) {
+			destructive = true
 		}
 	}
 
@@ -122,6 +199,18 @@ func InitializeWorkflowDB(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse[any]{Success: false, Message: "Failed to create database folder", Error: err.Error()})
 		return
 	}
+
+	var backupPath string
+	if destructive {
+		if _, statErr := os.Stat(fullPath); statErr == nil {
+			backupPath, err = backupDatabaseBeforeDestructiveMigration(c.Request.Context(), fullPath)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, models.APIResponse[any]{Success: false, Message: "Failed to snapshot database before destructive migration", Error: err.Error()})
+				return
+			}
+		}
+	}
+
 	dsn := (&url.URL{Scheme: "file", Path: fullPath}).String() + "?_pragma=busy_timeout(5000)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -146,7 +235,12 @@ func InitializeWorkflowDB(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse[any]{Success: false, Message: "Failed to commit migration", Error: err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, models.APIResponse[map[string]any]{Success: true, Message: "Database initialized", Data: map[string]any{"db_path": cleanRequest}})
+	log.Printf("[WORKFLOW_DB_MIGRATION] user=%q db=%q statements=%d destructive=%v backup=%q", getUserID(c), cleanRequest, len(req.Migrations), destructive, backupPath)
+	data := map[string]any{"db_path": cleanRequest}
+	if backupPath != "" {
+		data["backup_path"] = backupPath
+	}
+	c.JSON(http.StatusOK, models.APIResponse[map[string]any]{Success: true, Message: "Database initialized", Data: data})
 }
 
 // scanRows reads all rows of a *sql.Rows into []map[string]interface{}, keyed by
