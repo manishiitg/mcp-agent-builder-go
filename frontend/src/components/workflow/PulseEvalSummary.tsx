@@ -4,16 +4,13 @@ import { agentApi } from '../../services/api'
 import type { EvalResultRecord } from '../../services/api-types'
 import { WORKFLOW_LOG_REFRESH_EVENT } from './workflowEvents'
 
-function recordedLabel(value: string): string {
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
-}
-
 /** A step "passes" only once it has a captured score at or above half its max. */
 function stepPassed(step: EvalResultRecord): boolean {
   if (step.skipped || !step.score_captured) return false
   return step.max_score <= 0 || step.score >= step.max_score / 2
 }
+
+const MAX_TREND_RUNS = 8
 
 export function PulseEvalSummary({
   workspacePath,
@@ -48,23 +45,26 @@ export function PulseEvalSummary({
     return () => window.removeEventListener(WORKFLOW_LOG_REFRESH_EVENT, refresh)
   }, [load])
 
-  const runs = useMemo(() => {
-    const byRun = new Map<string, EvalResultRecord[]>()
+  const { latestRunFolder, steps, trendsByStepID } = useMemo(() => {
+    // Results arrive newest-first; the first row seen for any step_id is that
+    // step's most recent run, which is also this workflow's latest eval run.
+    const latestByStep = new Map<string, EvalResultRecord>()
+    const runsByStep = new Map<string, EvalResultRecord[]>()
     for (const result of results) {
-      const steps = byRun.get(result.run_folder) || []
-      steps.push(result)
-      byRun.set(result.run_folder, steps)
+      if (!latestByStep.has(result.step_id)) latestByStep.set(result.step_id, result)
+      const runs = runsByStep.get(result.step_id) || []
+      runs.push(result)
+      runsByStep.set(result.step_id, runs)
     }
-    // Each run's own most recent generated_at orders the run list; results
-    // arrive newest-first from the backend, so the first row seen per run is
-    // already that run's latest timestamp.
-    return Array.from(byRun.entries())
-      .map(([runFolder, steps]) => ({ runFolder, steps, generatedAt: steps[0]?.generated_at || '' }))
-      .sort((a, b) => b.generatedAt.localeCompare(a.generatedAt))
+    const latest = [...latestByStep.values()]
+    const runFolder = latest[0]?.run_folder
+    const trends = new Map<string, EvalResultRecord[]>()
+    for (const [stepID, runs] of runsByStep) {
+      // Oldest-first, capped, so the trend reads left-to-right as a timeline.
+      trends.set(stepID, runs.slice(0, MAX_TREND_RUNS).reverse())
+    }
+    return { latestRunFolder: runFolder, steps: latest, trendsByStepID: trends }
   }, [results])
-
-  const latestRun = runs[0]
-  const previousRuns = runs.slice(1, 6)
 
   return (
     <section className={`min-w-0 overflow-hidden rounded-xl border bg-background ${className}`} aria-label="Evaluation results">
@@ -72,7 +72,7 @@ export function PulseEvalSummary({
         <div>
           <h3 className="text-sm font-semibold text-foreground">Evaluation</h3>
           <p className="mt-0.5 text-[11px] text-muted-foreground">
-            What each eval step checked and its latest score, one criterion at a time
+            {latestRunFolder ? `Latest run · ${latestRunFolder}` : 'Each criterion’s latest score and its trend across recent runs'}
           </p>
         </div>
         <button
@@ -92,65 +92,47 @@ export function PulseEvalSummary({
         <div className="flex min-h-32 items-center justify-center gap-2 text-xs text-muted-foreground">
           <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading evaluation results…
         </div>
-      ) : !latestRun ? (
+      ) : steps.length === 0 ? (
         <div className="flex min-h-32 items-center justify-center text-xs text-muted-foreground">No evaluation results yet.</div>
       ) : (
-        <>
-          <div className="border-b bg-muted/20 px-4 py-2 text-[11px] text-muted-foreground">
-            Latest run · {latestRun.runFolder} · {recordedLabel(latestRun.generatedAt)}
-          </div>
-          <div className="divide-y">
-            {latestRun.steps.map((step) => {
-              const Icon = step.skipped ? MinusCircle : stepPassed(step) ? CheckCircle2 : XCircle
-              const iconTone = step.skipped
-                ? 'text-muted-foreground'
-                : stepPassed(step) ? 'text-emerald-500' : 'text-red-500'
-              return (
-                <div key={step.step_id} className="px-4 py-3">
-                  <div className="flex items-start gap-2">
-                    <Icon className={`mt-0.5 h-4 w-4 shrink-0 ${iconTone}`} />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
-                        <span className="font-medium text-foreground">{step.title || step.step_id}</span>
-                        {step.skipped ? (
-                          <span className="text-muted-foreground">skipped this run</span>
-                        ) : step.score_captured ? (
-                          <span className="text-muted-foreground">{step.score} / {step.max_score}</span>
-                        ) : (
-                          <span className="text-muted-foreground">no score captured</span>
-                        )}
-                      </div>
-                      {step.reasoning && (
-                        <p className="mt-1 text-xs leading-5 text-muted-foreground">{step.reasoning}</p>
-                      )}
-                      {step.evidence && (
-                        <p className="mt-1 text-[11px] leading-5 text-muted-foreground/80">Evidence: {step.evidence}</p>
-                      )}
-                    </div>
-                  </div>
+        <div className="divide-y">
+          {steps.map((step) => {
+            const Icon = step.skipped ? MinusCircle : stepPassed(step) ? CheckCircle2 : XCircle
+            const iconTone = step.skipped
+              ? 'text-muted-foreground'
+              : stepPassed(step) ? 'text-emerald-500' : 'text-red-500'
+            const trend = trendsByStepID.get(step.step_id) || []
+            return (
+              <div key={step.step_id} className="flex items-center gap-3 px-4 py-2.5">
+                <Icon className={`h-4 w-4 shrink-0 ${iconTone}`} />
+                <div className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
+                  {step.title || step.step_id}
                 </div>
-              )
-            })}
-          </div>
-
-          {previousRuns.length > 0 && (
-            <div className="border-t px-4 py-2.5">
-              <div className="mb-1.5 text-[11px] font-medium text-muted-foreground">Previous runs</div>
-              <div className="space-y-1">
-                {previousRuns.map((run) => {
-                  const scored = run.steps.filter((step) => !step.skipped && step.score_captured)
-                  const passed = scored.filter(stepPassed).length
-                  return (
-                    <div key={run.runFolder} className="flex items-center justify-between text-[11px] text-muted-foreground">
-                      <span className="truncate">{run.runFolder}</span>
-                      <span className="shrink-0 pl-2">{recordedLabel(run.generatedAt)} · {passed}/{scored.length} passed</span>
-                    </div>
-                  )
-                })}
+                <div className="shrink-0 text-xs text-muted-foreground">
+                  {step.skipped
+                    ? 'skipped'
+                    : step.score_captured
+                      ? `${step.score} / ${step.max_score}`
+                      : 'no score'}
+                </div>
+                {trend.length > 1 && (
+                  <div className="flex shrink-0 items-center gap-0.5" title="Score across recent runs, oldest to newest">
+                    {trend.map((run) => (
+                      <span
+                        key={run.run_folder}
+                        className={`h-1.5 w-1.5 rounded-full ${
+                          run.skipped
+                            ? 'bg-muted-foreground/40'
+                            : run.score_captured && stepPassed(run) ? 'bg-emerald-500' : 'bg-red-500'
+                        }`}
+                      />
+                    ))}
+                  </div>
+                )}
               </div>
-            </div>
-          )}
-        </>
+            )
+          })}
+        </div>
       )}
     </section>
   )
