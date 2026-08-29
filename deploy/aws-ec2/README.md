@@ -182,24 +182,40 @@ and hardware metadata—not all of `/proc`. Do not run the service as root, gran
 it `CAP_SYS_ADMIN`, or broaden `/proc`, because doing so could expose other
 service processes' environments.
 
-**On Ubuntu 23.10+/24.04 hosts, verify the mount-namespace fallback actually
-works, not just that Landlock's own preflight passes.** Landlock is purely
-additive (no allow-with-carve-out rules) and rejects any Folder Guard policy
-that needs one — e.g. write access to a folder except one of its
-subfolders — falling through to the mount-namespace path instead. Found live
-on the Dominion Hetzner deployment (`dominion-hetzner.md`) 2026-08-28:
-Ubuntu 24.04 defaults `kernel.apparmor_restrict_unprivileged_userns=1`, which
-blocks unprivileged mount-namespace creation for any process without an
-explicit AppArmor profile — independent of `kernel.unprivileged_userns_clone`,
-which can show enabled while this still blocks the fallback. Symptom:
-`SANDBOX_UNAVAILABLE: Landlock cannot represent this Folder Guard policy and
-mount namespaces are unavailable: ...`. Check
-`cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns` — if it's `1`,
-decide (this is a real security trade-off, not a default to reach for)
-between disabling it host-wide (`kernel.apparmor_restrict_unprivileged_userns=0`
-via `/etc/sysctl.d/`, simplest but loosens every process on a shared host)
-or a narrower AppArmor profile granting `userns_create` to only this
-product's own binaries.
+**Verify the mount-namespace fallback actually works, not just that
+Landlock's own preflight passes.** Landlock is purely additive (no
+allow-with-carve-out rules) and rejects any Folder Guard policy that needs
+one — e.g. write access to a folder except one of its subfolders — falling
+through to the mount-namespace path instead. Found live on the Dominion
+Hetzner deployment (`dominion-hetzner.md`) 2026-08-28/29 as two stacked
+bugs, both now fixed:
+
+1. **Application bug, fixed in `workspace/security/isolator.go`/
+   `isolator_linux.go`**: the fallback ran a plain `unshare -m` (mount
+   namespace only, no `-U`/`--user`), which needs real `CAP_SYS_ADMIN` in
+   the *current* user namespace — something an unprivileged service account
+   never has. It failed with `Operation not permitted` on every rootless
+   deployment, unconditionally, making the fallback permanently
+   non-functional regardless of any OS setting. Fixed by adding
+   `--user --map-root-user` (the standard unprivileged-mount-namespace
+   pattern rootless container runtimes use). Any deployment built from a
+   `workspace` module at or after this fix already has it — no action
+   needed beyond redeploying.
+2. **Ubuntu 23.10+/24.04-specific, still needs a per-host check**:
+   `kernel.apparmor_restrict_unprivileged_userns` defaults to `1`, which
+   separately blocks unprivileged user-namespace creation for any process
+   without an explicit AppArmor profile, independent of
+   `kernel.unprivileged_userns_clone` (which can show enabled while this
+   still blocks it) and independent of fix 1 above — both were needed
+   together. Symptom if only this one is present:
+   `SANDBOX_UNAVAILABLE: Landlock cannot represent this Folder Guard policy
+   and mount namespaces are unavailable: ...`. Check
+   `cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns` — if it's
+   `1`, decide (a real security trade-off, not a default to reach for)
+   between disabling it host-wide (`kernel.apparmor_restrict_unprivileged_userns=0`
+   via `/etc/sysctl.d/`, simplest but loosens every process on a shared
+   host) or a narrower AppArmor profile granting `userns_create` to only
+   this product's own binaries.
 
 Post-deploy, validate the actual guarded path (not only direct SSH) by running
 `npm run check` through `/api/execute` with Folder Guard enabled in a Video

@@ -193,12 +193,24 @@ func landlockABI() (int, error) {
 	return int(version), nil
 }
 
+// mountNamespaceAvailable must probe the exact privilege shape
+// executeIsolatedMountNamespace actually uses. A plain "unshare -m" (mount
+// namespace only) needs CAP_SYS_ADMIN in the CURRENT user namespace, which an
+// unprivileged service account never has -- it fails with EPERM regardless of
+// any Landlock/AppArmor state, making this probe (and the fallback it gates)
+// permanently unusable for every rootless deployment. Pairing it with --user
+// --map-root-user first enters a new user namespace mapped back to the
+// caller's own UID (the standard unprivileged-mount-namespace pattern, the
+// same one rootless container runtimes use), which genuinely grants
+// CAP_SYS_ADMIN inside that namespace. Confirmed live on the Dominion
+// Hetzner deployment: identical "-m" alone failed with "Operation not
+// permitted" as the unprivileged service user, while this form succeeded.
 func mountNamespaceAvailable() bool {
 	path, err := exec.LookPath("unshare")
 	if err != nil {
 		return false
 	}
-	cmd := exec.Command(path, "-m", "--propagation", "private", "true")
+	cmd := exec.Command(path, "--mount", "--user", "--map-root-user", "--propagation", "private", "true")
 	cmd.Env = BuildSafeEnvironment()
 	return cmd.Run() == nil
 }
