@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Durable agentic P0 for generate_text_llm. Capture exercises Pi-dev through
-# mcpagent's real bridge; verify requires an agent-reviewed live receipt.
+# mcpagent's real bridge at low, medium, and high tiers; verify requires an
+# agent-reviewed live receipt.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -19,7 +20,7 @@ capture() {
   MLP_AGENT_REVIEW_CAPTURE=1 \
   MLP_AGENT_REVIEW_DIR="$review_dir" \
   go test -tags generate_text_llm_pi_bridge_p0_live ./cmd/server/virtual-tools \
-    -run TestGenerateTextLLMPiBridgeP0 -count=1 -timeout 15m
+    -run TestGenerateTextLLMPiBridgeP0 -count=1 -timeout 30m
 }
 
 verify() {
