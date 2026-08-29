@@ -63,7 +63,7 @@ command or script.
 ### Text generation
 
 - **`generate_text_llm(user_message, tier)`** — Generate text with one direct LLM call using the workspace tier config. `tier` must be `high`, `medium`, or `low`.
-- **`search_web_llm(query, provider, model_id?)`** — Run a live web search using a provider from the published search-capable LLM set. Before selecting a provider/model, call `list_llm_capabilities(capability="search_web", include_models=true)`. `provider` is required; `model_id` is optional only when accepting the backend's default for that provider.
+- **`search_web_llm(query, provider, model_id?)`** — Run a live web search using a provider from the published search-capable LLM set. Before selecting a provider/model, call `list_llm_capabilities(capability="search_web", include_models=true)`. `provider` is required; `model_id` is optional only when accepting the backend's default for that provider. The tool itself has no timeout parameter and the backend imposes none on a CLI-backed provider (`codex-cli`, `cursor-cli`, `claude-code`, `pi-cli`) — each call boots a real CLI process from cold before it can search, so budget several minutes for these providers, not a fixed ~180s. Design any self-chosen wait budget for this call around that cold-start cost, not around the query itself; a short caller-side deadline killing the call before a slow-but-working CLI provider finishes is the caller's own budget being too tight, not the tool timing out.
 
 ### Image generation + editing
 
@@ -106,4 +106,5 @@ command or script.
 - **Typing a raw API key value into a shell command or script**: leaks into logs / scrollback. Store it via `set_provider_auth` for the built-in tools, or `set_workflow_secret`/`set_user_secret` for Python that needs it as `SECRET_<NAME>` — never the literal value.
 - **Editing provider-auth config by hand**: auth is encrypted; manual edits corrupt it.
 - **Reaching for `execute_shell_command` + curl/Python to redo a basic request** the dedicated tool already handles well: you lose its auth wiring, retries, output validation, and cost tracking for no benefit. Reserve the Python path for capabilities the tool genuinely doesn't expose.
+- **Giving `search_web_llm` with a CLI-backed provider (`codex-cli`, `cursor-cli`, `claude-code`, `pi-cli`) a short wait budget (e.g. ~180s)**: real CLI cold-start regularly exceeds that on its own, before any searching happens. A timeout here means the caller's own deadline was too tight, not that the provider is broken — widen the budget rather than switching providers on a single timeout.
 - **Assuming a provider is unavailable** because it doesn't show up in the published LLM set: published LLMs are for chat/search routing, not media tools. Call `list_llm_capabilities(capability="...")` for the authoritative answer.
