@@ -153,6 +153,102 @@ func TestHarnessRejectionResultCarriesNoRunEvidence(t *testing.T) {
 	}
 }
 
+// A script that deliberately exits ScriptedTerminalRefusalExitCode (a
+// fail-closed data-safety guard refusing to proceed) must abort the step, not
+// reach the relearn path. Live incident on HDFC-Personal-Accounts: a BR5-01
+// guard correctly refused to overwrite bank balance history it could not
+// verify was current, and the (then-undifferentiated) relearn fallback read
+// that refusal, agreed it was correct, and performed the exact write and
+// database mutation the script had refused to do.
+func TestTerminalRefusalAbortsInsteadOfRelearning(t *testing.T) {
+	d := decideScriptedFastPath(&ScriptedFastPathResult{
+		RanScript:             true,
+		ExitCode:              ScriptedTerminalRefusalExitCode,
+		TerminalRefusal:       true,
+		TerminalRefusalReason: "ABORT: failed to read existing rows; refusing to overwrite and risk wiping history",
+		ExistingScript:        "print('working code')",
+	})
+	if !d.TerminalRefusal {
+		t.Fatal("a terminal refusal must be surfaced as such, not as a script failure")
+	}
+	if d.PriorError != "" || d.PriorScript != "" {
+		t.Fatalf("nothing may be handed to the relearn path: %#v", d)
+	}
+	if d.FastPathDone {
+		t.Fatal("a deliberate refusal did not complete the step")
+	}
+	if !strings.Contains(d.TerminalRefusalReason, "refusing to overwrite") {
+		t.Fatalf("the refusal detail must survive for the operator: %q", d.TerminalRefusalReason)
+	}
+}
+
+// The reserved exit code is an opt-in signal, not a guess from exit code
+// alone: any other non-zero exit (including the still-conventional 1) must
+// keep relearning exactly as before this existed.
+func TestOrdinaryNonZeroExitStillRelearnsNotJustReservedCode(t *testing.T) {
+	d := decideScriptedFastPath(&ScriptedFastPathResult{
+		RanScript:      true,
+		Success:        false,
+		ExitCode:       1,
+		Error:          "KeyError: 'ticker'",
+		ExistingScript: "print('broken')",
+	})
+	if d.TerminalRefusal {
+		t.Fatal("an ordinary exit code 1 failure must not be mistaken for a deliberate refusal")
+	}
+	if d.PriorError == "" || d.PriorScript == "" {
+		t.Fatalf("relearn context must still be handed to the LLM: %#v", d)
+	}
+}
+
+// The step must abort rather than fall through, and say plainly that this is
+// the script working correctly, not a bug to fix.
+func TestTerminalRefusalStepErrorExplainsItIsNotABug(t *testing.T) {
+	src := readSourceFile(t, "controller_execution.go")
+	idx := strings.Index(src, "if scriptedDecision.TerminalRefusal {")
+	if idx < 0 {
+		t.Fatal("the terminal-refusal branch must abort the step before the relearn switch")
+	}
+	relearn := strings.Index(src, "learnCodePriorError = scriptedDecision.PriorError")
+	if relearn < idx {
+		t.Fatal("the abort must come before relearn context is assigned")
+	}
+	block := src[idx:relearn]
+	if !strings.Contains(block, "return \"\", updatedContextFiles, fmt.Errorf(") {
+		t.Fatalf("the branch must return an error, not fall through:\n%s", block)
+	}
+	for _, want := range []string{"not a bug", "do NOT modify main.py", "working correctly"} {
+		if !strings.Contains(block, want) {
+			t.Fatalf("step error must state %q:\n%s", want, block)
+		}
+	}
+}
+
+// A deliberate refusal must not count against the script's lock-code record,
+// the same way a harness rejection does not — it is evidence the guard is
+// working, not that the script is broken.
+func TestTerminalRefusalResultCarriesNoRunEvidence(t *testing.T) {
+	src := readSourceFile(t, "controller_scripted.go")
+	idx := strings.Index(src, "if execErr == nil && exitCode == ScriptedTerminalRefusalExitCode {")
+	if idx < 0 {
+		t.Fatal("terminal refusal must be detected in the fast path")
+	}
+	rel := strings.Index(src[idx:], "\n\t}\n")
+	if rel < 0 {
+		t.Fatal("could not find the end of the terminal-refusal branch")
+	}
+	block := src[idx : idx+rel]
+	if strings.Contains(block, "RunPreValidation") {
+		t.Fatal("a deliberate refusal has nothing valid to pre-validate")
+	}
+	if strings.Contains(block, "updateScriptedRunStats") {
+		t.Fatal("a deliberate refusal must not be recorded against the script's run history")
+	}
+	if !strings.Contains(block, "TerminalRefusal:") {
+		t.Fatalf("result must report the refusal:\n%s", block)
+	}
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a

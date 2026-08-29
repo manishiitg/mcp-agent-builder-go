@@ -160,6 +160,26 @@ type StreakInfo struct {
 // reviewers that could do nothing about it.
 var ErrScriptedHarnessRejection = errors.New("workspace refused to start the script")
 
+// ScriptedTerminalRefusalExitCode is the reserved exit code a scripted step's
+// main.py uses to signal a DELIBERATE, terminal refusal to proceed -- e.g. a
+// fail-closed data-safety guard that detected an unsafe write and correctly
+// aborted -- as distinct from an ordinary bug (any other non-zero exit code).
+//
+// Without this, decideScriptedFastPath could not tell the two apart: "the
+// fallback is the feature" (see its own doc comment) treats every non-zero
+// exit identically, handing the LLM the script and its error to relearn from.
+// That is correct for a genuine bug, but actively dangerous for a deliberate
+// safety refusal -- confirmed live on HDFC-Personal-Accounts: a BR5-01
+// fail-closed guard refused to overwrite bank balance history it could not
+// verify was current, sys.exit(1)'d with an explicit ABORT message, and the
+// LLM fallback read that refusal, agreed it was correct, and then performed
+// the exact write and database mutation the script had refused to do.
+//
+// A script opts into this by returning sys.exit(2) specifically; any other
+// non-zero code (including the still-conventional sys.exit(1)) keeps today's
+// relearn-fallback behavior unchanged.
+const ScriptedTerminalRefusalExitCode = 2
+
 // ScriptedFastPathResult is returned by tryRunSavedScriptedScript.
 type ScriptedFastPathResult struct {
 	RanScript       bool   // true if a saved script was found and attempted
@@ -176,6 +196,13 @@ type ScriptedFastPathResult struct {
 	// exit code, no output, and nothing for the LLM to repair.
 	HarnessFailure bool
 	HarnessError   string
+	// TerminalRefusal means the script ran and exited
+	// ScriptedTerminalRefusalExitCode: a deliberate, terminal refusal, not a
+	// bug. Like HarnessFailure, this must never reach the LLM relearn path --
+	// handing an agent "here is a refusal, fix it" is exactly how the refusal
+	// gets overridden instead of respected.
+	TerminalRefusal       bool
+	TerminalRefusalReason string
 }
 
 // ScriptedFastPathDecision is what the saved-script attempt means for the rest
@@ -196,6 +223,12 @@ type ScriptedFastPathDecision struct {
 	// so neither the fast path nor the LLM fallback has anything to work with.
 	HarnessFailure bool
 	HarnessError   string
+	// TerminalRefusal aborts the step: the script deliberately exited
+	// ScriptedTerminalRefusalExitCode rather than proceed. Unlike PriorError,
+	// this must never be handed to the LLM as something to fix -- see
+	// ScriptedTerminalRefusalExitCode's doc comment for why.
+	TerminalRefusal       bool
+	TerminalRefusalReason string
 }
 
 // decideScriptedFastPath maps a saved-script attempt onto the step's next move.
@@ -214,6 +247,11 @@ func decideScriptedFastPath(result *ScriptedFastPathResult) ScriptedFastPathDeci
 		// The script never started. Handing the LLM a script and an error it did
 		// not cause is how working code gets rewritten — abort instead.
 		return ScriptedFastPathDecision{HarnessFailure: true, HarnessError: result.HarnessError}
+	case result.TerminalRefusal:
+		// The script deliberately refused to proceed. Handing this to the LLM
+		// as "here is an error, fix it" is how the refusal gets overridden
+		// instead of respected — abort instead, exactly like HarnessFailure.
+		return ScriptedFastPathDecision{TerminalRefusal: true, TerminalRefusalReason: result.TerminalRefusalReason}
 	case result.RanScript && result.Success:
 		// Saved script executed and validated — skip the LLM entirely.
 		return ScriptedFastPathDecision{FastPathDone: true}
@@ -1113,6 +1151,27 @@ func (hcpo *StepBasedWorkflowOrchestrator) tryRunSavedScriptedScript(
 			HarnessError:   execErr.Error(),
 			ExitCode:       -1,
 			ExistingScript: existingScript,
+		}
+	}
+
+	// A deliberate terminal refusal (sys.exit(2)) is not a run to validate or
+	// score, the same way a harness rejection is not — the script correctly
+	// detected an unsafe condition and stopped, which is the mechanism
+	// working, not a failure of it. Handled before pre-validation and before
+	// updateScriptedRunStats for the same reason as the harness-rejection
+	// branch above: this must not count against lock_code_stats or be handed
+	// to the LLM as something to fix.
+	if execErr == nil && exitCode == ScriptedTerminalRefusalExitCode {
+		hcpo.GetLogger().Warn(fmt.Sprintf(
+			"🛑 [scripted] Step %d (%s) main.py deliberately refused to proceed (exit %d) — treating as terminal, not falling back to an agentic retry",
+			stepIndex+1, stepID, ScriptedTerminalRefusalExitCode))
+		return &ScriptedFastPathResult{
+			RanScript:             true,
+			ExitCode:              exitCode,
+			Output:                output,
+			TerminalRefusal:       true,
+			TerminalRefusalReason: strings.TrimSpace(output),
+			ExistingScript:        existingScript,
 		}
 	}
 
