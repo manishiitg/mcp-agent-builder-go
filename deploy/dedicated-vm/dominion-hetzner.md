@@ -4,6 +4,12 @@ This is the deployment contract for the isolated Dominion product at
 `trader.tectonicmarkets.com`. It deliberately does **not** reuse the legacy
 shared-host deployment described in `README.md`.
 
+Before standing up (or re-verifying) this deployment, run through
+[`../ROOTLESS-LINUX-DEPLOYMENT-CHECKLIST.md`](../ROOTLESS-LINUX-DEPLOYMENT-CHECKLIST.md)
+— every item on it was independently rediscovered as a live production
+incident on this exact deployment because nothing forced it to be checked
+up front. Don't repeat that.
+
 ## Deployment target
 
 | Item | Value |
@@ -345,6 +351,13 @@ Live on the target host, first deployed 2026-08-24:
   path requests that Dominion's own narrower profile never happened to
   trigger. The fallback is what makes that policy shape work at all on
   Linux.
+- `MCP_API_URL=http://127.0.0.1:21000` and `NATIVE_WORKSPACE=true` added to
+  `/srv/dominion/.env`, 2026-08-29. Without an explicit `MCP_API_URL`,
+  `GetCodeExecAPIURL()` falls through to `http://host.docker.internal:21000`
+  for custom-tool callbacks on any rootless (non-Docker) deployment —
+  discovered live when a workflow chat's tool calls stopped resolving.
+  See [`../ROOTLESS-LINUX-DEPLOYMENT-CHECKLIST.md`](../ROOTLESS-LINUX-DEPLOYMENT-CHECKLIST.md)
+  item 4 for the general form of this gap.
 
 Known follow-up, not yet done:
 

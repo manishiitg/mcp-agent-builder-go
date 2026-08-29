@@ -6,6 +6,13 @@ always present; Finance, Dominion, and other product surfaces are not exposed,
 and only the `video-studio` backend product is loaded. The release script
 validates both allowlists before every deployment.
 
+`deploy-rootless.sh` already guarantees most of
+[`../ROOTLESS-LINUX-DEPLOYMENT-CHECKLIST.md`](../ROOTLESS-LINUX-DEPLOYMENT-CHECKLIST.md)
+automatically on every release — that doc exists because a sibling
+deployment without an equivalent script had to rediscover each item as a
+live incident. Skim it after any change to the shared `workspace`/`agent_go`
+sandboxing or Caddy config, since this deployment shares that code.
+
 - URL: `https://video.realtrainingsys.com`
 - Region: `us-west-2`
 - Stack: `video-studio-prod`
