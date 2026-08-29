@@ -171,9 +171,7 @@ Do not read or write tier-config storage with shell/file tools. Use the UI or de
 
 ## Published LLMs & Provider Auth
 Published LLM metadata and provider authentication are workspace-backed configuration surfaces. Access them through dedicated tools only; raw workspace file tools intentionally do not expose ` + "`config/`" + `.
-- To see which providers/models are supported and currently usable by mode, use ` + "`list_llm_capabilities`" + `. It covers ` + "`chat`" + `, ` + "`search_web`" + `, ` + "`read_image`" + `, ` + "`generate_image`" + `, ` + "`generate_video`" + `, ` + "`text_to_speech`" + `, ` + "`speech_to_text`" + `, and ` + "`generate_music`" + `, including auth/runtime availability and static pricing metadata where available.
-- When choosing a concrete provider-backed model for search, media reading, media generation, transcription, or music, call ` + "`list_llm_capabilities(capability=\"...\", include_models=true)`" + ` first and pass ` + "`provider`" + ` and ` + "`model_id`" + ` together from the same capability entry. Do not pass only ` + "`model_id`" + ` and rely on provider inference.
-- Estimate priced generation/transcription costs with ` + "`estimate_llm_cost`" + ` for ` + "`generate_video`" + `, ` + "`text_to_speech`" + `, ` + "`speech_to_text`" + `, and ` + "`generate_music`" + `. Treat results as estimates and verify provider pricing before high-volume runs.
+- To see which text providers/models are supported and currently usable, use ` + "`list_llm_capabilities(capability=\"chat\")`" + `. ` + "`search_web_llm`" + ` uses its own hosted MCP providers rather than a text-model route.
 - Test an LLM before publishing: use the ` + "`test_llm`" + ` tool with ` + "`provider`" + `, ` + "`model_id`" + `, and optional overrides. It uses workspace-backed provider auth by default.
 - List the frontend-known models for a provider: use the ` + "`list_provider_models`" + ` tool. It uses shared metadata for fixed providers and the same dynamic picker source as the UI for dynamic providers.
 - List published LLMs with ` + "`list_published_llms`" + `.
@@ -185,35 +183,6 @@ Published LLM metadata and provider authentication are workspace-backed configur
 - ` + "`search_web_llm`" + ` is MCP-only. Its required ` + "`provider`" + ` is one of ` + "`parallel`" + `, ` + "`exa`" + `, or ` + "`firecrawl`" + `; do not pass ` + "`model_id`" + `. Parallel and Exa use anonymous free MCP access, while Firecrawl keyless availability is service-controlled.
 
 Provider media tools (` + "`read_image`" + `, image/video/audio/music generation and transcription) are deprecated and hidden from agents. Do not call them; the active provider-backed tool surface is ` + "`generate_text_llm`" + ` and ` + "`search_web_llm`" + ` only.
-
-## Image Generation Defaults
-Image generation defaults are workspace-backed configuration. Provider authentication is managed separately through ` + "`set_provider_auth`" + `.
-- Do not read or write saved defaults with shell/file tools. Use runtime ` + "`image_gen_config`" + ` overrides for the current chat session, or the dedicated UI/API configuration path when changing saved defaults.
-- Schema: ` + "`{\"primary\":{\"provider\":\"vertex\",\"model_id\":\"gemini-3.1-flash-image\"},\"fallbacks\":[{\"provider\":\"codex-cli\",\"model_id\":\"gpt-5.4-mini\"}]}`" + `
-- ` + "`primary`" + ` is tried first. ` + "`fallbacks`" + ` are tried in order when the primary provider lacks workspace auth.
-- Runtime ` + "`image_gen_config`" + ` overrides this file for the current chat session only.
-- Keep provider auth updated with the ` + "`set_provider_auth`" + ` tool; do not hand-edit encrypted auth files.
-- Do not infer image-generation support from ` + "`list_provider_models`" + ` or the normal LLM model catalog. Those lists are for chat/text models, not image models.
-- Vertex image generation is supported via provider ` + "`vertex`" + ` with models such as ` + "`gemini-3.1-flash-image`" + ` and ` + "`gemini-3-pro-image`" + `.
-- Codex CLI image generation is supported via provider ` + "`codex-cli`" + ` with models such as ` + "`gpt-5.4-mini`" + `.
-- Antigravity CLI image generation is deprecated for new setup. Existing legacy defaults using provider ` + "`agy-cli`" + ` and model ` + "`agy-cli`" + ` remain runnable when local ` + "`agy`" + ` sign-in is present.
-- For one-off ` + "`image_gen`" + ` or ` + "`image_edit`" + ` calls, use ` + "`list_llm_capabilities(capability=\"generate_image\", include_models=true)`" + ` and pass ` + "`provider`" + ` with the matching ` + "`model_id`" + ` when overriding defaults.
-
-## Image Analysis Defaults
-Image understanding for the ` + "`read_image`" + ` tool can be routed via workspace-backed image analysis defaults.
-- Do not read or write saved defaults with shell/file tools. Use per-call ` + "`read_image`" + ` overrides, or the dedicated UI/API configuration path when changing saved defaults.
-- Schema: ` + "`{\"primary\":{\"provider\":\"vertex\",\"model_id\":\"gemini-3-pro-preview\"},\"fallbacks\":[{\"provider\":\"codex-cli\",\"model_id\":\"gpt-5.4-mini\"},{\"provider\":\"cursor-cli\",\"model_id\":\"cursor-cli\"},{\"provider\":\"claude-code\",\"model_id\":\"claude-code\"}]}`" + `
-- If this file exists, ` + "`read_image`" + ` uses its ` + "`primary`" + ` and ordered ` + "`fallbacks`" + ` with workspace provider auth.
-- If this file does not exist, ` + "`read_image`" + ` falls back to the current chat model.
-- For one-off ` + "`read_image`" + ` calls, use ` + "`list_llm_capabilities(capability=\"read_image\", include_models=true)`" + ` and pass ` + "`provider`" + ` with the matching ` + "`model_id`" + ` when overriding defaults.
-- Codex CLI image understanding is supported via provider ` + "`codex-cli`" + ` by passing the local workspace image path to Codex CLI.
-- Cursor CLI image understanding is supported via provider ` + "`cursor-cli`" + ` by passing the local workspace image path to Cursor Agent CLI.
-- Antigravity CLI image understanding is deprecated for new setup. Existing legacy ` + "`agy-cli`" + ` defaults remain runnable by passing the local workspace image path to Antigravity CLI.
-- Claude Code image understanding is supported via provider ` + "`claude-code`" + ` by passing the local workspace image path to Claude Code CLI.
-- Keep provider auth updated with the ` + "`set_provider_auth`" + ` tool; do not hand-edit encrypted auth files.
-
-## Video Analysis
-No dedicated workspace video-reading tool is exposed right now. For video QA or inspection, use local ` + "`execute_shell_command`" + ` workflows such as frame/audio extraction and provider-specific scripts only when the required credentials are available as workflow/user secrets.
 
 ## Workflows
 List workflows with ` + "`execute_shell_command(command: \"ls " + absWorkflow + "/\")`" + `.

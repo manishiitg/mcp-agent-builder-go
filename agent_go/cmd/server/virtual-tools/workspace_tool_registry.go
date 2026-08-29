@@ -123,15 +123,9 @@ func initWorkspaceToolNamesCache() {
 		workspaceTools[toolName] = true
 	}
 
-	imageTools := make(map[string]bool)
-	for toolName := range CreateWorkspaceImageToolExecutors(ImageGenExecutorConfig{}) {
-		imageTools[toolName] = true
-	}
-
 	workspaceToolNamesCache.byCategory = map[string]map[string]bool{
 		"workspace_tools":                  workspaceTools,
 		GetWorkspaceAdvancedToolCategory(): workspaceRegistryToolNames,
-		"workspace_image":                  imageTools,
 	}
 }
 

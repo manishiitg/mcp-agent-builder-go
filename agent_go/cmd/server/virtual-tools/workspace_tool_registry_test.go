@@ -42,6 +42,9 @@ func TestCreateWorkspaceToolRegistryIncludesOnlyActiveTextAndSearchTools(t *test
 			t.Fatalf("deprecated media tool %q must not have a registry executor", name)
 		}
 	}
+	if mediaCategory := WorkspaceToolNamesByCategory("workspace_image"); len(mediaCategory) != 0 {
+		t.Fatalf("retired workspace_image category still resolves tools: %v", mediaCategory)
+	}
 
 	if got := registry.Env["MCP_SESSION_ID"]; got != "registry-test-session" {
 		t.Fatalf("registry env MCP_SESSION_ID = %q, want registry-test-session", got)

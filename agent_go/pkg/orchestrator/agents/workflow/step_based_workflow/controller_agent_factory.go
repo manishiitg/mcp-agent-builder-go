@@ -798,8 +798,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) prepareCustomTools(stepConfig *AgentC
 		var enabledTools []string
 		hasAdvanced := false
 		for _, entry := range stepConfig.EnabledCustomTools {
-			// workspace_image* entries are legacy — image tools now live inside workspace_advanced,
-			// which is auto-added below, so these entries become no-ops and are dropped.
+			// workspace_image* entries are retired and must not re-enable provider
+			// media tools through old workflow manifests.
 			if entry == "workspace_image:*" || strings.HasPrefix(entry, "workspace_image:") ||
 				entry == "workspace_image_gen:*" || strings.HasPrefix(entry, "workspace_image_gen:") ||
 				entry == "workspace_image_edit:*" || strings.HasPrefix(entry, "workspace_image_edit:") {

@@ -2,12 +2,9 @@ package workspace
 
 import (
 	"context"
-	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 )
 
 func TestNormalizeReadImageAbsolutePath(t *testing.T) {
@@ -67,39 +64,3 @@ func TestReadImageRejectsRelativePathBeforeWorkspaceAPI(t *testing.T) {
 		t.Fatalf("error = %q, want mention of absolute path", err.Error())
 	}
 }
-
-func TestLLMBackedToolDefinitionsReferenceCapabilityDiscovery(t *testing.T) {
-	tests := []struct {
-		name       string
-		tool       llmToolDefinition
-		capability string
-		wantFields []string
-	}{
-		{
-			name:       "read_image",
-			tool:       imageToolDef,
-			capability: "read_image",
-			wantFields: []string{"provider", "model_id"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			encoded, err := json.Marshal(tt.tool())
-			if err != nil {
-				t.Fatalf("marshal tool definition: %v", err)
-			}
-			text := string(encoded)
-			if !strings.Contains(text, `list_llm_capabilities(capability=\"`+tt.capability+`\", include_models=true)`) {
-				t.Fatalf("tool definition missing capability discovery instruction for %s: %s", tt.capability, text)
-			}
-			for _, field := range tt.wantFields {
-				if !strings.Contains(text, `"`+field+`"`) {
-					t.Fatalf("tool definition missing field %q: %s", field, text)
-				}
-			}
-		})
-	}
-}
-
-type llmToolDefinition func() llmtypes.Tool

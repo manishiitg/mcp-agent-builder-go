@@ -63,7 +63,6 @@ func (bo *BaseOrchestrator) EnhanceToolDescriptionWithFolderGuard(toolName, orig
 	// Tool classification (same as in WrapWorkspaceToolsWithFolderGuard)
 	readOnlyTools := map[string]bool{
 		"execute_shell_command": true,
-		"read_image":            true,
 	}
 
 	writeTools := map[string]bool{
@@ -178,7 +177,6 @@ func (bo *BaseOrchestrator) wrapWorkspaceToolsWithPaths(snapshotReadPaths, snaps
 	// Classify as read-only or write operations
 	readOnlyTools := map[string][]string{
 		"execute_shell_command": {},
-		"read_image":            {"filepath"},
 	}
 
 	writeTools := map[string][]string{
