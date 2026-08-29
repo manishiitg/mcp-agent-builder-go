@@ -34,7 +34,6 @@ var pulseConsolidatedToolNames = []string{
 
 var pulseReviewerWriteToolNames = []string{
 	"record_pulse_finding",
-	"complete_pulse_review",
 	"merge_pulse_issues",
 }
 
@@ -123,7 +122,7 @@ func TestPulseToolSurfaceIncludesTypedReviewerWrites(t *testing.T) {
 	// derive a name instead of guessing one. The two explicit semantic actions
 	// are documented by name in the returned tool index.
 	for name := range registered {
-		if name == "resolve_run_concern" || name == "complete_pulse_review" || name == "merge_pulse_issues" {
+		if name == "resolve_run_concern" || name == "merge_pulse_issues" {
 			continue
 		}
 		if !strings.HasPrefix(name, "get_pulse_") && !strings.HasPrefix(name, "record_pulse_") {

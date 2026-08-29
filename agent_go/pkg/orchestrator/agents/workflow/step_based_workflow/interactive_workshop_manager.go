@@ -112,10 +112,8 @@ func sanitizeWorkshopAgentIdentityPart(value string) string {
 }
 
 func newWorkshopStageAgentIdentity(name string) string {
-	// Pulse review receipts use the child tool-session identity as their
-	// review_run_id. Keep every workshop stage identity valid for that durable
-	// contract instead of minting an unrelated workshop-<kind>-<nanos> value
-	// that cannot be looked up through get_pulse_state(view="review").
+	// Keep every workshop stage identity stable and readable in durable
+	// background-agent logs and tool-session diagnostics.
 	prefix := time.Now().UTC().Format("2006-01-02T15-04-05.000Z")
 	return fmt.Sprintf("%s_%s-%d", prefix, sanitizeWorkshopAgentIdentityPart(name), workshopStageAgentIdentityCounter.Add(1))
 }
@@ -1556,7 +1554,6 @@ func GetToolsForWorkshopMode(mode string) []string {
 		"get_pulse_state",
 		"record_pulse_finding",
 		"merge_pulse_issues",
-		"complete_pulse_review",
 		"record_pulse_worklist",
 		"record_pulse_result",
 		"record_pulse_impact",
@@ -3373,15 +3370,6 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					"enum":        []string{"continue", "present_result"},
 					"description": "continue (default) lets the parent continue normal work. present_result makes completion presentation-only: surface the child result without tool calls or state revalidation.",
 				},
-				"required_pulse_review_modules": map[string]interface{}{
-					"type":        "array",
-					"uniqueItems": true,
-					"items": map[string]interface{}{
-						"type": "string",
-						"enum": pulsemodules.AcceptedForReviewReceipts(),
-					},
-					"description": "Optional typed completion contract. The background execution succeeds only when its exact child session writes a completed Pulse review receipt for every listed module.",
-				},
 			},
 			"required": []string{"name", "instruction"},
 		},
@@ -3422,7 +3410,6 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			if completionMode != "continue" && completionMode != "present_result" {
 				return "", fmt.Errorf("completion_mode must be continue or present_result")
 			}
-			requiredPulseReviewModules := backgroundStringSliceArg(args["required_pulse_review_modules"])
 			// Create slug from name for execution ID
 			nameSlug := strings.ToLower(strings.ReplaceAll(name, " ", "-"))
 			// Trim to reasonable length
@@ -3525,7 +3512,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				if agentType == "orchestrator" {
 					result, execErr = iwm.runBackgroundTodoTaskAgent(execCtx, name, instruction, inheritedSkills)
 				} else {
-					result, execErr = iwm.runBackgroundTaskAgentSequence(execCtx, name, instruction, messageSequence, inheritedSkills, requiredPulseReviewModules)
+					result, execErr = iwm.runBackgroundTaskAgentSequence(execCtx, name, instruction, messageSequence, inheritedSkills)
 				}
 			}()
 
@@ -10238,7 +10225,7 @@ func (iwm *InteractiveWorkshopManager) runBackgroundTodoTaskAgent(ctx context.Co
 
 // runBackgroundTaskAgentSequence creates and runs one standalone background
 // agent, optionally preserving it across ordered follow-up turns.
-func (iwm *InteractiveWorkshopManager) runBackgroundTaskAgentSequence(ctx context.Context, name string, instruction string, messageSequence []backgroundMessageSequenceItem, inheritedSkills []*llmtypes.Skill, requiredPulseReviewModules []string) (string, error) {
+func (iwm *InteractiveWorkshopManager) runBackgroundTaskAgentSequence(ctx context.Context, name string, instruction string, messageSequence []backgroundMessageSequenceItem, inheritedSkills []*llmtypes.Skill) (string, error) {
 	logger := iwm.controller.GetLogger()
 
 	// --- Folder guard: same as workshop agent ---
@@ -10286,7 +10273,7 @@ func (iwm *InteractiveWorkshopManager) runBackgroundTaskAgentSequence(ctx contex
 	// CLI CWD.
 	config.IsolateCodingAgentWorkspace = true
 	config.CodingAgentKeepAlive = len(messageSequence) > 0
-	toolSessionID, cleanupToolSession := iwm.configureWorkshopToolAgentSessionWithID(config, "background-task", readPaths, writePaths)
+	_, cleanupToolSession := iwm.configureWorkshopToolAgentSessionWithID(config, "background-task", readPaths, writePaths)
 	defer cleanupToolSession()
 
 	// The workshop-only tools are native definitions rather than entries in the
@@ -10421,59 +10408,7 @@ func (iwm *InteractiveWorkshopManager) runBackgroundTaskAgentSequence(ctx contex
 	if err != nil {
 		return "", fmt.Errorf("background task agent failed: %w", err)
 	}
-	if err := requireBackgroundPulseReviewReceipts(ctx, workspacePath, toolSessionID, requiredPulseReviewModules); err != nil {
-		return "", err
-	}
 	return result, nil
-}
-
-func requireBackgroundPulseReviewReceipts(ctx context.Context, workspacePath, reviewRunID string, modules []string) error {
-	if len(modules) == 0 {
-		return nil
-	}
-	reviewRunID = strings.TrimSpace(reviewRunID)
-	if reviewRunID == "" {
-		return fmt.Errorf("background Pulse review is incomplete: child session has no review identity")
-	}
-	for _, module := range modules {
-		module = strings.TrimSpace(module)
-		receipt, err := LoadPulseReviewReceiptForRun(ctx, workspacePath, reviewRunID, module)
-		if err != nil {
-			// PLAT-196 diagnostic: log which review_run_ids actually did write
-			// a receipt for this module recently, so a recurrence shows
-			// directly whether the write landed under a different session id
-			// than reviewRunID (config.MCPSessionID) expected here.
-			if recent, recentErr := RecentPulseReviewRunIDsForModule(ctx, workspacePath, module, 10); recentErr == nil {
-				log.Printf("[PULSE] [PLAT-196] required %s receipt missing for expected review_run_id=%q; recent review_run_ids seen for this module: %v", module, reviewRunID, recent)
-			}
-			return fmt.Errorf("background Pulse review is incomplete: required %s receipt for child session %s was not recorded: %w", module, reviewRunID, err)
-		}
-		if receipt == nil || receipt.Status != "completed" {
-			status := "missing"
-			if receipt != nil && strings.TrimSpace(receipt.Status) != "" {
-				status = receipt.Status
-			}
-			return fmt.Errorf("background Pulse review is incomplete: required %s receipt for child session %s has status %s", module, reviewRunID, status)
-		}
-	}
-	return nil
-}
-
-func backgroundStringSliceArg(raw interface{}) []string {
-	values, ok := raw.([]interface{})
-	if !ok {
-		if strings, ok := raw.([]string); ok {
-			return uniqueStringsPreserveOrder(strings)
-		}
-		return nil
-	}
-	result := make([]string, 0, len(values))
-	for _, value := range values {
-		if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
-			result = append(result, strings.TrimSpace(text))
-		}
-	}
-	return uniqueStringsPreserveOrder(result)
 }
 
 func closeBackgroundMessageSequenceAgent(agent agents.OrchestratorAgent, config *agents.OrchestratorAgentConfig, name string) {

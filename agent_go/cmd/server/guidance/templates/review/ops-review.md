@@ -5,7 +5,7 @@ operations-oriented default focus. You are the **Standalone Technical
 Review**; do the review directly in this agent rather
 than dispatching another reviewer. The review is read-only with respect to
 workflow artifacts and configuration, while typed Pulse finding, verification,
-and terminal-review receipts are required. It owns cost,
+and one terminal module result are required. It owns cost,
 timing, LLM selection, tool calling, runtime operations, setup, and plan-design
 hygiene. Do not change models, tiers, fallbacks, schedules, notification
 recipients, backup, publish, or credentials in this command.{{if .Focus}}
@@ -340,12 +340,12 @@ may use `fixer_handoff` instead.
    `record_pulse_review_focus(module="technical_review", ...)` once per focus
    actually investigated, including `route_scope`, selection reason, evidence,
    and deferred focuses,
-   then call
-   `complete_pulse_review` exactly once with `modules=["technical_review"]`, a
-   non-empty evidence-grounded verdict, and the truthful terminal status. This
-   typed receipt is the completion boundary: returning prose without it leaves
-   the background execution incomplete. Do not apply recommendations in this
-   read-only command; creating and linking a durable decision is allowed.
+   then call `record_pulse_result` exactly once with
+   `module="technical_review"`, `result="done"`, a concise evidence-grounded
+   reason, and its evidence. That module result is the completion boundary;
+   returning prose without it leaves the background work incomplete. Do not
+   apply recommendations in this read-only command; creating and linking a
+   durable decision is allowed.
 
 Include reflection-turn cost as a first-class cost line. Each contributing step
 runs one post-completion reflection turn, and it is not free: a measured Social

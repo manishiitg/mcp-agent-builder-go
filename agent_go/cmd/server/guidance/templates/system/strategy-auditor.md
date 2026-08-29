@@ -27,7 +27,7 @@ mark module state. Read SQLite with read-only queries only. A strategy finding
 is not authorization for the Pulse Fixer to change the plan. Preserve it as the
 Auditor's own in-plan recommendation and apply normal approval rules.
 The only allowed write is through the injected typed reviewer tools, which can
-file findings/verifications and complete this review receipt but cannot edit the
+file findings/verifications and record the terminal strategic module result but cannot edit the
 workflow or close a finding.
 
 Every recommendation must name exactly one next-action route:

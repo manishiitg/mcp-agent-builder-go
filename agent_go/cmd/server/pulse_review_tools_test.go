@@ -11,19 +11,16 @@ import (
 	mcpexecutor "github.com/manishiitg/mcpagent/executor"
 )
 
-func TestTypedPulseReviewerToolsPersistFindingAndCompactReceipt(t *testing.T) {
+func TestTypedPulseReviewerToolsPersistFindingWithoutCompletionHandshake(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("WORKSPACE_DOCS_PATH", root)
 	workspacePath := "Workflow/typed-review-tools"
 	const sessionID = "2026-08-28T12-00-00.000Z_typed-reviewer-session"
 	pulseRunID := "schedule-manual--typed-review"
-	reviewRunID := sessionID
 	ctx := mcpexecutor.WithSessionID(context.Background(), sessionID)
 
 	_, executors, _ := createPulseWorklistTools()
 	recordFinding := executors["record_pulse_finding"].(func(context.Context, map[string]interface{}) (string, error))
-	completeReview := executors["complete_pulse_review"].(func(context.Context, map[string]interface{}) (string, error))
-	recordFocus := executors["record_pulse_review_focus"].(func(context.Context, map[string]interface{}) (string, error))
 	raw, err := recordFinding(ctx, map[string]interface{}{
 		"workspace_path": workspacePath, "pulse_run_id": pulseRunID,
 		"module": pulseModuleTechnicalReview, "concern": "collector silently drops failed rows",
@@ -53,42 +50,6 @@ func TestTypedPulseReviewerToolsPersistFindingAndCompactReceipt(t *testing.T) {
 		t.Fatalf("idempotent record_pulse_finding retry: %v", err)
 	}
 
-	if _, err := completeReview(ctx, map[string]interface{}{
-		"workspace_path": workspacePath, "pulse_run_id": pulseRunID,
-		"modules": []interface{}{pulseModuleTechnicalReview}, "verdict": "   ", "status": "completed",
-	}); err == nil || !strings.Contains(err.Error(), "non-empty verdict") {
-		t.Fatalf("blank verdict error=%v", err)
-	}
-	if _, err := completeReview(ctx, map[string]interface{}{
-		"workspace_path": workspacePath, "pulse_run_id": pulseRunID,
-		"modules": []interface{}{pulseModuleTechnicalReview}, "verdict": "One correctness issue.", "status": "completed",
-	}); err == nil || !strings.Contains(err.Error(), "requires record_pulse_review_focus") {
-		t.Fatalf("missing focus error=%v", err)
-	}
-	if _, err := recordFocus(ctx, map[string]interface{}{
-		"workspace_path": workspacePath, "pulse_run_id": pulseRunID, "module": pulseModuleTechnicalReview,
-		"focus_key": "execution_health", "priority_class": "critical_regression", "selection_reason": "The retained correctness issue was the highest-priority evidence.",
-	}); err != nil {
-		t.Fatalf("record_pulse_review_focus: %v", err)
-	}
-
-	if _, err := completeReview(ctx, map[string]interface{}{
-		"workspace_path": workspacePath, "pulse_run_id": pulseRunID,
-		"modules": []interface{}{pulseModuleTechnicalReview}, "verdict": "One correctness issue.", "status": "completed",
-	}); err != nil {
-		t.Fatalf("complete_pulse_review: %v", err)
-	}
-
-	receipt, err := step_based_workflow.LoadPulseReviewReceiptForRun(context.Background(), workspacePath, reviewRunID, pulseModuleTechnicalReview)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if receipt.FindingCount != 1 || receipt.Status != "completed" || receipt.Verdict != "One correctness issue." {
-		t.Fatalf("unexpected receipt: %#v", receipt)
-	}
-	if receipt.PulseRunID != pulseRunID || receipt.ReviewRunID != reviewRunID {
-		t.Fatalf("receipt identities collapsed: pulse_run_id=%q review_run_id=%q", receipt.PulseRunID, receipt.ReviewRunID)
-	}
 	findings, err := step_based_workflow.LoadPulseFindingLifecycles(context.Background(), workspacePath, pulseModuleTechnicalReview, -1)
 	if err != nil || len(findings) != 1 || findings[0].SeenCount != 1 || findings[0].Details == nil || findings[0].Details.Summary != "Failed rows disappear" {
 		t.Fatalf("unexpected lifecycle: %#v err=%v", findings, err)

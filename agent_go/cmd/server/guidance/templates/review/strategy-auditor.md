@@ -4,7 +4,7 @@ Run the same cross-run plan-versus-goal diagnosis used by Pulse. You are the
 **Standalone Strategy Audit**; perform the review directly in this background
 agent rather than dispatching another reviewer. The review is read-only with
 respect to workflow artifacts and configuration, while typed Pulse finding,
-verification, and terminal-review receipts are required. This is the
+verification, and one terminal module result are required. This is the
 **READ-ONLY STRATEGY AUDIT** contract; "read-only" never forbids those typed
 lifecycle receipts. Do not run Pulse Gate,
 Goal Advisor, the workflow, or any fixer. In other words, this is the same
@@ -59,10 +59,10 @@ inspect; it may not turn this into Goal Advisor, Engineering, or Ops review.
    links the finding as `awaiting_user`. Never leave an actionable strategic
    proposal without a decision card.
 7. Reconcile your findings against the actual artifacts, then call
-   `complete_pulse_review` exactly once with `modules=["strategic_review"]`, a
-   non-empty evidence-grounded verdict, and the truthful terminal status. This
-   typed receipt is the completion boundary: returning prose without it leaves
-   the background execution incomplete. Do not edit the plan, configuration,
+   `record_pulse_result` exactly once with `module="strategic_review"`,
+   `result="done"`, a concise evidence-grounded reason, and its evidence. That
+   module result is the completion boundary: returning prose without it leaves
+   the background work incomplete. Do not edit the plan, configuration,
    workflow DB data, or reports/evals. Do not launch `/goal-advisor` automatically.
 
 Finish with a short executive summary followed by every finding, bounded

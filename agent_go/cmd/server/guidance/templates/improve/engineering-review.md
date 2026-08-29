@@ -54,9 +54,9 @@ Use `{{.RunFolder}}` as the primary retained run.{{end}}
    engineering repairs use `fixer_handoff` and do not consume operator attention.
 4. Deduplicate by root cause and leave one compact, ordered canonical repair
    queue. Do not apply repairs. Record the chosen focus exactly once, then call
-   `complete_pulse_review(modules=["technical_review"], ...)` exactly once with
-   the truthful terminal review verdict. The same retained Review+Fix task owns
-   mutations and repair outcome; it must not rewrite this review receipt.
+   `record_pulse_result(module="technical_review", result="done", ...)` exactly
+   once with the truthful review outcome and evidence. The same retained Review+Fix task may later add a supplemental changed result with repair
+   dispositions; it must not invent a separate completion handshake.
 5. Finish with a concise summary of what was reviewed, promoted, linked,
    rejected, already verified, awaiting evidence, or blocked. State whether at
    least one safe canonical issue is actionable for the later Fix phase; do not

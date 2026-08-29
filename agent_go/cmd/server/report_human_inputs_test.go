@@ -174,6 +174,30 @@ func TestReportHumanInputPersistsStructuredApplyContract(t *testing.T) {
 	}
 }
 
+func TestReportHumanInputToolReportsExactInvalidApplyContractField(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		applyContract interface{}
+		want          string
+	}{
+		{name: "whole contract is string", applyContract: `{}`, want: "apply_contract must be an object"},
+		{name: "scope is object", applyContract: map[string]interface{}{"mode": "targeted_fixer", "approved_scope": map[string]interface{}{"objective": "repair route"}}, want: "apply_contract.approved_scope must be a string"},
+		{name: "proof is array", applyContract: map[string]interface{}{"mode": "targeted_fixer", "approved_scope": "repair route", "post_run_proof": []interface{}{"fixture passes"}}, want: "apply_contract.post_run_proof must be a string"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := map[string]interface{}{
+				"workspace_path": "Workflow/upwork",
+				"question":       "Apply the bounded plan repair?",
+				"apply_contract": tc.applyContract,
+			}
+			_, err := reportHumanInputCreateRequestFromToolArgs(args)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestApprovedTargetedFixerCandidatesResolveLinkedFinding(t *testing.T) {
 	inputs := []ReportHumanInput{
 		{ID: "approved", WorkspacePath: "Workflow/social-media", Status: "answered", SelectedOptionID: "approve", ApplyContract: ReportHumanInputApplyContract{Mode: "targeted_fixer", ApprovedScope: "Extract one contract."}},

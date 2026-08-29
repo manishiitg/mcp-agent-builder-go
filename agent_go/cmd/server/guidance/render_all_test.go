@@ -191,7 +191,7 @@ func TestManualPulseCommandsKeepRunSetupReviewAndFixBoundariesSeparate(t *testin
 			"Own the review yourself",
 			"link it to an existing issue, promote it with evidence, or reject it",
 			"Do not apply repairs",
-			"same retained Review+Fix task",
+			"same retained Review+Fix task may later",
 		},
 		"pulse-fixer": {
 			"PULSE FIX PHASE",
@@ -228,7 +228,7 @@ func TestManualPulseCommandsKeepRunSetupReviewAndFixBoundariesSeparate(t *testin
 	}
 }
 
-func TestStandaloneOpsReviewRunsDirectlyAndRequiresTypedCompletion(t *testing.T) {
+func TestStandaloneOpsReviewRunsDirectlyAndRequiresTerminalModuleResult(t *testing.T) {
 	raw, err := os.ReadFile("templates/review/ops-review.md")
 	if err != nil {
 		t.Fatalf("read ops-review template: %v", err)
@@ -240,9 +240,8 @@ func TestStandaloneOpsReviewRunsDirectlyAndRequiresTypedCompletion(t *testing.T)
 		`source="technical_review"`,
 		`human_input_id`,
 		"Never emit `decision_required` without this question",
-		"complete_pulse_review",
-		"modules=[\"technical_review\"]",
-		"returning prose without it leaves",
+		"record_pulse_result",
+		"module=technical_review",
 		"Execution-health diagnosis",
 		"repeated context reconstruction",
 		"ops-decision-execution-efficiency-",
@@ -256,7 +255,7 @@ func TestStandaloneOpsReviewRunsDirectlyAndRequiresTypedCompletion(t *testing.T)
 	}
 }
 
-func TestStandaloneStrategyAuditRunsDirectlyAndRequiresTypedCompletion(t *testing.T) {
+func TestStandaloneStrategyAuditRunsDirectlyAndRequiresTerminalModuleResult(t *testing.T) {
 	raw, err := os.ReadFile("templates/review/strategy-auditor.md")
 	if err != nil {
 		t.Fatalf("read strategy-auditor template: %v", err)
@@ -265,9 +264,8 @@ func TestStandaloneStrategyAuditRunsDirectlyAndRequiresTypedCompletion(t *testin
 	for _, want := range []string{
 		"Perform the review in this current background agent",
 		"record_pulse_finding",
-		"complete_pulse_review",
-		"modules=[\"strategic_review\"]",
-		"returning prose without it leaves",
+		"record_pulse_result",
+		"module=strategic_review",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("standalone strategy audit missing direct typed-completion contract %q", want)
@@ -489,7 +487,6 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 		"Never silently rebase or broaden",
 		"only passed post-change proof",
 		"changed_unverified",
-		"awaiting_next_valid_run",
 		"owns review selection",
 		"READ-ONLY REVIEW",
 		"main Pulse agent owns the Review+Fix turn",
@@ -573,7 +570,7 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 		"a successful write alone is not proof",
 		"mtime alone",
 		"changed_unverified",
-		"awaiting_next_valid_run",
+		"later normal run",
 	} {
 		if !strings.Contains(fixVerify, want) {
 			t.Fatalf("fix-verification missing %q", want)
@@ -1033,7 +1030,7 @@ func TestStandalonePulseReviewCommandsUsePersistedReviewerPipeline(t *testing.T)
 	for kind, module := range map[string]string{
 		"ops-review":            "technical_review",
 		"strategy-auditor":      "strategic_review",
-		"review-artifact-drift": "artifact_review",
+		"review-artifact-drift": "technical_review",
 	} {
 		rendered, err := renderFromRegistry(kind, tmplData{}, allKinds)
 		if err != nil {
@@ -1050,17 +1047,15 @@ func TestStandalonePulseReviewCommandsUsePersistedReviewerPipeline(t *testing.T)
 				"do the review directly in this agent",
 				"typed Pulse finding, verification",
 				`module=technical_review`,
-				"complete_pulse_review",
+				"record_pulse_result",
 			}
 		} else if kind == "strategy-auditor" {
 			wants = []string{
 				"perform the review directly",
 				"typed Pulse finding",
 				`module=strategic_review`,
-				"complete_pulse_review",
+				"record_pulse_result",
 			}
-		} else {
-			wants = append(wants, "Do not pass `pulse_run_id` or `review_run_id`", "call_generic_agent")
 		}
 		for _, want := range wants {
 			if !strings.Contains(rendered, want) {

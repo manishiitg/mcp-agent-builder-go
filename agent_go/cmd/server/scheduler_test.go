@@ -989,7 +989,7 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 		"PULSE SEQUENCED REVIEW + FIX DISPATCH",
 		"run_in_background",
 		"single retained task instruction",
-		`required_pulse_review_modules=["technical_review"]`,
+		"terminal technical_review module result",
 		"drain every actionable workflow-owned canonical repair root",
 		"Platform-owned findings, human decisions, and evidence waits are durable but are not workflow repair debt",
 		"Do not stop after merely the highest-value bundle",
@@ -1750,7 +1750,7 @@ func TestWorkflowHasPendingPlanChangelogArtifactReview(t *testing.T) {
 	}
 }
 
-func TestValidatePulseDueModuleResultsRequiresAgentReceipts(t *testing.T) {
+func TestValidatePulseDueModuleResultsRequiresTerminalModuleResults(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	t.Setenv("WORKSPACE_DOCS_PATH", root)
@@ -1771,11 +1771,6 @@ func TestValidatePulseDueModuleResultsRequiresAgentReceipts(t *testing.T) {
 	if _, err := markPulseModuleResultFromAgent(ctx, workspacePath, pulseModuleStrategicReview, pulseRunID, "done", "Strategic review complete.", []string{"pulse_review_log:run:strategic_review"}); err != nil {
 		t.Fatalf("mark goal advisor: %v", err)
 	}
-	if err := validatePulseDueModuleResults(ctx, workspacePath, pulseRunID); err == nil || !strings.Contains(err.Error(), "terminal current-run review receipts") {
-		t.Fatalf("missing typed-review validation error = %v", err)
-	}
-	seedPulseReviewLogRow(ctx, t, workspacePath, pulseModuleTechnicalReview, pulseRunID, "completed", "Clean review.")
-	seedPulseReviewLogRow(ctx, t, workspacePath, pulseModuleStrategicReview, pulseRunID, "completed", "Strategic review complete.")
 	if err := validatePulseDueModuleResults(ctx, workspacePath, pulseRunID); err != nil {
 		t.Fatalf("terminal validation: %v", err)
 	}
@@ -1791,7 +1786,7 @@ func TestValidatePulseDueModuleResultsRequiresAgentReceipts(t *testing.T) {
 	}
 }
 
-func TestValidatePulseDueModuleResultsRejectsRunningReviewReceipt(t *testing.T) {
+func TestValidatePulseDueModuleResultsIgnoresLegacyRunningReviewReceipt(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	t.Setenv("WORKSPACE_DOCS_PATH", root)
@@ -1806,8 +1801,8 @@ func TestValidatePulseDueModuleResultsRejectsRunningReviewReceipt(t *testing.T) 
 		t.Fatalf("mark review: %v", err)
 	}
 	seedPulseReviewLogRow(ctx, t, workspacePath, pulseModuleTechnicalReview, pulseRunID, "running", "")
-	if err := validatePulseDueModuleResults(ctx, workspacePath, pulseRunID); err == nil || !strings.Contains(err.Error(), "technical_review (running)") {
-		t.Fatalf("running review receipt validation error = %v", err)
+	if err := validatePulseDueModuleResults(ctx, workspacePath, pulseRunID); err != nil {
+		t.Fatalf("terminal module result should not depend on legacy review receipt: %v", err)
 	}
 }
 

@@ -131,7 +131,7 @@ func (n *workshopExecutionBgNotifier) OnExecutionStart(start todo_creation_human
 		Metadata:          metadata,
 	}
 	n.api.bgAgentRegistry.Register(n.sessionID, bgAgent)
-	n.api.trackWorkshopExecutionStart(n.sessionID, n.workspacePath, n.presetQueryID, n.userID, start.ID, start.Name, parentExecutionID)
+	n.api.trackWorkshopExecutionStart(n.sessionID, n.workspacePath, n.presetQueryID, n.userID, start.ID, start.Name, parentExecutionID, metadata)
 
 	// Pre-create the channel so NotifyCompletion never drops a completion
 	n.api.bgAgentRegistry.GetNotificationChannel(n.sessionID)

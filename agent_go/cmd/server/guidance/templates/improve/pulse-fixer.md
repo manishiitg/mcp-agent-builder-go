@@ -49,7 +49,7 @@ selected issue's proof boundary.{{end}}
 6. Record the repair attempt and each issue disposition, but do not write or
    replace either reviewer's terminal receipt. Review completion and repair
    outcome are separate facts. If no safe canonical objective exists, preserve
-   the truthful review receipts without manufacturing a repair. When this is
+   the truthful terminal module results without manufacturing a repair. When this is
    the backend-unlocked Fix message of a combined manual Review+Fix sequence,
    also call `record_pulse_result` exactly once for `technical_review` with
    `pulse_run_id="current"` and the truthful repair/no-safe-repair outcome.

@@ -92,7 +92,7 @@ describe('Pulse slash commands', () => {
     expect(submitted).toContain('Run /pulse-review as a BACKGROUND task')
     expect(submitted).toContain('BACKGROUND task')
     expect(submitted).toContain('completion_mode="present_result"')
-		expect(submitted).toContain('required_pulse_review_modules=["technical_review"]')
+		expect(submitted).not.toContain('required_pulse_review_modules')
 		expect(submitted).toContain('Do not call tools, reload state, or independently revalidate')
     expect(submitted).toContain('iteration-9/default')
     expect(submitted).toContain('prioritize failed evaluation writes')
@@ -127,7 +127,7 @@ describe('Pulse slash commands', () => {
     } as CommandContext)
     expect(submitted).toContain('kind=\\"engineering-review\\"')
     expect(submitted).toContain('Manual Pulse review focus: execution_health')
-    expect(submitted).toContain('required_pulse_review_modules=["technical_review"]')
+    expect(submitted).not.toContain('required_pulse_review_modules')
 		expect(submitted).toContain('bounded Review+Fix')
   })
 
@@ -162,7 +162,7 @@ describe('Pulse slash commands', () => {
 
     expect(submitted).toContain('Run the /strategy-auditor review as a BACKGROUND task')
     expect(submitted).toContain('kind=\\"strategy-auditor\\"')
-    expect(submitted).toContain('required_pulse_review_modules=["strategic_review"]')
+    expect(submitted).not.toContain('required_pulse_review_modules')
     expect(submitted).toContain('iteration-7/group-a')
     expect(submitted).toContain('focus on repeated targets')
   })

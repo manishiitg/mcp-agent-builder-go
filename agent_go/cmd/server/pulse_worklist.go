@@ -900,20 +900,6 @@ func getPulseReviewFocusSelections(ctx context.Context, workspacePath string, li
 	return out, rows.Err()
 }
 
-func hasPulseReviewFocusForRun(ctx context.Context, workspacePath, pulseRunID, module string) (bool, error) {
-	normalized, db, err := openPulseModuleStateDB(ctx, workspacePath, false)
-	if err != nil || db == nil {
-		return false, err
-	}
-	defer db.Close()
-	if err := ensurePulseModuleStateSchema(ctx, db); err != nil {
-		return false, err
-	}
-	var count int
-	err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pulse_review_focus_history WHERE workspace_path=? AND pulse_run_id=? AND module=?`, normalized, strings.TrimSpace(pulseRunID), strings.TrimSpace(module)).Scan(&count)
-	return count > 0, err
-}
-
 func recordPulseWorklist(ctx context.Context, workspacePath, pulseRunID string, decisions []PulseWorklistDecision) ([]PulseModuleState, error) {
 	return recordPulseWorklistWithMode(ctx, workspacePath, pulseRunID, pulseRunModeDiscovery, "Direct worklist call; Gate mode was not supplied.", decisions)
 }
@@ -1887,15 +1873,6 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		Description: "Persist one complete Pulse reviewer finding directly to the SQLite lifecycle. First inspect the compact active and closed issue index and reason about semantic sameness; request targeted full detail only for candidate issue_ids. For an existing root cause, including a closed one, supply its issue_id and update/reopen it; do not create a second issue because wording, evidence paths, or symptoms differ. Omit issue_id only for a genuinely distinct root cause with a different repair or owner. Do not encode findings in the final response. Backup, publish, and notify waiting for their ordered finalizer stage are not findings; report only a real terminal failure after that command ran.",
 		Parameters:  llmtypes.NewParameters(map[string]interface{}{"type": "object", "additionalProperties": false, "properties": findingProperties, "required": []string{"workspace_path", "pulse_run_id", "module", "concern", "issue_kind", "classification", "severity", "summary", "impact", "evidence"}}),
 	}}
-	completeReviewTool := llmtypes.Tool{Type: "function", Function: &llmtypes.FunctionDefinition{
-		Name:        "complete_pulse_review",
-		Description: "Finalize compact SQLite receipts after all findings have been recorded. Finding counts are computed by the backend. Applied repairs are closed by the Fixer and normal-run recurrence reopens them; reviewers do not maintain a separate verification queue. Call exactly once before the review's brief final message; final response text is not persisted or parsed.",
-		Parameters: llmtypes.NewParameters(map[string]interface{}{"type": "object", "additionalProperties": false, "properties": map[string]interface{}{
-			"workspace_path": reviewIdentityProperties["workspace_path"], "pulse_run_id": reviewIdentityProperties["pulse_run_id"],
-			"modules": map[string]interface{}{"type": "array", "minItems": 1, "uniqueItems": true, "items": map[string]interface{}{"type": "string", "enum": moduleEnum}},
-			"verdict": map[string]interface{}{"type": "string", "description": "Compact overall judgment; not a findings transport."}, "status": map[string]interface{}{"type": "string", "enum": []string{"completed", "failed"}},
-		}, "required": []string{"workspace_path", "pulse_run_id", "modules", "verdict", "status"}}),
-	}}
 	focusAgendaTool := llmtypes.Tool{Type: "function", Function: &llmtypes.FunctionDefinition{
 		Name:        "get_pulse_review_focus_agenda",
 		Description: "Read the compact durable deep-review coverage agenda for technical_review or strategic_review. It includes every canonical focus, global and route-specific review counts, last verdict, due boundary, and deferred history. Pass route_scope when reviewing one route/group/sub-workflow. Use it after the normal module/backlog state read and before agentically choosing the smallest sufficient focus set; it is not blind round-robin.",
@@ -2128,40 +2105,6 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 			payload, _ := json.Marshal(map[string]interface{}{"status": "merged", "merged_count": merged, "canonical_issue_id": stringToolArg(args, "canonical_issue_id")})
 			return string(payload), nil
 		},
-		"complete_pulse_review": func(ctx context.Context, args map[string]interface{}) (string, error) {
-			workspacePath, _ := args["workspace_path"].(string)
-			pulseRunID, _ := args["pulse_run_id"].(string)
-			pulseRunID = pulseRunIDForSession(ctx, pulseRunID)
-			verdict := strings.TrimSpace(stringToolArg(args, "verdict"))
-			if verdict == "" {
-				return "", fmt.Errorf("complete_pulse_review requires a non-empty verdict: summarize the overall judgment after recording findings and verifications")
-			}
-			modules := stringSliceFromToolArg(args["modules"])
-			if err := validatePulseToolRunID(ctx, pulseRunID); err != nil {
-				return "", err
-			}
-			if strings.EqualFold(stringToolArg(args, "status"), "completed") {
-				for _, module := range modules {
-					module = pulsemodules.Normalize(module)
-					if module != pulseModuleTechnicalReview && module != pulseModuleStrategicReview {
-						continue
-					}
-					hasFocus, err := hasPulseReviewFocusForRun(ctx, workspacePath, pulseRunID, module)
-					if err != nil {
-						return "", err
-					}
-					if !hasFocus {
-						return "", fmt.Errorf("completed %s review requires record_pulse_review_focus for pulse_run_id %q first", module, pulseRunID)
-					}
-				}
-			}
-			reviewRunID := pulseReviewRunIDForSession(ctx, pulseRunID)
-			log.Printf("[PULSE] complete_pulse_review: writing review_run_id=%q pulse_run_id=%q modules=%v status=%q", reviewRunID, pulseRunID, modules, stringToolArg(args, "status"))
-			if err := step_based_workflow.CompletePulseReview(ctx, workspacePath, modules, reviewRunID, pulseRunID, verdict, stringToolArg(args, "status")); err != nil {
-				return "", err
-			}
-			return `{"status":"completed"}`, nil
-		},
 		"get_pulse_review_focus_agenda": func(ctx context.Context, args map[string]interface{}) (string, error) {
 			focuses, err := getPulseReviewFocusAgenda(ctx, stringToolArg(args, "workspace_path"), stringToolArg(args, "module"), stringToolArg(args, "route_scope"), intToolArg(args, "limit"))
 			if err != nil {
@@ -2269,7 +2212,6 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 	categories := map[string]string{
 		"record_pulse_finding":                           "workflow",
 		"merge_pulse_issues":                             "workflow",
-		"complete_pulse_review":                          "workflow",
 		"get_pulse_review_focus_agenda":                  "workflow",
 		"record_pulse_review_focus":                      "workflow",
 		"record_pulse_worklist":                          "workflow",
@@ -2316,7 +2258,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		return fmt.Sprintf("Issue %s marked %s.", step_based_workflow.NewPulseIssue(finding).ID, status), nil
 	}
 
-	return []llmtypes.Tool{recordFindingTool, focusAgendaTool, recordFocusTool, completeReviewTool, mergeIssuesTool, reconcileLifecycleTool, reconcileActionableBacklogTool, fastRequestTool, recordTool, stateTool, resultTool, impactTool, resolveConcernTool}, executors, categories
+	return []llmtypes.Tool{recordFindingTool, focusAgendaTool, recordFocusTool, mergeIssuesTool, reconcileLifecycleTool, reconcileActionableBacklogTool, fastRequestTool, recordTool, stateTool, resultTool, impactTool, resolveConcernTool}, executors, categories
 }
 
 func stringToolArg(args map[string]interface{}, key string) string {

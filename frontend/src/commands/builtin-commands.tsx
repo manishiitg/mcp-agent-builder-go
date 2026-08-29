@@ -41,22 +41,14 @@ function submitGuidedWorkflowCommand(
       `Call ${guidanceCall} and follow the returned instructions verbatim. ${outputContract} ` +
       `Treat focus as the request context before the slash command. The tool returns the canonical guided-flow text; do not paraphrase or skip its steps.` +
       (isReviewFix
-        ? ' This is one retained Review+Fix task. Review, apply only a bounded safe repair when warranted, proportionally verify it, then persist the technical_review receipt and terminal result before ending.'
+        ? ' This is one retained Review+Fix task. Review, apply only a bounded safe repair when warranted, proportionally verify it, then persist the terminal technical_review result before ending.'
         : '')
-    const requiredReviewModule = kind === 'engineering-review'
-      ? 'technical_review'
-      : kind === 'strategy-auditor'
-        ? 'strategic_review'
-        : null
-    const requiredReviewReceipt = requiredReviewModule
-      ? `, required_pulse_review_modules=[${JSON.stringify(requiredReviewModule)}]`
-      : ''
     const backgroundFallback = isReviewFix
       ? 'If run_in_background is not available, perform the same bounded Review+Fix inline this turn.'
       : `If run_in_background is not available, perform the ${taskLabel} inline this turn instead.`
     ctx.onSubmit(
       taskIntro +
-      `If the run_in_background tool is available: call run_in_background(name=${JSON.stringify(displayName + ' ' + taskLabel)}, instruction=${JSON.stringify(instruction)}, completion_mode="present_result"${requiredReviewReceipt}) and do NOT perform the ${taskLabel} yourself this turn — you'll get a presentation-only completion notification, ${completionContract} Do not call tools, reload state, or independently revalidate after that notification. ` +
+      `If the run_in_background tool is available: call run_in_background(name=${JSON.stringify(displayName + ' ' + taskLabel)}, instruction=${JSON.stringify(instruction)}, completion_mode="present_result") and do NOT perform the ${taskLabel} yourself this turn — you'll get a presentation-only completion notification, ${completionContract} Do not call tools, reload state, or independently revalidate after that notification. ` +
       backgroundFallback
     )
     return
@@ -274,8 +266,8 @@ export const builtinCommands: CommandDefinition[] = [
     source: 'builtin',
     execute: (ctx) => {
       const runFolder = ctx.getWorkflowStore().selectedRunFolder
-      // Keep the mature backend guidance key and technical_review receipt
-      // contract stable; only the user-facing manual command is renamed.
+      // Keep the mature backend guidance key stable; only the user-facing
+      // manual command is renamed.
       submitGuidedWorkflowCommand(ctx, 'engineering-review', {
         runFolder,
         background: true,

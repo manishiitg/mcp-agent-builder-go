@@ -52,11 +52,10 @@ authorization.
 
 The parent turn is a launcher, not a long-running parent review or Fixer.
 Use `run_in_background` for every selected child. When `technical_review` is
-due, use one `agent_type="executor"` child with
-`required_pulse_review_modules=["technical_review"]`. Put the exact parent
-`pulse_run_id` and run-scoped checkpoint path in its instruction. The retained
-child reviews and repairs in the same task; use `message_sequence` only when a
-later reasoning turn is genuinely needed, never as a review-permission gate.
+due, use one `agent_type="executor"` child. Put the exact parent `pulse_run_id`
+and run-scoped checkpoint path in its instruction. The retained child reviews
+and repairs in the same task; use `message_sequence` only when a later reasoning
+turn is genuinely needed, never as a review-permission gate.
 Every turn reads that checkpoint first and updates it before ending, so context
 compaction cannot erase evidence or decisions. SQLite is still authoritative;
 the checkpoint is compact working memory, not a second issue database.
@@ -273,7 +272,7 @@ or a stale value in an old record — to support a context-pressure finding.
 Cumulative token and cost evidence is unaffected; use that instead.
 
 First inspect current-run results, the complete active retained backlog,
-answered decisions, awaiting-verification work, and saved typed review receipts.
+answered decisions, awaiting-verification work, and saved terminal module results.
 
 **Drain every answered decision in this pass (PLAT-092).** Inspecting them is
 not enough: an answered decision that is only re-read leaves the operator's
@@ -489,7 +488,11 @@ safety/public-action run. `direct_apply` is only for one already-defined
 setting with a known exact check. Use `no_change` for reject/defer outcomes and
 `external_wait` when an external prerequisite must arrive. Do not leave the
 contract empty for a new repair decision; legacy prose-only requests are never
-auto-applied by pre-run.
+auto-applied by pre-run. The custom tool is an HTTP JSON contract: send
+`apply_contract` as an object, `pre_run_checks` as an array of strings, and both
+`approved_scope` and `post_run_proof` as single strings (not nested objects or
+arrays). Fetch and follow the published tool schema instead of inventing nested
+field shapes.
 For `strategic_review`, the question source must be `strategic_review` and its
 id must start `strategy-proposal-`. The backend rejects a strategic
 `proposal_only` disposition with no `next_check`, so every accepted

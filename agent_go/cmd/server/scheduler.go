@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -2258,10 +2257,9 @@ func (s *SchedulerService) runPulseLifecycle(ctx context.Context, sctx *Schedule
 	}
 
 	// Pulse is one continuing agent conversation. Go sends three ordered turns:
-	// Gate, Review+Fix, and Finalize. Technical review and repair run as separate
-	// message-sequence turns inside one retained executor; Go keeps repair locked
-	// until that executor persists its completed review receipt. Go preserves ordering
-	// and validates durable receipts; the agents own semantic choices.
+	// Gate, Review+Fix, and Finalize. The selected module's terminal result is
+	// the single durable completion boundary; Go preserves ordering while agents
+	// own the semantic choices and per-finding lifecycle.
 	pulseContext := "A scheduled run of this workflow just finished"
 	if sctx.PulseOnly {
 		pulseContext = "This is a manual Pulse-only review of the latest retained workflow evidence. The workflow was not executed by this action"
@@ -2679,9 +2677,9 @@ func pulseLifecycleAgenticReviewStep(pulseRunID string) pulseLifecycleStep {
 		label: "review-fix",
 		query: fmt.Sprintf(`PULSE SEQUENCED REVIEW + FIX DISPATCH. pulse_run_id=%q. Load read_skill(skills=[{"name":"builder-reference","path":"references/pulse-review-fixer.md"}]) and follow its Sequenced Technical Maintenance contract. Read the durable Gate worklist via get_pulse_state(view="module", pulse_run_id=<this id>) and handle only due modules in the persisted mode.
 
-		When technical_review is due, launch exactly one executor with run_in_background and required_pulse_review_modules=["technical_review"]. Its single retained task instruction must name exact pulse_run_id=%q and checkpoint %q. In that one retained turn: (1) read the compact backlog once, plan routes, retained run selectors, and focus agenda, then perform the lightweight safety scan and choose the smallest sufficient evidence-backed focus set; (2) investigate only selected focuses and exact public PUL ids, classify every selected observation, continuously merge semantic duplicates, and update the checkpoint; (3) drain every actionable workflow-owned canonical repair root that the compact backlog exposes: apply safe coherent repair bundles, verify them proportionally, and continue to the next bundle until none remain. Platform-owned findings, human decisions, and evidence waits are durable but are not workflow repair debt; classify and route them instead of leaving them in the repair queue. Do not stop after merely the highest-value bundle; (4) persist every focus, typed finding, verification, exact repair disposition, terminal technical_review module result, and one completed technical_review receipt before ending. A no-safe-repair outcome is valid only when no actionable workflow-owned root remains; otherwise record the exact PUL ids and a failed/partial technical result rather than claiming completion. Do not split review and repair into artificial sequence turns, and never launch a fresh Fixer or another technical reviewer.
+		When technical_review is due, launch exactly one executor with run_in_background. Its single retained task instruction must name exact pulse_run_id=%q and checkpoint %q. In that one retained turn: (1) read the compact backlog once, plan routes, retained run selectors, and focus agenda, then perform the lightweight safety scan and choose the smallest sufficient evidence-backed focus set; (2) investigate only selected focuses and exact public PUL ids, classify every selected observation, continuously merge semantic duplicates, and update the checkpoint; (3) drain every actionable workflow-owned canonical repair root that the compact backlog exposes: apply safe coherent repair bundles, verify them proportionally, and continue to the next bundle until none remain. Platform-owned findings, human decisions, and evidence waits are durable but are not workflow repair debt; classify and route them instead of leaving them in the repair queue. Do not stop after merely the highest-value bundle; (4) persist every focus, typed finding, verification, exact repair disposition, and one terminal technical_review module result before ending. A no-safe-repair outcome is valid only when no actionable workflow-owned root remains; otherwise record the exact PUL ids and a truthful partial technical result rather than claiming completion. Do not split review and repair into artificial sequence turns, and never launch a fresh Fixer or another technical reviewer.
 
-		When strategic_review is due, launch one separate read-only executor with required_pulse_review_modules=["strategic_review"]. It performs the route-aware scan, selects the smallest sufficient strategic focus set, audits the warranted mechanisms, persists typed findings/decisions/impact plus exactly one strategic_review receipt, and records the terminal strategic_review module result. Every turn updates %q. Audit-only and backlog_drain omit opportunity discovery. Strategic Review never repairs workflow implementation.
+		When strategic_review is due, launch one separate read-only executor. It performs the route-aware scan, selects the smallest sufficient strategic focus set, audits the warranted mechanisms, persists typed findings/decisions/impact and one terminal strategic_review module result. Every turn updates %q. Audit-only and backlog_drain omit opportunity discovery. Strategic Review never repairs workflow implementation.
 
 		Automatic-notification prose is not persistence. Use message_sequence only when further reasoning genuinely needs a later turn, never merely to separate review from repair. After dispatch, end this parent turn immediately; the runtime waits for registered children. Do not do review or repair in this parent, render a dashboard, back up, publish, or notify.`, pulseRunID, pulseRunID, technicalCheckpoint, strategicCheckpoint),
 	}
@@ -2893,78 +2891,18 @@ func validatePulseDueModuleResults(ctx context.Context, workspacePath, pulseRunI
 	if !ok {
 		return fmt.Errorf("Pulse worklist %q is missing", pulseRunID)
 	}
-	var dueModules []string
 	var unresolved []string
 	for _, module := range pulseModuleOrder {
 		state, exists := worklist[module]
 		if !exists || strings.TrimSpace(strings.ToLower(state.LastDecision)) != "due" {
 			continue
 		}
-		dueModules = append(dueModules, module)
 		if strings.TrimSpace(state.LastResult) == "" {
 			unresolved = append(unresolved, module)
 		}
 	}
 	if len(unresolved) > 0 {
 		return fmt.Errorf("due Pulse modules lack terminal current-run results: %s", strings.Join(unresolved, ", "))
-	}
-	if err := validatePulseDueModuleReviewReceipts(ctx, workspacePath, pulseRunID, dueModules); err != nil {
-		return err
-	}
-	return nil
-}
-
-// validatePulseDueModuleReviewReceipts closes the gap between the two durable
-// completion projections owned by Review+Fix. A module result records the
-// parent turn's summary; pulse_review_log is the typed reviewer receipt. The
-// scheduler must not advance when only the first exists: Upwork did exactly
-// that on 2026-08-15, then a later server restart found the still-running
-// reviewer row and falsely labeled an already-finished review interrupted.
-func validatePulseDueModuleReviewReceipts(ctx context.Context, workspacePath, pulseRunID string, dueModules []string) error {
-	if len(dueModules) == 0 {
-		return nil
-	}
-	_, db, err := openPulseModuleStateDB(ctx, workspacePath, false)
-	if err != nil {
-		return fmt.Errorf("open Pulse review receipts: %w", err)
-	}
-	if db == nil {
-		return fmt.Errorf("due Pulse modules lack terminal current-run review receipts: %s", strings.Join(dueModules, ", "))
-	}
-	defer db.Close()
-
-	var tableName string
-	if err := db.QueryRowContext(ctx,
-		`SELECT name FROM sqlite_master WHERE type='table' AND name='pulse_review_log'`).Scan(&tableName); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("due Pulse modules lack terminal current-run review receipts: %s", strings.Join(dueModules, ", "))
-		}
-		return fmt.Errorf("inspect Pulse review receipts: %w", err)
-	}
-
-	var incomplete []string
-	for _, module := range dueModules {
-		var status, verdict string
-		err := db.QueryRowContext(ctx, `SELECT status, verdict FROM pulse_review_log
-			WHERE pulse_run_id = ? AND module = ? ORDER BY _id DESC LIMIT 1`,
-			strings.TrimSpace(pulseRunID), normalizePulseModule(module)).Scan(&status, &verdict)
-		if errors.Is(err, sql.ErrNoRows) {
-			incomplete = append(incomplete, module+" (missing)")
-			continue
-		}
-		if err != nil {
-			return fmt.Errorf("read Pulse review receipt for %s: %w", module, err)
-		}
-		status = strings.ToLower(strings.TrimSpace(status))
-		if (status != "completed" && status != "failed") || strings.TrimSpace(verdict) == "" {
-			if status == "" {
-				status = "empty"
-			}
-			incomplete = append(incomplete, fmt.Sprintf("%s (%s)", module, status))
-		}
-	}
-	if len(incomplete) > 0 {
-		return fmt.Errorf("due Pulse modules lack terminal current-run review receipts: %s", strings.Join(incomplete, ", "))
 	}
 	return nil
 }

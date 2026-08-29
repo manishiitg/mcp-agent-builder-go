@@ -12,8 +12,10 @@ Use this as the read-only audit checklist for artifact drift after plan or confi
   call `query_step`.
 - The reviewer is strictly read-only. It must not edit files, mutate the plan/config,
   mark changelog entries, or mark Pulse module state.
-- Read only matching typed Artifact Review findings, review history, and relevant
-  decisions/outcomes. Do not inspect or create Pulse presentation artifacts.
+- Artifact drift is a technical-review focus, not a third Pulse module. Read only
+  matching typed state through `get_pulse_state(view="review")` with
+  `module=technical_review`, using the managed SQLite-backed tools and structured finding lifecycle; do not query SQLite directly or inspect/create Pulse
+  presentation artifacts.
 
 For a suspected drift that recurs or a repaired dependency awaiting proof,
 compare the current artifact/run evidence with up to three comparable retained
@@ -83,8 +85,8 @@ Load `read_skill(skills=[{"name":"builder-reference","path":"references/assumpti
      report it merely because it is long. Compare reuse, inputs/outputs,
      side effects, approval and failure boundaries; report the missing route
      only when those facts show the work belongs in the canonical plan.
-   - a plan step no schedule message reaches, and no other step invokes — dead
-     work, or a queue that was never updated after the step was added
+   - a schedule message that drives no plan step, or a plan step no schedule message reaches and no other step invokes — dead work, or a queue that was
+     never updated after the step was added
    - execution order or grouping that exists only in the message queue while
      `plan.json` leaves order/groups unset. The plan is then not runnable on its
      own, and the queue silently owns the sequence
@@ -92,6 +94,9 @@ Load `read_skill(skills=[{"name":"builder-reference","path":"references/assumpti
      duplication that will drift the next time either side changes
    - schedule cron/timezone that contradicts what `soul.md` or the plan claims
      about cadence or the window the work is valid for
+   - a schedule message that should invoke canonical work but bypasses
+     `run_full_workflow`/`execute_step`; use `validate_plan_change` when a repair
+     changes plan references or dependency wiring
 5. Include clean checks briefly. Do not manufacture drift merely because an artifact exists.
 
 ## Reviewer result

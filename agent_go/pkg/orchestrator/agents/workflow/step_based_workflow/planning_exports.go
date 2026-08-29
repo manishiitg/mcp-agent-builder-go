@@ -2034,6 +2034,26 @@ func RegisterRunFullWorkflowTool(
 			} else if len(enabledGroupNames) > 0 {
 				workflowDisplayName = fmt.Sprintf("full-run [%s]", enabledGroupNames[0])
 			}
+			execMeta := map[string]string{
+				"workshop_mode":  "runner",
+				"execution_type": "full-workflow",
+			}
+			if disableEval {
+				execMeta["disable_eval"] = "true"
+			}
+			if iteration != "" {
+				execMeta["iteration"] = iteration
+			}
+			if len(enabledGroupNames) > 0 {
+				execMeta["group_name"] = enabledGroupNames[0]
+			}
+			if iteration != "" {
+				runFolder := iteration
+				if len(enabledGroupNames) > 0 {
+					runFolder = filepath.Join(iteration, enabledGroupNames[0])
+				}
+				execMeta["run_folder"] = runFolder
+			}
 			if session.executionNotifier != nil {
 				session.executionNotifier.OnExecutionStart(WorkshopExecutionStart{
 					ID:                execID,
@@ -2044,8 +2064,9 @@ func RegisterRunFullWorkflowTool(
 					// still registered so cancellation and HasRunningAgents()
 					// work, but declaring the kind keeps it out of the terminal
 					// rail instead of sitting there beside real agents.
-					Kind:   string(orchestrator_events.ExecutionKindFullRun),
-					Cancel: cancel,
+					Kind:     string(orchestrator_events.ExecutionKindFullRun),
+					Metadata: execMeta,
+					Cancel:   cancel,
 				})
 			}
 			execCtx = virtualtools.WithBackgroundAgentID(execCtx, execID)
@@ -2062,19 +2083,6 @@ func RegisterRunFullWorkflowTool(
 
 				var result string
 				var execErr error
-				execMeta := map[string]string{
-					"workshop_mode":  "runner",
-					"execution_type": "full-workflow",
-				}
-				if disableEval {
-					execMeta["disable_eval"] = "true"
-				}
-				if iteration != "" {
-					execMeta["iteration"] = iteration
-				}
-				if len(enabledGroupNames) > 0 {
-					execMeta["group_name"] = enabledGroupNames[0]
-				}
 				defer func() {
 					skipNotify := finalizeExecStatus(exec, execCtx, &result, &execErr)
 					if !skipNotify && session.executionNotifier != nil {

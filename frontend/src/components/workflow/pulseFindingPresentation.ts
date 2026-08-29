@@ -84,6 +84,22 @@ export function pulseFindingDisposition(finding: PulseFindingLifecycle): string 
   return ''
 }
 
+/**
+ * A repair can be recorded, then a later ordinary workflow run can show that
+ * the same problem still exists. Keep that history visible: presenting the
+ * finding as merely "New" discards the most useful part of its lifecycle.
+ */
+function hasRecordedAppliedFix(finding: PulseFindingLifecycle): boolean {
+  const disposition = pulseFindingDisposition(finding)
+  return finding.fix_attempts.some((attempt) => attempt.changed_files.length > 0)
+    || finding.events.some((event) => event.event_type === 'fix_applied')
+    || ['changed_unverified', 'fixed_verified'].includes(disposition)
+}
+
+function reopenedAfterAppliedFix(finding: PulseFindingLifecycle): boolean {
+  return finding.status === 'open' && hasRecordedAppliedFix(finding)
+}
+
 function closedLabel(finding: PulseFindingLifecycle): string {
   const disposition = pulseFindingDisposition(finding)
   if (disposition === 'fixed_verified') return 'Fixed and verified'
@@ -181,6 +197,15 @@ export function pulseFindingPresentation(finding: PulseFindingLifecycle): PulseF
       tone: 'danger',
       nextAction: finding.resolution_note?.trim()
         || 'The latest verification failed; Pulse must reopen the repair and check it again.',
+    }
+  }
+
+  if (reopenedAfterAppliedFix(finding)) {
+    return {
+      label: 'Reopened after fix',
+      queue: 'needs_action',
+      tone: 'danger',
+      nextAction: 'New workflow evidence appeared after the recorded repair. Pulse must compare that run with the repair, then either repair again or record why this is a distinct issue.',
     }
   }
 
@@ -282,10 +307,20 @@ export function pulseFindingProgress(finding: PulseFindingLifecycle): PulseFindi
     || presentation.queue === 'blocked'
     || presentation.queue === 'platform'
     || presentation.queue === 'resolved'
-  const fixApplied = finding.fix_attempts.some((attempt) => attempt.changed_files.length > 0)
-    || ['changed_unverified', 'fixed_verified'].includes(disposition)
+  const fixApplied = hasRecordedAppliedFix(finding)
   const verified = latestVerification(finding)?.verdict === 'passed'
     || ['fixed_verified', 'verified_no_change'].includes(disposition)
+  if (reopenedAfterAppliedFix(finding)) {
+    const flags = [true, diagnosed, fixApplied, verified, false]
+    const labels = ['Found', 'Diagnosed', 'Fix applied', 'Verified', 'Reopened']
+    return labels.map((label, index) => ({
+      label,
+      // Reopened is the current condition, even when an earlier verification
+      // stage is absent. Otherwise the UI implies that it is merely waiting
+      // for a first verification rather than needing the repair reconsidered.
+      state: flags[index] ? 'done' : index === labels.length - 1 ? 'current' : 'pending',
+    }))
+  }
   const closed = presentation.queue === 'resolved'
   const flags = [true, diagnosed, fixApplied, verified, closed]
   const labels = ['Found', 'Diagnosed', 'Fix applied', 'Verified', 'Closed']

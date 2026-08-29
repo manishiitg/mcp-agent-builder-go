@@ -846,7 +846,7 @@ func createReportHumanInputTools() ([]llmtypes.Tool, map[string]interface{}, map
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
 			Name:        "create_human_input_request",
-			Description: "Create or refresh a structured non-blocking workflow question for the user. Review decisions are stored in that workflow's db/db.sqlite and answered inside the Pulse/report panel. Attribute new review requests to source=\"technical_review\" or \"strategic_review\"; reserve source=\"pulse\" for generic Pulse coordination. For any decision that authorizes a workflow change, supply apply_contract: pre-run routes it deterministically and never infers a repair from user-facing prose. Use targeted_fixer for prompt, plan, route, validation, database, tool, model, or cross-artifact changes; direct_apply only for a known single setting and exact static check.",
+			Description: "Create or refresh a structured non-blocking workflow question for the user. Review decisions are stored in that workflow's db/db.sqlite and answered inside the Pulse/report panel. Attribute new review requests to source=\"technical_review\" or \"strategic_review\"; reserve source=\"pulse\" for generic Pulse coordination. For any decision that authorizes a workflow change, supply apply_contract: pre-run routes it deterministically and never infers a repair from user-facing prose. Use targeted_fixer for prompt, plan, route, validation, database, tool, model, or cross-artifact changes; direct_apply only for a known single setting and exact static check. This tool is called through the custom HTTP route, so the JSON body must match the published schema exactly; apply_contract is an object, but approved_scope and post_run_proof inside it are plain strings.",
 			Parameters: llmtypes.NewParameters(map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -875,9 +875,9 @@ func createReportHumanInputTools() ([]llmtypes.Tool, map[string]interface{}, map
 					"apply_contract": map[string]interface{}{"type": "object", "additionalProperties": false, "properties": map[string]interface{}{
 						"mode":           map[string]interface{}{"type": "string", "enum": []string{"no_change", "direct_apply", "targeted_fixer", "external_wait"}, "description": "Deterministic pre-run handling. Omit only for legacy/informational requests that must not be auto-applied."},
 						"issue_id":       map[string]interface{}{"type": "string", "description": "Optional linked canonical PUL issue id when already known."},
-						"approved_scope": map[string]interface{}{"type": "string", "description": "Bounded implementation authority. Required for targeted_fixer."},
+						"approved_scope": map[string]interface{}{"type": "string", "description": "Bounded implementation authority as one plain string, not a nested object or array. Required for targeted_fixer."},
 						"pre_run_checks": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Exact static/dry-run checks required before the decision may be consumed."},
-						"post_run_proof": map[string]interface{}{"type": "string", "description": "Evidence a later producing run must provide; this never substitutes for pre-run checks."},
+						"post_run_proof": map[string]interface{}{"type": "string", "description": "Evidence a later producing run must provide, expressed as one plain string rather than an array; this never substitutes for pre-run checks."},
 						"failure_policy": map[string]interface{}{"type": "string", "enum": []string{"continue_unchanged", "block_run"}, "description": "Whether a failed application may continue with the old safe plan or must block this run."},
 					}},
 				},
@@ -1061,9 +1061,20 @@ func reportHumanInputCreateRequestFromToolArgs(args map[string]interface{}) (Rep
 	req.RunID, _ = args["run_id"].(string)
 	req.Evidence, _ = args["evidence"].(string)
 	if raw, ok := args["apply_contract"]; ok {
+		contractObject, isObject := raw.(map[string]interface{})
+		if !isObject {
+			return req, fmt.Errorf("apply_contract must be an object")
+		}
+		for _, field := range []string{"mode", "issue_id", "approved_scope", "post_run_proof", "failure_policy"} {
+			if value, exists := contractObject[field]; exists && value != nil {
+				if _, isString := value.(string); !isString {
+					return req, fmt.Errorf("apply_contract.%s must be a string", field)
+				}
+			}
+		}
 		b, _ := json.Marshal(raw)
 		if err := json.Unmarshal(b, &req.ApplyContract); err != nil {
-			return req, fmt.Errorf("apply_contract must be an object")
+			return req, fmt.Errorf("invalid apply_contract: %w", err)
 		}
 	}
 	req.CreatedBy, _ = args["created_by"].(string)
