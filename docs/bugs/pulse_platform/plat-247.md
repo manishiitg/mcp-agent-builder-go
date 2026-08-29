@@ -176,10 +176,13 @@ about.
   180s timeout → 20-30s pass, lockdown still fully in place.
   (`multi-llm-provider-go` commit `7a0e17d`.)
 
-**`image_gen`/`image_edit` native passthrough (codex-cli only —
-cursor-cli/claude-code/vertex not investigated this pass; agy-cli was
-fully removed from this repo in this same session — see Follow-up
-(2026-08-29b) below):**
+**`image_gen`/`image_edit` native passthrough (codex-cli is the only
+supported provider besides vertex — `cursor-cli`/`claude-code` were never
+wired up for generation/editing at all, only for `read_image`; confirmed
+via `InitializeImageGenerationModel` in `multi-llm-provider-go`, which
+only switches on `vertex`/`minimax-coding-plan`/`codex-cli`. vertex
+itself not investigated this pass. agy-cli was fully removed from this
+repo in this same session — see Follow-up (2026-08-29b) below):**
 - `image_gen` worked, but ran under
   `--dangerously-bypass-approvals-and-sandbox` (zero lockdown at all,
   independent of whatever session lockdown was requested). Verified live
@@ -207,7 +210,8 @@ Both fixes shipped with new live tests
 `TestCodexCLIRealImageGeneration`, `TestCodexCLIRealImageEditing` are new)
 and full-package regression sweeps (0 failures) in
 `multi-llm-provider-go`. Not yet done: the same live-verification pass for
-`image_gen`/`image_edit` on `cursor-cli`/`claude-code`. Also not yet done: a P0 test in this repo
+`image_gen`/`image_edit` on `vertex` (the only other supported
+provider). Also not yet done: a P0 test in this repo
 (`mcp-agent-builder-go`) exercising the actual `read_image`/`image_gen`/
 `image_edit` tool surface end to end (the live verification above covers
 the underlying `multi-llm-provider-go` adapters only, one layer below
@@ -267,3 +271,93 @@ package pass (`cmd/server`, `cmd/server/virtual-tools` — pre-existing
 excluding the already-broken files — `cmd/testing`, `internal/terminals`,
 `internal/terminalleases`, `pkg/common`,
 `pkg/orchestrator/agents/workflow/step_based_workflow`), 0 failures.
+
+## Follow-up (2026-08-29c) — the P0-in-this-repo gap, closed; two new live
+findings surfaced
+
+Closes the other "not yet done" item from Follow-up (2026-08-29): a go
+test in this repo that exercises the actual `read_image`/`image_gen`/
+`image_edit` tool surface (`CreateReadImageProviderTestExecutor`,
+`CreateImageGenExecutor`, `CreateImageEditExecutor` in
+`cmd/server/virtual-tools/`), not just the `multi-llm-provider-go` adapter
+one layer below.
+
+**Why not the existing `agentreview`-based P0 pattern** (the one
+`search_web_llm`/`generate_text_llm` use, e.g.
+`search_web_llm_tool_p0_live_test.go`): investigated it as the template
+and found it is itself currently broken, repo-wide, not just in the one
+file PLAT-247's original restoration flagged. `agentreview` lives at
+`mcpagent/internal/agentreview` — genuinely `internal/`, with no public
+counterpart — so `import "github.com/manishiitg/mcpagent/agentreview"`
+cannot resolve from outside the `mcpagent` module at all. Every test file
+using it (including `search_web_llm_tool_p0_live_test.go` itself) fails
+to compile today. Mirroring that pattern would only have added more
+broken files. Used plain env-var-gated live tests with direct assertions
+instead (same shape as this session's `multi-llm-provider-go` tests),
+which is both simpler and actually runs.
+
+New files: `read_image_tool_p0_live_test.go`, `image_gen_tool_p0_live_test.go`,
+`image_edit_tool_p0_live_test.go` in `cmd/server/virtual-tools/`. Each
+skips by default; opt in with `READ_IMAGE_TOOL_P0_LIVE=1` /
+`IMAGE_GEN_TOOL_P0_LIVE=1` / `IMAGE_EDIT_TOOL_P0_LIVE=1` plus the
+workspace-URL/docs-dir/image-path env vars documented in each file's
+doc comment.
+
+**Test infrastructure gotchas hit and resolved, worth recording:**
+- Ran against an isolated, throwaway workspace server (own port, own
+  scratch `--docs-dir`) rather than the real one — a live desktop app +
+  its own workspace server were already running against the real
+  `workspace-docs` directory on this machine at the time, and this
+  avoided any risk of visibly cluttering that live session.
+- `read_image`'s path validation (`pkg/workspace/execute_shell_command.go`'s
+  `workspaceDocsRoots()`) and `image_gen`/`image_edit`'s
+  (`video_gen_tools.go`'s `workspaceDocumentRoots()`) both already respect
+  a `WORKSPACE_DOCS_PATH` env var override -- no code change was needed to
+  point them at the scratch docs dir; the tests just weren't setting it.
+- All three tools require an explicit folder-guard grant via context, and
+  `FolderGuardReadPathsKey` alone is inert: `resolveEffectiveFolderGuard`
+  in `pkg/workspace/client.go` only consults it as a supplement once
+  `FolderGuardAllowedWriteFolderKey` (or `FolderGuardWritePathsKey`) is
+  *also* present to select that resolution branch at all -- even an empty
+  `[]string{}` write grant is enough to trigger it. Without both keys set,
+  every call fails closed with "no workspace read paths were granted"
+  regardless of the client-level `FolderGuardConfig`.
+
+**Live results:**
+- `image_gen`/codex-cli: **PASS** (52s).
+- `image_edit`/codex-cli: **PASS** (102s) -- the first successful
+  end-to-end verification of this tool in this repo's history; it had
+  zero test coverage of any kind before this (not even the manual
+  `cmd/testing/image_gen_providers.go` operator CLI covers editing, only
+  generation).
+- `read_image`/codex-cli: **PASS**, but only after fixing the test's model
+  ID -- the hardcoded `gpt-5.4-mini` default (also used by
+  `cmd/testing/read_image_providers.go`'s own `defaultReadImageProviderModel`,
+  which is very likely equally stale today) is now deprecated; codex
+  responds with a "switch to GPT-5.6 Luna" prompt instead of answering.
+  Fixed by using `codex-cli` (codex's own current default) instead of a
+  pinned model ID.
+- `read_image`/cursor-cli: **FAIL**, a real, live-observed finding, not a
+  test artifact. Without an explicit working directory (which
+  `wrapReadImageWithLLM` in `workspace_advanced_tools.go` never sets, for
+  any provider -- confirmed by reading the code: its `GenerateContent`
+  call passes zero options), cursor-agent's own agentic judgment shelled
+  out with `find ... -iname '*.jpg' -o ...` searching for the image
+  instead of opening the given absolute path directly, and that shell
+  command hit a "Not in allowlist: find" gate. This is a distinct issue
+  from the `beforeReadFile`-hook bug already fixed in `multi-llm-provider-go`
+  commit `7a0e17d` -- that fix was scoped to the `WithDenyBuiltinTools`
+  lockdown path; this reproduces on the *default*, non-locked-down path.
+- `read_image`/claude-code: **inconclusive**. Hung past its own 2-minute
+  per-call `context.WithTimeout` inside
+  `ClaudeCodeInteractiveAdapter.waitForTmuxPrompt`, and the test binary's
+  outer timeout eventually killed the whole process rather than the
+  context cancellation stopping just that call. Not root-caused --
+  unclear whether context cancellation genuinely doesn't propagate into
+  that tmux wait loop, or whether this run's tmux session state was
+  simply stuck for an unrelated reason.
+
+**Not yet done:** root-causing the cursor-cli and claude-code findings
+above; vertex (no Vertex/Gemini credentials configured in this
+environment, so every vertex subtest skips by design, matching
+`cmd/testing/image_gen_providers.go`'s own skip-reason logic).
