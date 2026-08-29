@@ -19,10 +19,9 @@ type PublishedLLMMetadataSnapshot = {
 
 const DEFAULT_CHAT_PROVIDER: LLMProvider = 'codex-cli'
 const DEFAULT_CHAT_MODEL = 'codex-cli'
-// 2026-08-20: direct API transport (openai/anthropic/vertex/bedrock/azure) --
-// see docs/design/api_transport_vs_pi_tradeoff.md. minimax is deliberately
-// excluded: it is an audio_provider here (speech/music), not one of these
-// five text-LLM api_model providers.
+// Direct API transport is limited to text LLM providers. MiniMax remains
+// available only through Pi's text-model sub-provider routing; no separate
+// MiniMax, ElevenLabs, or Deepgram frontend provider configuration remains.
 const FRONTEND_DEPRECATED_PROVIDER_IDS = new Set<string>([
   'agy-cli',
   'openai',
@@ -42,9 +41,6 @@ const SUPPORTED_PROVIDERS_FALLBACK: LLMProvider[] = [
   'codex-cli',
   'cursor-cli',
   'pi-cli',
-  'minimax',
-  'elevenlabs',
-  'deepgram',
 ]
 
 function isFrontendDeprecatedProvider(provider?: string): boolean {
@@ -159,9 +155,6 @@ function hasStoredProviderKeys(keys?: StoredProviderKeys | null): boolean {
     keys?.codex_cli ||
     keys?.cursor_cli ||
     keys?.pi_cli ||
-    keys?.minimax ||
-    keys?.elevenlabs ||
-    keys?.deepgram ||
     (keys?.pi_provider_keys && Object.values(keys.pi_provider_keys).some(key => !!key?.trim())) ||
     keys?.bedrock?.region ||
     (keys?.azure?.endpoint && keys?.azure?.api_key)
@@ -177,10 +170,6 @@ function extractStoredProviderKeysFromState(state: {
   vertexConfig: ExtendedLLMConfiguration
   bedrockConfig: ExtendedLLMConfiguration
   azureConfig: ExtendedLLMConfiguration
-  minimaxConfig: ExtendedLLMConfiguration
-  minimaxCodingPlanConfig: ExtendedLLMConfiguration
-  elevenlabsConfig: ExtendedLLMConfiguration
-  deepgramConfig: ExtendedLLMConfiguration
   savedLLMs: SavedLLM[]
 }): StoredProviderKeys {
   const keys: StoredProviderKeys = {
@@ -189,9 +178,6 @@ function extractStoredProviderKeysFromState(state: {
     zai: unmaskedProviderKey(state.zaiConfig?.api_key),
     kimi: unmaskedProviderKey(state.kimiConfig?.api_key),
     vertex: unmaskedProviderKey(state.vertexConfig?.api_key),
-    minimax: unmaskedProviderKey(state.minimaxConfig?.api_key),
-    elevenlabs: unmaskedProviderKey(state.elevenlabsConfig?.api_key),
-    deepgram: unmaskedProviderKey(state.deepgramConfig?.api_key),
     bedrock: state.bedrockConfig?.region ? { region: state.bedrockConfig.region } : undefined,
     azure: state.azureConfig?.endpoint && unmaskedProviderKey(state.azureConfig?.api_key)
       ? {
@@ -212,7 +198,6 @@ function extractStoredProviderKeysFromState(state: {
     if (llm.provider === 'vertex' && apiKey && !keys.vertex) keys.vertex = apiKey
     if (llm.provider === 'codex-cli' && apiKey && !keys.codex_cli) keys.codex_cli = apiKey
     if (llm.provider === 'pi-cli' && apiKey && !keys.pi_cli) keys.pi_cli = apiKey
-    if (llm.provider === 'minimax' && apiKey && !keys.minimax) keys.minimax = apiKey
     if (llm.provider === 'bedrock' && llm.region && !keys.bedrock) keys.bedrock = { region: llm.region }
     if (llm.provider === 'azure' && llm.endpoint && apiKey && !keys.azure) {
       keys.azure = {
@@ -364,7 +349,7 @@ interface LLMState extends StoreActions {
   removeCustomMinimaxCodingPlanModel: (model: string) => void
 
   // Legacy actions (for backward compatibility)
-  updateProvider: (provider: 'bedrock' | 'openai' | 'vertex' | 'anthropic' | 'azure' | 'elevenlabs' | 'deepgram') => void
+  updateProvider: (provider: 'bedrock' | 'openai' | 'vertex' | 'anthropic' | 'azure') => void
   updateModel: (modelId: string) => void
   updateFallbacks: (fallbacks: string[]) => void
   updateCrossProviderFallback: (fallback: LLMConfiguration['cross_provider_fallback']) => void
@@ -1123,7 +1108,11 @@ export const useLLMStore = create<LLMState>()(
               availableElevenLabsModels: defaults.available_models.elevenlabs || [],
               availableDeepgramModels: defaults.available_models.deepgram || [],
               supportedProviders: (() => {
-                const sp = (defaults.supported_providers || SUPPORTED_PROVIDERS_FALLBACK).filter(provider => provider !== 'openrouter' && provider !== 'z-ai' && provider !== 'kimi' && provider !== 'minimax-coding-plan')
+                const sp = (defaults.supported_providers || SUPPORTED_PROVIDERS_FALLBACK).filter(provider =>
+                  provider !== 'openrouter' && provider !== 'z-ai' && provider !== 'kimi' &&
+                  provider !== 'minimax' && provider !== 'minimax-coding-plan' &&
+                  provider !== 'elevenlabs' && provider !== 'deepgram'
+                )
                 console.log('[useLLMStore] supported_providers from backend:', defaults.supported_providers, '→ using:', sp)
                 return sp
               })(),
@@ -1224,12 +1213,6 @@ export const useLLMStore = create<LLMState>()(
               break;
             case 'azure':
               availableModels = [...state.availableAzureModels, ...state.customAzureModels];
-              break;
-            case 'elevenlabs':
-              availableModels = state.availableElevenLabsModels;
-              break;
-            case 'deepgram':
-              availableModels = state.availableDeepgramModels;
               break;
           }
           
@@ -1515,14 +1498,10 @@ export const useLLMStore = create<LLMState>()(
           azureConfig: sanitizeProviderConfigForPersistence(state.azureConfig),
           zaiConfig: sanitizeProviderConfigForPersistence(state.zaiConfig),
           kimiConfig: sanitizeProviderConfigForPersistence(state.kimiConfig),
-          minimaxConfig: sanitizeProviderConfigForPersistence(state.minimaxConfig),
-          elevenlabsConfig: sanitizeProviderConfigForPersistence(state.elevenlabsConfig),
-          deepgramConfig: sanitizeProviderConfigForPersistence(state.deepgramConfig),
           customBedrockModels: state.customBedrockModels,
           customOpenAIModels: state.customOpenAIModels,
           customVertexModels: state.customVertexModels,
           customAzureModels: state.customAzureModels,
-          customMinimaxModels: state.customMinimaxModels,
           showLLMModal: state.showLLMModal,
           delegationTierConfig: state.delegationTierConfig,
           // DO NOT persist availableBedrockModels, availableOpenRouterModels, availableOpenAIModels
@@ -1575,9 +1554,6 @@ function syncProviderKeysToServer() {
         kimi: unmaskedProviderKey(s.kimiConfig?.api_key),
         vertex: unmaskedProviderKey(s.vertexConfig?.api_key),
         pi_cli: piSavedKey,
-        minimax: unmaskedProviderKey(s.minimaxConfig?.api_key),
-        elevenlabs: unmaskedProviderKey(s.elevenlabsConfig?.api_key),
-        deepgram: unmaskedProviderKey(s.deepgramConfig?.api_key),
         bedrock: s.bedrockConfig?.region ? { region: s.bedrockConfig.region } : undefined,
         azure: s.azureConfig?.endpoint && azureApiKey
           ? {
@@ -1602,9 +1578,6 @@ const getProviderKeySnapshot = (state: LLMState) => ([
   state.vertexConfig?.api_key,
   state.azureConfig?.api_key,
   state.azureConfig?.endpoint,
-  state.minimaxConfig?.api_key,
-  state.elevenlabsConfig?.api_key,
-  state.deepgramConfig?.api_key,
   state.bedrockConfig?.region,
 ])
 

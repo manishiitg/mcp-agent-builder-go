@@ -92,3 +92,23 @@ this ticket's own functional narrowing (media tools remain hidden); it
 restores the reference-doc pointer and content the narrowing incidentally
 carried away, and brings the two affected test files current with the
 narrowing's own intent.
+
+## Frontend correction (2026-08-29)
+
+The backend/registry refactor had not removed all frontend provider-collection
+paths: `LLMConfigurationModal` still contained unreachable-but-real Gemini
+audio, MiniMax audio/music, ElevenLabs, and Deepgram credential sections, and
+the frontend store could still migrate, persist, and sync the latter three
+keys. A stale provider manifest or direct tab selection could therefore
+re-expose a retired configuration surface.
+
+Removed every retired media provider tab/section from the Model Provider page,
+excluded MiniMax/ElevenLabs/Deepgram from the modal and library filters, and
+stopped frontend key migration, persistence, and workspace-key sync for those
+providers. Pi CLI remains in the coding-agent area; its own supported text
+sub-provider routing is not a standalone MiniMax credential page.
+
+`npx eslint src/components/LLMConfigurationModal.tsx src/stores/useLLMStore.ts`
+and `npm run build` pass. The repository-wide frontend lint command still has
+pre-existing failures in unrelated files and was not used as this change's
+gate.
