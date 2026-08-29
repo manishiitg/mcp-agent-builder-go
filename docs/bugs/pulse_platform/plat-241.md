@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | Claude Code |
-| Ticket state | `root cause confirmed live — fix design specified, implementation deferred` |
+| Ticket state | `root cause confirmed live — fix design specified (corrected: overwrite in place, not additive), implementation deferred` |
 | Last synchronized | `2026-08-29` |
 
 - **Priority:** harness_issue, severity high.
@@ -68,23 +68,40 @@ rotation is unambiguously now at `to`.
 
 ## Recommended fix design (for whoever implements this)
 
-Add a fourth sibling, e.g. `archivePreValidationRunFolder(ctx, from, to
-string) error` in `step_based_workflow`, called from
-`rotatePairedIterationZero` alongside the other three (best-effort,
-`Warn`-only on failure, matching the existing three). Walk
-`<runsPath>/<to>/*/logs/*/pre_validation_*.json` (group → step-id → file,
-one extra `ListWorkspaceFiles` level versus the existing siblings). For
-each file whose top-level `run_folder` field equals `from + "/" +
-<its own group>`, **add** a new field (e.g. `archived_run_folder`) set to
-`to + "/" + <group>` — following `ArchiveRunCostPaths`'s established
-convention of preserving the original captured value and adding a
-separate archived-path field, rather than overwriting `run_folder` in
-place. Skip files that already have that field set (idempotent, matching
-the siblings' `if ... != "" { continue }` guard). Write a test harness
-first (none of the three existing siblings have one worth modeling
-closely; a fresh fixture using the real `ListWorkspaceFiles`/
-`WriteWorkspaceFile` test doubles already used elsewhere in this package
-is the right starting point) before wiring it into the live rotation path.
+**Correction (2026-08-29, independent review):** the first draft of this
+section recommended adding a new `archived_run_folder` field alongside the
+existing `run_folder`, copying `ArchiveRunCostPaths`'s convention. That
+convention is right for cost/evaluation ledgers because the *original*
+`RunFolder` value there is an immutable part of the record with its own
+consumers, and `ArchivedRunFolder` is deliberately an addition, not a
+replacement. It does not transfer here: `grep`-ing this repo for
+`.RunFolder` reads on the pre_validation struct finds **no Go-side
+consumer at all** — `RunFolder` on `PreValidationResult`
+(`pre_validation.go:134`) is write-only from Go's perspective. Adding a
+second field nobody is required to prefer would reproduce the exact bug
+this ticket exists to fix, just one field over — any future or existing
+consumer that reads `run_folder` (an agent, a script, a person) still gets
+the stale value unless it separately knows to check
+`archived_run_folder` first, and nothing enforces that.
+
+Given there is no immutable-record constraint and no known consumer to
+break, the correct fix is simpler than the cost-ledger pattern: **overwrite
+`run_folder` in place** at rotation time, not add a parallel field. Add a
+fourth sibling, e.g. `archivePreValidationRunFolder(ctx, from, to string)
+error` in `step_based_workflow`, called from `rotatePairedIterationZero`
+alongside the other three (best-effort, `Warn`-only on failure, matching
+the existing three). Walk `<runsPath>/<to>/*/logs/*/pre_validation_*.json`
+(group → step-id → file, one extra `ListWorkspaceFiles` level versus the
+existing siblings). For each file whose top-level `run_folder` field
+equals `from + "/" + <its own group>`, set it directly to
+`to + "/" + <group>` and rewrite the file. Idempotent by construction — a
+file already renamed to `to` simply won't match `from` on a later pass, so
+no extra "already done" guard is needed the way the additive siblings need
+one. Write a test harness first (none of the three existing siblings have
+one worth modeling closely; a fresh fixture using the real
+`ListWorkspaceFiles`/`WriteWorkspaceFile` test doubles already used
+elsewhere in this package is the right starting point) before wiring it
+into the live rotation path.
 
 ## Verification
 
@@ -95,6 +112,6 @@ finding text alone.
 ## Reverify
 
 Not applicable — no fix shipped this session. Reverify once implemented,
-by confirming a newly-rotated run's `pre_validation_*.json` files gain a
-correct `archived_run_folder` field pointing at the permanent iteration
+by confirming a newly-rotated run's `pre_validation_*.json` files have
+their `run_folder` field updated in place to the permanent iteration
 name.
