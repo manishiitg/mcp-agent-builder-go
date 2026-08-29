@@ -22,6 +22,7 @@ var evaluationPlanEditableFields = []string{
 	"max_score",
 	"applies_to_routes",
 	"validation_schema",
+	"pre_validation",
 	"db_write",
 }
 
@@ -203,7 +204,8 @@ func getUpdateEvaluationPlanSchema() string {
     "context_dependencies": {"type": "array", "items": {"type": "string"}},
     "max_score": {"type": "integer", "description": "Score scale for this step. Steps without one cannot be compared run to run."},
     "db_write": {"type": "boolean"},
-    "validation_schema": {"type": "object", "description": "Pre-validation schema for this step's output."},
+    "validation_schema": {"type": "object", "description": "Validation schema for this step's OWN OUTPUT, checked after it runs."},
+    "pre_validation": {"type": "object", "description": "Files required to exist BEFORE this step runs, e.g. {\"files\":[{\"file_name\":\"...\",\"must_exist\":true}]}. Distinct from validation_schema, which checks this step's own output afterward. Gate route/producer alignment against this together with applies_to_routes so a step's evidence requirement never outlives the route that actually produces it (PUL-E45BE152)."},
     "applies_to_routes": {
       "type": "array",
       "description": "Gate this step to specific routes chosen by a routing step. Omit to run it on every route.",
