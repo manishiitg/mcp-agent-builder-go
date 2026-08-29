@@ -1546,6 +1546,29 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       } else {
         setLastEventIndex(newLastEventIndex)
       }
+    } else if (response.last_processed_index === -1) {
+      // -1 is the backend's explicit "this session is not in my in-memory
+      // event store" signal (polling.go: !exists -> LastProcessedIndex: -1).
+      // The store is in-memory only, so a server restart wipes every live
+      // session's event log; a tab left open across that restart keeps
+      // polling with its pre-restart since= cursor forever, which the fresh
+      // process's own (much shorter) post-restart event log can never reach
+      // -- the poll silently returns empty on every tick, with no visible
+      // error, indefinitely. Only reset when we previously tracked real
+      // progress (index > 0): a genuinely brand-new, never-polled session
+      // legitimately gets -1 on its first poll too, and resetting an
+      // already-0 index would be a no-op anyway.
+      const priorIndex = tab
+        ? getTabLastEventIndex(actualSessionId)
+        : lastEventIndexRef.current
+      if (priorIndex > 0) {
+        logger.warn('ChatArea', `Backend has no record of session ${actualSessionId} (likely a server restart) after prior progress at index ${priorIndex}; resetting cursor to resync`)
+        if (tab) {
+          setTabLastEventIndex(actualSessionId, 0)
+        } else {
+          setLastEventIndex(0)
+        }
+      }
     }
 
     if (response.events.length === 0) return
@@ -1856,7 +1879,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       addTabEvents(actualSessionId, newEvents)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [getTabEvents, setTabLastEventIndex, setLastEventIndex, addTabEvents, setIsStreaming, setIsCompleted, setHasActiveChat, selectedModeCategory])
+  }, [getTabEvents, getTabLastEventIndex, setTabLastEventIndex, setLastEventIndex, addTabEvents, setIsStreaming, setIsCompleted, setHasActiveChat, selectedModeCategory])
 
   // Handle an incoming SSE event message: ignore global streaming display events,
   // then process non-streaming events inline.
