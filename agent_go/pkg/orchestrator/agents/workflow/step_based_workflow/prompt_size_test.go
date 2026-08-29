@@ -298,8 +298,15 @@ func TestPhaseChatWorkshopSelectsWorkspaceToolGuidanceByTransport(t *testing.T) 
 
 	base["UseProjectedReferenceSkills"] = "false"
 	apiPrompt := PhaseChatSystemPrompt("workflow-builder", base)
-	if !strings.Contains(apiPrompt, "generate_video(prompt, output_path") ||
-		!strings.Contains(apiPrompt, "- **Schedule management**:") {
+	// PLAT-244 deliberately narrowed the active provider-backed tool surface
+	// to generate_text_llm/search_web_llm and hid media tools (generate_video
+	// et al.) from being presented as callable, so the API/non-CLI inline
+	// fallback should show the narrowed catalog inline -- not the pre-PLAT-244
+	// full media catalog, which is no longer a real, reachable tool surface.
+	if !strings.Contains(apiPrompt, "generate_text_llm(user_message, tier)") ||
+		!strings.Contains(apiPrompt, "search_web_llm(query, provider)") ||
+		!strings.Contains(apiPrompt, "- **Schedule management**:") ||
+		strings.Contains(apiPrompt, "generate_video(prompt, output_path") {
 		t.Fatal("API phase-chat builder lost its inline workspace-tool fallback")
 	}
 }

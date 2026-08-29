@@ -96,8 +96,13 @@ func TestMaterializedReferenceSkillIncludesConfigToolOnlyDocs(t *testing.T) {
 		}
 	}
 
+	// PLAT-244 deliberately narrowed the active workspace provider surface to
+	// generate_text_llm/search_web_llm and hid media tools (image/video/audio/
+	// music/transcription), routing search through hosted-MCP providers
+	// (parallel/exa/firecrawl) rather than the published LLM set -- so this
+	// reference's content, and this test's expectations, changed with it.
 	mediaTools := materializedFileContent(t, skill, "references/workspace-media-tools.md")
-	for _, want := range []string{"set_provider_auth", "workspace-backed image generation defaults", "**Search provider routing** comes from the published LLM set"} {
+	for _, want := range []string{"set_provider_auth", "deprecated and hidden", "hosted-MCP web search"} {
 		if !strings.Contains(mediaTools, want) {
 			t.Fatalf("workspace-media-tools reference should contain %q\n%s", want, mediaTools)
 		}

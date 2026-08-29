@@ -15,3 +15,6 @@ collect media-provider credentials through workspace provider setup.
 For ordinary chat/text provider credentials, use the existing provider setup
 flow. A Pi sub-provider credential (including MiniMax) is allowed only when
 explicitly configuring Pi for a text model; it is not a media-provider setup.
+Store any provider API key via `set_provider_auth` — encrypted, workspace-backed
+— never by hand-editing a config file or pasting the raw key into a shell
+command or script.

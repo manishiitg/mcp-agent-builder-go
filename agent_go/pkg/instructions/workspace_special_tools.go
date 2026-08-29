@@ -18,7 +18,9 @@ Available tools:
 
 Provider-setup essentials (do not hand-edit provider-auth storage — it's encrypted and managed via ` + "`set_provider_auth`" + `; audio/video/image/music providers are workspace **tool** capabilities, not published-LLM entries — call ` + "`list_llm_capabilities(capability=\"...\")`" + ` for the authoritative availability answer).
 
-Provider media tools are deprecated and hidden from agents while these two text/search tools are the active testing focus.`
+Provider media tools are deprecated and hidden from agents while these two text/search tools are the active testing focus.
+
+**For the full reference on these two active tools — parameters, defaults, provider routing rules, model-ID lists, and common-mistake gotchas — call:** ` + "`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/workspace-media-tools.md\"}])`" + `.`
 }
 
 // GetSpecialWorkspaceToolsPointer returns the compact coding-CLI form of the
@@ -29,5 +31,5 @@ Provider media tools are deprecated and hidden from agents while these two text/
 func GetSpecialWorkspaceToolsPointer() string {
 	return `## Special Workspace Tools
 
-The active provider-backed text and web-search tools are available through the MCP bridge. Provider media tools are deprecated and hidden from agents while text/search testing is the focus.`
+The active provider-backed text and web-search tools are available through the MCP bridge. Provider media tools are deprecated and hidden from agents while text/search testing is the focus. Before using ` + "`search_web_llm`" + ` or ` + "`generate_text_llm`" + `, read the attached ` + "`builder-reference`" + ` skill's ` + "`references/workspace-media-tools.md`" + ` (or call ` + "`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/workspace-media-tools.md\"}])`" + `) for parameters, provider routing, and known gotchas. Use ` + "`list_llm_capabilities`" + ` as the authoritative availability source and ` + "`set_provider_auth`" + ` for credentials; never place credentials in shell commands or files.`
 }
