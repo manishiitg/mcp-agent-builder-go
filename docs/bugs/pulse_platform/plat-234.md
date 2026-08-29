@@ -121,3 +121,17 @@ observed >180s duration to the full search turn rather than cold start
 specifically, and to scope the claim to `codex-cli` rather than every
 CLI-backed provider. `go build ./...` and `go test
 ./cmd/server/guidance/...` pass after the edit.
+
+**Second correction applied (2026-08-29):** the guidance's causal framing
+was too absolute — "a timeout here means the caller's own deadline was too
+tight, not that the provider is broken" reads as a binary claim covering
+every future timeout, when the underlying evidence is a single day's
+findings (three occurrences, same session) showing one healthy-but-slow
+turn, not proof that a timeout can *never* indicate a real provider
+problem. Reworded both the inline `search_web_llm` note and the "Common
+mistakes" bullet: a timeout no longer *proves* the budget was too
+tight — it "doesn't by itself prove the provider is broken" and "can
+simply be a too-tight budget," with an explicit escalation path (widen the
+budget and retry; treat *persistent* timeouts across multiple widened
+attempts as evidence of a real problem, not a budget one). `go build
+./...` and `go test ./cmd/server/guidance/...` pass.

@@ -180,17 +180,46 @@ func (vs *ValidationSchema) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
-	// Fix double-escaped patterns in all checks
-	for i := range vs.Files {
-		for j := range vs.Files[i].JSONChecks {
-			if vs.Files[i].JSONChecks[j].Pattern != "" {
-				fixed := fixDoubleEscapedPattern(vs.Files[i].JSONChecks[j].Pattern)
-				vs.Files[i].JSONChecks[j].Pattern = fixed
-			}
+	// Fix double-escaped patterns in all checks, file-based and DB-based alike
+	// -- both run the same JSONValidationCheck through the same pattern
+	// matcher at runtime (pre_validation.go / pre_validation_db.go).
+	forEachSchemaCheck(vs, func(_ string, check *JSONValidationCheck) {
+		if check.Pattern != "" {
+			check.Pattern = fixDoubleEscapedPattern(check.Pattern)
 		}
-	}
+	})
 
 	return nil
+}
+
+// forEachSchemaCheck calls fn once for every JSONValidationCheck in the
+// schema, across both file-based rules (schema.Files[].JSONChecks) and
+// DB-based rules (schema.DB[].Checks) -- the same JSONValidationCheck type,
+// evaluated by the same validateJSONCheck/validatePattern logic at runtime
+// (pre_validation.go, pre_validation_db.go). label identifies which rule the
+// check belongs to, for error messages. Every write-time schema validator
+// must walk both rule kinds through this helper: an unsatisfiable or
+// malformed check is exactly as real in a DB rule as in a file rule.
+func forEachSchemaCheck(schema *ValidationSchema, fn func(label string, check *JSONValidationCheck)) {
+	if schema == nil {
+		return
+	}
+	for i := range schema.Files {
+		fileRule := &schema.Files[i]
+		for j := range fileRule.JSONChecks {
+			fn(fmt.Sprintf("File '%s'", fileRule.FileName), &fileRule.JSONChecks[j])
+		}
+	}
+	for i := range schema.DB {
+		dbRule := &schema.DB[i]
+		label := strings.TrimSpace(dbRule.Name)
+		if label == "" {
+			label = fmt.Sprintf("DB check #%d", i+1)
+		}
+		for j := range dbRule.Checks {
+			fn(fmt.Sprintf("DB rule '%s'", label), &dbRule.Checks[j])
+		}
+	}
 }
 
 // FileValidationRule represents validation rules for a specific file
@@ -2254,26 +2283,23 @@ func validateRegexPatternsInSchema(schema *ValidationSchema) error {
 	}
 
 	var errors []string
-	for _, fileRule := range schema.Files {
-		for i := range fileRule.JSONChecks {
-			check := &fileRule.JSONChecks[i]
-			if check.Pattern != "" {
-				// Safety net: Fix double-escaped patterns if they weren't fixed during unmarshaling
-				// (e.g., if schema was created programmatically rather than from JSON)
-				fixedPattern := fixDoubleEscapedPattern(check.Pattern)
-				if fixedPattern != check.Pattern {
-					// Update the pattern in the schema to the fixed version
-					check.Pattern = fixedPattern
-				}
-
-				// Validate the pattern
-				_, err := regexp.Compile(check.Pattern)
-				if err != nil {
-					errors = append(errors, fmt.Sprintf("Invalid regex pattern in file '%s' at path '%s': %v (pattern: '%s')", fileRule.FileName, check.Path, err, check.Pattern))
-				}
-			}
+	forEachSchemaCheck(schema, func(label string, check *JSONValidationCheck) {
+		if check.Pattern == "" {
+			return
 		}
-	}
+		// Safety net: Fix double-escaped patterns if they weren't fixed during unmarshaling
+		// (e.g., if schema was created programmatically rather than from JSON)
+		fixedPattern := fixDoubleEscapedPattern(check.Pattern)
+		if fixedPattern != check.Pattern {
+			// Update the pattern in the schema to the fixed version
+			check.Pattern = fixedPattern
+		}
+
+		// Validate the pattern
+		if _, err := regexp.Compile(check.Pattern); err != nil {
+			errors = append(errors, fmt.Sprintf("%s at path '%s': invalid regex pattern: %v (pattern: '%s')", label, check.Path, err, check.Pattern))
+		}
+	})
 
 	if len(errors) > 0 {
 		return fmt.Errorf("validation schema contains invalid regex patterns:\n%s", strings.Join(errors, "\n"))
@@ -2297,20 +2323,18 @@ func validateValueTypePatternCompatibility(schema *ValidationSchema) error {
 	}
 
 	var errors []string
-	for _, fileRule := range schema.Files {
-		for _, check := range fileRule.JSONChecks {
-			if check.Pattern == "" {
-				continue
-			}
-			valueType := strings.TrimSpace(check.ValueType)
-			if valueType != "" && valueType != "string" {
-				errors = append(errors, fmt.Sprintf(
-					"File '%s': path '%s' sets both value_type=%q and a pattern, but pattern only ever matches string values -- this combination can never pass for any real data. Remove the pattern or drop value_type to \"string\"",
-					fileRule.FileName, check.Path, valueType,
-				))
-			}
+	forEachSchemaCheck(schema, func(label string, check *JSONValidationCheck) {
+		if check.Pattern == "" {
+			return
 		}
-	}
+		valueType := strings.TrimSpace(check.ValueType)
+		if valueType != "" && valueType != "string" {
+			errors = append(errors, fmt.Sprintf(
+				"%s: path '%s' sets both value_type=%q and a pattern, but pattern only ever matches string values -- this combination can never pass for any real data. Remove the pattern or drop value_type to \"string\"",
+				label, check.Path, valueType,
+			))
+		}
+	})
 
 	if len(errors) > 0 {
 		return fmt.Errorf("validation schema has an unsatisfiable value_type/pattern combination:\n%s", strings.Join(errors, "\n"))
@@ -2328,56 +2352,54 @@ func validateJSONPathSyntax(schema *ValidationSchema) error {
 	var errors []string
 	dummyData := map[string]interface{}{}
 
-	for _, fileRule := range schema.Files {
-		for _, check := range fileRule.JSONChecks {
-			// Validate check.Path
-			path := strings.TrimSpace(check.Path)
-			if path == "" {
-				errors = append(errors, fmt.Sprintf("File '%s': Empty path is not allowed", fileRule.FileName))
+	forEachSchemaCheck(schema, func(label string, check *JSONValidationCheck) {
+		// Validate check.Path
+		path := strings.TrimSpace(check.Path)
+		if path == "" {
+			errors = append(errors, fmt.Sprintf("%s: Empty path is not allowed", label))
+		} else {
+			if !strings.HasPrefix(path, "$.") {
+				errors = append(errors, fmt.Sprintf("%s: Path '%s' must start with '$.'", label, path))
 			} else {
-				if !strings.HasPrefix(path, "$.") {
-					errors = append(errors, fmt.Sprintf("File '%s': Path '%s' must start with '$.'", fileRule.FileName, path))
-				} else {
-					// Check syntax by attempting to evaluate against dummy data
-					_, err := jsonpath.Get(path, dummyData)
-					if err != nil && strings.Contains(err.Error(), "parsing error") {
-						errors = append(errors, fmt.Sprintf("File '%s': Invalid JSONPath syntax in '%s': %v", fileRule.FileName, path, err))
-					}
+				// Check syntax by attempting to evaluate against dummy data
+				_, err := jsonpath.Get(path, dummyData)
+				if err != nil && strings.Contains(err.Error(), "parsing error") {
+					errors = append(errors, fmt.Sprintf("%s: Invalid JSONPath syntax in '%s': %v", label, path, err))
 				}
 			}
+		}
 
-			// Validate consistency_check if it exists and is actually specified
-			// Skip validation if both Type and CompareWithPath are empty (treat as not specified)
-			if check.ConsistencyCheck != nil {
-				comparePath := strings.TrimSpace(check.ConsistencyCheck.CompareWithPath)
-				checkType := strings.TrimSpace(check.ConsistencyCheck.Type)
+		// Validate consistency_check if it exists and is actually specified
+		// Skip validation if both Type and CompareWithPath are empty (treat as not specified)
+		if check.ConsistencyCheck != nil {
+			comparePath := strings.TrimSpace(check.ConsistencyCheck.CompareWithPath)
+			checkType := strings.TrimSpace(check.ConsistencyCheck.Type)
 
-				// Only validate if at least one field is specified
-				if comparePath == "" && checkType == "" {
-					// Both empty - treat as if consistency_check wasn't specified, skip validation
-				} else if comparePath == "" || checkType == "" {
-					// One is specified but not the other - error
-					if comparePath == "" {
-						errors = append(errors, fmt.Sprintf("File '%s': compare_with_path is required when consistency check type is specified", fileRule.FileName))
-					}
-					if checkType == "" {
-						errors = append(errors, fmt.Sprintf("File '%s': type is required when consistency check compare_with_path is specified", fileRule.FileName))
-					}
+			// Only validate if at least one field is specified
+			if comparePath == "" && checkType == "" {
+				// Both empty - treat as if consistency_check wasn't specified, skip validation
+			} else if comparePath == "" || checkType == "" {
+				// One is specified but not the other - error
+				if comparePath == "" {
+					errors = append(errors, fmt.Sprintf("%s: compare_with_path is required when consistency check type is specified", label))
+				}
+				if checkType == "" {
+					errors = append(errors, fmt.Sprintf("%s: type is required when consistency check compare_with_path is specified", label))
+				}
+			} else {
+				// Both specified - validate the path syntax
+				if !strings.HasPrefix(comparePath, "$.") {
+					errors = append(errors, fmt.Sprintf("%s: compare_with_path '%s' must start with '$.'", label, comparePath))
 				} else {
-					// Both specified - validate the path syntax
-					if !strings.HasPrefix(comparePath, "$.") {
-						errors = append(errors, fmt.Sprintf("File '%s': compare_with_path '%s' must start with '$.'", fileRule.FileName, comparePath))
-					} else {
-						// Check syntax
-						_, err := jsonpath.Get(comparePath, dummyData)
-						if err != nil && strings.Contains(err.Error(), "parsing error") {
-							errors = append(errors, fmt.Sprintf("File '%s': Invalid JSONPath syntax in compare_with_path '%s': %v", fileRule.FileName, comparePath, err))
-						}
+					// Check syntax
+					_, err := jsonpath.Get(comparePath, dummyData)
+					if err != nil && strings.Contains(err.Error(), "parsing error") {
+						errors = append(errors, fmt.Sprintf("%s: Invalid JSONPath syntax in compare_with_path '%s': %v", label, comparePath, err))
 					}
 				}
 			}
 		}
-	}
+	})
 
 	if len(errors) > 0 {
 		return fmt.Errorf("validation schema contains invalid JSONPaths:\n%s", strings.Join(errors, "\n"))
@@ -2419,57 +2441,55 @@ func validateArrayLengthConsistencyChecks(schema *ValidationSchema) error {
 	}
 
 	var errors []string
-	for _, fileRule := range schema.Files {
-		for _, check := range fileRule.JSONChecks {
-			if check.ConsistencyCheck == nil || check.ConsistencyCheck.Type != "array_length" {
-				continue
-			}
-
-			path := strings.TrimSpace(check.Path)
-			comparePath := strings.TrimSpace(check.ConsistencyCheck.CompareWithPath)
-
-			// Basic validation: paths must be non-empty and different
-			if path == "" {
-				errors = append(errors, fmt.Sprintf(
-					"File '%s': array_length consistency check has empty path. Path must be a valid JSONPath.",
-					fileRule.FileName))
-				continue
-			}
-
-			if comparePath == "" {
-				errors = append(errors, fmt.Sprintf(
-					"File '%s': array_length consistency check has empty compare_with_path. compare_with_path must be a valid JSONPath.",
-					fileRule.FileName))
-				continue
-			}
-
-			if path == comparePath {
-				errors = append(errors, fmt.Sprintf(
-					"File '%s': array_length consistency check has path '%s' equal to compare_with_path '%s'. They must be different - one should point to a COUNT/number field, the other to an ARRAY field.",
-					fileRule.FileName, path, comparePath))
-				continue
-			}
-
-			// Detect field types to check for ambiguity
-			pathIsNumber, pathIsArray := detectFieldTypeFromPath(path)
-			compareIsNumber, compareIsArray := detectFieldTypeFromPath(comparePath)
-
-			// Check for ambiguous configurations
-			if pathIsArray && compareIsArray {
-				errors = append(errors, fmt.Sprintf(
-					"File '%s': AMBIGUOUS CHECK! Both path '%s' and compare_with_path '%s' contain array field indicators. One must be a NUMBER/COUNT field. Please check your paths.",
-					fileRule.FileName, path, comparePath))
-			} else if pathIsNumber && compareIsNumber {
-				errors = append(errors, fmt.Sprintf(
-					"File '%s': AMBIGUOUS CHECK! Both path '%s' and compare_with_path '%s' contain number field indicators. One must be an ARRAY field. Please check your paths.",
-					fileRule.FileName, path, comparePath))
-			}
-
-			// Note: We no longer enforce strict order (Number, Array) vs (Array, Number)
-			// because the runtime validator now handles both cases.
-			// We only flag if both look like the SAME type.
+	forEachSchemaCheck(schema, func(label string, check *JSONValidationCheck) {
+		if check.ConsistencyCheck == nil || check.ConsistencyCheck.Type != "array_length" {
+			return
 		}
-	}
+
+		path := strings.TrimSpace(check.Path)
+		comparePath := strings.TrimSpace(check.ConsistencyCheck.CompareWithPath)
+
+		// Basic validation: paths must be non-empty and different
+		if path == "" {
+			errors = append(errors, fmt.Sprintf(
+				"%s: array_length consistency check has empty path. Path must be a valid JSONPath.",
+				label))
+			return
+		}
+
+		if comparePath == "" {
+			errors = append(errors, fmt.Sprintf(
+				"%s: array_length consistency check has empty compare_with_path. compare_with_path must be a valid JSONPath.",
+				label))
+			return
+		}
+
+		if path == comparePath {
+			errors = append(errors, fmt.Sprintf(
+				"%s: array_length consistency check has path '%s' equal to compare_with_path '%s'. They must be different - one should point to a COUNT/number field, the other to an ARRAY field.",
+				label, path, comparePath))
+			return
+		}
+
+		// Detect field types to check for ambiguity
+		pathIsNumber, pathIsArray := detectFieldTypeFromPath(path)
+		compareIsNumber, compareIsArray := detectFieldTypeFromPath(comparePath)
+
+		// Check for ambiguous configurations
+		if pathIsArray && compareIsArray {
+			errors = append(errors, fmt.Sprintf(
+				"%s: AMBIGUOUS CHECK! Both path '%s' and compare_with_path '%s' contain array field indicators. One must be a NUMBER/COUNT field. Please check your paths.",
+				label, path, comparePath))
+		} else if pathIsNumber && compareIsNumber {
+			errors = append(errors, fmt.Sprintf(
+				"%s: AMBIGUOUS CHECK! Both path '%s' and compare_with_path '%s' contain number field indicators. One must be an ARRAY field. Please check your paths.",
+				label, path, comparePath))
+		}
+
+		// Note: We no longer enforce strict order (Number, Array) vs (Array, Number)
+		// because the runtime validator now handles both cases.
+		// We only flag if both look like the SAME type.
+	})
 
 	if len(errors) > 0 {
 		return fmt.Errorf("validation schema contains misconfigured array_length consistency checks:\n%s", strings.Join(errors, "\n"))

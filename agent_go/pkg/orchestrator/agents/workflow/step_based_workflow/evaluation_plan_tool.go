@@ -78,6 +78,23 @@ func UpdateEvaluationPlanStep(
 		return "", fmt.Errorf("cannot set %s; editable fields are %s", strings.Join(unknown, ", "), strings.Join(evaluationPlanEditableFields, ", "))
 	}
 
+	// validation_schema/pre_validation are accepted here as raw decoded JSON
+	// (see the function doc for why this tool edits the map, not a struct),
+	// which meant they never passed through the same schema validators every
+	// other schema-writing tool in this file does -- PLAT-236 found this only
+	// after the exact unsatisfiable value_type/pattern shape it fixed
+	// elsewhere could still be authored through this specific tool
+	// untouched. Validate both by round-tripping through ValidationSchema.
+	for _, field := range []string{"validation_schema", "pre_validation"} {
+		raw, ok := updates[field]
+		if !ok {
+			continue
+		}
+		if err := validateSchemaLikeUpdateField(field, raw); err != nil {
+			return "", err
+		}
+	}
+
 	path := strings.Trim(strings.TrimSpace(workspacePath), "/") + "/" + evaluationPlanRelPath
 	raw, err := readFile(ctx, path)
 	if err != nil {
@@ -178,6 +195,35 @@ func UpdateEvaluationPlanStep(
 		changed = append(changed, change.Field)
 	}
 	return fmt.Sprintf("Updated evaluation step %q (%s) and recorded it in planning/changelog.", stepID, strings.Join(changed, ", ")), nil
+}
+
+// validateSchemaLikeUpdateField round-trips a raw decoded validation_schema
+// or pre_validation value through the shared ValidationSchema struct so it
+// gets the same write-time checks every other schema-writing tool applies:
+// regex pattern validity, JSONPath syntax, array_length consistency, and
+// value_type/pattern compatibility (PLAT-236).
+func validateSchemaLikeUpdateField(field string, raw interface{}) error {
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return fmt.Errorf("%s: %w", field, err)
+	}
+	var schema ValidationSchema
+	if err := json.Unmarshal(encoded, &schema); err != nil {
+		return fmt.Errorf("%s does not match the expected schema shape: %w", field, err)
+	}
+	if err := validateRegexPatternsInSchema(&schema); err != nil {
+		return fmt.Errorf("%s has invalid regex patterns: %w", field, err)
+	}
+	if err := validateJSONPathSyntax(&schema); err != nil {
+		return fmt.Errorf("%s has invalid JSONPath syntax: %w", field, err)
+	}
+	if err := validateArrayLengthConsistencyChecks(&schema); err != nil {
+		return fmt.Errorf("%s has invalid array_length consistency checks: %w", field, err)
+	}
+	if err := validateValueTypePatternCompatibility(&schema); err != nil {
+		return fmt.Errorf("%s has an invalid schema: %w", field, err)
+	}
+	return nil
 }
 
 // jsonEqual compares two decoded JSON values so an update that sets a field to

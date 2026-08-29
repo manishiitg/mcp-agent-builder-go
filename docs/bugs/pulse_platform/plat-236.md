@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | Claude Code |
-| Ticket state | `implemented; runtime reverify` |
+| Ticket state | `implemented; update_evaluation_plan gap closed; DB-check coverage added; runtime reverify` |
 | Last synchronized | `2026-08-29` |
 
 - **Priority:** harness_issue (write-time guardrail gap), severity high on
@@ -49,13 +49,8 @@ four call sites that accept a `validation_schema`/`pre_validation` payload:
 normalization. Rejects any check pairing `pattern` with a `value_type`
 other than `""`/`"string"`, naming the offending path and value_type.
 
-Deliberately not touched: `update_evaluation_plan`'s own `pre_validation`
-write path (`evaluation_plan_tool.go`, PLAT-227) calls none of these four
-validators at all — it edits the raw JSON map directly rather than through
-`PartialPlanStep`. That is a real, separate gap (any of the four
-contradiction classes could reach a live evaluation step through that
-tool untouched), out of scope for these two findings and left for a
-follow-up.
+~~Deliberately not touched: `update_evaluation_plan`'s own `pre_validation`
+write path...~~ — fixed, see "Corrections applied" below.
 
 ## Verification
 
@@ -72,3 +67,103 @@ contradictory schema yet. Reverify by confirming a future
 `update_validation_schema`/step-creation call that pairs a non-string
 `value_type` with a `pattern` is rejected with a clear error instead of
 silently landing an unsatisfiable check.
+
+## Independent review (2026-08-29)
+
+**Root cause: checks out.** `validatePattern`
+(`agent_go/pkg/orchestrator/agents/workflow/step_based_workflow/pre_validation.go:835-849`)
+really does reject any non-string value with the exact message quoted in
+the ticket, `"Pattern validation only applies to strings"`
+(`pre_validation.go:846`), regardless of what `value_type` claims. Since a
+`value_type=boolean` (or any non-string type) check and a `pattern` check
+are independent gates that must both pass, and no JSON value is
+simultaneously a `bool` and a `string`, the combination genuinely can never
+be satisfied — the ticket's core claim is correct.
+
+**Fix: exists and is wired at write time as described.**
+`validateValueTypePatternCompatibility`
+(`planning_agent.go:2294-2320`) rejects exactly the described shape: it
+walks `schema.Files[].JSONChecks`, and for any check with `Pattern != ""`
+and a trimmed `ValueType` that is non-empty and not `"string"`, appends an
+error naming the file, path, and offending `value_type`
+(`planning_agent.go:2305-2311`). All four claimed call sites are real and
+correctly identified:
+- `planning_agent.go:3341`, inside `updateSingleStep` (func at `:2931`) —
+  "the generic step-update path."
+- `planning_agent.go:4709`, inside `createSingleStepAdder` (func at
+  `:4666`) — "step-creation validation."
+- `planning_agent.go:5950`, inside `createUpdateValidationSchemaExecutor`
+  (func at `:5907`) — "`update_validation_schema`'s executor."
+- `evaluation_helpers.go:178`, inside `registerEvaluationValidationTools`'s
+  evaluation-plan normalization loop, gated on `step.PreValidation != nil`
+  (`:168-181`) — "evaluation-plan normalization."
+
+All 4 tests in `value_type_pattern_compatibility_test.go` pass as
+described (boolean+pattern rejected and error names the path/value_type;
+string+pattern allowed; non-string value_type with no pattern allowed;
+nil-schema no-op). Independently ran `go build ./...`, `go test
+./pkg/orchestrator/agents/workflow/step_based_workflow/... -run
+ValueTypePattern -v`, and both pass. The "deliberately not touched"
+claim about `evaluation_plan_tool.go`'s `update_evaluation_plan` path is
+also accurate — grepping that file finds no call to any of the four
+write-time validators; it references `pre_validation` only as a raw JSON
+field name/schema-doc string (`evaluation_plan_tool.go:25`, `:208`).
+
+**Wording overreach:** none found. The call-site count (4) is accurate,
+unlike the sibling PLAT-235 ticket's off-by-one call-site claim.
+
+**Missed edge case — DB validation checks share the exact same
+unsatisfiable shape and are completely unguarded.**
+`ValidationSchema` has two independent check surfaces:
+`Files []FileValidationRule` (each with `JSONChecks
+[]JSONValidationCheck`) and `DB []DBValidationRule` (each with `Checks
+[]JSONValidationCheck`) — same struct definition, same `ValueType`/
+`Pattern` fields (`planning_agent.go:153-160`, `:162-169`, `:204-214`).
+`validateValueTypePatternCompatibility` only iterates `schema.Files`
+(`planning_agent.go:2300`) and never touches `schema.DB`. This is not a
+theoretical gap: at runtime, `evaluateDBRule`
+(`pre_validation_db.go:45-74`) feeds every entry of `rule.Checks` through
+`validateJSONCheck(ctx, c, first)` (`pre_validation_db.go:69`), the same
+evaluator whose pattern step is the very `validatePattern` function this
+ticket cites — so a DB check pairing e.g. `value_type=boolean` with a
+`pattern` is exactly as unsatisfiable as the original file-check finding,
+and the new write-time guard silently lets it through at every one of the
+four call sites.
+
+This blind spot is not unique to the new validator — all three sibling
+write-time validators it sits alongside also only walk `schema.Files` and
+never `schema.DB` (`validateRegexPatternsInSchema`,
+`planning_agent.go:2257`; `validateJSONPathSyntax`, `:2331`;
+`validateArrayLengthConsistencyChecks`, `:2422`), so this is a pre-existing
+platform gap the new function inherited rather than a regression it
+introduced. But the ticket's own quoted changelog reason text
+("preserve boolean typing and every companion file/DB guard") shows DB
+guards are an established, named concept in this schema, and the ticket's
+"Deliberately not touched" section calls out only the
+`evaluation_plan_tool.go` gap — it should also name this equally real,
+currently-live DB-check blind spot rather than leaving it undisclosed.
+
+**Corrections applied (2026-08-29):**
+
+1. **`update_evaluation_plan` gap closed.** Added
+   `validateSchemaLikeUpdateField` in `evaluation_plan_tool.go`: for either
+   `validation_schema` or `pre_validation` in an update's raw JSON, it
+   round-trips the value through `ValidationSchema` and runs all four
+   write-time validators before the write proceeds. New test
+   `TestUpdateEvaluationPlanRejectsUnsatisfiableValueTypePattern`
+   reproduces the exact PLAT-236 shape through this tool and confirms it's
+   now rejected.
+2. **DB-check blind spot closed for all four validators, not just this
+   one.** Added `forEachSchemaCheck`, a shared iterator walking both
+   `schema.Files[].JSONChecks` and `schema.DB[].Checks`. All four
+   validators (`validateRegexPatternsInSchema`, `validateJSONPathSyntax`,
+   `validateArrayLengthConsistencyChecks`,
+   `validateValueTypePatternCompatibility`) — and `ValidationSchema`'s own
+   `UnmarshalJSON` double-escape-pattern fix — now route through it, so a
+   DB check gets the identical write-time coverage a file check does. New
+   test `TestSchemaValidatorsAlsoCoverDBChecks` (4 subtests, one per
+   validator) proves each one now rejects the equivalent DB-check shape.
+
+`go build ./...` and `go test
+./pkg/orchestrator/agents/workflow/step_based_workflow/... ./cmd/server/...`
+pass (13 total tests across both corrections).

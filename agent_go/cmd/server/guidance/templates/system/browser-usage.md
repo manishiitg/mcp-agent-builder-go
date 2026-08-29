@@ -214,16 +214,23 @@ Verify and recover with the same recipe five independent findings converged
 on:
 
 1. Dispatch the click.
-2. Wait for the settle delay, then take a *fresh* scoped read of the exact
-   same control — a new `snapshot`/`get` or a stable-selector re-query
-   (e.g. its `data-testid`), not a reused `@eN` reference from before the
-   click. Refs go stale after every interaction (see "Common mistakes"
-   below); reusing one here would read pre-click state and look like a
-   false pass. Check both `aria-label` and `data-testid` changed to the
-   expected post-action values.
-3. If unchanged, retry once with a scoped DOM click on the exact
-   `data-testid` for that control (not a fresh top-level click), then verify
-   again with another fresh read.
+2. Wait for the settle delay, then take a *fresh* scoped read of the same
+   control — a new `snapshot`/`get` of the surrounding region, not a
+   reused `@eN` reference from before the click. Refs go stale after every
+   interaction (see "Common mistakes" below); reusing one here would read
+   pre-click state and look like a false pass. On these controls,
+   `data-testid` is itself part of the state — X swaps a like button's
+   `data-testid` between `"like"` and `"unlike"` as the component re-renders
+   — so it cannot double as the stable selector used to re-find the
+   element; locate it in the fresh snapshot by its stable characteristics
+   (position/role/surrounding text), then read both its current
+   `aria-label` and `data-testid` and check they now hold the expected
+   post-action values.
+3. If unchanged, retry once with a scoped DOM click targeting that same
+   located element directly (not a fresh top-level click, and not a
+   selector built from the pre-click `data-testid`, which may no longer
+   identify anything if the action partially landed), then verify again
+   with another fresh read.
 4. If still unchanged, do not record success. Persist the attempt as failed
    with the observed before/after state — do not fabricate a landed action
    from a command-success response alone. A concurrent rate limit (HTTP 429

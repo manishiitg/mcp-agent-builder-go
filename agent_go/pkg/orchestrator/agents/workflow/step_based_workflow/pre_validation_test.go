@@ -169,6 +169,49 @@ func TestAdjacentPerValuePredicatesValidateEveryWildcardMatch(t *testing.T) {
 	})
 }
 
+// TestValueTypeArrayOnWildcardChecksEveryMatchNotTheCollection is a second
+// PLAT-229 follow-up: value_type="array" on a genuine wildcard multi-match
+// path used to special-case the whole multi-match result slice as "the"
+// value, checking whether that Go []interface{} was itself an array --
+// which is trivially always true regardless of what any individual matched
+// value actually was, so a wildcard array check could never actually fail.
+// value_type="array" must mean "every matched value is itself an array",
+// same as every other per-value predicate on a multi-match path.
+func TestValueTypeArrayOnWildcardChecksEveryMatchNotTheCollection(t *testing.T) {
+	jsonData := parseJSONForCheck(t, `{"items":[{"tags":["a","b"]},{"tags":["c"]},{"tags":"not-an-array"}]}`)
+	check := JSONValidationCheck{Path: "$.items[*].tags", ValueType: "array"}
+	result := validateJSONCheck(context.Background(), check, jsonData)
+	if result.Passed {
+		t.Fatalf("a later wildcard match that is not an array passed unnoticed: %+v", result)
+	}
+	if !strings.Contains(result.ErrorMsg, "match 2 of 3") {
+		t.Fatalf("error does not identify which match failed: %+v", result)
+	}
+}
+
+func TestValueTypeArrayOnWildcardPassesWhenEveryMatchIsAnArray(t *testing.T) {
+	jsonData := parseJSONForCheck(t, `{"items":[{"tags":["a","b"]},{"tags":["c"]},{"tags":[]}]}`)
+	check := JSONValidationCheck{Path: "$.items[*].tags", ValueType: "array"}
+	result := validateJSONCheck(context.Background(), check, jsonData)
+	if !result.Passed {
+		t.Fatalf("all-array wildcard matches unexpectedly failed: %+v", result)
+	}
+}
+
+// TestValueTypeArrayOnDefinitePathStillUsesTheArrayItself pins that a
+// definite (non-wildcard) path pointing directly at one array value is
+// still checked against that array itself, not per-element -- only a
+// genuine multi-match path means "every match", per
+// jsonPathHasMultipleMatches's own contract.
+func TestValueTypeArrayOnDefinitePathStillUsesTheArrayItself(t *testing.T) {
+	jsonData := parseJSONForCheck(t, `{"notes":["a","b","c"]}`)
+	check := JSONValidationCheck{Path: "$.notes", ValueType: "array"}
+	result := validateJSONCheck(context.Background(), check, jsonData)
+	if !result.Passed {
+		t.Fatalf("a definite path's own array value should pass value_type=array: %+v", result)
+	}
+}
+
 // TestJSONPathHasMultipleMatchesDistinguishesDefiniteFromWildcardPaths pins
 // the exact boundary the fix depends on: a plain numeric index like [0]
 // names one location (PLAT's JSONValidationCheck.Path doc comment gives

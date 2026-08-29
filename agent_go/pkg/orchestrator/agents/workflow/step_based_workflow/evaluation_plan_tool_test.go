@@ -171,6 +171,41 @@ func TestUpdateEvaluationPlanRequiresReasonAndKnownFields(t *testing.T) {
 	}
 }
 
+// TestUpdateEvaluationPlanRejectsUnsatisfiableValueTypePattern is PLAT-236's
+// follow-up: this tool edits the plan's raw decoded JSON rather than going
+// through PartialPlanStep/ValidationSchema, so it never ran the write-time
+// schema validators every other schema-writing tool applies. An agent could
+// still author the exact unsatisfiable value_type=boolean+pattern shape
+// PLAT-236 fixed everywhere else, straight through this one tool.
+func TestUpdateEvaluationPlanRejectsUnsatisfiableValueTypePattern(t *testing.T) {
+	workspacePath, _, read, write := evalPlanHarness(t, `{"steps":[{"id":"eval-a","title":"A"}]}`)
+
+	_, err := UpdateEvaluationPlanStep(context.Background(), workspacePath, "eval-a",
+		map[string]interface{}{
+			"validation_schema": map[string]interface{}{
+				"files": []interface{}{
+					map[string]interface{}{
+						"file_name": "metrics_today.json",
+						"json_checks": []interface{}{
+							map[string]interface{}{
+								"path":       "$.reach_snapshot_table_updated",
+								"value_type": "boolean",
+								"pattern":    "^true$",
+							},
+						},
+					},
+				},
+			},
+		},
+		"reproduce PLAT-236 through update_evaluation_plan", read, write, loggerv2.NewNoop())
+	if err == nil {
+		t.Fatal("expected the unsatisfiable value_type/pattern combination to be rejected")
+	}
+	if !strings.Contains(err.Error(), "reach_snapshot_table_updated") {
+		t.Fatalf("error does not name the offending path: %v", err)
+	}
+}
+
 // TestUpdateEvaluationPlanRecordsWhatAndWhy covers the gap that made
 // AR-20260729-2 unclosable: the changelog is what drift review reads, and a
 // record without the rationale and the field-level diff cannot be reviewed.

@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | Claude Code |
-| Ticket state | `implemented; adjacent wildcard predicates fixed; runtime reverify` |
+| Ticket state | `implemented; adjacent wildcard predicates fixed; wildcard value_type=array fixed; runtime reverify` |
 | Last synchronized | `2026-08-29` |
 
 - **Priority:** P2 in the audit queue, but `severity: high` on the finding
@@ -140,3 +140,19 @@ on a genuine multi-match path validates every matched value and reports the
 failing index the same way. New test
 `TestAdjacentPerValuePredicatesValidateEveryWildcardMatch` (4 subtests: each
 predicate individually, plus an all-valid-passes case). Full suite passes.
+
+**Second correction applied (2026-08-29):** a further review found
+`value_type="array"` on a genuine wildcard multi-match path was special-cased
+to check whether the *whole multi-match result slice* was itself a Go
+`[]interface{}` — trivially always true, since the matched-results collection
+is always a slice regardless of what any individual matched value actually
+was. E.g. `$.items[*].tags` with `value_type=array` would report passed even
+if one item's `tags` field was a plain string, not an array. Removed the
+special case entirely: `value_type=array` on a multi-match path now routes
+through the same `checkEveryMatch` predicate as every other check, requiring
+every individual matched value to itself be an array. A definite (non-wildcard)
+path's own array value is unaffected — still checked directly, not per-element.
+3 new tests: rejects a wildcard match where one item's value isn't an array
+(reports the failing index), passes when every match is an array, and a
+definite-path control case confirming single-value array checks are
+untouched. Full suite passes.

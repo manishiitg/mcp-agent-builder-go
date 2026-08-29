@@ -111,3 +111,20 @@ platform-side fix could ever exist — it now names the concrete possible
 future improvement (an opt-in click-and-verify operation with a
 caller-supplied postcondition) while keeping this recipe as the current
 mitigation. `go build ./...` and `go test ./cmd/server/guidance/...` pass.
+
+**Second correction applied (2026-08-29):** the recipe's step 2 was itself
+internally contradictory. It named `data-testid` as both a *stable
+selector* to re-locate the element ("a stable-selector re-query (e.g. its
+`data-testid`)") and a *value expected to change* as proof of the action
+landing — but on X's real like/follow controls, `data-testid` literally
+flips between two values (e.g. `"like"` → `"unlike"`) as part of the
+state change, so it cannot double as a fixed selector across that
+transition: re-querying by the pre-click `data-testid` after a genuinely
+successful action would no longer match anything. Reworded step 2 to
+locate the element by stable characteristics (position/role/surrounding
+text) in the fresh snapshot, separately from reading its now-current
+`data-testid` value as one of the two state signals to check. Step 3's
+retry no longer references building a selector from the "exact
+`data-testid`," which had the same problem. No test changes needed — this
+is a guidance-only wording fix; `go build ./...` and `go test
+./cmd/server/guidance/...` pass.

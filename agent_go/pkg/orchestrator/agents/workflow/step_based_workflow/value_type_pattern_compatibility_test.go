@@ -71,3 +71,83 @@ func TestValidateValueTypePatternCompatibilityNilSchema(t *testing.T) {
 		t.Fatalf("nil schema should not error: %v", err)
 	}
 }
+
+// TestSchemaValidatorsAlsoCoverDBChecks is an independent-review follow-up
+// on PLAT-236: all four write-time schema validators
+// (validateRegexPatternsInSchema, validateJSONPathSyntax,
+// validateArrayLengthConsistencyChecks, validateValueTypePatternCompatibility)
+// only ever walked schema.Files, never schema.DB -- even though
+// DBValidationRule.Checks is the identical JSONValidationCheck type, fed
+// through the identical validateJSONCheck/validatePattern logic at runtime
+// (pre_validation_db.go). A DB check could carry the exact same
+// unsatisfiable value_type/pattern combination, an invalid regex, a bad
+// JSONPath, or a malformed array_length consistency check, completely
+// unguarded. All four now route through forEachSchemaCheck, which walks
+// both rule kinds.
+func TestSchemaValidatorsAlsoCoverDBChecks(t *testing.T) {
+	t.Run("value_type_pattern", func(t *testing.T) {
+		schema := &ValidationSchema{
+			DB: []DBValidationRule{
+				{
+					Name: "landed measurements",
+					SQL:  "SELECT reach_snapshot_table_updated FROM metrics",
+					Checks: []JSONValidationCheck{
+						{Path: "$.reach_snapshot_table_updated", ValueType: "boolean", Pattern: "^true$"},
+					},
+				},
+			},
+		}
+		err := validateValueTypePatternCompatibility(schema)
+		if err == nil {
+			t.Fatal("expected the unsatisfiable value_type/pattern combination in a DB check to be rejected")
+		}
+		if !strings.Contains(err.Error(), "landed measurements") || !strings.Contains(err.Error(), "reach_snapshot_table_updated") {
+			t.Fatalf("error does not name the offending DB rule/path: %v", err)
+		}
+	})
+
+	t.Run("regex_pattern", func(t *testing.T) {
+		schema := &ValidationSchema{
+			DB: []DBValidationRule{
+				{SQL: "SELECT handle FROM engagement_attribution", Checks: []JSONValidationCheck{
+					{Path: "$.handle", Pattern: "(unterminated"},
+				}},
+			},
+		}
+		if err := validateRegexPatternsInSchema(schema); err == nil {
+			t.Fatal("expected an invalid regex in a DB check to be rejected")
+		}
+	})
+
+	t.Run("jsonpath_syntax", func(t *testing.T) {
+		schema := &ValidationSchema{
+			DB: []DBValidationRule{
+				{SQL: "SELECT handle FROM engagement_attribution", Checks: []JSONValidationCheck{
+					{Path: "not-a-jsonpath"},
+				}},
+			},
+		}
+		if err := validateJSONPathSyntax(schema); err == nil {
+			t.Fatal("expected a malformed JSONPath in a DB check to be rejected")
+		}
+	})
+
+	t.Run("array_length_consistency", func(t *testing.T) {
+		schema := &ValidationSchema{
+			DB: []DBValidationRule{
+				{SQL: "SELECT * FROM action_queue", Checks: []JSONValidationCheck{
+					{
+						Path: "$.actions",
+						ConsistencyCheck: &ConsistencyRule{
+							Type:            "array_length",
+							CompareWithPath: "$.actions", // identical to Path -- malformed
+						},
+					},
+				}},
+			},
+		}
+		if err := validateArrayLengthConsistencyChecks(schema); err == nil {
+			t.Fatal("expected a malformed array_length consistency check in a DB check to be rejected")
+		}
+	})
+}

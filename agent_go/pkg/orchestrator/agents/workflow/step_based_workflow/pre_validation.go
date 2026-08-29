@@ -574,12 +574,7 @@ func validateJSONCheck(
 	var multiMatchValues []interface{}
 	if valuesSlice, ok := values.([]interface{}); ok && jsonPathHasMultipleMatches(check.Path) {
 		multiMatchValues = valuesSlice
-		// If we're expecting an array and got a slice, the slice IS the array value
-		// (not a collection of results to take the first element from)
-		if check.ValueType == "array" {
-			value = valuesSlice
-		} else if len(valuesSlice) > 0 {
-			// For non-array types, if we got multiple results, take the first one
+		if len(valuesSlice) > 0 {
 			value = valuesSlice[0]
 		} else {
 			// Empty slice - use as is (will fail validation if expected type is not array)
@@ -593,13 +588,17 @@ func validateJSONCheck(
 	// value against a per-value predicate, not only the first -- otherwise a
 	// valid first item followed by invalid ones would silently pass, since
 	// only value[0] was ever inspected. This applies uniformly to every
-	// per-value check below (type, length, numeric range, pattern): each one
-	// is a predicate over a single scalar/array/object, so "every match must
-	// satisfy it" is the same rule in each case, with the failing match index
-	// reported. An array-typed check.ValueType is the one exception -- there
-	// the multi-match slice itself IS the value being checked, not a
-	// collection of values to check individually.
-	everyMultiMatch := check.ValueType != "array" && len(multiMatchValues) > 1
+	// per-value check below (type, length, numeric range, pattern), value_type
+	// included: an earlier version special-cased value_type="array" to check
+	// whether the *multi-match result slice itself* was a Go []interface{},
+	// which is trivially always true for a genuine multi-match regardless of
+	// what any individual matched value actually was -- e.g. a real wildcard
+	// match on $.items[*].tags with one item's tags holding a plain string
+	// would still report value_type=array as passed. value_type=array on a
+	// multi-match path means "every matched value must itself be an array",
+	// the same per-match rule as every other predicate here, not "the
+	// collection of matches is a slice."
+	everyMultiMatch := len(multiMatchValues) > 1
 	checkEveryMatch := func(checkFn func(interface{}) JSONCheckResult) JSONCheckResult {
 		if !everyMultiMatch {
 			return checkFn(value)

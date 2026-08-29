@@ -1304,8 +1304,14 @@ func browserContextGuardPaths(ctx context.Context, key common.ContextKey) []stri
 // timeout here got zero retries even though five independent Pulse findings
 // converged on this exact call, after this exact endpoint, coming back
 // reachable moments earlier from a fresh Stage-0 connection test. Retry once
-// here specifically, mirroring the dispatcher's own 500ms-then-retry-once
-// shape for other CDP read timeouts, without touching that shared allowlist.
+// here specifically, sleeping 500ms then reissuing the identical command --
+// only the sleep-then-retry-once *mechanic* mirrors the dispatcher's own
+// timeout retry (executor.go:978-990); this retry deliberately skips the
+// dispatcher's session-recovery steps (guardCDPAutomaticRecovery /
+// resetCDPSessionRuntime / clearCDPActiveTabForPort /
+// clearCDPExclusiveFeaturesForPort), since a bare listing timeout does not
+// by itself indicate a dead session worth resetting, and does not touch
+// shouldRetryCDPTimeout's shared allowlist.
 func (e *Executor) listCDPTabs(ctx context.Context, session, cdpURL string, opts *ExecuteOptions) (string, error) {
 	args := []string{
 		"--session", session,
@@ -1314,7 +1320,7 @@ func (e *Executor) listCDPTabs(ctx context.Context, session, cdpURL string, opts
 		"--json",
 	}
 	output, err := e.Client.ExecuteCommand(ctx, args, opts)
-	if err != nil && isCommandTimeoutError(err) {
+	if err != nil && isGenuineCDPListingTimeout(err) {
 		log.Printf("[BROWSER] CDP tab list timed out for session %q, retrying once: %v", session, err)
 		time.Sleep(500 * time.Millisecond)
 		output, err = e.Client.ExecuteCommand(ctx, args, opts)
@@ -1496,6 +1502,26 @@ func isCommandTimeoutError(err error) bool {
 		strings.Contains(msg, "command execution timed out") ||
 		strings.Contains(msg, "context deadline exceeded") ||
 		strings.Contains(msg, "context canceled") ||
+		strings.Contains(msg, "exceeded timeout")
+}
+
+// isGenuineCDPListingTimeout is isCommandTimeoutError narrowed for
+// listCDPTabs's retry: isCommandTimeoutError also matches "context
+// canceled", which fires when the *caller's* context was canceled (e.g. the
+// parent request was aborted), not when the CDP endpoint was genuinely
+// slow. Retrying a canceled-context failure after a 500ms sleep is not a
+// recovery attempt -- the reissued command will almost certainly fail
+// immediately for the identical reason, so the sleep is pure waste on that
+// path. Only retry the shapes that indicate the request actually ran out of
+// time against a live endpoint.
+func isGenuineCDPListingTimeout(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "command timed out") ||
+		strings.Contains(msg, "command execution timed out") ||
+		strings.Contains(msg, "context deadline exceeded") ||
 		strings.Contains(msg, "exceeded timeout")
 }
 
