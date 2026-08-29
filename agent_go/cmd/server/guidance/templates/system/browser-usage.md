@@ -178,6 +178,38 @@ Downloads folder, which is read-only to the agent.
   mode, sessions are intentionally remapped to one per port; isolation comes
   from workflow-owned labeled tabs plus the per-port select-and-act lock.
 
+## A click response proves the event dispatched, not that the target's state changed
+
+`agent_browser click`'s `success` field means the click event fired — nothing
+more. On toggle-style controls (like, follow, and similar state-flip
+buttons), a dispatched click can return `success=true` while the live DOM's
+`aria-label`/`data-testid` on that exact element never changes: the target
+still reads unliked/not-following after the call returns. Never treat a
+click response alone as proof a toggle action landed, especially before
+writing a durable receipt for a real public action.
+
+Verify and recover with the same recipe five independent findings converged
+on:
+
+1. Dispatch the click.
+2. Wait for the settle delay, then re-read the *exact same element* (not a
+   generic re-snapshot) — check both its `aria-label` and `data-testid`
+   changed to the expected post-action values.
+3. If unchanged, retry once with a scoped DOM click on the exact
+   `data-testid` for that control (not a fresh top-level click), then verify
+   again.
+4. If still unchanged, do not record success. Persist the attempt as failed
+   with the observed before/after state — do not fabricate a landed action
+   from a dispatch response alone. A concurrent rate limit (HTTP 429 / X
+   `code:88` on the account-settings diagnostic) is one real cause and is
+   itself worth recording, not silently retried away.
+
+This is a dispatch/verification gap in the managed click primitive itself,
+not something either side of a specific action can design around —
+`agent_browser` is a third-party CLI with no vendored source in this
+platform, so this recipe is the mitigation available, not a fix to the
+click mechanism itself.
+
 ## Common mistakes
 
 - Calling `open` with `["tab", "t1", url]` in CDP — `open` is URL-only.
