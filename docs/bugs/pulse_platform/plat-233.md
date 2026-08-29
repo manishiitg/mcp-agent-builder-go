@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | Claude Code |
-| Ticket state | `guidance fixed; directly reproduced against the real binary` |
+| Ticket state | `guidance fixed; independently reproduced against the real binary; live reverify` |
 | Last synchronized | `2026-08-29` |
 
 - **Priority:** harness_issue, severity medium across findings.
@@ -65,3 +65,16 @@ No live step has loaded this corrected guidance through the deployed
 server yet. Reverify by observing whether a future like/follow pacing wait
 now uses the bare-number form and completes in the requested duration
 instead of timing out at ~25000ms.
+
+## Independent review (2026-08-29)
+
+Confirmed against the installed `agent-browser 0.35.1` binary rather than the
+ticket narrative alone. `agent-browser wait --help` documents the positional
+`<ms>` form; `wait 75` completed successfully, while `wait --ms 75`
+reproduced the misleading timeout after approximately 25.03 seconds. All four
+cited social-media findings are recorded `resolved` with PLAT-233 as their
+resolution, and the focused guidance tests pass.
+
+No corrective code change was requested by this review. The remaining step is
+operational: restart onto a build containing this guidance and observe a live
+workflow call using the positional form.

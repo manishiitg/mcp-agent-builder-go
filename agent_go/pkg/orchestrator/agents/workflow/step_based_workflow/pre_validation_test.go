@@ -113,6 +113,62 @@ func TestValueTypeCheckValidatesEveryWildcardMatchNotJustTheFirst(t *testing.T) 
 	}
 }
 
+// TestAdjacentPerValuePredicatesValidateEveryWildcardMatch is a PLAT-229
+// follow-up: the review that caught the value_type gap found the same
+// pattern still present in min_length/max_length, min_value/max_value, and
+// pattern checks -- each only inspected the first wildcard match, so a valid
+// first item followed by an invalid later one silently passed.
+func TestAdjacentPerValuePredicatesValidateEveryWildcardMatch(t *testing.T) {
+	minLen := 3
+
+	t.Run("min_length", func(t *testing.T) {
+		jsonData := parseJSONForCheck(t, `{"items":[{"name":"first"},{"name":"second"},{"name":"x"}]}`)
+		check := JSONValidationCheck{Path: "$.items[*].name", MinLength: &minLen}
+		result := validateJSONCheck(context.Background(), check, jsonData)
+		if result.Passed {
+			t.Fatalf("a later wildcard match shorter than min_length passed unnoticed: %+v", result)
+		}
+		if !strings.Contains(result.ErrorMsg, "match 2 of 3") {
+			t.Fatalf("error does not identify which match failed: %+v", result)
+		}
+	})
+
+	t.Run("value_range", func(t *testing.T) {
+		minValue := 0.0
+		maxValue := 100.0
+		jsonData := parseJSONForCheck(t, `{"scores":[10,50,150]}`)
+		check := JSONValidationCheck{Path: "$.scores[*]", MinValue: &minValue, MaxValue: &maxValue}
+		result := validateJSONCheck(context.Background(), check, jsonData)
+		if result.Passed {
+			t.Fatalf("a later wildcard match outside min/max value passed unnoticed: %+v", result)
+		}
+		if !strings.Contains(result.ErrorMsg, "match 2 of 3") {
+			t.Fatalf("error does not identify which match failed: %+v", result)
+		}
+	})
+
+	t.Run("pattern", func(t *testing.T) {
+		jsonData := parseJSONForCheck(t, `{"handles":["@alice","@bob","not-a-handle"]}`)
+		check := JSONValidationCheck{Path: "$.handles[*]", Pattern: "^@"}
+		result := validateJSONCheck(context.Background(), check, jsonData)
+		if result.Passed {
+			t.Fatalf("a later wildcard match not matching the pattern passed unnoticed: %+v", result)
+		}
+		if !strings.Contains(result.ErrorMsg, "match 2 of 3") {
+			t.Fatalf("error does not identify which match failed: %+v", result)
+		}
+	})
+
+	t.Run("all matches valid still passes", func(t *testing.T) {
+		jsonData := parseJSONForCheck(t, `{"handles":["@alice","@bob","@carol"]}`)
+		check := JSONValidationCheck{Path: "$.handles[*]", Pattern: "^@", MinLength: &minLen}
+		result := validateJSONCheck(context.Background(), check, jsonData)
+		if !result.Passed {
+			t.Fatalf("all-valid wildcard matches unexpectedly failed: %+v", result)
+		}
+	})
+}
+
 // TestJSONPathHasMultipleMatchesDistinguishesDefiniteFromWildcardPaths pins
 // the exact boundary the fix depends on: a plain numeric index like [0]
 // names one location (PLAT's JSONValidationCheck.Path doc comment gives

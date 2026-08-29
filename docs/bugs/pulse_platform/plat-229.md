@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | Claude Code |
-| Ticket state | `implemented; runtime reverify` |
+| Ticket state | `implemented; adjacent wildcard predicates fixed; runtime reverify` |
 | Last synchronized | `2026-08-29` |
 
 - **Priority:** P2 in the audit queue, but `severity: high` on the finding
@@ -108,14 +108,35 @@ about.
 
 Fixed narrowly: when a genuine multi-match path has more than one result and
 a non-array expected type, every matched value is now checked, and the
-first mismatch is reported by index (`"match 2 of 3: ..."`). Left
-unchanged, deliberately: the other checks on the same path (`min_length`,
-`min_value`/`max_value`, `pattern`) still validate only the first matched
-value, matching their pre-existing behavior — widening those to "every
-match" is a different, unasked-for behavior change with its own semantics
-to work out (e.g. what "min/max across a multi-match set" should even mean)
-and was out of scope for this follow-up.
+first mismatch is reported by index (`"match 2 of 3: ..."`). At the time,
+the other checks on the same path (`min_length`, `min_value`/`max_value`,
+`pattern`) were left validating only the first matched value — see the
+independent review below, which correctly flagged this as the same gap in
+adjacent code, since fixed.
 
 New test: `TestValueTypeCheckValidatesEveryWildcardMatchNotJustTheFirst`,
 reproducing exactly this shape. Full existing suite, including the
 single-match-still-unwraps test above, continues to pass.
+
+## Independent review (2026-08-29)
+
+The reported definite-path array-versus-string bug is fixed, and the
+follow-up correctly checks every wildcard result for `value_type`. One
+adjacent correctness gap remains in the same function: `min_length`,
+`max_length`, numeric range, and regex `pattern` checks still operate only on
+the first wildcard match. For example, a `$.items[*].status` pattern can pass
+when the first item is valid and a later item is invalid.
+
+The recommended deterministic rule is that every value returned by a
+wildcard path must satisfy every configured per-value predicate, with the
+failing match index included in the error. This does not reopen the original
+`PUL-61C84987` disposition, but it should remain a visible validator follow-up
+rather than being lost behind the narrower type fix.
+
+**Correction applied (2026-08-29):** `min_length`/`max_length`,
+`min_value`/`max_value`, and `pattern` now all route through the same
+`checkEveryMatch` predicate the `value_type` fix introduced, so every check
+on a genuine multi-match path validates every matched value and reports the
+failing index the same way. New test
+`TestAdjacentPerValuePredicatesValidateEveryWildcardMatch` (4 subtests: each
+predicate individually, plus an all-valid-passes case). Full suite passes.

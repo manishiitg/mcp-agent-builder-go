@@ -589,38 +589,48 @@ func validateJSONCheck(
 		value = values
 	}
 
-	// Validate value type. A genuine multi-match path (e.g. $.items[*].name)
-	// with a non-array expected type checks every matched value, not only
-	// the first -- otherwise a valid first item followed by invalid ones
-	// would silently pass, since only value[0] was ever inspected. The
-	// min/max length/value/pattern checks below still operate on the single
-	// representative `value` (first match); the review that caught this only
-	// found the type check itself skipping later matches, and widening the
-	// other checks to "every match" is a separate, unasked-for behavior
-	// change with its own semantics to work out (e.g. min/max across which
-	// aggregate).
+	// A genuine multi-match path (e.g. $.items[*].name) checks every matched
+	// value against a per-value predicate, not only the first -- otherwise a
+	// valid first item followed by invalid ones would silently pass, since
+	// only value[0] was ever inspected. This applies uniformly to every
+	// per-value check below (type, length, numeric range, pattern): each one
+	// is a predicate over a single scalar/array/object, so "every match must
+	// satisfy it" is the same rule in each case, with the failing match index
+	// reported. An array-typed check.ValueType is the one exception -- there
+	// the multi-match slice itself IS the value being checked, not a
+	// collection of values to check individually.
+	everyMultiMatch := check.ValueType != "array" && len(multiMatchValues) > 1
+	checkEveryMatch := func(checkFn func(interface{}) JSONCheckResult) JSONCheckResult {
+		if !everyMultiMatch {
+			return checkFn(value)
+		}
+		for index, matched := range multiMatchValues {
+			matchResult := checkFn(matched)
+			if !matchResult.Passed {
+				matchResult.ErrorMsg = fmt.Sprintf("match %d of %d: %s", index, len(multiMatchValues), matchResult.ErrorMsg)
+				return matchResult
+			}
+		}
+		return checkFn(multiMatchValues[0])
+	}
+
+	// Validate value type.
 	if check.ValueType != "" {
-		if check.ValueType != "array" && len(multiMatchValues) > 1 {
-			for index, matched := range multiMatchValues {
-				typeResult := validateValueType(check.Path, matched, check.ValueType)
-				if !typeResult.Passed {
-					typeResult.ErrorMsg = fmt.Sprintf("match %d of %d: %s", index, len(multiMatchValues), typeResult.ErrorMsg)
-					return typeResult
-				}
-			}
-		} else {
-			typeResult := validateValueType(check.Path, value, check.ValueType)
-			if !typeResult.Passed {
-				return typeResult
-			}
+		typeResult := checkEveryMatch(func(v interface{}) JSONCheckResult {
+			return validateValueType(check.Path, v, check.ValueType)
+		})
+		if !typeResult.Passed {
+			return typeResult
 		}
 		result.CheckType = "value_type"
 		result.Passed = true
 	}
 
-	// Validate min/max length for strings and arrays
+	// Validate min/max length for strings and arrays.
 	if check.MinLength != nil || check.MaxLength != nil {
-		lengthResult := validateLength(check.Path, value, check.MinLength, check.MaxLength)
+		lengthResult := checkEveryMatch(func(v interface{}) JSONCheckResult {
+			return validateLength(check.Path, v, check.MinLength, check.MaxLength)
+		})
 		if !lengthResult.Passed {
 			return lengthResult
 		}
@@ -630,9 +640,11 @@ func validateJSONCheck(
 		result.Passed = true
 	}
 
-	// Validate min/max value for numbers
+	// Validate min/max value for numbers.
 	if check.MinValue != nil || check.MaxValue != nil {
-		valueResult := validateValueRange(check.Path, value, check.MinValue, check.MaxValue)
+		valueResult := checkEveryMatch(func(v interface{}) JSONCheckResult {
+			return validateValueRange(check.Path, v, check.MinValue, check.MaxValue)
+		})
 		if !valueResult.Passed {
 			return valueResult
 		}
@@ -642,9 +654,11 @@ func validateJSONCheck(
 		result.Passed = true
 	}
 
-	// Validate pattern (regex) for strings
+	// Validate pattern (regex) for strings.
 	if check.Pattern != "" {
-		patternResult := validatePattern(check.Path, value, check.Pattern)
+		patternResult := checkEveryMatch(func(v interface{}) JSONCheckResult {
+			return validatePattern(check.Path, v, check.Pattern)
+		})
 		if !patternResult.Passed {
 			return patternResult
 		}

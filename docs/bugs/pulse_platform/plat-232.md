@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | Claude Code |
-| Ticket state | `guidance fixed; underlying click primitive is a third-party boundary, same class as PLAT-224` |
+| Ticket state | `guidance mitigation applied; independent review wording corrections applied; live reverify` |
 | Last synchronized | `2026-08-29` |
 
 - **Priority:** harness_issue, medium/high severity across findings.
@@ -74,3 +74,40 @@ No live step has loaded this guidance section through the deployed server
 yet. Reverify by observing whether a future like/follow action that hits
 this exact shape now applies the documented verification recipe before
 recording success.
+
+## Independent review (2026-08-29)
+
+Consolidating the five like/follow findings and keeping the two quote-compose
+findings separate is sound. The guidance mitigation is also directionally
+correct: a successful click command is insufficient evidence that the
+intended durable state changed.
+
+Three accuracy corrections remain:
+
+1. The platform wrapper proves that the external click command completed
+   successfully; it does not itself prove that a page event was genuinely
+   delivered. Guidance should say command completion, not event dispatch.
+2. The instruction to inspect the "exact same element" must explicitly require
+   a fresh scoped snapshot or stable-selector re-query. Reusing the old `@eN`
+   reference would contradict this same document's stale-reference rule after
+   interactions.
+3. The external CLI source is unavailable, but an in-repo improvement is not
+   categorically impossible. The owned wrapper could eventually expose an
+   opt-in click-and-verify operation with a caller-supplied postcondition.
+   Guidance is an appropriate immediate mitigation; it should not be described
+   as proof that no platform-side improvement can ever exist.
+
+These points do not invalidate the five SQLite resolutions under the current
+fix-applied closure policy, but they keep the remaining guidance/runtime
+boundary explicit.
+
+**Corrections applied (2026-08-29):** reworded `browser-usage.md`'s section
+heading and opening paragraph to say the `success` field proves *command
+completion*, not event dispatch; step 2 of the recipe now explicitly
+requires a fresh scoped `snapshot`/`get` or stable-selector re-query, naming
+that reusing a stale `@eN` would contradict the document's own
+refs-go-stale rule; and the closing paragraph no longer claims no
+platform-side fix could ever exist — it now names the concrete possible
+future improvement (an opt-in click-and-verify operation with a
+caller-supplied postcondition) while keeping this recipe as the current
+mitigation. `go build ./...` and `go test ./cmd/server/guidance/...` pass.

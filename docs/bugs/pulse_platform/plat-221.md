@@ -215,3 +215,19 @@ gaps, all fixed:
 
 Verification: `go test ./pkg/orchestrator/... ./cmd/server/...` (agent_go)
 and `go test ./...` (workspace) both pass clean after all four fixes.
+
+## Independent policy review (2026-08-29)
+
+The follow-up implementation was reviewed against the product's intended
+authority model. The migration tool is reachable by ordinary read-write
+workflow agents as well as Builder/Pulse sessions, and destructive schema
+operations plus the migration ledger remain agent-accessible. The user
+explicitly confirmed that this broad authority is intentional: agents are
+trusted and should receive more access rather than narrowly partitioned
+schema privileges. Under that policy, the broad allowlist and agent-editable
+ledger are accepted design choices, not outstanding defects.
+
+Focused workspace-handler and workflow-orchestrator test suites passed during
+the review. The separate LinkedIn `PUL-3BD9F422` migration remains undesigned,
+as already recorded above; that workflow work is not evidence that the
+platform migration route itself is unreachable.

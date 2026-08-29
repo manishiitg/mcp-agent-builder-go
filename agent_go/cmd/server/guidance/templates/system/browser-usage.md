@@ -198,11 +198,13 @@ mistake. The tool's other wait modes take a selector, or one of
 `--url <pattern>`, `--load <state>`, `--fn <expression>`, `--text <text>`,
 `--download [path]` — a bare number is specifically the fixed-delay form.
 
-## A click response proves the event dispatched, not that the target's state changed
+## A click response proves the command completed, not that the target's state changed
 
-`agent_browser click`'s `success` field means the click event fired — nothing
-more. On toggle-style controls (like, follow, and similar state-flip
-buttons), a dispatched click can return `success=true` while the live DOM's
+`agent_browser click`'s `success` field means the click *command* completed
+successfully — it does not itself prove the click event was genuinely
+delivered to the page or that anything changed as a result. On
+toggle-style controls (like, follow, and similar state-flip buttons), a
+successful click command can return `success=true` while the live DOM's
 `aria-label`/`data-testid` on that exact element never changes: the target
 still reads unliked/not-following after the call returns. Never treat a
 click response alone as proof a toggle action landed, especially before
@@ -212,23 +214,28 @@ Verify and recover with the same recipe five independent findings converged
 on:
 
 1. Dispatch the click.
-2. Wait for the settle delay, then re-read the *exact same element* (not a
-   generic re-snapshot) — check both its `aria-label` and `data-testid`
-   changed to the expected post-action values.
+2. Wait for the settle delay, then take a *fresh* scoped read of the exact
+   same control — a new `snapshot`/`get` or a stable-selector re-query
+   (e.g. its `data-testid`), not a reused `@eN` reference from before the
+   click. Refs go stale after every interaction (see "Common mistakes"
+   below); reusing one here would read pre-click state and look like a
+   false pass. Check both `aria-label` and `data-testid` changed to the
+   expected post-action values.
 3. If unchanged, retry once with a scoped DOM click on the exact
    `data-testid` for that control (not a fresh top-level click), then verify
-   again.
+   again with another fresh read.
 4. If still unchanged, do not record success. Persist the attempt as failed
    with the observed before/after state — do not fabricate a landed action
-   from a dispatch response alone. A concurrent rate limit (HTTP 429 / X
-   `code:88` on the account-settings diagnostic) is one real cause and is
-   itself worth recording, not silently retried away.
+   from a command-success response alone. A concurrent rate limit (HTTP 429
+   / X `code:88` on the account-settings diagnostic) is one real cause and
+   is itself worth recording, not silently retried away.
 
-This is a dispatch/verification gap in the managed click primitive itself,
-not something either side of a specific action can design around —
-`agent_browser` is a third-party CLI with no vendored source in this
-platform, so this recipe is the mitigation available, not a fix to the
-click mechanism itself.
+This is the current mitigation, not a claim that no platform-side fix could
+ever exist: `agent_browser` is a third-party CLI with no vendored source in
+this platform, so there is no click-mechanism internals to patch today, but
+the owned wrapper around it could eventually offer an opt-in click-and-verify
+operation that takes a caller-supplied postcondition. Until that exists, this
+verify/recover recipe is the available mitigation.
 
 ## Common mistakes
 
