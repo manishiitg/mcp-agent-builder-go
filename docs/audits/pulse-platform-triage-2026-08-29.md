@@ -20,10 +20,11 @@ LinkedIn, and 6 Sales Outreach.
 | [PLAT-200](../bugs/pulse_platform/plat-200.md) | Upwork `PUL-DD9EDE3C` | Oversized browser snapshots are now staged into an authorized tool-output path rather than discarded. | Reproduce one oversized guarded snapshot and close if its spill artifact is readable. |
 | [PLAT-206](../bugs/pulse_platform/plat-206.md) | Upwork `PUL-565F9ED1`; Sales Outreach `PUL-4719B06` | Exact same terminal-module-result collision: reviewer `done` blocked the later Fixer's disposition write. | Run one review-plus-fix case with a real disposition. Close both only if it persists the repair. |
 
-`PUL-13197E02` (Upwork tab acquisition) is a **candidate** for
-[PLAT-028](../bugs/pulse_platform/plat-028.md), but not a proven duplicate:
-PLAT-028 repairs a recovered tab leaking into a later page action, while this
-finding also mentions tab creation. Reproduce before linking or closing it.
+`PUL-13197E02` (Upwork tab acquisition) is confirmed **not** a duplicate of
+[PLAT-028](../bugs/pulse_platform/plat-028.md) — see
+[PLAT-231](../bugs/pulse_platform/plat-231.md), which also found both of its
+cited errors are correct input validation in `cdp_tabs.go`, not a harness
+defect; reclassified.
 
 ## Current Pulse architecture — deployment/reverification required
 
@@ -55,7 +56,7 @@ finding also mentions tab creation. Reproduce before linking or closing it.
 | ~~P2~~ done | LinkedIn `PUL-61C84987` | [PLAT-229](../bugs/pulse_platform/plat-229.md) fixed the false-pass at its root: the shared JSONPath value extractor now only unwraps genuine wildcard multi-matches, never a definite path's own array value. |
 | ~~P2~~ done | LinkedIn `PUL-17E6F19A`; `PUL-7607952E` | See above — [PLAT-230](../bugs/pulse_platform/plat-230.md). |
 | ~~P2~~ done | Upwork `PUL-B0A88D49` | [PLAT-228](../bugs/pulse_platform/plat-228.md) confirmed the specific instance is stale — the whole `"bug-review"` guidance kind it referenced was retired and replaced by `engineering-review`, whose reads are genuinely bundled. The systemic `read_skill` materialization-time validator this row also asked for remains real, unstarted future work. |
-| P2 | Upwork `PUL-13197E02` | Reproduce exact CDP tab-creation/acquisition shape; either link it to PLAT-028 or file a separate creation-contract fix. |
+| ~~P2~~ done | Upwork `PUL-13197E02` | [PLAT-231](../bugs/pulse_platform/plat-231.md) — reclassified, not a harness defect. |
 
 ## Reclassify instead of fixing as platform code
 
