@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | Codex |
-| Ticket state | `filed` |
+| Ticket state | `implemented; runtime reverify` |
 | Last synchronized | `2026-08-29` |
 
 - **Priority:** harness issue, severity medium.
@@ -36,30 +36,35 @@ Without this, agents know the API names but must infer operational policy. That
 invites avoidable direct-answer behavior, unprincipled tier selection, and
 unsafe shell/credential workarounds.
 
-## Proposed fix
+## Fix
 
-1. Expand `workspace-media-tools.md` into an active-tools workflow guide with
-   concise decision rules and one safe example for each tool.
-2. Add a scripted-agent section that explicitly routes calls through the MCP
-   bridge, points to `mcp-bridge.md`, and forbids raw-key/raw-request patterns.
-3. Keep provider/media retirement language out of the operational path so the
-   two active tools are prominent and unambiguous.
-4. Add prompt/materialization contract coverage: a Workshop agent with either
-   tool must receive the guide; a scripted agent must be pointed to both this
-   guide and the MCP bridge contract. Add an agentic P0 only if static contract
-   coverage cannot prove the actual prompt/tool behavior.
+`workspace-media-tools.md` now gives active-tool decision rules: use search
+for fresh external evidence, use text generation for a bounded additional model
+operation, and choose low/medium/high according to transformation complexity,
+normal synthesis, or material reasoning/quality risk. It also records returned
+provider/model identity as runtime evidence rather than assuming a permanent
+tier-to-model mapping.
+
+The same reference now has a scripted-workflow section: inspect granted tools
+and their current schema, read `mcp-bridge.md`, and invoke only the custom tool
+through `$MCP_CUSTOM`. It forbids direct provider calls, invented endpoints,
+raw keys, and passing `model_id` to hosted-MCP search.
+
+Both the compact Builder prompt and the coding-CLI pointer now explicitly tell
+scripted/code-execution agents to load both references before writing the
+bridge call.
 
 ## Acceptance criteria
 
-- Builder, Workshop, and run-mode agents that are granted either active tool
-  can discover an exact, current use pattern through `builder-reference`.
-- The guide supplies tier-selection guidance for `generate_text_llm` and
-  provider/freshness/failure guidance for `search_web_llm`.
-- Scripted usage is bridge-only and never requires a raw credential or an
-  invented endpoint.
-- Regression tests prove the capability-derived guidance is present only when
-  the relevant tools are available, avoiding the broad-reference regression
-  previously addressed by PLAT-125.
+## Verification
+
+- `TestSpecialWorkspaceToolsInstructionsDirectScriptedAgentsToBridgeGuidance`
+  pins the compact prompts' two references and direct-provider/key prohibition.
+- `TestScriptedActiveProviderToolsReceiveBridgeSafeGuidance` proves a scripted
+  step granted both active tools receives both the active-tools and MCP-bridge
+  references, including the exact `$MCP_CUSTOM` routes.
+- Focused guidance, instruction, and workflow prompt tests pass; focused lint
+  passes for `pkg/instructions` and `cmd/server/guidance`.
 
 ## Reverify
 
