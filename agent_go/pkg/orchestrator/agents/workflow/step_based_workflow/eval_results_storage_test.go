@@ -223,6 +223,78 @@ func TestLoadEvalResultsJoinsPlanTitlesAndOrdersNewestRunFirst(t *testing.T) {
 	}
 }
 
+// TestLoadEvalResultsBackfillsFromScoreLedger proves the gap found live
+// against confida-login: eval_results only started being written the first
+// time a workflow ran eval after this table existed, so a workflow with real
+// history sitting in the older scores/evaluation/<group>/<date>.json ledger
+// (survives iteration-0 rotation; eval_results does not backfill itself) had
+// only its single newest run visible in a cross-run view -- 10 dated ledger
+// files, 1 row in eval_results. LoadEvalResults must pull the older runs in
+// too, covering both the v2 (Evaluations, keyed by evaluation_id) and legacy
+// v1 (RunFolders, keyed by run_folder) ledger shapes, and must never
+// overwrite a run_folder eval_results already has from a real write.
+func TestLoadEvalResultsBackfillsFromScoreLedger(t *testing.T) {
+	hcpo := newEvalResultsTestOrchestrator(t)
+	ctx := context.Background()
+	workspacePath := hcpo.GetWorkspacePath()
+
+	// A real write already covers iteration-3; the ledger's own entry for it
+	// must not overwrite this with different content.
+	if err := hcpo.persistEvalResultsToDB(ctx, &EvaluationReport{
+		TargetRunFolder: "iteration-3",
+		GeneratedAt:     "2026-07-15T00:00:00Z",
+		StepScores:      []*EvaluationStepScore{{StepID: "eval-a", Score: 7, MaxScore: 10, ScoreCaptured: true, Reasoning: "real write"}},
+	}); err != nil {
+		t.Fatalf("persist real row: %v", err)
+	}
+
+	ledgerDir := filepath.Join(fsutil.WorkspaceDocsRoot(), workspacePath, "scores", "evaluation", "default")
+	if err := os.MkdirAll(ledgerDir, 0o755); err != nil {
+		t.Fatalf("mkdir ledger dir: %v", err)
+	}
+	// v2 shape: keyed by evaluation_id under "evaluations".
+	v2 := `{"date":"2026-07-10","group_folder":"default","evaluations":{"eval-id-1":{"run_folder":"iteration-1","report":{"target_run_folder":"iteration-1","generated_at":"2026-07-10T00:00:00Z","step_scores":[{"step_id":"eval-a","score":3,"max_score":10,"score_captured":true,"reasoning":"ledger v2"}]}}}}`
+	if err := os.WriteFile(filepath.Join(ledgerDir, "2026-07-10.json"), []byte(v2), 0o644); err != nil {
+		t.Fatalf("write v2 ledger file: %v", err)
+	}
+	// Legacy v1 shape: keyed by run_folder under "run_folders", and a stale
+	// entry for iteration-3 that must NOT clobber the real write above.
+	v1 := `{"date":"2026-07-12","group_folder":"default","run_folders":{"iteration-2":{"target_run_folder":"iteration-2","generated_at":"2026-07-12T00:00:00Z","step_scores":[{"step_id":"eval-a","score":5,"max_score":10,"score_captured":true,"reasoning":"ledger v1"}]},"iteration-3":{"target_run_folder":"iteration-3","generated_at":"2026-07-12T00:00:00Z","step_scores":[{"step_id":"eval-a","score":1,"max_score":10,"score_captured":true,"reasoning":"stale ledger copy"}]}}}`
+	if err := os.WriteFile(filepath.Join(ledgerDir, "2026-07-12.json"), []byte(v1), 0o644); err != nil {
+		t.Fatalf("write v1 ledger file: %v", err)
+	}
+
+	results, err := LoadEvalResults(ctx, workspacePath, 0)
+	if err != nil {
+		t.Fatalf("LoadEvalResults: %v", err)
+	}
+	byRun := map[string]EvalResultRecord{}
+	for _, r := range results {
+		byRun[r.RunFolder] = r
+	}
+	if len(byRun) != 3 {
+		t.Fatalf("expected 3 distinct runs (1 real write + 2 backfilled), got %d: %#v", len(byRun), results)
+	}
+	if r := byRun["iteration-1"]; r.Reasoning != "ledger v2" || r.Score != 3 {
+		t.Fatalf("v2 ledger entry not backfilled correctly: %#v", r)
+	}
+	if r := byRun["iteration-2"]; r.Reasoning != "ledger v1" || r.Score != 5 {
+		t.Fatalf("v1 ledger entry not backfilled correctly: %#v", r)
+	}
+	if r := byRun["iteration-3"]; r.Reasoning != "real write" || r.Score != 7 {
+		t.Fatalf("backfill must not overwrite a run eval_results already has from a real write: %#v", r)
+	}
+
+	// A second call must be a no-op over the same data, not duplicate rows.
+	again, err := LoadEvalResults(ctx, workspacePath, 0)
+	if err != nil {
+		t.Fatalf("second LoadEvalResults: %v", err)
+	}
+	if len(again) != len(results) {
+		t.Fatalf("backfill is not idempotent: first=%d second=%d", len(results), len(again))
+	}
+}
+
 // newEvalReportPhaseWiringTestOrchestrator wires a REAL workspace-docs HTTP
 // server AND aligns fsutil.WorkspaceDocsRoot() (WORKSPACE_DOCS_PATH) to the
 // same backing directory, so a direct db/db.sqlite open (used by

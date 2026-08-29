@@ -323,6 +323,22 @@ func TestEvaluationPlanGuidanceAcceptsSourceGroundedValidEmptyResults(t *testing
 	}
 }
 
+func TestEvaluationPlanGuidanceCoversOutcomeBasedDurableJudgmentSteps(t *testing.T) {
+	guidance, err := renderFromRegistry("evaluation-plan", tmplData{}, referenceKinds)
+	if err != nil {
+		t.Fatalf("render evaluation-plan: %v", err)
+	}
+	for _, want := range []string{
+		"Self-claimed resolution is not human judgment",
+		"a rolling rate over the last N outcomes",
+		"says nothing about recall",
+	} {
+		if !strings.Contains(guidance, want) {
+			t.Fatalf("evaluation guidance missing %q\n\nGuidance:\n%s", want, guidance)
+		}
+	}
+}
+
 func TestPulseCostGuidanceReconcilesRawLedgersWithoutDoubleCounting(t *testing.T) {
 	postRun := readPulseDesignSpec(t)
 	opsReview, err := renderFromRegistry("ops-review", tmplData{}, allKinds)

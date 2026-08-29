@@ -76,9 +76,17 @@ func (hcpo *StepBasedWorkflowOrchestrator) persistEvalResultsToDB(ctx context.Co
 		return err
 	}
 
-	// The report is rebuilt wholesale every eval run, so a re-run against the same
-	// run_folder must replace its rows rather than let stale step ids accumulate
-	// (e.g. an eval step removed from evaluation_plan.json between runs).
+	return insertEvalResultsRows(ctx, db, runFolder, report)
+}
+
+// insertEvalResultsRows writes one report's step scores into eval_results for
+// the given run_folder, replacing any rows already there for that run first
+// (a report is always rebuilt wholesale, never incrementally, so a re-run or
+// a backfill must not let stale step ids from an earlier plan accumulate).
+// Shared by the live write path (persistEvalResultsToDB, called after every
+// real eval run) and the historical backfill (backfillEvalResultsFromScoreLedger,
+// called lazily on read) so both populate the table identically.
+func insertEvalResultsRows(ctx context.Context, db *sql.DB, runFolder string, report *EvaluationReport) error {
 	if _, err := db.ExecContext(ctx, `DELETE FROM eval_results WHERE run_folder = ?`, runFolder); err != nil {
 		return err
 	}
@@ -103,6 +111,102 @@ func (hcpo *StepBasedWorkflowOrchestrator) persistEvalResultsToDB(ctx context.Co
 			runFolder, groupName, score.StepID, score.Score, score.MaxScore, scoreCaptured, score.Reasoning, score.Evidence, skipped, report.GeneratedAt, now,
 		); err != nil {
 			return fmt.Errorf("insert eval_results row for step %q: %w", score.StepID, err)
+		}
+	}
+	return nil
+}
+
+// backfillEvalResultsFromScoreLedger fills in eval_results for any run_folder
+// present in the older scores/evaluation/<group>/<date>.json ledger but
+// missing from eval_results. eval_results only started being written the
+// first time a workflow ran eval after this table existed, so a workflow
+// with real history predating that has months of runs sitting in the ledger
+// with nothing to show in a cross-run view -- confirmed live against
+// confida-login: 10 dated ledger files back to July, one row in eval_results.
+// Idempotent (skips any run_folder already present) and best-effort: a
+// missing/unreadable ledger directory, or one already fully backfilled, is a
+// no-op, not an error, matching persistEvalResultsToDB's own contract that a
+// failure here must never block the caller from reading what IS there.
+func backfillEvalResultsFromScoreLedger(ctx context.Context, db *sql.DB, workspacePath string) error {
+	existing := map[string]bool{}
+	rows, err := db.QueryContext(ctx, `SELECT DISTINCT run_folder FROM eval_results`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var runFolder string
+		if err := rows.Scan(&runFolder); err != nil {
+			rows.Close()
+			return err
+		}
+		existing[runFolder] = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	ledgerRoot := filepath.Join(fsutil.WorkspaceDocsRoot(), filepath.FromSlash(strings.Trim(strings.TrimSpace(workspacePath), "/")), "scores", "evaluation")
+	groupDirs, err := os.ReadDir(ledgerRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	insert := func(runFolder string, report *EvaluationReport) error {
+		runFolder = strings.TrimSpace(runFolder)
+		if runFolder == "" || report == nil || existing[runFolder] {
+			return nil
+		}
+		if err := insertEvalResultsRows(ctx, db, runFolder, report); err != nil {
+			return err
+		}
+		existing[runFolder] = true
+		return nil
+	}
+
+	for _, groupDir := range groupDirs {
+		if !groupDir.IsDir() {
+			continue
+		}
+		dateFiles, err := os.ReadDir(filepath.Join(ledgerRoot, groupDir.Name()))
+		if err != nil {
+			continue
+		}
+		for _, dateFile := range dateFiles {
+			if dateFile.IsDir() || !strings.HasSuffix(dateFile.Name(), ".json") {
+				continue
+			}
+			content, err := os.ReadFile(filepath.Join(ledgerRoot, groupDir.Name(), dateFile.Name()))
+			if err != nil {
+				continue
+			}
+			var daily EvaluationScoreDailyFile
+			if err := json.Unmarshal(content, &daily); err != nil {
+				continue
+			}
+			for _, stored := range daily.Evaluations {
+				if stored == nil {
+					continue
+				}
+				runFolder := stored.RunFolder
+				if strings.TrimSpace(runFolder) == "" && stored.Report != nil {
+					runFolder = stored.Report.TargetRunFolder
+				}
+				if err := insert(runFolder, stored.Report); err != nil {
+					return err
+				}
+			}
+			// v1 ledger shape, kept readable per StoredEvaluationReport's own doc.
+			for runFolder, report := range daily.RunFolders {
+				if err := insert(runFolder, report); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	return nil
@@ -137,7 +241,7 @@ func LoadEvalResults(ctx context.Context, workspacePath string, limit int) ([]Ev
 	if limit <= 0 {
 		limit = 200
 	}
-	db, err := openRunConcernsDB(ctx, workspacePath, false)
+	db, err := openRunConcernsDB(ctx, workspacePath, true)
 	if err != nil || db == nil {
 		return []EvalResultRecord{}, err
 	}
@@ -146,6 +250,9 @@ func LoadEvalResults(ctx context.Context, workspacePath string, limit int) ([]Ev
 		return nil, err
 	}
 	if err := ensureEvalResultsScoreCapturedColumn(ctx, db); err != nil {
+		return nil, err
+	}
+	if err := backfillEvalResultsFromScoreLedger(ctx, db, workspacePath); err != nil {
 		return nil, err
 	}
 

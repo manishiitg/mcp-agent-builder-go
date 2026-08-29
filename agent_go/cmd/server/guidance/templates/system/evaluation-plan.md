@@ -11,6 +11,17 @@ Pulse Gate and Bug Review already inspect every run for operational breakage: er
 - **Anchor every eval step to a success criterion.** One eval step per criterion (route-scoped where routes apply), and say in the description which criterion it measures. Pulse maps eval verdicts to the Goal verdict/progress read from `soul/soul.md` — an eval step tied to no criterion has no consumer, and a criterion with no eval step is unmeasured.
 - **Evals are the ruler for both loops.** Pulse verifies reliability fixes and Goal Advisor judges strategy changes by comparing eval reports across runs. Keep the instrument stable — same steps, same scale, same rubric — so score movement means the workflow changed, not the measurement.
 
+### Outcome-based eval steps — measuring against durable human judgment, not this run's own artifacts
+
+Some success criteria cannot be honestly scored from one run's own artifacts at all, because the run's own artifacts are exactly what's in question. A workflow that files bugs, proposes changes, or produces anything a human later accepts or rejects can score itself as "working" every single cycle while a human is quietly closing most of what it produces as noise — a per-run artifact check has no way to see that, because the artifacts always look internally consistent from the inside.
+
+When a criterion is really "does this workflow's output hold up against independent outside judgment," anchor the eval step to a durable, human-reconciled outcome table instead of (or in addition to) this run's own `{{"{{TARGET_RUN_PATH}}"}}`:
+
+- Query the full history in `db/db.sqlite` (e.g. a `github_issues`-style reconciliation table with `status`/`resolution`/`human_comment`/`verdict_author`/`reconciled_at`), not just this run's slice of it. The score is a rolling rate over the last N outcomes — it will read the same on every run until new outcomes land, and that stability is correct, not a bug: the measurement only moves when reality moves.
+- **Self-claimed resolution is not human judgment.** A status like "fixed-claimed" or "closed" set by the same automation (or the same fix) that produced the thing being judged must never be counted as acceptance. Only count a resolution as genuine acceptance/rejection when it came from an independent human verdict (check `verdict_author`, `human_comment`, or an equivalent field naming who decided). Blending self-reported closure into an "accepted" rate lets the workflow grade its own homework and silently inflates the score.
+- **Name what this measures and what it doesn't.** An acceptance-rate-style criterion measures precision (of what it produced, how much held up) — it says nothing about recall (what it never found or produced at all). State that explicitly in the step's description rather than implying the single number is a complete measure of the goal. If recall genuinely cannot be measured from available data, say so and leave it unmeasured — an honest partial measure beats a fabricated complete one.
+- This does not replace a per-run check when a criterion genuinely is about this run's own artifacts (did this cycle's output match the source data). Use an outcome-based step only when the criterion is inherently about durable acceptance, not immediate correctness.
+
 ### Cost discipline — eval is a per-run tax
 
 Auto-eval runs after every successful execution, so every eval step's cost recurs on every run (tracked under `costs/evaluation/`). Keep it lean:
