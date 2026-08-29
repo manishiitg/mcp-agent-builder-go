@@ -3250,6 +3250,10 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     if (targetTab) {
       activateTab(targetTab.tabId)
       chatStore.resetTabChat(targetTab.tabId, rotatedConversation?.session_id)
+      // The reset tab is blank on purpose. Without this, the workflow landing
+      // panel's own "nothing else is happening — reopen the last conversation"
+      // effect would see the same blank state and immediately undo New Chat.
+      chatStore.setTabMetadata(targetTab.tabId, { skipWorkflowAutoRestore: true })
       if (rotatedConversation) {
         chatStore.setTabMetadata(targetTab.tabId, {
           agentProfileConversationId: rotatedConversation.conversation_id,

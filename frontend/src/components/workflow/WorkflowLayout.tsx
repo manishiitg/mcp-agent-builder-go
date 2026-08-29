@@ -401,6 +401,10 @@ const WorkflowPreviousChatsPanel: React.FC<{
     const tab = store.chatTabs[activeTabId]
     if (!tab || tab.metadata?.mode !== 'workflow') return
     if (tab.metadata?.isViewOnly || tab.metadata?.isScheduledRun || tab.metadata?.isBotRun) return
+    // An explicit New Chat leaves this same tab blank, which otherwise looks
+    // identical to "just landed here, nothing running" -- respect the
+    // operator's choice instead of immediately reopening what they just left.
+    if (tab.metadata?.skipWorkflowAutoRestore) return
     // Only the blank builder tab this panel backs is eligible -- never
     // hijack a tab the user already pointed at something else.
     if (workflowTabAlreadyHasContent(tab, store.tabEvents)) return
@@ -427,6 +431,7 @@ const WorkflowPreviousChatsPanel: React.FC<{
         const latestTab = latestStore.chatTabs[activeTabId]
         if (!latestTab) return
         if (workflowTabAlreadyHasContent(latestTab, latestStore.tabEvents)) return
+        if (latestTab.metadata?.skipWorkflowAutoRestore) return
         await resumeChatSessionIntoTab(mostRecent, activeTabId, chatHistoryOpenDisposition(mostRecent))
       } catch (error) {
         logger.warn('WorkflowLayout', 'Failed to auto-restore the most recent conversation', { workspacePath, error })
@@ -997,7 +1002,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
     openDefaultPreview()
   }, [openDefaultPreview])
 
-  const createFreshWorkflowBuilderTab = useCallback(async (presetId: string, options?: { composerFirst?: boolean }) => {
+  const createFreshWorkflowBuilderTab = useCallback(async (presetId: string, options?: { composerFirst?: boolean; isExplicitNewChat?: boolean }) => {
     const chatStore = useChatStore.getState()
     const oldTabs = Object.values(chatStore.chatTabs).filter(tab =>
       tab.metadata?.mode === 'workflow' &&
@@ -1010,7 +1015,12 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
       mode: 'workflow',
       phaseId: 'workflow-builder',
       phaseName: 'Automation Builder',
-      presetQueryId: presetId
+      presetQueryId: presetId,
+      // Only an explicit New Chat marks the tab as intentionally blank. The
+      // preset-switch fallback (landing on a workflow with no open tabs) must
+      // keep auto-restoring the previous conversation -- that's the feature
+      // working as intended, not the bug this flag guards against.
+      skipWorkflowAutoRestore: options?.isExplicitNewChat === true
     })
     if (options?.composerFirst) {
       openDefaultPreview()
@@ -2215,10 +2225,17 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
         return
       }
 
-      await createFreshWorkflowBuilderTab(activePresetId, { composerFirst: true })
+      await createFreshWorkflowBuilderTab(activePresetId, { composerFirst: true, isExplicitNewChat: true })
       return
     }
 
+    // Likely unreachable: this function's only caller is WorkflowChatTabs'
+    // "New chat" button, which renders solely when showChatArea is already
+    // true, and every setShowChatArea(true) in this file that's easy to trace
+    // back also has activePresetId set. Not proven dead -- showChatArea and
+    // activePresetId are independent state, set from ~18 different call
+    // sites, and nothing here guarantees they stay in lockstep. Left in place
+    // as a harmless fallback rather than deleted without full certainty.
     openDefaultPreview()
     setWorkflowWorkspaceView('builder')
     setShowWorkspacePane(true)
@@ -2253,7 +2270,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
     }
     setKillAndStartState({ isOpen: false, sessionIdsToStop: [], description: '', isStopping: false })
     try {
-      await createFreshWorkflowBuilderTab(activePresetId, { composerFirst: true })
+      await createFreshWorkflowBuilderTab(activePresetId, { composerFirst: true, isExplicitNewChat: true })
     } catch (err) {
       logger.error('WorkflowLayout', 'createFreshWorkflowBuilderTab failed after kill-and-start:', err)
       addToast('Failed to start new chat after stopping the previous one.', 'error')
