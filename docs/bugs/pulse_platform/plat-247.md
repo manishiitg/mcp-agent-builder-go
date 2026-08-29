@@ -135,3 +135,75 @@ Start a fresh Builder/Workshop or step agent, confirm `read_image`,
 `image_gen`, and `image_edit` appear in its tool list, and confirm a
 `read_image` call against a real workspace screenshot succeeds end to end
 (this was the exact live failure that prompted this ticket).
+
+## Follow-up (2026-08-29) — the native-CLI-passthrough question this ticket
+left open, now answered with live verification
+
+"Explicitly not done" above flagged that whether native-CLI passthrough
+(`provider=codex-cli`/`cursor-cli`/`claude-code`) actually *works* was
+never investigated — restoring the bridge-routing code path was the
+lower-risk fix at the time, but nobody had driven it against the real
+CLIs. This follow-up did exactly that, live, in the sibling
+`multi-llm-provider-go` repo (pulled into `agent_go` via its local
+`replace` directive — no version bump needed for these fixes to be live
+here).
+
+**How native passthrough actually works** (was undocumented before this):
+there is no dedicated function for it, unlike `search_web_llm`'s
+`SearchWeb()`. `wrapReadImageWithLLM` / the `image_gen`/`image_edit` tool
+wrappers just send a plain-text prompt ("here's a local file path /
+attached reference image, do X") through the provider's normal
+`GenerateContent()` / `GenerateImages()` call, and rely entirely on that
+CLI's own agentic judgment to invoke its own native tool. Verification
+had to be per-provider because there is no shared mechanism to reason
+about.
+
+**`read_image` native passthrough:**
+- `codex-cli`, `claude-code`: verified live, work correctly, including
+  under the same lockdown flags a real workflow-step session runs under
+  (`WithDisableShellTool()`).
+- `cursor-cli`: found a real bug. Under `WithDenyBuiltinTools(true)` (same
+  lockdown a real workflow-step session uses), every `read_image` call
+  hung for the full 180s context deadline instead of failing or
+  succeeding. Root cause: the `beforeReadFile` hook cursor installs to
+  force MCP-bridge routing denies *every* file read unconditionally (no
+  matcher, unlike the tool-name-matched `preToolUse` deny) — and since the
+  MCP bridge has no vision equivalent, the denied agent just flails
+  (e.g. trying to `cat` binary PNG bytes through the bridge) until
+  timeout instead of getting redirected anywhere useful. Fixed by having
+  the deny script allow image-extension (`.png`/`.jpg`/`.jpeg`/`.webp`)
+  reads through while leaving every other denial unchanged. Verified live:
+  180s timeout → 20-30s pass, lockdown still fully in place.
+  (`multi-llm-provider-go` commit `7a0e17d`.)
+
+**`image_gen`/`image_edit` native passthrough (codex-cli only —
+cursor-cli/claude-code/agy-cli/vertex not investigated this pass):**
+- `image_gen` worked, but ran under
+  `--dangerously-bypass-approvals-and-sandbox` (zero lockdown at all,
+  independent of whatever session lockdown was requested). Verified live
+  that codex's built-in `image_gen` tool needs no approval prompt and
+  completes fine under `--sandbox workspace-write --ask-for-approval
+  never` instead — real security improvement, no behavior change.
+  Deliberately did not also disable `shell_tool`: codex's image skill
+  saves the generated file under `$CODEX_HOME/generated_images/` (outside
+  any sandbox) and shells out to `cp` it into the workspace path;
+  disabling shell would strand the file with no way to relocate it.
+- `image_edit` was **completely broken** — every single call failed.
+  `runSingleImageCommand` passed `--image <path>` as two separate argv
+  entries; codex's `--image` flag is clap-variadic (`<FILE>...`) and
+  greedily swallowed the prompt string that followed as another file
+  argument, leaving codex with no prompt at all ("No prompt provided via
+  stdin", exit 1). Reproduced manually against the real CLI before
+  touching code, fixed by passing a single `--image=<path>` token,
+  verified live (127s PASS, image content-checked as actually recolored
+  per the edit prompt, not just "returned some bytes").
+  (`multi-llm-provider-go` commit `1c55f59`.)
+
+Both fixes shipped with new live tests
+(`TestCursorCLIRealImagePathAnalysis` pre-existed and now passes;
+`TestCodexCLIRealImagePathAnalysis`, `TestClaudeCodeRealImagePathAnalysis`,
+`TestCodexCLIRealImageGeneration`, `TestCodexCLIRealImageEditing` are new)
+and full-package regression sweeps (0 failures) in
+`multi-llm-provider-go`. Not yet done: the same live-verification pass for
+`image_gen`/`image_edit` on `cursor-cli`/`claude-code`/`agy-cli`, and for
+`read_image` on `agy-cli`.
