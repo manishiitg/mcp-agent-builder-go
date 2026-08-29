@@ -54,7 +54,7 @@ finding also mentions tab creation. Reproduce before linking or closing it.
 | ~~P1~~ partially done | Sales Outreach `PUL-AAC278EF` | [PLAT-225](../bugs/pulse_platform/plat-225.md) fixed the concrete, reproduced half: the bridge no longer discards a chained command's real stdout/stderr when it reports failure, matching the finding's own stated `next_check` exactly. Left open, and genuinely fuzzier: whether an ordinary non-2xx HTTP response or expected non-zero subcommand embedded in a script should ever be classified as a tool-level failure at all is a shell-scripting-intent judgment call, not addressed here — a script's own exit code is arguably always the correct signal to trust. |
 | P2 | LinkedIn `PUL-61C84987` | Add a supported shared-validator fixture boundary and reject the `notes=[]` / string-type false pass. |
 | P2 | LinkedIn `PUL-17E6F19A`; `PUL-7607952E` | Complete changelog dependent-artifact coverage and make its dashboard cursor derive from that canonical record. |
-| P2 | Upwork `PUL-B0A88D49` | Prevent guidance from requiring an absent bundled reference. Validate every declared `read_skill` path at materialization time. |
+| ~~P2~~ done | Upwork `PUL-B0A88D49` | [PLAT-228](../bugs/pulse_platform/plat-228.md) confirmed the specific instance is stale — the whole `"bug-review"` guidance kind it referenced was retired and replaced by `engineering-review`, whose reads are genuinely bundled. The systemic `read_skill` materialization-time validator this row also asked for remains real, unstarted future work. |
 | P2 | Upwork `PUL-13197E02` | Reproduce exact CDP tab-creation/acquisition shape; either link it to PLAT-028 or file a separate creation-contract fix. |
 
 ## Reclassify instead of fixing as platform code
