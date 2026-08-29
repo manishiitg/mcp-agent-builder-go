@@ -178,6 +178,26 @@ Downloads folder, which is read-only to the agent.
   mode, sessions are intentionally remapped to one per port; isolation comes
   from workflow-owned labeled tabs plus the per-port select-and-act lock.
 
+## `wait` for a fixed delay takes a bare number, not a `--ms` flag
+
+To pause for a fixed duration (e.g. human-pacing between actions), pass the
+millisecond count as a **bare positional argument** —
+`browser("wait", ["1800"])` — not `--ms 1800`. `--ms` is not a real flag on
+this tool at all; passing it does not error out or get ignored cleanly, it
+makes the call fall through to a different, unrelated wait mode that then
+fails with a misleading `Wait timed out after 25000ms` after a fixed ~25
+second internal ceiling — regardless of the number that was supposed to
+follow `--ms`. This has been directly reproduced: `wait --ms 1800` times out
+after 25000ms; `wait 1800` (bare) returns `Done` in ~1.8s, exactly as
+requested.
+
+If a wait call times out after ~25000ms even though a short delay was
+intended, check the call for `--ms` first before assuming the browser or
+target page is unresponsive — it usually means the flag form was used by
+mistake. The tool's other wait modes take a selector, or one of
+`--url <pattern>`, `--load <state>`, `--fn <expression>`, `--text <text>`,
+`--download [path]` — a bare number is specifically the fixed-delay form.
+
 ## A click response proves the event dispatched, not that the target's state changed
 
 `agent_browser click`'s `success` field means the click event fired — nothing
