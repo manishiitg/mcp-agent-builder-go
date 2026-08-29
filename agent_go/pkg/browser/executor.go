@@ -1295,13 +1295,31 @@ func browserContextGuardPaths(ctx context.Context, key common.ContextKey) []stri
 	return append([]string(nil), paths...)
 }
 
+// listCDPTabs runs the bare `tab` listing form only -- no tab id/selector
+// argument -- so it is always a side-effect-free read, unlike `tab <id>`
+// (switches focus) or `tab new` (creates a tab). The top-level command
+// dispatcher's shouldRetryCDPTimeout retry set deliberately excludes "tab"
+// because that name also covers those side-effecting forms; every caller of
+// this internal helper also bypasses that dispatcher entirely, so a listing
+// timeout here got zero retries even though five independent Pulse findings
+// converged on this exact call, after this exact endpoint, coming back
+// reachable moments earlier from a fresh Stage-0 connection test. Retry once
+// here specifically, mirroring the dispatcher's own 500ms-then-retry-once
+// shape for other CDP read timeouts, without touching that shared allowlist.
 func (e *Executor) listCDPTabs(ctx context.Context, session, cdpURL string, opts *ExecuteOptions) (string, error) {
-	return e.Client.ExecuteCommand(ctx, []string{
+	args := []string{
 		"--session", session,
 		"tab",
 		"--cdp", cdpURL,
 		"--json",
-	}, opts)
+	}
+	output, err := e.Client.ExecuteCommand(ctx, args, opts)
+	if err != nil && isCommandTimeoutError(err) {
+		log.Printf("[BROWSER] CDP tab list timed out for session %q, retrying once: %v", session, err)
+		time.Sleep(500 * time.Millisecond)
+		output, err = e.Client.ExecuteCommand(ctx, args, opts)
+	}
+	return output, err
 }
 
 func (e *Executor) listCDPTabsForUser(ctx context.Context, session, cdpURL string, opts *ExecuteOptions, port int, ownerID string) string {
