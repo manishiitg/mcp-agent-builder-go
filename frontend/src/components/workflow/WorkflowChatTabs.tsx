@@ -41,7 +41,7 @@ const WorkflowTabItem = React.memo<WorkflowTabItemProps>(({
   onStop,
 }) => {
   const displayName = tab.metadata?.phaseId === 'workflow-builder' && tab.name === 'Automation Builder'
-    ? 'Conversations'
+    ? 'Chat'
     : tab.name
 
   // Tabs are a product-level conversation switcher. Derive their small status

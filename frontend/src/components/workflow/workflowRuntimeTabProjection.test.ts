@@ -49,6 +49,25 @@ describe('workflowRuntimeTabProjection', () => {
     expect(projected?.metadata.scheduledJobName).toBe('Schedule')
   })
 
+  it('labels the toolbar one-off Pulse lane as Manual Pulse', () => {
+    const projected = workflowRuntimeTabProjection(runtime({
+      session_id: 'schedule-manual--manual-p_1788000820583762000',
+      triggered_by: 'workflow_builder',
+      title: 'Workflow Builder',
+      phase_name: 'Workflow Builder',
+    }), 'workflow-linkedin')
+
+    expect(projected).toMatchObject({
+      name: 'Manual Pulse',
+      metadata: {
+        isViewOnly: true,
+        isScheduledRun: true,
+        scheduledJobName: 'Manual Pulse',
+      },
+      autoActivate: false,
+    })
+  })
+
   it('keeps an interactive builder run eligible for automatic selection', () => {
     const projected = workflowRuntimeTabProjection(runtime({
       phase_id: 'workflow-builder',
