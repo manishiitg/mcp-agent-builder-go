@@ -64,7 +64,8 @@ func TestPulseReviewFocusToolsPersistDurableAgenda(t *testing.T) {
 	ctx := mcpexecutor.WithSessionID(context.Background(), pulseRunID)
 	_, executors, _ := createPulseWorklistTools()
 	record := executors["record_pulse_review_focus"].(func(context.Context, map[string]interface{}) (string, error))
-	agenda := executors["get_pulse_review_focus_agenda"].(func(context.Context, map[string]interface{}) (string, error))
+	// get_pulse_review_focus_agenda was folded into get_pulse_state(view="focus_agenda").
+	agenda := executors["get_pulse_state"].(func(context.Context, map[string]interface{}) (string, error))
 
 	raw, err := record(ctx, map[string]interface{}{
 		"workspace_path": workspacePath, "pulse_run_id": pulseRunID, "module": pulseModuleTechnicalReview,
@@ -92,7 +93,7 @@ func TestPulseReviewFocusToolsPersistDurableAgenda(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("record second route focus: %v", err)
 	}
-	raw, err = agenda(ctx, map[string]interface{}{"workspace_path": workspacePath, "module": pulseModuleTechnicalReview, "route_scope": "daily-execution/small-route"})
+	raw, err = agenda(ctx, map[string]interface{}{"workspace_path": workspacePath, "view": "focus_agenda", "module": pulseModuleTechnicalReview, "route_scope": "daily-execution/small-route"})
 	if err != nil {
 		t.Fatalf("read agenda: %v", err)
 	}

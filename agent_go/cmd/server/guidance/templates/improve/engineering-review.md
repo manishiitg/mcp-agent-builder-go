@@ -23,7 +23,7 @@ Use `{{.RunFolder}}` as the primary retained run.{{end}}
    chat. Call `record_pulse_worklist` exactly once with `mode="backlog_drain"`
    and a concrete `mode_reason`: `technical_review` is due and
    `strategic_review` is deferred with an explicit next-check boundary. Read
-   `get_pulse_review_focus_agenda(module="technical_review", route_scope=<relevant route>)`, perform a
+   `get_pulse_state(view="focus_agenda", module="technical_review", route_scope=<relevant route>)`, perform a
    lightweight scan for critical regressions, matured verification, answered
    decisions, plan routes, and retained run selectors, then choose the smallest
    sufficient route-aware technical focus set using priority plus durable

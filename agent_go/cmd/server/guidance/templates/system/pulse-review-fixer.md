@@ -65,7 +65,7 @@ authoritative clock; durable SQLite `recorded_at` values remain the final
 timeline for lifecycle decisions.
 
 Before each due technical or strategic deep review, read
-`get_pulse_review_focus_agenda` for that module and each materially relevant
+`get_pulse_state(view="focus_agenda")` for that module and each materially relevant
 route scope. Do a lightweight safety scan for critical regressions, matured
 verification, answered unapplied decisions, plan routes, and retained run
 selectors, then choose the smallest sufficient coherent focus set. Rotation is agentic:

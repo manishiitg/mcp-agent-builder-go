@@ -18,7 +18,7 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
    `read_skill(skills=[{"name":"builder-reference","path":"references/llm-selection.md"}])`.
    Work from these references yourself. Findings are persisted through typed
    Pulse tools; do not create a Markdown or HTML review artifact.
-   Read `get_pulse_review_focus_agenda(module="technical_review", route_scope=<relevant route>)`, perform a
+   Read `get_pulse_state(view="focus_agenda", module="technical_review", route_scope=<relevant route>)`, perform a
    lightweight scan for critical regressions, matured verification, answered
    decisions, plan routes, and retained run selectors, then select the smallest
    sufficient route-aware technical focus set. A small route may need one;

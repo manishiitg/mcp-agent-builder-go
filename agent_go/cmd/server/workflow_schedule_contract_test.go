@@ -273,7 +273,7 @@ func TestVersion133ReceivesActionablePulseBacklogMigration(t *testing.T) {
 		t.Fatalf("1.0.33 upgrade plan = %+v, want only actionable Pulse backlog migration", plan)
 	}
 	for _, want := range []string{
-		"record_pulse_actionable_backlog_reconciliation",
+		`record_pulse_migration_reconciliation(scope="actionable_backlog")`,
 		"historical free-text observations",
 		"typed platform/harness findings",
 		"actionable_workflow_issues",

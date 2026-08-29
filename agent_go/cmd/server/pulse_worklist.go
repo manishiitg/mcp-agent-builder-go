@@ -1873,15 +1873,6 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		Description: "Persist one complete Pulse reviewer finding directly to the SQLite lifecycle. First inspect the compact active and closed issue index and reason about semantic sameness; request targeted full detail only for candidate issue_ids. For an existing root cause, including a closed one, supply its issue_id and update/reopen it; do not create a second issue because wording, evidence paths, or symptoms differ. Omit issue_id only for a genuinely distinct root cause with a different repair or owner. Do not encode findings in the final response. Backup, publish, and notify waiting for their ordered finalizer stage are not findings; report only a real terminal failure after that command ran.",
 		Parameters:  llmtypes.NewParameters(map[string]interface{}{"type": "object", "additionalProperties": false, "properties": findingProperties, "required": []string{"workspace_path", "pulse_run_id", "module", "concern", "issue_kind", "classification", "severity", "summary", "impact", "evidence"}}),
 	}}
-	focusAgendaTool := llmtypes.Tool{Type: "function", Function: &llmtypes.FunctionDefinition{
-		Name:        "get_pulse_review_focus_agenda",
-		Description: "Read the compact durable deep-review coverage agenda for technical_review or strategic_review. It includes every canonical focus, global and route-specific review counts, last verdict, due boundary, and deferred history. Pass route_scope when reviewing one route/group/sub-workflow. Use it after the normal module/backlog state read and before agentically choosing the smallest sufficient focus set; it is not blind round-robin.",
-		Parameters: llmtypes.NewParameters(map[string]interface{}{"type": "object", "additionalProperties": false, "properties": map[string]interface{}{
-			"workspace_path": reviewIdentityProperties["workspace_path"], "module": reviewIdentityProperties["module"],
-			"route_scope": map[string]interface{}{"type": "string", "description": "Optional canonical route/group/sub-workflow scope. Use the route id or stable group label from plan/run evidence; leave empty only for genuinely workflow-wide evidence."},
-			"limit":       map[string]interface{}{"type": "integer", "minimum": 1, "maximum": 50},
-		}, "required": []string{"workspace_path", "module"}}),
-	}}
 	recordFocusTool := llmtypes.Tool{Type: "function", Function: &llmtypes.FunctionDefinition{
 		Name:        "record_pulse_review_focus",
 		Description: "Persist one deep focus selected for this technical or strategic review. Call once for every focus actually investigated, then complete the module review. The reviewer agentically chooses the smallest sufficient set from route size, distinct evidence boundaries, unresolved risk, prior coverage, and marginal value; there is no fixed focus count. This is not a findings store and does not replace the run-scoped Markdown checkpoint.",
@@ -1908,19 +1899,15 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 			"reason":              map[string]interface{}{"type": "string", "description": "One sentence naming the shared root cause and why one repair covers the duplicates."},
 		}, "required": []string{"workspace_path", "canonical_issue_id", "duplicate_issue_ids", "reason"}}),
 	}}
-	reconcileLifecycleTool := llmtypes.Tool{Type: "function", Function: &llmtypes.FunctionDefinition{
-		Name:        "record_pulse_lifecycle_reconciliation",
-		Description: "Run the idempotent close-on-applied compatibility migration for this workflow's Pulse register. It closes every active issue with a recorded applied repair and changed files, moves legacy unfixed waiting rows back to the active register, retires merged aliases, and preserves all history. Use only for the workflow-contract v1.0.32 upgrade; it never edits the workflow plan or schedules.",
+	reconcileTool := llmtypes.Tool{Type: "function", Function: &llmtypes.FunctionDefinition{
+		Name: "record_pulse_migration_reconciliation",
+		Description: "Run one idempotent Pulse-register migration for a workflow-contract upgrade. Never edits the workflow plan or schedules. Pass scope to choose which:\n" +
+			"scope=\"lifecycle\": the close-on-applied compatibility migration. Closes every active issue with a recorded applied repair and changed files, moves legacy unfixed waiting rows back to the active register, retires merged aliases, and preserves all history. Use for the workflow-contract v1.0.32 and v1.0.33 upgrades.\n" +
+			"scope=\"actionable_backlog\": the actionable-backlog migration. First applies the same close-on-applied lifecycle reconciliation as scope=\"lifecycle\", then retires untyped legacy observations that were never promoted to canonical findings and hands typed harness issues to the platform register. Preserves all evidence and leaves human decisions and evidence waits visible but outside the workflow repair target. Use for the workflow-contract v1.0.34 upgrade.",
 		Parameters: llmtypes.NewParameters(map[string]interface{}{"type": "object", "additionalProperties": false, "properties": map[string]interface{}{
 			"workspace_path": map[string]interface{}{"type": "string", "description": "Workflow-relative path, e.g. Workflow/social-media."},
-		}, "required": []string{"workspace_path"}}),
-	}}
-	reconcileActionableBacklogTool := llmtypes.Tool{Type: "function", Function: &llmtypes.FunctionDefinition{
-		Name:        "record_pulse_actionable_backlog_reconciliation",
-		Description: "Run the idempotent actionable-backlog migration for this workflow's Pulse register. It first applies close-on-applied lifecycle reconciliation, then retires untyped legacy observations that were never promoted to canonical findings and hands typed harness issues to the platform register. It preserves all evidence and leaves human decisions and evidence waits visible but outside the workflow repair target. Use only for the workflow-contract v1.0.34 upgrade; it never edits the workflow plan or schedules.",
-		Parameters: llmtypes.NewParameters(map[string]interface{}{"type": "object", "additionalProperties": false, "properties": map[string]interface{}{
-			"workspace_path": map[string]interface{}{"type": "string", "description": "Workflow-relative path, e.g. Workflow/social-media."},
-		}, "required": []string{"workspace_path"}}),
+			"scope":          map[string]interface{}{"type": "string", "enum": []string{"lifecycle", "actionable_backlog"}, "description": "Which migration to run. actionable_backlog is a superset of lifecycle -- it already applies the lifecycle step first."},
+		}, "required": []string{"workspace_path", "scope"}}),
 	}}
 	fastRequestTool := llmtypes.Tool{Type: "function", Function: &llmtypes.FunctionDefinition{
 		Name:        "record_pulse_fast_request",
@@ -1971,19 +1958,20 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
 			Name: "get_pulse_state",
-			Description: fmt.Sprintf("Read Pulse state from the workflow's db/db.sqlite. One read tool with three views; typed SQLite state is the only source of truth.\n"+
+			Description: fmt.Sprintf("Read Pulse state from the workflow's db/db.sqlite. One read tool with four views; typed SQLite state is the only source of truth.\n"+
 				"view=\"module\": per-module cadence and results so Pulse Gate can decide what is due, plus the complete active concern backlog, externally owned suppressed concerns, plan-change backlog, reviewer history, impact ledger, and read-only loop-closure facts. Read this before record_pulse_worklist. Loop-closure findings are evidence Gate may weigh; they do not mandate a module or authorize mutation. A concern with a high seen_count has been reported on that many runs and should weigh heavily.\n"+
 				"view=\"backlog\": a compact active issue/observation index plus the closed canonical issue index by default. Read it once to select or semantically reuse public PUL ids. To inspect lifecycle evidence, call again with detail=\"full\" and 1-20 exact issue_ids; broad full-history reads are rejected. Optional module filter.\n"+
 				"view=\"review\": one compact reviewer receipt as JSON with validated structured verifications. Requires the stored pulse-run receipt id and module; reviewer prose and Markdown are not stored.\n"+
+				"view=\"focus_agenda\": the compact durable deep-review coverage agenda for technical_review or strategic_review — every canonical focus, global and route-specific review counts, last verdict, due boundary, and deferred history. Requires module. Pass route_scope when reviewing one route/group/sub-workflow. Read this after view=\"module\"/\"backlog\" and before agentically choosing the smallest sufficient focus set; it is not blind round-robin.\n"+
 				"Close a real finding only through a verified finding_disposition on record_pulse_result; resolve_run_concern is limited to acknowledgment or rejection. Modules: %s.", pulseModuleList()),
 			Parameters: llmtypes.NewParameters(map[string]interface{}{
 				"type":                 "object",
 				"additionalProperties": false,
 				"properties": map[string]interface{}{
 					"workspace_path": map[string]interface{}{"type": "string", "description": "Workflow-relative path, e.g. Workflow/social-media."},
-					"view":           map[string]interface{}{"type": "string", "enum": pulseStateViewValues, "description": "Which Pulse state to read: module cadence, the finding backlog, or one saved review."},
+					"view":           map[string]interface{}{"type": "string", "enum": pulseStateViewValues, "description": "Which Pulse state to read: module cadence, the finding backlog, one saved review, or the focus coverage agenda."},
 					"pulse_run_id":   map[string]interface{}{"type": "string", "description": "Optional current Pulse run id. With view=module, returns that Gate's persisted pass mode."},
-					"module":         map[string]interface{}{"type": "string", "description": "Optional owning-module filter for view=\"backlog\" (omit for the complete backlog). Required for view=\"review\". Ignored for view=\"module\"."},
+					"module":         map[string]interface{}{"type": "string", "description": "Optional owning-module filter for view=\"backlog\" (omit for the complete backlog). Required for view=\"review\" and view=\"focus_agenda\". Ignored for view=\"module\"."},
 					"review_run_id":  map[string]interface{}{"type": "string", "description": "Required for view=\"review\": the review run id from the reviewer's completion notification."},
 					"detail":         map[string]interface{}{"type": "string", "enum": []string{"compact", "full"}, "description": "For view=\"backlog\" only. compact (default) returns active issues/observations and the closed canonical issue index for semantic reuse. full requires issue_ids and returns complete lifecycle evidence only for those ids."},
 					"issue_ids": map[string]interface{}{
@@ -1991,6 +1979,8 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 						"items":       map[string]interface{}{"type": "string", "pattern": "^PUL-[A-Za-z0-9]+$"},
 						"description": "For view=\"backlog\" with detail=\"full\": 1-20 exact public PUL ids selected from the compact issues or observations index.",
 					},
+					"route_scope": map[string]interface{}{"type": "string", "description": "For view=\"focus_agenda\" only. Optional canonical route/group/sub-workflow scope. Use the route id or stable group label from plan/run evidence; leave empty only for genuinely workflow-wide evidence."},
+					"limit":       map[string]interface{}{"type": "integer", "minimum": 1, "maximum": 50, "description": "For view=\"focus_agenda\" only."},
 				},
 				"required": []string{"workspace_path", "view"},
 			}),
@@ -2105,14 +2095,6 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 			payload, _ := json.Marshal(map[string]interface{}{"status": "merged", "merged_count": merged, "canonical_issue_id": stringToolArg(args, "canonical_issue_id")})
 			return string(payload), nil
 		},
-		"get_pulse_review_focus_agenda": func(ctx context.Context, args map[string]interface{}) (string, error) {
-			focuses, err := getPulseReviewFocusAgenda(ctx, stringToolArg(args, "workspace_path"), stringToolArg(args, "module"), stringToolArg(args, "route_scope"), intToolArg(args, "limit"))
-			if err != nil {
-				return "", err
-			}
-			encoded, _ := json.Marshal(map[string]interface{}{"focuses": focuses})
-			return string(encoded), nil
-		},
 		"record_pulse_review_focus": func(ctx context.Context, args map[string]interface{}) (string, error) {
 			pulseRunID := pulseRunIDForSession(ctx, stringToolArg(args, "pulse_run_id"))
 			if err := validatePulseToolRunID(ctx, pulseRunID); err != nil {
@@ -2174,10 +2156,13 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 				module, _ := args["module"].(string)
 				reviewRunID, _ := args["review_run_id"].(string)
 				return readPulseReviewView(ctx, workspacePath, reviewRunID, module)
+			case pulseStateViewFocusAgenda:
+				module, _ := args["module"].(string)
+				return readPulseFocusAgendaView(ctx, workspacePath, module, stringToolArg(args, "route_scope"), intToolArg(args, "limit"))
 			default:
-				return "", fmt.Errorf("view %q is not a valid Pulse state view. Must be one of: %s. Use %q for module cadence and the active concern backlog, %q for the durable finding backlog, and %q for one saved reviewer result (which also needs review_run_id and module)",
+				return "", fmt.Errorf("view %q is not a valid Pulse state view. Must be one of: %s. Use %q for module cadence and the active concern backlog, %q for the durable finding backlog, %q for one saved reviewer result (which also needs review_run_id and module), and %q for the deep-review focus coverage agenda (which also needs module)",
 					view, strings.Join(pulseStateViewValues, ", "),
-					pulseStateViewModule, pulseStateViewBacklog, pulseStateViewReview)
+					pulseStateViewModule, pulseStateViewBacklog, pulseStateViewReview, pulseStateViewFocusAgenda)
 			}
 		},
 		"record_pulse_result": func(ctx context.Context, args map[string]interface{}) (string, error) {
@@ -2191,37 +2176,40 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 			payload, _ := json.Marshal(map[string]interface{}{"status": "queued", "request": request})
 			return string(payload), nil
 		},
-		"record_pulse_lifecycle_reconciliation": func(ctx context.Context, args map[string]interface{}) (string, error) {
-			result, err := step_based_workflow.ReconcilePulseFindingLifecycle(ctx, stringToolArg(args, "workspace_path"))
-			if err != nil {
-				return "", err
+		"record_pulse_migration_reconciliation": func(ctx context.Context, args map[string]interface{}) (string, error) {
+			workspacePath := stringToolArg(args, "workspace_path")
+			switch scope := strings.TrimSpace(stringToolArg(args, "scope")); scope {
+			case "lifecycle":
+				result, err := step_based_workflow.ReconcilePulseFindingLifecycle(ctx, workspacePath)
+				if err != nil {
+					return "", err
+				}
+				payload, _ := json.Marshal(result)
+				return string(payload), nil
+			case "actionable_backlog":
+				result, err := step_based_workflow.ReconcilePulseActionableBacklog(ctx, workspacePath)
+				if err != nil {
+					return "", err
+				}
+				payload, _ := json.Marshal(result)
+				return string(payload), nil
+			default:
+				return "", fmt.Errorf("scope %q is not valid; must be \"lifecycle\" or \"actionable_backlog\"", scope)
 			}
-			payload, _ := json.Marshal(result)
-			return string(payload), nil
-		},
-		"record_pulse_actionable_backlog_reconciliation": func(ctx context.Context, args map[string]interface{}) (string, error) {
-			result, err := step_based_workflow.ReconcilePulseActionableBacklog(ctx, stringToolArg(args, "workspace_path"))
-			if err != nil {
-				return "", err
-			}
-			payload, _ := json.Marshal(result)
-			return string(payload), nil
 		},
 		"record_pulse_impact": impactExecutor,
 	}
 	categories := map[string]string{
-		"record_pulse_finding":                           "workflow",
-		"merge_pulse_issues":                             "workflow",
-		"get_pulse_review_focus_agenda":                  "workflow",
-		"record_pulse_review_focus":                      "workflow",
-		"record_pulse_worklist":                          "workflow",
-		"get_pulse_state":                                "workflow",
-		"record_pulse_result":                            "workflow",
-		"record_pulse_fast_request":                      "workflow",
-		"record_pulse_impact":                            "workflow",
-		"resolve_run_concern":                            "workflow",
-		"record_pulse_lifecycle_reconciliation":          "workflow",
-		"record_pulse_actionable_backlog_reconciliation": "workflow",
+		"record_pulse_finding":                  "workflow",
+		"merge_pulse_issues":                    "workflow",
+		"record_pulse_review_focus":             "workflow",
+		"record_pulse_worklist":                 "workflow",
+		"get_pulse_state":                       "workflow",
+		"record_pulse_result":                   "workflow",
+		"record_pulse_fast_request":             "workflow",
+		"record_pulse_impact":                   "workflow",
+		"resolve_run_concern":                   "workflow",
+		"record_pulse_migration_reconciliation": "workflow",
 	}
 	resolveConcernTool := llmtypes.Tool{
 		Type: "function",
@@ -2258,7 +2246,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		return fmt.Sprintf("Issue %s marked %s.", step_based_workflow.NewPulseIssue(finding).ID, status), nil
 	}
 
-	return []llmtypes.Tool{recordFindingTool, focusAgendaTool, recordFocusTool, mergeIssuesTool, reconcileLifecycleTool, reconcileActionableBacklogTool, fastRequestTool, recordTool, stateTool, resultTool, impactTool, resolveConcernTool}, executors, categories
+	return []llmtypes.Tool{recordFindingTool, recordFocusTool, mergeIssuesTool, reconcileTool, fastRequestTool, recordTool, stateTool, resultTool, impactTool, resolveConcernTool}, executors, categories
 }
 
 func stringToolArg(args map[string]interface{}, key string) string {
@@ -2284,20 +2272,38 @@ func intToolArg(args map[string]interface{}, key string) int {
 // close_pulse_fix_attempt and resolve_human_input was guessing across a surface
 // larger than the number of concepts in it.
 const (
-	pulseStateViewModule  = "module"
-	pulseStateViewBacklog = "backlog"
-	pulseStateViewReview  = "review"
+	pulseStateViewModule      = "module"
+	pulseStateViewBacklog     = "backlog"
+	pulseStateViewReview      = "review"
+	pulseStateViewFocusAgenda = "focus_agenda"
 )
 
 // pulseStateViewValues is the closed view set shared by the schema enum, the
 // accept check, and the rejection message.
-var pulseStateViewValues = []string{pulseStateViewBacklog, pulseStateViewModule, pulseStateViewReview}
+var pulseStateViewValues = []string{pulseStateViewBacklog, pulseStateViewModule, pulseStateViewReview, pulseStateViewFocusAgenda}
 
 // pulseResultValues is the union of the module and final-command result sets.
 // Each target validates its own subset and names it on rejection; the schema
 // enum is the union so a valid value is never rejected by the transport before
 // the executor can explain which subset applies.
 var pulseResultValues = []string{"running", "done", "changed", "skipped", "blocked", "failed"}
+
+// readPulseFocusAgendaView wraps getPulseReviewFocusAgenda in the same
+// (string, error) JSON-encoded shape the other get_pulse_state views use.
+// Folded in as a fourth view (was the standalone get_pulse_review_focus_agenda
+// tool) since it is read-only and already fit get_pulse_state's existing
+// "one tool, multiple views" shape.
+func readPulseFocusAgendaView(ctx context.Context, workspacePath, module, routeScope string, limit int) (string, error) {
+	focuses, err := getPulseReviewFocusAgenda(ctx, workspacePath, module, routeScope, limit)
+	if err != nil {
+		return "", err
+	}
+	encoded, err := json.Marshal(map[string]interface{}{"focuses": focuses})
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
 
 func readPulseModuleStateView(ctx context.Context, workspacePath, pulseRunID string) (string, error) {
 	states, err := getPulseModuleStates(ctx, workspacePath)
