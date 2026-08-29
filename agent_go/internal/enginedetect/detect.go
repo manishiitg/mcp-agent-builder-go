@@ -281,8 +281,6 @@ func discoverySetupHint(provider string, runtimeMissing bool) string {
 			return "Install Codex CLI so the codex command is available on the backend PATH."
 		case "cursor-cli":
 			return "Install Cursor CLI so the cursor-agent command is available on the backend PATH."
-		case "agy-cli":
-			return "Install Antigravity CLI so the agy command is available on the backend PATH."
 		case "pi-cli":
 			return "Install Pi CLI with npm install -g @earendil-works/pi-coding-agent, or ensure npx is available on the backend PATH."
 		case "claude-code":
@@ -297,8 +295,6 @@ func discoverySetupHint(provider string, runtimeMissing bool) string {
 		return "Run codex login or set CODEX_API_KEY, then test again."
 	case "cursor-cli":
 		return "Run cursor-agent login or set CURSOR_API_KEY, then test again."
-	case "agy-cli":
-		return "Run agy locally and complete Antigravity sign-in, then test again."
 	case "pi-cli":
 		return "Set PI_API_KEY, GEMINI_API_KEY, or GOOGLE_API_KEY, then test again."
 	case "claude-code":

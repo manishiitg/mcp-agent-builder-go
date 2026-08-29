@@ -208,8 +208,7 @@ func codingAgentTmuxSnapshotIdleFor(snapshot terminals.Snapshot, now time.Time, 
 
 func isCodingAgentTmuxSessionName(tmuxSession string) bool {
 	name := strings.TrimSpace(tmuxSession)
-	return strings.HasPrefix(name, "mlp-agy-cli") ||
-		strings.HasPrefix(name, "mlp-claude-code") ||
+	return strings.HasPrefix(name, "mlp-claude-code") ||
 		strings.HasPrefix(name, "mlp-codex-cli") ||
 		strings.HasPrefix(name, "mlp-cursor-cli") ||
 		strings.HasPrefix(name, "mlp-pi-cli")

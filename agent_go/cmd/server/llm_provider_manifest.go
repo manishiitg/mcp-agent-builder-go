@@ -124,13 +124,6 @@ var providerStaticInfoMap = map[string]providerStaticInfo{
 		authDescription: "Local CLI (API key optional)",
 		requiresAPIKey:  false,
 	},
-	"agy-cli": {
-		displayName:     "Antigravity CLI (Deprecated)",
-		description:     "Deprecated for new setup. Existing sessions remain runnable; use Pi CLI for new multi-provider coding-agent work.",
-		integrationKind: "coding_agent",
-		authDescription: "Local CLI (Agy sign-in)",
-		requiresAPIKey:  false,
-	},
 	"pi-cli": {
 		displayName:     "Pi CLI",
 		description:     "Uses Pi CLI through tmux marker transport for Pi model IDs across Gemini, Z.AI, Kimi, MiniMax, DeepSeek, and custom Pi providers.",
@@ -319,7 +312,6 @@ func (api *StreamingAPI) handleGetProviderManifest(w http.ResponseWriter, r *htt
 
 	providerOrder := []string{
 		"claude-code", "codex-cli", "cursor-cli", "pi-cli",
-		"agy-cli",
 		"openai", "anthropic", "vertex", "bedrock", "azure",
 	}
 

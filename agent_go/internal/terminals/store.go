@@ -1073,7 +1073,6 @@ func (s *Store) upsertTerminal(sessionID string, event storeevents.Event, metada
 		stringValue(metadata, "tmux_session"),
 		stringValue(metadata, "tmux_session_name"),
 		stringValue(metadata, "pi_interactive_session"),
-		stringValue(metadata, "agy_interactive_session"),
 		stringValue(metadata, "claude_code_interactive_session"),
 		stringValue(metadata, "codex_interactive_session"),
 		stringValue(metadata, "gemini_interactive_session"),
@@ -2149,7 +2148,6 @@ func (s *Store) findInactiveTargetLocked(sessionID, ownerID string, metadata map
 		stringValue(metadata, "tmux_session"),
 		stringValue(metadata, "tmux_session_name"),
 		stringValue(metadata, "pi_interactive_session"),
-		stringValue(metadata, "agy_interactive_session"),
 		stringValue(metadata, "claude_code_interactive_session"),
 		stringValue(metadata, "codex_interactive_session"),
 		stringValue(metadata, "gemini_interactive_session"),
@@ -3135,7 +3133,6 @@ func (s *Store) handleStatusLine(sessionID string, event storeevents.Event) {
 		stringValue(statusMeta, "tmux_session"),
 		stringValue(statusMeta, "tmux_session_name"),
 		stringValue(statusMeta, "pi_interactive_session"),
-		stringValue(statusMeta, "agy_interactive_session"),
 		stringValue(statusMeta, "claude_code_interactive_session"),
 		stringValue(statusMeta, "codex_interactive_session"),
 		stringValue(statusMeta, "gemini_interactive_session"),
@@ -3143,7 +3140,7 @@ func (s *Store) handleStatusLine(sessionID string, event storeevents.Event) {
 	)
 
 	// Use the provider name verbatim — the adapter owns its display name
-	// (e.g. "agy-cli", "claudecode"); the store must not re-map provider ids.
+	// (e.g. "codex-cli", "claudecode"); the store must not re-map provider ids.
 	providerLabel := provider
 	if model != "" {
 		if providerLabel != "" {
