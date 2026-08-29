@@ -354,6 +354,22 @@ func isValidationSchemaLikeJSON(raw string) bool {
 	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &obj); err != nil {
 		return false
 	}
+	// A real eval step's own scored output can legitimately embed a "files"
+	// array shaped like a validation schema -- e.g. self-documenting which
+	// checks it satisfied -- as one field among its real content. Only treat
+	// the whole document as a validation-schema echo (not real step output)
+	// when it has no "score" of its own: a genuine validation_schema.json
+	// stub never scores itself, so any document that does is real output,
+	// not an echo, regardless of what else it nests. Without this, a step
+	// whose real context_output.json embeds a schema-shaped "files" field
+	// had its extractable score silently discarded (linkedin
+	// eval-strategy-loop, PLAT-243: score=6/max_score=10 present and
+	// correct in context_output.json, but evaluation_report.json recorded
+	// score=0, score_captured=false, "No output_content found for this
+	// step").
+	if _, hasScore := obj["score"]; hasScore {
+		return false
+	}
 	files, ok := obj["files"].([]interface{})
 	if !ok || len(files) == 0 {
 		return false
