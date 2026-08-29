@@ -341,7 +341,6 @@ export interface ChatTabConfig {
   pastedAttachments?: PastedAttachment[]  // Long pastes captured as attachment chips, prepended on send
   isQueueProcessing?: boolean  // Lock to prevent multiple ChatArea instances from double-processing the queue
   autoRun?: boolean  // Automatically run the chat when tab is loaded
-  enableImageGeneration?: boolean  // Enable/disable image generation virtual tool
 }
 
 const stripRestoreOnlyTabConfig = (config: ChatTabConfig): ChatTabConfig => {
@@ -455,7 +454,6 @@ const getDefaultTabConfig = (mode: 'workflow' | 'multi-agent' = 'multi-agent'): 
     enableContextSummarization: false,
     browserMode: appStore?.lastBrowserMode ?? 'auto',
     enableBrowserAccess: ['auto', 'headless', 'cdp'].includes(appStore?.lastBrowserMode ?? 'auto'),
-    enableImageGeneration: appStore?.lastEnableImageGeneration ?? false,
     selectedSkills: appStore?.lastSelectedSkills ?? [],
     delegationTierConfig: undefined,
     queuedMessages: [],
@@ -2666,12 +2664,10 @@ export const useChatStore = create<ChatState>()(
           type SyncUpdate = {
             lastSelectedSkills?: string[]
             lastBrowserMode?: 'none' | 'auto' | 'headless' | 'cdp'
-            lastEnableImageGeneration?: boolean
           }
           const sync: SyncUpdate = {}
           if (configUpdate.selectedSkills !== undefined) sync.lastSelectedSkills = configUpdate.selectedSkills
           if (configUpdate.browserMode !== undefined) sync.lastBrowserMode = configUpdate.browserMode
-          if (configUpdate.enableImageGeneration !== undefined) sync.lastEnableImageGeneration = configUpdate.enableImageGeneration
           if (Object.keys(sync).length > 0) {
             console.log('[TabSettings] Syncing to AppStore:', sync)
             useAppStore.getState().syncLastTabSettings(sync)

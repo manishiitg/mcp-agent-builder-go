@@ -35,6 +35,9 @@ func TestRegisterMultiAgentLLMToolsHonorsProductToolPolicy(t *testing.T) {
 	if !registrar.names["list_llm_capabilities"] {
 		t.Fatal("unrelated LLM capability tool was not registered")
 	}
+	if registrar.names["estimate_llm_cost"] {
+		t.Fatal("retired media cost-estimation tool was registered")
+	}
 }
 
 func TestGenericProductToolRegistrationsHonorToolPolicy(t *testing.T) {

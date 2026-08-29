@@ -358,12 +358,6 @@ func buildProviderAPIKeysFromEnv() *llm.ProviderAPIKeys {
 		keys.MiniMax = &s
 	}
 	keys.PiProviderKeys = buildPiProviderKeysFromEnv()
-	if s := os.Getenv("ELEVENLABS_API_KEY"); s != "" {
-		keys.ElevenLabs = &s
-	}
-	if s := os.Getenv("DEEPGRAM_API_KEY"); s != "" {
-		keys.Deepgram = &s
-	}
 	if endpoint := os.Getenv("AZURE_AI_ENDPOINT"); endpoint != "" {
 		apiKey := os.Getenv("AZURE_AI_API_KEY")
 		apiVer := os.Getenv("AZURE_AI_API_VERSION")

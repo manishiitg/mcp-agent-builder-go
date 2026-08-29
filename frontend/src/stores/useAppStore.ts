@@ -41,8 +41,7 @@ interface AppState {
   // Last-used tab settings — inherited by new tabs
   lastSelectedSkills: string[]
   lastBrowserMode: 'none' | 'auto' | 'headless' | 'cdp'
-  lastEnableImageGeneration: boolean
-  syncLastTabSettings: (update: Partial<Pick<AppState, 'lastSelectedSkills' | 'lastBrowserMode' | 'lastEnableImageGeneration'>>) => void
+  syncLastTabSettings: (update: Partial<Pick<AppState, 'lastSelectedSkills' | 'lastBrowserMode'>>) => void
 }
 
 export const useAppStore = create<AppState>()(
@@ -151,7 +150,6 @@ export const useAppStore = create<AppState>()(
 
         lastSelectedSkills: [],
         lastBrowserMode: 'auto',
-        lastEnableImageGeneration: false,
         syncLastTabSettings: (update) => {
           set(update)
         },
@@ -168,8 +166,7 @@ export const useAppStore = create<AppState>()(
         selectedPresetId: state.selectedPresetId,
         useCodeExecutionMode: state.useCodeExecutionMode,
         lastSelectedSkills: state.lastSelectedSkills,
-        lastBrowserMode: state.lastBrowserMode,
-        lastEnableImageGeneration: state.lastEnableImageGeneration
+        lastBrowserMode: state.lastBrowserMode
         // Note: requiresNewChat is not persisted as it's temporary state
         // File context is now mode-specific: multi-agent tabs have their own, workflow uses preset
       }),

@@ -15,8 +15,6 @@ import (
 	"github.com/manishiitg/mcpagent/llm"
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 	"github.com/manishiitg/multi-llm-provider-go/pkg/adapters/azure"
-
-	virtualtools "github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
 )
 
 var supportedLLMProviders = []string{
@@ -856,44 +854,6 @@ func (api *StreamingAPI) handleGetLLMDefaults(w http.ResponseWriter, r *http.Req
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
-}
-
-// handleTestImageGen tests image generation config by attempting to generate a single test image
-func (api *StreamingAPI) handleTestImageGen(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Provider string `json:"provider"`
-		ModelID  string `json:"model_id"`
-		APIKey   string `json:"api_key"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	cfg := virtualtools.ImageGenExecutorConfig{
-		Provider: req.Provider,
-		ModelID:  req.ModelID,
-		APIKey:   req.APIKey,
-	}
-	if cfg.Provider == "" {
-		cfg.Provider = "vertex"
-	}
-	if cfg.ModelID == "" {
-		cfg.ModelID = "gemini-3.1-flash-image"
-	}
-
-	executor := virtualtools.CreateImageGenExecutor(cfg)
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
-
-	_, err := executor(ctx, map[string]any{"prompt": "a simple red circle on white background"})
-
-	w.Header().Set("Content-Type", "application/json")
-	if err != nil {
-		json.NewEncoder(w).Encode(map[string]any{"valid": false, "error": err.Error()})
-		return
-	}
-	json.NewEncoder(w).Encode(map[string]any{"valid": true, "message": "Image generation is working"})
 }
 
 // handleValidateAPIKey validates API keys for supported LLM providers and coding CLIs.

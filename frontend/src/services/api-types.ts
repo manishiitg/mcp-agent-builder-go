@@ -83,10 +83,6 @@ export interface LLMConfiguration {
     vertex?: string
     kimi?: string
     pi_cli?: string
-    minimax?: string
-    minimax_coding_plan?: string
-    elevenlabs?: string
-    deepgram?: string
     pi_provider_keys?: Record<string, string>
     azure?: {
       endpoint: string
@@ -157,13 +153,6 @@ export interface AgentQueryRequest {
   // Conversation JSON selected from /resume or a previous chat panel. The backend
   // can use its runtime metadata for native coding-agent resume.
   restored_conversation_path?: string
-  // Image generation configuration
-  enable_image_generation?: boolean
-  image_gen_config?: {
-    provider: string
-    model_id: string
-    api_key?: string
-  }
   // Auto-notification flag: when true, this is a background agent completion notification,
   // not a user-initiated message. Backend treats it as a synthetic turn (doesn't block user input).
   is_auto_notification?: boolean
@@ -259,10 +248,6 @@ export interface LLMDefaultsResponse {
   zai_config?: ExtendedLLMConfiguration
   kimi_config?: ExtendedLLMConfiguration
   pi_cli_config?: ExtendedLLMConfiguration
-  minimax_config?: ExtendedLLMConfiguration
-  minimax_coding_plan_config?: ExtendedLLMConfiguration
-  elevenlabs_config?: ExtendedLLMConfiguration
-  deepgram_config?: ExtendedLLMConfiguration
   available_models: {
     bedrock: string[]
     openrouter?: string[]
@@ -273,10 +258,6 @@ export interface LLMDefaultsResponse {
     'z-ai'?: string[]
     kimi?: string[]
     'pi-cli'?: string[]
-    minimax?: string[]
-    'minimax-coding-plan'?: string[]
-    elevenlabs?: string[]
-    deepgram?: string[]
   }
   provider_capabilities?: Partial<Record<LLMProvider, string[]>>
   supported_providers?: LLMProvider[]

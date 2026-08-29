@@ -112,3 +112,27 @@ sub-provider routing is not a standalone MiniMax credential page.
 and `npm run build` pass. The repository-wide frontend lint command still has
 pre-existing failures in unrelated files and was not used as this change's
 gate.
+
+## Completion cleanup (2026-08-29)
+
+Removed the remaining frontend and server-side configuration plumbing rather
+than leaving it merely hidden:
+
+- deleted the unused image-generation configuration modal/store, chat request
+  fields, and `/api/image-gen/test` endpoint;
+- removed legacy image-generation fields and executor override wiring from
+  workflow/workshop query handling;
+- removed obsolete MiniMax standalone, ElevenLabs, and Deepgram frontend
+  state/default/model-list handling. MiniMax is retained only as a Pi text
+  sub-provider credential route;
+- stopped ElevenLabs and Deepgram environment discovery; and
+- narrowed `list_llm_capabilities` documentation and registration to chat and
+  web search. `estimate_llm_cost`, which was only meaningful for retired media
+  features, is no longer registered.
+
+The retained media implementation files serve no shared-agent path and remain
+out of scope for the separate Video product. Family Server upload image reading
+and Pi text sub-provider routing remain intentional exclusions.
+
+Verification: focused server/package tests and the production frontend build
+pass.

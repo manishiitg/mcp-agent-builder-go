@@ -680,9 +680,6 @@ type QueryRequest struct {
 	// Each port must belong to a separate Chrome --user-data-dir. The legacy
 	// cdp_port remains the primary/first port for backward compatibility.
 	CdpPorts []int `json:"cdp_ports,omitempty"`
-	// Image generation configuration
-	EnableImageGeneration *bool           `json:"enable_image_generation,omitempty"` // Enable image generation virtual tool
-	ImageGenConfig        *ImageGenConfig `json:"image_gen_config,omitempty"`        // Image generation provider configuration
 	// Selected skills to include in chat context
 	SelectedSkills []string `json:"selected_skills,omitempty"` // Array of skill folder names
 	// BotPlatform identifies the chat channel the session is talking through
@@ -955,13 +952,6 @@ func (api *StreamingAPI) resolveBackendNotificationSecret(ctx context.Context, u
 		}
 	}
 	return "", false
-}
-
-// ImageGenConfig holds image generation provider configuration
-type ImageGenConfig struct {
-	Provider string `json:"provider"` // e.g. "vertex"
-	ModelID  string `json:"model_id"` // e.g. "gemini-3.1-flash-image"
-	APIKey   string `json:"api_key"`  // e.g. GEMINI_API_KEY value (optional; backend falls back to env var)
 }
 
 const maxCDPPortsPerRun = 4
@@ -1909,7 +1899,6 @@ func runServer(cmd *cobra.Command, args []string) {
 	apiRouter.HandleFunc("/llm-config/models/metadata", api.handleGetModelMetadata).Methods("GET")
 	apiRouter.HandleFunc("/llm-config/azure/deployments", api.handleGetAzureDeployedModels).Methods("POST")
 	apiRouter.HandleFunc("/llm-config/validate-key", api.handleValidateAPIKey).Methods("POST")
-	apiRouter.HandleFunc("/image-gen/test", api.handleTestImageGen).Methods("POST")
 	apiRouter.HandleFunc("/llm-config/delegation-tiers", api.handleGetDelegationTierDefaults).Methods("GET")
 	apiRouter.HandleFunc("/llm-config/providers", api.handleGetProviderManifest).Methods("GET")
 	apiRouter.HandleFunc("/llm-config/providers/{provider}/models", api.handleGetProviderModels).Methods("GET")
@@ -3683,7 +3672,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			log.Printf("[MANIFEST] WARNING: No workflow.json found for preset %s - workflow will run with request defaults only. Run migration: POST /api/workflows/migrate", req.PresetQueryID)
 		}
 
-		// --- Post-load processing: browser and image generation ---
+		// --- Post-load processing: browser configuration ---
 		// Runs after either manifest or preset loading has populated the config variables.
 
 		// Resolve effective browser mode.
@@ -3726,22 +3715,6 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				log.Printf("[WORKFLOW] Auto-adding agent-browser skill for browser access")
 			}
 
-		}
-
-		// Load image generation from LLM config (works for both manifest and preset sources)
-		if presetLLMConfig != nil && presetLLMConfig.EnableImageGeneration != nil && *presetLLMConfig.EnableImageGeneration {
-			imgCfg := virtualtools.ImageGenExecutorConfig{
-				WorkspaceAPIURL: getWorkspaceAPIURL(),
-				UserID:          currentUserID,
-			}
-			if presetLLMConfig.ImageGenProvider != "" {
-				imgCfg.Provider = presetLLMConfig.ImageGenProvider
-			}
-			if presetLLMConfig.ImageGenModelID != "" {
-				imgCfg.ModelID = presetLLMConfig.ImageGenModelID
-			}
-			virtualtools.MergeImageToolExecutorsUntyped(imgCfg, allExecutors, toolCategories)
-			log.Printf("[WORKFLOW] Updated image tool executors (provider=%s model=%s)", imgCfg.Provider, imgCfg.ModelID)
 		}
 
 		// Use selected tools from request if preset didn't provide any
@@ -4761,7 +4734,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var workspaceEnv map[string]string // hoisted so secrets can be injected after allChatSecrets is computed
-		log.Printf("[CHAT_TOOLS_DEBUG] isChatMode=%v agentNonNil=%v enableImageGenPtr=%v", isChatMode, llmAgent.GetUnderlyingAgent() != nil, req.EnableImageGeneration)
+		log.Printf("[CHAT_TOOLS_DEBUG] isChatMode=%v agentNonNil=%v", isChatMode, llmAgent.GetUnderlyingAgent() != nil)
 
 		// Extract #workflow read-only folders early — needed both inside isChatMode block
 		// (for folder guard setup) and in the workflow_phase block (for shell isolator).
@@ -5021,14 +4994,6 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 
 					// Executor is already the correct type (func(ctx, args) (string, error))
 					// No type assertion needed unlike workflow where executors are map[string]interface{}
-					if virtualtools.IsImageTool(toolName) && req.ImageGenConfig != nil {
-						executor = virtualtools.WrapImageToolExecutorWithRuntimeOverride(executor, virtualtools.ImageGenRuntimeOverride{
-							Provider: req.ImageGenConfig.Provider,
-							ModelID:  req.ImageGenConfig.ModelID,
-							APIKey:   req.ImageGenConfig.APIKey,
-						})
-					}
-
 					if err := llmAgent.RegisterCustomTool(
 						toolName,
 						enhancedDescription,
@@ -5342,8 +5307,6 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				// The snapshot instructs the agent to call these. The gate is the
 				// authority on whether it can, so ask it rather than assuming.
 				HasLLMCapabilityTools: toolGate.Admit("list_llm_capabilities") ||
-					toolGate.Admit("text_to_speech") ||
-					toolGate.Admit("generate_music") ||
 					toolGate.Admit("set_provider_auth"),
 				ChannelFormatting: buildChannelFormattingInstructions(req.BotPlatform),
 				GrantSections:     resolvedGrants.PromptSections,
@@ -9118,22 +9081,6 @@ func (api *StreamingAPI) buildWorkshopConfig(
 						workshopFormatAgentLLM(cfg.TieredConfig.Tier1),
 						workshopFormatAgentLLM(cfg.TieredConfig.Tier2),
 						workshopFormatAgentLLM(cfg.TieredConfig.Tier3))
-				}
-
-				// Image generation tools
-				if llmCfg.EnableImageGeneration != nil && *llmCfg.EnableImageGeneration {
-					imgCfg := virtualtools.ImageGenExecutorConfig{
-						WorkspaceAPIURL: getWorkspaceAPIURL(),
-						UserID:          currentUserID,
-					}
-					if llmCfg.ImageGenProvider != "" {
-						imgCfg.Provider = llmCfg.ImageGenProvider
-					}
-					if llmCfg.ImageGenModelID != "" {
-						imgCfg.ModelID = llmCfg.ImageGenModelID
-					}
-					virtualtools.MergeImageToolExecutorsUntyped(imgCfg, allExecutors, toolCategories)
-					log.Printf("[WORKSHOP] Updated image tool executors (provider=%s model=%s)", imgCfg.Provider, imgCfg.ModelID)
 				}
 
 				log.Printf("[WORKSHOP] LLM config loaded: phase=%v pulse=%v tiered=%v kb=%v kbLock=%v",

@@ -686,7 +686,6 @@ func buildLLMCapabilities(ctx context.Context, capability string, includeModels 
 		"notes": []string{
 			"usable means required workspace/env auth is configured and any required CLI runtime is installed.",
 			"Provider auth is managed by set_provider_auth and related provider-auth APIs; do not inspect or hand-edit config files.",
-			"Pricing is a static snapshot and should be treated as an estimate; verify provider pricing pages before high-volume runs.",
 		},
 	}
 	// Provider media tools are deliberately not part of the active tool surface.
@@ -916,11 +915,9 @@ func buildLLMCapabilityPromptSection(ctx context.Context) string {
 		return ""
 	}
 
-	return `## Workspace LLM And Media Capability Snapshot
+	return `## Workspace LLM Capability Snapshot
 
-Published LLM entries are chat/text routing entries. Provider-backed media tools can be available even when they are not listed as published LLMs. Use ` + "`list_llm_capabilities`" + ` for authoritative provider, model, auth, runtime, and pricing status before answering availability questions or selecting a provider.
-
-For audio/music requests, call the dedicated ` + "`text_to_speech`" + ` or ` + "`generate_music`" + ` tool directly. If provider auth is missing and the user supplied a key, call ` + "`set_provider_auth`" + `; never paste provider keys into shell commands, scripts, curl calls, or logs.
+Published LLM entries are chat/text routing entries. Use ` + "`list_llm_capabilities`" + ` for authoritative chat and web-search provider, model, auth, and runtime status. The only active shared provider tools are ` + "`generate_text_llm`" + ` and ` + "`search_web_llm`" + `.
 
 ` + strings.Join(lines, "\n")
 }
@@ -1169,15 +1166,24 @@ func (api *StreamingAPI) registerMultiAgentLLMTools(underlyingAgent definitionTo
 }
 
 func registerLLMCapabilityDiscoveryTools(registerTool func(string, string, map[string]interface{}, func(context.Context, map[string]interface{}) (string, error)) error) error {
+	originalRegisterTool := registerTool
+	registerTool = func(name, description string, params map[string]interface{}, exec func(context.Context, map[string]interface{}) (string, error)) error {
+		// Cost estimation was solely for retired media generation/transcription.
+		if name == "estimate_llm_cost" {
+			return nil
+		}
+		return originalRegisterTool(name, description, params, exec)
+	}
+
 	if err := registerTool(
 		"list_llm_capabilities",
-		"List supported and currently usable LLM providers/models by capability: chat, search_web, read_image, generate_image, generate_video, text_to_speech, speech_to_text, and generate_music. Use include_models=true before choosing an explicit provider/model_id pair for provider-backed tools. Includes workspace defaults, auth requirements, CLI runtime availability, and static pricing metadata where available.",
+		"List supported and currently usable LLM providers/models by capability: chat and search_web. Use include_models=true before choosing an explicit provider/model_id pair. Includes workspace defaults, auth requirements, and CLI runtime availability.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"capability": map[string]interface{}{
 					"type":        "string",
-					"description": "Optional filter. Supported values: all, chat, search_web, read_image, generate_image, generate_video, text_to_speech, speech_to_text, generate_music.",
+					"description": "Optional filter. Supported values: all, chat, search_web.",
 				},
 				"include_models": map[string]interface{}{
 					"type":        "boolean",
@@ -1268,15 +1274,24 @@ func (api *StreamingAPI) registerWorkflowLLMDiscoveryTools(underlyingAgent defin
 }
 
 func registerLLMCapabilityTools(registerTool func(string, string, map[string]interface{}, func(context.Context, map[string]interface{}) (string, error)) error) error {
+	originalRegisterTool := registerTool
+	registerTool = func(name, description string, params map[string]interface{}, exec func(context.Context, map[string]interface{}) (string, error)) error {
+		// Cost estimation was solely for retired media generation/transcription.
+		if name == "estimate_llm_cost" {
+			return nil
+		}
+		return originalRegisterTool(name, description, params, exec)
+	}
+
 	if err := registerTool(
 		"list_llm_capabilities",
-		"List supported and currently usable LLM providers/models by capability: chat, search_web, read_image, generate_image, generate_video, text_to_speech, speech_to_text, and generate_music. Use include_models=true before choosing an explicit provider/model_id pair for provider-backed tools. Includes workspace defaults, auth requirements, CLI runtime availability, and static pricing metadata where available.",
+		"List supported and currently usable LLM providers/models by capability: chat and search_web. Use include_models=true before choosing an explicit provider/model_id pair. Includes workspace defaults, auth requirements, and CLI runtime availability.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"capability": map[string]interface{}{
 					"type":        "string",
-					"description": "Optional filter. Supported values: all, chat, search_web, read_image, generate_image, generate_video, text_to_speech, speech_to_text, generate_music.",
+					"description": "Optional filter. Supported values: all, chat, search_web.",
 				},
 				"include_models": map[string]interface{}{
 					"type":        "boolean",

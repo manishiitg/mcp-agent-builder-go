@@ -83,11 +83,6 @@ type PresetLLMConfig struct {
 	EnableContextSummarization *bool  `json:"enable_context_summarization,omitempty"`
 	EnableContextEditing       *bool  `json:"enable_context_editing,omitempty"`
 
-	// Image generation.
-	EnableImageGeneration *bool  `json:"enable_image_generation,omitempty"`
-	ImageGenProvider      string `json:"image_gen_provider,omitempty"`
-	ImageGenModelID       string `json:"image_gen_model_id,omitempty"`
-
 	TieredConfig *TieredLLMConfig `json:"tiered_config,omitempty"`
 
 	// Migration-only fields. NormalizePresetLLMConfig consumes and clears these

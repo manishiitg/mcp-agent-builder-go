@@ -2,7 +2,7 @@
 // These should match the LLM-visible backend categories. Internal-only
 // workspace_basic executors are intentionally omitted here.
 
-// workspace_advanced: advanced tools (shell, image/video generation, PDF, text generation, web search, diff patch)
+// workspace_advanced: advanced tools (shell, PDF, text generation, web search, diff patch)
 // Maps to backend "workspace_advanced" category
 export const WORKSPACE_ADVANCED_TOOLS = [
   'execute_shell_command',
@@ -10,10 +10,6 @@ export const WORKSPACE_ADVANCED_TOOLS = [
   'read_pdf',
   'generate_text_llm',
   'search_web_llm',
-  'generate_video',
-  'text_to_speech',
-  'speech_to_text',
-  'generate_music',
   'diff_patch_workspace_file',
 ] as const;
 
@@ -23,17 +19,9 @@ export const WORKSPACE_BROWSER_TOOLS = [
   'agent_browser',
 ] as const;
 
-// workspace_image: image generation and editing tools
-// Maps to backend "workspace_image" category
-export const WORKSPACE_IMAGE_TOOLS = [
-  'image_gen',
-  'image_edit',
-] as const;
-
 // All LLM-visible workspace tools (combined) - for backward compatibility with "workspace_tools" category
 export const WORKSPACE_TOOLS = [
   ...WORKSPACE_ADVANCED_TOOLS,
-  ...WORKSPACE_IMAGE_TOOLS,
   ...WORKSPACE_BROWSER_TOOLS,
 ] as const;
 
@@ -43,13 +31,12 @@ export const HUMAN_TOOLS = [
 
 export type WorkspaceAdvancedToolName = typeof WORKSPACE_ADVANCED_TOOLS[number];
 export type WorkspaceBrowserToolName = typeof WORKSPACE_BROWSER_TOOLS[number];
-export type WorkspaceImageToolName = typeof WORKSPACE_IMAGE_TOOLS[number];
 export type WorkspaceToolName = typeof WORKSPACE_TOOLS[number];
 export type HumanToolName = typeof HUMAN_TOOLS[number];
 export type CustomToolName = WorkspaceToolName | HumanToolName;
 
 // Helper to get all tools for a category
-// Supports: workspace_tools (all visible workspace tools), workspace_advanced, workspace_image, workspace_browser, human_tools
+// Supports: workspace_tools (all visible workspace tools), workspace_advanced, workspace_browser, human_tools
 export function getToolsByCategory(category: string, capabilities?: unknown): string[] {
   void capabilities
 
@@ -58,10 +45,8 @@ export function getToolsByCategory(category: string, capabilities?: unknown): st
       // Backward compatible - returns all LLM-visible workspace tools
       return [...WORKSPACE_TOOLS];
     case 'workspace_advanced':
-      // Advanced tools (shell + image + PDF + text generation + web search + diff patch)
+      // Advanced tools (shell + PDF + text generation + web search + diff patch)
       return [...WORKSPACE_ADVANCED_TOOLS];
-    case 'workspace_image':
-      return [...WORKSPACE_IMAGE_TOOLS];
     case 'workspace_browser':
       return [...WORKSPACE_BROWSER_TOOLS];
     case 'human_tools':
@@ -77,7 +62,6 @@ export function getAllCustomTools(capabilities?: unknown): string[] {
 
   return [
     ...WORKSPACE_ADVANCED_TOOLS,
-    ...WORKSPACE_IMAGE_TOOLS,
     ...WORKSPACE_BROWSER_TOOLS,
     ...HUMAN_TOOLS
   ];
@@ -96,9 +80,6 @@ export const normalizeMCPToolName = (toolName: string): string => {
 export function getCategoryForTool(toolName: string): string | null {
   if (WORKSPACE_ADVANCED_TOOLS.includes(toolName as WorkspaceAdvancedToolName)) {
     return 'workspace_advanced';
-  }
-  if (WORKSPACE_IMAGE_TOOLS.includes(toolName as WorkspaceImageToolName)) {
-    return 'workspace_image';
   }
   if (WORKSPACE_BROWSER_TOOLS.includes(toolName as WorkspaceBrowserToolName)) {
     return 'workspace_browser';

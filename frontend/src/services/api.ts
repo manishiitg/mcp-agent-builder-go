@@ -2276,12 +2276,6 @@ export const agentApi = {
     return response.data
   },
 
-  // Test image generation config by attempting to generate a sample image
-  testImageGen: async (config: { provider: string; model_id: string; api_key?: string }): Promise<{ valid: boolean; message?: string; error?: string; image_url?: string; image_data?: string }> => {
-    const response = await api.post('/api/image-gen/test', config)
-    return response.data
-  },
-
   // --- Workflow Manifest API (file-backed workflow definitions) ---
 
   listWorkflowManifests: async (): Promise<ListWorkflowManifestsResponse> => {

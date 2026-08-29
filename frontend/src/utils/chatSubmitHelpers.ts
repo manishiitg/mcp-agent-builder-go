@@ -9,7 +9,6 @@ import type { ModeCategory } from '../stores/useModeStore'
 import { useChatStore } from '../stores/useChatStore'
 import { useGlobalPresetStore } from '../stores/useGlobalPresetStore'
 import { useWorkflowStore } from '../stores/useWorkflowStore'
-import { useImageGenStore } from '../stores/useImageGenStore'
 import { logger } from './logger'
 
 // Workflow phases that support conversational chat mode instead of blocking human_feedback
@@ -188,18 +187,6 @@ export function buildQueryRequestPayload(params: {
       ? currentTab.config.workflowContext.map(w => w.workspacePath)
       : undefined,
     restored_conversation_path: restoredConversationPath?.trim() || undefined,
-    enable_image_generation: isChatWithExtras ? (currentTab?.config?.enableImageGeneration ?? false) : undefined,
-    image_gen_config: (() => {
-      if (!isChatWithExtras) return undefined
-      const imageGenConfig = useImageGenStore.getState().config
-      const cfg = {
-        provider: imageGenConfig.provider,
-        model_id: imageGenConfig.modelId,
-        api_key: imageGenConfig.apiKey || undefined,
-      }
-      console.log('[IMAGE_GEN] sending image_gen_config:', JSON.stringify(cfg))
-      return cfg
-    })(),
   }
 }
 
