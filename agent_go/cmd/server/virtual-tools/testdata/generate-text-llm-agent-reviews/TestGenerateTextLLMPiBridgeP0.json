@@ -1,0 +1,27 @@
+{
+  "test": "TestGenerateTextLLMPiBridgeP0",
+  "summary": "Pi-dev invoked builder generate_text_llm through mcpagent's api bridge and relayed a real configured-low-tier response.",
+  "review_criteria": [
+    "Pi-dev invoked generate_text_llm exactly once through the real MCP bridge rather than answering directly",
+    "the tool used the configured low tier and returned a non-empty provider/model identity with a real canary response",
+    "the Pi-dev final answer relayed the canary from the tool result without credentials or bridge transport noise"
+  ],
+  "output": {
+    "final_response": "GENERATE_TEXT_LLM_P0_OK",
+    "prompt": "Reply with exactly GENERATE_TEXT_LLM_P0_OK. Do not use markdown or tools.",
+    "tool_result": {
+      "tier": "low",
+      "provider": "codex-cli",
+      "model_id": "gpt-5.6-luna",
+      "response": "GENERATE_TEXT_LLM_P0_OK"
+    }
+  },
+  "fingerprint": "29a793fc4c13b502",
+  "agent_review": {
+    "verdict": "good",
+    "reviewed_fingerprint": "29a793fc4c13b502",
+    "reviewer": "codex-agent",
+    "issues": null,
+    "notes": "Reviewed the live Pi-dev receipt: the final response exactly relays GENERATE_TEXT_LLM_P0_OK from one low-tier generate_text_llm result, which identifies provider codex-cli and model gpt-5.6-luna. The captured output contains no credential or bridge noise."
+  }
+}
