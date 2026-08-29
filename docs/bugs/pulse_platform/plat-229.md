@@ -94,3 +94,28 @@ deployed server yet. Reverify per the finding's own `next_check`: run
 scratch `engagement_targets.json` fixtures under the retained schema and
 confirm `notes=[]` now fails `$.notes value_type=string` with
 `overall_pass=false`, while `notes:"..."` (string) still passes.
+
+## Code review follow-up (2026-08-29)
+
+A second, related gap survived this fix: for a genuine wildcard multi-match
+path (e.g. `$.items[*].name`), `value_type` only ever inspected the first
+matched result — a valid first item followed by a wrong-typed later one
+still passed `overall_pass=true`, unnoticed. This was pre-existing behavior
+this ticket deliberately preserved
+(`TestValueTypeCheckStillUnwrapsGenuineWildcardMatches`), not something this
+fix introduced, but it undermines the same trustworthiness this ticket was
+about.
+
+Fixed narrowly: when a genuine multi-match path has more than one result and
+a non-array expected type, every matched value is now checked, and the
+first mismatch is reported by index (`"match 2 of 3: ..."`). Left
+unchanged, deliberately: the other checks on the same path (`min_length`,
+`min_value`/`max_value`, `pattern`) still validate only the first matched
+value, matching their pre-existing behavior — widening those to "every
+match" is a different, unasked-for behavior change with its own semantics
+to work out (e.g. what "min/max across a multi-match set" should even mean)
+and was out of scope for this follow-up.
+
+New test: `TestValueTypeCheckValidatesEveryWildcardMatchNotJustTheFirst`,
+reproducing exactly this shape. Full existing suite, including the
+single-match-still-unwraps test above, continues to pass.

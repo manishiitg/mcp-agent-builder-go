@@ -57,6 +57,12 @@ type MutationResponse struct {
 type InitializeDatabaseRequest struct {
 	DBPath     string   `json:"db_path" binding:"required"`
 	Migrations []string `json:"migrations" binding:"required"`
+	// MigrationFile is the optional source filename this batch of statements
+	// came from (e.g. "2026-08-06-action-outcome-measurement.sql"), recorded
+	// in the durable _schema_migration_log ledger for audit. A caller that
+	// applies a fixed, compiled-in migration list (a product runtime, not a
+	// file-based caller) may leave this empty.
+	MigrationFile string `json:"migration_file,omitempty"`
 }
 
 // DBTablesResponse describes the tables in a workflow's SQLite DB, for the

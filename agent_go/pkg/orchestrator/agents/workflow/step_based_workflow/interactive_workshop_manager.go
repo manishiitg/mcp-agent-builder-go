@@ -1445,7 +1445,7 @@ func GetToolsForWorkshopMode(mode string) []string {
 		// not in the central workspace registry; use shell/diff/image/media tools.
 		"execute_shell_command", "diff_patch_workspace_file",
 		"read_image", "generate_text_llm", "search_web_llm",
-		"query_workflow_db", "mutate_workflow_db",
+		"query_workflow_db", "mutate_workflow_db", "apply_workflow_db_migration",
 		// PLAT-184. This workflow's own per-workspace cost ledger.
 		"query_workflow_costs",
 		"image_gen", "image_edit", "generate_video", "text_to_speech", "speech_to_text", "generate_music",

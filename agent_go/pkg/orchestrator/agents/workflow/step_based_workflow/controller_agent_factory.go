@@ -819,7 +819,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) prepareCustomTools(stepConfig *AgentC
 		// path or escalate a read-only step to mutation authority.
 		enabledTools = append(enabledTools, "workflow_db:query_workflow_db")
 		if resolveDBAccess(stepConfig) == DBAccessReadWrite {
-			enabledTools = append(enabledTools, "workflow_db:mutate_workflow_db")
+			enabledTools = append(enabledTools, "workflow_db:mutate_workflow_db", "workflow_db:apply_workflow_db_migration")
 		}
 		// PLAT-184. This workflow's own cost ledger is capability-derived like
 		// query_workflow_db above: a custom allowlist may narrow other tools,
@@ -1343,13 +1343,14 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 	if dbAccess == DBAccessRead {
 		filtered := toolsToRegister[:0]
 		for _, tool := range toolsToRegister {
-			if tool.Function != nil && tool.Function.Name == "mutate_workflow_db" {
+			if tool.Function != nil && (tool.Function.Name == "mutate_workflow_db" || tool.Function.Name == "apply_workflow_db_migration") {
 				continue
 			}
 			filtered = append(filtered, tool)
 		}
 		toolsToRegister = filtered
 		delete(executorsToUse, "mutate_workflow_db")
+		delete(executorsToUse, "apply_workflow_db_migration")
 	}
 	// Inject STEP_OUTPUT_DIR and STEP_EXECUTION_DIR for all execution-only agents (both scripted and agentic).
 	// Any script run via execute_shell_command may need STEP_OUTPUT_DIR to know where to write output
@@ -1722,8 +1723,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) createTodoTaskOrchestratorAgent(ctx c
 		}
 		return false
 	}
-	for _, name := range []string{"query_workflow_db", "mutate_workflow_db"} {
-		if name == "mutate_workflow_db" && dbAccess == DBAccessRead {
+	for _, name := range []string{"query_workflow_db", "mutate_workflow_db", "apply_workflow_db_migration"} {
+		if (name == "mutate_workflow_db" || name == "apply_workflow_db_migration") && dbAccess == DBAccessRead {
 			continue
 		}
 		if !hasTool(name) {
@@ -1741,13 +1742,14 @@ func (hcpo *StepBasedWorkflowOrchestrator) createTodoTaskOrchestratorAgent(ctx c
 	if dbAccess == DBAccessRead {
 		filtered := toolsToRegister[:0]
 		for _, tool := range toolsToRegister {
-			if tool.Function != nil && tool.Function.Name == "mutate_workflow_db" {
+			if tool.Function != nil && (tool.Function.Name == "mutate_workflow_db" || tool.Function.Name == "apply_workflow_db_migration") {
 				continue
 			}
 			filtered = append(filtered, tool)
 		}
 		toolsToRegister = filtered
 		delete(executorsToUse, "mutate_workflow_db")
+		delete(executorsToUse, "apply_workflow_db_migration")
 	}
 
 	// Inject STEP_OUTPUT_DIR and STEP_EXECUTION_DIR into execute_shell_command so the

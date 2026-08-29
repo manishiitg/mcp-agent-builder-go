@@ -106,6 +106,7 @@ Every non-trivial step has a `context_output` file (e.g. `extracted_data.json`).
   trail. Treat older empty attribution fields as `legacy_unattributed` rather
   than assuming they were human or agent generated.
 - `eval_results` — one row per eval step verdict (`run_folder`, `step_id`, `score`, `max_score`, `reasoning`, `evidence`), mirrored from `evaluation/runs/.../evaluation_report.json` by Go right after that report is built. Exists purely so the report can show eval verdicts via `window.report.query`, same table, same rules as `run_concerns`: read-only, never insert into it from a step or eval step.
+- `schema_migration_log` — the audit ledger for every `apply_workflow_db_migration` call: source filename, a content hash of the applied statements, whether it was destructive, its pre-migration backup path (`db/migrations/.backups/`) if one was taken, who applied it, and when. Written by the workspace service inside the same transaction as the migration itself, so a row exists if and only if that migration actually committed. Read-only for everything else.
 
 **Where the contract lives: `db/README.md`** (you create and maintain it — FolderGuard allows builder shell-writes). One section per table, in this shape:
 

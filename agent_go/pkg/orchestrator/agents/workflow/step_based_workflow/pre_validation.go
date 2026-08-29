@@ -571,7 +571,9 @@ func validateJSONCheck(
 	// (PUL-61C84987): a non-empty string-containing array's first element
 	// is itself a string, so validateValueType saw a string and passed.
 	var value interface{}
+	var multiMatchValues []interface{}
 	if valuesSlice, ok := values.([]interface{}); ok && jsonPathHasMultipleMatches(check.Path) {
+		multiMatchValues = valuesSlice
 		// If we're expecting an array and got a slice, the slice IS the array value
 		// (not a collection of results to take the first element from)
 		if check.ValueType == "array" {
@@ -587,11 +589,30 @@ func validateJSONCheck(
 		value = values
 	}
 
-	// Validate value type
+	// Validate value type. A genuine multi-match path (e.g. $.items[*].name)
+	// with a non-array expected type checks every matched value, not only
+	// the first -- otherwise a valid first item followed by invalid ones
+	// would silently pass, since only value[0] was ever inspected. The
+	// min/max length/value/pattern checks below still operate on the single
+	// representative `value` (first match); the review that caught this only
+	// found the type check itself skipping later matches, and widening the
+	// other checks to "every match" is a separate, unasked-for behavior
+	// change with its own semantics to work out (e.g. min/max across which
+	// aggregate).
 	if check.ValueType != "" {
-		typeResult := validateValueType(check.Path, value, check.ValueType)
-		if !typeResult.Passed {
-			return typeResult
+		if check.ValueType != "array" && len(multiMatchValues) > 1 {
+			for index, matched := range multiMatchValues {
+				typeResult := validateValueType(check.Path, matched, check.ValueType)
+				if !typeResult.Passed {
+					typeResult.ErrorMsg = fmt.Sprintf("match %d of %d: %s", index, len(multiMatchValues), typeResult.ErrorMsg)
+					return typeResult
+				}
+			}
+		} else {
+			typeResult := validateValueType(check.Path, value, check.ValueType)
+			if !typeResult.Passed {
+				return typeResult
+			}
 		}
 		result.CheckType = "value_type"
 		result.Passed = true

@@ -95,6 +95,24 @@ func TestValueTypeCheckStillUnwrapsGenuineWildcardMatches(t *testing.T) {
 	}
 }
 
+// TestValueTypeCheckValidatesEveryWildcardMatchNotJustTheFirst is a code
+// review finding on PLAT-229: the fix correctly rejected an array value on a
+// definite path, but a genuine wildcard multi-match still only inspected its
+// first result. A valid first item followed by an invalid later one
+// (e.g. $.items[*].name where one item's name is a number, not a string)
+// silently passed.
+func TestValueTypeCheckValidatesEveryWildcardMatchNotJustTheFirst(t *testing.T) {
+	jsonData := parseJSONForCheck(t, `{"items":[{"name":"first"},{"name":"second"},{"name":42}]}`)
+	check := JSONValidationCheck{Path: "$.items[*].name", ValueType: "string"}
+	result := validateJSONCheck(context.Background(), check, jsonData)
+	if result.Passed {
+		t.Fatalf("a later wildcard match with the wrong type passed unnoticed: %+v", result)
+	}
+	if !strings.Contains(result.ErrorMsg, "match 2 of 3") {
+		t.Fatalf("error does not identify which match failed: %+v", result)
+	}
+}
+
 // TestJSONPathHasMultipleMatchesDistinguishesDefiniteFromWildcardPaths pins
 // the exact boundary the fix depends on: a plain numeric index like [0]
 // names one location (PLAT's JSONValidationCheck.Path doc comment gives

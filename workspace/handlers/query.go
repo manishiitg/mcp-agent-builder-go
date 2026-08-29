@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"net/http"
@@ -10,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -97,7 +100,90 @@ func backupDatabaseBeforeDestructiveMigration(ctx context.Context, fullPath stri
 	if _, err := db.ExecContext(ctx, "VACUUM INTO "+quoted); err != nil {
 		return "", fmt.Errorf("snapshot database before destructive migration: %w", err)
 	}
+	pruneMigrationBackups(backupDir)
 	return backupPath, nil
+}
+
+// migrationBackupRetentionCount bounds how many pre-migration snapshots
+// backupDatabaseBeforeDestructiveMigration retains per workflow. Nothing else
+// limits their growth: every retried destructive migration writes another
+// complete database snapshot, and once the migration tool is reachable by
+// real agent sessions, retries are expected, not exceptional.
+const migrationBackupRetentionCount = 20
+
+// pruneMigrationBackups deletes the oldest pre-migration snapshots in
+// backupDir beyond migrationBackupRetentionCount, keeping the most recent
+// ones by modification time (not filename order, which would break if the
+// naming scheme ever changes). Best-effort: a prune failure is logged, not
+// returned, since a housekeeping failure must never block an otherwise-
+// successful migration that already committed its own snapshot.
+func pruneMigrationBackups(backupDir string) {
+	entries, err := os.ReadDir(backupDir)
+	if err != nil {
+		return
+	}
+	type backupFile struct {
+		path    string
+		modTime time.Time
+	}
+	var backups []backupFile
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), "-pre-migration.sqlite") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		backups = append(backups, backupFile{path: filepath.Join(backupDir, entry.Name()), modTime: info.ModTime()})
+	}
+	if len(backups) <= migrationBackupRetentionCount {
+		return
+	}
+	sort.Slice(backups, func(i, j int) bool { return backups[i].modTime.Before(backups[j].modTime) })
+	for _, old := range backups[:len(backups)-migrationBackupRetentionCount] {
+		if err := os.Remove(old.path); err != nil {
+			log.Printf("[WORKFLOW_DB_MIGRATION] failed to prune old backup %q: %v", old.path, err)
+		}
+	}
+}
+
+// schemaMigrationLedgerTableSQL creates the durable audit ledger for every
+// applied migration, inside the same transaction as the DDL it records --
+// so a ledger row exists if and only if its migration actually committed.
+// Not underscore-prefixed: matches this codebase's existing backend-owned
+// table naming (run_concerns, pulse_module_state, eval_results, ...), not a
+// distinct "system table" convention.
+const schemaMigrationLedgerTableSQL = `CREATE TABLE IF NOT EXISTS schema_migration_log (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	migration_file TEXT NOT NULL DEFAULT '',
+	statements_hash TEXT NOT NULL,
+	destructive INTEGER NOT NULL DEFAULT 0,
+	backup_path TEXT NOT NULL DEFAULT '',
+	applied_by TEXT NOT NULL DEFAULT '',
+	applied_at TEXT NOT NULL
+)`
+
+// recordSchemaMigrationLedgerTx records one durable ledger row for a
+// migration about to commit. migrations is hashed (not stored verbatim) --
+// the applied statements already live in the caller's own db/migrations/
+// file when one exists; the ledger's job is proving what ran and when, not
+// duplicating the SQL text.
+func recordSchemaMigrationLedgerTx(ctx context.Context, tx *sql.Tx, migrationFile string, migrations []string, destructive bool, backupPath, appliedBy string) error {
+	if _, err := tx.ExecContext(ctx, schemaMigrationLedgerTableSQL); err != nil {
+		return fmt.Errorf("ensure schema migration ledger table: %w", err)
+	}
+	hash := sha256.Sum256([]byte(strings.Join(migrations, "\n")))
+	destructiveFlag := 0
+	if destructive {
+		destructiveFlag = 1
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO schema_migration_log (migration_file, statements_hash, destructive, backup_path, applied_by, applied_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		migrationFile, hex.EncodeToString(hash[:]), destructiveFlag, backupPath, appliedBy, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		return fmt.Errorf("record schema migration ledger entry: %w", err)
+	}
+	return nil
 }
 
 // dbTablesSampleRows is how many sample rows the inspector returns per table.
@@ -230,6 +316,11 @@ func InitializeWorkflowDB(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, models.APIResponse[any]{Success: false, Message: "Migration failed", Error: fmt.Sprintf("migration %d: %v", index+1, err)})
 			return
 		}
+	}
+	if err := recordSchemaMigrationLedgerTx(c.Request.Context(), tx, req.MigrationFile, req.Migrations, destructive, backupPath, getUserID(c)); err != nil {
+		_ = tx.Rollback()
+		c.JSON(http.StatusInternalServerError, models.APIResponse[any]{Success: false, Message: "Failed to record migration ledger", Error: err.Error()})
+		return
 	}
 	if err := tx.Commit(); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse[any]{Success: false, Message: "Failed to commit migration", Error: err.Error()})

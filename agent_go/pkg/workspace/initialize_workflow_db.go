@@ -9,6 +9,11 @@ import (
 type InitializeWorkflowDBParams struct {
 	DBPath     string   `json:"db_path"`
 	Migrations []string `json:"migrations"`
+	// MigrationFile is the optional source filename this batch came from,
+	// recorded in the durable schema_migration_log ledger for audit. A
+	// caller applying a fixed, compiled-in migration list (a product
+	// runtime, not a file-based caller) may leave this empty.
+	MigrationFile string `json:"migration_file,omitempty"`
 }
 
 // InitializeWorkflowDBResult reports the backup snapshot path when the

@@ -222,6 +222,38 @@ func splitSQLStatements(script string) []string {
 	return statements
 }
 
+// stripLeadingSQLComments removes leading `-- line` and `/* block */`
+// comments (and the whitespace around them) so a naturally-commented
+// migration statement -- e.g. "-- Add outcome table\nCREATE TABLE IF NOT
+// EXISTS ..." -- is recognized by the anchored `^\s*CREATE...` style shape
+// checks in this file and in the workspace service's own validator, neither
+// of which treats "--" as insignificant. Mirrors
+// workspace/handlers/query.go's stripSQLCommentsAndSpace (a separate Go
+// module, so duplicated rather than imported); kept only for its comment
+// -> statement boundary, not as a general SQL lexer.
+func stripLeadingSQLComments(input string) string {
+	remaining := input
+	for {
+		remaining = strings.TrimSpace(remaining)
+		switch {
+		case strings.HasPrefix(remaining, "--"):
+			if newline := strings.IndexByte(remaining, '\n'); newline >= 0 {
+				remaining = remaining[newline+1:]
+				continue
+			}
+			return ""
+		case strings.HasPrefix(remaining, "/*"):
+			if end := strings.Index(remaining[2:], "*/"); end >= 0 {
+				remaining = remaining[end+4:]
+				continue
+			}
+			return remaining
+		default:
+			return remaining
+		}
+	}
+}
+
 // parseManagedMigrationStatements turns a migration file's contents into the
 // flat []string InitializeWorkflowDB expects: transaction-envelope statements
 // (BEGIN/COMMIT) removed, everything else required to already be an
@@ -231,7 +263,7 @@ func splitSQLStatements(script string) []string {
 func parseManagedMigrationStatements(script string) ([]string, error) {
 	var statements []string
 	for _, raw := range splitSQLStatements(script) {
-		trimmed := strings.TrimSpace(raw)
+		trimmed := stripLeadingSQLComments(raw)
 		if trimmed == "" {
 			continue
 		}
@@ -438,7 +470,7 @@ func CreateWorkflowDBToolRegistry(workspaceURL, userID, fallbackSessionID string
 		if err != nil {
 			return "", fmt.Errorf("migration file %q: %w", migrationPath, err)
 		}
-		result, err := client.InitializeWorkflowDB(ctx, workspace.InitializeWorkflowDBParams{DBPath: dbPath, Migrations: statements})
+		result, err := client.InitializeWorkflowDB(ctx, workspace.InitializeWorkflowDBParams{DBPath: dbPath, Migrations: statements, MigrationFile: filename})
 		if err != nil {
 			return "", fmt.Errorf("apply migration %q: %w", migrationPath, err)
 		}

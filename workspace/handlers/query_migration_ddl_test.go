@@ -1,11 +1,17 @@
 package handlers
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/manishiitg/coding-agent-loop/workspace/models"
 )
@@ -219,4 +225,181 @@ func TestInitializeWorkflowDBDestructiveMigrationOnFreshDatabaseNeedsNoBackup(t 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("drop-if-exists on fresh database failed: status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
+}
+
+// TestInitializeWorkflowDBRecordsDurableLedgerEntry is a code review finding:
+// the migration route claimed to be an "auditable route" but recorded only a
+// process log line, not anything durable. Every applied migration must now
+// leave a schema_migration_log row recording its source filename, a content
+// hash (not the raw SQL, which already lives in the caller's own
+// db/migrations/ file when one exists), whether it was destructive, its
+// backup path, and who applied it.
+func TestInitializeWorkflowDBRecordsDurableLedgerEntry(t *testing.T) {
+	rel, abs, router := setupWorkflowDBTest(t)
+	migrations := []string{"CREATE TABLE IF NOT EXISTS widgets (id TEXT PRIMARY KEY)"}
+	request := models.InitializeDatabaseRequest{DBPath: rel, Migrations: migrations, MigrationFile: "2026-08-06-widgets.sql"}
+	recorder := postWorkflowDBTest(t, router, "/api/db/initialize", request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("create failed: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	db, err := sql.Open("sqlite", abs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var migrationFile, statementsHash, backupPath, appliedBy, appliedAt string
+	var destructive int
+	if err := db.QueryRow(`SELECT migration_file, statements_hash, destructive, backup_path, applied_by, applied_at FROM schema_migration_log ORDER BY id DESC LIMIT 1`).
+		Scan(&migrationFile, &statementsHash, &destructive, &backupPath, &appliedBy, &appliedAt); err != nil {
+		t.Fatalf("ledger row missing: %v", err)
+	}
+	if migrationFile != "2026-08-06-widgets.sql" {
+		t.Fatalf("migration_file = %q", migrationFile)
+	}
+	wantHash := sha256.Sum256([]byte(strings.Join(migrations, "\n")))
+	if statementsHash != hex.EncodeToString(wantHash[:]) {
+		t.Fatalf("statements_hash = %q, want a real content hash", statementsHash)
+	}
+	if destructive != 0 {
+		t.Fatalf("destructive = %d, want 0 for a CREATE-only migration", destructive)
+	}
+	if backupPath != "" {
+		t.Fatalf("backup_path = %q, want empty for a non-destructive migration", backupPath)
+	}
+	if appliedBy == "" {
+		t.Fatalf("applied_by is empty")
+	}
+	if _, err := time.Parse(time.RFC3339Nano, appliedAt); err != nil {
+		t.Fatalf("applied_at = %q is not a valid timestamp: %v", appliedAt, err)
+	}
+}
+
+// TestInitializeWorkflowDBLedgerRecordsBackupPathForDestructiveMigrations
+// proves the ledger and the backup mechanism are linked: a destructive
+// migration's ledger row names the exact snapshot it can be recovered from.
+func TestInitializeWorkflowDBLedgerRecordsBackupPathForDestructiveMigrations(t *testing.T) {
+	rel, abs, router := setupWorkflowDBTest(t)
+	create := models.InitializeDatabaseRequest{DBPath: rel, Migrations: []string{
+		"CREATE TABLE IF NOT EXISTS widgets (id TEXT PRIMARY KEY)",
+	}}
+	if recorder := postWorkflowDBTest(t, router, "/api/db/initialize", create); recorder.Code != http.StatusOK {
+		t.Fatalf("create failed: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	drop := models.InitializeDatabaseRequest{DBPath: rel, Migrations: []string{
+		"DROP TABLE IF EXISTS widgets",
+	}}
+	if recorder := postWorkflowDBTest(t, router, "/api/db/initialize", drop); recorder.Code != http.StatusOK {
+		t.Fatalf("drop failed: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	db, err := sql.Open("sqlite", abs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var destructive int
+	var backupPath string
+	if err := db.QueryRow(`SELECT destructive, backup_path FROM schema_migration_log ORDER BY id DESC LIMIT 1`).
+		Scan(&destructive, &backupPath); err != nil {
+		t.Fatalf("ledger row missing: %v", err)
+	}
+	if destructive != 1 {
+		t.Fatalf("destructive = %d, want 1", destructive)
+	}
+	if backupPath == "" {
+		t.Fatalf("backup_path is empty for a destructive migration")
+	}
+	if _, err := os.Stat(backupPath); err != nil {
+		t.Fatalf("ledger's backup_path does not exist on disk: %v", err)
+	}
+}
+
+// TestInitializeWorkflowDBLedgerEntryRolledBackWithFailedMigration proves the
+// ledger is atomic with the migration it records: a migration batch that
+// fails partway through must leave neither a schema change nor a ledger row,
+// not a ledger row claiming a migration that never actually committed.
+func TestInitializeWorkflowDBLedgerEntryRolledBackWithFailedMigration(t *testing.T) {
+	rel, abs, router := setupWorkflowDBTest(t)
+	// ADD COLUMN twice in the same request: the second application fails
+	// (SQLite ALTER has no idempotent form), so the whole transaction must
+	// roll back -- including any ledger row -- not partially commit.
+	create := models.InitializeDatabaseRequest{DBPath: rel, Migrations: []string{
+		"CREATE TABLE IF NOT EXISTS widgets (id TEXT PRIMARY KEY)",
+	}}
+	if recorder := postWorkflowDBTest(t, router, "/api/db/initialize", create); recorder.Code != http.StatusOK {
+		t.Fatalf("create failed: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	addColumn := models.InitializeDatabaseRequest{DBPath: rel, Migrations: []string{
+		"ALTER TABLE widgets ADD COLUMN new_field TEXT",
+	}}
+	if recorder := postWorkflowDBTest(t, router, "/api/db/initialize", addColumn); recorder.Code != http.StatusOK {
+		t.Fatalf("first add column failed: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	db, err := sql.Open("sqlite", abs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var ledgerCountBefore int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM schema_migration_log`).Scan(&ledgerCountBefore); err != nil {
+		t.Fatal(err)
+	}
+
+	// Same statement again: SQLite rejects a duplicate column, so this must fail.
+	recorder := postWorkflowDBTest(t, router, "/api/db/initialize", addColumn)
+	if recorder.Code == http.StatusOK {
+		t.Fatalf("duplicate ADD COLUMN unexpectedly succeeded")
+	}
+
+	var ledgerCountAfter int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM schema_migration_log`).Scan(&ledgerCountAfter); err != nil {
+		t.Fatal(err)
+	}
+	if ledgerCountAfter != ledgerCountBefore {
+		t.Fatalf("ledger count changed from %d to %d despite the migration failing", ledgerCountBefore, ledgerCountAfter)
+	}
+}
+
+// TestPruneMigrationBackupsKeepsOnlyTheMostRecent proves destructive-migration
+// snapshots do not grow without bound: nothing else limited their count, and
+// every retried destructive migration writes another complete database copy.
+func TestPruneMigrationBackupsKeepsOnlyTheMostRecent(t *testing.T) {
+	backupDir := t.TempDir()
+	total := migrationBackupRetentionCount + 5
+	var names []string
+	for i := 0; i < total; i++ {
+		name := filepath.Join(backupDir, formatBackupTestName(i))
+		if err := os.WriteFile(name, []byte("fake snapshot"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		names = append(names, name)
+		// Distinct, increasing modification times so "most recent" is
+		// unambiguous regardless of filesystem timestamp resolution.
+		modTime := time.Now().Add(time.Duration(i) * time.Second)
+		if err := os.Chtimes(name, modTime, modTime); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	pruneMigrationBackups(backupDir)
+
+	entries, err := os.ReadDir(backupDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != migrationBackupRetentionCount {
+		t.Fatalf("backups remaining = %d, want %d", len(entries), migrationBackupRetentionCount)
+	}
+	// The oldest (lowest index) backups must be the ones removed.
+	if _, err := os.Stat(names[0]); err == nil {
+		t.Fatalf("oldest backup %q was not pruned", names[0])
+	}
+	if _, err := os.Stat(names[total-1]); err != nil {
+		t.Fatalf("newest backup %q was pruned: %v", names[total-1], err)
+	}
+}
+
+func formatBackupTestName(index int) string {
+	return fmt.Sprintf("backup-%04d-pre-migration.sqlite", index)
 }

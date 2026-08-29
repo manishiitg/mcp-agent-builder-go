@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | Claude Code |
-| Ticket state | `implemented; runtime reverify` |
+| Ticket state | `implemented and reachable; PUL-3BD9F422's migration still needs to be designed; runtime reverify` |
 | Last synchronized | `2026-08-29` |
 
 - **Priority:** P0 — LinkedIn `PUL-B995BF46` / `PUL-3BD9F422` (per the
@@ -148,4 +148,70 @@ that authors and applies a real migration end to end.
   column and `image_assets` still has no ordered batch/draft-binding
   identity. This is the concrete beneficiary of PLAT-221 going forward — its
   migration SQL has not been designed yet and is deliberately left as a
-  separate follow-up, not bundled into this ticket.
+  separate follow-up, not bundled into this ticket. **Do not mark this
+  ticket, or PUL-3BD9F422, "done" until that migration exists and applies.**
+
+## Code review follow-up (2026-08-29)
+
+An independent review of this ticket's original state caught four real
+gaps, all fixed:
+
+1. **P0 — the tool was registered and tested, but unreachable by any real
+   agent.** `apply_workflow_db_migration` was added to
+   `CreateWorkflowDBToolRegistry` (so it reaches the base tool pool via
+   `tool_setup.go`) and to `WorkflowDBToolNames()`, but three separate,
+   independent per-agent-type allowlists that gate what a session can
+   actually call still only listed `query_workflow_db`/`mutate_workflow_db`
+   by name: `prepareCustomTools` (ordinary agentic workflow steps,
+   `controller_agent_factory.go`), the todo-task orchestrator's DB-tool
+   ensure-list (same file), and `GetToolsForWorkshopMode`
+   (`interactive_workshop_manager.go` — the path Pulse Fixer and the main
+   Builder session both run through). The original E2E test injected its own
+   tool schema directly into the bridge, which exercises the executor but
+   never touches any of these three allowlists — so it passed while the tool
+   remained genuinely unreachable in production. This plausibly explains why
+   `PUL-3BD9F422` was never applied even after this ticket shipped: no real
+   session could have called the tool that would apply it. Fixed by adding
+   `apply_workflow_db_migration` to all three gates (gated the same way as
+   `mutate_workflow_db` — read-write only), plus the "stores" guidance's
+   tool-trigger list. `TestEveryRegisteredWorkshopToolIsAllowedInSomeMode`
+   (a pre-existing systemic test) was extended to also scan
+   `WorkflowDBToolNames()`/`WorkflowCostsToolNames()`, since its original AST
+   scan only covered `RegisterCustomTool` calls and structurally could not
+   see DB-registry-sourced tools at all — this is exactly why it didn't
+   catch the gap the first time, and now can't miss a future one of the same
+   shape. `TestPrepareCustomToolsMaterializesDBCapabilityFromDBAccess` was
+   extended with a direct behavioral assertion for the same reason.
+2. **P1 — destructive backups had no retention, and nothing durably
+   recorded what ran.** Every `VACUUM INTO` snapshot before a destructive
+   migration was a complete, unbounded-lifetime database copy; a log line
+   was the only record of what migration applied, when, by whom, or whether
+   it was destructive. Added `pruneMigrationBackups` (keeps the most recent
+   `migrationBackupRetentionCount = 20` snapshots by modification time,
+   best-effort, never blocks a successful migration) and a durable
+   `schema_migration_log` table — created and written inside the *same*
+   transaction as the migration's own DDL, so a ledger row exists if and
+   only if that migration actually committed. Records migration filename, a
+   SHA-256 hash of the applied statements (not the raw SQL — that already
+   lives in the caller's own `db/migrations/*.sql` file), whether it was
+   destructive, its backup path, who applied it, and when. `migration_file`
+   threads end to end: tool executor → HTTP request
+   (`InitializeDatabaseRequest.MigrationFile`) → ledger row, proven by a new
+   assertion in the production bridge E2E test, not just a unit test.
+   Documented as a new backend-owned table in `stores.md`.
+3. **P2 — a leading SQL comment broke an otherwise-valid migration
+   statement.** `-- Add outcome table\nCREATE TABLE IF NOT EXISTS ...` was
+   rejected: neither this tool's client-side check nor the workspace
+   service's own validator stripped comments before matching the anchored
+   `^\s*CREATE...` shape. Added `stripLeadingSQLComments` (mirroring the
+   workspace service's own `stripSQLCommentsAndSpace`, a separate Go module
+   so duplicated rather than imported) so a naturally-commented migration —
+   an ordinary human/agent authoring style — is recognized correctly. New
+   unit tests cover multiple comment placements and confirm genuinely
+   disallowed statements are still rejected, commented or not.
+4. A fifth finding (wildcard multi-match `value_type` checks only
+   inspecting the first result) was about PLAT-229's fix, not this ticket's
+   own code; see [PLAT-229](plat-229.md)'s follow-up note instead.
+
+Verification: `go test ./pkg/orchestrator/... ./cmd/server/...` (agent_go)
+and `go test ./...` (workspace) both pass clean after all four fixes.

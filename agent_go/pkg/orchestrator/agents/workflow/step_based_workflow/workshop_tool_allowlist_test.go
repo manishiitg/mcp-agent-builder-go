@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strconv"
 	"testing"
+
+	virtualtools "github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
 )
 
 // Registering a workshop tool is only half of shipping one: it also has to be
@@ -60,6 +62,21 @@ func TestEveryRegisteredWorkshopToolIsAllowedInSomeMode(t *testing.T) {
 
 	if len(registered) < 20 {
 		t.Fatalf("only found %d registered tools in %s; the scan is not finding them", len(registered), source)
+	}
+
+	// Tools registered through CreateWorkflowDBToolRegistry / CreateWorkflowCostsToolRegistry
+	// (tool_setup.go) never appear as a RegisterCustomTool call in this file at
+	// all -- the AST scan above cannot see them, which is exactly how
+	// apply_workflow_db_migration shipped registered and tested, but absent
+	// from GetToolsForWorkshopMode's allowlist, and so unreachable by any real
+	// Workshop/Pulse session (PLAT-221 follow-up). Check them from their own
+	// canonical name lists instead of trying to widen the AST scan to a
+	// registration path it was never written to see.
+	for name := range virtualtools.WorkflowDBToolNames() {
+		registered[name] = true
+	}
+	for name := range virtualtools.WorkflowCostsToolNames() {
+		registered[name] = true
 	}
 
 	allowed := map[string]bool{}

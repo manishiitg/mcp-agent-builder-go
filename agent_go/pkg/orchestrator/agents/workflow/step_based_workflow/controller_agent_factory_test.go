@@ -196,17 +196,19 @@ func TestPrepareCustomToolsMaterializesDBCapabilityFromDBAccess(t *testing.T) {
 	}
 	noop := func(context.Context, map[string]interface{}) (string, error) { return "", nil }
 	base.WorkspaceTools = []llmtypes.Tool{
-		tool("execute_shell_command"), tool("query_workflow_db"), tool("mutate_workflow_db"),
+		tool("execute_shell_command"), tool("query_workflow_db"), tool("mutate_workflow_db"), tool("apply_workflow_db_migration"),
 	}
 	base.WorkspaceToolExecutors = map[string]interface{}{
-		"execute_shell_command": noop,
-		"query_workflow_db":     noop,
-		"mutate_workflow_db":    noop,
+		"execute_shell_command":       noop,
+		"query_workflow_db":           noop,
+		"mutate_workflow_db":          noop,
+		"apply_workflow_db_migration": noop,
 	}
 	base.ToolCategories = map[string]string{
-		"execute_shell_command": "workspace_advanced",
-		"query_workflow_db":     "workflow_db",
-		"mutate_workflow_db":    "workflow_db",
+		"execute_shell_command":       "workspace_advanced",
+		"query_workflow_db":           "workflow_db",
+		"mutate_workflow_db":          "workflow_db",
+		"apply_workflow_db_migration": "workflow_db",
 	}
 	hcpo := &StepBasedWorkflowOrchestrator{BaseOrchestrator: base}
 
@@ -235,6 +237,15 @@ func TestPrepareCustomToolsMaterializesDBCapabilityFromDBAccess(t *testing.T) {
 			gotMutation := slices.Contains(names, "mutate_workflow_db") && executors["mutate_workflow_db"] != nil
 			if !gotMutation {
 				t.Fatalf("db_access=%q missing uniform mutation capability (tools=%v)", tt.access, names)
+			}
+			// PLAT-221 follow-up: apply_workflow_db_migration was registered and
+			// tested, but never added here, so a narrow explicit tool list (or
+			// any real read-write step) silently never received it -- the tool
+			// existed and worked, but no real Workshop/Pulse/workflow-step
+			// session could ever reach it.
+			gotMigration := slices.Contains(names, "apply_workflow_db_migration") && executors["apply_workflow_db_migration"] != nil
+			if !gotMigration {
+				t.Fatalf("db_access=%q missing uniform migration capability (tools=%v)", tt.access, names)
 			}
 		})
 	}

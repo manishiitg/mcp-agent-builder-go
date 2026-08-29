@@ -180,6 +180,18 @@ COMMIT;
 		t.Fatalf("action_outcome_bindings not created by migration")
 	}
 
+	// The durable ledger must have recorded the real source filename, threaded
+	// end to end from the tool call through the HTTP request to the
+	// transaction that applied it -- not just when called directly in a unit
+	// test.
+	var ledgerFile string
+	if err := live.QueryRow("SELECT migration_file FROM schema_migration_log ORDER BY id DESC LIMIT 1").Scan(&ledgerFile); err != nil {
+		t.Fatalf("ledger row missing after bridge migration: %v", err)
+	}
+	if ledgerFile != migrationFile {
+		t.Fatalf("ledger migration_file = %q, want %q", ledgerFile, migrationFile)
+	}
+
 	// Re-applying the same migration must be a safe no-op, not an error.
 	reapply, err := bridge.CallTool(ctx, migrate)
 	if err != nil {
