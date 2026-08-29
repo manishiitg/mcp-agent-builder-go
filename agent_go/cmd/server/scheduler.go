@@ -3105,7 +3105,7 @@ func attachScheduledPendingDecisionNotice(turns []scheduledWorkshopTurn, pending
 	return turns
 }
 
-func scheduledWorkshopTurns(manifest *WorkflowManifest, messages []string) ([]scheduledWorkshopTurn, error) {
+func scheduledWorkshopTurns(manifest *WorkflowManifest, messages []string, workspacePath string) ([]scheduledWorkshopTurn, error) {
 	upgradePlan := workflowVersionUpgradePlan(manifest)
 	manifestVersion := workflowContractVersionForUpgrade(manifest)
 	if manifestVersion != WorkflowContractCurrentVersion && (len(upgradePlan) == 0 || upgradePlan[len(upgradePlan)-1].to != WorkflowContractCurrentVersion) {
@@ -3119,9 +3119,13 @@ func scheduledWorkshopTurns(manifest *WorkflowManifest, messages []string) ([]sc
 
 	turns := make([]scheduledWorkshopTurn, 0, len(upgradePlan)+len(messages))
 	for _, upgrade := range upgradePlan {
+		query := bindWorkflowUpgradeWorkspacePath(upgrade.query, workspacePath)
+		if strings.Contains(query, workflowUpgradeWorkspacePathPlaceholder) {
+			return nil, fmt.Errorf("workflow upgrade preflight %s requires a workspace path", upgrade.label)
+		}
 		turns = append(turns, scheduledWorkshopTurn{
 			label:         upgrade.label,
-			query:         upgrade.query,
+			query:         query,
 			upgradeTarget: upgrade.to,
 		})
 	}
@@ -3241,7 +3245,7 @@ func (s *SchedulerService) executeWorkshopJob(ctx context.Context, sctx *Schedul
 	if !found {
 		return sessionID, runFolder, fmt.Errorf("workflow upgrade preflight: workflow manifest not found at %s", sctx.WorkspacePath)
 	}
-	turns, err := scheduledWorkshopTurns(manifest, messages)
+	turns, err := scheduledWorkshopTurns(manifest, messages, sctx.WorkspacePath)
 	if err != nil {
 		return sessionID, runFolder, err
 	}

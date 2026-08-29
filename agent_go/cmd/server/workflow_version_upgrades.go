@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -306,21 +307,31 @@ Call validate_report_html after editing; repair every error. Do not run the work
 
 const upgradePulseLifecycleReconciliation = `WORKFLOW CONTRACT UPGRADE: PULSE CLOSE-ON-APPLIED LIFECYCLE.
 
-Do only this platform data migration. Call record_pulse_migration_reconciliation(scope="lifecycle") once. It closes every still-active issue where a Fixer recorded changed files, regardless of its former verification/wait state; it moves legacy waiting-without-a-fix rows back to the active issue register, retires merged aliases, and preserves every attempt and event. It does not change the plan, schedules, workflow instructions, or human/platform-owned issues.
+Do only this platform data migration. Call record_pulse_migration_reconciliation(workspace_path={{WORKSPACE_PATH}}, scope="lifecycle") once. It closes every still-active issue where a Fixer recorded changed files, regardless of its former verification/wait state; it moves legacy waiting-without-a-fix rows back to the active issue register, retires merged aliases, and preserves every attempt and event. It does not change the plan, schedules, workflow instructions, or human/platform-owned issues.
 
-Read the returned counts. Then call get_pulse_state(view="backlog", detail="compact") to confirm the resulting issue register is readable. Do not run a workflow or a Pulse review. If either tool fails, do not stamp. Otherwise call set_workflow_contract_version(version="1.0.32") and stop.`
+Read the returned counts. Then call get_pulse_state(workspace_path={{WORKSPACE_PATH}}, view="backlog", detail="compact") to confirm the resulting issue register is readable. Do not run a workflow or a Pulse review. If either tool fails, do not stamp. Otherwise call set_workflow_contract_version(version="1.0.32") and stop.`
 
 const upgradePulseBacklogTriage = `WORKFLOW CONTRACT UPGRADE: PULSE BACKLOG TRIAGE.
 
-Do only this platform data migration. Call record_pulse_migration_reconciliation(scope="lifecycle") once. It applies the close-on-applied rule and returns legacy unfixed waits to the active register. Then call get_pulse_state(view="backlog", detail="compact") and confirm it is readable. Do not infer that free-text claims such as "passed" close an issue: only typed terminal lifecycle evidence may close automatically. The later bounded Technical Review triages the remaining ambiguous roots.
+Do only this platform data migration. Call record_pulse_migration_reconciliation(workspace_path={{WORKSPACE_PATH}}, scope="lifecycle") once. It applies the close-on-applied rule and returns legacy unfixed waits to the active register. Then call get_pulse_state(workspace_path={{WORKSPACE_PATH}}, view="backlog", detail="compact") and confirm it is readable. Do not infer that free-text claims such as "passed" close an issue: only typed terminal lifecycle evidence may close automatically. The later bounded Technical Review triages the remaining ambiguous roots.
 
 Do not run a workflow or a Pulse review. If either tool fails, do not stamp. Otherwise call set_workflow_contract_version(version="1.0.33") and stop.`
 
 const upgradePulseActionableBacklog = `WORKFLOW CONTRACT UPGRADE: PULSE ACTIONABLE BACKLOG.
 
-Do only this platform data migration. Call record_pulse_migration_reconciliation(scope="actionable_backlog") once. It applies the close-on-applied lifecycle rule, retires historical free-text observations that were never promoted into typed canonical Pulse issues, and moves typed platform/harness findings out of this workflow's repair queue. It preserves all records, decisions, evidence waits, and platform history.
+Do only this platform data migration. Call record_pulse_migration_reconciliation(workspace_path={{WORKSPACE_PATH}}, scope="actionable_backlog") once. It applies the close-on-applied lifecycle rule, retires historical free-text observations that were never promoted into typed canonical Pulse issues, and moves typed platform/harness findings out of this workflow's repair queue. It preserves all records, decisions, evidence waits, and platform history.
 
-Read the returned counts. Then call get_pulse_state(view="backlog", detail="compact") and confirm the canonical issue register is readable. Pulse's workflow-owned repair target is only the returned actionable_workflow_issues count: do not treat platform issues, human decisions, evidence waits, or retired observations as repair debt. Do not run a workflow or a Pulse review. If either tool fails, do not stamp. Otherwise call set_workflow_contract_version(version="1.0.34") and stop.`
+Read the returned counts. Then call get_pulse_state(workspace_path={{WORKSPACE_PATH}}, view="backlog", detail="compact") and confirm the canonical issue register is readable. Pulse's workflow-owned repair target is only the returned actionable_workflow_issues count: do not treat platform issues, human decisions, evidence waits, or retired observations as repair debt. Do not run a workflow or a Pulse review. If either tool fails, do not stamp. Otherwise call set_workflow_contract_version(version="1.0.34") and stop.`
+
+const workflowUpgradeWorkspacePathPlaceholder = "{{WORKSPACE_PATH}}"
+
+func bindWorkflowUpgradeWorkspacePath(query, workspacePath string) string {
+	workspacePath = strings.TrimSpace(workspacePath)
+	if workspacePath == "" {
+		return query
+	}
+	return strings.ReplaceAll(query, workflowUpgradeWorkspacePathPlaceholder, strconv.Quote(workspacePath))
+}
 
 // workflowVersionUpgradePlan keeps the retired HTML presentation migrations
 // retired, but preserves the independent behavioral/data migrations older

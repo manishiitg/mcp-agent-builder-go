@@ -273,7 +273,7 @@ func TestVersion133ReceivesActionablePulseBacklogMigration(t *testing.T) {
 		t.Fatalf("1.0.33 upgrade plan = %+v, want only actionable Pulse backlog migration", plan)
 	}
 	for _, want := range []string{
-		`record_pulse_migration_reconciliation(scope="actionable_backlog")`,
+		`record_pulse_migration_reconciliation(workspace_path={{WORKSPACE_PATH}}, scope="actionable_backlog")`,
 		"historical free-text observations",
 		"typed platform/harness findings",
 		"actionable_workflow_issues",
@@ -282,6 +282,49 @@ func TestVersion133ReceivesActionablePulseBacklogMigration(t *testing.T) {
 		if !strings.Contains(plan[0].query, want) {
 			t.Errorf("actionable Pulse backlog migration missing %q", want)
 		}
+	}
+}
+
+func TestPulseMigrationUpgradeTurnsBindRequiredWorkspacePath(t *testing.T) {
+	const workspacePath = "Workflow/linkedin"
+	tests := []struct {
+		version string
+		scope   string
+	}{
+		{version: workflowContractReportActivityTabVersion, scope: "lifecycle"},
+		{version: workflowContractPulseLifecycleReconciliationVersion, scope: "lifecycle"},
+		{version: workflowContractPulseBacklogTriageVersion, scope: "actionable_backlog"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.version, func(t *testing.T) {
+			turns, err := scheduledWorkshopTurns(&WorkflowManifest{Version: tt.version}, nil, workspacePath)
+			if err != nil {
+				t.Fatalf("scheduledWorkshopTurns: %v", err)
+			}
+			if len(turns) == 0 {
+				t.Fatal("expected a Pulse migration upgrade turn")
+			}
+			query := turns[0].query
+			for _, want := range []string{
+				`record_pulse_migration_reconciliation(workspace_path="Workflow/linkedin", scope="` + tt.scope + `")`,
+				`get_pulse_state(workspace_path="Workflow/linkedin", view="backlog", detail="compact")`,
+			} {
+				if !strings.Contains(query, want) {
+					t.Errorf("Pulse migration prompt missing required bound call %q\n%s", want, query)
+				}
+			}
+			if strings.Contains(query, workflowUpgradeWorkspacePathPlaceholder) {
+				t.Errorf("Pulse migration prompt leaked unbound workspace placeholder: %s", query)
+			}
+		})
+	}
+}
+
+func TestPulseMigrationUpgradeTurnsRejectMissingWorkspacePath(t *testing.T) {
+	_, err := scheduledWorkshopTurns(&WorkflowManifest{Version: workflowContractReportActivityTabVersion}, nil, "")
+	if err == nil || !strings.Contains(err.Error(), "requires a workspace path") {
+		t.Fatalf("missing workspace path error = %v, want explicit preflight rejection", err)
 	}
 }
 

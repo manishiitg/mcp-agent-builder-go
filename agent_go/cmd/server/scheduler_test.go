@@ -1570,7 +1570,7 @@ func TestPostRunMonitorPrependsWorkflowVersionUpgradeForOldManifest(t *testing.T
 }
 
 func TestScheduledWorkshopTurnsCurrentWorkflowStartsWithScheduleMessage(t *testing.T) {
-	turns, err := scheduledWorkshopTurns(&WorkflowManifest{Version: WorkflowContractCurrentVersion}, []string{"first", "second"})
+	turns, err := scheduledWorkshopTurns(&WorkflowManifest{Version: WorkflowContractCurrentVersion}, []string{"first", "second"}, "Workflow/test")
 	if err != nil {
 		t.Fatalf("scheduledWorkshopTurns: %v", err)
 	}
@@ -1580,7 +1580,7 @@ func TestScheduledWorkshopTurnsCurrentWorkflowStartsWithScheduleMessage(t *testi
 }
 
 func TestScheduledWorkshopTurnsRejectsUnknownVersionBeforeScheduleMessage(t *testing.T) {
-	turns, err := scheduledWorkshopTurns(&WorkflowManifest{Version: "9.9.9"}, []string{"must not run"})
+	turns, err := scheduledWorkshopTurns(&WorkflowManifest{Version: "9.9.9"}, []string{"must not run"}, "Workflow/test")
 	if err == nil || !strings.Contains(err.Error(), "no complete upgrade path") {
 		t.Fatalf("error = %v, want no complete upgrade path", err)
 	}
@@ -1637,7 +1637,7 @@ func TestPostRunMonitorPrependsPulseHistoryContractUpgradeForVersion110Manifest(
 // Review+Fix turn.
 func assertDirectContractUpgrade(t *testing.T, manifest *WorkflowManifest, from string) {
 	t.Helper()
-	turns, err := scheduledWorkshopTurns(manifest, nil)
+	turns, err := scheduledWorkshopTurns(manifest, nil, "Workflow/test")
 	if err != nil {
 		t.Fatalf("scheduledWorkshopTurns(%s): %v", from, err)
 	}
@@ -1667,7 +1667,7 @@ func assertDirectContractUpgrade(t *testing.T, manifest *WorkflowManifest, from 
 }
 
 func TestNoUpgradeTurnsForAWorkflowAlreadyAtTheCurrentContract(t *testing.T) {
-	turns, err := scheduledWorkshopTurns(&WorkflowManifest{Version: WorkflowContractCurrentVersion}, []string{"run the workflow"})
+	turns, err := scheduledWorkshopTurns(&WorkflowManifest{Version: WorkflowContractCurrentVersion}, []string{"run the workflow"}, "Workflow/test")
 	if err != nil {
 		t.Fatalf("scheduledWorkshopTurns: %v", err)
 	}

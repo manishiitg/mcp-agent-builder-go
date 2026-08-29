@@ -45,7 +45,7 @@ func TestBlockedUpgradePreflightIsDistinguishableFromAnOrdinaryRunFailure(t *tes
 // all. That blocks every trigger permanently, so it must skip Pulse too rather
 // than notifying about the same wall forever.
 func TestMissingUpgradePathIsAlsoABlockedPreflight(t *testing.T) {
-	_, err := scheduledWorkshopTurns(&WorkflowManifest{Version: "9.9.9"}, []string{"run it"})
+	_, err := scheduledWorkshopTurns(&WorkflowManifest{Version: "9.9.9"}, []string{"run it"}, "Workflow/test")
 	if err == nil {
 		t.Fatal("a version with no upgrade path should not produce runnable turns")
 	}
@@ -60,7 +60,7 @@ func TestMissingUpgradePathIsAlsoABlockedPreflight(t *testing.T) {
 // Failing open is the opposite decision: the schedule's normal messages do run,
 // so there is a run and Pulse should review it as usual.
 func TestFailOpenPathDoesNotMarkTheRunAsBlocked(t *testing.T) {
-	turns, err := scheduledWorkshopTurns(&WorkflowManifest{Version: "1.0.20"}, []string{"run it"})
+	turns, err := scheduledWorkshopTurns(&WorkflowManifest{Version: "1.0.20"}, []string{"run it"}, "Workflow/test")
 	if err != nil {
 		t.Fatalf("a known version should produce turns: %v", err)
 	}
