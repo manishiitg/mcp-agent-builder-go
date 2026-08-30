@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | Claude Code |
-| Ticket state | `second independent review's findings resolved` — real executeRoutingStep execution now covered by a regression test (not just the pieces around it); phase B's drift-review contract now versioned so existing reviews are invalidated when the check set grows, nested routing steps keep their type, and route_eval_pairing requires full route coverage, not just one reference; frontend per-route reporting tabs remain unbuilt (unchanged, tracked separately); live manual reverify against a real workflow run still open |
+| Ticket state | `third independent review open` — core branch execution and phase B corrections pass, but the canonical builder prompt still directs small/fixed branches to routing, branch execution evidence is mislabeled as routing in Execution Logs, and the plan add/update API rejects branch steps; frontend per-route reporting tabs and live manual reverify also remain open |
 | Last synchronized | `2026-08-30` |
 
 - **Type:** platform feature (design only, no code changed). Filed at the
@@ -494,3 +494,44 @@ concurrent session and passes.
 
 Still open, unchanged from before this review: the live manual reverify
 against a real workflow run, and the frontend per-route reporting tabs.
+
+## Third independent review — 2026-08-30
+
+Reviewed current `origin/main` at `eceb4c187`. The core branch implementation
+is now substantially sound: the shared executor, canonical plan validation,
+route selection, config application, navigation, nested type discovery,
+drift-review contract versioning, route-eval coverage guidance, and frontend
+plan/canvas typing are present. The full `step_based_workflow` package tests,
+focused server/tool-invariant/branch/routing/Plan Drift tests, and frontend
+TypeScript check pass.
+
+PLAT-259 is still not complete for three newly confirmed integration reasons:
+
+1. **The canonical builder prompt still defeats the semantic split.**
+   `interactive_workshop_manager.go`'s primary planning instruction omits
+   `branch` from the step-type list and explicitly tells the agent to use
+   deterministic `routing` for fixed branch choices. The same stale direction
+   remains in `plan-design.md`, `planning-steps.md`, `message-sequence.md`,
+   `regular.md`, and parts of `workflow-tools.md`. Normal plan creation can
+   therefore keep producing routing steps for the small decisions PLAT-259
+   introduced `branch` to represent. Update every canonical entry point and
+   add a guidance-contract test that requires both types and their distinction.
+2. **Branch execution is mislabeled as routing in Execution Logs.**
+   `workflow.go` converts every `routing-evaluation.json` artifact into an
+   orchestration entry with hardcoded `"type": "routing"`. A real branch run
+   consequently renders a routing-colored inner event and “Routing question”
+   even though the owning step header is a Branch. Carry the actual plan-step
+   type into the record (or derive it from plan metadata) and add a branch
+   execution-log response test.
+3. **The plan add/update HTTP API rejects branch steps.** The frontend's
+   `PlanStep` union and `usePlanData.addStep`/`updateStep` APIs accept a branch,
+   but `handleAddStep` only unmarshals `regular` and `todo_task`, while
+   `updateStepInPlan` likewise has no `BranchPlanStep` case. Builder-native
+   `add_branch_step`/`update_branch_step` work, but the platform's other plan
+   mutation path is internally inconsistent and returns `Unknown step type`
+   or `unknown step type`. Support branch in both handlers (and test it), or
+   narrow/remove the exposed generic API contract.
+
+The two already-declared open items also remain: frontend per-route reporting
+tabs and a live manual branch run against a real workflow. No runtime regression
+was found in the shared branch executor itself.
