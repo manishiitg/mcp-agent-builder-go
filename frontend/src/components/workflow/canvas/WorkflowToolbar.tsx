@@ -392,47 +392,27 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
     ['database', Table2, 'Database', true],
   ] as const).filter(([, , , visible]) => visible), [hasPlan])
 
-  // PLAT-158: the enabled dedicated review schedule is the only recurring
-  // Pulse switch. Ordinary workflow runs never launch Gate/Review+Fix inline.
-  const pulseReviewSchedule = useWorkflowManifestStore((s) => {
+  const pulseConfig = useWorkflowManifestStore(useShallow((s) => {
     const wf = s.workflows.find((w) => w.workspace_path === workspacePath)
-    return wf?.manifest.schedules?.find((schedule) => schedule.pulse_review_only)
-  })
-  const monitorOn = !!pulseReviewSchedule?.enabled
-  const refreshWorkflowManifests = useWorkflowManifestStore((s) => s.refreshWorkflows)
+    return {
+      enabled: wf?.manifest.pulse?.enabled,
+      legacyEnabled: wf?.manifest.schedules?.some((schedule) => schedule.pulse_review_only && schedule.enabled),
+    }
+  }))
+  const monitorOn = !!(pulseConfig.enabled || pulseConfig.legacyEnabled)
+  const updateWorkflowManifest = useWorkflowManifestStore((s) => s.updateWorkflow)
   const [monitorSaving, setMonitorSaving] = useState(false)
   const toggleMonitor = useCallback(async () => {
     if (!workspacePath || monitorSaving) return
     setMonitorSaving(true)
     try {
-      if (pulseReviewSchedule) {
-        if (monitorOn) {
-          await schedulerApi.disableJob(pulseReviewSchedule.id)
-        } else {
-          await schedulerApi.enableJob(pulseReviewSchedule.id)
-        }
-      } else {
-        // PLAT-158: creating the dedicated pulse_review_only schedule IS
-        // enabling Pulse — this is still the single source of truth, just
-        // created lazily from the toolbar toggle instead of /pulse-setup.
-        await schedulerApi.createJob({
-          name: 'Pulse review',
-          entity_type: 'workflow',
-          workspace_path: workspacePath,
-          mode: 'workshop',
-          cron_expression: '0 9 * * *',
-          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-          enabled: true,
-          pulse_review_only: true,
-        })
-      }
-      await refreshWorkflowManifests()
+      await updateWorkflowManifest(workspacePath, { pulse_enabled: !monitorOn })
     } catch (err) {
       console.error('[WorkflowToolbar] Failed to toggle Pulse review schedule:', err)
     } finally {
       setMonitorSaving(false)
     }
-  }, [workspacePath, pulseReviewSchedule, monitorOn, monitorSaving, refreshWorkflowManifests])
+  }, [workspacePath, monitorOn, monitorSaving, updateWorkflowManifest])
   const [showMonitorHelp, setShowMonitorHelp] = useState(false)
   const [pulseModuleStates, setPulseModuleStates] = useState<PulseModuleState[]>([])
   const [pulseFinalCommandStates, setPulseFinalCommandStates] = useState<PulseFinalCommandState[]>([])
@@ -1141,8 +1121,8 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                   <span className={`inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${monitorOn ? 'translate-x-[18px]' : 'translate-x-[2px]'}`} />
                 </button>
                 <div className="min-w-0">
-                  <div className="text-xs font-medium text-foreground">{monitorOn ? 'Reviewing on its own schedule' : pulseReviewSchedule ? 'Scheduled review is off' : 'Pulse is off'}</div>
-                  <div className="truncate text-[11px] text-muted-foreground">{pulseReviewSchedule ? 'Pulse findings, fixes, decisions, and history are here.' : 'Turn on to review runs daily and track findings here.'}</div>
+                  <div className="text-xs font-medium text-foreground">{monitorOn ? 'Reviews scheduled runs' : 'Pulse is off'}</div>
+                  <div className="truncate text-[11px] text-muted-foreground">{monitorOn ? 'Pulse Gate runs after each normal scheduled run.' : 'Turn on to review completed scheduled runs.'}</div>
                 </div>
               </div>
               <div className="inline-flex h-8 items-center overflow-hidden rounded-lg border border-border bg-muted/30">

@@ -62,19 +62,16 @@ func TestManualPulseScheduleContract(t *testing.T) {
 
 	sctx.ForcePulseReview = false
 	if shouldRunPulseLifecycle(sctx, manifest) {
-		t.Fatal("ordinary run must not add finalization when no Pulse schedule exists")
+		t.Fatal("ordinary run must not run Pulse when pulse.enabled is false")
+	}
+	manifest.Pulse = &WorkflowPulseConfig{Enabled: true}
+	if !shouldRunPulseLifecycle(normalCtx, manifest) {
+		t.Fatal("ordinary scheduled run must run Pulse when pulse.enabled is true")
 	}
 }
 
-// TestPulseReviewOnlyScheduleContractMirrorsManualPulseTrigger pins PLAT-115:
-// a persisted, recurring PulseReviewOnly schedule must reach the exact same
-// PulseOnly/ForcePulseReview state buildScheduleContext + the manual
-// toolbar trigger already produce (TestManualPulseScheduleContract, above) —
-// automatically, from the fired schedule's own field, not hand-set by the
-// caller. Unlike the manual trigger it must NOT set PulseEvidenceRunFolder:
-// that means "review exactly this one folder," but a periodic pass reviews
-// whatever backlog Gate itself decides is new (Part D), not a Go-selected
-// single folder.
+// TestPulseReviewOnlyScheduleContractMirrorsManualPulseTrigger retains the
+// legacy schedule parser until startup migration removes old entries.
 func TestPulseReviewOnlyScheduleContractMirrorsManualPulseTrigger(t *testing.T) {
 	manifest := &WorkflowManifest{ID: "workflow-id", Label: "Workflow"}
 	sched := WorkflowSchedule{
@@ -114,10 +111,7 @@ func TestPulseReviewOnlyScheduleContractMirrorsManualPulseTrigger(t *testing.T) 
 		ID: "periodic-pulse-review", Enabled: true, PulseReviewOnly: true,
 	}}
 	if !shouldRunPulseLifecycle(ordinary, manifest) {
-		t.Fatal("an ordinary run with a dedicated Pulse schedule must still run its short finalizer")
-	}
-	if !scheduledRunUsesLightweightFinalize(true, ordinary.PulseOnly) {
-		t.Fatal("an ordinary run must select only the lightweight finalizer")
+		t.Fatal("a legacy Pulse schedule must keep post-run Pulse enabled during migration")
 	}
 }
 
