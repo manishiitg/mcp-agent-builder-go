@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | Claude Code |
-| Ticket state | `phase A corrective audit complete` — every `*RoutingPlanStep`-only switch the independent review named (plus one it found itself, `setStepIdentity`'s nested sub-agent identity normalization) now has a matching `*BranchPlanStep` case; end-to-end regression test added and passing (see Corrective audit below); phase B (route best-practices in plan_drift_review) already implemented; frontend per-route reporting tabs not yet built |
+| Ticket state | `open after second independent review` — the phase A corrective switch audit is credible and focused tests pass, but its regression test stops short of the real executor/live-run boundary; phase B can skip existing and nested routing steps and does not prove every route has evaluation coverage; frontend per-route reporting tabs remain unbuilt |
 | Last synchronized | `2026-08-30` |
 
 - **Type:** platform feature (design only, no code changed). Filed at the
@@ -378,3 +378,46 @@ handoff-prompt text mismatch, unrelated to routing/branch); frontend
 `tsc --noEmit` and `npm run build` both clean.
 
 Phase A's reverify (below) is now unblocked.
+
+## Second independent review — 2026-08-30
+
+Reviewed current `origin/main` after the corrective audit. The core phase A
+implementation is substantially improved: `BranchPlanStep` now participates
+in canonical validation, config application, graph-reference validation,
+selected-route navigation, nested identity normalization, update handling,
+canvas rendering, and the shared execution dispatch. Focused branch/routing,
+plan-drift, guidance, tool-invariant, and frontend TypeScript checks pass.
+
+PLAT-259 nevertheless remains open for four reasons:
+
+1. **Phase B does not invalidate earlier drift reviews.** Adding
+   `route_structural_isolation` and `route_eval_pairing` changes the required
+   review contract, but a routing step with an existing
+   `drift_review.needs_review=false` remains clean. There is no review-contract
+   version or one-time migration that marks these existing routing reviews
+   stale, so workflows reviewed before phase B can silently miss both checks.
+2. **Nested routing candidates lose their type.** Candidate discovery's raw
+   walk includes nested todo-route `sub_agent_step` IDs, but
+   `stepTypeByID` is populated only from top-level `PlanningResponse.Steps`.
+   A nested routing step therefore reaches the reviewer with an empty
+   `step_type`, and the two routing-only checks are skipped.
+3. **`route_eval_pairing` proves only one reference, not complete route
+   coverage.** Its current contract passes when any evaluation step references
+   the routing-step ID. An eval covering one route out of five therefore
+   satisfies the check. Acceptance requires comparing the union of referenced
+   `route_ids` with every route declared by the routing step, with explicit
+   handling for intentionally route-agnostic evaluation.
+4. **The named end-to-end test does not execute the branch.**
+   `TestBranchStepEndToEndLifecycle` validates parse/round-trip, loaded-plan
+   validation, config population, and the isolated
+   `nextStepIDForSelectedRoute` helper, but never calls the real
+   `executeRoutingStep`/controller execution path. A live workflow execution
+   remains explicitly unverified, and frontend per-route reporting tabs are
+   still explicitly unbuilt.
+
+Required closure work: add a route-review contract/version invalidation or
+migration; populate candidate type recursively; require complete route eval
+coverage; exercise a real branch execution through the controller (plus the
+already-listed live reverify); and implement or explicitly split the
+per-route reporting UI into a linked follow-up ticket before calling this
+feature complete.

@@ -719,14 +719,69 @@ rather than folded into another PLAT-258 mega-push):
   final `drift_review` snapshot, plus a workflow-level `needs_review`/
   `reviewed_through_change_id` pair Gate's due-check also has to consult.
 
-## Second independent review — review-and-fix authority + 3 further findings (2026-08-30)
+## Review decision — combine plan-drift review and repair (2026-08-30)
+
+The handoff-only first version is superseded. `plan_drift_review` must follow
+the same combined maintenance model already used by Technical Review: one
+retained agent reviews its due scope, applies every safe workflow-owned fix,
+verifies the result, and records the terminal evidence in the same turn.
+Message-sequence continuations are allowed only when later reasoning genuinely
+needs another turn; they are not a mandatory boundary between review and fix.
+
+The module owns plan-change drift end to end:
+
+1. Read the shared candidate collector, preserved prior review, and changelog
+   entries after `reviewed_through_change_id`.
+2. Run the deterministic and judgment checks against the current step and its
+   affected dependencies.
+3. Apply coherent, safe workflow-owned repairs immediately across the exact
+   affected surfaces: plan/config, downstream contracts, validation, DB/report,
+   evaluation, learnings, KB, scripts, and route wiring as warranted by the
+   evidence.
+4. Verify each repair proportionally and record the check as `fixed`; a
+   same-turn repair does not need an intermediate Pulse issue merely to hand
+   work to another agent.
+5. Route only genuine human decisions, platform-owned defects, external
+   actions, or unsafe/ambiguous redesigns to durable issues. A failing check
+   may clear `needs_review` only after that durable handoff exists.
+6. Clear the step/workflow `needs_review` flag only after the complete review,
+   safe-fix, verification, and required-handoff set is durably recorded.
+   Interrupted or failed work stays due.
+
+Ownership must remain non-overlapping. Plan Drift owns repairs caused by a
+plan change and its dependent artifacts. Technical Review owns unrelated
+runtime/tool/store/report/evaluation/cost defects and must not re-review a
+Plan Drift root already fixed or durably routed in the same Pulse run.
+
+This decision also removes the scheduler workaround that depended on
+Technical Review already being due at Gate time. A Plan Drift-only Pulse run
+must be capable of reaching zero safe plan-drift debt without waiting for a
+second Pulse cycle.
+
+Acceptance must prove, in one scheduled run and through the shared manual
+entry point: review discovers a repairable drift; the same retained agent
+changes the relevant files; verification passes; the drift review is recorded
+as fixed and cleared; no duplicate Technical Review issue is created; and a
+failed/interrupted repair leaves the candidate due for retry.
+
+## Second independent review — review-and-fix authority + 3 further findings, implemented (2026-08-30)
 
 A second review confirmed the corrective contract's fixes work, then found 3
-more lifecycle gaps and made an explicit design request: give
-`plan_drift_review` real repair authority — the same review-and-fix shape as
-`technical_review` — instead of always handing routine drift off, which was
-creating an unnecessary extra Pulse cycle even after the earlier same-pass
-sequencing fix. All of the following are implemented and tested.
+more lifecycle gaps and made an explicit design request — matching the
+"Review decision" above exactly, reached independently in this session's own
+chat at the same time: give `plan_drift_review` real repair authority — the
+same review-and-fix shape as `technical_review` — instead of always handing
+routine drift off, which was creating an unnecessary extra Pulse cycle even
+after the earlier same-pass sequencing fix. All of the following are
+implemented and tested.
+
+Acceptance note on the "must be capable of reaching zero safe plan-drift
+debt without waiting for a second Pulse cycle" requirement above: this
+implementation's own same-pass late-insertion safety net (P1 finding 1,
+below) is a deliberate belt-and-suspenders backstop for the rare
+`fixer_handoff` escalation case specifically, not the primary mechanism —
+consistent with, not a substitute for, `plan_drift_review` resolving its own
+scope directly first.
 
 **Design change: `plan_drift_review` now reviews AND fixes.**
 `plan-drift-review.md` was rewritten from "no repair authority... hands off"
