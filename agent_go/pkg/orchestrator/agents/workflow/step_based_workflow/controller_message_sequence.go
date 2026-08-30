@@ -1062,7 +1062,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) getMessageSequenceRuntime(ctx context
 	}
 
 	agentName := fmt.Sprintf("message-sequence-%s", step.GetID())
-	agent, err := hcpo.createExecutionOnlyAgent(agentCtx, "execution_only", stepPath, agentName, step.AgentConfigs, step.GetID(), "", false)
+	agent, err := hcpo.createExecutionOnlyAgent(agentCtx, "execution_only", stepPath, agentName, step.AgentConfigs, step, step.GetID(), "", false)
 	if err != nil {
 		return nil, agentCtx, err
 	}
@@ -1201,16 +1201,21 @@ func requestedMessageSequenceItemWriteAccess(item MessageSequenceItem) (MessageS
 // silently read-only when the step itself is configured to write.
 func (hcpo *StepBasedWorkflowOrchestrator) resolveMessageSequenceItemWriteAccess(stepConfig *AgentConfigs, item MessageSequenceItem) MessageSequenceWriteAccess {
 	requested, hasItemOverride := requestedMessageSequenceItemWriteAccess(item)
+	var resolved MessageSequenceWriteAccess
 	if hasItemOverride {
-		return hcpo.constrainMessageSequenceWriteAccess(stepConfig, requested)
+		resolved = hcpo.constrainMessageSequenceWriteAccess(stepConfig, requested)
+	} else {
+		kbAccess := resolveKnowledgebaseAccess(stepConfig, hcpo.UseKnowledgebase())
+		resolved = MessageSequenceWriteAccess{
+			DB:            resolveDBAccess(stepConfig) == DBAccessReadWrite,
+			Knowledgebase: kbAccessAllowsWrite(kbAccess),
+			Learnings:     resolveLearningsAccess(stepConfig) == LearningsAccessReadWrite,
+		}
 	}
-
-	kbAccess := resolveKnowledgebaseAccess(stepConfig, hcpo.UseKnowledgebase())
-	return MessageSequenceWriteAccess{
-		DB:            resolveDBAccess(stepConfig) == DBAccessReadWrite,
-		Knowledgebase: kbAccessAllowsWrite(kbAccess),
-		Learnings:     resolveLearningsAccess(stepConfig) == LearningsAccessReadWrite,
+	if hcpo.isEvaluationMode {
+		resolved.Learnings = false
 	}
+	return resolved
 }
 
 // messageSequenceStepFullWriteAccess is the step's maximal granted write scope
@@ -1220,11 +1225,15 @@ func (hcpo *StepBasedWorkflowOrchestrator) resolveMessageSequenceItemWriteAccess
 func (hcpo *StepBasedWorkflowOrchestrator) messageSequenceStepFullWriteAccess(step *MessageSequencePlanStep) MessageSequenceWriteAccess {
 	stepConfig := getAgentConfigs(step)
 	kbAccess := resolveKnowledgebaseAccess(stepConfig, hcpo.UseKnowledgebase())
-	return MessageSequenceWriteAccess{
+	resolved := MessageSequenceWriteAccess{
 		DB:            resolveDBAccess(stepConfig) == DBAccessReadWrite,
 		Knowledgebase: kbAccessAllowsWrite(kbAccess),
 		Learnings:     resolveLearningsAccess(stepConfig) == LearningsAccessReadWrite,
 	}
+	if hcpo.isEvaluationMode {
+		resolved.Learnings = false
+	}
+	return resolved
 }
 
 func (hcpo *StepBasedWorkflowOrchestrator) constrainMessageSequenceWriteAccess(stepConfig *AgentConfigs, requested MessageSequenceWriteAccess) MessageSequenceWriteAccess {
@@ -1271,6 +1280,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) setupMessageSequenceFolderGuard(stepP
 	}
 	kbAccess := resolveKnowledgebaseAccess(stepConfig, hcpo.UseKnowledgebase())
 	learningsAccess := resolveLearningsAccess(stepConfig)
+	if hcpo.isEvaluationMode {
+		learningsAccess = LearningsAccessNone
+	}
 	// message_sequence agents use query_workflow_db/mutate_workflow_db, so
 	// db/db.sqlite itself stays off the filesystem grant: configureWorkflowDBSession
 	// blocks it for managed agents, and Landlock cannot represent a broad parent

@@ -4190,7 +4190,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				"knowledgebase_access": map[string]interface{}{
 					"type":        "string",
 					"enum":        []string{"read", "write", "read-write", "none"},
-					"description": "Access mode for this step against knowledgebase/ (per-topic notes/ + notes/_index.json registry). Defaults to 'none' — KB is opt-in per step. 'read' — may consume existing narrative (read notes via index-first then selective cat); 'write' / 'read-write' — may contribute: the step agent writes notes/ inline with diff_patch_workspace_file and closes with a self-review turn against its knowledgebase_contribution; 'none' — no access. Granting write without a knowledgebase_contribution results in no KB writes at all. Omit to keep the default.",
+					"description": knowledgebaseAccessDescription,
 				},
 				"learnings_access": map[string]interface{}{
 					"type":        "string",
