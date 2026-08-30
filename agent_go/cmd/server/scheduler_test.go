@@ -975,15 +975,32 @@ func TestCreateAndUpdatePulseReviewOnlyScheduleSkipsGroupNamesRequirement(t *tes
 
 func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 	steps := pulseLifecycleSteps()
-	if got := len(steps); got != 3 {
-		t.Fatalf("postRunMonitorSteps() length = %d, want 3", got)
+	if got := len(steps); got != 4 {
+		t.Fatalf("postRunMonitorSteps() length = %d, want 4", got)
 	}
-	for i, want := range []string{"gate", "review-fix", "finalize"} {
+	// plan-drift-review is sequenced strictly before review-fix — it must run
+	// and fully complete before technical_review's own dispatch, so that a
+	// drift finding it files is already in the backlog technical_review reads.
+	for i, want := range []string{"gate", "plan-drift-review", "review-fix", "finalize"} {
 		if got := steps[i].label; got != want {
 			t.Fatalf("postRunMonitorSteps()[%d].label = %q, want %q", i, got, want)
 		}
 	}
-	review := steps[1].query
+	planDrift := steps[1].query
+	for _, want := range []string{
+		"PULSE PLAN DRIFT REVIEW DISPATCH",
+		"Read the durable Gate worklist",
+		"If plan_drift_review is not due",
+		"run_in_background",
+		"plan-drift-review.md",
+		"lean first version",
+		"the runtime waits for the registered child",
+	} {
+		if !strings.Contains(planDrift, want) {
+			t.Fatalf("plan drift review prompt missing %q:\n%s", want, planDrift)
+		}
+	}
+	review := steps[2].query
 	for _, want := range []string{
 		"Read the durable Gate worklist",
 		"PULSE SEQUENCED REVIEW + FIX DISPATCH",
@@ -1002,7 +1019,10 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 			t.Fatalf("review prompt missing %q:\n%s", want, review)
 		}
 	}
-	if !strings.Contains(steps[2].query, "PULSE FINALIZER") || strings.Contains(steps[2].query, "PULSE DASHBOARD") {
+	if strings.Contains(review, "PULSE PLAN DRIFT REVIEW DISPATCH") || strings.Contains(review, `"plan_drift_review is due, launch`) {
+		t.Fatal("review-fix must not also dispatch plan_drift_review — that is plan-drift-review's own step now")
+	}
+	if !strings.Contains(steps[3].query, "PULSE FINALIZER") || strings.Contains(steps[3].query, "PULSE DASHBOARD") {
 		t.Fatal("only the finalizer must remain after sequenced Review + Fix")
 	}
 	return
@@ -1747,6 +1767,68 @@ func TestWorkflowHasPendingPlanChangelogArtifactReview(t *testing.T) {
 				t.Fatalf("workflowHasPendingPlanChangelogArtifactReview() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// pulseWorklistModulesDue lets a caller ask about a specific module subset —
+// needed once plan_drift_review became its own preceding lifecycle step, so
+// each step only checks the modules it is actually responsible for.
+func TestPulseWorklistModulesDueChecksOnlyGivenModules(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+	workspacePath := "Workflow/modules-due-scope"
+	pulseRunID := "pulse-modules-due-scope"
+	if _, err := recordPulseWorklist(ctx, workspacePath, pulseRunID, completePulseWorklistDecisions(map[string]PulseWorklistDecision{
+		pulseModuleTechnicalReview: {Module: pulseModuleTechnicalReview, Due: true, Reason: "Operational evidence."},
+	})); err != nil {
+		t.Fatalf("record worklist: %v", err)
+	}
+
+	if due, err := pulseWorklistModulesDue(ctx, workspacePath, pulseRunID, pulseModulePlanDriftReview); err != nil {
+		t.Fatalf("inspect plan_drift_review due-ness: %v", err)
+	} else if due {
+		t.Fatal("plan_drift_review was not marked due, but pulseWorklistModulesDue reported it due")
+	}
+	if due, err := pulseWorklistModulesDue(ctx, workspacePath, pulseRunID, pulseModuleTechnicalReview, pulseModuleStrategicReview); err != nil {
+		t.Fatalf("inspect technical/strategic due-ness: %v", err)
+	} else if !due {
+		t.Fatal("technical_review was marked due, but pulseWorklistModulesDue(technical, strategic) reported neither due")
+	}
+}
+
+// validatePulseDueModuleResultsFor must only flag the modules it was asked
+// about — checking the full module set right after plan_drift_review's own
+// step (which runs before technical_review/strategic_review even get their
+// turn) would wrongly treat "hasn't run yet" as "receipt missing."
+func TestValidatePulseDueModuleResultsForScopesToGivenModules(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+	workspacePath := "Workflow/scoped-results"
+	pulseRunID := "pulse-scoped-results"
+	if _, err := recordPulseWorklist(ctx, workspacePath, pulseRunID, completePulseWorklistDecisions(map[string]PulseWorklistDecision{
+		pulseModulePlanDriftReview: {Module: pulseModulePlanDriftReview, Due: true, Reason: "A step's drift_review is null."},
+		pulseModuleTechnicalReview: {Module: pulseModuleTechnicalReview, Due: true, Reason: "Operational evidence."},
+	})); err != nil {
+		t.Fatalf("record worklist: %v", err)
+	}
+
+	// Neither module has a terminal result yet. Scoped to plan_drift_review
+	// only, this must fail on plan_drift_review and must NOT mention
+	// technical_review (which simply has not had its turn yet in this
+	// lifecycle ordering).
+	err := validatePulseDueModuleResultsFor(ctx, workspacePath, pulseRunID, pulseModulePlanDriftReview)
+	if err == nil || !strings.Contains(err.Error(), pulseModulePlanDriftReview) {
+		t.Fatalf("expected an error naming plan_drift_review, got: %v", err)
+	}
+	if strings.Contains(err.Error(), pulseModuleTechnicalReview) {
+		t.Fatalf("scoped validation must not flag technical_review, which has not run yet: %v", err)
+	}
+
+	if _, err := markPulseModuleResultFromAgent(ctx, workspacePath, pulseModulePlanDriftReview, pulseRunID, "done", "Ground truth established for all pending steps.", nil); err != nil {
+		t.Fatalf("mark plan_drift_review: %v", err)
+	}
+	if err := validatePulseDueModuleResultsFor(ctx, workspacePath, pulseRunID, pulseModulePlanDriftReview); err != nil {
+		t.Fatalf("plan_drift_review has a terminal result, scoped validation should pass: %v", err)
 	}
 }
 

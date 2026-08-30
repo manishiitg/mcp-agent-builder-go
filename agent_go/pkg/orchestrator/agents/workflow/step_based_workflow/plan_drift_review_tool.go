@@ -54,6 +54,51 @@ func validateStepDriftChecks(checks []StepDriftCheck) error {
 				i, c.Evidence, minPlanDriftCheckEvidenceLength,
 			)
 		}
+		if c.Status == stepDriftCheckStatusFail && strings.TrimSpace(c.FindingID) == "" {
+			return fmt.Errorf(
+				"checks[%d].finding_id is required when status is \"fail\" — call record_pulse_finding first and pass its issue_id here, so a failed check can never be recorded as reviewed without a corresponding repair item already existing",
+				i,
+			)
+		}
+	}
+	return nil
+}
+
+// verifyStepDriftCheckFindingsExist confirms every fail-status check's
+// finding_id resolves to a real, currently-filed Pulse finding in this
+// workspace — not merely a non-empty string. validateStepDriftChecks alone
+// only enforces the field is present; an agent could satisfy that with a
+// fabricated id. This is the part of "atomic" that is actually achievable
+// across two separate tool calls: record_pulse_finding must have already run
+// and persisted before record_plan_drift_review is allowed to mark the check
+// reviewed.
+func verifyStepDriftCheckFindingsExist(ctx context.Context, workspacePath string, checks []StepDriftCheck) error {
+	var wantIDs []string
+	for _, c := range checks {
+		if c.Status == stepDriftCheckStatusFail {
+			wantIDs = append(wantIDs, strings.TrimSpace(strings.ToUpper(c.FindingID)))
+		}
+	}
+	if len(wantIDs) == 0 {
+		return nil
+	}
+	findings, err := LoadPulseFindingLifecycles(ctx, workspacePath, "", -1)
+	if err != nil {
+		return fmt.Errorf("failed to verify finding_id references against the Pulse backlog: %w", err)
+	}
+	known := make(map[string]bool, len(findings))
+	for _, f := range findings {
+		if id := strings.TrimSpace(strings.ToUpper(f.IssueID)); id != "" {
+			known[id] = true
+		}
+	}
+	for _, id := range wantIDs {
+		if !known[id] {
+			return fmt.Errorf(
+				"finding_id %q does not match any existing Pulse finding in this workspace — call record_pulse_finding first, then pass its real issue_id here",
+				id,
+			)
+		}
 	}
 	return nil
 }
@@ -83,6 +128,10 @@ func getRecordPlanDriftReviewSchema() string {
 						"evidence": {
 							"type": "string",
 							"description": "What was actually compared and what was found — specific, not a bare verdict. E.g. 'compared description sentence 2 (\"reads leads table\") against the step's actual tool config, which only reads campaigns; description is stale' — not 'reviewed, looks fine'."
+						},
+						"finding_id": {
+							"type": "string",
+							"description": "Required when status is \"fail\": the durable issue_id (e.g. \"PUL-xxxxxxxx\") returned by record_pulse_finding for this exact failure. Call record_pulse_finding BEFORE this tool for every failing check, then pass its real issue_id here — a fabricated or missing id is rejected. This is what keeps a failed check from being marked reviewed with no corresponding repair item in the backlog."
 						}
 					},
 					"required": ["check_id", "status", "evidence"]
@@ -92,6 +141,10 @@ func getRecordPlanDriftReviewSchema() string {
 			"reviewed_by": {
 				"type": "string",
 				"description": "Optional actor label, e.g. \"pulse:plan_drift_review\" for the automatic Pulse module, or left unset for a manual review-artifact-drift invocation (defaults to the current session)."
+			},
+			"reviewed_through_change_id": {
+				"type": "string",
+				"description": "Optional: the latest planning/changelog change_id this review actually consumed, if the step had prior evidence and you read the changelog entries since its last review. Persisted so a later review knows where to resume reading changelog history from. Leave unset if this step had no prior review or no relevant changelog entries existed."
 			}
 		},
 		"required": ["step_id", "checks"]
@@ -121,6 +174,9 @@ func createRecordPlanDriftReviewExecutor(workspacePath string, logger loggerv2.L
 		if err := validateStepDriftChecks(checks); err != nil {
 			return "", err
 		}
+		if err := verifyStepDriftCheckFindingsExist(ctx, workspacePath, checks); err != nil {
+			return "", err
+		}
 
 		reviewedBy := strings.TrimSpace(asString(args["reviewed_by"]))
 		if reviewedBy == "" {
@@ -131,13 +187,25 @@ func createRecordPlanDriftReviewExecutor(workspacePath string, logger loggerv2.L
 			}
 		}
 
+		reviewedThroughChangeID := strings.TrimSpace(asString(args["reviewed_through_change_id"]))
+
 		configs, err := readStepConfigViaFileCallback(ctx, workspacePath, readFile)
 		if err != nil {
 			return "", fmt.Errorf("failed to read step_config.json: %w", err)
 		}
 
 		now := time.Now().UTC().Format(time.RFC3339)
-		record := &StepDriftReview{ReviewedAt: now, ReviewedBy: reviewedBy, Checks: checks}
+		// NeedsReview is explicitly false: this is what actually clears the
+		// step from plan_drift_review's due list. A completed review always
+		// fully replaces the prior evidence — the stale flag model never keeps
+		// an old check result "pending" alongside a new one.
+		record := &StepDriftReview{
+			NeedsReview:             false,
+			ReviewedAt:              now,
+			ReviewedBy:              reviewedBy,
+			ReviewedThroughChangeID: reviewedThroughChangeID,
+			Checks:                  checks,
+		}
 
 		found := false
 		for i := range configs {

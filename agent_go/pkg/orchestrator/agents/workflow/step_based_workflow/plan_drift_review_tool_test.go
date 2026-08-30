@@ -47,14 +47,30 @@ func TestValidateStepDriftChecksRejectsPlaceholderEvidence(t *testing.T) {
 func TestValidateStepDriftChecksAcceptsRealEvidence(t *testing.T) {
 	err := validateStepDriftChecks([]StepDriftCheck{
 		{CheckID: "report_query_compatibility", Status: "pass", Evidence: "all 3 report queries ran cleanly against the current schema"},
-		{CheckID: "step_description_accuracy", Status: "fail", Evidence: "description says it reads leads; step only reads campaigns"},
+		{CheckID: "step_description_accuracy", Status: "fail", Evidence: "description says it reads leads; step only reads campaigns", FindingID: "PUL-1234ABCD"},
 	})
 	if err != nil {
 		t.Fatalf("expected valid checks to pass, got: %v", err)
 	}
 }
 
+func TestValidateStepDriftChecksRejectsFailWithoutFindingID(t *testing.T) {
+	err := validateStepDriftChecks([]StepDriftCheck{
+		{CheckID: "step_description_accuracy", Status: "fail", Evidence: "description says it reads leads; step only reads campaigns"},
+	})
+	if err == nil {
+		t.Fatal("expected an error for a fail-status check with no finding_id")
+	}
+	if !strings.Contains(err.Error(), "finding_id is required") {
+		t.Fatalf("error %q does not mention the finding_id requirement", err.Error())
+	}
+}
+
 func newPlanDriftReviewTestExecutor(files map[string]string) func(context.Context, map[string]interface{}) (string, error) {
+	return newPlanDriftReviewTestExecutorForWorkspace("", files)
+}
+
+func newPlanDriftReviewTestExecutorForWorkspace(workspacePath string, files map[string]string) func(context.Context, map[string]interface{}) (string, error) {
 	readFile := func(_ context.Context, path string) (string, error) {
 		return files[path], nil
 	}
@@ -62,7 +78,50 @@ func newPlanDriftReviewTestExecutor(files map[string]string) func(context.Contex
 		files[path] = content
 		return nil
 	}
-	return createRecordPlanDriftReviewExecutor("", loggerv2.NewNoop(), readFile, writeFile)
+	return createRecordPlanDriftReviewExecutor(workspacePath, loggerv2.NewNoop(), readFile, writeFile)
+}
+
+// A fail-status check must reference a finding that genuinely exists — not
+// merely a non-empty string. This is the concrete enforcement of the
+// agreed corrective contract's atomicity requirement: record_pulse_finding
+// must have already run and persisted before record_plan_drift_review will
+// mark that check reviewed.
+func TestRecordPlanDriftReviewExecutorRequiresRealFindingForFailStatus(t *testing.T) {
+	ctx := context.Background()
+	ws := concernsWorkspace(t)
+	if _, err := RecordRunConcerns(ctx, ws, "pulse-1", "", "step-a", ConcernPhaseReview,
+		structuredFindingSummary("PLANDRIFT-TEST-1", "step-a's report query no longer resolves")); err != nil {
+		t.Fatalf("record finding: %v", err)
+	}
+	findings, err := LoadPulseFindingLifecycles(ctx, ws, "", -1)
+	if err != nil {
+		t.Fatalf("load findings: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+	realID := findings[0].IssueID
+
+	files := map[string]string{"planning/step_config.json": `{"steps":[{"id":"step-a"}]}`}
+	executor := newPlanDriftReviewTestExecutorForWorkspace(ws, files)
+
+	if _, err := executor(ctx, map[string]interface{}{
+		"step_id": "step-a",
+		"checks": []interface{}{
+			map[string]interface{}{"check_id": "report_query_compatibility", "status": "fail", "evidence": "the query against emails now errors: no such column", "finding_id": "PUL-FABRICATED"},
+		},
+	}); err == nil || !strings.Contains(err.Error(), "does not match any existing Pulse finding") {
+		t.Fatalf("expected rejection for a fabricated finding_id, got: %v", err)
+	}
+
+	if _, err := executor(ctx, map[string]interface{}{
+		"step_id": "step-a",
+		"checks": []interface{}{
+			map[string]interface{}{"check_id": "report_query_compatibility", "status": "fail", "evidence": "the query against emails now errors: no such column", "finding_id": realID},
+		},
+	}); err != nil {
+		t.Fatalf("expected acceptance for a real finding_id %q, got: %v", realID, err)
+	}
 }
 
 func TestRecordPlanDriftReviewExecutorWritesNewRecord(t *testing.T) {
@@ -101,6 +160,39 @@ func TestRecordPlanDriftReviewExecutorWritesNewRecord(t *testing.T) {
 	}
 	if dr.ReviewedAt == "" || dr.ReviewedBy == "" {
 		t.Fatalf("expected reviewed_at/reviewed_by to be populated: %+v", dr)
+	}
+	if dr.NeedsReview {
+		t.Fatalf("a completed review must clear needs_review, got true: %+v", dr)
+	}
+}
+
+// A completed review persists reviewed_through_change_id when the caller
+// supplied one, so a later review knows exactly which changelog entries it
+// still needs to read.
+func TestRecordPlanDriftReviewExecutorPersistsReviewedThroughChangeID(t *testing.T) {
+	ctx := context.Background()
+	files := map[string]string{
+		"planning/step_config.json": `{"steps":[{"id":"step-a"}]}`,
+	}
+	executor := newPlanDriftReviewTestExecutor(files)
+
+	if _, err := executor(ctx, map[string]interface{}{
+		"step_id":                    "step-a",
+		"reviewed_through_change_id": "change-abc123",
+		"checks": []interface{}{
+			map[string]interface{}{"check_id": "report_query_compatibility", "status": "pass", "evidence": "all report queries ran cleanly against the current schema"},
+		},
+	}); err != nil {
+		t.Fatalf("executor returned error: %v", err)
+	}
+
+	var out StepConfigFile
+	if err := json.Unmarshal([]byte(files["planning/step_config.json"]), &out); err != nil {
+		t.Fatalf("updated step_config.json is invalid JSON: %v", err)
+	}
+	dr := out.Steps[0].AgentConfigs.DriftReview
+	if dr == nil || dr.ReviewedThroughChangeID != "change-abc123" {
+		t.Fatalf("expected reviewed_through_change_id = %q, got %+v", "change-abc123", dr)
 	}
 }
 

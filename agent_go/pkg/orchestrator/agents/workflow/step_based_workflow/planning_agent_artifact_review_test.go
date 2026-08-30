@@ -118,31 +118,43 @@ func TestClearDriftReviewAfterPlanUpdate(t *testing.T) {
 		t.Fatalf("clearDriftReviewAfterPlanUpdate returned error: %v", err)
 	}
 	if !cleared {
-		t.Fatalf("expected drift_review to be cleared")
+		t.Fatalf("expected drift_review to be flagged")
 	}
 
 	var out StepConfigFile
 	if err := json.Unmarshal([]byte(files["planning/step_config.json"]), &out); err != nil {
 		t.Fatalf("updated step_config.json is invalid JSON: %v", err)
 	}
-	if got := out.Steps[0].AgentConfigs.DriftReview; got != nil {
-		t.Fatalf("drift_review = %+v, want nil", got)
+	// Stale flag model: the record is flagged, not nulled — its evidence
+	// (Checks/ReviewedAt/ReviewedBy) survives until a completed review
+	// replaces it.
+	got := out.Steps[0].AgentConfigs.DriftReview
+	if got == nil {
+		t.Fatalf("drift_review = nil, want the record preserved with needs_review=true")
+	}
+	if !got.NeedsReview {
+		t.Fatalf("drift_review.needs_review = false, want true after a dependency-triggering edit")
+	}
+	if got.ReviewedAt != "2026-08-01T00:00:00Z" || got.ReviewedBy != "pulse:plan_drift_review" || len(got.Checks) != 1 {
+		t.Fatalf("drift_review evidence was not preserved: %+v", got)
 	}
 	if got := out.Steps[0].AgentConfigs.ReviewNotes; got != "old review" {
 		t.Fatalf("review_notes = %q, want preserved review notes", got)
 	}
 }
 
-func TestClearDriftReviewAfterPlanUpdateSkipsTitleOnly(t *testing.T) {
+// A step already flagged (needs_review already true) from an earlier edit in
+// the same unreviewed window must not report a new "cleared" event — nothing
+// about its due-ness changed.
+func TestClearDriftReviewAfterPlanUpdateIsIdempotentWhenAlreadyFlagged(t *testing.T) {
 	ctx := context.Background()
-	writeCalled := false
 	files := map[string]string{
-		"planning/step_config.json": `{"steps":[{"id":"step-a","agent_configs":{"drift_review":{"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"pulse:plan_drift_review","checks":[]}}}]}`,
+		"planning/step_config.json": `{"steps":[{"id":"step-a","agent_configs":{"drift_review":{"needs_review":true,"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"pulse:plan_drift_review","checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"all report queries ran cleanly"}]}}}]}`,
 	}
-
+	writeCalled := false
 	cleared, err := clearDriftReviewAfterPlanUpdate(ctx, "", "step-a", []PlanFieldChange{{
 		StepID: "step-a",
-		Field:  "title",
+		Field:  "description",
 	}}, func(_ context.Context, path string) (string, error) {
 		return files[path], nil
 	}, func(_ context.Context, path, content string) error {
@@ -154,10 +166,54 @@ func TestClearDriftReviewAfterPlanUpdateSkipsTitleOnly(t *testing.T) {
 		t.Fatalf("clearDriftReviewAfterPlanUpdate returned error: %v", err)
 	}
 	if cleared {
-		t.Fatalf("title-only changes should not clear drift_review")
+		t.Fatalf("an already-flagged review should not report a new clear event")
 	}
 	if writeCalled {
-		t.Fatalf("title-only changes should not write step_config.json")
+		t.Fatalf("an already-flagged review should not trigger a redundant write")
+	}
+}
+
+// The agreed corrective contract is explicit: do not attempt to classify an
+// update as material or cosmetic in Go, because even a title change can alter
+// meaning. Unlike description_reviewed (which legitimately skips a title-only
+// edit — the prose-vs-behavior claim it makes genuinely doesn't move), a
+// drift review's broader claim ("this step's current configured form has
+// been checked") is stale the instant any field changes, title included.
+func TestClearDriftReviewAfterPlanUpdateFlagsOnTitleOnly(t *testing.T) {
+	ctx := context.Background()
+	files := map[string]string{
+		"planning/step_config.json": `{"steps":[{"id":"step-a","agent_configs":{"drift_review":{"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"pulse:plan_drift_review","checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"all report queries ran cleanly"}]}}}]}`,
+	}
+
+	cleared, err := clearDriftReviewAfterPlanUpdate(ctx, "", "step-a", []PlanFieldChange{{
+		StepID: "step-a",
+		Field:  "title",
+	}}, func(_ context.Context, path string) (string, error) {
+		return files[path], nil
+	}, func(_ context.Context, path, content string) error {
+		files[path] = content
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("clearDriftReviewAfterPlanUpdate returned error: %v", err)
+	}
+	if !cleared {
+		t.Fatalf("a title-only change must flag drift_review.needs_review — no field is exempt from the drift-review trigger")
+	}
+
+	var out StepConfigFile
+	if err := json.Unmarshal([]byte(files["planning/step_config.json"]), &out); err != nil {
+		t.Fatalf("failed to parse updated step_config.json: %v", err)
+	}
+	got := out.Steps[0].AgentConfigs.DriftReview
+	if got == nil || !got.NeedsReview {
+		t.Fatalf("drift_review.needs_review should be true after a title-only change, got %#v", got)
+	}
+	// Evidence from the prior review must survive — the stale flag model
+	// preserves it until a completed review replaces it, unlike the earlier
+	// null-on-edit design this superseded.
+	if len(got.Checks) != 1 || got.ReviewedBy != "pulse:plan_drift_review" {
+		t.Fatalf("prior review evidence was not preserved: %+v", got)
 	}
 }
 

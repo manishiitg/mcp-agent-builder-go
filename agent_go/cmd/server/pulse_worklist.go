@@ -34,6 +34,10 @@ const (
 	// current strategy and conditional discovery of materially different
 	// approaches. Those are sequence turns, not independent modules.
 	pulseModuleStrategicReview = pulsemodules.StrategicReviewID
+	// pulseModulePlanDriftReview is event-triggered, not time-cadenced: it is
+	// due whenever any step has no drift_review record, or one flagged
+	// needs_review==true. See validatePlanDriftRouting below.
+	pulseModulePlanDriftReview = pulsemodules.PlanDriftReviewID
 )
 
 // Derived from the canonical registry — see pkg/pulsemodules. Do not restate
@@ -919,6 +923,9 @@ func recordPulseWorklistWithMode(ctx context.Context, workspacePath, pulseRunID,
 	if err := validateDeterministicIntakeRouting(ctx, workspacePath, decisions); err != nil {
 		return nil, err
 	}
+	if err := validatePlanDriftRouting(ctx, workspacePath, decisions); err != nil {
+		return nil, err
+	}
 	normalized, db, err := openPulseModuleStateDB(ctx, workspacePath, true)
 	if err != nil {
 		return nil, err
@@ -1038,6 +1045,45 @@ func validateDeterministicIntakeRouting(ctx context.Context, workspacePath strin
 		}
 	}
 	return fmt.Errorf("technical_review must be due because deterministic intake failed: %s. Route these facts to an agentic Technical Review; they are not automatic Pulse issues and do not authorize a Fixer", strings.Join(reasons, "; "))
+}
+
+// validatePlanDriftRouting is plan_drift_review's due-ness enforcement,
+// mirroring validateDeterministicIntakeRouting's treatment of
+// technical_review. Unlike technical_review's cadence-plus-evidence judgment
+// call, plan_drift_review's due condition is a plain fact: does any step lack
+// a drift_review record, or carry one flagged needs_review==true. There is no
+// cadence math and no judgment for Gate to exercise here — if the fact is
+// true, the module must be marked due, or the worklist is rejected.
+func validatePlanDriftRouting(ctx context.Context, workspacePath string, decisions []PulseWorklistDecision) error {
+	candidates, err := step_based_workflow.CollectPlanDriftCandidates(ctx, workspacePath)
+	if err != nil {
+		// An unreadable or malformed plan.json/step_config.json makes the real
+		// candidate set unknowable — that must never silently read as "nothing
+		// is due." Require either plan_drift_review (if the agent already
+		// suspects drift) or technical_review (to investigate the read/parse
+		// failure itself, which is a platform/data-integrity issue in its own
+		// right) to be due, exactly like a failed deterministic intake signal.
+		for _, decision := range decisions {
+			module := normalizePulseModule(decision.Module)
+			if (module == pulseModulePlanDriftReview || module == pulseModuleTechnicalReview) && decision.Due {
+				return nil
+			}
+		}
+		return fmt.Errorf("plan_drift_review or technical_review must be due: the plan drift candidate scan itself failed and the real candidate set is unknown: %v", err)
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	for _, decision := range decisions {
+		if normalizePulseModule(decision.Module) == pulseModulePlanDriftReview && decision.Due {
+			return nil
+		}
+	}
+	stepIDs := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		stepIDs = append(stepIDs, c.StepID)
+	}
+	return fmt.Errorf("plan_drift_review must be due: %d step(s) have no drift_review record or are flagged needs_review (%s). This is a plain fact, not a judgment call — mark it due", len(candidates), strings.Join(stepIDs, ", "))
 }
 
 func lastPulseModuleCheck(ctx context.Context, workspacePath, module string) time.Time {
@@ -2351,6 +2397,18 @@ func readPulseModuleStateView(ctx context.Context, workspacePath, pulseRunID str
 	// the remainder, so Gate had to derive it from the files each run.
 	planBacklog := step_based_workflow.CollectPlanChangeBacklog(workspacePath)
 	planDependencyIntake := step_based_workflow.BuildPlanChangeDependencyIntake(planBacklog)
+	// Steps with no drift_review record, or one flagged needs_review==true,
+	// with the deterministic Group 1/2 checks Go could run for each already
+	// computed — evidence for both Gate's forced due-decision
+	// (validatePlanDriftRouting) and the plan_drift_review reviewer turn
+	// itself, so it starts from pre-computed results instead of re-deriving
+	// them.
+	planDriftCandidates, planDriftErr := step_based_workflow.CollectPlanDriftCandidates(ctx, workspacePath)
+	planDriftErrorText := ""
+	if planDriftErr != nil {
+		log.Printf("[PULSE] get_pulse_state(view=module): plan drift candidate scan failed for %s: %v", workspacePath, planDriftErr)
+		planDriftErrorText = planDriftErr.Error()
+	}
 	// What each reviewer has actually been finding. Without this the choice
 	// between modules is a guess: nothing distinguished a module that keeps
 	// surfacing real breakage from one that returns clean every time.
@@ -2414,6 +2472,9 @@ func readPulseModuleStateView(ctx context.Context, workspacePath, pulseRunID str
 		"loop_closure":                 loopClosure,
 		"loop_closure_note":            "Read-only deterministic evidence. Gate may weigh verified findings alongside other facts, but they do not mandate a module or authorize mutation. coverage_status must be verified before an empty findings list means clean.",
 		"deterministic_intake":         map[string]interface{}{"runtime": runtimeIntake, "plan_change_dependencies": planDependencyIntake},
+		"plan_drift_candidates":        planDriftCandidates,
+		"plan_drift_candidates_error":  planDriftErrorText,
+		"plan_drift_candidates_note":   "Steps with no drift_review record, or one flagged needs_review==true (evidence from any prior review is preserved on the step's own record in step_config.json, not duplicated here), each with Go-precomputed Check 1/2/4/9 results (report query compatibility, validation_schema db[] rules from step_config.json only, scripted-code queries, db/README.md contract). Checks 5 (validation_schema file rules) and 13 (orphaned tables) are not precomputed here; the plan_drift_review reviewer checks those directly. A failed precomputed check is still evidence, not a filed finding — the reviewer turn records the merged result via record_plan_drift_review and files a Pulse finding for anything unresolved. A non-empty plan_drift_candidates_error means this scan itself failed (unreadable/malformed plan.json or step_config.json) — the candidate list above is empty because it is unknown, not because nothing is due; validatePlanDriftRouting requires plan_drift_review or technical_review due in that case.",
 		"deterministic_intake_note":    "Read-only typed evidence from retained runtime receipts and current-contract plan-change dependency receipts. A failed signal requires agentic Technical Review, but is not an automatic Pulse issue or Fixer authorization. coverage_status must be verified before an empty findings list means clean.",
 		"module_review_history":        reviewHistory,
 		"review_history_note":          "What each reviewer concluded the last few times it ran, most recently run first. A module absent from this list has not run in the retained window at all. Use it to justify each skip: a module that keeps returning real findings is a poor candidate for another cooldown, and one that has come back clean repeatedly is a good one. A verdict here is the reviewer's conclusion, which is not the same as whether anything was then fixed.",

@@ -275,16 +275,25 @@ type AgentConfigs struct {
 	DeclaredExecutionModeReason  string           `json:"declared_execution_mode_reason,omitempty"`  // Audit trail: why the declared mode is the best fit. Not consumed by Go runtime, but preserved so future LLM reviewers (harden, replan) reading raw step_config.json see the original decision rationale.
 	DescriptionReviewed          *bool            `json:"description_reviewed,omitempty"`            // True when the step description has been reviewed — clarity AND secrets/hardcoded values.
 	ReviewNotes                  string           `json:"review_notes,omitempty"`                    // Free-form rationale covering why config, locks, learning/KB choices, or description review state are justified.
-	DriftReview                  *StepDriftReview `json:"drift_review,omitempty"`                    // Plan-drift review record: which drift checks were run against this step's CURRENT config/output and what each found. Nil means "not reviewed since the last dependency-triggering change" — the same trigger that clears description_reviewed also nils this out (clearDriftReviewAfterPlanUpdate), and a nil record on any step is exactly what makes the plan_drift_review Pulse module due. Set by that module or its manual slash-command equivalent; never by a step-editing agent directly.
+	DriftReview                  *StepDriftReview `json:"drift_review,omitempty"`                    // Plan-drift review record: evidence from the last completed plan_drift_review pass over this step, plus a NeedsReview flag every persisted field change sets true (clearDriftReviewAfterPlanUpdate). Nil (no record yet) or NeedsReview==true both mean "due." Set by that module or its manual slash-command equivalent; never by a step-editing agent directly.
 }
 
-// StepDriftReview is one completed plan-drift review pass over a single step —
-// evidence per check, not a bare "reviewed: true" boolean, so a review can't be
-// rubber-stamped without recording what it actually looked at.
+// StepDriftReview is the "stale flag" model (superseding the earlier
+// null-on-edit design): evidence is preserved across edits rather than
+// destroyed, and a step's due-ness is its own NeedsReview flag, not the
+// presence/absence of the whole record. Every persisted plan-step field
+// change sets NeedsReview=true and leaves everything else untouched; only a
+// completed plan_drift_review turn replaces Checks/ReviewedAt/ReviewedBy/
+// ReviewedThroughChangeID and clears the flag. This means a step's last real
+// review is always available as evidence, even while a newer edit has made it
+// stale — the reviewer reads it plus only the changelog entries after
+// ReviewedThroughChangeID, instead of starting from nothing.
 type StepDriftReview struct {
-	ReviewedAt string           `json:"reviewed_at"` // RFC3339
-	ReviewedBy string           `json:"reviewed_by"` // e.g. "pulse:plan_drift_review" or a user-invoked slash-command session id
-	Checks     []StepDriftCheck `json:"checks"`
+	NeedsReview             bool             `json:"needs_review"`
+	ReviewedAt              string           `json:"reviewed_at"`                          // RFC3339, of the last completed review
+	ReviewedBy              string           `json:"reviewed_by"`                          // e.g. "pulse:plan_drift_review" or a user-invoked slash-command session id
+	ReviewedThroughChangeID string           `json:"reviewed_through_change_id,omitempty"` // the latest planning/changelog change_id this review consumed
+	Checks                  []StepDriftCheck `json:"checks"`
 }
 
 // StepDriftCheck is the evidence-required record for one drift check against
@@ -294,6 +303,16 @@ type StepDriftCheck struct {
 	CheckID  string `json:"check_id"` // stable id, e.g. "report_query_compatibility", "kb_access_mode"
 	Status   string `json:"status"`   // "pass" | "fail" | "fixed"
 	Evidence string `json:"evidence"` // what was compared and what was found — required, not optional
+	// FindingID is the durable Pulse issue_id (e.g. "PUL-xxxxxxxx") this check's
+	// failure was filed as, via record_pulse_finding. Required when Status is
+	// "fail" — record_plan_drift_review rejects a fail-status check with no
+	// finding_id, so a failed check can never be persisted as "reviewed"
+	// without a corresponding repair item already existing. This closes the
+	// window where the review call succeeds, the finding call never happens
+	// (crash, turn ends, tool error), and the failure silently disappears from
+	// both the drift record (marked reviewed) and the Pulse backlog (no
+	// finding filed).
+	FindingID string `json:"finding_id,omitempty"`
 }
 
 // ============================================================================
@@ -3456,15 +3475,29 @@ func clearDescriptionReviewedAfterPlanUpdate(ctx context.Context, workspacePath,
 	return false, nil
 }
 
-// clearDriftReviewAfterPlanUpdate mirrors clearDescriptionReviewedAfterPlanUpdate
-// exactly — same trigger condition, same read/find/clear/write shape — because a
-// step's drift review is stale for precisely the same set of field changes that
-// stale a description review: anything that changes what the step actually does.
-// A nil DriftReview on any step is what makes the plan_drift_review Pulse module
-// due, so this is the mechanism that turns "we edited a step" into "Pulse will
-// now notice."
+// clearDriftReviewAfterPlanUpdate flags an existing drift review stale rather
+// than destroying it — the "stale flag" model. It deliberately does NOT share
+// clearDescriptionReviewedAfterPlanUpdate's field classifier: a description
+// review is specifically about whether the step's prose still matches its
+// behavior, so a title-only edit legitimately leaves it untouched, but a
+// drift review's broader claim ("this step's current configured form has
+// been checked") is stale the instant any field changes, title included. Do
+// not attempt to classify an update as material or cosmetic in Go — even a
+// title change can alter meaning, and classification would create a new
+// false-negative path. The trigger condition here mirrors
+// planStepUpdateRequiresDependentArtifactReview's own unconditional
+// len(fieldChanges) > 0 gate, not the description-review classifier.
+//
+// A step with NeedsReview==true (or no record at all) is what makes the
+// plan_drift_review Pulse module due — this is the mechanism that turns "we
+// edited a step" into "Pulse will now notice," without discarding the
+// step's last real review: Checks/ReviewedAt/ReviewedBy/
+// ReviewedThroughChangeID stay exactly as they were until a completed
+// plan_drift_review turn replaces them. The plan-mod tool's own call already
+// appends the changelog entry for this field change elsewhere in the same
+// turn — no separate changelog entry is needed here.
 func clearDriftReviewAfterPlanUpdate(ctx context.Context, workspacePath, stepID string, fieldChanges []PlanFieldChange, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error) (bool, error) {
-	if !planStepUpdateInvalidatesDescriptionReview(fieldChanges) {
+	if len(fieldChanges) == 0 {
 		return false, nil
 	}
 
@@ -3477,9 +3510,16 @@ func clearDriftReviewAfterPlanUpdate(ctx context.Context, workspacePath, stepID 
 			continue
 		}
 		if configs[i].AgentConfigs == nil || configs[i].AgentConfigs.DriftReview == nil {
+			// No prior review to flag — a step with no drift_review record at
+			// all is already a plan_drift_review candidate on its own.
 			return false, nil
 		}
-		clearStepConfigField(&configs[i], "drift_review")
+		if configs[i].AgentConfigs.DriftReview.NeedsReview {
+			// Already flagged by an earlier edit in this same unreviewed window;
+			// nothing changed about due-ness, so this is not a new "cleared" event.
+			return false, nil
+		}
+		configs[i].AgentConfigs.DriftReview.NeedsReview = true
 		if err := writeStepConfigViaFileCallback(ctx, workspacePath, configs, writeFile); err != nil {
 			return false, err
 		}
@@ -3514,7 +3554,7 @@ func buildPlanStepDependentArtifactReviewNotice(stepID string, fieldChanges []Pl
 		b.WriteString("- Cleared step_config.agent_configs.description_reviewed because the reviewed step contract may now be stale.\n")
 	}
 	if driftReviewCleared {
-		b.WriteString("- Cleared step_config.agent_configs.drift_review — the plan_drift_review Pulse module will now treat this step as due until it (or the manual review-artifact-drift slash command) records fresh evidence via record_plan_drift_review.\n")
+		b.WriteString("- Flagged step_config.agent_configs.drift_review.needs_review=true — the plan_drift_review Pulse module will now treat this step as due until it (or the manual review-artifact-drift slash command) records fresh evidence via record_plan_drift_review.\n")
 	}
 	b.WriteString("- Pre-validation: confirm validation_schema still matches the new output files/fields; update plan validation_schema or step_config validation_schema if needed.\n")
 	b.WriteString("- Learnings: review learning_objective, learnings_access, lock_learnings, and any learnings/_global or learnings/" + stepID + " content for stale execution know-how.\n")
@@ -3591,7 +3631,7 @@ func buildTodoTaskRouteArtifactReviewNotice(parentStepID, routeID, action string
 		b.WriteString("- Cleared the parent step description_reviewed flag because its orchestration contract changed.\n")
 	}
 	if driftReviewCleared {
-		b.WriteString("- Cleared the parent step drift_review flag — plan_drift_review will treat it as due again.\n")
+		b.WriteString("- Flagged the parent step's drift_review.needs_review=true — plan_drift_review will treat it as due again.\n")
 	}
 	switch action {
 	case "added":

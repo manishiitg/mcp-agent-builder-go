@@ -512,6 +512,70 @@ func TestPulseWorklistRequiresTechnicalReviewForFailedRuntimeIntake(t *testing.T
 	}
 }
 
+// plan_drift_review's due-ness is a plain fact (any step with a null
+// drift_review record), not agentic judgment — mirrors the Technical Review
+// intake-routing tests above, but for validatePlanDriftRouting.
+func TestPulseWorklistRequiresPlanDriftReviewWhenCandidatesExist(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	workspacePath := "Workflow/example"
+	planningDir := filepath.Join(root, workspacePath, "planning")
+	if err := os.MkdirAll(planningDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	planJSON := `{"steps":[{"id":"step-a","type":"regular"}]}`
+	if err := os.WriteFile(filepath.Join(planningDir, "plan.json"), []byte(planJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stepConfig := `{"steps":[{"id":"step-a"}]}`
+	if err := os.WriteFile(filepath.Join(planningDir, "step_config.json"), []byte(stepConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	skipped := completePulseWorklistDecisions(nil)
+	if _, err := recordPulseWorklist(context.Background(), workspacePath, "pulse-drift-check-skip", skipped); err == nil ||
+		!strings.Contains(err.Error(), "plan_drift_review must be due") || !strings.Contains(err.Error(), "step-a") {
+		t.Fatalf("a step with a null drift_review record was allowed to skip plan_drift_review: %v", err)
+	}
+
+	due := completePulseWorklistDecisions(map[string]PulseWorklistDecision{
+		pulseModulePlanDriftReview: {Module: pulseModulePlanDriftReview, Due: true, Reason: "step-a has a null drift_review record."},
+	})
+	if _, err := recordPulseWorklist(context.Background(), workspacePath, "pulse-drift-check-due", due); err != nil {
+		t.Fatalf("plan_drift_review routing was rejected despite being marked due: %v", err)
+	}
+}
+
+// A scan failure (unreadable/malformed plan.json or step_config.json) must
+// never silently read as "nothing is due" — the real candidate set is
+// unknown, not empty, so Gate must route it to either plan_drift_review or
+// technical_review rather than being allowed to skip both.
+func TestPulseWorklistRequiresRoutingWhenPlanDriftScanFails(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	workspacePath := "Workflow/example"
+	planningDir := filepath.Join(root, workspacePath, "planning")
+	if err := os.MkdirAll(planningDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(planningDir, "plan.json"), []byte("{not valid json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	skipped := completePulseWorklistDecisions(nil)
+	if _, err := recordPulseWorklist(context.Background(), workspacePath, "pulse-drift-scan-fail-skip", skipped); err == nil ||
+		!strings.Contains(err.Error(), "plan_drift_review or technical_review must be due") {
+		t.Fatalf("a failed plan drift scan was allowed to skip both plan_drift_review and technical_review: %v", err)
+	}
+
+	due := completePulseWorklistDecisions(map[string]PulseWorklistDecision{
+		pulseModuleTechnicalReview: {Module: pulseModuleTechnicalReview, Due: true, Reason: "Investigate malformed plan.json."},
+	})
+	if _, err := recordPulseWorklist(context.Background(), workspacePath, "pulse-drift-scan-fail-due", due); err != nil {
+		t.Fatalf("technical_review routing was rejected despite being marked due: %v", err)
+	}
+}
+
 func TestPulseWorklistDecisionRejectsReviewPlanFields(t *testing.T) {
 	_, err := pulseWorklistDecisionsFromArgs([]interface{}{map[string]interface{}{
 		"module":  pulseModuleTechnicalReview,
