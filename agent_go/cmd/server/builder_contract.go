@@ -204,7 +204,7 @@ var builderInvariantCertifications = map[BuilderInvariantID]BuilderInvariantCert
 		TestFile:    "agent_go/cmd/server/multi_turn_chat_e2e_real_test.go",
 		TestName:    "TestMultiTurnChatE2E_ClaudeCode",
 		Env:         []string{"RUN_CLAUDE_CODE_EXPERIMENTAL_LIVE_E2E=1"},
-		Description: "Multi-turn chat with canary tokens injected in turn 1, verified in turn 2 — proves the provider's persistent session carries memory across turns and the orchestrator doesn't accidentally drop history. Per-CLI variants (_Codex, _Cursor, _Agy, _Pi) follow the same shape.",
+		Description: "Multi-turn chat with canary tokens injected in turn 1, verified in turn 2 — proves the provider's persistent session carries memory across turns and the orchestrator doesn't accidentally drop history. Per-CLI variants (_Codex, _Cursor) follow the same shape.",
 		RealE2E:     true,
 	},
 	InvTerminalLifecycleAPI: {
