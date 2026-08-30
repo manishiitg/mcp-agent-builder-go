@@ -205,6 +205,7 @@ func createRecordPlanDriftReviewExecutor(workspacePath string, logger loggerv2.L
 			ReviewedBy:              reviewedBy,
 			ReviewedThroughChangeID: reviewedThroughChangeID,
 			Checks:                  checks,
+			ContractVersion:         planDriftReviewContractVersion,
 		}
 
 		found := false

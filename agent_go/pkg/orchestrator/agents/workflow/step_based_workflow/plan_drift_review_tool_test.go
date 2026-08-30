@@ -164,6 +164,12 @@ func TestRecordPlanDriftReviewExecutorWritesNewRecord(t *testing.T) {
 	if dr.NeedsReview {
 		t.Fatalf("a completed review must clear needs_review, got true: %+v", dr)
 	}
+	// PLAT-259 second independent review: a completed review must stamp the
+	// current contract version, or CollectPlanDriftCandidates would treat
+	// this brand-new review as already stale.
+	if dr.ContractVersion != planDriftReviewContractVersion {
+		t.Fatalf("drift_review.contract_version = %d, want %d (the current contract version)", dr.ContractVersion, planDriftReviewContractVersion)
+	}
 }
 
 // A completed review persists reviewed_through_change_id when the caller

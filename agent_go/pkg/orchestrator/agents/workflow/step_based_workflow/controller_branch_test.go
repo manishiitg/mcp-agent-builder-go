@@ -1,11 +1,15 @@
 package step_based_workflow
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workspace"
 	loggerv2 "github.com/manishiitg/mcpagent/logger/v2"
 )
 
@@ -137,6 +141,121 @@ func TestBranchPlanStepMarshalJSONAlwaysSetsType(t *testing.T) {
 	}
 	if decoded["branch_question"] != "Which path?" {
 		t.Fatalf("decoded branch_question = %v, want %q", decoded["branch_question"], "Which path?")
+	}
+}
+
+// TestExecuteRoutingStepRunsRealBranchExecution is the second independent
+// PLAT-259 review's finding #4: TestBranchStepEndToEndLifecycle exercises
+// validation/config/navigation in isolation, but never calls the real
+// executeRoutingStep/controller execution path -- so nothing had actually
+// proven a *BranchPlanStep survives the real executor, only the pieces
+// around it. This drives a *BranchPlanStep through the real
+// executeRoutingStep, using the same httptest.NewServer + WorkspaceClient
+// mocking pattern as base_orchestrator_workspace_test.go
+// (TestReadWorkspaceFileAcceptsExistingEmptyFile): every GET (route-file
+// preseed reads) answers "not found" so resolution falls through to
+// default_route_id -- the same deterministic path a plain *RoutingPlanStep
+// already exercises live -- and every other method answers success (folder
+// creation, routing-evaluation.json write), matching the executor's
+// fail-open, warn-only handling of those secondary writes.
+func TestExecuteRoutingStepRunsRealBranchExecution(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet:
+			// Every read (route-file preseed candidates) answers "not found",
+			// so resolveDeterministicRoutingSelection falls through to
+			// default_route_id -- the same path a real *RoutingPlanStep
+			// already exercises live when no route_selection.json exists yet.
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"success":false,"error":"not found"}`))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/api/folders"):
+			w.WriteHeader(http.StatusCreated) // createFolderViaAPI requires 201 or 409
+			_, _ = w.Write([]byte(`{"success":true}`))
+		default:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"success":true}`))
+		}
+	}))
+	defer server.Close()
+	t.Setenv("WORKSPACE_API_URL", server.URL)
+
+	base, err := orchestrator.NewBaseOrchestrator(
+		loggerv2.NewDefault(),
+		nil,
+		orchestrator.OrchestratorTypeWorkflow,
+		"Workflow/branch-exec-demo",
+		0,
+		"",
+		nil,
+		nil,
+		false,
+		&orchestrator.LLMConfig{},
+		1,
+		nil,
+		nil,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("NewBaseOrchestrator returned error: %v", err)
+	}
+	base.WorkspaceClient = workspace.NewClient(server.URL)
+	base.SetWorkspacePath("Workflow/branch-exec-demo")
+	hcpo := &StepBasedWorkflowOrchestrator{
+		BaseOrchestrator:  base,
+		selectedRunFolder: "run-1",
+	}
+
+	branchStep := &BranchPlanStep{
+		CommonStepFields: CommonStepFields{ID: "branch-step", Title: "Branch Step"},
+		BranchQuestion:   "Which path?",
+		Routes:           deterministicRoutingTestRoutes(),
+		DefaultRouteID:   "route-search",
+	}
+	allSteps := []PlanStepInterface{branchStep}
+
+	selectedRouteID, executionResult, err := hcpo.executeRoutingStep(
+		context.Background(),
+		branchStep,
+		0,
+		&StepProgress{},
+		nil,
+		0,
+		nil,
+		allSteps,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("executeRoutingStep returned error for a well-formed branch step: %v", err)
+	}
+	if executionResult != "" {
+		t.Fatalf("executeRoutingStep executionResult = %q, want empty (deterministic switch never runs an agent)", executionResult)
+	}
+	if selectedRouteID != "route-search" {
+		t.Fatalf("executeRoutingStep selectedRouteID = %q, want default_route_id %q (no route_selection.json present)", selectedRouteID, "route-search")
+	}
+	if branchStep.SelectedRouteID != "route-search" {
+		t.Fatalf("executeRoutingStep did not persist SetSelectedRouteID onto the branch step struct: got %q", branchStep.SelectedRouteID)
+	}
+	if branchStep.RoutingResponse == nil || branchStep.RoutingResponse.SelectedRouteID != "route-search" {
+		t.Fatalf("executeRoutingStep did not persist SetRoutingResponse onto the branch step struct: got %+v", branchStep.RoutingResponse)
+	}
+
+	// Close the loop: feed the real executor's output into the navigation
+	// helper, exactly as the main execution loop does, and confirm it
+	// resolves to the selected route's real next_step_id.
+	nextStepID := nextStepIDForSelectedRoute(branchStep, selectedRouteID)
+	var wantNextStepID string
+	for _, route := range branchStep.Routes {
+		if route.RouteID == "route-search" {
+			wantNextStepID = route.NextStepID
+		}
+	}
+	if wantNextStepID == "" {
+		t.Fatalf("test fixture bug: route-search has no next_step_id in %+v", branchStep.Routes)
+	}
+	if nextStepID != wantNextStepID {
+		t.Fatalf("nextStepIDForSelectedRoute after real execution = %q, want %q", nextStepID, wantNextStepID)
 	}
 }
 

@@ -50,8 +50,8 @@ func planDriftCandidateWorkspace(t *testing.T, workspacePath, planJSON, stepConf
 const twoStepPlan = `{"steps":[{"id":"step-a","type":"regular"},{"id":"step-b","type":"regular"}]}`
 
 const reviewedStepConfig = `{"steps":[
-  {"id":"step-a","agent_configs":{"drift_review":{"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"pulse:plan_drift_review","checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"all report queries ran cleanly"}]}}},
-  {"id":"step-b","agent_configs":{"drift_review":{"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"pulse:plan_drift_review","checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"all report queries ran cleanly"}]}}}
+  {"id":"step-a","agent_configs":{"drift_review":{"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"pulse:plan_drift_review","contract_version":2,"checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"all report queries ran cleanly"}]}}},
+  {"id":"step-b","agent_configs":{"drift_review":{"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"pulse:plan_drift_review","contract_version":2,"checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"all report queries ran cleanly"}]}}}
 ]}`
 
 func TestCollectPlanDriftCandidatesNilWhenNoPlan(t *testing.T) {
@@ -74,6 +74,31 @@ func TestCollectPlanDriftCandidatesNilWhenAllReviewed(t *testing.T) {
 	}
 	if got != nil {
 		t.Fatalf("CollectPlanDriftCandidates = %#v, want nil when every plan step already has a drift_review record", got)
+	}
+}
+
+// TestCollectPlanDriftCandidatesReflagsStaleContractVersion is the second
+// independent PLAT-259 review's finding #1: a routing step reviewed BEFORE
+// phase B added route_structural_isolation/route_eval_pairing has
+// needs_review=false and would otherwise never resurface, even though the
+// reviewer turn is now required to run two more checks against it. A
+// drift_review with no contract_version at all (recorded before that field
+// existed) or one below the current planDriftReviewContractVersion must be
+// treated as due, exactly like needs_review=true.
+func TestCollectPlanDriftCandidatesReflagsStaleContractVersion(t *testing.T) {
+	planJSON := `{"steps":[{"type":"routing","id":"router-a","title":"Router","routing_question":"Which path?","routes":[
+    {"route_id":"r1","route_name":"One","condition":"c","next_step_id":"end"},
+    {"route_id":"r2","route_name":"Two","condition":"c","next_step_id":"end"}
+  ]}]}`
+	stepConfig := `{"steps":[{"id":"router-a","agent_configs":{"drift_review":{"needs_review":false,"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"x","checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"reviewed before phase B added route checks"}]}}}]}`
+	planDriftCandidateWorkspace(t, "Workflow/drift-candidates-stale-contract", planJSON, stepConfig)
+
+	got, err := CollectPlanDriftCandidates(context.Background(), "Workflow/drift-candidates-stale-contract")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 || got[0].StepID != "router-a" {
+		t.Fatalf("CollectPlanDriftCandidates = %#v, want router-a re-flagged as due despite needs_review=false, because its drift_review predates the current contract version", got)
 	}
 }
 
@@ -104,7 +129,7 @@ func TestCollectPlanDriftCandidatesErrorsOnMalformedStepConfig(t *testing.T) {
 // never been reviewed, exactly like one with a row but a null drift_review.
 // A missing config row must not be invisible to the scan.
 func TestCollectPlanDriftCandidatesIncludesStepsWithNoConfigRowAtAll(t *testing.T) {
-	stepConfig := `{"steps":[{"id":"step-a","agent_configs":{"drift_review":{"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"x","checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"already reviewed"}]}}}]}`
+	stepConfig := `{"steps":[{"id":"step-a","agent_configs":{"drift_review":{"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"x","contract_version":2,"checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"already reviewed"}]}}}]}`
 	planDriftCandidateWorkspace(t, "Workflow/drift-candidates", twoStepPlan, stepConfig)
 	got, err := CollectPlanDriftCandidates(context.Background(), "Workflow/drift-candidates")
 	if err != nil {
@@ -133,7 +158,7 @@ func TestCollectPlanDriftCandidatesAllStepsPendingWhenNoStepConfigFileAtAll(t *t
 
 func TestCollectPlanDriftCandidatesListsUnreviewedStepsOnly(t *testing.T) {
 	stepConfig := `{"steps":[
-  {"id":"step-a","agent_configs":{"drift_review":{"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"x","checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"already reviewed, must not reappear"}]}}},
+  {"id":"step-a","agent_configs":{"drift_review":{"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"x","contract_version":2,"checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"already reviewed, must not reappear"}]}}},
   {"id":"step-b"}
 ]}`
 	planDriftCandidateWorkspace(t, "Workflow/drift-candidates", twoStepPlan, stepConfig)
@@ -155,7 +180,7 @@ func TestCollectPlanDriftCandidatesListsUnreviewedStepsOnly(t *testing.T) {
 // only the flag drives due-ness.
 func TestCollectPlanDriftCandidatesIncludesFlaggedSteps(t *testing.T) {
 	stepConfig := `{"steps":[
-  {"id":"step-a","agent_configs":{"drift_review":{"needs_review":false,"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"x","checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"clean, must not reappear"}]}}},
+  {"id":"step-a","agent_configs":{"drift_review":{"needs_review":false,"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"x","contract_version":2,"checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"clean, must not reappear"}]}}},
   {"id":"step-b","agent_configs":{"drift_review":{"needs_review":true,"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"x","checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"stale after a later edit"}]}}}
 ]}`
 	planDriftCandidateWorkspace(t, "Workflow/drift-candidates", twoStepPlan, stepConfig)
@@ -312,5 +337,45 @@ func TestCollectPlanDriftCandidatesPopulatesStepTypeFromPlanJSON(t *testing.T) {
 	}
 	if byID["regular-b"].StepType != "regular" {
 		t.Fatalf("regular-b StepType = %q, want %q", byID["regular-b"].StepType, "regular")
+	}
+}
+
+// TestCollectPlanDriftCandidatesPopulatesStepTypeForNestedRoutingStep covers
+// the second independent PLAT-259 review's finding: candidate discovery
+// (planStepIDsFromPlanJSON) already recurses into a todo_task's
+// predefined_routes sub_agent_step, so a nested routing step is a real
+// candidate, but the step-type lookup previously only walked top-level
+// plan.Steps -- the nested routing step reached the reviewer with an empty
+// StepType, silently skipping route_structural_isolation/route_eval_pairing
+// for it.
+func TestCollectPlanDriftCandidatesPopulatesStepTypeForNestedRoutingStep(t *testing.T) {
+	const workspacePath = "Workflow/drift-candidates-nested-routing"
+	planJSON := `{"steps":[
+  {"type":"todo_task","id":"todo-a","title":"Todo","description":"d","predefined_routes":[
+    {"route_id":"nested-router","route_name":"Nested Router","condition":"c","sub_agent_step":{
+      "type":"routing","id":"nested-router","title":"Nested Router","routing_question":"Which path?","routes":[
+        {"route_id":"r1","route_name":"One","condition":"c","next_step_id":"end"},
+        {"route_id":"r2","route_name":"Two","condition":"c","next_step_id":"end"}
+      ]
+    }}
+  ]}
+]}`
+	stepConfig := `{"steps":[{"id":"todo-a"},{"id":"nested-router"}]}`
+	planDriftCandidateWorkspace(t, workspacePath, planJSON, stepConfig)
+
+	got, err := CollectPlanDriftCandidates(context.Background(), workspacePath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	byID := map[string]PlanDriftCandidate{}
+	for _, c := range got {
+		byID[c.StepID] = c
+	}
+	nested, ok := byID["nested-router"]
+	if !ok {
+		t.Fatalf("expected a candidate for the nested routing step, got %#v", got)
+	}
+	if nested.StepType != "routing" {
+		t.Fatalf("nested-router StepType = %q, want %q", nested.StepType, "routing")
 	}
 }

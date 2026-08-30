@@ -12,6 +12,22 @@ import (
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/fsutil"
 )
 
+// planDriftReviewContractVersion identifies which set of checks a completed
+// plan_drift_review is required to have run. Bump it whenever the set of
+// checks the reviewer turn must perform changes (a new Group 1/2 deterministic
+// check, or a new Group 3 judgment check in plan-drift-review.md) -- a step's
+// own persisted-edit NeedsReview flag only fires on an edit to THAT step, so
+// it never catches a change to the review contract itself. A review recorded
+// under an older contract version is due again even though the step hasn't
+// changed (second independent PLAT-259 review, 2026-08-30: phase B added
+// route_structural_isolation/route_eval_pairing, but a routing step already
+// marked reviewed before that change stayed clean and silently never got
+// re-reviewed against the new checks). History: 1 = original 9 deterministic
+// checks + step-description/learnings/KB/DB-normalization judgment checks
+// (PLAT-258 phases 1-6). 2 = adds route_structural_isolation/
+// route_eval_pairing for routing steps (PLAT-259 phase B).
+const planDriftReviewContractVersion = 2
+
 // PlanDriftCandidate is one step with no drift_review record at all, or one
 // whose record has needs_review==true (flagged stale by a dependency-
 // triggering plan edit since its last completed review), together with the
@@ -64,6 +80,31 @@ func planStepIDsFromPlanJSON(planContent string) (map[string]bool, error) {
 		collectRawPlanStepIDs(raw, ids)
 	}
 	return ids, nil
+}
+
+// collectStepTypesByID records step.StepType() for every step, recursing
+// into a todo_task's predefined_routes' sub_agent_step exactly the way
+// collectRawPlanStepIDs/collectKnownWorkflowStepIDs already recurse for step
+// IDs -- a nested sub-agent step (which can itself be a routing or branch
+// step) is a real, independently-typed plan.json step, not part of its
+// parent todo_task's own type.
+func collectStepTypesByID(steps []PlanStepInterface, out map[string]string) {
+	for _, step := range steps {
+		if step == nil {
+			continue
+		}
+		if id := strings.TrimSpace(step.GetID()); id != "" {
+			out[id] = string(step.StepType())
+		}
+		if todo, ok := step.(*TodoTaskPlanStep); ok {
+			for _, route := range todo.PredefinedRoutes {
+				if route.SubAgentStep == nil {
+					continue
+				}
+				collectStepTypesByID([]PlanStepInterface{route.SubAgentStep}, out)
+			}
+		}
+	}
 }
 
 // CollectPlanDriftCandidates scans planning/plan.json for the plan's real
@@ -125,13 +166,16 @@ func CollectPlanDriftCandidates(ctx context.Context, workspacePath string) ([]Pl
 	// branch and everything else without an extra lookup. Best-effort: a
 	// step type this typed parse doesn't recognize just leaves StepType
 	// empty for that id, it does not fail the whole scan (planStepIDsFromPlanJSON's
-	// raw-JSON walk above is what actually determines candidacy).
+	// raw-JSON walk above is what actually determines candidacy). Recurses
+	// into todo_task predefined_routes' sub_agent_step the same way
+	// planStepIDsFromPlanJSON's raw-JSON walk does -- a nested routing step
+	// is a real candidate (its id is in stepIDs) and must not silently lose
+	// its type, or route_structural_isolation/route_eval_pairing get skipped
+	// for it (second independent review, 2026-08-30).
 	stepTypeByID := map[string]string{}
 	var plan PlanningResponse
 	if err := json.Unmarshal(planRaw, &plan); err == nil {
-		for _, step := range plan.Steps {
-			stepTypeByID[step.GetID()] = string(step.StepType())
-		}
+		collectStepTypesByID(plan.Steps, stepTypeByID)
 	}
 
 	configPath := filepath.Join(fsutil.WorkspaceDocsRoot(), filepath.FromSlash(workspacePath), PlanningFolderName, "step_config.json")
@@ -155,7 +199,9 @@ func CollectPlanDriftCandidates(ctx context.Context, workspacePath string) ([]Pl
 	var pendingStepIDs []string
 	for id := range stepIDs {
 		cfg, ok := byID[id]
-		if !ok || cfg.AgentConfigs == nil || cfg.AgentConfigs.DriftReview == nil || cfg.AgentConfigs.DriftReview.NeedsReview {
+		if !ok || cfg.AgentConfigs == nil || cfg.AgentConfigs.DriftReview == nil ||
+			cfg.AgentConfigs.DriftReview.NeedsReview ||
+			cfg.AgentConfigs.DriftReview.ContractVersion < planDriftReviewContractVersion {
 			pendingStepIDs = append(pendingStepIDs, id)
 		}
 	}

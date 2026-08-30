@@ -92,11 +92,27 @@ judge:
 - **`route_eval_pairing`** — check whether the workflow has an
   `evaluation/evaluation_plan.json` at all. If it does not, this check is
   out of scope for this step — record it `pass` with evidence saying the
-  workflow has no eval plan, nothing to pair. If it does, look for at least
-  one eval step whose `applies_to_routes` references this routing step's ID
-  (e.g. `applies_to_routes: [{"routing_step_id":"<this step's id>",
-  "route_ids":[...]}]` — see `references/evaluation-plan.md`). No matching
-  eval step for a workflow that otherwise has an eval plan is the finding.
+  workflow has no eval plan, nothing to pair. If it does, this check is
+  about **coverage of every route this step declares, not just any one
+  eval reference** (a single eval covering 1 of this step's 5 routes must
+  not pass): collect every eval step whose `applies_to_routes` names this
+  routing step's ID (e.g. `applies_to_routes:
+  [{"routing_step_id":"<this step's id>", "route_ids":[...]}]` — see
+  `references/evaluation-plan.md`), union their `route_ids`, and compare
+  that union against this step's own declared `routes[].route_id` set.
+  Missing routes are the finding — name them by `route_id` in the
+  evidence. Two carve-outs, both judgment calls, not mechanical: (1) an
+  eval step with no `applies_to_routes` at all runs for every execution
+  regardless of route, so if it genuinely evaluates something the routing
+  decision itself doesn't affect (e.g. a global output-format or
+  cost-discipline check), it can count as intentionally route-agnostic
+  coverage for routes that have no route-specific eval step — but if it
+  only evaluates the behavior of the specific branch the run happened to
+  take, it does not count as covering the routes it never sees. (2) a
+  route whose destination is a trivial no-op (e.g. `next_step_id` goes
+  straight to `"end"` with nothing produced) may legitimately have nothing
+  worth evaluating — judge whether that's really true before treating it
+  as covered.
 
 ### 3. Hand off real failures BEFORE persisting the review
 
