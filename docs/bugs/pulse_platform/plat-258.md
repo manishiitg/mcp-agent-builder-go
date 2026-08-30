@@ -571,7 +571,23 @@ The lifecycle is:
    null and the next Pulse run retries it. If a completed review creates an
    unresolved human/platform/fixer item, the review record and linked item
    must be committed atomically.
+7. Scheduled Pulse and the standalone artifact-review slash command must
+   call the **same** candidate collector, reviewer contract, safe-fix path,
+   and completion writer. The slash command is a manual entry point into the
+   module, not a separate checklist implementation. It must select the same
+   canonical steps whose `drift_review` is missing/null, consume the same
+   changelog evidence, and populate the same record only after completion.
+   If no canonical step is due, it reports `no plan drift review due` and
+   performs no duplicate review.
 
 This preserves review history without making the changelog part of due-ness:
 `drift_review == null` triggers the work; the changelog explains what changed
 and helps the agent determine its effects.
+
+Acceptance must exercise both entry points against the same fixture: first
+verify that scheduled and slash dispatch choose the same null-review steps
+and produce the same durable result, then rerun the slash command and verify
+that it cleanly reports no work. The current standalone
+`/review-artifact-drift` checklist does not yet provide this parity and must
+be routed through the shared `plan_drift_review` implementation rather than
+maintained as an independent behavior.
