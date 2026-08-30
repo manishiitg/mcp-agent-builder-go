@@ -106,6 +106,21 @@ capture the agreed shape before implementation work is scoped and started.
   Execution Logs / reporting surfaces, and how it interacts with the
   existing step-summary view for plans with zero `routing` steps.
 
+**Reuse PLAT-258's `plan_drift_review` infrastructure instead of building a
+new agentic-check mechanism.** PLAT-258 (landed the same day, phases 1-3)
+built exactly the durable-evidence-required-record + due-detection +
+privileged-recording-tool shape this ticket's "agentic, not Go-enforced"
+route best-practices need: a per-step record nulled on any dependency-
+triggering edit, a `record_plan_drift_review` tool with real evidence-length
+enforcement (rejects placeholder text), writing atomically through the same
+FolderGuard-privileged path `update_step_config` uses. Rather than inventing
+a parallel mechanism for "does this route share a step with a sibling
+route" / "does this route have an eval," the implementation phase should
+add route-specific check types onto `plan_drift_review` (or register a
+sibling module reusing the same `StepDriftReview`/`StepDriftCheck` types
+and `record_plan_drift_review` tool) rather than building a second,
+independent self-check system.
+
 ## Reverify
 
 N/A — no implementation exists yet to verify. Reverify once a follow-up
