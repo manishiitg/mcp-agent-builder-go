@@ -3,6 +3,7 @@ import { ChevronDown, SlidersHorizontal, X } from 'lucide-react'
 import LLMRoleSelector from '../LLMRoleSelector'
 import LLMSelectionDropdown from '../LLMSelectionDropdown'
 import WorkflowLLMTierPreview from '../WorkflowLLMTierPreview'
+import { WorkflowProviderCredentialField } from '../WorkflowProviderCredentialField'
 import type { AgentLLMConfig, AgentLLMFallback, LLMProvider, PresetLLMConfig } from '../../services/api-types'
 import { useLLMStore } from '../../stores/useLLMStore'
 import type { LLMOption } from '../../types/llm'
@@ -28,6 +29,7 @@ const ROLE_ROWS: RoleRow[] = [
 ]
 
 type WorkflowLLMConfigurationPanelProps = {
+  workspacePath: string | null
   llmConfig?: PresetLLMConfig
   onChange: (config: PresetLLMConfig) => void
 }
@@ -76,7 +78,7 @@ function configLabel(config?: AgentLLMConfig): string {
   return config ? `${config.provider}/${config.model_id}` : 'Not configured'
 }
 
-export default function WorkflowLLMConfigurationPanel({ llmConfig, onChange }: WorkflowLLMConfigurationPanelProps) {
+export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig, onChange }: WorkflowLLMConfigurationPanelProps) {
   const [expandedRole, setExpandedRole] = useState<RoleKey | null>(null)
   const availableLLMs = useLLMStore(state => state.availableLLMs)
   const providerManifest = useLLMStore(state => state.providerManifest)
@@ -287,6 +289,45 @@ export default function WorkflowLLMConfigurationPanel({ llmConfig, onChange }: W
           ))}
         </div>
       )}
+
+      <div className="rounded-lg border border-border bg-muted/20 p-3">
+        <div className="text-xs font-medium text-foreground">Provider credentials</div>
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+          These encrypted credentials are private to this workflow and are used when the matching provider is selected above.
+        </p>
+        <div className="mt-3 space-y-4">
+          <WorkflowProviderCredentialField
+            provider="claude-code"
+            inputId="workflow-claude-code-token"
+            workflowCredentialPath={workspacePath || undefined}
+            copy={{
+              heading: 'Claude Code token',
+              hint: <>Use a token from <code className="rounded bg-background px-1 py-0.5 font-mono text-foreground">claude setup-token</code>, or leave this empty to use the saved Claude login.</>,
+              fallbackLabel: 'Using saved login',
+              inputPlaceholder: 'Paste Claude Code token',
+              replacePlaceholder: 'Paste a replacement token',
+              noun: 'token',
+              savedMessage: 'Workflow Claude Code token saved.',
+              removedMessage: 'Workflow Claude Code token removed; saved Claude login will be used.',
+            }}
+          />
+          <WorkflowProviderCredentialField
+            provider="cursor-cli"
+            inputId="workflow-cursor-api-key"
+            workflowCredentialPath={workspacePath || undefined}
+            copy={{
+              heading: 'Cursor API key',
+              hint: <>Paste an API key from <code className="rounded bg-background px-1 py-0.5 font-mono text-foreground">cursor.com</code> settings, or leave this empty to use the saved Cursor login.</>,
+              fallbackLabel: 'Using saved login',
+              inputPlaceholder: 'Paste Cursor API key',
+              replacePlaceholder: 'Paste a replacement API key',
+              noun: 'API key',
+              savedMessage: 'Workflow Cursor API key saved.',
+              removedMessage: 'Workflow Cursor API key removed; saved Cursor login will be used.',
+            }}
+          />
+        </div>
+      </div>
     </div>
   )
 }
