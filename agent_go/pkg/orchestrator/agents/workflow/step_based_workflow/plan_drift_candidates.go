@@ -22,8 +22,15 @@ import (
 // lost by anything failing to record, and the list always reflects the
 // current step_config.json.
 type PlanDriftCandidate struct {
-	StepID string           `json:"step_id"`
-	Checks []StepDriftCheck `json:"checks"`
+	StepID string `json:"step_id"`
+	// StepType is the plan.json step type ("routing", "branch", "regular",
+	// ...), precomputed so the reviewer turn can tell which candidates are
+	// routing steps (the "route"/major-fork concept, PLAT-259) without an
+	// extra lookup -- routing steps get two additional judgment checks
+	// (route_structural_isolation, route_eval_pairing) that branch and every
+	// other step type do not. Empty if plan.json could not be read/parsed.
+	StepType string           `json:"step_type,omitempty"`
+	Checks   []StepDriftCheck `json:"checks"`
 }
 
 // planDriftPlainFileReader adapts the workspace-relative paths that
@@ -113,6 +120,20 @@ func CollectPlanDriftCandidates(ctx context.Context, workspacePath string) ([]Pl
 		return nil, nil
 	}
 
+	// Precompute each candidate's plan.json step type -- lets the reviewer
+	// turn tell routing steps (the "route"/major-fork concept) apart from
+	// branch and everything else without an extra lookup. Best-effort: a
+	// step type this typed parse doesn't recognize just leaves StepType
+	// empty for that id, it does not fail the whole scan (planStepIDsFromPlanJSON's
+	// raw-JSON walk above is what actually determines candidacy).
+	stepTypeByID := map[string]string{}
+	var plan PlanningResponse
+	if err := json.Unmarshal(planRaw, &plan); err == nil {
+		for _, step := range plan.Steps {
+			stepTypeByID[step.GetID()] = string(step.StepType())
+		}
+	}
+
 	configPath := filepath.Join(fsutil.WorkspaceDocsRoot(), filepath.FromSlash(workspacePath), PlanningFolderName, "step_config.json")
 	byID := map[string]StepConfig{}
 	configRaw, err := os.ReadFile(configPath)
@@ -161,7 +182,7 @@ func CollectPlanDriftCandidates(ctx context.Context, workspacePath string) ([]Pl
 			checks = append(checks, dbCheck)
 		}
 
-		candidates = append(candidates, PlanDriftCandidate{StepID: stepID, Checks: checks})
+		candidates = append(candidates, PlanDriftCandidate{StepID: stepID, StepType: stepTypeByID[stepID], Checks: checks})
 	}
 	return candidates, nil
 }

@@ -145,7 +145,7 @@ func startRestoredTerminalHandler(api *StreamingAPI) http.HandlerFunc {
 		// the CLI caches its tool catalog via get_api_spec at launch, before
 		// /api/query has registered phase-specific tools like run_full_workflow
 		// or execute_step. The CLI then never sees those tools and falls back
-		// to shelling out (e.g. agy emits "tool(s) [run_full_workflow] not
+		// to shelling out (e.g. the CLI emits "tool(s) [run_full_workflow] not
 		// found" and runs python3 main.py instead).
 		//
 		// If the tmux pane is gone, defer the launch to the user's next

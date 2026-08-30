@@ -2,7 +2,7 @@ import { useMemo, useRef, useEffect } from 'react'
 import type { Node, Edge } from '@xyflow/react'
 import dagre from 'dagre'
 import type { PlanStep, PlanningResponse, AgentLLMConfig, ValidationSchema, RoutingRoute, MessageSequenceItem } from '../../../utils/stepConfigMatching'
-import { isHumanInputStep, isTodoTaskStep, isRoutingStep, isMessageSequenceStep, isRegularStep, runsAsMessageSequence, effectiveMessageSequenceItems } from '../../../utils/stepConfigMatching'
+import { isHumanInputStep, isTodoTaskStep, isRoutingStep, isBranchStep, isMessageSequenceStep, isRegularStep, runsAsMessageSequence, effectiveMessageSequenceItems } from '../../../utils/stepConfigMatching'
 import type { ChangeType, PlanChanges } from './usePlanData'
 import type { VariablesManifest, EvaluationStep } from '../../../services/api-types'
 import type { VariablesNodeData } from '../nodes/VariablesNode'
@@ -296,8 +296,8 @@ function estimateNodeHeight(node: WorkflowNode): number {
     }
   }
 
-  // For routing nodes, add height for routing question + route labels
-  if (node.type === 'routing') {
+  // For routing/branch nodes, add height for the decision question + route labels
+  if (node.type === 'routing' || node.type === 'branch') {
     const routingData = data as RoutingStepNodeData
     if (routingData.routing_question) {
       contentHeight += 40 // routing question box
@@ -425,7 +425,7 @@ function calculateTopologyMetrics(nodes: WorkflowNode[]): { hasOrchestrator: boo
 
       maxOrchestratorDepth = Math.max(maxOrchestratorDepth, numRoutes)
     }
-    if (node.type === 'routing') {
+    if (node.type === 'routing' || node.type === 'branch') {
       const routes = (node.data as RoutingStepNodeData).routes
       maxRoutingBranches = Math.max(maxRoutingBranches, routes?.length || 0)
     }
@@ -689,6 +689,22 @@ function stepToNode(
     }
   }
 
+  if (isBranchStep(step)) {
+    return {
+      id: nodeId,
+      type: 'branch',
+      position: { x: 0, y: 0 },
+      data: {
+        ...baseData,
+        // RoutingStepNode reads routing_question -- branch reuses the same
+        // component/node data shape, just its own node-type key. See PLAT-259.
+        routing_question: step.branch_question,
+        routes: step.routes,
+        validation_schema: step.validation_schema
+      } as RoutingStepNodeData
+    }
+  }
+
   if (isTodoTaskStep(step)) {
     return {
       id: nodeId,
@@ -791,6 +807,7 @@ function processSteps(
   }
   steps.forEach(s => {
     if (isRoutingStep(s) && s.routes) s.routes.forEach(r => addRouteTarget(r.next_step_id))
+    if (isBranchStep(s) && s.routes) s.routes.forEach(r => addRouteTarget(r.next_step_id))
     if (isHumanInputStep(s)) {
       addRouteTarget(s.if_yes_next_step_id)
       addRouteTarget(s.if_no_next_step_id)
@@ -1053,9 +1070,12 @@ function processSteps(
     } else {
       lastExitNodeId = node.id
     }
-    // Handle routing step edge routing
-    // Routing steps evaluate a question and route to one of N possible next steps
-    if (isRoutingStep(step)) {
+    // Handle routing/branch step edge routing
+    // Both evaluate a question and route to one of N possible next steps --
+    // identical mechanics, routing is now the "route"/major-fork concept
+    // and branch is the small in-flow decision. See PLAT-259.
+    if (isRoutingStep(step) || isBranchStep(step)) {
+      const edgeType = isBranchStep(step) ? 'branch' : 'routing'
       const routingEdges: WorkflowEdge[] = []
       const sourceNodeId = (typeof lastExitNodeId === 'string' ? lastExitNodeId : node.id)
 
@@ -1071,7 +1091,7 @@ function processSteps(
               source: sourceNodeId,
               sourceHandle: `route-${route.route_id}`,
               target: targetNodeId,
-              type: 'routing',
+              type: edgeType,
               label: route.route_name || route.route_id,
               labelStyle: { ...ROUTE_EDGE_LABEL_STYLE, opacity: isSelectedRoute ? 1 : 0.5 },
               labelBgStyle: EDGE_LABEL_BG_STYLE,
@@ -1098,7 +1118,7 @@ function processSteps(
               source: sourceNodeId,
               sourceHandle: `route-${route.route_id}`,
               target: 'end',
-              type: 'routing',
+              type: edgeType,
               label: route.route_name || route.route_id,
               labelStyle: { ...ROUTE_EDGE_LABEL_STYLE, opacity: isSelectedRoute ? 1 : 0.5 },
               labelBgStyle: EDGE_LABEL_BG_STYLE,

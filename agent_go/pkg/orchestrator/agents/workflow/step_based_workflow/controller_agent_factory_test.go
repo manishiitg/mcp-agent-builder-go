@@ -525,10 +525,11 @@ func TestApplyStepConfigToAgentConfigEnablesWorkspaceIsolation(t *testing.T) {
 //     each spawns a coding-CLI
 //     session for a workflow task and must isolate its workspace.
 //
-// Without isolation on any of these, an agy-cli orchestrator / workshop
-// background agent collides with the workshop chat's agy session in the
-// same workflow folder and the step fails with "agy-cli does not support
-// concurrent sessions in working directory ... with different MCP configs".
+// Without isolation on any of these, an orchestrator / workshop background
+// agent collides with the workshop chat's own coding-CLI session in the
+// same workflow folder, and the step fails with a "does not support
+// concurrent sessions in working directory ... with different MCP
+// configs"-style error some coding CLIs raise.
 //
 // The test asserts a specific count per file. A new factory added later
 // without isolation trips this test rather than shipping a silent regression.

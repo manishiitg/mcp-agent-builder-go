@@ -30,7 +30,6 @@ func TestCodingCLILifecycleMatrixHermeticTmux(t *testing.T) {
 		{name: "codex-cli", prefix: "mlp-codex-cli-int"},
 		{name: "cursor-cli", prefix: "mlp-cursor-cli-int"},
 		{name: "pi-cli", prefix: "mlp-pi-cli-int"},
-		{name: "agy-cli", prefix: "mlp-agy-cli-int"},
 	}
 
 	for _, provider := range providers {
@@ -171,7 +170,7 @@ func TestTerminalOwnerReconciliationRejectsStaleGeneration(t *testing.T) {
 }
 
 func TestTerminalSnapshotExpiryMatrix(t *testing.T) {
-	for _, providerPrefix := range []string{"mlp-claude-code-int", "mlp-codex-cli-int", "mlp-cursor-cli-int", "mlp-pi-cli-int", "mlp-agy-cli-int"} {
+	for _, providerPrefix := range []string{"mlp-claude-code-int", "mlp-codex-cli-int", "mlp-cursor-cli-int", "mlp-pi-cli-int"} {
 		t.Run(providerPrefix, func(t *testing.T) {
 			store := terminals.NewStore()
 			sessionID := "expiry-" + providerPrefix

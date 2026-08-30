@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useMemo, useCallback, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useRef, useMemo, useCallback, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import {
   BrainCircuit,
@@ -91,6 +91,164 @@ const EMPTY_WORKFLOW_SCHEDULE_STATS: WorkflowScheduleStats = {
 
 function normalizeWorkspacePath(path?: string | null): string {
   return (path || '').replace(/\/+$/, '')
+}
+
+interface CompactToolbarMenuProps {
+  label: string
+  icon: React.ReactNode
+  active?: boolean
+  children: (close: () => void) => React.ReactNode
+}
+
+function CompactToolbarMenu({ label, icon, active = false, children }: CompactToolbarMenuProps) {
+  const [open, setOpen] = useState(false)
+  const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0, ready: false })
+  const containerRef = useRef<HTMLDivElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  const updateMenuPosition = useCallback(() => {
+    const trigger = containerRef.current?.querySelector('button')
+    const menu = menuRef.current
+    if (!trigger || !menu) return
+    const triggerRect = trigger.getBoundingClientRect()
+    const menuWidth = menu.offsetWidth || 208
+    const menuHeight = menu.offsetHeight || 0
+    const gap = 8
+    const viewportGap = 8
+    const left = Math.max(
+      viewportGap,
+      Math.min(triggerRect.right - menuWidth, window.innerWidth - menuWidth - viewportGap),
+    )
+    const spaceBelow = window.innerHeight - triggerRect.bottom - gap - viewportGap
+    const spaceAbove = triggerRect.top - gap - viewportGap
+    const openAbove = menuHeight > spaceBelow && spaceAbove > spaceBelow
+    const desiredTop = openAbove
+      ? triggerRect.top - gap - menuHeight
+      : triggerRect.bottom + gap
+    const top = Math.max(viewportGap, Math.min(desiredTop, window.innerHeight - menuHeight - viewportGap))
+    setMenuPosition({ top, left, ready: true })
+  }, [])
+
+  useLayoutEffect(() => {
+    if (!open) return
+    updateMenuPosition()
+    window.addEventListener('resize', updateMenuPosition)
+    window.addEventListener('scroll', updateMenuPosition, true)
+    return () => {
+      window.removeEventListener('resize', updateMenuPosition)
+      window.removeEventListener('scroll', updateMenuPosition, true)
+    }
+  }, [open, updateMenuPosition])
+
+  useEffect(() => {
+    if (!open) return
+    const closeOnOutsideClick = (event: MouseEvent) => {
+      if (
+        containerRef.current
+        && !containerRef.current.contains(event.target as Node)
+        && !menuRef.current?.contains(event.target as Node)
+      ) {
+        setOpen(false)
+      }
+    }
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', closeOnOutsideClick)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('mousedown', closeOnOutsideClick)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [open])
+
+  return (
+    <div ref={containerRef} className="relative">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            onClick={() => setOpen(current => !current)}
+            className={`flex h-7 w-7 items-center justify-center rounded-md transition-colors ${open || active ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`}
+            aria-label={label}
+            aria-haspopup="menu"
+            aria-expanded={open}
+          >
+            {icon}
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom"><p>{label}</p></TooltipContent>
+      </Tooltip>
+      {open && (
+        <ModalPortal>
+          <div
+            ref={menuRef}
+            role="menu"
+            aria-label={label}
+            className="fixed z-[10000] max-h-[calc(100vh-1rem)] min-w-52 overflow-y-auto rounded-lg border border-border bg-popover p-1.5 text-popover-foreground shadow-xl"
+            style={{
+              top: menuPosition.top,
+              left: menuPosition.left,
+              visibility: menuPosition.ready ? 'visible' : 'hidden',
+            }}
+          >
+            {children(() => setOpen(false))}
+          </div>
+        </ModalPortal>
+      )}
+    </div>
+  )
+}
+
+interface CompactToolbarMenuItemProps {
+  icon: React.ReactNode
+  label: string
+  detail?: string
+  active?: boolean
+  trailingAction?: {
+    label: string
+    icon: React.ReactNode
+    onClick: () => void
+    active?: boolean
+  }
+  'data-testid'?: string
+  onClick: () => void
+}
+
+function CompactToolbarMenuItem({ icon, label, detail, active = false, trailingAction, onClick, 'data-testid': dataTestId }: CompactToolbarMenuItemProps) {
+  return (
+    <div className={`flex items-center rounded-md ${active ? 'bg-accent text-accent-foreground' : 'text-foreground hover:bg-accent hover:text-accent-foreground'}`}>
+      <button
+        type="button"
+        data-testid={dataTestId}
+        role="menuitem"
+        onClick={onClick}
+        className="flex min-w-0 flex-1 items-center gap-2.5 px-2.5 py-2 text-left text-xs"
+      >
+        <span className="flex h-5 w-5 shrink-0 items-center justify-center text-muted-foreground">{icon}</span>
+        <span className="min-w-0 flex-1">
+          <span className="block font-medium">{label}</span>
+          {detail && <span className="mt-0.5 block truncate text-[10px] text-muted-foreground">{detail}</span>}
+        </span>
+      </button>
+      {trailingAction && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={trailingAction.onClick}
+              aria-label={trailingAction.label}
+              aria-pressed={trailingAction.active}
+              className={`mr-1.5 flex h-6 w-6 shrink-0 items-center justify-center rounded transition-colors ${trailingAction.active ? 'text-primary hover:bg-primary/10' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`}
+            >
+              {trailingAction.icon}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="left"><p>{trailingAction.label}</p></TooltipContent>
+        </Tooltip>
+      )}
+    </div>
+  )
 }
 
 function formatPulseTimestamp(value?: string): string {
@@ -210,47 +368,27 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
     ['files', Files, 'Files', true],
   ] as const).filter(([, , , visible]) => visible), [hasPlan])
 
-  // PLAT-158: the enabled dedicated review schedule is the only recurring
-  // Pulse switch. Ordinary workflow runs never launch Gate/Review+Fix inline.
-  const pulseReviewSchedule = useWorkflowManifestStore((s) => {
+  const pulseConfig = useWorkflowManifestStore(useShallow((s) => {
     const wf = s.workflows.find((w) => w.workspace_path === workspacePath)
-    return wf?.manifest.schedules?.find((schedule) => schedule.pulse_review_only)
-  })
-  const monitorOn = !!pulseReviewSchedule?.enabled
-  const refreshWorkflowManifests = useWorkflowManifestStore((s) => s.refreshWorkflows)
+    return {
+      enabled: wf?.manifest.pulse?.enabled,
+      legacyEnabled: wf?.manifest.schedules?.some((schedule) => schedule.pulse_review_only && schedule.enabled),
+    }
+  }))
+  const monitorOn = !!(pulseConfig.enabled || pulseConfig.legacyEnabled)
+  const updateWorkflowManifest = useWorkflowManifestStore((s) => s.updateWorkflow)
   const [monitorSaving, setMonitorSaving] = useState(false)
   const toggleMonitor = useCallback(async () => {
     if (!workspacePath || monitorSaving) return
     setMonitorSaving(true)
     try {
-      if (pulseReviewSchedule) {
-        if (monitorOn) {
-          await schedulerApi.disableJob(pulseReviewSchedule.id)
-        } else {
-          await schedulerApi.enableJob(pulseReviewSchedule.id)
-        }
-      } else {
-        // PLAT-158: creating the dedicated pulse_review_only schedule IS
-        // enabling Pulse — this is still the single source of truth, just
-        // created lazily from the toolbar toggle instead of /pulse-setup.
-        await schedulerApi.createJob({
-          name: 'Pulse review',
-          entity_type: 'workflow',
-          workspace_path: workspacePath,
-          mode: 'workshop',
-          cron_expression: '0 9 * * *',
-          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-          enabled: true,
-          pulse_review_only: true,
-        })
-      }
-      await refreshWorkflowManifests()
+      await updateWorkflowManifest(workspacePath, { pulse_enabled: !monitorOn })
     } catch (err) {
       console.error('[WorkflowToolbar] Failed to toggle Pulse review schedule:', err)
     } finally {
       setMonitorSaving(false)
     }
-  }, [workspacePath, pulseReviewSchedule, monitorOn, monitorSaving, refreshWorkflowManifests])
+  }, [workspacePath, monitorOn, monitorSaving, updateWorkflowManifest])
   const [showMonitorHelp, setShowMonitorHelp] = useState(false)
   const [pulseModuleStates, setPulseModuleStates] = useState<PulseModuleState[]>([])
   const [pulseFinalCommandStates, setPulseFinalCommandStates] = useState<PulseFinalCommandState[]>([])
@@ -961,8 +1099,8 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                   <span className={`inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${monitorOn ? 'translate-x-[18px]' : 'translate-x-[2px]'}`} />
                 </button>
                 <div className="min-w-0">
-                  <div className="text-xs font-medium text-foreground">{monitorOn ? 'Reviewing on its own schedule' : pulseReviewSchedule ? 'Scheduled review is off' : 'Pulse is off'}</div>
-                  <div className="truncate text-[11px] text-muted-foreground">{pulseReviewSchedule ? 'Pulse findings, fixes, decisions, and history are here.' : 'Turn on to review runs daily and track findings here.'}</div>
+                  <div className="text-xs font-medium text-foreground">{monitorOn ? 'Reviews scheduled runs' : 'Pulse is off'}</div>
+                  <div className="truncate text-[11px] text-muted-foreground">{monitorOn ? 'Pulse Gate runs after each normal scheduled run.' : 'Turn on to review completed scheduled runs.'}</div>
                 </div>
               </div>
               <div className="inline-flex h-8 items-center overflow-hidden rounded-lg border border-border bg-muted/30">

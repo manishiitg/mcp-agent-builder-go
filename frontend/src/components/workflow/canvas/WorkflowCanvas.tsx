@@ -491,6 +491,7 @@ const WorkflowInspectorCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanva
       workspacePath={workspacePath}
       runFolder={selectedRunFolder}
       runFolders={runFolderNames}
+      onRefreshRunFolders={refreshWorkspaceState}
     />
   ) : workflowWorkspaceView === 'learnings' ? (
     <LearningsPopup
@@ -509,7 +510,7 @@ const WorkflowInspectorCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanva
   ) : workflowWorkspaceView === 'schedules' ? (
     <WorkflowScheduleRunsPanel
       embedded
-      workflowScope={{ presetQueryId, workspacePath }}
+      workflowScope={{ presetQueryId: presetQueryId || undefined, workspacePath: workspacePath || undefined }}
       onClose={closeInspector}
     />
   ) : workflowWorkspaceView === 'skills' || workflowWorkspaceView === 'mcp' || workflowWorkspaceView === 'secrets' || workflowWorkspaceView === 'browser' || workflowWorkspaceView === 'llm' ? (
@@ -1110,7 +1111,7 @@ function ReadOnlyStepDetailPanel({
   const step = 'step' in data && data.step ? data.step as PlanStep : null
   const title = (typeof data.title === 'string' && data.title) || step?.title || node.id
   const type = step?.type || node.type || 'node'
-  const routes = step?.type === 'routing'
+  const routes = step?.type === 'routing' || step?.type === 'branch'
     ? step.routes
     : step?.type === 'todo_task'
       ? step.predefined_routes
@@ -1171,7 +1172,7 @@ function ReadOnlyStepDetailPanel({
         )}
 
         {(routingQuestion || routes?.length) && (
-          <DetailSection icon={Route} title="Routing">
+          <DetailSection icon={Route} title={step?.type === 'branch' ? 'Branch' : 'Routing'}>
             {routingQuestion && <p className="mb-2 text-sm text-foreground/85">{routingQuestion}</p>}
             {routes?.length ? (
               <div className="space-y-2">

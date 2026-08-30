@@ -284,20 +284,53 @@ func TestReadWorkflowManifestPrunesRetiredExecutionDefaultsFields(t *testing.T) 
 	}
 }
 
-func TestEnabledPulseReviewScheduleIsRecurringPulseSourceOfTruth(t *testing.T) {
+func TestPulseEnabledAndLegacyScheduleMigration(t *testing.T) {
 	var nilManifest *WorkflowManifest
-	if nilManifest.HasEnabledPulseReviewSchedule() {
+	if nilManifest.PulseEnabled() {
 		t.Fatal("nil manifest must not have recurring Pulse")
 	}
 	manifest := &WorkflowManifest{Schedules: []WorkflowSchedule{
 		{Name: "ordinary", Enabled: true},
 		{Name: "disabled Pulse", Enabled: false, PulseReviewOnly: true},
 	}}
-	if manifest.HasEnabledPulseReviewSchedule() {
+	if manifest.PulseEnabled() {
 		t.Fatal("a disabled Pulse schedule must not enable recurring Pulse")
 	}
 	manifest.Schedules = append(manifest.Schedules, WorkflowSchedule{Name: "Pulse", Enabled: true, PulseReviewOnly: true})
-	if !manifest.HasEnabledPulseReviewSchedule() {
-		t.Fatal("an enabled Pulse review schedule must enable recurring Pulse")
+	if !manifest.PulseEnabled() {
+		t.Fatal("an enabled legacy Pulse schedule must preserve enablement before migration")
+	}
+	if !manifest.MigrateLegacyPulseSchedule() {
+		t.Fatal("legacy Pulse schedules must be migrated")
+	}
+	if manifest.Pulse == nil || !manifest.Pulse.Enabled {
+		t.Fatal("migration must store pulse.enabled=true")
+	}
+	if len(manifest.Schedules) != 1 || manifest.Schedules[0].Name != "ordinary" {
+		t.Fatalf("migration must retain only normal schedules: %+v", manifest.Schedules)
+	}
+	if manifest.MigrateLegacyPulseSchedule() {
+		t.Fatal("migration must be idempotent")
+	}
+}
+
+func TestSetWorkflowPulseEnabledRemovesDedicatedSchedule(t *testing.T) {
+	manifest := &WorkflowManifest{
+		Pulse: &WorkflowPulseConfig{AdvisorSpecialization: &WorkflowAdvisorSpecialization{Version: 1}},
+		Schedules: []WorkflowSchedule{
+			{ID: "normal", Enabled: true},
+			{ID: "legacy-pulse", Enabled: true, PulseReviewOnly: true},
+		},
+	}
+	setWorkflowPulseEnabled(manifest, true)
+	if !manifest.Pulse.Enabled || manifest.Pulse.AdvisorSpecialization == nil {
+		t.Fatalf("Pulse update lost config: %+v", manifest.Pulse)
+	}
+	if len(manifest.Schedules) != 1 || manifest.Schedules[0].ID != "normal" {
+		t.Fatalf("Pulse update retained obsolete schedule: %+v", manifest.Schedules)
+	}
+	setWorkflowPulseEnabled(manifest, false)
+	if manifest.Pulse.Enabled {
+		t.Fatal("Pulse update did not disable post-run review")
 	}
 }

@@ -16,7 +16,7 @@ import type { AgentMode } from '../stores/types'
 import { ChatInput } from './ChatInput'
 import { TerminalEventTranscript } from './TerminalEventTranscript'
 import { MainAgentTerminal } from './MainAgentTerminal'
-import { WorkflowModeHandler, type WorkflowModeHandlerRef, signalPlanModified } from './workflow'
+import { WorkflowModeHandler, type WorkflowModeHandlerRef } from './workflow'
 import { ToastContainer } from './ui/Toast'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useWorkflowStore } from '../stores/useWorkflowStore'
@@ -1690,20 +1690,6 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
         const correlationId = innerData?.correlation_id ?? innerData?.delegation_id ?? agentEvent?.correlation_id ?? agentEvent?.delegation_id
         if (correlationId && typeof correlationId === 'string') {
           chatStore.clearDelegationStreamingText(correlationId)
-        }
-      }
-
-      // Auto-refresh plan canvas when a plan modification tool completes
-      if (event.type === 'tool_call_end') {
-        const toolName = (innerData?.tool_name ?? agentEvent?.tool_name ?? '') as string
-        const isPlanModTool = toolName.startsWith('update_') && (
-          toolName.includes('step') || toolName.includes('validation') || toolName.includes('success_criteria')
-        )
-        const isAddTool = toolName.startsWith('add_') && toolName.includes('step')
-        const isDeleteTool = toolName === 'delete_plan_steps'
-        if (isPlanModTool || isAddTool || isDeleteTool) {
-          console.log('[PLAN REFRESH] Plan modification detected via tool:', toolName)
-          signalPlanModified()
         }
       }
 

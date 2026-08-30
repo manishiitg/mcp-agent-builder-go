@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   X,
   Loader2,
@@ -23,6 +23,7 @@ import {
   Archive,
   Search,
   ArrowLeft,
+  Gauge,
 } from 'lucide-react'
 import { agentApi } from '../../services/api'
 import type { ExecutionLogsResponse, StepExecutionLogs } from '../../services/api-types'
@@ -45,6 +46,14 @@ interface ExecutionLogsPopupProps {
   runFolders: string[] // Available run folders (iterations and groups)
   startedAt?: string | null
   embedded?: boolean
+  // Refreshes the run_folder LIST itself (a new folder appearing after a
+  // standalone execute_step run, e.g.), as opposed to the panel's own
+  // refresh, which only re-fetches logs for the already-selected folder.
+  // Without this, a folder that didn't exist when runFolders was last loaded
+  // stays invisible in the dropdown no matter how many times the panel's own
+  // refresh is clicked. Optional: the standalone (non-embedded) popup has no
+  // parent-owned folder list to refresh.
+  onRefreshRunFolders?: () => void | Promise<void>
 }
 
 const ITERATION_ZERO_DEFAULT_FOLDER = 'iteration-0/default'
@@ -704,6 +713,38 @@ const getStepMetrics = (executions: unknown[]): StepMetrics => executions.reduce
   llmCalls: 0,
 })
 
+// Most recent execution attempt's model — fast-path/scripted attempts carry
+// no model field, so those are skipped in favor of the latest LLM attempt.
+// Picked by actual completed_at/started_at timestamp, NOT array position or
+// "attempt N" number: attempt slots are fixed retry-slot labels, not
+// chronological order — a fresh top-level re-run overwrites the "attempt 1"
+// slot while an older "attempt 2" from a completely different run can sit
+// right next to it, many hours apart. Verified live: a step's array had
+// attempt-1 newest (just re-run) and attempt-2 from the prior day.
+const getStepModel = (executions: unknown[]): string | null => {
+  let bestModel: string | null = null
+  let bestTimeMs = -Infinity
+  for (const exec of executions) {
+    const execRecord = asRecord(exec)
+    if (execRecord?.fast_path === true) continue
+    const content = asRecord(execRecord?.content)
+    const model = content?.model
+    if (typeof model !== 'string' || !model.trim()) continue
+    const timestamp = content?.completed_at ?? content?.started_at
+    const timeMs = typeof timestamp === 'string' ? Date.parse(timestamp) : NaN
+    if (Number.isNaN(timeMs)) {
+      // No timestamp to compare — only use it if nothing better has been found yet.
+      if (bestModel === null) bestModel = model
+      continue
+    }
+    if (timeMs > bestTimeMs) {
+      bestTimeMs = timeMs
+      bestModel = model
+    }
+  }
+  return bestModel
+}
+
 const hasStepMetrics = (metrics: StepMetrics) => (
   metrics.durationMs > 0 || metrics.totalTokens > 0 || metrics.inputTokens > 0 || metrics.outputTokens > 0 || metrics.llmCalls > 0
 )
@@ -746,6 +787,8 @@ const getStepTypeLabel = (type: string): string => {
       return 'Orchestration'
     case 'routing':
       return 'Routing'
+    case 'branch':
+      return 'Branch'
     case 'todo_task':
       return 'Todo Task'
     case 'human_input':
@@ -769,7 +812,9 @@ const getStepTypeDescription = (type: string): string => {
     case 'message_sequence':
       return 'Message sequence: one AI agent completing an ordered series of conversation turns.'
     case 'routing':
-      return 'Routing step: deterministically selects the next workflow branch.'
+      return 'Routing step: a major, self-contained sub-workflow fork that deterministically selects the next path.'
+    case 'branch':
+      return 'Branch step: a small in-flow decision that deterministically selects the next step.'
     case 'human_input':
       return 'Human-input step: waits for an operator response before continuing.'
     case 'regular':
@@ -784,6 +829,8 @@ const getStepTypeBadgeStyle = (type: string): string => {
       return 'bg-purple-500/10 text-purple-600 border-purple-500/20 dark:bg-purple-500/20 dark:text-purple-300'
     case 'routing':
       return 'bg-indigo-500/10 text-indigo-600 border-indigo-500/20 dark:bg-indigo-500/20 dark:text-indigo-300'
+    case 'branch':
+      return 'bg-cyan-500/10 text-cyan-600 border-cyan-500/20 dark:bg-cyan-500/20 dark:text-cyan-300'
     case 'todo_task':
       return 'bg-fuchsia-500/10 text-fuchsia-600 border-fuchsia-500/20 dark:bg-fuchsia-500/20 dark:text-fuchsia-300'
     case 'human_input':
@@ -851,7 +898,8 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
   runFolder: initialRunFolder,
   runFolders,
   startedAt,
-  embedded = false
+  embedded = false,
+  onRefreshRunFolders
 }) => {
   const [localRunFolders, setLocalRunFolders] = useState<string[]>(() => runFolders)
 
@@ -881,6 +929,21 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
   const [fileContents, setFileContents] = useState<Record<string, string>>({})
   const [loadingFiles, setLoadingFiles] = useState<Set<string>>(new Set())
   const focusedStepId = expandedSteps.values().next().value as string | undefined
+  // Shrinks the sticky "Back to all steps" bar once the user scrolls past it,
+  // so it stops eating vertical space while reading step-detail content below.
+  // Uses two different thresholds (hysteresis) rather than one: a single
+  // trigger point flickers when scrollTop settles right at the boundary
+  // (inertial rebound, a small trackpad nudge), rapidly toggling the bar
+  // between sizes. Shrinking requires scrolling further than re-expanding
+  // requires scrolling back, so scroll jitter near either point can't flip it.
+  const [stepDetailScrolled, setStepDetailScrolled] = useState(false)
+  const handleStepDetailScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
+    const scrollTop = event.currentTarget.scrollTop
+    setStepDetailScrolled(prev => (prev ? scrollTop > 4 : scrollTop > 24))
+  }, [])
+  useEffect(() => {
+    setStepDetailScrolled(false)
+  }, [focusedStepId])
 
   // Update selected run folder when prop changes
   useEffect(() => {
@@ -1001,7 +1064,32 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
     })
   }
 
-  const toggleFileExpansion = async (path: string) => {
+  // Shared by the manual "View Message & Conversation" toggle and by the
+  // auto-expand-on-search effect below -- always ADDS to expandedFiles and
+  // loads content if missing, never toggles off. A toggle function called
+  // automatically (rather than from a click) risks double-firing under
+  // React's dev-mode double-invoked effects and collapsing what it just
+  // expanded; this variant has no "off" branch so that risk doesn't exist.
+  const ensureFileExpanded = (path: string) => {
+    setExpandedFiles(prev => (prev.has(path) ? prev : new Set(prev).add(path)))
+    if (fileContents[path] || loadingFiles.has(path)) return
+    setLoadingFiles(prev => new Set(prev).add(path))
+    agentApi.getLogFile(path).then(content => {
+      const contentStr = formatLogFileContent(content)
+      setFileContents(prev => ({ ...prev, [path]: contentStr }))
+    }).catch(e => {
+      console.error(e)
+      setFileContents(prev => ({ ...prev, [path]: 'Error: Failed to load content' }))
+    }).finally(() => {
+      setLoadingFiles(prev => {
+        const next = new Set(prev)
+        next.delete(path)
+        return next
+      })
+    })
+  }
+
+  const toggleFileExpansion = (path: string) => {
     if (expandedFiles.has(path)) {
       setExpandedFiles(prev => {
         const next = new Set(prev)
@@ -1010,27 +1098,38 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
       })
       return
     }
+    ensureFileExpanded(path)
+  }
 
-    setExpandedFiles(prev => new Set(prev).add(path))
-    
-    if (!fileContents[path]) {
-      setLoadingFiles(prev => new Set(prev).add(path))
-      try {
-        const content = await agentApi.getLogFile(path)
-        const contentStr = formatLogFileContent(content)
-        setFileContents(prev => ({ ...prev, [path]: contentStr }))
-      } catch (e) {
-        console.error(e)
-        setFileContents(prev => ({ ...prev, [path]: 'Error: Failed to load content' }))
-      } finally {
-        setLoadingFiles(prev => {
-          const next = new Set(prev)
-          next.delete(path)
-          return next
-        })
+  // A search hit can be inside a matching execution's own conversation file
+  // (a tool call's arguments/result), which stays unfetched until "View
+  // Message & Conversation" is clicked -- searching would otherwise still
+  // require a manual click per result just to see the hit. Auto-load+expand
+  // the conversation for every LLM-attempt execution matching an active
+  // search, scoped to steps the user already has open (renderStepContent
+  // only runs for expanded steps), so this never fetches for the whole
+  // workflow at once.
+  useEffect(() => {
+    if (!logs) return
+    for (const stepId of expandedSteps) {
+      const query = stepSearchQueries[stepId]?.trim()
+      if (!query) continue
+      const stepLogs = logs.steps[stepId]
+      for (const exec of stepLogs?.executions || []) {
+        if (exec.fast_path === true) continue
+        const path = exec.conversation_path
+        if (!path || expandedFiles.has(path)) continue
+        if (JSON.stringify(exec).toLowerCase().includes(query.toLowerCase())) {
+          ensureFileExpanded(path)
+        }
       }
     }
-  }
+    // ensureFileExpanded/expandedFiles/fileContents/loadingFiles intentionally
+    // excluded: they change as a RESULT of this effect and re-running on their
+    // own change would only ever re-check work already done, not cause a loop,
+    // but listing them would re-run this on every fetch completion for no gain.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [logs, expandedSteps, stepSearchQueries])
 
   // Recursive render function for step content
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1133,7 +1232,10 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                 {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
                 {stepLogs.executions.filter(matchesSearch).map((exec: any, idx: number) => {
                   const execId = `${stepId}-exec-${exec.attempt}-${exec.iteration}`
-                  const isExecExpanded = expandedExecutions.has(execId)
+                  // executions is already filtered to searchQuery matches above,
+                  // so an active search implies every rendered row is a hit --
+                  // force it open instead of making the user click through each one.
+                  const isExecExpanded = expandedExecutions.has(execId) || !!searchQuery
                   const isFastPath = exec.fast_path === true
                   const execMetrics = getExecutionMetrics(exec)
                   // Fast-path entries carry ScriptedFastPathLog shape: success/exit_code/output/error.
@@ -1148,6 +1250,12 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                   const sentMessages = expandedFiles.has(exec.conversation_path) && fileContents[exec.conversation_path]
                     ? getSentAgentMessages(fileContents[exec.conversation_path])
                     : []
+                  // "Attempt N" is a fixed retry-slot label, not chronological order — a
+                  // fresh top-level re-run overwrites slot 1's file while an unrelated
+                  // older retry can still occupy slot 2, hours or days apart. Show the
+                  // real timestamp so which attempt is actually newest is never a guess.
+                  const execTimestamp = exec.content?.completed_at ?? exec.content?.started_at
+                  const execTimestampMs = typeof execTimestamp === 'string' ? Date.parse(execTimestamp) : NaN
 
                   return (
                     <div key={idx} className={`bg-background rounded border overflow-hidden ${isFastPath ? 'border-indigo-200 dark:border-indigo-800' : 'border-border'}`}>
@@ -1185,14 +1293,29 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                                   {model}
                                 </span>
                               )}
-                              {execMetrics.totalTokens > 0 && (
-                                <span className="text-[10px] font-medium bg-muted px-1.5 py-0.5 rounded text-muted-foreground border border-border">
-                                  {formatTokenCount(execMetrics.totalTokens)} tok
+                              {execMetrics.inputTokens > 0 && (
+                                <span title={`Input tokens: ${execMetrics.inputTokens.toLocaleString()}`} className="text-[10px] font-medium bg-muted px-1.5 py-0.5 rounded text-muted-foreground border border-border">
+                                  {formatTokenCount(execMetrics.inputTokens)} in
+                                </span>
+                              )}
+                              {execMetrics.outputTokens > 0 && (
+                                <span title={`Output tokens: ${execMetrics.outputTokens.toLocaleString()}${execMetrics.reasoningTokens > 0 ? ` (includes ${execMetrics.reasoningTokens.toLocaleString()} reasoning)` : ''}`} className="text-[10px] font-medium bg-muted px-1.5 py-0.5 rounded text-muted-foreground border border-border">
+                                  {formatTokenCount(execMetrics.outputTokens)} out
+                                </span>
+                              )}
+                              {execMetrics.cacheTokens > 0 && (
+                                <span title={`Cached tokens: ${execMetrics.cacheTokens.toLocaleString()}`} className="text-[10px] font-medium bg-muted px-1.5 py-0.5 rounded text-muted-foreground border border-border">
+                                  {formatTokenCount(execMetrics.cacheTokens)} cache
                                 </span>
                               )}
                               {execMetrics.durationMs > 0 && (
                                 <span className="text-[10px] font-medium bg-muted px-1.5 py-0.5 rounded text-muted-foreground border border-border">
                                   {formatDuration(execMetrics.durationMs)}
+                                </span>
+                              )}
+                              {!Number.isNaN(execTimestampMs) && (
+                                <span className="text-[10px] text-muted-foreground" title={`Completed: ${new Date(execTimestampMs).toLocaleString()}`}>
+                                  {new Date(execTimestampMs).toLocaleString()}
                                 </span>
                               )}
                             </div>
@@ -1421,7 +1544,15 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                       : reasoning
                   const validationSucceeded = valStatus === 'COMPLETED' || valPassed === true
                   const validationFailed = valStatus === 'FAILED' || valPassed === false
-                  
+                  // val.attempt (validation_attempt) is nearly always 1 — it doesn't
+                  // distinguish the initial-check/saved-script/final-gate phases, or
+                  // separate retry-slot executions (execution_001 vs execution_002)
+                  // within the same phase, which can be many hours apart. Label with
+                  // the real distinguishing fields instead of a misleading "attempt N".
+                  const validationPhase = val.content?.validation_phase || val.phase
+                  const validationExecAttempt = val.content?.execution_attempt
+                  const validationTimestampMs = val.content?.timestamp ? Date.parse(val.content.timestamp) : NaN
+
                   return (
                     <div key={idx} className="bg-background rounded border border-border overflow-hidden">
                       <button
@@ -1433,8 +1564,15 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                           <div className="flex items-center justify-between mb-1">
                             <div className="flex items-center gap-2 flex-wrap">
                               <span className="text-sm font-medium text-foreground">
-                                {isAutomaticFinalValidation ? `Automatic final validation ${val.attempt}` : `Validation attempt ${val.attempt}`}
+                                {isAutomaticFinalValidation
+                                  ? `Automatic final validation${validationExecAttempt ? ` (execution ${validationExecAttempt})` : ''}`
+                                  : `${validationPhase ? `${validationPhase} validation` : 'Validation'}${validationExecAttempt ? ` (execution ${validationExecAttempt})` : ''}`}
                               </span>
+                              {!Number.isNaN(validationTimestampMs) && (
+                                <span className="text-[10px] text-muted-foreground" title={new Date(validationTimestampMs).toLocaleString()}>
+                                  {new Date(validationTimestampMs).toLocaleString()}
+                                </span>
+                              )}
                               {isAutomaticFinalValidation && (
                                 <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded border ${validationSucceeded ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : validationFailed ? 'border-rose-500/25 bg-rose-500/10 text-rose-700 dark:text-rose-300' : 'border-border bg-muted text-muted-foreground'}`}>
                                   {validationSucceeded ? 'passed' : validationFailed ? 'failed' : 'recorded'}
@@ -2393,13 +2531,21 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                 </div>
               )}
 
-              {/* Refresh Button */}
+              {/* Refresh Button — also refreshes the run-folder list itself
+                  (onRefreshRunFolders), not just the currently selected
+                  folder's logs (loadLogs). Without this, a run folder that
+                  appeared after this list was last loaded (e.g. a standalone
+                  execute_step run) stays invisible in the dropdown no matter
+                  how many times this button is clicked. */}
               <button
-                onClick={() => loadLogs()}
+                onClick={() => {
+                  loadLogs()
+                  onRefreshRunFolders?.()
+                }}
                 disabled={loading || !selectedRunFolder}
                 className="p-1.5 rounded-lg border border-border bg-card text-muted-foreground hover:text-foreground hover:bg-muted transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed ml-auto"
-                title="Refresh logs"
-                aria-label="Refresh logs"
+                title="Refresh logs and run-folder list"
+                aria-label="Refresh logs and run-folder list"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
               </button>
@@ -2416,7 +2562,10 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
         </div>
 
         {/* Content */}
-        <div className={`flex-1 overflow-y-auto bg-background ${embedded ? 'p-4' : 'p-6'}`}>
+        <div
+          className={`flex-1 overflow-y-auto bg-background ${embedded ? 'p-4' : 'p-6'}`}
+          onScroll={focusedStepId ? handleStepDetailScroll : undefined}
+        >
           {loading ? (
             <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
               <Loader2 className="w-8 h-8 animate-spin mb-3 text-primary" />
@@ -2446,13 +2595,19 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
           ) : (
             <div className="space-y-4">
               {focusedStepId && (
-                <div className="sticky top-0 z-20 -mx-1 flex items-center border-b border-border/80 bg-background/95 px-1 pb-3 pt-1 backdrop-blur-sm">
+                <div
+                  className={`sticky top-0 z-20 -mx-1 flex items-center border-b border-border/80 bg-background/95 px-1 backdrop-blur-sm transition-[padding] duration-150 ${
+                    stepDetailScrolled ? 'py-1' : 'pb-3 pt-1'
+                  }`}
+                >
                   <button
                     type="button"
                     onClick={() => toggleStep(focusedStepId)}
-                    className="inline-flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm font-medium text-foreground shadow-sm transition-colors hover:bg-accent"
+                    className={`inline-flex items-center gap-2 rounded-md border border-border bg-card font-medium text-foreground shadow-sm transition-all duration-150 hover:bg-accent ${
+                      stepDetailScrolled ? 'px-2 py-1 text-xs' : 'px-3 py-2 text-sm'
+                    }`}
                   >
-                    <ArrowLeft className="h-4 w-4" />
+                    <ArrowLeft className={stepDetailScrolled ? 'h-3 w-3' : 'h-4 w-4'} />
                     Back to all steps
                   </button>
                 </div>
@@ -2484,6 +2639,8 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                   const nestingClass = getStepNestingClass(stepId)
                   const stepMetrics = getStepMetrics(stepLogs.executions || [])
                   const showMetrics = hasStepMetrics(stepMetrics)
+                  const stepModel = getStepModel(stepLogs.executions || [])
+                  const executionTier = stepLogs.execution_tier?.trim()
                   const stepStartedAtMs = getStepFirstActivityMs(stepLogs)
 
                   const stepStatus = getStepStatus(stepLogs)
@@ -2547,11 +2704,37 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                         </div>
                         
                         <div className="flex w-full flex-wrap items-center gap-1.5 pl-10 text-xs text-muted-foreground">
+                          {stepModel && (
+                            <StepMetricChip title={`Model used on the most recent attempt: ${stepModel}`}>
+                              {stepModel}
+                            </StepMetricChip>
+                          )}
+                          {executionTier && (
+                            <StepMetricChip title={`Execution tier pinned in step config: ${executionTier}`}>
+                              <Gauge className="h-3 w-3" />
+                              {executionTier}
+                            </StepMetricChip>
+                          )}
                           {showMetrics && (
                             <>
                               {stepMetrics.totalTokens > 0 && (
                                 <StepMetricChip title={`Tokens used: ${stepMetrics.totalTokens.toLocaleString()} total (${stepMetrics.inputTokens.toLocaleString()} input, ${stepMetrics.outputTokens.toLocaleString()} output${stepMetrics.reasoningTokens > 0 ? `, ${stepMetrics.reasoningTokens.toLocaleString()} reasoning` : ''}${stepMetrics.cacheTokens > 0 ? `, ${stepMetrics.cacheTokens.toLocaleString()} cache` : ''})`}>
-                                  {formatTokenCount(stepMetrics.totalTokens)} tok
+                                  {formatTokenCount(stepMetrics.totalTokens)} tok total
+                                </StepMetricChip>
+                              )}
+                              {stepMetrics.inputTokens > 0 && (
+                                <StepMetricChip title={`Input tokens: ${stepMetrics.inputTokens.toLocaleString()}`}>
+                                  {formatTokenCount(stepMetrics.inputTokens)} in
+                                </StepMetricChip>
+                              )}
+                              {stepMetrics.outputTokens > 0 && (
+                                <StepMetricChip title={`Output tokens: ${stepMetrics.outputTokens.toLocaleString()}${stepMetrics.reasoningTokens > 0 ? ` (includes ${stepMetrics.reasoningTokens.toLocaleString()} reasoning)` : ''}`}>
+                                  {formatTokenCount(stepMetrics.outputTokens)} out
+                                </StepMetricChip>
+                              )}
+                              {stepMetrics.cacheTokens > 0 && (
+                                <StepMetricChip title={`Cached tokens: ${stepMetrics.cacheTokens.toLocaleString()}`}>
+                                  {formatTokenCount(stepMetrics.cacheTokens)} cache
                                 </StepMetricChip>
                               )}
                               {stepMetrics.durationMs > 0 && (

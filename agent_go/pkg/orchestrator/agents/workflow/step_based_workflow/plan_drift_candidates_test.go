@@ -281,3 +281,36 @@ func TestPlanStepIDsFromPlanJSONRejectsMalformedSteps(t *testing.T) {
 		t.Fatalf("error %q does not mention plan.json", err.Error())
 	}
 }
+
+// StepType is precomputed per candidate (PLAT-259) so the reviewer turn can
+// tell routing steps apart from branch/regular without an extra lookup.
+func TestCollectPlanDriftCandidatesPopulatesStepTypeFromPlanJSON(t *testing.T) {
+	const workspacePath = "Workflow/drift-candidates-types"
+	planJSON := `{"steps":[
+  {"type":"routing","id":"router-a","title":"Router","routing_question":"Which path?","routes":[
+    {"route_id":"r1","route_name":"One","condition":"c","next_step_id":"end"},
+    {"route_id":"r2","route_name":"Two","condition":"c","next_step_id":"end"}
+  ]},
+  {"type":"regular","id":"regular-b","title":"Regular","description":"d","validation_schema":{}}
+]}`
+	stepConfig := `{"steps":[{"id":"router-a"},{"id":"regular-b"}]}`
+	planDriftCandidateWorkspace(t, workspacePath, planJSON, stepConfig)
+
+	got, err := CollectPlanDriftCandidates(context.Background(), workspacePath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	byID := map[string]PlanDriftCandidate{}
+	for _, c := range got {
+		byID[c.StepID] = c
+	}
+	if len(byID) != 2 {
+		t.Fatalf("expected 2 candidates, got %d: %#v", len(byID), got)
+	}
+	if byID["router-a"].StepType != "routing" {
+		t.Fatalf("router-a StepType = %q, want %q", byID["router-a"].StepType, "routing")
+	}
+	if byID["regular-b"].StepType != "regular" {
+		t.Fatalf("regular-b StepType = %q, want %q", byID["regular-b"].StepType, "regular")
+	}
+}

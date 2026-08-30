@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   CheckCircle2,
+  GitCompare,
   Lightbulb,
   Loader2,
   Wrench,
@@ -15,7 +16,6 @@ import type {
   PulseReviewFocus,
 } from '../../services/api-types'
 import { ReportHumanInputPanel } from './ReportHumanInputPanel'
-import { PulseEvalSummary } from './PulseEvalSummary'
 import { SoulViewer } from './SoulViewer'
 import { PulseFindingCard } from './PulseFindingCard'
 import { pulseFindingPresentation, type PulseFindingQueue } from './pulseFindingPresentation'
@@ -295,7 +295,7 @@ export function PulseWorkspace({
             What Pulse found, who owns the next move, and the latest judgment
           </p>
         </div>
-        <div className="grid gap-px bg-border lg:grid-cols-2">
+        <div className="grid gap-px bg-border lg:grid-cols-3">
           {[
             {
               id: 'technical_review',
@@ -310,6 +310,13 @@ export function PulseWorkspace({
               icon: Lightbulb,
               description: 'Hidden strategic mechanisms and materially different opportunities for the goal',
               tone: 'text-amber-600 dark:text-amber-300',
+            },
+            {
+              id: 'plan_drift_review',
+              title: 'Plan drift review',
+              icon: GitCompare,
+              description: 'Steps flagged by a plan edit, checked for DB, report, learnings, KB, and validation_schema drift',
+              tone: 'text-violet-600 dark:text-violet-300',
             },
           ].map((area) => {
             const areaModules = moduleSummaries.filter((module) => module.id === area.id)
@@ -425,8 +432,6 @@ export function PulseWorkspace({
           })}
         </div>
       </section>
-
-      <PulseEvalSummary workspacePath={workspacePath} />
 
       {(error || statusError) && (
         <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">

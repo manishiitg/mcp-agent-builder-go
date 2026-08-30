@@ -25,6 +25,10 @@ export const nodeTypes = {
   human_input: HumanInputNode,
   evaluation: EvaluationNode,
   routing: RoutingStepNode,
+  // branch reuses RoutingStepNode as-is -- identical shape/mechanics, just
+  // its own node-type key so it can be told apart from routing (now the
+  // "route"/major-fork concept) elsewhere. See PLAT-259.
+  branch: RoutingStepNode,
   message_sequence: MessageSequenceNode,
   start: StartNode,
   end: EndNode,

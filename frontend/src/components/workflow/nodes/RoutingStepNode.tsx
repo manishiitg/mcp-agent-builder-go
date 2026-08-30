@@ -41,6 +41,10 @@ const statusIcons: Record<string, ReactElement | null> = {
 
 export const RoutingStepNode = memo(({ data, selected }: RoutingStepNodeProps) => {
   const { title, routing_question, routes, status, stepIndex, changeType, isOrphan } = data
+  // Reused as-is for both routing (the "route"/major-fork concept) and
+  // branch (the small in-flow decision, PLAT-259) -- only the untitled-step
+  // fallback label needs to say which one this actually is.
+  const fallbackLabel = data.step?.type === 'branch' ? `Branch ${stepIndex + 1}` : `Routing ${stepIndex + 1}`
   const executionMode = data.step?.agent_configs?.declared_execution_mode
   const executionModeReason = data.step?.agent_configs?.declared_execution_mode_reason
   const executionModeVisuals = getExecutionModeVisuals(executionMode, executionModeReason)
@@ -97,7 +101,7 @@ export const RoutingStepNode = memo(({ data, selected }: RoutingStepNodeProps) =
               )}
             </div>
             <div className="text-xs font-semibold text-gray-900 dark:text-white truncate">
-              {title || `Routing ${stepIndex + 1}`}
+              {title || fallbackLabel}
             </div>
             {statusIcon}
           </div>

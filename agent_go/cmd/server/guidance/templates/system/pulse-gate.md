@@ -207,7 +207,7 @@ An old backlog must not hide a new production failure. Conversely, unchanged
 backlog must not force another expensive discovery pass. A cooldown or focus
 rotation cannot suppress a measured miss or a new critical regression.
 
-Select **at most two** agentically-judged due modules from `technical_review`
+Select **at most two** due modules, chosen agentically from `technical_review`
 and `strategic_review`. `plan_drift_review` is never part of that judgment
 call: its due state is the plain fact reported in `plan_drift_candidates` (see
 Deterministic-intake boundary above), so record it as due exactly when that

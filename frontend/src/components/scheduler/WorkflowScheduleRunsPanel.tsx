@@ -24,6 +24,7 @@ import { scheduleTabLabel } from '../../utils/scheduleTabLabel'
 
 interface WorkflowScheduleRunsPanelProps {
   onClose: () => void
+  embedded?: boolean
   onJobsLoaded?: (jobs: ScheduledJob[]) => void
   workflowScope?: {
     presetQueryId?: string | null
@@ -608,7 +609,7 @@ function sortJobs(a: ScheduledJob, b: ScheduledJob): number {
   return bTime.localeCompare(aTime)
 }
 
-const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ onClose, onJobsLoaded, workflowScope }) => {
+const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ onClose, onJobsLoaded, workflowScope, embedded = false }) => {
   const [jobs, setJobs] = useState<ScheduledJob[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -1693,13 +1694,17 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
     { key: 'all', label: 'All', count: summary.total },
   ]
 
-  return ReactDOM.createPortal(
+  const panel = (
     <TooltipProvider delayDuration={300}>
     <div
-      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
+      className={embedded
+        ? 'flex h-full min-h-0 w-full bg-background'
+        : 'fixed inset-0 z-[9999] flex items-center justify-center bg-black/50'}
+      onClick={embedded ? undefined : (e) => { if (e.target === e.currentTarget) onClose() }}
     >
-      <div className="w-full max-w-6xl mx-4 bg-card text-card-foreground rounded-xl shadow-2xl border border-border flex flex-col max-h-[85vh]">
+      <div className={embedded
+        ? 'flex h-full min-h-0 w-full flex-col bg-card text-card-foreground'
+        : 'mx-4 flex max-h-[85vh] w-full max-w-6xl flex-col rounded-xl border border-border bg-card text-card-foreground shadow-2xl'}>
 
         {/* Header */}
         <div className="flex items-start justify-between gap-4 px-5 py-4 border-b border-border flex-shrink-0">
@@ -2968,9 +2973,10 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
       )}
 
     </div>
-    </TooltipProvider>,
-    document.body
+    </TooltipProvider>
   )
+
+  return embedded ? panel : ReactDOM.createPortal(panel, document.body)
 }
 
 export default WorkflowScheduleRunsPanel

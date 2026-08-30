@@ -868,6 +868,25 @@ describe('answer shown exactly once', () => {
     expect(ids).toContain('gen')
     expect(ids).toContain('done')
   })
+
+  // Two completion-card types (e.g. agent_end and unified_completion) can both
+  // fire for the same turn and both carry the identical final_result -- the
+  // reader saw the same "Agent · Response" block rendered twice in a row.
+  const agentEnd = (final_result: string): any => ({
+    id: 'agent-end', type: 'agent_end', data: { data: { final_result, status: 'completed' } },
+  })
+
+  it('drops a second completion card that repeats the same answer as an earlier one', () => {
+    const items = buildTranscriptItems([agentEnd(ANSWER), completion(ANSWER)])
+    const ids = items.filter(i => i.kind === 'event').map(i => (i as any).event.id)
+    expect(ids).toEqual(['agent-end'])
+  })
+
+  it('keeps two completion cards when their answers genuinely differ', () => {
+    const items = buildTranscriptItems([agentEnd(ANSWER), completion('A distinct second answer, not a repeat.')])
+    const ids = items.filter(i => i.kind === 'event').map(i => (i as any).event.id)
+    expect(ids).toEqual(['agent-end', 'done'])
+  })
 })
 
 describe('full-run container rows', () => {

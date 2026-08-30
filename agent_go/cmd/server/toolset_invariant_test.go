@@ -31,9 +31,9 @@ func knownWorkshopRegisteredToolNamesOutsideWorkflowPool() map[string]string {
 	add("LLM capability discovery tools", "list_llm_capabilities")
 	add("workshop plan tools",
 		"create_plan", "validate_plan_change", "migrate_message_sequence_code_items",
-		"add_scripted_step", "add_message_sequence_step", "add_routing_step",
+		"add_scripted_step", "add_message_sequence_step", "add_routing_step", "add_branch_step",
 		"add_human_input_step", "add_todo_task_step", "add_todo_task_route",
-		"update_scripted_step", "update_message_sequence_step", "update_routing_step",
+		"update_scripted_step", "update_message_sequence_step", "update_routing_step", "update_branch_step",
 		"update_human_input_step", "update_todo_task_step", "update_todo_task_route",
 		"delete_todo_task_route", "delete_plan_steps", "cleanup_orphan_step_configs",
 		"update_validation_schema", "update_evaluation_plan",

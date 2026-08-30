@@ -34,6 +34,7 @@ export interface WorkflowManifestState {
     execution_defaults?: WorkflowExecutionDefaults
     ownership?: WorkflowOwnership
     schedules?: WorkflowScheduleEntry[]
+    pulse_enabled?: boolean
   }) => Promise<WorkflowManifest>
   deleteWorkflow: (workspacePath: string) => Promise<void>
   duplicateWorkflow: (sourceWorkspacePath: string, targetWorkspacePath: string, newLabel?: string) => Promise<WorkflowManifest>

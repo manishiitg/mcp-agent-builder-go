@@ -1,0 +1,301 @@
+package step_based_workflow
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator"
+	loggerv2 "github.com/manishiitg/mcpagent/logger/v2"
+)
+
+// PLAT-259: branch is a new step type, same shape/executor as routing (now
+// the "route"/major-fork concept). These tests mirror the existing routing
+// coverage, substituting BranchPlanStep/branch, to prove the shared
+// routeSwitchStep interface refactor in controller_routing.go/
+// controller_routing_deterministic.go genuinely works for branch and not
+// just for routing.
+
+func TestValidateBranchStepRejectsDescription(t *testing.T) {
+	step := &BranchPlanStep{
+		CommonStepFields: CommonStepFields{
+			ID:          "branch-by-mode",
+			Title:       "Branch by Mode",
+			Description: "Decide the route first.",
+		},
+		BranchQuestion: "Which path should run?",
+		Routes:         deterministicRoutingTestRoutes(),
+	}
+
+	err := validateBranchStepFieldsTyped(step)
+	if err == nil {
+		t.Fatal("expected branch description to be rejected")
+	}
+	if !strings.Contains(err.Error(), "must not set description") {
+		t.Fatalf("expected deterministic-only description error, got %v", err)
+	}
+}
+
+func TestValidateBranchStepRequiresTwoRoutes(t *testing.T) {
+	step := &BranchPlanStep{
+		CommonStepFields: CommonStepFields{ID: "branch-one-route", Title: "One Route"},
+		BranchQuestion:   "Which path?",
+		Routes:           []RoutingRoute{{RouteID: "only", RouteName: "Only", NextStepID: "step-only"}},
+	}
+
+	err := validateBranchStepFieldsTyped(step)
+	if err == nil {
+		t.Fatal("expected branch step with < 2 routes to be rejected")
+	}
+	if !strings.Contains(err.Error(), "at least 2 routes") {
+		t.Fatalf("expected minimum-routes error, got %v", err)
+	}
+}
+
+func TestValidateBranchStepAcceptsWellFormedStep(t *testing.T) {
+	step := &BranchPlanStep{
+		CommonStepFields: CommonStepFields{ID: "branch-ok", Title: "OK"},
+		BranchQuestion:   "Which path?",
+		Routes:           deterministicRoutingTestRoutes(),
+		DefaultRouteID:   "route-search",
+	}
+
+	if err := validateBranchStepFieldsTyped(step); err != nil {
+		t.Fatalf("expected well-formed branch step to pass, got %v", err)
+	}
+}
+
+func TestBranchStepOwnRouteFileCandidatesIgnoresLegacyDescription(t *testing.T) {
+	base, err := orchestrator.NewBaseOrchestrator(
+		loggerv2.NewDefault(),
+		nil,
+		orchestrator.OrchestratorTypeWorkflow,
+		"Workflow/demo",
+		0,
+		"",
+		nil,
+		nil,
+		false,
+		&orchestrator.LLMConfig{},
+		1,
+		nil,
+		nil,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("NewBaseOrchestrator returned error: %v", err)
+	}
+	hcpo := &StepBasedWorkflowOrchestrator{
+		BaseOrchestrator:  base,
+		selectedRunFolder: "run-1",
+	}
+	step := &BranchPlanStep{
+		CommonStepFields: CommonStepFields{
+			ID:          "branch-by-mode",
+			Description: "legacy agent body",
+		},
+	}
+
+	candidates := hcpo.routingStepOwnRouteFileCandidates(step, 0, "step-1")
+	if len(candidates) != 1 {
+		t.Fatalf("expected one own route file candidate, got %d: %v", len(candidates), candidates)
+	}
+	if strings.Contains(candidates[0], "step-1-branch") {
+		t.Fatalf("legacy execute path should not be considered, got %q", candidates[0])
+	}
+}
+
+func TestIsRoutingStepRecognizesBranchStep(t *testing.T) {
+	if !isRoutingStep(&BranchPlanStep{}) {
+		t.Fatal("isRoutingStep should recognize *BranchPlanStep")
+	}
+	if !isRoutingStep(&RoutingPlanStep{}) {
+		t.Fatal("isRoutingStep should still recognize *RoutingPlanStep")
+	}
+	if isRoutingStep(&RegularPlanStep{}) {
+		t.Fatal("isRoutingStep should not recognize *RegularPlanStep")
+	}
+}
+
+func TestBranchPlanStepMarshalJSONAlwaysSetsType(t *testing.T) {
+	step := &BranchPlanStep{
+		CommonStepFields: CommonStepFields{ID: "branch-a", Title: "Branch A"},
+		BranchQuestion:   "Which path?",
+		Routes:           deterministicRoutingTestRoutes(),
+	}
+
+	raw, err := json.Marshal(step)
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	var decoded map[string]interface{}
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("Unmarshal into map failed: %v", err)
+	}
+	if decoded["type"] != "branch" {
+		t.Fatalf("decoded type = %v, want %q", decoded["type"], "branch")
+	}
+	if decoded["branch_question"] != "Which path?" {
+		t.Fatalf("decoded branch_question = %v, want %q", decoded["branch_question"], "Which path?")
+	}
+}
+
+// TestBranchStepEndToEndLifecycle is the corrective regression test an
+// independent review of PLAT-259 phase A required: adding a branch step
+// must survive persistence, reload, config application, and navigation to
+// its selected route's target -- not just parse in isolation. The review
+// found several *RoutingPlanStep-only switches that silently rejected or
+// no-op'd for *BranchPlanStep (canonical plan validation, populateRuntimeFields,
+// getAgentConfigs, post-execution navigation, validateNextStepIDReferences);
+// this test exercises each of those in sequence against one real branch step.
+func TestBranchStepEndToEndLifecycle(t *testing.T) {
+	// 1. A branch step plus the two steps its routes point to, and a
+	// convergence step both routes eventually reach.
+	planJSON := `{"steps":[
+		{"type":"branch","id":"branch-step","title":"Branch Step","branch_question":"Which path?","routes":[
+			{"route_id":"route-a","route_name":"A","condition":"c","next_step_id":"step-a"},
+			{"route_id":"route-b","route_name":"B","condition":"c","next_step_id":"step-b"}
+		]},
+		{"type":"regular","id":"step-a","title":"Step A","description":"d","validation_schema":{},"next_step_id":"converge"},
+		{"type":"regular","id":"step-b","title":"Step B","description":"d","validation_schema":{},"next_step_id":"converge"},
+		{"type":"regular","id":"converge","title":"Converge","description":"d","validation_schema":{}}
+	]}`
+
+	// 2. Persist + reload: unmarshal exactly as loadPlanFromFile/checkExistingPlan
+	// would (custom UnmarshalJSON -> parseStepFromJSON per step).
+	var plan PlanningResponse
+	if err := json.Unmarshal([]byte(planJSON), &plan); err != nil {
+		t.Fatalf("failed to unmarshal plan.json: %v", err)
+	}
+	if len(plan.Steps) != 4 {
+		t.Fatalf("expected 4 steps, got %d", len(plan.Steps))
+	}
+	branchStep, ok := plan.Steps[0].(*BranchPlanStep)
+	if !ok {
+		t.Fatalf("plan.Steps[0] = %T, want *BranchPlanStep", plan.Steps[0])
+	}
+
+	// 3. Canonical plan validation -- this is the review's most severe
+	// finding: validateLoadedPlanStepWithOptions previously had no
+	// *BranchPlanStep case and returned "unsupported step type" for every
+	// branch step, meaning add_branch_step could never actually persist.
+	if err := validateLoadedPlanStructure(&plan); err != nil {
+		t.Fatalf("validateLoadedPlanStructure rejected a well-formed branch step: %v", err)
+	}
+
+	// 4. Round-trip: marshal back out and re-parse, proving persistence is
+	// stable, not just the first parse.
+	reMarshaled, err := json.Marshal(&plan)
+	if err != nil {
+		t.Fatalf("failed to re-marshal plan: %v", err)
+	}
+	var reloaded PlanningResponse
+	if err := json.Unmarshal(reMarshaled, &reloaded); err != nil {
+		t.Fatalf("failed to re-unmarshal persisted plan: %v", err)
+	}
+	if err := validateLoadedPlanStructure(&reloaded); err != nil {
+		t.Fatalf("reloaded plan failed validation: %v", err)
+	}
+	reloadedBranch, ok := reloaded.Steps[0].(*BranchPlanStep)
+	if !ok || reloadedBranch.BranchQuestion != "Which path?" {
+		t.Fatalf("reloaded branch step = %+v, want branch_question preserved", reloaded.Steps[0])
+	}
+
+	// 5. Apply step_config.json to the step -- populateRuntimeFields
+	// previously had no *BranchPlanStep case and returned "unknown step
+	// type", and getAgentConfigs had no case either (silently returned nil).
+	stepConfigs := []StepConfig{
+		{ID: "branch-step", AgentConfigs: &AgentConfigs{ExecutionTier: "high"}},
+	}
+	if err := populateRuntimeFields(branchStep, stepConfigs); err != nil {
+		t.Fatalf("populateRuntimeFields rejected a branch step: %v", err)
+	}
+	if got := getAgentConfigs(branchStep); got == nil || got.ExecutionTier != "high" {
+		t.Fatalf("getAgentConfigs(branchStep) = %+v, want ExecutionTier=high applied", got)
+	}
+
+	// 6. Execute a selected route and verify navigation reaches its target --
+	// this is the review's other severe finding: the post-execution
+	// navigation lookup only ever type-asserted *RoutingPlanStep, silently
+	// leaving nextStepID empty for a branch step (the workflow would not
+	// know where to go next after a branch "completed").
+	if got := nextStepIDForSelectedRoute(branchStep, "route-a"); got != "step-a" {
+		t.Fatalf("nextStepIDForSelectedRoute(route-a) = %q, want step-a", got)
+	}
+	if got := nextStepIDForSelectedRoute(branchStep, "route-b"); got != "step-b" {
+		t.Fatalf("nextStepIDForSelectedRoute(route-b) = %q, want step-b", got)
+	}
+	if got := nextStepIDForSelectedRoute(branchStep, "no-such-route"); got != "" {
+		t.Fatalf("nextStepIDForSelectedRoute(no-such-route) = %q, want empty", got)
+	}
+}
+
+// TestBranchStepDanglingNextStepIDCaughtByValidation is the counterpart to
+// the review's validateNextStepIDReferences finding: a branch route
+// pointing at a step that does not exist must be rejected at plan-load
+// time, the same as a routing step's dangling route already was.
+func TestBranchStepDanglingNextStepIDCaughtByValidation(t *testing.T) {
+	planJSON := `{"steps":[
+		{"type":"branch","id":"branch-step","title":"Branch Step","branch_question":"Which path?","routes":[
+			{"route_id":"route-a","route_name":"A","condition":"c","next_step_id":"does-not-exist"},
+			{"route_id":"route-b","route_name":"B","condition":"c","next_step_id":"end"}
+		]}
+	]}`
+	var plan PlanningResponse
+	if err := json.Unmarshal([]byte(planJSON), &plan); err != nil {
+		t.Fatalf("failed to unmarshal plan.json: %v", err)
+	}
+	err := validateLoadedPlanStructure(&plan)
+	if err == nil {
+		t.Fatal("expected validateLoadedPlanStructure to reject a branch route pointing at a missing step")
+	}
+	if !strings.Contains(err.Error(), "does-not-exist") {
+		t.Fatalf("expected error to name the missing step, got: %v", err)
+	}
+}
+
+// TestSetStepIdentityAcceptsBranchStep covers a gap the independent review
+// called "nested sub-agent identity normalization": setStepIdentity is used
+// to stamp a todo_task predefined route's sub_agent_step with the route's ID
+// and name, and previously had no *BranchPlanStep case -- a branch step
+// nested as a sub_agent_step would hit the "unsupported sub_agent_step type"
+// default and error out, unlike an identical *RoutingPlanStep.
+func TestSetStepIdentityAcceptsBranchStep(t *testing.T) {
+	branchStep := &BranchPlanStep{
+		BranchQuestion: "Which path?",
+		Routes:         deterministicRoutingTestRoutes(),
+	}
+	if err := setStepIdentity(branchStep, "route-1", "Route One"); err != nil {
+		t.Fatalf("setStepIdentity rejected a branch sub_agent_step: %v", err)
+	}
+	if branchStep.ID != "route-1" || branchStep.Title != "Route One" {
+		t.Fatalf("setStepIdentity did not stamp branch step, got ID=%q Title=%q", branchStep.ID, branchStep.Title)
+	}
+
+	routingStep := &RoutingPlanStep{RoutingQuestion: "Which path?", Routes: deterministicRoutingTestRoutes()}
+	if err := setStepIdentity(routingStep, "route-2", "Route Two"); err != nil {
+		t.Fatalf("setStepIdentity rejected a routing sub_agent_step: %v", err)
+	}
+}
+
+func TestParseStepFromJSONHandlesBranchType(t *testing.T) {
+	raw := `{"type":"branch","id":"branch-a","title":"Branch A","branch_question":"Which path?","routes":[
+		{"route_id":"route-search","route_name":"Search","condition":"c","next_step_id":"step-search"},
+		{"route_id":"route-save","route_name":"Save","condition":"c","next_step_id":"step-save"}
+	]}`
+
+	step, err := parseStepFromJSON(json.RawMessage(raw), 0, "step")
+	if err != nil {
+		t.Fatalf("parseStepFromJSON returned error: %v", err)
+	}
+	branchStep, ok := step.(*BranchPlanStep)
+	if !ok {
+		t.Fatalf("parseStepFromJSON returned %T, want *BranchPlanStep", step)
+	}
+	if branchStep.StepType() != StepTypeBranch {
+		t.Fatalf("StepType() = %q, want %q", branchStep.StepType(), StepTypeBranch)
+	}
+	if len(branchStep.Routes) != 2 {
+		t.Fatalf("expected 2 routes, got %d", len(branchStep.Routes))
+	}
+}

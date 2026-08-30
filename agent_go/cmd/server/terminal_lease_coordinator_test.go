@@ -71,7 +71,7 @@ func TestSweepOrphanedOwnedTmuxSessionsKillsOnlyDeadTaggedOwner(t *testing.T) {
 }
 
 func TestParseOwnedTmuxSessionsRejectsIncompleteRows(t *testing.T) {
-	rows := parseOwnedTmuxSessions("short\trow\nmlp-agy-cli-int-1\tinstance\t42\t100\t200")
+	rows := parseOwnedTmuxSessions("short\trow\nmlp-codex-cli-int-1\tinstance\t42\t100\t200")
 	if len(rows) != 1 {
 		t.Fatalf("rows = %d, want 1", len(rows))
 	}
