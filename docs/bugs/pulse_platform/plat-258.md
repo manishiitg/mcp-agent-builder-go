@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | Claude Code |
-| Ticket state | `review-and-fix authority end-to-end; corrective follow-up required` — the third independent review's four integration gaps (dispatcher still said hand-off, `record_pulse_finding` had no `step_id`, platform-boundary guidance called an unsupported tool shape, the strategic-only late-insertion edge case) are fixed and tested — see "Fourth round" below. Slash/scheduled implementation parity and the workflow-level deletion-review flag are still explicitly **not yet built** — see Follow-up below |
+| Ticket state | `review-and-fix authority end-to-end; deletion coverage + slash parity still not built` — the third and fifth independent reviews' six integration gaps (dispatcher hand-off text, missing `step_id`, unsupported platform-boundary tool shape, strategic-only late-insertion edge case, step_id-on-reuse dead end, swallowed late-repair scheduling failures) are all fixed and tested — see "Fourth round" and "Fifth round" below. Slash/scheduled implementation parity and the workflow-level deletion-review flag remain explicitly **not yet built**, reconfirmed by the fifth review — see Follow-up below |
 | Last synchronized | `2026-08-30` |
 
 - **Type:** platform feature (multi-phase), not a single bug fix. Filed at
@@ -1018,3 +1018,64 @@ faith):
 ./pkg/orchestrator/agents/workflow/step_based_workflow/...` green (only the
 pre-existing, unrelated `TestUpgradeDedicatedPulseSchedulePromptShape`
 gap noted in earlier rounds, itself since resolved by a concurrent session).
+
+## Fifth round — reviewer confirmed the four fixes; two of four remaining findings fixed (2026-08-30)
+
+Same reviewer re-checked committed `main`: the fourth round's four fixes hold
+and all relevant Go tests pass, but flagged 2 new/deeper findings plus
+reconfirmed the 2 already-known deferred items (see Follow-up below — not
+started, same explicit user decision as before, not silently expanded here).
+Both new findings verified against the actual code before fixing:
+
+- **Exact step attribution was still incomplete on reuse** — the fourth
+  round's `step_id` fix only changed what a BRAND-NEW finding's `StepID`
+  defaults to. Reusing an existing issue via `issue_id` (exactly what callers
+  are told to do for the same semantic root cause) never actually persisted a
+  supplied `step_id` at all: `recordRunConcernLinesAtWithFingerprints`'s
+  `ON CONFLICT(fingerprint)` clause never listed `step_id` in its `SET`, so a
+  fingerprint match (the normal reuse path) silently kept whatever `step_id`
+  the row already had — my own upstream "prefer the explicit step_id"
+  computation in `RecordPulseReviewFinding` was consequently inert. A legacy
+  row (filed before this fix existed) or a genuinely module-wide finding thus
+  became a permanent dead end: reusing it could never satisfy
+  `verifyStepDriftCheckFindingsExist`'s exact-step check. Fixed at the real
+  write authority (`run_concerns.go`): the row's current `step_id` is now read
+  fresh alongside its status, and `step_id = excluded.step_id` is applied in
+  the `ON CONFLICT` clause — but only when the CURRENT persisted value is
+  itself a canonical module name (`pulsemodules.IsValid`), i.e. a placeholder,
+  never when it is already a real, distinct step identity (a real attribution
+  must never silently move to a different step). New
+  `TestRecordPulseReviewFindingUpgradesLegacyModuleStepIDOnReuse` covers all
+  three shapes: initial placeholder, upgrade via an explicit `step_id` on
+  reuse, and a subsequent step_id-omitting reuse that must NOT regress the
+  real attribution back to the placeholder.
+- **Late-repair scheduling failures were logged, not surfaced** — if
+  `CountPulseActionableWorkflowIssues`, the `technical_review` due-state read,
+  or `forcePulseModuleDueForLateRepairDebt` failed inside the plan-drift-review
+  late-insertion safety net, `runPulseLifecycle` only logged it and moved on;
+  the pass could still reach `pulseLifecycleCompleted` even though the safety
+  net — whose entire purpose is preventing a false-clean completion — could
+  not itself confirm whether late repair debt got scheduled. All three error
+  paths now set `result = pulseLifecycleStepRunResult{outcome:
+  pulseLifecycleStepWaitFailed, ...}` on the `plan-drift-review` step, the
+  exact same mechanism the adjacent `review-fix` completeness gate already
+  uses a few lines above (`handleStepFailure` → `recoveryNotes` →
+  `pulseLifecyclePartial`), so the pass is correctly reported partial instead
+  of a false clean success. Not covered by a dedicated scheduler-level
+  integration test — `runPulseLifecycle` needs substantial session/step
+  infrastructure to exercise directly, and this specific branch is a 3-line
+  change reusing an already-relied-upon existing pattern in the same function,
+  stated plainly rather than claimed as tested.
+
+`go build`/`go vet`/`gofmt` clean; full `go test ./...` green, no failures at
+all (the previously-noted schedule-prompt-shape gap remains resolved).
+
+**Still not started, per the user's own earlier "treat as its own follow-up"
+decision** — reconfirmed by this same reviewer, not new: the workflow-level
+`workflow_drift_review` deletion-coverage flag (a deleted step's own
+`drift_review` record is pruned along with it, so the canonical candidate
+scan has nothing left to see) and slash/scheduled `/review-artifact-drift`
+implementation parity (still a separate read-only Technical Review checklist,
+not plan_drift_review's candidate collector/repair contract/completion
+writer). Both remain real gaps in full PLAT-258 acceptance; deliberately not
+started in this round without checking scope with the user again first.

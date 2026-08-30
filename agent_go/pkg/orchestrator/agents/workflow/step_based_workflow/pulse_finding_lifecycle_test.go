@@ -385,6 +385,99 @@ func TestRecordPulseReviewFindingFallsBackToModuleWhenStepIDOmitted(t *testing.T
 	}
 }
 
+// TestRecordPulseReviewFindingUpgradesLegacyModuleStepIDOnReuse reproduces a
+// dead end the earlier step_id fix introduced: reusing an existing issue
+// whose StepID is a canonical module name (the pre-step_id-argument fallback,
+// or a genuinely module-wide finding) permanently preserved that placeholder
+// even when a later call supplied a real step_id, because the SQL
+// ON CONFLICT write path never applied the incoming step_id on a fingerprint
+// match at all. That made a legacy or module-wide issue impossible to ever
+// attribute to a real step through the normal "reuse the same issue_id for
+// the same semantic root cause" path callers are told to follow — exactly
+// the scenario plan_drift_review's own verifyStepDriftCheckFindingsExist
+// needs to succeed for.
+func TestRecordPulseReviewFindingUpgradesLegacyModuleStepIDOnReuse(t *testing.T) {
+	ctx := context.Background()
+	workspacePath := concernsWorkspace(t)
+
+	// A finding filed with no step_id — StepID falls back to the module name,
+	// simulating both a pre-fix legacy row and a genuinely module-wide finding.
+	first, err := RecordPulseReviewFinding(ctx, workspacePath, "pulse-1", "review-1", PulseReviewFindingInput{
+		Concern: "Report SQL references a column dropped from the live schema.",
+		Module:  pulsemodules.PlanDriftReviewID,
+		PulseFindingDetails: PulseFindingDetails{
+			IssueKind:      "workflow_issue",
+			Classification: "correctness_bug",
+			Severity:       "medium",
+			Summary:        "db/reports/index.html queries a column that no longer exists.",
+			Impact:         "The report silently fails to render this section.",
+			Evidence:       []string{"db/reports/index.html"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("record legacy finding: %v", err)
+	}
+	findings, err := LoadPulseFindingLifecycles(ctx, workspacePath, "", -1)
+	if err != nil || len(findings) != 1 {
+		t.Fatalf("load legacy finding: findings=%+v err=%v", findings, err)
+	}
+	if findings[0].StepID != pulsemodules.PlanDriftReviewID {
+		t.Fatalf("legacy finding StepID = %q, want the module-name placeholder", findings[0].StepID)
+	}
+
+	// A later review reuses the same issue for the same root cause, now
+	// supplying the real step_id per plan-drift-review.md's guidance.
+	if _, err := RecordPulseReviewFinding(ctx, workspacePath, "pulse-2", "review-2", PulseReviewFindingInput{
+		IssueID: first.IssueID,
+		StepID:  "scan-linkedin-feed-for-job-posts",
+		Concern: "Report SQL still references the dropped column.",
+		Module:  pulsemodules.PlanDriftReviewID,
+		PulseFindingDetails: PulseFindingDetails{
+			IssueKind:      "workflow_issue",
+			Classification: "correctness_bug",
+			Severity:       "medium",
+			Summary:        "db/reports/index.html queries a column that no longer exists.",
+			Impact:         "The report silently fails to render this section.",
+			Evidence:       []string{"db/reports/index.html"},
+		},
+	}); err != nil {
+		t.Fatalf("reuse legacy finding with explicit step_id: %v", err)
+	}
+
+	findings, err = LoadPulseFindingLifecycles(ctx, workspacePath, "", -1)
+	if err != nil || len(findings) != 1 {
+		t.Fatalf("reload upgraded finding: findings=%+v err=%v", findings, err)
+	}
+	if findings[0].StepID != "scan-linkedin-feed-for-job-posts" {
+		t.Fatalf("upgraded finding StepID = %q, want the real step id from the reuse call", findings[0].StepID)
+	}
+
+	// A THIRD call, now omitting step_id again, must not regress the real
+	// attribution back to a placeholder — a real step identity never moves.
+	if _, err := RecordPulseReviewFinding(ctx, workspacePath, "pulse-3", "review-3", PulseReviewFindingInput{
+		IssueID: first.IssueID,
+		Concern: "Report SQL still references the dropped column, confirmed a third time.",
+		Module:  pulsemodules.PlanDriftReviewID,
+		PulseFindingDetails: PulseFindingDetails{
+			IssueKind:      "workflow_issue",
+			Classification: "correctness_bug",
+			Severity:       "medium",
+			Summary:        "db/reports/index.html queries a column that no longer exists.",
+			Impact:         "The report silently fails to render this section.",
+			Evidence:       []string{"db/reports/index.html"},
+		},
+	}); err != nil {
+		t.Fatalf("reconfirm finding without step_id: %v", err)
+	}
+	findings, err = LoadPulseFindingLifecycles(ctx, workspacePath, "", -1)
+	if err != nil || len(findings) != 1 {
+		t.Fatalf("reload reconfirmed finding: findings=%+v err=%v", findings, err)
+	}
+	if findings[0].StepID != "scan-linkedin-feed-for-job-posts" {
+		t.Fatalf("real step attribution regressed to %q after a step_id-omitting reuse", findings[0].StepID)
+	}
+}
+
 // TestDifferentModulesSharingATargetKeyDoNotCollide reproduces Sales
 // Outreach PUL-1E38F625: technical_review and strategic_review independently
 // filed unrelated findings that happened to name the same target_key (a

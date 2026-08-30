@@ -211,10 +211,18 @@ func RecordPulseReviewFinding(ctx context.Context, workspacePath, pulseRunID, re
 			return PulseReviewFindingRecord{}, lookupErr
 		}
 		fingerprint = existing.Fingerprint
-		// An existing issue's original step identity is authoritative — the
-		// same finding cannot silently move to a different step just because
-		// a later call happens to pass a different step_id.
-		stepID = existing.StepID
+		// Prefer an explicit step_id on this call as the write's candidate
+		// value; otherwise fall back to whatever is already on record. This is
+		// only a candidate — recordRunConcernLinesAtWithFingerprints reads the
+		// row's CURRENT step_id fresh at write time and is the actual
+		// authority on whether a candidate may overwrite it (only when the
+		// persisted value is itself a placeholder module name, never a real
+		// step identity already on record — see its own doc comment).
+		if explicit := strings.TrimSpace(input.StepID); explicit != "" {
+			stepID = explicit
+		} else {
+			stepID = existing.StepID
+		}
 		promotedObservation = !IsPulseIssue(existing)
 		promotedIssueID = NewPulseIssue(existing).ID
 		// A PUL id is a reference to the existing lifecycle row, never a new

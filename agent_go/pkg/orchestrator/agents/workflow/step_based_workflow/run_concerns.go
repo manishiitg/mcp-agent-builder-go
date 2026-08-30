@@ -326,8 +326,25 @@ func recordRunConcernLinesAtWithFingerprints(
 			fp = canonical
 		}
 		previousStatus := ""
-		if err := db.QueryRowContext(ctx, `SELECT status FROM run_concerns WHERE fingerprint=?`, fp).Scan(&previousStatus); err != nil && err != sql.ErrNoRows {
+		previousStepID := ""
+		if err := db.QueryRowContext(ctx, `SELECT status, step_id FROM run_concerns WHERE fingerprint=?`, fp).Scan(&previousStatus, &previousStepID); err != nil && err != sql.ErrNoRows {
 			return recorded, err
+		}
+		// A recurring write's step_id may only UPGRADE a placeholder to a real
+		// attribution, never move an already-real one. Before per-caller
+		// step_id arguments existed, every finding's row got a canonical
+		// module name (e.g. "plan_drift_review") as its step_id fallback; that
+		// is not a real step identity, and a legacy or module-wide row stuck
+		// with one would otherwise be a permanent dead end for any caller that
+		// needs exact-step attribution (e.g. plan_drift_review's own
+		// verifyStepDriftCheckFindingsExist) — even though reusing the same
+		// fingerprint/issue for the same semantic root cause is exactly what
+		// callers are told to do. A previousStepID that is NOT a canonical
+		// module name is already real and must never silently move to a
+		// different step just because a later call passes a different one.
+		finalStepID := stepID
+		if previousStepID != "" && !pulsemodules.IsValid(previousStepID) {
+			finalStepID = previousStepID
 		}
 		// A concern that recurs after being marked resolved reopens: the fix did
 		// not hold, and that is strictly more important than the original report.
@@ -345,6 +362,7 @@ func recordRunConcernLinesAtWithFingerprints(
 			(fingerprint, issue_id, step_id, phase, group_name, text, first_seen_run, first_seen_at, last_seen_run, last_seen_at, seen_count, status, first_seen_platform_version)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
 			ON CONFLICT(fingerprint) DO UPDATE SET
+				step_id = excluded.step_id,
 				text = excluded.text,
 				phase = excluded.phase,
 				group_name = excluded.group_name,
@@ -355,7 +373,7 @@ func recordRunConcernLinesAtWithFingerprints(
 					ELSE 1
 				END,
 				status = CASE WHEN run_concerns.status IN (?, ?, ?) THEN ? ELSE run_concerns.status END`,
-			fp, issueID, stepID, phase, groupName, text, runFolder, observedAt, runFolder, observedAt, ConcernStatusOpen, PlatformVersion(),
+			fp, issueID, finalStepID, phase, groupName, text, runFolder, observedAt, runFolder, observedAt, ConcernStatusOpen, PlatformVersion(),
 			ConcernStatusResolved, ConcernStatusAwaitingVerification, ConcernStatusAwaitingRun, ConcernStatusOpen)
 		if err != nil {
 			return recorded, err

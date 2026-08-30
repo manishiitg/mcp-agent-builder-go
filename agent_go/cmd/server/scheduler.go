@@ -2532,15 +2532,20 @@ func (s *SchedulerService) runPulseLifecycle(ctx context.Context, sctx *Schedule
 			if st.label == "plan-drift-review" && result.outcome == pulseLifecycleStepCompleted {
 				remaining, countErr := stepworkflow.CountPulseActionableWorkflowIssues(ctx, sctx.WorkspacePath)
 				if countErr != nil {
-					s.sessionLogf(sctx, sessionID, "[PULSE] could not check for late plan_drift_review repair work; not adjusting the Review + Fix turn: %v", countErr)
+					// This safety net exists specifically to prevent late repair debt
+					// from silently surviving as a false "completed" pass — a failure
+					// to even CHECK for that debt must not itself be swallowed into a
+					// clean completion; that would defeat the whole point the same way
+					// the thing being guarded against would.
+					result = pulseLifecycleStepRunResult{outcome: pulseLifecycleStepWaitFailed, err: fmt.Errorf("check for late plan_drift_review repair work: %w", countErr)}
 				} else if remaining > 0 {
 					technicalDue, technicalDueErr := pulseWorklistModulesDue(ctx, sctx.WorkspacePath, pulseRunID, pulseModuleTechnicalReview)
 					if technicalDueErr != nil {
-						s.sessionLogf(sctx, sessionID, "[PULSE] could not inspect technical_review due state after plan_drift_review; not adjusting the Review + Fix turn: %v", technicalDueErr)
+						result = pulseLifecycleStepRunResult{outcome: pulseLifecycleStepWaitFailed, err: fmt.Errorf("inspect technical_review due state after plan_drift_review found %d late issue(s): %w", remaining, technicalDueErr)}
 					} else if !technicalDue {
 						if forceErr := forcePulseModuleDueForLateRepairDebt(ctx, sctx.WorkspacePath, pulseRunID, pulseModuleTechnicalReview,
 							fmt.Sprintf("plan_drift_review left %d actionable workflow-owned issue(s) Gate did not anticipate before it ran", remaining)); forceErr != nil {
-							s.sessionLogf(sctx, sessionID, "[PULSE] could not force technical_review due after plan_drift_review found late repair work: %v", forceErr)
+							result = pulseLifecycleStepRunResult{outcome: pulseLifecycleStepWaitFailed, err: fmt.Errorf("force technical_review due for %d late plan_drift_review issue(s): %w", remaining, forceErr)}
 						} else if !reviewFixScheduled {
 							s.sessionLogf(sctx, sessionID, "[PULSE] plan_drift_review left %d actionable issue(s) Gate did not anticipate; inserting a same-pass Review + Fix turn", remaining)
 							inserted := append([]pulseLifecycleStep{pulseLifecycleAgenticReviewStep(pulseRunID)}, steps[i+1:]...)
