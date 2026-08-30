@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | Claude Code |
-| Ticket state | `open after second independent review` — the phase A corrective switch audit is credible and focused tests pass, but its regression test stops short of the real executor/live-run boundary; phase B can skip existing and nested routing steps and does not prove every route has evaluation coverage; frontend per-route reporting tabs remain unbuilt |
+| Ticket state | `second independent review's findings resolved` — real executeRoutingStep execution now covered by a regression test (not just the pieces around it); phase B's drift-review contract now versioned so existing reviews are invalidated when the check set grows, nested routing steps keep their type, and route_eval_pairing requires full route coverage, not just one reference; frontend per-route reporting tabs remain unbuilt (unchanged, tracked separately); live manual reverify against a real workflow run still open |
 | Last synchronized | `2026-08-30` |
 
 - **Type:** platform feature (design only, no code changed). Filed at the
@@ -421,3 +421,76 @@ coverage; exercise a real branch execution through the controller (plus the
 already-listed live reverify); and implement or explicitly split the
 per-route reporting UI into a linked follow-up ticket before calling this
 feature complete.
+
+## Second independent review — resolved 2026-08-30
+
+Addressed all four required-closure items:
+
+1. **Drift-review contract versioning.** Added `StepDriftReview.ContractVersion`
+   and a package constant `planDriftReviewContractVersion` (currently 2 —
+   1 was the original phase 1-6 check set, 2 adds phase B's two routing
+   checks) in `plan_drift_candidates.go`. `CollectPlanDriftCandidates`'s
+   due-ness check now also fires when `ContractVersion <
+   planDriftReviewContractVersion` (zero/missing counts as always-stale,
+   correctly — no review recorded before the field existed could have run
+   checks a later version added), alongside the existing
+   `NeedsReview`/nil-record conditions. `createRecordPlanDriftReviewExecutor`
+   stamps the current version on every completed review. This is a global
+   version bump (every step gets one re-review pass, not only routing
+   steps) — simpler than trying to scope invalidation to just the step
+   types a given version's new checks apply to, and safe: a one-time extra
+   review of an already-clean non-routing step is a false-positive-safe
+   over-inclusion, not a correctness problem. Covered by
+   `TestCollectPlanDriftCandidatesReflagsStaleContractVersion` and an
+   assertion added to `TestRecordPlanDriftReviewExecutorWritesNewRecord`.
+2. **Nested routing candidates keep their type.** `CollectPlanDriftCandidates`
+   built `stepTypeByID` from only top-level `plan.Steps`, while candidate
+   discovery (`planStepIDsFromPlanJSON`) already recurses into a
+   `todo_task`'s `predefined_routes[].sub_agent_step`. Added
+   `collectStepTypesByID`, the typed equivalent of that same recursion
+   (mirrors `collectKnownWorkflowStepIDs` in `planning_exports.go`), so a
+   nested routing/branch step's `StepType` is populated the same as a
+   top-level one. Covered by
+   `TestCollectPlanDriftCandidatesPopulatesStepTypeForNestedRoutingStep`.
+3. **`route_eval_pairing` requires full coverage.** Rewrote the check's
+   guidance in `plan-drift-review.md`: instead of passing on any single
+   `applies_to_routes` reference, the reviewer must union every matching
+   eval step's `route_ids` and compare against the routing step's full
+   declared route set, naming any missing `route_id` as the finding. Two
+   explicit judgment carve-outs documented: an unscoped eval step (no
+   `applies_to_routes` at all) can count as covering routes with no
+   route-specific eval only if it genuinely evaluates something the
+   routing decision doesn't affect, not if it only exercises whichever
+   branch a run happened to take; and a route landing on a trivial no-op
+   destination may legitimately have nothing worth evaluating, judged, not
+   assumed. This stays a judgment check (per the original phase B design
+   choice), not new Go code — deterministic route-coverage math would
+   still need to answer "is this eval step's scope actually about this
+   route" (as e.g. #4 above found is the point of the human judgment).
+4. **Real branch execution through the controller.**
+   `TestExecuteRoutingStepRunsRealBranchExecution` (`controller_branch_test.go`)
+   drives a `*BranchPlanStep` through the real `executeRoutingStep`, using
+   the same `httptest.NewServer` + `WorkspaceClient` mocking pattern as
+   `base_orchestrator_workspace_test.go`: every read answers "not found" so
+   resolution falls through to `default_route_id` (the same path a plain
+   `*RoutingPlanStep` already exercises live when no `route_selection.json`
+   exists yet), folder creation and the `routing-evaluation.json` write are
+   mocked to succeed. Asserts the real executor returns the correct
+   selected route, persists `SetSelectedRouteID`/`SetRoutingResponse` onto
+   the branch step struct, and that feeding its output into
+   `nextStepIDForSelectedRoute` (the same call the main execution loop
+   makes) resolves to the route's real `next_step_id`. This is the first
+   test — for routing OR branch — that calls `executeRoutingStep` at all
+   (confirmed via `grep -rln "executeRoutingStep(" --include="*_test.go"`
+   returning empty before this).
+
+All four fixes verified: `go build ./...`, `gofmt -l`, `go vet` clean (only
+the same pre-existing unrelated `vet`/test findings already on record);
+`go test ./pkg/orchestrator/agents/workflow/step_based_workflow/...` and
+`./cmd/server/guidance/...` green;
+`TestStrategyAuditorGuidanceRequiresLongitudinalEvidenceAndReadOnlyHandoff`,
+previously a recorded pre-existing failure, is now fixed upstream by a
+concurrent session and passes.
+
+Still open, unchanged from before this review: the live manual reverify
+against a real workflow run, and the frontend per-route reporting tabs.

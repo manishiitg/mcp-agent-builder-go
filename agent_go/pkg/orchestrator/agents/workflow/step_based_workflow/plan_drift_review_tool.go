@@ -64,14 +64,6 @@ func validateStepDriftChecks(checks []StepDriftCheck) error {
 	return nil
 }
 
-// verifyStepDriftCheckFindingsExist confirms every fail-status check's
-// finding_id resolves to a real, currently-filed Pulse finding in this
-// workspace — not merely a non-empty string. validateStepDriftChecks alone
-// only enforces the field is present; an agent could satisfy that with a
-// fabricated id. This is the part of "atomic" that is actually achievable
-// across two separate tool calls: record_pulse_finding must have already run
-// and persisted before record_plan_drift_review is allowed to mark the check
-// reviewed.
 // pulseFindingInactiveStatuses mirrors the "active" boundary used elsewhere
 // in this package (e.g. run_concerns.go's active-issue filter): a finding
 // that has been closed out no longer represents unresolved repair work, so
@@ -228,6 +220,7 @@ func createRecordPlanDriftReviewExecutor(workspacePath string, logger loggerv2.L
 			ReviewedBy:              reviewedBy,
 			ReviewedThroughChangeID: reviewedThroughChangeID,
 			Checks:                  checks,
+			ContractVersion:         planDriftReviewContractVersion,
 		}
 
 		found := false

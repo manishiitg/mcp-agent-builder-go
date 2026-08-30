@@ -133,101 +133,17 @@ const parseJsonLike = (content: unknown): unknown => {
   }
 }
 
-const StructuredJsonValue = ({ value, depth = 0 }: { value: unknown; depth?: number }) => {
-  if (value === null || value === undefined) {
-    return <span className="italic text-muted-foreground">{value === null ? 'null' : 'not set'}</span>
-  }
-
-  if (typeof value === 'boolean') {
-    return (
-      <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${value
-        ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300'
-        : 'border-rose-500/25 bg-rose-500/10 text-rose-600 dark:text-rose-300'
-      }`}>
-        {value ? 'true' : 'false'}
-      </span>
-    )
-  }
-
-  if (typeof value === 'number') {
-    return <span className="font-mono tabular-nums text-sky-600 dark:text-sky-300">{value.toLocaleString()}</span>
-  }
-
-  if (typeof value === 'string') {
-    if (value.length > 360) {
-      return (
-        <details className="group/string">
-          <summary className="cursor-pointer list-none text-foreground/85 hover:text-foreground">
-            <span className="line-clamp-2 whitespace-pre-wrap break-words">{value}</span>
-            <span className="mt-1 inline-block text-[10px] font-medium text-primary group-open/string:hidden">Show full text</span>
-          </summary>
-          <p className="mt-2 whitespace-pre-wrap break-words leading-relaxed text-foreground/85">{value}</p>
-        </details>
-      )
-    }
-    return <span className="whitespace-pre-wrap break-words text-foreground/85">{value || '—'}</span>
-  }
-
-  if (Array.isArray(value)) {
-    if (value.length === 0) return <span className="text-muted-foreground">Empty list</span>
-    const simpleValues = value.every(item => item === null || ['string', 'number', 'boolean'].includes(typeof item))
-    if (simpleValues && value.length <= 12) {
-      return (
-        <div className="flex flex-wrap gap-1.5">
-          {value.map((item, index) => (
-            <span key={index} className="max-w-full rounded-md border border-border bg-muted/40 px-2 py-1 text-[11px]">
-              <StructuredJsonValue value={item} depth={depth + 1} />
-            </span>
-          ))}
-        </div>
-      )
-    }
-    return (
-      <details className="group/array" open={depth < 1}>
-        <summary className="cursor-pointer text-[11px] font-medium text-primary">
-          {value.length} item{value.length === 1 ? '' : 's'}
-        </summary>
-        <div className="mt-2 space-y-2 border-l border-border pl-3">
-          {value.map((item, index) => (
-            <div key={index} className="rounded-md border border-border/70 bg-background/60 p-2">
-              <div className="mb-1 text-[10px] font-semibold text-muted-foreground">Item {index + 1}</div>
-              <StructuredJsonValue value={item} depth={depth + 1} />
-            </div>
-          ))}
-        </div>
-      </details>
-    )
-  }
-
-  if (typeof value === 'object') {
-    const entries = Object.entries(value as Record<string, unknown>)
-    if (entries.length === 0) return <span className="text-muted-foreground">Empty object</span>
-    return (
-      <div className="overflow-hidden rounded-md border border-border/80 bg-background/60">
-        {entries.map(([key, nestedValue]) => (
-          <div key={key} className="grid grid-cols-1 gap-1 border-b border-border/60 px-3 py-2.5 last:border-b-0 sm:grid-cols-[minmax(120px,28%)_1fr] sm:gap-4">
-            <dt className="break-words font-mono text-[10px] font-semibold text-muted-foreground">{key}</dt>
-            <dd className="min-w-0 text-xs"><StructuredJsonValue value={nestedValue} depth={depth + 1} /></dd>
-          </div>
-        ))}
-      </div>
-    )
-  }
-
-  return <span className="font-mono text-xs">{String(value)}</span>
-}
-
 const StructuredJsonView = ({ value, label = 'Technical details', collapsed = true }: { value: unknown; label?: string; collapsed?: boolean }) => {
+  const formattedJson = formatLogFileContent(value)
   const body = (
-    <div className="max-h-[60vh] overflow-auto bg-muted/10 p-3">
-      <StructuredJsonValue value={parseJsonLike(value)} />
-    </div>
+    <pre className="max-h-[60vh] overflow-auto bg-[#0b0e12] p-3 font-mono text-xs leading-5 text-slate-200 selection:bg-sky-500/35 whitespace-pre">
+      <code>{formattedJson}</code>
+    </pre>
   )
 
   if (!collapsed) {
     return (
       <div className="overflow-hidden rounded-md border border-border bg-background/70">
-        <div className="border-b border-border px-3 py-2 text-xs font-semibold text-foreground">{label}</div>
         {body}
       </div>
     )
@@ -238,7 +154,7 @@ const StructuredJsonView = ({ value, label = 'Technical details', collapsed = tr
       <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-xs font-semibold text-foreground hover:bg-accent/40">
         <ChevronRight className="h-3.5 w-3.5 text-muted-foreground transition-transform group-open/json:rotate-90" />
         {label}
-        <span className="ml-auto text-[10px] font-normal text-muted-foreground">Structured data</span>
+        <span className="ml-auto text-[10px] font-normal text-muted-foreground">Formatted JSON</span>
       </summary>
       <div className="border-t border-border">{body}</div>
     </details>

@@ -294,6 +294,19 @@ type StepDriftReview struct {
 	ReviewedBy              string           `json:"reviewed_by"`                          // e.g. "pulse:plan_drift_review" or a user-invoked slash-command session id
 	ReviewedThroughChangeID string           `json:"reviewed_through_change_id,omitempty"` // the latest planning/changelog change_id this review consumed
 	Checks                  []StepDriftCheck `json:"checks"`
+	// ContractVersion is the planDriftReviewContractVersion (plan_drift_candidates.go)
+	// in effect when this review was recorded. A step's own field edits are
+	// what NeedsReview tracks; a *global* change to which checks the reviewer
+	// turn is required to run (e.g. PLAT-259 phase B adding
+	// route_structural_isolation/route_eval_pairing) is not a per-step plan
+	// edit and would never set NeedsReview -- so an old review recorded under
+	// a lower contract version is treated as due again even though nothing
+	// about the step itself changed. Zero (the JSON-omitted default) means
+	// "recorded before this field existed," which is always < the current
+	// version and therefore always due -- the correct behavior, since no
+	// review recorded before this field existed could have run the checks a
+	// later contract version added.
+	ContractVersion int `json:"contract_version,omitempty"`
 }
 
 // StepDriftCheck is the evidence-required record for one drift check against
