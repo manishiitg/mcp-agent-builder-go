@@ -10,7 +10,7 @@ import {
   type NodeChange,
   type OnNodeDrag
 } from '@xyflow/react'
-import { Braces, FileText, ListOrdered, Route, Settings, X } from 'lucide-react'
+import { Braces, FileText, ListOrdered, RefreshCw, Route, Settings, X } from 'lucide-react'
 import '@xyflow/react/dist/style.css'
 
 import { useModeStore } from '../../../stores/useModeStore'
@@ -249,11 +249,6 @@ const WorkflowReportCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasPr
     ])
   }, [loadPlanRefresh, refreshWorkspaceState])
 
-  const handleReportRefresh = useCallback(async () => {
-    await handleRefresh()
-    window.dispatchEvent(new CustomEvent(WORKFLOW_REPORT_REFRESH_EVENT))
-  }, [handleRefresh])
-
   useImperativeHandle(ref, () => ({
     refresh: async () => {
       await handleRefresh()
@@ -283,7 +278,6 @@ const WorkflowReportCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasPr
             onCreatePlan={onCreatePlan || (() => {})}
             showChatArea={showChatArea}
             onToggleChatArea={onToggleChatArea}
-            onRefresh={handleReportRefresh}
             onExport={() => window.dispatchEvent(new CustomEvent(WORKFLOW_REPORT_EXPORT_EVENT))}
             chatTabsSlot={chatTabsSlot}
           />
@@ -379,7 +373,6 @@ const WorkflowFilesCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasPro
             onCreatePlan={onCreatePlan || (() => {})}
             showChatArea={showChatArea}
             onToggleChatArea={onToggleChatArea}
-            onRefresh={handleRefresh}
             chatTabsSlot={chatTabsSlot}
           />
         </div>
@@ -539,7 +532,6 @@ const WorkflowInspectorCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanva
             onCreatePlan={onCreatePlan || (() => {})}
             showChatArea={showChatArea}
             onToggleChatArea={onToggleChatArea}
-            onRefresh={handleRefresh}
             chatTabsSlot={chatTabsSlot}
           />
         </div>
@@ -1707,6 +1699,13 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
 
     console.log('[WorkflowCanvas] Refresh completed')
   }, [workspacePath, loadPlanRefresh, refreshEvaluationPlan, refreshWorkspaceState, setViewport])
+
+  // The in-canvas Plan control is intentionally narrower than the canvas-wide
+  // refresh used by the toolbar and imperative API: it only reloads the plan.
+  const handlePlanRefresh = useCallback(async () => {
+    if (!workspacePath) return
+    await loadPlanRefresh()
+  }, [workspacePath, loadPlanRefresh])
 
   // Workflow execution
   const {
@@ -2954,7 +2953,6 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
               onCreatePlan={onCreatePlan || (() => {})}
               showChatArea={showChatArea}
               onToggleChatArea={onToggleChatArea}
-              onRefresh={handleRefresh}
               chatTabsSlot={chatTabsSlot}
               openPulseOnMount={openPulseOnMount}
             />
@@ -3005,7 +3003,6 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
             onCreatePlan={onCreatePlan || (() => {})}
             showChatArea={showChatArea}
             onToggleChatArea={onToggleChatArea}
-            onRefresh={handleRefresh}
             chatTabsSlot={chatTabsSlot}
             openPulseOnMount={openPulseOnMount}
             onExport={effectiveCanvasViewMode === 'report'
@@ -3022,6 +3019,16 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
             {workspacePath && <ReportView workspacePath={workspacePath} focusTier={reportFocusTier} />}
           </div>
         ) : <div className="h-full min-h-0 relative flex">
+          <button
+            type="button"
+            onClick={() => void handlePlanRefresh()}
+            className="absolute right-3 top-3 z-20 inline-flex h-8 w-8 items-center justify-center rounded-md border border-border bg-background/95 text-muted-foreground shadow-sm backdrop-blur-sm transition-colors hover:bg-muted hover:text-foreground"
+            aria-label="Refresh plan"
+            title="Refresh plan"
+            data-testid="refresh-plan"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+          </button>
           <div className={`min-h-0 h-full transition-all duration-300 ${showVariablesSidebar ? 'mr-[450px]' : ''} ${previewDevice === 'desktop' ? 'flex-1' : previewDeviceShellClass(previewDevice)}`}>
         <ReactFlow
           className="w-full h-full bg-gray-50 dark:bg-gray-900"
@@ -3063,8 +3070,8 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
         {/* Batch Progress Header */}
         <BatchProgressHeader position="canvas" />
 
-        {/* Plan/report navigation, device width, export, refresh, and collapse
-            now live in the workflow-level toolbar. */}
+        {/* Plan-specific controls live inside the canvas; shared navigation and
+            workflow actions remain in the workflow-level toolbar. */}
         </div>
 
         {selectedFlowNode && (
