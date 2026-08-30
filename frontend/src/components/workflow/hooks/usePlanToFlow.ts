@@ -606,6 +606,185 @@ function layoutWithDagre(nodes: WorkflowNode[], edges: WorkflowEdge[], direction
   return { nodes: layoutedNodes, edges }
 }
 
+function planStepSuccessors(step: PlanStep): string[] {
+  if (isRoutingStep(step) || isBranchStep(step)) {
+    return step.routes.map(route => route.next_step_id).filter(Boolean)
+  }
+
+  const routable = step as PlanStep & {
+    next_step_id?: string
+    if_yes_next_step_id?: string
+    if_no_next_step_id?: string
+    option_routes?: Record<string, string>
+  }
+  return [
+    routable.next_step_id,
+    routable.if_yes_next_step_id,
+    routable.if_no_next_step_id,
+    ...Object.values(routable.option_routes || {}),
+  ].filter((id): id is string => Boolean(id && id !== 'end'))
+}
+
+// A major routing step describes several independently runnable pipelines.
+// Dagre must honour every handoff between those pipelines, which can turn a
+// small set of routes into a very tall, sparse tree. Keep the workflow header
+// where the canvas put it, then arrange route bodies in a compact grid below it.
+// Handoff edges are intentionally retained between cells.
+function distributePrimaryRouteLanes(nodes: WorkflowNode[], plan: PlanningResponse): WorkflowNode[] {
+  if (nodes.some(node => node.id.includes('-sub-agent-'))) return nodes
+
+  const router = plan.steps.find(isRoutingStep)
+  if (!router) return nodes
+
+  const routes = router.routes
+  if (routes.length < 3) return nodes
+
+  const stepByID = new Map(plan.steps.map(step => [step.id, step]))
+  const nodeByID = new Map(nodes.map(node => [node.id, node]))
+  const routeEntries = new Set(routes.map(route => route.next_step_id))
+
+  const laneSteps = routes.map(route => {
+    const seen = new Set<string>()
+    const queue = [route.next_step_id]
+    const ordered: string[] = []
+
+    while (queue.length > 0) {
+      const stepID = queue.shift()
+      if (!stepID || seen.has(stepID) || !stepByID.has(stepID)) continue
+      // A decision may hand off into another top-level route. Keep that edge,
+      // but do not pull the destination out of its own lane.
+      if (stepID !== route.next_step_id && routeEntries.has(stepID)) continue
+      seen.add(stepID)
+      ordered.push(stepID)
+      for (const successor of planStepSuccessors(stepByID.get(stepID)!)) {
+        if (!seen.has(successor)) queue.push(successor)
+      }
+    }
+    return ordered
+  })
+
+  // A step may be reachable from more than one route. Render it in the first
+  // route that reaches it; duplicating it would make both the layout and the
+  // execution state misleading.
+  const assignedStepIDs = new Set<string>()
+  const uniqueLaneSteps = laneSteps.map(steps => steps.filter(id => {
+    if (assignedStepIDs.has(id)) return false
+    assignedStepIDs.add(id)
+    return true
+  }))
+  const laneStepIDs = new Set(uniqueLaneSteps.flat())
+  const preRouterIDs = plan.steps
+    .filter(step => planStepSuccessors(step).includes(router.id))
+    .map(step => step.id)
+  const independentIDs = plan.steps
+    .filter(step => step.id !== router.id && !laneStepIDs.has(step.id) && !preRouterIDs.includes(step.id))
+    .map(step => step.id)
+
+  const workflowNodes = nodes.filter(node =>
+    node.id !== 'start' && node.id !== 'variables' && node.id !== 'end'
+  )
+  if (workflowNodes.length === 0) return nodes
+
+  // The header is a persistent left column. Reuse the body bounds produced by
+  // the header-aware layout above so routes can never collide with Variables.
+  const bodyLeft = Math.min(...workflowNodes.map(node => node.position.x))
+  const bodyTop = Math.min(...workflowNodes.map(node => node.position.y))
+  const columns = Math.min(3, routes.length)
+  const laneGap = 72
+  const maxRouteWidth = Math.max(
+    280,
+    ...uniqueLaneSteps.flatMap(steps => steps
+      .map(id => nodeByID.get(id))
+      .filter((node): node is WorkflowNode => Boolean(node))
+      .map(node => getNodeLayoutDimensions(node).width)
+    )
+  )
+  const laneWidth = maxRouteWidth + laneGap
+  const gridWidth = (columns * maxRouteWidth) + ((columns - 1) * laneGap)
+  const centerX = bodyLeft + (gridWidth / 2)
+  const positionByID = new Map<string, { x: number; y: number }>()
+
+  const placeCentered = (id: string, y: number) => {
+    const node = nodeByID.get(id)
+    if (!node) return
+    const dims = getNodeLayoutDimensions(node)
+    positionByID.set(id, { x: centerX - (dims.width / 2), y })
+  }
+
+  let nextY = bodyTop
+  preRouterIDs.forEach(id => {
+    const node = nodeByID.get(id)
+    if (!node) return
+    placeCentered(id, nextY)
+    nextY += getNodeLayoutDimensions(node).height + 72
+  })
+
+  placeCentered(router.id, nextY)
+  const routerNode = nodeByID.get(router.id)
+  nextY += (routerNode ? getNodeLayoutDimensions(routerNode).height : 0) + 104
+
+  // Use up to three columns per row. This keeps six-route workflows readable
+  // at normal zoom instead of spreading them across one ultra-wide strip.
+  let laneBottom = nextY
+  for (let rowStart = 0; rowStart < uniqueLaneSteps.length; rowStart += columns) {
+    const rowLanes = uniqueLaneSteps.slice(rowStart, rowStart + columns)
+    const rowTop = laneBottom
+    let rowBottom = rowTop
+
+    rowLanes.forEach((steps, column) => {
+      let y = rowTop
+      const x = bodyLeft + (column * laneWidth)
+      steps.forEach(id => {
+        const node = nodeByID.get(id)
+        if (!node) return
+        const dims = getNodeLayoutDimensions(node)
+        positionByID.set(id, { x, y })
+        y += dims.height + 76
+      })
+      rowBottom = Math.max(rowBottom, y)
+    })
+
+    laneBottom = rowBottom + 96
+  }
+
+  // Steps which are not reachable from a primary route are genuine standalone
+  // jobs. Give them a compact bottom strip rather than letting them occupy
+  // arbitrary corners of the route map.
+  const independentTop = laneBottom
+  independentIDs.forEach((id, index) => {
+    const node = nodeByID.get(id)
+    if (!node) return
+    const column = index % columns
+    const row = Math.floor(index / columns)
+    const dims = getNodeLayoutDimensions(node)
+    positionByID.set(id, {
+      x: bodyLeft + (column * laneWidth),
+      y: independentTop + (row * (dims.height + 76)),
+    })
+  })
+
+  return nodes.map(node => {
+    const position = positionByID.get(node.id)
+    if (position) return { ...node, position }
+
+    // Keep supporting nodes attached to their plan step when that step moves
+    // into a route cell. They retain the original side-by-side offset.
+    const parentStepID = (node.data as { parentStepId?: string }).parentStepId
+    const parentPosition = parentStepID ? positionByID.get(parentStepID) : undefined
+    const originalParent = parentStepID ? nodeByID.get(parentStepID) : undefined
+    if (parentPosition && originalParent) {
+      return {
+        ...node,
+        position: {
+          x: parentPosition.x + (node.position.x - originalParent.position.x),
+          y: parentPosition.y + (node.position.y - originalParent.position.y),
+        },
+      }
+    }
+    return node
+  })
+}
+
 /**
  * Determine change type for a step based on detected changes
  */
@@ -2022,6 +2201,10 @@ export function usePlanToFlow(
 
     // Replace nodes with the adjusted positions
     layoutedResult.nodes = positionedNodes
+
+    if (layoutDirection === 'TB') {
+      layoutedResult.nodes = distributePrimaryRouteLanes(layoutedResult.nodes, plan)
+    }
 
     // Position the end node at the end of the workflow
     const endNodeIndex = layoutedResult.nodes.findIndex(n => n.id === 'end')

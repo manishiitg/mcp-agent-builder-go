@@ -67,8 +67,8 @@ const PNG_EXPORT_MAX_SIDE = 16000
 const PNG_EXPORT_MAX_PIXELS = 64_000_000
 // Bump this whenever the auto-layout algorithm changes so stale saved layouts
 // (custom drag positions from the old editor) are dropped and the new computed
-// layout takes over. 2.1-dagre: dagre-only layout + routing branch-target edge fix.
-const WORKFLOW_LAYOUT_VERSION = '2.1-dagre'
+// layout takes over. 2.3-route-grid: major route workflows use compact grid cells.
+const WORKFLOW_LAYOUT_VERSION = '2.3-route-grid'
 const FLOW_FIT_PADDING = 0.24
 const FLOW_FIT_MIN_ZOOM = 0.08
 const FLOW_FIT_MAX_ZOOM = 0.95
@@ -1435,6 +1435,10 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
         const layout = JSON.parse(response.data.content)
         if (layout.version !== WORKFLOW_LAYOUT_VERSION) {
           console.log('[WorkflowCanvas] Ignoring saved layout from older algorithm:', layout.version || 'unknown')
+          // A live refresh otherwise restores the positions captured before the
+          // version change, defeating the new auto-layout until a full reload.
+          currentPositionsRef.current.clear()
+          currentOffsetsRef.current.clear()
           return null
         }
         const positions = new Map<string, { x: number; y: number }>()
