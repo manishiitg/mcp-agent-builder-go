@@ -2673,6 +2673,7 @@ func pulseReviewBacklogFolderLine(folder RunFolderInfo) string {
 func pulseLifecycleAgenticReviewStep(pulseRunID string) pulseLifecycleStep {
 	technicalCheckpoint := fmt.Sprintf("runs/pulse/%s/technical-review.md", pulseRunID)
 	strategicCheckpoint := fmt.Sprintf("runs/pulse/%s/strategic-review.md", pulseRunID)
+	planDriftCheckpoint := fmt.Sprintf("runs/pulse/%s/plan-drift-review.md", pulseRunID)
 	return pulseLifecycleStep{
 		label: "review-fix",
 		query: fmt.Sprintf(`PULSE SEQUENCED REVIEW + FIX DISPATCH. pulse_run_id=%q. Load read_skill(skills=[{"name":"builder-reference","path":"references/pulse-review-fixer.md"}]) and follow its Sequenced Technical Maintenance contract. Read the durable Gate worklist via get_pulse_state(view="module", pulse_run_id=<this id>) and handle only due modules in the persisted mode.
@@ -2681,7 +2682,9 @@ func pulseLifecycleAgenticReviewStep(pulseRunID string) pulseLifecycleStep {
 
 		When strategic_review is due, launch one separate read-only executor. It performs the route-aware scan, selects the smallest sufficient strategic focus set, audits the warranted mechanisms, persists typed findings/decisions/impact and one terminal strategic_review module result. Every turn updates %q. Audit-only and backlog_drain omit opportunity discovery. Strategic Review never repairs workflow implementation.
 
-		Automatic-notification prose is not persistence. Use message_sequence only when further reasoning genuinely needs a later turn, never merely to separate review from repair. After dispatch, end this parent turn immediately; the runtime waits for registered children. Do not do review or repair in this parent, render a dashboard, back up, publish, or notify.`, pulseRunID, pulseRunID, technicalCheckpoint, strategicCheckpoint),
+		When plan_drift_review is due, launch one separate executor. Its instruction must name exact pulse_run_id=%q and checkpoint %q, and tell it to load read_skill(skills=[{"name":"builder-reference","path":"references/plan-drift-review.md"}]) and follow it exactly. This is a lean first version: it establishes ground truth per step and hands off rather than repairing in this turn.
+
+		Automatic-notification prose is not persistence. Use message_sequence only when further reasoning genuinely needs a later turn, never merely to separate review from repair. After dispatch, end this parent turn immediately; the runtime waits for registered children. Do not do review or repair in this parent, render a dashboard, back up, publish, or notify.`, pulseRunID, pulseRunID, technicalCheckpoint, strategicCheckpoint, pulseRunID, planDriftCheckpoint),
 	}
 }
 

@@ -1,11 +1,11 @@
 [← Pulse platform index](../pulse_platform_issue_register.md)
 
-# PLAT-258 — Dedicated `plan_drift_review` Pulse module (design + phases 1-4 complete)
+# PLAT-258 — Dedicated `plan_drift_review` Pulse module (design + phases 1-5 complete)
 
 | Coordination | Value |
 |---|---|
 | Assigned agent | Claude Code |
-| Ticket state | `design complete; phase 1 implemented; phase 2 complete (6 of 9 deterministic checks built; 1 needed no new code, 2 correctly found not-buildable-as-designed — see below); phase 3 implemented (record_plan_drift_review tool); phase 4 implemented (frontend); phases 5-6 not yet built` |
+| Ticket state | `design complete; phase 1 implemented; phase 2 complete (6 of 9 deterministic checks built; 1 needed no new code, 2 correctly found not-buildable-as-designed — see below); phase 3 implemented (record_plan_drift_review tool); phase 4 implemented (frontend); phase 5 implemented (module registration + reviewer-turn content, scheduling); phase 6 (technical_review cutover) not yet built` |
 | Last synchronized | `2026-08-30` |
 
 - **Type:** platform feature (multi-phase), not a single bug fix. Filed at
@@ -283,6 +283,95 @@ and inspectable before its content is authored, not a functional module yet.
 `sessionRestore.productFallback.test.ts` (unrelated Video Studio
 session-restore work from a concurrent session, confirmed by file/topic, not
 touched by this change). `npx tsc --noEmit` clean.
+
+## Phase 5 — implemented: module registration, scheduling, reviewer-turn content
+
+Note on authorship: this phase's core implementation (module registration,
+`CollectPlanDriftCandidates`, the `plan-drift-review.md` reviewer-turn
+content, scheduler/Gate wiring) was built directly in the shared primary
+working directory by a concurrent session while this ticket's own Phase 5
+investigation was still in flight. Found via `git status` before starting —
+reviewed line-by-line, built, and tested rather than re-implemented; this
+section documents what was verified and the two gaps closed on top of it.
+
+**Registration (`pulsemodules.go`):** `PlanDriftReviewID = "plan_drift_review"`
+added as a third `Module{}` in `All`, `StepLabel: "plan-drift-review"`,
+aliases `drift_review`/`plan_drift`. No scheduler step-label collision.
+
+**`CollectPlanDriftCandidates`** (new file `plan_drift_candidates.go`): the
+orchestration-layer Go function Phase 2's design always needed — scans
+`step_config.json` for steps with a null `drift_review` record and runs the
+deterministic checks Go can precompute for each: Check 1 (report query
+compatibility) and Check 9 (`db/README.md` contract) once per pass
+(workflow-wide, attached to every candidate), Check 4 (scripted-code queries)
+per step, and Check 2 (`validation_schema.db[]` rules) per step **only when
+`step_config.json` itself carries the override** — a plan.json-only declared
+schema with no override is documented as out of scope for this precompute
+pass. Checks 5 (validation_schema file rules) and 13 (orphaned tables) are
+deliberately not precomputed — no run-folder resolver exists yet for 5, and
+13 needs every step's references aggregated across the whole plan — both are
+routed to the reviewer turn's own direct-check step instead, exactly Phase
+2's original design for what the deterministic pass could and couldn't cover.
+
+**Due-ness enforcement (`pulse_worklist.go`):** `validatePlanDriftRouting`
+mirrors `validateDeterministicIntakeRouting`'s treatment of `technical_review`
+exactly — plan_drift_review's due state is a plain fact (any candidate from
+`CollectPlanDriftCandidates`), not a judgment call, so `record_pulse_worklist`
+is rejected outright if a non-empty candidate list isn't marked due. Wired
+into `recordPulseWorklistWithMode` alongside the existing intake check.
+`get_pulse_state(view="module")` now also returns `plan_drift_candidates` (the
+same precomputed list) plus a `plan_drift_candidates_note` explaining the
+coverage boundary, so the reviewer turn starts from evidence instead of
+re-deriving it.
+
+**Reviewer-turn content (`plan-drift-review.md`, new guidance template,
+registered in `guidance.go`):** explicitly scoped as a **lean first version
+with no repair authority** — it establishes ground truth per step and hands
+off real failures via `record_pulse_finding(recommended_route="fixer_handoff")`
+into the existing `technical_review` repair queue, rather than repairing
+anything itself. Five steps: read the precomputed evidence, fill the two
+checks Go couldn't precompute plus the Group 3 judgment checks, call
+`record_plan_drift_review` once per step merging both, file a finding for
+anything unresolved, checkpoint and call `record_pulse_result` once. This
+matches Phase 2's original trust design for judgment checks (10/11/12/14)
+exactly, and correctly folds the KB/learnings access-mode-appropriateness
+question (originally Checks 6/7) into the judgment pass rather than a dead
+mechanical check, as Phase 2 had already concluded.
+
+**Scheduling (`scheduler.go`, `pulse-gate.md`):** `plan_drift_review` gets its
+own `run_in_background` launch block in the review-fix lifecycle step,
+parallel to `technical_review`/`strategic_review`'s existing blocks. Gate's
+worklist prompt updated: `plan_drift_review` is explicitly carved out of the
+"select at most two" agentic judgment call — it is always recorded as due
+exactly when `plan_drift_candidates` is non-empty, never selected or skipped
+by discretion.
+
+**Findings visibility:** `record_pulse_finding(module="plan_drift_review")`
+means failures become real `PulseFindingLifecycle` rows tagged with this
+module, so Phase 4's frontend card will show non-zero counts once this ships
+live — the two phases connect as designed.
+
+**Gaps closed in review (this ticket's own contribution to phase 5):** no
+test file existed for either new function. Added
+`plan_drift_candidates_test.go` (7 tests: nil on missing/malformed/fully-
+reviewed step_config.json, correct candidate list on a mix of reviewed/
+unreviewed steps, workflow-wide + scripted checks always present, the DB-rule
+check's override-only condition, blank-workspace-path handling) and
+`TestPulseWorklistRequiresPlanDriftReviewWhenCandidatesExist` in
+`pulse_worklist_test.go` (mirrors the existing Technical-Review intake-routing
+tests: a candidate forces rejection until marked due, then succeeds).
+Confirmed no other test asserts a stale 2-module set — the one hit
+(`TestValidatePulseDueModuleResultsRequiresTerminalModuleResults`'s
+`"technical_review, strategic_review"` substring check) remains correct
+because that test never marks `plan_drift_review` due and sets up no
+step_config.json, so `CollectPlanDriftCandidates` returns nil there.
+
+**Verification:** `go build ./...` clean (`agent_go`, `workspace`).
+`gofmt`/`go vet` clean for every touched/new file (two pre-existing `go vet`
+findings elsewhere in the package, unrelated to this change, left as found).
+`go test ./cmd/server/... ./pkg/orchestrator/agents/workflow/step_based_workflow/...`
+full packages green, 8 new tests total (7 phase 5 candidate tests + 1 routing
+test) plus the full pre-existing suite for both packages.
 
 ## Verification
 

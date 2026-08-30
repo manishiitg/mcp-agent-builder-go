@@ -512,6 +512,36 @@ func TestPulseWorklistRequiresTechnicalReviewForFailedRuntimeIntake(t *testing.T
 	}
 }
 
+// plan_drift_review's due-ness is a plain fact (any step with a null
+// drift_review record), not agentic judgment — mirrors the Technical Review
+// intake-routing tests above, but for validatePlanDriftRouting.
+func TestPulseWorklistRequiresPlanDriftReviewWhenCandidatesExist(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	workspacePath := "Workflow/example"
+	planningDir := filepath.Join(root, workspacePath, "planning")
+	if err := os.MkdirAll(planningDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stepConfig := `{"steps":[{"id":"step-a"}]}`
+	if err := os.WriteFile(filepath.Join(planningDir, "step_config.json"), []byte(stepConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	skipped := completePulseWorklistDecisions(nil)
+	if _, err := recordPulseWorklist(context.Background(), workspacePath, "pulse-drift-check-skip", skipped); err == nil ||
+		!strings.Contains(err.Error(), "plan_drift_review must be due") || !strings.Contains(err.Error(), "step-a") {
+		t.Fatalf("a step with a null drift_review record was allowed to skip plan_drift_review: %v", err)
+	}
+
+	due := completePulseWorklistDecisions(map[string]PulseWorklistDecision{
+		pulseModulePlanDriftReview: {Module: pulseModulePlanDriftReview, Due: true, Reason: "step-a has a null drift_review record."},
+	})
+	if _, err := recordPulseWorklist(context.Background(), workspacePath, "pulse-drift-check-due", due); err != nil {
+		t.Fatalf("plan_drift_review routing was rejected despite being marked due: %v", err)
+	}
+}
+
 func TestPulseWorklistDecisionRejectsReviewPlanFields(t *testing.T) {
 	_, err := pulseWorklistDecisionsFromArgs([]interface{}{map[string]interface{}{
 		"module":  pulseModuleTechnicalReview,
