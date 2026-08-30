@@ -1010,6 +1010,60 @@ func recordPulseWorklistWithMode(ctx context.Context, workspacePath, pulseRunID,
 	return states, nil
 }
 
+// forcePulseModuleDueForLateRepairDebt amends exactly one module's persisted
+// worklist decision to due=true, mid-pass, after Gate has already recorded
+// its own worklist for this pulse_run_id. Gate's own decision is made before
+// plan_drift_review runs, so real workflow-owned repair debt plan_drift_review
+// discovers this same pass (a rare fixer_handoff route, or a check it could
+// not safely fix itself) can leave technical_review sitting at Gate's earlier
+// due=false even though actionable work now exists in the backlog — every
+// downstream reader (the review-fix turn's own get_pulse_state read,
+// pulseWorklistModulesDue, validatePulseDueModuleResultsFor) treats
+// pulse_module_state.last_decision as the single source of truth for "is this
+// module due," with no live recomputation from backlog content. This is a
+// narrow, scheduler-internal correction to that one row — not a second
+// record_pulse_worklist call, which Gate's own contract expects to run only
+// once per pass. last_result/last_result_reason are cleared to an empty string to match
+// exactly what a fresh due decision looks like, so validatePulseDueModuleResultsFor
+// correctly requires a terminal result for this module before the pass ends.
+func forcePulseModuleDueForLateRepairDebt(ctx context.Context, workspacePath, pulseRunID, module, reason string) error {
+	pulseRunID = strings.TrimSpace(pulseRunID)
+	if pulseRunID == "" {
+		return fmt.Errorf("pulse_run_id is required")
+	}
+	module = normalizePulseModule(module)
+	if !validPulseModules[module] {
+		return fmt.Errorf("module %q is not a valid Pulse module", module)
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return fmt.Errorf("reason is required")
+	}
+	normalized, db, err := openPulseModuleStateDB(ctx, workspacePath, true)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err = db.ExecContext(ctx, `INSERT INTO pulse_module_state (
+			module, workspace_path, last_pulse_run_id, last_checked_at, last_decision,
+			last_reason, last_gate_decision, last_result, last_result_reason,
+			next_check_at, next_check_after_run_id, cooldown_runs,
+			evidence_json, updated_at
+		) VALUES (?, ?, ?, ?, 'due', ?, 'due', '', '', '', '', 0, '[]', ?)
+		ON CONFLICT(workspace_path, module) DO UPDATE SET
+			last_pulse_run_id=excluded.last_pulse_run_id,
+			last_checked_at=excluded.last_checked_at,
+			last_decision='due',
+			last_reason=excluded.last_reason,
+			last_result='',
+			last_result_reason='',
+			updated_at=excluded.updated_at`,
+		module, normalized, pulseRunID, now, reason, now,
+	)
+	return err
+}
+
 // validateDeterministicIntakeRouting closes the gap between a failed objective
 // check and the agentic review that interprets it. It never creates an issue or
 // authorizes a repair: it only prevents Gate from suppressing Technical Review
@@ -1910,6 +1964,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 	}
 	for key, value := range map[string]interface{}{
 		"issue_id":          map[string]interface{}{"type": "string", "description": "Optional visible PUL issue_id from the active or closed issue index returned by get_pulse_state(view=\"backlog\", detail=\"compact\"). Supply it when this is new evidence for an existing root cause; a closed match is reopened. Omit only for a genuinely new root issue."},
+		"step_id":           map[string]interface{}{"type": "string", "description": "The plan step this finding is about, e.g. the step's id field from plan.json. Required for a plan_drift_review fail-status check's linked finding (record_plan_drift_review verifies the finding is filed against this exact step). Omit only for a genuinely module-wide finding that is not about one specific step; updating an existing issue by issue_id keeps that issue's original step identity regardless of what is passed here."},
 		"concern":           map[string]interface{}{"type": "string", "description": "Current concise root-cause statement. It may be reworded when issue_id is supplied; wording never creates a new identity by itself."},
 		"issue_kind":        map[string]interface{}{"type": "string", "enum": []string{"workflow_issue", "harness_issue"}},
 		"classification":    map[string]interface{}{"type": "string"},
@@ -2126,7 +2181,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 				reproduction.Observed, _ = raw["observed"].(string)
 				reproduction.Limitations, _ = raw["limitations"].(string)
 			}
-			input := step_based_workflow.PulseReviewFindingInput{IssueID: stringToolArg(args, "issue_id"), Concern: stringToolArg(args, "concern"), Module: module, HumanInputID: stringToolArg(args, "human_input_id"), PulseFindingDetails: step_based_workflow.PulseFindingDetails{
+			input := step_based_workflow.PulseReviewFindingInput{IssueID: stringToolArg(args, "issue_id"), StepID: stringToolArg(args, "step_id"), Concern: stringToolArg(args, "concern"), Module: module, HumanInputID: stringToolArg(args, "human_input_id"), PulseFindingDetails: step_based_workflow.PulseFindingDetails{
 				TargetKey: stringToolArg(args, "target_key"), IssueKind: stringToolArg(args, "issue_kind"),
 				RecommendedRoute: stringToolArg(args, "recommended_route"), NextCheck: stringToolArg(args, "next_check"), Classification: stringToolArg(args, "classification"),
 				Severity: stringToolArg(args, "severity"), Summary: stringToolArg(args, "summary"), Impact: stringToolArg(args, "impact"), Workaround: stringToolArg(args, "workaround"),

@@ -146,33 +146,44 @@ what you changed and confirmed.
 
 Not every drift check is a same-turn repair. Classify anything you did not
 fix using the same routes `technical_review` uses — do not invent a
-different scheme:
+different scheme. Every `record_pulse_finding` call in this step must carry
+`step_id=<this step's id>`: `record_plan_drift_review`'s finding-verification
+requires each fail-status check's linked finding to be filed against the
+exact step under review, not merely to exist somewhere in the backlog.
 
 - **A genuine user decision** (e.g. two materially different ways to
   reconcile a contract, and only the operator can say which is intended):
   call `create_human_input_request` first, then `record_pulse_finding` with
-  `recommended_route="decision_required"` and that `human_input_id`.
+  `step_id`, `recommended_route="decision_required"`, and that
+  `human_input_id`.
 - **A platform-owned boundary** (a runtime/harness/bridge limitation, not
   this workflow's own plan, config, code, or data): `record_pulse_finding`
-  with `recommended_route="external_action_required"`, a `reason_code`, an
-  `external_owner`, and a `reopen_condition`.
+  with `step_id` (`recommended_route` may be omitted — it is not a valid
+  route for this case). Then, in the same turn's step 6 close-out, give that
+  finding's `finding_dispositions[]` entry on `record_pulse_result`
+  `disposition="external_action_required"` with a `reason_code`, an
+  `external_owner`, and a `reopen_condition` — those three fields belong to
+  the disposition, not to `record_pulse_finding` itself.
 - **Insufficient evidence to fix safely right now** (e.g. a real fix needs a
-  future run's output to confirm): `record_pulse_finding` with
-  `recommended_route="evidence_wait"` and an exact `next_check`.
+  future run's output to confirm): `record_pulse_finding` with `step_id`,
+  `recommended_route="evidence_wait"`, and an exact `next_check`.
 - Only as a last resort — a fix that is real, workflow-owned, and safe in
   principle, but too large or cross-cutting for this focused pass to
-  complete and verify on its own — fall back to `recommended_route=
-  "fixer_handoff"` so `technical_review` picks it up. Keep this rare: a
-  `fixer_handoff` finding for something this module could safely have fixed
-  itself is exactly the extra Pulse cycle this design exists to remove.
+  complete and verify on its own — fall back to `record_pulse_finding` with
+  `step_id` and `recommended_route="fixer_handoff"` so `technical_review`
+  picks it up. Keep this rare: a `fixer_handoff` finding for something this
+  module could safely have fixed itself is exactly the extra Pulse cycle
+  this design exists to remove.
 
 Reuse an existing issue's `issue_id` for the same semantic root cause instead
-of filing a duplicate — check the compact backlog first. File findings
-**before** persisting the review: `record_plan_drift_review` rejects a
-fail-status check with no `finding_id`, and rejects a `finding_id` that does
-not resolve to a real, already-filed Pulse finding — this is what keeps a
-routed check from ever being persisted as "reviewed" with no corresponding
-tracked item.
+of filing a duplicate — check the compact backlog first (an existing issue
+keeps its original `step_id`; a later `step_id` argument on an `issue_id`
+update does not move it to a different step). File findings **before**
+persisting the review: `record_plan_drift_review` rejects a fail-status check
+with no `finding_id`, and rejects a `finding_id` that does not resolve to a
+real, active, already-filed Pulse finding for this exact step — this is what
+keeps a routed check from ever being persisted as "reviewed" with no
+corresponding tracked item.
 
 ### 5. Persist the merged result per step
 
@@ -193,6 +204,9 @@ partial update.
 
 Update the run-scoped checkpoint (`runs/pulse/<run>/plan-drift-review.md`)
 with a compact per-step summary before ending. Call `record_pulse_result`
-exactly once for the terminal `plan_drift_review` module result. Do not
-render HTML, back up, publish, or notify — those belong to the finalizer
-stage.
+exactly once for the terminal `plan_drift_review` module result, with a
+`finding_dispositions[]` entry for every finding filed this turn — including
+`disposition="external_action_required"` (with `reason_code`,
+`external_owner`, `reopen_condition`) for step 4's platform-owned findings.
+Do not render HTML, back up, publish, or notify — those belong to the
+finalizer stage.

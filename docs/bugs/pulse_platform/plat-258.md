@@ -1,11 +1,11 @@
 [← Pulse platform index](../pulse_platform_issue_register.md)
 
-# PLAT-258 — Dedicated `plan_drift_review` Pulse module (review-and-fix authority implemented; parity follow-up open)
+# PLAT-258 — Dedicated `plan_drift_review` Pulse module (review-and-fix authority end-to-end; parity follow-up open)
 
 | Coordination | Value |
 |---|---|
 | Assigned agent | Claude Code |
-| Ticket state | `review-and-fix authority merged; corrective follow-up required` — the reference contract and supporting helpers are present, but a third independent review of committed `main` at `92e1a5f81` found four end-to-end integration gaps that prevent calling the combined behavior complete. See “Third independent review” below. Slash/scheduled implementation parity and the workflow-level deletion-review flag are also explicitly **not yet built** — see Follow-up below |
+| Ticket state | `review-and-fix authority end-to-end; corrective follow-up required` — the third independent review's four integration gaps (dispatcher still said hand-off, `record_pulse_finding` had no `step_id`, platform-boundary guidance called an unsupported tool shape, the strategic-only late-insertion edge case) are fixed and tested — see "Fourth round" below. Slash/scheduled implementation parity and the workflow-level deletion-review flag are still explicitly **not yet built** — see Follow-up below |
 | Last synchronized | `2026-08-30` |
 
 - **Type:** platform feature (multi-phase), not a single bug fix. Filed at
@@ -935,3 +935,86 @@ The implementation made meaningful progress, but PLAT-258 is not complete
 until these four committed-runtime gaps are fixed and exercised end to end.
 PLAT-259's branch/routing implementation is not challenged by these findings;
 the overlap is limited to shared Plan Drift integration files.
+
+## Fourth round — third independent review's four gaps fixed (2026-08-30)
+
+All four confirmed by re-reading the actual committed code before fixing
+(each finding checked directly against the file/line it cited, not taken on
+faith):
+
+- **P1 dispatcher still said hand-off** — `pulseLifecyclePlanDriftReviewStep`'s
+  launched instruction (`scheduler.go`) literally said "This is a lean first
+  version: it establishes ground truth per step and hands off rather than
+  repairing in this turn," contradicting the loaded `plan-drift-review.md`
+  contract at the one place a live agent actually reads at dispatch time.
+  Rewrote it to state the real contract: apply and verify safe workflow-owned
+  fixes directly, route only what cannot be safely fixed. A scheduler test
+  asserted the old exact substring; updated it to the new one.
+- **P1 exact-step finding verification incompatible with the public writer** —
+  `record_pulse_finding` had no `step_id` argument at all, and
+  `RecordPulseReviewFinding` initialized every new finding's `StepID` from
+  `marker.Module` (so a real `plan_drift_review` finding was always attributed
+  to the literal string `"plan_drift_review"`, never the actual plan step),
+  meaning `verifyStepDriftCheckFindingsExist`'s exact-step check could never
+  be satisfied by a finding filed through the real tool. Added a `step_id`
+  field to `PulseReviewFindingInput`, the tool schema, and the executor's
+  arg mapping; `RecordPulseReviewFinding` now uses it for a brand-new finding
+  (an existing issue's original `StepID` still wins on an `issue_id` update —
+  a finding cannot silently move to a different step). `plan-drift-review.md`
+  now tells the agent to pass `step_id` on every `record_pulse_finding` call
+  in step 4. Confirmed the review's own diagnosis of why the existing tests
+  missed this: they built fixture rows through `RecordRunConcerns(...,
+  "step-a", ...)`, a different write path that already took a real `stepID`
+  directly — never through `record_pulse_finding`/`RecordPulseReviewFinding`,
+  the actual agent-facing path. New tests exercise the real path directly:
+  `TestRecordPulseReviewFindingUsesExplicitStepIDForNewFinding` and
+  `TestRecordPulseReviewFindingFallsBackToModuleWhenStepIDOmitted` (module-wide
+  findings with no step_id keep the pre-existing fallback behavior).
+- **P1 platform-boundary guidance called an unsupported tool shape** —
+  `plan-drift-review.md` told the agent to call `record_pulse_finding` with
+  `recommended_route="external_action_required"` plus `reason_code`,
+  `external_owner`, `reopen_condition` — none of which the schema accepts
+  (`recommended_route`'s enum is `decision_required`/`evidence_wait`/
+  `fixer_handoff` only; those three fields exist solely on
+  `record_pulse_result`'s `finding_dispositions[]`). Rewrote the guidance to
+  the real two-step flow already used elsewhere (confirmed against
+  `pulse-review-fixer.md`'s own description of `external_action_required`):
+  file with `record_pulse_finding` (recommended_route omitted — not a valid
+  value for this case), then set `disposition="external_action_required"`
+  with the three required fields on that finding's `record_pulse_result`
+  entry during step 6 close-out.
+- **P2 strategic-only scheduling edge case** — `reviewFixScheduled` in
+  `runPulseLifecycle` became true for either `technical_review` or
+  `strategic_review`, so when Gate selected Strategic Review only and
+  `plan_drift_review` later produced a rare `fixer_handoff`, the late-insertion
+  safety net was suppressed (`!reviewFixScheduled` was already false) even
+  though `technical_review` was never actually going to be dispatched — the
+  already-scheduled review-fix step's own `get_pulse_state` read still saw
+  Gate's frozen `technical_review.due=false`, since `pulse_module_state.
+  last_decision` is a static per-pass row with no live recomputation from
+  backlog content (confirmed by reading `getPulseWorklistForRun` and
+  `pulse-review-fixer.md`'s own "Gate decides separately... read that durable
+  worklist yourself" instruction — Go never re-derives due-ness from the
+  backlog mid-pass). New `forcePulseModuleDueForLateRepairDebt` (`pulse_
+  worklist.go`) amends exactly one module's persisted due decision mid-pass —
+  a narrow single-row correction, not a second `record_pulse_worklist` call.
+  The late-insertion block now checks `technical_review`'s live due state
+  directly instead of relying on the coarser `reviewFixScheduled`: if not due
+  and real repair debt exists, it forces `technical_review` due and either
+  inserts a fresh review-fix step (nothing was scheduled) or, when a
+  strategic-only step is already scheduled ahead in `steps`, does nothing
+  further — that not-yet-run step will read the freshly forced due=true live
+  when it dispatches. New test
+  `TestForcePulseModuleDueForLateRepairDebtFlipsDueAndClearsResult` covers the
+  primitive directly (flips due, clears any stale result so a fresh terminal
+  result is required, leaves other modules' decisions untouched). A full
+  scheduler-level integration test for the strategic-only dispatch sequencing
+  itself was not added — `runPulseLifecycle` requires substantial session/step
+  infrastructure to exercise end to end; the fix's correctness rests on the
+  now-directly-tested primitive plus the unchanged, already-tested
+  `pulseWorklistModulesDue` read path.
+
+`go build`/`go vet`/`gofmt` clean; `go test ./cmd/server/...
+./pkg/orchestrator/agents/workflow/step_based_workflow/...` green (only the
+pre-existing, unrelated `TestUpgradeDedicatedPulseSchedulePromptShape`
+gap noted in earlier rounds, itself since resolved by a concurrent session).

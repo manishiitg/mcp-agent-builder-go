@@ -1010,7 +1010,7 @@ func TestPostRunMonitorUsesDynamicModulesAndSingleFinalizer(t *testing.T) {
 		"If plan_drift_review is not due",
 		"run_in_background",
 		"plan-drift-review.md",
-		"lean first version",
+		"applies and verifies safe workflow-owned fixes directly",
 		"the runtime waits for the registered child",
 	} {
 		if !strings.Contains(planDrift, want) {
@@ -1790,6 +1790,52 @@ func TestWorkflowHasPendingPlanChangelogArtifactReview(t *testing.T) {
 // pulseWorklistModulesDue lets a caller ask about a specific module subset —
 // needed once plan_drift_review became its own preceding lifecycle step, so
 // each step only checks the modules it is actually responsible for.
+// forcePulseModuleDueForLateRepairDebt is the strategic-only edge-case fix:
+// Gate's own due decision for technical_review is a static per-pass row with
+// no live recomputation, so a plan_drift_review finding filed after Gate
+// runs must amend that row directly, not merely check it, or the
+// already-scheduled (strategic_review-only) review-fix turn would read
+// technical_review.due=false forever and never pick up the new repair work.
+func TestForcePulseModuleDueForLateRepairDebtFlipsDueAndClearsResult(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+	workspacePath := "Workflow/force-module-due"
+	pulseRunID := "pulse-force-module-due"
+
+	// Gate's original decision: only strategic_review is due.
+	if _, err := recordPulseWorklist(ctx, workspacePath, pulseRunID, completePulseWorklistDecisions(map[string]PulseWorklistDecision{
+		pulseModuleStrategicReview: {Module: pulseModuleStrategicReview, Due: true, Reason: "Strategic evidence matured."},
+	})); err != nil {
+		t.Fatalf("record worklist: %v", err)
+	}
+	if due, err := pulseWorklistModulesDue(ctx, workspacePath, pulseRunID, pulseModuleTechnicalReview); err != nil {
+		t.Fatalf("inspect technical_review due-ness: %v", err)
+	} else if due {
+		t.Fatal("technical_review should start not due")
+	}
+
+	if err := forcePulseModuleDueForLateRepairDebt(ctx, workspacePath, pulseRunID, pulseModuleTechnicalReview, "plan_drift_review left 2 actionable issue(s) Gate did not anticipate"); err != nil {
+		t.Fatalf("forcePulseModuleDueForLateRepairDebt: %v", err)
+	}
+
+	if due, err := pulseWorklistModulesDue(ctx, workspacePath, pulseRunID, pulseModuleTechnicalReview); err != nil {
+		t.Fatalf("inspect technical_review due-ness after force: %v", err)
+	} else if !due {
+		t.Fatal("technical_review should be due after forcePulseModuleDueForLateRepairDebt")
+	}
+	// strategic_review's own due decision must be untouched by forcing a
+	// different module due — this is a narrow single-row amendment, not a
+	// second full worklist write.
+	if due, err := pulseWorklistModulesDue(ctx, workspacePath, pulseRunID, pulseModuleStrategicReview); err != nil {
+		t.Fatalf("inspect strategic_review due-ness: %v", err)
+	} else if !due {
+		t.Fatal("strategic_review's original due decision must survive forcing technical_review due")
+	}
+	if err := validatePulseDueModuleResultsFor(ctx, workspacePath, pulseRunID, pulseModuleTechnicalReview); err == nil {
+		t.Fatal("technical_review is due with no terminal result recorded for this run yet; validatePulseDueModuleResultsFor should require one")
+	}
+}
+
 func TestPulseWorklistModulesDueChecksOnlyGivenModules(t *testing.T) {
 	ctx := context.Background()
 	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
