@@ -113,13 +113,11 @@ export const HumanInputNode = memo(({ data, selected }: HumanInputNodeProps) => 
         </div>
       </div>
 
-      {/* Footer metadata */}
-      <div className="px-4 py-2 border-t border-gray-200 dark:border-gray-700 flex items-center justify-between bg-gray-50 dark:bg-gray-900/50">
-        <div className="text-xs text-gray-500 dark:text-gray-400">
-          Step {stepIndex + 1}
+      {statusIcon && (
+        <div className="px-4 py-2 border-t border-gray-200 dark:border-gray-700 flex justify-end bg-gray-50 dark:bg-gray-900/50">
+          <div className="flex-shrink-0">{statusIcon}</div>
         </div>
-        {statusIcon && <div className="flex-shrink-0">{statusIcon}</div>}
-      </div>
+      )}
 
       {/* Bottom handles - one per response-specific route. */}
       {response_type === 'yesno' && (
