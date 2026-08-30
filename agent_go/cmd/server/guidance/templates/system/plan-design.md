@@ -48,7 +48,7 @@ If selecting the next call genuinely requires live judgment, keep the decision a
 ### Step 3: Design Context Flow
 
 Every step reads from prior steps and writes for downstream steps:
-- **description** is executable for agentic steps. For `message_sequence`, it is the opening instruction prepended to the first item. For `todo_task`, it is the orchestrator's first turn. A scripted `regular` step describes its deterministic contract and `main.py` implements it. For `routing`, leave it empty because routing never runs an agent. Legacy non-scripted regular steps temporarily use the description through the compatibility adapter. Before writing or editing any of these descriptions, call `read_skill(skills=[{"name":"builder-reference","path":"references/prompt-engineering.md"}])` — it covers writing an optimized description, not just choosing the right step type.
+- **description** is executable for agentic steps. For `message_sequence`, it is the opening instruction prepended to the first item. For `todo_task`, it is the orchestrator's first turn. A scripted `regular` step describes its deterministic contract and `main.py` implements it. For `routing`, leave it empty because routing never runs an agent. Legacy non-scripted regular steps temporarily use the description through the compatibility adapter. Before writing or editing any of these descriptions, call `read_skill(skills=[{"name":"builder-reference","path":"references/step-description.md"}])` — it covers writing an optimized description, not just choosing the right step type.
 - **context_dependencies**: Files from prior steps this step needs (e.g., ["login_status.json"])
 - **context_output**: The file this step produces (e.g., "extracted_data.json")
 - **Flow must be forward-only** — no circular dependencies
@@ -135,7 +135,7 @@ Step-level `success_criteria` is deprecated. Rely on a strong `description` plus
 - **Trivial steps**: A step that just reads a file and passes it through — merge with the consumer
 - **Over-splitting same-context turns**: Several regular steps mostly reread the same context and depend on each other's transient reasoning. Collapse into one `message_sequence`; verification, critique, double-checking, and repair belong inside it unless a check truly needs an independent durable artifact, retry domain, or tool/security context.
 - **Missing validation**: No validation_schema means no automated quality gate
-- **Vague or bloated descriptions**: "Process the data appropriately" is too vague — be specific about WHAT, HOW, and WHERE. The opposite failure is just as real: restating the same instruction from several angles, copy-pasting shared policy into every step that needs it, or spelling out a rigid procedure a judgment call didn't need. See `references/prompt-engineering.md`.
+- **Vague or bloated descriptions**: "Process the data appropriately" is too vague — be specific about WHAT, HOW, and WHERE. The opposite failure is just as real: restating the same instruction from several angles, copy-pasting shared policy into every step that needs it, or spelling out a rigid procedure a judgment call didn't need. See `references/step-description.md`.
 - **Over-sequencing**: Steps that don't depend on each other can potentially run in parallel via independent step groups
 - **Inline sub-tasks in todo_task**: If you're writing detailed instructions for a specific task inside the orchestrator description, that task should be a sub-agent route instead
 
