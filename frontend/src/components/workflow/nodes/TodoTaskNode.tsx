@@ -65,13 +65,18 @@ export const TodoTaskNode = memo(({ data, selected }: TodoTaskNodeProps) => {
   const executionModeVisuals = getExecutionModeVisuals(executionMode, executionModeReason)
   const ModeIcon = executionModeVisuals.Icon
   const TodoIcon = ModeIcon || ListTodo
-  const taskBadgeColor = executionModeVisuals.solidBadgeClassName ||
-    (isNestedTodoSubAgent ? 'bg-violet-600 dark:bg-violet-700 text-white' : 'bg-purple-600 dark:bg-purple-700 text-white')
-  const nodeBorderColor = status === 'pending' && executionModeVisuals.borderClassName
-    ? executionModeVisuals.borderClassName
+  // Orchestrators have their own visual identity. Do not inherit the neutral
+  // grey agent-mode styling: the parent coordinates routes, rather than being
+  // another ordinary agent card.
+  const taskBadgeColor = isNestedTodoSubAgent
+    ? 'bg-violet-600 dark:bg-violet-700 text-white'
+    : 'bg-violet-600 dark:bg-violet-700 text-white'
+  const nodeBorderColor = status === 'pending'
+    ? 'border-violet-500 dark:border-violet-400'
     : statusBorderColors[status]
-  const primaryHandleColor = executionModeVisuals.handleClassName ||
-    (isNestedTodoSubAgent ? '!bg-violet-500 dark:!bg-violet-600' : '!bg-purple-500 dark:!bg-purple-600')
+  const primaryHandleColor = isNestedTodoSubAgent
+    ? '!bg-violet-500 dark:!bg-violet-600'
+    : '!bg-violet-500 dark:!bg-violet-600'
 
   // Scripted message sequence (scripted turns / foreach loops / prevalidation
   // gates) fed into the orchestrator's own conversation after its first turn.
@@ -185,18 +190,17 @@ export const TodoTaskNode = memo(({ data, selected }: TodoTaskNodeProps) => {
             </div>
           )}
 
-          {/* Predefined Routes */}
+          {/* Predefined routes are the orchestrator's sub-agent choices. */}
           {predefined_routes && predefined_routes.length > 0 && (
             <div className="mt-2 space-y-1.5">
               <div className={`flex items-center gap-1.5 text-[10px] font-semibold ${isNestedTodoSubAgent ? 'text-violet-600 dark:text-violet-400' : 'text-purple-600 dark:text-purple-400'}`}>
                 <Route className="w-3 h-3" />
-                <span>{predefined_routes.length} route{predefined_routes.length > 1 ? 's' : ''}</span>
+                <span>{predefined_routes.length} sub-agent{predefined_routes.length > 1 ? 's' : ''}</span>
               </div>
               {!isNestedTodoSubAgent && predefined_routes.slice(0, 4).map((route, index) => (
                 <div
                   key={route.route_id}
                   className="flex items-start gap-2 rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 dark:border-slate-700/80 dark:bg-slate-800/70"
-                  title={route.condition || route.route_name || route.route_id}
                 >
                   <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-purple-600 text-[9px] font-bold text-white dark:bg-purple-500/80 dark:text-purple-50">
                     {index + 1}
@@ -205,17 +209,12 @@ export const TodoTaskNode = memo(({ data, selected }: TodoTaskNodeProps) => {
                     <div className="truncate text-[11px] font-semibold text-slate-800 dark:text-slate-200">
                       {route.route_name || route.route_id}
                     </div>
-                    {route.condition && (
-                      <div className="line-clamp-1 text-[10px] text-slate-500 dark:text-slate-400">
-                        {route.condition}
-                      </div>
-                    )}
                   </div>
                 </div>
               ))}
               {!isNestedTodoSubAgent && predefined_routes.length > 4 && (
                 <div className="text-[10px] text-gray-500 dark:text-gray-400">
-                  +{predefined_routes.length - 4} more route{predefined_routes.length - 4 === 1 ? '' : 's'}
+                  +{predefined_routes.length - 4} more sub-agent{predefined_routes.length - 4 === 1 ? '' : 's'}
                 </div>
               )}
             </div>

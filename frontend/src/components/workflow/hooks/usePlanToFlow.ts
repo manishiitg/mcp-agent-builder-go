@@ -8,11 +8,11 @@ import type { VariablesManifest, EvaluationStep } from '../../../services/api-ty
 import type { VariablesNodeData } from '../nodes/VariablesNode'
 import { useActiveWorkflowPreset } from '../../../hooks/useActiveWorkflowPreset'
 import { useLLMStore } from '../../../stores/useLLMStore'
+import { routeColorForIndex } from '../routeColors'
 
 const ROUTE_EDGE_LABEL_STYLE = { fill: 'hsl(var(--muted-foreground))', fontWeight: 500, fontSize: 10 }
 const COMPLETION_EDGE_LABEL_STYLE = { fill: 'hsl(var(--primary))', fontWeight: 600, fontSize: 11 }
 const EDGE_LABEL_BG_STYLE = { fill: 'hsl(var(--popover))', fillOpacity: 0.92 }
-const ROUTING_EDGE_COLORS = ['#0f766e', '#2563eb', '#7c3aed', '#ea580c', '#0891b2']
 
 // Node data types for our custom nodes
 export interface StepNodeData extends Record<string, unknown> {
@@ -250,18 +250,9 @@ function countOrphanStepRefs(steps: PlanStep[] | undefined): Map<string, number>
   return counts
 }
 
-function textReferencesKnowledgebase(text: string): boolean {
-  return /\bknowledgebase[\\/]/i.test(text)
-}
-
-function textReferencesDatabase(text: string): boolean {
-  return /\$DB_PATH\b|\bdb[\\/]|db\.sqlite|\bsqlite3?\b/i.test(text)
-}
-
 /**
  * Estimate node height based on content
- * Simplified version - nodes no longer show description, success criteria, or validation schema
- * Only accounts for: context files, loop conditions
+ * Simplified version - only message-sequence item rows add variable height.
  */
 function estimateNodeHeight(node: WorkflowNode): number {
   const baseDimensions = NODE_DIMENSIONS[node.type as keyof typeof NODE_DIMENSIONS] || NODE_DIMENSIONS.step
@@ -275,72 +266,8 @@ function estimateNodeHeight(node: WorkflowNode): number {
   const footerHeight = 40 // Config footer
   const padding = 16 // Top and bottom padding
 
-  // Content height estimation - only for context files
+  // Content height estimation
   let contentHeight = 0
-
-  // Step metadata and context files
-  if ('step' in data && data.step && typeof data.step === 'object') {
-    const step = data.step as PlanStep
-
-    const learningConfig = step.agent_configs
-    const learningObjective = typeof learningConfig?.learning_objective === 'string'
-      ? learningConfig.learning_objective.trim()
-      : ''
-    const knowledgebaseContribution = typeof learningConfig?.knowledgebase_contribution === 'string'
-      ? learningConfig.knowledgebase_contribution.trim()
-      : ''
-    const learningAccess = learningConfig?.learnings_access
-    const knowledgebaseAccess = learningConfig?.knowledgebase_access
-    const dbAccess = learningConfig?.db_access
-    const executionMode = typeof learningConfig?.declared_execution_mode === 'string'
-      ? learningConfig.declared_execution_mode.trim()
-      : ''
-    const contextInputs = Array.isArray(step.context_dependencies) ? step.context_dependencies : []
-    const contextOutput = step.context_output
-    const contextOutputs = Array.isArray(contextOutput)
-      ? contextOutput
-      : (contextOutput ? [contextOutput] : [])
-    const validationFiles = step.validation_schema?.files?.map(file => file.file_name) || []
-    const referenceText = [
-      step.description,
-      step.success_criteria,
-      ...contextInputs,
-      ...contextOutputs,
-      ...validationFiles
-    ].filter((value): value is string => typeof value === 'string' && value.length > 0).join('\n')
-    const referencesKnowledgebase = textReferencesKnowledgebase(referenceText)
-    const referencesDatabase = textReferencesDatabase(referenceText)
-    const hasLearningMetadata = (
-      learningObjective.length > 0 ||
-      learningConfig?.lock_learnings === true ||
-      learningAccess === 'read' ||
-      learningAccess === 'read-write'
-    )
-    const hasKnowledgebaseMetadata = (
-      knowledgebaseContribution.length > 0 ||
-      knowledgebaseAccess === 'read' ||
-      knowledgebaseAccess === 'write' ||
-      knowledgebaseAccess === 'read-write' ||
-      referencesKnowledgebase
-    )
-    const hasDbMetadata = dbAccess === 'read' || dbAccess === 'write' || dbAccess === 'read-write' || referencesDatabase
-    const metadataRowCount = [hasLearningMetadata, hasKnowledgebaseMetadata, hasDbMetadata].filter(Boolean).length
-    if (metadataRowCount > 0) {
-      contentHeight += (hasLearningMetadata ? 44 : 0) + (hasKnowledgebaseMetadata ? 44 : 0) + (hasDbMetadata ? 28 : 0) +
-        Math.max(0, metadataRowCount - 1) * 6 + 8
-      if (learningObjective.length > 120) contentHeight += 10
-      if (knowledgebaseContribution.length > 120) contentHeight += 10
-    }
-
-    if (contextInputs.length > 0 || contextOutputs.length > 0) {
-      const totalFiles = contextInputs.length + contextOutputs.length
-      contentHeight += 20 + (totalFiles * 20) + 8 // Base + per file + spacing
-    }
-
-    if (executionMode.length > 0) {
-      contentHeight += 22
-    }
-  }
 
   // For message_sequence nodes, add height for title, badges, and item rows
   if (node.type === 'message_sequence') {
@@ -348,27 +275,8 @@ function estimateNodeHeight(node: WorkflowNode): number {
     const seqItems = messageData.items || []
     const visibleCount = Math.min(seqItems.length, 6)
     const hiddenCount = seqItems.length - visibleCount
-    const hasStoreBadges = seqItems.some(item => {
-      const itemReferenceText = [
-        item.title,
-        item.message,
-        item.source
-      ].filter((value): value is string => typeof value === 'string' && value.length > 0).join('\n')
-
-      return (
-        item.write_access?.db === true ||
-        item.write_access?.knowledgebase === true ||
-        item.write_access?.learnings === true ||
-        item.kind === 'db' ||
-        item.kind === 'knowledgebase' ||
-        textReferencesDatabase(itemReferenceText) ||
-        textReferencesKnowledgebase(itemReferenceText)
-      )
-    })
-
     contentHeight += 35
     if (messageData.description) contentHeight += 20
-    if (hasStoreBadges) contentHeight += 24
     contentHeight += 20 + Math.max(visibleCount, 1) * 24
     if (hiddenCount > 0) contentHeight += 18
   }
@@ -533,18 +441,29 @@ function layoutWithDagre(nodes: WorkflowNode[], edges: WorkflowEdge[], direction
   // Get config based on layout direction
   const baseConfig = getDagreConfig(direction)
 
-  // Dynamic config based on topology. Widen spacing when the graph fans out —
-  // many todo-task sub-agents OR many routing branches — so sibling lanes stay
-  // visually distinct instead of cramming together.
+  // Dynamic config based on topology. Routing branches need substantially more
+  // space than ordinary siblings: users trace these colored paths from a route
+  // card to a downstream step, so give each possible route its own visible lane.
   const fanOut = Math.max(maxOrchestratorSubAgents, maxRoutingBranches)
-  const spacingMultiplier = fanOut > 3 ? 1.6 : fanOut > 2 ? 1.35 : 1
+  const generalSpacingMultiplier = fanOut > 3 ? 1.6 : fanOut > 2 ? 1.35 : 1
+  const routingLaneMultiplier = maxRoutingBranches >= 6
+    ? 2.5
+    : maxRoutingBranches >= 4
+      ? 2.1
+      : maxRoutingBranches >= 3
+        ? 1.6
+        : 1
+  const laneSpacingMultiplier = Math.max(generalSpacingMultiplier, routingLaneMultiplier)
+  const rankSpacingMultiplier = maxRoutingBranches >= 4
+    ? 1.45
+    : Math.min(generalSpacingMultiplier, 1.3)
 
   const dynamicConfig = {
     ...baseConfig,
-    // nodesep (sibling/lane separation) widens most with fan-out; ranksep grows
-    // gentler so the tree doesn't become excessively tall.
-    nodesep: baseConfig.nodesep * spacingMultiplier,
-    ranksep: baseConfig.ranksep * Math.min(spacingMultiplier, 1.3)
+    // nodesep is the sibling-lane gap (horizontal in the top-to-bottom plan).
+    // ranksep gives the lines room to leave a routing card before another row.
+    nodesep: baseConfig.nodesep * laneSpacingMultiplier,
+    ranksep: baseConfig.ranksep * rankSpacingMultiplier
   }
 
   const g = new dagre.graphlib.Graph()
@@ -1143,7 +1062,7 @@ function processSteps(
       if (step.routes) {
         step.routes.forEach((route, routeIndex) => {
           const targetNodeId = stepIdToNodeIdMap?.get(route.next_step_id)
-          const routeColor = ROUTING_EDGE_COLORS[routeIndex % ROUTING_EDGE_COLORS.length]
+          const routeColor = routeColorForIndex(routeIndex)
 
           if (targetNodeId) {
             const isSelectedRoute = !step.selected_route_id || route.route_id === step.selected_route_id

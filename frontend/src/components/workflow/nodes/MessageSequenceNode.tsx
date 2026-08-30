@@ -1,6 +1,6 @@
-import { memo, useEffect, type ReactElement } from 'react'
+import { memo, type ReactElement } from 'react'
 import { Handle, Position } from '@xyflow/react'
-import { BookOpen, CheckCircle, Database, FileText, XCircle, Loader2, Plus, RefreshCw, ListOrdered, MessageSquare, ShieldCheck, Repeat } from 'lucide-react'
+import { CheckCircle, XCircle, Loader2, Plus, RefreshCw, ListOrdered, MessageSquare, ShieldCheck, Repeat } from 'lucide-react'
 import type { MessageSequenceNodeData } from '../hooks/usePlanToFlow'
 import type { ChangeType } from '../hooks/usePlanData'
 import type { MessageSequenceItem } from '../../../utils/stepConfigMatching'
@@ -37,19 +37,6 @@ const statusIcons: Record<string, ReactElement | null> = {
   executing: <Loader2 className="w-4 h-4 text-violet-500 animate-spin" />,
   completed: <CheckCircle className="w-4 h-4 text-green-500" />,
   failed: <XCircle className="w-4 h-4 text-red-500" />
-}
-
-// NOTE: uses the same colored-bg pattern as the item badges (which render
-// correctly). The previous `bg-white/80` base rendered as empty/low-contrast
-// grey boxes on the canvas.
-const metadataChipBase = 'inline-flex h-5 shrink-0 items-center gap-1 rounded-md bg-gray-100 px-1.5 text-[10px] font-medium leading-none text-gray-700 dark:bg-gray-700/60 dark:text-gray-200'
-
-function textReferencesKnowledgebase(text: string): boolean {
-  return /\bknowledgebase[\\/]/i.test(text)
-}
-
-function textReferencesDatabase(text: string): boolean {
-  return /\$DB_PATH\b|\bdb[\\/]|db\.sqlite|\bsqlite3?\b/i.test(text)
 }
 
 // Per-item-type presentation: short label, badge colors, and icon. Falls back
@@ -90,7 +77,7 @@ function itemPrimaryText(item: MessageSequenceItem): string {
 }
 
 export const MessageSequenceNode = memo(({ data, selected }: MessageSequenceNodeProps) => {
-  const { id, title, description, items, status, stepIndex, changeType, isOrphan, step } = data
+  const { title, description, items, status, stepIndex, changeType, isOrphan, step } = data
   const orphanReuseCount = (data as { orphanReuseCount?: number }).orphanReuseCount ?? 0
 
   const borderColor = statusBorderColors[status] || statusBorderColors.pending
@@ -113,66 +100,6 @@ export const MessageSequenceNode = memo(({ data, selected }: MessageSequenceNode
   const MAX_VISIBLE = 6
   const visibleItems = seqItems.slice(0, MAX_VISIBLE)
   const hiddenCount = seqItems.length - visibleItems.length
-  const writesDb = seqItems.some(item => item.write_access?.db === true)
-  const writesKnowledgebase = seqItems.some(item => item.write_access?.knowledgebase === true)
-  const writesLearnings = seqItems.some(item => item.write_access?.learnings === true)
-  const storeReferenceText = [
-    description,
-    ...seqItems.flatMap(item => [
-      item.title,
-      item.message,
-      item.source,
-      ...(item.validation_schema?.files?.map(file => file.file_name) || []),
-      ...(item.prevalidation?.files?.map(file => file.file_name) || [])
-    ])
-  ].filter((value): value is string => typeof value === 'string' && value.length > 0).join('\n')
-  const referencesDb = textReferencesDatabase(storeReferenceText)
-  const referencesKnowledgebase = textReferencesKnowledgebase(storeReferenceText)
-  const hasDbItem = writesDb || referencesDb || seqItems.some(item => item.kind === 'db')
-  const hasKnowledgebaseItem = writesKnowledgebase || referencesKnowledgebase || seqItems.some(item => item.kind === 'knowledgebase')
-  const dbBadgeLabel = writesDb ? 'DB write' : referencesDb ? 'Uses DB' : 'DB'
-  const knowledgebaseBadgeLabel = writesKnowledgebase ? 'KB write' : referencesKnowledgebase ? 'Uses KB' : 'KB'
-
-  // Step-level config metadata (same as a regular step card): a message_sequence
-  // step can carry a learning objective + learnings/KB/DB access, not just items.
-  const agentConfig = step?.agent_configs
-  const learningObjective = typeof agentConfig?.learning_objective === 'string' ? agentConfig.learning_objective.trim() : ''
-  const learningsAccess = agentConfig?.learnings_access
-  const knowledgebaseAccess = agentConfig?.knowledgebase_access
-  const dbAccess = agentConfig?.db_access
-  const accessChips = [
-    learningsAccess && learningsAccess !== 'none' ? { icon: BookOpen, label: `Learnings: ${learningsAccess}` } : null,
-    knowledgebaseAccess && knowledgebaseAccess !== 'none' ? { icon: FileText, label: `KB: ${knowledgebaseAccess}` } : null,
-    dbAccess && dbAccess !== 'none' ? { icon: Database, label: 'DB: read-write (runtime)' } : null,
-  ].filter((c): c is { icon: typeof BookOpen; label: string } => c !== null)
-
-  useEffect(() => {
-    if (!import.meta.env.DEV) return
-    if (!hasDbItem && !hasKnowledgebaseItem && !writesLearnings) return
-
-    console.log('[WorkflowMessageSequenceNode] store metadata', {
-      nodeId: id,
-      stepId: step?.id,
-      title: displayTitle,
-      writes_db: writesDb,
-      writes_knowledgebase: writesKnowledgebase,
-      writes_learnings: writesLearnings,
-      references_database: referencesDb,
-      references_knowledgebase: referencesKnowledgebase
-    })
-  }, [
-    displayTitle,
-    hasDbItem,
-    hasKnowledgebaseItem,
-    id,
-    referencesDb,
-    referencesKnowledgebase,
-    step?.id,
-    writesDb,
-    writesKnowledgebase,
-    writesLearnings
-  ])
-
   return (
     <div
       className={`
@@ -235,53 +162,6 @@ export const MessageSequenceNode = memo(({ data, selected }: MessageSequenceNode
             {description}
           </div>
         )}
-        {(hasDbItem || hasKnowledgebaseItem || writesLearnings) && (
-          <div className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5">
-            {hasDbItem && (
-              <span
-                className={metadataChipBase}
-                title={writesDb ? 'Message sequence writes to DB' : referencesDb ? 'Message sequence references DB paths or SQLite' : 'Message sequence has a DB item'}
-              >
-                <Database className="h-3 w-3" />
-                <span>{dbBadgeLabel}</span>
-              </span>
-            )}
-            {hasKnowledgebaseItem && (
-              <span
-                className={metadataChipBase}
-                title={writesKnowledgebase ? 'Message sequence writes to KB' : referencesKnowledgebase ? 'Message sequence references knowledgebase paths' : 'Message sequence has a KB item'}
-              >
-                <FileText className="h-3 w-3" />
-                <span>{knowledgebaseBadgeLabel}</span>
-              </span>
-            )}
-            {writesLearnings && (
-              <span
-                className={metadataChipBase}
-                title="Message sequence writes to learnings"
-              >
-                <BookOpen className="h-3 w-3" />
-                <span>Learning write</span>
-              </span>
-            )}
-          </div>
-        )}
-        {learningObjective && (
-          <div className="mt-2 rounded-md bg-amber-500/10 px-2 py-1">
-            <div className="text-[9px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400">Learning Objective</div>
-            <div className="text-[11px] leading-snug text-gray-700 dark:text-gray-300 line-clamp-2">{learningObjective}</div>
-          </div>
-        )}
-        {accessChips.length > 0 && (
-          <div className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5">
-            {accessChips.map(chip => (
-              <span key={chip.label} className={metadataChipBase} title={chip.label}>
-                <chip.icon className="h-3 w-3" />
-                <span>{chip.label}</span>
-              </span>
-            ))}
-          </div>
-        )}
       </div>
 
       {/* Ordered item queue */}
@@ -314,13 +194,11 @@ export const MessageSequenceNode = memo(({ data, selected }: MessageSequenceNode
         )}
       </div>
 
-      {/* Footer metadata */}
-      <div className="px-4 py-2 border-t border-gray-200 dark:border-gray-700 flex items-center justify-between bg-gray-50 dark:bg-gray-900/50">
-        <div className="text-xs text-gray-500 dark:text-gray-400">
-          Step {stepIndex + 1}
+      {statusIcon && (
+        <div className="px-4 py-2 border-t border-gray-200 dark:border-gray-700 flex justify-end bg-gray-50 dark:bg-gray-900/50">
+          <div className="flex-shrink-0">{statusIcon}</div>
         </div>
-        {statusIcon && <div className="flex-shrink-0">{statusIcon}</div>}
-      </div>
+      )}
 
       {/* Bottom handle — sequence is linear, single exit */}
       <Handle type="source" position={Position.Bottom} className={`w-3 h-3 ${modeHandleColor}`} />
