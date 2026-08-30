@@ -3527,13 +3527,25 @@ func (api *StreamingAPI) handleGetExecutionLogs(w http.ResponseWriter, r *http.R
 								if err := json.Unmarshal([]byte(content), &routingData); err == nil {
 									// PLAT-259: this artifact is written by the shared
 									// routing/branch executor for either step type
-									// (executeRoutingStep). Report the owning plan step's
-									// real type instead of hardcoding "routing", or a
-									// branch step's execution renders as a routing-colored
-									// entry with "Routing question" in Execution Logs even
-									// though its own step header says Branch.
+									// (executeRoutingStep). Report the step's real type
+									// instead of hardcoding "routing", or a branch step's
+									// execution renders as a routing-colored entry with
+									// "Routing question" in Execution Logs even though its
+									// own step header says Branch.
+									//
+									// Prefer step_type recorded IN the artifact itself
+									// (executeRoutingStep has persisted this since PLAT-259)
+									// over the current plan.json lookup: a step reclassified
+									// routing<->branch after this run executed must keep
+									// reporting what it actually was when it ran, not what
+									// the step is typed as today, or migrating a step's type
+									// silently relabels every one of its historical runs.
+									// Fall back to the live plan.json type only for an
+									// artifact written before this field existed.
 									entryType := "routing"
-									if meta, ok := stepMetadata[stepId]; ok && meta["type"] != "" {
+									if persistedType, ok := routingData["step_type"].(string); ok && persistedType != "" {
+										entryType = persistedType
+									} else if meta, ok := stepMetadata[stepId]; ok && meta["type"] != "" {
 										entryType = meta["type"]
 									}
 									orchLogs = append(orchLogs, map[string]interface{}{

@@ -5109,6 +5109,151 @@ func createUpdateBranchStepExecutor(workspacePath string, logger loggerv2.Logger
 	}
 }
 
+// getConvertRoutingBranchStepTypeSchema returns the JSON schema for
+// convert_routing_branch_step_type.
+func getConvertRoutingBranchStepTypeSchema() string {
+	return `{
+		"type": "object",
+		"properties": {
+			"existing_step_id": {
+				"type": "string",
+				"description": "The step's id field from plan.json. Must currently be a routing or branch step."
+			},
+			"target_type": {
+				"type": "string",
+				"enum": ["routing", "branch"],
+				"description": "The type to convert the step to. Must differ from its current type -- routing to convert a branch step into a routing step, branch to convert a routing step into a branch step."
+			}
+		},
+		"required": ["existing_step_id", "target_type"]
+	}`
+}
+
+// createConvertRoutingBranchStepTypeExecutor creates the executor for
+// convert_routing_branch_step_type: an atomic, in-place reclassification
+// between routing and branch that keeps the step's id unchanged. routing and
+// branch share the exact same routeSwitchStep shape (routes/default_route_id/
+// route_source_file, only the human-readable question field's name differs),
+// so this is a pure relabeling, not a data migration.
+//
+// Deliberately does NOT delete and recreate the step. An earlier guided-flow
+// doc (migrate-routing-to-branch.md) told the agent to reroute references,
+// delete the old step, then recreate it under the original id to "preserve
+// history" -- but delete_plan_steps prunes the deleted id's step_config.json
+// row (drift_review, execution_tier, etc.) before the id is ever reused, so
+// that claimed continuity was false. Keeping the same id throughout, in one
+// mutation, means step_config.json's row for it is never orphaned at all --
+// there is nothing to lose and nothing to restore.
+func createConvertRoutingBranchStepTypeExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, unlockLearningsFunc func(context.Context, string, int) error) func(context.Context, map[string]interface{}) (string, error) {
+	return func(ctx context.Context, args map[string]interface{}) (string, error) {
+		reason, err := requireReason(args)
+		if err != nil {
+			return "", err
+		}
+		stepID := strings.TrimSpace(asString(args["existing_step_id"]))
+		if stepID == "" {
+			return "", fmt.Errorf("existing_step_id is required")
+		}
+		targetType := strings.TrimSpace(asString(args["target_type"]))
+		if targetType != "routing" && targetType != "branch" {
+			return "", fmt.Errorf("target_type must be \"routing\" or \"branch\", got %q", targetType)
+		}
+
+		plan, err := readPlanForMutation(ctx, workspacePath, readFile)
+		if err != nil {
+			return "", fmt.Errorf("failed to read plan: %w", err)
+		}
+
+		stepIndex := -1
+		for i, step := range plan.Steps {
+			if step.GetID() == stepID {
+				stepIndex = i
+				break
+			}
+		}
+		if stepIndex == -1 {
+			return "", fmt.Errorf("step ID '%s' not found in existing plan", stepID)
+		}
+
+		var updated PlanStepInterface
+		var oldType string
+		switch s := plan.Steps[stepIndex].(type) {
+		case *RoutingPlanStep:
+			if targetType != "branch" {
+				return "", fmt.Errorf("step '%s' is already a routing step", stepID)
+			}
+			updated = &BranchPlanStep{
+				Type:             StepTypeBranch,
+				CommonStepFields: s.CommonStepFields,
+				BranchQuestion:   s.RoutingQuestion,
+				Routes:           s.Routes,
+				DefaultRouteID:   s.DefaultRouteID,
+				RouteSourceFile:  s.RouteSourceFile,
+			}
+			oldType = "routing"
+		case *BranchPlanStep:
+			if targetType != "routing" {
+				return "", fmt.Errorf("step '%s' is already a branch step", stepID)
+			}
+			updated = &RoutingPlanStep{
+				Type:             StepTypeRouting,
+				CommonStepFields: s.CommonStepFields,
+				RoutingQuestion:  s.BranchQuestion,
+				Routes:           s.Routes,
+				DefaultRouteID:   s.DefaultRouteID,
+				RouteSourceFile:  s.RouteSourceFile,
+			}
+			oldType = "branch"
+		default:
+			return "", fmt.Errorf("step '%s' is a %T, not a routing or branch step", stepID, plan.Steps[stepIndex])
+		}
+		plan.Steps[stepIndex] = updated
+
+		switch s := updated.(type) {
+		case *RoutingPlanStep:
+			if err := validateRoutingStepFieldsTyped(s); err != nil {
+				return "", fmt.Errorf("validation failed after conversion: %w", err)
+			}
+		case *BranchPlanStep:
+			if err := validateBranchStepFieldsTyped(s); err != nil {
+				return "", fmt.Errorf("validation failed after conversion: %w", err)
+			}
+		}
+		if err := validatePlanStepIDs(plan.Steps); err != nil {
+			return "", fmt.Errorf("plan validation failed after conversion: %w", err)
+		}
+		if err := validateStepIDUniqueness(plan); err != nil {
+			return "", fmt.Errorf("plan validation failed after conversion: %w", err)
+		}
+		if err := validateCrossPlanStepIDUniqueness(ctx, workspacePath, readFile, plan); err != nil {
+			return "", fmt.Errorf("plan validation failed after conversion: %w", err)
+		}
+
+		if err := writePlanToFile(ctx, workspacePath, plan, readFile, writeFile, logger); err != nil {
+			return "", fmt.Errorf("failed to write plan: %w", err)
+		}
+
+		fieldChanges := []PlanFieldChange{{StepID: stepID, Field: "type", OldValue: oldType, NewValue: targetType}}
+		logPlanChange(ctx, workspacePath, PlanChangelogEntry{
+			Tool:    "convert_routing_branch_step_type",
+			Reason:  reason,
+			StepIDs: []string{stepID},
+			Changes: fieldChanges,
+		}, readFile, writeFile, logger)
+
+		if unlockLearningsFunc != nil {
+			if err := unlockLearningsFunc(ctx, stepID, stepIndex); err != nil {
+				logger.Warn(fmt.Sprintf("⚠️ Failed to unlock learnings for converted step %s: %v", stepID, err))
+			}
+		}
+
+		dependentReviewNotice := handlePlanStepDependentArtifactReview(ctx, workspacePath, stepID, fieldChanges, readFile, writeFile, logger)
+
+		logger.Info(fmt.Sprintf("✅ Converted step '%s' from %s to %s (same id, step_config.json/drift-review history preserved)", stepID, oldType, targetType))
+		return fmt.Sprintf("Successfully converted step '%s' from %s to %s. The step id is unchanged, so its step_config.json and drift_review history remain continuous -- no separate cleanup needed.%s", stepID, oldType, targetType, dependentReviewNotice), nil
+	}
+}
+
 // createAddRegularStepExecutor creates the internal regular plan type exposed as add_scripted_step.
 func createAddRegularStepExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, moveFile func(context.Context, string, string) error, unlockLearningsFunc func(context.Context, string, int) error) func(context.Context, map[string]interface{}) (string, error) {
 	return createSingleStepAdder(workspacePath, logger, readFile, writeFile, moveFile, "regular", unlockLearningsFunc)
@@ -5937,6 +6082,21 @@ func registerPlanModificationTools(
 		"workflow",
 	); err != nil {
 		return fmt.Errorf("failed to register update_branch_step tool: %w", err)
+	}
+
+	convertRoutingBranchSchema := getConvertRoutingBranchStepTypeSchema()
+	convertRoutingBranchParams, err := parseSchemaForToolParameters(convertRoutingBranchSchema)
+	if err != nil {
+		return fmt.Errorf("failed to parse convert_routing_branch_step_type schema: %w", err)
+	}
+	if err := mcpAgent.RegisterCustomTool(
+		"convert_routing_branch_step_type",
+		"Reclassify an existing routing step as branch, or an existing branch step as routing, in place. Both types share the exact same deterministic-switch shape (routes/default_route_id/route_source_file; only the human-readable question field's name differs) — this only relabels the step, it never deletes and recreates it, so the step's id is unchanged and its planning/step_config.json row (drift_review, execution_tier, etc.) stays continuous. Use this instead of manually deleting and re-adding a step to change its type — that approach loses step_config.json history for the deleted id. Provide existing_step_id and target_type (\"routing\" or \"branch\", must differ from the step's current type). The plan.json file is updated immediately when this tool is called.",
+		convertRoutingBranchParams,
+		createConvertRoutingBranchStepTypeExecutor(workspacePath, logger, readFile, writeFile, unlockLearningsFunc),
+		"workflow",
+	); err != nil {
+		return fmt.Errorf("failed to register convert_routing_branch_step_type tool: %w", err)
 	}
 
 	messageSequenceUpdateSchema := getUpdateMessageSequenceStepSchema()

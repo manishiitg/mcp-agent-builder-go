@@ -628,15 +628,63 @@ them to confirm branch works in a real workflow.
 - **`/migrate-routing-to-branch`** — the user's actual ask ("convert the
   existing workflow as per best practices"): reclassifies existing
   `routing` steps in the current plan as `branch` where they're really the
-  small in-flow decision PLAT-259 introduced `branch` for (preserving the
-  step's id via a reroute-then-restore sequence, since routing/branch steps
-  never run an agent and so carry no learnings to lose from the id churn
-  otherwise), and — for any `routing` step that legitimately stays
-  `routing` — applies the same `route_structural_isolation`/
-  `route_eval_pairing` judgment checks `plan_drift_review`'s phase B
-  already added, filing `record_pulse_finding` for real violations instead
-  of only reporting them in chat.
+  small in-flow decision PLAT-259 introduced `branch` for, and — for any
+  `routing` step that legitimately stays `routing` — applies the same
+  `route_structural_isolation`/`route_eval_pairing` judgment checks
+  `plan_drift_review`'s phase B already added, filing
+  `record_pulse_finding` for real violations instead of only reporting
+  them in chat.
 
 Neither command has been run against a real workflow by the operator yet —
 that run is exactly what will finally close the "live manual reverify"
 open item above.
+
+## Two more findings, fixed 2026-08-30
+
+1. **[P2] Execution Logs could mislabel historical runs.** The handler
+   derived a routing/branch entry's `type` from the CURRENT plan.json, not
+   from what the run artifact recorded at execution time. After
+   `convert_routing_branch_step_type` reclassifies a step (or, previously,
+   after the flawed delete-and-recreate procedure below), an older run
+   that actually executed as `routing` would render as `branch` in
+   Execution Logs, or vice versa. Fixed by persisting `step_type` into
+   `routing-evaluation.json` itself at execution time
+   (`executeRoutingStep`, `controller_routing.go`) and having
+   `handleGetExecutionLogs` prefer that recorded value over the live
+   plan.json lookup, falling back to the plan.json lookup only for an
+   artifact written before this field existed. Covered by
+   `TestHandleGetExecutionLogsPrefersPersistedStepTypeOverCurrentPlan`
+   (confirmed to fail against the pre-fix handler) and an assertion added
+   to `TestExecuteRoutingStepRunsRealBranchExecution` proving the artifact
+   write includes `step_type`.
+2. **[P2] `/migrate-routing-to-branch`'s original procedure did not
+   preserve history as claimed.** Its guidance said restoring a step's
+   original id after converting it kept `step_config.json`/drift-review
+   history continuous, but the procedure's own `delete_plan_steps` call
+   removed the old id's `step_config.json` row before the id could ever be
+   reused — the claimed continuity was false. Rather than patch the
+   guidance to be more careful about a delete-then-recreate dance, built
+   the purpose-built atomic tool the finding recommended:
+   `convert_routing_branch_step_type(existing_step_id, target_type)`
+   (`planning_agent.go`) relabels a step's type **in place** — the step's
+   `id` (and therefore its `step_config.json` row) is never touched at
+   all, because routing and branch already share the exact same
+   deterministic-switch shape (only the question field's name differs).
+   Registered alongside `add_branch_step`/`update_branch_step`, with the
+   same validation/changelog/drift-review-invalidation contract every
+   other plan-mod tool follows. `/migrate-routing-to-branch`'s guidance
+   rewritten to use this tool instead of the flawed procedure. Covered by
+   `TestConvertRoutingBranchStepTypeFromRoutingToBranch`,
+   `TestConvertRoutingBranchStepTypeFromBranchToRouting`, and
+   `TestConvertRoutingBranchStepTypeRejectsNoOpConversion`
+   (`controller_branch_test.go`) — the first explicitly asserts
+   `step_config.json` is never written to during a conversion.
+
+Note: `convert_routing_branch_step_type` is a genuinely useful, permanent
+tool (unlike the two temporary slash commands above) — it stays even after
+`/verify-branch-step`/`/migrate-routing-to-branch` are eventually removed.
+
+All fixes verified: `go build ./...`, `gofmt -l` clean; `go test
+./pkg/orchestrator/agents/workflow/step_based_workflow/...`,
+`./cmd/server/...`, `./cmd/server/guidance/...` green (only the same
+pre-existing unrelated `virtual-tools` failure).

@@ -3,6 +3,7 @@ package step_based_workflow
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -160,6 +161,7 @@ func TestBranchPlanStepMarshalJSONAlwaysSetsType(t *testing.T) {
 // creation, routing-evaluation.json write), matching the executor's
 // fail-open, warn-only handling of those secondary writes.
 func TestExecuteRoutingStepRunsRealBranchExecution(t *testing.T) {
+	var writtenRoutingEvaluationJSON string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
@@ -172,6 +174,14 @@ func TestExecuteRoutingStepRunsRealBranchExecution(t *testing.T) {
 			_, _ = w.Write([]byte(`{"success":false,"error":"not found"}`))
 		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/api/folders"):
 			w.WriteHeader(http.StatusCreated) // createFolderViaAPI requires 201 or 409
+			_, _ = w.Write([]byte(`{"success":true}`))
+		case (r.Method == http.MethodPut || r.Method == http.MethodPost) && strings.Contains(r.URL.Path, "routing-evaluation.json"):
+			var body struct {
+				Content string `json:"content"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			writtenRoutingEvaluationJSON = body.Content
+			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"success":true}`))
 		default:
 			w.WriteHeader(http.StatusOK)
@@ -257,6 +267,22 @@ func TestExecuteRoutingStepRunsRealBranchExecution(t *testing.T) {
 	}
 	if nextStepID != wantNextStepID {
 		t.Fatalf("nextStepIDForSelectedRoute after real execution = %q, want %q", nextStepID, wantNextStepID)
+	}
+
+	// The persisted artifact must record the step's real type at execution
+	// time -- Execution Logs later prefers this over the current plan.json
+	// lookup precisely so a step reclassified after this run doesn't
+	// silently relabel this historical run's evidence (P2 finding on the
+	// PLAT-259 Execution Logs fix).
+	if writtenRoutingEvaluationJSON == "" {
+		t.Fatal("expected executeRoutingStep to write routing-evaluation.json, got no write captured")
+	}
+	var persisted map[string]interface{}
+	if err := json.Unmarshal([]byte(writtenRoutingEvaluationJSON), &persisted); err != nil {
+		t.Fatalf("routing-evaluation.json is not valid JSON: %v\n%s", err, writtenRoutingEvaluationJSON)
+	}
+	if got, _ := persisted["step_type"].(string); got != "branch" {
+		t.Fatalf("routing-evaluation.json step_type = %q, want %q", got, "branch")
 	}
 }
 
@@ -444,5 +470,177 @@ func TestCanonicalWorkshopPromptOffersBranchForFixedChoices(t *testing.T) {
 	}
 	if !strings.Contains(text, "when the choice forks into a major") {
 		t.Error("canonical workshop prompt's fixed-choice guidance no longer distinguishes branch (small in-flow decision) from routing (major sub-workflow fork)")
+	}
+}
+
+// convertRoutingBranchTestRoutes returns two routes that both terminate at
+// "end", so a single-step plan fixture stays graph-valid without needing
+// real downstream steps.
+func convertRoutingBranchTestRoutes() []RoutingRoute {
+	return []RoutingRoute{
+		{RouteID: "route-a", RouteName: "A", Condition: "c", NextStepID: "end"},
+		{RouteID: "route-b", RouteName: "B", Condition: "c", NextStepID: "end"},
+	}
+}
+
+// convertRoutingBranchTestPlanFileIO returns readFile/writeFile stubs for
+// createConvertRoutingBranchStepTypeExecutor tests, following the same
+// lightweight (no HTTP server) pattern as
+// TestUpdateRoutingStepCanRepairPreviouslyDanglingGraph in
+// planning_graph_integrity_test.go. Also records every path writeFile is
+// called with, so a test can assert step_config.json was never touched.
+func convertRoutingBranchTestPlanFileIO(t *testing.T, plan *PlanningResponse) (readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, writtenPaths *[]string, writtenPlan *string) {
+	t.Helper()
+	planJSON, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatalf("marshal plan: %v", err)
+	}
+	writtenPaths = &[]string{}
+	writtenPlan = new(string)
+	readFile = func(_ context.Context, path string) (string, error) {
+		if strings.HasSuffix(path, "step_config.json") {
+			return "[]", nil
+		}
+		if strings.Contains(path, "evaluation/") {
+			return "", errors.New("not found")
+		}
+		if strings.Contains(path, "changelog") {
+			return "", errors.New("not found")
+		}
+		return string(planJSON), nil
+	}
+	writeFile = func(_ context.Context, path, content string) error {
+		*writtenPaths = append(*writtenPaths, path)
+		if strings.HasSuffix(path, "plan.json") {
+			*writtenPlan = content
+		}
+		return nil
+	}
+	return readFile, writeFile, writtenPaths, writtenPlan
+}
+
+// TestConvertRoutingBranchStepTypeFromRoutingToBranch covers the fix for a
+// P2 finding on the /migrate-routing-to-branch temporary command: its
+// original guidance claimed reusing a step's id via delete-then-recreate
+// preserved step_config.json/drift-review history, but delete_plan_steps
+// prunes the deleted id's step_config.json row before the id is ever reused,
+// so that claim was false. This purpose-built tool instead relabels the
+// step's type in place -- the id, and therefore its step_config.json row,
+// is never touched at all.
+func TestConvertRoutingBranchStepTypeFromRoutingToBranch(t *testing.T) {
+	plan := &PlanningResponse{Steps: []PlanStepInterface{
+		&RoutingPlanStep{
+			Type:             StepTypeRouting,
+			CommonStepFields: CommonStepFields{ID: "decision-step", Title: "Decision"},
+			RoutingQuestion:  "Which path?",
+			Routes:           convertRoutingBranchTestRoutes(),
+			DefaultRouteID:   "route-a",
+		},
+	}}
+	readFile, writeFile, writtenPaths, writtenPlan := convertRoutingBranchTestPlanFileIO(t, plan)
+	executor := createConvertRoutingBranchStepTypeExecutor("workflow", loggerv2.NewNoop(), readFile, writeFile, nil)
+
+	result, err := executor(context.Background(), map[string]interface{}{
+		"existing_step_id": "decision-step",
+		"target_type":      "branch",
+		"reason":           "PLAT-259: reclassify small in-flow decision",
+	})
+	if err != nil {
+		t.Fatalf("conversion failed: %v", err)
+	}
+	if !strings.Contains(result, "Successfully converted step 'decision-step' from routing to branch") {
+		t.Fatalf("unexpected result: %s", result)
+	}
+
+	var converted PlanningResponse
+	if err := json.Unmarshal([]byte(*writtenPlan), &converted); err != nil {
+		t.Fatalf("decode persisted plan: %v", err)
+	}
+	if len(converted.Steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(converted.Steps))
+	}
+	branchStep, ok := converted.Steps[0].(*BranchPlanStep)
+	if !ok {
+		t.Fatalf("converted step = %T, want *BranchPlanStep", converted.Steps[0])
+	}
+	if branchStep.ID != "decision-step" {
+		t.Fatalf("converted step id = %q, want unchanged %q", branchStep.ID, "decision-step")
+	}
+	if branchStep.BranchQuestion != "Which path?" {
+		t.Fatalf("branch_question = %q, want the old routing_question text preserved", branchStep.BranchQuestion)
+	}
+	if len(branchStep.Routes) != 2 || branchStep.DefaultRouteID != "route-a" {
+		t.Fatalf("routes/default_route_id not preserved: %+v", branchStep)
+	}
+
+	for _, p := range *writtenPaths {
+		if strings.Contains(p, "step_config.json") {
+			t.Fatalf("conversion wrote to step_config.json (%s) -- it must never touch step_config, that's the whole point: the id, and its config row, are untouched", p)
+		}
+	}
+}
+
+// TestConvertRoutingBranchStepTypeFromBranchToRouting covers the reverse
+// direction.
+func TestConvertRoutingBranchStepTypeFromBranchToRouting(t *testing.T) {
+	plan := &PlanningResponse{Steps: []PlanStepInterface{
+		&BranchPlanStep{
+			Type:             StepTypeBranch,
+			CommonStepFields: CommonStepFields{ID: "decision-step", Title: "Decision"},
+			BranchQuestion:   "Which path?",
+			Routes:           convertRoutingBranchTestRoutes(),
+			DefaultRouteID:   "route-a",
+		},
+	}}
+	readFile, writeFile, _, writtenPlan := convertRoutingBranchTestPlanFileIO(t, plan)
+	executor := createConvertRoutingBranchStepTypeExecutor("workflow", loggerv2.NewNoop(), readFile, writeFile, nil)
+
+	_, err := executor(context.Background(), map[string]interface{}{
+		"existing_step_id": "decision-step",
+		"target_type":      "routing",
+		"reason":           "PLAT-259: reclassify as a major sub-workflow fork",
+	})
+	if err != nil {
+		t.Fatalf("conversion failed: %v", err)
+	}
+
+	var converted PlanningResponse
+	if err := json.Unmarshal([]byte(*writtenPlan), &converted); err != nil {
+		t.Fatalf("decode persisted plan: %v", err)
+	}
+	routingStep, ok := converted.Steps[0].(*RoutingPlanStep)
+	if !ok {
+		t.Fatalf("converted step = %T, want *RoutingPlanStep", converted.Steps[0])
+	}
+	if routingStep.ID != "decision-step" || routingStep.RoutingQuestion != "Which path?" {
+		t.Fatalf("unexpected converted step: %+v", routingStep)
+	}
+}
+
+// TestConvertRoutingBranchStepTypeRejectsNoOpConversion covers requesting a
+// step's already-current type.
+func TestConvertRoutingBranchStepTypeRejectsNoOpConversion(t *testing.T) {
+	plan := &PlanningResponse{Steps: []PlanStepInterface{
+		&RoutingPlanStep{
+			Type:             StepTypeRouting,
+			CommonStepFields: CommonStepFields{ID: "decision-step", Title: "Decision"},
+			RoutingQuestion:  "Which path?",
+			Routes:           convertRoutingBranchTestRoutes(),
+			DefaultRouteID:   "route-a",
+		},
+	}}
+	readFile, writeFile, _, _ := convertRoutingBranchTestPlanFileIO(t, plan)
+	executor := createConvertRoutingBranchStepTypeExecutor("workflow", loggerv2.NewNoop(), readFile, writeFile, nil)
+
+	_, err := executor(context.Background(), map[string]interface{}{
+		"existing_step_id": "decision-step",
+		"target_type":      "routing",
+		"reason":           "no-op",
+	})
+	if err == nil {
+		t.Fatal("expected an error converting a routing step to routing")
+	}
+	if !strings.Contains(err.Error(), "already a routing step") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
