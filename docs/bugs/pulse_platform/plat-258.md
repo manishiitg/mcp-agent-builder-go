@@ -32,9 +32,19 @@ Confirmed via direct code/log inspection (not assumption):
 
 **Module, not a technical_review sub-check.** A new dedicated Pulse module, `plan_drift_review`, event-triggered by real plan-step changes rather than a time cadence — confirmed feasible: Pulse's module registry (`pulsemodules.go`) was already built as a real extensible registry (a ~15-line entry, no DB migration — `pulse_module_state.module` is plain `TEXT`). The harder, novel part is genuine event-triggering (see Phase 1 below) and reviewer-turn authoring (Phase 4) — both real work, not free.
 
-**Trigger — the simplest possible "due" check.** Every step carries a `drift_review` record. It gets nulled by the *same* hook that already nulls `description_reviewed` on any dependency-triggering field change (`clearDescriptionReviewedAfterPlanUpdate`). Pulse's "is `plan_drift_review` due" check becomes: does any step in the plan have `drift_review == null`. No cadence math, no judgment call — a plain scan.
+**Trigger — the simplest possible "due" check.** Every reviewed step carries
+a `drift_review` record containing its evidence plus a `needs_review` flag.
+Every persisted step update sets that flag to `true` while preserving the
+previous review. Pulse's due check becomes: does any canonical plan step lack
+a review record, or have `drift_review.needs_review == true`. No cadence math,
+compatibility-check trigger, or judgment call — a plain scan.
 
-**Evidence-required, not a boolean.** `drift_review` holds a `reviewed_at`/`reviewed_by` plus a list of per-check records (`check_id`, `status`, `evidence`) — the review has to say *what it compared and what it found*, not just "reviewed: true". This directly targets the self-reported-with-no-proof failure mode found above.
+**Evidence-required, not merely a boolean.** `drift_review` holds
+`needs_review`, `reviewed_at`/`reviewed_by`,
+`reviewed_through_change_id`, and a list of per-check records (`check_id`,
+`status`, `evidence`) — the flag controls deterministic due-ness, while the
+record must still say *what it compared and what it found*. This directly
+targets the self-reported-with-no-proof failure mode found above.
 
 **The 14 checks**, split by whether they need an LLM or are pure Go:
 
@@ -484,12 +494,12 @@ suite still green.
 ## Reverify
 
 After the corrective contract lands, confirm live that updating **any persisted
-field** of a step—including a title-only edit—snapshots the prior review in
-the changelog and nulls `drift_review` in `step_config.json`. Also confirm
-`record_plan_drift_review` is actually callable from a live Workshop-mode
-session (not just present in the allow-list), that only a completed turn
-writes the replacement record, and that an interrupted turn leaves the field
-null for retry.
+field** of a step—including a title-only edit—preserves the existing review,
+appends the change to the changelog, and sets
+`drift_review.needs_review = true`. Also confirm `record_plan_drift_review` is
+actually callable from a live Workshop-mode session (not just present in the
+allow-list), that only a completed turn replaces the evidence and clears the
+flag, and that an interrupted turn leaves the flag set for retry.
 
 ## Independent review — 2026-08-30
 
@@ -500,11 +510,12 @@ Pulse report no work or postpone a repair even though plan drift remains:
 1. **The due scan does not derive its step set from the canonical plan.**
    `CollectPlanDriftCandidates` scans only `planning/step_config.json`.
    A plan step with no config row is therefore invisible, even though the
-   agreed invariant says every plan step with no `drift_review` is due. A
+   corrective invariant says every plan step with no `drift_review`, or with
+   `drift_review.needs_review == true`, is due. A
    workspace audit found 31 top-level plan steps across 11 workflows with no
    corresponding config row. The collector must parse `planning/plan.json`,
    enumerate its steps, and left-join `step_config.json` by step ID; a missing
-   config row or missing review must both produce a candidate.
+   config row, missing review, or flagged review must produce a candidate.
 2. **Read and parse failures are converted into a false clean result.** The
    collector returns `nil` for an unreadable or malformed
    `step_config.json`, which is indistinguishable from "nothing is due" to
@@ -534,10 +545,11 @@ landing, not a completed operational contract.
 
 ## Agreed corrective contract — 2026-08-30
 
-The review trigger is intentionally reduced to one deterministic fact:
+The review trigger is intentionally reduced to one deterministic condition:
 
 ```text
-Any canonical plan step has drift_review missing or null
+Any canonical plan step has no drift_review record
+OR drift_review.needs_review == true
 → plan_drift_review is due
 ```
 
@@ -548,46 +560,49 @@ they are not additional triggers.
 
 The lifecycle is:
 
-1. A newly-created step starts with `drift_review: null`.
-2. **Every persisted update to any field of a plan step** clears
-   `drift_review`. Do not attempt to classify an update as material or
-   cosmetic in Go; a description or title change can still alter meaning,
-   and classification would create a new false-negative path. UI state that
-   is not persisted in the plan naturally does not participate.
+1. A newly-created step has no review record yet, so it is due.
+2. **Every persisted update to any field of a plan step** sets
+   `drift_review.needs_review = true` while preserving the previous evidence,
+   reasoning, reviewer, and timestamp. Do not attempt to classify an update
+   as material or cosmetic in Go; a description or title change can still
+   alter meaning, and classification would create a new false-negative path.
+   UI state that is not persisted in the plan naturally does not participate.
 3. Gate enumerates the canonical step set from `planning/plan.json` and
    left-joins `planning/step_config.json`. A missing config row, missing
-   field, or explicit null all mean due.
-4. Before clearing a prior review, the same plan-mutation operation appends
-   an immutable changelog entry containing the step ID, timestamp, actor,
-   reason, changed fields, and a complete `previous_drift_review` snapshot.
-   Preserving the snapshot and clearing the current review must be one
-   mutation contract so a partial failure cannot lose history.
+   review, or `needs_review: true` all mean due.
+4. The same plan-mutation operation appends an immutable changelog entry
+   containing the change ID, step ID, timestamp, actor, reason, and changed
+   fields. It does **not** duplicate the previous review into each changelog
+   row because that review remains in `step_config.json` until replacement.
+   Appending the change and setting the flag must be one mutation contract.
 5. The agentic reviewer reads the current step, its dependencies and
-   artifacts, the previous review, and only the changelog entries since that
-   review. It uses this evidence to determine downstream effects and apply
-   safe fixes.
-6. Only a completed review writes the new evidence-backed `drift_review`.
-   If the reviewer turn or its required persistence fails, the field remains
-   null and the next Pulse run retries it. If a completed review creates an
-   unresolved human/platform/fixer item, the review record and linked item
-   must be committed atomically.
+   artifacts, the preserved review, and only changelog entries after its
+   `reviewed_through_change_id`. It uses this evidence to determine downstream
+   effects and apply safe fixes.
+6. Only a completed review replaces the evidence, sets
+   `reviewed_through_change_id` to the latest consumed change, and sets
+   `needs_review = false`. If the reviewer turn or required persistence
+   fails, the flag stays true and the next Pulse run retries it. If a
+   completed review creates an unresolved human/platform/fixer item, the
+   review record and linked item must be committed atomically.
 7. Scheduled Pulse and the standalone artifact-review slash command must
    call the **same** candidate collector, reviewer contract, safe-fix path,
    and completion writer. The slash command is a manual entry point into the
-   module, not a separate checklist implementation. It must select the same
-   canonical steps whose `drift_review` is missing/null, consume the same
-   changelog evidence, and populate the same record only after completion.
-   If no canonical step is due, it reports `no plan drift review due` and
+   module, not a separate checklist implementation. It selects the same
+   canonical steps whose review is missing or flagged, consumes the same
+   changelog evidence, and updates the same record only after completion. If
+   no canonical step is due, it reports `no plan drift review due` and
    performs no duplicate review.
 
-This preserves review history without making the changelog part of due-ness:
-`drift_review == null` triggers the work; the changelog explains what changed
+This preserves review history without duplicating it in the changelog or
+making the changelog part of due-ness: a missing review or
+`needs_review: true` triggers the work; the changelog explains what changed
 and helps the agent determine its effects.
 
 Acceptance must exercise both entry points against the same fixture: first
-verify that scheduled and slash dispatch choose the same null-review steps
-and produce the same durable result, then rerun the slash command and verify
-that it cleanly reports no work. The current standalone
+verify that scheduled and slash dispatch choose the same missing/flagged
+steps and produce the same durable result, then rerun the slash command and
+verify that it cleanly reports no work. The current standalone
 `/review-artifact-drift` checklist does not yet provide this parity and must
 be routed through the shared `plan_drift_review` implementation rather than
 maintained as an independent behavior.
