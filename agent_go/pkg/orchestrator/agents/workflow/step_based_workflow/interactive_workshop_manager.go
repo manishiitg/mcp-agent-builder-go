@@ -3336,7 +3336,23 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				groupInfo = fmt.Sprintf(", group=%q", groupName)
 			}
 			logger.Info(fmt.Sprintf("🚀 Workshop: step %q started in background, execution_id=%q%s, fast_path_only=%v", stepID, execID, groupInfo, fastPathOnly))
-			return fmt.Sprintf("Step %q started in background.\nexecution_id: %q\nYou will be automatically notified when it completes. End the current agent turn now instead of polling. Use query_step(step_id=%q) only if the user explicitly requests a live status check. Use send_step_message(execution_id=%q, message=...) only for a necessary live correction while an agent turn is active.", stepID, execID, stepID, execID), nil
+			// Surface the resolved run_folder/group explicitly. group_name is
+			// optional on this tool and silently falls back to the first
+			// enabled/manifest group when omitted — without this line, an
+			// omitted or mistyped group_name silently lands the run in a
+			// folder the caller never confirmed, discoverable only by reading
+			// runs/ directly (found live: a step run this way was invisible
+			// in the Execution Logs UI because its dropdown never listed the
+			// folder the run actually used).
+			displayGroupName := resolvedGroupName
+			if displayGroupName == "" {
+				displayGroupName = groupName
+			}
+			runFolderNotice := fmt.Sprintf("\nrun_folder: %q", runFolder)
+			if displayGroupName == "" {
+				runFolderNotice += " (no group resolved — this workspace may have no defined variable groups)"
+			}
+			return fmt.Sprintf("Step %q started in background.\nexecution_id: %q%s\nYou will be automatically notified when it completes. End the current agent turn now instead of polling. Use query_step(step_id=%q) only if the user explicitly requests a live status check. Use send_step_message(execution_id=%q, message=...) only for a necessary live correction while an agent turn is active.", stepID, execID, runFolderNotice, stepID, execID), nil
 		},
 		"workflow",
 	); err != nil {
