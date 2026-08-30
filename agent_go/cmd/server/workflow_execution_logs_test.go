@@ -344,3 +344,56 @@ func TestHandleGetExecutionLogsReportsBranchStepTypeNotRouting(t *testing.T) {
 		t.Fatalf("orchestration entry type = %q, want %q (the owning step's real plan.json type)", entry.Type, "branch")
 	}
 }
+
+// TestHandleGetExecutionLogsPrefersPersistedStepTypeOverCurrentPlan is a
+// follow-up finding on the fix above: deriving the entry's type from
+// stepMetadata (the CURRENT plan.json) is itself wrong for a HISTORICAL run.
+// If a step is later reclassified routing<->branch (e.g. via
+// /migrate-routing-to-branch), every one of its past runs would silently
+// relabel to the step's new type, even though it actually executed as the
+// old one. executeRoutingStep now persists step_type into
+// routing-evaluation.json at execution time; this handler must prefer that
+// recorded value over the live plan.json lookup.
+func TestHandleGetExecutionLogsPrefersPersistedStepTypeOverCurrentPlan(t *testing.T) {
+	const workspacePath = "/workspace/Workflow/test"
+	workspace := httptest.NewServer(&mockWorkspaceAPI{files: map[string]string{
+		// The step is CURRENTLY typed branch (e.g. migrated after this run).
+		workspacePath + "/planning/plan.json": `{
+  "steps": [{"type":"branch","id":"migrated-job","title":"Migrated job"}]
+}`,
+		// But the artifact records what it actually was AT EXECUTION TIME: routing.
+		workspacePath + "/runs/iteration-0/default/logs/migrated-job/routing-evaluation.json": `{
+  "step_type":"routing",
+  "routing_question":"Which path?",
+  "selected_route_id":"research",
+  "timestamp":"2026-08-25T00:00:00Z"
+}`,
+	}})
+	t.Cleanup(workspace.Close)
+	t.Setenv("WORKSPACE_API_URL", workspace.URL)
+
+	request := httptest.NewRequest("GET", "/api/workflow/logs?workspace_path="+workspacePath+"&run_folder=iteration-0/default", nil)
+	response := httptest.NewRecorder()
+	(&StreamingAPI{}).handleGetExecutionLogs(response, request)
+	if response.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
+	}
+
+	var body struct {
+		Steps map[string]struct {
+			Orchestration []struct {
+				Type string `json:"type"`
+			} `json:"orchestration"`
+		} `json:"steps"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	route, ok := body.Steps["migrated-job"]
+	if !ok || len(route.Orchestration) != 1 {
+		t.Fatalf("expected migrated-job log in response, got %+v", body.Steps)
+	}
+	if entry := route.Orchestration[0]; entry.Type != "routing" {
+		t.Fatalf("orchestration entry type = %q, want %q (the artifact's recorded execution-time type, not the step's current type)", entry.Type, "routing")
+	}
+}
