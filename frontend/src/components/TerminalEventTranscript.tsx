@@ -54,6 +54,13 @@ type TranscriptRenderItem = TranscriptItem | {
 // is what produced triplicated server names, boxes inside boxes, and a scroll
 // container fighting itself.
 const PREVIEW_LIMIT = 600
+const AGENT_RESPONSE_EVENT_TYPES = new Set([
+  'agent_end',
+  'background_agent_completed',
+  'llm_generation_end',
+  'orchestrator_agent_end',
+  'unified_completion',
+])
 
 function transcriptEventPayload(event: PollingEvent): Record<string, unknown> {
   const outer = event.data
@@ -79,17 +86,14 @@ const TranscriptEvent: React.FC<{
     return <InternalActivityEvent title={internalTranscriptMessageTitle(event)} content={content} timestamp={timestamp} />
   }
 
-  if (event.type === 'llm_generation_end' && content) {
-    return <AssistantTranscriptMessage event={event} content={content} timestamp={timestamp} />
-  }
-
-  // A completed background task often carries its only useful human result in
-  // `result`.  In the formatted transcript this is an answer from the
-  // automation, not a diagnostic event, so it deserves the same calm treatment
-  // as a main-agent response rather than EventDispatcher's dense status card.
-  if (event.type === 'background_agent_completed') {
-    const result = typeof payload.result === 'string' ? payload.result.trim() : ''
-    if (result) return <AssistantTranscriptMessage event={event} content={result} timestamp={timestamp} label="Task update" />
+  // Different runtime transports carry a completed agent answer in different
+  // fields. They are all agent responses, so render them with one component
+  // and one type scale instead of falling through to several event cards.
+  const finalResult = typeof payload.final_result === 'string' ? payload.final_result.trim() : ''
+  const result = typeof payload.result === 'string' ? payload.result.trim() : ''
+  const responseContent = content || finalResult || result
+  if (AGENT_RESPONSE_EVENT_TYPES.has(event.type || '') && responseContent) {
+    return <AssistantTranscriptMessage event={event} content={responseContent} timestamp={timestamp} />
   }
 
   if (isExecutionPromptTranscriptMessage(event)) {
@@ -154,7 +158,9 @@ const AssistantTranscriptMessage: React.FC<{ event: PollingEvent; content: strin
           {turn != null ? `Turn ${turn}` : 'Response'}{duration ? ` · ${duration}` : ''}{timestamp ? ` · ${timestamp}` : ''}
         </span>
       </div>
-      <ConversationMarkdownRenderer content={content} framed={false} maxHeight="none" />
+      <div className="[&_li]:!text-[14px] [&_p]:!text-[14px]">
+        <ConversationMarkdownRenderer content={content} framed={false} maxHeight="none" />
+      </div>
     </article>
   )
 }
@@ -597,7 +603,9 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
 const LiveAssistantTranscript: React.FC<{ text: string; status: string }> = ({ text }) => (
   text ? (
     <article data-testid="terminal-clear-live-assistant-message" className="mx-5 my-4 border-l-2 border-cyan-400/55 pl-4 pr-2">
-      <ConversationMarkdownRenderer content={text} framed={false} maxHeight="none" />
+      <div className="[&_li]:!text-[14px] [&_p]:!text-[14px]">
+        <ConversationMarkdownRenderer content={text} framed={false} maxHeight="none" />
+      </div>
       <span aria-label="Writing" className="mt-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-cyan-400" />
     </article>
   ) : null
