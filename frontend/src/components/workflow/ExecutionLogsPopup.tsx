@@ -1248,9 +1248,19 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                                   {model}
                                 </span>
                               )}
-                              {execMetrics.totalTokens > 0 && (
-                                <span className="text-[10px] font-medium bg-muted px-1.5 py-0.5 rounded text-muted-foreground border border-border">
-                                  {formatTokenCount(execMetrics.totalTokens)} tok
+                              {execMetrics.inputTokens > 0 && (
+                                <span title={`Input tokens: ${execMetrics.inputTokens.toLocaleString()}`} className="text-[10px] font-medium bg-muted px-1.5 py-0.5 rounded text-muted-foreground border border-border">
+                                  {formatTokenCount(execMetrics.inputTokens)} in
+                                </span>
+                              )}
+                              {execMetrics.outputTokens > 0 && (
+                                <span title={`Output tokens: ${execMetrics.outputTokens.toLocaleString()}${execMetrics.reasoningTokens > 0 ? ` (includes ${execMetrics.reasoningTokens.toLocaleString()} reasoning)` : ''}`} className="text-[10px] font-medium bg-muted px-1.5 py-0.5 rounded text-muted-foreground border border-border">
+                                  {formatTokenCount(execMetrics.outputTokens)} out
+                                </span>
+                              )}
+                              {execMetrics.cacheTokens > 0 && (
+                                <span title={`Cached tokens: ${execMetrics.cacheTokens.toLocaleString()}`} className="text-[10px] font-medium bg-muted px-1.5 py-0.5 rounded text-muted-foreground border border-border">
+                                  {formatTokenCount(execMetrics.cacheTokens)} cache
                                 </span>
                               )}
                               {execMetrics.durationMs > 0 && (
@@ -2664,7 +2674,22 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                             <>
                               {stepMetrics.totalTokens > 0 && (
                                 <StepMetricChip title={`Tokens used: ${stepMetrics.totalTokens.toLocaleString()} total (${stepMetrics.inputTokens.toLocaleString()} input, ${stepMetrics.outputTokens.toLocaleString()} output${stepMetrics.reasoningTokens > 0 ? `, ${stepMetrics.reasoningTokens.toLocaleString()} reasoning` : ''}${stepMetrics.cacheTokens > 0 ? `, ${stepMetrics.cacheTokens.toLocaleString()} cache` : ''})`}>
-                                  {formatTokenCount(stepMetrics.totalTokens)} tok
+                                  {formatTokenCount(stepMetrics.totalTokens)} tok total
+                                </StepMetricChip>
+                              )}
+                              {stepMetrics.inputTokens > 0 && (
+                                <StepMetricChip title={`Input tokens: ${stepMetrics.inputTokens.toLocaleString()}`}>
+                                  {formatTokenCount(stepMetrics.inputTokens)} in
+                                </StepMetricChip>
+                              )}
+                              {stepMetrics.outputTokens > 0 && (
+                                <StepMetricChip title={`Output tokens: ${stepMetrics.outputTokens.toLocaleString()}${stepMetrics.reasoningTokens > 0 ? ` (includes ${stepMetrics.reasoningTokens.toLocaleString()} reasoning)` : ''}`}>
+                                  {formatTokenCount(stepMetrics.outputTokens)} out
+                                </StepMetricChip>
+                              )}
+                              {stepMetrics.cacheTokens > 0 && (
+                                <StepMetricChip title={`Cached tokens: ${stepMetrics.cacheTokens.toLocaleString()}`}>
+                                  {formatTokenCount(stepMetrics.cacheTokens)} cache
                                 </StepMetricChip>
                               )}
                               {stepMetrics.durationMs > 0 && (
