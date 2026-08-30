@@ -1164,9 +1164,10 @@ func (hcpo *StepBasedWorkflowOrchestrator) GetType() string {
 
 // UseKnowledgebase reports whether the knowledgebase prerequisite is enabled.
 // The knowledgebase is now ALWAYS enabled for workflows — the per-preset
-// "enable KB" toggle was removed. Per-step access is still opt-in via each
-// step's knowledgebase_access (default "none"); this prerequisite no longer
-// acts as a global kill-switch.
+// "enable KB" toggle was removed. Steps read it by default; an explicit
+// knowledgebase_access="none" opts out, while writes still require an explicit
+// contribution contract. This prerequisite no longer acts as a global
+// kill-switch.
 func (hcpo *StepBasedWorkflowOrchestrator) UseKnowledgebase() bool {
 	return true
 }

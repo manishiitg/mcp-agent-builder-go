@@ -479,6 +479,7 @@ const WorkflowInspectorCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanva
       workspacePath={workspacePath}
       runFolder={selectedRunFolder}
       runFolders={runFolderNames}
+      onRefreshRunFolders={refreshWorkspaceState}
     />
   ) : workflowWorkspaceView === 'learnings' ? (
     <LearningsPopup
