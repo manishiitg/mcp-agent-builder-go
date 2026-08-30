@@ -93,13 +93,10 @@ import {
   type PollingEvent,
   type RunningWorkflowInfo,
 } from '../../services/api-types'
-import { getRawEventData } from '../../generated/event-types'
 import { findOrCreateWorkflowTab, isChatCompatiblePhase } from '../../utils/chatSubmitHelpers'
 import { hydrateTabEvents } from '../../utils/sessionRestore'
 // Inactive workflow tabs hydrate lazily and fall back to workflow-scoped chat history.
 
-// Stable empty array for Zustand selector (must be module-level to avoid referential instability)
-const EMPTY_WORKFLOW_EVENTS: PollingEvent[] = []
 const WORKFLOW_RESTORE_TIMEOUT_MS = 8000
 const WORKFLOW_KILL_AND_START_STOP_TIMEOUT_MS = 30_000
 const WORKFLOW_CHAT_CONTENT_EVENT_TYPES = new Set(['user_message', 'conversation_end', 'unified_completion'])
@@ -783,11 +780,6 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
   const chatAreaRef = useRef<ChatAreaRef>(null)
   // Ref for the WorkflowCanvas component (for triggering refresh)
   const canvasRef = useRef<WorkflowCanvasRef>(null)
-  // Per-session high-water marks for event processing.
-  // Using Maps instead of single refs prevents re-scanning all historical events when switching
-  // between workflow tabs. Without this, every tab switch fires canvasRef.refresh() for every
-  // historical todo_steps_extracted event — causing hangs proportional to event history depth.
-  const lastProcessedEventIndexRef = useRef<Map<string, number>>(new Map())
   // Store pending query to submit after ChatArea mounts
   const pendingQueryRef = useRef<{ query: string; executionOptions?: ExecutionOptions } | null>(null)
   const isActiveWorkflowSessionRestoring = useChatStore(state => {
@@ -1288,19 +1280,6 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
     }
   }, [])
 
-  // When switching to a session we haven't seen yet, initialize its high-water mark to the
-  // current event count — skipping all historical events. The canvas initializes via usePlanData
-  // independently; replaying old todo_steps_extracted events would fire multiple canvas.refresh()
-  // calls for no benefit and cause the visible hang on tab switch.
-  useEffect(() => {
-    const sid = activeSessionId
-    if (!sid) return
-    if (!lastProcessedEventIndexRef.current.has(sid)) {
-      const evts = useChatStore.getState().tabEvents[sid] ?? []
-      lastProcessedEventIndexRef.current.set(sid, evts.length - 1)
-    }
-  }, [activeSessionId])
-
   // The global workspace toggle now maps to the workflow's right-side Files
   // pane instead of the old app-level far-right file column.
   //
@@ -1371,93 +1350,6 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
       }
     }
   }, [])
-
-  const processPlanUpdateEvents = useCallback((sessionId: string, events: PollingEvent[]) => {
-    if (events.length === 0) return
-    // Find new todo_steps_extracted events that we haven't processed yet
-    const lastIdx = lastProcessedEventIndexRef.current.get(sessionId) ?? events.length - 1
-    for (let i = lastIdx + 1; i < events.length; i++) {
-      const event = events[i]
-      
-      if (event.type === 'todo_steps_extracted') {
-        logger.debug('WorkflowLayout', `[PlanUpdate] Event ${i}: type=${event.type}, timestamp=${event.timestamp}`)
-        // Use helper function to extract raw event data (handles nested structure)
-        const rawData = getRawEventData(event)
-        const eventData = rawData as {
-          extracted_steps?: unknown[], 
-          total_steps_extracted?: number, 
-          plan_source?: string, 
-          extraction_method?: string, 
-          workspace_path?: string,
-          metadata?: {
-            [k: string]: unknown
-          }
-        } | undefined
-        
-        if (!eventData) {
-          logger.warn('WorkflowLayout', '[PlanUpdate] Could not extract event data from event:', event)
-          continue
-        }
-        
-        const stepCount = (eventData?.extracted_steps?.length) || eventData?.total_steps_extracted || 0
-        const planSource = eventData?.plan_source || 'unknown'
-        const extractionMethod = eventData?.extraction_method || 'unknown'
-        
-        // Extract changed step IDs from metadata (granular event data)
-        // Metadata is at the top level of the event data (from BaseEventData)
-        const metadata = eventData?.metadata || {}
-        const changedStepIDs = (Array.isArray(metadata.changed_step_ids) 
-          ? metadata.changed_step_ids as string[] 
-          : []) || []
-        const deletedStepIDs = (Array.isArray(metadata.deleted_step_ids) 
-          ? metadata.deleted_step_ids as string[] 
-          : []) || []
-        
-        logger.debug('WorkflowLayout', `[PlanUpdate] Detected plan update event:`, {
-          stepCount,
-          planSource,
-          extractionMethod,
-          workspacePath: eventData?.workspace_path,
-          changedStepIDs,
-          deletedStepIDs,
-          hasMetadata: !!(eventData?.metadata),
-          metadataKeys: eventData?.metadata ? Object.keys(eventData.metadata) : [],
-          metadata: eventData?.metadata,
-          rawEventData: rawData,
-          eventIndex: i
-        })
-        
-        // Trigger canvas refresh with granular change data
-        if (canvasRef.current) {
-          logger.debug('WorkflowLayout', '[PlanUpdate] Calling canvasRef.current.refresh() with granular changes')
-          canvasRef.current.refresh(changedStepIDs, deletedStepIDs).then((changes) => {
-            logger.debug('WorkflowLayout', '[PlanUpdate] Canvas refresh completed:', changes)
-          }).catch((err) => {
-            logger.error('WorkflowLayout', '[PlanUpdate] Canvas refresh failed:', err)
-          })
-        } else {
-          logger.warn('WorkflowLayout', '[PlanUpdate] canvasRef.current is null, cannot refresh')
-        }
-      }
-      
-      // Update index processed - do this for ALL events to avoid re-scanning
-      lastProcessedEventIndexRef.current.set(sessionId, i)
-    }
-  }, [])
-
-  // Listen for todo_steps_extracted events without subscribing the whole layout
-  // render path to high-frequency chat/tool event updates.
-  useEffect(() => {
-    if (!activeSessionId) return
-
-    const sessionId = activeSessionId
-    return useChatStore.subscribe((state, prevState) => {
-      const events = state.tabEvents[sessionId] ?? EMPTY_WORKFLOW_EVENTS
-      const previousEvents = prevState.tabEvents[sessionId] ?? EMPTY_WORKFLOW_EVENTS
-      if (events === previousEvents || events.length === previousEvents.length) return
-      processPlanUpdateEvents(sessionId, events)
-    })
-  }, [activeSessionId, processPlanUpdateEvents])
 
   // Track reconnection by preset to prevent duplicate tabs while still allowing
   // Ctrl+K workflow switches to run the reconnect decision for that preset.
