@@ -37,6 +37,7 @@ func knownWorkshopRegisteredToolNamesOutsideWorkflowPool() map[string]string {
 		"update_human_input_step", "update_todo_task_step", "update_todo_task_route",
 		"delete_todo_task_route", "delete_plan_steps", "cleanup_orphan_step_configs",
 		"update_validation_schema", "update_evaluation_plan",
+		"record_plan_drift_review",
 	)
 	add("workshop execution tools",
 		"execute_step", "query_step", "send_step_message", "debug_step", "list_executions",
@@ -52,6 +53,7 @@ func knownWorkshopRegisteredToolNamesOutsideWorkflowPool() map[string]string {
 	)
 	add("workshop workflow/config tools",
 		"get_llm_config", "get_workflow_config", "update_workflow_config",
+		"request_workflow_folder_access",
 		"set_workflow_contract_version",
 		"update_variable", "add_group", "update_group", "delete_group",
 		"list_schedules", "create_schedule", "create_calendar_schedule",

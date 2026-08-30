@@ -1,11 +1,11 @@
 [← Pulse platform index](../pulse_platform_issue_register.md)
 
-# PLAT-258 — Dedicated `plan_drift_review` Pulse module (design + phases 1-2 complete)
+# PLAT-258 — Dedicated `plan_drift_review` Pulse module (design + phases 1-3 complete)
 
 | Coordination | Value |
 |---|---|
 | Assigned agent | Claude Code |
-| Ticket state | `design complete; phase 1 implemented; phase 2 complete (6 of 9 deterministic checks built; 1 needed no new code, 2 correctly found not-buildable-as-designed — see below); phases 3-6 not yet built` |
+| Ticket state | `design complete; phase 1 implemented; phase 2 complete (6 of 9 deterministic checks built; 1 needed no new code, 2 correctly found not-buildable-as-designed — see below); phase 3 implemented (record_plan_drift_review tool); phases 4-6 not yet built` |
 | Last synchronized | `2026-08-30` |
 
 - **Type:** platform feature (multi-phase), not a single bug fix. Filed at
@@ -61,7 +61,18 @@ Confirmed via direct code/log inspection (not assumption):
 
 **Trust for the judgment checks (10, 11, 12, 14):** evidence-required records (above) + periodic independent spot-check verification (a second pass re-checks a sample, same pattern as this session's own adversarial code-review flow) + outcome-based tracking (if a later mechanical check catches something a judgment review should have caught, that's a logged review-quality failure, not just a missed finding).
 
-**Sequencing (agreed):** Phase 1 (this ticket) → Phase 2 (build the deterministic checks as real Go functions) → Phase 3 (a `record_plan_drift_review` tool, since `planning/` is FolderGuard-blocked-write for normal sessions — the reviewer needs a purpose-built recording tool with the same privileged write path `update_step_config` already uses, not a raw file write) → Phase 4 (module registration + reviewer turn content, the real authoring work) → Phase 5 (frontend — currently hardcoded to a 2-module layout) → Phase 6 (cutover: remove the now-redundant drift-handling folded into `technical_review`, once the new module is proven working).
+**Sequencing (agreed, reordered after phase 3):** Phase 1 (this ticket) →
+Phase 2 (build the deterministic checks as real Go functions) → Phase 3 (a
+`record_plan_drift_review` tool, since `planning/` is FolderGuard-blocked-
+write for normal sessions — the reviewer needs a purpose-built recording
+tool with the same privileged write path `update_step_config` already uses,
+not a raw file write) → **Phase 4 (frontend — currently hardcoded to a
+2-module layout; moved up from phase 5 at the user's request, so the module
+is visible/inspectable in the UI before the reviewer-turn content is
+authored)** → Phase 5 (module registration + reviewer turn content, the
+real authoring work) → Phase 6 (cutover: remove the now-redundant
+drift-handling folded into `technical_review`, once the new module is
+proven working).
 
 ## Phase 1 — implemented in this ticket
 
@@ -77,8 +88,9 @@ Design refinement made while starting this phase: the deterministic checks
 (Groups 1/2) don't need an agent/LLM turn at all — they're plain Go functions,
 following the exact precedent `run_concerns.go` already documents ("these rows
 are written by Go..., never by an agent calling a tool. There is no call for
-an agent to skip"). Only the judgment checks (Group 3, phase 4) genuinely need
-a Pulse reviewer turn and the `record_plan_drift_review` tool (phase 3) to
+an agent to skip"). Only the judgment checks (Group 3, phase 5 — frontend was
+reordered ahead of it to phase 4, see Sequencing below) genuinely need a
+Pulse reviewer turn and the `record_plan_drift_review` tool (phase 3) to
 persist their reasoning-based evidence.
 
 **Built (`plan_drift_checks.go`):** `CheckReportQueryCompatibility` — Check 1.
@@ -163,7 +175,7 @@ function with synthetic data.
   fact detection. No check built; the only genuinely open part of the user's
   original ask here — "is the CURRENT access mode/lock state the *right*
   choice given the step's maturity" — was already correctly categorized as a
-  Group 3 judgment check (phase 4), not a mechanical one.
+  Group 3 judgment check (phase 5), not a mechanical one.
 
 - **Built: `CheckOrphanedTables`** — Check 13. Now buildable with reasonable
   source coverage using Checks 1/2/4/9's own extraction: cross-references
@@ -184,6 +196,40 @@ function with synthetic data.
   finding reads as "candidate for manual review," not certainty. The fix
   path for a real orphan is `apply_workflow_db_migration` (already
   auto-snapshots before any destructive change), never a raw `DROP`.
+
+## Phase 3 — implemented: `record_plan_drift_review`
+
+`planning/step_config.json` is FolderGuard-blocked-write for a normal
+session, so the reviewer (automatic or manual) needs a purpose-built
+recording path, not a raw file write. Registered
+`record_plan_drift_review` through `registerPlanModificationTools` — the
+exact same function that already registers `update_step_config`,
+`cleanup_orphan_step_configs`, etc., so it gets the identical privileged
+`writeFile` (`withPlanMutationWriteAccess`) every other plan-mod tool
+already has, no new plumbing.
+
+- Takes `step_id` + `checks: [{check_id, status, evidence}]` (+ optional
+  `reviewed_by`). Rejects an empty `checks` array, a missing `check_id`, an
+  invalid `status` (must be `pass`/`fail`/`fixed`), and — the concrete
+  enforcement of "evidence-required, not a boolean" — any `evidence` under
+  15 characters, which is enough to reject a rubber-stamped "ok"/"fine"/
+  "n/a" without being a real quality bar.
+- Writes the full record atomically (reads `step_config.json`, replaces
+  `drift_review` wholesale, writes back) — creates a new `step_config.json`
+  entry if the step never had one rather than erroring, matching how
+  `update_step_config` handles a first write.
+- `reviewed_by` defaults to the calling session id if not explicitly
+  provided, so an automatic Pulse pass and a manual
+  `review-artifact-drift` invocation are both distinguishable in the
+  record later.
+- Caught and fixed a real gap in review: `agent_go/cmd/server/
+  toolset_invariant_test.go` guards exactly the failure class this session
+  already found for `/review-artifact-drift` (a tool that exists but is
+  never reachable) — a new plan-mod tool has to be added to BOTH
+  `GetToolsForWorkshopMode`'s allow-list (`interactive_workshop_manager.go`)
+  and the invariant test's own tracking list, or it would have been
+  registered but never actually exposed to any agent. Both updated;
+  `TestToolSetInvariants` passes.
 
 ## Verification
 
@@ -218,6 +264,18 @@ pass-when-referenced, fail-on-a-genuine-orphan, reserved-tables-never-
 flagged, report-and-readme-references-recognized. `gofmt`/`go vet` clean, full package suite
 still green.
 
+Phase 3: 10 new tests across `plan_drift_review_tool_test.go` —
+`validateStepDriftChecks` (rejects empty slice, missing check_id, invalid
+status, and 5 different placeholder-evidence strings in one table test;
+accepts real multi-check evidence) and `createRecordPlanDriftReviewExecutor`
+end-to-end (writes a new record, creates a `step_config.json` entry when the
+step had none, overwrites and fully replaces a prior record while honoring
+an explicit `reviewed_by`, rejects invalid checks WITHOUT writing anything —
+verified by diffing the file content before/after —, requires `step_id`).
+Plus `TestToolSetInvariants` (`agent_go/cmd/server`) passing after adding
+the new tool to both tracking lists. `gofmt`/`go vet` clean, full package
+suite still green.
+
 ## Reverify
 
-Once later phases land: confirm live that editing a step's description/context_dependencies/validation_schema nulls `drift_review` in `step_config.json`, and that a title-only edit does not.
+Once later phases land: confirm live that editing a step's description/context_dependencies/validation_schema nulls `drift_review` in `step_config.json`, and that a title-only edit does not. Also confirm `record_plan_drift_review` is actually callable from a live Workshop-mode session (not just present in the allow-list) and that a written record is visible in `step_config.json` on disk.

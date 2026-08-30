@@ -5136,6 +5136,21 @@ func registerPlanModificationTools(
 		return fmt.Errorf("failed to register cleanup_orphan_step_configs tool: %w", err)
 	}
 
+	driftReviewSchema := getRecordPlanDriftReviewSchema()
+	driftReviewParams, err := parseSchemaForToolParameters(driftReviewSchema)
+	if err != nil {
+		return fmt.Errorf("failed to parse record_plan_drift_review schema: %w", err)
+	}
+	if err := mcpAgent.RegisterCustomTool(
+		"record_plan_drift_review",
+		"Record the results of a plan-drift review pass for one step, into planning/step_config.json's drift_review field. Call once per step with every check that ran, including checks that passed — not just failures. Each check needs check_id, status (pass/fail/fixed — fixed means real drift was found AND repaired in this same pass, not merely flagged), and evidence describing what was actually compared and what was found (a bare verdict like \"looks fine\" is rejected). Writing this record is what clears the step from plan_drift_review's due list; it stays cleared until the step is edited again (any dependency-triggering field change nulls it automatically).",
+		driftReviewParams,
+		createRecordPlanDriftReviewExecutor(workspacePath, logger, readFile, writeFile),
+		"workflow",
+	); err != nil {
+		return fmt.Errorf("failed to register record_plan_drift_review tool: %w", err)
+	}
+
 	// Register type-specific step addition tools
 	regularSchema := getAddRegularStepSchema()
 	regularParams, err := parseSchemaForToolParameters(regularSchema)

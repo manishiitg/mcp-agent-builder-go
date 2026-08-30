@@ -1475,7 +1475,7 @@ func GetToolsForWorkshopMode(mode string) []string {
 
 	// Read-only info tools — safe in all modes
 	readOnly := []string{
-		"get_step_prompts", "get_plan_prompt_health", "get_workflow_config", "get_llm_config", "get_cost_summary",
+		"get_step_prompts", "get_plan_prompt_health", "get_workflow_config", "request_workflow_folder_access", "get_llm_config", "get_cost_summary",
 	}
 
 	// Workshop execution tools
@@ -1507,6 +1507,7 @@ func GetToolsForWorkshopMode(mode string) []string {
 		"delete_todo_task_route", "delete_plan_steps", "cleanup_orphan_step_configs",
 		"update_validation_schema",
 		"update_evaluation_plan",
+		"record_plan_drift_review",
 	}
 
 	// Variable & config tools
@@ -1990,6 +1991,7 @@ func (iwm *InteractiveWorkshopManager) InteractiveWorkshopOnly(ctx context.Conte
 	// The complete media/tool contract is attached in builder-reference and
 	// read through mcpagent on every transport.
 	workspaceToolsInstructions := instructions.GetSpecialWorkspaceToolsPointer()
+	workspaceToolsInstructions += "\n\n" + workflowFolderAccessBuilderPrompt(workspacePath)
 
 	templateVars := map[string]string{
 		"WorkspacePath":                     workspacePath,
@@ -2063,7 +2065,7 @@ func (iwm *InteractiveWorkshopManager) setupWorkshopToolAgentSession(agentKind s
 	if len(blockedWrites) > 0 {
 		common.SetSessionFolderGuardBlockedWritePaths(sessionID, blockedWrites)
 	}
-	iwm.controller.grantSessionCDPHostDownloadsReadOnly(sessionID)
+	iwm.controller.grantSessionCDPHostDownloadsReadWrite(sessionID)
 	if workspacePath != "" {
 		common.SetSessionWorkingDir(sessionID, workspacePath)
 	}
@@ -2141,7 +2143,9 @@ func (iwm *InteractiveWorkshopManager) configureWorkshopToolAgentSession(config 
 // that identity — Pulse write authority is keyed by session id — need the real
 // value, which is derived here and is not the agentKind passed in.
 func (iwm *InteractiveWorkshopManager) configureWorkshopToolAgentSessionWithID(config *agents.OrchestratorAgentConfig, agentKind string, readPaths []string, writePaths []string) (string, func()) {
+	readPaths, writePaths, readOnlyPaths, folderEnv := appendWorkflowFolderAccess(iwm.controller.GetWorkspacePath(), readPaths, writePaths)
 	toolAgentSessionID := iwm.setupWorkshopToolAgentSession(agentKind, readPaths, writePaths)
+	configureWorkflowFolderAccessSession(toolAgentSessionID, iwm.controller.GetWorkspacePath(), readOnlyPaths, folderEnv)
 	config.MCPSessionID = toolAgentSessionID
 	config.FolderGuardReadPaths = readPaths
 	config.FolderGuardWritePaths = writePaths
@@ -2174,6 +2178,8 @@ func (iwm *InteractiveWorkshopManager) createInteractiveWorkshopAgent(ctx contex
 		"Chats", // Allow reading chat history for context
 	}
 	writePaths := workshopWritePaths(workspacePath)
+	readPaths, writePaths, readOnlyPaths, folderEnv := appendWorkflowFolderAccess(workspacePath, readPaths, writePaths)
+	readPaths, writePaths = iwm.controller.appendCDPHostDownloadsPaths(readPaths, writePaths)
 
 	iwm.controller.SetWorkspacePathForFolderGuard(readPaths, writePaths)
 	iwm.controller.GetLogger().Info(fmt.Sprintf("🔧 Workshop folder guard - Read: %v, Write: %v", readPaths, writePaths))
@@ -2222,6 +2228,8 @@ func (iwm *InteractiveWorkshopManager) createInteractiveWorkshopAgent(ctx contex
 	if blockedWrites := workshopBlockedWritePaths(workspacePath, writePaths); len(blockedWrites) > 0 {
 		common.SetSessionFolderGuardBlockedWritePaths(config.MCPSessionID, blockedWrites)
 	}
+	iwm.controller.grantSessionCDPHostDownloadsReadWrite(config.MCPSessionID)
+	configureWorkflowFolderAccessSession(config.MCPSessionID, workspacePath, readOnlyPaths, folderEnv)
 	config.FolderGuardReadPaths = readPaths
 	config.FolderGuardWritePaths = writePaths
 
@@ -4174,7 +4182,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				"knowledgebase_access": map[string]interface{}{
 					"type":        "string",
 					"enum":        []string{"read", "write", "read-write", "none"},
-					"description": "Access mode for this step against knowledgebase/ (per-topic notes/ + notes/_index.json registry). Defaults to 'none' — KB is opt-in per step. 'read' — may consume existing narrative (read notes via index-first then selective cat); 'write' / 'read-write' — may contribute: the step agent writes notes/ inline with diff_patch_workspace_file and closes with a self-review turn against its knowledgebase_contribution; 'none' — no access. Granting write without a knowledgebase_contribution results in no KB writes at all. Omit to keep the default.",
+					"description": "Access mode for this step against knowledgebase/ (per-topic notes/ + notes/_index.json registry). Defaults to 'read' so steps can consume shared context; use 'none' to opt out. 'write' / 'read-write' may contribute: the step agent writes notes/ inline with diff_patch_workspace_file and closes with a self-review turn against its knowledgebase_contribution. Granting write without a knowledgebase_contribution results in no KB writes at all.",
 				},
 				"learnings_access": map[string]interface{}{
 					"type":        "string",
@@ -5954,13 +5962,14 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// Tool: get_workflow_config — read-only view of workflow-level settings (MCP servers, skills, secrets, LLM config)
 	if err := mcpAgent.RegisterCustomTool(
 		"get_workflow_config",
-		"Show current workflow configuration: selected workflow MCP servers, selected workflow skills, secrets (names only, no values), workflow-scoped notification content instructions and one-way destinations, active owner-approved advisor specialization, run retention, LLM config (tiered allocation with fallbacks, preset defaults), and schedules.",
+		"Show current workflow configuration: selected workflow MCP servers, selected workflow skills, secrets (names only, no values), approved external folder access, workflow-scoped notification content instructions and one-way destinations, active owner-approved advisor specialization, run retention, LLM config (tiered allocation with fallbacks, preset defaults), and schedules.",
 		map[string]interface{}{
 			"type":       "object",
 			"properties": map[string]interface{}{},
 		},
 		func(ctx context.Context, args map[string]interface{}) (string, error) {
 			ctrl := iwm.controller
+			refreshWorkflowFolderAccessSession(ctx, ctrl.GetWorkspacePath())
 			selected := ctrl.GetSelectedServers()
 			var sb strings.Builder
 			sb.WriteString("## Workflow Configuration\n\n")
@@ -5984,6 +5993,24 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			} else {
 				for _, sk := range selectedSkills {
 					sb.WriteString(fmt.Sprintf("- **%s** — instructions at `skills/%s/SKILL.md`\n", sk, sk))
+				}
+			}
+
+			// --- Owner-approved external folders ---
+			sb.WriteString("\n### Attached Folders\n")
+			grants := workflowFolderAccess(ctrl.GetWorkspacePath())
+			if len(grants) == 0 {
+				sb.WriteString("No external folders are attached. Use Workflow toolbar → Attached folders; an agent cannot approve a host path for itself.\n")
+			} else {
+				for _, grant := range grants {
+					key := strings.Trim(workflowFolderEnvUnsafe.ReplaceAllString(strings.ToUpper(strings.TrimSpace(grant.Alias)), "_"), "_")
+					sb.WriteString(fmt.Sprintf("- **%s** (`%s`) — %s — `$WORKFLOW_FOLDER_%s`\n", grant.Alias, grant.ID, grant.Access, key))
+				}
+			}
+			if requests := workflowFolderAccessRequests(ctrl.GetWorkspacePath()); len(requests) > 0 {
+				sb.WriteString("Pending requests:\n")
+				for _, request := range requests {
+					sb.WriteString(fmt.Sprintf("- **%s** (`%s`) — %s — %s\n", request.Alias, request.ID, request.Access, request.Reason))
 				}
 			}
 
@@ -6237,6 +6264,71 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 		"workflow",
 	); err != nil {
 		logger.Warn(fmt.Sprintf("⚠️ Failed to register get_workflow_config tool: %v", err))
+	}
+
+	if err := mcpAgent.RegisterCustomTool(
+		"request_workflow_folder_access",
+		"Create a pending attached-folder request in the Workflow toolbar. This never grants access. If the user explicitly supplied an exact absolute host folder path, preserve it in path so the user can approve or deny that exact request; never infer a path. Without a supplied path, the user chooses one with the native picker. Use get_workflow_config afterward to confirm the approved grant.",
+		map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"alias":  map[string]interface{}{"type": "string", "description": "Suggested short alias, for example rts-source."},
+				"path":   map[string]interface{}{"type": "string", "description": "Optional exact absolute folder path explicitly supplied by the user. Never infer or invent this value."},
+				"access": map[string]interface{}{"type": "string", "enum": []string{"read_only", "read_write"}},
+				"reason": map[string]interface{}{"type": "string", "description": "Why the workflow needs this folder and what it will do there."},
+			},
+			"required": []string{"alias", "access", "reason"},
+		},
+		func(ctx context.Context, args map[string]interface{}) (string, error) {
+			alias := strings.TrimSpace(fmt.Sprint(args["alias"]))
+			access := strings.TrimSpace(fmt.Sprint(args["access"]))
+			reason := strings.TrimSpace(fmt.Sprint(args["reason"]))
+			requestedPath := ""
+			if rawPath, ok := args["path"]; ok && rawPath != nil {
+				requestedPath = strings.TrimSpace(fmt.Sprint(rawPath))
+			}
+			if alias == "" || reason == "" || (access != workflowtypes.FolderAccessReadOnly && access != workflowtypes.FolderAccessReadWrite) {
+				return "Error: alias, reason, and access (read_only or read_write) are required.", nil
+			}
+			if requestedPath != "" {
+				if strings.ContainsRune(requestedPath, '\x00') || !filepath.IsAbs(requestedPath) {
+					return "Error: path must be an exact absolute folder path supplied by the user.", nil
+				}
+				requestedPath = filepath.Clean(requestedPath)
+				if requestedPath == filepath.VolumeName(requestedPath)+string(filepath.Separator) {
+					return "Error: a filesystem root cannot be requested.", nil
+				}
+			}
+			content, readErr := iwm.controller.ReadWorkspaceFile(ctx, "workflow.json")
+			if readErr != nil {
+				return fmt.Sprintf("Failed to read workflow.json: %v", readErr), nil
+			}
+			now := time.Now().UTC()
+			request := workflowtypes.WorkflowFolderAccessRequest{
+				ID:            fmt.Sprintf("folder-request-%d", now.UnixNano()),
+				Alias:         alias,
+				RequestedPath: requestedPath,
+				Access:        access,
+				Reason:        reason,
+				RequestedAt:   now.Format(time.RFC3339Nano),
+			}
+			updated, existing, updateErr := upsertWorkflowFolderAccessRequest([]byte(content), request)
+			if updateErr != nil {
+				return fmt.Sprintf("Unable to create folder request: %v", updateErr), nil
+			}
+			if !existing {
+				if writeErr := iwm.controller.WriteWorkspaceFile(ctx, "workflow.json", string(updated)); writeErr != nil {
+					return fmt.Sprintf("Unable to save folder request: %v", writeErr), nil
+				}
+			}
+			if requestedPath != "" {
+				return fmt.Sprintf("Pending folder request %q for %q is now visible in Workflow toolbar → Attached folders. No access has been granted yet. The user can approve or deny the displayed %s permission. After approval, call get_workflow_config to confirm the grant.", alias, requestedPath, access), nil
+			}
+			return fmt.Sprintf("Pending folder request %q is now visible in Workflow toolbar → Attached folders. No access has been granted yet. The user must choose the folder and approve %s access. After approval, call get_workflow_config to confirm the grant.", alias, access), nil
+		},
+		"workflow",
+	); err != nil {
+		logger.Warn(fmt.Sprintf("⚠️ Failed to register request_workflow_folder_access tool: %v", err))
 	}
 
 	// === Tool: update_workflow_config ===
