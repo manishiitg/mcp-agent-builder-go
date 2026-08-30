@@ -1,6 +1,7 @@
 import { routeForQueuedMessage, splitQueuedMessages } from '../utils/queuedMessageDelivery'
 import { resolvePiModelGroup } from '../utils/llmDisplay'
 import React, { useRef, useCallback, useMemo, useState, useEffect, useLayoutEffect } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { useShallow } from 'zustand/react/shallow'
 
 const DBG = '[skill-popup]'
@@ -114,7 +115,7 @@ import SkillImportDialog from './skills/SkillImportDialog'
 import { MCPConfigPopup } from './MCPConfigPopup'
 import MCPDetailsModal from './MCPDetailsModal'
 import LLMConfigurationModal from './LLMConfigurationModal'
-import type { PlannerFile, LLMProvider, ChatHistorySession } from '../services/api-types'
+import type { PlannerFile, LLMProvider, ChatHistorySession, TerminalSnapshot } from '../services/api-types'
 import type { LLMOption } from '../types/llm'
 import { useAppStore, useMCPStore, useLLMStore, useChatStore } from '../stores'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
@@ -126,6 +127,7 @@ import { skillsApi } from '../api/skills'
 import type { Skill } from '../types/skills'
 import { chatHistorySupportsNativeResume, chatHistoryUsesTerminalRestore } from './PreviousChatHistoryPanel'
 import { getClipboardImageFiles } from './clipboardImages'
+import { isMainAgentTerminal } from '../utils/terminalIdentity'
 
 const AUTO_NOTIFICATION_PREFIX = '[AUTO-NOTIFICATION]'
 const FALLBACK_CODING_AGENT_PROVIDERS = new Set(['claude-code', 'codex-cli', 'cursor-cli', 'pi-cli'])
@@ -1299,6 +1301,29 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     const entry = providerManifest.find(p => p.id === provider)
     return (entry?.integration_kind === 'coding_agent' && !entry.deprecated) || FALLBACK_CODING_AGENT_PROVIDERS.has(provider)
   }, [primaryLLM?.provider, effectiveProviderForSteer, providerManifest])
+
+  // The terminal snapshot already carries the coding CLI's structured status
+  // line. Surface it next to the model in the composer so a user can see plan
+  // usage (for example "5h 11% · 7d 22%") without opening the terminal.
+  const { data: chatInputTerminalStatus } = useQuery({
+    queryKey: ['chat-input-statusline', tabSessionId],
+    queryFn: () => agentApi.listTerminals(tabSessionId!, 'none'),
+    enabled: !hideRuntimeStatus && !isProductSurface && mainAgentIsTmuxCLI && !!tabSessionId,
+    staleTime: 1_000,
+    retry: false,
+    refetchInterval: (query) => {
+      const mainTerminal = query.state.data?.terminals?.find(isMainAgentTerminal)
+      return isTurnInFlight || mainTerminal?.active ? 3_000 : false
+    },
+  })
+  const chatInputStatusExtras = useMemo(() => {
+    const mainTerminal: TerminalSnapshot | undefined = chatInputTerminalStatus?.terminals?.find(isMainAgentTerminal)
+    const rawExtras = mainTerminal?.status?.status_meta?.status_extras
+    return Array.isArray(rawExtras)
+      ? rawExtras.filter((value): value is string => typeof value === 'string' && value.trim() !== '')
+      : []
+  }, [chatInputTerminalStatus?.terminals])
+  const chatInputStatusLine = chatInputStatusExtras.join(' · ')
 
   // Use the exact same authoritative activity classification as the global
   // monitor. A retained tmux session is intentionally "idle" there; merely
@@ -3660,6 +3685,23 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                     <TooltipContent side="top">
                       <p>{mainAgentRuntimeStatus.label} — {mainAgentRuntimeStatus.activityLabel}</p>
                     </TooltipContent>
+                  </Tooltip>
+                )}
+                {chatInputStatusLine && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <div
+                        data-testid="chat-input-statusline"
+                        className="flex h-7 max-w-[220px] items-center rounded-md border border-lime-400/20 bg-lime-400/5 px-1.5 font-mono text-[10px] text-lime-200/90"
+                        role="status"
+                        aria-label={`Provider status: ${chatInputStatusLine}`}
+                      >
+                        <span className="truncate">{chatInputStatusLine}</span>
+                      </div>
+                    </TooltipTrigger>
+                      <TooltipContent side="top">
+                        <p>Runtime status · {chatInputStatusLine}</p>
+                      </TooltipContent>
                   </Tooltip>
                 )}
                 {mainTerminalAvailable && activeTabId && !isProductSurface && (
