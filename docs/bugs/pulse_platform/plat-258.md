@@ -1,11 +1,11 @@
 [← Pulse platform index](../pulse_platform_issue_register.md)
 
-# PLAT-258 — Dedicated `plan_drift_review` Pulse module (design + phase 1: durable per-step drift record)
+# PLAT-258 — Dedicated `plan_drift_review` Pulse module (design + phases 1-2 in progress)
 
 | Coordination | Value |
 |---|---|
 | Assigned agent | Claude Code |
-| Ticket state | `design complete; phase 1 (durable record + clear-on-edit) implemented; phases 2-6 not yet built` |
+| Ticket state | `design complete; phase 1 implemented; phase 2 in progress (1 of 9 deterministic checks built); phases 3-6 not yet built` |
 | Last synchronized | `2026-08-30` |
 
 - **Type:** platform feature (multi-phase), not a single bug fix. Filed at
@@ -71,9 +71,47 @@ Confirmed via direct code/log inspection (not assumption):
 - `MergeAgentConfigFields` updated — caught by the codebase's own `TestMergeAgentConfigFieldsCoversEveryField` completeness test, which correctly failed until this was added (a saved `drift_review` would otherwise never reach the runtime on the merge path).
 - Notice text updated so an agent editing a step sees the drift-review clear alongside the description-review clear.
 
+## Phase 2 — in progress: the deterministic checks
+
+Design refinement made while starting this phase: the deterministic checks
+(Groups 1/2) don't need an agent/LLM turn at all — they're plain Go functions,
+following the exact precedent `run_concerns.go` already documents ("these rows
+are written by Go..., never by an agent calling a tool. There is no call for
+an agent to skip"). Only the judgment checks (Group 3, phase 4) genuinely need
+a Pulse reviewer turn and the `record_plan_drift_review` tool (phase 3) to
+persist their reasoning-based evidence.
+
+**Built (`plan_drift_checks.go`):** `CheckReportQueryCompatibility` — Check 1.
+Extracts every `window.report.query(...)` SQL string out of a workflow's
+`db/reports/index.html` (three quote-style patterns, since Go's RE2 regexp
+engine has no backreferences — one pattern per quote character instead of a
+single backreference-based pattern), then dry-runs each against the live
+`db.sqlite` opened `query_only` (never mutation-capable, verified by test). A
+query that used to run and now errors — a step renamed/dropped a table or
+column the report depends on — is drift, caught mechanically, no LLM needed.
+This is the exact concrete case ("a step can affect report") that prompted
+this whole investigation.
+
+Remaining Group 1/2 checks (2-9, minus the retired #8) are not yet built.
+
 ## Verification
 
-`go build ./agent_go/... ./workspace/...` clean. `go test ./agent_go/pkg/orchestrator/agents/workflow/step_based_workflow/...` — full package suite green, including 2 new tests (`TestClearDriftReviewAfterPlanUpdate`, `TestClearDriftReviewAfterPlanUpdateSkipsTitleOnly`) mirroring the existing description-review test pair exactly, plus the pre-existing `TestArtifactReviewNotices`/`TestMergeAgentConfigFieldsCoversEveryField` updated and passing.
+Phase 1: `go build ./agent_go/... ./workspace/...` clean. `go test
+./agent_go/pkg/orchestrator/agents/workflow/step_based_workflow/...` — full
+package suite green, including 2 new tests
+(`TestClearDriftReviewAfterPlanUpdate`,
+`TestClearDriftReviewAfterPlanUpdateSkipsTitleOnly`) mirroring the existing
+description-review test pair exactly, plus the pre-existing
+`TestArtifactReviewNotices`/`TestMergeAgentConfigFieldsCoversEveryField`
+updated and passing.
+
+Phase 2 (Check 1): 8 new tests — 4 for `extractReportQueries` (all three quote
+styles, dedup-preserving-first-occurrence-position, escaped-quote handling,
+no-match case) and 4 for `CheckReportQueryCompatibility` (pass on matching
+schema, fail on a dropped column, pass when no report exists, and a dedicated
+safety test proving a report embedding an `UPDATE` statement never actually
+mutates the database — the `query_only` guard holds). `gofmt`/`go vet` clean,
+full package suite still green.
 
 ## Reverify
 
