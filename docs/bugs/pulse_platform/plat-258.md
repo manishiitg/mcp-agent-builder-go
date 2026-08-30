@@ -483,7 +483,13 @@ suite still green.
 
 ## Reverify
 
-Once later phases land: confirm live that editing a step's description/context_dependencies/validation_schema nulls `drift_review` in `step_config.json`, and that a title-only edit does not. Also confirm `record_plan_drift_review` is actually callable from a live Workshop-mode session (not just present in the allow-list) and that a written record is visible in `step_config.json` on disk.
+After the corrective contract lands, confirm live that updating **any persisted
+field** of a step—including a title-only edit—snapshots the prior review in
+the changelog and nulls `drift_review` in `step_config.json`. Also confirm
+`record_plan_drift_review` is actually callable from a live Workshop-mode
+session (not just present in the allow-list), that only a completed turn
+writes the replacement record, and that an interrupted turn leaves the field
+null for retry.
 
 ## Independent review — 2026-08-30
 
@@ -525,3 +531,47 @@ Acceptance requires regression tests for missing config rows, malformed
 config, failed-review handoff atomicity, and same-pass safe-repair routing.
 Until those pass, the earlier "all 6 phases complete" wording describes code
 landing, not a completed operational contract.
+
+## Agreed corrective contract — 2026-08-30
+
+The review trigger is intentionally reduced to one deterministic fact:
+
+```text
+Any canonical plan step has drift_review missing or null
+→ plan_drift_review is due
+```
+
+No compatibility check, changelog classification, cadence, or LLM judgment
+may independently decide whether the module is due. Deterministic SQL, JSON,
+schema, and reference checks remain evidence available *inside* the review;
+they are not additional triggers.
+
+The lifecycle is:
+
+1. A newly-created step starts with `drift_review: null`.
+2. **Every persisted update to any field of a plan step** clears
+   `drift_review`. Do not attempt to classify an update as material or
+   cosmetic in Go; a description or title change can still alter meaning,
+   and classification would create a new false-negative path. UI state that
+   is not persisted in the plan naturally does not participate.
+3. Gate enumerates the canonical step set from `planning/plan.json` and
+   left-joins `planning/step_config.json`. A missing config row, missing
+   field, or explicit null all mean due.
+4. Before clearing a prior review, the same plan-mutation operation appends
+   an immutable changelog entry containing the step ID, timestamp, actor,
+   reason, changed fields, and a complete `previous_drift_review` snapshot.
+   Preserving the snapshot and clearing the current review must be one
+   mutation contract so a partial failure cannot lose history.
+5. The agentic reviewer reads the current step, its dependencies and
+   artifacts, the previous review, and only the changelog entries since that
+   review. It uses this evidence to determine downstream effects and apply
+   safe fixes.
+6. Only a completed review writes the new evidence-backed `drift_review`.
+   If the reviewer turn or its required persistence fails, the field remains
+   null and the next Pulse run retries it. If a completed review creates an
+   unresolved human/platform/fixer item, the review record and linked item
+   must be committed atomically.
+
+This preserves review history without making the changelog part of due-ness:
+`drift_review == null` triggers the work; the changelog explains what changed
+and helps the agent determine its effects.
