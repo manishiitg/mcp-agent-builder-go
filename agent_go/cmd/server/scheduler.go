@@ -38,9 +38,8 @@ type ScheduleContext struct {
 	// A scheduled run mints its own session, so without this link its terminals
 	// are invisible to the tab that asked for the run. Empty for cron.
 	OriginSessionID string
-	// ForcePulseReview is used by the toolbar's one-off Pulse action and by a
-	// dedicated Pulse schedule. It reuses the scheduled-run pipeline without
-	// coupling Pulse to ordinary workflow schedules.
+	// ForcePulseReview is used by the toolbar's one-off Pulse action. Normal
+	// schedules use workflow.json pulse.enabled instead.
 	ForcePulseReview bool
 	// PulseOnly suppresses the normal workflow message for the toolbar's one-off
 	// Pulse action. Version preflight still runs before Pulse, which reviews the
@@ -276,6 +275,15 @@ func (s *SchedulerService) Start(ctx context.Context) error {
 	// Discover all workflows by scanning workspace-docs/Workflow/*/workflow.json
 	workflows := s.discoverWorkflows(ctx)
 	scheduleLogf("[SCHEDULER] Discovered %d workflows with manifests", len(workflows))
+	for i := range workflows {
+		if workflows[i].Manifest.MigrateLegacyPulseSchedule() {
+			if err := WriteWorkflowManifest(ctx, workflows[i].WorkspacePath, workflows[i].Manifest); err != nil {
+				scheduleLogf("[PULSE] Failed to migrate legacy dedicated schedule in %s: %v", workflows[i].WorkspacePath, err)
+			} else {
+				scheduleLogf("[PULSE] Migrated legacy dedicated schedule to pulse.enabled in %s", workflows[i].WorkspacePath)
+			}
+		}
+	}
 	for _, wf := range workflows {
 		// Reviewer rows are stranded by an interrupted agent process and no
 		// longer represent live work after restart. This cleanup does not infer
@@ -332,7 +340,7 @@ func (s *SchedulerService) Start(ctx context.Context) error {
 			sctx := buildScheduleContext(wf.WorkspacePath, wf.Manifest, sched)
 			if err := s.LoadSchedule(sctx); err != nil {
 				scheduleLogf("[SCHEDULER] Failed to load schedule %s (%s): %v", sched.ID, sched.Name, err)
-			} else if sched.Enabled {
+			} else if sched.Enabled && !sched.PulseReviewOnly {
 				loaded++
 			}
 		}
@@ -343,9 +351,6 @@ func (s *SchedulerService) Start(ctx context.Context) error {
 
 	// Wall-clock tick loop: every 60s, evaluate all registered schedules against current time.
 	go s.tickLoop(ctx)
-	// Do not make a durable fast-Pulse request wait for the first tick after a
-	// restart. It still goes through the same dedicated schedule/session path.
-	go s.launchPendingFastPulseRequests(context.Background())
 
 	// Wait for context cancellation
 	<-ctx.Done()
@@ -471,12 +476,11 @@ func (s *SchedulerService) tickLoop(ctx context.Context) {
 			// schedules (PLAT-101).
 			go s.resumeDueCapacityWaits(context.Background(), t.UTC())
 			go s.resumeQueuedScheduleOccurrences(context.Background(), t.UTC())
-			// A workflow finalizer may ask for an earlier Pulse after judging that
-			// its just-finished run materially changed evidence. The request is
-			// durable and coalesced, but it still launches only the configured
-			// PulseReviewOnly schedule in a separate scheduler session.
+			// A durable fast-Pulse request (PLAT-262) otherwise sits inert
+			// until a regularly scheduled Pulse run happens to coalesce it
+			// (see the PulseOnly branch in triggerSchedule) — the whole point
+			// of "fast" is dispatching it now, not waiting for that.
 			go s.launchPendingFastPulseRequests(context.Background())
-
 			lastTick = t
 		}
 	}
@@ -602,7 +606,7 @@ func shouldRunPulseLifecycle(sctx *ScheduleContext, manifest *WorkflowManifest) 
 	if manifest == nil {
 		return false
 	}
-	return manifest.HasEnabledPulseReviewSchedule() || (sctx != nil && sctx.ForcePulseReview)
+	return manifest.PulseEnabled() || (sctx != nil && sctx.ForcePulseReview)
 }
 
 // pulseScheduleTimingSummary supplies facts to the ordinary-run finalizer; it
@@ -679,6 +683,13 @@ func (s *SchedulerService) LoadSchedule(sctx *ScheduleContext) error {
 		if strings.HasPrefix(key, calendarPrefix) {
 			delete(s.jobs, key)
 		}
+	}
+	// Legacy manifests may still contain a dedicated Pulse cron. It now serves
+	// only as a backwards-compatible enablement signal; recurring Pulse is
+	// triggered by completion of a normal scheduled run instead.
+	if sched.PulseReviewOnly {
+		s.scheduleFingerprints[runtimeKey] = scheduleConfigFingerprint(sctx)
+		return nil
 	}
 
 	// Update workspace index
@@ -2121,16 +2132,13 @@ func (s *SchedulerService) runJob(ctx context.Context, sctx *ScheduleContext, ru
 		s.sessionLogf(sctx, sessionID, "[SCHEDULER] Failed to update run entry for %s: %v", schedID, err)
 	}
 
-	// Pulse: the dedicated review lifecycle. Its own schedule runs a Gate turn that reads
+	// Pulse runs after an enabled normal schedule completes. Gate reads
 	// run evidence and records a module worklist in db/db.sqlite, then executes
 	// only the selected agents (consolidated Workflow Review, independent
 	// Strategy Auditor, and independent Goal Advisor), then one Fixer, backs
 	// up the final state, publishes, and sends
-	// a review summary notification. Ordinary workflow schedules run only their
-	// short backup/publish/run-summary finalizer.
-	// Recurring Pulse is configured only by an enabled pulse_review_only
-	// schedule. Ordinary workflow runs receive the short run finalizer but never
-	// Gate/Review+Fix; the dedicated schedule owns the full Pulse lifecycle.
+	// a review summary notification. Recurring Pulse is configured by
+	// workflow.json pulse.enabled and has no independent cron.
 	// Manual one-off Pulse explicitly forces the same lifecycle.
 	// Never affects the run's recorded result.
 	// A blocked contract-upgrade preflight is the one failure where Pulse has
@@ -2149,15 +2157,15 @@ func (s *SchedulerService) runJob(ctx context.Context, sctx *ScheduleContext, ru
 			if sctx.PulseOnly && strings.TrimSpace(sctx.PulseEvidenceRunStatus) != "" {
 				pulseEvidenceStatus = sctx.PulseEvidenceRunStatus
 			}
-			// Only a dedicated/manual Pulse occurrence enters Pulse lifecycle state.
-			// An ordinary run stays at workflow_finished while its short finalizer runs.
+			// Manual Pulse enters its explicit lifecycle state. A normal schedule
+			// continues post-run in the same session against the run it just made.
 			if sctx.PulseOnly {
 				s.transitionScheduleRun(ctx, sctx, schedulerstate.Transition{
 					RunID: runID, To: schedulerstate.StatePulseGate, Reason: "dedicated Pulse review started", SessionID: sessionID, SessionKind: "pulse", At: time.Now().UTC(),
 				})
 			}
 			// Pass the run's sessionID so the next message resumes the SAME chat.
-			pulseResult = s.runPulseLifecycle(ctx, sctx, manifest, pulseEvidenceStatus, runFolder, sessionID, runID, errMsg)
+			pulseResult = s.runPulseLifecycle(ctx, sctx, pulseEvidenceStatus, runFolder, sessionID, runID, errMsg)
 		}
 	}
 
@@ -2232,7 +2240,7 @@ const (
 	pulseLifecycleStopped   pulseLifecycleResult = "stopped"
 )
 
-func (s *SchedulerService) runPulseLifecycle(ctx context.Context, sctx *ScheduleContext, manifest *WorkflowManifest, runStatus, runFolder, runSessionID, scheduleRunID, runFailureReason string) (pulseResult pulseLifecycleResult) {
+func (s *SchedulerService) runPulseLifecycle(ctx context.Context, sctx *ScheduleContext, runStatus, runFolder, runSessionID, scheduleRunID, runFailureReason string) (pulseResult pulseLifecycleResult) {
 	pulseResult = pulseLifecyclePartial
 	var reviewFixStartedAt, reviewFixCompletedAt time.Time
 
@@ -2352,14 +2360,14 @@ func (s *SchedulerService) runPulseLifecycle(ctx context.Context, sctx *Schedule
 		s.sessionLogf(sctx, sessionID, "[PULSE] workflow did not start in this invocation; skipping Gate, reviewers, Fixer, dashboard and publish")
 	}
 
-	lightweightFinalizeOnly := scheduledRunUsesLightweightFinalize(reviewEvidenceAvailable, sctx.PulseOnly)
-
 	var steps []pulseLifecycleStep
+	// reviewFixScheduled tracks whether pulseLifecycleAgenticReviewStep is
+	// already in `steps`, checked by the late-schedule insertion below (a
+	// plan_drift_review finding must not get technical_review dispatched
+	// twice in the same pass).
+	reviewFixScheduled := false
 	if !reviewEvidenceAvailable {
 		steps = pulseLifecycleNoRunSteps(pulseRunID, runFailureReason, notificationInstructionsFromCapabilities(sctx.Capabilities))
-	} else if lightweightFinalizeOnly {
-		s.sessionLogf(sctx, sessionID, "[FINALIZE] running backup/publish/notify only; Gate/Review+Fix belong exclusively to the dedicated Pulse schedule")
-		steps = scheduledRunFinalizeStepWithPulseTiming(pulseRunID, pulseScheduleTimingSummary(manifest), notificationInstructionsFromCapabilities(sctx.Capabilities))
 	} else {
 		gateStep := pulseLifecycleGateStep(pulseRunID, runFolder, runStatus)
 		if sctx.Schedule.PulseReviewOnly {
@@ -2410,18 +2418,26 @@ func (s *SchedulerService) runPulseLifecycle(ctx context.Context, sctx *Schedule
 			// is dispatched, or technical_review's backlog read can race a drift
 			// finding that hasn't been written yet — see
 			// pulseLifecyclePlanDriftReviewStep's own doc comment.
+			runningPlanDriftReview := false
 			if planDriftDue, err := pulseWorklistModulesDue(ctx, sctx.WorkspacePath, pulseRunID, pulseModulePlanDriftReview); err != nil {
 				s.sessionLogf(sctx, sessionID, "[PULSE] could not inspect plan_drift_review due-module receipt after Gate; preserving the plan drift review turn: %v", err)
 				steps = append(steps, pulseLifecyclePlanDriftReviewStep(pulseRunID))
+				runningPlanDriftReview = true
 			} else if planDriftDue {
 				steps = append(steps, pulseLifecyclePlanDriftReviewStep(pulseRunID))
+				runningPlanDriftReview = true
 			}
 			if due, err := pulseWorklistModulesDue(ctx, sctx.WorkspacePath, pulseRunID, pulseModuleTechnicalReview, pulseModuleStrategicReview); err != nil {
 				s.sessionLogf(sctx, sessionID, "[PULSE] could not inspect due-module receipt after Gate; preserving the sequenced Review + Fix turn: %v", err)
 				steps = append(steps, pulseLifecycleAgenticReviewStep(pulseRunID))
+				reviewFixScheduled = true
 			} else if due {
 				steps = append(steps, pulseLifecycleAgenticReviewStep(pulseRunID))
-			} else {
+				reviewFixScheduled = true
+			} else if !runningPlanDriftReview {
+				// Only plan_drift_review can still add repair-worthy findings this
+				// pass (see the "late-schedule review-fix" check in the loop below).
+				// If it isn't even running, Gate really did find nothing due.
 				s.sessionLogf(sctx, sessionID, "[PULSE] Gate skipped every review perspective; omitting the Review + Fix turn")
 			}
 			steps = append(steps, pulseLifecycleFinalSteps(pulseRunID, notificationInstructionsFromCapabilities(sctx.Capabilities))...)
@@ -2437,7 +2453,11 @@ func (s *SchedulerService) runPulseLifecycle(ctx context.Context, sctx *Schedule
 		}
 	}
 
-	for i, st := range steps {
+	// Index-based (not range) so a late review-fix insertion below is picked
+	// up by the loop that is already in progress — range would have captured
+	// the pre-insertion length and never see it.
+	for i := 0; i < len(steps); i++ {
+		st := steps[i]
 		// No Pulse turn stamps a contract version, so none of them is granted
 		// one. Revoking after each turn keeps that true even if a future step
 		// starts minting.
@@ -2489,6 +2509,27 @@ func (s *SchedulerService) runPulseLifecycle(ctx context.Context, sctx *Schedule
 					// the run partial rather than announcing a successful Pulse pass
 					// while actionable work still exists.
 					result = pulseLifecycleStepRunResult{outcome: pulseLifecycleStepWaitFailed, err: fmt.Errorf("Review+Fix left %d actionable workflow-owned Pulse issue(s); the repair drain is incomplete", remaining)}
+				}
+			}
+			// plan_drift_review has no repair authority: any check failure it
+			// found this run became a record_pulse_finding(recommended_route=
+			// "fixer_handoff") in the actionable backlog. Gate's own due-decision
+			// for technical_review was made BEFORE plan_drift_review ran, so a
+			// fresh drift finding can otherwise sit unrepaired for a full extra
+			// Pulse cycle even though this same pass already discovered it. If
+			// technical_review/strategic_review were not already scheduled,
+			// check whether plan_drift_review just created real repair work and,
+			// if so, insert the review-fix step right after this one rather than
+			// deferring it to the next Gate scan.
+			if st.label == "plan-drift-review" && result.outcome == pulseLifecycleStepCompleted && !reviewFixScheduled {
+				remaining, countErr := stepworkflow.CountPulseActionableWorkflowIssues(ctx, sctx.WorkspacePath)
+				if countErr != nil {
+					s.sessionLogf(sctx, sessionID, "[PULSE] could not check for late plan_drift_review repair work; not inserting a same-pass Review + Fix turn: %v", countErr)
+				} else if remaining > 0 {
+					s.sessionLogf(sctx, sessionID, "[PULSE] plan_drift_review left %d actionable issue(s) Gate did not anticipate; inserting a same-pass Review + Fix turn", remaining)
+					inserted := append([]pulseLifecycleStep{pulseLifecycleAgenticReviewStep(pulseRunID)}, steps[i+1:]...)
+					steps = append(steps[:i+1], inserted...)
+					reviewFixScheduled = true
 				}
 			}
 		}
@@ -2858,13 +2899,6 @@ func pulseLifecycleFinalSteps(pulseRunID string, instructions ...workflowNotific
 		notificationContext += "\n\nThese instructions control content detail and emphasis only; they never change recipients, channels, secrets, permissions, or safety rules."
 	}
 	return []pulseLifecycleStep{{"finalize", fmt.Sprintf("PULSE FINALIZER. pulse_run_id=%q. Load read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/pulse-finalizer.md\"}]) and follow it exactly. First confirm every due module has a terminal current-run result; never treat missing as success. The Pulse popup is the only presentation: do not write a Pulse HTML document or dashboard card. Complete backup, publish, and notify in that order in this one turn, recording running and terminal status for each with record_pulse_result(command=...). Continue after individual failures, keep every status truthful, then stop.%s", pulseRunID, notificationContext)}}
-}
-
-// scheduledRunUsesLightweightFinalize separates ordinary run completion from
-// Pulse review. It requires real run evidence; no-evidence runs take the
-// truthful no-run finalizer path. PulseOnly always owns the full Pulse chain.
-func scheduledRunUsesLightweightFinalize(reviewEvidenceAvailable, pulseOnly bool) bool {
-	return reviewEvidenceAvailable && !pulseOnly
 }
 
 // scheduledRunFinalizeStep finalizes an ordinary workflow run. Gate,

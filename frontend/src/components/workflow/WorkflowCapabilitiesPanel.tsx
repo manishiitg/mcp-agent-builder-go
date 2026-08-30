@@ -207,6 +207,7 @@ export default function WorkflowCapabilitiesPanel({ section, workspacePath, onCl
             )}
             {section === 'llm' && (
               <WorkflowLLMConfigurationPanel
+                workspacePath={workspacePath}
                 llmConfig={capabilities.llm_config}
                 onChange={(llm_config) => setCapabilities(current => ({ ...current, llm_config }))}
               />

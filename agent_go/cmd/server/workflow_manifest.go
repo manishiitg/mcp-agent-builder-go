@@ -120,6 +120,9 @@ type WorkflowManifest struct {
 }
 
 type WorkflowPulseConfig struct {
+	// Enabled runs Pulse Gate after each normal scheduled workflow run. Pulse
+	// does not own a separate recurring cron; the completed run is its trigger.
+	Enabled               bool                           `json:"enabled,omitempty"`
 	AdvisorSpecialization *WorkflowAdvisorSpecialization `json:"advisor_specialization,omitempty"`
 }
 
@@ -131,10 +134,8 @@ type WorkflowAdvisorSpecialization struct {
 	UpdatedAt       string `json:"updated_at,omitempty"`
 }
 
-// HasEnabledPulseReviewSchedule reports whether recurring Pulse is configured.
-// The schedule is the single source of truth: normal workflow schedules never
-// run Gate/Review+Fix inline, while the dedicated schedule reviews accumulated
-// evidence on its own cadence.
+// HasEnabledPulseReviewSchedule recognizes the retired dedicated-schedule
+// representation long enough to migrate existing workflow manifests.
 func (m *WorkflowManifest) HasEnabledPulseReviewSchedule() bool {
 	if m == nil {
 		return false
@@ -145,6 +146,47 @@ func (m *WorkflowManifest) HasEnabledPulseReviewSchedule() bool {
 		}
 	}
 	return false
+}
+
+// PulseEnabled reports whether post-run Pulse is enabled. Older manifests used
+// an enabled pulse_review_only schedule as the toggle; retain that as a read
+// compatibility signal while the next UI save removes the obsolete schedule.
+func (m *WorkflowManifest) PulseEnabled() bool {
+	if m == nil {
+		return false
+	}
+	if m.Pulse != nil && m.Pulse.Enabled {
+		return true
+	}
+	return m.HasEnabledPulseReviewSchedule()
+}
+
+// MigrateLegacyPulseSchedule folds the retired dedicated Pulse schedule into
+// pulse.enabled and removes it from the normal schedule list.
+func (m *WorkflowManifest) MigrateLegacyPulseSchedule() bool {
+	if m == nil {
+		return false
+	}
+	found := false
+	enabled := false
+	schedules := make([]WorkflowSchedule, 0, len(m.Schedules))
+	for _, schedule := range m.Schedules {
+		if schedule.PulseReviewOnly {
+			found = true
+			enabled = enabled || schedule.Enabled
+			continue
+		}
+		schedules = append(schedules, schedule)
+	}
+	if !found {
+		return false
+	}
+	if m.Pulse == nil {
+		m.Pulse = &WorkflowPulseConfig{}
+	}
+	m.Pulse.Enabled = m.Pulse.Enabled || enabled
+	m.Schedules = schedules
+	return true
 }
 
 type WorkflowBackupConfig struct {

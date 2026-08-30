@@ -103,12 +103,12 @@ func isWorkspaceNotFoundErr(err error) bool {
 		strings.Contains(errText, "does not exist")
 }
 
-func (hcpo *StepBasedWorkflowOrchestrator) routingStepExecutionPath(step *RoutingPlanStep, stepIndex int) string {
+func (hcpo *StepBasedWorkflowOrchestrator) routingStepExecutionPath(step routeSwitchStep, stepIndex int) string {
 	stepPath := fmt.Sprintf("step-%d", stepIndex+1)
 	return hcpo.routingStepExecutionPathForStepPath(step, stepIndex, stepPath)
 }
 
-func (hcpo *StepBasedWorkflowOrchestrator) routingStepExecutionPathForStepPath(step *RoutingPlanStep, stepIndex int, stepPath string) string {
+func (hcpo *StepBasedWorkflowOrchestrator) routingStepExecutionPathForStepPath(step routeSwitchStep, stepIndex int, stepPath string) string {
 	runWorkspacePath := fmt.Sprintf("%s/runs/%s", hcpo.GetWorkspacePath(), hcpo.selectedRunFolder)
 	executionWorkspacePath := fmt.Sprintf("%s/execution", runWorkspacePath)
 	return getExecutionFolderPath(executionWorkspacePath, step.GetID(), stepPath)
@@ -135,11 +135,11 @@ func (hcpo *StepBasedWorkflowOrchestrator) seedRouteSelectionsForRun(ctx context
 	}
 
 	routingSteps := make(map[string]struct {
-		step  *RoutingPlanStep
+		step  routeSwitchStep
 		index int
 	})
 	for i, step := range steps {
-		routingStep, ok := step.(*RoutingPlanStep)
+		routingStep, ok := step.(routeSwitchStep)
 		if !ok {
 			continue
 		}
@@ -148,7 +148,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) seedRouteSelectionsForRun(ctx context
 			continue
 		}
 		routingSteps[stepID] = struct {
-			step  *RoutingPlanStep
+			step  routeSwitchStep
 			index int
 		}{step: routingStep, index: i}
 	}
@@ -160,7 +160,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) seedRouteSelectionsForRun(ctx context
 		if !ok {
 			return fmt.Errorf("route_selections references unknown routing step %q", stepID)
 		}
-		selectedRouteID, err := resolveRouteSelectionValue(routingStepInfo.step.Routes, rawValue)
+		selectedRouteID, err := resolveRouteSelectionValue(routingStepInfo.step.GetRoutes(), rawValue)
 		if err != nil {
 			return fmt.Errorf("invalid route_selections[%q]: %w", stepID, err)
 		}
@@ -187,7 +187,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) seedRouteSelectionsForRun(ctx context
 
 func (hcpo *StepBasedWorkflowOrchestrator) resolveDeterministicRoutingSelection(
 	ctx context.Context,
-	routingStep *RoutingPlanStep,
+	routingStep routeSwitchStep,
 	stepIndex int,
 	routingStepPath string,
 	allSteps []PlanStepInterface,
@@ -204,7 +204,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) resolveDeterministicRoutingSelection(
 		}
 	}
 
-	if source := strings.TrimSpace(routingStep.RouteSourceFile); source != "" {
+	if source := strings.TrimSpace(routingStep.GetRouteSourceFile()); source != "" {
 		for _, candidate := range hcpo.resolveRouteSourceCandidates(ctx, source, stepIndex, routingStepPath, allSteps) {
 			if selection, found, err := hcpo.readDeterministicRoutingSource(ctx, routingStep, candidate, "route_source_file"); err != nil {
 				return nil, err
@@ -229,8 +229,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) resolveDeterministicRoutingSelection(
 		}
 	}
 
-	if defaultRouteID := strings.TrimSpace(routingStep.DefaultRouteID); defaultRouteID != "" {
-		selectedRouteID, err := resolveRouteSelectionValue(routingStep.Routes, defaultRouteID)
+	if defaultRouteID := strings.TrimSpace(routingStep.GetDefaultRouteID()); defaultRouteID != "" {
+		selectedRouteID, err := resolveRouteSelectionValue(routingStep.GetRoutes(), defaultRouteID)
 		if err != nil {
 			return nil, fmt.Errorf("invalid default_route_id for routing step %q: %w", routingStep.GetID(), err)
 		}
@@ -245,7 +245,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) resolveDeterministicRoutingSelection(
 	return nil, fmt.Errorf("routing step %q requires %s or default_route_id", routingStep.GetID(), routeSelectionFileName)
 }
 
-func (hcpo *StepBasedWorkflowOrchestrator) routingStepOwnRouteFileCandidates(routingStep *RoutingPlanStep, stepIndex int, routingStepPath string) []string {
+func (hcpo *StepBasedWorkflowOrchestrator) routingStepOwnRouteFileCandidates(routingStep routeSwitchStep, stepIndex int, routingStepPath string) []string {
 	if routingStepPath == "" {
 		routingStepPath = fmt.Sprintf("step-%d", stepIndex+1)
 	}
@@ -282,7 +282,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) resolveRouteSourceCandidates(
 
 func (hcpo *StepBasedWorkflowOrchestrator) readDeterministicRoutingSource(
 	ctx context.Context,
-	routingStep *RoutingPlanStep,
+	routingStep routeSwitchStep,
 	sourcePath string,
 	sourceKind string,
 ) (*deterministicRoutingSelection, bool, error) {
@@ -303,7 +303,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) readDeterministicRoutingSource(
 	if err != nil {
 		return nil, true, fmt.Errorf("invalid route selection source %q: %w", sourcePath, err)
 	}
-	selectedRouteID, err := resolveRouteSelectionValue(routingStep.Routes, rawValue)
+	selectedRouteID, err := resolveRouteSelectionValue(routingStep.GetRoutes(), rawValue)
 	if err != nil {
 		return nil, true, fmt.Errorf("invalid route selection source %q: %w", sourcePath, err)
 	}

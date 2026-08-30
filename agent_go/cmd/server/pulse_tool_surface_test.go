@@ -27,7 +27,6 @@ var pulseConsolidatedToolNames = []string{
 	"record_pulse_worklist",
 	"record_pulse_result",
 	"record_pulse_impact",
-	"record_pulse_fast_request",
 	"record_pulse_review_focus",
 }
 

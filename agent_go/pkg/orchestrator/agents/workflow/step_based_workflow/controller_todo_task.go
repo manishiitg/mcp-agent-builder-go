@@ -327,6 +327,11 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeTodoTaskStep(
 		}
 	}()
 
+	// Fires an [AUTO-NOTIFICATION] on the first pre-validation failure this
+	// step this run — see the matching guard in controller_execution.go for
+	// the full rationale (early builder visibility during retries, not just
+	// after they're exhausted; once per step, not once per attempt).
+	preValidationNotifiedThisStep := false
 	for retryAttempt := 1; retryAttempt <= maxRetryAttempts; retryAttempt++ {
 		// Check for context cancellation before each attempt
 		select {
@@ -436,6 +441,22 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeTodoTaskStep(
 				hcpo.emitTodoTaskStepCompletedEvent(ctx, step, stepIndex, todoTaskStepPath, 1, nil, "Pre-validation passed", todoTaskStep.NextStepID)
 				hcpo.emitStepFinishedEvent(ctx, step, stepIndex, todoTaskStepPath)
 				return true, todoTaskStep.NextStepID, nil
+			}
+
+			if !preValidationNotifiedThisStep && hcpo.workshopExecutionNotifier != nil {
+				preValidationNotifiedThisStep = true
+				notifyID := fmt.Sprintf("prevalidation-warn-%s-%d", step.GetID(), time.Now().UnixNano())
+				notifyName := fmt.Sprintf("Pre-validation check: %s", step.GetTitle())
+				hcpo.workshopExecutionNotifier.OnExecutionStart(WorkshopExecutionStart{
+					ID:                notifyID,
+					ParentExecutionID: currentWorkshopParentExecutionID(ctx),
+					Name:              notifyName,
+					Kind:              "prevalidation_warning",
+					Metadata:          map[string]string{"step_id": step.GetID(), "step_path": todoTaskStepPath},
+				})
+				hcpo.workshopExecutionNotifier.OnExecutionComplete(notifyID, notifyName, formattedResults,
+					map[string]string{"step_id": step.GetID(), "step_path": todoTaskStepPath},
+					fmt.Errorf("pre-validation failed on attempt %d/%d — will retry unless attempts are exhausted", retryAttempt, maxRetryAttempts))
 			}
 
 			// Build validation response for feedback on next retry
@@ -1316,6 +1337,10 @@ func cloneStepWithDelegationOverrides(
 		applyDelegationOverridesToCommonFields(&stepCopy.CommonStepFields, instructions)
 		return &stepCopy, nil
 	case *RoutingPlanStep:
+		stepCopy := *s
+		applyDelegationOverridesToCommonFields(&stepCopy.CommonStepFields, instructions)
+		return &stepCopy, nil
+	case *BranchPlanStep:
 		stepCopy := *s
 		applyDelegationOverridesToCommonFields(&stepCopy.CommonStepFields, instructions)
 		return &stepCopy, nil

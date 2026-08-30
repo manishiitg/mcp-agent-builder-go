@@ -3777,10 +3777,10 @@ func TestStoreMarkStaleClearsTmuxSession(t *testing.T) {
 
 	store.HandleEvent("session-1", terminalEventWithMetadata(
 		"workflow-step:wf-1:step-1",
-		"agy chat screen",
+		"codex chat screen",
 		1,
 		map[string]interface{}{
-			"tmux_session":    "mlp-agy-cli-int-9999-deadbeef",
+			"tmux_session":    "mlp-codex-cli-int-9999-deadbeef",
 			"current_step_id": "step-1",
 			"execution_kind":  "workflow_step",
 			"scope":           "workflow_step",
@@ -3826,12 +3826,12 @@ func TestStoreHandlesStatusLineUpdate(t *testing.T) {
 	// Seed the terminal snapshot first so we have something to update
 	meta := map[string]interface{}{
 		"kind":         "terminal",
-		"tmux_session": "mlp-agy-int-1",
+		"tmux_session": "mlp-codex-int-1",
 	}
 	store.HandleEvent("session-1", terminalEventWithMetadata("exec-1", "active terminal pane", 1, meta, time.Now()))
 
 	// Create a status_line event. Provider is used verbatim — the adapter owns
-	// its display name ("agy-cli"); the store must not re-map it. TmuxSession
+	// its display name ("codex-cli"); the store must not re-map it. TmuxSession
 	// scopes the update to the owning pane.
 	statusLineEvent := storeevents.Event{
 		Type:      "status_line",
@@ -3840,9 +3840,9 @@ func TestStoreHandlesStatusLineUpdate(t *testing.T) {
 		Data: &agentevents.AgentEvent{
 			Type: agentevents.StreamingStatusLine,
 			Data: &agentevents.StreamingStatusLineEvent{
-				Provider:     "agy-cli",
+				Provider:     "codex-cli",
 				Model:        "claude-3-5-sonnet",
-				TmuxSession:  "mlp-agy-int-1",
+				TmuxSession:  "mlp-codex-int-1",
 				InputTokens:  1200,
 				OutputTokens: 350,
 				CostUSD:      0.0088,
@@ -3858,8 +3858,8 @@ func TestStoreHandlesStatusLineUpdate(t *testing.T) {
 		t.Fatalf("expected to find terminal session-1:exec-1")
 	}
 
-	if snapshot.Status.ProviderLabel != "agy-cli · claude-3-5-sonnet" {
-		t.Errorf("got ProviderLabel = %q, want 'agy-cli · claude-3-5-sonnet'", snapshot.Status.ProviderLabel)
+	if snapshot.Status.ProviderLabel != "codex-cli · claude-3-5-sonnet" {
+		t.Errorf("got ProviderLabel = %q, want 'codex-cli · claude-3-5-sonnet'", snapshot.Status.ProviderLabel)
 	}
 	if snapshot.Status.InputTokens != 1200 {
 		t.Errorf("got InputTokens = %d, want 1200", snapshot.Status.InputTokens)
@@ -3877,8 +3877,8 @@ func TestStoreHandlesStatusLineUpdate(t *testing.T) {
 		t.Fatalf("expected RefreshContent to succeed")
 	}
 
-	if refreshed.Status.ProviderLabel != "agy-cli · claude-3-5-sonnet" {
-		t.Errorf("after RefreshContent: got ProviderLabel = %q, want 'agy-cli · claude-3-5-sonnet'", refreshed.Status.ProviderLabel)
+	if refreshed.Status.ProviderLabel != "codex-cli · claude-3-5-sonnet" {
+		t.Errorf("after RefreshContent: got ProviderLabel = %q, want 'codex-cli · claude-3-5-sonnet'", refreshed.Status.ProviderLabel)
 	}
 	if refreshed.Status.InputTokens != 1200 {
 		t.Errorf("after RefreshContent: got InputTokens = %d, want 1200", refreshed.Status.InputTokens)
@@ -3893,9 +3893,9 @@ func TestStoreHandlesStatusLineUpdate(t *testing.T) {
 	// A second pane in the same session, owned by a different tmux session, must
 	// NOT inherit the first pane's telemetry — the status_line carries a
 	// tmux_session and the update is scoped to the owning pane only.
-	otherMeta := map[string]interface{}{"kind": "terminal", "tmux_session": "mlp-agy-int-2"}
+	otherMeta := map[string]interface{}{"kind": "terminal", "tmux_session": "mlp-codex-int-2"}
 	store.HandleEvent("session-1", terminalEventWithMetadata("exec-2", "second pane", 1, otherMeta, time.Now()))
-	store.HandleEvent("session-1", statusLineEvent) // still targets mlp-agy-int-1
+	store.HandleEvent("session-1", statusLineEvent) // still targets mlp-codex-int-1
 
 	other, ok := store.Get("session-1:exec-2")
 	if !ok {
@@ -3905,7 +3905,7 @@ func TestStoreHandlesStatusLineUpdate(t *testing.T) {
 		t.Errorf("unrelated pane received telemetry: in=%d out=%d cost=%f",
 			other.Status.InputTokens, other.Status.OutputTokens, other.Status.CostUSD)
 	}
-	if other.Status.ProviderLabel == "agy-cli · claude-3-5-sonnet" {
+	if other.Status.ProviderLabel == "codex-cli · claude-3-5-sonnet" {
 		t.Errorf("unrelated pane received provider label %q", other.Status.ProviderLabel)
 	}
 }

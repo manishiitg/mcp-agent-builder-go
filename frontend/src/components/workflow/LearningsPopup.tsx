@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { X, BookOpen, Loader2, AlertCircle, ChevronDown, ChevronRight, Code, FileText, Trash2, Search, Globe, Check, Copy, ArrowLeft } from 'lucide-react'
 import { agentApi } from '../../services/api'
 import type { PlanningResponse, PlanStep } from '../../utils/stepConfigMatching'
-import { isRoutingStep, isTodoTaskStep } from '../../utils/stepConfigMatching'
+import { isRouteSwitchStep, isTodoTaskStep } from '../../utils/stepConfigMatching'
 import { MarkdownRenderer } from '../ui/MarkdownRenderer'
 import type { PlannerFile } from '../../services/api-types'
 import ConfirmationDialog from '../ui/ConfirmationDialog'
@@ -712,7 +712,7 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
 
     const collectSteps = (steps: PlanStep[]) => {
       steps.forEach((step) => {
-        if (step.id && !isScripted(step) && !isRoutingStep(step)) {
+        if (step.id && !isScripted(step) && !isRouteSwitchStep(step)) {
           const stepType = step.type || 'regular'
           stepsWithMetadata.push({
             stepId: step.id,

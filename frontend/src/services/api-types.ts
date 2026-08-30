@@ -2047,6 +2047,7 @@ export interface StepExecutionLogs {
   parent_step_title?: string;
   route_id?: string;
   success_criteria?: string;
+  execution_tier?: string; // Configured tier pin from step_config.json ("high"|"medium"|"low"); empty when the step uses adaptive tiering
   context_output?: string;  // Expected output filename
   learning_objective?: string;
   learnings_access?: string;
@@ -3095,6 +3096,7 @@ export interface WorkflowFolderAccessRequest {
 }
 
 export interface WorkflowPulseConfig {
+  enabled?: boolean
   advisor_specialization?: WorkflowAdvisorSpecialization
 }
 
@@ -3196,6 +3198,7 @@ export interface UpdateWorkflowManifestRequest {
   schedules?: WorkflowScheduleEntry[]
   workshop_mode?: string // Standalone patch — avoids zeroing out other execution_defaults fields
   run_retention_count?: number
+  pulse_enabled?: boolean
   run_notification_instructions?: string
   pulse_notification_instructions?: string
   run_notification_channels?: string[]

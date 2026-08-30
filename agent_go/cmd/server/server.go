@@ -86,22 +86,25 @@ var (
 )
 
 var mcpBridgeCustomToolCategories = map[string]bool{
-	"workspace":           true,
-	"workspace_tools":     true,
-	"workspace_browser":   true,
-	"workspace_advanced":  true,
-	"human_tools":         true,
-	"delegation_tools":    true,
-	"workflow":            true,
-	"workflow_creator":    true,
-	"knowledgebase_tools": true,
-	"llm_config_tools":    true,
-	"secret_tools":        true,
-	"notification_tools":  true,
-	"skill_tools":         true,
-	"mcp_server_tools":    true,
-	"activity_status":     true,
-	"auto_improvement":    true,
+	"workspace":            true,
+	"workspace_tools":      true,
+	"workspace_browser":    true,
+	"workspace_advanced":   true,
+	"workspace_image":      true,
+	"workspace_image_gen":  true,
+	"workspace_image_edit": true,
+	"human_tools":          true,
+	"delegation_tools":     true,
+	"workflow":             true,
+	"workflow_creator":     true,
+	"knowledgebase_tools":  true,
+	"llm_config_tools":     true,
+	"secret_tools":         true,
+	"notification_tools":   true,
+	"skill_tools":          true,
+	"mcp_server_tools":     true,
+	"activity_status":      true,
+	"auto_improvement":     true,
 }
 
 var mcpBridgeVirtualToolCategories = map[string]bool{}
@@ -492,7 +495,15 @@ type StreamingAPI struct {
 	// replacing the original message root.
 	retainedMainTurnAdditionalExecutionIDs map[string]map[string]struct{}
 	retainedMainTurnWatchCancels           map[string]context.CancelFunc
-	retainedMainTurnsMu                    sync.Mutex
+	// retainedMainTurnCompletionEmitted guards emitRetainedMainTurnStreamCompletion
+	// against firing twice for one logical turn. Idle-composer detection
+	// (observeRetainedMainTurnStream) and a closed control stream that already
+	// has a durable final response (handleRetainedMainTurnStreamClosed) can both
+	// independently decide the same turn just finished -- without this guard
+	// both emit their own unified_completion event carrying the identical final
+	// text, rendered as the same answer twice in a row.
+	retainedMainTurnCompletionEmitted map[string]time.Time
+	retainedMainTurnsMu               sync.Mutex
 
 	// Pending completions queue — background agent IDs that finished while session was busy
 	pendingCompletions map[string][]string
@@ -6944,8 +6955,6 @@ func retainedCodingAgentProvider(snapshot terminals.Snapshot) string {
 		return string(llm.ProviderCodexCLI)
 	case strings.HasPrefix(tmuxSession, "mlp-cursor-cli"):
 		return string(llm.ProviderCursorCLI)
-	case strings.HasPrefix(tmuxSession, "mlp-agy-cli"):
-		return "agy-cli"
 	case strings.HasPrefix(tmuxSession, "mlp-pi-cli"):
 		return string(llm.ProviderPiCLI)
 	}
@@ -6958,8 +6967,6 @@ func retainedCodingAgentProvider(snapshot terminals.Snapshot) string {
 		return string(llm.ProviderCodexCLI)
 	case strings.Contains(label, "cursor"):
 		return string(llm.ProviderCursorCLI)
-	case strings.Contains(label, "agy") || strings.Contains(label, "antigravity"):
-		return "agy-cli"
 	case strings.Contains(label, "pi-cli") || strings.HasPrefix(label, "pi "):
 		return string(llm.ProviderPiCLI)
 	default:
@@ -7206,7 +7213,18 @@ func (api *StreamingAPI) emitRetainedMainTurnStreamCompletion(sessionID string, 
 	api.retainedMainTurnsMu.Lock()
 	executionID := strings.TrimSpace(api.retainedMainTurnExecutionIDs[sessionID])
 	turnStartedAt := api.retainedMainTurns[sessionID]
+	alreadyEmitted := !turnStartedAt.IsZero() && api.retainedMainTurnCompletionEmitted[sessionID].Equal(turnStartedAt)
+	if !alreadyEmitted && !turnStartedAt.IsZero() {
+		if api.retainedMainTurnCompletionEmitted == nil {
+			api.retainedMainTurnCompletionEmitted = make(map[string]time.Time)
+		}
+		api.retainedMainTurnCompletionEmitted[sessionID] = turnStartedAt
+	}
 	api.retainedMainTurnsMu.Unlock()
+	if alreadyEmitted {
+		log.Printf("[RETAINED_TURN] Completion already emitted for this turn, skipping duplicate session=%s terminal=%s", sessionID, snapshot.TerminalID)
+		return
+	}
 	if executionID == "" {
 		executionID = strings.TrimSpace(snapshot.ExecutionID)
 	}

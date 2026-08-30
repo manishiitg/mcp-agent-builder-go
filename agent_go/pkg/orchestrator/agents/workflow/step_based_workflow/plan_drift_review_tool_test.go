@@ -110,7 +110,7 @@ func TestRecordPlanDriftReviewExecutorRequiresRealFindingForFailStatus(t *testin
 		"checks": []interface{}{
 			map[string]interface{}{"check_id": "report_query_compatibility", "status": "fail", "evidence": "the query against emails now errors: no such column", "finding_id": "PUL-FABRICATED"},
 		},
-	}); err == nil || !strings.Contains(err.Error(), "does not match any existing Pulse finding") {
+	}); err == nil || !strings.Contains(err.Error(), "does not match any active Pulse finding") {
 		t.Fatalf("expected rejection for a fabricated finding_id, got: %v", err)
 	}
 
@@ -121,6 +121,79 @@ func TestRecordPlanDriftReviewExecutorRequiresRealFindingForFailStatus(t *testin
 		},
 	}); err != nil {
 		t.Fatalf("expected acceptance for a real finding_id %q, got: %v", realID, err)
+	}
+}
+
+// A finding_id that exists but is already resolved must be rejected — a
+// closed-out finding does not prove anything is currently being tracked, so
+// referencing one is exactly as fraudulent as referencing an unrelated one.
+func TestRecordPlanDriftReviewExecutorRejectsResolvedFinding(t *testing.T) {
+	ctx := context.Background()
+	ws := concernsWorkspace(t)
+	if _, err := RecordRunConcerns(ctx, ws, "pulse-1", "", "step-a", ConcernPhaseReview,
+		structuredFindingSummary("PLANDRIFT-RESOLVED-1", "step-a's report query no longer resolves")); err != nil {
+		t.Fatalf("record finding: %v", err)
+	}
+	findings, err := LoadPulseFindingLifecycles(ctx, ws, "", -1)
+	if err != nil {
+		t.Fatalf("load findings: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+	realID := findings[0].IssueID
+	fingerprint := findings[0].Fingerprint
+
+	db, err := openRunConcernsDB(ctx, ws, false)
+	if err != nil || db == nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE run_concerns SET status=? WHERE fingerprint=?`, ConcernStatusResolved, fingerprint); err != nil {
+		db.Close()
+		t.Fatalf("mark resolved: %v", err)
+	}
+	db.Close()
+
+	files := map[string]string{"planning/step_config.json": `{"steps":[{"id":"step-a"}]}`}
+	executor := newPlanDriftReviewTestExecutorForWorkspace(ws, files)
+	if _, err := executor(ctx, map[string]interface{}{
+		"step_id": "step-a",
+		"checks": []interface{}{
+			map[string]interface{}{"check_id": "report_query_compatibility", "status": "fail", "evidence": "the query against emails now errors: no such column", "finding_id": realID},
+		},
+	}); err == nil || !strings.Contains(err.Error(), "does not match any active Pulse finding") {
+		t.Fatalf("expected rejection for a resolved finding_id, got: %v", err)
+	}
+}
+
+// A finding_id that exists and is active, but was filed against a DIFFERENT
+// step, must be rejected — a real active finding does not prove it belongs
+// to THIS step's drift failure.
+func TestRecordPlanDriftReviewExecutorRejectsFindingForDifferentStep(t *testing.T) {
+	ctx := context.Background()
+	ws := concernsWorkspace(t)
+	if _, err := RecordRunConcerns(ctx, ws, "pulse-1", "", "step-b", ConcernPhaseReview,
+		structuredFindingSummary("PLANDRIFT-OTHERSTEP-1", "step-b's own unrelated issue")); err != nil {
+		t.Fatalf("record finding: %v", err)
+	}
+	findings, err := LoadPulseFindingLifecycles(ctx, ws, "", -1)
+	if err != nil {
+		t.Fatalf("load findings: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+	realIDForOtherStep := findings[0].IssueID
+
+	files := map[string]string{"planning/step_config.json": `{"steps":[{"id":"step-a"}]}`}
+	executor := newPlanDriftReviewTestExecutorForWorkspace(ws, files)
+	if _, err := executor(ctx, map[string]interface{}{
+		"step_id": "step-a",
+		"checks": []interface{}{
+			map[string]interface{}{"check_id": "report_query_compatibility", "status": "fail", "evidence": "the query against emails now errors: no such column", "finding_id": realIDForOtherStep},
+		},
+	}); err == nil || !strings.Contains(err.Error(), "does not match any active Pulse finding") {
+		t.Fatalf("expected rejection for a finding filed against a different step, got: %v", err)
 	}
 }
 
@@ -163,6 +236,12 @@ func TestRecordPlanDriftReviewExecutorWritesNewRecord(t *testing.T) {
 	}
 	if dr.NeedsReview {
 		t.Fatalf("a completed review must clear needs_review, got true: %+v", dr)
+	}
+	// PLAT-259 second independent review: a completed review must stamp the
+	// current contract version, or CollectPlanDriftCandidates would treat
+	// this brand-new review as already stale.
+	if dr.ContractVersion != planDriftReviewContractVersion {
+		t.Fatalf("drift_review.contract_version = %d, want %d (the current contract version)", dr.ContractVersion, planDriftReviewContractVersion)
 	}
 }
 

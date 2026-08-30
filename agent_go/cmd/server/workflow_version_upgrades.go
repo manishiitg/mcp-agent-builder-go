@@ -153,23 +153,19 @@ until index.html has passed validation. Do not run the workflow. If a source is
 missing or the consolidation is ambiguous, report the blocker and do not stamp.
 Otherwise call set_workflow_contract_version(version="1.0.23") and stop.`
 
-const upgradeDedicatedPulseSchedule = `WORKFLOW CONTRACT UPGRADE: DEDICATED PULSE REVIEW SCHEDULE.
+const upgradeDedicatedPulseSchedule = `WORKFLOW CONTRACT UPGRADE: POST-RUN PULSE ENABLEMENT.
 
-Recurring Pulse is represented only by an enabled pulse_review_only schedule;
-that schedule is the single source of truth for enablement and cadence.
-Normal workflow schedules never run Gate/Review+Fix inline. Legacy
-post_run_monitor and post_run_monitor_mode fields are obsolete and ignored;
-remove them if present. If recurring Pulse was enabled previously and no
-pulse_review_only schedule exists, create one at a cadence justified by the
-enabled run schedules and retained run history. Do not add group_names,
-route_selections, or messages to that review schedule.
+Recurring Pulse is represented by workflow.json pulse.enabled. It has no
+independent cron: after each normal scheduled workflow run, Pulse Gate decides
+whether Review+Fix work is due for that run's evidence. Legacy post_run_monitor,
+post_run_monitor_mode, and pulse_review_only schedules are obsolete.
 
-Read the raw workflow.json before changing anything so a legacy
-post_run_monitor=true can be distinguished from an absent/false field. If it
-was true and no dedicated schedule exists, create the schedule. If it was
-false/absent and no dedicated schedule exists, do not enable Pulse. Calling
-set_workflow_contract_version rewrites the manifest through the current schema
-and removes the retired fields.
+Read the raw workflow.json before changing anything. Preserve prior enablement:
+if post_run_monitor was true or an enabled pulse_review_only schedule exists,
+set pulse.enabled=true. Otherwise leave Pulse disabled. Remove every
+pulse_review_only schedule; do not change any normal workflow schedule.
+Calling set_workflow_contract_version rewrites the manifest through the current
+schema and removes the retired fields.
 
 Do not run the workflow. Call set_workflow_contract_version(version="1.0.27") and stop.`
 
@@ -229,7 +225,7 @@ retained schedule message. For a route-backed schedule, route_selections own
 what workflow work runs; messages are optional follow-ups only.
 
 The platform owns normal run finalization: backup, execution-report publish,
-and run notification. The enabled pulse_review_only schedule owns Pulse Gate,
+run notification, and—when pulse.enabled is true—the post-run Pulse Gate,
 Review, and Fixer. Remove a normal schedule message when it merely tells the
 agent to do any of the following after selected work completes: routine
 evaluation, generic completion reporting, backup/status.json updates, Git

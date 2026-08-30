@@ -161,6 +161,7 @@ type UpdateWorkflowManifestRequest struct {
 	RunRetentionCount    *int                                         `json:"run_retention_count,omitempty"`
 	FolderAccess         *[]workflowtypes.WorkflowFolderGrant         `json:"folder_access,omitempty"`
 	FolderAccessRequests *[]workflowtypes.WorkflowFolderAccessRequest `json:"folder_access_requests,omitempty"`
+	PulseEnabled         *bool                                        `json:"pulse_enabled,omitempty"`
 	// Notification instruction fields are standalone patches so the Notify
 	// popup can update content guidance without replacing workflow capabilities.
 	RunNotificationInstructions   *string   `json:"run_notification_instructions,omitempty"`
@@ -210,6 +211,23 @@ func mergeWorkflowCapabilitiesUpdate(existing WorkflowCapabilities, incoming *Wo
 		}
 	}
 	return updated
+}
+
+func setWorkflowPulseEnabled(manifest *WorkflowManifest, enabled bool) {
+	if manifest.Pulse == nil {
+		manifest.Pulse = &WorkflowPulseConfig{}
+	}
+	manifest.Pulse.Enabled = enabled
+	// The old model stored Pulse as an independent recurring schedule. Once the
+	// explicit flag is saved, remove those obsolete cron entries so only normal
+	// scheduled runs can trigger recurring Pulse.
+	schedules := manifest.Schedules[:0]
+	for _, schedule := range manifest.Schedules {
+		if !schedule.PulseReviewOnly {
+			schedules = append(schedules, schedule)
+		}
+	}
+	manifest.Schedules = schedules
 }
 
 func (api *StreamingAPI) handleUpdateWorkflowManifest(w http.ResponseWriter, r *http.Request) {
@@ -271,6 +289,9 @@ func (api *StreamingAPI) handleUpdateWorkflowManifest(w http.ResponseWriter, r *
 	}
 	if req.FolderAccessRequests != nil {
 		manifest.FolderAccessRequests = append([]workflowtypes.WorkflowFolderAccessRequest(nil), (*req.FolderAccessRequests)...)
+	}
+	if req.PulseEnabled != nil {
+		setWorkflowPulseEnabled(manifest, *req.PulseEnabled)
 	}
 	if req.RunNotificationInstructions != nil || req.PulseNotificationInstructions != nil ||
 		req.RunNotificationChannels != nil || req.PulseNotificationChannels != nil ||

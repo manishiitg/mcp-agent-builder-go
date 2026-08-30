@@ -171,7 +171,8 @@ Do not read or write tier-config storage with shell/file tools. Use the UI or de
 
 ## Published LLMs & Provider Auth
 Published LLM metadata and provider authentication are workspace-backed configuration surfaces. Access them through dedicated tools only; raw workspace file tools intentionally do not expose ` + "`config/`" + `.
-- To see which text providers/models are supported and currently usable, use ` + "`list_llm_capabilities(capability=\"chat\")`" + `. ` + "`search_web_llm`" + ` uses its own hosted MCP providers rather than a text-model route.
+- To see which providers/models are supported and currently usable, use ` + "`list_llm_capabilities`" + `. It covers ` + "`chat`" + `, ` + "`search_web`" + `, ` + "`read_image`" + `, and ` + "`generate_image`" + `, including auth/runtime availability and static pricing metadata where available.
+- When choosing a concrete provider-backed model for search, image reading, or image generation/editing, call ` + "`list_llm_capabilities(capability=\"...\", include_models=true)`" + ` first and pass ` + "`provider`" + ` and ` + "`model_id`" + ` together from the same capability entry. Do not pass only ` + "`model_id`" + ` and rely on provider inference.
 - Test an LLM before publishing: use the ` + "`test_llm`" + ` tool with ` + "`provider`" + `, ` + "`model_id`" + `, and optional overrides. It uses workspace-backed provider auth by default.
 - List the frontend-known models for a provider: use the ` + "`list_provider_models`" + ` tool. It uses shared metadata for fixed providers and the same dynamic picker source as the UI for dynamic providers.
 - List published LLMs with ` + "`list_published_llms`" + `.
@@ -182,7 +183,24 @@ Published LLM metadata and provider authentication are workspace-backed configur
 - Use dedicated tools for all published LLM and provider-auth operations; raw workspace file tools intentionally do not have ` + "`config/`" + ` access.
 - ` + "`search_web_llm`" + ` is MCP-only. Its required ` + "`provider`" + ` is one of ` + "`parallel`" + `, ` + "`exa`" + `, or ` + "`firecrawl`" + `; do not pass ` + "`model_id`" + `. Parallel and Exa use anonymous free MCP access, while Firecrawl keyless availability is service-controlled.
 
-Provider media tools (` + "`read_image`" + `, image/video/audio/music generation and transcription) are deprecated and hidden from agents. Do not call them; the active provider-backed tool surface is ` + "`generate_text_llm`" + ` and ` + "`search_web_llm`" + ` only.
+Video/audio/music generation and transcription provider tools remain deprecated and hidden from agents. ` + "`read_image`" + `, ` + "`image_gen`" + `, and ` + "`image_edit`" + ` are active.
+
+## Image Generation Defaults
+Image generation defaults are workspace-backed configuration. Provider authentication is managed separately through ` + "`set_provider_auth`" + `.
+- Do not read or write saved defaults with shell/file tools. Use runtime ` + "`image_gen_config`" + ` overrides for the current chat session, or the dedicated UI/API configuration path when changing saved defaults.
+- ` + "`primary`" + ` is tried first. ` + "`fallbacks`" + ` are tried in order when the primary provider lacks workspace auth.
+- Runtime ` + "`image_gen_config`" + ` overrides this file for the current chat session only.
+- Keep provider auth updated with the ` + "`set_provider_auth`" + ` tool; do not hand-edit encrypted auth files.
+- Do not infer image-generation support from ` + "`list_provider_models`" + ` or the normal LLM model catalog. Those lists are for chat/text models, not image models.
+- For one-off ` + "`image_gen`" + ` or ` + "`image_edit`" + ` calls, use ` + "`list_llm_capabilities(capability=\"generate_image\", include_models=true)`" + ` and pass ` + "`provider`" + ` with the matching ` + "`model_id`" + ` when overriding defaults.
+
+## Image Analysis Defaults
+Image understanding for the ` + "`read_image`" + ` tool can be routed via workspace-backed image analysis defaults, including through a coding-agent CLI's own native vision by passing it the local workspace image path directly (` + "`codex-cli`" + `, ` + "`cursor-cli`" + `, and ` + "`claude-code`" + ` are all supported providers for this) rather than only through a standalone vision-model API.
+- Do not read or write saved defaults with shell/file tools. Use per-call ` + "`read_image`" + ` overrides, or the dedicated UI/API configuration path when changing saved defaults.
+- If this file exists, ` + "`read_image`" + ` uses its ` + "`primary`" + ` and ordered ` + "`fallbacks`" + ` with workspace provider auth.
+- If this file does not exist, ` + "`read_image`" + ` falls back to the current chat model.
+- For one-off ` + "`read_image`" + ` calls, use ` + "`list_llm_capabilities(capability=\"read_image\", include_models=true)`" + ` and pass ` + "`provider`" + ` with the matching ` + "`model_id`" + ` when overriding defaults.
+- Keep provider auth updated with the ` + "`set_provider_auth`" + ` tool; do not hand-edit encrypted auth files.
 
 ## Workflows
 List workflows with ` + "`execute_shell_command(command: \"ls " + absWorkflow + "/\")`" + `.
@@ -333,7 +351,7 @@ The returned text is your instructions for this turn — do not paraphrase or sk
 
 ### How improvement is split
 
-Pulse is the single broad maintenance path and owns routine Bug Review, bounded fixes, artifact review, and KB/learnings/db/report hygiene when evidence points there. Manual ` + "`/pulse-review`" + ` and focused ` + "`/pulse-review-*`" + ` commands run one retained Technical Maintenance sequence: their review phase is read-only through a durable receipt, then the backend unlocks a bounded Fix phase in that same child. ` + "`/pulse-fixer`" + ` remains a repair-only recovery command for an already reviewed queue. ` + "`/pulse`" + ` runs the complete Gate → Review+Fix → Finalize path once, ` + "`/strategy-auditor`" + ` runs only the read-only plan-versus-goal diagnosis, and ` + "`/goal-advisor`" + ` runs only the selective strategy-response module. Recurring Pulse itself has no slash command — it is a UI toggle in the workflow toolbar/Pulse popup, backed by an enabled ` + "`pulse_review_only`" + ` schedule; enabling it there creates that schedule if one doesn't already exist.
+Pulse is the single broad maintenance path and owns routine Bug Review, bounded fixes, artifact review, and KB/learnings/db/report hygiene when evidence points there. Manual ` + "`/pulse-review`" + ` and focused ` + "`/pulse-review-*`" + ` commands run one retained Technical Maintenance sequence: their review phase is read-only through a durable receipt, then the backend unlocks a bounded Fix phase in that same child. ` + "`/pulse-fixer`" + ` remains a repair-only recovery command for an already reviewed queue. ` + "`/pulse`" + ` runs the complete Gate → Review+Fix → Finalize path once, ` + "`/strategy-auditor`" + ` runs only the read-only plan-versus-goal diagnosis, and ` + "`/goal-advisor`" + ` runs only the selective strategy-response module. Recurring Pulse itself has no slash command or independent cron: the workflow toolbar/Pulse popup stores ` + "`pulse.enabled`" + `, and each completed normal scheduled run invokes Pulse Gate against that run's evidence.
 
 ### Resolution discipline
 

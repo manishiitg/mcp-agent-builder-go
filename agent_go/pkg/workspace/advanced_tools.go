@@ -36,6 +36,39 @@ func shellToolDef() llmtypes.Tool {
 	}
 }
 
+// imageToolDef returns the read_image tool definition (single source of truth).
+func imageToolDef() llmtypes.Tool {
+	return llmtypes.Tool{
+		Type: "function",
+		Function: &llmtypes.FunctionDefinition{
+			Name:        "read_image",
+			Description: "Read an image file from workspace and ask a question about it using a provider-backed vision model. Before choosing provider/model_id, call list_llm_capabilities(capability=\"read_image\", include_models=true). If you pass model_id, also pass the matching provider from that capability result; do not pass model_id by itself.",
+			Parameters: llmtypes.NewParameters(map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"filepath": map[string]interface{}{
+						"type":        "string",
+						"description": "Full absolute path to the image file under the workspace docs root (e.g., '/Users/.../workspace-docs/_users/default/Chats/photo.png', '/app/workspace-docs/_users/default/Downloads/hdfc_login.png'). Workspace-relative paths are rejected. Absolute paths outside the workspace docs root are rejected.",
+					},
+					"query": map[string]interface{}{
+						"type":        "string",
+						"description": "Question to ask about the image (e.g., 'What is in this image?', 'Describe this image', 'What text is written here?')",
+					},
+					"provider": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional image-analysis provider override. Discover currently usable providers with list_llm_capabilities(capability=\"read_image\", include_models=true). If specifying model_id, pass the matching provider too.",
+					},
+					"model_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional image-analysis model id. Use a model from list_llm_capabilities(capability=\"read_image\", include_models=true), and pass the matching provider in the same call. Do not use tier labels such as low, medium, high, or auto as model IDs.",
+					},
+				},
+				"required": []string{"filepath", "query"},
+			}),
+		},
+	}
+}
+
 // generateTextLLMToolDef returns the generate_text_llm tool definition (single source of truth).
 func generateTextLLMToolDef() llmtypes.Tool {
 	return llmtypes.Tool{
@@ -117,6 +150,11 @@ func GetShellToolDefinitions() []llmtypes.Tool {
 	return []llmtypes.Tool{shellToolDef()}
 }
 
+// GetImageToolDefinitions returns image understanding tools.
+func GetImageToolDefinitions() []llmtypes.Tool {
+	return []llmtypes.Tool{imageToolDef()}
+}
+
 // GetGenerateTextLLMToolDefinitions returns only the text generation tool.
 func GetGenerateTextLLMToolDefinitions() []llmtypes.Tool {
 	return []llmtypes.Tool{generateTextLLMToolDef()}
@@ -132,12 +170,14 @@ func GetDiffPatchToolDefinitions() []llmtypes.Tool {
 	return []llmtypes.Tool{diffPatchToolDef()}
 }
 
-// GetAdvancedToolDefinitions returns the active agent-facing tools. Provider
-// media tools are retained in code for compatibility but are deprecated and
-// deliberately hidden while testing focuses on text generation and web search.
+// GetAdvancedToolDefinitions returns the active agent-facing tools: shell,
+// image understanding (read_image), text generation, web search, and diff
+// patch. Image/video/audio/music *generation* tools remain retired -- only
+// read_image (pure inspection, no provider media creation) is active here.
 func GetAdvancedToolDefinitions() []llmtypes.Tool {
 	var tools []llmtypes.Tool
 	tools = append(tools, GetShellToolDefinitions()...)
+	tools = append(tools, GetImageToolDefinitions()...)
 	tools = append(tools, GetGenerateTextLLMToolDefinitions()...)
 	tools = append(tools, GetSearchWebLLMToolDefinitions()...)
 	tools = append(tools, GetDiffPatchToolDefinitions()...)

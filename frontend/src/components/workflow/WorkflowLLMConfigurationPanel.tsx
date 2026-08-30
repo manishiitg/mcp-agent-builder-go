@@ -3,6 +3,7 @@ import { ChevronDown, SlidersHorizontal, X } from 'lucide-react'
 import LLMRoleSelector from '../LLMRoleSelector'
 import LLMSelectionDropdown from '../LLMSelectionDropdown'
 import WorkflowLLMTierPreview from '../WorkflowLLMTierPreview'
+import { WorkflowProviderCredentialField } from '../WorkflowProviderCredentialField'
 import type { AgentLLMConfig, AgentLLMFallback, LLMProvider, PresetLLMConfig } from '../../services/api-types'
 import { useLLMStore } from '../../stores/useLLMStore'
 import type { LLMOption } from '../../types/llm'
@@ -10,6 +11,7 @@ import { llmOptionsKey } from '../../utils/llmConfigDisplay'
 import { getWorkflowLLMOptions, getWorkflowLLMTierDefaults, getWorkflowProviderOptions } from '../../utils/workflowLLMTierDefaults'
 
 type RoleKey = 'tier_1' | 'tier_2' | 'tier_3' | 'builder_llm' | 'maintenance_llm' | 'pulse_llm'
+type CredentialProvider = 'claude-code' | 'cursor-cli'
 
 type RoleRow = {
   key: RoleKey
@@ -28,6 +30,7 @@ const ROLE_ROWS: RoleRow[] = [
 ]
 
 type WorkflowLLMConfigurationPanelProps = {
+  workspacePath: string | null
   llmConfig?: PresetLLMConfig
   onChange: (config: PresetLLMConfig) => void
 }
@@ -76,8 +79,9 @@ function configLabel(config?: AgentLLMConfig): string {
   return config ? `${config.provider}/${config.model_id}` : 'Not configured'
 }
 
-export default function WorkflowLLMConfigurationPanel({ llmConfig, onChange }: WorkflowLLMConfigurationPanelProps) {
+export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig, onChange }: WorkflowLLMConfigurationPanelProps) {
   const [expandedRole, setExpandedRole] = useState<RoleKey | null>(null)
+  const [credentialProvider, setCredentialProvider] = useState<CredentialProvider>('claude-code')
   const availableLLMs = useLLMStore(state => state.availableLLMs)
   const providerManifest = useLLMStore(state => state.providerManifest)
   const providerManifestLoaded = useLLMStore(state => state.providerManifestLoaded)
@@ -104,6 +108,12 @@ export default function WorkflowLLMConfigurationPanel({ llmConfig, onChange }: W
   useEffect(() => {
     if (!providerManifestLoaded) void loadProviderManifest()
   }, [loadProviderManifest, providerManifestLoaded])
+
+  useEffect(() => {
+    if (selectedProfile?.provider === 'claude-code' || selectedProfile?.provider === 'cursor-cli') {
+      setCredentialProvider(selectedProfile.provider)
+    }
+  }, [selectedProfile?.provider])
 
   const useManagedDefaults = () => {
     if (!selectedProfile) return
@@ -260,6 +270,63 @@ export default function WorkflowLLMConfigurationPanel({ llmConfig, onChange }: W
               placeholder={providerManifestLoaded ? 'Select a coding agent' : 'Loading providers…'}
             />
           </div>
+          <div className="mt-4 border-t border-border pt-4">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <div className="text-xs font-medium text-foreground">Provider credentials</div>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">Encrypted and scoped to this workflow.</p>
+              </div>
+              <div className="inline-flex rounded-md border border-border bg-background p-0.5">
+                {([
+                  ['claude-code', 'Claude Code'],
+                  ['cursor-cli', 'Cursor'],
+                ] as const).map(([provider, label]) => (
+                  <button
+                    key={provider}
+                    type="button"
+                    onClick={() => setCredentialProvider(provider)}
+                    className={`rounded px-2 py-1 text-[11px] font-medium transition-colors ${credentialProvider === provider ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+                    aria-pressed={credentialProvider === provider}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {credentialProvider === 'claude-code' ? (
+              <WorkflowProviderCredentialField
+                provider="claude-code"
+                inputId="workflow-claude-code-token"
+                workflowCredentialPath={workspacePath || undefined}
+                copy={{
+                  heading: 'Claude Code token',
+                  hint: <>Use a token from <code className="rounded bg-background px-1 py-0.5 font-mono text-foreground">claude setup-token</code>, or leave this empty to use the saved Claude login.</>,
+                  fallbackLabel: 'Using saved login',
+                  inputPlaceholder: 'Paste Claude Code token',
+                  replacePlaceholder: 'Paste a replacement token',
+                  noun: 'token',
+                  savedMessage: 'Workflow Claude Code token saved.',
+                  removedMessage: 'Workflow Claude Code token removed; saved Claude login will be used.',
+                }}
+              />
+            ) : (
+              <WorkflowProviderCredentialField
+                provider="cursor-cli"
+                inputId="workflow-cursor-api-key"
+                workflowCredentialPath={workspacePath || undefined}
+                copy={{
+                  heading: 'Cursor API key',
+                  hint: <>Paste an API key from <code className="rounded bg-background px-1 py-0.5 font-mono text-foreground">cursor.com</code> settings, or leave this empty to use the saved Cursor login.</>,
+                  fallbackLabel: 'Using saved login',
+                  inputPlaceholder: 'Paste Cursor API key',
+                  replacePlaceholder: 'Paste a replacement API key',
+                  noun: 'API key',
+                  savedMessage: 'Workflow Cursor API key saved.',
+                  removedMessage: 'Workflow Cursor API key removed; saved Cursor login will be used.',
+                }}
+              />
+            )}
+          </div>
           <WorkflowLLMTierPreview selectedLLM={selectedProfile} providerManifest={providerManifest} />
           <p className="mt-3 text-xs leading-relaxed text-muted-foreground">Builder, Maintenance, Pulse, and execution tiers follow the provider’s current defaults. Switch to advanced setup to pin individual roles and fallback order.</p>
           <button type="button" onClick={startAdvancedSetup} disabled={!defaults} className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-50">
@@ -287,6 +354,7 @@ export default function WorkflowLLMConfigurationPanel({ llmConfig, onChange }: W
           ))}
         </div>
       )}
+
     </div>
   )
 }

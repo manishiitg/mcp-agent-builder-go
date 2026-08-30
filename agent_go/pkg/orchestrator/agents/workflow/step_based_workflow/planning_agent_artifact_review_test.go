@@ -3,8 +3,11 @@ package step_based_workflow
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
+
+	loggerv2 "github.com/manishiitg/mcpagent/logger/v2"
 )
 
 func TestClearDescriptionReviewedAfterPlanUpdate(t *testing.T) {
@@ -221,7 +224,7 @@ func TestArtifactReviewNotices(t *testing.T) {
 	updateNotice := buildPlanStepDependentArtifactReviewNotice("step-a", []PlanFieldChange{{
 		StepID: "step-a",
 		Field:  "description",
-	}}, true, true)
+	}}, true, true, false)
 	for _, want := range []string{
 		"Dependent artifact review required",
 		"validation_schema",
@@ -236,6 +239,9 @@ func TestArtifactReviewNotices(t *testing.T) {
 		if !strings.Contains(updateNotice, want) {
 			t.Fatalf("update notice missing %q:\n%s", want, updateNotice)
 		}
+	}
+	if strings.Contains(updateNotice, "FAILED to flag") {
+		t.Fatalf("update notice should not warn about a flag failure when driftReviewFlagFailed is false:\n%s", updateNotice)
 	}
 
 	addNotice := buildAddedStepArtifactSetupNotice("new-step", "regular")
@@ -252,11 +258,84 @@ func TestArtifactReviewNotices(t *testing.T) {
 		}
 	}
 
-	routeNotice := buildTodoTaskRouteArtifactReviewNotice("parent", "route-a", "deleted", true, true)
+	routeNotice := buildTodoTaskRouteArtifactReviewNotice("parent", "route-a", "deleted", true, true, false)
 	for _, want := range []string{"Todo route artifact review required", "description_reviewed", "drift_review", "learnings/route-a"} {
 		if !strings.Contains(routeNotice, want) {
 			t.Fatalf("route notice missing %q:\n%s", want, routeNotice)
 		}
+	}
+}
+
+// A persistent flag-write failure (both attempts) must surface loudly in the
+// notice text the calling agent actually sees, not just a logger.Warn call
+// nothing reads — the concrete fix for the update/flag atomicity gap.
+func TestArtifactReviewNoticesSurfaceDriftReviewFlagFailure(t *testing.T) {
+	updateNotice := buildPlanStepDependentArtifactReviewNotice("step-a", []PlanFieldChange{{
+		StepID: "step-a",
+		Field:  "description",
+	}}, false, false, true)
+	if !strings.Contains(updateNotice, "FAILED to flag") || !strings.Contains(updateNotice, "needs_review") {
+		t.Fatalf("update notice does not surface the drift_review flag failure:\n%s", updateNotice)
+	}
+
+	routeNotice := buildTodoTaskRouteArtifactReviewNotice("parent", "route-a", "deleted", false, false, true)
+	if !strings.Contains(routeNotice, "FAILED to flag") {
+		t.Fatalf("route notice does not surface the drift_review flag failure:\n%s", routeNotice)
+	}
+}
+
+// The retry wrapper must succeed on a second attempt after a first-attempt
+// failure, and must not retry (or double-write) once the underlying write
+// has already succeeded.
+func TestClearDriftReviewAfterPlanUpdateRetriedSucceedsOnSecondAttempt(t *testing.T) {
+	ctx := context.Background()
+	files := map[string]string{
+		"planning/step_config.json": `{"steps":[{"id":"step-a","agent_configs":{"drift_review":{"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"x","checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"all report queries ran cleanly"}]}}}]}`,
+	}
+	attempt := 0
+	readFile := func(_ context.Context, path string) (string, error) {
+		return files[path], nil
+	}
+	writeFile := func(_ context.Context, path, content string) error {
+		attempt++
+		if attempt == 1 {
+			return fmt.Errorf("simulated transient write failure")
+		}
+		files[path] = content
+		return nil
+	}
+	cleared, err := clearDriftReviewAfterPlanUpdateRetried(ctx, "", "step-a", []PlanFieldChange{{
+		StepID: "step-a",
+		Field:  "description",
+	}}, readFile, writeFile, loggerv2.NewNoop())
+	if err != nil {
+		t.Fatalf("expected the retry to succeed, got error: %v", err)
+	}
+	if !cleared {
+		t.Fatal("expected the retried write to report cleared=true")
+	}
+	if attempt != 2 {
+		t.Fatalf("expected exactly 2 write attempts, got %d", attempt)
+	}
+}
+
+func TestClearDriftReviewAfterPlanUpdateRetriedReturnsPersistentFailure(t *testing.T) {
+	ctx := context.Background()
+	files := map[string]string{
+		"planning/step_config.json": `{"steps":[{"id":"step-a","agent_configs":{"drift_review":{"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"x","checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"all report queries ran cleanly"}]}}}]}`,
+	}
+	readFile := func(_ context.Context, path string) (string, error) {
+		return files[path], nil
+	}
+	writeFile := func(_ context.Context, path, content string) error {
+		return fmt.Errorf("simulated persistent write failure")
+	}
+	_, err := clearDriftReviewAfterPlanUpdateRetried(ctx, "", "step-a", []PlanFieldChange{{
+		StepID: "step-a",
+		Field:  "description",
+	}}, readFile, writeFile, loggerv2.NewNoop())
+	if err == nil {
+		t.Fatal("expected a persistent write failure to be returned after both attempts fail")
 	}
 }
 

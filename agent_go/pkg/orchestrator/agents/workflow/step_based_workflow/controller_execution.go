@@ -135,6 +135,8 @@ const (
 	KBAccessRead      = "read"
 	KBAccessWrite     = "write"
 	KBAccessNone      = "none"
+
+	knowledgebaseAccessDescription = "Access mode for this step against knowledgebase/ (per-topic notes/ + notes/_index.json registry). Defaults to 'read' so steps can consume shared context; use 'none' to opt out. 'write' / 'read-write' may contribute: the step agent writes notes/ inline with diff_patch_workspace_file and closes with a self-review turn against its knowledgebase_contribution. Granting write without a knowledgebase_contribution results in no KB writes at all."
 )
 
 // resolveKnowledgebaseAccess resolves the effective KB access mode for a step.
@@ -1882,6 +1884,14 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 			}
 
 			// Retry loop: Execute with validation feedback, reusing the same learning history
+			// Fires an [AUTO-NOTIFICATION] into the builder chat on the FIRST
+			// pre-validation failure for this step this run — before retries
+			// are exhausted — so the builder can assess and intervene while
+			// the step is still retrying, rather than only learning about it
+			// once the whole step eventually fails outright. Deliberately
+			// once-per-step, not once-per-attempt: firing on every attempt
+			// would spam the chat for a step that recovers on retry 2.
+			preValidationNotifiedThisStep := false
 			for retryAttempt := 1; retryAttempt <= maxRetryAttempts; retryAttempt++ {
 				// Check for context cancellation before retry attempt
 				select {
@@ -2494,6 +2504,33 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 				// Build validation response based on pre-validation results
 				if !preValidationResults.OverallPass {
 					hcpo.GetLogger().Warn(fmt.Sprintf("Pre-validation failed for step %d - rejecting", stepIndex+1))
+					// One [AUTO-NOTIFICATION] per step per run, on the FIRST
+					// failure only (see preValidationNotifiedThisStep above the
+					// retry loop) -- not the same case as
+					// completeMessageSequenceItemNotification's deliberately
+					// silent per-ITEM prevalidation gate (controller_message_
+					// sequence.go): that one fires up to once per item and the
+					// step's own eventual completion notification already
+					// covers it. This is the step's overall gate, fires at
+					// most once total, and specifically exists so the builder
+					// hears about a real structural problem while the step is
+					// still burning retries -- not only after all of them are
+					// exhausted.
+					if !preValidationNotifiedThisStep && hcpo.workshopExecutionNotifier != nil {
+						preValidationNotifiedThisStep = true
+						notifyID := fmt.Sprintf("prevalidation-warn-%s-%d", step.GetID(), time.Now().UnixNano())
+						notifyName := fmt.Sprintf("Pre-validation check: %s", step.GetTitle())
+						hcpo.workshopExecutionNotifier.OnExecutionStart(WorkshopExecutionStart{
+							ID:                notifyID,
+							ParentExecutionID: currentWorkshopParentExecutionID(ctx),
+							Name:              notifyName,
+							Kind:              "prevalidation_warning",
+							Metadata:          map[string]string{"step_id": step.GetID(), "step_path": stepPath},
+						})
+						hcpo.workshopExecutionNotifier.OnExecutionComplete(notifyID, notifyName, formatWorkspaceResults(preValidationResults),
+							map[string]string{"step_id": step.GetID(), "step_path": stepPath},
+							fmt.Errorf("pre-validation failed on attempt %d/%d — will retry unless attempts are exhausted", retryAttempt, maxRetryAttempts))
+					}
 					validationResponse = &ValidationResponse{
 						IsSuccessCriteriaMet: false,
 						ExecutionStatus:      "FAILED",
@@ -2951,10 +2988,40 @@ func isTodoTaskStep(step PlanStepInterface) bool {
 	return ok
 }
 
-// isRoutingStep returns true if the step is a routing step (N-way LLM-based routing)
+// isRoutingStep returns true if the step is a deterministic N-way switch --
+// either a routing step (now the "route"/major-fork concept) or a branch
+// step (the small in-flow decision). Both share the exact same executor and
+// deterministic-only behavior (no learnings, no agent execution); see
+// routeSwitchStep in planning_agent.go and PLAT-259.
 func isRoutingStep(step PlanStepInterface) bool {
-	_, ok := step.(*RoutingPlanStep)
-	return ok
+	switch step.(type) {
+	case *RoutingPlanStep, *BranchPlanStep:
+		return true
+	default:
+		return false
+	}
+}
+
+// nextStepIDForSelectedRoute resolves where execution continues after a
+// routing/branch step's route has been selected -- the ID it returns becomes
+// the next step in the run. Empty for anything that isn't a routeSwitchStep,
+// or a route_id that doesn't match any of the step's routes. Extracted as a
+// standalone function (was inline in the execution loop) specifically so it
+// has direct test coverage for both RoutingPlanStep and BranchPlanStep,
+// after an independent review found the inline version only ever
+// type-asserted *RoutingPlanStep and silently left a branch step's target
+// empty. See PLAT-259.
+func nextStepIDForSelectedRoute(step PlanStepInterface, selectedRouteID string) string {
+	routingStep, ok := step.(routeSwitchStep)
+	if !ok {
+		return ""
+	}
+	for _, route := range routingStep.GetRoutes() {
+		if route.RouteID == selectedRouteID {
+			return route.NextStepID
+		}
+	}
+	return ""
 }
 
 func isMessageSequenceStep(step PlanStepInterface) bool {
@@ -3076,6 +3143,8 @@ func getAgentConfigs(step PlanStepInterface) *AgentConfigs {
 	case *EvaluationStep:
 		return s.AgentConfigs
 	case *RoutingPlanStep:
+		return s.AgentConfigs
+	case *BranchPlanStep:
 		return s.AgentConfigs
 	case *MessageSequencePlanStep:
 		return s.AgentConfigs
@@ -3314,15 +3383,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) runExecutionPhase(
 			}
 
 			// Find next step based on selected route
-			var nextStepID string
-			if routingStep, ok := step.(*RoutingPlanStep); ok {
-				for _, route := range routingStep.Routes {
-					if route.RouteID == selectedRouteID {
-						nextStepID = route.NextStepID
-						break
-					}
-				}
-			}
+			nextStepID := nextStepIDForSelectedRoute(step, selectedRouteID)
 
 			// Track routing evaluations to prevent infinite loops
 			if progress.RoutingEvaluationCounts == nil {
