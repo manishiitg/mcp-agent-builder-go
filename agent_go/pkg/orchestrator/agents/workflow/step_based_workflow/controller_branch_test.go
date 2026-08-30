@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -416,5 +417,32 @@ func TestParseStepFromJSONHandlesBranchType(t *testing.T) {
 	}
 	if len(branchStep.Routes) != 2 {
 		t.Fatalf("expected 2 routes, got %d", len(branchStep.Routes))
+	}
+}
+
+// TestCanonicalWorkshopPromptOffersBranchForFixedChoices is the third
+// independent PLAT-259 review's finding #1: the canonical planning
+// instruction inside interactive_workshop_manager.go (the primary text the
+// Builder agent actually reads every workshop turn, distinct from the
+// references/*.md deep-dive docs) told the agent to use deterministic
+// `routing` for every fixed branch choice and omitted `branch` from its
+// step-types list entirely -- so normal plan creation could keep producing
+// routing steps for the small decisions PLAT-259 introduced `branch` to
+// represent, regardless of how well the reference docs described `branch`.
+// Mirrors the existing source-scan pattern in
+// TestRunInBackgroundPassesBuilderSkillSnapshotToBothAgentKinds
+// (background_skill_inheritance_test.go).
+func TestCanonicalWorkshopPromptOffersBranchForFixedChoices(t *testing.T) {
+	source, err := os.ReadFile("interactive_workshop_manager.go")
+	if err != nil {
+		t.Fatalf("read interactive_workshop_manager.go: %v", err)
+	}
+	text := string(source)
+
+	if !strings.Contains(text, "`+\"`branch`\"+`") {
+		t.Error("canonical workshop prompt never mentions `branch` as a step type")
+	}
+	if !strings.Contains(text, "when the choice forks into a major") {
+		t.Error("canonical workshop prompt's fixed-choice guidance no longer distinguishes branch (small in-flow decision) from routing (major sub-workflow fork)")
 	}
 }

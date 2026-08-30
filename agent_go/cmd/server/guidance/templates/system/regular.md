@@ -6,8 +6,8 @@ Do not create an agentic regular step: every new conversational or judgment-heav
 **`message_sequence`**, even when it needs only one work turn. Persisted non-scripted regular
 steps are normalized to a one-turn message sequence at runtime; they never use the removed
 direct regular-agent path. See `read_skill(skills=[{"name":"builder-reference","path":"references/message-sequence.md"}])`.
-Use the others for branching (`routing`), sub-agent coordination (`todo_task`), or operator
-input (`human_input`).
+Use the others for branching (`branch` for a small in-flow decision, `routing` for a major
+sub-workflow fork), sub-agent coordination (`todo_task`), or operator input (`human_input`).
 
 ## When to use
 
@@ -44,7 +44,8 @@ Preferred data shape: `regular scripted fetcher(s) → message_sequence processo
 
 ## When NOT to use (redirects)
 
-- Branching on a decision or run flag → **`routing`**.
+- Branching on a decision or run flag → **`branch`** (small in-flow decision) or **`routing`**
+  (major, self-contained sub-workflow fork).
 - Coordinating ≥2 specialized sub-agents, or dynamic per-item work → **`todo_task`**.
 - Same-context ordered turns, a stateful conversation, self-validation/grounding
   gate, or stepping through a db array row-by-row → **`message_sequence`**
@@ -55,7 +56,7 @@ Preferred data shape: `regular scripted fetcher(s) → message_sequence processo
 
 - Cramming multiple durable outputs into one step — split at output / store /
   failure-domain boundaries.
-- Narrative branching in the description ("if X do A else B") — use a `routing` step.
+- Narrative branching in the description ("if X do A else B") — use a `branch` or `routing` step.
 - A regular step that just enumerates a list and processes each item — if the list is
   a db array, use a `foreach` (see `workflow-patterns` #10); if each item needs
   sub-agents, use `todo_task`.
