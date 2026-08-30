@@ -19,7 +19,8 @@ Use the same workflow-style config/status split:
 - workflow publish config/status: `workflow.json.publish` + `publish/status.json`
 
 - **Reporting dashboard** (`reports/`) — **live** HTML: it calls `window.report.query(sql)`
-  against `db/db.sqlite` inside the app, which doesn't exist on a static host. **Generate a
+  (and may call `updateField`/`updateFields` to write a field) against `db/db.sqlite` inside
+  the app, which doesn't exist on a static host — reads AND writes both need it. **Generate a
   static snapshot** first (next section) → `dashboard.html`.
 - **Pulse state** — remains in SQLite and is shown in the application Pulse popup.
   It is not a static publish artifact.
@@ -78,11 +79,20 @@ A live report won't work on static hosting. Bake it to static HTML at publish ti
    ```html
    <script>
      window.__REPORT_DATA__ = { /* normalized-sql -> rows */ };
-     window.report = { query: function (sql) { return window.__REPORT_DATA__[normalize(sql)] || []; } };
+     var deniedWrite = function () { return Promise.reject(new Error('Editing is not available on this published snapshot.')); };
+     window.report = {
+       query: function (sql) { return window.__REPORT_DATA__[normalize(sql)] || []; },
+       updateField: deniedWrite, updateFields: deniedWrite
+     };
    </script>
    ```
    Put this **before** the report's own scripts so the shim wins. Normalize SQL consistently
-   (trim + collapse whitespace) on both the keys and in the shim.
+   (trim + collapse whitespace) on both the keys and in the shim. If the live report uses
+   `window.report.updateField`/`updateFields` (an inline Approve/edit action — see
+   `reporting-policy.md`), the shim's rejection is the only thing standing between a static
+   viewer and a raw "not a function" error on click; there is no live backend on a static host
+   for either function to reach, so a published snapshot is always read-only regardless of what
+   the live report can do.
 4. The result is a self-contained static file. The data is a **snapshot as of now** — that's
    expected; auto-republish after each run keeps it current.
 

@@ -145,11 +145,17 @@ func TestUpdateReportFieldRejectsGuardedColumnsAndLeavesRowUnchanged(t *testing.
 
 func TestUpdateReportFieldRejectsReservedTable(t *testing.T) {
 	rel, _, router := setupReportFieldUpdateTest(t)
-	recorder := postWorkflowDBTest(t, router, "/api/report-field", models.ReportFieldUpdateRequest{
-		DBPath: rel, Table: "report_human_inputs", RowID: "some-id", Fields: map[string]interface{}{"status": "consumed"},
-	})
-	if recorder.Code == http.StatusOK {
-		t.Fatalf("write to reserved table was accepted: %s", recorder.Body.String())
+	for _, table := range []string{
+		"report_human_inputs", "report_human_input_events", "schema_migration_log",
+		"run_concerns", "eval_results", "pulse_module_state", "pulse_module_audit",
+		"report_field_update_log",
+	} {
+		recorder := postWorkflowDBTest(t, router, "/api/report-field", models.ReportFieldUpdateRequest{
+			DBPath: rel, Table: table, RowID: "some-id", Fields: map[string]interface{}{"status": "consumed"},
+		})
+		if recorder.Code == http.StatusOK {
+			t.Fatalf("write to reserved table %q was accepted: %s", table, recorder.Body.String())
+		}
 	}
 }
 

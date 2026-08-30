@@ -1039,15 +1039,23 @@ func quoteIdent(name string) string {
 	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 
-// reportFieldUpdateReservedTables holds platform-owned tables in a workflow's
-// db.sqlite that a report's own inline edit action must never touch — they
-// have their own dedicated, validated write paths (report_human_inputs via
-// /report-human-inputs/{id}/answer|dismiss, schema_migration_log via the
-// managed-migration route only).
+// reportFieldUpdateReservedTables holds every platform-owned table in a
+// workflow's db.sqlite that a report's own inline edit action must never
+// touch — each already has its own dedicated, validated write path elsewhere
+// (report_human_inputs via /report-human-inputs/{id}/answer|dismiss,
+// schema_migration_log via the managed-migration route, run_concerns/
+// eval_results/pulse_module_state/pulse_module_audit written by Go only, this
+// endpoint's own audit log). Keep in sync with the Go-managed table list in
+// guidance/templates/system/stores.md.
 var reportFieldUpdateReservedTables = map[string]bool{
 	"report_human_inputs":       true,
 	"report_human_input_events": true,
 	"schema_migration_log":      true,
+	"run_concerns":              true,
+	"eval_results":              true,
+	"pulse_module_state":        true,
+	"pulse_module_audit":        true,
+	"report_field_update_log":   true,
 }
 
 // reportFieldUpdateGuardedColumnSuffixes/Names bound what a report's own
