@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -1036,4 +1037,280 @@ func tableColumns(ctx context.Context, db *sql.DB, table string) ([]models.DBCol
 // this is defense-in-depth, not untrusted input.
 func quoteIdent(name string) string {
 	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+}
+
+// reportFieldUpdateReservedTables holds platform-owned tables in a workflow's
+// db.sqlite that a report's own inline edit action must never touch — they
+// have their own dedicated, validated write paths (report_human_inputs via
+// /report-human-inputs/{id}/answer|dismiss, schema_migration_log via the
+// managed-migration route only).
+var reportFieldUpdateReservedTables = map[string]bool{
+	"report_human_inputs":       true,
+	"report_human_input_events": true,
+	"schema_migration_log":      true,
+}
+
+// reportFieldUpdateGuardedColumnSuffixes/Names bound what a report's own
+// inline single-cell edit can touch, deliberately independent of who or what
+// authored the report: a column that identifies the row or another row (the
+// primary key, any *_id column) or records when the row was created/touched
+// is never a legitimate "approve this email" / "flag this lead" target, so a
+// call that names one is rejected before it ever reaches SQL, regardless of
+// how the calling report's own JS was generated.
+var reportFieldUpdateGuardedColumnNames = map[string]bool{
+	"id": true, "created_at": true, "updated_at": true,
+}
+
+func isReportFieldUpdateGuardedColumn(name string, primaryKey bool) bool {
+	if primaryKey {
+		return true
+	}
+	lower := strings.ToLower(name)
+	if reportFieldUpdateGuardedColumnNames[lower] {
+		return true
+	}
+	return strings.HasSuffix(lower, "_id")
+}
+
+const maximumReportFieldUpdateValueLength = 20_000
+
+// maximumReportFieldUpdateFields bounds a single form-style write. Not a real
+// safety boundary (each field is independently validated the same as a lone
+// updateField call) — just a sanity cap against a malformed/runaway caller.
+const maximumReportFieldUpdateFields = 50
+
+func validateReportFieldUpdateValue(value interface{}) error {
+	switch v := value.(type) {
+	case nil, bool, float64:
+		return nil
+	case string:
+		if len(v) > maximumReportFieldUpdateValueLength {
+			return fmt.Errorf("value exceeds %d characters", maximumReportFieldUpdateValueLength)
+		}
+		return nil
+	default:
+		return fmt.Errorf("value must be a plain string, number, boolean, or null — got %T", value)
+	}
+}
+
+func validateReportFieldUpdateRowID(rowID interface{}) error {
+	switch rowID.(type) {
+	case string, float64:
+		return nil
+	default:
+		return fmt.Errorf("row_id must be a string or number")
+	}
+}
+
+// UpdateReportField handles POST /api/report-field — the write half of an
+// interactive HTML report (window.report.updateField/updateFields). It is
+// deliberately NOT a general mutation route: the caller never supplies SQL,
+// only a table, row id, and a {column: value} map, all validated against the
+// database's own live schema before one parameterized UPDATE runs against
+// exactly one existing row's named columns, in one transaction — either every
+// field in the call is applied, or none are.
+func UpdateReportField(c *gin.Context) {
+	var req models.ReportFieldUpdateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse[any]{Success: false, Message: "Invalid request body", Error: err.Error()})
+		return
+	}
+	if err := validateReportFieldUpdateRowID(req.RowID); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse[any]{Success: false, Message: "Invalid row_id", Error: err.Error()})
+		return
+	}
+	if len(req.Fields) == 0 {
+		c.JSON(http.StatusBadRequest, models.APIResponse[any]{Success: false, Message: "Invalid fields", Error: "fields must contain at least one column"})
+		return
+	}
+	if len(req.Fields) > maximumReportFieldUpdateFields {
+		c.JSON(http.StatusBadRequest, models.APIResponse[any]{Success: false, Message: "Invalid fields", Error: fmt.Sprintf("fields must contain at most %d columns", maximumReportFieldUpdateFields)})
+		return
+	}
+	for column, value := range req.Fields {
+		if err := validateReportFieldUpdateValue(value); err != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse[any]{Success: false, Message: "Invalid value", Error: fmt.Sprintf("field %q: %v", column, err)})
+			return
+		}
+	}
+	if reportFieldUpdateReservedTables[strings.ToLower(strings.TrimSpace(req.Table))] {
+		c.JSON(http.StatusBadRequest, models.APIResponse[any]{Success: false, Message: "Table rejected", Error: fmt.Sprintf("table %q is platform-owned and cannot be edited from a report", req.Table)})
+		return
+	}
+
+	fullPath, err := resolveReadonlyDBPath(c, req.DBPath)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse[any]{Success: false, Message: "Invalid db_path", Error: err.Error()})
+		return
+	}
+
+	db, err := openMutationDB(fullPath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse[any]{Success: false, Message: "Failed to open database", Error: err.Error()})
+		return
+	}
+	defer db.Close()
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), queryTimeout)
+	defer cancel()
+
+	tableNames, err := listTableNames(ctx, db)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse[any]{Success: false, Message: "Failed to list tables", Error: err.Error()})
+		return
+	}
+	tableFound := false
+	for _, name := range tableNames {
+		if name == req.Table {
+			tableFound = true
+			break
+		}
+	}
+	if !tableFound {
+		c.JSON(http.StatusBadRequest, models.APIResponse[any]{Success: false, Message: "Table not found", Error: fmt.Sprintf("table %q does not exist in this database", req.Table)})
+		return
+	}
+
+	columns, err := tableColumns(ctx, db, req.Table)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse[any]{Success: false, Message: "Failed to read table schema", Error: err.Error()})
+		return
+	}
+	columnsByName := make(map[string]models.DBColumnInfo, len(columns))
+	var primaryKeyColumn string
+	primaryKeyCount := 0
+	for _, col := range columns {
+		columnsByName[col.Name] = col
+		if col.PrimaryKey {
+			primaryKeyCount++
+			primaryKeyColumn = col.Name
+		}
+	}
+	if primaryKeyCount != 1 {
+		c.JSON(http.StatusBadRequest, models.APIResponse[any]{Success: false, Message: "Table not editable", Error: fmt.Sprintf("table %q must have exactly one primary key column to target a single row unambiguously (found %d)", req.Table, primaryKeyCount)})
+		return
+	}
+	// Deterministic order: map iteration order is random in Go, and both the
+	// SELECT/UPDATE column lists and the audit log must be stable and match
+	// each other for a given request.
+	targetColumns := make([]string, 0, len(req.Fields))
+	for column := range req.Fields {
+		col, ok := columnsByName[column]
+		if !ok {
+			c.JSON(http.StatusBadRequest, models.APIResponse[any]{Success: false, Message: "Column not found", Error: fmt.Sprintf("column %q does not exist on table %q", column, req.Table)})
+			return
+		}
+		if isReportFieldUpdateGuardedColumn(col.Name, col.PrimaryKey) {
+			c.JSON(http.StatusBadRequest, models.APIResponse[any]{Success: false, Message: "Column rejected", Error: fmt.Sprintf("column %q identifies or timestamps the row and cannot be edited from a report", column)})
+			return
+		}
+		targetColumns = append(targetColumns, col.Name)
+	}
+	sort.Strings(targetColumns)
+
+	quotedTable := quoteIdent(req.Table)
+	quotedPK := quoteIdent(primaryKeyColumn)
+
+	selectCols := make([]string, len(targetColumns))
+	for i, name := range targetColumns {
+		selectCols[i] = quoteIdent(name)
+	}
+	selectSQL := "SELECT " + strings.Join(selectCols, ", ") + " FROM " + quotedTable + " WHERE " + quotedPK + " = ?"
+	scanTargets := make([]interface{}, len(targetColumns))
+	scanValues := make([]interface{}, len(targetColumns))
+	for i := range scanValues {
+		scanTargets[i] = &scanValues[i]
+	}
+	if err := db.QueryRowContext(ctx, selectSQL, req.RowID).Scan(scanTargets...); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusBadRequest, models.APIResponse[any]{Success: false, Message: "Row not found", Error: fmt.Sprintf("no row in %q with %s=%v", req.Table, primaryKeyColumn, req.RowID)})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, models.APIResponse[any]{Success: false, Message: "Failed to read current values", Error: err.Error()})
+		return
+	}
+	oldValues := make(map[string]interface{}, len(targetColumns))
+	for i, name := range targetColumns {
+		v := scanValues[i]
+		if b, ok := v.([]byte); ok {
+			v = string(b)
+		}
+		oldValues[name] = v
+	}
+
+	setClauses := make([]string, len(targetColumns))
+	updateArgs := make([]interface{}, 0, len(targetColumns)+1)
+	for i, name := range targetColumns {
+		setClauses[i] = quoteIdent(name) + " = ?"
+		updateArgs = append(updateArgs, req.Fields[name])
+	}
+	updateArgs = append(updateArgs, req.RowID)
+	updateSQL := "UPDATE " + quotedTable + " SET " + strings.Join(setClauses, ", ") + " WHERE " + quotedPK + " = ?"
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse[any]{Success: false, Message: "Failed to start transaction", Error: err.Error()})
+		return
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	if _, err := tx.ExecContext(ctx, updateSQL, updateArgs...); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse[any]{Success: false, Message: "Update failed", Error: err.Error()})
+		return
+	}
+	updatedBy := getUserID(c)
+	if err := recordReportFieldUpdateLog(ctx, tx, req, updatedBy, targetColumns, oldValues); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse[any]{Success: false, Message: "Failed to record audit log", Error: err.Error()})
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse[any]{Success: false, Message: "Failed to commit update", Error: err.Error()})
+		return
+	}
+	committed = true
+	log.Printf("[REPORT_FIELD_UPDATE] user=%q db=%q table=%q row_id=%v fields=%v old=%v new=%v",
+		updatedBy, req.DBPath, req.Table, req.RowID, targetColumns, oldValues, req.Fields)
+
+	c.JSON(http.StatusOK, models.APIResponse[models.ReportFieldUpdateResponse]{
+		Success: true,
+		Data: models.ReportFieldUpdateResponse{
+			Table: req.Table, RowID: req.RowID,
+			OldValues: oldValues, NewValues: req.Fields,
+		},
+	})
+}
+
+const reportFieldUpdateLogTableSQL = `CREATE TABLE IF NOT EXISTS report_field_update_log (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	table_name TEXT NOT NULL,
+	row_id TEXT NOT NULL,
+	column_name TEXT NOT NULL,
+	old_value TEXT,
+	new_value TEXT,
+	updated_by TEXT NOT NULL DEFAULT '',
+	updated_at TEXT NOT NULL
+)`
+
+// recordReportFieldUpdateLog appends one durable audit row PER changed column
+// — old and new value, who, when — so a mistaken or unexpected write is
+// traceable and reversible-by-inspection rather than silent. Part of the same
+// transaction as the UPDATE itself: a committed field change always has a
+// matching audit row, and a rolled-back one never leaves a dangling log entry.
+func recordReportFieldUpdateLog(ctx context.Context, tx *sql.Tx, req models.ReportFieldUpdateRequest, updatedBy string, columns []string, oldValues map[string]interface{}) error {
+	if _, err := tx.ExecContext(ctx, reportFieldUpdateLogTableSQL); err != nil {
+		return err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, column := range columns {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO report_field_update_log (table_name, row_id, column_name, old_value, new_value, updated_by, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			req.Table, fmt.Sprintf("%v", req.RowID), column, fmt.Sprintf("%v", oldValues[column]), fmt.Sprintf("%v", req.Fields[column]), updatedBy, now); err != nil {
+			return err
+		}
+	}
+	return nil
 }

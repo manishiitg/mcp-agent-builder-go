@@ -33,7 +33,7 @@ function debugReportFrame(event: string, title: string, detail?: Record<string, 
 // `(async()=>{ await window.report.query(...) })()` — all of which can run
 // before injection, when `window.report.query` doesn't exist yet. Previously
 // that was a synchronous TypeError (`.query is not a function`). So the stub
-// also predefines `query`/`get`/`getText`/`getHtml`/`fileUrl` itself: called
+// also predefines `query`/`get`/`getText`/`getHtml`/`fileUrl`/`updateField`/`updateFields` itself: called
 // before injection, each one queues its call and returns a pending promise
 // instead of throwing; `inject()` below replays every queued call against the
 // real API once it exists. This makes the wrong-but-instinctive pattern work
@@ -62,7 +62,7 @@ const REPORT_BOOTSTRAP = `<script>(function(){
       });
     };
   }
-  ['query', 'get', 'getText', 'getHtml', 'fileUrl'].forEach(function(name){
+  ['query', 'get', 'getText', 'getHtml', 'fileUrl', 'updateField', 'updateFields'].forEach(function(name){
     api[name] = queueCall(name);
   });
   api.openFile = function(){
@@ -186,6 +186,17 @@ const FORWARDED_APP_SHORTCUT_KEYS = new Set(['1', '2', '3', '6', '7', 'k', 'n'])
 //                                      // rendered .md inline: el.innerHTML = await window.report.getHtml(p)
 //   await window.report.fileUrl(path)// blob URL for <img>/<a>/<iframe> (images, PDFs, …)
 //   window.report.openFile(path)     // open a file in the in-report preview modal
+//   await window.report.updateField(table, row_id, column, value) // write one cell;
+//                                      // table/column validated against the live schema
+//                                      // server-side, row matched on its own primary key —
+//                                      // no SQL passes through this call. Rejects columns
+//                                      // that identify or timestamp the row. Resolves
+//                                      // { oldValue, newValue } once committed.
+//   await window.report.updateFields(table, row_id, {col1: v1, col2: v2}) // form-style:
+//                                      // write several columns on one row atomically (all
+//                                      // fields applied, or none). Same validation as
+//                                      // updateField, per column. Resolves
+//                                      // { oldValues, newValues } keyed by column name.
 //   window.report.theme              // 'dark' | 'light' — the APP's current theme
 //   window.addEventListener('report:data', render)   // fires on load + on data refresh
 //   window.addEventListener('report:theme', restyle) // fires when the app theme toggles
@@ -502,14 +513,16 @@ function HtmlReportFrameComponent({
         renderMarkdown: dataApi.renderMarkdown,
         fileUrl: dataApi.fileUrl,
         openFile: dataApi.openFile,
+        updateField: dataApi.updateField,
+        updateFields: dataApi.updateFields,
         theme: 'light',
       }
 
-      // The bootstrap's stub queued any query/get/getText/getHtml/fileUrl/openFile
-      // call made before this injection (DOMContentLoaded, window.onload, a bare
-      // top-level await — anything that ran before window.report was the real
-      // API). Replay each against the real methods now instead of leaving those
-      // promises pending forever. Runs once per document: the bootstrap's pending
+      // The bootstrap's stub queued any query/get/getText/getHtml/fileUrl/openFile/
+      // updateField/updateFields call made before this injection (DOMContentLoaded,
+      // window.onload, a bare top-level await — anything that ran before window.report
+      // was the real API). Replay each against the real methods now instead of leaving
+      // those promises pending forever. Runs once per document: the bootstrap's pending
       // array is drained and cleared here, so it stays empty on every later
       // re-injection (data refresh, theme change).
       const realReportMethods: Record<string, ((...args: unknown[]) => unknown) | undefined> = {
@@ -518,6 +531,8 @@ function HtmlReportFrameComponent({
         getText: dataApi.getText as (...args: unknown[]) => unknown,
         getHtml: dataApi.getHtml as (...args: unknown[]) => unknown,
         fileUrl: dataApi.fileUrl as (...args: unknown[]) => unknown,
+        updateField: dataApi.updateField as (...args: unknown[]) => unknown,
+        updateFields: dataApi.updateFields as (...args: unknown[]) => unknown,
       }
       type QueuedReportCall = {
         name: string

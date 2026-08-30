@@ -83,3 +83,29 @@ type DBColumnInfo struct {
 	Type       string `json:"type"`
 	PrimaryKey bool   `json:"primary_key"`
 }
+
+// ReportFieldUpdateRequest is a narrow, structured write for an HTML report's
+// window.report.updateField/updateFields — the browser-facing counterpart to
+// the agent-only /api/mutate. Unlike /api/mutate, the caller never supplies
+// SQL: table/column names come from Fields' own keys and are validated
+// against the live schema, and the row is matched on that table's own
+// single-column primary key — so this can only ever change one already-
+// existing row's named columns in one transaction, never structure, never an
+// arbitrary WHERE. Fields covers both single-field (one key) and form-style
+// multi-field (several keys) writes with the same request shape.
+type ReportFieldUpdateRequest struct {
+	DBPath string                 `json:"db_path" binding:"required"`
+	Table  string                 `json:"table" binding:"required"`
+	RowID  interface{}            `json:"row_id" binding:"required"`
+	Fields map[string]interface{} `json:"fields" binding:"required"`
+}
+
+// ReportFieldUpdateResponse returns both value sets, keyed by the same column
+// names as the request, so the report can update its own UI optimistically
+// without a full re-query, and confirm exactly what changed.
+type ReportFieldUpdateResponse struct {
+	Table     string                 `json:"table"`
+	RowID     interface{}            `json:"row_id"`
+	OldValues map[string]interface{} `json:"old_values"`
+	NewValues map[string]interface{} `json:"new_values"`
+}

@@ -118,6 +118,16 @@ function useReportDataApi(workspacePath: string): ReportDataApi {
         const allowed = allowedReportPath(path)
         if (allowed) useReportFilePreviewStore.getState().show({ path: `${workspacePath}/${allowed}` })
       },
+      updateField: async (table, rowId, column, value) => {
+        const response = await agentApi.updateReportFields(`${workspacePath}/db/db.sqlite`, table, rowId, { [column]: value })
+        if (!response.success || !response.data) throw new Error(response.error || 'Update failed.')
+        return { oldValue: response.data.old_values[column], newValue: response.data.new_values[column] }
+      },
+      updateFields: async (table, rowId, fields) => {
+        const response = await agentApi.updateReportFields(`${workspacePath}/db/db.sqlite`, table, rowId, fields)
+        if (!response.success || !response.data) throw new Error(response.error || 'Update failed.')
+        return { oldValues: response.data.old_values, newValues: response.data.new_values }
+      },
     }
   }, [workspacePath])
 }

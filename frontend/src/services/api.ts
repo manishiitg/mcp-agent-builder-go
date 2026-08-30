@@ -1610,6 +1610,27 @@ export const agentApi = {
     }
   },
 
+  // Write one or more cells on one row in a workflow's db/db.sqlite for an HTML
+  // report's window.report.updateField/updateFields. The backend validates
+  // every column against the live schema and matches the row on that table's
+  // own primary key, applying all fields in one transaction — no caller-
+  // supplied SQL, so this is safe to call from report iframe JS.
+  updateReportFields: async (
+    dbPath: string,
+    table: string,
+    rowId: string | number,
+    fields: Record<string, string | number | boolean | null>,
+  ) => {
+    const response = await workspaceApi.post('/api/report-field', {
+      db_path: dbPath, table, row_id: rowId, fields,
+    })
+    return response.data as {
+      success: boolean
+      error?: string
+      data?: { table: string; row_id: string | number; old_values: Record<string, unknown>; new_values: Record<string, unknown> }
+    }
+  },
+
 	listReportHumanInputs: async (workspacePath: string, status?: string, source?: string) => {
     const response = await api.get('/api/report-human-inputs', {
       params: {
