@@ -495,7 +495,15 @@ type StreamingAPI struct {
 	// replacing the original message root.
 	retainedMainTurnAdditionalExecutionIDs map[string]map[string]struct{}
 	retainedMainTurnWatchCancels           map[string]context.CancelFunc
-	retainedMainTurnsMu                    sync.Mutex
+	// retainedMainTurnCompletionEmitted guards emitRetainedMainTurnStreamCompletion
+	// against firing twice for one logical turn. Idle-composer detection
+	// (observeRetainedMainTurnStream) and a closed control stream that already
+	// has a durable final response (handleRetainedMainTurnStreamClosed) can both
+	// independently decide the same turn just finished -- without this guard
+	// both emit their own unified_completion event carrying the identical final
+	// text, rendered as the same answer twice in a row.
+	retainedMainTurnCompletionEmitted map[string]time.Time
+	retainedMainTurnsMu               sync.Mutex
 
 	// Pending completions queue — background agent IDs that finished while session was busy
 	pendingCompletions map[string][]string
@@ -7202,7 +7210,18 @@ func (api *StreamingAPI) emitRetainedMainTurnStreamCompletion(sessionID string, 
 	api.retainedMainTurnsMu.Lock()
 	executionID := strings.TrimSpace(api.retainedMainTurnExecutionIDs[sessionID])
 	turnStartedAt := api.retainedMainTurns[sessionID]
+	alreadyEmitted := !turnStartedAt.IsZero() && api.retainedMainTurnCompletionEmitted[sessionID].Equal(turnStartedAt)
+	if !alreadyEmitted && !turnStartedAt.IsZero() {
+		if api.retainedMainTurnCompletionEmitted == nil {
+			api.retainedMainTurnCompletionEmitted = make(map[string]time.Time)
+		}
+		api.retainedMainTurnCompletionEmitted[sessionID] = turnStartedAt
+	}
 	api.retainedMainTurnsMu.Unlock()
+	if alreadyEmitted {
+		log.Printf("[RETAINED_TURN] Completion already emitted for this turn, skipping duplicate session=%s terminal=%s", sessionID, snapshot.TerminalID)
+		return
+	}
 	if executionID == "" {
 		executionID = strings.TrimSpace(snapshot.ExecutionID)
 	}
