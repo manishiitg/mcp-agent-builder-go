@@ -62,10 +62,11 @@ func listChatHistoryHandler(api *StreamingAPI) http.HandlerFunc {
 		}
 
 		workspacePath := r.URL.Query().Get("workspace_path")
+		kind := r.URL.Query().Get("kind")
 
-		sessions, err := ListChatHistorySessions(userID, limit, offset, workspacePath)
+		sessions, err := ListChatHistorySessionsByKind(userID, kind, limit, offset, workspacePath)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 
@@ -144,7 +145,7 @@ func startRestoredTerminalHandler(api *StreamingAPI) http.HandlerFunc {
 		// the CLI caches its tool catalog via get_api_spec at launch, before
 		// /api/query has registered phase-specific tools like run_full_workflow
 		// or execute_step. The CLI then never sees those tools and falls back
-		// to shelling out (e.g. agy emits "tool(s) [run_full_workflow] not
+		// to shelling out (e.g. the CLI emits "tool(s) [run_full_workflow] not
 		// found" and runs python3 main.py instead).
 		//
 		// If the tmux pane is gone, defer the launch to the user's next
@@ -477,7 +478,20 @@ func getChatHistoryConversationHandler(api *StreamingAPI) http.HandlerFunc {
 		// 1.3 MB for a real builder session, nearly all of it ui_events -- and
 		// threw away everything but the last handful of messages client-side.
 		if limit := parsePositiveQueryInt(r, "resume_turns"); limit > 0 {
+			includeUIEvents := r.URL.Query().Get("include_ui_events") == "1"
+			var rawUIEvents []byte
+			if includeUIEvents {
+				rawUIEvents = chatHistoryUIEvents(data)
+			}
 			data = projectChatHistoryConversationForResumePage(data, limit, parseNonNegativeQueryInt(r, "resume_offset"))
+			// A scheduled run is restored as a read-only conversation, so its
+			// saved UI-event tail is the only existing record of its child-agent
+			// messages and tool calls. Keep the normal resume projection small by
+			// default, but return the compact, displayable trace when the caller
+			// explicitly asks to reconstruct that run.
+			if includeUIEvents {
+				data = attachChatHistoryUIEventsForResume(data, rawUIEvents)
+			}
 		} else if limit := parsePositiveQueryInt(r, "preview_messages"); limit > 0 {
 			data = trimChatHistoryConversationForPreview(data, limit)
 		}
@@ -487,14 +501,78 @@ func getChatHistoryConversationHandler(api *StreamingAPI) http.HandlerFunc {
 	}
 }
 
+// mustReadChatHistoryUIEvents extracts the durable UI-event tail from the
+// original conversation document. Resume first projects messages to a bounded
+// view, then this helper attaches only events the formatted conversation can
+// use. Keeping this opt-in avoids making ordinary chat restore download the
+// high-volume terminal/stream trace.
+func chatHistoryUIEvents(data []byte) []byte {
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return nil
+	}
+	return doc["ui_events"]
+}
+
+func attachChatHistoryUIEventsForResume(projected, rawUIEvents []byte) []byte {
+	if len(rawUIEvents) == 0 {
+		return projected
+	}
+	var events []json.RawMessage
+	if err := json.Unmarshal(rawUIEvents, &events); err != nil {
+		return projected
+	}
+	kept := make([]json.RawMessage, 0, len(events))
+	for _, event := range events {
+		var header struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(event, &header) == nil && isFormattedResumeUIEventType(header.Type) {
+			kept = append(kept, event)
+		}
+	}
+	if len(kept) == 0 {
+		return projected
+	}
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(projected, &doc); err != nil {
+		return projected
+	}
+	encoded, err := json.Marshal(kept)
+	if err != nil {
+		return projected
+	}
+	doc["ui_events"] = encoded
+	return marshalChatHistoryProjectionOrOriginal(doc, projected)
+}
+
+// isFormattedResumeUIEventType intentionally excludes system prompts, token
+// counters, raw terminal frames, and streaming chunks. Final messages and
+// paired tool calls are enough to reconstruct what happened without turning a
+// read-only schedule restore into a terminal dump.
+func isFormattedResumeUIEventType(eventType string) bool {
+	switch eventType {
+	case "user_message", "llm_generation_end", "llm_generation_error", "unified_completion",
+		"tool_call_start", "tool_call_end", "tool_call_error",
+		"background_agent_started", "background_agent_completed", "background_agent_failed", "background_agent_terminated",
+		"orchestrator_agent_start", "orchestrator_agent_end",
+		"agent_start", "agent_end", "agent_error", "conversation_error", "workflow_error",
+		"request_human_feedback", "blocking_human_feedback", "plan_approval":
+		return true
+	default:
+		return false
+	}
+}
+
 // projectChatHistoryConversationForResume returns the actual conversational
 // turns needed by Formatted mode, without terminal snapshots, UI trace events,
 // system prompts, tool results, or coding-provider tool-call marker messages.
 //
-// Coding CLIs persist many internal AI messages between two user messages. The
-// last ordinary AI message before the next user message is the completed reply;
-// retaining only that message prevents a resumed chat from looking like a tmux
-// transcript while preserving the user/assistant conversation itself.
+// Coding CLIs can persist more than one meaningful assistant update between two
+// user messages. Keep every ordinary text update in its original order: a long
+// tool-heavy turn otherwise restores as only the final answer, even though the
+// operator saw progress and intermediate conclusions while it ran. Function
+// markers and tool results remain out of this conversational projection.
 func projectChatHistoryConversationForResume(data []byte, maxTurns int) []byte {
 	return projectChatHistoryConversationForResumePage(data, maxTurns, 0)
 }
@@ -521,27 +599,31 @@ func projectChatHistoryConversationForResumePage(data []byte, maxTurns, offset i
 		return data
 	}
 
+	type resumeMessage struct {
+		raw   json.RawMessage
+		order int
+	}
 	type turn struct {
-		user      json.RawMessage
-		assistant json.RawMessage
+		user       resumeMessage
+		assistants []resumeMessage
 	}
 	turns := make([]turn, 0)
 	var current *turn
-	var assistantWithoutUser json.RawMessage
-	for _, raw := range history {
+	var assistantWithoutUser resumeMessage
+	for order, raw := range history {
 		role, text := chatHistoryMessageRoleAndText(raw)
 		switch role {
 		case "human", "user":
-			turns = append(turns, turn{user: raw})
+			turns = append(turns, turn{user: resumeMessage{raw: raw, order: order}})
 			current = &turns[len(turns)-1]
 		case "ai", "assistant":
 			if text == "" || isPersistedToolCallMarker(text) {
 				continue
 			}
 			if current != nil {
-				current.assistant = raw
+				current.assistants = append(current.assistants, resumeMessage{raw: raw, order: order})
 			} else {
-				assistantWithoutUser = raw
+				assistantWithoutUser = resumeMessage{raw: raw, order: order}
 			}
 		}
 	}
@@ -560,13 +642,13 @@ func projectChatHistoryConversationForResumePage(data []byte, maxTurns, offset i
 	}
 	turns = turns[start:end]
 	projected := make([]json.RawMessage, 0, len(turns)*2+1)
-	if len(turns) == 0 && len(assistantWithoutUser) > 0 {
-		projected = append(projected, assistantWithoutUser)
+	if len(turns) == 0 && len(assistantWithoutUser.raw) > 0 {
+		projected = append(projected, annotateResumedChatMessage(assistantWithoutUser.raw, assistantWithoutUser.order, len(history)))
 	}
 	for _, item := range turns {
-		projected = append(projected, item.user)
-		if len(item.assistant) > 0 {
-			projected = append(projected, item.assistant)
+		projected = append(projected, annotateResumedChatMessage(item.user.raw, item.user.order, len(history)))
+		for _, assistant := range item.assistants {
+			projected = append(projected, annotateResumedChatMessage(assistant.raw, assistant.order, len(history)))
 		}
 	}
 	encoded, err := json.Marshal(projected)
@@ -574,6 +656,10 @@ func projectChatHistoryConversationForResumePage(data []byte, maxTurns, offset i
 		return data
 	}
 	doc["conversation_history"] = encoded
+	// The formatted client uses these stable source positions only to interleave
+	// readable assistant updates with the persisted tool trace. They are not
+	// terminal events and do not affect the conversation's durable identity.
+	doc["history_source_message_count"], _ = json.Marshal(len(history))
 	pagination, err := json.Marshal(map[string]interface{}{
 		"has_more":    start > 0,
 		"next_offset": offset + len(turns),
@@ -585,6 +671,28 @@ func projectChatHistoryConversationForResumePage(data []byte, maxTurns, offset i
 	}
 	doc["history_pagination"] = pagination
 	return marshalChatHistoryProjectionOrOriginal(doc, data)
+}
+
+func annotateResumedChatMessage(raw json.RawMessage, order, sourceCount int) json.RawMessage {
+	var message map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &message); err != nil {
+		return raw
+	}
+	encodedOrder, err := json.Marshal(order)
+	if err != nil {
+		return raw
+	}
+	encodedSourceCount, err := json.Marshal(sourceCount)
+	if err != nil {
+		return raw
+	}
+	message["resume_order"] = encodedOrder
+	message["resume_source_message_count"] = encodedSourceCount
+	annotated, err := json.Marshal(message)
+	if err != nil {
+		return raw
+	}
+	return annotated
 }
 
 func marshalChatHistoryProjectionOrOriginal(doc map[string]json.RawMessage, original []byte) []byte {

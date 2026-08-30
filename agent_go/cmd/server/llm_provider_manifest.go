@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
@@ -78,6 +79,7 @@ type dynamicModelEntry struct {
 	ModelName     string  `json:"model_name"`
 	Group         string  `json:"group,omitempty"`
 	IsDefault     bool    `json:"is_default,omitempty"`
+	IsFree        bool    `json:"is_free,omitempty"`
 	ContextWindow int     `json:"context_window,omitempty"`
 	CostInput     float64 `json:"cost_input,omitempty"`
 	CostOutput    float64 `json:"cost_output,omitempty"`
@@ -120,13 +122,6 @@ var providerStaticInfoMap = map[string]providerStaticInfo{
 		description:     "Uses cursor-agent through tmux. Supports 100+ models via Cursor subscription.",
 		integrationKind: "coding_agent",
 		authDescription: "Local CLI (API key optional)",
-		requiresAPIKey:  false,
-	},
-	"agy-cli": {
-		displayName:     "Antigravity CLI (Deprecated)",
-		description:     "Deprecated for new setup. Existing sessions remain runnable; use Pi CLI for new multi-provider coding-agent work.",
-		integrationKind: "coding_agent",
-		authDescription: "Local CLI (Agy sign-in)",
 		requiresAPIKey:  false,
 	},
 	"pi-cli": {
@@ -187,32 +182,6 @@ var providerStaticInfoMap = map[string]providerStaticInfo{
 		authDescription: "Endpoint + API key required",
 		requiresAPIKey:  true,
 		apiKeyEnv:       "AZURE_AI_API_KEY",
-	},
-	"minimax": {
-		displayName:     "MiniMax",
-		description:     "MiniMax API for speech, music, and audio models.",
-		integrationKind: "audio_provider",
-		authDescription: "API key required",
-		requiresAPIKey:  true,
-		apiKeyEnv:       "MINIMAX_API_KEY",
-	},
-	"elevenlabs": {
-		displayName:     "ElevenLabs",
-		description:     "Speech synthesis, voice cloning, and audio generation.",
-		integrationKind: "audio_provider",
-		authDescription: "API key required",
-		requiresAPIKey:  true,
-		apiKeyEnv:       "ELEVENLABS_API_KEY",
-		apiKeyURL:       "https://elevenlabs.io/app/settings/api-keys",
-	},
-	"deepgram": {
-		displayName:     "Deepgram",
-		description:     "Speech-to-text transcription and audio intelligence.",
-		integrationKind: "audio_provider",
-		authDescription: "API key required",
-		requiresAPIKey:  true,
-		apiKeyEnv:       "DEEPGRAM_API_KEY",
-		apiKeyURL:       "https://console.deepgram.com/",
 	},
 }
 
@@ -343,9 +312,7 @@ func (api *StreamingAPI) handleGetProviderManifest(w http.ResponseWriter, r *htt
 
 	providerOrder := []string{
 		"claude-code", "codex-cli", "cursor-cli", "pi-cli",
-		"agy-cli",
 		"openai", "anthropic", "vertex", "bedrock", "azure",
-		"elevenlabs", "deepgram", "minimax",
 	}
 
 	supported := getSupportedProviders()
@@ -428,9 +395,8 @@ func (api *StreamingAPI) handleGetProviderManifest(w http.ResponseWriter, r *htt
 	resp := providerManifestResponse{
 		Providers: entries,
 		IntegrationKinds: map[string]integrationKindInfo{
-			"coding_agent":   {Label: "Coding Agents", Description: "Local agent CLI runtimes"},
-			"api_model":      {Label: "API Providers", Description: "Cloud-hosted LLM APIs"},
-			"audio_provider": {Label: "Audio & Media", Description: "Speech, voice, and media models"},
+			"coding_agent": {Label: "Coding Agents", Description: "Local agent CLI runtimes"},
+			"api_model":    {Label: "API Providers", Description: "Cloud-hosted LLM APIs"},
 		},
 		ProviderOrder: providerOrder,
 	}
@@ -693,13 +659,25 @@ func fetchPiCLIModels(full bool) *dynamicModelsResponse {
 	var source string
 
 	if full {
-		cliModels, err := listPiCLIModels()
-		if err == nil && len(cliModels) > 0 {
-			models = mergePiModelEntries(piFallbackModels(), cliModels)
-			source = "cli_full_catalog"
-		} else {
-			models = piFallbackModels()
-			source = "curated_latest_fallback"
+		// Curated shortlist first (keeps pinned picks like the free Ox Alpha
+		// model prominent), then the live OpenRouter catalog -- fetched fresh
+		// from OpenRouter itself, so it carries real pricing/IsFree data --
+		// and only then pi's own --list-models output. Order matters here:
+		// mergePiModelEntries keeps the FIRST occurrence per ModelID, and
+		// pi's own listing can legitimately include the same OpenRouter model
+		// IDs with no pricing info at all (it doesn't know IsFree). Merging
+		// cliModels in last means it can only ever ADD models neither other
+		// source already covered, never silently mask a live-verified
+		// IsFree=true with a pricing-blind duplicate.
+		models = piFallbackModels()
+		source = "curated_latest"
+		if orModels, orErr := fetchOpenRouterCatalog(); orErr == nil && len(orModels) > 0 {
+			models = mergePiModelEntries(models, orModels)
+			source += "+openrouter_live"
+		}
+		if cliModels, err := listPiCLIModelsFn(); err == nil && len(cliModels) > 0 {
+			models = mergePiModelEntries(models, cliModels)
+			source += "+cli_full_catalog"
 		}
 	} else {
 		models = piFallbackModels()
@@ -723,6 +701,79 @@ func fetchPiCLIModels(full bool) *dynamicModelsResponse {
 	}
 	return resp
 }
+
+// openRouterModelsAPIURL is a package-level var (not a const) so a test can
+// point it at an httptest.NewServer instead of the real OpenRouter API.
+var openRouterModelsAPIURL = "https://openrouter.ai/api/v1/models"
+
+type openRouterModelsResponse struct {
+	Data []struct {
+		ID            string `json:"id"`
+		Name          string `json:"name"`
+		ContextLength int    `json:"context_length"`
+		Pricing       struct {
+			Prompt     string `json:"prompt"`
+			Completion string `json:"completion"`
+		} `json:"pricing"`
+	} `json:"data"`
+}
+
+// fetchOpenRouterCatalog fetches OpenRouter's public, unauthenticated model
+// catalog and maps it onto Pi's own "openrouter/<vendor>/<model>" model ID
+// convention (OpenRouter's own id is already "<vendor>/<model>"; Pi's own
+// "openrouter/" prefix is prepended the same way the existing hardcoded
+// OpenRouter entries in piFallbackModels already do). A model is only
+// IsFree when OpenRouter's own pricing reports both prompt and completion
+// cost as exactly zero -- distinct from cost fields simply being unset,
+// which the existing hardcoded shortlist entries mostly are (unknown cost,
+// not confirmed free).
+func fetchOpenRouterCatalog() ([]dynamicModelEntry, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, openRouterModelsAPIURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	client := &http.Client{Timeout: 8 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("openrouter models API returned status %d", resp.StatusCode)
+	}
+
+	var parsed openRouterModelsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return nil, err
+	}
+
+	models := make([]dynamicModelEntry, 0, len(parsed.Data))
+	for _, m := range parsed.Data {
+		if strings.TrimSpace(m.ID) == "" {
+			continue
+		}
+		promptCost, _ := strconv.ParseFloat(m.Pricing.Prompt, 64)
+		completionCost, _ := strconv.ParseFloat(m.Pricing.Completion, 64)
+		models = append(models, dynamicModelEntry{
+			ModelID:       "openrouter/" + m.ID,
+			ModelName:     m.Name,
+			Group:         "OpenRouter",
+			IsFree:        promptCost == 0 && completionCost == 0,
+			ContextWindow: m.ContextLength,
+			CostInput:     promptCost * 1_000_000,
+			CostOutput:    completionCost * 1_000_000,
+		})
+	}
+	return models, nil
+}
+
+// listPiCLIModelsFn is a package-level var (not a direct call) so a test can
+// substitute a canned pi --list-models result without shelling out to a real
+// pi binary.
+var listPiCLIModelsFn = listPiCLIModels
 
 func listPiCLIModels() ([]dynamicModelEntry, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -825,7 +876,7 @@ func piModelDisplayName(provider, model string) string {
 func piModelGroup(provider string) string {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case "google":
-		return "Google"
+		return "Gemini"
 	case "google-vertex":
 		return "Google Vertex"
 	case "anthropic":
@@ -844,6 +895,8 @@ func piModelGroup(provider string) string {
 		return "MiniMax"
 	case "kimi-coding", "moonshotai", "moonshotai-cn":
 		return "Kimi"
+	case "xai":
+		return "xAI"
 	case "nvidia":
 		return "NVIDIA"
 	default:
@@ -920,6 +973,13 @@ func piFallbackModels() []dynamicModelEntry {
 			CostOutput:    0.28,
 		},
 		{
+			ModelID:       "openrouter/stealth/ox-alpha",
+			ModelName:     "Ox Alpha",
+			Group:         "OpenRouter",
+			IsFree:        true,
+			ContextWindow: 1048576,
+		},
+		{
 			ModelID:   "openrouter/minimax/minimax-m3-20260531",
 			ModelName: "MiniMax M3",
 			Group:     "OpenRouter",
@@ -977,9 +1037,6 @@ func piProviderCatalogModels() []dynamicModelEntry {
 		}
 		provider, _, _ := strings.Cut(model.ModelID, "/")
 		group := piModelGroup(provider)
-		if provider == "google" {
-			group = "Recommended Gemini"
-		}
 		name := strings.TrimSpace(model.ModelName)
 		if strings.HasPrefix(name, "Pi CLI (") && strings.HasSuffix(name, ")") {
 			name = strings.TrimSuffix(strings.TrimPrefix(name, "Pi CLI ("), ")")

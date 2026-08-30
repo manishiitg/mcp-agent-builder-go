@@ -62,6 +62,49 @@ export const LLM_INTEGRATION_DISPLAY_INFO: Record<LLMIntegrationKind, LLMIntegra
 export const CODING_AGENT_PROVIDERS = new Set(['claude-code', 'codex-cli', 'cursor-cli', 'pi-cli'])
 const AUDIO_PROVIDER_PROVIDERS = new Set(['elevenlabs', 'deepgram'])
 
+// Pi CLI routes to several different model backends via a `<backend>/<model>`
+// model id. Mirrors agent_go/cmd/server/llm_provider_manifest.go's
+// piModelGroup -- kept as a small, separate table (not merged into
+// PROVIDER_DISPLAY_INFO's real, independent 'openrouter'/'z-ai'/'kimi'
+// direct-API provider entries) so a Pi-routed "OpenRouter" model and the
+// actual direct-API OpenRouter provider stay distinct concepts even though
+// their display text can coincide.
+const PI_MODEL_GROUP_BY_PREFIX: Record<string, string> = {
+  google: 'Gemini',
+  'google-vertex': 'Google Vertex',
+  anthropic: 'Anthropic',
+  openai: 'OpenAI',
+  openrouter: 'OpenRouter',
+  bedrock: 'Amazon Bedrock',
+  deepseek: 'DeepSeek',
+  zai: 'Z.AI',
+  'zai-coding-cn': 'Z.AI',
+  minimax: 'MiniMax',
+  'minimax-cn': 'MiniMax',
+  'kimi-coding': 'Kimi',
+  moonshotai: 'Kimi',
+  'moonshotai-cn': 'Kimi',
+  xai: 'xAI',
+  nvidia: 'NVIDIA',
+}
+
+const PI_MODEL_GROUP_DISPLAY: Record<string, ProviderDisplayInfo> = {
+  Gemini: { name: 'Gemini', authDescription: 'API Key', colorClass: 'text-purple-600 dark:text-purple-400' },
+  OpenRouter: { name: 'OpenRouter', authDescription: 'API Key', colorClass: 'text-blue-600 dark:text-blue-400' },
+  'Z.AI': { name: 'Z.AI', authDescription: 'API Key', colorClass: 'text-fuchsia-600 dark:text-fuchsia-400' },
+  MiniMax: { name: 'MiniMax', authDescription: 'API Key', colorClass: 'text-cyan-600 dark:text-cyan-400' },
+  Kimi: { name: 'Kimi', authDescription: 'API Key', colorClass: 'text-rose-600 dark:text-rose-400' },
+  DeepSeek: { name: 'DeepSeek', authDescription: 'API Key', colorClass: 'text-indigo-600 dark:text-indigo-400' },
+  xAI: { name: 'xAI', authDescription: 'API Key', colorClass: 'text-neutral-700 dark:text-neutral-300' },
+}
+
+/** Resolves a Pi CLI model id (e.g. "google/gemini-3.7-flash") to its display group ("Gemini"). Returns null when unresolvable. */
+export function resolvePiModelGroup(modelId?: string): string | null {
+  const prefix = (modelId || '').trim().split('/')[0]?.toLowerCase()
+  if (!prefix) return null
+  return PI_MODEL_GROUP_BY_PREFIX[prefix] || null
+}
+
 const PROVIDER_DISPLAY_INFO: Record<ProviderType, ProviderDisplayInfo> = {
   openrouter: {
     name: 'OpenRouter',
@@ -165,12 +208,19 @@ export const PROVIDER_ORDER: ProviderType[] = [
   'deepgram',
 ]
 
-export function getProviderDisplayInfo(provider?: string): ProviderDisplayInfo {
+export function getProviderDisplayInfo(provider?: string, modelId?: string): ProviderDisplayInfo {
   if (!provider) {
     return {
       name: 'No LLM selected',
       authDescription: '',
       colorClass: 'text-gray-600 dark:text-gray-400',
+    }
+  }
+
+  if (provider === 'pi-cli') {
+    const group = resolvePiModelGroup(modelId)
+    if (group && group in PI_MODEL_GROUP_DISPLAY) {
+      return PI_MODEL_GROUP_DISPLAY[group]
     }
   }
 

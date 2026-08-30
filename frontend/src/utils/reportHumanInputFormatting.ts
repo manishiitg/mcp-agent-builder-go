@@ -1,4 +1,9 @@
-import type { ReportHumanInput } from '../services/api-types'
+import type {
+  PulseImpactAssessment,
+  PulseImpactLedger,
+  PulseIntervention,
+  ReportHumanInput,
+} from '../services/api-types'
 
 export type ReportHumanInputContextSection = {
   label: string
@@ -8,15 +13,15 @@ export type ReportHumanInputContextSection = {
 
 export function reportHumanInputStatusLabel(input: ReportHumanInput): string {
 	if (input.status === 'answered') {
-		if (input.source === 'chief_of_staff') return 'Waiting for Chief of Staff'
-		if (input.source === 'strategy_auditor') return 'Waiting for Strategy Auditor'
-		if (input.source === 'goal_advisor') return 'Waiting for Goal Advisor'
+		if (['technical_review', 'engineering_review', 'ops_review'].includes(input.source)) return 'Waiting for Technical Review'
+		if (['strategic_review', 'strategy_auditor', 'goal_advisor'].includes(input.source)) return 'Waiting for Strategic Review'
+		if (input.source === 'plan_drift_review') return 'Waiting for Plan Drift Review'
 		return 'Waiting for Pulse'
 	}
 	if (input.status === 'claimed') {
-		if (input.source === 'chief_of_staff') return 'Chief of Staff is working'
-		if (input.source === 'strategy_auditor') return 'Strategy Auditor is working'
-		if (input.source === 'goal_advisor') return 'Goal Advisor is working'
+		if (['technical_review', 'engineering_review', 'ops_review'].includes(input.source)) return 'Technical Review is working'
+		if (['strategic_review', 'strategy_auditor', 'goal_advisor'].includes(input.source)) return 'Strategic Review is working'
+		if (input.source === 'plan_drift_review') return 'Plan Drift Review is working'
 		return 'Pulse is working'
 	}
   if (input.status === 'consumed') return 'Action completed'
@@ -28,6 +33,28 @@ export function reportHumanInputHistory(inputs: ReportHumanInput[], limit = 4): 
   return inputs
     .filter(input => input.status !== 'pending')
     .slice(0, limit)
+}
+
+export type ReportHumanInputImpact = {
+  intervention: PulseIntervention
+  latestAssessment?: PulseImpactAssessment
+}
+
+// Decisions and impact share one durable join key. Keep this projection in the
+// UI instead of copying impact state onto report_human_inputs, which would
+// create two lifecycle authorities that can disagree.
+export function reportHumanInputImpact(
+  input: ReportHumanInput,
+  ledger?: PulseImpactLedger,
+): ReportHumanInputImpact | null {
+  if (!ledger) return null
+  const intervention = ledger.interventions.find(item => item.human_input_id === input.id)
+  if (!intervention) return null
+  return {
+    intervention,
+    // The API returns immutable assessment history newest first.
+    latestAssessment: ledger.assessments.find(item => item.intervention_id === intervention.intervention_id),
+  }
 }
 
 const CONTEXT_MARKER_PATTERN = /(?:^|\s)(Proposal|Strategy Auditor specialization|Goal Advisor specialization|Exact intended edits(?: if approved)?|Rationale|Expected impact|Risk|Evidence):\s*/gi

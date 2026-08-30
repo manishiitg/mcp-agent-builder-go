@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log"
 	"os/exec"
 	"strings"
@@ -25,7 +26,7 @@ const (
 	codingWatchdogConfirmChecks = 2
 	// Only inspect the current tail. Rate-limit text can remain in tmux scrollback
 	// after a provider has recovered and resumed useful work.
-	codingWatchdogRateLimitTailLines = 40
+	codingWatchdogRateLimitTailLines = 80
 )
 
 var captureTmuxPanePlainForWatchdog = captureTmuxPanePlain
@@ -125,26 +126,27 @@ func (api *StreamingAPI) reapRateLimitedCodingSessionsOnce(streak map[string]cod
 			continue
 		}
 
+		limitReason := codingWatchdogLimitReason(snap)
 		isMainAgent := codingAgentSnapshotIsMainAgent(snap)
 		if isMainAgent {
 			log.Printf("[CODING_WATCHDOG] main session %s tmux %s parked on a usage/rate-limit wall - failing and canceling session runtime",
 				sessionID, tmux)
 			// Persist failure before closing panes: stream goroutines may unwind as
 			// soon as cancellation starts and must not overwrite this as completed.
-			api.reconcileUnexpectedTerminalExit(snap, "provider usage/rate limit reached")
+			api.reconcileUnexpectedTerminalExit(snap, limitReason)
 			delete(streak, watchdogKey)
 			continue
 		} else {
 			log.Printf("[CODING_WATCHDOG] child terminal %s session %s tmux %s parked on a usage/rate-limit wall - closing child only",
 				snap.TerminalID, sessionID, tmux)
 		}
-		closeCodingCLITmuxForWatchdog(tmux, "provider usage/rate limit reached")
+		closeCodingCLITmuxForWatchdog(tmux, limitReason)
 		killCtx, cancel := context.WithTimeout(context.Background(), terminalTmuxActionTimeout)
 		_ = runTmuxKill(killCtx, tmux)
 		cancel()
 		api.terminalStore.MarkFailed(snap.TerminalID)
-		api.terminalStore.MarkProcessClosed(snap.TerminalID, "provider usage/rate limit reached")
-		api.reconcileUnexpectedTerminalExit(snap, "provider usage/rate limit reached")
+		api.terminalStore.MarkProcessClosed(snap.TerminalID, limitReason)
+		api.reconcileUnexpectedTerminalExit(snap, limitReason)
 		if registry := api.ensureTerminalLeaseRegistry(); registry != nil {
 			registry.MarkClosed(tmux, "provider usage/rate limit reached", time.Now())
 		}
@@ -177,10 +179,26 @@ func codingWatchdogRateLimitEvidence(content string) string {
 		normalized = append(normalized, strings.ToLower(line))
 		hasRateLimit = hasRateLimit || terminals.DetectRateLimit(line)
 	}
+	// Claude replaces its original "You've hit your session limit" line with
+	// a two-choice interactive menu. The provider wording is then no longer in
+	// the visible pane, which used to leave the watchdog (and therefore every
+	// product UI) unable to distinguish it from useful ongoing work.
+	menu := strings.Join(normalized, "\n")
+	if strings.Contains(menu, "stop and wait for limit to reset") && strings.Contains(menu, "upgrade your plan") {
+		hasRateLimit = true
+	}
 	if !hasRateLimit {
 		return ""
 	}
 	return strings.Join(normalized, "\n")
+}
+
+func codingWatchdogLimitReason(snapshot terminals.Snapshot) string {
+	provider := strings.TrimSpace(snapshot.Status.ProviderLabel)
+	if provider == "" {
+		provider = "The coding assistant"
+	}
+	return fmt.Sprintf("%s has reached its usage limit. This request was stopped, so it will not keep working in the background. Try again after the provider limit resets or use another provider.", provider)
 }
 
 type codingTmuxPaneState int

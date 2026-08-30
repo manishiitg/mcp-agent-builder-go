@@ -1,30 +1,24 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useShallow } from "zustand/react/shallow";
-import { useEffect, useCallback, useRef, useState, forwardRef, lazy, Suspense } from "react";
+import { useEffect, useCallback, useRef, useState, lazy, Suspense } from "react";
 import { ThemeProvider } from "./contexts/ThemeContext.tsx";
 import { UpdateProgressToast } from "./components/UpdateProgressToast";
 import { GlobalHumanFeedbackPrompt } from "./components/GlobalHumanFeedbackPrompt";
-import Workspace from "./components/Workspace.tsx";
-import { ChiefTasksPanel } from "./components/org/OrgHtmlPanels";
-import { ORG_HTML_PREVIEW_PREFERENCE_CHANGED_EVENT, getOrgHtmlPreviewDevice, setOrgHtmlPreviewDevice as persistOrgHtmlPreviewDevice, type OrgHtmlPreviewDevice } from "./components/org/orgHtmlPreview";
-import ChatArea, { type ChatAreaRef } from "./components/ChatArea.tsx";
 import { FileContentViewer } from "./components/FileContentViewer";
-import { resetSessionId, agentApi } from "./services/api";
+import { resetSessionId } from "./services/api";
 import { AuthWrapper } from "./components/AuthWrapper";
-import { findBlockingMultiAgentSession, shouldConfirmForSessionStatus, shouldConfirmNewMultiAgentChat } from "./utils/newChatConfirmation";
 import { isScheduledSession } from "./utils/workflowSessionKinds";
 import { activateTab } from "./utils/activateTab";
-import { Loader2, PanelRightClose, PanelRightOpen, Smartphone, Laptop } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { WorkflowLayout } from "./components/workflow";
 import { ModePresetBar } from "./components/ModePresetBar";
-import { ChatTabs } from "./components/ChatTabs";
-import ConfirmationDialog from "./components/ui/ConfirmationDialog";
-import { useAppStore, useMCPStore, useGlobalPresetStore, useWorkspaceStore, useWorkflowStore, useChatStore } from "./stores";
+import { useAppStore, useMCPStore, useGlobalPresetStore, useWorkflowStore, useChatStore } from "./stores";
 import { useModeStore } from "./stores/useModeStore";
 import { useProductSurfaceStore } from "./stores/useProductSurfaceStore";
+import { useAuthStore } from "./stores/useAuthStore";
+import { deploymentDefaultProductSurface, isEnabledProductSurface, intersectAllowedProductSurfaces } from "./products/productSurfaceConfig";
 import { useLLMStore } from "./stores/useLLMStore";
 import { normalizeEventViewMode, waitForChatStoreHydration, type ChatTab } from "./stores/useChatStore";
-import { CHIEF_OF_STAFF_PROFILE_ID, isChiefOfStaffTab, isChiefOfStaffScheduleTab, isInteractiveChiefOfStaffTab } from "./utils/chiefOfStaff";
 import { useLLMDefaults } from "./hooks/useLLMDefaults";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./components/ui/tooltip";
 import "./App.css";
@@ -35,18 +29,20 @@ declare global {
     highlightFile?: (filepath: string) => void;
     toggleAutoScroll?: () => void;
     perfDiag?: () => void;
+    apiPerf?: () => void;
+    apiLog?: (filter?: string) => void;
   }
 }
 
 import { copyToClipboard } from './utils/textUtils'
 import LazyModalFallback from './components/ui/LazyModalFallback'
+import { apiLogEntries, summarizeApiTimings } from './utils/apiTiming'
 
 const queryClient = new QueryClient();
 
 const QuickSwitcher = lazy(() => import('./components/QuickSwitcher'))
 const WorkflowsOverviewPage = lazy(() => import('./components/WorkflowsOverviewPage').then(module => ({ default: module.WorkflowsOverviewPage })))
 const VideoStudioSurface = lazy(() => import('./products/video-studio/VideoStudioSurface').then(module => ({ default: module.VideoStudioSurface })))
-const ChiefOfStaffSurface = lazy(() => import('./products/chief-of-staff/ChiefOfStaffSurface').then(module => ({ default: module.ChiefOfStaffSurface })))
 const FinanceSurface = lazy(() => import('./products/finance/FinanceSurface').then(module => ({ default: module.FinanceSurface })))
 const DominionSurface = lazy(() => import('./products/dominion/DominionSurface').then(module => ({ default: module.DominionSurface })))
 
@@ -97,43 +93,24 @@ const hasOpenWorkspaceCollapsingPopup = () => {
 }
 
 
-// Helper component to get observerId and render ChatArea
-// Always renders ChatArea (even without observerId) so header with mode/preset selectors is visible
-// Uses Zustand hooks to reactively update when tabs change
-const ChatAreaWithObserverId = forwardRef<ChatAreaRef, { onNewChat: () => void; previousChatsCompact?: boolean }>(({ onNewChat, previousChatsCompact }, ref) => {
-  // Pass null (not undefined) when the active tab is a workflow tab so this hidden
-  // instance doesn't steal SSE connections, polling, or queue processing from
-  // WorkflowLayout's ChatArea which is the primary instance for workflow tabs.
-  const activeTabId = useChatStore(state => {
-    const tabId = state.activeTabId
-    const tab = tabId ? state.chatTabs[tabId] : null
-    return tab?.metadata?.mode === 'workflow' ? null : (tabId || undefined)
-  })
-
-  return (
-    <ChatArea
-      ref={ref}
-      onNewChat={onNewChat}
-      tabId={activeTabId}
-      previousChatsCompact={previousChatsCompact}
-    />
-  )
-})
-
-const multiAgentPanelTabClass = (active: boolean) =>
-  `rounded px-2.5 py-1 text-xs font-medium whitespace-nowrap transition-colors ${
-    active ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
-  }`
-
 function App() {
-  // Ref for ChatArea component to access its methods
-  const chatAreaRef = useRef<ChatAreaRef>(null)
-  const [orgHtmlPreviewDevice, setOrgHtmlPreviewDevice] = useState<OrgHtmlPreviewDevice>(() => getOrgHtmlPreviewDevice())
   const productSurface = useProductSurfaceStore(state => state.productSurface)
-  const chatAutoScroll = useChatStore(state => state.autoScroll)
+  const setProductSurface = useProductSurfaceStore(state => state.setProductSurface)
+  const allowedProducts = useAuthStore(state => state.user?.allowed_products)
+
+  // A dedicated deployment is an allowlist, not a visual preference. Correct
+  // persisted desktop selections before rendering so a stale Finance or
+  // Dominion choice cannot expose a product disabled on this host -- or, now,
+  // a product this specific logged-in user isn't granted.
+  useEffect(() => {
+    const userAllowedSurfaces = intersectAllowedProductSurfaces([productSurface], allowedProducts)
+    if (userAllowedSurfaces.length === 0 || !isEnabledProductSurface(productSurface)) {
+      const fallback = intersectAllowedProductSurfaces([deploymentDefaultProductSurface()], allowedProducts)
+      setProductSurface(fallback[0] ?? deploymentDefaultProductSurface())
+    }
+  }, [productSurface, setProductSurface, allowedProducts])
 
   // Store subscriptions
-  const setAgentMode = useAppStore(state => state.setAgentMode)
   const { hasCompletedInitialSetup, selectedModeCategory, setModeCategory, completeInitialSetup } = useModeStore(useShallow(state => ({
     hasCompletedInitialSetup: state.hasCompletedInitialSetup,
     selectedModeCategory: state.selectedModeCategory,
@@ -149,28 +126,6 @@ function App() {
   // Load LLM defaults from backend
   useLLMDefaults()
 
-  useEffect(() => {
-    if (productSurface !== 'agentworks' || selectedModeCategory !== 'multi-agent') return
-    let cancelled = false
-    void waitForChatStoreHydration().then(async () => {
-      if (cancelled || useProductSurfaceStore.getState().productSurface !== 'agentworks') return
-      const chatStore = useChatStore.getState()
-      const chiefTab = Object.values(chatStore.chatTabs).find(isInteractiveChiefOfStaffTab)
-      if (chiefTab) {
-        chatStore.switchTab(chiefTab.tabId)
-      } else {
-        await chatStore.createChatTab('Chief of Staff', {
-          mode: 'multi-agent',
-          agentProfileId: CHIEF_OF_STAFF_PROFILE_ID,
-          agentProfileVersion: 1,
-          agentProfileWorkspace: 'Chats',
-          agentProfileProjectTitle: 'Chief of Staff',
-        })
-      }
-    })
-    return () => { cancelled = true }
-  }, [productSurface, selectedModeCategory])
-  
   // App Store subscriptions for workspace and chat
   const {
     setSelectedPresetId,
@@ -178,8 +133,6 @@ function App() {
     workspaceMinimizedByMode,
     setWorkspaceMinimized,
     setWorkspaceMinimizedForLayout,
-    multiAgentRightPanelView,
-    setMultiAgentRightPanelView,
     showWorkflowsOverview,
     setShowWorkflowsOverview
   } = useAppStore(useShallow(state => ({
@@ -188,31 +141,11 @@ function App() {
     workspaceMinimizedByMode: state.workspaceMinimizedByMode,
     setWorkspaceMinimized: state.setWorkspaceMinimized,
     setWorkspaceMinimizedForLayout: state.setWorkspaceMinimizedForLayout,
-    multiAgentRightPanelView: state.multiAgentRightPanelView,
-    setMultiAgentRightPanelView: state.setMultiAgentRightPanelView,
     showWorkflowsOverview: state.showWorkflowsOverview,
     setShowWorkflowsOverview: state.setShowWorkflowsOverview,
   })))
   const [hasOpenedWorkflowsOverview, setHasOpenedWorkflowsOverview] = useState(showWorkflowsOverview)
   
-  useEffect(() => {
-    const handler = (event: Event) => {
-      const preference = (event as CustomEvent).detail?.preference
-      if (preference === 'mobile' || preference === 'desktop') {
-        setOrgHtmlPreviewDevice(preference)
-      }
-    }
-    window.addEventListener(ORG_HTML_PREVIEW_PREFERENCE_CHANGED_EVENT, handler)
-    return () => window.removeEventListener(ORG_HTML_PREVIEW_PREFERENCE_CHANGED_EVENT, handler)
-  }, [])
-
-  const submitMultiAgentPanelCommand = useCallback((query: string) => {
-    setWorkspaceMinimized(false)
-    chatAreaRef.current?.submitQuery(query).catch(error => {
-      console.error('[App] Failed to submit org panel command:', error)
-    })
-  }, [setWorkspaceMinimized])
-
   // Expose performance diagnostics on window for DevTools console
   useEffect(() => {
     window.perfDiag = () => {
@@ -539,11 +472,74 @@ function App() {
     return () => { delete window.perfDiag }
   }, [])
 
+  // Expose API response-time diagnostics on window for DevTools console.
+  // Every request through services/api.ts (both the agent and workspace
+  // axios instances) is timed client-side only -- nothing is sent anywhere.
+  useEffect(() => {
+    window.apiPerf = () => {
+      const { aggregates, recent } = summarizeApiTimings()
+
+      console.log('%c === API PERF DIAGNOSTICS ===', 'color: cyan; font-weight: bold; font-size: 14px')
+
+      if (aggregates.length === 0) {
+        console.log('No API calls recorded yet -- interact with the app, then run apiPerf() again.')
+        console.log('%c ============================', 'color: cyan; font-weight: bold')
+        return
+      }
+
+      console.log(`\nBy endpoint (${aggregates.length} distinct, sorted by total time spent):`)
+      console.table(aggregates)
+
+      console.log(`\nMost recent 30 calls, slowest first:`)
+      console.table(recent.map(r => ({
+        method: r.method,
+        path: r.path,
+        status: r.status,
+        durationMs: Math.round(r.durationMs),
+        at: new Date(r.timestamp).toLocaleTimeString(),
+      })))
+
+      const slow = aggregates.filter(a => a.avgMs > 2000)
+      if (slow.length > 0) {
+        console.log('%c \n⚠️  Endpoints averaging over 2s:', 'color: red; font-weight: bold')
+        slow.forEach(a => console.log(`%c  • ${a.endpoint}: avg=${a.avgMs}ms p95=${a.p95Ms}ms (${a.calls} calls)`, 'color: red'))
+      }
+
+      console.log('%c ============================', 'color: cyan; font-weight: bold')
+      console.log('%c Tip: Run apiPerf() again after interacting to see fresh timings', 'color: gray; font-style: italic')
+    }
+    return () => { delete window.apiPerf }
+  }, [])
+
+  // Expose per-call API request/response inspection on window for DevTools
+  // console. apiPerf() above is the timing summary; this is the detail view
+  // for a specific endpoint (or the most recent calls if no filter is
+  // given) -- console.table can't usefully render nested request/response
+  // objects, so each call prints as its own expandable group instead.
+  useEffect(() => {
+    window.apiLog = (filter?: string) => {
+      const matches = apiLogEntries(filter)
+      if (matches.length === 0) {
+        console.log(filter ? `No recorded calls matching %c${filter}` : 'No API calls recorded yet -- interact with the app, then run apiLog() again.', 'font-weight: bold')
+        return
+      }
+      console.log(`%c === API LOG${filter ? ` (filter: ${filter})` : ''} — ${matches.length} call(s), most recent last ===`, 'color: cyan; font-weight: bold; font-size: 14px')
+      for (const entry of matches) {
+        const at = new Date(entry.timestamp).toLocaleTimeString()
+        console.groupCollapsed(`${entry.method} ${entry.path} — ${Math.round(entry.durationMs)}ms — ${entry.status} — ${at}`)
+        if (entry.requestParams !== undefined) console.log('request params:', entry.requestParams)
+        if (entry.requestBody !== undefined) console.log('request body:', entry.requestBody)
+        console.log('response body:', entry.responseBody)
+        console.groupEnd()
+      }
+    }
+    return () => { delete window.apiLog }
+  }, [])
+
   const [showQuickSwitcher, setShowQuickSwitcher] = useState(false)
   const [quickSwitcherInitialQuery, setQuickSwitcherInitialQuery] = useState('')
   
   // Ref to prevent duplicate default tab creation (React StrictMode runs effects twice)
-  const hasCreatedDefaultTabRef = useRef<string | null>(null)
 
   
   const clearActivePreset = useGlobalPresetStore(state => state.clearActivePreset)
@@ -585,15 +581,17 @@ function App() {
     useWorkflowStore.getState().loadPhases()
   }, [])
 
-  // First launch now defaults directly to Chat. If no LLM is configured once
-  // backend defaults are loaded, open the LLM configuration dialog instead of
-  // asking the user to choose between Chat and Workflow.
+  // AgentWorks has two product surfaces: Automations and Organization. The
+  // former profile-less Chat landing was removed; product-owned chats render
+  // outside this shell and continue to use their own agent profiles.
   useEffect(() => {
-    if (!hasCompletedInitialSetup || !selectedModeCategory) {
-      setModeCategory('multi-agent')
+    if (productSurface !== 'agentworks') return
+    if (!hasCompletedInitialSetup || selectedModeCategory !== 'workflow') {
+      setModeCategory('workflow')
+      setShowWorkflowsOverview(true)
       completeInitialSetup()
     }
-  }, [hasCompletedInitialSetup, selectedModeCategory, setModeCategory, completeInitialSetup])
+  }, [completeInitialSetup, hasCompletedInitialSetup, productSurface, selectedModeCategory, setModeCategory, setShowWorkflowsOverview])
 
   useEffect(() => {
     if (hasCheckedInitialLLMConfigRef.current) return
@@ -606,68 +604,11 @@ function App() {
     }
   }, [defaultsLoaded, isConfigValid, llmConfigLocked, savedLLMs.length, setShowLLMModal])
   
-  // Create default tab on page load (only for multi-agent mode, not workflow mode)
-  // In workflow mode, tabs are created when user starts a phase/execution
-  useEffect(() => {
-    if (!hasCompletedInitialSetup) return
-
-    // Only create default tab for multi-agent mode
-    // (workflow tabs are created by WorkflowLayout)
-    if (selectedModeCategory !== 'multi-agent') {
-      return
-    }
-
-    let cancelled = false
-
-    const createDefaultTab = async () => {
-      await waitForChatStoreHydration()
-      if (cancelled) return
-
-      // Prevent duplicate execution (React StrictMode runs effects twice)
-      if (hasCreatedDefaultTabRef.current === selectedModeCategory) {
-        return
-      }
-
-      const chatStore = useChatStore.getState()
-      const modeTabs = Object.values(chatStore.chatTabs).filter(isInteractiveChiefOfStaffTab)
-
-      // If tabs already exist for this mode, skip
-      if (modeTabs.length > 0) {
-        return
-      }
-
-      // Mark as in progress for this mode
-      hasCreatedDefaultTabRef.current = selectedModeCategory
-
-      try {
-        // This effect only runs for multi-agent mode (guarded above); workflow
-        // tabs are created by WorkflowLayout.
-        await chatStore.createChatTab('Chief of Staff', {
-          mode: 'multi-agent',
-          agentProfileId: CHIEF_OF_STAFF_PROFILE_ID,
-          agentProfileVersion: 1,
-          agentProfileWorkspace: 'Chats',
-          agentProfileProjectTitle: 'Chief of Staff',
-        })
-      } catch (error) {
-        console.error('Failed to create default tab:', error)
-        // Reset flag on error so it can retry
-        hasCreatedDefaultTabRef.current = null
-      }
-    }
-
-    void createDefaultTab()
-
-    return () => {
-      cancelled = true
-    }
-  }, [hasCompletedInitialSetup, selectedModeCategory])
-
   // Ensure a chat tab is selected after restore (fix for page reload issue)
   // This ensures that when tabs are restored from localStorage, we select the first tab of the current mode
   // if activeTabId is null or invalid or belongs to a different mode
   useEffect(() => {
-    if (!hasCompletedInitialSetup) return
+    if (!hasCompletedInitialSetup || productSurface !== 'agentworks' || selectedModeCategory !== 'workflow') return
 
     let cancelled = false
 
@@ -753,51 +694,6 @@ function App() {
         return
       }
 
-      // For multi-agent: select the first tab of the current mode
-      // if activeTabId is null, invalid, or belongs to a different mode
-      if (selectedModeCategory !== 'multi-agent') {
-        return
-      }
-
-      const chatStore = useChatStore.getState()
-
-      // Chief of Staff has two independent lanes: one interactive chat and one
-      // read-only schedule. Collapse duplicates within each lane, never across
-      // lanes, so opening a schedule cannot replace the chat.
-      const multiAgentTabs = Object.values(chatStore.chatTabs).filter(tab =>
-        isChiefOfStaffTab(tab) &&
-        tab.metadata?.isOrganizationAssistant !== true
-      )
-      const lanes = [
-        multiAgentTabs.filter(isInteractiveChiefOfStaffTab),
-        multiAgentTabs.filter(isChiefOfStaffScheduleTab),
-      ]
-      for (const laneTabs of lanes) {
-        if (laneTabs.length <= 1) continue
-        const keep = laneTabs.reduce((best, tab) =>
-          (tab.lastAccessedAt ?? tab.createdAt ?? 0) > (best.lastAccessedAt ?? best.createdAt ?? 0) ? tab : best
-        , laneTabs[0])
-        for (const tab of laneTabs) {
-          if (tab.tabId !== keep.tabId) {
-            await chatStore.closeTab(tab.tabId, false)
-          }
-        }
-      }
-
-      const activeTabId = chatStore.activeTabId
-
-      // Check if activeTabId is null, points to a non-existent tab, or belongs to a different mode
-      const activeTab = activeTabId ? chatStore.getTab(activeTabId) : null
-      const hasValidActiveTab = activeTab &&
-        isChiefOfStaffTab(activeTab) &&
-        activeTab.metadata?.isOrganizationAssistant !== true
-
-      if (!hasValidActiveTab && multiAgentTabs.length > 0) {
-        const interactiveTab = multiAgentTabs
-          .filter(isInteractiveChiefOfStaffTab)
-          .sort((a, b) => workflowTabSortTimestamp(b) - workflowTabSortTimestamp(a))[0]
-        chatStore.switchTab((interactiveTab || multiAgentTabs[0]).tabId)
-      }
     }
 
     void ensureActiveTab()
@@ -805,13 +701,14 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [hasCompletedInitialSetup, selectedModeCategory])
+  }, [hasCompletedInitialSetup, productSurface, selectedModeCategory])
 
   // Restore active presets after stores are initialized
   const hasRestoredPresetRef = useRef(false)
   useEffect(() => {
-    // Only restore presets if initial setup is completed and we have a mode category
-    if (hasCompletedInitialSetup && selectedModeCategory) {
+    // AgentWorks only restores automation presets. Product chats own their
+    // profile configuration and never use the removed generic-chat preset.
+    if (productSurface === 'agentworks' && hasCompletedInitialSetup && selectedModeCategory === 'workflow') {
       // Add a small delay to ensure stores are fully initialized
       const timer = setTimeout(() => {
         const activePreset = getActivePreset(selectedModeCategory)
@@ -821,19 +718,13 @@ function App() {
           if (!result.success) {
             console.error('[APP] Failed to restore preset:', result.error)
           }
-        } else if (selectedModeCategory === 'multi-agent') {
-          // For multi-agent mode, if there's no active preset, clear any stale preset server state
-          // This prevents old preset servers from persisting when no preset is selected
-          hasRestoredPresetRef.current = true
-          const { setCurrentPresetServers } = useGlobalPresetStore.getState()
-          setCurrentPresetServers([])
         }
         // For workflow mode with no preset found, don't mark as restored — retry below
       }, 500) // 500ms delay to ensure stores are ready
 
       return () => clearTimeout(timer)
     }
-  }, [hasCompletedInitialSetup, selectedModeCategory, getActivePreset, applyPreset])
+  }, [hasCompletedInitialSetup, selectedModeCategory, productSurface, getActivePreset, applyPreset])
 
   // Retry preset restoration for workflow mode after presets finish loading from manifests
   // The 500ms timer above may fire before refreshPresets() completes
@@ -853,12 +744,6 @@ function App() {
 
   // Start new chat function
   const startNewChat = useCallback(() => {
-    
-    // Use ChatArea's resetChatState method to clear all chat state without circular call
-    if (chatAreaRef.current) {
-      chatAreaRef.current.resetChatState();
-    }
-    
     // Preserve active preset for workflow mode, clear for other modes
     if (selectedModeCategory === 'workflow') {
       // For workflow mode, preserve the active preset
@@ -909,117 +794,21 @@ function App() {
     setWorkspaceMinimized(!workspaceMinimized)
   }, [workspaceMinimized, setWorkspaceMinimized])
 
-  // "New Chat" resets the one interactive Chief of Staff lane in place. A
-  // concurrently running schedule remains in its separate read-only lane.
-  const [showNewChatConfirm, setShowNewChatConfirm] = useState(false)
-  const newChatCheckInFlightRef = useRef(false)
-  const pendingNewChiefOfStaffTabIdRef = useRef<string | null>(null)
-  const requestNewMultiAgentChat = useCallback(() => {
-    if (newChatCheckInFlightRef.current) return
-
-    const startFreshChat = (tabId: string) => {
-      useChatStore.getState().switchTab(tabId)
-      void chatAreaRef.current?.handleNewChat(tabId)
-    }
-
-    const checkAndRoute = async () => {
-      newChatCheckInFlightRef.current = true
-      try {
-        const chatStore = useChatStore.getState()
-        let activeTab: ChatTab | null = Object.values(chatStore.chatTabs)
-          .filter(isInteractiveChiefOfStaffTab)
-          .sort((a, b) => workflowTabSortTimestamp(b) - workflowTabSortTimestamp(a))[0] || null
-        if (!activeTab) {
-          const tabId = await chatStore.createChatTab('Chief of Staff', {
-            mode: 'multi-agent',
-            agentProfileId: CHIEF_OF_STAFF_PROFILE_ID,
-            agentProfileVersion: 1,
-            agentProfileWorkspace: 'Chats',
-            agentProfileProjectTitle: 'Chief of Staff',
-          })
-          activeTab = chatStore.getTab(tabId) || null
-        }
-        if (!activeTab) return
-        pendingNewChiefOfStaffTabIdRef.current = activeTab.tabId
-
-        if (shouldConfirmNewMultiAgentChat(activeTab)) {
-          setShowNewChatConfirm(true)
-          return
-        }
-
-        let activeSessionsChecked = false
-        let activeSessionFound = false
-        try {
-          const response = await agentApi.getActiveSessions()
-          const activeSession = activeTab?.sessionId
-            ? response.active_sessions?.find(session => session.session_id === activeTab.sessionId)
-            : undefined
-          activeSessionsChecked = true
-          activeSessionFound = !!activeSession
-          if (shouldConfirmNewMultiAgentChat(activeTab, activeSession)) {
-            setShowNewChatConfirm(true)
-            return
-          }
-          const blockingMultiAgentSession = findBlockingMultiAgentSession(response.active_sessions, activeTab?.sessionId)
-          if (blockingMultiAgentSession) {
-            setShowNewChatConfirm(true)
-            return
-          }
-        } catch (activeSessionsError) {
-          console.warn('[NewChat] Failed to check active sessions before resetting chat:', activeSessionsError)
-        }
-
-        if (!activeTab?.sessionId) {
-          startFreshChat(activeTab.tabId)
-          return
-        }
-
-        try {
-          const status = await agentApi.getSessionStatus(activeTab.sessionId)
-          if (shouldConfirmForSessionStatus(status)) {
-            setShowNewChatConfirm(true)
-            return
-          }
-          startFreshChat(activeTab.tabId)
-        } catch (statusError) {
-          console.warn('[NewChat] Failed to check session status before resetting chat:', statusError)
-          if (activeSessionsChecked && !activeSessionFound) {
-            startFreshChat(activeTab.tabId)
-            return
-          }
-          setShowNewChatConfirm(true)
-        }
-      } finally {
-        newChatCheckInFlightRef.current = false
-      }
-    }
-
-    void checkAndRoute()
-  }, [])
-  const confirmNewMultiAgentChat = useCallback(() => {
-    setShowNewChatConfirm(false)
-    const tabId = pendingNewChiefOfStaffTabIdRef.current
-    if (!tabId) return
-    useChatStore.getState().switchTab(tabId)
-    void chatAreaRef.current?.handleNewChat(tabId)
-  }, [])
-
   // After a Ctrl+1 mode switch, restore the most recently-accessed
   // tab matching the new mode. Without this the activeTabId stays on
   // whatever was selected before (often a tab in the *other* mode), so
   // the workflow's chat panel doesn't pick up the running session and
   // the user has to click the tab manually.
-  const restoreMostRecentTabForMode = useCallback((mode: 'workflow' | 'multi-agent') => {
+  const restoreMostRecentWorkflowTab = useCallback(() => {
     const chatStore = useChatStore.getState()
     const currentTab = chatStore.activeTabId ? chatStore.chatTabs[chatStore.activeTabId] : null
     if (
       currentTab &&
-      currentTab.metadata?.mode === mode &&
-      (mode !== 'workflow' || isInteractiveWorkflowTab(currentTab) || isRecentExplicitReadOnlyWorkflowTab(currentTab))
+      currentTab.metadata?.mode === 'workflow' &&
+      (isInteractiveWorkflowTab(currentTab) || isRecentExplicitReadOnlyWorkflowTab(currentTab))
     ) return
     const candidates = Object.values(chatStore.chatTabs).filter(t =>
-      t.metadata?.mode === mode &&
-      (mode !== 'workflow' || isInteractiveWorkflowTab(t))
+      t.metadata?.mode === 'workflow' && isInteractiveWorkflowTab(t)
     )
     if (candidates.length === 0) return
     const mostRecent = candidates.reduce((best, t) =>
@@ -1036,7 +825,7 @@ function App() {
         const { setModeCategory } = useModeStore.getState()
         setModeCategory('workflow')
         setShowWorkflowsOverview(false)
-        restoreMostRecentTabForMode('workflow')
+        restoreMostRecentWorkflowTab()
         return
       }
       // Ctrl/Cmd + 3 for Organization view
@@ -1065,23 +854,11 @@ function App() {
         setShowQuickSwitcher(prev => !prev)
         return
       }
-      // Ctrl/Cmd + N for new chat
-      if ((event.ctrlKey || event.metaKey) && event.key === 'n') {
-        event.preventDefault()
-        if (selectedModeCategory === 'multi-agent' && !showWorkflowsOverview) {
-          requestNewMultiAgentChat()
-          return
-        }
-        // Outside chat mode, preserve the existing reset-current-chat behavior.
-        if (chatAreaRef.current) {
-          chatAreaRef.current.handleNewChat()
-        }
-      }
     }
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [requestNewMultiAgentChat, restoreMostRecentTabForMode, selectedModeCategory, showWorkflowsOverview, toggleWorkspaceMinimize, setAgentMode, setShowWorkflowsOverview, startNewChat])
+  }, [restoreMostRecentWorkflowTab, setShowWorkflowsOverview, toggleWorkspaceMinimize])
 
   useEffect(() => {
     if (showWorkflowsOverview) {
@@ -1122,116 +899,24 @@ function App() {
     return () => observer.disconnect()
   }, [setWorkspaceMinimizedForLayout])
 
-  // Responsive split mirroring WorkflowLayout's splitGridCols, keyed off the
-  // device tier (OrgHtmlPreviewDevice = 'mobile' | 'desktop'; the UI labels
-  // 'desktop' as "Laptop"). Chat is grid col 1, org content is grid col 2.
-  //   'mobile' (default) → chat fills (1fr), org content = 480px panel on the right
-  //   'desktop' (UI "Laptop") → chat/terminal column is hidden; org content fills
-  //     the full width as a single grid column.
-  const isMultiAgentLaptopFull = orgHtmlPreviewDevice === 'desktop'
-  const multiAgentSplitGridCols =
-    isMultiAgentLaptopFull ? 'md:grid-cols-[minmax(0,1fr)]'
-      : 'md:grid-cols-[minmax(0,1fr)_480px]'
-  const layoutWorkspaceMinimized =
-    showWorkflowsOverview
-      ? true
-      : selectedModeCategory === 'workflow' || selectedModeCategory === 'multi-agent'
-        ? Boolean(workspaceMinimizedByMode?.[selectedModeCategory])
-        : workspaceMinimized
-
-  useEffect(() => {
-    if (layoutWorkspaceMinimized) return
-    if (multiAgentRightPanelView !== 'files') return
-    if (selectedModeCategory === 'workflow') return
-
-    const workspace = useWorkspaceStore.getState()
-    workspace.setActiveFolder(null)
-    workspace.fetchFiles(undefined, { force: true, maxDepth: 2 }).catch(error => {
-      console.error('[Workspace] Failed to load multi-agent files panel:', error)
-    })
-  }, [layoutWorkspaceMinimized, multiAgentRightPanelView, selectedModeCategory])
-
-  const toggleMultiAgentPanelMinimize = useCallback(() => {
-    setWorkspaceMinimized(!layoutWorkspaceMinimized)
-  }, [layoutWorkspaceMinimized, setWorkspaceMinimized])
-  // Device-preview toggle (Mobile / Laptop). Lives alongside the panel tabs so it
-  // renders in EVERY right-panel view header (Pulse/Goals/Tasks/Files) — critical
-  // because Laptop hides the chat/terminal column, so this toggle is the only way
-  // back to Mobile to interact with the agent. Persists + broadcasts the choice;
-  // App's own listener mirrors it into local state.
-  const multiAgentDeviceToggle = (
-    <div className="inline-flex flex-none items-center gap-0.5 rounded-lg border border-border bg-muted/70 p-0.5 shadow-sm backdrop-blur-sm">
-      {([
-        { mode: 'mobile' as const, Icon: Smartphone, label: 'Mobile' },
-        { mode: 'desktop' as const, Icon: Laptop, label: 'Laptop' },
-      ]).map(({ mode, Icon: DeviceIcon, label }) => (
-        <button
-          key={mode}
-          type="button"
-          onClick={() => persistOrgHtmlPreviewDevice(mode)}
-          title={`${label} layout`}
-          aria-label={`${label} layout`}
-          className={`inline-flex h-6 w-6 items-center justify-center rounded transition-colors ${
-            orgHtmlPreviewDevice === mode ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
-          }`}
-        >
-          <DeviceIcon className="h-3.5 w-3.5" />
-        </button>
-      ))}
-    </div>
-  )
-  const multiAgentPanelTabs = (
-    <div className="inline-flex min-w-0 flex-none items-center gap-1">
-      <div className="inline-flex min-w-0 flex-none items-center gap-0.5 rounded-lg border border-border bg-muted/70 p-0.5 shadow-sm backdrop-blur-sm">
-        <button
-          type="button"
-          onClick={() => setMultiAgentRightPanelView('tasks')}
-          className={multiAgentPanelTabClass(multiAgentRightPanelView === 'tasks')}
-        >
-          Tasks
-        </button>
-        <button
-          type="button"
-          onClick={() => setMultiAgentRightPanelView('files')}
-          className={multiAgentPanelTabClass(multiAgentRightPanelView === 'files')}
-        >
-          Files
-        </button>
-      </div>
-      {multiAgentDeviceToggle}
-    </div>
-  )
-  const multiAgentPanelCloseButton = (
-    <button
-      type="button"
-      onClick={toggleMultiAgentPanelMinimize}
-      title="Hide panel"
-      aria-label="Hide panel"
-      className="inline-flex h-7 w-7 flex-none items-center justify-center rounded-lg border border-border bg-background/90 text-muted-foreground shadow-sm transition-colors hover:bg-muted hover:text-foreground"
-    >
-      <PanelRightClose className="h-4 w-4" />
-    </button>
-  )
-
   return (
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
         <AuthWrapper>
+        <TooltipProvider>
         {productSurface === 'video-studio' ? (
           <Suspense fallback={<FileSurfaceFallback />}><VideoStudioSurface /></Suspense>
-        ) : productSurface === 'chief-of-staff' ? (
-          <Suspense fallback={<FileSurfaceFallback />}><ChiefOfStaffSurface /></Suspense>
         ) : productSurface === 'finance' ? (
           <Suspense fallback={<FileSurfaceFallback />}><FinanceSurface /></Suspense>
         ) : productSurface === 'dominion' ? (
           <Suspense fallback={<FileSurfaceFallback />}><DominionSurface /></Suspense>
         ) : (
-        <TooltipProvider>
+        <>
         <UpdateProgressToast />
         <GlobalHumanFeedbackPrompt />
         <div className="h-screen bg-background flex">
-          {/* Main Content Area - WorkflowLayout (workflow mode) or ChatArea (other modes).
-              The former left sidebar was removed; its controls now live in the top bar
+          {/* AgentWorks contains Automations and Organization. The former left
+              sidebar was removed; its controls now live in the top bar
               (ModePresetBar → WorkspaceTopBarControls). */}
           <div className="flex-1 flex flex-col min-w-0 min-h-0 relative z-10 overflow-hidden">
             {/* Quick Switcher (Ctrl+K) - constrained to the main content area */}
@@ -1248,29 +933,7 @@ function App() {
             {/* Global Mode & Preset Bar - only above middle content area, not sidebars */}
             <ModePresetBar />
             
-            {/* Chat Tabs - global navigation for both chat and workflow modes */}
-            <ChatTabs
-              onNewChat={requestNewMultiAgentChat}
-              autoScroll={chatAutoScroll}
-              onSubmitOrgCommand={submitMultiAgentPanelCommand}
-              onToggleAutoScroll={() => {
-                const chatStore = useChatStore.getState()
-                chatStore.setAutoScroll(!chatStore.autoScroll)
-              }}
-            />
-
-            <ConfirmationDialog
-              isOpen={showNewChatConfirm}
-              onClose={() => setShowNewChatConfirm(false)}
-              onConfirm={confirmNewMultiAgentChat}
-              title="Start a new chat?"
-              message="This stops the current chat session and clears the conversation. This can't be undone."
-              confirmText="New Chat"
-              cancelText="Cancel"
-              type="warning"
-            />
-            
-              <div className="flex-1 min-h-0 overflow-hidden relative">
+            <div className="flex-1 min-h-0 overflow-hidden relative">
                 {hasOpenedWorkflowsOverview && (
                   <div className={showWorkflowsOverview ? 'h-full' : 'hidden'}>
                     <Suspense fallback={<FileSurfaceFallback />}>
@@ -1279,85 +942,12 @@ function App() {
                   </div>
                 )}
                 <div className={!showWorkflowsOverview ? 'h-full' : 'hidden'}>
-                  <div className={selectedModeCategory === 'workflow' ? 'h-full' : 'hidden'}>
-                    <WorkflowLayout
-                      className="h-full"
-                      onNewChat={startNewChat}
-                    />
-                  </div>
-                  <div className={selectedModeCategory !== 'workflow' ? 'h-full relative' : 'hidden'}>
-                    {layoutWorkspaceMinimized && (
-                      <button
-                        type="button"
-                        onClick={() => setWorkspaceMinimized(false)}
-                        title="Show side panel"
-                        aria-label="Show side panel"
-                        className="absolute right-0 top-1/2 z-30 hidden -translate-y-1/2 flex-col items-center gap-1.5 rounded-l-lg border border-r-0 border-border bg-background/95 py-3 pl-1.5 pr-1 text-muted-foreground shadow-md backdrop-blur-sm transition-colors hover:bg-muted hover:text-foreground md:flex"
-                      >
-                        <PanelRightOpen className="h-4 w-4" />
-                        <span className="[writing-mode:vertical-rl] text-[10px] font-semibold uppercase tracking-wider">Panel</span>
-                      </button>
-                    )}
-                    {/* Mirrors WorkflowLayout: chat (col 1) + org content (col 2)
-                        laid out as a responsive grid so the org content resizes with
-                        the device selector (Laptop/Tablet/Mobile). The chat rail is
-                        always visible; only the user-initiated minimize toggle hides
-                        the org panel, at which point the chat flexes to fill. */}
-                    <div
-                      className={`h-full min-h-0 min-w-0 ${
-                        layoutWorkspaceMinimized
-                          ? 'flex'
-                          : `flex flex-col md:grid ${multiAgentSplitGridCols} md:grid-rows-[minmax(0,1fr)]`
-                      }`}
-                    >
-                      {/* Chat rail = grid col 1, mirroring the workflow. Minimized →
-                          flexes to fill the width; Laptop → hidden entirely so the
-                          org content takes the full width; otherwise it's the col-1
-                          rail. */}
-                      <div
-                        className={`flex min-w-0 flex-col overflow-hidden bg-background ${
-                          layoutWorkspaceMinimized
-                            ? 'flex-1'
-                            : isMultiAgentLaptopFull
-                              ? 'hidden'
-                              : 'w-full border-b border-gray-200 dark:border-gray-700 md:col-start-1 md:border-b-0 md:border-r'
-                        }`}
-                      >
-                        <ChatAreaWithObserverId
-                          ref={chatAreaRef}
-                          onNewChat={startNewChat}
-                          previousChatsCompact={!layoutWorkspaceMinimized}
-                        />
-                      </div>
-                      {!layoutWorkspaceMinimized && (
-                        <div
-                          className={`flex min-w-0 flex-1 flex-col overflow-hidden bg-background ${isMultiAgentLaptopFull ? 'md:col-start-1' : 'md:col-start-2'}`}
-                        >
-                          {multiAgentRightPanelView === 'files' && (
-                            <div className="flex flex-wrap items-center justify-between gap-1 border-b border-border bg-muted/40 px-2 py-2">
-                              {multiAgentPanelTabs}
-                              {multiAgentPanelCloseButton}
-                            </div>
-                          )}
-                          <div className="min-h-0 flex-1 overflow-hidden">
-                            {multiAgentRightPanelView === 'files' ? (
-                              <Workspace
-                                minimized={false}
-                                onToggleMinimize={toggleMultiAgentPanelMinimize}
-                              />
-                            ) : (
-                              <ChiefTasksPanel
-                                toolbarLeading={multiAgentPanelTabs}
-                                onClosePanel={toggleMultiAgentPanelMinimize}
-                              />
-                            )}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
+                  <WorkflowLayout
+                    className="h-full"
+                    onNewChat={startNewChat}
+                  />
                 </div>
-              </div>
+            </div>
 
             {/* File Content View - overlay when showing file content */}
             <FileContentViewer />
@@ -1365,8 +955,9 @@ function App() {
 
         </div>
 
-        </TooltipProvider>
+        </>
         )}
+        </TooltipProvider>
         </AuthWrapper>
       </ThemeProvider>
     </QueryClientProvider>

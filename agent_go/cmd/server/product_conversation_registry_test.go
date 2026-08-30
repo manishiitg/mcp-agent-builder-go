@@ -1,0 +1,228 @@
+package server
+
+import (
+	"context"
+	"encoding/json"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/agentprofiles"
+)
+
+func memoryProductConversationStore() (productConversationRegistryStore, map[string]string) {
+	files := map[string]string{}
+	ids := []string{"logical-1", "session-1", "logical-2", "session-2"}
+	return productConversationRegistryStore{
+		read: func(_ context.Context, path string) (string, bool, error) {
+			value, ok := files[path]
+			return value, ok, nil
+		},
+		write: func(_ context.Context, path, value string) error {
+			files[path] = value
+			return nil
+		},
+		now: func() time.Time { return time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC) },
+		newID: func() string {
+			value := ids[0]
+			ids = ids[1:]
+			return value
+		},
+	}, files
+}
+
+func singletonConversationProfile() agentprofiles.Profile {
+	profile := routeTestProfile("dominion", true, "")
+	profile.Runtime.Workspace = agentprofiles.WorkspacePolicy{Mode: agentprofiles.WorkspaceModeFixed, Root: "Chats"}
+	profile.Runtime.Conversation = agentprofiles.ConversationPolicy{Mode: agentprofiles.ConversationModeSingleton}
+	return profile
+}
+
+func TestProductConversationRegistryReusesStableIdentity(t *testing.T) {
+	store, _ := memoryProductConversationStore()
+	profile := singletonConversationProfile()
+	binding, err := resolveProductConversationBinding(context.Background(), "user-1", profile, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.resolveOrCreate(context.Background(), "user-1", profile, binding, "existing-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.resolveOrCreate(context.Background(), "user-1", profile, binding, "different-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ConversationID != second.ConversationID || second.SessionID != "existing-session" {
+		t.Fatalf("durable identity changed: first=%+v second=%+v", first, second)
+	}
+}
+
+func TestProductConversationRegistrySeparatesUsersAndKeys(t *testing.T) {
+	store, files := memoryProductConversationStore()
+	profile := singletonConversationProfile()
+	binding, _ := resolveProductConversationBinding(context.Background(), "user-1", profile, "main")
+	userOne, err := store.resolveOrCreate(context.Background(), "user-1", profile, binding, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	userTwo, err := store.resolveOrCreate(context.Background(), "user-2", profile, binding, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if userOne.ConversationID == userTwo.ConversationID || userOne.SessionID == userTwo.SessionID {
+		t.Fatalf("users shared a product conversation: one=%+v two=%+v", userOne, userTwo)
+	}
+	if len(files) != 2 {
+		t.Fatalf("registry files=%d, want one per user", len(files))
+	}
+}
+
+func TestProductConversationRotationChangesProjectSessionAndKeepsNewBinding(t *testing.T) {
+	store, files := memoryProductConversationStore()
+	profile := routeTestProfile("video-studio", true, "")
+	profile.Runtime.Conversation = agentprofiles.ConversationPolicy{
+		Mode: agentprofiles.ConversationModeKeyed, KeyType: agentprofiles.ConversationKeyTypeProject,
+	}
+	const manifestPath = "_users/user-1/Chats/Video Studio/projects/launch/product.json"
+	files[manifestPath] = `{"product":"video-studio","id":"launch","title":"Launch","session_id":"existing-session","unrelated":"preserved"}`
+	binding := productConversationBinding{
+		ConversationKey: "launch", WorkspacePath: "_users/user-1/Chats/Video Studio/projects/launch",
+		ManifestPath: manifestPath, ResourceID: "launch", Title: "Launch", AuthoritativeSessionID: "existing-session",
+	}
+	original, err := store.resolveOrCreate(context.Background(), "user-1", profile, binding, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotated, err := store.rotate(context.Background(), "user-1", profile, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rotated.ConversationID == original.ConversationID || rotated.SessionID == original.SessionID {
+		t.Fatalf("rotation reused the old durable identity: original=%+v rotated=%+v", original, rotated)
+	}
+	var manifest map[string]interface{}
+	if err := json.Unmarshal([]byte(files[manifestPath]), &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest["session_id"] != rotated.SessionID || manifest["unrelated"] != "preserved" {
+		t.Fatalf("manifest not safely updated: %+v", manifest)
+	}
+
+	// A normal later resolve reads the rotated project binding and must not
+	// revive the conversation it replaced.
+	binding.AuthoritativeSessionID = rotated.SessionID
+	resolved, err := store.resolveOrCreate(context.Background(), "user-1", profile, binding, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.ConversationID != rotated.ConversationID || resolved.SessionID != rotated.SessionID {
+		t.Fatalf("resolve revived prior conversation: got=%+v want=%+v", resolved, rotated)
+	}
+}
+
+func TestResolveProductConversationBindingEnforcesDeclaredMode(t *testing.T) {
+	profile := singletonConversationProfile()
+	if _, err := resolveProductConversationBinding(context.Background(), "user-1", profile, "other"); err == nil || !strings.Contains(err.Error(), "singleton") {
+		t.Fatalf("singleton accepted an arbitrary key: %v", err)
+	}
+	profile.Runtime.Conversation = agentprofiles.ConversationPolicy{Mode: agentprofiles.ConversationModeKeyed, KeyType: agentprofiles.ConversationKeyTypeProject}
+	profile.Runtime.Workspace = agentprofiles.WorkspacePolicy{Mode: agentprofiles.WorkspaceModeProject, ProjectsRoot: "Chats/Video Studio/projects"}
+	if _, err := resolveProductConversationBinding(context.Background(), "user-1", profile, ""); err == nil || !strings.Contains(err.Error(), "conversation_key") {
+		t.Fatalf("keyed conversation accepted an empty key: %v", err)
+	}
+}
+
+func TestProductConversationP0ProjectKeyResolvesAndResumesOneDurableConversation(t *testing.T) {
+	profile := routeTestProfile("video-studio", true, "")
+	profile.Name = "Video Studio"
+	profile.Runtime.Workspace = agentprofiles.WorkspacePolicy{
+		Mode:         agentprofiles.WorkspaceModeProject,
+		ProjectsRoot: "Chats/Video Studio/projects",
+	}
+	profile.Runtime.Conversation = agentprofiles.ConversationPolicy{
+		Mode:    agentprofiles.ConversationModeKeyed,
+		KeyType: agentprofiles.ConversationKeyTypeProject,
+	}
+
+	const manifestPath = "_users/user-1/Chats/Video Studio/projects/launch-film/product.json"
+	projectStore := productProjectStore{
+		listPaths: func(_ context.Context, root string) ([]string, bool, error) {
+			if root != "_users/user-1/Chats/Video Studio/projects" {
+				t.Fatalf("projects root=%q", root)
+			}
+			return []string{
+				"_users/user-1/Chats/Video Studio/projects/not-a-video/product.json",
+				manifestPath,
+				manifestPath,
+			}, true, nil
+		},
+		read: func(_ context.Context, path string) (string, bool, error) {
+			switch path {
+			case manifestPath:
+				return `{"schema_version":1,"product":"video-studio","id":"launch-2026","title":"Launch Film","description":"Product launch film","session_id":"existing-video-session"}`, true, nil
+			case "_users/user-1/Chats/Video Studio/projects/not-a-video/product.json":
+				return `{"schema_version":1,"product":"other-product","id":"launch-2026","title":"Wrong product","session_id":"wrong-session"}`, true, nil
+			default:
+				return "", false, nil
+			}
+		},
+	}
+
+	binding, err := resolveProductProjectBindingWithStore(context.Background(), "user-1", profile, "launch-2026", projectStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binding.WorkspacePath != "_users/user-1/Chats/Video Studio/projects/launch-film" ||
+		binding.ManifestPath != manifestPath ||
+		binding.AuthoritativeSessionID != "existing-video-session" ||
+		binding.Title != "Launch Film" {
+		t.Fatalf("unexpected server-owned project binding: %+v", binding)
+	}
+
+	registry, _ := memoryProductConversationStore()
+	first, err := registry.resolveOrCreate(context.Background(), "user-1", profile, binding, "browser-session-must-not-win")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := registry.resolveOrCreate(context.Background(), "user-1", profile, binding, "another-browser-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ConversationID == "" || first.ConversationID != second.ConversationID || second.SessionID != "existing-video-session" {
+		t.Fatalf("project conversation did not resume its durable identity: first=%+v second=%+v", first, second)
+	}
+
+	query, err := queryRequestForAgentProfileChat(profile, AgentProfileChatRequest{
+		Message:         "Continue the launch film",
+		ConversationKey: "launch-2026",
+	}, second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if query.SelectedFolder != binding.WorkspacePath || query.SessionTitle != "Launch Film" || query.RestoredConversationPath != "" {
+		t.Fatalf("turn did not use only the canonical product binding: %+v", query)
+	}
+}
+
+func TestProductProjectBindingRejectsDuplicateProjectIDs(t *testing.T) {
+	profile := routeTestProfile("video-studio", true, "")
+	profile.Runtime.Workspace = agentprofiles.WorkspacePolicy{Mode: agentprofiles.WorkspaceModeProject, ProjectsRoot: "Chats/Video Studio/projects"}
+	profile.Runtime.Conversation = agentprofiles.ConversationPolicy{Mode: agentprofiles.ConversationModeKeyed, KeyType: agentprofiles.ConversationKeyTypeProject}
+	store := productProjectStore{
+		listPaths: func(context.Context, string) ([]string, bool, error) {
+			return []string{
+				"_users/user-1/Chats/Video Studio/projects/one/product.json",
+				"_users/user-1/Chats/Video Studio/projects/two/product.json",
+			}, true, nil
+		},
+		read: func(context.Context, string) (string, bool, error) {
+			return `{"product":"video-studio","id":"duplicate","title":"Video","session_id":"session"}`, true, nil
+		},
+	}
+
+	_, err := resolveProductProjectBindingWithStore(context.Background(), "user-1", profile, "duplicate", store)
+	if err == nil || !strings.Contains(err.Error(), "duplicated") {
+		t.Fatalf("duplicate project id was not rejected: %v", err)
+	}
+}

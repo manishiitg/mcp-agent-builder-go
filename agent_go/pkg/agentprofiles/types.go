@@ -16,14 +16,33 @@ const (
 )
 
 type RuntimePolicy struct {
-	Transport       string              `json:"transport" yaml:"transport"`
-	Provider        string              `json:"provider,omitempty" yaml:"provider,omitempty"`
-	ModelID         string              `json:"model_id,omitempty" yaml:"model_id,omitempty"`
-	ProviderOptions []ProviderOption    `json:"provider_options,omitempty" yaml:"provider_options,omitempty"`
-	Capabilities    RuntimeCapabilities `json:"capabilities" yaml:"capabilities"`
+	Transport       string           `json:"transport" yaml:"transport"`
+	Provider        string           `json:"provider,omitempty" yaml:"provider,omitempty"`
+	ModelID         string           `json:"model_id,omitempty" yaml:"model_id,omitempty"`
+	ProviderOptions []ProviderOption `json:"provider_options,omitempty" yaml:"provider_options,omitempty"`
+	// CredentialScope selects where the coding-agent provider credential comes
+	// from. Empty/workspace preserves the historical per-project override;
+	// global uses only the server-wide credential and ignores saved project
+	// overrides. This does not affect product generation secrets.
+	CredentialScope string `json:"credential_scope,omitempty" yaml:"credential_scope,omitempty"`
+	// RequireProviderToken forces this profile to refuse a claude-code turn
+	// outright when no explicit provider token is resolved, instead of
+	// falling back to whatever `claude` CLI login happens to exist on the
+	// host. Independent of, and in addition to, the server's own
+	// single-product-deployment heuristic (isSingleProductServerDeployment in
+	// cmd/server) -- that heuristic is a deployment-topology default any
+	// product gets for free on a dedicated server without touching this
+	// file; this field is a per-product override for a profile that must
+	// never rely on an ambient CLI login, even in a shared or desktop
+	// context (for example, a fixed-workspace, single-tenant product with no
+	// legitimate desktop use case). False preserves every existing profile's
+	// current behavior.
+	RequireProviderToken bool                `json:"require_provider_token,omitempty" yaml:"require_provider_token,omitempty"`
+	Capabilities         RuntimeCapabilities `json:"capabilities" yaml:"capabilities"`
 	// AgentTools selects whether a coding provider receives only AgentWorks MCP
-	// tools (mcp_only) or provider-native tools (hybrid). Hybrid is deliberately
-	// incompatible with execute_shell_command; use APITransport for product APIs.
+	// tools (mcp_only) or provider-native tools (hybrid). Hybrid may retain the
+	// MCP execute_shell_command bridge; only APITransport native_shell is
+	// mutually exclusive with that bridge route.
 	// Empty preserves mcp_only for existing profiles.
 	AgentTools AgentToolsPolicy `json:"agent_tools,omitempty" yaml:"agent_tools,omitempty"`
 	// Approvals controls the native-tool approval policy when AgentTools enables
@@ -40,10 +59,27 @@ type RuntimePolicy struct {
 	// without those concepts would be told to use anyway, contradicting the
 	// placement rules its system prompt had just given.
 	Workspace WorkspacePolicy `json:"workspace,omitempty" yaml:"workspace,omitempty"`
+	// Conversation declares how a product maps its domain objects to durable
+	// chats. The browser supplies only the key (when one is required); the
+	// server owns the durable conversation/session identity.
+	Conversation ConversationPolicy `json:"conversation,omitempty" yaml:"conversation,omitempty"`
 }
 
 // WorkspacePolicy carries a product's declared artifact placement rules.
 type WorkspacePolicy struct {
+	// Mode is fixed for products with one workspace and project for products
+	// whose conversation key selects a project manifest below ProjectsRoot.
+	Mode string `json:"mode,omitempty" yaml:"mode,omitempty"`
+	// Root is the server-owned default workspace for profile-chat turns. A
+	// product with no user-selected project (for example Dominion) declares it
+	// here so its chat client never has to send an AgentWorks folder path.
+	// Project-based products leave it empty and keep supplying their selected
+	// project workspace through their product surface.
+	Root string `json:"root,omitempty" yaml:"root,omitempty"`
+	// ProjectsRoot is the server-owned parent containing project manifests for
+	// a project-bound product. A client sends the manifest's project id, never
+	// a path below this root.
+	ProjectsRoot string `json:"projects_root,omitempty" yaml:"projects_root,omitempty"`
 	// Placement is keyed by tool name: each tool's description gets only the
 	// lines declared for it. Per-tool rather than one shared block because the
 	// advice that helps differs by tool — where a shell command should write is
@@ -52,6 +88,27 @@ type WorkspacePolicy struct {
 	// read by the model, so phrase each as an instruction naming a concrete path.
 	Placement map[string][]string `json:"placement,omitempty" yaml:"placement,omitempty"`
 }
+
+// ConversationPolicy controls durable product-conversation identity.
+type ConversationPolicy struct {
+	// Mode is singleton (one conversation per user/profile) or keyed (one per
+	// domain resource, such as a Video Studio project).
+	Mode string `json:"mode,omitempty" yaml:"mode,omitempty"`
+	// KeyType names the domain key for diagnostics and validation. The first
+	// keyed binding is project; future products can add another resolver without
+	// widening the public chat request to paths or runtime configuration.
+	KeyType string `json:"key_type,omitempty" yaml:"key_type,omitempty"`
+}
+
+const (
+	ConversationModeSingleton  = "singleton"
+	ConversationModeKeyed      = "keyed"
+	ConversationKeyTypeProject = "project"
+	WorkspaceModeFixed         = "fixed"
+	WorkspaceModeProject       = "project"
+	CredentialScopeWorkspace   = "workspace"
+	CredentialScopeGlobal      = "global"
+)
 
 type AgentToolsPolicy struct {
 	Mode string `json:"mode,omitempty" yaml:"mode,omitempty"`
@@ -130,9 +187,9 @@ type PresentationBinding struct {
 // keep the text in their own files and fill this in at load time, so a long
 // prompt does not have to live inline in the product manifest.
 type CommandBinding struct {
-	Name        string   `json:"name" yaml:"name"`
-	Description string   `json:"description" yaml:"description"`
-	Icon        string   `json:"icon,omitempty" yaml:"icon,omitempty"`
+	Name        string `json:"name" yaml:"name"`
+	Description string `json:"description" yaml:"description"`
+	Icon        string `json:"icon,omitempty" yaml:"icon,omitempty"`
 	// File is the product-relative path holding the prompt. It is resolved by
 	// the product at load time and never sent to a client.
 	File   string `json:"-" yaml:"file,omitempty"`
@@ -176,10 +233,17 @@ type Profile struct {
 	Runtime              RuntimePolicy    `json:"runtime" yaml:"runtime"`
 	BuiltIn              bool             `json:"built_in" yaml:"built_in"`
 	OwnerID              string           `json:"owner_id,omitempty" yaml:"owner_id,omitempty"`
+	// Product names which product surface this builtin profile belongs to
+	// (e.g. "dominion", "video-studio", "finance") -- set by each product's
+	// registration call in server.go, never by the product package itself.
+	// Empty for non-builtin profiles and for the generic, profile-less
+	// AgentWorks chat path. Used only to key per-user product access checks;
+	// it has no effect on tool/skill resolution.
+	Product string `json:"product,omitempty" yaml:"product,omitempty"`
 	// Scope declares whether this profile is bound to one project workspace
 	// (the default -- every profile before this field existed, including
 	// Video Studio, behaves this way) or operates globally across a user's
-	// whole workspace with no single project folder, e.g. Chief of Staff.
+	// whole workspace with no single project folder.
 	// Empty is equivalent to ProfileScopeProject; always read this through
 	// EffectiveScope(), never the raw field, so that equivalence holds
 	// everywhere.

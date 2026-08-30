@@ -12,82 +12,26 @@ func videoAgentLLMConfig() map[string]interface{} {
 	return map[string]interface{}{"provider": "claude-code", "model_id": DefaultClaudeModel}
 }
 func videoWorkflowLLMConfig() map[string]interface{} {
-	return map[string]interface{}{"schema_version": 2, "mode": "explicit", "builder_llm": videoAgentLLMConfig(), "maintenance_llm": videoAgentLLMConfig(), "pulse_llm": videoAgentLLMConfig(), "tiered_config": map[string]interface{}{"tier_1": videoAgentLLMConfig(), "tier_2": videoAgentLLMConfig(), "tier_3": videoAgentLLMConfig()}}
+	return map[string]interface{}{"schema_version": 2, "mode": "explicit", "builder_llm": videoAgentLLMConfig(), "pulse_llm": videoAgentLLMConfig(), "tiered_config": map[string]interface{}{"tier_1": videoAgentLLMConfig(), "tier_2": videoAgentLLMConfig(), "tier_3": videoAgentLLMConfig()}}
 }
 func planForAll(pipelines []*Pipeline) map[string]interface{} {
 	steps := make([]map[string]interface{}, 0, 1+len(pipelines)*8)
 	routes := make([]map[string]interface{}, 0, len(pipelines))
 	for _, p := range pipelines {
-		routes = append(routes, map[string]interface{}{"route_id": p.ID, "route_name": p.Name, "condition": p.WhenToUse, "next_step_id": pipelineEntryStepID(p)})
+		routes = append(routes, map[string]interface{}{"route_id": p.ID, "route_name": p.Name, "condition": p.WhenToUse, "next_step_id": p.Stages[0].ID})
 	}
 	steps = append(steps, map[string]interface{}{"type": "routing", "id": routeStepID, "title": "Route", "routing_question": "Which pipeline does this brief call for?", "routes": routes, "default_route_id": pipelines[0].ID})
 	for _, p := range pipelines {
-		block := orchestratedStageIDs(p)
-		blockRoutes := make([]map[string]interface{}, 0, len(block))
-		blockDeps := []string{}
-		blockEmitted := false
 		for i, stage := range p.Stages {
 			deps := []string{}
 			for prev := 0; prev < i; prev++ {
 				deps = append(deps, p.Stages[prev].Output)
 				deps = append(deps, p.Stages[prev].Artifacts...)
 			}
-			step := stageStep(p, stage, deps, i == len(p.Stages)-1)
-
-			if block[stage.ID] {
-				// Orchestrated stages become routes rather than plan steps. The
-				// orchestrator is emitted at the position of the first one so the
-				// plan order still reads as the production order.
-				if !blockEmitted {
-					blockDeps = append([]string{}, deps...)
-					blockEmitted = true
-				}
-				delete(step, "next_step_id")
-				blockRoutes = append(blockRoutes, map[string]interface{}{
-					"route_id":       stage.ID,
-					"route_name":     stage.Title,
-					"condition":      stage.Summary,
-					"sub_agent_step": step,
-				})
-				if stage.ID == p.Orchestrated.StageIDs[len(p.Orchestrated.StageIDs)-1] {
-					// A todo_task must name its successor. The runtime would fall
-					// through to the next step in array order anyway, but the plan
-					// graph refuses to draw a sequential edge out of a todo_task —
-					// it only follows next_step_id — so without this the
-					// orchestrator renders as a dead end and the plan stops
-					// describing what actually runs.
-					next := "end"
-					if i+1 < len(p.Stages) {
-						next = p.Stages[i+1].ID
-					}
-					steps = append(steps, orchestratorStep(p, blockRoutes, blockDeps, next))
-				}
-				continue
-			}
-			steps = append(steps, step)
+			steps = append(steps, stageStep(p, stage, deps, i == len(p.Stages)-1))
 		}
 	}
 	return map[string]interface{}{"steps": steps}
-}
-
-// pipelineEntryStepID is what the router points at: the orchestrator when the
-// pipeline opens with an orchestrated block, otherwise its first stage.
-func pipelineEntryStepID(p *Pipeline) string {
-	if p.Orchestrated != nil && len(p.Orchestrated.StageIDs) > 0 && p.Stages[0].ID == p.Orchestrated.StageIDs[0] {
-		return p.Orchestrated.ID
-	}
-	return p.Stages[0].ID
-}
-
-func orchestratedStageIDs(p *Pipeline) map[string]bool {
-	ids := map[string]bool{}
-	if p.Orchestrated == nil {
-		return ids
-	}
-	for _, id := range p.Orchestrated.StageIDs {
-		ids[id] = true
-	}
-	return ids
 }
 
 // stageStep is one production stage. Always a message_sequence — every stage
@@ -107,23 +51,6 @@ func stageStep(p *Pipeline, stage PipelineStage, deps []string, last bool) map[s
 	}
 	if last {
 		step["next_step_id"] = "end"
-	}
-	return step
-}
-
-// orchestratorStep runs an OrchestratedBlock's stages as sub-agent routes. Its
-// own validation asserts the block's output so the step cannot pass by talking
-// about work its routes never did.
-func orchestratorStep(p *Pipeline, blockRoutes []map[string]interface{}, deps []string, nextStepID string) map[string]interface{} {
-	step := map[string]interface{}{
-		"type": "todo_task", "id": p.Orchestrated.ID, "title": p.Orchestrated.Title,
-		"description": p.Orchestrated.Description, "context_dependencies": deps,
-		"context_output":    p.Orchestrated.Output,
-		"predefined_routes": blockRoutes,
-		"validation_schema": map[string]interface{}{"files": []map[string]interface{}{
-			{"file_name": p.Orchestrated.Output, "must_exist": true},
-		}},
-		"next_step_id": nextStepID,
 	}
 	return step
 }
@@ -155,14 +82,14 @@ func stageExecuteItem() map[string]interface{} {
 }
 
 // managedSkillPolicy splits a stage's declared skills by how the product says
-// each one reaches the agent. product.yaml installs twelve HyperFrames skills
-// but declares `attach: [hyperframes]`; the rest are, in productdeps' own
-// words, "ordinary files for progressive disclosure" — product-infographic
-// routes the agent to read them by path (`skills/<name>/SKILL.md`).
+// each one reaches the agent. product.yaml installs the HyperFrames production
+// stack but declares `attach: [hyperframes]`; the rest are, in productdeps' own
+// words, "ordinary files for progressive disclosure" and cinematic stages
+// read only the parts needed by an explicitly planned insert.
 //
 // One field was doing both jobs. Every stage asked to ATTACH all of them,
 // which failed silently before the loader became workspace-aware and would now
-// succeed and load eleven specialist skills nobody asked for — the exact thing
+// succeed and load specialist skills nobody asked for — the exact thing
 // the product prompt says not to do. So attachment gets the skills declared
 // attachable, and the remainder get a read path instead.
 func managedSkillPolicy() (installed map[string]bool, attachable map[string]bool) {
@@ -199,13 +126,6 @@ func baseStageAgentConfig() map[string]interface{} {
 func stepConfigForAll(pipelines []*Pipeline) map[string]interface{} {
 	steps := make([]map[string]interface{}, 0, len(pipelines)*8)
 	for _, p := range pipelines {
-		// The orchestrator is an agent too and needs its own entry; without one
-		// it falls back to platform defaults rather than this product's LLM.
-		// It carries no stage skills: it sequences routes and relays findings,
-		// and never writes an artifact itself.
-		if p.Orchestrated != nil {
-			steps = append(steps, map[string]interface{}{"id": p.Orchestrated.ID, "title": p.Orchestrated.Title, "agent_configs": baseStageAgentConfig()})
-		}
 		for _, stage := range p.Stages {
 			config := baseStageAgentConfig()
 			if len(stage.Skills) > 0 {

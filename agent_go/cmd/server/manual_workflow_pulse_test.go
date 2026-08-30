@@ -21,7 +21,7 @@ func TestManualPulseScheduleContract(t *testing.T) {
 	}
 	sctx := buildScheduleContext("/tmp/workflow", manifest, sched)
 	sctx.TriggerSource = "manual"
-	sctx.ForcePostRunMonitor = true
+	sctx.ForcePulseReview = true
 	sctx.PulseOnly = true
 	sctx.PulseEvidenceRunFolder = "iteration-2/default"
 	sctx.PulseEvidenceRunStatus = "error"
@@ -29,8 +29,8 @@ func TestManualPulseScheduleContract(t *testing.T) {
 	if sctx.Schedule.Mode != "workshop" || sctx.Schedule.WorkshopMode != "run" {
 		t.Fatalf("manual Pulse must use the workshop preflight path: %+v", sctx.Schedule)
 	}
-	if !sctx.ForcePostRunMonitor {
-		t.Fatal("manual Pulse must force post-run Pulse without changing workflow config")
+	if !sctx.ForcePulseReview {
+		t.Fatal("manual Pulse must force Pulse without changing recurring schedules")
 	}
 	if !sctx.PulseOnly {
 		t.Fatal("manual toolbar action must be marked Pulse-only")
@@ -38,7 +38,7 @@ func TestManualPulseScheduleContract(t *testing.T) {
 	if messages := scheduledWorkshopMessages(sctx); len(messages) != 0 {
 		t.Fatalf("Pulse-only action must not enqueue a workflow message: %v", messages)
 	}
-	turns, err := scheduledWorkshopTurns(manifest, scheduledWorkshopMessages(sctx))
+	turns, err := scheduledWorkshopTurns(manifest, scheduledWorkshopMessages(sctx), sctx.WorkspacePath)
 	if err != nil {
 		t.Fatalf("build Pulse preflight turns: %v", err)
 	}
@@ -50,8 +50,8 @@ func TestManualPulseScheduleContract(t *testing.T) {
 			t.Fatalf("Pulse-only action queued a non-upgrade turn: %+v", turn)
 		}
 	}
-	if !shouldRunPostRunMonitor(sctx, manifest) {
-		t.Fatal("one-off Pulse must execute even when post_run_monitor is disabled")
+	if !shouldRunPulseLifecycle(sctx, manifest) {
+		t.Fatal("one-off Pulse must execute without a recurring Pulse schedule")
 	}
 
 	normalCtx := buildScheduleContext("/tmp/workflow", manifest, WorkflowSchedule{Mode: "workshop", WorkshopMode: "run"})
@@ -60,23 +60,20 @@ func TestManualPulseScheduleContract(t *testing.T) {
 		t.Fatalf("ordinary empty schedule must retain the default workflow message: %v", normalMessages)
 	}
 
-	sctx.ForcePostRunMonitor = false
-	if shouldRunPostRunMonitor(sctx, manifest) {
-		t.Fatal("ordinary run must respect the disabled post_run_monitor setting")
+	sctx.ForcePulseReview = false
+	if shouldRunPulseLifecycle(sctx, manifest) {
+		t.Fatal("ordinary run must not run Pulse when pulse.enabled is false")
+	}
+	manifest.Pulse = &WorkflowPulseConfig{Enabled: true}
+	if !shouldRunPulseLifecycle(normalCtx, manifest) {
+		t.Fatal("ordinary scheduled run must run Pulse when pulse.enabled is true")
 	}
 }
 
-// TestPulseReviewOnlyScheduleContractMirrorsManualPulseTrigger pins PLAT-115:
-// a persisted, recurring PulseReviewOnly schedule must reach the exact same
-// PulseOnly/ForcePostRunMonitor state buildScheduleContext + the manual
-// toolbar trigger already produce (TestManualPulseScheduleContract, above) —
-// automatically, from the fired schedule's own field, not hand-set by the
-// caller. Unlike the manual trigger it must NOT set PulseEvidenceRunFolder:
-// that means "review exactly this one folder," but a periodic pass reviews
-// whatever backlog Gate itself decides is new (Part D), not a Go-selected
-// single folder.
+// TestPulseReviewOnlyScheduleContractMirrorsManualPulseTrigger retains the
+// legacy schedule parser until startup migration removes old entries.
 func TestPulseReviewOnlyScheduleContractMirrorsManualPulseTrigger(t *testing.T) {
-	manifest := &WorkflowManifest{ID: "workflow-id", Label: "Workflow", PostRunMonitor: boolPtr(false)}
+	manifest := &WorkflowManifest{ID: "workflow-id", Label: "Workflow"}
 	sched := WorkflowSchedule{
 		ID:              "periodic-pulse-review",
 		Name:            "Periodic Pulse Review",
@@ -90,14 +87,14 @@ func TestPulseReviewOnlyScheduleContractMirrorsManualPulseTrigger(t *testing.T) 
 	if !sctx.PulseOnly {
 		t.Fatal("a PulseReviewOnly schedule must set sctx.PulseOnly")
 	}
-	if !sctx.ForcePostRunMonitor {
-		t.Fatal("a PulseReviewOnly schedule must force Pulse to run even with post_run_monitor disabled")
+	if !sctx.ForcePulseReview {
+		t.Fatal("a PulseReviewOnly schedule must force Pulse to run")
 	}
 	if sctx.PulseEvidenceRunFolder != "" {
 		t.Fatalf("PulseEvidenceRunFolder = %q, want empty — a periodic pass must not be pinned to a single folder", sctx.PulseEvidenceRunFolder)
 	}
-	if !shouldRunPostRunMonitor(sctx, manifest) {
-		t.Fatal("a PulseReviewOnly schedule must execute Pulse even when the workflow's own post_run_monitor is disabled")
+	if !shouldRunPulseLifecycle(sctx, manifest) {
+		t.Fatal("a PulseReviewOnly schedule must execute Pulse")
 	}
 	if messages := scheduledWorkshopMessages(sctx); len(messages) != 0 {
 		t.Fatalf("PulseReviewOnly must not enqueue a workflow message: %v", messages)
@@ -107,8 +104,14 @@ func TestPulseReviewOnlyScheduleContractMirrorsManualPulseTrigger(t *testing.T) 
 	// including every existing one before this field existed) must be
 	// completely unaffected.
 	ordinary := buildScheduleContext("/tmp/workflow", manifest, WorkflowSchedule{Mode: "workshop", WorkshopMode: "run"})
-	if ordinary.PulseOnly || ordinary.ForcePostRunMonitor {
+	if ordinary.PulseOnly || ordinary.ForcePulseReview {
 		t.Fatalf("an ordinary schedule must not be marked Pulse-only: %+v", ordinary)
+	}
+	manifest.Schedules = []WorkflowSchedule{{
+		ID: "periodic-pulse-review", Enabled: true, PulseReviewOnly: true,
+	}}
+	if !shouldRunPulseLifecycle(ordinary, manifest) {
+		t.Fatal("a legacy Pulse schedule must keep post-run Pulse enabled during migration")
 	}
 }
 

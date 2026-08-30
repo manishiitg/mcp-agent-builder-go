@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -65,14 +64,10 @@ func targetingAuditFailure(field, message string) *WorkspaceVerificationResult {
 	}
 }
 
-// TestSavePreValidationLogFilesFailureAsRunConcern proves the actual fix: a
-// failing gate is now durably recorded in db/db.sqlite via RecordRunConcerns,
-// not just (over-writably) in the per-run pre_validation.json. This is the
-// exact scenario found live in the twitter automation workflow's
-// execute-targeting-audit step: it failed prevalidation twice before passing,
-// and once it passed, pre_validation.json on disk showed only the clean
-// final attempt with zero trace of the two real failures.
-func TestSavePreValidationLogFilesFailureAsRunConcern(t *testing.T) {
+// Prevalidation is durable run evidence, not a Go-created Pulse observation.
+// Technical Review reads the retained log and decides whether it is a real
+// workflow issue; this avoids turning every malformed retry into repair debt.
+func TestSavePreValidationLogKeepsFailureOutOfPulseRegister(t *testing.T) {
 	hcpo, _ := newPreValidationConcernTestOrchestrator(t)
 	ctx := context.Background()
 	stepID := "execute-targeting-audit"
@@ -86,21 +81,8 @@ func TestSavePreValidationLogFilesFailureAsRunConcern(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadOpenRunConcerns: %v", err)
 	}
-	if len(concerns) != 1 {
-		t.Fatalf("got %d open concerns, want 1: %+v", len(concerns), concerns)
-	}
-	c := concerns[0]
-	if c.StepID != stepID {
-		t.Errorf("concern StepID = %q, want %q", c.StepID, stepID)
-	}
-	if c.Phase != ConcernPhasePreValidation {
-		t.Errorf("concern Phase = %q, want %q", c.Phase, ConcernPhasePreValidation)
-	}
-	if c.SeenCount != 1 {
-		t.Errorf("SeenCount = %d, want 1", c.SeenCount)
-	}
-	if c.Status != ConcernStatusOpen {
-		t.Errorf("Status = %q, want %q", c.Status, ConcernStatusOpen)
+	if len(concerns) != 0 {
+		t.Fatalf("prevalidation evidence must not create a raw Pulse concern: %+v", concerns)
 	}
 }
 
@@ -110,7 +92,7 @@ func TestSavePreValidationLogFilesFailureAsRunConcern(t *testing.T) {
 // pre-run-folder) still accumulates onto the SAME db row instead of starting
 // over, which is exactly the cross-run chronic-defect signal a per-run JSON
 // file structurally cannot provide.
-func TestSavePreValidationLogConcernRecursAcrossRuns(t *testing.T) {
+func TestSavePreValidationLogRepeatedFailuresStayOutOfPulseRegister(t *testing.T) {
 	hcpo, _ := newPreValidationConcernTestOrchestrator(t)
 	ctx := context.Background()
 	stepID := "execute-targeting-audit"
@@ -127,18 +109,12 @@ func TestSavePreValidationLogConcernRecursAcrossRuns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadOpenRunConcerns: %v", err)
 	}
-	if len(concerns) != 1 {
-		t.Fatalf("got %d open concerns, want 1 (same field, same fingerprint, across runs): %+v", len(concerns), concerns)
-	}
-	if concerns[0].SeenCount != 2 {
-		t.Fatalf("SeenCount = %d, want 2 (recurred across both runs)", concerns[0].SeenCount)
-	}
-	if concerns[0].LastSeenRun != "iteration-0/default-2" {
-		t.Errorf("LastSeenRun = %q, want the second run", concerns[0].LastSeenRun)
+	if len(concerns) != 0 {
+		t.Fatalf("repeated prevalidation evidence must remain in retained logs, not raw Pulse concerns: %+v", concerns)
 	}
 }
 
-func TestSavePreValidationLogCollapsesAllFailedChecksForOneStep(t *testing.T) {
+func TestSavePreValidationLogDoesNotCreateCollapsedPulseConcern(t *testing.T) {
 	hcpo, _ := newPreValidationConcernTestOrchestrator(t)
 	ctx := context.Background()
 	stepID := "execute-find-opportunities"
@@ -163,16 +139,8 @@ func TestSavePreValidationLogCollapsesAllFailedChecksForOneStep(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadOpenRunConcerns: %v", err)
 	}
-	if len(concerns) != 1 {
-		t.Fatalf("got %d concerns, want one step-level prevalidation bug: %+v", len(concerns), concerns)
-	}
-	for _, path := range []string{"$.action_targets", "$.coverage_report", "$.targets"} {
-		if !strings.Contains(concerns[0].Text, path) {
-			t.Fatalf("one concern must retain field evidence %q: %s", path, concerns[0].Text)
-		}
-	}
-	if concerns[0].SeenCount != 1 {
-		t.Fatalf("SeenCount=%d, want one observation for one run", concerns[0].SeenCount)
+	if len(concerns) != 0 {
+		t.Fatalf("failed checks must remain retained evidence until Technical Review classifies them: %+v", concerns)
 	}
 
 	// A repair retry in the same run updates the one bug's latest evidence but
@@ -184,8 +152,8 @@ func TestSavePreValidationLogCollapsesAllFailedChecksForOneStep(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reload concerns: %v", err)
 	}
-	if len(concerns) != 1 || concerns[0].SeenCount != 1 || !strings.Contains(concerns[0].Text, "$.new_field") {
-		t.Fatalf("same-run retry should update one concern without recurrence inflation: %+v", concerns)
+	if len(concerns) != 0 {
+		t.Fatalf("same-run retry must not create Pulse register noise: %+v", concerns)
 	}
 }
 

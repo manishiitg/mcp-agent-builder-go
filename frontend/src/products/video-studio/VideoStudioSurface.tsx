@@ -12,7 +12,6 @@ import {
   FolderOpen,
   Users,
   Eye,
-  EyeOff,
   KeyRound,
   Loader2,
   MessageSquareText,
@@ -32,9 +31,9 @@ import { ConversationMarkdownRenderer } from '../../components/ui/MarkdownRender
 import { clampPanelWidth, loadStoredPanelWidth, saveStoredPanelWidth } from './panelWidth'
 import { videoStamp } from './videoStamp'
 import { ProductSurfaceSwitcher } from '../../components/ProductSurfaceSwitcher'
+import AccountControl from '../../components/topbar/AccountControl'
 import SecretsManagerModal from '../../components/secrets/SecretsManagerModal'
 import SecretSelectionDropdown from '../../components/secrets/SecretSelectionDropdown'
-import { secretsApi, type WorkflowCredentialProvider } from '../../api/secrets'
 import Workspace from '../../components/Workspace'
 import { WorkflowCanvas } from '../../components/workflow/canvas/WorkflowCanvas'
 import { PresentationRenderer, type PresentationRendererProps } from '../../platform/presentations/PresentationRenderer'
@@ -49,231 +48,37 @@ import { useAuthStore } from '../../stores/useAuthStore'
 import { useChatStore, waitForChatStoreHydration } from '../../stores/useChatStore'
 import { useModeStore } from '../../stores/useModeStore'
 import { useProductSurfaceStore } from '../../stores/useProductSurfaceStore'
-import { restoreSession } from '../../utils/sessionRestore'
+import { hydrateTabEvents, restoreSession } from '../../utils/sessionRestore'
 import {
   VIDEO_PROFILE_ID,
   VIDEO_PROFILE_VERSION,
   createVideoProject,
-  loadVideoAgentProviderOptions,
   loadVideoPresentations,
   loadVideoProductCommands,
   loadCharacterPresentations,
+  loadReferencePresentations,
   loadDocumentPresentations,
   loadVideoProjects,
   relativeTime,
   workspaceMediaURL,
   type VideoPresentation,
   type CharacterPresentation,
+  type ReferencePresentation,
   type DocumentPresentation,
-  type VideoAgentProviderOption,
   type VideoProject,
 } from './videoStudioData'
 
 type WorkspacePanel = 'production' | 'files' | 'workflow'
 const EMPTY_SECRET_IDS: string[] = []
-const EMPTY_VIDEO_AGENT_PROVIDER_OPTIONS: VideoAgentProviderOption[] = []
-
-type ProviderCredentialDialogCopy = {
-  title: string
-  /** Shown under the title, e.g. "Optional for this project. Without one, Video Studio uses your saved AgentWorks Claude login." */
-  subtitle: string
-  hint: ReactNode
-  fallbackLabel: string
-  inputPlaceholder: string
-  replacePlaceholder: string
-  /** Noun used in buttons, e.g. "token" or "API key". */
-  noun: string
-}
-
-/**
- * Per-project credential entry for a coding-CLI provider, scoped to this
- * project's workspace path. Claude Code, Cursor, and Pi CLI share this dialog
- * because all three need the same guarantee: without a scoped credential the
- * project falls back to whichever login/key is on the server, silently
- * billing that account. The backend already treats every provider
- * identically (workflowProviderAPIKeys in workflow_provider_auth.go); this
- * keeps the frontend the same way instead of growing one dialog per provider.
- */
-function ProviderCredentialDialog({ provider, copy, workspacePath, onClose }: { provider: WorkflowCredentialProvider; copy: ProviderCredentialDialogCopy; workspacePath: string; onClose: () => void }) {
-  const [token, setToken] = useState('')
-  const [visible, setVisible] = useState(false)
-  const [configured, setConfigured] = useState(false)
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-  const [deleting, setDeleting] = useState(false)
-  const [error, setError] = useState('')
-
-  useEffect(() => {
-    let cancelled = false
-    void secretsApi.getWorkflowProviderCredentialStatus(provider, workspacePath)
-      .then((status) => { if (!cancelled) setConfigured(status.configured) })
-      .catch(() => { if (!cancelled) setError(`Unable to check the saved ${copy.noun}.`) })
-      .finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
-  }, [provider, workspacePath, copy.noun])
-
-  const save = async () => {
-    if (!token.trim() || saving) return
-    setSaving(true)
-    setError('')
-    try {
-      await secretsApi.storeWorkflowProviderCredential(provider, workspacePath, token.trim())
-      setToken('')
-      setConfigured(true)
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : `Unable to save the ${copy.noun}.`)
-    } finally {
-      setSaving(false)
-    }
-  }
-  const remove = async () => {
-    if (deleting) return
-    setDeleting(true)
-    setError('')
-    try {
-      await secretsApi.deleteWorkflowProviderCredential(provider, workspacePath)
-      setConfigured(false)
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : `Unable to remove the ${copy.noun}.`)
-    } finally {
-      setDeleting(false)
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 z-[90] grid place-items-center bg-slate-950/45 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="provider-credential-title">
-      <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl dark:border-slate-700 dark:bg-slate-900">
-        <div className="flex items-start justify-between gap-4">
-          <div><h2 id="provider-credential-title" className="text-sm font-semibold text-slate-900 dark:text-slate-100">{copy.title}</h2><p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">{copy.subtitle}</p></div>
-          <button type="button" onClick={onClose} className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200" aria-label="Close credential setup"><X className="h-4 w-4" /></button>
-        </div>
-        <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs leading-5 text-slate-600 dark:border-slate-700 dark:bg-slate-950/40 dark:text-slate-300">
-          {copy.hint}
-        </div>
-        <div className="mt-4 flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-          {loading ? <><Loader2 className="h-3.5 w-3.5 animate-spin" />Checking saved {copy.noun}…</> : configured ? <><CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />A project {copy.noun} is saved.</> : copy.fallbackLabel}
-        </div>
-        <div className="relative mt-3">
-          <input type={visible ? 'text' : 'password'} autoComplete="off" value={token} onChange={(event) => { setToken(event.target.value); setError('') }} placeholder={configured ? copy.replacePlaceholder : copy.inputPlaceholder} className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 pr-10 font-mono text-sm text-slate-900 outline-none placeholder:text-slate-400 focus:border-violet-500 focus:ring-2 focus:ring-violet-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:focus:ring-violet-950" />
-          <button type="button" onClick={() => setVisible((current) => !current)} className="absolute inset-y-0 right-0 grid w-10 place-items-center text-slate-400 hover:text-slate-700 dark:hover:text-slate-200" aria-label={visible ? `Hide ${copy.noun}` : `Show ${copy.noun}`}>{visible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button>
-        </div>
-        {error ? <p role="alert" className="mt-2 text-xs text-rose-600 dark:text-rose-400">{error}</p> : null}
-        <div className="mt-5 flex items-center justify-between gap-3">
-          {configured ? <button type="button" onClick={() => void remove()} disabled={deleting || saving} className="inline-flex items-center gap-1.5 text-xs font-medium text-rose-600 hover:text-rose-700 disabled:opacity-50 dark:text-rose-400"><Trash2 className="h-3.5 w-3.5" />{deleting ? 'Removing…' : `Remove ${copy.noun}`}</button> : <span />}
-          <button type="button" onClick={() => void save()} disabled={!token.trim() || saving || deleting} className="inline-flex h-9 items-center rounded-lg bg-violet-600 px-3 text-xs font-semibold text-white shadow-sm hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-50">{saving ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}{saving ? 'Saving…' : `Save ${copy.noun}`}</button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-const PROVIDER_CREDENTIAL_COPY: Partial<Record<WorkflowCredentialProvider, ProviderCredentialDialogCopy>> = {
-  'claude-code': {
-    title: 'Claude Code token',
-    subtitle: 'Optional for this project. Without one, Video Studio uses your saved AgentWorks Claude login.',
-    hint: <>Use a token from <code className="rounded bg-white px-1 py-0.5 font-mono text-[11px] dark:bg-slate-800">claude setup-token</code>. It is encrypted, private to this project, and never shown again.</>,
-    fallbackLabel: 'Using saved AgentWorks login',
-    inputPlaceholder: 'Paste Claude Code token',
-    replacePlaceholder: 'Paste a replacement token',
-    noun: 'token',
-  },
-  'cursor-cli': {
-    title: 'Cursor API key',
-    subtitle: 'Optional for this project. Without one, Video Studio uses your saved AgentWorks Cursor login.',
-    hint: <>Paste an API key from <code className="rounded bg-white px-1 py-0.5 font-mono text-[11px] dark:bg-slate-800">cursor.com</code> settings. It is encrypted, private to this project, and never shown again.</>,
-    fallbackLabel: 'Using saved AgentWorks login',
-    inputPlaceholder: 'Paste Cursor API key',
-    replacePlaceholder: 'Paste a replacement API key',
-    noun: 'API key',
-  },
-  'pi-cli': {
-    title: 'Pi CLI (Gemini) API key',
-    subtitle: 'Optional for this project. Without one, Video Studio uses whichever Gemini key is configured on the server.',
-    hint: <>Paste a Gemini API key from <code className="rounded bg-white px-1 py-0.5 font-mono text-[11px] dark:bg-slate-800">aistudio.google.com</code>. It is encrypted, private to this project, and never shown again.</>,
-    fallbackLabel: 'Using the server-configured Gemini key',
-    inputPlaceholder: 'Paste Gemini API key',
-    replacePlaceholder: 'Paste a replacement API key',
-    noun: 'API key',
-  },
-}
-
 function VideoStudioHeader({ children, projectTabId }: { children?: ReactNode; projectTabId?: string | null }) {
   const user = useAuthStore((state) => state.user)
   const [showSecretsManager, setShowSecretsManager] = useState(false)
-  const [showCredentialSetup, setShowCredentialSetup] = useState(false)
-  const [providerOptions, setProviderOptions] = useState<VideoAgentProviderOption[]>(EMPTY_VIDEO_AGENT_PROVIDER_OPTIONS)
   // Keep the fallback reference stable. Zustand uses Object.is for selector
   // results, so allocating [] here causes useSyncExternalStore to re-render
   // forever while a project tab is still being restored.
   const selectedSecrets = useChatStore((state) => projectTabId ? state.chatTabs[projectTabId]?.config.selectedSecrets ?? EMPTY_SECRET_IDS : EMPTY_SECRET_IDS)
-  const projectLLMConfig = useChatStore((state) => projectTabId ? state.chatTabs[projectTabId]?.config.llmConfig : undefined)
-  const projectWorkspacePath = useChatStore((state) => projectTabId ? state.chatTabs[projectTabId]?.metadata?.agentProfileWorkspace : undefined)
-  useEffect(() => {
-    if (!projectTabId) return
-    let cancelled = false
-    void loadVideoAgentProviderOptions().then((options) => {
-      if (!cancelled && options.length > 0) setProviderOptions(options)
-    }).catch(() => {})
-    return () => { cancelled = true }
-  }, [projectTabId])
   const updateSelectedSecrets = (next: string[]) => {
     if (projectTabId) useChatStore.getState().setTabConfig(projectTabId, { selectedSecrets: next })
-  }
-  // Resolution is deliberately three-stage. An exact provider+model match wins;
-  // failing that we match on PROVIDER ALONE, because a saved project pins a
-  // model id that product.yaml can later rename (a project saved with
-  // codex-cli/"codex-cli" no longer matched once the option moved to
-  // gpt-5.6-terra). Without the provider-only stage that project fell through to
-  // the isDefault option and the header rendered "Claude Code" while the request
-  // still carried the stored provider — the label and the turn disagreed.
-  const exactProviderOption = providerOptions.find((option) => option.provider === projectLLMConfig?.provider && option.modelId === projectLLMConfig?.model_id)
-  const providerOnlyOption = providerOptions.find((option) => option.provider === projectLLMConfig?.provider)
-  const resolvedProviderOption = exactProviderOption ?? providerOnlyOption ?? providerOptions.find((option) => option.isDefault) ?? providerOptions[0]
-  const selectedProviderID = resolvedProviderOption?.id ?? ''
-  const selectedProvider = resolvedProviderOption
-  // Whatever the header ends up displaying is now written back as the project's
-  // real configuration, so the dropdown can never be a cosmetic lie about which
-  // provider the next turn will actually use.
-  useEffect(() => {
-    if (!projectTabId || !resolvedProviderOption || !projectLLMConfig) return
-    if (projectLLMConfig.provider === resolvedProviderOption.provider && projectLLMConfig.model_id === resolvedProviderOption.modelId) return
-    useChatStore.getState().setTabConfig(projectTabId, {
-      llmConfig: {
-        ...projectLLMConfig,
-        provider: resolvedProviderOption.provider,
-        model_id: resolvedProviderOption.modelId,
-        fallback_models: [],
-      },
-    })
-  }, [projectTabId, resolvedProviderOption, projectLLMConfig])
-  // Only providers with a per-project credential (Claude Code, Cursor, Pi
-  // CLI) show the key button; Codex has no scoped-credential story yet.
-  const selectedCredentialCopy = selectedProvider ? PROVIDER_CREDENTIAL_COPY[selectedProvider.provider as WorkflowCredentialProvider] : undefined
-  const updateProvider = (providerID: string) => {
-    if (!projectTabId) return
-    const option = providerOptions.find((candidate) => candidate.id === providerID)
-    if (!option) return
-    const current = useChatStore.getState().chatTabs[projectTabId]?.config.llmConfig
-    useChatStore.getState().setTabConfig(projectTabId, {
-      llmConfig: {
-        ...current,
-        provider: option.provider,
-        model_id: option.modelId,
-        fallback_models: [],
-      },
-    })
-    // Prompt for the credential right away rather than leaving it to a small
-    // icon in the corner: switching to a provider with no scoped credential
-    // yet is exactly the moment a user needs to know one is available. Stays
-    // quiet if a credential is already saved, so it doesn't nag every switch.
-    const copy = PROVIDER_CREDENTIAL_COPY[option.provider as WorkflowCredentialProvider]
-    if (copy && projectWorkspacePath) {
-      void secretsApi.getWorkflowProviderCredentialStatus(option.provider as WorkflowCredentialProvider, projectWorkspacePath)
-        .then((status) => {
-          if (!status.configured) setShowCredentialSetup(true)
-        })
-        .catch(() => {})
-    }
   }
   return (
     <header className="flex h-[62px] shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4 dark:border-slate-800 dark:bg-slate-950">
@@ -282,16 +87,9 @@ function VideoStudioHeader({ children, projectTabId }: { children?: ReactNode; p
         {children}
       </div>
       <div className="flex items-center gap-2">
+        <AccountControl />
         {projectTabId ? (
           <>
-            <div className="relative">
-              <label className="sr-only" htmlFor={`video-agent-provider-${projectTabId}`}>Project agent provider</label>
-              <select id={`video-agent-provider-${projectTabId}`} data-testid="video-studio-agent-provider-select" value={selectedProviderID} onChange={(event) => updateProvider(event.target.value)} className="h-8 appearance-none rounded-lg border border-slate-200 bg-slate-50 py-0 pl-3 pr-8 text-xs font-semibold text-slate-700 shadow-sm outline-none transition hover:border-violet-300 hover:bg-white focus:border-violet-500 focus:ring-2 focus:ring-violet-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-violet-700 dark:hover:bg-slate-800 dark:focus:border-violet-500 dark:focus:ring-violet-950" aria-label="Project agent provider">
-                {providerOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
-              </select>
-              <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
-            </div>
-            {selectedCredentialCopy && projectWorkspacePath ? <button type="button" onClick={() => setShowCredentialSetup(true)} className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-slate-50 text-slate-500 shadow-sm transition hover:border-violet-300 hover:bg-violet-50 hover:text-violet-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:border-violet-700 dark:hover:bg-violet-950/40 dark:hover:text-violet-300" aria-label={`Set up ${selectedCredentialCopy.noun}`} title={`Set up ${selectedCredentialCopy.noun}`}><KeyRound className="h-3.5 w-3.5" /></button> : null}
             <SecretSelectionDropdown
               selectedSecrets={selectedSecrets}
               onSecretToggle={(secretId) => updateSelectedSecrets(selectedSecrets.includes(secretId) ? selectedSecrets.filter((id) => id !== secretId) : [...selectedSecrets, secretId])}
@@ -318,7 +116,6 @@ function VideoStudioHeader({ children, projectTabId }: { children?: ReactNode; p
         </div>
       </div>
       {showSecretsManager ? <SecretsManagerModal onClose={() => setShowSecretsManager(false)} /> : null}
-      {showCredentialSetup && projectWorkspacePath && selectedProvider && selectedCredentialCopy ? <ProviderCredentialDialog provider={selectedProvider.provider as WorkflowCredentialProvider} copy={selectedCredentialCopy} workspacePath={projectWorkspacePath} onClose={() => setShowCredentialSetup(false)} /> : null}
     </header>
   )
 }
@@ -460,8 +257,12 @@ function MediaVideoPresentation({ presentation, workspacePath }: PresentationRen
   const [loading, setLoading] = useState(true)
   const [playbackError, setPlaybackError] = useState('')
   const relativePath = typeof presentation.payload.path === 'string' ? presentation.payload.path.replace(/^\/+/, '') : ''
+  const mediaURL = relativePath ? workspaceMediaURL(`${workspacePath}/${relativePath}`) : ''
+  // A presentation makes a clip visible in the production panel, but must not
+  // start media merely because React mounted it. Mounts happen on refresh and
+  // reload too, and surprising audible (or muted) playback is especially bad
+  // for a large production asset. Playback is always an explicit user action.
   if (!relativePath) return <div className="grid aspect-video place-items-center bg-slate-950 text-xs text-slate-400">Video path is unavailable.</div>
-  const mediaURL = workspaceMediaURL(`${workspacePath}/${relativePath}`)
   const retryPlayback = () => {
     setPlaybackError('')
     setLoading(true)
@@ -477,7 +278,7 @@ function MediaVideoPresentation({ presentation, workspacePath }: PresentationRen
         data-presentation-revision={presentation.revision}
         controls
         playsInline
-        preload="auto"
+        preload="metadata"
         className="h-full w-full bg-black object-contain"
         src={mediaURL}
         onLoadStart={() => { setLoading(true); setPlaybackError('') }}
@@ -529,14 +330,20 @@ function ProductionSection({ id, title, count, icon, children, forceOpenKey }: {
 
 function VideosSection({ project, videos }: { project: VideoProject; videos: VideoPresentation[] }) {
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const latestVideoKey = videos[0] ? `${videos[0].id}:${videos[0].revision}:${videos[0].updatedAt}` : ''
+  const previousLatestVideoKey = useRef(latestVideoKey)
   const selected = videos.find((video) => video.id === selectedId) || videos[0]
   useEffect(() => {
     if (videos.length === 0) setSelectedId(null)
-    else if (!videos.some((video) => video.id === selectedId)) setSelectedId(videos[0].id)
-  }, [selectedId, videos])
+    else if (previousLatestVideoKey.current !== latestVideoKey) {
+      previousLatestVideoKey.current = latestVideoKey
+      setSelectedId(videos[0].id)
+    } else if (!videos.some((video) => video.id === selectedId)) setSelectedId(videos[0].id)
+  }, [latestVideoKey, selectedId, videos])
   if (!selected) return null
 
   const mediaURL = workspaceMediaURL(`${project.workspacePath}/${selected.path.replace(/^\/+/, '')}`)
+  const isPreview = selected.verdict === 'preview'
   return (
     <ProductionSection id="videos" title="Videos" count={videos.length} icon={<Film className="h-3.5 w-3.5" />} forceOpenKey={videos.length}>
       <div data-testid="video-studio-videos-panel" data-video-count={videos.length}>
@@ -547,7 +354,11 @@ function VideosSection({ project, videos }: { project: VideoProject; videos: Vid
           <div className="min-w-0">
             <h3 className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{selected.title}</h3>
             <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] font-medium">
-              <span className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400"><CheckCircle2 className="h-3 w-3" /> QA {selected.verdict || 'passed'}</span>
+              {isPreview ? (
+                <span className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400"><Eye className="h-3 w-3" /> Preview · QA pending</span>
+              ) : (
+                <span className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400"><CheckCircle2 className="h-3 w-3" /> QA {selected.verdict || 'passed'}</span>
+              )}
               {videoStamp(selected.updatedAt).short ? <span data-testid="video-studio-video-timestamp" title={videoStamp(selected.updatedAt).full} className="text-slate-500 dark:text-slate-400">{videoStamp(selected.updatedAt).short}{selected.revision > 1 ? ` · rev ${selected.revision}` : ''}</span> : null}
             </p>
           </div>
@@ -574,13 +385,13 @@ function VideosSection({ project, videos }: { project: VideoProject; videos: Vid
 // the written artifacts approved between stages. These were three sibling tabs,
 // which hid the sequence and made Characters something you had to already know
 // to click.
-function ProductionPanel({ project, videos, characters, documents }: { project: VideoProject; videos: VideoPresentation[]; characters: CharacterPresentation[]; documents: DocumentPresentation[] }) {
+function ProductionPanel({ project, videos, characters, references, documents }: { project: VideoProject; videos: VideoPresentation[]; characters: CharacterPresentation[]; references: ReferencePresentation[]; documents: DocumentPresentation[] }) {
   const [isDraggingAssets, setIsDraggingAssets] = useState(false)
   const [uploadingAssets, setUploadingAssets] = useState(false)
   const [uploadMessage, setUploadMessage] = useState('')
   const uploadInputRef = useRef<HTMLInputElement>(null)
   const uploadDestination = `${project.workspacePath.replace(/\/$/, '')}/uploads`
-  const isEmpty = videos.length === 0 && characters.length === 0 && documents.length === 0
+  const isEmpty = videos.length === 0 && characters.length === 0 && references.length === 0 && documents.length === 0
   const panelRef = useRef<HTMLDivElement>(null)
 
   // Sections stack Videos / Characters / Documents in one scroll, so new
@@ -594,7 +405,7 @@ function ProductionPanel({ project, videos, characters, documents }: { project: 
   const knownCounts = useRef<ProductionCounts | null>(null)
   useEffect(() => {
     const previous = knownCounts.current
-    const current = { videos: videos.length, characters: characters.length, documents: documents.length }
+    const current = { videos: videos.length, characters: characters.length, references: references.length, documents: documents.length }
     knownCounts.current = current
     const grew = sectionThatGrew(previous, current)
     if (!grew) return
@@ -603,7 +414,7 @@ function ProductionPanel({ project, videos, characters, documents }: { project: 
     requestAnimationFrame(() => {
       panelRef.current?.querySelector(`[data-section-id="${grew}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     })
-  }, [videos.length, characters.length, documents.length])
+  }, [videos.length, characters.length, references.length, documents.length])
 
   const uploadAssets = async (files: File[]) => {
     if (files.length === 0 || uploadingAssets) return
@@ -650,7 +461,7 @@ function ProductionPanel({ project, videos, characters, documents }: { project: 
   )
 
   return (
-    <div ref={panelRef} data-testid="video-studio-production-panel" data-video-count={videos.length} data-character-count={characters.length} data-document-count={documents.length} className="min-h-0 flex-1 overflow-y-auto">
+    <div ref={panelRef} data-testid="video-studio-production-panel" data-video-count={videos.length} data-character-count={characters.length} data-reference-count={references.length} data-document-count={documents.length} className="min-h-0 flex-1 overflow-y-auto">
       <div className="p-4 pb-3">{uploadDropZone}</div>
       {isEmpty ? (
         <div className="px-8 pb-10 pt-4 text-center">
@@ -662,10 +473,37 @@ function ProductionPanel({ project, videos, characters, documents }: { project: 
         <>
           <VideosSection project={project} videos={videos} />
           <CharactersSection project={project} characters={characters} />
+          <ReferencesSection project={project} references={references} />
           <DocumentsSection documents={documents} />
         </>
       )}
     </div>
+  )
+}
+
+function ReferencesSection({ project, references }: { project: VideoProject; references: ReferencePresentation[] }) {
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const selected = references.find((reference) => reference.id === selectedId) || references[0]
+  useEffect(() => {
+    if (references.length === 0) setSelectedId(null)
+    else if (!references.some((reference) => reference.id === selectedId)) setSelectedId(references[0].id)
+  }, [selectedId, references])
+  if (!selected) return null
+  const imageURL = workspaceMediaURL(`${project.workspacePath}/${selected.path.replace(/^\/+/, '')}`)
+  return (
+    <ProductionSection id="references" title="References" count={references.length} icon={<FileImage className="h-3.5 w-3.5" />} forceOpenKey={references.length}>
+      <div data-testid="video-studio-references-panel" data-reference-count={references.length}>
+        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-100 dark:border-slate-800 dark:bg-slate-900">
+          <img src={imageURL} alt={`Reference image for ${selected.title}`} data-testid="video-studio-reference-image" className="max-h-[22rem] w-full bg-slate-950 object-contain" />
+        </div>
+        <div className="mt-3 flex items-start justify-between gap-3">
+          <div className="min-w-0"><h3 className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{selected.title}</h3><p className="mt-1 text-[10px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">{selected.role || 'visual reference'}</p></div>
+          <a href={imageURL} download className="shrink-0 rounded-lg border border-slate-200 px-2.5 py-1.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">Download</a>
+        </div>
+        {selected.note ? <p className="mt-3 rounded-xl bg-slate-100 p-3 text-xs leading-5 text-slate-600 dark:bg-slate-800 dark:text-slate-300">{selected.note}</p> : null}
+        {references.length > 1 ? <div className="mt-5 grid grid-cols-2 gap-2 border-t border-slate-200 pt-4 sm:grid-cols-3 dark:border-slate-800">{references.map((reference) => <button key={reference.id} type="button" data-testid="video-studio-reference-list-item" data-reference-id={reference.id} data-selected={reference.id === selected.id} onClick={() => setSelectedId(reference.id)} className={`overflow-hidden rounded-xl border text-left ${reference.id === selected.id ? 'border-violet-500/60 shadow-sm' : 'border-slate-200 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800'}`}><img src={workspaceMediaURL(`${project.workspacePath}/${reference.path.replace(/^\/+/, '')}`)} alt="" className="h-20 w-full bg-slate-950 object-cover" /><strong className="block truncate px-2 py-1.5 text-[11px] text-slate-800 dark:text-slate-200">{reference.title}</strong></button>)}</div> : null}
+      </div>
+    </ProductionSection>
   )
 }
 
@@ -781,12 +619,13 @@ function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: 
   const [panel, setPanel] = useState<WorkspacePanel>('production')
   const [videos, setVideos] = useState<VideoPresentation[]>([])
   const [characters, setCharacters] = useState<CharacterPresentation[]>([])
+  const [references, setReferences] = useState<ReferencePresentation[]>([])
   const [documents, setDocuments] = useState<DocumentPresentation[]>([])
   const [showVideoPlayer, setShowVideoPlayer] = useState(false)
   const [loadingProject, setLoadingProject] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [loadError, setLoadError] = useState('')
-  const videoCountRef = useRef(0)
+  const videoCountRef = useRef<number | null>(null)
 
   // Production panel width: draggable, and remembered per browser rather than
   // reset every visit. Read once on mount rather than on every render -- the
@@ -820,18 +659,20 @@ function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: 
   const refreshProject = useCallback(async (quiet = false) => {
     if (!quiet) setRefreshing(true)
     try {
-      // Loaded together so one refresh reflects the whole production. Only the
-      // video count auto-opens the player; a new character or document should
-      // not yank the user out of whatever they were reading.
-      const [nextVideos, nextCharacters, nextDocuments] = await Promise.all([
+      // Loaded together so one refresh reflects the whole production. A video
+      // that arrives after this project is already open can surface its player;
+      // the initial page load is a baseline, never a “new video” event.
+      const [nextVideos, nextCharacters, nextReferences, nextDocuments] = await Promise.all([
         loadVideoPresentations(project),
         loadCharacterPresentations(project),
+        loadReferencePresentations(project),
         loadDocumentPresentations(project),
       ])
-      if (nextVideos.length > videoCountRef.current) setShowVideoPlayer(true)
+      if (videoCountRef.current !== null && nextVideos.length > videoCountRef.current) setShowVideoPlayer(true)
       videoCountRef.current = nextVideos.length
       setVideos(nextVideos)
       setCharacters(nextCharacters)
+      setReferences(nextReferences)
       setDocuments(nextDocuments)
       setLoadError('')
     } catch (cause) {
@@ -853,37 +694,54 @@ function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: 
       await waitForChatStoreHydration()
       if (cancelled) return
       const chatStore = useChatStore.getState()
-      let projectTab = Object.values(chatStore.chatTabs).find((tab) =>
+      const existing = Object.values(chatStore.chatTabs).find((tab) =>
         tab.metadata?.agentProfileId === VIDEO_PROFILE_ID &&
-        tab.metadata?.agentProfileWorkspace === project.workspacePath
+        tab.metadata?.agentProfileProjectId === project.id
       )
-      if (projectTab && projectTab.metadata?.agentProfileVersion !== VIDEO_PROFILE_VERSION) {
-        chatStore.setTabMetadata(projectTab.tabId, { agentProfileVersion: VIDEO_PROFILE_VERSION })
-        projectTab = chatStore.getTab(projectTab.tabId)
-      }
-      if (!projectTab) {
-        const createdTabId = await chatStore.createChatTab(project.title, {
-          mode: 'multi-agent',
-          agentProfileId: VIDEO_PROFILE_ID,
-          agentProfileVersion: VIDEO_PROFILE_VERSION,
-          agentProfileWorkspace: project.workspacePath,
-          agentProfileProjectId: project.id,
-          agentProfileProjectTitle: project.title,
-          agentProfileWorkspaceDescription: project.description,
-        }, project.sessionId)
-        projectTab = chatStore.getTab(createdTabId)
-      }
+      const conversation = await agentApi.resolveAgentProfileConversation(
+        VIDEO_PROFILE_ID,
+        { conversation_key: project.id },
+        existing?.sessionId ?? project.sessionId,
+      )
+      const createdTabId = await chatStore.createChatTab(project.title, {
+        mode: 'multi-agent',
+        agentProfileId: VIDEO_PROFILE_ID,
+        agentProfileVersion: VIDEO_PROFILE_VERSION,
+        agentProfileWorkspace: project.workspacePath,
+        agentProfileProjectId: project.id,
+        agentProfileProjectTitle: project.title,
+        agentProfileWorkspaceDescription: project.description,
+        agentProfileChatContract: 'profile-v1',
+        agentProfileConversationKey: project.id,
+        agentProfileConversationId: conversation.conversation_id,
+      }, conversation.session_id)
+      const projectTab = chatStore.getTab(createdTabId)
       if (cancelled || !projectTab) return
-      const restoredTabId = await restoreSession(project.sessionId, {
+      const restoredTabId = await restoreSession(conversation.session_id, {
         title: project.title,
         source: 'video-project-open',
         skipConfigRestore: true,
+        workspacePath: project.workspacePath,
+        // A finished production's durable transcript is complete; the live
+        // event cache may contain only user prompts after a browser refresh.
+      })
+      if (cancelled) return
+      // The generic page restore can race with this surface and retain only
+      // the volatile event tail. Hydrate once more at the product boundary so
+      // an open Video Studio project always renders its durable assistant
+      // replies, while restoreSession keeps the live streaming status intact.
+      await hydrateTabEvents(conversation.session_id, {
+        workspacePath: project.workspacePath,
+        fallbackToChatHistory: true,
+        preferChatHistory: true,
       })
       if (cancelled) return
       chatStore.switchTab(restoredTabId)
       setTabId(restoredTabId)
     }
-    void prepare()
+    void prepare().catch((error) => {
+      if (!cancelled) setLoadError(error instanceof Error ? error.message : 'Could not open the project conversation.')
+    })
     return () => { cancelled = true }
   }, [project])
 
@@ -904,7 +762,7 @@ function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: 
   // instead of waiting up to 5s for the poll above. Reuses the SSE stream
   // useChatStore already keeps open for the chat transcript -- see
   // usePresentationEvents for why this does not open a second connection.
-  const presentationEvents = usePresentationEvents(project.sessionId, ['media.video', 'media.character', 'document.markdown'])
+  const presentationEvents = usePresentationEvents(project.sessionId, ['media.video', 'media.character', 'media.reference', 'document.markdown'])
   const handledPresentationEventCountRef = useRef(0)
   useEffect(() => {
     if (presentationEvents.length <= handledPresentationEventCountRef.current) return
@@ -935,7 +793,8 @@ function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: 
                 contentRenderer={VideoStudioConversation}
                 inputVariant="product"
                 fullTurnStreaming
-                showConversationUsage
+                hideRuntimeStatus
+                showNewChatAction
               />
             ) : <div className="grid h-full place-items-center text-xs text-slate-400"><Loader2 className="mr-2 inline h-4 w-4 animate-spin" />Connecting project agent…</div>}
           </div>
@@ -955,7 +814,7 @@ function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: 
           <div className="flex h-14 shrink-0 items-center justify-between border-b border-slate-200 px-3 dark:border-slate-800">
             <div className="flex h-full items-center">
               {(['production', 'files', 'workflow'] as WorkspacePanel[]).map((item) => {
-                const count = item === 'production' ? videos.length + characters.length + documents.length : 0
+                const count = item === 'production' ? videos.length + characters.length + references.length + documents.length : 0
                 return (
                   <button key={item} type="button" onClick={() => setPanel(item)} className={`h-full border-b-2 px-3 text-xs font-semibold capitalize ${panel === item ? 'border-violet-600 text-violet-700 dark:text-violet-300' : 'border-transparent text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'}`}>
                     {item}{count > 0 ? <span className="ml-1 rounded-md bg-violet-100 px-1.5 py-0.5 text-[9px] dark:bg-violet-950">{count}</span> : null}
@@ -979,7 +838,7 @@ function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: 
               <button type="button" onClick={() => void refreshProject()} disabled={refreshing} className="mt-2 inline-flex h-7 items-center rounded-lg bg-amber-600 px-2.5 text-[11px] font-semibold text-white hover:bg-amber-500 disabled:opacity-50">{refreshing ? 'Retrying…' : 'Retry'}</button>
             </div>
           ) : null}
-          {loadingProject ? <div className="grid h-full place-items-center text-xs text-slate-400"><Loader2 className="h-5 w-5 animate-spin" /></div> : panel === 'files' ? <FilesPanel project={project} /> : panel === 'workflow' ? <WorkflowPanel project={project} /> : <ProductionPanel project={project} videos={videos} characters={characters} documents={documents} />}
+          {loadingProject ? <div className="grid h-full place-items-center text-xs text-slate-400"><Loader2 className="h-5 w-5 animate-spin" /></div> : panel === 'files' ? <FilesPanel project={project} /> : panel === 'workflow' ? <WorkflowPanel project={project} /> : <ProductionPanel project={project} videos={videos} characters={characters} references={references} documents={documents} />}
         </aside>
       </div>
       {showVideoPlayer && videos.length > 0 ? (

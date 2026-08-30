@@ -181,6 +181,13 @@ func (api *StreamingAPI) persistChatConversationToPathWithTerminalSession(sessio
 	if convPath == "" {
 		convPath = chatHistoryConversationPath(userID, sessionID, now)
 	}
+	// A rebuild that has fewer user turns than the record on disk is a partial
+	// one, and writing it destroys the fuller history (salesoutreach lost 242
+	// user turns to 2 this way after a restart).
+	if lossy, existingTurns, nextTurns := conversationOverwriteWouldLoseTurns(context.Background(), convPath, persistedHistory); lossy {
+		refuseConversationOverwrite(convPath, existingTurns, nextTurns)
+		return
+	}
 	if err := writeRawFileToWorkspace(context.Background(), convPath, string(convJSON)); err != nil {
 		logfWithContext(logCtx, "[CHAT_HISTORY] Failed to write %s: %v", convPath, err)
 		return
@@ -687,6 +694,17 @@ func mergeRestoredChatHistory(existing, incoming []llmtypes.MessageContent) []ll
 	if chatHistoryHasPrefix(incoming, existing) {
 		return incoming
 	}
+	// Rendered system prompts contain turn-local data such as the current time.
+	// Their text can differ while the human/assistant body is a true cumulative
+	// continuation. Compare that body independently and keep only the newest
+	// runtime prompt; otherwise every save appends the full conversation again.
+	if existing[0].Role == llmtypes.ChatMessageTypeSystem && incoming[0].Role == llmtypes.ChatMessageTypeSystem {
+		body := mergeRestoredChatHistory(existing[1:], incoming[1:])
+		merged := make([]llmtypes.MessageContent, 0, len(body)+1)
+		merged = append(merged, incoming[0])
+		merged = append(merged, body...)
+		return merged
+	}
 	maxOverlap := len(existing)
 	if len(incoming) < maxOverlap {
 		maxOverlap = len(incoming)
@@ -710,6 +728,38 @@ func mergeRestoredChatHistory(existing, incoming []llmtypes.MessageContent) []ll
 	merged = append(merged, existing...)
 	merged = append(merged, incoming...)
 	return merged
+}
+
+// mergeNativeContinuationChatHistory keeps the durable/UI transcript
+// cumulative when a coding provider owns conversational context through its
+// native continuation handle. In that mode the new Agent wrapper correctly
+// does not replay existing UI history, so GetHistory contains only the current
+// turn (and its freshly rendered system prompt). Persisting it directly would
+// silently replace every earlier turn.
+//
+// A system prompt is runtime identity, not a user-visible turn. Keep the newest
+// one and join the prior and current human/assistant exchanges around it.
+func mergeNativeContinuationChatHistory(existing, current []llmtypes.MessageContent) []llmtypes.MessageContent {
+	if len(existing) == 0 {
+		return current
+	}
+	if len(current) == 0 {
+		return existing
+	}
+	if chatHistoryHasPrefix(current, existing) {
+		return current
+	}
+	if existing[0].Role == llmtypes.ChatMessageTypeSystem && current[0].Role == llmtypes.ChatMessageTypeSystem {
+		// Native providers may return either only the new exchange or their
+		// cumulative exchange history. Compare the conversational body without
+		// the regenerated system prompt so both shapes merge without duplicates.
+		body := mergeRestoredChatHistory(existing[1:], current[1:])
+		merged := make([]llmtypes.MessageContent, 0, len(body)+1)
+		merged = append(merged, current[0])
+		merged = append(merged, body...)
+		return merged
+	}
+	return mergeRestoredChatHistory(existing, current)
 }
 
 // boundedChatHistoryTail returns the newest messages that fit the supplied
@@ -816,6 +866,22 @@ func trimChatHistoryUIEvents(uiEvents []internalevents.Event) []internalevents.E
 
 // ListChatHistorySessions returns persisted session metadata for a user, newest first.
 func ListChatHistorySessions(userID string, limit, offset int, workspacePath string) ([]ChatHistorySession, error) {
+	return listChatHistorySessions(userID, limit, offset, workspacePath, "")
+}
+
+// ListChatHistorySessionsByKind returns a page from one visible history kind.
+// The kind filter must be applied before pagination: a busy schedule can write
+// many newer transcripts than an ordinary builder chat, and paging the mixed
+// list first made the Recent tab incorrectly appear empty.
+func ListChatHistorySessionsByKind(userID, kind string, limit, offset int, workspacePath string) ([]ChatHistorySession, error) {
+	kind = strings.ToLower(strings.TrimSpace(kind))
+	if kind != "" && kind != "chat" && kind != "schedule" && kind != "bot" {
+		return nil, fmt.Errorf("unsupported chat history kind %q", kind)
+	}
+	return listChatHistorySessions(userID, limit, offset, workspacePath, kind)
+}
+
+func listChatHistorySessions(userID string, limit, offset int, workspacePath, kind string) ([]ChatHistorySession, error) {
 	if userID == "" {
 		userID = "default"
 	}
@@ -823,7 +889,7 @@ func ListChatHistorySessions(userID string, limit, offset int, workspacePath str
 	workspacePath = normalizeChatHistoryWorkspacePath(workspacePath)
 
 	if workspacePath != "" {
-		if sessions, ok, err := listWorkflowScopedChatHistorySessionsFromDisk(userID, root, workspacePath, limit, offset); ok || err != nil {
+		if sessions, ok, err := listWorkflowScopedChatHistorySessionsFromDisk(userID, root, workspacePath, limit, offset, kind); ok || err != nil {
 			return sessions, err
 		}
 	}
@@ -886,6 +952,15 @@ func ListChatHistorySessions(userID string, limit, offset int, workspacePath str
 		sessions = sessions[:limit]
 	}
 
+	if kind != "" {
+		filtered := sessions[:0]
+		for _, session := range sessions {
+			if chatHistorySessionMatchesKind(session.SessionID, kind) {
+				filtered = append(filtered, session)
+			}
+		}
+		sessions = filtered
+	}
 	return sessions, nil
 }
 
@@ -941,7 +1016,7 @@ func listChatHistorySessionsFromDisk(userID, workspaceRoot, workflowPath string,
 		return nil, true, err
 	}
 
-	scheduleIDBySessionID := multiAgentScheduleIDBySessionID(userID)
+	var scheduleIDBySessionID map[string]string
 	filesBySession := make(map[string]localChatHistoryFile)
 	for _, entry := range entries {
 		if !entry.IsDir() {
@@ -1059,7 +1134,7 @@ func chatHistorySessionIDFromWorkspacePath(root, convPath string) (string, bool)
 	return "", false
 }
 
-func listWorkflowScopedChatHistorySessionsFromDisk(userID, chatHistoryRootPath, workflowPath string, limit, offset int) ([]ChatHistorySession, bool, error) {
+func listWorkflowScopedChatHistorySessionsFromDisk(userID, chatHistoryRootPath, workflowPath string, limit, offset int, kind string) ([]ChatHistorySession, bool, error) {
 	all := make([]ChatHistorySession, 0)
 
 	// Workflow builder files are the most precise source for /resume inside a
@@ -1071,7 +1146,7 @@ func listWorkflowScopedChatHistorySessionsFromDisk(userID, chatHistoryRootPath, 
 	if limit > 0 {
 		readBudget = limit + offset
 	}
-	if builderSessions, ok := listWorkflowBuilderHistoryFromDisk(userID, workflowPath, readBudget); ok {
+	if builderSessions, ok := listWorkflowBuilderHistoryFromDisk(userID, workflowPath, readBudget, kind); ok {
 		all = append(all, builderSessions...)
 	}
 
@@ -1083,7 +1158,7 @@ func listWorkflowScopedChatHistorySessionsFromDisk(userID, chatHistoryRootPath, 
 // part — preview building): we stat every file (cheap) and dedupe to the latest
 // display row by filename+mtime WITHOUT reading, sort by mtime, then read only
 // the top readBudget. readBudget<=0 reads all (unlimited list).
-func listWorkflowBuilderHistoryFromDisk(userID, workflowPath string, readBudget int) ([]ChatHistorySession, bool) {
+func listWorkflowBuilderHistoryFromDisk(userID, workflowPath string, readBudget int, kind string) ([]ChatHistorySession, bool) {
 	workflowDir, ok := resolveLocalWorkflowDir(workflowPath)
 	if !ok {
 		return nil, false
@@ -1116,6 +1191,9 @@ func listWorkflowBuilderHistoryFromDisk(userID, workflowPath string, readBudget 
 			continue
 		}
 		sessionID := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(convPath), "session-"), "-conversation.json")
+		if !chatHistorySessionMatchesKind(sessionID, kind) {
+			continue
+		}
 		dedupeKey := workflowBuilderHistoryDisplayKey(sessionID, scheduleIDBySessionID)
 		workspaceConversationPath := workflowRelativeConversationPath(workflowPath, workflowDir, convPath)
 		if cur, ok := latest[dedupeKey]; !ok || info.ModTime().After(cur.modTime) {
@@ -1170,6 +1248,24 @@ func listWorkflowBuilderHistoryFromDisk(userID, workflowPath string, readBudget 
 		return paginateChatHistorySessions(sessions, readBudget, 0), true
 	}
 	return sessions, true
+}
+
+func chatHistorySessionMatchesKind(sessionID, kind string) bool {
+	if kind == "" {
+		return true
+	}
+	isSchedule := strings.HasPrefix(sessionID, "schedule-") || strings.HasPrefix(sessionID, "sched_")
+	isBot := strings.HasPrefix(sessionID, "bot-")
+	switch kind {
+	case "schedule":
+		return isSchedule
+	case "bot":
+		return isBot
+	case "chat":
+		return !isSchedule && !isBot
+	default:
+		return false
+	}
 }
 
 func readLocalChatHistoryIndex(indexPath string) (chatHistoryIndex, bool) {
@@ -1320,20 +1416,12 @@ func workflowScheduleIDBySessionID(workflowPath string) map[string]string {
 	return scheduleIDBySessionIDFromRuns(runs)
 }
 
-func multiAgentScheduleIDBySessionID(userID string) map[string]string {
-	runs, ok, err := readLocalMultiAgentScheduleRuns(userID)
-	if err != nil || !ok {
-		return nil
-	}
-	return scheduleIDBySessionIDFromRuns(runs)
-}
-
-func chatHistoryScheduleIDBySessionID(userID, workspacePath string) map[string]string {
+func chatHistoryScheduleIDBySessionID(_ string, workspacePath string) map[string]string {
 	workspacePath = normalizeChatHistoryWorkspacePath(workspacePath)
 	if workspacePath != "" {
 		return workflowScheduleIDBySessionID(workspacePath)
 	}
-	return multiAgentScheduleIDBySessionID(userID)
+	return nil
 }
 
 func scheduleIDBySessionIDFromRuns(runs []ScheduleRunEntry) map[string]string {
@@ -1539,17 +1627,19 @@ func parseLocalChatHistorySession(userID, workspaceRoot, workflowPath, fallbackS
 // behave like workshop sessions because the merged tool list is a strict
 // superset of all three pre-merge surfaces.
 func normalizeChatHistoryWorkshopMode(mode string) string {
-	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "workshop", "builder", "optimizer", "reporting":
-		return "workshop"
-	case "run":
-		return "run"
-	case "ask", "debugger", "runner":
-		return "run"
-	case "eval", "output":
-		return "workshop"
-	default:
+	trimmed := strings.ToLower(strings.TrimSpace(mode))
+	if trimmed == "" {
 		return ""
+	}
+	// Only "run" and "workshop" exist. Every retired name — builder,
+	// optimizer, reporting, eval, output, ask, debugger, runner — resolves
+	// to one of them rather than being enumerated, so a session persisted
+	// under any older name still loads.
+	switch trimmed {
+	case "run", "ask", "debugger", "runner":
+		return "run"
+	default:
+		return "workshop"
 	}
 }
 
@@ -2059,7 +2149,7 @@ func chatHistoryTerminalSnapshotFromUIEvent(sessionID string, runtime *ChatHisto
 		"claude_code_interactive_session",
 		"gemini_interactive_session",
 	)
-	// A tmux_session is no longer required: multi-agent / Chief-of-Staff chats
+	// A tmux_session is no longer required: multi-agent chats
 	// stream their coding-agent terminal over a non-tmux transport, so those
 	// terminal events carry no tmux_session. Reconstruct them anyway (keyed by
 	// session) so the last capture is restorable from ui_events on sessions
@@ -2227,8 +2317,6 @@ func defaultCodingAgentResumeFlag(provider string) string {
 		return "--resume"
 	case "codex-cli":
 		return "resume"
-	case "agy-cli":
-		return "--conversation"
 	case "pi-cli":
 		return "--session-id"
 	default:

@@ -2,10 +2,16 @@
 
 ## Problem
 
-Video Studio runs coding providers in `runtime.agent_tools.mode: hybrid`.
-Native provider tools do normal project work, while `runtime.api_transport.mode: native_shell` gives native Bash a session-scoped HTTP route for product APIs such as `show_video`.
+Video Studio and Dominion AI run coding providers in
+`runtime.agent_tools.mode: mcp_only` with `runtime.transport: auto`. The
+guarded MCP bridge performs project work and product APIs such as
+`show_video` through `execute_shell_command`.
+`runtime.api_transport.mode: native_shell` remains implemented but disabled;
+it is documented here as an experimental alternative, not the active route.
 
-The route is intentionally not supplied through AgentWorks' `execute_shell_command` bridge. The server instead creates a small per-turn environment:
+When `native_shell` is experimentally enabled, the route is intentionally not
+supplied through AgentWorks' `execute_shell_command` bridge. The server instead
+creates a small per-turn environment:
 
 - `MCP_API_URL`, `MCP_API_TOKEN`, and `MCP_SESSION_ID`
 - derived routes: `MCP_MCP`, `MCP_CUSTOM`, `MCP_VIRTUAL`
@@ -33,7 +39,25 @@ Both `mcpagent` and `multi-llm-provider-go` now admit:
 - any non-empty `SECRET_*` value;
 - exactly these non-empty session API keys: `MCP_API_URL`, `MCP_API_TOKEN`, `MCP_SESSION_ID`, `MCP_MCP`, `MCP_CUSTOM`, `MCP_VIRTUAL`, and `MCP_AUTH`.
 
-All other values, including `PATH` and unrelated server settings, remain blocked. This repair keeps `execute_shell_command` disabled for Video Studio.
+All other values, including `PATH` and unrelated server settings, remain
+blocked. The active Video Studio profile keeps `execute_shell_command` enabled;
+it is mutually exclusive only with an enabled `native_shell` transport.
+
+## Browser-product constraint: provider-native interaction is not web-chat interaction
+
+Native coding tools are not just file and shell operations. A provider can
+also open its own terminal UI, including a structured question, chooser, or
+approval flow. AgentWorks' browser chat cannot currently render or answer that
+provider-owned UI. The Claude Code `AskUserQuestion`-style chooser observed in
+Video Studio is the concrete failure: Claude waits in tmux for a selection,
+while the browser has no terminal completion event and shows `Working` forever.
+
+This is a functional reason that a browser product must remain `mcp_only` by
+default. Native/hybrid mode may be enabled only after its provider-native
+interactive surface is either bridged into the product UI or explicitly
+disabled with a verified provider deny-list. A prompt instruction saying
+"ask normally" is helpful but is not a safety mechanism; the transport must
+make the unsupported interaction impossible.
 
 ## Proposal: one policy owner
 

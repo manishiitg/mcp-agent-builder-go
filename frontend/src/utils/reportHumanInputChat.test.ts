@@ -59,36 +59,6 @@ describe('Pulse decision chat routing', () => {
     )?.tabId).toBe('chat')
   })
 
-  it('never routes a Chief-of-Staff Pulse question to a different product\'s tab', () => {
-    // Regression test: isInteractiveChiefOfStaffTab used to check only
-    // mode/isOrganizationAssistant/isViewOnly/isScheduledRun/isBotRun, never
-    // agentProfileId -- so a normal, fully interactive Video Studio project
-    // chat (also mode: 'multi-agent') could have been selected as the target
-    // for a Chief-of-Staff Pulse question. Fixed by consolidating onto the
-    // shared isInteractiveChiefOfStaffTab (utils/chiefOfStaff.ts), which does
-    // check profile identity.
-    const videoStudioTab = tab('video-studio', {
-      metadata: { mode: 'multi-agent', agentProfileId: 'video-studio', agentProfileWorkspace: 'Chats/Video Studio/projects/launch' },
-    })
-    const chiefOfStaffTab = tab('chief-of-staff', { metadata: { mode: 'multi-agent' } })
-
-    expect(selectReportDiscussionTab(
-      { videoStudioTab, chiefOfStaffTab },
-      { mode: 'multi-agent' },
-    )?.tabId).toBe('chief-of-staff')
-  })
-
-  it('matches the new explicit chief-of-staff profile id the same as the legacy no-profile shape', () => {
-    const explicit = tab('explicit', {
-      metadata: { mode: 'multi-agent', agentProfileId: 'chief-of-staff' },
-    })
-
-    expect(selectReportDiscussionTab(
-      { explicit },
-      { mode: 'multi-agent' },
-    )?.tabId).toBe('explicit')
-  })
-
   it('prefers a running interactive chat when more than one retained tab exists', () => {
     const idle = tab('idle', { createdAt: 20 })
     const running = tab('running', { isStreaming: true, createdAt: 10 })
@@ -150,5 +120,16 @@ describe('Pulse decision chat routing', () => {
     expect(message).toContain('call answer_human_input_request')
     expect(message).toContain('Do not mark the decision consumed yourself.')
     expect(message).toContain('Archive older entries [option_id=archive] — Nothing is lost.')
+  })
+
+  it('names the reviewer that created the decision', () => {
+    const input = {
+      id: 'ops-decision-one', workspace_path: 'Workflow/example', source: 'ops_review', status: 'pending',
+      priority: 'medium', question: 'Replace the fixed orchestrator?', options: [], allow_free_text: true,
+      created_at: '2026-08-19T08:22:00Z', updated_at: '2026-08-19T08:22:00Z',
+    } as ReportHumanInput
+
+    expect(buildReportHumanInputDelegatedActionMessage(input, 'Workflow/example'))
+      .toContain('pending Technical Review decision')
   })
 })

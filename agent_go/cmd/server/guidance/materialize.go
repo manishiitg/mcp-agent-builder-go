@@ -41,11 +41,11 @@ func referenceSkillSpecForMode(mode string) referenceSkillSpec {
 	if mode == "multi-agent" {
 		return referenceSkillSpec{
 			Name: "builder-reference",
-			Description: "Multi-agent chat reference docs — detailed contracts and rules to consult before specific actions: " +
-				"LLM/provider configuration via tools, delegation, skill management, memory, browser/media tools, " +
+			Description: "Product chat reference docs — detailed contracts and rules to consult before specific actions: " +
+				"LLM/provider configuration via tools, skill management, memory, browser/media tools, " +
 				"schedule and secret management, backup, debugging, and MCP bridge usage. Match this skill when you need deep " +
-				"multi-agent chat reference material, then read the matching file under references/.",
-			Intro: "This skill bundles multi-agent chat reference documentation. Match it when you need detailed rules, patterns, or contracts for any of the topics below — especially LLM/provider configuration, which is managed through dedicated tools and not by reading or editing `config/` files. Read the single matching file under `references/`. You don't need to read more than one unless the action spans multiple topics.",
+				"product chat reference material, then read the matching file under references/.",
+			Intro: "This skill bundles product chat reference documentation. Match it when you need detailed rules, patterns, or contracts for any of the topics below — especially LLM/provider configuration, which is managed through dedicated tools and not by reading or editing `config/` files. Read the single matching file under `references/`. You don't need to read more than one unless the action spans multiple topics.",
 		}
 	}
 
@@ -76,7 +76,7 @@ func MaterializeGuidanceSkill(mode string) *llmtypes.Skill {
 		Registry: allKinds,
 		Name:     "workflow-commands",
 		Description: "Workflow workshop slash-command flows — canonical procedural guidance for design-plan, improve-evaluation, " +
-			"review-artifact-drift, ops-review, strategy-auditor, define-success, pulse, pulse-setup, engineering-review, " +
+			"review-artifact-drift, ops-review, strategy-auditor, define-success, pulse, engineering-review, pulse-fixer, " +
 			"improve-knowledge, improve-learnings, improve-database, improve-report, goal-advisor, specialize-advisors, design-plan. Match this skill when the user " +
 			"invokes one of those slash commands or describes the same intent in chat, then read the matching file under " +
 			"references/.",
@@ -108,7 +108,7 @@ func MaterializeGuidanceSkill(mode string) *llmtypes.Skill {
 // MaterializeReferenceKindsAsSkills renders each named referenceKinds entry
 // as its OWN individually-named skill, for a product that wants to declare
 // reference material in profile.skills[] the way it would declare any other
-// product-owned skill -- e.g. Chief of Staff declaring "delegation",
+// product-owned skill -- e.g. a product declaring "backup-strategy" or
 // "secret-management" by name -- rather than relying on the mode-gated
 // "builder-reference" bundle AttachReferenceSurface produces. mode gates
 // eligibility exactly as it does there; requesting a kind not allowed in
@@ -176,6 +176,11 @@ type buildMegaSkillSpec struct {
 	Description string
 	Intro       string
 	Render      func(kind string, data tmplData) (string, error)
+
+	// Select overrides mode filtering when non-nil. Step execution selects by
+	// the tools the agent actually holds rather than by mode — see PLAT-124 and
+	// MaterializeStepExecutionReferenceSkill.
+	Select func(kind string, meta kindMeta) bool
 }
 
 // buildMegaSkill assembles one Anthropic-pattern skill from a kind registry:
@@ -189,6 +194,12 @@ func buildMegaSkill(spec buildMegaSkillSpec) *llmtypes.Skill {
 
 	allowed := make([]string, 0, len(kinds))
 	for _, k := range kinds {
+		if spec.Select != nil {
+			if spec.Select(k, spec.Registry[k]) {
+				allowed = append(allowed, k)
+			}
+			continue
+		}
 		if spec.Mode == "" || modeAllowedIn(k, spec.Mode, spec.Registry) {
 			allowed = append(allowed, k)
 		}

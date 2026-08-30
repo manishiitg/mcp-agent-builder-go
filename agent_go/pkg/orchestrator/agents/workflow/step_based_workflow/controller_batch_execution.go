@@ -203,7 +203,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) runBatchExecution(
 	startTime := time.Now()
 
 	// Determine base iteration folder
-	baseIterationFolder := hcpo.determineBaseIterationFolder(ctx)
+	baseIterationFolder := hcpo.determineBaseIterationFolder()
 
 	// Execute for each enabled group sequentially
 	for groupIndex, group := range enabledGroups {
@@ -259,7 +259,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) runBatchExecution(
 			result.FailedGroupNames = append(result.FailedGroupNames, group.Name)
 			continue
 		}
-		hcpo.markRunMetadataStarted(ctx, runFolder)
+		if err := hcpo.markRunMetadataStarted(ctx, runFolder); err != nil {
+			return nil, fmt.Errorf("bind run %s to executable plan revision: %w", runFolder, err)
+		}
 
 		// Use ExecutionManager to prepare and apply cleanup for this group
 		// Pass isFirstGroup=true only for the first group (groupIndex == 0)
@@ -385,7 +387,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) runBatchExecution(
 		}
 
 		// Run execution phase for this group
-		err = hcpo.runExecutionPhase(ctx, breakdownSteps, iteration, progress, groupSetup.StartFromStep, groupSetup.Context)
+		err = hcpo.runExecutionPhase(ctx, breakdownSteps, iteration, progress, groupSetup.StartFromStep, groupSetup.Context, nil)
 		persistenceErr := error(nil)
 		if cab, ok := hcpo.GetContextAwareBridge().(*orchestrator.ContextAwareEventBridge); ok {
 			flushCtx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
@@ -493,89 +495,10 @@ func (hcpo *StepBasedWorkflowOrchestrator) waitForTokenPersistence() error {
 	return cab.WaitForTokenPersistence(flushCtx)
 }
 
-// determineBaseIterationFolder determines the base iteration folder based on run mode
-func (hcpo *StepBasedWorkflowOrchestrator) determineBaseIterationFolder(ctx context.Context) string {
-	var baseIterationFolder string
-	var baseIterationNum int
-
-	if hcpo.selectedRunFolder != "" {
-		// User selected a specific folder - use it
-		baseIterationFolder = hcpo.selectedRunFolder
-		// Extract iteration number from folder name
-		if strings.Contains(baseIterationFolder, "/") {
-			// Nested folder: extract iteration-X from "iteration-X/group-Y" or "iteration-X/display-name"
-			if _, err := fmt.Sscanf(baseIterationFolder, "iteration-%d/", &baseIterationNum); err != nil {
-				re := regexp.MustCompile(`iteration-(\d+)`)
-				matches := re.FindStringSubmatch(baseIterationFolder)
-				if len(matches) > 1 {
-					fmt.Sscanf(matches[1], "%d", &baseIterationNum)
-				} else {
-					baseIterationNum = hcpo.getNextIterationNumber(ctx)
-				}
-			}
-			// Use parent folder (iteration-X) as base
-			parts := strings.Split(baseIterationFolder, "/")
-			baseIterationFolder = parts[0]
-		} else {
-			// Top-level folder: extract iteration number
-			if _, err := fmt.Sscanf(baseIterationFolder, "iteration-%d", &baseIterationNum); err != nil {
-				baseIterationNum = hcpo.getNextIterationNumber(ctx)
-			}
-		}
-		hcpo.GetLogger().Info(fmt.Sprintf("📁 Using selected run folder: %s (iteration %d)", baseIterationFolder, baseIterationNum))
-	} else if hcpo.selectedRunMode == "create_new_runs_always" {
-		// Create new iteration folder
-		baseIterationNum = hcpo.getNextIterationNumber(ctx)
-		baseIterationFolder = fmt.Sprintf("iteration-%d", baseIterationNum)
-		hcpo.GetLogger().Info(fmt.Sprintf("📁 Creating new iteration folder: %s", baseIterationFolder))
-	} else {
-		// use_same_run mode - use latest existing iteration or create new one
-		runsPath := fmt.Sprintf("%s/runs", hcpo.GetWorkspacePath())
-		existingFolders, err := hcpo.listRunFolders(ctx, runsPath)
-		if err == nil && len(existingFolders) > 0 {
-			maxIteration := hcpo.findMaxIterationNumber(existingFolders)
-			if maxIteration > 0 {
-				baseIterationNum = maxIteration
-				baseIterationFolder = fmt.Sprintf("iteration-%d", baseIterationNum)
-				hcpo.GetLogger().Info(fmt.Sprintf("📁 Using existing iteration folder: %s", baseIterationFolder))
-			} else {
-				baseIterationNum = 1
-				baseIterationFolder = fmt.Sprintf("iteration-%d", baseIterationNum)
-				hcpo.GetLogger().Info(fmt.Sprintf("📁 No existing iteration folders found, creating: %s", baseIterationFolder))
-			}
-		} else {
-			baseIterationNum = 1
-			baseIterationFolder = fmt.Sprintf("iteration-%d", baseIterationNum)
-			hcpo.GetLogger().Info(fmt.Sprintf("📁 No existing folders found, creating: %s", baseIterationFolder))
-		}
-	}
-
-	return baseIterationFolder
-}
-
-// findMaxIterationNumber finds the highest iteration number from folder list
-func (hcpo *StepBasedWorkflowOrchestrator) findMaxIterationNumber(folders []string) int {
-	maxIteration := 0
-	for _, folder := range folders {
-		var iterNum int
-		if _, err := fmt.Sscanf(folder, "iteration-%d", &iterNum); err == nil {
-			if iterNum > maxIteration {
-				maxIteration = iterNum
-			}
-		} else {
-			// Try nested format: iteration-X/group-Y
-			re := regexp.MustCompile(`iteration-(\d+)/`)
-			matches := re.FindStringSubmatch(folder)
-			if len(matches) > 1 {
-				if _, err := fmt.Sscanf(matches[1], "%d", &iterNum); err == nil {
-					if iterNum > maxIteration {
-						maxIteration = iterNum
-					}
-				}
-			}
-		}
-	}
-	return maxIteration
+// determineBaseIterationFolder returns the current live slot. Rotation, when
+// needed, happens before batch execution; callers never choose an iteration.
+func (hcpo *StepBasedWorkflowOrchestrator) determineBaseIterationFolder() string {
+	return currentWorkflowRunFolder
 }
 
 // sanitizeNameForFolder sanitizes a group name for use in folder paths
@@ -630,39 +553,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) createGroupRunFolder(baseIterationFol
 		folderName = groupName // fallback to raw name
 	}
 	return fmt.Sprintf("%s/%s", baseIterationFolder, folderName)
-}
-
-// getNextIterationNumber determines the next iteration number for batch execution
-func (hcpo *StepBasedWorkflowOrchestrator) getNextIterationNumber(ctx context.Context) int {
-	runsPath := fmt.Sprintf("%s/runs", hcpo.GetWorkspacePath())
-
-	// List existing run folders
-	existingFolders, err := hcpo.listRunFolders(ctx, runsPath)
-	if err != nil || len(existingFolders) == 0 {
-		return 1
-	}
-
-	// Find the highest iteration number
-	// Support both old format (iteration-X-group-Y) and new format (iteration-X/group-Y)
-	maxIteration := 0
-	for _, folder := range existingFolders {
-		var iterNum int
-		// Try to parse iteration-X (top-level folder)
-		if _, err := fmt.Sscanf(folder, "iteration-%d", &iterNum); err == nil {
-			if iterNum > maxIteration {
-				maxIteration = iterNum
-			}
-		} else {
-			// Try old format: iteration-X-group-Y (backward compatibility)
-			if _, err := fmt.Sscanf(folder, "iteration-%d-", &iterNum); err == nil {
-				if iterNum > maxIteration {
-					maxIteration = iterNum
-				}
-			}
-		}
-	}
-
-	return maxIteration + 1
 }
 
 // Cancellation remains a user-visible terminal event; routine batch/group

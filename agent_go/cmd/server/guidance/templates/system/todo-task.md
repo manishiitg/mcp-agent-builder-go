@@ -8,25 +8,30 @@ between inline `sub_agent_step` and shared `orphan_step_ref`, or
 debugging route behavior.
 
 For the broader plan-design framing (when to pick todo_task vs routing
-vs message_sequence vs regular), the `plan-design` skill is the parent
-reference.
+vs message_sequence vs regular), the `plan-design` skill is the authoritative
+parent reference. This file explains how to author an already-justified
+orchestrator; it does not relax that parent's eligibility rule.
 
 ## When to use todo_task
 
-A todo_task step is right when the step must **manage independently delegated
-tasks whose contexts should be isolated**, especially:
+A todo_task step is right only when its parent makes a **real runtime
+orchestration decision that the static plan cannot directly express**, such as:
 
 - The set of tasks is dynamic — discovered at runtime — and each must be
   executed
-- Progress tracking matters — the UI shows which tasks are done,
-  pending, failed, with retry counts
-- Tasks may need different sub-agents per route
-- Tasks should run in parallel or need independent retries and progress
+- Runtime evidence conditionally selects or fans out different workers
+- The parent coordinates material runtime parallelism or adaptive retries
+- An approval boundary or interim synthesis changes subsequent delegation
+
+**A fixed child set and order does not justify `todo_task`.** Different tools,
+separate learnings, progress visibility, and easier debugging are supporting
+properties after this eligibility gate, not sufficient reasons by themselves.
 
 **Don't use todo_task when:**
 
 - The flow is a single linear conversation — use `message_sequence`
 - Several known actions share one objective, context, and output/retry contract — keep them in one large `message_sequence`
+- Several known independent fixed actions can be declared as plan steps with dependencies — do that instead of adding an LLM parent
 - A list/dataset can be processed in one shared conversation — use a `foreach` item inside `message_sequence`
 - The next step depends on a binary or N-way decision — use `routing`
 - It's a single focused conversational task with one output — use
@@ -196,6 +201,10 @@ LLM orchestrator with a fresh start. The orchestrator scripted path is
 **read-only at runtime** — the builder writes main.py once at design
 time, the runtime only runs it. There is no fix loop and no save-back.
 Script failures surface so you can regenerate `main.py` manually.
+
+This is an optimization for an already-justified orchestrator whose delegation
+later stabilized. It is not permission to create a `todo_task` merely because a
+fixed child sequence can be scripted.
 
 For the full scripted-orchestrator authoring rules, call
 `read_skill(skills=[{"name":"builder-reference","path":"references/optimize-playbook.md"}])` and read the

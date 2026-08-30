@@ -10,6 +10,68 @@
 | Reported | 2026-08-14 |
 | Related | [PLAT-020](plat-020.md), [PLAT-035](plat-035.md), [PLAT-099](plat-099.md), [PLAT-102](plat-102.md), [PLAT-103](plat-103.md) |
 
+## Blocking live regression — Claude interim `tool_use` text ended the turn early
+
+The 2026-08-19 Sales Outreach chat proves the per-turn contract also fails in
+the opposite direction from the Social Media reproduction below. Instead of
+losing a real completion, mcpagent emitted completion too early.
+
+For AgentWorks session `c2b1bb4c-5a4d-4fd1-9709-ad7329c34a7b`, Claude Code
+emitted “Let me check what sequence the workflow actually defines.” as text on
+a message whose native `stop_reason` was `tool_use`. The retained Session's
+generic transcript reader returned that in-progress text, and mcpagent emitted
+`source=mcpagent_session` `unified_completion` at `11:15:47` IST. AgentWorks
+truthfully settled what it was given. Claude then ran three more tool rounds
+and committed its real `stop_reason=end_turn` answer at `11:16:10`; tmux showed
+that answer, but the already-settled Formatted turn could not receive it.
+
+This narrows the producer defect: Claude's retained completion path uses
+`readClaudeTranscriptMessages` (an in-progress tool-trail reader) instead of
+the existing `completedAssistantResponseFromTranscript` end-of-turn oracle.
+It is not a frontend spinner, polling, or deduplication defect.
+
+The mandatory P0 must therefore cover both terminal-signal directions:
+
+1. no completion may be emitted for assistant text attached to `tool_use`;
+2. exactly one matching completion must be emitted after `end_turn`;
+3. the final answer must be visible, busy must clear only then, and the same
+   Session must remain reusable.
+
+The Claude producer half is now repaired in `multi-llm-provider-go`: retained
+completion reads only a committed `stop_reason=end_turn`, with a regression
+test based on this live transcript. PLAT-105 remains P0 blocking until the
+restarted product path proves the canonical completion reaches AgentWorks once,
+settles busy at the correct boundary, and leaves the Session reusable; the
+older missing-completion direction is also still independently open.
+
+### 2026-08-21 Video Studio recurrence — ordinary interactive turn used a two-second competing clock
+
+Video Studio session `5e79aae3-d8f8-45d4-a29d-12258dba0d1e` reproduced the
+same terminal-signal violation outside the retained-turn reader. Claude Code
+successfully completed three `api-bridge` tool calls and its tmux pane displayed
+final-looking character-generation narration. The native JSONL transcript still
+contained only `stop_reason=tool_use`; no current-turn `end_turn` had committed.
+The ordinary interactive adapter treated pane readiness as completion, waited a
+fixed two-second transcript grace, raised `current turn has no completed
+end_turn response`, and discarded the persistent tmux session.
+
+This was not an MCP, shell, credential, or frontend failure. The retained-turn
+repair described above already used the correct completion oracle, but
+`ClaudeCodeInteractiveAdapter.GenerateContent` still had a second completion
+clock: `waitForMarkedResponse` followed by `claudeTranscriptCommitGrace`.
+
+The shared provider repair removes that fixed grace. Once a transcript exists,
+the adapter now waits for its authoritative non-empty `stop_reason=end_turn`
+until the owning turn context is cancelled. Pane readiness remains a transport
+hint and cannot terminate an active tool loop. Context cancellation is returned
+as cancellation rather than being rewritten as a transcript-protocol error.
+Regression coverage delays the final `end_turn` beyond the former two-second
+boundary and separately proves that turn cancellation still bounds the wait.
+
+Focused provider tests pass. This ticket remains open until the restarted Video
+Studio path proves the final answer is visible, exactly one canonical completion
+settles busy, and the same Claude session remains reusable.
+
 ## Blocking live regression — final response captured, turn never settled
 
 The 2026-08-15 Social Media backlog-audit chat provides a concrete production

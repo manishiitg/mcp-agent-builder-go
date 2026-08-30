@@ -33,6 +33,16 @@ type PhaseTokenPersister interface {
 	PersistPhaseTokenUsage(ctx context.Context, phaseTokenData *PhaseTokenData, modelTokenData *ModelTokenData) error
 }
 
+// BackgroundAgentTranscriptWriter persists one normalized event into a
+// background agent's durable structured transcript (PLAT-164). agentID is
+// the execution-owner id carried by orchevents.ParentExecutionIDKey — the
+// same id background_agent_log and the transcript's own file path are keyed
+// on, so a bridge-side append lands in the same file cmd/server created at
+// agent start and will mark terminal at agent completion.
+type BackgroundAgentTranscriptWriter interface {
+	AppendBackgroundAgentTranscriptEvent(ctx context.Context, sessionID, agentID string, evt orchevents.BackgroundAgentTranscriptEvent) error
+}
+
 // AgentSessionIDKey is re-exported from orchestrator/events for convenience.
 // Use events.AgentSessionIDKey to inject agent session ID into context.
 // When set, the ContextAwareEventBridge tags events with this correlation ID,
@@ -147,6 +157,10 @@ type ContextAwareEventBridge struct {
 	underlyingBridge mcpagent.AgentEventListener
 	tokenPersister   TokenPersister // Interface for persisting token usage
 	iterationFolder  string         // Current iteration folder for persistence
+	// transcriptWriter persists background-agent events into their durable
+	// PLAT-164 transcript. nil when this bridge is not backing a background
+	// execution's orchestrator (e.g. tests) — appends are then a no-op.
+	transcriptWriter BackgroundAgentTranscriptWriter
 	// executionID is one immutable ID minted for the lifetime of this bridge
 	// instance (PLAT-031), i.e. for the whole run — stamped onto every step
 	// cost event so the cost ledger keeps one execution's identity intact
@@ -185,6 +199,12 @@ type ContextAwareEventBridge struct {
 	tokenPersistWG  sync.WaitGroup
 	tokenPersistMu  sync.Mutex
 	tokenPersistErr []error
+
+	// Transcript persistence, mirroring the token-persistence fields above so
+	// a caller can independently drain either one.
+	transcriptPersistWG  sync.WaitGroup
+	transcriptPersistMu  sync.Mutex
+	transcriptPersistErr []error
 }
 
 const tokenPersistenceTimeout = 30 * time.Second
@@ -231,6 +251,49 @@ func (c *ContextAwareEventBridge) WaitForTokenPersistence(ctx context.Context) e
 	return fmt.Errorf("token persistence failed: %s", strings.Join(messages, "; "))
 }
 
+func (c *ContextAwareEventBridge) persistTranscriptAsync(label string, persist func(context.Context) error) {
+	c.transcriptPersistWG.Add(1)
+	go func() {
+		defer c.transcriptPersistWG.Done()
+		persistCtx, cancel := context.WithTimeout(context.Background(), tokenPersistenceTimeout)
+		defer cancel()
+		if err := persist(persistCtx); err != nil {
+			wrapped := fmt.Errorf("%s: %w", label, err)
+			c.transcriptPersistMu.Lock()
+			c.transcriptPersistErr = append(c.transcriptPersistErr, wrapped)
+			c.transcriptPersistMu.Unlock()
+			c.logger.Warn(fmt.Sprintf("Failed to persist background agent transcript event: %v", wrapped))
+		}
+	}()
+}
+
+// WaitForBackgroundTranscriptPersistence drains transcript-event writes,
+// mirroring WaitForTokenPersistence. Independent of it — a caller that only
+// cares about one need not wait on the other.
+func (c *ContextAwareEventBridge) WaitForBackgroundTranscriptPersistence(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		c.transcriptPersistWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("waiting for background transcript persistence: %w", ctx.Err())
+	case <-done:
+	}
+	c.transcriptPersistMu.Lock()
+	defer c.transcriptPersistMu.Unlock()
+	if len(c.transcriptPersistErr) == 0 {
+		return nil
+	}
+	messages := make([]string, 0, len(c.transcriptPersistErr))
+	for _, err := range c.transcriptPersistErr {
+		messages = append(messages, err.Error())
+	}
+	c.transcriptPersistErr = nil
+	return fmt.Errorf("background transcript persistence failed: %s", strings.Join(messages, "; "))
+}
+
 // Name implements the EventBridge interface
 func (c *ContextAwareEventBridge) Name() string {
 	return "context_aware_bridge"
@@ -265,6 +328,14 @@ func (c *ContextAwareEventBridge) SetTokenPersister(persister TokenPersister) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.tokenPersister = persister
+}
+
+// SetBackgroundAgentTranscriptWriter sets the writer HandleEvent appends
+// background-agent events to (PLAT-164).
+func (c *ContextAwareEventBridge) SetBackgroundAgentTranscriptWriter(writer BackgroundAgentTranscriptWriter) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.transcriptWriter = writer
 }
 
 // SetIterationFolder sets the current iteration folder for token persistence
@@ -791,6 +862,27 @@ func (c *ContextAwareEventBridge) HandleEvent(ctx context.Context, event *events
 			}
 		} else {
 			c.logger.Warn(fmt.Sprintf("⚠️ ContextAwareBridge: Event data %T does not have GetBaseEventData method", event.Data))
+		}
+	}
+
+	// PLAT-164: append this event to the background agent's durable
+	// transcript. Scope matches the "background_agent" execution_kind tagged
+	// into metadata above — an execution owner that is not a workflow step.
+	// Workflow steps already get a durable per-run record for free
+	// (runs/iteration-N/...); top-level chat/workflow-builder turns with no
+	// execution owner at all have their own conversation persistence.
+	if hasExecutionOwner && !strings.HasPrefix(executionOwnerID, "workflow-step:") {
+		c.mu.RLock()
+		writer := c.transcriptWriter
+		c.mu.RUnlock()
+		if writer != nil {
+			if transcriptEvent, ok := orchevents.NormalizeBackgroundTranscriptEvent(event); ok {
+				sessionID := event.SessionID
+				agentID := executionOwnerID
+				c.persistTranscriptAsync("background agent transcript", func(persistCtx context.Context) error {
+					return writer.AppendBackgroundAgentTranscriptEvent(persistCtx, sessionID, agentID, transcriptEvent)
+				})
+			}
 		}
 	}
 

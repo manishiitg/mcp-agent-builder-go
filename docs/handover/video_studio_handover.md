@@ -50,8 +50,10 @@ frontend. It does not start Electron or the retired standalone product.
   access, `show_video`, and secrets.
 - `show_video` requires a passing project-relative `quality-report.json` for
   the exact video presented.
-- Video Studio currently focuses on HyperFrames product explainers and
-  independent video QA. Cinematic/AI-footage production is not an active route.
+- Video Studio exposes short-form and long-form cinematic production plus
+  independent video QA. HyperFrames is an optional technique inside a
+  cinematic production for exact UI, titles, diagrams, overlays, transitions,
+  supplied-asset camera moves, and compositing; it is not a separate product.
 
 ## Secrets
 

@@ -108,10 +108,11 @@ func TestIsolatorOSDetection(t *testing.T) {
 		}
 		t.Logf("✓ macOS: Using sandbox-exec")
 	} else if runtime.GOOS == "linux" {
-		if cmd.Args[0] != "unshare" {
-			t.Errorf("Expected unshare on Linux, got: %s", cmd.Args[0])
+		backend := filepath.Base(cmd.Args[0])
+		if backend != "unshare" && backend != landlockRunnerName {
+			t.Errorf("Expected a supported Linux sandbox launcher, got: %s", cmd.Args[0])
 		}
-		t.Logf("✓ Linux: Using unshare")
+		t.Logf("✓ Linux: Using %s", backend)
 	}
 
 	// Verify safe environment is set
@@ -785,5 +786,39 @@ func BenchmarkIsolatorOverhead(b *testing.B) {
 			cleanup()
 		}
 		cancel()
+	}
+}
+
+// TestMountNamespaceCommandUsesUnprivilegedUserNamespace pins the exact
+// privilege shape executeIsolatedMountNamespace requests. A plain "unshare
+// -m" (mount namespace only) needs CAP_SYS_ADMIN in the CURRENT user
+// namespace, which an unprivileged service account never has -- it fails
+// with EPERM regardless of Landlock/AppArmor state, making the whole
+// fallback permanently unusable for every rootless deployment. Confirmed
+// live on the Dominion Hetzner deployment 2026-08-29: identical "-m" alone
+// failed with "Operation not permitted" as the unprivileged service user,
+// while "--mount --user --map-root-user" succeeded -- the standard
+// unprivileged-mount-namespace pattern rootless container runtimes use.
+// This test is portable (no linux build tag) so it catches a regression on
+// any platform, even though the command it inspects only ever runs on Linux.
+func TestMountNamespaceCommandUsesUnprivilegedUserNamespace(t *testing.T) {
+	isolator := &Isolator{WorkDir: t.TempDir()}
+	cmd, cleanup, err := isolator.executeIsolatedMountNamespace(context.Background(), "true", nil)
+	if err != nil {
+		t.Fatalf("executeIsolatedMountNamespace: %v", err)
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+
+	args := cmd.Args
+	if len(args) < 1 || !strings.HasSuffix(args[0], "unshare") {
+		t.Fatalf("args[0] = %q, want it to invoke unshare", args)
+	}
+	joined := strings.Join(args, " ")
+	for _, want := range []string{"--mount", "--user", "--map-root-user"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("unshare args %v missing %q -- without it this command needs CAP_SYS_ADMIN in the caller's own (unprivileged) user namespace and will always fail with EPERM on a rootless deployment", args, want)
+		}
 	}
 }

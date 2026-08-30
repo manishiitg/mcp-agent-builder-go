@@ -29,6 +29,12 @@ npx --yes hyperframes@latest doctor --json
 
 ## Stitching independently AI-generated clips
 
+For a multi-scene or long-form cinematic production, read
+`longform-cinematic-video` first and treat its sequence plan, continuity
+ledger, edit-decision list, and seam report as the governing assembly
+contract. This skill supplies the deterministic editing mechanics; it does
+not replace the production-level continuity decisions.
+
 **Before stitching anything, check that each clip going into the assembly
 was already shown to the user individually** (see `video-creation`'s
 generation checkpoints). Combining clips into a preview is not a substitute

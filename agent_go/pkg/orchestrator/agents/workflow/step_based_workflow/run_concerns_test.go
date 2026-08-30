@@ -38,6 +38,36 @@ func TestParseConcernLinesExtractsPayloadOnly(t *testing.T) {
 	}
 }
 
+// PLAT-211: a legacy review/advisor summary can render the marker as a Markdown
+// inline-code span. Live on HDFC-Personal-Accounts, six such findings vanished
+// silently -- no error, review still recorded completed -- because the bare
+// prefix check never matched a line starting with a backtick.
+func TestParseConcernLinesUnwrapsMarkdownCodeSpan(t *testing.T) {
+	summary := "Did the work.\n`CONCERNS: step description says 1% but soul.md says 1.5%`\nSTATUS: COMPLETED"
+	got := ParseConcernLines(summary)
+	if len(got) != 1 || got[0] != "step description says 1% but soul.md says 1.5%" {
+		t.Fatalf("backtick-wrapped marker should still be extracted, got %#v", got)
+	}
+	// Whitespace between the fence and the marker text is normal Markdown and
+	// must not defeat the unwrap.
+	if got := ParseConcernLines("` CONCERNS: extra space inside the span `"); len(got) != 1 || got[0] != "extra space inside the span" {
+		t.Fatalf("got %#v", got)
+	}
+	// A line that merely mentions a backtick, or opens a span it never
+	// closes, must not be misinterpreted -- only a genuine whole-line wrap.
+	if got := ParseConcernLines("CONCERNS: the `foo` field is stale"); len(got) != 1 || got[0] != "the `foo` field is stale" {
+		t.Fatalf("an internal backtick must not be treated as a wrapper, got %#v", got)
+	}
+	if got := ParseConcernLines("`CONCERNS: unterminated span"); len(got) != 0 {
+		t.Fatalf("an unterminated code span must not match the marker, got %#v", got)
+	}
+	// Two adjacent spans on one line ("`a` CONCERNS: `b`") are not a single
+	// whole-line wrap; leave them alone rather than guess which is real.
+	if got := ParseConcernLines("`context` CONCERNS: `detail`"); len(got) != 0 {
+		t.Fatalf("multiple spans on one line must not be unwrapped, got %#v", got)
+	}
+}
+
 // Magnitude is the interesting part of a recurring concern, so two reports that
 // differ only in a number must stay distinct rows.
 func TestConcernFingerprintKeepsDigitsButIgnoresFormatting(t *testing.T) {
@@ -87,7 +117,7 @@ func TestAdvisorConcernsRequireDurableRouting(t *testing.T) {
 	workspacePath := concernsWorkspace(t)
 	concern := "the current target mix cannot reach enough new accounts"
 
-	if _, err := RecordRunConcerns(ctx, workspacePath, "pulse-1", "", pulsemodules.StrategyAuditorID,
+	if _, err := RecordRunConcerns(ctx, workspacePath, "pulse-1", "", pulsemodules.LegacyStrategyAuditorID,
 		ConcernPhaseReview, "CONCERNS: "+concern); err == nil || !strings.Contains(err.Error(), "missing its PULSE_FINDING_JSON routing marker") {
 		t.Fatalf("bare strategy concern was accepted: %v", err)
 	}
@@ -96,11 +126,11 @@ func TestAdvisorConcernsRequireDurableRouting(t *testing.T) {
 		`PULSE_FINDING_JSON: {"module":"strategy_auditor","concern":"` + concern + `","issue_kind":"workflow_issue","recommended_route":"evidence_wait","next_check":"after three completed acquisition runs"}`,
 		"CONCERNS: " + concern,
 	}, "\n")
-	if _, err := RecordRunConcerns(ctx, workspacePath, "pulse-1", "", pulsemodules.StrategyAuditorID,
+	if _, err := RecordRunConcerns(ctx, workspacePath, "pulse-1", "", pulsemodules.LegacyStrategyAuditorID,
 		ConcernPhaseReview, evidenceWait); err != nil {
 		t.Fatalf("routed strategy concern was rejected: %v", err)
 	}
-	findings, err := LoadPulseFindingLifecycles(ctx, workspacePath, pulsemodules.StrategyAuditorID, 10)
+	findings, err := LoadPulseFindingLifecycles(ctx, workspacePath, pulsemodules.LegacyStrategyAuditorID, 10)
 	if err != nil || len(findings) != 1 || findings[0].Details == nil {
 		t.Fatalf("load routed strategy concern: findings=%+v err=%v", findings, err)
 	}
@@ -113,7 +143,7 @@ func TestAdvisorConcernsRequireDurableRouting(t *testing.T) {
 		`PULSE_FINDING_JSON: {"module":"goal_advisor","concern":"no material strategic gap","issue_kind":"workflow_issue","recommended_route":"none"}`,
 		"CONCERNS: no material strategic gap",
 	}, "\n")
-	if _, err := RecordRunConcerns(ctx, concernsWorkspace(t), "pulse-2", "", pulsemodules.GoalAdvisorID,
+	if _, err := RecordRunConcerns(ctx, concernsWorkspace(t), "pulse-2", "", pulsemodules.LegacyGoalAdvisorID,
 		ConcernPhaseReview, noneConcern); err == nil || !strings.Contains(err.Error(), "must not have been filed") && !strings.Contains(err.Error(), "omit the CONCERNS line") {
 		t.Fatalf("recommended_route=none was accepted as an active concern: %v", err)
 	}

@@ -393,9 +393,24 @@ func (api *StreamingAPI) buildActiveSessionInfoSummary(session *ActiveSessionInf
 	api.trackedWorkflowExecutionsMux.RLock()
 	if exec := api.runningWorkflowExecutionBySessionLocked(session.SessionID); exec != nil {
 		active := trackedExecutionToActive(exec)
-		enriched.PresetQueryID = active.PresetQueryID
-		enriched.PresetName = active.PresetName
-		enriched.WorkspacePath = active.WorkspacePath
+		// Enrichment must not clobber identity the session already resolved.
+		// A tracked execution is a narrower record than the session: a
+		// workflow-builder/background execution can legitimately carry no
+		// workspace path or preset, and overwriting unconditionally erased
+		// both from a running scheduled session (PLAT-131). The frontend
+		// resolves a session's workflow by preset_query_id or workspace_path,
+		// so erasing them made a live pill unable to switch workflows at all —
+		// it opened a tab under whichever workflow happened to be on screen.
+		// TriggeredBy below was already guarded this way; these three were not.
+		if active.PresetQueryID != "" {
+			enriched.PresetQueryID = active.PresetQueryID
+		}
+		if active.PresetName != "" {
+			enriched.PresetName = active.PresetName
+		}
+		if active.WorkspacePath != "" {
+			enriched.WorkspacePath = active.WorkspacePath
+		}
 		if active.TriggeredBy != "" {
 			enriched.TriggeredBy = active.TriggeredBy
 		}
@@ -422,9 +437,24 @@ func (api *StreamingAPI) buildActiveSessionInfoSummary(session *ActiveSessionInf
 		}
 	} else if exec := api.runningTrackedExecutionBySessionLocked(session.SessionID); exec != nil {
 		active := trackedExecutionToActive(exec)
-		enriched.PresetQueryID = active.PresetQueryID
-		enriched.PresetName = active.PresetName
-		enriched.WorkspacePath = active.WorkspacePath
+		// Enrichment must not clobber identity the session already resolved.
+		// A tracked execution is a narrower record than the session: a
+		// workflow-builder/background execution can legitimately carry no
+		// workspace path or preset, and overwriting unconditionally erased
+		// both from a running scheduled session (PLAT-131). The frontend
+		// resolves a session's workflow by preset_query_id or workspace_path,
+		// so erasing them made a live pill unable to switch workflows at all —
+		// it opened a tab under whichever workflow happened to be on screen.
+		// TriggeredBy below was already guarded this way; these three were not.
+		if active.PresetQueryID != "" {
+			enriched.PresetQueryID = active.PresetQueryID
+		}
+		if active.PresetName != "" {
+			enriched.PresetName = active.PresetName
+		}
+		if active.WorkspacePath != "" {
+			enriched.WorkspacePath = active.WorkspacePath
+		}
 		if active.TriggeredBy != "" {
 			enriched.TriggeredBy = active.TriggeredBy
 		}
@@ -468,6 +498,23 @@ func workflowNameFromWorkspacePath(workspacePath string) string {
 	}
 	parts := strings.Split(trimmed, "/")
 	return parts[len(parts)-1]
+}
+
+// workflowDisplayLabel returns the name a session should present to the user
+// for its workflow — the configured workflow.json label when one is known,
+// the raw workspace-folder name otherwise. A workflow's folder name (its
+// stable identity, e.g. "social-media") and its display label (e.g.
+// "twitter-automation") can differ; using the folder name as the label made
+// the same running session look like a different workflow wherever the UI
+// reads the label instead of the folder name (the Global Activity Monitor
+// pill, in particular).
+func workflowDisplayLabel(workspacePath string, manifest *WorkflowManifest) string {
+	if manifest != nil {
+		if label := strings.TrimSpace(manifest.Label); label != "" {
+			return label
+		}
+	}
+	return workflowNameFromWorkspacePath(workspacePath)
 }
 
 func (api *StreamingAPI) deriveSessionUserInputState(sessionID string) (bool, string, *time.Time, string) {

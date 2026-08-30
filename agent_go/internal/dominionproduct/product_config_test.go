@@ -24,17 +24,28 @@ func TestDominionManifestDeclaresProjectScopeAndNarrowAllowlist(t *testing.T) {
 	if manifest.Profile.Runtime.Provider != "claude-code" || manifest.Profile.Runtime.ModelID != "claude-sonnet-5" {
 		t.Fatalf("expected provider=claude-code model_id=claude-sonnet-5, got provider=%q model_id=%q", manifest.Profile.Runtime.Provider, manifest.Profile.Runtime.ModelID)
 	}
-	// Load-bearing: see Finance's own test/comment. Leaving transport unset
-	// lets a non-cursor-cli provider run in native/interactive mode, where
-	// tool_policy's allowlist does not apply at all.
-	if manifest.Profile.Runtime.Transport != "structured" {
-		t.Fatalf("dominion must declare runtime.transport: structured -- without it, a non-cursor-cli provider bypasses tool_policy entirely via its own native tools, got transport=%q", manifest.Profile.Runtime.Transport)
+	// Dominion shares Video Studio's persistent Claude session shape. Its
+	// mcp_only tool policy remains the containment boundary.
+	if manifest.Profile.Runtime.Transport != "auto" {
+		t.Fatalf("dominion must declare runtime.transport: auto for persistent Claude sessions, got transport=%q", manifest.Profile.Runtime.Transport)
+	}
+	if manifest.Profile.Runtime.Workspace.Root != "Chats" {
+		t.Fatalf("dominion profile-chat workspace root = %q, want Chats", manifest.Profile.Runtime.Workspace.Root)
+	}
+	if manifest.Profile.Runtime.Workspace.Mode != agentprofiles.WorkspaceModeFixed || manifest.Profile.Runtime.Conversation.Mode != agentprofiles.ConversationModeSingleton {
+		t.Fatalf("dominion must use one server-owned durable conversation: workspace=%+v conversation=%+v", manifest.Profile.Runtime.Workspace, manifest.Profile.Runtime.Conversation)
 	}
 	if !strings.EqualFold(manifest.Profile.Runtime.AgentTools.Mode, "mcp_only") {
 		t.Fatalf("dominion must declare agent_tools.mode: mcp_only explicitly, got %q", manifest.Profile.Runtime.AgentTools.Mode)
 	}
 	if len(manifest.Profile.Runtime.ProviderOptions) != 1 || manifest.Profile.Runtime.ProviderOptions[0].Provider != "claude-code" {
 		t.Fatalf("dominion must curate runtime.provider_options to exactly claude-code, got %+v", manifest.Profile.Runtime.ProviderOptions)
+	}
+	// Dominion has no legitimate desktop use case -- it must never silently
+	// fall back to an ambient `claude` CLI login, regardless of how the
+	// server happens to be configured.
+	if !manifest.Profile.Runtime.RequireProviderToken {
+		t.Fatal("dominion must declare runtime.require_provider_token: true")
 	}
 	if !manifest.Profile.ToolPolicy.IsAllowlist() {
 		t.Fatal("dominion must declare tool_policy.mode: allowlist -- an unrestricted chat over trading data is exactly the gap this profile exists to close")

@@ -83,10 +83,6 @@ export interface LLMConfiguration {
     vertex?: string
     kimi?: string
     pi_cli?: string
-    minimax?: string
-    minimax_coding_plan?: string
-    elevenlabs?: string
-    deepgram?: string
     pi_provider_keys?: Record<string, string>
     azure?: {
       endpoint: string
@@ -157,13 +153,6 @@ export interface AgentQueryRequest {
   // Conversation JSON selected from /resume or a previous chat panel. The backend
   // can use its runtime metadata for native coding-agent resume.
   restored_conversation_path?: string
-  // Image generation configuration
-  enable_image_generation?: boolean
-  image_gen_config?: {
-    provider: string
-    model_id: string
-    api_key?: string
-  }
   // Auto-notification flag: when true, this is a background agent completion notification,
   // not a user-initiated message. Backend treats it as a synthetic turn (doesn't block user input).
   is_auto_notification?: boolean
@@ -230,6 +219,23 @@ export interface AgentQueryResponse {
   provider?: string
 }
 
+// Minimal product-chat wire contract. Profile-owned model, prompt, tools,
+// skills and workspace configuration are deliberately absent.
+export interface AgentProfileChatRequest {
+  message: string
+  conversation_key?: string
+}
+
+export interface AgentProfileConversationRequest {
+  conversation_key?: string
+}
+
+export interface AgentProfileConversationResponse {
+  conversation_id: string
+  conversation_key: string
+  session_id: string
+}
+
 // LLM Defaults Configuration Response
 export interface LLMDefaultsResponse {
   primary_config: LLMConfiguration
@@ -242,10 +248,6 @@ export interface LLMDefaultsResponse {
   zai_config?: ExtendedLLMConfiguration
   kimi_config?: ExtendedLLMConfiguration
   pi_cli_config?: ExtendedLLMConfiguration
-  minimax_config?: ExtendedLLMConfiguration
-  minimax_coding_plan_config?: ExtendedLLMConfiguration
-  elevenlabs_config?: ExtendedLLMConfiguration
-  deepgram_config?: ExtendedLLMConfiguration
   available_models: {
     bedrock: string[]
     openrouter?: string[]
@@ -256,10 +258,6 @@ export interface LLMDefaultsResponse {
     'z-ai'?: string[]
     kimi?: string[]
     'pi-cli'?: string[]
-    minimax?: string[]
-    'minimax-coding-plan'?: string[]
-    elevenlabs?: string[]
-    deepgram?: string[]
   }
   provider_capabilities?: Partial<Record<LLMProvider, string[]>>
   supported_providers?: LLMProvider[]
@@ -367,10 +365,19 @@ export interface ReportHumanInputOption {
   description?: string
 }
 
+export interface ReportHumanInputApplyContract {
+  mode?: 'no_change' | 'direct_apply' | 'targeted_fixer' | 'external_wait' | string
+  issue_id?: string
+  approved_scope?: string
+  pre_run_checks?: string[]
+  post_run_proof?: string
+  failure_policy?: 'continue_unchanged' | 'block_run' | string
+}
+
 export interface ReportHumanInput {
   id: string
   workspace_path: string
-  source: 'pulse' | 'strategy_auditor' | 'goal_advisor' | 'chief_of_staff' | string
+  source: 'pulse' | 'technical_review' | 'strategic_review' | 'plan_drift_review' | 'engineering_review' | 'ops_review' | 'strategy_auditor' | 'goal_advisor' | string
   priority: 'low' | 'medium' | 'high' | string
   question: string
   context?: string
@@ -396,6 +403,7 @@ export interface ReportHumanInput {
 	claim_token?: string
 	claimed_at?: string
 	claim_expires_at?: string
+	apply_contract?: ReportHumanInputApplyContract
 }
 
 export interface ReportHumanInputsResponse {
@@ -447,6 +455,24 @@ export interface PulseRunMode {
   recorded_at: string
 }
 
+export interface PulseReviewFocus {
+  workspace_path: string
+  module: string
+  focus_key: string
+  last_pulse_run_id?: string
+  last_reviewed_at?: string
+  last_verdict?: string
+  last_selection_reason?: string
+  route_scope?: string
+  next_check_at?: string
+  next_check_reason?: string
+  updated_at: string
+  review_count?: number
+  route_review_count?: number
+  deferred_focuses?: string[]
+  issue_ids?: string[]
+}
+
 export interface PulseLoopClosureFinding {
   kind: 'answer_not_applied' | 'decision_waiting_on_user' | 'concern_keeps_recurring' | string
   severity: 'high' | 'medium' | string
@@ -474,6 +500,8 @@ export interface PulseModuleStateResponse {
   modules: PulseModuleState[]
   commands: PulseFinalCommandState[]
   gate_mode?: PulseRunMode | null
+  review_focus_history?: PulseReviewFocus[]
+  review_focus_selections?: PulseReviewFocus[]
   shadow_signal_observations?: PulseShadowSignalObservation[]
   shadow_signal_coverage?: {
     status: string
@@ -504,6 +532,7 @@ export interface PulseIntervention {
   kind?: 'fix_bundle' | 'strategy_experiment' | string
   guardrails?: string[]
   rollback_condition?: string
+  interference_domains?: string[]
   human_input_id?: string
   terminal_outcome?: string
   created_at?: string
@@ -571,6 +600,27 @@ export interface PulseContextResponse {
   error?: string
 }
 
+export interface EvalResultRecord {
+  run_folder: string
+  step_id: string
+  title?: string
+  description?: string
+  score: number
+  max_score: number
+  score_captured: boolean
+  reasoning: string
+  evidence: string
+  skipped: boolean
+  generated_at: string
+  historical?: boolean
+}
+
+export interface PulseEvalResultsResponse {
+  success: boolean
+  results: EvalResultRecord[]
+  error?: string
+}
+
 export interface PulseFindingVerification {
   check: string
   verdict: 'passed' | 'failed' | 'inconclusive' | string
@@ -581,7 +631,6 @@ export interface PulseFindingVerification {
 }
 
 export interface PulseFixFindingRef {
-  fingerprint: string
   finding_id: string
   disposition?: string
   summary?: string
@@ -658,7 +707,11 @@ export interface PulseIssue {
 export interface PulseFindingLifecycle {
   /** Compact user-facing issue. Remaining fields are lifecycle internals. */
   issue?: PulseIssue
-  fingerprint: string
+  /**
+   * `observation` is workflow evidence awaiting reviewer classification;
+   * `issue` has been accepted into Pulse's repair lifecycle.
+   */
+  kind?: 'issue' | 'observation'
   finding_id?: string
   module?: string
   step_id: string
@@ -1378,6 +1431,9 @@ export interface ChatHistoryMessage {
   role?: string;
   Parts?: ChatHistoryMessagePart[];
   parts?: ChatHistoryMessagePart[];
+  /** Stable original position supplied only by the bounded formatted-resume projection. */
+  resume_order?: number;
+  resume_source_message_count?: number;
 }
 
 export interface ChatHistoryConversation {
@@ -1394,6 +1450,7 @@ export interface ChatHistoryConversation {
     start_turn: number;
     total_turns: number;
   };
+  history_source_message_count?: number;
   updated_at?: string;
 }
 
@@ -1470,6 +1527,8 @@ export interface ChatHistorySession {
   message_count?: number;
   preview_messages?: ChatHistoryPreviewMessage[];
 }
+
+export type ChatHistorySessionKind = 'chat' | 'schedule' | 'bot'
 
 export interface ChatHistoryCleanupResult {
   deleted_count: number;
@@ -1610,8 +1669,17 @@ export interface CostDateAggregate extends CostAggregate {
   workflow_run_count?: number
 }
 
+// CostExecutionAggregate is one runtime execution's cost, with an optional
+// phase breakdown (PLAT-166): a workflow step's own execution-turn cost vs
+// its separate post-completion reflection-turn cost, when the ledger entries
+// making up this execution carried a phase. Absent for executions that never
+// distinguished a phase — the combined total above is unaffected either way.
+export interface CostExecutionAggregate extends CostAggregate {
+  by_phase?: Record<string, CostAggregate>
+}
+
 export interface CostScopeAggregate extends CostAggregate {
-  by_execution?: Record<string, CostAggregate>
+  by_execution?: Record<string, CostExecutionAggregate>
 }
 
 export interface CostSummary {
@@ -1662,8 +1730,6 @@ export interface PresetLLMConfig {
   builder_llm?: AgentLLMConfig
   maintenance_llm?: AgentLLMConfig
   pulse_llm?: AgentLLMConfig
-  chief_of_staff_llm?: AgentLLMConfig   // Optional scheduled Chief of Staff override
-
   // Feature toggles
   use_knowledgebase?: boolean           // nil/true = enabled (default), false = disabled
   enable_context_summarization?: boolean // nil/true = enabled (default), false = disabled
@@ -1777,7 +1843,6 @@ export interface CreateRunFolderResponse {
 // Execution options for frontend-controlled execution
 // Note: AgentLLMConfig is already defined above (line ~462)
 export interface ExecutionOptions {
-  run_mode: 'use_same_run' | 'create_new_runs_always';
   selected_run_folder?: string;
   execution_strategy: string;
   resume_from_step?: number;  // 1-based step number (for top-level steps)
@@ -1866,6 +1931,12 @@ export interface VariableGroupsResponse {
 // Execution Logs API types
 export interface ValidationLog {
   attempt: number;
+  // "pre_validation" records are automatic structural checks that can trigger
+  // a message-sequence repair turn; ordinary "validation" is the legacy step
+  // validation format.
+  kind?: 'validation' | 'pre_validation' | string;
+  phase?: string;
+  execution_attempt?: number;
   file_path: string;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   content: any; // Full JSON content of validation log
@@ -1891,6 +1962,19 @@ export interface ExecutionAttemptLog {
 export interface OrchestrationLog {
   type: string;
   timestamp: string;
+  source?: 'routing_evaluation' | string;
+  file_path?: string;
+  routing_evaluation?: {
+    routing_question?: string;
+    selected_route_id?: string;
+    routing_reasoning?: string;
+    route_selection?: {
+      source_kind?: string;
+      source_path?: string;
+      raw_value?: string;
+    };
+    route_next_steps?: Record<string, string>;
+  };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   orchestration_response?: any;
   selected_route_id?: string;
@@ -1959,7 +2043,11 @@ export interface StepExecutionLogs {
   type: string;
   title: string;
   description: string;
+  parent_step_id?: string;
+  parent_step_title?: string;
+  route_id?: string;
   success_criteria?: string;
+  execution_tier?: string; // Configured tier pin from step_config.json ("high"|"medium"|"low"); empty when the step uses adaptive tiering
   context_output?: string;  // Expected output filename
   learning_objective?: string;
   learnings_access?: string;
@@ -1967,6 +2055,14 @@ export interface StepExecutionLogs {
   knowledgebase_write_method?: string;
   knowledgebase_contribution?: string;
   message_sequence_status?: 'running' | 'completed' | 'failed';
+  message_sequence?: {
+    session_path: string;
+    status?: 'running' | 'completed' | 'failed' | string;
+    entries?: MessageSequenceLogEntry[];
+  };
+  // The message text authored in the workflow plan, distinct from the larger
+  // runtime prompt assembled for the agent.
+  planned_messages?: PlannedMessageSequenceItem[];
   output_content?: StepOutputContent;  // Actual output file content
   artifacts?: { file_name: string; file_path: string }[]; // Other output files
   validations: ValidationLog[];
@@ -1976,6 +2072,24 @@ export interface StepExecutionLogs {
   learnings?: LearningLog[];
   archived_logs?: ArchivedLogEntry[];  // Logs from previous runs
   archived_executions?: ArchivedExecutionEntry[];  // Archived execution outputs from previous routing
+}
+
+export interface MessageSequenceLogEntry {
+  entry_id: string;
+  item_id?: string;
+  item_type?: string;
+  source?: string;
+  status: 'running' | 'completed' | 'failed' | string;
+  summary?: string;
+  started_at?: string;
+  ended_at?: string;
+}
+
+export interface PlannedMessageSequenceItem {
+  id: string;
+  type?: string;
+  kind?: string;
+  message: string;
 }
 
 export interface ModelTokenUsage {
@@ -2798,6 +2912,10 @@ export interface ScheduledJob {
   workflow_label?: string
   trigger_payload?: Record<string, unknown>
   group_names?: string[]  // undefined/empty = all groups
+  // Deterministic route choices for a workflow schedule. The scheduler passes
+  // these to the canonical full-workflow run; they are useful schedule context
+  // in the history UI too.
+  route_selections?: Record<string, string>
   mode?: 'workshop' | 'multi-agent'
   messages?: string[]  // predefined messages for workflow workshop schedules
   workshop_mode?: 'run' | 'optimizer'  // workflow workshop schedule mode (default: run)
@@ -2812,14 +2930,28 @@ export interface ScheduledJob {
   last_run_at?: string
   next_run_at?: string
   last_session_id?: string
-  last_status?: 'success' | 'error' | 'running' | 'partial' | 'stopped' | 'interrupted'
+  last_status?: 'success' | 'error' | 'running' | 'partial' | 'stopped' | 'interrupted' | 'waiting_for_capacity' | 'waiting_for_workflow'
   last_error?: string
   last_duration_ms?: number
   run_count: number
   consecutive_failures: number
+  execution_mode?: 'close_only'
+  collision_policy?: 'skip' | 'queue_latest' | 'retry' | 'coalesce'
+  max_start_delay_minutes?: number
+  after_schedule_id?: string
+  after_terminal_status?: 'completed' | 'any_terminal'
+  after_delay_minutes?: number
+  dependency_deadline?: string
+  waiting_since?: string
+  waiting_until?: string
+  waiting_reason?: string
+  queued_occurrences?: number
   missed_run_count?: number
   latest_missed_run_at?: string
   missed_run_reason?: string
+  // Pulse schedules synthesize their run-specific messages from current
+  // evidence; they intentionally do not persist ordinary messages[].
+  pulse_review_only?: boolean
   created_at?: string
   updated_at?: string
   built_in?: boolean
@@ -2839,11 +2971,19 @@ export interface CreateScheduledJobRequest {
   workshop_mode?: 'run' | 'optimizer'
   query?: string
   resume_previous?: boolean
+  execution_mode?: 'close_only'
+  collision_policy?: 'skip' | 'queue_latest' | 'retry' | 'coalesce'
+  max_start_delay_minutes?: number
+  after_schedule_id?: string
+  after_terminal_status?: 'completed' | 'any_terminal'
+  after_delay_minutes?: number
+  dependency_deadline?: string
   schedule_type?: 'cron' | 'calendar'
   calendar_items?: CalendarScheduleItem[]
   cron_expression?: string
   timezone?: string
   enabled?: boolean
+  pulse_review_only?: boolean
 }
 
 export interface UpdateScheduledJobRequest {
@@ -2857,6 +2997,13 @@ export interface UpdateScheduledJobRequest {
   workshop_mode?: 'run' | 'optimizer'
   query?: string
   resume_previous?: boolean
+  execution_mode?: 'close_only' | ''
+  collision_policy?: 'skip' | 'queue_latest' | 'retry' | 'coalesce'
+  max_start_delay_minutes?: number
+  after_schedule_id?: string
+  after_terminal_status?: 'completed' | 'any_terminal'
+  after_delay_minutes?: number
+  dependency_deadline?: string
   schedule_type?: 'cron' | 'calendar'
   calendar_items?: CalendarScheduleItem[]
   cron_expression?: string
@@ -2883,9 +3030,11 @@ export interface ListScheduledJobsResponse {
 export interface ScheduledJobRun {
   id: string
   job_id: string
+  trigger_source?: 'manual' | 'cron' | 'calendar' | string
+  scheduled_for?: string
   run_folder?: string
   session_id?: string
-  status: 'running' | 'success' | 'error'
+  status: 'running' | 'success' | 'error' | 'failed' | 'partial' | 'stopped' | 'interrupted' | 'waiting_for_capacity' | 'waiting_for_workflow'
   error?: string
   duration_ms?: number
   group_names?: string[]
@@ -2921,12 +3070,33 @@ export interface WorkflowManifest {
   created_at?: string
   updated_at?: string
   run_retention_count?: number
-  post_run_monitor?: boolean
   pulse?: WorkflowPulseConfig
   backup?: WorkflowBackupConfig
+  folder_access?: WorkflowFolderGrant[]
+  folder_access_requests?: WorkflowFolderAccessRequest[]
+}
+
+export interface WorkflowFolderGrant {
+  id: string
+  alias: string
+  path: string
+  access: 'read_only' | 'read_write'
+  reason?: string
+  created_at?: string
+  updated_at?: string
+}
+
+export interface WorkflowFolderAccessRequest {
+  id: string
+  alias: string
+  requested_path?: string
+  access: 'read_only' | 'read_write'
+  reason: string
+  requested_at: string
 }
 
 export interface WorkflowPulseConfig {
+  enabled?: boolean
   advisor_specialization?: WorkflowAdvisorSpecialization
 }
 
@@ -2963,7 +3133,6 @@ export interface WorkflowNotificationConfig {
 }
 
 export interface WorkflowExecutionDefaults {
-  always_use_same_run: boolean
   // Global step overrides (replaces step_override.json)
   disable_learning?: boolean
   disable_parallel_tool_execution?: boolean
@@ -2992,6 +3161,7 @@ export interface WorkflowScheduleEntry {
   workshop_mode?: 'run' | 'optimizer' | string
   query?: string
   resume_previous?: boolean
+  pulse_review_only?: boolean
 }
 
 export interface DiscoveredWorkflow {
@@ -3028,7 +3198,7 @@ export interface UpdateWorkflowManifestRequest {
   schedules?: WorkflowScheduleEntry[]
   workshop_mode?: string // Standalone patch — avoids zeroing out other execution_defaults fields
   run_retention_count?: number
-  post_run_monitor?: boolean
+  pulse_enabled?: boolean
   run_notification_instructions?: string
   pulse_notification_instructions?: string
   run_notification_channels?: string[]
@@ -3038,6 +3208,8 @@ export interface UpdateWorkflowManifestRequest {
   run_notification_recipients?: string[]
   pulse_notification_recipients?: string[]
   notification_instructions?: string
+  folder_access?: WorkflowFolderGrant[]
+  folder_access_requests?: WorkflowFolderAccessRequest[]
 }
 
 export interface DuplicateWorkflowManifestRequest {

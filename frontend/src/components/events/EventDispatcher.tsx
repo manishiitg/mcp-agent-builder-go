@@ -491,8 +491,13 @@ export const EventDispatcher: React.FC<EventDispatcherProps> = React.memo(({
     return <CompactWrapper compact={compact}><StatusLineEventDisplay event={data} compact={compact} /></CompactWrapper>
   }
   if (event.type === 'conversation_resumed') {
-    const agentEvent = event.data as { data?: { previous_event_count?: number } } | undefined
+    const agentEvent = event.data as { data?: { previous_event_count?: number; has_more_history?: boolean } } | undefined
     const count = agentEvent?.data?.previous_event_count ?? 0
+    // A restored session is not necessarily truncated. Showing this divider
+    // when every saved conversational page is already present falsely suggests
+    // that older messages are available. The transcript-level pager is shown
+    // only when the durable cursor says there is another page to fetch.
+    if (agentEvent?.data?.has_more_history !== true) return null
     return (
       <div className={`flex items-center gap-2 ${compact ? 'py-1' : 'py-2'} ${compact ? 'text-[10px]' : 'text-xs'} text-gray-400 dark:text-gray-500`}>
         <div className="flex-1 border-t border-gray-200 dark:border-gray-700" />

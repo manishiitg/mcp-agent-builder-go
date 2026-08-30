@@ -305,7 +305,9 @@ export const WorkflowChatTabs: React.FC<WorkflowChatTabsProps> = ({ onNewChat, e
           ))}
         </div>
 
-        {/* New Chat sits right next to the tabs (browser-style) */}
+        {/* This starts a fresh conversation. The active tab is the
+            conversation workspace; it is deliberately not another "Chat"
+            label competing with the recent-conversation selector below. */}
         {onNewChat && (
           <button
             type="button"
@@ -317,7 +319,7 @@ export const WorkflowChatTabs: React.FC<WorkflowChatTabsProps> = ({ onNewChat, e
             title="Start a new automation chat"
           >
             <Plus className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">New Chat</span>
+            <span className="hidden sm:inline">New chat</span>
           </button>
         )}
 

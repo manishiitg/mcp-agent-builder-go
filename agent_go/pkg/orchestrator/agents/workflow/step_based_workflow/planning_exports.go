@@ -237,9 +237,9 @@ func PhaseChatSystemPrompt(phaseId string, templateVars map[string]string) strin
 // This avoids importing database/scheduler packages in the workshop package.
 type SchedulerCallbacks struct {
 	ListSchedules          func(ctx context.Context, workspacePath string) (string, error)
-	CreateSchedule         func(ctx context.Context, workspacePath, name, cronExpr, timezone string, groupNames []string, routeSelections map[string]string, mode string, messages []string, directMessagesReason string, workshopMode string, resumePrevious *bool, pulseReviewOnly bool) (string, error)
+	CreateSchedule         func(ctx context.Context, workspacePath, name, cronExpr, timezone string, groupNames []string, routeSelections map[string]string, mode string, messages []string, directMessagesReason string, workshopMode string, resumePrevious *bool, pulseReviewOnly bool, policy ScheduleRuntimePolicy) (string, error)
 	CreateCalendarSchedule func(ctx context.Context, workspacePath, name, timezone string, groupNames []string, calendarItemsJSON string, mode string, messages []string, directMessagesReason string, workshopMode string) (string, error)
-	UpdateSchedule         func(ctx context.Context, jobID, name, cronExpr, timezone string, groupNames []string, setGroupNames bool, routeSelections map[string]string, setRouteSelections bool, enabled *bool, mode string, messages []string, setMessages bool, directMessagesReason *string, workshopMode string, resumePrevious *bool, pulseReviewOnly *bool) (string, error)
+	UpdateSchedule         func(ctx context.Context, jobID, name, cronExpr, timezone string, groupNames []string, setGroupNames bool, routeSelections map[string]string, setRouteSelections bool, enabled *bool, mode string, messages []string, setMessages bool, directMessagesReason *string, workshopMode string, resumePrevious *bool, pulseReviewOnly *bool, policy *ScheduleRuntimePolicy) (string, error)
 	DeleteSchedule         func(ctx context.Context, jobID string) error
 	TriggerSchedule        func(ctx context.Context, jobID string) (string, error)
 	GetScheduleRuns        func(ctx context.Context, jobID string, limit int) (string, error)
@@ -249,6 +249,29 @@ type SchedulerCallbacks struct {
 
 	// NextContractUpgrade returns the next migration owed by the workflow.
 	NextContractUpgrade func(ctx context.Context, workspacePath string) (target string, label string, err error)
+}
+
+// ScheduleRuntimePolicy carries typed scheduling behavior that must be
+// enforced by the runtime rather than inferred from a natural-language
+// message or a conveniently spaced cron expression.
+type ScheduleRuntimePolicy struct {
+	ExecutionMode        string
+	CollisionPolicy      string
+	MaxStartDelayMinutes int
+	AfterScheduleID      string
+	AfterTerminalStatus  string
+	AfterDelayMinutes    int
+	DependencyDeadline   string
+	// Set* is used only by update_schedule. It distinguishes an omitted field
+	// from an explicit empty/zero value, so changing one policy does not erase
+	// the other three.
+	SetExecutionMode        bool
+	SetCollisionPolicy      bool
+	SetMaxStartDelayMinutes bool
+	SetAfterScheduleID      bool
+	SetAfterTerminalStatus  bool
+	SetAfterDelayMinutes    bool
+	SetDependencyDeadline   bool
 }
 
 // SkillCallbacks provides skill management operations via callbacks from server.go.
@@ -569,16 +592,16 @@ type WorkshopConfig struct {
 	ToolCategories       map[string]string
 	// BrowserRuntime stores configured intent (auto/cdp/headless + candidate
 	// ports). The executor resolves live CDP reachability at tool-call time.
-	BrowserRuntime       *browser.BrowserRuntimeConfig
-	LLMConfig            *orchestrator.LLMConfig
-	PresetPhaseLLM       *AgentLLMConfig
-	PresetMaintenanceLLM *AgentLLMConfig
-	UseKnowledgebase     bool
-	LockKnowledgebase    bool
-	LLMAllocationMode    string
-	TieredConfig         *TieredLLMConfig
-	Logger               loggerv2.Logger
-	EventBridge          mcpagent.AgentEventListener
+	BrowserRuntime    *browser.BrowserRuntimeConfig
+	LLMConfig         *orchestrator.LLMConfig
+	PresetPhaseLLM    *AgentLLMConfig
+	PresetPulseLLM    *AgentLLMConfig
+	UseKnowledgebase  bool
+	LockKnowledgebase bool
+	LLMAllocationMode string
+	TieredConfig      *TieredLLMConfig
+	Logger            loggerv2.Logger
+	EventBridge       mcpagent.AgentEventListener
 	// Session tracking — needed for MCP connection sharing and session cleanup
 	SessionID string
 	// Secrets for step execution (merged global + user secrets)
@@ -632,8 +655,8 @@ func NewWorkshopChatSession(ctx context.Context, cfg *WorkshopConfig) (*Workshop
 	if cfg.PresetPhaseLLM != nil {
 		logger.Info(fmt.Sprintf("[WORKSHOP] presetPhaseLLM=%s/%s", cfg.PresetPhaseLLM.Provider, cfg.PresetPhaseLLM.ModelID))
 	}
-	if cfg.PresetMaintenanceLLM != nil {
-		logger.Info(fmt.Sprintf("[WORKSHOP] presetMaintenanceLLM=%s/%s", cfg.PresetMaintenanceLLM.Provider, cfg.PresetMaintenanceLLM.ModelID))
+	if cfg.PresetPulseLLM != nil {
+		logger.Info(fmt.Sprintf("[WORKSHOP] presetPulseLLM=%s/%s", cfg.PresetPulseLLM.Provider, cfg.PresetPulseLLM.ModelID))
 	}
 	if cfg.TieredConfig != nil {
 		logger.Info(fmt.Sprintf("[WORKSHOP] tiered: T1=%s T2=%s T3=%s",
@@ -671,7 +694,7 @@ func NewWorkshopChatSession(ctx context.Context, cfg *WorkshopConfig) (*Workshop
 		cfg.CustomToolExecutors,
 		cfg.ToolCategories,
 		cfg.PresetPhaseLLM,
-		cfg.PresetMaintenanceLLM,
+		cfg.PresetPulseLLM,
 		cfg.UseKnowledgebase,
 		cfg.TieredConfig,
 	)
@@ -809,12 +832,12 @@ func formatTierAgentLLM(cfg *AgentLLMConfig) string {
 // UpdatePresetLLMConfigs refreshes the controller's preset LLM configs.
 // Called when reusing a cached workshop session to pick up any LLM config changes
 // the user made in the workflow editor since the session was first created.
-func (s *WorkshopChatSession) UpdatePresetLLMConfigs(phaseLLM *AgentLLMConfig, maintenanceLLM *AgentLLMConfig) {
+func (s *WorkshopChatSession) UpdatePresetLLMConfigs(phaseLLM *AgentLLMConfig, pulseLLM *AgentLLMConfig) {
 	s.controller.presetPhaseLLM = phaseLLM
-	s.controller.presetMaintenanceLLM = maintenanceLLM
+	s.controller.presetPulseLLM = pulseLLM
 	if s.config != nil {
 		s.config.PresetPhaseLLM = phaseLLM
-		s.config.PresetMaintenanceLLM = maintenanceLLM
+		s.config.PresetPulseLLM = pulseLLM
 	}
 }
 
@@ -1290,7 +1313,7 @@ func RegisterRunFullEvaluationTool(
 			"required": []string{"group_name"},
 		},
 		func(ctx context.Context, args map[string]interface{}) (string, error) {
-			iteration := "iteration-0"
+			iteration := currentWorkflowRunFolder
 			groupName, _ := args["group_name"].(string)
 			if groupName == "" {
 				return "group_name is required — evaluation needs a specific group's execution folder (e.g., 'saurabh', 'xspaces')", nil
@@ -1388,7 +1411,7 @@ func RegisterRunFullEvaluationTool(
 					cfg.CustomToolExecutors,
 					cfg.ToolCategories,
 					cfg.PresetPhaseLLM,
-					cfg.PresetMaintenanceLLM,
+					cfg.PresetPulseLLM,
 					cfg.UseKnowledgebase,
 					cfg.TieredConfig,
 				)
@@ -1946,8 +1969,8 @@ func RegisterRunFullWorkflowTool(
 							missingSteps = append(missingSteps, fmt.Sprintf("  - %s (id: %s, question: %q)", hiStep.GetTitle(), stepID, hiStep.Question))
 						}
 					}
-					if step.StepType() == StepTypeRouting {
-						if routingStep, ok := step.(*RoutingPlanStep); ok && routingStep.Description != "" {
+					if step.StepType() == StepTypeRouting || step.StepType() == StepTypeBranch {
+						if routingStep, ok := step.(routeSwitchStep); ok && routingStep.GetDescription() != "" {
 							legacyRoutingSteps = append(legacyRoutingSteps, fmt.Sprintf("  - %s (id: %s)", step.GetTitle(), step.GetID()))
 						}
 					}
@@ -1956,12 +1979,9 @@ func RegisterRunFullWorkflowTool(
 					return fmt.Sprintf("❌ Plan has human_input steps that require responses via human_inputs parameter. Missing:\n%s\n\nProvide human_inputs with a response for each step ID listed above.", strings.Join(missingSteps, "\n")), nil
 				}
 				if len(legacyRoutingSteps) > 0 {
-					return fmt.Sprintf("❌ Plan has routing steps with legacy descriptions. Routing is deterministic-only and routing steps no longer execute agents:\n%s\n\nMove each probe/judgment into a prior message_sequence step that writes route_selection.json, then clear the routing description and point the routing step at that file via route_source_file or context_dependencies.", strings.Join(legacyRoutingSteps, "\n")), nil
+					return fmt.Sprintf("❌ Plan has routing/branch steps with legacy descriptions. Both are deterministic-only and never execute agents:\n%s\n\nMove each probe/judgment into a prior message_sequence step that writes route_selection.json, then clear the description and point the step at that file via route_source_file or context_dependencies.", strings.Join(legacyRoutingSteps, "\n")), nil
 				}
 			}
-
-			// Iteration is always provided — reuse the folder (creates if doesn't exist)
-			runMode := "use_same_run"
 
 			execToken := workflowExecutionIDToken()
 			execID := fmt.Sprintf("workflow-full-%s", execToken)
@@ -2014,6 +2034,26 @@ func RegisterRunFullWorkflowTool(
 			} else if len(enabledGroupNames) > 0 {
 				workflowDisplayName = fmt.Sprintf("full-run [%s]", enabledGroupNames[0])
 			}
+			execMeta := map[string]string{
+				"workshop_mode":  "runner",
+				"execution_type": "full-workflow",
+			}
+			if disableEval {
+				execMeta["disable_eval"] = "true"
+			}
+			if iteration != "" {
+				execMeta["iteration"] = iteration
+			}
+			if len(enabledGroupNames) > 0 {
+				execMeta["group_name"] = enabledGroupNames[0]
+			}
+			if iteration != "" {
+				runFolder := iteration
+				if len(enabledGroupNames) > 0 {
+					runFolder = filepath.Join(iteration, enabledGroupNames[0])
+				}
+				execMeta["run_folder"] = runFolder
+			}
 			if session.executionNotifier != nil {
 				session.executionNotifier.OnExecutionStart(WorkshopExecutionStart{
 					ID:                execID,
@@ -2024,8 +2064,9 @@ func RegisterRunFullWorkflowTool(
 					// still registered so cancellation and HasRunningAgents()
 					// work, but declaring the kind keeps it out of the terminal
 					// rail instead of sitting there beside real agents.
-					Kind:   string(orchestrator_events.ExecutionKindFullRun),
-					Cancel: cancel,
+					Kind:     string(orchestrator_events.ExecutionKindFullRun),
+					Metadata: execMeta,
+					Cancel:   cancel,
 				})
 			}
 			execCtx = virtualtools.WithBackgroundAgentID(execCtx, execID)
@@ -2042,19 +2083,6 @@ func RegisterRunFullWorkflowTool(
 
 				var result string
 				var execErr error
-				execMeta := map[string]string{
-					"workshop_mode":  "runner",
-					"execution_type": "full-workflow",
-				}
-				if disableEval {
-					execMeta["disable_eval"] = "true"
-				}
-				if iteration != "" {
-					execMeta["iteration"] = iteration
-				}
-				if len(enabledGroupNames) > 0 {
-					execMeta["group_name"] = enabledGroupNames[0]
-				}
 				defer func() {
 					skipNotify := finalizeExecStatus(exec, execCtx, &result, &execErr)
 					if !skipNotify && session.executionNotifier != nil {
@@ -2090,7 +2118,7 @@ func RegisterRunFullWorkflowTool(
 					cfg.CustomToolExecutors,
 					cfg.ToolCategories,
 					cfg.PresetPhaseLLM,
-					cfg.PresetMaintenanceLLM,
+					cfg.PresetPulseLLM,
 					cfg.UseKnowledgebase,
 					cfg.TieredConfig,
 				)
@@ -2137,7 +2165,6 @@ func RegisterRunFullWorkflowTool(
 
 				// Set execution options
 				execOpts := &ExecutionOptions{
-					RunMode:           runMode,
 					SelectedRunFolder: iteration,
 					ExecutionStrategy: strategy,
 					EnabledGroupNames: enabledGroupNames,

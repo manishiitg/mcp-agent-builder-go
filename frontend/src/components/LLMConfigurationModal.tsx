@@ -1,16 +1,13 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { X, Settings, Lock, ShieldCheck } from 'lucide-react'
+import { X, Settings, Lock } from 'lucide-react'
 import { Button } from './ui/Button'
 import { TooltipProvider } from './ui/tooltip'
 import { useLLMStore, useAppStore } from '../stores'
 import type { LLMConfiguration, ExtendedLLMConfiguration, AgentLLMConfiguration, LLMProvider } from '../services/api-types'
 import { CodingAgentSection } from './llm/CodingAgentSection'
 import { APIProviderSection } from './llm/APIProviderSection'
-import { APIKeyProviderSection } from './APIKeyProviderSection'
 import { llmConfigService, type ModelMetadata, type ProviderManifestEntry } from '../services/llm-config-api'
 import { LibraryTab } from './llm/LibraryTab'
-import { CLISecuritySection } from './llm/CLISecuritySection'
-import { getProviderDisplayInfo } from '../utils/llmDisplay'
 import ModalPortal from './ui/ModalPortal'
 
 interface LLMConfigurationModalProps {
@@ -19,7 +16,7 @@ interface LLMConfigurationModalProps {
 }
 
 // Providers that use API keys in this modal (excludes local CLIs and hidden legacy chat providers)
-type APIKeyProviderType = 'bedrock' | 'openai' | 'vertex' | 'anthropic' | 'azure' | 'minimax' | 'elevenlabs' | 'deepgram'
+type APIKeyProviderType = 'bedrock' | 'openai' | 'vertex' | 'anthropic' | 'azure'
 
 type APIKeyStatusValue = 'idle' | 'testing' | 'valid' | 'invalid' | 'timeout'
 
@@ -27,53 +24,27 @@ type APIKeyStatus = Record<APIKeyProviderType, APIKeyStatusValue>
 
 type APIKeyError = Record<APIKeyProviderType, string | null>
 
-type AudioProviderTab = 'audio-gemini' | 'audio-minimax'
+// Pi CLI routes through several distinct model backends (Gemini, OpenRouter,
+// Z.AI, ...); each gets its own sidebar tab under a synthetic id rather than
+// exposing "Pi CLI" as one opaque option. The manifest still has exactly one
+// 'pi-cli' provider entry -- these ids exist only in the frontend tab list.
+type PiCliGroupTab = `pi-cli::${string}`
 
-type TabType = 'library' | 'cli-security' | LLMProvider | AudioProviderTab
+type TabType = 'library' | LLMProvider | PiCliGroupTab
+
+const piCliGroupTabId = (group: string): PiCliGroupTab => `pi-cli::${group}`
 
 const CHAT_CAPABILITIES = new Set(['chat', 'text'])
-const AUDIO_CAPABILITIES = new Set(['text_to_speech', 'speech_to_text', 'generate_music', 'audio_generation', 'audio_transcription', 'music_generation'])
-const HIDDEN_CHAT_PROVIDER_TABS = new Set<string>(['openrouter', 'z-ai', 'kimi', 'minimax', 'minimax-coding-plan'])
-const isMiniMaxAudioModel = (modelId: string) => /^(speech|music|audio|voice)[-_]/i.test(modelId)
-const API_KEY_PROVIDER_IDS = new Set<string>(['bedrock', 'openai', 'vertex', 'anthropic', 'azure', 'minimax', 'elevenlabs', 'deepgram'])
+const HIDDEN_CHAT_PROVIDER_TABS = new Set<string>([
+  'openrouter', 'z-ai', 'kimi', 'minimax', 'minimax-coding-plan', 'elevenlabs', 'deepgram'
+])
+const API_KEY_PROVIDER_IDS = new Set<string>(['bedrock', 'openai', 'vertex', 'anthropic', 'azure'])
 const CODING_AGENT_PROVIDER_ORDER = ['claude-code', 'codex-cli', 'cursor-cli', 'pi-cli']
 const CODING_AGENT_PROVIDER_RANK = new Map<string, number>(
   CODING_AGENT_PROVIDER_ORDER.map((provider, index) => [provider, index])
 )
 const codingAgentProviderRank = (provider: string) =>
   CODING_AGENT_PROVIDER_RANK.get(provider) ?? 999
-
-const FALLBACK_AUDIO_PROVIDER_ITEMS: Array<{
-  tab: LLMProvider | AudioProviderTab
-  provider: APIKeyProviderType
-  name: string
-  placeholder: string
-}> = [
-  {
-    tab: 'audio-gemini',
-    provider: 'vertex',
-    name: 'Gemini',
-    placeholder: 'Select a Gemini audio model',
-  },
-  {
-    tab: 'audio-minimax',
-    provider: 'minimax',
-    name: 'MiniMax',
-    placeholder: 'Select a MiniMax audio model',
-  },
-  {
-    tab: 'elevenlabs',
-    provider: 'elevenlabs',
-    name: 'ElevenLabs',
-    placeholder: 'Select an ElevenLabs media model',
-  },
-  {
-    tab: 'deepgram',
-    provider: 'deepgram',
-    name: 'Deepgram',
-    placeholder: 'Select a Deepgram media model',
-  },
-]
 
 export default function LLMConfigurationModal({ isOpen, onClose }: LLMConfigurationModalProps) {
   // Get current mode from app store
@@ -97,24 +68,15 @@ export default function LLMConfigurationModal({ isOpen, onClose }: LLMConfigurat
     vertexConfig,
     anthropicConfig,
     azureConfig,
-    minimaxConfig,
-    elevenlabsConfig,
-    deepgramConfig,
-    availableVertexModels,
-    availableMinimaxModels,
-    availableElevenLabsModels,
-    availableDeepgramModels,
     setBedrockConfig,
     setOpenaiConfig,
     setVertexConfig,
     setAnthropicConfig,
     setAzureConfig,
-    setMinimaxConfig,
-    setElevenlabsConfig,
-    setDeepgramConfig,
     testAPIKey,
     defaultsLoaded,
     loadDefaultsFromBackend,
+    getProviderDynamicModels,
     // Supported providers filter
     isProviderSupported,
     llmConfigLocked,
@@ -128,8 +90,6 @@ export default function LLMConfigurationModal({ isOpen, onClose }: LLMConfigurat
     lockedProviders.includes('all') || lockedProviders.includes(provider)
 
   const getProviderForTab = (tab: TabType): APIKeyProviderType | null => {
-    if (tab === 'audio-gemini') return 'vertex'
-    if (tab === 'audio-minimax') return 'minimax'
     if (tab === 'library') return null
     const entry = providerManifest.find(provider => provider.id === tab)
     if (entry?.integration_kind === 'coding_agent') return null
@@ -169,24 +129,38 @@ export default function LLMConfigurationModal({ isOpen, onClose }: LLMConfigurat
     [manifestProviderEntries]
   )
 
-  const audioProviderItems = useMemo(() => {
-    if (providerManifest.length === 0) {
-      return FALLBACK_AUDIO_PROVIDER_ITEMS.filter(item => isProviderSupported(item.provider))
-    }
-    const items = manifestProviderEntries
-      .filter(entry => API_KEY_PROVIDER_IDS.has(entry.id) && entryHasCapability(entry, AUDIO_CAPABILITIES))
-      .map(entry => ({
-        tab: entry.id === 'vertex' ? 'audio-gemini' as const : entry.id === 'minimax' ? 'audio-minimax' as const : entry.id as LLMProvider,
-        provider: entry.id as APIKeyProviderType,
-        name: entry.id === 'vertex' ? 'Gemini' : entry.display_name,
-        placeholder: entry.id === 'vertex'
-          ? 'Select a Gemini audio model'
-          : entry.id === 'minimax'
-            ? 'Select a MiniMax audio model'
-            : `Select a ${entry.display_name} media model`,
+  // Pi CLI is one manifest entry but routes through several model backends;
+  // fetch its group list once (backend already returns a deduped, ordered
+  // "groups" array) so the sidebar can show one tab per backend instead of a
+  // single opaque "Pi CLI" option.
+  const [piCliGroups, setPiCliGroups] = useState<string[]>([])
+  useEffect(() => {
+    if (!isOpen || !codingAgentProviderEntries.some(entry => entry.id === 'pi-cli')) return
+    let cancelled = false
+    getProviderDynamicModels('pi-cli', false).then(result => {
+      if (cancelled || !result?.groups?.length) return
+      setPiCliGroups(result.groups)
+    })
+    return () => { cancelled = true }
+  }, [isOpen, codingAgentProviderEntries, getProviderDynamicModels])
+
+  const codingAgentSidebarItems = useMemo(() => {
+    return codingAgentProviderEntries.flatMap(entry => {
+      if (entry.id !== 'pi-cli' || piCliGroups.length === 0) {
+        return [{ tabId: entry.id as TabType, displayName: entry.display_name, authDescription: entry.auth_description, entry, groupFilter: undefined as string | undefined }]
+      }
+      // Every group shares the pi-cli entry's auth_description ("Local CLI
+      // (Pi provider API key)") -- generic and correct for the underlying
+      // mechanism, but names "Pi" for a sidebar item that no longer does.
+      return piCliGroups.map(group => ({
+        tabId: piCliGroupTabId(group),
+        displayName: group,
+        authDescription: 'API key',
+        entry,
+        groupFilter: group,
       }))
-    return items.length > 0 ? items : FALLBACK_AUDIO_PROVIDER_ITEMS.filter(item => isProviderSupported(item.provider))
-  }, [entryHasCapability, isProviderSupported, manifestProviderEntries, providerManifest.length])
+    })
+  }, [codingAgentProviderEntries, piCliGroups])
 
   // Get mode-specific configs
   const modeConfig = getConfigForMode(currentMode)
@@ -220,12 +194,9 @@ export default function LLMConfigurationModal({ isOpen, onClose }: LLMConfigurat
     openai: { config: openaiConfig, setConfig: setOpenaiConfig },
     vertex: { config: vertexConfig, setConfig: setVertexConfig },
     anthropic: { config: anthropicConfig, setConfig: setAnthropicConfig },
-    azure: { config: azureConfig, setConfig: setAzureConfig },
-    minimax: { config: minimaxConfig, setConfig: setMinimaxConfig },
-    elevenlabs: { config: elevenlabsConfig, setConfig: setElevenlabsConfig },
-    deepgram: { config: deepgramConfig, setConfig: setDeepgramConfig }
-  }), [bedrockConfig, openaiConfig, vertexConfig, anthropicConfig, azureConfig, minimaxConfig, elevenlabsConfig, deepgramConfig,
-      setBedrockConfig, setOpenaiConfig, setVertexConfig, setAnthropicConfig, setAzureConfig, setMinimaxConfig, setElevenlabsConfig, setDeepgramConfig])
+    azure: { config: azureConfig, setConfig: setAzureConfig }
+  }), [bedrockConfig, openaiConfig, vertexConfig, anthropicConfig, azureConfig,
+      setBedrockConfig, setOpenaiConfig, setVertexConfig, setAnthropicConfig, setAzureConfig])
 
   // Metadata state - Driven purely by backend
   const [metadata, setMetadata] = useState<ModelMetadata[]>([])
@@ -292,10 +263,7 @@ export default function LLMConfigurationModal({ isOpen, onClose }: LLMConfigurat
     bedrock: 'idle',
     vertex: 'idle',
     anthropic: 'idle',
-    azure: 'idle',
-    minimax: 'idle',
-    elevenlabs: 'idle',
-    deepgram: 'idle'
+    azure: 'idle'
   })
 
   const [apiKeyErrors, setApiKeyErrors] = useState<APIKeyError>({
@@ -303,21 +271,21 @@ export default function LLMConfigurationModal({ isOpen, onClose }: LLMConfigurat
     bedrock: null,
     vertex: null,
     anthropic: null,
-    azure: null,
-    minimax: null,
-    elevenlabs: null,
-    deepgram: null
+    azure: null
   })
 
   const [activeTab, setActiveTab] = useState<TabType>('library')
 
   const openProvider = useCallback((provider: ProviderManifestEntry) => {
-    if (provider.integration_kind === 'audio_provider' && provider.id === 'minimax') {
-      setActiveTab('audio-minimax')
+    if (provider.id === 'pi-cli') {
+      // 'pi-cli' alone is no longer a real sidebar tab -- it's split into one
+      // tab per model backend. Land on the first (Gemini, when available).
+      const firstPiTab = codingAgentSidebarItems.find(item => item.entry.id === 'pi-cli')
+      setActiveTab(firstPiTab ? firstPiTab.tabId : piCliGroupTabId('Gemini'))
       return
     }
     setActiveTab(provider.id as TabType)
-  }, [])
+  }, [codingAgentSidebarItems])
 
   // Load defaults and manifest when modal opens
   useEffect(() => {
@@ -478,37 +446,24 @@ export default function LLMConfigurationModal({ isOpen, onClose }: LLMConfigurat
                   <Settings className="w-4 h-4" />
                 </button>
 
-                <button
-                  onClick={() => setActiveTab('cli-security')}
-                  className={`w-full flex items-center gap-3 p-3 rounded-md text-left transition-colors ${
-                    activeTab === 'cli-security' ? 'bg-primary text-primary-foreground' : 'hover:bg-secondary'
-                  }`}
-                >
-                  <div className="flex-1">
-                    <div className="font-medium">CLI Security</div>
-                    <div className="text-xs opacity-75">Filesystem access</div>
-                  </div>
-                  <ShieldCheck className="w-4 h-4" />
-                </button>
-
-                {codingAgentProviderEntries.length > 0 && (
+                {codingAgentSidebarItems.length > 0 && (
                   <>
                     <h3 className="text-sm font-medium text-muted-foreground mb-3 mt-6">Coding Agents</h3>
-                    {codingAgentProviderEntries.map((entry) => (
+                    {codingAgentSidebarItems.map((item) => (
                       <button
-                        key={entry.id}
-                        onClick={() => setActiveTab(entry.id as typeof activeTab)}
+                        key={item.tabId}
+                        onClick={() => setActiveTab(item.tabId)}
                         className={`w-full flex items-center gap-3 p-3 rounded-md text-left transition-colors ${
-                          activeTab === entry.id ? 'bg-primary text-primary-foreground' : 'hover:bg-secondary'
+                          activeTab === item.tabId ? 'bg-primary text-primary-foreground' : 'hover:bg-secondary'
                         }`}
                       >
                         <div className="flex-1">
-                          <div className="font-medium">{entry.display_name}</div>
+                          <div className="font-medium">{item.displayName}</div>
                           <div className="text-xs opacity-75">
-                            {isProviderLocked(entry.id) ? 'Configured by admin' : entry.auth_description}
+                            {isProviderLocked(item.entry.id) ? 'Configured by admin' : item.authDescription}
                           </div>
                         </div>
-                        {isProviderLocked(entry.id) && <Lock className="w-4 h-4 opacity-60" />}
+                        {isProviderLocked(item.entry.id) && <Lock className="w-4 h-4 opacity-60" />}
                       </button>
                     ))}
                   </>
@@ -537,33 +492,6 @@ export default function LLMConfigurationModal({ isOpen, onClose }: LLMConfigurat
                   </>
                 )}
 
-                {audioProviderItems.length > 0 && (
-                  <>
-                    <h3 className="text-sm font-medium text-muted-foreground mb-3 mt-6">Audio Providers</h3>
-                    {audioProviderItems.map((item) => (
-                      (() => {
-                        const providerInfo = getProviderDisplayInfo(item.provider)
-                        return (
-                    <button
-                      key={item.tab}
-                      onClick={() => setActiveTab(item.tab)}
-                      className={`w-full flex items-center gap-3 p-3 rounded-md text-left transition-colors ${
-                        activeTab === item.tab ? 'bg-primary text-primary-foreground' : 'hover:bg-secondary'
-                      }`}
-                    >
-                      <div className="flex-1">
-                        <div className="font-medium">{item.name}</div>
-                        <div className="text-xs opacity-75">
-                          {isProviderLocked(item.provider) ? 'Configured by admin' : providerInfo.authDescription}
-                        </div>
-                      </div>
-                      {isProviderLocked(item.provider) && <Lock className="w-4 h-4 opacity-60" />}
-                    </button>
-                        )
-                      })()
-                    ))}
-                  </>
-                )}
               </div>
             </div>
 
@@ -576,7 +504,6 @@ export default function LLMConfigurationModal({ isOpen, onClose }: LLMConfigurat
                   isProviderLocked={isProviderLocked}
                 />
               )}
-              {activeTab === 'cli-security' && <CLISecuritySection />}
 
               {/* Locked provider read-only banner */}
               {(() => {
@@ -618,102 +545,13 @@ export default function LLMConfigurationModal({ isOpen, onClose }: LLMConfigurat
                 )
               })()}
 
-              {activeTab === 'audio-gemini' && !isProviderLocked('vertex') && (
-                <APIKeyProviderSection
-                  provider="vertex"
-                  providerLabel="Gemini Audio"
-                  modelPlaceholder="Select a Gemini audio model"
-                  publishErrorLabel="Gemini"
-                  config={{
-                    ...vertexConfig,
-                    model_id: vertexConfig.model_id || 'gemini-3.1-flash-tts-preview'
-                  }}
-                  models={Array.from(new Set([
-                    'gemini-3.1-flash-tts-preview',
-                    ...(metadata?.filter(m => m.provider === 'vertex').map(m => m.model_id) || []),
-                    ...availableVertexModels
-                  ]))}
-                  onUpdate={(config) => setVertexConfig(config)}
-                  onTestAPIKey={(apiKey, modelId, options) => handleTestAPIKey('vertex', apiKey, modelId, options)}
-                  apiKeyStatus={apiKeyStatus.vertex}
-                  apiKeyError={apiKeyErrors.vertex}
-                  metadata={metadata}
-                  allowPublish={false}
-                />
-              )}
-
-              {activeTab === 'audio-minimax' && !isProviderLocked('minimax') && (
-                <APIKeyProviderSection
-                  provider="minimax"
-                  providerLabel="MiniMax Audio"
-                  modelPlaceholder="Select a MiniMax audio model"
-                  publishErrorLabel="MiniMax"
-                  config={{
-                    ...minimaxConfig,
-                    model_id: minimaxConfig.model_id || 'speech-2.8-turbo'
-                  }}
-                  models={Array.from(new Set([
-                    'speech-2.8-turbo',
-                    'speech-2.8-hd',
-                    'music-2.6',
-                    'music-2.6-free',
-                    ...(metadata?.filter(m => m.provider === 'minimax' && isMiniMaxAudioModel(m.model_id)).map(m => m.model_id) || []),
-                    ...availableMinimaxModels.filter(isMiniMaxAudioModel)
-                  ]))}
-                  onUpdate={(config) => setMinimaxConfig(config)}
-                  onTestAPIKey={(apiKey, modelId, options) => handleTestAPIKey('minimax', apiKey, modelId, options)}
-                  apiKeyStatus={apiKeyStatus.minimax}
-                  apiKeyError={apiKeyErrors.minimax}
-                  metadata={metadata}
-                  allowPublish={false}
-                />
-              )}
-
-              {activeTab === 'elevenlabs' && !isProviderLocked('elevenlabs') && (
-                <APIKeyProviderSection
-                  provider="elevenlabs"
-                  providerLabel="ElevenLabs"
-                  modelPlaceholder="Select an ElevenLabs media model"
-                  publishErrorLabel="ElevenLabs"
-                  config={elevenlabsConfig}
-                  models={Array.from(new Set([
-                    ...(metadata?.filter(m => m.provider === 'elevenlabs').map(m => m.model_id) || []),
-                    ...availableElevenLabsModels
-                  ]))}
-                  onUpdate={(config) => handleProviderConfigUpdate('elevenlabs', config)}
-                  onTestAPIKey={(apiKey, modelId, options) => handleTestAPIKey('elevenlabs', apiKey, modelId, options)}
-                  apiKeyStatus={apiKeyStatus.elevenlabs}
-                  apiKeyError={apiKeyErrors.elevenlabs}
-                  metadata={metadata}
-                  allowPublish={false}
-                />
-              )}
-
-              {activeTab === 'deepgram' && !isProviderLocked('deepgram') && (
-                <APIKeyProviderSection
-                  provider="deepgram"
-                  providerLabel="Deepgram"
-                  modelPlaceholder="Select a Deepgram media model"
-                  publishErrorLabel="Deepgram"
-                  config={deepgramConfig}
-                  models={Array.from(new Set([
-                    ...(metadata?.filter(m => m.provider === 'deepgram').map(m => m.model_id) || []),
-                    ...availableDeepgramModels
-                  ]))}
-                  onUpdate={(config) => handleProviderConfigUpdate('deepgram', config)}
-                  onTestAPIKey={(apiKey, modelId, options) => handleTestAPIKey('deepgram', apiKey, modelId, options)}
-                  apiKeyStatus={apiKeyStatus.deepgram}
-                  apiKeyError={apiKeyErrors.deepgram}
-                  metadata={metadata}
-                  allowPublish={false}
-                />
-              )}
-
               {/* Coding agent sections — unified component driven by manifest */}
-              {codingAgentProviderEntries.some(entry => entry.id === activeTab) && (() => {
-                const entry = getManifestEntry(activeTab as string)
+              {(() => {
+                const sidebarItem = codingAgentSidebarItems.find(item => item.tabId === activeTab)
+                if (!sidebarItem) return null
+                const entry = getManifestEntry(sidebarItem.entry.id)
                 if (!entry) return <div className="text-sm text-muted-foreground py-8 text-center">Loading provider info...</div>
-                return <CodingAgentSection provider={entry} />
+                return <CodingAgentSection key={sidebarItem.tabId} provider={entry} groupFilter={sidebarItem.groupFilter} />
               })()}
             </div>
           </div>

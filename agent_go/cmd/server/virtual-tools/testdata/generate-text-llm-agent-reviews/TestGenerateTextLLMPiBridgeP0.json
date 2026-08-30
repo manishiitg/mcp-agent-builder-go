@@ -1,0 +1,57 @@
+{
+  "test": "TestGenerateTextLLMPiBridgeP0",
+  "summary": "Pi-dev invoked builder generate_text_llm through mcpagent's api bridge and relayed real responses from low, medium, and high configured tiers.",
+  "review_criteria": [
+    "for each of low, medium, and high, Pi-dev invoked generate_text_llm exactly once through the real MCP bridge rather than answering directly",
+    "each requested tier returned a non-empty provider/model identity and its own real canary response",
+    "each Pi-dev final answer relayed its canary from the corresponding tool result without credentials or bridge transport noise"
+  ],
+  "output": {
+    "runs": [
+      {
+        "tier": "low",
+        "prompt": "Reply with exactly GENERATE_TEXT_LLM_P0_LOW_OK. Do not use markdown or tools.",
+        "tool_calls": 1,
+        "tool_result": {
+          "tier": "low",
+          "provider": "codex-cli",
+          "model_id": "gpt-5.6-luna",
+          "response": "GENERATE_TEXT_LLM_P0_LOW_OK"
+        },
+        "final_response": "GENERATE_TEXT_LLM_P0_LOW_OK"
+      },
+      {
+        "tier": "medium",
+        "prompt": "Reply with exactly GENERATE_TEXT_LLM_P0_MEDIUM_OK. Do not use markdown or tools.",
+        "tool_calls": 1,
+        "tool_result": {
+          "tier": "medium",
+          "provider": "codex-cli",
+          "model_id": "gpt-5.6-luna",
+          "response": "GENERATE_TEXT_LLM_P0_MEDIUM_OK"
+        },
+        "final_response": "GENERATE_TEXT_LLM_P0_MEDIUM_OK"
+      },
+      {
+        "tier": "high",
+        "prompt": "Reply with exactly GENERATE_TEXT_LLM_P0_HIGH_OK. Do not use markdown or tools.",
+        "tool_calls": 1,
+        "tool_result": {
+          "tier": "high",
+          "provider": "codex-cli",
+          "model_id": "gpt-5.6-terra",
+          "response": "GENERATE_TEXT_LLM_P0_HIGH_OK"
+        },
+        "final_response": "GENERATE_TEXT_LLM_P0_HIGH_OK"
+      }
+    ]
+  },
+  "fingerprint": "a71d5da6b2de41b4",
+  "agent_review": {
+    "verdict": "good",
+    "reviewed_fingerprint": "a71d5da6b2de41b4",
+    "reviewer": "codex-agent",
+    "issues": null,
+    "notes": "Reviewed the live Pi-dev receipt for all configured tiers. Low and medium each made one bridge tool call and relayed their exact canary from codex-cli/gpt-5.6-luna; high made one bridge tool call and relayed its exact canary from codex-cli/gpt-5.6-terra. The captured output contains no credentials or bridge transport noise."
+  }
+}

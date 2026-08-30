@@ -2,23 +2,20 @@ package costobserver
 
 import "testing"
 
-// TestScopeForScheduledLLMRoleNamesPulseAndChiefOfStaff pins the PLAT-088
+// TestScopeForScheduledLLMRoleNamesPulse pins the PLAT-088
 // fix. A scheduled Pulse turn is indistinguishable from the workflow
 // orchestration turns around it by agent mode or phase id alone — same
 // session, same "workflow-builder" phase — so before this the entire Pulse
 // stage of every scheduled run was charged to `chat`. The scheduler already
-// stamps llm_config_source when it swaps in the Pulse/maintenance LLM, so the
+// stamps llm_config_source when it swaps in the Pulse LLM, so the
 // intent is known at the source; this maps it to the cost scope.
-func TestScopeForScheduledLLMRoleNamesPulseAndChiefOfStaff(t *testing.T) {
+func TestScopeForScheduledLLMRoleNamesPulse(t *testing.T) {
 	for _, tc := range []struct {
 		source string
 		want   string
 	}{
 		{"scheduled_pulse", ScopePulse},
 		// Goal Advisor / Strategy Auditor are Pulse modules that happen to run
-		// on the maintenance LLM; their spend belongs in the Pulse total.
-		{"scheduled_auto_improve", ScopePulse},
-		{"scheduled_chief_of_staff", ScopeChiefOfStaff},
 		{"  SCHEDULED_PULSE  ", ScopePulse},
 		// Anything else must return "" so the caller keeps its own default
 		// rather than inheriting a wrong one.

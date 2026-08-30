@@ -89,6 +89,64 @@ func TestUpdateEvaluationPlanPreservesFieldsTheStructDoesNotModel(t *testing.T) 
 	}
 }
 
+// TestUpdateEvaluationPlanCanRealignRouteGatingAndPreValidationAtomically
+// reproduces LinkedIn PUL-E45BE152: update_evaluation_plan had no editable
+// pre_validation field, so a step's producer-route gate (applies_to_routes)
+// and its pre-run evidence requirement (pre_validation) could never be
+// aligned in one atomic typed change. A partial route-only edit had to be
+// rolled back because it would have stranded the evaluator behind a
+// prevalidation artifact only the OLD route set actually produced.
+func TestUpdateEvaluationPlanCanRealignRouteGatingAndPreValidationAtomically(t *testing.T) {
+	plan := `{"steps":[
+		{"id":"eval-strategy-loop","title":"Strategy loop","description":"old",
+		 "applies_to_routes":[{"routing_step_id":"step-workflow-router","route_ids":["route-explore","route-measure","route-post"]}],
+		 "pre_validation":{"files":[{"file_name":"{{TARGET_RUN_PATH}}/step-li-topic-select/linkedin_topic_selection.json","must_exist":true}]}}
+	]}`
+	workspacePath, files, read, write := evalPlanHarness(t, plan)
+
+	out, err := UpdateEvaluationPlanStep(context.Background(), workspacePath, "eval-strategy-loop",
+		map[string]interface{}{
+			"applies_to_routes": []interface{}{
+				map[string]interface{}{"routing_step_id": "step-workflow-router", "route_ids": []interface{}{"route-explore"}},
+			},
+			"pre_validation": map[string]interface{}{
+				"files": []interface{}{
+					map[string]interface{}{"file_name": "{{TARGET_RUN_PATH}}/step-strategy-proposal/strategies_summary.json", "must_exist": true},
+				},
+			},
+		},
+		"Gate to the one route that actually produces strategies_summary.json; the old pre_validation artifact belonged to a different producer.",
+		read, write, loggerv2.NewNoop())
+	if err != nil {
+		t.Fatalf("atomic route+pre_validation realignment: %v", err)
+	}
+	if !strings.Contains(out, "applies_to_routes") || !strings.Contains(out, "pre_validation") {
+		t.Fatalf("result did not confirm both fields changed together: %s", out)
+	}
+
+	var document map[string]interface{}
+	if err := json.Unmarshal([]byte(files[workspacePath+"/"+evaluationPlanRelPath]), &document); err != nil {
+		t.Fatalf("written plan does not parse: %v", err)
+	}
+	edited := document["steps"].([]interface{})[0].(map[string]interface{})
+
+	routes := edited["applies_to_routes"].([]interface{})[0].(map[string]interface{})
+	routeIDs := routes["route_ids"].([]interface{})
+	if len(routeIDs) != 1 || routeIDs[0] != "route-explore" {
+		t.Fatalf("route gate was not realigned: %#v", routeIDs)
+	}
+
+	preValidation := edited["pre_validation"].(map[string]interface{})
+	preFiles := preValidation["files"].([]interface{})
+	if len(preFiles) != 1 {
+		t.Fatalf("pre_validation was not realigned: %#v", preValidation)
+	}
+	fileName := preFiles[0].(map[string]interface{})["file_name"]
+	if fileName != "{{TARGET_RUN_PATH}}/step-strategy-proposal/strategies_summary.json" {
+		t.Fatalf("pre_validation still points at the old producer's artifact: %v", fileName)
+	}
+}
+
 func TestUpdateEvaluationPlanRequiresReasonAndKnownFields(t *testing.T) {
 	workspacePath, _, read, write := evalPlanHarness(t, `{"steps":[{"id":"eval-a","title":"A"}]}`)
 	ctx := context.Background()
@@ -110,6 +168,41 @@ func TestUpdateEvaluationPlanRequiresReasonAndKnownFields(t *testing.T) {
 		map[string]interface{}{"title": "B"}, "why", read, write, logger); err == nil ||
 		!strings.Contains(err.Error(), "no evaluation step") {
 		t.Fatalf("unknown step id was not rejected: %v", err)
+	}
+}
+
+// TestUpdateEvaluationPlanRejectsUnsatisfiableValueTypePattern is PLAT-236's
+// follow-up: this tool edits the plan's raw decoded JSON rather than going
+// through PartialPlanStep/ValidationSchema, so it never ran the write-time
+// schema validators every other schema-writing tool applies. An agent could
+// still author the exact unsatisfiable value_type=boolean+pattern shape
+// PLAT-236 fixed everywhere else, straight through this one tool.
+func TestUpdateEvaluationPlanRejectsUnsatisfiableValueTypePattern(t *testing.T) {
+	workspacePath, _, read, write := evalPlanHarness(t, `{"steps":[{"id":"eval-a","title":"A"}]}`)
+
+	_, err := UpdateEvaluationPlanStep(context.Background(), workspacePath, "eval-a",
+		map[string]interface{}{
+			"validation_schema": map[string]interface{}{
+				"files": []interface{}{
+					map[string]interface{}{
+						"file_name": "metrics_today.json",
+						"json_checks": []interface{}{
+							map[string]interface{}{
+								"path":       "$.reach_snapshot_table_updated",
+								"value_type": "boolean",
+								"pattern":    "^true$",
+							},
+						},
+					},
+				},
+			},
+		},
+		"reproduce PLAT-236 through update_evaluation_plan", read, write, loggerv2.NewNoop())
+	if err == nil {
+		t.Fatal("expected the unsatisfiable value_type/pattern combination to be rejected")
+	}
+	if !strings.Contains(err.Error(), "reach_snapshot_table_updated") {
+		t.Fatalf("error does not name the offending path: %v", err)
 	}
 }
 

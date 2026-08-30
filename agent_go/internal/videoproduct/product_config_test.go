@@ -9,6 +9,19 @@ import (
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/agentprofiles"
 )
 
+func TestVideoStudioConversationPolicyValidates(t *testing.T) {
+	profile := BuiltinAgentProfile()
+	if err := agentprofiles.Validate(profile); err != nil {
+		t.Fatalf("Video Studio profile failed validation: %v", err)
+	}
+	if profile.Runtime.Workspace.Mode != agentprofiles.WorkspaceModeProject ||
+		profile.Runtime.Workspace.ProjectsRoot != "Chats/Video Studio/projects" ||
+		profile.Runtime.Conversation.Mode != agentprofiles.ConversationModeKeyed ||
+		profile.Runtime.Conversation.KeyType != agentprofiles.ConversationKeyTypeProject {
+		t.Fatalf("Video Studio must bind one durable conversation to each server-resolved project: workspace=%+v conversation=%+v", profile.Runtime.Workspace, profile.Runtime.Conversation)
+	}
+}
+
 func TestVideoStudioManifestDrivesProfileAndWorkflowCapabilities(t *testing.T) {
 	manifest, err := VideoStudioManifest()
 	if err != nil {
@@ -33,13 +46,16 @@ func TestVideoStudioManifestDrivesProfileAndWorkflowCapabilities(t *testing.T) {
 	// The product controls and the secret CRUD its ui.secrets surface needs.
 	// set_workflow_secret is here because it was registered-but-invisible once.
 	for _, name := range []string{
-		"show_video", "agent_browser",
+		"show_video", "show_reference", "agent_browser",
 		"list_secrets", "set_workflow_secret", "set_user_secret",
-		"run_full_workflow", "execute_step",
+		"execute_step",
 	} {
 		if !enabled[name] {
 			t.Fatalf("Video Studio needs %q: %+v", name, manifest.Profile.ToolPolicy)
 		}
+	}
+	if enabled["run_full_workflow"] {
+		t.Fatal("Video Studio must expose individual stage execution only")
 	}
 	// The bridge shell is how product HTTP APIs are reached. Reaching them from
 	// each CLI's own shell instead (api_transport.native_shell) is implemented
@@ -52,26 +68,19 @@ func TestVideoStudioManifestDrivesProfileAndWorkflowCapabilities(t *testing.T) {
 	if mode := strings.TrimSpace(manifest.Profile.Runtime.APITransport.Mode); mode == "native_shell" {
 		t.Fatalf("native_shell is intentionally off for now (see docs/design/product_api_transport_for_coding_agents.md); enabling it needs the bridge-shell entry above reconsidered too")
 	}
-	// video.show-video must declare what it presents. Without this the
-	// factory refuses every call (see TestShowVideoRequiresADeclaredPresentationKind)
-	// and the frontend's kind-keyed renderer registry has nothing to dispatch on.
-	var showVideoBinding *agentprofiles.ToolBinding
-	for i := range manifest.Profile.Tools {
-		if manifest.Profile.Tools[i].ID == "video.show-video" {
-			showVideoBinding = &manifest.Profile.Tools[i]
+	for id, wantKind := range map[string]string{"video.show-video": "media.video", "video.show-reference": "media.reference"} {
+		var binding *agentprofiles.ToolBinding
+		for i := range manifest.Profile.Tools {
+			if manifest.Profile.Tools[i].ID == id {
+				binding = &manifest.Profile.Tools[i]
+			}
+		}
+		if binding == nil || binding.Presentation == nil || binding.Presentation.Kind != wantKind {
+			t.Fatalf("%s must declare presentation.kind=%s, got %+v", id, wantKind, binding)
 		}
 	}
-	if showVideoBinding == nil {
-		t.Fatal("video.show-video is not in manifest.Profile.Tools")
-	}
-	if showVideoBinding.Presentation == nil || showVideoBinding.Presentation.Kind != "media.video" {
-		t.Fatalf("video.show-video must declare presentation.kind=media.video, got %+v", showVideoBinding.Presentation)
-	}
-	// Under mcp_only the CLI's own Read/Write are denied, so the bridge supplies
-	// the guarded editor. Mode-dependent, not a property of the tool — the
-	// hybrid direction is pinned by
-	// TestProductToolGateGovernsTheCodingAgentBridgeCatalog.
-	if manifest.Profile.Runtime.AgentTools.Mode != "hybrid" && !enabled["diff_patch_workspace_file"] {
+	// Video Studio is MCP-only, so the bridge supplies the guarded editor.
+	if manifest.Profile.Runtime.AgentTools.Mode == "mcp_only" && !enabled["diff_patch_workspace_file"] {
 		t.Fatalf("agent_tools.mode=%q denies native edits; the bridge must carry diff_patch_workspace_file: %+v",
 			manifest.Profile.Runtime.AgentTools.Mode, manifest.Profile.ToolPolicy)
 	}
@@ -89,13 +98,12 @@ func TestVideoStudioManifestDrivesProfileAndWorkflowCapabilities(t *testing.T) {
 	if manifest.UI.Surface != "video-studio" || !manifest.UI.Secrets || manifest.Branding.Favicon != "/video-studio-favicon.svg" {
 		t.Fatalf("unexpected UI/branding definition: %+v %+v", manifest.UI, manifest.Branding)
 	}
-	if manifest.Profile.Runtime.Transport != "structured" {
-		t.Fatalf("Video Studio runtime transport = %q, want structured", manifest.Profile.Runtime.Transport)
+	if manifest.Profile.Runtime.Transport != "auto" {
+		t.Fatalf("Video Studio runtime transport = %q, want auto", manifest.Profile.Runtime.Transport)
 	}
 	if manifest.Profile.Runtime.AgentTools.Mode != "mcp_only" || manifest.Profile.Runtime.Approvals.Mode != "provider_auto" {
-		t.Fatalf("Video Studio native-tool policy = %+v %+v, want mcp_only/provider_auto", manifest.Profile.Runtime.AgentTools, manifest.Profile.Runtime.Approvals)
+		t.Fatalf("Video Studio tool policy = %+v %+v, want mcp_only/provider_auto", manifest.Profile.Runtime.AgentTools, manifest.Profile.Runtime.Approvals)
 	}
-
 	if manifest.Workflows.BrowserMode != "auto" || len(manifest.Workflows.SelectedSkills) == 0 {
 		t.Fatalf("unexpected workflow definition: %+v", manifest.Workflows)
 	}
@@ -112,6 +120,22 @@ func TestVideoStudioManifestDrivesProfileAndWorkflowCapabilities(t *testing.T) {
 		if len(manifest.Profile.Runtime.Workspace.Placement[writer]) == 0 {
 			t.Fatalf("%s is exposed but declares no runtime.workspace.placement: %+v", writer, manifest.Profile.Runtime.Workspace)
 		}
+	}
+}
+
+func TestVideoStudioIsPinnedToClaudeCodeWithoutProviderChoices(t *testing.T) {
+	manifest, err := VideoStudioManifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Profile.Runtime.Provider != "claude-code" || manifest.Profile.Runtime.ModelID != DefaultClaudeModel {
+		t.Fatalf("Video Studio runtime = %s/%s, want claude-code/%s", manifest.Profile.Runtime.Provider, manifest.Profile.Runtime.ModelID, DefaultClaudeModel)
+	}
+	if manifest.Profile.Runtime.CredentialScope != agentprofiles.CredentialScopeGlobal {
+		t.Fatalf("Video Studio credential scope = %q, want global", manifest.Profile.Runtime.CredentialScope)
+	}
+	if len(manifest.Profile.Runtime.ProviderOptions) != 0 {
+		t.Fatalf("Video Studio exposes provider choices despite its Claude-only contract: %+v", manifest.Profile.Runtime.ProviderOptions)
 	}
 }
 
@@ -174,23 +198,7 @@ func TestGeneratedPlanAuthorsStagesAsMessageSequences(t *testing.T) {
 		case "routing":
 			continue // a router branches; it runs no stage turn
 		case "todo_task":
-			// An orchestrator runs no turn of its own — its work is its routes,
-			// and each of those is still a stage and still a message_sequence.
-			if len(step.Routes) == 0 {
-				t.Fatalf("todo_task %q declares no predefined_routes", step.ID)
-			}
-			for _, route := range step.Routes {
-				stages++
-				first := ""
-				if len(route.Sub.Items) > 0 {
-					first = route.Sub.Items[0].Type
-				}
-				assertStage(route.Sub.ID, route.Sub.Type, len(route.Sub.Items), first)
-				if route.RouteID != route.Sub.ID {
-					t.Fatalf("route_id %q does not match its sub_agent_step id %q; the orchestrator re-dispatches by route_id", route.RouteID, route.Sub.ID)
-				}
-			}
-			continue
+			t.Fatalf("generated Video Studio plan still contains orchestrator step %q; every production task must be an individually runnable message_sequence", step.ID)
 		}
 		stages++
 		first := ""
@@ -216,67 +224,8 @@ func TestVideoStudioPromptExpandsAllowListedVariables(t *testing.T) {
 	}
 }
 
-// The pre-production block is orchestrated because its critic is a pure
-// reviewer: it faults BRIEF/STORYBOARD/SCRIPT/frame.md, owns none of them, and
-// is told not to build. Linearly its `revise` verdict had no addressee — the
-// author's step had finished, the next step did not own the artifact, and the
-// platform removed step loops. This pins the wiring that gives a finding
-// somewhere to go.
-func TestPreProductionIsOrchestratedSoCritiqueFindingsHaveAnAddressee(t *testing.T) {
-	block := infographicPipeline.Orchestrated
-	if block == nil {
-		t.Fatal("infographic pipeline declares no orchestrated block; a creative-critique verdict would again have nowhere to go")
-	}
-
-	// The critic must be inside the block. Outside it, the orchestrator never
-	// sees the verdict and cannot re-dispatch anyone.
-	var hasCritic bool
-	for _, id := range block.StageIDs {
-		if id == "infographic-creative-critique" {
-			hasCritic = true
-		}
-	}
-	if !hasCritic {
-		t.Fatalf("creative critique is not one of the orchestrated routes: %v", block.StageIDs)
-	}
-
-	// It must also be able to reach the authors of what it faults, or a
-	// `revise` verdict still has no addressee.
-	for _, owner := range []string{"infographic-concept", "infographic-copy", "infographic-layout"} {
-		var found bool
-		for _, id := range block.StageIDs {
-			if id == owner {
-				found = true
-			}
-		}
-		if !found {
-			t.Fatalf("%s authors an artifact the critique faults but is not a route the orchestrator can re-dispatch: %v", owner, block.StageIDs)
-		}
-	}
-
-	// The instruction has to say what each verdict does. Without this the
-	// orchestrator sees a scorecard and no mandate to act on it.
-	for _, required := range []string{"revise", "blocked", "pass"} {
-		if !strings.Contains(block.Description, required) {
-			t.Fatalf("orchestrator description never handles verdict %q", required)
-		}
-	}
-	// Bounded, or a failing critique loops forever.
-	if !strings.Contains(block.Description, "three review rounds") {
-		t.Fatalf("orchestrator description sets no bound on re-review rounds:\n%s", block.Description)
-	}
-
-	// The later critiques stay linear on purpose: they own the artifact they
-	// judge and repair it in place, which needs no orchestrator.
-	for _, id := range block.StageIDs {
-		if id == "infographic-composition-critique" || id == "infographic-render-critique" {
-			t.Fatalf("%s repairs the artifact it judges; orchestrating it adds nondeterminism for nothing", id)
-		}
-	}
-}
-
 // The creative critique writes "the exact acceptance criteria the builder must
-// prove". The builder is the first stage after the orchestrated gate, so if its
+// prove". The builder is the first stage after the individual critique, so if its
 // instructions never name the scorecard, those criteria are written and then
 // read by nobody until the composition critique — one stage too late to steer
 // the build they were written for.
@@ -300,14 +249,10 @@ func TestBuilderIsPointedAtTheCriteriaTheCritiqueWrote(t *testing.T) {
 	}
 }
 
-// Skills are attached per step id via step_config.steps[].agent_configs.
-// enabled_skills, and the runtime resolves them by matching that id — including
-// recursively into predefined_routes[].sub_agent_step (populateRuntimeFields).
-// Moving a stage from a top-level step to a route therefore keeps its skills
-// ONLY because its step_config entry is still emitted under the same id. This
-// pins that: a stage that loses its entry would run with no skills at all,
-// which fails as a vague result rather than an error.
-func TestOrchestratedRoutesKeepTheirSkillEntries(t *testing.T) {
+// Every individual stage needs its own step_config entry. A missing entry makes
+// that step silently fall back to platform defaults and lose its declared
+// production skills.
+func TestIndividualStagesKeepTheirSkillEntries(t *testing.T) {
 	raw, err := json.Marshal(stepConfigForAll(pipelineRegistry))
 	if err != nil {
 		t.Fatal(err)
@@ -329,47 +274,24 @@ func TestOrchestratedRoutesKeepTheirSkillEntries(t *testing.T) {
 	}
 
 	for _, p := range pipelineRegistry {
-		if p.Orchestrated == nil {
-			continue
-		}
-		if _, ok := skillsByID[p.Orchestrated.ID]; !ok {
-			t.Fatalf("orchestrator %q has no step_config entry; it would fall back to platform defaults instead of this product's LLM", p.Orchestrated.ID)
-		}
-		for _, id := range p.Orchestrated.StageIDs {
-			var stage *PipelineStage
-			for i := range p.Stages {
-				if p.Stages[i].ID == id {
-					stage = &p.Stages[i]
-				}
-			}
-			if stage == nil {
-				t.Fatalf("orchestrated stage id %q matches no stage in pipeline %q", id, p.ID)
-			}
-			got, ok := skillsByID[id]
+		for i := range p.Stages {
+			stage := &p.Stages[i]
+			got, ok := skillsByID[stage.ID]
 			if !ok {
-				t.Fatalf("orchestrated route %q has no step_config entry; as a route it would run with no skills", id)
+				t.Fatalf("individual stage %q has no step_config entry", stage.ID)
 			}
-			// Not every declared skill attaches — the ones the product installs
-			// as read-from-disk files are granted a read path instead (see
-			// TestStagesAttachOnlyDeclaredAttachableSkills). What must hold is
-			// that the attach list is exactly the attachable subset, so moving
-			// a stage into a route still carries its skills.
 			wantAttach, _ := splitStageSkills(stage.Skills)
 			if !reflect.DeepEqual(got, wantAttach) {
-				t.Fatalf("route %q attaches %v, want %v", id, got, wantAttach)
+				t.Fatalf("stage %q attaches %v, want %v", stage.ID, got, wantAttach)
 			}
 			if len(wantAttach) > 0 && len(got) == 0 {
-				t.Fatalf("route %q declares attachable skills but its config carries none", id)
+				t.Fatalf("stage %q declares attachable skills but its config carries none", stage.ID)
 			}
 		}
 	}
 }
 
-// The plan graph draws no sequential edge out of a todo_task — usePlanToFlow
-// sets lastExitNodeId = null for it and follows next_step_id only. The runtime
-// would fall through in array order regardless, so omitting it ran correctly
-// while rendering the orchestrator as a dead end with no path to the build.
-func TestOrchestratorNamesItsSuccessor(t *testing.T) {
+func TestGeneratedPlanContainsNoOrchestratorSteps(t *testing.T) {
 	raw, err := json.Marshal(planForAll(pipelineRegistry))
 	if err != nil {
 		t.Fatal(err)
@@ -384,25 +306,10 @@ func TestOrchestratorNamesItsSuccessor(t *testing.T) {
 	if err := json.Unmarshal(raw, &plan); err != nil {
 		t.Fatal(err)
 	}
-	ids := map[string]bool{"end": true}
 	for _, s := range plan.Steps {
-		ids[s.ID] = true
-	}
-	var seen int
-	for _, s := range plan.Steps {
-		if s.Type != "todo_task" {
-			continue
+		if s.Type == "todo_task" {
+			t.Fatalf("found orchestrator %q in Video Studio plan", s.ID)
 		}
-		seen++
-		if s.Next == "" {
-			t.Fatalf("todo_task %q names no next_step_id; the plan graph renders it as a dead end", s.ID)
-		}
-		if !ids[s.Next] {
-			t.Fatalf("todo_task %q points at %q, which is not a step in the plan", s.ID, s.Next)
-		}
-	}
-	if seen == 0 {
-		t.Fatal("no todo_task step in the generated plan")
 	}
 }
 

@@ -3,7 +3,6 @@ import type { ActiveSessionInfo, RuntimePhase, RuntimeSnapshot, TerminalSnapshot
 import {
   executionTreeRuntimeStatus,
   reconcileTerminalRuntimeState,
-  runtimeCanSteer,
   runtimeHasBackgroundAgents,
   runtimeNeedsUserInput,
   sessionRuntimeStatus,
@@ -157,7 +156,6 @@ describe('authoritative runtime activity selector', () => {
     }))
     expect(runtimeHasBackgroundAgents(value)).toBe(true)
     expect(runtimeNeedsUserInput(value)).toBe(true)
-    expect(runtimeCanSteer(value)).toBe(true)
   })
 
   it('does not expose stale live children after a terminal runtime boundary', () => {

@@ -1433,7 +1433,7 @@ export default function BotConnectorModal({ isOpen, onClose }: BotConnectorModal
                     <>
                       <div>
                         <h3 className="text-sm font-semibold">Gmail notifications</h3>
-                        <p className="mt-1 text-xs text-muted-foreground">Account-wide one-way email delivery, shared by <code>notify_user</code> across every workflow and Chief of Staff. Turn this off to stop all outbound email. Email replies do not resume an agent.</p>
+                        <p className="mt-1 text-xs text-muted-foreground">Account-wide one-way email delivery, shared by <code>notify_user</code> across every workflow and product chat. Turn this off to stop all outbound email. Email replies do not resume an agent.</p>
                       </div>
                       {gmailError && (
                         <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg flex items-start gap-2">
@@ -1451,7 +1451,7 @@ export default function BotConnectorModal({ isOpen, onClose }: BotConnectorModal
                         <div className="flex items-center justify-between gap-3">
                           <div>
                             <h4 className="text-sm font-medium">Enable Gmail</h4>
-                            <p className="mt-0.5 text-xs text-muted-foreground">Available to notify_user across workflows and Chief of Staff.</p>
+                            <p className="mt-0.5 text-xs text-muted-foreground">Available to notify_user across workflows and product chats.</p>
                           </div>
                           <label className={`relative inline-flex items-center ${!gmailConfig.enabled && !gmailTestPassed ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
                             <input type="checkbox" checked={gmailConfig.enabled} disabled={!gmailConfig.enabled && !gmailTestPassed} onChange={event => setGmailConfig({ ...gmailConfig, enabled: event.target.checked })} className="peer sr-only" />

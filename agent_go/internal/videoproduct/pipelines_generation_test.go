@@ -15,10 +15,16 @@ func TestEverySpendingStageCarriesTheApprovalGate(t *testing.T) {
 	const gateMarker = "ONLY from the human input for THIS stage"
 
 	wantGated := map[string]bool{
-		"longform-characters": true,
-		"longform-narration":  true,
-		"longform-generate":   true,
-		"shortform-generate":  true,
+		"longform-characters":          true,
+		"longform-visual-development":  true,
+		"longform-narration":           true,
+		"longform-anchor-shot":         true,
+		"longform-next-shot":           true,
+		"shortform-characters":         true,
+		"shortform-visual-development": true,
+		"shortform-narration":          true,
+		"shortform-anchor-shot":        true,
+		"shortform-next-shot":          true,
 	}
 
 	for _, pipeline := range []*Pipeline{longformPipeline, shortformPipeline} {
@@ -41,6 +47,142 @@ func TestEverySpendingStageCarriesTheApprovalGate(t *testing.T) {
 	// that is exactly how an approved storyboard becomes an unapproved bill.
 	if !strings.Contains(generationSpendGate("x"), "Approval of an earlier stage") {
 		t.Fatal("the spend gate no longer rejects approval inherited from an earlier stage")
+	}
+}
+
+func TestShortformStagesPutDirectionAndMeasuredNarrationBeforeShots(t *testing.T) {
+	index := map[string]int{}
+	for i, stage := range shortformPipeline.Stages {
+		index[stage.ID] = i
+	}
+	for _, ordered := range [][2]string{
+		{"shortform-script", "shortform-characters"},
+		{"shortform-characters", "shortform-look-sound"},
+		{"shortform-look-sound", "shortform-narration"},
+		{"shortform-narration", "shortform-shotlist"},
+		{"shortform-shotlist", "shortform-visual-development"},
+		{"shortform-visual-development", "shortform-anchor-shot"},
+		{"shortform-shotlist", "shortform-anchor-shot"},
+		{"shortform-anchor-shot", "shortform-next-shot"},
+		{"shortform-next-shot", "shortform-seam-proof"},
+		{"shortform-seam-proof", "shortform-stitch-plan"},
+		{"shortform-stitch-plan", "shortform-assemble"},
+		{"shortform-assemble", "shortform-check"},
+	} {
+		before, after := ordered[0], ordered[1]
+		if index[before] >= index[after] {
+			t.Fatalf("%s must run before %s", before, after)
+		}
+	}
+	characters := shortformPipeline.Stages[index["shortform-characters"]].Description
+	for _, required := range []string{"budget", "recommended", "premium", "explicitly approved", "separately from video-per-second cost", "NEVER silently select it", "selected provider/model"} {
+		if !strings.Contains(characters, required) {
+			t.Fatalf("short-form character step is missing %q", required)
+		}
+	}
+	anchor := shortformPipeline.Stages[index["shortform-anchor-shot"]].Description
+	next := shortformPipeline.Stages[index["shortform-next-shot"]].Description
+	for _, required := range []string{"exactly one approved anchor clip", "Do not batch the remaining shots", "HyperFrames insert", "photoreal footage"} {
+		if !strings.Contains(anchor, required) {
+			t.Fatalf("short-form anchor generation is missing rule %q", required)
+		}
+	}
+
+	lookSound := shortformPipeline.Stages[index["shortform-look-sound"]].Description
+	for _, required := range []string{"Locations and backgrounds", "Wardrobe, props, and continuity", "Lighting and visual palette", "Speech and voices", "Music", "Ambience and sound effects", "Captions", "BEFORE committing the video model", "visible lip-synced dialogue", "off-camera TTS voiceover", "hybrid with native dialogue", "cost", "edit-complexity tradeoff", "explicit choice", "audio-incapable model silently decide", "synchronized native audio", "Separate TTS is for off-camera voiceover", "Never silently turn"} {
+		if !strings.Contains(lookSound, required) {
+			t.Fatalf("short-form look/sound step is missing %q", required)
+		}
+	}
+
+	narration := shortformPipeline.Stages[index["shortform-narration"]].Description
+	for _, required := range []string{"ffprobe", "REAL measured duration", "Missing, unreadable, silent, or unmeasured", "visible native dialogue", "Off-camera instructional voiceover is not optional"} {
+		if !strings.Contains(narration, required) {
+			t.Fatalf("short-form narration step is missing %q", required)
+		}
+	}
+
+	shotlist := shortformPipeline.Stages[index["shortform-shotlist"]].Description
+	for _, required := range []string{"shortform-look-sound.md", "shortform-narration.md", "MEASURED", "Never fit narration", "multi-clip-cinematic-generation", "live-verified continuity controls", "seam-generation route", "last usable stable frame", "motivated camera-angle cut"} {
+		if !strings.Contains(shotlist, required) {
+			t.Fatalf("short-form shot list is missing %q", required)
+		}
+	}
+	for _, required := range []string{"exactly one next clip", "multi-clip-cinematic-generation", "durable history from prior runs", "seam-generation route", "extension/reference-video continuation", "last usable stable frame", "orientation/aspect-ratio", "camera-angle change", "cumulatively"} {
+		if !strings.Contains(next, required) {
+			t.Fatalf("short-form next-shot generation is missing follow-up guidance %q", required)
+		}
+	}
+	visualDevelopment := shortformPipeline.Stages[index["shortform-visual-development"]]
+	for _, required := range []string{"real approved reference pack", "show_reference", "start reference", "exit/end-state reference", "shortform-reference-manifest.json"} {
+		if !strings.Contains(visualDevelopment.Description, required) {
+			t.Fatalf("short-form visual-development step is missing %q", required)
+		}
+	}
+	for _, id := range []string{"shortform-characters", "shortform-visual-development", "shortform-anchor-shot", "shortform-next-shot"} {
+		if !containsSkill(shortformPipeline.Stages[index[id]].Skills, "cinematic-visual-development") {
+			t.Fatalf("%s must attach cinematic-visual-development", id)
+		}
+	}
+	seamProof := shortformPipeline.Stages[index["shortform-seam-proof"]]
+	for _, required := range []string{"two-clip seam-preview MP4", "show_video", "Only a passing proof"} {
+		if !strings.Contains(seamProof.Description, required) {
+			t.Fatalf("short-form seam-proof step is missing %q", required)
+		}
+	}
+
+	stitchPlan := shortformPipeline.Stages[index["shortform-stitch-plan"]]
+	for _, required := range []string{"video-stitching", "every seam", "show_document", "meaningful plain-language editorial options", "Do not render"} {
+		if !strings.Contains(stitchPlan.Description, required) {
+			t.Fatalf("short-form stitch plan is missing %q", required)
+		}
+	}
+	for _, skill := range []string{"video-stitching", "video-editing"} {
+		if !containsSkill(stitchPlan.Skills, skill) {
+			t.Fatalf("short-form stitch plan does not attach %s: %v", skill, stitchPlan.Skills)
+		}
+	}
+
+	assemble := shortformPipeline.Stages[index["shortform-assemble"]].Description
+	for _, required := range []string{"shortform-stitch-plan.json", "video-stitching", "required narration segment", "Cut visuals to the measured narration timeline", "music, ambience, sound effects, and captions", "selected background/look decisions", "native-dialogue source per beat"} {
+		if !strings.Contains(assemble, required) {
+			t.Fatalf("short-form assembly is missing %q", required)
+		}
+	}
+
+	check := shortformPipeline.Stages[index["shortform-check"]].Description
+	for _, required := range []string{"missing or silent narration is a deterministic failure", "may not be marked not_applicable", "narration_alignment", "shortform-seam-report.json", "EVERY edit boundary"} {
+		if !strings.Contains(check, required) {
+			t.Fatalf("short-form QA is missing %q", required)
+		}
+	}
+}
+
+func TestCharacterModelIsUserSelectedBeforeAnyReferenceSpend(t *testing.T) {
+	for _, pipeline := range []*Pipeline{longformPipeline, shortformPipeline} {
+		var characters, shotlist string
+		for _, stage := range pipeline.Stages {
+			switch stage.ID {
+			case pipeline.ID + "-characters":
+				characters = stage.Description
+			case pipeline.ID + "-shotlist":
+				shotlist = stage.Description
+			}
+		}
+		for _, required := range []string{
+			"live-verified viable character-model choices",
+			"NEVER silently select it",
+			"selected provider/model",
+			"explicit approval to spend",
+			"show_character",
+		} {
+			if !strings.Contains(characters, required) {
+				t.Fatalf("%s character stage is missing %q", pipeline.ID, required)
+			}
+		}
+		if !strings.Contains(shotlist, "explicitly approves its displayed reference") {
+			t.Fatalf("%s shot list can proceed without explicit approval of the displayed character reference", pipeline.ID)
+		}
 	}
 }
 
@@ -79,11 +221,17 @@ func TestLongformStagesKeepTheirLoadBearingOrder(t *testing.T) {
 
 	for _, ordered := range [][2]string{
 		{"longform-script", "longform-characters"},
-		{"longform-characters", "longform-generate"},
+		{"longform-characters", "longform-look-sound"},
+		{"longform-look-sound", "longform-narration"},
 		{"longform-script", "longform-narration"},
 		{"longform-narration", "longform-shotlist"},
-		{"longform-shotlist", "longform-generate"},
-		{"longform-generate", "longform-assemble"},
+		{"longform-shotlist", "longform-visual-development"},
+		{"longform-visual-development", "longform-anchor-shot"},
+		{"longform-shotlist", "longform-anchor-shot"},
+		{"longform-anchor-shot", "longform-next-shot"},
+		{"longform-next-shot", "longform-seam-proof"},
+		{"longform-seam-proof", "longform-stitch-plan"},
+		{"longform-stitch-plan", "longform-assemble"},
 		{"longform-assemble", "longform-check"},
 	} {
 		before, after := ordered[0], ordered[1]
@@ -93,27 +241,108 @@ func TestLongformStagesKeepTheirLoadBearingOrder(t *testing.T) {
 	}
 
 	shotlist := longformPipeline.Stages[index["longform-shotlist"]].Description
-	if !strings.Contains(shotlist, "MEASURED") {
-		t.Fatal("the shot list stage no longer derives durations from measured narration, which is what stops visuals being cut to an estimate")
+	for _, required := range []string{"MEASURED", "multi-clip-cinematic-generation", "live-verified continuity controls", "seam-generation route", "last usable stable frame", "camera handoff", "reference manifest"} {
+		if !strings.Contains(shotlist, required) {
+			t.Fatalf("long-form shot list is missing %q", required)
+		}
+	}
+	next := longformPipeline.Stages[index["longform-next-shot"]].Description
+	for _, required := range []string{"exactly one next clip", "multi-clip-cinematic-generation", "durable history from prior runs", "recorded seam-generation route", "extension/reference-video continuation", "last usable stable frame", "orientation/aspect-ratio", "camera-angle cut", "cumulatively"} {
+		if !strings.Contains(next, required) {
+			t.Fatalf("long-form next-shot generation is missing follow-up-shot guidance %q", required)
+		}
+	}
+	visualDevelopment := longformPipeline.Stages[index["longform-visual-development"]]
+	for _, required := range []string{"actual visual evidence", "show_reference", "start reference", "exit/end-state reference", "longform-reference-manifest.json"} {
+		if !strings.Contains(visualDevelopment.Description, required) {
+			t.Fatalf("long-form visual-development step is missing %q", required)
+		}
+	}
+	for _, id := range []string{"longform-characters", "longform-visual-development", "longform-anchor-shot", "longform-next-shot"} {
+		if !containsSkill(longformPipeline.Stages[index[id]].Skills, "cinematic-visual-development") {
+			t.Fatalf("%s must attach cinematic-visual-development", id)
+		}
+	}
+	seamProof := longformPipeline.Stages[index["longform-seam-proof"]]
+	for _, required := range []string{"two-clip seam-preview MP4", "show_video", "Only a passing proof"} {
+		if !strings.Contains(seamProof.Description, required) {
+			t.Fatalf("long-form seam-proof step is missing %q", required)
+		}
 	}
 }
 
-// Both generation pipelines route to skills the product owns, and neither may
-// reach for the HyperFrames composition stack -- that is the infographic
-// route's job, and pulling it in here is how a footage production quietly
-// turns into a slideshow.
-func TestGenerationPipelinesUseGenerationSkillsOnly(t *testing.T) {
+func TestShotCreationUsesAnchorAndReusableNextShotRecipes(t *testing.T) {
+	plan := planForAll([]*Pipeline{longformPipeline, shortformPipeline})
+	steps := map[string]map[string]interface{}{}
+	for _, raw := range plan["steps"].([]map[string]interface{}) {
+		steps[raw["id"].(string)] = raw
+	}
+
+	for _, pipeline := range []*Pipeline{longformPipeline, shortformPipeline} {
+		anchorID := pipeline.ID + "-anchor-shot"
+		nextID := pipeline.ID + "-next-shot"
+		var anchor, next PipelineStage
+		for _, stage := range pipeline.Stages {
+			switch stage.ID {
+			case anchorID:
+				anchor = stage
+			case nextID:
+				next = stage
+			}
+		}
+		if anchor.ID == "" || next.ID == "" {
+			t.Fatalf("%s must expose both anchor and reusable next-shot recipes", pipeline.ID)
+		}
+		for _, required := range []string{"exactly one approved anchor clip", "Do not batch", "show_video"} {
+			if !strings.Contains(anchor.Description, required) {
+				t.Fatalf("%s is missing %q", anchorID, required)
+			}
+		}
+		for _, required := range []string{"exactly one next clip", "human input", "durable history from prior runs", "blocked result", "cumulatively", "show_video"} {
+			if !strings.Contains(next.Description, required) {
+				t.Fatalf("%s is missing %q", nextID, required)
+			}
+		}
+		var shotlist PipelineStage
+		for _, stage := range pipeline.Stages {
+			if stage.ID == pipeline.ID+"-shotlist" {
+				shotlist = stage
+			}
+		}
+		for _, stage := range []PipelineStage{shotlist, anchor, next} {
+			if !containsSkill(stage.Skills, "multi-clip-cinematic-generation") {
+				t.Fatalf("%s must attach multi-clip-cinematic-generation: %v", stage.ID, stage.Skills)
+			}
+		}
+
+		deps := map[string]bool{}
+		for _, name := range steps[nextID]["context_dependencies"].([]string) {
+			deps[name] = true
+		}
+		for _, required := range append([]string{anchor.Output}, anchor.Artifacts...) {
+			if !deps[required] {
+				t.Fatalf("%s cannot read anchor evidence %q: %v", nextID, required, deps)
+			}
+		}
+	}
+}
+
+// Both cinematic pipelines retain real footage generation while permitting
+// HyperFrames only in the planning, creation, assembly, and QA steps where an
+// explicitly planned deterministic insert can be made and verified.
+func TestCinematicPipelinesScopeHyperFramesToPlannedInserts(t *testing.T) {
 	generationSkills := map[string]bool{}
-	for _, name := range []string{"fal-ai", "google-ai", "video-model-selection", "video-cinematography", "video-storytelling"} {
+	for _, name := range []string{"fal-ai", "google-ai", "seeddance-api", "longform-cinematic-video", "video-model-selection", "video-cinematography", "video-storytelling"} {
 		generationSkills[name] = true
 	}
 
 	for _, pipeline := range []*Pipeline{longformPipeline, shortformPipeline} {
 		sawGenerationSkill := false
 		for _, stage := range pipeline.Stages {
+			allowsHyperFrames := strings.HasSuffix(stage.ID, "-shotlist") || strings.HasSuffix(stage.ID, "-anchor-shot") || strings.HasSuffix(stage.ID, "-next-shot") || strings.HasSuffix(stage.ID, "-assemble") || strings.HasSuffix(stage.ID, "-check")
 			for _, skill := range stage.Skills {
-				if strings.HasPrefix(skill, "hyperframes") {
-					t.Fatalf("%s/%s attaches %q; generation pipelines produce footage, not HyperFrames compositions", pipeline.ID, stage.ID, skill)
+				if strings.HasPrefix(skill, "hyperframes") && !allowsHyperFrames {
+					t.Fatalf("%s/%s attaches %q outside the planned insert lifecycle", pipeline.ID, stage.ID, skill)
 				}
 				if generationSkills[skill] {
 					sawGenerationSkill = true
@@ -129,7 +358,76 @@ func TestGenerationPipelinesUseGenerationSkillsOnly(t *testing.T) {
 		if !sawGenerationSkill {
 			t.Fatalf("%s attaches none of the generation skills it exists to run", pipeline.ID)
 		}
+		var shotlist string
+		for _, stage := range pipeline.Stages {
+			if stage.ID == pipeline.ID+"-shotlist" {
+				shotlist = stage.Description
+			}
+		}
+		for _, marker := range []string{"HyperFrames insert", "never use it"} {
+			if !strings.Contains(shotlist, marker) {
+				t.Fatalf("%s shot list is missing %q", pipeline.ID, marker)
+			}
+		}
 	}
+}
+
+func TestLongformPipelineOwnsCinematicContinuityAndSeamEvidence(t *testing.T) {
+	requiredSkillStages := map[string]bool{
+		"longform-brief":       true,
+		"longform-script":      true,
+		"longform-shotlist":    true,
+		"longform-anchor-shot": true,
+		"longform-next-shot":   true,
+		"longform-stitch-plan": true,
+		"longform-assemble":    true,
+		"longform-check":       true,
+	}
+	requiredArtifacts := map[string][]string{
+		"longform-shotlist":    {"longform-sequence-plan.json"},
+		"longform-anchor-shot": {"longform-continuity-anchor.json"},
+		"longform-next-shot":   {"longform-continuity-ledger.json"},
+		"longform-stitch-plan": {"longform-stitch-plan.json"},
+		"longform-assemble":    {"longform-final.mp4", "longform-edit-decision-list.json"},
+		"longform-check":       {"quality-report.json", "longform-seam-report.json"},
+	}
+
+	for _, stage := range longformPipeline.Stages {
+		if requiredSkillStages[stage.ID] {
+			attached := false
+			for _, skill := range stage.Skills {
+				if skill == "longform-cinematic-video" {
+					attached = true
+					break
+				}
+			}
+			if !attached {
+				t.Fatalf("%s must attach longform-cinematic-video: %v", stage.ID, stage.Skills)
+			}
+		}
+
+		for _, required := range requiredArtifacts[stage.ID] {
+			found := false
+			for _, artifact := range stage.Artifacts {
+				if artifact == required {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("%s must require %s: %v", stage.ID, required, stage.Artifacts)
+			}
+		}
+	}
+}
+
+func containsSkill(skills []string, want string) bool {
+	for _, skill := range skills {
+		if skill == want {
+			return true
+		}
+	}
+	return false
 }
 
 // A user with only one provider's key must still be able to finish a whole
@@ -163,10 +461,9 @@ func TestNarrationIsNotLockedToOneProvider(t *testing.T) {
 	}
 }
 
-// Routing is what makes the new pipelines reachable at all; without a route
-// the stages sit in plan.json and never execute. The default deliberately
-// stays on the pipeline that cannot spend money.
-func TestGenerationPipelinesAreRoutableAndNotTheDefault(t *testing.T) {
+// Video Studio exposes cinematic production only. Short-form is the default;
+// HyperFrames is a technique inside it, never a separate route.
+func TestCinematicPipelinesAreTheOnlyCreativeRoutes(t *testing.T) {
 	plan := planForAll(pipelineRegistry)
 	steps := plan["steps"].([]map[string]interface{})
 	if len(steps) == 0 || steps[0]["type"] != "routing" {
@@ -178,7 +475,7 @@ func TestGenerationPipelinesAreRoutableAndNotTheDefault(t *testing.T) {
 	for _, route := range routes {
 		routed[route["route_id"].(string)] = route["next_step_id"].(string)
 	}
-	for _, want := range []string{"longform", "shortform", "infographic", "quality"} {
+	for _, want := range []string{"longform", "shortform", "quality"} {
 		if routed[want] == "" {
 			t.Fatalf("no route reaches the %s pipeline: %+v", want, routed)
 		}
@@ -186,11 +483,13 @@ func TestGenerationPipelinesAreRoutableAndNotTheDefault(t *testing.T) {
 	if routed["longform"] != "longform-brief" || routed["shortform"] != "shortform-brief" {
 		t.Fatalf("generation routes must enter at their brief stage, got %+v", routed)
 	}
-	if got := steps[0]["default_route_id"]; got != "infographic" {
-		t.Fatalf("default route = %v, want infographic -- the default must not be a pipeline that spends money", got)
+	if routed["infographic"] != "" {
+		t.Fatalf("product infographic remains exposed as a route: %+v", routed)
 	}
-
-	if DefaultPipeline().ID != "infographic" {
-		t.Fatalf("DefaultPipeline() = %s, want infographic", DefaultPipeline().ID)
+	if got := steps[0]["default_route_id"]; got != "shortform" {
+		t.Fatalf("default route = %v, want shortform", got)
+	}
+	if DefaultPipeline().ID != "shortform" {
+		t.Fatalf("DefaultPipeline() = %s, want shortform", DefaultPipeline().ID)
 	}
 }

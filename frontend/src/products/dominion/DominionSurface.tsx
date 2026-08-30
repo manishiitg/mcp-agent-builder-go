@@ -3,12 +3,15 @@ import { MessageCircle, Plus, TrendingUp } from 'lucide-react'
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import ChatArea from '../../components/ChatArea'
 import { ProductSurfaceSwitcher } from '../../components/ProductSurfaceSwitcher'
+import AccountControl from '../../components/topbar/AccountControl'
+import { agentApi } from '../../services/api'
 import { useAppStore } from '../../stores/useAppStore'
 import { useChatStore, waitForChatStoreHydration } from '../../stores/useChatStore'
 import { useModeStore } from '../../stores/useModeStore'
 import { restoreSession } from '../../utils/sessionRestore'
 import { AddStockDialog } from './AddStockDialog'
 import { ConfirmDialog } from './ConfirmDialog'
+import { DailyActions } from './DailyActions'
 import { loadEquityCurve, loadLatestSnapshot } from './adapters/portfolio'
 import { loadOpenPositions } from './adapters/positions'
 import { loadRecentTradeIdeas } from './adapters/signals'
@@ -53,21 +56,29 @@ function useDominionChatTab() {
       await waitForChatStoreHydration()
       if (cancelled) return
       const chatStore = useChatStore.getState()
+      const existing = Object.values(chatStore.chatTabs).find((tab) => tab.metadata?.agentProfileId === DOMINION_PROFILE_ID)
+      const conversation = await agentApi.resolveAgentProfileConversation(
+        DOMINION_PROFILE_ID,
+        { conversation_key: 'main' },
+        existing?.sessionId ?? undefined,
+      )
 
-      let tab = Object.values(chatStore.chatTabs).find((t) => t.metadata?.agentProfileId === DOMINION_PROFILE_ID)
-      if (!tab) {
-        const createdTabId = await chatStore.createChatTab('Dominion', {
-          mode: 'multi-agent',
-          agentProfileId: DOMINION_PROFILE_ID,
-          agentProfileVersion: 1,
-          agentProfileWorkspace: 'Chats',
-          agentProfileProjectTitle: 'Dominion',
-        })
-        tab = chatStore.getTab(createdTabId)
-      }
+      // createChatTab reuses the durable singleton and merges the current
+      // profile binding, upgrading pre-contract Dominion tabs in place.
+      const createdTabId = await chatStore.createChatTab('Dominion', {
+        mode: 'multi-agent',
+        agentProfileId: DOMINION_PROFILE_ID,
+        agentProfileVersion: 1,
+        agentProfileWorkspace: 'Chats',
+        agentProfileProjectTitle: 'Dominion',
+        agentProfileChatContract: 'profile-v1',
+        agentProfileConversationKey: 'main',
+        agentProfileConversationId: conversation.conversation_id,
+      }, conversation.session_id)
+      const tab = chatStore.getTab(createdTabId)
       if (cancelled || !tab) return
 
-      const restoredTabId = await restoreSession(tab.sessionId ?? tab.tabId, {
+      const restoredTabId = await restoreSession(conversation.session_id, {
         title: 'Dominion',
         source: 'dominion-open',
         skipConfigRestore: true,
@@ -76,7 +87,9 @@ function useDominionChatTab() {
       chatStore.switchTab(restoredTabId)
       setTabId(restoredTabId)
     }
-    void prepare()
+    void prepare().catch((error) => {
+      if (!cancelled) useChatStore.getState().addToast(error instanceof Error ? error.message : 'Unable to open Dominion conversation', 'error')
+    })
     return () => { cancelled = true }
   }, [])
 
@@ -188,6 +201,10 @@ export function DominionSurface() {
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false)
   const [detailSymbol, setDetailSymbol] = useState<string | null>(null)
   const [removeTarget, setRemoveTarget] = useState<string | null>(null)
+  // Daily Action leads: it answers "what did this workflow actually do" before
+  // the reference views (equity history, full watchlist) — same insight-first
+  // ordering as the platform's own report-authoring guidance.
+  const [activeTab, setActiveTab] = useState<'daily-action' | 'equity' | 'stocks'>('daily-action')
 
   const handleAddSymbol = async (symbol: string, tier: WatchlistTier) => {
     const next = [...effectiveWatchlist, { symbol, tier }]
@@ -214,11 +231,14 @@ export function DominionSurface() {
     <div className="flex h-screen min-h-0 flex-col overflow-hidden bg-[#05070d]">
       <header className="flex h-[62px] shrink-0 items-center gap-4 border-b border-white/10 bg-[#05070d] px-4">
         <ProductSurfaceSwitcher />
+        <div className="ml-auto flex items-center gap-1">
+          <AccountControl />
+        </div>
       </header>
       <div className="flex min-h-0 flex-1">
         <aside className="flex w-[420px] shrink-0 flex-col border-r border-white/10 bg-[#070a12]">
           {chatTabId ? (
-            <ChatArea tabId={chatTabId} onNewChat={() => {}} landingContent={<DominionChatWelcome />} fullTurnStreaming showConversationUsage inputVariant="product" />
+            <ChatArea tabId={chatTabId} onNewChat={() => {}} landingContent={<DominionChatWelcome />} fullTurnStreaming inputVariant="product" hideRuntimeStatus showNewChatAction />
           ) : (
             <div className="grid h-full place-items-center text-xs text-slate-500">Connecting…</div>
           )}
@@ -262,67 +282,108 @@ export function DominionSurface() {
                 />
               </section>
 
-              {/* Equity curve */}
-              <section>
-                <SectionHeader icon={TrendingUp} title="Equity Curve" />
-                <div className={CARD}>
-                  <div className="h-[320px]">
-                    {chartData.length > 0 ? (
-                      <ResponsiveContainer width="100%" height="100%">
-                        <AreaChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
-                          <defs>
-                            <linearGradient id="dominionEquityFill" x1="0" y1="0" x2="0" y2="1">
-                              <stop offset="0%" stopColor="#818cf8" stopOpacity={0.4} />
-                              <stop offset="100%" stopColor="#818cf8" stopOpacity={0} />
-                            </linearGradient>
-                          </defs>
-                          <CartesianGrid strokeDasharray="3 3" stroke="#ffffff" opacity={0.06} />
-                          <XAxis dataKey="dateLabel" fontSize={12} tick={{ fill: '#64748b' }} axisLine={{ stroke: '#ffffff1a' }} tickLine={false} minTickGap={50} />
-                          <YAxis
-                            domain={equityDomain}
-                            fontSize={12}
-                            tick={{ fill: '#64748b' }}
-                            axisLine={false}
-                            tickLine={false}
-                            tickFormatter={(v) => formatUsd(Number(v), true)}
-                            width={72}
-                          />
-                          <Tooltip
-                            formatter={(value) => formatUsd(Number(value ?? 0))}
-                            contentStyle={{ borderRadius: 8, fontSize: 13, background: '#0d111c', border: '1px solid rgba(255,255,255,0.1)', color: '#e2e8f0' }}
-                          />
-                          <Area type="monotone" dataKey="equity" stroke="#818cf8" strokeWidth={2.5} fill="url(#dominionEquityFill)" activeDot={{ r: 5 }} />
-                        </AreaChart>
-                      </ResponsiveContainer>
-                    ) : (
-                      <div className="grid h-full place-items-center text-sm text-slate-500">No snapshots yet</div>
-                    )}
+              {/* Tabs -- each view is a distinct question (what happened, equity
+                  history, full watchlist); showing one at a time instead of
+                  stacking every section keeps the page from turning into an
+                  ever-scrolling wall. */}
+              <div className="border-b border-white/10">
+                <nav className="-mb-px flex gap-6" role="tablist">
+                  {(
+                    [
+                      { id: 'daily-action', label: 'Daily Action' },
+                      { id: 'equity', label: 'Equity' },
+                      { id: 'stocks', label: 'Stocks', count: stockGroups.length },
+                    ] as const
+                  ).map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={activeTab === tab.id}
+                      onClick={() => setActiveTab(tab.id)}
+                      className={`flex items-center gap-2 border-b-2 px-1 pb-3 text-sm font-medium transition ${
+                        activeTab === tab.id
+                          ? 'border-indigo-400 text-slate-100'
+                          : 'border-transparent text-slate-500 hover:text-slate-300'
+                      }`}
+                    >
+                      {tab.label}
+                      {'count' in tab ? (
+                        <span className="rounded-full bg-white/5 px-2 py-0.5 text-xs font-medium text-slate-400">{tab.count}</span>
+                      ) : null}
+                    </button>
+                  ))}
+                </nav>
+              </div>
+
+              {activeTab === 'equity' && (
+                <section>
+                  <SectionHeader icon={TrendingUp} title="Equity Curve" />
+                  <div className={CARD}>
+                    <div className="h-[320px]">
+                      {chartData.length > 0 ? (
+                        <ResponsiveContainer width="100%" height="100%">
+                          <AreaChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+                            <defs>
+                              <linearGradient id="dominionEquityFill" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="0%" stopColor="#818cf8" stopOpacity={0.4} />
+                                <stop offset="100%" stopColor="#818cf8" stopOpacity={0} />
+                              </linearGradient>
+                            </defs>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#ffffff" opacity={0.06} />
+                            <XAxis dataKey="dateLabel" fontSize={12} tick={{ fill: '#64748b' }} axisLine={{ stroke: '#ffffff1a' }} tickLine={false} minTickGap={50} />
+                            <YAxis
+                              domain={equityDomain}
+                              fontSize={12}
+                              tick={{ fill: '#64748b' }}
+                              axisLine={false}
+                              tickLine={false}
+                              tickFormatter={(v) => formatUsd(Number(v), true)}
+                              width={72}
+                            />
+                            <Tooltip
+                              formatter={(value) => formatUsd(Number(value ?? 0))}
+                              contentStyle={{ borderRadius: 8, fontSize: 13, background: '#0d111c', border: '1px solid rgba(255,255,255,0.1)', color: '#e2e8f0' }}
+                            />
+                            <Area type="monotone" dataKey="equity" stroke="#818cf8" strokeWidth={2.5} fill="url(#dominionEquityFill)" activeDot={{ r: 5 }} />
+                          </AreaChart>
+                        </ResponsiveContainer>
+                      ) : (
+                        <div className="grid h-full place-items-center text-sm text-slate-500">No snapshots yet</div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              </section>
+                </section>
+              )}
+
+              {/* Daily Action -- plain-language "what did this workflow actually do"
+                  record: the latest trading session's closed trades and new signals. */}
+              {activeTab === 'daily-action' && <DailyActions outcomes={outcomes} ideas={ideas} />}
 
               {/* Stocks -- everything grouped per symbol: tier, signal, position, recent grades.
                   Click a row for full history; the trash icon removes it from the watchlist. */}
-              <section>
-                <div className="mb-4 flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-indigo-500/10 text-indigo-400">
-                      <TrendingUp className="h-4 w-4" strokeWidth={2.25} />
-                    </span>
-                    <h2 className="text-base font-semibold text-slate-100">Stocks</h2>
-                    <span className="rounded-full bg-white/5 px-2.5 py-0.5 text-xs font-medium text-slate-400">{stockGroups.length}</span>
+              {activeTab === 'stocks' && (
+                <section>
+                  <div className="mb-4 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-indigo-500/10 text-indigo-400">
+                        <TrendingUp className="h-4 w-4" strokeWidth={2.25} />
+                      </span>
+                      <h2 className="text-base font-semibold text-slate-100">Stocks</h2>
+                      <span className="rounded-full bg-white/5 px-2.5 py-0.5 text-xs font-medium text-slate-400">{stockGroups.length}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setIsAddDialogOpen(true)}
+                      className="flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-indigo-500"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      Add Stock
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setIsAddDialogOpen(true)}
-                    className="flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-indigo-500"
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                    Add Stock
-                  </button>
-                </div>
-                <StockTable groups={stockGroups} onSelectSymbol={setDetailSymbol} onRequestRemove={setRemoveTarget} />
-              </section>
+                  <StockTable groups={stockGroups} onSelectSymbol={setDetailSymbol} onRequestRemove={setRemoveTarget} />
+                </section>
+              )}
             </div>
           </div>
         )}

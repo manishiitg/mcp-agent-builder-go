@@ -44,7 +44,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) ExecuteEvaluationOnly(ctx context.Con
 	// iteration-0 sandbox while still reading artifacts from the requested target run.
 	// Eval always runs against the workflow's current iteration-0. Historical
 	// re-scoring is intentionally not supported — workflow + eval rotate together
-	// in resolveRunFolderWithOptions, so evaluation/runs/iteration-N is paired
+	// in prepareCurrentRun, so evaluation/runs/iteration-N is paired
 	// with runs/iteration-N by construction. We preserve any group suffix the
 	// caller passed (e.g. "iteration-19/manishiitg" -> "iteration-0/manishiitg")
 	// since multi-group runs share an iteration but split per-group inside it.
@@ -133,7 +133,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) ExecuteEvaluationOnly(ctx context.Con
 	execCtx.SkipHumanInput = true // Ensure execution context also has this set
 
 	// Run execution phase
-	err = hcpo.runExecutionPhase(ctx, breakdownSteps, 1, progress, 0, execCtx)
+	err = hcpo.runExecutionPhase(ctx, breakdownSteps, 1, progress, 0, execCtx, nil)
 	if err != nil {
 		hcpo.GetLogger().Error(fmt.Sprintf("❌ Evaluation execution failed: %v", err), nil)
 		return "", fmt.Errorf("evaluation execution phase failed: %w", err)
@@ -352,6 +352,22 @@ func evaluationOutputContentCandidates(evalExecutionPath, stepFolder string, ste
 func isValidationSchemaLikeJSON(raw string) bool {
 	var obj map[string]interface{}
 	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &obj); err != nil {
+		return false
+	}
+	// A real eval step's own scored output can legitimately embed a "files"
+	// array shaped like a validation schema -- e.g. self-documenting which
+	// checks it satisfied -- as one field among its real content. Only treat
+	// the whole document as a validation-schema echo (not real step output)
+	// when it has no "score" of its own: a genuine validation_schema.json
+	// stub never scores itself, so any document that does is real output,
+	// not an echo, regardless of what else it nests. Without this, a step
+	// whose real context_output.json embeds a schema-shaped "files" field
+	// had its extractable score silently discarded (linkedin
+	// eval-strategy-loop, PLAT-243: score=6/max_score=10 present and
+	// correct in context_output.json, but evaluation_report.json recorded
+	// score=0, score_captured=false, "No output_content found for this
+	// step").
+	if _, hasScore := obj["score"]; hasScore {
 		return false
 	}
 	files, ok := obj["files"].([]interface{})

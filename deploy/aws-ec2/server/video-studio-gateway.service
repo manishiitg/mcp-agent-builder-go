@@ -1,0 +1,18 @@
+[Unit]
+Description=Video Studio cookie-auth gateway
+After=network-online.target docker.service video-studio-agent.service video-studio-workspace.service
+Wants=network-online.target docker.service
+
+[Service]
+Type=simple
+User=video-studio
+Group=video-studio
+EnvironmentFile=/opt/video-studio/.env
+Environment=HOME=/var/lib/video-studio
+WorkingDirectory=/opt/video-studio/current
+ExecStart=/opt/video-studio/current/bin/video-studio-gateway
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

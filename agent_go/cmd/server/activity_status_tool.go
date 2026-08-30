@@ -38,7 +38,6 @@ type activityRunningSchedule struct {
 	Source         string   `json:"source"`
 	WorkflowLabel  string   `json:"workflow_label,omitempty"`
 	WorkspacePath  string   `json:"workspace_path,omitempty"`
-	UserID         string   `json:"user_id,omitempty"`
 	Mode           string   `json:"mode,omitempty"`
 	WorkshopMode   string   `json:"workshop_mode,omitempty"`
 	GroupNames     []string `json:"group_names,omitempty"`
@@ -47,10 +46,9 @@ type activityRunningSchedule struct {
 	NextRunAt      string   `json:"next_run_at,omitempty"`
 	CronExpression string   `json:"cron_expression,omitempty"`
 	Timezone       string   `json:"timezone,omitempty"`
-	Query          string   `json:"query,omitempty"`
 }
 
-// registerActivityStatusTool gives multi-agent chat a read-only live status view.
+// registerActivityStatusTool gives AgentWorks chat a read-only live status view.
 // It mirrors the UI header's running workflow source and the scheduler runtime state.
 func (api *StreamingAPI) registerActivityStatusTool(underlyingAgent definitionToolRegistrar, currentUserID string) error {
 	if underlyingAgent == nil {
@@ -61,7 +59,7 @@ func (api *StreamingAPI) registerActivityStatusTool(underlyingAgent definitionTo
 		"type":       "object",
 		"properties": map[string]interface{}{},
 	}
-	description := "Return a JSON snapshot of currently running workflow executions and currently running schedules. Use this when the user asks what workflows, background runs, cron jobs, or multi-agent schedules are running right now."
+	description := "Return a JSON snapshot of currently running workflow executions and workflow schedules. Use this when the user asks what workflows, background runs, or cron jobs are running right now."
 
 	return underlyingAgent.RegisterCustomTool(
 		"get_activity_status",
@@ -103,7 +101,7 @@ func (api *StreamingAPI) handleActivityStatusTool(ctx context.Context, currentUs
 		RunningSchedules:  runningSchedules,
 		WorkflowCount:     len(runningWorkflows),
 		ScheduleCount:     len(runningSchedules),
-		IncludesSchedules: []string{"workflow schedules", "current user's multi-agent schedules"},
+		IncludesSchedules: []string{"workflow schedules"},
 	}
 
 	out, err := json.MarshalIndent(resp, "", "  ")
@@ -148,34 +146,6 @@ func (api *StreamingAPI) listRunningScheduleActivities(ctx context.Context, curr
 				CronExpression: sched.CronExpression,
 				Timezone:       scheduleTimezoneOrDefault(sched.Timezone),
 			})
-		}
-	}
-
-	if currentUserID != "" {
-		if f, exists, err := ReadMultiAgentSchedules(ctx, currentUserID); err != nil {
-			return nil, fmt.Errorf("failed to read multi-agent schedules: %w", err)
-		} else if exists && f != nil {
-			for _, sched := range MergeBuiltinSchedules(f.Schedules) {
-				state := api.scheduler.GetRuntimeStateForUser(currentUserID, sched.ID)
-				if !strings.EqualFold(state.LastStatus, "running") {
-					continue
-				}
-				out = append(out, activityRunningSchedule{
-					ID:             sched.ID,
-					Name:           sched.Name,
-					EntityType:     "multi-agent",
-					Source:         "user:" + currentUserID,
-					WorkspacePath:  "_users/" + currentUserID,
-					UserID:         currentUserID,
-					Mode:           "multi-agent",
-					SessionID:      state.LastSessionID,
-					LastRunAt:      formatActivityPtrTime(state.LastRunAt),
-					NextRunAt:      formatActivityPtrTime(state.NextRunAt),
-					CronExpression: sched.CronExpression,
-					Timezone:       scheduleTimezoneOrDefault(sched.Timezone),
-					Query:          sched.Query,
-				})
-			}
 		}
 	}
 

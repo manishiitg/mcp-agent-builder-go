@@ -32,7 +32,7 @@ func createRecordPulseImpactTool() (llmtypes.Tool, func(context.Context, map[str
 		"type": "object", "additionalProperties": false,
 		"properties": map[string]interface{}{
 			"intervention_id":       map[string]interface{}{"type": "string", "description": "Stable id; omit to derive it from criterion, metric, and title."},
-			"kind":                  map[string]interface{}{"type": "string", "enum": []string{"fix_bundle", "strategy_experiment"}, "description": "Use strategy_experiment only for the single approval-gated Goal Advisor experiment. Omit for ordinary fix bundles."},
+			"kind":                  map[string]interface{}{"type": "string", "enum": []string{"fix_bundle", "strategy_experiment"}, "description": "Use strategy_experiment only for an approval-gated Strategic Review experiment. Omit for ordinary fix bundles."},
 			"title":                 map[string]interface{}{"type": "string"},
 			"criterion_id":          map[string]interface{}{"type": "string", "description": "Stable success-criterion id from the workflow's durable goal contract."},
 			"impact_type":           map[string]interface{}{"type": "string", "enum": []string{"direct_goal", "reliability", "measurement", "presentation_maintenance"}},
@@ -44,6 +44,7 @@ func createRecordPulseImpactTool() (llmtypes.Tool, func(context.Context, map[str
 			"checkpoint":            map[string]interface{}{"type": "string"},
 			"guardrails":            stringArray,
 			"rollback_condition":    map[string]interface{}{"type": "string"},
+			"interference_domains":  map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Required when a strategy experiment is running or measuring. Stable names for every applicable goal criterion, control surface, channel/cohort, metric stream, shared resource, or contamination boundary, e.g. control:reply-copy or metric:qualified-replies. Concurrent experiments may not overlap."},
 			"human_input_id":        map[string]interface{}{"type": "string", "description": "Link the create_human_input_request id when approval is needed."},
 			"terminal_outcome":      map[string]interface{}{"type": "string", "description": "Required when a strategy experiment is adopted, rejected, or retired."},
 			"minimum_evidence_runs": map[string]interface{}{"type": "integer", "minimum": 1},

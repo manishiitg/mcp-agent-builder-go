@@ -1,5 +1,5 @@
 import { activateTab } from './activateTab'
-import { restoreSession } from './sessionRestore'
+import { hydrateTabEvents, restoreSession } from './sessionRestore'
 import { agentApi } from '../services/api'
 import type { ActiveSessionInfo, RunningWorkflowInfo } from '../services/api-types'
 import { useChatStore, type ChatTab } from '../stores/useChatStore'
@@ -11,6 +11,7 @@ import { isInternalChildSession, isScheduledSession } from './workflowSessionKin
 import { isVisibleActivitySession } from './activitySessions'
 import { openWorkflowInDefaultPreview } from './reportPreviewPreference'
 import { activateWorkflowTab, beginWorkflowNavigation, isCurrentWorkflowNavigation, selectWorkflowPreset } from './workflowNavigation'
+import { scheduleTabLabel } from './scheduleTabLabel'
 
 type RestoreWorkflowSessionOptions = {
   preset?: CustomPreset | PredefinedPreset
@@ -243,11 +244,11 @@ export function workflowSessionBotPlatform(
   return undefined
 }
 
-export function isBotWorkflowSession(session: ActiveSessionInfo, runningWorkflow?: RunningWorkflowInfo): boolean {
+function isBotWorkflowSession(session: ActiveSessionInfo, runningWorkflow?: RunningWorkflowInfo): boolean {
   return !!workflowSessionBotPlatform(session, runningWorkflow)
 }
 
-export function findWorkflowPresetForSession(
+function findWorkflowPresetForSession(
   session: ActiveSessionInfo,
   runningWorkflow?: RunningWorkflowInfo,
 ): CustomPreset | PredefinedPreset | undefined {
@@ -281,7 +282,7 @@ function revealWorkflowChat(tabId: string, workspacePath?: string | null): void 
   workflowStore.setFocusedPane('chat')
 }
 
-export async function restoreWorkflowSessionChat(
+async function restoreWorkflowSessionChat(
   session: ActiveSessionInfo,
   options: RestoreWorkflowSessionOptions = {},
 ): Promise<string> {
@@ -375,7 +376,7 @@ export async function restoreWorkflowSessionChat(
   }
 }
 
-export async function restoreScheduledWorkflowRunChat(
+async function restoreScheduledWorkflowRunChat(
   session: ActiveSessionInfo,
   options: RestoreWorkflowSessionOptions = {},
 ): Promise<string> {
@@ -387,7 +388,7 @@ export async function restoreScheduledWorkflowRunChat(
 
   return restoreReadOnlyWorkflowRunChat(session, {
     ...options,
-    tabName: 'Schedule',
+    tabName: scheduleTabLabel(jobName),
     metadata: {
       isScheduledRun: true,
       scheduledJobName: jobName,
@@ -397,7 +398,7 @@ export async function restoreScheduledWorkflowRunChat(
   })
 }
 
-export async function restoreBotWorkflowRunChat(
+async function restoreBotWorkflowRunChat(
   session: ActiveSessionInfo,
   options: RestoreWorkflowSessionOptions = {},
 ): Promise<string> {
@@ -555,10 +556,20 @@ async function restoreReadOnlyWorkflowRunChat(
     })
   }
 
-  // Do not hydrate event history on workflow switch. Scheduled/bot workflow runs
-  // can have large histories, and opening them from the header activity monitor
-  // should focus terminal/report/previous-chats immediately. Tree/debug view
-  // lazy-loads events when explicitly opened.
+  // A scheduled run is read-only, but it is still a conversation. Hydrate its
+  // bounded persisted event tail so restored schedules show the main-agent and
+  // child-agent work that already happened rather than an empty placeholder.
+  // The API strips raw terminal/stream events; this remains far smaller than a
+  // terminal restore and does not start polling.
+  try {
+    await hydrateTabEvents(session.session_id, {
+      workspacePath: workspacePath || undefined,
+      fallbackToChatHistory: true,
+      includeUiEvents: true,
+    })
+  } catch (error) {
+    console.warn('[WorkflowSessionRestore] could not hydrate saved schedule transcript', error)
+  }
   const isActive = isActiveWorkflowSession(session)
   chatStore.setTabStreaming(tabId, isActive)
   chatStore.setTabCompleted(tabId, !isActive)
@@ -585,7 +596,7 @@ async function restoreReadOnlyWorkflowRunChat(
 // to an existing tab, closes a stale builder tab, applies the preset, switches to
 // workflow mode, clears the Workflows Overview, and scrolls to bottom. Plain chat
 // sessions activate their existing tab or restore a fresh one.
-export async function openActiveSession(
+async function openActiveSession(
   session: ActiveSessionInfo,
   options: { preset?: CustomPreset | PredefinedPreset; runningWorkflow?: RunningWorkflowInfo; title?: string; source?: string; navigationGeneration?: number } = {},
 ): Promise<void> {
@@ -601,30 +612,6 @@ export async function openActiveSession(
     return
   }
 
-  const isChiefOfStaffSchedule = (session.agent_mode || '').toLowerCase().includes('multi-agent') &&
-    isScheduledSession({
-      sessionId: session.session_id,
-      triggeredBy: session.triggered_by,
-      botPlatform: session.bot_platform,
-    })
-
-  if (isChiefOfStaffSchedule) {
-    const tabId = await restoreSession(session.session_id, {
-      title: options.title || session.preset_name || session.title || 'Schedule',
-      source: options.source,
-    })
-    const chatStore = useChatStore.getState()
-    chatStore.setTabMetadata(tabId, {
-      mode: 'multi-agent',
-      isViewOnly: true,
-      isScheduledRun: true,
-      scheduledJobName: session.preset_name || session.title || options.title || 'Scheduled task',
-      readOnlyRestoredAt: Date.now(),
-    })
-    activateTab(tabId)
-    requestChatScrollToBottom()
-    return
-  }
 
   const chatStore = useChatStore.getState()
   const existingTab = findTabForSession(chatStore.chatTabs, session.session_id)

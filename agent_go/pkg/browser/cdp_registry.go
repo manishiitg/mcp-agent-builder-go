@@ -226,6 +226,18 @@ func guardCDPReset(port int, ownerID string) error {
 // guardCDPTabCreation returns an error when an owner already has
 // MaxCDPTabsPerOwner labeled tabs in the shared Chrome.
 func guardCDPTabCreation(port int, ownerID string) error {
+	// A caller with no resolvable per-workflow identity gets a fresh,
+	// never-before-seen ownerID on every call (cdpUnidentifiedOwnerID) so it
+	// can never collide with a real workflow's count -- but that same
+	// freshness means countCDPTabAliasesForOwner always reads 0 for it,
+	// silently bypassing the limit entirely rather than merely miscounting
+	// it (PLAT-181 review). Refuse outright instead: an unenforceable quota
+	// must fail loud, not fail open.
+	if isCDPUnidentifiedOwner(ownerID) {
+		return fmt.Errorf(
+			"cannot create a labeled tab in the shared CDP browser: no workflow/session identity could be resolved for this call, so tab ownership cannot be tracked or limited for it. " +
+				"This indicates missing session context upstream (a bug to fix at the caller, not a condition to retry).")
+	}
 	count := countCDPTabAliasesForOwner(port, ownerID)
 	if count < MaxCDPTabsPerOwner {
 		return nil

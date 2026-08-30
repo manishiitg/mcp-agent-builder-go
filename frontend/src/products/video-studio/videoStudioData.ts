@@ -1,33 +1,10 @@
 import { agentApi, getApiBaseUrl, getAuthToken } from '../../services/api'
-import type { LLMProvider, PlannerFile } from '../../services/api-types'
+import type { PlannerFile } from '../../services/api-types'
 import { loadWorkspacePresentations, parseWorkspacePresentations, type WorkspacePresentation } from '../../platform/presentations/presentationData'
 
 export const VIDEO_PROJECTS_ROOT = 'Chats/Video Studio/projects'
 export const VIDEO_PROFILE_ID = 'video-studio'
 export const VIDEO_PROFILE_VERSION = 2
-
-// Mirrors the LLMProvider union in api-types.ts. Kept as a Set here (rather
-// than importing one) because there is no runtime-checkable form of a
-// string-literal union to import -- this is the validation half that has to
-// exist somewhere for a value arriving as untyped server JSON to become a
-// safely-typed LLMProvider.
-const KNOWN_LLM_PROVIDERS = new Set<LLMProvider>([
-  'openrouter', 'bedrock', 'openai', 'vertex', 'anthropic', 'azure', 'z-ai',
-  'kimi', 'claude-code', 'codex-cli', 'cursor-cli', 'agy-cli', 'pi-cli',
-  'minimax', 'minimax-coding-plan', 'elevenlabs', 'deepgram',
-])
-
-function asLLMProvider(value: string): LLMProvider | null {
-  return KNOWN_LLM_PROVIDERS.has(value as LLMProvider) ? (value as LLMProvider) : null
-}
-
-export type VideoAgentProviderOption = {
-  id: string
-  label: string
-  provider: LLMProvider
-  modelId: string
-  isDefault?: boolean
-}
 
 export type VideoProductCommand = {
   name: string
@@ -43,18 +20,6 @@ type AgentProfileResponse = {
     icon?: unknown
     prompt?: unknown
   }>
-  runtime?: {
-    provider_options?: Array<{
-      id?: unknown
-      label?: unknown
-      provider?: unknown
-      model_id?: unknown
-      default?: unknown
-    }>
-    capabilities?: {
-      voice?: unknown
-    }
-  }
 }
 
 // Slash commands the product ships with itself, declared in its product.yaml.
@@ -81,26 +46,6 @@ export async function loadVideoProductCommands(): Promise<VideoProductCommand[]>
   })
   if (!response.ok) throw new Error(`Unable to load Video Studio commands (${response.status})`)
   return parseProductCommands(await response.json() as AgentProfileResponse)
-}
-
-// The profile endpoint returns the server's YAML-loaded profile. This keeps
-// product controls declarative: adding a provider choice requires changing the
-// product YAML, not a separate frontend allow-list.
-export async function loadVideoAgentProviderOptions(): Promise<VideoAgentProviderOption[]> {
-  const token = getAuthToken()
-  const response = await fetch(`${getApiBaseUrl()}/api/agent-profiles/${encodeURIComponent(VIDEO_PROFILE_ID)}?version=${VIDEO_PROFILE_VERSION}`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-  })
-  if (!response.ok) throw new Error(`Unable to load Video Studio agent profile (${response.status})`)
-  const profile = await response.json() as AgentProfileResponse
-  const options = profile.runtime?.provider_options ?? []
-  return options.flatMap((option) => {
-    const id = asString(option.id)
-    const label = asString(option.label)
-    const provider = asLLMProvider(asString(option.provider))
-    const modelId = asString(option.model_id)
-    return id && label && provider && modelId ? [{ id, label, provider, modelId, isDefault: option.default === true }] : []
-  })
 }
 
 export type VideoProject = {
@@ -140,6 +85,20 @@ export type CharacterPresentation = {
   spec: string
   model: string
   provider: string
+  note: string
+  revision: number
+  updatedAt: string
+  workspacePresentation: WorkspacePresentation
+}
+
+// Visual-development references are approved production constraints, not loose
+// attachments: later footage is conditioned on them to keep backgrounds,
+// wardrobe, props, and sequence boundaries stable.
+export type ReferencePresentation = {
+  id: string
+  title: string
+  path: string
+  role: string
   note: string
   revision: number
   updatedAt: string
@@ -406,6 +365,27 @@ export function toCharacterPresentations(presentations: WorkspacePresentation[])
 
 export async function loadCharacterPresentations(project: VideoProject): Promise<CharacterPresentation[]> {
   return toCharacterPresentations(await loadWorkspacePresentations(project.workspacePath, ['media.character']))
+}
+
+export function toReferencePresentations(presentations: WorkspacePresentation[]): ReferencePresentation[] {
+  return presentations.flatMap((presentation) => {
+    const path = asString(presentation.payload.path)
+    if (!path) return []
+    return [{
+      id: presentation.id,
+      title: presentation.title || path.split('/').pop() || 'Reference',
+      path,
+      role: asString(presentation.payload.role),
+      note: asString(presentation.payload.note),
+      revision: presentation.revision,
+      updatedAt: presentation.updatedAt,
+      workspacePresentation: presentation,
+    }]
+  })
+}
+
+export async function loadReferencePresentations(project: VideoProject): Promise<ReferencePresentation[]> {
+  return toReferencePresentations(await loadWorkspacePresentations(project.workspacePath, ['media.reference']))
 }
 
 export function toDocumentPresentations(presentations: WorkspacePresentation[]): DocumentPresentation[] {

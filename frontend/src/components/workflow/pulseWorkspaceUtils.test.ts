@@ -10,8 +10,8 @@ import {
 } from './pulseWorkspaceUtils'
 
 const definitions = [
-  { id: 'workflow_review', label: 'Engineering review', description: 'Correctness' },
-  { id: 'llm_ops_review', label: 'Ops review', description: 'Operations' },
+  { id: 'technical_review', label: 'Technical review', description: 'Correctness and operations' },
+  { id: 'strategic_review', label: 'Strategic review', description: 'Strategy' },
 ]
 
 function finding(
@@ -20,7 +20,6 @@ function finding(
   seenCount = 1,
 ): PulseFindingLifecycle {
   return {
-    fingerprint: `${module}-${status}-${seenCount}`,
     module,
     step_id: 'step-1',
     phase: 'review',
@@ -46,8 +45,9 @@ function review(module: string, recordedAt: string): PulseReviewRecord {
 
 describe('Pulse workspace model', () => {
   it('keeps only canonical module identities', () => {
-    expect(normalizePulseWorkspaceModule('workflow_review')).toBe('workflow_review')
-    expect(normalizePulseWorkspaceModule('strategy_auditor')).toBe('strategy_auditor')
+    expect(normalizePulseWorkspaceModule('workflow_review')).toBe('technical_review')
+    expect(normalizePulseWorkspaceModule('strategy_auditor')).toBe('strategic_review')
+    expect(normalizePulseWorkspaceModule('goal_advisor')).toBe('strategic_review')
   })
 
   it('summarizes module lifecycle state and keeps the latest review', () => {
@@ -106,7 +106,7 @@ describe('Pulse workspace model', () => {
       [review('llm_ops_review', '2026-07-31T12:00:00Z')],
     )
 
-    expect(selectPulseWorkspaceModule(summaries)).toBe('workflow_review')
+    expect(selectPulseWorkspaceModule(summaries)).toBe('technical_review')
   })
 
 })

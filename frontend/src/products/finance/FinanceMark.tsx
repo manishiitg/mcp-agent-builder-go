@@ -6,7 +6,7 @@ type FinanceMarkProps = {
   title?: string
 }
 
-// No bespoke SVG mark, same reasoning as ChiefOfStaffMark: reuse an
+// No bespoke SVG mark: reuse an
 // existing lucide identity in a gradient badge rather than commission art
 // for a v1 dashboard.
 export function FinanceMark({ className, title = 'Finance' }: FinanceMarkProps) {

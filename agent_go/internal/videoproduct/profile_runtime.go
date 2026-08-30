@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strconv"
 	"strings"
 	"time"
 
@@ -50,6 +49,38 @@ func updateWorkspaceJSON(ctx context.Context, client *workspace.Client, path str
 func workspaceFileExists(ctx context.Context, client *workspace.Client, path string) bool {
 	_, err := client.ReadWorkspaceFile(ctx, workspace.ReadWorkspaceFileParams{Filepath: path})
 	return err == nil
+}
+
+func videoStudioDefaultVariablesManifest() sbw.VariablesManifest {
+	return sbw.VariablesManifest{
+		Variables:      []sbw.Variable{},
+		Groups:         []sbw.VariableGroup{{Name: "default", Values: map[string]string{}, Enabled: true}},
+		ExtractionDate: time.Now().Format(time.RFC3339),
+	}
+}
+
+// ensureVideoStudioDefaultGroup gives the single-project Video Studio surface a
+// stable execution scope. The shared workflow runtime uses variable groups to
+// name run folders and isolate execution sessions, even when a product has no
+// user-facing variables. Video Studio therefore always has one internal
+// "default" group; it is not a choice presented to the user.
+func ensureVideoStudioDefaultGroup(ctx context.Context, client *workspace.Client, path string) error {
+	file, err := client.ReadWorkspaceFile(ctx, workspace.ReadWorkspaceFileParams{Filepath: path})
+	if err != nil {
+		return err
+	}
+	var manifest sbw.VariablesManifest
+	if err := json.Unmarshal([]byte(file.Content), &manifest); err != nil {
+		return fmt.Errorf("parse variables manifest: %w", err)
+	}
+	if len(manifest.Groups) > 0 {
+		return nil
+	}
+	manifest.Groups = []sbw.VariableGroup{{Name: "default", Values: map[string]string{}, Enabled: true}}
+	if strings.TrimSpace(manifest.ExtractionDate) == "" {
+		manifest.ExtractionDate = time.Now().Format(time.RFC3339)
+	}
+	return updateWorkspaceJSON(ctx, client, path, manifest)
 }
 
 // Profile metadata stores the user-relative workspace path (Chats/...), while
@@ -183,7 +214,12 @@ func ensureIntegratedProject(ctx context.Context, workspaceAPIURL string, runtim
 		return errors.New("product.json is not a valid Video Studio project manifest")
 	}
 
-	for _, folder := range []string{"uploads", "work", "outputs", "planning", "variables", "soul", "db"} {
+	// Every path granted to the step Folder Guard must exist before Landlock
+	// constructs its ruleset. builder/ is read-only execution context and may be
+	// empty on a new product project, but omitting the directory makes the whole
+	// shell sandbox unavailable on hosts that fail closed for missing policy
+	// paths.
+	for _, folder := range integratedProjectFolders() {
 		if err := client.CreateFolder(ctx, filepath.ToSlash(filepath.Join(runtime.WorkspacePath, folder))); err != nil && !strings.Contains(strings.ToLower(err.Error()), "exist") {
 			return fmt.Errorf("create %s folder: %w", folder, err)
 		}
@@ -203,7 +239,7 @@ func ensureIntegratedProject(ctx context.Context, workspaceAPIURL string, runtim
 		"planning/plan.json":        planForAll(pipelineRegistry),
 		"planning/step_config.json": integratedStepConfig(),
 		"workflow.json":             integratedWorkflowManifest(product.ID, product.Title),
-		"variables/variables.json":  map[string]interface{}{"variables": []interface{}{}, "groups": []interface{}{}, "extraction_date": time.Now().Format(time.RFC3339)},
+		"variables/variables.json":  videoStudioDefaultVariablesManifest(),
 	}
 	// Upgrade prior generated Video Studio plans too. Besides retiring the old
 	// legacy routes and panel-PNG/FFmpeg contracts, keep product-owned plans in
@@ -225,6 +261,9 @@ func ensureIntegratedProject(ctx context.Context, workspaceAPIURL string, runtim
 			return fmt.Errorf("seed %s: %w", relative, err)
 		}
 	}
+	if err := ensureVideoStudioDefaultGroup(ctx, client, filepath.ToSlash(filepath.Join(runtime.WorkspacePath, "variables/variables.json"))); err != nil {
+		return fmt.Errorf("ensure Video Studio default execution group: %w", err)
+	}
 	if err := reconcileIntegratedLLMConfig(ctx, client, runtime.WorkspacePath); err != nil {
 		return err
 	}
@@ -235,10 +274,15 @@ func ensureIntegratedProject(ctx context.Context, workspaceAPIURL string, runtim
 			return err
 		}
 	}
-	return client.InitializeWorkflowDB(ctx, workspace.InitializeWorkflowDBParams{
+	_, err = client.InitializeWorkflowDB(ctx, workspace.InitializeWorkflowDBParams{
 		DBPath:     filepath.ToSlash(filepath.Join(runtime.WorkspacePath, "db/db.sqlite")),
 		Migrations: []string{presentationsMigration, presentationsKindIndexMigration},
 	})
+	return err
+}
+
+func integratedProjectFolders() []string {
+	return []string{"uploads", "work", "outputs", "planning", "variables", "soul", "builder", "db"}
 }
 
 func shouldRefreshGeneratedVideoStudioPlan(content string) bool {
@@ -252,8 +296,10 @@ func shouldRefreshGeneratedVideoStudioPlan(content string) bool {
 		strings.Contains(content, `Build each panel in HTML/CSS`) {
 		return true
 	}
-	if !strings.Contains(content, `"route_id": "infographic"`) ||
-		!strings.Contains(content, `"infographic-research"`) {
+	hasInfographicRoute := strings.Contains(content, `"route_id": "infographic"`) || strings.Contains(content, `"route_id":"infographic"`)
+	hasCinematicRoutes := (strings.Contains(content, `"route_id": "shortform"`) || strings.Contains(content, `"route_id":"shortform"`)) &&
+		(strings.Contains(content, `"route_id": "longform"`) || strings.Contains(content, `"route_id":"longform"`))
+	if !hasInfographicRoute && !hasCinematicRoutes {
 		return false
 	}
 	// A plan this product generated that the platform will not load is worse
@@ -268,13 +314,13 @@ func shouldRefreshGeneratedVideoStudioPlan(content string) bool {
 	}
 	// Structural upgrades belong here for the same reason the critic gates do:
 	// a plan generated before one of them exists is missing a required part of
-	// the workflow, and nothing else brings it forward. The orchestrator id is
-	// read from the pipeline rather than written out, so renaming the block
-	// cannot leave this fingerprint silently checking for a stale name.
-	required := []string{`"infographic-render-critique"`}
-	if infographicPipeline.Orchestrated != nil {
-		required = append(required, strconv.Quote(infographicPipeline.Orchestrated.ID))
+	// the workflow, and nothing else brings it forward. Video Studio now exposes
+	// every production task as one message_sequence; refresh the older todo_task
+	// plans rather than leaving a hidden orchestrator in existing projects.
+	if strings.Contains(content, `"type": "todo_task"`) || strings.Contains(content, `"type":"todo_task"`) {
+		return true
 	}
+	required := []string{`"shortform-characters"`, `"shortform-look-sound"`, `"shortform-narration"`, `"longform-shotlist"`}
 	for _, marker := range required {
 		if !strings.Contains(content, marker) {
 			return true
@@ -382,13 +428,13 @@ func showVideoFactory(workspaceAPIURL string) agentprofiles.ToolFactory {
 		projectRoot := profileWorkspaceRoot(runtime.UserID, runtime.WorkspacePath)
 		return agentprofiles.ToolSpec{
 			Name: "show_video", Category: "presentation_tools",
-			Description: "Present the exact finished video in the product Videos panel after its quality-report.json has passed. Repeating the same path updates the existing presentation.",
+			Description: "Present a playable project video in the Production panel. Call this as soon as a reviewable MP4 exists; include a passing quality-report.json only when marking it as an approved final. Repeating the same path updates the existing presentation.",
 			Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{
 				"path":           map[string]interface{}{"type": "string", "description": "Project-relative path to the exact video"},
-				"qa_report_path": map[string]interface{}{"type": "string", "description": "Project-relative path to quality-report.json"},
+				"qa_report_path": map[string]interface{}{"type": "string", "description": "Optional project-relative passing quality-report.json. Omit for a review preview."},
 				"title":          map[string]interface{}{"type": "string"},
 				"note":           map[string]interface{}{"type": "string"},
-			}, "required": []string{"path", "qa_report_path", "title"}},
+			}, "required": []string{"path", "title"}},
 			Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
 				// The profile must declare this tool's presentation kind in
 				// product.yaml (tools[].presentation.kind). Requiring it here,
@@ -411,9 +457,14 @@ func showVideoFactory(workspaceAPIURL string) agentprofiles.ToolFactory {
 				if title == "" {
 					title = filepath.Base(videoPath)
 				}
-				verdict, err := validateWorkspaceQualityReport(ctx, client, projectRoot, videoPath, reportPath, note)
-				if err != nil {
-					return "Quality assurance has not passed for this video: " + err.Error(), nil
+				verdict := "preview"
+				if strings.TrimSpace(reportPath) != "" {
+					verdict, err = validateWorkspaceQualityReport(ctx, client, projectRoot, videoPath, reportPath, note)
+					if err != nil {
+						return "Quality assurance has not passed for this video: " + err.Error(), nil
+					}
+				} else if _, data, err := resolveWorkspaceEvidence(ctx, client, projectRoot, videoPath, videoPath); err != nil || len(data) == 0 {
+					return "show_video requires an existing, non-empty project video: " + videoPath, nil
 				}
 				event, err := presentations.Upsert(ctx, client, presentations.Presentation{
 					Kind:          runtime.Presentation.Kind,
@@ -453,6 +504,9 @@ func RegisterAgentProfileRuntime(registry *agentprofiles.Registry, workspaceAPIU
 		return err
 	}
 	if err := registry.RegisterToolFactory("video.show-character", showCharacterFactory(workspaceAPIURL)); err != nil {
+		return err
+	}
+	if err := registry.RegisterToolFactory("video.show-reference", showReferenceFactory(workspaceAPIURL)); err != nil {
 		return err
 	}
 	return registry.RegisterToolFactory("video.show-document", showDocumentFactory(workspaceAPIURL))

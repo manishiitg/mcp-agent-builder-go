@@ -8,6 +8,69 @@ export interface WorkflowRuntimeTabProjection {
   autoActivate: boolean
 }
 
+const MANUAL_PULSE_SESSION_PREFIX = 'schedule-manual--manual-p_'
+
+/** The toolbar's one-off Pulse run uses the scheduler lane but is not a
+ * user-authored schedule. Its generated session id carries the reserved
+ * manual-pulse schedule prefix, which lets the tab distinguish it from the
+ * Workflow Builder child execution projected for the same session. */
+function isManualPulseSession(sessionId?: string | null): boolean {
+  return (sessionId || '').toLowerCase().startsWith(MANUAL_PULSE_SESSION_PREFIX)
+}
+
+/**
+ * A runtime-projected tab can be discovered after its session has already
+ * emitted events. Formatted mode needs an explicit history catch-up before its
+ * live SSE subscription can take over; terminal mode has its own retained
+ * terminal restoration path.
+ */
+export function shouldCatchUpRunningWorkflowTranscript(
+  viewMode: ChatTab['viewMode'],
+  eventCount: number,
+): boolean {
+  return viewMode === 'formatted' && eventCount === 0
+}
+
+
+/**
+ * reusableScheduleTabId finds a finished Schedule lane that a newly-discovered
+ * run should take over, instead of opening yet another tab.
+ *
+ * The scheduler holds a durable per-workflow lease — `runningScheduleInSetLocked`
+ * refuses to start a second schedule while one owns the workflow — so at most one
+ * scheduled run per workflow exists at a time. The UI keyed its dedupe purely on
+ * backend session id, and every run mints a new session, so each run opened a
+ * fresh tab and none was ever reclaimed: a workflow scheduled three times a day
+ * accumulated a row of identical "Schedule" tabs for runs that had long finished.
+ *
+ * Only a lane that is genuinely free is reused:
+ *  - it belongs to this workflow (same preset), so runs never cross workflows;
+ *  - it is still a view-only scheduled run. A tab the user promoted to an
+ *    interactive Builder chat is user-owned state and must never be recycled
+ *    underneath them (the same precedence reconcileWorkflowRuntimeTab honours);
+ *  - its own run is over. A streaming lane is a live run, and the lease means a
+ *    new run should not be displacing it.
+ */
+export function reusableScheduleTabId(
+  // Derived from ChatTab rather than restated: a hand-written shape drifted
+  // from the real one (ChatTab.sessionId is string | null, not string).
+  tabs: Record<string, Pick<ChatTab, 'tabId' | 'sessionId' | 'isStreaming' | 'metadata'>>,
+  presetQueryId: string,
+  incomingSessionId: string,
+): string | null {
+  for (const tab of Object.values(tabs)) {
+    if (!tab || tab.sessionId === incomingSessionId) continue
+    const meta = tab.metadata
+    if (!meta || meta.mode !== 'workflow') continue
+    if (!meta.isScheduledRun || !meta.isViewOnly) continue
+    if (meta.userInteractiveContinuation) continue
+    if (meta.presetQueryId !== presetQueryId) continue
+    if (tab.isStreaming) continue
+    return tab.tabId
+  }
+  return null
+}
+
 /**
  * Apply a live-runtime projection without undoing an explicit user promotion.
  *
@@ -48,15 +111,22 @@ export function reconcileWorkflowRuntimeTab(
 }
 
 /**
- * A Schedule is a first-class parallel lane, not a temporary observer that
- * disappears when Chat becomes active. Keep it in the tab strip until the user
- * closes it. Other read-only lanes retain the old active/running visibility
- * rule so stale bot observations do not accumulate in the toolbar.
+ * A tab, once opened, is closed only by the user — never auto-hidden because
+ * its run finished or it fell out of focus.
+ *
+ * This was previously conditional for view-only Schedule lanes: hidden once
+ * a run finished unless it was the active tab, streaming, or had running
+ * background agents. That auto-hide was itself a reaction to an earlier,
+ * unconditional "until the user closes it" version that let finished runs
+ * pile up in the strip and reappear on every reload (tabs persist 24h with
+ * isStreaming reset to false). Explicit product decision: revert to
+ * user-closes-only and accept that a workflow scheduled several times a day
+ * accumulates that many tabs until manually closed, including across a
+ * reload — see selectDurableChatState's persistence filter, which no longer
+ * excludes finished Schedule tabs either.
  */
-export function shouldDisplayWorkflowTab(tab: ChatTab, activeTabId: string | null): boolean {
-  if (!tab.metadata?.isViewOnly) return true
-  if (tab.metadata?.isScheduledRun) return true
-  return tab.tabId === activeTabId || tab.isStreaming || tab.hasRunningBgAgents
+export function shouldDisplayWorkflowTab(_tab: ChatTab, _activeTabId: string | null): boolean {
+  return true
 }
 
 /** Describe the top-level tab for one live workflow execution. */
@@ -76,14 +146,23 @@ export function workflowRuntimeTabProjection(
   if (external && !scheduled) return null
 
   if (scheduled) {
+    const scheduledJobName = isManualPulseSession(running.session_id)
+      ? 'Manual Pulse'
+      : running.title || running.preset_name || running.phase_name || 'Schedule'
     return {
-      name: 'Schedule',
+      // The tab label shows the actual schedule's name (e.g. "Daily
+      // execution") rather than the generic "Schedule" -- with several
+      // schedules per workflow, a row of identically-labeled tabs was not
+      // distinguishable at a glance. The scheduled/bot "make interactive"
+      // icon (WorkflowChatTabs) still signals it's a schedule lane
+      // independent of the label.
+      name: scheduledJobName,
       metadata: {
         mode: 'workflow',
         presetQueryId,
         isViewOnly: true,
         isScheduledRun: true,
-        scheduledJobName: running.title || running.preset_name || running.phase_name || 'Schedule',
+        scheduledJobName,
       },
       // Runtime discovery must not pull the user away from their live Chat.
       autoActivate: false,

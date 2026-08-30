@@ -3,6 +3,7 @@ import { Checkbox } from './ui/checkbox';
 import { Check, Loader2 } from 'lucide-react';
 import { useToolSelectionStore } from '../stores/useToolSelectionStore';
 import { useMCPStore } from '../stores';
+import { serverNamesMatch, isSelectedServer, toolBelongsToServer, hasServerTool } from '../utils/mcpServerAlias';
 
 interface ToolSelectionSectionProps {
   availableServers: string[];
@@ -12,6 +13,8 @@ interface ToolSelectionSectionProps {
   onToolChange: (tools: string[]) => void;
   stepId?: string; // Optional step ID for debugging
   agentMode: string; // Add agentMode prop
+  /** Lets the server list use an embedded side panel's remaining vertical space. */
+  fillAvailableHeight?: boolean;
 }
 
 export const ToolSelectionSection: React.FC<ToolSelectionSectionProps> = ({
@@ -21,6 +24,7 @@ export const ToolSelectionSection: React.FC<ToolSelectionSectionProps> = ({
   onServerChange,
   onToolChange,
   stepId,
+  fillAvailableHeight = false,
 }) => {
   // Generate instance ID from stepId or use a default
   const instanceId = useMemo(() => stepId || `preset-${Date.now()}`, [stepId]);
@@ -156,31 +160,37 @@ export const ToolSelectionSection: React.FC<ToolSelectionSectionProps> = ({
 
   // Handle server checkbox
   const handleServerToggle = useCallback((serverName: string) => {
-    const isSelected = selectedServers.includes(serverName);
-    
+    const isSelected = isSelectedServer(selectedServers, serverName);
+
     if (isSelected) {
-      // Remove server
-      const newServers = selectedServers.filter(s => s !== serverName);
+      // Remove server — alias-aware, so unchecking clears a legacy-spelled
+      // entry (e.g. "google_sheets") even though the catalog only offers the
+      // current spelling (e.g. "google-sheets") to click.
+      const newServers = selectedServers.filter(s => !serverNamesMatch(s, serverName));
       onServerChange(newServers);
-      
+
       // Remove all tools from this server (including "*" marker)
-      const newTools = selectedTools.filter(t => !t.startsWith(`${serverName}:`));
+      const newTools = selectedTools.filter(t => !toolBelongsToServer(t, serverName));
       onToolChange(newTools);
     } else {
       // Add server - check if we already have specific tools for this server
-      const existingServerTools = selectedTools.filter(t => 
-        t.startsWith(`${serverName}:`) && !t.endsWith(':*')
+      const existingServerTools = selectedTools.filter(t =>
+        toolBelongsToServer(t, serverName) && !t.endsWith(':*')
       );
       const hasSpecificTools = existingServerTools.length > 0;
-      
-      onServerChange([...selectedServers, serverName]);
-      
+
+      // Defense in depth (PLAT-169): drop any stray alias-equivalent entry
+      // before appending the canonical spelling, so a toggle can never leave
+      // both spellings present even if selectedServers already somehow held
+      // a legacy one this render didn't catch.
+      onServerChange([...selectedServers.filter(s => !serverNamesMatch(s, serverName)), serverName]);
+
       if (!hasSpecificTools) {
         // No specific tools - use default 'all' mode and set "all tools" marker
         const newTools = [...selectedTools, `${serverName}:*`];
         onToolChange(newTools);
       }
-      
+
       // Always expand when server is selected so user can choose tool mode
       expandServer(serverName);
     }
@@ -263,38 +273,38 @@ export const ToolSelectionSection: React.FC<ToolSelectionSectionProps> = ({
   // Check if all tools from a server are selected
   const areAllServerToolsSelected = useCallback((serverName: string) => {
     // Check if in "all tools" mode first
-    if (selectedTools.includes(`${serverName}:*`)) {
+    if (selectedTools.some(t => t.endsWith(':*') && toolBelongsToServer(t, serverName))) {
       return true;
     }
-    
+
     const serverTools = storeActions.getServerTools(serverName) || [];
     if (!Array.isArray(serverTools) || serverTools.length === 0) return false;
-    
+
     // Filter out "*" marker when counting specific tools
-    const specificTools = selectedTools.filter(t => 
-      t.startsWith(`${serverName}:`) && !t.endsWith(':*')
+    const specificTools = selectedTools.filter(t =>
+      toolBelongsToServer(t, serverName) && !t.endsWith(':*')
     );
-    
-    return specificTools.length > 0 && serverTools.every(t => selectedTools.includes(`${serverName}:${t.name}`));
+
+    return specificTools.length > 0 && serverTools.every(t => hasServerTool(selectedTools, serverName, t.name));
   }, [storeActions, selectedTools]);
 
   return (
-    <div className="space-y-3">
-      <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
+    <div className={fillAvailableHeight ? 'flex h-full min-h-0 flex-col gap-3' : 'space-y-3'}>
+      <label className="block shrink-0 text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
         MCP Server Selection
       </label>
 
-      <div className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+      <div className="shrink-0 text-xs text-gray-500 dark:text-gray-400 mb-2">
         Select servers and choose whether to use all tools or select specific tools for each server.
       </div>
 
       {/* Server and Tool List */}
-      <div className="border border-gray-200 dark:border-gray-700 rounded-md max-h-96 overflow-y-auto">
+      <div className={`border border-gray-200 dark:border-gray-700 rounded-md overflow-y-auto ${fillAvailableHeight ? 'min-h-0 flex-1' : 'max-h-96'}`}>
         {availableServers
           .filter(serverName => serverName !== 'mcp')
           .sort((a, b) => {
-            const aSelected = selectedServers.includes(a);
-            const bSelected = selectedServers.includes(b);
+            const aSelected = isSelectedServer(selectedServers, a);
+            const bSelected = isSelectedServer(selectedServers, b);
             if (aSelected && !bSelected) return -1;
             if (!aSelected && bSelected) return 1;
             return a.localeCompare(b);
@@ -302,17 +312,17 @@ export const ToolSelectionSection: React.FC<ToolSelectionSectionProps> = ({
           .map((serverName) => {
           const isExpanded = instance.expandedServers.has(serverName);
           const isLoading = storeActions.isServerLoading(instanceId, serverName);
-          const isServerSelected = selectedServers.includes(serverName);
+          const isServerSelected = isSelectedServer(selectedServers, serverName);
           // Check if tools have been loaded (undefined = not loaded yet, array = loaded)
           const toolsFromStore = storeActions.getServerTools(serverName);
           const hasLoadedTools = toolsFromStore !== undefined;
           const serverTools = hasLoadedTools ? toolsFromStore : [];
           const allToolsSelected = areAllServerToolsSelected(serverName);
-          
+
           // Calculate mode from selectedTools if not in serverToolMode (fallback for initial render)
-          const hasAllToolsMarker = selectedTools.includes(`${serverName}:*`);
-          const serverSpecificTools = selectedTools.filter(t => 
-            t.startsWith(`${serverName}:`) && !t.endsWith(':*')
+          const hasAllToolsMarker = selectedTools.some(t => t.endsWith(':*') && toolBelongsToServer(t, serverName));
+          const serverSpecificTools = selectedTools.filter(t =>
+            toolBelongsToServer(t, serverName) && !t.endsWith(':*')
           );
           const calculatedMode = hasAllToolsMarker ? 'all' : (serverSpecificTools.length > 0 ? 'specific' : 'all');
           const toolMode = instance.serverToolMode[serverName] || calculatedMode;

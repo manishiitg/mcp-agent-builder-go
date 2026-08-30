@@ -7,11 +7,19 @@ on:
       - "agent_go/**"
       - "scripts/run-coding-cli-p0.sh"
       - ".github/workflows/coding-cli-p0.yml"
+      # The ticket-register integrity check below guards a docs-only failure
+      # mode, so a docs-only change has to be able to trigger this workflow.
+      - "docs/bugs/pulse_platform_issue_register.md"
+      - "docs/bugs/pulse_platform/**"
   pull_request:
     paths:
       - "agent_go/**"
       - "scripts/run-coding-cli-p0.sh"
       - ".github/workflows/coding-cli-p0.yml"
+      # The ticket-register integrity check below guards a docs-only failure
+      # mode, so a docs-only change has to be able to trigger this workflow.
+      - "docs/bugs/pulse_platform_issue_register.md"
+      - "docs/bugs/pulse_platform/**"
   workflow_dispatch:
     inputs:
       providers:
@@ -77,11 +85,31 @@ jobs:
           go -C ../multi-llm-provider-go test ./pkg/adapters/picli -run '^TestPiBoundedCleanupUsesSharedTmuxKillDelay$' -count=1
           go -C ../mcpagent test ./agent -run '^TestFinishStreamingTerminalEndIncludesRetentionMetadata$' -count=1
 
+      - name: Verify mandatory canonical turn lifecycle
+        working-directory: coding-agent-loop
+        run: >-
+          go -C ../mcpagent test ./agent
+          -run '^TestP0CanonicalTurnContract$'
+          -count=1
+
       - name: Verify deterministic delivery and notification contracts
         working-directory: coding-agent-loop
         run: >-
           go -C agent_go test ./cmd/server
           -run 'Test(HandleLiveInputMessageBusyCodingAgentDeliversExactlyOnce|HandleLiveInputMessageCompletionBoundaryChoosesExactlyOneRoute|StartNextTurnFromLiveInputAcknowledgesBeforeQueuedTurnRuns|WorkflowStepCompletionAutoNotificationCarriesCleanFinalMessage|CodingCLILifecycleMatrixHermeticTmux|TerminalOwnerReconciliationRejectsStaleGeneration|TerminalSnapshotExpiryMatrix|CleanupBoundedTmuxKeepsDismissedSnapshotUntilDisplayDeadline|HandleStopSessionCancelsActiveWorkAndPreventsPaneReuse|ResolveLiveAttachRestartRecoveryRequiresMatchingTmuxOwner|TerminalRoutesCompleteTerminalSignalsProviderWaitLoop|TerminalRoutesFailTerminalMarksSnapshotFailed|TerminalRoutesKillTerminalKillsTmuxAndMarksFailed|TerminalRoutesSendDownBypassesStartupReadinessForCompletedLivePane)$'
+          -count=1
+
+      # docs/bugs/pulse_platform_issue_register.md is edited by every parallel
+      # agent session, so a session that rewrites a region of it can silently
+      # drop another session's row and orphan a ticket that still exists on
+      # disk. That happened on 2026-08-17 (29b1241e dropped PLAT-123) and was
+      # caught only because an unrelated rebase touched the same lines.
+      # Cheap: reads two paths, no deps, no network.
+      - name: Verify Pulse platform ticket register integrity
+        working-directory: coding-agent-loop
+        run: >-
+          go -C agent_go test ./cmd/server
+          -run '^TestEveryPulsePlatformTicketIsLinkedFromTheRegister$'
           -count=1
 
       - name: Verify frontend live-input submission contract

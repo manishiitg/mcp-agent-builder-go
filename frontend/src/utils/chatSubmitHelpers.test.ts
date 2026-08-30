@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentQueryRequest } from '../services/api-types'
 import type { ChatTab } from '../stores/useChatStore'
-import { applyAgentProfileBinding } from './chatSubmitHelpers'
+import { applyAgentProfileBinding, buildAgentProfileChatRequest } from './chatSubmitHelpers'
 
 describe('agent profile query binding', () => {
   it('pins a product query to its profile version and workspace', () => {
@@ -29,5 +29,23 @@ describe('agent profile query binding', () => {
       },
     })
     expect(payload.agent_profile_id).toBeUndefined()
+  })
+
+  it('reduces a broad AgentWorks request to the minimal profile-chat wire contract', () => {
+    const payload = {
+      query: 'Explain today\'s portfolio changes',
+      agent_mode: 'multi-agent',
+      provider: 'codex-cli',
+      model_id: 'gpt-5.6-sol',
+      selected_folder: 'a/browser/chosen/path',
+      enabled_servers: ['workspace_advanced'],
+      selected_skills: [{ name: 'builder-reference', path: 'SKILL.md' }],
+      restored_conversation_path: 'Chats/dominion-history.json',
+    } as unknown as AgentQueryRequest
+
+    expect(buildAgentProfileChatRequest(payload, 'project-123')).toEqual({
+      message: 'Explain today\'s portfolio changes',
+      conversation_key: 'project-123',
+    })
   })
 })

@@ -1,0 +1,206 @@
+# Rootless Linux deployment checklist
+
+Shared requirements for the **rootless, `systemd --user`, host-level-Caddy**
+deployment pattern — the architecture Dominion
+([`dedicated-vm/dominion-hetzner.md`](dedicated-vm/dominion-hetzner.md)) and
+Video Studio ([`aws-ec2/README.md`](aws-ec2/README.md)) both use: an
+unprivileged service account runs the agent + workspace API + gateway
+directly (no root, no Docker), a shared host-level Caddy reverse-proxies to
+it, and shell tools run inside a Landlock-first sandbox with a mount-
+namespace fallback.
+
+This doc exists because Video Studio's `deploy-rootless.sh` guarantees most
+of the items below automatically, every release. **Dominion has no
+equivalent script — every one of these was independently rediscovered as a
+live production incident**, one at a time, because there was nothing
+forcing a new dedicated-VM deployment to prove it satisfies them before
+going live. Use this as a pre-launch checklist for any *new* deployment on
+this pattern, and re-run it after any change to the underlying `workspace`/
+`agent_go` modules that touches sandboxing, credentials, or Caddy config.
+
+The legacy `dedicated-vm/README.md` deployment (root-owned, Docker Caddy +
+frontend) is architecturally different enough that most of this doesn't
+apply there as-is — it's called out per item below where relevant.
+
+## Checklist
+
+### 1. Claude Code CLI installed and authenticated
+
+The agent shells out to a bare `claude` on `PATH`
+(`exec.LookPath("claude")`, no configurable override). Without it, every
+turn fails with `claude cli not found in PATH`.
+
+```bash
+npm install -g --prefix <tools-prefix> @anthropic-ai/claude-code
+```
+
+Put `<tools-prefix>/bin` ahead of the system default in `PATH` for every
+service unit's `EnvironmentFile`, then verify it actually authenticates
+with the deployed token — a present-but-unauthenticated CLI fails
+differently, not with the PATH error above:
+
+```bash
+CLAUDE_CODE_OAUTH_TOKEN=... HOME=<service-home> PATH=<tools-prefix>/bin:$PATH \
+  claude -p --output-format json <<< "say OK"
+# expect: {"is_error":false, ..., "result":"OK", ...}
+```
+
+### 2. The Landlock launcher binary is present
+
+The workspace API resolves its shell-sandbox launcher by the hardcoded name
+`video-studio-landlock-runner` (`workspace/security/landlock_policy.go`) —
+**that literal filename regardless of which product is actually running** —
+first next to its own binary, then on `PATH`. Without it, PLAT-118's
+fail-closed design refuses every `execute_shell_command` call with
+`SANDBOX_UNAVAILABLE` rather than running unsandboxed.
+
+```bash
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build \
+  -o releases/<release-id>/bin/video-studio-landlock-runner \
+  ./workspace/cmd/landlock-runner
+```
+
+Verify: `curl http://127.0.0.1:<workspace-port>/health` →
+`shell_sandbox.available=true`, `shell_sandbox.backend=landlock`.
+
+### 3. Both Downloads directories exist
+
+Two *different* directories, both required, both silent `SANDBOX_UNAVAILABLE`
+failures if missing:
+
+- **Workspace-level** `Downloads/` under the docs root (e.g.
+  `<docs-dir>/Downloads`) — one of the hardcoded read/write folders every
+  multi-agent chat session grants (`server.go`, `tool_setup.go`).
+- **`$HOME`-level** `Downloads/` under the service account's own `$HOME`
+  (e.g. `<service-home>/Downloads`) — referenced by the Folder Guard policy
+  bootstrap independent of the workspace docs tree. Its absence produces
+  `SANDBOX_UNAVAILABLE: ... stat <home>/Downloads: no such file or
+  directory` — silently blocking `execute_shell_command` for every session
+  from first boot, discovered live on Dominion 2026-08-25 (see
+  `dominion-hetzner.md`).
+
+Create both explicitly during account/directory bootstrap, not as an
+afterthought:
+
+```bash
+mkdir -p <docs-dir>/Downloads <service-home>/Downloads
+```
+
+### 4. `MCP_API_URL` is explicitly set — never left to infer
+
+`GetCodeExecAPIURL()` (`agent_go/cmd/server/server.go`) resolves the URL
+custom tools use to call back into the agent, in this priority order:
+1. Explicit `MCP_API_URL` env var — **always wins if set.**
+2. `NATIVE_WORKSPACE=true` → `http://127.0.0.1:<agent-port>`. This flag is
+   only set by a local-dev wrapper script (`run_server_with_logging.sh
+   --with-workspace`), **not** by `deploy-rootless.sh` — don't rely on it
+   for a production rootless deployment.
+3. Otherwise, if `WORKSPACE_API_URL` contains `localhost`/`127.0.0.1`
+   (true for essentially every rootless deployment), it falls through to
+   **`http://host.docker.internal:<agent-port>`** — a Docker-only hostname
+   that does not resolve on a bare-metal/rootless host at all.
+
+Branch 3 is what actually fires when this is missed: tool calls fail with
+DNS resolution errors against `host.docker.internal`, and the agent itself
+may go looking for it (`getent hosts host.docker.internal`) while trying to
+self-diagnose. Found live on Dominion 2026-08-29, ~5 days after the rest of
+this checklist's items were already fixed — this one had no earlier
+symptom because nothing had needed a custom tool callback until then.
+
+`deploy-rootless.sh` guarantees this for Video Studio automatically
+(`grep -q '^MCP_API_URL=' ... || echo 'MCP_API_URL=http://127.0.0.1:8000' >>
+...`, idempotent on every release). Set it explicitly and permanently in
+`.env` for any deployment without that script:
+
+```bash
+echo 'MCP_API_URL=http://127.0.0.1:<agent-port>' >> <deployment>/.env
+```
+
+### 5. Caddy compresses responses
+
+Caddy does not compress by default — a site block with no `encode`
+directive silently ships the full uncompressed frontend bundle (multiple
+MB) on every page load. Confirmed live on Dominion 2026-08-28 as the root
+cause of a real "the server is slow" report: the main JS bundle transferred
+at ~3.7 MB instead of the ~1 MB gzip produces.
+
+```
+your-hostname.example.com {
+    encode zstd gzip
+    reverse_proxy 127.0.0.1:<gateway-port>
+}
+```
+
+Verify against the *real* JS bundle, not the small `/login` page (which
+compresses trivially either way and can look fine even when the real
+bundle isn't):
+
+```bash
+curl -sS -H "Accept-Encoding: gzip" -D - -o /dev/null \
+  https://your-hostname.example.com/assets/index-<hash>.js
+# expect: content-encoding: gzip
+```
+
+Applies to this doc's rootless pattern only — the legacy Docker-Caddy
+deployment configures compression separately in its own Caddyfile.
+
+### 6. The mount-namespace Landlock fallback actually works
+
+Landlock's rule model is purely additive (no allow-with-carve-out), so it
+correctly *refuses* any Folder Guard policy that needs one — e.g. write
+access to a folder except one of its own subfolders (a real policy the
+generic AgentWorks chat requests for a workflow's `planning/` folder). It's
+supposed to fall through to a mount-namespace backend for that case.
+
+As of 2026-08-29 the code-level bug that made that fallback permanently
+non-functional on every rootless deployment is fixed
+(`workspace/security/isolator.go`/`isolator_linux.go` — see git history for
+"Fix the Landlock mount-namespace fallback"); any deployment built from
+`workspace` at or after that fix already has it. What's still a genuine
+**per-host** thing to check, not fixed by that patch: Ubuntu 23.10+/24.04
+defaults `kernel.apparmor_restrict_unprivileged_userns=1`, which separately
+blocks unprivileged user-namespace creation for any process without an
+explicit AppArmor profile.
+
+```bash
+cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+# if 1: decide (a real security trade-off, not a default to reach for)
+# between disabling it host-wide via /etc/sysctl.d/ (simplest, loosens
+# every process on a shared host) or a narrower AppArmor profile granting
+# userns_create to only this product's own binaries.
+```
+
+**Verify with the actual test**, not a manual curl reproduction — compile
+it locally and ship the binary if the host has no Go toolchain (typical for
+a deploy-target-only server):
+
+```bash
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test -c ./workspace/security/ -o security.test
+# ship security.test to the host, then:
+./security.test -test.run TestMountNamespaceFallbackEnforcesLandlockRejectedOverlapPolicy -test.v
+```
+
+### 7. If syncing an existing workflow's data from a dev machine
+
+A full directory sync of workflow state (chat history, builder sessions,
+`.claude/` project state) from a local/dev machine to a server carries that
+machine's own absolute paths with it — specifically
+`runtime.agent_session_handle.provider.working_dir` inside any `builder/`
+conversation JSON, captured when a native Claude Code session was last used
+*locally*. Resuming one of those sessions on the server fails with
+`SANDBOX_UNAVAILABLE: ... mkdir <dev-machine-path>: permission denied`
+(found live on Dominion 2026-08-28, 221 affected files).
+
+Before considering a sync complete, grep the synced tree for the source
+machine's own absolute path and bulk-correct it to the real server path.
+This is silent until a native coding-agent session actually tries to
+resume — it will not surface at sync time.
+
+## Not yet automated
+
+Every item above is currently a manual, human-run checklist. The more
+durable fix — a `deploy-dominion.sh` (or similarly named) script mirroring
+`deploy-rootless.sh`'s automatic guarantees for this specific deployment,
+so a release can't silently skip any of these — has not been built. Worth
+doing if this deployment gets another release cycle rather than staying
+effectively static.

@@ -227,11 +227,10 @@ func TestWorkflowE2ESingleRegularStepPiCLI(t *testing.T) {
 		ModelID:  model,
 	}
 	presetCfg := &workflowtypes.PresetLLMConfig{
-		SchemaVersion:  workflowtypes.LLMConfigSchemaVersion,
-		Mode:           workflowtypes.LLMConfigModeExplicit,
-		BuilderLLM:     agentLLM,
-		MaintenanceLLM: agentLLM,
-		PulseLLM:       agentLLM,
+		SchemaVersion: workflowtypes.LLMConfigSchemaVersion,
+		Mode:          workflowtypes.LLMConfigModeExplicit,
+		BuilderLLM:    agentLLM,
+		PulseLLM:      agentLLM,
 		TieredConfig: &workflowtypes.TieredLLMConfig{
 			Tier1: agentLLM,
 			Tier2: agentLLM,
@@ -260,7 +259,6 @@ func TestWorkflowE2ESingleRegularStepPiCLI(t *testing.T) {
 		t.Fatalf("NewWorkflowOrchestrator: %v", err)
 	}
 	wo.SetExecutionOptions(&stepworkflow.ExecutionOptions{
-		RunMode:           "use_same_run",
 		SelectedRunFolder: "iteration-0",
 		ExecutionStrategy: stepworkflow.ExecutionStrategyStartFromBeginningNoHuman,
 		EnabledGroupNames: []string{"default"},
@@ -368,12 +366,11 @@ func TestWorkflowE2EMessageSequencePiCLI(t *testing.T) {
 	}
 	agentLLM := &workflowtypes.AgentLLMConfig{Provider: string(llm.ProviderPiCLI), ModelID: model}
 	presetCfg := &workflowtypes.PresetLLMConfig{
-		SchemaVersion:  workflowtypes.LLMConfigSchemaVersion,
-		Mode:           workflowtypes.LLMConfigModeExplicit,
-		BuilderLLM:     agentLLM,
-		MaintenanceLLM: agentLLM,
-		PulseLLM:       agentLLM,
-		TieredConfig:   &workflowtypes.TieredLLMConfig{Tier1: agentLLM, Tier2: agentLLM, Tier3: agentLLM},
+		SchemaVersion: workflowtypes.LLMConfigSchemaVersion,
+		Mode:          workflowtypes.LLMConfigModeExplicit,
+		BuilderLLM:    agentLLM,
+		PulseLLM:      agentLLM,
+		TieredConfig:  &workflowtypes.TieredLLMConfig{Tier1: agentLLM, Tier2: agentLLM, Tier3: agentLLM},
 	}
 
 	wo, err := NewWorkflowOrchestrator("", 0.7, "workflow", loggerv2.NewNoop(), nil, nil, []string{}, []string{}, false, nil, map[string]interface{}{}, llmCfg, 10, map[string]string{}, presetCfg)

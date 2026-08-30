@@ -5,9 +5,14 @@ import type { AxiosInstance, InternalAxiosRequestConfig } from 'axios'
 import { useChatStore } from '../stores/useChatStore'
 import { useModeStore } from '../stores/useModeStore'
 import { getActiveWorkspaceProfile, useWorkspaceConnectionStore } from '../stores/useWorkspaceConnectionStore'
+import { GATEWAY_LOGIN_HEADER, gatewayLoginTarget, redirectToGatewayLogin } from '../utils/gatewayAuth'
+import { apiTimingPathFor, recordApiTiming, sanitizeApiBody } from '../utils/apiTiming'
 import type {
   AgentQueryRequest,
   AgentQueryResponse,
+  AgentProfileChatRequest,
+  AgentProfileConversationRequest,
+  AgentProfileConversationResponse,
   GetEventsResponse,
   TerminalEventsResponse,
   MCPServerConfig,
@@ -79,6 +84,7 @@ import type {
   PulseAgentMetricsResponse,
   PulseImpactResponse,
   PulseContextResponse,
+  PulseEvalResultsResponse,
 } from './api-types'
 import type { PlanStep, AgentConfigs } from '../utils/stepConfigMatching'
 
@@ -86,6 +92,9 @@ import type { PlanStep, AgentConfigs } from '../utils/stepConfigMatching'
 export type {
   AgentQueryRequest,
   AgentQueryResponse,
+  AgentProfileChatRequest,
+  AgentProfileConversationRequest,
+  AgentProfileConversationResponse,
   GetEventsResponse,
   MCPServerConfig,
   ChatSession,
@@ -166,6 +175,29 @@ type AppWindow = Window & {
 
 type RuntimeRetriableRequestConfig = InternalAxiosRequestConfig & {
   __runtimeConfigRetried?: boolean
+}
+
+type TimedRequestConfig = InternalAxiosRequestConfig & {
+  __requestStartedAt?: number
+}
+
+function markRequestStart(config: TimedRequestConfig): TimedRequestConfig {
+  config.__requestStartedAt = performance.now()
+  return config
+}
+
+function recordResponseTiming(config: TimedRequestConfig | undefined, status: number | 'error', responseData?: unknown) {
+  if (!config || config.__requestStartedAt === undefined) return
+  recordApiTiming({
+    method: (config.method || 'get').toUpperCase(),
+    path: apiTimingPathFor(config.url, config.baseURL),
+    status,
+    durationMs: performance.now() - config.__requestStartedAt,
+    timestamp: Date.now(),
+    requestParams: sanitizeApiBody(config.params),
+    requestBody: sanitizeApiBody(config.data),
+    responseBody: sanitizeApiBody(responseData),
+  })
 }
 
 // Resolve API base URL: use build-time env if set; otherwise fallback based on mode
@@ -511,7 +543,7 @@ api.interceptors.request.use((config) => {
     config.headers['Authorization'] = `Bearer ${authToken}`
   }
 
-  return config
+  return markRequestStart(config)
 })
 
 // --- Axios response interceptor to handle 401 errors ---
@@ -528,9 +560,24 @@ function is401DueToBadToken(error: unknown): boolean {
   return msg.includes('expired') || msg.includes('invalid')
 }
 
+function redirectOnGatewayAuthenticationRequired(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const response = (error as { response?: { status?: number; headers?: Record<string, unknown> & { get?: (name: string) => unknown } } }).response
+  const headers = response?.headers
+  const headerValue = headers?.get?.(GATEWAY_LOGIN_HEADER) ?? headers?.[GATEWAY_LOGIN_HEADER.toLowerCase()]
+  return redirectToGatewayLogin(gatewayLoginTarget(response?.status, headerValue))
+}
+
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    recordResponseTiming(response.config as TimedRequestConfig, response.status, response.data)
+    return response
+  },
   async (error) => {
+    if (axios.isAxiosError(error)) {
+      recordResponseTiming(error.config as TimedRequestConfig, error.response?.status ?? 'error', error.response?.data)
+    }
+    if (redirectOnGatewayAuthenticationRequired(error)) return Promise.reject(error)
     if (is401DueToBadToken(error)) {
       clearAuthToken()
     }
@@ -576,12 +623,19 @@ workspaceApi.interceptors.request.use((config) => {
     }
   }
 
-  return config
+  return markRequestStart(config)
 })
 
 workspaceApi.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    recordResponseTiming(response.config as TimedRequestConfig, response.status, response.data)
+    return response
+  },
   async (error) => {
+    if (axios.isAxiosError(error)) {
+      recordResponseTiming(error.config as TimedRequestConfig, error.response?.status ?? 'error', error.response?.data)
+    }
+    if (redirectOnGatewayAuthenticationRequired(error)) return Promise.reject(error)
     if (is401DueToBadToken(error)) {
       clearAuthToken()
     }
@@ -839,20 +893,22 @@ export const agentApi = {
     return response.data
   },
 
-  // Formatted Resume needs conversational turns, not the archived terminal/UI
-  // trace. The server projects the persisted history to bounded user/final-
-  // assistant pairs so reopening a large coding-agent chat stays lightweight.
-  getChatHistoryResumeConversation: async (sessionId: string, workspacePath?: string, resumeTurns = 100, resumeOffset = 0): Promise<ChatHistoryConversation> => {
+  // Formatted Resume needs the readable conversation plus its compact tool
+  // trace, never raw terminal frames. The server bounds by user turns and
+  // preserves meaningful assistant updates within each turn.
+  getChatHistoryResumeConversation: async (sessionId: string, workspacePath?: string, resumeTurns = 100, resumeOffset = 0, includeUiEvents = false): Promise<ChatHistoryConversation> => {
     const params: Record<string, string> = { resume_turns: String(resumeTurns) }
     if (resumeOffset > 0) params.resume_offset = String(resumeOffset)
+    if (includeUiEvents) params.include_ui_events = '1'
     if (workspacePath) params.workspace_path = workspacePath
     const response = await api.get(`/api/chat-history/sessions/${sessionId}`, { params })
     return response.data
   },
 
-  listChatHistorySessions: async (limit = 80, offset = 0, workspacePath?: string): Promise<{ sessions: ChatHistorySession[] }> => {
+  listChatHistorySessions: async (limit = 80, offset = 0, workspacePath?: string, kind?: import('./api-types').ChatHistorySessionKind): Promise<{ sessions: ChatHistorySession[] }> => {
     const params: Record<string, string | number> = { limit, offset }
     if (workspacePath) params.workspace_path = workspacePath
+    if (kind) params.kind = kind
     const response = await api.get('/api/chat-history/sessions', { params })
     return response.data
   },
@@ -919,6 +975,49 @@ export const agentApi = {
     }
 
     const response = await api.post('/api/query', request, { headers })
+    return response.data
+  },
+
+  // Product-owned chats use a narrow server-authored profile contract instead
+  // of sending the Workflow Builder / AgentWorks QueryRequest surface.
+  startAgentProfileQuery: async (
+    profileId: string,
+    request: AgentProfileChatRequest,
+    sessionId?: string,
+  ): Promise<AgentQueryResponse> => {
+    const headers: Record<string, string> = {}
+    if (sessionId) headers['X-Session-ID'] = sessionId
+    const response = await api.post(
+      `/api/agent-profiles/${encodeURIComponent(profileId)}/query`,
+      request,
+      { headers },
+    )
+    return response.data
+  },
+
+  resolveAgentProfileConversation: async (
+    profileId: string,
+    request: AgentProfileConversationRequest,
+    existingSessionId?: string,
+  ): Promise<AgentProfileConversationResponse> => {
+    const headers: Record<string, string> = {}
+    if (existingSessionId) headers['X-Session-ID'] = existingSessionId
+    const response = await api.post(
+      `/api/agent-profiles/${encodeURIComponent(profileId)}/conversation`,
+      request,
+      { headers },
+    )
+    return response.data
+  },
+
+  startNewAgentProfileConversation: async (
+    profileId: string,
+    request: AgentProfileConversationRequest,
+  ): Promise<AgentProfileConversationResponse> => {
+    const response = await api.post(
+      `/api/agent-profiles/${encodeURIComponent(profileId)}/conversation/new`,
+      request,
+    )
     return response.data
   },
 
@@ -1511,6 +1610,27 @@ export const agentApi = {
     }
   },
 
+  // Write one or more cells on one row in a workflow's db/db.sqlite for an HTML
+  // report's window.report.updateField/updateFields. The backend validates
+  // every column against the live schema and matches the row on that table's
+  // own primary key, applying all fields in one transaction — no caller-
+  // supplied SQL, so this is safe to call from report iframe JS.
+  updateReportFields: async (
+    dbPath: string,
+    table: string,
+    rowId: string | number,
+    fields: Record<string, string | number | boolean | null>,
+  ) => {
+    const response = await workspaceApi.post('/api/report-field', {
+      db_path: dbPath, table, row_id: rowId, fields,
+    })
+    return response.data as {
+      success: boolean
+      error?: string
+      data?: { table: string; row_id: string | number; old_values: Record<string, unknown>; new_values: Record<string, unknown> }
+    }
+  },
+
 	listReportHumanInputs: async (workspacePath: string, status?: string, source?: string) => {
     const response = await api.get('/api/report-human-inputs', {
       params: {
@@ -1587,6 +1707,13 @@ export const agentApi = {
       params: { workspace_path: workspacePath },
     })
     return response.data as PulseContextResponse
+  },
+
+  getPulseEvalResults: async (workspacePath: string) => {
+    const response = await api.get('/api/workflow/pulse-eval-results', {
+      params: { workspace_path: workspacePath },
+    })
+    return response.data as PulseEvalResultsResponse
   },
 
   answerReportHumanInput: async (
@@ -2163,26 +2290,10 @@ export const agentApi = {
     return response.data
   },
 
-  getOrgNotifications: async (): Promise<WorkflowNotificationInfoResponse> => {
-    const response = await api.get('/api/org/notifications')
-    return response.data
-  },
-
   getWorkflowPublishSecret: async (workspacePath: string, secretName: string): Promise<WorkflowPublishSecretResponse> => {
     const response = await api.get('/api/workflow/publish/secret', {
       params: { workspace_path: workspacePath, secret_name: secretName }
     })
-    return response.data
-  },
-
-  getOrgBackup: async (): Promise<WorkflowBackupInfoResponse> => {
-    const response = await api.get('/api/org/backup')
-    return response.data
-  },
-
-  // Test image generation config by attempting to generate a sample image
-  testImageGen: async (config: { provider: string; model_id: string; api_key?: string }): Promise<{ valid: boolean; message?: string; error?: string; image_url?: string; image_data?: string }> => {
-    const response = await api.post('/api/image-gen/test', config)
     return response.data
   },
 
@@ -2253,11 +2364,15 @@ export interface AuthUser {
   email?: string
   provider?: string
   is_bot_manager?: boolean
-  workflow_access?: 'read' | 'write' | 'owner'
+  workflow_access?: 'write' | 'owner'
   can_run_workflows?: boolean
   can_write_workflows?: boolean
   can_manage_workflow_access?: boolean
   workflow_permissions_enabled?: boolean
+  // null/undefined means unrestricted -- the deployment's own enabledProductSurfaces
+  // (and every workflow) applies. A non-empty array narrows further, per-user.
+  allowed_products?: string[] | null
+  allowed_workflow_ids?: string[] | null
 }
 
 export interface AuthResponse {
@@ -2367,7 +2482,7 @@ export const authApi = {
 
   upsertWorkflowUserPermission: async (
     userKey: string,
-    workflowAccess: 'read' | 'write' | 'owner'
+    workflowAccess: 'write' | 'owner'
   ): Promise<WorkflowUserPermission> => {
     const response = await api.put('/api/workflow/user-permissions', {
       user_key: userKey,
@@ -2383,7 +2498,7 @@ export const authApi = {
 
 export interface WorkflowUserPermission {
   user_key: string
-  workflow_access: 'read' | 'write' | 'owner'
+  workflow_access: 'write' | 'owner'
 }
 
 export interface WorkflowUserPermissionsResponse {

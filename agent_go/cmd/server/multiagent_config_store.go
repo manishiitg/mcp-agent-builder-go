@@ -14,7 +14,7 @@ import (
 // the same setup as the interactive UI, instead of auto-discovering everything.
 //
 // This is the chat-mode parallel to a workflow's workflow.json capabilities.
-// It is intentionally separate from _users/{userID}/multiagent-schedules.json
+// It is intentionally scoped to generic AgentWorks chat configuration.
 // (whose Capabilities block governs scheduled runs).
 type MultiAgentChatConfig struct {
 	Capabilities WorkflowCapabilities `json:"capabilities"`

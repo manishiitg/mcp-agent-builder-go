@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { CheckCircle2, ChevronDown, ChevronRight, Clock3, Loader2, MessageSquareText, RefreshCw, Send, Sparkles, X } from 'lucide-react'
 import { agentApi } from '../../services/api'
-import type { ReportHumanInput } from '../../services/api-types'
+import type { PulseImpactLedger, ReportHumanInput } from '../../services/api-types'
 import { useChatStore } from '../../stores/useChatStore'
 import {
   parseReportHumanInputContext,
   reportHumanInputHistory,
+  reportHumanInputImpact,
   reportHumanInputStatusLabel,
 } from '../../utils/reportHumanInputFormatting'
 import { delegateReportHumanInputActionToChat, sendReportHumanInputQuestionToChat } from '../../utils/reportHumanInputChat'
 import { useContainerSizeTier } from './reportWidgets/tableHelpers'
+import { PlainMarkdown } from '../ui/PlainMarkdown'
 import { WORKFLOW_LOG_REFRESH_EVENT } from './workflowEvents'
 
 type ReportHumanInputDraft = {
@@ -30,9 +32,9 @@ function keepPreviousInputsWhenUnchanged(
 }
 
 function sourceLabel(source?: string): string {
-	if (source === 'strategy_auditor') return 'Strategy Auditor'
-  if (source === 'goal_advisor') return 'Goal Advisor'
-  if (source === 'chief_of_staff') return 'Chief of Staff'
+  if (source && ['technical_review', 'engineering_review', 'ops_review'].includes(source)) return 'Technical Review'
+  if (source && ['strategic_review', 'strategy_auditor', 'goal_advisor'].includes(source)) return 'Strategic Review'
+  if (source === 'plan_drift_review') return 'Plan Drift Review'
   return 'Pulse'
 }
 
@@ -81,7 +83,7 @@ function HumanInputContext({ value }: { value: string }) {
           {section.label && (
             <div className="mb-0.5 font-semibold text-foreground">{section.label}</div>
           )}
-          {section.body && <p className="whitespace-pre-line">{section.body}</p>}
+          {section.body && <PlainMarkdown content={section.body} />}
           {section.items.length > 0 && (
             <ol className="mt-1.5 list-decimal space-y-1.5 pl-4 marker:font-semibold marker:text-cyan-300">
               {section.items.map((item, itemIndex) => <li key={itemIndex} className="pl-1">{item}</li>)}
@@ -102,6 +104,7 @@ interface ReportHumanInputPanelProps {
 	historyMode?: 'collapsed' | 'expanded'
 	historyLimit?: number
 	providedInputs?: ReportHumanInput[]
+	providedImpact?: PulseImpactLedger
 	providedLoading?: boolean
 	providedError?: string | null
 	onRequestRefresh?: () => void
@@ -116,6 +119,7 @@ export function ReportHumanInputPanel({
 	historyMode = 'collapsed',
 	historyLimit = 4,
 	providedInputs,
+	providedImpact,
 	providedLoading,
 	providedError,
 	onRequestRefresh,
@@ -205,10 +209,13 @@ export function ReportHumanInputPanel({
   const answerInput = async (input: ReportHumanInput) => {
     const draft = drafts[input.id] || { selectedOptionId: '', note: '' }
     const selectedOptionId = draft.selectedOptionId || ''
-    const note = draft.note.trim()
+    // Option-backed decisions are deliberately closed-choice. Free text is
+    // reserved for questions that have no options at all, so it cannot become
+    // an implicit fourth answer that bypasses the reviewed decision contract.
+    const note = input.options.length === 0 && input.allow_free_text ? draft.note.trim() : ''
     if (!selectedOptionId && !note) {
       const message = input.options.length > 0
-        ? (input.allow_free_text ? 'Choose an option or write your own answer.' : 'Choose an option before answering.')
+        ? 'Choose an option before answering.'
         : 'Write an answer before submitting.'
       useChatStore.getState().addToast(message, 'error')
       return
@@ -293,6 +300,8 @@ export function ReportHumanInputPanel({
       {history.map(input => {
         const expanded = expandedHistoryIds[input.id] ?? historyMode === 'expanded'
         const answer = selectedOptionTitle(input)
+        const impact = reportHumanInputImpact(input, providedImpact)
+        const assessment = impact?.latestAssessment
         return (
           <div key={input.id} className="rounded-md bg-background/50 text-xs">
             <button
@@ -334,10 +343,38 @@ export function ReportHumanInputPanel({
                 {input.outcome_summary && (
                   <div className="rounded-md border border-emerald-400/20 bg-emerald-400/[0.06] px-2 py-1.5 text-emerald-100">
                     <div>
-                      <span className="font-medium">Handled by {consumedActorLabel(input)}: </span>
+                      <span className="font-medium">Action taken by {consumedActorLabel(input)}: </span>
                       <span>{input.outcome_summary}</span>
                     </div>
                     {input.consumed_at && <div className="mt-1 text-[11px] text-emerald-200/70">Completed {inputTime(input.consumed_at)}</div>}
+                  </div>
+                )}
+                {impact && (
+                  <div className="rounded-md border border-violet-400/20 bg-violet-400/[0.06] px-2 py-1.5 text-violet-100">
+                    <div className="font-medium">Impact tracking</div>
+                    {assessment ? (
+                      <>
+                        <div className="mt-0.5">
+                          {assessment.verdict === 'improved' ? 'Improved' : assessment.verdict === 'regressed' ? 'Regressed' : assessment.verdict === 'unchanged' ? 'No clear change' : assessment.verdict === 'confounded' ? 'Could not isolate the effect' : 'Not enough evidence yet'}
+                          {typeof assessment.before_value === 'number' && typeof assessment.after_value === 'number'
+                            ? ` · ${assessment.before_value} → ${assessment.after_value}`
+                            : ''}
+                        </div>
+                        <div className="mt-1 text-[11px] text-violet-200/70">
+                          {impact.intervention.metric.replaceAll('_', ' ')} · {assessment.confidence || 'unknown'} confidence · measured {inputTime(assessment.assessed_at)}
+                        </div>
+                        {assessment.next_checkpoint && <div className="mt-1 text-[11px] text-violet-200/70">Next check: {assessment.next_checkpoint}</div>}
+                      </>
+                    ) : (
+                      <>
+                        <div className="mt-0.5">Waiting for comparable run evidence.</div>
+                        <div className="mt-1 text-[11px] text-violet-200/70">
+                          Measuring {impact.intervention.metric.replaceAll('_', ' ')}
+                          {impact.intervention.checkpoint ? ` · next check: ${impact.intervention.checkpoint}` : ''}
+                          {impact.intervention.minimum_evidence_runs > 0 ? ` · ${impact.intervention.minimum_evidence_runs} run${impact.intervention.minimum_evidence_runs === 1 ? '' : 's'} required` : ''}
+                        </div>
+                      </>
+                    )}
                   </div>
                 )}
                 {!answer && !input.note && !input.outcome_summary && <div>No saved answer details.</div>}
@@ -485,11 +522,11 @@ export function ReportHumanInputPanel({
                   Selected: {input.options.find(option => option.id === draft.selectedOptionId)?.title || draft.selectedOptionId}. Save the answer to confirm it.
                 </div>
               )}
-              {input.allow_free_text && (
+              {input.allow_free_text && input.options.length === 0 && (
                 <textarea
                   value={draft.note}
                   onChange={event => updateDraft(input.id, { note: event.target.value })}
-                  placeholder={input.options.length > 0 ? 'Write a different answer or add a note' : 'Write your answer'}
+                  placeholder="Write your answer"
                   className="mt-3 min-h-20 w-full resize-y rounded-md border border-border bg-background px-2.5 py-2 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-cyan-400"
                 />
               )}
@@ -569,7 +606,9 @@ export function ReportHumanInputPanel({
                 <button
                   type="button"
                   onClick={() => void answerInput(input)}
-                  disabled={busy}
+                  disabled={busy || (input.options.length > 0
+                    ? !draft.selectedOptionId
+                    : !draft.note.trim())}
                   className="inline-flex h-8 items-center gap-1.5 rounded-md border border-cyan-400/40 bg-cyan-400/15 px-3 text-xs font-semibold text-cyan-100 hover:bg-cyan-400/25 disabled:opacity-50"
                 >
                   {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}

@@ -26,14 +26,14 @@ func materializedFileContent(t *testing.T, skill *llmtypes.Skill, relPath string
 }
 
 func TestMaterializeReferenceKindsAsSkillsRendersEachIndividually(t *testing.T) {
-	skills, err := MaterializeReferenceKindsAsSkills("multi-agent", []string{"delegation", "secret-management"})
+	skills, err := MaterializeReferenceKindsAsSkills("multi-agent", []string{"backup-strategy", "secret-management"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(skills) != 2 {
 		t.Fatalf("expected 2 skills, got %d", len(skills))
 	}
-	if skills[0].Name != "delegation" || skills[1].Name != "secret-management" {
+	if skills[0].Name != "backup-strategy" || skills[1].Name != "secret-management" {
 		t.Fatalf("unexpected skill names/order: %q, %q", skills[0].Name, skills[1].Name)
 	}
 	for _, skill := range skills {
@@ -51,9 +51,9 @@ func TestMaterializeReferenceKindsAsSkillsRendersEachIndividually(t *testing.T) 
 	// under a different implementation -- the individually-named skill and
 	// the bundle's per-kind supporting file should be byte-for-byte the same.
 	bundle := MaterializeReferenceSkill("multi-agent")
-	bundled := materializedFileContent(t, bundle, "references/delegation.md")
+	bundled := materializedFileContent(t, bundle, "references/backup-strategy.md")
 	if skills[0].Content != bundled {
-		t.Fatalf("individually-materialized delegation content diverges from the bundle's own copy")
+		t.Fatalf("individually-materialized backup content diverges from the bundle's own copy")
 	}
 }
 
@@ -96,8 +96,13 @@ func TestMaterializedReferenceSkillIncludesConfigToolOnlyDocs(t *testing.T) {
 		}
 	}
 
+	// PLAT-244 deliberately narrowed the active workspace provider surface to
+	// generate_text_llm/search_web_llm and hid media tools (image/video/audio/
+	// music/transcription), routing search through hosted-MCP providers
+	// (parallel/exa/firecrawl) rather than the published LLM set -- so this
+	// reference's content, and this test's expectations, changed with it.
 	mediaTools := materializedFileContent(t, skill, "references/workspace-media-tools.md")
-	for _, want := range []string{"set_provider_auth", "workspace-backed image generation defaults", "**Search provider routing** comes from the published LLM set"} {
+	for _, want := range []string{"set_provider_auth", "deprecated and hidden", "hosted-MCP web search", "## Scripted workflow use", "$MCP_CUSTOM/generate_text_llm", "$MCP_CUSTOM/search_web_llm", "references/mcp-bridge.md"} {
 		if !strings.Contains(mediaTools, want) {
 			t.Fatalf("workspace-media-tools reference should contain %q\n%s", want, mediaTools)
 		}
@@ -165,7 +170,7 @@ func TestMaterializedReferenceSkillUsesMultiAgentSurface(t *testing.T) {
 		t.Fatalf("skill name = %q, want builder-reference", skill.Name)
 	}
 
-	for _, want := range []string{"Multi-agent chat reference docs", "references/llm-provider-config.md", "references/delegation.md"} {
+	for _, want := range []string{"Product chat reference docs", "references/llm-provider-config.md", "references/secret-management.md"} {
 		if !strings.Contains(skill.Description+skill.Content, want) {
 			t.Fatalf("builder-reference skill should contain %q\nDescription:\n%s\nContent:\n%s", want, skill.Description, skill.Content)
 		}
@@ -236,6 +241,9 @@ func TestPulseReviewFixerDocsAreNamedAndLoadable(t *testing.T) {
 	if !strings.Contains(prompt, "references/pulse-fixer-practices.md") {
 		t.Fatal("pulse-review-fixer does not require the canonical Fixer practices reference")
 	}
+	if !strings.Contains(prompt, `"name":"workflow-commands","path":"references/ops-review.md"`) {
+		t.Fatal("pulse-review-fixer does not load the canonical Operations checklist from its actual bundle")
+	}
 
 	// The docs are split across bundles — review-artifact-drift is in
 	// workflow-commands, the rest in builder-reference — so the whole surface
@@ -249,7 +257,7 @@ func TestPulseReviewFixerDocsAreNamedAndLoadable(t *testing.T) {
 	}
 	for _, kind := range []string{
 		"fix-verification", "pulse-fixer-practices", "strategy-auditor", "pulse-bug-review",
-		"llm-selection", "review-artifact-drift",
+		"llm-selection", "review-artifact-drift", "ops-review",
 	} {
 		want := "references/" + kind + ".md"
 		found := false
@@ -264,9 +272,18 @@ func TestPulseReviewFixerDocsAreNamedAndLoadable(t *testing.T) {
 			t.Errorf("no attached skill carries %s, which pulse-review-fixer tells the agent to read", want)
 		}
 	}
+	for _, want := range []string{
+		"execution_health",
+		"cadence-threatening",
+		"durable approval request",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("pulse-review-fixer is missing execution-health handoff %q", want)
+		}
+	}
 }
 
-func TestEngineeringReviewUsesTheCanonicalReviewAndFixSequence(t *testing.T) {
+func TestEngineeringReviewUsesTheCanonicalReviewOnlySequence(t *testing.T) {
 	raw, err := os.ReadFile("templates/improve/engineering-review.md")
 	if err != nil {
 		t.Fatalf("read engineering-review template: %v", err)
@@ -274,35 +291,38 @@ func TestEngineeringReviewUsesTheCanonicalReviewAndFixSequence(t *testing.T) {
 	prompt := string(raw)
 	for _, want := range []string{
 		"continuing Workflow Builder conversation",
+		`"name":"workflow-commands","path":"references/ops-review.md"`,
+		"standalone wrapper",
 		"pulse_run_id=\"current\"",
 		"Own the review yourself",
-		"Persist typed findings and verification",
-		"normal Workflow Builder tools",
-		"one terminal module result for Engineering and one for Operations",
+		"Persist typed findings and matured verification",
+		"Do not apply repairs",
+		"same retained Review+Fix task may later",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("engineering-review prompt is missing canonical sequence contract %q", want)
 		}
 	}
-	for _, forbidden := range []string{"STANDALONE PULSE FIXER", `role="fixer"`, `review_lanes=[`} {
+	for _, forbidden := range []string{"apply safe bounded fixes", "normal Workflow Builder tools", "one terminal module result for Engineering", `role="fixer"`} {
 		if strings.Contains(prompt, forbidden) {
 			t.Errorf("engineering-review retained obsolete standalone Fixer contract %q", forbidden)
 		}
 	}
 }
 
-func TestPulseFixerPracticesRequireExhaustiveAgenticDrain(t *testing.T) {
+func TestPulseFixerPracticesRequireBoundedAgenticProgress(t *testing.T) {
 	raw, err := os.ReadFile("templates/system/pulse-fixer-practices.md")
 	if err != nil {
 		t.Fatalf("read pulse-fixer-practices template: %v", err)
 	}
 	practices := string(raw)
 	for _, want := range []string{
-		"Full-backlog drain contract",
+		"Bounded backlog progress contract",
 		"Freeze a starting manifest",
-		"Classify every manifest item",
+		"Rank from compact lifecycle evidence",
 		"Maintain an explicit remaining list",
 		"Reconcile before completion",
+		"A pass may complete while the durable backlog remains",
 		`record_pulse_result`,
 	} {
 		if !strings.Contains(practices, want) {
@@ -313,9 +333,10 @@ func TestPulseFixerPracticesRequireExhaustiveAgenticDrain(t *testing.T) {
 	scheduled := RenderSystemDoc("pulse-review-fixer")
 	for _, want := range []string{
 		"complete active starting manifest",
-		"do not narrow the executor's retained",
-		"Full-backlog drain contract",
-		"must not claim completion",
+		"do not hide retained work",
+		"Bounded backlog progress contract",
+		"bounded repair batch",
+		"truthful remaining queue",
 	} {
 		if !strings.Contains(scheduled, want) {
 			t.Errorf("scheduled Fixer prompt missing exhaustive-drain rule %q", want)

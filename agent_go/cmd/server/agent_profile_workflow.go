@@ -188,7 +188,6 @@ func (api *StreamingAPI) registerAgentProfileWorkflowTools(
 		syntheticReq := req
 		syntheticReq.SelectedFolder = runtimeWorkspacePath
 		syntheticReq.ExecutionOptions = &ExecutionOptions{
-			RunMode:           "use_same_run",
 			SelectedRunFolder: runFolder,
 			ExecutionStrategy: "start_from_beginning_no_human",
 			WorkshopMode:      "run",

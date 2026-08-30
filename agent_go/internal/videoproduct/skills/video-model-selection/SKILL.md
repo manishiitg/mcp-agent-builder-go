@@ -6,7 +6,11 @@ description: Choose which fal.ai or Google Gemini/Veo model fits one shot's requ
 # Choosing a generation model
 
 `fal-ai` and `google-ai` teach how to call a model once you've picked one.
-This skill teaches how to pick it. Neither this skill nor either of those
+This skill teaches how to pick it. Read `references/model-capabilities.md`
+whenever quoting model duration, resolution, aspect ratio, audio, language, or
+reference support. Read `references/cost-guidance.md` whenever the user
+compares models, asks about price, or must approve a paid plan.
+Neither this skill nor either of those
 pins a model catalog or a "best model for X" table -- both providers'
 catalogs, capabilities, and pricing change independently and on their own
 schedule, and a fixed ranking here would go stale exactly the way a fixed
@@ -54,6 +58,90 @@ not as a second separate interview later.
 Write the resolved answers into `production.json` so a revision does not
 re-ask what was already decided.
 
+## Character references: the user chooses before the first image
+
+When a recurring character, presenter, or product needs a generated reference,
+do not treat the general provider preference as permission to choose its model.
+Before the reference-image call, present at most three live-verified choices
+that can actually condition later video shots on the reference. For each give
+the exact provider/model, why it fits the subject, the relevant controls or
+limits, and current billing evidence. Recommend one, but wait for the user to
+select a named option and approve the reference-pack spend. Record that choice,
+the pack size, retry allowance, and billing evidence alongside the character.
+
+The selected provider/model is the character arc's default: every later shot
+with that subject uses it and the approved reference unless the user explicitly
+approves a change. This is deliberately before shot planning and before any
+paid media generation; a reference made on an unchosen model is already sunk
+cost and can lock the production into the wrong continuity path.
+
+## Present a costed choice before spending
+
+Before the first paid generation, give the user at most three viable model
+choices. For each, state in plain language: provider and exact model, why it
+fits the shot, output duration/resolution, live billing unit and rate, planned
+cost, and the maximum cost after the approved retry allowance. Recommend one
+choice. Recommend the least-expensive option that satisfies the shot's hard
+requirements; do not treat a premium tier, a newer version number, or the word
+"cinematic" as a reason by itself. Price must not override a required
+continuity, lip-sync, reference, duration, or resolution capability, but an
+optional quality preference must not silently override the user's budget
+either. State the exact capability that justifies every price increase.
+
+Use this practical routing order after checking the live endpoint schemas:
+
+1. Start with a budget-capable endpoint such as Veo 3.1 Lite when it satisfies
+   the shot's duration, resolution, reference, and synchronized-audio needs.
+2. Move to Kling Standard or Pro only when its structured multi-shot prompts,
+   custom character/object elements, longer take, voice control, or output
+   resolution materially benefits this shot. Try Standard before Pro when its
+   controls are sufficient.
+3. Move to Seedance 2.5 when a 15--30 second continuous take or its large mixed
+   image/video/audio reference set avoids costly seams or continuity failures.
+   Do not use it as the default for ordinary short shots.
+4. Use Veo Fast/Standard, 4K routes, or another premium endpoint only for a
+   requirement the cheaper viable routes cannot meet.
+
+This is a routing heuristic, not a frozen ranking. A recurring character does
+not automatically require Kling, and lip-sync alone does not automatically
+require Kling: compare every current endpoint that supports the approved
+speech design. Read `references/cost-guidance.md` for the maintained comparison
+and recheck all rates before presenting them.
+
+Do the capability check before presenting the shot count or total runtime, not
+after the user approves the plan. Convert the exact route's allowed duration
+enum into the shot plan. For example, a route limited to 4, 6, or 8 seconds
+cannot be represented as seven 10-second calls; choose supported durations,
+re-space the beats, and show the resulting call count and cost before approval.
+Never quote a family-wide limit when the selected mode or tier has a narrower
+contract.
+
+**A dollar total is allowed only when the live billing unit can be mapped to
+the planned output without guessing.** If fal returns `seconds` for the exact
+endpoint, calculate from the requested output seconds. If it returns `video`,
+calculate from the planned call count. If it returns `compute seconds`,
+`tokens`, credits, GPU time, or another non-output unit, do **not** multiply it
+by the requested video duration and do not present a made-up “base” or “max”
+total. State the live unit rate, say that the provider has not supplied a
+reliable output-duration conversion, and offer a small capped paid test or ask
+for a user-approved dollar cap. This is especially important for the current
+fal MiniMax H3 reference route (compute seconds) and Seedance 2.5 reference
+route (tokens). Never call such a number an estimate, recommendation, or
+price quote.
+
+Use `references/cost-guidance.md` for the calculation, published anchors, and
+provider-specific price lookup. A static table is only orientation. fal prices
+must be resolved from the current account-facing pricing API for the exact
+endpoint; Google prices must be rechecked on the official pricing page; direct
+Seeddance estimates must use its available credit information. If a provider
+does not expose enough information for a reliable dollar estimate, say that
+plainly and offer a bounded low-cost test instead of converting credits by
+guesswork.
+
+Record the comparison and the user's approved option in `production.json` and
+the generation ledger. A user approving a storyboard is not approving an
+unbounded spend increase caused by a different model or retry count.
+
 ## Decide by requirement, not by brand loyalty
 
 For each shot, resolve these dimensions before choosing a model. Get the
@@ -88,15 +176,24 @@ model explorer, Google's Gemini API model reference), not from memory:
 - **Native audio**: some video models generate synchronized audio (dialogue,
   ambience, SFX) directly; others produce silent video that needs a separate
   voice/music generation pass (see `fal-ai`'s and `google-ai`'s audio
-  capabilities) plus assembly in `video-editing`. Decide this per shot
+  capabilities) plus assembly in `video-editing`. Before selecting between
+  them for a production with people/characters and spoken content, use
+  `video-look-sound` to present visible native dialogue, off-camera TTS voiceover,
+  and hybrid as explicit user choices. Explain their lip-sync,
+  voice-continuity, cost, model, and edit-complexity tradeoffs. An endpoint
+  without native audio must never silently turn a speaking character into a
+  non-speaking performance with narration. Decide the resulting audio mode per shot
   rather than once for the whole production, since a narrated hook and a
   silent B-roll cutaway may want different models -- but only for shots
   with no recurring character or subject in them. Any shot featuring a
   recurring subject is bound to that subject's committed model and provider
   (see "Keep the whole character arc on one model and provider" in
-  `video-cinematography`); when that model's audio support is wrong for the
-  shot, generate it silent on the committed model and add the audio in
-  `video-editing` rather than switching models for one shot.
+  `video-cinematography`). Confirm audio support before committing that model.
+  If the user later changes an approved recurring character from voiceover to
+  visible dialogue and its committed model cannot produce synchronized speech,
+  revisit the model choice and obtain explicit approval for the continuity,
+  cost, and regeneration consequences; do not manufacture lip sync or silently
+  keep the character mute.
 - **Cost and generation time**: video generation is priced and timed very
   differently from image generation, and cost typically scales with
   duration and resolution. Confirm current per-call pricing before
@@ -114,26 +211,25 @@ model explorer, Google's Gemini API model reference), not from memory:
   open-weight option rather than assuming every model is equivalent on this
   axis.
 
-## Notable options as of 2026-08-15 -- a starting point, not a source of truth
+## Notable options as of 2026-08-17 -- a starting point, not a source of truth
 
-This list was checked against real search results and Google's own docs on
-2026-08-15. It will go stale -- confirm the exact model ID and current
+This list was checked against fal.ai's and Google's own docs on 2026-08-17. It
+will go stale -- confirm the exact model ID and current
 capabilities against the provider's own live reference before calling
 anything, per "Never invent a model ID" in `fal-ai` and `google-ai`. Do not
 extend this list from memory in a later session; re-check instead.
 
-- **Video, hosted on fal.ai**: Seedance 2.5 (`bytedance/seedance-2.5/text-to-video`,
-  `.../image-to-video`, `.../reference-to-video`) supersedes 2.0 -- native
-  30-second generation in one pass (relevant to the shot-count arithmetic
-  above: fewer, longer calls to cover the same total long-form runtime than
-  a model capped at 5-8s per call), up to 50 multimodal references in one
-  generation, native audio co-processed in the same latent space as the
-  visuals so it's synchronized without a post layering pass, and roughly
-  double 2.0's native ceiling -- for image-to-video this shows up most as
-  materially better subject/character consistency across the whole clip
-  (see `video-cinematography`'s consistency section), which matters more,
-  not less, the longer a character's arc runs across a production. MiniMax
-  H3 (`minimax/h3/text-to-video`, `.../image-to-video`, `.../reference-to-video`)
+- **Video, hosted on fal.ai**: Seedance 2.5 is live under
+  `bytedance/seedance-2.5/text-to-video`, `.../image-to-video`, and
+  `.../reference-to-video`. Current schemas expose `auto` or 4-30 second
+  clips, native synchronized audio, first/last frames on image-to-video, and
+  up to 30 images, 10 videos, and 10 audio references (50 total) on the
+  reference route. Seedance 2.0 remains available in Standard and Fast route
+  families and can be the better choice for its separate price, latency, and
+  current 4K options. Compare the exact live schemas rather than treating 2.5
+  as a universal replacement. MiniMax
+  H3 (`minimax/hailuo-03/text-to-video`, `.../image-to-video`,
+  `.../reference-to-video`)
   is the notable open-weights option -- self-hostable/fine-tunable, not
   only a closed API -- generating 2K, 5-15s clips at 24 FPS with native
   stereo audio and rich multimodal reference input (up to 9 images for
@@ -141,7 +237,11 @@ extend this list from memory in a later session; re-check instead.
   it a strong reference-conditioning option for character consistency. Also
   available: Veo 3.1 / Veo 3.1 Lite (native audio, lip-synced dialogue),
   Kling 3.0 Pro (cinematic, native audio, multilingual lip-sync), Wan 2.6,
-  LTX 2.0.
+  LTX 2.0. Gemini Omni Flash is also hosted on fal.ai under
+  `google/gemini-omni-flash` with image, reference, and edit routes; use
+  `gemini-omni-video` for its current route-specific controls rather than
+  assuming the landing page's multimodal claims appear as fields on every
+  endpoint.
 - **Image, hosted on fal.ai**: FLUX, and Google's Nano Banana models
   re-hosted alongside fal.ai's own catalog.
 - **Voice/audio, hosted on fal.ai**: ElevenLabs (text-to-speech, voice
@@ -149,10 +249,9 @@ extend this list from memory in a later session; re-check instead.
 - **Image, direct via Google's Gemini API**: Nano Banana 2 =
   `gemini-3.1-flash-image` (most versatile); Nano Banana 2 Lite =
   `gemini-3.1-flash-lite-image`.
-- **Video, direct via Google's Gemini API**: Veo 3.1. A newer multimodal
-  option, `gemini-omni-flash-preview`, was reported rolling out with native
-  video generation and conversational editing from text/image/video input,
-  priced comparably to Veo 3.1 Fast.
+- **Video, direct via Google's Gemini API**: Veo 3.1. Do not infer that the
+  fal-hosted `google/gemini-omni-flash` endpoint ID is accepted by Google's
+  direct API; provider routing and model IDs are separate contracts.
 - **Narration/TTS, direct via Google's Gemini API**: Gemini TTS, in preview
   at the time of writing under ids of the shape
   `gemini-3.1-flash-tts-preview` and `gemini-2.5-flash-preview-tts` /
@@ -168,6 +267,12 @@ both, the choice is about aggregation convenience and pricing, not
 capability -- fal.ai gives one unified surface across many vendors' models
 under one key; going direct to Google skips that layer for Google's own
 models specifically.
+
+Seedance also has two provider paths in this product. fal.ai hosts Seedance
+under its aggregator key; the independent Seeddance API uses its own key and
+direct model IDs such as `seedance-2.5`. Read `seeddance-api` before choosing
+the direct path. The same model family name does not make schemas, account
+access, pricing, task IDs, or credentials portable between those providers.
 
 ## Prompt length and structure are model-specific
 
@@ -208,11 +313,16 @@ shifted with newer versions):
 - Use `google-ai` when the brief specifically calls for a Google-native
   model -- Gemini image generation, Veo, or Gemini TTS -- rather than a
   third-party one.
+- Use `seeddance-api` when the brief selects Seedance and the direct service's
+  account access, price, or limits are preferable to fal. It generates
+  Seedance video only; image creation, narration, and music still require an
+  appropriate additional provider.
 - **Which credentials actually exist is part of this decision.** Confirm
   which provider keys are configured before planning a production around
-  one: either provider alone covers video, image, and narration, so a
-  single key is enough for a complete piece. Only a generated music bed is
-  fal.ai-only (see `google-ai`'s note on music). Plan within the keys
+  one. fal.ai or Google alone covers video, image, and narration, so either
+  key can carry a complete piece; the direct Seeddance key covers only its
+  Seedance video surface. Only a generated music bed is fal.ai-only (see
+  `google-ai`'s note on music). Plan within the keys
   available, or say plainly which key is missing and what it would add --
   do not design a production around a provider the user cannot call.
 - The same production can legitimately use both: e.g. Google's model for a
@@ -224,7 +334,8 @@ shifted with newer versions):
 ## Record the decision, not just the output
 
 For every shot, write down in `production.json`: the resolved model ID, the
-provider (`fal-ai` or `google-ai`), the exact input/arguments used, and why
+provider (`fal-ai`, `google-ai`, or `seeddance-api`), the exact input/arguments
+used, and why
 that model was chosen over alternatives if the choice was non-obvious. A
 revision to one shot should not have to re-derive this reasoning from
 scratch, and a viewer noticing an inconsistency between two shots (different
@@ -239,6 +350,7 @@ the model-per-shot record already exists.
 - Use this skill to choose a model per shot.
 - Use `video-cinematography` to turn the creative intent for that shot into
   the actual prompt/camera/lighting direction handed to the chosen model.
-- Use `fal-ai` or `google-ai` (per the chosen provider) to make the call.
+- Use `fal-ai`, `google-ai`, or `seeddance-api` (per the chosen provider) to
+  make the call.
 - Use `video-editing` to assemble the results, `video-quality` before
   presenting any version as complete.

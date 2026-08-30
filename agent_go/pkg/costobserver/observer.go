@@ -27,11 +27,24 @@ const (
 	ScopeBuilder           = "builder"
 	ScopePulse             = "pulse"
 	ScopeEvaluation        = "evaluation"
-	ScopeChiefOfStaff      = "chief_of_staff"
 	ScopeWorkflowExecution = "workflow_execution"
 	// ScopeUnknown is the last-resort value recorded when a launch path did
 	// not name its scope. Reaching it is a defect and is logged as one.
 	ScopeUnknown = "unknown"
+)
+
+// Cost phases (PLAT-166). A workflow step's execution turn and its separate
+// post-completion reflection turn reuse the same agent and the same Observer
+// instance — SetPhase toggles which one every entry from here on is
+// attributed to. These deliberately reuse the exact phase-string vocabulary
+// the older per-step token-usage-file system already established
+// (pkg/orchestrator/context_aware_bridge.go's attributedPhase =
+// "execution_only", pkg/orchestrator/agents/workflow/step_based_workflow's
+// reflectionCostPhase = "reflection") so an operator cross-referencing both
+// systems isn't learning a second vocabulary for the same concept.
+const (
+	PhaseExecutionOnly = "execution_only"
+	PhaseReflection    = "reflection"
 )
 
 // Observer persists immutable per-LLM-call events. The cumulative token_usage
@@ -52,6 +65,11 @@ type Observer struct {
 
 	mu         sync.Mutex
 	sawPerCall bool
+	// phase is the one attribution field that legitimately changes mid-
+	// lifetime for the same Observer instance (PLAT-166) — everything else in
+	// WithAttribution is fixed at construction because a reflection turn
+	// reuses the step's own agent/observer rather than getting a new one.
+	phase string
 }
 
 // Option configures an Observer at construction time.
@@ -98,6 +116,15 @@ func New(ledger *costledger.Ledger, sessionID, userID, agentMode string, opts ..
 		sessionID: sessionID,
 		userID:    userID,
 		agentMode: agentMode,
+		// phase deliberately starts empty, not PhaseExecutionOnly (PLAT-166
+		// scope-fix). Every observer used to default to PhaseExecutionOnly,
+		// which meant EVERY execution — chat, builder, Pulse, evaluation,
+		// every plain workflow step — grew a `by_phase.execution_only` entry
+		// that just duplicated its own top-level total, in every Cost
+		// Analysis API response, forever. Only a phase the caller explicitly
+		// sets via SetPhase (reflection, a message_sequence item) is worth
+		// naming; addEntryToExecutionBucket already skips ByPhase entirely
+		// for an empty phase, so leaving this unset costs nothing.
 	}
 	for _, opt := range opts {
 		opt(observer)
@@ -129,6 +156,36 @@ func (o *Observer) ExecutionID() string {
 		return ""
 	}
 	return o.executionID
+}
+
+// SetPhase updates the phase every entry this observer writes from now on
+// carries, until changed again (PLAT-166). A reflection turn — or, per
+// PLAT-167, a message_sequence item's own turn — reuses the same agent, and
+// therefore the same Observer instance, as whatever ran before it. Bracket
+// the turn with SetPhase(PhaseReflection) (or "item:<id>") and a deferred
+// SetPhase(""), mirroring ContextAwareEventBridge.PushContext/PopContext's
+// bracket right next to it. Reset to "" (not PhaseExecutionOnly): an empty
+// phase writes no ByPhase entry at all (addEntryToExecutionBucket), so any
+// turn that follows and was never explicitly tagged stays invisible in
+// by_phase instead of manufacturing a redundant duplicate-of-the-total entry
+// for it.
+func (o *Observer) SetPhase(phase string) {
+	if o == nil {
+		return
+	}
+	o.mu.Lock()
+	o.phase = strings.TrimSpace(phase)
+	o.mu.Unlock()
+}
+
+// Phase reports the phase currently attributed to entries from this observer.
+func (o *Observer) Phase() string {
+	if o == nil {
+		return ""
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.phase
 }
 
 // Name identifies this listener to the agent runtime.
@@ -275,6 +332,9 @@ func (o *Observer) baseEntry(event *unifiedevents.AgentEvent) costledger.Entry {
 		storedEventID = strings.Join([]string{o.sessionID, eventID}, ":")
 		idempotencyKey = storedEventID
 	}
+	o.mu.Lock()
+	phase := o.phase
+	o.mu.Unlock()
 	return costledger.Entry{
 		EventID:        storedEventID,
 		IdempotencyKey: idempotencyKey,
@@ -285,6 +345,7 @@ func (o *Observer) baseEntry(event *unifiedevents.AgentEvent) costledger.Entry {
 		RunID:          o.runID,
 		ExecutionID:    o.executionID,
 		Scope:          o.scope,
+		Phase:          phase,
 		AgentMode:      o.agentMode,
 		Component:      event.Component,
 		CorrelationID:  event.CorrelationID,
@@ -294,6 +355,34 @@ func (o *Observer) baseEntry(event *unifiedevents.AgentEvent) costledger.Entry {
 func (o *Observer) append(entry costledger.Entry) {
 	if err := o.ledger.Append(entry); err != nil {
 		log.Printf("[COST_LEDGER] Failed to append entry: %v", err)
+	}
+	o.appendToWorkspaceLedger(entry)
+}
+
+// appendToWorkspaceLedger records the same entry into the attributed
+// workflow's own per-workspace ledger (PLAT-184), alongside the global one
+// above. The global ledger sits outside every workflow's own folder and is
+// not reachable by any agent's normal read/tool access at all; this copy is
+// what makes a workflow's own cost data -- including the phase/item
+// breakdown PLAT-166/167 added -- actually queryable by that workflow's own
+// Pulse review and Workflow Builder sessions. Best-effort: a failure here
+// must never affect the global ledger write above, which remains the
+// authoritative record the Cost Analysis UI reads.
+func (o *Observer) appendToWorkspaceLedger(entry costledger.Entry) {
+	workspacePath := strings.TrimSpace(o.workflowID)
+	if workspacePath == "" {
+		return
+	}
+	ledger, err := costledger.WorkspaceLedger(workspacePath)
+	if err != nil {
+		log.Printf("[COST_LEDGER] Failed to open workspace ledger for %s: %v", workspacePath, err)
+		return
+	}
+	if ledger == nil {
+		return
+	}
+	if err := ledger.Append(entry); err != nil {
+		log.Printf("[COST_LEDGER] Failed to append entry to workspace ledger for %s: %v", workspacePath, err)
 	}
 }
 
@@ -318,18 +407,12 @@ func matchPhaseScope(values ...string) string {
 // scheduled Pulse turn runs in the same session, with the same agent mode and
 // the same workflow-builder phase id, as the workflow-orchestration turns that
 // precede it — so neither the mode nor the phase can tell them apart. The
-// scheduler already stamps this field when it swaps in the Pulse/maintenance
+// scheduler already stamps this field when it swaps in the Pulse
 // LLM, so the intent is known at the source and only needs to be honored here.
-//
-// scheduled_auto_improve maps to Pulse deliberately: Goal Advisor and Strategy
-// Auditor are Pulse modules that happen to run on the maintenance LLM, so their
-// spend belongs in the Pulse total rather than in a bucket of its own.
 func ScopeForScheduledLLMRole(llmConfigSource string) string {
 	switch strings.ToLower(strings.TrimSpace(llmConfigSource)) {
-	case "scheduled_pulse", "scheduled_auto_improve":
+	case "scheduled_pulse":
 		return ScopePulse
-	case "scheduled_chief_of_staff":
-		return ScopeChiefOfStaff
 	}
 	return ""
 }
@@ -342,8 +425,6 @@ func InferScope(agentMode, phaseID string) string {
 	}
 	mode := strings.ToLower(strings.TrimSpace(agentMode))
 	switch {
-	case strings.Contains(mode, "chief"):
-		return ScopeChiefOfStaff
 	case strings.Contains(mode, "workflow"):
 		return ScopeBuilder
 	default:
@@ -362,9 +443,6 @@ func InferScope(agentMode, phaseID string) string {
 func InferWorkflowScope(agentMode string, hasRunFolder bool, identifiers ...string) string {
 	if scope := matchPhaseScope(identifiers...); scope != "" {
 		return scope
-	}
-	if strings.Contains(strings.ToLower(strings.TrimSpace(agentMode)), "chief") {
-		return ScopeChiefOfStaff
 	}
 	if hasRunFolder {
 		return ScopeWorkflowExecution

@@ -29,7 +29,7 @@ func TestReflectionTurnRoutesEachStoreExplicitly(t *testing.T) {
 	// them anyway, because the rule named stores the turn could not reach.
 	for _, want := range []string{
 		"Route each thing to the store that owns it",
-		"record_run_concern",
+		"Pulse Technical Review evaluates it",
 		"soul/soul.md",
 		"Learnings is not a fallback",
 	} {
@@ -173,6 +173,41 @@ func TestReflectionTurnRequiresCleanupJudgmentOnEveryFileItTouches(t *testing.T)
 	}
 }
 
+// PLAT-173. The KB half of this same turn had none of the anti-append guidance
+// the learnings half above carries, and the omission produced exactly the
+// failure it would have prevented: confida-login's app-structure.md grew past
+// every stated threshold because each survey cycle appended a fresh dated
+// section instead of correcting the existing one. A step cannot be faulted for
+// stacking sections when the only KB instruction it received was where to write
+// and what to contribute.
+func TestReflectionKBSectionRequiresUpdateInPlaceNotDatedAppends(t *testing.T) {
+	in := reflectionInput()
+	in.KBAccess = KBAccessReadWrite
+	in.KBContribution = "Record the app's durable page and endpoint structure."
+	msg := BuildStepReflectionTurn(in)
+
+	// The same three duties the learnings half states, owed by the KB half too:
+	// read the file before writing it, correct rather than append, and clean up
+	// what is already there regardless of how small this turn's addition is.
+	for _, want := range []string{
+		"Update the existing section in place",
+		"a new dated section",
+		"read the whole topic file",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("KB section missing anti-append rule %q", want)
+		}
+	}
+
+	// Compaction is the writing step's own duty. stores.md claimed notes
+	// "compact themselves" past 20KB/30 sections; no such mechanism exists, and
+	// a step told compaction is automatic has a positive reason to keep
+	// appending. The turn must say plainly that nothing else will do it.
+	if !strings.Contains(msg, "Nothing compacts these files for you") {
+		t.Error("KB section does not tell the step that compaction is its own duty")
+	}
+}
+
 func TestReflectionTurnOmitsSectionsThatDoNotApply(t *testing.T) {
 	// Learnings only.
 	learningsOnly := BuildStepReflectionTurn(reflectionInput())
@@ -201,7 +236,6 @@ func TestReflectionTurnSkippedWhenNoStoreIsDue(t *testing.T) {
 	// Neither learnings nor KB due: emitting a turn purely for the concern
 	// outlet would add an LLM call to every step of a lock_learnings workflow
 	// (LinkedIn has 6 of 6 locked), where the previous code emitted nothing.
-	// record_run_concern remains available during main execution.
 	none := reflectionInput()
 	none.LearningObjective = ""
 	if msg := BuildStepReflectionTurn(none); msg != "" {

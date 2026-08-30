@@ -113,3 +113,43 @@ directions in `workflow_schedule_contract_markers_test.go`.
 This does not change the `nonEmptyCount > 1` rule: a multi-message schedule is a
 direct sequence and still needs `direct_messages_reason`. All three confida
 schedules do — they now fail with that true reason instead of a spurious marker.
+
+## Follow-up — route selection was accidentally suppressed by a retained message (2026-08-21)
+
+The implementation still treated these two saved fields as alternatives:
+
+- `route_selections`: the canonical choice of workflow path; and
+- `messages`: optional schedule-specific follow-up conversation.
+
+`scheduledWorkshopMessages` generated the canonical `run_full_workflow(...,
+route_selections=...)` instruction only when `messages` was empty. A
+route-backed schedule with even one retained message therefore sent only that
+message. Social Media's Daily Execution message began “After the selected work
+completes …”, but the selected `execution` route was never explicitly started.
+The builder had to guess, and could spend a run on evaluation/backup prose with
+no new execution evidence.
+
+### Corrected contract
+
+1. A saved route selection is always emitted as the first canonical schedule
+   turn.
+2. Retained messages, when justified, run afterwards as follow-ups.
+3. Normal-run finalization (backup, report publish, notification) remains
+   server-owned; dedicated `pulse_review_only` owns Gate/Review/Fixer. Generic
+   copied lifecycle tails are removed from normal schedules.
+4. Contract `1.0.29` performs the agentic cleanup while preserving genuine
+   time-bound direct procedures (for example Techtonic's close-only pass).
+
+### Immediate repair and proof
+
+- Removed the stale lifecycle-only messages from Social Media's three
+  route-backed schedules.
+- Removed the redundant manual backup turn from Sales Outreach's two lead-run
+  schedules; the server finalizer performs it.
+- Added `TestScheduledWorkshopMessagesRunsRouteBeforeCustomFollowUp`, proving a
+  route-backed schedule produces the route turn first and retains the follow-up
+  second.
+- Focused scheduler contract tests pass. Live verification: run a Social Media
+  daily execution after server restart and confirm the first tool call is
+  `run_full_workflow` with `step-run-mode-router=execution`, with one finalizer
+  backup path only.

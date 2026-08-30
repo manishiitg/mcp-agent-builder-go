@@ -75,9 +75,8 @@ func BuildStepReflectionTurn(in StepReflectionTurnInput) string {
 	// No store to write to means no turn. Emitting one purely for the concern
 	// outlet would add an LLM call to every step that contributes nothing —
 	// including every step in a lock_learnings workflow, where the old code
-	// correctly emitted nothing at all. record_run_concern is available during
-	// main execution regardless, so a step with no contribution can still report
-	// a defect while it is doing the work that revealed it.
+	// correctly emitted nothing at all. Pulse reviews retained execution output
+	// and deterministic receipts directly after the run.
 	if !learnings && !kb {
 		return ""
 	}
@@ -101,12 +100,12 @@ func BuildStepReflectionTurn(in StepReflectionTurnInput) string {
 	b.WriteString("| Reusable execution technique — selectors, timings, auth flows, API quirks, retry/recovery patterns | learnings |\n")
 	b.WriteString("| Measurements, counts, run results, current status | the database (you already wrote these during the step) |\n")
 	b.WriteString("| Durable business/domain narrative | knowledgebase |\n")
-	b.WriteString("| A defect, contradiction, or platform problem | `record_run_concern` |\n")
+	b.WriteString("| A defect, contradiction, or platform problem | retain concrete evidence in the step result; Pulse Technical Review evaluates it |\n")
 	b.WriteString("| An owner constraint value (cap, limit, threshold) | nowhere — it lives in `soul/soul.md` and is injected every run |\n\n")
 
 	b.WriteString("**The test that settles most cases: if it will be wrong in a month, it is not a learning.** ")
 	b.WriteString("`this API needs region us-east-1` stays true. `spend is ~$50/day` and `3 items are stale` do not.\n\n")
-	b.WriteString("**Learnings is not a fallback.** If something belongs to another store, put it there or raise it as a concern. ")
+	b.WriteString("**Learnings is not a fallback.** If something belongs to another store, put it there. ")
 	b.WriteString("Do not write it into learnings because it seemed easier to reach — that is how these files fill with incident narratives and stale numbers that later runs then trust.\n\n")
 
 	if len(in.DBTableNames) > 0 {
@@ -116,13 +115,8 @@ func BuildStepReflectionTurn(in StepReflectionTurnInput) string {
 		b.WriteString("If your observation belongs in one of them it is already recorded — name the table, never paste its values here. A number copied out of the database is stale the moment the next run writes.\n\n")
 	}
 
-	// ---- Concern outlet. ----
-	b.WriteString("### Reporting a problem\n\n")
-	b.WriteString("Call `record_run_concern` when this run showed something wrong: a tool or harness that misbehaved, an artifact contract that contradicts itself, ")
-	b.WriteString("a step description that conflicts with a binding constraint, two stores that state the same fact differently, or a path/table/field the description names that does not exist. ")
-	b.WriteString("It takes real fields — severity, classification, impact, evidence, reproduction — so file the whole finding there rather than compressing it into prose somewhere else. ")
-	b.WriteString("Your step identity is supplied by the runtime; you do not pass it.\n\n")
-	b.WriteString("Use it for consequential, unresolved run evidence — not routine progress, and not something the workflow simply has not learned yet.\n\n")
+	// Pulse Technical Review independently evaluates retained output and runtime
+	// receipts. Reflection does not file observations or infer issue identity.
 
 	if learnings {
 		b.WriteString(buildReflectionLearningsSection(in, skillPath, referencesPath))
@@ -134,10 +128,10 @@ func BuildStepReflectionTurn(in StepReflectionTurnInput) string {
 	b.WriteString("### Closing\n\n")
 	b.WriteString("- This is your only reflection turn for this step; there is no second pass.\n")
 	if learnings {
-		b.WriteString("- If there is genuinely nothing new worth capturing, do **not** force an edit. Say so briefly and why. A concern still applies on a no-op turn.\n")
+		b.WriteString("- If there is genuinely nothing new worth capturing, do **not** force an edit. Say so briefly and why.\n")
 		b.WriteString("- If you changed files, end with exactly one line: `Learnings updated: files changed: <comma-separated list>`.\n")
 	}
-	b.WriteString("- Available tools: `execute_shell_command` for read-only inspection (`cat`, `ls`, `find`, `wc`), `query_workflow_db` for reads, `diff_patch_workspace_file` for writes, and `record_run_concern`.\n")
+	b.WriteString("- Available tools: `execute_shell_command` for read-only inspection (`cat`, `ls`, `find`, `wc`), `query_workflow_db` for reads, and `diff_patch_workspace_file` for writes.\n")
 
 	return b.String()
 }
@@ -259,6 +253,30 @@ func buildReflectionKBSection(in StepReflectionTurnInput) string {
 	b.WriteString("Topic ids: entity-scoped narrative uses the entity slug (`company-acme.md`); a cross-cutting pattern uses `pattern-<slug>`. ")
 	b.WriteString("Write every change with `diff_patch_workspace_file`, including registry updates.\n\n")
 	b.WriteString("Do not write to `knowledgebase/context/` — that store is user-owned.\n\n")
+
+	// ---- Anti-append (PLAT-173). ----
+	// The learnings half of this same turn states these duties at length; the KB
+	// half stated none of them, and the omission produced exactly the failure
+	// they prevent. confida-login's app-structure.md passed every stated
+	// threshold because each survey cycle appended a fresh dated section rather
+	// than correcting the existing one — the step's own flag named the pattern:
+	// "each appending a new dated per-cycle section instead of updating in
+	// place". A step that is only told where to write and what to contribute
+	// has been given no reason to do anything else.
+	b.WriteString("**Update the existing section in place; do not append a new dated one.** Before you write, `cat` and read the whole topic file. ")
+	b.WriteString("If a section already covers what you observed, correct or strengthen it — including replacing a claim this run disproved. ")
+	b.WriteString("Adding a new dated section that restates, contradicts, or supersedes an existing one without reconciling it is the defect: a reader going top-to-bottom lands on the stale claim as if it were current. ")
+	b.WriteString("A date is metadata on an entry (`last verified 2026-07-02`), never the identity of one.\n\n")
+
+	// stores.md told steps that notes "compact themselves when they exceed 20KB
+	// or 30 sections". No such mechanism exists anywhere in the platform: the
+	// post-step KB agent that once could compact is retired for this path, and
+	// /improve-knowledge is a workshop-mode skill nobody triggers per-cycle. A
+	// step told compaction is automatic has a positive reason to keep appending.
+	b.WriteString("**Nothing compacts these files for you.** No automatic pass condenses old sections, and no separate agent cleans up behind this turn — ")
+	b.WriteString("if a file you touch has accumulated near-duplicate sections across runs, fold them into one current entry now, as part of this turn, even when your own addition is small. ")
+	b.WriteString("Demote genuinely superseded point-in-time observations into a `## Historical context` block, keeping their dates, rather than deleting them outright.\n\n")
+
 	b.WriteString("**Your contribution contract:**\n")
 	b.WriteString(strings.TrimSpace(in.KBContribution))
 	b.WriteString("\n\nDo not invent facts this step did not establish; partial coverage beats fabricated coverage.\n\n")

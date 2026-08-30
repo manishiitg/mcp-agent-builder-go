@@ -1,9 +1,10 @@
 import { routeForQueuedMessage, splitQueuedMessages } from '../utils/queuedMessageDelivery'
+import { resolvePiModelGroup } from '../utils/llmDisplay'
 import React, { useRef, useCallback, useMemo, useState, useEffect, useLayoutEffect } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 
 const DBG = '[skill-popup]'
-import { Send, Wand2, Loader2, Globe, Layers, X, History, Bot, Server, Download, Paperclip, CalendarClock, MessageSquare, Terminal } from 'lucide-react'
+import { Send, Wand2, Loader2, Globe, Layers, X, History, Bot, Server, Download, Paperclip, CalendarClock, MessageSquare, Terminal, Plus } from 'lucide-react'
 import { Button } from './ui/Button'
 import { Textarea } from './ui/Textarea'
 import FileContextDisplay from './FileContextDisplay'
@@ -27,9 +28,8 @@ import { useWorkflowManifestStore } from '../stores/useWorkflowManifestStore'
 import { startRestoredTransportTerminal } from '../utils/restoredTerminal'
 import { chromeCdpInstallCommand, chromeCdpLaunchCommand, chromeCdpVerifyCommand, chromeCdpZipUrl } from '../utils/cdpSetup'
 import { CHAT_TOOL_COMMAND_EVENT, chatToolCommandFromEvent } from '../utils/chatToolEvents'
-import { loadAgentProfileCapabilityEnabled } from '../utils/agentProfileCapabilities'
+import { loadAgentProfileCapabilityEnabled, loadAgentProfileRuntime } from '../utils/agentProfileCapabilities'
 import { MicButton } from '../voice/MicButton'
-import { resolveDelegationMainModel } from '../utils/workflowLLMTierDefaults'
 import { hasActiveSessionWork } from '../utils/activitySessions'
 import { headerStatusLabel, statusTone } from '../utils/globalActivityMonitorStatus'
 import { shouldClearAcceptedChatDraft } from '../utils/chatSubmissionDraft'
@@ -48,66 +48,9 @@ const removePasteMarkersFromText = (text: string, markers: string[]) => {
   }, text)
 }
 
-const CLIPBOARD_IMAGE_EXTENSIONS: Record<string, string> = {
-  'image/png': 'png',
-  'image/jpeg': 'jpg',
-  'image/jpg': 'jpg',
-  'image/webp': 'webp',
-  'image/gif': 'gif',
-  'image/bmp': 'bmp',
-  'image/svg+xml': 'svg',
-  'image/tiff': 'tiff',
-}
+// Clipboard image helpers live in ./clipboardImages so they can be unit
+// tested without importing this component (which pulls the whole app graph).
 
-const CLIPBOARD_IMAGE_FILE_EXTENSION_PATTERN = /\.(png|jpe?g|webp|gif|bmp|svg|tiff?)$/i
-
-const isClipboardImageFile = (file: File): boolean => {
-  return file.type.toLowerCase().startsWith('image/')
-    || CLIPBOARD_IMAGE_FILE_EXTENSION_PATTERN.test(file.name)
-}
-
-const clipboardImageExtension = (file: File): string => {
-  const mimeExtension = CLIPBOARD_IMAGE_EXTENSIONS[file.type.toLowerCase()]
-  if (mimeExtension) return mimeExtension
-
-  const nameExtension = file.name.match(/\.([a-z0-9]{1,8})$/i)?.[1]?.toLowerCase()
-  return nameExtension || 'png'
-}
-
-const pastedImageFileName = (file: File, index: number): string => {
-  const timestamp = new Date()
-    .toISOString()
-    .replace(/[-:]/g, '')
-    .replace(/\.\d{3}Z$/, 'Z')
-  const suffix = index > 0 ? `-${index + 1}` : ''
-  return `pasted-image-${timestamp}${suffix}.${clipboardImageExtension(file)}`
-}
-
-const getClipboardImageFiles = (clipboardData?: DataTransfer | null): File[] => {
-  if (!clipboardData) return []
-
-  const images: File[] = []
-  const seen = new Set<string>()
-  const addFile = (file: File | null) => {
-    if (!file || !isClipboardImageFile(file)) return
-    const key = `${file.name}:${file.type}:${file.size}:${file.lastModified}`
-    if (seen.has(key)) return
-    seen.add(key)
-    images.push(file)
-  }
-
-  Array.from(clipboardData.files || []).forEach(addFile)
-  Array.from(clipboardData.items || []).forEach(item => {
-    if (item.kind === 'file') {
-      addFile(item.getAsFile())
-    }
-  })
-
-  return images.map((file, index) => new File([file], pastedImageFileName(file, index), {
-    type: file.type || 'image/png',
-    lastModified: Date.now(),
-  }))
-}
 
 const getHttpErrorStatus = (err: unknown): number | undefined => {
   return (err as { response?: { status?: number } } | undefined)?.response?.status
@@ -137,7 +80,7 @@ interface LiveMessageDelivery {
   detail?: string
 }
 
-const formatLiveInputProviderLabel = (provider?: string | null) => {
+const formatLiveInputProviderLabel = (provider?: string | null, modelId?: string | null) => {
   const normalized = (provider || '').trim().toLowerCase()
   switch (normalized) {
     case 'claude-code':
@@ -150,8 +93,10 @@ const formatLiveInputProviderLabel = (provider?: string | null) => {
     case 'cursor_cli':
       return 'Cursor CLI'
     case 'pi-cli':
-    case 'pi_cli':
-      return 'Pi CLI'
+    case 'pi_cli': {
+      const group = resolvePiModelGroup(modelId || undefined)
+      return group || 'the coding agent'
+    }
     default:
       return provider ? provider.replace(/[-_]/g, ' ') : 'live agent'
   }
@@ -172,7 +117,6 @@ import LLMConfigurationModal from './LLMConfigurationModal'
 import type { PlannerFile, LLMProvider, ChatHistorySession } from '../services/api-types'
 import type { LLMOption } from '../types/llm'
 import { useAppStore, useMCPStore, useLLMStore, useChatStore } from '../stores'
-import { CHIEF_OF_STAFF_PROFILE_ID, isChiefOfStaffTab } from '../utils/chiefOfStaff'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useCommandDialogStore } from '../stores/useCommandDialogStore'
 import { usePresetApplication, useGlobalPresetStore } from '../stores/useGlobalPresetStore'
@@ -181,6 +125,7 @@ import { agentApi } from '../services/api'
 import { skillsApi } from '../api/skills'
 import type { Skill } from '../types/skills'
 import { chatHistorySupportsNativeResume, chatHistoryUsesTerminalRestore } from './PreviousChatHistoryPanel'
+import { getClipboardImageFiles } from './clipboardImages'
 
 const AUTO_NOTIFICATION_PREFIX = '[AUTO-NOTIFICATION]'
 const FALLBACK_CODING_AGENT_PROVIDERS = new Set(['claude-code', 'codex-cli', 'cursor-cli', 'pi-cli'])
@@ -304,6 +249,7 @@ interface ChatInputProps {
     options?: { preferLiveInput?: boolean; sourceTabId?: string }
   ) => boolean | void | Promise<boolean | void>
   onStopStreaming: () => void
+  onNewChat?: () => void
   // Optional tab scope for embedded chat panes, such as WorkflowLayout. When
   // omitted, ChatInput uses the globally active chat tab.
   tabId?: string | null
@@ -314,6 +260,8 @@ interface ChatInputProps {
   // Product surfaces keep the shared transport but hide developer/provider
   // controls and render a simple customer-facing composer.
   surfaceVariant?: 'default' | 'product'
+  showNewChatAction?: boolean
+  hideRuntimeStatus?: boolean
 }
 
 function isAutoNotificationMessage(msg: string): boolean {
@@ -545,6 +493,9 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   tabId: scopedTabId,
   restoredConversationPending = true,
   surfaceVariant = 'default',
+  showNewChatAction = false,
+  hideRuntimeStatus = false,
+  onNewChat,
 }) => {
   const isProductSurface = surfaceVariant === 'product'
   // Store subscriptions
@@ -562,7 +513,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   const activeTabId = scopedTabId === null ? null : (scopedTabId ?? storeActiveTabId)
   // Use the scoped tab as the mode source when ChatInput is embedded. The global
   // mode category can lag behind WorkflowLayout, which would otherwise make a
-  // workflow builder input behave like generic multi-agent chat.
+  // workflow builder input behave like product-profile chat.
   const activeTab = useChatStore(state =>
     activeTabId ? state.chatTabs[activeTabId] : undefined
   )
@@ -601,6 +552,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   const isOrganizationAssistant = !!activeTab?.metadata?.isOrganizationAssistant
   const agentProfileWorkspace = activeTab?.metadata?.agentProfileWorkspace
   const agentProfileId = activeTab?.metadata?.agentProfileId
+  const agentProfileVersion = activeTab?.metadata?.agentProfileVersion
   // Mic control is gated per-profile (agentprofiles.RuntimeCapabilities.Voice)
   // rather than hardcoded to any one product — see agentProfileCapabilities.ts.
   // Checked only for product surfaces: AgentWorks' own generic chat has no
@@ -612,21 +564,31 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
       return
     }
     let cancelled = false
-    void loadAgentProfileCapabilityEnabled(agentProfileId, 'voice').then((enabled) => {
+    void loadAgentProfileCapabilityEnabled(agentProfileId, 'voice', agentProfileVersion).then((enabled) => {
       if (!cancelled) setVoiceCapabilityEnabled(enabled)
     })
     return () => { cancelled = true }
-  }, [isProductSurface, agentProfileId])
+  }, [isProductSurface, agentProfileId, agentProfileVersion])
+
+  // Product-owned chats display the provider/model declared by their profile,
+  // not the stale model config a durable tab may have inherited before the
+  // profile contract existed. The running session still wins below so a real
+  // server-selected fallback remains visible while it is active.
+  const [agentProfileRuntime, setAgentProfileRuntime] = useState<{ provider: string; model_id: string } | null>(null)
+  useEffect(() => {
+    if (!isProductSurface || !agentProfileId) {
+      setAgentProfileRuntime(null)
+      return
+    }
+    let cancelled = false
+    void loadAgentProfileRuntime(agentProfileId, agentProfileVersion).then((runtime) => {
+      if (!cancelled) setAgentProfileRuntime(runtime)
+    })
+    return () => { cancelled = true }
+  }, [agentProfileId, agentProfileVersion, isProductSurface])
 
   // Memoize tabConfig to prevent unnecessary re-renders
   const tabConfig = useMemo(() => activeTab?.config, [activeTab?.config])
-
-  const defaultReasoningLevel = tabConfig?.defaultReasoningLevel ?? null
-  const setDefaultReasoningLevel = useCallback((level: 'high' | 'medium' | 'low' | null) => {
-    if (activeTabId) {
-      useChatStore.getState().setTabConfig(activeTabId, { defaultReasoningLevel: level })
-    }
-  }, [activeTabId])
 
   // CRITICAL: Always use tab's status - never fall back to global to prevent mixing
   // If no active tab, this is an error condition (tabs should always exist)
@@ -646,15 +608,16 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     return state.activeSessionsCache.find(session => session.session_id === tabSessionId)
   })
   const activeSessionRuntime = hasActiveSessionWork(activeSession) ? activeSession?.runtime : undefined
-  const delegationTierConfig = useLLMStore(state => state.delegationTierConfig)
   const {
     providerManifest,
     providerManifestLoaded,
     loadProviderManifest,
+    primaryConfig,
   } = useLLMStore(useShallow(state => ({
     providerManifest: state.providerManifest,
     providerManifestLoaded: state.providerManifestLoaded,
     loadProviderManifest: state.loadProviderManifest,
+    primaryConfig: state.primaryConfig,
   })))
   
   // Note: activeTab may be undefined during initial render before tabs are created
@@ -744,16 +707,24 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
       return { provider: runtimeProvider as LLMProvider, model_id: runtimeModel }
     }
 
-    const configuredMain = resolveDelegationMainModel(delegationTierConfig, providerManifest)
-    if (configuredMain) return configuredMain
+    if (agentProfileRuntime?.provider && agentProfileRuntime.model_id) {
+      return {
+        provider: agentProfileRuntime.provider as LLMProvider,
+        model_id: agentProfileRuntime.model_id,
+      }
+    }
 
+    if (primaryConfig?.provider && primaryConfig.model_id) {
+      return { provider: primaryConfig.provider, model_id: primaryConfig.model_id }
+    }
     return null
   }, [
     activeSessionRuntime?.model_id,
     activeSessionRuntime?.provider,
-    delegationTierConfig,
+    agentProfileRuntime?.model_id,
+    agentProfileRuntime?.provider,
     isMultiAgentMode,
-    providerManifest,
+    primaryConfig,
   ])
 
   const effectiveProviderForSteer = useMemo(() => {
@@ -806,7 +777,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   const [cdpError, setCdpError] = useState<string | null>(null)
   const [cdpChecking, setCdpChecking] = useState(false)
   const [showCdpPopup, setShowCdpPopup] = useState(false)
-  const [showReasoningPopup, setShowReasoningPopup] = useState(false)
   const [isUploadingFiles, setIsUploadingFiles] = useState(false)
   const [isDraggingFiles, setIsDraggingFiles] = useState(false)
   const isCdpDisconnected = browserMode === 'cdp' && cdpConnected === false
@@ -1286,17 +1256,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
       )
     }
 
-    // Do not flash an unrelated stale tab model while the provider manifest is
-    // still loading. The selected profile is already authoritative.
-    if (isMultiAgentMode && delegationTierConfig?.mode === 'provider_profile' && delegationTierConfig.provider) {
-      return {
-        provider: delegationTierConfig.provider as LLMProvider,
-        model: '',
-        label: delegationTierConfig.provider,
-        description: 'Selected coding-agent profile',
-      }
-    }
-
     if (tabConfig?.llmConfig) {
       const config = tabConfig.llmConfig
       const foundLLM = availableLLMs.find(llm =>
@@ -1323,8 +1282,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     multiAgentEffectiveLLMConfig?.model_id,
     multiAgentEffectiveLLMConfig?.provider,
     activeSessionRuntime?.provider,
-    delegationTierConfig?.mode,
-    delegationTierConfig?.provider,
     manifestBuilderLLM,
     workflowPhasePreset,
     providerManifest,
@@ -1352,11 +1309,19 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     const model = activeSession?.runtime?.model_id?.trim() || primaryLLM?.model?.trim() || ''
     if (!provider) return null
 
-    const tone = activeSession ? statusTone(activeSession) : 'idle'
+    // A durable foreground completion settles the turn even when the periodic
+    // activity snapshot has not refreshed yet. This is the same boundary the
+    // global monitor eventually observes, applied immediately to the open chat.
+    const tone = activeTab?.isCompleted && !isTurnInFlight
+      ? 'idle'
+      : activeSession ? statusTone(activeSession) : 'idle'
     const waiting = tone === 'needs-input'
     const running = tone === 'running' || tone === 'background'
     return {
-      label: model && model !== provider ? `${provider} · ${model}` : provider,
+      // The composer is user-facing: transport names such as "claude-code"
+      // do not add useful context here. Keep the provider only as a fallback
+      // when the runtime has not reported its model yet.
+      label: model || provider,
       state: waiting ? 'waiting' as const : running ? 'running' as const : 'ready' as const,
       activityLabel: activeSession ? headerStatusLabel(activeSession) : 'idle',
     }
@@ -1371,9 +1336,31 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     activeSession?.has_running_background_agents,
     activeSession?.running_background_agent_count,
     activeSession?.needs_user_input,
+    activeTab?.isCompleted,
+    isTurnInFlight,
     primaryLLM?.model,
     primaryLLM?.provider,
   ])
+
+  // mainAgentRuntimeStatus reads activeSession from activeSessionsCache, a
+  // 30s-TTL cache that nothing polls on a timer inside the workflow-builder
+  // view (only the main chat view's GlobalActivityMonitor does, every 5s).
+  // The tab strip's own busy dot reads chatTabs[tabId].isStreaming /
+  // .hasRunningBgAgents directly -- live, event-driven -- so left alone this
+  // composer chip can visibly lag it: still showing "running" up to 30s
+  // after a background agent/step actually finished (reported live: the
+  // composer's spinner kept going after the tab strip had already gone
+  // idle). Force a refresh right when the live signal transitions instead
+  // of waiting on the cache's own TTL.
+  const liveTabBusy = (activeTab?.isStreaming ?? false) || (activeTab?.hasRunningBgAgents ?? false)
+  const lastLiveTabBusyRef = useRef(liveTabBusy)
+  useEffect(() => {
+    if (lastLiveTabBusyRef.current === liveTabBusy) return
+    lastLiveTabBusyRef.current = liveTabBusy
+    useChatStore.getState().getActiveSessions(true).catch(error => {
+      console.warn('[ChatInput] Failed to refresh active sessions after live busy-state change', error)
+    })
+  }, [liveTabBusy])
 
   // Preset folder selection
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -1568,26 +1555,23 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   const adjustTextareaHeight = useCallback(() => {
     if (textareaRef.current) {
       const textarea = textareaRef.current
-      // Video Studio is a compact, single-line composer. Keep long creative
-      // prompts on one horizontal line rather than growing the product surface
-      // into a terminal-like input box.
-      if (isProductSurface) {
-        textarea.style.height = '36px'
-        return
-      }
-      // Fast path: the box is already at the 2-line floor and the content fits
-      // (no vertical overflow). There is nothing to grow or shrink, so DON'T flip
+      // Product surfaces start one line shorter (36px vs 40px) to stay compact
+      // when empty, but still grow with real wrapped content rather than
+      // scrolling it off-screen horizontally.
+      const floor = isProductSurface ? 36 : 40
+      // Fast path: the box is already at its floor and the content fits (no
+      // vertical overflow). There is nothing to grow or shrink, so DON'T flip
       // height to 'auto' — that forced reflow is what jitters the flex column and
       // fires the terminal's ResizeObserver on every keystroke, even a single
       // character that needs no growth at all.
-      if (textarea.style.height === '40px' && textarea.scrollHeight <= textarea.clientHeight) {
+      if (textarea.style.height === `${floor}px` && textarea.scrollHeight <= textarea.clientHeight) {
         return
       }
       // Reset height to auto to get correct scrollHeight
       textarea.style.height = 'auto'
-      // Calculate new height (min 40px for 2 lines, max 100px)
+      // Calculate new height (min = floor, max 100px)
       // scrollHeight includes padding, so we get the exact content height
-      const newHeight = Math.min(Math.max(textarea.scrollHeight, 40), 100)
+      const newHeight = Math.min(Math.max(textarea.scrollHeight, floor), 100)
       const newHeightPx = `${newHeight}px`
       // Only write when it actually changes so an unchanged height never leaves a
       // pending style mutation / extra layout pass.
@@ -1827,7 +1811,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     try {
       await agentApi.sendControlKey(tabSessionId, key)
       if (options?.showToast ?? key === 'Escape') {
-        addToast(`Sent ${key} to ${effectiveProviderForSteer || 'CLI'} — Stop button ends the session`, 'info')
+        addToast(`Sent ${key} to ${formatLiveInputProviderLabel(effectiveProviderForSteer, primaryLLM?.model)} — Stop button ends the session`, 'info')
       }
       return true
     } catch (err) {
@@ -1840,7 +1824,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
       }
       return false
     }
-  }, [activeTabId, addToast, effectiveProviderForSteer, supportsLiveCodingAgentInput, tabSessionId])
+  }, [activeTabId, addToast, effectiveProviderForSteer, primaryLLM?.model, supportsLiveCodingAgentInput, tabSessionId])
 
   const ensureMultiAgentTabReady = useCallback(async (): Promise<boolean> => {
     if (!isMultiAgentMode || showWorkflowsOverview) return false
@@ -1849,58 +1833,13 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     const currentActiveTab = chatStore.activeTabId ? chatStore.chatTabs[chatStore.activeTabId] : null
     if (
       currentActiveTab?.metadata?.mode === 'multi-agent' &&
-      (!!agentProfileWorkspace || !currentActiveTab.metadata?.agentProfileId) &&
+      !!currentActiveTab.metadata?.agentProfileId &&
       currentActiveTab.metadata?.isOrganizationAssistant !== true
     ) {
       return true
     }
-
-    const modeTabs = Object.values(chatStore.chatTabs)
-      .filter(tab => isChiefOfStaffTab(tab) && tab.metadata?.isOrganizationAssistant !== true)
-      .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))
-
-    if (modeTabs.length > 0) {
-      chatStore.switchTab(modeTabs[0].tabId)
-      return true
-    }
-
-    try {
-      await chatStore.createChatTab('Chief of Staff', {
-        mode: 'multi-agent',
-        agentProfileId: CHIEF_OF_STAFF_PROFILE_ID,
-        agentProfileVersion: 1,
-        agentProfileWorkspace: 'Chats',
-        agentProfileProjectTitle: 'Chief of Staff',
-      })
-      return true
-    } catch (error) {
-      console.error('Failed to create fallback multi-agent tab:', error)
-      addToast('Unable to initialize a chat tab right now.', 'error')
-      return false
-    }
-  }, [agentProfileWorkspace, isMultiAgentMode, showWorkflowsOverview, addToast])
-
-  // Select a multi-agent tab on mode entry, not just on input focus. After a
-  // reload or mode switch, activeTabId can be null or point to a non-multi-agent
-  // tab, leaving an existing tab (e.g. "Agent Chat 1") visible but unselected —
-  // so the chat input renders but typing does nothing. Select-only here (never
-  // create) to avoid racing store rehydration / making duplicate tabs.
-  useEffect(() => {
-    if (!isMultiAgentMode || showWorkflowsOverview || isOrganizationAssistant) return
-    const store = useChatStore.getState()
-    const active = store.activeTabId ? store.chatTabs[store.activeTabId] : null
-    const activeIsVisibleMultiAgent =
-      active?.metadata?.mode === 'multi-agent' &&
-      (!!agentProfileWorkspace || !active.metadata?.agentProfileId) &&
-      active.metadata?.isOrganizationAssistant !== true
-    if (activeIsVisibleMultiAgent) return
-    const modeTabs = Object.values(store.chatTabs)
-      .filter(tab => isChiefOfStaffTab(tab) && tab.metadata?.isOrganizationAssistant !== true)
-      .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))
-    if (modeTabs.length > 0) {
-      store.switchTab(modeTabs[0].tabId)
-    }
-  }, [agentProfileWorkspace, isMultiAgentMode, showWorkflowsOverview, isOrganizationAssistant, activeTabId])
+    return false
+  }, [isMultiAgentMode, showWorkflowsOverview])
 
   // If the user has already typed surrounding text, keep pasted content out of
   // the textarea and insert a stable marker the message can refer to.
@@ -3022,10 +2961,17 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
       return `${agentProfileWorkspace.replace(/\/$/, '')}/uploads`
     }
     if (selectedModeCategory === 'workflow') {
-      return workspaceActiveFolder || 'Workflow'
+      // activeWorkflowWorkspacePath resolves the workflow this chat tab is
+      // actually scoped to. workspaceActiveFolder is the file browser's own
+      // navigation state -- a separate piece of state that can be empty or
+      // pointed elsewhere while the chat itself is scoped to a workflow, which
+      // silently dropped pasted screenshots into the shared Workflow/ root
+      // instead of the workflow's own folder (confirmed live: a pasted image
+      // from the confida-login chat landed at Workflow/pasted-image-*.png).
+      return activeWorkflowWorkspacePath || workspaceActiveFolder || 'Workflow'
     }
     return 'Chats'
-  }, [agentProfileWorkspace, selectedModeCategory, workspaceActiveFolder])
+  }, [activeWorkflowWorkspacePath, agentProfileWorkspace, selectedModeCategory, workspaceActiveFolder])
 
   const uploadFilesToChat = useCallback(async (files: File[]) => {
     if (files.length === 0 || isUploadingFiles) {
@@ -3344,7 +3290,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     return `Ask anything... (${baseHints})`
   }, [agentProfileWorkspace, isProductSurface, isStreaming, isViewOnly, isMultiAgentMode, isWorkflowPhaseChat, tabSessionId, canBootstrapMultiAgentTab, canBootstrapWorkflowPhaseTab])
 
-  const liveDeliveryProviderLabel = formatLiveInputProviderLabel(liveMessageDelivery?.provider || effectiveProviderForSteer)
+  const liveDeliveryProviderLabel = formatLiveInputProviderLabel(liveMessageDelivery?.provider || effectiveProviderForSteer, primaryLLM?.model)
   const liveDeliveryText = liveMessageDelivery
     ? liveMessageDelivery.status === 'sending'
       ? isProductSurface ? 'Sending message…' : `Sending to ${liveDeliveryProviderLabel}...`
@@ -3358,19 +3304,27 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
               ? isProductSurface ? 'Message saved' : 'Saved to queue'
               : isProductSurface ? 'Could not send the message' : 'Could not submit live input'
     : ''
-  // The project chat already echoes an accepted message in the conversation.
-  // Do not leave an extra success banner in the composer; only transient send
-  // and failure states need a separate signal here.
-  const showLiveDelivery = Boolean(liveMessageDelivery && (!isProductSurface || liveMessageDelivery.status === 'sending' || liveMessageDelivery.status === 'failed'))
+  // The chat history already echoes an accepted message as its own bubble
+  // once delivery reaches 'sent_to_cli' or 'next_turn_started' (see
+  // ChatArea's submitQueryImmediately, which appends an optimistic user
+  // message event for exactly those two statuses, on every surface, not
+  // just product chat). Showing the composer banner too for those statuses
+  // duplicated the same text right below the bubble. Queued/local-save
+  // states never get a bubble, so they still need the banner as the only
+  // signal; sending/failed are always transient and always shown.
+  const showLiveDelivery = Boolean(liveMessageDelivery && (
+    liveMessageDelivery.status === 'sending' ||
+    liveMessageDelivery.status === 'failed' ||
+    (!isProductSurface && liveMessageDelivery.status !== 'sent_to_cli' && liveMessageDelivery.status !== 'next_turn_started')
+  ))
   const liveDeliveryClass = liveMessageDelivery?.status === 'failed'
     ? 'text-amber-600 dark:text-amber-300'
     : liveMessageDelivery?.status === 'sending'
       ? 'text-blue-600 dark:text-blue-300'
       : 'text-emerald-600 dark:text-emerald-300'
 
-  // The multi-agent (Chief of Staff) chat pane aligns its left inset with the
-  // "Chief of Staff" heading (ChatTabs header, px-3); workflow mode keeps the
-  // wider px-4 so its toolbar layout is unchanged.
+  // Product chats use the roomier project layout; workflow mode keeps the
+  // existing toolbar alignment.
   const inputPadX = isProductSurface ? 'px-4 sm:px-6' : isMultiAgentMode ? 'px-3' : 'px-4'
 
   // For view-only (restored) tabs, show a minimal indicator instead of the full input form
@@ -3656,9 +3610,8 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
               onDragLeave={handleTextareaDragLeave}
               onDrop={handleTextareaDrop}
               rows={isProductSurface ? 1 : undefined}
-              wrap={isProductSurface ? 'off' : undefined}
               placeholder={placeholder}
-              className={`${isProductSurface ? '!min-h-[36px] !max-h-[36px] !border-0 !bg-transparent !px-2 !py-1.5 text-sm text-slate-100 !shadow-none focus-visible:!ring-0 placeholder:text-sm placeholder:text-slate-400 whitespace-nowrap !overflow-x-auto !overflow-y-hidden' : '!min-h-[36px] max-h-[100px] !border-0 !bg-transparent !py-1.5 !px-2 text-xs !shadow-none focus-visible:!ring-0 placeholder:text-xs'} resize-none overflow-y-auto leading-[1.3] ${
+              className={`${isProductSurface ? '!min-h-[36px] max-h-[100px] !border-0 !bg-transparent !px-2 !py-1.5 text-sm text-slate-100 !shadow-none focus-visible:!ring-0 placeholder:text-sm placeholder:text-slate-400' : '!min-h-[36px] max-h-[100px] !border-0 !bg-transparent !py-1.5 !px-2 text-xs !shadow-none focus-visible:!ring-0 placeholder:text-xs'} resize-none overflow-y-auto leading-[1.3] ${
                 isDraggingFiles ? 'ring-2 ring-blue-500 border-blue-500 bg-blue-50/30 dark:bg-blue-900/10' : ''
               }`}
               disabled={inputDisabled}
@@ -3672,7 +3625,21 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             )}
             <div className="flex justify-between items-center">
               <div className="flex items-center gap-1.5">
-                {mainAgentRuntimeStatus && (
+                {showNewChatAction && onNewChat ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={onNewChat}
+                    disabled={isTurnInFlight}
+                    className="h-7 gap-1.5 px-2 text-[11px] text-muted-foreground"
+                    aria-label="Start a new chat"
+                    title={isTurnInFlight ? 'Wait for the current response or stop it first' : 'Start a new chat'}
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    New chat
+                  </Button>
+                ) : null}
+                {!hideRuntimeStatus && mainAgentRuntimeStatus && (
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <div
@@ -3752,7 +3719,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                         )}
                       </>
 
-                    {/* Browser access lives in the Chief of Staff header for multi-agent mode. */}
+                    {/* Browser access lives in the chat header for multi-agent mode. */}
                     {!hideExtras && !isMultiAgentMode && <button
                       type="button"
                       data-tour="chat-browser-tools"
@@ -4062,64 +4029,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                           className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           {browserMode === 'cdp' && cdpConnected !== true ? (cdpChecking ? 'Checking...' : 'Connect Chrome First') : 'Done'}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Reasoning Level Popup */}
-                {showReasoningPopup && (
-                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowReasoningPopup(false)}>
-                    <div className="bg-gray-900 rounded-xl shadow-2xl border border-gray-700 w-[320px] max-w-[90vw]" onClick={(e) => e.stopPropagation()}>
-                      <div className="flex items-center justify-between px-5 py-4 border-b border-gray-700">
-                        <div className="flex items-center gap-2">
-                          <Bot className="w-5 h-5 text-blue-400" />
-                          <h3 className="text-base font-semibold text-white">Reasoning Level</h3>
-                        </div>
-                        <button onClick={() => setShowReasoningPopup(false)} className="text-gray-400 hover:text-gray-200 transition-colors">
-                          <X className="w-5 h-5" />
-                        </button>
-                      </div>
-                      <div className="px-5 py-4 space-y-2">
-                        <p className="text-xs text-gray-400 mb-3">Sets the default reasoning effort for delegated sub-agent tasks.</p>
-                        {([
-                          { level: 'high',   label: 'High',   desc: 'Deep thinking — complex reasoning, research, planning',   activeClass: 'border-orange-500 bg-orange-950/40', dotClass: 'bg-orange-500' },
-                          { level: 'medium', label: 'Medium', desc: 'Balanced — good for most tasks',                          activeClass: 'border-yellow-500 bg-yellow-950/40', dotClass: 'bg-yellow-400' },
-                          { level: 'low',    label: 'Low',    desc: 'Fast — simple lookups, straightforward actions',          activeClass: 'border-green-500 bg-green-950/40',  dotClass: 'bg-green-500'  },
-                        ] as const).map(({ level, label, desc, activeClass, dotClass }) => (
-                          <label key={level} className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
-                            defaultReasoningLevel === level ? activeClass : 'border-gray-700 hover:bg-gray-800'
-                          }`}>
-                            <input
-                              type="radio"
-                              name="reasoningLevel"
-                              checked={defaultReasoningLevel === level}
-                              onChange={() => setDefaultReasoningLevel(level)}
-                              className="sr-only"
-                            />
-                            <div className={`w-3 h-3 rounded-full mt-0.5 flex-shrink-0 ${defaultReasoningLevel === level ? dotClass : 'bg-gray-600'}`} />
-                            <div>
-                              <div className="text-sm font-medium text-gray-100">{label}</div>
-                              <div className="text-xs text-gray-400 mt-0.5">{desc}</div>
-                            </div>
-                          </label>
-                        ))}
-                      </div>
-                      <div className="flex justify-between gap-2 px-5 py-3 border-t border-gray-700">
-                        <button
-                          type="button"
-                          onClick={() => { setDefaultReasoningLevel(null); setShowReasoningPopup(false) }}
-                          className="px-4 py-2 text-sm text-gray-300 hover:bg-gray-800 rounded-md transition-colors"
-                        >
-                          Clear (Auto)
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setShowReasoningPopup(false)}
-                          className="px-4 py-2 text-sm font-medium bg-blue-600 hover:bg-blue-500 text-white rounded-md transition-colors"
-                        >
-                          Done
                         </button>
                       </div>
                     </div>

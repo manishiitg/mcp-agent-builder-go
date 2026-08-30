@@ -1,5 +1,13 @@
 ## ROUTING STEP DESIGN
 
+**Routing is now the "route" concept: a major, self-contained sub-workflow
+fork** — not a small in-flow decision. For a lightweight next-step choice,
+use a **`branch` step** instead (`references/branch.md`); it has the exact
+same mechanics described below, just its own type tag, so guidance,
+reporting, and eval tooling can tell a major fork apart from a small
+decision. Everything else on this page still applies unchanged to routing
+steps. See PLAT-259.
+
 A routing step is a deterministic switch. It reads `route_selection.json`, resolves the selected value to one of its `routes[]`, and branches to that route's `next_step_id`.
 
 Use routing when the workflow must run **exactly one** of N existing downstream steps. The common case is a fixed branch selected from the user's request to the builder; the builder/caller passes that choice as `route_selections` when starting the workflow. Do not put judgment inside the routing step itself; put judgment in an earlier message sequence or caller-provided `route_selections`. If an agent decision is needed, add a message sequence before routing that writes `route_selection.json` in its own output folder.

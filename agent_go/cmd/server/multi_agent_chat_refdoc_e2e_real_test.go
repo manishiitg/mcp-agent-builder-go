@@ -24,7 +24,7 @@ import (
 
 // TestMultiAgentChatPromptSteersToReferenceDocs is a real-LLM e2e test for
 // the multi-agent chat prompt refactor. It verifies that the new
-// schedule/secret cheat-sheet+pointer pattern actually steers the LLM to
+// secret cheat-sheet+pointer pattern actually steers the LLM to
 // call read_skill(skills=[{"name":"builder-reference","path":"references/....md"}]) before performing rare-path actions,
 // instead of inventing the file format / tool semantics from memory.
 //
@@ -32,12 +32,22 @@ import (
 //  1. Builds the same system prompt the multi-agent chat session would see
 //     (GetMultiAgentDelegationInstructionsWithUser).
 //  2. Defines read_skill with mcpagent's intrinsic attached-skill schema.
-//  3. Sends a "schedule a daily task" user message OR a "store a secret"
-//     user message via the Anthropic API with claude-haiku.
+//  3. Sends a "store a secret" user message via the Anthropic API with
+//     claude-haiku.
 //  4. Asserts the model's first response contains a tool_use block for
 //     read_skill with the expected bundled path. The system prompt pointer
-//     ("call read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/schedule-management.md\"}]) first") only
+//     ("call read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/secret-management.md\"}]) first") only
 //     produces correct behavior if the LLM actually parses and acts on it.
+//
+// A sibling "schedule a daily task" case was removed 2026-08-27: multi-agent
+// chat's own global schedule runtime was deleted (see
+// TestGetMultiAgentDelegationInstructionsLazyLoadsSecret's "removed"
+// assertions in delegation_tools_test.go), and there is no production code
+// anywhere that registers a multi-agent-chat-scoped schedule tool. This case
+// had drifted stale behind this test's cost gate without anyone noticing.
+// Workflow-level scheduling (create_schedule/update_schedule/
+// create_calendar_schedule) is a separate, still-live capability documented
+// under references/workflow-tools.md, not this one.
 //
 // Gating:
 //   - RUN_MULTIAGENT_REFDOC_E2E=1 to run (off by default — costs API tokens).
@@ -45,7 +55,7 @@ import (
 //   - ANTHROPIC_REFDOC_MODEL optional override (defaults to claude-haiku-4-5,
 //     the cheapest model that's still smart enough to follow tool guidance).
 //
-// Cost: roughly $0.001 per case (two cases, ~10k input tokens each on
+// Cost: roughly $0.001 per case (one case, ~10k input tokens on
 // claude-haiku-4-5).
 func TestMultiAgentChatPromptSteersToReferenceDocs(t *testing.T) {
 	if os.Getenv("RUN_MULTIAGENT_REFDOC_E2E") == "" {
@@ -78,7 +88,7 @@ func TestMultiAgentChatPromptSteersToReferenceDocs(t *testing.T) {
 						},
 						"path": map[string]any{
 							"type": "string",
-							"enum": []string{"references/schedule-management.md", "references/secret-management.md"},
+							"enum": []string{"references/secret-management.md"},
 						},
 					},
 					Required: []string{"skill_name", "path"},
@@ -93,11 +103,6 @@ func TestMultiAgentChatPromptSteersToReferenceDocs(t *testing.T) {
 		expectKind string
 	}
 	cases := []caseSpec{
-		{
-			name:       "schedule_request_triggers_schedule_doc_load",
-			userMsg:    "I'd like to schedule a multi-agent task that runs every weekday at 9:00 AM. The task should send me a daily summary. Set it up.",
-			expectKind: "schedule-management",
-		},
 		{
 			name:       "secret_storage_request_triggers_secret_doc_load",
 			userMsg:    "Please store my Slack API token. The value is sk-test-1234-fake-not-real. Save it as SLACK_TOKEN.",
@@ -237,12 +242,6 @@ func TestMultiAgentChatPromptSteersToReferenceDocs_ClaudeCode(t *testing.T) {
 		mustMention []string // additional phrases that should appear in the response
 	}
 	cases := []caseSpec{
-		{
-			name:        "schedule_request_describes_schedule_doc_load",
-			userMsg:     "I want to schedule a multi-agent task that runs every weekday at 9 AM. Walk me through exactly what tools you would call, in order, to set this up. Be specific about tool names and arguments.",
-			expectKind:  "schedule-management",
-			mustMention: []string{"read_skill"},
-		},
 		{
 			name:        "secret_storage_describes_secret_doc_load",
 			userMsg:     "I want to save a Slack API token as SLACK_TOKEN. Walk me through exactly what tools you would call, in order, to store it correctly. Be specific about tool names and arguments.",
@@ -400,23 +399,15 @@ This workflow is ` + workflowDescription + `. It runs continuously and updates `
 	}
 	turns := []turn{
 		{
-			name:    "1_schedule_request",
-			userMsg: "Hi. I want to schedule a multi-agent task that runs every weekday at 9:00 AM. Walk me through exactly what tools you would call, in order, to set this up.",
-			mustMentionAny: [][]string{
-				{"read_skill"},
-				{"schedule-management"},
-			},
-		},
-		{
-			name:    "2_secret_storage",
-			userMsg: "Different topic — I also want to save a Slack API token as SLACK_TOKEN. What tool do you call first, before doing anything else?",
+			name:    "1_secret_storage",
+			userMsg: "Hi. I want to save a Slack API token as SLACK_TOKEN. What tool do you call first, before doing anything else?",
 			mustMentionAny: [][]string{
 				{"read_skill"},
 				{"secret-management"},
 			},
 		},
 		{
-			name:    "3_employees_lookup",
+			name:    "2_employees_lookup",
 			userMsg: "Who handles the bot-whatsapp-customer-support workflow? Use the employee context you already have — don't ask me, just answer from what's loaded.",
 			mustMentionAny: [][]string{
 				// Either name or workflow path. Should NOT invent another name.
@@ -427,7 +418,7 @@ This workflow is ` + workflowDescription + `. It runs continuously and updates `
 			},
 		},
 		{
-			name:    "4_workflow_context_inspect",
+			name:    "3_workflow_context_inspect",
 			userMsg: "Briefly describe what the bot-whatsapp-customer-support workflow does, based on the workflow context loaded in this session. Don't make anything up — only use what's already in the system prompt.",
 			mustMentionAny: [][]string{
 				// Should reference the distinctive content from the synthetic workflow context.

@@ -9,33 +9,54 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/loopclosure"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/pulseintake"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/pulsemodules"
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 )
 
 const (
-	pulseModuleWorkflowReview = pulsemodules.WorkflowReviewID
-	// pulseModuleLLMOpsReview owns cost, timing, tool-call operations,
-	// model/tier/catalog review, and plan-design hygiene (step-type fitness,
-	// prevalidation fitness, schema/description drift). These checks need one
-	// agentic judgment pass over the same runtime and goal evidence.
-	pulseModuleLLMOpsReview = pulsemodules.LLMOpsReviewID
-	// pulseModuleStrategyAuditor owns read-only improvement of the current
-	// strategy across retained runs. Goal Advisor independently explores
-	// materially different approaches outside the current plan.
-	pulseModuleStrategyAuditor = pulsemodules.StrategyAuditorID
-	pulseModuleGoalAdvisor     = pulsemodules.GoalAdvisorID
+	// pulseModuleTechnicalReview is one durable review identity with distinct
+	// agent-selected lenses for correctness, stores, runtime operations,
+	// orchestration shape, model/tier fitness, cost, and execution efficiency.
+	// Engineering and Operations remain useful lens names, not separate queues.
+	pulseModuleTechnicalReview = pulsemodules.TechnicalReviewID
+	// Legacy constants remain available to migration tests and readers. Runtime
+	// worklists and new writes use pulseModuleTechnicalReview exclusively.
+	pulseModuleWorkflowReview = pulsemodules.LegacyWorkflowReviewID
+	pulseModuleLLMOpsReview   = pulsemodules.LegacyLLMOpsReviewID
+	// pulseModuleStrategicReview owns both hidden-mechanism review of the
+	// current strategy and conditional discovery of materially different
+	// approaches. Those are sequence turns, not independent modules.
+	pulseModuleStrategicReview = pulsemodules.StrategicReviewID
+	// pulseModulePlanDriftReview is event-triggered, not time-cadenced: it is
+	// due whenever any step's drift_review record is null. See
+	// validatePlanDriftRouting below.
+	pulseModulePlanDriftReview = pulsemodules.PlanDriftReviewID
 )
 
 // Derived from the canonical registry — see pkg/pulsemodules. Do not restate
 // the module set here; a hand-maintained second copy is exactly what caused
 // the 2026-07-29 desync.
 var pulseModuleOrder = pulsemodules.IDs()
+
+// Focus catalogs define durable coverage identities, not review decisions.
+// Gate and reviewers still use evidence and judgment to choose what is due.
+var pulseReviewFocusCatalog = map[string][]string{
+	pulseModuleTechnicalReview: {
+		"execution_health", "validation_contract_health", "plan_orchestration_integrity", "store_integrity",
+		"report_quality_truth", "evaluation_quality_truth", "model_cost_fitness",
+	},
+	pulseModuleStrategicReview: {
+		"goal_measurement_validity", "strategy_effectiveness", "feedback_loops_bias",
+		"concentration_saturation", "alternative_headroom", "experiment_impact",
+	},
+}
 
 var validPulseModules = func() map[string]bool {
 	m := make(map[string]bool, len(pulsemodules.All))
@@ -56,7 +77,7 @@ func pulseModuleExample() string {
 	if len(pulseModuleOrder) > 0 {
 		return pulseModuleOrder[0]
 	}
-	return pulseModuleWorkflowReview
+	return pulseModuleTechnicalReview
 }
 
 // pulseModuleResultValues is the module-audit result set shared by the accept
@@ -111,6 +132,44 @@ const pulseRunModeSchema = `CREATE TABLE IF NOT EXISTS pulse_run_mode (
 	reason TEXT NOT NULL,
 	recorded_at TEXT NOT NULL,
 	PRIMARY KEY (workspace_path, pulse_run_id)
+)`
+
+// Pulse review focus is deliberately separate from module cadence and reviewer
+// receipts. Module state answers whether Technical Review is due; focus state
+// answers which bounded deep lenses were examined inside that module. A review
+// may select more than one lens when distinct routes or evidence boundaries
+// justify the extra work; route scope is retained so a small route does not
+// make a materially different large route look reviewed.
+// The Markdown checkpoint remains per-run working memory only.
+const pulseReviewFocusStateSchema = `CREATE TABLE IF NOT EXISTS pulse_review_focus_state (
+	workspace_path TEXT NOT NULL,
+	module TEXT NOT NULL,
+	focus_key TEXT NOT NULL,
+	last_pulse_run_id TEXT NOT NULL DEFAULT '',
+	last_reviewed_at TEXT NOT NULL DEFAULT '',
+	last_verdict TEXT NOT NULL DEFAULT '',
+	last_selection_reason TEXT NOT NULL DEFAULT '',
+	last_route_scope TEXT NOT NULL DEFAULT '',
+	next_check_at TEXT NOT NULL DEFAULT '',
+	next_check_reason TEXT NOT NULL DEFAULT '',
+	updated_at TEXT NOT NULL,
+	PRIMARY KEY (workspace_path, module, focus_key)
+)`
+
+const pulseReviewFocusHistorySchema = `CREATE TABLE IF NOT EXISTS pulse_review_focus_history (
+	_id INTEGER PRIMARY KEY AUTOINCREMENT,
+	workspace_path TEXT NOT NULL,
+	module TEXT NOT NULL,
+	pulse_run_id TEXT NOT NULL,
+	focus_key TEXT NOT NULL,
+	priority_class TEXT NOT NULL,
+	selection_reason TEXT NOT NULL,
+	route_scope TEXT NOT NULL DEFAULT '',
+	verdict TEXT NOT NULL DEFAULT '',
+	evidence_json TEXT NOT NULL DEFAULT '[]',
+	issue_ids_json TEXT NOT NULL DEFAULT '[]',
+	deferred_focuses_json TEXT NOT NULL DEFAULT '[]',
+	recorded_at TEXT NOT NULL
 )`
 
 const (
@@ -179,6 +238,26 @@ type PulseRunMode struct {
 	RecordedAt    string `json:"recorded_at"`
 }
 
+// PulseReviewFocus is compact, durable coverage state. Times are explicit UTC
+// RFC3339 timestamps; never infer lifecycle time from the opaque pulse_run_id.
+type PulseReviewFocus struct {
+	WorkspacePath       string   `json:"workspace_path"`
+	Module              string   `json:"module"`
+	FocusKey            string   `json:"focus_key"`
+	LastPulseRunID      string   `json:"last_pulse_run_id,omitempty"`
+	LastReviewedAt      string   `json:"last_reviewed_at,omitempty"`
+	LastVerdict         string   `json:"last_verdict,omitempty"`
+	LastSelectionReason string   `json:"last_selection_reason,omitempty"`
+	RouteScope          string   `json:"route_scope,omitempty"`
+	NextCheckAt         string   `json:"next_check_at,omitempty"`
+	NextCheckReason     string   `json:"next_check_reason,omitempty"`
+	UpdatedAt           string   `json:"updated_at"`
+	ReviewCount         int      `json:"review_count"`
+	RouteReviewCount    int      `json:"route_review_count,omitempty"`
+	DeferredFocuses     []string `json:"deferred_focuses,omitempty"`
+	IssueIDs            []string `json:"issue_ids,omitempty"`
+}
+
 type PulseModuleAudit struct {
 	WorkspacePath string   `json:"workspace_path"`
 	Module        string   `json:"module"`
@@ -224,9 +303,12 @@ func ensurePulseModuleStateSchema(ctx context.Context, db *sql.DB) error {
 		pulseModuleStateSchema,
 		pulseModuleAuditSchema,
 		pulseRunModeSchema,
+		pulseReviewFocusStateSchema,
+		pulseReviewFocusHistorySchema,
 		pulseShadowSignalObservationSchema,
 		pulseFinalCommandStateSchema,
 		backgroundAgentLogSchema,
+		pulseFastRequestSchema,
 	}
 	for _, stmt := range stmts {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
@@ -236,12 +318,29 @@ func ensurePulseModuleStateSchema(ctx context.Context, db *sql.DB) error {
 	if err := ensurePulseModuleStateColumns(ctx, db); err != nil {
 		return err
 	}
+	if err := ensurePulseReviewFocusColumns(ctx, db); err != nil {
+		return err
+	}
+	if err := ensureBackgroundAgentLogColumns(ctx, db); err != nil {
+		return err
+	}
+	if err := migrateMergedStrategicReviewRows(ctx, db); err != nil {
+		return err
+	}
+	if err := migrateMergedTechnicalReviewRows(ctx, db); err != nil {
+		return err
+	}
+	if err := migratePulseReviewFocusCatalog(ctx, db); err != nil {
+		return err
+	}
 	stmts = []string{
 		`CREATE INDEX IF NOT EXISTS idx_pulse_module_state_run ON pulse_module_state(last_pulse_run_id, last_decision)`,
 		`CREATE INDEX IF NOT EXISTS idx_pulse_module_audit_recorded ON pulse_module_audit(workspace_path, recorded_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_pulse_run_mode_recorded ON pulse_run_mode(workspace_path, recorded_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_pulse_review_focus_history_module ON pulse_review_focus_history(workspace_path, module, recorded_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_pulse_shadow_signal_observed ON pulse_shadow_signal_observation(workspace_path, observed_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_background_agent_log_session ON background_agent_log(workspace_path, session_id, started_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_pulse_fast_request_status ON pulse_fast_request(status, requested_at)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
@@ -249,6 +348,232 @@ func ensurePulseModuleStateSchema(ctx context.Context, db *sql.DB) error {
 		}
 	}
 	return nil
+}
+
+// migratePulseReviewFocusCatalog preserves the useful coverage history from
+// the original fine-grained catalog while moving the live agenda to the six
+// operator-facing review areas introduced by PLAT-163. Merged lenses retain
+// their newest state and historical counts. The old combined report/evaluation
+// lens is intentionally not copied into both successors: doing so would claim
+// two reviews happened when only one broad review did. Its history remains
+// readable, while both new lenses start due. Safety history is also retained,
+// but safety is not an independently selectable focus in the current catalog.
+func migratePulseReviewFocusCatalog(ctx context.Context, db *sql.DB) error {
+	merged := map[string][]string{
+		"execution_health": {
+			"execution_correctness", "execution_efficiency", "tool_runtime_reliability", "schedule_capacity_recovery",
+		},
+		"plan_orchestration_integrity": {"plan_contract_integrity", "orchestration_fitness"},
+		"model_cost_fitness":           {"model_tier_fitness", "cost_attribution"},
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for canonical, legacyKeys := range merged {
+		for _, legacy := range legacyKeys {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO pulse_review_focus_state (
+				workspace_path,module,focus_key,last_pulse_run_id,last_reviewed_at,last_verdict,
+				last_selection_reason,last_route_scope,next_check_at,next_check_reason,updated_at)
+				SELECT workspace_path,module,?,last_pulse_run_id,last_reviewed_at,last_verdict,
+				last_selection_reason,last_route_scope,next_check_at,next_check_reason,updated_at
+				FROM pulse_review_focus_state WHERE module=? AND focus_key=?
+				ON CONFLICT(workspace_path,module,focus_key) DO UPDATE SET
+					last_pulse_run_id=excluded.last_pulse_run_id,
+					last_reviewed_at=excluded.last_reviewed_at,
+					last_verdict=excluded.last_verdict,
+					last_selection_reason=excluded.last_selection_reason,
+					last_route_scope=excluded.last_route_scope,
+					next_check_at=excluded.next_check_at,
+					next_check_reason=excluded.next_check_reason,
+					updated_at=excluded.updated_at
+				WHERE excluded.updated_at > pulse_review_focus_state.updated_at`, canonical, pulseModuleTechnicalReview, legacy); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE pulse_review_focus_history SET focus_key=? WHERE module=? AND focus_key=?`, canonical, pulseModuleTechnicalReview, legacy); err != nil {
+				return err
+			}
+		}
+	}
+	legacyStateKeys := []string{
+		"execution_correctness", "execution_efficiency", "tool_runtime_reliability", "schedule_capacity_recovery",
+		"plan_contract_integrity", "orchestration_fitness", "model_tier_fitness", "cost_attribution",
+		"report_eval_truth", "safety_permissions",
+	}
+	for _, legacy := range legacyStateKeys {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM pulse_review_focus_state WHERE module=? AND focus_key=?`, pulseModuleTechnicalReview, legacy); err != nil {
+			return err
+		}
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT _id,deferred_focuses_json FROM pulse_review_focus_history WHERE module=?`, pulseModuleTechnicalReview)
+	if err != nil {
+		return err
+	}
+	type deferredRow struct {
+		id      int64
+		encoded string
+	}
+	var deferredRows []deferredRow
+	for rows.Next() {
+		var row deferredRow
+		if err := rows.Scan(&row.id, &row.encoded); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		deferredRows = append(deferredRows, row)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, row := range deferredRows {
+		var keys []string
+		_ = json.Unmarshal([]byte(row.encoded), &keys)
+		encoded, _ := json.Marshal(canonicalPulseDeferredFocuses(keys))
+		if _, err := tx.ExecContext(ctx, `UPDATE pulse_review_focus_history SET deferred_focuses_json=? WHERE _id=?`, string(encoded), row.id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func canonicalPulseDeferredFocuses(keys []string) []string {
+	aliases := map[string][]string{
+		"execution_correctness":      {"execution_health"},
+		"execution_efficiency":       {"execution_health"},
+		"tool_runtime_reliability":   {"execution_health"},
+		"schedule_capacity_recovery": {"execution_health"},
+		"plan_contract_integrity":    {"plan_orchestration_integrity"},
+		"orchestration_fitness":      {"plan_orchestration_integrity"},
+		"model_tier_fitness":         {"model_cost_fitness"},
+		"cost_attribution":           {"model_cost_fitness"},
+		"report_eval_truth":          {"report_quality_truth", "evaluation_quality_truth"},
+		"safety_permissions":         {},
+	}
+	seen := map[string]bool{}
+	out := []string{}
+	for _, key := range keys {
+		key = strings.TrimSpace(key)
+		mapped, legacy := aliases[key]
+		if !legacy {
+			mapped = []string{key}
+		}
+		for _, candidate := range mapped {
+			if candidate == "" || seen[candidate] {
+				continue
+			}
+			seen[candidate] = true
+			out = append(out, candidate)
+		}
+	}
+	return out
+}
+
+// migrateMergedTechnicalReviewRows collapses the retired Engineering and
+// Operations lanes into one live Technical Review identity. The newest module
+// state wins. Audit receipts from the same Pulse run are merged conservatively:
+// the newest receipt becomes the canonical summary while the legacy evidence
+// remains available through finding and focus history migration.
+func migrateMergedTechnicalReviewRows(ctx context.Context, db *sql.DB) error {
+	return migrateMergedModuleRows(ctx, db, pulsemodules.TechnicalReviewID,
+		pulsemodules.LegacyWorkflowReviewID, pulsemodules.LegacyLLMOpsReviewID)
+}
+
+// migrateMergedStrategicReviewRows collapses the two retired advisor lanes
+// into the one live Strategic Review identity. The newest state wins when an
+// old workflow database has both rows; audit history preserves one receipt per
+// Pulse run, which is the new module contract.
+func migrateMergedStrategicReviewRows(ctx context.Context, db *sql.DB) error {
+	return migrateMergedModuleRows(ctx, db, pulsemodules.StrategicReviewID,
+		pulsemodules.LegacyStrategyAuditorID, pulsemodules.LegacyGoalAdvisorID)
+}
+
+func migrateMergedModuleRows(ctx context.Context, db *sql.DB, canonical, legacyFirst, legacySecond string) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `INSERT INTO pulse_module_state (
+		workspace_path, module, last_pulse_run_id, last_checked_at, last_ran_at,
+		last_decision, last_reason, last_gate_decision, last_result, last_result_reason,
+		next_check_at, next_check_after_run_id, cooldown_runs, evidence_json, updated_at)
+		SELECT workspace_path, ?, last_pulse_run_id, last_checked_at, last_ran_at,
+		last_decision, last_reason, last_gate_decision, last_result, last_result_reason,
+		next_check_at, next_check_after_run_id, cooldown_runs, evidence_json, updated_at
+		FROM pulse_module_state old
+		WHERE module IN (?, ?)
+		AND updated_at=(SELECT MAX(updated_at) FROM pulse_module_state newer
+			WHERE newer.workspace_path=old.workspace_path AND newer.module IN (?, ?))
+		ORDER BY updated_at DESC
+		ON CONFLICT(workspace_path, module) DO UPDATE SET
+			last_pulse_run_id=excluded.last_pulse_run_id,
+			last_checked_at=excluded.last_checked_at,
+			last_ran_at=excluded.last_ran_at,
+			last_decision=excluded.last_decision,
+			last_reason=excluded.last_reason,
+			last_gate_decision=excluded.last_gate_decision,
+			last_result=excluded.last_result,
+			last_result_reason=excluded.last_result_reason,
+			next_check_at=excluded.next_check_at,
+			next_check_after_run_id=excluded.next_check_after_run_id,
+			cooldown_runs=excluded.cooldown_runs,
+			evidence_json=excluded.evidence_json,
+			updated_at=excluded.updated_at
+		WHERE excluded.updated_at > pulse_module_state.updated_at`, canonical, legacyFirst, legacySecond, legacyFirst, legacySecond); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM pulse_module_state WHERE module IN (?, ?)`, legacyFirst, legacySecond); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO pulse_module_audit (
+		workspace_path, module, pulse_run_id, result, reason, evidence_json,
+		changed_files_json, verification_json, before_refs_json, after_refs_json, recorded_at)
+		SELECT workspace_path, ?, pulse_run_id, result, reason, evidence_json,
+		changed_files_json, verification_json, before_refs_json, after_refs_json, recorded_at
+		FROM pulse_module_audit WHERE module IN (?, ?) ORDER BY recorded_at DESC
+		ON CONFLICT(workspace_path,module,pulse_run_id) DO UPDATE SET
+			result=excluded.result,
+			reason=excluded.reason,
+			evidence_json=excluded.evidence_json,
+			changed_files_json=excluded.changed_files_json,
+			verification_json=excluded.verification_json,
+			before_refs_json=excluded.before_refs_json,
+			after_refs_json=excluded.after_refs_json,
+			recorded_at=excluded.recorded_at
+		WHERE excluded.recorded_at > pulse_module_audit.recorded_at`,
+		canonical, legacyFirst, legacySecond); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM pulse_module_audit WHERE module IN (?, ?)`, legacyFirst, legacySecond); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO pulse_review_focus_state (
+		workspace_path,module,focus_key,last_pulse_run_id,last_reviewed_at,last_verdict,
+		last_selection_reason,last_route_scope,next_check_at,next_check_reason,updated_at)
+		SELECT workspace_path,?,focus_key,last_pulse_run_id,last_reviewed_at,last_verdict,
+		last_selection_reason,last_route_scope,next_check_at,next_check_reason,updated_at
+		FROM pulse_review_focus_state WHERE module IN (?, ?)
+		ORDER BY updated_at ASC
+		ON CONFLICT(workspace_path,module,focus_key) DO UPDATE SET
+			last_pulse_run_id=excluded.last_pulse_run_id,
+			last_reviewed_at=excluded.last_reviewed_at,
+			last_verdict=excluded.last_verdict,
+			last_selection_reason=excluded.last_selection_reason,
+			last_route_scope=excluded.last_route_scope,
+			next_check_at=excluded.next_check_at,
+			next_check_reason=excluded.next_check_reason,
+			updated_at=excluded.updated_at
+		WHERE excluded.updated_at > pulse_review_focus_state.updated_at`, canonical, legacyFirst, legacySecond); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM pulse_review_focus_state WHERE module IN (?, ?)`, legacyFirst, legacySecond); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE pulse_review_focus_history SET module=? WHERE module IN (?, ?)`, canonical, legacyFirst, legacySecond); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func migratePulseModuleStateSchema(ctx context.Context, db *sql.DB) error {
@@ -353,6 +678,42 @@ func ensurePulseModuleStateColumns(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
+func ensurePulseReviewFocusColumns(ctx context.Context, db *sql.DB) error {
+	for _, table := range []struct {
+		name   string
+		column string
+	}{
+		{name: "pulse_review_focus_state", column: "last_route_scope"},
+		{name: "pulse_review_focus_history", column: "route_scope"},
+	} {
+		rows, err := db.QueryContext(ctx, fmt.Sprintf(`PRAGMA table_info(%s)`, table.name))
+		if err != nil {
+			return err
+		}
+		found := false
+		for rows.Next() {
+			var cid, notNull, pkIndex int
+			var name, colType string
+			var defaultValue sql.NullString
+			if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultValue, &pkIndex); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			found = found || name == table.column
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		if found {
+			continue
+		}
+		if _, err := db.ExecContext(ctx, fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s TEXT NOT NULL DEFAULT ''`, table.name, table.column)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func openPulseModuleStateDB(ctx context.Context, workspacePath string, create bool) (string, *sql.DB, error) {
 	normalized, db, err := openReportHumanInputDB(ctx, workspacePath, create)
 	if err != nil || db == nil {
@@ -365,6 +726,182 @@ func openPulseModuleStateDB(ctx context.Context, workspacePath string, create bo
 		}
 	}
 	return normalized, db, nil
+}
+
+func recordPulseReviewFocus(ctx context.Context, workspacePath, pulseRunID, module, focusKey, routeScope, priorityClass, selectionReason, verdict, nextCheckAt, nextCheckReason string, evidence, issueIDs, deferred []string) (*PulseReviewFocus, error) {
+	pulseRunID, module, focusKey = strings.TrimSpace(pulseRunID), strings.TrimSpace(module), strings.TrimSpace(focusKey)
+	routeScope = strings.TrimSpace(routeScope)
+	if pulseRunID == "" || module == "" || focusKey == "" || strings.TrimSpace(priorityClass) == "" || strings.TrimSpace(selectionReason) == "" {
+		return nil, fmt.Errorf("pulse_run_id, module, focus_key, priority_class, and selection_reason are required")
+	}
+	if !validPulseModules[module] {
+		return nil, fmt.Errorf("module %q is not valid; choose one of: %s", module, pulseModuleList())
+	}
+	if !slices.Contains(pulseReviewFocusCatalog[module], focusKey) {
+		return nil, fmt.Errorf("focus_key %q is not valid for %s; choose one of: %s", focusKey, module, strings.Join(pulseReviewFocusCatalog[module], ", "))
+	}
+	for _, deferredKey := range deferred {
+		deferredKey = strings.TrimSpace(deferredKey)
+		if deferredKey != "" && !slices.Contains(pulseReviewFocusCatalog[module], deferredKey) {
+			return nil, fmt.Errorf("deferred focus %q is not valid for %s; choose one of: %s", deferredKey, module, strings.Join(pulseReviewFocusCatalog[module], ", "))
+		}
+	}
+	normalized, db, err := openPulseModuleStateDB(ctx, workspacePath, true)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	evidenceJSON, _ := json.Marshal(evidence)
+	issuesJSON, _ := json.Marshal(issueIDs)
+	deferredJSON, _ := json.Marshal(deferred)
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `INSERT INTO pulse_review_focus_history
+		(workspace_path,module,pulse_run_id,focus_key,route_scope,priority_class,selection_reason,verdict,evidence_json,issue_ids_json,deferred_focuses_json,recorded_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, normalized, module, pulseRunID, focusKey, routeScope, strings.TrimSpace(priorityClass), strings.TrimSpace(selectionReason), strings.TrimSpace(verdict), string(evidenceJSON), string(issuesJSON), string(deferredJSON), now); err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO pulse_review_focus_state
+		(workspace_path,module,focus_key,last_pulse_run_id,last_reviewed_at,last_verdict,last_selection_reason,last_route_scope,next_check_at,next_check_reason,updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(workspace_path,module,focus_key) DO UPDATE SET
+		last_pulse_run_id=excluded.last_pulse_run_id,last_reviewed_at=excluded.last_reviewed_at,last_verdict=excluded.last_verdict,
+		last_selection_reason=excluded.last_selection_reason,last_route_scope=excluded.last_route_scope,next_check_at=excluded.next_check_at,next_check_reason=excluded.next_check_reason,updated_at=excluded.updated_at`,
+		normalized, module, focusKey, pulseRunID, now, strings.TrimSpace(verdict), strings.TrimSpace(selectionReason), routeScope, strings.TrimSpace(nextCheckAt), strings.TrimSpace(nextCheckReason), now); err != nil {
+		return nil, err
+	}
+	// A deferred lens is not merely prose: seed it as never-reviewed coverage so
+	// the next compact agenda can surface it without scanning Markdown history.
+	for _, deferredKey := range deferred {
+		deferredKey = strings.TrimSpace(deferredKey)
+		if deferredKey == "" || deferredKey == focusKey {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO pulse_review_focus_state
+			(workspace_path,module,focus_key,last_pulse_run_id,last_reviewed_at,last_verdict,last_selection_reason,last_route_scope,next_check_at,next_check_reason,updated_at)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(workspace_path,module,focus_key) DO NOTHING`,
+			normalized, module, deferredKey, "", "", "", "", "", "", "", now); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return &PulseReviewFocus{WorkspacePath: normalized, Module: module, FocusKey: focusKey, LastPulseRunID: pulseRunID, LastReviewedAt: now, LastVerdict: strings.TrimSpace(verdict), LastSelectionReason: strings.TrimSpace(selectionReason), RouteScope: routeScope, NextCheckAt: strings.TrimSpace(nextCheckAt), NextCheckReason: strings.TrimSpace(nextCheckReason), UpdatedAt: now, ReviewCount: 1, RouteReviewCount: 1, DeferredFocuses: deferred}, nil
+}
+
+func getPulseReviewFocusAgenda(ctx context.Context, workspacePath, module, routeScope string, limit int) ([]PulseReviewFocus, error) {
+	if !validPulseModules[strings.TrimSpace(module)] {
+		return nil, fmt.Errorf("module %q is not valid; choose one of: %s", module, pulseModuleList())
+	}
+	if limit <= 0 || limit > 50 {
+		limit = 20
+	}
+	normalized, db, err := openPulseModuleStateDB(ctx, workspacePath, false)
+	if err != nil || db == nil {
+		return []PulseReviewFocus{}, err
+	}
+	defer db.Close()
+	routeScope = strings.TrimSpace(routeScope)
+	if err := ensurePulseModuleStateSchema(ctx, db); err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, focusKey := range pulseReviewFocusCatalog[module] {
+		if _, err := db.ExecContext(ctx, `INSERT INTO pulse_review_focus_state
+			(workspace_path,module,focus_key,last_pulse_run_id,last_reviewed_at,last_verdict,last_selection_reason,last_route_scope,next_check_at,next_check_reason,updated_at)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(workspace_path,module,focus_key) DO NOTHING`,
+			normalized, module, focusKey, "", "", "", "", "", "", "", now); err != nil {
+			return nil, err
+		}
+	}
+	rows, err := db.QueryContext(ctx, `SELECT s.workspace_path,s.module,s.focus_key,s.last_pulse_run_id,s.last_reviewed_at,s.last_verdict,s.last_selection_reason,s.last_route_scope,s.next_check_at,s.next_check_reason,s.updated_at,
+		(SELECT COUNT(*) FROM pulse_review_focus_history hc WHERE hc.workspace_path=s.workspace_path AND hc.module=s.module AND hc.focus_key=s.focus_key),
+		(SELECT COUNT(*) FROM pulse_review_focus_history hr WHERE hr.workspace_path=s.workspace_path AND hr.module=s.module AND hr.focus_key=s.focus_key AND (?='' OR hr.route_scope=?)),
+		COALESCE((SELECT deferred_focuses_json FROM pulse_review_focus_history h WHERE h.workspace_path=s.workspace_path AND h.module=s.module AND h.focus_key=s.focus_key ORDER BY h._id DESC LIMIT 1),'[]')
+		FROM pulse_review_focus_state s WHERE s.workspace_path=? AND s.module=?
+		ORDER BY CASE
+			WHEN s.last_reviewed_at='' THEN 0
+			WHEN s.next_check_at<>'' AND s.next_check_at<=? THEN 1
+			ELSE 2
+		END,
+		(SELECT COUNT(*) FROM pulse_review_focus_history hr WHERE hr.workspace_path=s.workspace_path AND hr.module=s.module AND hr.focus_key=s.focus_key AND (?='' OR hr.route_scope=?)) ASC,
+		s.last_reviewed_at ASC, s.focus_key ASC LIMIT ?`, routeScope, routeScope, normalized, module, now, routeScope, routeScope, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []PulseReviewFocus{}
+	for rows.Next() {
+		var focus PulseReviewFocus
+		var deferredJSON string
+		if err := rows.Scan(&focus.WorkspacePath, &focus.Module, &focus.FocusKey, &focus.LastPulseRunID, &focus.LastReviewedAt, &focus.LastVerdict, &focus.LastSelectionReason, &focus.RouteScope, &focus.NextCheckAt, &focus.NextCheckReason, &focus.UpdatedAt, &focus.ReviewCount, &focus.RouteReviewCount, &deferredJSON); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal([]byte(deferredJSON), &focus.DeferredFocuses)
+		if focus.DeferredFocuses == nil {
+			focus.DeferredFocuses = []string{}
+		}
+		out = append(out, focus)
+	}
+	return out, rows.Err()
+}
+
+func getPulseReviewFocusStates(ctx context.Context, workspacePath string) ([]PulseReviewFocus, error) {
+	out := []PulseReviewFocus{}
+	for _, module := range []string{pulseModuleTechnicalReview, pulseModuleStrategicReview} {
+		focuses, err := getPulseReviewFocusAgenda(ctx, workspacePath, module, "", 50)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, focuses...)
+	}
+	return out, nil
+}
+
+func getPulseReviewFocusSelections(ctx context.Context, workspacePath string, limit int) ([]PulseReviewFocus, error) {
+	if limit <= 0 || limit > 250 {
+		limit = 50
+	}
+	normalized, db, err := openPulseModuleStateDB(ctx, workspacePath, false)
+	if err != nil || db == nil {
+		return []PulseReviewFocus{}, err
+	}
+	defer db.Close()
+	if err := ensurePulseModuleStateSchema(ctx, db); err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(ctx, `SELECT h.workspace_path,h.module,h.focus_key,h.pulse_run_id,h.recorded_at,h.verdict,h.selection_reason,h.route_scope,h.deferred_focuses_json,h.issue_ids_json,
+		(SELECT COUNT(*) FROM pulse_review_focus_history hc WHERE hc.workspace_path=h.workspace_path AND hc.module=h.module AND hc.focus_key=h.focus_key),
+		(SELECT COUNT(*) FROM pulse_review_focus_history hr WHERE hr.workspace_path=h.workspace_path AND hr.module=h.module AND hr.focus_key=h.focus_key AND hr.route_scope=h.route_scope)
+		FROM pulse_review_focus_history h WHERE h.workspace_path=? ORDER BY h._id DESC LIMIT ?`, normalized, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []PulseReviewFocus{}
+	for rows.Next() {
+		var focus PulseReviewFocus
+		var deferredJSON, issueIDsJSON string
+		if err := rows.Scan(&focus.WorkspacePath, &focus.Module, &focus.FocusKey, &focus.LastPulseRunID, &focus.LastReviewedAt, &focus.LastVerdict, &focus.LastSelectionReason, &focus.RouteScope, &deferredJSON, &issueIDsJSON, &focus.ReviewCount, &focus.RouteReviewCount); err != nil {
+			return nil, err
+		}
+		focus.UpdatedAt = focus.LastReviewedAt
+		_ = json.Unmarshal([]byte(deferredJSON), &focus.DeferredFocuses)
+		if focus.DeferredFocuses == nil {
+			focus.DeferredFocuses = []string{}
+		}
+		_ = json.Unmarshal([]byte(issueIDsJSON), &focus.IssueIDs)
+		if focus.IssueIDs == nil {
+			focus.IssueIDs = []string{}
+		}
+		out = append(out, focus)
+	}
+	return out, rows.Err()
 }
 
 func recordPulseWorklist(ctx context.Context, workspacePath, pulseRunID string, decisions []PulseWorklistDecision) ([]PulseModuleState, error) {
@@ -381,6 +918,12 @@ func recordPulseWorklistWithMode(ctx context.Context, workspacePath, pulseRunID,
 		return nil, err
 	}
 	if err := validatePulseWorklistDecisions(decisions); err != nil {
+		return nil, err
+	}
+	if err := validateDeterministicIntakeRouting(ctx, workspacePath, decisions); err != nil {
+		return nil, err
+	}
+	if err := validatePlanDriftRouting(ctx, workspacePath, decisions); err != nil {
 		return nil, err
 	}
 	normalized, db, err := openPulseModuleStateDB(ctx, workspacePath, true)
@@ -465,6 +1008,84 @@ func recordPulseWorklistWithMode(ctx context.Context, workspacePath, pulseRunID,
 		return nil, err
 	}
 	return states, nil
+}
+
+// validateDeterministicIntakeRouting closes the gap between a failed objective
+// check and the agentic review that interprets it. It never creates an issue or
+// authorizes a repair: it only prevents Gate from suppressing Technical Review
+// when retained structured evidence already proves that review is needed.
+func validateDeterministicIntakeRouting(ctx context.Context, workspacePath string, decisions []PulseWorklistDecision) error {
+	reasons := []string{}
+	runtimeResult := pulseintake.CheckRuntime(workspacePath, time.Now().UTC())
+	lastTechnicalCheck := lastPulseModuleCheck(ctx, workspacePath, pulseModuleTechnicalReview)
+	newRuntimeFindings := 0
+	for _, finding := range runtimeResult.Findings {
+		observedAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(finding.ObservedAt))
+		// Module checkpoints are stored at second precision. Compare at that
+		// same precision so a run written earlier in the checkpoint's second is
+		// not misclassified as new forever because its filesystem mtime has nanos.
+		if err != nil || lastTechnicalCheck.IsZero() || observedAt.Truncate(time.Second).After(lastTechnicalCheck) {
+			newRuntimeFindings++
+		}
+	}
+	if newRuntimeFindings > 0 && runtimeResult.CoverageStatus != pulseintake.CoverageUnavailable {
+		reasons = append(reasons, fmt.Sprintf("runtime intake reported %d new structured failure signal(s)", newRuntimeFindings))
+	}
+	planBacklog := step_based_workflow.CollectPlanChangeBacklog(workspacePath)
+	planResult := step_based_workflow.BuildPlanChangeDependencyIntake(planBacklog)
+	if planResult.Failed {
+		reasons = append(reasons, fmt.Sprintf("%d current-contract plan change(s) lack complete dependency coverage", planResult.FailureCount))
+	}
+	if len(reasons) == 0 {
+		return nil
+	}
+	for _, decision := range decisions {
+		if normalizePulseModule(decision.Module) == pulseModuleTechnicalReview && decision.Due {
+			return nil
+		}
+	}
+	return fmt.Errorf("technical_review must be due because deterministic intake failed: %s. Route these facts to an agentic Technical Review; they are not automatic Pulse issues and do not authorize a Fixer", strings.Join(reasons, "; "))
+}
+
+// validatePlanDriftRouting is plan_drift_review's due-ness enforcement,
+// mirroring validateDeterministicIntakeRouting's treatment of
+// technical_review. Unlike technical_review's cadence-plus-evidence judgment
+// call, plan_drift_review's due condition is a plain fact: does any step's
+// step_config.json carry a null drift_review record. There is no cadence math
+// and no judgment for Gate to exercise here — if the fact is true, the module
+// must be marked due, or the worklist is rejected.
+func validatePlanDriftRouting(ctx context.Context, workspacePath string, decisions []PulseWorklistDecision) error {
+	candidates := step_based_workflow.CollectPlanDriftCandidates(ctx, workspacePath)
+	if len(candidates) == 0 {
+		return nil
+	}
+	for _, decision := range decisions {
+		if normalizePulseModule(decision.Module) == pulseModulePlanDriftReview && decision.Due {
+			return nil
+		}
+	}
+	stepIDs := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		stepIDs = append(stepIDs, c.StepID)
+	}
+	return fmt.Errorf("plan_drift_review must be due: %d step(s) have a null drift_review record (%s). This is a plain fact, not a judgment call — mark it due", len(candidates), strings.Join(stepIDs, ", "))
+}
+
+func lastPulseModuleCheck(ctx context.Context, workspacePath, module string) time.Time {
+	states, err := getPulseModuleStates(ctx, workspacePath)
+	if err != nil {
+		return time.Time{}
+	}
+	for _, state := range states {
+		if normalizePulseModule(state.Module) != module {
+			continue
+		}
+		checkedAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(state.LastCheckedAt))
+		if err == nil {
+			return checkedAt
+		}
+	}
+	return time.Time{}
 }
 
 func recordPulseWorklistOnce(ctx context.Context, workspacePath, pulseRunID string, decisions []PulseWorklistDecision) ([]PulseModuleState, error) {
@@ -743,7 +1364,18 @@ func markPulseModuleResultFromAgentWithAuditAndFindings(
 		if readErr != nil {
 			return nil, fmt.Errorf("Pulse module %q is not an unresolved due module for run %q", module, pulseRunID)
 		}
-		if existing.LastPulseRunID == pulseRunID && existing.LastResult == result {
+		// A same-run, same-result call is a completion-turn replay (idempotent
+		// retry). A same-run call with a DIFFERENT result but real dispositions
+		// is the split reviewer/Fixer contract working as designed: the
+		// reviewer's own terminal write ("done", nothing more to review) and
+		// the Fixer's later supplemental write ("changed", files were
+		// modified) are both true facts about the same pulse_run_id, not a
+		// conflict to reject. Either shape records dispositions/audit without
+		// re-writing the module's own last_result/last_result_reason, which
+		// stay the reviewer's original terminal verdict. A same-run call with
+		// a different result AND no dispositions carries no new evidence to
+		// justify a second write, so it still falls through to the error below.
+		if existing.LastPulseRunID == pulseRunID && (existing.LastResult == result || len(dispositions) > 0) {
 			retryTx, err := db.BeginTx(ctx, nil)
 			if err != nil {
 				return nil, err
@@ -951,6 +1583,16 @@ func (api *StreamingAPI) handleGetPulseModuleState(w http.ResponseWriter, r *htt
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	focusHistory, err := getPulseReviewFocusStates(r.Context(), r.URL.Query().Get("workspace_path"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	focusSelections, err := getPulseReviewFocusSelections(r.Context(), r.URL.Query().Get("workspace_path"), 250)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	shadowObservations, shadowErr := getPulseShadowSignalObservations(r.Context(), r.URL.Query().Get("workspace_path"), 20)
 	shadowCoverage := map[string]string{}
 	if shadowErr != nil {
@@ -971,6 +1613,8 @@ func (api *StreamingAPI) handleGetPulseModuleState(w http.ResponseWriter, r *htt
 		"modules":                    states,
 		"commands":                   commands,
 		"gate_mode":                  gateMode,
+		"review_focus_history":       focusHistory,
+		"review_focus_selections":    focusSelections,
 		"shadow_signal_observations": shadowObservations,
 		"shadow_signal_coverage":     shadowCoverage,
 	})
@@ -1106,6 +1750,25 @@ func (api *StreamingAPI) handleGetPulseContext(w http.ResponseWriter, r *http.Re
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "records": records, "total": len(records)})
 }
 
+func (api *StreamingAPI) handleGetPulseEvalResults(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	workspacePath, err := normalizeReportHumanInputWorkspacePath(r.URL.Query().Get("workspace_path"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	results, err := step_based_workflow.LoadEvalResults(r.Context(), workspacePath, 200)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "results": results})
+}
+
 func getPulseWorklistForRun(ctx context.Context, workspacePath, pulseRunID string) (map[string]PulseModuleState, bool, error) {
 	normalized, db, err := openPulseModuleStateDB(ctx, workspacePath, false)
 	if err != nil {
@@ -1231,7 +1894,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		findingProperties[key] = value
 	}
 	for key, value := range map[string]interface{}{
-		"issue_id":          map[string]interface{}{"type": "string", "description": "Optional visible PUL issue id from get_pulse_state(view=\"backlog\"). Supply it when this is new evidence for an existing root cause; omit only for a genuinely new root issue."},
+		"issue_id":          map[string]interface{}{"type": "string", "description": "Optional visible PUL issue_id from the active or closed issue index returned by get_pulse_state(view=\"backlog\", detail=\"compact\"). Supply it when this is new evidence for an existing root cause; a closed match is reopened. Omit only for a genuinely new root issue."},
 		"concern":           map[string]interface{}{"type": "string", "description": "Current concise root-cause statement. It may be reworded when issue_id is supplied; wording never creates a new identity by itself."},
 		"issue_kind":        map[string]interface{}{"type": "string", "enum": []string{"workflow_issue", "harness_issue"}},
 		"classification":    map[string]interface{}{"type": "string"},
@@ -1240,6 +1903,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		"impact":            map[string]interface{}{"type": "string"},
 		"evidence":          map[string]interface{}{"type": "array", "minItems": 1, "items": map[string]interface{}{"type": "string"}},
 		"recommended_route": map[string]interface{}{"type": "string", "enum": []string{"decision_required", "evidence_wait", "fixer_handoff"}},
+		"human_input_id":    map[string]interface{}{"type": "string", "description": "Required with recommended_route=decision_required. Create the pending reviewer-owned decision first and pass its exact id so the finding is atomically linked as awaiting_user."},
 		"next_check":        map[string]interface{}{"type": "string"},
 		"workaround":        map[string]interface{}{"type": "string"},
 		"target_key":        map[string]interface{}{"type": "string"},
@@ -1256,34 +1920,24 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 	}
 	recordFindingTool := llmtypes.Tool{Type: "function", Function: &llmtypes.FunctionDefinition{
 		Name:        "record_pulse_finding",
-		Description: "Persist one complete Pulse reviewer finding directly to the SQLite lifecycle. First inspect the complete active backlog and reason about semantic sameness. For an existing root cause, supply its issue_id and update it; do not create a second issue because wording, evidence paths, or symptoms differ. Omit issue_id only for a genuinely distinct root cause with a different repair, owner, or verification boundary. Do not encode findings in the final response. Backup, publish, and notify waiting for their ordered finalizer stage are not findings; report only a real terminal failure after that command ran.",
+		Description: "Persist one complete Pulse reviewer finding directly to the SQLite lifecycle. First inspect the compact active and closed issue index and reason about semantic sameness; request targeted full detail only for candidate issue_ids. For an existing root cause, including a closed one, supply its issue_id and update/reopen it; do not create a second issue because wording, evidence paths, or symptoms differ. Omit issue_id only for a genuinely distinct root cause with a different repair or owner. Do not encode findings in the final response. Backup, publish, and notify waiting for their ordered finalizer stage are not findings; report only a real terminal failure after that command ran.",
 		Parameters:  llmtypes.NewParameters(map[string]interface{}{"type": "object", "additionalProperties": false, "properties": findingProperties, "required": []string{"workspace_path", "pulse_run_id", "module", "concern", "issue_kind", "classification", "severity", "summary", "impact", "evidence"}}),
 	}}
-	verificationProperties := map[string]interface{}{}
-	for key, value := range reviewIdentityProperties {
-		verificationProperties[key] = value
-	}
-	for key, value := range map[string]interface{}{
-		"issue_id": map[string]interface{}{"type": "string", "description": "The visible issue.id from get_pulse_state(view=\"backlog\"). The backend resolves the pending internal attempt."},
-		"verdict":  map[string]interface{}{"type": "string", "enum": []string{"passed", "failed", "inconclusive"}},
-		"expected": map[string]interface{}{"type": "string"}, "observed": map[string]interface{}{"type": "string"},
-		"evidence": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}}, "next_check": map[string]interface{}{"type": "string"},
-	} {
-		verificationProperties[key] = value
-	}
-	recordVerificationTool := llmtypes.Tool{Type: "function", Function: &llmtypes.FunctionDefinition{
-		Name:        "record_pulse_verification",
-		Description: "Persist one reviewer judgment for a pending changed_unverified issue from get_pulse_state(view=\"backlog\"). Send only issue_id; the backend resolves the exact eligible internal attempt.",
-		Parameters:  llmtypes.NewParameters(map[string]interface{}{"type": "object", "additionalProperties": false, "properties": verificationProperties, "required": []string{"workspace_path", "pulse_run_id", "module", "issue_id", "verdict", "expected", "observed"}}),
-	}}
-	completeReviewTool := llmtypes.Tool{Type: "function", Function: &llmtypes.FunctionDefinition{
-		Name:        "complete_pulse_review",
-		Description: "Finalize compact SQLite receipts after all findings and verifications have been recorded through their tools. Finding and verification counts are computed by the backend. Call exactly once before the review's brief final message; final response text is not persisted or parsed.",
+	recordFocusTool := llmtypes.Tool{Type: "function", Function: &llmtypes.FunctionDefinition{
+		Name:        "record_pulse_review_focus",
+		Description: "Persist one deep focus selected for this technical or strategic review. Call once for every focus actually investigated, then complete the module review. The reviewer agentically chooses the smallest sufficient set from route size, distinct evidence boundaries, unresolved risk, prior coverage, and marginal value; there is no fixed focus count. This is not a findings store and does not replace the run-scoped Markdown checkpoint.",
 		Parameters: llmtypes.NewParameters(map[string]interface{}{"type": "object", "additionalProperties": false, "properties": map[string]interface{}{
-			"workspace_path": reviewIdentityProperties["workspace_path"], "pulse_run_id": reviewIdentityProperties["pulse_run_id"],
-			"modules": map[string]interface{}{"type": "array", "minItems": 1, "uniqueItems": true, "items": map[string]interface{}{"type": "string", "enum": moduleEnum}},
-			"verdict": map[string]interface{}{"type": "string", "description": "Compact overall judgment; not a findings transport."}, "status": map[string]interface{}{"type": "string", "enum": []string{"completed", "failed"}},
-		}, "required": []string{"workspace_path", "pulse_run_id", "modules", "verdict", "status"}}),
+			"workspace_path": reviewIdentityProperties["workspace_path"], "pulse_run_id": reviewIdentityProperties["pulse_run_id"], "module": reviewIdentityProperties["module"],
+			"focus_key":        map[string]interface{}{"type": "string", "enum": append(append([]string{}, pulseReviewFocusCatalog[pulseModuleTechnicalReview]...), pulseReviewFocusCatalog[pulseModuleStrategicReview]...), "description": "Canonical focus key belonging to the selected module."},
+			"route_scope":      map[string]interface{}{"type": "string", "description": "Canonical route/group/sub-workflow this focus covered. Leave empty only when the evidence and conclusion are genuinely workflow-wide."},
+			"priority_class":   map[string]interface{}{"type": "string", "enum": []string{"critical_regression", "matured_verification", "answered_decision", "new_or_changed", "overdue", "oldest_remaining"}},
+			"selection_reason": map[string]interface{}{"type": "string"}, "verdict": map[string]interface{}{"type": "string"},
+			"evidence":          map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
+			"issue_ids":         map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string", "pattern": "^PUL-[A-Za-z0-9]+$"}},
+			"deferred_focuses":  map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string", "enum": append(append([]string{}, pulseReviewFocusCatalog[pulseModuleTechnicalReview]...), pulseReviewFocusCatalog[pulseModuleStrategicReview]...)}},
+			"next_check_at":     map[string]interface{}{"type": "string", "description": "Optional explicit RFC3339 UTC timestamp or date; do not encode this in pulse_run_id."},
+			"next_check_reason": map[string]interface{}{"type": "string"},
+		}, "required": []string{"workspace_path", "pulse_run_id", "module", "focus_key", "priority_class", "selection_reason"}}),
 	}}
 	mergeIssuesTool := llmtypes.Tool{Type: "function", Function: &llmtypes.FunctionDefinition{
 		Name:        "merge_pulse_issues",
@@ -1295,11 +1949,21 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 			"reason":              map[string]interface{}{"type": "string", "description": "One sentence naming the shared root cause and why one repair covers the duplicates."},
 		}, "required": []string{"workspace_path", "canonical_issue_id", "duplicate_issue_ids", "reason"}}),
 	}}
+	reconcileTool := llmtypes.Tool{Type: "function", Function: &llmtypes.FunctionDefinition{
+		Name: "record_pulse_migration_reconciliation",
+		Description: "Run one idempotent Pulse-register migration for a workflow-contract upgrade. Never edits the workflow plan or schedules. Pass scope to choose which:\n" +
+			"scope=\"lifecycle\": the close-on-applied compatibility migration. Closes every active issue with a recorded applied repair and changed files, moves legacy unfixed waiting rows back to the active register, retires merged aliases, and preserves all history. Use for the workflow-contract v1.0.32 and v1.0.33 upgrades.\n" +
+			"scope=\"actionable_backlog\": the actionable-backlog migration. First applies the same close-on-applied lifecycle reconciliation as scope=\"lifecycle\", then retires untyped legacy observations that were never promoted to canonical findings and hands typed harness issues to the platform register. Preserves all evidence and leaves human decisions and evidence waits visible but outside the workflow repair target. Use for the workflow-contract v1.0.34 upgrade.",
+		Parameters: llmtypes.NewParameters(map[string]interface{}{"type": "object", "additionalProperties": false, "properties": map[string]interface{}{
+			"workspace_path": map[string]interface{}{"type": "string", "description": "Workflow-relative path, e.g. Workflow/social-media."},
+			"scope":          map[string]interface{}{"type": "string", "enum": []string{"lifecycle", "actionable_backlog"}, "description": "Which migration to run. actionable_backlog is a superset of lifecycle -- it already applies the lifecycle step first."},
+		}, "required": []string{"workspace_path", "scope"}}),
+	}}
 	recordTool := llmtypes.Tool{
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
 			Name:        "record_pulse_worklist",
-			Description: fmt.Sprintf("Record the dynamic Pulse worklist for this run in the workflow's db/db.sqlite. Pulse Gate must call this exactly once after choosing the agent-owned pass mode and deciding which perspectives are due or skipped. backlog_drain verifies and repairs retained issues without broad discovery; discovery investigates materially new evidence; strategy is for selected product/goal work; observe runs no reviewer or fixer. Go validates the declared mode but never selects it. The decisions array must contain exactly one entry for each current Pulse module: %s. Select only the work justified by evidence and expected value; explicitly defer lower-priority lenses with a reason and next-check boundary. workflow_review is Engineering Review and conditionally covers execution, report/eval implementation, plan-change/artifact consistency, and store-integrity evidence. When store integrity is selected, name the specific Stores Health lens (learnings, knowledgebase, and/or DB) in the workflow_review reason/evidence; the later Engineering sequence then runs that distinct internal turn before fixing. llm_ops_review owns efficiency and runtime operations. strategy_auditor owns product/business adequacy inside the current strategy; goal_advisor owns materially different approaches. Engineering and Ops may share one selected-perspective sequence; Strategy and Goal remain independent agents. Do not pass retired artifact-named modules and never make one reviewer depend on another. Every skipped module must include next_check_at, next_check_after_run_id, or a positive cooldown_runs value.", strings.Join(pulseModuleOrder, ", ")),
+			Description: fmt.Sprintf("Record the dynamic Pulse worklist for this run in the workflow's db/db.sqlite. Pulse Gate must call this exactly once after choosing the agent-owned pass mode and deciding which perspectives are due or skipped. backlog_drain verifies and repairs retained issues without broad discovery; discovery investigates materially new evidence; strategy is for selected product/goal work; observe runs no reviewer or fixer. Go validates the declared mode but never selects it. The decisions array must contain exactly one entry for each current Pulse module: %s. This is a small scheduling receipt, not a review-plan payload: in each decision use only module, due, reason, evidence, next_check_at, next_check_after_run_id, and cooldown_runs. Never send focuses, route_scope, issue_ids, deferred_focuses, decision, or other review-plan fields; unknown fields reject the whole worklist. State scope and lower-priority deferrals in reason/evidence and the next-check boundary. The later reviewer independently selects and persists actual focus coverage after it has inspected evidence. Do not pass retired module names. Every skipped module must include next_check_at, next_check_after_run_id, or a positive cooldown_runs value.", strings.Join(pulseModuleOrder, ", ")),
 			Parameters: llmtypes.NewParameters(map[string]interface{}{
 				"type":                 "object",
 				"additionalProperties": false,
@@ -1334,20 +1998,29 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
 			Name: "get_pulse_state",
-			Description: fmt.Sprintf("Read Pulse state from the workflow's db/db.sqlite. One read tool with three views; typed SQLite state is the only source of truth.\n"+
+			Description: fmt.Sprintf("Read Pulse state from the workflow's db/db.sqlite. One read tool with four views; typed SQLite state is the only source of truth.\n"+
 				"view=\"module\": per-module cadence and results so Pulse Gate can decide what is due, plus the complete active concern backlog, externally owned suppressed concerns, plan-change backlog, reviewer history, impact ledger, and read-only loop-closure facts. Read this before record_pulse_worklist. Loop-closure findings are evidence Gate may weigh; they do not mandate a module or authorize mutation. A concern with a high seen_count has been reported on that many runs and should weigh heavily.\n"+
-				"view=\"backlog\": the durable SDLC-style issue backlog — each compact issue, current lifecycle state, fix attempts, verification history, and external-action disposition. Optional module filter. issue.id is the only issue identifier agents send back. The backend resolves its internal fingerprint; never copy, invent, or submit a fingerprint.\n"+
+				"view=\"backlog\": a compact active issue/observation index plus the closed canonical issue index by default. Read it once to select or semantically reuse public PUL ids. To inspect lifecycle evidence, call again with detail=\"full\" and 1-20 exact issue_ids; broad full-history reads are rejected. Optional module filter.\n"+
 				"view=\"review\": one compact reviewer receipt as JSON with validated structured verifications. Requires the stored pulse-run receipt id and module; reviewer prose and Markdown are not stored.\n"+
+				"view=\"focus_agenda\": the compact durable deep-review coverage agenda for technical_review or strategic_review — every canonical focus, global and route-specific review counts, last verdict, due boundary, and deferred history. Requires module. Pass route_scope when reviewing one route/group/sub-workflow. Read this after view=\"module\"/\"backlog\" and before agentically choosing the smallest sufficient focus set; it is not blind round-robin.\n"+
 				"Close a real finding only through a verified finding_disposition on record_pulse_result; resolve_run_concern is limited to acknowledgment or rejection. Modules: %s.", pulseModuleList()),
 			Parameters: llmtypes.NewParameters(map[string]interface{}{
 				"type":                 "object",
 				"additionalProperties": false,
 				"properties": map[string]interface{}{
 					"workspace_path": map[string]interface{}{"type": "string", "description": "Workflow-relative path, e.g. Workflow/social-media."},
-					"view":           map[string]interface{}{"type": "string", "enum": pulseStateViewValues, "description": "Which Pulse state to read: module cadence, the finding backlog, or one saved review."},
+					"view":           map[string]interface{}{"type": "string", "enum": pulseStateViewValues, "description": "Which Pulse state to read: module cadence, the finding backlog, one saved review, or the focus coverage agenda."},
 					"pulse_run_id":   map[string]interface{}{"type": "string", "description": "Optional current Pulse run id. With view=module, returns that Gate's persisted pass mode."},
-					"module":         map[string]interface{}{"type": "string", "description": "Optional owning-module filter for view=\"backlog\" (omit for the complete backlog). Required for view=\"review\". Ignored for view=\"module\"."},
+					"module":         map[string]interface{}{"type": "string", "description": "Optional owning-module filter for view=\"backlog\" (omit for the complete backlog). Required for view=\"review\" and view=\"focus_agenda\". Ignored for view=\"module\"."},
 					"review_run_id":  map[string]interface{}{"type": "string", "description": "Required for view=\"review\": the review run id from the reviewer's completion notification."},
+					"detail":         map[string]interface{}{"type": "string", "enum": []string{"compact", "full"}, "description": "For view=\"backlog\" only. compact (default) returns active issues/observations and the closed canonical issue index for semantic reuse. full requires issue_ids and returns complete lifecycle evidence only for those ids."},
+					"issue_ids": map[string]interface{}{
+						"type": "array", "minItems": 1, "maxItems": 20, "uniqueItems": true,
+						"items":       map[string]interface{}{"type": "string", "pattern": "^PUL-[A-Za-z0-9]+$"},
+						"description": "For view=\"backlog\" with detail=\"full\": 1-20 exact public PUL ids selected from the compact issues or observations index.",
+					},
+					"route_scope": map[string]interface{}{"type": "string", "description": "For view=\"focus_agenda\" only. Optional canonical route/group/sub-workflow scope. Use the route id or stable group label from plan/run evidence; leave empty only for genuinely workflow-wide evidence."},
+					"limit":       map[string]interface{}{"type": "integer", "minimum": 1, "maximum": 50, "description": "For view=\"focus_agenda\" only."},
 				},
 				"required": []string{"workspace_path", "view"},
 			}),
@@ -1360,7 +2033,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 			Description: fmt.Sprintf("Record one Pulse outcome in the workflow's db/db.sqlite. Pass exactly one of module or command.\n"+
 				"module (%s): the terminal result of a selected Pulse module after its review and Fixer work complete — done, changed, blocked, failed, or skipped. This writes the module audit and per-finding lifecycle atomically. For result=changed, changed_files, verification, and finding_dispositions are required.\n"+
 				"command (%s): the live or final status of one Pulse final command — running, done, skipped, blocked, or failed. The combined Pulse finalizer marks each command running before work and then terminal immediately after it finishes.\n"+
-				"Fix attempts are opened by the backend from the disposition itself; there is no separate attempt tool and no attempt_id to carry. A fixed_verified finding needs changed_files plus only passed post-change checks. changed_unverified needs an inconclusive check plus next_check naming the run, table, or artifact whose arrival settles it, and remains open awaiting that evidence; the next review verifies it against that evidence rather than re-attempting the fix. queued_for_engineering means a safe workflow repair exists but was deliberately not attempted in this pass; it requires next_check naming the next Engineering/Pulse pass and remains in Gate's active queue. external_action_required permanently removes a diagnosed real finding from Pulse's active queue and requires external_owner, reason_code, and reopen_condition; use it only when workflow tools cannot act. A failed check reopens the concern. awaiting_run is a real finding waiting only on a scheduled run to produce its evidence — no fix applied, nobody stuck — and requires next_check naming that run. Use it rather than blocked whenever the answer is \"the data does not exist yet\". blocked means there is genuinely no safe action at all; never use it merely because work was deferred, deprioritized, or not selected in this pass. awaiting_user requires human_input_id naming a still-pending create_human_input_request, so a finding cannot wait on a decision the operator was never asked for; escalate only when the goal does not already settle it and the cost of deciding is real, otherwise decide and record the reasoning. For strategy_auditor and goal_advisor, proposal_only is accepted only with a concrete next_check evidence boundary; an actionable recommendation must use awaiting_user linked to that module's pending decision, while safe technical prerequisites use the normal Fixer lifecycle. before_refs and after_refs are paired agent-supplied audit references; the backend preserves them but does not recompute arbitrary textual checks. The lifecycle is machine-validated for finding/module linkage and required evidence shape, not for the truth of an agent-authored verdict. Put exact technical failures in reason.",
+				"Fix attempts are opened by the backend from the disposition itself; there is no separate attempt tool and no attempt_id to carry. A fixed_verified finding needs changed_files plus only passed immediate checks. changed_unverified means a repair was successfully applied but no stronger proof was available; it closes immediately, and a later normal workflow observation semantically linked to the same issue_id reopens it. Pulse does not schedule a separate verification run. queued_for_engineering means a safe workflow repair exists but was deliberately not attempted in this pass; it requires next_check naming the next Engineering/Pulse pass and remains in Gate's active queue. external_action_required permanently removes a diagnosed real finding from Pulse's active queue and requires external_owner, reason_code, and reopen_condition; use it only when workflow tools cannot act. A failed immediate check keeps the concern open. awaiting_run is only for a real finding where no fix was applied and required evidence does not exist yet; it requires next_check naming that evidence. blocked means there is genuinely no safe action at all; never use it merely because work was deferred, deprioritized, or not selected in this pass. awaiting_user requires human_input_id naming a still-pending create_human_input_request. For strategic_review, proposal_only is accepted only with a concrete next_check evidence boundary; an actionable recommendation must use awaiting_user linked to a pending strategic_review decision. before_refs and after_refs are paired audit references. issue_id is the sole public identity; inspect existing issue text and history and reuse the issue_id for the same semantic root cause.",
 				strings.Join(pulseModuleOrder, ", "), strings.Join(pulseFinalCommandOrder, ", ")),
 			Parameters: llmtypes.NewParameters(map[string]interface{}{
 				"type": "object",
@@ -1383,7 +2056,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 							"type":                 "object",
 							"additionalProperties": false,
 							"properties": map[string]interface{}{
-								"issue_id":         map[string]interface{}{"type": "string", "description": "The visible issue.id (for example PUL-DBA2B19E) from get_pulse_state(view=\"backlog\"). This is the only finding identity to send; the backend resolves the internal fingerprint."},
+								"issue_id":         map[string]interface{}{"type": "string", "description": "The visible issue_id (for example PUL-DBA2B19E) from get_pulse_state(view=\"backlog\", detail=\"compact\"). This is the only finding identity to send; the backend resolves the internal fingerprint."},
 								"disposition":      map[string]interface{}{"type": "string", "enum": []string{"fixed_verified", "verified_no_change", "changed_unverified", "proposal_only", "awaiting_user", "queued_for_engineering", "awaiting_run", "blocked", "external_action_required", "failed", "rejected"}},
 								"summary":          map[string]interface{}{"type": "string"},
 								"changed_files":    map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
@@ -1438,13 +2111,14 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 				reproduction.Observed, _ = raw["observed"].(string)
 				reproduction.Limitations, _ = raw["limitations"].(string)
 			}
-			input := step_based_workflow.PulseReviewFindingInput{IssueID: stringToolArg(args, "issue_id"), Concern: stringToolArg(args, "concern"), Module: module, PulseFindingDetails: step_based_workflow.PulseFindingDetails{
+			input := step_based_workflow.PulseReviewFindingInput{IssueID: stringToolArg(args, "issue_id"), Concern: stringToolArg(args, "concern"), Module: module, HumanInputID: stringToolArg(args, "human_input_id"), PulseFindingDetails: step_based_workflow.PulseFindingDetails{
 				TargetKey: stringToolArg(args, "target_key"), IssueKind: stringToolArg(args, "issue_kind"),
 				RecommendedRoute: stringToolArg(args, "recommended_route"), NextCheck: stringToolArg(args, "next_check"), Classification: stringToolArg(args, "classification"),
 				Severity: stringToolArg(args, "severity"), Summary: stringToolArg(args, "summary"), Impact: stringToolArg(args, "impact"), Workaround: stringToolArg(args, "workaround"),
 				Evidence: stringSliceFromToolArg(args["evidence"]), Reproduction: reproduction,
 			}}
-			record, err := step_based_workflow.RecordPulseReviewFinding(ctx, workspacePath, pulseRunID, pulseRunID, input)
+			reviewRunID := pulseReviewRunIDForSession(ctx, pulseRunID)
+			record, err := step_based_workflow.RecordPulseReviewFinding(ctx, workspacePath, pulseRunID, reviewRunID, input)
 			if err != nil {
 				return "", err
 			}
@@ -1461,45 +2135,17 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 			payload, _ := json.Marshal(map[string]interface{}{"status": "merged", "merged_count": merged, "canonical_issue_id": stringToolArg(args, "canonical_issue_id")})
 			return string(payload), nil
 		},
-		"record_pulse_verification": func(ctx context.Context, args map[string]interface{}) (string, error) {
-			workspacePath, _ := args["workspace_path"].(string)
-			pulseRunID, _ := args["pulse_run_id"].(string)
-			pulseRunID = pulseRunIDForSession(ctx, pulseRunID)
+		"record_pulse_review_focus": func(ctx context.Context, args map[string]interface{}) (string, error) {
+			pulseRunID := pulseRunIDForSession(ctx, stringToolArg(args, "pulse_run_id"))
 			if err := validatePulseToolRunID(ctx, pulseRunID); err != nil {
 				return "", err
 			}
-			candidate, err := step_based_workflow.ResolvePulseReviewVerificationIssueID(
-				ctx, workspacePath, stringToolArg(args, "module"), stringToolArg(args, "issue_id"),
-			)
+			focus, err := recordPulseReviewFocus(ctx, stringToolArg(args, "workspace_path"), pulseRunID, stringToolArg(args, "module"), stringToolArg(args, "focus_key"), stringToolArg(args, "route_scope"), stringToolArg(args, "priority_class"), stringToolArg(args, "selection_reason"), stringToolArg(args, "verdict"), stringToolArg(args, "next_check_at"), stringToolArg(args, "next_check_reason"), stringSliceFromToolArg(args["evidence"]), stringSliceFromToolArg(args["issue_ids"]), stringSliceFromToolArg(args["deferred_focuses"]))
 			if err != nil {
 				return "", err
 			}
-			verification := step_based_workflow.PulseReviewVerificationResult{
-				FindingID: candidate.FindingID, Fingerprint: candidate.Fingerprint, AttemptID: candidate.AttemptID,
-				Verdict: stringToolArg(args, "verdict"), Expected: stringToolArg(args, "expected"), Observed: stringToolArg(args, "observed"),
-				Evidence: stringSliceFromToolArg(args["evidence"]), NextCheck: stringToolArg(args, "next_check"),
-			}
-			if err := step_based_workflow.RecordPulseReviewVerification(ctx, workspacePath, stringToolArg(args, "module"), pulseRunID, pulseRunID, verification); err != nil {
-				return "", err
-			}
-			return `{"status":"recorded"}`, nil
-		},
-		"complete_pulse_review": func(ctx context.Context, args map[string]interface{}) (string, error) {
-			workspacePath, _ := args["workspace_path"].(string)
-			pulseRunID, _ := args["pulse_run_id"].(string)
-			pulseRunID = pulseRunIDForSession(ctx, pulseRunID)
-			verdict := strings.TrimSpace(stringToolArg(args, "verdict"))
-			if verdict == "" {
-				return "", fmt.Errorf("complete_pulse_review requires a non-empty verdict: summarize the overall judgment after recording findings and verifications")
-			}
-			modules := stringSliceFromToolArg(args["modules"])
-			if err := validatePulseToolRunID(ctx, pulseRunID); err != nil {
-				return "", err
-			}
-			if err := step_based_workflow.CompletePulseReview(ctx, workspacePath, modules, pulseRunID, pulseRunID, verdict, stringToolArg(args, "status")); err != nil {
-				return "", err
-			}
-			return `{"status":"completed"}`, nil
+			encoded, _ := json.Marshal(focus)
+			return string(encoded), nil
 		},
 		"record_pulse_worklist": func(ctx context.Context, args map[string]interface{}) (string, error) {
 			workspacePath, _ := args["workspace_path"].(string)
@@ -1545,32 +2191,56 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 				return readPulseModuleStateView(ctx, workspacePath, stringToolArg(args, "pulse_run_id"))
 			case pulseStateViewBacklog:
 				module, _ := args["module"].(string)
-				return readPulseBacklogView(ctx, workspacePath, module)
+				return readPulseBacklogViewWithOptions(ctx, workspacePath, module, stringToolArg(args, "detail"), stringSliceFromToolArg(args["issue_ids"]))
 			case pulseStateViewReview:
 				module, _ := args["module"].(string)
 				reviewRunID, _ := args["review_run_id"].(string)
 				return readPulseReviewView(ctx, workspacePath, reviewRunID, module)
+			case pulseStateViewFocusAgenda:
+				module, _ := args["module"].(string)
+				return readPulseFocusAgendaView(ctx, workspacePath, module, stringToolArg(args, "route_scope"), intToolArg(args, "limit"))
 			default:
-				return "", fmt.Errorf("view %q is not a valid Pulse state view. Must be one of: %s. Use %q for module cadence and the active concern backlog, %q for the durable finding backlog, and %q for one saved reviewer result (which also needs review_run_id and module)",
+				return "", fmt.Errorf("view %q is not a valid Pulse state view. Must be one of: %s. Use %q for module cadence and the active concern backlog, %q for the durable finding backlog, %q for one saved reviewer result (which also needs review_run_id and module), and %q for the deep-review focus coverage agenda (which also needs module)",
 					view, strings.Join(pulseStateViewValues, ", "),
-					pulseStateViewModule, pulseStateViewBacklog, pulseStateViewReview)
+					pulseStateViewModule, pulseStateViewBacklog, pulseStateViewReview, pulseStateViewFocusAgenda)
 			}
 		},
 		"record_pulse_result": func(ctx context.Context, args map[string]interface{}) (string, error) {
 			return recordPulseResultFromToolArgs(ctx, args)
 		},
+		"record_pulse_migration_reconciliation": func(ctx context.Context, args map[string]interface{}) (string, error) {
+			workspacePath := stringToolArg(args, "workspace_path")
+			switch scope := strings.TrimSpace(stringToolArg(args, "scope")); scope {
+			case "lifecycle":
+				result, err := step_based_workflow.ReconcilePulseFindingLifecycle(ctx, workspacePath)
+				if err != nil {
+					return "", err
+				}
+				payload, _ := json.Marshal(result)
+				return string(payload), nil
+			case "actionable_backlog":
+				result, err := step_based_workflow.ReconcilePulseActionableBacklog(ctx, workspacePath)
+				if err != nil {
+					return "", err
+				}
+				payload, _ := json.Marshal(result)
+				return string(payload), nil
+			default:
+				return "", fmt.Errorf("scope %q is not valid; must be \"lifecycle\" or \"actionable_backlog\"", scope)
+			}
+		},
 		"record_pulse_impact": impactExecutor,
 	}
 	categories := map[string]string{
-		"record_pulse_finding":      "workflow",
-		"record_pulse_verification": "workflow",
-		"merge_pulse_issues":        "workflow",
-		"complete_pulse_review":     "workflow",
-		"record_pulse_worklist":     "workflow",
-		"get_pulse_state":           "workflow",
-		"record_pulse_result":       "workflow",
-		"record_pulse_impact":       "workflow",
-		"resolve_run_concern":       "workflow",
+		"record_pulse_finding":                  "workflow",
+		"merge_pulse_issues":                    "workflow",
+		"record_pulse_review_focus":             "workflow",
+		"record_pulse_worklist":                 "workflow",
+		"get_pulse_state":                       "workflow",
+		"record_pulse_result":                   "workflow",
+		"record_pulse_impact":                   "workflow",
+		"resolve_run_concern":                   "workflow",
+		"record_pulse_migration_reconciliation": "workflow",
 	}
 	resolveConcernTool := llmtypes.Tool{
 		Type: "function",
@@ -1581,7 +2251,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 				"type": "object",
 				"properties": map[string]interface{}{
 					"workspace_path": map[string]interface{}{"type": "string", "description": "Workflow-relative path, e.g. Workflow/social-media."},
-					"issue_id":       map[string]interface{}{"type": "string", "description": "The visible issue.id from get_pulse_state(view=\"backlog\")."},
+					"issue_id":       map[string]interface{}{"type": "string", "description": "The visible issue_id from get_pulse_state(view=\"backlog\", detail=\"compact\")."},
 					"status":         map[string]interface{}{"type": "string", "enum": []string{"acknowledged", "rejected"}},
 					"note":           map[string]interface{}{"type": "string", "description": "Short justification recorded with the judgement."},
 				},
@@ -1607,7 +2277,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		return fmt.Sprintf("Issue %s marked %s.", step_based_workflow.NewPulseIssue(finding).ID, status), nil
 	}
 
-	return []llmtypes.Tool{recordFindingTool, recordVerificationTool, completeReviewTool, mergeIssuesTool, recordTool, stateTool, resultTool, impactTool, resolveConcernTool}, executors, categories
+	return []llmtypes.Tool{recordFindingTool, recordFocusTool, mergeIssuesTool, reconcileTool, recordTool, stateTool, resultTool, impactTool, resolveConcernTool}, executors, categories
 }
 
 func stringToolArg(args map[string]interface{}, key string) string {
@@ -1615,19 +2285,33 @@ func stringToolArg(args map[string]interface{}, key string) string {
 	return strings.TrimSpace(value)
 }
 
+func intToolArg(args map[string]interface{}, key string) int {
+	switch value := args[key].(type) {
+	case int:
+		return value
+	case int64:
+		return int(value)
+	case float64:
+		return int(value)
+	default:
+		return 0
+	}
+}
+
 // The three reads get_pulse_state merges. One tool with a named view rather
 // than three tools whose names shared no rule: the agent that invented
 // close_pulse_fix_attempt and resolve_human_input was guessing across a surface
 // larger than the number of concepts in it.
 const (
-	pulseStateViewModule  = "module"
-	pulseStateViewBacklog = "backlog"
-	pulseStateViewReview  = "review"
+	pulseStateViewModule      = "module"
+	pulseStateViewBacklog     = "backlog"
+	pulseStateViewReview      = "review"
+	pulseStateViewFocusAgenda = "focus_agenda"
 )
 
 // pulseStateViewValues is the closed view set shared by the schema enum, the
 // accept check, and the rejection message.
-var pulseStateViewValues = []string{pulseStateViewBacklog, pulseStateViewModule, pulseStateViewReview}
+var pulseStateViewValues = []string{pulseStateViewBacklog, pulseStateViewModule, pulseStateViewReview, pulseStateViewFocusAgenda}
 
 // pulseResultValues is the union of the module and final-command result sets.
 // Each target validates its own subset and names it on rejection; the schema
@@ -1635,20 +2319,40 @@ var pulseStateViewValues = []string{pulseStateViewBacklog, pulseStateViewModule,
 // the executor can explain which subset applies.
 var pulseResultValues = []string{"running", "done", "changed", "skipped", "blocked", "failed"}
 
+// readPulseFocusAgendaView wraps getPulseReviewFocusAgenda in the same
+// (string, error) JSON-encoded shape the other get_pulse_state views use.
+// Folded in as a fourth view (was the standalone get_pulse_review_focus_agenda
+// tool) since it is read-only and already fit get_pulse_state's existing
+// "one tool, multiple views" shape.
+func readPulseFocusAgendaView(ctx context.Context, workspacePath, module, routeScope string, limit int) (string, error) {
+	focuses, err := getPulseReviewFocusAgenda(ctx, workspacePath, module, routeScope, limit)
+	if err != nil {
+		return "", err
+	}
+	encoded, err := json.Marshal(map[string]interface{}{"focuses": focuses})
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
 func readPulseModuleStateView(ctx context.Context, workspacePath, pulseRunID string) (string, error) {
 	states, err := getPulseModuleStates(ctx, workspacePath)
 	if err != nil {
 		return "", err
 	}
-	// Open step concerns ride along with module state rather than needing
-	// their own tool: the Gate already calls this immediately before
-	// deciding what is due, which is exactly when a recurring concern
-	// should influence that decision. Best-effort — a concerns read
-	// failure must not block the Gate from scheduling modules.
-	concerns, concernsErr := step_based_workflow.LoadOpenRunConcerns(ctx, workspacePath, -1)
+	// Workflow observations and accepted Pulse issues share one durable ledger,
+	// but they are different queues. Gate needs both: issues are lifecycle work;
+	// observations are evidence it may ask a reviewer to classify. Flattening
+	// them made raw CONCERNS lines look like 100 confirmed bugs and sent Fixer
+	// into broad rediscovery loops.
+	lifecycles, concernsErr := step_based_workflow.LoadPulseFindingLifecycles(ctx, workspacePath, "", -1)
 	if concernsErr != nil {
 		log.Printf("[PULSE] get_pulse_state(view=module): open concerns unavailable for %s: %v", workspacePath, concernsErr)
 	}
+	issues, observations := step_based_workflow.SplitPulseFindingLifecycles(lifecycles)
+	issues = activePulseFindingLifecycles(issues)
+	observations = activePulseFindingLifecycles(observations)
 	suppressedConcerns, suppressedErr := step_based_workflow.LoadExternallyOwnedRunConcerns(ctx, workspacePath)
 	if suppressedErr != nil {
 		log.Printf("[PULSE] get_pulse_state(view=module): suppressed concerns unavailable for %s: %v", workspacePath, suppressedErr)
@@ -1658,6 +2362,13 @@ func readPulseModuleStateView(ctx context.Context, workspacePath, pulseRunID str
 	// already stamps the ones that have been reconciled; nothing counted
 	// the remainder, so Gate had to derive it from the files each run.
 	planBacklog := step_based_workflow.CollectPlanChangeBacklog(workspacePath)
+	planDependencyIntake := step_based_workflow.BuildPlanChangeDependencyIntake(planBacklog)
+	// Steps whose drift_review record is null, with the deterministic Group
+	// 1/2 checks Go could run for each already computed — evidence for both
+	// Gate's forced due-decision (validatePlanDriftRouting) and the
+	// plan_drift_review reviewer turn itself, so it starts from pre-computed
+	// results instead of re-deriving them.
+	planDriftCandidates := step_based_workflow.CollectPlanDriftCandidates(ctx, workspacePath)
 	// What each reviewer has actually been finding. Without this the choice
 	// between modules is a guess: nothing distinguished a module that keeps
 	// surfacing real breakage from one that returns clean every time.
@@ -1671,9 +2382,24 @@ func readPulseModuleStateView(ctx context.Context, workspacePath, pulseRunID str
 	// routing rule. A separate pre-decision snapshot is still retained
 	// when Gate records its worklist so its handling remains auditable.
 	loopClosure := loopclosure.Check(ctx, workspacePath, time.Now().UTC())
+	// Runtime receipts are emitted by the execution engine, but a completed
+	// outer run does not prove every child call succeeded. This collector turns
+	// only explicit status disagreements and structured failures into compact
+	// evidence for Gate; it never promotes them directly to Pulse issues.
+	runtimeIntake := pulseintake.CheckRuntime(workspacePath, time.Now().UTC())
 	impactLedger, impactErr := step_based_workflow.LoadPulseImpactLedger(ctx, workspacePath, 100)
 	if impactErr != nil {
 		log.Printf("[PULSE] get_pulse_state(view=module): impact ledger unavailable for %s: %v", workspacePath, impactErr)
+	}
+	focusHistory, focusErr := getPulseReviewFocusStates(ctx, workspacePath)
+	if focusErr != nil {
+		log.Printf("[PULSE] get_pulse_state(view=module): focus history unavailable for %s: %v", workspacePath, focusErr)
+		focusHistory = []PulseReviewFocus{}
+	}
+	focusSelections, selectionErr := getPulseReviewFocusSelections(ctx, workspacePath, 50)
+	if selectionErr != nil {
+		log.Printf("[PULSE] get_pulse_state(view=module): focus selections unavailable for %s: %v", workspacePath, selectionErr)
+		focusSelections = []PulseReviewFocus{}
 	}
 	var runMode *PulseRunMode
 	if strings.TrimSpace(pulseRunID) != "" {
@@ -1684,24 +2410,43 @@ func readPulseModuleStateView(ctx context.Context, workspacePath, pulseRunID str
 		}
 	}
 	payload, _ := json.Marshal(map[string]interface{}{
-		"modules":                  states,
-		"open_concerns":            pulseConcernAgentProjection(concerns),
-		"open_concern_count":       len(concerns),
-		"concerns_note":            "Complete active backlog. seen_count is how many runs reported the same thing; absence is not evidence of a fix. Use severity, age, recurrence, ownership, and starvation—not recurrence alone—when selecting work.",
-		"suppressed_concerns":      pulseConcernAgentProjection(suppressedConcerns),
-		"suppressed_concern_count": len(suppressedConcerns),
-		"suppressed_concerns_note": "Diagnosed real findings owned outside this workflow. Do not report an unchanged fingerprint as a new finding or spend active review effort on it. A materially changed target/evidence creates or reopens an active finding; the recorded reopen condition explains the boundary.",
-		"plan_change_backlog":      planBacklog,
-		"loop_closure":             loopClosure,
-		"loop_closure_note":        "Read-only deterministic evidence. Gate may weigh verified findings alongside other facts, but they do not mandate a module or authorize mutation. coverage_status must be verified before an empty findings list means clean.",
-		"module_review_history":    reviewHistory,
-		"review_history_note":      "What each reviewer concluded the last few times it ran, most recently run first. A module absent from this list has not run in the retained window at all. Use it to justify each skip: a module that keeps returning real findings is a poor candidate for another cooldown, and one that has come back clean repeatedly is a good one. A verdict here is the reviewer's conclusion, which is not the same as whether anything was then fixed.",
-		"impact_ledger":            impactLedger,
-		"impact_ledger_note":       "Durable intervention, per-run success-criterion observation, and append-only before/after assessment history. Reliability or measurement work is not direct goal progress; inconclusive is correct until a comparable evidence window matures.",
-		"context_records":          loadPulseContextRecordsForState(ctx, workspacePath),
-		"context_records_note":     "User-confirmed workflow rules captured through capture_context. The context file is the runtime source; these immutable records show who captured what and when.",
-		"gate_mode":                runMode,
-		"gate_mode_note":           "The Gate-selected pass shape for the supplied pulse_run_id. Go records it but does not choose it; the following message sequence must follow it.",
+		"modules": states,
+		// Backward-compatible aliases now intentionally mean canonical issues.
+		"open_concerns":              pulseLifecycleAgentProjection(issues, "issue_id"),
+		"open_concern_count":         len(issues),
+		"canonical_issues":           pulseLifecycleAgentProjection(issues, "issue_id"),
+		"canonical_issue_count":      len(issues),
+		"concerns_note":              "Complete active canonical issue backlog. These have been accepted by a reviewer or entered lifecycle work; they are not raw step emissions.",
+		"workflow_observations":      []map[string]interface{}{},
+		"workflow_observation_count": len(observations),
+		"workflow_observations_note": "Historical observation rows are retained for audit only and are no longer an active Pulse intake. Technical Review reads retained run artifacts and deterministic receipts directly; do not load or classify these rows as a queue.",
+		"pulse_store_navigation": map[string]string{
+			"issues":                "Canonical repair roots. Reuse the existing public PUL issue_id for the same semantic root cause.",
+			"closed_issues":         "Previously handled roots. Matching new evidence reopens the same root rather than creating a duplicate.",
+			"workflow_observations": "Historical audit evidence only. It is not an active reviewer queue; Technical Review reads retained run artifacts and deterministic receipts directly.",
+		},
+		"suppressed_concerns":          pulseConcernAgentProjection(suppressedConcerns),
+		"suppressed_concern_count":     len(suppressedConcerns),
+		"suppressed_concerns_note":     "Diagnosed real findings owned outside this workflow. Do not report an unchanged fingerprint as a new finding or spend active review effort on it. A materially changed target/evidence creates or reopens an active finding; the recorded reopen condition explains the boundary.",
+		"plan_change_backlog":          planBacklog,
+		"loop_closure":                 loopClosure,
+		"loop_closure_note":            "Read-only deterministic evidence. Gate may weigh verified findings alongside other facts, but they do not mandate a module or authorize mutation. coverage_status must be verified before an empty findings list means clean.",
+		"deterministic_intake":         map[string]interface{}{"runtime": runtimeIntake, "plan_change_dependencies": planDependencyIntake},
+		"plan_drift_candidates":        planDriftCandidates,
+		"plan_drift_candidates_note":   "Steps with a null drift_review record, each with Go-precomputed Check 1/2/4/9 results (report query compatibility, validation_schema db[] rules from step_config.json only, scripted-code queries, db/README.md contract). Checks 5 (validation_schema file rules) and 13 (orphaned tables) are not precomputed here; the plan_drift_review reviewer checks those directly. A failed precomputed check is still evidence, not a filed finding — the reviewer turn records the merged result via record_plan_drift_review and files a Pulse finding for anything unresolved.",
+		"deterministic_intake_note":    "Read-only typed evidence from retained runtime receipts and current-contract plan-change dependency receipts. A failed signal requires agentic Technical Review, but is not an automatic Pulse issue or Fixer authorization. coverage_status must be verified before an empty findings list means clean.",
+		"module_review_history":        reviewHistory,
+		"review_history_note":          "What each reviewer concluded the last few times it ran, most recently run first. A module absent from this list has not run in the retained window at all. Use it to justify each skip: a module that keeps returning real findings is a poor candidate for another cooldown, and one that has come back clean repeatedly is a good one. A verdict here is the reviewer's conclusion, which is not the same as whether anything was then fixed.",
+		"review_focus_history":         focusHistory,
+		"review_focus_history_note":    "Compact durable deep-review coverage. Never-reviewed and overdue focus keys are candidates after urgent regressions, matured verification, and answered unapplied decisions. Route-specific counts prevent one sub-workflow from standing in for another. The agent chooses semantically; this is not blind round-robin.",
+		"review_focus_selections":      focusSelections,
+		"review_focus_selections_note": "Recent focus selections, one row per investigated focus and route scope. Multiple rows for one Pulse run are valid when the reviewer found distinct evidence and decision value; their count is agent-chosen, not a platform quota.",
+		"impact_ledger":                impactLedger,
+		"impact_ledger_note":           "Durable intervention, per-run success-criterion observation, and append-only before/after assessment history. Reliability or measurement work is not direct goal progress; inconclusive is correct until a comparable evidence window matures.",
+		"context_records":              loadPulseContextRecordsForState(ctx, workspacePath),
+		"context_records_note":         "User-confirmed workflow rules captured through capture_context. The context file is the runtime source; these immutable records show who captured what and when.",
+		"gate_mode":                    runMode,
+		"gate_mode_note":               "The Gate-selected pass shape for the supplied pulse_run_id. Go records it but does not choose it; the following message sequence must follow it.",
 	})
 	return string(payload), nil
 }
@@ -1715,32 +2460,140 @@ func loadPulseContextRecordsForState(ctx context.Context, workspacePath string) 
 	return records
 }
 
+const maxPulseBacklogDetailIDs = 20
+
+// readPulseBacklogView is retained as the compact-default entry point used by
+// focused tests and internal callers. Agent tool calls flow through the options
+// variant so a full lifecycle response is impossible without explicit ids.
 func readPulseBacklogView(ctx context.Context, workspacePath, module string) (string, error) {
+	return readPulseBacklogViewWithOptions(ctx, workspacePath, module, "compact", nil)
+}
+
+func readPulseBacklogViewWithOptions(ctx context.Context, workspacePath, module, detail string, issueIDs []string) (string, error) {
 	module = normalizePulseModule(module)
 	if module != "" && !validPulseModules[module] {
 		return "", fmt.Errorf("module %q is not a valid Pulse module. Must be one of: %s. Omit module entirely to load the complete backlog", module, pulseModuleList())
+	}
+	detail = strings.ToLower(strings.TrimSpace(detail))
+	if detail == "" {
+		detail = "compact"
+	}
+	if detail != "compact" && detail != "full" {
+		return "", fmt.Errorf("detail %q is not valid for get_pulse_state(view=\"backlog\"); use compact or full", detail)
+	}
+	issueIDs = normalizePulseIssueIDs(issueIDs)
+	if detail == "compact" && len(issueIDs) > 0 {
+		return "", fmt.Errorf("issue_ids is only valid with detail=\"full\"; read the compact index without ids first")
+	}
+	if detail == "full" {
+		if len(issueIDs) == 0 {
+			return "", fmt.Errorf("detail=\"full\" requires 1-%d issue_ids selected from the compact backlog index; broad full-history reads are intentionally disabled", maxPulseBacklogDetailIDs)
+		}
+		if len(issueIDs) > maxPulseBacklogDetailIDs {
+			return "", fmt.Errorf("detail=\"full\" accepts at most %d issue_ids, got %d", maxPulseBacklogDetailIDs, len(issueIDs))
+		}
 	}
 	findings, err := step_based_workflow.LoadPulseFindingLifecycles(ctx, workspacePath, module, -1)
 	if err != nil {
 		return "", err
 	}
-	payload, _ := json.Marshal(map[string]interface{}{
-		"findings": pulseBacklogAgentProjection(findings),
-		"total":    len(findings),
-		"summary":  pulseBacklogSummary(findings),
-		"note":     "Durable issue, attempt, verification, and disposition history. issue.id is the only agent-facing identity: submit it unchanged to Pulse finding, result, verification, merge, and triage tools. Match issues by affected behavior, expected outcome, and observed failure—not wording, a hidden key, or an invented identifier.",
+	issues, observations := step_based_workflow.SplitPulseFindingLifecycles(findings)
+	if detail == "full" {
+		selected, missing, ambiguous := selectPulseLifecyclesByIssueID(findings, issueIDs)
+		if len(missing) > 0 {
+			return "", fmt.Errorf("unknown issue_ids: %s; refresh get_pulse_state(view=\"backlog\", detail=\"compact\") and use exact ids", strings.Join(missing, ", "))
+		}
+		if len(ambiguous) > 0 {
+			return "", fmt.Errorf("ambiguous issue_ids: %s; these public prefixes match multiple lifecycle rows and require backend identity repair before mutation", strings.Join(ambiguous, ", "))
+		}
+		payload, marshalErr := json.Marshal(map[string]interface{}{
+			"detail":  "full",
+			"records": pulseBacklogAgentProjection(selected),
+			"total":   len(selected),
+			"note":    "Complete lifecycle evidence for only the requested public PUL ids. No unrequested issue or observation history was loaded into the agent response.",
+		})
+		if marshalErr != nil {
+			return "", marshalErr
+		}
+		return string(payload), nil
+	}
+
+	activeIssues := activePulseFindingLifecycles(issues)
+	activeObservations := activePulseFindingLifecycles(observations)
+	closedIssues := make([]step_based_workflow.PulseFindingLifecycle, 0, len(issues)-len(activeIssues))
+	for _, finding := range issues {
+		if !pulseFindingLifecycleActive(finding) {
+			closedIssues = append(closedIssues, finding)
+		}
+	}
+	payload, marshalErr := json.Marshal(map[string]interface{}{
+		"detail":            "compact",
+		"issues":            pulseLifecycleAgentProjection(activeIssues, "issue_id"),
+		"closed_issues":     pulseLifecycleAgentProjection(closedIssues, "issue_id"),
+		"observations":      []map[string]interface{}{},
+		"total":             len(activeIssues),
+		"issue_total":       len(activeIssues),
+		"observation_total": len(activeObservations),
+		"summary":           pulseBacklogSummary(issues, observations),
+		"note":              "Compact issue register: compare new evidence with active and closed issue text, reuse the matching issue_id, and request detail=\"full\" only for candidates. Historical observations are retained for audit but are not supplied as an active review queue; Technical Review reads retained run artifacts and deterministic receipts directly.",
+		"navigation": map[string]string{
+			"issues":        "Canonical repair roots. Start here and reuse the same PUL issue_id for the same semantic root cause.",
+			"closed_issues": "Previously handled roots. Matching new evidence reopens the same root rather than creating a duplicate.",
+			"observations":  "Historical audit evidence only. It is not an active reviewer queue; Technical Review reads retained run artifacts and deterministic receipts directly.",
+		},
 	})
+	if marshalErr != nil {
+		return "", marshalErr
+	}
 	return string(payload), nil
+}
+
+func normalizePulseIssueIDs(issueIDs []string) []string {
+	seen := make(map[string]bool, len(issueIDs))
+	normalized := make([]string, 0, len(issueIDs))
+	for _, issueID := range issueIDs {
+		issueID = strings.ToUpper(strings.TrimSpace(issueID))
+		if issueID == "" || seen[issueID] {
+			continue
+		}
+		seen[issueID] = true
+		normalized = append(normalized, issueID)
+	}
+	return normalized
+}
+
+func selectPulseLifecyclesByIssueID(findings []step_based_workflow.PulseFindingLifecycle, issueIDs []string) ([]step_based_workflow.PulseFindingLifecycle, []string, []string) {
+	byID := make(map[string][]step_based_workflow.PulseFindingLifecycle, len(findings))
+	for _, finding := range findings {
+		issueID := strings.ToUpper(step_based_workflow.NewPulseIssue(finding).ID)
+		byID[issueID] = append(byID[issueID], finding)
+	}
+	selected := make([]step_based_workflow.PulseFindingLifecycle, 0, len(issueIDs))
+	missing := make([]string, 0)
+	ambiguous := make([]string, 0)
+	for _, issueID := range issueIDs {
+		matches := byID[issueID]
+		if len(matches) == 0 {
+			missing = append(missing, issueID)
+			continue
+		}
+		if len(matches) > 1 {
+			ambiguous = append(ambiguous, issueID)
+			continue
+		}
+		selected = append(selected, matches[0])
+	}
+	return selected, missing, ambiguous
 }
 
 // pulseBacklogSummary is intentionally derived from durable lifecycle rows,
 // not a model receipt. It lets a reviewer and the consolidation command report
 // whether the active backlog actually moved rather than celebrating activity
 // while the number of unresolved root causes rises.
-func pulseBacklogSummary(findings []step_based_workflow.PulseFindingLifecycle) map[string]interface{} {
+func pulseBacklogSummary(issues, observations []step_based_workflow.PulseFindingLifecycle) map[string]interface{} {
 	byStatus := map[string]int{}
 	active, merged := 0, 0
-	for _, finding := range findings {
+	for _, finding := range issues {
 		status := strings.TrimSpace(finding.Status)
 		if status == "" {
 			status = "unknown"
@@ -1755,7 +2608,71 @@ func pulseBacklogSummary(findings []step_based_workflow.PulseFindingLifecycle) m
 			active++
 		}
 	}
-	return map[string]interface{}{"active_count": active, "terminal_count": len(findings) - active, "merged_duplicate_count": merged, "by_status": byStatus}
+	observationByStatus := map[string]int{}
+	activeObservations := 0
+	for _, observation := range observations {
+		status := strings.TrimSpace(observation.Status)
+		if status == "" {
+			status = "unknown"
+		}
+		observationByStatus[status]++
+		if pulseFindingLifecycleActive(observation) {
+			activeObservations++
+		}
+	}
+	return map[string]interface{}{
+		"active_count": active, "terminal_count": len(issues) - active,
+		"merged_duplicate_count": merged, "by_status": byStatus,
+		"active_observation_count":   activeObservations,
+		"terminal_observation_count": len(observations) - activeObservations,
+		"observations_by_status":     observationByStatus,
+	}
+}
+
+func pulseFindingLifecycleActive(finding step_based_workflow.PulseFindingLifecycle) bool {
+	switch strings.TrimSpace(finding.Status) {
+	case step_based_workflow.ConcernStatusResolved, step_based_workflow.ConcernStatusRejected, step_based_workflow.ConcernStatusExternalActionRequired:
+		return false
+	default:
+		return true
+	}
+}
+
+func activePulseFindingLifecycles(findings []step_based_workflow.PulseFindingLifecycle) []step_based_workflow.PulseFindingLifecycle {
+	active := make([]step_based_workflow.PulseFindingLifecycle, 0, len(findings))
+	for _, finding := range findings {
+		if pulseFindingLifecycleActive(finding) {
+			active = append(active, finding)
+		}
+	}
+	return active
+}
+
+func pulseLifecycleAgentProjection(findings []step_based_workflow.PulseFindingLifecycle, idKey string) []map[string]interface{} {
+	projected := make([]map[string]interface{}, 0, len(findings))
+	for _, finding := range findings {
+		issue := step_based_workflow.NewPulseIssue(finding)
+		card := map[string]interface{}{
+			idKey: issue.ID, "kind": finding.Kind, "step_id": finding.StepID,
+			"phase": finding.Phase, "group_name": finding.GroupName, "summary": issue.Title,
+			"first_seen_run": finding.FirstSeenRun, "first_seen_at": finding.FirstSeenAt,
+			"last_seen_run": finding.LastSeenRun, "last_seen_at": finding.LastSeenAt,
+			"seen_count": finding.SeenCount, "status": finding.Status, "priority": issue.Priority,
+			"module": issue.Module, "repair_eligible": finding.Kind == step_based_workflow.PulseFindingKindIssue && issue.Status == "backlog",
+		}
+		if finding.Details != nil {
+			card["target_key"] = finding.Details.TargetKey
+			card["next_check"] = finding.Details.NextCheck
+		}
+		if len(finding.Verification) > 0 {
+			latest := finding.Verification[0]
+			card["latest_verification"] = map[string]interface{}{
+				"verdict": latest.Verdict, "check": latest.Check, "verified_at": latest.At,
+			}
+		}
+		projected = append(projected, card)
+	}
+	return projected
 }
 
 // pulseConcernAgentProjection keeps the Gate's issue feed on the same public
@@ -1765,7 +2682,7 @@ func pulseConcernAgentProjection(concerns []step_based_workflow.RunConcern) []ma
 	projected := make([]map[string]interface{}, 0, len(concerns))
 	for _, concern := range concerns {
 		issue := step_based_workflow.NewPulseIssue(step_based_workflow.PulseFindingLifecycle{
-			Fingerprint: concern.Fingerprint, StepID: concern.StepID, Phase: concern.Phase,
+			Fingerprint: concern.Fingerprint, IssueID: concern.IssueID, StepID: concern.StepID, Phase: concern.Phase,
 			GroupName: concern.GroupName, Text: concern.Text, FirstSeenRun: concern.FirstSeenRun,
 			FirstSeenAt: concern.FirstSeenAt, LastSeenRun: concern.LastSeenRun, LastSeenAt: concern.LastSeenAt,
 			SeenCount: concern.SeenCount, Status: concern.Status,
@@ -1990,7 +2907,7 @@ func pulseValueIsOneOf(value string, allowed []string) bool {
 // says nothing about the shape that would have worked, so a mistyped payload
 // cannot be corrected from the rejection alone.
 const pulseFindingDispositionsShape = `finding_dispositions takes an array of disposition objects, not an object or a string: ` +
-	`[{"issue_id": "<backlog issue.id>", "disposition": "fixed_verified", "summary": "<one sentence>", ` +
+	`[{"issue_id": "<backlog issue_id>", "disposition": "fixed_verified", "summary": "<one sentence>", ` +
 	`"changed_files": ["path/to/file"], ` +
 	`"verification": [{"check": "<what was run>", "verdict": "passed", "expected": "<expected>", "observed": "<observed>"}]}]`
 

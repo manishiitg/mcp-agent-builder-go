@@ -1,28 +1,64 @@
-# ENGINEERING AND OPERATIONS REVIEW WITH FIXES
+# TECHNICAL REVIEW PHASE
 
-Run the operational Review+Fix contract directly in this continuing Workflow Builder conversation.
-Do not launch a separate Fixer and do not run Pulse Gate,
+Run the operational Review contract directly in this continuing Workflow Builder conversation.
+Do not modify implementation files and do not run Pulse Gate,
 Strategy Auditor, Goal Advisor, Dashboard, publish, or notify.{{if .Focus}}
 
 Focus especially on: {{.Focus}}. The focus sets priority; it does not suppress
-other material Engineering or Operations evidence.{{end}}{{if .RunFolder}}
+a lightweight scan for critical technical evidence.{{end}}{{if .RunFolder}}
 
 Use `{{.RunFolder}}` as the primary retained run.{{end}}
 
-1. Load `read_skill(skills=[{"name":"builder-reference","path":"references/pulse-review-fixer.md"}])`.
+1. Load `read_skill(skills=[{"name":"builder-reference","path":"references/pulse-review-fixer.md"},{"name":"workflow-commands","path":"references/ops-review.md"}])`.
+   Treat `ops-review.md` as the canonical operations evidence and structural
+   checklist. This continuing Review command overrides only that reference's
+   Standalone Operations Review dispatch and read-only return wrapper: do not launch its
+   standalone wrapper. Apply its checks inside this conversation,
+   persist evidence-backed findings, and leave implementation changes to a
+   later Fix phase. The caller may attach that phase automatically as the next
+   message in this retained conversation, or the operator may invoke
+   `/pulse-fixer` separately; neither possibility grants mutation authority in
+   this review turn.
 2. Use `pulse_run_id="current"`, which resolves to this current Workflow Builder
    chat. Call `record_pulse_worklist` exactly once with `mode="backlog_drain"`
-   and a concrete `mode_reason`: Engineering and Operations are due;
-   Strategy Auditor and Goal Advisor are deferred with explicit next-check
-   boundaries. Then read the complete retained backlog, pending verification,
+   and a concrete `mode_reason`: `technical_review` is due and
+   `strategic_review` is deferred with an explicit next-check boundary. Read
+   `get_pulse_state(view="focus_agenda", module="technical_review", route_scope=<relevant route>)`, perform a
+   lightweight scan for critical regressions, matured verification, answered
+   decisions, plan routes, and retained run selectors, then choose the smallest
+   sufficient route-aware technical focus set using priority plus durable
+   rotation history. Route size is evidence, not a mechanical quota. Then read the retained backlog, pending verification,
+   `get_pulse_state(view="backlog", detail="compact")` exactly once, plus the
    latest meaningful run evidence, plan/store state, and cost/runtime evidence.
+   **Navigate the Pulse store deliberately:** `issues` are the canonical repair
+   register; work from those roots first. `closed_issues` are prior roots to
+   reuse when new evidence is semantically the same. Historical `observations`
+   are audit-only and are not a review queue. Inspect the retained run artifacts
+   and deterministic runtime/validation receipts directly, then use judgment to
+   create, reopen, or reject a canonical issue only when that evidence supports
+   it. Never treat a raw historical observation count as either a clean system
+   or a backlog of confirmed bugs. Then request
+   `detail="full"` only for those exact IDs (at most 20 per call). Never reload
+   the complete compact index merely to filter or confirm a small ID set.
 3. Own the review yourself. Use a specialist child only when independent focused
    analysis is genuinely useful; wait for its automatic completion and
-   consolidate it before mutation. Persist typed findings and verification as
-   they are established. Do not create a Markdown review report.
-4. Deduplicate by root cause, build a compact repair queue, apply safe bounded
-   fixes with normal Workflow Builder tools, and prove each immediately or name
-   its exact future producing-run boundary.
-5. Record one terminal module result for Engineering and one for Operations.
-   Finish with a concise summary of what was reviewed, fixed, verified, left
-   awaiting evidence, or blocked by an exact user/external boundary.
+   consolidate it before persistence. For every selected workflow observation,
+   link it to an existing issue, promote it with evidence, or reject it as a
+   non-issue. Persist typed findings and matured verification as they are
+   established. Do not create a Markdown review report. For an exceptional
+   repair that genuinely requires operator judgment, create or refresh one
+   `create_human_input_request(source="technical_review", input_id="technical-decision-...", options=[approve,reject,defer])`
+   before filing it with `recommended_route="decision_required"`, and pass the
+   returned id as `human_input_id` to `record_pulse_finding`. Never leave a
+   decision-required finding without a real pending question. Normal safe
+   engineering repairs use `fixer_handoff` and do not consume operator attention.
+4. Deduplicate by root cause and leave one compact, ordered canonical repair
+   queue. Do not apply repairs. Record the chosen focus exactly once, then call
+   `record_pulse_result(module="technical_review", result="done", ...)` exactly
+   once with the truthful review outcome and evidence. The same retained Review+Fix task may later add a supplemental changed result with repair
+   dispositions; it must not invent a separate completion handshake.
+5. Finish with a concise summary of what was reviewed, promoted, linked,
+   rejected, already verified, awaiting evidence, or blocked. State whether at
+   least one safe canonical issue is actionable for the later Fix phase; do not
+   assume whether the caller attached that phase automatically or the operator
+   will invoke `/pulse-fixer` separately.

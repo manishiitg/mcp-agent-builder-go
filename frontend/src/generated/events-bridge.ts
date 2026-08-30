@@ -494,6 +494,7 @@ export interface ToolCallEndEvent {
   duration?: number;
   server_name?: string;
   tool_call_id?: string;
+  synthetic_settle?: boolean;
   context_usage_percent?: number;
   model_context_window?: number;
   context_window_usage?: number;

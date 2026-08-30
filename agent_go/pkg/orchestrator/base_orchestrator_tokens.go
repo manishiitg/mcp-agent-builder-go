@@ -193,17 +193,28 @@ type CachePricing struct {
 // calculatePricingFromModelData calculates pricing from ModelTokenData using model metadata
 // Returns input, output, reasoning, cache costs, total cost, and context window size
 // Cache costs are now separated into read (discounted) and write (premium 1.25x) components
-func calculatePricingFromModelData(modelData *ModelTokenData) (inputCost, outputCost, reasoningCost, cacheCost, totalCost float64, contextWindow int) {
+// pricingFound distinguishes "this call genuinely cost $0" from "we have no
+// rate card for this model" -- both produce all-zero cost fields otherwise,
+// which an omitempty JSON tag then renders identically (key absent). A
+// provider adapter can also return metadata successfully with every
+// *CostPer1MTokens field left at its Go zero value (pi-cli's
+// GetModelMetadata does exactly this for every model, having no rate card
+// at all) -- that is not a real rate card either, so it must not be
+// reported as one.
+func calculatePricingFromModelData(modelData *ModelTokenData) (inputCost, outputCost, reasoningCost, cacheCost, totalCost float64, contextWindow int, pricingFound bool) {
 	if modelData == nil {
-		return 0, 0, 0, 0, 0, 0
+		return 0, 0, 0, 0, 0, 0, false
 	}
 
 	// Get model metadata
 	metadata, err := getModelMetadata(modelData.Provider, modelData.ModelID)
 	if err != nil || metadata == nil {
 		// If metadata is not available, return zeros (pricing will be 0)
-		return 0, 0, 0, 0, 0, 0
+		return 0, 0, 0, 0, 0, 0, false
 	}
+	pricingFound = metadata.InputCostPer1MTokens > 0 || metadata.OutputCostPer1MTokens > 0 ||
+		metadata.ReasoningCostPer1MTokens > 0 || metadata.CachedInputCostPer1MTokens > 0 ||
+		metadata.CachedInputCostWritePer1MTokens > 0
 
 	contextWindow = metadata.ContextWindow
 
@@ -264,7 +275,7 @@ func calculatePricingFromModelData(modelData *ModelTokenData) (inputCost, output
 
 	totalCost = inputCost + outputCost + reasoningCost + cacheCost
 
-	return inputCost, outputCost, reasoningCost, cacheCost, totalCost, contextWindow
+	return inputCost, outputCost, reasoningCost, cacheCost, totalCost, contextWindow, pricingFound
 }
 
 // GetStepTokenUsage reads token usage from file for a specific step (aggregated across all models)

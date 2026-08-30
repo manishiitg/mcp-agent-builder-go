@@ -30,13 +30,14 @@ func knownWorkshopRegisteredToolNamesOutsideWorkflowPool() map[string]string {
 	// 385c95158 without a matching entry here, which left this invariant red.
 	add("LLM capability discovery tools", "list_llm_capabilities")
 	add("workshop plan tools",
-		"create_plan", "migrate_message_sequence_code_items",
-		"add_scripted_step", "add_message_sequence_step", "add_routing_step",
+		"create_plan", "validate_plan_change", "migrate_message_sequence_code_items",
+		"add_scripted_step", "add_message_sequence_step", "add_routing_step", "add_branch_step",
 		"add_human_input_step", "add_todo_task_step", "add_todo_task_route",
-		"update_scripted_step", "update_message_sequence_step", "update_routing_step",
+		"update_scripted_step", "update_message_sequence_step", "update_routing_step", "update_branch_step",
 		"update_human_input_step", "update_todo_task_step", "update_todo_task_route",
 		"delete_todo_task_route", "delete_plan_steps", "cleanup_orphan_step_configs",
 		"update_validation_schema", "update_evaluation_plan",
+		"record_plan_drift_review",
 	)
 	add("workshop execution tools",
 		"execute_step", "query_step", "send_step_message", "debug_step", "list_executions",
@@ -44,7 +45,7 @@ func knownWorkshopRegisteredToolNamesOutsideWorkflowPool() map[string]string {
 		"run_full_workflow",
 	)
 	add("workshop review/maintenance tools",
-		"update_step_config", "get_step_prompts",
+		"update_step_config", "get_step_prompts", "get_plan_prompt_health",
 		"review_plan", "mark_changelog_artifact_reviewed",
 		"review_workflow_timing", "review_workflow_costs", "review_step_code",
 		"get_cost_summary",
@@ -52,6 +53,7 @@ func knownWorkshopRegisteredToolNamesOutsideWorkflowPool() map[string]string {
 	)
 	add("workshop workflow/config tools",
 		"get_llm_config", "get_workflow_config", "update_workflow_config",
+		"request_workflow_folder_access",
 		"set_workflow_contract_version",
 		"update_variable", "add_group", "update_group", "delete_group",
 		"list_schedules", "create_schedule", "create_calendar_schedule",
@@ -113,7 +115,7 @@ func TestToolSetInvariants(t *testing.T) {
 			t.Fatalf("filtered workflow pool contains %d definitions for %q", count, name)
 		}
 	}
-	for _, n := range []string{"human_feedback", "notify_user", "get_human_input_request", "create_human_input_request", "answer_human_input_request", "mark_human_input_consumed"} {
+	for _, n := range []string{"human_feedback", "notify_user", "get_human_input_request", "list_approved_fixer_decisions", "create_human_input_request", "answer_human_input_request", "mark_human_input_consumed"} {
 		if !pool[n] || cats[n] != "human_tools" {
 			t.Fatalf("workflow pool missing human tool %q (in_pool=%v cat=%q)", n, pool[n], cats[n])
 		}

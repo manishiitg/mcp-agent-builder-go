@@ -1,0 +1,220 @@
+package step_based_workflow
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/common"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workflowtypes"
+)
+
+var workflowFolderEnvUnsafe = regexp.MustCompile(`[^A-Z0-9]+`)
+
+type workflowFolderAccessManifest struct {
+	FolderAccess         []workflowtypes.WorkflowFolderGrant         `json:"folder_access"`
+	FolderAccessRequests []workflowtypes.WorkflowFolderAccessRequest `json:"folder_access_requests"`
+}
+
+func upsertWorkflowFolderAccessRequest(raw []byte, request workflowtypes.WorkflowFolderAccessRequest) ([]byte, bool, error) {
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &document); err != nil {
+		return nil, false, err
+	}
+	var manifest workflowFolderAccessManifest
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		return nil, false, err
+	}
+	for _, grant := range manifest.FolderAccess {
+		if strings.EqualFold(strings.TrimSpace(grant.Alias), strings.TrimSpace(request.Alias)) {
+			return nil, false, fmt.Errorf("folder alias %q is already attached", request.Alias)
+		}
+	}
+	for i, existing := range manifest.FolderAccessRequests {
+		if !strings.EqualFold(strings.TrimSpace(existing.Alias), strings.TrimSpace(request.Alias)) {
+			continue
+		}
+		if strings.TrimSpace(existing.Access) == strings.TrimSpace(request.Access) &&
+			strings.TrimSpace(existing.Reason) == strings.TrimSpace(request.Reason) &&
+			strings.TrimSpace(existing.RequestedPath) == strings.TrimSpace(request.RequestedPath) {
+			return raw, true, nil
+		}
+		// One pending request per alias. A later request may enrich a path-free
+		// proposal after the user supplies the exact path in chat.
+		request.ID = existing.ID
+		if strings.TrimSpace(existing.RequestedAt) != "" {
+			request.RequestedAt = existing.RequestedAt
+		}
+		manifest.FolderAccessRequests[i] = request
+		encodedRequests, err := json.Marshal(manifest.FolderAccessRequests)
+		if err != nil {
+			return nil, false, err
+		}
+		document["folder_access_requests"] = encodedRequests
+		updated, err := json.MarshalIndent(document, "", "  ")
+		if err != nil {
+			return nil, false, err
+		}
+		return append(updated, '\n'), false, nil
+	}
+	manifest.FolderAccessRequests = append(manifest.FolderAccessRequests, request)
+	encodedRequests, err := json.Marshal(manifest.FolderAccessRequests)
+	if err != nil {
+		return nil, false, err
+	}
+	document["folder_access_requests"] = encodedRequests
+	updated, err := json.MarshalIndent(document, "", "  ")
+	if err != nil {
+		return nil, false, err
+	}
+	return append(updated, '\n'), false, nil
+}
+
+// workflowFolderAccess resolves the host-local grants saved in workflow.json.
+// Missing host paths are skipped rather than making a restored workflow
+// unloadable; the Builder UI reports those grants as unavailable.
+func workflowFolderAccess(workspacePath string) []workflowtypes.WorkflowFolderGrant {
+	manifestPath := filepath.Join(GetPromptDocsRoot(), filepath.FromSlash(strings.TrimSpace(workspacePath)), "workflow.json")
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return nil
+	}
+	var manifest workflowFolderAccessManifest
+	if json.Unmarshal(raw, &manifest) != nil {
+		return nil
+	}
+	resolved := make([]workflowtypes.WorkflowFolderGrant, 0, len(manifest.FolderAccess))
+	for _, grant := range manifest.FolderAccess {
+		path := filepath.Clean(strings.TrimSpace(grant.Path))
+		if !filepath.IsAbs(path) || path == filepath.VolumeName(path)+string(filepath.Separator) {
+			continue
+		}
+		canonical, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			continue
+		}
+		info, err := os.Stat(canonical)
+		if err != nil || !info.IsDir() {
+			continue
+		}
+		grant.Path = filepath.Clean(canonical)
+		resolved = append(resolved, grant)
+	}
+	return resolved
+}
+
+func workflowFolderAccessRequests(workspacePath string) []workflowtypes.WorkflowFolderAccessRequest {
+	manifestPath := filepath.Join(GetPromptDocsRoot(), filepath.FromSlash(strings.TrimSpace(workspacePath)), "workflow.json")
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return nil
+	}
+	var manifest workflowFolderAccessManifest
+	if json.Unmarshal(raw, &manifest) != nil {
+		return nil
+	}
+	return append([]workflowtypes.WorkflowFolderAccessRequest(nil), manifest.FolderAccessRequests...)
+}
+
+func appendWorkflowFolderAccess(workspacePath string, readPaths, writePaths []string) ([]string, []string, []string, map[string]string) {
+	env := map[string]string{}
+	readOnlyPaths := []string{}
+	for _, grant := range workflowFolderAccess(workspacePath) {
+		readPaths = append(readPaths, grant.Path)
+		if grant.CanWrite() {
+			writePaths = append(writePaths, grant.Path)
+		} else {
+			readOnlyPaths = append(readOnlyPaths, grant.Path)
+		}
+		key := workflowFolderEnvUnsafe.ReplaceAllString(strings.ToUpper(strings.TrimSpace(grant.Alias)), "_")
+		key = strings.Trim(key, "_")
+		if key != "" {
+			env["WORKFLOW_FOLDER_"+key] = grant.Path
+		}
+	}
+	return common.DeduplicateStrings(readPaths), common.DeduplicateStrings(writePaths), common.DeduplicateStrings(readOnlyPaths), env
+}
+
+func configureWorkflowFolderAccessSession(sessionID, workspacePath string, readOnlyPaths []string, env map[string]string) {
+	if strings.TrimSpace(sessionID) == "" {
+		return
+	}
+	existing := common.GetSessionShellConfig(sessionID)
+	if existing == nil {
+		return
+	}
+	grants := workflowFolderAccess(workspacePath)
+	readRoots := make([]string, 0, len(grants))
+	writeRoots := make([]string, 0, len(grants))
+	for _, grant := range grants {
+		readRoots = append(readRoots, grant.Path)
+		if grant.CanWrite() {
+			writeRoots = append(writeRoots, grant.Path)
+		}
+	}
+	common.ApplySessionWorkflowFolderAccess(sessionID, workspacePath, readRoots, writeRoots, readOnlyPaths, env)
+}
+
+func refreshWorkflowFolderAccessSession(ctx context.Context, workspacePath string) {
+	sessionID, _ := ctx.Value(common.ChatSessionIDKey).(string)
+	if strings.TrimSpace(sessionID) == "" {
+		return
+	}
+	RefreshWorkflowFolderAccessSession(sessionID, workspacePath)
+}
+
+// RefreshWorkflowFolderAccessSession reapplies the durable folder grants from
+// workflow.json to a live shell session. Workflow-phase setup rebuilds the
+// base folder guard when a chat is restored, so this must run after that reset;
+// otherwise an approved attachment remains visible in config while shell calls
+// still use the smaller pre-attachment allow-list.
+func RefreshWorkflowFolderAccessSession(sessionID, workspacePath string) {
+	if strings.TrimSpace(sessionID) == "" || strings.TrimSpace(workspacePath) == "" {
+		return
+	}
+	grants := workflowFolderAccess(workspacePath)
+	readOnlyPaths := make([]string, 0, len(grants))
+	env := make(map[string]string, len(grants))
+	for _, grant := range grants {
+		if !grant.CanWrite() {
+			readOnlyPaths = append(readOnlyPaths, grant.Path)
+		}
+		key := strings.Trim(workflowFolderEnvUnsafe.ReplaceAllString(strings.ToUpper(strings.TrimSpace(grant.Alias)), "_"), "_")
+		if key != "" {
+			env["WORKFLOW_FOLDER_"+key] = grant.Path
+		}
+	}
+	configureWorkflowFolderAccessSession(sessionID, workspacePath, readOnlyPaths, env)
+}
+
+func workflowFolderAccessPrompt(workspacePath string) string {
+	grants := workflowFolderAccess(workspacePath)
+	if len(grants) == 0 {
+		return ""
+	}
+	sort.Slice(grants, func(i, j int) bool { return grants[i].Alias < grants[j].Alias })
+	var lines []string
+	lines = append(lines, "## Attached folders", "These owner-approved host folders are available through the shell. Use the environment variable, not a hand-copied absolute path. For a read-write grant, `diff_patch_workspace_file` accepts `linked://<alias>/<relative-path>`:")
+	for _, grant := range grants {
+		key := strings.Trim(workflowFolderEnvUnsafe.ReplaceAllString(strings.ToUpper(strings.TrimSpace(grant.Alias)), "_"), "_")
+		lines = append(lines, fmt.Sprintf("- `%s` — `%s` (%s)", grant.Alias, "WORKFLOW_FOLDER_"+key, grant.Access))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// workflowFolderAccessBuilderPrompt is always present in the Workflow Builder
+// identity. The empty-grant state is when the Builder most needs to know that
+// an owner-approved attachment flow exists; omitting the section until after a
+// grant is created makes the capability undiscoverable.
+func workflowFolderAccessBuilderPrompt(workspacePath string) string {
+	prompt := workflowFolderAccessPrompt(workspacePath)
+	if prompt == "" {
+		prompt = "## Attached folders\nNo external folders are currently attached to this workflow."
+	}
+	return prompt + "\nWhen the user asks to access a host folder outside this workflow, use `request_workflow_folder_access` to create a pending request containing the alias, access mode, and reason. If and only if the user supplied an exact absolute folder path, include it as `path`; never infer or invent a host path. The request does not grant access. The user must approve the displayed path and permission under Workflow toolbar → Attached folders; when no path was supplied, the user chooses it there first. Never claim that external-folder access is impossible merely because no folder is attached yet."
+}

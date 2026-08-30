@@ -261,7 +261,9 @@ export interface RoutingRoute {
   next_step_id: string;
 }
 
-// Routing step (N-way LLM-based routing)
+// Routing step -- now the "route" (major sub-workflow fork) concept.
+// Deterministic N-way switch; see BranchPlanStep for the small in-flow
+// decision sibling with identical mechanics. See PLAT-259.
 export interface RoutingPlanStep extends CommonStepFields {
   type: 'routing';
   routing_question: string;           // Question to evaluate for route selection
@@ -270,8 +272,19 @@ export interface RoutingPlanStep extends CommonStepFields {
   selected_route_id?: string;         // runtime: stores selected route
 }
 
+// Branch step -- a small in-flow next-step decision, same deterministic
+// switch mechanics as RoutingPlanStep (now the "route"/major-fork concept),
+// just its own type tag. See PLAT-259.
+export interface BranchPlanStep extends CommonStepFields {
+  type: 'branch';
+  branch_question: string;            // Question to evaluate for route selection
+  routes: RoutingRoute[];             // Available routes (min 2)
+  default_route_id?: string;          // Optional fallback route_id
+  selected_route_id?: string;         // runtime: stores selected route
+}
+
 // Discriminated union type for all step types
-export type PlanStep = RegularPlanStep | HumanInputPlanStep | TodoTaskPlanStep | MessageSequencePlanStep | RoutingPlanStep;
+export type PlanStep = RegularPlanStep | HumanInputPlanStep | TodoTaskPlanStep | MessageSequencePlanStep | RoutingPlanStep | BranchPlanStep;
 
 // PlanRoutingRoute represents a possible route/sub-agent for planning
 export interface PlanRoutingRoute {
@@ -280,7 +293,6 @@ export interface PlanRoutingRoute {
   condition: string;                  // Condition description
   sub_agent_step?: PlanStep;           // The sub-agent step to execute
   orphan_step_ref?: string;           // Optional reference to a reusable orphan step in the same plan
-  context_to_pass?: string;           // Optional: specific context to pass to sub-agent
 }
 
 // PlanningResponse interface for plan.json
@@ -353,4 +365,14 @@ export function effectiveMessageSequenceItems(step: PlanStep): MessageSequenceIt
 
 export function isRoutingStep(step: PlanStep): step is RoutingPlanStep {
   return step.type === 'routing';
+}
+
+export function isBranchStep(step: PlanStep): step is BranchPlanStep {
+  return step.type === 'branch';
+}
+
+// A deterministic N-way switch -- either flavor. Same shape/mechanics,
+// different intent (routing = major fork, branch = small in-flow decision).
+export function isRouteSwitchStep(step: PlanStep): step is RoutingPlanStep | BranchPlanStep {
+  return isRoutingStep(step) || isBranchStep(step);
 }

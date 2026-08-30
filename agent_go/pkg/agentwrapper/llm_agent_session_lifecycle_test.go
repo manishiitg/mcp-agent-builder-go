@@ -63,6 +63,9 @@ func TestWrapperKeepsSessionAfterTurnReturns(t *testing.T) {
 func TestWrapperBuildsSessionTurnWithExplicitContinuationInput(t *testing.T) {
 	history := []llmtypes.MessageContent{{Role: llmtypes.ChatMessageTypeHuman, Parts: []llmtypes.ContentPart{llmtypes.TextContent{Text: "hi"}}}}
 	turn := buildSessionTurn("[AUTO-NOTIFICATION] child completed", history, mcpagent.ToolPolicy{}, nil)
+	if turn.ID == "" {
+		t.Fatal("turn has no stable platform identity")
+	}
 	if turn.Input != "[AUTO-NOTIFICATION] child completed" {
 		t.Fatalf("turn input = %q, want current continuation", turn.Input)
 	}

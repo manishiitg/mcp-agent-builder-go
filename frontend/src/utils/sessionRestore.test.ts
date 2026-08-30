@@ -33,7 +33,7 @@ vi.mock('../services/api', () => ({
   },
 }))
 
-import { hydrateTabEvents } from './sessionRestore'
+import { conversationToRestoredEvents, hydrateTabEvents } from './sessionRestore'
 
 describe('hydrateTabEvents restored chat fallback', () => {
   beforeEach(() => {
@@ -66,6 +66,9 @@ describe('hydrateTabEvents restored chat fallback', () => {
     expect(mocks.getChatHistoryResumeConversation).toHaveBeenCalledWith(
       'restored-session',
       '/workspace/workflow',
+      100,
+      0,
+      true,
     )
     expect(mocks.setTabEvents).toHaveBeenCalledWith(
       'restored-session',
@@ -74,14 +77,112 @@ describe('hydrateTabEvents restored chat fallback', () => {
         expect.objectContaining({
           type: 'llm_generation_end',
           data: expect.objectContaining({
-            data: expect.objectContaining({ content: 'Hi there', result: 'Hi there' }),
+            data: expect.objectContaining({ content: 'I will inspect that.', result: 'I will inspect that.' }),
+          }),
+        }),
+        expect.objectContaining({
+          type: 'unified_completion',
+          data: expect.objectContaining({
+            data: expect.objectContaining({ final_result: 'Hi there', result: 'Hi there' }),
           }),
         }),
       ]),
     )
-    expect(mocks.setTabLastEventIndex).toHaveBeenCalledWith('restored-session', 2)
+    expect(mocks.setTabLastEventIndex).toHaveBeenCalledWith('restored-session', 4)
     expect(mocks.setTabHasMoreOlderEvents).toHaveBeenCalledWith('restored-session', false)
     expect(mocks.setTabHistoryPagination).toHaveBeenCalledWith('restored-session', null)
-    expect(mocks.getRecentSessionEvents).not.toHaveBeenCalled()
+    expect(mocks.getRecentSessionEvents).toHaveBeenCalledWith('restored-session')
+  })
+
+  it('keeps every meaningful assistant update from one tool-heavy turn', () => {
+    const events = conversationToRestoredEvents({
+      session_id: 'tool-heavy-session',
+      conversation_history: [
+        { Role: 'human', Parts: [{ Text: 'Review the run' }] },
+        { Role: 'ai', Parts: [{ Text: 'I will inspect the run.' }] },
+        { Role: 'ai', Parts: [{ Type: 'function' }] },
+        { Role: 'tool', Parts: [{ Text: 'tool result' }] },
+        { Role: 'ai', Parts: [{ Text: 'The first finding is confirmed.' }] },
+        { Role: 'ai', Parts: [{ Text: 'Done — final result.' }] },
+      ],
+    })
+
+    const assistantUpdates = events.filter(event => event.type === 'llm_generation_end')
+    expect(assistantUpdates.map(event => (event.data as { data?: { content?: string } }).data?.content)).toEqual([
+      'I will inspect the run.',
+      'The first finding is confirmed.',
+      'Done — final result.',
+    ])
+    expect(events.filter(event => event.type === 'unified_completion')).toHaveLength(1)
+  })
+
+  it('uses the saved formatted trace when a read-only schedule explicitly requests it', async () => {
+    mocks.getRecentSessionEvents.mockResolvedValue({
+      events: [],
+      session_status: 'completed',
+      last_processed_index: -1,
+      has_more: false,
+    })
+    mocks.getChatHistoryResumeConversation.mockResolvedValue({
+      session_id: 'schedule-session',
+      conversation_history: [
+        { Role: 'human', Parts: [{ Text: 'Start the scheduled run' }] },
+        { Role: 'ai', Parts: [{ Text: 'The first stage completed.' }] },
+        { Role: 'human', Parts: [{ Text: 'Continue with the next stage' }] },
+        { Role: 'ai', Parts: [{ Text: 'The scheduled run is complete.' }] },
+      ],
+      ui_events: [
+        {
+          id: 'child-tool',
+          type: 'tool_call_start',
+          timestamp: '2026-08-21T01:00:00Z',
+          session_id: 'schedule-session',
+          terminal_id: 'schedule-session:child',
+          terminal_owner_id: 'child',
+          data: { data: { tool_name: 'query_workflow_db' } },
+        },
+        {
+          id: 'child-answer',
+          type: 'unified_completion',
+          timestamp: '2026-08-21T01:00:01Z',
+          session_id: 'schedule-session',
+          data: { data: { final_result: 'Fixer result' } },
+        },
+      ],
+    })
+
+    await hydrateTabEvents('schedule-session', {
+      workspacePath: '/workspace/workflow',
+      fallbackToChatHistory: true,
+      includeUiEvents: true,
+    })
+
+    expect(mocks.getChatHistoryResumeConversation).toHaveBeenCalledWith(
+      'schedule-session',
+      '/workspace/workflow',
+      100,
+      0,
+      true,
+    )
+    expect(mocks.setTabEvents).toHaveBeenCalledWith(
+      'schedule-session',
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'conversation_resumed' }),
+        expect.objectContaining({
+          type: 'user_message',
+          data: expect.objectContaining({
+            data: expect.objectContaining({ content: 'Start the scheduled run' }),
+          }),
+        }),
+        expect.objectContaining({
+          type: 'unified_completion',
+          data: expect.objectContaining({
+            data: expect.objectContaining({ final_result: 'The scheduled run is complete.' }),
+          }),
+        }),
+        expect.objectContaining({ id: 'child-tool', type: 'tool_call_start' }),
+        expect.objectContaining({ id: 'child-answer', type: 'unified_completion' }),
+      ]),
+    )
   })
 })

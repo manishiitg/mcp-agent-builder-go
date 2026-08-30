@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -45,6 +46,14 @@ func workflowContractVersionRank(version string) (int, bool) {
 		workflowContractScheduledRouteVersion,
 		workflowContractScheduleExecutionModelVersion,
 		workflowContractPeriodicPulseReviewVersion,
+		workflowContractDedicatedPulseScheduleVersion,
+		workflowContractSchedulePromptContractVersion,
+		workflowContractFinalizerOwnedScheduleVersion,
+		workflowContractReportActivitySectionVersion,
+		workflowContractReportActivityTabVersion,
+		workflowContractPulseLifecycleReconciliationVersion,
+		workflowContractPulseBacklogTriageVersion,
+		workflowContractPulseActionableBacklogVersion,
 	}
 	for rank, candidate := range known {
 		if version == candidate {
@@ -144,19 +153,97 @@ until index.html has passed validation. Do not run the workflow. If a source is
 missing or the consolidation is ambiguous, report the blocker and do not stamp.
 Otherwise call set_workflow_contract_version(version="1.0.23") and stop.`
 
-const upgradePeriodicPulseReviewHandoff = `WORKFLOW CONTRACT UPGRADE: PERIODIC PULSE REVIEW — HANDLED BY GATE, NOT A MIGRATION.
+const upgradeDedicatedPulseSchedule = `WORKFLOW CONTRACT UPGRADE: POST-RUN PULSE ENABLEMENT.
 
-Earlier contract versions had a dedicated migration turn decide, per workflow,
-whether to split Gate/Review+Fix/Finalize onto their own separate schedule.
-That decision is no longer made here, and it is no longer optional: every
-workflow moves to post_run_monitor_mode="periodic" with a paired
-pulse_review_only review schedule, unconditionally. Gate itself now bootstraps
-this automatically, the first time it runs a normal Gate/Review+Fix/Finalize
-pass under this workflow's current per_run mode — see pulse-gate.md. Nothing
-for this turn to do except record that this workflow's other, unrelated
-contract migrations are complete.
+Recurring Pulse is represented by workflow.json pulse.enabled. It has no
+independent cron: after each normal scheduled workflow run, Pulse Gate decides
+whether Review+Fix work is due for that run's evidence. Legacy post_run_monitor,
+post_run_monitor_mode, and pulse_review_only schedules are obsolete.
 
-Do not run the workflow. Call set_workflow_contract_version(version="1.0.26") and stop.`
+Read the raw workflow.json before changing anything. Preserve prior enablement:
+if post_run_monitor was true or an enabled pulse_review_only schedule exists,
+set pulse.enabled=true. Otherwise leave Pulse disabled. Remove every
+pulse_review_only schedule; do not change any normal workflow schedule.
+Calling set_workflow_contract_version rewrites the manifest through the current
+schema and removes the retired fields.
+
+Do not run the workflow. Call set_workflow_contract_version(version="1.0.27") and stop.`
+
+const upgradeSchedulePromptContract = `WORKFLOW CONTRACT UPGRADE: CURRENT SCHEDULE INSTRUCTIONS.
+
+Do only this one-time schedule migration. It cleans recurring schedule messages;
+it does not run, redesign, pause, delete, or create any schedule.
+
+Read workflow.json and inspect every schedule before changing anything. Preserve
+each schedule's ID, name, cron/calendar timing, timezone, enabled state, groups,
+route selections, execution mode, and every domain safety boundary. Do not change
+a route, step, public-action policy, or backup destination in this migration.
+
+Remove historical implementation debris from normal workflow schedule messages
+and direct_messages_reason: dated incidents, previous failure counts, old operator
+decisions, ticket references, watchdog/idle-wait stories, implementation folder
+or database probes, and old workaround narratives. A recurring prompt must state
+the current contract, not narrate why an older platform version needed it.
+
+Evaluation ownership must remain correct:
+1. If a schedule currently owns a routine evaluation, keep that behavior as one
+   concise instruction immediately after the selected work completes. Do not
+   turn it into a conditional probe/retry of an undocumented automatic pass.
+2. If a higher-frequency schedule deliberately skips evaluation because one
+   designated daily/closing schedule owns it, preserve that division plainly.
+3. Do not add evaluation to a schedule that did not already own it, and do not
+   remove a routine evaluation merely to shorten the message.
+
+Keep a schedule message only when it carries genuinely schedule-specific work
+that cannot be represented by its existing groups and route selections. Make it
+one concise current-state instruction. A route-backed schedule whose message only
+restates running the selected route should have no message. Do not turn ordinary
+workflow behavior into a schedule-local procedure.
+
+Do not weaken concrete backup behavior in this migration. Preserve the existing
+configured backup contract; only remove historical dates or rationale that do
+not change what must be backed up or how success is reported. Do not replace a
+working concrete backup procedure with a promise that some other component will
+handle it.
+
+Use the schedule-management tools to make any required schedule updates. Re-read
+workflow.json afterwards. Confirm every retained message is concise and current,
+no retained schedule prose contains a historical incident date or workaround,
+and normal workflow schedules do not perform Pulse Gate/Review/Fix inline. Do
+not run the workflow. If any change would make evaluation, backup, safety, or a
+public action ambiguous, preserve that schedule unchanged, report the blocker,
+and do not stamp. Otherwise call
+set_workflow_contract_version(version="1.0.28") and stop.`
+
+const upgradeScheduleFinalizerOwnership = `WORKFLOW CONTRACT UPGRADE: SCHEDULE ROUTE AND FINALIZER OWNERSHIP.
+
+Do only this one-time schedule migration. Do not run, pause, delete, or create
+any schedule.
+
+The scheduler always executes a schedule's saved route selection before any
+retained schedule message. For a route-backed schedule, route_selections own
+what workflow work runs; messages are optional follow-ups only.
+
+The platform owns normal run finalization: backup, execution-report publish,
+run notification, and—when pulse.enabled is true—the post-run Pulse Gate,
+Review, and Fixer. Remove a normal schedule message when it merely tells the
+agent to do any of the following after selected work completes: routine
+evaluation, generic completion reporting, backup/status.json updates, Git
+commit/push, report publishing, notification, or Pulse review/fixing. These
+are platform lifecycle duties and must not be copied into schedule prose.
+
+Preserve genuine schedule-specific work and its safety boundary. In particular,
+do not delete a direct schedule message just because it mentions evaluation or
+backup if its primary purpose is a distinct time-bound procedure that cannot be
+expressed by the selected route (for example a market-close-only operation).
+Remove only the copied generic lifecycle tail, leaving the special procedure
+concise and truthful. A route-backed schedule whose only message is that copied
+lifecycle tail must end with messages empty and no direct_messages_reason.
+
+Read every schedule, update only what this ownership rule requires, re-read
+workflow.json, and confirm all saved route selections, groups, timing, enabled
+states, public-action boundaries, and backup configuration are unchanged. Then
+call set_workflow_contract_version(version="1.0.29") and stop.`
 
 const upgradeScheduledRoutes = `WORKFLOW CONTRACT UPGRADE: SCHEDULE EXECUTION MODEL (PLAT-086).
 
@@ -192,6 +279,56 @@ message rationale. Do not run the workflow. If route equivalence is ambiguous,
 keep the direct sequence with an honest rationale rather than guessing. Then call
 set_workflow_contract_version(version="1.0.25") and stop.`
 
+const upgradeReportActivitySection = `WORKFLOW CONTRACT UPGRADE: REPORT ACTIVITY SECTION.
+
+This workflow predates the reporting contract's required activity section. Do only this one-time report migration.
+
+If db/reports/index.html does not exist, this is a no-op — do not create a report from scratch in this migration. Otherwise read it in full.
+
+Every report must include one section — its own tab, panel, or anchored region; the overall layout stays the report's own choice — that answers "what did this workflow actually do," in plain, non-technical language: recent runs and the actions taken in each, in the order a non-technical reader would want them, with no raw JSON, internal IDs, or state codes. Name it for the workflow's real run cadence: Daily Action (or Today's Actions) for a workflow that genuinely runs daily, Recent Activity or Latest Run for one that runs hourly, weekly, or on demand.
+
+If the report already has an equivalent section under any name, do not duplicate it; at most rename or lightly adjust it to fit the cadence guidance above. If it is missing, add it as a new section reading live data from db/db.sqlite through window.report.query — do not fabricate content or invent values.
+
+Call validate_report_html after editing; repair every error. Do not run the workflow. If the required source data is ambiguous or does not exist yet, report the blocker and do not stamp. Otherwise call set_workflow_contract_version(version="1.0.30") and stop.`
+
+const upgradeReportActivityTab = `WORKFLOW CONTRACT UPGRADE: REPORT ACTIVITY SECTION MUST BE A TOP-LEVEL TAB.
+
+This workflow predates the requirement that its "what did this workflow actually do" activity section (added or confirmed by the 1.0.30 migration -- Daily Action, Today's Actions, Recent Activity, or Latest Run, named for the workflow's real run cadence) be a top-level tab specifically, not merely a section, panel, or anchored region within another tab or a single scrolling page.
+
+If db/reports/index.html does not exist, this is a no-op -- do not create a report from scratch in this migration. Otherwise read it in full.
+
+If the report already uses tab-based navigation and the activity section is already one of those top-level tabs, this is already satisfied -- do not restructure anything else. If the activity section exists but is not a top-level tab (e.g. a subsection scrolled past within another tab, as in a report with only "Dashboard" and one or more content tabs), promote it into its own top-level tab, moving its existing markup and live-data wiring (window.report.query calls, ids) intact -- do not rewrite its content or invent new data. If the report currently has no tab structure at all (a single scrolling page, a sidebar, or anchored sections only), add a minimal tab bar and make this the first tab, migrating the rest of the existing content into a second tab (or more, if the report already has other genuinely distinct views) without changing what that other content says.
+
+Call validate_report_html after editing; repair every error. Do not run the workflow. If the required source data is ambiguous or does not exist yet, report the blocker and do not stamp. Otherwise call set_workflow_contract_version(version="1.0.31") and stop.`
+
+const upgradePulseLifecycleReconciliation = `WORKFLOW CONTRACT UPGRADE: PULSE CLOSE-ON-APPLIED LIFECYCLE.
+
+Do only this platform data migration. Call record_pulse_migration_reconciliation(workspace_path={{WORKSPACE_PATH}}, scope="lifecycle") once. It closes every still-active issue where a Fixer recorded changed files, regardless of its former verification/wait state; it moves legacy waiting-without-a-fix rows back to the active issue register, retires merged aliases, and preserves every attempt and event. It does not change the plan, schedules, workflow instructions, or human/platform-owned issues.
+
+Read the returned counts. Then call get_pulse_state(workspace_path={{WORKSPACE_PATH}}, view="backlog", detail="compact") to confirm the resulting issue register is readable. Do not run a workflow or a Pulse review. If either tool fails, do not stamp. Otherwise call set_workflow_contract_version(version="1.0.32") and stop.`
+
+const upgradePulseBacklogTriage = `WORKFLOW CONTRACT UPGRADE: PULSE BACKLOG TRIAGE.
+
+Do only this platform data migration. Call record_pulse_migration_reconciliation(workspace_path={{WORKSPACE_PATH}}, scope="lifecycle") once. It applies the close-on-applied rule and returns legacy unfixed waits to the active register. Then call get_pulse_state(workspace_path={{WORKSPACE_PATH}}, view="backlog", detail="compact") and confirm it is readable. Do not infer that free-text claims such as "passed" close an issue: only typed terminal lifecycle evidence may close automatically. The later bounded Technical Review triages the remaining ambiguous roots.
+
+Do not run a workflow or a Pulse review. If either tool fails, do not stamp. Otherwise call set_workflow_contract_version(version="1.0.33") and stop.`
+
+const upgradePulseActionableBacklog = `WORKFLOW CONTRACT UPGRADE: PULSE ACTIONABLE BACKLOG.
+
+Do only this platform data migration. Call record_pulse_migration_reconciliation(workspace_path={{WORKSPACE_PATH}}, scope="actionable_backlog") once. It applies the close-on-applied lifecycle rule, retires historical free-text observations that were never promoted into typed canonical Pulse issues, and moves typed platform/harness findings out of this workflow's repair queue. It preserves all records, decisions, evidence waits, and platform history.
+
+Read the returned counts. Then call get_pulse_state(workspace_path={{WORKSPACE_PATH}}, view="backlog", detail="compact") and confirm the canonical issue register is readable. Pulse's workflow-owned repair target is only the returned actionable_workflow_issues count: do not treat platform issues, human decisions, evidence waits, or retired observations as repair debt. Do not run a workflow or a Pulse review. If either tool fails, do not stamp. Otherwise call set_workflow_contract_version(version="1.0.34") and stop.`
+
+const workflowUpgradeWorkspacePathPlaceholder = "{{WORKSPACE_PATH}}"
+
+func bindWorkflowUpgradeWorkspacePath(query, workspacePath string) string {
+	workspacePath = strings.TrimSpace(workspacePath)
+	if workspacePath == "" {
+		return query
+	}
+	return strings.ReplaceAll(query, workflowUpgradeWorkspacePathPlaceholder, strconv.Quote(workspacePath))
+}
+
 // workflowVersionUpgradePlan keeps the retired HTML presentation migrations
 // retired, but preserves the independent behavioral/data migrations older
 // workflows still need. They are deliberately grouped into bounded,
@@ -203,7 +340,7 @@ func workflowVersionUpgradePlan(manifest *WorkflowManifest) []workflowVersionUpg
 		return nil
 	}
 
-	steps := make([]workflowVersionUpgrade, 0, 7)
+	steps := make([]workflowVersionUpgrade, 0, 8)
 	if rank < 10 {
 		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractMessageSequenceCodeVersion, label: "upgrade-message-sequence-code", query: upgradeMessageSequenceCode})
 	}
@@ -233,14 +370,30 @@ func workflowVersionUpgradePlan(manifest *WorkflowManifest) []workflowVersionUpg
 	if rank < 24 {
 		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractScheduleExecutionModelVersion, label: "upgrade-schedule-execution-model", query: upgradeScheduledRoutes})
 	}
-	// This used to be a frequency-based judgment turn deciding whether to
-	// adopt periodic mode. That policy is retired: periodic mode is
-	// mandatory for every workflow, and Gate bootstraps it itself during a
-	// normal pass (pulse-gate.md) rather than through a dedicated migration
-	// turn. What remains here is a trivial version stamp so any workflow
-	// still below current always has a complete upgrade path, per
-	// scheduledWorkshopTurns' requirement.
-	steps = append(steps, workflowVersionUpgrade{from: version, to: WorkflowContractCurrentVersion, label: "upgrade-periodic-pulse-review-handoff", query: upgradePeriodicPulseReviewHandoff})
+	if rank < 26 {
+		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractDedicatedPulseScheduleVersion, label: "upgrade-dedicated-pulse-schedule", query: upgradeDedicatedPulseSchedule})
+	}
+	if rank < 27 {
+		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractSchedulePromptContractVersion, label: "upgrade-schedule-prompt-contract", query: upgradeSchedulePromptContract})
+	}
+	if rank < 28 {
+		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractFinalizerOwnedScheduleVersion, label: "upgrade-schedule-finalizer-ownership", query: upgradeScheduleFinalizerOwnership})
+	}
+	if rank < 29 {
+		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractReportActivitySectionVersion, label: "upgrade-report-activity-section", query: upgradeReportActivitySection})
+	}
+	if rank < 30 {
+		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractReportActivityTabVersion, label: "upgrade-report-activity-tab", query: upgradeReportActivityTab})
+	}
+	if rank < 31 {
+		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractPulseLifecycleReconciliationVersion, label: "upgrade-pulse-lifecycle-reconciliation", query: upgradePulseLifecycleReconciliation})
+	}
+	if rank < 32 {
+		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractPulseBacklogTriageVersion, label: "upgrade-pulse-backlog-triage", query: upgradePulseBacklogTriage})
+	}
+	if rank < 33 {
+		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractPulseActionableBacklogVersion, label: "upgrade-pulse-actionable-backlog", query: upgradePulseActionableBacklog})
+	}
 	// Attached here rather than at the call site so the turn text is identical
 	// wherever it is built. The version pair used to be added only on the Pulse
 	// delivery path, which meant the blocking preflight — the one that actually

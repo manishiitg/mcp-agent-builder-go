@@ -58,16 +58,16 @@ func TestMultiAgentToolDescriptionKeepsAgentWorksLayoutWithoutProfile(t *testing
 	const folder = "_users/default/Chats"
 
 	shell := enhanceToolDescriptionForMultiAgentMode("execute_shell_command", "base.", folder, nil)
-	for _, want := range []string{"pulse/task.html", "{plan_id}"} {
+	for _, want := range []string{"{plan_id}"} {
 		if !strings.Contains(shell, want) {
 			t.Fatalf("AgentWorks description lost %q:\n%s", want, shell)
 		}
 	}
 
-	// Read-only tools advertise the writable scopes; only AgentWorks includes pulse/.
+	// Read-only tools advertise only the generic writable chat scope.
 	readOnly := enhanceToolDescriptionForMultiAgentMode("read_workspace_file", "base.", folder, nil)
-	if !strings.Contains(readOnly, "pulse/") {
-		t.Fatalf("AgentWorks read-only description lost pulse/:\n%s", readOnly)
+	if !strings.Contains(readOnly, folder) {
+		t.Fatalf("AgentWorks read-only description lost its chat scope:\n%s", readOnly)
 	}
 	productReadOnly := enhanceToolDescriptionForMultiAgentMode("read_workspace_file", "base.", folder, profileWithPlacement(nil))
 	if strings.Contains(productReadOnly, "pulse/") {

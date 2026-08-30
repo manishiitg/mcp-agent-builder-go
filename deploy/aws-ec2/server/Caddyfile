@@ -1,0 +1,9 @@
+{
+    http_port 8080
+    https_port 8443
+}
+
+__DOMAIN__ {
+    encode gzip
+    reverse_proxy host.docker.internal:8090
+}

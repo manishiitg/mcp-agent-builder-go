@@ -1,0 +1,344 @@
+package server
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+func TestClaudeNativeTranscriptProjectSlugMatchesEscapingScheme(t *testing.T) {
+	got := claudeNativeTranscriptProjectSlug("/Users/mipl/ai-work/mcp-agent-builder-go/workspace-docs/Workflow/substack")
+	want := "-Users-mipl-ai-work-mcp-agent-builder-go-workspace-docs-Workflow-substack"
+	if got != want {
+		t.Fatalf("unexpected slug:\n got: %s\nwant: %s", got, want)
+	}
+}
+
+func TestExtractClaudeTranscriptText(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name:    "plain string content",
+			content: `"can you check the workflow upgrades and do them"`,
+			want:    "can you check the workflow upgrades and do them",
+		},
+		{
+			name:    "assistant text block",
+			content: `[{"type":"text","text":"Done - fixed both bugs."}]`,
+			want:    "Done - fixed both bugs.",
+		},
+		{
+			name:    "assistant text block mixed with thinking and tool_use is filtered to text only",
+			content: `[{"type":"thinking","thinking":"internal reasoning"},{"type":"text","text":"Here is the answer."},{"type":"tool_use","id":"t1","name":"get_api_spec","input":{}}]`,
+			want:    "Here is the answer.",
+		},
+		{
+			name:    "tool_result-only content yields no visible text",
+			content: `[{"tool_use_id":"toolu_1","type":"tool_result","content":[{"type":"text","text":"raw tool output"}]}]`,
+			want:    "",
+		},
+		{
+			name:    "empty content",
+			content: ``,
+			want:    "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := extractClaudeTranscriptText(json.RawMessage(tc.content))
+			if got != tc.want {
+				t.Fatalf("unexpected text:\n got: %q\nwant: %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func writeTranscriptFixture(t *testing.T, path string, lines []string) {
+	t.Helper()
+	content := ""
+	for _, line := range lines {
+		content += line + "\n"
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("failed to write transcript fixture: %v", err)
+	}
+}
+
+func TestReadNewClaudeTranscriptMessagesFiltersBySinceAndKeepsOnlyRealChatText(t *testing.T) {
+	dir := t.TempDir()
+	transcriptPath := filepath.Join(dir, "session.jsonl")
+
+	writeTranscriptFixture(t, transcriptPath, []string{
+		`{"type":"user","timestamp":"2026-08-22T08:00:00.000Z","message":{"role":"user","content":"before cutoff, should be excluded"}}`,
+		`{"type":"user","timestamp":"2026-08-22T08:21:26.000Z","message":{"role":"user","content":"new question after resume"}}`,
+		`{"type":"assistant","timestamp":"2026-08-22T08:22:00.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"..."},{"type":"text","text":"Here is the fix."}]}}`,
+		`{"type":"user","timestamp":"2026-08-22T08:22:05.000Z","message":{"role":"user","content":[{"tool_use_id":"toolu_1","type":"tool_result","content":[{"type":"text","text":"tool output, not a chat message"}]}]}}`,
+		`{"type":"queue-operation","timestamp":"2026-08-22T08:22:10.000Z","operation":"enqueue","content":"pasted text while busy"}`,
+		`{"type":"system","timestamp":"2026-08-22T08:22:15.000Z","subtype":"turn_duration"}`,
+	})
+
+	// since = 2026-08-22T13:51:26+05:30 == 2026-08-22T08:21:26Z
+	since, err := time.Parse(time.RFC3339, "2026-08-22T13:51:26+05:30")
+	if err != nil {
+		t.Fatalf("failed to parse since: %v", err)
+	}
+
+	messages, maxTimestamp, err := readNewClaudeTranscriptMessages(transcriptPath, since)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(messages) != 1 {
+		t.Fatalf("expected exactly 1 real chat message after cutoff (tool_result/queue-operation/system must be excluded), got %d: %+v", len(messages), messages)
+	}
+	if messages[0].Role != "ai" {
+		t.Fatalf("unexpected role: %q", messages[0].Role)
+	}
+	if messages[0].Parts[0].Text != "Here is the fix." {
+		t.Fatalf("unexpected text: %q", messages[0].Parts[0].Text)
+	}
+
+	wantMax, _ := time.Parse(time.RFC3339Nano, "2026-08-22T08:22:00.000Z")
+	if !maxTimestamp.Equal(wantMax) {
+		t.Fatalf("unexpected max timestamp: got %v want %v", maxTimestamp, wantMax)
+	}
+}
+
+func TestReadNewClaudeTranscriptMessagesReturnsNothingWhenNoEntriesAreNewer(t *testing.T) {
+	dir := t.TempDir()
+	transcriptPath := filepath.Join(dir, "session.jsonl")
+	writeTranscriptFixture(t, transcriptPath, []string{
+		`{"type":"user","timestamp":"2026-08-22T08:00:00.000Z","message":{"role":"user","content":"old message"}}`,
+	})
+
+	since, _ := time.Parse(time.RFC3339, "2026-08-22T13:51:26+05:30")
+	messages, _, err := readNewClaudeTranscriptMessages(transcriptPath, since)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(messages) != 0 {
+		t.Fatalf("expected no new messages, got %d", len(messages))
+	}
+}
+
+// TestRefreshLatestBuilderConversationFromNativeTranscript is the
+// fail-before/pass-after regression test for PLAT-178: before this fix,
+// nothing in the restore path ever looked at Claude Code's own transcript,
+// so a stale conversation_history snapshot (frozen at whatever the last
+// full turn saved) was returned as-is forever, even when the CLI's own
+// transcript already had more recent messages on disk. This proves the
+// missing messages are recovered.
+func TestRefreshLatestBuilderConversationFromNativeTranscript(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	workingDir := filepath.Join(home, "ai-work", "mcp-agent-builder-go", "workspace-docs", "Workflow", "substack")
+	if err := os.MkdirAll(workingDir, 0o755); err != nil {
+		t.Fatalf("failed to create working dir: %v", err)
+	}
+
+	slug := claudeNativeTranscriptProjectSlug(workingDir)
+	transcriptDir := filepath.Join(home, ".claude", "projects", slug)
+	if err := os.MkdirAll(transcriptDir, 0o755); err != nil {
+		t.Fatalf("failed to create transcript dir: %v", err)
+	}
+	nativeSessionID := "71ed3dcb-fe3c-412d-94cb-e62226fc4648"
+	transcriptPath := filepath.Join(transcriptDir, nativeSessionID+".jsonl")
+	writeTranscriptFixture(t, transcriptPath, []string{
+		`{"type":"user","timestamp":"2026-08-22T08:25:00.000Z","message":{"role":"user","content":"can you also check follow health"}}`,
+		`{"type":"assistant","timestamp":"2026-08-22T08:26:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Added the Follow Health panel and confirmed it validates."}]}}`,
+	})
+
+	conv := builderConversationLog{
+		SessionID: "b5e39872-4e4e-4645-8059-6d6e7a1231db",
+		PhaseID:   "workflow-builder",
+		UpdatedAt: "2026-08-22T13:51:26+05:30",
+		ConversationHistory: []builderConversationMessage{
+			{Role: "human", Parts: []builderConversationPart{{Text: "can you check the workflow upgrades and do them"}}},
+			{Role: "ai", Parts: []builderConversationPart{{Text: "Yes - both bugs you reported are fixed."}}},
+		},
+	}
+
+	record := map[string]interface{}{
+		"session_id": conv.SessionID,
+		"phase_id":   conv.PhaseID,
+		"updated_at": conv.UpdatedAt,
+		"conversation_history": []map[string]interface{}{
+			{"Role": "human", "Parts": []map[string]interface{}{{"Text": "can you check the workflow upgrades and do them"}}},
+			{"Role": "ai", "Parts": []map[string]interface{}{{"Text": "Yes - both bugs you reported are fixed."}}},
+		},
+		"runtime": map[string]interface{}{
+			"provider":            "claude-code",
+			"external_session_id": nativeSessionID,
+			"agent_session_handle": map[string]interface{}{
+				"provider": map[string]interface{}{
+					"provider":          "claude-code",
+					"native_session_id": nativeSessionID,
+					"working_dir":       workingDir,
+				},
+			},
+		},
+	}
+	rawContent, err := json.Marshal(record)
+	if err != nil {
+		t.Fatalf("failed to marshal fixture record: %v", err)
+	}
+
+	api := &StreamingAPI{}
+	refreshed := api.refreshLatestBuilderConversationFromNativeTranscript(context.Background(), "Workflow/substack/builder/conversation/2026-08-22/session-b5e39872-conversation.json", string(rawContent), conv)
+
+	if len(refreshed.ConversationHistory) != 4 {
+		t.Fatalf("expected 4 messages after catch-up (2 original + 2 from native transcript), got %d: %+v", len(refreshed.ConversationHistory), refreshed.ConversationHistory)
+	}
+	last := refreshed.ConversationHistory[len(refreshed.ConversationHistory)-1]
+	if last.Role != "ai" || last.Parts[0].Text != "Added the Follow Health panel and confirmed it validates." {
+		t.Fatalf("expected the merge to append the native transcript's newest assistant message last, got %+v", last)
+	}
+	secondToLast := refreshed.ConversationHistory[len(refreshed.ConversationHistory)-2]
+	if secondToLast.Role != "human" || secondToLast.Parts[0].Text != "can you also check follow health" {
+		t.Fatalf("expected the merge to append the native transcript's user message before the assistant reply, got %+v", secondToLast)
+	}
+
+	wantUpdatedAt, _ := time.Parse(time.RFC3339Nano, "2026-08-22T08:26:00.000Z")
+	gotUpdatedAt := parseBuilderConversationUpdatedAt(refreshed.UpdatedAt)
+	if !gotUpdatedAt.Equal(wantUpdatedAt) {
+		t.Fatalf("expected updated_at to advance to the native transcript's newest timestamp, got %v want %v", gotUpdatedAt, wantUpdatedAt)
+	}
+}
+
+func TestRefreshLatestBuilderConversationFromNativeTranscriptNoOpsWithoutClaudeCodeRuntime(t *testing.T) {
+	conv := builderConversationLog{
+		SessionID: "some-session",
+		UpdatedAt: "2026-08-22T13:51:26+05:30",
+		ConversationHistory: []builderConversationMessage{
+			{Role: "human", Parts: []builderConversationPart{{Text: "hi"}}},
+		},
+	}
+	record := map[string]interface{}{
+		"session_id": conv.SessionID,
+		"updated_at": conv.UpdatedAt,
+	}
+	rawContent, _ := json.Marshal(record)
+
+	api := &StreamingAPI{}
+	refreshed := api.refreshLatestBuilderConversationFromNativeTranscript(context.Background(), "Workflow/some/path.json", string(rawContent), conv)
+
+	if len(refreshed.ConversationHistory) != 1 {
+		t.Fatalf("expected no-op when runtime info is absent, got %d messages", len(refreshed.ConversationHistory))
+	}
+}
+
+func TestMergeBuilderConversationHistoryRecoversRepliesBetweenPersistedLiveInputs(t *testing.T) {
+	persisted := []builderConversationMessage{
+		{Role: "human", Parts: []builderConversationPart{{Text: "first live input"}}},
+		{Role: "human", Parts: []builderConversationPart{{Text: "second live input"}}},
+	}
+	native := []builderConversationMessage{
+		{Role: "human", Parts: []builderConversationPart{{Text: "first live input"}}},
+		{Role: "ai", Parts: []builderConversationPart{{Text: "first reply"}}},
+		{Role: "human", Parts: []builderConversationPart{{Text: "second live input"}}},
+		{Role: "ai", Parts: []builderConversationPart{{Text: "second reply"}}},
+	}
+
+	merged := mergeBuilderConversationHistory(persisted, native)
+	if len(merged) != 4 {
+		t.Fatalf("merged history has %d messages, want 4: %+v", len(merged), merged)
+	}
+	want := []string{"first live input", "first reply", "second live input", "second reply"}
+	for index, text := range want {
+		if got := merged[index].Parts[0].Text; got != text {
+			t.Fatalf("merged[%d] = %q, want %q; full history: %+v", index, got, text, merged)
+		}
+	}
+}
+
+func TestRefreshLatestBuilderConversationIgnoresLiveInputUpdatedAtAsTranscriptCursor(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	workingDir := filepath.Join(home, "workspace-docs", "Workflow", "test")
+	if err := os.MkdirAll(workingDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	nativeSessionID := "native-live-input-session"
+	transcriptDir := filepath.Join(home, ".claude", "projects", claudeNativeTranscriptProjectSlug(workingDir))
+	if err := os.MkdirAll(transcriptDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTranscriptFixture(t, filepath.Join(transcriptDir, nativeSessionID+".jsonl"), []string{
+		`{"type":"user","timestamp":"2026-08-22T08:01:00Z","message":{"role":"user","content":"first live input"}}`,
+		`{"type":"assistant","timestamp":"2026-08-22T08:02:00Z","message":{"role":"assistant","content":[{"type":"text","text":"first reply"}]}}`,
+		`{"type":"user","timestamp":"2026-08-22T08:03:00.500Z","message":{"role":"user","content":"second live input"}}`,
+		`{"type":"assistant","timestamp":"2026-08-22T08:04:00Z","message":{"role":"assistant","content":[{"type":"text","text":"second reply"}]}}`,
+	})
+
+	conv := builderConversationLog{
+		UpdatedAt: "2026-08-22T08:03:00Z", // advanced by persisting the second human message
+		ConversationHistory: []builderConversationMessage{
+			{Role: "human", Parts: []builderConversationPart{{Text: "first live input"}}},
+			{Role: "human", Parts: []builderConversationPart{{Text: "second live input"}}},
+		},
+	}
+	record := map[string]interface{}{
+		"updated_at":           conv.UpdatedAt,
+		"conversation_history": conv.ConversationHistory,
+		"runtime": map[string]interface{}{
+			"provider":            "claude-code",
+			"external_session_id": nativeSessionID,
+			"agent_session_handle": map[string]interface{}{
+				"provider": map[string]interface{}{
+					"provider":          "claude-code",
+					"native_session_id": nativeSessionID,
+					"working_dir":       workingDir,
+				},
+			},
+		},
+	}
+	rawContent, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	refreshed := (&StreamingAPI{}).refreshLatestBuilderConversationFromNativeTranscript(
+		context.Background(), "Workflow/test/builder/conversation/session.json", string(rawContent), conv,
+	)
+	want := []string{"first live input", "first reply", "second live input", "second reply"}
+	if len(refreshed.ConversationHistory) != len(want) {
+		t.Fatalf("refreshed history has %d messages, want %d: %+v", len(refreshed.ConversationHistory), len(want), refreshed.ConversationHistory)
+	}
+	for index, text := range want {
+		if got := refreshed.ConversationHistory[index].Parts[0].Text; got != text {
+			t.Fatalf("refreshed[%d] = %q, want %q; full history: %+v", index, got, text, refreshed.ConversationHistory)
+		}
+	}
+}
+
+func TestMergeBuilderConversationHistoryKeepsPreNativePrefixAndRepeatedMessages(t *testing.T) {
+	persisted := []builderConversationMessage{
+		{Role: "human", Parts: []builderConversationPart{{Text: "older persisted context"}}},
+		{Role: "human", Parts: []builderConversationPart{{Text: "hi"}}},
+		{Role: "human", Parts: []builderConversationPart{{Text: "hi"}}},
+	}
+	native := []builderConversationMessage{
+		{Role: "human", Parts: []builderConversationPart{{Text: "hi"}}},
+		{Role: "ai", Parts: []builderConversationPart{{Text: "hello"}}},
+		{Role: "human", Parts: []builderConversationPart{{Text: "hi"}}},
+		{Role: "ai", Parts: []builderConversationPart{{Text: "hello again"}}},
+	}
+
+	merged := mergeBuilderConversationHistory(persisted, native)
+	want := []string{"older persisted context", "hi", "hello", "hi", "hello again"}
+	if len(merged) != len(want) {
+		t.Fatalf("merged history has %d messages, want %d: %+v", len(merged), len(want), merged)
+	}
+	for index, text := range want {
+		if got := merged[index].Parts[0].Text; got != text {
+			t.Fatalf("merged[%d] = %q, want %q; full history: %+v", index, got, text, merged)
+		}
+	}
+}

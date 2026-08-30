@@ -17,6 +17,7 @@ import { useMCPStore } from '../stores/useMCPStore'
 import { useAppStore } from '../stores/useAppStore'
 import { useCommandDialogStore } from '../stores/useCommandDialogStore'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
+import { dedupeServerNames } from '../utils/mcpServerAlias'
 import { GlobalActivityMonitor } from './GlobalActivityMonitor'
 import WorkflowWalkthrough from './workflow/WorkflowWalkthrough'
 import { ProductSurfaceSwitcher } from './ProductSurfaceSwitcher'
@@ -428,6 +429,13 @@ export const ModePresetBar: React.FC = () => {
       const globalSecretNamesForBackend = selectedGlobalSecretNames === undefined
         ? (editingPreset?.selectedGlobalSecretNames === undefined ? [] : editingPreset.selectedGlobalSecretNames)
         : selectedGlobalSecretNames
+      // PLAT-169: collapse any hyphen/underscore-alias duplicate before this
+      // ever reaches the backend. ToolSelectionSection.tsx no longer creates
+      // new ones, but a manifest saved before that fix (or edited outside
+      // the UI) can still carry both spellings — this self-heals it on the
+      // very next successful save instead of permanently failing the
+      // backend's duplicate validation until someone hand-edits the JSON.
+      const dedupedSelectedServers = selectedServers ? dedupeServerNames(selectedServers) : selectedServers
 
       // Workflow mode: save to file-backed manifest (not DB)
       if (effectiveMode === 'workflow' && editingPreset?.selectedFolder?.filepath) {
@@ -436,7 +444,7 @@ export const ModePresetBar: React.FC = () => {
           workspace_path: workspacePath,
           label,
           capabilities: {
-            selected_servers: selectedServers || [],
+            selected_servers: dedupedSelectedServers || [],
             selected_tools: selectedTools || [],
             selected_skills: selectedSkills || [],
             selected_secrets: selectedSecrets || [],
@@ -457,7 +465,7 @@ export const ModePresetBar: React.FC = () => {
       const savedPreset = await savePreset(
         label,
         query,
-        selectedServers,
+        dedupedSelectedServers,
         selectedTools,
         selectedSkills,
         effectiveMode,

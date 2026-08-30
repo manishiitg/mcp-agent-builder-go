@@ -208,8 +208,7 @@ func codingAgentTmuxSnapshotIdleFor(snapshot terminals.Snapshot, now time.Time, 
 
 func isCodingAgentTmuxSessionName(tmuxSession string) bool {
 	name := strings.TrimSpace(tmuxSession)
-	return strings.HasPrefix(name, "mlp-agy-cli") ||
-		strings.HasPrefix(name, "mlp-claude-code") ||
+	return strings.HasPrefix(name, "mlp-claude-code") ||
 		strings.HasPrefix(name, "mlp-codex-cli") ||
 		strings.HasPrefix(name, "mlp-cursor-cli") ||
 		strings.HasPrefix(name, "mlp-pi-cli")
@@ -233,7 +232,7 @@ func closeCodingAgentTmuxSessionByName(tmuxSession, reason string) bool {
 // cleanupConflictingPiCLIInteractiveSessions closes older manual Pi CLI main
 // sessions in the same working directory before launching a new one. Pi CLI
 // rejects concurrent sessions in one directory when their MCP bridge configs
-// differ; Chief-of-Staff chats intentionally share _users/<user>/Chats, so a
+// differ; multi-agent chats intentionally share _users/<user>/Chats, so a
 // completed app session whose tmux process is still alive can block new chats.
 func (api *StreamingAPI) cleanupConflictingPiCLIInteractiveSessions(currentSessionID, workingDir, reason string) int {
 	if api == nil || api.terminalStore == nil {

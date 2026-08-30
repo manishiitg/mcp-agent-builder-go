@@ -25,6 +25,7 @@ All paths below are relative to the workspace root (prepend the absolute root wh
 | costs/evaluation/{group}/{YYYY-MM-DD}.json | Evaluation cost ledger shard. Current records live under `evaluations[evaluation_id]`; do not use a reusable run-folder path as identity. |
 | costs/phase/token_usage.json | Token usage for the `planning` phase plus workflow-builder chat interactions ONLY — not a workflow-wide total. Step-execution cost (the bulk of a real run) lives in `costs/execution/`, not here. `input_cost_usd` excludes cache-served tokens by design (`cache_cost_usd` carries their real charge) — a near-zero `input_cost_usd` next to a large `input_tokens` count is expected for a cache-heavy workload, not a pricing defect. |
 | costs/phase/daily/{YYYY-MM-DD}.json | Same narrow phase/model-key scope as `costs/phase/token_usage.json`, rolled up by date. Do not compare its total against `costs/execution/` and infer under/over-counting — the two ledgers cover different, non-overlapping call sets by design. |
+| costs/costs.sqlite | This workflow's own cost ledger (PLAT-184) — per-run, per-step `phase`, and per-message-sequence-item (`phase="item:<id>"`) cost/token breakdown for every LLM and paid-tool call attributed to this workflow. Query it with `query_workflow_costs`, never by reading the file directly. It only holds events recorded since PLAT-184 shipped — it is not a backfilled history and not the same store as the global human-facing Cost Analysis dashboard, which is a separate, workflow-agent-unreachable ledger. |
 
 ### Execution Logs (per run, per group, per step)
 | Path | Contents |
@@ -74,7 +75,7 @@ Use this order when debugging latency:
 | builder/conversation/YYYY-MM-DD/session-{id}-conversation.json | Previous builder chat sessions |
 | db/db.sqlite | Workflow state and results — one SQLite database, one table per entity (agentic steps use managed DB tools; saved scripts retain direct compatibility; upsert on the primary key) |
 | db/README.md | Per-table schema contract (DDL, primary key, upsert rule, indexes, writers, consumers) |
-| db/assets/* | Durable media/file assets referenced by db.sqlite rows, reports, or later steps |
+| db/assets/* | Durable media/file assets referenced by db.sqlite rows, reports, or later steps. **The only folder a step can write an arbitrary file to** — the folder guard opens `db/`, `knowledgebase/notes/`, and `learnings/_global/` for step writes and nothing else; a custom folder (e.g. `downloads/`, `business-context/`) is denied. |
 | db/reports/index.html | Complete workflow-owned live report UI; it owns internal navigation and reads db/db.sqlite through window.report |
 | knowledgebase/context/context.md | User-supplied runtime business context that steps with KB read access must respect |
 | knowledgebase/notes/*.md | Per-topic narrative markdown — durable observations discovered by the workflow. Normally written by step agents in direct-write mode; post-step KB agent only when explicitly requested. |

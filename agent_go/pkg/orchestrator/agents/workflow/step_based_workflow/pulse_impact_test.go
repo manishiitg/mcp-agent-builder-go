@@ -2,6 +2,7 @@ package step_based_workflow
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -98,5 +99,36 @@ func TestRecordPulseImpactUpdateRejectsUnsupportedClaimsAtomically(t *testing.T)
 	}
 	if len(ledger.Interventions) != 0 {
 		t.Fatalf("rejected transaction persisted data: %#v", ledger.Interventions)
+	}
+}
+
+func TestStrategyExperimentsUseInterferenceDomainsInsteadOfGlobalLimit(t *testing.T) {
+	ctx := context.Background()
+	workspace := concernsWorkspace(t)
+	experiment := func(id, status string, domains ...string) PulseIntervention {
+		return PulseIntervention{
+			InterventionID: id, Title: id, CriterionID: "growth", ImpactType: "direct_goal",
+			Metric: "qualified_replies", ExpectedDirection: "increase", Kind: "strategy_experiment",
+			Status: status, BaselineWindow: "prior 3 runs", Checkpoint: "after 2 producing runs",
+			Guardrails: []string{"no unsolicited messages"}, RollbackCondition: "reply quality regresses",
+			InterferenceDomains: domains,
+		}
+	}
+	ledger, err := RecordPulseImpactUpdate(ctx, workspace, PulseImpactUpdate{Interventions: []PulseIntervention{
+		experiment("video-format", "running", "control:post-format", "metric:video-replies"),
+		experiment("reply-copy", "running", "control:reply-copy", "metric:qualified-replies"),
+		experiment("future-channel", "approved"), // not started; no active slot or domain required
+	}})
+	if err != nil {
+		t.Fatalf("non-conflicting experiments rejected: %v", err)
+	}
+	if len(ledger.Interventions) != 3 {
+		t.Fatalf("interventions = %d, want 3", len(ledger.Interventions))
+	}
+	_, err = RecordPulseImpactUpdate(ctx, workspace, PulseImpactUpdate{Interventions: []PulseIntervention{
+		experiment("competing-copy", "measuring", "control:reply-copy", "metric:conversion"),
+	}})
+	if err == nil || !strings.Contains(err.Error(), "control:reply-copy") {
+		t.Fatalf("overlapping experiment error = %v, want named interference domain", err)
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -53,6 +54,17 @@ type newCDPTabRequest struct {
 
 func sharedCDPSessionName(port int) string {
 	return common.PrefixBrowserSessionID(fmt.Sprintf("shared-cdp-%d", port))
+}
+
+// cdpSharedConnectionIdentityFor returns the value cdpOwnerID must never
+// resolve an owner to, for the given call's mode/port -- see cdpOwnerID's
+// own doc comment. Non-CDP callers get "", since `session` is a genuine
+// identity for them, not a shared connection name.
+func cdpSharedConnectionIdentityFor(isCdpMode bool, port int) string {
+	if !isCdpMode {
+		return ""
+	}
+	return sharedCDPSessionName(port)
 }
 
 func sharedCDPLock(port int) *sync.Mutex {
@@ -449,7 +461,19 @@ func clearCDPActiveTab(port int, tab string) {
 	}
 }
 
-func cdpOwnerID(workflowSessionID, agentSessionID, session string) string {
+// cdpOwnerID resolves the identity that a workflow/agent's CDP tabs and
+// artifacts are tracked under. sharedConnectionIdentity is the value
+// (typically sharedCDPSessionName(port)) that `session` gets deliberately
+// overwritten to for the purpose of choosing which real Chrome to talk to,
+// when the caller is in CDP mode -- pass "" for a non-CDP caller, where
+// `session` is a genuine identity and safe to use as a fallback.
+//
+// session must never be returned as the resolved owner when it equals
+// sharedConnectionIdentity: that string is shared by construction across
+// every workflow using the same CDP port (see sharedCDPSessionName), so
+// treating it as one workflow's owner identity silently pools every such
+// workflow's tabs and cleanup leases under one key (PLAT-181).
+func cdpOwnerID(workflowSessionID, agentSessionID, session, sharedConnectionIdentity string) string {
 	for _, candidate := range []string{agentSessionID, workflowSessionID} {
 		candidate = strings.TrimSpace(candidate)
 		if candidate == "" {
@@ -459,12 +483,51 @@ func cdpOwnerID(workflowSessionID, agentSessionID, session string) string {
 			return resolved
 		}
 	}
+	sharedConnectionIdentity = strings.TrimSpace(sharedConnectionIdentity)
 	for _, candidate := range []string{workflowSessionID, agentSessionID, session} {
-		if trimmed := strings.TrimSpace(candidate); trimmed != "" {
-			return trimmed
+		trimmed := strings.TrimSpace(candidate)
+		if trimmed == "" {
+			continue
 		}
+		if sharedConnectionIdentity != "" && trimmed == sharedConnectionIdentity {
+			continue
+		}
+		return trimmed
 	}
-	return "default"
+	return cdpUnidentifiedOwnerID()
+}
+
+// cdpUnidentifiedOwnerPrefix marks an owner value returned when no
+// per-workflow identity could be resolved at all. Callers that enforce a
+// per-owner quota (guardCDPTabCreation) must check isCDPUnidentifiedOwner
+// and refuse the operation outright rather than trust this value as a real
+// owner -- a fresh, never-before-seen key always reads as "zero tabs used,"
+// so treating it as a normal owner silently bypasses the quota it exists to
+// enforce (PLAT-181 review). Fixed diagnostics/cleanup paths that only
+// observe usage (not gate it) may still record against this value; it is
+// still unique per call, so it will not pool with a genuine workflow's
+// count or with another unidentified call's count.
+const cdpUnidentifiedOwnerPrefix = "unidentified-"
+
+var cdpUnidentifiedOwnerCounter atomic.Int64
+
+// cdpUnidentifiedOwnerID returns a fresh identity for a caller with no
+// resolvable per-workflow session at all -- the old behavior returned the
+// fixed literal "default" here, which collided across every such caller the
+// same way the shared connection identity did (PLAT-181): two genuinely
+// unidentified workflows would still pool their tabs under one key. A
+// unique value per call means it never collides with anyone else's real
+// count. It must not be treated as a normal, quota-eligible owner by any
+// caller that enforces a limit -- see isCDPUnidentifiedOwner.
+func cdpUnidentifiedOwnerID() string {
+	return fmt.Sprintf("%s%d-%d", cdpUnidentifiedOwnerPrefix, time.Now().UnixNano(), cdpUnidentifiedOwnerCounter.Add(1))
+}
+
+// isCDPUnidentifiedOwner reports whether ownerID came from
+// cdpUnidentifiedOwnerID rather than a real, resolved per-workflow
+// identity.
+func isCDPUnidentifiedOwner(ownerID string) bool {
+	return strings.HasPrefix(ownerID, cdpUnidentifiedOwnerPrefix)
 }
 
 func parseTabSelection(args []string) (tab string, clear bool, err error) {

@@ -187,12 +187,6 @@ func getStoredProviderAPIKey(keys *StoredProviderKeys, provider string) string {
 		return strings.TrimSpace(keys.CursorCLI)
 	case "pi-cli":
 		return strings.TrimSpace(keys.PiCLI)
-	case "minimax":
-		return strings.TrimSpace(keys.MiniMax)
-	case "elevenlabs":
-		return strings.TrimSpace(keys.ElevenLabs)
-	case "deepgram":
-		return strings.TrimSpace(keys.Deepgram)
 	default:
 		return ""
 	}
@@ -221,12 +215,6 @@ func setStoredProviderAPIKey(keys *StoredProviderKeys, provider, apiKey string) 
 		keys.CursorCLI = value
 	case "pi-cli":
 		keys.PiCLI = value
-	case "minimax":
-		keys.MiniMax = value
-	case "elevenlabs":
-		keys.ElevenLabs = value
-	case "deepgram":
-		keys.Deepgram = value
 	default:
 		return false
 	}
@@ -457,12 +445,6 @@ func providerAuthConfigured(provider string, keys *llm.ProviderAPIKeys) (bool, s
 		return configured, "Cursor CLI login or CURSOR_API_KEY/workspace provider auth"
 	case string(llm.ProviderPiCLI):
 		return piProviderAuthConfigured(keys), "Provider-specific Pi API key or workspace provider auth"
-	case string(llm.ProviderMiniMax):
-		return keys.MiniMax != nil && strings.TrimSpace(*keys.MiniMax) != "", "MINIMAX_API_KEY or workspace provider auth"
-	case string(llm.ProviderElevenLabs):
-		return keys.ElevenLabs != nil && strings.TrimSpace(*keys.ElevenLabs) != "", "ELEVENLABS_API_KEY or workspace provider auth"
-	case string(llm.ProviderDeepgram):
-		return keys.Deepgram != nil && strings.TrimSpace(*keys.Deepgram) != "", "DEEPGRAM_API_KEY or workspace provider auth"
 	case string(llm.ProviderBedrock):
 		return keys.Bedrock != nil && strings.TrimSpace(keys.Bedrock.Region) != "", "BEDROCK_REGION or workspace provider auth"
 	case string(llm.ProviderAzure):
@@ -625,13 +607,10 @@ func buildFixedCapabilityProviders(keys *llm.ProviderAPIKeys, providerModels map
 	result := make([]llmCapabilityProvider, 0, len(providerModels))
 	for _, provider := range []string{
 		string(llm.ProviderVertex),
-		string(llm.ProviderMiniMax),
 		string(llm.ProviderCodexCLI),
 		string(llm.ProviderCursorCLI),
 		string(llm.ProviderPiCLI),
 		string(llm.ProviderClaudeCode),
-		string(llm.ProviderElevenLabs),
-		string(llm.ProviderDeepgram),
 	} {
 		models, ok := providerModels[provider]
 		if !ok {
@@ -707,8 +686,12 @@ func buildLLMCapabilities(ctx context.Context, capability string, includeModels 
 		"notes": []string{
 			"usable means required workspace/env auth is configured and any required CLI runtime is installed.",
 			"Provider auth is managed by set_provider_auth and related provider-auth APIs; do not inspect or hand-edit config files.",
-			"Pricing is a static snapshot and should be treated as an estimate; verify provider pricing pages before high-volume runs.",
 		},
+	}
+	// Provider media tools are deliberately not part of the active tool surface.
+	// Do not advertise a provider route that an agent cannot invoke.
+	if isRetiredProviderMediaCapability(capability) {
+		return all
 	}
 
 	if capability == "all" || capability == "chat" || capability == "text" {
@@ -744,7 +727,7 @@ func buildLLMCapabilities(ctx context.Context, capability string, includeModels 
 		}
 	}
 
-	if capability == "all" || capability == "read_image" || capability == "image_analysis" {
+	if capability == "read_image" || capability == "image_analysis" {
 		all["read_image"] = map[string]interface{}{
 			"description": "Providers usable by read_image for image understanding.",
 			"providers": buildFixedCapabilityProviders(
@@ -770,7 +753,7 @@ func buildLLMCapabilities(ctx context.Context, capability string, includeModels 
 		}
 	}
 
-	if capability == "all" || capability == "generate_image" || capability == "image_generation" {
+	if capability == "generate_image" || capability == "image_generation" {
 		all["generate_image"] = map[string]interface{}{
 			"description": "Providers usable by image_gen/image_edit.",
 			"providers": buildFixedCapabilityProviders(
@@ -788,7 +771,7 @@ func buildLLMCapabilities(ctx context.Context, capability string, includeModels 
 		}
 	}
 
-	if capability == "all" || capability == "generate_video" || capability == "video_generation" {
+	if capability == "generate_video" || capability == "video_generation" {
 		all["generate_video"] = map[string]interface{}{
 			"description": "Providers usable by generate_video.",
 			"providers": attachPricing("generate_video", buildFixedCapabilityProviders(
@@ -806,7 +789,7 @@ func buildLLMCapabilities(ctx context.Context, capability string, includeModels 
 		}
 	}
 
-	if capability == "all" || capability == "text_to_speech" || capability == "audio_generation" {
+	if capability == "text_to_speech" || capability == "audio_generation" {
 		all["text_to_speech"] = map[string]interface{}{
 			"description": "Providers usable by text_to_speech.",
 			"providers": attachPricing("text_to_speech", buildFixedCapabilityProviders(
@@ -833,7 +816,7 @@ func buildLLMCapabilities(ctx context.Context, capability string, includeModels 
 		}
 	}
 
-	if capability == "all" || capability == "speech_to_text" || capability == "audio_transcription" {
+	if capability == "speech_to_text" || capability == "audio_transcription" {
 		all["speech_to_text"] = map[string]interface{}{
 			"description": "Providers usable by speech_to_text.",
 			"providers": attachPricing("speech_to_text", buildFixedCapabilityProviders(
@@ -851,7 +834,7 @@ func buildLLMCapabilities(ctx context.Context, capability string, includeModels 
 		}
 	}
 
-	if capability == "all" || capability == "generate_music" || capability == "music_generation" {
+	if capability == "generate_music" || capability == "music_generation" {
 		all["generate_music"] = map[string]interface{}{
 			"description": "Providers usable by generate_music.",
 			"providers": attachPricing("generate_music", buildFixedCapabilityProviders(
@@ -875,17 +858,22 @@ func buildLLMCapabilities(ctx context.Context, capability string, includeModels 
 	return all
 }
 
+func isRetiredProviderMediaCapability(capability string) bool {
+	switch capability {
+	case "read_image", "image_analysis", "generate_image", "image_generation",
+		"generate_video", "video_generation", "text_to_speech", "audio_generation",
+		"speech_to_text", "audio_transcription", "generate_music", "music_generation":
+		return true
+	default:
+		return false
+	}
+}
+
 func buildLLMCapabilityPromptSection(ctx context.Context) string {
 	capabilities := buildLLMCapabilities(ctx, "all", false)
 	orderedCapabilities := []string{
 		"chat",
 		"search_web",
-		"read_image",
-		"generate_image",
-		"generate_video",
-		"text_to_speech",
-		"speech_to_text",
-		"generate_music",
 	}
 
 	var lines []string
@@ -927,11 +915,9 @@ func buildLLMCapabilityPromptSection(ctx context.Context) string {
 		return ""
 	}
 
-	return `## Workspace LLM And Media Capability Snapshot
+	return `## Workspace LLM Capability Snapshot
 
-Published LLM entries are chat/text routing entries. Provider-backed media tools can be available even when they are not listed as published LLMs. Use ` + "`list_llm_capabilities`" + ` for authoritative provider, model, auth, runtime, and pricing status before answering availability questions or selecting a provider.
-
-For audio/music requests, call the dedicated ` + "`text_to_speech`" + ` or ` + "`generate_music`" + ` tool directly. If provider auth is missing and the user supplied a key, call ` + "`set_provider_auth`" + `; never paste provider keys into shell commands, scripts, curl calls, or logs.
+Published LLM entries are chat/text routing entries. Use ` + "`list_llm_capabilities`" + ` for authoritative chat and web-search provider, model, auth, and runtime status. The only active shared provider tools are ` + "`generate_text_llm`" + ` and ` + "`search_web_llm`" + `.
 
 ` + strings.Join(lines, "\n")
 }
@@ -1180,15 +1166,24 @@ func (api *StreamingAPI) registerMultiAgentLLMTools(underlyingAgent definitionTo
 }
 
 func registerLLMCapabilityDiscoveryTools(registerTool func(string, string, map[string]interface{}, func(context.Context, map[string]interface{}) (string, error)) error) error {
+	originalRegisterTool := registerTool
+	registerTool = func(name, description string, params map[string]interface{}, exec func(context.Context, map[string]interface{}) (string, error)) error {
+		// Cost estimation was solely for retired media generation/transcription.
+		if name == "estimate_llm_cost" {
+			return nil
+		}
+		return originalRegisterTool(name, description, params, exec)
+	}
+
 	if err := registerTool(
 		"list_llm_capabilities",
-		"List supported and currently usable LLM providers/models by capability: chat, search_web, read_image, generate_image, generate_video, text_to_speech, speech_to_text, and generate_music. Use include_models=true before choosing an explicit provider/model_id pair for provider-backed tools. Includes workspace defaults, auth requirements, CLI runtime availability, and static pricing metadata where available.",
+		"List supported and currently usable LLM providers/models by capability: chat and search_web. Use include_models=true before choosing an explicit provider/model_id pair. Includes workspace defaults, auth requirements, and CLI runtime availability.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"capability": map[string]interface{}{
 					"type":        "string",
-					"description": "Optional filter. Supported values: all, chat, search_web, read_image, generate_image, generate_video, text_to_speech, speech_to_text, generate_music.",
+					"description": "Optional filter. Supported values: all, chat, search_web.",
 				},
 				"include_models": map[string]interface{}{
 					"type":        "boolean",
@@ -1279,15 +1274,24 @@ func (api *StreamingAPI) registerWorkflowLLMDiscoveryTools(underlyingAgent defin
 }
 
 func registerLLMCapabilityTools(registerTool func(string, string, map[string]interface{}, func(context.Context, map[string]interface{}) (string, error)) error) error {
+	originalRegisterTool := registerTool
+	registerTool = func(name, description string, params map[string]interface{}, exec func(context.Context, map[string]interface{}) (string, error)) error {
+		// Cost estimation was solely for retired media generation/transcription.
+		if name == "estimate_llm_cost" {
+			return nil
+		}
+		return originalRegisterTool(name, description, params, exec)
+	}
+
 	if err := registerTool(
 		"list_llm_capabilities",
-		"List supported and currently usable LLM providers/models by capability: chat, search_web, read_image, generate_image, generate_video, text_to_speech, speech_to_text, and generate_music. Use include_models=true before choosing an explicit provider/model_id pair for provider-backed tools. Includes workspace defaults, auth requirements, CLI runtime availability, and static pricing metadata where available.",
+		"List supported and currently usable LLM providers/models by capability: chat and search_web. Use include_models=true before choosing an explicit provider/model_id pair. Includes workspace defaults, auth requirements, and CLI runtime availability.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"capability": map[string]interface{}{
 					"type":        "string",
-					"description": "Optional filter. Supported values: all, chat, search_web, read_image, generate_image, generate_video, text_to_speech, speech_to_text, generate_music.",
+					"description": "Optional filter. Supported values: all, chat, search_web.",
 				},
 				"include_models": map[string]interface{}{
 					"type":        "boolean",
@@ -1647,7 +1651,7 @@ func registerLLMCapabilityTools(registerTool func(string, string, map[string]int
 			"properties": map[string]interface{}{
 				"provider": map[string]interface{}{
 					"type":        "string",
-					"description": "Provider id: pi-cli, codex-cli, cursor-cli, openai, anthropic, vertex, minimax, elevenlabs, deepgram, bedrock, or azure.",
+					"description": "Provider id: pi-cli, codex-cli, cursor-cli, openai, anthropic, vertex, bedrock, or azure. Use pi_provider for a Pi sub-provider such as MiniMax.",
 				},
 				"api_key": map[string]interface{}{
 					"type":        "string",

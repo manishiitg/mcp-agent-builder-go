@@ -5,7 +5,7 @@ import "context"
 // SubAgentSpec is the typed contract for spawning a delegated sub-agent via
 // the delegate() tool. It replaces the previous set of individual context
 // keys (delegation_depth, reasoning_level, agent_template, delegation_servers,
-// delegation_skills, share_browser, background_agent_id) that together formed
+// delegation_skills, background_agent_id) that together formed
 // an implicit, untraceable spec. One struct under one key means the full
 // contract is visible at every set/read site and testable in isolation.
 //
@@ -28,15 +28,10 @@ type SubAgentSpec struct {
 	// inherit all of the parent's servers.
 	Servers []string
 
-	// Skills is an additive explicit skill list. Chief of Staff sub-agents
+	// Skills is an additive explicit skill list. AgentWorks sub-agents
 	// inherit the skills attached to the parent agent; names here attach extra
 	// skills that are not already present.
 	Skills []string
-
-	// ShareBrowser controls browser session isolation. true (the default)
-	// shares the parent's browser session; false gives the sub-agent an
-	// isolated session ID.
-	ShareBrowser bool
 
 	// BackgroundAgentID links a background delegation to its registry entry
 	// so delegation events and nested spawns can reference the parent agent.
@@ -48,9 +43,9 @@ type subAgentSpecKeyType struct{}
 var subAgentSpecKey subAgentSpecKeyType
 
 // DefaultSubAgentSpec returns the spec for a context with no delegation
-// configured: root depth, shared browser, no overrides.
+// configured: root depth and no overrides.
 func DefaultSubAgentSpec() SubAgentSpec {
-	return SubAgentSpec{ShareBrowser: true}
+	return SubAgentSpec{}
 }
 
 // WithSubAgentSpec returns a context carrying the spec.

@@ -17,7 +17,6 @@ import {
 import { agentApi } from '../../services/api'
 import type { ReportHumanInput } from '../../services/api-types'
 import ModalPortal from '../ui/ModalPortal'
-import { ReportHumanInputCollection } from '../workflow/ReportHumanInputPanel'
 
 type HealthStatus = 'healthy' | 'bug' | 'critical' | 'idle'
 type ProgressStatus = 'on-track' | 'at-risk' | 'off-goal' | 'idle'
@@ -424,7 +423,6 @@ export const OrgDashboard: React.FC<OrgDashboardProps> = ({ workflows, onOpenDec
     const priorityRank: Record<string, number> = { high: 0, medium: 1, low: 2 }
     return entries
       .flatMap(entry => (entry.pendingInputs ?? [])
-        .filter(input => input.source !== 'chief_of_staff')
         .map(input => ({
           input,
           workspacePath: entry.workspacePath,
@@ -462,17 +460,6 @@ export const OrgDashboard: React.FC<OrgDashboardProps> = ({ workflows, onOpenDec
     </div>
   )
 
-	const chiefDecisionPanels = (
-		<ReportHumanInputCollection
-			className="space-y-3"
-			source="chief_of_staff"
-			scopes={[
-				{ workspacePath: 'pulse', workspaceLabel: 'Organization' },
-				...workflows.map(workflow => ({ workspacePath: workflow.workspacePath, workspaceLabel: workflow.label })),
-			]}
-		/>
-	)
-
   // Loading
   if (loading && entries.length === 0) {
     return (
@@ -488,7 +475,6 @@ export const OrgDashboard: React.FC<OrgDashboardProps> = ({ workflows, onOpenDec
     return (
       <div className="flex h-full min-h-[320px] flex-col">
         {header}
-        <div className="mx-4 mt-3">{chiefDecisionPanels}</div>
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-muted-foreground">
           <LayoutDashboard className="h-10 w-10 text-muted-foreground/50" />
           <p className="text-sm font-medium text-foreground">No automations yet</p>
@@ -503,7 +489,6 @@ export const OrgDashboard: React.FC<OrgDashboardProps> = ({ workflows, onOpenDec
     return (
       <div className="flex h-full flex-col">
         {header}
-        <div className="mx-4 mt-3">{chiefDecisionPanels}</div>
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 py-12 text-center text-muted-foreground">
           <Activity className="h-10 w-10 text-muted-foreground/50" />
           <p className="text-sm font-medium text-foreground">Org dashboard is warming up</p>
@@ -552,7 +537,6 @@ export const OrgDashboard: React.FC<OrgDashboardProps> = ({ workflows, onOpenDec
 
       {/* Status groups */}
       <div className="flex-1 space-y-5 overflow-auto px-4 py-4">
-        {chiefDecisionPanels}
 
         {pendingDecisions.length > 0 && (
           <section className="space-y-2" aria-labelledby="org-decisions-heading">

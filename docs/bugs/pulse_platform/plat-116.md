@@ -5,17 +5,118 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `partially implemented` — the diagnostic + leak fix below shipped and is tested; the deeper root cause (why the bridge stalls in the first place) is still not pinned, deliberately deferred |
-| Last synchronized | `2026-08-16` |
+| Ticket state | `implemented_pending_restarted_ui_reverify` — the Codex cross-session lock inversion is fixed, and `mcpagent` now owns a provider-neutral stable turn ID plus exactly-once unified completion. IC-12 makes that lifecycle a mandatory deterministic CI and live per-provider release gate. The shared real retained-session contract passed for Codex, Claude Code, Cursor, and Pi; real concurrent Codex completion and race tests passed. A restarted AgentWorks Social Media run is the remaining production/UI reverify. |
+| Last synchronized | `2026-08-20` |
 
 - **Priority:** P1 — silently turns real successes into false `error` schedule
   runs, and permanently leaks the session/goroutine so the UI keeps showing it
   as stuck long after the platform has already given up on it.
-- **Owner:** coding-agent completion detection (`multi-llm-provider-go`
-  interactive adapters) + the bridge from a provider's own turn completion to
-  `textChan` closing (`agent_go/pkg/agentwrapper/llm_agent.go`,
+- **Owner:** provider-native completion translation (`multi-llm-provider-go`
+  interactive adapters) + canonical per-turn lifecycle ownership (`mcpagent`)
+  + the bridge from canonical completion to `textChan` closing
+  (`agent_go/pkg/agentwrapper/llm_agent.go`,
   `cmd/server/server.go`) + the scheduler's safety net
   (`waitForConversationTurnTree`, `cmd/server/conversation_turn_lifecycle.go`)
+
+## 2026-08-20 Social Media recurrence: root cause confirmed
+
+The pre-run decision drain for session
+`schedule-manual--5227790a_1787198314069858000` produced a stronger trace than
+the earlier incidents. Codex wrote `task_complete` at `09:37:00 IST`; the
+adapter logged both `codex_task_complete_observed` and
+`codex_wait_returned outcome=completed` by `09:37:02`. It then logged
+`codex interactive response captured` but never logged
+`codex_stream_closing`. AgentWorks consequently showed no formatted final
+answer and the scheduler waited until `09:47:01`, falsely timing out a turn
+whose final answer had already been visible in tmux for ten minutes.
+
+The blocking line is after provider completion, in final-answer rollout
+resolution. A live Codex turn holds its own `codexInteractiveSession.mu` for
+the complete GenerateContent call. `resolveCodexRolloutPathLocked` then called
+`boundCodexRolloutPaths`, which locked every other live session's same mutex.
+When two Codex sessions completed concurrently, session A held A's mutex and
+waited for B while B held B's mutex and waited for A. The earlier claim that
+skipping the caller made this safe was incorrect; it prevented self-deadlock
+but not cross-session lock inversion.
+
+The fix separates transcript identity (`rolloutPath` and `threadID`) behind a
+short-lived `rolloutMu`. Rollout exclusion scans no longer touch another
+turn's whole-lifetime mutex, and resolution never holds one rollout lock while
+reading another. A deterministic two-session regression test holds both turn
+mutexes and proves both final-resolution calls return. This is the shared
+completion closure that restores formatted final output and lets the scheduler
+advance without the ten-minute safety timeout.
+
+The prior P0 coverage missed this because it exercised one retained session at
+a time. Single-session completion cannot create the A-waits-for-B / B-waits-for-A
+cycle. The new regression deliberately holds two sessions' turn mutexes before
+resolving either rollout, so the exact concurrency boundary is now covered.
+
+## Required platform-level closure — provider adapters translate; mcpagent owns the turn
+
+The rollout-lock change is necessary because the reproduced deadlock lives in
+the Codex adapter, but it is not the architectural closure for PLAT-116. Every
+coding CLI must expose one canonical lifecycle to AgentWorks regardless of how
+its native transport signals completion. Provider adapters may translate
+Codex `task_complete`, Claude `stop_reason=end_turn`, Pi `agent_settled`, or a
+Cursor structured result; they must not define different outward completion
+semantics.
+
+The target contract is:
+
+1. `mcpagent` creates one stable `turn_id` for every submitted message. Session
+   lifetime and turn lifetime are separate: a retained tmux/API session may
+   remain alive after the current turn is complete.
+2. Every canonical event carries that `turn_id`: assistant deltas, tool
+   receipts, and the one `unified_completion` terminal event. That terminal
+   event carries the final answer as well as completed/error status; the
+   platform does not publish a second competing final/completion event.
+3. The provider adapter reports its native facts; `mcpagent` owns the
+   exactly-once terminal state transition and stream closure. AgentWorks, the
+   scheduler, and the UI do not independently infer completion from tmux
+   liveness, rollout mtimes, inactivity, or session status.
+4. Transcript identity is bound at turn/session start. Normal completion must
+   not scan or acquire a whole-turn lock from an unrelated session.
+5. Optional enrichment — transcript rereads, token/cost extraction, usage, and
+   diagnostics — runs after or independently of terminal delivery and cannot
+   delay `unified_completion`.
+6. AgentWorks derives formatted final visibility and busy=false from the same
+   canonical terminal event; the scheduler advances from that event; the
+   retained session remains reusable for the next turn.
+
+### Shared P0 conformance suite
+
+Run the same assertions through the real `mcpagent → AgentWorks` boundary for
+Codex, Claude Code, Pi, and Cursor rather than giving each adapter a different
+definition of success:
+
+- two same-provider sessions can complete concurrently;
+- a workflow schedule and an interactive chat can complete concurrently;
+- each turn exposes its final answer promptly and emits exactly one terminal
+  completion;
+- the formatted spinner stops and canonical busy becomes false while the
+  underlying retained session stays alive and accepts a follow-up message;
+- tool/final output never crosses turn or session IDs;
+- a stuck enrichment or transcript-diagnostic path cannot hold completion;
+- provider-native completion-to-canonical-completion latency is measured and
+  fails the P0 gate instead of falling through to the scheduler's ten-minute
+  timeout.
+
+This contract now passes live for all four coding CLIs. Product closure still
+requires a restarted AgentWorks run because the currently running server does
+not contain the new `mcpagent` and wrapper code.
+
+### Mandatory release enforcement
+
+The architectural contract above is now canonical IC-12 in
+`agent_go/docs/cross_repo_integration_contract.md`, not advisory prose in this
+ticket. Every PR runs mcpagent's credential-free P0 lifecycle test. The live
+coding-CLI P0 additionally rejects a retained turn unless its tool receipts and
+single `unified_completion` carry the same stable `turn_id`, the completion is
+explicitly marked canonical, the final answer is visible, and the underlying
+session remains reusable. New adapters and production product profiles inherit
+the same contract through mcpagent rather than defining provider-specific
+completion behavior.
 
 ## Why this ticket exists
 
@@ -128,6 +229,46 @@ the provider-specific tracker is entirely provider-agnostic:
   provider-agnostic by construction — it has no idea which provider is
   running underneath it, which is exactly why it can only ever produce a
   generic "made no progress" failure instead of a real diagnosis.
+
+## 2026-08-19 Build-in-Public recurrence: completion miss reproduced; next-turn failure is separate
+
+Build-in-Public Pulse-only session
+`schedule-cron--af5a941f_1787078711034693000` reproduced this ticket on the
+current binary. Gate durably wrote its worklist and the bound Codex rollout
+reached terminal completion, but AgentWorks did not observe it. At 00:25:14 IST
+the idle-timeout path marked the session `error` and ran `CloseHTTPSession`.
+
+That evidence keeps the deeper completion-bridge root open: diagnostic cleanup
+prevents one kind of leaked activity, but it does not make provider completion
+reach the canonical turn lifecycle.
+
+The scheduler then attempted Review+Fix in the same continuing Pulse
+conversation and hung because it reused the session that cleanup had just
+closed. That second boundary is tracked separately as
+[PLAT-148](plat-148.md). PLAT-116 owns why Gate required orphan cleanup;
+PLAT-148 owns why cleanup destroyed the conversation needed by the next
+sequence message. They require coordinated P0 coverage but must not be
+collapsed into one ambiguous fix.
+
+### Focused completion tracing added for the next reproduction
+
+The previous logs stopped at AgentWorks entering `for chunk := range textChan`,
+so they could prove the bridge was stuck but could not identify which boundary
+lost completion. Focused, content-free `[COMPLETION_TRACE]` checkpoints now
+record the correlation chain needed to pin the root cause on the next live run:
+
+- AgentWorks session/query begins waiting on the stream, and records when that
+  stream actually closes;
+- mcpagent records when its provider call starts and returns, including the
+  provider-native session ID;
+- the Codex adapter records the owner session, tmux session, bound Codex thread
+  and exact rollout path, then the native turn ID and offset where
+  `task_complete` was observed;
+- the adapter records its wait return and its stream-channel close.
+
+No prompt, response, tool arguments, or tool output is included. This is
+diagnostic instrumentation only: it deliberately does not change completion
+semantics or mark PLAT-116 resolved.
 
 Checked each interactive-capable adapter directly rather than assuming
 parity from the provider contract table. First pass wrongly claimed Claude
@@ -339,16 +480,35 @@ durable-log completion hook. A background agent settled this way stays
 anyone (or any future agent) auditing that table directly. Not fixed in this
 pass — flagged here since PLAT-114 owns that log's completeness.
 
-## Deliberately still deferred, not fixed here
+## Formerly deferred bridge root cause is now pinned; shared closure remains
 
-The deeper question — why the bridge (`textChan`/`Session.Run`) stalls in
-the first place, rather than just diagnosing and cleaning up after it does —
-is unchanged from the original investigation. Instrumenting
-`codexRolloutResolverForSession`'s closure and `waitForCodexInteractiveResponse`'s
-poll loop and reproducing live is still the next step if that's ever
-pursued; this pass deliberately did not chase it further.
+The earlier investigation left the bridge stall unexplained. The 2026-08-20
+trace and concurrent-session review supersede that deferral for the reproduced
+Codex path: final-answer rollout resolution blocked on another live session's
+whole-turn mutex after native completion. The dedicated rollout-identity lock
+fixes that mechanism. What remains deliberately open is not the Codex RCA, but
+the provider-neutral lifecycle ownership and conformance work specified above.
 
 ## Verification
+
+- `mcpagent` unit and race tests prove one stable `turn_id`, duplicate terminal
+  suppression, canonical error completion, concurrent turn isolation, and
+  retained direct-delivery completion.
+- The real retained-session P0 ran through `mcpagent.Session.Run` for **Codex,
+  Claude Code, Cursor, and Pi**. Each provider completed two sequential turns,
+  reused the same live coding-CLI session, returned the expected final answer,
+  and emitted exactly one matching canonical `unified_completion` per turn.
+- The real concurrent Codex P0 ran two live sessions together and passed with
+  isolated tool/final output and exactly one canonical completion per turn.
+- The deterministic Codex lock regression and its race run pass: both sessions
+  hold their full-turn mutexes while resolving their bound rollouts, and both
+  return without cross-session lock inversion.
+- `go build ./...` passes in `mcpagent` and AgentWorks. The AgentWorks wrapper
+  suite and race suite pass. Full `mcpagent/agent/...` has no functional
+  regression; its only failure is the existing manual approval gate for four
+  previously captured streaming-review JSON records.
+- Focused AgentWorks server completion/retained-session consumer tests pass,
+  including the documented unified-completion final-answer extraction path.
 
 - `codexcli_turn_diagnostics_test.go` / `claudecode_turn_diagnostics_test.go`
   (`multi-llm-provider-go`): finds a completion after `since`, ignores one
@@ -379,3 +539,125 @@ pursued; this pass deliberately did not chase it further.
   unrelated `schedule_execution_history_test.go` pair) are pre-existing and
   untouched by any file this change modified — zero new failures introduced.
   fix reads from.
+
+## Pi CLI structured completion: two theories, one wrong, one real (2026-08-18/19)
+
+An earlier version of this section claimed Pi's structured adapter had a
+terminal-event bug and that it was fixed. **Both claims were wrong.** The
+section is rewritten here rather than deleted, because the false claim was
+acted on twice and caused a production regression, and because the way it was
+reached is the actually-useful lesson.
+
+### The claim that was wrong
+
+> *"pi 0.84.2 does not emit `agent_settled` at all — measured over a full day
+> of production logs, 0 occurrences against 57 `agent_end`."*
+
+`agent_settled` **is** emitted by pi 0.84.2, as the final event of every run.
+The "0 occurrences" was a **logging artifact created by the measurement
+itself**: the structured adapter *handled* `agent_settled` in its own `case`
+arm, which logs nothing, while `agent_end` fell through to the `default:` arm,
+whose only job is to `Debugf("pi: unhandled event type=%q")`. Grepping the logs
+therefore compared a deliberately-silent handled event against a deliberately-
+logged unhandled one, and read the silence as absence.
+
+### Verified directly against the real CLI
+
+Run with a real Gemini key, a real stdio MCP server configured through
+`.pi/mcp.json`, and the exact flags the adapter builds
+(`--print --mode json --no-builtin-tools -e npm:pi-mcp-adapter --approve`):
+
+```
+=== event types seen ===
+   1 "type":"agent_start"    1 "type":"turn_start"
+   1 "type":"turn_end"       1 "type":"agent_end"
+   1 "type":"agent_settled"          <-- emitted, and last
+>>> pi EXITED on its own after ~5s
+```
+
+`agent_settled` fires, it is the terminal event, and pi exits on its own
+afterwards **with the MCP extension loaded and an MCP server running**. No
+stale process, no held stdout, no hang.
+
+### Why `agent_settled` is the correct signal (and `agent_end` is not)
+
+From pi's own source (`dist/core/agent-session.js`):
+
+```js
+async _runAgentPrompt(messages) {
+    this._isAgentRunActive = true;
+    try {
+        await this.agent.prompt(messages);
+        while (await this._handlePostAgentRun()) {
+            await this.agent.continue();   // tool loops + auto-retries run HERE
+        }
+    } finally {
+        await this._emitAgentSettled();    // once, guaranteed, after the loop
+    }
+}
+```
+
+- `agent_settled` is emitted from a **`finally` block** — it cannot be skipped
+  on success, error, or abort — **once per run**, *after* the
+  `while (_handlePostAgentRun())` loop that drives multi-step tool use and
+  retries has fully drained. It also flips `_isAgentRunActive = false` and
+  resolves the internal idle-wait promise; it is the same signal pi's own
+  `waitForIdle()` is built on.
+- `agent_end` fires **inside** that loop — once per agent pass, many times per
+  run.
+
+So the original adapter (`case "agent_settled"`) was correct by construction.
+Swapping in `agent_end` replaced a guaranteed-once terminal event with one
+guaranteed to fire repeatedly *mid-run*.
+
+### What that mistake cost
+
+`multi-llm-provider-go@6609765` added `agent_end` as a teardown trigger. Within
+hours it killed a healthy, still-working pi process — its 3s natural-exit grace
+expired while pi was legitimately mid-run:
+
+```
+11:56:27 [SHUTDOWN] natural-exit grace (3s) expired for pid 67763
+11:56:27 [SHUTDOWN] SIGTERM attempt 1/3 to pgrp 67763
+11:56:27 [SHUTDOWN] process 67763 exited after SIGTERM #1
+```
+
+surfacing to the user as `pi run failed: exit status 143` (pi's print-mode
+SIGTERM handler is literally `process.exit(143)`). Reverted in
+`multi-llm-provider-go@fd00585`. A second follow-up attempt — reworking all
+four structured adapters to drive completion from a concurrent `cmd.Wait()`
+instead of a parsed event, on a theory that a child process inherits and holds
+pi's **stdout** — was **abandoned before commit** once that specific premise
+collapsed. That theory was independently disproven too: the MCP SDK spawns
+stdio servers with `stdio: ['pipe','pipe', stderr]`, so an MCP child gets its
+**own** pipes and never inherits the parent's stdout. Commit `da13e17`, cited
+in earlier versions of this note, is a dangling rebase object reachable from
+no branch.
+
+### The lesson worth keeping
+
+Absence of a log line is not absence of an event — especially when the code
+being investigated is what decides whether that event gets logged. Two live CLI
+runs (~2 minutes) would have refuted the claim before any code changed; instead
+it was defended through three successive rounds of source-reading and theory.
+
+### What actually explained it: stderr, not stdout
+
+Abandoning the stdout theory did not mean the incident was fictional — the
+65-minute hang was real, on both the original occurrence and a second one the
+next day. **[PLAT-139](plat-139.md)** found the real mechanism, live, via a
+production goroutine dump: `cmd.Wait()` itself was blocked, not on stdout (it
+had already closed cleanly) but on `os/exec`'s own internal stderr-copy
+goroutine — the adapter used `cmd.Stderr = &bytes.Buffer{}`, which hands
+`os/exec` a pipe the adapter never had a handle to close. Fixed via
+`cmd.StderrPipe()`, symmetric to stdout, in
+`multi-llm-provider-go@6d8e4e9`. Full account, including the hermetic
+reproduction whose pre-fix failure produces the identical stack trace as the
+production incident, is in [PLAT-139](plat-139.md).
+
+The stdout theory's own abandonment is what made room to find this: it was
+wrong specifically about *which pipe*, not about there being a pipe held open
+past the process's own exit. The two follow-on lessons from this ticket's
+history compound cleanly — verify against the real CLI before theorizing
+further (this section), and when a theory is disproven, keep looking rather
+than concluding the underlying incident was never real (the next section).

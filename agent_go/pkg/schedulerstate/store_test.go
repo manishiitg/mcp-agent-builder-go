@@ -355,3 +355,158 @@ func TestFireDecisionRetentionIsBoundedPerTriggerSource(t *testing.T) {
 		t.Fatalf("retained cron/manual decisions = %d/%d, want %d/1", cronCount, manualCount, fireDecisionRetentionPerSchedule)
 	}
 }
+
+func TestRunForScheduleOccurrenceUsesDurableFireDecisionLink(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	dayStart := time.Date(2026, 8, 19, 0, 0, 0, 0, time.UTC)
+	parentOccurrence := dayStart.Add(16 * time.Hour)
+
+	// A later run for the same schedule must not release the dependent
+	// occurrence merely because it is the newest run started that day.
+	for _, run := range []Run{
+		{
+			RunID: "matching-parent", ScopeType: "workflow", ScopeID: "Workflow/demo",
+			LockKey: "workflow:Workflow/demo", ScheduleID: "market-close", TriggerSource: "cron",
+			ScheduledFor: parentOccurrence, StartedAt: parentOccurrence,
+		},
+		{
+			RunID: "unrelated-manual", ScopeType: "workflow", ScopeID: "Workflow/demo",
+			LockKey: "workflow:Workflow/demo", ScheduleID: "market-close", TriggerSource: "manual",
+			ScheduledFor: parentOccurrence.Add(time.Hour), StartedAt: parentOccurrence.Add(time.Hour),
+		},
+	} {
+		if err := store.BeginRun(ctx, run); err != nil {
+			t.Fatalf("begin %s: %v", run.RunID, err)
+		}
+		if err := store.Transition(ctx, Transition{RunID: run.RunID, To: StateWorkflowRunning}); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Transition(ctx, Transition{RunID: run.RunID, To: StateWorkflowFinished}); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Transition(ctx, Transition{RunID: run.RunID, To: StateCompleted}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.RecordFireDecision(ctx, FireDecision{
+		DecisionID: "parent-fire", ScopeType: "workflow", ScopeID: "Workflow/demo",
+		ScheduleID: "market-close", TriggerSource: "cron", Decision: "started",
+		RunID: "matching-parent", ScheduledFor: parentOccurrence, FiredAt: parentOccurrence,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := store.RunForScheduleOccurrence(ctx, "workflow", "Workflow/demo", "market-close", dayStart, dayStart.Add(24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RunID != "matching-parent" || !got.ScheduledFor.Equal(parentOccurrence) {
+		t.Fatalf("matched run = %+v, want the durably linked parent occurrence", got)
+	}
+}
+
+func TestPendingOccurrencePoliciesAreDurableAndBounded(t *testing.T) {
+	base := time.Date(2026, 8, 19, 10, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name                string
+		policy              string
+		wantScheduledFor    time.Time
+		wantLatest          time.Time
+		wantQueuedAt        time.Time
+		wantExpiresAt       time.Time
+		wantOccurrenceCount int
+	}{
+		{
+			name: "queue_latest replaces the stale occurrence", policy: "queue_latest",
+			wantScheduledFor: base.Add(time.Hour), wantLatest: base.Add(time.Hour),
+			wantQueuedAt: base.Add(time.Hour), wantExpiresAt: base.Add(3 * time.Hour), wantOccurrenceCount: 1,
+		},
+		{
+			name: "retry preserves the exact first occurrence and deadline", policy: "retry",
+			wantScheduledFor: base, wantLatest: base,
+			wantQueuedAt: base, wantExpiresAt: base.Add(2 * time.Hour), wantOccurrenceCount: 1,
+		},
+		{
+			name: "coalesce records one catch-up with first and latest occurrence", policy: "coalesce",
+			wantScheduledFor: base, wantLatest: base.Add(time.Hour),
+			wantQueuedAt: base, wantExpiresAt: base.Add(2 * time.Hour), wantOccurrenceCount: 2,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			store := openTestStore(t)
+			ctx := context.Background()
+			for i := 0; i < 2; i++ {
+				at := base.Add(time.Duration(i) * time.Hour)
+				if err := store.UpsertPendingOccurrence(ctx, PendingOccurrence{
+					ScopeType: "workflow", ScopeID: "Workflow/demo", ScheduleID: "signals",
+					ScheduledFor: at, QueuedAt: at, ExpiresAt: at.Add(2 * time.Hour),
+					TriggerSource: "cron", Policy: tc.policy, Reason: fmt.Sprintf("blocked-%d", i),
+				}); err != nil {
+					t.Fatalf("upsert %d: %v", i, err)
+				}
+			}
+			got, err := store.GetPendingOccurrence(ctx, "workflow", "Workflow/demo", "signals")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !got.ScheduledFor.Equal(tc.wantScheduledFor) ||
+				!got.LatestScheduledFor.Equal(tc.wantLatest) ||
+				!got.QueuedAt.Equal(tc.wantQueuedAt) ||
+				!got.ExpiresAt.Equal(tc.wantExpiresAt) ||
+				got.OccurrenceCount != tc.wantOccurrenceCount {
+				t.Fatalf("pending = %+v", got)
+			}
+		})
+	}
+}
+
+func TestBeginQueuedRunAtomicallyConsumesPendingOnlyWhenLeaseSucceeds(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 19, 10, 0, 0, 0, time.UTC)
+	if err := store.UpsertPendingOccurrence(ctx, PendingOccurrence{
+		ScopeType: "workflow", ScopeID: "Workflow/demo", ScheduleID: "queued",
+		ScheduledFor: now, QueuedAt: now, ExpiresAt: now.Add(time.Hour), Policy: "queue_latest",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	blocker := Run{
+		RunID: "blocker", ScopeType: "workflow", ScopeID: "Workflow/demo",
+		LockKey: "workflow:Workflow/demo", ScheduleID: "other", StartedAt: now,
+	}
+	if err := store.BeginRun(ctx, blocker); err != nil {
+		t.Fatal(err)
+	}
+	queued := Run{
+		RunID: "queued-run", ScopeType: "workflow", ScopeID: "Workflow/demo",
+		LockKey: "workflow:Workflow/demo", ScheduleID: "queued", TriggerSource: "queued",
+		ScheduledFor: now, StartedAt: now.Add(time.Minute),
+	}
+	if err := store.BeginQueuedRun(ctx, queued); !errors.Is(err, ErrRunAlreadyActive) {
+		t.Fatalf("busy queued claim error = %v, want ErrRunAlreadyActive", err)
+	}
+	if _, err := store.GetPendingOccurrence(ctx, "workflow", "Workflow/demo", "queued"); err != nil {
+		t.Fatalf("busy claim consumed pending occurrence: %v", err)
+	}
+
+	if err := store.ForceTerminal(ctx, Transition{RunID: blocker.RunID, To: StateCompleted, At: now.Add(2 * time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BeginQueuedRun(ctx, queued); err != nil {
+		t.Fatalf("queued claim after lease release: %v", err)
+	}
+	if _, err := store.GetPendingOccurrence(ctx, "workflow", "Workflow/demo", "queued"); !errors.Is(err, ErrRunNotFound) {
+		t.Fatalf("pending occurrence remains after atomic claim: %v", err)
+	}
+	if err := store.ForceTerminal(ctx, Transition{RunID: queued.RunID, To: StateCompleted, At: now.Add(3 * time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	duplicate := queued
+	duplicate.RunID = "duplicate"
+	if err := store.BeginQueuedRun(ctx, duplicate); !errors.Is(err, ErrPendingOccurrenceMissing) {
+		t.Fatalf("duplicate queued claim error = %v, want ErrPendingOccurrenceMissing", err)
+	}
+}

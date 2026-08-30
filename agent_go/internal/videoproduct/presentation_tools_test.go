@@ -31,6 +31,11 @@ func TestPresentationToolsRequireADeclaredKind(t *testing.T) {
 			factory: showDocumentFactory("http://unused"),
 			args:    map[string]interface{}{"path": "work/longform-script.md", "title": "Script"},
 		},
+		{
+			name:    "show_reference",
+			factory: showReferenceFactory("http://unused"),
+			args:    map[string]interface{}{"path": "references/cafe.png", "title": "Cafe", "role": "location"},
+		},
 	} {
 		spec, err := tc.factory(agentprofiles.ToolRuntimeContext{
 			UserID: "u1", SessionID: "s1", WorkspacePath: "Chats/Video Studio/projects/demo",
@@ -248,6 +253,7 @@ func TestProductDeclaresAndAdmitsThePresentationTools(t *testing.T) {
 	for id, want := range map[string]string{
 		"video.show-video":     "media.video",
 		"video.show-character": "media.character",
+		"video.show-reference": "media.reference",
 		"video.show-document":  "document.markdown",
 	} {
 		if kinds[id] != want {
@@ -259,7 +265,7 @@ func TestProductDeclaresAndAdmitsThePresentationTools(t *testing.T) {
 	for _, name := range manifest.Profile.ToolPolicy.Enabled {
 		admitted[name] = true
 	}
-	for _, name := range []string{"show_video", "show_character", "show_document"} {
+	for _, name := range []string{"show_video", "show_character", "show_reference", "show_document"} {
 		if !admitted[name] {
 			t.Fatalf("%s is not in the tool allowlist, so the agent never receives it: %v", name, manifest.Profile.ToolPolicy.Enabled)
 		}

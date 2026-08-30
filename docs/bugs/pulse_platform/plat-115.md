@@ -198,6 +198,36 @@ configured target.
   underlying read-side logic it writes (`PostRunMonitorIsPeriodic`) is
   thoroughly tested instead.
 
+## Follow-up — adaptive fast Pulse requests on the dedicated lane
+
+The mandatory dedicated schedule remains correct: a full Pulse lifecycle must
+never resume inside the workflow session it reviews. But waiting blindly for
+the next cron occurrence also delays feedback after a materially changed run.
+
+**Decision:** the ordinary run's lightweight finalizer now receives factual
+Pulse timing context and makes the semantic decision itself. It may call
+`record_pulse_fast_request` only when the completed run contains material new
+evidence (for example a meaningful plan/schema/evaluation change, serious
+regression, or anomalous cost/runtime). Routine or no-change runs make no
+request and accumulate evidence for the ordinary periodic Pulse pass.
+
+The request is a workflow-local SQLite row, not a cron rewrite or inline
+review. The scheduler coalesces requests and, on its next tick, triggers the
+already-configured `pulse_review_only` schedule immediately. That schedule
+creates its own Pulse-only session and uses the normal Gate → Review/Fix →
+Finalize path. If a cron/manual Pulse begins first, it consumes the pending
+request so the same evidence is not reviewed twice.
+
+Go only delivers/coalesces the agent's durable decision. It does not classify
+what is material, mutate cron cadence, or run reviewers in the ordinary
+workflow session.
+
+- `TestFastPulseRequestCoalescesAndConsumes` covers durable coalescing and
+  consumption.
+- `TestScheduledRunFinalizerOffersSeparateFastPulseDecision` ensures the
+  finalizer has the bounded agentic choice while retaining the no-cron-mutation
+  boundary.
+
 ## Verification
 
 - `go build ./...` clean throughout.

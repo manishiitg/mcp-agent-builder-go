@@ -127,7 +127,9 @@ func TestWorkflowScheduleTrackingWindowStartSurvivesEmptySchedulerState(t *testi
 		Timezone:       "UTC",
 		Enabled:        true,
 	}
-	want := mustParseTime(t, "2026-08-05T10:00:00Z")
+	// Keep the cursor inside the implementation's seven-day retention window;
+	// an empty tracker older than that is intentionally pruned.
+	want := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
 	if err := EnsureWorkflowScheduleExecutionTracker(context.Background(), workspacePath, sched, want); err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +145,6 @@ func TestWorkflowScheduleTrackingWindowStartSurvivesEmptySchedulerState(t *testi
 	service := NewSchedulerService(nil)
 	sctx := &ScheduleContext{
 		WorkspacePath: workspacePath,
-		SourceType:    "workflow",
 		Schedule:      sched,
 	}
 	if err := service.LoadSchedule(sctx); err != nil {
@@ -177,7 +178,7 @@ func TestRecordWorkflowSchedulePreflightFailureFailsOpenAtThreshold(t *testing.T
 	t.Setenv("WORKSPACE_API_URL", server.URL)
 
 	ctx := context.Background()
-	now := mustParseTime(t, "2026-08-08T10:00:00Z")
+	now := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
 
 	for i := 1; i < workflowSchedulePreflightFailOpenThreshold; i++ {
 		failOpen, count, err := RecordWorkflowSchedulePreflightFailure(ctx, workspacePath, sched, "1.0.21", now)

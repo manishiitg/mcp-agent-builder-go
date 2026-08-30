@@ -36,15 +36,15 @@ func TestExecutionOnlyPromptIncludesCodeExecutionInstructions(t *testing.T) {
 	}
 }
 
-func TestExecutionOnlyPromptRequiresDurableConcernHandoff(t *testing.T) {
+func TestExecutionOnlyPromptLeavesConsequenceTriageToPulseReview(t *testing.T) {
 	agent := &WorkflowExecutionOnlyAgent{}
 	prompt := agent.executionOnlySystemPromptProcessor(map[string]string{})
 
 	for _, want := range []string{
-		"CONCERNS: <brief evidence-backed concern; include the affected artifact or operation>",
-		"immediately before the STATUS line",
-		"unresolved or consequential run evidence",
-		"completion notification and the durable run summary",
+		"consequential non-fatal evidence",
+		"Pulse Technical Review reads retained outputs",
+		"do not emit a",
+		"line or try to classify/deduplicate the problem yourself",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("execution prompt missing concern handoff %q:\n%s", want, prompt)
@@ -74,6 +74,8 @@ func TestExecutionOnlyPromptUsesManagedWorkflowDBTools(t *testing.T) {
 	requiredSnippets := []string{
 		"Use `query_workflow_db` for schema discovery and reads",
 		"`mutate_workflow_db` for transactional INSERT/UPDATE/DELETE operations",
+		`jq -n --arg sql "$sql"`,
+		"never place SQL containing single quotes",
 		"persist results with `mutate_workflow_db`",
 	}
 	for _, snippet := range requiredSnippets {
@@ -143,7 +145,14 @@ func TestReadOnlyExecutionPromptCannotRecommendMutationOrRawSQLite(t *testing.T)
 	if !strings.Contains(prompt, "READ-ONLY workflow evidence") || !strings.Contains(prompt, "query_workflow_db") {
 		t.Fatalf("read-only DB guidance missing:\n%s", prompt)
 	}
-	for _, forbidden := range []string{"mutate_workflow_db", "$DB_PATH", "sqlite3", "INSERT ... ON CONFLICT"} {
+	// Naming the forbidden tool is correct, explicit guidance -- "do not call
+	// mutate_workflow_db" cannot avoid the substring "mutate_workflow_db" and
+	// should not have to. What must never appear is an instruction that
+	// recommends calling it.
+	if !strings.Contains(prompt, "do not call `mutate_workflow_db`") {
+		t.Fatalf("read-only prompt does not explicitly prohibit mutate_workflow_db:\n%s", prompt)
+	}
+	for _, forbidden := range []string{"Use `mutate_workflow_db`", "$DB_PATH", "sqlite3", "INSERT ... ON CONFLICT"} {
 		if strings.Contains(prompt, forbidden) {
 			t.Fatalf("read-only prompt contains %q:\n%s", forbidden, prompt)
 		}

@@ -38,7 +38,6 @@ func resolvedWorkflowLLMRoles(manifestJSON string) ([]resolvedLLMRole, error) {
 		if !ok || builder == nil || tiers == nil {
 			return nil, fmt.Errorf("provider profile %q has no complete model defaults", cfg.Provider)
 		}
-		maintenance, _ := workflowtypes.ResolveProviderProfileMaintenanceConfig(cfg)
 		pulse, _ := workflowtypes.ResolveProviderProfilePulseConfig(cfg)
 		source := "provider_profile:" + cfg.Provider
 		return []resolvedLLMRole{
@@ -46,7 +45,6 @@ func resolvedWorkflowLLMRoles(manifestJSON string) ([]resolvedLLMRole, error) {
 			{"execution_high", tiers.Tier1, source, false},
 			{"execution_medium", tiers.Tier2, source, false},
 			{"execution_low", tiers.Tier3, source, false},
-			{"maintenance", maintenance, source, false},
 			{"pulse", pulse, source, false},
 		}, nil
 	}
@@ -58,7 +56,6 @@ func resolvedWorkflowLLMRoles(manifestJSON string) ([]resolvedLLMRole, error) {
 		{"execution_high", cfg.TieredConfig.Tier1, "explicit_override", true},
 		{"execution_medium", cfg.TieredConfig.Tier2, "explicit_override", true},
 		{"execution_low", cfg.TieredConfig.Tier3, "explicit_override", true},
-		{"maintenance", cfg.MaintenanceLLM, "explicit_override", true},
 		{"pulse", cfg.PulseLLM, "explicit_override", true},
 	}, nil
 }

@@ -34,6 +34,7 @@ func (api *StreamingAPI) handleListWorkflowManifests(w http.ResponseWriter, r *h
 		http.Error(w, fmt.Sprintf("Failed to discover workflows: %v", err), http.StatusInternalServerError)
 		return
 	}
+	discovered = filterWorkflowManifestsForUser(GetUserFromContext(r.Context()), discovered)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -154,7 +155,7 @@ type UpdateWorkflowManifestRequest struct {
 	Schedules         *[]WorkflowSchedule        `json:"schedules,omitempty"`
 	WorkshopMode      *string                    `json:"workshop_mode,omitempty"` // Standalone patch — avoids zeroing out other ExecutionDefaults fields
 	RunRetentionCount *int                       `json:"run_retention_count,omitempty"`
-	PostRunMonitor    *bool                      `json:"post_run_monitor,omitempty"` // Opt-in to the post-run monitor pass
+	PulseEnabled      *bool                      `json:"pulse_enabled,omitempty"`
 	// Notification instruction fields are standalone patches so the Notify
 	// popup can update content guidance without replacing workflow capabilities.
 	RunNotificationInstructions   *string   `json:"run_notification_instructions,omitempty"`
@@ -206,6 +207,23 @@ func mergeWorkflowCapabilitiesUpdate(existing WorkflowCapabilities, incoming *Wo
 	return updated
 }
 
+func setWorkflowPulseEnabled(manifest *WorkflowManifest, enabled bool) {
+	if manifest.Pulse == nil {
+		manifest.Pulse = &WorkflowPulseConfig{}
+	}
+	manifest.Pulse.Enabled = enabled
+	// The old model stored Pulse as an independent recurring schedule. Once the
+	// explicit flag is saved, remove those obsolete cron entries so only normal
+	// scheduled runs can trigger recurring Pulse.
+	schedules := manifest.Schedules[:0]
+	for _, schedule := range manifest.Schedules {
+		if !schedule.PulseReviewOnly {
+			schedules = append(schedules, schedule)
+		}
+	}
+	manifest.Schedules = schedules
+}
+
 func (api *StreamingAPI) handleUpdateWorkflowManifest(w http.ResponseWriter, r *http.Request) {
 	setCORS(w)
 	if r.Method == "OPTIONS" {
@@ -254,8 +272,8 @@ func (api *StreamingAPI) handleUpdateWorkflowManifest(w http.ResponseWriter, r *
 	if req.RunRetentionCount != nil {
 		manifest.RunRetentionCount = req.RunRetentionCount
 	}
-	if req.PostRunMonitor != nil {
-		manifest.PostRunMonitor = req.PostRunMonitor
+	if req.PulseEnabled != nil {
+		setWorkflowPulseEnabled(manifest, *req.PulseEnabled)
 	}
 	if req.RunNotificationInstructions != nil || req.PulseNotificationInstructions != nil ||
 		req.RunNotificationChannels != nil || req.PulseNotificationChannels != nil ||

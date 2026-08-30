@@ -9,6 +9,15 @@ import (
 	"testing"
 )
 
+func TestBuildProviderAPIKeysFromEnvUsesClaudeCodeSetupToken(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "setup-token-for-test")
+
+	keys := buildProviderAPIKeysFromEnv()
+	if keys.ClaudeCodeOAuthToken == nil || *keys.ClaudeCodeOAuthToken != "setup-token-for-test" {
+		t.Fatalf("ClaudeCodeOAuthToken = %#v, want configured setup token", keys.ClaudeCodeOAuthToken)
+	}
+}
+
 func TestLLMDiscoveryHTTPShowsCursorLoginRequired(t *testing.T) {
 	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
 	t.Setenv("SUPPORTED_LLM_PROVIDERS", "cursor-cli")
@@ -208,12 +217,10 @@ func TestProviderManifestPublishesCodexGPT56Defaults(t *testing.T) {
 			model  string
 			effort string
 		}{
-			"high":           {model: "gpt-5.6-terra", effort: "medium"},
-			"medium":         {model: "gpt-5.6-luna", effort: "high"},
-			"low":            {model: "gpt-5.6-luna", effort: "low"},
-			"maintenance":    {model: "gpt-5.6-sol", effort: "high"},
-			"pulse":          {model: "gpt-5.6-terra", effort: "xhigh"},
-			"chief_of_staff": {model: "gpt-5.6-sol", effort: "high"},
+			"high":   {model: "gpt-5.6-terra", effort: "medium"},
+			"medium": {model: "gpt-5.6-luna", effort: "high"},
+			"low":    {model: "gpt-5.6-luna", effort: "medium"},
+			"pulse":  {model: "gpt-5.6-terra", effort: "high"},
 		} {
 			got := provider.DefaultTierModels[tier]
 			if got.ModelID != want.model || got.Options["reasoning_effort"] != want.effort {
@@ -286,5 +293,82 @@ func TestPiCLIIsPublishedAsCodingAgent(t *testing.T) {
 	}
 	if !foundOpenRouter {
 		t.Fatalf("options = %v, want OpenRouter MiniMax top model", candidate.Options)
+	}
+}
+
+// TestProviderManifestMarksDeprecatedAPIModelProviders is the regression for
+// the 2026-08-20 direct-API-transport deprecation
+// (docs/design/api_transport_vs_pi_tradeoff.md). Uses the real HTTP handler,
+// matching TestProviderManifestMarksDeprecatedCodingAgents's pattern.
+func TestProviderManifestMarksDeprecatedAPIModelProviders(t *testing.T) {
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+	t.Setenv("SUPPORTED_LLM_PROVIDERS", "openai,anthropic,vertex,bedrock,azure,minimax,elevenlabs,deepgram,pi-cli")
+	t.Setenv("PATH", t.TempDir())
+
+	api := &StreamingAPI{}
+	req := httptest.NewRequest(http.MethodGet, "/api/llm-config/providers", nil)
+	rec := httptest.NewRecorder()
+	api.handleGetProviderManifest(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("manifest status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Providers []struct {
+			ID                  string `json:"id"`
+			Deprecated          bool   `json:"deprecated"`
+			DeprecationReason   string `json:"deprecation_reason"`
+			ReplacementProvider string `json:"replacement_provider"`
+			IntegrationKind     string `json:"integration_kind"`
+		} `json:"providers"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode manifest: %v", err)
+	}
+
+	byID := map[string]struct {
+		Deprecated          bool
+		DeprecationReason   string
+		ReplacementProvider string
+		IntegrationKind     string
+	}{}
+	for _, p := range resp.Providers {
+		byID[p.ID] = struct {
+			Deprecated          bool
+			DeprecationReason   string
+			ReplacementProvider string
+			IntegrationKind     string
+		}{p.Deprecated, p.DeprecationReason, p.ReplacementProvider, p.IntegrationKind}
+	}
+
+	for _, id := range []string{"openai", "anthropic", "vertex", "bedrock", "azure"} {
+		got, ok := byID[id]
+		if !ok {
+			t.Fatalf("%s missing from manifest entirely", id)
+		}
+		if !got.Deprecated {
+			t.Errorf("%s deprecated = false, want true", id)
+		}
+		if got.ReplacementProvider != "pi-cli" {
+			t.Errorf("%s replacement_provider = %q, want %q", id, got.ReplacementProvider, "pi-cli")
+		}
+		if strings.TrimSpace(got.DeprecationReason) == "" {
+			t.Errorf("%s deprecation_reason is empty", id)
+		}
+	}
+
+	// These were media-tool-only direct providers. They must not come back into
+	// the setup manifest just because an older deployment still lists them in
+	// SUPPORTED_LLM_PROVIDERS. MiniMax remains available as a Pi sub-provider,
+	// not as a top-level provider entry.
+	for _, id := range []string{"minimax", "elevenlabs", "deepgram"} {
+		if _, ok := byID[id]; ok {
+			t.Errorf("retired media provider %q appeared in the setup manifest", id)
+		}
+	}
+
+	// pi-cli is the replacement, not another casualty.
+	if got, ok := byID["pi-cli"]; ok && got.Deprecated {
+		t.Error("pi-cli unexpectedly marked deprecated")
 	}
 }

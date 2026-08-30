@@ -13,7 +13,7 @@ import (
 // Default limits — overridden by env vars at init time.
 var (
 	// MaxBrowserSessionsPerAgent is the max concurrent headless browser sessions per agent.
-	// For share_browser=true agents, this is the parent session; for share_browser=false, the isolated session.
+	// Delegated agents use the parent workflow session.
 	MaxBrowserSessionsPerAgent = 1
 
 	// MaxBrowserSessionsPerWorkflow is the max concurrent headless browser sessions across
@@ -43,7 +43,7 @@ func init() {
 // browserSessionInfo tracks a headless browser session
 type browserSessionInfo struct {
 	browserSession    string // agent-browser session name (e.g., "twitter_research")
-	agentSessionID    string // agent-level session ID (isolated ID for share_browser=false, parent for true)
+	agentSessionID    string // agent-level browser owner ID
 	workflowSessionID string // root workflow/chat session ID (always the parent, for per-workflow limit)
 	lastUsed          time.Time
 	createdAt         time.Time
@@ -295,7 +295,7 @@ func (t *SessionTracker) CheckLimits(browserSession, agentSessionID, workflowSes
 		if wfCount >= MaxBrowserSessionsPerWorkflow {
 			return fmt.Sprintf(
 				"ERROR: Cannot open browser session %q — this workflow already has %d active browser session(s) (max %d per workflow). "+
-					"Active sessions: %v. Use share_browser=true to reuse an existing session, or wait for a running sub-agent to finish.",
+					"Active sessions: %v. Reuse an existing session, or wait for a running sub-agent to finish.",
 				browserSession, wfCount, MaxBrowserSessionsPerWorkflow, wfSessions)
 		}
 	}

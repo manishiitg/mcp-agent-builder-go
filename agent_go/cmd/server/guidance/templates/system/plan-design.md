@@ -48,7 +48,7 @@ If selecting the next call genuinely requires live judgment, keep the decision a
 ### Step 3: Design Context Flow
 
 Every step reads from prior steps and writes for downstream steps:
-- **description** is executable for agentic steps. For `message_sequence`, it is the opening instruction prepended to the first item. For `todo_task`, it is the orchestrator's first turn. A scripted `regular` step describes its deterministic contract and `main.py` implements it. For `routing`, leave it empty because routing never runs an agent. Legacy non-scripted regular steps temporarily use the description through the compatibility adapter.
+- **description** is executable for agentic steps. For `message_sequence`, it is the opening instruction prepended to the first item. For `todo_task`, it is the orchestrator's first turn. A scripted `regular` step describes its deterministic contract and `main.py` implements it. For `routing`, leave it empty because routing never runs an agent. Legacy non-scripted regular steps temporarily use the description through the compatibility adapter. Before writing or editing any of these descriptions, call `read_skill(skills=[{"name":"builder-reference","path":"references/step-description.md"}])` — it covers writing an optimized description, not just choosing the right step type.
 - **context_dependencies**: Files from prior steps this step needs (e.g., ["login_status.json"])
 - **context_output**: The file this step produces (e.g., "extracted_data.json")
 - **Flow must be forward-only** — no circular dependencies
@@ -58,11 +58,19 @@ Every step reads from prior steps and writes for downstream steps:
 
 **Note:** Users may refer to todo_task steps as "Orchestrators", "orchestrators", "sub-workflows", or "pipelines", and to the routes/sub-agent steps within them as "sub-agents". These are all the same concept — the internal type name is todo_task.
 
-**Use todo_task only when the step must manage independently delegated tasks**, especially when:
+**Eligibility gate:** use `todo_task` only when the parent makes a real runtime
+orchestration decision the static plan cannot directly express. Examples are:
 - Runtime evidence determines which or how many independent tasks must run
-- Different tasks need **different tools or servers** (e.g., one sub-agent uses browser, another uses API)
-- Tasks benefit from **independent learning** — each sub-agent accumulates its own patterns
-- You need **progress tracking** — todo_task shows which tasks are done, pending, failed
+- The parent conditionally selects or fans out workers
+- The parent coordinates material runtime parallelism or adaptive retry/recovery
+- An approval boundary or interim synthesis changes subsequent delegation
+
+**A fixed child set and order does not justify `todo_task`.** Different tools,
+separate learnings, progress visibility, and easier debugging are supporting
+properties after the eligibility gate, not reasons to add an orchestrator by
+themselves. Use explicit plan steps/dependencies for known independent fixed
+work; use one `message_sequence` for known same-context work; use scripted
+steps for known deterministic work; use `routing` for a fixed exclusive branch.
 
 **Create predefined sub-agents (routes)** for tasks that are:
 - **Predictable** — same pattern every run, even if inputs change
@@ -96,13 +104,15 @@ Use a `message_sequence` route when the parent orchestrator should be able to ca
 - As a todo_task predefined route, a message_sequence behaves like a reusable specialist sub-agent: reuse the same route for critique, test feedback, validation feedback, or follow-up work that should keep prior context; restart only when the prior conversation is stale, wrong, or contaminated.
 - For row/item iteration, use a `foreach` item inside message_sequence when one shared conversation should process every row. Use todo_task when each item needs independent sub-agent delegation.
 
-### Step 6: When to Use Routing (brief)
+### Step 6: When to Use Routing or Branch (brief)
 
-Use `routing` when the next step must be **exactly one of N mutually exclusive paths** (e.g., "did login succeed, hit MFA, or fail?"). Routing is deterministic: a caller or prior step must provide `route_selection.json` (or `route_selections`) with the selected route. For running every sub-task, use todo_task. For a linear conversation, use message_sequence.
+Use `routing` or `branch` when the next step must be **exactly one of N mutually exclusive paths** (e.g., "did login succeed, hit MFA, or fail?"). Both are deterministic: a caller or prior step must provide `route_selection.json` (or `route_selections`) with the selected route. For running every sub-task, use todo_task. For a linear conversation, use message_sequence.
 
-Routing has one mode: leave `description` and `context_output` empty, read an existing route file/source, then switch. The common case is that the builder/caller selects the fixed branch from the user's request with `route_selections`. If an agent/probe/judgment is needed, add a prior `message_sequence` step that writes `route_selection.json` and have the routing step consume it with `route_source_file` or `context_dependencies: ["route_selection.json"]`. Each `routes` entry needs a stable `route_id`, a `condition` explaining when that route should be selected, and a `next_step_id` that points to another step in the plan (routing routes do **not** define inline sub-agents — they branch to existing steps); set `default_route_id` only as a missing-file fallback.
+**Routing is now the "route" concept: a major, self-contained sub-workflow fork** — use it when the alternatives lead to substantially different continuations of the plan. **Branch is the small in-flow decision** — use it for a lightweight fork that converges back quickly. Mechanics are identical either way.
 
-For full route structure, file contract, and anti-patterns, call `read_skill(skills=[{"name":"builder-reference","path":"references/routing.md"}])` — load before designing or repairing any routing step.
+Both have one mode: leave `description` and `context_output` empty, read an existing route file/source, then switch. The common case is that the builder/caller selects the fixed option from the user's request with `route_selections`. If an agent/probe/judgment is needed, add a prior `message_sequence` step that writes `route_selection.json` and have the routing/branch step consume it with `route_source_file` or `context_dependencies: ["route_selection.json"]`. Each `routes` entry needs a stable `route_id`, a `condition` explaining when that route should be selected, and a `next_step_id` that points to another step in the plan (routing/branch routes do **not** define inline sub-agents — they branch to existing steps); set `default_route_id` only as a missing-file fallback.
+
+For full route structure, file contract, and anti-patterns, call `read_skill(skills=[{"name":"builder-reference","path":"references/routing.md"}])` for routing (the "route"/major-fork concept) or `read_skill(skills=[{"name":"builder-reference","path":"references/branch.md"}])` for branch (the small in-flow decision) — load before designing or repairing either kind of step.
 
 ### Step 7: Design Validation
 
@@ -111,6 +121,7 @@ Every step MUST have a **validation_schema** — the automated gate that pass/fa
 - Include enough checks that stale/leftover files from previous runs can't pass
 - For todo_task steps: validation passing IS the completion signal
 - For message_sequence steps: the runtime automatically runs the step-level schema after the final work turn and repairs failures in the same conversation. Add explicit prevalidation items only for intermediate gates.
+- **When a field's `value_type` is `object`, also add nested `json_checks` for its expected keys** (e.g. `$.semantic_balance.real_journey_count`, not just `$.semantic_balance`). A bare `{"value_type": "object"}` only rejects the wrong outer type — it accepts any shape at all, including one with none of the fields anything downstream actually reads. Worse, it gives the authoring agent no way to know what the object should contain, so it has to guess; a wrong guess (e.g. writing a descriptive string instead, since the field name alone doesn't say "object") then fails validation with no clue what shape was actually expected, and the automatic repair turn that follows has to go searching elsewhere in the workspace for a definition that was never written down. Name every required key up front instead.
 
 Step-level `success_criteria` is deprecated. Rely on a strong `description` plus `validation_schema` instead.
 
@@ -126,7 +137,7 @@ Step-level `success_criteria` is deprecated. Rely on a strong `description` plus
 - **Trivial steps**: A step that just reads a file and passes it through — merge with the consumer
 - **Over-splitting same-context turns**: Several regular steps mostly reread the same context and depend on each other's transient reasoning. Collapse into one `message_sequence`; verification, critique, double-checking, and repair belong inside it unless a check truly needs an independent durable artifact, retry domain, or tool/security context.
 - **Missing validation**: No validation_schema means no automated quality gate
-- **Vague descriptions**: "Process the data appropriately" — be specific about WHAT, HOW, and WHERE
+- **Vague or bloated descriptions**: "Process the data appropriately" is too vague — be specific about WHAT, HOW, and WHERE. The opposite failure is just as real: restating the same instruction from several angles, copy-pasting shared policy into every step that needs it, or spelling out a rigid procedure a judgment call didn't need. See `references/step-description.md`.
 - **Over-sequencing**: Steps that don't depend on each other can potentially run in parallel via independent step groups
 - **Inline sub-tasks in todo_task**: If you're writing detailed instructions for a specific task inside the orchestrator description, that task should be a sub-agent route instead
 
@@ -134,8 +145,9 @@ Step-level `success_criteria` is deprecated. Rely on a strong `description` plus
 
 - **Message Sequence** (type: "message_sequence") — **the default for conversational work**: a single-agent ordered conversation with `items`. Do the whole coherent job, then **verify and fix it in focused follow-up user_message items** in the same context. Supports foreach turns and intermediate prevalidation gates. Its top-level validation_schema is automatically enforced as the final gate with same-conversation repair retries. Deterministic code is always a separate regular scripted step with explicit file dependencies and outputs. As a top-level step the queue runs once; as a todo_task route it can be re-entered during the same workflow run and receive new instructions without replaying the queue.
 - **Regular** (type: "regular"): an explicitly scripted deterministic boundary for fixed API/CLI/data work. New regular steps are automatically declared `scripted`; use `message_sequence` for every conversational or judgment-heavy step, including one-turn work.
-- **Orchestrator / Todo Task / Sub-Workflow** (type: "todo_task"): Also called "orchestrator" by users. Manages a dynamic todo list. Has a **todo_task_step** (orchestrator) and **predefined_routes**. Each route can either define an inline **sub_agent_step** or reuse a plan-local orphan definition via **orphan_step_ref**. Conversational route sub-agents use **message_sequence** (including one-turn work), **regular** is reserved for explicitly scripted deterministic routes, and **todo_task** provides one nested orchestration layer. Only one nested todo_task layer is allowed: top-level todo_task -> nested todo_task is valid, but a nested todo_task must not contain another nested todo_task.
-- **Routing** (type: "routing"): N-way deterministic branching. Reads `route_selection.json` (or caller `route_selections`) and picks exactly one **routes[]** entry. Each route has **route_id**, **condition**, and **next_step_id** (pointer to an existing step). Optional **default_route_id** is a missing-file fallback. Optional **route_source_file** points at a prior step's route file.
+- **Orchestrator / Todo Task / Sub-Workflow** (type: "todo_task"): Also called "orchestrator" by users. Manages runtime delegation only after the Step 4 eligibility gate is met; a fixed child set/order is not enough. Has a **todo_task_step** (orchestrator) and **predefined_routes**. Each route can either define an inline **sub_agent_step** or reuse a plan-local orphan definition via **orphan_step_ref**. Conversational route sub-agents use **message_sequence** (including one-turn work), **regular** is reserved for explicitly scripted deterministic routes, and **todo_task** provides one nested orchestration layer. Only one nested todo_task layer is allowed: top-level todo_task -> nested todo_task is valid, but a nested todo_task must not contain another nested todo_task.
+- **Routing** (type: "routing"): N-way deterministic branching for a major sub-workflow fork. Reads `route_selection.json` (or caller `route_selections`) and picks exactly one **routes[]** entry. Each route has **route_id**, **condition**, and **next_step_id** (pointer to an existing step). Optional **default_route_id** is a missing-file fallback. Optional **route_source_file** points at a prior step's route file.
+- **Branch** (type: "branch"): same mechanics as Routing, for a small in-flow next-step decision instead of a major fork. Field is **branch_question** instead of **routing_question**; everything else matches Routing exactly.
 - **Human Input** (type: "human_input"): Asks a question to the user and blocks until response. Supports: 'text', 'yesno', 'multiple_choice'. Can route based on response.
 - **Orphan** (is_orphan: true): Not part of the main execution flow. Orphan steps are plan-local reusable definitions and manual utility agents. Use them for data checks, environment validation, one-off investigations, or shared sub-agent definitions that multiple orchestrators in the same plan may reuse. Reuse is explicit: an orphan step must declare `shared_with.orchestrator_ids`, and a todo_task route must point to it with `orphan_step_ref`. Do not assume every orphan step is shared with every orchestrator.
 

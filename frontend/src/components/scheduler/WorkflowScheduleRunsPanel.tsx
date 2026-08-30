@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import ReactDOM from 'react-dom'
 import cronstrue from 'cronstrue'
 import {
-  X, Play, Trash2, Clock, CheckCircle, XCircle, Minus, Loader,
+  X, Play, Trash2, Clock, CheckCircle, XCircle, PauseCircle, Minus, Loader,
   Terminal, Pause, Calendar, ClipboardCheck, AlertTriangle,
   ChevronDown, ChevronLeft, ChevronRight, RefreshCw, Square, Radio, Search, FileText, MessageSquare
 } from 'lucide-react'
@@ -19,11 +19,12 @@ import CostsPopup from '../workflow/CostsPopup'
 import ExecutionLogsPopup from '../workflow/ExecutionLogsPopup'
 import EvaluationPopup from '../workflow/EvaluationPopup'
 import { ReportViewer } from '../workflow/ReportViewer'
-import SchedulePresetPopup from '../SchedulePresetPopup'
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from '../ui/tooltip'
+import { scheduleTabLabel } from '../../utils/scheduleTabLabel'
 
 interface WorkflowScheduleRunsPanelProps {
   onClose: () => void
+  embedded?: boolean
   onJobsLoaded?: (jobs: ScheduledJob[]) => void
   workflowScope?: {
     presetQueryId?: string | null
@@ -36,11 +37,21 @@ type ActivePopup = 'costs' | 'logs' | 'eval' | 'report' | null
 type JobFilter = 'running' | 'enabled' | 'paused' | 'missed' | 'issues' | 'all'
 type SchedulePanelView = 'overview' | 'calendar' | 'by-workflow' | 'schedules'
 
+// RUN_HISTORY_VISIBLE_ROWS is how many rows fit in the run-history scroll box
+// (max-h-48 = 12rem, ~27px per row). It only drives the "scroll for all" hint
+// and the bottom fade, so being a row out either way costs nothing — but with
+// no affordance at all the list reads as truncated, which is how a correct
+// count of 10 alongside 7 visible rows looked like a bug.
+const RUN_HISTORY_VISIBLE_ROWS = 7
+
 const isScheduleIssueStatus = (status?: ScheduledJob['last_status']) =>
   status === 'error' || status === 'partial' || status === 'interrupted'
 
 const isSchedulePartialStatus = (status?: ScheduledJob['last_status']) =>
   status === 'partial' || status === 'interrupted'
+
+const isScheduleWaitingStatus = (status?: ScheduledJob['last_status']) =>
+  status === 'waiting_for_workflow' || status === 'waiting_for_capacity'
 
 const WORKFLOW_SCHEDULE_PANEL_LIMIT = 10_000
 
@@ -598,7 +609,7 @@ function sortJobs(a: ScheduledJob, b: ScheduledJob): number {
   return bTime.localeCompare(aTime)
 }
 
-const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ onClose, onJobsLoaded, workflowScope }) => {
+const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ onClose, onJobsLoaded, workflowScope, embedded = false }) => {
   const [jobs, setJobs] = useState<ScheduledJob[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -617,7 +628,6 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
 
   const [triggering, setTriggering] = useState<string | null>(null)
   const [popupState, setPopupState] = useState<JobPopupState | null>(null)
-  const [editingJob, setEditingJob] = useState<ScheduledJob | null>(null)
   // Run history per job
   const [jobRuns, setJobRuns] = useState<Record<string, ScheduledJobRun[]>>({})
   const [loadingRunIds, setLoadingRunIds] = useState<Record<string, boolean>>({})
@@ -942,7 +952,14 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
             if (!isMissedSchedule(job)) return false
             break
           case 'issues':
-            if (job.last_status !== 'error') return false
+            // The Issues badge counts error, partial AND interrupted
+            // (isScheduleIssueStatus), so filtering to 'error' alone made a
+            // schedule that ended partial contribute to the count and then
+            // vanish when the count was clicked — the badge said 1, the list
+            // said nothing. hetzner-ssh hit exactly this: its workflow
+            // succeeded, Pulse finalized partial, and the schedule became
+            // unfindable.
+            if (!isScheduleIssueStatus(job.last_status)) return false
             break
           case 'all':
           default:
@@ -1274,7 +1291,7 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
     useModeStore.getState().setModeCategory('workflow')
     useWorkflowStore.getState().setShowChatArea(true)
 
-    const desiredName = 'Schedule'
+    const desiredName = scheduleTabLabel(jobName)
     const metadata = {
       mode: 'workflow' as const,
       phaseId: undefined,
@@ -1454,6 +1471,7 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
     const cronDesc = describeCron(job.cron_expression)
     const localizedJobName = getLocalizedJobName(job)
     const isRunningJob = job.last_status === 'running'
+    const isWaitingJob = isScheduleWaitingStatus(job.last_status)
     const isMissedJob = isMissedSchedule(job)
     const missedDelayMs = getMissedScheduleDelayMs(job)
     const missedReason = isMissedJob ? formatMissedScheduleReason(job) : ''
@@ -1466,6 +1484,7 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
             <div className="flex items-start gap-3">
               <div className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${
                 isRunningJob ? 'bg-amber-500 animate-pulse' :
+                isWaitingJob ? 'bg-sky-500 animate-pulse' :
                 isMissedJob ? 'bg-amber-500' :
                 job.last_status === 'error' ? 'bg-red-500' :
                 isSchedulePartialStatus(job.last_status) ? 'bg-amber-500' :
@@ -1479,6 +1498,13 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                   {isRunningJob && (
                     <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-300">
                       Running
+                    </span>
+                  )}
+                  {isWaitingJob && (
+                    <span className="rounded-full border border-sky-500/30 bg-sky-500/10 px-1.5 py-0.5 text-[11px] font-medium text-sky-700 dark:text-sky-300">
+                      {job.last_status === 'waiting_for_capacity'
+                        ? 'Waiting for capacity'
+                        : `Queued${job.queued_occurrences && job.queued_occurrences > 1 ? ` · ${job.queued_occurrences} combined` : ''}`}
                     </span>
                   )}
                   {isMissedJob && (
@@ -1523,7 +1549,11 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                     </span>
                   )}
                   <span title={formatExactDateTime(job.last_run_at)}>
-                    {isRunningJob
+                    {isWaitingJob
+                      ? job.waiting_until
+                        ? `Waiting until ${formatLocalScheduleTime(job.waiting_until)}`
+                        : 'Waiting to start'
+                      : isRunningJob
                       ? job.last_run_at
                         ? `Running since ${formatLocalScheduleTime(job.last_run_at)}`
                         : 'Running now'
@@ -1553,6 +1583,15 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                     {job.last_error}
                   </div>
                 )}
+                {isWaitingJob && job.waiting_reason && (
+                  <div className="mt-1 truncate text-xs text-sky-700 dark:text-sky-300" title={job.waiting_reason}>
+                    {job.waiting_reason}
+                  </div>
+                )}
+                <div className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <MessageSquare className="h-3.5 w-3.5" />
+                  <span>To change this schedule, ask the automation agent in Chat.</span>
+                </div>
               </div>
             </div>
           </div>
@@ -1621,17 +1660,6 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
-                  onClick={() => setEditingJob(job)}
-                  className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-blue-500"
-                >
-                  <Clock className="h-3.5 w-3.5" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">Edit schedule</TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
                   onClick={() => handleDelete(job)}
                   className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-red-500"
                 >
@@ -1666,13 +1694,17 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
     { key: 'all', label: 'All', count: summary.total },
   ]
 
-  return ReactDOM.createPortal(
+  const panel = (
     <TooltipProvider delayDuration={300}>
     <div
-      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
+      className={embedded
+        ? 'flex h-full min-h-0 w-full bg-background'
+        : 'fixed inset-0 z-[9999] flex items-center justify-center bg-black/50'}
+      onClick={embedded ? undefined : (e) => { if (e.target === e.currentTarget) onClose() }}
     >
-      <div className="w-full max-w-6xl mx-4 bg-card text-card-foreground rounded-xl shadow-2xl border border-border flex flex-col max-h-[85vh]">
+      <div className={embedded
+        ? 'flex h-full min-h-0 w-full flex-col bg-card text-card-foreground'
+        : 'mx-4 flex max-h-[85vh] w-full max-w-6xl flex-col rounded-xl border border-border bg-card text-card-foreground shadow-2xl'}>
 
         {/* Header */}
         <div className="flex items-start justify-between gap-4 px-5 py-4 border-b border-border flex-shrink-0">
@@ -2374,6 +2406,7 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                 const isLoadingThis = !!loadingRunIds[job.id]
                 const previousJob = index > 0 ? jobsList[index - 1] : null
                 const isRunningJob = job.last_status === 'running'
+                const isWaitingJob = isScheduleWaitingStatus(job.last_status)
                 const isMissedJob = isMissedSchedule(job)
                 const missedDelayMs = getMissedScheduleDelayMs(job)
                 const missedReason = isMissedJob ? formatMissedScheduleReason(job) : ''
@@ -2432,6 +2465,7 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                       {/* Status dot */}
                       <div className={`mt-1 w-2 h-2 rounded-full flex-shrink-0 ${
                         job.last_status === 'running' ? 'bg-amber-500 animate-pulse' :
+                        isWaitingJob ? 'bg-sky-500 animate-pulse' :
                         isMissedJob ? 'bg-amber-500' :
                         job.enabled ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-600'
                       }`} />
@@ -2459,6 +2493,13 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                           {isMissedJob && (
                             <span className="text-xs px-1.5 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300">
                               Missed
+                            </span>
+                          )}
+                          {isWaitingJob && (
+                            <span className="text-xs px-1.5 py-0.5 rounded-full bg-sky-100 dark:bg-sky-900/30 text-sky-700 dark:text-sky-300">
+                              {job.last_status === 'waiting_for_capacity'
+                                ? 'Waiting for capacity'
+                                : `Queued${job.queued_occurrences && job.queued_occurrences > 1 ? ` · ${job.queued_occurrences} combined` : ''}`}
                             </span>
                           )}
                           {!job.enabled && (
@@ -2499,6 +2540,8 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                           <span className="flex items-center gap-1" title={formatExactDateTime(job.last_run_at)}>
                             {job.last_status === 'running' ? (
                               <Loader className="w-3 h-3 text-amber-500 animate-spin" />
+                            ) : isWaitingJob ? (
+                              <Clock className="w-3 h-3 text-sky-500" />
                             ) : job.last_status === 'success' ? (
                               <CheckCircle className="w-3 h-3 text-green-500" />
                             ) : job.last_status === 'error' ? (
@@ -2510,7 +2553,11 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                             ) : (
                               <Minus className="w-3 h-3" />
                             )}
-                            {job.last_status === 'running'
+                            {isWaitingJob
+                              ? job.waiting_until
+                                ? `Waiting until ${formatLocalScheduleTime(job.waiting_until)}`
+                                : 'Waiting to start'
+                              : job.last_status === 'running'
                               ? job.last_run_at
                                 ? `Running since ${formatLocalScheduleTime(job.last_run_at)} (${timeAgo(job.last_run_at)})`
                                 : 'Running...'
@@ -2542,6 +2589,15 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                             ✗ {job.last_error}
                           </div>
                         )}
+                        {isWaitingJob && job.waiting_reason && (
+                          <div className="mt-1 text-xs truncate max-w-lg text-sky-700 dark:text-sky-300" title={job.waiting_reason}>
+                            {job.waiting_reason}
+                          </div>
+                        )}
+                        <div className="mt-2 flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
+                          <MessageSquare className="w-3.5 h-3.5" />
+                          <span>To change this schedule, ask the automation agent in Chat.</span>
+                        </div>
                       </div>
 
                       {/* Actions */}
@@ -2615,17 +2671,6 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <button
-                              onClick={() => setEditingJob(job)}
-                              className="p-1.5 rounded-md text-gray-400 hover:text-blue-500 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
-                            >
-                              <Clock className="w-3.5 h-3.5" />
-                            </button>
-                          </TooltipTrigger>
-                          <TooltipContent side="bottom">Edit schedule</TooltipContent>
-                        </Tooltip>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <button
                               onClick={() => handleDelete(job)}
                               className="p-1.5 rounded-md text-gray-400 hover:text-red-500 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
                             >
@@ -2664,9 +2709,17 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                         ) : (
                           <div className="space-y-1">
                             <div className="text-xs text-gray-400 dark:text-gray-500 mb-1.5">
-                              Run history ({runs.length} runs):
+                              Run history ({runs.length} runs
+                              {runs.length > RUN_HISTORY_VISIBLE_ROWS && (
+                                <span className="text-gray-400 dark:text-gray-500"> · scroll for all {runs.length}</span>
+                              )}
+                              ):
                             </div>
-                            <div className="space-y-1 max-h-48 overflow-y-auto">
+                            {/* The list scrolls inside a fixed height, which with no
+                                affordance reads as a truncated list — the count said 10
+                                while 7 were visible and nothing indicated the rest. */}
+                            <div className="relative">
+                              <div className="space-y-1 max-h-48 overflow-y-auto">
                               {runs.map((run, runIndex) => {
                                 const effectiveFolder = getResolvedRunFolder(
                                   run,
@@ -2676,6 +2729,17 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                                 )
                                 const currentSessionId =
                                   run.session_id || (run.status === 'running' ? job.last_session_id : undefined)
+                                // iteration-0 is the live slot and is REUSED: every historical
+                                // run records it as its folder, but its contents belong to the
+                                // most recent run alone. Offering logs/eval/report on an older
+                                // run therefore opened today's artifacts under that run's
+                                // timestamp — worse than showing nothing. Rotated folders
+                                // (iteration-N, N>0) are stable per-run identities and stay
+                                // correct. The conversation button is unaffected: run.session_id
+                                // is genuinely per-run.
+                                const runOwnsItsFolder =
+                                  Boolean(effectiveFolder) &&
+                                  (getRunFolderIterationNumber(effectiveFolder) > 0 || runIndex === 0)
                                 return (
                                 <div
                                   key={run.id}
@@ -2691,6 +2755,12 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                                     <Loader className="w-3 h-3 text-amber-500 animate-spin flex-shrink-0" />
                                   ) : run.status === 'success' ? (
                                     <CheckCircle className="w-3 h-3 text-green-500 flex-shrink-0" />
+                                  ) : run.status === 'waiting_for_capacity' ? (
+                                    /* Suspended, not failed: the run holds completed steps and
+                                       resumes itself when the provider window reopens. A red
+                                       cross here reads as a defect and invites a manual re-run
+                                       that would replay those steps' side effects. */
+                                    <PauseCircle className="w-3 h-3 text-amber-500 flex-shrink-0" />
                                   ) : (
                                     <XCircle className="w-3 h-3 text-red-500 flex-shrink-0" />
                                   )}
@@ -2761,6 +2831,11 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                                   )}
 
                                   {/* Error (truncated) */}
+                                  {run.status === 'waiting_for_capacity' && run.error && (
+                                    <span className="text-amber-500 truncate flex-1" title={run.error}>
+                                      {run.error}
+                                    </span>
+                                  )}
                                   {run.status === 'error' && run.error && (
                                     <span className="text-red-400 truncate flex-1" title={run.error}>
                                       {run.error.length > 50 ? run.error.slice(0, 50) + '...' : run.error}
@@ -2787,22 +2862,8 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                                         </TooltipContent>
                                       </Tooltip>
                                     )}
-                                    {/* Stop button for running jobs */}
-                                    {run.status === 'running' && (
-                                      <Tooltip>
-                                        <TooltipTrigger asChild>
-                                          <button
-                                            onClick={() => handleStopRun(job)}
-                                            className="p-1 text-gray-400 hover:text-red-500 transition-colors"
-                                          >
-                                            <Square className="w-3 h-3" />
-                                          </button>
-                                        </TooltipTrigger>
-                                        <TooltipContent side="left">Stop this run</TooltipContent>
-                                      </Tooltip>
-                                    )}
                                     {/* Logs button */}
-                                    {effectiveFolder && run.status !== 'running' && (
+                                    {runOwnsItsFolder && run.status !== 'running' && (
                                       <Tooltip>
                                         <TooltipTrigger asChild>
                                           <button
@@ -2816,7 +2877,7 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                                       </Tooltip>
                                     )}
                                     {/* Evaluation button */}
-                                    {effectiveFolder && run.status !== 'running' && (
+                                    {runOwnsItsFolder && run.status !== 'running' && (
                                       <Tooltip>
                                         <TooltipTrigger asChild>
                                           <button
@@ -2830,7 +2891,7 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                                       </Tooltip>
                                     )}
                                     {/* Report button */}
-                                    {effectiveFolder && run.status !== 'running' && (
+                                    {runOwnsItsFolder && run.status !== 'running' && (
                                       <Tooltip>
                                         <TooltipTrigger asChild>
                                           <button
@@ -2847,6 +2908,10 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                                 </div>
                                 )
                               })}
+                            </div>
+                              {runs.length > RUN_HISTORY_VISIBLE_ROWS && (
+                                <div className="pointer-events-none absolute inset-x-0 bottom-0 h-6 bg-gradient-to-t from-white to-transparent dark:from-gray-900" />
+                              )}
                             </div>
                           </div>
                         )}
@@ -2907,25 +2972,11 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
         />
       )}
 
-      {/* Edit schedule popup */}
-      {editingJob && (() => {
-        const preset = presetMap.get(editingJob.preset_query_id ?? '')
-        return (
-          <SchedulePresetPopup
-            presetQueryId={editingJob.preset_query_id ?? null}
-            presetLabel={preset?.label ?? editingJob.name}
-            entityType="workflow"
-            jobId={editingJob.id}
-            workspacePath={editingJob.workspace_path || preset?.workspacePath || undefined}
-            onClose={() => { setEditingJob(null); loadJobs() }}
-          />
-        )
-      })()}
-
     </div>
-    </TooltipProvider>,
-    document.body
+    </TooltipProvider>
   )
+
+  return embedded ? panel : ReactDOM.createPortal(panel, document.body)
 }
 
 export default WorkflowScheduleRunsPanel

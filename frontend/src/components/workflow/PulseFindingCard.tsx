@@ -106,12 +106,14 @@ function FindingProgress({ finding }: { finding: PulseFindingLifecycle }) {
 export function PulseFindingCard({
   finding,
   moduleLabel,
+  reviewFocus,
   expanded,
   onToggle,
   onOpenModule,
 }: {
   finding: PulseFindingLifecycle
   moduleLabel?: string
+  reviewFocus?: { label: string; relatedCount: number }
   expanded: boolean
   onToggle: () => void
   onOpenModule?: () => void
@@ -206,6 +208,14 @@ export function PulseFindingCard({
             )}
             <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[9px] text-muted-foreground">
               <span><b className="font-semibold text-foreground/80">Reported by</b> {reporter}</span>
+              {reviewFocus && (
+                <>
+                  <span>·</span>
+                  <span className="rounded bg-muted px-1.5 py-0.5 font-medium text-foreground" title="Deep review subcategory">
+                    {reviewFocus.label}{reviewFocus.relatedCount > 0 ? ` +${reviewFocus.relatedCount}` : ''}
+                  </span>
+                </>
+              )}
               <span>·</span>
               <span>{formatDate(issue.updated_at || finding.last_seen_at)}</span>
               {issue.seen_count > 1 && (
@@ -257,9 +267,9 @@ export function PulseFindingCard({
                     <Wrench className="h-3.5 w-3.5" /> No repair attempt has been recorded yet.
                   </div>
                 ) : attempts.map((attempt, index) => {
+                  const issueID = finding.issue?.id || finding.finding_id
                   const reference = attempt.findings?.find((candidate) => (
-                    candidate.fingerprint === finding.fingerprint
-                    || (finding.finding_id && candidate.finding_id === finding.finding_id)
+                    issueID && candidate.finding_id === issueID
                   ))
                   const incomplete = pulseFixAttemptIsIncomplete(finding, attempt)
                   return (

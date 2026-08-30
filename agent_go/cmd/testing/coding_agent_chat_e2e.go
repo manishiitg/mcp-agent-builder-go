@@ -64,12 +64,6 @@ Example:
     --server-url http://localhost:18743 \
     --provider cursor-cli \
     --model auto \
-    --selected-folder _users/default/Chats
-
-  mcp-agent test coding-agent-chat-e2e \
-    --server-url http://localhost:18743 \
-    --provider agy-cli \
-    --model agy-cli \
     --selected-folder _users/default/Chats`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := context.WithTimeout(cmd.Context(), codingAgentChatE2EFlags.timeout)
@@ -136,7 +130,7 @@ Example:
 
 		if codingAgentChatE2EFlags.runTmuxLossResume {
 			if !providerSupportsTmuxLossResumeE2E(provider) {
-				return fmt.Errorf("--run-tmux-loss-resume is only certified for claude-code, codex-cli, and agy-cli, got %q", provider)
+				return fmt.Errorf("--run-tmux-loss-resume is only certified for claude-code and codex-cli, got %q", provider)
 			}
 			killedTmux, err := client.killLatestTerminalTmux(ctx, sessionID)
 			if err != nil {
@@ -255,7 +249,7 @@ Example:
 
 func init() {
 	codingAgentChatE2ECmd.Flags().StringVar(&codingAgentChatE2EFlags.serverURL, "server-url", "http://localhost:18743", "coding-agent-loop server URL")
-	codingAgentChatE2ECmd.Flags().StringVar(&codingAgentChatE2EFlags.provider, "provider", "codex-cli", "coding CLI provider: codex-cli, cursor-cli, agy-cli, pi-cli, or claude-code")
+	codingAgentChatE2ECmd.Flags().StringVar(&codingAgentChatE2EFlags.provider, "provider", "codex-cli", "coding CLI provider: codex-cli, cursor-cli, pi-cli, or claude-code")
 	codingAgentChatE2ECmd.Flags().StringVar(&codingAgentChatE2EFlags.model, "model", "", "model ID; defaults to the provider-specific E2E model")
 	codingAgentChatE2ECmd.Flags().StringVar(&codingAgentChatE2EFlags.sessionID, "session-id", "", "session ID to reuse; generated when omitted")
 	codingAgentChatE2ECmd.Flags().StringVar(&codingAgentChatE2EFlags.selectedFolder, "selected-folder", "_users/default/Chats", "workspace-relative folder for the chat session")
@@ -268,7 +262,7 @@ func init() {
 	codingAgentChatE2ECmd.Flags().BoolVar(&codingAgentChatE2EFlags.skipLiveSteer, "skip-live-steer", false, "skip the in-flight /steer regression test")
 	codingAgentChatE2ECmd.Flags().BoolVar(&codingAgentChatE2EFlags.skipCompletionProbe, "skip-completion-probe", false, "skip the tool-backed completion detection regression test")
 	codingAgentChatE2ECmd.Flags().BoolVar(&codingAgentChatE2EFlags.retainedWindowOnly, "retained-window-p0-only", false, "run only the two-turn IC-11 retained-session P0 contract")
-	codingAgentChatE2ECmd.Flags().BoolVar(&codingAgentChatE2EFlags.runTmuxLossResume, "run-tmux-loss-resume", false, "kill the latest tmux pane after turn 2 and require provider-native continuation recovery; certified for claude-code, codex-cli, and agy-cli")
+	codingAgentChatE2ECmd.Flags().BoolVar(&codingAgentChatE2EFlags.runTmuxLossResume, "run-tmux-loss-resume", false, "kill the latest tmux pane after turn 2 and require provider-native continuation recovery; certified for claude-code and codex-cli")
 	codingAgentChatE2ECmd.Flags().BoolVar(&codingAgentChatE2EFlags.vertexFinalJudge, "vertex-final-judge", false, "use a Gemini/Vertex LLM judge to validate each extracted unified_completion final answer")
 	codingAgentChatE2ECmd.Flags().StringVar(&codingAgentChatE2EFlags.vertexJudgeModel, "vertex-final-judge-model", "", "Gemini/Vertex model for --vertex-final-judge; defaults to VERTEX_FINAL_EXTRACTION_JUDGE_MODEL or gemini-3.1-pro-preview")
 }
@@ -314,8 +308,6 @@ func defaultCodingAgentE2EModel(provider string) string {
 		return "gpt-5.3-codex-spark"
 	case "cursor-cli":
 		return "auto"
-	case "agy-cli":
-		return "agy-cli"
 	case "claude-code":
 		return "claude-sonnet-5"
 	case "pi-cli":
@@ -428,7 +420,7 @@ func (c *codingAgentChatE2EClient) startQueryWithResponse(ctx context.Context, s
 
 const retainedWindowP0DeliveryLimit = time.Second
 
-// runRetainedWindowP0 is the IC-11 cross-repository contract. It deliberately
+// runRetainedWindowP0 is the IC-11 and IC-12 cross-repository contract. It deliberately
 // reaches the retained window by letting the preceding real CLI turn finish;
 // it never deletes a registration or injects a completion event to manufacture
 // the state under test.
@@ -484,6 +476,9 @@ func (c *codingAgentChatE2EClient) runRetainedWindowP0(ctx context.Context, sess
 	if err := assertOneRetainedCompletion(events, rememberedToken); err != nil {
 		return err
 	}
+	if err := assertCanonicalRetainedTurnIdentity(events, "execute_shell_command"); err != nil {
+		return err
+	}
 	if err := assertOneRetainedToolReceipt(events, "execute_shell_command", toolToken); err != nil {
 		return err
 	}
@@ -497,6 +492,61 @@ func (c *codingAgentChatE2EClient) runRetainedWindowP0(ctx context.Context, sess
 	}
 	if err := c.assertRetainedTmuxLive(ctx, sessionID); err != nil {
 		return fmt.Errorf("provider process was not reusable after retained turn: %w", err)
+	}
+	return nil
+}
+
+// assertCanonicalRetainedTurnIdentity enforces the provider-neutral turn
+// lifecycle contract at the real AgentWorks -> mcpagent boundary. A retained
+// session may outlive many turns, but every event belonging to one turn must
+// carry the same non-empty identity and its sole completion must be marked as
+// the canonical lifecycle owner.
+func assertCanonicalRetainedTurnIdentity(events []map[string]interface{}, toolName string) error {
+	completionTurnID := ""
+	completionCount := 0
+	for _, event := range events {
+		if fmt.Sprint(event["type"]) != "unified_completion" {
+			continue
+		}
+		completionCount++
+		completionTurnID = strings.TrimSpace(eventPayloadString(event, "turn_id"))
+		if completionTurnID == "" {
+			return fmt.Errorf("retained unified_completion has no stable turn_id")
+		}
+		metadata := eventPayloadMap(event, "metadata")
+		canonical, ok := metadata["canonical_turn_completion"].(bool)
+		if !ok || !canonical {
+			return fmt.Errorf("retained unified_completion is not marked canonical_turn_completion")
+		}
+	}
+	if completionCount != 1 {
+		return fmt.Errorf("retained turn emitted %d unified completions, want exactly 1", completionCount)
+	}
+
+	starts, ends := 0, 0
+	for _, event := range events {
+		if eventPayloadString(event, "tool_name") != toolName {
+			continue
+		}
+		eventType := fmt.Sprint(event["type"])
+		if eventType != "tool_call_start" && eventType != "tool_call_end" {
+			continue
+		}
+		turnID := strings.TrimSpace(eventPayloadString(event, "turn_id"))
+		if turnID == "" {
+			return fmt.Errorf("retained %s %s has no stable turn_id", toolName, eventType)
+		}
+		if turnID != completionTurnID {
+			return fmt.Errorf("retained %s %s turn_id=%q, completion turn_id=%q", toolName, eventType, turnID, completionTurnID)
+		}
+		if eventType == "tool_call_start" {
+			starts++
+		} else {
+			ends++
+		}
+	}
+	if starts != 1 || ends != 1 {
+		return fmt.Errorf("retained %s lifecycle events start=%d end=%d, want exactly one of each", toolName, starts, ends)
 	}
 	return nil
 }
@@ -810,7 +860,7 @@ func (c *codingAgentChatE2EClient) getTerminals(ctx context.Context, sessionID s
 
 func providerSupportsTmuxLossResumeE2E(provider string) bool {
 	switch strings.TrimSpace(provider) {
-	case "claude-code", "codex-cli", "agy-cli":
+	case "claude-code", "codex-cli":
 		return true
 	default:
 		return false

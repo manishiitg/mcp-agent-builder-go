@@ -1159,6 +1159,34 @@ func (st *liveAttachStream) runControlMode(ctx context.Context) {
 		}
 	}()
 
+	// Kill() terminates the process but does NOT reap it: the child stays a
+	// <defunct> zombie until its parent calls Wait, and because this is an
+	// exec.CommandContext, os/exec's watchCtx goroutine also blocks forever on
+	// a send that only Wait drains. So an unreaped attach leaked BOTH a PID and
+	// a goroutine, permanently, until the server restarted.
+	//
+	// Measured live 2026-08-19: live-attach enabled at 10:35:08, then five
+	// <defunct> children of the server accumulated (10:40, 10:47, 10:54, 11:11,
+	// 11:20) against exactly five watchCtx goroutines parked on `chan send` in
+	// a goroutine dump. This is the only pty.Start in agent_go, mcpagent, or
+	// multi-llm-provider-go, and every other exec.CommandContext call site uses
+	// Run/Output/CombinedOutput, which reap internally.
+	//
+	// Deferred rather than folded into the ctx.Done goroutine above because
+	// runControlMode also returns on its own (tmux %exit, or a scanner error)
+	// while ctx is still live; that path must reap too. Close+Kill are repeated
+	// here so the self-exit path tears the PTY down rather than waiting for a
+	// cancel that may never come — both are safe to call twice.
+	defer func() {
+		_ = ptmx.Close()
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		// Wait returns the kill's own "signal: killed" error on the normal
+		// path; the reap is the point, not the status.
+		_ = cmd.Wait()
+	}()
+
 	proto := &liveattach.Protocol{}
 	sc := bufio.NewScanner(ptmx)
 	sc.Buffer(make([]byte, liveAttachScannerInitial), liveattach.MaxControlLineBytes)

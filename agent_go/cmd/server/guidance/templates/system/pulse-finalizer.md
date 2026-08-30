@@ -24,9 +24,9 @@ Run Backup, Publish, then Notify. Before and after each, call
    Read current worklist/module results, saved reviews, finding
    lifecycle/dispositions, and pending human requests from SQLite-backed tools;
    dashboard prose is not notification truth. A module result of `changed` is
-   not proof of a fix. Only `fixed_verified` or `verified_no_change` with passing
-   evidence is complete. `changed_unverified`, failed verification, and every
-   active/blocked/awaiting-user finding remains pending.
+   not stronger behavioral proof, but an applied repair closes its issue.
+   `fixed_verified`, `verified_no_change`, and `changed_unverified` are complete;
+   a failed repair and every active/blocked/awaiting-user finding remains pending.
 
    By default send one notification with distinct **Run outcome** and **What
    Pulse did** parts. Run outcome covers execution outputs, failures, goal
@@ -38,7 +38,8 @@ Run Backup, Publish, then Notify. Before and after each, call
    - **Issues found this pass:** each material new/reopened issue, severity,
      impact, and review area. Say “none” when proven; incomplete is not clean.
    - **Fixed by Pulse:** Fixer changes and verification. Separate verified
-     fixes/no-change closures from changes awaiting proof.
+     fixes/no-change closures and note when an applied fix is being monitored
+     for recurrence.
    - **Still pending:** exact active count, highest-priority current and retained
      issues, blocker, next owner, and checkpoint. If over five, show the top five,
      remaining count, and tell the user to open Pulse for details.

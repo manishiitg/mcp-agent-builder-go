@@ -130,7 +130,7 @@ func TestCleanupStaleCodingAgentTmuxSessionsKeepsRunningActiveSession(t *testing
 	now := time.Now()
 	store := terminals.NewStore()
 	sessionID := "running-session"
-	tmuxSession := "mlp-agy-cli-running"
+	tmuxSession := "mlp-codex-cli-running"
 	store.HandleEvent(sessionID, codingAgentTmuxReaperChunkEvent(now.Add(-4*time.Hour), sessionID, "workflow-step:review-plan", tmuxSession))
 	api := &StreamingAPI{
 		terminalStore: store,
@@ -177,7 +177,7 @@ func TestCleanupStaleCodingAgentTmuxSessionsClosesStoppedSessionImmediately(t *t
 }
 
 func TestCleanupBoundedTmuxKeepsDismissedSnapshotUntilDisplayDeadline(t *testing.T) {
-	for _, providerPrefix := range []string{"mlp-claude-code-int", "mlp-codex-cli-int", "mlp-cursor-cli-int", "mlp-pi-cli-int", "mlp-agy-cli-int"} {
+	for _, providerPrefix := range []string{"mlp-claude-code-int", "mlp-codex-cli-int", "mlp-cursor-cli-int", "mlp-pi-cli-int"} {
 		providerPrefix := providerPrefix
 		t.Run(providerPrefix, func(t *testing.T) {
 			now := time.Now()

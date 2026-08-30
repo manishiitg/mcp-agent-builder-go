@@ -14,9 +14,13 @@ func TestDiagnoseStalledConversationTurnReturnsEmptyWithoutARunningAgent(t *test
 	}
 }
 
-func TestCleanupOrphanedConversationTurnSessionClearsActiveSessionAndQueryIndex(t *testing.T) {
+func TestCleanupOrphanedConversationTurnClearsExactTurnAndKeepsConversationReusable(t *testing.T) {
 	api := lifecycleTestAPI()
 	const sessionID = "session-orphaned"
+	cancelCalls := 0
+	api.agentCancelFuncs = map[string]context.CancelFunc{
+		sessionID: func() { cancelCalls++ },
+	}
 	api.activeSessions = map[string]*ActiveSessionInfo{
 		sessionID: {SessionID: sessionID, Status: "running"},
 	}
@@ -29,7 +33,10 @@ func TestCleanupOrphanedConversationTurnSessionClearsActiveSessionAndQueryIndex(
 	}
 	api.setSessionBusy(sessionID, true)
 
-	api.cleanupOrphanedConversationTurnSession(sessionID, "orphaned-query")
+	api.cleanupOrphanedConversationTurn(sessionID, "orphaned-query")
+	if cancelCalls != 1 {
+		t.Fatalf("turn cancel calls = %d, want exactly one", cancelCalls)
+	}
 
 	api.activeSessionsMux.RLock()
 	status := api.activeSessions[sessionID].Status
@@ -60,7 +67,7 @@ func TestCleanupOrphanedConversationTurnSessionClearsActiveSessionAndQueryIndex(
 	}
 }
 
-func TestCleanupOrphanedConversationTurnSessionIsIdempotent(t *testing.T) {
+func TestCleanupOrphanedConversationTurnIsIdempotent(t *testing.T) {
 	api := lifecycleTestAPI()
 	const sessionID = "session-double-cleanup"
 	api.activeSessions = map[string]*ActiveSessionInfo{
@@ -70,8 +77,8 @@ func TestCleanupOrphanedConversationTurnSessionIsIdempotent(t *testing.T) {
 
 	// Simulates the orphaned goroutine eventually unblocking and running its
 	// own normal completion cleanup after the safety net already ran this one.
-	api.cleanupOrphanedConversationTurnSession(sessionID, "query-id")
-	api.cleanupOrphanedConversationTurnSession(sessionID, "query-id")
+	api.cleanupOrphanedConversationTurn(sessionID, "query-id")
+	api.cleanupOrphanedConversationTurn(sessionID, "query-id")
 
 	api.activeSessionsMux.RLock()
 	status := api.activeSessions[sessionID].Status

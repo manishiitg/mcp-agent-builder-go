@@ -1069,6 +1069,79 @@ func TestRetainedTurnCompletionUsesSidecarFinalResponse(t *testing.T) {
 	}
 }
 
+// Idle-composer detection and a closed control stream that already sees a
+// durable final response can both independently decide the same retained
+// turn just finished, and both call emitRetainedMainTurnStreamCompletion for
+// it -- reported live as the identical "Agent · Response" answer rendered
+// twice in a row. The second call for the same turn must be a no-op.
+func TestRetainedTurnCompletionSkipsDuplicateForSameTurn(t *testing.T) {
+	const sessionID = "retained-duplicate-completion"
+	const finalResponse = "The full route run completed successfully end-to-end."
+	startedAt := time.Now().Add(-2 * time.Second)
+	store := internalevents.NewEventStore(10)
+	defer store.Stop()
+
+	api := &StreamingAPI{
+		eventStore: store,
+		retainedMainTurns: map[string]time.Time{
+			sessionID: startedAt,
+		},
+		retainedMainTurnExecutionIDs: map[string]string{
+			sessionID: "live-turn:test",
+		},
+		internalRetainedTurnFinalResponseReader: func(llmproviders.Provider, string, time.Time) string {
+			return finalResponse
+		},
+	}
+
+	snapshot := terminals.Snapshot{TerminalID: sessionID + ":main:" + sessionID, TmuxSession: "mlp-codex-cli-int-retained"}
+	// The idle-composer path fires first...
+	api.emitRetainedMainTurnStreamCompletion(sessionID, snapshot, llmproviders.ProviderCodexCLI, "completed", "")
+	// ...then the control-stream-closed path independently reaches the same
+	// conclusion for the same turn a few seconds later.
+	api.emitRetainedMainTurnStreamCompletion(sessionID, snapshot, llmproviders.ProviderCodexCLI, "completed", "")
+
+	recorded := store.GetAllEventsRaw(sessionID)
+	if len(recorded) != 1 {
+		t.Fatalf("recorded events=%d, want 1 (duplicate completion for the same turn must be suppressed)", len(recorded))
+	}
+}
+
+// A genuinely new turn (retainedMainTurns advances to a new start time) must
+// still get its own completion -- the guard is per-turn, not per-session.
+func TestRetainedTurnCompletionEmitsAgainForANewTurn(t *testing.T) {
+	const sessionID = "retained-new-turn-completion"
+	store := internalevents.NewEventStore(10)
+	defer store.Stop()
+
+	api := &StreamingAPI{
+		eventStore: store,
+		retainedMainTurns: map[string]time.Time{
+			sessionID: time.Now().Add(-2 * time.Second),
+		},
+		retainedMainTurnExecutionIDs: map[string]string{
+			sessionID: "live-turn:test",
+		},
+		internalRetainedTurnFinalResponseReader: func(llmproviders.Provider, string, time.Time) string {
+			return "first turn's answer"
+		},
+	}
+	snapshot := terminals.Snapshot{TerminalID: sessionID + ":main:" + sessionID, TmuxSession: "mlp-codex-cli-int-retained"}
+	api.emitRetainedMainTurnStreamCompletion(sessionID, snapshot, llmproviders.ProviderCodexCLI, "completed", "")
+
+	// A new turn starts, advancing the tracked start time.
+	api.retainedMainTurns[sessionID] = time.Now()
+	api.internalRetainedTurnFinalResponseReader = func(llmproviders.Provider, string, time.Time) string {
+		return "second turn's answer"
+	}
+	api.emitRetainedMainTurnStreamCompletion(sessionID, snapshot, llmproviders.ProviderCodexCLI, "completed", "")
+
+	recorded := store.GetAllEventsRaw(sessionID)
+	if len(recorded) != 2 {
+		t.Fatalf("recorded events=%d, want 2 (a new turn must still get its own completion)", len(recorded))
+	}
+}
+
 // API/LLM unchanged: even when busy, a non-coding (API) agent must NOT be
 // short-circuited — those keep their frontend steer-vs-queue path.
 func TestTryDeliverQueryAsLiveInputSkipsNonCodingAgent(t *testing.T) {
@@ -1105,11 +1178,6 @@ func TestRequestLLMConfigOverridesManifestOnlyForScheduledSources(t *testing.T) 
 	req.LLMConfigSource = llmConfigSourceScheduledPulse
 	if !requestLLMConfigOverridesManifest(req) {
 		t.Fatal("scheduled Pulse LLM config should override workflow manifest phase LLM")
-	}
-
-	req.LLMConfigSource = llmConfigSourceScheduledAutoImprove
-	if !requestLLMConfigOverridesManifest(req) {
-		t.Fatal("scheduled Goal Advisor LLM config should override the workflow Builder model")
 	}
 
 	req.LLMConfigSource = "manual"
@@ -1427,12 +1495,12 @@ func TestQueryRequestWithEffectiveRuntimeReplacesStaleProviderWithoutMutatingSou
 	}
 }
 
-func TestChiefOfStaffQueriesUseInteractiveInputLane(t *testing.T) {
+func TestAgentWorksChatQueriesUseInteractiveInputLane(t *testing.T) {
 	if !shouldSerializeInteractiveQueryInput(QueryRequest{AgentMode: "multi-agent"}) {
-		t.Fatal("Chief of Staff multi-agent query must use the session input lane")
+		t.Fatal("AgentWorks multi-agent query must use the session input lane")
 	}
 	if !shouldSerializeInteractiveQueryInput(QueryRequest{AgentMode: "simple"}) {
-		t.Fatal("legacy Chief of Staff simple query must use the session input lane")
+		t.Fatal("simple chat query must use the session input lane")
 	}
 	if !shouldSerializeInteractiveQueryInput(QueryRequest{AgentMode: "multi-agent", IsAutoNotification: true}) {
 		t.Fatal("auto-notification turns must share the same full-turn lane")

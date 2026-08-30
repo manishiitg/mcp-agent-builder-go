@@ -8,9 +8,33 @@ import (
 func plat093Answered(ids ...string) []ReportHumanInput {
 	out := make([]ReportHumanInput, 0, len(ids))
 	for _, id := range ids {
-		out = append(out, ReportHumanInput{ID: id, Status: "answered", SelectedOptionID: "approve"})
+		out = append(out, ReportHumanInput{ID: id, Status: "answered", SelectedOptionID: "approve", ApplyContract: ReportHumanInputApplyContract{Mode: "direct_apply", FailurePolicy: "continue_unchanged"}})
 	}
 	return out
+}
+
+func TestDecisionPreflightRoutesOnlyStructuredContracts(t *testing.T) {
+	turns := scheduledDecisionPreflightTurns([]ReportHumanInput{
+		{ID: "legacy-prose", Status: "answered", SelectedOptionID: "approve"},
+		{ID: "safe-setting", Status: "answered", SelectedOptionID: "approve", ApplyContract: ReportHumanInputApplyContract{Mode: "direct_apply"}},
+		{ID: "prompt-bloat", WorkspacePath: "Workflow/social-media", Status: "answered", SelectedOptionID: "approve", ApplyContract: ReportHumanInputApplyContract{
+			Mode: "targeted_fixer", IssueID: "PUL-55BE3473", ApprovedScope: "Extract one shared contract.", PreRunChecks: []string{"validate_plan_change"}, PostRunProof: "one producing run",
+		}},
+		{ID: "rejected-prompt-bloat", Status: "answered", SelectedOptionID: "reject", ApplyContract: ReportHumanInputApplyContract{Mode: "targeted_fixer", ApprovedScope: "Must not run."}},
+		{ID: "external-wait", Status: "answered", SelectedOptionID: "approve", ApplyContract: ReportHumanInputApplyContract{Mode: "external_wait"}},
+	})
+	if len(turns) != 2 {
+		t.Fatalf("preflight turns = %d, want direct drain plus targeted fixer", len(turns))
+	}
+	if turns[0].label != "decision-drain-preflight" || !strings.Contains(turns[0].query, "safe-setting") || !strings.Contains(turns[0].query, "rejected-prompt-bloat") || strings.Contains(turns[0].query, "legacy-prose") {
+		t.Fatalf("direct drain must contain only safe direct or rejected target decisions: %+v", turns[0])
+	}
+	fixer := turns[1]
+	for _, want := range []string{"decision-fixer-preflight", "PUL-55BE3473", "Extract one shared contract.", "validate_plan_change", "one producing run", "Do NOT run workflow steps"} {
+		if !(fixer.label == want || strings.Contains(fixer.query, want)) {
+			t.Fatalf("targeted fixer missing %q: %+v", want, fixer)
+		}
+	}
 }
 
 // TestDecisionDrainTurnOnlyExistsWhenThereIsSomethingToApply keeps an ordinary
@@ -85,6 +109,38 @@ func TestDecisionDrainTurnRefusesToRunTheWorkflow(t *testing.T) {
 	}
 }
 
+// TestDecisionDrainTreatsSafeProofAsPartOfApplying captures the Social Media
+// flattening regression from 2026-08-20. The operator approved replacing the
+// fixed outer orchestrator, but the drain deferred it because a non-producing
+// fixture had not run yet. The old, expensive topology then ran for hours. A
+// safe fixture is work the pre-run turn can do itself; only evidence requiring
+// a production run may be deferred.
+func TestDecisionDrainTreatsSafeProofAsPartOfApplying(t *testing.T) {
+	turn, _ := scheduledDecisionDrainTurn(plat093Answered("ops-decision-flatten-execution-pipeline"))
+	for _, want := range []string{
+		"SAFE VALIDATION IS PART OF APPLYING, NOT A REASON TO DEFER",
+		"non-producing fixture",
+		"Only evidence that inherently requires a real production run or external side effect may wait",
+		"migrate both control flow and data flow",
+		"exact `context_dependencies`",
+		"removed step ids and obsolete path prefixes",
+		"old/new artifact coexistence",
+		"call validate_plan_change",
+		"Treat passed=true as the required deterministic receipt",
+		"if any unexplained old reference remains or the proof still fails, do not consume",
+		"IMPACT FOLLOW-THROUGH",
+		"record_pulse_impact",
+		"human_input_id=<the exact decision id>",
+		"it does not prove the decision worked",
+		"Do not invent an impact record",
+		"Later Pulse passes will append observations and an assessment",
+	} {
+		if !strings.Contains(turn.query, want) {
+			t.Fatalf("decision drain missing structural-application requirement %q:\n%s", want, turn.query)
+		}
+	}
+}
+
 // TestDecisionDrainRunsAfterUpgradesAndBeforeScheduleMessages pins the
 // ordering, which is the entire point of the change. A contract upgrade can
 // rewrite the very artifacts a decision edits, so the upgrade goes first; the
@@ -120,6 +176,35 @@ func TestDecisionDrainRunsAfterUpgradesAndBeforeScheduleMessages(t *testing.T) {
 	for i := range want {
 		if gotOrder[i] != want[i] {
 			t.Fatalf("turn order = %v, want %v", gotOrder, want)
+		}
+	}
+}
+
+func TestPendingDecisionNoticeDoesNotAddATurnOrInferAnAnswer(t *testing.T) {
+	turns := []scheduledWorkshopTurn{
+		{label: "upgrade", upgradeTarget: "1.0.99", query: "upgrade"},
+		{label: "decision-drain-preflight", decisionDrain: true, query: "drain"},
+		{label: "schedule-message-1", query: "run the workflow"},
+		{label: "schedule-message-2", query: "summarize"},
+	}
+	got := attachScheduledPendingDecisionNotice(turns, []ReportHumanInput{
+		{ID: "ops-decision-step-execution-pipeline", Source: "ops_review", Status: "pending"},
+	})
+	if len(got) != len(turns) {
+		t.Fatalf("pending decision context added a turn: got %d, want %d", len(got), len(turns))
+	}
+	if got[0].query != "upgrade" || got[1].query != "drain" || got[3].query != "summarize" {
+		t.Fatalf("notice must affect only the first normal schedule turn: %+v", got)
+	}
+	for _, want := range []string{
+		"ops-decision-step-execution-pipeline (source: ops_review)",
+		"Do not infer an answer",
+		"do not block unrelated safe work",
+		"get_human_input_request",
+		"run the workflow",
+	} {
+		if !strings.Contains(got[2].query, want) {
+			t.Fatalf("pending decision notice missing %q:\n%s", want, got[2].query)
 		}
 	}
 }

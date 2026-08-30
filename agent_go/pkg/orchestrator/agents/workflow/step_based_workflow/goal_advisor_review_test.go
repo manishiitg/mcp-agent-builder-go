@@ -69,19 +69,20 @@ func TestApplyAdvisorSpecializationToManifestIsVersionedAndIdempotent(t *testing
 	}
 }
 
-func TestAdvisorSpecializationPromptIsModuleScoped(t *testing.T) {
+func TestAdvisorSpecializationPromptJoinsBothStrategicPhases(t *testing.T) {
 	specialization := &workflowAdvisorSpecialization{
 		Version:         2,
 		StrategyAuditor: "STRATEGY-LENS-UNIQUE",
 		GoalAdvisor:     "GOAL-LENS-UNIQUE",
 	}
-	strategy := advisorSpecializationPrompt(specialization, "strategy_auditor")
-	goal := advisorSpecializationPrompt(specialization, "goal_advisor")
-	if !strings.Contains(strategy, "STRATEGY-LENS-UNIQUE") || strings.Contains(strategy, "GOAL-LENS-UNIQUE") {
-		t.Fatalf("strategy prompt was not isolated: %s", strategy)
-	}
-	if !strings.Contains(goal, "GOAL-LENS-UNIQUE") || strings.Contains(goal, "STRATEGY-LENS-UNIQUE") {
-		t.Fatalf("goal prompt was not isolated: %s", goal)
+	for _, module := range []string{"strategic_review", "strategy_auditor", "goal_advisor"} {
+		prompt := advisorSpecializationPrompt(specialization, module)
+		if !strings.Contains(prompt, "STRATEGY-LENS-UNIQUE") || !strings.Contains(prompt, "GOAL-LENS-UNIQUE") {
+			t.Fatalf("%s did not receive both ordered phase lenses: %s", module, prompt)
+		}
+		if !strings.Contains(prompt, "Current-strategy audit lens") || !strings.Contains(prompt, "Independent-opportunity lens") {
+			t.Fatalf("%s prompt does not preserve phase ownership: %s", module, prompt)
+		}
 	}
 	if got := advisorSpecializationPrompt(specialization, "workflow_review"); got != "" {
 		t.Fatalf("engineering review received advisor specialization: %q", got)
@@ -95,11 +96,14 @@ func TestWorkshopStageAgentIdentityIsDistinctAndSafe(t *testing.T) {
 		t.Fatalf("stage identities must be unique, got %q", first)
 	}
 	for _, identity := range []string{first, second} {
-		if !strings.HasPrefix(identity, "pulse-reviewer-artifact-review-") {
+		if !strings.Contains(identity, "_pulse-reviewer-artifact-review-") {
 			t.Fatalf("unexpected sanitized stage identity %q", identity)
 		}
-		if strings.ContainsAny(identity, " _/") {
+		if strings.ContainsAny(identity, " /") {
 			t.Fatalf("stage identity contains unsafe separators: %q", identity)
+		}
+		if err := ValidatePulseReviewIdentity(identity, "technical_review"); err != nil {
+			t.Fatalf("stage identity is not receipt-safe: %v", err)
 		}
 	}
 }

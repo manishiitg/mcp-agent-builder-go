@@ -44,6 +44,18 @@ describe('buildCleanConversationItems', () => {
     ])
   })
 
+  it('renders assistant replies restored from the shared durable transcript', () => {
+    const items = buildCleanConversationItems([
+      event('restored-user', 'user_message', { content: 'Show the finished video' }),
+      event('restored-answer', 'llm_generation_end', { content: 'The finished video is ready to preview.' }),
+    ])
+
+    expect(items.map((item) => `${item.role}:${item.content}`)).toEqual([
+      'user:Show the finished video',
+      'assistant:The finished video is ready to preview.',
+    ])
+  })
+
   it('keeps structured reasoning separate from the final answer', () => {
     const items = buildCleanConversationItems([
       event('user', 'user_message', { content: 'Create the teaser' }),
@@ -105,6 +117,81 @@ describe('buildCleanConversationItems', () => {
       role: 'error',
       content: 'The current response was cancelled.',
     }))
+  })
+
+  it('turns an agent quota failure into an actionable product error', () => {
+    const raw = 'all LLMs failed (primary + 0 fallbacks): Claude Code hit your weekly limit [quota_exhausted]'
+    const items = buildCleanConversationItems([
+      event('user', 'user_message', { content: 'Create the video' }),
+      event('failure', 'agent_error', { error: raw, code: 'quota_exhausted' }),
+    ])
+
+    expect(items.at(-1)).toEqual(expect.objectContaining({
+      role: 'error',
+      content: expect.stringContaining('usage limit has been reached'),
+      failure: expect.objectContaining({
+        code: 'quota_exhausted',
+        title: 'Claude Code usage limit reached',
+        retryable: true,
+        technicalDetails: raw,
+      }),
+    }))
+  })
+
+  it('does not present a failed completion as an assistant answer', () => {
+    const raw = 'all LLMs failed (primary + 0 fallbacks): provider unavailable'
+    const items = buildCleanConversationItems([
+      event('user', 'user_message', { content: 'Hello' }),
+      event('done', 'unified_completion', { final_result: raw }),
+    ])
+
+    expect(items.at(-1)).toEqual(expect.objectContaining({
+      role: 'error',
+      failure: expect.objectContaining({ code: 'provider_unavailable', retryable: true }),
+    }))
+    expect(items.some((item) => item.role === 'assistant')).toBe(false)
+  })
+
+  it('deduplicates equivalent failure carriers from one turn', () => {
+    const raw = 'all LLMs failed (primary + 0 fallbacks): Claude Code hit your weekly limit [quota_exhausted]'
+    const items = buildCleanConversationItems([
+      event('user', 'user_message', { content: 'Create it' }),
+      event('failure', 'agent_error', { error: raw }),
+      event('done', 'unified_completion', { final_result: raw }),
+    ])
+
+    expect(items.filter((item) => item.role === 'error')).toHaveLength(1)
+  })
+
+  it('keeps technical configuration errors behind structured failure metadata', () => {
+    const raw = 'Claude Code requires the MCP bridge: mcpbridge binary not found in PATH (set MCP_BRIDGE_BINARY)'
+    const items = buildCleanConversationItems([
+      event('failure', 'conversation_error', { error: raw }),
+    ])
+
+    expect(items).toEqual([
+      expect.objectContaining({
+        role: 'error',
+        content: 'A required server configuration is missing. Ask an administrator to check this product deployment.',
+        failure: expect.objectContaining({
+          code: 'configuration_error',
+          title: 'This product is not configured correctly',
+          technicalDetails: raw,
+        }),
+      }),
+    ])
+  })
+
+  it('redacts credentials from technical failure details', () => {
+    const items = buildCleanConversationItems([
+      event('failure', 'agent_error', {
+        error: 'all LLMs failed: invalid token sk-secretvalue123456 and API_KEY=also-secret',
+      }),
+    ])
+
+    expect(items[0].failure?.technicalDetails).not.toContain('sk-secretvalue123456')
+    expect(items[0].failure?.technicalDetails).not.toContain('also-secret')
+    expect(items[0].failure?.technicalDetails).toContain('[redacted]')
   })
 })
 

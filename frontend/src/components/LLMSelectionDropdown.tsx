@@ -9,6 +9,7 @@ import {
   getProviderIntegrationInfo,
   getProviderIntegrationKind,
   LLM_INTEGRATION_ORDER,
+  resolvePiModelGroup,
   shouldShowLLMPricing,
   type LLMIntegrationKind,
 } from '../utils/llmDisplay';
@@ -310,11 +311,19 @@ export default function LLMSelectionDropdown({
                     {filteredLLMs.length > 0 ? (
                       groupedLLMs.map((group) => {
                         const IntegrationIcon = group.icon;
+                        // Pi CLI routes every backend through one provider id, so
+                        // grouping by llm.provider alone would collapse Gemini,
+                        // OpenRouter, etc. saves into one generic "Pi CLI"
+                        // sub-header. Group by the resolved backend instead for
+                        // pi-cli specifically.
                         const providerGroups = group.llms.reduce((groups, llm) => {
-                          if (!groups[llm.provider]) {
-                            groups[llm.provider] = [];
+                          const key = llm.provider === 'pi-cli'
+                            ? `pi-cli::${resolvePiModelGroup(llm.model) || 'pi-cli'}`
+                            : llm.provider;
+                          if (!groups[key]) {
+                            groups[key] = [];
                           }
-                          groups[llm.provider].push(llm);
+                          groups[key].push(llm);
                           return groups;
                         }, {} as Record<string, LLMOption[]>);
 
@@ -325,10 +334,11 @@ export default function LLMSelectionDropdown({
                               {group.label}
                             </div>
 
-                            {Object.entries(providerGroups).map(([provider, llms]) => {
-                              const providerInfo = getProviderDisplayInfo(provider);
+                            {Object.entries(providerGroups).map(([groupKey, llms]) => {
+                              const provider = llms[0]?.provider ?? groupKey;
+                              const providerInfo = getProviderDisplayInfo(provider, llms[0]?.model);
                               return (
-                                <div key={provider} className="space-y-1">
+                                <div key={groupKey} className="space-y-1">
                                   <div className="text-[11px] font-medium text-muted-foreground px-2 pt-1">
                                     {providerInfo.name}
                                   </div>
@@ -420,7 +430,7 @@ export default function LLMSelectionDropdown({
                         <div className="font-medium text-foreground">Selected: {selectedLLM.label}</div>
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="px-1.5 py-0.5 bg-secondary rounded text-[10px] capitalize">
-                            {selectedLLM.provider}
+                            {getProviderDisplayInfo(selectedLLM.provider, selectedLLM.model).name}
                           </span>
                           {selectedLLM.contextWindow && (
                             <span className="flex items-center gap-0.5">

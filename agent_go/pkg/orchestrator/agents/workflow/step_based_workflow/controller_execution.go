@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	virtualtools "github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/common"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator"
@@ -134,15 +135,12 @@ const (
 	KBAccessRead      = "read"
 	KBAccessWrite     = "write"
 	KBAccessNone      = "none"
+
+	knowledgebaseAccessDescription = "Access mode for this step against knowledgebase/ (per-topic notes/ + notes/_index.json registry). Defaults to 'read' so steps can consume shared context; use 'none' to opt out. 'write' / 'read-write' may contribute: the step agent writes notes/ inline with diff_patch_workspace_file and closes with a self-review turn against its knowledgebase_contribution. Granting write without a knowledgebase_contribution results in no KB writes at all."
 )
 
 // resolveKnowledgebaseAccess resolves the effective KB access mode for a step.
 //
-// Policy: KB access is opt-in per step. Default is "none" — a step only gets KB read
-// or write when knowledgebase_access is explicitly set on its step_config.json entry.
-// The preset-level UseKnowledgebase flag is a prerequisite (when off, all steps are
-// forced to "none" regardless of explicit setting); it controls whether knowledgebase/
-// exists at all, not whether any given step can touch it.
 // resolveKnowledgebaseAccess returns the effective knowledgebase_access for a
 // step. Explicit value wins. Unset mirrors resolveLearningsAccess's already-safe
 // default pattern rather than introducing a new one: read by default (every
@@ -775,6 +773,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) saveExecutionConversationLogs(
 	attemptCompletedAt time.Time,
 	attemptDuration time.Duration,
 ) error {
+	// Recover any orphaned tool call before this evidence is written (PLAT-142/143).
+	backfillMissingToolResults(hcpo.sessionID, toolCalls, executionAgent)
+
 	// Use background context so saves succeed even when execution was canceled/stopped by user
 	saveCtx := context.Background()
 
@@ -786,6 +787,13 @@ func (hcpo *StepBasedWorkflowOrchestrator) saveExecutionConversationLogs(
 	}
 	logDir := getExecutionFolderPathForLogs(validationWorkspacePath, stepID, stepPath)
 	filenameBase := fmt.Sprintf("execution-attempt-%d-iteration-%d", retryAttempt, loopIterationCount)
+	// PLAT-176. retryAttempt and loopIterationCount are counters LOCAL to one
+	// dispatch of this step -- both restart at 1 every time the step is
+	// dispatched again -- so a re-dispatched step recomputes this exact path and
+	// the writes below silently destroy the previous dispatch's evidence. Move
+	// the prior files aside first; canonical names keep holding the newest
+	// dispatch, so every existing reader is unaffected.
+	hcpo.archiveSupersededExecutionLogs(saveCtx, logDir, filenameBase)
 	if attemptCompletedAt.IsZero() {
 		attemptCompletedAt = time.Now().UTC()
 	}
@@ -1003,6 +1011,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) loadSingleStepResultFromLogs(ctx cont
 
 	var latestExecutionResult string
 	var latestAttempt, latestIteration int
+	var latestCompletedAt time.Time
+	var haveLatestCompletedAt bool
 
 	for attempt := 1; attempt <= 10; attempt++ {
 		for iteration := 0; iteration <= 10; iteration++ {
@@ -1018,18 +1028,59 @@ func (hcpo *StepBasedWorkflowOrchestrator) loadSingleStepResultFromLogs(ctx cont
 				continue
 			}
 
-			if execResult, ok := executionData["execution_result"].(string); ok {
-				if attempt > latestAttempt || (attempt == latestAttempt && iteration > latestIteration) {
-					latestExecutionResult = execResult
-					latestAttempt = attempt
-					latestIteration = iteration
+			execResult, ok := executionData["execution_result"].(string)
+			if !ok {
+				continue
+			}
+
+			// attempt/iteration are counters LOCAL to one dispatch, reset to 1/0
+			// on every fresh run of this step (same shape as PLAT-176) -- across
+			// dispatches they are not a time-ordered sequence, so a superseded
+			// dispatch that happened to reach a higher attempt number than a
+			// later, successful dispatch would otherwise win here and silently
+			// resurrect a stale (and possibly failed) result as if it were
+			// current. completed_at is wall-clock time and is the only field
+			// that is actually comparable across dispatches; the attempt/
+			// iteration pair remains a tie-breaker for same-instant files, and
+			// stays the sole ordering when a legacy file predates completed_at
+			// being recorded (this branch's own value would be its zero time,
+			// which correctly loses to anything with a real timestamp below).
+			var completedAt time.Time
+			var hasCompletedAt bool
+			if raw, ok := executionData["completed_at"].(string); ok {
+				// RFC3339Nano parses a plain-RFC3339 (whole-second) legacy
+				// value fine too, so this covers both old and new files.
+				if parsed, parseErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(raw)); parseErr == nil && !parsed.IsZero() {
+					completedAt = parsed
+					hasCompletedAt = true
 				}
+			}
+
+			better := false
+			switch {
+			case hasCompletedAt && haveLatestCompletedAt:
+				better = completedAt.After(latestCompletedAt) ||
+					(completedAt.Equal(latestCompletedAt) && (attempt > latestAttempt || (attempt == latestAttempt && iteration > latestIteration)))
+			case hasCompletedAt && !haveLatestCompletedAt:
+				better = true
+			case !hasCompletedAt && !haveLatestCompletedAt:
+				better = attempt > latestAttempt || (attempt == latestAttempt && iteration > latestIteration)
+			default: // !hasCompletedAt && haveLatestCompletedAt: never prefer an undated file over a dated one
+				better = false
+			}
+
+			if better {
+				latestExecutionResult = execResult
+				latestAttempt = attempt
+				latestIteration = iteration
+				latestCompletedAt = completedAt
+				haveLatestCompletedAt = hasCompletedAt
 			}
 		}
 	}
 
 	if latestExecutionResult != "" {
-		hcpo.GetLogger().Info(fmt.Sprintf("Loaded execution result from logs for step %d (attempt %d, iteration %d)", stepNumber, latestAttempt, latestIteration))
+		hcpo.GetLogger().Info(fmt.Sprintf("Loaded execution result from logs for step %d (attempt %d, iteration %d, completed_at=%s)", stepNumber, latestAttempt, latestIteration, latestCompletedAt.Format(time.RFC3339)))
 		return latestExecutionResult, true
 	}
 	return "", false
@@ -1275,6 +1326,17 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 	copy(updatedContextFiles, previousContextFiles)
 	artifactStepID, artifactStepPath := getExecutionArtifactIdentity(step.GetID(), stepPath, execCtx)
 
+	// PLAT-174. Everything below reads step.AgentConfigs (folder guard scope,
+	// scripted-mode detection, and eventually the execution agent's LLM), and
+	// until now that field was a snapshot taken exactly once, at run start
+	// (controller.go's populateRuntimeFields sweep over every plan step). A
+	// step_config.json change made mid-run — even minutes before this exact
+	// step began, well after the change landed on disk — never reached it,
+	// because the run was already in flight. "Before this step started" was
+	// never the boundary that mattered; "before the run started" was, and by
+	// the time any step but the first one runs, that boundary has passed.
+	hcpo.refreshStepAgentConfigsBeforeExecution(ctx, step)
+
 	// Emit step_started event (also emits step progress with status="start")
 	hcpo.emitStepStartedEvent(ctx, step, stepIndex, stepPath)
 
@@ -1307,7 +1369,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 	if sessionID := hcpo.GetMCPSessionID(); sessionID != "" && !isSubAgent {
 		narrowAgentCfg := getAgentConfigs(step)
 		narrowKBAccess := resolveKnowledgebaseAccess(narrowAgentCfg, hcpo.UseKnowledgebase())
-		narrowLearningsAccess := resolveLearningsAccess(narrowAgentCfg)
+		narrowLearningsAccess := resolveExecutionLearningsAccess(narrowAgentCfg, step, hcpo.isEvaluationMode)
 		narrowRead, narrowWrite := hcpo.setupExecutionFolderGuard(artifactStepPath, artifactStepID, narrowKBAccess, narrowLearningsAccess, resolveDBAccess(narrowAgentCfg), narrowAgentCfg)
 		var prevRead, prevWrite []string
 		if prevCfg := common.GetSessionShellConfig(sessionID); prevCfg != nil {
@@ -1430,7 +1492,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 		}
 
 		// Get folder guard paths for template (so agent knows exact paths it can access)
-		learningsAccess := resolveLearningsAccess(agentConfigs)
+		learningsAccess := resolveExecutionLearningsAccess(agentConfigs, step, hcpo.isEvaluationMode)
 		evaluationDBWrite := false
 		if evalStep, ok := step.(*EvaluationStep); ok {
 			evaluationDBWrite = evalStep.DBWrite
@@ -1659,6 +1721,20 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 						"This is a harness/infrastructure failure, not a fault in the script — do not modify main.py in response to it. Underlying error: %s",
 					step.GetID(), scriptedDecision.HarnessError)
 			}
+			// The script deliberately exited ScriptedTerminalRefusalExitCode: a
+			// fail-closed guard correctly detected an unsafe condition and
+			// refused to proceed. This must fail the step outright rather than
+			// fall through to the LLM relearn path — handing an agent "here is
+			// a refusal, fix it" is exactly how the refusal gets overridden
+			// instead of respected. See ScriptedTerminalRefusalExitCode's own
+			// doc comment for the live incident that established this.
+			if scriptedDecision.TerminalRefusal {
+				return "", updatedContextFiles, fmt.Errorf(
+					"scripted step %q deliberately refused to proceed (exit code %d): its own protective logic detected an unsafe condition and stopped. "+
+						"This is the script working correctly, not a bug — do NOT modify main.py or attempt the write it refused. "+
+						"Investigate and resolve the underlying condition the script detected before retrying. Refusal detail: %s",
+					step.GetID(), ScriptedTerminalRefusalExitCode, scriptedDecision.TerminalRefusalReason)
+			}
 			learnCodePriorScript = scriptedDecision.PriorScript
 			learnCodePriorError = scriptedDecision.PriorError
 			switch {
@@ -1797,6 +1873,14 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 			}
 
 			// Retry loop: Execute with validation feedback, reusing the same learning history
+			// Fires an [AUTO-NOTIFICATION] into the builder chat on the FIRST
+			// pre-validation failure for this step this run — before retries
+			// are exhausted — so the builder can assess and intervene while
+			// the step is still retrying, rather than only learning about it
+			// once the whole step eventually fails outright. Deliberately
+			// once-per-step, not once-per-attempt: firing on every attempt
+			// would spam the chat for a step that recovers on retry 2.
+			preValidationNotifiedThisStep := false
 			for retryAttempt := 1; retryAttempt <= maxRetryAttempts; retryAttempt++ {
 				// Check for context cancellation before retry attempt
 				select {
@@ -1899,7 +1983,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 					// Pass stepPath to createExecutionOnlyAgent so nested sub-agent folders resolve correctly.
 					// For learnings / metadata selection, use the concrete step ID so sub-agents align with their own learnings folder.
 					// allSteps is already []PlanStepInterface - no conversion needed
-					executionAgent, err = hcpo.createExecutionOnlyAgent(executionAgentCtx, "execution_only", stepPath, executionAgentName, agentConfigs, step.GetID(), getExecutionArtifactFolderOverride(execCtx), evaluationDBWrite)
+					executionAgent, err = hcpo.createExecutionOnlyAgent(executionAgentCtx, "execution_only", stepPath, executionAgentName, agentConfigs, step, step.GetID(), getExecutionArtifactFolderOverride(execCtx), evaluationDBWrite)
 					if err != nil {
 						return "", updatedContextFiles, fmt.Errorf("failed to create execution-only agent for step %d: %w", stepIndex+1, err)
 					}
@@ -2228,7 +2312,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 						// Force Tier 1 (High) for repair agents — they need to fix a failure,
 						// so they should use at least the same tier as the original execution.
 						repairCtx := context.WithValue(ctx, WorkshopTierOverrideKey, int(TierHigh))
-						repairAgent, repairErr := hcpo.createExecutionOnlyAgent(repairCtx, "execution_only", stepPath, repairAgentName, agentConfigs, step.GetID(), getExecutionArtifactFolderOverride(execCtx), evaluationDBWrite)
+						repairAgent, repairErr := hcpo.createExecutionOnlyAgent(repairCtx, "execution_only", stepPath, repairAgentName, agentConfigs, step, step.GetID(), getExecutionArtifactFolderOverride(execCtx), evaluationDBWrite)
 						if repairErr != nil {
 							hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ [scripted] failed to create repair agent for step %d fix %d: %v", stepIndex+1, fixIter+1, repairErr))
 							break
@@ -2409,6 +2493,33 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 				// Build validation response based on pre-validation results
 				if !preValidationResults.OverallPass {
 					hcpo.GetLogger().Warn(fmt.Sprintf("Pre-validation failed for step %d - rejecting", stepIndex+1))
+					// One [AUTO-NOTIFICATION] per step per run, on the FIRST
+					// failure only (see preValidationNotifiedThisStep above the
+					// retry loop) -- not the same case as
+					// completeMessageSequenceItemNotification's deliberately
+					// silent per-ITEM prevalidation gate (controller_message_
+					// sequence.go): that one fires up to once per item and the
+					// step's own eventual completion notification already
+					// covers it. This is the step's overall gate, fires at
+					// most once total, and specifically exists so the builder
+					// hears about a real structural problem while the step is
+					// still burning retries -- not only after all of them are
+					// exhausted.
+					if !preValidationNotifiedThisStep && hcpo.workshopExecutionNotifier != nil {
+						preValidationNotifiedThisStep = true
+						notifyID := fmt.Sprintf("prevalidation-warn-%s-%d", step.GetID(), time.Now().UnixNano())
+						notifyName := fmt.Sprintf("Pre-validation check: %s", step.GetTitle())
+						hcpo.workshopExecutionNotifier.OnExecutionStart(WorkshopExecutionStart{
+							ID:                notifyID,
+							ParentExecutionID: currentWorkshopParentExecutionID(ctx),
+							Name:              notifyName,
+							Kind:              "prevalidation_warning",
+							Metadata:          map[string]string{"step_id": step.GetID(), "step_path": stepPath},
+						})
+						hcpo.workshopExecutionNotifier.OnExecutionComplete(notifyID, notifyName, formatWorkspaceResults(preValidationResults),
+							map[string]string{"step_id": step.GetID(), "step_path": stepPath},
+							fmt.Errorf("pre-validation failed on attempt %d/%d — will retry unless attempts are exhausted", retryAttempt, maxRetryAttempts))
+					}
 					validationResponse = &ValidationResponse{
 						IsSuccessCriteriaMet: false,
 						ExecutionStatus:      "FAILED",
@@ -2442,17 +2553,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 							hcpo.GetLogger().Info(fmt.Sprintf("🧠 Reflection completed for step %d (history=%d turns)", stepIndex+1, len(executionConversationHistory)))
 						}
 					}
-					// File any CONCERNS: lines durably BEFORE the summaries are joined.
-					// Phase attribution is free here and nowhere else — once they are
-					// concatenated there is no way to tell a contradiction found while
-					// reflecting from one raised by the task itself. Since PLAT-055
-					// merged the KB and learnings turns, reflection files under the
-					// learnings phase; kb-review remains a valid phase for historical
-					// rows and for concerns raised through record_run_concern.
-					hcpo.recordStepConcerns(ctx, step.GetID(), map[string]string{
-						ConcernPhaseExecution: mainExecutionSummary,
-						ConcernPhaseLearnings: directLearningsSummary,
-					})
+					// Step summaries are retained run evidence. Pulse reviews that
+					// evidence directly; the runtime must not scrape prose into the
+					// Pulse observation store or attempt text-based deduplication.
 
 					if combinedSummary := buildDirectModeCompletionSummary(mainExecutionSummary, "", directLearningsSummary); combinedSummary != "" {
 						executionResult = combinedSummary
@@ -2874,15 +2977,125 @@ func isTodoTaskStep(step PlanStepInterface) bool {
 	return ok
 }
 
-// isRoutingStep returns true if the step is a routing step (N-way LLM-based routing)
+// isRoutingStep returns true if the step is a deterministic N-way switch --
+// either a routing step (now the "route"/major-fork concept) or a branch
+// step (the small in-flow decision). Both share the exact same executor and
+// deterministic-only behavior (no learnings, no agent execution); see
+// routeSwitchStep in planning_agent.go and PLAT-259.
 func isRoutingStep(step PlanStepInterface) bool {
-	_, ok := step.(*RoutingPlanStep)
-	return ok
+	switch step.(type) {
+	case *RoutingPlanStep, *BranchPlanStep:
+		return true
+	default:
+		return false
+	}
 }
 
 func isMessageSequenceStep(step PlanStepInterface) bool {
 	_, ok := step.(*MessageSequencePlanStep)
 	return ok
+}
+
+// executionLogEvidenceSuffixes are the four files saveExecutionConversationLogs
+// writes for one dispatch, all sharing a filenameBase.
+var executionLogEvidenceSuffixes = []string{"", "-conversation", "-timing", "-prompts"}
+
+// archiveSupersededExecutionLogs moves a previous dispatch's execution evidence
+// into a `superseded/` subfolder so the imminent write cannot destroy it.
+//
+// PLAT-176. Execution evidence is named
+// `execution-attempt-{retryAttempt}-iteration-{loopIteration}`, and both counters
+// are local to a single dispatch of a step: retryAttempt comes from this
+// function's own `for retryAttempt := 1; ...` loop, and message_sequence passes a
+// literal 1 with a per-entry turn number. Nothing in the name identifies WHICH
+// dispatch produced it, so a step that runs again -- a route re-entry, an
+// operator re-run, a gate sending work back -- recomputes the identical path and
+// overwrites the earlier run in place.
+//
+// Confirmed live on confida-login (2026-08-22): `execute-browser-and-capture-apis`
+// was dispatched 5 times in one run and every dispatch clobbered the last.
+// Reading one timing file minutes apart returned two different runs entirely
+// (2675000ms/21 tool calls, then 104248ms/14 tool calls). The run's own logs
+// could not show the step had run more than once, so a diagnosis built on them
+// was wrong, and the real history had to be recovered from server_debug.log.
+// That is the cost this prevents: a looping run erases the evidence that it
+// looped, defeating exactly the after-the-fact review meant to catch it.
+//
+// Archived copies go into a subfolder rather than a sibling name on purpose:
+// readers list this directory with an `execution-attempt-*` prefix glob
+// (cmd/server/workflow.go) and parse the counters back out with Sscanf, so a
+// stamped sibling would show up as a phantom extra attempt and misparse. A
+// subfolder is invisible to those globs while staying trivially discoverable.
+//
+// Best-effort by design: this is evidence retention, not correctness. A failure
+// here is logged and execution continues -- losing an archive is bad, failing a
+// step because an archive could not be written would be worse.
+func (hcpo *StepBasedWorkflowOrchestrator) archiveSupersededExecutionLogs(ctx context.Context, logDir, filenameBase string) {
+	primary := fmt.Sprintf("%s/%s.json", logDir, filenameBase)
+	exists, err := hcpo.CheckWorkspaceFileExists(ctx, primary)
+	if err != nil {
+		hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ [LOG_RETENTION] Could not check %s before overwrite: %v (proceeding; a prior dispatch's evidence may be lost)", primary, err))
+		return
+	}
+	if !exists {
+		// First dispatch, the overwhelmingly common case: nothing to preserve.
+		return
+	}
+
+	// A timestamp keeps the archive human-readable; the UUID makes the archive
+	// collision-proof even when a fast failure/re-dispatch cycle finishes more
+	// than once inside the same second. The workspace move endpoint rejects an
+	// existing destination, so timestamp-only names can silently lose the newer
+	// dispatch's evidence when the canonical file is subsequently overwritten.
+	stamp := fmt.Sprintf("%s-%s", time.Now().UTC().Format("20060102T150405Z"), uuid.NewString())
+	archived := 0
+	for _, suffix := range executionLogEvidenceSuffixes {
+		src := fmt.Sprintf("%s/%s%s.json", logDir, filenameBase, suffix)
+		if ok, checkErr := hcpo.CheckWorkspaceFileExists(ctx, src); checkErr != nil || !ok {
+			continue
+		}
+		dst := fmt.Sprintf("%s/superseded/%s%s-%s.json", logDir, filenameBase, suffix, stamp)
+		if moveErr := hcpo.MoveWorkspaceFile(ctx, src, dst); moveErr != nil {
+			hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ [LOG_RETENTION] Failed to preserve %s before overwrite: %v", src, moveErr))
+			continue
+		}
+		archived++
+	}
+	if archived > 0 {
+		hcpo.GetLogger().Info(fmt.Sprintf("📚 [LOG_RETENTION] Step re-dispatched: preserved %d file(s) from the previous dispatch under %s/superseded/ (stamp %s) instead of overwriting them", archived, logDir, stamp))
+	}
+}
+
+// refreshStepAgentConfigsBeforeExecution re-reads step_config.json and
+// repopulates this one step's runtime AgentConfigs immediately before it
+// executes, so an update_step_config change made after the run started —
+// but before this step's own dispatch — actually takes effect.
+//
+// PLAT-174. Before this, step_config.json was read exactly once per run
+// (controller.go's populateRuntimeFields sweep, at run start), and every
+// step for the rest of that run carried whatever snapshot existed at that
+// moment. A change landing on disk after the run started never reached a
+// step that had not begun yet, no matter how far ahead of that step's own
+// turn it was made — confirmed live when a pin to execute-browser-and-capture-apis,
+// saved 16 minutes before that step began, still ran on the pre-run-start
+// default for all three of that step's executions.
+//
+// A read failure here (transient I/O, a mid-write file) must not abort step
+// dispatch or blank out config the step already has — it logs and keeps
+// whatever populateRuntimeFields already set at run start, the same
+// fail-open behavior controller.go uses for the run-start read itself.
+func (hcpo *StepBasedWorkflowOrchestrator) refreshStepAgentConfigsBeforeExecution(ctx context.Context, step PlanStepInterface) {
+	if step == nil || strings.TrimSpace(step.GetID()) == "" {
+		return
+	}
+	stepConfigs, err := hcpo.ReadStepConfigs(ctx)
+	if err != nil {
+		hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ [CONFIG_REFRESH] Failed to re-read step_config.json before executing step %s: %v (keeping config from run start)", step.GetID(), err))
+		return
+	}
+	if err := populateRuntimeFields(step, stepConfigs); err != nil {
+		hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ [CONFIG_REFRESH] Failed to refresh runtime config for step %s: %v (keeping config from run start)", step.GetID(), err))
+	}
 }
 
 // getAgentConfigs returns AgentConfigs from a PlanStepInterface
@@ -2921,7 +3134,29 @@ func getRegularPlanStep(step PlanStepInterface) *RegularPlanStep {
 	return nil
 }
 
-// runExecutionPhase executes the plan steps one by one
+// LastExecutedStepOutcome captures the exact in-memory result of the most
+// recently executed step within one runExecutionPhase call. It exists so a
+// caller that dispatched exactly one step (e.g. the workshop's
+// ExecuteStepForWorkshop) can use the result it just produced directly,
+// instead of re-reading the step's log folder afterward -- a re-read has no
+// way to distinguish "the file this exact call just wrote" from a file a
+// concurrent, unrelated dispatch of the same step wrote in the meantime
+// (PLAT-182 review). Found is false when no step that populates
+// previousExecutionResults ran (e.g. only a routing or todo_task step ran,
+// neither of which produces a result string this way) -- the caller must
+// fall back to a log-folder read in that case.
+type LastExecutedStepOutcome struct {
+	StepIndex       int
+	StepID          string
+	ExecutionResult string
+	Found           bool
+}
+
+// runExecutionPhase executes the plan steps one by one. lastOutcome, if
+// non-nil, is populated in place with the final executed step's exact
+// in-memory result -- see LastExecutedStepOutcome. Callers that process a
+// whole plan/group (not a single targeted step) have no use for this and
+// pass nil.
 func (hcpo *StepBasedWorkflowOrchestrator) runExecutionPhase(
 	ctx context.Context,
 	breakdownSteps []PlanStepInterface,
@@ -2929,6 +3164,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) runExecutionPhase(
 	progress *StepProgress,
 	startFromStep int,
 	execCtx *ExecutionContext,
+	lastOutcome *LastExecutedStepOutcome,
 ) error {
 	// Run folder should already be resolved early (after plan approval)
 	if hcpo.selectedRunFolder == "" {
@@ -3351,6 +3587,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) runExecutionPhase(
 			}
 			previousExecutionResults[i] = executionResult
 			hcpo.GetLogger().Info(fmt.Sprintf("💾 Stored execution result for human input step %d (will be used by subsequent steps): %s", i+1, executionResult))
+			if lastOutcome != nil {
+				*lastOutcome = LastExecutedStepOutcome{StepIndex: i, StepID: step.GetID(), ExecutionResult: executionResult, Found: true}
+			}
 
 			// Check if we're in single step mode and should stop
 			if hcpo.runSingleStepOnly && i == hcpo.singleStepTarget {
@@ -3413,6 +3652,21 @@ func (hcpo *StepBasedWorkflowOrchestrator) runExecutionPhase(
 			hcpo.GetLogger().Info(fmt.Sprintf("[STEP-PATH] Using default step path %q for step index %d (override=%q, singleStep=%v, target=%d)",
 				stepPath, i, execCtx.StepPathOverride, execCtx.RunSingleStepOnly, execCtx.SingleStepTarget))
 		}
+		// Same contract as the message_sequence queue: a cancelled run must not
+		// START another step, regardless of what the previous one reported
+		// (PLAT-130). A step failing for its own reasons already aborts the loop;
+		// this covers the case where cancellation never became an error.
+		if ctx != nil && ctx.Err() != nil {
+			hcpo.GetLogger().Info(fmt.Sprintf("[STOP] refusing to start step %d of %d (%q) — run is canceled: %v",
+				i+1, len(breakdownSteps), step.GetTitle(), ctx.Err()))
+			return fmt.Errorf("workflow halted before step %d: %w", i+1, ctx.Err())
+		}
+		// Quota pacing (opt-in per workflow). Spread the run across a window
+		// reset rather than racing into the wall — but only when the account is
+		// actually near it, so a healthy run pays nothing.
+		if pacingErr := hcpo.applyQuotaPacingBeforeStep(ctx, i+1, len(breakdownSteps), step, stepPath); pacingErr != nil {
+			return pacingErr
+		}
 		executionResult, _, err := hcpo.executeSingleStep(
 			ctx,
 			step,
@@ -3430,6 +3684,21 @@ func (hcpo *StepBasedWorkflowOrchestrator) runExecutionPhase(
 			nil,                      // orchestrationRoutes - nil for regular steps (not sub-agents)
 		)
 		if err != nil {
+			// A provider capacity wall is not a step failure. The steps before
+			// this one completed and did real work; the remaining ones will
+			// succeed once the window reopens. Recording a durable wait and
+			// returning it typed lets the scheduler suspend this run at exactly
+			// this step instead of marking it failed and letting the next cron
+			// tick replay the completed steps' side effects (PLAT-101).
+			stepTitleForWait := step.GetTitle()
+			stepIDForWait := step.GetID()
+			if stepIDForWait == "" {
+				stepIDForWait = fmt.Sprintf("step-%d", i+1)
+			}
+			if waitErr := hcpo.recordWorkflowCapacityWait(ctx, err, i+1, len(breakdownSteps), stepIDForWait, stepPath, stepTitleForWait); waitErr != nil {
+				hcpo.GetLogger().Info(fmt.Sprintf("⏸️ Step %d suspended on provider capacity: %v", i+1, waitErr))
+				return waitErr
+			}
 			hcpo.GetLogger().Error(fmt.Sprintf("❌ Step %d execution failed: %v", i+1, err), nil)
 			// Emit step_progress_updated (failed) event
 			stepTitle := step.GetTitle()
@@ -3458,6 +3727,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) runExecutionPhase(
 		}
 		previousExecutionResults[i] = executionResult
 		hcpo.GetLogger().Info(fmt.Sprintf("💾 Stored execution result for downstream steps after step %d", i+1))
+		if lastOutcome != nil {
+			*lastOutcome = LastExecutedStepOutcome{StepIndex: i, StepID: step.GetID(), ExecutionResult: executionResult, Found: true}
+		}
 
 		// Check if we're in single step mode and should stop
 		if hcpo.runSingleStepOnly && i == hcpo.singleStepTarget {

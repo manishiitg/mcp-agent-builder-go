@@ -119,6 +119,38 @@ func TestValidateManifestRejectsEquivalentMCPServerAliases(t *testing.T) {
 	}
 }
 
+func TestValidateManifestRejectsScheduleDependencyCycle(t *testing.T) {
+	manifest := NewWorkflowManifest("Dependency cycle")
+	manifest.Schedules = []WorkflowSchedule{
+		{ID: "close", Mode: "multi-agent", ScheduleType: "cron", CronExpression: "0 16 * * 1-5", AfterScheduleID: "pulse"},
+		{ID: "pulse", Mode: "multi-agent", ScheduleType: "cron", CronExpression: "5 16 * * 1-5", AfterScheduleID: "close"},
+	}
+	err := ValidateManifest(manifest)
+	if err == nil || !strings.Contains(err.Error(), "dependency cycle") {
+		t.Fatalf("expected dependency cycle to be rejected, got %v", err)
+	}
+}
+
+func TestValidateManifestAcceptsTypedDependencyAndCollisionPolicies(t *testing.T) {
+	manifest := NewWorkflowManifest("Dependent schedules")
+	manifest.Schedules = []WorkflowSchedule{
+		{ID: "close", Mode: "multi-agent", ScheduleType: "cron", CronExpression: "55 15 * * 1-5", CollisionPolicy: "queue_latest"},
+		{
+			ID: "pulse", Mode: "multi-agent", ScheduleType: "cron", CronExpression: "10 16 * * 1-5",
+			AfterScheduleID: "close", AfterTerminalStatus: "completed", AfterDelayMinutes: 10,
+			DependencyDeadline: "17:30", CollisionPolicy: "coalesce", MaxStartDelayMinutes: 80,
+		},
+	}
+	if err := ValidateManifest(manifest); err != nil {
+		t.Fatalf("valid dependency policy rejected: %v", err)
+	}
+
+	manifest.Schedules[1].DependencyDeadline = "tomorrow"
+	if err := ValidateManifest(manifest); err == nil || !strings.Contains(err.Error(), "HH:MM") {
+		t.Fatalf("invalid dependency deadline should be rejected, got %v", err)
+	}
+}
+
 func TestNewWorkflowManifestDefaultsGlobalSecretsToNone(t *testing.T) {
 	manifest := NewWorkflowManifest("Test workflow")
 	if manifest.Version != WorkflowContractCurrentVersion {
@@ -207,7 +239,7 @@ func TestReadWorkflowManifestMigratesMissingLabelFromWorkspacePath(t *testing.T)
 	}
 }
 
-func TestReadWorkflowManifestPrunesRetiredExecutionDefaultsField(t *testing.T) {
+func TestReadWorkflowManifestPrunesRetiredExecutionDefaultsFields(t *testing.T) {
 	const workspacePath = "Workflow/linkedin"
 	manifestJSON, err := json.Marshal(map[string]interface{}{
 		"schema_version": 1,
@@ -237,42 +269,68 @@ func TestReadWorkflowManifestPrunesRetiredExecutionDefaultsField(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("ReadWorkflowManifest() found=%v err=%v", found, err)
 	}
-	if manifest.ExecutionDefs.WorkshopMode != "optimizer" || !manifest.ExecutionDefs.AlwaysUseSameRun {
+	if manifest.ExecutionDefs.WorkshopMode != "optimizer" {
 		t.Fatalf("known execution_defaults fields not preserved: %+v", manifest.ExecutionDefs)
 	}
 
 	workspace.mu.Lock()
 	persistedJSON := workspace.files[workspacePath+"/workflow.json"]
 	workspace.mu.Unlock()
-	if strings.Contains(persistedJSON, "global_skill_objective") {
-		t.Fatalf("persisted manifest still contains retired field global_skill_objective: %s", persistedJSON)
+	if strings.Contains(persistedJSON, "global_skill_objective") || strings.Contains(persistedJSON, "always_use_same_run") {
+		t.Fatalf("persisted manifest still contains retired execution defaults: %s", persistedJSON)
 	}
 	if !strings.Contains(persistedJSON, "\"workshop_mode\": \"optimizer\"") {
 		t.Fatalf("persisted manifest lost known field workshop_mode: %s", persistedJSON)
 	}
 }
 
-// TestPostRunMonitorIsPeriodicFailsSafeToPerRun pins PLAT-115: every
-// existing workflow has no post_run_monitor_mode set at all, and must keep
-// running Gate/Review+Fix/Finalize after every run exactly as before. Only
-// the exact value "periodic" opts out of that — anything else (empty,
-// whitespace, an unrecognized future value, or a nil manifest) fails safe to
-// today's per-run behavior rather than silently skipping review.
-func TestPostRunMonitorIsPeriodicFailsSafeToPerRun(t *testing.T) {
+func TestPulseEnabledAndLegacyScheduleMigration(t *testing.T) {
 	var nilManifest *WorkflowManifest
-	if nilManifest.PostRunMonitorIsPeriodic() {
-		t.Fatal("nil manifest must not be periodic")
+	if nilManifest.PulseEnabled() {
+		t.Fatal("nil manifest must not have recurring Pulse")
 	}
-	for _, mode := range []string{"", "   ", "per_run", "unknown_future_value"} {
-		m := &WorkflowManifest{PostRunMonitorMode: mode}
-		if m.PostRunMonitorIsPeriodic() {
-			t.Fatalf("mode %q must not be treated as periodic", mode)
-		}
+	manifest := &WorkflowManifest{Schedules: []WorkflowSchedule{
+		{Name: "ordinary", Enabled: true},
+		{Name: "disabled Pulse", Enabled: false, PulseReviewOnly: true},
+	}}
+	if manifest.PulseEnabled() {
+		t.Fatal("a disabled Pulse schedule must not enable recurring Pulse")
 	}
-	if m := (&WorkflowManifest{PostRunMonitorMode: "periodic"}); !m.PostRunMonitorIsPeriodic() {
-		t.Fatal("mode \"periodic\" must be treated as periodic")
+	manifest.Schedules = append(manifest.Schedules, WorkflowSchedule{Name: "Pulse", Enabled: true, PulseReviewOnly: true})
+	if !manifest.PulseEnabled() {
+		t.Fatal("an enabled legacy Pulse schedule must preserve enablement before migration")
 	}
-	if m := (&WorkflowManifest{PostRunMonitorMode: "  periodic  "}); !m.PostRunMonitorIsPeriodic() {
-		t.Fatal("mode \"periodic\" with surrounding whitespace must still be treated as periodic")
+	if !manifest.MigrateLegacyPulseSchedule() {
+		t.Fatal("legacy Pulse schedules must be migrated")
+	}
+	if manifest.Pulse == nil || !manifest.Pulse.Enabled {
+		t.Fatal("migration must store pulse.enabled=true")
+	}
+	if len(manifest.Schedules) != 1 || manifest.Schedules[0].Name != "ordinary" {
+		t.Fatalf("migration must retain only normal schedules: %+v", manifest.Schedules)
+	}
+	if manifest.MigrateLegacyPulseSchedule() {
+		t.Fatal("migration must be idempotent")
+	}
+}
+
+func TestSetWorkflowPulseEnabledRemovesDedicatedSchedule(t *testing.T) {
+	manifest := &WorkflowManifest{
+		Pulse: &WorkflowPulseConfig{AdvisorSpecialization: &WorkflowAdvisorSpecialization{Version: 1}},
+		Schedules: []WorkflowSchedule{
+			{ID: "normal", Enabled: true},
+			{ID: "legacy-pulse", Enabled: true, PulseReviewOnly: true},
+		},
+	}
+	setWorkflowPulseEnabled(manifest, true)
+	if !manifest.Pulse.Enabled || manifest.Pulse.AdvisorSpecialization == nil {
+		t.Fatalf("Pulse update lost config: %+v", manifest.Pulse)
+	}
+	if len(manifest.Schedules) != 1 || manifest.Schedules[0].ID != "normal" {
+		t.Fatalf("Pulse update retained obsolete schedule: %+v", manifest.Schedules)
+	}
+	setWorkflowPulseEnabled(manifest, false)
+	if manifest.Pulse.Enabled {
+		t.Fatal("Pulse update did not disable post-run review")
 	}
 }

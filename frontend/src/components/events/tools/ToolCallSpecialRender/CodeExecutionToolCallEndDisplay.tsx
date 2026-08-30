@@ -198,6 +198,14 @@ export const CodeExecutionToolCallEndDisplay: React.FC<CodeExecutionToolCallEndD
 
   // Handle execute_shell_command tool response
   if (logicalToolName === 'execute_shell_command') {
+    // PLAT-160. A synthetic settle (the tool never reported its own end, so
+    // the event store closed the chip itself) is not a normal completion —
+    // ToolCallEndEvent.tsx already treats it as its own state elsewhere in
+    // this app. This branch didn't, so a settled shell command rendered as an
+    // ordinary green "Command Completed" with Turn: 0 (a settled event
+    // carries no real turn number) and its open-to-settle time labelled
+    // "Duration" as if it had been measured.
+    const isSyntheticSettle = event.synthetic_settle === true
     const rawOutput = resultText || eventResultText
 
     // Extract stdout/stderr from parsed JSON if available
@@ -241,8 +249,12 @@ export const CodeExecutionToolCallEndDisplay: React.FC<CodeExecutionToolCallEndD
       ? 'text-red-600 dark:text-red-400'
       : 'text-slate-500 dark:text-slate-400'
 
-    const statusIcon = isError ? '❌' : '✅'
-    const statusText = isError ? 'Command Failed' : 'Command Completed'
+    const statusIcon = isError ? '❌' : isSyntheticSettle ? '○' : '✅'
+    const statusText = isError
+      ? 'Command Failed'
+      : isSyntheticSettle
+        ? (output.trim() ? 'Command — result recovered after the fact' : 'Command — no result reported')
+        : 'Command Completed'
 
     return (
       <div className={`${bgColor} border rounded p-2`}>
@@ -252,8 +264,18 @@ export const CodeExecutionToolCallEndDisplay: React.FC<CodeExecutionToolCallEndD
               <div className={`text-xs font-medium ${textColor} flex items-center gap-2`}>
                 {statusIcon} {statusText}{' '}
                 <span className={`text-xs font-normal ${secondaryTextColor}`}>
-                  {event.turn !== undefined && `• Turn: ${event.turn}`}
-                  {event.duration != null && ` • Duration: ${formatDuration(event.duration)}`}
+                  {/* Turn is meaningless on a synthetic settle: the fabricated
+                      event carries no turn number, so it always renders 0. */}
+                  {!isSyntheticSettle && event.turn !== undefined && `• Turn: ${event.turn}`}
+                  {event.duration != null && (isSyntheticSettle
+                    ? output.trim()
+                      // The backend recovered this from the provider's own
+                      // transcript (PLAT-141), so the duration is real —
+                      // unlike the no-output case below, this is not
+                      // open-to-settle time.
+                      ? ` • Runtime (recovered): ${formatDuration(event.duration)}`
+                      : ` • Open for: ${formatDuration(event.duration)} (not tool runtime)`
+                    : ` • Duration: ${formatDuration(event.duration)}`)}
                 </span>
                 {contextUsagePercent !== undefined && contextUsagePercent > 0 && (
                   <TooltipProvider>

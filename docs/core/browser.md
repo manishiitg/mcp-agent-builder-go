@@ -157,7 +157,9 @@ workflow must replace it.
 - Headless mode starts fresh and should use screenshots to expose visual state.
 - Shared CDP concurrency is isolated by real tab IDs plus a per-port
   select-and-act lock; labels are aliases, not durable tab identities.
-- `share_browser=false` gives a sub-agent a separate agent-browser session.
+- Delegated agents inherit the workflow's agent-browser session. Use explicit
+  browser session names or configured CDP profiles when distinct browser state
+  is genuinely required.
 - Workflow-created CDP tabs are closed automatically one hour after the final
   run releases its lease; reused user tabs are preserved.
 

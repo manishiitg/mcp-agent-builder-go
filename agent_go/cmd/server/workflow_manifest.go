@@ -25,7 +25,7 @@ const WorkflowManifestSchemaVersion = 1
 // contract version. Unlike schema_version, this gates agent-run workflow
 // upgrades: Pulse can add version-specific messages and stamp this value only
 // after the workflow has been checked or migrated.
-const WorkflowContractCurrentVersion = "1.0.26"
+const WorkflowContractCurrentVersion = "1.0.34"
 
 const workflowContractInitialVersion = "1.0.0"
 const workflowContractMessageSequenceCodeVersion = "1.0.10"
@@ -44,9 +44,17 @@ const workflowContractDirectHTMLReportsVersion = "1.0.23"
 const workflowContractScheduledRouteVersion = "1.0.24"
 const workflowContractScheduleExecutionModelVersion = "1.0.25"
 const workflowContractPeriodicPulseReviewVersion = "1.0.26"
+const workflowContractDedicatedPulseScheduleVersion = "1.0.27"
+const workflowContractSchedulePromptContractVersion = "1.0.28"
+const workflowContractFinalizerOwnedScheduleVersion = "1.0.29"
+const workflowContractReportActivitySectionVersion = "1.0.30"
+const workflowContractReportActivityTabVersion = "1.0.31"
+const workflowContractPulseLifecycleReconciliationVersion = "1.0.32"
+const workflowContractPulseBacklogTriageVersion = "1.0.33"
+const workflowContractPulseActionableBacklogVersion = "1.0.34"
 
 const (
-	DefaultRunRetentionCount = 5
+	DefaultRunRetentionCount = 3
 	MaxRunRetentionCount     = 50
 )
 
@@ -71,23 +79,20 @@ type WorkflowManifest struct {
 	// and typed Pulse records; prose captures nuance that enums cannot.
 	OversightMode OversightMode `json:"oversight_mode,omitempty"`
 
-	// PostRunMonitor opts this workflow into the post-run monitor: a compact
-	// evidence scan that runs after each scheduled run and records Bug +
-	// Goal verdicts (and any silent-failure / drift finding) into the workflow
-	// log. It is a deliberate choice — the user or the builder agent enables it
-	// for workflows where silent breakage matters (QA, production, monitoring,
-	// compliance). Unset/false = off (no monitor pass, no extra cost).
-	PostRunMonitor *bool `json:"post_run_monitor,omitempty"`
+	// PaceOnLowQuota spreads a run out rather than racing into a provider
+	// capacity wall. Opt-in per workflow, because it is only ever the right
+	// trade for workflows whose consumption is large relative to the provider
+	// window — everything else pays wall-clock for nothing.
+	//
+	// It does not reduce what a run consumes; it moves consumption across a
+	// window reset. That is why it is a wait-until-reset rather than a fixed
+	// delay: padding every step wastes time when quota is healthy and still
+	// does not save a run whose next step is the one that exhausts the window.
+	PaceOnLowQuota bool `json:"pace_on_low_quota,omitempty"`
 
-	// PostRunMonitorMode selects when Gate/Review+Fix/Finalize actually run.
-	// "" or "per_run" (default): today's behavior — the full pass runs after
-	// every scheduled run, in that run's own session. "periodic": every run
-	// gets only a lightweight backup+notify pass; the full pass runs on its
-	// own separately-scheduled cadence (a WorkflowSchedule with
-	// PulseReviewOnly set), decoupled from any single run's session. See
-	// PLAT-115 — this exists because long Pulse-adjacent sessions reused
-	// across scheduled runs caused real bugs (PLAT-113, PLAT-114).
-	PostRunMonitorMode string `json:"post_run_monitor_mode,omitempty"`
+	// PaceThresholdPercent is the window usage at or above which the next step
+	// waits. Zero means the default.
+	PaceThresholdPercent int `json:"pace_threshold_percent,omitempty"`
 
 	// Pulse contains owner-approved workflow-specific review lenses. These
 	// specialize the stable reviewer contracts; they never replace them.
@@ -112,6 +117,9 @@ type WorkflowManifest struct {
 }
 
 type WorkflowPulseConfig struct {
+	// Enabled runs Pulse Gate after each normal scheduled workflow run. Pulse
+	// does not own a separate recurring cron; the completed run is its trigger.
+	Enabled               bool                           `json:"enabled,omitempty"`
 	AdvisorSpecialization *WorkflowAdvisorSpecialization `json:"advisor_specialization,omitempty"`
 }
 
@@ -123,19 +131,59 @@ type WorkflowAdvisorSpecialization struct {
 	UpdatedAt       string `json:"updated_at,omitempty"`
 }
 
-// MonitorEnabled reports whether the post-run monitor should run for this
-// workflow. It is opt-in: only an explicit true enables it.
-func (m *WorkflowManifest) MonitorEnabled() bool {
-	return m != nil && m.PostRunMonitor != nil && *m.PostRunMonitor
+// HasEnabledPulseReviewSchedule recognizes the retired dedicated-schedule
+// representation long enough to migrate existing workflow manifests.
+func (m *WorkflowManifest) HasEnabledPulseReviewSchedule() bool {
+	if m == nil {
+		return false
+	}
+	for _, schedule := range m.Schedules {
+		if schedule.Enabled && schedule.PulseReviewOnly {
+			return true
+		}
+	}
+	return false
 }
 
-// PostRunMonitorIsPeriodic reports whether Gate/Review+Fix/Finalize run on
-// their own separately-scheduled cadence instead of after every run. Any
-// value other than exactly "periodic" — including empty, unrecognized, or
-// legacy — is treated as "per_run", so an unknown future value fails safe to
-// today's behavior rather than silently skipping review on every run.
-func (m *WorkflowManifest) PostRunMonitorIsPeriodic() bool {
-	return m != nil && strings.TrimSpace(m.PostRunMonitorMode) == "periodic"
+// PulseEnabled reports whether post-run Pulse is enabled. Older manifests used
+// an enabled pulse_review_only schedule as the toggle; retain that as a read
+// compatibility signal while the next UI save removes the obsolete schedule.
+func (m *WorkflowManifest) PulseEnabled() bool {
+	if m == nil {
+		return false
+	}
+	if m.Pulse != nil && m.Pulse.Enabled {
+		return true
+	}
+	return m.HasEnabledPulseReviewSchedule()
+}
+
+// MigrateLegacyPulseSchedule folds the retired dedicated Pulse schedule into
+// pulse.enabled and removes it from the normal schedule list.
+func (m *WorkflowManifest) MigrateLegacyPulseSchedule() bool {
+	if m == nil {
+		return false
+	}
+	found := false
+	enabled := false
+	schedules := make([]WorkflowSchedule, 0, len(m.Schedules))
+	for _, schedule := range m.Schedules {
+		if schedule.PulseReviewOnly {
+			found = true
+			enabled = enabled || schedule.Enabled
+			continue
+		}
+		schedules = append(schedules, schedule)
+	}
+	if !found {
+		return false
+	}
+	if m.Pulse == nil {
+		m.Pulse = &WorkflowPulseConfig{}
+	}
+	m.Pulse.Enabled = m.Pulse.Enabled || enabled
+	m.Schedules = schedules
+	return true
 }
 
 type WorkflowBackupConfig struct {
@@ -282,15 +330,15 @@ func (c *WorkflowNotificationConfig) EffectivePulseSummaryInstructions() string 
 	return strings.TrimSpace(c.Instructions)
 }
 
-// WorkflowExecutionDefaults stores toolbar-level defaults for workflow execution.
+// WorkflowExecutionDefaults stores workflow-wide execution settings. Run-folder
+// selection is intentionally absent: full runs always use the current slot.
 type WorkflowExecutionDefaults struct {
-	AlwaysUseSameRun bool `json:"always_use_same_run"`
 	// Global step overrides (replaces step_override.json)
 	DisableLearning              *bool    `json:"disable_learning,omitempty"`
 	DisableParallelToolExecution *bool    `json:"disable_parallel_tool_execution,omitempty"`
 	ExecutionMaxTurns            *int     `json:"execution_max_turns,omitempty"`
 	EnabledCustomTools           []string `json:"enabled_custom_tools,omitempty"`
-	WorkshopMode                 string   `json:"workshop_mode,omitempty"` // Workshop builder mode: "builder", "optimizer", "run" (legacy values "ask"/"debugger"/"runner"/"eval"/"output" auto-migrated by server)
+	WorkshopMode                 string   `json:"workshop_mode,omitempty"` // Session mode: "workshop" or "run". Every retired name (builder, optimizer, reporting, eval, output, ask, debugger, runner) normalizes to one of those two.
 }
 
 // WorkflowSchedule represents a cron or calendar schedule stored in the manifest.
@@ -314,20 +362,45 @@ type WorkflowSchedule struct {
 	// DirectMessagesReason records why a schedule-local conversation is preferable
 	// to a canonical route despite its weaker step-level lifecycle.
 	DirectMessagesReason string `json:"direct_messages_reason,omitempty"`
-	WorkshopMode         string `json:"workshop_mode,omitempty"`   // Workshop builder mode for scheduled runs: "run" (default) or "optimizer" (legacy "ask"/"runner"/"debugger" auto-migrated to "run")
+	WorkshopMode         string `json:"workshop_mode,omitempty"`   // Vestigial. Schedules always run in workshop mode; nothing branches on this value any more. Retained so existing workflow.json files still parse.
 	Query                string `json:"query,omitempty"`           // Message to execute (multi-agent mode)
 	ResumePrevious       *bool  `json:"resume_previous,omitempty"` // Coding-agent CLI only: resume the latest prior thread (same provider) instead of a fresh session each run. nil = default (fresh session); explicit true opts in.
-	// PulseReviewOnly marks this schedule as a workflow's own periodic Pulse
-	// review pass (PLAT-115), not a workflow-execution schedule: when it
+	// PulseReviewOnly marks this schedule as a workflow's own Pulse review
+	// pass, not a workflow-execution schedule: when it
 	// fires, the workflow does not run — Gate/Review+Fix/Finalize run over
 	// whatever runs/iteration-N/ backlog has accumulated since Gate's own
 	// last_checked_at, the same way the manual "Run Pulse now" trigger
 	// (ScheduleContext.PulseOnly) already reviews retained evidence without
-	// executing the workflow. Pairs with a workflow's own
-	// post_run_monitor_mode="periodic": that setting shortens every run's own
-	// pass to backup+notify; this schedule is what performs the deferred
-	// review, on its own cadence.
+	// executing the workflow. Its enabled presence is the complete recurring
+	// Pulse configuration; there is no second workflow-level enable/mode flag.
 	PulseReviewOnly bool `json:"pulse_review_only,omitempty"`
+	// ExecutionMode is a typed, runtime-enforced operating mode for a scheduled
+	// invocation. It is deliberately separate from Messages: safety must not
+	// depend on an agent interpreting prose or on the wall clock happening to be
+	// inside the expected cron window. Empty means the normal workflow mode.
+	ExecutionMode string `json:"execution_mode,omitempty"`
+	// CollisionPolicy controls what happens when the workflow is already owned
+	// by another scheduled/execution run. Empty/"skip" preserves the default;
+	// "queue_latest" durably retains the newest occurrence for a later retry.
+	CollisionPolicy string `json:"collision_policy,omitempty"`
+	// MaxStartDelayMinutes bounds a queued occurrence. Zero uses the platform
+	// default. It prevents a stale market-hours or notification run from firing
+	// much later with obsolete assumptions.
+	MaxStartDelayMinutes int `json:"max_start_delay_minutes,omitempty"`
+	// AfterScheduleID expresses a completion dependency without encoding it as
+	// a fragile clock offset. The dependent occurrence is bound to the named
+	// schedule's durable occurrence on the same local calendar date.
+	AfterScheduleID string `json:"after_schedule_id,omitempty"`
+	// AfterTerminalStatus controls which prerequisite outcomes release this
+	// schedule. Empty/"completed" requires a successful completion; any_terminal
+	// permits failed, partial, stopped, or interrupted prerequisites too.
+	AfterTerminalStatus string `json:"after_terminal_status,omitempty"`
+	// AfterDelayMinutes delays release after the prerequisite's terminal receipt.
+	AfterDelayMinutes int `json:"after_delay_minutes,omitempty"`
+	// DependencyDeadline is an optional HH:MM local-time deadline. A prerequisite
+	// that has not released this occurrence by then expires visibly instead of
+	// leaking into the next operating day.
+	DependencyDeadline string `json:"dependency_deadline,omitempty"`
 }
 
 // ShouldResumePrevious reports whether a scheduled run should resume the
@@ -344,6 +417,43 @@ type CalendarScheduleItem struct {
 	Description    string          `json:"description,omitempty"`
 	TriggerPayload json.RawMessage `json:"trigger_payload,omitempty"`
 	Messages       []string        `json:"messages,omitempty"`
+}
+
+func validateScheduleRuntimePolicy(schedule WorkflowSchedule) error {
+	switch strings.TrimSpace(schedule.ExecutionMode) {
+	case "", "close_only":
+	default:
+		return fmt.Errorf("execution_mode must be empty or close_only")
+	}
+	switch strings.TrimSpace(schedule.CollisionPolicy) {
+	case "", "skip", "queue_latest", "retry", "coalesce":
+	default:
+		return fmt.Errorf("collision_policy must be skip, queue_latest, retry, or coalesce")
+	}
+	if schedule.MaxStartDelayMinutes < 0 {
+		return fmt.Errorf("max_start_delay_minutes cannot be negative")
+	}
+	if strings.TrimSpace(schedule.AfterScheduleID) == schedule.ID {
+		return fmt.Errorf("after_schedule_id cannot reference itself")
+	}
+	switch strings.TrimSpace(schedule.AfterTerminalStatus) {
+	case "", "completed", "any_terminal":
+	default:
+		return fmt.Errorf("after_terminal_status must be completed or any_terminal")
+	}
+	if schedule.AfterDelayMinutes < 0 {
+		return fmt.Errorf("after_delay_minutes cannot be negative")
+	}
+	if deadline := strings.TrimSpace(schedule.DependencyDeadline); deadline != "" {
+		if _, err := time.Parse("15:04", deadline); err != nil {
+			return fmt.Errorf("dependency_deadline must be HH:MM in the schedule timezone")
+		}
+	}
+	if strings.TrimSpace(schedule.AfterScheduleID) == "" &&
+		(strings.TrimSpace(schedule.AfterTerminalStatus) != "" || schedule.AfterDelayMinutes != 0 || strings.TrimSpace(schedule.DependencyDeadline) != "") {
+		return fmt.Errorf("after_terminal_status, after_delay_minutes, and dependency_deadline require after_schedule_id")
+	}
+	return nil
 }
 
 // --- Validation ---
@@ -427,6 +537,12 @@ func ValidateManifest(m *WorkflowManifest) error {
 	}
 
 	// Validate schedules
+	scheduleIDs := make(map[string]struct{}, len(m.Schedules))
+	for _, schedule := range m.Schedules {
+		if id := strings.TrimSpace(schedule.ID); id != "" {
+			scheduleIDs[id] = struct{}{}
+		}
+	}
 	for i, sched := range m.Schedules {
 		if sched.ID == "" {
 			return fmt.Errorf("schedules[%d].id is required", i)
@@ -442,6 +558,31 @@ func ValidateManifest(m *WorkflowManifest) error {
 		// workflow, so it has no group to run.
 		if sched.Mode != "multi-agent" && !sched.PulseReviewOnly && len(normalizeScheduleGroupNames(sched.GroupNames)) == 0 {
 			return fmt.Errorf("schedules[%d].group_names is required", i)
+		}
+		if err := validateScheduleRuntimePolicy(sched); err != nil {
+			return fmt.Errorf("schedules[%d]: %w", i, err)
+		}
+		if dependencyID := strings.TrimSpace(sched.AfterScheduleID); dependencyID != "" {
+			if _, ok := scheduleIDs[dependencyID]; !ok {
+				return fmt.Errorf("schedules[%d].after_schedule_id references unknown schedule %q", i, dependencyID)
+			}
+		}
+	}
+	// Dependencies form a directed graph. Reject cycles at authoring time so a
+	// pair (or longer chain) of queue_latest schedules cannot wait forever.
+	dependencies := make(map[string]string, len(m.Schedules))
+	for _, sched := range m.Schedules {
+		if dependencyID := strings.TrimSpace(sched.AfterScheduleID); dependencyID != "" {
+			dependencies[sched.ID] = dependencyID
+		}
+	}
+	for scheduleID := range dependencies {
+		seen := map[string]bool{}
+		for current := scheduleID; current != ""; current = dependencies[current] {
+			if seen[current] {
+				return fmt.Errorf("schedule dependency cycle includes %q", current)
+			}
+			seen[current] = true
 		}
 	}
 
@@ -1008,4 +1149,25 @@ func listWorkspaceFolders(ctx context.Context) ([]string, error) {
 	}
 
 	return folders, nil
+}
+
+// defaultPaceThresholdPercent is where "close to the wall" starts.
+//
+// Deliberately not near 100: the whole point is to cross a reset BEFORE the
+// window is exhausted, and a step can consume several percent on its own, so a
+// threshold at 98 would routinely be overtaken mid-step by the very run it is
+// meant to protect.
+const defaultPaceThresholdPercent = 85
+
+// PaceThreshold returns the configured usage threshold, or the default.
+func (m *WorkflowManifest) PaceThreshold() int {
+	if m == nil || m.PaceThresholdPercent <= 0 || m.PaceThresholdPercent > 100 {
+		return defaultPaceThresholdPercent
+	}
+	return m.PaceThresholdPercent
+}
+
+// PacingEnabled reports whether this workflow opted into quota pacing.
+func (m *WorkflowManifest) PacingEnabled() bool {
+	return m != nil && m.PaceOnLowQuota
 }

@@ -30,6 +30,72 @@ func routeTestProfile(id string, builtIn bool, ownerID string) agentprofiles.Pro
 	}
 }
 
+func TestQueryRequestForAgentProfileChatUsesOnlyServerOwnedProfileConfiguration(t *testing.T) {
+	profile := routeTestProfile("dominion", true, "")
+	profile.Name = "Dominion"
+
+	query, err := queryRequestForAgentProfileChat(profile, AgentProfileChatRequest{
+		Message: "What changed in the portfolio today?",
+	}, ProductConversationRecord{
+		ConversationID:  "conversation-1",
+		ConversationKey: "main",
+		SessionID:       "session-1",
+		WorkspacePath:   "Chats",
+		Title:           "Dominion",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if query.Query != "What changed in the portfolio today?" {
+		t.Fatalf("query=%q", query.Query)
+	}
+	if query.AgentProfileID != "dominion" || query.AgentProfileVersion != 1 {
+		t.Fatalf("unexpected profile binding: id=%q version=%d", query.AgentProfileID, query.AgentProfileVersion)
+	}
+	if query.SelectedFolder != "Chats" || query.AgentProfileContext.ProjectTitle != "Dominion" {
+		t.Fatalf("unexpected server-owned workspace binding: folder=%q context=%+v", query.SelectedFolder, query.AgentProfileContext)
+	}
+	if query.RestoredConversationPath != "" || query.RestoredConversationSessionID != "" {
+		t.Fatalf("browser-controlled restore leaked into query: path=%q session=%q", query.RestoredConversationPath, query.RestoredConversationSessionID)
+	}
+	if query.AgentMode != "multi-agent" || !query.DisableLiveInputDelivery {
+		t.Fatalf("unexpected runner configuration: mode=%q disable_live_input=%v", query.AgentMode, query.DisableLiveInputDelivery)
+	}
+}
+
+func TestQueryRequestForAgentProfileChatRequiresServerOwnedWorkspace(t *testing.T) {
+	_, err := queryRequestForAgentProfileChat(
+		routeTestProfile("project-product", true, ""),
+		AgentProfileChatRequest{Message: "hello"},
+		ProductConversationRecord{SessionID: "session-1"},
+	)
+	if err == nil {
+		t.Fatal("expected a conversation without runtime workspace to be rejected")
+	}
+}
+
+func TestAgentProfileChatEndpointRejectsBroadAgentWorksFields(t *testing.T) {
+	api := &StreamingAPI{}
+	req := profileRouteRequest(
+		http.MethodPost,
+		"/api/agent-profiles/dominion/query",
+		[]byte(`{"message":"hello","provider":"codex-cli"}`),
+		"user-1",
+	)
+	req = mux.SetURLVars(req, map[string]string{"id": "dominion"})
+	recorder := httptest.NewRecorder()
+
+	api.handleAgentProfileChatQuery(recorder, req)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !bytes.Contains(recorder.Body.Bytes(), []byte("unknown field")) {
+		t.Fatalf("expected unknown-field rejection, body=%s", recorder.Body.String())
+	}
+}
+
 func TestListAgentProfilesFiltersOtherOwners(t *testing.T) {
 	registry := agentprofiles.NewRegistry()
 	for _, profile := range []agentprofiles.Profile{

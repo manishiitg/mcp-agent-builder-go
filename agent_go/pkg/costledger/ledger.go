@@ -37,11 +37,19 @@ type Entry struct {
 	RunID          string    `json:"run_id,omitempty"`
 	ExecutionID    string    `json:"execution_id,omitempty"`
 	Scope          string    `json:"scope,omitempty"`
-	AgentMode      string    `json:"agent_mode,omitempty"`
-	Component      string    `json:"component,omitempty"`
-	CorrelationID  string    `json:"correlation_id,omitempty"`
-	Provider       string    `json:"provider,omitempty"`
-	ModelID        string    `json:"model_id,omitempty"`
+	// Phase distinguishes what kind of turn produced this entry within one
+	// ExecutionID — "execution_only" or "reflection" for a workflow step
+	// (PLAT-166), matching the same phase-string vocabulary the older
+	// per-step token-usage-file system already uses
+	// (pkg/orchestrator/context_aware_bridge.go's attributedPhase). Empty for
+	// every non-workflow scope and every entry written before this shipped;
+	// addEntryToSummary only builds a ByPhase breakdown when this is set.
+	Phase         string `json:"phase,omitempty"`
+	AgentMode     string `json:"agent_mode,omitempty"`
+	Component     string `json:"component,omitempty"`
+	CorrelationID string `json:"correlation_id,omitempty"`
+	Provider      string `json:"provider,omitempty"`
+	ModelID       string `json:"model_id,omitempty"`
 	// EffectiveModelID is the model the CLI/provider ACTUALLY served
 	// the turn with — may drift from ModelID when the user picked an
 	// alias like "auto" or "cursor-cli", or when a /model swap happened
@@ -163,7 +171,19 @@ type DateAggregate struct {
 // cost UI: builder/pulse/workflow/evaluation, then their child agents/steps.
 type ScopeAggregate struct {
 	Aggregate
-	ByExecution map[string]*Aggregate `json:"by_execution,omitempty"`
+	ByExecution map[string]*ExecutionAggregate `json:"by_execution,omitempty"`
+}
+
+// ExecutionAggregate rolls one runtime execution's cost up while retaining a
+// phase breakdown (PLAT-166): a workflow step's own execution-turn cost vs
+// its separate post-completion reflection-turn cost, when the entries making
+// up this execution carry a Phase. Aggregate is embedded so the JSON shape
+// stays flat for every existing field (`total_cost_usd`,
+// `llm_generation_duration_ms`, etc. all read exactly as before); `by_phase`
+// is new and omitted entirely for an execution whose entries never set Phase.
+type ExecutionAggregate struct {
+	Aggregate
+	ByPhase map[string]*Aggregate `json:"by_phase,omitempty"`
 }
 
 // Summary is the aggregated view returned by Summarize.
@@ -546,6 +566,28 @@ func (l *Ledger) MigrateLegacyJSONL(path string) (MigrationReport, error) {
 	return l.db.migrateLegacyJSONL(path)
 }
 
+// addEntryToExecutionBucket rolls one entry into an execution's combined
+// total (unchanged from before PLAT-166) and, only when the entry names a
+// Phase, also into that execution's ByPhase breakdown. An execution whose
+// entries never set Phase never gets a ByPhase map at all, so `by_phase` is
+// omitted from its JSON exactly as it was before this field existed.
+func addEntryToExecutionBucket(bucket *ExecutionAggregate, e Entry) {
+	bucket.Aggregate.add(e)
+	phase := strings.TrimSpace(e.Phase)
+	if phase == "" {
+		return
+	}
+	if bucket.ByPhase == nil {
+		bucket.ByPhase = make(map[string]*Aggregate)
+	}
+	phaseBucket, ok := bucket.ByPhase[phase]
+	if !ok {
+		phaseBucket = &Aggregate{}
+		bucket.ByPhase[phase] = phaseBucket
+	}
+	phaseBucket.add(e)
+}
+
 func addEntryToSummary(summary *Summary, date string, e Entry) {
 	summary.Total.add(e)
 	if summary.ByScope == nil {
@@ -557,7 +599,7 @@ func addEntryToSummary(summary *Summary, date string, e Entry) {
 	}
 	scopeBucket, ok := summary.ByScope[scope]
 	if !ok {
-		scopeBucket = &ScopeAggregate{ByExecution: make(map[string]*Aggregate)}
+		scopeBucket = &ScopeAggregate{ByExecution: make(map[string]*ExecutionAggregate)}
 		summary.ByScope[scope] = scopeBucket
 	}
 	scopeBucket.Aggregate.add(e)
@@ -570,10 +612,10 @@ func addEntryToSummary(summary *Summary, date string, e Entry) {
 	}
 	executionBucket, ok := scopeBucket.ByExecution[executionID]
 	if !ok {
-		executionBucket = &Aggregate{}
+		executionBucket = &ExecutionAggregate{}
 		scopeBucket.ByExecution[executionID] = executionBucket
 	}
-	executionBucket.add(e)
+	addEntryToExecutionBucket(executionBucket, e)
 	bucket, ok := summary.ByDate[date]
 	if !ok {
 		bucket = &DateAggregate{
@@ -586,16 +628,16 @@ func addEntryToSummary(summary *Summary, date string, e Entry) {
 	bucket.Aggregate.add(e)
 	dateScopeBucket, ok := bucket.ByScope[scope]
 	if !ok {
-		dateScopeBucket = &ScopeAggregate{ByExecution: make(map[string]*Aggregate)}
+		dateScopeBucket = &ScopeAggregate{ByExecution: make(map[string]*ExecutionAggregate)}
 		bucket.ByScope[scope] = dateScopeBucket
 	}
 	dateScopeBucket.Aggregate.add(e)
 	dateExecutionBucket, ok := dateScopeBucket.ByExecution[executionID]
 	if !ok {
-		dateExecutionBucket = &Aggregate{}
+		dateExecutionBucket = &ExecutionAggregate{}
 		dateScopeBucket.ByExecution[executionID] = dateExecutionBucket
 	}
-	dateExecutionBucket.add(e)
+	addEntryToExecutionBucket(dateExecutionBucket, e)
 	if scope == "workflow_execution" && strings.TrimSpace(e.RunID) != "" {
 		bucket.workflowRunIDs[e.RunID] = struct{}{}
 		bucket.WorkflowRunCount = len(bucket.workflowRunIDs)

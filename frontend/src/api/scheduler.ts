@@ -61,8 +61,8 @@ export const schedulerApi = {
       workspace_path: workspacePath,
     }).then(r => r.data),
 
-  getJobRuns: (id: string, limit = 20) =>
-    api.get<ListScheduledJobRunsResponse>(`/api/scheduler/jobs/${id}/runs`, { params: { limit } }).then(r => r.data),
+  getJobRuns: (id: string, limit = 20, offset = 0) =>
+    api.get<ListScheduledJobRunsResponse>(`/api/scheduler/jobs/${id}/runs`, { params: { limit, offset } }).then(r => r.data),
 
   stopJob: (id: string) =>
     api.post<ScheduledJob>(`/api/scheduler/jobs/${id}/stop`).then(r => r.data),
@@ -80,10 +80,9 @@ export interface StoredProviderKeys {
   codex_cli?: string
   cursor_cli?: string
   pi_cli?: string
+  // Retained only for Pi's MiniMax text-model routing; there is no standalone
+  // MiniMax provider configuration in the frontend.
   minimax?: string
-  minimax_coding_plan?: string
-  elevenlabs?: string
-  deepgram?: string
   pi_provider_keys?: Record<string, string>
   bedrock?: { region: string }
   azure?: { endpoint: string; api_key: string; api_version?: string; region?: string }

@@ -28,37 +28,6 @@ type PipelineStage struct {
 	Skills []string
 }
 
-// OrchestratedBlock groups consecutive stages under one todo_task orchestrator
-// instead of emitting them as a linear chain.
-//
-// It exists for exactly one reason: a critic that does not build cannot act on
-// its own findings, and a linear chain has nowhere to send them. The stage that
-// follows does not own the faulted artifact, the stage that wrote it has already
-// finished, and the platform removed step loops — so a `revise` verdict was
-// written, validated as "file exists", and then ignored.
-//
-// An orchestrator closes that loop the way the critic's own prompt already
-// assumes ("tell the orchestrator to pause for the user"): it receives each
-// route's result in its own conversation, and re-calling a message_sequence
-// route resumes THAT specialist's conversation with the feedback as the
-// re-entry message. The storyboard author revises its own storyboard, in the
-// context that produced it, and the critic stays independent.
-//
-// Only blocks that need this get one. The composition and render critiques are
-// deliberately NOT orchestrated: they own the artifact they judge and repair it
-// in place, which is cheaper and already works.
-type OrchestratedBlock struct {
-	ID       string   // plan step id for the orchestrator itself
-	Title    string   // user-facing name
-	Summary  string   // one-line user-facing explanation
-	StageIDs []string // stages to run as routes, in their authored order
-	// Description is the orchestrator's own instruction: how to sequence the
-	// routes, what to do with each verdict, and when to stop.
-	Description string
-	// Output is the artifact the block as a whole must leave behind.
-	Output string
-}
-
 // Pipeline is one named workflow.
 type Pipeline struct {
 	ID          string
@@ -66,9 +35,6 @@ type Pipeline struct {
 	Description string
 	WhenToUse   string // routing hint: how a brief maps to this pipeline
 	Stages      []PipelineStage
-	// Orchestrated, when set, runs the named stages as routes of one todo_task
-	// instead of as a linear chain. See OrchestratedBlock for why.
-	Orchestrated *OrchestratedBlock
 }
 
 // Stage descriptions are the stage agents' prompts. They live here rather than
@@ -91,11 +57,11 @@ var infographicStageDescriptions = map[string]string{
 	"infographic-concept":              "Turn BRIEF.md into STORYBOARD.md. Establish a teaching or product-proof spine rather than translating each paragraph into a scene. The opening must earn attention, the main idea must be clear by scene two, every body scene must advance one mechanism/feature/step/example/proof, and the ending must land one remembered sentence or action. For each scene record purpose, timing, exact evidence, visual form, on-screen copy intent, narration intent, transition purpose, and the HyperFrames composition or reusable system it will need. Confirm total duration and flag unsupported claims. Do not author HTML yet.",
 	"infographic-copy":                 "Use BRIEF.md and STORYBOARD.md to write SCRIPT.md. Even for a silent piece, lock the exact on-screen words scene by scene and explicitly state that narration is not applicable. When narration exists, include timed narration, captions, pronunciation notes, music/SFX intent, and the relationship between spoken and visible information. Preserve any verbatim wording the brief locks. Keep every number and product claim tied to its source. Do not build the composition yet.",
 	"infographic-layout":               "Use BRIEF.md, STORYBOARD.md, and SCRIPT.md to write frame.md: the production's visual and motion system. Define the exact palette, type stack, canvas/safe areas, spacing/grid, shape and image language, product-UI treatment, chart/diagram grammar, scene transition grammar, motion intensity, caption treatment, audio rules, and reusable variables such as title/logo/colors/prices. Use a chart only to prove a claim, a diagram to reveal a mechanism, and motion to show change. Record which installed HyperFrames technical skills and optional registry items the build actually needs. Do not write HTML yet.",
-	"infographic-creative-critique":    "Act as the independent pre-production critic for this high-quality workflow. Read BRIEF.md, STORYBOARD.md, SCRIPT.md, and frame.md; do not build the composition. Score the proposed work against the production rubric: audience/message clarity by scene two, evidence and claim traceability, narrative progression, density and playback readability, visual hierarchy, motion purpose, visual-system coherence, accessibility/caption intent, and a memorable ending. Write creative-review.md and creative-scorecard.json. The scorecard must contain schema_version 1, verdict (pass, revise, or blocked), category scores and evidence, blocking findings, targeted repair instructions, and the exact acceptance criteria the builder must prove. Be demanding: a vague compliment is not a review. A blocked verdict must name the missing decision or evidence and tell the orchestrator to pause for the user rather than inventing facts. A revise verdict must be specific enough for the builder to repair without reinterpreting the brief. This review is a gate: the downstream build must treat every finding as mandatory work, not optional advice.",
+	"infographic-creative-critique":    "Act as the independent pre-production critic for this high-quality workflow. Read BRIEF.md, STORYBOARD.md, SCRIPT.md, and frame.md; do not build the composition. Score the proposed work against the production rubric: audience/message clarity by scene two, evidence and claim traceability, narrative progression, density and playback readability, visual hierarchy, motion purpose, visual-system coherence, accessibility/caption intent, and a memorable ending. Write creative-review.md and creative-scorecard.json. The scorecard must contain schema_version 1, verdict (pass, revise, or blocked), category scores and evidence, blocking findings, targeted repair instructions, and the exact acceptance criteria the builder must prove. Be demanding: a vague compliment is not a review. A blocked verdict must name the missing decision or evidence and stop for the user rather than inventing facts. A revise verdict must identify which earlier individual step owns each repair so the user can rerun only that step. This review is a gate: the downstream build must treat every finding as mandatory work, not optional advice.",
 	"infographic-design":               "Build one native, editable HyperFrames project in this step folder from BRIEF.md, STORYBOARD.md, SCRIPT.md, and frame.md. Read creative-review.md and creative-scorecard.json first: pre-production passed its critique before you were called, and the scorecard's acceptance criteria are the bar this build must prove, not optional advice. This is not a panel-to-PNG or FFmpeg slideshow stage. Read the selected route and the installed hyperframes-core, hyperframes-creative, hyperframes-animation, media-use, registry, and keyframes skills as applicable. Use the managed HyperFrames CLI non-interactively and do not reinstall skills. Create index.html, hyperframes.json, compositions/, and assets/ using seek-safe deterministic timelines; copy or derive working assets without modifying uploads/. Run the CLI's structural lint during authoring and create representative snapshots to inspect the opening, main proof, dense text/data moments, transitions, and ending. Fix blank, clipped, unreadable, non-deterministic, or structurally invalid results. Package the complete source project as hyperframes-project.tgz so the next isolated stage receives compositions and assets as one immutable handoff. Write build-report.md last with the exact project root, composition IDs, source files, assets, selected route/skills, snapshots inspected, lint results, archive path, remaining blockers, and commands used. A report or archive without real source files is failure.",
-	"infographic-composition-critique": "Run the composition critique-and-refinement gate. Unpack hyperframes-project.tgz and read the creative-review.md/creative-scorecard.json together with the brief, storyboard, script, frame system, and representative snapshots. You are the workflow's builder-and-critic loop: first inspect the composition against every acceptance criterion, then repair the editable source, lint/check it, create fresh snapshots, and inspect again. Make up to two bounded repair passes; do not merely write a review of known defects. Focus on the opening, scene-two message clarity, proof scenes, dense typography/data, transitions, and ending. Preserve verified claims and never replace the native HyperFrames composition with a static-panel or FFmpeg workaround. Write composition-critique.md and composition-scorecard.json with the initial findings, each repair pass, evidence, and final verdict (pass, revise, or blocked). Repack the corrected editable source as hyperframes-project-reviewed.tgz. Only a pass verdict may hand off the reviewed archive. If the work cannot pass because the brief is ambiguous, evidence is missing, or a defect cannot be safely repaired, return a failed step so the orchestrator stops and asks for direction; do not let rendering continue on a known weak composition.",
+	"infographic-composition-critique": "Run the composition critique-and-refinement gate. Unpack hyperframes-project.tgz and read the creative-review.md/creative-scorecard.json together with the brief, storyboard, script, frame system, and representative snapshots. First inspect the composition against every acceptance criterion, then repair the editable source, lint/check it, create fresh snapshots, and inspect again. Make up to two bounded repair passes; do not merely write a review of known defects. Focus on the opening, scene-two message clarity, proof scenes, dense typography/data, transitions, and ending. Preserve verified claims and never replace the native HyperFrames composition with a static-panel or FFmpeg workaround. Write composition-critique.md and composition-scorecard.json with the initial findings, each repair pass, evidence, and final verdict (pass, revise, or blocked). Repack the corrected editable source as hyperframes-project-reviewed.tgz. Only a pass verdict may hand off the reviewed archive. If the work cannot pass because the brief is ambiguous, evidence is missing, or a defect cannot be safely repaired, fail this individual step and ask for direction; do not let rendering continue on a known weak composition.",
 	"infographic-render":               "Unpack hyperframes-project-reviewed.tgz into this step folder and validate that exact reviewed HyperFrames project; do not replace it with a new composition or assemble static panels with FFmpeg. Read hyperframes-cli and hyperframes-keyframes. Run the current CLI doctor checks needed by this production, then lint and check; use keyframe diagnostics and additional snapshots where animation or dense layouts need them. Fix failures in the unpacked editable source and repeat the affected checks before rendering. Render a playable final.mp4 in this step folder, then verify it with ffprobe/full decode and measure duration, dimensions, frame rate, streams, and codecs. Repack the final corrected source as hyperframes-project-final.tgz. Write render-report.md with the exact source project path, output path, CLI version, validation results, snapshots/key moments, render command, measurements, corrected-source archive, and whether any placeholder remains. A successful command without final.mp4, the corrected source archive, and passing checks is failure.",
-	"infographic-render-critique":      "Run the final render critique-and-refinement gate. Inspect final.mp4, render-report.md, BRIEF.md, STORYBOARD.md, SCRIPT.md, frame.md, and the reviewed source archive. Act as a demanding delivery critic before the workflow can reach QA: use a contact sheet and playback checks to assess legibility at speed, framing/safe areas, hierarchy, continuity, purposeful motion, pacing, claim/product accuracy, captions/audio where applicable, and the promised ending. If a material issue appears, unpack hyperframes-project-final.tgz, repair the editable source, rerun the relevant HyperFrames checks, render a replacement final-reviewed.mp4, and repeat inspection. Perform at most two bounded repair passes and keep all evidence. Write render-critique.md and render-scorecard.json with initial findings, repairs, final verdict (pass, revise, or blocked), and the exact candidate path. Package the corrected source as hyperframes-project-reviewed-final.tgz. Only a pass may hand off final-reviewed.mp4. If a problem remains or requires a user decision, fail the step so the orchestrator stops rather than passing an unreviewed render to QA.",
+	"infographic-render-critique":      "Run the final render critique-and-refinement gate. Inspect final.mp4, render-report.md, BRIEF.md, STORYBOARD.md, SCRIPT.md, frame.md, and the reviewed source archive. Act as a demanding delivery critic before the workflow can reach QA: use a contact sheet and playback checks to assess legibility at speed, framing/safe areas, hierarchy, continuity, purposeful motion, pacing, claim/product accuracy, captions/audio where applicable, and the promised ending. If a material issue appears, unpack hyperframes-project-final.tgz, repair the editable source, rerun the relevant HyperFrames checks, render a replacement final-reviewed.mp4, and repeat inspection. Perform at most two bounded repair passes and keep all evidence. Write render-critique.md and render-scorecard.json with initial findings, repairs, final verdict (pass, revise, or blocked), and the exact candidate path. Package the corrected source as hyperframes-project-reviewed-final.tgz. Only a pass may hand off final-reviewed.mp4. If a problem remains or requires a user decision, fail this individual step rather than passing an unreviewed render to QA.",
 	"infographic-check":                qualityReviewDescription("the final-reviewed.mp4 named by render-critique.md", "infographic-delivery.md") + " Also compare the result with BRIEF.md, STORYBOARD.md, SCRIPT.md, frame.md, creative-review.md, composition-critique.md, render-critique.md, and the HyperFrames snapshots. Verify that the main idea is clear by scene two, every product state is realistic, every number and claim traces to its source, important UI/text is readable at playback size, motion teaches rather than decorates, and the ending lands the approved message or action.",
 }
 
@@ -104,30 +70,6 @@ var infographicPipeline = &Pipeline{
 	Name:        "Product explainer / infographic",
 	Description: "A high-quality HyperFrames product explainer with independent critique and bounded refinement gates.",
 	WhenToUse:   "Product explainers, feature breakdowns, stat and data pieces, comparison or pricing videos — anything whose value comes from typography, numbers and layout rather than footage and mood.",
-	// Pre-production is orchestrated because its critic is a pure reviewer: it
-	// faults BRIEF/STORYBOARD/SCRIPT/frame.md, none of which it owns or may
-	// build. Linear, its `revise` verdict had no addressee. The two later
-	// critiques stay linear — they repair the artifact they judge.
-	Orchestrated: &OrchestratedBlock{
-		ID:      "infographic-preproduction",
-		Title:   "Brief, storyboard and creative review",
-		Summary: "Agree the brief, storyboard, script and visual system, then pass an independent creative review.",
-		Output:  "creative-review.md",
-		Description: "Own pre-production for this video: brief, storyboard, script, visual system, and the independent creative review that gates them. " +
-			"Run the routes in their listed order — each one writes the artifact the next depends on, so none can be skipped or reordered. " +
-			"When the creative review finishes, read creative-scorecard.json and act on its verdict; it is a gate, not advice.\n" +
-			"- verdict `pass`: pre-production is done. Finish the step.\n" +
-			"- verdict `revise`: for each blocking finding, call the route that OWNS the faulted artifact again — storyboard findings go to the storyboard route, wording to script and copy, palette/type/motion to visual system — passing that finding's targeted repair instructions and acceptance criteria as your instructions. Re-calling a route resumes that specialist's own conversation, so it revises its work with the context that produced it; do not re-run the whole block and do not repair the artifact yourself. Then call the creative review route again to re-judge. Stop after three review rounds and finish with the outstanding findings named, rather than looping.\n" +
-			"- verdict `blocked`: the review has found a missing decision or missing evidence that cannot be invented. Do not guess it and do not send it back to a specialist. Finish the step and report exactly what the user must decide or supply.\n" +
-			"Never write the routes' artifacts yourself. Your job is to sequence them, carry the review's findings to whoever owns them, and know when to stop.",
-		StageIDs: []string{
-			"infographic-research",
-			"infographic-concept",
-			"infographic-copy",
-			"infographic-layout",
-			"infographic-creative-critique",
-		},
-	},
 	Stages: []PipelineStage{
 		{ID: "infographic-research", Title: "Brief and evidence", Summary: "Confirm the message, authoritative evidence, format, and HyperFrames route.", Output: "BRIEF.md", Skills: []string{"product-infographic", "video-creation", "hyperframes", "product-launch-video", "faceless-explainer", "motion-graphics", "general-video"}},
 		{ID: "infographic-concept", Title: "Storyboard", Summary: "Shape the teaching or product-proof sequence scene by scene.", Output: "STORYBOARD.md", Skills: []string{"product-infographic", "hyperframes-creative"}},
@@ -179,15 +121,16 @@ func qualityReviewDescription(candidateSource, markdownOutput string) string {
 // route and answer anything. Names must be flat and hyphenated — the builtin
 // registry rejects slashes, so layered names wait on nested discovery.
 
-// pipelineRegistry holds every pipeline the product can run. Routing picks one.
-// Order matters: the router's default is the first entry, and the product's
-// default route stays the infographic explainer because it is the only one
-// that cannot spend the user's money.
-var pipelineRegistry = []*Pipeline{infographicPipeline, shortformPipeline, longformPipeline, qualityPipeline}
+// pipelineRegistry holds every pipeline the product can run. Video Studio is
+// deliberately cinematic-only; HyperFrames remains a technique available
+// inside these pipelines, not a separate product/infographic route.
+var pipelineRegistry = []*Pipeline{shortformPipeline, longformPipeline, qualityPipeline}
 
 func init() {
 	// Attach descriptions by stage id so the definitions above stay scannable.
-	for _, pipeline := range pipelineRegistry {
+	// Keep the retired infographic definition initialized only so legacy-plan
+	// migration tests and upgrades can still recognize it. It is not registered.
+	for _, pipeline := range append([]*Pipeline{infographicPipeline}, pipelineRegistry...) {
 		for i := range pipeline.Stages {
 			if pipeline.Stages[i].Description != "" {
 				continue
@@ -209,4 +152,4 @@ func init() {
 }
 
 // DefaultPipeline is the branch a run takes when nothing selects one.
-func DefaultPipeline() *Pipeline { return infographicPipeline }
+func DefaultPipeline() *Pipeline { return shortformPipeline }

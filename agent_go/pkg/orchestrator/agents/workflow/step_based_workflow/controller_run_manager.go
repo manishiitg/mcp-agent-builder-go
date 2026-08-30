@@ -12,16 +12,14 @@ import (
 )
 
 const (
-	defaultRunRetentionCount = 5
+	defaultRunRetentionCount = 3
 	maxRunRetentionCount     = 50
 )
 
-// resolveRunFolderWithOptions always resolves to iteration-0 under the workflow's
-// runs/ tree. The previous iteration-0 (workflow + eval) is rotated to the same
-// numbered backup so workflow run N and its eval at evaluation/runs/iteration-N
-// stay paired by construction. workflow.json run_retention_count controls backup
-// retention for both trees, defaulting to 5 when omitted.
-func (hcpo *StepBasedWorkflowOrchestrator) resolveRunFolderWithOptions(ctx context.Context, workspacePath, runMode, selectedRunFolder string) (string, error) {
+// prepareCurrentRun rotates the previous iteration-0 into a paired archive, then
+// returns the fresh current run slot. workflow.json run_retention_count controls
+// the number of archives retained for both the workflow and evaluation trees.
+func (hcpo *StepBasedWorkflowOrchestrator) prepareCurrentRun(ctx context.Context, workspacePath string) (string, error) {
 	runsPath := fmt.Sprintf("%s/runs", workspacePath)
 	evalRunsPath := fmt.Sprintf("%s/evaluation/runs", workspacePath)
 	runRetentionCount := hcpo.resolveRunRetentionCount(ctx)
@@ -29,7 +27,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) resolveRunFolderWithOptions(ctx conte
 		return "", err
 	}
 	hcpo.GetLogger().Info(fmt.Sprintf("Using iteration-0 for workflow execution (keeping %d backup iteration(s))", runRetentionCount))
-	return "iteration-0", nil
+	return currentWorkflowRunFolder, nil
 }
 
 func (hcpo *StepBasedWorkflowOrchestrator) resolveRunRetentionCount(ctx context.Context) int {
@@ -108,6 +106,14 @@ func (hcpo *StepBasedWorkflowOrchestrator) rotatePairedIterationZero(ctx context
 		if err := hcpo.archiveEvaluationScoreRunFolder(ctx, "iteration-0", backupName); err != nil {
 			hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Could not update archived evaluation paths for %s: %v", backupName, err))
 		}
+		// Run history is the third thing that names this folder, and the only
+		// one that was never repointed. Cost and evaluation records above follow
+		// the rotation; the history entry kept claiming iteration-0, so the
+		// schedule popup looked every historical run's cost up against the live
+		// slot and showed the current run's spend on every row.
+		if err := hcpo.ArchiveScheduleRunFolder(ctx, "iteration-0", backupName); err != nil {
+			hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Could not update run history folder for %s: %v", backupName, err))
+		}
 	}
 
 	hcpo.pruneOldIterations(ctx, runsPath, keep)
@@ -115,6 +121,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) rotatePairedIterationZero(ctx context
 
 	if err := hcpo.createRunFolderStructure(ctx, workflowIter0); err != nil {
 		return fmt.Errorf("failed to create workflow iteration-0: %w", err)
+	}
+	if err := hcpo.writeRunIndex(ctx, "full_run_rotation"); err != nil {
+		return fmt.Errorf("failed to publish run provenance: %w", err)
 	}
 	return nil
 }
@@ -353,7 +362,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createRunFolderStructure(ctx context.
 
 // determineRunFolderForCleanup determines which run folder will be used (if any) without creating it.
 // Always returns iteration-0 since that is the only folder workflows run in.
-func (hcpo *StepBasedWorkflowOrchestrator) determineRunFolderForCleanup(ctx context.Context, workspacePath, runMode string) (string, bool, error) {
+func (hcpo *StepBasedWorkflowOrchestrator) determineRunFolderForCleanup(ctx context.Context, workspacePath string) (string, bool, error) {
 	runsPath := fmt.Sprintf("%s/runs", workspacePath)
 	iteration0Path := fmt.Sprintf("%s/iteration-0", runsPath)
 
@@ -366,8 +375,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) determineRunFolderForCleanup(ctx cont
 
 // shouldAskDeleteOldProgress determines if we should ask the "Delete old progress" question
 // Returns true only when we're reusing an existing folder that might have old progress
-func (hcpo *StepBasedWorkflowOrchestrator) shouldAskDeleteOldProgress(ctx context.Context, workspacePath, runMode string) bool {
-	_, shouldClean, err := hcpo.determineRunFolderForCleanup(ctx, workspacePath, runMode)
+func (hcpo *StepBasedWorkflowOrchestrator) shouldAskDeleteOldProgress(ctx context.Context, workspacePath string) bool {
+	_, shouldClean, err := hcpo.determineRunFolderForCleanup(ctx, workspacePath)
 	if err != nil {
 		hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Failed to determine run folder for cleanup check: %v, defaulting to ask question", err))
 		return true // Default to asking if we can't determine
@@ -375,10 +384,10 @@ func (hcpo *StepBasedWorkflowOrchestrator) shouldAskDeleteOldProgress(ctx contex
 	return shouldClean
 }
 
-// cleanupExecutionArtifactsForFreshStart cleans execution and validation artifacts based on run mode.
+// cleanupExecutionArtifactsForFreshStart cleans execution and validation artifacts in the current run slot.
 // This handles both new runs folder structure and old structure for backward compatibility.
-func (hcpo *StepBasedWorkflowOrchestrator) cleanupExecutionArtifactsForFreshStart(ctx context.Context, workspacePath, runMode string) {
-	hcpo.GetLogger().Info(fmt.Sprintf("🧹 Starting cleanup of execution artifacts for fresh start (run_mode: %s)", runMode))
+func (hcpo *StepBasedWorkflowOrchestrator) cleanupExecutionArtifactsForFreshStart(ctx context.Context, workspacePath string) {
+	hcpo.GetLogger().Info("🧹 Starting cleanup of execution artifacts for fresh start")
 
 	// Check if a specific run folder was already selected (from frontend or earlier resolution)
 	var runFolderName string
@@ -392,7 +401,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) cleanupExecutionArtifactsForFreshStar
 	} else {
 		// Determine which run folder will be used (if any)
 		var err error
-		runFolderName, shouldCleanSpecificFolder, err = hcpo.determineRunFolderForCleanup(ctx, workspacePath, runMode)
+		runFolderName, shouldCleanSpecificFolder, err = hcpo.determineRunFolderForCleanup(ctx, workspacePath)
 		if err != nil {
 			hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Failed to determine run folder for cleanup: %v, will only clean old structure", err))
 			shouldCleanSpecificFolder = false

@@ -9,7 +9,8 @@ dependencies:
     - id: hyperframes-skills
       installer: skills-cli
       source: heygen-com/hyperframes
-      # Install the official core plus routes used by product-infographic.
+      # Keep HyperFrames as a cinematic production technique for exact UI,
+      # titles, diagrams, overlays, transitions, and compositing.
       install:
         - hyperframes
         - hyperframes-core
@@ -19,10 +20,6 @@ dependencies:
         - media-use
         - hyperframes-registry
         - hyperframes-keyframes
-        - general-video
-        - product-launch-video
-        - faceless-explainer
-        - motion-graphics
       attach: [hyperframes]
       refresh_hours: 24
 
@@ -66,8 +63,12 @@ profile:
   name: Video Studio
   version: 2
   skills:
-    - product-infographic
     - video-creation
+    - video-look-sound
+    - cinematic-visual-development
+    - longform-cinematic-video
+    - multi-clip-cinematic-generation
+    - video-stitching
     - video-editing
     - video-quality
     - hyperframes-quality
@@ -76,6 +77,13 @@ profile:
     - agent-browser
     - fal-ai
     - google-ai
+    - seeddance-api
+    - video-provider-capabilities
+    - kling-video
+    - seedance-video
+    - veo-video
+    - minimax-h3-video
+    - gemini-omni-video
     - video-model-selection
     - video-cinematography
     - video-storytelling
@@ -90,11 +98,17 @@ profile:
       presentation:
         kind: media.video
     # A character reference is pre-production, not a deliverable: it is shown
-    # so the user can reject a face while changing it is still cheap, which is
-    # why it carries no QA gate the way show-video does.
+    # so the user can reject a face while changing it is still cheap. Video
+    # previews are likewise review material; show-video applies its QA gate
+    # only when the caller supplies a final quality report.
     - id: video.show-character
       presentation:
         kind: media.character
+    # Locations, wardrobe, props, and sequence boundary frames are their own
+    # reviewable evidence. They must not be smuggled into the Characters panel.
+    - id: video.show-reference
+      presentation:
+        kind: media.reference
     # The written artifacts a stage produces — brief, script, shot list — are
     # what the user actually approves between stages.
     - id: video.show-document
@@ -116,13 +130,13 @@ profile:
     # (delegate, query_agent, list_agents, terminate_agent); every schedule tool;
     # and human_feedback / notify_user.
     #
-    # Two surfaces this list does not govern: mcpagent's intrinsic tools
+    # This list does not govern mcpagent's intrinsic tools
     # (get_api_spec, get_prompt, get_resource, read_skill), which it injects
-    # itself, and the coding CLI's own native tools under agent_tools.mode
-    # Hybrid — Video Studio also has provider-native tools for workspace work.
-    # Product HTTP APIs still go through the shared shell bridge, because every
-    # provider can call it as an MCP tool. Reaching them from each CLI's OWN
-    # shell was tried and reverted: see
+    # itself. Video Studio is deliberately MCP-only: terminal-native Claude
+    # interactions cannot be represented in the browser chat, whereas MCP tool
+    # calls have structured progress and results. Product HTTP APIs therefore
+    # go through the shared, guarded shell bridge. Reaching them from each
+    # CLI's own shell was tried and reverted: see
     # docs/design/product_api_transport_for_coding_agents.md.
     mode: allowlist
     enabled:
@@ -131,18 +145,15 @@ profile:
       # Pre-production surfaces: a character's reference image before shots are
       # generated from it, and the written artifact a stage just produced.
       - show_character
+      - show_reference
       - show_document
+      # MCP-only file editing is guarded and reported to the browser, unlike a
+      # provider-native terminal edit.
+      - diff_patch_workspace_file
       # The bridge shell is how product HTTP APIs are called. Every provider can
       # reach it (Codex only through its JS code-mode sandbox, which has no
-      # network and no env of its own), so it is not redundant with the CLI's
-      # native shell.
+      # network and no env of its own).
       - execute_shell_command
-      # The guarded structured file edit. Under agent_tools: mcp_only the CLI's
-      # own Read/Write are denied, so without this the agent rewrites files with
-      # shell heredocs. Restored to the platform in "restore workspace patching"
-      # (pkg/workspace/advanced_tools.go) together with its folder-guard
-      # writeTools entry, so edits through it stay path-checked.
-      - diff_patch_workspace_file
       # Managed browser capability, matching the agent-browser skill above.
       - agent_browser
       # Project and user secret CRUD. ui.secrets is required for this product.
@@ -151,8 +162,8 @@ profile:
       - delete_workflow_secret
       - set_user_secret
       - delete_user_secret
-      # Running the production pipeline and inspecting it.
-      - run_full_workflow
+      # Run only the individual stage the user chooses. Video Studio does not
+      # expose unattended full-workflow execution.
       - execute_step
       - query_step
       - send_step_message
@@ -201,6 +212,9 @@ profile:
     - name: GEMINI_API_KEY
       description: Google Gemini API key. Unlocks Google's own video (Veo), image, and narration (TTS) models (see the google-ai skill) -- alone, enough for a complete narrated production. Get one at aistudio.google.com.
       group: generation-provider
+    - name: SEEDANCE_API_KEY
+      description: Direct Seeddance API key. Unlocks Seedance video generation through seeddance.io independently of fal.ai (see the seeddance-api skill).
+      group: generation-provider
   runtime:
     # auto resolves the transport per provider instead of forcing one answer for
     # all four. It is what video_studio_inside_agentworks.md always specified
@@ -219,32 +233,18 @@ profile:
     transport: auto
     provider: claude-code
     model_id: claude-sonnet-5
-    # mcp_only: the CLI's native Read/Write/Shell are denied; every action —
-    # file work, rendering, product control — goes through the guarded
-    # AgentWorks MCP bridge. See the mode table in
-    # docs/design/video_studio_inside_agentworks.md.
-    #
-    # Chosen over hybrid because hybrid's native tools are NOT constrained by
-    # FolderGuard, which the design doc calls valid only "for a trusted local
-    # developer machine" and says "must never be silently selected for hosted
-    # or multi-user deployments". Under mcp_only every write is guarded.
-    #
-    # This mode is why diff_patch_workspace_file is in the allow list above: the
-    # bridge carries what the CLI cannot do natively, and mcp_only denies the
-    # CLI's own editor. Under hybrid it would be redundant and should come back
-    # out — TestProductToolGateGovernsTheCodingAgentBridgeCatalog pins that.
-    #
-    # An earlier round of "mcp_only is broken" symptoms (native commands
-    # running unblocked, "product shell not connected") turned out not to be
-    # about this setting at all: the structured Cursor CLI adapter never
-    # created a git-root marker in the project working directory, so
-    # cursor-agent walked up to the enclosing monorepo root looking for
-    # .cursor/mcp.json, found none, and silently never connected the api-bridge
-    # MCP server on ANY mode. Fixed in cursorcli_structured_adapter.go.
-    #
-    # Product HTTP APIs go through the bridge shell either way —
-    # api_transport.native_shell is implemented and left OFF; see
-    # docs/design/product_api_transport_for_coding_agents.md.
+    # Video Studio currently uses the shared server Claude login. Project-level
+    # coding-agent token overrides and their UI are deliberately disabled.
+    credential_scope: global
+    # Keep this browser product MCP-only. Native Claude Code tools can open a
+    # terminal-only chooser or approval prompt with no bridge back to the chat,
+    # leaving the visible UI permanently “Working”. MCP provides structured
+    # progress/results and retains FolderGuard for all workspace access. The
+    # bridge shell is the provider-neutral route for product HTTP APIs, secrets,
+    # managed browser work, rendering, verification, and workflow control.
+    # Do not switch to native_shell; it was intentionally left off after
+    # cross-provider failures. See
+    # docs/design/product_api_transport_for_coding_agents.md and PLAT-134.
     agent_tools:
       mode: mcp_only
     approvals:
@@ -256,6 +256,10 @@ profile:
     # Keep in step with prompts/system-prompt.md, which tells the agent the same
     # thing; the tool description is what it re-reads on every get_api_spec.
     workspace:
+      # A chat supplies a project id, never this project's workspace path. The
+      # server resolves and validates product.json below this owned root.
+      mode: project
+      projects_root: Chats/Video Studio/projects
       placement:
         execute_shell_command:
           - "Uploaded references live in `uploads/` and are read-only — never modify them."
@@ -263,24 +267,11 @@ profile:
           - "Workflow steps write inside their own run folder, not at the project root."
         diff_patch_workspace_file:
           - "Patch files in `work/` (direct chat) or the step's own run folder (workflow). `uploads/` is read-only — copy a reference into `work/` before changing it."
-    provider_options:
-      - id: claude-code
-        label: Claude Code
-        provider: claude-code
-        model_id: claude-sonnet-5
-        default: true
-      - id: codex
-        label: Codex
-        provider: codex-cli
-        model_id: gpt-5.6-terra
-      - id: cursor
-        label: Cursor
-        provider: cursor-cli
-        model_id: auto
-      - id: pi-cli
-        label: Pi CLI (Gemini)
-        provider: pi-cli
-        model_id: google/gemini-3.7-flash
+    conversation:
+      # Each Video Studio project owns one durable conversation. The project
+      # may move or the live CLI may be reaped without changing that identity.
+      mode: keyed
+      key_type: project
     capabilities:
       # Structured turns are one-shot processes. Follow-ups queue at a safe
       # boundary; they are never typed into a live terminal prompt.
@@ -290,10 +281,11 @@ profile:
       workflow_execution: required
       browser: required
       secrets: required
-      # Streaming mic input. preferred, not required: the composer works fine
-      # by typing, and a user without a mic or on a machine where the STT
-      # model has not finished downloading should not be blocked.
-      voice: preferred
+      # Streaming microphone dictation. This product-level capability gates
+      # the mic control in the shared composer. Keep it disabled until the
+      # EC2 deployment includes the CGO-enabled Sherpa ONNX voice runtime.
+      # Typed chat remains fully available.
+      voice: disabled
   built_in: true
 
 branding:
@@ -308,10 +300,13 @@ ui:
   streaming: structured
 
 workflows:
-  enabled: [infographic, shortform, longform, quality]
+  enabled: [shortform, longform, quality]
   selected_skills:
-    - product-infographic
     - video-creation
+    - video-look-sound
+    - cinematic-visual-development
+    - multi-clip-cinematic-generation
+    - video-stitching
     - video-editing
     - video-quality
     - hyperframes-quality

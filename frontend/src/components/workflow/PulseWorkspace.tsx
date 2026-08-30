@@ -1,15 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  Activity,
-  AlertTriangle,
   CheckCircle2,
-  Clock3,
-  Cpu,
+  GitCompare,
   Lightbulb,
   Loader2,
-  RefreshCw,
-  ShieldCheck,
-  Sparkles,
   Wrench,
 } from 'lucide-react'
 import { agentApi } from '../../services/api'
@@ -18,23 +12,17 @@ import type {
   PulseFindingLifecycle,
   PulseImpactLedger,
   PulseContextRecord,
-  PulseAgentMetricRecord,
-  PulseModuleState,
-  PulseRunMode,
   PulseReviewRecord,
+  PulseReviewFocus,
 } from '../../services/api-types'
 import { ReportHumanInputPanel } from './ReportHumanInputPanel'
 import { SoulViewer } from './SoulViewer'
-import { PulseModuleInspector } from './PulseModuleInspector'
 import { PulseFindingCard } from './PulseFindingCard'
-import {
-  buildPulseModuleActivity,
-} from './pulseModuleInspectorUtils'
 import { pulseFindingPresentation, type PulseFindingQueue } from './pulseFindingPresentation'
+import { isPulseOwnedFinding, pulseIssueForFinding } from './pulseModuleInspectorUtils'
 import {
   buildPulseWorkspaceModuleSummaries,
   normalizePulseWorkspaceModule,
-  selectPulseWorkspaceModule,
 } from './pulseWorkspaceUtils'
 import {
   PULSE_FIXED_COMMANDS,
@@ -55,18 +43,8 @@ function formatDate(value?: string): string {
 }
 
 function readable(value?: string): string {
-  return (value || '').trim().replaceAll('_', ' ') || 'No data'
-}
-
-const compactMetricNumber = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 })
-
-function formatAgentDuration(milliseconds: number): string {
-  if (!Number.isFinite(milliseconds) || milliseconds < 1) return '0s'
-  const seconds = Math.round(milliseconds / 1000)
-  const minutes = Math.floor(seconds / 60)
-  const hours = Math.floor(minutes / 60)
-  if (hours > 0) return `${hours}h ${minutes % 60}m`
-  return minutes > 0 ? `${minutes}m ${seconds % 60}s` : `${seconds}s`
+  const text = (value || '').trim().replaceAll('_', ' ')
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : 'No data'
 }
 
 function statusTone(value?: string): string {
@@ -83,10 +61,6 @@ function statusTone(value?: string): string {
   return 'border-border bg-muted text-muted-foreground'
 }
 
-function moduleStateLabel(state?: PulseModuleState): string {
-  return readable(state?.last_result || state?.last_gate_decision || state?.last_decision)
-}
-
 function finalCommandLabel(state?: PulseFinalCommandState): string {
   return readable(state?.status)
 }
@@ -94,14 +68,9 @@ function finalCommandLabel(state?: PulseFinalCommandState): string {
 /** Which slice of the backlog the findings list is showing. */
 type PulseFocus = 'all' | PulseFindingQueue
 
-type LatestWorkflowRun = {
-  folder: string
-  status: string
-  created_at?: string
-  completed_at?: string
-  completed_steps: number
-  total_steps: number
-  is_running: boolean
+type ReviewFocusLabel = {
+  label: string
+  relatedCount: number
 }
 
 const FOCUS_TITLES: Record<PulseFocus, string> = {
@@ -132,37 +101,22 @@ const FOCUS_HINTS: Record<PulseFocus, string> = {
 
 export function PulseWorkspace({
   workspacePath,
-  monitorOn,
-  moduleStates,
   finalCommandStates,
-  gateMode,
-  statusLoading,
+  reviewFocuses,
+  reviewFocusSelections,
   statusError,
-  onRefresh,
 }: {
   workspacePath: string
-  monitorOn: boolean
-  moduleStates: PulseModuleState[]
   finalCommandStates: PulseFinalCommandState[]
-  gateMode: PulseRunMode | null
-  statusLoading: boolean
+  reviewFocuses: PulseReviewFocus[]
+  reviewFocusSelections: PulseReviewFocus[]
   statusError: string | null
-  onRefresh: () => void
 }) {
   const [findings, setFindings] = useState<PulseFindingLifecycle[]>([])
   const [reviews, setReviews] = useState<PulseReviewRecord[]>([])
-  const [agentMetrics, setAgentMetrics] = useState<PulseAgentMetricRecord[]>([])
   const [impact, setImpact] = useState<PulseImpactLedger>({ interventions: [], observations: [], assessments: [] })
   const [contextRecords, setContextRecords] = useState<PulseContextRecord[]>([])
-  const [latestRun, setLatestRun] = useState<LatestWorkflowRun | null>(null)
-  const [selectedModule, setSelectedModule] = useState<string | null>(null)
   const [focus, setFocus] = useState<PulseFocus>('all')
-  // Distinct from selectedModule on purpose. selectedModule always holds a
-  // value because the inspector below needs something to render, and an effect
-  // re-picks a default whenever it is empty — so using it to filter the list
-  // meant Clear filter showed everything for one frame and then snapped back to
-  // one module as that effect re-fired. This is only ever set by an explicit
-  // click, and cleared means cleared.
   const [moduleFilter, setModuleFilter] = useState<string | null>(null)
   const [expandedFinding, setExpandedFinding] = useState<string | null>(null)
   const [showCompleteBacklog, setShowCompleteBacklog] = useState(false)
@@ -173,13 +127,11 @@ export function PulseWorkspace({
     if (!workspacePath) return
     setLoading(true)
     setError(null)
-    const [findingResult, reviewResult, impactResult, contextResult, metricResult, runResult] = await Promise.allSettled([
+    const [findingResult, reviewResult, impactResult, contextResult] = await Promise.allSettled([
       agentApi.getPulseFindings(workspacePath),
       agentApi.getPulseReviews(workspacePath),
       agentApi.getPulseImpact(workspacePath),
       agentApi.getPulseContext(workspacePath),
-      agentApi.getPulseAgentMetrics(workspacePath),
-      agentApi.getWorkflowsSummary([workspacePath]),
     ])
     const errors: string[] = []
     if (findingResult.status === 'fulfilled' && findingResult.value.success) {
@@ -222,40 +174,15 @@ export function PulseWorkspace({
           : contextResult.value.error || 'Could not load user context.',
       )
     }
-    if (metricResult.status === 'fulfilled' && metricResult.value.success) {
-      setAgentMetrics(metricResult.value.metrics || [])
-    } else {
-      setAgentMetrics([])
-      errors.push(
-        metricResult.status === 'rejected'
-          ? (metricResult.reason instanceof Error ? metricResult.reason.message : 'Could not load reviewer measurements.')
-          : metricResult.value.error || 'Could not load reviewer measurements.',
-      )
-    }
-    if (runResult.status === 'fulfilled' && runResult.value.success) {
-      const workflow = runResult.value.workflows.find((item) => item.workspace_path === workspacePath)
-        || runResult.value.workflows[0]
-      const retainedRun = workflow?.latest_run
-      // Older zero-step folders are bookkeeping artifacts, not useful run
-      // outcomes. Showing one as the "latest run" is actively misleading.
-      setLatestRun(retainedRun && (workflow.is_running || retainedRun.total_steps > 0)
-        ? { ...retainedRun, is_running: workflow.is_running }
-        : null)
-    } else {
-      setLatestRun(null)
-    }
     setError(errors.length > 0 ? errors.join(' ') : null)
     setLoading(false)
   }, [workspacePath])
 
   useEffect(() => {
-    setSelectedModule(null)
     setFindings([])
     setReviews([])
-    setAgentMetrics([])
     setImpact({ interventions: [], observations: [], assessments: [] })
     setContextRecords([])
-    setLatestRun(null)
     void load()
   }, [load])
 
@@ -278,16 +205,26 @@ export function PulseWorkspace({
     () => buildPulseWorkspaceModuleSummaries(PULSE_MODULE_COMMANDS, findings, reviews),
     [findings, reviews],
   )
-  const selectedDefinition = moduleSummaries.find((module) => module.id === selectedModule) || null
-  useEffect(() => {
-    if (selectedModule && moduleSummaries.some((module) => module.id === selectedModule)) return
-    setSelectedModule(selectPulseWorkspaceModule(moduleSummaries))
-  }, [moduleSummaries, selectedModule])
+  const reviewFocusByIssueID = useMemo(() => {
+    const labels = new Map<string, string[]>()
+    reviewFocusSelections.forEach((selection) => {
+      const label = `${readable(normalizePulseWorkspaceModule(selection.module))} › ${readable(selection.focus_key)}`
+      selection.issue_ids?.forEach((issueID) => {
+        const normalizedID = issueID.trim().toUpperCase()
+        if (!normalizedID) return
+        const existing = labels.get(normalizedID) || []
+        if (!existing.includes(label)) existing.push(label)
+        labels.set(normalizedID, existing)
+      })
+    })
+    return new Map<string, ReviewFocusLabel>(
+      Array.from(labels, ([issueID, focusLabels]) => [
+        issueID,
+        { label: focusLabels[0], relatedCount: Math.max(0, focusLabels.length - 1) },
+      ]),
+    )
+  }, [reviewFocusSelections])
 
-  const moduleStateByID = useMemo(
-    () => new Map(moduleStates.map((state) => [normalizePulseWorkspaceModule(state.module), state])),
-    [moduleStates],
-  )
   const finalCommandStateByID = useMemo(
     () => new Map(finalCommandStates.map((state) => [state.command, state])),
     [finalCommandStates],
@@ -306,9 +243,7 @@ export function PulseWorkspace({
         // that ignore each other.
         .filter((finding) => (
           !moduleFilter
-          || (moduleFilter === 'product'
-            ? ['strategy_auditor', 'goal_advisor'].includes(normalizePulseWorkspaceModule(finding.module))
-            : normalizePulseWorkspaceModule(finding.module) === moduleFilter)
+          || normalizePulseWorkspaceModule(finding.module) === moduleFilter
         ))
         .sort((a, b) => {
           const rank: Record<PulseFindingQueue, number> = {
@@ -338,92 +273,6 @@ export function PulseWorkspace({
       : matchingFindings,
     [focus, matchingFindings, moduleFilter, showCompleteBacklog],
   )
-  const activity = useMemo(() => buildPulseModuleActivity(findings, 8), [findings])
-  const impactSummary = useMemo(() => {
-    const latestBySeries = new Map<string, PulseImpactLedger['observations'][number]>()
-    impact.observations.forEach((observation) => {
-      const key = [observation.criterion_id, observation.metric, observation.route || '', observation.environment || ''].join('\u0000')
-      if (!latestBySeries.has(key)) latestBySeries.set(key, observation)
-    })
-    const latestAssessmentByIntervention = new Map<string, PulseImpactLedger['assessments'][number]>()
-    impact.assessments.forEach((assessment) => {
-      if (!latestAssessmentByIntervention.has(assessment.intervention_id)) {
-        latestAssessmentByIntervention.set(assessment.intervention_id, assessment)
-      }
-    })
-    const currentAssessments = Array.from(latestAssessmentByIntervention.values())
-    return {
-      improved: currentAssessments.filter((item) => item.verdict === 'improved').length,
-      regressed: currentAssessments.filter((item) => item.verdict === 'regressed').length,
-      inconclusive: currentAssessments.filter((item) => ['inconclusive', 'confounded'].includes(item.verdict)).length,
-      awaiting: impact.interventions.filter((item) => ['awaiting_evidence', 'proposed', 'approved', 'running', 'measuring', 'blocked'].includes(item.status)).length,
-      strategyExperiment: impact.interventions.find((item) => item.kind === 'strategy_experiment') || null,
-      latest: Array.from(latestBySeries.values()).slice(0, 4),
-    }
-  }, [impact])
-  const latestPassMetrics = useMemo(() => {
-    const latestPulseRunID = agentMetrics.find((metric) => metric.pulse_run_id)?.pulse_run_id
-    if (!latestPulseRunID) return null
-    const rows = agentMetrics.filter((metric) => metric.pulse_run_id === latestPulseRunID)
-    const captured = rows.filter((metric) => metric.usage_status === 'captured')
-    const started = rows
-      .map((metric) => Date.parse(metric.started_at || ''))
-      .filter(Number.isFinite)
-    const completed = rows
-      .map((metric) => Date.parse(metric.completed_at || ''))
-      .filter(Number.isFinite)
-    return {
-      pulseRunID: latestPulseRunID,
-      reviewers: rows.filter((metric) => metric.role === 'reviewer').length,
-      fixers: rows.filter((metric) => metric.role === 'fixer').length,
-      agentTimeMS: rows.reduce((sum, metric) => sum + metric.duration_ms, 0),
-      wallTimeMS: started.length > 0 && completed.length > 0
-        ? Math.max(...completed) - Math.min(...started)
-        : 0,
-      calls: captured.reduce((sum, metric) => sum + metric.llm_call_count, 0),
-      promptTokens: captured.reduce((sum, metric) => sum + metric.prompt_tokens, 0),
-      cacheReadTokens: captured.reduce((sum, metric) => sum + metric.cache_read_tokens, 0),
-      completionTokens: captured.reduce((sum, metric) => sum + metric.completion_tokens, 0),
-      cost: captured.reduce((sum, metric) => sum + metric.total_cost_usd, 0),
-      unavailable: rows.length - captured.length,
-    }
-  }, [agentMetrics])
-
-  const health = queueCounts.needs_action > 0
-    ? {
-        label: 'Pulse work queued',
-        detail: `${queueCounts.needs_action} issue${queueCounts.needs_action === 1 ? '' : 's'} for Pulse to diagnose or repair`,
-        tone: 'border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300',
-        Icon: AlertTriangle,
-      }
-    : queueCounts.decisions > 0
-      ? {
-          label: 'Your decision needed',
-          detail: `${queueCounts.decisions} item${queueCounts.decisions === 1 ? '' : 's'} cannot continue without approval`,
-          tone: 'border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-700 dark:text-fuchsia-300',
-          Icon: Clock3,
-        }
-      : queueCounts.waiting_proof > 0
-        ? {
-          label: 'Waiting for proof',
-          detail: `${queueCounts.waiting_proof} fix${queueCounts.waiting_proof === 1 ? '' : 'es'} need verification evidence`,
-          tone: 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300',
-          Icon: Clock3,
-        }
-      : reviews.length > 0
-        ? {
-            label: 'No open findings',
-            detail: 'Latest stored reviews have no active tracked issue',
-            tone: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
-            Icon: ShieldCheck,
-          }
-        : {
-            label: 'Awaiting review evidence',
-            detail: 'Run Pulse or a review slash command to establish health',
-            tone: 'border-border bg-muted text-muted-foreground',
-            Icon: Activity,
-          }
-
   if (loading && findings.length === 0 && reviews.length === 0) {
     return (
       <div className="flex min-h-96 items-center justify-center gap-2 text-sm text-muted-foreground">
@@ -437,66 +286,7 @@ export function PulseWorkspace({
     <div className="space-y-4">
       <SoulViewer workspacePath={workspacePath} pulseSummary />
 
-      <section className="overflow-hidden rounded-xl border bg-gradient-to-br from-primary/7 via-background to-background">
-        <div className="flex flex-wrap items-start justify-between gap-4 p-4 sm:p-5">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-              <Activity className="h-3.5 w-3.5" />
-              Latest outcome
-            </div>
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold ${health.tone}`}>
-                <health.Icon className="h-3.5 w-3.5" />
-                {health.label}
-              </span>
-              <span className="text-xs text-muted-foreground">{health.detail}</span>
-            </div>
-            <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
-              <span>
-                <span className="font-medium text-foreground">Latest retained run:</span>{' '}
-                {latestRun
-                  ? readable(latestRun.is_running ? 'running' : latestRun.status)
-                  : 'Not recorded'}
-              </span>
-              {latestRun && latestRun.total_steps > 0 && (
-                <span>
-                  {latestRun.completed_steps}/{latestRun.total_steps} steps
-                  {' · '}{formatDate(latestRun.completed_at || latestRun.created_at)}
-                </span>
-              )}
-              {gateMode && (
-                <span title={gateMode.reason}>
-                  <span className="font-medium text-foreground">Pulse mode:</span>{' '}
-                  {readable(gateMode.mode)}
-                </span>
-              )}
-              <span><span className="font-medium text-foreground">Pulse owns:</span> {queueCounts.needs_action}</span>
-              <span><span className="font-medium text-foreground">Queued for Pulse:</span> {queueCounts.queued_repair}</span>
-              <span><span className="font-medium text-foreground">You own:</span> {queueCounts.decisions}</span>
-              <span><span className="font-medium text-foreground">Waiting on runs:</span> {queueCounts.waiting_proof}</span>
-              {queueCounts.platform > 0 && <span><span className="font-medium text-foreground">Platform repair pending:</span> {queueCounts.platform}</span>}
-            </div>
-          </div>
-          <div className="flex shrink-0 items-center gap-1">
-            <button
-              type="button"
-              onClick={onRefresh}
-              disabled={loading || statusLoading}
-              className="inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
-            >
-              <RefreshCw className={`h-3.5 w-3.5 ${loading || statusLoading ? 'animate-spin' : ''}`} />
-              Refresh
-            </button>
-          </div>
-        </div>
-        {!monitorOn && (
-          <div className="border-t border-dashed px-4 py-2.5 text-xs text-muted-foreground sm:px-5">
-            Scheduled Pulse is off. Saved reviews and lifecycle history remain available.
-          </div>
-        )}
-      </section>
-
-      <ReportHumanInputPanel workspacePath={workspacePath} contentMode="pending" />
+      <ReportHumanInputPanel workspacePath={workspacePath} contentMode="all" providedImpact={impact} />
 
       <section className="overflow-hidden rounded-xl border bg-background">
         <div className="border-b px-4 py-3">
@@ -508,33 +298,32 @@ export function PulseWorkspace({
         <div className="grid gap-px bg-border lg:grid-cols-3">
           {[
             {
-              id: 'workflow_review',
-              title: 'Engineering issues',
+              id: 'technical_review',
+              title: 'Technical review',
               icon: Wrench,
-              description: 'Execution, reports, evaluations, plan consistency, and data integrity',
+              description: 'Execution health, plan integrity, stores, reports, evaluation, and model/cost fitness',
               tone: 'text-sky-600 dark:text-sky-300',
             },
             {
-              id: 'llm_ops_review',
-              title: 'Operations',
-              icon: Cpu,
-              description: 'Cost, latency, model and tool use, retries, timeouts, and reliability',
-              tone: 'text-violet-600 dark:text-violet-300',
-            },
-            {
-              id: 'product',
-              title: 'Product improvements',
+              id: 'strategic_review',
+              title: 'Strategic review',
               icon: Lightbulb,
-              description: 'Strategy recommendations and blank-sheet opportunities for the goal',
+              description: 'Hidden strategic mechanisms and materially different opportunities for the goal',
               tone: 'text-amber-600 dark:text-amber-300',
             },
+            {
+              id: 'plan_drift_review',
+              title: 'Plan drift review',
+              icon: GitCompare,
+              description: 'Steps flagged by a plan edit, checked for DB, report, learnings, KB, and validation_schema drift',
+              tone: 'text-violet-600 dark:text-violet-300',
+            },
           ].map((area) => {
-            const areaModules = area.id === 'product'
-              ? moduleSummaries.filter((module) => ['strategy_auditor', 'goal_advisor'].includes(module.id))
-              : moduleSummaries.filter((module) => module.id === area.id)
+            const areaModules = moduleSummaries.filter((module) => module.id === area.id)
             const decisions = areaModules.reduce((sum, module) => sum + module.awaitingUser, 0)
             const proposals = areaModules.reduce((sum, module) => sum + module.proposals, 0)
-            const actionable = area.id === 'product'
+            const strategic = area.id === 'strategic_review'
+            const actionable = strategic
               ? decisions + proposals
               : areaModules.reduce((sum, module) => sum + module.active + module.fixing + module.queuedForEngineering, 0)
             const waiting = areaModules.reduce((sum, module) => (
@@ -545,21 +334,35 @@ export function PulseWorkspace({
             const latest = [...areaModules]
               .sort((a, b) => (b.latestReview?.recorded_at || '').localeCompare(a.latestReview?.recorded_at || ''))[0]
               ?.latestReview
-            const moduleID = area.id === 'product' ? null : area.id
+            const reviewedFocuses = reviewFocusSelections
+              .filter((item) => normalizePulseWorkspaceModule(item.module) === area.id && item.last_reviewed_at)
+              .sort((a, b) => (b.last_reviewed_at || '').localeCompare(a.last_reviewed_at || ''))
+            const latestFocus = reviewedFocuses[0]
+            const latestFocuses = latestFocus?.last_pulse_run_id
+              ? reviewedFocuses.filter((item) => item.last_pulse_run_id === latestFocus.last_pulse_run_id)
+              : latestFocus ? [latestFocus] : []
+            const latestFocusKeys = new Set(latestFocuses.map((item) => item.focus_key))
+            const upcomingFocuses = reviewFocuses
+              .filter((item) => (
+                normalizePulseWorkspaceModule(item.module) === area.id
+                && !latestFocusKeys.has(item.focus_key)
+              ))
+              .slice(0, 3)
+            const deferredFocuses = latestFocuses.flatMap((item) => item.deferred_focuses || [])
+            const nextFocusKeys = deferredFocuses.length
+              ? [...new Set(deferredFocuses)].slice(0, 3)
+              : upcomingFocuses.map((item) => item.focus_key)
+            const moduleID = area.id
             return (
               <button
                 key={area.id}
                 type="button"
                 onClick={() => {
-                  if (moduleID) {
-                    setSelectedModule(moduleID)
-                    setModuleFilter(moduleID)
-                    setShowCompleteBacklog(false)
-                  } else {
+                  setModuleFilter(moduleID)
+                  if (strategic && (decisions > 0 || proposals > 0)) {
                     setFocus(decisions > 0 ? 'decisions' : 'proposals')
-                    setModuleFilter('product')
-                    setShowCompleteBacklog(false)
                   }
+                  setShowCompleteBacklog(false)
                 }}
                 className="min-w-0 bg-background p-4 text-left transition-colors hover:bg-muted/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40"
               >
@@ -573,12 +376,12 @@ export function PulseWorkspace({
                   </div>
                   {actionable > 0 && (
                     <span className="rounded-full border border-red-500/25 bg-red-500/5 px-2 py-0.5 text-[9px] font-semibold text-red-700 dark:text-red-300">
-                      {actionable} {area.id === 'product' ? 'recommendations' : 'to fix'}
+                      {actionable} {strategic ? 'recommendations' : 'to fix'}
                     </span>
                   )}
                 </div>
                 <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
-                  {area.id === 'product' ? (
+                  {strategic ? (
                     <>
                       <span><span className="font-semibold text-foreground">{proposals}</span> ideas</span>
                       <span><span className="font-semibold text-foreground">{decisions}</span> decisions</span>
@@ -599,6 +402,30 @@ export function PulseWorkspace({
                   <span className="line-clamp-2">
                     {latest ? latest.verdict || 'Review recorded' : 'No stored review yet'}
                   </span>
+                  {latestFocuses.length > 0 ? (
+                    <div className="mt-1.5 text-[10px] text-muted-foreground">
+                      <span className="font-medium text-foreground">Last {latestFocuses.length === 1 ? 'focus' : 'focuses'}:</span>{' '}
+                      {latestFocuses.map((item) => (
+                        `${readable(item.focus_key)}${item.route_scope ? ` · ${readable(item.route_scope)}` : ''}`
+                      )).join(', ')} · {formatDate(latestFocuses[0].last_reviewed_at)}
+                      {latestFocuses.length === 1 && (latestFocuses[0].review_count || 0) > 0 && (
+                        <span> · reviewed {latestFocuses[0].review_count} {latestFocuses[0].review_count === 1 ? 'time' : 'times'}</span>
+                      )}
+                      {latestFocuses[0].last_selection_reason && (
+                        <span className="mt-0.5 block line-clamp-2">{latestFocuses[0].last_selection_reason}</span>
+                      )}
+                      {nextFocusKeys.length > 0 && (
+                        <span className="mt-0.5 block line-clamp-2">
+                          Next focus candidates: {nextFocusKeys.map(readable).join(', ')}
+                        </span>
+                      )}
+                    </div>
+                  ) : upcomingFocuses.length > 0 ? (
+                    <div className="mt-1.5 text-[10px] text-muted-foreground">
+                      <span className="font-medium text-foreground">Next focus candidates:</span>{' '}
+                      {upcomingFocuses.map((item) => readable(item.focus_key)).join(', ')}
+                    </div>
+                  ) : null}
                 </div>
               </button>
             )
@@ -695,52 +522,29 @@ export function PulseWorkspace({
               {attentionFindings.map((finding) => {
                 const moduleID = normalizePulseWorkspaceModule(finding.module)
                 const module = moduleSummaries.find((item) => item.id === moduleID)
+                const issueID = pulseIssueForFinding(finding).id.toUpperCase()
+                const reviewFocus = reviewFocusByIssueID.get(issueID) || (isPulseOwnedFinding(finding)
+                  ? { label: `${module?.label || readable(moduleID)} › Unclassified`, relatedCount: 0 }
+                  : undefined)
                 return (
                   <PulseFindingCard
-                    key={finding.fingerprint}
+                    key={issueID}
                     finding={finding}
                     moduleLabel={module?.label}
-                    expanded={expandedFinding === finding.fingerprint}
+                    reviewFocus={reviewFocus}
+                    expanded={expandedFinding === issueID}
                     onToggle={() => setExpandedFinding(
-                      expandedFinding === finding.fingerprint ? null : finding.fingerprint,
+                      expandedFinding === issueID ? null : issueID,
                     )}
-                    onOpenModule={() => moduleID && setSelectedModule(moduleID)}
+                    onOpenModule={() => {
+                      if (!moduleID) return
+                      setModuleFilter(moduleID)
+                      setFocus('all')
+                      setShowCompleteBacklog(false)
+                    }}
                   />
                 )
               })}
-            </div>
-          )}
-        </section>
-
-        <section className="overflow-hidden rounded-xl border bg-background">
-          <div className="border-b px-4 py-3">
-            <h3 className="text-sm font-semibold text-foreground">Recent fixes and follow-through</h3>
-            <p className="mt-0.5 text-[11px] text-muted-foreground">What changed after issues were filed</p>
-          </div>
-          {activity.length === 0 ? (
-            <div className="flex min-h-40 items-center justify-center px-5 text-center text-xs text-muted-foreground">
-              Lifecycle activity will appear after findings are filed.
-            </div>
-          ) : (
-            <div className="divide-y">
-              {activity.map((event, index) => (
-                <div key={`${event.fingerprint}-${event.recorded_at}-${index}`} className="flex gap-3 px-4 py-3">
-                  <span className="mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
-                    {event.event_type.includes('fix')
-                      ? <Wrench className="h-3 w-3" />
-                      : event.event_type === 'closed' || event.event_type === 'verified'
-                        ? <CheckCircle2 className="h-3 w-3" />
-                        : <Sparkles className="h-3 w-3" />}
-                  </span>
-                  <div className="min-w-0">
-                    <div className="text-[10px] font-semibold capitalize text-foreground">{readable(event.event_type)}</div>
-                    <div className="mt-0.5 line-clamp-2 text-[11px] leading-4 text-muted-foreground">
-                      {event.summary || event.findingText}
-                    </div>
-                    <div className="mt-1 text-[9px] text-muted-foreground">{formatDate(event.recorded_at)}</div>
-                  </div>
-                </div>
-              ))}
             </div>
           )}
         </section>
@@ -766,179 +570,6 @@ export function PulseWorkspace({
           </section>
         )}
       </div>
-
-      <section className="overflow-hidden rounded-xl border bg-background">
-        <div className="border-b px-4 py-3">
-          <h3 className="text-sm font-semibold text-foreground">Pulse activity</h3>
-          <p className="mt-0.5 text-[11px] text-muted-foreground">
-            What Gate ran or skipped, why it made that choice, and whether a Fixer ran
-          </p>
-		  {latestPassMetrics && (
-		    <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-muted-foreground" title={latestPassMetrics.pulseRunID}>
-		      <span className="font-medium text-foreground">Latest measured pass</span>
-		      <span>{latestPassMetrics.reviewers} review turn{latestPassMetrics.reviewers === 1 ? '' : 's'}{latestPassMetrics.fixers > 0 ? ` + ${latestPassMetrics.fixers} fixer` : ' · no fixer needed'}</span>
-		      <span>{formatAgentDuration(latestPassMetrics.wallTimeMS)} wall</span>
-		      <span>{formatAgentDuration(latestPassMetrics.agentTimeMS)} agent time</span>
-		      <span>{latestPassMetrics.calls} calls</span>
-		      <span>{compactMetricNumber.format(latestPassMetrics.promptTokens)} input</span>
-		      <span>{compactMetricNumber.format(latestPassMetrics.cacheReadTokens)} cached</span>
-		      <span>{compactMetricNumber.format(latestPassMetrics.completionTokens)} output</span>
-		      <span>${latestPassMetrics.cost.toFixed(2)}</span>
-		      {latestPassMetrics.unavailable > 0 && <span className="text-amber-700 dark:text-amber-300">{latestPassMetrics.unavailable} usage unavailable</span>}
-		    </div>
-		  )}
-        </div>
-        <div className="grid gap-px bg-border sm:grid-cols-2 xl:grid-cols-4">
-          {moduleSummaries.map((module) => {
-            const state = moduleStateByID.get(module.id)
-            const active = selectedModule === module.id
-            const openWork = module.active + module.fixing + module.queuedForEngineering
-            const waitingWork = module.awaitingVerification + module.awaitingRun
-            return (
-              <button
-                key={module.id}
-                type="button"
-                onClick={() => { setSelectedModule(module.id); setModuleFilter(module.id); setShowCompleteBacklog(false) }}
-                aria-pressed={active}
-                className={`min-w-0 bg-background p-3 text-left transition-colors hover:bg-muted/40 ${active ? 'ring-2 ring-inset ring-primary/50' : ''}`}
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <span className="text-xs font-semibold text-foreground">{module.label}</span>
-                  {openWork > 0 && (
-                    <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500/10 px-1.5 text-[9px] font-semibold text-red-700 dark:text-red-300">
-                      {openWork}
-                    </span>
-                  )}
-                </div>
-                <div className="mt-1 line-clamp-2 min-h-8 text-[10px] leading-4 text-muted-foreground">{module.description}</div>
-                <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                  <span className={`rounded-full border px-1.5 py-0.5 text-[9px] font-semibold capitalize ${statusTone(moduleStateLabel(state))}`}>
-                    {moduleStateLabel(state)}
-                  </span>
-                  {module.recurring > 0 && (
-                    <span className="text-[9px] font-medium text-amber-700 dark:text-amber-300">{module.recurring} recurring</span>
-                  )}
-                  {waitingWork > 0 && (
-                    <span className="text-[9px] font-medium text-amber-700 dark:text-amber-300">{waitingWork} waiting</span>
-                  )}
-                  {module.awaitingUser > 0 && (
-                    <span className="text-[9px] font-medium text-fuchsia-700 dark:text-fuchsia-300">{module.awaitingUser} decisions</span>
-                  )}
-                  {module.queuedForEngineering > 0 && (
-                    <span className="text-[9px] font-medium text-sky-700 dark:text-sky-300">{module.queuedForEngineering} queued</span>
-                  )}
-                  {module.blocked > 0 && (
-                    <span className="text-[9px] font-medium text-muted-foreground">{module.blocked} blocked</span>
-                  )}
-                  {module.externalAction > 0 && (
-                    <span className="text-[9px] font-medium text-violet-700 dark:text-violet-300">
-                      {module.externalAction} external
-                    </span>
-                  )}
-                </div>
-                <div className="mt-2 line-clamp-2 text-[10px] leading-4 text-foreground">
-                  {module.latestReview?.verdict || (module.latestReview ? 'Review recorded' : 'No stored review yet')}
-                </div>
-                {(state?.last_result_reason || state?.last_reason) && (
-                  <div className="mt-1 line-clamp-2 text-[9px] leading-4 text-muted-foreground">
-                    {state.last_result_reason || state.last_reason}
-                  </div>
-                )}
-                <div className="mt-1 text-[9px] text-muted-foreground">
-                  {module.latestReview ? formatDate(module.latestReview.recorded_at) : 'Awaiting evidence'}
-                </div>
-				{module.latestReview?.metrics && (
-				  <div className="mt-1 text-[9px] text-muted-foreground">
-				    {formatAgentDuration(module.latestReview.metrics.duration_ms)}
-				    {module.latestReview.metrics.usage_status === 'captured' && (
-				      <> · {compactMetricNumber.format(module.latestReview.metrics.completion_tokens)} output · ${module.latestReview.metrics.total_cost_usd.toFixed(2)}</>
-				    )}
-				  </div>
-				)}
-              </button>
-            )
-          })}
-        </div>
-      </section>
-
-      {selectedDefinition && (
-        <section className="overflow-hidden rounded-xl border bg-background">
-          <div className="border-b px-4 py-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <h3 className="text-sm font-semibold text-foreground">{selectedDefinition.label}</h3>
-                <p className="mt-0.5 text-[11px] text-muted-foreground">{selectedDefinition.description}</p>
-              </div>
-              <span className="text-[10px] text-muted-foreground">
-                {selectedDefinition.findings} finding{selectedDefinition.findings === 1 ? '' : 's'} · {selectedDefinition.closed} closed
-              </span>
-            </div>
-          </div>
-          <PulseModuleInspector
-            workspacePath={workspacePath}
-            module={selectedDefinition.id}
-            label={selectedDefinition.label}
-            reviews={reviews.filter((review) => (
-              normalizePulseWorkspaceModule(review.module) === selectedDefinition.id
-            ))}
-          />
-        </section>
-      )}
-
-      <section className="overflow-hidden rounded-xl border bg-background">
-        <div className="flex flex-wrap items-start justify-between gap-3 border-b px-4 py-3">
-          <div>
-            <h3 className="text-sm font-semibold text-foreground">Impact over time</h3>
-            <p className="mt-0.5 text-[11px] text-muted-foreground">
-              Whether Pulse changes improved the workflow’s actual success measures
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-1.5 text-[10px] font-semibold">
-            <span className="rounded-full border border-emerald-500/25 bg-emerald-500/5 px-2 py-1 text-emerald-700 dark:text-emerald-300">{impactSummary.improved} improved</span>
-            <span className="rounded-full border border-red-500/25 bg-red-500/5 px-2 py-1 text-red-700 dark:text-red-300">{impactSummary.regressed} regressed</span>
-            <span className="rounded-full border border-amber-500/25 bg-amber-500/5 px-2 py-1 text-amber-700 dark:text-amber-300">{impactSummary.inconclusive} inconclusive</span>
-            <span className="rounded-full border px-2 py-1 text-muted-foreground">{impactSummary.awaiting} awaiting evidence</span>
-          </div>
-        </div>
-        {impactSummary.strategyExperiment && (
-          <div className="border-b px-4 py-3 text-xs">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <div className="font-semibold text-foreground">Strategy experiment: {impactSummary.strategyExperiment.title}</div>
-                <div className="mt-1 text-[11px] text-muted-foreground">
-                  {readable(impactSummary.strategyExperiment.status)} · {readable(impactSummary.strategyExperiment.metric)} · checkpoint {readable(impactSummary.strategyExperiment.checkpoint)}
-                </div>
-              </div>
-              <span className={`rounded-full border px-2 py-1 text-[10px] font-semibold ${statusTone(impactSummary.strategyExperiment.status)}`}>
-                {readable(impactSummary.strategyExperiment.status)}
-              </span>
-            </div>
-            {impactSummary.strategyExperiment.guardrails?.length ? (
-              <div className="mt-2 text-[10px] leading-4 text-muted-foreground">Guardrails: {impactSummary.strategyExperiment.guardrails.join(' · ')}</div>
-            ) : null}
-          </div>
-        )}
-        {impactSummary.latest.length === 0 ? (
-          <div className="flex items-start gap-2 px-4 py-3 text-xs text-muted-foreground">
-            <Clock3 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
-            <span>No comparable result yet. A producing workflow run is needed before Pulse can say whether these changes improved the goal.</span>
-          </div>
-        ) : (
-          <div className="grid gap-px bg-border sm:grid-cols-2 lg:grid-cols-4">
-            {impactSummary.latest.map((observation) => (
-              <div key={observation.observation_id} className="bg-background px-4 py-3">
-                <div className="truncate text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{readable(observation.criterion_id)}</div>
-                <div className="mt-1 text-sm font-semibold text-foreground">
-                  {typeof observation.value === 'number'
-                    ? `${observation.value}${observation.unit ? ` ${observation.unit}` : ''}`
-                    : readable(observation.status)}
-                </div>
-                <div className="mt-1 truncate text-[10px] text-muted-foreground">{readable(observation.metric)} · {formatDate(observation.observed_at)}</div>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
 
       <section className="overflow-hidden rounded-xl border bg-background">
         <div className="border-b px-4 py-3">

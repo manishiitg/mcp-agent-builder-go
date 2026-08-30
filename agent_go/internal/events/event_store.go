@@ -2,7 +2,9 @@ package events
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -735,7 +737,7 @@ func (es *EventStore) AddEvent(sessionID string, event Event) {
 	}
 
 	logStreamingChunkTelemetry(sessionID, event)
-	logToolCallTelemetry(sessionID, event)
+	es.logToolCallTelemetry(sessionID, event)
 
 	// Notify SSE subscribers (non-blocking send; drop if buffer full)
 	es.subscribersMu.RLock()
@@ -1568,9 +1570,26 @@ type toolCallTelemetry struct {
 var (
 	toolCallsMu  sync.Mutex
 	openToolCall = map[string]map[string]*toolCallTelemetry{} // sessionID -> toolCallID
+	// toolResultResolver, when set, recovers a tool call's real output and
+	// runtime from the provider's own record. Injected rather than imported so
+	// this package stays free of provider knowledge; cmd/server owns the
+	// Claude Code implementation (PLAT-141).
+	toolResultResolver   ToolResultResolver
+	toolResultResolverMu sync.RWMutex
+
+	// settleInFlight stops one turn from scheduling two settle passes. A turn
+	// emits BOTH agent_end and unified_completion, so the handler started a
+	// goroutine for each. The event stream stayed correct — the first pass
+	// removed the calls it settled, so the second found none and emitted
+	// nothing — but the LOG became unreadable: at 21:23:23 the same session
+	// reported "5 of 5 tool call(s) never reported after 5s -- settling" and
+	// "all 5 open tool call(s) reported within the grace window" in the same
+	// second. Diagnosing this bug from those two lines is impossible, which is
+	// the whole reason the logging exists.
+	settleInFlight = map[string]bool{}
 )
 
-func logToolCallTelemetry(sessionID string, event Event) {
+func (es *EventStore) logToolCallTelemetry(sessionID string, event Event) {
 	if event.Data == nil {
 		return
 	}
@@ -1601,19 +1620,246 @@ func logToolCallTelemetry(sessionID string, event Event) {
 		}
 		log.Printf("[TOOL] session=%s END id=%s name=%s duration=%s result_len=%d open=%d",
 			sessionID, d.ToolCallID, started.name, time.Since(started.startedAt).Truncate(time.Millisecond), len(d.Result), open)
+	case *events.ToolCallErrorEvent:
+		// A tool call that fails still REPORTED — with a real error, not
+		// silence. Before this case existed, only ToolCallEndEvent cleared an
+		// entry, so an errored call stayed in openToolCall forever and, at
+		// turn end, was indistinguishable from a call that got no response at
+		// all: settleOpenToolCalls swept it into the same synthetic-settle
+		// bucket and the UI showed "no result reported" for a call that had
+		// in fact reported a specific, real error.
+		//
+		// Confirmed live 2026-08-20 on a pi-cli session: two real errors
+		// ("Working directory does not exist", then an ACCESS DENIED write to
+		// the wrong scoped folder) both left their ToolCallID stuck open, and
+		// both later turned up inside a "N of N tool call(s) produced no end
+		// event" settle alongside genuinely unreported calls.
+		toolCallsMu.Lock()
+		started := openToolCall[sessionID][d.ToolCallID]
+		if started != nil {
+			delete(openToolCall[sessionID], d.ToolCallID)
+		}
+		open := len(openToolCall[sessionID])
+		toolCallsMu.Unlock()
+		if started == nil {
+			log.Printf("[TOOL] session=%s ERROR id=%s name=%s UNPAIRED (no matching START id) error_len=%d open=%d",
+				sessionID, d.ToolCallID, d.ToolName, len(d.Error), open)
+			return
+		}
+		log.Printf("[TOOL] session=%s ERROR id=%s name=%s duration=%s error_len=%d open=%d",
+			sessionID, d.ToolCallID, started.name, time.Since(started.startedAt).Truncate(time.Millisecond), len(d.Error), open)
 	}
 	// A turn that ends with calls still open is the spinning-chip case.
 	if event.Type == "agent_end" || event.Type == "unified_completion" {
 		toolCallsMu.Lock()
-		stuck := make([]string, 0, len(openToolCall[sessionID]))
+		pending := make(map[string]*toolCallTelemetry, len(openToolCall[sessionID]))
 		for id, tc := range openToolCall[sessionID] {
-			stuck = append(stuck, tc.name+"("+id+")")
+			pending[id] = tc
 		}
-		delete(openToolCall, sessionID)
 		toolCallsMu.Unlock()
-		if len(stuck) > 0 {
-			log.Printf("[TOOL] session=%s turn ended with %d tool call(s) STILL OPEN -- their UI chips will spin forever: %s",
-				sessionID, len(stuck), strings.Join(stuck, ", "))
+		toolCallsMu.Lock()
+		alreadySettling := settleInFlight[sessionID]
+		if len(pending) > 0 && !alreadySettling {
+			settleInFlight[sessionID] = true
 		}
+		toolCallsMu.Unlock()
+		if alreadySettling {
+			return
+		}
+		if len(pending) > 0 {
+			names := make([]string, 0, len(pending))
+			for id, tc := range pending {
+				names = append(names, tc.name+"("+id+")")
+			}
+			sort.Strings(names)
+			log.Printf("[TOOL] session=%s turn ended with %d tool call(s) open -- waiting %s for late results: %s",
+				sessionID, len(pending), toolCallSettleGrace, strings.Join(names, ", "))
+			go es.settleAfterGrace(sessionID, event, pending)
+		} else {
+			toolCallsMu.Lock()
+			delete(openToolCall, sessionID)
+			toolCallsMu.Unlock()
+		}
+	}
+}
+
+// toolCallSettleGrace is how long a turn-end waits for tool results that are
+// already on their way.
+//
+// The turn-end signal and the tool-end events reach this store from different
+// places — the CLI's own completion versus the bridge callback that runs the
+// tool — and they are not ordered against each other. Measured on
+// tectonicusadaytrading 2026-08-18: the turn ended at 20:34:28 and the tool's
+// completion was processed at 20:34:29. Settling the instant the turn ends
+// therefore condemns calls that are one second from landing, which is how
+// fourteen completed shell commands were reported as never having reported.
+//
+// The native transcript for that session shows 215 tool_use and 215
+// tool_result: the model received everything. Nothing is lost here except the
+// UI's copy, so the grace window only needs to cover the gap between two
+// pipelines, not any real tool latency.
+var toolCallSettleGrace = 5 * time.Second
+
+// A settled call carries no message at all.
+//
+// Three versions of a message were tried here — the mechanism, then the
+// evidence, then a short placeholder — and every one of them put a diagnostic
+// in front of someone reading a chat. The gap is ours: the tool ran, the agent
+// used its result, and only our copy is missing (PLAT-141 measures one such
+// call completing in 41ms). None of that is the reader's problem to interpret,
+// so it belongs in the server log, where it now is, and nowhere else.
+//
+// The event is still emitted, because without an end the chip spins forever —
+// which is the bug this whole line of work started from.
+
+// settleAfterGrace closes only the calls that are still missing once late
+// results have had time to arrive.
+// ToolResultResolver recovers a tool call the live stream never completed.
+// name and startedAt are the caller's own record of the orphaned call, passed
+// through so a resolver correlating against a different id space (PLAT-143)
+// has what it needs to match on. Returns ok=false when nothing has a record
+// of it either.
+type ToolResultResolver func(sessionID, toolCallID, name string, startedAt time.Time) (result string, duration time.Duration, ok bool)
+
+// SetToolResultResolver installs the recovery path used when a tool call
+// produces no end event.
+func SetToolResultResolver(resolver ToolResultResolver) {
+	toolResultResolverMu.Lock()
+	toolResultResolver = resolver
+	toolResultResolverMu.Unlock()
+}
+
+func resolveToolResult(sessionID, toolCallID, name string, startedAt time.Time) (string, time.Duration, bool) {
+	toolResultResolverMu.RLock()
+	resolver := toolResultResolver
+	toolResultResolverMu.RUnlock()
+	if resolver == nil {
+		return "", 0, false
+	}
+	return resolver(sessionID, toolCallID, name, startedAt)
+}
+
+func (es *EventStore) settleAfterGrace(sessionID string, turnEnd Event, pending map[string]*toolCallTelemetry) {
+	time.Sleep(toolCallSettleGrace)
+
+	toolCallsMu.Lock()
+	delete(settleInFlight, sessionID)
+	stuck := make(map[string]*toolCallTelemetry, len(pending))
+	for id, tc := range pending {
+		// Still open means the end never arrived; anything that landed during
+		// the grace window removed itself from the map on the way through.
+		if _, open := openToolCall[sessionID][id]; open {
+			stuck[id] = tc
+			delete(openToolCall[sessionID], id)
+		}
+	}
+	if len(openToolCall[sessionID]) == 0 {
+		delete(openToolCall, sessionID)
+	}
+	toolCallsMu.Unlock()
+
+	if len(stuck) == 0 {
+		log.Printf("[TOOL] session=%s all %d open tool call(s) reported within the grace window", sessionID, len(pending))
+		return
+	}
+	names := make([]string, 0, len(stuck))
+	for id, tc := range stuck {
+		names = append(names, tc.name+"("+id+")")
+	}
+	sort.Strings(names)
+	// The whole diagnostic lives here rather than on screen. PLAT-141: these
+	// calls complete promptly — one measured at 41ms — and their results simply
+	// never become events, so the durations below are open-to-settle, not tool
+	// runtime, and should not be read as slow tools.
+	log.Printf("[TOOL] session=%s PLAT-141: %d of %d tool call(s) produced no end event within %s; closing their UI chips with no output. "+
+		"open-to-settle (NOT tool runtime): %s",
+		sessionID, len(stuck), len(pending), toolCallSettleGrace, strings.Join(names, ", "))
+	es.settleOpenToolCalls(sessionID, turnEnd, stuck)
+}
+
+// settleOpenToolCalls closes chips whose tool call never reported an end.
+//
+// The condition was already detected here and logged verbatim as "their UI
+// chips will spin forever" — accurately, and then nothing was done about it. A
+// user watching a chat sees a spinner that outlives the turn and reasonably
+// concludes the agent is still working; on salesoutreach that produced a chat
+// that looked busy for as long as it stayed open, while the session had
+// genuinely completed.
+//
+// The synthetic end is deliberately marked as such rather than dressed up as a
+// normal completion. The tool really did not report a result, and a chip that
+// silently turns green would replace a visible wrong state with an invisible
+// one — the same trade this codebase refuses elsewhere.
+//
+// Safe to call from AddEvent: the store mutex is already released by this
+// point, and the events emitted are ToolCallEnd, which cannot re-enter this
+// branch.
+func (es *EventStore) settleOpenToolCalls(sessionID string, turnEnd Event, stuck map[string]*toolCallTelemetry) {
+	if es == nil {
+		return
+	}
+	for id, tc := range stuck {
+		now := time.Now()
+		name := tc.name
+		if name == "" {
+			name = "unknown_tool"
+		}
+		// The provider's own record is complete where ours is not, so recover
+		// the real output and the real runtime rather than closing the chip
+		// blank (PLAT-141). Falls through to an empty settle when the provider
+		// has no record either.
+		result := ""
+		duration := now.Sub(tc.startedAt)
+		// displayTimestamp defaults to the settle moment -- the only signal
+		// available when nothing is recovered. When a real duration IS
+		// recovered, the settle moment is not this call's completion time; it
+		// is whenever the batch happened to run, which is why several settled
+		// calls with different real durations could all display the identical
+		// clock time. Use the call's own real start+duration instead.
+		displayTimestamp := now
+		if recovered, realDuration, ok := resolveToolResult(sessionID, id, name, tc.startedAt); ok {
+			result = recovered
+			if realDuration > 0 {
+				duration = realDuration
+				displayTimestamp = tc.startedAt.Add(realDuration)
+			}
+			log.Printf("[TOOL] session=%s PLAT-141: recovered %s(%s) from the provider transcript — %d bytes, real runtime %s",
+				sessionID, name, id, len(recovered), realDuration.Round(time.Millisecond))
+		}
+		// A completion, not an error. The tool ran — measured on
+		// tectonicusadaytrading, whose native transcript holds 215 tool_use and
+		// 215 tool_result — and the agent received its result. Only our copy is
+		// missing. Painting that red puts a failure badge on a run where nothing
+		// failed, which is what an earlier version of this did and what made it
+		// worth reporting twice.
+		//
+		// The output field says the output was not captured rather than showing
+		// a fabricated one, so nothing is asserted that was not observed.
+		es.AddEvent(sessionID, Event{
+			ID:                fmt.Sprintf("settle-%s-%d", id, now.UnixNano()),
+			Type:              "tool_call_end",
+			Timestamp:         displayTimestamp,
+			SessionID:         sessionID,
+			ExecutionID:       turnEnd.ExecutionID,
+			ParentExecutionID: turnEnd.ParentExecutionID,
+			ExecutionKind:     turnEnd.ExecutionKind,
+			TerminalOwnerID:   turnEnd.TerminalOwnerID,
+			Data: &events.AgentEvent{
+				Type:      events.EventType("tool_call_end"),
+				Timestamp: displayTimestamp,
+				SessionID: sessionID,
+				Data: &events.ToolCallEndEvent{
+					ToolName:   name,
+					ToolCallID: id,
+					Duration:   duration,
+					Result:     result,
+					// Duration here is open-to-settle, not tool runtime (see the
+					// log line above, which says so verbatim). Flagging it lets a
+					// consumer label it honestly instead of presenting it as a
+					// measured runtime it is not.
+					SyntheticSettle: true,
+				},
+			},
+		})
 	}
 }

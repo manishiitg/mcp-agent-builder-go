@@ -341,8 +341,6 @@ export interface ChatTabConfig {
   pastedAttachments?: PastedAttachment[]  // Long pastes captured as attachment chips, prepended on send
   isQueueProcessing?: boolean  // Lock to prevent multiple ChatArea instances from double-processing the queue
   autoRun?: boolean  // Automatically run the chat when tab is loaded
-  defaultReasoningLevel?: 'high' | 'medium' | 'low' | null  // Preferred reasoning level for delegated tasks in multi-agent mode
-  enableImageGeneration?: boolean  // Enable/disable image generation virtual tool
 }
 
 const stripRestoreOnlyTabConfig = (config: ChatTabConfig): ChatTabConfig => {
@@ -394,6 +392,7 @@ export interface ChatTab {
     scheduledJobName?: string // Display name of the scheduled job, surfaced in the view-only banner
     isBotRun?: boolean // True when tab is observing a bot-triggered session (read-only live view)
     botPlatform?: string // Display label for the bot platform, e.g. Slack or WhatsApp
+    skipWorkflowAutoRestore?: boolean // True right after an explicit New Chat: this tab is blank on purpose, so the workflow landing panel must not auto-open the previous conversation into it
     readOnlyRestoredAt?: number // Timestamp for an explicit user-opened Schedule/Bot restore
     // Generic product-agent binding. These fields are durable so a project can
     // recover its normal AgentWorks session after a refresh without maintaining
@@ -404,6 +403,15 @@ export interface ChatTab {
     agentProfileProjectId?: string
     agentProfileProjectTitle?: string
     agentProfileWorkspaceDescription?: string
+    // Stable product-domain identity used by the server conversation registry.
+    // Singleton products omit it; keyed products use a project/resource id.
+    agentProfileConversationKey?: string
+    // Server-issued logical conversation identity. This remains stable even
+    // if a future runtime migration rotates the underlying agent session.
+    agentProfileConversationId?: string
+    // Opts a product into the narrow /agent-profiles/{id}/query contract.
+    // Kept on the product-owned tab so ChatArea remains product-agnostic.
+    agentProfileChatContract?: 'profile-v1'
     userInteractiveContinuation?: boolean // Observed run promoted to an interactive chat without changing session ID
   }
 }
@@ -446,7 +454,6 @@ const getDefaultTabConfig = (mode: 'workflow' | 'multi-agent' = 'multi-agent'): 
     enableContextSummarization: false,
     browserMode: appStore?.lastBrowserMode ?? 'auto',
     enableBrowserAccess: ['auto', 'headless', 'cdp'].includes(appStore?.lastBrowserMode ?? 'auto'),
-    enableImageGeneration: appStore?.lastEnableImageGeneration ?? false,
     selectedSkills: appStore?.lastSelectedSkills ?? [],
     delegationTierConfig: undefined,
     queuedMessages: [],
@@ -522,7 +529,10 @@ interface ChatState extends StoreActions {
   // Loading states
   isLoadingHistory: boolean
   isApprovingWorkflow: boolean
-  isRestoringWorkflowSessions: boolean
+  // Restore ownership is session-scoped. A single global boolean made an
+  // unrelated workflow switch replace the active chat with a restore screen.
+  // Counts make overlapping hydrations for the same session race-safe.
+  restoringWorkflowSessions: Record<string, number>
   
   // Session management
   sessionState: 'loading' | 'active' | 'completed' | 'not_found' | 'error'
@@ -616,7 +626,8 @@ interface ChatState extends StoreActions {
   // Loading actions
   setIsLoadingHistory: (loading: boolean) => void
   setIsApprovingWorkflow: (loading: boolean) => void
-  setIsRestoringWorkflowSessions: (restoring: boolean) => void
+  beginWorkflowSessionRestore: (sessionId: string) => void
+  endWorkflowSessionRestore: (sessionId: string) => void
   
   // Session management actions
   setSessionState: (state: 'loading' | 'active' | 'completed' | 'not_found' | 'error') => void
@@ -690,7 +701,7 @@ interface ChatState extends StoreActions {
   disconnectAllSSE: () => void
 
   // Helper methods
-  resetTabChat: (tabId: string) => void
+  resetTabChat: (tabId: string, nextSessionId?: string) => void
   resetChatState: () => void
   isAtBottom: (element: HTMLDivElement) => boolean
 }
@@ -723,6 +734,13 @@ const selectDurableChatState = (state: ChatState): DurableChatState => {
       .filter(([, tab]) => {
         const isRelevantMode = tab.metadata?.mode === 'workflow' || tab.metadata?.mode === 'multi-agent'
         if (!isRelevantMode) return false
+        // Explicit product decision: a tab, once opened, is closed only by the
+        // user -- including a view-only Schedule lane whose run has finished.
+        // This snapshot forces isStreaming false, so a restored Schedule tab
+        // looks dead (not live) on reload -- that's accepted, not a bug; the
+        // tab still exists as a closable record until the user closes it.
+        // See shouldDisplayWorkflowTab in workflowRuntimeTabProjection.ts for
+        // the matching live-display side of this decision.
         return Date.now() - (tab.createdAt || 0) < 24 * 60 * 60 * 1000
       })
       .map(([tabId, tab]) => [
@@ -849,7 +867,7 @@ export const useChatStore = create<ChatState>()(
       isCompleted: false,
       isLoadingHistory: false,
       isApprovingWorkflow: false,
-      isRestoringWorkflowSessions: false,
+      restoringWorkflowSessions: {},
       sessionState: 'loading',
       isCheckingActiveSessions: false,
       currentWorkflowPhase: 'planning' as WorkflowPhase,
@@ -1402,8 +1420,32 @@ export const useChatStore = create<ChatState>()(
         set({ isApprovingWorkflow: loading })
       },
 
-      setIsRestoringWorkflowSessions: (restoring) => {
-        set({ isRestoringWorkflowSessions: restoring })
+      beginWorkflowSessionRestore: (sessionId) => {
+        if (!sessionId) return
+        set((state) => ({
+          restoringWorkflowSessions: {
+            ...state.restoringWorkflowSessions,
+            [sessionId]: (state.restoringWorkflowSessions[sessionId] ?? 0) + 1,
+          },
+        }))
+      },
+
+      endWorkflowSessionRestore: (sessionId) => {
+        if (!sessionId) return
+        set((state) => {
+          const current = state.restoringWorkflowSessions[sessionId] ?? 0
+          if (current <= 1) {
+            const next = { ...state.restoringWorkflowSessions }
+            delete next[sessionId]
+            return { restoringWorkflowSessions: next }
+          }
+          return {
+            restoringWorkflowSessions: {
+              ...state.restoringWorkflowSessions,
+              [sessionId]: current - 1,
+            },
+          }
+        })
       },
 
       // Session management actions
@@ -1822,13 +1864,13 @@ export const useChatStore = create<ChatState>()(
       },
 
       // Reset a single tab's chat session without touching other tabs (used by prototype "New Chat")
-      resetTabChat: (tabId: string) => {
+      resetTabChat: (tabId: string, nextSessionId?: string) => {
         const state = get()
         const tab = state.chatTabs[tabId]
         if (!tab) return
 
         const oldSessionId = tab.sessionId
-        const newSessionId = globalThis.crypto.randomUUID()
+        const newSessionId = nextSessionId || globalThis.crypto.randomUUID()
 
         // Stop any streaming + close SSE for this tab
         if (oldSessionId && state.sseConnections[oldSessionId]) {
@@ -1941,7 +1983,7 @@ export const useChatStore = create<ChatState>()(
           isCompleted: false,
           isLoadingHistory: false,
           isApprovingWorkflow: false,
-          isRestoringWorkflowSessions: false,
+          restoringWorkflowSessions: {},
           sessionState: 'loading',
           isCheckingActiveSessions: false,
           currentWorkflowPhase: 'planning' as WorkflowPhase,
@@ -1994,30 +2036,54 @@ export const useChatStore = create<ChatState>()(
         const timestamp = Date.now()
         const mode = metadata?.mode || 'multi-agent'
 
-        // Chief of Staff has one interactive tab. Product agent profiles have
-        // one tab per immutable profile/workspace binding. Never reuse one lane
-        // for the other merely because both use AgentWorks multi-agent runtime.
+        if (mode === 'multi-agent' && !metadata?.agentProfileId) {
+          throw new Error('Profile-less AgentWorks Chat has been removed; multi-agent tabs must be owned by a product profile')
+        }
+
+        // Product agent profiles have one tab per durable product conversation.
+        // The conversation key is authoritative when present; workspace paths
+        // and profile versions may change without creating a second chat.
         if (
           mode === 'multi-agent' &&
+          metadata &&
           !metadata?.isOrganizationAssistant &&
           !metadata?.isViewOnly &&
           !metadata?.isScheduledRun &&
           !metadata?.isBotRun
         ) {
-          const requestedProfileKey = metadata?.agentProfileId && metadata?.agentProfileWorkspace
-            ? `${metadata.agentProfileId}:${metadata.agentProfileVersion || 0}:${metadata.agentProfileWorkspace}`
-            : ''
           const existing = Object.values(get().chatTabs).find(t =>
             t.metadata?.mode === 'multi-agent' &&
             !t.metadata?.isOrganizationAssistant &&
             t.metadata?.isViewOnly !== true &&
             t.metadata?.isScheduledRun !== true &&
             t.metadata?.isBotRun !== true &&
-            (requestedProfileKey
-              ? `${t.metadata?.agentProfileId || ''}:${t.metadata?.agentProfileVersion || 0}:${t.metadata?.agentProfileWorkspace || ''}` === requestedProfileKey
-              : !t.metadata?.agentProfileId)
+            t.metadata?.agentProfileId === metadata.agentProfileId &&
+            (metadata.agentProfileConversationKey
+              ? (
+                  t.metadata?.agentProfileConversationKey === metadata.agentProfileConversationKey ||
+                  (!t.metadata?.agentProfileConversationKey && (
+                    metadata.agentProfileProjectId
+                      ? t.metadata?.agentProfileProjectId === metadata.agentProfileProjectId
+                      : true
+                  ))
+                )
+              : metadata.agentProfileWorkspace
+                ? t.metadata?.agentProfileWorkspace === metadata.agentProfileWorkspace
+                : true)
           )
           if (existing) {
+            // Product manifests can opt an existing durable tab into a newer
+            // chat contract. Merge the declarative binding on reuse so users
+            // keep their existing conversation when a product is upgraded.
+            set(state => ({
+              chatTabs: {
+                ...state.chatTabs,
+                [existing.tabId]: {
+                  ...state.chatTabs[existing.tabId],
+                  metadata: { ...state.chatTabs[existing.tabId].metadata, ...metadata },
+                },
+              },
+            }))
             // Restore binds the single tab to a specific backend session.
             if (existingObserverId && existingObserverId !== existing.sessionId) {
               get().updateTabSessionId(existing.tabId, existingObserverId)
@@ -2031,7 +2097,7 @@ export const useChatStore = create<ChatState>()(
         const tabIdBase = mode === 'workflow' && metadata?.phaseId
           ? `phase_${metadata.phaseId}_${timestamp}`
           : `chat_${timestamp}`
-        // Two independent lanes (for example Schedule + Chief of Staff chat)
+        // Two independent lanes (for example Schedule + a product chat)
         // can be created in the same millisecond. Preserve the readable ID
         // shape while guaranteeing that the second tab cannot overwrite the
         // first in the chatTabs record.
@@ -2598,12 +2664,10 @@ export const useChatStore = create<ChatState>()(
           type SyncUpdate = {
             lastSelectedSkills?: string[]
             lastBrowserMode?: 'none' | 'auto' | 'headless' | 'cdp'
-            lastEnableImageGeneration?: boolean
           }
           const sync: SyncUpdate = {}
           if (configUpdate.selectedSkills !== undefined) sync.lastSelectedSkills = configUpdate.selectedSkills
           if (configUpdate.browserMode !== undefined) sync.lastBrowserMode = configUpdate.browserMode
-          if (configUpdate.enableImageGeneration !== undefined) sync.lastEnableImageGeneration = configUpdate.enableImageGeneration
           if (Object.keys(sync).length > 0) {
             console.log('[TabSettings] Syncing to AppStore:', sync)
             useAppStore.getState().syncLastTabSettings(sync)

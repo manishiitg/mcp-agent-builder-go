@@ -61,7 +61,7 @@ func saveMultiAgentChatCapabilitiesHandler() http.HandlerFunc {
 			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		// The general Chief-of-Staff capability editor predates notifications and
+		// The general chat capability editor predates notifications and
 		// replaces the entire capabilities object. Preserve the dedicated Notify
 		// setting when an older/current editor omits that field; disabling Notify
 		// remains an explicit agent-tool action.

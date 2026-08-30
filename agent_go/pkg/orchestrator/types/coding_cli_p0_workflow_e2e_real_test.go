@@ -244,7 +244,7 @@ func runCodingCLIWorkflowP0(t *testing.T, provider codingCLIP0Provider) {
 	model := &workflowtypes.AgentLLMConfig{Provider: string(provider.provider), ModelID: provider.model}
 	preset := &workflowtypes.PresetLLMConfig{
 		SchemaVersion: workflowtypes.LLMConfigSchemaVersion, Mode: workflowtypes.LLMConfigModeExplicit,
-		BuilderLLM: model, MaintenanceLLM: model, PulseLLM: model,
+		BuilderLLM: model, PulseLLM: model,
 		TieredConfig: &workflowtypes.TieredLLMConfig{Tier1: model, Tier2: model, Tier3: model},
 	}
 	workflowLLM := &orchestrator.LLMConfig{
@@ -264,7 +264,7 @@ func runCodingCLIWorkflowP0(t *testing.T, provider codingCLIP0Provider) {
 		t.Fatalf("NewWorkflowOrchestrator: %v", err)
 	}
 	wo.SetExecutionOptions(&stepworkflow.ExecutionOptions{
-		RunMode: "use_same_run", SelectedRunFolder: "iteration-0",
+		SelectedRunFolder: "iteration-0",
 		ExecutionStrategy: stepworkflow.ExecutionStrategyStartFromBeginningNoHuman,
 		EnabledGroupNames: []string{"default"},
 	})

@@ -8,6 +8,37 @@
 | Ticket state | `implemented` — liveness fix shipped and fail-before/pass-after verified; one further decoupling designed but deliberately not built (see last section) |
 | Last synchronized | `2026-08-17` |
 
+## 2026-08-20 follow-up — unified execution tracker remained busy
+
+The Social Media run in session
+`schedule-manual--5227790a_1787203229327335000` exposed one more copy of the
+same lifecycle record. At `15:53:43 IST`, parent
+`workflow-full-mt12p13b01` reconciled orphan progress child
+`workflow-full-mt12p13b01-step-0-mt17a9lh09`. Its background-agent record and
+terminal became terminal, and the provider turn, finalizer, schedule run, and
+foreground session all later settled. Global Monitor nevertheless continued
+to show `[Execute] Run Today's Actions` as running.
+
+The authoritative runtime snapshot made the split explicit:
+
+- `raw_session_status=completed`
+- `foreground_turn.busy=false`
+- `terminal_busy=false`
+- runtime phase `running` only because `tracked child execution is active`
+
+`workshopExecutionBgNotifier.OnExecutionComplete` called
+`ReconcileOrphanedProgressChildren` and emitted the durable completion, but it
+did not call `completeTrackedExecution` for each reconciled orphan. The unified
+tracker therefore retained a second, independently-running copy that powers
+`/api/workflow/running` and Global Monitor.
+
+**Repair:** orphan reconciliation now settles the background-agent record, the
+unified tracked execution, and the durable completion together. A product-path
+regression test starts the real parent/orphan pair, completes the parent through
+`workshopExecutionBgNotifier`, and proves the Global Monitor list becomes empty.
+Keeping the retained tmux session alive is intentionally unrelated to this
+busy signal.
+
 - **Priority:** P0 — this is the mechanism behind the social-media false-failure
   emails. It makes `terminal()` unreachable, so an affected turn is
   *guaranteed* to end in an idle-wait timeout no matter how well the underlying

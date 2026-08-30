@@ -139,7 +139,7 @@ func TestHandleDelegatePrefersAsyncBackgroundDelegate(t *testing.T) {
 
 // TestHandleDelegateBuildsChildSpec verifies that delegate(...) translates its
 // tool args into the SubAgentSpec the sub-agent creation path consumes:
-// additive skills, server restriction, browser isolation, tier, and the
+// additive skills, server restriction, tier, and the
 // incremented depth. If this propagation breaks, sub-agents silently get the
 // defaults with no diagnostic — this test catches it at the boundary.
 func TestHandleDelegateBuildsChildSpec(t *testing.T) {
@@ -151,7 +151,7 @@ func TestHandleDelegateBuildsChildSpec(t *testing.T) {
 		return "agent-xyz", nil
 	})
 
-	parentSpec := SubAgentSpec{Depth: 1, ShareBrowser: true}
+	parentSpec := SubAgentSpec{Depth: 1}
 	ctx := context.WithValue(context.Background(), BackgroundDelegateKey, bgDelegate)
 	ctx = WithSubAgentSpec(ctx, parentSpec)
 
@@ -161,7 +161,6 @@ func TestHandleDelegateBuildsChildSpec(t *testing.T) {
 		"reasoning_level": "low",
 		"skills":          []interface{}{"pdf-extract", "agent-browser"},
 		"servers":         []interface{}{"github"},
-		"share_browser":   false,
 	})
 	if err != nil {
 		t.Fatalf("handleDelegate returned error: %v", err)
@@ -172,9 +171,6 @@ func TestHandleDelegateBuildsChildSpec(t *testing.T) {
 	}
 	if len(captured.Servers) != 1 || captured.Servers[0] != "github" {
 		t.Errorf("expected servers [github], got %v", captured.Servers)
-	}
-	if captured.ShareBrowser {
-		t.Error("share_browser=false should produce ShareBrowser=false in the child spec")
 	}
 	if captured.ReasoningLevel != "low" {
 		t.Errorf("expected reasoning level low, got %q", captured.ReasoningLevel)
@@ -210,9 +206,6 @@ func TestHandleDelegateNoSkillsArgMeansNoAdditionalSkills(t *testing.T) {
 	if len(captured.Skills) != 0 {
 		t.Errorf("expected no skills in child spec when args has no skills; got %v", captured.Skills)
 	}
-	if !captured.ShareBrowser {
-		t.Error("ShareBrowser should default to true when share_browser arg is omitted")
-	}
 }
 
 // TestHandleDelegateEnforcesMaxDepth verifies the recursion guard reads the
@@ -223,7 +216,7 @@ func TestHandleDelegateEnforcesMaxDepth(t *testing.T) {
 		return "", nil
 	})
 	ctx := context.WithValue(context.Background(), BackgroundDelegateKey, bgDelegate)
-	ctx = WithSubAgentSpec(ctx, SubAgentSpec{Depth: MaxDelegationDepth, ShareBrowser: true})
+	ctx = WithSubAgentSpec(ctx, SubAgentSpec{Depth: MaxDelegationDepth})
 
 	_, err := handleDelegate(ctx, map[string]interface{}{
 		"name":            "too-deep",
@@ -236,11 +229,11 @@ func TestHandleDelegateEnforcesMaxDepth(t *testing.T) {
 }
 
 // TestSubAgentSpecContextRoundTrip locks the spec accessor contract: defaults
-// when absent (root depth, shared browser), exact round-trip when set, and
+// when absent (root depth), exact round-trip when set, and
 // WithBackgroundAgentID preserving other fields.
 func TestSubAgentSpecContextRoundTrip(t *testing.T) {
 	def := SubAgentSpecFromContext(context.Background())
-	if def.Depth != 0 || !def.ShareBrowser || def.ReasoningLevel != "" || def.BackgroundAgentID != "" {
+	if def.Depth != 0 || def.ReasoningLevel != "" || def.BackgroundAgentID != "" {
 		t.Errorf("unexpected default spec: %+v", def)
 	}
 
@@ -250,12 +243,11 @@ func TestSubAgentSpecContextRoundTrip(t *testing.T) {
 		AgentTemplate:  "researcher",
 		Servers:        []string{"github"},
 		Skills:         []string{"pdf-extract"},
-		ShareBrowser:   false,
 	}
 	ctx := WithSubAgentSpec(context.Background(), want)
 	got := SubAgentSpecFromContext(ctx)
 	if got.Depth != want.Depth || got.ReasoningLevel != want.ReasoningLevel ||
-		got.AgentTemplate != want.AgentTemplate || got.ShareBrowser != want.ShareBrowser ||
+		got.AgentTemplate != want.AgentTemplate ||
 		len(got.Servers) != 1 || len(got.Skills) != 1 {
 		t.Errorf("spec round-trip mismatch: got %+v, want %+v", got, want)
 	}
@@ -269,34 +261,27 @@ func TestSubAgentSpecContextRoundTrip(t *testing.T) {
 	}
 }
 
-// TestGetMultiAgentDelegationInstructionsLazyLoadsScheduleAndSecret locks in
-// the prompt refactor that moved Schedule and Secret management deep docs
-// into templates/system/{schedule-management,secret-management}.md. The
-// inline prompt should keep brief cheat sheets + read_skill pointers
-// — not the old ~80-line JSON file format / detailed tool description
-// blocks that every chat turn used to carry.
-func TestGetMultiAgentDelegationInstructionsLazyLoadsScheduleAndSecret(t *testing.T) {
+// TestGetMultiAgentDelegationInstructionsLazyLoadsSecret keeps account-secret
+// guidance available without restoring the removed global schedule runtime.
+func TestGetMultiAgentDelegationInstructionsLazyLoadsSecret(t *testing.T) {
 	out := GetMultiAgentDelegationInstructionsWithUser("Chats", "default")
 
-	// Cheat-sheet headers must remain so the agent still knows the
-	// capabilities exist without loading the deep docs.
+	// The secret cheat sheet remains so the chat knows the capability exists
+	// without loading the deep guide on every turn.
 	mustContain := []string{
-		"## Schedule Management (brief)",
 		"## Secret Management (brief)",
-		// Brief Schedule cheat sheet keeps the file path + workflow.
-		"multiagent-schedules.json",
-		`mode: "multi-agent"`,
-		// Brief Secret cheat sheet keeps the three buckets + safety rule.
 		"workflow",
 		"never echo / print / log a plaintext secret",
-		// Pointers to the reference docs — agent needs these to know to
-		// load the deep guide before scheduling / managing secrets.
-		`read_skill(skills=[{"name":"builder-reference","path":"references/schedule-management.md"}])`,
 		`read_skill(skills=[{"name":"builder-reference","path":"references/secret-management.md"}])`,
 	}
 	for _, s := range mustContain {
 		if !strings.Contains(out, s) {
 			t.Errorf("delegation prompt missing required cheat-sheet content: %q", s)
+		}
+	}
+	for _, removed := range []string{"Schedule Management", "multiagent-schedules.json", "schedule-management.md"} {
+		if strings.Contains(out, removed) {
+			t.Errorf("delegation prompt retained removed global schedule guidance: %q", removed)
 		}
 	}
 

@@ -1,8 +1,8 @@
 import { useEffect, useState, useCallback } from 'react'
-import { X, BookOpen, Lock, Unlock, Loader2, AlertCircle, ChevronDown, ChevronRight, Code, FileText, Trash2, Search, Globe, Hash, Eye, Edit2, Save, Ban, Check, Copy, GitBranch, Bot, Terminal, ArrowLeft } from 'lucide-react'
+import { X, BookOpen, Loader2, AlertCircle, ChevronDown, ChevronRight, Code, FileText, Trash2, Search, Globe, Check, Copy, ArrowLeft } from 'lucide-react'
 import { agentApi } from '../../services/api'
 import type { PlanningResponse, PlanStep } from '../../utils/stepConfigMatching'
-import { isTodoTaskStep } from '../../utils/stepConfigMatching'
+import { isRouteSwitchStep, isTodoTaskStep } from '../../utils/stepConfigMatching'
 import { MarkdownRenderer } from '../ui/MarkdownRenderer'
 import type { PlannerFile } from '../../services/api-types'
 import ConfirmationDialog from '../ui/ConfirmationDialog'
@@ -21,11 +21,17 @@ interface LearningsPopupProps {
 // Go LearningMetadata struct and the AgentConfigs struct (snake_case in JSON).
 type LearningsAccess = 'read' | 'read-write' | 'none'
 
+type LearningFileFreshness = {
+  lastConfirmedAt: string
+  lastAction: string
+}
+
 interface LearningMetadata {
   step_id?: string
   successful_runs?: number
   last_turn_count?: number
   total_iterations?: number
+  description_hash_runs?: number
 
   // Adaptive execution tiering (description-hash scoped). These are written by
   // controller_execution_tiering.go, NOT by any learnings mechanism: a step is
@@ -37,8 +43,6 @@ interface LearningMetadata {
   // fields were removed: no Go code has ever set them. The only remaining
   // reference (workflow.go:2638) CLEARS them on manual unlock, so every derived
   // badge could render nothing but an empty state.
-  last_description_hash?: string
-  description_hash_runs?: number
 
   // Step-config fields merged in by the backend
   use_code_execution_mode?: boolean
@@ -48,15 +52,6 @@ interface LearningMetadata {
 
   // Global learning only: per-step contribution counts
   step_contributions?: Record<string, number>
-}
-
-function isStepLocked(metadata: LearningMetadata | null): boolean {
-  return metadata?.lock_learnings === true
-}
-
-function getSuccessfulRuns(metadata: LearningMetadata | null): number {
-  if (!metadata) return 0
-  return metadata.successful_runs || 0
 }
 
 // Check if learnings folder exists
@@ -149,6 +144,36 @@ function getStepTitle(plan: PlanningResponse | null, stepId: string): string {
   return step?.title || stepId
 }
 
+function parseGlobalFileFreshness(content: string): Record<string, LearningFileFreshness> {
+  try {
+    const parsed: unknown = JSON.parse(content)
+    if (!parsed || typeof parsed !== 'object') return {}
+    const items = (parsed as { items?: unknown }).items
+    if (!items || typeof items !== 'object') return {}
+
+    return Object.fromEntries(
+      Object.entries(items as Record<string, unknown>).flatMap(([path, value]) => {
+        if (!value || typeof value !== 'object') return []
+        const entry = value as { last_confirmed_at?: unknown; last_action?: unknown }
+        const lastConfirmedAt = typeof entry.last_confirmed_at === 'string' ? entry.last_confirmed_at : ''
+        if (!lastConfirmedAt) return []
+        return [[path, {
+          lastConfirmedAt,
+          lastAction: typeof entry.last_action === 'string' ? entry.last_action : '',
+        }]]
+      }),
+    )
+  } catch {
+    return {}
+  }
+}
+
+function formatFreshnessDate(timestamp: string): string {
+  const date = new Date(timestamp)
+  if (!Number.isFinite(date.getTime())) return 'Fresh'
+  return `Fresh ${date.toLocaleDateString([], { month: 'short', day: 'numeric' })}`
+}
+
 export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, embedded = false }: LearningsPopupProps) {
   const [learnings, setLearnings] = useState<Record<string, LearningMetadata | null>>({})
   const [isLoading, setIsLoading] = useState(false)
@@ -169,7 +194,6 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
   const [deleteConfirmStepId, setDeleteConfirmStepId] = useState<string | null>(null)
   
   // Filter state - show only unlocked steps
-  const [showOnlyUnlocked, setShowOnlyUnlocked] = useState(false)
   // Search state
   const [searchTerm, setSearchTerm] = useState('')
 
@@ -182,16 +206,12 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
   // keyed by its relative path (e.g. "references/selectors.md") so grouping by dir
   // is trivial.
   const [globalFiles, setGlobalFiles] = useState<Array<{ name: string; relPath: string; absPath: string; dir: string }>>([])
+  const [globalFileFreshness, setGlobalFileFreshness] = useState<Record<string, LearningFileFreshness>>({})
   const [globalLoading, setGlobalLoading] = useState(false)
   const [globalError, setGlobalError] = useState<string | null>(null)
-  const [globalExpanded, setGlobalExpanded] = useState(false)
+  const [globalExpanded, setGlobalExpanded] = useState(true)
   const [expandedFilePaths, setExpandedFilePaths] = useState<Set<string>>(new Set())
   const [fileContentCache, setFileContentCache] = useState<Record<string, string>>({})
-
-  // Per-step inline editors for the new access/objective controls.
-  const [editingObjectiveStepId, setEditingObjectiveStepId] = useState<string | null>(null)
-  const [objectiveDraft, setObjectiveDraft] = useState<string>('')
-  const [savingConfigStepIds, setSavingConfigStepIds] = useState<Set<string>>(new Set())
 
   // Tab switching state for expanded code/readme sections per step
   const [stepTabs, setStepTabs] = useState<Record<string, 'readme' | 'code'>>({})
@@ -261,6 +281,7 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
     setGlobalError(null)
     setGlobalSkillContent('')
     setGlobalFiles([])
+    setGlobalFileFreshness({})
     setFileContentCache({})
     setExpandedFilePaths(new Set())
 
@@ -322,6 +343,15 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
           }
         }
 
+        const freshnessFile = flatFiles.find(f => relFromGlobal(f.filepath || '') === '_freshness.json')
+        if (freshnessFile) {
+          const freshnessPath = resolveAbs(freshnessFile.filepath || '')
+          const freshnessResp = await agentApi.getPlannerFileContent(freshnessPath)
+          if (!cancelled && freshnessResp.success && freshnessResp.data?.content) {
+            setGlobalFileFreshness(parseGlobalFileFreshness(freshnessResp.data.content))
+          }
+        }
+
         // Every other file (excluding SKILL.md + .learning_metadata.json + anything
         // that somehow resolved outside _global/). Grouped by directory for display;
         // content fetched on demand.
@@ -331,6 +361,9 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
           const relPath = normalizeGlobalSkillRelPath(relFromGlobal(rawPath))
 
           if (!relPath || relPath === 'SKILL.md') continue
+          // Freshness is display metadata for the files below, not a learning
+          // artifact users need to open on its own.
+          if (relPath === '_freshness.json') continue
           if (relPath.endsWith('.learning_metadata.json')) continue
           if (isPatchArtifactPath(relPath)) continue
           if (relPath.endsWith('/')) continue
@@ -401,45 +434,6 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
       }
       return next
     })
-  }
-
-  // Update a step's learnings_access + learning_objective through the same
-  // update_step_config endpoint. Validation (read-write requires objective) is
-  // enforced server-side; we just surface errors.
-  const handleUpdateStepConfig = async (
-    stepId: string,
-    patch: Partial<{ learnings_access: LearningsAccess; learning_objective: string; lock_learnings: boolean }>
-  ) => {
-    if (!workspacePath || savingConfigStepIds.has(stepId)) return
-    setSavingConfigStepIds(prev => new Set(prev).add(stepId))
-    try {
-      const step = plan?.steps?.find(s => s.id === stepId)
-      const current = step?.agent_configs || {}
-      const metadata = learnings[stepId]
-      // Preserve any existing fields we track locally so we don't clobber them.
-      const merged: Record<string, unknown> = {
-        ...current,
-        learnings_access: current.learnings_access ?? metadata?.learnings_access,
-        learning_objective: current.learning_objective ?? metadata?.learning_objective,
-        lock_learnings: current.lock_learnings ?? metadata?.lock_learnings,
-        ...patch,
-      }
-      await agentApi.updateStepConfig(workspacePath, stepId, merged)
-      const response = await agentApi.getAllStepLearnings(workspacePath)
-      if (response.success) setLearnings(parseLearningsResponse(response.learnings || {}))
-      setEditingObjectiveStepId(null)
-      setObjectiveDraft('')
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Unknown error'
-      console.error('[LearningsPopup] Error updating step config:', err)
-      setError('Failed to update step config: ' + msg)
-    } finally {
-      setSavingConfigStepIds(prev => {
-        const next = new Set(prev)
-        next.delete(stepId)
-        return next
-      })
-    }
   }
 
   const handleDeleteLearning = async (stepId: string) => {
@@ -710,20 +704,18 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
   }
 
   // Collect all step IDs in execution order from plan with metadata
-  const getStepsInExecutionOrder = useCallback((): Array<{ stepId: string; stepNumber: number; stepType: string; relationType?: string; parentStepId?: string }> => {
+  const getStepsInExecutionOrder = useCallback((): Array<{ stepId: string; stepType: string }> => {
     if (!plan || !plan.steps) return []
 
-    const stepsWithMetadata: Array<{ stepId: string; stepNumber: number; stepType: string; relationType?: string; parentStepId?: string }> = []
-    let stepCounter = 0
+    const stepsWithMetadata: Array<{ stepId: string; stepType: string }> = []
+    const isScripted = (step: PlanStep): boolean => step.agent_configs?.declared_execution_mode === 'scripted'
 
     const collectSteps = (steps: PlanStep[]) => {
       steps.forEach((step) => {
-        if (step.id) {
-          stepCounter++
+        if (step.id && !isScripted(step) && !isRouteSwitchStep(step)) {
           const stepType = step.type || 'regular'
           stepsWithMetadata.push({
             stepId: step.id,
-            stepNumber: stepCounter,
             stepType
           })
         }
@@ -731,15 +723,11 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
         // Handle todo_task steps - collect sub-agent step IDs from predefined_routes
         if (isTodoTaskStep(step)) {
           if (step.predefined_routes) {
-            step.predefined_routes.forEach((route, routeIdx) => {
-              if (route.sub_agent_step && route.sub_agent_step.id) {
-                stepCounter++
+            step.predefined_routes.forEach((route) => {
+              if (route.sub_agent_step && route.sub_agent_step.id && !isScripted(route.sub_agent_step)) {
                 stepsWithMetadata.push({
                   stepId: route.sub_agent_step.id,
-                  stepNumber: stepCounter,
-                  stepType: 'todo_sub_agent',
-                  relationType: `todo-sub-agent-${route.route_id || routeIdx}`,
-                  parentStepId: step.id // Track parent for nesting
+                  stepType: 'todo_sub_agent'
                 })
               }
             })
@@ -759,14 +747,6 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
   const allStepsInOrder = getStepsInExecutionOrder()
   let stepsWithLearnings = allStepsInOrder.filter(step => step.stepId in learnings && step.stepId !== '_global')
   
-  // Apply unlocked filter if enabled
-  if (showOnlyUnlocked) {
-    stepsWithLearnings = stepsWithLearnings.filter(step => {
-      const metadata = learnings[step.stepId]
-      return !isStepLocked(metadata) // Show only unlocked steps
-    })
-  }
-
   // Apply search filter
   if (searchTerm) {
     const lowerTerm = searchTerm.toLowerCase()
@@ -787,7 +767,6 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
     allPlanStepIds: allStepsInOrder.map(step => step.stepId),
     fetchedLearningStepIds: Object.keys(learnings),
     visibleLearningStepIds: stepsWithLearnings.map(step => step.stepId),
-    showOnlyUnlocked,
     searchTerm,
   })
 
@@ -925,6 +904,7 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
                                   const isExpanded = expandedFilePaths.has(file.relPath)
                                   const isMarkdown = file.name.endsWith('.md')
                                   const cached = fileContentCache[file.relPath]
+                                  const freshness = globalFileFreshness[file.relPath]
                                   return (
                                     <div key={file.relPath} className="border border-border rounded">
                                       <button
@@ -942,6 +922,14 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
                                           <Code className="w-3 h-3 text-muted-foreground shrink-0" />
                                         )}
                                         <span className="text-[11px] font-mono truncate flex-1">{file.name}</span>
+                                        {freshness && (
+                                          <span
+                                            className="shrink-0 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-medium text-emerald-700 dark:text-emerald-300"
+                                            title={`Last ${freshness.lastAction || 'confirmed'}: ${new Date(freshness.lastConfirmedAt).toLocaleString()}`}
+                                          >
+                                            {formatFreshnessDate(freshness.lastConfirmedAt)}
+                                          </span>
+                                        )}
                                         {!dir && (
                                           <span className="text-[9px] text-muted-foreground shrink-0">/</span>
                                         )}
@@ -983,7 +971,7 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
             </div>
           )}
 
-          {/* Step toolbar — search + expand/collapse/unlocked controls.
+          {/* Step toolbar — search and expand/collapse controls.
               Placed here (after the global skill card) because these actions
               only apply to the per-step section below. */}
           {!isLoading && !error && (
@@ -1006,20 +994,6 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
                   </button>
                 )}
               </div>
-              <div className="flex items-center gap-1.5">
-                <button
-                  onClick={() => setShowOnlyUnlocked(!showOnlyUnlocked)}
-                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors whitespace-nowrap ${
-                    showOnlyUnlocked
-                      ? 'bg-yellow-100 hover:bg-yellow-200 dark:bg-yellow-900/30 dark:hover:bg-yellow-900/50 text-yellow-700 dark:text-yellow-400'
-                      : 'bg-muted hover:bg-muted/80 text-foreground'
-                  }`}
-                  title={showOnlyUnlocked ? 'Show all steps' : 'Show only unlocked steps'}
-                >
-                  <Unlock className="w-3.5 h-3.5" />
-                  <span>Unlocked Only</span>
-                </button>
-              </div>
             </div>
           )}
 
@@ -1029,7 +1003,6 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
               <BookOpen className="w-10 h-10 opacity-20" />
               <p>No per-step learning metadata yet</p>
               {searchTerm && <p className="text-sm">Try adjusting your search query</p>}
-              {showOnlyUnlocked && <p className="text-sm">Try disabling the "Unlocked Only" filter</p>}
             </div>
           )}
 
@@ -1045,63 +1018,18 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
                   Back to all steps
                 </button>
               )}
-              {visibleStepsWithLearnings.map(({ stepId, stepNumber, stepType, relationType }) => {
+              {visibleStepsWithLearnings.map(({ stepId, stepType }) => {
                 const metadata = learnings[stepId]
-                // Lock state comes only from step_config.json (merged by the backend
-                // into metadata.lock_learnings for this API response). Metadata is
-                // used only to explain whether a current lock was auto or manual.
-                // Every lock is a deliberate Workshop/user decision (PLAT-059 also
-                // requires a stated reason), so there is no auto/manual split to
-                // display — nothing has ever written auto_locked_at.
-                const isLocked = isStepLocked(metadata)
-
-                // Hash-scoped run counter. Drives adaptive execution-tier promotion,
-                // not learnings. Falls back to legacy successful_runs while
-                // .learning_metadata.json hasn't been rewritten.
-                const hashRuns = metadata?.description_hash_runs ?? 0
-                const successfulRuns = getSuccessfulRuns(metadata)
-                const progressRuns = hashRuns > 0 ? hashRuns : successfulRuns
                 const access = effectiveAccess(metadata || null)
-                const accessExplicit = metadata?.learnings_access === 'read' ||
-                  metadata?.learnings_access === 'read-write' ||
-                  metadata?.learnings_access === 'none'
                 const objective = (metadata?.learning_objective || '').trim()
-                const isSavingConfig = savingConfigStepIds.has(stepId)
                 const stepTitle = getStepTitle(plan, stepId)
 
                 const isExpanded = expandedStepIds.has(stepId)
                 const isLoadingContent = loadingStepIds.has(stepId)
                 const cachedContent = learningContentCache[stepId]
 
-                // Determine step type label and badge color
-                const getStepTypeLabel = () => {
-                  if (stepType === 'global') return 'Global'
-                  // Use same "Sub-Agent" label for both orchestration and todo_task sub-agents
-                  if (relationType?.startsWith('todo-sub-agent') || stepType === 'todo_sub_agent') return 'Sub-Agent'
-                  if (relationType?.startsWith('sub-agent') || stepType === 'sub_agent') return 'Sub-Agent'
-                  if (stepType === 'decision_inner') return 'Decision'
-                  return stepType.charAt(0).toUpperCase() + stepType.slice(1)
-                }
-
-                const getStepTypeBadgeColor = () => {
-                  if (stepType === 'global') return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
-                  // Use same orange color for both orchestration and todo_task sub-agents
-                  if (relationType?.startsWith('todo-sub-agent') || stepType === 'todo_sub_agent') return 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400'
-                  if (relationType?.startsWith('sub-agent') || stepType === 'sub_agent') return 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400'
-                  if (stepType === 'decision_inner') return 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400'
-                  return 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300'
-                }
-
                 // Check if this is a sub-agent (should be indented)
                 const isSubAgent = stepType === 'sub_agent' || stepType === 'todo_sub_agent'
-
-                // Determine premium icon to represent step type
-                const getStepIcon = () => {
-                  if (stepType === 'global') return <Globe className="w-3.5 h-3.5 text-emerald-500" />
-                  if (isSubAgent) return <Bot className="w-3.5 h-3.5 text-orange-500" />
-                  if (stepType === 'decision_inner') return <GitBranch className="w-3.5 h-3.5 text-indigo-500" />
-                  return <Terminal className="w-3.5 h-3.5 text-sky-500" />
-                }
 
                 // Determine border and active hover accent based on step type
                 const getBorderAccent = () => {
@@ -1146,90 +1074,19 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
                                 <ChevronRight className="w-4 h-4 text-muted-foreground" />
                               )}
                             </button>
-                            <span className="text-[10px] font-mono font-bold text-primary bg-primary/10 border border-primary/20 px-1.5 py-0.5 rounded shrink-0">
-                              #{stepNumber}
-                            </span>
-                            <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium shrink-0 flex items-center gap-1 ${getStepTypeBadgeColor()}`}>
-                              {getStepIcon()}
-                              {getStepTypeLabel()}
-                            </span>
                             <h3 className="font-semibold text-sm truncate text-foreground hover:text-primary transition-colors flex-1" title={stepTitle}>
                               {stepTitle}
                             </h3>
-                            <span className="text-[10px] text-muted-foreground font-mono truncate shrink-0 max-w-[120px]" title={stepId}>
-                              {stepId}
-                            </span>
                           </div>
 
                           {isExpanded && <div className="flex flex-col gap-2 ml-7">
-                            {/* Single-line metadata: access, lock status, lock button, auto-unlock badge, turns, iterations. */}
+                            {/* Read-only learning metadata. */}
                             <div className="flex items-center gap-2.5 flex-wrap text-xs">
-                              
-                              {/* Custom Segmented Control for Learnings Access */}
-                              <div className="flex items-center gap-1 bg-muted/60 p-0.5 rounded-lg border border-border/60 shrink-0" onClick={(e) => e.stopPropagation()}>
-                                {(['none', 'read', 'read-write'] as LearningsAccess[]).map((opt) => {
-                                  const isActive = access === opt
-                                  const isSelSaving = isSavingConfig
-                                  return (
-                                    <button
-                                      key={opt}
-                                      disabled={isSelSaving}
-                                      onClick={(e) => {
-                                        e.stopPropagation()
-                                        if (!isActive) {
-                                          handleUpdateStepConfig(stepId, { learnings_access: opt })
-                                        }
-                                      }}
-                                      className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-all duration-200 flex items-center gap-1 ${
-                                        isActive
-                                          ? opt === 'read-write'
-                                            ? 'bg-emerald-500 text-white shadow-sm font-semibold'
-                                            : opt === 'read'
-                                            ? 'bg-blue-500 text-white shadow-sm font-semibold'
-                                            : 'bg-zinc-600 text-white shadow-sm dark:bg-zinc-500 font-semibold'
-                                          : 'text-muted-foreground hover:text-foreground hover:bg-muted'
-                                      } disabled:opacity-50 disabled:cursor-not-allowed`}
-                                      title={`Set learnings_access to ${opt}`}
-                                    >
-                                      {opt === 'none' && <Ban className="w-3 h-3" />}
-                                      {opt === 'read' && <Eye className="w-3 h-3" />}
-                                      {opt === 'read-write' && <BookOpen className="w-3 h-3" />}
-                                      <span>{opt}</span>
-                                      {!isActive && !accessExplicit && opt === 'read' && (
-                                        <span className="text-[9px] opacity-65 italic font-normal">(auto)</span>
-                                      )}
-                                    </button>
-                                  )
-                                })}
-                              </div>
+                              <span className="rounded-md border border-border/60 bg-muted/40 px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
+                                Learnings access: <span className="text-foreground">{access}</span>
+                              </span>
 
-                              {metadata && (
-                                <div className="flex items-center gap-2 bg-muted/30 px-2 py-0.5 rounded-lg border border-border/40">
-                                  <div className="flex items-center gap-1">
-                                    {isLocked ? (
-                                      <>
-                                        <Lock className="w-3.5 h-3.5 text-green-500" />
-                                        <span className="text-green-600 dark:text-green-400 font-semibold text-xs">
-                                          Locked
-                                        </span>
-                                      </>
-                                    ) : (
-                                      <>
-                                        <Unlock className="w-3.5 h-3.5 text-amber-500" />
-                                        <span className="text-amber-600 dark:text-amber-400 font-semibold text-xs">Unlocked</span>
-                                      </>
-                                    )}
-                                  </div>
-                                  {/* The lock toggle was removed deliberately (PLAT-059). Locking a
-                                      step is a considered decision, not a click: under the shared
-                                      topic-organised skill a locked step reads every other step's
-                                      contributions and can never give anything back, and it now
-                                      requires a written reason that only the agent path can carry.
-                                      State stays visible here; set it via chat or Pulse. */}
-                                </div>
-                              )}
-
-                              {/* Turns + Iter badges sharing the same row as access/lock. */}
+                              {/* Turns + Iter badges. */}
                               {metadata && metadata.last_turn_count !== undefined && metadata.last_turn_count > 0 && (
                                 <span className="text-[10px] text-muted-foreground bg-muted/40 px-2 py-1 rounded-md border border-border/30">
                                   Turns: <span className="font-semibold text-foreground">{metadata.last_turn_count}</span>
@@ -1241,67 +1098,6 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
                                 </span>
                               )}
                             </div>
-
-                            {/* Milestone Node Track */}
-                            {metadata && (
-                              <div className="mt-1 bg-muted/25 border border-border/40 rounded-xl p-2.5 flex flex-wrap sm:flex-nowrap items-center justify-between gap-4">
-                                <div className="flex items-center gap-2 flex-wrap">
-                                  <span
-                                    className="text-[11px] font-semibold text-muted-foreground flex items-center gap-1 shrink-0"
-                                    title="Stable successful runs on the current step description. At 3, adaptive execution tiering promotes this step from High to Medium; editing the description resets the count. This is an execution-tier signal, not a learnings lock."
-                                  >
-                                    <Hash className="w-3 h-3" /> Stable runs → tier promotion:
-                                  </span>
-                                  {/* 3 milestone circles with connecting line */}
-                                  <div className="flex items-center gap-1.5 shrink-0">
-                                    {[1, 2, 3].map((node) => {
-                                      const isDone = progressRuns >= node
-                                      const isCurrent = progressRuns === node - 1
-                                      return (
-                                        <div key={node} className="flex items-center">
-                                          <div
-                                            className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold transition-all duration-300 ${
-                                              isDone
-                                                ? 'bg-emerald-500 text-white shadow-sm shadow-emerald-500/10'
-                                                : isCurrent
-                                                ? 'border-2 border-amber-500 text-amber-600 dark:text-amber-400 font-extrabold bg-amber-50 dark:bg-amber-950/20 animate-pulse'
-                                                : 'border border-border bg-muted/30 text-muted-foreground'
-                                            }`}
-                                            title={isDone ? `Run ${node} completed` : `Run ${node} pending`}
-                                          >
-                                            {node}
-                                          </div>
-                                          {node < 3 && (
-                                            <div
-                                              className={`h-0.5 w-4 transition-all duration-300 ${
-                                                progressRuns >= node ? 'bg-emerald-500' : 'bg-border'
-                                              }`}
-                                            />
-                                          )}
-                                        </div>
-                                      )
-                                    })}
-                                  </div>
-                                </div>
-
-                                <div className="flex items-center gap-2 text-[11px] ml-auto">
-                                  {metadata.last_description_hash && (
-                                    <span className="font-mono text-[9px] bg-muted/60 px-2 py-0.5 rounded text-muted-foreground border border-border/40 shrink-0" title={`Description hash: ${metadata.last_description_hash}`}>
-                                      hash: {metadata.last_description_hash.slice(0, 8)}
-                                    </span>
-                                  )}
-                                  {isLocked ? (
-                                    <span className="flex items-center gap-1 bg-green-500/10 text-green-600 dark:text-green-400 px-2 py-0.5 rounded border border-green-500/20 font-semibold shrink-0">
-                                      <Lock className="w-3 h-3" /> Fully Locked
-                                    </span>
-                                  ) : (
-                                    <span className="flex items-center gap-1 bg-amber-500/10 text-amber-600 dark:text-amber-400 px-2 py-0.5 rounded border border-amber-500/20 font-semibold shrink-0 animate-pulse">
-                                      <Unlock className="w-3 h-3" /> Unlocked
-                                    </span>
-                                  )}
-                                </div>
-                              </div>
-                            )}
 
                             {!metadata && (
                               <div className="text-xs text-muted-foreground italic mt-0.5">
@@ -1336,61 +1132,15 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
                     {/* Expanded Learning Content */}
                     {isExpanded && (
                       <div className="border-t border-border/60 px-5 py-5 bg-muted/10">
-                        {/* learning_objective inline editor */}
+                        {/* Read-only learning objective */}
                         <div className="mb-5 p-4 bg-muted/10 dark:bg-card border border-border/80 rounded-xl shadow-sm">
-                          <div className="flex items-center justify-between mb-2.5">
+                          <div className="mb-2.5">
                             <div className="text-xs font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
                               <BookOpen className="w-3.5 h-3.5 text-primary" />
                               Learning Objective
                             </div>
-                            {editingObjectiveStepId !== stepId ? (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  setObjectiveDraft(objective)
-                                  setEditingObjectiveStepId(stepId)
-                                }}
-                                className="flex items-center gap-1 text-xs px-2.5 py-1 rounded-md hover:bg-muted border border-border/60 transition-colors text-muted-foreground hover:text-foreground"
-                                title="Edit objective"
-                              >
-                                <Edit2 className="w-3 h-3" />
-                                Edit
-                              </button>
-                            ) : (
-                              <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    handleUpdateStepConfig(stepId, { learning_objective: objectiveDraft.trim() })
-                                  }}
-                                  disabled={isSavingConfig}
-                                  className="flex items-center gap-1 text-xs px-3 py-1 rounded-md bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50 font-semibold shadow-sm"
-                                >
-                                  {isSavingConfig ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
-                                  Save
-                                </button>
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    setEditingObjectiveStepId(null)
-                                    setObjectiveDraft('')
-                                  }}
-                                  className="text-xs px-2.5 py-1 rounded-md hover:bg-muted transition-colors text-muted-foreground"
-                                >
-                                  Cancel
-                                </button>
-                              </div>
-                            )}
                           </div>
-                          {editingObjectiveStepId === stepId ? (
-                            <textarea
-                              value={objectiveDraft}
-                              onChange={(e) => setObjectiveDraft(e.target.value)}
-                              onClick={(e) => e.stopPropagation()}
-                              placeholder={'Describe what SKILL.md should capture from this step. Required when learnings_access="read-write".'}
-                              className="w-full min-h-[90px] p-3 text-sm bg-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary resize-y font-mono"
-                            />
-                          ) : objective ? (
+                          {objective ? (
                             <div className="text-xs text-foreground whitespace-pre-wrap font-mono leading-relaxed bg-muted/30 p-2.5 rounded-lg border border-border/40">{objective}</div>
                           ) : (
                             <div className="text-xs text-muted-foreground italic">

@@ -79,7 +79,6 @@ export interface ProviderDefaultTierModels {
   low: ProviderTierModelRef
   maintenance?: ProviderTierModelRef
   pulse?: ProviderTierModelRef
-  chief_of_staff?: ProviderTierModelRef
   // Read-only compatibility for a backend that is still restarting during a
   // desktop update. New provider manifests never emit these fields.
   main?: ProviderTierModelRef
@@ -103,6 +102,7 @@ export interface DynamicModelEntry {
   model_name: string
   group?: string
   is_default?: boolean
+  is_free?: boolean
   context_window?: number
   cost_input?: number
   cost_output?: number

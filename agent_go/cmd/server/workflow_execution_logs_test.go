@@ -59,6 +59,66 @@ func TestHandleGetExecutionLogsReturnsSemanticStepLogs(t *testing.T) {
 	}
 }
 
+func TestHandleGetExecutionLogsReturnsAutomaticFinalValidation(t *testing.T) {
+	const workspacePath = "/workspace/Workflow/test"
+	workspace := httptest.NewServer(&mockWorkspaceAPI{files: map[string]string{
+		workspacePath + "/planning/plan.json": `{
+			"steps": [{"id":"compile-package","title":"Compile package","type":"message_sequence","message_sequence":{"items":[{"id":"execute-and-verify","type":"user_message","message":"Compile and verify the package."}]}}]
+		}`,
+		workspacePath + "/runs/iteration-0/default/logs/compile-package/execution/execution-attempt-1-iteration-2.json": `{
+			"execution_result":"Message sequence item: __automatic_final_validation__-repair-1 (user_message)"
+		}`,
+		workspacePath + "/runs/iteration-0/default/logs/compile-package/pre_validation_message-sequence-automatic-final-validation_execution_001_attempt_001.json": `{
+			"validation_phase":"message-sequence-automatic-final-validation",
+			"execution_attempt":1,
+			"validation_attempt":1,
+			"overall_pass":false,
+			"passed_checks":21,
+			"failed_checks":2,
+			"errors":[{"Message":"Required field was missing"}]
+		}`,
+	}})
+	t.Cleanup(workspace.Close)
+	t.Setenv("WORKSPACE_API_URL", workspace.URL)
+
+	request := httptest.NewRequest("GET", "/api/workflow/logs?workspace_path="+workspacePath+"&run_folder=iteration-0/default", nil)
+	response := httptest.NewRecorder()
+	(&StreamingAPI{}).handleGetExecutionLogs(response, request)
+	if response.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
+	}
+
+	var body struct {
+		Steps map[string]struct {
+			PlannedMessages []struct {
+				ID      string `json:"id"`
+				Message string `json:"message"`
+			} `json:"planned_messages"`
+			Validations []struct {
+				Attempt          int    `json:"attempt"`
+				Kind             string `json:"kind"`
+				Phase            string `json:"phase"`
+				ExecutionAttempt int    `json:"execution_attempt"`
+			} `json:"validations"`
+		} `json:"steps"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	validations := body.Steps["compile-package"].Validations
+	plannedMessages := body.Steps["compile-package"].PlannedMessages
+	if len(plannedMessages) != 1 || plannedMessages[0].ID != "execute-and-verify" || plannedMessages[0].Message != "Compile and verify the package." {
+		t.Fatalf("expected planned message sequence item, got %+v", plannedMessages)
+	}
+	if len(validations) != 1 {
+		t.Fatalf("expected one automatic final validation, got %+v", validations)
+	}
+	got := validations[0]
+	if got.Attempt != 1 || got.Kind != "pre_validation" || got.Phase != "message-sequence-automatic-final-validation" || got.ExecutionAttempt != 1 {
+		t.Fatalf("unexpected automatic final validation metadata: %+v", got)
+	}
+}
+
 func executionLogFolder(path string, children ...virtualtools.WorkspaceFolderItem) virtualtools.WorkspaceFolderItem {
 	return virtualtools.WorkspaceFolderItem{
 		FilePath: path,
@@ -113,6 +173,28 @@ func TestIsExecutionOutputStepItemSupportsSemanticStepIDs(t *testing.T) {
 	}
 }
 
+func TestPopulateStepMetadataLinksPredefinedRouteToParent(t *testing.T) {
+	metadata := make(map[string]map[string]string)
+	populateStepMetadata([]map[string]interface{}{{
+		"id":    "reel-orchestrator",
+		"title": "Master Reel Orchestrator",
+		"type":  "todo_task",
+		"predefined_routes": []interface{}{map[string]interface{}{
+			"route_id": "build-reel",
+			"sub_agent_step": map[string]interface{}{
+				"id":          "build-reel",
+				"title":       "Build Reel",
+				"description": "Render the reel.",
+			},
+		}},
+	}}, metadata)
+
+	child := metadata["build-reel"]
+	if child["parent_step_id"] != "reel-orchestrator" || child["parent_step_title"] != "Master Reel Orchestrator" || child["route_id"] != "build-reel" {
+		t.Fatalf("expected parent and route metadata, got %+v", child)
+	}
+}
+
 func TestHandleGetExecutionLogsUsesMessageSequenceSessionStatus(t *testing.T) {
 	const workspacePath = "/workspace/Workflow/test"
 	workspace := httptest.NewServer(&mockWorkspaceAPI{files: map[string]string{
@@ -125,7 +207,10 @@ func TestHandleGetExecutionLogsUsesMessageSequenceSessionStatus(t *testing.T) {
 				"messages": [{"id":"send","type":"user_message","message":"send"}]
 			}]
 		}`,
-		workspacePath + "/runs/iteration-0/default/execution/deliver/session.json": `{"status":"failed"}`,
+		workspacePath + "/runs/iteration-0/default/execution/deliver/session.json": `{
+  "status":"failed",
+  "entries":[{"item_id":"deliver-reflection","status":"failed","summary":"Could not write learning"}]
+}`,
 	}})
 	t.Cleanup(workspace.Close)
 	t.Setenv("WORKSPACE_API_URL", workspace.URL)
@@ -138,7 +223,13 @@ func TestHandleGetExecutionLogsUsesMessageSequenceSessionStatus(t *testing.T) {
 	}
 	var body struct {
 		Steps map[string]struct {
-			Status string `json:"message_sequence_status"`
+			Status  string `json:"message_sequence_status"`
+			Session struct {
+				Entries []struct {
+					ItemID string `json:"item_id"`
+					Status string `json:"status"`
+				} `json:"entries"`
+			} `json:"message_sequence"`
 		} `json:"steps"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
@@ -146,5 +237,57 @@ func TestHandleGetExecutionLogsUsesMessageSequenceSessionStatus(t *testing.T) {
 	}
 	if got := body.Steps["deliver"].Status; got != "failed" {
 		t.Fatalf("expected failed message sequence status, got %q", got)
+	}
+	if entries := body.Steps["deliver"].Session.Entries; len(entries) != 1 || entries[0].ItemID != "deliver-reflection" || entries[0].Status != "failed" {
+		t.Fatalf("expected persisted reflection entry, got %+v", entries)
+	}
+}
+
+func TestHandleGetExecutionLogsReturnsRoutingEvaluation(t *testing.T) {
+	const workspacePath = "/workspace/Workflow/test"
+	workspace := httptest.NewServer(&mockWorkspaceAPI{files: map[string]string{
+		workspacePath + "/planning/plan.json": `{
+  "steps": [{"type":"routing","id":"route-job","title":"Route job"}]
+}`,
+		workspacePath + "/runs/iteration-0/default/logs/route-job/routing-evaluation.json": `{
+  "routing_question":"Where should this job go?",
+  "selected_route_id":"research",
+  "routing_reasoning":"The incoming request requires research.",
+  "route_next_steps":{"research":"research-step"},
+  "timestamp":"2026-08-25T00:00:00Z"
+}`,
+	}})
+	t.Cleanup(workspace.Close)
+	t.Setenv("WORKSPACE_API_URL", workspace.URL)
+
+	request := httptest.NewRequest("GET", "/api/workflow/logs?workspace_path="+workspacePath+"&run_folder=iteration-0/default", nil)
+	response := httptest.NewRecorder()
+	(&StreamingAPI{}).handleGetExecutionLogs(response, request)
+	if response.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
+	}
+
+	var body struct {
+		Steps map[string]struct {
+			Orchestration []struct {
+				Type              string `json:"type"`
+				Source            string `json:"source"`
+				RoutingEvaluation struct {
+					SelectedRouteID string            `json:"selected_route_id"`
+					RouteNextSteps  map[string]string `json:"route_next_steps"`
+				} `json:"routing_evaluation"`
+			} `json:"orchestration"`
+		} `json:"steps"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	route, ok := body.Steps["route-job"]
+	if !ok || len(route.Orchestration) != 1 {
+		t.Fatalf("expected routing log in response, got %+v", body.Steps)
+	}
+	entry := route.Orchestration[0]
+	if entry.Type != "routing" || entry.Source != "routing_evaluation" || entry.RoutingEvaluation.SelectedRouteID != "research" || entry.RoutingEvaluation.RouteNextSteps["research"] != "research-step" {
+		t.Fatalf("unexpected routing log: %+v", entry)
 	}
 }

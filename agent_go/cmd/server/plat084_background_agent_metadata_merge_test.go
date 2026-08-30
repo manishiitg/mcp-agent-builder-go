@@ -8,7 +8,7 @@ import "testing"
 // registration-time fields like execution_type or suppress_auto_notification.
 // A replace-all implementation silently wiped those the moment an execution
 // completed — for execution_type specifically, that would have undermined
-// scheduledWorkflowStepProducedEvidence's Metadata-based fallback for any
+// scheduledWorkflowExecutionProducedEvidence's Metadata-based fallback for any
 // caller relying on it instead of (or in addition to) Kind.
 func TestBackgroundAgentSetMetadataMergesRatherThanReplaces(t *testing.T) {
 	agent := &BackgroundAgent{

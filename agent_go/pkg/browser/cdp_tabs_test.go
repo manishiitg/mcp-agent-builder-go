@@ -119,24 +119,152 @@ func TestNormalizeAgentBrowserCommandArgs(t *testing.T) {
 	}
 }
 
-func TestSnapshotResultTooLargeErrorPreservesSmallResultAndRejectsLargeResult(t *testing.T) {
+// An oversized snapshot used to return an error and discard the tree entirely,
+// costing a round trip and forcing the agent to pick a narrower --selector
+// without having seen the page (measured live 2026-08-17 on confida-login: 4
+// blind retries at ~30.4k runes against the 24k cap). It now returns the head
+// with an explicit incompleteness banner. The banner is the load-bearing part:
+// a silently truncated accessibility tree is indistinguishable from a page
+// where the element is genuinely absent, and a QA step must never record that
+// negative from partial evidence.
+func TestOversizedSnapshotReturnsTruncatedHeadWithIncompletenessBanner(t *testing.T) {
+	e := &Executor{}
+
 	short := "- button Submit"
-	if err := snapshotResultTooLargeError(short); err != nil {
-		t.Fatalf("small snapshot error = %v, want nil", err)
+	output := short
+	handled, err := e.handleOversizedSnapshot(context.Background(), &output, false)
+	if err != nil || handled {
+		t.Fatalf("small snapshot: handled=%v err=%v, want handled=false err=nil", handled, err)
+	}
+	if output != short {
+		t.Fatalf("small snapshot was modified: %q", output)
 	}
 
 	large := strings.Repeat("x", maxInlineSnapshotOutputRunes+100)
-	err := snapshotResultTooLargeError(large)
-	if err == nil {
-		t.Fatal("large snapshot error = nil, want explicit retry error")
+	output = large
+	handled, err = e.handleOversizedSnapshot(context.Background(), &output, false)
+	if err != nil || !handled {
+		t.Fatalf("large snapshot: handled=%v err=%v, want handled=true err=nil", handled, err)
 	}
 	for _, want := range []string{
-		"SNAPSHOT_RESULT_TOO_LARGE", "ran exactly as requested", "did not add --compact",
-		"did not", "truncate its evidence", "--selector <css>", "--depth <n>",
+		"SNAPSHOT_TRUNCATED", "THIS TREE IS INCOMPLETE", "do NOT record it as absent",
+		"--selector", "--compact", "--interactive", "--depth", fullSnapshotFlag,
+		// PLAT-200: --depth only shrinks a deeply nested tree, not a wide/flat
+		// one -- live-reproduced (a 500-sibling flat page returned a
+		// byte-identical snapshot at --depth 2 vs. unlimited). The guidance
+		// must warn the agent instead of listing --depth as an equal-weight
+		// option, or it burns a retry on a no-op exactly as the confida-login
+		// harness finding observed (byte-identical 30365-rune retries).
+		"WIDE/FLAT page", "byte-identical result and", "only helps if the head below looks deeply nested, not wide",
 	} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("large snapshot error missing %q:\n%s", want, err)
+		if !strings.Contains(output, want) {
+			t.Fatalf("truncated snapshot missing %q:\n%s", want, output[:min(len(output), 600)])
 		}
+	}
+	// The evidence itself must still be there, not just the banner.
+	if !strings.Contains(output, strings.Repeat("x", 100)) {
+		t.Fatal("truncated snapshot dropped the tree content entirely")
+	}
+}
+
+// PLAT-200: the default truncated path used to discard the full tree with no
+// way to recover it short of a second, full-cost snapshot call. When the
+// caller has wired a spiller (which it only does after confirming, via the
+// session's own granted folder guard, that the target is readable back --
+// see workspace_browser_tools.go), the banner must point at the real saved
+// path instead of only offering a re-run.
+func TestOversizedSnapshotUsesConfiguredSpillerWhenAvailable(t *testing.T) {
+	large := strings.Repeat("z", maxInlineSnapshotOutputRunes+100)
+
+	t.Run("spiller succeeds", func(t *testing.T) {
+		var gotContent string
+		e := &Executor{
+			SpillOversized: func(ctx context.Context, content string) (string, error) {
+				gotContent = content
+				return "Workflow/testing/tool_output_folder/agent_browser_snapshot_123.txt", nil
+			},
+		}
+		output := large
+		handled, err := e.handleOversizedSnapshot(context.Background(), &output, false)
+		if err != nil || !handled {
+			t.Fatalf("handled=%v err=%v, want handled=true err=nil", handled, err)
+		}
+		if gotContent != large {
+			t.Fatalf("spiller did not receive the full untruncated tree (got %d chars, want %d)", len(gotContent), len(large))
+		}
+		if !strings.Contains(output, "Workflow/testing/tool_output_folder/agent_browser_snapshot_123.txt") {
+			t.Fatalf("truncated snapshot did not surface the spilled path:\n%s", output[:min(len(output), 600)])
+		}
+		if !strings.Contains(output, "execute_shell_command") || !strings.Contains(output, "sed -n '1,240p'") {
+			t.Fatalf("truncated snapshot did not advertise the available chunked-read recovery command:\n%s", output[:min(len(output), 600)])
+		}
+	})
+
+	t.Run("no spiller configured falls back to the re-run option, no crash", func(t *testing.T) {
+		e := &Executor{}
+		output := large
+		handled, err := e.handleOversizedSnapshot(context.Background(), &output, false)
+		if err != nil || !handled {
+			t.Fatalf("handled=%v err=%v, want handled=true err=nil", handled, err)
+		}
+		if !strings.Contains(output, fullSnapshotFlag) {
+			t.Fatalf("missing fallback re-run option when no spiller is configured:\n%s", output[:min(len(output), 600)])
+		}
+	})
+
+	t.Run("spiller error falls back to the re-run option, error is not propagated", func(t *testing.T) {
+		e := &Executor{
+			SpillOversized: func(ctx context.Context, content string) (string, error) {
+				return "", errors.New("write denied: session has no tool_output_folder grant")
+			},
+		}
+		output := large
+		handled, err := e.handleOversizedSnapshot(context.Background(), &output, false)
+		if err != nil || !handled {
+			t.Fatalf("handled=%v err=%v, want handled=true err=nil (a spill failure must not fail the whole call)", handled, err)
+		}
+		if !strings.Contains(output, fullSnapshotFlag) {
+			t.Fatalf("missing fallback re-run option when the spiller errors:\n%s", output[:min(len(output), 600)])
+		}
+	})
+}
+
+// --full-snapshot is the agent's explicit opt-in to pay the context cost.
+func TestFullSnapshotFlagReturnsWholeTreeAndIsStrippedFromCLIArgs(t *testing.T) {
+	e := &Executor{}
+	large := strings.Repeat("y", maxInlineSnapshotOutputRunes+100)
+	output := large
+	handled, err := e.handleOversizedSnapshot(context.Background(), &output, true)
+	if err != nil || !handled {
+		t.Fatalf("handled=%v err=%v, want handled=true err=nil", handled, err)
+	}
+	if !strings.Contains(output, "SNAPSHOT_FULL") {
+		t.Fatalf("full snapshot missing SNAPSHOT_FULL marker:\n%s", output[:min(len(output), 300)])
+	}
+	if !strings.Contains(output, large) {
+		t.Fatal("full snapshot did not return the complete tree")
+	}
+	if strings.Contains(output, "SNAPSHOT_TRUNCATED") {
+		t.Fatal("full snapshot was truncated despite the explicit opt-in")
+	}
+
+	// agent-browser has no --full-snapshot flag; passing it through would fail
+	// with "Unknown subcommand". It must be consumed by AgentWorks.
+	found, cleaned := extractFullSnapshotArg([]string{"--cdp", "http://localhost:9222", fullSnapshotFlag, "tab", "t12"})
+	if !found {
+		t.Fatal("extractFullSnapshotArg did not detect the flag")
+	}
+	for _, arg := range cleaned {
+		if arg == fullSnapshotFlag {
+			t.Fatalf("flag survived into CLI args: %v", cleaned)
+		}
+	}
+	if len(cleaned) != 4 {
+		t.Fatalf("cleaned args = %v, want the other 4 preserved", cleaned)
+	}
+
+	if found, _ := extractFullSnapshotArg([]string{"tab", "t12"}); found {
+		t.Fatal("extractFullSnapshotArg reported the flag when absent")
 	}
 }
 
@@ -461,9 +589,50 @@ func TestCDPOwnerIDUsesStableBrowserSessionOverride(t *testing.T) {
 	common.SetSessionBrowserSessionID(agentSession, browserSession)
 	defer common.ClearSessionShellConfig(agentSession)
 
-	got := cdpOwnerID(workflowSession, agentSession, "shared-cdp-9222")
+	got := cdpOwnerID(workflowSession, agentSession, "shared-cdp-9222", "shared-cdp-9222")
 	if got != browserSession {
 		t.Fatalf("cdpOwnerID() = %q, want %q", got, browserSession)
+	}
+}
+
+// PLAT-181. When no per-workflow browser session was ever bound (no
+// SetSessionBrowserSessionID call for either candidate), cdpOwnerID must not
+// fall back to returning the shared connection identity that every workflow
+// on the same CDP port has by construction (sharedCDPSessionName) -- doing
+// so pooled unrelated workflows' tabs and cleanup leases under one key.
+func TestCDPOwnerIDNeverReturnsTheSharedConnectionIdentity(t *testing.T) {
+	const sharedIdentity = "shared-cdp-9222"
+
+	got := cdpOwnerID("", "", sharedIdentity, sharedIdentity)
+	if got == sharedIdentity {
+		t.Fatalf("cdpOwnerID() = %q, must never equal the shared connection identity %q", got, sharedIdentity)
+	}
+	if got == "" {
+		t.Fatal("cdpOwnerID() = \"\", must return a non-empty identity even when unresolved")
+	}
+}
+
+// Two calls with no resolvable identity are two different, genuinely
+// unidentified callers as far as this function can tell -- they must not
+// collide with each other either, or the same pooling bug just moves from
+// the shared connection name to a different fixed fallback value.
+func TestCDPOwnerIDUnidentifiedFallbacksDoNotCollideAcrossCalls(t *testing.T) {
+	const sharedIdentity = "shared-cdp-9222"
+
+	first := cdpOwnerID("", "", sharedIdentity, sharedIdentity)
+	second := cdpOwnerID("", "", sharedIdentity, sharedIdentity)
+	if first == second {
+		t.Fatalf("two independently-unidentified callers resolved to the same owner %q, would still pool their tabs together", first)
+	}
+}
+
+// A non-CDP caller's session is a genuine identity, not a shared connection
+// name -- passing "" for sharedConnectionIdentity (as the real non-CDP call
+// site does) must let it through the fallback exactly as before this fix.
+func TestCDPOwnerIDStillUsesSessionAsFallbackOutsideCDPMode(t *testing.T) {
+	got := cdpOwnerID("", "", "headless-session-42", "")
+	if got != "headless-session-42" {
+		t.Fatalf("cdpOwnerID() = %q, want the non-CDP session to still be used as a fallback identity", got)
 	}
 }
 

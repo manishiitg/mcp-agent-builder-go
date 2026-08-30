@@ -12,7 +12,7 @@ function matchesMode(cmd: CommandDefinition, mode?: ModeCategory, workshopMode?:
   if (mode === 'workflow') {
     if (!(cmd.modes?.includes('workflow') ?? false)) return false
     // Filter by workshop mode if set
-    if (workshopMode && cmd.requiredWorkshopMode) {
+    if (workshopMode && cmd.requiredWorkshopMode && !cmd.showInAllWorkshopModes) {
       const allowed = Array.isArray(cmd.requiredWorkshopMode)
         ? cmd.requiredWorkshopMode
         : [cmd.requiredWorkshopMode]

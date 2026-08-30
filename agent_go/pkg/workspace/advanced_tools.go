@@ -101,7 +101,7 @@ func searchWebLLMToolDef() llmtypes.Tool {
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
 			Name:        "search_web_llm",
-			Description: "Search the web using a published search-capable provider. Before choosing provider/model_id, call list_llm_capabilities(capability=\"search_web\", include_models=true). Provider is required. If you pass model_id, pass the matching provider from that capability result; do not pass model_id by itself. model_id can be omitted only when accepting the backend's working default for that provider.",
+			Description: "Search the web through a hosted MCP provider. Provider is required: parallel, exa, or firecrawl. Do not pass model_id. Parallel and Exa use their anonymous free MCP tiers; Firecrawl keyless availability is service-controlled.",
 			Parameters: llmtypes.NewParameters(map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -111,11 +111,7 @@ func searchWebLLMToolDef() llmtypes.Tool {
 					},
 					"provider": map[string]interface{}{
 						"type":        "string",
-						"description": "Required published provider, e.g. vertex, claude-code, codex-cli, cursor-cli, pi-cli, or minimax-coding-plan. Discover usable providers with list_llm_capabilities(capability=\"search_web\", include_models=true).",
-					},
-					"model_id": map[string]interface{}{
-						"type":        "string",
-						"description": "Optional published model_id override. Use a model from list_llm_capabilities(capability=\"search_web\", include_models=true), and pass the matching provider in the same call. If omitted, or if a provider alias such as codex-cli is passed, the tool selects a working model for the provider.",
+						"description": "Required hosted MCP provider: parallel, exa, or firecrawl. Firecrawl keyless availability is service-controlled.",
 					},
 				},
 				"required": []string{"query", "provider"},
@@ -140,7 +136,7 @@ func diffPatchToolDef() llmtypes.Tool {
 					},
 					"diff": map[string]interface{}{
 						"type":        "string",
-						"description": "Unified diff patch string to apply.\n\nFormat:\n- Headers: --- a/file and +++ b/file\n- Hunk headers: @@ -startLine,lineCount +startLine,lineCount @@\n- Context lines: ' ' prefix (space + content)\n- Removals: '-' prefix\n- Additions: '+' prefix\n- End with a trailing newline\n\nExample:\n--- a/file\n+++ b/file\n@@ -5,1 +5,1 @@\n-- [ ] task-1\n+- [x] task-1\n",
+						"description": "Unified diff patch string to apply.\n\nFormat:\n- Headers: --- a/file and +++ b/file\n- Hunk headers: @@ -startLine,lineCount +startLine,lineCount @@\n- Context lines: ' ' prefix (space + content)\n- Removals: '-' prefix\n- Additions: '+' prefix\n- End with a trailing newline\n\nExample:\n--- a/file\n+++ b/file\n@@ -5,1 +5,1 @@\n-- [ ] task-1\n+- [x] task-1\n\nContext and removal lines must be byte-exact copies of the current file content, not retyped from memory. If the target text contains em dashes (—), curly quotes (“ ”), or arrows (→), do not hand-copy it — retyping commonly substitutes plain ASCII equivalents (-, \", ->) without you noticing, which this tool will correctly reject as a context mismatch. Read the file first and copy the exact bytes, or generate the diff programmatically from the file you just read.",
 					},
 				},
 				"required": []string{"filepath", "diff"},
@@ -174,7 +170,10 @@ func GetDiffPatchToolDefinitions() []llmtypes.Tool {
 	return []llmtypes.Tool{diffPatchToolDef()}
 }
 
-// GetAdvancedToolDefinitions returns all advanced workspace tools (shell, image/video, text generation, diff patch).
+// GetAdvancedToolDefinitions returns the active agent-facing tools: shell,
+// image understanding (read_image), text generation, web search, and diff
+// patch. Image/video/audio/music *generation* tools remain retired -- only
+// read_image (pure inspection, no provider media creation) is active here.
 func GetAdvancedToolDefinitions() []llmtypes.Tool {
 	var tools []llmtypes.Tool
 	tools = append(tools, GetShellToolDefinitions()...)

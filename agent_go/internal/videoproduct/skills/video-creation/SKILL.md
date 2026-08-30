@@ -36,12 +36,18 @@ do, and running in chat does not mean skipping what those gates are for. It
 means you hold them yourself. Stop at each checkpoint and let the user
 answer before spending:
 
-1. **Before the first paid call**, resolve the production-level unknowns in
-   `video-model-selection`: which provider keys actually exist, whether any
-   character or product must recur across shots, roughly how many paid calls
-   the piece implies and any cost ceiling, and how many re-prompts a
-   disappointing shot gets. Ask these together, once, in plain language --
-   this is the one place a short interview is worth more than a good guess.
+1. **Before the first paid call, choose characters first.** Resolve whether
+   any character, presenter, or product must recur across shots. If so, write
+   its visual spec, then present at most three live-verified character-model
+   choices from `video-model-selection`. State the exact provider/model,
+   why it fits the subject, relevant controls, and current billing evidence.
+   Recommend one but do not choose silently: wait for the user to name a
+   model and approve the stated reference-pack spend. That model/provider is
+   then committed to the subject's whole arc unless the user explicitly
+   changes it. In the same compact question resolve which provider keys
+   actually exist, the cost ceiling or maximum paid calls, and the retry
+   allowance. If no subject recurs, record that characters are not applicable
+   rather than inventing one.
 2. **Show the plan before building it.** When the script and shot list
    exist, call `show_document` for each so the user reads what they are
    paying for. A shot list is cheap to change and expensive to regret.
@@ -53,8 +59,8 @@ answer before spending:
    fixed by regenerating all of it.
 4. **Generate one shot, then stop.** The first shot of a new character,
    scene, or model choice is a sample, not a commitment. Generate it alone,
-   show it (`show_video` once it has passed `video-quality`, or describe
-   the local file if a full QA pass does not fit a single sample), and wait
+   show it with `show_video` as a Preview (omit `qa_report_path` until the
+   final quality pass), and wait
    for the user's reaction before generating anything else. If the batch
    has several unrelated shots, one representative sample is enough --
    commit the whole direction on one unapproved guess only when the user
@@ -89,7 +95,7 @@ to prevent -- it is not a shortcut, it is the checkpoint being skipped.
 - Keep each shot responsible for one idea. Match the visual change to the spoken beat.
 - Put exact wording, logos, UI, prices, and captions into the editing/overlay layer, never into an AI-generated shot.
 - For presenter reels, a reliable pattern is host hook, screenshot-worthy value card while narration continues, host close/CTA, then a short end card.
-- For anything long-form (roughly 8 minutes or more), that single-arc shape does not carry the runtime -- use `video-storytelling` for chapter structure, retention management, and pacing instead.
+- Begin every fresh video with `longform-cinematic-video`, regardless of runtime, so the cinematic contract, continuity, sound world, and final edit are designed as one film. For a short piece, scale its chapter/sequence artifacts down rather than switching to a less coherent visual grammar.
 
 ## Make the work resumable
 
@@ -111,8 +117,8 @@ As a workflow stage, the equivalent record is your stage's own artifact (researc
 
 - Use local editing for trims, crops, concatenation, audio, captions, and supplied footage.
 - Use programmatic overlays for exact text, branded cards, product UI, or repeatable templates.
-- For product-led explainers, feature breakdowns, and short-form pieces, build from uploaded assets and deterministic HTML/CSS composition (`product-infographic` / HyperFrames) rather than generating footage -- exact wording, UI, and prices belong in that layer, not an AI-generated shot.
-- For narrative long-form video where the brief genuinely calls for AI-generated footage, reference imagery, voice, or music: use `video-storytelling` to structure the narrative arc and pacing first, `video-model-selection` to choose between `fal-ai` (third-party hosted models) and `google-ai` (Google's own Gemini image models, Veo) per shot, `video-cinematography` to turn each beat into camera/lighting/consistency direction, then the chosen provider skill to generate. Prefer uploaded assets and deterministic composition whenever they can carry the brief -- but a narrative long-form piece is a case they usually cannot carry, so route to generation because the brief calls for it, not as a last resort.
+- Use `longform-cinematic-video` as the director for every new production. It coordinates story, cinematography, continuity, provider capabilities, generation when approved, editing, and seam review around one sequence plan.
+- Keep every production cinematic. HyperFrames may be used selectively inside it for exact wording, UI, prices, typography, diagrams, camera motion over supplied assets, overlays, transitions, and compositing when the user wants that treatment or the approved shot list calls for it. It is not a separate route and must never replace a photoreal character, performance, location, or continuity-critical generated shot.
 - Use the `video-editing` skill for assembly, captions, audio, and exports.
 - Use the `video-quality` skill before presenting a version as complete.
 

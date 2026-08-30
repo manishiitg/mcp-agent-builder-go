@@ -23,9 +23,14 @@ func TestVideoStudioDeclaresManagedHyperFramesSkills(t *testing.T) {
 	for _, name := range source.Install {
 		installed[name] = true
 	}
-	for _, required := range []string{"hyperframes", "hyperframes-core", "hyperframes-animation", "hyperframes-creative", "hyperframes-cli", "media-use", "hyperframes-registry", "hyperframes-keyframes", "general-video", "product-launch-video", "faceless-explainer", "motion-graphics"} {
+	for _, required := range []string{"hyperframes", "hyperframes-core", "hyperframes-animation", "hyperframes-creative", "hyperframes-cli", "media-use", "hyperframes-registry", "hyperframes-keyframes"} {
 		if !installed[required] {
 			t.Fatalf("HyperFrames installed skills omit %q: %+v", required, source.Install)
+		}
+	}
+	for _, retiredRoute := range []string{"general-video", "product-launch-video", "faceless-explainer", "motion-graphics"} {
+		if installed[retiredRoute] {
+			t.Fatalf("retired standalone HyperFrames route %q remains installed: %+v", retiredRoute, source.Install)
 		}
 	}
 	if len(source.Attach) != 1 || source.Attach[0] != "hyperframes" {
@@ -100,14 +105,14 @@ func TestInfographicWorkflowCarriesDurableArtifactsForward(t *testing.T) {
 	}
 }
 
-// fal-ai and google-ai are product-owned skills (embedded via profileSkills,
+// Generation provider skills are product-owned (embedded via profileSkills,
 // not the managed HyperFrames dependency source), and neither is part of the
 // infographic pipeline's own stages -- product-infographic never routes to
 // them. They exist so a chat session can generate AI video/image/voice/music
 // for a long-form production the infographic route does not cover, one per
-// provider (fal.ai's hosted third-party models vs. Google's own Gemini/Veo).
-// This pins that both register and read back cleanly, and that adding them
-// did not silently pull either into every infographic stage's attach list.
+// provider (fal.ai's hosted models, Google's own Gemini/Veo, and direct
+// Seeddance video). This pins that they register and read back cleanly, and
+// that adding them did not pull any into the infographic stages.
 func TestGenerationSkillsRegisterAndStayOutOfTheInfographicPipeline(t *testing.T) {
 	if err := RegisterProductSkills(); err != nil {
 		t.Fatalf("RegisterProductSkills: %v", err)
@@ -119,10 +124,21 @@ func TestGenerationSkillsRegisterAndStayOutOfTheInfographicPipeline(t *testing.T
 	}{
 		{"fal-ai", []string{"SECRET_FAL_KEY", "Never invent a model ID", "@fal-ai/client"}},
 		{"google-ai", []string{"SECRET_GEMINI_API_KEY", "Never invent a model ID", "@google/genai"}},
-		{"video-model-selection", []string{"video-cinematography", "fal-ai", "google-ai", "Shot count vs. budget"}},
+		{"seeddance-api", []string{"SECRET_SEEDANCE_API_KEY", "/v1/videos/generations", "task_id", "show_video"}},
+		{"longform-cinematic-video", []string{"longform-sequence-plan.json", "longform-edit-decision-list.json", "longform-seam-report.json", "one film"}},
+		{"cinematic-visual-development", []string{"Subject type", "Human / presenter", "Animal / pet", "Product / object", "show_reference", "endpoint_input", "seam proof"}},
+		{"multi-clip-cinematic-generation", []string{"reference manifest", "orientation", "structured multi-shot", "Cut on action", "HyperFrames"}},
+		{"video-provider-capabilities", []string{"official API", "capability record", "maximum_approved_cost", "pending_user_review", "continuity-plan.json", "generation-ledger.json"}},
+		{"kling-video", []string{"multi_prompt", "@Element1", "motion-transfer", "show_video"}},
+		{"seedance-video", []string{"@Image1", "bytedance/seedance-2.0", "bytedance/seedance-2.5", "30-second", "show_video"}},
+		{"veo-video", []string{"fal-ai/veo3.1/lite/image-to-video", "4s", "6s", "8s", "first plus last frame", "previously generated Veo", "long-running", "show_video"}},
+		{"minimax-h3-video", []string{"minimax/hailuo-03", "native stereo audio", "reference ledger", "show_video"}},
+		{"gemini-omni-video", []string{"google/gemini-omni-flash", "<IMAGE_REF_0>", "fal-ai", "show_video"}},
+		{"video-model-selection", []string{"video-cinematography", "fal-ai", "google-ai", "seeddance-api", "model-capabilities.md", "Shot count vs. budget", "Present a costed choice", "least-expensive option", "Veo 3.1 Lite", "Seedance 2.5", "maximum cost", "visible native dialogue", "off-camera TTS voiceover", "must never silently turn"}},
 		{"video-cinematography", []string{"dolly is not zoom", "reference-image conditioning", "video-model-selection"}},
 		{"video-storytelling", []string{"video-cinematography", "video-model-selection", "But-therefore, not and-then", "Scaling to true long-form"}},
 		{"generated-video-quality", []string{"character_consistency", "generation_artifacts", "temporal_coherence", "video-quality"}},
+		{"video-look-sound", []string{"Locations and backgrounds", "Visible native dialogue", "Off-camera TTS voiceover", "Hybrid", "cost", "explicit choice", "without native audio", "constraint to", "Use separate TTS only for off-camera voiceover", "ffprobe", "silent visual preview", "not_applicable", "render report"}},
 	}
 	for _, tc := range cases {
 		if !skills.IsBuiltinSkill(tc.name) {
@@ -136,6 +152,30 @@ func TestGenerationSkillsRegisterAndStayOutOfTheInfographicPipeline(t *testing.T
 			if !strings.Contains(attached[0].Content, want) {
 				t.Fatalf("%s skill lost required content %q", tc.name, want)
 			}
+		}
+	}
+
+	capabilitySkill := skills.LoadAttachable("", []string{"video-provider-capabilities"})
+	if len(capabilitySkill) != 1 {
+		t.Fatalf("video-provider-capabilities bundle = %v", capabilitySkill)
+	}
+	supporting := map[string]string{}
+	for _, file := range capabilitySkill[0].SupportingFiles {
+		supporting[file.RelPath] = string(file.Content)
+	}
+	for path, requiredText := range map[string]string{
+		"references/capability-record.md":   "Reference manifest",
+		"references/continuity-planning.md": "Boundary-frame chain",
+		"references/execution-review.md":    "Durable job lifecycle",
+	} {
+		if !strings.Contains(supporting[path], requiredText) {
+			t.Fatalf("video-provider-capabilities supporting file %q missing %q: %v", path, requiredText, supporting)
+		}
+	}
+	for _, name := range []string{"longform-cinematic-video", "kling-video", "seedance-video", "seeddance-api", "veo-video", "minimax-h3-video", "gemini-omni-video"} {
+		attached := skills.LoadAttachable("", []string{name})
+		if len(attached) != 1 || len(attached[0].SupportingFiles) != 1 || attached[0].SupportingFiles[0].RelPath != "agents/openai.yaml" {
+			t.Fatalf("%s must carry its generated UI metadata: %+v", name, attached)
 		}
 	}
 
@@ -153,11 +193,38 @@ func TestGenerationSkillsRegisterAndStayOutOfTheInfographicPipeline(t *testing.T
 		}
 	}
 
-	generationSkillNames := map[string]bool{"fal-ai": true, "google-ai": true, "video-model-selection": true, "video-cinematography": true, "video-storytelling": true, "generated-video-quality": true}
+	generationSkillNames := map[string]bool{"fal-ai": true, "google-ai": true, "seeddance-api": true, "longform-cinematic-video": true, "multi-clip-cinematic-generation": true, "video-provider-capabilities": true, "kling-video": true, "seedance-video": true, "veo-video": true, "minimax-h3-video": true, "gemini-omni-video": true, "video-model-selection": true, "video-cinematography": true, "video-storytelling": true, "generated-video-quality": true}
 	for _, stage := range infographicPipeline.Stages {
 		for _, name := range stage.Skills {
 			if generationSkillNames[name] {
 				t.Fatalf("infographic stage %q attaches %q; the infographic route stays on HyperFrames composition", stage.ID, name)
+			}
+		}
+	}
+}
+
+func TestGenerationPipelinesAttachCapabilityDiscoveryBeforePaidVideo(t *testing.T) {
+	requiredSkills := []string{"video-provider-capabilities", "kling-video", "seedance-video", "seeddance-api", "veo-video", "minimax-h3-video", "gemini-omni-video"}
+	for _, pipeline := range []*Pipeline{longformPipeline, shortformPipeline} {
+		for _, stageID := range []string{pipeline.ID + "-brief", pipeline.ID + "-shotlist", pipeline.ID + "-anchor-shot", pipeline.ID + "-next-shot"} {
+			var stage *PipelineStage
+			for index := range pipeline.Stages {
+				if pipeline.Stages[index].ID == stageID {
+					stage = &pipeline.Stages[index]
+					break
+				}
+			}
+			if stage == nil {
+				t.Fatalf("%s has no %s stage", pipeline.ID, stageID)
+			}
+			attached := map[string]bool{}
+			for _, skill := range stage.Skills {
+				attached[skill] = true
+			}
+			for _, required := range requiredSkills {
+				if !attached[required] {
+					t.Fatalf("%s must attach %s: %v", stage.ID, required, stage.Skills)
+				}
 			}
 		}
 	}

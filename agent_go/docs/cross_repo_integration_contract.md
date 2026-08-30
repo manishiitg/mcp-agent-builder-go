@@ -21,7 +21,7 @@ handling, cancellation.
 ## Table of Contents
 
 1. [Boundaries](#boundaries)
-2. [Integration Contract Areas (IC-1 through IC-11)](#integration-contract-areas)
+2. [Integration Contract Areas (IC-1 through IC-12)](#integration-contract-areas)
 3. [Cost Tracking Contract](#cost-tracking-contract)
 4. [Inspector Debug Contract](#inspector-debug-contract)
 5. [Test Matrix](#test-matrix)
@@ -66,7 +66,6 @@ The agent's `executeLLM()` builds provider-specific options and calls
 | claude-code | `WithMCPConfig`, `WithResumeSessionID`, `WithClaudeCodeTools`, `WithClaudeCodeSettings`, `WithMaxTurns`, `WithClaudeCodeEffort` |
 | codex-cli | `WithCodexDisableShellTool`, `WithCodexApprovalPolicy`, `WithCodexConfigOverrides`, `WithCodexResumeSessionID` |
 | cursor-cli | `WithCursorMCPConfig`, `WithCursorApproveMCPs`, `WithCursorForce` |
-| agy-cli | `WithAgyMCPConfig`, `WithAgyDangerouslySkipPermissions`, `WithAgyWorkingDir`, `WithAgyResumeSessionID`, persistent tmux session options |
 | pi-cli | `WithPiWorkingDir`, `WithPiProvider`, `WithPiMCPConfig`, `WithPiBridgeOnlyTools`, `WithPiResumeSessionID`, persistent tmux session options |
 
 **Universal options (all providers):**
@@ -157,7 +156,7 @@ subsequent turns to resume the conversation.
 
 **Provider-specific session-id keys** (in `GenerationInfo.Additional`):
 - `claude_code_session_id`, `gemini_session_id`, `codex_thread_id`,
-  `cursor_session_id`, `agy_session_id`, `pi_session_id`
+  `cursor_session_id`, `pi_session_id`
 
 **Risk:** key drift → mcpagent reads wrong key → resume silently starts a
 fresh session.
@@ -206,8 +205,6 @@ history for subsequent turns. CLI providers receive tool context as text
 
 `WithMCPConfig(json)` → Claude Code `--mcp-config <file>`
 `WithCursorMCPConfig(json)` → Cursor `.cursor/mcp.json`
-`WithAgyMCPConfig(json)` → Antigravity `.agents/mcp_config.json`
-`WithAgyResumeSessionID(id)` → Antigravity `agy --conversation <id>`
 MCP tool calls work through the bridge end-to-end.
 
 ### IC-11: Retained Submission Neutrality
@@ -219,6 +216,34 @@ follow-up must persist exactly one canonical tool receipt with arguments,
 result/error, and duration, followed by exactly one non-empty final assistant
 response. The host must not reconstruct the Agent, MCP bridge, skills, or tool
 registry, and the retained provider process must remain reusable.
+
+### IC-12: Canonical Turn Lifecycle
+
+Every accepted turn must have one provider-neutral lifecycle, independent of
+the provider's native completion signal and independent of the longer-lived
+session or tmux process.
+
+**Mandatory invariants:**
+
+1. `mcpagent` assigns one stable, non-empty `turn_id` when it accepts the turn.
+2. Assistant, tool-start, tool-end/tool-error, and terminal events for that turn
+   carry the same `turn_id`; events from another turn may not be attached.
+3. Exactly one `unified_completion` is emitted. It contains either the final
+   assistant answer or the terminal error and is marked
+   `metadata.canonical_turn_completion=true`.
+4. Provider adapters translate native facts such as Codex `task_complete`,
+   Claude `end_turn`, Pi `agent_end`, Cursor's structured result, or API finish
+   reasons. They do not create competing outward lifecycle semantics.
+5. AgentWorks clears busy state, exposes the formatted final answer, and lets
+   schedulers advance from that canonical completion. Provider/session liveness
+   must not keep a completed turn busy, and a retained session must remain
+   reusable for a later turn.
+
+This contract is a **P0 release gate**. The credential-free mcpagent lifecycle
+test runs on every PR, while the retained-session live P0 verifies the same
+identity, tool receipt, exactly-once completion, and session-reuse invariants
+for every supported coding CLI. A provider or host integration that cannot
+produce this contract is not production-compatible.
 
 ---
 
@@ -251,7 +276,6 @@ real provider call
 | Codex CLI (structured + tmux) | Computed | `cost_usd_estimated` |
 | Cursor CLI (structured) | Computed | `cost_usd_estimated` |
 | Cursor CLI (tmux) | **No tokens available** (transcript lacks usage) | — |
-| Antigravity CLI (tmux) | Estimated tokens only | `cost_usd_estimated` when rates are available |
 | Bedrock / Azure / Z.AI / Kimi / MiniMax | Computed | `cost_usd_estimated` |
 
 ### IC-area test coverage (cross-stack)
@@ -264,6 +288,7 @@ real provider call
 | IC-8 | Cancellation (shutdown) | `cmd/server/shutdown_cleanup_test.go` | 2 tests |
 | IC-10 | Coding CLI chat contract: multi-turn, literal `@` prompt text, MCP bridge tool completion, live steer, and terminal pane de-dupe | `cmd/testing/coding_agent_chat_e2e.go` | opt-in `coding-agent-chat-e2e` live command |
 | IC-11 | Completed-turn retained delivery: typed transport acknowledgement, one tool receipt, one final response, no reconstruction, reusable tmux | `cmd/testing/coding_agent_chat_e2e.go` | required per provider by `scripts/run-coding-cli-p0.sh` |
+| IC-12 | Stable turn ID, same-turn tool events, canonical exactly-once completion, reusable session | `mcpagent/agent/turn_lifecycle_test.go` + `cmd/testing/coding_agent_chat_e2e.go` | mandatory deterministic CI + required live per provider |
 | IC-10 | Coding CLI → MCP bridge → `agent_browser` CDP mode | `cmd/testing/agent_browse_e2e.go` | opt-in `agent-browse-e2e` live command |
 | IC-10 | Parallel coding CLIs → shared `agent_browser` CDP lock | `cmd/testing/agent_browse_stress_e2e.go` | opt-in `agent-browse-stress-e2e` live command |
 | IC-10 | Direct mcpbridge-compatible API → shared `agent_browser` CDP lock | `cmd/testing/agent_browse_api_stress_e2e.go` | opt-in `agent-browse-api-stress-e2e` live command |
@@ -412,6 +437,7 @@ matrix test fails loudly with which provider broke.
 | IC-9 | Multi-turn tool context | B2 → B3 | mcpagent |
 | IC-10 | MCP bridge propagation | B1 → B3 | mcpagent |
 | IC-11 | Retained submission neutrality | B1 → B2 | coding-agent-loop + mcpagent |
+| IC-12 | Canonical turn lifecycle | B3 → B2 → B1 | adapter translation + mcpagent ownership + AgentWorks consumption |
 | Cost | Cost emission + bucketing | B3 → B2 → B1 | adapter + bridge + ledger + HTTP |
 | Inspector | Debug-event contract | B3 → B2 → B1 (separate sink) | adapter + store + HTTP |
 
@@ -426,10 +452,6 @@ Each contract area should be verified for all supported providers.
 - pi-cli is the preferred Google/Gemini-backed coding-agent provider. It uses
   tmux marker transport, supports dynamic provider/model ids, and is the
   replacement path for new Gemini-family and open-model coding-agent setup.
-- agy-cli is deprecated for new setup but remains in the runtime contract for
-  existing/restored sessions and regression coverage. It is tmux-only and
-  requires local Antigravity sign-in; structured JSON transport is not part of
-  the retained legacy contract.
 
 **API providers (direct HTTP):**
 - anthropic, openai, vertex (Gemini API), bedrock, azure, z-ai, kimi, minimax, openrouter
@@ -443,6 +465,7 @@ Each contract area should be verified for all supported providers.
 - IC-4 Session ID & resume
 - IC-8 Cancellation propagation
 - IC-11 Retained submission neutrality
+- IC-12 Canonical turn lifecycle
 
 **P1 (degrades quality):**
 - IC-1 Config propagation
@@ -469,7 +492,7 @@ Each contract area should be verified for all supported providers.
 | openai | 11 | ⏳ pending |
 | vertex | 10 | ⏳ pending |
 | kimi | 1 (skips without direct moonshot key) | — |
-| claudecode / codexcli / cursorcli / agycli / picli | structured + tmux transcript/contract tests as supported by each provider | ⏳ pending |
+| claudecode / codexcli / cursorcli / picli | structured + tmux transcript/contract tests as supported by each provider | ⏳ pending |
 | bedrock / azure / minimax / zai | code-only, no creds | — |
 
 Cross-adapter matrix test: `inspector_contract_matrix_test.go` (currently anthropic only).
@@ -490,6 +513,8 @@ Cross-adapter matrix test: `inspector_contract_matrix_test.go` (currently anthro
 - IC-8: `internal/events/event_store_test.go` (19 subtests), `cmd/server/shutdown_cleanup_test.go` (2 tests)
 - IC-10 cross-stack: `cmd/testing/coding_agent_chat_e2e.go`, `cmd/testing/agent_browse_*_e2e.go`
 - IC-11 cross-stack: `cmd/testing/coding_agent_chat_e2e.go --retained-window-p0-only`, enforced per provider by `scripts/run-coding-cli-p0.sh`
+- IC-12 deterministic: `mcpagent/agent/turn_lifecycle_test.go::TestP0CanonicalTurnContract`, enforced by `.github/workflows/coding-cli-p0.yml`
+- IC-12 live cross-stack: the IC-11 retained-window command additionally requires stable same-turn IDs and `canonical_turn_completion=true` for every provider
 - Validate-key cross-stack: `cmd/server/validate_<provider>_real_test.go` (anthropic, openai, vertex)
 - Inspector: `cmd/server/inspector_e2e_real_test.go` + `internal/inspector/store_test.go`
 

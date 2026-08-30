@@ -7,8 +7,8 @@ import (
 
 func TestWorkflowVersionUpgradePlanFrom122MigratesReportsThenScheduledRoutes(t *testing.T) {
 	plan := workflowVersionUpgradePlan(&WorkflowManifest{Version: "1.0.22"})
-	if len(plan) != 3 {
-		t.Fatalf("plan from 1.0.22 = %d steps, want direct-report, scheduled-route, then periodic-pulse-review migrations: %+v", len(plan), plan)
+	if len(plan) != 10 {
+		t.Fatalf("plan from 1.0.22 = %d steps, want direct-report, scheduled-route, dedicated-Pulse, schedule-prompt, finalizer-ownership, report-activity-section, report-activity-tab, then Pulse lifecycle reconciliation migrations: %+v", len(plan), plan)
 	}
 	if plan[0].label != "upgrade-direct-html-reports" || plan[0].to != "1.0.23" {
 		t.Fatalf("plan[0] = %+v, want direct-report migration to 1.0.23", plan[0])
@@ -16,8 +16,23 @@ func TestWorkflowVersionUpgradePlanFrom122MigratesReportsThenScheduledRoutes(t *
 	if plan[1].label != "upgrade-schedule-execution-model" || plan[1].to != workflowContractScheduleExecutionModelVersion {
 		t.Fatalf("plan[1] = %+v, want schedule execution-model migration to %s", plan[1], workflowContractScheduleExecutionModelVersion)
 	}
-	if plan[2].label != "upgrade-periodic-pulse-review-handoff" || plan[2].to != WorkflowContractCurrentVersion {
-		t.Fatalf("plan[2] = %+v, want periodic-pulse-review migration to current", plan[2])
+	if plan[2].label != "upgrade-dedicated-pulse-schedule" || plan[2].to != workflowContractDedicatedPulseScheduleVersion {
+		t.Fatalf("plan[2] = %+v, want dedicated-Pulse migration", plan[2])
+	}
+	if plan[3].label != "upgrade-schedule-prompt-contract" || plan[3].to != workflowContractSchedulePromptContractVersion {
+		t.Fatalf("plan[3] = %+v, want schedule-prompt migration", plan[3])
+	}
+	if plan[4].label != "upgrade-schedule-finalizer-ownership" || plan[4].to != workflowContractFinalizerOwnedScheduleVersion {
+		t.Fatalf("plan[4] = %+v, want finalizer-ownership migration", plan[4])
+	}
+	if plan[5].label != "upgrade-report-activity-section" || plan[5].to != workflowContractReportActivitySectionVersion {
+		t.Fatalf("plan[5] = %+v, want report-activity-section migration", plan[5])
+	}
+	if plan[6].label != "upgrade-report-activity-tab" || plan[6].to != workflowContractReportActivityTabVersion {
+		t.Fatalf("plan[6] = %+v, want report-activity-tab migration", plan[6])
+	}
+	if plan[7].label != "upgrade-pulse-lifecycle-reconciliation" || plan[7].to != workflowContractPulseLifecycleReconciliationVersion || plan[8].label != "upgrade-pulse-backlog-triage" || plan[8].to != workflowContractPulseBacklogTriageVersion || plan[9].label != "upgrade-pulse-actionable-backlog" || plan[9].to != WorkflowContractCurrentVersion {
+		t.Fatalf("plan[7] = %+v, want Pulse lifecycle reconciliation migration to current", plan[7])
 	}
 }
 

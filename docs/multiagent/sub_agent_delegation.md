@@ -32,8 +32,7 @@ Spawns a background sub-agent and returns immediately. The sub-agent runs async 
     "instruction": "Comprehensive, self-contained instructions — workers have no shared memory",
     "reasoning_level": "high | medium | low | <custom-tier> (required in multi-agent mode)",
     "agent_template": "Optional sub-agent template folder name from subagents/",
-    "servers": ["optional", "list", "of", "mcp", "servers"],
-    "share_browser": true
+    "servers": ["optional", "list", "of", "mcp", "servers"]
   }
 }
 ```
@@ -106,7 +105,7 @@ Sub-agents inherit most configuration from the parent request:
 | Context Editing | All parent context-editing fields | Parent defaults |
 | LargeOutputThreshold | `LARGE_OUTPUT_THRESHOLD` env var | Default |
 | MCP servers | Parent's enabled servers (or the `servers` override from the delegate call) | — |
-| Browser session | Shared with parent unless `share_browser: false` | — |
+| Browser session | Inherited from the parent workflow | — |
 
 ### Reasoning Tiers
 
@@ -235,7 +234,6 @@ Defined in `delegation_tools.go`:
 | `CapabilitiesContextKey` | `*CapabilitiesContext` | Available MCP servers, skills, and sub-agent templates |
 | `AgentTemplateKey` | `string` | Sub-agent template folder name (from `agent_template` param) |
 | `DelegationServersKey` | `[]string` | MCP servers scoped to this sub-agent (from `servers` param) |
-| `ShareBrowserKey` | `bool` | False when the delegate call asked for browser isolation |
 | `SessionEventEmitterKey` | `SessionEventEmitter` | Emits blocking human-feedback / question events for input UIs |
 | `BGAgentRegistryKey` | `BGAgentQuerier` | Registry used by `query_agent` / `list_agents` / `terminate_agent` |
 | `BGAgentSessionIDKey` | `string` | Session ID for the background agent registry |

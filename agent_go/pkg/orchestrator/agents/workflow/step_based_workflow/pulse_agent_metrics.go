@@ -75,6 +75,10 @@ func ensurePulseAgentMetricsSchema(ctx context.Context, db pulseFindingLifecycle
 	if _, err := db.ExecContext(ctx, pulseAgentMetricsSchema); err != nil {
 		return err
 	}
+	if _, err := db.ExecContext(ctx, `UPDATE pulse_agent_metrics SET module=? WHERE module IN (?, ?)`,
+		pulsemodules.TechnicalReviewID, pulsemodules.LegacyWorkflowReviewID, pulsemodules.LegacyLLMOpsReviewID); err != nil {
+		return err
+	}
 	_, err := db.ExecContext(ctx, pulseAgentMetricsIndexes)
 	return err
 }

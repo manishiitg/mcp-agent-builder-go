@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, type ReactNode } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { AlertCircle, Bell, Check, Loader2, Sparkles, Wrench } from 'lucide-react'
 import type { PollingEvent } from '../services/api-types'
 import { buildCleanConversationItems, buildProductionActivityTurns } from '../utils/cleanConversation'
@@ -11,6 +11,7 @@ export interface CleanConversationSurfaceProps {
   isRestoring: boolean
   streamingText: string
   landingContent?: ReactNode
+  onRetryLastMessage?: () => void | Promise<void>
 }
 
 function messageTime(timestamp?: string): string {
@@ -80,8 +81,10 @@ export function CleanConversationSurface({
   isRestoring,
   streamingText,
   landingContent,
+  onRetryLastMessage,
 }: CleanConversationSurfaceProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
+  const [retryingFailureId, setRetryingFailureId] = useState<string | null>(null)
   const items = useMemo(() => buildCleanConversationItems(events), [events])
   const activityTurns = useMemo(() => buildProductionActivityTurns(events), [events])
 
@@ -160,14 +163,44 @@ export function CleanConversationSurface({
             </div>
           </details>
         ) : (
-          <article key={item.id} className="flex w-full items-start gap-3" data-testid={item.role === 'error' ? 'clean-error-message' : 'clean-assistant-message'}>
+          <article key={item.id} className="flex w-full items-start gap-3" role={item.role === 'error' ? 'alert' : undefined} data-testid={item.role === 'error' ? 'clean-error-message' : 'clean-assistant-message'}>
             <span className={`mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-xl ${item.role === 'error' ? 'bg-red-50 text-red-600 dark:bg-red-950/50 dark:text-red-300' : 'bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300'}`}>
               {item.role === 'error' ? <AlertCircle className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
             </span>
             <div className={`min-w-0 flex-1 rounded-2xl rounded-tl-md border px-4 py-3 shadow-sm ${item.role === 'error' ? 'border-red-200 bg-red-50 text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-200' : 'border-slate-200 bg-white text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200'}`}>
-              {item.role === 'assistant'
-                ? <ConversationMarkdownRenderer content={item.content} maxHeight="none" framed={false} />
-                : <p className="whitespace-pre-wrap text-sm leading-6">{item.content}</p>}
+              {item.role === 'assistant' ? (
+                <ConversationMarkdownRenderer content={item.content} maxHeight="none" framed={false} />
+              ) : item.failure ? (
+                <div className="space-y-2">
+                  <p className="text-sm font-semibold leading-5">{item.failure.title}</p>
+                  <p className="whitespace-pre-wrap text-sm leading-6">{item.content}</p>
+                  <div className="flex flex-wrap items-center gap-2 pt-1">
+                    {item.failure.retryable && onRetryLastMessage ? (
+                      <button
+                        type="button"
+                        className="rounded-lg border border-red-300 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-red-800 dark:bg-red-950/30 dark:text-red-200 dark:hover:bg-red-950/60"
+                        disabled={isStreaming || retryingFailureId === item.id}
+                        onClick={() => {
+                          setRetryingFailureId(item.id)
+                          void Promise.resolve(onRetryLastMessage())
+                            .catch(() => undefined)
+                            .finally(() => setRetryingFailureId(null))
+                        }}
+                      >
+                        {retryingFailureId === item.id ? 'Retrying…' : 'Retry'}
+                      </button>
+                    ) : null}
+                    {item.failure.technicalDetails ? (
+                      <details className="text-xs text-red-700/80 dark:text-red-300/80">
+                        <summary className="cursor-pointer select-none">Technical details</summary>
+                        <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-red-100/70 p-2 font-mono text-[11px] leading-4 dark:bg-black/20">{item.failure.technicalDetails}</pre>
+                      </details>
+                    ) : null}
+                  </div>
+                </div>
+              ) : (
+                <p className="whitespace-pre-wrap text-sm leading-6">{item.content}</p>
+              )}
               {(item.role === 'assistant' && item.usage) || messageTime(item.timestamp) ? (
                 <div className={`mt-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 pt-2 text-[10px] font-medium text-slate-400 ${item.role === 'assistant' && item.usage ? 'border-t border-slate-100 dark:border-slate-800' : ''}`}>
                   {item.role === 'assistant' && item.usage ? (

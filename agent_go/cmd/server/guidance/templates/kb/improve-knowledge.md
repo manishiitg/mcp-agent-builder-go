@@ -21,7 +21,7 @@ contract. Its
 output is evidence for the one Engineering Review result, never a standalone
 reviewer result.
 
-Return only: `module=workflow_review`, `verdict`, `note_shape`,
+Return only: `module=technical_review`, `verdict`, `note_shape`,
 `kb_purity_manifest`, `ownership_candidates`, `next_check`, and ordered
 `findings`. Every finding includes stable `finding_id`, `target_key`,
 severity, plain-language summary, precise `evidence`, a bounded

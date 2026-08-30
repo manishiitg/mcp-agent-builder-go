@@ -10,6 +10,10 @@ interface DynamicModelSelectorProps {
   onSelect: (modelId: string) => void
   className?: string
   disabled?: boolean
+  /** Restrict the picker to models whose `group` matches exactly. Used to
+   * scope a single Pi CLI backend (e.g. "Gemini") to its own tab instead of
+   * showing every backend's models grouped together. */
+  groupFilter?: string
 }
 
 function isPrimaryPiGroup(group: string): boolean {
@@ -31,6 +35,7 @@ export function DynamicModelSelector({
   onSelect,
   className,
   disabled = false,
+  groupFilter,
 }: DynamicModelSelectorProps) {
   const getProviderDynamicModels = useLLMStore(s => s.getProviderDynamicModels)
   const [data, setData] = useState<DynamicModelsResponse | null>(null)
@@ -42,6 +47,7 @@ export function DynamicModelSelector({
   const [showCustomInput, setShowCustomInput] = useState(false)
   const [showFullCatalog, setShowFullCatalog] = useState(false)
   const [loadingFull, setLoadingFull] = useState(false)
+  const [freeOnly, setFreeOnly] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -66,7 +72,7 @@ export function DynamicModelSelector({
       setCollapsedGroups(new Set())
       return
     }
-    if (provider !== 'pi-cli' || data.models.length <= 80) return
+    if (groupFilter || provider !== 'pi-cli' || data.models.length <= 80) return
 
     const next = new Set<string>()
     for (const model of data.models) {
@@ -74,18 +80,37 @@ export function DynamicModelSelector({
       if (!isPrimaryPiGroup(group)) next.add(group)
     }
     setCollapsedGroups(next)
-  }, [data, provider])
+  }, [data, provider, groupFilter])
+
+  const groupScopedModels = useMemo(() => {
+    if (!data?.models) return []
+    if (!groupFilter) return data.models
+    return data.models.filter(m => (m.group || 'Other') === groupFilter)
+  }, [data, groupFilter])
+
+  const hasFreeModels = useMemo(() => groupScopedModels.some(m => m.is_free), [groupScopedModels])
+
+  // A group-scoped tab (e.g. one Pi CLI backend) has no meaningful
+  // provider-wide default to fall back on -- the caller can't know a group's
+  // real default model id without this catalog, so pick it here once data
+  // arrives, but only if nothing is selected yet (never overrides a real
+  // choice, including one restored from a saved config).
+  useEffect(() => {
+    if (!groupFilter || selectedModelId || groupScopedModels.length === 0) return
+    const fallback = groupScopedModels.find(m => m.is_default) ?? groupScopedModels[0]
+    if (fallback) onSelect(fallback.model_id)
+  }, [groupFilter, selectedModelId, groupScopedModels, onSelect])
 
   const grouped = useMemo(() => {
-    if (!data?.models) return new Map<string, DynamicModelEntry[]>()
+    const base = freeOnly ? groupScopedModels.filter(m => m.is_free) : groupScopedModels
     const q = search.toLowerCase().trim()
     const filtered = q
-      ? data.models.filter(m =>
+      ? base.filter(m =>
           m.model_id.toLowerCase().includes(q) ||
           m.model_name.toLowerCase().includes(q) ||
           (m.group || '').toLowerCase().includes(q)
         )
-      : data.models
+      : base
 
     const groups = new Map<string, DynamicModelEntry[]>()
     for (const m of filtered) {
@@ -94,7 +119,7 @@ export function DynamicModelSelector({
       groups.get(g)!.push(m)
     }
     return groups
-  }, [data, search])
+  }, [groupScopedModels, search, freeOnly])
 
   const toggleGroup = (group: string) => {
     setCollapsedGroups(prev => {
@@ -163,7 +188,7 @@ export function DynamicModelSelector({
             className="text-xs font-semibold text-primary hover:underline flex items-center gap-1.5 disabled:opacity-50"
           >
             {loadingFull && <Loader2 className="h-3 w-3 animate-spin" />}
-            Search full Pi model catalog
+            {groupFilter ? `Search full ${groupFilter} catalog` : 'Search full model catalog'}
           </button>
         </div>
       )}
@@ -174,11 +199,24 @@ export function DynamicModelSelector({
           type="text"
           value={search}
           onChange={e => setSearch(e.target.value)}
-          placeholder={`Search ${data.models.length} models...`}
+          placeholder={`Search ${groupScopedModels.length} models...`}
           disabled={disabled}
           className="w-full pl-8 pr-3 py-2 text-sm bg-background border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50"
         />
       </div>
+
+      {hasFreeModels && (
+        <label className="flex items-center gap-2 text-xs text-muted-foreground select-none">
+          <input
+            type="checkbox"
+            checked={freeOnly}
+            onChange={e => setFreeOnly(e.target.checked)}
+            disabled={disabled}
+            className="h-3.5 w-3.5 rounded border-border"
+          />
+          Free only
+        </label>
+      )}
 
       <div className="max-h-64 overflow-y-auto border border-border rounded-md divide-y divide-border">
         {grouped.size === 0 && (
@@ -187,21 +225,23 @@ export function DynamicModelSelector({
           </div>
         )}
         {Array.from(grouped.entries()).map(([group, models]) => {
-          const isCollapsed = collapsedGroups.has(group)
+          const isCollapsed = !groupFilter && collapsedGroups.has(group)
           return (
             <div key={group}>
-              <button
-                type="button"
-                onClick={() => toggleGroup(group)}
-                className="w-full flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-muted-foreground bg-muted/30 hover:bg-muted/50 transition-colors"
-              >
-                {isCollapsed
-                  ? <ChevronRight className="h-3 w-3" />
-                  : <ChevronDown className="h-3 w-3" />
-                }
-                {group}
-                <span className="ml-auto text-[10px] font-normal">{models.length}</span>
-              </button>
+              {!groupFilter && (
+                <button
+                  type="button"
+                  onClick={() => toggleGroup(group)}
+                  className="w-full flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-muted-foreground bg-muted/30 hover:bg-muted/50 transition-colors"
+                >
+                  {isCollapsed
+                    ? <ChevronRight className="h-3 w-3" />
+                    : <ChevronDown className="h-3 w-3" />
+                  }
+                  {group}
+                  <span className="ml-auto text-[10px] font-normal">{models.length}</span>
+                </button>
+              )}
               {!isCollapsed && models.map(model => {
                 const isSelected = model.model_id === selectedModelId
                 return (
@@ -221,6 +261,9 @@ export function DynamicModelSelector({
                       <span className="truncate">{model.model_name || model.model_id}</span>
                       {model.is_default && (
                         <span className="shrink-0 text-[10px] font-medium bg-primary/10 text-primary px-1.5 py-0.5 rounded">default</span>
+                      )}
+                      {model.is_free && (
+                        <span className="shrink-0 text-[10px] font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 px-1.5 py-0.5 rounded">Free</span>
                       )}
                     </div>
                     {model.context_window ? (

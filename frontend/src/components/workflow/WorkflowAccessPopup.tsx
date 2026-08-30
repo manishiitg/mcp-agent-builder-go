@@ -8,11 +8,10 @@ interface WorkflowAccessPopupProps {
   onClose: () => void
 }
 
-type AccessLevel = 'read' | 'write' | 'owner'
+type AccessLevel = 'write' | 'owner'
 
 const ACCESS_LEVELS: { value: AccessLevel; label: string; hint: string }[] = [
-  { value: 'read', label: 'Read', hint: 'Run mode only — no builder/optimizer.' },
-  { value: 'write', label: 'Write', hint: 'Run, builder, and optimizer modes.' },
+  { value: 'write', label: 'Write', hint: 'Full access to run and build workflows.' },
   { value: 'owner', label: 'Owner', hint: 'Write + can manage other users’ access.' },
 ]
 
@@ -21,7 +20,7 @@ const WorkflowAccessPopup: React.FC<WorkflowAccessPopupProps> = ({ isOpen, onClo
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [newUserKey, setNewUserKey] = useState('')
-  const [newAccess, setNewAccess] = useState<AccessLevel>('read')
+  const [newAccess, setNewAccess] = useState<AccessLevel>('write')
   const [submitting, setSubmitting] = useState(false)
   const [busyKey, setBusyKey] = useState<string | null>(null)
 
@@ -50,7 +49,7 @@ const WorkflowAccessPopup: React.FC<WorkflowAccessPopupProps> = ({ isOpen, onClo
     try {
       await authApi.upsertWorkflowUserPermission(key, newAccess)
       setNewUserKey('')
-      setNewAccess('read')
+      setNewAccess('write')
       await refresh()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))

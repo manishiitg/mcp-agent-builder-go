@@ -2,11 +2,12 @@ import { useEffect, useRef, useState, type ComponentType } from 'react'
 import { Check, ChevronDown } from 'lucide-react'
 import { RunloopMark } from './branding/RunloopLogo'
 import { VideoStudioMark } from '../products/video-studio/VideoStudioMark'
-import { ChiefOfStaffMark } from '../products/chief-of-staff/ChiefOfStaffMark'
 import { FinanceMark } from '../products/finance/FinanceMark'
 import { DominionMark } from '../products/dominion/DominionMark'
 import { useProductSurfaceStore, type ProductSurface } from '../stores/useProductSurfaceStore'
 import { useAppStore } from '../stores/useAppStore'
+import { useAuthStore } from '../stores/useAuthStore'
+import { isEnabledProductSurface, intersectAllowedProductSurfaces } from '../products/productSurfaceConfig'
 import { cn } from '../lib/utils'
 
 type ProductSurfaceSwitcherProps = {
@@ -14,9 +15,8 @@ type ProductSurfaceSwitcherProps = {
   version?: string
 }
 
-// RunloopMark/VideoStudioMark render <svg>, ChiefOfStaffMark renders a <div>
-// badge (see its own comment) -- this is the common shape all three actually
-// need, not svg-specific props.
+// Product marks can render any element; callers only rely on the common
+// className/title surface, not SVG-specific props.
 type ProductMarkComponent = ComponentType<{ className?: string; title?: string }>
 
 const products: Array<{
@@ -27,17 +27,24 @@ const products: Array<{
 }> = [
   { id: 'agentworks', label: 'AgentWorks', description: 'Automation and workflows', icon: RunloopMark },
   { id: 'video-studio', label: 'Video Studio', description: 'Projects and video production', icon: VideoStudioMark },
-  { id: 'chief-of-staff', label: 'Chief of Staff', description: 'Your operations hub across automations', icon: ChiefOfStaffMark },
   { id: 'finance', label: 'Finance', description: 'Consolidated bank, investment, and tax view', icon: FinanceMark },
   { id: 'dominion', label: 'Dominion', description: 'Paper-trading watchlist and portfolio', icon: DominionMark },
 ]
 
+export function visibleProductSurfaceIDs(allowedProducts?: string[] | null): ProductSurface[] {
+  const deploymentSurfaces = products.filter((product) => isEnabledProductSurface(product.id)).map((product) => product.id)
+  return intersectAllowedProductSurfaces(deploymentSurfaces, allowedProducts)
+}
+
 export function ProductSurfaceSwitcher({ className, version }: ProductSurfaceSwitcherProps) {
   const productSurface = useProductSurfaceStore((state) => state.productSurface)
   const setProductSurface = useProductSurfaceStore((state) => state.setProductSurface)
+  const allowedProducts = useAuthStore((state) => state.user?.allowed_products)
   const [open, setOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
-  const currentProduct = products.find((product) => product.id === productSurface) ?? products[0]
+  const visibleProductIDs = visibleProductSurfaceIDs(allowedProducts)
+  const visibleProducts = products.filter((product) => visibleProductIDs.includes(product.id))
+  const currentProduct = visibleProducts.find((product) => product.id === productSurface) ?? visibleProducts[0] ?? products[0]
   const CurrentIcon = currentProduct.icon
 
   const activateProduct = (product: ProductSurface) => {
@@ -45,8 +52,7 @@ export function ProductSurfaceSwitcher({ className, version }: ProductSurfaceSwi
     setProductSurface(product)
     if (product !== 'agentworks') return
 
-    // AgentWorks means Automations now -- Chief of Staff is its own
-    // top-level product surface, not a lane restored inside this one.
+    // AgentWorks opens the automation overview; parked products are not exposed here.
     const appStore = useAppStore.getState()
     appStore.setModeCategory('workflow')
     appStore.setShowWorkflowsOverview(true)
@@ -88,7 +94,7 @@ export function ProductSurfaceSwitcher({ className, version }: ProductSurfaceSwi
       </button>
       {open ? (
         <div role="menu" aria-label="Products" className="absolute left-0 top-[calc(100%+8px)] z-50 w-64 rounded-2xl border border-slate-200 bg-white p-1.5 shadow-2xl shadow-slate-950/15 dark:border-slate-700 dark:bg-slate-900">
-          {products.map((product) => {
+          {visibleProducts.map((product) => {
             const active = productSurface === product.id
             const Icon = product.icon
             return (

@@ -112,7 +112,10 @@ func sanitizeWorkshopAgentIdentityPart(value string) string {
 }
 
 func newWorkshopStageAgentIdentity(name string) string {
-	return fmt.Sprintf("%s-%d-%d", sanitizeWorkshopAgentIdentityPart(name), time.Now().UnixNano(), workshopStageAgentIdentityCounter.Add(1))
+	// Keep every workshop stage identity stable and readable in durable
+	// background-agent logs and tool-session diagnostics.
+	prefix := time.Now().UTC().Format("2006-01-02T15-04-05.000Z")
+	return fmt.Sprintf("%s_%s-%d", prefix, sanitizeWorkshopAgentIdentityPart(name), workshopStageAgentIdentityCounter.Add(1))
 }
 
 const maxBackgroundMessageSequenceItems = 12
@@ -631,7 +634,7 @@ func (iwm *InteractiveWorkshopManager) enrichQueryForComplexStep(
 	case StepTypeTodoTask:
 		logFileName = "todo-task-execution.json"
 		stepTypeName = "Todo Task"
-	case StepTypeRouting:
+	case StepTypeRouting, StepTypeBranch:
 		logFileName = "orchestration-execution.json"
 		stepTypeName = "Orchestration"
 	default:
@@ -1439,11 +1442,12 @@ func GetToolsForWorkshopMode(mode string) []string {
 	// Includes workspace, shell, virtual tools, and human interaction/notification.
 	system := []string{
 		// Workspace advanced tools. Basic workspace file tools are intentionally
-		// not in the central workspace registry; use shell/diff/image/media tools.
+		// not in the central workspace registry; use the active shell/diff/text/search tools.
 		"execute_shell_command", "diff_patch_workspace_file",
-		"read_image", "generate_text_llm", "search_web_llm",
-		"query_workflow_db", "mutate_workflow_db",
-		"image_gen", "image_edit", "generate_video", "text_to_speech", "speech_to_text", "generate_music",
+		"generate_text_llm", "search_web_llm",
+		"query_workflow_db", "mutate_workflow_db", "apply_workflow_db_migration",
+		// PLAT-184. This workflow's own per-workspace cost ledger.
+		"query_workflow_costs",
 		// Secret management tools. Global secrets are read-only; workflow/user
 		// encrypted stores are writable when the corresponding tools are registered.
 		"list_secrets", "set_workflow_secret", "delete_workflow_secret", "set_user_secret", "delete_user_secret",
@@ -1471,7 +1475,7 @@ func GetToolsForWorkshopMode(mode string) []string {
 
 	// Read-only info tools — safe in all modes
 	readOnly := []string{
-		"get_step_prompts", "get_workflow_config", "get_llm_config", "get_cost_summary",
+		"get_step_prompts", "get_plan_prompt_health", "get_workflow_config", "request_workflow_folder_access", "get_llm_config", "get_cost_summary",
 	}
 
 	// Workshop execution tools
@@ -1494,14 +1498,16 @@ func GetToolsForWorkshopMode(mode string) []string {
 	// Plan modification tools
 	planMod := []string{
 		"create_plan",
+		"validate_plan_change",
 		"migrate_message_sequence_code_items",
-		"add_scripted_step", "add_message_sequence_step", "add_routing_step",
+		"add_scripted_step", "add_message_sequence_step", "add_routing_step", "add_branch_step",
 		"add_human_input_step", "add_todo_task_step", "add_todo_task_route",
-		"update_scripted_step", "update_message_sequence_step", "update_routing_step",
+		"update_scripted_step", "update_message_sequence_step", "update_routing_step", "update_branch_step",
 		"update_human_input_step", "update_todo_task_step", "update_todo_task_route",
 		"delete_todo_task_route", "delete_plan_steps", "cleanup_orphan_step_configs",
 		"update_validation_schema",
 		"update_evaluation_plan",
+		"record_plan_drift_review",
 	}
 
 	// Variable & config tools
@@ -1548,8 +1554,6 @@ func GetToolsForWorkshopMode(mode string) []string {
 		"get_pulse_state",
 		"record_pulse_finding",
 		"merge_pulse_issues",
-		"record_pulse_verification",
-		"complete_pulse_review",
 		"record_pulse_worklist",
 		"record_pulse_result",
 		"record_pulse_impact",
@@ -1636,7 +1640,7 @@ func (iwm *InteractiveWorkshopManager) registerMarkChangelogArtifactReviewedTool
 	}
 	return mcpAgent.RegisterCustomTool(
 		"mark_changelog_artifact_reviewed",
-		"Mark planning/changelog entries as fully inspected after the parent Pulse/workshop agent has recorded the Artifact Review in builder/improve.html. Generic read-only reviewers must only propose exact marks and must not call this tool. This is the only supported way to set artifact_review.done=true; do not edit changelog JSON directly.",
+		"Mark planning/changelog entries as fully inspected after every dependency surface has an evidence-backed disposition. Generic read-only reviewers must only propose exact marks and must not call this tool. This is the only supported way to set artifact_review.done=true; do not edit changelog JSON directly.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -1655,6 +1659,7 @@ func (iwm *InteractiveWorkshopManager) registerMarkChangelogArtifactReviewedTool
 								"description": "Zero-based indexes in the file's entries array that were fully inspected or cursor-backfilled.",
 								"items":       map[string]interface{}{"type": "integer"},
 							},
+							"surface_reviews": planDependencySurfaceReviewSchema(),
 						},
 						"required": []string{"file", "entry_indexes"},
 					},
@@ -1737,6 +1742,7 @@ func (iwm *InteractiveWorkshopManager) markChangelogArtifactReviewed(ctx context
 	reportEntryID := strings.TrimSpace(asString(args["report_entry_id"]))
 
 	marksByFile := map[string]map[int]bool{}
+	reviewsByFile := map[string]map[int]map[string]PlanDependencySurfaceReview{}
 	for _, raw := range rawMarks {
 		obj, ok := raw.(map[string]interface{})
 		if !ok {
@@ -1752,6 +1758,19 @@ func (iwm *InteractiveWorkshopManager) markChangelogArtifactReviewed(ctx context
 		}
 		if marksByFile[file] == nil {
 			marksByFile[file] = map[int]bool{}
+		}
+		var surfaceReviews map[string]PlanDependencySurfaceReview
+		if result == "cursor-backfill" && obj["surface_reviews"] == nil {
+			surfaceReviews = cursorBackfillSurfaceReviews()
+		} else {
+			var reviewErr error
+			surfaceReviews, reviewErr = parsePlanDependencySurfaceReviews(obj["surface_reviews"])
+			if reviewErr != nil {
+				return fmt.Sprintf("invalid dependency review for %s: %v", file, reviewErr), nil
+			}
+		}
+		if reviewsByFile[file] == nil {
+			reviewsByFile[file] = map[int]map[string]PlanDependencySurfaceReview{}
 		}
 		for _, rawIndex := range rawIndexes {
 			var idx int
@@ -1770,6 +1789,7 @@ func (iwm *InteractiveWorkshopManager) markChangelogArtifactReviewed(ctx context
 				return fmt.Sprintf("entry index %d for %s is negative", idx, file), nil
 			}
 			marksByFile[file][idx] = true
+			reviewsByFile[file][idx] = surfaceReviews
 		}
 	}
 
@@ -1800,6 +1820,7 @@ func (iwm *InteractiveWorkshopManager) markChangelogArtifactReviewed(ctx context
 				ReviewedBy:    "workflow_builder",
 				Result:        result,
 				ReportEntryID: reportEntryID,
+				Surfaces:      reviewsByFile[file][idx],
 			}
 			totalMarked++
 		}
@@ -1824,13 +1845,15 @@ func (iwm *InteractiveWorkshopManager) markChangelogArtifactReviewed(ctx context
 // canonicalWorkshopMode keeps this package aligned with server-side chat-history
 // normalization. Legacy editable-mode names all mean the unified Workshop mode.
 func canonicalWorkshopMode(mode string) string {
-	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "workshop", "builder", "optimizer", "reporting", "eval", "output":
-		return "workshop"
+	trimmed := strings.ToLower(strings.TrimSpace(mode))
+	if trimmed == "" {
+		return ""
+	}
+	switch trimmed {
 	case "run", "ask", "debugger", "runner":
 		return "run"
 	default:
-		return ""
+		return "workshop"
 	}
 }
 
@@ -1968,6 +1991,7 @@ func (iwm *InteractiveWorkshopManager) InteractiveWorkshopOnly(ctx context.Conte
 	// The complete media/tool contract is attached in builder-reference and
 	// read through mcpagent on every transport.
 	workspaceToolsInstructions := instructions.GetSpecialWorkspaceToolsPointer()
+	workspaceToolsInstructions += "\n\n" + workflowFolderAccessBuilderPrompt(workspacePath)
 
 	templateVars := map[string]string{
 		"WorkspacePath":                     workspacePath,
@@ -2027,7 +2051,7 @@ func workshopWritePaths(workspacePath string) []string {
 }
 
 func (iwm *InteractiveWorkshopManager) setupWorkshopToolAgentSession(agentKind string, readPaths []string, writePaths []string) string {
-	sessionID := fmt.Sprintf("workshop-%s-%d", agentKind, time.Now().UnixNano())
+	sessionID := newWorkshopStageAgentIdentity(agentKind)
 	workspacePath := strings.TrimSpace(iwm.controller.GetWorkspacePath())
 
 	common.SetSessionFolderGuard(sessionID, readPaths, writePaths)
@@ -2041,7 +2065,7 @@ func (iwm *InteractiveWorkshopManager) setupWorkshopToolAgentSession(agentKind s
 	if len(blockedWrites) > 0 {
 		common.SetSessionFolderGuardBlockedWritePaths(sessionID, blockedWrites)
 	}
-	iwm.controller.grantSessionCDPHostDownloadsReadOnly(sessionID)
+	iwm.controller.grantSessionCDPHostDownloadsReadWrite(sessionID)
 	if workspacePath != "" {
 		common.SetSessionWorkingDir(sessionID, workspacePath)
 	}
@@ -2119,7 +2143,9 @@ func (iwm *InteractiveWorkshopManager) configureWorkshopToolAgentSession(config 
 // that identity — Pulse write authority is keyed by session id — need the real
 // value, which is derived here and is not the agentKind passed in.
 func (iwm *InteractiveWorkshopManager) configureWorkshopToolAgentSessionWithID(config *agents.OrchestratorAgentConfig, agentKind string, readPaths []string, writePaths []string) (string, func()) {
+	readPaths, writePaths, readOnlyPaths, folderEnv := appendWorkflowFolderAccess(iwm.controller.GetWorkspacePath(), readPaths, writePaths)
 	toolAgentSessionID := iwm.setupWorkshopToolAgentSession(agentKind, readPaths, writePaths)
+	configureWorkflowFolderAccessSession(toolAgentSessionID, iwm.controller.GetWorkspacePath(), readOnlyPaths, folderEnv)
 	config.MCPSessionID = toolAgentSessionID
 	config.FolderGuardReadPaths = readPaths
 	config.FolderGuardWritePaths = writePaths
@@ -2152,6 +2178,8 @@ func (iwm *InteractiveWorkshopManager) createInteractiveWorkshopAgent(ctx contex
 		"Chats", // Allow reading chat history for context
 	}
 	writePaths := workshopWritePaths(workspacePath)
+	readPaths, writePaths, readOnlyPaths, folderEnv := appendWorkflowFolderAccess(workspacePath, readPaths, writePaths)
+	readPaths, writePaths = iwm.controller.appendCDPHostDownloadsPaths(readPaths, writePaths)
 
 	iwm.controller.SetWorkspacePathForFolderGuard(readPaths, writePaths)
 	iwm.controller.GetLogger().Info(fmt.Sprintf("🔧 Workshop folder guard - Read: %v, Write: %v", readPaths, writePaths))
@@ -2200,6 +2228,8 @@ func (iwm *InteractiveWorkshopManager) createInteractiveWorkshopAgent(ctx contex
 	if blockedWrites := workshopBlockedWritePaths(workspacePath, writePaths); len(blockedWrites) > 0 {
 		common.SetSessionFolderGuardBlockedWritePaths(config.MCPSessionID, blockedWrites)
 	}
+	iwm.controller.grantSessionCDPHostDownloadsReadWrite(config.MCPSessionID)
+	configureWorkflowFolderAccessSession(config.MCPSessionID, workspacePath, readOnlyPaths, folderEnv)
 	config.FolderGuardReadPaths = readPaths
 	config.FolderGuardWritePaths = writePaths
 
@@ -2387,7 +2417,7 @@ Run mode is the user-facing runtime surface, including Slack and WhatsApp routes
 1. **Do direct runtime work** when no workflow run is needed: use available tools plus workflow context to answer, look up, analyze, summarize, or take a small operational action. Before acting, ground in the generated skill, KB, and db state: `+"`learnings/_global/SKILL.md`"+` for HOW to operate, `+"`knowledgebase/context/`"+` and targeted `+"`knowledgebase/notes/`"+` for business context, and `+"`db/`"+` plus `+"`db/README.md`"+` for durable facts/results.
 2. **Run the workflow** for one configured group at a time with `+"`run_full_workflow(group_name=\"...\")`"+`.
 3. **Run a specific step or orphan utility step** with `+"`execute_step(step_id=\"...\", group_name=\"...\")`"+` when the user asks for a targeted action, retry, data check, or one-off investigation.
-4. **Answer user questions** from current workflow state, latest run outputs, `+"`db/db.sqlite`"+` (query with `+"`query_workflow_db`"+`), `+"`db/assets/`"+` references, report data, eval reports, Ops Review results, KB context/notes, learnings, saved scripts, and prior step results.
+4. **Answer user questions** from current workflow state, latest run outputs, `+"`db/db.sqlite`"+` (query with `+"`query_workflow_db`"+`), this workflow's own per-run/per-step/per-item cost and token breakdown (query with `+"`query_workflow_costs`"+`, PLAT-184 — not the same store as the global human-facing Cost Analysis dashboard), `+"`db/assets/`"+` references, report data, eval reports, Ops Review results, KB context/notes, learnings, saved scripts, and prior step results.
 5. **Inspect/debug execution** with `+"`list_executions`"+`, `+"`query_step`"+`, `+"`debug_step`"+`, and read-only review tools. Explain the issue and next action; do not mutate plan/config/learnings/KB/report/eval files in Run mode.
 
 ### Runtime context access
@@ -2519,13 +2549,13 @@ This is the one-line-per-category map. For full signatures, parameters, when-to-
 {{if or (eq .WorkshopMode "workshop") (eq .WorkshopMode "run")}}
 - **Step execution & inspection**: `+"`execute_step`"+`, `+"`query_step`"+`, `+"`send_step_message`"+`, `+"`debug_step`"+`, `+"`list_executions`"+`, `+"`stop_step`"+`, `+"`stop_all_executions`"+`, `+"`run_in_background`"+`, `+"`run_full_workflow`"+`. {{if eq .WorkshopMode "workshop"}}Workshop also exposes `+"`execute_step(..., fast_path_only=true)`"+` for scripted main.py fast-path testing.{{end}}
 {{end}}{{if eq .WorkshopMode "workshop"}}
-- **Step config & analysis**: `+"`update_step_config`"+`, read-only improve/review tools, `+"`review_workflow_timing`"+`, `+"`review_workflow_costs`"+`, and `+"`get_cost_summary`"+`. Objective + success criteria live in `+"`soul/soul.md`"+`. Pulse uses ordinary `+"`run_in_background`"+` agents: Engineering/Ops can share one executor message sequence, while Strategy and Goal remain independent. Strategy changes use normal plan tools only after approval or during an explicit bounded manual request.
+- **Step config & analysis**: `+"`update_step_config`"+`, read-only improve/review tools, `+"`review_workflow_timing`"+`, `+"`review_workflow_costs`"+`, and `+"`get_cost_summary`"+`. Objective + success criteria live in `+"`soul/soul.md`"+`. Scheduled Pulse uses ordinary `+"`run_in_background`"+` agents: Technical Maintenance retains one executor that reviews and applies a bounded safe repair in the same task, while Strategic Review remains a separate read-only task. Strategy changes use normal plan tools only after approval or during an explicit bounded manual request.
 - **Strategy review & decisions**: use the guided `+"`/goal-advisor`"+` review in the current conversation. Use `+"`create_human_input_request`"+` for durable approval/clarification cards; scheduled Pulse renders them in `+"`builder/improve.html`"+`.
 {{end}}
 - **Read-only info**: `+"`get_step_prompts`"+`, `+"`get_workflow_config`"+`, `+"`get_llm_config`"+`{{if eq .WorkshopMode "workshop"}}, `+"`get_workflow_command_guidance(kind=\"review-artifact-drift\")`"+`{{else}}. Artifact drift reviews belong in Workshop — switch modes and run `+"`/review-artifact-drift`"+` if needed{{end}}.
 {{if eq .WorkshopMode "workshop"}}
 - **Plan modification**: `+"`create_plan`"+`, `+"`add_<type>_step`"+`, `+"`update_<type>_step`"+`, `+"`delete_plan_steps`"+`, `+"`cleanup_orphan_step_configs`"+`, todo-task route tools, `+"`update_validation_schema`"+`.
-- **Variables & config**: `+"`update_variable`"+`, `+"`add_group`"+`/`+"`update_group`"+`/`+"`delete_group`"+`, `+"`update_workflow_config`"+`. Use `+"`update_workflow_config`"+` for workflow MCP servers, workflow-level MCP tool allowlists, selected skills, selected secrets, the one-way Slack webhook secret reference, browser_mode, KB lock, run retention, the per-run monitor (`+"`post_run_monitor`"+`), and activation of an owner-approved advisor specialization decision. Do NOT edit `+"`workflow.json`"+` manually.
+- **Variables & config**: `+"`update_variable`"+`, `+"`add_group`"+`/`+"`update_group`"+`/`+"`delete_group`"+`, `+"`update_workflow_config`"+`. Use `+"`update_workflow_config`"+` for workflow MCP servers, workflow-level MCP tool allowlists, selected skills, selected secrets, the one-way Slack webhook secret reference, browser_mode, KB lock, run retention, and activation of an owner-approved advisor specialization decision. Recurring Pulse is configured only through an enabled `+"`pulse_review_only`"+` schedule. Do NOT edit `+"`workflow.json`"+` manually.
 - **Schedule management**: `+"`list_schedules`"+`, `+"`create_schedule`"+`, `+"`create_calendar_schedule`"+`, `+"`update_schedule`"+`, `+"`delete_schedule`"+`, `+"`trigger_schedule`"+`, `+"`get_schedule_runs`"+`. Cron / message-authoring rules, normal Run schedules plus Pulse, the `+"`/pulse-setup`"+` setup path, and unattended-message discipline — all live in the `+"`workflow-tools`"+` ref doc. Workflow schedules always use the workshop path; do not create direct `+"`mode=\"workflow\"`"+` schedules. **Whenever you create a recurring schedule, also pair it with a backup** so unattended runs persist their state off-box — see `+"`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/backup-strategy.md\"}])`"+`.
 {{end}}
 - **Shell & discovery**: `+"`execute_shell_command`"+`, `+"`diff_patch_workspace_file`"+`, `+"`read_image`"+`, `+"`generate_text_llm`"+`, `+"`search_web_llm`"+`.
@@ -2944,7 +2974,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				},
 				"group_name": map[string]interface{}{
 					"type":        "string",
-					"description": "Variable group ID (e.g., 'group-1', 'saurabh'). Required. Read variables/variables.json to see available groups.",
+					"description": "Optional variable group ID. Omit it when this product has one default execution group; otherwise read variables/variables.json and provide a group name.",
 				},
 				"instructions": map[string]interface{}{
 					"type":        "string",
@@ -2968,7 +2998,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					"description": "Workshop mode only. If true, run ONLY the saved learnings/{step-id}/main.py script with no LLM fallback. Fails if no saved script exists, the step is not in scripted mode, or the current workshop mode is Run. Use this to quickly test scripted main.py patches.",
 				},
 			},
-			"required": []string{"step_id", "group_name"},
+			"required": []string{"step_id"},
 		},
 		func(ctx context.Context, args map[string]interface{}) (string, error) {
 			stepIDRaw, ok := args["step_id"]
@@ -2983,23 +3013,22 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			// Extract group_name and other options
 			groupNameRaw, _ := args["group_name"]
 			groupName, _ := groupNameRaw.(string)
-			if groupName == "" {
-				return "group_name is required. Read variables/variables.json to see available groups.", nil
-			}
 
 			// Fallback to session-level group from toolbar selection
 			if groupName == "" && len(iwm.controller.enabledGroupNames) > 0 {
 				groupName = iwm.controller.enabledGroupNames[0]
 			}
 
-			// Validate a group is available — cannot run steps without one
+			// Resolve an execution group when the workspace defines them. Products
+			// with no user-visible variables may omit group_name and supply only a
+			// run folder; this preserves a stable execution scope without forcing a
+			// user to choose workflow machinery.
 			if groupName == "" {
 				iwm.refreshVariablesManifest(ctx)
-				if iwm.controller.variablesManifest == nil || len(iwm.controller.variablesManifest.Groups) == 0 {
-					return "No variable groups exist. Create a group first using add_group before running steps.", nil
+				if iwm.controller.variablesManifest != nil && len(iwm.controller.variablesManifest.Groups) > 0 {
+					// Auto-select the first available group.
+					groupName = iwm.controller.variablesManifest.Groups[0].Name
 				}
-				// Auto-select the first available group
-				groupName = iwm.controller.variablesManifest.Groups[0].Name
 			}
 
 			iteration := "iteration-0"
@@ -3315,7 +3344,23 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				groupInfo = fmt.Sprintf(", group=%q", groupName)
 			}
 			logger.Info(fmt.Sprintf("🚀 Workshop: step %q started in background, execution_id=%q%s, fast_path_only=%v", stepID, execID, groupInfo, fastPathOnly))
-			return fmt.Sprintf("Step %q started in background.\nexecution_id: %q\nYou will be automatically notified when it completes. End the current agent turn now instead of polling. Use query_step(step_id=%q) only if the user explicitly requests a live status check. Use send_step_message(execution_id=%q, message=...) only for a necessary live correction while an agent turn is active.", stepID, execID, stepID, execID), nil
+			// Surface the resolved run_folder/group explicitly. group_name is
+			// optional on this tool and silently falls back to the first
+			// enabled/manifest group when omitted — without this line, an
+			// omitted or mistyped group_name silently lands the run in a
+			// folder the caller never confirmed, discoverable only by reading
+			// runs/ directly (found live: a step run this way was invisible
+			// in the Execution Logs UI because its dropdown never listed the
+			// folder the run actually used).
+			displayGroupName := resolvedGroupName
+			if displayGroupName == "" {
+				displayGroupName = groupName
+			}
+			runFolderNotice := fmt.Sprintf("\nrun_folder: %q", runFolder)
+			if displayGroupName == "" {
+				runFolderNotice += " (no group resolved — this workspace may have no defined variable groups)"
+			}
+			return fmt.Sprintf("Step %q started in background.\nexecution_id: %q%s\nYou will be automatically notified when it completes. End the current agent turn now instead of polling. Use query_step(step_id=%q) only if the user explicitly requests a live status check. Use send_step_message(execution_id=%q, message=...) only for a necessary live correction while an agent turn is active.", stepID, execID, runFolderNotice, stepID, execID), nil
 		},
 		"workflow",
 	); err != nil {
@@ -3325,7 +3370,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// Tool: run_in_background — spawn independent background agent (not tied to a workflow step)
 	if err := mcpAgent.RegisterCustomTool(
 		"run_in_background",
-		"Spawn an independent background agent to run a task with the same tools and attached skills as the workflow builder. Returns an execution_id immediately. You will be notified when it completes. Use this to offload context-heavy work or run tasks in parallel. message_sequence is optional: use it only when one executor needs ordered follow-up turns in the same conversation. Every supplied item needs only a non-empty message, for example [{\"message\":\"Review the evidence.\"},{\"message\":\"Apply and verify safe fixes.\"}]. Optional id/title fields are generated or used only for diagnostics.\n\nagent_type controls the agent model:\n- \"executor\" (default): single-pass execution agent — best for focused, well-defined tasks\n- \"orchestrator\": todo task orchestrator — best for complex multi-step tasks that benefit from task management and sub-agent delegation. Sub-agent completions also auto-notify you.",
+		"Spawn an independent background agent to run a task with the same tools and attached skills as the workflow builder. Returns an execution_id immediately. You will be notified when it completes. Use this to offload context-heavy work or run tasks in parallel. message_sequence is optional: use it only when one executor needs ordered follow-up turns in the same conversation. Every supplied item needs only a non-empty message, for example [{\"message\":\"Review the evidence.\"},{\"message\":\"Apply and verify safe fixes.\"}]. Optional id/title fields are generated or used only for diagnostics. completion_mode=\"present_result\" marks the completion as presentation-only: the parent must surface the returned result without re-reading tools or independently revalidating it.\n\nagent_type controls the agent model:\n- \"executor\" (default): single-pass execution agent — best for focused, well-defined tasks\n- \"orchestrator\": todo task orchestrator — best for complex multi-step tasks that benefit from task management and sub-agent delegation. Sub-agent completions also auto-notify you.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -3342,6 +3387,11 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					"type":        "string",
 					"enum":        []string{"executor", "orchestrator"},
 					"description": "executor (default): single-pass agent. orchestrator: todo task orchestrator with sub-agent delegation.",
+				},
+				"completion_mode": map[string]interface{}{
+					"type":        "string",
+					"enum":        []string{"continue", "present_result"},
+					"description": "continue (default) lets the parent continue normal work. present_result makes completion presentation-only: surface the child result without tool calls or state revalidation.",
 				},
 			},
 			"required": []string{"name", "instruction"},
@@ -3376,7 +3426,13 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			if agentType == "orchestrator" && len(messageSequence) > 0 {
 				return "", fmt.Errorf("message_sequence is supported by executor background agents; orchestrator agents already manage their own dynamic multi-turn task flow")
 			}
-
+			completionMode := "continue"
+			if value, ok := args["completion_mode"].(string); ok && strings.TrimSpace(value) != "" {
+				completionMode = strings.TrimSpace(value)
+			}
+			if completionMode != "continue" && completionMode != "present_result" {
+				return "", fmt.Errorf("completion_mode must be continue or present_result")
+			}
 			// Create slug from name for execution ID
 			nameSlug := strings.ToLower(strings.ReplaceAll(name, " ", "-"))
 			// Trim to reasonable length
@@ -3412,6 +3468,9 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					ParentExecutionID: currentWorkshopParentExecutionID(execCtx),
 					Name:              name,
 					Cancel:            cancel,
+					Metadata: map[string]string{
+						"completion_mode": completionMode,
+					},
 				})
 			}
 			execCtx = virtualtools.WithBackgroundAgentID(execCtx, execID)
@@ -3481,7 +3540,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			}()
 
 			logger.Info(fmt.Sprintf("🚀 Workshop: background task %q started (type=%s, inherited_skills=%d), execution_id=%q", name, agentType, len(inheritedSkills), execID))
-			return fmt.Sprintf("Background task %q started (type=%s).\nexecution_id: %q\nYou will be automatically notified when it completes.", name, agentType, execID), nil
+			return fmt.Sprintf("Background task %q started (type=%s, completion_mode=%s).\nexecution_id: %q\nYou will be automatically notified when it completes.", name, agentType, completionMode, execID), nil
 		},
 		"workflow",
 	); err != nil {
@@ -4139,7 +4198,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				"knowledgebase_access": map[string]interface{}{
 					"type":        "string",
 					"enum":        []string{"read", "write", "read-write", "none"},
-					"description": "Access mode for this step against knowledgebase/ (per-topic notes/ + notes/_index.json registry). Defaults to 'none' — KB is opt-in per step. 'read' — may consume existing narrative (read notes via index-first then selective cat); 'write' / 'read-write' — may contribute: the step agent writes notes/ inline with diff_patch_workspace_file and closes with a self-review turn against its knowledgebase_contribution; 'none' — no access. Granting write without a knowledgebase_contribution results in no KB writes at all. Omit to keep the default.",
+					"description": knowledgebaseAccessDescription,
 				},
 				"learnings_access": map[string]interface{}{
 					"type":        "string",
@@ -4857,7 +4916,38 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 		logger.Warn(fmt.Sprintf("⚠️ Failed to register update_step_config tool: %v", err))
 	}
 
-	// Tool 5: get_step_prompts — read saved system prompt + user message for a step run
+	// Tool 5: get_plan_prompt_health — compact, deterministic size/duplication
+	// metrics for authored step descriptions. This avoids pasting a whole plan into
+	// a reviewer prompt just to establish whether prompt-contract bloat exists.
+	if err := mcpAgent.RegisterCustomTool(
+		"get_plan_prompt_health",
+		"Measure authored plan-description health without dumping the plan: per-step character counts, 5k/10k/20k thresholds, and long verbatim duplicate paragraphs. This is an objective review signal, not permission to rewrite a workflow automatically.",
+		map[string]interface{}{
+			"type":       "object",
+			"properties": map[string]interface{}{},
+		},
+		func(ctx context.Context, _ map[string]interface{}) (string, error) {
+			if iwm.controller.approvedPlan == nil {
+				if err := iwm.controller.LoadPlanForWorkshop(ctx); err != nil {
+					return "", fmt.Errorf("load plan for prompt-health review: %w", err)
+				}
+			}
+			if iwm.controller.approvedPlan == nil {
+				return "no plan loaded; ensure planning/plan.json exists", nil
+			}
+			report := BuildPromptHealthReport(iwm.controller.approvedPlan.Steps)
+			encoded, err := json.MarshalIndent(report, "", "  ")
+			if err != nil {
+				return "", fmt.Errorf("encode prompt-health report: %w", err)
+			}
+			return string(encoded), nil
+		},
+		"workflow",
+	); err != nil {
+		logger.Warn(fmt.Sprintf("⚠️ Failed to register get_plan_prompt_health tool: %v", err))
+	}
+
+	// Tool 6: get_step_prompts — read saved system prompt + user message for a step run
 	if err := mcpAgent.RegisterCustomTool(
 		"get_step_prompts",
 		"Get the system prompt and user message for a step. Works both during execution (prompts saved at start) and after completion. Useful for debugging what instructions the agent received. For sub-agent steps, pass the inner step ID directly (e.g., 'step-icici-login') or use route_id with the parent step.",
@@ -5592,7 +5682,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// Tool: get_llm_config — show current LLM configuration (read-only)
 	if err := mcpAgent.RegisterCustomTool(
 		"get_llm_config",
-		"Show every effective workflow LLM role (Builder, execution high/medium/low, Maintenance, Pulse, and Chief of Staff), including provider/model, reasoning, inheritance source, override status, and per-step overrides.",
+		"Show every effective workflow LLM role (Builder, execution high/medium/low, and Pulse), including provider/model, reasoning, inheritance source, override status, and per-step overrides.",
 		map[string]interface{}{
 			"type":       "object",
 			"properties": map[string]interface{}{},
@@ -5888,13 +5978,14 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// Tool: get_workflow_config — read-only view of workflow-level settings (MCP servers, skills, secrets, LLM config)
 	if err := mcpAgent.RegisterCustomTool(
 		"get_workflow_config",
-		"Show current workflow configuration: selected workflow MCP servers, selected workflow skills, secrets (names only, no values), workflow-scoped notification content instructions and one-way destinations, active owner-approved advisor specialization, run retention, LLM config (tiered allocation with fallbacks, preset defaults), and schedules.",
+		"Show current workflow configuration: selected workflow MCP servers, selected workflow skills, secrets (names only, no values), approved external folder access, workflow-scoped notification content instructions and one-way destinations, active owner-approved advisor specialization, run retention, LLM config (tiered allocation with fallbacks, preset defaults), and schedules.",
 		map[string]interface{}{
 			"type":       "object",
 			"properties": map[string]interface{}{},
 		},
 		func(ctx context.Context, args map[string]interface{}) (string, error) {
 			ctrl := iwm.controller
+			refreshWorkflowFolderAccessSession(ctx, ctrl.GetWorkspacePath())
 			selected := ctrl.GetSelectedServers()
 			var sb strings.Builder
 			sb.WriteString("## Workflow Configuration\n\n")
@@ -5918,6 +6009,24 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			} else {
 				for _, sk := range selectedSkills {
 					sb.WriteString(fmt.Sprintf("- **%s** — instructions at `skills/%s/SKILL.md`\n", sk, sk))
+				}
+			}
+
+			// --- Owner-approved external folders ---
+			sb.WriteString("\n### Attached Folders\n")
+			grants := workflowFolderAccess(ctrl.GetWorkspacePath())
+			if len(grants) == 0 {
+				sb.WriteString("No external folders are attached. Use Workflow toolbar → Attached folders; an agent cannot approve a host path for itself.\n")
+			} else {
+				for _, grant := range grants {
+					key := strings.Trim(workflowFolderEnvUnsafe.ReplaceAllString(strings.ToUpper(strings.TrimSpace(grant.Alias)), "_"), "_")
+					sb.WriteString(fmt.Sprintf("- **%s** (`%s`) — %s — `$WORKFLOW_FOLDER_%s`\n", grant.Alias, grant.ID, grant.Access, key))
+				}
+			}
+			if requests := workflowFolderAccessRequests(ctrl.GetWorkspacePath()); len(requests) > 0 {
+				sb.WriteString("Pending requests:\n")
+				for _, request := range requests {
+					sb.WriteString(fmt.Sprintf("- **%s** (`%s`) — %s — %s\n", request.Alias, request.ID, request.Access, request.Reason))
 				}
 			}
 
@@ -6150,7 +6259,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				}
 			}
 			writeLLMDefault("Builder", ctrl.presetPhaseLLM)
-			writeLLMDefault("Maintenance", ctrl.presetMaintenanceLLM)
+			writeLLMDefault("Pulse", ctrl.presetPulseLLM)
 
 			// --- Schedules ---
 			if iwm.schedulerFuncs != nil && iwm.schedulerWorkspacePath != "" {
@@ -6171,6 +6280,71 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 		"workflow",
 	); err != nil {
 		logger.Warn(fmt.Sprintf("⚠️ Failed to register get_workflow_config tool: %v", err))
+	}
+
+	if err := mcpAgent.RegisterCustomTool(
+		"request_workflow_folder_access",
+		"Create a pending attached-folder request in the Workflow toolbar. This never grants access. If the user explicitly supplied an exact absolute host folder path, preserve it in path so the user can approve or deny that exact request; never infer a path. Without a supplied path, the user chooses one with the native picker. Use get_workflow_config afterward to confirm the approved grant.",
+		map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"alias":  map[string]interface{}{"type": "string", "description": "Suggested short alias, for example rts-source."},
+				"path":   map[string]interface{}{"type": "string", "description": "Optional exact absolute folder path explicitly supplied by the user. Never infer or invent this value."},
+				"access": map[string]interface{}{"type": "string", "enum": []string{"read_only", "read_write"}},
+				"reason": map[string]interface{}{"type": "string", "description": "Why the workflow needs this folder and what it will do there."},
+			},
+			"required": []string{"alias", "access", "reason"},
+		},
+		func(ctx context.Context, args map[string]interface{}) (string, error) {
+			alias := strings.TrimSpace(fmt.Sprint(args["alias"]))
+			access := strings.TrimSpace(fmt.Sprint(args["access"]))
+			reason := strings.TrimSpace(fmt.Sprint(args["reason"]))
+			requestedPath := ""
+			if rawPath, ok := args["path"]; ok && rawPath != nil {
+				requestedPath = strings.TrimSpace(fmt.Sprint(rawPath))
+			}
+			if alias == "" || reason == "" || (access != workflowtypes.FolderAccessReadOnly && access != workflowtypes.FolderAccessReadWrite) {
+				return "Error: alias, reason, and access (read_only or read_write) are required.", nil
+			}
+			if requestedPath != "" {
+				if strings.ContainsRune(requestedPath, '\x00') || !filepath.IsAbs(requestedPath) {
+					return "Error: path must be an exact absolute folder path supplied by the user.", nil
+				}
+				requestedPath = filepath.Clean(requestedPath)
+				if requestedPath == filepath.VolumeName(requestedPath)+string(filepath.Separator) {
+					return "Error: a filesystem root cannot be requested.", nil
+				}
+			}
+			content, readErr := iwm.controller.ReadWorkspaceFile(ctx, "workflow.json")
+			if readErr != nil {
+				return fmt.Sprintf("Failed to read workflow.json: %v", readErr), nil
+			}
+			now := time.Now().UTC()
+			request := workflowtypes.WorkflowFolderAccessRequest{
+				ID:            fmt.Sprintf("folder-request-%d", now.UnixNano()),
+				Alias:         alias,
+				RequestedPath: requestedPath,
+				Access:        access,
+				Reason:        reason,
+				RequestedAt:   now.Format(time.RFC3339Nano),
+			}
+			updated, existing, updateErr := upsertWorkflowFolderAccessRequest([]byte(content), request)
+			if updateErr != nil {
+				return fmt.Sprintf("Unable to create folder request: %v", updateErr), nil
+			}
+			if !existing {
+				if writeErr := iwm.controller.WriteWorkspaceFile(ctx, "workflow.json", string(updated)); writeErr != nil {
+					return fmt.Sprintf("Unable to save folder request: %v", writeErr), nil
+				}
+			}
+			if requestedPath != "" {
+				return fmt.Sprintf("Pending folder request %q for %q is now visible in Workflow toolbar → Attached folders. No access has been granted yet. The user can approve or deny the displayed %s permission. After approval, call get_workflow_config to confirm the grant.", alias, requestedPath, access), nil
+			}
+			return fmt.Sprintf("Pending folder request %q is now visible in Workflow toolbar → Attached folders. No access has been granted yet. The user must choose the folder and approve %s access. After approval, call get_workflow_config to confirm the grant.", alias, access), nil
+		},
+		"workflow",
+	); err != nil {
+		logger.Warn(fmt.Sprintf("⚠️ Failed to register request_workflow_folder_access tool: %v", err))
 	}
 
 	// === Tool: update_workflow_config ===
@@ -6305,7 +6479,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					"type":        "integer",
 					"minimum":     1,
 					"maximum":     maxRunRetentionCount,
-					"description": "Number of backup run/eval iterations to keep, excluding active iteration-0. Defaults to 5 when omitted. Raise this for workflows whose Pulse or Goal Advisor reviews need a wider evidence window.",
+					"description": "Number of backup run/eval iterations to keep, excluding active iteration-0. Defaults to 3 when omitted. Raise this for workflows whose Pulse or Goal Advisor reviews need a wider evidence window.",
 				},
 				"execution_max_turns": map[string]interface{}{
 					"type":        "integer",
@@ -6320,15 +6494,6 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					"type":        "array",
 					"items":       map[string]interface{}{"type": "string"},
 					"description": "Workflow-level default workspace/custom tools (stored in execution_defaults, applies to EVERY step unless a step sets its own enabled_custom_tools). Format: 'category:tool' or 'category:*', same categories as update_step_config's enabled_custom_tools. Use only when nearly every step in this workflow needs the same tools; prefer per-step tuning via update_step_config otherwise. Pass an empty array to clear the workflow-level default.",
-				},
-				"post_run_monitor": map[string]interface{}{
-					"type":        "boolean",
-					"description": "Enable the per-run monitor (Pulse): after each scheduled run Gate selects evidence-backed review/fix work, ordinary background agents perform the selected work, and the parent consolidates results before the finalizer updates builder/improve.html, backup/publish status, and notification. Set true for workflows where a silent failure matters; default off. /pulse-setup turns this on as part of recurring setup; /goal-advisor does not change it.",
-				},
-				"post_run_monitor_mode": map[string]interface{}{
-					"type":        "string",
-					"description": "\"per_run\" (default, or omit): Gate/Review+Fix/Finalize run after every scheduled run, in that run's own session — today's behavior. \"periodic\": every run instead gets only a lightweight backup+notify pass; the full Gate/Review+Fix/Finalize review runs separately, on its own cadence, via a schedule created with create_schedule(pulse_review_only=true). Only set \"periodic\" once that schedule exists — otherwise no full review ever runs for this workflow. Pass \"\" to reset to per_run.",
-					"enum":        []string{"per_run", "periodic", ""},
 				},
 				"advisor_specialization_approval_input_id": map[string]interface{}{
 					"type":        "string",
@@ -7499,81 +7664,6 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				logger.Info(fmt.Sprintf("Updated workflow execution_defaults: %v", summary))
 			}
 
-			// --- Per-run monitor ---
-			if raw, ok := args["post_run_monitor"]; ok && raw != nil {
-				enabled, isBool := raw.(bool)
-				if !isBool {
-					return "Error: post_run_monitor must be a boolean.", nil
-				}
-				content, err := iwm.controller.ReadWorkspaceFile(ctx, "workflow.json")
-				if err != nil {
-					return fmt.Sprintf("Failed to read workflow.json: %v", err), nil
-				}
-				var manifest map[string]interface{}
-				if err := json.Unmarshal([]byte(content), &manifest); err != nil {
-					return fmt.Sprintf("Failed to parse workflow.json: %v", err), nil
-				}
-				manifest["post_run_monitor"] = enabled
-				manifest["updated_at"] = time.Now().UTC().Format(time.RFC3339)
-				out, err := json.MarshalIndent(manifest, "", "  ")
-				if err != nil {
-					return fmt.Sprintf("Failed to marshal workflow.json: %v", err), nil
-				}
-				if err := iwm.controller.WriteWorkspaceFile(ctx, "workflow.json", string(out)); err != nil {
-					return fmt.Sprintf("Failed to write workflow.json: %v", err), nil
-				}
-				anyChanged = true
-				state := "disabled"
-				if enabled {
-					state = "enabled"
-				}
-				sb.WriteString(fmt.Sprintf("\n### Per-run monitor (%s)\nThe per-run review-only pass is now %s for this workflow's scheduled runs.\n", state, state))
-				logger.Info(fmt.Sprintf("Updated workflow post_run_monitor=%v", enabled))
-			}
-
-			// --- Post-run monitor mode (PLAT-115) ---
-			if raw, ok := args["post_run_monitor_mode"]; ok && raw != nil {
-				mode, isString := raw.(string)
-				if !isString {
-					return "Error: post_run_monitor_mode must be a string.", nil
-				}
-				mode = strings.TrimSpace(mode)
-				if mode != "" && mode != "per_run" && mode != "periodic" {
-					return "Error: post_run_monitor_mode must be \"per_run\", \"periodic\", or \"\" to reset to per_run.", nil
-				}
-				content, err := iwm.controller.ReadWorkspaceFile(ctx, "workflow.json")
-				if err != nil {
-					return fmt.Sprintf("Failed to read workflow.json: %v", err), nil
-				}
-				var manifest map[string]interface{}
-				if err := json.Unmarshal([]byte(content), &manifest); err != nil {
-					return fmt.Sprintf("Failed to parse workflow.json: %v", err), nil
-				}
-				if mode == "" || mode == "per_run" {
-					delete(manifest, "post_run_monitor_mode")
-				} else {
-					manifest["post_run_monitor_mode"] = mode
-				}
-				manifest["updated_at"] = time.Now().UTC().Format(time.RFC3339)
-				out, err := json.MarshalIndent(manifest, "", "  ")
-				if err != nil {
-					return fmt.Sprintf("Failed to marshal workflow.json: %v", err), nil
-				}
-				if err := iwm.controller.WriteWorkspaceFile(ctx, "workflow.json", string(out)); err != nil {
-					return fmt.Sprintf("Failed to write workflow.json: %v", err), nil
-				}
-				anyChanged = true
-				display := mode
-				description := "after every scheduled run, in that run's own session"
-				if display == "" {
-					display = "per_run"
-				} else if display == "periodic" {
-					description = "on this workflow's own separately-scheduled periodic Pulse review, not after every run"
-				}
-				sb.WriteString(fmt.Sprintf("\n### Post-run monitor mode (%s)\nGate/Review+Fix/Finalize now run %s.\n", display, description))
-				logger.Info(fmt.Sprintf("Updated workflow post_run_monitor_mode=%q", mode))
-			}
-
 			// --- Owner-approved advisor specialization ---
 			if raw, ok := args["advisor_specialization_approval_input_id"]; ok && raw != nil {
 				inputID, _ := raw.(string)
@@ -7592,7 +7682,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			}
 
 			if !anyChanged {
-				return "No changes applied. Provide at least one of: add_servers, remove_servers, add_tools, remove_tools, add_skills, remove_skills, add_secrets, remove_secrets, run_notification_instructions, pulse_notification_instructions, run_notification_channels, pulse_notification_channels, slack_webhook_secret_name, update_tier_fallbacks, lock_knowledgebase, browser_mode, cdp_ports, run_retention_count, post_run_monitor, advisor_specialization_approval_input_id.", nil
+				return "No changes applied. Provide at least one of: add_servers, remove_servers, add_tools, remove_tools, add_skills, remove_skills, add_secrets, remove_secrets, run_notification_instructions, pulse_notification_instructions, run_notification_channels, pulse_notification_channels, slack_webhook_secret_name, update_tier_fallbacks, lock_knowledgebase, browser_mode, cdp_ports, run_retention_count, advisor_specialization_approval_input_id.", nil
 			}
 
 			// Persist config changes to workflow.json manifest (file-backed)
@@ -7733,7 +7823,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// Tool: create_schedule — Create a new cron schedule
 	if err := mcpAgent.RegisterCustomTool(
 		"create_schedule",
-		"Create a new cron schedule for this workflow. Workflow schedules use mode='workshop' with workshop_mode='run'. Messages are optional; when omitted, the scheduler asks Run mode to execute the full workflow. Continuous improvement, including Goal Advisor, is selected dynamically by Pulse after normal scheduled runs; do not create a separate optimizer schedule.",
+		"Create a new cron schedule for this workflow. Workflow schedules use mode='workshop' with workshop_mode='run'. Messages are optional; when omitted, the scheduler asks Run mode to execute the full workflow. Continuous improvement, including Goal Advisor, is selected dynamically by Pulse after normal scheduled runs; do not create a separate optimizer schedule. For the full contract (collision/dependency policy design, when direct messages vs. route_selections is correct, resume_previous tradeoffs): read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/workflow-tools.md\"}]).",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -7784,7 +7874,35 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				},
 				"pulse_review_only": map[string]interface{}{
 					"type":        "boolean",
-					"description": "Creates this workflow's own periodic Pulse review schedule instead of a workflow-execution schedule. On its own cadence it reviews the accumulated runs/iteration-N backlog and runs Gate/Review+Fix/Finalize — it never runs the workflow itself, so group_names/route_selections/messages do not apply. Pairs with update_workflow_config(post_run_monitor_mode=\"periodic\"), which shortens every normal run's own pass to backup+notify only, deferring the full review to this schedule. Omit or false for an ordinary workflow-execution schedule.",
+					"description": "Creates this workflow's own Pulse review schedule instead of a workflow-execution schedule. Its enabled presence is the single source of truth for recurring Pulse. On its own cadence it reviews the accumulated runs/iteration-N backlog and runs Gate/Review+Fix/Finalize; it never runs the workflow itself, so group_names/route_selections/messages do not apply. Omit or false for an ordinary workflow-execution schedule.",
+				},
+				"execution_mode": map[string]interface{}{
+					"type": "string", "enum": []string{"close_only"},
+					"description": "Optional backend-enforced operating mode. Use close_only for a run that may manage/close existing state but must never create new entries.",
+				},
+				"collision_policy": map[string]interface{}{
+					"type": "string", "enum": []string{"skip", "queue_latest", "retry", "coalesce"},
+					"description": "What to do if this workflow is already running: skip discards; queue_latest keeps only the newest; retry preserves the first blocked occurrence; coalesce combines repeated occurrences into one catch-up run.",
+				},
+				"max_start_delay_minutes": map[string]interface{}{
+					"type": "integer", "minimum": 1,
+					"description": "Maximum age of a queued occurrence before it expires.",
+				},
+				"after_schedule_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Optional prerequisite schedule ID. This schedule binds to that schedule's durable occurrence on the same local date.",
+				},
+				"after_terminal_status": map[string]interface{}{
+					"type": "string", "enum": []string{"completed", "any_terminal"},
+					"description": "Which prerequisite result releases this schedule. completed is the safe default; any_terminal also releases after failure, partial, stop, or interruption.",
+				},
+				"after_delay_minutes": map[string]interface{}{
+					"type": "integer", "minimum": 0,
+					"description": "Optional delay after the prerequisite terminal receipt before this schedule may start.",
+				},
+				"dependency_deadline": map[string]interface{}{
+					"type":        "string",
+					"description": "Optional local HH:MM deadline after which this dependent occurrence expires instead of running stale.",
 				},
 			},
 			"required": []string{"name", "cron_expression", "timezone"},
@@ -7852,7 +7970,19 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			if pulseReviewOnly && (len(groupNames) > 0 || len(routeSelections) > 0 || len(messages) > 0) {
 				return "pulse_review_only does not run the workflow — it must not set group_names, route_selections, or messages.", nil
 			}
-			return iwm.schedulerFuncs.CreateSchedule(ctx, iwm.schedulerWorkspacePath, name, cronExpr, timezone, groupNames, routeSelections, mode, messages, directMessagesReason, workshopMode, resumePrevious, pulseReviewOnly)
+			policy := ScheduleRuntimePolicy{}
+			policy.ExecutionMode, _ = args["execution_mode"].(string)
+			policy.CollisionPolicy, _ = args["collision_policy"].(string)
+			policy.AfterScheduleID, _ = args["after_schedule_id"].(string)
+			policy.AfterTerminalStatus, _ = args["after_terminal_status"].(string)
+			policy.DependencyDeadline, _ = args["dependency_deadline"].(string)
+			if value, ok := args["max_start_delay_minutes"].(float64); ok {
+				policy.MaxStartDelayMinutes = int(value)
+			}
+			if value, ok := args["after_delay_minutes"].(float64); ok {
+				policy.AfterDelayMinutes = int(value)
+			}
+			return iwm.schedulerFuncs.CreateSchedule(ctx, iwm.schedulerWorkspacePath, name, cronExpr, timezone, groupNames, routeSelections, mode, messages, directMessagesReason, workshopMode, resumePrevious, pulseReviewOnly, policy)
 		},
 		"workflow",
 	); err != nil {
@@ -7862,7 +7992,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// Tool: create_calendar_schedule — Create dated one-time runs for content calendars
 	if err := mcpAgent.RegisterCustomTool(
 		"create_calendar_schedule",
-		"Create a dated calendar schedule for this workflow, such as a full-month Instagram content calendar. Use this when the user provides specific dates/times instead of a repeating cron pattern. Workflow calendar schedules always run through the workshop builder path; omit mode or use mode='workshop'.",
+		"Create a dated calendar schedule for this workflow, such as a full-month Instagram content calendar. Use this when the user provides specific dates/times instead of a repeating cron pattern. Workflow calendar schedules always run through the workshop builder path; omit mode or use mode='workshop'. For the full contract: read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/workflow-tools.md\"}]).",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -7948,7 +8078,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// Tool: update_schedule — Update a schedule
 	if err := mcpAgent.RegisterCustomTool(
 		"update_schedule",
-		"Update an existing schedule. Only provided fields are changed; omitted fields keep their current values.",
+		"Update an existing schedule. Only provided fields are changed; omitted fields keep their current values. For collision/dependency policy design and when direct messages vs. route_selections is correct: read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/workflow-tools.md\"}]).",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -8008,6 +8138,27 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				"pulse_review_only": map[string]interface{}{
 					"type":        "boolean",
 					"description": "Converts this schedule between a workflow-execution schedule and this workflow's periodic Pulse review schedule (PLAT-115). true: this schedule stops running the workflow and instead runs Gate/Review+Fix/Finalize over the accumulated backlog on its own cadence. false: converts it back to an ordinary workflow-execution schedule. Omit to leave the current setting unchanged.",
+				},
+				"execution_mode": map[string]interface{}{
+					"type": "string", "description": "Set close_only, or an empty string to clear the backend-enforced execution mode.",
+				},
+				"collision_policy": map[string]interface{}{
+					"type": "string", "description": "Set skip, queue_latest, retry, or coalesce. Empty resets to the default skip behavior.",
+				},
+				"max_start_delay_minutes": map[string]interface{}{
+					"type": "integer", "minimum": 0, "description": "Maximum queued age. Zero restores the platform default.",
+				},
+				"after_schedule_id": map[string]interface{}{
+					"type": "string", "description": "Prerequisite schedule ID, or an empty string to clear the dependency.",
+				},
+				"after_terminal_status": map[string]interface{}{
+					"type": "string", "description": "Set completed or any_terminal. Empty restores completed.",
+				},
+				"after_delay_minutes": map[string]interface{}{
+					"type": "integer", "minimum": 0, "description": "Delay after prerequisite completion. Zero clears it.",
+				},
+				"dependency_deadline": map[string]interface{}{
+					"type": "string", "description": "Local HH:MM deadline, or an empty string to clear it.",
 				},
 			},
 			"required": []string{"job_id"},
@@ -8102,7 +8253,49 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			if pulseReviewOnly != nil && *pulseReviewOnly && (setGroupNames || setRouteSelections || setMessages) {
 				return "pulse_review_only=true does not run the workflow — do not combine it with group_names, route_selections, or messages in the same call.", nil
 			}
-			return iwm.schedulerFuncs.UpdateSchedule(ctx, jobID, name, cronExpr, timezone, groupNames, setGroupNames, routeSelections, setRouteSelections, enabled, mode, messages, setMessages, directMessagesReason, workshopMode, resumePrevious, pulseReviewOnly)
+			var policy *ScheduleRuntimePolicy
+			if _, ok1 := args["execution_mode"]; ok1 {
+				policy = &ScheduleRuntimePolicy{}
+			}
+			if _, ok2 := args["collision_policy"]; ok2 && policy == nil {
+				policy = &ScheduleRuntimePolicy{}
+			}
+			if _, ok3 := args["max_start_delay_minutes"]; ok3 && policy == nil {
+				policy = &ScheduleRuntimePolicy{}
+			}
+			if _, ok4 := args["after_schedule_id"]; ok4 && policy == nil {
+				policy = &ScheduleRuntimePolicy{}
+			}
+			if _, ok5 := args["after_terminal_status"]; ok5 && policy == nil {
+				policy = &ScheduleRuntimePolicy{}
+			}
+			if _, ok6 := args["after_delay_minutes"]; ok6 && policy == nil {
+				policy = &ScheduleRuntimePolicy{}
+			}
+			if _, ok7 := args["dependency_deadline"]; ok7 && policy == nil {
+				policy = &ScheduleRuntimePolicy{}
+			}
+			if policy != nil {
+				_, policy.SetExecutionMode = args["execution_mode"]
+				_, policy.SetCollisionPolicy = args["collision_policy"]
+				_, policy.SetMaxStartDelayMinutes = args["max_start_delay_minutes"]
+				_, policy.SetAfterScheduleID = args["after_schedule_id"]
+				_, policy.SetAfterTerminalStatus = args["after_terminal_status"]
+				_, policy.SetAfterDelayMinutes = args["after_delay_minutes"]
+				_, policy.SetDependencyDeadline = args["dependency_deadline"]
+				policy.ExecutionMode, _ = args["execution_mode"].(string)
+				policy.CollisionPolicy, _ = args["collision_policy"].(string)
+				policy.AfterScheduleID, _ = args["after_schedule_id"].(string)
+				policy.AfterTerminalStatus, _ = args["after_terminal_status"].(string)
+				policy.DependencyDeadline, _ = args["dependency_deadline"].(string)
+				if value, ok := args["max_start_delay_minutes"].(float64); ok {
+					policy.MaxStartDelayMinutes = int(value)
+				}
+				if value, ok := args["after_delay_minutes"].(float64); ok {
+					policy.AfterDelayMinutes = int(value)
+				}
+			}
+			return iwm.schedulerFuncs.UpdateSchedule(ctx, jobID, name, cronExpr, timezone, groupNames, setGroupNames, routeSelections, setRouteSelections, enabled, mode, messages, setMessages, directMessagesReason, workshopMode, resumePrevious, pulseReviewOnly, policy)
 		},
 		"workflow",
 	); err != nil {
@@ -8173,7 +8366,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// Tool: get_schedule_runs — Get run history for a schedule
 	if err := mcpAgent.RegisterCustomTool(
 		"get_schedule_runs",
-		"View the execution history for a specific schedule, including status, duration, and errors.",
+		"View the execution history for a specific schedule, including status, duration, and errors. Also returns any recent occurrences the scheduler deliberately did NOT run (global pause, another schedule already owning the workflow, a queued dependency) with the real reason — these never appear in Run History since they never started a run. Before concluding a schedule 'silently skipped' or diagnosing a missing recovery mechanism, check this list first: a schedule with no runs for days is very often a scheduler correctly honoring a pause the whole time, not a defect.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -8214,7 +8407,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// Tool: list_skills — List all available skills in the workspace
 	if err := mcpAgent.RegisterCustomTool(
 		"list_skills",
-		"List all available skills in the workspace. Shows both selected skills (used by this workflow) and all discovered skills.",
+		"List all available skills in the workspace. Shows both selected skills (used by this workflow) and all discovered skills. Being listed as selected is not the same as being usable at runtime — a step only receives a skill if it's explicitly listed in that step's enabled_skills.",
 		map[string]interface{}{
 			"type":       "object",
 			"properties": map[string]interface{}{},
@@ -8233,7 +8426,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// Tool: import_skill — Import a skill from GitHub
 	if err := mcpAgent.RegisterCustomTool(
 		"import_skill",
-		"Import a skill from GitHub into the workspace. The skill will be downloaded and available for use in workflows. Use list_skills first to see what's already available.",
+		"Import a skill from GitHub into the workspace. The skill will be downloaded and available for use in workflows. Use list_skills first to see what's already available. Importing alone does not attach it anywhere: call update_workflow_config(add_skills=[\"folder-name\"]) to select it for the workflow, then update_step_config(step_id, enabled_skills=[\"folder-name\"]) on each step that should actually receive it at runtime — step execution does not inherit workflow-selected skills.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -8267,7 +8460,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// Tool: uninstall_skill — Uninstall a skill from the workspace
 	if err := mcpAgent.RegisterCustomTool(
 		"uninstall_skill",
-		"Uninstall a skill from the workspace. Removes skill files and version tracking. Use list_skills first to see available skills and their folder names.",
+		"Uninstall a skill from the workspace. Removes skill files and version tracking. Use list_skills first to see available skills and their folder names. This does not remove the skill from any workflow's add_skills or a step's enabled_skills — clear those references first (update_workflow_config, update_step_config) or the workflow will point at a skill that no longer exists.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -8299,7 +8492,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// Tool: search_skills — Search the skills registry
 	if err := mcpAgent.RegisterCustomTool(
 		"search_skills",
-		"Search for skills in the public skills registry. Returns matching skills with install commands. Use install_skill to install a result.",
+		"Search for skills in the public skills registry. Returns matching skills with install commands. Use install_skill to install a result. Installing is not the same as attaching it to a workflow or step — see install_skill.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -8328,7 +8521,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// Tool: install_skill — Install a skill via the skills CLI
 	if err := mcpAgent.RegisterCustomTool(
 		"install_skill",
-		"Install a skill from the public skills registry using owner/repo@skill-name format. Use search_skills first to find available skills.",
+		"Install a skill from the public skills registry using owner/repo@skill-name format. Use search_skills first to find available skills. Installing alone does not attach it anywhere: call update_workflow_config(add_skills=[\"folder-name\"]) to select it for the workflow, then update_step_config(step_id, enabled_skills=[\"folder-name\"]) on each step that should actually receive it at runtime — step execution does not inherit workflow-selected skills.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -8535,7 +8728,7 @@ func registerWorkshopLLMTools(iwm *InteractiveWorkshopManager, mcpAgent Definiti
 	// workflow role configuration directly to workflow.json.
 	if err := mcpAgent.RegisterCustomTool(
 		"set_workflow_llm_config",
-		"Save the workflow's LLM configuration to workflow.json capabilities.llm_config. Requires read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/llm-selection.md\"}]) first. In provider_profile mode, provide one coding-agent provider and its current Builder, execution-tier, Maintenance, and Pulse defaults resolve at runtime. In explicit mode, provide builder_llm, maintenance_llm, pulse_llm, and all three execution tiers; each entry directly pins provider, model_id, options, and optional fallbacks. Saved model-library entries are optional reusable shortcuts, not a prerequisite.",
+		"Save the workflow's LLM configuration to workflow.json capabilities.llm_config. Requires read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/llm-selection.md\"}]) first. In provider_profile mode, provide one coding-agent provider and its current Builder, execution-tier, and Pulse defaults resolve at runtime. In explicit mode, provide builder_llm, pulse_llm, and all three execution tiers; each entry directly pins provider, model_id, options, and optional fallbacks. Saved model-library entries are optional reusable shortcuts, not a prerequisite.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -8544,13 +8737,12 @@ func registerWorkshopLLMTools(iwm *InteractiveWorkshopManager, mcpAgent Definiti
 					"enum":        []string{workflowtypes.LLMConfigModeProviderProfile, workflowtypes.LLMConfigModeExplicit},
 					"description": "provider_profile follows the coding-agent provider defaults; explicit pins every workflow role.",
 				},
-				"provider":        map[string]interface{}{"type": "string", "description": "Coding-agent provider id. Required only in provider_profile mode."},
-				"builder_llm":     llmEntrySchema("Builder model for planning, eval design, debugging, and normal workflow-builder chat.", "Ordered fallback models tried if the Builder model fails."),
-				"tier_1":          llmEntrySchema("High-reasoning execution tier: first-time or difficult work.", "Ordered fallback models tried if the primary fails."),
-				"tier_2":          llmEntrySchema("Medium-reasoning execution tier: established work with useful context.", "Ordered fallback models tried if the primary fails."),
-				"tier_3":          llmEntrySchema("Low-reasoning execution tier: validation and mature routine work.", "Ordered fallback models tried if the primary fails."),
-				"maintenance_llm": llmEntrySchema("Maintenance model for expensive Pulse modules such as Goal Advisor, Bug Review, report/eval improvement, KB health, and DB health.", "Ordered fallback models tried if the Maintenance model fails."),
-				"pulse_llm":       llmEntrySchema("Pulse coordinator model for gate, worklist, reporting, and notification turns.", "Ordered fallback models tried if the Pulse model fails."),
+				"provider":    map[string]interface{}{"type": "string", "description": "Coding-agent provider id. Required only in provider_profile mode."},
+				"builder_llm": llmEntrySchema("Builder model for planning, eval design, debugging, and normal workflow-builder chat.", "Ordered fallback models tried if the Builder model fails."),
+				"tier_1":      llmEntrySchema("High-reasoning execution tier: first-time or difficult work.", "Ordered fallback models tried if the primary fails."),
+				"tier_2":      llmEntrySchema("Medium-reasoning execution tier: established work with useful context.", "Ordered fallback models tried if the primary fails."),
+				"tier_3":      llmEntrySchema("Low-reasoning execution tier: validation and mature routine work.", "Ordered fallback models tried if the primary fails."),
+				"pulse_llm":   llmEntrySchema("Pulse coordinator model for gate, worklist, reporting, and notification turns.", "Ordered fallback models tried if the Pulse model fails."),
 			},
 			"required": []string{"mode"},
 		},
@@ -8649,7 +8841,7 @@ func registerWorkshopLLMTools(iwm *InteractiveWorkshopManager, mcpAgent Definiti
 			case workflowtypes.LLMConfigModeExplicit:
 				llmCfg["mode"] = workflowtypes.LLMConfigModeExplicit
 				missing := []string{}
-				for _, key := range []string{"builder_llm", "maintenance_llm", "pulse_llm"} {
+				for _, key := range []string{"builder_llm", "pulse_llm"} {
 					entry := buildTierEntry(args[key])
 					if entry == nil {
 						missing = append(missing, key)
@@ -8753,22 +8945,33 @@ Boundary truth: many tool calls can belong in one step; many durable contracts s
 ## CONTEXT
 
 - **Workspace**: {{.WorkspacePath}}
-{{if .WorkflowObjective}}- **Workflow Objective**: {{.WorkflowObjective}}{{else}}- **Workflow Objective**: ⚠️ NOT SET — treat missing objective as a top-level review finding{{end}}
-{{if .WorkflowSuccessCriteria}}- **Success Criteria**: {{.WorkflowSuccessCriteria}}{{else}}- **Success Criteria**: ⚠️ NOT SET — treat missing success criteria as a top-level review finding{{end}}
-{{if .WorkflowSelectedSkills}}- **Workflow-Selected Skills**: {{.WorkflowSelectedSkills}}{{else}}- **Workflow-Selected Skills**: none configured{{end}}
 {{if .TargetRunFolder}}- **Target Run Folder**: {{.TargetRunFolder}}{{end}}
 
 ## PATH DISCIPLINE
 
 For shell commands, use absolute workspace paths: `+"`{{.AbsWorkspacePath}}/...`"+`. For workspace file tools that expect workspace-relative paths, use `+"`{{.WorkspacePath}}/...`"+`. Do not use bare `+"`runs/...`"+`, `+"`evaluation/...`"+`, `+"`db/...`"+`, or similar paths unless a tool explicitly requires a path relative to the workflow root. Do not use host paths outside workspace-docs.
 
-{{if .PlanJSON}}## CURRENT PLAN
-`+"```json\n{{.PlanJSON}}\n```"+`
-{{else}}Read the plan from `+"`planning/plan.json`"+` using shell commands before starting the review.{{end}}
+## REQUIRED SOURCE REVIEW
 
-{{if .StepConfigSummary}}## STEP CONFIG SUMMARY
-{{.StepConfigSummary}}
-{{end}}
+Read the workflow's source artifacts yourself before forming findings. The Go
+controller deliberately does not paste or summarize them into this prompt:
+
+- read `+"`soul/soul.md`"+` for the objective and success criteria; report them as
+  missing only after checking the file
+- read `+"`workflow.json`"+` for workflow-selected skills and capability settings
+- inspect `+"`planning/plan.json`"+` with targeted `+"`jq`"+` queries, one relevant
+  step/route/field set at a time; do not dump the full plan into the conversation
+- call `+"`get_plan_prompt_health`"+` before raising any prompt-contract-bloat
+  finding. Treat its character counts and repeated-paragraph clusters as an
+  objective triage signal, not an automatic defect: inspect the affected step,
+  validation, and shared references before deciding whether a safe extraction
+  exists. Prefer one workflow-level consolidation finding over one finding per
+  oversized step, and never rewrite a broad workflow contract from review alone.
+- inspect `+"`planning/step_config.json`"+` directly for execution modes, tools,
+  skills, learning/KB access, locks, and review metadata
+
+The files are the authority. Do not infer their content from controller prose,
+route labels, or prior review text.
 
 ## EVALUATION PLAN
 Read `+"`evaluation/evaluation_plan.json`"+` using shell commands if it exists. If it does not exist, treat missing evaluation as a review finding when the workflow clearly needs measurable verification.
@@ -9358,63 +9561,6 @@ func (iwm *InteractiveWorkshopManager) runReviewPlanAgent(ctx context.Context, t
 	workspacePath := iwm.controller.GetWorkspacePath()
 	logger := iwm.controller.GetLogger()
 
-	planJSON := ""
-	if planContent, err := iwm.controller.ReadWorkspaceFile(ctx, "planning/plan.json"); err == nil {
-		planJSON = planContent
-	}
-
-	stepConfigSummary := ""
-	if stepConfigs, err := iwm.controller.ReadStepConfigs(ctx); err == nil && len(stepConfigs) > 0 {
-		var sb strings.Builder
-		for _, sc := range stepConfigs {
-			mode := "agentic"
-			declaredMode := ""
-			successfulRuns := 0
-			lockLearnings := false
-			lockCode := false
-			learningAccess := ""
-			learningObjective := ""
-			learningOptedIn := false
-			kbAccess := ""
-			kbContribution := ""
-			enabledSkills := []string{}
-			reviewNotes := ""
-			descriptionReviewed := false
-			if sc.AgentConfigs != nil {
-				if isScriptedExecutionModeConfig(sc.AgentConfigs) {
-					mode = "scripted"
-				}
-				declaredMode = sc.AgentConfigs.DeclaredExecutionMode
-				if sc.AgentConfigs.SuccessfulRuns != nil {
-					successfulRuns = *sc.AgentConfigs.SuccessfulRuns
-				}
-				if sc.AgentConfigs.LockLearnings != nil {
-					lockLearnings = *sc.AgentConfigs.LockLearnings
-				}
-				if sc.AgentConfigs.LockCode != nil {
-					lockCode = *sc.AgentConfigs.LockCode
-				}
-				learningAccess = resolveLearningsAccess(sc.AgentConfigs)
-				learningObjective = sc.AgentConfigs.LearningObjective
-				learningOptedIn = learningAccess == LearningsAccessReadWrite && strings.TrimSpace(learningObjective) != ""
-				kbAccess = sc.AgentConfigs.KnowledgebaseAccess
-				kbContribution = sc.AgentConfigs.KnowledgebaseContribution
-				enabledSkills = append([]string(nil), sc.AgentConfigs.EnabledSkills...)
-				reviewNotes = sc.AgentConfigs.ReviewNotes
-				if sc.AgentConfigs.DescriptionReviewed != nil {
-					descriptionReviewed = *sc.AgentConfigs.DescriptionReviewed
-				}
-			}
-			sb.WriteString(fmt.Sprintf("- %s: mode=%s, declared_mode=%s, successful_runs=%d, lock_learnings=%v, lock_code=%v, enabled_skills=%v, learnings_access=%s, learning_objective=%q, learning_opted_in=%v, kb_access=%s, kb_contribution=%q, description_reviewed=%v, review_notes=%q\n", sc.ID, mode, declaredMode, successfulRuns, lockLearnings, lockCode, enabledSkills, learningAccess, learningObjective, learningOptedIn, kbAccess, kbContribution, descriptionReviewed, reviewNotes))
-		}
-		stepConfigSummary = sb.String()
-	}
-
-	if err := iwm.controller.LoadPlanForWorkshop(ctx); err != nil {
-		logger.Warn(fmt.Sprintf("⚠️ review_plan: failed to reload plan for objective: %v (using cached value)", err))
-	}
-	workflowObjective, workflowSuccessCriteria := iwm.controller.ResolveWorkflowObjective(ctx)
-
 	readPaths := []string{
 		workspacePath,
 		fmt.Sprintf("%s/builder", workspacePath),
@@ -9429,7 +9575,7 @@ func (iwm *InteractiveWorkshopManager) runReviewPlanAgent(ctx context.Context, t
 	}
 	iwm.controller.SetWorkspacePathForFolderGuard(readPaths, []string{})
 
-	llmConfigToUse := iwm.controller.selectMaintenanceLLM("review_plan agent")
+	llmConfigToUse := iwm.controller.selectPulseLLM("review_plan agent")
 	if llmConfigToUse == nil {
 		return "", fmt.Errorf("no valid LLM configuration for review_plan agent")
 	}
@@ -9454,22 +9600,16 @@ func (iwm *InteractiveWorkshopManager) runReviewPlanAgent(ctx context.Context, t
 		return "", fmt.Errorf("failed to create review_plan agent: %w", err)
 	}
 
-	workflowSelectedSkills := strings.Join(iwm.controller.GetSelectedSkills(), ", ")
 	templateVars := map[string]string{
-		"WorkspacePath":           workspacePath,
-		"AbsWorkspacePath":        absPromptWorkspacePath(workspacePath),
-		"TargetRunFolder":         targetRunFolder,
-		"PlanJSON":                planJSON,
-		"StepConfigSummary":       stepConfigSummary,
-		"WorkflowObjective":       workflowObjective,
-		"WorkflowSuccessCriteria": workflowSuccessCriteria,
-		"WorkflowSelectedSkills":  workflowSelectedSkills,
-		"Focus":                   focus,
-		"SessionID":               iwm.sessionID,
-		"WorkflowID":              iwm.workflowID,
+		"WorkspacePath":    workspacePath,
+		"AbsWorkspacePath": absPromptWorkspacePath(workspacePath),
+		"TargetRunFolder":  targetRunFolder,
+		"Focus":            focus,
+		"SessionID":        iwm.sessionID,
+		"WorkflowID":       iwm.workflowID,
 	}
 
-	logger.Info(fmt.Sprintf("🧪 Running review_plan agent (target_run_folder: %q, objective: %q, success_criteria: %q, focus: %q)", targetRunFolder, workflowObjective, workflowSuccessCriteria, focus))
+	logger.Info(fmt.Sprintf("🧪 Running review_plan agent (target_run_folder: %q, focus: %q)", targetRunFolder, focus))
 	result, _, err := agent.Execute(ctx, templateVars, nil)
 	if err != nil {
 		return "", fmt.Errorf("review_plan agent failed: %w", err)
@@ -9491,6 +9631,7 @@ func prepareReadOnlyBackgroundAgentTools(base *orchestrator.BaseOrchestrator) ([
 			"workspace_advanced:execute_shell_command",
 			"human_tools:*",
 			"workflow_db:query_workflow_db",
+			"workflow_costs:query_workflow_costs",
 		},
 	)
 }
@@ -9548,7 +9689,7 @@ func (iwm *InteractiveWorkshopManager) runReviewWorkflowTimingAgent(ctx context.
 	}
 	iwm.controller.SetWorkspacePathForFolderGuard(readPaths, []string{})
 
-	llmConfigToUse := iwm.controller.selectMaintenanceLLM("review_workflow_timing agent")
+	llmConfigToUse := iwm.controller.selectPulseLLM("review_workflow_timing agent")
 	if llmConfigToUse == nil {
 		return "", fmt.Errorf("no valid LLM configuration for review_workflow_timing agent")
 	}
@@ -9648,7 +9789,7 @@ func (iwm *InteractiveWorkshopManager) runReviewWorkflowCostsAgent(ctx context.C
 	}
 	iwm.controller.SetWorkspacePathForFolderGuard(readPaths, []string{})
 
-	llmConfigToUse := iwm.controller.selectMaintenanceLLM("review_workflow_costs agent")
+	llmConfigToUse := iwm.controller.selectPulseLLM("review_workflow_costs agent")
 	if llmConfigToUse == nil {
 		return "", fmt.Errorf("no valid LLM configuration for review_workflow_costs agent")
 	}
@@ -9817,7 +9958,7 @@ func (iwm *InteractiveWorkshopManager) runReviewStepCodeAgent(ctx context.Contex
 	}
 	iwm.controller.SetWorkspacePathForFolderGuard(readPaths, []string{})
 
-	llmConfigToUse := iwm.controller.selectMaintenanceLLM("review_step_code agent")
+	llmConfigToUse := iwm.controller.selectPulseLLM("review_step_code agent")
 	if llmConfigToUse == nil {
 		return "", fmt.Errorf("no valid LLM configuration for review_step_code agent")
 	}
@@ -9958,18 +10099,23 @@ func applyAdvisorSpecializationToManifest(content, inputID, strategy, goal, upda
 }
 
 func advisorSpecializationPrompt(specialization *workflowAdvisorSpecialization, module string) string {
-	if specialization == nil || (module != pulsemodules.StrategyAuditorID && module != pulsemodules.GoalAdvisorID) {
+	if specialization == nil || pulsemodules.Normalize(module) != pulsemodules.StrategicReviewID {
 		return ""
 	}
-	lens := specialization.StrategyAuditor
-	if module == pulsemodules.GoalAdvisorID {
-		lens = specialization.GoalAdvisor
+	// The manifest retains both approved texts so existing workflows do not
+	// lose owner decisions during migration. They are phase-specific lenses in
+	// one Strategic Review sequence now, not separate module identities.
+	parts := make([]string, 0, 2)
+	if lens := strings.TrimSpace(specialization.StrategyAuditor); lens != "" {
+		parts = append(parts, "Current-strategy audit lens:\n"+lens)
 	}
-	lens = strings.TrimSpace(lens)
-	if lens == "" {
+	if lens := strings.TrimSpace(specialization.GoalAdvisor); lens != "" {
+		parts = append(parts, "Independent-opportunity lens:\n"+lens)
+	}
+	if len(parts) == 0 {
 		return ""
 	}
-	return fmt.Sprintf("OWNER-APPROVED WORKFLOW-SPECIFIC LENS (version %d). Apply this only within the canonical reviewer role. The canonical contract and current soul/plan win on conflict:\n%s", specialization.Version, lens)
+	return fmt.Sprintf("OWNER-APPROVED WORKFLOW-SPECIFIC STRATEGIC REVIEW LENSES (version %d). Apply each only in its named sequence phase. The canonical contract and current soul/plan win on conflict:\n%s", specialization.Version, strings.Join(parts, "\n\n"))
 }
 
 func (iwm *InteractiveWorkshopManager) activateApprovedAdvisorSpecialization(ctx context.Context, inputID string) (*workflowAdvisorSpecialization, bool, error) {
@@ -10204,9 +10350,9 @@ func (iwm *InteractiveWorkshopManager) runBackgroundTaskAgentSequence(ctx contex
 	iwm.controller.SetWorkspacePathForFolderGuard(readPaths, writePaths)
 
 	// --- LLM: generic run_in_background follows the normal workshop/phase model.
-	// Background agents use the same normal workshop phase selection. Pulse
-	// review/fix work is ordinary run_in_background work too; it has no hidden
-	// maintenance runner or model-selection path.
+	// Background agents use the same normal workshop phase selection. Pulse technical
+	// maintenance is ordinary run_in_background work. It has no hidden
+	// maintenance runner, phase unlock, or model-selection path.
 	llmConfigToUse := iwm.controller.selectPhaseLLM("background task agent")
 	if llmConfigToUse == nil && iwm.presetLLM != nil && iwm.presetLLM.Provider != "" && iwm.presetLLM.ModelID != "" {
 		llmConfigToUse = workflowAgentLLMConfig(iwm.presetLLM, iwm.controller.GetFallbacks(), iwm.controller.GetAPIKeys())
@@ -10226,15 +10372,16 @@ func (iwm *InteractiveWorkshopManager) runBackgroundTaskAgentSequence(ctx contex
 	// the workshop chat's `run_in_background` tool, which means the
 	// workshop chat itself is already attached to the workflow folder
 	// with the chat's MCP config; without isolation, the background
-	// agent's agy-cli session collides with the chat's session on the
-	// same dir with different MCP configs, and the run fails with
-	// "agy-cli does not support concurrent sessions ...". File access to
-	// the user's workspace continues to flow through the MCP api-bridge
-	// tools, which take absolute workspace paths and do not depend on
-	// CLI CWD.
+	// agent's coding-CLI session collides with the chat's session on the
+	// same dir with different MCP configs, and the run fails with a "does
+	// not support concurrent sessions ..."-style error some coding CLIs
+	// raise. File access to the user's workspace continues to flow
+	// through the MCP api-bridge tools, which take absolute workspace
+	// paths and do not depend on CLI CWD.
 	config.IsolateCodingAgentWorkspace = true
 	config.CodingAgentKeepAlive = len(messageSequence) > 0
-	defer iwm.configureWorkshopToolAgentSession(config, "background-task", readPaths, writePaths)()
+	_, cleanupToolSession := iwm.configureWorkshopToolAgentSessionWithID(config, "background-task", readPaths, writePaths)
+	defer cleanupToolSession()
 
 	// The workshop-only tools are native definitions rather than entries in the
 	// workspace tool pool. Collect them before construction, alongside the full

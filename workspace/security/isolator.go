@@ -132,8 +132,9 @@ func (iso *Isolator) sandboxAllowedPath(path string) (string, bool) {
 	return canonicalAllowedPath, true
 }
 
-// ExecuteIsolated runs a command with filesystem restrictions
-// Uses unshare on Linux, sandbox-exec on macOS
+// ExecuteIsolated runs a command with filesystem restrictions.
+// Linux selects a verified kernel backend (Landlock first, then a proven mount
+// namespace); macOS uses sandbox-exec.
 // Returns the command, a cleanup function, and an error
 func (iso *Isolator) ExecuteIsolated(ctx context.Context, command string, args []string) (*exec.Cmd, func(), error) {
 	if runtime.GOOS == "darwin" {
@@ -147,6 +148,13 @@ func (iso *Isolator) ExecuteIsolated(ctx context.Context, command string, args [
 
 // executeIsolatedLinux uses unshare for filesystem isolation on Linux
 func (iso *Isolator) executeIsolatedLinux(ctx context.Context, command string, args []string) (*exec.Cmd, func(), error) {
+	return iso.executeIsolatedLinuxPlatform(ctx, command, args)
+}
+
+// executeIsolatedMountNamespace is the legacy Linux mount-namespace backend.
+// Callers must prove that unshare is permitted for the service identity before
+// selecting it; invoking it optimistically is PLAT-118's root cause.
+func (iso *Isolator) executeIsolatedMountNamespace(ctx context.Context, command string, args []string) (*exec.Cmd, func(), error) {
 	// Generate mount script for isolation
 	mountScript := iso.generateMountScript(command, args)
 
@@ -163,10 +171,18 @@ func (iso *Isolator) executeIsolatedLinux(ctx context.Context, command string, a
 		os.Remove(scriptPath)
 	}
 
-	// Execute using unshare (creates new mount namespace)
-	// -m: mount namespace
-	// --propagation private: don't propagate mounts to parent namespace
-	cmd := exec.CommandContext(ctx, "unshare", "-m", "--propagation", "private", "sh", scriptPath)
+	// Execute using unshare (creates new mount + user namespace).
+	// --mount: mount namespace, containing the bind mounts/tmpfs the script sets up.
+	// --user --map-root-user: enters a new user namespace mapped back to the
+	//   caller's own UID -- the standard unprivileged-mount-namespace pattern
+	//   (the same one rootless container runtimes use). Required: a plain
+	//   "-m" needs CAP_SYS_ADMIN in the CURRENT user namespace, which an
+	//   unprivileged service account never has, so mount/bind-mount inside
+	//   the script (both requiring CAP_SYS_ADMIN) would fail outright without
+	//   it -- this mirrors mountNamespaceAvailable()'s probe, which must test
+	//   the exact same privilege shape this actually uses.
+	// --propagation private: don't propagate mounts to parent namespace.
+	cmd := exec.CommandContext(ctx, "unshare", "--mount", "--user", "--map-root-user", "--propagation", "private", "sh", scriptPath)
 
 	// Set working directory for proper error messages
 	cmd.Dir = iso.WorkDir

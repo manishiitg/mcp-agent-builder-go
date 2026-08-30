@@ -5,8 +5,8 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `open` — design agreed; implementation and live reproduction test pending |
-| Last synchronized | `2026-08-13` |
+| Ticket state | `implemented` — suspend/resume shipped; live reverify pending. Stage 1 `multi-llm-provider-go@a9fa11a`, stage 1c `@e8cbc1e`, stage 2 `mcpagent@c88bfc0`, bounded consume `781d52605`, stage 3 `45ba49660`, per-account cache `@2ca6c02`, schedule gate `f64c54619`. Live reproduction captured 2026-08-18 (rtslatency, see below) |
+| Last synchronized | `2026-08-19` |
 
 - **Priority:** P0 — a workflow can stop midway and remain falsely running for
   hours after its coding-agent account reaches a usage limit.
@@ -227,3 +227,233 @@ The safety buffer prevents waking exactly on a provider boundary. Controls:
   never repeated.
 - The run reaches its normal terminal stages only after the recovered workflow
   itself finishes.
+
+## Live reproduction, 2026-08-18 (rtslatency)
+
+The first captured instance of this defect in the wild, found while
+diagnosing an unrelated UI report. Recorded here because the ticket's state
+was "live reproduction pending", and because it identifies a specific
+mechanism the analysis above does not name.
+
+**What the operator saw.** `rtslatency` sat in the global activity monitor
+with a live spinner and would not go away across page refreshes. The account's
+Claude limit had been reached mid-run.
+
+**What the runtime actually held**, from `/api/sessions/active` more than three
+hours after the last real work finished:
+
+```json
+{
+  "session_id": "schedule-cron--42eca39a_1787009443095002000",
+  "created_at":    "2026-08-18T05:16:47+05:30",
+  "last_activity": "2026-08-18T08:30:48+05:30",
+  "runtime_state": {
+    "phase": "running",
+    "reason": "foreground turn is active",
+    "raw_session_status": "error",
+    "foreground_turn": { "busy": false, "can_steer": true, "synthetic": true },
+    "background_live": false
+  }
+}
+```
+
+Nothing was executing: the foreground turn was not busy, no background agent
+was live, and every real child had finished. A sibling session in the same
+response carried `phase: "failed", reason: "provider usage/rate limit reached"`,
+confirming the trigger.
+
+**The mechanism that kept it `running`.** Five `synthetic-turn:steer-message-*`
+child executions were still `running`, started 00:00:09, 00:00:22 (×2),
+00:29:31 (×2) UTC and never settled. Each one had been spawned by a child
+*failing*, within milliseconds:
+
+| failed child completed_at | stuck synthetic turn started_at | gap |
+|---|---|---|
+| 00:00:09.478 (`bg-pulse-engineering+ops-backlog`) | 00:00:09.483 | 5 ms |
+| 00:00:22.548 (`msgseq-daily-latency-report`) | 00:00:22.581 | 33 ms |
+| 00:00:22.561 (`exec-daily-latency-collect-dev`) | 00:00:22.688 | 127 ms |
+| 00:29:31.416 (`msgseq-security-sweep-reflection`) | 00:29:31.451 | 35 ms |
+| 00:29:31.430 (`exec-daily-security-sweep`) | 00:29:31.558 | 128 ms |
+
+The correlation is total and runs both ways in the same session: **5 of 5**
+children that failed produced a permanently-stuck notification turn, while
+**4 of 4** children that completed produced notification turns that settled
+normally in 14–17 s.
+
+**Why those turns never settle.** `executeSyntheticTurn`
+(`cmd/server/background_agents.go`) always settles its tracked execution from a
+`defer`, so a turn stuck `running` means the goroutine never reached that
+defer. It is parked in the stream-consume loop:
+
+```go
+textChan, err := llmAgent.StreamWithEvents(agentCtx, syntheticMsg)
+...
+for range textChan {          // no deadline
+    ...
+}
+```
+
+`agentCtx` is `context.WithCancel(context.Background())` — no timeout and no
+deadline. When the provider is rate-limited and its stream never closes the
+channel, this loop blocks forever, the deferred `completeTrackedExecution`
+never runs, and the session keeps reporting a live foreground turn
+indefinitely. That is the concrete path by which "falsely running for hours"
+happens, and it is downstream of every layer the repair plan above addresses:
+even a correct typed quota error does not release a turn already parked on a
+channel that will never close.
+
+Implication for the repair: alongside the typed error, durable suspension, and
+wake-up, the auto-notification consume loop needs a bound (deadline or
+cancellation tied to the provider failure) so a stream that never terminates
+cannot hold a session open on its own.
+
+**Not the same bug as PLAT-130.** That ticket covers a cancel path that marks
+executions canceled without stopping the work. This is the inverse: no cancel
+was requested at all, and the work is already finished — only the notification
+turn is stuck.
+
+## Implementation status
+
+Staged so each increment is independently shippable and testable. Current
+state was verified in-repo before starting, not assumed from this document.
+
+### Stage 1 — provider: structured reset time and typed quota error — **DONE**
+
+`multi-llm-provider-go@545fb18`, wiring completed in `a9fa11a`.
+
+What was actually found versus what this ticket predicted:
+
+| the ticket said | verified state |
+|---|---|
+| adapter matches only one exact sentence | confirmed — **two** sites (`detectTmuxFatalStatus`, `isClaudeFatalProgressLine`), and `"You've hit your weekly limit"` genuinely does not contain `"You've hit your limit"` |
+| `resets_at` read for display and discarded | confirmed — `claudeStatusExtras` formats it to `"7d 100% →Fri"` and drops the instant |
+| need a typed quota failure carrying `RetryAt` | `KindQuotaExhausted` already existed; `RetryAt` did not exist anywhere in any of the three repos |
+
+Shipped:
+
+- `IsClaudeUsageLimitText` matches the stable shape of the wording (verb +
+  possessive + optional qualifier + `limit`) instead of one sentence, anchored
+  on hit/reached/exceeded so an agent discussing rate limits in its own output
+  is not misread as a limit wall. Both detection sites now use it.
+- `llmtypes.RateLimitWindow` + `StatusLine.SetRateLimitWindows` /
+  `RateLimitWindows()` carry each window with its reset instant intact, beside
+  (not instead of) the display extras. `EarliestReset` returns the soonest
+  future reset among *exhausted* windows — the instant a caller may retry.
+- `llmerrors.Error` gained `RetryAt` (absolute) and `Window`, with
+  `RetryAtOrZero` / `QuotaWindow` / `IsQuotaExhausted`. `RetryAt` is separate
+  from the existing `RetryAfter` on purpose: a duration is only meaningful
+  relative to when it was computed, so it cannot survive being persisted and
+  reloaded, which is precisely what a suspension has to do.
+
+Throughout, *exhausted with an unknown reset* stays distinguishable from *not
+exhausted* rather than collapsing to one state, so stage 3 can implement this
+ticket's `waiting_for_capacity_unknown` branch instead of inventing a
+timestamp.
+
+14 tests including the status-line JSON quoted above, a JSON round trip (a
+`StatusLine` crosses a process boundary between the adapter that fills it and
+the runtime that reads it), and explicit false-positive coverage for the
+matcher. Full repo suite green.
+
+### Stage 2 — agent: fallbacks, then preserve the typed error — **DONE**
+
+`mcpagent@c88bfc0`.
+
+Most of what this stage asked for already existed and simply never fired:
+`isQuotaExhaustedError` checks `llmerrors.KindOf` before its string fallbacks,
+so once stage 1b returned a typed error, a Claude weekly limit already skipped
+same-model retries and moved to the fallback chain. Prior to that the same wall
+classified as transient throttling and was retried against a window that
+reopens in hours.
+
+What was genuinely missing was *time*. `quotaExhaustedModels` was a
+`map[string]bool`, which can only express "never try this again":
+
+- a five-hour window that reopened mid-run left that model benched for the
+  agent's entire lifetime, because nothing recorded that it would return;
+- the terminal `all models are quota-exhausted` error was a plain string, so no
+  caller could learn when capacity comes back — the single fact a workflow
+  needs to suspend rather than lose a partially-executed run.
+
+The map now stores the reset instant, taken from the typed provider error
+rather than re-parsed from text at this layer. A model whose window has
+reopened is removed and retried. When every model is out, the returned error is
+a typed `KindQuotaExhausted` carrying the soonest reset among them — which is
+what stage 3 will schedule its resume on.
+
+A zero reset keeps its meaning end to end: exhausted, no reliable time. Such a
+model is skipped like any other, contributes no resume time, and is never
+retried on a guessed schedule. `model_not_found` shares this map and is stored
+with a zero reset deliberately — a missing model is a config error, not a
+window that reopens.
+
+### Stage 3 — runtime: durable suspension and wake-up — not started
+
+Both inputs this stage needs now exist and are correct: `IsQuotaExhausted` to
+decide, and `RetryAtOrZero` to schedule. Neither was usable before stages 1-2 —
+every limit looked like transient throttling and carried no time.
+
+The largest stage, and the one with real correctness hazards: durable
+`waiting_for_capacity` state, releasing every live resource, atomic claim so
+two server loops cannot resume once each, restart survival, and preventing the
+next cron occurrence from duplicating a waiting run. Detailed in the repair
+plan above.
+
+Note the additional requirement from the live reproduction: bounding the
+auto-notification consume loop. That defect is independent of the typed error —
+a turn already parked on a channel that never closes is not released by
+classifying the failure correctly.
+
+### Stage 4 — UI — not started
+
+Clock instead of spinner, plus Resume now / Use fallback provider / Cancel run.
+
+This refers to the durable **workflow-run** capacity controls. Direct product
+chat now separately normalizes quota failures into the shared product failure
+card, stops the working indicator, shows a retry action, and preserves an exact
+`retry_at` when the event carries one. That frontend improvement does not mark
+this workflow stage complete: Global Monitor still needs the clock and the
+three run-level controls above.
+
+## What shipped (2026-08-18)
+
+A run that hits a capacity wall is now **suspended, not failed**.
+
+- **Reset times are read, never reconstructed.** The Claude statusline sidecar
+  already carried exact per-window `resets_at`; the failure path was parsing
+  `resets 10am` out of pane text instead. `llmtypes.MostConstrainedReset` exists
+  alongside `EarliestReset` because the sidecar reads 99.x rather than a clean
+  100 at the instant of the wall, so `EarliestReset` returns nothing there and
+  silently demotes an exact instant to a guess.
+- **The zombie is closed.** `executeSyntheticTurn`'s consume loop had one exit —
+  the producer closing the channel — and a pane parked on a limit never closes
+  it. Two bounds now: context cancellation and an idle deadline. A stall is
+  recorded as a failure with its reason rather than as `context canceled`, so it
+  stops being filed as a user stop.
+- **`waiting_for_capacity` is its own run status.** `capacity_wait.json` records
+  which step, of how many, which window, and when it reopens. Durable because a
+  wait outlives the process, and the restart sweep would otherwise convert the
+  pause into a false `interrupted: server restarted`.
+- **The schedule stops firing while a run is suspended**, which is what ends the
+  run storm, and the tick loop resumes the run in place at its reset instant —
+  same run row, same run folder, at the step that could not run.
+- **A schedule-level gate** refuses to start a run into a window already at
+  100%, using a per-account cache of the quota reading the provider already
+  sends on every turn.
+
+Two refusals are deliberate: a wait with no stated reset never wakes on its own,
+and a wall with no record on disk is reported as the failure it effectively is.
+
+## Known gaps
+
+1. **No per-item checkpoint in `message_sequence`.** Resuming a suspended step
+   replays from item 1. Since `message_sequence` is the default step type, a
+   step that posted to Slack at item 2 and died at item 5 will re-post on
+   resume. This is the most consequential remaining gap.
+2. **No per-step preflight.** The orchestrator has no account identity and no
+   StatusLine handle in scope, so only the schedule-level gate exists. Deliberate
+   — a per-step gate cannot predict whether a run FITS in the remaining quota
+   without a cost estimate, and agentic steps vary too much between runs for any
+   such estimate to be safe.
+3. **Live reverify outstanding.** All of the above is code and unit coverage;
+   no capacity wall has been observed end-to-end since the change.

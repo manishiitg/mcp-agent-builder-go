@@ -18,6 +18,7 @@ interface ElectronBridge {
   saveFlowImage?: (payload: Record<string, unknown>) => Promise<unknown>
   captureFlowImage?: (payload: Record<string, unknown>) => Promise<string | null>
   captureRegion?: (payload: Record<string, unknown>) => Promise<string | null>
+  pickWorkflowFolder?: () => Promise<string | null>
   logRendererError?: (payload: unknown) => void
   onUpdateProgress?: (callback: (progress: ElectronUpdateProgress) => void) => (() => void)
   restartToInstall?: () => void

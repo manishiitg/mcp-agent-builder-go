@@ -290,11 +290,15 @@ func (api *StreamingAPI) trackWorkflowRunStart(exec *ActiveWorkflowExecution) {
 	})
 }
 
-func (api *StreamingAPI) trackWorkshopExecutionStart(sessionID, workspacePath, presetQueryID, userID string, executionID, name, parentExecutionID string) {
-	metadata := map[string]string{}
+func (api *StreamingAPI) trackWorkshopExecutionStart(sessionID, workspacePath, presetQueryID, userID string, executionID, name, parentExecutionID string, startMetadata map[string]string) {
+	metadata := cloneTrackedMetadata(startMetadata)
+	if metadata == nil {
+		metadata = map[string]string{}
+	}
 	if parentExecutionID = strings.TrimSpace(parentExecutionID); parentExecutionID != "" {
 		metadata["parent_execution_id"] = parentExecutionID
 	}
+	runFolder := strings.TrimSpace(metadata["run_folder"])
 	api.trackExecutionStart(&TrackedWorkflowExecution{
 		ExecutionID:   executionID,
 		SessionID:     sessionID,
@@ -303,6 +307,7 @@ func (api *StreamingAPI) trackWorkshopExecutionStart(sessionID, workspacePath, p
 		Title:         name,
 		PresetQueryID: presetQueryID,
 		WorkspacePath: workspacePath,
+		RunFolder:     runFolder,
 		PhaseID:       "workflow-builder",
 		PhaseName:     "Workflow Builder",
 		Status:        trackedExecutionStatusRunning,
@@ -364,13 +369,22 @@ func (api *StreamingAPI) cancelTrackedExecutionsForSession(sessionID string) {
 	api.trackedWorkflowExecutionsMux.Lock()
 
 	now := time.Now().UTC()
+	marked := 0
 	for _, exec := range api.trackedWorkflowExecutions {
 		if exec == nil || exec.SessionID != sessionID || exec.Status != trackedExecutionStatusRunning {
 			continue
 		}
 		exec.Status = trackedExecutionStatusCanceled
 		exec.CompletedAt = &now
+		marked++
+		// Marking a tracked execution canceled tells watchers to stop watching.
+		// It does not stop the worker — that is cancelBackgroundAgents' job — so
+		// log both and compare the counts when diagnosing a Stop that did not
+		// take (PLAT-130).
+		log.Printf("[STOP] session=%s tracked execution marked canceled: id=%s kind=%s name=%q",
+			sessionID, exec.ExecutionID, exec.Kind, exec.Name)
 	}
+	log.Printf("[STOP] session=%s tracked executions marked canceled=%d (status only — see background agent counts for actual cancellation)", sessionID, marked)
 	api.pruneTrackedExecutionsLocked(now)
 	api.trackedWorkflowExecutionsMux.Unlock()
 	api.observeRuntimeSnapshot(sessionID)

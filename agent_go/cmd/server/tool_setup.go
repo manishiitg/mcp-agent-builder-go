@@ -273,6 +273,19 @@ func createCustomTools(workflowMode bool, sessionInfo ...string) ([]llmtypes.Too
 			toolCategories[name] = category
 		}
 
+		// PLAT-184. This workflow's own per-workspace cost ledger, readable
+		// through its normal folder-guard-scoped tools -- unlike the global
+		// human-facing Cost Analysis ledger, which sits outside every
+		// workflow's own folder and is not reachable by any agent at all.
+		workflowCostsRegistry := virtualtools.CreateWorkflowCostsToolRegistry(getWorkspaceAPIURL(), userID, sessionID)
+		allTools = append(allTools, workflowCostsRegistry.Tools...)
+		for name, executor := range workflowCostsRegistry.Executors {
+			allExecutors[name] = executor
+		}
+		for name, category := range workflowCostsRegistry.Categories {
+			toolCategories[name] = category
+		}
+
 		reportHumanInputTools, reportHumanInputExecutors, reportHumanInputCategories := createReportHumanInputTools()
 		allTools = append(allTools, reportHumanInputTools...)
 		for name, executor := range reportHumanInputExecutors {
@@ -312,27 +325,6 @@ func createCustomTools(workflowMode bool, sessionInfo ...string) ([]llmtypes.Too
 	// See the workflow initialization section where browser tools are added if enabled.
 
 	return allTools, allExecutors, toolCategories
-}
-
-// enhanceToolDescriptionForChatMode enhances a tool description with chat-mode-specific directory access information.
-// chatsFolder is the full per-user path (e.g. "_users/default/Chats").
-func enhanceToolDescriptionForChatMode(toolName, originalDescription, chatsFolder string) string {
-	writeTools := map[string]bool{
-		"diff_patch_workspace_file": true,
-		"execute_shell_command":     true,
-	}
-
-	var accessInfo strings.Builder
-	accessInfo.WriteString("\n\n📁 **DIRECTORY ACCESS RESTRICTIONS (CHAT MODE):**")
-
-	if writeTools[toolName] {
-		accessInfo.WriteString(fmt.Sprintf("\n\n⚠️ **IMPORTANT:** You can ONLY write/modify files in '%s/'. All other folders are read-only.", chatsFolder))
-		accessInfo.WriteString(fmt.Sprintf("\nExample: '%s/output.txt', '%s/data.json'.", chatsFolder, chatsFolder))
-	} else {
-		accessInfo.WriteString(fmt.Sprintf("\n\nYou have READ access to all workspace folders (Workflow/, skills/, etc.), but you can only WRITE to '%s/'.", chatsFolder))
-	}
-
-	return originalDescription + accessInfo.String()
 }
 
 // enhanceToolDescriptionForWorkflowPhase augments workspace tool descriptions for
@@ -381,9 +373,7 @@ func enhanceToolDescriptionForWorkflowPhase(toolName, originalDescription, workf
 // the correct answer rather than a reason to fall back: inheriting another
 // product's conventions is the bug this replaced.
 func multiAgentPlacementGuidance(toolName, chatsFolder string, profile *resolvedAgentProfile) []string {
-	// A global-scoped profile (Chief of Staff) falls through to the same
-	// guidance a profile-less turn gets, including the pulse/ mention --
-	// only a project-scoped profile's own declared placement map applies.
+	// Only a project-scoped profile's own declared placement map applies.
 	if profile != nil && !isGlobalScopedProfile(profile) {
 		return profile.Definition.Runtime.Workspace.Placement[toolName]
 	}
@@ -391,7 +381,6 @@ func multiAgentPlacementGuidance(toolName, chatsFolder string, profile *resolved
 	case "diff_patch_workspace_file", "execute_shell_command":
 		return []string{
 			fmt.Sprintf("Save plan outputs inside the plan folder (e.g. '%s/{plan_id}/output.txt').", chatsFolder),
-			"Cross-workflow task reports belong in `pulse/` (for example `pulse/task.html`).",
 		}
 	}
 	return nil

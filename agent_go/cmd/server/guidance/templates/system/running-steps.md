@@ -54,20 +54,6 @@ When running a step or the full workflow:
      Workshop if changes are required.
 6. **ALWAYS follow up** after execution. Never fire-and-forget.
 
-## Org Goal Evidence Handoff
-
-If the workflow objective, success criteria, or user request names an org
-goal, the run follow-up must point to the concrete evidence that a Chief of
-Staff / Org Pulse pass can use to measure that goal: run outputs under
-`runs/iteration-0/<group>/execution/`, typed Pulse verdicts, reports under
-`reports/`, and durable rows/metrics in
-`db/db.sqlite`.
-
-Do not edit workspace-level `pulse/goals.html` from workflow run/workshop mode.
-That file belongs to Chief of Staff / Org Pulse. Your job during a workflow run
-is to produce and cite the evidence cleanly enough for the org-level scorecard
-to be updated after the run.
-
 ## Auto-notification system
 
 All background agents **automatically notify you** when they complete:
@@ -91,6 +77,18 @@ All background agents **automatically notify you** when they complete:
 - `query_step` and `list_executions` report whether the exact execution is
   currently messageable. Live steering is not a durable resume mechanism:
   completed, failed, and cancelled executions reject new messages.
+- **Pre-validation failures notify separately, mid-run** — a step's own
+  step-level pre-validation gate (structural file/DB checks) and any
+  `message_sequence` item's pre-validation gate fire their own
+  `[AUTO-NOTIFICATION]` the first time they fail, before the step's
+  overall completion notification and even if the step's own retries go
+  on to fix it. Treat this as an early heads-up, not the final outcome —
+  the step may still succeed on a later retry attempt, in which case its
+  own completion notification (✅) still arrives separately afterward. Use
+  it to start investigating whether the failure is a real bug or a
+  transient/environmental issue (e.g. schedule drift, a stale saved
+  script) while the step is still running, rather than waiting for it to
+  exhaust every retry first.
 
 ## Stopping tasks
 

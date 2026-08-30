@@ -52,12 +52,18 @@ profile:
       - add_dominion_watchlist_symbol
       - execute_shell_command
   runtime:
-    # Load-bearing -- see Finance's own product.yaml comment. "auto"/unset
-    # resolves to native/tmux mode for claude-code and codex-cli, where the
-    # coding CLI's own built-in tool loop runs entirely outside mcpagent's
-    # registry and tool_policy does not apply. structured is what Finance
-    # confirmed live keeps PRODUCT_TOOL_GATE actually enforced.
-    transport: structured
+    # Match Video Studio: Claude Code keeps its tmux session warm between web
+    # turns so conversation context and its project projection (`CLAUDE.md` and
+    # `.claude/skills`) remain available. Tool safety comes from mcp_only below,
+    # not from forcing a one-shot structured transport.
+    transport: auto
+    # Dominion has no legitimate desktop use case -- it's a fixed-workspace,
+    # single-tenant trading dashboard, only ever run as its own dedicated
+    # server. Declare this explicitly rather than relying solely on the
+    # server's single-product-deployment heuristic, so a turn on this profile
+    # never silently falls back to an ambient `claude` CLI login regardless of
+    # how the server happens to be configured.
+    require_provider_token: true
     provider_options:
       - id: claude-code
         label: Claude Code
@@ -66,6 +72,15 @@ profile:
         default: true
     agent_tools:
       mode: mcp_only
+    workspace:
+      # Dominion has no selectable project. The dedicated profile-chat API
+      # resolves this server-side so the browser sends only the user message.
+      mode: fixed
+      root: Chats
+    conversation:
+      # One durable conversation per user. The server registry keeps this
+      # identity stable across browser tabs, backend restarts, and CLI reaping.
+      mode: singleton
     provider: claude-code
     model_id: claude-sonnet-5
   built_in: true

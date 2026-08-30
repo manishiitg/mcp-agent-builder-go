@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/common"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/costobserver"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents"
 
@@ -66,9 +67,17 @@ type messageSequenceEntry struct {
 }
 
 type messageSequenceCallOptions struct {
-	Source         string
-	ReentryMessage string
-	Restart        bool
+	Source              string
+	ReentryMessage      string
+	ContinuationMessage string
+	Restart             bool
+}
+
+func messageSequenceContinuationMessage(opts messageSequenceCallOptions) string {
+	if msg := strings.TrimSpace(opts.ContinuationMessage); msg != "" {
+		return msg
+	}
+	return strings.TrimSpace(opts.ReentryMessage)
 }
 
 const normalizedRegularSequenceItemID = "execute-and-verify"
@@ -310,7 +319,10 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeMessageSequenceStep(
 	if hasExisting {
 		// Route re-entry: continue the in-memory conversation with one new user message.
 		session = existing
-		msg := strings.TrimSpace(opts.ReentryMessage)
+		// The opening route description is already in this conversation. Send only
+		// the new instruction supplied by the parent orchestrator; replaying the full
+		// durable description wastes context and duplicates instructions every call.
+		msg := messageSequenceContinuationMessage(opts)
 		if msg == "" {
 			return "", session.ConversationHistory, fmt.Errorf("message_sequence route %q already has an active conversation; provide a re-entry message or restart", sequenceStep.GetID())
 		}
@@ -353,6 +365,11 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeMessageSequenceStep(
 		} else if desc := strings.TrimSpace(sequenceStep.GetDescription()); desc != "" {
 			session.LastRuntimeContext = "Step description (opening instruction):\n" + desc
 		}
+		// Show the validation schema on the opening turn — the same way regular
+		// and todo_task steps already surface it proactively — so a
+		// message_sequence step doesn't have to guess the output shape and only
+		// learn it reactively after a failed pre-validation attempt.
+		session.LastRuntimeContext = appendMessageSequenceValidationSchema(session.LastRuntimeContext, sequenceStep.ValidationSchema)
 		source = "configured_queue"
 	}
 
@@ -361,6 +378,27 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeMessageSequenceStep(
 	}
 
 	for _, item := range plannedItems {
+		// Stop means stop. Every layer below is expected to surface a cancelled
+		// context as an item error, and the queue halts on any error — but that
+		// makes halting depend on a lower layer noticing, and a coding-CLI turn
+		// whose pane is torn down can return a plausible-looking result instead
+		// of an error. A cancelled run must never START another item, whatever
+		// the previous one reported (PLAT-130).
+		if haltErr := messageSequenceHaltedBeforeItem(ctx, sequenceStep.GetID(), item.ID); haltErr != nil {
+			// The line a live reverify greps for: it names the item that was NOT
+			// sent, which is the whole claim Stop makes (PLAT-130).
+			if hcpo.GetLogger() != nil {
+				hcpo.GetLogger().Info(fmt.Sprintf("[STOP] message_sequence step %q: refusing to start item %q (%d of %d) — run is canceled: %v",
+					sequenceStep.GetID(), item.ID, len(session.Entries)+1, len(plannedItems), ctx.Err()))
+			}
+			session.Status = "failed"
+			session.UpdatedAt = time.Now()
+			if isRoute {
+				hcpo.storeMsgSeqRouteSession(routeKey, session)
+			}
+			_ = hcpo.saveMessageSequenceSession(context.WithoutCancel(ctx), sessionRelPath, session)
+			return "", session.ConversationHistory, haltErr
+		}
 		started := time.Now()
 		notificationID, notificationName, notificationMeta, notifyItem := hcpo.startMessageSequenceItemNotification(ctx, sequenceStep, item, stepIndex, stepPath, source, started)
 		summary, err := hcpo.executeMessageSequenceItem(ctx, sequenceStep, item, stepIndex, stepPath, session, isRoute)
@@ -419,12 +457,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeMessageSequenceStep(
 	}
 	_ = hcpo.saveMessageSequenceSession(ctx, sessionRelPath, session)
 	finalSummary := hcpo.summarizeMessageSequenceSession(session)
-	// The aggregated summary carries each item's CONCERNS: line prefixed with its
-	// item ID. File them durably here — this is the message-sequence equivalent of
-	// the regular step's composition point.
-	hcpo.recordStepConcerns(ctx, sequenceStep.GetID(), map[string]string{
-		ConcernPhaseMessageSequence: finalSummary,
-	})
+	// Item summaries stay in the retained message-sequence session. Pulse reads
+	// that evidence directly; do not parse prose into observations here.
 	if err := hcpo.saveFinalExecutionSummary(sequenceStep.GetID(), stepPath, finalSummary); err != nil {
 		hcpo.recordRunPersistenceError(context.Background(), sequenceStep.GetID(), err)
 	}
@@ -484,19 +518,17 @@ func (hcpo *StepBasedWorkflowOrchestrator) startMessageSequenceItemNotification(
 	if hcpo == nil || step == nil {
 		return "", "", nil, false
 	}
-	// The runtime's own final validation gate does not get an auto-notification.
-	// On the happy path it is a deterministic file/DB check in Go (RunPreValidation
-	// — no model turn, nothing the agent did not already report), yet announcing it
-	// cost a full synthetic LLM turn and put a second near-identical "step finished"
-	// message in the conversation for one step. A real failure is not lost: it
-	// propagates out of executeMessageSequenceItem, fails the sequence, and is
-	// reported by the step's own completion notification with the validation errors
-	// in its summary — and emitPreValidationCompletedEvent still feeds the UI the
-	// gate result either way. Author-declared prevalidation items keep their
-	// notifications; only the appended gate is silent.
-	if item.Synthetic {
-		return "", "", nil, false
-	}
+	// The runtime's own final validation gate used to skip its auto-notification:
+	// on the happy path it is a deterministic file/DB check in Go (RunPreValidation
+	// — no model turn, nothing the agent did not already report), and announcing
+	// it cost a full synthetic LLM turn plus a second near-identical "step
+	// finished" message for one step. Re-enabled: the builder wants to hear about
+	// a pre-validation failure as soon as it happens (so it can check whether a
+	// schedule/setup issue or a genuine mistake is to blame) rather than only
+	// after it eventually surfaces via the step's own completion notification —
+	// worth the extra turn/message on the failure path. Author-declared
+	// prevalidation items always got notifications; this just stops treating the
+	// appended gate item differently from them.
 	// Fail loud, not silent: a nil notifier means this execution path forgot to
 	// wire SetWorkshopExecutionNotifier, so the main agent gets NO notification
 	// for this message_sequence item. That used to be an invisible no-op (a whole
@@ -840,6 +872,26 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeMessageSequenceUserMessage(ctx
 	}
 	session.ExecutionTurnCount++
 	turnNumber := session.ExecutionTurnCount
+	// PLAT-167: tag this item's cost-ledger entries with its own identity, so
+	// Cost Analysis can break a message_sequence step's spend out per item
+	// instead of merging every item into one combined row. Reuses PLAT-166's
+	// generic phase mechanism verbatim (Entry.Phase / ExecutionAggregate.ByPhase
+	// already accept any string) — no new ledger plumbing. runtime.Agent is
+	// created once and reused for every item in this step
+	// (getMessageSequenceRuntime), so — exactly like the reflection turn —
+	// this must toggle the already-attached observer's phase rather than
+	// attaching a new one.
+	if ba := runtime.Agent.GetBaseAgent(); ba != nil {
+		for _, observer := range ba.Observers() {
+			if costObserver, ok := observer.(*costobserver.Observer); ok {
+				costObserver.SetPhase("item:" + item.ID)
+				// Resets to "" (not costobserver.PhaseExecutionOnly): see
+				// Observer.SetPhase's doc — an untagged turn writes no
+				// by_phase entry at all, instead of a named-but-redundant one.
+				defer costObserver.SetPhase("")
+			}
+		}
+	}
 	attemptStartedAt := time.Now().UTC()
 	result, history, err := hcpo.withWorkshopMessageTarget(turnCtx, step.GetID(), "message-sequence:"+item.ID, runtime.Agent, func() (string, []llmtypes.MessageContent, error) {
 		return runtime.Agent.Execute(turnCtx, templateVars, session.ConversationHistory)
@@ -981,6 +1033,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) getMessageSequenceRuntime(ctx context
 		sessionID = strings.TrimSpace(session.runtime.SessionID)
 	}
 	session.RuntimeSessionID = sessionID
+	if err := hcpo.materializeWorkflowGuardPaths(readPaths, writePaths); err != nil {
+		return nil, ctx, err
+	}
 	hcpo.configureSubAgentSessionGuard(sessionID, "message-sequence", step.GetID(), readPaths, writePaths)
 	hcpo.setMessageSequenceShellEnv(sessionID, stepPath, step.GetID())
 
@@ -1007,7 +1062,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) getMessageSequenceRuntime(ctx context
 	}
 
 	agentName := fmt.Sprintf("message-sequence-%s", step.GetID())
-	agent, err := hcpo.createExecutionOnlyAgent(agentCtx, "execution_only", stepPath, agentName, step.AgentConfigs, step.GetID(), "", false)
+	agent, err := hcpo.createExecutionOnlyAgent(agentCtx, "execution_only", stepPath, agentName, step.AgentConfigs, step, step.GetID(), "", false)
 	if err != nil {
 		return nil, agentCtx, err
 	}
@@ -1043,6 +1098,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) setMessageSequenceShellEnv(sessionID,
 		stepOutputAbs,
 		filepath.Dir(stepOutputAbs),
 		"",
+		hcpo.selectedRunFolder,
 		hcpo.snapshotWorkspaceEnv(),
 	)
 	configureWorkflowDBSession(sessionID, hcpo.GetWorkspacePath(), DBAccessReadWrite, false)
@@ -1145,16 +1201,21 @@ func requestedMessageSequenceItemWriteAccess(item MessageSequenceItem) (MessageS
 // silently read-only when the step itself is configured to write.
 func (hcpo *StepBasedWorkflowOrchestrator) resolveMessageSequenceItemWriteAccess(stepConfig *AgentConfigs, item MessageSequenceItem) MessageSequenceWriteAccess {
 	requested, hasItemOverride := requestedMessageSequenceItemWriteAccess(item)
+	var resolved MessageSequenceWriteAccess
 	if hasItemOverride {
-		return hcpo.constrainMessageSequenceWriteAccess(stepConfig, requested)
+		resolved = hcpo.constrainMessageSequenceWriteAccess(stepConfig, requested)
+	} else {
+		kbAccess := resolveKnowledgebaseAccess(stepConfig, hcpo.UseKnowledgebase())
+		resolved = MessageSequenceWriteAccess{
+			DB:            resolveDBAccess(stepConfig) == DBAccessReadWrite,
+			Knowledgebase: kbAccessAllowsWrite(kbAccess),
+			Learnings:     resolveLearningsAccess(stepConfig) == LearningsAccessReadWrite,
+		}
 	}
-
-	kbAccess := resolveKnowledgebaseAccess(stepConfig, hcpo.UseKnowledgebase())
-	return MessageSequenceWriteAccess{
-		DB:            resolveDBAccess(stepConfig) == DBAccessReadWrite,
-		Knowledgebase: kbAccessAllowsWrite(kbAccess),
-		Learnings:     resolveLearningsAccess(stepConfig) == LearningsAccessReadWrite,
+	if hcpo.isEvaluationMode {
+		resolved.Learnings = false
 	}
+	return resolved
 }
 
 // messageSequenceStepFullWriteAccess is the step's maximal granted write scope
@@ -1164,11 +1225,15 @@ func (hcpo *StepBasedWorkflowOrchestrator) resolveMessageSequenceItemWriteAccess
 func (hcpo *StepBasedWorkflowOrchestrator) messageSequenceStepFullWriteAccess(step *MessageSequencePlanStep) MessageSequenceWriteAccess {
 	stepConfig := getAgentConfigs(step)
 	kbAccess := resolveKnowledgebaseAccess(stepConfig, hcpo.UseKnowledgebase())
-	return MessageSequenceWriteAccess{
+	resolved := MessageSequenceWriteAccess{
 		DB:            resolveDBAccess(stepConfig) == DBAccessReadWrite,
 		Knowledgebase: kbAccessAllowsWrite(kbAccess),
 		Learnings:     resolveLearningsAccess(stepConfig) == LearningsAccessReadWrite,
 	}
+	if hcpo.isEvaluationMode {
+		resolved.Learnings = false
+	}
+	return resolved
 }
 
 func (hcpo *StepBasedWorkflowOrchestrator) constrainMessageSequenceWriteAccess(stepConfig *AgentConfigs, requested MessageSequenceWriteAccess) MessageSequenceWriteAccess {
@@ -1200,21 +1265,48 @@ func (hcpo *StepBasedWorkflowOrchestrator) setupMessageSequenceFolderGuard(stepP
 		executionWorkspacePath,
 		fmt.Sprintf("%s/soul", baseWorkspacePath),
 		fmt.Sprintf("%s/builder", baseWorkspacePath),
+		// tool_output_folder is where any bridge tool result past its inline size
+		// cap is spilled (MCP_TOOL_OUTPUT_DIR) -- most often a large agent_browser
+		// snapshot. setupExecutionFolderGuard has granted this since PLAT-073
+		// cluster F; this parallel message_sequence builder never did, so a
+		// message_sequence step told "full output saved to <path>" had no legal
+		// way to read it back. Confirmed live 2026-08-17 (confida-login
+		// step-5-execute-browser-and-capture-apis): its read paths carried no
+		// tool_output_folder, and a spilled agent_browser result came back as
+		// "access denied ... outside every workspace root" with no recoverable
+		// path. Read-only: the spill is written by the bridge process, never by
+		// the step.
+		fmt.Sprintf("%s/tool_output_folder", baseWorkspacePath),
 	}
-	dbAccess := resolveDBAccess(stepConfig)
 	kbAccess := resolveKnowledgebaseAccess(stepConfig, hcpo.UseKnowledgebase())
 	learningsAccess := resolveLearningsAccess(stepConfig)
-	readPaths = append(readPaths, getDBPath(baseWorkspacePath))
+	if hcpo.isEvaluationMode {
+		learningsAccess = LearningsAccessNone
+	}
+	// message_sequence agents use query_workflow_db/mutate_workflow_db, so
+	// db/db.sqlite itself stays off the filesystem grant: configureWorkflowDBSession
+	// blocks it for managed agents, and Landlock cannot represent a broad parent
+	// allow with a narrower child deny because its rules are additive (introduced
+	// in commit a960df20 -- no PLAT ticket was filed for it; an earlier version
+	// of this comment mislabeled it "PLAT-169 follow-up", a real but unrelated
+	// ticket about MCP server checkbox spelling, corrected here as part of
+	// PLAT-175). db/assets/ is a sibling of db.sqlite, not a child of it, so
+	// granting it directly doesn't reopen that conflict -- and it has to be
+	// granted, because it's the only durable location a step can write an
+	// arbitrary file to (stores.md), and mutate_workflow_db is SQL-only and
+	// cannot write one. A prior version of this fix dropped the whole db/ grant
+	// instead of narrowing it, which took db/assets/ down as collateral damage:
+	// confida-login's survey step is instructed to sync db/assets/business-context/
+	// via shell every cycle and had no legal path to do so (PLAT-175).
+	dbAssetsPath := filepath.Join(getDBPath(baseWorkspacePath), DBAssetsFolderName)
+	readPaths = append(readPaths, dbAssetsPath)
 	if kbAccessAllowsRead(kbAccess) {
 		readPaths = append(readPaths, getKnowledgebasePath(baseWorkspacePath))
 	}
 	if learningsAccess != LearningsAccessNone {
 		readPaths = appendLearningReadPaths(readPaths, baseWorkspacePath, stepID)
 	}
-	writePaths = []string{stepFolderPath, downloadsPath}
-	if dbAccess == DBAccessReadWrite {
-		writePaths = append(writePaths, getDBPath(baseWorkspacePath))
-	}
+	writePaths = []string{stepFolderPath, downloadsPath, dbAssetsPath}
 	if itemWriteAccess.Knowledgebase && kbAccessAllowsWrite(kbAccess) {
 		writePaths = append(writePaths, filepath.Join(getKnowledgebasePath(baseWorkspacePath), "notes"))
 	}
@@ -1240,6 +1332,35 @@ func firstValidationFileName(schema *ValidationSchema) string {
 		}
 	}
 	return ""
+}
+
+// formatMessageSequenceValidationSchema renders a step's validation_schema for the
+// opening turn, matching the section regular and todo_task steps already render into
+// their system prompts (see execution_only_agent.go / todo_task_orchestrator_agent.go).
+// Returns "" when there is no schema or it fails to marshal.
+func formatMessageSequenceValidationSchema(schema *ValidationSchema) string {
+	if schema == nil {
+		return ""
+	}
+	schemaJSON, err := json.MarshalIndent(schema, "", "  ")
+	if err != nil {
+		return ""
+	}
+	return "## Required Output (Pre-Validation Schema)\nYour output MUST match this structure (it may check files and/or the db):\n```json\n" + string(schemaJSON) + "\n```"
+}
+
+// appendMessageSequenceValidationSchema joins a rendered validation_schema section onto
+// an existing opening-turn runtime context (description and/or reentry instruction),
+// separated by a blank line. Returns runtimeContext unchanged when there is no schema.
+func appendMessageSequenceValidationSchema(runtimeContext string, schema *ValidationSchema) string {
+	schemaSection := formatMessageSequenceValidationSchema(schema)
+	if schemaSection == "" {
+		return runtimeContext
+	}
+	if runtimeContext == "" {
+		return schemaSection
+	}
+	return runtimeContext + "\n\n" + schemaSection
 }
 
 func (hcpo *StepBasedWorkflowOrchestrator) buildMessageSequenceTemplateVars(step *MessageSequencePlanStep, item MessageSequenceItem, stepIndex int, stepPath string, message string, readPaths []string, writePaths []string, writeAccess MessageSequenceWriteAccess) map[string]string {
@@ -1482,33 +1603,37 @@ func (hcpo *StepBasedWorkflowOrchestrator) saveMessageSequenceSession(ctx contex
 
 func (hcpo *StepBasedWorkflowOrchestrator) summarizeMessageSequenceSession(session *messageSequenceSession) string {
 	completed := 0
-	var concerns []string
 	for _, entry := range session.Entries {
 		if entry.Status == "completed" {
 			completed++
 		}
-		for _, line := range strings.Split(entry.Summary, "\n") {
-			line = strings.TrimSpace(line)
-			if !strings.HasPrefix(strings.ToUpper(line), "CONCERNS:") {
-				continue
-			}
-			concern := strings.TrimSpace(line[len("CONCERNS:"):])
-			if concern == "" {
-				continue
-			}
-			itemID := strings.TrimSpace(entry.ItemID)
-			if itemID == "" {
-				itemID = strings.TrimSpace(entry.EntryID)
-			}
-			if itemID != "" {
-				concern = fmt.Sprintf("%s: %s", itemID, concern)
-			}
-			concerns = append(concerns, concern)
-		}
 	}
-	summary := fmt.Sprintf("Message sequence %s completed: %d item(s) completed", session.StepID, completed)
-	if len(concerns) > 0 {
-		summary += "\nCONCERNS: " + strings.Join(concerns, "; ")
+	return fmt.Sprintf("Message sequence %s completed: %d item(s) completed", session.StepID, completed)
+}
+
+// messageSequenceHaltedBeforeItem reports why a message_sequence queue must not
+// start another item, or nil to proceed.
+//
+// PLAT-130. Clicking Stop on a schedule cancelled the run's context correctly,
+// and the item loop already returned on any item error — yet a queued item
+// still fired, because "the context was cancelled" only becomes an error if
+// some layer underneath converts it into one. Session teardown races that
+// conversion: a coding-CLI turn whose pane is being killed can return a
+// truncated-but-plausible result rather than a failure, and the queue reads
+// that as success and moves on. The next item then runs its real side effect —
+// a post, a write, an outbound call — after the UI, the run history and the
+// schedule status all say the run stopped.
+//
+// Checking the context directly removes the dependency on that conversion. It
+// is deliberately a pre-item gate rather than a mid-item abort: an item already
+// in flight is left to unwind through its own error path, but no new work
+// begins once the run is cancelled.
+func messageSequenceHaltedBeforeItem(ctx context.Context, stepID, itemID string) error {
+	if ctx == nil {
+		return nil
 	}
-	return summary
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("message_sequence step %q halted before item %q: %w", stepID, itemID, err)
+	}
+	return nil
 }

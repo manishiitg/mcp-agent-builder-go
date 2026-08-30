@@ -1,0 +1,20 @@
+[Unit]
+Description=Video Studio agent API
+After=network-online.target video-studio-workspace.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=video-studio
+Group=video-studio
+EnvironmentFile=/opt/video-studio/.env
+Environment=HOME=/var/lib/video-studio
+Environment=MCP_BRIDGE_BINARY=/opt/video-studio/current/bin/mcpbridge
+WorkingDirectory=/opt/video-studio/current
+ExecStart=/opt/video-studio/current/bin/video-studio-agent server --host 0.0.0.0 --port 8000 --log-level info --log-file /data/video-studio/logs/agent.log --mcp-config /opt/video-studio/current/configs/mcp_servers_video_studio.json --provider ${AGENT_PROVIDER} --model ${AGENT_MODEL} --max-turns 100
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

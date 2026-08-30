@@ -1,6 +1,6 @@
 # Publish strategy — share HTML artifacts at a public URL
 
-You publish a workflow's (or the org's) **HTML artifacts** to a **public URL** on a static
+You publish a workflow's **HTML artifacts** to a **public URL** on a static
 host. This is the share-twin of backup: backup keeps things safe; publish makes them visible.
 You are **provider-agnostic** — you deploy to whatever static host the config names, using its
 CLI / git / file-sync, and you record the resulting URL. Never invent a destination; the
@@ -14,26 +14,20 @@ the Pulse log just because the saved `publish.targets` only lists the dashboard 
 should go out, **update `targets` to include both** before you build. Deploy `dashboard.html`
 AND `pulse.html`; if only one file ends up on the host, you did it wrong.
 
-For **org-level Chief of Staff / Org Pulse**, publish **BOTH org pages**:
-`pulse/goals.html` as `goals.html` and `pulse/org-pulse.html` as `pulse.html`, plus an
-`index.html` wrapper with Goals | Pulse navigation. There is no workflow dashboard for the
-org-level publish path unless the user explicitly asks for one.
-
 Use the same workflow-style config/status split:
 
 - workflow publish config/status: `workflow.json.publish` + `publish/status.json`
-- org publish config/status: `pulse/publish.json` + `pulse/publish/status.json`
 
 - **Reporting dashboard** (`reports/`) — **live** HTML: it calls `window.report.query(sql)`
-  against `db/db.sqlite` inside the app, which doesn't exist on a static host. **Generate a
+  (and may call `updateField`/`updateFields` to write a field) against `db/db.sqlite` inside
+  the app, which doesn't exist on a static host — reads AND writes both need it. **Generate a
   static snapshot** first (next section) → `dashboard.html`.
 - **Pulse state** — remains in SQLite and is shown in the application Pulse popup.
   It is not a static publish artifact.
 
 For workflow publish, deploy three files: `dashboard.html`, `pulse.html`, and an
 **`index.html` wrapper** with a **top nav** (Dashboard | Pulse) over a single iframe —
-clicking a tab swaps the iframe's source. For org publish, use the same wrapper pattern with
-Goals | Pulse and point the first tab at `goals.html`. This gives each view full width, avoids
+clicking a tab swaps the iframe's source. This gives each view full width, avoids
 the double-scroll / collapse problems of a side-by-side embed, and never modifies the two
 inner pages:
 
@@ -85,11 +79,20 @@ A live report won't work on static hosting. Bake it to static HTML at publish ti
    ```html
    <script>
      window.__REPORT_DATA__ = { /* normalized-sql -> rows */ };
-     window.report = { query: function (sql) { return window.__REPORT_DATA__[normalize(sql)] || []; } };
+     var deniedWrite = function () { return Promise.reject(new Error('Editing is not available on this published snapshot.')); };
+     window.report = {
+       query: function (sql) { return window.__REPORT_DATA__[normalize(sql)] || []; },
+       updateField: deniedWrite, updateFields: deniedWrite
+     };
    </script>
    ```
    Put this **before** the report's own scripts so the shim wins. Normalize SQL consistently
-   (trim + collapse whitespace) on both the keys and in the shim.
+   (trim + collapse whitespace) on both the keys and in the shim. If the live report uses
+   `window.report.updateField`/`updateFields` (an inline Approve/edit action — see
+   `reporting-policy.md`), the shim's rejection is the only thing standing between a static
+   viewer and a raw "not a function" error on click; there is no live backend on a static host
+   for either function to reach, so a published snapshot is always read-only regardless of what
+   the live report can do.
 4. The result is a self-contained static file. The data is a **snapshot as of now** — that's
    expected; auto-republish after each run keeps it current.
 

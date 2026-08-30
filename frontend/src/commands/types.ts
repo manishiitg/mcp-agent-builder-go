@@ -32,11 +32,9 @@ export type WorkshopMode = 'workshop' | 'run'
 
 export interface CommandContext {
   beforeSlash: string
-  // Set for a specific product's tab (e.g. 'video-studio'); unset for a
-  // legacy Chief of Staff chat, or 'chief-of-staff' itself for an explicit
-  // one -- see isChiefOfStaffTab (utils/chiefOfStaff.ts) for the same
-  // distinction against a full tab. Lets a command opt out of surfaces it
-  // makes no sense in.
+  // Set for a specific product's tab (e.g. 'video-studio'); unset for the
+  // product-owned chat surface. Lets a command opt out of surfaces where it
+  // makes no sense.
   agentProfileId?: string
   activeTabId: string
   tabSessionId: string | null
@@ -68,6 +66,11 @@ export interface CommandDefinition {
   modes?: ModeCategory[]
   requiredWorkflowMode?: 'plan' | 'eval' | 'output'
   requiredWorkshopMode?: WorkshopMode | WorkshopMode[]
+  // Show the command in every workflow view even when selecting it will switch
+  // into requiredWorkshopMode. Use this for intentional, manual entry points
+  // such as Pulse reviews; hiding them makes them impossible to discover from
+  // the execution-log view where their evidence is most visible.
+  showInAllWorkshopModes?: boolean
   validate?: (ctx: CommandContext) => string | null
   hidden?: boolean
   // 'product' commands ship with the active product (declared in its

@@ -1,6 +1,6 @@
 import React, { useMemo, useCallback, useRef, useEffect, forwardRef, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
-import { PanelRightOpen } from 'lucide-react'
+import { GripVertical, Laptop, PanelRightClose, PanelRightOpen, Smartphone, Tablet } from 'lucide-react'
 import { WorkflowCanvas, type WorkflowCanvasRef } from './canvas'
 import { useGlobalPresetStore } from '../../stores/useGlobalPresetStore'
 import { useModeStore } from '../../stores/useModeStore'
@@ -19,7 +19,12 @@ import { startRestoredTransportTerminal } from '../../utils/restoredTerminal'
 import { isExternalReadOnlyWorkflowSession, isInternalChildSession } from '../../utils/workflowSessionKinds'
 import { activeWorkflowTabIdForPreset } from '../../utils/workflowTabOwnership'
 import { activateTab } from '../../utils/activateTab'
-import { reconcileWorkflowRuntimeTab, workflowRuntimeTabProjection } from './workflowRuntimeTabProjection'
+import {
+  reconcileWorkflowRuntimeTab,
+  reusableScheduleTabId,
+  shouldCatchUpRunningWorkflowTranscript,
+  workflowRuntimeTabProjection,
+} from './workflowRuntimeTabProjection'
 import {
   PreviousChatHistoryPanel,
   chatHistoryConversationPath,
@@ -29,12 +34,16 @@ import {
   chatHistoryUsesTerminalRestore,
   chatHistoryWorkshopModeLabel,
 } from '../PreviousChatHistoryPanel'
+import { chatHistoryOpenDisposition } from '../../utils/chatHistoryOpenDisposition'
 import {
   DEFAULT_REPORT_PREVIEW_DEVICE,
   REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT,
   openWorkflowInDefaultPreview,
   readReportPreviewPreference,
+  readWorkflowSplitPreference,
   type ReportPreviewDevice,
+  writeReportPreviewPreference,
+  writeWorkflowSplitPreference,
 } from '../../utils/reportPreviewPreference'
 
 // Helper component to get observerId and render ChatArea
@@ -87,13 +96,10 @@ import {
   type PollingEvent,
   type RunningWorkflowInfo,
 } from '../../services/api-types'
-import { getRawEventData } from '../../generated/event-types'
 import { findOrCreateWorkflowTab, isChatCompatiblePhase } from '../../utils/chatSubmitHelpers'
 import { hydrateTabEvents } from '../../utils/sessionRestore'
 // Inactive workflow tabs hydrate lazily and fall back to workflow-scoped chat history.
 
-// Stable empty array for Zustand selector (must be module-level to avoid referential instability)
-const EMPTY_WORKFLOW_EVENTS: PollingEvent[] = []
 const WORKFLOW_RESTORE_TIMEOUT_MS = 8000
 const WORKFLOW_KILL_AND_START_STOP_TIMEOUT_MS = 30_000
 const WORKFLOW_CHAT_CONTENT_EVENT_TYPES = new Set(['user_message', 'conversation_end', 'unified_completion'])
@@ -101,8 +107,30 @@ function normalizeWorkflowPath(path?: string | null): string {
   return (path || '').replace(/\/+$/, '')
 }
 
+function defaultWorkflowSplitRatio(device: ReportPreviewDevice, width = typeof window === 'undefined' ? 1280 : window.innerWidth): number {
+  if (device === 'mobile') return clampWorkflowSplitRatio((width - 480) / width, width)
+  if (device === 'desktop') return clampWorkflowSplitRatio(380 / width, width)
+  return 0.5
+}
+
+function clampWorkflowSplitRatio(ratio: number, width: number): number {
+  const minPaneWidth = 240
+  const minRatio = Math.max(0.15, Math.min(0.5, minPaneWidth / Math.max(width, minPaneWidth * 2)))
+  const maxRatio = Math.min(0.85, 1 - minRatio)
+  return Math.max(minRatio, Math.min(maxRatio, ratio))
+}
+
 function hasWorkflowChatContent(events?: PollingEvent[]): boolean {
   return (events || []).some(event => WORKFLOW_CHAT_CONTENT_EVENT_TYPES.has(event.type || ''))
+}
+
+// createChatTab always mints a fresh crypto.randomUUID() sessionId for a
+// brand-new tab, even one with zero conversation behind it -- so a tab's
+// `sessionId` alone is truthy even when nothing has ever been loaded into
+// it. The real "already has something" signal is whether that session has
+// any actual content.
+function workflowTabAlreadyHasContent(tab: ChatTab | undefined, tabEvents: Record<string, PollingEvent[]>): boolean {
+  return Boolean(tab?.sessionId) && hasWorkflowChatContent(tabEvents[tab!.sessionId!])
 }
 
 function workflowTabSortTimestamp(tab: ChatTab): number {
@@ -224,13 +252,17 @@ const WorkflowPreviousChatsPanel: React.FC<{
   const setTabConfig = useChatStore(state => state.setTabConfig)
   const addToast = useChatStore(state => state.addToast)
 
-  const handleResumePreviousChat = useCallback(async (session: ChatHistorySession) => {
-    if (!activeTabId) {
-      addToast('No active automation chat to resume in', 'error')
-      return
-    }
-
-    let targetTabId = activeTabId
+  // Shared by the manual "Resume" click (handleResumePreviousChat below,
+  // starting tab = whatever's active) and the auto-restore-on-open effect
+  // further below (starting tab = the just-created blank builder tab, known
+  // synchronously -- reading activeTabId there would race React's state
+  // batching).
+  const resumeChatSessionIntoTab = useCallback(async (
+    session: ChatHistorySession,
+    startingTabId: string,
+    disposition: ReturnType<typeof chatHistoryOpenDisposition>,
+  ) => {
+    let targetTabId = startingTabId
     const chatStore = useChatStore.getState()
     let targetTab = chatStore.chatTabs[targetTabId]
     const targetPresetId = targetTab?.metadata?.presetQueryId
@@ -268,8 +300,8 @@ const WorkflowPreviousChatsPanel: React.FC<{
     chatStore.updateTabSessionId(targetTabId, session.session_id)
 
     const path = chatHistoryConversationPath(session)
-    const useTerminalRestore = chatHistoryUsesTerminalRestore(session)
-    const useNativeResume = chatHistorySupportsNativeResume(session)
+    const useTerminalRestore = disposition === 'interactive-transport' && chatHistoryUsesTerminalRestore(session)
+    const useNativeResume = disposition === 'interactive-transport' && chatHistorySupportsNativeResume(session)
     const existingContext = useChatStore.getState().getTabConfig(targetTabId)?.fileContext || []
     const shouldAttachFileFallback = !useTerminalRestore && !useNativeResume
     const nextFileContext = shouldAttachFileFallback
@@ -304,14 +336,131 @@ const WorkflowPreviousChatsPanel: React.FC<{
       setShowChatArea(true)
       startRestoredTransportTerminal(session.session_id, path, session.session_id, workspacePath)
     }
-  }, [activePresetId, activeTabId, addToast, setShowChatArea, setTabConfig, workspacePath])
+  }, [activePresetId, addToast, setShowChatArea, setTabConfig, workspacePath])
+
+  const handleResumePreviousChat = useCallback(async (session: ChatHistorySession) => {
+    const disposition = chatHistoryOpenDisposition(session)
+    if (disposition === 'read-only-schedule') {
+      const chatStore = useChatStore.getState()
+      const existingTab = Object.values(chatStore.chatTabs).find(tab =>
+        tab.metadata?.mode === 'workflow' &&
+        tab.metadata?.isScheduledRun === true &&
+        tab.sessionId === session.session_id
+      )
+      const scheduleMetadata: NonNullable<ChatTab['metadata']> = {
+        mode: 'workflow',
+        presetQueryId: activePresetId || undefined,
+        isViewOnly: true,
+        isScheduledRun: true,
+        scheduledJobName: 'Schedule',
+        readOnlyRestoredAt: Date.now(),
+        userInteractiveContinuation: false,
+      }
+      const targetTabId = existingTab?.tabId || await chatStore.createChatTab('Schedule', scheduleMetadata)
+
+      if (existingTab) chatStore.setTabMetadata(targetTabId, scheduleMetadata)
+      chatStore.updateTabSessionId(targetTabId, session.session_id)
+      chatStore.setTabViewMode(targetTabId, 'formatted')
+      chatStore.setTabStreaming(targetTabId, false)
+      chatStore.setTabCompleted(targetTabId, true)
+      chatStore.setTabHasRunningBgAgents(targetTabId, false)
+      chatStore.setTabSyntheticTurn(targetTabId, false)
+      chatStore.setTabCanSteer(targetTabId, false)
+
+      try {
+        const runtime = await hydrateTabEvents(session.session_id, {
+          workspacePath,
+          fallbackToChatHistory: true,
+          preferChatHistory: true,
+        })
+        chatStore.setTabStreaming(targetTabId, runtime.status === 'running')
+        chatStore.setTabCompleted(targetTabId, runtime.status !== 'running')
+        chatStore.setTabHasRunningBgAgents(targetTabId, runtime.hasRunningBackgroundAgents ?? false)
+        chatStore.setTabSyntheticTurn(targetTabId, runtime.isSyntheticTurn ?? false)
+        chatStore.setTabCanSteer(targetTabId, false)
+      } catch (error) {
+        logger.warn('WorkflowLayout', 'Failed to restore scheduled-run transcript', {
+          sessionId: session.session_id,
+          error,
+        })
+        addToast('Failed to open the saved schedule transcript', 'error')
+        return
+      }
+
+      activateTab(targetTabId)
+      setShowChatArea(true)
+      return
+    }
+
+    if (!activeTabId) {
+      addToast('No active automation chat to resume in', 'error')
+      return
+    }
+    await resumeChatSessionIntoTab(session, activeTabId, disposition)
+  }, [activeTabId, addToast, resumeChatSessionIntoTab, setShowChatArea, workspacePath, activePresetId])
+
+  // Explicit product decision: opening a workflow with nothing currently
+  // happening for it (no live schedule, no live chat, no bg agents -- the
+  // reconnect effect in WorkflowLayout already prefers activating any of
+  // those over leaving this landing panel showing) should not drop the
+  // operator on a bare browse screen. Auto-restore the most recent real
+  // conversation instead; this landing panel still renders for genuinely
+  // fresh workflows (no chat history at all) and while its own fetch runs.
+  const autoRestoredRef = useRef(false)
+  useEffect(() => {
+    if (autoRestoredRef.current) return
+    if (!activeTabId || !workspacePath) return
+    const store = useChatStore.getState()
+    const tab = store.chatTabs[activeTabId]
+    if (!tab || tab.metadata?.mode !== 'workflow') return
+    if (tab.metadata?.isViewOnly || tab.metadata?.isScheduledRun || tab.metadata?.isBotRun) return
+    // An explicit New Chat leaves this same tab blank, which otherwise looks
+    // identical to "just landed here, nothing running" -- respect the
+    // operator's choice instead of immediately reopening what they just left.
+    if (tab.metadata?.skipWorkflowAutoRestore) return
+    // Only the blank builder tab this panel backs is eligible -- never
+    // hijack a tab the user already pointed at something else.
+    if (workflowTabAlreadyHasContent(tab, store.tabEvents)) return
+
+    // Explicit guard, not just an assumption about effect ordering: skip if
+    // ANY other tab for this workflow is actually doing something right now.
+    const somethingElseIsRunning = Object.values(store.chatTabs).some(other =>
+      other.tabId !== activeTabId &&
+      other.metadata?.mode === 'workflow' &&
+      other.metadata?.presetQueryId === activePresetId &&
+      (other.isStreaming || other.hasRunningBgAgents)
+    )
+    if (somethingElseIsRunning) return
+
+    autoRestoredRef.current = true
+    void (async () => {
+      try {
+        const { sessions } = await agentApi.listChatHistorySessions(1, 0, workspacePath, 'chat')
+        const [mostRecent] = sessions
+        if (!mostRecent) return
+        // Re-check right before applying: this fetch is async, and the
+        // reconnect effect may have activated a live tab in the meantime.
+        const latestStore = useChatStore.getState()
+        const latestTab = latestStore.chatTabs[activeTabId]
+        if (!latestTab) return
+        if (workflowTabAlreadyHasContent(latestTab, latestStore.tabEvents)) return
+        if (latestTab.metadata?.skipWorkflowAutoRestore) return
+        await resumeChatSessionIntoTab(mostRecent, activeTabId, chatHistoryOpenDisposition(mostRecent))
+      } catch (error) {
+        logger.warn('WorkflowLayout', 'Failed to auto-restore the most recent conversation', { workspacePath, error })
+      }
+    })()
+  }, [activeTabId, workspacePath, resumeChatSessionIntoTab])
 
   return (
     <PreviousChatHistoryPanel
       workspacePath={workspacePath}
       activeSessionId={activeSessionId ?? undefined}
-      title="Previous automation chats"
-      actionLabel="Resume"
+      // The active tab is the conversation workspace. The panel beneath it
+      // is only a selector for recent conversations / schedules / bots, so a
+      // second "Previous automation chats" heading just repeated the tab.
+      title=""
+      actionLabel="Open"
       emptyText="No previous automation chats yet."
       onHasChatsChange={onHasChatsChange}
       onSelectSession={handleResumePreviousChat}
@@ -375,6 +524,12 @@ function shouldBlockWorkflowNewChatForSession(
   return status === 'running' || status === 'active' || status === 'in_progress'
 }
 
+// restoreWorkflowStateFromEvents has no timeout of its own (it awaits
+// agentApi.getRecentSessionEvents / hydrateTabEvents directly), so every
+// caller that increments restoringWorkflowSessions via
+// beginWorkflowSessionRestore MUST wrap its restore call in this helper --
+// otherwise a hung request leaves that counter incremented forever and the
+// chat pane stuck on "Restoring previous session..." with no way out.
 function withWorkflowRestoreTimeout<T>(promise: Promise<T>, label: string, timeoutMs = WORKFLOW_RESTORE_TIMEOUT_MS): Promise<T> {
   return new Promise((resolve, reject) => {
     const timeout = window.setTimeout(() => {
@@ -430,11 +585,11 @@ async function restoreWorkflowStateFromEvents(
     const { addTabEvents, setTabEvents, setTabLastEventIndex, getTabLastEventIndex, getTabEvents } = useChatStore.getState()
     const workflowStore = useWorkflowStore.getState()
 
-    // Skip if batch progress is already active (avoid overwriting live state)
-    if (workflowStore.batchProgress?.isActive) {
-      logger.debug('WorkflowLayout', 'Batch progress already active, skipping restore')
-      return
-    }
+    // Transcript hydration and canvas-state restoration are separate concerns.
+    // Another workflow may already own the singleton canvas batch-progress
+    // state, but that must never prevent this session's conversation events
+    // from being loaded into its tab.
+    const shouldRestoreCanvasState = !workflowStore.batchProgress?.isActive
 
     let events: PollingEvent[] = []
     let lastIndex = -1
@@ -475,6 +630,14 @@ async function restoreWorkflowStateFromEvents(
     const currentIndex = getTabLastEventIndex(sessionId)
     if (lastIndex > currentIndex) {
       setTabLastEventIndex(sessionId, lastIndex)
+    }
+
+    if (!shouldRestoreCanvasState) {
+      logger.debug('WorkflowLayout', 'Hydrated workflow transcript without replacing active batch progress', {
+        sessionId,
+        eventCount: events.length,
+      })
+      return
     }
 
     // Scan events to find batch context, current step, and step statuses
@@ -633,17 +796,12 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
   const chatAreaRef = useRef<ChatAreaRef>(null)
   // Ref for the WorkflowCanvas component (for triggering refresh)
   const canvasRef = useRef<WorkflowCanvasRef>(null)
-  // Per-session high-water marks for event processing.
-  // Using Maps instead of single refs prevents re-scanning all historical events when switching
-  // between workflow tabs. Without this, every tab switch fires canvasRef.refresh() for every
-  // historical todo_steps_extracted event — causing hangs proportional to event history depth.
-  const lastProcessedEventIndexRef = useRef<Map<string, number>>(new Map())
   // Store pending query to submit after ChatArea mounts
   const pendingQueryRef = useRef<{ query: string; executionOptions?: ExecutionOptions } | null>(null)
-  // Loading state for session restoration (shown between chat tabs and chat area).
-  // Lifted into useChatStore so ChatArea can render an in-panel spinner during restore.
-  const isRestoringWorkflowSessions = useChatStore(state => state.isRestoringWorkflowSessions)
-  const setIsRestoringWorkflowSessions = useChatStore(state => state.setIsRestoringWorkflowSessions)
+  const isActiveWorkflowSessionRestoring = useChatStore(state => {
+    const tab = state.activeTabId ? state.chatTabs[state.activeTabId] : undefined
+    return !!tab?.sessionId && (state.restoringWorkflowSessions[tab.sessionId] ?? 0) > 0
+  })
   // Kill-and-start confirmation when "+ new chat" hits a running workflow session.
   // Holds the session ID(s) to stop and a human-readable description for the dialog.
   const [killAndStartState, setKillAndStartState] = useState<{
@@ -668,14 +826,6 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
     setShowWorkspacePane(true)
     setFocusedPane('chat')
   }, [setFocusedPane, setShowChatArea, setShowWorkspacePane])
-  useEffect(() => {
-    if (!isRestoringWorkflowSessions) return
-    const timeout = window.setTimeout(() => {
-      console.warn('[WorkflowReconnect] Restore indicator timed out; clearing stuck restoring state')
-      setIsRestoringWorkflowSessions(false)
-    }, WORKFLOW_RESTORE_TIMEOUT_MS + 2000)
-    return () => window.clearTimeout(timeout)
-  }, [isRestoringWorkflowSessions, setIsRestoringWorkflowSessions])
   // Track the previous preset ID for auto-minimize on preset switch
   const previousPresetIdRef = useRef<string | null>(null)
   const pendingReadOnlyRestoreRef = useRef<{ presetId: string | null; tabId: string } | null>(null)
@@ -755,6 +905,8 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
 
     for (const tab of tabsToHydrate) {
       if (!tab.sessionId) continue
+      const restoreStore = useChatStore.getState()
+      restoreStore.beginWorkflowSessionRestore(tab.sessionId)
       try {
         await withWorkflowRestoreTimeout(
           restoreWorkflowStateFromEvents(tab.sessionId, currentWorkspacePath, true),
@@ -771,6 +923,8 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
         }
       } catch (err) {
         console.warn('[WorkflowReconnect] Failed to rehydrate events for persisted tab', tab.sessionId, err)
+      } finally {
+        useChatStore.getState().endWorkflowSessionRestore(tab.sessionId)
       }
     }
 
@@ -848,6 +1002,58 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
   const [reportPreviewPreference, setReportPreviewPreference] = useState<ReportPreviewDevice>(
     () => readReportPreviewPreference(workspacePath),
   )
+  const splitLayoutRef = useRef<HTMLDivElement>(null)
+  const [workspaceSplitRatio, setWorkspaceSplitRatio] = useState(() => (
+    readWorkflowSplitPreference(workspacePath, readReportPreviewPreference(workspacePath))
+      ?? defaultWorkflowSplitRatio(readReportPreviewPreference(workspacePath))
+  ))
+  const workspaceSplitRatioRef = useRef(workspaceSplitRatio)
+
+  useEffect(() => {
+    const saved = readWorkflowSplitPreference(workspacePath, reportPreviewPreference)
+    const width = splitLayoutRef.current?.getBoundingClientRect().width || window.innerWidth
+    const next = saved ?? defaultWorkflowSplitRatio(reportPreviewPreference, width)
+    workspaceSplitRatioRef.current = next
+    setWorkspaceSplitRatio(next)
+  }, [reportPreviewPreference, workspacePath])
+
+  const setSplitRatio = useCallback((next: number, persist = false) => {
+    const width = splitLayoutRef.current?.getBoundingClientRect().width || window.innerWidth
+    const ratio = clampWorkflowSplitRatio(next, width)
+    workspaceSplitRatioRef.current = ratio
+    setWorkspaceSplitRatio(ratio)
+    if (persist) writeWorkflowSplitPreference(workspacePath, ratio, reportPreviewPreference)
+  }, [reportPreviewPreference, workspacePath])
+
+  const handleSplitPointerDown = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
+    if (window.innerWidth < 768) return
+    event.preventDefault()
+    const container = splitLayoutRef.current
+    if (!container) return
+    event.currentTarget.setPointerCapture(event.pointerId)
+    const rect = container.getBoundingClientRect()
+    const update = (clientX: number) => setSplitRatio((clientX - rect.left) / rect.width)
+    update(event.clientX)
+    const onMove = (moveEvent: PointerEvent) => {
+      if (moveEvent.pointerId === event.pointerId) update(moveEvent.clientX)
+    }
+    const onEnd = (endEvent: PointerEvent) => {
+      if (endEvent.pointerId !== event.pointerId) return
+      writeWorkflowSplitPreference(workspacePath, workspaceSplitRatioRef.current, reportPreviewPreference)
+      event.currentTarget.removeEventListener('pointermove', onMove)
+      event.currentTarget.removeEventListener('pointerup', onEnd)
+      event.currentTarget.removeEventListener('pointercancel', onEnd)
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    event.currentTarget.addEventListener('pointermove', onMove)
+    event.currentTarget.addEventListener('pointerup', onEnd)
+    event.currentTarget.addEventListener('pointercancel', onEnd)
+  }, [reportPreviewPreference, setSplitRatio, workspacePath])
+
+  const collapseWorkspaceFromRail = useCallback(() => {
+    setShowWorkspacePane(false)
+    setWorkspaceMinimized(true)
+  }, [setShowWorkspacePane, setWorkspaceMinimized])
 
   const openDefaultPreview = useCallback(() => {
     setReportPreviewPreference(DEFAULT_REPORT_PREVIEW_DEVICE)
@@ -862,7 +1068,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
     openDefaultPreview()
   }, [openDefaultPreview])
 
-  const createFreshWorkflowBuilderTab = useCallback(async (presetId: string, options?: { composerFirst?: boolean }) => {
+  const createFreshWorkflowBuilderTab = useCallback(async (presetId: string, options?: { composerFirst?: boolean; isExplicitNewChat?: boolean }) => {
     const chatStore = useChatStore.getState()
     const oldTabs = Object.values(chatStore.chatTabs).filter(tab =>
       tab.metadata?.mode === 'workflow' &&
@@ -875,7 +1081,12 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
       mode: 'workflow',
       phaseId: 'workflow-builder',
       phaseName: 'Automation Builder',
-      presetQueryId: presetId
+      presetQueryId: presetId,
+      // Only an explicit New Chat marks the tab as intentionally blank. The
+      // preset-switch fallback (landing on a workflow with no open tabs) must
+      // keep auto-restoring the previous conversation -- that's the feature
+      // working as intended, not the bug this flag guards against.
+      skipWorkflowAutoRestore: options?.isExplicitNewChat === true
     })
     if (options?.composerFirst) {
       openDefaultPreview()
@@ -921,7 +1132,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
   //
   //   mobile  → preview/files 480px column, chat takes the rest (review-style)
   //   tablet  → equal 50/50 split between chat and preview
-  //   laptop  → chat is hidden, report fills the full width
+  //   laptop  → compact mobile-width chat beside the full desktop workspace
   //   default → 50/50 split (no preview pref, or running in non-preview views)
   const isResponsiveWorkspaceCanvas = showChatArea && workspacePaneVisible
   const previewPaneTier: 'mobile' | 'tablet' | 'laptop' | null = isResponsiveWorkspaceCanvas
@@ -945,7 +1156,15 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
     workflowWorkspaceView === 'execution-logs' ||
     workflowWorkspaceView === 'learnings' ||
     workflowWorkspaceView === 'knowledgebase' ||
-    workflowWorkspaceView === 'database'
+    workflowWorkspaceView === 'database' ||
+    workflowWorkspaceView === 'evaluation' ||
+    workflowWorkspaceView === 'schedules' ||
+    workflowWorkspaceView === 'skills' ||
+    workflowWorkspaceView === 'mcp' ||
+    workflowWorkspaceView === 'secrets' ||
+    workflowWorkspaceView === 'folders' ||
+    workflowWorkspaceView === 'browser' ||
+    workflowWorkspaceView === 'llm'
   const chatPaneVisibilityClass =
     workspacePaneVisible && isWorkspaceViewActive
       ? 'hidden md:flex'
@@ -953,21 +1172,18 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
   // The report preview preference drives the outer pane width:
   //   mobile/files → right pane 480px, chat fills the rest (chat is col 1, pane col 2)
   //   tablet → report/flow and chat each take half the available width
-  //   laptop → chat is hidden, report/flow fills the full width
+  //   laptop → mobile-width chat, report/flow takes the remaining width
   //   default → normal split pane
-  const laptopHidesChat = previewPaneTier === 'laptop'
-  const splitGridCols = previewPaneTier === 'mobile' ? 'md:grid-cols-[minmax(0,1fr)_480px]'
-    : previewPaneTier === 'tablet' ? 'md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]'
-    : previewPaneTier === 'laptop' ? 'md:grid-cols-[minmax(0,1fr)]'
-    : 'md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]'
-  // Animate the GRID TRACK widths on the container so the chat↔report resize
-  // glides — the panes just follow their grid column instead of fighting it with
-  // per-tier explicit widths. (grid-template-columns animation is supported by
-  // the Electron Chromium runtime.)
-  const splitLayoutClassName = !showChatArea || !workspacePaneVisible || laptopHidesChat
+  // The divider sits between chat and the workspace. Each device preview keeps
+  // its own saved ratio, so Mobile, Tablet, and Laptop can be switched without
+  // one mode inheriting another mode's layout.
+  const splitLayoutClassName = !showChatArea || !workspacePaneVisible
     ? 'flex-1 min-h-0 flex flex-col'
-    : `flex-1 min-h-0 flex flex-col md:grid ${splitGridCols} md:grid-rows-[auto_minmax(0,1fr)] md:transition-[grid-template-columns] md:duration-300 md:ease-in-out`
-  const canvasPaneClassName = !showChatArea || laptopHidesChat
+    : 'flex-1 min-h-0 flex flex-col md:grid md:grid-rows-[auto_minmax(0,1fr)] md:[grid-template-columns:var(--workflow-split-columns)] md:transition-[grid-template-columns] md:duration-150 md:ease-out'
+  const splitLayoutStyle = showChatArea && workspacePaneVisible
+    ? ({ '--workflow-split-columns': `minmax(240px, ${workspaceSplitRatio}fr) minmax(240px, ${1 - workspaceSplitRatio}fr)` } as React.CSSProperties)
+    : undefined
+  const canvasPaneClassName = !showChatArea
     ? 'flex-1 min-h-0 min-w-0'
     : !workspacePaneVisible
       ? 'hidden'
@@ -1136,19 +1352,6 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
     }
   }, [])
 
-  // When switching to a session we haven't seen yet, initialize its high-water mark to the
-  // current event count — skipping all historical events. The canvas initializes via usePlanData
-  // independently; replaying old todo_steps_extracted events would fire multiple canvas.refresh()
-  // calls for no benefit and cause the visible hang on tab switch.
-  useEffect(() => {
-    const sid = activeSessionId
-    if (!sid) return
-    if (!lastProcessedEventIndexRef.current.has(sid)) {
-      const evts = useChatStore.getState().tabEvents[sid] ?? []
-      lastProcessedEventIndexRef.current.set(sid, evts.length - 1)
-    }
-  }, [activeSessionId])
-
   // The global workspace toggle now maps to the workflow's right-side Files
   // pane instead of the old app-level far-right file column.
   //
@@ -1219,93 +1422,6 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
       }
     }
   }, [])
-
-  const processPlanUpdateEvents = useCallback((sessionId: string, events: PollingEvent[]) => {
-    if (events.length === 0) return
-    // Find new todo_steps_extracted events that we haven't processed yet
-    const lastIdx = lastProcessedEventIndexRef.current.get(sessionId) ?? events.length - 1
-    for (let i = lastIdx + 1; i < events.length; i++) {
-      const event = events[i]
-      
-      if (event.type === 'todo_steps_extracted') {
-        logger.debug('WorkflowLayout', `[PlanUpdate] Event ${i}: type=${event.type}, timestamp=${event.timestamp}`)
-        // Use helper function to extract raw event data (handles nested structure)
-        const rawData = getRawEventData(event)
-        const eventData = rawData as {
-          extracted_steps?: unknown[], 
-          total_steps_extracted?: number, 
-          plan_source?: string, 
-          extraction_method?: string, 
-          workspace_path?: string,
-          metadata?: {
-            [k: string]: unknown
-          }
-        } | undefined
-        
-        if (!eventData) {
-          logger.warn('WorkflowLayout', '[PlanUpdate] Could not extract event data from event:', event)
-          continue
-        }
-        
-        const stepCount = (eventData?.extracted_steps?.length) || eventData?.total_steps_extracted || 0
-        const planSource = eventData?.plan_source || 'unknown'
-        const extractionMethod = eventData?.extraction_method || 'unknown'
-        
-        // Extract changed step IDs from metadata (granular event data)
-        // Metadata is at the top level of the event data (from BaseEventData)
-        const metadata = eventData?.metadata || {}
-        const changedStepIDs = (Array.isArray(metadata.changed_step_ids) 
-          ? metadata.changed_step_ids as string[] 
-          : []) || []
-        const deletedStepIDs = (Array.isArray(metadata.deleted_step_ids) 
-          ? metadata.deleted_step_ids as string[] 
-          : []) || []
-        
-        logger.debug('WorkflowLayout', `[PlanUpdate] Detected plan update event:`, {
-          stepCount,
-          planSource,
-          extractionMethod,
-          workspacePath: eventData?.workspace_path,
-          changedStepIDs,
-          deletedStepIDs,
-          hasMetadata: !!(eventData?.metadata),
-          metadataKeys: eventData?.metadata ? Object.keys(eventData.metadata) : [],
-          metadata: eventData?.metadata,
-          rawEventData: rawData,
-          eventIndex: i
-        })
-        
-        // Trigger canvas refresh with granular change data
-        if (canvasRef.current) {
-          logger.debug('WorkflowLayout', '[PlanUpdate] Calling canvasRef.current.refresh() with granular changes')
-          canvasRef.current.refresh(changedStepIDs, deletedStepIDs).then((changes) => {
-            logger.debug('WorkflowLayout', '[PlanUpdate] Canvas refresh completed:', changes)
-          }).catch((err) => {
-            logger.error('WorkflowLayout', '[PlanUpdate] Canvas refresh failed:', err)
-          })
-        } else {
-          logger.warn('WorkflowLayout', '[PlanUpdate] canvasRef.current is null, cannot refresh')
-        }
-      }
-      
-      // Update index processed - do this for ALL events to avoid re-scanning
-      lastProcessedEventIndexRef.current.set(sessionId, i)
-    }
-  }, [])
-
-  // Listen for todo_steps_extracted events without subscribing the whole layout
-  // render path to high-frequency chat/tool event updates.
-  useEffect(() => {
-    if (!activeSessionId) return
-
-    const sessionId = activeSessionId
-    return useChatStore.subscribe((state, prevState) => {
-      const events = state.tabEvents[sessionId] ?? EMPTY_WORKFLOW_EVENTS
-      const previousEvents = prevState.tabEvents[sessionId] ?? EMPTY_WORKFLOW_EVENTS
-      if (events === previousEvents || events.length === previousEvents.length) return
-      processPlanUpdateEvents(sessionId, events)
-    })
-  }, [activeSessionId, processPlanUpdateEvents])
 
   // Track reconnection by preset to prevent duplicate tabs while still allowing
   // Ctrl+K workflow switches to run the reconnect decision for that preset.
@@ -1537,10 +1653,6 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
           tab.sessionId && getTabEvents(tab.sessionId).length === 0
         )
 
-        if (sessionsToActuallyRestore.length > 0 || needsTabHydration) {
-          setIsRestoringWorkflowSessions(true)
-        }
-
         // 3a. Rehydrate events for persisted tabs whose event buffer was lost on refresh.
         if (needsTabHydration) {
           await rehydrateWorkflowTabs(interactiveExistingWorkflowTabs, workspacePath)
@@ -1610,13 +1722,19 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
             setTabStreaming(tabId, session.isActive)
             useChatStore.getState().setTabCompleted(tabId, !session.isActive)
           } else if (shouldHydrateWorkflowEvents) {
+            useChatStore.getState().beginWorkflowSessionRestore(session.sessionId)
             try {
-              await restoreWorkflowStateFromEvents(session.sessionId)
+              await withWorkflowRestoreTimeout(
+                restoreWorkflowStateFromEvents(session.sessionId),
+                `Restoring workflow events for ${session.sessionId}`
+              )
               if (session.isActive || session.status === 'running') {
                 setTabStreaming(tabId, true)
               }
             } catch (err) {
               console.warn('[WorkflowReconnect] Failed to load events for', session.sessionId, err)
+            } finally {
+              useChatStore.getState().endWorkflowSessionRestore(session.sessionId)
             }
           } else {
             setTabStreaming(tabId, session.isActive || session.status === 'running')
@@ -1679,14 +1797,12 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
         }
       } catch (error) {
         console.warn('[WorkflowReconnect] Failed to reconnect workflow tabs:', error)
-      } finally {
-        setIsRestoringWorkflowSessions(false)
       }
     }
 
     const timeoutId = setTimeout(reconnectWorkflowTabs, 500)
     return () => clearTimeout(timeoutId)
-  }, [activePresetId, workspacePath, setShowChatArea, setIsRestoringWorkflowSessions, rehydrateWorkflowTabs, createFreshWorkflowBuilderTab])
+  }, [activePresetId, workspacePath, setShowChatArea, rehydrateWorkflowTabs, createFreshWorkflowBuilderTab])
 
   useEffect(() => {
     if (!activePresetId || selectedModeCategory !== 'workflow') return
@@ -1730,7 +1846,22 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
 
           let tabId = existingTab?.tabId
           if (!tabId) {
-            tabId = await latestChatStore.createChatTab(projection.name, projection.metadata, running.session_id)
+            // The scheduler holds a per-workflow lease, so only one scheduled
+            // run exists at a time. Take over a finished Schedule lane rather
+            // than opening another tab per run — keying the dedupe purely on
+            // session id meant every run minted a new tab and none was ever
+            // reclaimed.
+            const reusableTabId = reusableScheduleTabId(
+              latestChatStore.chatTabs,
+              activePresetId,
+              running.session_id,
+            )
+            if (reusableTabId) {
+              tabId = reusableTabId
+              latestChatStore.updateTabSessionId(reusableTabId, running.session_id)
+            } else {
+              tabId = await latestChatStore.createChatTab(projection.name, projection.metadata, running.session_id)
+            }
           }
           if (projection.autoActivate) selectedRunningTabId ||= tabId
 
@@ -1751,6 +1882,28 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
           chatStore.setTabStreaming(tabId, true)
           chatStore.setTabCompleted(tabId, false)
           chatStore.setTabViewMode(tabId, activeViewMode)
+
+          // This reconciler often discovers a scheduled run after it has
+          // already emitted its opening message and several tool/stream
+          // events. SSE only guarantees delivery from the live subscription
+          // point onward, so explicitly catch up the formatted transcript
+          // before relying on the stream for future events.
+          if (shouldCatchUpRunningWorkflowTranscript(
+            activeViewMode,
+            useChatStore.getState().getTabEvents(running.session_id).length,
+          )) {
+            useChatStore.getState().beginWorkflowSessionRestore(running.session_id)
+            try {
+              await withWorkflowRestoreTimeout(
+                restoreWorkflowStateFromEvents(running.session_id, workspacePath),
+                `Restoring workflow events for ${running.session_id}`
+              )
+            } catch (error) {
+              logger.warn('WorkflowLayout', 'Failed to hydrate newly discovered running workflow tab:', error)
+            } finally {
+              useChatStore.getState().endWorkflowSessionRestore(running.session_id)
+            }
+          }
 
         }
 
@@ -1855,10 +2008,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
           tab.sessionId && chatStore.getTabEvents(tab.sessionId).length === 0
         )
         if (needsHydration) {
-          setIsRestoringWorkflowSessions(true)
-          void rehydrateWorkflowTabs(interactiveTabs, workspacePath).finally(() => {
-            setIsRestoringWorkflowSessions(false)
-          })
+          void rehydrateWorkflowTabs(interactiveTabs, workspacePath)
         }
       } else {
         console.log(`[WorkflowLayout] No tabs for new preset, clearing activeTabId`)
@@ -1875,7 +2025,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
       // Update the ref for non-preset-change re-fires (dep changes only)
       previousPresetIdRef.current = activePresetId
     }
-  }, [activePresetId, minimizeWorkflow, selectedRunFolder, setShowChatArea, setIsRestoringWorkflowSessions, rehydrateWorkflowTabs, createFreshWorkflowBuilderTab, workspacePath, revealWorkflowChat])
+  }, [activePresetId, minimizeWorkflow, selectedRunFolder, setShowChatArea, rehydrateWorkflowTabs, createFreshWorkflowBuilderTab, workspacePath, revealWorkflowChat])
 
   // Note: Query submission is now handled via chatAreaCallbackRef when ChatArea mounts
   // No need for useEffect with setTimeout - callback ref is the proper React pattern
@@ -2052,10 +2202,17 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
         return
       }
 
-      await createFreshWorkflowBuilderTab(activePresetId, { composerFirst: true })
+      await createFreshWorkflowBuilderTab(activePresetId, { composerFirst: true, isExplicitNewChat: true })
       return
     }
 
+    // Likely unreachable: this function's only caller is WorkflowChatTabs'
+    // "New chat" button, which renders solely when showChatArea is already
+    // true, and every setShowChatArea(true) in this file that's easy to trace
+    // back also has activePresetId set. Not proven dead -- showChatArea and
+    // activePresetId are independent state, set from ~18 different call
+    // sites, and nothing here guarantees they stay in lockstep. Left in place
+    // as a harmless fallback rather than deleted without full certainty.
     openDefaultPreview()
     setWorkflowWorkspaceView('builder')
     setShowWorkspacePane(true)
@@ -2090,7 +2247,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
     }
     setKillAndStartState({ isOpen: false, sessionIdsToStop: [], description: '', isStopping: false })
     try {
-      await createFreshWorkflowBuilderTab(activePresetId, { composerFirst: true })
+      await createFreshWorkflowBuilderTab(activePresetId, { composerFirst: true, isExplicitNewChat: true })
     } catch (err) {
       logger.error('WorkflowLayout', 'createFreshWorkflowBuilderTab failed after kill-and-start:', err)
       addToast('Failed to start new chat after stopping the previous one.', 'error')
@@ -2167,7 +2324,9 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
           'chat' when the click lands inside it. Capture fires outer→inner, so the
           deeper chat handler wins for chat clicks while canvas clicks stay 'preview'. */}
       <div
+        ref={splitLayoutRef}
         className={splitLayoutClassName}
+        style={splitLayoutStyle}
         onMouseDownCapture={showChatArea && workspacePaneVisible ? () => setFocusedPane('preview') : undefined}
       >
         {showChatArea && !workspacePaneVisible && canvasElement}
@@ -2177,7 +2336,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
             data-tour="workflow-chat-pane"
             data-testid="tour-workflow-chat-pane"
             onMouseDownCapture={() => setFocusedPane('chat')}
-            className={`${laptopHidesChat ? 'hidden' : chatPaneVisibilityClass} min-h-0 min-w-0 overflow-hidden flex-col bg-background transition-all duration-300 ${
+            className={`${chatPaneVisibilityClass} min-h-0 min-w-0 overflow-hidden flex-col bg-background transition-all duration-300 ${
             workspacePaneVisible
               ? `border-b border-border md:col-start-1 md:row-start-2 md:border-b-0 md:border-r ${shouldUseMobileReportPane ? 'flex-1 md:flex-[1.35]' : 'flex-1 basis-1/2'}`
               : 'flex-1'
@@ -2185,7 +2344,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
             {/* WorkflowChatTabs now renders inline in the WorkflowToolbar (chatTabsSlot
                 on canvasElement above) so the tabs + status + tools share one bar. */}
 
-            {isRestoringWorkflowSessions && (
+            {isActiveWorkflowSessionRestoring && (
               <div className="flex items-center gap-2 border-b border-blue-100 bg-blue-50 px-3 py-1.5 dark:border-blue-800/50 dark:bg-blue-900/20">
                 <div className="h-3 w-3 animate-spin rounded-full border-2 border-gray-300 border-t-blue-600 dark:border-gray-600 dark:border-t-blue-400"></div>
                 <span className="text-xs text-blue-600 dark:text-blue-400">Restoring previous session...</span>
@@ -2216,6 +2375,63 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
         )}
 
         {workspacePaneVisible && canvasElement}
+
+        {showChatArea && workspacePaneVisible && (
+          <div className="group/split relative z-30 hidden min-h-0 w-0 justify-self-start md:col-start-2 md:row-start-2 md:block">
+            <button
+              type="button"
+              onPointerDown={handleSplitPointerDown}
+              onKeyDown={(event) => {
+                if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+                event.preventDefault()
+                setSplitRatio(workspaceSplitRatioRef.current + (event.key === 'ArrowLeft' ? -0.02 : 0.02), true)
+              }}
+              className="absolute -left-1.5 inset-y-0 z-10 w-3 cursor-col-resize touch-none outline-none"
+              aria-label="Resize chat and workspace panels"
+              aria-orientation="vertical"
+              role="separator"
+              aria-valuemin={15}
+              aria-valuemax={85}
+              aria-valuenow={Math.round(workspaceSplitRatio * 100)}
+            >
+              <span className="absolute bottom-0 left-1/2 top-0 w-px -translate-x-1/2 bg-border transition-colors group-hover/split:bg-primary group-focus-within/split:bg-primary" />
+              <span className="absolute left-1/2 top-1/2 flex h-6 w-3.5 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-sm transition-colors group-hover/split:border-primary group-hover/split:text-primary group-focus-within/split:border-primary group-focus-within/split:text-primary">
+                <GripVertical className="h-3 w-3" />
+              </span>
+            </button>
+            <div className="pointer-events-none absolute left-0 top-1/2 z-20 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-0.5 rounded-md border border-border bg-background/95 p-0.5 shadow-lg backdrop-blur-sm opacity-0 transition-opacity group-hover/split:opacity-100 group-focus-within/split:opacity-100">
+              {([
+                ['mobile', Smartphone, 'Mobile preview'],
+                ['tablet', Tablet, 'Tablet preview'],
+                ['desktop', Laptop, 'Laptop preview'],
+              ] as const).map(([device, Icon, label]) => (
+                <button
+                  key={device}
+                  type="button"
+                  onPointerDown={event => event.stopPropagation()}
+                  onClick={() => writeReportPreviewPreference(workspacePath, device)}
+                  className={`pointer-events-auto flex h-6 w-6 items-center justify-center rounded transition-colors ${reportPreviewPreference === device ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}
+                  aria-label={label}
+                  aria-pressed={reportPreviewPreference === device}
+                  title={label}
+                >
+                  <Icon className="h-3 w-3" />
+                </button>
+              ))}
+              <span className="h-px w-3 bg-border" />
+              <button
+                type="button"
+                onPointerDown={event => event.stopPropagation()}
+                onClick={collapseWorkspaceFromRail}
+                className="pointer-events-auto flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                aria-label="Collapse workspace panel"
+                title="Collapse workspace panel"
+              >
+                <PanelRightClose className="h-3 w-3" />
+              </button>
+            </div>
+          </div>
+        )}
       </div>
       <ConfirmationDialog
         isOpen={killAndStartState.isOpen}

@@ -3,15 +3,13 @@
  * and WorkflowLayout.tsx handleStartPhase to reduce complexity.
  */
 
-import type { PollingEvent, ExtendedLLMConfiguration, AgentQueryRequest, ExecutionOptions } from '../services/api-types'
+import type { PollingEvent, ExtendedLLMConfiguration, AgentProfileChatRequest, AgentQueryRequest, ExecutionOptions } from '../services/api-types'
 import type { ChatTab } from '../stores/useChatStore'
 import type { ModeCategory } from '../stores/useModeStore'
 import { useChatStore } from '../stores/useChatStore'
 import { useGlobalPresetStore } from '../stores/useGlobalPresetStore'
 import { useWorkflowStore } from '../stores/useWorkflowStore'
-import { useImageGenStore } from '../stores/useImageGenStore'
 import { logger } from './logger'
-import { isChiefOfStaffTab } from './chiefOfStaff'
 
 // Workflow phases that support conversational chat mode instead of blocking human_feedback
 const CHAT_COMPATIBLE_PHASES = new Set([
@@ -189,18 +187,6 @@ export function buildQueryRequestPayload(params: {
       ? currentTab.config.workflowContext.map(w => w.workspacePath)
       : undefined,
     restored_conversation_path: restoredConversationPath?.trim() || undefined,
-    enable_image_generation: isChatWithExtras ? (currentTab?.config?.enableImageGeneration ?? false) : undefined,
-    image_gen_config: (() => {
-      if (!isChatWithExtras) return undefined
-      const imageGenConfig = useImageGenStore.getState().config
-      const cfg = {
-        provider: imageGenConfig.provider,
-        model_id: imageGenConfig.modelId,
-        api_key: imageGenConfig.apiKey || undefined,
-      }
-      console.log('[IMAGE_GEN] sending image_gen_config:', JSON.stringify(cfg))
-      return cfg
-    })(),
   }
 }
 
@@ -219,8 +205,15 @@ export function applyAgentProfileBinding(payload: AgentQueryRequest, tab: ChatTa
   }
 }
 
+export function buildAgentProfileChatRequest(payload: AgentQueryRequest, conversationKey?: string): AgentProfileChatRequest {
+  return {
+    message: payload.query,
+    ...(conversationKey ? { conversation_key: conversationKey } : {}),
+  }
+}
+
 // ---------------------------------------------------------------------------
-// 1d. resolveOrCreateTab — tab resolution + session ID guarantee for multi-agent
+// 1d. resolveOrCreateTab — tab resolution + session ID guarantee
 // ---------------------------------------------------------------------------
 
 export async function resolveOrCreateTab(params: {
@@ -230,29 +223,8 @@ export async function resolveOrCreateTab(params: {
   const { freshActiveTab, selectedModeCategory } = params
   let currentTab = freshActiveTab
 
-  if (!currentTab && selectedModeCategory === 'multi-agent') {
-    const chatStore = useChatStore.getState()
-    const tabs = Object.values(chatStore.chatTabs).filter(isChiefOfStaffTab)
-
-    if (tabs.length === 0) {
-      try {
-        // Guarded by selectedModeCategory === 'multi-agent' above.
-        const newTabId = await chatStore.createChatTab('Chief of Staff', {
-          mode: selectedModeCategory,
-        })
-        currentTab = chatStore.getTab(newTabId)
-        logger.debug('ChatArea', `Created new ${selectedModeCategory} tab: ${newTabId}`)
-      } catch (error) {
-        logger.error('ChatArea', `Failed to create ${selectedModeCategory} tab:`, error)
-        return null
-      }
-    } else {
-      currentTab = chatStore.getActiveTab() || tabs[0]
-    }
-  }
-
   if (!currentTab) {
-    logger.error('ChatArea', 'No currentTab — cannot submit query')
+    logger.error('ChatArea', `No ${selectedModeCategory || 'agent'} tab — the owning surface must create one before submit`)
     return null
   }
 

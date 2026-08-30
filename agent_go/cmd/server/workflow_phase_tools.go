@@ -148,8 +148,8 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 						log.Printf("[WORKFLOW_PHASE] Refresh LLMConfig details: mode=%q tieredConfig=%v",
 							caps.LLMConfig.Mode, caps.LLMConfig.TieredConfig != nil)
 						phaseLLM, refreshedTiered := workshopResolveLLMConfig(caps.LLMConfig)
-						maintenanceLLM := workshopResolveMaintenanceLLMConfig(caps.LLMConfig)
-						workshopSession.UpdatePresetLLMConfigs(phaseLLM, maintenanceLLM)
+						pulseLLM := workshopResolvePulseLLMConfig(caps.LLMConfig)
+						workshopSession.UpdatePresetLLMConfigs(phaseLLM, pulseLLM)
 
 						if refreshedTiered != nil {
 							workshopSession.UpdateTieredConfig(refreshedTiered)
@@ -274,7 +274,11 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 			log.Printf("[WORKFLOW_PHASE] Registered evaluation validation tool in %s", workflowPhaseID)
 		}
 
-		if phaseTemplateVars["WorkshopMode"] == "workshop" || phaseTemplateVars["WorkshopMode"] == "builder" || phaseTemplateVars["WorkshopMode"] == "optimizer" || phaseTemplateVars["WorkshopMode"] == "reporting" {
+		// Only "workshop" or "run" can reach phaseTemplateVars: server.go
+		// normalizes every legacy value before this point. Comparing against
+		// the retired names asserted they still occur, which cost real
+		// debugging time while diagnosing PLAT-125.
+		if phaseTemplateVars["WorkshopMode"] == "workshop" {
 			// The HTML report is loaded directly from db/reports/index.html. The
 			// builder edits those files with normal workspace tools and validates
 			// each page; there is no report-plan JSON registry or widget layer.
@@ -362,7 +366,7 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 			// backward compat with persisted sessions that pre-date the
 			// merge.
 			switch phaseTemplateVars["WorkshopMode"] {
-			case "workshop", "optimizer":
+			case "workshop":
 				RegisterAutoImprovementProposerTools(definitionAgent, phaseWorkspacePath, "pulse-fixer", api.logger)
 				log.Printf("[WORKFLOW_PHASE] Registered auto-improvement proposer tools in %s (mode=%s)", workflowPhaseID, phaseTemplateVars["WorkshopMode"])
 			case "run":
@@ -377,17 +381,27 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 			guidance.RegisterGuidanceTool(definitionAgent, phaseTemplateVars["WorkshopMode"], api.logger)
 			log.Printf("[WORKFLOW_PHASE] Registered get_workflow_command_guidance in %s (mode=%s)", workflowPhaseID, phaseTemplateVars["WorkshopMode"])
 
-			workshopMode := phaseTemplateVars["WorkshopMode"]
+		}
 
-			// Attach the reference and command bundles once. mcpagent owns
-			// transport-specific access: read_skill is a normal API tool and
-			// an MCP-bridge tool for coding CLIs, while native projection is
-			// a convenience rather than a second contract.
-			if err := guidance.AttachReferenceSurface(workshopMode, func(skill *llmtypes.Skill) error {
-				return definitionAgent.AttachSkill(skill)
-			}); err != nil {
-				log.Printf("[WORKFLOW_PHASE] Failed to attach reference surface in %s (mode=%s): %v", workflowPhaseID, workshopMode, err)
-			}
+		// Attach the reference and command bundles once. mcpagent owns
+		// transport-specific access: read_skill is a normal API tool and
+		// an MCP-bridge tool for coding CLIs, while native projection is
+		// a convenience rather than a second contract.
+		//
+		// Deliberately OUTSIDE the workshopSession guard (PLAT-119). These
+		// bundles are the agent's procedures, not workshop tooling: every Pulse
+		// step opens with "load builder-reference and follow it exactly".
+		// Nesting them inside tool registration meant that whenever workshop
+		// creation was skipped — most commonly because the session was already
+		// stopped, which is exactly when Pulse runs its finalizer — the agent
+		// silently lost its procedures along with its tools and improvised a
+		// plausible-looking pass instead. Tools may legitimately be unavailable;
+		// the procedure describing how to behave must not vanish with them.
+		workshopMode := phaseTemplateVars["WorkshopMode"]
+		if err := guidance.AttachReferenceSurface(workshopMode, func(skill *llmtypes.Skill) error {
+			return definitionAgent.AttachSkill(skill)
+		}); err != nil {
+			log.Printf("[WORKFLOW_PHASE] Failed to attach reference surface in %s (mode=%s): %v", workflowPhaseID, workshopMode, err)
 		}
 	default:
 		// planning: plan modification tools

@@ -83,16 +83,11 @@ func scheduleLogContext(sctx *ScheduleContext) serverLogContext {
 		return serverLogContext{}
 	}
 
-	mode := "workflow"
-	if sctx.SourceType == "multi-agent" || strings.TrimSpace(sctx.Schedule.Mode) == "multi-agent" {
-		mode = "multi-agent"
-	}
-
 	return newServerLogContext(
 		sctx.WorkspacePath,
 		singleSelectedGroupName(sctx.Schedule.GroupNames),
-		mode,
-		sctx.UserID,
+		"workflow",
+		"",
 		"",
 		"",
 	)

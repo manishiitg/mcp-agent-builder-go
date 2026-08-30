@@ -15,8 +15,6 @@ import (
 	"github.com/manishiitg/mcpagent/llm"
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 	"github.com/manishiitg/multi-llm-provider-go/pkg/adapters/azure"
-
-	virtualtools "github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
 )
 
 var supportedLLMProviders = []string{
@@ -25,28 +23,46 @@ var supportedLLMProviders = []string{
 	"vertex",
 	"anthropic",
 	"azure",
-	"minimax",
-	"elevenlabs",
-	"deepgram",
 	"claude-code",
 	"codex-cli",
 	"cursor-cli",
 	"pi-cli",
 }
 
+// deprecatedAPIModelProviders were deprecated 2026-08-20: see
+// docs/design/api_transport_vs_pi_tradeoff.md. Direct API transport
+// duplicates per-provider tool-calling translation that MCP already solves
+// once (pi and the other coding CLIs); the day's own certification work
+// showed the duplication wasn't keeping pace (for example, Azure had no live
+// E2E at that point).
+//
+// Soft deprecation, not removal: `Deprecated: true` hides these from new
+// setup in the LLM config modal (LLMConfigurationModal.tsx already filters on
+// this field); an existing configuration keeps working exactly as before.
+var deprecatedAPIModelProviders = map[string]bool{
+	"openai":    true,
+	"anthropic": true,
+	"vertex":    true,
+	"bedrock":   true,
+	"azure":     true,
+}
+
 func isDeprecatedLLMProvider(provider string) bool {
-	_ = strings.ToLower(strings.TrimSpace(provider))
-	return false
+	return deprecatedAPIModelProviders[strings.ToLower(strings.TrimSpace(provider))]
 }
 
 func providerDeprecationReason(provider string) string {
-	_ = strings.ToLower(strings.TrimSpace(provider))
-	return ""
+	if !isDeprecatedLLMProvider(provider) {
+		return ""
+	}
+	return "Direct API transport is being phased out in favor of MCP-routed coding CLIs. See docs/design/api_transport_vs_pi_tradeoff.md. Existing configurations remain runnable."
 }
 
 func providerReplacementProvider(provider string) string {
-	_ = strings.ToLower(strings.TrimSpace(provider))
-	return ""
+	if !isDeprecatedLLMProvider(provider) {
+		return ""
+	}
+	return "pi-cli"
 }
 
 func isPublishedLLMProviderAllowed(provider string) bool {
@@ -272,6 +288,12 @@ func buildProviderAPIKeysFromEnv() *llm.ProviderAPIKeys {
 	setProviderKeyFromEnv(llm.ProviderOpenAI, "OPENAI_API_KEY")
 	setProviderKeyFromEnv(llm.ProviderOpenRouter, "OPENROUTER_API_KEY", "OPEN_ROUTER_API_KEY")
 	setProviderKeyFromEnv(llm.ProviderAnthropic, "ANTHROPIC_API_KEY")
+	// A Claude Code setup token is an OAuth credential for the Claude CLI, not
+	// an Anthropic API key. Keep it on its dedicated field so the adapter can
+	// inject it into the per-project CLI process without exposing it to chat.
+	if s := strings.TrimSpace(os.Getenv("CLAUDE_CODE_OAUTH_TOKEN")); s != "" {
+		keys.ClaudeCodeOAuthToken = &s
+	}
 	setProviderKeyFromEnv(llm.ProviderZAI, "ZAI_API_KEY")
 	setProviderKeyFromEnv(llm.ProviderKimi, "KIMI_API_KEY")
 	if s := os.Getenv("VERTEX_API_KEY"); s != "" {
@@ -305,12 +327,6 @@ func buildProviderAPIKeysFromEnv() *llm.ProviderAPIKeys {
 		keys.MiniMax = &s
 	}
 	keys.PiProviderKeys = buildPiProviderKeysFromEnv()
-	if s := os.Getenv("ELEVENLABS_API_KEY"); s != "" {
-		keys.ElevenLabs = &s
-	}
-	if s := os.Getenv("DEEPGRAM_API_KEY"); s != "" {
-		keys.Deepgram = &s
-	}
 	if endpoint := os.Getenv("AZURE_AI_ENDPOINT"); endpoint != "" {
 		apiKey := os.Getenv("AZURE_AI_API_KEY")
 		apiVer := os.Getenv("AZURE_AI_API_VERSION")
@@ -791,9 +807,6 @@ func (api *StreamingAPI) handleGetLLMDefaults(w http.ResponseWriter, r *http.Req
 		"azure_config":          defaults.AzureConfig,
 		"zai_config":            defaults.ZAIConfig,
 		"kimi_config":           defaults.KimiConfig,
-		"minimax_config":        defaults.MinimaxConfig,
-		"elevenlabs_config":     defaults.ElevenLabsConfig,
-		"deepgram_config":       defaults.DeepgramConfig,
 		"available_models":      availableModels,
 		"provider_capabilities": buildProviderCapabilities(r.Context()),
 		"supported_providers":   getSupportedProviders(),
@@ -831,12 +844,6 @@ func (api *StreamingAPI) handleGetLLMDefaults(w http.ResponseWriter, r *http.Req
 				stripSecrets("kimi_config")
 			case "vertex":
 				stripSecrets("vertex_config")
-			case "minimax":
-				stripSecrets("minimax_config")
-			case "elevenlabs":
-				stripSecrets("elevenlabs_config")
-			case "deepgram":
-				stripSecrets("deepgram_config")
 			}
 		}
 	}
@@ -847,44 +854,6 @@ func (api *StreamingAPI) handleGetLLMDefaults(w http.ResponseWriter, r *http.Req
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
-}
-
-// handleTestImageGen tests image generation config by attempting to generate a single test image
-func (api *StreamingAPI) handleTestImageGen(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Provider string `json:"provider"`
-		ModelID  string `json:"model_id"`
-		APIKey   string `json:"api_key"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	cfg := virtualtools.ImageGenExecutorConfig{
-		Provider: req.Provider,
-		ModelID:  req.ModelID,
-		APIKey:   req.APIKey,
-	}
-	if cfg.Provider == "" {
-		cfg.Provider = "vertex"
-	}
-	if cfg.ModelID == "" {
-		cfg.ModelID = "gemini-3.1-flash-image"
-	}
-
-	executor := virtualtools.CreateImageGenExecutor(cfg)
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
-
-	_, err := executor(ctx, map[string]any{"prompt": "a simple red circle on white background"})
-
-	w.Header().Set("Content-Type", "application/json")
-	if err != nil {
-		json.NewEncoder(w).Encode(map[string]any{"valid": false, "error": err.Error()})
-		return
-	}
-	json.NewEncoder(w).Encode(map[string]any{"valid": true, "message": "Image generation is working"})
 }
 
 // handleValidateAPIKey validates API keys for supported LLM providers and coding CLIs.
@@ -938,10 +907,6 @@ func (api *StreamingAPI) populateValidationCredentialsFromMergedKeys(ctx context
 		}
 	case "minimax":
 		setAPIKey(keys.MiniMax)
-	case "elevenlabs":
-		setAPIKey(keys.ElevenLabs)
-	case "deepgram":
-		setAPIKey(keys.Deepgram)
 	case "z-ai":
 		setAPIKey(keys.ZAI)
 	case "kimi":

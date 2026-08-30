@@ -21,16 +21,20 @@ func TestRegisterStepSessionShellEnvProvidesBridgeParity(t *testing.T) {
 	sessionID := "eval-shell-env-test"
 	defer common.ClearSessionShellConfig(sessionID)
 
-	registerStepSessionShellEnv(sessionID, "/workspace/eval/step", "/workspace/eval", "/workspace/db/db.sqlite", map[string]string{
+	registerStepSessionShellEnv(sessionID, "/workspace/eval/step", "/workspace/eval", "/workspace/db/db.sqlite", "iteration-0/eval", map[string]string{
 		"VAR_LOGIN_EMAIL":       "configured@example.com",
 		"SECRET_LOGIN_PASSWORD": "password",
 		"MCP_SESSION_ID":        "stale-parent-session",
 	})
 	env := common.GetSessionShellEnv(sessionID)
 	for key, want := range map[string]string{
-		"STEP_OUTPUT_DIR":       "/workspace/eval/step",
-		"STEP_EXECUTION_DIR":    "/workspace/eval",
-		"DB_PATH":               "/workspace/db/db.sqlite",
+		"STEP_OUTPUT_DIR":    "/workspace/eval/step",
+		"STEP_EXECUTION_DIR": "/workspace/eval",
+		"DB_PATH":            "/workspace/db/db.sqlite",
+		// PLAT-185: a scripted step reading a sibling step's runs/<iteration>/
+		// logs/... folder had no reliable way to know the current run's own
+		// folder name short of hardcoding a guess. RUN_FOLDER removes the guess.
+		"RUN_FOLDER":            "iteration-0/eval",
 		"VAR_LOGIN_EMAIL":       "configured@example.com",
 		"SECRET_LOGIN_PASSWORD": "password",
 	} {
@@ -108,6 +112,39 @@ func TestWorkshopToolAgentBridgeSessionOverridesParentRouting(t *testing.T) {
 	}
 }
 
+func TestSelectPulseLLMUsesPulseConfigInsteadOfPhaseConfig(t *testing.T) {
+	base, err := orchestrator.NewBaseOrchestrator(
+		loggerv2.NewNoop(), nil, orchestrator.OrchestratorTypeWorkflow, "", 0,
+		"", nil, nil, false, &orchestrator.LLMConfig{}, 1, nil, nil, nil,
+	)
+	if err != nil {
+		t.Fatalf("NewBaseOrchestrator returned error: %v", err)
+	}
+	hcpo := &StepBasedWorkflowOrchestrator{
+		BaseOrchestrator: base,
+		presetPhaseLLM: &AgentLLMConfig{
+			Provider: "phase-provider",
+			ModelID:  "phase-model",
+		},
+		presetPulseLLM: &AgentLLMConfig{
+			Provider: "pulse-provider",
+			ModelID:  "pulse-model",
+			Options:  map[string]interface{}{"reasoning_effort": "high"},
+		},
+	}
+
+	got := hcpo.selectPulseLLM("review agent")
+	if got == nil {
+		t.Fatal("selectPulseLLM returned nil")
+	}
+	if got.Primary.Provider != "pulse-provider" || got.Primary.ModelID != "pulse-model" {
+		t.Fatalf("review selected %s/%s, want pulse-provider/pulse-model", got.Primary.Provider, got.Primary.ModelID)
+	}
+	if got.Primary.Options["reasoning_effort"] != "high" {
+		t.Fatalf("review lost Pulse options: %+v", got.Primary.Options)
+	}
+}
+
 func TestKBMaintenanceAgentsGetQueryButNotMutation(t *testing.T) {
 	base, err := orchestrator.NewBaseOrchestrator(
 		loggerv2.NewNoop(), nil, orchestrator.OrchestratorTypeWorkflow, "", 0,
@@ -159,17 +196,19 @@ func TestPrepareCustomToolsMaterializesDBCapabilityFromDBAccess(t *testing.T) {
 	}
 	noop := func(context.Context, map[string]interface{}) (string, error) { return "", nil }
 	base.WorkspaceTools = []llmtypes.Tool{
-		tool("execute_shell_command"), tool("query_workflow_db"), tool("mutate_workflow_db"),
+		tool("execute_shell_command"), tool("query_workflow_db"), tool("mutate_workflow_db"), tool("apply_workflow_db_migration"),
 	}
 	base.WorkspaceToolExecutors = map[string]interface{}{
-		"execute_shell_command": noop,
-		"query_workflow_db":     noop,
-		"mutate_workflow_db":    noop,
+		"execute_shell_command":       noop,
+		"query_workflow_db":           noop,
+		"mutate_workflow_db":          noop,
+		"apply_workflow_db_migration": noop,
 	}
 	base.ToolCategories = map[string]string{
-		"execute_shell_command": "workspace_advanced",
-		"query_workflow_db":     "workflow_db",
-		"mutate_workflow_db":    "workflow_db",
+		"execute_shell_command":       "workspace_advanced",
+		"query_workflow_db":           "workflow_db",
+		"mutate_workflow_db":          "workflow_db",
+		"apply_workflow_db_migration": "workflow_db",
 	}
 	hcpo := &StepBasedWorkflowOrchestrator{BaseOrchestrator: base}
 
@@ -198,6 +237,15 @@ func TestPrepareCustomToolsMaterializesDBCapabilityFromDBAccess(t *testing.T) {
 			gotMutation := slices.Contains(names, "mutate_workflow_db") && executors["mutate_workflow_db"] != nil
 			if !gotMutation {
 				t.Fatalf("db_access=%q missing uniform mutation capability (tools=%v)", tt.access, names)
+			}
+			// PLAT-221 follow-up: apply_workflow_db_migration was registered and
+			// tested, but never added here, so a narrow explicit tool list (or
+			// any real read-write step) silently never received it -- the tool
+			// existed and worked, but no real Workshop/Pulse/workflow-step
+			// session could ever reach it.
+			gotMigration := slices.Contains(names, "apply_workflow_db_migration") && executors["apply_workflow_db_migration"] != nil
+			if !gotMigration {
+				t.Fatalf("db_access=%q missing uniform migration capability (tools=%v)", tt.access, names)
 			}
 		})
 	}
@@ -352,6 +400,70 @@ func TestApplyStepConfigToAgentConfigSupportsCodingAgentTmuxKeepAlive(t *testing
 	}
 }
 
+func TestApplyStepConfigToAgentConfigDoesNotExposeRunConcernTool(t *testing.T) {
+	t.Run("default branch (no step-specific SelectedTools)", func(t *testing.T) {
+		hcpo := newAgentFactoryTestOrchestrator(t)
+		config := agents.NewOrchestratorAgentConfig("step-agent")
+		hcpo.applyStepConfigToAgentConfig(config, &AgentConfigs{}, true)
+		if slices.Contains(config.SelectedTools, "workflow_db:record_run_concern") {
+			t.Fatalf("default SelectedTools must not expose retired record_run_concern, got %v", config.SelectedTools)
+		}
+	})
+
+	t.Run("step-specific SelectedTools narrows other tools but not this one", func(t *testing.T) {
+		hcpo := newAgentFactoryTestOrchestrator(t)
+		config := agents.NewOrchestratorAgentConfig("step-agent")
+		hcpo.applyStepConfigToAgentConfig(config, &AgentConfigs{
+			SelectedTools: []string{"api-bridge:execute_shell_command", "workflow_db:record_run_concern"},
+		}, true)
+		if slices.Contains(config.SelectedTools, "workflow_db:record_run_concern") {
+			t.Fatalf("step-specific SelectedTools must not expose retired record_run_concern, got %v", config.SelectedTools)
+		}
+	})
+}
+
+func TestPrepareCustomToolsDefaultBranchExcludesRunConcernTool(t *testing.T) {
+	base, err := orchestrator.NewBaseOrchestrator(
+		loggerv2.NewNoop(), nil, orchestrator.OrchestratorTypeWorkflow, "", 0,
+		"", nil, nil, false, &orchestrator.LLMConfig{}, 1, nil, nil, nil,
+	)
+	if err != nil {
+		t.Fatalf("NewBaseOrchestrator returned error: %v", err)
+	}
+	tool := func(name string) llmtypes.Tool {
+		return llmtypes.Tool{Type: "function", Function: &llmtypes.FunctionDefinition{Name: name}}
+	}
+	noop := func(context.Context, map[string]interface{}) (string, error) { return "", nil }
+	base.WorkspaceTools = []llmtypes.Tool{
+		tool("execute_shell_command"), tool("query_workflow_db"), tool("record_run_concern"),
+	}
+	base.WorkspaceToolExecutors = map[string]interface{}{
+		"execute_shell_command": noop,
+		"query_workflow_db":     noop,
+		"record_run_concern":    noop,
+	}
+	base.ToolCategories = map[string]string{
+		"execute_shell_command": "workspace_advanced",
+		"query_workflow_db":     "workflow_db",
+		"record_run_concern":    "workflow_db",
+	}
+	hcpo := &StepBasedWorkflowOrchestrator{BaseOrchestrator: base}
+
+	// No EnabledCustomTools -- exercises the "Default: enable only advanced +
+	// human tools" branch, not the EnabledCustomTools branch a few lines above
+	// it (which already force-included this tool before this fix).
+	tools, executors := hcpo.prepareCustomTools(&AgentConfigs{})
+	names := make([]string, 0, len(tools))
+	for _, definition := range tools {
+		if definition.Function != nil {
+			names = append(names, definition.Function.Name)
+		}
+	}
+	if slices.Contains(names, "record_run_concern") || executors["record_run_concern"] != nil {
+		t.Fatalf("default tool set must exclude retired record_run_concern: tools=%v executors=%v", names, executors)
+	}
+}
+
 func TestEnableWorkflowMainCodingAgentKeepAliveEnablesCLIProvider(t *testing.T) {
 	config := agents.NewOrchestratorAgentConfig("workflow-builder-agent")
 	config.LLMConfig.Primary.Provider = string(mcpllm.ProviderCodexCLI)
@@ -413,10 +525,11 @@ func TestApplyStepConfigToAgentConfigEnablesWorkspaceIsolation(t *testing.T) {
 //     each spawns a coding-CLI
 //     session for a workflow task and must isolate its workspace.
 //
-// Without isolation on any of these, an agy-cli orchestrator / workshop
-// background agent collides with the workshop chat's agy session in the
-// same workflow folder and the step fails with "agy-cli does not support
-// concurrent sessions in working directory ... with different MCP configs".
+// Without isolation on any of these, an orchestrator / workshop background
+// agent collides with the workshop chat's own coding-CLI session in the
+// same workflow folder, and the step fails with a "does not support
+// concurrent sessions in working directory ... with different MCP
+// configs"-style error some coding CLIs raise.
 //
 // The test asserts a specific count per file. A new factory added later
 // without isolation trips this test rather than shipping a silent regression.
@@ -522,6 +635,7 @@ func TestInjectStepEnvIntoShellExecutor_OverridesStaleMCPSessionEnv(t *testing.T
 		"/tmp/workflow/execution/math-solver",
 		"/tmp/workflow/execution",
 		"/tmp/workflow/db/db.sqlite",
+		"iteration-0/math",
 		"step-session-123",
 		map[string]string{
 			"VAR_LOGIN_EMAIL":       "configured@example.com",
@@ -559,6 +673,9 @@ func TestInjectStepEnvIntoShellExecutor_OverridesStaleMCPSessionEnv(t *testing.T
 	}
 	if got := rawExtraEnv["STEP_EXECUTION_DIR"]; got != "/tmp/workflow/execution" {
 		t.Fatalf("expected STEP_EXECUTION_DIR override, got %#v", got)
+	}
+	if got := rawExtraEnv["RUN_FOLDER"]; got != "iteration-0/math" {
+		t.Fatalf("expected RUN_FOLDER override, got %#v", got)
 	}
 	if got := rawExtraEnv["MCP_SESSION_ID"]; got != "step-session-123" {
 		t.Fatalf("expected MCP_SESSION_ID override, got %#v", got)
@@ -675,6 +792,50 @@ func TestSetupExecutionFolderGuardGivesGenericReviewerWorkflowWideReadOnlyView(t
 			t.Fatalf("generic reviewer unexpectedly writes %q: %v", forbidden, writePaths)
 		}
 	}
+}
+
+// Every folder-guard builder must grant tool_output_folder. It is where any
+// bridge tool result past its inline cap is spilled (MCP_TOOL_OUTPUT_DIR), so an
+// agent handed "full output saved to <path>" needs a legal way to read it back.
+//
+// setupExecutionFolderGuard has granted it since PLAT-073 cluster F, but the two
+// parallel builders never did, and nothing pinned the parity. Confirmed live
+// 2026-08-17 (confida-login step-5-execute-browser-and-capture-apis, a
+// message_sequence step): its read paths carried no tool_output_folder, and a
+// spilled agent_browser result came back "outside every workspace root" with no
+// recoverable path — a dead end that cost the step a full round trip.
+func TestEveryFolderGuardBuilderGrantsToolOutputFolder(t *testing.T) {
+	newOrch := func() *StepBasedWorkflowOrchestrator {
+		base, err := orchestrator.NewBaseOrchestrator(
+			loggerv2.NewNoop(), nil, orchestrator.OrchestratorTypeWorkflow, "", 0,
+			"", nil, nil, false, &orchestrator.LLMConfig{}, 1, nil, nil, nil,
+		)
+		if err != nil {
+			t.Fatalf("NewBaseOrchestrator returned error: %v", err)
+		}
+		base.SetWorkspacePath("Workflow/testing")
+		return &StepBasedWorkflowOrchestrator{BaseOrchestrator: base, selectedRunFolder: "iteration-0/test-group"}
+	}
+	const want = "Workflow/testing/tool_output_folder"
+
+	t.Run("execution", func(t *testing.T) {
+		readPaths, _ := newOrch().setupExecutionFolderGuard("step-1", "s", KBAccessNone, LearningsAccessNone, DBAccessRead, nil)
+		if !slices.Contains(readPaths, want) {
+			t.Fatalf("read paths missing %q: %v", want, readPaths)
+		}
+	})
+	t.Run("message_sequence", func(t *testing.T) {
+		readPaths, _ := newOrch().setupMessageSequenceFolderGuard("step-1", "s", nil, MessageSequenceWriteAccess{})
+		if !slices.Contains(readPaths, want) {
+			t.Fatalf("read paths missing %q: %v", want, readPaths)
+		}
+	})
+	t.Run("kb_update", func(t *testing.T) {
+		readPaths, _ := newOrch().setupKBUpdateFolderGuard("s", "step-1")
+		if !slices.Contains(readPaths, want) {
+			t.Fatalf("read paths missing %q: %v", want, readPaths)
+		}
+	})
 }
 
 func TestSetupExecutionFolderGuardAddsOnlyConfiguredStores(t *testing.T) {

@@ -288,6 +288,8 @@ func NewBaseOrchestrator(
 
 	// Set token persister on bridge (no longer using accumulators)
 	contextAwareBridge.SetTokenPersister(orchestrator)
+	// PLAT-164: durable background-agent transcript writer.
+	contextAwareBridge.SetBackgroundAgentTranscriptWriter(orchestrator)
 
 	return orchestrator, nil
 }

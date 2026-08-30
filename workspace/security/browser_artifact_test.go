@@ -35,6 +35,9 @@ func TestFinalizeBrowserArtifactRejectsUnauthorizedDestination(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "not covered") {
 		t.Fatalf("expected unauthorized destination error, got %v", err)
 	}
+	if _, err := os.Stat(source); err != nil {
+		t.Fatalf("unauthorized finalization must retain the staged artifact for recovery, stat error = %v", err)
+	}
 }
 
 func TestFinalizeBrowserArtifactRejectsBlockedWrite(t *testing.T) {

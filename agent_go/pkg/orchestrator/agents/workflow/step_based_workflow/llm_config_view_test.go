@@ -11,7 +11,7 @@ func TestRenderResolvedWorkflowLLMRolesIncludesEveryProviderProfileRole(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"builder", "execution_high", "execution_medium", "execution_low", "maintenance", "pulse", "provider_profile:claude-code"} {
+	for _, want := range []string{"builder", "execution_high", "execution_medium", "execution_low", "pulse", "provider_profile:claude-code"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("output missing %q:\n%s", want, got)
 		}
@@ -20,7 +20,7 @@ func TestRenderResolvedWorkflowLLMRolesIncludesEveryProviderProfileRole(t *testi
 
 func TestRenderResolvedWorkflowLLMRolesShowsReasoningSourceAndOverride(t *testing.T) {
 	model := `{"provider":"codex-cli","model_id":"gpt-5.6","options":{"reasoning_effort":"high"}}`
-	manifest := `{"capabilities":{"llm_config":{"schema_version":2,"mode":"explicit","builder_llm":` + model + `,"maintenance_llm":` + model + `,"pulse_llm":` + model + `,"tiered_config":{"tier_1":` + model + `,"tier_2":` + model + `,"tier_3":` + model + `}}}}`
+	manifest := `{"capabilities":{"llm_config":{"schema_version":2,"mode":"explicit","builder_llm":` + model + `,"pulse_llm":` + model + `,"tiered_config":{"tier_1":` + model + `,"tier_2":` + model + `,"tier_3":` + model + `}}}}`
 	got, err := renderResolvedWorkflowLLMRoles(manifest)
 	if err != nil {
 		t.Fatal(err)

@@ -72,6 +72,8 @@ func clearStepConfigField(sc *StepConfig, name string) bool {
 		ac.DisableParallelToolExecution = nil
 	case "description_reviewed":
 		ac.DescriptionReviewed = nil
+	case "drift_review":
+		ac.DriftReview = nil
 
 	// String fields (empty string + omitempty drops the key)
 	case "learnings_access":
@@ -106,7 +108,7 @@ func isKnownAgentConfigClearField(name string) bool {
 		"execution_llm_reason", "execution_tier_reason",
 		"use_code_execution_mode",
 		"disable_parallel_tool_execution",
-		"description_reviewed",
+		"description_reviewed", "drift_review",
 		"knowledgebase_access", "knowledgebase_contribution",
 		"review_notes", "declared_execution_mode", "declared_execution_mode_reason",
 		"coding_agent_tmux_lifecycle":

@@ -71,7 +71,7 @@ func TestTrimChatHistoryConversationForPreviewKeepsShortConversationsWhole(t *te
 	}
 }
 
-func TestProjectChatHistoryConversationForResumeKeepsRealTurnsOnly(t *testing.T) {
+func TestProjectChatHistoryConversationForResumeKeepsReadableAssistantUpdates(t *testing.T) {
 	message := func(role, text string) map[string]interface{} {
 		return map[string]interface{}{
 			"Role":  role,
@@ -114,18 +114,91 @@ func TestProjectChatHistoryConversationForResumeKeepsRealTurnsOnly(t *testing.T)
 	if err := json.Unmarshal(got["conversation_history"], &history); err != nil {
 		t.Fatal(err)
 	}
-	if len(history) != 4 {
-		t.Fatalf("got %d projected messages, want two user/assistant pairs", len(history))
+	if len(history) != 5 {
+		t.Fatalf("got %d projected messages, want both assistant updates in the first turn", len(history))
 	}
 	texts := make([]string, 0, len(history))
 	for _, item := range history {
 		texts = append(texts, item.Parts[0].Text)
 	}
-	want := []string{"first question", "First final answer.", "second question", "Second final answer."}
+	want := []string{"first question", "I will inspect it.", "First final answer.", "second question", "Second final answer."}
 	for index := range want {
 		if texts[index] != want[index] {
 			t.Fatalf("message %d = %q, want %q", index, texts[index], want[index])
 		}
+	}
+}
+
+func TestProjectChatHistoryConversationForResumeKeepsAllTextUpdatesInOneToolHeavyTurn(t *testing.T) {
+	message := func(role, text string) map[string]interface{} {
+		return map[string]interface{}{
+			"Role":  role,
+			"Parts": []map[string]string{{"Text": text}},
+		}
+	}
+	raw, _ := json.Marshal(map[string]interface{}{
+		"conversation_history": []map[string]interface{}{
+			message("human", "review this"),
+			message("ai", "I will inspect the run."),
+			{"Role": "ai", "Parts": []map[string]interface{}{{"Type": "function", "FunctionCall": map[string]string{"Name": "read_file"}}}},
+			message("tool", "tool output"),
+			message("ai", "The first finding is confirmed."),
+			message("ai", "Done — here is the final result."),
+		},
+	})
+
+	var got struct {
+		History []json.RawMessage `json:"conversation_history"`
+	}
+	if err := json.Unmarshal(projectChatHistoryConversationForResume(raw, 100), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.History) != 4 {
+		t.Fatalf("got %d messages, want user plus all three assistant updates", len(got.History))
+	}
+	texts := make([]string, 0, len(got.History))
+	for _, item := range got.History {
+		_, text := chatHistoryMessageRoleAndText(item)
+		texts = append(texts, text)
+	}
+	want := []string{"review this", "I will inspect the run.", "The first finding is confirmed.", "Done — here is the final result."}
+	for index := range want {
+		if texts[index] != want[index] {
+			t.Fatalf("message %d = %q, want %q", index, texts[index], want[index])
+		}
+	}
+}
+
+func TestAttachChatHistoryUIEventsForResumeKeepsOnlyFormattedTrace(t *testing.T) {
+	raw, _ := json.Marshal(map[string]interface{}{
+		"session_id": "schedule-1",
+		"conversation_history": []map[string]interface{}{
+			{"Role": "human", "Parts": []map[string]string{{"Text": "run it"}}},
+		},
+		"ui_events": []map[string]interface{}{
+			{"id": "prompt", "type": "user_message", "timestamp": "2026-08-21T01:00:00Z"},
+			{"id": "tool", "type": "tool_call_start", "timestamp": "2026-08-21T01:00:01Z"},
+			{"id": "answer", "type": "unified_completion", "timestamp": "2026-08-21T01:00:02Z"},
+			{"id": "stream", "type": "streaming_chunk", "timestamp": "2026-08-21T01:00:03Z"},
+			{"id": "prompt", "type": "system_prompt", "timestamp": "2026-08-21T01:00:04Z"},
+		},
+	})
+	projected := projectChatHistoryConversationForResume(raw, 20)
+	out := attachChatHistoryUIEventsForResume(projected, chatHistoryUIEvents(raw))
+	var got struct {
+		Events []struct {
+			ID   string `json:"id"`
+			Type string `json:"type"`
+		} `json:"ui_events"`
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Events) != 3 {
+		t.Fatalf("kept %d events, want user/tool/final only: %#v", len(got.Events), got.Events)
+	}
+	if got.Events[0].Type != "user_message" || got.Events[1].Type != "tool_call_start" || got.Events[2].Type != "unified_completion" {
+		t.Fatalf("unexpected restored trace: %#v", got.Events)
 	}
 }
 

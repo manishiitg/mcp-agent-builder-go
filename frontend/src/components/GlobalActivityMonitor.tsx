@@ -15,15 +15,13 @@ import { hasLiveBackgroundAgents, isVisibleActivitySession, nonWorkflowActivityT
 import { runtimeNeedsUserInput } from '../utils/runtimeActivity'
 import {
   currentSessionId as resolveCurrentSessionId,
+  GLOBAL_ACTIVITY_REFRESH_MS,
   headerStatusLabel,
   statusTone,
   visibleActivitySessions,
 } from '../utils/globalActivityMonitorStatus'
 import { isInternalChildSession } from '../utils/workflowSessionKinds'
 
-// This matches useChatStore's active-session cache TTL. A longer store TTL also
-// increases the monitor's effective freshness window and should be changed here.
-const ACTIVITY_DETAILS_POLL_MS = 30000
 const MAX_INLINE_ACTIVITY_ITEMS = 2
 
 type ActivityMonitorItem =
@@ -142,7 +140,9 @@ export const GlobalActivityMonitor: React.FC = () => {
     let refreshPromise: Promise<void> | null = null
 
     const refresh = async () => {
-      await getActiveSessions().catch(() => [])
+      // This surface promises live state; bypass the shared 30-second cache so
+      // a schedule that just started does not keep its old idle clock.
+      await getActiveSessions(true).catch(() => [])
       if (disposed) return
     }
 
@@ -155,7 +155,7 @@ export const GlobalActivityMonitor: React.FC = () => {
     const handleVisibilityChange = () => requestRefresh()
 
     requestRefresh()
-    const interval = window.setInterval(requestRefresh, ACTIVITY_DETAILS_POLL_MS)
+    const interval = window.setInterval(requestRefresh, GLOBAL_ACTIVITY_REFRESH_MS)
     document.addEventListener('visibilitychange', handleVisibilityChange)
     return () => {
       disposed = true

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -10,21 +11,19 @@ import (
 	mcpexecutor "github.com/manishiitg/mcpagent/executor"
 )
 
-func TestTypedPulseReviewerToolsPersistFindingAndCompactReceipt(t *testing.T) {
+func TestTypedPulseReviewerToolsPersistFindingWithoutCompletionHandshake(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("WORKSPACE_DOCS_PATH", root)
 	workspacePath := "Workflow/typed-review-tools"
-	const sessionID = "typed-reviewer-session"
-	pulseRunID := sessionID
-	reviewRunID := sessionID
+	const sessionID = "2026-08-28T12-00-00.000Z_typed-reviewer-session"
+	pulseRunID := "schedule-manual--typed-review"
 	ctx := mcpexecutor.WithSessionID(context.Background(), sessionID)
 
 	_, executors, _ := createPulseWorklistTools()
 	recordFinding := executors["record_pulse_finding"].(func(context.Context, map[string]interface{}) (string, error))
-	completeReview := executors["complete_pulse_review"].(func(context.Context, map[string]interface{}) (string, error))
 	raw, err := recordFinding(ctx, map[string]interface{}{
 		"workspace_path": workspacePath, "pulse_run_id": pulseRunID,
-		"module": pulseModuleWorkflowReview, "concern": "collector silently drops failed rows",
+		"module": pulseModuleTechnicalReview, "concern": "collector silently drops failed rows",
 		"issue_kind": "workflow_issue", "classification": "correctness_bug", "severity": "high",
 		"summary": "Failed rows disappear", "impact": "The workflow can report success on incomplete data.",
 		"evidence": []interface{}{"runs/iteration-0/result.json"},
@@ -43,7 +42,7 @@ func TestTypedPulseReviewerToolsPersistFindingAndCompactReceipt(t *testing.T) {
 	// second recurrence in the same review identity.
 	if _, err := recordFinding(ctx, map[string]interface{}{
 		"workspace_path": workspacePath, "pulse_run_id": pulseRunID,
-		"module": pulseModuleWorkflowReview, "concern": "collector silently drops failed rows",
+		"module": pulseModuleTechnicalReview, "concern": "collector silently drops failed rows",
 		"issue_kind": "workflow_issue", "classification": "correctness_bug", "severity": "high",
 		"summary": "Failed rows disappear", "impact": "The workflow can report success on incomplete data.",
 		"evidence": []interface{}{"runs/iteration-0/result.json"},
@@ -51,31 +50,82 @@ func TestTypedPulseReviewerToolsPersistFindingAndCompactReceipt(t *testing.T) {
 		t.Fatalf("idempotent record_pulse_finding retry: %v", err)
 	}
 
-	if _, err := completeReview(ctx, map[string]interface{}{
-		"workspace_path": workspacePath, "pulse_run_id": pulseRunID,
-		"modules": []interface{}{pulseModuleWorkflowReview}, "verdict": "   ", "status": "completed",
-	}); err == nil || !strings.Contains(err.Error(), "non-empty verdict") {
-		t.Fatalf("blank verdict error=%v", err)
-	}
-
-	if _, err := completeReview(ctx, map[string]interface{}{
-		"workspace_path": workspacePath, "pulse_run_id": pulseRunID,
-		"modules": []interface{}{pulseModuleWorkflowReview}, "verdict": "One correctness issue.", "status": "completed",
-	}); err != nil {
-		t.Fatalf("complete_pulse_review: %v", err)
-	}
-
-	receipt, err := step_based_workflow.LoadPulseReviewReceiptForRun(context.Background(), workspacePath, reviewRunID, pulseModuleWorkflowReview)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if receipt.FindingCount != 1 || receipt.Status != "completed" || receipt.Verdict != "One correctness issue." {
-		t.Fatalf("unexpected receipt: %#v", receipt)
-	}
-	findings, err := step_based_workflow.LoadPulseFindingLifecycles(context.Background(), workspacePath, pulseModuleWorkflowReview, -1)
+	findings, err := step_based_workflow.LoadPulseFindingLifecycles(context.Background(), workspacePath, pulseModuleTechnicalReview, -1)
 	if err != nil || len(findings) != 1 || findings[0].SeenCount != 1 || findings[0].Details == nil || findings[0].Details.Summary != "Failed rows disappear" {
 		t.Fatalf("unexpected lifecycle: %#v err=%v", findings, err)
 	}
+}
+
+func TestPulseReviewFocusToolsPersistDurableAgenda(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	const workspacePath = "Workflow/focus-history"
+	const pulseRunID = "focus-session"
+	ctx := mcpexecutor.WithSessionID(context.Background(), pulseRunID)
+	_, executors, _ := createPulseWorklistTools()
+	record := executors["record_pulse_review_focus"].(func(context.Context, map[string]interface{}) (string, error))
+	// get_pulse_review_focus_agenda was folded into get_pulse_state(view="focus_agenda").
+	agenda := executors["get_pulse_state"].(func(context.Context, map[string]interface{}) (string, error))
+
+	raw, err := record(ctx, map[string]interface{}{
+		"workspace_path": workspacePath, "pulse_run_id": pulseRunID, "module": pulseModuleTechnicalReview,
+		"route_scope": "daily-execution/small-route",
+		"focus_key":   "execution_health", "priority_class": "overdue", "selection_reason": "This lens has not been reviewed since the timeout recurrence.",
+		"verdict": "Observer now has a targeted recheck.", "evidence": []interface{}{"runs/iteration-0/execution/attempt.json"},
+		"issue_ids": []interface{}{"PUL-AB12CD34"}, "deferred_focuses": []interface{}{"plan_orchestration_integrity"},
+		"next_check_at": "2026-08-21T00:00:00Z", "next_check_reason": "next producing run",
+	})
+	if err != nil {
+		t.Fatalf("record focus: %v", err)
+	}
+	var stored PulseReviewFocus
+	if err := json.Unmarshal([]byte(raw), &stored); err != nil || stored.LastReviewedAt == "" || stored.FocusKey != "execution_health" {
+		t.Fatalf("stored focus=%#v decode_err=%v raw=%s", stored, err, raw)
+	}
+	if stored.RouteScope != "daily-execution/small-route" {
+		t.Fatalf("stored route scope = %q", stored.RouteScope)
+	}
+	if _, err := record(ctx, map[string]interface{}{
+		"workspace_path": workspacePath, "pulse_run_id": pulseRunID, "module": pulseModuleTechnicalReview,
+		"route_scope": "daily-execution/large-route",
+		"focus_key":   "plan_orchestration_integrity", "priority_class": "new_or_changed", "selection_reason": "The larger route has distinct payload amplification evidence.",
+		"verdict": "The large route needs a bounded repair.", "evidence": []interface{}{"runs/iteration-1/costs/execution.json"},
+	}); err != nil {
+		t.Fatalf("record second route focus: %v", err)
+	}
+	raw, err = agenda(ctx, map[string]interface{}{"workspace_path": workspacePath, "view": "focus_agenda", "module": pulseModuleTechnicalReview, "route_scope": "daily-execution/small-route"})
+	if err != nil {
+		t.Fatalf("read agenda: %v", err)
+	}
+	var response struct {
+		Focuses []PulseReviewFocus `json:"focuses"`
+	}
+	if err := json.Unmarshal([]byte(raw), &response); err != nil || len(response.Focuses) != len(pulseReviewFocusCatalog[pulseModuleTechnicalReview]) {
+		t.Fatalf("agenda=%#v decode_err=%v raw=%s", response, err, raw)
+	}
+	counts := map[string][2]int{}
+	for _, focus := range response.Focuses {
+		counts[focus.FocusKey] = [2]int{focus.ReviewCount, focus.RouteReviewCount}
+	}
+	if counts["execution_health"] != [2]int{1, 1} {
+		t.Fatalf("small-route execution-health counts = %v", counts["execution_health"])
+	}
+	if counts["plan_orchestration_integrity"] != [2]int{1, 0} {
+		t.Fatalf("small-route plan counts = %v", counts["plan_orchestration_integrity"])
+	}
+	selections, err := getPulseReviewFocusSelections(ctx, workspacePath, 10)
+	if err != nil {
+		t.Fatalf("load review focus selections: %v", err)
+	}
+	for _, selection := range selections {
+		if selection.FocusKey == "execution_health" {
+			if !slices.Contains(selection.IssueIDs, "PUL-AB12CD34") {
+				t.Fatalf("execution-health issue links = %#v", selection.IssueIDs)
+			}
+			return
+		}
+	}
+	t.Fatal("execution-health selection was not returned")
 }
 
 func TestTypedPulseReviewerToolsRequireCurrentConversation(t *testing.T) {

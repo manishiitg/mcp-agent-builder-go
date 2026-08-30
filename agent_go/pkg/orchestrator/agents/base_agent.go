@@ -476,6 +476,14 @@ func (ba *BaseAgent) AddObserver(observer mcpagent.AgentEventListener) error {
 	return nil
 }
 
+// Observers returns every event listener registered on this agent so far
+// (PLAT-166: a reflection turn reusing this same agent needs to find its
+// already-attached cost observer to toggle its phase, rather than attaching
+// a second one).
+func (ba *BaseAgent) Observers() []mcpagent.AgentEventListener {
+	return append([]mcpagent.AgentEventListener(nil), ba.runtime.Observability.Observers...)
+}
+
 func (ba *BaseAgent) finalizeDefinition(ctx context.Context) error {
 	if ba.finalized {
 		return nil
@@ -551,6 +559,22 @@ func (ba *BaseAgent) Resume(ctx context.Context, handle *mcpagent.AgentSessionHa
 // SessionHandle returns the latest opaque continuation state produced by Run.
 func (ba *BaseAgent) SessionHandle() *mcpagent.AgentSessionHandle {
 	return ba.lastHandle
+}
+
+// MCPSessionID returns the platform-assigned session id this agent's MCP
+// connections and bridge tool calls are routed under.
+//
+// This is a different id space from SessionHandle().Provider.NativeSessionID:
+// that one is the CLI's own internal session UUID (used for --resume against
+// its transcript); this one is what the HTTP bridge handler
+// (mcpagent/executor.HandleCustomExecute) receives as req.SessionID and keys
+// toolcalllog by. Recovering a call from toolcalllog needs this id, not the
+// native one (PLAT-142/143).
+func (ba *BaseAgent) MCPSessionID() string {
+	if ba == nil {
+		return ""
+	}
+	return ba.mcpSessionID
 }
 
 // SetWorkspacePolicy configures filesystem enforcement as runtime policy,

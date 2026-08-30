@@ -4,8 +4,6 @@ import type { AgentMode } from './types'
 import { useModeStore, type ModeCategory } from './useModeStore'
 import { getWorkspaceScopedStorageKey } from './useWorkspaceConnectionStore'
 
-export type MultiAgentRightPanelView = 'files' | 'tasks'
-
 interface AppState {
   // Agent configuration
   agentMode: AgentMode
@@ -17,7 +15,6 @@ interface AppState {
   // UI state
   workspaceMinimized: boolean
   workspaceMinimizedByMode: Record<'workflow' | 'multi-agent', boolean>
-  multiAgentRightPanelView: MultiAgentRightPanelView
   showWorkflowsOverview: boolean
   
   // Code execution mode (for multi-agent mode when no preset is active)
@@ -39,14 +36,12 @@ interface AppState {
   // UI actions
   setWorkspaceMinimized: (minimized: boolean) => void
   setWorkspaceMinimizedForLayout: (minimized: boolean) => void
-  setMultiAgentRightPanelView: (view: MultiAgentRightPanelView) => void
   setShowWorkflowsOverview: (show: boolean) => void
   setUseCodeExecutionMode: (enabled: boolean) => void
   // Last-used tab settings — inherited by new tabs
   lastSelectedSkills: string[]
   lastBrowserMode: 'none' | 'auto' | 'headless' | 'cdp'
-  lastEnableImageGeneration: boolean
-  syncLastTabSettings: (update: Partial<Pick<AppState, 'lastSelectedSkills' | 'lastBrowserMode' | 'lastEnableImageGeneration'>>) => void
+  syncLastTabSettings: (update: Partial<Pick<AppState, 'lastSelectedSkills' | 'lastBrowserMode'>>) => void
 }
 
 export const useAppStore = create<AppState>()(
@@ -66,7 +61,6 @@ export const useAppStore = create<AppState>()(
           workflow: false,
           'multi-agent': false,
         },
-        multiAgentRightPanelView: 'files',
         showWorkflowsOverview: false,
         useCodeExecutionMode: true, // Default to enabled
         // Actions
@@ -146,10 +140,6 @@ export const useAppStore = create<AppState>()(
           set({ workspaceMinimized: minimized })
         },
 
-        setMultiAgentRightPanelView: (view) => {
-          set({ multiAgentRightPanelView: view })
-        },
-
         setShowWorkflowsOverview: (show) => {
           set({ showWorkflowsOverview: show })
         },
@@ -160,7 +150,6 @@ export const useAppStore = create<AppState>()(
 
         lastSelectedSkills: [],
         lastBrowserMode: 'auto',
-        lastEnableImageGeneration: false,
         syncLastTabSettings: (update) => {
           set(update)
         },
@@ -173,13 +162,11 @@ export const useAppStore = create<AppState>()(
         agentMode: state.agentMode,
         workspaceMinimized: state.workspaceMinimized,
         workspaceMinimizedByMode: state.workspaceMinimizedByMode,
-        multiAgentRightPanelView: state.multiAgentRightPanelView,
         showWorkflowsOverview: state.showWorkflowsOverview,
         selectedPresetId: state.selectedPresetId,
         useCodeExecutionMode: state.useCodeExecutionMode,
         lastSelectedSkills: state.lastSelectedSkills,
-        lastBrowserMode: state.lastBrowserMode,
-        lastEnableImageGeneration: state.lastEnableImageGeneration
+        lastBrowserMode: state.lastBrowserMode
         // Note: requiresNewChat is not persisted as it's temporary state
         // File context is now mode-specific: multi-agent tabs have their own, workflow uses preset
       }),
@@ -215,14 +202,7 @@ export const useAppStore = create<AppState>()(
           }
           state.workspaceMinimized = false
         }
-        // org-goals/org-pulse were removed alongside the dropped goals/Org-Pulse
-        // feature -- a stale persisted value of either falls through to files.
-        if (
-          state.multiAgentRightPanelView !== 'files' &&
-          state.multiAgentRightPanelView !== 'tasks'
-        ) {
-          state.multiAgentRightPanelView = 'files'
-        }
+        delete state.multiAgentRightPanelView
         return state as unknown as AppState
       }
     }

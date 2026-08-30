@@ -38,7 +38,6 @@ def call_route(route_id: str, todo_id: str, instructions: str, preferred_tier: i
         "route_id": route_id,
         "todo_id": todo_id,
         "instructions": instructions,
-        "share_browser": True,
         "preferred_tier": preferred_tier,
     }
     log(f"START route={route_id} todo_id={todo_id}")

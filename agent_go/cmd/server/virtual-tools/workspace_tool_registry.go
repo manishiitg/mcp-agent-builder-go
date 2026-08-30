@@ -31,8 +31,9 @@ var workspaceToolNamesCache = struct {
 	byCategory map[string]map[string]bool
 }{}
 
-// CreateWorkspaceToolRegistry returns the complete provider/media workspace
-// tool bundle. Basic workspace and git tools are intentionally excluded.
+// CreateWorkspaceToolRegistry returns the active workspace tool bundle. Basic
+// workspace and git tools are intentionally excluded. image_gen/image_edit are
+// active; video/audio/music generation remain deprecated and not agent-exposed.
 func CreateWorkspaceToolRegistry(cfg WorkspaceToolRegistryConfig) WorkspaceToolRegistry {
 	workspaceURL := strings.TrimSpace(cfg.WorkspaceAPIURL)
 	if workspaceURL == "" {
@@ -41,33 +42,28 @@ func CreateWorkspaceToolRegistry(cfg WorkspaceToolRegistryConfig) WorkspaceToolR
 
 	tools := append([]llmtypes.Tool{}, CreateWorkspaceAdvancedTools()...)
 	tools = append(tools, CreateWorkspaceImageTools()...)
-	tools = append(tools, CreateWorkspaceVideoTools()...)
-	tools = append(tools, CreateWorkspaceAudioTools()...)
-	tools = append(tools, CreateWorkspaceMusicTools()...)
 
 	advancedExecutors, env := createWorkspaceAdvancedExecutorsForRegistry(cfg, workspaceURL)
 	executors := make(map[string]func(ctx context.Context, args map[string]any) (string, error), len(advancedExecutors)+8)
 	for name, executor := range advancedExecutors {
 		executors[name] = executor
 	}
-
 	mediaCfg := ImageGenExecutorConfig{
 		WorkspaceAPIURL: workspaceURL,
 		UserID:          cfg.UserID,
 	}
 	MergeImageToolExecutors(mediaCfg, executors, nil)
-	MergeVideoToolExecutors(VideoGenExecutorConfig{
-		WorkspaceAPIURL: workspaceURL,
-		UserID:          cfg.UserID,
-	}, executors, nil)
-	MergeAudioToolExecutors(AudioGenExecutorConfig{
-		WorkspaceAPIURL: workspaceURL,
-		UserID:          cfg.UserID,
-	}, executors, nil)
-	MergeMusicToolExecutors(AudioGenExecutorConfig{
-		WorkspaceAPIURL: workspaceURL,
-		UserID:          cfg.UserID,
-	}, executors, nil)
+	visible := make(map[string]bool, len(tools))
+	for _, tool := range tools {
+		if tool.Function != nil {
+			visible[tool.Function.Name] = true
+		}
+	}
+	for name := range executors {
+		if !visible[name] {
+			delete(executors, name)
+		}
+	}
 
 	categories := make(map[string]string, len(tools))
 	category := GetWorkspaceAdvancedToolCategory()

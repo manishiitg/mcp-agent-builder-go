@@ -2,6 +2,10 @@
 
 Production deployment of coding-agent-loop on a single Hetzner VM. Hybrid setup: agent + workspace run **bare-metal** under systemd, frontend + caddy run in **Docker**.
 
+> This is the legacy shared-host deployment. The isolated Dominion deployment
+> on its own Hetzner account is documented separately in
+> [`dominion-hetzner.md`](dominion-hetzner.md).
+
 ## Access
 
 | What | Value |

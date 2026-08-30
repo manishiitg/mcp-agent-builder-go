@@ -4,6 +4,7 @@ import { agentApi } from '../services/api'
 import type { ChatHistoryConversation, ChatHistoryMessage, PollingEvent } from '../services/api-types'
 import { truncateTabTitle } from './textUtils'
 import axios from 'axios'
+import { isProviderTranscriptArtifact } from './restoredConversationFilter'
 
 const TAG = '[SessionRestore]'
 
@@ -136,21 +137,16 @@ async function doRestoreSession(
       if (runtime.events.length > 0) {
         chatStore.addTabEvents(sessionId, runtime.events)
       }
-      if (
-        options?.workspacePath &&
-        !isForegroundStreaming({
-          status: runtime.session_status,
-          hasRunningBackgroundAgents: runtime.has_running_background_agents,
-          isSyntheticTurn: runtime.is_synthetic_turn,
-          canSteer: runtime.can_steer,
-        })
-      ) {
-        // A completed coding-agent turn's live event window often contains an
-        // empty provider tool-start. Replace it with the durable structured
-        // transcript, which is enriched with bridge-authoritative arguments.
-        // This also fixes partial browser caches after a backend restart.
-        await hydrateTabEventsFromChatHistory(sessionId, options.workspacePath)
-      }
+      // Every chat uses the same recovery contract: the workspace-backed
+      // conversation is the authoritative durable transcript, while the
+      // polling endpoint is only the volatile live tail. Do this for all
+      // products (and while a turn is running) so a refresh cannot leave a
+      // user-only event buffer in the UI. If a legacy session has no durable
+      // transcript, retain the live events already loaded above.
+      await tryHydrateTabEventsFromChatHistory(
+        sessionId,
+        options?.workspacePath || existingTab?.metadata?.agentProfileWorkspace,
+      )
       if (runtime.last_processed_index !== undefined) {
         chatStore.setTabLastEventIndex(sessionId, runtime.last_processed_index)
       }
@@ -160,7 +156,7 @@ async function doRestoreSession(
       console.log(`${TAG} [${src}] Refreshed runtime state for existing tab ${tabId}`)
     } else {
       const runtime = await hydrateTabEvents(sessionId, {
-        workspacePath: existingTab?.metadata?.agentProfileWorkspace,
+        workspacePath: options?.workspacePath || existingTab?.metadata?.agentProfileWorkspace,
         fallbackToChatHistory: true,
       })
       applySessionStatus(tabId, runtime)
@@ -168,6 +164,17 @@ async function doRestoreSession(
       console.log(`${TAG} [${src}] Hydrated ${eventCount} events`)
     }
   } catch (err) {
+    const workspacePath = options?.workspacePath || existingTab?.metadata?.agentProfileWorkspace
+    // A bounded live cursor can be rejected after a server restart. The
+    // durable transcript is independent of that volatile window and applies
+    // equally to every product, so recover it before preserving an incomplete
+    // local cache.
+    const restored = await tryHydrateTabEventsFromChatHistory(sessionId, workspacePath)
+    if (restored) {
+      applySessionStatus(tabId, restored)
+      console.log(`${TAG} [${src}] Recovered persisted transcript after runtime sync failure`)
+      return tabId
+    }
     if (isNotFoundError(err) && existingEventCount > 0) {
       console.log(`${TAG} [${src}] Session ${sessionId} no longer in memory; keeping locally restored events`)
       applySessionStatus(tabId, {
@@ -233,6 +240,27 @@ function makeRestoredEvent(
 export function conversationToRestoredEvents(conversation: ChatHistoryConversation): PollingEvent[] {
   const sessionId = conversation.session_id
   const messages = conversation.conversation_history || []
+  const traceTimes = (conversation.ui_events || [])
+    .map(event => Date.parse(event.timestamp || ''))
+    .filter((timestamp): timestamp is number => Number.isFinite(timestamp))
+  const traceStart = traceTimes.length > 0 ? Math.min(...traceTimes) : undefined
+  const traceEnd = traceTimes.length > 0 ? Math.max(...traceTimes) : undefined
+  const sourceMessageCount = conversation.history_source_message_count || Math.max(
+    messages.length,
+    ...messages.map(message => Number(message.resume_source_message_count) || 0),
+  )
+  // Conversation history does not carry provider timestamps, while its saved
+  // UI trace does. The source order lets a restored user/update/final message
+  // remain in the right place among tool calls instead of appearing after the
+  // whole trace just because it was rebuilt at restore time.
+  const restoredMessageTimestamp = (message: ChatHistoryMessage): string | undefined => {
+    const order = Number(message.resume_order)
+    if (!Number.isFinite(order) || traceStart === undefined || traceEnd === undefined || sourceMessageCount <= 0) {
+      return undefined
+    }
+    const position = Math.max(0, Math.min(1, (order + 1) / (sourceMessageCount + 1)))
+    return new Date(traceStart + ((traceEnd - traceStart) * position)).toISOString()
+  }
   // Page identity is durable across "Load earlier" requests. Without this,
   // every page restarts at restored-…-0 and the event store/UI deduplicates
   // distinct older turns as if they were the newest page.
@@ -240,26 +268,45 @@ export function conversationToRestoredEvents(conversation: ChatHistoryConversati
   const events: PollingEvent[] = [
     makeRestoredEvent(sessionId, 'conversation_resumed', {
       previous_event_count: messages.length,
+      has_more_history: conversation.history_pagination?.has_more === true,
       restored_from: 'workspace_chat_history',
     }, eventIndexBase),
   ]
 
   let turn = 0
   let currentQuestion = ''
-  let pendingAssistant = ''
+  let pendingAssistant: Array<{ content: string; message: ChatHistoryMessage }> = []
   const flushAssistant = () => {
-    if (!pendingAssistant) return
-    // TerminalCenter's readable transcript treats llm_generation_end as the
-    // canonical assistant message. conversation_end is lifecycle-only there
-    // and intentionally hidden, so using it made resumed replies disappear.
-    events.push(makeRestoredEvent(sessionId, 'llm_generation_end', {
-      status: 'completed',
-      question: currentQuestion,
-      content: pendingAssistant,
-      result: pendingAssistant,
-      turns: turn,
-    }, eventIndexBase + events.length))
-    pendingAssistant = ''
+    if (pendingAssistant.length === 0) return
+    // A coding CLI can persist several ordinary assistant messages within one
+    // user turn (progress, a finding, then the final reply). Restoring only
+    // the last one made a 183-message chat appear almost empty. Preserve every
+    // readable update; only the last gets the completion carrier that settles
+    // the turn, so the transcript still has exactly one final response.
+    pendingAssistant.forEach(({ content, message }, index) => {
+      const final = index === pendingAssistant.length - 1
+      const timestamp = restoredMessageTimestamp(message)
+      events.push(makeRestoredEvent(sessionId, 'llm_generation_end', {
+        status: 'completed',
+        question: currentQuestion,
+        content,
+        result: content,
+        turns: turn,
+        restored_intermediate_update: !final,
+        ...(timestamp ? { timestamp } : {}),
+      }, eventIndexBase + events.length))
+      if (final) {
+        events.push(makeRestoredEvent(sessionId, 'unified_completion', {
+          status: 'completed',
+          question: currentQuestion,
+          final_result: content,
+          result: content,
+          turns: turn,
+          ...(timestamp ? { timestamp } : {}),
+        }, eventIndexBase + events.length))
+      }
+    })
+    pendingAssistant = []
   }
 
   for (const message of messages) {
@@ -273,25 +320,108 @@ export function conversationToRestoredEvents(conversation: ChatHistoryConversati
       flushAssistant()
       turn += 1
       currentQuestion = content
+      const timestamp = restoredMessageTimestamp(message)
       events.push(makeRestoredEvent(sessionId, 'user_message', {
         content,
         role: 'user',
         turn,
+        ...(timestamp ? { timestamp } : {}),
       }, eventIndexBase + events.length))
     } else if (role === 'ai' || role === 'assistant') {
-      const normalized = content.trim().toLowerCase()
-      if (normalized.startsWith('[previous tool call:') || normalized.startsWith('[previous tool result:')) {
-        continue
-      }
+      if (isProviderTranscriptArtifact(content)) continue
       // Coding providers persist commentary and tool markers as separate AI
       // messages. The final ordinary AI message before the next user message
       // is the completed reply that belongs in the resumed chat.
-      pendingAssistant = content
+      pendingAssistant.push({ content, message })
     }
   }
   flushAssistant()
 
+  // A scheduled run has two durable representations:
+  //
+  // - conversation_history is the complete parent conversation, with a real
+  //   page cursor for older turns;
+  // - ui_events is a bounded, displayable trace containing tool calls and
+  //   child-agent activity.
+  //
+  // The latter used to replace the former. That meant navigating to a running
+  // workflow from Global Monitor could show only the small retained trace even
+  // though its full parent conversation was on disk. Keep the conversation as
+  // the transcript backbone and append only trace records that do not duplicate
+  // a persisted user/final-answer carrier.
+  if (conversation.ui_events && conversation.ui_events.length > 0) {
+    return mergePersistedUIEvents(
+      events,
+      conversation.ui_events as PollingEvent[],
+      sessionId,
+      eventIndexBase + events.length,
+    )
+  }
+
   return events
+}
+
+function restoredEventText(event: PollingEvent): string {
+  const outer = event.data && typeof event.data === 'object' ? event.data as Record<string, unknown> : {}
+  const nested = outer.data && typeof outer.data === 'object' ? outer.data as Record<string, unknown> : outer
+  for (const field of ['content', 'final_result', 'result']) {
+    const value = nested[field]
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return ''
+}
+
+function transcriptCarrierKey(event: PollingEvent): string | undefined {
+  const type = event.type || ''
+  if (type !== 'user_message' && type !== 'llm_generation_end' && type !== 'unified_completion') return undefined
+  const content = restoredEventText(event).replace(/\s+/g, ' ').trim().toLowerCase()
+  return content ? `${type}:${content}` : undefined
+}
+
+function mergePersistedUIEvents(
+  conversationEvents: PollingEvent[],
+  persistedUIEvents: PollingEvent[],
+  sessionId: string,
+  eventIndexBase: number,
+): PollingEvent[] {
+  const knownIDs = new Set(conversationEvents.map(event => event.id).filter(Boolean))
+  const knownCarriers = new Set(conversationEvents
+    .map(transcriptCarrierKey)
+    .filter((key): key is string => !!key))
+
+  const trace = persistedUIEvents
+    .map((event, index) => markPersistedRestoreTrace(event, sessionId, eventIndexBase + index + 1))
+    .filter((event) => {
+      if (event.id && knownIDs.has(event.id)) return false
+      const carrier = transcriptCarrierKey(event)
+      if (carrier && knownCarriers.has(carrier)) return false
+      if (event.id) knownIDs.add(event.id)
+      if (carrier) knownCarriers.add(carrier)
+      return true
+    })
+
+  return [...conversationEvents, ...trace]
+}
+
+function markPersistedRestoreTrace(event: PollingEvent, parentSessionId: string, eventIndex: number): PollingEvent {
+  const outer = event.data && typeof event.data === 'object' ? event.data as Record<string, unknown> : {}
+  const nested = outer.data && typeof outer.data === 'object' ? outer.data as Record<string, unknown> : {}
+  const metadata = nested.metadata && typeof nested.metadata === 'object' ? nested.metadata as Record<string, unknown> : {}
+  return {
+    ...event,
+    // Persisted UI events are recorded under the parent session even when the
+    // nested event belongs to a background child. Preserve that ownership so
+    // one restored schedule remains one tab/timeline.
+    session_id: event.session_id || parentSessionId,
+    event_index: typeof event.event_index === 'number' ? event.event_index : eventIndex,
+    data: {
+      ...outer,
+      data: {
+        ...nested,
+        metadata: { ...metadata, restored_persisted_trace: true },
+      },
+    },
+  } as PollingEvent
 }
 
 // Coding-provider stream events can reach persistence with an empty
@@ -341,7 +471,7 @@ function restoreToolArgumentsFromConversation(
   })
 }
 
-async function hydrateTabEventsFromChatHistory(sessionId: string, workspacePath?: string): Promise<RuntimeSessionState> {
+async function hydrateTabEventsFromChatHistory(sessionId: string, workspacePath?: string, includeUiEvents = true): Promise<RuntimeSessionState> {
   const chatStore = useChatStore.getState()
   // getChatHistoryResumeConversation (not the unbounded preview variant) keeps
   // this lightweight, and conversationToRestoredEvents does the real work of
@@ -350,7 +480,9 @@ async function hydrateTabEventsFromChatHistory(sessionId: string, workspacePath?
   // empty tool_params.arguments even though the structured conversation_history
   // has them, so restoreToolArgumentsFromConversation patches those back in
   // regardless of which path built the underlying events.
-  const conversation = await agentApi.getChatHistoryResumeConversation(sessionId, workspacePath)
+  const conversation = includeUiEvents
+    ? await agentApi.getChatHistoryResumeConversation(sessionId, workspacePath, 100, 0, true)
+    : await agentApi.getChatHistoryResumeConversation(sessionId, workspacePath)
   const rawEvents = conversationToRestoredEvents(conversation)
   const events = restoreToolArgumentsFromConversation(rawEvents, conversation)
 
@@ -369,7 +501,7 @@ async function hydrateTabEventsFromChatHistory(sessionId: string, workspacePath?
   console.info(`${TAG} Hydrated persisted conversation`, {
     sessionId,
     eventCount: events.length,
-    source: 'conversation_history',
+    source: includeUiEvents ? 'conversation_history + persisted_ui_events' : 'conversation_history',
   })
 
   return {
@@ -383,9 +515,10 @@ async function hydrateTabEventsFromChatHistory(sessionId: string, workspacePath?
 async function tryHydrateTabEventsFromChatHistory(
   sessionId: string,
   workspacePath?: string,
+  includeUiEvents = true,
 ): Promise<RuntimeSessionState | null> {
   try {
-    return await hydrateTabEventsFromChatHistory(sessionId, workspacePath)
+    return await hydrateTabEventsFromChatHistory(sessionId, workspacePath, includeUiEvents)
   } catch (error) {
     if (isNotFoundError(error)) {
       return null
@@ -404,19 +537,16 @@ export async function hydrateTabEvents(
   options: {
     workspacePath?: string
     fallbackToChatHistory?: boolean
+    // Kept for callers that explicitly request history. Durable history is
+    // now the default for every session, so this no longer changes behavior.
     preferChatHistory?: boolean
+    // Restore the bounded, formatted UI trace for every retained chat. It
+    // supplies tool calls that structured provider history represents only as
+    // function markers; raw terminal frames are never requested.
+    includeUiEvents?: boolean
   } = {},
 ): Promise<RuntimeSessionState> {
   const chatStore = useChatStore.getState()
-
-  // Explicitly reopened chats should show the complete durable conversation,
-  // not whichever bounded tail happens to remain in the volatile EventStore.
-  // If the history file was removed or cannot be resolved, fall through to the
-  // live event endpoint so terminal restoration still works.
-  if (options.preferChatHistory) {
-    const restored = await tryHydrateTabEventsFromChatHistory(sessionId, options.workspacePath)
-    if (restored) return restored
-  }
 
   let response
   try {
@@ -424,10 +554,24 @@ export async function hydrateTabEvents(
   } catch (error) {
     if (isNotFoundError(error)) {
       console.log(`${TAG} Polling session ${sessionId} not found; restoring from workspace chat history`)
-      const restored = await tryHydrateTabEventsFromChatHistory(sessionId, options.workspacePath)
+      const restored = await tryHydrateTabEventsFromChatHistory(sessionId, options.workspacePath, options.includeUiEvents)
       if (restored) return restored
     }
     throw error
+  }
+
+  // The event store is a short-lived transport cache and can contain only
+  // prompts after a browser reload. Prefer the durable conversation for every
+  // session, regardless of its owning product. Runtime status remains
+  // authoritative so a currently running turn still renders as streaming.
+  const restored = await tryHydrateTabEventsFromChatHistory(sessionId, options.workspacePath, options.includeUiEvents)
+  if (restored) {
+    return {
+      status: response.session_status || restored.status,
+      hasRunningBackgroundAgents: response.has_running_background_agents,
+      isSyntheticTurn: response.is_synthetic_turn,
+      canSteer: response.can_steer,
+    }
   }
 
   if (response.events.length > 0) {
@@ -446,7 +590,7 @@ export async function hydrateTabEvents(
     // tell us whether the durable transcript exists. The caller only enables
     // this fallback for an explicitly restored chat, so prefer its persisted
     // history whenever the volatile event buffer has no events.
-    const restored = await tryHydrateTabEventsFromChatHistory(sessionId, options.workspacePath)
+    const restored = await tryHydrateTabEventsFromChatHistory(sessionId, options.workspacePath, options.includeUiEvents)
     if (restored) {
       return {
         status: response.session_status || restored.status,

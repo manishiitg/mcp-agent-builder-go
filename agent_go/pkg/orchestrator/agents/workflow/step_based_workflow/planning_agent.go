@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -28,7 +29,6 @@ type PlanOrchestrationRoute struct {
 	Condition     string            `json:"condition"`                 // Condition description (e.g., "If error is authentication-related")
 	SubAgentStep  PlanStepInterface `json:"sub_agent_step"`            // The sub-agent step to execute (private, not in main workflow) - must have "type" field
 	OrphanStepRef string            `json:"orphan_step_ref,omitempty"` // Optional: reference to a reusable orphan step definition in the same plan
-	ContextToPass string            `json:"context_to_pass,omitempty"` // Optional: specific context to pass to sub-agent
 }
 
 // MarshalJSON implements custom marshaling for PlanOrchestrationRoute
@@ -40,7 +40,6 @@ func (r PlanOrchestrationRoute) MarshalJSON() ([]byte, error) {
 		Condition     string          `json:"condition"`
 		SubAgentStep  json.RawMessage `json:"sub_agent_step,omitempty"`
 		OrphanStepRef string          `json:"orphan_step_ref,omitempty"`
-		ContextToPass string          `json:"context_to_pass,omitempty"`
 	}
 
 	result := routeJSON{
@@ -48,7 +47,6 @@ func (r PlanOrchestrationRoute) MarshalJSON() ([]byte, error) {
 		RouteName:     r.RouteName,
 		Condition:     r.Condition,
 		OrphanStepRef: r.OrphanStepRef,
-		ContextToPass: r.ContextToPass,
 	}
 
 	// For reusable orphan step references, persist only the reference in plan.json.
@@ -75,7 +73,6 @@ func (r *PlanOrchestrationRoute) UnmarshalJSON(data []byte) error {
 		Condition     string          `json:"condition"`
 		SubAgentStep  json.RawMessage `json:"sub_agent_step"`
 		OrphanStepRef string          `json:"orphan_step_ref,omitempty"`
-		ContextToPass string          `json:"context_to_pass,omitempty"`
 	}
 
 	if err := json.Unmarshal(data, &temp); err != nil {
@@ -87,7 +84,6 @@ func (r *PlanOrchestrationRoute) UnmarshalJSON(data []byte) error {
 	r.RouteName = temp.RouteName
 	r.Condition = temp.Condition
 	r.OrphanStepRef = temp.OrphanStepRef
-	r.ContextToPass = temp.ContextToPass
 
 	// Unmarshal nested SubAgentStep
 	if len(temp.SubAgentStep) > 0 {
@@ -184,17 +180,46 @@ func (vs *ValidationSchema) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
-	// Fix double-escaped patterns in all checks
-	for i := range vs.Files {
-		for j := range vs.Files[i].JSONChecks {
-			if vs.Files[i].JSONChecks[j].Pattern != "" {
-				fixed := fixDoubleEscapedPattern(vs.Files[i].JSONChecks[j].Pattern)
-				vs.Files[i].JSONChecks[j].Pattern = fixed
-			}
+	// Fix double-escaped patterns in all checks, file-based and DB-based alike
+	// -- both run the same JSONValidationCheck through the same pattern
+	// matcher at runtime (pre_validation.go / pre_validation_db.go).
+	forEachSchemaCheck(vs, func(_ string, check *JSONValidationCheck) {
+		if check.Pattern != "" {
+			check.Pattern = fixDoubleEscapedPattern(check.Pattern)
 		}
-	}
+	})
 
 	return nil
+}
+
+// forEachSchemaCheck calls fn once for every JSONValidationCheck in the
+// schema, across both file-based rules (schema.Files[].JSONChecks) and
+// DB-based rules (schema.DB[].Checks) -- the same JSONValidationCheck type,
+// evaluated by the same validateJSONCheck/validatePattern logic at runtime
+// (pre_validation.go, pre_validation_db.go). label identifies which rule the
+// check belongs to, for error messages. Every write-time schema validator
+// must walk both rule kinds through this helper: an unsatisfiable or
+// malformed check is exactly as real in a DB rule as in a file rule.
+func forEachSchemaCheck(schema *ValidationSchema, fn func(label string, check *JSONValidationCheck)) {
+	if schema == nil {
+		return
+	}
+	for i := range schema.Files {
+		fileRule := &schema.Files[i]
+		for j := range fileRule.JSONChecks {
+			fn(fmt.Sprintf("File '%s'", fileRule.FileName), &fileRule.JSONChecks[j])
+		}
+	}
+	for i := range schema.DB {
+		dbRule := &schema.DB[i]
+		label := strings.TrimSpace(dbRule.Name)
+		if label == "" {
+			label = fmt.Sprintf("DB check #%d", i+1)
+		}
+		for j := range dbRule.Checks {
+			fn(fmt.Sprintf("DB rule '%s'", label), &dbRule.Checks[j])
+		}
+	}
 }
 
 // FileValidationRule represents validation rules for a specific file
@@ -225,31 +250,50 @@ type ConsistencyRule struct {
 
 // AgentConfigs represents per-agent configuration for a step
 type AgentConfigs struct {
-	ExecutionLLM                 *AgentLLMConfig `json:"execution_llm,omitempty"`
-	ExecutionLLMReason           string          `json:"execution_llm_reason,omitempty"`            // PLAT-060. Why this step is pinned to a specific model. Required whenever execution_llm is set — update_step_config rejects the pin without it. A pin outranks execution_tier entirely, so it silently overrides every tier decision above it. Cite the owning llm_ops_review finding id, and the human_input_id when the pin was user-approved.
-	ExecutionTier                string          `json:"execution_tier,omitempty"`                  // Persistent execution tier override in tiered mode: "high" | "medium" | "low"
-	ExecutionTierReason          string          `json:"execution_tier_reason,omitempty"`           // PLAT-060. Why this step's tier is pinned. Required whenever execution_tier is set — update_step_config rejects the override without it. Setting the tier explicitly also DISABLES adaptive tiering for the step (see shouldUseAdaptiveExecutionTiering), so it opts out of the automatic high→medium promotion after 3 stable runs. Cite the owning llm_ops_review finding id, and the human_input_id when approved.
-	ExecutionMaxTurns            *int            `json:"execution_max_turns,omitempty"`             // default: 500
-	LearningObjective            string          `json:"learning_objective,omitempty"`              // What SKILL.md should capture from successful runs of this step — selectors, timings, auth flows, tool-call patterns, API quirks. This is the instruction the step agent uses during its post-completion turn to know what HOW-to-run knowledge to extract. Required when learnings_access includes write; must be specific (not "learn from this run").
-	LearningsAccess              string          `json:"learnings_access,omitempty"`                // "read" | "read-write" | "none". Mirrors knowledgebase_access. "read" (default): step sees global SKILL.md in its prompt but doesn't write. "read-write": reads and writes — requires learning_objective to be non-empty. "none": no read, no write. Empty = legacy auto-migration (see resolveLearningsAccess). Writes happen via the step agent's own post-completion turn (shell + diff_patch_workspace_file); no separate analyzer runs.
-	LockLearnings                *bool           `json:"lock_learnings,omitempty"`                  // lock learnings (SKILL.md) - prevents new writes but still uses existing SKILL.md (nil = not set/unlocked, true = locked, false = explicitly unlocked). Setting true requires a non-empty lock_learnings_reason.
-	LockLearningsReason          string          `json:"lock_learnings_reason,omitempty"`           // PLAT-059. Why this step is frozen. Required whenever lock_learnings is set true — update_step_config rejects the lock without it. A locked step still reads the whole shared skill but can never contribute to it, so the freeze needs a stated justification a later reviewer can judge rather than infer.
-	LockCode                     *bool           `json:"lock_code,omitempty"`                       // lock code (main.py) - prevents LLM-rewritten main.py from being saved back to learnings, skips fix loop (nil = not set/unlocked, true = locked, false = explicitly unlocked)
-	SelectedServers              []string        `json:"selected_servers,omitempty"`                // step-level MCP server selection (subset of preset servers)
-	SelectedTools                []string        `json:"selected_tools,omitempty"`                  // step-level tool selection (format: "server:tool" or "server:*" for all tools)
-	EnabledCustomTools           []string        `json:"enabled_custom_tools,omitempty"`            // e.g., ["workspace_advanced:execute_shell_command", "human_tools:notify_user"] - enables specific tools (overrides categories if both specified)
-	UseCodeExecutionMode         *bool           `json:"use_code_execution_mode,omitempty"`         // Step-level code execution mode override (nil = use preset default, true/false = override)
-	EnabledSkills                []string        `json:"enabled_skills,omitempty"`                  // Step-level skill selection (skill folder names, overrides preset if specified)
-	AdditionalReadPaths          []string        `json:"additional_read_paths,omitempty"`           // Extra workflow-relative folders/files this step may read (for example "variables" or "reports/reference.json"). Paths are read-only, must stay inside this workflow, and never widen write access.
-	KnowledgebaseAccess          string          `json:"knowledgebase_access,omitempty"`            // "read" | "write" | "read-write" | "none". If empty, defaults to "none" — KB is opt-in per step. Preset-level UseKnowledgebase is a prerequisite (off → forced "none"). When granted "read", this also covers user-supplied runtime context at knowledgebase/context/context.md. knowledgebase/context/ is excluded from KB health/fixer passes — user-supplied content is never silently rewritten.
-	KnowledgebaseContribution    string          `json:"knowledgebase_contribution,omitempty"`      // User-authored instruction for KB writes — what this step should contribute to notes/. In "agent" write-method, it's the extraction instruction handed to the post-step KB update agent. In "direct" write-method, it's injected into the step agent's prompt as its contribution contract. Required to trigger KB writes; if empty, no KB write happens regardless of access.
-	DisableParallelToolExecution *bool           `json:"disable_parallel_tool_execution,omitempty"` // Disable parallel tool execution for this step (nil = enabled by default, true = disabled, false = explicitly enabled)
-	CodingAgentTmuxLifecycle     string          `json:"coding_agent_tmux_lifecycle,omitempty"`     // Tmux lifecycle for CLI coding providers: "close_on_completion" (default for steps) or "keep_alive" (only when a step intentionally needs the native coding session after completion).
-	SuccessfulRuns               *int            `json:"successful_runs,omitempty"`                 // System-managed counter. Written by syncSuccessfulRunsToStepConfig after each successful validation; mirrors the authoritative count in learning metadata. Read by the readiness checklist to gauge optimization progress (3+ = ready). Agents must NOT set this directly.
-	DeclaredExecutionMode        string          `json:"declared_execution_mode,omitempty"`         // Required mode decision for the step: "scripted" or "agentic" (legacy values "learn_code" / "code_exec" are still accepted on read)
-	DeclaredExecutionModeReason  string          `json:"declared_execution_mode_reason,omitempty"`  // Audit trail: why the declared mode is the best fit. Not consumed by Go runtime, but preserved so future LLM reviewers (harden, replan) reading raw step_config.json see the original decision rationale.
-	DescriptionReviewed          *bool           `json:"description_reviewed,omitempty"`            // True when the step description has been reviewed — clarity AND secrets/hardcoded values.
-	ReviewNotes                  string          `json:"review_notes,omitempty"`                    // Free-form rationale covering why config, locks, learning/KB choices, or description review state are justified.
+	ExecutionLLM                 *AgentLLMConfig  `json:"execution_llm,omitempty"`
+	ExecutionLLMReason           string           `json:"execution_llm_reason,omitempty"`            // PLAT-060. Why this step is pinned to a specific model. Required whenever execution_llm is set — update_step_config rejects the pin without it. A pin outranks execution_tier entirely, so it silently overrides every tier decision above it. Cite the owning llm_ops_review finding id, and the human_input_id when the pin was user-approved.
+	ExecutionTier                string           `json:"execution_tier,omitempty"`                  // Persistent execution tier override in tiered mode: "high" | "medium" | "low"
+	ExecutionTierReason          string           `json:"execution_tier_reason,omitempty"`           // PLAT-060. Why this step's tier is pinned. Required whenever execution_tier is set — update_step_config rejects the override without it. Setting the tier explicitly also DISABLES adaptive tiering for the step (see shouldUseAdaptiveExecutionTiering), so it opts out of the automatic high→medium promotion after 3 stable runs. Cite the owning llm_ops_review finding id, and the human_input_id when approved.
+	ExecutionMaxTurns            *int             `json:"execution_max_turns,omitempty"`             // default: 500
+	LearningObjective            string           `json:"learning_objective,omitempty"`              // What SKILL.md should capture from successful runs of this step — selectors, timings, auth flows, tool-call patterns, API quirks. This is the instruction the step agent uses during its post-completion turn to know what HOW-to-run knowledge to extract. Required when learnings_access includes write; must be specific (not "learn from this run").
+	LearningsAccess              string           `json:"learnings_access,omitempty"`                // "read" | "read-write" | "none". Mirrors knowledgebase_access. "read" (default): step sees global SKILL.md in its prompt but doesn't write. "read-write": reads and writes — requires learning_objective to be non-empty. "none": no read, no write. Empty = legacy auto-migration (see resolveLearningsAccess). Writes happen via the step agent's own post-completion turn (shell + diff_patch_workspace_file); no separate analyzer runs.
+	LockLearnings                *bool            `json:"lock_learnings,omitempty"`                  // lock learnings (SKILL.md) - prevents new writes but still uses existing SKILL.md (nil = not set/unlocked, true = locked, false = explicitly unlocked). Setting true requires a non-empty lock_learnings_reason.
+	LockLearningsReason          string           `json:"lock_learnings_reason,omitempty"`           // PLAT-059. Why this step is frozen. Required whenever lock_learnings is set true — update_step_config rejects the lock without it. A locked step still reads the whole shared skill but can never contribute to it, so the freeze needs a stated justification a later reviewer can judge rather than infer.
+	LockCode                     *bool            `json:"lock_code,omitempty"`                       // lock code (main.py) - prevents LLM-rewritten main.py from being saved back to learnings, skips fix loop (nil = not set/unlocked, true = locked, false = explicitly unlocked)
+	SelectedServers              []string         `json:"selected_servers,omitempty"`                // step-level MCP server selection (subset of preset servers)
+	SelectedTools                []string         `json:"selected_tools,omitempty"`                  // step-level tool selection (format: "server:tool" or "server:*" for all tools)
+	EnabledCustomTools           []string         `json:"enabled_custom_tools,omitempty"`            // e.g., ["workspace_advanced:execute_shell_command", "human_tools:notify_user"] - enables specific tools (overrides categories if both specified)
+	UseCodeExecutionMode         *bool            `json:"use_code_execution_mode,omitempty"`         // Step-level code execution mode override (nil = use preset default, true/false = override)
+	EnabledSkills                []string         `json:"enabled_skills,omitempty"`                  // Step-level skill selection (skill folder names, overrides preset if specified)
+	AdditionalReadPaths          []string         `json:"additional_read_paths,omitempty"`           // Extra workflow-relative folders/files this step may read (for example "variables" or "reports/reference.json"). Paths are read-only, must stay inside this workflow, and never widen write access.
+	KnowledgebaseAccess          string           `json:"knowledgebase_access,omitempty"`            // "read" | "write" | "read-write" | "none". Empty defaults to "read" so every step can consume shared context; "none" explicitly opts out. A non-empty knowledgebase_contribution promotes an unset mode to "read-write", but writes still require that contribution contract. Read access includes knowledgebase/context/context.md. knowledgebase/context/ is excluded from KB health/fixer passes — user-supplied content is never silently rewritten.
+	KnowledgebaseContribution    string           `json:"knowledgebase_contribution,omitempty"`      // User-authored instruction for KB writes — what this step should contribute to notes/. In "agent" write-method, it's the extraction instruction handed to the post-step KB update agent. In "direct" write-method, it's injected into the step agent's prompt as its contribution contract. Required to trigger KB writes; if empty, no KB write happens regardless of access.
+	DisableParallelToolExecution *bool            `json:"disable_parallel_tool_execution,omitempty"` // Disable parallel tool execution for this step (nil = enabled by default, true = disabled, false = explicitly enabled)
+	CodingAgentTmuxLifecycle     string           `json:"coding_agent_tmux_lifecycle,omitempty"`     // Tmux lifecycle for CLI coding providers: "close_on_completion" (default for steps) or "keep_alive" (only when a step intentionally needs the native coding session after completion).
+	SuccessfulRuns               *int             `json:"successful_runs,omitempty"`                 // System-managed counter. Written by syncSuccessfulRunsToStepConfig after each successful validation; mirrors the authoritative count in learning metadata. Read by the readiness checklist to gauge optimization progress (3+ = ready). Agents must NOT set this directly.
+	DeclaredExecutionMode        string           `json:"declared_execution_mode,omitempty"`         // Required mode decision for the step: "scripted" or "agentic" (legacy values "learn_code" / "code_exec" are still accepted on read)
+	DeclaredExecutionModeReason  string           `json:"declared_execution_mode_reason,omitempty"`  // Audit trail: why the declared mode is the best fit. Not consumed by Go runtime, but preserved so future LLM reviewers (harden, replan) reading raw step_config.json see the original decision rationale.
+	DescriptionReviewed          *bool            `json:"description_reviewed,omitempty"`            // True when the step description has been reviewed — clarity AND secrets/hardcoded values.
+	ReviewNotes                  string           `json:"review_notes,omitempty"`                    // Free-form rationale covering why config, locks, learning/KB choices, or description review state are justified.
+	DriftReview                  *StepDriftReview `json:"drift_review,omitempty"`                    // Plan-drift review record: which drift checks were run against this step's CURRENT config/output and what each found. Nil means "not reviewed since the last dependency-triggering change" — the same trigger that clears description_reviewed also nils this out (clearDriftReviewAfterPlanUpdate), and a nil record on any step is exactly what makes the plan_drift_review Pulse module due. Set by that module or its manual slash-command equivalent; never by a step-editing agent directly.
+}
+
+// StepDriftReview is one completed plan-drift review pass over a single step —
+// evidence per check, not a bare "reviewed: true" boolean, so a review can't be
+// rubber-stamped without recording what it actually looked at.
+type StepDriftReview struct {
+	ReviewedAt string           `json:"reviewed_at"` // RFC3339
+	ReviewedBy string           `json:"reviewed_by"` // e.g. "pulse:plan_drift_review" or a user-invoked slash-command session id
+	Checks     []StepDriftCheck `json:"checks"`
+}
+
+// StepDriftCheck is the evidence-required record for one drift check against
+// one step. Status "fixed" means the check found real drift AND a repair was
+// applied in this same review pass — not merely flagged.
+type StepDriftCheck struct {
+	CheckID  string `json:"check_id"` // stable id, e.g. "report_query_compatibility", "kb_access_mode"
+	Status   string `json:"status"`   // "pass" | "fail" | "fixed"
+	Evidence string `json:"evidence"` // what was compared and what was found — required, not optional
 }
 
 // ============================================================================
@@ -265,6 +309,11 @@ const (
 	StepTypeTodoTask   StepType = "todo_task"
 	StepTypeRouting    StepType = "routing"
 	StepTypeMessageSeq StepType = "message_sequence"
+	// StepTypeBranch is a small in-flow next-step decision — same executor
+	// as StepTypeRouting, distinct type so guidance/reporting/eval tooling
+	// can tell it apart from routing, which is now the "route" (major fork)
+	// concept. See PLAT-259.
+	StepTypeBranch StepType = "branch"
 )
 
 // CommonStepFields contains fields shared by all step types
@@ -342,6 +391,24 @@ type RoutingResponse struct {
 	Reasoning       string `json:"reasoning"`         // Reasoning for the selection
 }
 
+// routeSwitchStep is implemented by both RoutingPlanStep and BranchPlanStep --
+// identical deterministic-switch shape and evaluation logic, just a
+// different step-type tag (routing is now the "route"/major-fork concept
+// going forward; branch is the small in-flow decision). Lets the shared
+// executor (executeRoutingStep in controller_routing.go,
+// resolveDeterministicRoutingSelection and its helpers in
+// controller_routing_deterministic.go) operate on either without
+// duplicating that logic. See PLAT-259.
+type routeSwitchStep interface {
+	PlanStepInterface
+	GetRoutes() []RoutingRoute
+	GetDefaultRouteID() string
+	GetRouteSourceFile() string
+	GetRoutingQuestionText() string
+	SetSelectedRouteID(string)
+	SetRoutingResponse(*RoutingResponse)
+}
+
 // RoutingPlanStep represents a deterministic N-way switch.
 // Routing steps never execute agents. If an agent/probe/judgment is needed, put
 // it in a prior message_sequence step that writes route_selection.json, then point this
@@ -393,6 +460,78 @@ func (r *RoutingPlanStep) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("failed to unmarshal routing step: %w", err)
 	}
 	*r = RoutingPlanStep(temp)
+	return nil
+}
+
+// Implement routeSwitchStep for RoutingPlanStep
+func (r *RoutingPlanStep) GetRoutes() []RoutingRoute                { return r.Routes }
+func (r *RoutingPlanStep) GetDefaultRouteID() string                { return r.DefaultRouteID }
+func (r *RoutingPlanStep) GetRouteSourceFile() string               { return r.RouteSourceFile }
+func (r *RoutingPlanStep) GetRoutingQuestionText() string           { return r.RoutingQuestion }
+func (r *RoutingPlanStep) SetSelectedRouteID(id string)             { r.SelectedRouteID = id }
+func (r *RoutingPlanStep) SetRoutingResponse(resp *RoutingResponse) { r.RoutingResponse = resp }
+
+// BranchPlanStep represents a small in-flow deterministic N-way switch.
+// Identical mechanics to RoutingPlanStep (never executes an agent, resolves
+// its route from a preseeded route_selection.json / route_source_file /
+// context_dependencies entry / default_route_id) -- the only difference is
+// intent: branch is for a lightweight next-step decision, while routing is
+// now the "route" (major sub-workflow fork) concept. See PLAT-259.
+type BranchPlanStep struct {
+	Type StepType `json:"type"` // Always "branch" - required for JSON marshaling/unmarshaling
+	CommonStepFields
+	BranchQuestion  string           `json:"branch_question"`             // Human-readable decision prompt; retained for compatibility/readability
+	Routes          []RoutingRoute   `json:"routes"`                      // Available routes (min 2, required)
+	DefaultRouteID  string           `json:"default_route_id,omitempty"`  // Optional fallback route_id when no route file is available
+	RouteSourceFile string           `json:"route_source_file,omitempty"` // Optional route_selection.json source produced by a prior step
+	SelectedRouteID string           `json:"-"`                           // runtime: stores selected route ID
+	RoutingResponse *RoutingResponse `json:"-"`                           // runtime: stores structured routing response
+	AgentConfigs    *AgentConfigs    `json:"-"`                           // runtime: per-agent configuration
+}
+
+// Implement PlanStepInterface for BranchPlanStep
+func (b *BranchPlanStep) GetID() string                           { return b.ID }
+func (b *BranchPlanStep) GetTitle() string                        { return b.Title }
+func (b *BranchPlanStep) GetDescription() string                  { return b.Description }
+func (b *BranchPlanStep) GetContextDependencies() []string        { return b.ContextDependencies }
+func (b *BranchPlanStep) GetContextOutput() FlexibleContextOutput { return b.ContextOutput }
+func (b *BranchPlanStep) GetValidationSchema() *ValidationSchema  { return b.ValidationSchema }
+func (b *BranchPlanStep) StepType() StepType                      { return StepTypeBranch }
+func (b *BranchPlanStep) GetCommonFields() CommonStepFields {
+	return CommonStepFields{
+		ID:                  b.ID,
+		Title:               b.Title,
+		Description:         b.Description,
+		ContextDependencies: b.ContextDependencies,
+		ContextOutput:       b.ContextOutput,
+		ValidationSchema:    b.ValidationSchema,
+		SharedWith:          b.SharedWith,
+	}
+}
+
+// Implement routeSwitchStep for BranchPlanStep
+func (b *BranchPlanStep) GetRoutes() []RoutingRoute                { return b.Routes }
+func (b *BranchPlanStep) GetDefaultRouteID() string                { return b.DefaultRouteID }
+func (b *BranchPlanStep) GetRouteSourceFile() string               { return b.RouteSourceFile }
+func (b *BranchPlanStep) GetRoutingQuestionText() string           { return b.BranchQuestion }
+func (b *BranchPlanStep) SetSelectedRouteID(id string)             { b.SelectedRouteID = id }
+func (b *BranchPlanStep) SetRoutingResponse(resp *RoutingResponse) { b.RoutingResponse = resp }
+
+// MarshalJSON ensures the type field is always set when marshaling
+func (b *BranchPlanStep) MarshalJSON() ([]byte, error) {
+	b.Type = StepTypeBranch
+	type Alias BranchPlanStep
+	return json.Marshal((*Alias)(b))
+}
+
+// UnmarshalJSON implements custom unmarshaling for BranchPlanStep
+func (b *BranchPlanStep) UnmarshalJSON(data []byte) error {
+	type Alias BranchPlanStep
+	var temp Alias
+	if err := json.Unmarshal(data, &temp); err != nil {
+		return fmt.Errorf("failed to unmarshal branch step: %w", err)
+	}
+	*b = BranchPlanStep(temp)
 	return nil
 }
 
@@ -602,7 +741,6 @@ func (t *TodoTaskPlanStep) UnmarshalJSON(data []byte) error {
 			Condition     string          `json:"condition"`
 			SubAgentStep  json.RawMessage `json:"sub_agent_step"`
 			OrphanStepRef string          `json:"orphan_step_ref,omitempty"`
-			ContextToPass string          `json:"context_to_pass,omitempty"`
 		} `json:"predefined_routes,omitempty"`
 		NextStepID string                `json:"next_step_id,omitempty"`
 		Messages   []MessageSequenceItem `json:"messages,omitempty"`
@@ -654,7 +792,6 @@ func (t *TodoTaskPlanStep) UnmarshalJSON(data []byte) error {
 			t.PredefinedRoutes[i].RouteName = route.RouteName
 			t.PredefinedRoutes[i].Condition = route.Condition
 			t.PredefinedRoutes[i].OrphanStepRef = route.OrphanStepRef
-			t.PredefinedRoutes[i].ContextToPass = route.ContextToPass
 
 			// Unmarshal nested sub_agent_step
 			if len(route.SubAgentStep) > 0 && string(route.SubAgentStep) != "null" {
@@ -697,7 +834,7 @@ func parseStepFromJSON(stepData json.RawMessage, index int, label string) (PlanS
 	}
 
 	if stepWithType.Type == "" {
-		return nil, fmt.Errorf("%s %d is missing required 'type' field (must be: regular, human_input, todo_task, routing, or message_sequence)", label, index)
+		return nil, fmt.Errorf("%s %d is missing required 'type' field (must be: regular, human_input, todo_task, routing, branch, or message_sequence)", label, index)
 	}
 
 	switch stepWithType.Type {
@@ -725,6 +862,12 @@ func parseStepFromJSON(stepData json.RawMessage, index int, label string) (PlanS
 			return nil, fmt.Errorf("failed to parse routing %s %d: %w", label, index, err)
 		}
 		return &step, nil
+	case "branch":
+		var step BranchPlanStep
+		if err := json.Unmarshal(stepData, &step); err != nil {
+			return nil, fmt.Errorf("failed to parse branch %s %d: %w", label, index, err)
+		}
+		return &step, nil
 	case "message_sequence":
 		var step MessageSequencePlanStep
 		if err := json.Unmarshal(stepData, &step); err != nil {
@@ -732,7 +875,7 @@ func parseStepFromJSON(stepData json.RawMessage, index int, label string) (PlanS
 		}
 		return &step, nil
 	default:
-		return nil, fmt.Errorf("unknown step type %q in %s %d (must be: regular, human_input, todo_task, routing, or message_sequence)", stepWithType.Type, label, index)
+		return nil, fmt.Errorf("unknown step type %q in %s %d (must be: regular, human_input, todo_task, routing, branch, or message_sequence)", stepWithType.Type, label, index)
 	}
 }
 
@@ -867,6 +1010,7 @@ type PlanFieldChange struct {
 // successful plan-mod tool call appends one entry to the active session file
 // under planning/changelog/.
 type PlanChangelogEntry struct {
+	ChangeID        string                       `json:"change_id"`
 	Timestamp       string                       `json:"timestamp"`                 // ISO 8601 UTC
 	Tool            string                       `json:"tool"`                      // tool name (e.g. "update_scripted_step")
 	Reason          string                       `json:"reason"`                    // mandatory rationale supplied by the agent
@@ -881,6 +1025,7 @@ type PlanChangelogEntry struct {
 	NoOp            bool                         `json:"no_op,omitempty"`           // true when BeforeSnapshot/AfterSnapshot were both real and identical
 	Actor           string                       `json:"actor"`                     // managed mutation authority
 	DependencyClass string                       `json:"dependency_class"`          // review domain affected by the mutation
+	Origin          PlanChangeOrigin             `json:"origin"`
 
 	// BeforeSnapshot / AfterSnapshot are the actual target-artifact content
 	// before and after the mutation, captured by the caller. When set, these
@@ -895,11 +1040,18 @@ type PlanChangelogEntry struct {
 }
 
 type PlanChangelogArtifactReview struct {
-	Done          bool   `json:"done"`
-	ReviewedAt    string `json:"reviewed_at,omitempty"`
-	ReviewedBy    string `json:"reviewed_by,omitempty"`
-	Result        string `json:"result,omitempty"`
-	ReportEntryID string `json:"report_entry_id,omitempty"`
+	Done          bool                                   `json:"done"`
+	ReviewedAt    string                                 `json:"reviewed_at,omitempty"`
+	ReviewedBy    string                                 `json:"reviewed_by,omitempty"`
+	Result        string                                 `json:"result,omitempty"`
+	ReportEntryID string                                 `json:"report_entry_id,omitempty"`
+	Surfaces      map[string]PlanDependencySurfaceReview `json:"surfaces,omitempty"`
+}
+
+type PlanDependencySurfaceReview struct {
+	Disposition string   `json:"disposition"`
+	Evidence    []string `json:"evidence,omitempty"`
+	IssueIDs    []string `json:"issue_ids,omitempty"`
 }
 
 // PlanChangelog is the per-session changelog file under planning/changelog/.
@@ -980,7 +1132,22 @@ func writePlanChangelogEntry(
 	if entry.Timestamp == "" {
 		entry.Timestamp = now.Format(time.RFC3339)
 	}
+	entry.Origin = planChangeOriginFromContext(ctx, workspacePath)
+	if entry.Origin.Type == "pulse_fixer" {
+		entry.Origin.IssueIDs, entry.Origin.FixAttemptID, entry.Origin.HumanInputID = pulseChangeReferences(ctx, workspacePath, entry.Origin.PulseRunID)
+		if entry.Origin.HumanInputID != "" {
+			entry.Origin.Type = "human_decision"
+		}
+	}
 	completePlanChangelogEntry(&entry)
+	if entry.ChangeID == "" {
+		entry.ChangeID = strings.TrimPrefix(artifactContentRef(map[string]interface{}{
+			"timestamp": entry.Timestamp, "tool": entry.Tool, "target": entry.Target,
+			"before_ref": entry.BeforeRef, "after_ref": entry.AfterRef,
+			"session_id": entry.Origin.SessionID,
+		}), "sha256:")[:20]
+		entry.ChangeID = "change-" + entry.ChangeID
+	}
 
 	relPath := filepath.Join("planning", "changelog", planChangelogSessionFile)
 	changelogPath := normalizePathForWorkspaceAPI(relPath, workspacePath)
@@ -1102,7 +1269,7 @@ func getUpdateRegularStepSchema() string {
 						},
 						"description": {
 							"type": "string",
-				"description": "OPTIONAL: Updated deterministic execution contract implemented by learnings/<step-id>/main.py. Only include if you want to change the contract. If omitted, the existing description is preserved."
+				"description": "OPTIONAL: Replaces the deterministic execution contract implemented by learnings/<step-id>/main.py. Specify inputs, target-domain operations, persistence behavior, outputs, idempotency, error handling, and provenance/freshness requirements. Do not copy shared AgentWorks bridge/auth, Folder Guard, managed-tool, tool-discovery, or coding-session mechanics into this field. This is not an LLM prompt; conversational or judgment-heavy work belongs in update_message_sequence_step. Omit to preserve the existing description."
 						},
 						"context_dependencies": {
 							"type": "array",
@@ -1250,7 +1417,7 @@ func getAddMessageSequenceStepSchema() string {
 			"context_output": {"type": "string", "description": "OPTIONAL: Summary/result file for later steps. Omit when the step writes its result to the db (validate via validation_schema.db)."},
 			"items": {
 				"type": "array",
-				"description": "REQUIRED: Ordered queue of follow-up turns (turns 1..N; the step description is turn 0). Turn 0 should own the complete coherent outcome, including its routine sub-actions. Add a user_message only for evidence-based verification, critique, repair, new external input, or a real phase change; do not create one item per checklist line or tool call. Use explicit prevalidation items only for intermediate gates; the top-level validation_schema runs automatically after the final work turn. Deterministic code must be a standalone regular scripted step, never a sequence item. Plain turns inherit step-level DB/KB/learnings writes. Use kind or a non-empty write_access only to narrow a turn to selected stores.",
+				"description": "REQUIRED: Ordered queue of follow-up turns (turns 1..N; the step description is turn 0). Turn 0 should own the complete coherent outcome, including its routine sub-actions. Add a user_message only for evidence-based verification, critique, repair, new external input, or a real phase change; do not create one item per checklist line or tool call. Use explicit prevalidation items only for intermediate gates; the top-level validation_schema runs automatically after the final work turn. Deterministic code must be a standalone regular scripted step, never a sequence item. Plain turns inherit step-level DB/KB/learnings writes. Use kind or a non-empty write_access only to narrow a turn to selected stores. Before authoring more than a single verify/repair turn, load references/message-sequence.md: read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/message-sequence.md\"}]).",
 				"items": {
 					"type": "object",
 					"properties": {
@@ -1289,14 +1456,18 @@ func getUpdateMessageSequenceStepSchema() string {
 	return `{
 		"type": "object",
 		"properties": {
-			"existing_step_id": {"type": "string", "description": "REQUIRED: ID of the message_sequence step to update. Legacy non-scripted regular steps are accepted and atomically upgraded to message_sequence because that is already their effective runtime type."},
-			"title": {"type": "string"},
-			"description": {"type": "string"},
-			"context_dependencies": {"type": "array", "items": {"type": "string"}},
-			"context_output": {"type": "string"},
-			"items": {"type": "array", "items": {"type": "object"}, "description": "Replace the ordered item queue."},
-			"next_step_id": {"type": "string"},
-			"validation_schema": {"type": "object"},
+			"existing_step_id": {"type": "string", "minLength": 1, "description": "REQUIRED: ID of the message_sequence step to update. Legacy non-scripted regular steps are accepted and atomically upgraded to message_sequence because that is already their effective runtime type."},
+			"title": {"type": "string", "description": "OPTIONAL: New title. Omit to preserve the existing title."},
+			"description": {"type": "string", "description": "OPTIONAL: Replaces the opening instruction AND complete coherent outcome. This IS EXECUTED as the first user turn (turn 0): it leads items[0] inside the same conversation. Write it as an actionable semantic workflow instruction: domain action, inputs, durable result, failure behavior, and verification. Do not copy shared AgentWorks bridge/auth, Folder Guard, managed-tool, tool-discovery, or coding-session mechanics here. Keep routine sub-actions here; reserve items[] (turns 1..N) for decision-useful validation, critique, repair, new input, or real phase changes. Omit to preserve the existing description — do not resend it unchanged just to also change another field."},
+			"context_dependencies": {"type": "array", "items": {"type": "string"}, "description": "OPTIONAL: Replaces the full list of prior context files this sequence depends on. Omit to preserve the existing list."},
+			"context_output": {"type": "string", "description": "OPTIONAL: Replaces the summary/result file for later steps. Omit to preserve the existing value, or to leave the step writing its result to the db (validate via validation_schema.db) instead of a file."},
+			"items": {
+				"type": "array",
+				"description": "OPTIONAL: Replaces the entire ordered queue of follow-up turns (turns 1..N; the step description is turn 0) — this is a full replacement, not a merge, so include every item you want kept. Add a user_message only for evidence-based verification, critique, repair, new external input, or a real phase change; do not create one item per checklist line or tool call. Use explicit prevalidation items only for intermediate gates; the top-level validation_schema runs automatically after the final work turn. Deterministic code must be a standalone regular scripted step, never a sequence item. Plain turns inherit step-level DB/KB/learnings writes; use kind or a non-empty write_access only to narrow a turn to selected stores. Before restructuring items[] into anything beyond a single verify/repair turn, load references/message-sequence.md: read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/message-sequence.md\"}]).",
+				"items": {"type": "object"}
+			},
+			"next_step_id": {"type": "string", "description": "OPTIONAL: Replaces the explicit next step ID, or 'end'. Omit to preserve sequential execution."},
+			"validation_schema": {"type": "object", "description": "OPTIONAL: Replaces the step-level final validation contract. When present, the runtime automatically runs it after the configured work turns and before learning/knowledge closing turns; failures are sent back to the same conversation for repair and retried. Omit to preserve the existing schema. Keep it to the load-bearing checks a downstream step, evaluator, or user actually depends on — not every field the output happens to contain."},
 			"reason": {"type": "string", "description": "REQUIRED: One-sentence rationale for this update."}
 		},
 		"required": ["existing_step_id", "reason"]
@@ -1441,6 +1612,153 @@ func getUpdateRoutingStepSchema() string {
 			"reason": {
 				"type": "string",
 				"description": "REQUIRED: One-sentence rationale for why this routing step is being updated. Captured into the plan changelog."
+			}
+		},
+		"required": ["existing_step_id", "reason"]
+	}`
+}
+
+// getAddBranchStepSchema returns the JSON schema for add_branch_step tool. Same
+// shape as add_routing_step -- branch_question instead of routing_question --
+// since branch is the small in-flow decision, routing is now the "route"
+// (major sub-workflow fork) concept. See PLAT-259.
+func getAddBranchStepSchema() string {
+	return `{
+		"type": "object",
+		"properties": {
+			"id": {
+				"type": "string",
+				"description": "REQUIRED: Stable step ID for this branch step. Generate a unique, URL-friendly ID based on the step title."
+			},
+			"title": {
+				"type": "string",
+				"description": "REQUIRED: Short, clear title for the branch step"
+			},
+			"description": {
+				"type": "string",
+				"description": "DO NOT SET for branch steps. Branch is deterministic-only and never executes an agent. If a probe/judgment is needed, add a prior message_sequence step that writes route_selection.json, then route from that file."
+			},
+			"context_dependencies": {
+				"type": "array",
+				"items": {"type": "string"},
+				"description": "REQUIRED: List of context files from previous steps that this step depends on. For prior-step decisions, include route_selection.json and ensure a prior step declares route_selection.json in context_output. Use empty array [] if no dependencies."
+			},
+			"context_output": {
+				"type": "string",
+				"description": "Do not set for branch steps. Branch steps do not create outputs; a prior message_sequence step should declare route_selection.json in its context_output when it produces the decision."
+			},
+			"branch_question": {
+				"type": "string",
+				"description": "REQUIRED for compatibility/readability: Human-readable next-step decision prompt. It is not evaluated by an LLM at runtime; the selected route must come from caller route_selections, route_source_file, route_selection.json dependency, or default_route_id."
+			},
+			"routes": {
+				"type": "array",
+				"minItems": 2,
+				"items": {
+					"type": "object",
+					"properties": {
+						"route_id": {
+							"type": "string",
+							"description": "REQUIRED: Unique identifier for this route (e.g., 'route_positive', 'route_negative')"
+						},
+						"route_name": {
+							"type": "string",
+							"description": "REQUIRED: Human-readable name for this route (e.g., 'Positive Sentiment')"
+						},
+						"condition": {
+							"type": "string",
+							"description": "REQUIRED: Description of when this route should be selected (e.g., 'Select when sentiment analysis indicates positive sentiment')"
+						},
+						"next_step_id": {
+							"type": "string",
+							"description": "REQUIRED: ID of step to route to when this route is selected. Use step ID from the plan, or 'end' to terminate workflow."
+						}
+					},
+					"required": ["route_id", "route_name", "condition", "next_step_id"]
+				},
+				"description": "REQUIRED: Array of possible routes (minimum 2). Each route has a route_id, route_name, condition description, and next_step_id."
+			},
+			"default_route_id": {
+				"type": "string",
+				"description": "OPTIONAL: Fallback route_id to use when no route_selection.json is available. Must match one of the route_ids in routes."
+			},
+			"route_source_file": {
+				"type": "string",
+				"description": "OPTIONAL: Explicit route_selection.json source file, usually a context output from a prior step. The file must contain {\"select_route\":\"<route_id>\"}."
+			},
+			"insert_after_step_id": {
+				"type": "string",
+				"description": "REQUIRED: The ID of the step to insert after. Use the step's id field from the plan. Use empty string to insert at the beginning."
+			},
+			"reason": {
+				"type": "string",
+				"description": "REQUIRED: One-sentence rationale for why this branch step is being added. Captured into the plan changelog."
+			}
+		},
+		"required": ["id", "title", "branch_question", "routes", "context_dependencies", "insert_after_step_id", "reason"]
+	}`
+}
+
+// getUpdateBranchStepSchema returns the JSON schema for update_branch_step tool
+func getUpdateBranchStepSchema() string {
+	return `{
+		"type": "object",
+		"properties": {
+			"existing_step_id": {
+				"type": "string",
+				"description": "REQUIRED: The ID of the branch step to update. Use the step's id field from the plan."
+			},
+			"title": {
+				"type": "string",
+				"description": "OPTIONAL: New title for the step."
+			},
+			"description": {
+				"type": "string",
+				"description": "DO NOT SET for branch steps. Branch is deterministic-only and never executes an agent. Use clear_description=true to remove a legacy description; put any probe/judgment in a prior message_sequence step that writes route_selection.json."
+			},
+			"clear_description": {
+				"type": "boolean",
+				"description": "OPTIONAL: Set true to clear a legacy description during migration. New branch steps must keep description empty."
+			},
+			"context_dependencies": {
+				"type": "array",
+				"items": { "type": "string" },
+				"description": "OPTIONAL: Updated context dependencies. Use route_selection.json when consuming a prior step's deterministic decision."
+			},
+			"context_output": {
+				"type": "string",
+				"description": "Do not set for branch steps. Branch steps do not create outputs; route_selection.json should be produced by a prior message_sequence step or preseeded by caller route_selections."
+			},
+			"branch_question": {
+				"type": "string",
+				"description": "OPTIONAL: Updated human-readable branch prompt. Runtime does not LLM-evaluate this field."
+			},
+			"routes": {
+				"type": "array",
+				"minItems": 2,
+				"items": {
+					"type": "object",
+					"properties": {
+						"route_id": {"type": "string"},
+						"route_name": {"type": "string"},
+						"condition": {"type": "string"},
+						"next_step_id": {"type": "string"}
+					},
+					"required": ["route_id", "route_name", "condition", "next_step_id"]
+				},
+				"description": "OPTIONAL: Updated routes array (minimum 2)."
+			},
+			"default_route_id": {
+				"type": "string",
+				"description": "OPTIONAL: Updated default route ID."
+			},
+			"route_source_file": {
+				"type": "string",
+				"description": "OPTIONAL: Updated explicit route_selection.json source file produced by a prior step."
+			},
+			"reason": {
+				"type": "string",
+				"description": "REQUIRED: One-sentence rationale for why this branch step is being updated. Captured into the plan changelog."
 			}
 		},
 		"required": ["existing_step_id", "reason"]
@@ -1767,7 +2085,7 @@ func getAddTodoTaskRouteSchema() string {
 							"title": {"type": "string", "description": "REQUIRED: Title of the sub-agent step"},
 							"description": {"type": "string", "description": "REQUIRED: What this specialized agent does AND its standing brief. This IS EXECUTED as the agent's opening instruction (turn 0) on the first call — the orchestrator's per-call call_sub_agent instructions are added on top. Write it as an actionable brief, not throwaway metadata."},
 							"items": {"type": "array", "description": "REQUIRED when type='message_sequence'. Ordered user_message, prevalidation, or foreach turns.", "items": {"type": "object"}},
-							"context_dependencies": {"type": "array", "items": {"type": "string"}},
+							"context_dependencies": {"type": "array", "items": {"type": "string"}, "description": "Exact durable file outputs this child consumes. The runtime resolves and injects these files. Use [] when the child reads durable state from managed DB/KB tools instead."},
 							"context_output": {"type": "string", "description": "OPTIONAL: Context file this step creates. Omit when the step writes to the db (validate via validation_schema.db)."},
 							"todo_task_step": {"type": "object", "description": "When type='todo_task': the nested orchestrator's inner regular step metadata."},
 							"predefined_routes": {"type": "array", "description": "When type='todo_task': predefined routes for the nested orchestrator. Conversational children use message_sequence; deterministic scripted children may use regular. Another todo_task layer is not allowed."},
@@ -1777,10 +2095,6 @@ func getAddTodoTaskRouteSchema() string {
 							}
 						},
 						"required": ["type", "id", "title"]
-					},
-					"context_to_pass": {
-						"type": "string",
-						"description": "OPTIONAL: Specific context to pass to the sub-agent"
 					}
 				},
 				"required": ["route_id", "route_name", "condition"]
@@ -1826,19 +2140,15 @@ func getUpdateTodoTaskRouteSchema() string {
 					"type": {"type": "string", "enum": ["message_sequence", "regular", "todo_task"]},
 					"id": {"type": "string"},
 					"title": {"type": "string"},
-					"description": {"type": "string"},
-					"items": {"type": "array", "description": "Required when type='message_sequence'.", "items": {"type": "object"}},
-					"context_dependencies": {"type": "array", "items": {"type": "string"}},
+					"description": {"type": "string", "description": "OPTIONAL: Replaces what this specialized agent does AND its standing brief. This IS EXECUTED as the agent's opening instruction (turn 0) on the first call — the orchestrator's per-call call_sub_agent instructions are added on top. Write it as an actionable brief, not throwaway metadata. Omit to preserve the existing description."},
+					"items": {"type": "array", "description": "Required when type='message_sequence'. Replaces the entire ordered queue of follow-up turns (turns 1..N; description is turn 0) — a full replacement, not a merge. Add a user_message only for evidence-based verification, critique, repair, new input, or a real phase change. Before restructuring this into anything beyond a single verify/repair turn, load references/message-sequence.md: read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/message-sequence.md\"}]).", "items": {"type": "object"}},
+					"context_dependencies": {"type": "array", "items": {"type": "string"}, "description": "Exact durable file outputs this child consumes. The runtime resolves and injects these files. Use [] when the child reads durable state from managed DB/KB tools instead."},
 					"context_output": {"type": "string"},
 					"todo_task_step": {"type": "object", "description": "When type='todo_task': nested orchestrator inner step metadata."},
 					"predefined_routes": {"type": "array", "description": "When type='todo_task': nested routes may use message_sequence or scripted regular, but not another todo_task layer."},
 						"validation_schema": {"type": "object"}
 				},
 				"required": ["type", "id", "title"]
-			},
-			"context_to_pass": {
-				"type": "string",
-				"description": "OPTIONAL: Updated context to pass to the sub-agent."
 			},
 			"reason": {
 				"type": "string",
@@ -1950,6 +2260,8 @@ func updateToolForStepType(stepType StepType) string {
 		return "update_todo_task_step"
 	case StepTypeRouting:
 		return "update_routing_step"
+	case StepTypeBranch:
+		return "update_branch_step"
 	case StepTypeHumanInput:
 		return "update_human_input_step"
 	case StepTypeRegular:
@@ -2154,6 +2466,12 @@ func convertMapToStep(stepMap map[string]interface{}) (PlanStepInterface, error)
 			return nil, fmt.Errorf("failed to parse routing step: %w", err)
 		}
 		typedStep = &step
+	case "branch":
+		var step BranchPlanStep
+		if err := json.Unmarshal(stepJSON, &step); err != nil {
+			return nil, fmt.Errorf("failed to parse branch step: %w", err)
+		}
+		typedStep = &step
 	case "message_sequence":
 		var step MessageSequencePlanStep
 		if err := json.Unmarshal(stepJSON, &step); err != nil {
@@ -2216,6 +2534,13 @@ func unmarshalStepFromJSON(stepData json.RawMessage) (PlanStepInterface, error) 
 		}
 		step.Type = StepTypeRouting
 		typedStep = &step
+	case "branch":
+		var step BranchPlanStep
+		if err := json.Unmarshal(stepData, &step); err != nil {
+			return nil, fmt.Errorf("failed to parse branch step: %w", err)
+		}
+		step.Type = StepTypeBranch
+		typedStep = &step
 	case "message_sequence":
 		var step MessageSequencePlanStep
 		if err := json.Unmarshal(stepData, &step); err != nil {
@@ -2240,29 +2565,61 @@ func validateRegexPatternsInSchema(schema *ValidationSchema) error {
 	}
 
 	var errors []string
-	for _, fileRule := range schema.Files {
-		for i := range fileRule.JSONChecks {
-			check := &fileRule.JSONChecks[i]
-			if check.Pattern != "" {
-				// Safety net: Fix double-escaped patterns if they weren't fixed during unmarshaling
-				// (e.g., if schema was created programmatically rather than from JSON)
-				fixedPattern := fixDoubleEscapedPattern(check.Pattern)
-				if fixedPattern != check.Pattern {
-					// Update the pattern in the schema to the fixed version
-					check.Pattern = fixedPattern
-				}
-
-				// Validate the pattern
-				_, err := regexp.Compile(check.Pattern)
-				if err != nil {
-					errors = append(errors, fmt.Sprintf("Invalid regex pattern in file '%s' at path '%s': %v (pattern: '%s')", fileRule.FileName, check.Path, err, check.Pattern))
-				}
-			}
+	forEachSchemaCheck(schema, func(label string, check *JSONValidationCheck) {
+		if check.Pattern == "" {
+			return
 		}
-	}
+		// Safety net: Fix double-escaped patterns if they weren't fixed during unmarshaling
+		// (e.g., if schema was created programmatically rather than from JSON)
+		fixedPattern := fixDoubleEscapedPattern(check.Pattern)
+		if fixedPattern != check.Pattern {
+			// Update the pattern in the schema to the fixed version
+			check.Pattern = fixedPattern
+		}
+
+		// Validate the pattern
+		if _, err := regexp.Compile(check.Pattern); err != nil {
+			errors = append(errors, fmt.Sprintf("%s at path '%s': invalid regex pattern: %v (pattern: '%s')", label, check.Path, err, check.Pattern))
+		}
+	})
 
 	if len(errors) > 0 {
 		return fmt.Errorf("validation schema contains invalid regex patterns:\n%s", strings.Join(errors, "\n"))
+	}
+
+	return nil
+}
+
+// validateValueTypePatternCompatibility rejects a check that pairs a non-string
+// value_type with a pattern. validatePattern (pre_validation.go) only ever
+// matches string values -- for any other value_type, the actual pattern check
+// always fails regardless of the real data, since a genuinely well-typed
+// boolean/number/array/object value can never also be a string. A schema
+// combining these two constraints on one path is unsatisfiable by
+// construction: no JSON value can ever pass it. PLAT-236 traced two
+// (already independently fixed) Twitter/social-media findings to exactly
+// this shape reaching a live step's validation_schema undetected.
+func validateValueTypePatternCompatibility(schema *ValidationSchema) error {
+	if schema == nil {
+		return nil
+	}
+
+	var errors []string
+	forEachSchemaCheck(schema, func(label string, check *JSONValidationCheck) {
+		if check.Pattern == "" {
+			return
+		}
+		valueType := strings.TrimSpace(check.ValueType)
+		if valueType != "" && valueType != "string" {
+			errors = append(errors, fmt.Sprintf(
+				"%s: path '%s' sets both value_type=%q and a pattern, but pattern only ever matches string values -- this combination can never pass for any real data. Remove the pattern or drop value_type to \"string\"",
+				label, check.Path, valueType,
+			))
+		}
+	})
+
+	if len(errors) > 0 {
+		return fmt.Errorf("validation schema has an unsatisfiable value_type/pattern combination:\n%s", strings.Join(errors, "\n"))
 	}
 
 	return nil
@@ -2277,56 +2634,54 @@ func validateJSONPathSyntax(schema *ValidationSchema) error {
 	var errors []string
 	dummyData := map[string]interface{}{}
 
-	for _, fileRule := range schema.Files {
-		for _, check := range fileRule.JSONChecks {
-			// Validate check.Path
-			path := strings.TrimSpace(check.Path)
-			if path == "" {
-				errors = append(errors, fmt.Sprintf("File '%s': Empty path is not allowed", fileRule.FileName))
+	forEachSchemaCheck(schema, func(label string, check *JSONValidationCheck) {
+		// Validate check.Path
+		path := strings.TrimSpace(check.Path)
+		if path == "" {
+			errors = append(errors, fmt.Sprintf("%s: Empty path is not allowed", label))
+		} else {
+			if !strings.HasPrefix(path, "$.") {
+				errors = append(errors, fmt.Sprintf("%s: Path '%s' must start with '$.'", label, path))
 			} else {
-				if !strings.HasPrefix(path, "$.") {
-					errors = append(errors, fmt.Sprintf("File '%s': Path '%s' must start with '$.'", fileRule.FileName, path))
-				} else {
-					// Check syntax by attempting to evaluate against dummy data
-					_, err := jsonpath.Get(path, dummyData)
-					if err != nil && strings.Contains(err.Error(), "parsing error") {
-						errors = append(errors, fmt.Sprintf("File '%s': Invalid JSONPath syntax in '%s': %v", fileRule.FileName, path, err))
-					}
+				// Check syntax by attempting to evaluate against dummy data
+				_, err := jsonpath.Get(path, dummyData)
+				if err != nil && strings.Contains(err.Error(), "parsing error") {
+					errors = append(errors, fmt.Sprintf("%s: Invalid JSONPath syntax in '%s': %v", label, path, err))
 				}
 			}
+		}
 
-			// Validate consistency_check if it exists and is actually specified
-			// Skip validation if both Type and CompareWithPath are empty (treat as not specified)
-			if check.ConsistencyCheck != nil {
-				comparePath := strings.TrimSpace(check.ConsistencyCheck.CompareWithPath)
-				checkType := strings.TrimSpace(check.ConsistencyCheck.Type)
+		// Validate consistency_check if it exists and is actually specified
+		// Skip validation if both Type and CompareWithPath are empty (treat as not specified)
+		if check.ConsistencyCheck != nil {
+			comparePath := strings.TrimSpace(check.ConsistencyCheck.CompareWithPath)
+			checkType := strings.TrimSpace(check.ConsistencyCheck.Type)
 
-				// Only validate if at least one field is specified
-				if comparePath == "" && checkType == "" {
-					// Both empty - treat as if consistency_check wasn't specified, skip validation
-				} else if comparePath == "" || checkType == "" {
-					// One is specified but not the other - error
-					if comparePath == "" {
-						errors = append(errors, fmt.Sprintf("File '%s': compare_with_path is required when consistency check type is specified", fileRule.FileName))
-					}
-					if checkType == "" {
-						errors = append(errors, fmt.Sprintf("File '%s': type is required when consistency check compare_with_path is specified", fileRule.FileName))
-					}
+			// Only validate if at least one field is specified
+			if comparePath == "" && checkType == "" {
+				// Both empty - treat as if consistency_check wasn't specified, skip validation
+			} else if comparePath == "" || checkType == "" {
+				// One is specified but not the other - error
+				if comparePath == "" {
+					errors = append(errors, fmt.Sprintf("%s: compare_with_path is required when consistency check type is specified", label))
+				}
+				if checkType == "" {
+					errors = append(errors, fmt.Sprintf("%s: type is required when consistency check compare_with_path is specified", label))
+				}
+			} else {
+				// Both specified - validate the path syntax
+				if !strings.HasPrefix(comparePath, "$.") {
+					errors = append(errors, fmt.Sprintf("%s: compare_with_path '%s' must start with '$.'", label, comparePath))
 				} else {
-					// Both specified - validate the path syntax
-					if !strings.HasPrefix(comparePath, "$.") {
-						errors = append(errors, fmt.Sprintf("File '%s': compare_with_path '%s' must start with '$.'", fileRule.FileName, comparePath))
-					} else {
-						// Check syntax
-						_, err := jsonpath.Get(comparePath, dummyData)
-						if err != nil && strings.Contains(err.Error(), "parsing error") {
-							errors = append(errors, fmt.Sprintf("File '%s': Invalid JSONPath syntax in compare_with_path '%s': %v", fileRule.FileName, comparePath, err))
-						}
+					// Check syntax
+					_, err := jsonpath.Get(comparePath, dummyData)
+					if err != nil && strings.Contains(err.Error(), "parsing error") {
+						errors = append(errors, fmt.Sprintf("%s: Invalid JSONPath syntax in compare_with_path '%s': %v", label, comparePath, err))
 					}
 				}
 			}
 		}
-	}
+	})
 
 	if len(errors) > 0 {
 		return fmt.Errorf("validation schema contains invalid JSONPaths:\n%s", strings.Join(errors, "\n"))
@@ -2368,57 +2723,55 @@ func validateArrayLengthConsistencyChecks(schema *ValidationSchema) error {
 	}
 
 	var errors []string
-	for _, fileRule := range schema.Files {
-		for _, check := range fileRule.JSONChecks {
-			if check.ConsistencyCheck == nil || check.ConsistencyCheck.Type != "array_length" {
-				continue
-			}
-
-			path := strings.TrimSpace(check.Path)
-			comparePath := strings.TrimSpace(check.ConsistencyCheck.CompareWithPath)
-
-			// Basic validation: paths must be non-empty and different
-			if path == "" {
-				errors = append(errors, fmt.Sprintf(
-					"File '%s': array_length consistency check has empty path. Path must be a valid JSONPath.",
-					fileRule.FileName))
-				continue
-			}
-
-			if comparePath == "" {
-				errors = append(errors, fmt.Sprintf(
-					"File '%s': array_length consistency check has empty compare_with_path. compare_with_path must be a valid JSONPath.",
-					fileRule.FileName))
-				continue
-			}
-
-			if path == comparePath {
-				errors = append(errors, fmt.Sprintf(
-					"File '%s': array_length consistency check has path '%s' equal to compare_with_path '%s'. They must be different - one should point to a COUNT/number field, the other to an ARRAY field.",
-					fileRule.FileName, path, comparePath))
-				continue
-			}
-
-			// Detect field types to check for ambiguity
-			pathIsNumber, pathIsArray := detectFieldTypeFromPath(path)
-			compareIsNumber, compareIsArray := detectFieldTypeFromPath(comparePath)
-
-			// Check for ambiguous configurations
-			if pathIsArray && compareIsArray {
-				errors = append(errors, fmt.Sprintf(
-					"File '%s': AMBIGUOUS CHECK! Both path '%s' and compare_with_path '%s' contain array field indicators. One must be a NUMBER/COUNT field. Please check your paths.",
-					fileRule.FileName, path, comparePath))
-			} else if pathIsNumber && compareIsNumber {
-				errors = append(errors, fmt.Sprintf(
-					"File '%s': AMBIGUOUS CHECK! Both path '%s' and compare_with_path '%s' contain number field indicators. One must be an ARRAY field. Please check your paths.",
-					fileRule.FileName, path, comparePath))
-			}
-
-			// Note: We no longer enforce strict order (Number, Array) vs (Array, Number)
-			// because the runtime validator now handles both cases.
-			// We only flag if both look like the SAME type.
+	forEachSchemaCheck(schema, func(label string, check *JSONValidationCheck) {
+		if check.ConsistencyCheck == nil || check.ConsistencyCheck.Type != "array_length" {
+			return
 		}
-	}
+
+		path := strings.TrimSpace(check.Path)
+		comparePath := strings.TrimSpace(check.ConsistencyCheck.CompareWithPath)
+
+		// Basic validation: paths must be non-empty and different
+		if path == "" {
+			errors = append(errors, fmt.Sprintf(
+				"%s: array_length consistency check has empty path. Path must be a valid JSONPath.",
+				label))
+			return
+		}
+
+		if comparePath == "" {
+			errors = append(errors, fmt.Sprintf(
+				"%s: array_length consistency check has empty compare_with_path. compare_with_path must be a valid JSONPath.",
+				label))
+			return
+		}
+
+		if path == comparePath {
+			errors = append(errors, fmt.Sprintf(
+				"%s: array_length consistency check has path '%s' equal to compare_with_path '%s'. They must be different - one should point to a COUNT/number field, the other to an ARRAY field.",
+				label, path, comparePath))
+			return
+		}
+
+		// Detect field types to check for ambiguity
+		pathIsNumber, pathIsArray := detectFieldTypeFromPath(path)
+		compareIsNumber, compareIsArray := detectFieldTypeFromPath(comparePath)
+
+		// Check for ambiguous configurations
+		if pathIsArray && compareIsArray {
+			errors = append(errors, fmt.Sprintf(
+				"%s: AMBIGUOUS CHECK! Both path '%s' and compare_with_path '%s' contain array field indicators. One must be a NUMBER/COUNT field. Please check your paths.",
+				label, path, comparePath))
+		} else if pathIsNumber && compareIsNumber {
+			errors = append(errors, fmt.Sprintf(
+				"%s: AMBIGUOUS CHECK! Both path '%s' and compare_with_path '%s' contain number field indicators. One must be an ARRAY field. Please check your paths.",
+				label, path, comparePath))
+		}
+
+		// Note: We no longer enforce strict order (Number, Array) vs (Array, Number)
+		// because the runtime validator now handles both cases.
+		// We only flag if both look like the SAME type.
+	})
 
 	if len(errors) > 0 {
 		return fmt.Errorf("validation schema contains misconfigured array_length consistency checks:\n%s", strings.Join(errors, "\n"))
@@ -3042,14 +3395,6 @@ func updateSingleStep(plan *PlanningResponse, partialUpdate PartialPlanStep, fie
 							NewValue: newRoute.Condition,
 						})
 					}
-					if oldRoute.ContextToPass != newRoute.ContextToPass {
-						*fieldChanges = append(*fieldChanges, PlanFieldChange{
-							StepID:   partialUpdate.ExistingStepID,
-							Field:    routePrefix + ".context_to_pass",
-							OldValue: oldRoute.ContextToPass,
-							NewValue: newRoute.ContextToPass,
-						})
-					}
 					// Compare nested sub-agent step
 					if oldRoute.SubAgentStep != nil && newRoute.SubAgentStep != nil {
 						compareNestedStepFields(oldRoute.SubAgentStep, newRoute.SubAgentStep, partialUpdate.ExistingStepID, routePrefix+".sub_agent_step", fieldChanges)
@@ -3293,6 +3638,11 @@ func updateSingleStep(plan *PlanningResponse, partialUpdate PartialPlanStep, fie
 		if err := validateArrayLengthConsistencyChecks(partialUpdate.ValidationSchema); err != nil {
 			return -1, nil, fmt.Errorf("invalid array_length consistency checks in validation schema: %w", err)
 		}
+
+		// Validate value_type/pattern compatibility
+		if err := validateValueTypePatternCompatibility(partialUpdate.ValidationSchema); err != nil {
+			return -1, nil, fmt.Errorf("invalid validation schema: %w", err)
+		}
 	}
 
 	// Apply updates recursively
@@ -3369,7 +3719,39 @@ func clearDescriptionReviewedAfterPlanUpdate(ctx context.Context, workspacePath,
 	return false, nil
 }
 
-func buildPlanStepDependentArtifactReviewNotice(stepID string, fieldChanges []PlanFieldChange, descriptionReviewCleared bool) string {
+// clearDriftReviewAfterPlanUpdate mirrors clearDescriptionReviewedAfterPlanUpdate
+// exactly — same trigger condition, same read/find/clear/write shape — because a
+// step's drift review is stale for precisely the same set of field changes that
+// stale a description review: anything that changes what the step actually does.
+// A nil DriftReview on any step is what makes the plan_drift_review Pulse module
+// due, so this is the mechanism that turns "we edited a step" into "Pulse will
+// now notice."
+func clearDriftReviewAfterPlanUpdate(ctx context.Context, workspacePath, stepID string, fieldChanges []PlanFieldChange, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error) (bool, error) {
+	if !planStepUpdateInvalidatesDescriptionReview(fieldChanges) {
+		return false, nil
+	}
+
+	configs, err := readStepConfigViaFileCallback(ctx, workspacePath, readFile)
+	if err != nil {
+		return false, err
+	}
+	for i := range configs {
+		if configs[i].ID != stepID {
+			continue
+		}
+		if configs[i].AgentConfigs == nil || configs[i].AgentConfigs.DriftReview == nil {
+			return false, nil
+		}
+		clearStepConfigField(&configs[i], "drift_review")
+		if err := writeStepConfigViaFileCallback(ctx, workspacePath, configs, writeFile); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+func buildPlanStepDependentArtifactReviewNotice(stepID string, fieldChanges []PlanFieldChange, descriptionReviewCleared, driftReviewCleared bool) string {
 	if !planStepUpdateRequiresDependentArtifactReview(fieldChanges) {
 		return ""
 	}
@@ -3394,6 +3776,12 @@ func buildPlanStepDependentArtifactReviewNotice(stepID string, fieldChanges []Pl
 	if descriptionReviewCleared {
 		b.WriteString("- Cleared step_config.agent_configs.description_reviewed because the reviewed step contract may now be stale.\n")
 	}
+	if driftReviewCleared {
+		b.WriteString("- Cleared step_config.agent_configs.drift_review — the plan_drift_review Pulse module will now treat this step as due until it (or the manual review-artifact-drift slash command) records fresh evidence via record_plan_drift_review.\n")
+	}
+	if seen["description"] || seen["validation_schema"] {
+		b.WriteString("- Description & schema quality: this edit touched description or validation_schema — call read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/step-description.md\"}]) and apply it before finalizing.\n")
+	}
 	b.WriteString("- Pre-validation: confirm validation_schema still matches the new output files/fields; update plan validation_schema or step_config validation_schema if needed.\n")
 	b.WriteString("- Learnings: review learning_objective, learnings_access, lock_learnings, and any learnings/_global or learnings/" + stepID + " content for stale execution know-how.\n")
 	b.WriteString("- DB: if output/state shape changed, update db/README.md, the db/db.sqlite table schema/writers/upsert rules, and any report widgets (sql) that read those columns.\n")
@@ -3413,7 +3801,11 @@ func handlePlanStepDependentArtifactReview(ctx context.Context, workspacePath, s
 	if err != nil {
 		logger.Warn(fmt.Sprintf("⚠️ Failed to clear description_reviewed after updating step %s: %v", stepID, err))
 	}
-	return buildPlanStepDependentArtifactReviewNotice(stepID, fieldChanges, descriptionReviewCleared)
+	driftReviewCleared, err := clearDriftReviewAfterPlanUpdate(ctx, workspacePath, stepID, fieldChanges, readFile, writeFile)
+	if err != nil {
+		logger.Warn(fmt.Sprintf("⚠️ Failed to clear drift_review after updating step %s: %v", stepID, err))
+	}
+	return buildPlanStepDependentArtifactReviewNotice(stepID, fieldChanges, descriptionReviewCleared, driftReviewCleared)
 }
 
 func buildAddedStepArtifactSetupNotice(stepID, stepType string) string {
@@ -3426,6 +3818,7 @@ func buildAddedStepArtifactSetupNotice(stepID, stepType string) string {
 	b.WriteString("- KB: decide knowledgebase_access and knowledgebase_contribution for business context and notes.\n")
 	b.WriteString("- Scripted code: if " + stepType + " step " + stepID + " should run code, create or review learnings/" + stepID + "/main.py and set code execution config; otherwise make sure no stale script is implied.\n")
 	b.WriteString("- Downstream wiring: connect routes/next_step_id/context_dependencies, and update db/reports/index.html or evaluation/evaluation_plan.json if this step affects outputs.\n")
+	b.WriteString("- Description & schema quality: before finalizing this step's description and validation_schema, call read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/step-description.md\"}]) and apply it.\n")
 	b.WriteString("- Before marking the plan done, run get_workflow_command_guidance(kind=\"review-artifact-drift\", focus=\"" + stepID + "\").")
 	return b.String()
 }
@@ -3452,7 +3845,7 @@ func buildDeletedStepArtifactCleanupNotice(deletedIDs []string, prunedConfigIDs 
 	return b.String()
 }
 
-func buildTodoTaskRouteArtifactReviewNotice(parentStepID, routeID, action string, descriptionReviewCleared bool) string {
+func buildTodoTaskRouteArtifactReviewNotice(parentStepID, routeID, action string, descriptionReviewCleared, driftReviewCleared bool) string {
 	var b strings.Builder
 	b.WriteString("\n\nTodo route artifact review required for ")
 	b.WriteString(action)
@@ -3464,13 +3857,16 @@ func buildTodoTaskRouteArtifactReviewNotice(parentStepID, routeID, action string
 	if descriptionReviewCleared {
 		b.WriteString("- Cleared the parent step description_reviewed flag because its orchestration contract changed.\n")
 	}
+	if driftReviewCleared {
+		b.WriteString("- Cleared the parent step drift_review flag — plan_drift_review will treat it as due again.\n")
+	}
 	switch action {
 	case "added":
 		b.WriteString("- Route setup: configure step_config, tools/servers/skills, prevalidation, learnings, KB, DB, and optional learnings/" + routeID + "/main.py for the new nested agent.\n")
 	case "deleted":
 		b.WriteString("- Route cleanup: remove stale step_config, learnings/" + routeID + ", scripted main.py, DB/KB/report/eval references, and downstream context dependencies for the removed nested agent.\n")
 	default:
-		b.WriteString("- Route update: review route condition/context_to_pass/sub-agent description against prevalidation, learnings, DB, KB, scripts, reports/evals, and downstream dependencies.\n")
+		b.WriteString("- Route update: review route condition, sub-agent description, declared context_dependencies, prevalidation, learnings, DB, KB, scripts, reports/evals, and downstream dependencies.\n")
 	}
 	b.WriteString("- Before marking the plan done, run get_workflow_command_guidance(kind=\"review-artifact-drift\", focus=\"" + parentStepID + "\").")
 	return b.String()
@@ -3485,7 +3881,11 @@ func handleTodoTaskRouteArtifactReview(ctx context.Context, workspacePath, paren
 	if err != nil {
 		logger.Warn(fmt.Sprintf("⚠️ Failed to clear description_reviewed after %s route %s on step %s: %v", action, routeID, parentStepID, err))
 	}
-	return buildTodoTaskRouteArtifactReviewNotice(parentStepID, routeID, action, descriptionReviewCleared)
+	driftReviewCleared, err := clearDriftReviewAfterPlanUpdate(ctx, workspacePath, parentStepID, fieldChanges, readFile, writeFile)
+	if err != nil {
+		logger.Warn(fmt.Sprintf("⚠️ Failed to clear drift_review after %s route %s on step %s: %v", action, routeID, parentStepID, err))
+	}
+	return buildTodoTaskRouteArtifactReviewNotice(parentStepID, routeID, action, descriptionReviewCleared, driftReviewCleared)
 }
 
 // createUpdateRegularStepExecutor edits the internal regular plan type exposed as update_scripted_step.
@@ -4188,6 +4588,11 @@ func createAddRoutingStepExecutor(workspacePath string, logger loggerv2.Logger, 
 	return createSingleStepAdder(workspacePath, logger, readFile, writeFile, moveFile, "routing", unlockLearningsFunc)
 }
 
+// createAddBranchStepExecutor creates an executor function for add_branch_step tool.
+func createAddBranchStepExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, moveFile func(context.Context, string, string) error, unlockLearningsFunc func(context.Context, string, int) error) func(context.Context, map[string]interface{}) (string, error) {
+	return createSingleStepAdder(workspacePath, logger, readFile, writeFile, moveFile, "branch", unlockLearningsFunc)
+}
+
 // validateRoutingStepFieldsTyped validates that a RoutingPlanStep has all required fields
 func validateRoutingStepFieldsTyped(step *RoutingPlanStep) error {
 	if step.ID == "" {
@@ -4220,6 +4625,45 @@ func validateRoutingStepFieldsTyped(step *RoutingPlanStep) error {
 	if step.DefaultRouteID != "" {
 		if !routeIDs[step.DefaultRouteID] {
 			return fmt.Errorf("routing step (title: %q, ID: %s) has default_route_id %q that doesn't match any route_id", step.Title, step.ID, step.DefaultRouteID)
+		}
+	}
+	return nil
+}
+
+// validateBranchStepFieldsTyped validates that a BranchPlanStep has all required
+// fields. Mirrors validateRoutingStepFieldsTyped exactly -- same deterministic-
+// switch rules, branch_question instead of routing_question.
+func validateBranchStepFieldsTyped(step *BranchPlanStep) error {
+	if step.ID == "" {
+		return fmt.Errorf("branch step (title: %q) is missing required ID field", step.Title)
+	}
+	if strings.TrimSpace(step.Description) != "" {
+		return fmt.Errorf("branch step (title: %q, ID: %s) must not set description; branch is deterministic-only. Put any probe or judgment in a prior message_sequence step that writes %s", step.Title, step.ID, routeSelectionFileName)
+	}
+	if step.BranchQuestion == "" {
+		return fmt.Errorf("branch step (title: %q, ID: %s) is missing required branch_question field", step.Title, step.ID)
+	}
+	if len(step.Routes) < 2 {
+		return fmt.Errorf("branch step (title: %q, ID: %s) must have at least 2 routes, got %d", step.Title, step.ID, len(step.Routes))
+	}
+	// Check for duplicate route IDs
+	routeIDs := make(map[string]bool)
+	for _, route := range step.Routes {
+		if route.RouteID == "" {
+			return fmt.Errorf("branch step (title: %q, ID: %s) has a route with empty route_id", step.Title, step.ID)
+		}
+		if route.NextStepID == "" {
+			return fmt.Errorf("branch step (title: %q, ID: %s) route %q is missing required next_step_id", step.Title, step.ID, route.RouteID)
+		}
+		if routeIDs[route.RouteID] {
+			return fmt.Errorf("branch step (title: %q, ID: %s) has duplicate route_id %q", step.Title, step.ID, route.RouteID)
+		}
+		routeIDs[route.RouteID] = true
+	}
+	// Validate default_route_id if set
+	if step.DefaultRouteID != "" {
+		if !routeIDs[step.DefaultRouteID] {
+			return fmt.Errorf("branch step (title: %q, ID: %s) has default_route_id %q that doesn't match any route_id", step.Title, step.ID, step.DefaultRouteID)
 		}
 	}
 	return nil
@@ -4320,6 +4764,106 @@ func createUpdateRoutingStepExecutor(workspacePath string, logger loggerv2.Logge
 
 		logger.Info(fmt.Sprintf("✅ Updated routing step '%s' in plan", partialUpdate.ExistingStepID))
 		return fmt.Sprintf("Successfully updated routing step '%s' in the plan%s", partialUpdate.ExistingStepID, dependentReviewNotice), nil
+	}
+}
+
+// createUpdateBranchStepExecutor creates an executor function for update_branch_step
+// tool. Mirrors createUpdateRoutingStepExecutor exactly -- same shape, *BranchPlanStep
+// instead of *RoutingPlanStep.
+func createUpdateBranchStepExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, unlockLearningsFunc func(context.Context, string, int) error) func(context.Context, map[string]interface{}) (string, error) {
+	return func(ctx context.Context, args map[string]interface{}) (string, error) {
+		reason, err := requireReason(args)
+		if err != nil {
+			return "", err
+		}
+		if clearDescription, _ := args["clear_description"].(bool); clearDescription {
+			if description, ok := args["description"].(string); ok && strings.TrimSpace(description) != "" {
+				return "", fmt.Errorf("description must be empty when clear_description=true")
+			}
+		}
+
+		stepJSON, err := json.Marshal(args)
+		if err != nil {
+			return "", fmt.Errorf("failed to marshal step: %w", err)
+		}
+
+		var partialUpdate PartialPlanStep
+		if err := json.Unmarshal(stepJSON, &partialUpdate); err != nil {
+			return "", fmt.Errorf("failed to parse step: %w", err)
+		}
+
+		plan, err := readPlanForMutation(ctx, workspacePath, readFile)
+		if err != nil {
+			return "", fmt.Errorf("failed to read plan: %w", err)
+		}
+
+		var existingStep PlanStepInterface
+		for _, step := range plan.Steps {
+			if step.GetID() == partialUpdate.ExistingStepID {
+				existingStep = step
+				break
+			}
+		}
+		if existingStep == nil {
+			availableIDs := make([]string, 0, len(plan.Steps))
+			for _, step := range plan.Steps {
+				availableIDs = append(availableIDs, step.GetID())
+			}
+			return "", fmt.Errorf("step ID '%s' not found in existing plan. Available step IDs: %v", partialUpdate.ExistingStepID, availableIDs)
+		}
+
+		if _, ok := existingStep.(*BranchPlanStep); !ok {
+			return "", fmt.Errorf("step with ID '%s' is not a branch step", partialUpdate.ExistingStepID)
+		}
+
+		fieldChanges := make([]PlanFieldChange, 0)
+		stepIndex, _, err := updateSingleStep(plan, partialUpdate, &fieldChanges)
+		if err != nil {
+			return "", err
+		}
+
+		// Validate the updated step
+		updatedStep := plan.Steps[stepIndex]
+		updatedBranchStep, ok := updatedStep.(*BranchPlanStep)
+		if !ok {
+			return "", fmt.Errorf("updated step is not a branch step")
+		}
+
+		if err := validateBranchStepFieldsTyped(updatedBranchStep); err != nil {
+			return "", fmt.Errorf("validation failed after update: %w", err)
+		}
+
+		if err := validatePlanStepIDs(plan.Steps); err != nil {
+			return "", fmt.Errorf("plan validation failed after update: %w", err)
+		}
+		if err := validateStepIDUniqueness(plan); err != nil {
+			return "", fmt.Errorf("plan validation failed after update: %w", err)
+		}
+		if err := validateCrossPlanStepIDUniqueness(ctx, workspacePath, readFile, plan); err != nil {
+			return "", fmt.Errorf("plan validation failed after update: %w", err)
+		}
+
+		if err := writePlanToFile(ctx, workspacePath, plan, readFile, writeFile, logger); err != nil {
+			return "", fmt.Errorf("failed to write plan: %w", err)
+		}
+
+		logPlanChange(ctx, workspacePath, PlanChangelogEntry{
+			Tool:    "update_branch_step",
+			Reason:  reason,
+			StepIDs: []string{partialUpdate.ExistingStepID},
+			Changes: fieldChanges,
+		}, readFile, writeFile, logger)
+
+		if unlockLearningsFunc != nil && stepIndex >= 0 {
+			if err := unlockLearningsFunc(ctx, partialUpdate.ExistingStepID, stepIndex); err != nil {
+				logger.Warn(fmt.Sprintf("⚠️ Failed to unlock learnings for updated step %s: %v", partialUpdate.ExistingStepID, err))
+			}
+		}
+
+		dependentReviewNotice := handlePlanStepDependentArtifactReview(ctx, workspacePath, partialUpdate.ExistingStepID, fieldChanges, readFile, writeFile, logger)
+
+		logger.Info(fmt.Sprintf("✅ Updated branch step '%s' in plan", partialUpdate.ExistingStepID))
+		return fmt.Sprintf("Successfully updated branch step '%s' in the plan%s", partialUpdate.ExistingStepID, dependentReviewNotice), nil
 	}
 }
 
@@ -4656,6 +5200,11 @@ func createSingleStepAdder(workspacePath string, logger loggerv2.Logger, readFil
 			if err := validateArrayLengthConsistencyChecks(validationSchema); err != nil {
 				return "", fmt.Errorf("invalid array_length consistency checks in validation schema: %w", err)
 			}
+
+			// Validate value_type/pattern compatibility
+			if err := validateValueTypePatternCompatibility(validationSchema); err != nil {
+				return "", fmt.Errorf("invalid validation schema: %w", err)
+			}
 		}
 
 		// Validate step type-specific required fields BEFORE writing to plan
@@ -4670,6 +5219,12 @@ func createSingleStepAdder(workspacePath string, logger loggerv2.Logger, readFil
 		case "routing":
 			if routingStep, ok := typedStep.(*RoutingPlanStep); ok {
 				if err := validateRoutingStepFieldsTyped(routingStep); err != nil {
+					return "", fmt.Errorf("validation failed: %w", err)
+				}
+			}
+		case "branch":
+			if branchStep, ok := typedStep.(*BranchPlanStep); ok {
+				if err := validateBranchStepFieldsTyped(branchStep); err != nil {
 					return "", fmt.Errorf("validation failed: %w", err)
 				}
 			}
@@ -4863,6 +5418,7 @@ func registerPlanModificationTools(
 	agentName string, // e.g., "planning agent" or "plan improvement agent"
 	unlockLearningsFunc func(context.Context, string, int) error, // Optional: function to unlock learnings after plan modifications
 ) error {
+	mcpAgent = planChangeOriginRegistrar{DefinitionToolRegistrar: mcpAgent, agentName: agentName}
 	rawWriteFile := writeFile
 	writeFile = withPlanMutationWriteAccess(workspacePath, writeFile)
 
@@ -4884,6 +5440,34 @@ func registerPlanModificationTools(
 		"workflow",
 	); err != nil {
 		return fmt.Errorf("failed to register create_plan tool: %w", err)
+	}
+
+	if err := mcpAgent.RegisterCustomTool(
+		"validate_plan_change",
+		"Validate the concrete invariants of a completed plan change without running the workflow. The agent remains responsible for deciding the intended design; this tool proves the declared result against the persisted plan and its known dependent artifacts. Supply every removed step id or obsolete path as forbidden_references, and the exact context_dependencies expected for each changed consumer. A structural decision must not be consumed unless this returns passed=true.",
+		map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"forbidden_references": map[string]interface{}{
+					"type":        "array",
+					"items":       map[string]interface{}{"type": "string"},
+					"description": "Exact removed step ids, obsolete artifact path prefixes, or retired field names that must no longer occur in current workflow artifacts.",
+				},
+				"expected_context_dependencies": map[string]interface{}{
+					"type":                 "object",
+					"additionalProperties": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
+					"description":          "Map of changed step id to its exact expected context_dependencies array. Extra or missing dependencies fail validation.",
+				},
+			},
+			"anyOf": []interface{}{
+				map[string]interface{}{"required": []interface{}{"forbidden_references"}},
+				map[string]interface{}{"required": []interface{}{"expected_context_dependencies"}},
+			},
+		},
+		createValidatePlanChangeExecutor(workspacePath, readFile),
+		"workflow",
+	); err != nil {
+		return fmt.Errorf("failed to register validate_plan_change tool: %w", err)
 	}
 
 	migrateSequenceCodeParams, err := parseSchemaForToolParameters(`{"type":"object","properties":{}}`)
@@ -4967,6 +5551,21 @@ func registerPlanModificationTools(
 		"workflow",
 	); err != nil {
 		return fmt.Errorf("failed to register cleanup_orphan_step_configs tool: %w", err)
+	}
+
+	driftReviewSchema := getRecordPlanDriftReviewSchema()
+	driftReviewParams, err := parseSchemaForToolParameters(driftReviewSchema)
+	if err != nil {
+		return fmt.Errorf("failed to parse record_plan_drift_review schema: %w", err)
+	}
+	if err := mcpAgent.RegisterCustomTool(
+		"record_plan_drift_review",
+		"Record the results of a plan-drift review pass for one step, into planning/step_config.json's drift_review field. Call once per step with every check that ran, including checks that passed — not just failures. Each check needs check_id, status (pass/fail/fixed — fixed means real drift was found AND repaired in this same pass, not merely flagged), and evidence describing what was actually compared and what was found (a bare verdict like \"looks fine\" is rejected). Writing this record is what clears the step from plan_drift_review's due list; it stays cleared until the step is edited again (any dependency-triggering field change nulls it automatically).",
+		driftReviewParams,
+		createRecordPlanDriftReviewExecutor(workspacePath, logger, readFile, writeFile),
+		"workflow",
+	); err != nil {
+		return fmt.Errorf("failed to register record_plan_drift_review tool: %w", err)
 	}
 
 	// Register type-specific step addition tools
@@ -5061,6 +5660,36 @@ func registerPlanModificationTools(
 		"workflow",
 	); err != nil {
 		return fmt.Errorf("failed to register update_routing_step tool: %w", err)
+	}
+
+	branchSchema := getAddBranchStepSchema()
+	branchParams, err := parseSchemaForToolParameters(branchSchema)
+	if err != nil {
+		return fmt.Errorf("failed to parse branch step schema: %w", err)
+	}
+	if err := mcpAgent.RegisterCustomTool(
+		"add_branch_step",
+		"Add a deterministic branch step to the plan. Use this for a small in-flow next-step decision -- the workflow must choose exactly one of a few existing downstream steps. (Routing steps now represent a larger, major sub-workflow fork; use branch for a lightweight decision instead.) Branch has one mode only: read caller route_selections, the branch step's preseeded route_selection.json, route_source_file, a context_dependencies entry named route_selection.json, or default_route_id, then switch to the selected route. Do not set description or context_output on branch steps; if an agent/probe/judgment is needed, add a prior message_sequence step that writes route_selection.json and declare that file in the branch step's route_source_file or context_dependencies. Provide: id, title, branch_question (readability/compatibility only), routes (min 2 with route_id/route_name/condition/next_step_id), context_dependencies, optional default_route_id, optional route_source_file, insert_after_step_id. The plan.json file is updated immediately when this tool is called.",
+		branchParams,
+		createAddBranchStepExecutor(workspacePath, logger, readFile, writeFile, moveFile, unlockLearningsFunc),
+		"workflow",
+	); err != nil {
+		return fmt.Errorf("failed to register add_branch_step tool: %w", err)
+	}
+
+	branchUpdateSchema := getUpdateBranchStepSchema()
+	branchUpdateParams, err := parseSchemaForToolParameters(branchUpdateSchema)
+	if err != nil {
+		return fmt.Errorf("failed to parse update branch step schema: %w", err)
+	}
+	if err := mcpAgent.RegisterCustomTool(
+		"update_branch_step",
+		"Update a deterministic branch step in the plan. Provide existing_step_id (required) and only include fields you want to change: title, branch_question, routes, default_route_id, route_source_file, context_dependencies, or clear_description=true for legacy migration. Do not set description or context_output; branch never executes an agent and never LLM-evaluates branch_question. The selected route must come from caller route_selections, route_selection.json, route_source_file, context_dependencies, or default_route_id. The plan.json file is updated immediately when this tool is called. After a substantive change, review whether saved artifacts still match the new plan — they can drift out of sync; run get_workflow_command_guidance(kind=\"review-artifact-drift\").",
+		branchUpdateParams,
+		createUpdateBranchStepExecutor(workspacePath, logger, readFile, writeFile, unlockLearningsFunc),
+		"workflow",
+	); err != nil {
+		return fmt.Errorf("failed to register update_branch_step tool: %w", err)
 	}
 
 	messageSequenceUpdateSchema := getUpdateMessageSequenceStepSchema()
@@ -5176,6 +5805,205 @@ func registerPlanModificationTools(
 	}
 
 	return nil
+}
+
+type planChangeDependencyMismatch struct {
+	StepID   string   `json:"step_id"`
+	Expected []string `json:"expected"`
+	Actual   []string `json:"actual,omitempty"`
+	Reason   string   `json:"reason"`
+}
+
+func createValidatePlanChangeExecutor(
+	workspacePath string,
+	readFile func(context.Context, string) (string, error),
+) func(context.Context, map[string]interface{}) (string, error) {
+	return func(ctx context.Context, args map[string]interface{}) (string, error) {
+		forbidden, err := stringSliceToolArg(args["forbidden_references"], "forbidden_references")
+		if err != nil {
+			return "", err
+		}
+		expectedDependencies, err := stringSliceMapToolArg(args["expected_context_dependencies"], "expected_context_dependencies")
+		if err != nil {
+			return "", err
+		}
+		if len(forbidden) == 0 && len(expectedDependencies) == 0 {
+			return "", fmt.Errorf("provide forbidden_references and/or expected_context_dependencies")
+		}
+
+		plan, err := readPlanFromFile(ctx, workspacePath, readFile)
+		if err != nil {
+			return "", err
+		}
+		if err := ValidatePlanStructure(plan); err != nil {
+			return "", err
+		}
+
+		steps := make(map[string]PlanStepInterface)
+		var collect func([]PlanStepInterface)
+		collect = func(items []PlanStepInterface) {
+			for _, step := range items {
+				if step == nil {
+					continue
+				}
+				steps[step.GetID()] = step
+				if todo, ok := step.(*TodoTaskPlanStep); ok {
+					for _, route := range todo.PredefinedRoutes {
+						if route.SubAgentStep != nil {
+							collect([]PlanStepInterface{route.SubAgentStep})
+						}
+					}
+				}
+			}
+		}
+		collect(plan.Steps)
+		collect(plan.OrphanSteps)
+
+		mismatches := make([]planChangeDependencyMismatch, 0)
+		stepIDs := make([]string, 0, len(expectedDependencies))
+		for stepID := range expectedDependencies {
+			stepIDs = append(stepIDs, stepID)
+		}
+		sort.Strings(stepIDs)
+		for _, stepID := range stepIDs {
+			expected := normalizedStringSet(expectedDependencies[stepID])
+			step, ok := steps[stepID]
+			if !ok {
+				mismatches = append(mismatches, planChangeDependencyMismatch{StepID: stepID, Expected: expected, Reason: "step not found"})
+				continue
+			}
+			actual := normalizedStringSet(step.GetContextDependencies())
+			if !planChangeEqualStringSlices(expected, actual) {
+				mismatches = append(mismatches, planChangeDependencyMismatch{StepID: stepID, Expected: expected, Actual: actual, Reason: "context_dependencies differ"})
+			}
+		}
+
+		artifactPaths := []string{
+			"planning/plan.json",
+			"planning/step_config.json",
+			"planning/variables.json",
+			"evaluation/evaluation_plan.json",
+			"db/reports/index.html",
+			"db/README.md",
+			"workflow.json",
+			"soul/soul.md",
+			"learnings/_global/SKILL.md",
+			"knowledgebase/_index.json",
+		}
+		hits := make(map[string][]string)
+		scanned := make([]string, 0, len(artifactPaths))
+		for _, relativePath := range artifactPaths {
+			path := normalizePathForWorkspaceAPI(relativePath, workspacePath)
+			content, readErr := readFile(ctx, path)
+			if readErr != nil {
+				continue
+			}
+			scanned = append(scanned, relativePath)
+			for _, reference := range forbidden {
+				if strings.Contains(content, reference) {
+					hits[reference] = append(hits[reference], relativePath)
+				}
+			}
+		}
+
+		issues := make([]string, 0, len(hits)+len(mismatches))
+		for _, reference := range forbidden {
+			if paths := hits[reference]; len(paths) > 0 {
+				issues = append(issues, fmt.Sprintf("forbidden reference %q remains in %s", reference, strings.Join(paths, ", ")))
+			}
+		}
+		for _, mismatch := range mismatches {
+			issues = append(issues, fmt.Sprintf("step %q: %s", mismatch.StepID, mismatch.Reason))
+		}
+		result := map[string]interface{}{
+			"passed":                        len(issues) == 0,
+			"plan_structure":                "passed",
+			"scanned_artifacts":             scanned,
+			"forbidden_reference_hits":      hits,
+			"context_dependency_mismatches": mismatches,
+			"issues":                        issues,
+		}
+		encoded, err := json.Marshal(result)
+		if err != nil {
+			return "", err
+		}
+		return string(encoded), nil
+	}
+}
+
+func stringSliceToolArg(raw interface{}, name string) ([]string, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	items, ok := raw.([]interface{})
+	if !ok {
+		if typed, typedOK := raw.([]string); typedOK {
+			return normalizedStringSet(typed), nil
+		}
+		return nil, fmt.Errorf("%s must be an array of strings", name)
+	}
+	values := make([]string, 0, len(items))
+	for _, item := range items {
+		value, ok := item.(string)
+		if !ok || strings.TrimSpace(value) == "" {
+			return nil, fmt.Errorf("%s must contain only non-empty strings", name)
+		}
+		values = append(values, value)
+	}
+	return normalizedStringSet(values), nil
+}
+
+func stringSliceMapToolArg(raw interface{}, name string) (map[string][]string, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	object, ok := raw.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("%s must be an object keyed by step id", name)
+	}
+	values := make(map[string][]string, len(object))
+	for rawStepID, rawDependencies := range object {
+		stepID := strings.TrimSpace(rawStepID)
+		if stepID == "" {
+			return nil, fmt.Errorf("%s contains an empty step id", name)
+		}
+		dependencies, err := stringSliceToolArg(rawDependencies, name+"["+stepID+"]")
+		if err != nil {
+			return nil, err
+		}
+		values[stepID] = dependencies
+	}
+	return values, nil
+}
+
+func normalizedStringSet(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, raw := range values {
+		value := strings.TrimSpace(raw)
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func planChangeEqualStringSlices(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func withPlanMutationWriteAccess(workspacePath string, writeFile func(context.Context, string, string) error) func(context.Context, string, string) error {
@@ -5426,10 +6254,6 @@ func createUpdateTodoTaskRouteExecutor(workspacePath string, logger loggerv2.Log
 			routeToUpdate.Condition = condition
 		}
 
-		if contextToPass, ok := args["context_to_pass"].(string); ok {
-			routeToUpdate.ContextToPass = contextToPass
-		}
-
 		if orphanStepRef, ok := args["orphan_step_ref"].(string); ok {
 			routeToUpdate.OrphanStepRef = strings.TrimSpace(orphanStepRef)
 			if routeToUpdate.OrphanStepRef != "" {
@@ -5667,6 +6491,11 @@ func createUpdateValidationSchemaExecutor(workspacePath string, logger loggerv2.
 		// Validate array_length consistency checks
 		if err := validateArrayLengthConsistencyChecks(updateData.ValidationSchema); err != nil {
 			return "", fmt.Errorf("invalid array_length consistency checks in validation schema: %w", err)
+		}
+
+		// Validate value_type/pattern compatibility
+		if err := validateValueTypePatternCompatibility(updateData.ValidationSchema); err != nil {
+			return "", fmt.Errorf("invalid validation schema: %w", err)
 		}
 
 		// Create PartialPlanStep with only validation schema

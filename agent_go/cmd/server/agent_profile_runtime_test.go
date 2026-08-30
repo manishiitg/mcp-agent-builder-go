@@ -7,7 +7,6 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
-	"os"
 	"strings"
 	"testing"
 
@@ -19,7 +18,7 @@ import (
 func TestResolveAgentProfileForQueryResolvesGlobalScopeWithoutFolderOrTitle(t *testing.T) {
 	registry := agentprofiles.NewRegistry()
 	profile := agentprofiles.Profile{
-		ID: "chief-of-staff", Name: "Chief of Staff", Version: 1, BuiltIn: true,
+		ID: "global-assistant", Name: "Global Assistant", Version: 1, BuiltIn: true,
 		SystemPromptTemplate: "placeholder",
 		Scope:                agentprofiles.ProfileScopeGlobal,
 		Runtime:              agentprofiles.RuntimePolicy{Transport: "auto"},
@@ -30,7 +29,7 @@ func TestResolveAgentProfileForQueryResolvesGlobalScopeWithoutFolderOrTitle(t *t
 	api := &StreamingAPI{agentProfiles: registry}
 	// No SelectedFolder, no AgentProfileContext.ProjectTitle -- exactly what a
 	// global-scoped profile must resolve without, unlike a project-scoped one.
-	req := QueryRequest{AgentMode: "multi-agent", AgentProfileID: "chief-of-staff"}
+	req := QueryRequest{AgentMode: "multi-agent", AgentProfileID: "global-assistant"}
 	resolved, err := api.resolveAgentProfileForQuery(context.Background(), &req, "user-1", "session-1")
 	if err != nil {
 		t.Fatalf("global-scoped profile should resolve without selected_folder/project_title, got: %v", err)
@@ -41,7 +40,7 @@ func TestResolveAgentProfileForQueryResolvesGlobalScopeWithoutFolderOrTitle(t *t
 	if req.SelectedFolder != "Chats" {
 		t.Fatalf("expected the Chats alias to be defaulted, got %q", req.SelectedFolder)
 	}
-	if req.AgentProfileContext.ProjectTitle != "Chief of Staff" {
+	if req.AgentProfileContext.ProjectTitle != "Global Assistant" {
 		t.Fatalf("expected project_title to default to the profile Name, got %q", req.AgentProfileContext.ProjectTitle)
 	}
 	if got := agentProfileRuntimeWorkspace("user-1", req.SelectedFolder); got != "_users/user-1/Chats" {
@@ -49,7 +48,7 @@ func TestResolveAgentProfileForQueryResolvesGlobalScopeWithoutFolderOrTitle(t *t
 	}
 }
 
-// A global-scoped profile (Chief of Staff) is meant to feel like a
+// A global-scoped profile is meant to feel like a
 // profile-less multi-agent chat, where the user's own chat-level model
 // selection (any published LLM) already wins -- unlike a project-scoped
 // product (Video Studio), whose pinned runtime binding is deliberately
@@ -58,7 +57,7 @@ func TestResolveAgentProfileForQueryResolvesGlobalScopeWithoutFolderOrTitle(t *t
 func TestResolveAgentProfileForQueryGlobalScopeDefersToRequestedModel(t *testing.T) {
 	registry := agentprofiles.NewRegistry()
 	profile := agentprofiles.Profile{
-		ID: "chief-of-staff", Name: "Chief of Staff", Version: 1, BuiltIn: true,
+		ID: "global-assistant", Name: "Global Assistant", Version: 1, BuiltIn: true,
 		SystemPromptTemplate: "placeholder",
 		Scope:                agentprofiles.ProfileScopeGlobal,
 		Runtime:              agentprofiles.RuntimePolicy{Transport: "auto", Provider: "claude-code", ModelID: "claude-sonnet-5"},
@@ -68,7 +67,7 @@ func TestResolveAgentProfileForQueryGlobalScopeDefersToRequestedModel(t *testing
 	}
 	api := &StreamingAPI{agentProfiles: registry}
 	req := QueryRequest{
-		AgentMode: "multi-agent", AgentProfileID: "chief-of-staff",
+		AgentMode: "multi-agent", AgentProfileID: "global-assistant",
 		Provider: "codex-cli", ModelID: "gpt-5.6-terra",
 	}
 	if _, err := api.resolveAgentProfileForQuery(context.Background(), &req, "user-1", "session-1"); err != nil {
@@ -82,7 +81,7 @@ func TestResolveAgentProfileForQueryGlobalScopeDefersToRequestedModel(t *testing
 func TestResolveAgentProfileForQueryGlobalScopeFallsBackToPinnedModelWhenRequestEmpty(t *testing.T) {
 	registry := agentprofiles.NewRegistry()
 	profile := agentprofiles.Profile{
-		ID: "chief-of-staff", Name: "Chief of Staff", Version: 1, BuiltIn: true,
+		ID: "global-assistant", Name: "Global Assistant", Version: 1, BuiltIn: true,
 		SystemPromptTemplate: "placeholder",
 		Scope:                agentprofiles.ProfileScopeGlobal,
 		Runtime:              agentprofiles.RuntimePolicy{Transport: "auto", Provider: "claude-code", ModelID: "claude-sonnet-5"},
@@ -91,7 +90,7 @@ func TestResolveAgentProfileForQueryGlobalScopeFallsBackToPinnedModelWhenRequest
 		t.Fatal(err)
 	}
 	api := &StreamingAPI{agentProfiles: registry}
-	req := QueryRequest{AgentMode: "multi-agent", AgentProfileID: "chief-of-staff"}
+	req := QueryRequest{AgentMode: "multi-agent", AgentProfileID: "global-assistant"}
 	if _, err := api.resolveAgentProfileForQuery(context.Background(), &req, "user-1", "session-1"); err != nil {
 		t.Fatalf("resolveAgentProfileForQuery() error = %v", err)
 	}
@@ -244,7 +243,7 @@ func TestLookupAgentProfileDefinitionDoesNotRunTheRuntimeInitializer(t *testing.
 
 	// The delegation path only reads the declared surface, so it must not.
 	before := req
-	resolved, err := api.lookupAgentProfileDefinition(&req, "user-1")
+	resolved, err := api.lookupAgentProfileDefinition(context.Background(), &req, "user-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,25 +263,6 @@ func TestLookupAgentProfileDefinitionDoesNotRunTheRuntimeInitializer(t *testing.
 	// ...without rewriting the caller's request the way the per-turn path does.
 	if req.Provider != before.Provider || req.ModelID != before.ModelID || len(req.SelectedSkills) != len(before.SelectedSkills) {
 		t.Fatalf("lookup mutated the request: provider=%q model=%q skills=%v", req.Provider, req.ModelID, req.SelectedSkills)
-	}
-}
-
-// The check above proves the helper is cheap; it does not prove delegation uses
-// it. Without this, reverting the call site to resolveAgentProfileForQuery
-// passes every assertion above while restoring the per-sub-agent initializer.
-func TestDelegationUsesTheReadOnlyProfileLookup(t *testing.T) {
-	source, err := os.ReadFile("delegation.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(source), "resolveAgentProfileForQuery(") {
-		t.Fatal("delegation calls resolveAgentProfileForQuery, which re-runs the product runtime initializer " +
-			"(workspace seeding, plan refresh, workflow DB init, productdeps.Ensure) for every sub-agent; " +
-			"it needs only Definition.ToolPolicy, so use lookupAgentProfileDefinition")
-	}
-	if !strings.Contains(string(source), "lookupAgentProfileDefinition(") {
-		t.Fatal("delegation no longer resolves the parent profile at all; the sub-agent would get a wider " +
-			"tool surface than the product declared")
 	}
 }
 

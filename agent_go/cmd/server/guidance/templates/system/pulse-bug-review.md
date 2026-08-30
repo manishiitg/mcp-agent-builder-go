@@ -1,11 +1,11 @@
 ## Pulse Bug Review — read-only QA and execution-trace contract
 
-Load this when Engineering Review is due and runtime/logic evidence is selected.
-It is the deep read-only execution evidence pack used by Engineering Review and
-the Review+Fix sequence. Gate does not load it — Gate only decides whether
-`workflow_review` is due from the durable worklist recorded by Pulse Gate. The reviewer inspects and advises;
-only the Pulse Fixer applies bounded repairs, and only for confirmed
-`correctness_bug` findings.
+Load this when the Technical Review runtime/logic focus is selected.
+It is the deep execution evidence pack used by the retained Technical Review+Fix
+task. Gate does not load it — Gate only decides whether `technical_review` is
+due from the durable worklist recorded by Pulse Gate. The retained reviewer
+inspects, applies only bounded safe repairs for confirmed `correctness_bug`
+findings, and records its evidence and outcome before ending.
 
 The read-only reviewer identifies and scopes the defect from run/eval evidence,
 execution logs, validation, prompts/config, stale artifacts, and evidence-chain
@@ -87,6 +87,39 @@ Act like a careful human QA engineer, but remain read-only and side-effect safe:
    for proof, record `changed_unverified`; on that later run close it through a
    `verified_no_change` finding disposition only after the expected behavior is
    observed. Failed proof or recurrence reopens it automatically.
+
+#### Validation-contract health
+
+When the selected Technical Review focus is `validation_contract_health`, make
+the review deliberately smaller than an all-schema audit. Start with repeated
+prevalidation concerns or automatic-validation repair turns, group all failed
+fields from one producer into one contract, and trace only that producer's real
+consumers, side-effect proof, and routing boundary. For every selected check,
+answer: **what meaningful bad outcome could pass if this check did not exist?**
+Keep it only when the answer is concrete and evidenced.
+
+Keep a check when it proves a real downstream parser/consumer contract, an
+authoritative DB or external-system read-back, a route/approval/safety boundary,
+or run-specific provenance in a genuine deliverable. Simplify or remove it when
+it is cosmetic metadata, a duplicate upstream fact, an unread field, a
+self-written success marker, or a second intermediate `prevalidation` that
+merely repeats the final step-level schema without protecting a later costly or
+irreversible operation. Do not replace removed evidence with a weaker
+`status=success` field.
+
+Explicitly search for contradictions that create repair churn without better
+evidence: one field required as both boolean and a string pattern; number/string
+type conflicts; required fields that a documented branch can legitimately omit;
+object checks with no required child shape; and literals that exist only to
+satisfy a pattern rather than describe reality. Make such fields conditional or
+optional, or replace them with the smallest authoritative assertion.
+
+The recommendation must name retained minimal checks, removed or rewritten
+checks, consumer/side-effect evidence for each, and one negative fixture the
+revised schema must still reject. This is a safe `fixer_handoff` only when the
+producer, consumers, and meaning remain unchanged. Changing a public-action
+guard, approval boundary, or externally visible artifact contract is
+`decision_required`, not an automatic simplification.
 9. Return `QA coverage`, `expected versus observed`, exact evidence, confidence,
    and `untested risk` alongside the normal ordered findings. Coverage is not a
    percentage unless a real denominator exists.
@@ -190,9 +223,8 @@ inputs as a harness issue.
 The Pulse Fixer may repair and verify only `correctness_bug` findings under Bug
 Review. It must not rewrite a step merely because another tool might have been
 faster or stylistically preferable. Route `efficiency_or_coaching` findings to
-the `llm_ops_review` evidence set: if that module is due in the current worklist,
-pass the finding to its reviewer; otherwise record one deduplicated evidence
-pointer and next-check trigger through typed Pulse tools so the next Gate makes
-LLM/Ops due. Record `no_issue` as reviewed with no action. Keep
+the `technical_review` execution-efficiency or orchestration-fitness focus. If
+that focus is not selected now, record one deduplicated evidence pointer and
+next-check trigger so a later Gate can prioritize it. Record `no_issue` as reviewed with no action. Keep
 `insufficient_evidence` visible only when it is consequential, with a concrete
 way to obtain the missing evidence.

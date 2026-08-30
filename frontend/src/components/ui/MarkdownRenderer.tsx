@@ -21,6 +21,9 @@ interface MarkdownRendererProps {
   maxHeight?: string
   showScrollbar?: boolean
   disablePathLinking?: boolean
+  // Conversation messages can contain large generated reference images. Keep
+  // those messages scannable while leaving the original asset one click away.
+  compactImages?: boolean
   basePath?: string
   onLinkClick?: (filepath: string) => void
   // When provided, a ```report-widget fenced block whose body is a widget JSON
@@ -575,6 +578,7 @@ const MarkdownRendererImpl: React.FC<MarkdownRendererProps> = ({
   maxHeight = "none",
   showScrollbar = false,
   disablePathLinking = false,
+  compactImages = false,
   basePath,
   onLinkClick,
   renderEmbeddedWidget
@@ -1223,12 +1227,27 @@ const MarkdownRendererImpl: React.FC<MarkdownRendererProps> = ({
               ? `${getApiBaseUrl()}/api/public/file?path=${btoa(workspaceFilepath)}`
               : src
             console.log(`[IMAGE_RENDER] MarkdownRenderer src="${src}" workspaceFilepath="${workspaceFilepath}" resolvedSrc="${resolvedSrc}"`)
-            return (
+            const image = (
               <img
                 src={resolvedSrc}
                 alt={alt}
-                className="max-w-full h-auto rounded-lg shadow-md my-4 border border-gray-200 dark:border-gray-700"
+                className={compactImages
+                  ? "max-w-full w-auto h-auto max-h-80 rounded-lg shadow-md my-3 border border-gray-200 dark:border-gray-700 cursor-zoom-in"
+                  : "max-w-full h-auto rounded-lg shadow-md my-4 border border-gray-200 dark:border-gray-700"}
               />
+            )
+            if (!compactImages || !resolvedSrc) return image
+            return (
+              <a
+                href={resolvedSrc}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-block max-w-full"
+                title="Open full-size image"
+                aria-label={`Open full-size image${alt ? `: ${alt}` : ''}`}
+              >
+                {image}
+              </a>
             )
           },
           hr: () => <hr className="my-6 border-gray-300 dark:border-gray-600" />,
@@ -1320,7 +1339,7 @@ export const ConversationMarkdownRenderer: React.FC<{ content: string; maxHeight
     style={{ maxHeight }}
   >
     <div className={`${framed ? 'p-3' : 'p-0'} min-w-0`}>
-      <MarkdownRenderer content={content} disablePathLinking={disablePathLinking} />
+      <MarkdownRenderer content={content} disablePathLinking={disablePathLinking} compactImages />
     </div>
   </div>
 ))

@@ -11,7 +11,6 @@ import (
 	"time"
 
 	virtualtools "github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
-	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/browser"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/common"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents"
@@ -188,7 +187,7 @@ func stepRuntimeEnv(workspaceEnv map[string]string) map[string]string {
 	result := make(map[string]string, len(workspaceEnv))
 	for key, value := range workspaceEnv {
 		switch key {
-		case "STEP_OUTPUT_DIR", "STEP_EXECUTION_DIR", "DB_PATH",
+		case "STEP_OUTPUT_DIR", "STEP_EXECUTION_DIR", "DB_PATH", "RUN_FOLDER",
 			"MCP_SESSION_ID", "MCP_API_URL", "MCP_CUSTOM", "MCP_AUTH", "MCP_VIRTUAL":
 			continue
 		}
@@ -197,7 +196,7 @@ func stepRuntimeEnv(workspaceEnv map[string]string) map[string]string {
 	return result
 }
 
-func injectStepEnvIntoShellExecutor(executors map[string]interface{}, stepOutputAbsPath, stepExecutionAbsPath, dbAbsPath string, mcpSessionID string, workspaceEnv map[string]string) {
+func injectStepEnvIntoShellExecutor(executors map[string]interface{}, stepOutputAbsPath, stepExecutionAbsPath, dbAbsPath, runFolder string, mcpSessionID string, workspaceEnv map[string]string) {
 	if len(executors) == 0 || strings.TrimSpace(stepOutputAbsPath) == "" {
 		return
 	}
@@ -222,6 +221,7 @@ func injectStepEnvIntoShellExecutor(executors map[string]interface{}, stepOutput
 		if strings.TrimSpace(dbAbsPath) != "" {
 			mergedEnv["DB_PATH"] = dbAbsPath
 		}
+		mergedEnv["RUN_FOLDER"] = runFolder
 		if rawExtraEnv, exists := args["extra_env"]; exists {
 			switch typed := rawExtraEnv.(type) {
 			case map[string]interface{}:
@@ -240,6 +240,7 @@ func injectStepEnvIntoShellExecutor(executors map[string]interface{}, stepOutput
 		if strings.TrimSpace(dbAbsPath) != "" {
 			mergedEnv["DB_PATH"] = dbAbsPath
 		}
+		mergedEnv["RUN_FOLDER"] = runFolder
 		if strings.TrimSpace(mcpSessionID) != "" {
 			// Shell/file tools must resolve against the step-local MCP session so the
 			// session-level folder guard matches the prompt's narrow read/write scope.
@@ -263,7 +264,7 @@ func injectStepEnvIntoShellExecutor(executors map[string]interface{}, stepOutput
 	}
 }
 
-func registerStepSessionShellEnv(sessionID, stepOutputAbsPath, stepExecutionAbsPath, dbAbsPath string, workspaceEnv map[string]string) {
+func registerStepSessionShellEnv(sessionID, stepOutputAbsPath, stepExecutionAbsPath, dbAbsPath, runFolder string, workspaceEnv map[string]string) {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
 		return
@@ -277,6 +278,7 @@ func registerStepSessionShellEnv(sessionID, stepOutputAbsPath, stepExecutionAbsP
 	if strings.TrimSpace(dbAbsPath) != "" {
 		env["DB_PATH"] = dbAbsPath
 	}
+	env["RUN_FOLDER"] = runFolder
 	common.SetSessionShellEnv(sessionID, env)
 }
 
@@ -383,7 +385,8 @@ func isGenericAgentStep(stepID, stepPath string) bool {
 // setupExecutionFolderGuard sets up folder guard paths for execution agents.
 // kbAccess must be one of KBAccessRead / Write / ReadWrite / None — callers resolve it
 // via resolveKnowledgebaseAccess before invoking. learningsAccess must be resolved via
-// resolveLearningsAccess. When kbAccess permits writes the step is the KB writer,
+// resolveExecutionLearningsAccess so evaluation/routing isolation matches the prompt.
+// When kbAccess permits writes the step is the KB writer,
 // so knowledgebase/notes/ is added to writePaths. Returns readPaths and writePaths.
 func (hcpo *StepBasedWorkflowOrchestrator) setupExecutionFolderGuard(stepPath string, stepID string, kbAccess string, learningsAccess string, dbAccess string, stepConfig *AgentConfigs) (readPaths, writePaths []string) {
 	baseWorkspacePath := hcpo.GetWorkspacePath()
@@ -720,6 +723,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) applyStepConfigToAgentConfig(config *
 			hcpo.GetLogger().Info(fmt.Sprintf("🔧 Step config found but no SelectedTools specified - using orchestrator defaults: %v", config.SelectedTools))
 		}
 	}
+	config.SelectedTools = withoutRetiredRunConcernTool(config.SelectedTools)
 
 	// Determine execution mode: CLI providers and scripted steps always use code execution mode.
 	// scripted steps need code execution mode so the agent gets the tool index and get_api_spec
@@ -795,8 +799,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) prepareCustomTools(stepConfig *AgentC
 		var enabledTools []string
 		hasAdvanced := false
 		for _, entry := range stepConfig.EnabledCustomTools {
-			// workspace_image* entries are legacy — image tools now live inside workspace_advanced,
-			// which is auto-added below, so these entries become no-ops and are dropped.
+			// workspace_image* entries are retired and must not re-enable provider
+			// media tools through old workflow manifests.
 			if entry == "workspace_image:*" || strings.HasPrefix(entry, "workspace_image:") ||
 				entry == "workspace_image_gen:*" || strings.HasPrefix(entry, "workspace_image_gen:") ||
 				entry == "workspace_image_edit:*" || strings.HasPrefix(entry, "workspace_image_edit:") {
@@ -816,13 +820,14 @@ func (hcpo *StepBasedWorkflowOrchestrator) prepareCustomTools(stepConfig *AgentC
 		// path or escalate a read-only step to mutation authority.
 		enabledTools = append(enabledTools, "workflow_db:query_workflow_db")
 		if resolveDBAccess(stepConfig) == DBAccessReadWrite {
-			enabledTools = append(enabledTools, "workflow_db:mutate_workflow_db")
+			enabledTools = append(enabledTools, "workflow_db:mutate_workflow_db", "workflow_db:apply_workflow_db_migration")
 		}
-		// PLAT-055. Every step can raise a structured concern. This is
-		// capability-derived like the DB tools above: a step that observed a
-		// defect must always be able to report it, and a custom allowlist must
-		// not be able to silence that channel.
-		enabledTools = append(enabledTools, "workflow_db:record_run_concern")
+		// PLAT-184. This workflow's own cost ledger is capability-derived like
+		// query_workflow_db above: a custom allowlist may narrow other tools,
+		// but every step (including Pulse's Technical Review reviewer, which
+		// runs through this same path) can always read its own workflow's cost
+		// and token breakdown.
+		enabledTools = append(enabledTools, "workflow_costs:query_workflow_costs")
 
 		// Auto-include workspace_browser:* if agent_browser exists in the workspace tools pool
 		// (present when preset has enable_browser_access: true) and not already listed.
@@ -843,6 +848,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) prepareCustomTools(stepConfig *AgentC
 			}
 		}
 
+		enabledTools = withoutRetiredRunConcernTool(enabledTools)
 		// Filter tools based on unified format (category:tool or category:*)
 		toolsToRegister, executorsToUse = orchestrator.FilterCustomToolsByCategory(
 			hcpo.WorkspaceTools,
@@ -857,6 +863,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) prepareCustomTools(stepConfig *AgentC
 			"workspace_advanced:*",
 			"human_tools:*",
 			"workflow_db:query_workflow_db",
+			// PLAT-184, capability-derived like query_workflow_db above.
+			"workflow_costs:query_workflow_costs",
 		}
 		if resolveDBAccess(stepConfig) == DBAccessReadWrite {
 			defaultEnabledTools = append(defaultEnabledTools, "workflow_db:mutate_workflow_db")
@@ -869,6 +877,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) prepareCustomTools(stepConfig *AgentC
 				break
 			}
 		}
+		defaultEnabledTools = withoutRetiredRunConcernTool(defaultEnabledTools)
 		toolsToRegister, executorsToUse = orchestrator.FilterCustomToolsByCategory(
 			hcpo.WorkspaceTools,
 			hcpo.WorkspaceToolExecutors,
@@ -878,6 +887,20 @@ func (hcpo *StepBasedWorkflowOrchestrator) prepareCustomTools(stepConfig *AgentC
 	}
 
 	return toolsToRegister, executorsToUse
+}
+
+// withoutRetiredRunConcernTool prevents legacy workflow configuration from
+// re-enabling the retired step-observation writer. Pulse reviews retained step
+// evidence and deterministic receipts directly instead.
+func withoutRetiredRunConcernTool(tools []string) []string {
+	filtered := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		if strings.TrimSpace(tool) == "workflow_db:record_run_concern" {
+			continue
+		}
+		filtered = append(filtered, tool)
+	}
+	return filtered
 }
 
 // prepareWorkspaceToolsOnly prepares minimal tools for KB maintenance agents.
@@ -913,7 +936,14 @@ func (hcpo *StepBasedWorkflowOrchestrator) setupKBUpdateFolderGuard(stepID strin
 	stepFolderPath := getExecutionFolderPath(executionWorkspacePath, stepID, stepPath)
 	knowledgebasePath := getKnowledgebasePath(baseWorkspacePath)
 
-	readPaths = []string{executionWorkspacePath, stepFolderPath, knowledgebasePath}
+	// tool_output_folder for the same reason every other guard grants it: any
+	// bridge tool result past its inline cap is spilled there, and an agent told
+	// "full output saved to <path>" needs a legal way to read it back. A KB
+	// update agent reads large step artifacts to summarize them, so it hits this
+	// as readily as an execution step does.
+	toolOutputPath := fmt.Sprintf("%s/tool_output_folder", baseWorkspacePath)
+
+	readPaths = []string{executionWorkspacePath, stepFolderPath, knowledgebasePath, toolOutputPath}
 	writePaths = []string{knowledgebasePath}
 	return readPaths, writePaths
 }
@@ -1005,19 +1035,19 @@ func (hcpo *StepBasedWorkflowOrchestrator) selectPhaseLLM(agentPurpose string) *
 	}
 }
 
-func (hcpo *StepBasedWorkflowOrchestrator) selectMaintenanceLLM(agentPurpose string) *orchestrator.LLMConfig {
-	if hcpo.presetMaintenanceLLM == nil || hcpo.presetMaintenanceLLM.Provider == "" || hcpo.presetMaintenanceLLM.ModelID == "" {
+func (hcpo *StepBasedWorkflowOrchestrator) selectPulseLLM(agentPurpose string) *orchestrator.LLMConfig {
+	if hcpo.presetPulseLLM == nil || hcpo.presetPulseLLM.Provider == "" || hcpo.presetPulseLLM.ModelID == "" {
 		return hcpo.selectPhaseLLM(agentPurpose)
 	}
-	hcpo.GetLogger().Info(fmt.Sprintf("🔧 Using maintenance LLM for %s: %s/%s",
-		agentPurpose, hcpo.presetMaintenanceLLM.Provider, hcpo.presetMaintenanceLLM.ModelID))
+	hcpo.GetLogger().Info(fmt.Sprintf("🔧 Using Pulse LLM for %s: %s/%s",
+		agentPurpose, hcpo.presetPulseLLM.Provider, hcpo.presetPulseLLM.ModelID))
 	return &orchestrator.LLMConfig{
 		Primary: orchestrator.LLMModel{
-			Provider: hcpo.presetMaintenanceLLM.Provider,
-			ModelID:  hcpo.presetMaintenanceLLM.ModelID,
-			Options:  hcpo.presetMaintenanceLLM.Options,
+			Provider: hcpo.presetPulseLLM.Provider,
+			ModelID:  hcpo.presetPulseLLM.ModelID,
+			Options:  hcpo.presetPulseLLM.Options,
 		},
-		Fallbacks: convertAgentFallbacks(hcpo.presetMaintenanceLLM.Fallbacks),
+		Fallbacks: convertAgentFallbacks(hcpo.presetPulseLLM.Fallbacks),
 		APIKeys:   hcpo.GetAPIKeys(),
 	}
 }
@@ -1032,12 +1062,15 @@ func (hcpo *StepBasedWorkflowOrchestrator) createKBConsolidateAgent(ctx context.
 	stepPath := "builder-consolidate"
 
 	readPaths, writePaths := hcpo.setupKBUpdateFolderGuard(stepID, stepPath)
+	if err := hcpo.materializeWorkflowGuardPaths(readPaths, writePaths); err != nil {
+		return nil, err
+	}
 	subAgentSessionID := hcpo.setupSubAgentSessionGuard("kb-consolidate", stepID, readPaths, writePaths)
 	configureWorkflowDBSession(subAgentSessionID, hcpo.GetWorkspacePath(), DBAccessRead, false)
 	hcpo.SetWorkspacePathForFolderGuard(readPaths, writePaths)
 	hcpo.GetLogger().Info(fmt.Sprintf("🔒 Setting folder guard for KB consolidate agent - Read: %v, Write: %v", readPaths, writePaths))
 
-	llmConfig := hcpo.selectMaintenanceLLM("KB consolidate agent")
+	llmConfig := hcpo.selectPulseLLM("KB consolidate agent")
 	if llmConfig == nil {
 		return nil, fmt.Errorf("no valid LLM configuration found for KB consolidate agent")
 	}
@@ -1091,12 +1124,15 @@ func (hcpo *StepBasedWorkflowOrchestrator) createKBReorganizeAgent(ctx context.C
 	stepPath := "builder-reorganize"
 
 	readPaths, writePaths := hcpo.setupKBUpdateFolderGuard(stepID, stepPath)
+	if err := hcpo.materializeWorkflowGuardPaths(readPaths, writePaths); err != nil {
+		return nil, err
+	}
 	subAgentSessionID := hcpo.setupSubAgentSessionGuard("kb-reorganize", stepID, readPaths, writePaths)
 	configureWorkflowDBSession(subAgentSessionID, hcpo.GetWorkspacePath(), DBAccessRead, false)
 	hcpo.SetWorkspacePathForFolderGuard(readPaths, writePaths)
 	hcpo.GetLogger().Info(fmt.Sprintf("🔒 Setting folder guard for KB reorganize agent - Read: %v, Write: %v", readPaths, writePaths))
 
-	llmConfig := hcpo.selectMaintenanceLLM("KB reorganize agent")
+	llmConfig := hcpo.selectPulseLLM("KB reorganize agent")
 	if llmConfig == nil {
 		return nil, fmt.Errorf("no valid LLM configuration found for KB reorganize agent")
 	}
@@ -1171,7 +1207,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) applyPostSetupToAgent(agent agents.Or
 // artifactFolderNameOverride: Optional execution/log folder name. This keeps logical step ID stable while isolating per-call artifacts.
 //
 //	When empty, the step ID will be derived from stepPath.
-func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.Context, phase string, stepPath string, agentName string, stepConfig *AgentConfigs, stepIDOverride string, artifactFolderNameOverride string, evaluationDBWrite bool) (agents.OrchestratorAgent, error) {
+func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.Context, phase string, stepPath string, agentName string, stepConfig *AgentConfigs, planStep PlanStepInterface, stepIDOverride string, artifactFolderNameOverride string, evaluationDBWrite bool) (agents.OrchestratorAgent, error) {
 	// 1. Resolve stepID first (needed for folder guard setup)
 	stepID := hcpo.resolveStepID(stepPath, stepIDOverride)
 	artifactStepID := stepID
@@ -1183,7 +1219,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 
 	// 2. Setup folder guard (extracted method). Empty kbAccess defaults to orchestrator-level UseKnowledgebase.
 	kbAccess := resolveKnowledgebaseAccess(stepConfig, hcpo.UseKnowledgebase())
-	learningsAccess := resolveLearningsAccess(stepConfig)
+	learningsAccess := resolveExecutionLearningsAccess(stepConfig, planStep, hcpo.isEvaluationMode)
 	dbAccess := resolveEffectiveDBAccess(stepConfig, hcpo.isEvaluationMode, evaluationDBWrite)
 	readPaths, writePaths := hcpo.setupExecutionFolderGuard(artifactStepPath, artifactStepID, kbAccess, learningsAccess, dbAccess, stepConfig)
 	stepEnvOutputPathOverride := ""
@@ -1223,6 +1259,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 		skillReadPaths, _ := BuildSkillFolderGuardPaths(effectiveSkills)
 		readPaths = append(readPaths, skillReadPaths...)
 		hcpo.GetLogger().Info(fmt.Sprintf("🎯 Added skill folder paths to folder guard: %v", skillReadPaths))
+	}
+	if err := hcpo.materializeWorkflowGuardPaths(readPaths, writePaths); err != nil {
+		return nil, err
 	}
 
 	// NOTE: We no longer call hcpo.SetWorkspacePathForFolderGuard here.
@@ -1267,14 +1306,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 	config.MCPSessionID = execSessionID
 	directDBAccess := isScriptedExecutionModeConfig(stepConfig)
 	configureWorkflowDBSession(execSessionID, hcpo.GetWorkspacePath(), dbAccess, directDBAccess)
-	// PLAT-055. record_run_concern attributes from this trusted identity rather
-	// than from tool arguments, so a step cannot file against another step.
-	hcpo.configureRunConcernSession(execSessionID, stepID, ConcernPhaseExecution)
-	// Keep browser-sharing behavior unchanged: bind the per-step execution session to the
-	// same shared browser session the group session uses. If a caller later requests
-	// share_browser=false, the isolated browser session override below still wins.
-	// Re-bind the new tool session onto the group's shared browser session so shell
-	// isolation does not accidentally disable browser reuse for share_browser=true.
+	// Bind the per-step tool session to the workflow's browser session. Tool-session
+	// isolation protects folder and DB permissions without creating a second browser.
 	sharedBrowserSessionID := hcpo.resolveWorkshopBrowserSessionID(hcpo.currentGroupName)
 	hcpo.bindWorkshopBrowserSession(execSessionID, sharedBrowserSessionID)
 
@@ -1306,44 +1339,19 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 		hcpo.GetLogger().Info("🔧 Parallel tool execution DISABLED for execution-only agent via step config")
 	}
 
-	// Check for isolated browser session ID (from share_browser=false in sub-agent tools)
-	if isolatedSessionID, ok := ctx.Value(virtualtools.SubAgentIsolatedSessionIDKey).(string); ok && isolatedSessionID != "" {
-		// The isolated session is minted fresh (`<parent>-isolated-<nanos>`) and
-		// carries no session-scoped setup of its own. Everything configured above
-		// was keyed to execSessionID, but from here on this is the session the
-		// agent's tools actually call through, so each binding has to be re-applied
-		// or it is silently absent for the whole step:
-		//   - folder guard: without it the step's read/write scope is not enforced
-		//     at session level;
-		//   - workflow DB: carries the access level AND the db.sqlite deny paths
-		//     that force use of the managed DB tools instead of raw sqlite;
-		//   - run-concern identity: record_run_concern attributes from the trusted
-		//     session identity, so without it the tool fails with "no trusted step
-		//     identity" even though it is registered and advertised to the agent.
-		// Guard first — configureWorkflowDBSession appends its deny paths to
-		// whatever the session config already carries.
-		hcpo.configureSubAgentSessionGuard(isolatedSessionID, "exec-isolated", stepID, readPaths, writePaths)
-		if cfg := common.GetSessionShellConfig(config.MCPSessionID); cfg != nil && strings.TrimSpace(cfg.WorkingDir) != "" {
-			common.SetSessionWorkingDir(isolatedSessionID, cfg.WorkingDir)
-		}
-		configureWorkflowDBSession(isolatedSessionID, hcpo.GetWorkspacePath(), dbAccess, directDBAccess)
-		hcpo.configureRunConcernSession(isolatedSessionID, stepID, ConcernPhaseExecution)
-		config.MCPSessionID = isolatedSessionID
-		hcpo.GetLogger().Info(fmt.Sprintf("Browser isolation: overriding MCPSessionID to %s (folder guard, workflow DB, and run-concern identity re-bound)", isolatedSessionID))
-	}
-
 	// 5. Prepare custom tools (filtered by step config)
 	toolsToRegister, executorsToUse := hcpo.prepareCustomTools(stepConfig)
 	if dbAccess == DBAccessRead {
 		filtered := toolsToRegister[:0]
 		for _, tool := range toolsToRegister {
-			if tool.Function != nil && tool.Function.Name == "mutate_workflow_db" {
+			if tool.Function != nil && (tool.Function.Name == "mutate_workflow_db" || tool.Function.Name == "apply_workflow_db_migration") {
 				continue
 			}
 			filtered = append(filtered, tool)
 		}
 		toolsToRegister = filtered
 		delete(executorsToUse, "mutate_workflow_db")
+		delete(executorsToUse, "apply_workflow_db_migration")
 	}
 	// Inject STEP_OUTPUT_DIR and STEP_EXECUTION_DIR for all execution-only agents (both scripted and agentic).
 	// Any script run via execute_shell_command may need STEP_OUTPUT_DIR to know where to write output
@@ -1361,8 +1369,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 			dbAbsPath = filepath.Join(GetPromptDocsRoot(), hcpo.GetWorkspacePath(), DBFolderName, "db.sqlite")
 		}
 		workspaceEnv := hcpo.snapshotWorkspaceEnv()
-		registerStepSessionShellEnv(config.MCPSessionID, stepOutputAbsPath, stepExecutionAbsPath, dbAbsPath, workspaceEnv)
-		injectStepEnvIntoShellExecutor(executorsToUse, stepOutputAbsPath, stepExecutionAbsPath, dbAbsPath, config.MCPSessionID, workspaceEnv)
+		registerStepSessionShellEnv(config.MCPSessionID, stepOutputAbsPath, stepExecutionAbsPath, dbAbsPath, hcpo.selectedRunFolder, workspaceEnv)
+		injectStepEnvIntoShellExecutor(executorsToUse, stepOutputAbsPath, stepExecutionAbsPath, dbAbsPath, hcpo.selectedRunFolder, config.MCPSessionID, workspaceEnv)
 		hcpo.GetLogger().Info(fmt.Sprintf("📂 Injecting step shell env into execute_shell_command for %s: STEP_OUTPUT_DIR=%s MCP_SESSION_ID=%s", stepID, stepOutputAbsPath, config.MCPSessionID))
 	}
 
@@ -1393,10 +1401,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 	if baseAgent == nil {
 		return nil, fmt.Errorf("base agent is nil after creation for %s - this should never happen", agentName)
 	}
-	// Inject supplementary prompts (skills, browser isolation, secrets, browser instructions)
-	isolatedSessionID, _ := ctx.Value(virtualtools.SubAgentIsolatedSessionIDKey).(string)
+	// Inject supplementary prompts (skills, secrets, browser instructions)
 	attachGlobalLearnings := !hcpo.isEvaluationMode && learningsAccess != LearningsAccessNone
-	hcpo.appendSupplementaryPrompts(ctx, baseAgent, config, effectiveSkills, isolatedSessionID, attachGlobalLearnings)
+	hcpo.appendSupplementaryPrompts(ctx, baseAgent, config, effectiveSkills, attachGlobalLearnings, registeredToolNames(toolsToRegister), isScriptedExecutionModeConfig(stepConfig))
 
 	// Apply post-setup configuration (folder guard paths and optional registry update)
 	if err := hcpo.applyPostSetupToAgent(agent, agentName); err != nil {
@@ -1419,6 +1426,7 @@ type ConversationEntry struct {
 // SubAgentCallRecord stores the full record of a single call_sub_agent / call_generic_agent call
 type SubAgentCallRecord struct {
 	Index         int                 `json:"index"` // 1-based call order
+	ExecutionID   string              `json:"execution_id"`
 	CalledAt      time.Time           `json:"called_at"`
 	TodoID        string              `json:"todo_id"`
 	RouteID       string              `json:"route_id,omitempty"` // empty for generic
@@ -1428,6 +1436,41 @@ type SubAgentCallRecord struct {
 	Error         string              `json:"error,omitempty"`
 	ExecutionTime string              `json:"execution_time"`
 	Conversation  []ConversationEntry `json:"conversation"`
+}
+
+func subAgentConversationPage(records []SubAgentCallRecord, executionID string, fromLastX, offsetLastX int) (string, error) {
+	executionID = strings.TrimSpace(executionID)
+	for i := len(records) - 1; i >= 0; i-- {
+		if records[i].ExecutionID != executionID {
+			continue
+		}
+		record := records[i]
+		conv := record.Conversation
+		total := len(conv)
+		end := total - offsetLastX
+		if end < 0 {
+			end = 0
+		}
+		start := end - fromLastX
+		if start < 0 {
+			start = 0
+		}
+		trimmed := record
+		trimmed.Conversation = conv[start:end]
+		type resultWrapper struct {
+			TotalEntries int                `json:"total_entries"`
+			Showing      string             `json:"showing"`
+			Record       SubAgentCallRecord `json:"record"`
+		}
+		out := resultWrapper{
+			TotalEntries: total,
+			Showing:      fmt.Sprintf("entries %d-%d of %d", start+1, end, total),
+			Record:       trimmed,
+		}
+		data, _ := json.MarshalIndent(out, "", "  ")
+		return string(data), nil
+	}
+	return "", fmt.Errorf("no sub-agent call found for execution_id %q", executionID)
 }
 
 // SubAgentExecutionContext holds the context needed for sub-agent execution from tools
@@ -1582,14 +1625,14 @@ func (hcpo *StepBasedWorkflowOrchestrator) createTodoTaskOrchestratorAgent(ctx c
 	// Run the coding-CLI session in a fresh os.MkdirTemp dir instead of
 	// CodingAgentWorkingDir — same protection the regular execution-step
 	// path gets via applyStepConfigToAgentConfig. Without this, a
-	// todo-task orchestrator agent collides with any other agy-cli
+	// todo-task orchestrator agent collides with any other coding-CLI
 	// session already attached to the workflow folder (notably the
-	// workshop chat that triggered the run): agy-cli rejects concurrent
-	// sessions on the same dir with different MCP configs, and the step
-	// fails with "agy-cli does not support concurrent sessions in
-	// working directory ... with different MCP configs". The MCP bridge
-	// remains the authoritative path for any file changes the model
-	// wants to make to the user's actual workspace.
+	// workshop chat that triggered the run): some coding CLIs reject
+	// concurrent sessions on the same dir with different MCP configs,
+	// failing the step with a "does not support concurrent sessions in
+	// working directory ... with different MCP configs"-style error. The
+	// MCP bridge remains the authoritative path for any file changes the
+	// model wants to make to the user's actual workspace.
 	config.IsolateCodingAgentWorkspace = true
 
 	// Give nested todo_task orchestrators their own session-level folder guard just like
@@ -1601,15 +1644,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) createTodoTaskOrchestratorAgent(ctx c
 	dbAccess := resolveEffectiveDBAccess(stepConfig, hcpo.isEvaluationMode, false)
 	directDBAccess := isScriptedExecutionModeConfig(stepConfig)
 	configureWorkflowDBSession(todoSessionID, hcpo.GetWorkspacePath(), dbAccess, directDBAccess)
-	// record_run_concern is registered for every workflow-mode session, so the
-	// orchestrator is offered the tool whether or not it can use it. Without a
-	// trusted identity on this session the call fails with "no trusted step
-	// identity" — the orchestrator sees an advertised tool that always errors,
-	// and its own observations (a route that keeps failing, a sub-agent that
-	// never produced its artifact) have nowhere structured to go. It owns a
-	// dedicated session already, so this attributes to its own step ID and
-	// cannot file against another step.
-	hcpo.configureRunConcernSession(todoSessionID, stepID, ConcernPhaseExecution)
 	if subAgentExecCtx != nil {
 		subAgentExecCtx.ToolSessionID = todoSessionID
 	}
@@ -1690,8 +1724,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) createTodoTaskOrchestratorAgent(ctx c
 		}
 		return false
 	}
-	for _, name := range []string{"query_workflow_db", "mutate_workflow_db"} {
-		if name == "mutate_workflow_db" && dbAccess == DBAccessRead {
+	for _, name := range []string{"query_workflow_db", "mutate_workflow_db", "apply_workflow_db_migration"} {
+		if (name == "mutate_workflow_db" || name == "apply_workflow_db_migration") && dbAccess == DBAccessRead {
 			continue
 		}
 		if !hasTool(name) {
@@ -1709,13 +1743,14 @@ func (hcpo *StepBasedWorkflowOrchestrator) createTodoTaskOrchestratorAgent(ctx c
 	if dbAccess == DBAccessRead {
 		filtered := toolsToRegister[:0]
 		for _, tool := range toolsToRegister {
-			if tool.Function != nil && tool.Function.Name == "mutate_workflow_db" {
+			if tool.Function != nil && (tool.Function.Name == "mutate_workflow_db" || tool.Function.Name == "apply_workflow_db_migration") {
 				continue
 			}
 			filtered = append(filtered, tool)
 		}
 		toolsToRegister = filtered
 		delete(executorsToUse, "mutate_workflow_db")
+		delete(executorsToUse, "apply_workflow_db_migration")
 	}
 
 	// Inject STEP_OUTPUT_DIR and STEP_EXECUTION_DIR into execute_shell_command so the
@@ -1733,8 +1768,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) createTodoTaskOrchestratorAgent(ctx c
 			dbAbsPath = filepath.Join(GetPromptDocsRoot(), hcpo.GetWorkspacePath(), DBFolderName, "db.sqlite")
 		}
 		workspaceEnv := hcpo.snapshotWorkspaceEnv()
-		registerStepSessionShellEnv(config.MCPSessionID, stepOutputAbsPath, stepExecutionAbsPath, dbAbsPath, workspaceEnv)
-		injectStepEnvIntoShellExecutor(executorsToUse, stepOutputAbsPath, stepExecutionAbsPath, dbAbsPath, config.MCPSessionID, workspaceEnv)
+		registerStepSessionShellEnv(config.MCPSessionID, stepOutputAbsPath, stepExecutionAbsPath, dbAbsPath, hcpo.selectedRunFolder, workspaceEnv)
+		injectStepEnvIntoShellExecutor(executorsToUse, stepOutputAbsPath, stepExecutionAbsPath, dbAbsPath, hcpo.selectedRunFolder, config.MCPSessionID, workspaceEnv)
 		hcpo.GetLogger().Info(fmt.Sprintf("📂 Injecting step shell env into execute_shell_command for todo task %s: STEP_OUTPUT_DIR=%s MCP_SESSION_ID=%s", stepID, stepOutputAbsPath, config.MCPSessionID))
 	}
 
@@ -1830,7 +1865,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createTodoTaskOrchestratorAgent(ctx c
 	if baseAgent := agent.GetBaseAgent(); baseAgent != nil {
 		if baseAgent.Agent() != nil {
 			attachGlobalLearnings := !hcpo.isEvaluationMode && resolveLearningsAccess(stepConfig) != LearningsAccessNone
-			hcpo.appendSupplementaryPrompts(ctx, baseAgent, config, effectiveSkills, "", attachGlobalLearnings)
+			hcpo.appendSupplementaryPrompts(ctx, baseAgent, config, effectiveSkills, attachGlobalLearnings, registeredToolNames(toolsToRegister), isScriptedExecutionModeConfig(stepConfig))
 			if inherited := backgroundAgentSkillsFromContext(ctx); len(inherited) > 0 {
 				if err := applyInheritedBackgroundSkills(ctx, baseAgent, inherited); err != nil {
 					return nil, fmt.Errorf("apply inherited background orchestrator skills: %w", err)
@@ -1930,39 +1965,10 @@ func (hcpo *StepBasedWorkflowOrchestrator) wrapSubAgentToolExecutor(
 		}
 
 		// Inject get_sub_agent_conversation function
-		getConvFunc := virtualtools.GetSubAgentConversationFunc(func(ctx context.Context, todoID string, fromLastX, offsetLastX int) (string, error) {
+		getConvFunc := virtualtools.GetSubAgentConversationFunc(func(ctx context.Context, executionID string, fromLastX, offsetLastX int) (string, error) {
 			execCtx.callHistoryMu.Lock()
 			defer execCtx.callHistoryMu.Unlock()
-			for i := len(execCtx.CallHistory) - 1; i >= 0; i-- {
-				if execCtx.CallHistory[i].TodoID == todoID {
-					record := execCtx.CallHistory[i]
-					conv := record.Conversation
-					total := len(conv)
-					end := total - offsetLastX
-					if end < 0 {
-						end = 0
-					}
-					start := end - fromLastX
-					if start < 0 {
-						start = 0
-					}
-					trimmed := record // shallow copy
-					trimmed.Conversation = conv[start:end]
-					type resultWrapper struct {
-						TotalEntries int                `json:"total_entries"`
-						Showing      string             `json:"showing"`
-						Record       SubAgentCallRecord `json:"record"`
-					}
-					out := resultWrapper{
-						TotalEntries: total,
-						Showing:      fmt.Sprintf("entries %d-%d of %d", start+1, end, total),
-						Record:       trimmed,
-					}
-					data, _ := json.MarshalIndent(out, "", "  ")
-					return string(data), nil
-				}
-			}
-			return "", fmt.Errorf("no sub-agent call found for todo_id %q", todoID)
+			return subAgentConversationPage(execCtx.CallHistory, executionID, fromLastX, offsetLastX)
 		})
 		ctx = context.WithValue(ctx, virtualtools.GetSubAgentConversationKey, getConvFunc)
 
@@ -2010,30 +2016,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutePredefinedSubAgentSyncFu
 			}
 		}
 
-		// Browser isolation: generate isolated session ID when share_browser=false
-		if sb, ok := ctx.Value(virtualtools.SubAgentShareBrowserKey).(bool); ok && !sb {
-			isolatedSessionID := fmt.Sprintf("%s-isolated-%d", hcpo.getSessionID(), time.Now().UnixNano())
-			ctx = context.WithValue(ctx, virtualtools.SubAgentIsolatedSessionIDKey, isolatedSessionID)
-			hcpo.GetLogger().Info(fmt.Sprintf("Browser isolation: sub-agent gets session %s", isolatedSessionID))
-			defer func() {
-				// Close the MCP session and its stateful connections.
-				mcpagent.CloseSession(isolatedSessionID)
-				// Close agent-browser processes and remove from tracker
-				tracker := browser.GetSessionTracker()
-				workspaceAPIURL := os.Getenv("WORKSPACE_API_URL")
-				if workspaceAPIURL == "" {
-					workspaceAPIURL = "http://127.0.0.1:8081"
-				}
-				browserClient := browser.NewClient(workspaceAPIURL)
-				// Close all browser sessions tracked under this isolated agent ID
-				sessions := tracker.SessionsForAgent(isolatedSessionID)
-				for _, s := range sessions {
-					tracker.CloseSession(s, browserClient)
-				}
-				hcpo.GetLogger().Info(fmt.Sprintf("Closed isolated browser session: %s (cleaned %d browser processes)", isolatedSessionID, len(sessions)))
-			}()
-		}
-
 		// Build a TodoTaskResponse to reuse existing execution logic
 		response := &TodoTaskResponse{
 			NextAction:             "delegate",
@@ -2071,6 +2053,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutePredefinedSubAgentSyncFu
 		// Store call record for get_sub_agent_conversation
 		record := SubAgentCallRecord{
 			CalledAt:      startTime,
+			ExecutionID:   asyncSubAgentExecutionID(ctx),
 			TodoID:        todoID,
 			RouteID:       routeID,
 			AgentType:     "predefined",
@@ -2119,30 +2102,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecuteGenericAgentSyncFunc(
 			}
 		}
 
-		// Browser isolation: generate isolated session ID when share_browser=false
-		if sb, ok := ctx.Value(virtualtools.SubAgentShareBrowserKey).(bool); ok && !sb {
-			isolatedSessionID := fmt.Sprintf("%s-isolated-%d", hcpo.getSessionID(), time.Now().UnixNano())
-			ctx = context.WithValue(ctx, virtualtools.SubAgentIsolatedSessionIDKey, isolatedSessionID)
-			hcpo.GetLogger().Info(fmt.Sprintf("Browser isolation: sub-agent gets session %s", isolatedSessionID))
-			defer func() {
-				// Close the MCP session and its stateful connections.
-				mcpagent.CloseSession(isolatedSessionID)
-				// Close agent-browser processes and remove from tracker
-				tracker := browser.GetSessionTracker()
-				workspaceAPIURL := os.Getenv("WORKSPACE_API_URL")
-				if workspaceAPIURL == "" {
-					workspaceAPIURL = "http://127.0.0.1:8081"
-				}
-				browserClient := browser.NewClient(workspaceAPIURL)
-				// Close all browser sessions tracked under this isolated agent ID
-				sessions := tracker.SessionsForAgent(isolatedSessionID)
-				for _, s := range sessions {
-					tracker.CloseSession(s, browserClient)
-				}
-				hcpo.GetLogger().Info(fmt.Sprintf("Closed isolated browser session: %s (cleaned %d browser processes)", isolatedSessionID, len(sessions)))
-			}()
-		}
-
 		// Build a TodoTaskResponse to reuse existing execution logic
 		// All task info comes from the tool parameters, not from a file
 		response := &TodoTaskResponse{
@@ -2174,6 +2133,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecuteGenericAgentSyncFunc(
 		// Store call record for get_sub_agent_conversation
 		record := SubAgentCallRecord{
 			CalledAt:      startTime,
+			ExecutionID:   asyncSubAgentExecutionID(ctx),
 			TodoID:        todoID,
 			AgentType:     "generic",
 			Success:       err == nil,

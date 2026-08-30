@@ -2,10 +2,14 @@ package virtualtools
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"strings"
+	"time"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/browser"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/common"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workspace"
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 )
 
@@ -49,22 +53,16 @@ func CreateWorkspaceBrowserToolExecutorsWithRuntime(sessionID string, runtime *b
 
 	// Wire up the browser executor from the pkg/browser package
 	browserClient := browser.NewClient(getWorkspaceAPIURL())
-	browserExecutor := browser.NewExecutor(browserClient, browser.WithBrowserRuntimeConfig(runtime))
+	browserExecutor := browser.NewExecutor(browserClient,
+		browser.WithBrowserRuntimeConfig(runtime),
+		browser.WithOversizedOutputSpiller(spillOversizedBrowserOutput),
+	)
 
-	// Wrap executor to inject session IDs into context.
-	// - ChatSessionIDKey = agent-level ID (isolated for share_browser=false, parent otherwise)
-	// - WorkflowSessionIDKey = always the parent workflow session ID
+	// Wrap executor to inject the workflow session ID. Delegated agents inherit
+	// this browser session; tool-session isolation does not fork browser state.
 	executors["agent_browser"] = func(ctx context.Context, args map[string]interface{}) (string, error) {
-		// If the context already has an isolated session ID (set by share_browser=false),
-		// use it as the agent-level session. Otherwise use the parent sessionID.
-		if isolatedID, ok := ctx.Value(SubAgentIsolatedSessionIDKey).(string); ok && isolatedID != "" {
-			ctx = context.WithValue(ctx, common.ChatSessionIDKey, isolatedID)
-			log.Printf("[BROWSER_TOOLS] Using isolated agent session: %s (parent workflow: %s)", isolatedID, sessionID)
-		} else if existingID, ok := ctx.Value(common.ChatSessionIDKey).(string); ok && existingID != "" {
+		if existingID, ok := ctx.Value(common.ChatSessionIDKey).(string); ok && existingID != "" {
 			// Preserve the session injected by /s/{session_id}/tools/... routes.
-			// For share_browser=false code-exec sub-agents this is the isolated
-			// sub-agent session; overwriting it with the parent would collapse
-			// browser isolation.
 			log.Printf("[BROWSER_TOOLS] Preserving context agent session: %s (parent workflow: %s)", existingID, sessionID)
 		} else if sessionID != "" {
 			ctx = context.WithValue(ctx, common.ChatSessionIDKey, sessionID)
@@ -77,4 +75,56 @@ func CreateWorkspaceBrowserToolExecutorsWithRuntime(sessionID string, runtime *b
 	}
 
 	return executors
+}
+
+// spillOversizedBrowserOutput persists an oversized agent_browser result
+// (PLAT-200: the default truncated path used to just discard it) so the
+// calling step can read it back without re-running the whole snapshot.
+//
+// It never invents a write location. tool_output_folder is deliberately
+// read-only for agent-facing writes (PLAT-073 cluster F / PLAT-078): only the
+// trusted bridge machinery writes there, so every step's folder guard already
+// grants it read access without also granting write access. This function
+// checks the CALLING SESSION'S OWN already-granted ReadPaths for an entry
+// ending in tool_output_folder and only writes if one is present -- reusing
+// PLAT-078's proven grant instead of re-deriving a workspace path itself. No
+// grant found (or no session at all, e.g. the schema-only, session-less
+// executor variant) means no spill; the caller's existing truncate-and-offer-
+// a-rerun behavior is unchanged.
+func spillOversizedBrowserOutput(ctx context.Context, content string) (string, error) {
+	sessionID, _ := ctx.Value(common.ChatSessionIDKey).(string)
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return "", fmt.Errorf("no session id on context, declining to spill")
+	}
+	cfg := common.GetSessionShellConfig(sessionID)
+	if cfg == nil {
+		return "", fmt.Errorf("session %s has no folder guard configured, declining to spill", sessionID)
+	}
+	toolOutputDir := ""
+	for _, p := range cfg.ReadPaths {
+		p = strings.TrimSuffix(strings.TrimSpace(p), "/")
+		if p == "tool_output_folder" || strings.HasSuffix(p, "/tool_output_folder") {
+			toolOutputDir = p
+			break
+		}
+	}
+	if toolOutputDir == "" {
+		return "", fmt.Errorf("session %s has no tool_output_folder read grant, declining to spill", sessionID)
+	}
+
+	relPath := fmt.Sprintf("%s/agent_browser_snapshot_%d.txt", toolOutputDir, time.Now().UnixNano())
+	client := workspace.NewClient(getWorkspaceAPIURL(), workspace.WithExtraEnv(getMCPExtraEnv(sessionID)))
+	// tool_output_folder is not in this session's own WritePaths by design (see
+	// comment above) -- this trusted, platform-initiated write (never an agent
+	// tool-call argument) is the documented exception WithSystemManagedWritePaths
+	// exists for, scoped to exactly this directory.
+	writeCtx := workspace.WithSystemManagedWritePaths(ctx, toolOutputDir)
+	if _, err := client.UpdateWorkspaceFile(writeCtx, workspace.UpdateWorkspaceFileParams{
+		Filepath: relPath,
+		Content:  content,
+	}); err != nil {
+		return "", fmt.Errorf("failed to spill oversized snapshot to %s: %w", relPath, err)
+	}
+	return relPath, nil
 }

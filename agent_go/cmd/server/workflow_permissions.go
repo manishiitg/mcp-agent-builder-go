@@ -11,8 +11,18 @@ import (
 
 type WorkflowAccessLevel string
 
+// There is no read-only tier. Every authenticated user can write; "owner"
+// exists only to gate who may manage access itself.
+//
+// A read tier was defined here but none of WORKFLOW_READ_USERS /
+// WORKFLOW_WRITE_USERS / WORKFLOW_OWNER_USERS / WORKFLOW_USER_PERMISSIONS was
+// ever set in any deployment, so every caller resolved to owner and the tier
+// never took effect. What it did do was leave a query-access gate full of
+// unreachable checks against workshop modes that no longer exist, which cost
+// real debugging time while diagnosing PLAT-125. Removed 2026-08-17 along with
+// that gate; legacy "read"/"run"/"viewer" values in a config string resolve to
+// write so a deployment that still names them does not lose access.
 const (
-	WorkflowAccessRead  WorkflowAccessLevel = "read"
 	WorkflowAccessWrite WorkflowAccessLevel = "write"
 	WorkflowAccessOwner WorkflowAccessLevel = "owner"
 )
@@ -45,7 +55,6 @@ func loadWorkflowPermissionConfig() workflowPermissionConfig {
 		}
 	}
 
-	parseList("WORKFLOW_READ_USERS", WorkflowAccessRead)
 	parseList("WORKFLOW_WRITE_USERS", WorkflowAccessWrite)
 	parseList("WORKFLOW_OWNER_USERS", WorkflowAccessOwner)
 
@@ -107,10 +116,12 @@ func parseWorkflowAccessLevel(raw string) (WorkflowAccessLevel, bool) {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "owner", "admin", "manage", "manager":
 		return WorkflowAccessOwner, true
-	case "write", "writer", "edit", "editor", "builder", "optimizer":
+	case "write", "writer", "edit", "editor":
 		return WorkflowAccessWrite, true
+	// Legacy read-tier aliases resolve to write: the tier is gone, and a
+	// deployment still naming it should not silently lose access.
 	case "read", "reader", "run", "runner", "view", "viewer":
-		return WorkflowAccessRead, true
+		return WorkflowAccessWrite, true
 	default:
 		return "", false
 	}
@@ -123,7 +134,7 @@ func normalizeWorkflowPermissionKey(raw string) string {
 func workflowAccessForClaims(claims *UserClaims) WorkflowAccessLevel {
 	if claims == nil {
 		if loadWorkflowPermissionConfig().configured {
-			return WorkflowAccessRead
+			return WorkflowAccessWrite
 		}
 		return WorkflowAccessOwner
 	}
@@ -146,7 +157,7 @@ func workflowAccessForIdentity(userID, username, email string) WorkflowAccessLev
 		}
 	}
 
-	return WorkflowAccessRead
+	return WorkflowAccessWrite
 }
 
 func workflowPermissionInfoForClaims(claims *UserClaims) WorkflowPermissionInfo {
@@ -159,7 +170,7 @@ func workflowPermissionInfo(access WorkflowAccessLevel) WorkflowPermissionInfo {
 	canManage := access == WorkflowAccessOwner
 	return WorkflowPermissionInfo{
 		WorkflowAccess:             access,
-		CanRunWorkflows:            access == WorkflowAccessRead || canWrite,
+		CanRunWorkflows:            true,
 		CanWriteWorkflows:          canWrite,
 		CanManageWorkflowAccess:    canManage,
 		WorkflowPermissionsEnabled: cfg.configured,
@@ -173,6 +184,11 @@ func userInfoWithWorkflowPermissions(info UserInfo) UserInfo {
 	info.CanRunWorkflows = perms.CanRunWorkflows
 	info.CanWriteWorkflows = perms.CanWriteWorkflows
 	info.CanManageWorkflowAccess = perms.CanManageWorkflowAccess
+
+	if productAccess, ok := userProductAccessForIdentity(info.ID, info.Username, info.Email); ok {
+		info.AllowedProducts = productAccess.Products
+		info.AllowedWorkflowIDs = productAccess.WorkflowIDs
+	}
 	return info
 }
 
@@ -221,33 +237,6 @@ func writeWorkflowPermissionDenied(w http.ResponseWriter, required string) {
 		"error":           "workflow permission denied",
 		"required_access": required,
 	})
-}
-
-func enforceWorkflowQueryAccess(r *http.Request, req *QueryRequest) bool {
-	if req == nil {
-		return true
-	}
-	if currentUserCanWriteWorkflows(r) {
-		return true
-	}
-
-	workspaceMode := ""
-	if req.ExecutionOptions != nil {
-		workspaceMode = strings.ToLower(strings.TrimSpace(req.ExecutionOptions.WorkshopMode))
-	}
-	if workspaceMode == "builder" || workspaceMode == "optimizer" || workspaceMode == "reporting" {
-		return false
-	}
-
-	if req.AgentMode != "workflow_phase" {
-		return true
-	}
-
-	if workspaceMode == "run" || workspaceMode == "runner" {
-		return true
-	}
-
-	return false
 }
 
 func (api *StreamingAPI) handleListAuthUsers(w http.ResponseWriter, r *http.Request) {

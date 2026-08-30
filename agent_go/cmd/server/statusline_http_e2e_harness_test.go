@@ -25,7 +25,7 @@ import (
 // assertions, so a new provider only supplies how to run it and pull its
 // statusline.
 type statusLineE2ECase struct {
-	name    string // subtest / log label, e.g. "agy"
+	name    string // subtest / log label, e.g. "cursor"
 	envGate string // env var that must be set to opt in
 	binary  string // CLI binary that must be in PATH
 	cleanup func() // optional teardown (e.g. kill tmux sessions)

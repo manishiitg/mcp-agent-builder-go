@@ -15,7 +15,7 @@ func noopExecutor(context.Context, map[string]interface{}) (string, error) { ret
 // mcpagent's finalizeDefinition rejects a duplicate name and the agent fails to
 // construct.
 //
-// The Chief of Staff daily pass resumes the previous run's thread and
+// A retained AgentWorks chat can resume the previous turn's thread and
 // re-registers delegation tools onto a wrapper that already carries them. Every
 // run after the first died before step 1 with `duplicate direct tool name
 // "delegate"` — 2026-08-03 09:01:00 and 2026-08-04 09:00:18.

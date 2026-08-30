@@ -11,16 +11,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/services"
 	virtualtools "github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/events"
-	agent "github.com/manishiitg/coding-agent-loop/agent_go/pkg/agentwrapper"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/common"
 	orchEvents "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/events"
 
 	mcpagent "github.com/manishiitg/mcpagent/agent"
 	unifiedevents "github.com/manishiitg/mcpagent/events"
-	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 )
 
 // BackgroundAgentStatus represents the status of a background agent
@@ -590,12 +587,19 @@ func (r *BackgroundAgentRegistry) CancelAgent(sessionID, agentID string) error {
 }
 
 // CancelAll cancels all running background agents in a session
-func (r *BackgroundAgentRegistry) CancelAll(sessionID string) {
+// CancelAll cancels every running agent for a session and reports how many it
+// cancelled, how many carried no cancel func, and how many were already done.
+//
+// The counts exist because PLAT-130 was diagnosed twice from the same silent
+// teardown. "Stop was clicked and nothing visibly happened" is consistent with
+// three different failures — no agents registered, agents registered without a
+// cancel func, or agents already finished — and they need opposite fixes.
+func (r *BackgroundAgentRegistry) CancelAll(sessionID string) (canceled, missingCancel, alreadyDone int) {
 	r.mu.RLock()
 	sessionAgents, ok := r.agents[sessionID]
 	if !ok {
 		r.mu.RUnlock()
-		return
+		return 0, 0, 0
 	}
 	// Copy the slice to avoid holding lock during cancel
 	agents := make([]*BackgroundAgent, 0, len(sessionAgents))
@@ -605,13 +609,22 @@ func (r *BackgroundAgentRegistry) CancelAll(sessionID string) {
 	r.mu.RUnlock()
 
 	for _, agent := range agents {
-		if agent.GetStatus() == BGAgentRunning {
-			if agent.cancel != nil {
-				agent.cancel()
-			}
-			agent.SetCanceled()
+		if agent.GetStatus() != BGAgentRunning {
+			alreadyDone++
+			continue
 		}
+		if agent.cancel != nil {
+			agent.cancel()
+			canceled++
+		} else {
+			// An agent registered without a cancel func can be marked canceled
+			// but never actually told to stop. That is the exact shape of
+			// PLAT-130, so it is counted rather than passed over.
+			missingCancel++
+		}
+		agent.SetCanceled()
 	}
+	return canceled, missingCancel, alreadyDone
 }
 
 // NotifyCompletion sends a completion notification for a session.
@@ -713,163 +726,6 @@ func backgroundAgentCountsAsLiveActivity(snap BackgroundAgentSnapshot, now time.
 // server.go to sit alongside the BackgroundAgent types above).
 // ---------------------------------------------------------------------------
 
-// executeBackgroundDelegatedTask spawns a background goroutine for async delegation
-func (api *StreamingAPI) executeBackgroundDelegatedTask(
-	ctx context.Context, parentReq QueryRequest, sessionID, name, instruction string,
-) (string, error) {
-	agentID := api.bgAgentRegistry.NextID(name)
-	bgCtx, bgCancel := context.WithCancel(context.Background())
-
-	// Carry the delegation spec across the context boundary (bgCtx derives from
-	// Background(), not from ctx, so nothing is inherited automatically).
-	// Depth is reset to 0 because background sub-agents don't have the delegate
-	// tool, so they can never create further sub-agents.
-	// BackgroundAgentID is set to this agent so delegation_start can link back.
-	bgSpec := virtualtools.SubAgentSpecFromContext(ctx)
-	parentExecutionID := bgSpec.BackgroundAgentID
-	if strings.TrimSpace(parentExecutionID) == "" {
-		// A first-level background agent belongs to the exact conversation turn
-		// that invoked run_in_background, not to the session-wide main node. This
-		// lets the scheduler wait for only that message's descendants and prevents
-		// an old/unrelated child completion from advancing a later message.
-		parentExecutionID = api.currentConversationTurnExecutionID(sessionID)
-	}
-	bgSpec.Depth = 0
-	bgSpec.BackgroundAgentID = agentID
-	bgCtx = virtualtools.WithSubAgentSpec(bgCtx, bgSpec)
-	// The background context intentionally starts from context.Background(),
-	// so carry the Chief of Staff's exact attached skill snapshot explicitly.
-	bgCtx = copyDelegatedParentSkills(ctx, bgCtx)
-
-	// Propagate per-user Chats folder to background sub-agents so shell commands
-	// resolve to the right user's workspace folder.
-	if cf, ok := ctx.Value(virtualtools.ChatsFolderKey).(string); ok && cf != "" {
-		bgCtx = context.WithValue(bgCtx, virtualtools.ChatsFolderKey, cf)
-	}
-	// Pass user ID for per-user OAuth
-	if userID, ok := ctx.Value(common.UserIDKey).(string); ok {
-		bgCtx = context.WithValue(bgCtx, common.UserIDKey, userID)
-		log.Printf("[USER_ID_DEBUGGING] Background agent: copied UserIDKey=%q to bgCtx", userID)
-	}
-	if dest, ok := ctx.Value(virtualtools.BotNotificationDestinationKey).(*services.NotificationDestination); ok && dest != nil {
-		bgCtx = context.WithValue(bgCtx, virtualtools.BotNotificationDestinationKey, dest)
-	}
-
-	bgAgent := &BackgroundAgent{
-		ID:                agentID,
-		ParentExecutionID: parentExecutionID,
-		Name:              name,
-		SessionID:         sessionID,
-		Instruction:       instruction,
-		Kind:              "delegation",
-		Status:            BGAgentRunning,
-		CreatedAt:         time.Now(),
-		cancel:            bgCancel,
-	}
-	api.bgAgentRegistry.Register(sessionID, bgAgent)
-
-	// Inject tool event callback so executeDelegatedTask's observer tracks timing on bgAgent
-	bgCtx = context.WithValue(bgCtx, virtualtools.ToolEventCallbackKey, events.ToolEventCallback(
-		func(toolCallID, toolName, eventType string, duration time.Duration) {
-			switch eventType {
-			case "start":
-				bgAgent.RecordToolCallStart(toolCallID, toolName)
-			case "end":
-				bgAgent.RecordToolCallEnd(toolCallID, toolName, duration, false)
-			case "error":
-				bgAgent.RecordToolCallEnd(toolCallID, toolName, duration, true)
-			}
-		},
-	))
-
-	// Emit background_agent_started event
-	// The delegate tool always creates a real delegated LLM agent.
-	api.emitBackgroundAgentStarted(sessionID, agentID, name, truncateForToolResponse(instruction, 200), "", orchEvents.ExecutionKindSubAgent)
-	api.notifyBackgroundAgentStarted(sessionID, agentID)
-
-	// Start the background completion loop for this session if not already running
-	api.completionLoopStartedMu.Lock()
-	if !api.completionLoopStarted[sessionID] {
-		api.completionLoopStarted[sessionID] = true
-		go api.backgroundCompletionLoop(sessionID)
-	}
-	api.completionLoopStartedMu.Unlock()
-
-	go func() {
-		defer bgCancel()
-		result, err := api.executeDelegatedTask(bgCtx, parentReq, sessionID, instruction, func(wrapper *agent.LLMAgentWrapper) {
-			// Attach history func so query_agent can read the sub-agent's live conversation
-			bgAgent.SetHistoryFunc(func(lastN int) []HistoryEntry {
-				history := wrapper.GetHistory()
-				start := 0
-				if lastN > 0 && len(history) > lastN {
-					start = len(history) - lastN
-				}
-				var entries []HistoryEntry
-				for _, msg := range history[start:] {
-					role := string(msg.Role)
-					var parts []string
-					for _, part := range msg.Parts {
-						switch p := part.(type) {
-						case llmtypes.TextContent:
-							if p.Text != "" {
-								parts = append(parts, p.Text)
-							}
-						case llmtypes.ToolCall:
-							name := ""
-							args := ""
-							if p.FunctionCall != nil {
-								name = p.FunctionCall.Name
-								args = p.FunctionCall.Arguments
-							}
-							parts = append(parts, fmt.Sprintf("[tool_call: %s(%s)]", name, args))
-						case *llmtypes.ToolCall:
-							name := ""
-							args := ""
-							if p != nil && p.FunctionCall != nil {
-								name = p.FunctionCall.Name
-								args = p.FunctionCall.Arguments
-							}
-							parts = append(parts, fmt.Sprintf("[tool_call: %s(%s)]", name, args))
-						case llmtypes.ToolCallResponse:
-							parts = append(parts, fmt.Sprintf("[tool_result: %s] %s", p.Name, p.Content))
-						case *llmtypes.ToolCallResponse:
-							if p != nil {
-								parts = append(parts, fmt.Sprintf("[tool_result: %s] %s", p.Name, p.Content))
-							}
-						}
-					}
-					if len(parts) > 0 {
-						entries = append(entries, HistoryEntry{
-							Role: role,
-							Text: strings.Join(parts, "\n"),
-						})
-					}
-				}
-				return entries
-			})
-		})
-
-		now := time.Now()
-		duration := now.Sub(bgAgent.CreatedAt)
-
-		if err != nil {
-			bgAgent.SetError(err.Error())
-			api.emitBackgroundAgentCompleted(sessionID, agentID, name, "failed", "", err.Error(), duration.Truncate(time.Second).String())
-			log.Printf("[BG AGENT] Agent '%s' (ID: %s) failed after %s: %v", name, agentID, duration, err)
-		} else {
-			bgAgent.SetResult(result)
-			api.emitBackgroundAgentCompleted(sessionID, agentID, name, "completed", truncateForToolResponse(result, 500), "", duration.Truncate(time.Second).String())
-			log.Printf("[BG AGENT] Agent '%s' (ID: %s) completed in %s", name, agentID, duration)
-		}
-
-		// Signal completion to the notification loop
-		api.bgAgentRegistry.NotifyCompletion(sessionID, agentID)
-	}()
-
-	return agentID, nil
-}
-
 // backfillParentExecutionID returns existing if already set, otherwise looks
 // up agentID in the background agent registry for its ParentExecutionID.
 // Centralized so every typed emitter below backfills the same way the old
@@ -945,6 +801,9 @@ func (api *StreamingAPI) emitBackgroundAgentStarted(sessionID, agentID, name, in
 	// PLAT-114: durable record, independent of the 200-event ui_events cap
 	// this same completion is also reported through.
 	api.recordBackgroundAgentLogStarted(sessionID, agentID, name, kind, resolvedParentExecutionID, now)
+	// PLAT-164: durable structured transcript, created before the child's
+	// first provider turn so a setup failure still leaves a diagnostic record.
+	api.createBackgroundAgentTranscript(sessionID, agentID, name, string(kind), resolvedParentExecutionID, now)
 }
 
 // emitBackgroundAgentCompleted reports a background/delegated agent
@@ -968,6 +827,9 @@ func (api *StreamingAPI) emitBackgroundAgentCompleted(sessionID, agentID, name, 
 	// PLAT-114: durable record, independent of the 200-event ui_events cap
 	// this same completion is also reported through.
 	api.recordBackgroundAgentLogCompleted(sessionID, agentID, name, string(kind), status, result, errMsg, duration, now)
+	// PLAT-164: mark the structured transcript terminal exactly once, at the
+	// same point the lifecycle summary above reaches a terminal state.
+	api.finalizeBackgroundAgentTranscript(sessionID, agentID, status, errMsg, now)
 }
 
 func (api *StreamingAPI) backgroundAgentExecutionKind(sessionID, agentID string) orchEvents.ExecutionKind {
@@ -993,6 +855,15 @@ func (api *StreamingAPI) emitBackgroundAgentTerminated(sessionID, agentID, name,
 		ParentExecutionID: api.backfillParentExecutionID(sessionID, agentID, ""),
 	}
 	api.emitTypedBackgroundEvent(sessionID, agentID, string(orchEvents.BackgroundAgentTerminated), "", evt)
+	// PLAT-164: a terminated/canceled agent never reaches
+	// emitBackgroundAgentCompleted, so this is the only terminal signal its
+	// transcript gets. Mark it terminal here rather than leaving it "running"
+	// forever.
+	terminalStatus := status
+	if terminalStatus == "" {
+		terminalStatus = "canceled"
+	}
+	api.finalizeBackgroundAgentTranscript(sessionID, agentID, terminalStatus, "", now)
 }
 
 // emitSyntheticTurnReady notifies the main agent that background work
@@ -1989,7 +1860,7 @@ func (api *StreamingAPI) processBackgroundAgentCompletion(sessionID, agentID str
 // workflowRunBackupDirective returns the directive that backs up an interactive
 // workflow run/step after it completes, or "" when this completion is not a
 // workflow run. This is the interactive arm of post-run backup: for scheduled
-// runs the Pulse pass (scheduler.go runPostRunMonitor, step 4) owns backup.
+// runs the dedicated Pulse lifecycle (scheduler.go runPulseLifecycle) owns backup.
 // Both arms share ONE backup contract — same default (zero-config local git),
 // same source-hash skip — so a run backed up by one is recognized as current by
 // the other (no double push). Keep this text in sync with Pulse's backup step.
@@ -2044,6 +1915,15 @@ func (api *StreamingAPI) buildAutoNotificationMessage(sessionID string, snap Bac
 	}
 	isFailed := snap.Status == BGAgentFailed
 	actionHint := buildWorkshopActionHint(workshopMode, isLockCode, isLockLearnings, lockCodeConsecutiveFailures, lockCodeNeedsReview, isFailed)
+	presentationOnly := snap.Metadata != nil && snap.Metadata["completion_mode"] == "present_result"
+	if presentationOnly {
+		// A guided review/fix child already owns evidence collection and durable
+		// writes. Letting the synthetic parent turn treat its receipt as a fresh
+		// investigation caused seven repeated 2.92 MB backlog reads in one live
+		// Engineering Review. The parent still gets one natural-language turn to
+		// present the result, but no follow-up work is part of that contract.
+		actionHint = ""
+	}
 
 	// Iteration and group go inline alongside id/status to keep the header
 	// to a single line — cursor-cli's tmux paste-compression collapses any
@@ -2053,6 +1933,9 @@ func (api *StreamingAPI) buildAutoNotificationMessage(sessionID string, snap Bac
 	syntheticMsg := fmt.Sprintf(
 		"[AUTO-NOTIFICATION] Agent '%s' completed — status=%s%s.\nResult: %s%s%s",
 		strings.TrimSpace(snap.Name), snap.Status, contextInfo, resultText, actionHint, workflowRunCompletionDirective(snap))
+	if presentationOnly {
+		syntheticMsg += "\n\n[PRESENTATION-ONLY COMPLETION] The background agent above is the authoritative owner of this task's evidence collection and durable writes. Present its result to the user now. Do not call any tool, reload Pulse/SQLite/workspace state, inspect the child conversation, or independently revalidate the result. Do not start more work."
+	}
 
 	// Bot connector sessions (slack / whatsapp / discord / telegram / etc.): the
 	// builder's reply is forwarded verbatim to a chat thread, so a faithful echo
@@ -2490,19 +2373,38 @@ func (api *StreamingAPI) executeSyntheticTurn(sessionID, syntheticMsg string, pa
 
 		// Stream already started above; events flow through already-attached
 		// EventObservers (in-memory + DB). Consume text chunks and save history.
-		for range textChan {
+		//
+		// Bounded rather than a bare range: a coding-agent CLI parked on a
+		// usage-limit wall stops producing without closing the channel, and an
+		// unbounded consume there blocks this goroutine — and the deferred
+		// cleanup below it — forever (PLAT-101).
+		abandonReason, streamStalled := drainSyntheticTurnStream(agentCtx, textChan, func(string) {
 			api.conversationMux.Lock()
 			api.conversationHistory[sessionID] = llmAgent.GetHistory()
 			api.conversationMux.Unlock()
+		})
+		if abandonReason != "" {
+			log.Printf("[BG AGENT] Abandoning synthetic turn stream on session %s: %s", sessionID, abandonReason)
+			// Cancel first so the producer stops, then read the channel to
+			// close so it is not left blocked on a send nobody receives.
+			agentCancel()
+			discardAbandonedSyntheticStream(sessionID, textChan)
 		}
 
 		// A stopped/canceled synthetic turn must not "complete" afterward, otherwise
 		// it can resurrect the stored agent and reopen stateful MCP connections after Esc/stop.
 		if agentCtx.Err() != nil || api.isSessionStoppedOrInactive(sessionID) {
 			syntheticStatus = trackedExecutionStatusCanceled
-			if agentCtx.Err() != nil {
+			switch {
+			case streamStalled:
+				// We cancelled this turn ourselves because it went silent, so
+				// the context error below would describe our own reaction
+				// rather than the cause. A stall is a failure, not a user stop.
+				syntheticStatus = trackedExecutionStatusFailed
+				syntheticError = abandonReason
+			case agentCtx.Err() != nil:
 				syntheticError = agentCtx.Err().Error()
-			} else {
+			default:
 				syntheticError = "session stopped"
 			}
 			log.Printf("[BG AGENT] Synthetic turn aborted for session %s after stream end (ctx_err=%v stopped=%v)",

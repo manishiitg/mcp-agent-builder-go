@@ -1,0 +1,206 @@
+package events
+
+import (
+	"encoding/json"
+	"fmt"
+	"path"
+	"strings"
+	"time"
+
+	"github.com/manishiitg/mcpagent/events"
+)
+
+// BackgroundAgentTranscript is the durable, per-execution structured record
+// of one background agent's provider conversation (PLAT-164). Every
+// background execution — a generic run_in_background task, a todo-task
+// delegate, or a scheduled/Pulse child — gets exactly one of these, keyed by
+// (session, agent). It is intentionally narrower than the live UI event
+// stream: only what is needed to forensically reconstruct what the child
+// said and did after its ui_events cache has aged out or the server has
+// restarted.
+type BackgroundAgentTranscript struct {
+	SessionID         string    `json:"session_id"`
+	AgentID           string    `json:"agent_id"`
+	ParentExecutionID string    `json:"parent_execution_id,omitempty"`
+	Name              string    `json:"name,omitempty"`
+	Kind              string    `json:"kind,omitempty"`
+	ModelID           string    `json:"model_id,omitempty"`
+	Provider          string    `json:"provider,omitempty"`
+	StartedAt         time.Time `json:"started_at"`
+	CompletedAt       time.Time `json:"completed_at,omitempty"`
+	// Status is "running" until MarkTerminal is called with "completed",
+	// "failed", or "canceled". A transcript left at "running" forever is
+	// itself a real signal, same as background_agent_log (PLAT-114).
+	Status string                           `json:"status"`
+	Error  string                           `json:"error,omitempty"`
+	Events []BackgroundAgentTranscriptEvent `json:"events"`
+}
+
+// BackgroundAgentTranscriptEvent is one normalized, provider-agnostic
+// record. The Type discriminates which fields are populated; consumers
+// should not need to special-case a coding-CLI transport vs an API provider
+// — both funnel through the same typed events before reaching here.
+type BackgroundAgentTranscriptEvent struct {
+	Timestamp time.Time `json:"timestamp"`
+	Type      string    `json:"type"` // "user_message" | "assistant_message" | "tool_call"
+	Role      string    `json:"role,omitempty"`
+	Text      string    `json:"text,omitempty"`
+	// ToolCall reuses mcpagent/events' own ToolCallRecord contract — the same
+	// one every other tool-call consumer in this codebase already reads —
+	// rather than inventing a second shape for tool calls.
+	ToolCall *events.ToolCallRecord `json:"tool_call,omitempty"`
+}
+
+const (
+	backgroundTranscriptEventUserMessage      = "user_message"
+	backgroundTranscriptEventAssistantMessage = "assistant_message"
+	backgroundTranscriptEventToolCall         = "tool_call"
+)
+
+// BackgroundAgentTranscriptPath resolves the durable transcript path for one
+// background agent. It sits below the same builder/conversation storage root
+// workflowBuilderConversationLogPath already uses for chat history, in a
+// "background" subtree keyed by session then agent, rather than inventing a
+// new top-level storage convention (correcting this ticket's own original
+// proposal of a "sessions/" root, which has no other usage anywhere in this
+// codebase).
+func BackgroundAgentTranscriptPath(workspacePath, sessionID, agentID string) string {
+	cleanWorkspacePath := strings.Trim(strings.TrimSpace(workspacePath), "/")
+	cleanSessionID := strings.TrimSpace(sessionID)
+	cleanAgentID := strings.TrimSpace(agentID)
+	return path.Join(cleanWorkspacePath, "builder", "conversation", "background", cleanSessionID, cleanAgentID+".json")
+}
+
+// NewBackgroundAgentTranscript creates the initial "running" transcript
+// record. Callers write this before the child's first provider turn so a
+// child that fails during setup still leaves a terminal diagnostic record
+// once MarkTerminal is later applied to it (requirement 1).
+func NewBackgroundAgentTranscript(sessionID, agentID, parentExecutionID, name, kind string, startedAt time.Time) *BackgroundAgentTranscript {
+	return &BackgroundAgentTranscript{
+		SessionID:         strings.TrimSpace(sessionID),
+		AgentID:           strings.TrimSpace(agentID),
+		ParentExecutionID: strings.TrimSpace(parentExecutionID),
+		Name:              strings.TrimSpace(name),
+		Kind:              strings.TrimSpace(kind),
+		StartedAt:         startedAt,
+		Status:            "running",
+		Events:            []BackgroundAgentTranscriptEvent{},
+	}
+}
+
+// ParseBackgroundAgentTranscript parses an existing transcript file's
+// content. Empty content is not an error — it means no transcript exists yet.
+func ParseBackgroundAgentTranscript(content string) (*BackgroundAgentTranscript, error) {
+	if strings.TrimSpace(content) == "" {
+		return nil, nil
+	}
+	var transcript BackgroundAgentTranscript
+	if err := json.Unmarshal([]byte(content), &transcript); err != nil {
+		return nil, fmt.Errorf("parse background agent transcript: %w", err)
+	}
+	return &transcript, nil
+}
+
+// Marshal serializes the transcript for storage.
+func (t *BackgroundAgentTranscript) Marshal() (string, error) {
+	if t == nil {
+		return "", fmt.Errorf("nil background agent transcript")
+	}
+	data, err := json.MarshalIndent(t, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("marshal background agent transcript: %w", err)
+	}
+	return string(data), nil
+}
+
+// AppendEvent appends one normalized event. Ordering is append-only; callers
+// hold the file-level lock across read-modify-write, so this itself does no
+// locking of its own.
+func (t *BackgroundAgentTranscript) AppendEvent(evt BackgroundAgentTranscriptEvent) {
+	if t == nil {
+		return
+	}
+	t.Events = append(t.Events, evt)
+}
+
+// MarkTerminal atomically transitions the transcript to a terminal status.
+// Calling it more than once is idempotent in effect (last write wins) but
+// callers should still only call it exactly once per agent, at the point the
+// agent's own lifecycle (background_agent_log) reaches a terminal state.
+func (t *BackgroundAgentTranscript) MarkTerminal(status, errMsg string, completedAt time.Time) {
+	if t == nil {
+		return
+	}
+	t.Status = status
+	t.Error = strings.TrimSpace(errMsg)
+	t.CompletedAt = completedAt
+}
+
+// NormalizeBackgroundTranscriptEvent maps one mcpagent AgentEvent into the
+// transcript's normalized contract. ok is false for event types the
+// transcript intentionally does not record (token usage, streaming deltas,
+// MCP connection chatter, etc.) — the transcript is a forensic record of
+// what was said and done, not a full replay of every internal signal.
+func NormalizeBackgroundTranscriptEvent(evt *events.AgentEvent) (BackgroundAgentTranscriptEvent, bool) {
+	if evt == nil || evt.Data == nil {
+		return BackgroundAgentTranscriptEvent{}, false
+	}
+	switch data := evt.Data.(type) {
+	case *events.UserMessageEvent:
+		text := strings.TrimSpace(data.Content)
+		if text == "" {
+			return BackgroundAgentTranscriptEvent{}, false
+		}
+		role := data.Role
+		if role == "" {
+			role = "user"
+		}
+		return BackgroundAgentTranscriptEvent{
+			Timestamp: eventTimestamp(evt, data.Timestamp),
+			Type:      backgroundTranscriptEventUserMessage,
+			Role:      role,
+			Text:      text,
+		}, true
+	case *OrchestratorAgentStartEvent:
+		text := strings.TrimSpace(data.UserMessage)
+		if text == "" {
+			return BackgroundAgentTranscriptEvent{}, false
+		}
+		return BackgroundAgentTranscriptEvent{
+			Timestamp: eventTimestamp(evt, data.Timestamp),
+			Type:      backgroundTranscriptEventUserMessage,
+			Role:      "user",
+			Text:      text,
+		}, true
+	case *OrchestratorAgentEndEvent:
+		text := strings.TrimSpace(data.Result)
+		if text == "" && strings.TrimSpace(data.Error) == "" {
+			return BackgroundAgentTranscriptEvent{}, false
+		}
+		if text == "" {
+			text = strings.TrimSpace(data.Error)
+		}
+		return BackgroundAgentTranscriptEvent{
+			Timestamp: eventTimestamp(evt, data.Timestamp),
+			Type:      backgroundTranscriptEventAssistantMessage,
+			Role:      "assistant",
+			Text:      text,
+		}, true
+	default:
+		if record, ok := events.ToolCallRecordFromEvent(evt.Data); ok {
+			return BackgroundAgentTranscriptEvent{
+				Timestamp: evt.Timestamp,
+				Type:      backgroundTranscriptEventToolCall,
+				ToolCall:  &record,
+			}, true
+		}
+	}
+	return BackgroundAgentTranscriptEvent{}, false
+}
+
+func eventTimestamp(evt *events.AgentEvent, dataTimestamp time.Time) time.Time {
+	if !dataTimestamp.IsZero() {
+		return dataTimestamp
+	}
+	return evt.Timestamp
+}

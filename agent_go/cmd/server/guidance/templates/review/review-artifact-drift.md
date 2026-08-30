@@ -12,8 +12,17 @@ Use this as the read-only audit checklist for artifact drift after plan or confi
   call `query_step`.
 - The reviewer is strictly read-only. It must not edit files, mutate the plan/config,
   mark changelog entries, or mark Pulse module state.
-- Read only matching typed Artifact Review findings, review history, and relevant
-  decisions/outcomes. Do not inspect or create Pulse presentation artifacts.
+- This checklist is a technical-review evidence pack, not `plan_drift_review`
+  itself. A dedicated `plan_drift_review` Pulse module now owns the mechanical,
+  per-step drift checks below (report query compatibility, `validation_schema`
+  db/file rules, scripted-code queries, `db/README.md` contract, orphaned
+  tables) — see the deferral note on step 3. This checklist's own job is
+  everything plan_drift_review does not cover: schedule cron/timezone/queue
+  drift, eval/success-criteria coverage, downstream-step field consumption,
+  dead step/schedule references, and duplicate control stores. Read only
+  matching typed state through `get_pulse_state(view="review")` with
+  `module=technical_review`, using the managed SQLite-backed tools and structured finding lifecycle; do not query SQLite directly or inspect/create Pulse
+  presentation artifacts.
 
 For a suspected drift that recurs or a repaired dependency awaiting proof,
 compare the current artifact/run evidence with up to three comparable retained
@@ -30,18 +39,56 @@ Load `read_skill(skills=[{"name":"builder-reference","path":"references/assumpti
      inspect the exact entry; do not rely on a separate presentation cursor.
    - If no cursor exists and more than 100 entries are unreviewed, inspect only the latest 100 and report that the older entries remain unreviewed.
    - Never advance the proposed cursor past an entry that was not fully inspected or safely cursor-backfilled.
+   - **The changelog only records plan mutations** (`update_scripted_step` and
+     the other typed plan-mod tools) — `planning/` is never a granted write
+     path for any other tool, so `plan.json` itself is always fully and
+     truthfully captured here. A direct edit to a step's own code
+     (`learnings/<step-id>/main.py`) or a shared doc (`db/README.md`) made via
+     `diff_patch_workspace_file`/`update_workspace_file` is a different kind
+     of change and does not produce a changelog entry, even when it happens
+     in the same turn as a plan-tool call — the entry that turn produces
+     describes only the plan-tool's own field change. When a changelog entry
+     does flag a step as affected, step 3 below already directs inspecting
+     that step's `main.py` directly, so the code change is still caught. The
+     residual gap is narrower: an isolated code/doc edit with **no**
+     accompanying plan-tool call in the same turn produces no changelog
+     entry at all, so nothing routes that step into this checklist's
+     cursor-selection step in the first place — this is a scope boundary of
+     the changelog cursor, not evidence the checklist itself missed
+     something once a step is in scope.
 3. For each affected step, inspect only relevant current artifacts:
    - `planning/plan.json` and `planning/step_config.json`
+   - **Deferral to plan_drift_review**: before re-deriving any of the mechanical
+     checks below by hand, read the step's `agent_configs.drift_review` record
+     in `step_config.json`. When it is present and its `checks[]` cover
+     `report_query_compatibility`, `validation_schema_db_rules`,
+     `validation_schema_file_rules`, `scripted_code_db_queries`,
+     `db_readme_contract`, or `orphaned_tables`, treat that recorded
+     `status`/`evidence` as authoritative — it is Go-computed (dry-run against
+     the live schema, not a manual read) and strictly more rigorous than a
+     manual re-check. Only inspect one of these surfaces directly yourself
+     when the record is absent, stale relative to the current changelog
+     cursor, or its evidence looks insufficient for the entry under review.
    - the workflow's schedules in `workflow.json` — for each schedule, its cron,
      timezone, and the `messages` queue. The queue is what the scheduler
      actually sends, so it is a first-class contract with the plan, not
      configuration noise: read every message and resolve each to the plan step
      it drives.
-   - `learnings/<step-id>/main.py`, script metadata, per-step learning metadata, and relevant `learnings/_global/` guidance
+   - `learnings/<step-id>/main.py`, script metadata, per-step learning metadata, and relevant `learnings/_global/` guidance — plan_drift_review's
+     `scripted_code_db_queries` check only covers whether a scripted step's SQL
+     still resolves against the live schema; content staleness, stale locks,
+     and access-mode appropriateness stay this checklist's job (or the
+     judgment pass inside plan_drift_review's own reviewer turn — do not
+     duplicate a finding both places for the same step)
    - relevant `knowledgebase/notes/` content and KB access/contribution settings; treat `knowledgebase/context/` as read-only user-owned context
-   - `db/README.md`, named DB tables/assets/contracts, and their writers/consumers
-   - `db/reports/index.html`, its internal views, SQL, and data contracts; flag a remaining `reports/report_plan.json` as an incomplete version migration
-   - `evaluation/evaluation_plan.json`, `evaluation/step_config.json`, and matching goal/success-criteria coverage
+   - `db/README.md`, named DB tables/assets/contracts, and their writers/consumers — deferral above covers the DDL-vs-live-schema contract check;
+     this checklist still owns writer/consumer disagreement across steps
+   - `db/reports/index.html`, its internal views, SQL, and data contracts — deferral above covers whether each `window.report.query(...)` call still
+     resolves; this checklist still owns data-contract/semantic disagreement.
+     Flag a remaining `reports/report_plan.json` as an incomplete version migration
+   - `evaluation/evaluation_plan.json`, `evaluation/step_config.json`, and matching goal/success-criteria coverage — deferral above covers whether an
+     eval step's `PreValidation` SQL/JSONPath rules still resolve; coverage
+     gaps (an orphaned or missing eval) stay this checklist's job
    - one representative recent run for changed runtime behavior when evidence exists
    - for any changed status, strategy, feature flag, guard, routing rule, or
      other control value, trace the exact changed record to the current runtime
@@ -66,8 +113,8 @@ Load `read_skill(skills=[{"name":"builder-reference","path":"references/assumpti
      report it merely because it is long. Compare reuse, inputs/outputs,
      side effects, approval and failure boundaries; report the missing route
      only when those facts show the work belongs in the canonical plan.
-   - a plan step no schedule message reaches, and no other step invokes — dead
-     work, or a queue that was never updated after the step was added
+   - a schedule message that drives no plan step, or a plan step no schedule message reaches and no other step invokes — dead work, or a queue that was
+     never updated after the step was added
    - execution order or grouping that exists only in the message queue while
      `plan.json` leaves order/groups unset. The plan is then not runnable on its
      own, and the queue silently owns the sequence
@@ -75,13 +122,16 @@ Load `read_skill(skills=[{"name":"builder-reference","path":"references/assumpti
      duplication that will drift the next time either side changes
    - schedule cron/timezone that contradicts what `soul.md` or the plan claims
      about cadence or the window the work is valid for
+   - a schedule message that should invoke canonical work but bypasses
+     `run_full_workflow`/`execute_step`; use `validate_plan_change` when a repair
+     changes plan references or dependency wiring
 5. Include clean checks briefly. Do not manufacture drift merely because an artifact exists.
 
 ## Reviewer result
 
 Return one compact review package containing:
 
-- `module=workflow_review`, `verdict`, and `next_check`
+- `module=technical_review`, `verdict`, and `next_check`
 - cursor before and proposed cursor after
 - changelog files and zero-based entry indexes fully inspected
 - affected steps inspected
@@ -90,8 +140,13 @@ Return one compact review package containing:
   verification, recommended owner, and `user_judgment_required` with reason
 - clean checks
 - exact proposed marks grouped as `clean`, `findings`, or `cursor-backfill`
+- for every proposed non-backfill mark, `surface_reviews` covering
+  `downstream_steps`, `validation`, `evaluation`, `reporting`, `database`, and
+  `learnings_and_knowledge`, each with one disposition (`updated`,
+  `already_compatible`, `not_applicable`, `blocked`, or `broken`) and concrete
+  evidence; `blocked` and `broken` also require durable Pulse `issue_ids`
 - any blocked entry that prevented further cursor advancement
 
-The parent Pulse Fixer/workshop agent validates this package, applies only bounded approved fixes, records typed Artifact Review findings/dispositions, and calls `mark_changelog_artifact_reviewed` for only the exact verified entries. Do not edit or delete changelog JSON directly and do not create a second cursor or state file.
+The parent Pulse Fixer/workshop agent validates this package, applies only bounded approved fixes, records typed Artifact Review findings/dispositions, and calls `mark_changelog_artifact_reviewed` for only the exact verified entries with all required surface reviews. Do not edit or delete changelog JSON directly and do not create a second cursor or state file.
 
 A finding marked `user_judgment_required` needs the user's call before it is applied (never before). If this command is running as a live chat turn with the user present (a standalone `/review-artifact-drift`), ask directly in this chat and wait for the reply. If this is the unattended scheduled Pulse pass, never ask a direct question -- nobody is watching that chat and it would stall unanswered -- use `create_human_input_request` instead, which surfaces as a Needs your decision card the user answers later.

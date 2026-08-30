@@ -448,6 +448,78 @@ func TestResolveRestoredCodingConversationPersistTargetIsTransportSpecific(t *te
 	}
 }
 
+func TestMergeNativeContinuationChatHistoryRetainsPriorTurnsAndReplacesSystemPrompt(t *testing.T) {
+	message := func(role llmtypes.ChatMessageType, text string) llmtypes.MessageContent {
+		return llmtypes.MessageContent{
+			Role:  role,
+			Parts: []llmtypes.ContentPart{llmtypes.TextContent{Text: text}},
+		}
+	}
+	existing := []llmtypes.MessageContent{
+		message(llmtypes.ChatMessageTypeSystem, "old runtime prompt"),
+		message(llmtypes.ChatMessageTypeHuman, "first request"),
+		message(llmtypes.ChatMessageTypeAI, "first answer"),
+	}
+	current := []llmtypes.MessageContent{
+		message(llmtypes.ChatMessageTypeSystem, "new runtime prompt"),
+		// Claude/Codex may return the prior exchange cumulatively even though
+		// AgentWorks did not replay it into this wrapper.
+		message(llmtypes.ChatMessageTypeHuman, "first request"),
+		message(llmtypes.ChatMessageTypeAI, "first answer"),
+		message(llmtypes.ChatMessageTypeHuman, "second request"),
+		message(llmtypes.ChatMessageTypeAI, "second answer"),
+	}
+
+	merged := mergeNativeContinuationChatHistory(existing, current)
+	if len(merged) != 5 {
+		t.Fatalf("merged history length = %d, want 5", len(merged))
+	}
+	wantRoles := []llmtypes.ChatMessageType{
+		llmtypes.ChatMessageTypeSystem,
+		llmtypes.ChatMessageTypeHuman,
+		llmtypes.ChatMessageTypeAI,
+		llmtypes.ChatMessageTypeHuman,
+		llmtypes.ChatMessageTypeAI,
+	}
+	for index, wantRole := range wantRoles {
+		if merged[index].Role != wantRole {
+			t.Fatalf("merged[%d].Role = %q, want %q", index, merged[index].Role, wantRole)
+		}
+	}
+	if got := chatHistoryPartText(merged[0].Parts[0]); got != "new runtime prompt" {
+		t.Fatalf("system prompt = %q, want newest prompt", got)
+	}
+}
+
+func TestMergeRestoredChatHistoryIgnoresChangingSystemPromptWhenBodyIsCumulative(t *testing.T) {
+	message := func(role llmtypes.ChatMessageType, text string) llmtypes.MessageContent {
+		return llmtypes.MessageContent{
+			Role:  role,
+			Parts: []llmtypes.ContentPart{llmtypes.TextContent{Text: text}},
+		}
+	}
+	existing := []llmtypes.MessageContent{
+		message(llmtypes.ChatMessageTypeSystem, "prompt rendered at 11:00"),
+		message(llmtypes.ChatMessageTypeHuman, "first request"),
+		message(llmtypes.ChatMessageTypeAI, "first answer"),
+	}
+	incoming := []llmtypes.MessageContent{
+		message(llmtypes.ChatMessageTypeSystem, "prompt rendered at 11:05"),
+		message(llmtypes.ChatMessageTypeHuman, "first request"),
+		message(llmtypes.ChatMessageTypeAI, "first answer"),
+		message(llmtypes.ChatMessageTypeHuman, "second request"),
+		message(llmtypes.ChatMessageTypeAI, "second answer"),
+	}
+
+	merged := mergeRestoredChatHistory(existing, incoming)
+	if len(merged) != len(incoming) {
+		t.Fatalf("merged history length = %d, want %d", len(merged), len(incoming))
+	}
+	if got := chatHistoryPartText(merged[0].Parts[0]); got != "prompt rendered at 11:05" {
+		t.Fatalf("system prompt = %q, want newest prompt", got)
+	}
+}
+
 func TestShouldAttachRestoredConversationFallbackSkipsMatchingCodingAgent(t *testing.T) {
 	runtime := &ChatHistoryAgentRuntime{
 		Kind:              "coding_agent",
@@ -862,6 +934,44 @@ func TestListWorkflowChatHistoryFindsConversationMissingFromCompleteIndex(t *tes
 	}
 }
 
+func TestListChatHistorySessionsByKindFiltersBeforePagination(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+
+	workspacePath := "Workflow/kind-filter"
+	convDir := filepath.Join(root, filepath.FromSlash(workspacePath), "builder", "conversation", "2026-08-22")
+	if err := os.MkdirAll(convDir, 0o755); err != nil {
+		t.Fatalf("mkdir conversation dir: %v", err)
+	}
+	writeConversation := func(sessionID string, modifiedAt time.Time) {
+		t.Helper()
+		conversation := fmt.Sprintf(`{"session_id":%q,"conversation_history":[{"role":"human","parts":[{"type":"text","text":"%s"}]}]}`, sessionID, sessionID)
+		filePath := filepath.Join(convDir, "session-"+sessionID+"-conversation.json")
+		if err := os.WriteFile(filePath, []byte(conversation), 0o600); err != nil {
+			t.Fatalf("write %s: %v", sessionID, err)
+		}
+		if err := os.Chtimes(filePath, modifiedAt, modifiedAt); err != nil {
+			t.Fatalf("set mtime for %s: %v", sessionID, err)
+		}
+	}
+
+	base := time.Date(2026, time.August, 22, 10, 0, 0, 0, time.UTC)
+	// These newer schedule transcripts fill a mixed first page. The ordinary
+	// chat is deliberately older, reproducing the empty Recent tab regression.
+	for i := 0; i < 30; i++ {
+		writeConversation(fmt.Sprintf("schedule-cron--job_%02d", i), base.Add(time.Duration(i)*time.Minute))
+	}
+	writeConversation("ordinary-builder-chat", base.Add(-time.Hour))
+
+	sessions, err := ListChatHistorySessionsByKind("default", "chat", 25, 0, workspacePath)
+	if err != nil {
+		t.Fatalf("list chat sessions by kind: %v", err)
+	}
+	if len(sessions) != 1 || sessions[0].SessionID != "ordinary-builder-chat" {
+		t.Fatalf("chat-kind page = %#v, want ordinary builder chat", sessions)
+	}
+}
+
 func TestPersistChatConversationUpdatesMetadataIndex(t *testing.T) {
 	workspace := &mockWorkspaceAPI{files: map[string]string{}}
 	server := httptest.NewServer(workspace)
@@ -904,83 +1014,6 @@ func TestPersistChatConversationUpdatesMetadataIndex(t *testing.T) {
 	}
 	if entry.SourceSize != int64(len(conversationData)) {
 		t.Fatalf("source size = %d, want %d", entry.SourceSize, len(conversationData))
-	}
-}
-
-// Renamed from ...CollapsesMultiAgentScheduleRunsBySchedule, for the same
-// reason as the workflow variant: hiding every run but the newest also hid
-// failures, and the run index it deferred to carries no error text.
-func TestListChatHistorySessionsFromDiskKeepsEveryMultiAgentScheduleRun(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("WORKSPACE_DOCS_PATH", root)
-
-	convDir := filepath.Join(root, "_users", "default", "chat_history", "2026-05-17")
-	if err := os.MkdirAll(convDir, 0o755); err != nil {
-		t.Fatalf("mkdir conversation dir: %v", err)
-	}
-
-	writeConversation := func(sessionID, updatedAt, text string, mtime time.Time) {
-		t.Helper()
-		data := fmt.Sprintf(`{
-  "session_id": %q,
-  "agent_mode": "simple",
-  "conversation_history": [{"Role": "human", "Parts": [{"Text": %q}]}],
-  "updated_at": %q
-}`, sessionID, text, updatedAt)
-		path := filepath.Join(convDir, "session-"+sessionID+"-conversation.json")
-		if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
-			t.Fatalf("write conversation %s: %v", sessionID, err)
-		}
-		if err := os.Chtimes(path, mtime, mtime); err != nil {
-			t.Fatalf("chtimes conversation %s: %v", sessionID, err)
-		}
-	}
-
-	oldCronSession := "schedule-cron--abc12345_100"
-	legacySession := "sched_abc12345_150"
-	latestManualSession := "schedule-manual--abc12345_300"
-	otherScheduleSession := "schedule-cron--def67890_100"
-	normalSession := "normal-chat-1"
-
-	writeConversation(oldCronSession, "2026-05-17T10:00:00Z", "old cron run", time.Date(2026, 5, 17, 10, 0, 0, 0, time.UTC))
-	writeConversation(legacySession, "2026-05-17T11:00:00Z", "legacy schedule run", time.Date(2026, 5, 17, 11, 0, 0, 0, time.UTC))
-	writeConversation(latestManualSession, "2026-05-18T10:00:00Z", "latest manual run", time.Date(2026, 5, 18, 10, 0, 0, 0, time.UTC))
-	writeConversation(otherScheduleSession, "2026-05-17T12:00:00Z", "other schedule run", time.Date(2026, 5, 17, 12, 0, 0, 0, time.UTC))
-	writeConversation(normalSession, "2026-05-18T11:00:00Z", "normal chat", time.Date(2026, 5, 18, 11, 0, 0, 0, time.UTC))
-
-	runsPath := filepath.Join(root, "_users", "default", "multiagent-schedule-runs.json")
-	runsJSON := fmt.Sprintf(`[
-  {"id":"run-new","schedule_id":"sched-a","session_id":%q,"status":"success","started_at":"2026-05-18T10:00:00Z"},
-  {"id":"run-legacy","schedule_id":"sched-a","session_id":%q,"status":"success","started_at":"2026-05-17T11:00:00Z"},
-  {"id":"run-old","schedule_id":"sched-a","session_id":%q,"status":"success","started_at":"2026-05-17T10:00:00Z"},
-  {"id":"run-other","schedule_id":"sched-b","session_id":%q,"status":"success","started_at":"2026-05-17T12:00:00Z"}
-]`, latestManualSession, legacySession, oldCronSession, otherScheduleSession)
-	if err := os.WriteFile(runsPath, []byte(runsJSON), 0o600); err != nil {
-		t.Fatalf("write multiagent schedule runs: %v", err)
-	}
-
-	sessions, ok, err := listChatHistorySessionsFromDisk("default", "_users/default/chat_history", "", 10, 0)
-	if err != nil {
-		t.Fatalf("list error = %v", err)
-	}
-	if !ok {
-		t.Fatal("list ok = false, want true")
-	}
-
-	ids := map[string]bool{}
-	for _, session := range sessions {
-		ids[session.SessionID] = true
-	}
-	if len(sessions) != 5 {
-		t.Fatalf("session count = %d, want 5: %#v", len(sessions), sessions)
-	}
-	for _, want := range []string{
-		normalSession, latestManualSession, otherScheduleSession,
-		oldCronSession, legacySession,
-	} {
-		if !ids[want] {
-			t.Fatalf("missing session %q in %#v", want, sessions)
-		}
 	}
 }
 

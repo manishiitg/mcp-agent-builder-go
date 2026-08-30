@@ -16,7 +16,7 @@ import type { AgentMode } from '../stores/types'
 import { ChatInput } from './ChatInput'
 import { TerminalEventTranscript } from './TerminalEventTranscript'
 import { MainAgentTerminal } from './MainAgentTerminal'
-import { WorkflowModeHandler, type WorkflowModeHandlerRef, signalPlanModified } from './workflow'
+import { WorkflowModeHandler, type WorkflowModeHandlerRef } from './workflow'
 import { ToastContainer } from './ui/Toast'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useWorkflowStore } from '../stores/useWorkflowStore'
@@ -28,7 +28,7 @@ import { PresetSelectionOverlay } from './PresetSelectionOverlay'
 import { ModeSwitchDialog } from './ui/ModeSwitchDialog'
 import type { ChatTab } from '../stores/useChatStore'
 import type { CustomPreset } from '../types/preset'
-import { conversationToRestoredEvents, restoreSession } from '../utils/sessionRestore'
+import { conversationToRestoredEvents, hydrateTabEvents, restoreSession } from '../utils/sessionRestore'
 import { logger } from '../utils/logger'
 import { secretsApi } from '../api/secrets'
 import { useSecretsStore } from '../stores'
@@ -38,15 +38,17 @@ import {
   buildLLMConfigWithApiKeys,
   buildQueryRequestPayload,
   applyAgentProfileBinding,
+  buildAgentProfileChatRequest,
   resolveOrCreateTab,
   createUserMessageEvent,
   validateExecutionGroups,
   isChatCompatiblePhase,
 } from '../utils/chatSubmitHelpers'
-import { resolveDelegationMainModel } from '../utils/workflowLLMTierDefaults'
 import { shouldKeepWorkflowSessionSubscribed } from '../utils/workflowSessionSubscription'
 import { activateTab } from '../utils/activateTab'
 import { selectWorkflowPreset } from '../utils/workflowNavigation'
+import { ProductChatSurface } from '../platform/chat/ProductChatSurface'
+import { WORKFLOW_LOG_REFRESH_EVENT } from './workflow/workflowEvents'
 
 // Stable empty array to avoid infinite re-render loops in Zustand selectors
 // (a new [] on every selector call breaks referential equality checks)
@@ -189,6 +191,24 @@ function getUserMessageContent(event: PollingEvent): string {
 function getDisplaySafeUserMessageContent(content: string): string {
   const markerIndex = content.indexOf(RESTORED_CONVERSATION_CONTEXT_MARKER)
   return (markerIndex >= 0 ? content.slice(0, markerIndex) : content).trim()
+}
+
+function createSubmissionErrorEvent(sessionId: string, error: unknown): PollingEvent {
+  const message = typeof error === 'string'
+    ? error
+    : error instanceof Error
+      ? error.message
+      : 'The request could not be started.'
+  return {
+    id: `conversation-error-${globalThis.crypto.randomUUID()}`,
+    type: 'conversation_error',
+    timestamp: new Date().toISOString(),
+    session_id: sessionId,
+    data: {
+      type: 'conversation_error',
+      data: { error: message },
+    } as PollingEvent['data'],
+  }
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -405,6 +425,7 @@ export interface ChatContentRendererProps {
   isRestoring: boolean
   streamingText: string
   landingContent?: ReactNode
+  onRetryLastMessage?: () => void | Promise<void>
 }
 
 interface ChatAreaProps {
@@ -430,7 +451,7 @@ interface ChatAreaProps {
   // the list. When present, ChatArea renders it as the primary surface (mirroring
   // the multi-agent landing panel) and suppresses its own workflow empty states.
   workflowPreviousChatsPanel?: React.ReactNode
-  // Product surfaces can replace the Chief-of-Staff previous-chat landing
+  // Product surfaces can replace the default previous-chat landing
   // without forking the shared stream, terminal, event, and composer stack.
   landingContent?: React.ReactNode
   // Product surfaces can replace the developer-facing terminal presentation
@@ -449,6 +470,10 @@ interface ChatAreaProps {
   // final response. The shared AgentWorks surface keeps this internal by
   // default to avoid changing its transcript density.
   showConversationUsage?: boolean
+  // Product deployments with one fixed runtime can omit a redundant badge.
+  hideRuntimeStatus?: boolean
+  // Product chats otherwise have no generic header in which to start fresh.
+  showNewChatAction?: boolean
 }
 
 // Ref interface for ChatArea component
@@ -468,7 +493,12 @@ let globalHasRestored = false
 
 // Inner component for chat area
 const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAreaRef>) => {
-  const { onNewChat, hideInput = false, compact = false, tabId, previousChatsCompact = false, workflowPreviousChatsPanel, landingContent, contentRenderer: ContentRenderer, inputVariant = 'default', fullTurnStreaming = false, showConversationUsage = false } = props
+  const { onNewChat, hideInput = false, compact = false, tabId, previousChatsCompact = false, workflowPreviousChatsPanel, landingContent, contentRenderer: ContentRenderer, inputVariant = 'default', fullTurnStreaming = false, showConversationUsage = false, hideRuntimeStatus = false, showNewChatAction = false } = props
+  // Product mode is a complete shared surface, not just a simplified composer.
+  // Products may still supply a renderer for domain-specific presentation, but
+  // every new product gets the durable transcript and normalized error UI by
+  // default simply by selecting inputVariant="product".
+  const EffectiveContentRenderer = ContentRenderer ?? (inputVariant === 'product' ? ProductChatSurface : undefined)
   // null means "inactive — don't subscribe to any tab or run any effects"
   const isInactive = tabId === null
 
@@ -686,6 +716,25 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
   const tabEvents = useChatStore((state) =>
     activeSessionId ? state.tabEvents[activeSessionId] || EMPTY_EVENTS : EMPTY_EVENTS
   )
+  const productTranscriptHydratedRef = useRef<string | null>(null)
+  useEffect(() => {
+    const workspacePath = activeTab?.metadata?.agentProfileWorkspace
+    if (
+      activeTab?.metadata?.agentProfileId !== 'video-studio' ||
+      !activeSessionId ||
+      !workspacePath ||
+      productTranscriptHydratedRef.current === activeSessionId
+    ) return
+    productTranscriptHydratedRef.current = activeSessionId
+    void hydrateTabEvents(activeSessionId, {
+      workspacePath,
+      fallbackToChatHistory: true,
+      preferChatHistory: true,
+    }).catch((error) => {
+      productTranscriptHydratedRef.current = null
+      console.error('[SessionRestore] Video Studio transcript hydration failed:', error)
+    })
+  }, [activeSessionId, activeTab?.metadata?.agentProfileId, activeTab?.metadata?.agentProfileWorkspace])
   const activeStreamingText = useChatStore((state) =>
     activeSessionId ? state.streamingText[activeSessionId] || '' : ''
   )
@@ -877,9 +926,13 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
 
   // State for session restoration loading
   const [isRestoringChatSessions, setIsRestoringChatSessions] = useState(false)
-  // Workflow-mode restore flag is owned by WorkflowLayout via useChatStore so we can show
-  // an in-panel spinner here while reconnectWorkflowTabs() is replaying events.
-  const isRestoringWorkflowSessions = useChatStore(state => state.isRestoringWorkflowSessions)
+  // Only the active session can put this pane into a restoring state. Other
+  // workflows may hydrate concurrently without blanking the chat the user is
+  // currently reading (PLAT-143).
+  const isRestoringWorkflowSession = useChatStore(state => {
+    const sessionId = activeTab?.sessionId
+    return !!sessionId && (state.restoringWorkflowSessions[sessionId] ?? 0) > 0
+  })
   // A resumed chat sets restoredConversationPath on the tab (cleared by New Chat's
   // resetTabChat). We no longer hard-hide the list on this marker alone — an empty
   // or stale resume (terminal restore that yielded nothing) would otherwise leave a
@@ -931,6 +984,55 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     const timer = window.setTimeout(() => setResumeGaveUp(true), RESUME_SETTLE_MS)
     return () => window.clearTimeout(timer)
   }, [activeTabHasRestoredConversation, hasConversationContent, activeTabStreaming, activeSessionId])
+  // Read-only run view give-up TIMER. isReadOnlyRunView (a scheduled/bot run
+  // tab) forces resolveChatSurface to 'restoring' unconditionally while empty,
+  // by design (a read-only run must never bounce to the previous-chats
+  // landing panel — the "schedule-bounce" fix). But that means a tab whose
+  // session the backend no longer knows about (its in-memory event store was
+  // wiped by a server restart, or openScheduledRunInChat's own fetch failed
+  // and was silently swallowed) spins forever with no escape. This timer only
+  // flips a display flag consumed below to swap the spinner for an explicit
+  // "couldn't load" message with a retry action; it never changes
+  // resolveChatSurface's returned surface or its landing-avoidance guarantee.
+  const [readOnlyRunViewGaveUp, setReadOnlyRunViewGaveUp] = useState(false)
+  useEffect(() => {
+    if (!isReadOnlyRunView || displayEvents.length > 0 || activeTabStreaming) {
+      setReadOnlyRunViewGaveUp(false)
+      return
+    }
+    setReadOnlyRunViewGaveUp(false)
+    const timer = window.setTimeout(() => setReadOnlyRunViewGaveUp(true), RESUME_SETTLE_MS)
+    return () => window.clearTimeout(timer)
+  }, [isReadOnlyRunView, displayEvents.length, activeTabStreaming, activeSessionId])
+  // Manual retry for the give-up message above: re-fetch this session's
+  // events the same way openScheduledRunInChat does on first open. If the
+  // session really is gone, this comes back empty and the give-up timer
+  // above simply re-arms and fires again — an honest "still not there".
+  const retryReadOnlyRunView = useCallback(async () => {
+    const sessionId = activeSessionId
+    const tabId = activeTab?.tabId
+    if (!sessionId || !tabId) return
+    setReadOnlyRunViewGaveUp(false)
+    try {
+      const response = await agentApi.getRecentSessionEvents(sessionId)
+      const chatStore = useChatStore.getState()
+      if (response.events.length > 0) {
+        chatStore.setTabEvents(sessionId, response.events)
+      }
+      if (response.last_processed_index !== undefined) {
+        chatStore.setTabLastEventIndex(sessionId, response.last_processed_index)
+      }
+      if (response.has_more !== undefined) {
+        chatStore.setTabHasMoreOlderEvents(sessionId, response.has_more)
+      }
+      const isDone = response.session_status === 'completed' || response.session_status === 'stopped'
+      const isError = response.session_status === 'error'
+      chatStore.setTabCompleted(tabId, isDone)
+      chatStore.setTabStreaming(tabId, !isDone && !isError && response.session_status === 'running')
+    } catch {
+      // Leave it to the give-up timer to re-fire; nothing else to do here.
+    }
+  }, [activeSessionId, activeTab?.tabId])
   // resumePending — SYNCHRONOUS (derived in render, NOT an effect-set state). This
   // is the regression fix: on a Resume click restoredConversationPath is set
   // synchronously (setTabConfig), so this is already true on the FIRST render →
@@ -1493,6 +1595,29 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       } else {
         setLastEventIndex(newLastEventIndex)
       }
+    } else if (response.last_processed_index === -1) {
+      // -1 is the backend's explicit "this session is not in my in-memory
+      // event store" signal (polling.go: !exists -> LastProcessedIndex: -1).
+      // The store is in-memory only, so a server restart wipes every live
+      // session's event log; a tab left open across that restart keeps
+      // polling with its pre-restart since= cursor forever, which the fresh
+      // process's own (much shorter) post-restart event log can never reach
+      // -- the poll silently returns empty on every tick, with no visible
+      // error, indefinitely. Only reset when we previously tracked real
+      // progress (index > 0): a genuinely brand-new, never-polled session
+      // legitimately gets -1 on its first poll too, and resetting an
+      // already-0 index would be a no-op anyway.
+      const priorIndex = tab
+        ? getTabLastEventIndex(actualSessionId)
+        : lastEventIndexRef.current
+      if (priorIndex > 0) {
+        logger.warn('ChatArea', `Backend has no record of session ${actualSessionId} (likely a server restart) after prior progress at index ${priorIndex}; resetting cursor to resync`)
+        if (tab) {
+          setTabLastEventIndex(actualSessionId, 0)
+        } else {
+          setLastEventIndex(0)
+        }
+      }
     }
 
     if (response.events.length === 0) return
@@ -1565,20 +1690,6 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
         const correlationId = innerData?.correlation_id ?? innerData?.delegation_id ?? agentEvent?.correlation_id ?? agentEvent?.delegation_id
         if (correlationId && typeof correlationId === 'string') {
           chatStore.clearDelegationStreamingText(correlationId)
-        }
-      }
-
-      // Auto-refresh plan canvas when a plan modification tool completes
-      if (event.type === 'tool_call_end') {
-        const toolName = (innerData?.tool_name ?? agentEvent?.tool_name ?? '') as string
-        const isPlanModTool = toolName.startsWith('update_') && (
-          toolName.includes('step') || toolName.includes('validation') || toolName.includes('success_criteria')
-        )
-        const isAddTool = toolName.startsWith('add_') && toolName.includes('step')
-        const isDeleteTool = toolName === 'delete_plan_steps'
-        if (isPlanModTool || isAddTool || isDeleteTool) {
-          console.log('[PLAN REFRESH] Plan modification detected via tool:', toolName)
-          signalPlanModified()
         }
       }
 
@@ -1719,6 +1830,32 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     // writes share no reliable common file event. Mark the view stale after a
     // completed run and let the user choose when to refresh it.
     const isCompletionLike = hasCompletionEvent || newEvents.some(e => e.type === 'background_agent_completed')
+    // Reviewer/fixer turns can create typed Pulse findings, decisions, review
+    // receipts, and changelog entries without touching a workspace file. Those
+    // panels intentionally do not poll while empty, so completion is the
+    // canonical point to refresh their lightweight API projections. Limit the
+    // event to the active workflow preset; background work for another preset
+    // must not perturb the workflow currently on screen.
+    if (isCompletionLike && selectedModeCategory === 'workflow' && isActivePresetTab !== false) {
+      window.dispatchEvent(new CustomEvent(WORKFLOW_LOG_REFRESH_EVENT))
+    }
+    // A foreground terminal event is the per-turn completion contract. Settle
+    // the chat immediately instead of waiting for a later activity-cache poll;
+    // the retained tmux/session may stay alive for the next user message.
+    if (hasCompletionEvent && tab) {
+      const hasBgAgents = response.has_running_background_agents ?? tab.hasRunningBgAgents
+      chatStore.setTabStreaming(tab.tabId, false)
+      chatStore.setTabCompleted(tab.tabId, !hasBgAgents)
+      chatStore.clearStreamingText(actualSessionId)
+      if (sessionOwnsGlobalChatIndicators(actualSessionId, activeSessionIdRef.current)) {
+        setIsStreaming(false)
+        setIsCompleted(!hasBgAgents)
+        setHasActiveChat(hasBgAgents)
+      }
+      void chatStore.getActiveSessions(true).catch(error => {
+        logger.warn('ChatArea', 'Failed to refresh activity after foreground completion', error)
+      })
+    }
     if (isCompletionLike && hadWorkspaceActivityRef.current && isActivePresetTab !== false) {
       hadWorkspaceActivityRef.current = false
       console.log('[Workspace] Marking files stale after workspace activity')
@@ -1777,7 +1914,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       addTabEvents(actualSessionId, newEvents)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [getTabEvents, setTabLastEventIndex, setLastEventIndex, addTabEvents, setIsStreaming, setIsCompleted, setHasActiveChat, selectedModeCategory])
+  }, [getTabEvents, getTabLastEventIndex, setTabLastEventIndex, setLastEventIndex, addTabEvents, setIsStreaming, setIsCompleted, setHasActiveChat, selectedModeCategory])
 
   // Handle an incoming SSE event message: ignore global streaming display events,
   // then process non-streaming events inline.
@@ -2127,11 +2264,19 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
           const chatStore = useChatStore.getState()
           const persistedSessionIds = new Set(
             Object.values(chatStore.chatTabs)
-              .filter(tab => tab.sessionId)
+              // Product surfaces own their restoration contract. In
+              // particular, Video Studio restores the durable transcript;
+              // letting the generic live-event hydrator race it leaves a
+              // user-only cache after refresh.
+              .filter(tab => tab.sessionId && tab.metadata?.agentProfileId !== 'video-studio')
               .map(tab => tab.sessionId!)
           )
           const sessionsToRestore = runningSessions.filter(s =>
-            persistedSessionIds.has(s.session_id) || s.status === 'running'
+            persistedSessionIds.has(s.session_id) || (
+              s.status === 'running' && !Object.values(chatStore.chatTabs).some(tab =>
+                tab.sessionId === s.session_id && tab.metadata?.agentProfileId === 'video-studio'
+              )
+            )
           )
 
           if (sessionsToRestore.length > 0) {
@@ -2160,6 +2305,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
         const tabs = Object.values(chatStore.chatTabs)
         const tabsToHydrate = tabs.filter(tab => {
           if (!tab.sessionId || tab.metadata?.mode === 'workflow') return false
+          if (tab.metadata?.agentProfileId === 'video-studio') return false
           if (restoredSessionIds.has(tab.sessionId)) return false
           return chatStore.getTabEvents(tab.sessionId).length === 0
         })
@@ -2168,7 +2314,11 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
         }
         for (const tab of tabsToHydrate) {
           try {
-            await restoreSession(tab.sessionId!, { source: 'page-refresh', skipConfigRestore: true })
+            await restoreSession(tab.sessionId!, {
+              source: 'page-refresh',
+              skipConfigRestore: true,
+              workspacePath: tab.metadata?.agentProfileWorkspace,
+            })
           } catch (err) {
             console.error(`[SessionRestore] page-refresh hydrate failed for tab ${tab.tabId}:`, err)
           }
@@ -2747,24 +2897,10 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
         : (isMultiAgentMode && currentTab?.config?.llmConfig)
           ? currentTab.config.llmConfig
           : llmStore.primaryConfig
-      const tierConfig = llmStore.delegationTierConfig
-      const delegationMainModel = resolveDelegationMainModel(tierConfig, llmStore.providerManifest)
-      // A product surface (Video Studio and friends) picks its provider per
-      // PROJECT, from the manifest's own agent options, and shows that choice in
-      // its header. The global delegation tier is an AgentWorks-wide setting and
-      // must not silently outrank it: it did, so a project whose header read
-      // "Codex" actually ran the tier's pi-cli/gemini — and failed on a Gemini
-      // credential the user never chose to use. Product surfaces are identified
-      // by the same agentProfileId that authorizes the profile server-side.
-      const isProductSurfaceTab = Boolean(currentTab?.metadata?.agentProfileId)
-      const effectiveLLMConfig: ExtendedLLMConfiguration = (isMultiAgentMode && delegationMainModel && !isProductSurfaceTab)
-        ? {
-            ...baseLLMConfig,
-            provider: delegationMainModel.provider as ExtendedLLMConfiguration['provider'],
-            model_id: delegationMainModel.model_id,
-            options: delegationMainModel.options,
-          }
-        : baseLLMConfig
+      // Chat has one primary model. Product profiles may replace it with their
+      // server-owned runtime; delegation tiers no longer participate in normal
+      // chat model selection because chat no longer creates sub-agents.
+      const effectiveLLMConfig: ExtendedLLMConfiguration = baseLLMConfig
 
       const llmConfigWithApiKeys = buildLLMConfigWithApiKeys(effectiveLLMConfig)
 
@@ -2837,7 +2973,13 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       // Set session ID and submit
       chatStore.setSessionId(tabSessionId)
       console.log('[WF_DEBUG] 1. Submitting', { tabId: currentTab.tabId, tabSessionId, eventCount: chatStore.getTabEvents(tabSessionId).length, mode: currentTab.metadata?.mode })
-      const response = await agentApi.startQuery(requestPayload, tabSessionId)
+      const response = currentTab.metadata?.agentProfileChatContract === 'profile-v1' && currentTab.metadata.agentProfileId
+        ? await agentApi.startAgentProfileQuery(
+            currentTab.metadata.agentProfileId,
+            buildAgentProfileChatRequest(requestPayload, currentTab.metadata.agentProfileConversationKey),
+            tabSessionId,
+          )
+        : await agentApi.startQuery(requestPayload, tabSessionId)
       console.log('[WF_DEBUG] 2. Response', { status: response.status, responseSessionId: response.session_id || response.query_id, tabSessionId, match: (response.session_id || response.query_id) === tabSessionId })
 
       if (response.status === 'started' || response.status === 'workflow_started') {
@@ -2845,6 +2987,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
         if (!responseSessionId) {
           console.log('[WF_DEBUG] ERROR: No sessionId in response')
           logger.error('ChatArea', 'No sessionId in response')
+          chatStore.addTabEvents(tabSessionId, [createSubmissionErrorEvent(tabSessionId, 'The server started the request without returning a session identifier.')])
           resetStreamingState(currentTab.tabId)
           return false
         }
@@ -2912,12 +3055,14 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       } else {
         console.log('[WF_DEBUG] ERROR: Backend non-started response', { status: response.status, message: response.message, response })
         logger.error('ChatArea', 'Backend error:', response)
+        chatStore.addTabEvents(tabSessionId, [createSubmissionErrorEvent(tabSessionId, response.message || `The server returned ${response.status || 'an error'}.`)])
         resetStreamingState(currentTab.tabId)
         return false
       }
     } catch (error) {
       console.log('[WF_DEBUG] ERROR: Submit exception', { error })
       logger.error('ChatArea', 'Failed to submit query:', error)
+      chatStore.addTabEvents(tabSessionId, [createSubmissionErrorEvent(tabSessionId, error)])
       resetStreamingState(currentTab.tabId)
       return false
     }
@@ -2950,6 +3095,17 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     }
     return submit()
   }, [activeTab, selectedModeCategory, submitQueryImmediately, fullTurnStreaming])
+
+  const retryLastProductMessage = useCallback(async () => {
+    const lastUserMessage = [...displayEvents]
+      .reverse()
+      .find((event) => event.type === 'user_message' && !getUserMessageContent(event).startsWith(AUTO_NOTIFICATION_PREFIX))
+    const content = lastUserMessage
+      ? getDisplaySafeUserMessageContent(getUserMessageContent(lastUserMessage))
+      : ''
+    if (!content) return
+    await submitQueryWithQuery(content, undefined, { sourceTabId: activeTab?.tabId })
+  }, [activeTab?.tabId, displayEvents, submitQueryWithQuery])
 
   // If the active tab is stuck in streaming state, ChatInput queues the user's text
   // instead of calling /api/query. Force-refresh active sessions so the store can
@@ -3098,12 +3254,12 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     const chatStore = useChatStore.getState()
     const targetTab = targetTabId ? chatStore.getTab(targetTabId) : activeTab
     // Stop the previous backend session first (if it exists). This closes any
-    // tmux-backed CLI owner before the tab rotates to a fresh Chief of Staff
+    // tmux-backed CLI owner before the tab rotates to a fresh AgentWorks
     // session, preventing two pi-cli sessions from sharing the Chats cwd.
     const currentSessionId = getSessionId()
     // An explicitly targeted empty chat must not fall back to the globally
     // selected session ID: that ID may belong to the concurrently viewed
-    // Chief of Staff schedule.
+    // scheduled agent session.
     const sessionIdToClear = targetTabId !== undefined
       ? targetTab?.sessionId
       : (targetTab?.sessionId || currentSessionId)
@@ -3120,6 +3276,24 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       }
     }
 
+    // Product profiles own their durable conversation identity on the server.
+    // Rotating only this tab's local UUID would be overwritten by the next
+    // product resolve and the prior transcript would reappear.
+    let rotatedConversation: { conversation_id: string; session_id: string } | undefined
+    const profileId = targetTab?.metadata?.agentProfileId
+    const conversationKey = targetTab?.metadata?.agentProfileConversationKey
+    if (profileId && conversationKey) {
+      try {
+        rotatedConversation = await agentApi.startNewAgentProfileConversation(profileId, {
+          conversation_key: conversationKey,
+        })
+      } catch (error) {
+        logger.error('ChatArea', 'Failed to start a new product conversation:', error)
+        addToast('Could not start a new chat. Your existing conversation was kept.', 'error')
+        return
+      }
+    }
+
     // For workflow mode, preserve the selected preset but reset workflow phase
     if (selectedModeCategory === 'workflow' && selectedWorkflowPreset) {
       // Keep the preset selected, just reset the workflow phase to default
@@ -3133,7 +3307,16 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
 
     if (targetTab) {
       activateTab(targetTab.tabId)
-      chatStore.resetTabChat(targetTab.tabId)
+      chatStore.resetTabChat(targetTab.tabId, rotatedConversation?.session_id)
+      // The reset tab is blank on purpose. Without this, the workflow landing
+      // panel's own "nothing else is happening — reopen the last conversation"
+      // effect would see the same blank state and immediately undo New Chat.
+      chatStore.setTabMetadata(targetTab.tabId, { skipWorkflowAutoRestore: true })
+      if (rotatedConversation) {
+        chatStore.setTabMetadata(targetTab.tabId, {
+          agentProfileConversationId: rotatedConversation.conversation_id,
+        })
+      }
       chatStore.setTabConfig(targetTab.tabId, {
         queuedMessages: [],
         isQueueProcessing: false,
@@ -3155,7 +3338,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     processedCompletionEventsRef.current.clear()
 
 
-  }, [clearWorkflowState, resetChatState, onNewChat, activeTab, selectedModeCategory, selectedWorkflowPreset, setCurrentWorkflowPhase, setLastEventIndex, getActiveSessions])
+  }, [addToast, clearWorkflowState, resetChatState, onNewChat, activeTab, selectedModeCategory, selectedWorkflowPreset, setCurrentWorkflowPhase, setLastEventIndex, getActiveSessions])
 
   // Refresh workflow presets function
   const refreshWorkflowPresets = useCallback(async () => {
@@ -3191,7 +3374,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     isReadOnlyRunView,
   })
   const workflowSurface = resolveWorkflowChatSurface({
-    isRestoring: isRestoringWorkflowSessions,
+    isRestoring: isRestoringWorkflowSession,
     resumeSettling: resumePending,
     hasContent: displayEvents.length > 0,
     isStreaming: activeTabStreaming,
@@ -3249,7 +3432,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     (selectedModeCategory === 'multi-agent' && multiAgentSurface === 'active')
   // A product-supplied content renderer owns the whole pane, so it is always
   // full height regardless of which transcript surface is active.
-  const shouldUseFullHeightContent = !!ContentRenderer || hasActiveTranscript || showNormalPreviousChatsPanel || showWorkflowPreviousChatsPanel
+  const shouldUseFullHeightContent = !!EffectiveContentRenderer || hasActiveTranscript || showNormalPreviousChatsPanel || showWorkflowPreviousChatsPanel
 
   return (
     <div className="flex flex-col h-full min-w-0" data-testid="chat-area-container">
@@ -3286,7 +3469,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
 
         <div className={`min-w-0 ${shouldUseFullHeightContent ? 'flex h-full flex-col' : 'min-h-full'} ${compact ? 'px-2 pb-2' : 'px-3 pb-4'}`}>
           {/* Loading indicator for historical events */}
-          {!ContentRenderer && isLoadingHistory && (
+          {!EffectiveContentRenderer && isLoadingHistory && (
             <div className={`flex items-center justify-center ${compact ? 'py-4' : 'py-8'}`}>
               <div className="flex items-center gap-3 text-gray-600 dark:text-gray-400">
                 <div className={`${compact ? 'w-4 h-4' : 'w-5 h-5'} border-2 border-gray-300 dark:border-gray-600 border-t-blue-600 dark:border-t-blue-400 rounded-full animate-spin`}></div>
@@ -3296,7 +3479,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
           )}
 
           {/* Loading indicator for active session checking */}
-          {!ContentRenderer && isCheckingActiveSessions && (
+          {!EffectiveContentRenderer && isCheckingActiveSessions && (
             <div className={`flex items-center justify-center ${compact ? 'py-4' : 'py-8'}`}>
               <div className="flex items-center gap-3 text-gray-600 dark:text-gray-400">
                 <div className={`${compact ? 'w-4 h-4' : 'w-5 h-5'} border-2 border-gray-300 dark:border-gray-600 border-t-green-600 dark:border-t-green-400 rounded-full animate-spin`}></div>
@@ -3306,7 +3489,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
           )}
 
           {/* Active session indicator */}
-          {!ContentRenderer && sessionState === 'active' && (
+          {!EffectiveContentRenderer && sessionState === 'active' && (
             <div className={`flex items-center justify-center ${compact ? 'py-2' : 'py-4'}`}>
               <div className={`flex items-center gap-2 ${compact ? 'px-2 py-1' : 'px-3 py-2'} bg-green-100 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg`}>
                 <div className={`${compact ? 'w-1.5 h-1.5' : 'w-2 h-2'} bg-green-500 rounded-full animate-pulse`}></div>
@@ -3316,7 +3499,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
           )}
 
           {/* Session error indicator */}
-          {!ContentRenderer && sessionState === 'error' && (
+          {!EffectiveContentRenderer && sessionState === 'error' && (
             <div className={`flex items-center justify-center ${compact ? 'py-2' : 'py-4'}`}>
               <div className={`flex items-center gap-2 ${compact ? 'px-2 py-1' : 'px-3 py-2'} bg-red-100 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg`}>
                 <svg className={`${compact ? 'w-3 h-3' : 'w-4 h-4'} text-red-600 dark:text-red-400`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -3327,13 +3510,14 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
             </div>
           )}
 
-        {ContentRenderer && selectedModeCategory !== 'workflow' ? (
-          <ContentRenderer
+        {EffectiveContentRenderer && selectedModeCategory !== 'workflow' ? (
+          <EffectiveContentRenderer
             events={displayEvents}
             isStreaming={activeTabBusy}
             isRestoring={multiAgentSurface === 'restoring'}
             streamingText={activeStreamingText}
             landingContent={landingContent}
+            onRetryLastMessage={retryLastProductMessage}
           />
         ) : selectedModeCategory === 'workflow' ? (
           <WorkflowModeHandler
@@ -3341,8 +3525,26 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
             onPresetSelected={handleWorkflowPresetSelected}
             onWorkflowPhaseChange={setCurrentWorkflowPhase}
           >
-            {/* restoring — reconnectWorkflowTabs is replaying events. */}
-            {visibleWorkflowSurface === 'restoring' && (
+            {/* restoring — reconnectWorkflowTabs is replaying events. A
+                read-only run view (scheduled/bot run) that never receives
+                content — its session is gone from the backend's in-memory
+                event store, or the fetch itself failed — has no other escape
+                from 'restoring' (see readOnlyRunViewGaveUp above), so past
+                the give-up timeout show an explicit message instead of
+                spinning forever. */}
+            {visibleWorkflowSurface === 'restoring' && isReadOnlyRunView && readOnlyRunViewGaveUp && (
+              <div className="flex flex-col items-center justify-center py-12 gap-2 text-center px-4">
+                <p className="text-sm text-gray-500 dark:text-gray-400">Couldn't load this run's session data — it may no longer be available.</p>
+                <button
+                  type="button"
+                  className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
+                  onClick={() => { void retryReadOnlyRunView() }}
+                >
+                  Try again
+                </button>
+              </div>
+            )}
+            {visibleWorkflowSurface === 'restoring' && !(isReadOnlyRunView && readOnlyRunViewGaveUp) && (
               <div className="flex flex-col items-center justify-center py-12 gap-3">
                 <div className="w-6 h-6 border-2 border-gray-300 dark:border-gray-600 border-t-blue-600 dark:border-t-blue-400 rounded-full animate-spin"></div>
                 <p className="text-sm text-gray-500 dark:text-gray-400">Restoring previous session...</p>
@@ -3431,9 +3633,12 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
         <ChatInput
           onSubmit={(query, options) => submitQueryWithQuery(query, undefined, options)}
           onStopStreaming={stopStreaming}
+          onNewChat={() => void handleNewChat(targetTabId ?? undefined)}
           tabId={targetTabId}
           restoredConversationPending={resumePending && !hasRestoredLiveContent}
           surfaceVariant={inputVariant}
+          hideRuntimeStatus={hideRuntimeStatus}
+          showNewChatAction={showNewChatAction}
         />
       )}
 

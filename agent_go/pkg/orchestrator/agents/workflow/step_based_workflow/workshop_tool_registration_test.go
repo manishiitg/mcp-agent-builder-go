@@ -68,6 +68,13 @@ func TestRegisterWorkshopChatToolsIncludesArtifactReviewMarker(t *testing.T) {
 	if tool.Execute == nil {
 		t.Fatal("mark_changelog_artifact_reviewed has no registered executor")
 	}
+	promptHealth, ok := agent.tools["get_plan_prompt_health"]
+	if !ok {
+		t.Fatal("actual workshop agent registry is missing get_plan_prompt_health")
+	}
+	if promptHealth.DisplayGroup != "workflow" || promptHealth.Execute == nil {
+		t.Fatalf("get_plan_prompt_health registration = %#v, want executable workflow tool", promptHealth)
+	}
 }
 
 func TestBackgroundTaskGetsWorkshopMutationToolDefinitions(t *testing.T) {

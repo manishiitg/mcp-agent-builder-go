@@ -320,6 +320,30 @@ func TestScheduledAutoNotificationBoundsCompletionResult(t *testing.T) {
 	}
 }
 
+func TestPresentationOnlyBackgroundCompletionForbidsParentReinspection(t *testing.T) {
+	snap := BackgroundAgentSnapshot{
+		ID:     "bg-engineering-review",
+		Name:   "engineering-review review",
+		Status: BGAgentCompleted,
+		Result: "Five canonical findings were persisted and eleven checks remain inconclusive.",
+		Metadata: map[string]string{
+			"completion_mode": "present_result",
+		},
+	}
+
+	message := (&StreamingAPI{}).buildAutoNotificationMessage("interactive-session", snap)
+	for _, want := range []string{
+		"[PRESENTATION-ONLY COMPLETION]",
+		"Present its result to the user now",
+		"Do not call any tool",
+		"independently revalidate",
+	} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("presentation-only completion missing %q:\n%s", want, message)
+		}
+	}
+}
+
 func TestWorkflowStartAutoNotificationClearsStaleBusyWithoutActiveTurn(t *testing.T) {
 	store := internalevents.NewEventStore(10)
 	defer store.Stop()

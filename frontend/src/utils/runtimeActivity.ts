@@ -42,11 +42,6 @@ export function runtimeNeedsUserInput(session?: Pick<ActiveSessionInfo, 'runtime
   return session.runtime_state?.waiting_for_user ?? session.needs_user_input === true
 }
 
-export function runtimeCanSteer(session?: Pick<ActiveSessionInfo, 'runtime_state' | 'can_steer'> | null): boolean {
-  if (!session) return false
-  return session.runtime_state?.foreground_turn.can_steer ?? session.can_steer === true
-}
-
 type RuntimeExecutionRecord = {
   id: string
   status: string

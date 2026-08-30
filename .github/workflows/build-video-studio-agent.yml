@@ -1,0 +1,60 @@
+name: Build Video Studio agent
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-linux-agent:
+    name: Build Linux amd64 agent
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out matching MCP bridge runtime
+        uses: actions/checkout@v4
+        with:
+          repository: manishiitg/mcpagent
+          ref: de7ef672f5e0ce2ffe68e5419ec1928236445a5f
+          path: dependencies/mcpagent
+
+      - name: Check out matching LLM runtime
+        uses: actions/checkout@v4
+        with:
+          repository: manishiitg/llm-provider-mcp
+          ref: f32b481c08b1a1d96e75e656c9f36431f1128266
+          path: dependencies/multi-llm-provider-go
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.12'
+          cache-dependency-path: |
+            go.work.sum
+            mcp-agent-builder-go/agent_go/go.sum
+            mcpagent/go.sum
+
+      - name: Build Video Studio agent
+        working-directory: agent_go
+        run: |
+          # Retained-turn support is in the checked-out MCP runtime, which has
+          # not been released in the pinned public module yet.
+          go mod edit -replace github.com/manishiitg/mcpagent=../dependencies/mcpagent
+          go mod edit -replace github.com/manishiitg/multi-llm-provider-go=../dependencies/multi-llm-provider-go
+          go mod tidy
+          # Ship the optional speech runtime beside the agent. Its relative
+          # rpath avoids a host-wide library install or sudo.
+          SHERPA_LIB_DIR="$(go env GOPATH)/pkg/mod/github.com/k2-fsa/sherpa-onnx-go-linux@v1.13.5/lib/x86_64-unknown-linux-gnu"
+          test -f "$SHERPA_LIB_DIR/libsherpa-onnx-c-api.so"
+          mkdir -p ../dist/lib
+          cp "$SHERPA_LIB_DIR"/libsherpa-onnx-c-api.so "$SHERPA_LIB_DIR"/libonnxruntime.so ../dist/lib/
+          CGO_LDFLAGS='-Wl,-rpath,$ORIGIN/../lib' go build -o ../dist/video-studio-agent .
+
+      - name: Upload Linux agent
+        uses: actions/upload-artifact@v4
+        with:
+          name: video-studio-agent-linux-amd64
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7

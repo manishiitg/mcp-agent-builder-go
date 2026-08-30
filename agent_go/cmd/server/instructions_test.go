@@ -9,10 +9,8 @@ func TestWorkspaceMapForbidsWebFetchForLocalArtifacts(t *testing.T) {
 	out := GetWorkspaceMap("/tmp/workspace-docs", "_users/default/Chats")
 
 	mustContain := []string{
-		"pulse/task.html",
 		"LOCAL paths RELATIVE to the docs root",
 		"Never use WebFetch/raw GitHub URLs for workspace artifacts, skills, or reference docs",
-		"/tmp/workspace-docs/pulse/",
 		`read_skill(skills=[{"name":"builder-reference","path":"references/....md"}])`,
 	}
 	for _, s := range mustContain {

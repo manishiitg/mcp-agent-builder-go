@@ -79,20 +79,23 @@ func TestTodoTaskOrchestratorPromptDocumentsMessageSequenceRoutes(t *testing.T) 
 	}
 }
 
-func TestTodoTaskOrchestratorPromptRequiresDurableConcernHandoff(t *testing.T) {
+func TestTodoTaskOrchestratorPromptRoutesConsequentialEvidenceToPulseReview(t *testing.T) {
 	agent := &WorkflowTodoTaskOrchestratorAgent{}
 	prompt := agent.todoTaskOrchestratorSystemPromptProcessor(map[string]string{})
 
 	for _, want := range []string{
 		"## Completion",
-		"CONCERNS: <brief evidence-backed concern; include the affected artifact or operation>",
-		"unresolved or consequential run evidence",
+		"Technical Review evaluates consequential non-fatal evidence directly",
+		"emit a separate concern protocol",
 		"STATUS: COMPLETED",
 		"STATUS: FAILED",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("todo-task prompt missing concern handoff %q:\n%s", want, prompt)
 		}
+	}
+	if strings.Contains(prompt, "CONCERNS:") {
+		t.Fatalf("todo-task prompt must not revive the retired free-text concern protocol:\n%s", prompt)
 	}
 }
 

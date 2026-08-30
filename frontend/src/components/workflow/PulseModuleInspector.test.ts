@@ -4,7 +4,6 @@ import { buildPulseModuleActivity, pulseIssueForFinding, summarizePulseModule } 
 
 function finding(overrides: Partial<PulseFindingLifecycle>): PulseFindingLifecycle {
   return {
-    fingerprint: 'fp',
     step_id: 'bug_review',
     phase: 'review',
     text: 'Finding',
@@ -20,9 +19,8 @@ function finding(overrides: Partial<PulseFindingLifecycle>): PulseFindingLifecyc
 describe('PulseModuleInspector data summaries', () => {
   it('separates action, fixing, proof, and closed states', () => {
     const summary = summarizePulseModule([
-      finding({ fingerprint: 'open', seen_count: 3 }),
+      finding({ seen_count: 3 }),
       finding({
-        fingerprint: 'fixing',
         status: 'fixing',
         fix_attempts: [{
           attempt_id: 'a1',
@@ -38,12 +36,10 @@ describe('PulseModuleInspector data summaries', () => {
         }],
       }),
       finding({
-        fingerprint: 'proof',
         status: 'awaiting_verification',
         verifications: [{ check: 'next run', verdict: 'inconclusive' }],
       }),
       finding({
-        fingerprint: 'closed',
         status: 'resolved',
         verifications: [
           { check: 'regression', verdict: 'passed' },
@@ -51,7 +47,6 @@ describe('PulseModuleInspector data summaries', () => {
         ],
       }),
       finding({
-        fingerprint: 'external',
         status: 'external_action_required',
         seen_count: 5,
         external_owner: 'platform',
@@ -96,7 +91,7 @@ describe('PulseModuleInspector data summaries', () => {
           },
         },
       }),
-      finding({ fingerprint: 'workflow-bug' }),
+      finding({ finding_id: 'PUL-WORKFLOW' }),
     ])
 
     expect(summary.harnessIssues).toBe(1)
@@ -106,26 +101,24 @@ describe('PulseModuleInspector data summaries', () => {
   it('builds a newest-first event feed with finding context', () => {
     const activity = buildPulseModuleActivity([
       finding({
-        fingerprint: 'one',
         finding_id: 'BUG-1',
         text: 'First',
         events: [{ event_type: 'filed', summary: 'First filed', recorded_at: '2026-07-31T01:00:00Z' }],
       }),
       finding({
-        fingerprint: 'two',
+        finding_id: 'BUG-2',
         text: 'Second',
         events: [{ event_type: 'reopened', summary: 'Second reopened', recorded_at: '2026-07-31T02:00:00Z' }],
       }),
     ])
 
-    expect(activity.map((event) => event.fingerprint)).toEqual(['two', 'one'])
+    expect(activity.map((event) => event.findingID)).toEqual(['BUG-2', 'BUG-1'])
     expect(activity[1]).toMatchObject({ findingID: 'BUG-1', findingText: 'First' })
   })
 })
 
 describe('acknowledged findings are split by who must act', () => {
   const finding = (status: string, eventTypes: string[]): PulseFindingLifecycle => ({
-    fingerprint: `fp-${status}-${eventTypes.join('-')}`,
     step_id: 'step', phase: 'review', text: 't', status,
     seen_count: 1, fix_attempts: [], verifications: [],
     events: eventTypes.map((event_type) => ({ event_type, summary: '', recorded_at: '' })),
@@ -154,9 +147,8 @@ describe('acknowledged findings are split by who must act', () => {
 })
 
 describe('compact Pulse issue projection', () => {
-  it('uses the server projection without exposing the fingerprint as the issue id', () => {
+  it('uses the server issue projection as the sole identity', () => {
     const issue = pulseIssueForFinding(finding({
-      fingerprint: '0123456789abcdef',
       issue: {
         id: 'PUL-01234567',
         title: 'Selector repeats the same accounts',
@@ -174,13 +166,11 @@ describe('compact Pulse issue projection', () => {
       priority: 'high',
       seen_count: 4,
     })
-    expect(issue.id).not.toContain('0123456789abcdef')
   })
 
   it('projects older API responses into the same minimal issue shape', () => {
     const issue = pulseIssueForFinding(finding({
-      fingerprint: 'abcdef0123456789',
-      finding_id: '',
+      finding_id: 'PUL-ABCDEF01',
       module: 'bug_review',
       text: 'Broken scheduler status',
       status: 'awaiting_verification',
@@ -218,9 +208,8 @@ describe('acknowledged findings route by reason, not by fallthrough', () => {
   // declined to repair.
   it('counts a recorded proposal as a proposal, never as work Pulse can fix', () => {
     const summary = summarizePulseModule([
-      finding({ fingerprint: 'actionable' }),
+      finding({ finding_id: 'PUL-ACTIONABLE' }),
       finding({
-        fingerprint: 'proposal',
         status: 'acknowledged',
         events: [event('proposal_recorded'), event('filed')],
       }),
@@ -232,8 +221,8 @@ describe('acknowledged findings route by reason, not by fallthrough', () => {
 
   it('keeps blocked and awaiting_user out of the actionable count', () => {
     const summary = summarizePulseModule([
-      finding({ fingerprint: 'b', status: 'acknowledged', events: [event('blocked')] }),
-      finding({ fingerprint: 'u', status: 'acknowledged', events: [event('awaiting_user')] }),
+      finding({ status: 'acknowledged', events: [event('blocked')] }),
+      finding({ status: 'acknowledged', events: [event('awaiting_user')] }),
     ])
 
     expect(summary.blocked).toBe(1)
@@ -245,8 +234,8 @@ describe('acknowledged findings route by reason, not by fallthrough', () => {
   // most likely to act on — that is the mechanism that hid the proposal bug.
   it('sends an unmodelled status to unclassified rather than to open', () => {
     const summary = summarizePulseModule([
-      finding({ fingerprint: 'known' }),
-      finding({ fingerprint: 'future', status: 'awaiting_third_party_sync' }),
+      finding({ finding_id: 'PUL-KNOWN' }),
+      finding({ status: 'awaiting_third_party_sync' }),
     ])
 
     expect(summary.open).toBe(1)
@@ -262,10 +251,10 @@ describe('workflow-reported concerns are not Pulse’s queue', () => {
   // fix, in a module that was not even due.
   it('keeps step-reported concerns out of the actionable count', () => {
     const summary = summarizePulseModule([
-      finding({ fingerprint: 'pulse', phase: 'review' }),
-      finding({ fingerprint: 'prevalidation', phase: 'prevalidation', step_id: 'execute-find-opportunities' }),
-      finding({ fingerprint: 'execution', phase: 'execution', step_id: 'execute-allocate' }),
-      finding({ fingerprint: 'sequence', phase: 'message-sequence', step_id: 'execute-actions' }),
+      finding({ phase: 'review' }),
+      finding({ phase: 'prevalidation', step_id: 'execute-find-opportunities' }),
+      finding({ phase: 'execution', step_id: 'execute-allocate' }),
+      finding({ phase: 'message-sequence', step_id: 'execute-actions' }),
     ])
 
     expect(summary.open).toBe(1)
@@ -275,9 +264,19 @@ describe('workflow-reported concerns are not Pulse’s queue', () => {
   // Compatibility: an older backend may not send `phase`. Hiding those findings
   // would be worse than counting them, so an absent phase stays Pulse-owned.
   it('treats a missing phase as Pulse-owned rather than hiding it', () => {
-    const summary = summarizePulseModule([finding({ fingerprint: 'legacy', phase: '' })])
+    const summary = summarizePulseModule([finding({ phase: '' })])
 
     expect(summary.open).toBe(1)
     expect(summary.workflowReported).toBe(0)
+  })
+
+  it('uses explicit lifecycle kind before the historical phase heuristic', () => {
+    const summary = summarizePulseModule([
+      finding({ kind: 'issue', phase: 'execution' }),
+      finding({ kind: 'observation', phase: 'review' }),
+    ])
+
+    expect(summary.open).toBe(1)
+    expect(summary.workflowReported).toBe(1)
   })
 })

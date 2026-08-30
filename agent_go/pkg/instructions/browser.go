@@ -24,7 +24,6 @@ type BrowserConfig struct {
 	CdpPort         int   // Primary port (legacy compatibility).
 	CdpPorts        []int // Authorized independent Chrome profiles for this run.
 	Mode            string
-	IsIsolated      bool // true when running in a share_browser=false sub-agent
 }
 
 // BuildBrowserRuntimeInstructions returns only run-specific browser state for
@@ -59,9 +58,6 @@ func BuildBrowserRuntimeInstructions(cfg BrowserConfig) string {
 	}
 	if mode == "auto" {
 		sb.WriteString("- Before the first action and after an availability error, call `agent_browser` status. Follow its live `effective_mode`; never infer CDP reachability from this prompt or probe Chrome through shell.\n")
-	}
-	if cfg.IsIsolated {
-		sb.WriteString("- This agent has an isolated browser session; use the session name in the Browser Isolation section.\n")
 	}
 	sb.WriteString("- Before browser work, read the projected `agent-browser` skill when attached; otherwise read `builder-reference/references/browser-usage.md`. Those references contain the managed HTTP bridge, current skill-loading, tab ownership, cleanup, and safety contracts.\n")
 	return sb.String()
@@ -112,10 +108,6 @@ func BuildBrowserInstructions(cfg BrowserConfig) string {
 		browser.MaxBrowserSessionsGlobal,
 		closeRule,
 	)
-
-	if cfg.IsIsolated {
-		result += "\n- You have an **isolated** browser session. Close it when finished to free the slot for other agents."
-	}
 
 	return result
 }

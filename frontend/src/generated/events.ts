@@ -1371,6 +1371,7 @@ export interface ToolCallEndEvent {
   server_name?: string;
   session_id?: string;
   span_id?: string;
+  synthetic_settle?: boolean;
   timestamp?: string;
   tool_call_id?: string;
   tool_name?: string;

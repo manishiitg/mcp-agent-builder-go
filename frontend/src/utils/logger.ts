@@ -21,7 +21,6 @@ export type LogCategory =
   | 'EventStore'
   | 'SessionStore'
   | 'WorkflowLayout'
-  | 'ChatTabs'
   | 'WorkflowChatTabs'
   | 'Polling'
   | 'Reconnection'
