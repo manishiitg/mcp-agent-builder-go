@@ -1876,6 +1876,14 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 			}
 
 			// Retry loop: Execute with validation feedback, reusing the same learning history
+			// Fires an [AUTO-NOTIFICATION] into the builder chat on the FIRST
+			// pre-validation failure for this step this run — before retries
+			// are exhausted — so the builder can assess and intervene while
+			// the step is still retrying, rather than only learning about it
+			// once the whole step eventually fails outright. Deliberately
+			// once-per-step, not once-per-attempt: firing on every attempt
+			// would spam the chat for a step that recovers on retry 2.
+			preValidationNotifiedThisStep := false
 			for retryAttempt := 1; retryAttempt <= maxRetryAttempts; retryAttempt++ {
 				// Check for context cancellation before retry attempt
 				select {
@@ -2488,6 +2496,33 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 				// Build validation response based on pre-validation results
 				if !preValidationResults.OverallPass {
 					hcpo.GetLogger().Warn(fmt.Sprintf("Pre-validation failed for step %d - rejecting", stepIndex+1))
+					// One [AUTO-NOTIFICATION] per step per run, on the FIRST
+					// failure only (see preValidationNotifiedThisStep above the
+					// retry loop) -- not the same case as
+					// completeMessageSequenceItemNotification's deliberately
+					// silent per-ITEM prevalidation gate (controller_message_
+					// sequence.go): that one fires up to once per item and the
+					// step's own eventual completion notification already
+					// covers it. This is the step's overall gate, fires at
+					// most once total, and specifically exists so the builder
+					// hears about a real structural problem while the step is
+					// still burning retries -- not only after all of them are
+					// exhausted.
+					if !preValidationNotifiedThisStep && hcpo.workshopExecutionNotifier != nil {
+						preValidationNotifiedThisStep = true
+						notifyID := fmt.Sprintf("prevalidation-warn-%s-%d", step.GetID(), time.Now().UnixNano())
+						notifyName := fmt.Sprintf("Pre-validation check: %s", step.GetTitle())
+						hcpo.workshopExecutionNotifier.OnExecutionStart(WorkshopExecutionStart{
+							ID:                notifyID,
+							ParentExecutionID: currentWorkshopParentExecutionID(ctx),
+							Name:              notifyName,
+							Kind:              "prevalidation_warning",
+							Metadata:          map[string]string{"step_id": step.GetID(), "step_path": stepPath},
+						})
+						hcpo.workshopExecutionNotifier.OnExecutionComplete(notifyID, notifyName, formatWorkspaceResults(preValidationResults),
+							map[string]string{"step_id": step.GetID(), "step_path": stepPath},
+							fmt.Errorf("pre-validation failed on attempt %d/%d — will retry unless attempts are exhausted", retryAttempt, maxRetryAttempts))
+					}
 					validationResponse = &ValidationResponse{
 						IsSuccessCriteriaMet: false,
 						ExecutionStatus:      "FAILED",
