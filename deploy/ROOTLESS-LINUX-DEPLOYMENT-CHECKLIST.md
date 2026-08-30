@@ -196,6 +196,34 @@ machine's own absolute path and bulk-correct it to the real server path.
 This is silent until a native coding-agent session actually tries to
 resume — it will not surface at sync time.
 
+### 8. `npm`'s prefix must resolve correctly for the service identity
+
+`npm install -g --prefix <tools-prefix> @anthropic-ai/claude-code` (item 1)
+only fixes where the CLI is *installed*; it doesn't make `npm config get
+prefix` return that path afterward for the identity that actually runs
+`claude`. If no `.npmrc` sets `prefix=<tools-prefix>` under the service's
+real `HOME` (the systemd unit's `Environment=HOME=...`, not an interactive
+SSH login's own `$HOME` — these can differ), `npm` falls back to the system
+default (typically `/usr`), and Claude Code's own self-update tries to
+write there on every invocation and fails on permissions. That failure
+doesn't break the turn itself — it prints a persistent "✘ Auto-update
+failed: ... · Run claude doctor" footer at the bottom of the tmux pane
+below the real idle `❯` prompt. `multi-llm-provider-go`'s
+`hasReadyInputPrompt` completion scan (`claudecode_interactive_adapter.go`)
+hits that footer first and reports "not ready" indefinitely — confirmed
+live on Dominion 2026-08-30, wedging a turn for 3+ hours with the CLI
+itself having answered in 8 seconds. Fixed there as one instance of a
+general shape (unrecognized footer line masking the idle prompt); any
+*other* still-unrecognized Claude Code footer text can reproduce the same
+class of hang regardless of this specific fix.
+
+Verify with the real service identity, not a bare SSH login:
+
+```bash
+HOME=<service-home> npm config get prefix
+# expect: <tools-prefix>, not /usr or any other system default
+```
+
 ## Not yet automated
 
 Every item above is currently a manual, human-run checklist. The more
