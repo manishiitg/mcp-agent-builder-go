@@ -12,7 +12,14 @@ Use this as the read-only audit checklist for artifact drift after plan or confi
   call `query_step`.
 - The reviewer is strictly read-only. It must not edit files, mutate the plan/config,
   mark changelog entries, or mark Pulse module state.
-- Artifact drift is a technical-review focus, not a third Pulse module. Read only
+- This checklist is a technical-review evidence pack, not `plan_drift_review`
+  itself. A dedicated `plan_drift_review` Pulse module now owns the mechanical,
+  per-step drift checks below (report query compatibility, `validation_schema`
+  db/file rules, scripted-code queries, `db/README.md` contract, orphaned
+  tables) — see the deferral note on step 3. This checklist's own job is
+  everything plan_drift_review does not cover: schedule cron/timezone/queue
+  drift, eval/success-criteria coverage, downstream-step field consumption,
+  dead step/schedule references, and duplicate control stores. Read only
   matching typed state through `get_pulse_state(view="review")` with
   `module=technical_review`, using the managed SQLite-backed tools and structured finding lifecycle; do not query SQLite directly or inspect/create Pulse
   presentation artifacts.
@@ -51,16 +58,37 @@ Load `read_skill(skills=[{"name":"builder-reference","path":"references/assumpti
      something once a step is in scope.
 3. For each affected step, inspect only relevant current artifacts:
    - `planning/plan.json` and `planning/step_config.json`
+   - **Deferral to plan_drift_review**: before re-deriving any of the mechanical
+     checks below by hand, read the step's `agent_configs.drift_review` record
+     in `step_config.json`. When it is present and its `checks[]` cover
+     `report_query_compatibility`, `validation_schema_db_rules`,
+     `validation_schema_file_rules`, `scripted_code_db_queries`,
+     `db_readme_contract`, or `orphaned_tables`, treat that recorded
+     `status`/`evidence` as authoritative — it is Go-computed (dry-run against
+     the live schema, not a manual read) and strictly more rigorous than a
+     manual re-check. Only inspect one of these surfaces directly yourself
+     when the record is absent, stale relative to the current changelog
+     cursor, or its evidence looks insufficient for the entry under review.
    - the workflow's schedules in `workflow.json` — for each schedule, its cron,
      timezone, and the `messages` queue. The queue is what the scheduler
      actually sends, so it is a first-class contract with the plan, not
      configuration noise: read every message and resolve each to the plan step
      it drives.
-   - `learnings/<step-id>/main.py`, script metadata, per-step learning metadata, and relevant `learnings/_global/` guidance
+   - `learnings/<step-id>/main.py`, script metadata, per-step learning metadata, and relevant `learnings/_global/` guidance — plan_drift_review's
+     `scripted_code_db_queries` check only covers whether a scripted step's SQL
+     still resolves against the live schema; content staleness, stale locks,
+     and access-mode appropriateness stay this checklist's job (or the
+     judgment pass inside plan_drift_review's own reviewer turn — do not
+     duplicate a finding both places for the same step)
    - relevant `knowledgebase/notes/` content and KB access/contribution settings; treat `knowledgebase/context/` as read-only user-owned context
-   - `db/README.md`, named DB tables/assets/contracts, and their writers/consumers
-   - `db/reports/index.html`, its internal views, SQL, and data contracts; flag a remaining `reports/report_plan.json` as an incomplete version migration
-   - `evaluation/evaluation_plan.json`, `evaluation/step_config.json`, and matching goal/success-criteria coverage
+   - `db/README.md`, named DB tables/assets/contracts, and their writers/consumers — deferral above covers the DDL-vs-live-schema contract check;
+     this checklist still owns writer/consumer disagreement across steps
+   - `db/reports/index.html`, its internal views, SQL, and data contracts — deferral above covers whether each `window.report.query(...)` call still
+     resolves; this checklist still owns data-contract/semantic disagreement.
+     Flag a remaining `reports/report_plan.json` as an incomplete version migration
+   - `evaluation/evaluation_plan.json`, `evaluation/step_config.json`, and matching goal/success-criteria coverage — deferral above covers whether an
+     eval step's `PreValidation` SQL/JSONPath rules still resolve; coverage
+     gaps (an orphaned or missing eval) stay this checklist's job
    - one representative recent run for changed runtime behavior when evidence exists
    - for any changed status, strategy, feature flag, guard, routing rule, or
      other control value, trace the exact changed record to the current runtime

@@ -1,11 +1,11 @@
 [← Pulse platform index](../pulse_platform_issue_register.md)
 
-# PLAT-258 — Dedicated `plan_drift_review` Pulse module (design + phases 1-5 complete)
+# PLAT-258 — Dedicated `plan_drift_review` Pulse module (all 6 phases complete)
 
 | Coordination | Value |
 |---|---|
 | Assigned agent | Claude Code |
-| Ticket state | `design complete; phase 1 implemented; phase 2 complete (6 of 9 deterministic checks built; 1 needed no new code, 2 correctly found not-buildable-as-designed — see below); phase 3 implemented (record_plan_drift_review tool); phase 4 implemented (frontend); phase 5 implemented (module registration + reviewer-turn content, scheduling); phase 6 (technical_review cutover) not yet built` |
+| Ticket state | `implemented, all 6 phases complete` — phase 1 durable per-step record + clear-on-edit; phase 2, 6 of 9 deterministic checks built as plain Go functions (1 needed no new code, 2 correctly found not-buildable-as-designed — see below); phase 3 `record_plan_drift_review` tool; phase 4 frontend; phase 5 module registration + reviewer-turn content + scheduling; phase 6 technical_review cutover (see below) |
 | Last synchronized | `2026-08-30` |
 
 - **Type:** platform feature (multi-phase), not a single bug fix. Filed at
@@ -372,6 +372,69 @@ findings elsewhere in the package, unrelated to this change, left as found).
 `go test ./cmd/server/... ./pkg/orchestrator/agents/workflow/step_based_workflow/...`
 full packages green, 8 new tests total (7 phase 5 candidate tests + 1 routing
 test) plus the full pre-existing suite for both packages.
+
+## Phase 6 — implemented: technical_review cutover
+
+Scoped narrowly and deliberately, based on a dedicated investigation into
+exactly what in `technical_review`'s guidance chain is genuinely redundant
+with `plan_drift_review` versus a distinct concern that must not be touched —
+getting this wrong (removing something still load-bearing) was the single
+highest risk in this whole ticket.
+
+**What is genuinely redundant and was cut over:**
+`review-artifact-drift.md` (the checklist `technical_review` conditionally
+loads as an evidence pack, also the standalone `/review-artifact-drift`
+command) previously told an agent to manually re-derive DB/report/
+validation_schema/scripted-code drift by hand for every affected step — work
+`plan_drift_review` now does mechanically, via real Go dry-runs against the
+live schema, which is strictly more rigorous than a manual read. Added a
+deferral note in its checklist: before re-deriving `report_query_
+compatibility`, `validation_schema_db_rules`, `validation_schema_file_rules`,
+`scripted_code_db_queries`, `db_readme_contract`, or `orphaned_tables` by
+hand, read the step's `agent_configs.drift_review` record and treat it as
+authoritative when present and current; only fall back to a manual check
+when the record is absent, stale, or its evidence looks insufficient. Also
+fixed a line that PLAT-258 made factually false ("Artifact drift is a
+technical-review focus, not a third Pulse module" — there now is one).
+
+**What looked redundant but is not, and was deliberately left alone (per
+investigation):**
+- `validateDeterministicIntakeRouting` (forces `technical_review` due on an
+  unreconciled changelog entry, tracked via `artifact_review.done`) and
+  `validatePlanDriftRouting` (forces `plan_drift_review` due on a null
+  `drift_review` record) enforce two independent completion flags for two
+  independent processes — a plan edit's six-surface blast-radius
+  reconciliation vs. one step's per-check drift state. Both can legitimately
+  fire on the same edit. Neither Go function was touched.
+- `review-artifact-drift.md`'s non-overlapping coverage (schedule cron/
+  timezone/queue drift, eval/success-criteria coverage gaps, downstream-step
+  field consumption, dead step/schedule references, cross-step writer/
+  consumer semantic disagreement) is real, distinct work `plan_drift_review`
+  does not do — the file was trimmed at the overlap, not gutted or deleted,
+  and the standalone `/review-artifact-drift` command it also serves keeps
+  working unchanged.
+- `pulse-bug-review.md`'s "drift" mentions (`shadow_store_drift`, schema/
+  description drift found via actual execution-trace evidence) are a
+  different mechanism — real-run bug detection, not `plan_drift_review`'s
+  static/schema-level checks — and were left untouched.
+- `pulse-fixer-practices.md`, `workflow-tools.md`, `optimize-playbook.md` —
+  confirmed either generic process guidance or a different consumer
+  (Workshop-facing manual tool catalog, not the Pulse-automated turn), left
+  untouched.
+
+Also added a one-line disambiguation in `plan-change-impact.md` (which
+already used the informal term "Artifact Review module stage" for
+`technical_review`'s internal changelog-reconciliation stage, predating this
+ticket): clarified it is not the same thing as the new, separately-scheduled
+`plan_drift_review` Pulse module, since the two now share adjacent
+terminology.
+
+**Verification:** `go build`/`go test`/`gofmt` clean (no Go code changed in
+this phase — only guidance-template Markdown). Guidance rendering tests
+re-run explicitly (`TestArtifactDriftAuditsTheSchedule`,
+`TestStandalone*`, `TestMaterialize*`) — all pass; none asserted the exact
+text this phase removed or added, since they check for presence of specific
+unrelated substrings that remain in place.
 
 ## Verification
 
