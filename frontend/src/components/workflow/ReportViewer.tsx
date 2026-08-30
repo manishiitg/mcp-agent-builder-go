@@ -195,7 +195,18 @@ function ReportViewComponent({ workspacePath, onClose, focusTier }: ReportViewPr
             <ReportHumanInputPanel workspacePath={workspacePath} contentMode="pending" />
             {loading && <div className="flex min-h-64 items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Loading report…</div>}
             {error && <div className="m-3 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">Failed to load report: {error}</div>}
-            {!loading && !error && !report && <div className="m-3 flex flex-col items-center gap-3 rounded-xl border border-dashed border-border p-8 text-center"><BarChart3 className="h-8 w-8 text-muted-foreground" /><div><div className="font-semibold">Report upgrade required</div><p className="mt-1 text-sm text-muted-foreground">This workflow needs its single <code>db/reports/index.html</code> report document.</p></div><button type="button" onClick={refresh} className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm hover:bg-muted"><RefreshCw className="h-3.5 w-3.5" /> Refresh</button></div>}
+            {!loading && !error && !report && (
+              <div className="m-3 flex flex-col items-center gap-3 rounded-xl border border-dashed border-border p-8 text-center">
+                <BarChart3 className="h-8 w-8 text-muted-foreground" />
+                <div>
+                  <div className="font-semibold">Reporting isn’t set up yet</div>
+                  <p className="mt-1 text-sm text-muted-foreground">Run the workflow or ask the Builder to set up its report. It will appear here when it is ready.</p>
+                </div>
+                <button type="button" onClick={refresh} className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm hover:bg-muted">
+                  <RefreshCw className="h-3.5 w-3.5" /> Check again
+                </button>
+              </div>
+            )}
             {!loading && report && !report.html && <div className="m-3 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">Could not read {report.label}.</div>}
             {report?.html && <HtmlReportFrame html={report.html} title={report.label} autoHeight refreshToken={refreshNonce} className="block w-full border-0" />}
           </div>

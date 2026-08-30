@@ -13,6 +13,8 @@ interface ToolSelectionSectionProps {
   onToolChange: (tools: string[]) => void;
   stepId?: string; // Optional step ID for debugging
   agentMode: string; // Add agentMode prop
+  /** Lets the server list use an embedded side panel's remaining vertical space. */
+  fillAvailableHeight?: boolean;
 }
 
 export const ToolSelectionSection: React.FC<ToolSelectionSectionProps> = ({
@@ -22,6 +24,7 @@ export const ToolSelectionSection: React.FC<ToolSelectionSectionProps> = ({
   onServerChange,
   onToolChange,
   stepId,
+  fillAvailableHeight = false,
 }) => {
   // Generate instance ID from stepId or use a default
   const instanceId = useMemo(() => stepId || `preset-${Date.now()}`, [stepId]);
@@ -286,17 +289,17 @@ export const ToolSelectionSection: React.FC<ToolSelectionSectionProps> = ({
   }, [storeActions, selectedTools]);
 
   return (
-    <div className="space-y-3">
-      <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
+    <div className={fillAvailableHeight ? 'flex h-full min-h-0 flex-col gap-3' : 'space-y-3'}>
+      <label className="block shrink-0 text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
         MCP Server Selection
       </label>
 
-      <div className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+      <div className="shrink-0 text-xs text-gray-500 dark:text-gray-400 mb-2">
         Select servers and choose whether to use all tools or select specific tools for each server.
       </div>
 
       {/* Server and Tool List */}
-      <div className="border border-gray-200 dark:border-gray-700 rounded-md max-h-96 overflow-y-auto">
+      <div className={`border border-gray-200 dark:border-gray-700 rounded-md overflow-y-auto ${fillAvailableHeight ? 'min-h-0 flex-1' : 'max-h-96'}`}>
         {availableServers
           .filter(serverName => serverName !== 'mcp')
           .sort((a, b) => {

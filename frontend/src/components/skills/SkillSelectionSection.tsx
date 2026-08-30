@@ -7,11 +7,14 @@ import type { Skill } from '../../types/skills';
 interface SkillSelectionSectionProps {
   selectedSkills: string[]; // Array of skill folder names
   onSkillChange: (skills: string[]) => void;
+  /** Lets the list use an embedded side panel's remaining vertical space. */
+  fillAvailableHeight?: boolean;
 }
 
 export const SkillSelectionSection: React.FC<SkillSelectionSectionProps> = ({
   selectedSkills,
   onSkillChange,
+  fillAvailableHeight = false,
 }) => {
   const [skills, setSkills] = useState<Skill[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -73,8 +76,8 @@ export const SkillSelectionSection: React.FC<SkillSelectionSectionProps> = ({
   const allSelected = skills.length > 0 && skills.every(s => selectedSkills.includes(s.folder_name));
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between">
+    <div className={fillAvailableHeight ? 'flex h-full min-h-0 flex-col gap-3' : 'space-y-3'}>
+      <div className="flex shrink-0 items-center justify-between">
         <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 flex items-center gap-2">
           <Sparkles className="w-4 h-4 text-purple-500" />
           Skills Selection
@@ -90,12 +93,12 @@ export const SkillSelectionSection: React.FC<SkillSelectionSectionProps> = ({
         </button>
       </div>
 
-      <div className="text-xs text-gray-500 dark:text-gray-400">
+      <div className="shrink-0 text-xs text-gray-500 dark:text-gray-400">
         Select skills to enable for this preset. Skills provide reusable instructions for the agent.
       </div>
 
       {/* Skills List */}
-      <div className="border border-gray-200 dark:border-gray-700 rounded-md max-h-64 overflow-y-auto">
+      <div className={`border border-gray-200 dark:border-gray-700 rounded-md overflow-y-auto ${fillAvailableHeight ? 'min-h-0 flex-1' : 'max-h-64'}`}>
         {isLoading ? (
           <div className="flex items-center justify-center gap-2 text-sm text-gray-500 dark:text-gray-400 py-8">
             <Loader2 className="w-4 h-4 animate-spin" />
@@ -182,7 +185,7 @@ export const SkillSelectionSection: React.FC<SkillSelectionSectionProps> = ({
 
       {/* Selection Summary */}
       {selectedSkills.length > 0 && (
-        <div className="text-xs text-gray-500 dark:text-gray-400">
+        <div className="shrink-0 text-xs text-gray-500 dark:text-gray-400">
           Selected: {selectedSkills.length} skill{selectedSkills.length !== 1 ? 's' : ''}
         </div>
       )}

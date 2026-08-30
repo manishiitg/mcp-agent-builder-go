@@ -54,6 +54,10 @@ import ExecutionLogsPopup from '../ExecutionLogsPopup'
 import LearningsPopup from '../LearningsPopup'
 import KBPopup from '../KBPopup'
 import DatabasePopup from '../DatabasePopup'
+import { PulseEvalSummary } from '../PulseEvalSummary'
+import WorkflowScheduleRunsPanel from '../../scheduler/WorkflowScheduleRunsPanel'
+import WorkflowCapabilitiesPanel from '../WorkflowCapabilitiesPanel'
+import WorkflowFolderAccessPopup from '../WorkflowFolderAccessPopup'
 
 // Duration to show highlights before clearing (in ms)
 const HIGHLIGHT_DURATION = 4000
@@ -205,8 +209,8 @@ const WorkflowReportCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasPr
   const canvasViewMode = useWorkflowStore(state => state.canvasViewMode)
   const paneMode = viewMode || canvasViewMode
   // In Mobile the report sits in a narrow 480px column; when chat is focused we
-  // keep the report mobile-framed so it fits. In Laptop the chat is hidden, so
-  // there's no chat-focus case to cap for.
+  // keep the report mobile-framed so it fits. Laptop keeps its desktop report
+  // beside a separate compact chat column, so it needs no report-width cap.
   const reportPreviewDevice = usePreviewDevice(workspacePath)
   const reportFocusTier: 'mobile' | undefined =
     useWorkflowStore(state => state.focusedPane === 'chat' && reportPreviewDevice === 'mobile')
@@ -406,6 +410,14 @@ const INSPECTOR_WORKSPACE_VIEWS = new Set([
   'learnings',
   'knowledgebase',
   'database',
+  'evaluation',
+  'schedules',
+  'skills',
+  'mcp',
+  'secrets',
+  'folders',
+  'browser',
+  'llm',
 ])
 
 const WorkflowInspectorCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>(({
@@ -490,6 +502,20 @@ const WorkflowInspectorCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanva
     />
   ) : workflowWorkspaceView === 'knowledgebase' ? (
     <KBPopup isOpen embedded onClose={closeInspector} workspacePath={workspacePath} />
+  ) : workflowWorkspaceView === 'evaluation' ? (
+    <div className="h-full overflow-y-auto">
+      <PulseEvalSummary workspacePath={workspacePath || ''} className="min-h-full rounded-none border-0" />
+    </div>
+  ) : workflowWorkspaceView === 'schedules' ? (
+    <WorkflowScheduleRunsPanel
+      embedded
+      workflowScope={{ presetQueryId, workspacePath }}
+      onClose={closeInspector}
+    />
+  ) : workflowWorkspaceView === 'skills' || workflowWorkspaceView === 'mcp' || workflowWorkspaceView === 'secrets' || workflowWorkspaceView === 'browser' || workflowWorkspaceView === 'llm' ? (
+    <WorkflowCapabilitiesPanel section={workflowWorkspaceView} workspacePath={workspacePath} onClose={closeInspector} />
+  ) : workflowWorkspaceView === 'folders' ? (
+    <WorkflowFolderAccessPopup isOpen embedded workspacePath={workspacePath} onClose={closeInspector} />
   ) : (
     <DatabasePopup isOpen embedded onClose={closeInspector} workspacePath={workspacePath} />
   )
@@ -1475,8 +1501,8 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
   const selectedRunFolder = useWorkflowStore(state => state.selectedRunFolder)
   // Device-width preview also constrains the plan/flow pane (centered shell).
   const previewDevice = usePreviewDevice(workspacePath)
-  // In Mobile, a chat-focused report stays mobile-framed to fit its narrow column;
-  // in Laptop the chat is hidden so there's no chat-focus case to cap for.
+  // In Mobile, a chat-focused report stays mobile-framed to fit its narrow column.
+  // Laptop keeps the desktop report beside its own compact chat column.
   const reportFocusTier: 'mobile' | undefined =
     useWorkflowStore(state => state.focusedPane === 'chat' && previewDevice === 'mobile')
       ? 'mobile'
