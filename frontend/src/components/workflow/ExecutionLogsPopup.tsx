@@ -1058,7 +1058,32 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
     })
   }
 
-  const toggleFileExpansion = async (path: string) => {
+  // Shared by the manual "View Message & Conversation" toggle and by the
+  // auto-expand-on-search effect below -- always ADDS to expandedFiles and
+  // loads content if missing, never toggles off. A toggle function called
+  // automatically (rather than from a click) risks double-firing under
+  // React's dev-mode double-invoked effects and collapsing what it just
+  // expanded; this variant has no "off" branch so that risk doesn't exist.
+  const ensureFileExpanded = (path: string) => {
+    setExpandedFiles(prev => (prev.has(path) ? prev : new Set(prev).add(path)))
+    if (fileContents[path] || loadingFiles.has(path)) return
+    setLoadingFiles(prev => new Set(prev).add(path))
+    agentApi.getLogFile(path).then(content => {
+      const contentStr = formatLogFileContent(content)
+      setFileContents(prev => ({ ...prev, [path]: contentStr }))
+    }).catch(e => {
+      console.error(e)
+      setFileContents(prev => ({ ...prev, [path]: 'Error: Failed to load content' }))
+    }).finally(() => {
+      setLoadingFiles(prev => {
+        const next = new Set(prev)
+        next.delete(path)
+        return next
+      })
+    })
+  }
+
+  const toggleFileExpansion = (path: string) => {
     if (expandedFiles.has(path)) {
       setExpandedFiles(prev => {
         const next = new Set(prev)
@@ -1067,27 +1092,38 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
       })
       return
     }
+    ensureFileExpanded(path)
+  }
 
-    setExpandedFiles(prev => new Set(prev).add(path))
-    
-    if (!fileContents[path]) {
-      setLoadingFiles(prev => new Set(prev).add(path))
-      try {
-        const content = await agentApi.getLogFile(path)
-        const contentStr = formatLogFileContent(content)
-        setFileContents(prev => ({ ...prev, [path]: contentStr }))
-      } catch (e) {
-        console.error(e)
-        setFileContents(prev => ({ ...prev, [path]: 'Error: Failed to load content' }))
-      } finally {
-        setLoadingFiles(prev => {
-          const next = new Set(prev)
-          next.delete(path)
-          return next
-        })
+  // A search hit can be inside a matching execution's own conversation file
+  // (a tool call's arguments/result), which stays unfetched until "View
+  // Message & Conversation" is clicked -- searching would otherwise still
+  // require a manual click per result just to see the hit. Auto-load+expand
+  // the conversation for every LLM-attempt execution matching an active
+  // search, scoped to steps the user already has open (renderStepContent
+  // only runs for expanded steps), so this never fetches for the whole
+  // workflow at once.
+  useEffect(() => {
+    if (!logs) return
+    for (const stepId of expandedSteps) {
+      const query = stepSearchQueries[stepId]?.trim()
+      if (!query) continue
+      const stepLogs = logs.steps[stepId]
+      for (const exec of stepLogs?.executions || []) {
+        if (exec.fast_path === true) continue
+        const path = exec.conversation_path
+        if (!path || expandedFiles.has(path)) continue
+        if (JSON.stringify(exec).toLowerCase().includes(query.toLowerCase())) {
+          ensureFileExpanded(path)
+        }
       }
     }
-  }
+    // ensureFileExpanded/expandedFiles/fileContents/loadingFiles intentionally
+    // excluded: they change as a RESULT of this effect and re-running on their
+    // own change would only ever re-check work already done, not cause a loop,
+    // but listing them would re-run this on every fetch completion for no gain.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [logs, expandedSteps, stepSearchQueries])
 
   // Recursive render function for step content
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1190,7 +1226,10 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                 {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
                 {stepLogs.executions.filter(matchesSearch).map((exec: any, idx: number) => {
                   const execId = `${stepId}-exec-${exec.attempt}-${exec.iteration}`
-                  const isExecExpanded = expandedExecutions.has(execId)
+                  // executions is already filtered to searchQuery matches above,
+                  // so an active search implies every rendered row is a hit --
+                  // force it open instead of making the user click through each one.
+                  const isExecExpanded = expandedExecutions.has(execId) || !!searchQuery
                   const isFastPath = exec.fast_path === true
                   const execMetrics = getExecutionMetrics(exec)
                   // Fast-path entries carry ScriptedFastPathLog shape: success/exit_code/output/error.
