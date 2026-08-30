@@ -29,20 +29,23 @@ type LearningFileInfo struct {
 	ModifiedAt time.Time `json:"modified_at"`
 }
 
-// validateRoutingStepTyped validates that a routing step has all required fields
+// validateRoutingStepTyped validates that a routing/branch step has all
+// required fields. Operates on the shared routeSwitchStep interface (see
+// planning_agent.go, PLAT-259) rather than a concrete *RoutingPlanStep, so it
+// applies identically to *BranchPlanStep — no-op for every other step type.
 func validateRoutingStepTyped(step PlanStepInterface, stepIndex int) error {
-	if routingStep, ok := step.(*RoutingPlanStep); ok {
-		if routingStep.ID == "" {
+	if routingStep, ok := step.(routeSwitchStep); ok {
+		if routingStep.GetID() == "" {
 			return fmt.Errorf("routing step at index %d (title: %q) is missing required ID field", stepIndex, step.GetTitle())
 		}
-		if routingStep.RoutingQuestion == "" {
+		if routingStep.GetRoutingQuestionText() == "" {
 			return fmt.Errorf("routing step at index %d (title: %q) is missing required routing_question field", stepIndex, step.GetTitle())
 		}
-		if len(routingStep.Routes) < 2 {
-			return fmt.Errorf("routing step at index %d (title: %q) must have at least 2 routes, got %d", stepIndex, step.GetTitle(), len(routingStep.Routes))
+		if len(routingStep.GetRoutes()) < 2 {
+			return fmt.Errorf("routing step at index %d (title: %q) must have at least 2 routes, got %d", stepIndex, step.GetTitle(), len(routingStep.GetRoutes()))
 		}
 		routeIDs := make(map[string]bool)
-		for _, route := range routingStep.Routes {
+		for _, route := range routingStep.GetRoutes() {
 			if route.RouteID == "" {
 				return fmt.Errorf("routing step at index %d (title: %q) has a route with empty route_id", stepIndex, step.GetTitle())
 			}
@@ -54,8 +57,8 @@ func validateRoutingStepTyped(step PlanStepInterface, stepIndex int) error {
 			}
 			routeIDs[route.RouteID] = true
 		}
-		if routingStep.DefaultRouteID != "" && !routeIDs[routingStep.DefaultRouteID] {
-			return fmt.Errorf("routing step at index %d (title: %q) has default_route_id %q that doesn't match any route_id", stepIndex, step.GetTitle(), routingStep.DefaultRouteID)
+		if routingStep.GetDefaultRouteID() != "" && !routeIDs[routingStep.GetDefaultRouteID()] {
+			return fmt.Errorf("routing step at index %d (title: %q) has default_route_id %q that doesn't match any route_id", stepIndex, step.GetTitle(), routingStep.GetDefaultRouteID())
 		}
 	}
 	return nil
@@ -194,7 +197,7 @@ func validateLoadedPlanStepWithOptions(typedStep PlanStepInterface, stepIndex in
 	case *MessageSequencePlanStep:
 		return validateMessageSequenceStepFieldsTypedWithOptions(step, allowLegacyMessageSequenceCode)
 
-	case *RoutingPlanStep:
+	case *RoutingPlanStep, *BranchPlanStep:
 		if err := validateRoutingStepTyped(step, stepIndex); err != nil {
 			return err
 		}
@@ -394,6 +397,10 @@ func validateNextStepIDReferences(plan *PlanningResponse) error {
 				for _, route := range s.Routes {
 					ref(s.GetID(), fmt.Sprintf("route %q.next_step_id", route.RouteID), route.NextStepID)
 				}
+			case *BranchPlanStep:
+				for _, route := range s.Routes {
+					ref(s.GetID(), fmt.Sprintf("route %q.next_step_id", route.RouteID), route.NextStepID)
+				}
 			case *TodoTaskPlanStep:
 				ref(s.GetID(), "next_step_id", s.NextStepID)
 				for _, route := range s.PredefinedRoutes {
@@ -560,6 +567,15 @@ func populateRuntimeFields(typedStep PlanStepInterface, stepConfigs []StepConfig
 		}
 		return nil
 
+	case *BranchPlanStep:
+		// Branch step: same deterministic switch mechanics as routing, just the
+		// small in-flow decision (PLAT-259). Populate runtime field directly.
+		step.AgentConfigs = agentConfigs
+		if validationSchemaOverride != nil {
+			step.ValidationSchema = validationSchemaOverride
+		}
+		return nil
+
 	case *MessageSequencePlanStep:
 		step.AgentConfigs = agentConfigs
 		if validationSchemaOverride != nil {
@@ -606,6 +622,9 @@ func populateStepRuntimeFields(typedStep PlanStepInterface, stepConfigs []StepCo
 
 	case *RoutingPlanStep:
 		// Routing step is flattened - no nested steps to populate
+
+	case *BranchPlanStep:
+		// Branch step is flattened - no nested steps to populate (same as routing)
 	}
 
 	// Return the step with populated runtime fields

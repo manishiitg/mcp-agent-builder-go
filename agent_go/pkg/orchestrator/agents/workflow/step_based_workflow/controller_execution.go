@@ -2991,6 +2991,28 @@ func isRoutingStep(step PlanStepInterface) bool {
 	}
 }
 
+// nextStepIDForSelectedRoute resolves where execution continues after a
+// routing/branch step's route has been selected -- the ID it returns becomes
+// the next step in the run. Empty for anything that isn't a routeSwitchStep,
+// or a route_id that doesn't match any of the step's routes. Extracted as a
+// standalone function (was inline in the execution loop) specifically so it
+// has direct test coverage for both RoutingPlanStep and BranchPlanStep,
+// after an independent review found the inline version only ever
+// type-asserted *RoutingPlanStep and silently left a branch step's target
+// empty. See PLAT-259.
+func nextStepIDForSelectedRoute(step PlanStepInterface, selectedRouteID string) string {
+	routingStep, ok := step.(routeSwitchStep)
+	if !ok {
+		return ""
+	}
+	for _, route := range routingStep.GetRoutes() {
+		if route.RouteID == selectedRouteID {
+			return route.NextStepID
+		}
+	}
+	return ""
+}
+
 func isMessageSequenceStep(step PlanStepInterface) bool {
 	_, ok := step.(*MessageSequencePlanStep)
 	return ok
@@ -3110,6 +3132,8 @@ func getAgentConfigs(step PlanStepInterface) *AgentConfigs {
 	case *EvaluationStep:
 		return s.AgentConfigs
 	case *RoutingPlanStep:
+		return s.AgentConfigs
+	case *BranchPlanStep:
 		return s.AgentConfigs
 	case *MessageSequencePlanStep:
 		return s.AgentConfigs
@@ -3348,15 +3372,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) runExecutionPhase(
 			}
 
 			// Find next step based on selected route
-			var nextStepID string
-			if routingStep, ok := step.(*RoutingPlanStep); ok {
-				for _, route := range routingStep.Routes {
-					if route.RouteID == selectedRouteID {
-						nextStepID = route.NextStepID
-						break
-					}
-				}
-			}
+			nextStepID := nextStepIDForSelectedRoute(step, selectedRouteID)
 
 			// Track routing evaluations to prevent infinite loops
 			if progress.RoutingEvaluationCounts == nil {

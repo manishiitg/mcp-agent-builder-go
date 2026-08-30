@@ -134,3 +134,56 @@ func TestCollectPlanDriftCandidatesTrimsWorkspacePath(t *testing.T) {
 		t.Fatalf("CollectPlanDriftCandidates = %#v, want nil for a blank workspace path", got)
 	}
 }
+
+// StepType lets the reviewer turn tell a routing step (the "route"/major-fork
+// concept, PLAT-259) apart from every other candidate without an extra
+// lookup, so it can apply the two route-only judgment checks
+// (route_structural_isolation, route_eval_pairing) precisely.
+func TestCollectPlanDriftCandidatesPopulatesStepTypeFromPlanJSON(t *testing.T) {
+	const workspacePath = "Workflow/drift-candidates-types"
+	stepConfig := `{"steps":[{"id":"router-a"},{"id":"regular-b"}]}`
+	planDriftCandidateWorkspace(t, workspacePath, stepConfig)
+
+	planJSON := `{"steps":[
+  {"type":"routing","id":"router-a","title":"Router","routing_question":"Which path?","routes":[
+    {"route_id":"r1","route_name":"One","condition":"c","next_step_id":"end"},
+    {"route_id":"r2","route_name":"Two","condition":"c","next_step_id":"end"}
+  ]},
+  {"type":"regular","id":"regular-b","title":"Regular","description":"d","validation_schema":{}}
+]}`
+	planPath := filepath.Join(os.Getenv("WORKSPACE_DOCS_PATH"), workspacePath, PlanningFolderName, "plan.json")
+	if err := os.WriteFile(planPath, []byte(planJSON), 0o644); err != nil {
+		t.Fatalf("write plan.json: %v", err)
+	}
+
+	got := CollectPlanDriftCandidates(context.Background(), workspacePath)
+	byID := map[string]PlanDriftCandidate{}
+	for _, c := range got {
+		byID[c.StepID] = c
+	}
+	if len(byID) != 2 {
+		t.Fatalf("expected 2 candidates, got %d: %#v", len(byID), got)
+	}
+	if byID["router-a"].StepType != "routing" {
+		t.Fatalf("router-a StepType = %q, want %q", byID["router-a"].StepType, "routing")
+	}
+	if byID["regular-b"].StepType != "regular" {
+		t.Fatalf("regular-b StepType = %q, want %q", byID["regular-b"].StepType, "regular")
+	}
+}
+
+// A missing/unparseable plan.json must not fail the whole scan -- StepType
+// just stays empty, matching this file's existing tolerance for a missing
+// step_config.json elsewhere.
+func TestCollectPlanDriftCandidatesToleratesMissingPlanJSON(t *testing.T) {
+	stepConfig := `{"steps":[{"id":"step-b"}]}`
+	planDriftCandidateWorkspace(t, "Workflow/drift-candidates-no-plan", stepConfig)
+
+	got := CollectPlanDriftCandidates(context.Background(), "Workflow/drift-candidates-no-plan")
+	if len(got) != 1 {
+		t.Fatalf("expected 1 candidate, got %d", len(got))
+	}
+	if got[0].StepType != "" {
+		t.Fatalf("StepType = %q, want empty when plan.json does not exist", got[0].StepType)
+	}
+}

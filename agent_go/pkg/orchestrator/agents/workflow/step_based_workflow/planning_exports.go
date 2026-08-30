@@ -389,8 +389,8 @@ func workflowRunValidationVariableValues(ctx context.Context, session *WorkshopC
 
 func routeScopedValidationSteps(steps []PlanStep, variableValues map[string]string, humanInputs map[string]string, routeSelections map[string]string) []PlanStep {
 	for i, step := range steps {
-		routingStep, ok := step.(*RoutingPlanStep)
-		if !ok || len(routingStep.Routes) == 0 {
+		routingStep, ok := step.(routeSwitchStep)
+		if !ok || len(routingStep.GetRoutes()) == 0 {
 			continue
 		}
 		route := inferValidationRoute(routingStep, variableValues, humanInputs, routeSelections)
@@ -413,15 +413,16 @@ func routeScopedValidationSteps(steps []PlanStep, variableValues map[string]stri
 	return steps
 }
 
-func inferValidationRoute(step *RoutingPlanStep, variableValues map[string]string, humanInputs map[string]string, routeSelections map[string]string) *RoutingRoute {
+func inferValidationRoute(step routeSwitchStep, variableValues map[string]string, humanInputs map[string]string, routeSelections map[string]string) *RoutingRoute {
 	if step == nil {
 		return nil
 	}
+	routes := step.GetRoutes()
 	if routeSelections != nil {
 		if raw := strings.TrimSpace(routeSelections[step.GetID()]); raw != "" {
-			if routeID, err := resolveRouteSelectionValue(step.Routes, raw); err == nil {
-				for i := range step.Routes {
-					route := &step.Routes[i]
+			if routeID, err := resolveRouteSelectionValue(routes, raw); err == nil {
+				for i := range routes {
+					route := &routes[i]
 					if route.RouteID == routeID {
 						return route
 					}
@@ -432,26 +433,26 @@ func inferValidationRoute(step *RoutingPlanStep, variableValues map[string]strin
 	if humanInputs != nil {
 		if raw := strings.TrimSpace(humanInputs[step.GetID()]); raw != "" {
 			normalized := strings.ToLower(raw)
-			for i := range step.Routes {
-				route := &step.Routes[i]
+			for i := range routes {
+				route := &routes[i]
 				if strings.ToLower(route.RouteID) == normalized || strings.ToLower(route.RouteName) == normalized {
 					return route
 				}
 			}
 		}
 	}
-	if defaultRouteID := strings.TrimSpace(step.DefaultRouteID); defaultRouteID != "" {
-		if routeID, err := resolveRouteSelectionValue(step.Routes, defaultRouteID); err == nil {
-			for i := range step.Routes {
-				route := &step.Routes[i]
+	if defaultRouteID := strings.TrimSpace(step.GetDefaultRouteID()); defaultRouteID != "" {
+		if routeID, err := resolveRouteSelectionValue(routes, defaultRouteID); err == nil {
+			for i := range routes {
+				route := &routes[i]
 				if route.RouteID == routeID {
 					return route
 				}
 			}
 		}
 	}
-	for i := range step.Routes {
-		route := &step.Routes[i]
+	for i := range routes {
+		route := &routes[i]
 		condition := strings.ToLower(route.Condition)
 		for name, value := range variableValues {
 			if value == "" {
@@ -479,12 +480,12 @@ func planStepIndexByID(steps []PlanStep, stepID string) int {
 
 func routeSegmentEndIndex(steps []PlanStep, start int) int {
 	for i := start; i < len(steps); i++ {
-		routingStep, ok := steps[i].(*RoutingPlanStep)
-		if !ok || len(routingStep.Routes) == 0 {
+		routingStep, ok := steps[i].(routeSwitchStep)
+		if !ok || len(routingStep.GetRoutes()) == 0 {
 			continue
 		}
 		allEnd := true
-		for _, route := range routingStep.Routes {
+		for _, route := range routingStep.GetRoutes() {
 			if !strings.EqualFold(strings.TrimSpace(route.NextStepID), "end") {
 				allEnd = false
 				break

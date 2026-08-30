@@ -978,6 +978,9 @@ type PartialPlanStep struct {
 	Routes          []RoutingRoute `json:"routes,omitempty"`            // Optional: Updated routes
 	DefaultRouteID  string         `json:"default_route_id,omitempty"`  // Optional: Updated default route ID
 	RouteSourceFile string         `json:"route_source_file,omitempty"` // Optional: Updated deterministic route source file
+	// Branch step fields (PLAT-259: same deterministic-switch shape as
+	// routing, just its own field name for the human-readable prompt)
+	BranchQuestion string `json:"branch_question,omitempty"` // Optional: Updated branch question
 	// Human input step fields
 	Question         string            `json:"question,omitempty"`            // Optional: Updated question
 	VariableName     string            `json:"variable_name,omitempty"`       // Optional: Updated variable name
@@ -2793,6 +2796,8 @@ func updateValidationSchemaOnStep(step PlanStepInterface, schema *ValidationSche
 		s.ValidationSchema = schema
 	case *RoutingPlanStep:
 		s.ValidationSchema = schema
+	case *BranchPlanStep:
+		s.ValidationSchema = schema
 	case *MessageSequencePlanStep:
 		s.ValidationSchema = schema
 	}
@@ -3133,6 +3138,39 @@ func mergePartialStepUpdate(existingStep PlanStepInterface, partialUpdate Partia
 		}
 		if partialUpdate.RoutingQuestion != "" {
 			updated.RoutingQuestion = partialUpdate.RoutingQuestion
+		}
+		if len(partialUpdate.Routes) > 0 {
+			updated.Routes = partialUpdate.Routes
+		}
+		if partialUpdate.DefaultRouteID != "" {
+			updated.DefaultRouteID = partialUpdate.DefaultRouteID
+		}
+		if partialUpdate.RouteSourceFile != "" {
+			updated.RouteSourceFile = partialUpdate.RouteSourceFile
+		}
+		return &updated
+
+	case *BranchPlanStep:
+		updated := *step
+		if partialUpdate.Title != "" {
+			updated.Title = partialUpdate.Title
+		}
+		if partialUpdate.ClearDescription {
+			updated.Description = ""
+		} else if partialUpdate.Description != "" {
+			updated.Description = partialUpdate.Description
+		}
+		if partialUpdate.ContextDependencies != nil {
+			updated.ContextDependencies = partialUpdate.ContextDependencies
+		}
+		if partialUpdate.ContextOutput != "" {
+			updated.ContextOutput = FlexibleContextOutput(partialUpdate.ContextOutput)
+		}
+		if partialUpdate.ValidationSchema != nil {
+			updated.ValidationSchema = partialUpdate.ValidationSchema
+		}
+		if partialUpdate.BranchQuestion != "" {
+			updated.BranchQuestion = partialUpdate.BranchQuestion
 		}
 		if len(partialUpdate.Routes) > 0 {
 			updated.Routes = partialUpdate.Routes
@@ -3561,11 +3599,24 @@ func updateSingleStep(plan *PlanningResponse, partialUpdate PartialPlanStep, fie
 			NewValue: partialUpdate.RoutingQuestion,
 		})
 	}
+	if partialUpdate.BranchQuestion != "" {
+		changedFields = append(changedFields, "branch_question")
+		oldQuestion := ""
+		if branchStep, ok := existingStep.(*BranchPlanStep); ok {
+			oldQuestion = branchStep.BranchQuestion
+		}
+		*fieldChanges = append(*fieldChanges, PlanFieldChange{
+			StepID:   partialUpdate.ExistingStepID,
+			Field:    "branch_question",
+			OldValue: oldQuestion,
+			NewValue: partialUpdate.BranchQuestion,
+		})
+	}
 	if partialUpdate.Routes != nil {
 		changedFields = append(changedFields, "routes")
 		oldRoutesJSON := "[]"
-		if routingStep, ok := existingStep.(*RoutingPlanStep); ok {
-			oldBytes, _ := json.Marshal(routingStep.Routes)
+		if routingStep, ok := existingStep.(routeSwitchStep); ok {
+			oldBytes, _ := json.Marshal(routingStep.GetRoutes())
 			oldRoutesJSON = string(oldBytes)
 		}
 		newBytes, _ := json.Marshal(partialUpdate.Routes)
@@ -3579,8 +3630,8 @@ func updateSingleStep(plan *PlanningResponse, partialUpdate PartialPlanStep, fie
 	if partialUpdate.DefaultRouteID != "" {
 		changedFields = append(changedFields, "default_route_id")
 		oldDefaultRouteID := ""
-		if routingStep, ok := existingStep.(*RoutingPlanStep); ok {
-			oldDefaultRouteID = routingStep.DefaultRouteID
+		if routingStep, ok := existingStep.(routeSwitchStep); ok {
+			oldDefaultRouteID = routingStep.GetDefaultRouteID()
 		}
 		*fieldChanges = append(*fieldChanges, PlanFieldChange{
 			StepID:   partialUpdate.ExistingStepID,
@@ -3592,8 +3643,8 @@ func updateSingleStep(plan *PlanningResponse, partialUpdate PartialPlanStep, fie
 	if partialUpdate.RouteSourceFile != "" {
 		changedFields = append(changedFields, "route_source_file")
 		oldRouteSourceFile := ""
-		if routingStep, ok := existingStep.(*RoutingPlanStep); ok {
-			oldRouteSourceFile = routingStep.RouteSourceFile
+		if routingStep, ok := existingStep.(routeSwitchStep); ok {
+			oldRouteSourceFile = routingStep.GetRouteSourceFile()
 		}
 		*fieldChanges = append(*fieldChanges, PlanFieldChange{
 			StepID:   partialUpdate.ExistingStepID,
@@ -3676,6 +3727,7 @@ func planStepUpdateInvalidatesDescriptionReview(fieldChanges []PlanFieldChange) 
 			field == "next_step_id" ||
 			field == "validation_schema" ||
 			field == "routing_question" ||
+			field == "branch_question" ||
 			field == "routes" ||
 			field == "default_route_id" ||
 			field == "route_source_file" ||
@@ -5119,6 +5171,11 @@ func setStepIdentity(step PlanStepInterface, id, title string) error {
 			s.Title = title
 		}
 	case *RoutingPlanStep:
+		s.ID = id
+		if strings.TrimSpace(s.Title) == "" {
+			s.Title = title
+		}
+	case *BranchPlanStep:
 		s.ID = id
 		if strings.TrimSpace(s.Title) == "" {
 			s.Title = title

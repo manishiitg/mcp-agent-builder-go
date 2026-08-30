@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | Claude Code |
-| Ticket state | `phase A reopened after independent review` — the design is sound, but canonical plan validation rejects `BranchPlanStep` and several runtime/config/navigation switches still omit it; reporting and guidance follow-ups remain unbuilt |
+| Ticket state | `phase A corrective audit complete` — every `*RoutingPlanStep`-only switch the independent review named (plus one it found itself, `setStepIdentity`'s nested sub-agent identity normalization) now has a matching `*BranchPlanStep` case; end-to-end regression test added and passing (see Corrective audit below); phase B (route best-practices in plan_drift_review) already implemented; frontend per-route reporting tabs not yet built |
 | Last synchronized | `2026-08-30` |
 
 - **Type:** platform feature (design only, no code changed). Filed at the
@@ -153,30 +153,49 @@ visually distinguishable in Execution Logs (the one surface where telling
 them apart actually matters for this phase — reporting them into separate
 top-level tabs is still future work, see below).
 
+## Phase B — implemented: route best-practices in `plan_drift_review`
+
+Asked directly whether the two route checks should be a deterministic Go
+graph-traversal or a Group 3 judgment check (the reviewer LLM reasons about
+it); the user chose **judgment check**, matching their original design
+preference ("not enforceable in golang code") — no new Go algorithm.
+
+- `PlanDriftCandidate` (`plan_drift_candidates.go`) gained a `StepType`
+  field, precomputed by reading `planning/plan.json` (via the existing
+  `PlanningResponse`/its `UnmarshalJSON`) alongside the already-read
+  `step_config.json` — best-effort, tolerates a missing/unparseable
+  plan.json by leaving it empty rather than failing the scan. Lets the
+  reviewer turn know which candidates are routing steps without an extra
+  lookup, matching the module's existing "precomputed evidence" philosophy.
+- `plan-drift-review.md` gained two new Group 3 checks, explicitly gated to
+  `step_type == "routing"` only (never `branch` — branch is deliberately
+  the small in-flow decision, these don't apply to it):
+  `route_structural_isolation` (trace each route's `next_step_id` chain;
+  legitimate convergence at a shared step, per `routing.md`'s documented
+  pattern, is not drift — an *interior* step reachable from more than one
+  sibling route is) and `route_eval_pairing` (if the workflow has an
+  `evaluation_plan.json` at all, is there an eval step whose
+  `applies_to_routes` covers this routing step — a real, already-documented
+  field in `evaluation-plan.md`, not something invented for this).
+- `guidance.go`'s `plan-drift-review` reference-kind description updated to
+  mention the two new checks.
+
 ## Explicitly not done (still open)
 
-- **Frontend per-route top-level reporting tabs.** Not built this phase —
-  Execution Logs currently show routing and branch steps with distinct
-  badges/labels, but neither gets a dedicated tab. This is real, buildable
-  UI work once `routing` reliably means "route" going forward; scoping it
-  is a separate pass.
-- **Route best-practices guidance/self-check** (no shared downstream steps
-  between sibling routes, always pair a route with an eval). Per the design
-  above, this should extend PLAT-258's `plan_drift_review` infrastructure
-  (durable evidence-required record + due-detection + the privileged
-  `record_plan_drift_review` tool) with route-specific check types, rather
-  than inventing a second, parallel self-check mechanism — not started.
+- **Frontend per-route top-level reporting tabs.** Not built — Execution
+  Logs currently show routing and branch steps with distinct badges/labels,
+  but neither gets a dedicated tab. This is real, buildable UI work once
+  `routing` reliably means "route" going forward; scoping it is a separate
+  pass.
 
 ## Open questions for the implementation phase
 
-The two structural questions from the design phase are now resolved by
-Phase A above (distinct `BranchPlanStep` struct; distinct
-`add_branch_step`/`update_branch_step` tools). Remaining, for the two
-not-yet-done items above:
+The structural questions from the design phase are resolved by Phase A
+(distinct `BranchPlanStep` struct; distinct `add_branch_step`/
+`update_branch_step` tools) and Phase B (judgment check, not deterministic
+Go, per explicit user choice) above. Remaining, for the one not-yet-done
+item:
 
-- Exact shape of the route-specific `plan_drift_review` check types (new
-  `check_id`s? a distinct reviewer-turn trigger for route steps
-  specifically, or folded into the existing due-scan?).
 - Frontend: where exactly the per-route top-level tab lives in the
   Execution Logs / reporting surfaces, and how it interacts with the
   existing step-summary view for plans with zero `routing` steps.
@@ -195,23 +214,51 @@ not-yet-done items above:
   `cmd/server` suite has one pre-existing, unrelated failure
   (`TestEveryPulsePlatformTicketIsLinkedFromTheRegister`, missing
   `plat-248.md`/`plat-249.md` from a concurrent session — confirmed
-  reproducible with this ticket's changes fully stashed out).
+  reproducible with this ticket's changes fully stashed out). Phase B added
+  2 more tests to `plan_drift_candidates_test.go`
+  (`TestCollectPlanDriftCandidatesPopulatesStepTypeFromPlanJSON`,
+  `TestCollectPlanDriftCandidatesToleratesMissingPlanJSON`) — both pass;
+  `cmd/server/guidance` package has one further pre-existing, unrelated
+  failure (`TestStrategyAuditorGuidanceRequiresLongitudinalEvidenceAndReadOnlyHandoff`
+  — a text-mismatch bug in a concurrent session's own `pulse-gate.md`/test
+  pair, confirmed reproducible with Phase B's changes stashed out too).
 - `cd frontend && npx tsc --noEmit -p . && npm run build` clean;
   `npx vitest run` has 2 pre-existing failures unrelated to this change
   (`sessionRestore.productFallback.test.ts`, video-studio mock-argument
   drift — confirmed reproducible with this ticket's changes fully stashed
   out).
+- See "Corrective audit — 2026-08-30" below for the fuller re-verification
+  after the independent review's findings were fixed, including the new
+  end-to-end `TestBranchStepEndToEndLifecycle` regression test and two UI
+  mislabeling fixes (`RoutingStepNode.tsx`'s untitled-step fallback label,
+  `WorkflowCanvas.tsx`'s inspector section title — both previously said
+  "Routing" unconditionally even for a branch step).
 
 ## Reverify
 
-Ask the planning agent to add a `branch` step to a real workflow plan via
-`add_branch_step`, confirm it appears correctly on the canvas (indigo
-routing / cyan branch badges distinguishable in Execution Logs), executes
-via `run_full_workflow` exactly like a routing step would, and that
+Phase A: ask the planning agent to add a `branch` step to a real workflow
+plan via `add_branch_step`, confirm it appears correctly on the canvas
+(indigo routing / cyan branch badges distinguishable in Execution Logs),
+executes via `run_full_workflow` exactly like a routing step would, and
+that
 `read_skill(skills=[{"name":"builder-reference","path":"references/branch.md"}])`
-returns the new guidance. The two "explicitly not done" items above
-(reporting tabs, guidance/self-check reuse of `plan_drift_review`) remain
-open follow-up work, not covered by this reverify.
+returns the new guidance. **Now unblocked** — the independent review's
+findings below were all fixed in the corrective audit and are covered by
+the new automated regression test; this manual live reverify against a real
+workflow run has not been executed yet and remains the one open item before
+closing phase A entirely.
+
+Phase B: trigger `plan_drift_review` on a workflow with a routing step
+whose two routes share an interior step (not a legitimate shared
+convergence point), and separately on one with an `evaluation_plan.json`
+that has zero `applies_to_routes` coverage for a real routing step, confirm
+the reviewer turn actually judges and raises both as findings via
+`record_pulse_finding` rather than skipping them. Phase B does not depend
+on the phase A gaps below (`plan_drift_review` reads plan.json directly; it
+does not go through the runtime switches the review found broken).
+
+The one remaining "explicitly not done" item above (frontend per-route
+reporting tabs) stays open follow-up work, not covered by either reverify.
 
 ## Independent review — 2026-08-30
 
@@ -247,3 +294,87 @@ selected route, and verifies navigation reaches that route's target. The
 seven existing tests cover parsing and isolated parity only; they do not
 exercise that lifecycle. Reporting tabs and plan-drift guidance should wait
 until this runtime contract passes.
+
+## Corrective audit — 2026-08-30, all findings above resolved
+
+Methodology change: the original phase A audit grepped for the
+`StepTypeRouting` string constant, which misses every call site that
+type-asserts the concrete `*RoutingPlanStep` type directly. The corrective
+pass instead ran `grep -rln "RoutingPlanStep" --include="*.go" .` to list
+every file, then read every matching line in each file to decide whether
+`*BranchPlanStep` needed an identical case. This found every gap the review
+named, plus one it implied but didn't name directly:
+
+- `validateLoadedPlanStepWithOptions` (`planning_management.go`) — now
+  `case *RoutingPlanStep, *BranchPlanStep:` (the critical fix; branch steps
+  can now persist and reload).
+- `populateRuntimeFields` / `populateStepRuntimeFields`
+  (`planning_management.go`) — branch case added, config now applies.
+- `ApplyStepConfigFromFile` (`step_config.go`, both `matchedConfig` and
+  `overrides` switches) — branch case added.
+- `getAgentConfigs` (`controller_execution.go`) — branch case added.
+- Post-execution navigation — the inline "find next step based on selected
+  route" block in the main execution loop was extracted into a standalone
+  `nextStepIDForSelectedRoute(step, selectedRouteID) string` function
+  (specifically so it has direct test coverage), type-asserting the shared
+  `routeSwitchStep` interface instead of the concrete `*RoutingPlanStep`.
+- `validateNextStepIDReferences` (`planning_management.go`) — branch case
+  added to the `next_step_id` graph walk, so dangling branch route targets
+  are now caught the same as dangling routing targets.
+- Route-scoped validation (`planning_exports.go`:
+  `routeScopedValidationSteps`, `inferValidationRoute`,
+  `routeSegmentEndIndex`) — all three switched from `*RoutingPlanStep` type
+  assertions to the `routeSwitchStep` interface.
+- Nested sub-agent identity normalization (`setStepIdentity`,
+  `planning_agent.go`) — **found during this audit, not named explicitly by
+  the review's bullet list, but implied by its general instruction.** Used
+  to stamp a `todo_task` predefined route's `sub_agent_step` with the
+  route's ID/name; had no `*BranchPlanStep` case, so a branch step nested as
+  a sub-agent step would hit `unsupported sub_agent_step type` and error.
+  Fixed; covered by `TestSetStepIdentityAcceptsBranchStep`.
+- `updateValidationSchemaOnStep`, `cloneStepWithDelegationOverrides`
+  (`controller_todo_task.go`) — branch cases added.
+- `mergePartialStepUpdate` and the field-change-tracking section of
+  `updateSingleStep` (`planning_agent.go`) — **a bug this audit introduced
+  in its own earlier phase A work, caught during the systematic re-check,
+  not flagged by the review's text.** `mergePartialStepUpdate` had no
+  `*BranchPlanStep` case at all, so `update_branch_step`'s executor would
+  silently return the step unchanged for any field update (hit the
+  `default: return existingStep` fallback). Added the missing case, plus a
+  `BranchQuestion` field on `PartialPlanStep` (which didn't exist), plus
+  changelog old-value tracking for `branch_question` and switched the
+  `Routes`/`DefaultRouteID`/`RouteSourceFile` old-value lookups to the
+  shared `routeSwitchStep` interface so they work for both types.
+- `validateRoutingStepTyped` (`planning_management.go`) — extended to
+  type-assert `routeSwitchStep` instead of `*RoutingPlanStep`, so the
+  `validatePlanStepIDsAtPath` call path (a separate, pre-existing validator
+  from `validateRoutingStepFieldsTyped`) now validates branch steps too.
+
+**End-to-end regression test added** (`controller_branch_test.go`,
+`TestBranchStepEndToEndLifecycle`), the acceptance bar the review set: adds
+a branch step with two routes to a plan, validates it via
+`validateLoadedPlanStructure` (would previously error with `unsupported
+step type`), round-trips it through marshal/unmarshal and re-validates,
+applies `step_config.json` via `populateRuntimeFields`/`getAgentConfigs`
+(would previously silently no-op), and confirms
+`nextStepIDForSelectedRoute` resolves each route to its correct
+`next_step_id` (would previously return empty, stalling execution).
+`TestBranchStepDanglingNextStepIDCaughtByValidation` covers the
+`validateNextStepIDReferences` fix separately.
+
+All 11 tests in `controller_branch_test.go` pass; full
+`step_based_workflow` package suite passes; `go build ./...`, `gofmt -l`
+clean; `go vet` has only pre-existing, unrelated issues (confirmed
+reproducible with this ticket's changes stashed out —
+`generate_text_llm_tool_p0_reviews_test.go`'s missing `agentreview` module,
+`message_sequence_stop_test.go`'s context-leak vet warning,
+`scheduler_test.go`'s unreachable-code vet warning); `cmd/server` full
+suite has the two pre-existing failures already on record
+(`TestEveryPulsePlatformTicketIsLinkedFromTheRegister`,
+`TestStrategyAuditorGuidanceRequiresLongitudinalEvidenceAndReadOnlyHandoff`)
+plus one more confirmed pre-existing and unrelated the same way
+(`TestUpgradeDedicatedPulseSchedulePromptShape` — a periodic-pulse-review
+handoff-prompt text mismatch, unrelated to routing/branch); frontend
+`tsc --noEmit` and `npm run build` both clean.
+
+Phase A's reverify (below) is now unblocked.

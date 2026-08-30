@@ -1172,7 +1172,7 @@ function ReadOnlyStepDetailPanel({
         )}
 
         {(routingQuestion || routes?.length) && (
-          <DetailSection icon={Route} title="Routing">
+          <DetailSection icon={Route} title={step?.type === 'branch' ? 'Branch' : 'Routing'}>
             {routingQuestion && <p className="mb-2 text-sm text-foreground/85">{routingQuestion}</p>}
             {routes?.length ? (
               <div className="space-y-2">
