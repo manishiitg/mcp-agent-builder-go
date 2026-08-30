@@ -1564,6 +1564,7 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
   const changes = planData.changes
 
   const loadPlanRefresh = planData.refresh
+  const refreshPlanInPlace = planData.refreshSilently
   const clearChanges = planData.clearChanges
   const setChanges = planData.setChanges
 
@@ -1702,10 +1703,16 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
 
   // The in-canvas Plan control is intentionally narrower than the canvas-wide
   // refresh used by the toolbar and imperative API: it only reloads the plan.
+  const [isRefreshingPlan, setIsRefreshingPlan] = React.useState(false)
   const handlePlanRefresh = useCallback(async () => {
-    if (!workspacePath) return
-    await loadPlanRefresh()
-  }, [workspacePath, loadPlanRefresh])
+    if (isRefreshingPlan) return
+    setIsRefreshingPlan(true)
+    try {
+      await refreshPlanInPlace()
+    } finally {
+      setIsRefreshingPlan(false)
+    }
+  }, [isRefreshingPlan, refreshPlanInPlace])
 
   // Workflow execution
   const {
@@ -3021,13 +3028,18 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
         ) : <div className="h-full min-h-0 relative flex">
           <button
             type="button"
-            onClick={() => void handlePlanRefresh()}
+            onPointerDown={event => event.stopPropagation()}
+            onClick={event => {
+              event.stopPropagation()
+              void handlePlanRefresh()
+            }}
+            disabled={isRefreshingPlan}
             className="absolute right-3 top-3 z-20 inline-flex h-8 w-8 items-center justify-center rounded-md border border-border bg-background/95 text-muted-foreground shadow-sm backdrop-blur-sm transition-colors hover:bg-muted hover:text-foreground"
             aria-label="Refresh plan"
             title="Refresh plan"
             data-testid="refresh-plan"
           >
-            <RefreshCw className="h-3.5 w-3.5" />
+            <RefreshCw className={`h-3.5 w-3.5 ${isRefreshingPlan ? 'animate-spin' : ''}`} />
           </button>
           <div className={`min-h-0 h-full transition-all duration-300 ${showVariablesSidebar ? 'mr-[450px]' : ''} ${previewDevice === 'desktop' ? 'flex-1' : previewDeviceShellClass(previewDevice)}`}>
         <ReactFlow
