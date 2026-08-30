@@ -250,31 +250,50 @@ type ConsistencyRule struct {
 
 // AgentConfigs represents per-agent configuration for a step
 type AgentConfigs struct {
-	ExecutionLLM                 *AgentLLMConfig `json:"execution_llm,omitempty"`
-	ExecutionLLMReason           string          `json:"execution_llm_reason,omitempty"`            // PLAT-060. Why this step is pinned to a specific model. Required whenever execution_llm is set — update_step_config rejects the pin without it. A pin outranks execution_tier entirely, so it silently overrides every tier decision above it. Cite the owning llm_ops_review finding id, and the human_input_id when the pin was user-approved.
-	ExecutionTier                string          `json:"execution_tier,omitempty"`                  // Persistent execution tier override in tiered mode: "high" | "medium" | "low"
-	ExecutionTierReason          string          `json:"execution_tier_reason,omitempty"`           // PLAT-060. Why this step's tier is pinned. Required whenever execution_tier is set — update_step_config rejects the override without it. Setting the tier explicitly also DISABLES adaptive tiering for the step (see shouldUseAdaptiveExecutionTiering), so it opts out of the automatic high→medium promotion after 3 stable runs. Cite the owning llm_ops_review finding id, and the human_input_id when approved.
-	ExecutionMaxTurns            *int            `json:"execution_max_turns,omitempty"`             // default: 500
-	LearningObjective            string          `json:"learning_objective,omitempty"`              // What SKILL.md should capture from successful runs of this step — selectors, timings, auth flows, tool-call patterns, API quirks. This is the instruction the step agent uses during its post-completion turn to know what HOW-to-run knowledge to extract. Required when learnings_access includes write; must be specific (not "learn from this run").
-	LearningsAccess              string          `json:"learnings_access,omitempty"`                // "read" | "read-write" | "none". Mirrors knowledgebase_access. "read" (default): step sees global SKILL.md in its prompt but doesn't write. "read-write": reads and writes — requires learning_objective to be non-empty. "none": no read, no write. Empty = legacy auto-migration (see resolveLearningsAccess). Writes happen via the step agent's own post-completion turn (shell + diff_patch_workspace_file); no separate analyzer runs.
-	LockLearnings                *bool           `json:"lock_learnings,omitempty"`                  // lock learnings (SKILL.md) - prevents new writes but still uses existing SKILL.md (nil = not set/unlocked, true = locked, false = explicitly unlocked). Setting true requires a non-empty lock_learnings_reason.
-	LockLearningsReason          string          `json:"lock_learnings_reason,omitempty"`           // PLAT-059. Why this step is frozen. Required whenever lock_learnings is set true — update_step_config rejects the lock without it. A locked step still reads the whole shared skill but can never contribute to it, so the freeze needs a stated justification a later reviewer can judge rather than infer.
-	LockCode                     *bool           `json:"lock_code,omitempty"`                       // lock code (main.py) - prevents LLM-rewritten main.py from being saved back to learnings, skips fix loop (nil = not set/unlocked, true = locked, false = explicitly unlocked)
-	SelectedServers              []string        `json:"selected_servers,omitempty"`                // step-level MCP server selection (subset of preset servers)
-	SelectedTools                []string        `json:"selected_tools,omitempty"`                  // step-level tool selection (format: "server:tool" or "server:*" for all tools)
-	EnabledCustomTools           []string        `json:"enabled_custom_tools,omitempty"`            // e.g., ["workspace_advanced:execute_shell_command", "human_tools:notify_user"] - enables specific tools (overrides categories if both specified)
-	UseCodeExecutionMode         *bool           `json:"use_code_execution_mode,omitempty"`         // Step-level code execution mode override (nil = use preset default, true/false = override)
-	EnabledSkills                []string        `json:"enabled_skills,omitempty"`                  // Step-level skill selection (skill folder names, overrides preset if specified)
-	AdditionalReadPaths          []string        `json:"additional_read_paths,omitempty"`           // Extra workflow-relative folders/files this step may read (for example "variables" or "reports/reference.json"). Paths are read-only, must stay inside this workflow, and never widen write access.
-	KnowledgebaseAccess          string          `json:"knowledgebase_access,omitempty"`            // "read" | "write" | "read-write" | "none". If empty, defaults to "none" — KB is opt-in per step. Preset-level UseKnowledgebase is a prerequisite (off → forced "none"). When granted "read", this also covers user-supplied runtime context at knowledgebase/context/context.md. knowledgebase/context/ is excluded from KB health/fixer passes — user-supplied content is never silently rewritten.
-	KnowledgebaseContribution    string          `json:"knowledgebase_contribution,omitempty"`      // User-authored instruction for KB writes — what this step should contribute to notes/. In "agent" write-method, it's the extraction instruction handed to the post-step KB update agent. In "direct" write-method, it's injected into the step agent's prompt as its contribution contract. Required to trigger KB writes; if empty, no KB write happens regardless of access.
-	DisableParallelToolExecution *bool           `json:"disable_parallel_tool_execution,omitempty"` // Disable parallel tool execution for this step (nil = enabled by default, true = disabled, false = explicitly enabled)
-	CodingAgentTmuxLifecycle     string          `json:"coding_agent_tmux_lifecycle,omitempty"`     // Tmux lifecycle for CLI coding providers: "close_on_completion" (default for steps) or "keep_alive" (only when a step intentionally needs the native coding session after completion).
-	SuccessfulRuns               *int            `json:"successful_runs,omitempty"`                 // System-managed counter. Written by syncSuccessfulRunsToStepConfig after each successful validation; mirrors the authoritative count in learning metadata. Read by the readiness checklist to gauge optimization progress (3+ = ready). Agents must NOT set this directly.
-	DeclaredExecutionMode        string          `json:"declared_execution_mode,omitempty"`         // Required mode decision for the step: "scripted" or "agentic" (legacy values "learn_code" / "code_exec" are still accepted on read)
-	DeclaredExecutionModeReason  string          `json:"declared_execution_mode_reason,omitempty"`  // Audit trail: why the declared mode is the best fit. Not consumed by Go runtime, but preserved so future LLM reviewers (harden, replan) reading raw step_config.json see the original decision rationale.
-	DescriptionReviewed          *bool           `json:"description_reviewed,omitempty"`            // True when the step description has been reviewed — clarity AND secrets/hardcoded values.
-	ReviewNotes                  string          `json:"review_notes,omitempty"`                    // Free-form rationale covering why config, locks, learning/KB choices, or description review state are justified.
+	ExecutionLLM                 *AgentLLMConfig  `json:"execution_llm,omitempty"`
+	ExecutionLLMReason           string           `json:"execution_llm_reason,omitempty"`            // PLAT-060. Why this step is pinned to a specific model. Required whenever execution_llm is set — update_step_config rejects the pin without it. A pin outranks execution_tier entirely, so it silently overrides every tier decision above it. Cite the owning llm_ops_review finding id, and the human_input_id when the pin was user-approved.
+	ExecutionTier                string           `json:"execution_tier,omitempty"`                  // Persistent execution tier override in tiered mode: "high" | "medium" | "low"
+	ExecutionTierReason          string           `json:"execution_tier_reason,omitempty"`           // PLAT-060. Why this step's tier is pinned. Required whenever execution_tier is set — update_step_config rejects the override without it. Setting the tier explicitly also DISABLES adaptive tiering for the step (see shouldUseAdaptiveExecutionTiering), so it opts out of the automatic high→medium promotion after 3 stable runs. Cite the owning llm_ops_review finding id, and the human_input_id when approved.
+	ExecutionMaxTurns            *int             `json:"execution_max_turns,omitempty"`             // default: 500
+	LearningObjective            string           `json:"learning_objective,omitempty"`              // What SKILL.md should capture from successful runs of this step — selectors, timings, auth flows, tool-call patterns, API quirks. This is the instruction the step agent uses during its post-completion turn to know what HOW-to-run knowledge to extract. Required when learnings_access includes write; must be specific (not "learn from this run").
+	LearningsAccess              string           `json:"learnings_access,omitempty"`                // "read" | "read-write" | "none". Mirrors knowledgebase_access. "read" (default): step sees global SKILL.md in its prompt but doesn't write. "read-write": reads and writes — requires learning_objective to be non-empty. "none": no read, no write. Empty = legacy auto-migration (see resolveLearningsAccess). Writes happen via the step agent's own post-completion turn (shell + diff_patch_workspace_file); no separate analyzer runs.
+	LockLearnings                *bool            `json:"lock_learnings,omitempty"`                  // lock learnings (SKILL.md) - prevents new writes but still uses existing SKILL.md (nil = not set/unlocked, true = locked, false = explicitly unlocked). Setting true requires a non-empty lock_learnings_reason.
+	LockLearningsReason          string           `json:"lock_learnings_reason,omitempty"`           // PLAT-059. Why this step is frozen. Required whenever lock_learnings is set true — update_step_config rejects the lock without it. A locked step still reads the whole shared skill but can never contribute to it, so the freeze needs a stated justification a later reviewer can judge rather than infer.
+	LockCode                     *bool            `json:"lock_code,omitempty"`                       // lock code (main.py) - prevents LLM-rewritten main.py from being saved back to learnings, skips fix loop (nil = not set/unlocked, true = locked, false = explicitly unlocked)
+	SelectedServers              []string         `json:"selected_servers,omitempty"`                // step-level MCP server selection (subset of preset servers)
+	SelectedTools                []string         `json:"selected_tools,omitempty"`                  // step-level tool selection (format: "server:tool" or "server:*" for all tools)
+	EnabledCustomTools           []string         `json:"enabled_custom_tools,omitempty"`            // e.g., ["workspace_advanced:execute_shell_command", "human_tools:notify_user"] - enables specific tools (overrides categories if both specified)
+	UseCodeExecutionMode         *bool            `json:"use_code_execution_mode,omitempty"`         // Step-level code execution mode override (nil = use preset default, true/false = override)
+	EnabledSkills                []string         `json:"enabled_skills,omitempty"`                  // Step-level skill selection (skill folder names, overrides preset if specified)
+	AdditionalReadPaths          []string         `json:"additional_read_paths,omitempty"`           // Extra workflow-relative folders/files this step may read (for example "variables" or "reports/reference.json"). Paths are read-only, must stay inside this workflow, and never widen write access.
+	KnowledgebaseAccess          string           `json:"knowledgebase_access,omitempty"`            // "read" | "write" | "read-write" | "none". Empty defaults to "read" so every step can consume shared context; "none" explicitly opts out. A non-empty knowledgebase_contribution promotes an unset mode to "read-write", but writes still require that contribution contract. Read access includes knowledgebase/context/context.md. knowledgebase/context/ is excluded from KB health/fixer passes — user-supplied content is never silently rewritten.
+	KnowledgebaseContribution    string           `json:"knowledgebase_contribution,omitempty"`      // User-authored instruction for KB writes — what this step should contribute to notes/. In "agent" write-method, it's the extraction instruction handed to the post-step KB update agent. In "direct" write-method, it's injected into the step agent's prompt as its contribution contract. Required to trigger KB writes; if empty, no KB write happens regardless of access.
+	DisableParallelToolExecution *bool            `json:"disable_parallel_tool_execution,omitempty"` // Disable parallel tool execution for this step (nil = enabled by default, true = disabled, false = explicitly enabled)
+	CodingAgentTmuxLifecycle     string           `json:"coding_agent_tmux_lifecycle,omitempty"`     // Tmux lifecycle for CLI coding providers: "close_on_completion" (default for steps) or "keep_alive" (only when a step intentionally needs the native coding session after completion).
+	SuccessfulRuns               *int             `json:"successful_runs,omitempty"`                 // System-managed counter. Written by syncSuccessfulRunsToStepConfig after each successful validation; mirrors the authoritative count in learning metadata. Read by the readiness checklist to gauge optimization progress (3+ = ready). Agents must NOT set this directly.
+	DeclaredExecutionMode        string           `json:"declared_execution_mode,omitempty"`         // Required mode decision for the step: "scripted" or "agentic" (legacy values "learn_code" / "code_exec" are still accepted on read)
+	DeclaredExecutionModeReason  string           `json:"declared_execution_mode_reason,omitempty"`  // Audit trail: why the declared mode is the best fit. Not consumed by Go runtime, but preserved so future LLM reviewers (harden, replan) reading raw step_config.json see the original decision rationale.
+	DescriptionReviewed          *bool            `json:"description_reviewed,omitempty"`            // True when the step description has been reviewed — clarity AND secrets/hardcoded values.
+	ReviewNotes                  string           `json:"review_notes,omitempty"`                    // Free-form rationale covering why config, locks, learning/KB choices, or description review state are justified.
+	DriftReview                  *StepDriftReview `json:"drift_review,omitempty"`                    // Plan-drift review record: which drift checks were run against this step's CURRENT config/output and what each found. Nil means "not reviewed since the last dependency-triggering change" — the same trigger that clears description_reviewed also nils this out (clearDriftReviewAfterPlanUpdate), and a nil record on any step is exactly what makes the plan_drift_review Pulse module due. Set by that module or its manual slash-command equivalent; never by a step-editing agent directly.
+}
+
+// StepDriftReview is one completed plan-drift review pass over a single step —
+// evidence per check, not a bare "reviewed: true" boolean, so a review can't be
+// rubber-stamped without recording what it actually looked at.
+type StepDriftReview struct {
+	ReviewedAt string           `json:"reviewed_at"` // RFC3339
+	ReviewedBy string           `json:"reviewed_by"` // e.g. "pulse:plan_drift_review" or a user-invoked slash-command session id
+	Checks     []StepDriftCheck `json:"checks"`
+}
+
+// StepDriftCheck is the evidence-required record for one drift check against
+// one step. Status "fixed" means the check found real drift AND a repair was
+// applied in this same review pass — not merely flagged.
+type StepDriftCheck struct {
+	CheckID  string `json:"check_id"` // stable id, e.g. "report_query_compatibility", "kb_access_mode"
+	Status   string `json:"status"`   // "pass" | "fail" | "fixed"
+	Evidence string `json:"evidence"` // what was compared and what was found — required, not optional
 }
 
 // ============================================================================
@@ -3437,7 +3456,39 @@ func clearDescriptionReviewedAfterPlanUpdate(ctx context.Context, workspacePath,
 	return false, nil
 }
 
-func buildPlanStepDependentArtifactReviewNotice(stepID string, fieldChanges []PlanFieldChange, descriptionReviewCleared bool) string {
+// clearDriftReviewAfterPlanUpdate mirrors clearDescriptionReviewedAfterPlanUpdate
+// exactly — same trigger condition, same read/find/clear/write shape — because a
+// step's drift review is stale for precisely the same set of field changes that
+// stale a description review: anything that changes what the step actually does.
+// A nil DriftReview on any step is what makes the plan_drift_review Pulse module
+// due, so this is the mechanism that turns "we edited a step" into "Pulse will
+// now notice."
+func clearDriftReviewAfterPlanUpdate(ctx context.Context, workspacePath, stepID string, fieldChanges []PlanFieldChange, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error) (bool, error) {
+	if !planStepUpdateInvalidatesDescriptionReview(fieldChanges) {
+		return false, nil
+	}
+
+	configs, err := readStepConfigViaFileCallback(ctx, workspacePath, readFile)
+	if err != nil {
+		return false, err
+	}
+	for i := range configs {
+		if configs[i].ID != stepID {
+			continue
+		}
+		if configs[i].AgentConfigs == nil || configs[i].AgentConfigs.DriftReview == nil {
+			return false, nil
+		}
+		clearStepConfigField(&configs[i], "drift_review")
+		if err := writeStepConfigViaFileCallback(ctx, workspacePath, configs, writeFile); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+func buildPlanStepDependentArtifactReviewNotice(stepID string, fieldChanges []PlanFieldChange, descriptionReviewCleared, driftReviewCleared bool) string {
 	if !planStepUpdateRequiresDependentArtifactReview(fieldChanges) {
 		return ""
 	}
@@ -3462,6 +3513,9 @@ func buildPlanStepDependentArtifactReviewNotice(stepID string, fieldChanges []Pl
 	if descriptionReviewCleared {
 		b.WriteString("- Cleared step_config.agent_configs.description_reviewed because the reviewed step contract may now be stale.\n")
 	}
+	if driftReviewCleared {
+		b.WriteString("- Cleared step_config.agent_configs.drift_review — the plan_drift_review Pulse module will now treat this step as due until it (or the manual review-artifact-drift slash command) records fresh evidence via record_plan_drift_review.\n")
+	}
 	b.WriteString("- Pre-validation: confirm validation_schema still matches the new output files/fields; update plan validation_schema or step_config validation_schema if needed.\n")
 	b.WriteString("- Learnings: review learning_objective, learnings_access, lock_learnings, and any learnings/_global or learnings/" + stepID + " content for stale execution know-how.\n")
 	b.WriteString("- DB: if output/state shape changed, update db/README.md, the db/db.sqlite table schema/writers/upsert rules, and any report widgets (sql) that read those columns.\n")
@@ -3481,7 +3535,11 @@ func handlePlanStepDependentArtifactReview(ctx context.Context, workspacePath, s
 	if err != nil {
 		logger.Warn(fmt.Sprintf("⚠️ Failed to clear description_reviewed after updating step %s: %v", stepID, err))
 	}
-	return buildPlanStepDependentArtifactReviewNotice(stepID, fieldChanges, descriptionReviewCleared)
+	driftReviewCleared, err := clearDriftReviewAfterPlanUpdate(ctx, workspacePath, stepID, fieldChanges, readFile, writeFile)
+	if err != nil {
+		logger.Warn(fmt.Sprintf("⚠️ Failed to clear drift_review after updating step %s: %v", stepID, err))
+	}
+	return buildPlanStepDependentArtifactReviewNotice(stepID, fieldChanges, descriptionReviewCleared, driftReviewCleared)
 }
 
 func buildAddedStepArtifactSetupNotice(stepID, stepType string) string {
@@ -3520,7 +3578,7 @@ func buildDeletedStepArtifactCleanupNotice(deletedIDs []string, prunedConfigIDs 
 	return b.String()
 }
 
-func buildTodoTaskRouteArtifactReviewNotice(parentStepID, routeID, action string, descriptionReviewCleared bool) string {
+func buildTodoTaskRouteArtifactReviewNotice(parentStepID, routeID, action string, descriptionReviewCleared, driftReviewCleared bool) string {
 	var b strings.Builder
 	b.WriteString("\n\nTodo route artifact review required for ")
 	b.WriteString(action)
@@ -3531,6 +3589,9 @@ func buildTodoTaskRouteArtifactReviewNotice(parentStepID, routeID, action string
 	b.WriteString(".\n")
 	if descriptionReviewCleared {
 		b.WriteString("- Cleared the parent step description_reviewed flag because its orchestration contract changed.\n")
+	}
+	if driftReviewCleared {
+		b.WriteString("- Cleared the parent step drift_review flag — plan_drift_review will treat it as due again.\n")
 	}
 	switch action {
 	case "added":
@@ -3553,7 +3614,11 @@ func handleTodoTaskRouteArtifactReview(ctx context.Context, workspacePath, paren
 	if err != nil {
 		logger.Warn(fmt.Sprintf("⚠️ Failed to clear description_reviewed after %s route %s on step %s: %v", action, routeID, parentStepID, err))
 	}
-	return buildTodoTaskRouteArtifactReviewNotice(parentStepID, routeID, action, descriptionReviewCleared)
+	driftReviewCleared, err := clearDriftReviewAfterPlanUpdate(ctx, workspacePath, parentStepID, fieldChanges, readFile, writeFile)
+	if err != nil {
+		logger.Warn(fmt.Sprintf("⚠️ Failed to clear drift_review after %s route %s on step %s: %v", action, routeID, parentStepID, err))
+	}
+	return buildTodoTaskRouteArtifactReviewNotice(parentStepID, routeID, action, descriptionReviewCleared, driftReviewCleared)
 }
 
 // createUpdateRegularStepExecutor edits the internal regular plan type exposed as update_scripted_step.

@@ -438,6 +438,9 @@ func MergeAgentConfigFields(target *AgentConfigs, source *AgentConfigs, stepID s
 	if source.DescriptionReviewed != nil {
 		target.DescriptionReviewed = source.DescriptionReviewed
 	}
+	if source.DriftReview != nil {
+		target.DriftReview = source.DriftReview
+	}
 	if source.ReviewNotes != "" {
 		target.ReviewNotes = source.ReviewNotes
 	}
