@@ -358,6 +358,55 @@ Live on the target host, first deployed 2026-08-24:
   discovered live when a workflow chat's tool calls stopped resolving.
   See [`../ROOTLESS-LINUX-DEPLOYMENT-CHECKLIST.md`](../ROOTLESS-LINUX-DEPLOYMENT-CHECKLIST.md)
   item 4 for the general form of this gap.
+- Foreground Claude Code turns could wedge for hours with the CLI itself
+  already done — two stacked bugs, found and fixed 2026-08-30:
+  1. **npm prefix misconfigured for the `dominion` service identity**:
+     `npm config get prefix` resolved to `/usr` (the system default) rather
+     than `/srv/dominion/tools`, because `/srv/dominion/.npmrc` was never
+     written — only `/srv/dominion/tools/bin` being ahead on `PATH` made
+     `claude` resolve correctly at all. Claude Code's own self-update then
+     tried to write to `/usr` on every invocation, failed on permissions,
+     and printed a persistent "✘ Auto-update failed: no write permission to
+     npm prefix · Run claude doctor" footer at the bottom of every tmux
+     pane. Fixed by writing `prefix=/srv/dominion/tools` to
+     `/srv/dominion/home/.npmrc` — **the actual `HOME` the systemd services
+     use (`Environment=HOME=/srv/dominion/home`), not an interactive SSH
+     login's own `$HOME`**; verify with
+     `HOME=/srv/dominion/home npm config get prefix`, not a bare
+     `npm config get prefix` over SSH, which checks the wrong file.
+  2. **`multi-llm-provider-go`'s tmux-pane completion scan didn't recognize
+     that footer line**: `claudecode_interactive_adapter.go`'s
+     `hasReadyInputPrompt` scans backward from the bottom of the pane for
+     the idle `❯` prompt, skipping known non-prompt "footer" lines via an
+     explicit allowlist (`isIgnorableClaudePromptFooterLine`). The
+     auto-update-failure banner sits below the real idle prompt and wasn't
+     on that allowlist, so the scan hit it first and reported "not ready" —
+     even though the CLI had already answered 8 seconds earlier. The
+     session showed no bug from the CLI's perspective at all; only the
+     completion watch never fired, so the platform never surfaced the
+     answer or freed the turn. Fixed by adding a
+     `strings.Contains(trimmed, "Auto-update failed")` match to that
+     allowlist (matched on the fixed substring, not the specific reason
+     after it, since npm can fail this self-update for other causes too —
+     network, disk — with the identical pane-boundary problem either way).
+     Both bugs had to be fixed together: bug 1 is what put the footer on
+     the pane in the first place, and fixing only bug 1 leaves any other
+     transient cause of that same footer (or of any future CLI footer line
+     not yet on the allowlist) able to reproduce bug 2's hang again.
+  As defense in depth against the general failure shape (an unrecognized
+  footer line permanently masking an idle prompt, of which this is the
+  second confirmed instance after the upgrade-notice case), the shared
+  library's disabled-by-default "stale pane backstop" is enabled for this
+  deployment only —
+  `CLAUDE_CODE_INTERACTIVE_STALE_PANE_BACKSTOP_SECONDS=7200` (2 hours) in
+  `/srv/dominion/.env`. Deliberately **not** flipped as the shared library's
+  global default: inferring turn completion from pane inactivity risks a
+  false-positive "done" on a legitimately long-running turn, and that
+  trade-off shouldn't be forced on every other product sharing this
+  library without their own opt-in. 2 hours is chosen to sit safely above
+  any real Dominion turn's expected duration while still bounding the
+  worst case far below the "hours, indefinitely" this incident actually
+  hit.
 
 Known follow-up, not yet done:
 
