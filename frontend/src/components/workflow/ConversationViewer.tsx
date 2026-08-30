@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useEffect } from 'react'
 import {
   Bot,
   User,
@@ -151,7 +151,13 @@ const ConversationTimingSummary: React.FC<{
   timing?: TimingData
   llmCalls: LLMCallTiming[]
   toolCalls: ToolCallTiming[]
-}> = ({ timing, llmCalls, toolCalls }) => {
+  toolArgsById: Map<string, { name: string; arguments: string }>
+  toolResultById: Map<string, string>
+  llmMessageByIndex: Map<number, ConversationMessage>
+  searchQuery?: string
+}> = ({ timing, llmCalls, toolCalls, toolArgsById, toolResultById, llmMessageByIndex, searchQuery }) => {
+  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set())
+  const [detailsOpen, setDetailsOpen] = useState(false)
   const agentDurationMs = asNumber(timing?.agent?.duration_ms)
   const llmDurationMs = asNumber(timing?.llm?.total_duration_ms) || llmCalls.reduce((sum, call) => sum + asNumber(call.duration_ms), 0)
   const toolDurationMs = asNumber(timing?.tools?.total_duration_ms) || toolCalls.reduce((sum, call) => sum + asNumber(call.duration_ms), 0)
@@ -159,8 +165,6 @@ const ConversationTimingSummary: React.FC<{
   const outputTokens = llmCalls.reduce((sum, call) => sum + asNumber(call.completion_tokens), 0)
   const totalTokens = llmCalls.reduce((sum, call) => sum + timingTokenTotal(call), 0)
   const unaccountedMs = Math.max(0, agentDurationMs - llmDurationMs - toolDurationMs)
-
-  if (!timing && llmCalls.length === 0 && toolCalls.length === 0) return null
 
   const timeline = [
     ...llmCalls.map((call, index) => ({
@@ -173,7 +177,9 @@ const ConversationTimingSummary: React.FC<{
       inputTokens: asNumber(call.prompt_tokens),
       outputTokens: asNumber(call.completion_tokens),
       totalTokens: timingTokenTotal(call),
-      toolCalls: asNumber(call.tool_calls)
+      toolCalls: asNumber(call.tool_calls),
+      toolCallId: undefined as string | undefined,
+      llmIndex: index as number | undefined
     })),
     ...toolCalls.map((call, index) => ({
       key: `tool-${call.tool_call_id || index}`,
@@ -185,7 +191,9 @@ const ConversationTimingSummary: React.FC<{
       inputTokens: 0,
       outputTokens: 0,
       totalTokens: 0,
-      toolCalls: 0
+      toolCalls: 0,
+      toolCallId: call.tool_call_id as string | undefined,
+      llmIndex: undefined as number | undefined
     }))
   ].sort((a, b) => {
     if (a.offsetMs !== b.offsetMs) return a.offsetMs - b.offsetMs
@@ -193,6 +201,58 @@ const ConversationTimingSummary: React.FC<{
   })
 
   const slowest = [...timeline].sort((a, b) => b.durationMs - a.durationMs).slice(0, 5)
+
+  const lowerQuery = searchQuery?.trim().toLowerCase() || ''
+  const itemMatchesSearch = (item: (typeof timeline)[number]): boolean => {
+    if (!lowerQuery) return false
+    if (item.name.toLowerCase().includes(lowerQuery)) return true
+    if (item.type === 'Tool' && item.toolCallId) {
+      const args = toolArgsById.get(item.toolCallId)
+      if (args && (args.name.toLowerCase().includes(lowerQuery) || args.arguments.toLowerCase().includes(lowerQuery))) return true
+      const result = toolResultById.get(item.toolCallId)
+      if (result && result.toLowerCase().includes(lowerQuery)) return true
+    }
+    if (item.type === 'LLM' && item.llmIndex !== undefined) {
+      const message = llmMessageByIndex.get(item.llmIndex)
+      if (message) {
+        for (const part of message.Parts) {
+          if (part.Text?.toLowerCase().includes(lowerQuery)) return true
+          if (part.FunctionCall && (
+            part.FunctionCall.Name.toLowerCase().includes(lowerQuery) ||
+            part.FunctionCall.Arguments.toLowerCase().includes(lowerQuery)
+          )) return true
+        }
+      }
+    }
+    return false
+  }
+  const matchingKeys = lowerQuery ? timeline.filter(itemMatchesSearch).map(item => item.key) : []
+  const matchingKeysSignature = matchingKeys.join('|')
+
+  // A search hit can be inside a call's own args/result/text, several clicks
+  // deep behind this "Full call timeline" details element and each row's own
+  // expand toggle. Open both automatically for every matching row instead of
+  // leaving the reader to click through each one to find where the hit is.
+  useEffect(() => {
+    if (matchingKeys.length === 0) return
+    setDetailsOpen(true)
+    setExpandedKeys(prev => {
+      let changed = false
+      const next = new Set(prev)
+      for (const key of matchingKeys) {
+        if (!next.has(key)) {
+          next.add(key)
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    })
+    // matchingKeysSignature is the stable, content-based proxy for matchingKeys
+    // (a fresh array every render otherwise).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [matchingKeysSignature])
+
+  if (!timing && llmCalls.length === 0 && toolCalls.length === 0) return null
 
   return (
     <div className="mb-3 rounded border border-border bg-muted/20 p-2.5">
@@ -258,36 +318,89 @@ const ConversationTimingSummary: React.FC<{
       )}
 
       {timeline.length > 0 && (
-        <details className="mt-3 rounded border border-border bg-background">
+        <details
+          className="mt-3 rounded border border-border bg-background"
+          open={detailsOpen}
+          onToggle={(e) => setDetailsOpen(e.currentTarget.open)}
+        >
           <summary className="cursor-pointer px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground">
             Full call timeline ({timeline.length})
           </summary>
           <div className="max-h-72 overflow-y-auto border-t border-border">
-            {timeline.map((item, index) => (
-              <div key={item.key} className="grid grid-cols-[2rem_minmax(0,1fr)_auto] items-center gap-2 border-b border-border/70 px-2 py-1.5 text-[10px] last:border-b-0">
-                <span className="font-mono text-muted-foreground">#{index + 1}</span>
-                <div className="min-w-0">
-                  <div className="flex min-w-0 items-center gap-1.5">
-                    <span className={cn('rounded px-1 py-0.5 font-semibold', item.type === 'LLM' ? 'bg-blue-500/10 text-blue-600 dark:text-blue-300' : 'bg-amber-500/10 text-amber-700 dark:text-amber-300')}>
-                      {item.type}
-                    </span>
-                    <span className="truncate font-mono text-foreground">{item.name}</span>
-                    {item.status && <span className="text-muted-foreground">{item.status}</span>}
-                  </div>
-                  <div className="mt-0.5 flex flex-wrap gap-2 text-muted-foreground">
-                    <span>start {formatDuration(item.offsetMs)}</span>
-                    {item.type === 'LLM' && (
-                      <>
-                        <span>In {formatTokens(item.inputTokens)}</span>
-                        <span>Out {formatTokens(item.outputTokens)}</span>
-                        {item.toolCalls > 0 && <span>{item.toolCalls} tool call{item.toolCalls === 1 ? '' : 's'}</span>}
-                      </>
+            {timeline.map((item, index) => {
+              const rowMatches = lowerQuery ? itemMatchesSearch(item) : false
+              const isExpanded = expandedKeys.has(item.key)
+              const toolArgs = item.toolCallId ? toolArgsById.get(item.toolCallId) : undefined
+              const toolResult = item.toolCallId ? toolResultById.get(item.toolCallId) : undefined
+              const llmMessage = item.llmIndex !== undefined ? llmMessageByIndex.get(item.llmIndex) : undefined
+              const canExpand = item.type === 'Tool' ? Boolean(toolArgs || toolResult !== undefined) : Boolean(llmMessage)
+              return (
+                <div key={item.key} className={cn('border-b border-border/70 last:border-b-0', rowMatches && 'bg-amber-500/[0.06]')}>
+                  <button
+                    type="button"
+                    onClick={() => canExpand && setExpandedKeys(prev => {
+                      const next = new Set(prev)
+                      if (next.has(item.key)) next.delete(item.key)
+                      else next.add(item.key)
+                      return next
+                    })}
+                    className={cn(
+                      'grid w-full grid-cols-[1.25rem_2rem_minmax(0,1fr)_auto] items-center gap-2 px-2 py-1.5 text-left text-[10px]',
+                      canExpand && 'hover:bg-accent/40'
                     )}
-                  </div>
+                  >
+                    {canExpand ? (
+                      isExpanded ? <ChevronDown className="h-2.5 w-2.5 text-muted-foreground" /> : <ChevronRight className="h-2.5 w-2.5 text-muted-foreground" />
+                    ) : <span />}
+                    <span className="font-mono text-muted-foreground">#{index + 1}</span>
+                    <div className="min-w-0">
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        <span className={cn('rounded px-1 py-0.5 font-semibold', item.type === 'LLM' ? 'bg-blue-500/10 text-blue-600 dark:text-blue-300' : 'bg-amber-500/10 text-amber-700 dark:text-amber-300')}>
+                          {item.type}
+                        </span>
+                        <span className="truncate font-mono text-foreground">{item.name}</span>
+                        {item.status && <span className="text-muted-foreground">{item.status}</span>}
+                        {rowMatches && <span className="rounded bg-amber-500/20 px-1 py-0.5 text-[9px] font-medium text-amber-700 dark:text-amber-300">match</span>}
+                      </div>
+                      <div className="mt-0.5 flex flex-wrap gap-2 text-muted-foreground">
+                        <span>start {formatDuration(item.offsetMs)}</span>
+                        {item.type === 'LLM' && (
+                          <>
+                            <span>In {formatTokens(item.inputTokens)}</span>
+                            <span>Out {formatTokens(item.outputTokens)}</span>
+                            {item.toolCalls > 0 && <span>{item.toolCalls} tool call{item.toolCalls === 1 ? '' : 's'}</span>}
+                          </>
+                        )}
+                      </div>
+                    </div>
+                    <span className="font-semibold text-foreground">{formatDuration(item.durationMs)}</span>
+                  </button>
+                  {isExpanded && item.type === 'Tool' && (
+                    <div className="px-2 pb-2 pl-8">
+                      {toolArgs && (
+                        <ConversationToolCallDisplay name={toolArgs.name} arguments={toolArgs.arguments} callId={item.toolCallId} forceExpanded={rowMatches} />
+                      )}
+                      {toolResult !== undefined && (
+                        <ConversationToolResponseDisplay toolName={item.name} toolCallId={item.toolCallId} content={toolResult} forceExpanded={rowMatches} />
+                      )}
+                    </div>
+                  )}
+                  {isExpanded && item.type === 'LLM' && llmMessage && (
+                    <div className="px-2 pb-2 pl-8">
+                      {llmMessage.Parts.map((part, partIndex) => {
+                        if (part.Text) {
+                          return <CollapsibleContent key={partIndex} content={part.Text} defaultExpanded={rowMatches} maxPreviewLength={1000} className="text-[11px] text-foreground" />
+                        }
+                        if (part.FunctionCall) {
+                          return <ConversationToolCallDisplay key={partIndex} name={part.FunctionCall.Name} arguments={part.FunctionCall.Arguments} callId={part.ID} forceExpanded={rowMatches} />
+                        }
+                        return null
+                      })}
+                    </div>
+                  )}
                 </div>
-                <span className="font-semibold text-foreground">{formatDuration(item.durationMs)}</span>
-              </div>
-            ))}
+              )
+            })}
           </div>
         </details>
       )}
@@ -340,6 +453,12 @@ const CollapsibleContent: React.FC<{
   isJson?: boolean
 }> = ({ content, defaultExpanded = false, maxPreviewLength = 200, className, isJson = false }) => {
   const [isExpanded, setIsExpanded] = useState(defaultExpanded)
+  // defaultExpanded flips true once a match is found in an already-mounted
+  // instance (search text refined while this block was still collapsed) --
+  // useState's initial value alone would miss that, so sync on the way up.
+  useEffect(() => {
+    if (defaultExpanded) setIsExpanded(true)
+  }, [defaultExpanded])
   const shouldCollapse = content.length > maxPreviewLength
 
   if (!shouldCollapse) {
@@ -387,8 +506,14 @@ export const ConversationToolCallDisplay: React.FC<{
   arguments: string
   callId?: string
   timing?: ToolCallTiming
-}> = ({ name, arguments: args, callId, timing }) => {
-  const [showArgs, setShowArgs] = useState(false)
+  /** Auto-opens Args once (e.g. it matched an active search) without taking
+   * away the user's own ability to collapse it again afterward. */
+  forceExpanded?: boolean
+}> = ({ name, arguments: args, callId, timing, forceExpanded }) => {
+  const [showArgs, setShowArgs] = useState(Boolean(forceExpanded))
+  useEffect(() => {
+    if (forceExpanded) setShowArgs(true)
+  }, [forceExpanded])
   const isError = failedToolTiming(timing)
 
   let formattedArgs = args
@@ -444,8 +569,14 @@ export const ConversationToolResponseDisplay: React.FC<{
   toolCallId?: string
   content: string
   timing?: ToolCallTiming
-}> = ({ toolName, toolCallId, content, timing }) => {
-  const [showContent, setShowContent] = useState(false)
+  /** Auto-opens the result once (e.g. it matched an active search) without
+   * taking away the user's own ability to collapse it again afterward. */
+  forceExpanded?: boolean
+}> = ({ toolName, toolCallId, content, timing, forceExpanded }) => {
+  const [showContent, setShowContent] = useState(Boolean(forceExpanded))
+  useEffect(() => {
+    if (forceExpanded) setShowContent(true)
+  }, [forceExpanded])
   const resultFormatting = useMemo(() => formatToolCallResult(content), [content])
   const isError = resultFormatting.isError || failedToolTiming(timing)
 
@@ -499,9 +630,11 @@ export const ConversationMessageDisplay: React.FC<{
   llmCall?: LLMCallTiming
   toolTimingById: Map<string, ToolCallTiming>
   toolTimingByName: Map<string, ToolCallTiming[]>
-}> = ({ message, index, showIndex = true, llmCall, toolTimingById, toolTimingByName }) => {
+  searchQuery?: string
+}> = ({ message, index, showIndex = true, llmCall, toolTimingById, toolTimingByName, searchQuery }) => {
   const config = roleConfig[message.Role] || roleConfig.system
   const Icon = config.icon
+  const lowerQuery = searchQuery?.trim().toLowerCase() || ''
 
   // Render parts based on their content
   const renderParts = () => {
@@ -509,11 +642,12 @@ export const ConversationMessageDisplay: React.FC<{
       // Text content
       if (part.Text) {
         const isSystem = message.Role === 'system'
+        const matches = lowerQuery ? part.Text.toLowerCase().includes(lowerQuery) : false
         return (
           <CollapsibleContent
             key={partIndex}
             content={part.Text}
-            defaultExpanded={!isSystem}
+            defaultExpanded={!isSystem || matches}
             maxPreviewLength={isSystem ? 500 : 1000}
             className="text-[11px] text-foreground"
           />
@@ -525,6 +659,10 @@ export const ConversationMessageDisplay: React.FC<{
         const timing = part.ID
           ? toolTimingById.get(part.ID)
           : toolTimingByName.get(part.FunctionCall.Name)?.[0]
+        const matches = lowerQuery ? (
+          part.FunctionCall.Name.toLowerCase().includes(lowerQuery) ||
+          part.FunctionCall.Arguments.toLowerCase().includes(lowerQuery)
+        ) : false
         return (
           <ConversationToolCallDisplay
             key={partIndex}
@@ -532,6 +670,7 @@ export const ConversationMessageDisplay: React.FC<{
             arguments={part.FunctionCall.Arguments}
             callId={part.ID}
             timing={timing}
+            forceExpanded={matches}
           />
         )
       }
@@ -543,6 +682,7 @@ export const ConversationMessageDisplay: React.FC<{
           : part.Name
             ? toolTimingByName.get(part.Name)?.[0]
             : undefined
+        const matches = lowerQuery ? (part.Content || '').toLowerCase().includes(lowerQuery) : false
         return (
           <ConversationToolResponseDisplay
             key={partIndex}
@@ -550,6 +690,7 @@ export const ConversationMessageDisplay: React.FC<{
             toolCallId={part.ToolCallID}
             content={part.Content || ''}
             timing={timing}
+            forceExpanded={matches}
           />
         )
       }
@@ -646,6 +787,32 @@ export const ConversationViewer: React.FC<ConversationViewerProps> = ({ content,
     return { toolTimingById: byId, toolTimingByName: byName }
   }, [toolCalls])
 
+  // For the compact "Full call timeline" summary: match each timeline row
+  // back to its actual call/response content in conversation_history, so a
+  // row can be expanded in place instead of only showing timing numbers.
+  const { toolArgsById, toolResultById, llmMessageByIndex } = useMemo(() => {
+    const argsById = new Map<string, { name: string; arguments: string }>()
+    const resultById = new Map<string, string>()
+    const byLLMIndex = new Map<number, ConversationMessage>()
+    if (!messages) return { toolArgsById: argsById, toolResultById: resultById, llmMessageByIndex: byLLMIndex }
+    let aiIndex = 0
+    messages.forEach(message => {
+      if (message.Role === 'ai') {
+        byLLMIndex.set(aiIndex, message)
+        aiIndex += 1
+      }
+      message.Parts.forEach(part => {
+        if (part.FunctionCall && part.ID) {
+          argsById.set(part.ID, { name: part.FunctionCall.Name, arguments: part.FunctionCall.Arguments })
+        }
+        if (part.ToolCallID && part.Content !== undefined) {
+          resultById.set(part.ToolCallID, part.Content)
+        }
+      })
+    })
+    return { toolArgsById: argsById, toolResultById: resultById, llmMessageByIndex: byLLMIndex }
+  }, [messages])
+
   // Filter messages based on search query
   const filteredMessages = useMemo(() => {
     if (!messages || !searchQuery) return messages
@@ -700,7 +867,15 @@ export const ConversationViewer: React.FC<ConversationViewerProps> = ({ content,
         </pre>
       ) : (
         <div className="max-h-[60vh] overflow-y-auto pr-1">
-          <ConversationTimingSummary timing={timing} llmCalls={llmCalls} toolCalls={toolCalls} />
+          <ConversationTimingSummary
+            timing={timing}
+            llmCalls={llmCalls}
+            toolCalls={toolCalls}
+            toolArgsById={toolArgsById}
+            toolResultById={toolResultById}
+            llmMessageByIndex={llmMessageByIndex}
+            searchQuery={searchQuery}
+          />
           {filteredMessages?.map((message) => {
             const originalIndex = messages.indexOf(message)
             return (
@@ -711,6 +886,7 @@ export const ConversationViewer: React.FC<ConversationViewerProps> = ({ content,
                 llmCall={messageLLMCallByIndex.get(originalIndex)}
                 toolTimingById={toolTimingById}
                 toolTimingByName={toolTimingByName}
+                searchQuery={searchQuery}
               />
             )
           })}

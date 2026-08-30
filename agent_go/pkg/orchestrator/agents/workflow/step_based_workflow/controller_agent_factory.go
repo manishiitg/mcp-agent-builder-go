@@ -385,7 +385,8 @@ func isGenericAgentStep(stepID, stepPath string) bool {
 // setupExecutionFolderGuard sets up folder guard paths for execution agents.
 // kbAccess must be one of KBAccessRead / Write / ReadWrite / None — callers resolve it
 // via resolveKnowledgebaseAccess before invoking. learningsAccess must be resolved via
-// resolveLearningsAccess. When kbAccess permits writes the step is the KB writer,
+// resolveExecutionLearningsAccess so evaluation/routing isolation matches the prompt.
+// When kbAccess permits writes the step is the KB writer,
 // so knowledgebase/notes/ is added to writePaths. Returns readPaths and writePaths.
 func (hcpo *StepBasedWorkflowOrchestrator) setupExecutionFolderGuard(stepPath string, stepID string, kbAccess string, learningsAccess string, dbAccess string, stepConfig *AgentConfigs) (readPaths, writePaths []string) {
 	baseWorkspacePath := hcpo.GetWorkspacePath()
@@ -1206,7 +1207,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) applyPostSetupToAgent(agent agents.Or
 // artifactFolderNameOverride: Optional execution/log folder name. This keeps logical step ID stable while isolating per-call artifacts.
 //
 //	When empty, the step ID will be derived from stepPath.
-func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.Context, phase string, stepPath string, agentName string, stepConfig *AgentConfigs, stepIDOverride string, artifactFolderNameOverride string, evaluationDBWrite bool) (agents.OrchestratorAgent, error) {
+func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.Context, phase string, stepPath string, agentName string, stepConfig *AgentConfigs, planStep PlanStepInterface, stepIDOverride string, artifactFolderNameOverride string, evaluationDBWrite bool) (agents.OrchestratorAgent, error) {
 	// 1. Resolve stepID first (needed for folder guard setup)
 	stepID := hcpo.resolveStepID(stepPath, stepIDOverride)
 	artifactStepID := stepID
@@ -1218,7 +1219,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 
 	// 2. Setup folder guard (extracted method). Empty kbAccess defaults to orchestrator-level UseKnowledgebase.
 	kbAccess := resolveKnowledgebaseAccess(stepConfig, hcpo.UseKnowledgebase())
-	learningsAccess := resolveLearningsAccess(stepConfig)
+	learningsAccess := resolveExecutionLearningsAccess(stepConfig, planStep, hcpo.isEvaluationMode)
 	dbAccess := resolveEffectiveDBAccess(stepConfig, hcpo.isEvaluationMode, evaluationDBWrite)
 	readPaths, writePaths := hcpo.setupExecutionFolderGuard(artifactStepPath, artifactStepID, kbAccess, learningsAccess, dbAccess, stepConfig)
 	stepEnvOutputPathOverride := ""
@@ -1624,14 +1625,14 @@ func (hcpo *StepBasedWorkflowOrchestrator) createTodoTaskOrchestratorAgent(ctx c
 	// Run the coding-CLI session in a fresh os.MkdirTemp dir instead of
 	// CodingAgentWorkingDir — same protection the regular execution-step
 	// path gets via applyStepConfigToAgentConfig. Without this, a
-	// todo-task orchestrator agent collides with any other agy-cli
+	// todo-task orchestrator agent collides with any other coding-CLI
 	// session already attached to the workflow folder (notably the
-	// workshop chat that triggered the run): agy-cli rejects concurrent
-	// sessions on the same dir with different MCP configs, and the step
-	// fails with "agy-cli does not support concurrent sessions in
-	// working directory ... with different MCP configs". The MCP bridge
-	// remains the authoritative path for any file changes the model
-	// wants to make to the user's actual workspace.
+	// workshop chat that triggered the run): some coding CLIs reject
+	// concurrent sessions on the same dir with different MCP configs,
+	// failing the step with a "does not support concurrent sessions in
+	// working directory ... with different MCP configs"-style error. The
+	// MCP bridge remains the authoritative path for any file changes the
+	// model wants to make to the user's actual workspace.
 	config.IsolateCodingAgentWorkspace = true
 
 	// Give nested todo_task orchestrators their own session-level folder guard just like
