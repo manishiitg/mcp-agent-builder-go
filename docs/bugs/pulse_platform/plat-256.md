@@ -1,6 +1,6 @@
 [← Pulse platform index](../pulse_platform_issue_register.md)
 
-# PLAT-254 — Interactive HTML reports: `window.report.updateField`/`updateFields`
+# PLAT-256 — Interactive HTML reports: `window.report.updateField`/`updateFields`
 
 | Coordination | Value |
 |---|---|
