@@ -39,6 +39,8 @@ export type WorkflowWorkspaceView =
   | 'learnings'
   | 'knowledgebase'
   | 'database'
+  | 'evaluation'
+  | 'schedules'
   | null
 
 // Layout direction for workflow canvas
@@ -101,6 +103,8 @@ function normalizeWorkflowWorkspaceView(view: unknown): WorkflowWorkspaceView {
     case 'learnings':
     case 'knowledgebase':
     case 'database':
+    case 'evaluation':
+    case 'schedules':
     case null:
       return view
     case 'soul':

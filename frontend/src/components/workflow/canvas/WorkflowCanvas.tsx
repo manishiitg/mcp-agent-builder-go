@@ -54,6 +54,8 @@ import ExecutionLogsPopup from '../ExecutionLogsPopup'
 import LearningsPopup from '../LearningsPopup'
 import KBPopup from '../KBPopup'
 import DatabasePopup from '../DatabasePopup'
+import { PulseEvalSummary } from '../PulseEvalSummary'
+import WorkflowScheduleRunsPanel from '../../scheduler/WorkflowScheduleRunsPanel'
 
 // Duration to show highlights before clearing (in ms)
 const HIGHLIGHT_DURATION = 4000
@@ -406,6 +408,8 @@ const INSPECTOR_WORKSPACE_VIEWS = new Set([
   'learnings',
   'knowledgebase',
   'database',
+  'evaluation',
+  'schedules',
 ])
 
 const WorkflowInspectorCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>(({
@@ -491,6 +495,16 @@ const WorkflowInspectorCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanva
     />
   ) : workflowWorkspaceView === 'knowledgebase' ? (
     <KBPopup isOpen embedded onClose={closeInspector} workspacePath={workspacePath} />
+  ) : workflowWorkspaceView === 'evaluation' ? (
+    <div className="h-full overflow-y-auto">
+      <PulseEvalSummary workspacePath={workspacePath || ''} className="min-h-full rounded-none border-0" />
+    </div>
+  ) : workflowWorkspaceView === 'schedules' ? (
+    <WorkflowScheduleRunsPanel
+      embedded
+      workflowScope={{ presetQueryId: presetQueryId || undefined, workspacePath: workspacePath || undefined }}
+      onClose={closeInspector}
+    />
   ) : (
     <DatabasePopup isOpen embedded onClose={closeInspector} workspacePath={workspacePath} />
   )

@@ -19,6 +19,7 @@ import {
   Activity,
   BellRing,
   CalendarClock,
+  ClipboardCheck,
   RefreshCw,
   Smartphone,
   Tablet,
@@ -56,7 +57,6 @@ import { PulseWorkspace } from '../PulseWorkspace'
 import { getNotificationDotClass } from '../notificationStatus'
 import { loadWorkflowNotificationInfo, type WorkflowNotificationState } from '../../../services/workflow-notifications'
 import WorkflowAccessPopup from '../WorkflowAccessPopup'
-import WorkflowScheduleRunsPanel from '../../scheduler/WorkflowScheduleRunsPanel'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../../ui/tooltip'
 import { WORKFLOW_SOUL_REFRESH_EVENT } from '../SoulViewer'
 import { hasWorkflowWriteAccess, hasWorkflowOwnerAccess } from '../../../utils/workflowPermissions'
@@ -77,7 +77,7 @@ import { sendWorkflowMessageToChat } from '../../../utils/reportHumanInputChat'
 const EXECUTION_PHASE_ID = 'execution'
 const WORKFLOW_SCHEDULE_TOOLBAR_LIMIT = 10_000
 
-type WorkspaceView = 'flow' | 'report' | 'files' | 'costs' | 'execution-logs' | 'learnings' | 'knowledgebase' | 'database'
+type WorkspaceView = 'flow' | 'report' | 'files' | 'costs' | 'execution-logs' | 'learnings' | 'knowledgebase' | 'database' | 'evaluation' | 'schedules'
 
 type WorkflowScheduleStats = {
   total: number
@@ -99,11 +99,6 @@ const EMPTY_WORKFLOW_SCHEDULE_STATS: WorkflowScheduleStats = {
 
 function normalizeWorkspacePath(path?: string | null): string {
   return (path || '').replace(/\/+$/, '')
-}
-
-function formatWorkflowNameFromPath(path?: string | null): string {
-  const name = normalizeWorkspacePath(path).split('/').filter(Boolean).pop()
-  return name || 'Workflow'
 }
 
 interface CompactToolbarMenuProps {
@@ -377,6 +372,8 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
     || workflowWorkspaceView === 'learnings'
     || workflowWorkspaceView === 'knowledgebase'
     || workflowWorkspaceView === 'database'
+    || workflowWorkspaceView === 'evaluation'
+    || workflowWorkspaceView === 'schedules'
   const isPreviewView = workflowWorkspaceView !== 'files' && !isInspectorView
     && (canvasViewMode === 'flow' || canvasViewMode === 'report')
 
@@ -453,7 +450,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
   const [showNotifications, setShowNotifications] = useState(false)
   const [notificationState, setNotificationState] = useState<WorkflowNotificationState | 'loading'>('loading')
   const [showAccessPopup, setShowAccessPopup] = useState(false)
-  const [showWorkflowSchedulesPanel, setShowWorkflowSchedulesPanel] = useState(false)
   const [workflowScheduleStats, setWorkflowScheduleStats] = useState<WorkflowScheduleStats>(EMPTY_WORKFLOW_SCHEDULE_STATS)
   const [manualPulseStarting, setManualPulseStarting] = useState(false)
 
@@ -480,11 +476,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
       setManualPulseStarting(false)
     }
   }, [manualPulseStarting, workspacePath])
-
-  const workflowScheduleLabel = useMemo(
-    () => formatWorkflowNameFromPath(workspacePath),
-    [workspacePath]
-  )
 
   const refreshPulseModuleStates = useCallback(async (showLoading = true) => {
     if (!workspacePath) {
@@ -661,7 +652,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
     setShowBackupPopup(false)
     setShowPublishPopup(false)
     setShowNotifications(false)
-    setShowWorkflowSchedulesPanel(false)
     setShowMonitorHelp(false)
   }, [])
   
@@ -1002,7 +992,20 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                 <TooltipTrigger asChild>
                   <button
                     type="button"
-                    onClick={() => setShowWorkflowSchedulesPanel(true)}
+                    onClick={() => openWorkspaceView('evaluation')}
+                    className="flex h-full w-8 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                    aria-label="Evaluation"
+                  >
+                    <ClipboardCheck className="h-3.5 w-3.5" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom"><p>Evaluation results</p></TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() => openWorkspaceView('schedules')}
                     className="relative flex h-full w-8 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                     aria-label="Schedules"
                   >
@@ -1064,21 +1067,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
         </TooltipProvider>
       </div>
     </div>
-    {showWorkflowSchedulesPanel && (
-      <WorkflowScheduleRunsPanel
-        workflowScope={{
-          presetQueryId,
-          workspacePath,
-          label: workflowScheduleLabel,
-        }}
-        onClose={() => {
-          setShowWorkflowSchedulesPanel(false)
-          refreshWorkflowScheduleStats()
-        }}
-        onJobsLoaded={updateWorkflowScheduleStats}
-      />
-    )}
-
     {/* Database-native Pulse workspace */}
     {showMonitorHelp && (
       <ModalPortal>

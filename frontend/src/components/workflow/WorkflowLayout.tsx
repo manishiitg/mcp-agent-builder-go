@@ -1096,7 +1096,9 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
     workflowWorkspaceView === 'execution-logs' ||
     workflowWorkspaceView === 'learnings' ||
     workflowWorkspaceView === 'knowledgebase' ||
-    workflowWorkspaceView === 'database'
+    workflowWorkspaceView === 'database' ||
+    workflowWorkspaceView === 'evaluation' ||
+    workflowWorkspaceView === 'schedules'
   const chatPaneVisibilityClass =
     workspacePaneVisible && isWorkspaceViewActive
       ? 'hidden md:flex'
