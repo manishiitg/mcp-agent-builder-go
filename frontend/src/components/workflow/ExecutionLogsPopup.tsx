@@ -1672,6 +1672,7 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                           {/* Timeline dot */}
                           <div className={`absolute -left-[5px] top-3 w-2.5 h-2.5 rounded-full border-2 border-background ${
                             log.type === 'routing' ? 'bg-indigo-500' :
+                            log.type === 'branch' ? 'bg-cyan-500' :
                             log.type === 'evaluation' ? (log.success_criteria_met ? 'bg-emerald-500' : 'bg-rose-500') :
                             'bg-slate-400 dark:bg-slate-500'
                           }`} />
@@ -1680,6 +1681,7 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                             <div className="flex items-center gap-2 mb-2">
                               <span className={`font-mono text-[10px] px-1.5 py-0.5 rounded uppercase font-bold tracking-wide border ${
                                 log.type === 'routing' ? 'bg-indigo-500/10 text-indigo-600 border-indigo-500/20 dark:bg-indigo-500/20 dark:text-indigo-300 dark:border-indigo-500/30' :
+                                log.type === 'branch' ? 'bg-cyan-500/10 text-cyan-600 border-cyan-500/20 dark:bg-cyan-500/20 dark:text-cyan-300 dark:border-cyan-500/30' :
                                 log.type === 'evaluation' ? 'bg-violet-500/10 text-violet-600 border-violet-500/20 dark:bg-violet-500/20 dark:text-violet-300 dark:border-violet-500/30' :
                                 'bg-slate-100 text-slate-700 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700/50'
                               }`}>
@@ -1690,12 +1692,12 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                               </span>
                             </div>
 
-                            {log.type === 'routing' && log.routing_evaluation && (
+                            {(log.type === 'routing' || log.type === 'branch') && log.routing_evaluation && (
                               <div className="mt-3 space-y-3">
-                                <div className="rounded border border-indigo-500/20 bg-indigo-500/[0.05] p-3">
+                                <div className={`rounded border p-3 ${log.type === 'branch' ? 'border-cyan-500/20 bg-cyan-500/[0.05]' : 'border-indigo-500/20 bg-indigo-500/[0.05]'}`}>
                                   <div className="flex flex-wrap items-center justify-between gap-2">
                                     <span className="text-xs font-medium text-foreground">Selected route</span>
-                                    <span className="rounded border border-indigo-500/20 bg-background px-1.5 py-0.5 font-mono text-[10px] text-indigo-700 dark:text-indigo-300">
+                                    <span className={`rounded border bg-background px-1.5 py-0.5 font-mono text-[10px] ${log.type === 'branch' ? 'border-cyan-500/20 text-cyan-700 dark:text-cyan-300' : 'border-indigo-500/20 text-indigo-700 dark:text-indigo-300'}`}>
                                       {log.routing_evaluation.selected_route_id || 'not recorded'}
                                     </span>
                                   </div>
@@ -1707,7 +1709,7 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                                 </div>
                                 {log.routing_evaluation.routing_question && (
                                   <div className="text-xs">
-                                    <div className="mb-1 font-semibold text-foreground">Routing question</div>
+                                    <div className="mb-1 font-semibold text-foreground">{log.type === 'branch' ? 'Branch question' : 'Routing question'}</div>
                                     <p className="text-muted-foreground">{log.routing_evaluation.routing_question}</p>
                                   </div>
                                 )}
@@ -1720,7 +1722,7 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                               </div>
                             )}
 
-                            {log.type === 'routing' && log.orchestration_response && !log.routing_evaluation && (
+                            {(log.type === 'routing' || log.type === 'branch') && log.orchestration_response && !log.routing_evaluation && (
                               <div className="space-y-3 mt-3">
                                 <div className="flex flex-col gap-2 p-3 bg-primary/5 rounded border border-primary/20">
                                     <div className="flex justify-between items-start">

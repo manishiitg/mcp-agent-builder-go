@@ -112,6 +112,39 @@ export const builtinCommands: CommandDefinition[] = [
     }
   },
   {
+    // TEMPORARY (PLAT-259): manual live-reverify diagnostic for the `branch`
+    // step type. Remove this entry, its backend guidance kind
+    // (cmd/server/guidance/guidance.go's "verify-branch-step"), and
+    // templates/review/verify-branch-step.md once confirmed working.
+    command: 'verify-branch-step',
+    description: '[TEMP] Verify a real branch step persists, executes, logs, and navigates correctly',
+    icon: <CheckCircle className="w-4 h-4" />,
+    modes: ['workflow'],
+    requiredWorkflowMode: 'plan',
+    requiredWorkshopMode: ['workshop', 'run'],
+    source: 'builtin',
+    execute: (ctx) => {
+      submitGuidedWorkflowCommand(ctx, 'verify-branch-step')
+    }
+  },
+  {
+    // TEMPORARY (PLAT-259): reclassifies pre-split routing steps onto the
+    // new routing/branch semantics. Remove this entry, its backend guidance
+    // kind (cmd/server/guidance/guidance.go's "migrate-routing-to-branch"),
+    // and templates/review/migrate-routing-to-branch.md once confirmed
+    // working.
+    command: 'migrate-routing-to-branch',
+    description: '[TEMP] Convert existing routing steps to branch where appropriate and check route best practices',
+    icon: <GitBranch className="w-4 h-4" />,
+    modes: ['workflow'],
+    requiredWorkflowMode: 'plan',
+    requiredWorkshopMode: ['workshop'],
+    source: 'builtin',
+    execute: (ctx) => {
+      submitGuidedWorkflowCommand(ctx, 'migrate-routing-to-branch')
+    }
+  },
+  {
     command: 'review-artifact-drift',
     description: 'Check whether artifacts drifted from recent plan changes',
     icon: <RefreshCw className="w-4 h-4" />,

@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | Claude Code |
-| Ticket state | `third independent review open` — core branch execution and phase B corrections pass, but the canonical builder prompt still directs small/fixed branches to routing, branch execution evidence is mislabeled as routing in Execution Logs, and the plan add/update API rejects branch steps; frontend per-route reporting tabs and live manual reverify also remain open |
+| Ticket state | `third independent review's findings resolved` — the canonical workshop prompt and every named reference doc now offer `branch` as the fixed-choice alternative to `routing`, with a guidance-contract test locking both in; Execution Logs now reports a branch run's real step type instead of hardcoding `routing`; the platform's generic plan add/update HTTP API (distinct from the Builder-native tools) now accepts branch steps. Frontend per-route reporting tabs and live manual reverify remain the only open items |
 | Last synchronized | `2026-08-30` |
 
 - **Type:** platform feature (design only, no code changed). Filed at the
@@ -535,3 +535,108 @@ PLAT-259 is still not complete for three newly confirmed integration reasons:
 The two already-declared open items also remain: frontend per-route reporting
 tabs and a live manual branch run against a real workflow. No runtime regression
 was found in the shared branch executor itself.
+
+## Third independent review — resolved 2026-08-30
+
+Addressed all three findings:
+
+1. **Canonical builder prompt now offers `branch`.** The prompt block
+   inside `interactive_workshop_manager.go` (`## Planning steps`, the text
+   the Builder agent reads every workshop turn, distinct from the
+   `references/*.md` deep-dive docs) previously told the agent to use
+   deterministic `routing` for every fixed branch choice and omitted
+   `branch` from its step-types list entirely. Rewrote the guidance to
+   offer both explicitly (`branch` for a small in-flow decision, `routing`
+   for a major sub-workflow fork) and added `branch` to the step-types
+   list and the per-step-deep-dive doc list. Extended the same fix to
+   every other canonical entry point the review named:
+   `plan-design.md`, `planning-steps.md`, `message-sequence.md`,
+   `regular.md`, and `workflow-tools.md` (which was also missing
+   `add_branch_step`/`update_branch_step` from its tool lists entirely).
+   Two new regression tests lock this in:
+   `TestCanonicalWorkshopPromptOffersBranchForFixedChoices`
+   (`controller_branch_test.go`, source-scans
+   `interactive_workshop_manager.go`, mirroring the existing
+   `TestRunInBackgroundPassesBuilderSkillSnapshotToBothAgentKinds`
+   pattern) and `TestCanonicalPlanningDocsDistinguishBranchFromRouting`
+   (`cmd/server/guidance/branch_step_type_distinction_test.go`, renders
+   each of the five docs via `RenderSystemDoc` and asserts both `branch`
+   and `routing` are documented as real step-type options, not just used
+   as the English verb). Both confirmed to fail against the pre-fix files.
+2. **Execution Logs now reports a branch run's real type.**
+   `handleGetExecutionLogs` (`cmd/server/workflow.go`) hardcoded
+   `"type": "routing"` on every `routing-evaluation.json`-derived
+   orchestration entry — the artifact the shared `executeRoutingStep`
+   writes identically for either step type. Now looks up the owning
+   step's real type from `stepMetadata` (already populated from
+   `plan.json` for other purposes in the same handler), falling back to
+   `"routing"` only if metadata is missing. The frontend
+   (`ExecutionLogsPopup.tsx`) previously only rendered this block for
+   `log.type === 'routing'` — extended every check to include `'branch'`
+   too, with its own cyan styling (matching the existing step-header
+   badge convention) and a "Branch question" label instead of "Routing
+   question", so a branch entry doesn't just stop rendering.
+   `TestHandleGetExecutionLogsReportsBranchStepTypeNotRouting`
+   (`workflow_execution_logs_test.go`) covers the backend fix; confirmed
+   to fail against the pre-fix handler.
+3. **The generic plan add/update HTTP API now accepts branch steps.**
+   `handleAddStep` and `updateStepInPlan` (`cmd/server/workflow.go`) —
+   the platform's generic plan-mutation endpoints distinct from the
+   Builder-native `add_branch_step`/`update_branch_step` tools — had no
+   `BranchPlanStep` case in either switch and returned "Unknown step
+   type"/"unknown step type" for a branch payload, even though the
+   frontend's `PlanStep` union already accepts one. Added a `case
+   "branch":` to `handleAddStep` (full unmarshal, matching `regular`'s
+   shape) and a `case *BranchPlanStep:` to `updateStepInPlan` (common
+   fields only — title/description/context_dependencies/context_output —
+   matching exactly what this generic path already offers every other
+   type; route-specific fields like `routes`/`branch_question` stay the
+   exclusive job of the Builder-native `update_branch_step` tool's
+   privileged, validated write path, not this legacy generic one).
+   `TestHandleAddStepAcceptsBranchStep` and
+   `TestUpdateStepInPlanAcceptsBranchStep`
+   (`workflow_branch_step_api_test.go`) cover both; both confirmed to
+   fail against the pre-fix handlers.
+
+All three fixes verified: `go build ./...`, `gofmt -l` clean; `go test
+./pkg/orchestrator/agents/workflow/step_based_workflow/...`,
+`./cmd/server/...`, and `./cmd/server/guidance/...` green (only the
+pre-existing, unrelated `virtual-tools` missing-module failure remains —
+confirmed reproducible with this ticket's changes fully stashed out, same
+as prior rounds); `cd frontend && npx tsc --noEmit -p . && npm run build`
+clean.
+
+Still open, unchanged: frontend per-route reporting tabs, and the live
+manual reverify against a real workflow run.
+
+## Temporary operator diagnostic commands — added 2026-08-30
+
+At the user's explicit request, to actually close the live-manual-reverify
+item against a real workflow instead of leaving it perpetually open. Both
+are deliberately **temporary** — not permanent workflow-maintenance
+flows — and should be removed (their `allKinds` entry in
+`cmd/server/guidance/guidance.go`, their template in
+`cmd/server/guidance/templates/review/`, and their frontend command in
+`frontend/src/commands/builtin-commands.tsx`) once the operator has used
+them to confirm branch works in a real workflow.
+
+- **`/verify-branch-step`** — adds (or reuses) a real branch step, runs it
+  via `run_full_workflow`, and checks Execution Logs reports it as
+  `"branch"` (not `"routing"`), that it executed deterministically with no
+  agent turn, and that navigation reached the selected route's declared
+  `next_step_id`. Cleans up any step it created for the test.
+- **`/migrate-routing-to-branch`** — the user's actual ask ("convert the
+  existing workflow as per best practices"): reclassifies existing
+  `routing` steps in the current plan as `branch` where they're really the
+  small in-flow decision PLAT-259 introduced `branch` for (preserving the
+  step's id via a reroute-then-restore sequence, since routing/branch steps
+  never run an agent and so carry no learnings to lose from the id churn
+  otherwise), and — for any `routing` step that legitimately stays
+  `routing` — applies the same `route_structural_isolation`/
+  `route_eval_pairing` judgment checks `plan_drift_review`'s phase B
+  already added, filing `record_pulse_finding` for real violations instead
+  of only reporting them in chat.
+
+Neither command has been run against a real workflow by the operator yet —
+that run is exactly what will finally close the "live manual reverify"
+open item above.
