@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | Claude Code |
-| Ticket state | `design complete; phase A (the branch step type) implemented; guidance best-practices reuse of plan_drift_review and frontend per-route reporting tabs not yet built` |
+| Ticket state | `phase A reopened after independent review` — the design is sound, but canonical plan validation rejects `BranchPlanStep` and several runtime/config/navigation switches still omit it; reporting and guidance follow-ups remain unbuilt |
 | Last synchronized | `2026-08-30` |
 
 - **Type:** platform feature (design only, no code changed). Filed at the
@@ -212,3 +212,38 @@ via `run_full_workflow` exactly like a routing step would, and that
 returns the new guidance. The two "explicitly not done" items above
 (reporting tabs, guidance/self-check reuse of `plan_drift_review`) remain
 open follow-up work, not covered by this reverify.
+
+## Independent review — 2026-08-30
+
+The distinct `branch` type and shared `routeSwitchStep` executor are a sound
+design, but phase A is **not usable end to end** and must not be described as
+implemented or working yet.
+
+1. **Canonical plan validation rejects every branch step.**
+   `validateLoadedPlanStepWithOptions` handles regular/evaluation, human,
+   message-sequence, routing, and todo steps, but has no `BranchPlanStep`
+   case. It therefore returns `unsupported step type *BranchPlanStep during
+   loaded plan validation`. Every persisted plan write passes through this
+   validator after a JSON round trip, so `add_branch_step` cannot reliably
+   persist a branch and an existing branch plan cannot reliably reload.
+2. **The runtime switch audit is incomplete.** At minimum:
+   - `populateRuntimeFields` has no branch case and returns `unknown step
+     type`;
+   - `ApplyStepConfigFromFile` does not attach per-step or global config to a
+     branch;
+   - `getAgentConfigs` has no branch case;
+   - post-execution navigation extracts the selected route's `next_step_id`
+     only from concrete `*RoutingPlanStep`, leaving a branch target empty;
+   - `validateNextStepIDReferences` validates routing targets but not branch
+     targets, so dangling branch edges can escape graph validation;
+   - route-scoped validation, nested sub-agent identity normalization, and
+     other routing-specific switches still omit branch.
+
+The corrective implementation should audit every concrete
+`*RoutingPlanStep` switch and use `routeSwitchStep` wherever routing and
+branch share semantics. Acceptance needs one end-to-end regression test that
+adds a branch, persists the plan, reloads it, applies its config, executes a
+selected route, and verifies navigation reaches that route's target. The
+seven existing tests cover parsing and isolated parity only; they do not
+exercise that lifecycle. Reporting tabs and plan-drift guidance should wait
+until this runtime contract passes.

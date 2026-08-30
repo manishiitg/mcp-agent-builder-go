@@ -1,11 +1,11 @@
 [← Pulse platform index](../pulse_platform_issue_register.md)
 
-# PLAT-258 — Dedicated `plan_drift_review` Pulse module (all 6 phases complete)
+# PLAT-258 — Dedicated `plan_drift_review` Pulse module (corrective work required)
 
 | Coordination | Value |
 |---|---|
 | Assigned agent | Claude Code |
-| Ticket state | `implemented, all 6 phases complete` — phase 1 durable per-step record + clear-on-edit; phase 2, 6 of 9 deterministic checks built as plain Go functions (1 needed no new code, 2 correctly found not-buildable-as-designed — see below); phase 3 `record_plan_drift_review` tool; phase 4 frontend; phase 5 module registration + reviewer-turn content + scheduling; phase 6 technical_review cutover (see below) |
+| Ticket state | `reopened after independent review` — the six intended phases landed, but the due scan can silently omit plan steps and errors, failed reviews can disappear without a repair finding, and the separate parallel reviewer delays safe repairs to a later Pulse cycle |
 | Last synchronized | `2026-08-30` |
 
 - **Type:** platform feature (multi-phase), not a single bug fix. Filed at
@@ -484,3 +484,44 @@ suite still green.
 ## Reverify
 
 Once later phases land: confirm live that editing a step's description/context_dependencies/validation_schema nulls `drift_review` in `step_config.json`, and that a title-only edit does not. Also confirm `record_plan_drift_review` is actually callable from a live Workshop-mode session (not just present in the allow-list) and that a written record is visible in `step_config.json` on disk.
+
+## Independent review — 2026-08-30
+
+The six implementation phases are present, but the ticket is **not
+acceptance-complete**. The review found four lifecycle defects that can make
+Pulse report no work or postpone a repair even though plan drift remains:
+
+1. **The due scan does not derive its step set from the canonical plan.**
+   `CollectPlanDriftCandidates` scans only `planning/step_config.json`.
+   A plan step with no config row is therefore invisible, even though the
+   agreed invariant says every plan step with no `drift_review` is due. A
+   workspace audit found 31 top-level plan steps across 11 workflows with no
+   corresponding config row. The collector must parse `planning/plan.json`,
+   enumerate its steps, and left-join `step_config.json` by step ID; a missing
+   config row or missing review must both produce a candidate.
+2. **Read and parse failures are converted into a false clean result.** The
+   collector returns `nil` for an unreadable or malformed
+   `step_config.json`, which is indistinguishable from "nothing is due" to
+   Gate. Change the API to return `(candidates, error)` and route the error as
+   visible technical/platform work. Inaccessible review state must never
+   suppress the module.
+3. **A failed review can be marked done before its repair issue exists.**
+   `record_plan_drift_review` persists a non-null record even when a check has
+   `status: "fail"`, while candidate collection treats every non-null record
+   as complete. The reviewer creates the corresponding
+   `record_pulse_finding` only afterward. If that second call fails or the
+   turn ends between calls, the failed step is no longer due and no repair
+   item is guaranteed. Persist the failed result and linked finding
+   atomically, or keep failed/unlinked reviews due.
+4. **Review and repair are unnecessarily split across Pulse cycles.** The
+   scheduler launches `plan_drift_review` in parallel with
+   `technical_review`, while the drift reviewer has explicitly been given no
+   repair authority. Technical review can read the backlog before the drift
+   reviewer adds its handoff, postponing a safe repair to the next run. Run
+   drift intake before technical maintenance, or let the same maintenance
+   worker apply safe fixes in the same pass.
+
+Acceptance requires regression tests for missing config rows, malformed
+config, failed-review handoff atomicity, and same-pass safe-repair routing.
+Until those pass, the earlier "all 6 phases complete" wording describes code
+landing, not a completed operational contract.
