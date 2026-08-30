@@ -67,8 +67,8 @@ const PNG_EXPORT_MAX_SIDE = 16000
 const PNG_EXPORT_MAX_PIXELS = 64_000_000
 // Bump this whenever the auto-layout algorithm changes so stale saved layouts
 // (custom drag positions from the old editor) are dropped and the new computed
-// layout takes over. 2.3-route-grid: major route workflows use compact grid cells.
-const WORKFLOW_LAYOUT_VERSION = '2.3-route-grid'
+// layout takes over. 2.6-route-convergence: branches remain in route lanes, then rejoin.
+const WORKFLOW_LAYOUT_VERSION = '2.6-route-convergence'
 const FLOW_FIT_PADDING = 0.24
 const FLOW_FIT_MIN_ZOOM = 0.08
 const FLOW_FIT_MAX_ZOOM = 0.95
@@ -1713,7 +1713,16 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
     if (isRefreshingPlan) return
     setIsRefreshingPlan(true)
     try {
-      await loadPlanRefresh()
+      const reloaded = await loadPlanRefresh()
+      if (!reloaded) {
+        throw new Error('Plan could not be reloaded')
+      }
+      useChatStore.getState().addToast('Plan reloaded', 'success')
+    } catch (err) {
+      useChatStore.getState().addToast(
+        err instanceof Error ? err.message : 'Failed to reload plan',
+        'error'
+      )
     } finally {
       setIsRefreshingPlan(false)
     }

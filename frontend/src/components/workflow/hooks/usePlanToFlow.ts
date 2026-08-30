@@ -606,7 +606,7 @@ function layoutWithDagre(nodes: WorkflowNode[], edges: WorkflowEdge[], direction
   return { nodes: layoutedNodes, edges }
 }
 
-function planStepSuccessors(step: PlanStep): string[] {
+function explicitPlanStepSuccessors(step: PlanStep): string[] {
   if (isRoutingStep(step) || isBranchStep(step)) {
     return step.routes.map(route => route.next_step_id).filter(Boolean)
   }
@@ -623,6 +623,55 @@ function planStepSuccessors(step: PlanStep): string[] {
     routable.if_no_next_step_id,
     ...Object.values(routable.option_routes || {}),
   ].filter((id): id is string => Boolean(id && id !== 'end'))
+}
+
+function hasExplicitPlanContinuation(step: PlanStep): boolean {
+  if (isRoutingStep(step) || isBranchStep(step)) return step.routes.length > 0
+
+  const routable = step as PlanStep & {
+    next_step_id?: string
+    if_yes_next_step_id?: string
+    if_no_next_step_id?: string
+    option_routes?: Record<string, string>
+  }
+  return Boolean(
+    routable.next_step_id ||
+    routable.if_yes_next_step_id ||
+    routable.if_no_next_step_id ||
+    Object.keys(routable.option_routes || {}).length > 0
+  )
+}
+
+// The visual graph includes a sequential edge when a top-level step has no
+// explicit continuation and the following step is not the target of another
+// route. Mirror that rule here, otherwise an "after X" branch gets detached
+// from the route it governs and is laid out in an unrelated corner.
+function buildPlanSuccessorMap(plan: PlanningResponse): Map<string, string[]> {
+  const explicitTargets = new Set<string>()
+  const directSuccessors = new Map<string, string[]>()
+
+  plan.steps.forEach(step => {
+    const successors = explicitPlanStepSuccessors(step)
+    directSuccessors.set(step.id, successors)
+    successors.forEach(successor => explicitTargets.add(successor))
+  })
+
+  const successorsByID = new Map<string, string[]>()
+  plan.steps.forEach((step, index) => {
+    const successors = [...(directSuccessors.get(step.id) || [])]
+    const canContinueSequentially = !hasExplicitPlanContinuation(step) &&
+      !isRoutingStep(step) &&
+      !isBranchStep(step) &&
+      !isHumanInputStep(step) &&
+      !isTodoTaskStep(step)
+    const nextStep = plan.steps[index + 1]
+    if (canContinueSequentially && nextStep && !explicitTargets.has(nextStep.id)) {
+      successors.push(nextStep.id)
+    }
+    successorsByID.set(step.id, successors)
+  })
+
+  return successorsByID
 }
 
 // A major routing step describes several independently runnable pipelines.
@@ -642,6 +691,21 @@ function distributePrimaryRouteLanes(nodes: WorkflowNode[], plan: PlanningRespon
   const stepByID = new Map(plan.steps.map(step => [step.id, step]))
   const nodeByID = new Map(nodes.map(node => [node.id, node]))
   const routeEntries = new Set(routes.map(route => route.next_step_id))
+  const successorsByID = buildPlanSuccessorMap(plan)
+  const inboundCounts = new Map<string, number>()
+  successorsByID.forEach(successors => {
+    successors.forEach(successor => {
+      inboundCounts.set(successor, (inboundCounts.get(successor) || 0) + 1)
+    })
+  })
+  // Shared terminal work is a convergence point, not part of whichever route
+  // happens to be visited first. Keep it below the routes so each pipeline
+  // reads top-to-bottom before the flow rejoins.
+  const convergenceStepIDs = new Set(
+    Array.from(inboundCounts.entries())
+      .filter(([id, count]) => count > 1 && !routeEntries.has(id))
+      .map(([id]) => id)
+  )
 
   const laneSteps = routes.map(route => {
     const seen = new Set<string>()
@@ -656,7 +720,7 @@ function distributePrimaryRouteLanes(nodes: WorkflowNode[], plan: PlanningRespon
       if (stepID !== route.next_step_id && routeEntries.has(stepID)) continue
       seen.add(stepID)
       ordered.push(stepID)
-      for (const successor of planStepSuccessors(stepByID.get(stepID)!)) {
+      for (const successor of successorsByID.get(stepID) || []) {
         if (!seen.has(successor)) queue.push(successor)
       }
     }
@@ -668,16 +732,22 @@ function distributePrimaryRouteLanes(nodes: WorkflowNode[], plan: PlanningRespon
   // execution state misleading.
   const assignedStepIDs = new Set<string>()
   const uniqueLaneSteps = laneSteps.map(steps => steps.filter(id => {
+    if (convergenceStepIDs.has(id)) return false
     if (assignedStepIDs.has(id)) return false
     assignedStepIDs.add(id)
     return true
   }))
   const laneStepIDs = new Set(uniqueLaneSteps.flat())
   const preRouterIDs = plan.steps
-    .filter(step => planStepSuccessors(step).includes(router.id))
+    .filter(step => successorsByID.get(step.id)?.includes(router.id))
     .map(step => step.id)
   const independentIDs = plan.steps
-    .filter(step => step.id !== router.id && !laneStepIDs.has(step.id) && !preRouterIDs.includes(step.id))
+    .filter(step =>
+      step.id !== router.id &&
+      !laneStepIDs.has(step.id) &&
+      !preRouterIDs.includes(step.id) &&
+      !convergenceStepIDs.has(step.id)
+    )
     .map(step => step.id)
 
   const workflowNodes = nodes.filter(node =>
@@ -690,7 +760,12 @@ function distributePrimaryRouteLanes(nodes: WorkflowNode[], plan: PlanningRespon
   const bodyLeft = Math.min(...workflowNodes.map(node => node.position.x))
   const bodyTop = Math.min(...workflowNodes.map(node => node.position.y))
   const columns = Math.min(3, routes.length)
-  const laneGap = 72
+  // Route cards need enough white space for labels and their connecting lines.
+  // Keep these deliberately larger than the normal Dagre sibling gap: this is
+  // the readable overview of a multi-pipeline workflow, not a dense DAG dump.
+  const laneGap = 144
+  const stepGap = 112
+  const routeRowGap = 160
   const maxRouteWidth = Math.max(
     280,
     ...uniqueLaneSteps.flatMap(steps => steps
@@ -716,12 +791,12 @@ function distributePrimaryRouteLanes(nodes: WorkflowNode[], plan: PlanningRespon
     const node = nodeByID.get(id)
     if (!node) return
     placeCentered(id, nextY)
-    nextY += getNodeLayoutDimensions(node).height + 72
+    nextY += getNodeLayoutDimensions(node).height + stepGap
   })
 
   placeCentered(router.id, nextY)
   const routerNode = nodeByID.get(router.id)
-  nextY += (routerNode ? getNodeLayoutDimensions(routerNode).height : 0) + 104
+  nextY += (routerNode ? getNodeLayoutDimensions(routerNode).height : 0) + routeRowGap
 
   // Use up to three columns per row. This keeps six-route workflows readable
   // at normal zoom instead of spreading them across one ultra-wide strip.
@@ -739,18 +814,19 @@ function distributePrimaryRouteLanes(nodes: WorkflowNode[], plan: PlanningRespon
         if (!node) return
         const dims = getNodeLayoutDimensions(node)
         positionByID.set(id, { x, y })
-        y += dims.height + 76
+        y += dims.height + stepGap
       })
       rowBottom = Math.max(rowBottom, y)
     })
 
-    laneBottom = rowBottom + 96
+    laneBottom = rowBottom + routeRowGap
   }
 
   // Steps which are not reachable from a primary route are genuine standalone
   // jobs. Give them a compact bottom strip rather than letting them occupy
   // arbitrary corners of the route map.
   const independentTop = laneBottom
+  let independentBottom = independentTop
   independentIDs.forEach((id, index) => {
     const node = nodeByID.get(id)
     if (!node) return
@@ -759,7 +835,21 @@ function distributePrimaryRouteLanes(nodes: WorkflowNode[], plan: PlanningRespon
     const dims = getNodeLayoutDimensions(node)
     positionByID.set(id, {
       x: bodyLeft + (column * laneWidth),
-      y: independentTop + (row * (dims.height + 76)),
+      y: independentTop + (row * (dims.height + stepGap)),
+    })
+    independentBottom = Math.max(
+      independentBottom,
+      independentTop + (row * (dims.height + stepGap)) + dims.height
+    )
+  })
+
+  convergenceStepIDs.forEach(id => {
+    const node = nodeByID.get(id)
+    if (!node) return
+    const dims = getNodeLayoutDimensions(node)
+    positionByID.set(id, {
+      x: centerX - (dims.width / 2),
+      y: independentBottom + routeRowGap,
     })
   })
 
@@ -1280,12 +1370,14 @@ function processSteps(
                 routeIndex,
                 routeCount: step.routes?.length || 0,
                 routeName: route.route_name || route.route_id,
+                isBranch: isBranchStep(step),
                 selected: isSelectedRoute,
                 color: routeColor
               },
               style: {
                 stroke: isSelectedRoute ? routeColor : '#94a3b8',
                 strokeWidth: isSelectedRoute ? 2.5 : 1.25,
+                strokeDasharray: isBranchStep(step) ? '7 5' : undefined,
                 opacity: isSelectedRoute ? 1 : 0.4
               },
               animated: false
@@ -1307,12 +1399,14 @@ function processSteps(
                 routeIndex,
                 routeCount: step.routes?.length || 0,
                 routeName: route.route_name || route.route_id,
+                isBranch: isBranchStep(step),
                 selected: isSelectedRoute,
                 color: routeColor
               },
               style: {
                 stroke: isSelectedRoute ? routeColor : '#94a3b8',
                 strokeWidth: isSelectedRoute ? 2.5 : 1.25,
+                strokeDasharray: isBranchStep(step) ? '7 5' : undefined,
                 opacity: isSelectedRoute ? 1 : 0.4
               },
               animated: false
