@@ -23,6 +23,7 @@ import {
   Archive,
   Search,
   ArrowLeft,
+  Gauge,
 } from 'lucide-react'
 import { agentApi } from '../../services/api'
 import type { ExecutionLogsResponse, StepExecutionLogs } from '../../services/api-types'
@@ -2584,6 +2585,7 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                   const stepMetrics = getStepMetrics(stepLogs.executions || [])
                   const showMetrics = hasStepMetrics(stepMetrics)
                   const stepModel = getStepModel(stepLogs.executions || [])
+                  const executionTier = stepLogs.execution_tier?.trim()
                   const stepStartedAtMs = getStepFirstActivityMs(stepLogs)
 
                   const stepStatus = getStepStatus(stepLogs)
@@ -2650,6 +2652,12 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                           {stepModel && (
                             <StepMetricChip title={`Model used on the most recent attempt: ${stepModel}`}>
                               {stepModel}
+                            </StepMetricChip>
+                          )}
+                          {executionTier && (
+                            <StepMetricChip title={`Execution tier pinned in step config: ${executionTier}`}>
+                              <Gauge className="h-3 w-3" />
+                              {executionTier}
                             </StepMetricChip>
                           )}
                           {showMetrics && (
