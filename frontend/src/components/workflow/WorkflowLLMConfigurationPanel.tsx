@@ -262,6 +262,44 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
               placeholder={providerManifestLoaded ? 'Select a coding agent' : 'Loading providers…'}
             />
           </div>
+          {selectedProfile?.provider === 'claude-code' && (
+            <div className="mt-4 border-t border-border pt-4">
+              <WorkflowProviderCredentialField
+                provider="claude-code"
+                inputId="workflow-claude-code-token"
+                workflowCredentialPath={workspacePath || undefined}
+                copy={{
+                  heading: 'Claude Code token',
+                  hint: <>Use a token from <code className="rounded bg-background px-1 py-0.5 font-mono text-foreground">claude setup-token</code>, or leave this empty to use the saved Claude login.</>,
+                  fallbackLabel: 'Using saved login',
+                  inputPlaceholder: 'Paste Claude Code token',
+                  replacePlaceholder: 'Paste a replacement token',
+                  noun: 'token',
+                  savedMessage: 'Workflow Claude Code token saved.',
+                  removedMessage: 'Workflow Claude Code token removed; saved Claude login will be used.',
+                }}
+              />
+            </div>
+          )}
+          {selectedProfile?.provider === 'cursor-cli' && (
+            <div className="mt-4 border-t border-border pt-4">
+              <WorkflowProviderCredentialField
+                provider="cursor-cli"
+                inputId="workflow-cursor-api-key"
+                workflowCredentialPath={workspacePath || undefined}
+                copy={{
+                  heading: 'Cursor API key',
+                  hint: <>Paste an API key from <code className="rounded bg-background px-1 py-0.5 font-mono text-foreground">cursor.com</code> settings, or leave this empty to use the saved Cursor login.</>,
+                  fallbackLabel: 'Using saved login',
+                  inputPlaceholder: 'Paste Cursor API key',
+                  replacePlaceholder: 'Paste a replacement API key',
+                  noun: 'API key',
+                  savedMessage: 'Workflow Cursor API key saved.',
+                  removedMessage: 'Workflow Cursor API key removed; saved Cursor login will be used.',
+                }}
+              />
+            </div>
+          )}
           <WorkflowLLMTierPreview selectedLLM={selectedProfile} providerManifest={providerManifest} />
           <p className="mt-3 text-xs leading-relaxed text-muted-foreground">Builder, Maintenance, Pulse, and execution tiers follow the provider’s current defaults. Switch to advanced setup to pin individual roles and fallback order.</p>
           <button type="button" onClick={startAdvancedSetup} disabled={!defaults} className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-50">
@@ -290,44 +328,6 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
         </div>
       )}
 
-      <div className="rounded-lg border border-border bg-muted/20 p-3">
-        <div className="text-xs font-medium text-foreground">Provider credentials</div>
-        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-          These encrypted credentials are private to this workflow and are used when the matching provider is selected above.
-        </p>
-        <div className="mt-3 space-y-4">
-          <WorkflowProviderCredentialField
-            provider="claude-code"
-            inputId="workflow-claude-code-token"
-            workflowCredentialPath={workspacePath || undefined}
-            copy={{
-              heading: 'Claude Code token',
-              hint: <>Use a token from <code className="rounded bg-background px-1 py-0.5 font-mono text-foreground">claude setup-token</code>, or leave this empty to use the saved Claude login.</>,
-              fallbackLabel: 'Using saved login',
-              inputPlaceholder: 'Paste Claude Code token',
-              replacePlaceholder: 'Paste a replacement token',
-              noun: 'token',
-              savedMessage: 'Workflow Claude Code token saved.',
-              removedMessage: 'Workflow Claude Code token removed; saved Claude login will be used.',
-            }}
-          />
-          <WorkflowProviderCredentialField
-            provider="cursor-cli"
-            inputId="workflow-cursor-api-key"
-            workflowCredentialPath={workspacePath || undefined}
-            copy={{
-              heading: 'Cursor API key',
-              hint: <>Paste an API key from <code className="rounded bg-background px-1 py-0.5 font-mono text-foreground">cursor.com</code> settings, or leave this empty to use the saved Cursor login.</>,
-              fallbackLabel: 'Using saved login',
-              inputPlaceholder: 'Paste Cursor API key',
-              replacePlaceholder: 'Paste a replacement API key',
-              noun: 'API key',
-              savedMessage: 'Workflow Cursor API key saved.',
-              removedMessage: 'Workflow Cursor API key removed; saved Cursor login will be used.',
-            }}
-          />
-        </div>
-      </div>
     </div>
   )
 }
