@@ -511,7 +511,8 @@ Pulse report no work or postpone a repair even though plan drift remains:
    `CollectPlanDriftCandidates` scans only `planning/step_config.json`.
    A plan step with no config row is therefore invisible, even though the
    corrective invariant says every plan step with no `drift_review`, or with
-   `drift_review.needs_review == true`, is due. A
+   `drift_review.needs_review == true`, is due; a deleted step is represented
+   by the workflow-level deletion-review flag described below. A
    workspace audit found 31 top-level plan steps across 11 workflows with no
    corresponding config row. The collector must parse `planning/plan.json`,
    enumerate its steps, and left-join `step_config.json` by step ID; a missing
@@ -550,6 +551,7 @@ The review trigger is intentionally reduced to one deterministic condition:
 ```text
 Any canonical plan step has no drift_review record
 OR drift_review.needs_review == true
+OR workflow_drift_review.needs_review == true
 → plan_drift_review is due
 ```
 
@@ -567,25 +569,36 @@ The lifecycle is:
    as material or cosmetic in Go; a description or title change can still
    alter meaning, and classification would create a new false-negative path.
    UI state that is not persisted in the plan naturally does not participate.
-3. Gate enumerates the canonical step set from `planning/plan.json` and
+3. **Deleting a step** cannot flag the removed step, so the delete mutation
+   appends a `step_deleted` changelog entry with the deleted step definition
+   and its final `drift_review` snapshot, then sets
+   `workflow_drift_review.needs_review = true`. This is the only case where
+   copying the prior review into the changelog is necessary: the source record
+   is about to be removed. It lets the agent inspect dangling routes,
+   dependencies, reports, evaluations, learnings, and database artifacts.
+4. Gate enumerates the canonical step set from `planning/plan.json` and
    left-joins `planning/step_config.json`. A missing config row, missing
-   review, or `needs_review: true` all mean due.
-4. The same plan-mutation operation appends an immutable changelog entry
+   review, or `needs_review: true` all mean due; it also checks the one
+   workflow-level deletion-review flag.
+5. The same plan-mutation operation appends an immutable changelog entry
    containing the change ID, step ID, timestamp, actor, reason, and changed
    fields. It does **not** duplicate the previous review into each changelog
    row because that review remains in `step_config.json` until replacement.
    Appending the change and setting the flag must be one mutation contract.
-5. The agentic reviewer reads the current step, its dependencies and
+6. The agentic reviewer reads the current step, its dependencies and
    artifacts, the preserved review, and only changelog entries after its
    `reviewed_through_change_id`. It uses this evidence to determine downstream
    effects and apply safe fixes.
-6. Only a completed review replaces the evidence, sets
+7. Only a completed review replaces the evidence, sets
    `reviewed_through_change_id` to the latest consumed change, and sets
    `needs_review = false`. If the reviewer turn or required persistence
    fails, the flag stays true and the next Pulse run retries it. If a
    completed review creates an unresolved human/platform/fixer item, the
    review record and linked item must be committed atomically.
-7. Scheduled Pulse and the standalone artifact-review slash command must
+   A completed deletion review likewise advances the workflow-level
+   `reviewed_through_change_id` and clears its flag. Failed/interrupted work
+   leaves the appropriate flag set.
+8. Scheduled Pulse and the standalone artifact-review slash command must
    call the **same** candidate collector, reviewer contract, safe-fix path,
    and completion writer. The slash command is a manual entry point into the
    module, not a separate checklist implementation. It selects the same
@@ -595,14 +608,15 @@ The lifecycle is:
    performs no duplicate review.
 
 This preserves review history without duplicating it in the changelog or
-making the changelog part of due-ness: a missing review or
-`needs_review: true` triggers the work; the changelog explains what changed
-and helps the agent determine its effects.
+making the changelog part of due-ness: a missing review or a step/workflow
+`needs_review: true` flag triggers the work; the changelog explains what
+changed and helps the agent determine its effects.
 
 Acceptance must exercise both entry points against the same fixture: first
 verify that scheduled and slash dispatch choose the same missing/flagged
-steps and produce the same durable result, then rerun the slash command and
-verify that it cleanly reports no work. The current standalone
+steps and deletion-review work, and produce the same durable result. Cover a
+new step, an ordinary update, and a deletion. Then rerun the slash command
+and verify that it cleanly reports no work. The current standalone
 `/review-artifact-drift` checklist does not yet provide this parity and must
 be routed through the shared `plan_drift_review` implementation rather than
 maintained as an independent behavior.
