@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | Claude Code |
-| Ticket state | `corrective contract implemented` — all four independent-review findings fixed and tested (plan.json-derived scan, scan-error visibility, atomic fail/finding link, plan-drift-review sequenced before technical_review), plus the agreed "stale flag" redesign (needs_review + reviewed_through_change_id, evidence preserved not nulled). Slash/scheduled implementation parity (point 7/8) and the workflow-level deletion-review flag (point 8 of the newest update) are explicitly **not yet built** — see Follow-up below |
+| Ticket state | `open — combined review-and-fix contract agreed` — the corrective scan/stale-evidence foundation is implemented, but `plan_drift_review` must now own safe workflow repair and verification in the same retained turn, matching Technical Review's combined maintenance pattern; slash/scheduled parity, deleted-step coverage, mutation atomicity, and the remaining independent-review gaps also remain open |
 | Last synchronized | `2026-08-30` |
 
 - **Type:** platform feature (multi-phase), not a single bug fix. Filed at
@@ -718,3 +718,48 @@ rather than folded into another PLAT-258 mega-push):
   underway): a `step_deleted` changelog entry carrying the deleted step's
   final `drift_review` snapshot, plus a workflow-level `needs_review`/
   `reviewed_through_change_id` pair Gate's due-check also has to consult.
+
+## Review decision — combine plan-drift review and repair (2026-08-30)
+
+The handoff-only first version is superseded. `plan_drift_review` must follow
+the same combined maintenance model already used by Technical Review: one
+retained agent reviews its due scope, applies every safe workflow-owned fix,
+verifies the result, and records the terminal evidence in the same turn.
+Message-sequence continuations are allowed only when later reasoning genuinely
+needs another turn; they are not a mandatory boundary between review and fix.
+
+The module owns plan-change drift end to end:
+
+1. Read the shared candidate collector, preserved prior review, and changelog
+   entries after `reviewed_through_change_id`.
+2. Run the deterministic and judgment checks against the current step and its
+   affected dependencies.
+3. Apply coherent, safe workflow-owned repairs immediately across the exact
+   affected surfaces: plan/config, downstream contracts, validation, DB/report,
+   evaluation, learnings, KB, scripts, and route wiring as warranted by the
+   evidence.
+4. Verify each repair proportionally and record the check as `fixed`; a
+   same-turn repair does not need an intermediate Pulse issue merely to hand
+   work to another agent.
+5. Route only genuine human decisions, platform-owned defects, external
+   actions, or unsafe/ambiguous redesigns to durable issues. A failing check
+   may clear `needs_review` only after that durable handoff exists.
+6. Clear the step/workflow `needs_review` flag only after the complete review,
+   safe-fix, verification, and required-handoff set is durably recorded.
+   Interrupted or failed work stays due.
+
+Ownership must remain non-overlapping. Plan Drift owns repairs caused by a
+plan change and its dependent artifacts. Technical Review owns unrelated
+runtime/tool/store/report/evaluation/cost defects and must not re-review a
+Plan Drift root already fixed or durably routed in the same Pulse run.
+
+This decision also removes the scheduler workaround that depended on
+Technical Review already being due at Gate time. A Plan Drift-only Pulse run
+must be capable of reaching zero safe plan-drift debt without waiting for a
+second Pulse cycle.
+
+Acceptance must prove, in one scheduled run and through the shared manual
+entry point: review discovers a repairable drift; the same retained agent
+changes the relevant files; verification passes; the drift review is recorded
+as fixed and cleared; no duplicate Technical Review issue is created; and a
+failed/interrupted repair leaves the candidate due for retry.
