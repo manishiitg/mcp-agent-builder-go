@@ -150,8 +150,8 @@ func (api *StreamingAPI) cancelSessionRuntimeWork(sessionID, closeReason string,
 // closeAllCodingCLIInteractiveSessionsForOwner tears down the persistent
 // tmux-backed coding-CLI session registered under the given owner key, across
 // every tmux provider. Each adapter's CloseXxxInteractiveSessionForOwner runs
-// its own graceful-then-force shutdown (e.g. agy: tmux send-keys "/exit" →
-// tmux kill-session) and is a no-op when no session is registered for the
+// its own graceful-then-force shutdown (send an exit sequence, then tmux
+// kill-session) and is a no-op when no session is registered for the
 // owner, so calling all tmux providers is safe and provider-agnostic.
 func closeAllCodingCLIInteractiveSessionsForOwner(owner, reason string) {
 	llmproviders.CloseCursorCLIInteractiveSessionForOwner(owner, reason)
@@ -161,8 +161,8 @@ func closeAllCodingCLIInteractiveSessionsForOwner(owner, reason string) {
 }
 
 // gracefulCloseCodingCLITmuxByName runs the provider-specific graceful shutdown
-// (e.g. agy: Escape → "/exit" → Enter; claude: "C-u /exit C-m"; codex/cursor/
-// gemini: C-c) plus the adapter's file/MCP-lease cleanup for the tmux-backed
+// (e.g. claude: "C-u /exit C-m"; codex/cursor/gemini: C-c) plus the adapter's
+// file/MCP-lease cleanup for the tmux-backed
 // coding CLI identified by its tmux session name. The provider is detected from
 // the session-name prefix (set by each adapter's new<Provider>TmuxSessionName).
 // This tears the session down by tmux name rather than owner key, so it works
@@ -369,15 +369,14 @@ func (api *StreamingAPI) handleStopSession(w http.ResponseWriter, r *http.Reques
 	// canceling the Go context above tears down the streaming connection
 	// server-side but the CLI process inside the tmux pane keeps running
 	// its current turn (LLM calls, shell commands) until it finishes
-	// naturally — the user pressed stop but agy/codex/etc. ran for another
-	// 30-60 seconds.
+	// naturally — the user pressed stop but codex/cursor/etc. ran for
+	// another 30-60 seconds.
 	//
 	// Each adapter's CloseXxxInteractiveSessionForOwner implements that
-	// CLI's graceful-then-force shutdown sequence (agy: tmux send-keys
-	// "/exit" → tmux kill-session; codex/cursor/gemini/claude-code:
-	// adapter-specific exit → tmux kill-session). All are no-ops when no
-	// session is registered for the owner, so calling all five is safe
-	// and provider-agnostic.
+	// CLI's graceful-then-force shutdown sequence (codex/cursor/gemini/
+	// claude-code: adapter-specific exit → tmux kill-session). All are
+	// no-ops when no session is registered for the owner, so calling all
+	// four is safe and provider-agnostic.
 	closeReason := "user pressed stop"
 	closeAllCodingCLIInteractiveSessionsForOwner(sessionID, closeReason)
 	log.Printf("[SESSION DEBUG] Closed any tmux-backed coding-CLI session for stopped session %s", sessionID)
@@ -388,8 +387,7 @@ func (api *StreamingAPI) handleStopSession(w http.ResponseWriter, r *http.Reques
 	// chat sessionID — so the owner-keyed close above never matches them and
 	// their tmux panes orphan: the CLI process keeps running (and keeps holding
 	// the workflow's single-session slot, which blocks "new chat" and workflow
-	// model changes) long after the user stopped the run. This is provider-wide,
-	// not agy-specific.
+	// model changes) long after the user stopped the run. This is provider-wide.
 	//
 	// When the caller explicitly asked to cancel agents (cancelAgents=true — e.g.
 	// the workflow "kill & start new chat" popup, which calls stopSession(sid,

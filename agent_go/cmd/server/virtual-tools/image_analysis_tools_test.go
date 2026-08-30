@@ -74,19 +74,6 @@ func TestNormalizeImageAnalysisProviderAndModelCursorDefault(t *testing.T) {
 	}
 }
 
-func TestNormalizeImageAnalysisProviderAndModelAgyDefault(t *testing.T) {
-	provider, modelID, err := normalizeImageAnalysisProviderAndModel("agy-cli", "")
-	if err != nil {
-		t.Fatalf("normalizeImageAnalysisProviderAndModel returned error: %v", err)
-	}
-	if provider != "agy-cli" {
-		t.Fatalf("provider = %q, want agy-cli", provider)
-	}
-	if modelID != "agy-cli" {
-		t.Fatalf("modelID = %q, want agy-cli", modelID)
-	}
-}
-
 func TestNormalizeImageAnalysisProviderAndModelInfersCodexFromModel(t *testing.T) {
 	provider, modelID, err := normalizeImageAnalysisProviderAndModel("", "gpt-5.4-mini")
 	if err != nil {
@@ -126,19 +113,6 @@ func TestNormalizeImageAnalysisProviderAndModelInfersClaudeCodeFromSonnet5(t *te
 	}
 }
 
-func TestNormalizeImageAnalysisProviderAndModelInfersAgyFromModel(t *testing.T) {
-	provider, modelID, err := normalizeImageAnalysisProviderAndModel("", "agy-cli")
-	if err != nil {
-		t.Fatalf("normalizeImageAnalysisProviderAndModel returned error: %v", err)
-	}
-	if provider != "agy-cli" {
-		t.Fatalf("provider = %q, want agy-cli", provider)
-	}
-	if modelID != "agy-cli" {
-		t.Fatalf("modelID = %q, want agy-cli", modelID)
-	}
-}
-
 func TestNormalizeImageAnalysisProviderAndModelInfersKimiFromVisionModel(t *testing.T) {
 	provider, modelID, err := normalizeImageAnalysisProviderAndModel("", "kimi-k2.6")
 	if err != nil {
@@ -152,8 +126,8 @@ func TestNormalizeImageAnalysisProviderAndModelInfersKimiFromVisionModel(t *test
 	}
 }
 
-func TestPathBasedImageAnalysisProviderIncludesAgy(t *testing.T) {
-	for _, provider := range []string{"codex-cli", "cursor-cli", "agy-cli", "claude-code"} {
+func TestPathBasedImageAnalysisProviderIncludesNativeCLIs(t *testing.T) {
+	for _, provider := range []string{"codex-cli", "cursor-cli", "claude-code"} {
 		if !pathBasedImageAnalysisProvider(provider) {
 			t.Fatalf("pathBasedImageAnalysisProvider(%q) = false, want true", provider)
 		}

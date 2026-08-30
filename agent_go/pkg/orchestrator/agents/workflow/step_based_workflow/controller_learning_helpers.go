@@ -48,6 +48,17 @@ func canReadLearnings(agentConfigs *AgentConfigs, step PlanStepInterface, isEval
 	return resolveLearningsAccess(agentConfigs) != LearningsAccessNone
 }
 
+// resolveExecutionLearningsAccess is the single capability decision used by
+// both prompt injection and filesystem guards. Evaluation and deterministic
+// routing steps intentionally consume no workflow learnings; returning none
+// here prevents their shell access from being broader than their prompt.
+func resolveExecutionLearningsAccess(agentConfigs *AgentConfigs, step PlanStepInterface, isEvalMode bool) string {
+	if !canReadLearnings(agentConfigs, step, isEvalMode) {
+		return LearningsAccessNone
+	}
+	return resolveLearningsAccess(agentConfigs)
+}
+
 // canWriteLearnings reports whether the step agent should run its direct
 // post-completion learnings turn. Requires learnings_access == "read-write"
 // AND a non-empty learning_objective (the extraction target for the writer).
