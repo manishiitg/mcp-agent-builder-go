@@ -72,7 +72,25 @@ func validateStepDriftChecks(checks []StepDriftCheck) error {
 // across two separate tool calls: record_pulse_finding must have already run
 // and persisted before record_plan_drift_review is allowed to mark the check
 // reviewed.
-func verifyStepDriftCheckFindingsExist(ctx context.Context, workspacePath string, checks []StepDriftCheck) error {
+// pulseFindingInactiveStatuses mirrors the "active" boundary used elsewhere
+// in this package (e.g. run_concerns.go's active-issue filter): a finding
+// that has been closed out no longer represents unresolved repair work, so
+// referencing one is exactly as fraudulent as referencing an unrelated
+// finding — it does not prove anything is currently being tracked.
+var pulseFindingInactiveStatuses = map[string]bool{
+	"resolved": true,
+	"rejected": true,
+}
+
+// verifyStepDriftCheckFindingsExist confirms every fail-status check's
+// finding_id resolves to a real Pulse finding that is (a) currently active
+// (not resolved/rejected — a closed-out finding proves nothing is still
+// being tracked) and (b) filed against this exact step (stepID) — not merely
+// any finding that happens to exist anywhere in the workspace. Both
+// conditions together are what "belongs to this exact drift failure" means:
+// a fabricated id, a resolved id, or a real-but-unrelated-step's id are all
+// rejected the same way.
+func verifyStepDriftCheckFindingsExist(ctx context.Context, workspacePath, stepID string, checks []StepDriftCheck) error {
 	var wantIDs []string
 	for _, c := range checks {
 		if c.Status == stepDriftCheckStatusFail {
@@ -86,17 +104,22 @@ func verifyStepDriftCheckFindingsExist(ctx context.Context, workspacePath string
 	if err != nil {
 		return fmt.Errorf("failed to verify finding_id references against the Pulse backlog: %w", err)
 	}
-	known := make(map[string]bool, len(findings))
+	activeForStep := make(map[string]bool, len(findings))
 	for _, f := range findings {
-		if id := strings.TrimSpace(strings.ToUpper(f.IssueID)); id != "" {
-			known[id] = true
+		id := strings.TrimSpace(strings.ToUpper(f.IssueID))
+		if id == "" || f.StepID != stepID {
+			continue
 		}
+		if pulseFindingInactiveStatuses[strings.ToLower(strings.TrimSpace(f.Status))] {
+			continue
+		}
+		activeForStep[id] = true
 	}
 	for _, id := range wantIDs {
-		if !known[id] {
+		if !activeForStep[id] {
 			return fmt.Errorf(
-				"finding_id %q does not match any existing Pulse finding in this workspace — call record_pulse_finding first, then pass its real issue_id here",
-				id,
+				"finding_id %q does not match any active Pulse finding filed against step %q — it must be a real, currently-tracked (not resolved/rejected) finding for this exact step, not a fabricated id, a closed-out finding, or one filed against a different step. Call record_pulse_finding first, then pass its real issue_id here",
+				id, stepID,
 			)
 		}
 	}
@@ -174,7 +197,7 @@ func createRecordPlanDriftReviewExecutor(workspacePath string, logger loggerv2.L
 		if err := validateStepDriftChecks(checks); err != nil {
 			return "", err
 		}
-		if err := verifyStepDriftCheckFindingsExist(ctx, workspacePath, checks); err != nil {
+		if err := verifyStepDriftCheckFindingsExist(ctx, workspacePath, stepID, checks); err != nil {
 			return "", err
 		}
 

@@ -1,11 +1,11 @@
 [← Pulse platform index](../pulse_platform_issue_register.md)
 
-# PLAT-258 — Dedicated `plan_drift_review` Pulse module (corrective contract implemented; parity follow-up open)
+# PLAT-258 — Dedicated `plan_drift_review` Pulse module (review-and-fix authority implemented; parity follow-up open)
 
 | Coordination | Value |
 |---|---|
 | Assigned agent | Claude Code |
-| Ticket state | `corrective contract implemented` — all four independent-review findings fixed and tested (plan.json-derived scan, scan-error visibility, atomic fail/finding link, plan-drift-review sequenced before technical_review), plus the agreed "stale flag" redesign (needs_review + reviewed_through_change_id, evidence preserved not nulled). Slash/scheduled implementation parity (point 7/8) and the workflow-level deletion-review flag (point 8 of the newest update) are explicitly **not yet built** — see Follow-up below |
+| Ticket state | `review-and-fix authority implemented` — plan_drift_review is now a combined review-and-fix module, the same shape as technical_review: it applies and verifies safe workflow-owned repairs directly in its own turn, routes only genuine human decisions (`decision_required`) or platform-owned boundaries (`external_action_required`) elsewhere, and clears needs_review only once each check is fixed, passing, or routed with a verified linked finding. A second independent review's 3 further P1/P2 findings are fixed and tested: (1) a same-pass late-insertion safety net if plan_drift_review still leaves genuine workflow repair debt Gate did not anticipate; (2) the update/flag write retried once, with a persistent failure surfaced loudly in the tool's own response instead of only logged; (4) finding_id verification now requires the referenced finding to be both active (not resolved/rejected) and filed against the exact step being reviewed. Slash/scheduled implementation parity and the workflow-level deletion-review flag are explicitly **not yet built** — see Follow-up below |
 | Last synchronized | `2026-08-30` |
 
 - **Type:** platform feature (multi-phase), not a single bug fix. Filed at
@@ -718,3 +718,100 @@ rather than folded into another PLAT-258 mega-push):
   underway): a `step_deleted` changelog entry carrying the deleted step's
   final `drift_review` snapshot, plus a workflow-level `needs_review`/
   `reviewed_through_change_id` pair Gate's due-check also has to consult.
+
+## Second independent review — review-and-fix authority + 3 further findings (2026-08-30)
+
+A second review confirmed the corrective contract's fixes work, then found 3
+more lifecycle gaps and made an explicit design request: give
+`plan_drift_review` real repair authority — the same review-and-fix shape as
+`technical_review` — instead of always handing routine drift off, which was
+creating an unnecessary extra Pulse cycle even after the earlier same-pass
+sequencing fix. All of the following are implemented and tested.
+
+**Design change: `plan_drift_review` now reviews AND fixes.**
+`plan-drift-review.md` was rewritten from "no repair authority... hands off"
+to a review-and-fix contract mirroring `technical_review`'s own: apply and
+verify safe workflow-owned repairs directly (a broken report query/schema
+rule/scripted query, a stale description or learnings/KB entry, a
+`db/README.md` contract mismatch — fix and re-check the specific thing that
+was wrong), and route only what does not fit that shape using the exact same
+classification `technical_review` already uses: `decision_required` (via
+`create_human_input_request` first) for a genuine user decision,
+`external_action_required` for a platform-owned boundary,
+`evidence_wait` when a real fix needs a future run's output, and
+`fixer_handoff` only as a rare last resort for something too large for this
+focused pass. Because a fixed check never generates a
+`record_pulse_finding` at all, and the other three routes are already
+excluded from `technical_review`'s own repair-drain ("Platform-owned
+findings, human decisions, and evidence waits are durable but are not
+workflow repair debt"), `technical_review` naturally never reprocesses a
+drift finding this module already resolved — no additional code enforcement
+was needed once both modules classify findings the same way. Also removed a
+leftover contradictory paragraph in `pulseLifecycleAgenticReviewStep`'s own
+prompt that still told the technical_review turn to dispatch
+`plan_drift_review` itself, directly contradicting the line above it that
+correctly said not to (a merge artifact from an earlier phase, predating the
+dedicated lifecycle step split).
+
+**P1 (finding 1): a same-pass late-insertion safety net.** Gate's decision
+about whether `technical_review`/`strategic_review` should run at all is
+made from the worklist *before* `plan_drift_review`'s own step executes —
+so even with review-and-fix authority, a rare `fixer_handoff` escalation (or
+any other actionable workflow-owned issue plan_drift_review's turn
+surfaces) could otherwise still wait a full extra Pulse cycle if Gate had
+not independently marked `technical_review` due. `runPulseLifecycle`'s step
+loop is now index-based (not `range`, which would miss a later append) so
+that after `plan_drift_review`'s step completes, if `technical_review`
+wasn't already scheduled, it checks `CountPulseActionableWorkflowIssues` —
+the same fact `technical_review`'s own completeness gate already checks —
+and inserts `pulseLifecycleAgenticReviewStep` immediately after (before the
+finalize steps) when there is now real repair work to drain. Not covered by
+a dedicated automated test: `runPulseLifecycle` requires a full running
+`SchedulerService` + session infrastructure this codebase does not unit-test
+directly anywhere (its building blocks — `pulseWorklistModulesDue`,
+`validatePulseDueModuleResultsFor`, `CountPulseActionableWorkflowIssues` —
+are each independently tested); the slice-insertion logic itself was
+verified by hand for the classic Go aliasing pitfall (the old tail is copied
+into a fresh slice before the destination is overwritten).
+
+**P1 (finding 2): the update/flag write is retried, and a persistent
+failure is now loud, not silent.** `clearDriftReviewAfterPlanUpdateRetried`
+retries the `needs_review` flag write once before giving up. True atomicity
+— rolling back the plan-mod tool's own field change, which has already
+landed by the time this runs, as a separate earlier write — is not
+achievable without a transactional multi-file write mechanism this codebase
+has nowhere else; that limitation is stated plainly in code, not hidden. A
+persistent failure (both attempts) now surfaces as an explicit
+`⚠️ FAILED to flag drift_review.needs_review` line in the tool's own
+returned notice text (both `buildPlanStepDependentArtifactReviewNotice` and
+`buildTodoTaskRouteArtifactReviewNotice` gained a `driftReviewFlagFailed`
+parameter) instead of only a `logger.Warn` call the calling agent never
+sees — the agent is told to report the failure explicitly rather than
+silently treating the edit as fully clean.
+
+**Finding 3 (deleted-step handling + slash/scheduled parity): confirmed
+still open, not new.** This is the same follow-up already filed after the
+first corrective-contract pass, per the user's own explicit "treat as its
+own ticket" direction — the second review independently reaching the same
+conclusion confirms it is accurately scoped, not a regression or something
+missed. Still not built in this pass.
+
+**P2 (finding 4): finding_id verification tightened to active + this exact
+step.** `verifyStepDriftCheckFindingsExist` previously only checked that the
+referenced `finding_id` existed anywhere in the workspace — a resolved
+issue, or a real issue filed against an unrelated step, both passed. It now
+also requires the finding's `Status` to not be `resolved`/`rejected` (the
+same "active" boundary already used elsewhere in this package) and its
+`StepID` to match the exact step being reviewed. A fabricated id, a
+closed-out id, and a real-but-wrong-step id are now all rejected with one
+consistent error naming what "belongs to this exact drift failure" actually
+means.
+
+**Verification:** `GOWORK=off go build ./...` and
+`go test ./cmd/server/... ./pkg/orchestrator/.../step_based_workflow/...`
+clean except the same 2 confirmed pre-existing, unrelated failures as
+before (PLAT-248/249 register gap; `workflow_version_upgrades.go` schedule
+prompt shape). `gofmt` clean on every touched file. 7 new tests: 2 for the
+retry wrapper, 2 for the loud-failure notice text, 2 for the tightened
+finding verification (resolved, wrong-step), plus the existing fabricated-id
+test's assertion updated for the new error wording.

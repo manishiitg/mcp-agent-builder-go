@@ -3843,7 +3843,27 @@ func clearDriftReviewAfterPlanUpdate(ctx context.Context, workspacePath, stepID 
 	return false, nil
 }
 
-func buildPlanStepDependentArtifactReviewNotice(stepID string, fieldChanges []PlanFieldChange, descriptionReviewCleared, driftReviewCleared bool) string {
+// clearDriftReviewAfterPlanUpdateRetried retries the flag write once before
+// giving up. The plan-mod tool's own field change has already landed by the
+// time this runs (it is a separate, earlier write against plan.json), so
+// true atomicity — rolling that back if this second write fails — is not
+// achievable without a transactional multi-file write mechanism this
+// codebase has nowhere else. A transient I/O error retried once, plus a
+// persistent failure surfaced loudly to the calling agent (not just logged)
+// instead of silently swallowed, is the pragmatic mitigation: it meaningfully
+// shrinks the window where a step changes but plan_drift_review never
+// notices, without pretending to solve the general problem.
+func clearDriftReviewAfterPlanUpdateRetried(ctx context.Context, workspacePath, stepID string, fieldChanges []PlanFieldChange, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, logger loggerv2.Logger) (cleared bool, persistentErr error) {
+	cleared, err := clearDriftReviewAfterPlanUpdate(ctx, workspacePath, stepID, fieldChanges, readFile, writeFile)
+	if err == nil {
+		return cleared, nil
+	}
+	logger.Warn(fmt.Sprintf("⚠️ Failed to flag drift_review.needs_review after updating step %s, retrying once: %v", stepID, err))
+	cleared, err = clearDriftReviewAfterPlanUpdate(ctx, workspacePath, stepID, fieldChanges, readFile, writeFile)
+	return cleared, err
+}
+
+func buildPlanStepDependentArtifactReviewNotice(stepID string, fieldChanges []PlanFieldChange, descriptionReviewCleared, driftReviewCleared, driftReviewFlagFailed bool) string {
 	if !planStepUpdateRequiresDependentArtifactReview(fieldChanges) {
 		return ""
 	}
@@ -3871,6 +3891,9 @@ func buildPlanStepDependentArtifactReviewNotice(stepID string, fieldChanges []Pl
 	if driftReviewCleared {
 		b.WriteString("- Flagged step_config.agent_configs.drift_review.needs_review=true — the plan_drift_review Pulse module will now treat this step as due until it (or the manual review-artifact-drift slash command) records fresh evidence via record_plan_drift_review.\n")
 	}
+	if driftReviewFlagFailed {
+		b.WriteString("- ⚠️ FAILED to flag drift_review.needs_review after two attempts — plan_drift_review may NOT notice this step changed until it happens to be re-edited later. Report this failure explicitly in your final response rather than treating the edit as fully clean; do not attempt to write drift_review yourself (it is not an update_step_config field — only record_plan_drift_review may set it).\n")
+	}
 	if seen["description"] || seen["validation_schema"] {
 		b.WriteString("- Description & schema quality: this edit touched description or validation_schema — call read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/step-description.md\"}]) and apply it before finalizing.\n")
 	}
@@ -3893,11 +3916,13 @@ func handlePlanStepDependentArtifactReview(ctx context.Context, workspacePath, s
 	if err != nil {
 		logger.Warn(fmt.Sprintf("⚠️ Failed to clear description_reviewed after updating step %s: %v", stepID, err))
 	}
-	driftReviewCleared, err := clearDriftReviewAfterPlanUpdate(ctx, workspacePath, stepID, fieldChanges, readFile, writeFile)
+	driftReviewCleared, err := clearDriftReviewAfterPlanUpdateRetried(ctx, workspacePath, stepID, fieldChanges, readFile, writeFile, logger)
+	driftReviewFlagFailed := false
 	if err != nil {
-		logger.Warn(fmt.Sprintf("⚠️ Failed to clear drift_review after updating step %s: %v", stepID, err))
+		logger.Warn(fmt.Sprintf("⚠️ Failed to flag drift_review.needs_review after updating step %s (both attempts failed): %v", stepID, err))
+		driftReviewFlagFailed = true
 	}
-	return buildPlanStepDependentArtifactReviewNotice(stepID, fieldChanges, descriptionReviewCleared, driftReviewCleared)
+	return buildPlanStepDependentArtifactReviewNotice(stepID, fieldChanges, descriptionReviewCleared, driftReviewCleared, driftReviewFlagFailed)
 }
 
 func buildAddedStepArtifactSetupNotice(stepID, stepType string) string {
@@ -3937,7 +3962,7 @@ func buildDeletedStepArtifactCleanupNotice(deletedIDs []string, prunedConfigIDs 
 	return b.String()
 }
 
-func buildTodoTaskRouteArtifactReviewNotice(parentStepID, routeID, action string, descriptionReviewCleared, driftReviewCleared bool) string {
+func buildTodoTaskRouteArtifactReviewNotice(parentStepID, routeID, action string, descriptionReviewCleared, driftReviewCleared, driftReviewFlagFailed bool) string {
 	var b strings.Builder
 	b.WriteString("\n\nTodo route artifact review required for ")
 	b.WriteString(action)
@@ -3951,6 +3976,9 @@ func buildTodoTaskRouteArtifactReviewNotice(parentStepID, routeID, action string
 	}
 	if driftReviewCleared {
 		b.WriteString("- Flagged the parent step's drift_review.needs_review=true — plan_drift_review will treat it as due again.\n")
+	}
+	if driftReviewFlagFailed {
+		b.WriteString("- ⚠️ FAILED to flag the parent step's drift_review.needs_review after two attempts — plan_drift_review may NOT notice this change. Report this failure explicitly rather than treating the route edit as fully clean.\n")
 	}
 	switch action {
 	case "added":
@@ -3973,11 +4001,13 @@ func handleTodoTaskRouteArtifactReview(ctx context.Context, workspacePath, paren
 	if err != nil {
 		logger.Warn(fmt.Sprintf("⚠️ Failed to clear description_reviewed after %s route %s on step %s: %v", action, routeID, parentStepID, err))
 	}
-	driftReviewCleared, err := clearDriftReviewAfterPlanUpdate(ctx, workspacePath, parentStepID, fieldChanges, readFile, writeFile)
+	driftReviewCleared, err := clearDriftReviewAfterPlanUpdateRetried(ctx, workspacePath, parentStepID, fieldChanges, readFile, writeFile, logger)
+	driftReviewFlagFailed := false
 	if err != nil {
-		logger.Warn(fmt.Sprintf("⚠️ Failed to clear drift_review after %s route %s on step %s: %v", action, routeID, parentStepID, err))
+		logger.Warn(fmt.Sprintf("⚠️ Failed to flag drift_review.needs_review after %s route %s on step %s (both attempts failed): %v", action, routeID, parentStepID, err))
+		driftReviewFlagFailed = true
 	}
-	return buildTodoTaskRouteArtifactReviewNotice(parentStepID, routeID, action, descriptionReviewCleared, driftReviewCleared)
+	return buildTodoTaskRouteArtifactReviewNotice(parentStepID, routeID, action, descriptionReviewCleared, driftReviewCleared, driftReviewFlagFailed)
 }
 
 // createUpdateRegularStepExecutor edits the internal regular plan type exposed as update_scripted_step.

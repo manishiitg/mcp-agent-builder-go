@@ -1,9 +1,13 @@
-## Plan drift review (lean first version)
+## Plan drift review
 
-This module has no repair authority. It establishes ground truth per step and
-hands off — it never edits plan/step_config/validation_schema, learnings, KB,
-or db.sqlite in this turn. A later `technical_review` pass (or a human) does
-the actual repair.
+`plan_drift_review` is a review-**and**-fix module, the same shape as
+`technical_review`: in one retained turn it establishes ground truth per due
+step, applies safe workflow-owned repairs directly, verifies each fix, and
+only routes to a human decision or a platform-owned boundary what it
+genuinely cannot resolve itself. It does not hand routine drift off to
+`technical_review` to redo — a check this module already fixed and verified
+must never reappear as a separate `technical_review` finding for the same
+root cause.
 
 `plan_drift_review` is event-triggered, not cadenced: it becomes due whenever
 any canonical plan step has no `drift_review` record at all, or has one with
@@ -56,10 +60,7 @@ For each candidate step, directly check what the deterministic pass skipped:
   tables via `query_workflow_db`, cross-reference against report queries, any
   step's DB rules/scripted queries, and `db/README.md`. A table matching none
   of those and not a platform-reserved table is a candidate, not a certainty
-  — say so in the evidence. Route a genuine orphan through
-  `apply_workflow_db_migration` (it auto-snapshots) rather than filing it as
-  a plain finding, but do not run that migration in this turn: this module
-  has no repair authority, so file it via `record_pulse_finding` instead.
+  — say so in the evidence.
 
 Then do the judgment checks a Go function cannot:
 
@@ -98,38 +99,81 @@ judge:
   "route_ids":[...]}]` — see `references/evaluation-plan.md`). No matching
   eval step for a workflow that otherwise has an eval plan is the finding.
 
-### 3. Hand off real failures BEFORE persisting the review
+### 3. Apply safe workflow-owned fixes and verify each one
 
-For any check that failed, call `record_pulse_finding` with
-`module="plan_drift_review"`, a stable `concern`/`target_key` naming the step
-and the broken surface, and `recommended_route="fixer_handoff"` so it enters
-the normal `technical_review` repair queue rather than waiting on this module
-to gain repair authority. Reuse an existing issue's `issue_id` for the same
-semantic root cause instead of filing a duplicate — check the compact backlog
-first. Do this **before** step 4: `record_plan_drift_review` rejects a
+For every check that failed, fix it now if it is a bounded, safe,
+workflow-owned repair — the same standard `technical_review` applies to its
+own repair batches. This is the normal path, not the exception:
+
+- A broken `window.report.query(...)`, `validation_schema.db[]` rule, or
+  scripted `main.py` query usually means a report/schema/script still
+  references a renamed or dropped column/table — update the referencing
+  artifact (the report SQL, the schema rule, or the script) to match the live
+  schema. Route a genuine orphaned table through
+  `apply_workflow_db_migration` (it auto-snapshots before any destructive
+  statement) rather than a raw `DROP`.
+- A stale description, stale learnings/KB content, or a wrong learnings/KB
+  access mode is a direct edit through the normal Workflow Builder tools
+  (`update_step_config` and friends).
+- A `db/README.md` contract mismatch is a doc edit reconciling the
+  documented DDL with the live schema (or the reverse, if the doc is right
+  and the schema drifted — decide which side is authoritative from the
+  step's actual current behavior, not merely which was easier to edit).
+
+After each fix, verify it the same way `technical_review` verifies a repair:
+re-run the specific check (re-derive the report query result, re-check the
+schema rule, re-read the file) rather than assuming the edit worked. Record
+that check `status: "fixed"` with evidence describing both what was wrong and
+what you changed and confirmed.
+
+### 4. Route what you cannot safely fix in this turn
+
+Not every drift check is a same-turn repair. Classify anything you did not
+fix using the same routes `technical_review` uses — do not invent a
+different scheme:
+
+- **A genuine user decision** (e.g. two materially different ways to
+  reconcile a contract, and only the operator can say which is intended):
+  call `create_human_input_request` first, then `record_pulse_finding` with
+  `recommended_route="decision_required"` and that `human_input_id`.
+- **A platform-owned boundary** (a runtime/harness/bridge limitation, not
+  this workflow's own plan, config, code, or data): `record_pulse_finding`
+  with `recommended_route="external_action_required"`, a `reason_code`, an
+  `external_owner`, and a `reopen_condition`.
+- **Insufficient evidence to fix safely right now** (e.g. a real fix needs a
+  future run's output to confirm): `record_pulse_finding` with
+  `recommended_route="evidence_wait"` and an exact `next_check`.
+- Only as a last resort — a fix that is real, workflow-owned, and safe in
+  principle, but too large or cross-cutting for this focused pass to
+  complete and verify on its own — fall back to `recommended_route=
+  "fixer_handoff"` so `technical_review` picks it up. Keep this rare: a
+  `fixer_handoff` finding for something this module could safely have fixed
+  itself is exactly the extra Pulse cycle this design exists to remove.
+
+Reuse an existing issue's `issue_id` for the same semantic root cause instead
+of filing a duplicate — check the compact backlog first. File findings
+**before** persisting the review: `record_plan_drift_review` rejects a
 fail-status check with no `finding_id`, and rejects a `finding_id` that does
 not resolve to a real, already-filed Pulse finding — this is what keeps a
-failed check from ever being persisted as "reviewed" with no corresponding
-repair item in the backlog.
+routed check from ever being persisted as "reviewed" with no corresponding
+tracked item.
 
-### 4. Persist the merged result per step
+### 5. Persist the merged result per step
 
 Call `record_plan_drift_review(step_id=..., checks=[...], reviewed_through_change_id=...)`
 exactly once per candidate step, merging the precomputed checks from step 1
-with the ones you ran directly in step 2. Every check needs a real
-`check_id`, a `status` of `pass`/`fail`/`fixed`, and specific `evidence` —
-never a placeholder like "ok" or "n/a" (the tool rejects evidence under 15
-characters for exactly this reason); a `fail`-status check also needs the
-real `finding_id` from step 3. Use `fixed` only for a check this same turn
-genuinely repaired and verified; since this module has no repair authority,
-that should be rare to never in this first version — default to `fail` plus
-the filed finding. Pass `reviewed_through_change_id` as the latest
+with the ones you ran directly in step 2, using `status: "fixed"` for
+step-3 repairs and `status: "fail"` plus the linked `finding_id` for
+step-4 routes. Every check needs a real `check_id`, a `status` of
+`pass`/`fail`/`fixed`, and specific `evidence` — never a placeholder like
+"ok" or "n/a" (the tool rejects evidence under 15 characters for exactly this
+reason). Pass `reviewed_through_change_id` as the latest
 `planning/changelog/` `change_id` you actually read for this step, so the
 next review resumes exactly where this one left off. This call always fully
 replaces the step's prior evidence and clears `needs_review` — there is no
 partial update.
 
-### 5. Close out
+### 6. Close out
 
 Update the run-scoped checkpoint (`runs/pulse/<run>/plan-drift-review.md`)
 with a compact per-step summary before ending. Call `record_pulse_result`
