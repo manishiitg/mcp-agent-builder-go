@@ -7,6 +7,7 @@ describe('Pulse workspace registry', () => {
     expect(moduleIds).toEqual([
       'technical_review',
       'strategic_review',
+      'plan_drift_review',
     ])
     expect(new Set(moduleIds).size).toBe(moduleIds.length)
   })

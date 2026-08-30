@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -60,16 +61,18 @@ const (
 
 // WorkflowManifest is the top-level workflow.json structure that lives in each workspace.
 type WorkflowManifest struct {
-	SchemaVersion     int                       `json:"schema_version"`
-	ID                string                    `json:"id"`
-	Version           string                    `json:"version,omitempty"`
-	Label             string                    `json:"label"`
-	Capabilities      WorkflowCapabilities      `json:"capabilities"`
-	ExecutionDefs     WorkflowExecutionDefaults `json:"execution_defaults"`
-	Schedules         []WorkflowSchedule        `json:"schedules"`
-	CreatedAt         string                    `json:"created_at,omitempty"`
-	UpdatedAt         string                    `json:"updated_at,omitempty"`
-	RunRetentionCount *int                      `json:"run_retention_count,omitempty"`
+	SchemaVersion        int                                         `json:"schema_version"`
+	ID                   string                                      `json:"id"`
+	Version              string                                      `json:"version,omitempty"`
+	Label                string                                      `json:"label"`
+	Capabilities         WorkflowCapabilities                        `json:"capabilities"`
+	ExecutionDefs        WorkflowExecutionDefaults                   `json:"execution_defaults"`
+	Schedules            []WorkflowSchedule                          `json:"schedules"`
+	CreatedAt            string                                      `json:"created_at,omitempty"`
+	UpdatedAt            string                                      `json:"updated_at,omitempty"`
+	RunRetentionCount    *int                                        `json:"run_retention_count,omitempty"`
+	FolderAccess         []workflowtypes.WorkflowFolderGrant         `json:"folder_access,omitempty"`
+	FolderAccessRequests []workflowtypes.WorkflowFolderAccessRequest `json:"folder_access_requests,omitempty"`
 
 	// Auto-improvement framework fields. See docs/workflow/auto_improvement_framework.md.
 	//
@@ -432,6 +435,83 @@ func ValidateManifest(m *WorkflowManifest) error {
 			return fmt.Errorf("run_retention_count must be between 1 and %d", MaxRunRetentionCount)
 		}
 	}
+	seenFolderGrantIDs := make(map[string]struct{}, len(m.FolderAccess))
+	seenFolderGrantAliases := make(map[string]struct{}, len(m.FolderAccess))
+	seenFolderGrantEnvKeys := make(map[string]struct{}, len(m.FolderAccess))
+	for i, grant := range m.FolderAccess {
+		grant.ID = strings.TrimSpace(grant.ID)
+		grant.Alias = strings.TrimSpace(grant.Alias)
+		grant.Path = strings.TrimSpace(grant.Path)
+		grant.Access = strings.TrimSpace(grant.Access)
+		if grant.ID == "" {
+			return fmt.Errorf("folder_access[%d].id is required", i)
+		}
+		if _, exists := seenFolderGrantIDs[grant.ID]; exists {
+			return fmt.Errorf("duplicate folder_access id %q", grant.ID)
+		}
+		seenFolderGrantIDs[grant.ID] = struct{}{}
+		if !validWorkflowFolderAlias(grant.Alias) {
+			return fmt.Errorf("folder_access[%d].alias must start with a letter or number and contain only letters, numbers, hyphens, or underscores", i)
+		}
+		aliasKey := strings.ToLower(grant.Alias)
+		if _, exists := seenFolderGrantAliases[aliasKey]; exists {
+			return fmt.Errorf("duplicate folder_access alias %q", grant.Alias)
+		}
+		seenFolderGrantAliases[aliasKey] = struct{}{}
+		envKey := workflowFolderAliasEnvKey(grant.Alias)
+		if _, exists := seenFolderGrantEnvKeys[envKey]; exists {
+			return fmt.Errorf("folder_access[%d].alias collides with another attached-folder environment key", i)
+		}
+		seenFolderGrantEnvKeys[envKey] = struct{}{}
+		if !filepath.IsAbs(grant.Path) {
+			return fmt.Errorf("folder_access[%d].path must be absolute", i)
+		}
+		if strings.ContainsRune(grant.Path, '\x00') {
+			return fmt.Errorf("folder_access[%d].path contains a NUL byte", i)
+		}
+		cleanPath := filepath.Clean(grant.Path)
+		if cleanPath == filepath.VolumeName(cleanPath)+string(filepath.Separator) {
+			return fmt.Errorf("folder_access[%d].path cannot be a filesystem root", i)
+		}
+		switch grant.Access {
+		case workflowtypes.FolderAccessReadOnly, workflowtypes.FolderAccessReadWrite:
+		default:
+			return fmt.Errorf("folder_access[%d].access must be read_only or read_write", i)
+		}
+	}
+	seenFolderRequestIDs := make(map[string]struct{}, len(m.FolderAccessRequests))
+	for i, request := range m.FolderAccessRequests {
+		if strings.TrimSpace(request.ID) == "" {
+			return fmt.Errorf("folder_access_requests[%d].id is required", i)
+		}
+		if _, exists := seenFolderRequestIDs[request.ID]; exists {
+			return fmt.Errorf("duplicate folder_access request id %q", request.ID)
+		}
+		seenFolderRequestIDs[request.ID] = struct{}{}
+		if !validWorkflowFolderAlias(strings.TrimSpace(request.Alias)) {
+			return fmt.Errorf("folder_access_requests[%d].alias is invalid", i)
+		}
+		switch strings.TrimSpace(request.Access) {
+		case workflowtypes.FolderAccessReadOnly, workflowtypes.FolderAccessReadWrite:
+		default:
+			return fmt.Errorf("folder_access_requests[%d].access must be read_only or read_write", i)
+		}
+		if strings.TrimSpace(request.Reason) == "" {
+			return fmt.Errorf("folder_access_requests[%d].reason is required", i)
+		}
+		if request.RequestedPath != "" {
+			if strings.ContainsRune(request.RequestedPath, '\x00') {
+				return fmt.Errorf("folder_access_requests[%d].requested_path contains a NUL byte", i)
+			}
+			if !filepath.IsAbs(request.RequestedPath) {
+				return fmt.Errorf("folder_access_requests[%d].requested_path must be absolute", i)
+			}
+			cleanPath := filepath.Clean(request.RequestedPath)
+			if cleanPath == filepath.VolumeName(cleanPath)+string(filepath.Separator) {
+				return fmt.Errorf("folder_access_requests[%d].requested_path cannot be a filesystem root", i)
+			}
+		}
+	}
 	if m.Pulse != nil && m.Pulse.AdvisorSpecialization != nil {
 		specialization := m.Pulse.AdvisorSpecialization
 		if specialization.Version < 1 {
@@ -553,6 +633,31 @@ func ValidateManifest(m *WorkflowManifest) error {
 		}
 	}
 	return nil
+}
+
+func validWorkflowFolderAlias(alias string) bool {
+	if alias == "" || len(alias) > 64 {
+		return false
+	}
+	for i, r := range alias {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || (i > 0 && (r == '-' || r == '_')) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func workflowFolderAliasEnvKey(alias string) string {
+	var builder strings.Builder
+	for _, r := range strings.ToUpper(strings.TrimSpace(alias)) {
+		if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			builder.WriteRune(r)
+		} else {
+			builder.WriteByte('_')
+		}
+	}
+	return builder.String()
 }
 
 func normalizeScheduleGroupNames(groupNames []string) []string {

@@ -21,6 +21,16 @@ func TestConfiguredCDPPortsForAutoRemainCandidates(t *testing.T) {
 	}
 }
 
+func TestHostDownloadsBrowserModeResolvesRestoredAutoSessionToCDP(t *testing.T) {
+	req := QueryRequest{BrowserMode: "auto", CdpPorts: []int{9222}}
+	if got := hostDownloadsBrowserMode(req); got != "cdp" {
+		t.Fatalf("host Downloads mode = %q, want cdp", got)
+	}
+	if got := hostDownloadsBrowserMode(QueryRequest{BrowserMode: "headless"}); got != "headless" {
+		t.Fatalf("headless host Downloads mode = %q, want headless", got)
+	}
+}
+
 func TestGetCdpPortsPreservesPrimaryAndDeduplicates(t *testing.T) {
 	primary := 9333
 	ports := getCdpPorts(QueryRequest{BrowserMode: "cdp", CdpPort: &primary, CdpPorts: []int{9222, 9333, -1, 9444}})

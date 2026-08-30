@@ -74,7 +74,8 @@ function transcriptEventPayload(event: PollingEvent): Record<string, unknown> {
 const TranscriptEvent: React.FC<{
   event: PollingEvent
   onSendMessage?: (msg: string) => void
-}> = ({ event, onSendMessage }) => {
+  compactUserBottom?: boolean
+}> = ({ event, onSendMessage, compactUserBottom = false }) => {
   const payload = transcriptEventPayload(event)
   const content = typeof payload.content === 'string' ? payload.content.trim() : ''
   const rawTimestamp = event.timestamp || (typeof payload.timestamp === 'string' ? payload.timestamp : '')
@@ -87,7 +88,7 @@ const TranscriptEvent: React.FC<{
   }
 
   // Different runtime transports carry a completed agent answer in different
-  // fields. They are all agent responses, so render them with one component
+  // fields.  They are all agent responses, so render them with one component
   // and one type scale instead of falling through to several event cards.
   const finalResult = typeof payload.final_result === 'string' ? payload.final_result.trim() : ''
   const result = typeof payload.result === 'string' ? payload.result.trim() : ''
@@ -104,12 +105,12 @@ const TranscriptEvent: React.FC<{
     return <EventDispatcher event={event} onSendMessage={onSendMessage} compact hideOrchestratorContext />
   }
 
-  return <UserTranscriptMessage content={content || 'Message sent'} timestamp={timestamp} />
+  return <UserTranscriptMessage content={content || 'Message sent'} timestamp={timestamp} compactBottom={compactUserBottom} />
 }
 
 const USER_MESSAGE_PREVIEW_LIMIT = 480
 
-const UserTranscriptMessage: React.FC<{ content: string; timestamp: string }> = ({ content, timestamp }) => {
+const UserTranscriptMessage: React.FC<{ content: string; timestamp: string; compactBottom?: boolean }> = ({ content, timestamp, compactBottom = false }) => {
   const collapsible = shouldCollapseTranscriptUserMessage(content)
   const [expanded, setExpanded] = useState(false)
   const shown = collapsible && !expanded
@@ -118,7 +119,7 @@ const UserTranscriptMessage: React.FC<{ content: string; timestamp: string }> = 
 
   if (!collapsible) {
     return (
-      <div className="ml-auto my-4 max-w-[84%] text-right">
+      <div className={`ml-auto mt-4 max-w-[84%] text-right ${compactBottom ? 'mb-1' : 'mb-4'}`}>
         <div className="whitespace-pre-wrap break-words text-[14px] leading-6 text-neutral-200">{shown}</div>
         {timestamp && <div className="mt-1 text-[10px] tabular-nums text-neutral-600">{timestamp}</div>}
       </div>
@@ -126,7 +127,7 @@ const UserTranscriptMessage: React.FC<{ content: string; timestamp: string }> = 
   }
 
   return (
-    <article className="ml-auto my-4 w-[min(92%,52rem)] rounded-lg border border-neutral-800 bg-neutral-900/45 px-4 py-3 text-left">
+    <article className={`ml-auto mt-4 w-[min(92%,52rem)] rounded-lg border border-neutral-800 bg-neutral-900/45 px-4 py-3 text-left ${compactBottom ? 'mb-1' : 'mb-4'}`}>
       <div className="whitespace-pre-wrap break-words text-[13px] leading-6 text-neutral-300">{shown}</div>
       <div className="mt-2 flex items-center gap-3">
         <button
@@ -582,7 +583,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
         followOutput="smooth"
         initialTopMostItemIndex={Math.max(0, items.length - 1)}
         computeItemKey={(_, item) => item.key}
-        itemContent={(_, item) =>
+        itemContent={(index, item) =>
           item.kind === 'live' ? (
             <LiveAssistantTranscript text={item.text} status={item.status} />
           ) : item.kind === 'tools' ? (
@@ -591,7 +592,11 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
             </div>
           ) : (
             <div data-testid={`terminal-clear-event-${item.event.id || item.key}`} className="px-5 py-0.5">
-              <TranscriptEvent event={item.event} onSendMessage={onSendMessage} />
+              <TranscriptEvent
+                event={item.event}
+                onSendMessage={onSendMessage}
+                compactUserBottom={items[index + 1]?.kind === 'tools'}
+              />
             </div>
           )
         }

@@ -26,6 +26,8 @@ func (c *Client) DiffPatchWorkspaceFile(ctx context.Context, params DiffPatchWor
 		return DiffPatchResult{}, fmt.Errorf("diff is required")
 	}
 
+	params.Filepath = c.resolveLinkedFolderPath(ctx, params.Filepath)
+
 	// Normalize absolute paths to workspace-relative before building the URL.
 	// LLMs often send absolute paths (e.g. "/app/workspace-docs/Workflow/..."
 	// or native desktop paths ending in "/workspace-docs/Workflow/...").
@@ -34,6 +36,28 @@ func (c *Client) DiffPatchWorkspaceFile(ctx context.Context, params DiffPatchWor
 	params.Filepath = stripWorkspacePrefix(params.Filepath)
 	if err := c.ValidatePathWithContext(ctx, params.Filepath, true); err != nil {
 		return DiffPatchResult{}, err
+	}
+	if filepath.IsAbs(params.Filepath) {
+		guard := c.resolveEffectiveFolderGuard(ctx)
+		if guard == nil || !guard.Enabled {
+			return DiffPatchResult{}, fmt.Errorf("external diff requires a session folder grant")
+		}
+		respBody, err := c.request(ctx, "POST", "/api/external/diff", map[string]interface{}{
+			"filepath":     params.Filepath,
+			"diff":         params.Diff,
+			"folder_guard": guard,
+		})
+		if err != nil {
+			return DiffPatchResult{}, err
+		}
+		var apiResp APIResponse
+		if err := json.Unmarshal(respBody, &apiResp); err != nil {
+			return DiffPatchResult{}, fmt.Errorf("failed to parse external diff response: %w", err)
+		}
+		if !apiResp.Success {
+			return DiffPatchResult{}, fmt.Errorf("workspace API error: %s", apiResp.Error)
+		}
+		return DiffPatchResult{Data: apiResp.Data}, nil
 	}
 
 	// Build API URL for diff patching
@@ -78,6 +102,48 @@ func (c *Client) DiffPatchWorkspaceFile(ctx context.Context, params DiffPatchWor
 	return DiffPatchResult{
 		Data: apiResp.Data,
 	}, nil
+}
+
+func (c *Client) resolveLinkedFolderPath(ctx context.Context, input string) string {
+	const prefix = "linked://"
+	if !strings.HasPrefix(input, prefix) {
+		return input
+	}
+	remainder := strings.TrimPrefix(input, prefix)
+	parts := strings.SplitN(remainder, "/", 2)
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" {
+		return input
+	}
+	aliasKey := linkedFolderEnvKey(parts[0])
+	if aliasKey == "" {
+		return input
+	}
+	sessionID := c.sessionIDFromContext(ctx)
+	session := GetSessionShellConfig(sessionID)
+	root := ""
+	if session != nil {
+		root = strings.TrimSpace(session.Env["WORKFLOW_FOLDER_"+aliasKey])
+	}
+	relative := filepath.Clean(filepath.FromSlash(parts[1]))
+	if root == "" || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
+		return input
+	}
+	return filepath.Join(root, relative)
+}
+
+func linkedFolderEnvKey(alias string) string {
+	var b strings.Builder
+	underscore := false
+	for _, r := range strings.ToUpper(strings.TrimSpace(alias)) {
+		if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			underscore = false
+		} else if !underscore && b.Len() > 0 {
+			b.WriteByte('_')
+			underscore = true
+		}
+	}
+	return strings.Trim(b.String(), "_")
 }
 
 func encodeWorkspaceDocumentPath(path string) string {

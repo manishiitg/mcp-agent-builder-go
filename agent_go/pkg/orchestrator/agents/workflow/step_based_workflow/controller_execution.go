@@ -139,11 +139,6 @@ const (
 
 // resolveKnowledgebaseAccess resolves the effective KB access mode for a step.
 //
-// Policy: KB access is opt-in per step. Default is "none" — a step only gets KB read
-// or write when knowledgebase_access is explicitly set on its step_config.json entry.
-// The preset-level UseKnowledgebase flag is a prerequisite (when off, all steps are
-// forced to "none" regardless of explicit setting); it controls whether knowledgebase/
-// exists at all, not whether any given step can touch it.
 // resolveKnowledgebaseAccess returns the effective knowledgebase_access for a
 // step. Explicit value wins. Unset mirrors resolveLearningsAccess's already-safe
 // default pattern rather than introducing a new one: read by default (every
@@ -1372,7 +1367,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 	if sessionID := hcpo.GetMCPSessionID(); sessionID != "" && !isSubAgent {
 		narrowAgentCfg := getAgentConfigs(step)
 		narrowKBAccess := resolveKnowledgebaseAccess(narrowAgentCfg, hcpo.UseKnowledgebase())
-		narrowLearningsAccess := resolveLearningsAccess(narrowAgentCfg)
+		narrowLearningsAccess := resolveExecutionLearningsAccess(narrowAgentCfg, step, hcpo.isEvaluationMode)
 		narrowRead, narrowWrite := hcpo.setupExecutionFolderGuard(artifactStepPath, artifactStepID, narrowKBAccess, narrowLearningsAccess, resolveDBAccess(narrowAgentCfg), narrowAgentCfg)
 		var prevRead, prevWrite []string
 		if prevCfg := common.GetSessionShellConfig(sessionID); prevCfg != nil {
@@ -1380,11 +1375,11 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 			prevWrite = prevCfg.WritePaths
 		}
 		common.SetSessionFolderGuard(sessionID, narrowRead, narrowWrite)
-		hcpo.grantSessionCDPHostDownloadsReadOnly(sessionID)
+		hcpo.grantSessionCDPHostDownloadsReadWrite(sessionID)
 		hcpo.GetLogger().Info(fmt.Sprintf("🔒 [FOLDER_GUARD_STEP] Narrowed session %s for step %s: read=%v write=%v", sessionID, step.GetID(), narrowRead, narrowWrite))
 		defer func() {
 			common.SetSessionFolderGuard(sessionID, prevRead, prevWrite)
-			hcpo.grantSessionCDPHostDownloadsReadOnly(sessionID)
+			hcpo.grantSessionCDPHostDownloadsReadWrite(sessionID)
 			hcpo.GetLogger().Info(fmt.Sprintf("🔓 [FOLDER_GUARD_STEP] Restored session %s after step %s", sessionID, step.GetID()))
 		}()
 	}
@@ -1495,7 +1490,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 		}
 
 		// Get folder guard paths for template (so agent knows exact paths it can access)
-		learningsAccess := resolveLearningsAccess(agentConfigs)
+		learningsAccess := resolveExecutionLearningsAccess(agentConfigs, step, hcpo.isEvaluationMode)
 		evaluationDBWrite := false
 		if evalStep, ok := step.(*EvaluationStep); ok {
 			evaluationDBWrite = evalStep.DBWrite
@@ -1517,6 +1512,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 		docsRoot := GetPromptDocsRoot()
 		toAbsPath := func(path string) string {
 			if path == "" || docsRoot == "" {
+				return path
+			}
+			if filepath.IsAbs(path) {
 				return path
 			}
 			return filepath.Join(docsRoot, path)
@@ -1561,6 +1559,14 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 			}
 		}
 		kbNotesPathForPrompt := toAbsPath(filepath.Join(getKnowledgebasePath(hcpo.GetWorkspacePath()), KBNotesFolderName))
+		scriptedEnv := hcpo.snapshotWorkspaceEnv()
+		if scriptedEnv == nil {
+			scriptedEnv = make(map[string]string)
+		}
+		_, _, _, folderEnv := appendWorkflowFolderAccess(hcpo.GetWorkspacePath(), nil, nil)
+		for key, value := range folderEnv {
+			scriptedEnv[key] = value
+		}
 
 		templateVars := map[string]string{
 			"StepTitle":                 stepTitleForPrompt,
@@ -1591,7 +1597,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 			"ScriptedPriorScript":       learnCodePriorScript,
 			"ScriptedPriorError":        learnCodePriorError,
 			"ScriptedInputArgs":         learnCodeInputArgsForPrompt,
-			"ScriptedEnvVarNames":       buildScriptedEnvVarNamesForPrompt(isScriptedMode, hcpo.snapshotWorkspaceEnv()),
+			"ScriptedEnvVarNames":       buildScriptedEnvVarNamesForPrompt(isScriptedMode, scriptedEnv),
 			"ScriptedVarMapping":        buildScriptedVarMappingForPrompt(isCodeExecutionMode || isScriptedMode, hcpo.variablesManifest),
 			"GroupName":                 hcpo.currentGroupName,
 		}
@@ -1978,7 +1984,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 					// Pass stepPath to createExecutionOnlyAgent so nested sub-agent folders resolve correctly.
 					// For learnings / metadata selection, use the concrete step ID so sub-agents align with their own learnings folder.
 					// allSteps is already []PlanStepInterface - no conversion needed
-					executionAgent, err = hcpo.createExecutionOnlyAgent(executionAgentCtx, "execution_only", stepPath, executionAgentName, agentConfigs, step.GetID(), getExecutionArtifactFolderOverride(execCtx), evaluationDBWrite)
+					executionAgent, err = hcpo.createExecutionOnlyAgent(executionAgentCtx, "execution_only", stepPath, executionAgentName, agentConfigs, step, step.GetID(), getExecutionArtifactFolderOverride(execCtx), evaluationDBWrite)
 					if err != nil {
 						return "", updatedContextFiles, fmt.Errorf("failed to create execution-only agent for step %d: %w", stepIndex+1, err)
 					}
@@ -2307,7 +2313,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 						// Force Tier 1 (High) for repair agents — they need to fix a failure,
 						// so they should use at least the same tier as the original execution.
 						repairCtx := context.WithValue(ctx, WorkshopTierOverrideKey, int(TierHigh))
-						repairAgent, repairErr := hcpo.createExecutionOnlyAgent(repairCtx, "execution_only", stepPath, repairAgentName, agentConfigs, step.GetID(), getExecutionArtifactFolderOverride(execCtx), evaluationDBWrite)
+						repairAgent, repairErr := hcpo.createExecutionOnlyAgent(repairCtx, "execution_only", stepPath, repairAgentName, agentConfigs, step, step.GetID(), getExecutionArtifactFolderOverride(execCtx), evaluationDBWrite)
 						if repairErr != nil {
 							hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ [scripted] failed to create repair agent for step %d fix %d: %v", stepIndex+1, fixIter+1, repairErr))
 							break

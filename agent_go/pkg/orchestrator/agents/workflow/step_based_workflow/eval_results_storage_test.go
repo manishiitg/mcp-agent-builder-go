@@ -149,10 +149,9 @@ func TestPersistEvalResultsToDBReplacesStaleRowsOnRerun(t *testing.T) {
 }
 
 // TestLoadEvalResultsJoinsPlanTitlesAndOrdersNewestRunFirst proves the read
-// path backing the Pulse popup's eval display: newest run first, each row
+// path backing the Evaluation workspace: newest run first, each row
 // carries its step's title/description from evaluation_plan.json, and a
-// step_id no longer in the plan degrades to an empty title/description
-// instead of failing the whole read.
+// step_id no longer in the plan remains available and is marked historical.
 func TestLoadEvalResultsJoinsPlanTitlesAndOrdersNewestRunFirst(t *testing.T) {
 	hcpo := newEvalResultsTestOrchestrator(t)
 	ctx := context.Background()
@@ -212,14 +211,14 @@ func TestLoadEvalResultsJoinsPlanTitlesAndOrdersNewestRunFirst(t *testing.T) {
 			orphaned = &results[i]
 		}
 	}
-	if joined == nil || joined.Title != "Signal accuracy" || joined.Description != "Checks the signal matches the exchange feed." {
+	if joined == nil || joined.Title != "Signal accuracy" || joined.Description != "Checks the signal matches the exchange feed." || joined.Historical {
 		t.Fatalf("expected the newer eval-a row joined against the plan, got %#v", joined)
 	}
 	if !joined.ScoreCaptured || joined.Score != 9 {
 		t.Fatalf("expected the newer eval-a score to survive the join, got %#v", joined)
 	}
-	if orphaned == nil || orphaned.Title != "" || orphaned.Description != "" || !orphaned.Skipped {
-		t.Fatalf("expected a step absent from the plan to degrade to an empty title/description, not fail, got %#v", orphaned)
+	if orphaned == nil || orphaned.Title != "" || orphaned.Description != "" || !orphaned.Skipped || !orphaned.Historical {
+		t.Fatalf("expected a step absent from the current plan to remain available as historical, got %#v", orphaned)
 	}
 }
 

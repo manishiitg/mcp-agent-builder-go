@@ -68,3 +68,14 @@ func TestWorkflowGuardMaterializationFailsClosedOutsideDocsRoot(t *testing.T) {
 		t.Fatal("escaping managed path unexpectedly succeeded")
 	}
 }
+
+func TestWorkflowGuardMaterializationLeavesAbsoluteHostGrantUnmanaged(t *testing.T) {
+	docsRoot := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", docsRoot)
+	hcpo := newAgentFactoryTestOrchestrator(t)
+	hcpo.SetWorkspacePath("Workflow/fresh-product")
+	hostRoot := t.TempDir()
+	if err := hcpo.materializeWorkflowGuardPaths([]string{hostRoot}, []string{hostRoot}); err != nil {
+		t.Fatalf("pre-existing host grant should not be treated as a workspace-managed path: %v", err)
+	}
+}

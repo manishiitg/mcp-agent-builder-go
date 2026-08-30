@@ -557,6 +557,14 @@ ipcMain.handle('pick-docs-dir', async () => {
   if (result.canceled || !result.filePaths[0]) return null;
   return result.filePaths[0];
 });
+ipcMain.handle('pick-workflow-folder', async () => {
+  const result = await dialog.showOpenDialog(mainWindow || undefined, {
+    title: 'Attach a folder to this workflow',
+    properties: ['openDirectory'],
+  });
+  if (result.canceled || !result.filePaths[0]) return null;
+  return result.filePaths[0];
+});
 
 ipcMain.on('save-settings', (event, settings) => {
   saveSettings(settings);

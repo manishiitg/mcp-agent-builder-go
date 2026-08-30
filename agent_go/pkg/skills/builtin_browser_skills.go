@@ -173,7 +173,7 @@ Use a descriptive session name for parallel work and close headless sessions whe
 
 In workflow steps, use the run-scoped ` + "`Downloads/`" + ` folder given in the prompt. Do not read from or write to the root workspace ` + "`Downloads/`" + ` folder unless the prompt explicitly grants it.
 
-CDP caveat: native Chrome downloads can land in the host ` + "`~/Downloads`" + ` folder. If the step prompt grants a read-only host Downloads path, copy the needed file into the run-scoped ` + "`Downloads/`" + ` folder before reading or parsing it. Never write, move, or delete files in host Downloads.
+CDP caveat: native Chrome downloads can land in the host ` + "`~/Downloads`" + ` folder. When the step prompt grants that host path, it may be used to read, stage, or retrieve browser files. Prefer the run-scoped ` + "`Downloads/`" + ` folder for run-owned artifacts, and do not modify unrelated host files.
 
 The live step prompt and folder guard are authoritative. If they grant a host Downloads path, that path is readable for the current run even when an older workflow learning says it is inaccessible. After a native download, inspect the granted host folder for newly created completed files before declaring the download unavailable; do not infer current access from historical learnings.
 

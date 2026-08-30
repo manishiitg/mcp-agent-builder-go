@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/common"
 )
 
 func TestStripWorkspacePrefixUsesEnvRoot(t *testing.T) {
@@ -15,6 +17,36 @@ func TestStripWorkspacePrefixUsesEnvRoot(t *testing.T) {
 	want := "Workflow/demo/learnings/_global/SKILL.md"
 	if got != want {
 		t.Fatalf("stripWorkspacePrefix() = %q, want %q", got, want)
+	}
+}
+
+func TestResolveLinkedFolderPathUsesTrustedSessionAlias(t *testing.T) {
+	sessionID := "linked-folder-test"
+	root := t.TempDir()
+	common.SetSessionFolderGuard(sessionID, []string{root}, []string{root})
+	common.SetSessionShellEnv(sessionID, map[string]string{"WORKFLOW_FOLDER_RTS_SOURCE": root})
+	t.Cleanup(func() { common.ClearSessionShellConfig(sessionID) })
+
+	client := NewClient("http://unused")
+	ctx := context.WithValue(context.Background(), common.ChatSessionIDKey, sessionID)
+	got := client.resolveLinkedFolderPath(ctx, "linked://rts-source/docs/readme.md")
+	want := filepath.Join(root, "docs", "readme.md")
+	if got != want {
+		t.Fatalf("resolved path = %q, want %q", got, want)
+	}
+	if escaped := client.resolveLinkedFolderPath(ctx, "linked://rts-source/../secret"); escaped != "linked://rts-source/../secret" {
+		t.Fatalf("traversal alias unexpectedly resolved to %q", escaped)
+	}
+}
+
+func TestAbsoluteDottedDirectoryGrantAllowsChildPath(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "source.v2")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	guard := &FolderGuardConfig{Enabled: true, ReadPaths: []string{root}, WritePaths: []string{root}}
+	if err := validatePathAgainstGuard(guard, filepath.Join(root, "notes.md"), true); err != nil {
+		t.Fatalf("dotted directory was misclassified as an exact file grant: %v", err)
 	}
 }
 

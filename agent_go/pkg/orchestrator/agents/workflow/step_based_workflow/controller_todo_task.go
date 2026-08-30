@@ -84,7 +84,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeTodoTaskStep(
 	skillStepConfig := getAgentConfigs(step)
 	dbAccessForGuard := resolveEffectiveDBAccess(skillStepConfig, hcpo.isEvaluationMode, false)
 	kbAccessForGuard := resolveKnowledgebaseAccess(skillStepConfig, hcpo.UseKnowledgebase())
-	learningsAccessForGuard := resolveLearningsAccess(skillStepConfig)
+	learningsAccessForGuard := resolveExecutionLearningsAccess(skillStepConfig, step, hcpo.isEvaluationMode)
 
 	// READ: current group's execution folder + db, plus KB/learnings only when
 	// the step config grants those stores. WRITE: current group's execution
@@ -781,7 +781,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) buildTodoTaskOrchestratorTemplateVars
 
 	// Resolve KB access mode for this step (explicit step config > preset default).
 	kbAccess := resolveKnowledgebaseAccess(stepConfig, hcpo.UseKnowledgebase())
-	learningsAccess := resolveLearningsAccess(stepConfig)
+	learningsAccess := resolveExecutionLearningsAccess(stepConfig, step, hcpo.isEvaluationMode)
 	useKnowledgebase := kbAccess != KBAccessNone
 
 	// Build folder guard paths for prompt (same logic as executeTodoTaskStep setup)

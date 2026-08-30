@@ -1035,23 +1035,23 @@ const PresetModal: React.FC<PresetModalProps> = React.memo(({
 
                 {/* MCP Server Selection */}
                 {availableServers.length > 0 ? (
-                  <ToolSelectionSection
-                    availableServers={availableServers}
-                    selectedServers={selectedServers}
-                    selectedTools={selectedTools}
-                    onServerChange={setSelectedServers}
-                    onToolChange={setSelectedTools}
-                    agentMode={effectiveAgentMode}
-                  />
-                ) : (
-                  <div className="space-y-2">
-                    <label className="block text-sm font-medium text-gray-900 dark:text-gray-100">
-                      MCP Server Selection
-                    </label>
-                    <div className="p-3 border border-gray-200 dark:border-gray-700 rounded-md text-xs text-gray-500 dark:text-gray-400">
-                      No MCP servers configured. Add servers in the MCP settings sidebar.
+                    <ToolSelectionSection
+                      availableServers={availableServers}
+                      selectedServers={selectedServers}
+                      selectedTools={selectedTools}
+                      onServerChange={setSelectedServers}
+                      onToolChange={setSelectedTools}
+                      agentMode={effectiveAgentMode}
+                    />
+                  ) : (
+                    <div className="space-y-2">
+                      <label className="block text-sm font-medium text-gray-900 dark:text-gray-100">
+                        MCP Server Selection
+                      </label>
+                      <div className="p-3 border border-gray-200 dark:border-gray-700 rounded-md text-xs text-gray-500 dark:text-gray-400">
+                        No MCP servers configured. Add servers in the MCP settings sidebar.
+                      </div>
                     </div>
-                  </div>
                 )}
 
                 {/* Skills Selection - Workflow mode only */}

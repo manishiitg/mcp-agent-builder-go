@@ -12,7 +12,6 @@ export { StepNode, StartNode, EndNode, nodeTypes } from './nodes'
 // Hooks
 export {
   usePlanData,
-  signalPlanModified,
   usePlanToFlow,
   useWorkflowExecution
 } from './hooks'

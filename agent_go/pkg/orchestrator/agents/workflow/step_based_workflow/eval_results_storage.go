@@ -229,6 +229,7 @@ type EvalResultRecord struct {
 	Evidence      string  `json:"evidence"`
 	Skipped       bool    `json:"skipped"`
 	GeneratedAt   string  `json:"generated_at"`
+	Historical    bool    `json:"historical,omitempty"`
 }
 
 // LoadEvalResults returns the most recent eval_results rows for a workflow,
@@ -277,10 +278,14 @@ func LoadEvalResults(ctx context.Context, workspacePath string, limit int) ([]Ev
 		return nil, err
 	}
 
-	planTitles, planDescriptions := loadEvaluationPlanStepText(workspacePath)
+	planTitles, planDescriptions, currentPlanStepIDs, planLoaded := loadEvaluationPlanStepText(workspacePath)
 	for i := range records {
 		records[i].Title = planTitles[records[i].StepID]
 		records[i].Description = planDescriptions[records[i].StepID]
+		if planLoaded {
+			_, inCurrentPlan := currentPlanStepIDs[records[i].StepID]
+			records[i].Historical = !inCurrentPlan
+		}
 	}
 	return records, nil
 }
@@ -291,17 +296,18 @@ func LoadEvalResults(ctx context.Context, workspacePath string, limit int) ([]Ev
 // by id. Returns empty maps on any read/parse failure -- there is no
 // evaluation plan to describe for a workflow that never configured one, and
 // that is not an error condition for the caller.
-func loadEvaluationPlanStepText(workspacePath string) (titles, descriptions map[string]string) {
+func loadEvaluationPlanStepText(workspacePath string) (titles, descriptions map[string]string, stepIDs map[string]struct{}, loaded bool) {
 	titles = map[string]string{}
 	descriptions = map[string]string{}
+	stepIDs = map[string]struct{}{}
 	planPath := filepath.Join(fsutil.WorkspaceDocsRoot(), filepath.FromSlash(strings.Trim(strings.TrimSpace(workspacePath), "/")), "evaluation", "evaluation_plan.json")
 	content, err := os.ReadFile(planPath)
 	if err != nil {
-		return titles, descriptions
+		return titles, descriptions, stepIDs, false
 	}
 	var plan EvaluationPlan
 	if err := json.Unmarshal(content, &plan); err != nil {
-		return titles, descriptions
+		return titles, descriptions, stepIDs, false
 	}
 	for _, step := range plan.Steps {
 		if step == nil || strings.TrimSpace(step.ID) == "" {
@@ -309,8 +315,9 @@ func loadEvaluationPlanStepText(workspacePath string) (titles, descriptions map[
 		}
 		titles[step.ID] = step.Title
 		descriptions[step.ID] = step.Description
+		stepIDs[step.ID] = struct{}{}
 	}
-	return titles, descriptions
+	return titles, descriptions, stepIDs, true
 }
 
 func ensureEvalResultsScoreCapturedColumn(ctx context.Context, db *sql.DB) error {

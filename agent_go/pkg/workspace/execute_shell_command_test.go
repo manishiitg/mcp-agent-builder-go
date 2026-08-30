@@ -444,7 +444,7 @@ func TestExecuteShellCommand_ConcurrentRequestsUseIsolatedEnv(t *testing.T) {
 	}
 }
 
-func TestExecuteShellCommand_PassesCDPHostDownloadsReadOnlyGuard(t *testing.T) {
+func TestExecuteShellCommand_PassesCDPHostDownloadsReadWriteGuard(t *testing.T) {
 	t.Setenv("WORKSPACE_DOCS_PATH", "/Users/mipl/ai-work/coding-agent-loop/workspace-docs")
 	t.Setenv("PI_HOST_DOWNLOADS_PATH", "/Users/mipl/Downloads")
 
@@ -454,7 +454,7 @@ func TestExecuteShellCommand_PassesCDPHostDownloadsReadOnlyGuard(t *testing.T) {
 		[]string{"Workflow/testing/runs/iteration-0/test-group/execution"},
 		[]string{"Workflow/testing/runs/iteration-0/test-group/execution/Downloads"},
 	)
-	common.GrantSessionCDPHostDownloadsReadOnly(sessionID, "cdp")
+	common.GrantSessionCDPHostDownloadsReadWrite(sessionID, "cdp")
 	defer ClearSessionShellConfig(sessionID)
 
 	var got ExecuteShellCommandParams
@@ -482,11 +482,11 @@ func TestExecuteShellCommand_PassesCDPHostDownloadsReadOnlyGuard(t *testing.T) {
 	if !containsString(got.FolderGuard.ReadPaths, "/Users/mipl/Downloads") {
 		t.Fatalf("expected host Downloads in read paths, got %v", got.FolderGuard.ReadPaths)
 	}
-	if containsString(got.FolderGuard.WritePaths, "/Users/mipl/Downloads") {
-		t.Fatalf("host Downloads must not be writable, got write paths %v", got.FolderGuard.WritePaths)
+	if !containsString(got.FolderGuard.WritePaths, "/Users/mipl/Downloads") {
+		t.Fatalf("expected host Downloads in write paths, got %v", got.FolderGuard.WritePaths)
 	}
-	if !containsString(got.FolderGuard.BlockedWritePaths, "/Users/mipl/Downloads") {
-		t.Fatalf("expected host Downloads in blocked-write paths, got %v", got.FolderGuard.BlockedWritePaths)
+	if containsString(got.FolderGuard.BlockedWritePaths, "/Users/mipl/Downloads") {
+		t.Fatalf("host Downloads must not remain write-blocked, got %v", got.FolderGuard.BlockedWritePaths)
 	}
 }
 
@@ -500,7 +500,7 @@ func TestExecuteShellCommand_UsesClientSessionIDForCDPHostDownloadsGuard(t *test
 		[]string{"Workflow/testing"},
 		[]string{"Workflow/testing/Downloads"},
 	)
-	common.GrantSessionCDPHostDownloadsReadOnly(sessionID, "cdp")
+	common.GrantSessionCDPHostDownloadsReadWrite(sessionID, "cdp")
 	defer ClearSessionShellConfig(sessionID)
 
 	var got ExecuteShellCommandParams
@@ -529,11 +529,11 @@ func TestExecuteShellCommand_UsesClientSessionIDForCDPHostDownloadsGuard(t *test
 	if !containsString(got.FolderGuard.ReadPaths, "/Users/mipl/Downloads") {
 		t.Fatalf("expected host Downloads in read paths, got %v", got.FolderGuard.ReadPaths)
 	}
-	if containsString(got.FolderGuard.WritePaths, "/Users/mipl/Downloads") {
-		t.Fatalf("host Downloads must remain read-only, got write paths %v", got.FolderGuard.WritePaths)
+	if !containsString(got.FolderGuard.WritePaths, "/Users/mipl/Downloads") {
+		t.Fatalf("expected host Downloads in write paths, got %v", got.FolderGuard.WritePaths)
 	}
-	if !containsString(got.FolderGuard.BlockedWritePaths, "/Users/mipl/Downloads") {
-		t.Fatalf("expected host Downloads in blocked-write paths, got %v", got.FolderGuard.BlockedWritePaths)
+	if containsString(got.FolderGuard.BlockedWritePaths, "/Users/mipl/Downloads") {
+		t.Fatalf("host Downloads must not remain write-blocked, got %v", got.FolderGuard.BlockedWritePaths)
 	}
 }
 
