@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -375,5 +376,428 @@ func TestCheckValidationSchemaFileRulesPassesWhenNoRulesDeclared(t *testing.T) {
 	}
 	if check.Status != "pass" {
 		t.Fatalf("status = %q, want pass (no rules to check)", check.Status)
+	}
+}
+
+func TestExtractScriptedCodeQueriesHandlesRealWorldShapes(t *testing.T) {
+	code := "" +
+		"import sqlite3, os\n" +
+		"conn = sqlite3.connect(os.environ['DB_PATH'])\n" +
+		"cur = conn.cursor()\n" +
+		"cur.execute(\"SELECT id FROM leads WHERE status = ?\", (status,))\n" +
+		"cur.execute('''\n" +
+		"    UPDATE leads SET touched = 1 WHERE id = ?\n" +
+		"''', (lead_id,))\n"
+	got := extractScriptedCodeQueries(code)
+	want := []string{
+		"SELECT id FROM leads WHERE status = ?",
+		"UPDATE leads SET touched = 1 WHERE id = ?",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("extractScriptedCodeQueries = %v, want %v", got, want)
+	}
+}
+
+func TestCountSQLPlaceholders(t *testing.T) {
+	if n := countSQLPlaceholders("SELECT * FROM t WHERE a=? AND b=?"); n != 2 {
+		t.Fatalf("countSQLPlaceholders = %d, want 2", n)
+	}
+	if n := countSQLPlaceholders("SELECT * FROM t"); n != 0 {
+		t.Fatalf("countSQLPlaceholders = %d, want 0", n)
+	}
+}
+
+func TestCheckScriptedCodeDBQueriesPassesWhenSchemaMatches(t *testing.T) {
+	ctx := context.Background()
+	dbPath := setupPlanDriftDBTest(t, "Workflow/drift-test")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE leads(id INTEGER PRIMARY KEY, status TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+
+	readFile := func(_ context.Context, path string) (string, error) {
+		if path == "Workflow/drift-test/learnings/step-log/main.py" {
+			return `cur.execute("SELECT id FROM leads WHERE status = ?", (status,))`, nil
+		}
+		return "", os.ErrNotExist
+	}
+
+	check, err := CheckScriptedCodeDBQueries(ctx, "Workflow/drift-test", "step-log", readFile)
+	if err != nil {
+		t.Fatalf("CheckScriptedCodeDBQueries returned error: %v", err)
+	}
+	if check.Status != "pass" {
+		t.Fatalf("status = %q, want pass; evidence=%s", check.Status, check.Evidence)
+	}
+	if check.CheckID != scriptedCodeDriftCheckID {
+		t.Fatalf("check_id = %q, want %q", check.CheckID, scriptedCodeDriftCheckID)
+	}
+}
+
+func TestCheckScriptedCodeDBQueriesFailsWhenTableRenamed(t *testing.T) {
+	ctx := context.Background()
+	dbPath := setupPlanDriftDBTest(t, "Workflow/drift-test")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulates a later step renaming "leads" to "prospects" without
+	// updating this scripted step's own query.
+	if _, err := db.Exec(`CREATE TABLE prospects(id INTEGER PRIMARY KEY, status TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+
+	readFile := func(_ context.Context, path string) (string, error) {
+		if path == "Workflow/drift-test/learnings/step-log/main.py" {
+			return `cur.execute("SELECT id FROM leads WHERE status = ?", (status,))`, nil
+		}
+		return "", os.ErrNotExist
+	}
+
+	check, err := CheckScriptedCodeDBQueries(ctx, "Workflow/drift-test", "step-log", readFile)
+	if err != nil {
+		t.Fatalf("CheckScriptedCodeDBQueries returned error: %v", err)
+	}
+	if check.Status != "fail" {
+		t.Fatalf("status = %q, want fail (query references a renamed table)", check.Status)
+	}
+}
+
+func TestCheckScriptedCodeDBQueriesPassesWhenStepNotScripted(t *testing.T) {
+	ctx := context.Background()
+	setupPlanDriftDBTest(t, "Workflow/drift-test")
+
+	readFile := func(_ context.Context, _ string) (string, error) {
+		return "", os.ErrNotExist
+	}
+
+	check, err := CheckScriptedCodeDBQueries(ctx, "Workflow/drift-test", "step-agentic", readFile)
+	if err != nil {
+		t.Fatalf("CheckScriptedCodeDBQueries returned error: %v", err)
+	}
+	if check.Status != "pass" {
+		t.Fatalf("status = %q, want pass (no main.py — not a scripted step)", check.Status)
+	}
+	if check.Evidence == "" {
+		t.Fatal("evidence must explain why there was nothing to check")
+	}
+}
+
+func TestCheckScriptedCodeDBQueriesDoesNotMutateDB(t *testing.T) {
+	ctx := context.Background()
+	dbPath := setupPlanDriftDBTest(t, "Workflow/drift-test")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE leads(id INTEGER PRIMARY KEY, status TEXT); INSERT INTO leads VALUES (1, 'new')`); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+
+	readFile := func(_ context.Context, path string) (string, error) {
+		if path == "Workflow/drift-test/learnings/step-log/main.py" {
+			return `cur.execute("UPDATE leads SET status = 'hacked' WHERE id = ?", (lead_id,))`, nil
+		}
+		return "", os.ErrNotExist
+	}
+
+	if _, err := CheckScriptedCodeDBQueries(ctx, "Workflow/drift-test", "step-log", readFile); err != nil {
+		t.Fatalf("CheckScriptedCodeDBQueries returned error: %v", err)
+	}
+
+	check, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer check.Close()
+	var status string
+	if err := check.QueryRow(`SELECT status FROM leads WHERE id=1`).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "new" {
+		t.Fatalf("status = %q, want unchanged %q — EXPLAIN-only guard did not hold", status, "new")
+	}
+}
+
+func TestExtractDBReadmeDDLStatementsHandlesBothRealConventions(t *testing.T) {
+	readme := "" +
+		"## table: campaign_runs\n" +
+		"- **ddl**: `CREATE TABLE campaign_runs (batch_id TEXT PRIMARY KEY, status TEXT CHECK (status IN ('a','b')))`\n" +
+		"- **writers**: step-x\n\n" +
+		"## `prospects`\n" +
+		"- **create_table**:\n" +
+		"```sql\n" +
+		"CREATE TABLE prospects (\n" +
+		"  prospect_id TEXT PRIMARY KEY,\n" +
+		"  batch_id TEXT NOT NULL\n" +
+		")\n" +
+		"```\n"
+	got := extractDBReadmeDDLStatements(readme)
+	if len(got) != 2 {
+		t.Fatalf("extractDBReadmeDDLStatements found %d statement(s), want 2: %v", len(got), got)
+	}
+	if !strings.Contains(got[0], "campaign_runs") || !strings.Contains(got[1], "prospects") {
+		t.Fatalf("extracted statements = %v, want one per table in source order", got)
+	}
+}
+
+func TestDDLDeclaredColumnsParsesRealDDL(t *testing.T) {
+	ctx := context.Background()
+	name, cols, err := ddlDeclaredColumns(ctx, `CREATE TABLE campaign_runs (batch_id TEXT PRIMARY KEY, status TEXT CHECK (status IN ('a','b')), notes TEXT)`)
+	if err != nil {
+		t.Fatalf("ddlDeclaredColumns returned error: %v", err)
+	}
+	if name != "campaign_runs" {
+		t.Fatalf("table name = %q, want campaign_runs", name)
+	}
+	want := []string{"batch_id", "status", "notes"}
+	if !reflect.DeepEqual(cols, want) {
+		t.Fatalf("columns = %v, want %v", cols, want)
+	}
+}
+
+func TestCheckDBReadmeContractPassesWhenSchemaMatches(t *testing.T) {
+	ctx := context.Background()
+	dbPath := setupPlanDriftDBTest(t, "Workflow/drift-test")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE leads(id INTEGER PRIMARY KEY, status TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+
+	readFile := func(_ context.Context, path string) (string, error) {
+		if path == "Workflow/drift-test/db/README.md" {
+			return "## table: leads\n- **ddl**: `CREATE TABLE leads(id INTEGER PRIMARY KEY, status TEXT)`\n", nil
+		}
+		return "", os.ErrNotExist
+	}
+
+	check, err := CheckDBReadmeContract(ctx, "Workflow/drift-test", readFile)
+	if err != nil {
+		t.Fatalf("CheckDBReadmeContract returned error: %v", err)
+	}
+	if check.Status != "pass" {
+		t.Fatalf("status = %q, want pass; evidence=%s", check.Status, check.Evidence)
+	}
+	if check.CheckID != dbReadmeDriftCheckID {
+		t.Fatalf("check_id = %q, want %q", check.CheckID, dbReadmeDriftCheckID)
+	}
+}
+
+func TestCheckDBReadmeContractFailsWhenColumnDropped(t *testing.T) {
+	ctx := context.Background()
+	dbPath := setupPlanDriftDBTest(t, "Workflow/drift-test")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A step dropped the "status" column without updating db/README.md.
+	if _, err := db.Exec(`CREATE TABLE leads(id INTEGER PRIMARY KEY)`); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+
+	readFile := func(_ context.Context, path string) (string, error) {
+		if path == "Workflow/drift-test/db/README.md" {
+			return "## table: leads\n- **ddl**: `CREATE TABLE leads(id INTEGER PRIMARY KEY, status TEXT)`\n", nil
+		}
+		return "", os.ErrNotExist
+	}
+
+	check, err := CheckDBReadmeContract(ctx, "Workflow/drift-test", readFile)
+	if err != nil {
+		t.Fatalf("CheckDBReadmeContract returned error: %v", err)
+	}
+	if check.Status != "fail" {
+		t.Fatalf("status = %q, want fail (documented column no longer exists live)", check.Status)
+	}
+}
+
+func TestCheckDBReadmeContractFailsWhenTableDropped(t *testing.T) {
+	ctx := context.Background()
+	setupPlanDriftDBTest(t, "Workflow/drift-test")
+	// db.sqlite exists but the documented table was never created (or was dropped).
+	dbPath := planDriftWorkflowDBPath("Workflow/drift-test")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE unrelated(id INTEGER PRIMARY KEY)`); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+
+	readFile := func(_ context.Context, path string) (string, error) {
+		if path == "Workflow/drift-test/db/README.md" {
+			return "## table: leads\n- **ddl**: `CREATE TABLE leads(id INTEGER PRIMARY KEY, status TEXT)`\n", nil
+		}
+		return "", os.ErrNotExist
+	}
+
+	check, err := CheckDBReadmeContract(ctx, "Workflow/drift-test", readFile)
+	if err != nil {
+		t.Fatalf("CheckDBReadmeContract returned error: %v", err)
+	}
+	if check.Status != "fail" {
+		t.Fatalf("status = %q, want fail (documented table missing entirely)", check.Status)
+	}
+}
+
+func TestCheckDBReadmeContractPassesWhenProseOnly(t *testing.T) {
+	ctx := context.Background()
+	setupPlanDriftDBTest(t, "Workflow/drift-test")
+
+	readFile := func(_ context.Context, path string) (string, error) {
+		if path == "Workflow/drift-test/db/README.md" {
+			return "### `leads`\nPrimary key: `id`. Upsert rule: insert one row per lead.\n", nil
+		}
+		return "", os.ErrNotExist
+	}
+
+	check, err := CheckDBReadmeContract(ctx, "Workflow/drift-test", readFile)
+	if err != nil {
+		t.Fatalf("CheckDBReadmeContract returned error: %v", err)
+	}
+	if check.Status != "pass" {
+		t.Fatalf("status = %q, want pass (prose-only README, no DDL to verify — not a false failure)", check.Status)
+	}
+	if check.Evidence == "" {
+		t.Fatal("evidence must explain why nothing was verified")
+	}
+}
+
+func TestCheckDBReadmeContractPassesWhenNoReadmeExists(t *testing.T) {
+	ctx := context.Background()
+	setupPlanDriftDBTest(t, "Workflow/drift-test")
+
+	readFile := func(_ context.Context, _ string) (string, error) {
+		return "", os.ErrNotExist
+	}
+
+	check, err := CheckDBReadmeContract(ctx, "Workflow/drift-test", readFile)
+	if err != nil {
+		t.Fatalf("CheckDBReadmeContract returned error: %v", err)
+	}
+	if check.Status != "pass" {
+		t.Fatalf("status = %q, want pass (no README to check)", check.Status)
+	}
+}
+
+func TestExtractSQLTableReferencesFindsAllClauseKinds(t *testing.T) {
+	got := extractSQLTableReferences(`SELECT a.x FROM leads a JOIN campaigns c ON a.c=c.id; UPDATE leads SET x=1; INSERT INTO audit_log VALUES (1)`)
+	want := []string{"leads", "campaigns", "leads", "audit_log"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("extractSQLTableReferences = %v, want %v", got, want)
+	}
+}
+
+func TestCheckOrphanedTablesPassesWhenAllTablesReferenced(t *testing.T) {
+	ctx := context.Background()
+	dbPath := setupPlanDriftDBTest(t, "Workflow/drift-test")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE leads(id INTEGER PRIMARY KEY); CREATE TABLE campaigns(id INTEGER PRIMARY KEY)`); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+
+	check, err := CheckOrphanedTables(ctx, "Workflow/drift-test",
+		[]string{"SELECT * FROM leads"},     // db rule SQL
+		[]string{"SELECT * FROM campaigns"}, // scripted code queries
+		nil,                                 // report queries
+		nil,                                 // readme declared tables
+	)
+	if err != nil {
+		t.Fatalf("CheckOrphanedTables returned error: %v", err)
+	}
+	if check.Status != "pass" {
+		t.Fatalf("status = %q, want pass; evidence=%s", check.Status, check.Evidence)
+	}
+	if check.CheckID != orphanedTablesDriftCheckID {
+		t.Fatalf("check_id = %q, want %q", check.CheckID, orphanedTablesDriftCheckID)
+	}
+}
+
+func TestCheckOrphanedTablesFlagsUnreferencedTable(t *testing.T) {
+	ctx := context.Background()
+	dbPath := setupPlanDriftDBTest(t, "Workflow/drift-test")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// "legacy_imports" used to be written by a step that was since removed
+	// or rewritten; nothing references it anymore.
+	if _, err := db.Exec(`CREATE TABLE leads(id INTEGER PRIMARY KEY); CREATE TABLE legacy_imports(id INTEGER PRIMARY KEY)`); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+
+	check, err := CheckOrphanedTables(ctx, "Workflow/drift-test",
+		[]string{"SELECT * FROM leads"}, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("CheckOrphanedTables returned error: %v", err)
+	}
+	if check.Status != "fail" {
+		t.Fatalf("status = %q, want fail (legacy_imports has zero references)", check.Status)
+	}
+	if !strings.Contains(check.Evidence, "legacy_imports") {
+		t.Fatalf("evidence must name the orphaned table: %s", check.Evidence)
+	}
+}
+
+func TestCheckOrphanedTablesNeverFlagsReservedTables(t *testing.T) {
+	ctx := context.Background()
+	dbPath := setupPlanDriftDBTest(t, "Workflow/drift-test")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE run_concerns(id INTEGER PRIMARY KEY)`); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+
+	check, err := CheckOrphanedTables(ctx, "Workflow/drift-test", nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("CheckOrphanedTables returned error: %v", err)
+	}
+	if check.Status != "pass" {
+		t.Fatalf("status = %q, want pass (run_concerns is platform-reserved, never flagged): %s", check.Status, check.Evidence)
+	}
+}
+
+func TestCheckOrphanedTablesRecognizesReportAndReadmeReferences(t *testing.T) {
+	ctx := context.Background()
+	dbPath := setupPlanDriftDBTest(t, "Workflow/drift-test")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE from_report(id INTEGER PRIMARY KEY); CREATE TABLE from_readme(id INTEGER PRIMARY KEY)`); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+
+	check, err := CheckOrphanedTables(ctx, "Workflow/drift-test",
+		nil, nil,
+		[]string{"SELECT * FROM from_report"},
+		[]string{"from_readme"},
+	)
+	if err != nil {
+		t.Fatalf("CheckOrphanedTables returned error: %v", err)
+	}
+	if check.Status != "pass" {
+		t.Fatalf("status = %q, want pass; evidence=%s", check.Status, check.Evidence)
 	}
 }

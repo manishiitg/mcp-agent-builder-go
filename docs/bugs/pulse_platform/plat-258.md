@@ -1,11 +1,11 @@
 [← Pulse platform index](../pulse_platform_issue_register.md)
 
-# PLAT-258 — Dedicated `plan_drift_review` Pulse module (design + phases 1-2 in progress)
+# PLAT-258 — Dedicated `plan_drift_review` Pulse module (design + phases 1-2 complete)
 
 | Coordination | Value |
 |---|---|
 | Assigned agent | Claude Code |
-| Ticket state | `design complete; phase 1 implemented; phase 2 in progress (3 of 9 deterministic checks built); phases 3-6 not yet built` |
+| Ticket state | `design complete; phase 1 implemented; phase 2 complete (6 of 9 deterministic checks built; 1 needed no new code, 2 correctly found not-buildable-as-designed — see below); phases 3-6 not yet built` |
 | Last synchronized | `2026-08-30` |
 
 - **Type:** platform feature (multi-phase), not a single bug fix. Filed at
@@ -110,24 +110,80 @@ run-folder resolution is orchestration-layer plumbing (phase 3), unrelated to
 what this check itself asserts, so it stays a pure, directly-testable
 function with synthetic data.
 
-**Deferred, with reasons (not just out of time):**
-- **Check 3** (evaluation_plan.json query compatibility) — deferred pending
-  confirming evaluation_plan.json actually embeds raw SQL the way reports do;
-  initial scan of `evaluation_plan_tool.go` found no clear evidence of this
-  shape. Needs investigation before building, not assumption.
-- **Check 4** (scripted step code `query_workflow_db(...)` extraction) —
-  deferred pending confirming the actual shape of embedded DB calls in
-  `learnings/<step-id>/main.py`.
-- **Check 13** (orphaned/legacy tables) — deliberately deferred until 3 and 4
-  exist: an orphan detector is only trustworthy once it has checked EVERY
-  real consumer of a table, and building it on top of only checks 1/2/5's
-  extracted references risks false positives (flagging a table that a
-  not-yet-built extractor would have found in use) — exactly the kind of
-  untrustworthy finding this whole ticket exists to avoid.
-- **Checks 6/7** (KB/learnings access mode vs. actual tool-call history) and
-  **9** (`db/README.md` contract drift) — deferred pending investigating
-  their actual data sources (event/tool-call log shape; `db/README.md`
-  authoring convention) rather than guessing at a format.
+**Investigation, then built or resolved for the rest:**
+
+- **Check 3** (evaluation_plan.json query compatibility) — investigated:
+  `EvaluationStep` (`evaluation_types.go`) has no SQL field; it carries
+  `PreValidation *ValidationSchema` — the SAME type Checks 2/5 already
+  consume. **No new check needed** — Checks 2/5 already cover eval steps for
+  free once phase 3 runs them against every step's effective schema, not
+  only regular steps'.
+
+- **Built: `CheckScriptedCodeDBQueries`** — Check 4. Confirmed real shape by
+  surveying 27 real `learnings/<step-id>/main.py` files: 24 use
+  `sqlite3.connect(os.environ["DB_PATH"])` + `cur.execute("SQL", (params,))`,
+  standard `?`-placeholder parameterization (3 outliers shell out to the
+  `sqlite3` CLI — not covered, reported honestly as "0 queries found" rather
+  than a false pass). Extracts `.execute(...)` calls (triple- and single-
+  quoted), then dry-runs each via `EXPLAIN <sql>` with every `?` bound to
+  `NULL` — SQLite still must resolve every referenced table/column to build
+  the bytecode program, so schema drift is caught identically to a real run,
+  without executing the statement or needing real parameter values (verified
+  against a throwaway local database before shipping).
+
+- **Built: `CheckDBReadmeContract`** — Check 9. Confirmed real shape:
+  surveyed 13 real `db/README.md` files — 12/13 contain a literal `CREATE
+  TABLE` DDL string (two conventions: inline backtick-delimited, or a fenced
+  ` ```sql ` block; the 13th is prose-only, honestly reported as "no DDL
+  found" rather than guessed at). Extracts each documented `CREATE TABLE`
+  statement and runs it against a throwaway **in-memory** SQLite database,
+  reading back its column list via `PRAGMA table_info` on that scratch
+  database — using SQLite's own real parser instead of a hand-written SQL
+  column-list parser (a DDL's own `CHECK`/`FOREIGN KEY` clauses make regex
+  column extraction unreliable). Compares that declared column set against
+  the live table's real columns. Hit and fixed a genuine bug in review: a
+  `:memory:` SQLite database is private to whichever pooled connection opens
+  it, so without pinning the scratch connection to `SetMaxOpenConns(1)` (and
+  fully closing each query before starting the next one on it), the `CREATE
+  TABLE` and the `PRAGMA` read could silently land on two different databases
+  (empty columns) or, worse, deadlock waiting for a connection the pool would
+  never free. Both fixed, verified by test.
+
+- **Checks 6/7** (KB/learnings access mode vs. actual tool-call history) —
+  investigated: **not buildable as originally conceived**. No durable,
+  step-keyed tool-call history exists — the event store
+  (`agent_go/internal/events`) is purely in-memory, pruned after session
+  inactivity; the one durable-shaped candidate (`persistedToolCallTiming`,
+  `timing_persistence.go`) is confirmed dead/staged code with zero real
+  callers. More importantly: the exact violation this check was meant to
+  catch ("called a KB-write tool despite read-only access") is **already
+  prevented live** by FolderGuard write-path scoping — when
+  `knowledgebase_access` doesn't grant write, the write path is simply never
+  opened, so the attempt fails in the moment rather than needing after-the-
+  fact detection. No check built; the only genuinely open part of the user's
+  original ask here — "is the CURRENT access mode/lock state the *right*
+  choice given the step's maturity" — was already correctly categorized as a
+  Group 3 judgment check (phase 4), not a mechanical one.
+
+- **Built: `CheckOrphanedTables`** — Check 13. Now buildable with reasonable
+  source coverage using Checks 1/2/4/9's own extraction: cross-references
+  every live `db.sqlite` table against every table name referenced by report
+  queries, `validation_schema.db[]` rule SQL, scripted `main.py` queries, and
+  `db/README.md`'s own documented table names (via a lightweight
+  `FROM`/`JOIN`/`UPDATE`/`INTO` regex scan — a heuristic, not a SQL parser,
+  same tradeoff as the query extractors). A live table matching none of
+  those, and not on the platform-reserved list (mirrors
+  `workspace/handlers/query.go`'s denylist — different Go module, kept in
+  sync by comment), is a real orphan *candidate*. Deliberately takes its
+  reference lists as pre-aggregated inputs rather than assembling them
+  itself — full coverage needs every step's validation_schema and scripted
+  code, which means parsing the whole `plan.json` step-type union, which is
+  phase-3 orchestration work (it already needs to iterate every step to
+  schedule their own checks) — and its evidence explicitly states this is a
+  heuristic scan of known sources, not a full-plan reference audit, so a
+  finding reads as "candidate for manual review," not certainty. The fix
+  path for a real orphan is `apply_workflow_db_migration` (already
+  auto-snapshots before any destructive change), never a raw `DROP`.
 
 ## Verification
 
@@ -140,18 +196,26 @@ description-review test pair exactly, plus the pre-existing
 `TestArtifactReviewNotices`/`TestMergeAgentConfigFieldsCoversEveryField`
 updated and passing.
 
-Phase 2 (Checks 1, 2, 5): 16 new tests total. Check 1 — 4 for
-`extractReportQueries` (all three quote styles, dedup-preserving-first-
-occurrence-position, escaped-quote handling, no-match case) and 4 for
-`CheckReportQueryCompatibility` (pass on matching schema, fail on a dropped
-column, pass when no report exists, and a dedicated safety test proving a
-report embedding an `UPDATE` statement never actually mutates the database —
-the `query_only` guard holds). Check 2 — 4 for `CheckValidationSchemaDBRules`
-(assertions hold, fail on a renamed column, fail when a row-count assertion
-breaks, pass when no rules declared). Check 5 — 4 for
-`CheckValidationSchemaFileRules` (fields resolve, fail when a declared field
-is renamed away in real output, fail when a `must_exist` file is missing,
-pass when no rules declared). `gofmt`/`go vet` clean, full package suite
+Phase 2 (Checks 1, 2, 4, 5, 9, 13): 34 new tests total across
+`plan_drift_checks_test.go`. Check 1 — 4 for `extractReportQueries` (all
+three quote styles, dedup-preserving-first-occurrence-position, escaped-quote
+handling, no-match case) and 4 for `CheckReportQueryCompatibility` (pass on
+matching schema, fail on a dropped column, pass when no report exists, and a
+dedicated safety test proving a report embedding an `UPDATE` statement never
+actually mutates the database — the `query_only` guard holds). Check 2 — 4
+for `CheckValidationSchemaDBRules` (assertions hold, fail on a renamed
+column, fail when a row-count assertion breaks, pass when no rules
+declared). Check 5 — 4 for `CheckValidationSchemaFileRules` (fields resolve,
+fail when a declared field is renamed away in real output, fail when a
+`must_exist` file is missing, pass when no rules declared). Check 4 — 6:
+extraction against a real-shaped multi-line scripted file,
+`countSQLPlaceholders`, pass/fail/not-scripted/mutation-safety. Check 9 — 7:
+extraction across both real README conventions, DDL-to-column-list parsing
+via the in-memory scratch database, pass/fail-on-dropped-column/
+fail-on-dropped-table/pass-on-prose-only/pass-on-no-readme. Check 13 — 5:
+table-reference extraction across all four SQL clause kinds,
+pass-when-referenced, fail-on-a-genuine-orphan, reserved-tables-never-
+flagged, report-and-readme-references-recognized. `gofmt`/`go vet` clean, full package suite
 still green.
 
 ## Reverify
