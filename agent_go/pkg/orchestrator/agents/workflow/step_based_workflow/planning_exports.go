@@ -1969,8 +1969,8 @@ func RegisterRunFullWorkflowTool(
 							missingSteps = append(missingSteps, fmt.Sprintf("  - %s (id: %s, question: %q)", hiStep.GetTitle(), stepID, hiStep.Question))
 						}
 					}
-					if step.StepType() == StepTypeRouting {
-						if routingStep, ok := step.(*RoutingPlanStep); ok && routingStep.Description != "" {
+					if step.StepType() == StepTypeRouting || step.StepType() == StepTypeBranch {
+						if routingStep, ok := step.(routeSwitchStep); ok && routingStep.GetDescription() != "" {
 							legacyRoutingSteps = append(legacyRoutingSteps, fmt.Sprintf("  - %s (id: %s)", step.GetTitle(), step.GetID()))
 						}
 					}
@@ -1979,7 +1979,7 @@ func RegisterRunFullWorkflowTool(
 					return fmt.Sprintf("❌ Plan has human_input steps that require responses via human_inputs parameter. Missing:\n%s\n\nProvide human_inputs with a response for each step ID listed above.", strings.Join(missingSteps, "\n")), nil
 				}
 				if len(legacyRoutingSteps) > 0 {
-					return fmt.Sprintf("❌ Plan has routing steps with legacy descriptions. Routing is deterministic-only and routing steps no longer execute agents:\n%s\n\nMove each probe/judgment into a prior message_sequence step that writes route_selection.json, then clear the routing description and point the routing step at that file via route_source_file or context_dependencies.", strings.Join(legacyRoutingSteps, "\n")), nil
+					return fmt.Sprintf("❌ Plan has routing/branch steps with legacy descriptions. Both are deterministic-only and never execute agents:\n%s\n\nMove each probe/judgment into a prior message_sequence step that writes route_selection.json, then clear the description and point the step at that file via route_source_file or context_dependencies.", strings.Join(legacyRoutingSteps, "\n")), nil
 				}
 			}
 

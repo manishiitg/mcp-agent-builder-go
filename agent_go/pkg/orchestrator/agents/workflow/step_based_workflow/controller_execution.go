@@ -2977,10 +2977,18 @@ func isTodoTaskStep(step PlanStepInterface) bool {
 	return ok
 }
 
-// isRoutingStep returns true if the step is a routing step (N-way LLM-based routing)
+// isRoutingStep returns true if the step is a deterministic N-way switch --
+// either a routing step (now the "route"/major-fork concept) or a branch
+// step (the small in-flow decision). Both share the exact same executor and
+// deterministic-only behavior (no learnings, no agent execution); see
+// routeSwitchStep in planning_agent.go and PLAT-259.
 func isRoutingStep(step PlanStepInterface) bool {
-	_, ok := step.(*RoutingPlanStep)
-	return ok
+	switch step.(type) {
+	case *RoutingPlanStep, *BranchPlanStep:
+		return true
+	default:
+		return false
+	}
 }
 
 func isMessageSequenceStep(step PlanStepInterface) bool {

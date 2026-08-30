@@ -678,7 +678,7 @@ func getMetadataKeys(metadata map[string]interface{}) []string {
 
 // IsPlanModificationTool checks if a tool name is a plan modification tool
 func IsPlanModificationTool(name string) bool {
-	return name == "update_scripted_step" || name == "update_routing_step" || name == "update_human_input_step" || name == "update_todo_task_step" || name == "update_message_sequence_step" || name == "delete_plan_steps" || name == "add_scripted_step" || name == "add_routing_step" || name == "add_human_input_step" || name == "add_todo_task_step" || name == "add_message_sequence_step" ||
+	return name == "update_scripted_step" || name == "update_routing_step" || name == "update_branch_step" || name == "update_human_input_step" || name == "update_todo_task_step" || name == "update_message_sequence_step" || name == "delete_plan_steps" || name == "add_scripted_step" || name == "add_routing_step" || name == "add_branch_step" || name == "add_human_input_step" || name == "add_todo_task_step" || name == "add_message_sequence_step" ||
 		name == "update_validation_schema" ||
 		name == "add_todo_task_route" || name == "update_todo_task_route" || name == "delete_todo_task_route"
 }
@@ -747,7 +747,7 @@ func ExtractChangedStepIDsFromMessages(messages []llmtypes.MessageContent) Chang
 				}
 
 				switch toolName {
-				case "update_scripted_step", "update_routing_step":
+				case "update_scripted_step", "update_routing_step", "update_branch_step":
 					// Extract existing_step_id from updated step
 					if stepID, ok := argsMap["existing_step_id"].(string); ok && stepID != "" {
 						changed.Updated = append(changed.Updated, stepID)
@@ -763,7 +763,7 @@ func ExtractChangedStepIDsFromMessages(messages []llmtypes.MessageContent) Chang
 						}
 					}
 
-				case "add_scripted_step", "add_routing_step":
+				case "add_scripted_step", "add_routing_step", "add_branch_step":
 					// Extract id from new step
 					if stepID, ok := argsMap["id"].(string); ok && stepID != "" {
 						changed.Added = append(changed.Added, stepID)

@@ -634,7 +634,7 @@ func (iwm *InteractiveWorkshopManager) enrichQueryForComplexStep(
 	case StepTypeTodoTask:
 		logFileName = "todo-task-execution.json"
 		stepTypeName = "Todo Task"
-	case StepTypeRouting:
+	case StepTypeRouting, StepTypeBranch:
 		logFileName = "orchestration-execution.json"
 		stepTypeName = "Orchestration"
 	default:
@@ -1500,9 +1500,9 @@ func GetToolsForWorkshopMode(mode string) []string {
 		"create_plan",
 		"validate_plan_change",
 		"migrate_message_sequence_code_items",
-		"add_scripted_step", "add_message_sequence_step", "add_routing_step",
+		"add_scripted_step", "add_message_sequence_step", "add_routing_step", "add_branch_step",
 		"add_human_input_step", "add_todo_task_step", "add_todo_task_route",
-		"update_scripted_step", "update_message_sequence_step", "update_routing_step",
+		"update_scripted_step", "update_message_sequence_step", "update_routing_step", "update_branch_step",
 		"update_human_input_step", "update_todo_task_step", "update_todo_task_route",
 		"delete_todo_task_route", "delete_plan_steps", "cleanup_orphan_step_configs",
 		"update_validation_schema",

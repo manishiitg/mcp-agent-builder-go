@@ -787,6 +787,8 @@ const getStepTypeLabel = (type: string): string => {
       return 'Orchestration'
     case 'routing':
       return 'Routing'
+    case 'branch':
+      return 'Branch'
     case 'todo_task':
       return 'Todo Task'
     case 'human_input':
@@ -810,7 +812,9 @@ const getStepTypeDescription = (type: string): string => {
     case 'message_sequence':
       return 'Message sequence: one AI agent completing an ordered series of conversation turns.'
     case 'routing':
-      return 'Routing step: deterministically selects the next workflow branch.'
+      return 'Routing step: a major, self-contained sub-workflow fork that deterministically selects the next path.'
+    case 'branch':
+      return 'Branch step: a small in-flow decision that deterministically selects the next step.'
     case 'human_input':
       return 'Human-input step: waits for an operator response before continuing.'
     case 'regular':
@@ -825,6 +829,8 @@ const getStepTypeBadgeStyle = (type: string): string => {
       return 'bg-purple-500/10 text-purple-600 border-purple-500/20 dark:bg-purple-500/20 dark:text-purple-300'
     case 'routing':
       return 'bg-indigo-500/10 text-indigo-600 border-indigo-500/20 dark:bg-indigo-500/20 dark:text-indigo-300'
+    case 'branch':
+      return 'bg-cyan-500/10 text-cyan-600 border-cyan-500/20 dark:bg-cyan-500/20 dark:text-cyan-300'
     case 'todo_task':
       return 'bg-fuchsia-500/10 text-fuchsia-600 border-fuchsia-500/20 dark:bg-fuchsia-500/20 dark:text-fuchsia-300'
     case 'human_input':

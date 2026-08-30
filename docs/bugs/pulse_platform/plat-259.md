@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | Claude Code |
-| Ticket state | `open` — design agreed, **not implemented, not scheduled** |
+| Ticket state | `design complete; phase A (the branch step type) implemented; guidance best-practices reuse of plan_drift_review and frontend per-route reporting tabs not yet built` |
 | Last synchronized | `2026-08-30` |
 
 - **Type:** platform feature (design only, no code changed). Filed at the
@@ -86,43 +86,129 @@ nudge the planning agent toward.
   this discussion — a planning agent or a human skimming `plan.json` could
   easily conflate them.
 
-## Explicitly not done in this ticket
+## Phase A — implemented: the `branch` step type
 
-This is a design record only — no code was written, no Go type added, no
-guidance skill authored, no frontend reporting change made. It exists to
-capture the agreed shape before implementation work is scoped and started.
+`branch` is a real, working step type now, functionally identical to
+`routing` (unchanged, per the design above).
+
+**Backend** (`agent_go/pkg/orchestrator/agents/workflow/step_based_workflow/`):
+- `StepTypeBranch` constant + `BranchPlanStep` struct (`planning_agent.go`)
+  — a **distinct Go struct**, not `RoutingPlanStep` reused with a `Type`
+  differentiator (resolves the first open question below): the codebase's
+  dispatch pattern is pervasive type-assertion (`step.(*RoutingPlanStep)`),
+  which a single reused struct with two type tags would have fought against
+  everywhere. One deliberate field-name difference: `branch_question`, not
+  `routing_question` — `RoutingPlanStep` itself stays untouched.
+- Extracted a new `routeSwitchStep` interface (`GetRoutes`,
+  `GetDefaultRouteID`, `GetRouteSourceFile`, `GetRoutingQuestionText`,
+  `SetSelectedRouteID`, `SetRoutingResponse`, plus `PlanStepInterface`)
+  implemented by both `RoutingPlanStep` and `BranchPlanStep`. The entire
+  executor (`executeRoutingStep` in `controller_routing.go`,
+  `resolveDeterministicRoutingSelection` and its helpers in
+  `controller_routing_deterministic.go`, ~540 lines total) now operates on
+  this interface instead of the concrete `*RoutingPlanStep` type — one
+  execution code path for both step types, nothing duplicated.
+- Wired into every polymorphic step-type switch (JSON parse/unmarshal ×3,
+  `updateToolForStepType`, `createSingleStepAdder`'s validation switch,
+  `isRoutingStep` in `controller_execution.go` — broadened to recognize
+  both types since every existing caller wanted identical treatment for
+  branch: no learnings, routes through the same executor — and the
+  legacy-description pre-flight guard in `planning_exports.go`).
+- New `add_branch_step`/`update_branch_step` tools (**distinct tools**,
+  resolves the second open question below — matches the codebase's
+  established one-tool-pair-per-step-type convention rather than a shared
+  tool with a `kind` parameter): own JSON schema
+  (`getAddBranchStepSchema`/`getUpdateBranchStepSchema`), own executors
+  (`createAddBranchStepExecutor` delegates to the same generic
+  `createSingleStepAdder("branch", ...)` routing already uses;
+  `createUpdateBranchStepExecutor` mirrors `createUpdateRoutingStepExecutor`
+  exactly), registered next to the routing tools. Added to both allow-lists
+  (`interactive_workshop_manager.go`'s Workshop-mode tool list,
+  `planning_management.go`'s tool-name group checks) and the toolset
+  invariant test's tracking list (`cmd/server/toolset_invariant_test.go`) —
+  the exact registered-but-unreachable gap PLAT-258 phase 3 caught for
+  `record_plan_drift_review` doesn't recur here.
+- New `cmd/server/guidance/templates/system/branch.md` (mirrors
+  `routing.md`'s structure: selection contract, single mode, structure,
+  convergence, anti-patterns) plus a short reinterpretation note at the top
+  of `routing.md` and updated coverage in `plan-design.md`'s step-type
+  decision guide (Step 6 + the type enumeration) so the planning agent
+  actually learns branch exists at the point it chooses a step type, not
+  only inside the reference doc. New `branch` entry in `guidance.go`'s
+  `referenceKinds` registry.
+
+**Frontend** (`frontend/src`): no manual step-type picker exists anywhere —
+steps are authored by the planning agent — so this is purely
+recognize/render/exclude, no new UI. `stepConfigMatching.ts`'s `PlanStep`
+union gained `BranchPlanStep` + `isBranchStep`/`isRouteSwitchStep` guards;
+`usePlanToFlow.ts`'s node/edge building, route-target collection, and
+layout sizing now handle branch alongside routing; `nodes/index.ts`/
+`edges/index.ts` register `branch: RoutingStepNode`/`branch: RoutingEdge`
+(reused as-is, not forked, since branch renders identically to routing);
+`WorkflowCanvas.tsx`'s node inspector and `LearningsPopup.tsx`'s
+learnings-eligible-step filter both extended; `ExecutionLogsPopup.tsx`'s
+three step-type label/description/badge helpers gained a `branch` case
+with its own cyan badge, distinct from routing's indigo, so the two are
+visually distinguishable in Execution Logs (the one surface where telling
+them apart actually matters for this phase — reporting them into separate
+top-level tabs is still future work, see below).
+
+## Explicitly not done (still open)
+
+- **Frontend per-route top-level reporting tabs.** Not built this phase —
+  Execution Logs currently show routing and branch steps with distinct
+  badges/labels, but neither gets a dedicated tab. This is real, buildable
+  UI work once `routing` reliably means "route" going forward; scoping it
+  is a separate pass.
+- **Route best-practices guidance/self-check** (no shared downstream steps
+  between sibling routes, always pair a route with an eval). Per the design
+  above, this should extend PLAT-258's `plan_drift_review` infrastructure
+  (durable evidence-required record + due-detection + the privileged
+  `record_plan_drift_review` tool) with route-specific check types, rather
+  than inventing a second, parallel self-check mechanism — not started.
 
 ## Open questions for the implementation phase
 
-- Exact `branch` Go type: a distinct struct, or `RoutingPlanStep` reused
-  verbatim with the `Type` field as the only differentiator?
-- New planning tool surface: a distinct `add_branch_step` alongside the
-  existing routing-step tooling, or one tool with a `kind` parameter?
-- Content of the new "route" best-practices guidance skill (no shared
-  steps, always pair with an eval when the workflow has one) — needs the
-  same treatment `step-description.md` got in PLAT-255, including hints
-  wired into the relevant add/update step tool responses.
+The two structural questions from the design phase are now resolved by
+Phase A above (distinct `BranchPlanStep` struct; distinct
+`add_branch_step`/`update_branch_step` tools). Remaining, for the two
+not-yet-done items above:
+
+- Exact shape of the route-specific `plan_drift_review` check types (new
+  `check_id`s? a distinct reviewer-turn trigger for route steps
+  specifically, or folded into the existing due-scan?).
 - Frontend: where exactly the per-route top-level tab lives in the
   Execution Logs / reporting surfaces, and how it interacts with the
   existing step-summary view for plans with zero `routing` steps.
 
-**Reuse PLAT-258's `plan_drift_review` infrastructure instead of building a
-new agentic-check mechanism.** PLAT-258 (landed the same day, phases 1-3)
-built exactly the durable-evidence-required-record + due-detection +
-privileged-recording-tool shape this ticket's "agentic, not Go-enforced"
-route best-practices need: a per-step record nulled on any dependency-
-triggering edit, a `record_plan_drift_review` tool with real evidence-length
-enforcement (rejects placeholder text), writing atomically through the same
-FolderGuard-privileged path `update_step_config` uses. Rather than inventing
-a parallel mechanism for "does this route share a step with a sibling
-route" / "does this route have an eval," the implementation phase should
-add route-specific check types onto `plan_drift_review` (or register a
-sibling module reusing the same `StepDriftReview`/`StepDriftCheck` types
-and `record_plan_drift_review` tool) rather than building a second,
-independent self-check system.
+## Verification
+
+- `go build ./agent_go/... ./workspace/...` clean, `gofmt -l` clean.
+- `go test ./pkg/orchestrator/agents/workflow/step_based_workflow/...`,
+  `./cmd/server/guidance/...`, and `./cmd/server/ -run TestToolSetInvariants`
+  all pass — including 7 new tests in `controller_branch_test.go`
+  (validation accept/reject parity with routing, `isRoutingStep` recognizing
+  both types, JSON marshal always setting `type: "branch"`, `parseStepFromJSON`
+  round-tripping a real branch payload) and one existing test updated for the
+  new "regular, human_input, todo_task, routing, branch, or message_sequence"
+  error text (`TestPlanningResponseRejectsLegacyConditionalStep`). Full
+  `cmd/server` suite has one pre-existing, unrelated failure
+  (`TestEveryPulsePlatformTicketIsLinkedFromTheRegister`, missing
+  `plat-248.md`/`plat-249.md` from a concurrent session — confirmed
+  reproducible with this ticket's changes fully stashed out).
+- `cd frontend && npx tsc --noEmit -p . && npm run build` clean;
+  `npx vitest run` has 2 pre-existing failures unrelated to this change
+  (`sessionRestore.productFallback.test.ts`, video-studio mock-argument
+  drift — confirmed reproducible with this ticket's changes fully stashed
+  out).
 
 ## Reverify
 
-N/A — no implementation exists yet to verify. Reverify once a follow-up
-ticket implements the `branch` step type and the route reporting/guidance
-work described above.
+Ask the planning agent to add a `branch` step to a real workflow plan via
+`add_branch_step`, confirm it appears correctly on the canvas (indigo
+routing / cyan branch badges distinguishable in Execution Logs), executes
+via `run_full_workflow` exactly like a routing step would, and that
+`read_skill(skills=[{"name":"builder-reference","path":"references/branch.md"}])`
+returns the new guidance. The two "explicitly not done" items above
+(reporting tabs, guidance/self-check reuse of `plan_drift_review`) remain
+open follow-up work, not covered by this reverify.

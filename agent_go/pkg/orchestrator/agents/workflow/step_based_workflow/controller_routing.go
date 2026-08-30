@@ -27,22 +27,22 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeRoutingStep(
 	allSteps []PlanStepInterface,
 	previousExecutionResults []string,
 ) (string, string, error) {
-	routingStep, ok := step.(*RoutingPlanStep)
+	routingStep, ok := step.(routeSwitchStep)
 	if !ok {
-		return "", "", fmt.Errorf("step is not a RoutingPlanStep")
+		return "", "", fmt.Errorf("step is not a routing/branch step")
 	}
 
 	hcpo.GetLogger().Info(fmt.Sprintf("🔀 Executing routing step %d: %s", stepIndex+1, step.GetTitle()))
 
 	// Validate required fields
-	if routingStep.RoutingQuestion == "" {
-		return "", "", fmt.Errorf("routing step %d (%s) is missing required routing_question field", stepIndex+1, step.GetTitle())
+	if routingStep.GetRoutingQuestionText() == "" {
+		return "", "", fmt.Errorf("routing step %d (%s) is missing required routing_question/branch_question field", stepIndex+1, step.GetTitle())
 	}
-	if len(routingStep.Routes) < 2 {
-		return "", "", fmt.Errorf("routing step %d (%s) must have at least 2 routes, got %d", stepIndex+1, step.GetTitle(), len(routingStep.Routes))
+	if len(routingStep.GetRoutes()) < 2 {
+		return "", "", fmt.Errorf("routing step %d (%s) must have at least 2 routes, got %d", stepIndex+1, step.GetTitle(), len(routingStep.GetRoutes()))
 	}
-	if strings.TrimSpace(routingStep.Description) != "" {
-		return "", "", fmt.Errorf("routing step %d (%s) sets description, but routing is deterministic-only; move any probe or judgment into a prior message_sequence step that writes %s, then point the routing step at that file via route_source_file or context_dependencies", stepIndex+1, step.GetTitle(), routeSelectionFileName)
+	if strings.TrimSpace(routingStep.GetDescription()) != "" {
+		return "", "", fmt.Errorf("routing step %d (%s) sets description, but routing/branch is deterministic-only; move any probe or judgment into a prior message_sequence step that writes %s, then point the step at that file via route_source_file or context_dependencies", stepIndex+1, step.GetTitle(), routeSelectionFileName)
 	}
 
 	// Emit step_started event
@@ -53,7 +53,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeRoutingStep(
 	runNumber := 1
 	if progress.RoutingEvaluationCounts != nil {
 		totalEvals := 0
-		for _, route := range routingStep.Routes {
+		for _, route := range routingStep.GetRoutes() {
 			key := fmt.Sprintf("%s:%s", step.GetID(), route.RouteID)
 			totalEvals += progress.RoutingEvaluationCounts[key]
 		}
@@ -80,13 +80,13 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeRoutingStep(
 	selectedRouteID := routingResponse.SelectedRouteID
 
 	// Store result on step struct
-	routingStep.SelectedRouteID = selectedRouteID
-	routingStep.RoutingResponse = routingResponse
+	routingStep.SetSelectedRouteID(selectedRouteID)
+	routingStep.SetRoutingResponse(routingResponse)
 
 	hcpo.GetLogger().Info(fmt.Sprintf("✅ Routing step evaluated deterministically: selected route=%s source=%s", selectedRouteID, selection.SourceKind))
 
 	// Emit routing_evaluated event
-	hcpo.emitRoutingEvaluatedEvent(ctx, step, stepIndex, routingStepPath, routingResponse, routingStep.Routes, allSteps)
+	hcpo.emitRoutingEvaluatedEvent(ctx, step, stepIndex, routingStepPath, routingResponse, routingStep.GetRoutes(), allSteps)
 
 	// Save evaluation result to logs
 	var validationWorkspacePath string
@@ -99,7 +99,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeRoutingStep(
 	routingEvaluationFilePath := fmt.Sprintf("%s/routing-evaluation.json", validationFolderPath)
 
 	routeNextStepIDs := make(map[string]string)
-	for _, route := range routingStep.Routes {
+	for _, route := range routingStep.GetRoutes() {
 		routeNextStepIDs[route.RouteID] = route.NextStepID
 	}
 
@@ -107,7 +107,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeRoutingStep(
 		"step_index":        stepIndex + 1,
 		"step_path":         routingStepPath,
 		"routing_step_id":   step.GetID(),
-		"routing_question":  routingStep.RoutingQuestion,
+		"routing_question":  routingStep.GetRoutingQuestionText(),
 		"selected_route_id": selectedRouteID,
 		"routing_reasoning": routingResponse.Reasoning,
 		"route_selection": map[string]interface{}{
@@ -172,8 +172,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) emitRoutingEvaluatedEvent(ctx context
 		StepTitle: stepTitle,
 		StepPath:  stepPath,
 		RoutingQuestion: func() string {
-			if routingStep, ok := step.(*RoutingPlanStep); ok {
-				return routingStep.RoutingQuestion
+			if routingStep, ok := step.(routeSwitchStep); ok {
+				return routingStep.GetRoutingQuestionText()
 			}
 			return ""
 		}(),

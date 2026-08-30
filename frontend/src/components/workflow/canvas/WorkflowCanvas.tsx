@@ -1099,7 +1099,7 @@ function ReadOnlyStepDetailPanel({
   const step = 'step' in data && data.step ? data.step as PlanStep : null
   const title = (typeof data.title === 'string' && data.title) || step?.title || node.id
   const type = step?.type || node.type || 'node'
-  const routes = step?.type === 'routing'
+  const routes = step?.type === 'routing' || step?.type === 'branch'
     ? step.routes
     : step?.type === 'todo_task'
       ? step.predefined_routes
