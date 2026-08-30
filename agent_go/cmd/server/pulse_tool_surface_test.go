@@ -33,6 +33,11 @@ var pulseConsolidatedToolNames = []string{
 var pulseReviewerWriteToolNames = []string{
 	"record_pulse_finding",
 	"merge_pulse_issues",
+	// Lets a manual, non-Gate-scheduled review (e.g. /review-artifact-drift's
+	// Part 1) establish its own due claim for exactly the module it is about
+	// to persist a record_pulse_result for -- record_pulse_result's write is
+	// due-gated on a Gate-recorded worklist row a manual invocation never has.
+	"record_pulse_module_due",
 }
 
 // pulseRemovedToolNames must never reappear. Each was folded into one of the

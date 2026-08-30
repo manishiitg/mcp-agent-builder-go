@@ -1039,6 +1039,14 @@ func forcePulseModuleDueForLateRepairDebt(ctx context.Context, workspacePath, pu
 	if reason == "" {
 		return fmt.Errorf("reason is required")
 	}
+	return writePulseModuleDueRow(ctx, workspacePath, pulseRunID, module, reason)
+}
+
+// writePulseModuleDueRow is the shared single-row INSERT/ON CONFLICT write
+// both forcePulseModuleDueForLateRepairDebt and
+// recordPulseModuleDueForManualReview use. Callers must validate their
+// arguments and any collision guard before calling this.
+func writePulseModuleDueRow(ctx context.Context, workspacePath, pulseRunID, module, reason string) error {
 	normalized, db, err := openPulseModuleStateDB(ctx, workspacePath, true)
 	if err != nil {
 		return err
@@ -1062,6 +1070,59 @@ func forcePulseModuleDueForLateRepairDebt(ctx context.Context, workspacePath, pu
 		module, normalized, pulseRunID, now, reason, now,
 	)
 	return err
+}
+
+// recordPulseModuleDueForManualReview lets a manual, non-Gate-scheduled
+// review (e.g. /review-artifact-drift's Part 1, which runs plan_drift_review's
+// real procedure on demand rather than waiting for the next Pulse pass)
+// establish its own due claim for exactly the module it is about to persist a
+// terminal record_pulse_result for. record_pulse_result's own write is
+// due-gated: it only accepts a result when pulse_module_state already shows
+// due=true for the SAME pulse_run_id, which a manual invocation never has —
+// Gate never ran for it, so without this call every manual completion would
+// hit "already terminal or belongs to another run."
+//
+// pulse_module_state is one row per (workspace_path, module), not scoped per
+// pulse_run_id, so an unconditional overwrite here would be unsafe: if a real
+// scheduled Pulse pass is CURRENTLY mid-flight for this exact module (Gate
+// already recorded it due, its reviewer turn has not yet persisted a result),
+// blindly overwriting last_pulse_run_id would silently sever that in-flight
+// pass's own later receipt validation (validatePulseDueModuleResultsFor,
+// pulseWorklistModulesDue) from ever finding its row again. Refuse instead —
+// the manual reviewer should report that a Pulse pass is already reviewing
+// this module and wait, rather than corrupt it.
+func recordPulseModuleDueForManualReview(ctx context.Context, workspacePath, pulseRunID, module, reason string) error {
+	pulseRunID = strings.TrimSpace(pulseRunID)
+	if pulseRunID == "" {
+		return fmt.Errorf("pulse_run_id is required")
+	}
+	module = normalizePulseModule(module)
+	if !validPulseModules[module] {
+		return fmt.Errorf("module %q is not a valid Pulse module", module)
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return fmt.Errorf("reason is required")
+	}
+	normalized, db, err := openPulseModuleStateDB(ctx, workspacePath, true)
+	if err != nil {
+		return err
+	}
+	existing, stateErr := getPulseModuleStateByModule(ctx, db, normalized, module)
+	db.Close()
+	if stateErr != nil && !errors.Is(stateErr, sql.ErrNoRows) {
+		return stateErr
+	}
+	if existing != nil &&
+		strings.EqualFold(strings.TrimSpace(existing.LastDecision), "due") &&
+		strings.TrimSpace(existing.LastResult) == "" &&
+		strings.TrimSpace(existing.LastPulseRunID) != pulseRunID {
+		return fmt.Errorf(
+			"a Pulse pass (run %q) is currently reviewing %s and has not yet recorded a result — wait for it to finish before running this manual review, rather than risk corrupting its in-progress state",
+			existing.LastPulseRunID, module,
+		)
+	}
+	return writePulseModuleDueRow(ctx, workspacePath, pulseRunID, module, reason)
 }
 
 // validateDeterministicIntakeRouting closes the gap between a failed objective
@@ -2311,6 +2372,38 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		"record_pulse_impact":                   "workflow",
 		"resolve_run_concern":                   "workflow",
 		"record_pulse_migration_reconciliation": "workflow",
+		"record_pulse_module_due":               "workflow",
+	}
+	declareDueTool := llmtypes.Tool{
+		Type: "function",
+		Function: &llmtypes.FunctionDefinition{
+			Name:        "record_pulse_module_due",
+			Description: "Establish this conversation's OWN due claim for one Pulse module, so its later record_pulse_result call is accepted. Only for a manual, non-Gate-scheduled review that runs a canonical module's real procedure on demand — for example /review-artifact-drift's Part 1 running plan_drift_review outside the normal Pulse schedule. record_pulse_result's write is due-gated: it only accepts a result when the durable worklist already shows this module due for this exact pulse_run_id, which Gate normally records; a manual invocation has no such Gate-recorded row without calling this first. Refused if a real scheduled Pulse pass is currently mid-flight for this exact module (already due, no result recorded yet, under a different pulse_run_id) — wait for it to finish rather than risk corrupting its state. Never call this for a module Gate itself would decide; it exists only for a manual on-demand invocation of a module's real procedure.",
+			Parameters: llmtypes.NewParameters(map[string]interface{}{
+				"type":                 "object",
+				"additionalProperties": false,
+				"properties": map[string]interface{}{
+					"workspace_path": map[string]interface{}{"type": "string", "description": "Workflow-relative path, e.g. Workflow/social-media."},
+					"pulse_run_id":   map[string]interface{}{"type": "string", "description": "Use \"current\" for this active conversation."},
+					"module":         map[string]interface{}{"type": "string", "enum": moduleEnum},
+					"reason":         map[string]interface{}{"type": "string", "description": "Why this manual invocation is running the module's real procedure now."},
+				},
+				"required": []string{"workspace_path", "pulse_run_id", "module", "reason"},
+			}),
+		},
+	}
+	executors["record_pulse_module_due"] = func(ctx context.Context, args map[string]interface{}) (string, error) {
+		pulseRunID := pulseRunIDForSession(ctx, stringToolArg(args, "pulse_run_id"))
+		if err := validatePulseToolRunID(ctx, pulseRunID); err != nil {
+			return "", err
+		}
+		workspacePath := stringToolArg(args, "workspace_path")
+		module := stringToolArg(args, "module")
+		reason := stringToolArg(args, "reason")
+		if err := recordPulseModuleDueForManualReview(ctx, workspacePath, pulseRunID, module, reason); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("%s is now due for this conversation (run %s); record_pulse_result(module=%q, ...) will be accepted.", normalizePulseModule(module), pulseRunID, normalizePulseModule(module)), nil
 	}
 	resolveConcernTool := llmtypes.Tool{
 		Type: "function",
@@ -2347,7 +2440,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 		return fmt.Sprintf("Issue %s marked %s.", step_based_workflow.NewPulseIssue(finding).ID, status), nil
 	}
 
-	return []llmtypes.Tool{recordFindingTool, recordFocusTool, mergeIssuesTool, reconcileTool, recordTool, stateTool, resultTool, impactTool, resolveConcernTool}, executors, categories
+	return []llmtypes.Tool{recordFindingTool, recordFocusTool, mergeIssuesTool, reconcileTool, recordTool, stateTool, resultTool, impactTool, resolveConcernTool, declareDueTool}, executors, categories
 }
 
 func stringToolArg(args map[string]interface{}, key string) string {

@@ -2030,6 +2030,83 @@ func completePulseWorklistDecisions(overrides map[string]PulseWorklistDecision) 
 	return out
 }
 
+// recordPulseModuleDueForManualReview is the fix for a manual, non-Gate
+// invocation (e.g. /review-artifact-drift's Part 1) needing to persist a
+// record_pulse_result -- that write is due-gated on a Gate-recorded worklist
+// row for the exact pulse_run_id, which a manual invocation never has.
+func TestRecordPulseModuleDueForManualReviewSucceedsWithNoPriorState(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+	workspacePath := "Workflow/manual-review-due"
+	pulseRunID := "manual-session-1"
+
+	if err := recordPulseModuleDueForManualReview(ctx, workspacePath, pulseRunID, pulseModulePlanDriftReview, "manual /review-artifact-drift invocation"); err != nil {
+		t.Fatalf("recordPulseModuleDueForManualReview: %v", err)
+	}
+	if due, err := pulseWorklistModulesDue(ctx, workspacePath, pulseRunID, pulseModulePlanDriftReview); err != nil {
+		t.Fatalf("inspect due-ness: %v", err)
+	} else if !due {
+		t.Fatal("plan_drift_review should be due for the manual session after recordPulseModuleDueForManualReview")
+	}
+	// The whole point: record_pulse_result must now accept a terminal write
+	// for this exact pulse_run_id.
+	if _, err := markPulseModuleResultFromAgent(ctx, workspacePath, pulseModulePlanDriftReview, pulseRunID, "done", "Manual artifact-drift audit complete.", nil); err != nil {
+		t.Fatalf("record_pulse_result rejected the manual invocation's own due claim: %v", err)
+	}
+}
+
+func TestRecordPulseModuleDueForManualReviewRefusesWhenAnotherRunIsMidFlight(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+	workspacePath := "Workflow/manual-review-collision"
+
+	// A real scheduled Pulse pass: Gate recorded plan_drift_review due for
+	// pulse-scheduled-1, and its reviewer turn has not yet persisted a result.
+	if _, err := recordPulseWorklist(ctx, workspacePath, "pulse-scheduled-1", completePulseWorklistDecisions(map[string]PulseWorklistDecision{
+		pulseModulePlanDriftReview: {Module: pulseModulePlanDriftReview, Due: true, Reason: "A step's drift_review record is null."},
+	})); err != nil {
+		t.Fatalf("record scheduled worklist: %v", err)
+	}
+
+	// A manual /review-artifact-drift invocation, running concurrently under a
+	// completely different pulse_run_id, must not be able to silently steal
+	// the module's single shared row out from under the in-flight scheduled
+	// pass -- that would corrupt the scheduled pass's own later receipt
+	// validation.
+	err := recordPulseModuleDueForManualReview(ctx, workspacePath, "manual-session-concurrent", pulseModulePlanDriftReview, "manual /review-artifact-drift invocation")
+	if err == nil || !strings.Contains(err.Error(), "pulse-scheduled-1") {
+		t.Fatalf("expected refusal naming the in-flight scheduled run, got: %v", err)
+	}
+
+	// The scheduled pass's own claim must remain completely intact.
+	if due, dueErr := pulseWorklistModulesDue(ctx, workspacePath, "pulse-scheduled-1", pulseModulePlanDriftReview); dueErr != nil {
+		t.Fatalf("inspect scheduled due-ness: %v", dueErr)
+	} else if !due {
+		t.Fatal("the refused manual declaration must not have disturbed the scheduled pass's own due claim")
+	}
+}
+
+func TestRecordPulseModuleDueForManualReviewAllowedAfterScheduledPassResolves(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+	workspacePath := "Workflow/manual-review-after-resolved"
+
+	if _, err := recordPulseWorklist(ctx, workspacePath, "pulse-scheduled-2", completePulseWorklistDecisions(map[string]PulseWorklistDecision{
+		pulseModulePlanDriftReview: {Module: pulseModulePlanDriftReview, Due: true, Reason: "A step's drift_review record is null."},
+	})); err != nil {
+		t.Fatalf("record scheduled worklist: %v", err)
+	}
+	if _, err := markPulseModuleResultFromAgent(ctx, workspacePath, pulseModulePlanDriftReview, "pulse-scheduled-2", "done", "Scheduled pass finished.", nil); err != nil {
+		t.Fatalf("resolve scheduled pass: %v", err)
+	}
+
+	// The scheduled pass already recorded its own terminal result -- it is no
+	// longer mid-flight, so a later manual invocation is safe to claim the row.
+	if err := recordPulseModuleDueForManualReview(ctx, workspacePath, "manual-session-after", pulseModulePlanDriftReview, "manual /review-artifact-drift invocation"); err != nil {
+		t.Fatalf("recordPulseModuleDueForManualReview should succeed once the prior pass has a terminal result: %v", err)
+	}
+}
+
 func TestPulseReviewFocusCatalogUsesValidationContractHealthWithoutSafety(t *testing.T) {
 	want := []string{
 		"execution_health",

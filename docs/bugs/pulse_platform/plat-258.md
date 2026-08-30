@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | Claude Code |
-| Ticket state | `all acceptance items built` — review-and-fix authority end-to-end (fourth/fifth rounds fixed six independent-review integration gaps), deletion coverage (workflow-level `__workflow_drift_review__` sentinel record), and slash/scheduled parity (`/review-artifact-drift` Part 1 now dispatches plan_drift_review's real candidate collector/repair contract/completion writer) are all implemented and tested — see "Fourth", "Fifth", and "Sixth round" below |
+| Ticket state | `all acceptance items built, two self-found integration gaps fixed` — review-and-fix authority end-to-end (fourth/fifth rounds), deletion coverage and slash/scheduled parity (sixth round), and two gaps in the sixth round's own new mechanisms fixed (seventh round): Part 1's manual `record_pulse_result` was itself due-gate-broken, and the deletion flag write had no retry — see "Fourth" through "Seventh round" below |
 | Last synchronized | `2026-08-30` |
 
 - **Type:** platform feature (multi-phase), not a single bug fix. Filed at
@@ -1154,5 +1154,65 @@ no longer applies to it by design; added a dedicated
 `TestReviewArtifactDriftSharesPlanDriftReviewMechanismAndStaysReadOnlyElsewhere`
 asserting Part 1's real dispatch and Part 2's continued read-only boundary
 explicitly.
+
+`go build`/`go vet`/`gofmt` clean; full `go test ./...` green, no failures.
+
+## Seventh round — two integration gaps in the sixth round's own new mechanisms (2026-08-30)
+
+The user reported two further findings against work landed in the sixth
+round itself. Both verified against the actual code before fixing.
+
+- **P1 Part 1's manual completion write was itself broken** —
+  `record_pulse_result(module="plan_drift_review")`'s write is due-gated: it
+  only accepts a terminal result when `pulse_module_state` already shows the
+  module due for the exact calling `pulse_run_id` (`WHERE ... last_decision =
+  'due' AND last_result = ''`). A standalone `/review-artifact-drift`
+  invocation runs in its own fresh session with no Gate-recorded worklist
+  entry at all, so Part 1's mandated `record_pulse_result` call was
+  guaranteed to fail with "already terminal or belongs to another run" —
+  confirmed by reading `markPulseModuleResultFromAgentWithAuditAndFindings`'s
+  UPDATE clause directly. Fixed with a new tool, `record_pulse_module_due`
+  (Go: `recordPulseModuleDueForManualReview`), that lets a manual invocation
+  establish its own due claim before its terminal write. This is NOT a blind
+  overwrite: `pulse_module_state` is one row per module per workspace, not
+  scoped per pulse_run_id, so an unguarded write could corrupt a genuinely
+  concurrent scheduled Pulse pass's own in-flight state (severing its later
+  receipt validation from ever finding its row again). The new function
+  refuses when the module is currently due-and-unresolved under a *different*
+  pulse_run_id, naming the conflicting run so the manual reviewer reports the
+  collision and stops rather than proceeding into repair work whose receipt
+  could never be recorded anyway. Renamed from an initial `declare_*` draft to
+  `record_pulse_module_due` to match the codebase's own documented
+  `get_pulse_*`/`record_pulse_*` naming rule (caught by the existing closed-set
+  tool-surface test, `TestPulseToolSurfaceIncludesTypedReviewerWrites`).
+  `review-artifact-drift.md`'s Part 1 now calls it first, with an explicit
+  instruction to stop (not retry in a loop) if it refuses. Three new tests:
+  `TestRecordPulseModuleDueForManualReviewSucceedsWithNoPriorState`,
+  `...RefusesWhenAnotherRunIsMidFlight`, `...AllowedAfterScheduledPassResolves`.
+  (Part 2 was never affected — it never called `record_pulse_result` at all;
+  it always delegated entirely to the parent via `record_pulse_finding` +
+  `mark_changelog_artifact_reviewed`, neither of which needs Gate due-state.)
+- **P2 the deletion trigger/evidence pair was best-effort, not retried** —
+  `delete_plan_steps` commits `plan.json` first (an established, deliberate
+  point of no return — this codebase has no transactional multi-file write
+  mechanism to roll it back), then wrote the workflow-level drift-review flag
+  best-effort, only logging a failure rather than retrying or surfacing it.
+  Since the deleted step's own `drift_review` record is already gone by
+  definition, a failed flag write would leave plan_drift_review with no
+  remaining way at all to learn the deletion happened. (The separate
+  changelog-write failure risk the same finding also named is a pre-existing,
+  explicitly documented design choice shared by every plan-mod tool — "a
+  changelog write must never block the actual plan mutation" — and out of
+  scope to change here; only the sixth round's own new flag mechanism was
+  fixed.) New `cascadeDeleteStepConfigsRetried`/`cascadeDeleteStepConfigsOnce`
+  retry the step_config.json cascade-prune-and-flag write once, matching the
+  established `clearDriftReviewAfterPlanUpdateRetried` pattern from an earlier
+  round; a persistent failure after the retry still returns success (the plan
+  mutation genuinely succeeded) but now surfaces a loud, unmissable warning in
+  `delete_plan_steps`'s own response text (via a new `driftReviewFlagFailed`
+  parameter on `buildDeletedStepArtifactCleanupNotice`) naming
+  `/review-artifact-drift` as the manual fallback to cover the gap. Four new
+  tests cover the transient-recovers-silently and
+  persistent-surfaces-loudly cases directly, at the executor level.
 
 `go build`/`go vet`/`gofmt` clean; full `go test ./...` green, no failures.

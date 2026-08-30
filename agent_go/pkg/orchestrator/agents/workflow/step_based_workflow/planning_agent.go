@@ -377,6 +377,52 @@ func flagWorkflowDriftReviewOnDeletion(configs []StepConfig, deletedStepIDs []st
 	})
 }
 
+// cascadeDeleteStepConfigsOnce reads step_config.json, prunes the deleted
+// steps' own entries, flags the workflow-level drift review record, and
+// writes the result back in one pass.
+func cascadeDeleteStepConfigsOnce(ctx context.Context, workspacePath string, deletedSet map[string]bool, deletedIDs []string, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error) ([]string, error) {
+	existingConfigs, cfgErr := readStepConfigViaFileCallback(ctx, workspacePath, readFile)
+	if cfgErr != nil {
+		return nil, cfgErr
+	}
+	newConfigs, removed := pruneStepConfigsByID(existingConfigs, deletedSet)
+	newConfigs = flagWorkflowDriftReviewOnDeletion(newConfigs, deletedIDs)
+	if writeErr := writeStepConfigViaFileCallback(ctx, workspacePath, newConfigs, writeFile); writeErr != nil {
+		return nil, writeErr
+	}
+	return removed, nil
+}
+
+// cascadeDeleteStepConfigsRetried retries cascadeDeleteStepConfigsOnce once on
+// failure — the same pattern clearDriftReviewAfterPlanUpdateRetried uses for a
+// real step's own flag write. A failure here is more consequential than that
+// case: the deleted step's own drift_review record is already gone by
+// definition, so if this workflow-level replacement also fails to persist,
+// plan_drift_review has NO remaining way to learn the deletion happened at
+// all. driftReviewFlagFailed is true only when both attempts failed, so the
+// caller can surface it loudly in its own response rather than only logging it.
+func cascadeDeleteStepConfigsRetried(ctx context.Context, workspacePath string, deletedSet map[string]bool, deletedIDs []string, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, logger loggerv2.Logger) (prunedConfigIDs []string, driftReviewFlagFailed bool) {
+	removed, err := cascadeDeleteStepConfigsOnce(ctx, workspacePath, deletedSet, deletedIDs, readFile, writeFile)
+	if err == nil {
+		if len(removed) > 0 {
+			logger.Info(fmt.Sprintf("🧹 Cascade-removed %d step_config entries: %v", len(removed), removed))
+		}
+		logger.Info(fmt.Sprintf("🚩 Flagged workflow-level drift review needs_review after deleting %d step(s): %v", len(deletedIDs), deletedIDs))
+		return removed, false
+	}
+	logger.Warn(fmt.Sprintf("⚠️ Failed to cascade-delete step_config entries / flag workflow-level drift review, retrying once: %v", err))
+	removed, err = cascadeDeleteStepConfigsOnce(ctx, workspacePath, deletedSet, deletedIDs, readFile, writeFile)
+	if err != nil {
+		logger.Warn(fmt.Sprintf("⚠️ Cascade-delete step_config entries / flag workflow-level drift review failed again after retry: %v", err))
+		return nil, true
+	}
+	if len(removed) > 0 {
+		logger.Info(fmt.Sprintf("🧹 Cascade-removed %d step_config entries: %v", len(removed), removed))
+	}
+	logger.Info(fmt.Sprintf("🚩 Flagged workflow-level drift review needs_review after deleting %d step(s): %v", len(deletedIDs), deletedIDs))
+	return removed, false
+}
+
 // ============================================================================
 // TYPE-SAFE STEP SYSTEM (New Implementation)
 // ============================================================================
@@ -4002,7 +4048,7 @@ func buildAddedStepArtifactSetupNotice(stepID, stepType string) string {
 	return b.String()
 }
 
-func buildDeletedStepArtifactCleanupNotice(deletedIDs []string, prunedConfigIDs []string) string {
+func buildDeletedStepArtifactCleanupNotice(deletedIDs []string, prunedConfigIDs []string, driftReviewFlagFailed bool) string {
 	var b strings.Builder
 	b.WriteString("\n\nDeleted step artifact cleanup required")
 	if len(deletedIDs) > 0 {
@@ -4014,6 +4060,9 @@ func buildDeletedStepArtifactCleanupNotice(deletedIDs []string, prunedConfigIDs 
 		b.WriteString("- Removed matching planning/step_config.json entries: " + strings.Join(prunedConfigIDs, ", ") + ".\n")
 	} else {
 		b.WriteString("- Step config: confirm no stale planning/step_config.json entries remain for the deleted IDs.\n")
+	}
+	if driftReviewFlagFailed {
+		b.WriteString("- ⚠️ FAILED to flag the workflow-level drift review record (" + WorkflowDriftReviewStepID + ") after two attempts — plan_drift_review has no other way to learn this deletion happened, since the deleted step's own drift_review record is already gone. Report this failure explicitly in your final response; do not treat the deletion's dependent-artifact fallout as tracked. Manually run get_workflow_command_guidance(kind=\"review-artifact-drift\", focus=\"" + strings.Join(deletedIDs, ", ") + "\") to cover the gap this pass.\n")
 	}
 	b.WriteString("- Plan wiring: remove or reroute next_step_id, routes, predefined_routes, and downstream context_dependencies that referenced deleted steps.\n")
 	b.WriteString("- Pre-validation: remove validation schemas that validate deleted-step outputs and update schemas that depended on them.\n")
@@ -4467,24 +4516,16 @@ func createDeletePlanStepsExecutor(workspacePath string, logger loggerv2.Logger,
 		// this is the durable signal that dependent-artifact fallout from THIS
 		// deletion still needs auditing. Both writes are combined into the same
 		// read-modify-write to avoid a lost update between two separate passes.
-		// Best-effort: a missing file or write failure is logged but doesn't fail
-		// the plan-deletion call (the plan was already written).
-		prunedConfigIDs := []string{}
-		if existingConfigs, cfgErr := readStepConfigViaFileCallback(ctx, workspacePath, readFile); cfgErr != nil {
-			logger.Warn(fmt.Sprintf("⚠️ Failed to read step_config.json for cascade-delete: %v", cfgErr))
-		} else {
-			newConfigs, removed := pruneStepConfigsByID(existingConfigs, deletedSet)
-			newConfigs = flagWorkflowDriftReviewOnDeletion(newConfigs, deletedIDs)
-			if writeErr := writeStepConfigViaFileCallback(ctx, workspacePath, newConfigs, writeFile); writeErr != nil {
-				logger.Warn(fmt.Sprintf("⚠️ Failed to cascade-delete step_config entries %v / flag workflow-level drift review: %v", removed, writeErr))
-			} else {
-				prunedConfigIDs = removed
-				if len(removed) > 0 {
-					logger.Info(fmt.Sprintf("🧹 Cascade-removed %d step_config entries: %v", len(removed), removed))
-				}
-				logger.Info(fmt.Sprintf("🚩 Flagged workflow-level drift review needs_review after deleting %d step(s): %v", len(deletedIDs), deletedIDs))
-			}
-		}
+		// Retried once on failure (same pattern as clearDriftReviewAfterPlanUpdateRetried):
+		// a transient failure here would otherwise leave neither the deleted
+		// step's own trigger (already gone) nor this workflow-level replacement,
+		// so plan_drift_review would have no way at all to learn the deletion
+		// happened. A persistent failure after the retry still doesn't fail the
+		// plan-deletion call (the plan was already written, and is the point of
+		// no return — this codebase has no transactional multi-file write
+		// mechanism to roll it back), but is surfaced loudly in the tool's own
+		// response rather than only logged, so it cannot be silently missed.
+		prunedConfigIDs, driftReviewFlagFailed := cascadeDeleteStepConfigsRetried(ctx, workspacePath, deletedSet, deletedIDs, readFile, writeFile, logger)
 
 		// Unlock learnings for all deleted steps (if unlock function provided)
 		// Use old step indices from before deletion
@@ -4500,7 +4541,7 @@ func createDeletePlanStepsExecutor(workspacePath string, logger loggerv2.Logger,
 			}
 		}
 
-		cleanupNotice := buildDeletedStepArtifactCleanupNotice(deletedIDs, prunedConfigIDs)
+		cleanupNotice := buildDeletedStepArtifactCleanupNotice(deletedIDs, prunedConfigIDs, driftReviewFlagFailed)
 
 		logger.Info(fmt.Sprintf("✅ Deleted %d steps from plan", len(deletedIDs)))
 		return fmt.Sprintf("Successfully deleted %d step(s) from the plan%s", len(deletedIDs), cleanupNotice), nil

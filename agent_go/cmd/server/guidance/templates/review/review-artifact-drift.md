@@ -24,6 +24,22 @@ exact same candidate collector, repair contract, and completion writer as
 
 ## Part 1 — run plan_drift_review's real procedure now
 
+First call `record_pulse_module_due(pulse_run_id="current", module=
+"plan_drift_review", reason="manual /review-artifact-drift invocation")`.
+This manual invocation has no Gate-recorded worklist entry the way a
+scheduled Pulse pass does, and `record_pulse_result`'s own write only accepts
+a terminal result when the durable worklist already shows the module due for
+this exact conversation's run id — without this call, the repair work below
+would complete but its receipt would fail to persist, the exact
+"review completed but result failed" outcome this call exists to prevent.
+
+If `record_pulse_module_due` refuses because a real scheduled Pulse pass is
+already mid-flight for `plan_drift_review` (a genuine, rare collision — it
+means Gate is actively running this same module right now under a different
+run), stop here: state that plainly and do not proceed into repair work whose
+receipt could not be recorded anyway. Do not retry in a loop; the operator can
+re-run this command once the scheduled pass finishes.
+
 Call `get_pulse_state(view="module")`. Its `plan_drift_candidates` array is
 the exact same durable candidate set the scheduled Pulse pass reads — every
 step with no `drift_review` record or `needs_review == true`, plus (per

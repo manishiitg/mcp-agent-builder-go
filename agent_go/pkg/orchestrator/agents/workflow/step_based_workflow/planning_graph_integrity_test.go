@@ -185,6 +185,108 @@ func TestDeletePlanStepsFlagsWorkflowLevelDriftReview(t *testing.T) {
 // needs_review again without discarding whatever evidence a prior
 // workflow-level review already recorded — exactly like a real step's
 // drift_review record.
+// TestDeletePlanStepsRetriesWorkflowLevelFlagOnceOnTransientFailure covers a
+// transient step_config.json write failure: delete_plan_steps already commits
+// plan.json first (an established, documented point of no return this
+// codebase has no transactional multi-file write mechanism to undo), so the
+// deletion's own drift-trigger write must retry rather than silently drop the
+// only remaining signal plan_drift_review has for this deletion.
+func TestDeletePlanStepsRetriesWorkflowLevelFlagOnceOnTransientFailure(t *testing.T) {
+	plan := &PlanningResponse{Steps: []PlanStepInterface{regularStep("obsolete-step"), regularStep("keeper")}}
+	planJSON, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatalf("marshal plan: %v", err)
+	}
+	readFile := func(_ context.Context, path string) (string, error) {
+		if strings.HasSuffix(path, "step_config.json") {
+			return `{"steps":[]}`, nil
+		}
+		return string(planJSON), nil
+	}
+	writeAttempts := 0
+	var writtenConfig string
+	writeFile := func(_ context.Context, path, content string) error {
+		if strings.HasSuffix(path, "step_config.json") {
+			writeAttempts++
+			if writeAttempts == 1 {
+				return errors.New("transient write failure")
+			}
+			writtenConfig = content
+		}
+		return nil
+	}
+	executor := createDeletePlanStepsExecutor("workflow", loggerv2.NewNoop(), readFile, writeFile, nil, nil)
+
+	result, err := executor(context.Background(), map[string]interface{}{
+		"deleted_step_ids": []interface{}{"obsolete-step"},
+		"reason":           "no longer needed",
+	})
+	if err != nil {
+		t.Fatalf("delete failed: %v", err)
+	}
+	if writeAttempts != 2 {
+		t.Fatalf("write attempted %d time(s), want exactly 2 (one retry)", writeAttempts)
+	}
+	if strings.Contains(result, "FAILED to flag the workflow-level drift review record") {
+		t.Fatalf("a transient failure recovered by the retry must not be surfaced as a failure: %s", result)
+	}
+	var file StepConfigFile
+	if err := json.Unmarshal([]byte(writtenConfig), &file); err != nil {
+		t.Fatalf("decode written step_config.json: %v", err)
+	}
+	found := false
+	for _, cfg := range file.Steps {
+		if cfg.ID == WorkflowDriftReviewStepID && cfg.AgentConfigs != nil && cfg.AgentConfigs.DriftReview != nil && cfg.AgentConfigs.DriftReview.NeedsReview {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("workflow-level record was not flagged after the successful retry, entries: %+v", file.Steps)
+	}
+}
+
+// TestDeletePlanStepsSurfacesLoudWarningWhenWorkflowLevelFlagPersistentlyFails
+// covers the remaining case: both attempts fail. delete_plan_steps must still
+// report success (the plan mutation itself genuinely succeeded and cannot be
+// rolled back), but must make the tracking gap impossible to miss in its own
+// response rather than only logging it.
+func TestDeletePlanStepsSurfacesLoudWarningWhenWorkflowLevelFlagPersistentlyFails(t *testing.T) {
+	plan := &PlanningResponse{Steps: []PlanStepInterface{regularStep("obsolete-step"), regularStep("keeper")}}
+	planJSON, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatalf("marshal plan: %v", err)
+	}
+	readFile := func(_ context.Context, path string) (string, error) {
+		if strings.HasSuffix(path, "step_config.json") {
+			return `{"steps":[]}`, nil
+		}
+		return string(planJSON), nil
+	}
+	writeAttempts := 0
+	writeFile := func(_ context.Context, path, content string) error {
+		if strings.HasSuffix(path, "step_config.json") {
+			writeAttempts++
+			return errors.New("persistent write failure")
+		}
+		return nil
+	}
+	executor := createDeletePlanStepsExecutor("workflow", loggerv2.NewNoop(), readFile, writeFile, nil, nil)
+
+	result, err := executor(context.Background(), map[string]interface{}{
+		"deleted_step_ids": []interface{}{"obsolete-step"},
+		"reason":           "no longer needed",
+	})
+	if err != nil {
+		t.Fatalf("delete must still report success even when the flag write persistently fails: %v", err)
+	}
+	if writeAttempts != 2 {
+		t.Fatalf("write attempted %d time(s), want exactly 2 (one retry, both failing)", writeAttempts)
+	}
+	if !strings.Contains(result, "FAILED to flag the workflow-level drift review record") {
+		t.Fatalf("a persistent flag-write failure must be surfaced loudly in the tool's own response:\n%s", result)
+	}
+}
+
 func TestFlagWorkflowDriftReviewOnDeletionPreservesPriorEvidence(t *testing.T) {
 	configs := []StepConfig{
 		{ID: WorkflowDriftReviewStepID, AgentConfigs: &AgentConfigs{DriftReview: &StepDriftReview{

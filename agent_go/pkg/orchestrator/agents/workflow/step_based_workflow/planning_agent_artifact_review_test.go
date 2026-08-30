@@ -251,11 +251,19 @@ func TestArtifactReviewNotices(t *testing.T) {
 		}
 	}
 
-	deleteNotice := buildDeletedStepArtifactCleanupNotice([]string{"old-step"}, []string{"old-step"})
+	deleteNotice := buildDeletedStepArtifactCleanupNotice([]string{"old-step"}, []string{"old-step"}, false)
 	for _, want := range []string{"Deleted step artifact cleanup required", "Removed matching planning/step_config.json entries", "learnings/<step-id>"} {
 		if !strings.Contains(deleteNotice, want) {
 			t.Fatalf("delete notice missing %q:\n%s", want, deleteNotice)
 		}
+	}
+	if strings.Contains(deleteNotice, "FAILED to flag the workflow-level drift review record") {
+		t.Fatal("delete notice should not warn about a flag failure when driftReviewFlagFailed is false")
+	}
+
+	failedDeleteNotice := buildDeletedStepArtifactCleanupNotice([]string{"old-step"}, nil, true)
+	if !strings.Contains(failedDeleteNotice, "FAILED to flag the workflow-level drift review record") {
+		t.Fatalf("delete notice missing loud drift-review-flag-failed warning:\n%s", failedDeleteNotice)
 	}
 
 	routeNotice := buildTodoTaskRouteArtifactReviewNotice("parent", "route-a", "deleted", true, true, false)
