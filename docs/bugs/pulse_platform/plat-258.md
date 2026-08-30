@@ -1,11 +1,11 @@
 [← Pulse platform index](../pulse_platform_issue_register.md)
 
-# PLAT-258 — Dedicated `plan_drift_review` Pulse module (design + phases 1-3 complete)
+# PLAT-258 — Dedicated `plan_drift_review` Pulse module (design + phases 1-4 complete)
 
 | Coordination | Value |
 |---|---|
 | Assigned agent | Claude Code |
-| Ticket state | `design complete; phase 1 implemented; phase 2 complete (6 of 9 deterministic checks built; 1 needed no new code, 2 correctly found not-buildable-as-designed — see below); phase 3 implemented (record_plan_drift_review tool); phases 4-6 not yet built` |
+| Ticket state | `design complete; phase 1 implemented; phase 2 complete (6 of 9 deterministic checks built; 1 needed no new code, 2 correctly found not-buildable-as-designed — see below); phase 3 implemented (record_plan_drift_review tool); phase 4 implemented (frontend); phases 5-6 not yet built` |
 | Last synchronized | `2026-08-30` |
 
 - **Type:** platform feature (multi-phase), not a single bug fix. Filed at
@@ -230,6 +230,59 @@ already has, no new plumbing.
   and the invariant test's own tracking list, or it would have been
   registered but never actually exposed to any agent. Both updated;
   `TestToolSetInvariants` passes.
+
+## Phase 4 — implemented: frontend, module visible ahead of reviewer-turn authoring
+
+Reordered ahead of phase 5 at the user's explicit request, so the module is
+inspectable in the UI before its reviewer-turn content is written. A prior
+research pass (this ticket) confirmed the frontend's Pulse module list
+(`pulseSections.ts`'s `PULSE_MODULE_COMMANDS`) was a hand-maintained 2-entry
+array, independently restated (not derived) a second time inside
+`PulseWorkspace.tsx`'s "Work areas" card grid, with a literal `lg:grid-cols-2`
+Tailwind class — the exact drift-prone-restatement shape `pulsemodules.go`'s
+own doc comment already warns about, just on the frontend side of the fence.
+
+**Changed:**
+- `pulseSections.ts` — added the `plan_drift_review` entry (id/label/
+  description) to `PULSE_MODULE_COMMANDS`. Everything that already derives
+  from this array generically (`WorkflowToolbar.tsx`'s recorded/total pulse
+  overview count, `buildPulseWorkspaceModuleSummaries`,
+  `normalizePulseWorkspaceModule`) picked up the third module for free — no
+  count assumptions found there.
+- `PulseWorkspace.tsx` — added the third "Plan drift review" card to the
+  Work-areas inline array (its own icon/description/tone, matching the
+  existing two literal entries' shape) and widened `lg:grid-cols-2` →
+  `lg:grid-cols-3`. Deliberately did **not** add `plan_drift_review` to the
+  `strategic` advisor-style branch (`area.id === 'strategic_review'`) or to
+  `pulseFindingPresentation.ts`'s advisor-module list: this module's findings
+  are deterministic pass/fail/fixed checks with a real fix path, the same
+  shape as Technical Review's Gate findings, not strategy recommendations a
+  user accepts/declines — so it correctly falls into the existing
+  non-strategic branch, which is already generic over lifecycle counts and
+  needed no new bespoke rendering logic.
+- `ReportHumanInputPanel.tsx`, `reportHumanInputChat.ts`,
+  `reportHumanInputFormatting.ts`, `api-types.ts` — added `plan_drift_review`
+  to the human-input `source` label maps ("Plan Drift Review" /
+  "Waiting for Plan Drift Review" / "Plan Drift Review is working"), matching
+  the existing pattern for the other two modules. Inert until phase 5 makes
+  the module actually post human-input requests, but avoids a second,
+  later, easy-to-forget cross-file update once it does.
+- Test updates: `pulseSections.test.ts`'s exact-array assertion now expects
+  all three module ids; `PulseWorkspace.test.tsx` asserts the third card's
+  label renders.
+
+**Consequence understood and intended, not a bug:** until phase 5 registers
+`plan_drift_review` in the Go `pulsemodules.go` registry and wires scheduling,
+the new card will show "No stored review yet" with all-zero counts, and
+`WorkflowToolbar.tsx`'s pulse overview denominator becomes 3 while the
+numerator can only reach 2 — a visibly-incomplete-looking state. This is
+exactly what phase 4 being moved ahead of phase 5 was for: the module visible
+and inspectable before its content is authored, not a functional module yet.
+
+**Verification:** `npx vitest run` — 730 passed, 2 pre-existing failures in
+`sessionRestore.productFallback.test.ts` (unrelated Video Studio
+session-restore work from a concurrent session, confirmed by file/topic, not
+touched by this change). `npx tsc --noEmit` clean.
 
 ## Verification
 

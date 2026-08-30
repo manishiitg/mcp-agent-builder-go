@@ -7,6 +7,7 @@ export type PulseCommandDefinition = {
 export const PULSE_MODULE_COMMANDS: PulseCommandDefinition[] = [
   { id: 'technical_review', label: 'Technical review', description: 'One focused review of correctness, stores, runtime, orchestration, tools, model choice, cost, or execution efficiency' },
   { id: 'strategic_review', label: 'Strategic review', description: 'Audits hidden strategic mechanisms and conditionally explores materially different approaches' },
+  { id: 'plan_drift_review', label: 'Plan drift review', description: 'Checks steps flagged by a plan edit for DB, report, learnings, KB, and validation_schema drift' },
 ]
 
 export const PULSE_FIXED_COMMANDS: PulseCommandDefinition[] = [

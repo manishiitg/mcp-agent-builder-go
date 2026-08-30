@@ -377,7 +377,7 @@ export interface ReportHumanInputApplyContract {
 export interface ReportHumanInput {
   id: string
   workspace_path: string
-  source: 'pulse' | 'technical_review' | 'strategic_review' | 'engineering_review' | 'ops_review' | 'strategy_auditor' | 'goal_advisor' | string
+  source: 'pulse' | 'technical_review' | 'strategic_review' | 'plan_drift_review' | 'engineering_review' | 'ops_review' | 'strategy_auditor' | 'goal_advisor' | string
   priority: 'low' | 'medium' | 'high' | string
   question: string
   context?: string
@@ -612,6 +612,7 @@ export interface EvalResultRecord {
   evidence: string
   skipped: boolean
   generated_at: string
+  historical?: boolean
 }
 
 export interface PulseEvalResultsResponse {
@@ -3070,6 +3071,27 @@ export interface WorkflowManifest {
   run_retention_count?: number
   pulse?: WorkflowPulseConfig
   backup?: WorkflowBackupConfig
+  folder_access?: WorkflowFolderGrant[]
+  folder_access_requests?: WorkflowFolderAccessRequest[]
+}
+
+export interface WorkflowFolderGrant {
+  id: string
+  alias: string
+  path: string
+  access: 'read_only' | 'read_write'
+  reason?: string
+  created_at?: string
+  updated_at?: string
+}
+
+export interface WorkflowFolderAccessRequest {
+  id: string
+  alias: string
+  requested_path?: string
+  access: 'read_only' | 'read_write'
+  reason: string
+  requested_at: string
 }
 
 export interface WorkflowPulseConfig {
@@ -3183,6 +3205,8 @@ export interface UpdateWorkflowManifestRequest {
   run_notification_recipients?: string[]
   pulse_notification_recipients?: string[]
   notification_instructions?: string
+  folder_access?: WorkflowFolderGrant[]
+  folder_access_requests?: WorkflowFolderAccessRequest[]
 }
 
 export interface DuplicateWorkflowManifestRequest {
