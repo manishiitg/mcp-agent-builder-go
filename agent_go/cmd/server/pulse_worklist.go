@@ -1069,7 +1069,7 @@ func validatePlanDriftRouting(ctx context.Context, workspacePath string, decisio
 				return nil
 			}
 		}
-		return fmt.Errorf("plan_drift_review or technical_review must be due: the plan drift candidate scan itself failed and the real candidate set is unknown: %v", err)
+		return fmt.Errorf("plan_drift_review or technical_review must be due: the plan drift candidate scan itself failed and the real candidate set is unknown: %w", err)
 	}
 	if len(candidates) == 0 {
 		return nil
