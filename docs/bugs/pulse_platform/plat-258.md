@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | Claude Code |
-| Ticket state | `review-and-fix authority implemented` — plan_drift_review is now a combined review-and-fix module, the same shape as technical_review: it applies and verifies safe workflow-owned repairs directly in its own turn, routes only genuine human decisions (`decision_required`) or platform-owned boundaries (`external_action_required`) elsewhere, and clears needs_review only once each check is fixed, passing, or routed with a verified linked finding. A second independent review's 3 further P1/P2 findings are fixed and tested: (1) a same-pass late-insertion safety net if plan_drift_review still leaves genuine workflow repair debt Gate did not anticipate; (2) the update/flag write retried once, with a persistent failure surfaced loudly in the tool's own response instead of only logged; (4) finding_id verification now requires the referenced finding to be both active (not resolved/rejected) and filed against the exact step being reviewed. Slash/scheduled implementation parity and the workflow-level deletion-review flag are explicitly **not yet built** — see Follow-up below |
+| Ticket state | `review-and-fix authority merged; corrective follow-up required` — the reference contract and supporting helpers are present, but a third independent review of committed `main` at `92e1a5f81` found four end-to-end integration gaps that prevent calling the combined behavior complete. See “Third independent review” below. Slash/scheduled implementation parity and the workflow-level deletion-review flag are also explicitly **not yet built** — see Follow-up below |
 | Last synchronized | `2026-08-30` |
 
 - **Type:** platform feature (multi-phase), not a single bug fix. Filed at
@@ -870,3 +870,68 @@ prompt shape). `gofmt` clean on every touched file. 7 new tests: 2 for the
 retry wrapper, 2 for the loud-failure notice text, 2 for the tightened
 finding verification (resolved, wrong-step), plus the existing fabricated-id
 test's assertion updated for the new error wording.
+
+## Third independent review — merged runtime still has four integration gaps (2026-08-30)
+
+Re-reviewed the committed files on `main` at `92e1a5f81`, independently of
+the implementation commit message and the prior ticket narrative. The
+review-and-fix reference text and several useful helper changes are genuinely
+present, but the claim that the earlier findings are fully fixed does not hold
+through the real dispatcher → public finding tool → persisted review path.
+
+### P1 — the actual dispatcher still instructs handoff-only behavior
+
+`pulseLifecyclePlanDriftReviewStep` still tells the child executor: “This is a
+lean first version: it establishes ground truth per step and hands off rather
+than repairing in this turn.” That runtime instruction directly contradicts
+the loaded `plan-drift-review.md` review-and-fix contract. Removing a
+contradictory paragraph from the later Technical Review dispatcher did not
+remove this contradiction from Plan Drift's own dispatcher. Acceptance
+requires the launched instruction itself to state that the retained Plan Drift
+agent applies and verifies safe workflow-owned repairs.
+
+### P1 — exact-step finding verification is incompatible with the public writer
+
+`verifyStepDriftCheckFindingsExist` now requires a failed check's finding to be
+active and filed against the exact reviewed step. That is a sensible invariant,
+but `record_pulse_finding` exposes no `step_id` argument and
+`RecordPulseReviewFinding` initializes every new row's `StepID` from
+`marker.Module` (for this module, `plan_drift_review`). A newly routed failure
+created through the real public tool therefore cannot satisfy the new exact-step
+check for a plan step such as `compile-content`.
+
+The added tests miss this because they create lifecycle rows directly with
+`RecordRunConcerns(..., "step-a", ...)`, bypassing `record_pulse_finding` and
+its attribution behavior. Add an integration test that records the finding
+through the real public executor and then passes its returned issue ID to
+`record_plan_drift_review`.
+
+### P1 — platform-boundary guidance calls an unsupported tool shape
+
+The reference tells the agent to call `record_pulse_finding` with
+`recommended_route="external_action_required"`, `reason_code`,
+`external_owner`, and `reopen_condition`. The public finding schema accepts
+only `decision_required`, `evidence_wait`, or `fixer_handoff` as
+`recommended_route` and exposes none of those three external-disposition
+fields. The call will be rejected before the platform boundary is durably
+routed. Reconcile the guidance with the supported finding-plus-terminal-
+disposition lifecycle, or extend the schema and persistence coherently.
+
+### P2 — one scheduling flag conflates Technical and Strategic Review
+
+`reviewFixScheduled` becomes true when either `technical_review` or
+`strategic_review` is due. If Gate selected only Strategic Review and Plan
+Drift subsequently produces a rare `fixer_handoff`, the late insertion is
+suppressed because the combined review step already exists. That existing
+step still obeys the persisted worklist and skips Technical Review, so the
+new repair can wait until another Pulse cycle despite the same-pass guarantee.
+Track technical repair coverage separately from the presence of a shared
+review step, and cover the strategic-only + late-handoff case with a scheduler
+test.
+
+### Review conclusion
+
+The implementation made meaningful progress, but PLAT-258 is not complete
+until these four committed-runtime gaps are fixed and exercised end to end.
+PLAT-259's branch/routing implementation is not challenged by these findings;
+the overlap is limited to shared Plan Drift integration files.
