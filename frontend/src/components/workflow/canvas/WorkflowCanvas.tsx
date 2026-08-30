@@ -1559,12 +1559,14 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
   const evaluationPlan = evalData.evaluationPlan
   const refreshEvaluationPlan = evalData.refresh
 
-  const loading = planData.loading || evalData.loading
+  const [isRefreshingPlan, setIsRefreshingPlan] = React.useState(false)
+  // A manual Plan refresh still uses the canonical plan loader, but it must
+  // not replace the surrounding workflow surface with the initial-load screen.
+  const loading = (planData.loading && !isRefreshingPlan) || evalData.loading
   const error = planData.error
   const changes = planData.changes
 
   const loadPlanRefresh = planData.refresh
-  const refreshPlanInPlace = planData.refreshSilently
   const clearChanges = planData.clearChanges
   const setChanges = planData.setChanges
 
@@ -1703,16 +1705,15 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
 
   // The in-canvas Plan control is intentionally narrower than the canvas-wide
   // refresh used by the toolbar and imperative API: it only reloads the plan.
-  const [isRefreshingPlan, setIsRefreshingPlan] = React.useState(false)
   const handlePlanRefresh = useCallback(async () => {
     if (isRefreshingPlan) return
     setIsRefreshingPlan(true)
     try {
-      await refreshPlanInPlace()
+      await loadPlanRefresh()
     } finally {
       setIsRefreshingPlan(false)
     }
-  }, [isRefreshingPlan, refreshPlanInPlace])
+  }, [isRefreshingPlan, loadPlanRefresh])
 
   // Workflow execution
   const {

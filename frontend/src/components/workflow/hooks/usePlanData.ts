@@ -66,8 +66,6 @@ export interface UsePlanDataReturn {
   deleteStep: (stepIndex: number) => Promise<void>
   addStep: (step: PlanStep, afterIndex?: number) => Promise<void>
   refresh: () => Promise<void>  // Refreshes plan without comparison (alias for loadPlan)
-  /** Reloads only the in-memory plan without entering the canvas-wide loading state. */
-  refreshSilently: () => Promise<void>
   clearChanges: () => void  // Clear the changes state
   setChanges: (changes: PlanChanges | null) => void  // Set changes directly (for granular events)
 }
@@ -705,35 +703,6 @@ export function usePlanData(workspacePath: string | null): UsePlanDataReturn {
     await loadPlan()
   }, [loadPlan, invalidatePlanCache])
 
-  // The Plan canvas can refresh its own data without temporarily replacing the
-  // whole workflow surface with the global loading state. Keep the current plan
-  // visible if the request fails, so adjacent toolbar and chat UI stay intact.
-  const refreshSilently = useCallback(async () => {
-    if (!workspacePath) return
-
-    const cacheEntry = getPlanCacheEntry(workspacePath)
-    cacheEntry.data = null
-    cacheEntry.timestamp = 0
-    const refreshPromise = fetchPlanData()
-    cacheEntry.promise = refreshPromise
-
-    try {
-      const nextPlan = await refreshPromise
-      cacheEntry.data = nextPlan
-      cacheEntry.timestamp = Date.now()
-      setPlan(nextPlan)
-      setError(null)
-    } catch (err) {
-      // This is an in-place refresh, not initial loading: preserve the current
-      // canvas and report the diagnostic without changing the global error UI.
-      console.error('[usePlanData] Failed to refresh plan in place:', err)
-    } finally {
-      if (cacheEntry.promise === refreshPromise) {
-        cacheEntry.promise = null
-      }
-    }
-  }, [workspacePath, fetchPlanData])
-
   // Clear changes state (call after highlighting animation completes)
   const clearChanges = useCallback(() => {
     setChanges(null)
@@ -768,7 +737,6 @@ export function usePlanData(workspacePath: string | null): UsePlanDataReturn {
     deleteStep,
     addStep,
     refresh,
-    refreshSilently,
     clearChanges,
     setChanges
   }
