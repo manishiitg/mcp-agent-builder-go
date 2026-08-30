@@ -708,6 +708,18 @@ function comparableAnswer(text: string): string {
 // carriers legitimately differ at the edges (a completion card may prepend a
 // status line, or hold prose from before a trailing tool call), and the point
 // is only to detect that the reader is being shown the same answer twice.
+//
+// The same duplication happens between two completion-card types themselves:
+// a turn can fire both, say, agent_end and unified_completion carrying the
+// identical final_result, and neither was covered by the llm_generation_end
+// check above -- the reader saw the same "Agent · Response" block twice, back
+// to back, with matching duration and timestamp. Collapse those too, but only
+// against the MOST RECENT completion card and only when they share the same
+// lifecycleExecutionID: two different sub-agents/executions can legitimately
+// report the identical short answer (e.g. "done"), and merging across
+// executions would silently hide one agent's real result -- exact scoping,
+// exact text equality (not containment) keeps this to the narrow case it is
+// meant for.
 function dropAnswersRepeatedByCompletionCard(events: PollingEvent[]): PollingEvent[] {
   const completionAnswers: string[] = []
   for (const event of events) {
@@ -715,10 +727,22 @@ function dropAnswersRepeatedByCompletionCard(events: PollingEvent[]): PollingEve
     const text = comparableAnswer(answerText(event))
     if (text) completionAnswers.push(text)
   }
-  if (completionAnswers.length === 0) return events
 
+  let lastCompletion: { executionID: string; text: string } | null = null
   return events.filter(event => {
-    if ((event.type || '') !== 'llm_generation_end') return true
+    const type = event.type || ''
+    if (COMPLETION_ANSWER_TYPES.has(type)) {
+      const text = comparableAnswer(answerText(event))
+      if (!text) return true
+      const executionID = lifecycleExecutionID(event)
+      if (lastCompletion && lastCompletion.executionID === executionID && lastCompletion.text === text) {
+        return false
+      }
+      lastCompletion = { executionID, text }
+      return true
+    }
+
+    if (type !== 'llm_generation_end' || completionAnswers.length === 0) return true
     const text = comparableAnswer(answerText(event))
     // Exact equality is definitive even for a one-word reply. The backend
     // intentionally carries the final answer on both llm_generation_end and

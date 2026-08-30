@@ -831,7 +831,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) resolveScriptedShellGuard(
 ) (*workspace.FolderGuardConfig, error) {
 	stepConfig := getAgentConfigs(step)
 	kbAccess := resolveKnowledgebaseAccess(stepConfig, hcpo.UseKnowledgebase())
-	learningsAccess := resolveLearningsAccess(stepConfig)
+	learningsAccess := resolveExecutionLearningsAccess(stepConfig, step, hcpo.isEvaluationMode)
 
 	readPaths, writePaths := hcpo.setupExecutionFolderGuard(stepPath, step.GetID(), kbAccess, learningsAccess, resolveDBAccess(stepConfig), stepConfig)
 	if includeCodeDir && len(writePaths) > 0 {

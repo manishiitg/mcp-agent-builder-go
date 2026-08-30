@@ -77,6 +77,18 @@ All background agents **automatically notify you** when they complete:
 - `query_step` and `list_executions` report whether the exact execution is
   currently messageable. Live steering is not a durable resume mechanism:
   completed, failed, and cancelled executions reject new messages.
+- **Pre-validation failures notify separately, mid-run** — a step's own
+  step-level pre-validation gate (structural file/DB checks) and any
+  `message_sequence` item's pre-validation gate fire their own
+  `[AUTO-NOTIFICATION]` the first time they fail, before the step's
+  overall completion notification and even if the step's own retries go
+  on to fix it. Treat this as an early heads-up, not the final outcome —
+  the step may still succeed on a later retry attempt, in which case its
+  own completion notification (✅) still arrives separately afterward. Use
+  it to start investigating whether the failure is a real bug or a
+  transient/environmental issue (e.g. schedule drift, a stale saved
+  script) while the step is still running, rather than waiting for it to
+  exhaust every retry first.
 
 ## Stopping tasks
 
