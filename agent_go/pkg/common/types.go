@@ -84,19 +84,26 @@ func expandHomePath(path string) string {
 	return path
 }
 
-// CDPHostDownloadsReadPath returns the host Downloads read path only for CDP
-// mode. Headless browser downloads should stay inside workspace folders.
-func CDPHostDownloadsReadPath(browserMode string) string {
+// CDPHostDownloadsPath returns the host Downloads path only for CDP mode.
+// Headless browser downloads should stay inside workspace folders.
+func CDPHostDownloadsPath(browserMode string) string {
 	if strings.EqualFold(strings.TrimSpace(browserMode), "cdp") {
 		return HostDownloadsPath()
 	}
 	return ""
 }
 
-// GrantSessionCDPHostDownloadsReadOnly adds a read-only host Downloads grant to
-// a CDP session. The path is also added to BlockedWritePaths because macOS
-// sandboxing allows most of the home directory by default and relies on this
-// explicit deny to keep the grant read-only.
+// CDPHostDownloadsReadPath is the compatibility name used by callers that
+// intentionally keep Downloads read-only. New read-write sessions use
+// CDPHostDownloadsPath with GrantSessionCDPHostDownloadsReadWrite.
+func CDPHostDownloadsReadPath(browserMode string) string {
+	return CDPHostDownloadsPath(browserMode)
+}
+
+// GrantSessionCDPHostDownloadsReadOnly keeps the existing read-only contract
+// available while workflow-owned CDP sessions migrate to explicit read-write
+// access. The write deny is required on macOS, where the sandbox otherwise
+// permits much of the user's home directory.
 func GrantSessionCDPHostDownloadsReadOnly(sessionID, browserMode string) string {
 	hostDownloads := CDPHostDownloadsReadPath(browserMode)
 	if strings.TrimSpace(sessionID) == "" || hostDownloads == "" {
@@ -107,6 +114,28 @@ func GrantSessionCDPHostDownloadsReadOnly(sessionID, browserMode string) string 
 		cfg.BlockedWritePaths = DeduplicateStrings(append(cfg.BlockedWritePaths, hostDownloads))
 	})
 	log.Printf("[SHELL] Granted read-only host Downloads for CDP session %s: %s", sessionID, hostDownloads)
+	return hostDownloads
+}
+
+// GrantSessionCDPHostDownloadsReadWrite adds the host Downloads directory to
+// both read and write paths for a CDP session.
+func GrantSessionCDPHostDownloadsReadWrite(sessionID, browserMode string) string {
+	hostDownloads := CDPHostDownloadsPath(browserMode)
+	if strings.TrimSpace(sessionID) == "" || hostDownloads == "" {
+		return ""
+	}
+	updateSessionShellConfig(sessionID, func(cfg *SessionShellConfig) {
+		cfg.ReadPaths = DeduplicateStrings(append(cfg.ReadPaths, hostDownloads))
+		cfg.WritePaths = DeduplicateStrings(append(cfg.WritePaths, hostDownloads))
+		kept := cfg.BlockedWritePaths[:0]
+		for _, blocked := range cfg.BlockedWritePaths {
+			if filepath.Clean(strings.TrimSpace(blocked)) != filepath.Clean(hostDownloads) {
+				kept = append(kept, blocked)
+			}
+		}
+		cfg.BlockedWritePaths = kept
+	})
+	log.Printf("[SHELL] Granted read-write host Downloads for CDP session %s: %s", sessionID, hostDownloads)
 	return hostDownloads
 }
 
@@ -144,6 +173,7 @@ func PopulateMCPBridgeShortEnv(env map[string]string) {
 // as a write prefix but adds Workflow/<name>/planning/ to BlockedWritePaths so the
 // agent can read plan.json but not raw-write it.
 type SessionShellConfig struct {
+	WorkflowPath      string   // Owning workflow for live capability reconciliation
 	WorkingDir        string   // Default working directory (relative to workspace-docs)
 	FolderGuardSet    bool     // An explicit guard exists; empty capabilities must fail closed
 	ReadPaths         []string // Folder guard read paths for Isolator
@@ -157,6 +187,152 @@ type SessionShellConfig struct {
 	// STEP_OUTPUT_DIR reach the server-side bridge shell, which — unlike the
 	// in-process built-in executor — has no other channel for them.
 	Env map[string]string
+}
+
+// SetSessionWorkflowPath associates a shell policy with one workflow so live
+// workflow-level capabilities can be narrowed or revoked without touching
+// another workflow that happens to grant the same host path.
+func SetSessionWorkflowPath(sessionID, workflowPath string) {
+	updateSessionShellConfig(sessionID, func(cfg *SessionShellConfig) {
+		cfg.WorkflowPath = strings.Trim(strings.TrimSpace(workflowPath), "/")
+	})
+}
+
+// ReconcileSessionWorkflowFolderAccess updates attached-folder capabilities in
+// every still-open session for one workflow. Normal workspace paths are kept;
+// only roots from the previous folder_access snapshot are replaced.
+func ReconcileSessionWorkflowFolderAccess(workflowPath string, previousRoots, readRoots, writeRoots, readOnlyRoots []string, env map[string]string) {
+	workflowPath = strings.Trim(strings.TrimSpace(workflowPath), "/")
+	if workflowPath == "" {
+		return
+	}
+	previous := make(map[string]struct{}, len(previousRoots))
+	for _, path := range previousRoots {
+		previous[filepath.Clean(strings.TrimSpace(path))] = struct{}{}
+	}
+	removePrevious := func(paths []string) []string {
+		kept := paths[:0]
+		for _, path := range paths {
+			if _, remove := previous[filepath.Clean(strings.TrimSpace(path))]; !remove {
+				kept = append(kept, path)
+			}
+		}
+		return kept
+	}
+	appendUnique := func(paths []string, additions []string) []string {
+		seen := make(map[string]struct{}, len(paths)+len(additions))
+		result := make([]string, 0, len(paths)+len(additions))
+		for _, path := range append(paths, additions...) {
+			clean := filepath.Clean(strings.TrimSpace(path))
+			if clean == "." || clean == "" {
+				continue
+			}
+			if _, exists := seen[clean]; exists {
+				continue
+			}
+			seen[clean] = struct{}{}
+			result = append(result, clean)
+		}
+		return result
+	}
+
+	sessionShellConfigsMu.Lock()
+	defer sessionShellConfigsMu.Unlock()
+	for sessionID, existing := range sessionShellConfigs {
+		if existing == nil || !sessionBelongsToWorkflow(existing, workflowPath) {
+			continue
+		}
+		cfg := cloneSessionShellConfig(existing)
+		cfg.ReadPaths = appendUnique(removePrevious(cfg.ReadPaths), readRoots)
+		cfg.WritePaths = appendUnique(removePrevious(cfg.WritePaths), writeRoots)
+		cfg.BlockedWritePaths = appendUnique(removePrevious(cfg.BlockedWritePaths), readOnlyRoots)
+		if cfg.Env == nil {
+			cfg.Env = make(map[string]string)
+		}
+		for key := range cfg.Env {
+			if strings.HasPrefix(key, "WORKFLOW_FOLDER_") {
+				delete(cfg.Env, key)
+			}
+		}
+		for key, value := range env {
+			cfg.Env[key] = value
+		}
+		sessionShellConfigs[sessionID] = cfg
+	}
+}
+
+// ApplySessionWorkflowFolderAccess refreshes one live session from the current
+// workflow manifest. Previous attached roots are derived from the session's
+// WORKFLOW_FOLDER_* environment, so this also handles approval after the agent
+// process was already created.
+func ApplySessionWorkflowFolderAccess(sessionID, workflowPath string, readRoots, writeRoots, readOnlyRoots []string, env map[string]string) {
+	if strings.TrimSpace(sessionID) == "" || strings.TrimSpace(workflowPath) == "" {
+		return
+	}
+	updateSessionShellConfig(sessionID, func(cfg *SessionShellConfig) {
+		previous := make(map[string]struct{})
+		for key, value := range cfg.Env {
+			if strings.HasPrefix(key, "WORKFLOW_FOLDER_") {
+				previous[filepath.Clean(strings.TrimSpace(value))] = struct{}{}
+			}
+		}
+		removePrevious := func(paths []string) []string {
+			kept := make([]string, 0, len(paths))
+			for _, path := range paths {
+				if _, remove := previous[filepath.Clean(strings.TrimSpace(path))]; !remove {
+					kept = append(kept, path)
+				}
+			}
+			return kept
+		}
+		cfg.WorkflowPath = strings.Trim(strings.TrimSpace(workflowPath), "/")
+		cfg.ReadPaths = DeduplicateStrings(append(removePrevious(cfg.ReadPaths), readRoots...))
+		cfg.WritePaths = DeduplicateStrings(append(removePrevious(cfg.WritePaths), writeRoots...))
+		cfg.BlockedWritePaths = DeduplicateStrings(append(removePrevious(cfg.BlockedWritePaths), readOnlyRoots...))
+		if cfg.Env == nil {
+			cfg.Env = make(map[string]string)
+		}
+		for key := range cfg.Env {
+			if strings.HasPrefix(key, "WORKFLOW_FOLDER_") {
+				delete(cfg.Env, key)
+			}
+		}
+		for key, value := range env {
+			cfg.Env[key] = value
+		}
+	})
+}
+
+// sessionBelongsToWorkflow keeps live grant reconciliation working for sessions
+// created before WorkflowPath ownership tagging was added. Exact ownership is
+// preferred; the fallback only accepts a working/read/write path at or beneath
+// the same workflow root and then upgrades the session to the explicit tag.
+func sessionBelongsToWorkflow(config *SessionShellConfig, workflowPath string) bool {
+	if config == nil {
+		return false
+	}
+	workflowPath = strings.Trim(strings.TrimSpace(workflowPath), "/")
+	if workflowPath == "" {
+		return false
+	}
+	if strings.Trim(strings.TrimSpace(config.WorkflowPath), "/") == workflowPath {
+		return true
+	}
+	belongs := func(candidate string) bool {
+		candidate = strings.Trim(strings.TrimSpace(candidate), "/")
+		return candidate == workflowPath || strings.HasPrefix(candidate, workflowPath+"/")
+	}
+	if belongs(config.WorkingDir) {
+		config.WorkflowPath = workflowPath
+		return true
+	}
+	for _, candidate := range append(append([]string{}, config.ReadPaths...), config.WritePaths...) {
+		if belongs(candidate) {
+			config.WorkflowPath = workflowPath
+			return true
+		}
+	}
+	return false
 }
 
 var (
@@ -327,6 +503,16 @@ func CopySessionFolderGuard(fromSessionID, toSessionID string) bool {
 		return false
 	}
 	SetSessionFolderGuard(toSessionID, src.ReadPaths, src.WritePaths)
+	if src.WorkflowPath != "" {
+		SetSessionWorkflowPath(toSessionID, src.WorkflowPath)
+	}
+	folderEnv := make(map[string]string)
+	for key, value := range src.Env {
+		if strings.HasPrefix(key, "WORKFLOW_FOLDER_") {
+			folderEnv[key] = value
+		}
+	}
+	SetSessionShellEnv(toSessionID, folderEnv)
 	if len(src.BlockedPaths) > 0 {
 		SetSessionFolderGuardBlockedPaths(toSessionID, src.BlockedPaths)
 	}
