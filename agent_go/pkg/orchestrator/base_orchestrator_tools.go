@@ -14,7 +14,7 @@ func getToolNamesByCategory(category string) map[string]bool {
 	toolNames := make(map[string]bool)
 
 	switch category {
-	case "workspace_tools", "workspace_advanced":
+	case "workspace_tools", "workspace_advanced", "workspace_image":
 		for toolName := range virtualtools.WorkspaceToolNamesByCategory(category) {
 			toolNames[toolName] = true
 		}
