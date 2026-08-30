@@ -2941,10 +2941,17 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
       return `${agentProfileWorkspace.replace(/\/$/, '')}/uploads`
     }
     if (selectedModeCategory === 'workflow') {
-      return workspaceActiveFolder || 'Workflow'
+      // activeWorkflowWorkspacePath resolves the workflow this chat tab is
+      // actually scoped to. workspaceActiveFolder is the file browser's own
+      // navigation state -- a separate piece of state that can be empty or
+      // pointed elsewhere while the chat itself is scoped to a workflow, which
+      // silently dropped pasted screenshots into the shared Workflow/ root
+      // instead of the workflow's own folder (confirmed live: a pasted image
+      // from the confida-login chat landed at Workflow/pasted-image-*.png).
+      return activeWorkflowWorkspacePath || workspaceActiveFolder || 'Workflow'
     }
     return 'Chats'
-  }, [agentProfileWorkspace, selectedModeCategory, workspaceActiveFolder])
+  }, [activeWorkflowWorkspacePath, agentProfileWorkspace, selectedModeCategory, workspaceActiveFolder])
 
   const uploadFilesToChat = useCallback(async (files: File[]) => {
     if (files.length === 0 || isUploadingFiles) {

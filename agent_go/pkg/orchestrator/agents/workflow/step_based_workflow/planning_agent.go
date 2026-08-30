@@ -3462,6 +3462,9 @@ func buildPlanStepDependentArtifactReviewNotice(stepID string, fieldChanges []Pl
 	if descriptionReviewCleared {
 		b.WriteString("- Cleared step_config.agent_configs.description_reviewed because the reviewed step contract may now be stale.\n")
 	}
+	if seen["description"] || seen["validation_schema"] {
+		b.WriteString("- Description & schema quality: this edit touched description or validation_schema — call read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/step-description.md\"}]) and apply it before finalizing.\n")
+	}
 	b.WriteString("- Pre-validation: confirm validation_schema still matches the new output files/fields; update plan validation_schema or step_config validation_schema if needed.\n")
 	b.WriteString("- Learnings: review learning_objective, learnings_access, lock_learnings, and any learnings/_global or learnings/" + stepID + " content for stale execution know-how.\n")
 	b.WriteString("- DB: if output/state shape changed, update db/README.md, the db/db.sqlite table schema/writers/upsert rules, and any report widgets (sql) that read those columns.\n")
@@ -3494,6 +3497,7 @@ func buildAddedStepArtifactSetupNotice(stepID, stepType string) string {
 	b.WriteString("- KB: decide knowledgebase_access and knowledgebase_contribution for business context and notes.\n")
 	b.WriteString("- Scripted code: if " + stepType + " step " + stepID + " should run code, create or review learnings/" + stepID + "/main.py and set code execution config; otherwise make sure no stale script is implied.\n")
 	b.WriteString("- Downstream wiring: connect routes/next_step_id/context_dependencies, and update db/reports/index.html or evaluation/evaluation_plan.json if this step affects outputs.\n")
+	b.WriteString("- Description & schema quality: before finalizing this step's description and validation_schema, call read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/step-description.md\"}]) and apply it.\n")
 	b.WriteString("- Before marking the plan done, run get_workflow_command_guidance(kind=\"review-artifact-drift\", focus=\"" + stepID + "\").")
 	return b.String()
 }

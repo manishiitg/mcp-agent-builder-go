@@ -294,7 +294,7 @@ func (api *StreamingAPI) handleGetTerminal(w http.ResponseWriter, r *http.Reques
 	}
 	// Capture live tmux content when: explicitly requested via content=screen/history,
 	// OR when the terminal is inactive (active=false) and has a tmux session.
-	// Running content=screen captures the visible pane only. CLIs like Agy and
+	// Running content=screen captures the visible pane only. CLIs like
 	// Claude repaint loading/spinner text in place, and tmux history can flatten
 	// those old frames into repeated "loading/generating" fragments before
 	// xterm.js ever sees them. content=history is the explicit scrollback path.

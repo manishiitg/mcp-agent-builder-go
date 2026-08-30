@@ -2046,6 +2046,7 @@ export interface StepExecutionLogs {
   parent_step_title?: string;
   route_id?: string;
   success_criteria?: string;
+  execution_tier?: string; // Configured tier pin from step_config.json ("high"|"medium"|"low"); empty when the step uses adaptive tiering
   context_output?: string;  // Expected output filename
   learning_objective?: string;
   learnings_access?: string;

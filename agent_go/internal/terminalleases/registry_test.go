@@ -108,13 +108,13 @@ func TestClosedLeasePrunesOnlyAfterSnapshotDeadline(t *testing.T) {
 	registry := NewRegistry("instance-1", 1234, now)
 	registry.Observe(terminals.Snapshot{
 		TerminalID:  "terminal-1",
-		TmuxSession: "mlp-agy-cli-int-1",
+		TmuxSession: "mlp-codex-cli-int-1",
 		SessionID:   "session-1",
 		Active:      false,
 		ClosesAt:    &snapshotDeadline,
 		UpdatedAt:   now,
 	}, now)
-	registry.MarkClosed("mlp-agy-cli-int-1", "completed", now)
+	registry.MarkClosed("mlp-codex-cli-int-1", "completed", now)
 
 	if got := registry.Prune(now.Add(30 * time.Second)); got != 0 {
 		t.Fatalf("early prune = %d, want 0", got)
