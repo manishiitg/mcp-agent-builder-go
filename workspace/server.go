@@ -120,7 +120,6 @@ func runServer(cmd *cobra.Command, args []string) {
 
 		// Shell execution route
 		api.POST("/execute", requireWorkspaceAPIToken(), handlers.ExecuteShellCommand)
-		api.POST("/external/diff", requireWorkspaceAPIToken(), handlers.DiffPatchExternalFile)
 		api.GET("/processes", handlers.ListWorkflowProcesses)
 		api.POST("/processes/cleanup", handlers.CleanupWorkflowProcesses)
 
