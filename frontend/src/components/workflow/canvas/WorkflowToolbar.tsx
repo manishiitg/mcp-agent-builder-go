@@ -23,8 +23,6 @@ import {
   Smartphone,
   Tablet,
   Laptop,
-  MoreHorizontal,
-  Pin,
   PanelRightClose,
   SlidersHorizontal,
   X,
@@ -80,37 +78,6 @@ const EXECUTION_PHASE_ID = 'execution'
 const WORKFLOW_SCHEDULE_TOOLBAR_LIMIT = 10_000
 
 type WorkspaceView = 'flow' | 'report' | 'files' | 'costs' | 'execution-logs' | 'learnings' | 'knowledgebase' | 'database'
-
-// These remain stable until the user explicitly pins another destination.
-const DEFAULT_QUICK_WORKSPACE_VIEWS: WorkspaceView[] = ['report', 'costs', 'flow', 'execution-logs', 'learnings']
-const WORKSPACE_VIEW_IDS = new Set<WorkspaceView>([
-  'report', 'flow', 'files', 'costs', 'execution-logs', 'learnings', 'knowledgebase', 'database',
-])
-
-function pinnedWorkspaceViewsStorageKey(workspacePath?: string | null): string {
-  return `agentworks:pinned-workspace-views:${normalizeWorkspacePath(workspacePath) || 'default'}`
-}
-
-function readPinnedWorkspaceViews(workspacePath?: string | null): WorkspaceView[] {
-  if (typeof window === 'undefined') return []
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(pinnedWorkspaceViewsStorageKey(workspacePath)) || '[]')
-    if (!Array.isArray(parsed)) return []
-    const views = parsed.filter((value): value is WorkspaceView => WORKSPACE_VIEW_IDS.has(value))
-    return Array.from(new Set(views)).filter(view => !DEFAULT_QUICK_WORKSPACE_VIEWS.includes(view))
-  } catch {
-    return []
-  }
-}
-
-function writePinnedWorkspaceViews(workspacePath: string | null | undefined, views: WorkspaceView[]): void {
-  if (typeof window === 'undefined') return
-  try {
-    window.localStorage.setItem(pinnedWorkspaceViewsStorageKey(workspacePath), JSON.stringify(views.filter(view => !DEFAULT_QUICK_WORKSPACE_VIEWS.includes(view))))
-  } catch {
-    // A blocked localStorage must not make workspace navigation unusable.
-  }
-}
 
 type WorkflowScheduleStats = {
   total: number
@@ -381,7 +348,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
   const setCanvasViewMode = useWorkflowStore(state => state.setCanvasViewMode)
   const setShowWorkspacePane = useWorkflowStore(state => state.setShowWorkspacePane)
   const [previewDevice, setPreviewDeviceState] = useState<ReportPreviewDevice>(() => readReportPreviewPreference(workspacePath))
-  const [pinnedWorkspaceViews, setPinnedWorkspaceViews] = useState<WorkspaceView[]>(() => readPinnedWorkspaceViews(workspacePath))
 
   useEffect(() => {
     const sync = () => setPreviewDeviceState(readReportPreviewPreference(workspacePath))
@@ -392,10 +358,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
       window.removeEventListener(REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT, sync as EventListener)
       window.removeEventListener('storage', sync)
     }
-  }, [workspacePath])
-
-  useEffect(() => {
-    setPinnedWorkspaceViews(readPinnedWorkspaceViews(workspacePath))
   }, [workspacePath])
 
   const openWorkspaceView = useCallback((view: WorkspaceView) => {
@@ -432,25 +394,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
     ['knowledgebase', Database, 'Knowledgebase', true],
     ['database', Table2, 'Database', true],
   ] as const).filter(([, , , visible]) => visible), [hasPlan])
-
-  const quickWorkspaceViews = useMemo(() => {
-    const available = new Set<WorkspaceView>(workspaceViewDefinitions.map(([view]) => view))
-    const candidates: WorkspaceView[] = [
-      ...DEFAULT_QUICK_WORKSPACE_VIEWS,
-      ...pinnedWorkspaceViews,
-    ]
-    return Array.from(new Set(candidates)).filter(view => available.has(view))
-  }, [pinnedWorkspaceViews, workspaceViewDefinitions])
-
-  const togglePinnedWorkspaceView = useCallback((view: WorkspaceView) => {
-    setPinnedWorkspaceViews(current => {
-      const next = current.includes(view)
-        ? current.filter(candidate => candidate !== view)
-        : [...current, view]
-      writePinnedWorkspaceViews(workspacePath, next)
-      return next
-    })
-  }, [workspacePath])
 
   // PLAT-158: the enabled dedicated review schedule is the only recurring
   // Pulse switch. Ordinary workflow runs never launch Gate/Review+Fix inline.
@@ -911,10 +854,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
           {workspacePath && (
             <>
               <div className="inline-flex h-8 items-center gap-0.5 rounded-lg border border-border bg-muted/60 p-0.5 shadow-sm">
-                {quickWorkspaceViews.map(view => {
-                  const definition = workspaceViewDefinitions.find(([candidate]) => candidate === view)
-                  if (!definition) return null
-                  const [, Icon, label] = definition
+                {workspaceViewDefinitions.map(([view, Icon, label]) => {
                   const active = view === activeWorkspaceView
                   const viewButton = (
                     <button
@@ -945,41 +885,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                   </Tooltip>
                   )
                 })}
-                <CompactToolbarMenu
-                  label="More workspace views"
-                  active={!quickWorkspaceViews.includes(activeWorkspaceView)}
-                  icon={<MoreHorizontal className="h-3.5 w-3.5" />}
-                >
-                  {(close) => (
-                    <>
-                      {workspaceViewDefinitions
-                        // Already shown as a quick-access icon -- listing it again here
-                        // too is pure duplication.
-                        .filter(([view]) => !quickWorkspaceViews.includes(view))
-                        .map(([view, Icon, label]) => (
-                        <CompactToolbarMenuItem
-                          key={view}
-                          icon={<Icon className="h-3.5 w-3.5" />}
-                          label={label}
-                          active={workflowWorkspaceView === view}
-                          // Every item that survives the quickWorkspaceViews filter
-                          // above is by definition not in DEFAULT_QUICK_WORKSPACE_VIEWS
-                          // (a subset of it), so it's always pin-eligible here.
-                          trailingAction={{
-                            label: pinnedWorkspaceViews.includes(view) ? 'Unpin from shortcuts' : 'Pin to shortcuts',
-                            icon: <Pin className={`h-3.5 w-3.5 ${pinnedWorkspaceViews.includes(view) ? 'fill-current' : ''}`} />,
-                            active: pinnedWorkspaceViews.includes(view),
-                            onClick: () => togglePinnedWorkspaceView(view),
-                          }}
-                          onClick={() => {
-                            openWorkspaceView(view)
-                            close()
-                          }}
-                        />
-                      ))}
-                    </>
-                  )}
-                </CompactToolbarMenu>
               </div>
 
               {showWorkspacePane && (
