@@ -13,16 +13,24 @@ interface RoutingEdgeData extends Record<string, unknown> {
   routeName?: string
   selected?: boolean
   color?: string
+  isLateralHandoff?: boolean
 }
 
 function getRouteLabelPosition(
   sourceX: number,
   sourceY: number,
   targetX: number,
-  targetY: number
+  targetY: number,
+  isLateralHandoff = false
 ) {
   const deltaX = targetX - sourceX
   const deltaY = targetY - sourceY
+  if (isLateralHandoff) {
+    return {
+      x: sourceX + deltaX * 0.5,
+      y: sourceY + deltaY * 0.5,
+    }
+  }
   const labelOffsetY = Math.min(96, Math.max(44, Math.abs(deltaY) * 0.16))
 
   return {
@@ -77,7 +85,13 @@ export const RoutingEdge = memo(({
     borderRadius: 18,
     offset: 32
   })
-  const labelPosition = getRouteLabelPosition(sourceX, sourceY, targetX, targetY)
+  const labelPosition = getRouteLabelPosition(
+    sourceX,
+    sourceY,
+    targetX,
+    targetY,
+    Boolean(edgeData.isLateralHandoff),
+  )
 
   return (
     <>

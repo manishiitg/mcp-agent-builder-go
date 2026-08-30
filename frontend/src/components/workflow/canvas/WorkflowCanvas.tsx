@@ -15,6 +15,13 @@ import '@xyflow/react/dist/style.css'
 
 import { useModeStore } from '../../../stores/useModeStore'
 import { nodeTypes } from '../nodes'
+import {
+  HandoffHumanInputNode,
+  HandoffMessageSequenceNode,
+  HandoffRoutingNode,
+  HandoffStepNode,
+  HandoffTodoTaskNode,
+} from '../nodes/HandoffNodeWrappers'
 import { getExecutionModeVisuals } from '../nodes/executionModeVisuals'
 import { edgeTypes } from '../edges'
 import Workspace from '../../Workspace'
@@ -67,8 +74,9 @@ const PNG_EXPORT_MAX_SIDE = 16000
 const PNG_EXPORT_MAX_PIXELS = 64_000_000
 // Bump this whenever the auto-layout algorithm changes so stale saved layouts
 // (custom drag positions from the old editor) are dropped and the new computed
-// layout takes over. 2.6-route-convergence: branches remain in route lanes, then rejoin.
-const WORKFLOW_LAYOUT_VERSION = '2.6-route-convergence'
+// layout takes over. 2.7-route-handoffs: branch continuations use lateral
+// handoffs, so their destination cards can sit beside the decision.
+const WORKFLOW_LAYOUT_VERSION = '2.7-route-handoffs'
 const FLOW_FIT_PADDING = 0.24
 const FLOW_FIT_MIN_ZOOM = 0.08
 const FLOW_FIT_MAX_ZOOM = 0.95
@@ -77,6 +85,16 @@ const FLOW_HEADER_NODE_HEIGHTS: Record<string, number> = {
   start: 40,
   variables: 160
 }
+
+const canvasNodeTypes = {
+  ...nodeTypes,
+  step: HandoffStepNode,
+  todo_task: HandoffTodoTaskNode,
+  human_input: HandoffHumanInputNode,
+  routing: HandoffRoutingNode,
+  branch: HandoffRoutingNode,
+  message_sequence: HandoffMessageSequenceNode,
+} as const
 
 function enforceWorkflowHeaderClearance(nodes: WorkflowNode[]): WorkflowNode[] {
   const startNode = nodes.find(node => node.id === 'start')
@@ -3075,7 +3093,7 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
           edgesFocusable={false}
           onlyRenderVisibleElements={false}
           onViewportChange={onViewportChange}
-          nodeTypes={nodeTypes}
+          nodeTypes={canvasNodeTypes}
           edgeTypes={edgeTypes}
           fitView={false}
           fitViewOptions={{ padding: FLOW_FIT_PADDING, minZoom: FLOW_FIT_MIN_ZOOM, maxZoom: FLOW_FIT_MAX_ZOOM }}
