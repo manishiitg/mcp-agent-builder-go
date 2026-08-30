@@ -1317,6 +1317,12 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
       : activeSession ? statusTone(activeSession) : 'idle'
     const waiting = tone === 'needs-input'
     const running = tone === 'running' || tone === 'background'
+    // Shown whenever background agents/steps are active, independent of the
+    // foreground turn's own state -- it's most useful exactly when the
+    // composer looks otherwise idle (tone === 'background'), but a user typing
+    // a new message while background work is also in flight still wants to
+    // see the count.
+    const backgroundCount = activeSession?.running_background_agent_count ?? 0
     return {
       // The composer is user-facing: transport names such as "claude-code"
       // do not add useful context here. Keep the provider only as a fallback
@@ -1324,6 +1330,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
       label: model || provider,
       state: waiting ? 'waiting' as const : running ? 'running' as const : 'ready' as const,
       activityLabel: activeSession ? headerStatusLabel(activeSession) : 'idle',
+      backgroundCount,
     }
   }, [
     activeSession,
@@ -1341,6 +1348,26 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     primaryLLM?.model,
     primaryLLM?.provider,
   ])
+
+  // mainAgentRuntimeStatus reads activeSession from activeSessionsCache, a
+  // 30s-TTL cache that nothing polls on a timer inside the workflow-builder
+  // view (only the main chat view's GlobalActivityMonitor does, every 5s).
+  // The tab strip's own busy dot reads chatTabs[tabId].isStreaming /
+  // .hasRunningBgAgents directly -- live, event-driven -- so left alone this
+  // composer chip can visibly lag it: still showing "running" up to 30s
+  // after a background agent/step actually finished (reported live: the
+  // composer's spinner kept going after the tab strip had already gone
+  // idle). Force a refresh right when the live signal transitions instead
+  // of waiting on the cache's own TTL.
+  const liveTabBusy = (activeTab?.isStreaming ?? false) || (activeTab?.hasRunningBgAgents ?? false)
+  const lastLiveTabBusyRef = useRef(liveTabBusy)
+  useEffect(() => {
+    if (lastLiveTabBusyRef.current === liveTabBusy) return
+    lastLiveTabBusyRef.current = liveTabBusy
+    useChatStore.getState().getActiveSessions(true).catch(error => {
+      console.warn('[ChatInput] Failed to refresh active sessions after live busy-state change', error)
+    })
+  }, [liveTabBusy])
 
   // Preset folder selection
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -2941,10 +2968,17 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
       return `${agentProfileWorkspace.replace(/\/$/, '')}/uploads`
     }
     if (selectedModeCategory === 'workflow') {
-      return workspaceActiveFolder || 'Workflow'
+      // activeWorkflowWorkspacePath resolves the workflow this chat tab is
+      // actually scoped to. workspaceActiveFolder is the file browser's own
+      // navigation state -- a separate piece of state that can be empty or
+      // pointed elsewhere while the chat itself is scoped to a workflow, which
+      // silently dropped pasted screenshots into the shared Workflow/ root
+      // instead of the workflow's own folder (confirmed live: a pasted image
+      // from the confida-login chat landed at Workflow/pasted-image-*.png).
+      return activeWorkflowWorkspacePath || workspaceActiveFolder || 'Workflow'
     }
     return 'Chats'
-  }, [agentProfileWorkspace, selectedModeCategory, workspaceActiveFolder])
+  }, [activeWorkflowWorkspacePath, agentProfileWorkspace, selectedModeCategory, workspaceActiveFolder])
 
   const uploadFilesToChat = useCallback(async (files: File[]) => {
     if (files.length === 0 || isUploadingFiles) {
@@ -3632,6 +3666,24 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                     </TooltipTrigger>
                     <TooltipContent side="top">
                       <p>{mainAgentRuntimeStatus.label} — {mainAgentRuntimeStatus.activityLabel}</p>
+                    </TooltipContent>
+                  </Tooltip>
+                )}
+                {!hideRuntimeStatus && mainAgentRuntimeStatus && mainAgentRuntimeStatus.backgroundCount > 0 && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <div
+                        className="flex h-7 shrink-0 items-center gap-1 rounded-md border border-border bg-muted/50 px-1.5 font-mono text-[11px] text-muted-foreground"
+                        role="status"
+                      >
+                        <Bot className="h-3 w-3 shrink-0" aria-hidden="true" />
+                        <span>{mainAgentRuntimeStatus.backgroundCount}</span>
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipContent side="top">
+                      <p>
+                        {mainAgentRuntimeStatus.backgroundCount} background agent{mainAgentRuntimeStatus.backgroundCount === 1 ? '' : 's'} running
+                      </p>
                     </TooltipContent>
                   </Tooltip>
                 )}

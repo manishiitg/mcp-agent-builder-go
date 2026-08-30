@@ -518,19 +518,17 @@ func (hcpo *StepBasedWorkflowOrchestrator) startMessageSequenceItemNotification(
 	if hcpo == nil || step == nil {
 		return "", "", nil, false
 	}
-	// The runtime's own final validation gate does not get an auto-notification.
-	// On the happy path it is a deterministic file/DB check in Go (RunPreValidation
-	// — no model turn, nothing the agent did not already report), yet announcing it
-	// cost a full synthetic LLM turn and put a second near-identical "step finished"
-	// message in the conversation for one step. A real failure is not lost: it
-	// propagates out of executeMessageSequenceItem, fails the sequence, and is
-	// reported by the step's own completion notification with the validation errors
-	// in its summary — and emitPreValidationCompletedEvent still feeds the UI the
-	// gate result either way. Author-declared prevalidation items keep their
-	// notifications; only the appended gate is silent.
-	if item.Synthetic {
-		return "", "", nil, false
-	}
+	// The runtime's own final validation gate used to skip its auto-notification:
+	// on the happy path it is a deterministic file/DB check in Go (RunPreValidation
+	// — no model turn, nothing the agent did not already report), and announcing
+	// it cost a full synthetic LLM turn plus a second near-identical "step
+	// finished" message for one step. Re-enabled: the builder wants to hear about
+	// a pre-validation failure as soon as it happens (so it can check whether a
+	// schedule/setup issue or a genuine mistake is to blame) rather than only
+	// after it eventually surfaces via the step's own completion notification —
+	// worth the extra turn/message on the failure path. Author-declared
+	// prevalidation items always got notifications; this just stops treating the
+	// appended gate item differently from them.
 	// Fail loud, not silent: a nil notifier means this execution path forgot to
 	// wire SetWorkshopExecutionNotifier, so the main agent gets NO notification
 	// for this message_sequence item. That used to be an invisible no-op (a whole
@@ -1064,7 +1062,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) getMessageSequenceRuntime(ctx context
 	}
 
 	agentName := fmt.Sprintf("message-sequence-%s", step.GetID())
-	agent, err := hcpo.createExecutionOnlyAgent(agentCtx, "execution_only", stepPath, agentName, step.AgentConfigs, step.GetID(), "", false)
+	agent, err := hcpo.createExecutionOnlyAgent(agentCtx, "execution_only", stepPath, agentName, step.AgentConfigs, step, step.GetID(), "", false)
 	if err != nil {
 		return nil, agentCtx, err
 	}
@@ -1203,16 +1201,21 @@ func requestedMessageSequenceItemWriteAccess(item MessageSequenceItem) (MessageS
 // silently read-only when the step itself is configured to write.
 func (hcpo *StepBasedWorkflowOrchestrator) resolveMessageSequenceItemWriteAccess(stepConfig *AgentConfigs, item MessageSequenceItem) MessageSequenceWriteAccess {
 	requested, hasItemOverride := requestedMessageSequenceItemWriteAccess(item)
+	var resolved MessageSequenceWriteAccess
 	if hasItemOverride {
-		return hcpo.constrainMessageSequenceWriteAccess(stepConfig, requested)
+		resolved = hcpo.constrainMessageSequenceWriteAccess(stepConfig, requested)
+	} else {
+		kbAccess := resolveKnowledgebaseAccess(stepConfig, hcpo.UseKnowledgebase())
+		resolved = MessageSequenceWriteAccess{
+			DB:            resolveDBAccess(stepConfig) == DBAccessReadWrite,
+			Knowledgebase: kbAccessAllowsWrite(kbAccess),
+			Learnings:     resolveLearningsAccess(stepConfig) == LearningsAccessReadWrite,
+		}
 	}
-
-	kbAccess := resolveKnowledgebaseAccess(stepConfig, hcpo.UseKnowledgebase())
-	return MessageSequenceWriteAccess{
-		DB:            resolveDBAccess(stepConfig) == DBAccessReadWrite,
-		Knowledgebase: kbAccessAllowsWrite(kbAccess),
-		Learnings:     resolveLearningsAccess(stepConfig) == LearningsAccessReadWrite,
+	if hcpo.isEvaluationMode {
+		resolved.Learnings = false
 	}
+	return resolved
 }
 
 // messageSequenceStepFullWriteAccess is the step's maximal granted write scope
@@ -1222,11 +1225,15 @@ func (hcpo *StepBasedWorkflowOrchestrator) resolveMessageSequenceItemWriteAccess
 func (hcpo *StepBasedWorkflowOrchestrator) messageSequenceStepFullWriteAccess(step *MessageSequencePlanStep) MessageSequenceWriteAccess {
 	stepConfig := getAgentConfigs(step)
 	kbAccess := resolveKnowledgebaseAccess(stepConfig, hcpo.UseKnowledgebase())
-	return MessageSequenceWriteAccess{
+	resolved := MessageSequenceWriteAccess{
 		DB:            resolveDBAccess(stepConfig) == DBAccessReadWrite,
 		Knowledgebase: kbAccessAllowsWrite(kbAccess),
 		Learnings:     resolveLearningsAccess(stepConfig) == LearningsAccessReadWrite,
 	}
+	if hcpo.isEvaluationMode {
+		resolved.Learnings = false
+	}
+	return resolved
 }
 
 func (hcpo *StepBasedWorkflowOrchestrator) constrainMessageSequenceWriteAccess(stepConfig *AgentConfigs, requested MessageSequenceWriteAccess) MessageSequenceWriteAccess {
@@ -1273,6 +1280,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) setupMessageSequenceFolderGuard(stepP
 	}
 	kbAccess := resolveKnowledgebaseAccess(stepConfig, hcpo.UseKnowledgebase())
 	learningsAccess := resolveLearningsAccess(stepConfig)
+	if hcpo.isEvaluationMode {
+		learningsAccess = LearningsAccessNone
+	}
 	// message_sequence agents use query_workflow_db/mutate_workflow_db, so
 	// db/db.sqlite itself stays off the filesystem grant: configureWorkflowDBSession
 	// blocks it for managed agents, and Landlock cannot represent a broad parent

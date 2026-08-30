@@ -22,12 +22,12 @@ func TestStatusLineE2EThroughEventStore(t *testing.T) {
 	now := time.Now()
 
 	// Seed a coding-agent pane through the event store (the live event path).
-	es.AddEvent("session-1", terminalEventWithMetadata("exec-1", "agy pane", 1,
-		map[string]interface{}{"tmux_session": "mlp-agy-1"}, now))
+	es.AddEvent("session-1", terminalEventWithMetadata("exec-1", "codex pane", 1,
+		map[string]interface{}{"tmux_session": "mlp-codex-1"}, now))
 
 	// A second, unrelated pane in the same session — must NOT receive telemetry.
 	es.AddEvent("session-1", terminalEventWithMetadata("exec-2", "other pane", 1,
-		map[string]interface{}{"tmux_session": "mlp-agy-2"}, now))
+		map[string]interface{}{"tmux_session": "mlp-codex-2"}, now))
 
 	// Emit the status_line event carrying the complete StatusLine payload.
 	es.AddEvent("session-1", storeevents.Event{
@@ -37,8 +37,8 @@ func TestStatusLineE2EThroughEventStore(t *testing.T) {
 		Data: &agentevents.AgentEvent{
 			Type: agentevents.StreamingStatusLine,
 			Data: &agentevents.StreamingStatusLineEvent{
-				Provider:                 "agy-cli",
-				TmuxSession:              "mlp-agy-1",
+				Provider:                 "codex-cli",
+				TmuxSession:              "mlp-codex-1",
 				InputTokens:              15000,
 				OutputTokens:             273,
 				CacheCreationInputTokens: 1200,
@@ -57,8 +57,8 @@ func TestStatusLineE2EThroughEventStore(t *testing.T) {
 		t.Fatal("expected terminal session-1:exec-1")
 	}
 	st := snap.Status
-	if st.ProviderLabel != "agy-cli" {
-		t.Errorf("ProviderLabel = %q, want agy-cli (no placeholder model)", st.ProviderLabel)
+	if st.ProviderLabel != "codex-cli" {
+		t.Errorf("ProviderLabel = %q, want codex-cli (no placeholder model)", st.ProviderLabel)
 	}
 	if st.InputTokens != 15000 || st.OutputTokens != 273 {
 		t.Errorf("tokens = %d in / %d out, want 15000 / 273", st.InputTokens, st.OutputTokens)
@@ -84,8 +84,8 @@ func TestStatusLineE2EThroughEventStore(t *testing.T) {
 	}
 
 	// A pane refresh (DeriveStatus rebuild) must NOT wipe the telemetry.
-	es.AddEvent("session-1", terminalEventWithMetadata("exec-1", "agy pane - updated", 2,
-		map[string]interface{}{"tmux_session": "mlp-agy-1"}, now.Add(time.Second)))
+	es.AddEvent("session-1", terminalEventWithMetadata("exec-1", "codex pane - updated", 2,
+		map[string]interface{}{"tmux_session": "mlp-codex-1"}, now.Add(time.Second)))
 
 	after, _ := ts.Get("session-1:exec-1")
 	if after.Status.InputTokens != 15000 || after.Status.OutputTokens != 273 {
@@ -94,7 +94,7 @@ func TestStatusLineE2EThroughEventStore(t *testing.T) {
 	if after.Status.CacheReadInputTokens != 48000 || after.Status.TotalInputTokens != 63000 {
 		t.Errorf("cache/total wiped on refresh: cacheRead=%d totalIn=%d", after.Status.CacheReadInputTokens, after.Status.TotalInputTokens)
 	}
-	if after.Status.ProviderLabel != "agy-cli" {
+	if after.Status.ProviderLabel != "codex-cli" {
 		t.Errorf("ProviderLabel wiped on refresh: %q", after.Status.ProviderLabel)
 	}
 	if after.Status.StatusMeta == nil {

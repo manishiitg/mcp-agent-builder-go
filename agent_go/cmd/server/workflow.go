@@ -3166,6 +3166,34 @@ func (api *StreamingAPI) handleGetExecutionLogs(w http.ResponseWriter, r *http.R
 		}
 	}
 
+	// Merge in each step's configured execution_tier (planning/step_config.json)
+	// so the UI can show it alongside the model actually used — the tier is a
+	// config-time pin/default (or empty when the step uses adaptive tiering),
+	// not necessarily the tier of any one specific execution attempt: no
+	// per-execution record currently stores which tier resolved a given run.
+	stepConfigJSONPath := cleanedWorkspacePath + "/planning/step_config.json"
+	if stepConfigContent, stepConfigExists, _ := readFileFromWorkspace(r.Context(), stepConfigJSONPath); stepConfigExists {
+		var stepConfigDef struct {
+			Steps []struct {
+				ID           string `json:"id"`
+				AgentConfigs struct {
+					ExecutionTier string `json:"execution_tier"`
+				} `json:"agent_configs"`
+			} `json:"steps"`
+		}
+		if err := json.Unmarshal([]byte(stepConfigContent), &stepConfigDef); err == nil {
+			for _, sc := range stepConfigDef.Steps {
+				if sc.AgentConfigs.ExecutionTier == "" {
+					continue
+				}
+				if stepMetadata[sc.ID] == nil {
+					stepMetadata[sc.ID] = map[string]string{}
+				}
+				stepMetadata[sc.ID]["execution_tier"] = sc.AgentConfigs.ExecutionTier
+			}
+		}
+	}
+
 	// Typed response structure for folder listing
 	type FolderListingResponse struct {
 		Success bool                                `json:"success"`
@@ -3267,6 +3295,7 @@ func (api *StreamingAPI) handleGetExecutionLogs(w http.ResponseWriter, r *http.R
 			stepType := "regular"
 			contextOutput := ""
 			successCriteria := ""
+			executionTier := ""
 			learningObjective := ""
 			learningsAccess := ""
 			knowledgebaseAccess := ""
@@ -3286,6 +3315,7 @@ func (api *StreamingAPI) handleGetExecutionLogs(w http.ResponseWriter, r *http.R
 				}
 				contextOutput = meta["context_output"]
 				successCriteria = meta["success_criteria"]
+				executionTier = meta["execution_tier"]
 				learningObjective = meta["learning_objective"]
 				learningsAccess = meta["learnings_access"]
 				knowledgebaseAccess = meta["knowledgebase_access"]
@@ -3305,6 +3335,7 @@ func (api *StreamingAPI) handleGetExecutionLogs(w http.ResponseWriter, r *http.R
 				"title":                      title,
 				"description":                desc,
 				"success_criteria":           successCriteria,
+				"execution_tier":             executionTier,
 				"context_output":             contextOutput,
 				"learning_objective":         learningObjective,
 				"learnings_access":           learningsAccess,

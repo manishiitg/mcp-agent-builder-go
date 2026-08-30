@@ -461,7 +461,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) startRecoveredDirectContinuation(
 			if evalStep, ok := runtime.Step.(*EvaluationStep); ok {
 				evaluationDBWrite = evalStep.DBWrite
 			}
-			agent, err := hcpo.createExecutionOnlyAgent(execCtx, "execution_only", runtime.StepPath, agentName, getAgentConfigs(runtime.Step), state.StepID, "", evaluationDBWrite)
+			agent, err := hcpo.createExecutionOnlyAgent(execCtx, "execution_only", runtime.StepPath, agentName, getAgentConfigs(runtime.Step), runtime.Step, state.StepID, "", evaluationDBWrite)
 			if err != nil {
 				execErr = err
 				result = fmt.Sprintf("%s failed for %s: %v", labelPrefix, stepLabel, err)

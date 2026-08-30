@@ -135,15 +135,12 @@ const (
 	KBAccessRead      = "read"
 	KBAccessWrite     = "write"
 	KBAccessNone      = "none"
+
+	knowledgebaseAccessDescription = "Access mode for this step against knowledgebase/ (per-topic notes/ + notes/_index.json registry). Defaults to 'read' so steps can consume shared context; use 'none' to opt out. 'write' / 'read-write' may contribute: the step agent writes notes/ inline with diff_patch_workspace_file and closes with a self-review turn against its knowledgebase_contribution. Granting write without a knowledgebase_contribution results in no KB writes at all."
 )
 
 // resolveKnowledgebaseAccess resolves the effective KB access mode for a step.
 //
-// Policy: KB access is opt-in per step. Default is "none" — a step only gets KB read
-// or write when knowledgebase_access is explicitly set on its step_config.json entry.
-// The preset-level UseKnowledgebase flag is a prerequisite (when off, all steps are
-// forced to "none" regardless of explicit setting); it controls whether knowledgebase/
-// exists at all, not whether any given step can touch it.
 // resolveKnowledgebaseAccess returns the effective knowledgebase_access for a
 // step. Explicit value wins. Unset mirrors resolveLearningsAccess's already-safe
 // default pattern rather than introducing a new one: read by default (every
@@ -1372,7 +1369,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 	if sessionID := hcpo.GetMCPSessionID(); sessionID != "" && !isSubAgent {
 		narrowAgentCfg := getAgentConfigs(step)
 		narrowKBAccess := resolveKnowledgebaseAccess(narrowAgentCfg, hcpo.UseKnowledgebase())
-		narrowLearningsAccess := resolveLearningsAccess(narrowAgentCfg)
+		narrowLearningsAccess := resolveExecutionLearningsAccess(narrowAgentCfg, step, hcpo.isEvaluationMode)
 		narrowRead, narrowWrite := hcpo.setupExecutionFolderGuard(artifactStepPath, artifactStepID, narrowKBAccess, narrowLearningsAccess, resolveDBAccess(narrowAgentCfg), narrowAgentCfg)
 		var prevRead, prevWrite []string
 		if prevCfg := common.GetSessionShellConfig(sessionID); prevCfg != nil {
@@ -1495,7 +1492,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 		}
 
 		// Get folder guard paths for template (so agent knows exact paths it can access)
-		learningsAccess := resolveLearningsAccess(agentConfigs)
+		learningsAccess := resolveExecutionLearningsAccess(agentConfigs, step, hcpo.isEvaluationMode)
 		evaluationDBWrite := false
 		if evalStep, ok := step.(*EvaluationStep); ok {
 			evaluationDBWrite = evalStep.DBWrite
@@ -1876,6 +1873,14 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 			}
 
 			// Retry loop: Execute with validation feedback, reusing the same learning history
+			// Fires an [AUTO-NOTIFICATION] into the builder chat on the FIRST
+			// pre-validation failure for this step this run — before retries
+			// are exhausted — so the builder can assess and intervene while
+			// the step is still retrying, rather than only learning about it
+			// once the whole step eventually fails outright. Deliberately
+			// once-per-step, not once-per-attempt: firing on every attempt
+			// would spam the chat for a step that recovers on retry 2.
+			preValidationNotifiedThisStep := false
 			for retryAttempt := 1; retryAttempt <= maxRetryAttempts; retryAttempt++ {
 				// Check for context cancellation before retry attempt
 				select {
@@ -1978,7 +1983,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 					// Pass stepPath to createExecutionOnlyAgent so nested sub-agent folders resolve correctly.
 					// For learnings / metadata selection, use the concrete step ID so sub-agents align with their own learnings folder.
 					// allSteps is already []PlanStepInterface - no conversion needed
-					executionAgent, err = hcpo.createExecutionOnlyAgent(executionAgentCtx, "execution_only", stepPath, executionAgentName, agentConfigs, step.GetID(), getExecutionArtifactFolderOverride(execCtx), evaluationDBWrite)
+					executionAgent, err = hcpo.createExecutionOnlyAgent(executionAgentCtx, "execution_only", stepPath, executionAgentName, agentConfigs, step, step.GetID(), getExecutionArtifactFolderOverride(execCtx), evaluationDBWrite)
 					if err != nil {
 						return "", updatedContextFiles, fmt.Errorf("failed to create execution-only agent for step %d: %w", stepIndex+1, err)
 					}
@@ -2307,7 +2312,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 						// Force Tier 1 (High) for repair agents — they need to fix a failure,
 						// so they should use at least the same tier as the original execution.
 						repairCtx := context.WithValue(ctx, WorkshopTierOverrideKey, int(TierHigh))
-						repairAgent, repairErr := hcpo.createExecutionOnlyAgent(repairCtx, "execution_only", stepPath, repairAgentName, agentConfigs, step.GetID(), getExecutionArtifactFolderOverride(execCtx), evaluationDBWrite)
+						repairAgent, repairErr := hcpo.createExecutionOnlyAgent(repairCtx, "execution_only", stepPath, repairAgentName, agentConfigs, step, step.GetID(), getExecutionArtifactFolderOverride(execCtx), evaluationDBWrite)
 						if repairErr != nil {
 							hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ [scripted] failed to create repair agent for step %d fix %d: %v", stepIndex+1, fixIter+1, repairErr))
 							break
@@ -2488,6 +2493,33 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 				// Build validation response based on pre-validation results
 				if !preValidationResults.OverallPass {
 					hcpo.GetLogger().Warn(fmt.Sprintf("Pre-validation failed for step %d - rejecting", stepIndex+1))
+					// One [AUTO-NOTIFICATION] per step per run, on the FIRST
+					// failure only (see preValidationNotifiedThisStep above the
+					// retry loop) -- not the same case as
+					// completeMessageSequenceItemNotification's deliberately
+					// silent per-ITEM prevalidation gate (controller_message_
+					// sequence.go): that one fires up to once per item and the
+					// step's own eventual completion notification already
+					// covers it. This is the step's overall gate, fires at
+					// most once total, and specifically exists so the builder
+					// hears about a real structural problem while the step is
+					// still burning retries -- not only after all of them are
+					// exhausted.
+					if !preValidationNotifiedThisStep && hcpo.workshopExecutionNotifier != nil {
+						preValidationNotifiedThisStep = true
+						notifyID := fmt.Sprintf("prevalidation-warn-%s-%d", step.GetID(), time.Now().UnixNano())
+						notifyName := fmt.Sprintf("Pre-validation check: %s", step.GetTitle())
+						hcpo.workshopExecutionNotifier.OnExecutionStart(WorkshopExecutionStart{
+							ID:                notifyID,
+							ParentExecutionID: currentWorkshopParentExecutionID(ctx),
+							Name:              notifyName,
+							Kind:              "prevalidation_warning",
+							Metadata:          map[string]string{"step_id": step.GetID(), "step_path": stepPath},
+						})
+						hcpo.workshopExecutionNotifier.OnExecutionComplete(notifyID, notifyName, formatWorkspaceResults(preValidationResults),
+							map[string]string{"step_id": step.GetID(), "step_path": stepPath},
+							fmt.Errorf("pre-validation failed on attempt %d/%d — will retry unless attempts are exhausted", retryAttempt, maxRetryAttempts))
+					}
 					validationResponse = &ValidationResponse{
 						IsSuccessCriteriaMet: false,
 						ExecutionStatus:      "FAILED",
