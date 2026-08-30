@@ -546,6 +546,47 @@ func TestPulseWorklistRequiresPlanDriftReviewWhenCandidatesExist(t *testing.T) {
 	}
 }
 
+// A deleted step's own drift_review record is cascade-removed along with it,
+// so the per-step candidate set alone can go empty even though a deletion's
+// dependent-artifact fallout still needs auditing — the workflow-level
+// WorkflowDriftReviewStepID record (flagged by delete_plan_steps) must force
+// plan_drift_review due on its own, even when every real step is clean.
+func TestPulseWorklistRequiresPlanDriftReviewWhenWorkflowLevelFlagged(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	workspacePath := "Workflow/example"
+	planningDir := filepath.Join(root, workspacePath, "planning")
+	if err := os.MkdirAll(planningDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	planJSON := `{"steps":[{"id":"step-a","type":"regular"}]}`
+	if err := os.WriteFile(filepath.Join(planningDir, "plan.json"), []byte(planJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// step-a is fully reviewed; only the workflow-level sentinel is pending —
+	// this is exactly the state right after a step was deleted.
+	stepConfig := `{"steps":[
+		{"id":"step-a","agent_configs":{"drift_review":{"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"pulse:plan_drift_review","contract_version":2,"checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"all report queries ran cleanly"}]}}},
+		{"id":"__workflow_drift_review__","agent_configs":{"drift_review":{"needs_review":true}}}
+	]}`
+	if err := os.WriteFile(filepath.Join(planningDir, "step_config.json"), []byte(stepConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	skipped := completePulseWorklistDecisions(nil)
+	if _, err := recordPulseWorklist(context.Background(), workspacePath, "pulse-workflow-level-skip", skipped); err == nil ||
+		!strings.Contains(err.Error(), "plan_drift_review must be due") || !strings.Contains(err.Error(), "__workflow_drift_review__") {
+		t.Fatalf("a flagged workflow-level record was allowed to skip plan_drift_review: %v", err)
+	}
+
+	due := completePulseWorklistDecisions(map[string]PulseWorklistDecision{
+		pulseModulePlanDriftReview: {Module: pulseModulePlanDriftReview, Due: true, Reason: "A step was deleted; workflow-level drift review is flagged."},
+	})
+	if _, err := recordPulseWorklist(context.Background(), workspacePath, "pulse-workflow-level-due", due); err != nil {
+		t.Fatalf("plan_drift_review routing was rejected despite being marked due: %v", err)
+	}
+}
+
 // A scan failure (unreadable/malformed plan.json or step_config.json) must
 // never silently read as "nothing is due" — the real candidate set is
 // unknown, not empty, so Gate must route it to either plan_drift_review or

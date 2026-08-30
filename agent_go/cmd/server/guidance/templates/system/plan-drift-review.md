@@ -49,6 +49,49 @@ precomputed `fail` as real evidence — do not re-derive it, and do not accept a
 `pass` at face value without confirming it against the check's own explicit
 scope (an empty rule set legitimately passes).
 
+### Workflow-level deletion audit (candidates with no real step_id)
+
+`plan_drift_candidates` may include one entry whose `step_id` is
+`__workflow_drift_review__` — not a real plan step. It appears whenever
+`delete_plan_steps` has run since the last workflow-level audit: a deleted
+step's own `drift_review` record is removed along with it, so the per-step
+scan above structurally cannot see anything requiring review for a step that
+no longer exists, even though the deletion can leave dangling references
+elsewhere. Treat this candidate as its own due item, using the exact same
+tools as every other step (steps 3-6 below apply to it unchanged) — it just
+has no real step to attach fixes to.
+
+Audit procedure:
+
+1. Read this record's own prior evidence (`checks`, `reviewed_at`,
+   `reviewed_through_change_id`) the same stale-flag way as a real step's
+   record — do not start from nothing if a prior workflow-level audit exists.
+2. List `planning/changelog/changelog-*.json` in filename order and collect
+   every `delete_plan_steps` entry **after** `reviewed_through_change_id` (or
+   all of them, if this is the first workflow-level audit). Each entry's
+   `deleted_steps`/`step_ids` names exactly which step IDs were removed and
+   why (`reason`).
+3. For every deleted step ID, search dependent artifacts for a dangling
+   reference to it: other steps' `next_step_id`/`routes[].next_step_id`/
+   `predefined_routes` (a route or chain that still points at the deleted
+   ID), `evaluation/evaluation_plan.json` (`applies_to_routes` naming the
+   deleted step, or an eval step whose whole purpose was evaluating it),
+   `db/reports/index.html` and `db/README.md` (mentions of the deleted step
+   by name/id), and `learnings/_global/` notes referencing it. A route/chain
+   left pointing at a deleted step is real drift — the workflow can no longer
+   execute that path.
+4. Fix what is safe and workflow-owned directly (redirect a dangling
+   `next_step_id`, remove an orphaned eval step or route reference, update a
+   stale doc mention), verify each fix, and route anything you cannot safely
+   fix in this turn using the exact same classification scheme as step 4
+   below (`step_id="__workflow_drift_review__"` on every `record_pulse_finding`
+   call).
+5. Persist with `record_plan_drift_review(step_id="__workflow_drift_review__",
+   checks=[...], reviewed_through_change_id=<latest delete_plan_steps
+   change_id you actually read>)` — one call, same shape as a real step's,
+   using a `check_id` such as `deleted_step_dependent_artifact_audit` per
+   deleted step ID or per distinct artifact surface checked.
+
 ### 2. Fill the gaps Go could not precompute
 
 For each candidate step, directly check what the deterministic pass skipped:

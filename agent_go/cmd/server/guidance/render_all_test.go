@@ -941,13 +941,6 @@ func TestPulseRunsEveryDueReviewerAndWritesAttributedResults(t *testing.T) {
 // template, not by grepping stale expectations.
 func TestMaintenanceImproveGuidanceIsReadOnlyForPulseFixerHandoff(t *testing.T) {
 	cases := map[string][]string{
-		"review-artifact-drift": {
-			"read-only audit checklist",
-			"run_in_background",
-			"Never launch another reviewer",
-			"Pulse Fixer",
-			"mark_changelog_artifact_reviewed",
-		},
 		"improve-learnings": {
 			"ENGINEERING REVIEW — STORES HEALTH / LEARNINGS LENS",
 			"generic read-only reviewer",
@@ -1015,6 +1008,43 @@ func TestMaintenanceImproveGuidanceIsReadOnlyForPulseFixerHandoff(t *testing.T) 
 			if !strings.Contains(rendered, want) {
 				t.Fatalf("%s missing read-only reviewer contract %q", kind, want)
 			}
+		}
+	}
+}
+
+// TestReviewArtifactDriftSharesPlanDriftReviewMechanismAndStaysReadOnlyElsewhere
+// covers PLAT-258's slash/scheduled parity gap: /review-artifact-drift used to
+// be a fully separate, fully read-only checklist that only READ
+// plan_drift_review's precomputed evidence and deferred to it, never actually
+// running its collector/repair contract/completion writer itself. It is now a
+// two-part contract: Part 1 dispatches the real plan_drift_review procedure
+// (shared candidate collector, repair authority, completion writer), Part 2
+// remains the original read-only checklist for everything plan_drift_review
+// does not cover.
+func TestReviewArtifactDriftSharesPlanDriftReviewMechanismAndStaysReadOnlyElsewhere(t *testing.T) {
+	rendered, err := renderFromRegistry("review-artifact-drift", tmplData{}, allKinds)
+	if err != nil {
+		t.Fatalf("render review-artifact-drift: %v", err)
+	}
+	for _, want := range []string{
+		// Part 1: genuinely dispatches the shared mechanism, not just a read.
+		`get_pulse_state(view="module")`,
+		"plan_drift_candidates",
+		"__workflow_drift_review__",
+		`read_skill(skills=[{"name":"builder-reference","path":"references/plan-drift-review.md"}])`,
+		"real repair authority, identical to `plan_drift_review`'s",
+		"record_plan_drift_review",
+		`record_pulse_result`,
+		`module="plan_drift_review"`,
+		// Part 2: unchanged read-only checklist, own completion writer.
+		"stays strictly read-only",
+		"Part 2 — the read-only checklist",
+		"run_in_background",
+		"Never launch another reviewer",
+		"mark_changelog_artifact_reviewed",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("review-artifact-drift missing %q:\n%s", want, rendered)
 		}
 	}
 }

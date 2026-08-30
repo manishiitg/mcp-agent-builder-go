@@ -1,11 +1,11 @@
 [← Pulse platform index](../pulse_platform_issue_register.md)
 
-# PLAT-258 — Dedicated `plan_drift_review` Pulse module (review-and-fix authority end-to-end; parity follow-up open)
+# PLAT-258 — Dedicated `plan_drift_review` Pulse module (all acceptance items built)
 
 | Coordination | Value |
 |---|---|
 | Assigned agent | Claude Code |
-| Ticket state | `review-and-fix authority end-to-end; deletion coverage + slash parity still not built` — the third and fifth independent reviews' six integration gaps (dispatcher hand-off text, missing `step_id`, unsupported platform-boundary tool shape, strategic-only late-insertion edge case, step_id-on-reuse dead end, swallowed late-repair scheduling failures) are all fixed and tested — see "Fourth round" and "Fifth round" below. Slash/scheduled implementation parity and the workflow-level deletion-review flag remain explicitly **not yet built**, reconfirmed by the fifth review — see Follow-up below |
+| Ticket state | `all acceptance items built` — review-and-fix authority end-to-end (fourth/fifth rounds fixed six independent-review integration gaps), deletion coverage (workflow-level `__workflow_drift_review__` sentinel record), and slash/scheduled parity (`/review-artifact-drift` Part 1 now dispatches plan_drift_review's real candidate collector/repair contract/completion writer) are all implemented and tested — see "Fourth", "Fifth", and "Sixth round" below |
 | Last synchronized | `2026-08-30` |
 
 - **Type:** platform feature (multi-phase), not a single bug fix. Filed at
@@ -1070,12 +1070,89 @@ Both new findings verified against the actual code before fixing:
 `go build`/`go vet`/`gofmt` clean; full `go test ./...` green, no failures at
 all (the previously-noted schedule-prompt-shape gap remains resolved).
 
-**Still not started, per the user's own earlier "treat as its own follow-up"
-decision** — reconfirmed by this same reviewer, not new: the workflow-level
-`workflow_drift_review` deletion-coverage flag (a deleted step's own
-`drift_review` record is pruned along with it, so the canonical candidate
-scan has nothing left to see) and slash/scheduled `/review-artifact-drift`
-implementation parity (still a separate read-only Technical Review checklist,
-not plan_drift_review's candidate collector/repair contract/completion
-writer). Both remain real gaps in full PLAT-258 acceptance; deliberately not
-started in this round without checking scope with the user again first.
+## Sixth round — deletion coverage and slash/scheduled parity built (2026-08-30)
+
+The user explicitly greenlit starting both remaining follow-up items now
+(after three rounds of confirming they were deliberately deferred, not
+forgotten). Both implemented and tested:
+
+### Deletion coverage
+
+A deleted step's own `drift_review` record is cascade-removed along with its
+`step_config.json` entry when it's deleted — correct, since the step is gone
+and its per-step evidence is moot — but that also means
+`CollectPlanDriftCandidates`, which derives its candidate set from
+`plan.json`'s current step list, structurally cannot see anything requiring
+review for a step that no longer exists, even though the deletion can leave
+dangling references in dependent artifacts (other steps' `next_step_id`,
+eval `applies_to_routes`, reports, docs).
+
+Fixed by reusing the exact same `StepDriftReview` record shape and
+`record_plan_drift_review` write path a real step uses, keyed by a new
+reserved sentinel `WorkflowDriftReviewStepID = "__workflow_drift_review__"`
+(never a valid plan.json step id, so it can never collide with one):
+
+- `createDeletePlanStepsExecutor` now flags this sentinel's record
+  `needs_review=true` in the same read-modify-write as the cascade-prune
+  (`flagWorkflowDriftReviewOnDeletion`), preserving any prior evidence —
+  the same stale-flag pattern a real step's own record uses.
+- `cleanup_orphan_step_configs` explicitly exempts the sentinel — it is never
+  "live" in plan.json by definition, but is also never orphan garbage.
+- `CollectPlanDriftCandidates` surfaces it as a candidate with a
+  deliberately different invariant from a real step: an ABSENT record means
+  "this workflow has never deleted a step" (not pending), while an EXISTING
+  record with `needs_review==true` is pending — a workflow that has never
+  had a deletion must not be forced into a needless workflow-level audit.
+- `validatePlanDriftRouting` (Gate's forced-due enforcement) picks this up
+  automatically since it already iterates the generic candidate list.
+- `plan-drift-review.md` gained a new "Workflow-level deletion audit"
+  section: read `planning/changelog/`'s `delete_plan_steps` entries after
+  `reviewed_through_change_id`, trace each deleted step ID through dependent
+  artifacts (other steps' `next_step_id`/routes, eval `applies_to_routes`,
+  reports, docs, learnings/_global), fix what's safe directly, route the
+  rest via the same classification scheme as a real step, and persist via
+  `record_plan_drift_review(step_id="__workflow_drift_review__", ...)` —
+  reusing steps 3-6 unchanged.
+
+New tests: `TestDeletePlanStepsFlagsWorkflowLevelDriftReview`,
+`TestFlagWorkflowDriftReviewOnDeletionPreservesPriorEvidence`,
+`TestCleanupOrphanStepConfigsPreservesWorkflowLevelRecord`,
+`TestCollectPlanDriftCandidatesSurfacesWorkflowLevelPendingAfterDeletion`,
+`TestCollectPlanDriftCandidatesOmitsWorkflowLevelWhenReviewedClean`,
+`TestPulseWorklistRequiresPlanDriftReviewWhenWorkflowLevelFlagged` — the last
+one confirms Gate is forced due even when every REAL step is already clean,
+exactly the state right after a deletion.
+
+### Slash/scheduled parity
+
+`/review-artifact-drift` was a fully separate, fully read-only checklist that
+only *read* `plan_drift_review`'s precomputed per-step evidence and deferred
+to it — it never actually ran `plan_drift_review`'s own candidate collector,
+had no repair authority, and persisted through a different completion writer
+(`mark_changelog_artifact_reviewed` + its own changelog-cursor tracking,
+never `record_plan_drift_review`/`record_pulse_result(module=
+"plan_drift_review")`). Restructured into two explicit parts:
+
+- **Part 1** calls `get_pulse_state(view="module")` for the exact same
+  `plan_drift_candidates` the scheduled Pulse pass reads (including the new
+  workflow-level deletion-audit candidate), loads
+  `plan-drift-review.md` via `read_skill`, and follows its full review-and-fix
+  contract — same repair authority, same `record_plan_drift_review`/
+  `record_pulse_result(module="plan_drift_review")` completion writer as the
+  scheduled path. This is not optional evidence to defer past a stale
+  record anymore; it is the same due work Pulse would otherwise run on its
+  own schedule, done now because the operator asked for it directly.
+- **Part 2** is the original checklist, unchanged in scope and still
+  strictly read-only (schedule drift, eval coverage, downstream-step field
+  consumption, duplicate control stores — everything Part 1 does not cover),
+  keeping its own `mark_changelog_artifact_reviewed` completion writer.
+
+Removed `review-artifact-drift` from
+`TestMaintenanceImproveGuidanceIsReadOnlyForPulseFixerHandoff`'s invariant
+set — that test's premise (a purely read-only, hand-off-to-Fixer contract)
+no longer applies to it by design; added a dedicated
+`TestReviewArtifactDriftSharesPlanDriftReviewMechanismAndStaysReadOnlyElsewhere`
+asserting Part 1's real dispatch and Part 2's continued read-only boundary
+explicitly.
+
+`go build`/`go vet`/`gofmt` clean; full `go test ./...` green, no failures.

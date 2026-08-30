@@ -73,7 +73,7 @@ var allKinds = map[string]kindMeta{
 	"design-plan": {Group: "builder", Description: "Comprehensive workflow plan and dependent-artifact review with better design recommendations", Modes: []string{"workshop", "run"}},
 
 	// Reviews — recommend, don't apply; persist their typed result through Pulse.
-	"review-artifact-drift": {Group: "review", Description: "Audit plan changelog entries against dependent artifacts: the schedules that drive the workflow, learnings, main.py, KB, db, reports, and eval wiring", Modes: []string{"workshop"}},
+	"review-artifact-drift": {Group: "review", Description: "Manual on-demand equivalent of the scheduled plan_drift_review pass (same candidate collector, repair contract, and completion writer — including deletion-coverage audits), plus a read-only checklist for everything it doesn't cover: schedule drift, learnings, main.py, KB, db, reports, and eval wiring", Modes: []string{"workshop"}},
 	"ops-review":            {Group: "review", Description: "One-off agentic read-only review of cost, timing, tool/runtime reliability, model routing, setup, and plan-design hygiene", Modes: []string{"workshop"}},
 	"strategy-auditor":      {Group: "review", Description: "One-off read-only cross-run diagnosis of whether the current plan can achieve the goal; does not run Goal Advisor or change the plan", Modes: []string{"workshop"}},
 

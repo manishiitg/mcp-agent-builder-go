@@ -66,6 +66,55 @@ func TestCollectPlanDriftCandidatesNilWhenNoPlan(t *testing.T) {
 	}
 }
 
+// TestCollectPlanDriftCandidatesSurfacesWorkflowLevelPendingAfterDeletion
+// covers PLAT-258's deletion coverage gap: even when every real plan step is
+// cleanly reviewed, a flagged WorkflowDriftReviewStepID record (set by
+// flagWorkflowDriftReviewOnDeletion when a step is deleted) must still
+// surface as a candidate — the whole point is that a deleted step's own
+// per-step record can never carry this signal again.
+func TestCollectPlanDriftCandidatesSurfacesWorkflowLevelPendingAfterDeletion(t *testing.T) {
+	stepConfigWithFlaggedWorkflowLevel := `{"steps":[
+  {"id":"step-a","agent_configs":{"drift_review":{"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"pulse:plan_drift_review","contract_version":2,"checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"all report queries ran cleanly"}]}}},
+  {"id":"step-b","agent_configs":{"drift_review":{"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"pulse:plan_drift_review","contract_version":2,"checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"all report queries ran cleanly"}]}}},
+  {"id":"__workflow_drift_review__","agent_configs":{"drift_review":{"needs_review":true}}}
+]}`
+	planDriftCandidateWorkspace(t, "Workflow/drift-candidates", twoStepPlan, stepConfigWithFlaggedWorkflowLevel)
+	got, err := CollectPlanDriftCandidates(context.Background(), "Workflow/drift-candidates")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("CollectPlanDriftCandidates = %#v, want exactly one workflow-level candidate", got)
+	}
+	if got[0].StepID != WorkflowDriftReviewStepID {
+		t.Fatalf("candidate step_id = %q, want %q", got[0].StepID, WorkflowDriftReviewStepID)
+	}
+	if got[0].StepType != "workflow" {
+		t.Fatalf("candidate step_type = %q, want \"workflow\"", got[0].StepType)
+	}
+}
+
+// TestCollectPlanDriftCandidatesOmitsWorkflowLevelWhenNeverFlagged confirms
+// the deliberately different invariant from a real step: a workflow that has
+// never deleted a step (no WorkflowDriftReviewStepID entry exists at all)
+// must NOT be treated as pending merely because the record is absent — unlike
+// a real step, absence here means "nothing to review," not "due."
+func TestCollectPlanDriftCandidatesOmitsWorkflowLevelWhenReviewedClean(t *testing.T) {
+	stepConfigWithCleanWorkflowLevel := `{"steps":[
+  {"id":"step-a","agent_configs":{"drift_review":{"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"pulse:plan_drift_review","contract_version":2,"checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"all report queries ran cleanly"}]}}},
+  {"id":"step-b","agent_configs":{"drift_review":{"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"pulse:plan_drift_review","contract_version":2,"checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"all report queries ran cleanly"}]}}},
+  {"id":"__workflow_drift_review__","agent_configs":{"drift_review":{"needs_review":false,"reviewed_at":"2026-08-02T00:00:00Z","checks":[{"check_id":"deleted_step_dependent_artifact_audit","status":"pass","evidence":"no dangling references found"}]}}}
+]}`
+	planDriftCandidateWorkspace(t, "Workflow/drift-candidates", twoStepPlan, stepConfigWithCleanWorkflowLevel)
+	got, err := CollectPlanDriftCandidates(context.Background(), "Workflow/drift-candidates")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("CollectPlanDriftCandidates = %#v, want nil when the workflow-level record exists but is not flagged", got)
+	}
+}
+
 func TestCollectPlanDriftCandidatesNilWhenAllReviewed(t *testing.T) {
 	planDriftCandidateWorkspace(t, "Workflow/drift-candidates", twoStepPlan, reviewedStepConfig)
 	got, err := CollectPlanDriftCandidates(context.Background(), "Workflow/drift-candidates")

@@ -328,6 +328,55 @@ type StepDriftCheck struct {
 	FindingID string `json:"finding_id,omitempty"`
 }
 
+// WorkflowDriftReviewStepID is the reserved step_config.json ID that carries
+// the workflow-level (not per-step) drift review record — deletion coverage.
+// Deleting a step cascade-removes ITS OWN drift_review record along with its
+// step_config.json entry (correct: the step is gone, its per-step evidence is
+// moot), but that also means CollectPlanDriftCandidates — which derives its
+// candidate set from plan.json's current step list — structurally cannot see
+// anything requiring review for a step that no longer exists. A deletion can
+// still leave dangling references in dependent artifacts (reports, evals,
+// other steps' next_step_id/routes, learnings/KB mentions, DB contracts) that
+// need auditing. This sentinel ID reuses the exact same StepDriftReview record
+// shape and record_plan_drift_review write path a real step uses — it is
+// never a valid plan.json step id, so it can never collide with one, and
+// cleanup_orphan_step_configs must explicitly exempt it (it is not "live" in
+// plan.json by definition, but is also never orphaned garbage).
+const WorkflowDriftReviewStepID = "__workflow_drift_review__"
+
+// flagWorkflowDriftReviewOnDeletion sets NeedsReview=true on the workflow-
+// level drift review record (creating it if this workflow has never had a
+// deletion before), preserving any prior evidence — the same stale-flag
+// pattern clearDriftReviewAfterPlanUpdate uses for a real step's own record,
+// so the last completed workflow-level audit stays available even while
+// flagged stale. Unlike a real step, an absent record here does NOT mean
+// "due": a workflow that has never deleted a step has nothing for this
+// candidate to cover, so CollectPlanDriftCandidates only treats the sentinel
+// as pending when a record exists AND is flagged, never merely because it is
+// missing (see its own doc comment).
+func flagWorkflowDriftReviewOnDeletion(configs []StepConfig, deletedStepIDs []string) []StepConfig {
+	if len(deletedStepIDs) == 0 {
+		return configs
+	}
+	for i := range configs {
+		if configs[i].ID != WorkflowDriftReviewStepID {
+			continue
+		}
+		if configs[i].AgentConfigs == nil {
+			configs[i].AgentConfigs = &AgentConfigs{}
+		}
+		if configs[i].AgentConfigs.DriftReview == nil {
+			configs[i].AgentConfigs.DriftReview = &StepDriftReview{}
+		}
+		configs[i].AgentConfigs.DriftReview.NeedsReview = true
+		return configs
+	}
+	return append(configs, StepConfig{
+		ID:           WorkflowDriftReviewStepID,
+		AgentConfigs: &AgentConfigs{DriftReview: &StepDriftReview{NeedsReview: true}},
+	})
+}
+
 // ============================================================================
 // TYPE-SAFE STEP SYSTEM (New Implementation)
 // ============================================================================
@@ -4411,17 +4460,29 @@ func createDeletePlanStepsExecutor(workspacePath string, logger loggerv2.Logger,
 
 		// Cascade-delete the matching entries from planning/step_config.json so
 		// the step's per-step config doesn't linger as an orphan after its plan
-		// entry is gone. Best-effort: a missing file or write failure is logged
-		// but doesn't fail the plan-deletion call (the plan was already written).
+		// entry is gone, and flag the workflow-level drift review record
+		// (WorkflowDriftReviewStepID) needs_review — a deleted step's own
+		// drift_review record is gone along with it, so CollectPlanDriftCandidates'
+		// per-step scan structurally cannot see anything requiring review for it;
+		// this is the durable signal that dependent-artifact fallout from THIS
+		// deletion still needs auditing. Both writes are combined into the same
+		// read-modify-write to avoid a lost update between two separate passes.
+		// Best-effort: a missing file or write failure is logged but doesn't fail
+		// the plan-deletion call (the plan was already written).
 		prunedConfigIDs := []string{}
 		if existingConfigs, cfgErr := readStepConfigViaFileCallback(ctx, workspacePath, readFile); cfgErr != nil {
 			logger.Warn(fmt.Sprintf("⚠️ Failed to read step_config.json for cascade-delete: %v", cfgErr))
-		} else if newConfigs, removed := pruneStepConfigsByID(existingConfigs, deletedSet); len(removed) > 0 {
+		} else {
+			newConfigs, removed := pruneStepConfigsByID(existingConfigs, deletedSet)
+			newConfigs = flagWorkflowDriftReviewOnDeletion(newConfigs, deletedIDs)
 			if writeErr := writeStepConfigViaFileCallback(ctx, workspacePath, newConfigs, writeFile); writeErr != nil {
-				logger.Warn(fmt.Sprintf("⚠️ Failed to cascade-delete step_config entries %v: %v", removed, writeErr))
+				logger.Warn(fmt.Sprintf("⚠️ Failed to cascade-delete step_config entries %v / flag workflow-level drift review: %v", removed, writeErr))
 			} else {
 				prunedConfigIDs = removed
-				logger.Info(fmt.Sprintf("🧹 Cascade-removed %d step_config entries: %v", len(removed), removed))
+				if len(removed) > 0 {
+					logger.Info(fmt.Sprintf("🧹 Cascade-removed %d step_config entries: %v", len(removed), removed))
+				}
+				logger.Info(fmt.Sprintf("🚩 Flagged workflow-level drift review needs_review after deleting %d step(s): %v", len(deletedIDs), deletedIDs))
 			}
 		}
 
@@ -4480,7 +4541,12 @@ func createCleanupOrphanStepConfigsExecutor(workspacePath string, logger loggerv
 		kept := make([]StepConfig, 0, len(configs))
 		var removed []string
 		for _, cfg := range configs {
-			if liveIDs[cfg.ID] {
+			// WorkflowDriftReviewStepID is never a real plan.json step, so it is
+			// never "live" by this check's own definition — but it also is not
+			// orphan garbage. It is the durable workflow-level drift review
+			// record deletion coverage depends on; removing it here would erase
+			// exactly the signal flagWorkflowDriftReviewOnDeletion just set.
+			if liveIDs[cfg.ID] || cfg.ID == WorkflowDriftReviewStepID {
 				kept = append(kept, cfg)
 				continue
 			}

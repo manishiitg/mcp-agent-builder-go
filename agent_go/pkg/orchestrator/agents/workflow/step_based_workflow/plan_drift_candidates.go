@@ -205,10 +205,22 @@ func CollectPlanDriftCandidates(ctx context.Context, workspacePath string) ([]Pl
 			pendingStepIDs = append(pendingStepIDs, id)
 		}
 	}
-	if len(pendingStepIDs) == 0 {
+	sort.Strings(pendingStepIDs)
+
+	// The workflow-level record (WorkflowDriftReviewStepID) is a DIFFERENT
+	// invariant from every real step's: a missing record here means "this
+	// workflow has never deleted a step," not "pending" — flagWorkflowDriftReviewOnDeletion
+	// only ever creates the record when a deletion actually happens, so
+	// requiring a first review of a record that was never created by any real
+	// event would force every workflow into a needless workflow-level audit
+	// pass. Only an EXISTING record with NeedsReview==true is pending.
+	workflowLevelPending := false
+	if cfg, ok := byID[WorkflowDriftReviewStepID]; ok && cfg.AgentConfigs != nil && cfg.AgentConfigs.DriftReview != nil && cfg.AgentConfigs.DriftReview.NeedsReview {
+		workflowLevelPending = true
+	}
+	if len(pendingStepIDs) == 0 && !workflowLevelPending {
 		return nil, nil
 	}
-	sort.Strings(pendingStepIDs)
 
 	// Workflow-wide checks run once and are attached to every candidate step:
 	// a report query or db/README contract break isn't owned by one step, but
@@ -216,7 +228,7 @@ func CollectPlanDriftCandidates(ctx context.Context, workspacePath string) ([]Pl
 	reportCheck, _ := CheckReportQueryCompatibility(ctx, workspacePath, planDriftPlainFileReader)
 	readmeCheck, _ := CheckDBReadmeContract(ctx, workspacePath, planDriftPlainFileReader)
 
-	candidates := make([]PlanDriftCandidate, 0, len(pendingStepIDs))
+	candidates := make([]PlanDriftCandidate, 0, len(pendingStepIDs)+1)
 	for _, stepID := range pendingStepIDs {
 		checks := []StepDriftCheck{reportCheck, readmeCheck}
 
@@ -229,6 +241,19 @@ func CollectPlanDriftCandidates(ctx context.Context, workspacePath string) ([]Pl
 		}
 
 		candidates = append(candidates, PlanDriftCandidate{StepID: stepID, StepType: stepTypeByID[stepID], Checks: checks})
+	}
+	if workflowLevelPending {
+		// No Go-computable per-step evidence exists for a deletion audit — it
+		// requires reading planning/changelog/'s delete_plan_steps entries and
+		// tracing dependent artifacts, which is exactly the reviewer turn's
+		// job (see plan-drift-review.md's workflow-level deletion audit
+		// section). Still attach the workflow-wide report/README checks every
+		// other candidate gets, for the same reason they're workflow-wide.
+		candidates = append(candidates, PlanDriftCandidate{
+			StepID:   WorkflowDriftReviewStepID,
+			StepType: "workflow",
+			Checks:   []StepDriftCheck{reportCheck, readmeCheck},
+		})
 	}
 	return candidates, nil
 }

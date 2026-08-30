@@ -112,6 +112,163 @@ func TestDeletePlanStepsRejectsReferencedTargetWithoutWriting(t *testing.T) {
 	}
 }
 
+// TestDeletePlanStepsFlagsWorkflowLevelDriftReview covers PLAT-258's deletion
+// coverage gap: a deleted step's own drift_review record is cascade-removed
+// along with its step_config.json entry, so CollectPlanDriftCandidates'
+// per-step scan structurally cannot see anything requiring review for it.
+// Deletion must instead flag the workflow-level WorkflowDriftReviewStepID
+// record needs_review, since that survives the deleted step's own removal.
+func TestDeletePlanStepsFlagsWorkflowLevelDriftReview(t *testing.T) {
+	oldPlan := &PlanningResponse{Steps: []PlanStepInterface{
+		regularStep("obsolete-step"),
+		regularStep("keeper"),
+	}}
+	planJSON, err := json.Marshal(oldPlan)
+	if err != nil {
+		t.Fatalf("marshal plan: %v", err)
+	}
+	existingConfig := StepConfigFile{Steps: []StepConfig{
+		{ID: "obsolete-step", AgentConfigs: &AgentConfigs{DriftReview: &StepDriftReview{NeedsReview: false, ReviewedAt: "2026-08-01T00:00:00Z"}}},
+	}}
+	existingConfigJSON, err := json.Marshal(existingConfig)
+	if err != nil {
+		t.Fatalf("marshal step_config.json fixture: %v", err)
+	}
+	var writtenConfig string
+	readFile := func(_ context.Context, path string) (string, error) {
+		if strings.HasSuffix(path, "step_config.json") {
+			return string(existingConfigJSON), nil
+		}
+		return string(planJSON), nil
+	}
+	writeFile := func(_ context.Context, path, content string) error {
+		if strings.HasSuffix(path, "step_config.json") {
+			writtenConfig = content
+		}
+		return nil
+	}
+	executor := createDeletePlanStepsExecutor("workflow", loggerv2.NewNoop(), readFile, writeFile, nil, nil)
+
+	if _, err := executor(context.Background(), map[string]interface{}{
+		"deleted_step_ids": []interface{}{"obsolete-step"},
+		"reason":           "no longer needed",
+	}); err != nil {
+		t.Fatalf("delete failed: %v", err)
+	}
+	if writtenConfig == "" {
+		t.Fatal("delete did not write step_config.json")
+	}
+
+	var file StepConfigFile
+	if err := json.Unmarshal([]byte(writtenConfig), &file); err != nil {
+		t.Fatalf("decode written step_config.json: %v", err)
+	}
+	var workflowRecord *StepConfig
+	for i := range file.Steps {
+		if file.Steps[i].ID == "obsolete-step" {
+			t.Fatalf("deleted step's own step_config.json entry must be cascade-removed, found: %+v", file.Steps[i])
+		}
+		if file.Steps[i].ID == WorkflowDriftReviewStepID {
+			workflowRecord = &file.Steps[i]
+		}
+	}
+	if workflowRecord == nil {
+		t.Fatalf("workflow-level drift review record was not created, entries: %+v", file.Steps)
+	}
+	if workflowRecord.AgentConfigs == nil || workflowRecord.AgentConfigs.DriftReview == nil || !workflowRecord.AgentConfigs.DriftReview.NeedsReview {
+		t.Fatalf("workflow-level drift review record not flagged needs_review: %+v", workflowRecord)
+	}
+}
+
+// TestFlagWorkflowDriftReviewOnDeletionPreservesPriorEvidence covers the
+// stale-flag semantics: a second deletion must flag the SAME record's
+// needs_review again without discarding whatever evidence a prior
+// workflow-level review already recorded — exactly like a real step's
+// drift_review record.
+func TestFlagWorkflowDriftReviewOnDeletionPreservesPriorEvidence(t *testing.T) {
+	configs := []StepConfig{
+		{ID: WorkflowDriftReviewStepID, AgentConfigs: &AgentConfigs{DriftReview: &StepDriftReview{
+			NeedsReview: false,
+			ReviewedAt:  "2026-08-01T00:00:00Z",
+			ReviewedBy:  "pulse:plan_drift_review",
+			Checks:      []StepDriftCheck{{CheckID: "deleted_step_dependent_artifact_audit", Status: "pass", Evidence: "no dangling references found for the prior deletion batch"}},
+		}}},
+	}
+	updated := flagWorkflowDriftReviewOnDeletion(configs, []string{"another-obsolete-step"})
+	if len(updated) != 1 {
+		t.Fatalf("expected the single workflow-level record to be updated in place, got %d entries", len(updated))
+	}
+	record := updated[0].AgentConfigs.DriftReview
+	if !record.NeedsReview {
+		t.Fatal("expected NeedsReview to be set true by a second deletion")
+	}
+	if record.ReviewedAt != "2026-08-01T00:00:00Z" || len(record.Checks) != 1 {
+		t.Fatalf("prior evidence was not preserved: %+v", record)
+	}
+}
+
+// TestCleanupOrphanStepConfigsPreservesWorkflowLevelRecord covers the risk
+// that cleanup_orphan_step_configs (which removes any step_config.json entry
+// not found in plan.json's live step set) would otherwise treat the
+// workflow-level sentinel as orphan garbage and delete the exact signal
+// flagWorkflowDriftReviewOnDeletion just set — it is never a "live" plan.json
+// step by definition, but it is also never orphan garbage.
+func TestCleanupOrphanStepConfigsPreservesWorkflowLevelRecord(t *testing.T) {
+	plan := &PlanningResponse{Steps: []PlanStepInterface{regularStep("keeper")}}
+	planJSON, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatalf("marshal plan: %v", err)
+	}
+	existingConfig := StepConfigFile{Steps: []StepConfig{
+		{ID: "keeper"},
+		{ID: "truly-orphaned-step"},
+		{ID: WorkflowDriftReviewStepID, AgentConfigs: &AgentConfigs{DriftReview: &StepDriftReview{NeedsReview: true}}},
+	}}
+	existingConfigJSON, err := json.Marshal(existingConfig)
+	if err != nil {
+		t.Fatalf("marshal step_config.json fixture: %v", err)
+	}
+	var writtenConfig string
+	readFile := func(_ context.Context, path string) (string, error) {
+		if strings.HasSuffix(path, "step_config.json") {
+			return string(existingConfigJSON), nil
+		}
+		return string(planJSON), nil
+	}
+	writeFile := func(_ context.Context, path, content string) error {
+		if strings.HasSuffix(path, "step_config.json") {
+			writtenConfig = content
+		}
+		return nil
+	}
+	executor := createCleanupOrphanStepConfigsExecutor("workflow", loggerv2.NewNoop(), readFile, writeFile)
+
+	result, err := executor(context.Background(), map[string]interface{}{})
+	if err != nil {
+		t.Fatalf("cleanup failed: %v", err)
+	}
+	if !strings.Contains(result, "truly-orphaned-step") {
+		t.Fatalf("expected the genuinely orphaned entry to be removed: %s", result)
+	}
+	if strings.Contains(result, WorkflowDriftReviewStepID) {
+		t.Fatalf("workflow-level record must not be reported as removed: %s", result)
+	}
+
+	var file StepConfigFile
+	if err := json.Unmarshal([]byte(writtenConfig), &file); err != nil {
+		t.Fatalf("decode written step_config.json: %v", err)
+	}
+	found := false
+	for _, cfg := range file.Steps {
+		if cfg.ID == WorkflowDriftReviewStepID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("workflow-level record was removed by cleanup_orphan_step_configs, entries: %+v", file.Steps)
+	}
+}
+
 func TestUpdateRoutingStepCanRepairPreviouslyDanglingGraph(t *testing.T) {
 	brokenPlan := &PlanningResponse{Steps: []PlanStepInterface{
 		routingStepWithTargets("already-deleted", "end"),
