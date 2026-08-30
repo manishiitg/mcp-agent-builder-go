@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | Claude Code |
-| Ticket state | `design complete; phase 1 implemented; phase 2 in progress (1 of 9 deterministic checks built); phases 3-6 not yet built` |
+| Ticket state | `design complete; phase 1 implemented; phase 2 in progress (3 of 9 deterministic checks built); phases 3-6 not yet built` |
 | Last synchronized | `2026-08-30` |
 
 - **Type:** platform feature (multi-phase), not a single bug fix. Filed at
@@ -92,7 +92,42 @@ column the report depends on — is drift, caught mechanically, no LLM needed.
 This is the exact concrete case ("a step can affect report") that prompted
 this whole investigation.
 
-Remaining Group 1/2 checks (2-9, minus the retired #8) are not yet built.
+**Built:** `CheckValidationSchemaDBRules` — Check 2. Dry-runs every
+`ValidationSchema.DB[]` rule's SQL against the live `db.sqlite` and applies
+its `MinRows`/`MaxRows`/`Checks` assertions via the REAL `evaluateDBRule`
+(`pre_validation_db.go`) — the exact pure function normal pre-validation
+calls, reused as-is rather than reimplemented, so semantics can never drift
+between what a live run checks and what this drift check checks. A rule that
+used to pass and no longer does (renamed column, row-count assertion broken)
+is drift.
+
+**Built:** `CheckValidationSchemaFileRules` — Check 5. Re-runs a step's
+`ValidationSchema.Files[].json_checks` against its most recent real output,
+via the real `validateJSONCheck` (`pre_validation.go`) — same reuse
+principle. Deliberately takes an injected `loadJSON(fileName)` resolver
+rather than finding "the most recent run's output file" itself — that
+run-folder resolution is orchestration-layer plumbing (phase 3), unrelated to
+what this check itself asserts, so it stays a pure, directly-testable
+function with synthetic data.
+
+**Deferred, with reasons (not just out of time):**
+- **Check 3** (evaluation_plan.json query compatibility) — deferred pending
+  confirming evaluation_plan.json actually embeds raw SQL the way reports do;
+  initial scan of `evaluation_plan_tool.go` found no clear evidence of this
+  shape. Needs investigation before building, not assumption.
+- **Check 4** (scripted step code `query_workflow_db(...)` extraction) —
+  deferred pending confirming the actual shape of embedded DB calls in
+  `learnings/<step-id>/main.py`.
+- **Check 13** (orphaned/legacy tables) — deliberately deferred until 3 and 4
+  exist: an orphan detector is only trustworthy once it has checked EVERY
+  real consumer of a table, and building it on top of only checks 1/2/5's
+  extracted references risks false positives (flagging a table that a
+  not-yet-built extractor would have found in use) — exactly the kind of
+  untrustworthy finding this whole ticket exists to avoid.
+- **Checks 6/7** (KB/learnings access mode vs. actual tool-call history) and
+  **9** (`db/README.md` contract drift) — deferred pending investigating
+  their actual data sources (event/tool-call log shape; `db/README.md`
+  authoring convention) rather than guessing at a format.
 
 ## Verification
 
@@ -105,13 +140,19 @@ description-review test pair exactly, plus the pre-existing
 `TestArtifactReviewNotices`/`TestMergeAgentConfigFieldsCoversEveryField`
 updated and passing.
 
-Phase 2 (Check 1): 8 new tests — 4 for `extractReportQueries` (all three quote
-styles, dedup-preserving-first-occurrence-position, escaped-quote handling,
-no-match case) and 4 for `CheckReportQueryCompatibility` (pass on matching
-schema, fail on a dropped column, pass when no report exists, and a dedicated
-safety test proving a report embedding an `UPDATE` statement never actually
-mutates the database — the `query_only` guard holds). `gofmt`/`go vet` clean,
-full package suite still green.
+Phase 2 (Checks 1, 2, 5): 16 new tests total. Check 1 — 4 for
+`extractReportQueries` (all three quote styles, dedup-preserving-first-
+occurrence-position, escaped-quote handling, no-match case) and 4 for
+`CheckReportQueryCompatibility` (pass on matching schema, fail on a dropped
+column, pass when no report exists, and a dedicated safety test proving a
+report embedding an `UPDATE` statement never actually mutates the database —
+the `query_only` guard holds). Check 2 — 4 for `CheckValidationSchemaDBRules`
+(assertions hold, fail on a renamed column, fail when a row-count assertion
+breaks, pass when no rules declared). Check 5 — 4 for
+`CheckValidationSchemaFileRules` (fields resolve, fail when a declared field
+is renamed away in real output, fail when a `must_exist` file is missing,
+pass when no rules declared). `gofmt`/`go vet` clean, full package suite
+still green.
 
 ## Reverify
 
