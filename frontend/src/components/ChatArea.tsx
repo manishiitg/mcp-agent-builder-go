@@ -984,6 +984,55 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     const timer = window.setTimeout(() => setResumeGaveUp(true), RESUME_SETTLE_MS)
     return () => window.clearTimeout(timer)
   }, [activeTabHasRestoredConversation, hasConversationContent, activeTabStreaming, activeSessionId])
+  // Read-only run view give-up TIMER. isReadOnlyRunView (a scheduled/bot run
+  // tab) forces resolveChatSurface to 'restoring' unconditionally while empty,
+  // by design (a read-only run must never bounce to the previous-chats
+  // landing panel — the "schedule-bounce" fix). But that means a tab whose
+  // session the backend no longer knows about (its in-memory event store was
+  // wiped by a server restart, or openScheduledRunInChat's own fetch failed
+  // and was silently swallowed) spins forever with no escape. This timer only
+  // flips a display flag consumed below to swap the spinner for an explicit
+  // "couldn't load" message with a retry action; it never changes
+  // resolveChatSurface's returned surface or its landing-avoidance guarantee.
+  const [readOnlyRunViewGaveUp, setReadOnlyRunViewGaveUp] = useState(false)
+  useEffect(() => {
+    if (!isReadOnlyRunView || displayEvents.length > 0 || activeTabStreaming) {
+      setReadOnlyRunViewGaveUp(false)
+      return
+    }
+    setReadOnlyRunViewGaveUp(false)
+    const timer = window.setTimeout(() => setReadOnlyRunViewGaveUp(true), RESUME_SETTLE_MS)
+    return () => window.clearTimeout(timer)
+  }, [isReadOnlyRunView, displayEvents.length, activeTabStreaming, activeSessionId])
+  // Manual retry for the give-up message above: re-fetch this session's
+  // events the same way openScheduledRunInChat does on first open. If the
+  // session really is gone, this comes back empty and the give-up timer
+  // above simply re-arms and fires again — an honest "still not there".
+  const retryReadOnlyRunView = useCallback(async () => {
+    const sessionId = activeSessionId
+    const tabId = activeTab?.tabId
+    if (!sessionId || !tabId) return
+    setReadOnlyRunViewGaveUp(false)
+    try {
+      const response = await agentApi.getRecentSessionEvents(sessionId)
+      const chatStore = useChatStore.getState()
+      if (response.events.length > 0) {
+        chatStore.setTabEvents(sessionId, response.events)
+      }
+      if (response.last_processed_index !== undefined) {
+        chatStore.setTabLastEventIndex(sessionId, response.last_processed_index)
+      }
+      if (response.has_more !== undefined) {
+        chatStore.setTabHasMoreOlderEvents(sessionId, response.has_more)
+      }
+      const isDone = response.session_status === 'completed' || response.session_status === 'stopped'
+      const isError = response.session_status === 'error'
+      chatStore.setTabCompleted(tabId, isDone)
+      chatStore.setTabStreaming(tabId, !isDone && !isError && response.session_status === 'running')
+    } catch {
+      // Leave it to the give-up timer to re-fire; nothing else to do here.
+    }
+  }, [activeSessionId, activeTab?.tabId])
   // resumePending — SYNCHRONOUS (derived in render, NOT an effect-set state). This
   // is the regression fix: on a Resume click restoredConversationPath is set
   // synchronously (setTabConfig), so this is already true on the FIRST render →
@@ -3490,8 +3539,26 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
             onPresetSelected={handleWorkflowPresetSelected}
             onWorkflowPhaseChange={setCurrentWorkflowPhase}
           >
-            {/* restoring — reconnectWorkflowTabs is replaying events. */}
-            {visibleWorkflowSurface === 'restoring' && (
+            {/* restoring — reconnectWorkflowTabs is replaying events. A
+                read-only run view (scheduled/bot run) that never receives
+                content — its session is gone from the backend's in-memory
+                event store, or the fetch itself failed — has no other escape
+                from 'restoring' (see readOnlyRunViewGaveUp above), so past
+                the give-up timeout show an explicit message instead of
+                spinning forever. */}
+            {visibleWorkflowSurface === 'restoring' && isReadOnlyRunView && readOnlyRunViewGaveUp && (
+              <div className="flex flex-col items-center justify-center py-12 gap-2 text-center px-4">
+                <p className="text-sm text-gray-500 dark:text-gray-400">Couldn't load this run's session data — it may no longer be available.</p>
+                <button
+                  type="button"
+                  className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
+                  onClick={() => { void retryReadOnlyRunView() }}
+                >
+                  Try again
+                </button>
+              </div>
+            )}
+            {visibleWorkflowSurface === 'restoring' && !(isReadOnlyRunView && readOnlyRunViewGaveUp) && (
               <div className="flex flex-col items-center justify-center py-12 gap-3">
                 <div className="w-6 h-6 border-2 border-gray-300 dark:border-gray-600 border-t-blue-600 dark:border-t-blue-400 rounded-full animate-spin"></div>
                 <p className="text-sm text-gray-500 dark:text-gray-400">Restoring previous session...</p>
