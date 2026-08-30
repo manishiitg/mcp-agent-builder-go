@@ -41,6 +41,12 @@ export type WorkflowWorkspaceView =
   | 'database'
   | 'evaluation'
   | 'schedules'
+  | 'skills'
+  | 'mcp'
+  | 'secrets'
+  | 'folders'
+  | 'browser'
+  | 'llm'
   | null
 
 // Layout direction for workflow canvas
@@ -105,6 +111,12 @@ function normalizeWorkflowWorkspaceView(view: unknown): WorkflowWorkspaceView {
     case 'database':
     case 'evaluation':
     case 'schedules':
+    case 'skills':
+    case 'mcp':
+    case 'secrets':
+    case 'folders':
+    case 'browser':
+    case 'llm':
     case null:
       return view
     case 'soul':

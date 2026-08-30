@@ -10,6 +10,8 @@ interface SecretSelectionSectionProps {
   selectedGlobalSecrets?: string[] | null; // null = all selected, [] = none selected
   onGlobalSecretChange?: (names: string[] | null) => void;
   workflowPath?: string;
+  /** Lets the selector use an embedded side panel's remaining vertical space. */
+  fillAvailableHeight?: boolean;
 }
 
 const isValidName = (name: string) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name);
@@ -20,6 +22,7 @@ export const SecretSelectionSection: React.FC<SecretSelectionSectionProps> = ({
   selectedGlobalSecrets = [],
   onGlobalSecretChange,
   workflowPath,
+  fillAvailableHeight = false,
 }) => {
   const secrets = useSecretsStore((s) => s.secrets);
   const globalSecrets = useSecretsStore((s) => s.globalSecrets);
@@ -149,14 +152,14 @@ export const SecretSelectionSection: React.FC<SecretSelectionSectionProps> = ({
   const sortedWorkflowSecrets = [...workflowSecrets].sort((a, b) => a.name.localeCompare(b.name));
 
   return (
-    <div className="space-y-2">
-      <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 flex items-center gap-2">
+    <div className={fillAvailableHeight ? 'flex h-full min-h-0 flex-col gap-2' : 'space-y-2'}>
+      <label className="block shrink-0 text-sm font-medium text-gray-900 dark:text-gray-100 flex items-center gap-2">
         <KeyRound className="w-4 h-4 text-amber-500" />
         Secrets
       </label>
 
       {normalizedWorkflowPath && (
-        <div className="space-y-2 rounded-md border border-amber-200 bg-amber-50 p-3 dark:border-amber-900/60 dark:bg-amber-950/20">
+        <div className="shrink-0 space-y-2 rounded-md border border-amber-200 bg-amber-50 p-3 dark:border-amber-900/60 dark:bg-amber-950/20">
           <div className="flex items-center justify-between gap-2">
             <div className="min-w-0">
               <div className="text-sm font-medium text-gray-900 dark:text-gray-100">Automation Secrets</div>
@@ -195,7 +198,7 @@ export const SecretSelectionSection: React.FC<SecretSelectionSectionProps> = ({
         </div>
       )}
 
-      <div className="border border-gray-200 dark:border-gray-700 rounded-md max-h-64 overflow-y-auto bg-white dark:bg-gray-800">
+      <div className={`border border-gray-200 dark:border-gray-700 rounded-md overflow-y-auto bg-white dark:bg-gray-800 ${fillAvailableHeight ? 'min-h-0 flex-1' : 'max-h-64'}`}>
         {sortedWorkflowSecrets.map((secret) => (
           <div key={`workflow-${secret.name}`} className="flex items-center gap-2 p-3 border-b border-gray-200 dark:border-gray-700 last:border-b-0 hover:bg-gray-100 dark:hover:bg-gray-700">
             <Checkbox

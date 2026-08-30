@@ -1,6 +1,6 @@
 import React, { useMemo, useCallback, useRef, useEffect, forwardRef, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
-import { PanelRightOpen } from 'lucide-react'
+import { GripVertical, Laptop, PanelRightClose, PanelRightOpen, Smartphone, Tablet } from 'lucide-react'
 import { WorkflowCanvas, type WorkflowCanvasRef } from './canvas'
 import { useGlobalPresetStore } from '../../stores/useGlobalPresetStore'
 import { useModeStore } from '../../stores/useModeStore'
@@ -40,7 +40,10 @@ import {
   REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT,
   openWorkflowInDefaultPreview,
   readReportPreviewPreference,
+  readWorkflowSplitPreference,
   type ReportPreviewDevice,
+  writeReportPreviewPreference,
+  writeWorkflowSplitPreference,
 } from '../../utils/reportPreviewPreference'
 
 // Helper component to get observerId and render ChatArea
@@ -102,6 +105,19 @@ const WORKFLOW_KILL_AND_START_STOP_TIMEOUT_MS = 30_000
 const WORKFLOW_CHAT_CONTENT_EVENT_TYPES = new Set(['user_message', 'conversation_end', 'unified_completion'])
 function normalizeWorkflowPath(path?: string | null): string {
   return (path || '').replace(/\/+$/, '')
+}
+
+function defaultWorkflowSplitRatio(device: ReportPreviewDevice, width = typeof window === 'undefined' ? 1280 : window.innerWidth): number {
+  if (device === 'mobile') return clampWorkflowSplitRatio((width - 480) / width, width)
+  if (device === 'desktop') return clampWorkflowSplitRatio(380 / width, width)
+  return 0.5
+}
+
+function clampWorkflowSplitRatio(ratio: number, width: number): number {
+  const minPaneWidth = 240
+  const minRatio = Math.max(0.15, Math.min(0.5, minPaneWidth / Math.max(width, minPaneWidth * 2)))
+  const maxRatio = Math.min(0.85, 1 - minRatio)
+  return Math.max(minRatio, Math.min(maxRatio, ratio))
 }
 
 function hasWorkflowChatContent(events?: PollingEvent[]): boolean {
@@ -986,6 +1002,58 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
   const [reportPreviewPreference, setReportPreviewPreference] = useState<ReportPreviewDevice>(
     () => readReportPreviewPreference(workspacePath),
   )
+  const splitLayoutRef = useRef<HTMLDivElement>(null)
+  const [workspaceSplitRatio, setWorkspaceSplitRatio] = useState(() => (
+    readWorkflowSplitPreference(workspacePath, readReportPreviewPreference(workspacePath))
+      ?? defaultWorkflowSplitRatio(readReportPreviewPreference(workspacePath))
+  ))
+  const workspaceSplitRatioRef = useRef(workspaceSplitRatio)
+
+  useEffect(() => {
+    const saved = readWorkflowSplitPreference(workspacePath, reportPreviewPreference)
+    const width = splitLayoutRef.current?.getBoundingClientRect().width || window.innerWidth
+    const next = saved ?? defaultWorkflowSplitRatio(reportPreviewPreference, width)
+    workspaceSplitRatioRef.current = next
+    setWorkspaceSplitRatio(next)
+  }, [reportPreviewPreference, workspacePath])
+
+  const setSplitRatio = useCallback((next: number, persist = false) => {
+    const width = splitLayoutRef.current?.getBoundingClientRect().width || window.innerWidth
+    const ratio = clampWorkflowSplitRatio(next, width)
+    workspaceSplitRatioRef.current = ratio
+    setWorkspaceSplitRatio(ratio)
+    if (persist) writeWorkflowSplitPreference(workspacePath, ratio, reportPreviewPreference)
+  }, [reportPreviewPreference, workspacePath])
+
+  const handleSplitPointerDown = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
+    if (window.innerWidth < 768) return
+    event.preventDefault()
+    const container = splitLayoutRef.current
+    if (!container) return
+    event.currentTarget.setPointerCapture(event.pointerId)
+    const rect = container.getBoundingClientRect()
+    const update = (clientX: number) => setSplitRatio((clientX - rect.left) / rect.width)
+    update(event.clientX)
+    const onMove = (moveEvent: PointerEvent) => {
+      if (moveEvent.pointerId === event.pointerId) update(moveEvent.clientX)
+    }
+    const onEnd = (endEvent: PointerEvent) => {
+      if (endEvent.pointerId !== event.pointerId) return
+      writeWorkflowSplitPreference(workspacePath, workspaceSplitRatioRef.current, reportPreviewPreference)
+      event.currentTarget.removeEventListener('pointermove', onMove)
+      event.currentTarget.removeEventListener('pointerup', onEnd)
+      event.currentTarget.removeEventListener('pointercancel', onEnd)
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    event.currentTarget.addEventListener('pointermove', onMove)
+    event.currentTarget.addEventListener('pointerup', onEnd)
+    event.currentTarget.addEventListener('pointercancel', onEnd)
+  }, [reportPreviewPreference, setSplitRatio, workspacePath])
+
+  const collapseWorkspaceFromRail = useCallback(() => {
+    setShowWorkspacePane(false)
+    setWorkspaceMinimized(true)
+  }, [setShowWorkspacePane, setWorkspaceMinimized])
 
   const openDefaultPreview = useCallback(() => {
     setReportPreviewPreference(DEFAULT_REPORT_PREVIEW_DEVICE)
@@ -1090,7 +1158,13 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
     workflowWorkspaceView === 'knowledgebase' ||
     workflowWorkspaceView === 'database' ||
     workflowWorkspaceView === 'evaluation' ||
-    workflowWorkspaceView === 'schedules'
+    workflowWorkspaceView === 'schedules' ||
+    workflowWorkspaceView === 'skills' ||
+    workflowWorkspaceView === 'mcp' ||
+    workflowWorkspaceView === 'secrets' ||
+    workflowWorkspaceView === 'folders' ||
+    workflowWorkspaceView === 'browser' ||
+    workflowWorkspaceView === 'llm'
   const chatPaneVisibilityClass =
     workspacePaneVisible && isWorkspaceViewActive
       ? 'hidden md:flex'
@@ -1100,17 +1174,15 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
   //   tablet → report/flow and chat each take half the available width
   //   laptop → mobile-width chat, report/flow takes the remaining width
   //   default → normal split pane
-  const splitGridCols = previewPaneTier === 'mobile' ? 'md:grid-cols-[minmax(0,1fr)_480px]'
-    : previewPaneTier === 'tablet' ? 'md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]'
-    : previewPaneTier === 'laptop' ? 'md:grid-cols-[minmax(320px,380px)_minmax(0,1fr)]'
-    : 'md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]'
-  // Animate the GRID TRACK widths on the container so the chat↔report resize
-  // glides — the panes just follow their grid column instead of fighting it with
-  // per-tier explicit widths. (grid-template-columns animation is supported by
-  // the Electron Chromium runtime.)
+  // The divider sits between chat and the workspace. Each device preview keeps
+  // its own saved ratio, so Mobile, Tablet, and Laptop can be switched without
+  // one mode inheriting another mode's layout.
   const splitLayoutClassName = !showChatArea || !workspacePaneVisible
     ? 'flex-1 min-h-0 flex flex-col'
-    : `flex-1 min-h-0 flex flex-col md:grid ${splitGridCols} md:grid-rows-[auto_minmax(0,1fr)] md:transition-[grid-template-columns] md:duration-300 md:ease-in-out`
+    : 'flex-1 min-h-0 flex flex-col md:grid md:grid-rows-[auto_minmax(0,1fr)] md:[grid-template-columns:var(--workflow-split-columns)] md:transition-[grid-template-columns] md:duration-150 md:ease-out'
+  const splitLayoutStyle = showChatArea && workspacePaneVisible
+    ? ({ '--workflow-split-columns': `minmax(240px, ${workspaceSplitRatio}fr) minmax(240px, ${1 - workspaceSplitRatio}fr)` } as React.CSSProperties)
+    : undefined
   const canvasPaneClassName = !showChatArea
     ? 'flex-1 min-h-0 min-w-0'
     : !workspacePaneVisible
@@ -2252,7 +2324,9 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
           'chat' when the click lands inside it. Capture fires outer→inner, so the
           deeper chat handler wins for chat clicks while canvas clicks stay 'preview'. */}
       <div
+        ref={splitLayoutRef}
         className={splitLayoutClassName}
+        style={splitLayoutStyle}
         onMouseDownCapture={showChatArea && workspacePaneVisible ? () => setFocusedPane('preview') : undefined}
       >
         {showChatArea && !workspacePaneVisible && canvasElement}
@@ -2301,6 +2375,63 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
         )}
 
         {workspacePaneVisible && canvasElement}
+
+        {showChatArea && workspacePaneVisible && (
+          <div className="group/split relative z-30 hidden min-h-0 w-0 justify-self-start md:col-start-2 md:row-start-2 md:block">
+            <button
+              type="button"
+              onPointerDown={handleSplitPointerDown}
+              onKeyDown={(event) => {
+                if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+                event.preventDefault()
+                setSplitRatio(workspaceSplitRatioRef.current + (event.key === 'ArrowLeft' ? -0.02 : 0.02), true)
+              }}
+              className="absolute -left-1.5 inset-y-0 z-10 w-3 cursor-col-resize touch-none outline-none"
+              aria-label="Resize chat and workspace panels"
+              aria-orientation="vertical"
+              role="separator"
+              aria-valuemin={15}
+              aria-valuemax={85}
+              aria-valuenow={Math.round(workspaceSplitRatio * 100)}
+            >
+              <span className="absolute bottom-0 left-1/2 top-0 w-px -translate-x-1/2 bg-border transition-colors group-hover/split:bg-primary group-focus-within/split:bg-primary" />
+              <span className="absolute left-1/2 top-1/2 flex h-6 w-3.5 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-sm transition-colors group-hover/split:border-primary group-hover/split:text-primary group-focus-within/split:border-primary group-focus-within/split:text-primary">
+                <GripVertical className="h-3 w-3" />
+              </span>
+            </button>
+            <div className="pointer-events-none absolute left-0 top-1/2 z-20 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-0.5 rounded-md border border-border bg-background/95 p-0.5 shadow-lg backdrop-blur-sm opacity-0 transition-opacity group-hover/split:opacity-100 group-focus-within/split:opacity-100">
+              {([
+                ['mobile', Smartphone, 'Mobile preview'],
+                ['tablet', Tablet, 'Tablet preview'],
+                ['desktop', Laptop, 'Laptop preview'],
+              ] as const).map(([device, Icon, label]) => (
+                <button
+                  key={device}
+                  type="button"
+                  onPointerDown={event => event.stopPropagation()}
+                  onClick={() => writeReportPreviewPreference(workspacePath, device)}
+                  className={`pointer-events-auto flex h-6 w-6 items-center justify-center rounded transition-colors ${reportPreviewPreference === device ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}
+                  aria-label={label}
+                  aria-pressed={reportPreviewPreference === device}
+                  title={label}
+                >
+                  <Icon className="h-3 w-3" />
+                </button>
+              ))}
+              <span className="h-px w-3 bg-border" />
+              <button
+                type="button"
+                onPointerDown={event => event.stopPropagation()}
+                onClick={collapseWorkspaceFromRail}
+                className="pointer-events-auto flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                aria-label="Collapse workspace panel"
+                title="Collapse workspace panel"
+              >
+                <PanelRightClose className="h-3 w-3" />
+              </button>
+            </div>
+          </div>
+        )}
       </div>
       <ConfirmationDialog
         isOpen={killAndStartState.isOpen}
