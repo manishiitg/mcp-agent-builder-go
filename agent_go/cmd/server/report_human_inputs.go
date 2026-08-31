@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -177,12 +178,22 @@ func openReportHumanInputDB(ctx context.Context, workspacePath string, create bo
 		}
 		return "", nil, err
 	}
-	db, err := sql.Open("sqlite", dbPath)
+	// WAL mode is required, not optional: in the default rollback-journal mode
+	// a writer's transaction takes an exclusive lock on the whole file that
+	// blocks every concurrent reader, not just other writers. This function is
+	// opened fresh per call from many call sites in pulse_worklist.go, and
+	// get_pulse_state(view=module) alone opens/closes it 5 times sequentially
+	// for one logical call -- each one a fresh collision window against any
+	// concurrent step writing to this same db.sqlite. Embedding the pragmas in
+	// the DSN (rather than a runtime PRAGMA ExecContext call, as before)
+	// matters too: this *sql.DB has no SetMaxOpenConns cap, so a runtime
+	// PRAGMA on one pooled connection would silently not apply if the pool
+	// opened a second connection for a concurrent query. Same pattern already
+	// proven correct elsewhere in this codebase (pkg/costledger/sqlite.go,
+	// plan_drift_checks.go, loopclosure.go, whatsapp_service.go).
+	dsn := (&url.URL{Scheme: "file", Path: dbPath}).String() + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
-		return "", nil, err
-	}
-	if _, err := db.ExecContext(ctx, "PRAGMA busy_timeout = 5000"); err != nil {
-		_ = db.Close()
 		return "", nil, err
 	}
 	if err := ensureReportHumanInputSchema(ctx, db); err != nil {
