@@ -457,9 +457,39 @@ function isMissedSchedule(job: ScheduledJob): boolean {
   return !!job.enabled && (job.missed_run_count ?? 0) > 0
 }
 
-function getScheduleModeLabel(job: ScheduledJob): string | null {
-  if (job.mode !== 'workshop') return null
-  return 'Saved instructions'
+type ScheduleExecutionScope = {
+  label: string
+  title: string
+}
+
+function getScheduleExecutionScope(job: ScheduledJob): ScheduleExecutionScope | null {
+  if (job.entity_type !== 'workflow') return null
+
+  const selectedRoutes = Object.values(job.route_selections ?? {}).filter(Boolean)
+  if (selectedRoutes.length > 0) {
+    const routeList = selectedRoutes.join(', ')
+    return {
+      label: selectedRoutes.length === 1 ? `Route: ${routeList}` : `${selectedRoutes.length} selected routes`,
+      title: `Runs the full workflow using the saved route selection${selectedRoutes.length === 1 ? '' : 's'}: ${routeList}`,
+    }
+  }
+
+  const instructions = job.messages?.join('\n').toLowerCase() ?? ''
+  if (!instructions || instructions.includes('run_full_workflow')) {
+    return {
+      label: 'Full workflow',
+      title: 'Runs the complete workflow from the beginning for the selected group or groups.',
+    }
+  }
+
+  if (instructions.includes('execute_step') || instructions.includes('run only step-')) {
+    return {
+      label: 'Selected step',
+      title: 'Runs only the step or steps named in this schedule, not the full workflow.',
+    }
+  }
+
+  return null
 }
 
 function formatMissedScheduleReason(job: ScheduledJob): string {
@@ -1496,6 +1526,7 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
     const missedDelayMs = getMissedScheduleDelayMs(job)
     const missedReason = isMissedJob ? formatMissedScheduleReason(job) : ''
     const hasWorkspace = !!job.workspace_path || !!preset?.workspacePath
+    const executionScope = getScheduleExecutionScope(job)
 
     return (
       <div key={job.id} className={`px-4 py-3 ${!job.enabled ? 'opacity-65' : ''}`}>
@@ -1585,9 +1616,9 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                       Groups: {job.group_names.join(', ')}
                     </span>
                   )}
-                  {getScheduleModeLabel(job) && (
-                    <span className="rounded-full bg-purple-100 px-1.5 py-0.5 text-[11px] font-medium text-purple-600 dark:bg-purple-900/30 dark:text-purple-300" title="Runs the saved workflow instructions automatically.">
-                      {getScheduleModeLabel(job)}
+                  {executionScope && (
+                    <span className="rounded-full bg-purple-100 px-1.5 py-0.5 text-[11px] font-medium text-purple-600 dark:bg-purple-900/30 dark:text-purple-300" title={executionScope.title}>
+                      {executionScope.label}
                     </span>
                   )}
                   {!hasWorkspace && (
@@ -2405,6 +2436,7 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                 const instructionsExpanded = expandedInstructionJobIds.includes(job.id)
                 const instructionText = job.messages?.join('\n') ?? ''
                 const hasLongInstructions = instructionText.length > 280 || (job.messages?.length ?? 0) > 2
+                const executionScope = getScheduleExecutionScope(job)
                 const hasWorkspace = !!job.workspace_path || !!preset?.workspacePath
                 const runs = jobRuns[job.id] ?? []
                 const isLoadingThis = !!loadingRunIds[job.id]
@@ -2511,9 +2543,9 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                           {job.group_names && job.group_names.length > 0 && (
                             <span>Groups: {job.group_names.join(', ')}</span>
                           )}
-                          {getScheduleModeLabel(job) && (
-                            <span className="px-1.5 py-0.5 rounded-full bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400 font-medium" title="Runs the saved workflow instructions automatically.">
-                              {getScheduleModeLabel(job)}
+                          {executionScope && (
+                            <span className="px-1.5 py-0.5 rounded-full bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400 font-medium" title={executionScope.title}>
+                              {executionScope.label}
                             </span>
                           )}
                         </div>
