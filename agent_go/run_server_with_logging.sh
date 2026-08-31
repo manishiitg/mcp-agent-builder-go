@@ -51,6 +51,21 @@ MCP_SERVER_API_TOKEN_ARG_SET=false
 EXPECT_MCP_SERVER_API_TOKEN_VALUE=false
 POSITIONAL_ARGS=()
 
+print_usage() {
+    printf '%s\n' 'Usage: ./run_server_with_logging.sh [options]'
+    printf '%s\n' ''
+    printf '%s\n' 'Options:'
+    printf '%s\n' '  --with-workspace              Start the local workspace service.'
+    printf '%s\n' '  --with-frontend               Start the frontend and Electron app.'
+    printf '%s\n' '  --only-frontend               Start only the frontend and Electron app.'
+    printf '%s\n' '  --build                       Build and serve the frontend (use with --only-frontend).'
+    printf '%s\n' '  --without-electron            Do not launch Electron.'
+    printf '%s\n' '  --background, -b              Run services in the background.'
+    printf '%s\n' '  --test-connections, -t [file] Test an MCP config file.'
+    printf '%s\n' '  --mcp-api-token <token>       Set the MCP server API token for this run.'
+    printf '%s\n' '  --help, -h                    Show this help message.'
+}
+
 for arg in "$@"; do
     if [ "$EXPECT_MCP_SERVER_API_TOKEN_VALUE" = true ]; then
         MCP_SERVER_API_TOKEN_ARG="$arg"
@@ -94,11 +109,24 @@ for arg in "$@"; do
             MCP_SERVER_API_TOKEN_ARG="${arg#--mcp-api-token=}"
             MCP_SERVER_API_TOKEN_ARG_SET=true
             ;;
+        --help|-h)
+            print_usage
+            exit 0
+            ;;
         *)
             POSITIONAL_ARGS+=("$arg")
             ;;
     esac
 done
+
+# Only connection-test mode accepts a positional MCP configuration path. Treat
+# anything else as an error: a typo such as --with-frontendclear must not be
+# silently ignored and start a confusing partial local stack.
+if [ "${#POSITIONAL_ARGS[@]}" -gt 0 ] && [ "$TEST_CONNECTIONS" != true ]; then
+    echo "❌ Error: unknown option or argument: ${POSITIONAL_ARGS[0]}"
+    echo "   Run ./run_server_with_logging.sh --help to see supported options."
+    exit 2
+fi
 
 if [ "$EXPECT_MCP_SERVER_API_TOKEN_VALUE" = true ]; then
     echo "❌ Error: --mcp-api-token requires a token value"
