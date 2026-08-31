@@ -186,3 +186,60 @@ func TestMountNamespaceFallbackEnforcesLandlockRejectedOverlapPolicy(t *testing.
 		t.Error("SECURITY VIOLATION: write to the blocked-write subfolder succeeded")
 	}
 }
+
+// TestMountNamespaceFallbackHandlesFileReadPath is the live reproduction of
+// a second real production incident on the Dominion Hetzner deployment
+// 2026-08-31: every execute_shell_command call for a step whose scope
+// included Workflow/tectonicusadaytrading/schedule-runs.json (a plain file,
+// not a directory) failed unconditionally with `mount(2) system call
+// failed: Not a directory`, regardless of the command actually requested.
+//
+// generateMountScript's ReadPaths/WritePaths/BlockedWritePaths loops
+// assumed every configured path was a directory: `mkdir -p "$absPath"`
+// always creates a directory node (absPath never pre-exists -- step 3
+// already tmpfs-hid the whole BaseDir), so bind-mounting a *file* source
+// onto that freshly-created *directory* target failed at the kernel level.
+// Combined with `set -e`, this aborted the whole script every time.
+//
+// Calls executeIsolatedMountNamespace directly (an unexported, same-package
+// method) rather than going through ExecuteIsolated's Landlock-first
+// selection, since Landlock's own path handling was never buggy (it stats
+// each path and correctly masks directory-only rights for files) -- this
+// test needs to exercise the mount-namespace fallback specifically,
+// regardless of whether this environment's Landlock would normally be
+// chosen first.
+func TestMountNamespaceFallbackHandlesFileReadPath(t *testing.T) {
+	root := t.TempDir()
+	workflowDir := filepath.Join(root, "workflow")
+	if err := os.MkdirAll(workflowDir, 0755); err != nil {
+		t.Fatalf("mkdir %s: %v", workflowDir, err)
+	}
+	scheduleFile := filepath.Join(workflowDir, "schedule-runs.json")
+	if err := os.WriteFile(scheduleFile, []byte(`{"schedules":[]}`), 0644); err != nil {
+		t.Fatalf("seed schedule-runs.json: %v", err)
+	}
+
+	isolator := &Isolator{
+		ReadPaths:  []string{workflowDir, scheduleFile},
+		WritePaths: []string{workflowDir},
+		WorkDir:    workflowDir,
+		// BaseDir must be set explicitly: see the identical note in
+		// TestMountNamespaceFallbackEnforcesLandlockRejectedOverlapPolicy.
+		BaseDir: root,
+	}
+
+	command := fmt.Sprintf(`test "$(cat %q)" = '{"schedules":[]}'`, scheduleFile)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cmd, cleanup, err := isolator.executeIsolatedMountNamespace(ctx, command, nil)
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if err != nil {
+		t.Skipf("mount-namespace fallback is unavailable in this environment (%v) -- not what this fix changes; run on the actual deployment host to verify it", err)
+	}
+
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("execute_shell_command-equivalent failed with a file in ReadPaths (the exact live incident): %v\noutput: %s", err, output)
+	}
+}

@@ -528,6 +528,82 @@ func (iso *Isolator) generateStrictSandboxProfile() string {
 	return sb.String()
 }
 
+// resolveTempAndAbsPath computes the two locations generateMountScript's
+// per-path steps need: where a configured path lives inside the preserved
+// original-workspace copy (tempPath), and where it must end up in the
+// tmpfs-hidden workspace (absPath).
+func resolveTempAndAbsPath(path, baseDir, tempDir string) (tempPath, absPath string) {
+	relPath := strings.TrimPrefix(path, baseDir+"/")
+	if relPath == path && !strings.HasPrefix(path, "/") {
+		relPath = path
+	}
+	tempPath = filepath.Join(tempDir, relPath)
+	absPath = path
+	if !strings.HasPrefix(path, "/") {
+		absPath = filepath.Join(baseDir, path)
+	}
+	return tempPath, absPath
+}
+
+// writeCreatePlaceholder emits the shell lines that create an empty node at
+// absPath matching tempPath's type (directory or plain file), without
+// mounting anything yet.
+//
+// Every ReadPaths/WritePaths/BlockedWritePaths entry was previously assumed
+// to be a directory unconditionally, both in whether a placeholder was
+// created at all in this shape and in when: the old code created each
+// path's placeholder and bind-mounted it in the same per-path step,
+// interleaved with every other path's bind-mount. `mkdir -p "$absPath"`
+// always creates a directory node (absPath never pre-exists, since step 3
+// already tmpfs-hid the whole baseDir), and bind-mounting a *file* source
+// onto that freshly created *directory* target fails at the kernel level
+// with exactly `mount(2) system call failed: Not a directory`. Combined
+// with `set -e`, this aborted the whole script -- every execute_shell_command
+// call failed unconditionally, regardless of the command actually
+// requested, whenever any configured path in scope happened to be a plain
+// file rather than a directory. Confirmed live on the Dominion deployment
+// 2026-08-31: Workflow/tectonicusadaytrading/schedule-runs.json (a real
+// file) was the first one hit, but the bug was general, not specific to
+// that one file -- any file-shaped read/write/blocked-write path would
+// have hit it. The primary Landlock backend (landlock_runner_linux.go)
+// already stats each path and handles this correctly; only this
+// mount-namespace fallback (used when Landlock itself is unavailable) had
+// the gap.
+//
+// Fixing only the directory-vs-file branch surfaced a second, narrower
+// ordering bug: if a file's own parent directory was ALSO independently
+// listed (e.g. the workflow root in ReadPaths, with one of its files
+// listed again more specifically) and got read-only bind-mounted first,
+// creating the file's own placeholder afterward failed with "Read-only
+// file system" -- the touch happened after its parent was already
+// read-only. All placeholders for every ReadPaths/WritePaths/BlockedWritePaths
+// entry are therefore created in one pass (this function, called for every
+// path up front) strictly before any bind-mount runs, while the whole tree
+// is still the fresh, fully-writable tmpfs from step 3.
+func writeCreatePlaceholder(sb *strings.Builder, tempPath, absPath string) {
+	sb.WriteString(fmt.Sprintf("if [ -d \"%s\" ]; then\n", tempPath))
+	sb.WriteString(fmt.Sprintf("  mkdir -p \"%s\"\n", absPath))
+	sb.WriteString(fmt.Sprintf("elif [ -e \"%s\" ]; then\n", tempPath))
+	sb.WriteString(fmt.Sprintf("  mkdir -p \"$(dirname \"%s\")\"\n", absPath))
+	sb.WriteString(fmt.Sprintf("  : > \"%s\"\n", absPath))
+	sb.WriteString("fi\n")
+}
+
+// writeBindMountOnly emits the shell line that bind-mounts tempPath onto
+// absPath. Assumes writeCreatePlaceholder has already been run for this
+// path (and every other configured path) earlier in the script, so no
+// mkdir/touch happens here -- see writeCreatePlaceholder's comment for why
+// placeholder creation and mounting must not be interleaved per-path.
+func writeBindMountOnly(sb *strings.Builder, tempPath, absPath string, readOnly bool) {
+	roFlag := ""
+	if readOnly {
+		roFlag = "-o ro "
+	}
+	sb.WriteString(fmt.Sprintf("if [ -e \"%s\" ]; then\n", tempPath))
+	sb.WriteString(fmt.Sprintf("  mount --bind %s\"%s\" \"%s\"\n", roFlag, tempPath, absPath))
+	sb.WriteString("fi\n")
+}
+
 // generateMountScript creates a shell script for filesystem isolation
 // Strategy: Bind workspace to temp, hide with tmpfs, then selectively expose allowed paths
 func (iso *Isolator) generateMountScript(command string, args []string) string {
@@ -596,24 +672,33 @@ func (iso *Isolator) generateMountScript(command string, args []string) string {
 	sb.WriteString("# Hide workspace with tmpfs overlay\n")
 	sb.WriteString(fmt.Sprintf("mount -t tmpfs tmpfs \"%s\"\n\n", baseDir))
 
+	// Step 3.5: Create every configured path's placeholder node (directory
+	// or empty file, matching what's actually at that path in tempDir)
+	// before any bind-mount runs. Must happen in one pass across ALL of
+	// ReadPaths/WritePaths/BlockedWritePaths, strictly before step 4 starts
+	// -- see writeCreatePlaceholder's comment for why interleaving
+	// placeholder creation with bind-mounting (the previous structure)
+	// caused two different real failures.
+	allConfiguredPaths := make([]string, 0, len(iso.ReadPaths)+len(iso.WritePaths)+len(iso.BlockedWritePaths))
+	allConfiguredPaths = append(allConfiguredPaths, iso.ReadPaths...)
+	allConfiguredPaths = append(allConfiguredPaths, iso.WritePaths...)
+	allConfiguredPaths = append(allConfiguredPaths, iso.BlockedWritePaths...)
+	if len(allConfiguredPaths) > 0 {
+		sb.WriteString("# Create placeholder nodes for every configured path before mounting any of them\n")
+		for _, path := range allConfiguredPaths {
+			tempPath, absPath := resolveTempAndAbsPath(path, baseDir, tempDir)
+			writeCreatePlaceholder(&sb, tempPath, absPath)
+		}
+		sb.WriteString("\n")
+	}
+
 	// Step 4: Bind-mount read paths from temp (read-only)
 	// Includes write path dirs created in step 2 (they exist in the original filesystem)
 	if len(iso.ReadPaths) > 0 {
 		sb.WriteString("# Mount read-only paths from original workspace\n")
 		for _, path := range iso.ReadPaths {
-			relPath := strings.TrimPrefix(path, baseDir+"/")
-			if relPath == path && !strings.HasPrefix(path, "/") {
-				relPath = path
-			}
-			tempPath := filepath.Join(tempDir, relPath)
-			absPath := path
-			if !strings.HasPrefix(path, "/") {
-				absPath = filepath.Join(baseDir, path)
-			}
-			sb.WriteString(fmt.Sprintf("if [ -e \"%s\" ]; then\n", tempPath))
-			sb.WriteString(fmt.Sprintf("  mkdir -p \"%s\"\n", absPath))
-			sb.WriteString(fmt.Sprintf("  mount --bind -o ro \"%s\" \"%s\"\n", tempPath, absPath))
-			sb.WriteString("fi\n")
+			tempPath, absPath := resolveTempAndAbsPath(path, baseDir, tempDir)
+			writeBindMountOnly(&sb, tempPath, absPath, true)
 		}
 		sb.WriteString("\n")
 	}
@@ -622,19 +707,8 @@ func (iso *Isolator) generateMountScript(command string, args []string) string {
 	if len(iso.WritePaths) > 0 {
 		sb.WriteString("# Mount write paths read-write (overrides read-only for these subtrees)\n")
 		for _, path := range iso.WritePaths {
-			relPath := strings.TrimPrefix(path, baseDir+"/")
-			if relPath == path && !strings.HasPrefix(path, "/") {
-				relPath = path
-			}
-			tempPath := filepath.Join(tempDir, relPath)
-			absPath := path
-			if !strings.HasPrefix(path, "/") {
-				absPath = filepath.Join(baseDir, path)
-			}
-			sb.WriteString(fmt.Sprintf("if [ -e \"%s\" ]; then\n", tempPath))
-			sb.WriteString(fmt.Sprintf("  mkdir -p \"%s\"\n", absPath))
-			sb.WriteString(fmt.Sprintf("  mount --bind \"%s\" \"%s\"\n", tempPath, absPath))
-			sb.WriteString("fi\n")
+			tempPath, absPath := resolveTempAndAbsPath(path, baseDir, tempDir)
+			writeBindMountOnly(&sb, tempPath, absPath, false)
 		}
 		sb.WriteString("\n")
 	}
@@ -646,19 +720,8 @@ func (iso *Isolator) generateMountScript(command string, args []string) string {
 	if len(iso.BlockedWritePaths) > 0 {
 		sb.WriteString("# Re-mount write-blocked paths as read-only (reads allowed, writes denied)\n")
 		for _, path := range iso.BlockedWritePaths {
-			relPath := strings.TrimPrefix(path, baseDir+"/")
-			if relPath == path && !strings.HasPrefix(path, "/") {
-				relPath = path
-			}
-			tempPath := filepath.Join(tempDir, relPath)
-			absPath := path
-			if !strings.HasPrefix(path, "/") {
-				absPath = filepath.Join(baseDir, path)
-			}
-			sb.WriteString(fmt.Sprintf("if [ -e \"%s\" ]; then\n", tempPath))
-			sb.WriteString(fmt.Sprintf("  mkdir -p \"%s\"\n", absPath))
-			sb.WriteString(fmt.Sprintf("  mount --bind -o ro \"%s\" \"%s\"\n", tempPath, absPath))
-			sb.WriteString("fi\n")
+			tempPath, absPath := resolveTempAndAbsPath(path, baseDir, tempDir)
+			writeBindMountOnly(&sb, tempPath, absPath, true)
 		}
 		sb.WriteString("\n")
 	}
