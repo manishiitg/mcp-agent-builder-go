@@ -1128,6 +1128,8 @@ export interface ActiveSessionInfo {
   workspace_path?: string
   preset_name?: string
   preset_query_id?: string
+  phase_id?: string
+  phase_name?: string
   bot_platform?: string
   triggered_by?: string
   has_running_background_agents?: boolean
@@ -1147,6 +1149,19 @@ export interface ActiveSessionInfo {
 export interface GetActiveSessionsResponse {
   active_sessions: ActiveSessionInfo[]
   total: number
+}
+
+export interface WorkflowScheduleSummary {
+  scheduled_workflows: number
+  running_workflows: number
+  total_schedules: number
+  running_schedules: number
+}
+
+export interface HeaderSummaryResponse {
+  active_sessions: ActiveSessionInfo[]
+  total: number
+  schedule_summary: WorkflowScheduleSummary
 }
 
 export interface ReconnectSessionResponse {
@@ -2046,6 +2061,16 @@ export interface StepExecutionLogs {
   parent_step_id?: string;
   parent_step_title?: string;
   route_id?: string;
+  // Present when route_kind === 'routing': which routing/branch step (route
+  // major-fork concept, PLAT-259) selected this route for this run, and the
+  // route's own display name. Distinct from parent_step_id/parent_step_title
+  // above, which cover the unrelated todo_task orchestrator sub-agent-route
+  // case -- kept visually separate in the UI since they're different
+  // mechanisms.
+  route_name?: string;
+  route_kind?: 'orchestrator' | 'routing';
+  route_step_id?: string;
+  route_step_title?: string;
   success_criteria?: string;
   execution_tier?: string; // Configured tier pin from step_config.json ("high"|"medium"|"low"); empty when the step uses adaptive tiering
   context_output?: string;  // Expected output filename

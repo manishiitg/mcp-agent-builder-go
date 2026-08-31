@@ -3171,11 +3171,13 @@ func (api *StreamingAPI) handleGetExecutionLogs(w http.ResponseWriter, r *http.R
 	planContent, exists, _ := readFileFromWorkspace(r.Context(), planJsonPath)
 
 	stepMetadata := make(map[string]map[string]string)
+	var planSteps []map[string]interface{}
 	if exists {
 		var planDef struct {
 			Steps []map[string]interface{} `json:"steps"`
 		}
 		if err := json.Unmarshal([]byte(planContent), &planDef); err == nil {
+			planSteps = planDef.Steps
 			populateStepMetadata(planDef.Steps, stepMetadata)
 		}
 	}
@@ -3276,6 +3278,18 @@ func (api *StreamingAPI) handleGetExecutionLogs(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	// PLAT-259 follow-up: tag every step reached through a routing/branch
+	// step's ACTUALLY SELECTED route (this run's routing-evaluation.json,
+	// not merely a route the plan declares) so Execution Logs can group
+	// steps route-wise. Must run before getStepEntry below creates any
+	// stepsLogs entries, since those entries seed from stepMetadata on
+	// first creation.
+	if logsResp.Success && len(planSteps) > 0 {
+		if selectedRoutes := collectSelectedRoutes(r.Context(), logsResp.Data, stepMetadata); len(selectedRoutes) > 0 {
+			computeRouteMembership(planSteps, selectedRoutes, stepMetadata)
+		}
+	}
+
 	stepsLogs := make(map[string]map[string]interface{})
 	processedPaths := make(map[string]bool)
 
@@ -3317,6 +3331,10 @@ func (api *StreamingAPI) handleGetExecutionLogs(w http.ResponseWriter, r *http.R
 			parentStepID := ""
 			parentStepTitle := ""
 			routeID := ""
+			routeName := ""
+			routeKind := ""
+			routeStepID := ""
+			routeStepTitle := ""
 			plannedMessages := []map[string]interface{}{}
 			if meta != nil {
 				if t := meta["title"]; t != "" {
@@ -3337,6 +3355,10 @@ func (api *StreamingAPI) handleGetExecutionLogs(w http.ResponseWriter, r *http.R
 				parentStepID = meta["parent_step_id"]
 				parentStepTitle = meta["parent_step_title"]
 				routeID = meta["route_id"]
+				routeName = meta["route_name"]
+				routeKind = meta["route_kind"]
+				routeStepID = meta["route_step_id"]
+				routeStepTitle = meta["route_step_title"]
 				if rawMessages := meta["planned_messages"]; rawMessages != "" {
 					_ = json.Unmarshal([]byte(rawMessages), &plannedMessages)
 				}
@@ -3358,6 +3380,10 @@ func (api *StreamingAPI) handleGetExecutionLogs(w http.ResponseWriter, r *http.R
 				"parent_step_id":             parentStepID,
 				"parent_step_title":          parentStepTitle,
 				"route_id":                   routeID,
+				"route_name":                 routeName,
+				"route_kind":                 routeKind,
+				"route_step_id":              routeStepID,
+				"route_step_title":           routeStepTitle,
 				"planned_messages":           plannedMessages,
 				"output_content":             nil, // Will be populated if output file exists
 				"artifacts":                  []map[string]interface{}{},
@@ -4367,6 +4393,10 @@ func populateStepMetadata(steps []map[string]interface{}, metadata map[string]ma
 			"parent_step_id":             "",
 			"parent_step_title":          "",
 			"route_id":                   "",
+			"route_name":                 "",
+			"route_kind":                 "",
+			"route_step_id":              "",
+			"route_step_title":           "",
 			"planned_messages":           plannedMessages,
 		}
 
@@ -4399,6 +4429,10 @@ func populateStepMetadata(steps []map[string]interface{}, metadata map[string]ma
 							"parent_step_id":             id,
 							"parent_step_title":          title,
 							"route_id":                   routeID,
+							"route_name":                 "",
+							"route_kind":                 "orchestrator",
+							"route_step_id":              "",
+							"route_step_title":           "",
 							"planned_messages":           plannedMessageSequenceItemsJSON(subStep),
 						}
 						metadata[subAgentKey] = subMeta
@@ -4410,6 +4444,179 @@ func populateStepMetadata(steps []map[string]interface{}, metadata map[string]ma
 			}
 		}
 	}
+}
+
+// collectSelectedRoutes runs a lightweight pre-pass over the same step log
+// folders processLogsFolder below walks, extracting each routing/branch
+// step's ACTUAL selected_route_id for this specific run from its
+// routing-evaluation.json artifact. This has to happen before any
+// stepsLogs entries are created (via getStepEntry), because route
+// membership (PLAT-259's still-open "frontend per-route reporting" item)
+// needs to be known up front to tag downstream steps correctly regardless
+// of the order their own folders happen to be visited in.
+func collectSelectedRoutes(ctx context.Context, items []virtualtools.WorkspaceFolderItem, stepMetadata map[string]map[string]string) map[string]string {
+	selected := make(map[string]string)
+	var walk func(items []virtualtools.WorkspaceFolderItem)
+	walk = func(items []virtualtools.WorkspaceFolderItem) {
+		for _, item := range items {
+			if item.Type != "folder" {
+				continue
+			}
+			if !isExecutionLogStepFolder(item, stepMetadata) {
+				// Mirrors processLogsFolder below: a directory that isn't
+				// itself a step folder (e.g. the logs root, or a group
+				// wrapper) is a wrapper -- recurse into it to reach the
+				// real step folders nested inside.
+				if len(item.Children) > 0 {
+					walk(item.Children)
+				}
+				continue
+			}
+			stepId := filepath.Base(item.FilePath)
+			for _, child := range item.Children {
+				if child.Type == "folder" || filepath.Base(child.FilePath) != "routing-evaluation.json" {
+					continue
+				}
+				content, exists, _ := readFileFromWorkspace(ctx, child.FilePath)
+				if !exists {
+					continue
+				}
+				var routingData struct {
+					SelectedRouteID string `json:"selected_route_id"`
+				}
+				if err := json.Unmarshal([]byte(content), &routingData); err == nil && routingData.SelectedRouteID != "" {
+					selected[stepId] = routingData.SelectedRouteID
+				}
+			}
+		}
+	}
+	walk(items)
+	return selected
+}
+
+// computeRouteMembership tags every step reachable through a routing/branch
+// step's actually-selected route with which route it belongs to (route_id,
+// route_name, route_kind="routing", route_step_id/title of the owning
+// routing/branch step), so Execution Logs can group steps route-wise. This
+// is a per-run fact (from selectedRoutes, sourced from this run's
+// routing-evaluation.json artifacts), not a static property of the plan --
+// the same plan can take a different route on a different run. When
+// sibling routes legitimately converge back onto a shared downstream step,
+// that step is tagged with whichever route this run actually took, and a
+// later (more deeply nested) routing/branch step's own walk correctly
+// overrides the tag for its own downstream sub-segment, since steps are
+// processed in plan order.
+func computeRouteMembership(steps []map[string]interface{}, selectedRoutes map[string]string, stepMetadata map[string]map[string]string) {
+	indexByID := make(map[string]int, len(steps))
+	for i, step := range steps {
+		if id, _ := step["id"].(string); id != "" {
+			indexByID[id] = i
+		}
+	}
+
+	for i, step := range steps {
+		stepType, _ := step["type"].(string)
+		if stepType != "routing" && stepType != "branch" {
+			continue
+		}
+		routingStepID, _ := step["id"].(string)
+		selectedRouteID := selectedRoutes[routingStepID]
+		if selectedRouteID == "" {
+			continue // no run recorded a selection for this step yet
+		}
+		routingStepTitle, _ := step["title"].(string)
+
+		rawRoutes, _ := step["routes"].([]interface{})
+		var nextStepID, routeName string
+		// A sibling route's own entry point bounds this route's segment from
+		// the other side -- without this, "walk forward to convergence"
+		// would swallow an untaken sibling route's steps too, since neither
+		// side is itself a routing/branch step that would otherwise mark a
+		// convergence point.
+		siblingBoundary := -1
+		for _, r := range rawRoutes {
+			route, ok := r.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			routeID, _ := route["route_id"].(string)
+			routeNext, _ := route["next_step_id"].(string)
+			if routeID == selectedRouteID {
+				nextStepID = routeNext
+				routeName, _ = route["route_name"].(string)
+				continue
+			}
+			if strings.EqualFold(strings.TrimSpace(routeNext), "") || strings.EqualFold(strings.TrimSpace(routeNext), "end") {
+				continue
+			}
+			if idx, ok := indexByID[routeNext]; ok && idx > i && (siblingBoundary == -1 || idx < siblingBoundary) {
+				siblingBoundary = idx
+			}
+		}
+		if strings.EqualFold(strings.TrimSpace(nextStepID), "") || strings.EqualFold(strings.TrimSpace(nextStepID), "end") {
+			continue // this route terminates at the routing step itself, nothing downstream to tag
+		}
+
+		start, ok := indexByID[nextStepID]
+		if !ok || start <= i {
+			continue
+		}
+		end := routeSegmentEndIndexRaw(steps, start)
+		if siblingBoundary != -1 && siblingBoundary > start && siblingBoundary-1 < end {
+			end = siblingBoundary - 1
+		}
+
+		for j := start; j <= end; j++ {
+			downstreamID, _ := steps[j]["id"].(string)
+			if downstreamID == "" {
+				continue
+			}
+			meta := stepMetadata[downstreamID]
+			if meta == nil {
+				continue
+			}
+			meta["route_id"] = selectedRouteID
+			meta["route_name"] = routeName
+			meta["route_kind"] = "routing"
+			meta["route_step_id"] = routingStepID
+			meta["route_step_title"] = routingStepTitle
+		}
+	}
+}
+
+// routeSegmentEndIndexRaw mirrors step_based_workflow's
+// routeSegmentEndIndex (planning_exports.go) on raw plan.json step maps:
+// walks forward from start until a routing/branch step whose every
+// declared route ends ("next_step_id": "end"), treating that as the
+// convergence point, else the end of the step list.
+func routeSegmentEndIndexRaw(steps []map[string]interface{}, start int) int {
+	for i := start; i < len(steps); i++ {
+		stepType, _ := steps[i]["type"].(string)
+		if stepType != "routing" && stepType != "branch" {
+			continue
+		}
+		rawRoutes, _ := steps[i]["routes"].([]interface{})
+		if len(rawRoutes) == 0 {
+			continue
+		}
+		allEnd := true
+		for _, r := range rawRoutes {
+			route, ok := r.(map[string]interface{})
+			if !ok {
+				allEnd = false
+				break
+			}
+			nextID, _ := route["next_step_id"].(string)
+			if !strings.EqualFold(strings.TrimSpace(nextID), "end") {
+				allEnd = false
+				break
+			}
+		}
+		if allEnd {
+			return i
+		}
+	}
+	return len(steps) - 1
 }
 
 // plannedMessageSequenceItemsJSON keeps only the operator-meaningful part of

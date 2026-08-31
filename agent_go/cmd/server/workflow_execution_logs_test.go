@@ -397,3 +397,77 @@ func TestHandleGetExecutionLogsPrefersPersistedStepTypeOverCurrentPlan(t *testin
 		t.Fatalf("orchestration entry type = %q, want %q (the artifact's recorded execution-time type, not the step's current type)", entry.Type, "routing")
 	}
 }
+
+// TestHandleGetExecutionLogsTagsDownstreamStepsWithSelectedRoute is a
+// PLAT-259 follow-up: "route" (routing/branch) was split out as the
+// major-sub-workflow-fork concept, but nothing tagged which route a
+// downstream step actually belongs to for a given run, so Execution Logs
+// couldn't group steps route-wise. Only the step actually reached via this
+// run's selected route (per routing-evaluation.json, not merely a route
+// the plan declares) should be tagged; the untaken sibling route's step
+// must stay untagged.
+func TestHandleGetExecutionLogsTagsDownstreamStepsWithSelectedRoute(t *testing.T) {
+	const workspacePath = "/workspace/Workflow/test"
+	workspace := httptest.NewServer(&mockWorkspaceAPI{files: map[string]string{
+		workspacePath + "/planning/plan.json": `{
+  "steps": [
+    {
+      "type": "routing",
+      "id": "route-job",
+      "title": "Route job",
+      "routes": [
+        {"route_id": "research", "route_name": "Research path", "next_step_id": "research-step"},
+        {"route_id": "skip", "route_name": "Skip path", "next_step_id": "skip-step"}
+      ]
+    },
+    {"id": "research-step", "title": "Research step"},
+    {"id": "skip-step", "title": "Skip step"}
+  ]
+}`,
+		workspacePath + "/runs/iteration-0/default/logs/route-job/routing-evaluation.json": `{
+  "selected_route_id":"research",
+  "timestamp":"2026-08-25T00:00:00Z"
+}`,
+		workspacePath + "/runs/iteration-0/default/logs/research-step/execution/execution-attempt-1-iteration-0.json": `{"success":true}`,
+		workspacePath + "/runs/iteration-0/default/logs/skip-step/execution/execution-attempt-1-iteration-0.json":     `{"success":true}`,
+	}})
+	t.Cleanup(workspace.Close)
+	t.Setenv("WORKSPACE_API_URL", workspace.URL)
+
+	request := httptest.NewRequest("GET", "/api/workflow/logs?workspace_path="+workspacePath+"&run_folder=iteration-0/default", nil)
+	response := httptest.NewRecorder()
+	(&StreamingAPI{}).handleGetExecutionLogs(response, request)
+	if response.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
+	}
+
+	var body struct {
+		Steps map[string]struct {
+			RouteID        string `json:"route_id"`
+			RouteName      string `json:"route_name"`
+			RouteKind      string `json:"route_kind"`
+			RouteStepID    string `json:"route_step_id"`
+			RouteStepTitle string `json:"route_step_title"`
+		} `json:"steps"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	taken, ok := body.Steps["research-step"]
+	if !ok {
+		t.Fatalf("expected research-step in response, got %+v", body.Steps)
+	}
+	if taken.RouteID != "research" || taken.RouteName != "Research path" || taken.RouteKind != "routing" ||
+		taken.RouteStepID != "route-job" || taken.RouteStepTitle != "Route job" {
+		t.Fatalf("research-step not tagged with the selected route: %+v", taken)
+	}
+
+	untaken, ok := body.Steps["skip-step"]
+	if !ok {
+		t.Fatalf("expected skip-step in response, got %+v", body.Steps)
+	}
+	if untaken.RouteID != "" || untaken.RouteKind != "" {
+		t.Fatalf("skip-step (the untaken sibling route) must not be tagged: %+v", untaken)
+	}
+}
