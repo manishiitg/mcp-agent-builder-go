@@ -41,6 +41,12 @@ export interface MCPConfigStatus {
   mcp_config_locked?: boolean;
 }
 
+export interface MCPConnectResponse {
+  status: 'connected' | 'disconnected' | 'oauth_required';
+  server_name: string;
+  message?: string;
+}
+
 export class MCPConfigApi {
   private baseUrl: string;
 
@@ -107,6 +113,42 @@ export class MCPConfigApi {
     if (!response.ok) {
       throw new Error(`Failed to get server logs: ${response.statusText}`);
     }
+    return response.json();
+  }
+
+  /**
+   * Connect a server — writes it into the user config overlay.
+   * OAuth servers return { status: 'oauth_required' } and must go through
+   * the authorization flow instead.
+   */
+  async connectServer(serverName: string, apiKey?: string): Promise<MCPConnectResponse> {
+    const response = await fetch(`${this.baseUrl}/api/mcp/connect`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ server_name: serverName, api_key: apiKey }),
+    });
+
+    if (!response.ok) {
+      throw new Error(await response.text() || `Failed to connect: ${response.statusText}`);
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Disconnect a server — removes its overlay entry and any OAuth token.
+   */
+  async disconnectServer(serverName: string): Promise<MCPConnectResponse> {
+    const response = await fetch(`${this.baseUrl}/api/mcp/disconnect`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ server_name: serverName }),
+    });
+
+    if (!response.ok) {
+      throw new Error(await response.text() || `Failed to disconnect: ${response.statusText}`);
+    }
+
     return response.json();
   }
 

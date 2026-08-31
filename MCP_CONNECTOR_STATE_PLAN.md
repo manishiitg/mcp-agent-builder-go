@@ -1,7 +1,8 @@
 # MCP Connector Connection State — Implementation Plan
 
-**Status:** awaiting approval
-**Scope:** 8 files, 0 new files, 0 changes to the `mcpagent` repo
+**Status:** implemented
+**Scope:** 8 code files + 1 config file, 0 new files, 0 changes to the `mcpagent` repo
+**Includes:** connection state (§3-§5, §7-§8) and total removal of runtime OAuth discovery (§6)
 
 ---
 
@@ -128,9 +129,123 @@ Credential validity reuses `hasOAuthTokenFile` (`tools.go:912`) unchanged.
 
 ---
 
-## 6. Backend changes
+## 6. OAuth discovery removal
 
-### 6.1 `agent_go/cmd/server/tools.go`
+> **The catalog JSON is the sole source of OAuth endpoint truth. Runtime discovery is deleted, not gated.**
+
+### 6.1 Why removal, not a fix
+
+§2.2 blamed `discovery.go:342`. The bug is structural, not incidental:
+
+- `DiscoverFromWellKnown` (`discovery.go:211`) is a four-line wrapper over `FetchAuthServerMetadata` (`:334`). Every `.well-known` path in the codebase funnels through the same host-only URL construction, so every one of them inherits the same false positive.
+- Only the 401 path (`DiscoverFromResponse` → RFC 9728) resolves correctly, and it costs a full failed request per server.
+
+Discovery also cannot learn anything that cannot be written down once. Verified against the live catalog — a path-aware RFC 9728 → RFC 8414 probe resolves **16 of 16** OAuth servers:
+
+| Server | `auth_url` | `token_url` |
+|---|---|---|
+| Notion | `https://mcp.notion.com/authorize` | `https://mcp.notion.com/token` |
+| Linear | `https://mcp.linear.app/authorize` | `https://mcp.linear.app/token` |
+| Sentry | `https://mcp.sentry.dev/oauth/authorize` | `https://mcp.sentry.dev/oauth/token` |
+| Canva | `https://mcp.canva.com/authorize` | `https://mcp.canva.com/token` |
+| Airtable | `https://airtable.com/oauth2/v1/authorize` | `https://airtable.com/oauth2/v1/token` |
+| PostHog | `https://oauth.posthog.com/oauth/authorize/` | `https://oauth.posthog.com/oauth/token/` |
+| Grafana | `https://mcp.grafana.com/mcp/oauth/authorize` | `https://mcp.grafana.com/mcp/oauth/token` |
+| Honeycomb | `https://ui.honeycomb.io/oauth/authorize` | `https://ui.honeycomb.io/oauth/token` |
+| MongoDB | `https://cloud.mongodb.com/oauth/authorize` | `https://authorize.mongodb.com/tokens` |
+| Apify | `https://console.apify.com/authorize/oauth` | `https://console-backend.apify.com/oauth/apps/token` |
+| WorkOS | `https://signin.workos.com/oauth2/authorize` | `https://signin.workos.com/oauth2/token` |
+| Resend | `https://api.resend.com/oauth/authorize` | `https://api.resend.com/oauth/token` |
+| Paddle | `https://id.paddle.com/oauth2/authorize` | `https://id.paddle.com/oauth2/token` |
+| Port | `https://mcp.port.io/v1/authorize` | `https://mcp.port.io/v1/token` |
+| Indeed | `https://secure.indeed.com/oauth/v2/authorize` | `https://apis.indeed.com/oauth/v2/tokens` |
+| Morningstar | `https://mcp.morningstar.com/authorize` | `https://mcp.morningstar.com/token` |
+
+MongoDB is the only one advertising no `registration_endpoint` — irrelevant, since DCR is being removed anyway.
+
+### 6.2 Code deleted
+
+**`agent_go/cmd/server/oauth_routes.go`** — five blocks:
+
+| Lines | Block | Replaced by |
+|---|---|---|
+| `:290-318` | the two `AutoDiscover: true` `OAuthConfig` initializers in `handleOAuthStart` | 400 — server has no `oauth` block, so it is open |
+| `:333-415` | the `needsDiscovery` block, including **both** `oauth.RegisterClient` DCR calls (`:375`, `:404`) | nothing — endpoints come from config |
+| `:588-614` | `handleOAuthStatus`, `OAuth == nil` auto-discovery branch | `connection: available`, no probe |
+| `:620-645` | `handleOAuthStatus`, "auto-discover so refresh works" block | nothing — `token_url` is in config |
+| `:720-747` | `handleOAuthLogout`, `OAuth == nil` auto-discovery branch | 400 |
+
+**`agent_go/cmd/server/tools.go`**:
+
+- `tryOAuthDiscovery` (`:1109-…`) and the local `OAuthEndpoints` type — delete
+- call sites `:179-181` and `:272-273` — these are what set `RequiresOAuth` from a network probe, i.e. the direct cause of the Hugging Face false positive
+
+**The inversion that makes this safe:** today `serverConfig.OAuth == nil` *triggers* discovery. After this change it *is the answer* — no `oauth` block means an open server. That single rule removes every remaining probe.
+
+### 6.3 Config becomes authoritative
+
+Each of the 16 OAuth entries gains `auth_url` and `token_url` alongside the existing `client_id` and `token_file`, plus `scopes`/`resource` where the AS advertises them. All four fields already exist on `oauth.OAuthConfig` (`mcpagent/oauth/config.go:9-21`) — **no schema change.**
+
+```json
+"Notion": {
+  "url": "https://mcp.notion.com/mcp",
+  "oauth": {
+    "client_id":  "https://agentworkshq.com/.well-known/mcp-client.json",
+    "auth_url":   "https://mcp.notion.com/authorize",
+    "token_url":  "https://mcp.notion.com/token",
+    "token_file": "~/.config/mcpagent/tokens/default/Notion.json"
+  }
+}
+```
+
+### 6.4 Consequences
+
+- **`requires_oauth` stops being probe-derived.** It becomes `cfg.OAuth != nil` — a config read with no network call. Hugging Face reports false, correctly, and the `+` button matches the label.
+- **Exa's 500 disappears.** `handleOAuthStatus` no longer errors at `:601` on a server that was never going to have OAuth, so `OAuthStatusBadge.tsx:183` stops returning `null`.
+- **DCR is gone entirely.** Already implied by the CIMD-only rule that drops Vercel (§10). Any future DCR server must be added with a pre-registered `client_id`.
+- **`needs_client_id` (`:423`) still compiles and still fires** — but only for a hand-edited entry missing `client_id`, and it now reports the configured URLs instead of discovered ones.
+- **No custom-server-add UI exists.** `MCPConfigEditor.tsx` edits raw JSON, and `/api/mcp-config/discover` (`:196`) is *tool* discovery, unaffected. Hand-added servers must supply their own endpoints — consistent with the new rule.
+- **`mcpagent` still gets 0 changes.** `FetchAuthServerMetadata` and `DiscoverFromWellKnown` lose their only callers but remain exported library functions. `DiscoverFromResponse` stays live via `mcpclient/client.go:958,987`. Deleting the two now-dead functions is a follow-up in that repo.
+
+### 6.5 Resolving endpoints by hand
+
+All 16 entries already carry `auth_url` and `token_url`. This is the procedure to
+re-resolve one when a provider moves a URL, or to add a new OAuth connector.
+
+**Order matters, and the path-aware form must come first** — trying only the root
+form is exactly the bug in `discovery.go:342` that this section removes.
+
+```bash
+BASE=https://mcp.notion.com     # scheme + host of the server's url
+MCP_PATH=/mcp                   # its path, if any
+
+# 1. RFC 9728 — find the authorization server. Path-aware first, then root.
+curl -s $BASE/.well-known/oauth-protected-resource$MCP_PATH \
+  || curl -s $BASE/.well-known/oauth-protected-resource
+# → read "authorization_servers": ["https://as.example.com"]
+
+# 2. RFC 8414 on THAT server — again path-aware first, then root,
+#    then OpenID discovery as a last resort.
+AS=https://as.example.com
+curl -s $AS/.well-known/oauth-authorization-server \
+  || curl -s $AS/.well-known/openid-configuration
+# → read "authorization_endpoint" and "token_endpoint"
+
+# 3. If step 1 returns nothing, try step 2 against $BASE directly.
+```
+
+Take `authorization_endpoint` → `auth_url` and `token_endpoint` → `token_url`.
+A `registration_endpoint` in the metadata is irrelevant here; DCR is removed.
+
+### 6.6 Rollout order
+
+Ship the JSON first, the deletion second. `needsDiscovery` is `AutoDiscover || AuthURL == "" || TokenURL == ""`, and no catalog entry sets `auto_discover`, so **populating the endpoints alone already makes every discovery branch dead at runtime.** Step 1 is behaviourally verifiable on its own; step 2 removes code that is by then provably unreachable.
+
+---
+
+## 7. Backend changes
+
+### 7.1 `agent_go/cmd/server/tools.go`
 
 **Add to `ToolStatus`** (struct at `:62-74`):
 
@@ -152,7 +267,7 @@ Loads the overlay via `mcpclient.LoadConfig(api.getUserConfigPath(), api.logger)
 
 `status` is not modified anywhere.
 
-### 6.2 `agent_go/cmd/server/oauth_routes.go`
+### 7.2 `agent_go/cmd/server/oauth_routes.go`
 
 **`handleConnectServer`** (new). Request: `{server_name, api_key?}`
 
@@ -174,7 +289,7 @@ Loads the overlay via `mcpclient.LoadConfig(api.getUserConfigPath(), api.logger)
 
 > **Do not use** `handleSaveMCPConfig` (`mcp_config_routes.go:131`) for this. It only persists servers absent from the base config (`:160-164`), so a write for Hugging Face would be silently dropped.
 
-### 6.3 `agent_go/cmd/server/server.go`
+### 7.3 `agent_go/cmd/server/server.go`
 
 Two route lines beside `:2013-2016`:
 
@@ -185,30 +300,30 @@ apiRouter.HandleFunc("/mcp/disconnect", api.handleDisconnectServer).Methods("POS
 
 ---
 
-## 7. Frontend changes
+## 8. Frontend changes
 
-### 7.1 `frontend/src/stores/types.ts`
+### 8.1 `frontend/src/stores/types.ts`
 
 Add `connection?: string` to `ToolDefinition` (`:7`).
 
-### 7.2 `frontend/src/services/mcpConfigApi.ts`
+### 8.2 `frontend/src/services/mcpConfigApi.ts`
 
 Add `connectServer(name, apiKey?)` and `disconnectServer(name)` following the existing method shape (`:54-128`).
 
-### 7.3 `frontend/src/stores/useMCPStore.ts`
+### 8.3 `frontend/src/stores/useMCPStore.ts`
 
 - `:119` — `availableServers` filters `connection === 'connected'` instead of `status === 'ok'`
 - `:260` — same change to the second getter
 - `:154` — remove the auto-enable fallback
 - `:168` — unchanged, still polls on `status === 'loading'`
 
-### 7.4 `frontend/src/components/sidebar/MCPServersSection.tsx`
+### 8.4 `frontend/src/components/sidebar/MCPServersSection.tsx`
 
 - `statusLabel` (`:27-30`) reads `connection`
 - Sort keys (`:111`, `:121-122`) read `connection`
 - Pass `connection` to the badge (`:275`)
 
-### 7.5 `frontend/src/components/OAuthStatusBadge.tsx`
+### 8.5 `frontend/src/components/OAuthStatusBadge.tsx`
 
 Add optional `connection?: string` prop.
 
@@ -227,7 +342,7 @@ Reuse the existing `clientIdDialog` (`:196`) as the API-key input rather than ad
 
 ---
 
-## 8. API key handling
+## 9. API key handling
 
 The connect dialog offers an optional key for any server with no `oauth` block. Supplied → stored as `Authorization: Bearer <key>` in `Headers`. Skipped → connects anonymously.
 
@@ -262,17 +377,21 @@ Go silently ignores unknown JSON keys, so `type` would fail invisibly. Omit the 
 
 ---
 
-## 9. Migration
+## 10. Migration
 
 Remove `Vercel` from `mcp_servers_clean_user.json` — it is DCR-only, violates the CIMD-only rule, and under the new rule would render as connected.
 
-Canva and Linear stay: both are in the overlay with valid tokens, so they read as connected on first load with no migration step.
+Canva and Linear stay in the overlay, but **neither has a token file on disk** — `~/.config/mcpagent/tokens/default/` held only `Vercel.json`. Under the state machine they therefore read as `available`, not `connected`. The assumption that they carried valid tokens was wrong; the observed result is the intended zero-state below, and reconnecting them is a normal OAuth flow.
+
+Their `oauth.auto_discover: true` flags were also stripped from the overlay. Overlay entries replace base entries wholesale, so those flags — not the catalog — were what would have kept discovery alive for these two servers.
+
+The orphaned `Vercel.json` token is left on disk; removing a credential is the user's call.
 
 **Behaviour change:** dropping the auto-enable means all other servers start at zero. This is the intended model. If a softer rollout is wanted, seed the overlay once from servers currently reporting `status === 'ok'`.
 
 ---
 
-## 10. Risk register
+## 11. Risk register
 
 | Risk | Mitigation |
 |---|---|
@@ -281,19 +400,22 @@ Canva and Linear stay: both are in the overlay with valid tokens, so they read a
 | 24 overlay file reads per `/api/tools` | Read once per request, pass into the loop. |
 | `isMCPConfigLocked` bypassed | Guard at the top of both new handlers, matching `mcp_config_routes.go:133`. |
 | Users lose all connectors on upgrade | Intended; optional one-time seed available. |
+| A baked endpoint rots when a provider moves its authorize/token URL | No runtime fallback by design. Symptom is a failed authorize, not a silent wrong state; the handler names the server and the missing field. Fix is a one-line JSON edit using the procedure in §6.5. |
+| A DCR-only server can no longer be connected | Already policy — the CIMD-only rule drops Vercel for exactly this reason (§10). Such a server needs a pre-registered `client_id`. |
+| Deleting discovery breaks a hand-added server in `MCPConfigEditor` | Hand-added entries must now carry `auth_url`/`token_url`. Same rule as the catalog; no hidden behaviour. |
 
 ---
 
-## 11. Out of scope
+## 12. Out of scope
 
 - `Reconnect` state and 401-at-use demotion — deferred by decision
-- `oauth/discovery.go:342` path-stripping fix — lives in the `mcpagent` repo; no longer affects the UI once `connection` lands
+- Deleting the now-dead `FetchAuthServerMetadata` / `DiscoverFromWellKnown` from `mcpagent/oauth/discovery.go` — §6 removes their last callers, but they stay as exported library functions so this phase keeps its 0-changes-to-`mcpagent` property. `DiscoverFromResponse` remains live (`mcpclient/client.go:958,987`) and is not touched.
 - Retiring `status: "not_connected"` (`tools.go:180`, `:926`) — becomes vestigial but is read in five places; safer as a follow-up once `connection` is proven
-- `requires_oauth` — stops driving UI, still used internally by `getToolStatusForUser` (`tools.go:1060`)
+- `requires_oauth` — stops driving UI and, per §6.2, stops being probe-derived; still read internally by `getToolStatusForUser` (`tools.go:1060`)
 
 ---
 
-## 12. Test plan
+## 13. Test plan
 
 1. Fresh overlay (only Canva/Linear) → all 22 other servers show `+`; Canva and Linear show connected
 2. Connect Wolfram (no auth) → overlay entry appears, card flips to connected, no browser redirect
@@ -304,14 +426,46 @@ Canva and Linear stay: both are in the overlay with valid tokens, so they read a
 7. `ServerSelectionDropdown` and `MCPDetailsModal` unchanged
 8. Restart the server → connection states persist from the overlay
 
+**Discovery removal (§6)**
+
+9. Boot with the endpoints baked in → server logs contain zero `.well-known` fetches and zero `Auto-discovering OAuth endpoints` lines
+10. Connect each of the 16 OAuth servers → authorize round-trips end to end using only configured URLs; confirm on the wire that no `/.well-known/*` request is issued
+11. Hugging Face → `requires_oauth: false`, card shows `+`, no OAuth prompt (the §1 symptom, gone at the source)
+12. Exa → `/api/oauth/status` returns 200 instead of 500; the button renders instead of `null`
+13. Expire a token and let it refresh → refresh uses the configured `token_url` with no discovery fallback
+14. Point a catalog entry at a deliberately wrong `auth_url` → the flow fails loudly at authorize rather than silently re-discovering
+
+### Results
+
+Verified against a live server on port 18799 (24 catalogue servers, `LOCAL_MODE`):
+
+| # | Test | Result |
+|---|---|---|
+| 1 | Fresh overlay so nothing is connected | 24/24 `available` |
+| 2 | Connect Wolfram (no auth) | overlay entry written, `connected`, 3 tools, no redirect |
+| 3 | Connect Hugging Face with a key | `Authorization: Bearer` persisted to the overlay |
+| 5 | Disconnect Hugging Face | overlay entry gone, card back to `available` |
+| 6 | Connected server failing | observed naturally: HF with a bad key gave `connection: connected` + `status: error` |
+| 8 | Restart the server | Wolfram + HF still `connected` from the overlay |
+| 9 | No discovery on boot | zero `.well-known` / auto-discover / DCR lines in the log |
+| 11 | Hugging Face | `requires_oauth` absent (false), `status: ok`, shows `+` |
+| 12 | Exa | `/api/oauth/status` 200 with `has_oauth: false` (was 500) |
+| 14 | Missing endpoint | 500 naming the server and the fix, no silent re-discovery |
+
+Not run: 4, 10, 13 (need a real interactive OAuth grant) and 7 (visual check of the two unchanged call sites).
+
+**No unit tests retained.** A `connection_state_test.go` covering the §4 state machine, per-user token isolation, and overlay loading was written and passing during implementation, then removed by decision. The per-user case guarded a real bug found while building (trusting `token_file` from config rather than the requesting user's path); a refactor of `connectionState` now has no automated cover.
+
 ---
 
-## 13. Summary
+## 14. Summary
 
-**8 files, 0 new files, 0 changes to `mcpagent`.**
+**9 code files + 2 config files, 0 new files, 0 changes to `mcpagent`.**
+
+Two changes ship together: `connection` stops the UI inferring ownership from reachability, and §6 stops the backend inferring auth from network probes. Both replace a guess with a fact that is already written down.
 
 | Layer | Files |
 |---|---|
 | Backend | `tools.go`, `oauth_routes.go`, `server.go` |
 | Frontend | `types.ts`, `mcpConfigApi.ts`, `useMCPStore.ts`, `MCPServersSection.tsx`, `OAuthStatusBadge.tsx` |
-| Config | one Vercel removal |
+| Config | `mcp_servers_clean.json` — `auth_url`/`token_url` on 16 OAuth entries (§6.3); `mcp_servers_clean_user.json` — Vercel removed, `auto_discover` stripped (§10) |

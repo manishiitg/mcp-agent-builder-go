@@ -17,7 +17,6 @@ import (
 
 	"github.com/manishiitg/mcpagent/mcpcache"
 	"github.com/manishiitg/mcpagent/mcpclient"
-	"github.com/manishiitg/mcpagent/oauth"
 
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 )
@@ -68,15 +67,13 @@ type ToolStatus struct {
 	ToolsEnabled  int                    `json:"toolsEnabled"`
 	FunctionNames []string               `json:"function_names"`
 	Tools         []mcpclient.ToolDetail `json:"tools,omitempty"` // Only populated for detailed requests
-	// OAuth detection
-	RequiresOAuth  bool            `json:"requires_oauth,omitempty"`  // Auto-detected from 401 response
-	OAuthEndpoints *OAuthEndpoints `json:"oauth_endpoints,omitempty"` // Discovered endpoints if OAuth detected
-}
-
-// OAuthEndpoints represents discovered OAuth endpoints
-type OAuthEndpoints struct {
-	AuthURL  string `json:"auth_url"`
-	TokenURL string `json:"token_url"`
+	// Connection ownership — "connected" (the user added this server) or
+	// "available" (it is in the catalog but the user has not connected it).
+	// Distinct from Status, which reports whether the server is reachable.
+	Connection string `json:"connection"`
+	// OAuth requirement, read from config rather than probed. A server needs
+	// OAuth if and only if its config carries an oauth block.
+	RequiresOAuth bool `json:"requires_oauth,omitempty"`
 }
 
 // SetEnabledToolsRequest represents a request to set enabled tools
@@ -169,22 +166,14 @@ func (api *StreamingAPI) discoverServerToolsDetailed(ctx context.Context, server
 			ToolsEnabled: 0,
 		}
 
-		// Try OAuth auto-discovery if server has URL (HTTP/SSE protocol)
-		// Also support mcp-remote pattern: command=npx, args=["mcp-remote", "<url>"]
-		discoveryURL := srvCfg.URL
-		if discoveryURL == "" {
-			discoveryURL = extractMCPRemoteURL(srvCfg.Command, srvCfg.Args)
-		}
-		if discoveryURL != "" {
-			if endpoints := api.tryOAuthDiscovery(ctx, discoveryURL); endpoints != nil {
-				toolStatus.Status = "not_connected"
-				toolStatus.RequiresOAuth = true
-				toolStatus.OAuthEndpoints = endpoints
-				toolStatus.Error = "OAuth authentication required"
-				api.appendServerLog(serverName, "warn", "OAuth authentication required")
-				api.logger.Info(fmt.Sprintf("✅ Auto-detected OAuth for %s: auth=%s, token=%s",
-					serverName, endpoints.AuthURL, endpoints.TokenURL))
-			}
+		// A connection failure on a server that requires OAuth means the user has
+		// not authenticated yet. The oauth block in config is the authority — we
+		// no longer probe the network to find out.
+		if srvCfg.OAuth != nil {
+			toolStatus.Status = "not_connected"
+			toolStatus.RequiresOAuth = true
+			toolStatus.Error = "OAuth authentication required"
+			api.appendServerLog(serverName, "warn", "OAuth authentication required")
 		}
 
 		return toolStatus, nil
@@ -264,21 +253,6 @@ func (api *StreamingAPI) discoverServerToolsDetailed(ctx context.Context, server
 		Tools:         toolDetails,
 	}
 
-	// For mcp-remote servers: probe the remote URL for OAuth even on successful connection.
-	// Kite and similar servers allow unauthenticated tool listing but require auth for tool calls.
-	// Only do this if OAuth is not already configured for the server.
-	if srvCfg.OAuth == nil && srvCfg.URL == "" {
-		if remoteURL := extractMCPRemoteURL(srvCfg.Command, srvCfg.Args); remoteURL != "" {
-			if endpoints := api.tryOAuthDiscovery(ctx, remoteURL); endpoints != nil {
-				toolStatus.RequiresOAuth = true
-				toolStatus.OAuthEndpoints = endpoints
-				api.appendServerLog(serverName, "warn", "OAuth authentication required (detected via mcp-remote URL)")
-				api.logger.Info(fmt.Sprintf("✅ Auto-detected OAuth for mcp-remote server %s: auth=%s, token=%s",
-					serverName, endpoints.AuthURL, endpoints.TokenURL))
-			}
-		}
-	}
-
 	return toolStatus, nil
 }
 
@@ -320,13 +294,18 @@ func (api *StreamingAPI) handleGetTools(w http.ResponseWriter, r *http.Request) 
 		cachedMap[status.Name] = status
 	}
 
+	// Read the overlay once for the whole response, not once per server.
+	overlay := api.loadOverlayServerNames()
+
 	// Create comprehensive results showing ALL configured servers
 	// Apply per-user OAuth status to each result
 	allResults := make([]ToolStatus, 0, len(cfg.MCPServers))
 	for serverName, serverConfig := range cfg.MCPServers {
+		connection := connectionState(serverName, serverConfig, overlay, userID)
 		if cachedStatus, exists := cachedMap[serverName]; exists {
 			// Use cached result but apply user-specific OAuth status
 			userStatus := api.getToolStatusForUser(cachedStatus, userID)
+			userStatus.Connection = connection
 			allResults = append(allResults, userStatus)
 		} else {
 			// Create fallback result for servers not yet discovered
@@ -334,6 +313,7 @@ func (api *StreamingAPI) handleGetTools(w http.ResponseWriter, r *http.Request) 
 				Name:          serverName,
 				Server:        serverName,
 				Status:        "loading", // Indicate that tools are being discovered
+				Connection:    connection,
 				Description:   serverConfig.Description,
 				ToolsEnabled:  0,
 				FunctionNames: []string{},
@@ -641,6 +621,51 @@ func hasOAuthTokenFile(cfg mcpclient.MCPServerConfig) bool {
 	}
 	_, err := os.Stat(tokenFile)
 	return err == nil
+}
+
+// Connection states reported to the UI. "connected" means the user added this
+// server; "available" means it is offered by the catalog but not connected.
+const (
+	connectionConnected = "connected"
+	connectionAvailable = "available"
+)
+
+// loadOverlayServerNames returns the set of server names present in the user
+// config overlay. Overlay membership is the definition of "connected" — see
+// MCP_CONNECTOR_STATE_PLAN.md §3. Callers that iterate many servers must read
+// this once and pass the result into connectionState rather than re-reading
+// the file per server.
+func (api *StreamingAPI) loadOverlayServerNames() map[string]bool {
+	names := make(map[string]bool)
+	overlay, err := mcpclient.LoadConfig(api.getUserConfigPath(), api.logger)
+	if err != nil {
+		// A missing overlay is the normal first-run state, not an error worth
+		// failing the request over — it simply means nothing is connected yet.
+		api.logger.Debug(fmt.Sprintf("No user config overlay readable: %v", err))
+		return names
+	}
+	for name := range overlay.MCPServers {
+		names[name] = true
+	}
+	return names
+}
+
+// connectionState answers "is this server mine?" — distinct from Status, which
+// answers "is it working?". A server is connected when it is in the overlay and,
+// if it uses OAuth, this user has a credential on disk. The token is looked up
+// at the per-user path rather than the one in config, which is only the same
+// file for the default user.
+func connectionState(name string, cfg mcpclient.MCPServerConfig, overlay map[string]bool, userID string) string {
+	if !overlay[name] {
+		return connectionAvailable
+	}
+	if cfg.OAuth == nil {
+		return connectionConnected // no credential needed
+	}
+	if _, err := os.Stat(expandPath(getUserTokenFilePath(userID, name))); err != nil {
+		return connectionAvailable
+	}
+	return connectionConnected
 }
 
 // initializeToolCache initializes the tool cache on server startup using existing mcpcache service
@@ -1064,7 +1089,6 @@ func (api *StreamingAPI) getToolStatusForUser(status ToolStatus, userID string) 
 		if _, err := os.Stat(expandedPath); err == nil {
 			// User has authenticated - clear the OAuth required flag
 			status.RequiresOAuth = false
-			status.OAuthEndpoints = nil
 			status.Error = ""
 			// A "not_connected" status was recorded before this user authenticated,
 			// so it is now stale — rediscovery is pending. Report it as loading
@@ -1076,77 +1100,6 @@ func (api *StreamingAPI) getToolStatusForUser(status ToolStatus, userID string) 
 		}
 	}
 	return status
-}
-
-// extractMCPRemoteURL extracts the remote server URL from mcp-remote args.
-// mcp-remote is commonly used to proxy remote HTTP MCP servers via stdio:
-//
-//	command: "npx", args: ["mcp-remote", "https://example.com/mcp"]
-func extractMCPRemoteURL(command string, args []string) string {
-	if len(args) < 2 {
-		return ""
-	}
-	// Check for npx/npx.cmd mcp-remote pattern or direct mcp-remote command
-	isMCPRemote := false
-	urlArgIdx := -1
-	if (command == "npx" || command == "npx.cmd") && args[0] == "mcp-remote" {
-		isMCPRemote = true
-		urlArgIdx = 1
-	} else if command == "mcp-remote" {
-		isMCPRemote = true
-		urlArgIdx = 0
-	}
-	if !isMCPRemote || urlArgIdx >= len(args) {
-		return ""
-	}
-	url := args[urlArgIdx]
-	if strings.HasPrefix(url, "https://") || strings.HasPrefix(url, "http://") {
-		return url
-	}
-	return ""
-}
-
-// tryOAuthDiscovery attempts to discover OAuth endpoints from a 401 response
-func (api *StreamingAPI) tryOAuthDiscovery(ctx context.Context, serverURL string) *OAuthEndpoints {
-	// Try RFC 8414 well-known discovery first (more reliable)
-	if endpoints, err := oauth.DiscoverFromWellKnown(serverURL); err == nil {
-		api.logger.Debug(fmt.Sprintf("Discovered OAuth via RFC 8414 well-known: auth=%s, token=%s",
-			endpoints.AuthURL, endpoints.TokenURL))
-		return &OAuthEndpoints{
-			AuthURL:  endpoints.AuthURL,
-			TokenURL: endpoints.TokenURL,
-		}
-	}
-
-	// Fallback: Try 401 response header discovery
-	resp, err := http.Get(serverURL)
-	if err != nil {
-		return nil
-	}
-	defer resp.Body.Close()
-
-	// Only proceed if we got 401 Unauthorized
-	if resp.StatusCode != http.StatusUnauthorized {
-		return nil
-	}
-
-	// Try to extract OAuth endpoints from response headers
-	authHeader := resp.Header.Get("WWW-Authenticate")
-	if authHeader == "" {
-		return nil
-	}
-
-	// Use the oauth package's discovery logic
-	endpoints, err := oauth.DiscoverFromResponse(resp)
-	if err != nil {
-		api.logger.Debug(fmt.Sprintf("Failed to discover OAuth endpoints: %v", err))
-		return nil
-	}
-
-	return &OAuthEndpoints{
-		AuthURL:  endpoints.AuthURL,
-		TokenURL: endpoints.TokenURL,
-	}
 }
 
 // --- MCP/CUSTOM/VIRTUAL EXECUTION APIs MOVED TO mcpagent/executor ---

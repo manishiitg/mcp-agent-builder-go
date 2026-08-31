@@ -17,18 +17,19 @@ import { descriptionFor } from '../connectors/catalog'
 import { useMCPStore } from '../../stores'
 
 /**
- * A server awaiting OAuth is not broken — it simply has no token yet. The
- * backend still reports those as "error", so `requires_oauth` is what
- * distinguishes "needs connecting" from a genuine failure.
+ * The card label answers "is this mine?", which is what `connection` reports.
+ * `status` answers a different question — whether the server is currently
+ * reachable — so a connected-but-down server is surfaced as an error against
+ * the connected label rather than silently reading as not connected.
+ * See MCP_CONNECTOR_STATE_PLAN.md §5.
  */
-const isAwaitingAuth = (status: string | undefined, requiresOAuth: boolean | undefined) =>
-  status === 'not_connected' || (status !== 'ok' && !!requiresOAuth)
-
-const statusLabel = (status: string | undefined, requiresOAuth: boolean | undefined) => {
-  if (status === 'ok') return 'Connected'
-  if (status === 'loading') return 'Checking...'
-  if (isAwaitingAuth(status, requiresOAuth)) return 'Not connected'
-  return 'Error'
+const statusLabel = (connection: string | undefined, status: string | undefined) => {
+  if (connection === 'connected') {
+    if (status === 'error') return 'Connected — unreachable'
+    if (status === 'loading') return 'Connected — checking...'
+    return 'Connected'
+  }
+  return 'Not connected'
 }
 
 type Filter = 'all' | 'connected' | 'available'
@@ -108,7 +109,7 @@ export default function MCPServersSection() {
     const q = query.trim().toLowerCase()
     return Object.entries(groups)
       .filter(([name, tools]) => {
-        const connected = tools[0]?.status === 'ok'
+        const connected = tools[0]?.connection === 'connected'
         if (filter === 'connected' && !connected) return false
         if (filter === 'available' && connected) return false
         if (!q) return true
@@ -118,8 +119,8 @@ export default function MCPServersSection() {
         )
       })
       .sort(([aName, aTools], [bName, bTools]) => {
-        const aOk = aTools[0]?.status === 'ok' ? 0 : 1
-        const bOk = bTools[0]?.status === 'ok' ? 0 : 1
+        const aOk = aTools[0]?.connection === 'connected' ? 0 : 1
+        const bOk = bTools[0]?.connection === 'connected' ? 0 : 1
         return aOk - bOk || aName.localeCompare(bName)
       })
   }, [groups, query, filter])
@@ -131,7 +132,7 @@ export default function MCPServersSection() {
       {/* Connectors Modal */}
       {showMCPDetails && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="flex max-h-[85vh] w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-900">
+          <div className="flex h-[85vh] w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-900">
             {/* Header */}
             <div className="flex shrink-0 items-center justify-between border-b border-gray-200 px-6 py-4 dark:border-gray-800">
               <div className="flex items-center gap-2 text-sm">
@@ -232,7 +233,13 @@ export default function MCPServersSection() {
 
               {!isLoadingTools && visible.length === 0 && !toolsError && (
                 <p className="py-8 text-center text-sm text-gray-500 dark:text-gray-400">
-                  No connectors match “{query}”.
+                  {query
+                    ? `No connectors match “${query}”.`
+                    : filter === 'connected'
+                      ? 'No connectors yet. Pick one from Available and press Connect.'
+                      : filter === 'available'
+                        ? 'Every connector is already connected.'
+                        : 'No connectors configured.'}
                 </p>
               )}
 
@@ -241,6 +248,7 @@ export default function MCPServersSection() {
                   // eslint-disable-next-line @typescript-eslint/no-explicit-any
                   const requiresOAuth = (tools[0] as any).requires_oauth as boolean | undefined
                   const status = tools[0]?.status
+                  const connection = tools[0]?.connection
                   const isOpen = expandedLogs.has(serverName)
 
                   return (
@@ -265,7 +273,7 @@ export default function MCPServersSection() {
                             {descriptionFor(serverName)}
                           </p>
                           <span className="mt-1.5 inline-block text-[11px] text-gray-400 dark:text-gray-500">
-                            {statusLabel(status, requiresOAuth)}
+                            {statusLabel(connection, status)}
                           </span>
                         </div>
 
@@ -273,6 +281,7 @@ export default function MCPServersSection() {
                           <OAuthStatusBadge
                             serverName={serverName}
                             requiresOAuth={requiresOAuth}
+                            connection={connection}
                             variant="icon"
                             onAuthChange={() => {
                               // Refresh on disconnect too — the card's status text
