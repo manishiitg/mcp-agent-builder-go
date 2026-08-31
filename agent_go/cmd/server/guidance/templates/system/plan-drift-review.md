@@ -112,12 +112,69 @@ Then do the judgment checks a Go function cannot:
 - **Learnings / KB content staleness** — does `learnings/<step-id>/main.py`
   or its knowledgebase notes still describe what the step currently does?
 - **Learnings / KB access appropriateness** — is the step's
-  `knowledgebase_access` / learnings access mode and lock state still the
+  `knowledgebase_access` / learnings access mode still the
   right choice given the step's current maturity (not just internally
   consistent with itself)?
 - **DB schema normalization** — once per pass, not per step: informed by
   `PRAGMA table_info` across every table, judge whether the schema stays
   reasonably normalized, not merely whether each table's own contract holds.
+
+For a candidate whose `step_type` is `"message_sequence"`, first load
+`read_skill(skills=[{"name":"builder-reference","path":"references/message-sequence.md"}])`
+and record one additional **`message_sequence_best_practices`** check. Compare
+the actual step description, `items[]`, validation schema, context boundaries,
+and access configuration against that reference. The evidence must explicitly
+cover whether the sequence:
+
+- is one coherent shared-context span rather than unrelated work accumulated
+  into one conversation;
+- completes the outcome, re-opens authoritative evidence, and repairs plus
+  double-checks verified gaps (or explains why a smaller sequence is sufficient);
+- keeps deterministic API/CLI fetching, stable parsing, and mechanical
+  persistence in scripted regular steps rather than spending agent turns on it;
+- uses `prevalidation` only for a real intermediate boundary before a costly or
+  hard-to-undo later turn, never as a duplicate of the automatic final gate;
+- validates the durable output or real side effect with run-specific proof and
+  does not hide durable handoffs or retries only in conversation memory; and
+- narrows item-level write access where needed without exceeding or needlessly
+  broadening the step-level permissions.
+
+This is a judgment check, not a regex. Repair a bounded structural or prompt
+violation in this same pass when safe; otherwise file and link the exact Pulse
+finding before recording a failed check. `record_plan_drift_review` rejects a
+message-sequence review that omits this check.
+
+Apply the same reference-backed pattern to the other specialized step types:
+
+- For `step_type: "regular"` (the scripted step), load
+  `references/scripted.md` and record **`scripted_best_practices`**. Confirm the
+  work is genuinely deterministic rather than judgment-heavy; declared mode,
+  `learnings/<step-id>/main.py`, inputs, outputs, and description agree; fixed
+  API/CLI calls, parsing, persistence, retries, and errors are fail-closed and
+  idempotent where required; validation proves the real durable result; and a
+  retained recent run shows the script actually performs its stated job. If a
+  regular step is still agentic, treat that as a migration question: bounded
+  deterministic work should become scripted, while conversational judgment
+  should become `message_sequence`.
+- For `step_type: "todo_task"` (the orchestrator), load
+  `references/todo-task.md` and record **`todo_task_best_practices`**. Confirm
+  runtime orchestration is genuinely dynamic or adaptive rather than a fixed
+  child list; route eligibility/conditions are distinct; inline versus shared
+  orphan ownership is valid; sub-agent context, outputs, retries, and completion
+  receipts are explicit; and the parent does not duplicate child work.
+- For `step_type: "routing"`, load `references/routing.md` and record
+  **`routing_best_practices`** in addition to the two route checks below.
+  Confirm this is a major self-contained fork, selection is deterministic and
+  fail-closed, targets exist, sibling paths cannot fall through, and every path
+  intentionally converges or ends.
+- For `step_type: "branch"`, load `references/branch.md` and record
+  **`branch_best_practices`**. Confirm this is a small in-flow decision rather
+  than a major route, selection is deterministic and fail-closed, targets
+  exist, sibling paths cannot fall through, and convergence/end behavior is
+  explicit.
+
+These are also judgment checks with same-pass repair authority. The persistence
+tool rejects a step receipt that omits its matching reference-backed check.
 
 For a candidate whose `step_type` is `"routing"` only (never `"branch"` —
 branch is deliberately the small in-flow decision, these two checks do not

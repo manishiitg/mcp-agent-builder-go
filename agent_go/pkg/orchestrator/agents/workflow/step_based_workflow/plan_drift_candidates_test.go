@@ -151,6 +151,46 @@ func TestCollectPlanDriftCandidatesReflagsStaleContractVersion(t *testing.T) {
 	}
 }
 
+func TestCollectPlanDriftCandidatesReflagsSupportedTypesForContractVersionThree(t *testing.T) {
+	planJSON := `{"steps":[
+  {"id":"regular-a","type":"regular"},
+  {"id":"sequence-b","type":"message_sequence","description":"Complete and verify the outcome.","items":[{"id":"verify","type":"user_message","message":"Re-open the evidence and repair verified gaps."}]}
+]}`
+	stepConfig := `{"steps":[
+  {"id":"regular-a","agent_configs":{"drift_review":{"needs_review":false,"contract_version":2,"checks":[{"check_id":"step_description_accuracy","status":"pass","evidence":"regular step was reviewed under the still-current contract"}]}}},
+  {"id":"sequence-b","agent_configs":{"drift_review":{"needs_review":false,"contract_version":2,"checks":[{"check_id":"step_description_accuracy","status":"pass","evidence":"sequence predates its type-specific best-practices check"}]}}}
+]}`
+	planDriftCandidateWorkspace(t, "Workflow/drift-candidates-message-sequence-v3", planJSON, stepConfig)
+
+	got, err := CollectPlanDriftCandidates(context.Background(), "Workflow/drift-candidates-message-sequence-v3")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("CollectPlanDriftCandidates = %#v, want regular-a and sequence-b due for their type-specific v3 contracts", got)
+	}
+	byID := map[string]string{}
+	for _, candidate := range got {
+		byID[candidate.StepID] = candidate.StepType
+	}
+	if byID["regular-a"] != "regular" || byID["sequence-b"] != "message_sequence" {
+		t.Fatalf("candidate types = %#v, want both supported step types", byID)
+	}
+}
+
+func TestRequiredPlanDriftContractVersionIsTypeSpecific(t *testing.T) {
+	for _, stepType := range []string{"regular", "message_sequence", "todo_task", "routing", "branch"} {
+		if got := requiredPlanDriftReviewContractVersion(stepType); got != 3 {
+			t.Fatalf("required version for %s = %d, want 3", stepType, got)
+		}
+	}
+	for _, stepType := range []string{"human_input", "workflow", ""} {
+		if got := requiredPlanDriftReviewContractVersion(stepType); got != 2 {
+			t.Fatalf("required version for %s = %d, want 2", stepType, got)
+		}
+	}
+}
+
 func TestCollectPlanDriftCandidatesErrorsOnMalformedPlan(t *testing.T) {
 	planDriftCandidateWorkspace(t, "Workflow/drift-candidates", "{not valid json", "")
 	got, err := CollectPlanDriftCandidates(context.Background(), "Workflow/drift-candidates")
