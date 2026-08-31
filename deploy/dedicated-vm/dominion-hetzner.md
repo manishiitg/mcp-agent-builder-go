@@ -133,6 +133,60 @@ host. A release contains:
 - the built frontend with a runtime configuration exposing only `dominion`
 - `mcp_servers_dominion.json` with an empty `mcpServers` object
 
+### Logs are required, not automatic (found live 2026-08-31)
+
+A fresh release directory must symlink its `logs/` subfolder to the
+persistent `/srv/dominion/logs/`, not let the app create a plain directory
+there:
+
+```bash
+ln -s /srv/dominion/logs /srv/dominion/releases/<release-id>/logs
+```
+
+Without this, logging on this deployment is silently broken in two
+independent, stacked ways — both confirmed live while debugging an
+unrelated user report, after `grep`ing through conversation JSON files was
+the only way to find anything:
+
+1. **`--log-file` on `dominion-agent`'s `ExecStart` does nothing.**
+   `createServerLogger()` (`agent_go/cmd/server/server.go:6591`) hardcodes
+   `logFile := ""` regardless of the flag, with a comment saying it expects
+   the *launching shell* to redirect stdout to a file. Nothing in this
+   deployment does that, so under systemd every `log.Printf` from the main
+   server — including `[API]` request/response tracing and tool-execution
+   errors — goes to stdout/stderr, which systemd sends to the system
+   journal. The `dominion` account is not in the `adm`/`systemd-journal`
+   groups and cannot read it (`journalctl --user` fails with "insufficient
+   permissions"), so this output was completely unrecoverable. Fixed by
+   adding `StandardOutput=append:/srv/dominion/logs/agent.log` and
+   `StandardError=append:/srv/dominion/logs/agent.log` to
+   `dominion-agent.service` (mirrored for `dominion-workspace.service` →
+   `workspace.log` and `dominion-gateway.service` → `gateway.log`) — this is
+   the systemd-native equivalent of the shell redirection the code already
+   assumes exists, and needs no code change.
+2. **`logs/schedule.log` and `logs/llm_debug.log` are real and already
+   working, but not durable.** Several places (`schedule_logging.go`,
+   `base_llm.go`, `llm_agent.go`, `base_orchestrator_agent.go`) write to a
+   *relative* `logs/...` path, resolved against `WorkingDirectory` — which
+   is `/srv/dominion/current`, a symlink to whichever release directory is
+   active. A plain `mkdir logs` inside a new release (what every release up
+   to and including `62a096fe1-mlp-b932c7b-20260825050548` did) silently
+   orphans the previous release's log history on every single redeploy and
+   starts over empty — indistinguishable from logging being broken at all,
+   since nothing errors. The symlink above fixes this by construction: any
+   release-relative `logs/...` write and any systemd-captured stdout file
+   land in the same one persistent directory, continuously, regardless of
+   how many releases follow.
+
+Verify after any release:
+
+```bash
+ssh -p 2299 dominion@116.202.210.102 \
+  'ls -la /srv/dominion/current/logs && tail -5 /srv/dominion/logs/agent.log'
+# expect: /srv/dominion/current/logs is a symlink -> /srv/dominion/logs,
+# and agent.log has fresh [API] lines from just now, not empty/missing.
+```
+
 ### The Landlock launcher is required, not optional (PLAT-118)
 
 `dominion-workspace` resolves its shell sandbox launcher by a hardcoded name,
@@ -407,11 +461,43 @@ Live on the target host, first deployed 2026-08-24:
   any real Dominion turn's expected duration while still bounding the
   worst case far below the "hours, indefinitely" this incident actually
   hit.
+- Logging was silently broken since the original 2026-08-24 deploy, found
+  2026-08-31 while trying to check for tool errors and finding nothing —
+  see "Logs are required, not automatic" under Release requirements above
+  for the two-part fix (systemd `StandardOutput=append:`, plus symlinking
+  each release's `logs/` to the persistent `/srv/dominion/logs/`). All
+  three services now log to `/srv/dominion/logs/{agent,workspace,gateway}.log`,
+  continuously across releases.
 
-Known follow-up, not yet done:
+## Outstanding items (checklist)
 
-- Cloudflare SSL/TLS mode is not yet switched to Full (strict) — the DNS
-  record is currently unproxied (DNS-only), which is why certificate
-  issuance worked without any Cloudflare-side change. Flipping to proxied +
-  Full (strict) is optional, not blocking, and is the account owner's call
-  since it changes what protects this hostname.
+Kept here as the single place to check what's still open on this
+deployment, instead of scattered across incident write-ups above. Update
+this list — don't leave a fixed item unchecked, and don't let a new gap go
+undocumented elsewhere only.
+
+- [ ] **Cloudflare SSL/TLS mode not yet Full (strict).** The DNS record is
+      currently unproxied (DNS-only), which is why certificate issuance
+      worked without any Cloudflare-side change. Optional, not blocking —
+      the account owner's call, since it changes what protects this
+      hostname.
+- [ ] **No automated release script.** Every release today is a manual,
+      human-run sequence (build 5 binaries + frontend locally, `rsync`, swap
+      the `current` symlink, restart 3 services) — see
+      [`../ROOTLESS-LINUX-DEPLOYMENT-CHECKLIST.md`](../ROOTLESS-LINUX-DEPLOYMENT-CHECKLIST.md)'s
+      "Not yet automated" section. A `deploy-dominion.sh` mirroring
+      `deploy-rootless.sh` would make every item on that checklist — plus
+      the release-relative `logs/` symlink from this doc — impossible to
+      silently skip on a future release.
+- [ ] **`deliver-briefing` step reported `delivered: False status: failed`**
+      on the `tectonicusadaytrading` workflow's 2026-08-31 scheduled run
+      (`runs/iteration-0/default/execution/deliver-briefing/delivery_receipt.json`).
+      Found while checking logs for an unrelated report, not yet
+      root-caused — needs investigation on its own; may or may not be
+      related to today's other fixes.
+
+The logging gap this deployment found is shared code, not
+Dominion-specific, so the open item to check other rootless deployments for
+it (Video Studio) lives in
+[`../ROOTLESS-LINUX-DEPLOYMENT-CHECKLIST.md`](../ROOTLESS-LINUX-DEPLOYMENT-CHECKLIST.md#9-server-logs-must-actually-reach-a-file-the-service-account-can-read),
+not duplicated here.

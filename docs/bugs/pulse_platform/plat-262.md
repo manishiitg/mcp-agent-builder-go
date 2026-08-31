@@ -436,3 +436,34 @@ session's live testing exercised the permission/gating logic paths
 correctly but not the separate per-account chat-history isolation path
 (verified instead by code inspection: `chatHistoryRoot(userID)` is
 genuinely per-`userID`-keyed, confirmed no shared state).
+
+## Frontend UX polish (cosmetic-only, no new server-side enforcement)
+
+Live testing surfaced several UI controls that either promised a capability
+the read-only account doesn't have (misleading, since the click would just
+fail or silently do nothing after the fact), or exposed operational actions
+the user decided a read-only account specifically shouldn't see even though
+the underlying tool (`stop_step`, `trigger_schedule`) stays server-side
+available in Run mode for everyone by design (see the Run-mode tool-safe
+bucket above). All of these are pure `isWorkflowReadOnly(user, isMultiUserMode)`
+UI hides — none change server-side enforcement, which was already correct
+either way:
+
+- `ModePresetBar.tsx`: the "Edit automation" gear icon hidden, both next to
+  the active automation name and inside the preset-picker dropdown list.
+- `WorkflowChatTabs.tsx`: the in-tab Stop button (busy-tab control) and the
+  "Interact in Automation Builder" icon (converts a view-only scheduled/bot-run
+  tab into an interactive Builder chat) both hidden.
+- `WorkflowScheduleRunsPanel.tsx` (the Schedules popup): per-schedule
+  Stop/Run now/Resume buttons hidden (both the compact and expanded list
+  layouts); in the "⋮" action menu, "Pause schedule" and "Delete schedule"
+  items hidden individually ("Show details" stays visible for everyone);
+  the global scheduler pause/resume control and the per-workflow-group bulk
+  pause/resume control both hidden.
+- `WorkflowCapabilitiesPanel.tsx` (opened via the canvas toolbar's
+  skills/MCP/secrets/browser/LLM-config icons — a separate entry point from
+  the `PresetModal` the gear icon opens): the Save footer button hidden:
+  nothing in that panel can actually persist for a read-only account.
+
+Verified: `npx tsc --noEmit -p .` and `npm run build` clean after each
+change (pre-existing bundle-size warning only, not a failure).

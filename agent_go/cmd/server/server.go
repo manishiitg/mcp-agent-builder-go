@@ -2989,28 +2989,56 @@ func (api *StreamingAPI) apiRequestLogMiddleware(next http.Handler) http.Handler
 		}
 
 		start := time.Now()
-		inFlight := atomic.AddInt64(&apiRequestsInFlight, 1)
 		recorder := &statusCapturingResponseWriter{ResponseWriter: w}
+		traceRequest := shouldTraceAPIRequest(r)
+		var inFlight int64
+		if traceRequest {
+			inFlight = atomic.AddInt64(&apiRequestsInFlight, 1)
+			log.Printf("[API] --> %s %s in_flight=%d", r.Method, requestLogPath(r), inFlight)
+		}
 
-		log.Printf("[API] --> %s %s in_flight=%d", r.Method, requestLogPath(r), inFlight)
 		defer func() {
-			remaining := atomic.AddInt64(&apiRequestsInFlight, -1)
 			status := recorder.status
 			if status == 0 {
 				status = http.StatusOK
 			}
-			log.Printf("[API] <-- %s %s status=%d bytes=%d duration=%s in_flight=%d",
-				r.Method,
-				requestLogPath(r),
-				status,
-				recorder.bytes,
-				time.Since(start).Round(time.Millisecond),
-				remaining,
-			)
+			if traceRequest {
+				remaining := atomic.AddInt64(&apiRequestsInFlight, -1)
+				log.Printf("[API] <-- %s %s status=%d bytes=%d duration=%s in_flight=%d",
+					r.Method,
+					requestLogPath(r),
+					status,
+					recorder.bytes,
+					time.Since(start).Round(time.Millisecond),
+					remaining,
+				)
+			} else if status >= http.StatusBadRequest {
+				// Background reads are quiet when they succeed, but failures remain
+				// actionable in the normal server log.
+				log.Printf("[API] <-- %s %s status=%d bytes=%d duration=%s",
+					r.Method,
+					requestLogPath(r),
+					status,
+					recorder.bytes,
+					time.Since(start).Round(time.Millisecond),
+				)
+			}
 		}()
 
 		next.ServeHTTP(recorder, r)
 	})
+}
+
+// shouldTraceAPIRequest keeps normal logs focused on user actions and writes.
+// The frontend makes frequent successful GET requests for state refreshes; their
+// failures are still logged by apiRequestLogMiddleware.
+func shouldTraceAPIRequest(r *http.Request) bool {
+	switch r.Method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return false
+	default:
+		return true
+	}
 }
 
 func shouldLogAPIRequests() bool {

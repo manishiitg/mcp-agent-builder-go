@@ -628,9 +628,24 @@ func LoadModuleReviewHistory(ctx context.Context, workspacePath string, perModul
 	if err := ensurePulseReviewLogSchema(ctx, db); err != nil {
 		return nil, err
 	}
-	rows, err := db.QueryContext(ctx, `SELECT module, recorded_at, verdict
+
+	// Two bounded queries instead of one unbounded full-table scan + sort.
+	// The old version read every row this table has ever accumulated for
+	// the workflow's entire lifetime (no WHERE, no LIMIT) just to compute a
+	// per-module total and the 3 most recent verdicts in Go -- the only
+	// index (module, recorded_at) can't help an ORDER BY recorded_at with
+	// no module predicate. Confirmed live on the Dominion deployment
+	// 2026-08-31: this was the query behind get_pulse_state's "module" view
+	// hanging for 120+ seconds on a workflow with months of accumulated
+	// Gate cycles, while the sibling "backlog" view -- which never touches
+	// this table -- stayed fast on the identical database. `module` is
+	// already canonicalized on write (ensurePulseReviewLogSchema migrates
+	// old aliases in place), so grouping on the raw column is equivalent to
+	// the previous Normalize-after-read behavior.
+	summaryRows, err := db.QueryContext(ctx, `SELECT module, COUNT(*) AS run_count, MAX(recorded_at) AS last_ran_at
 		FROM pulse_review_log
-		ORDER BY recorded_at DESC, _id DESC`)
+		GROUP BY module
+		ORDER BY last_ran_at DESC`)
 	if err != nil {
 		// No table means no reviewer has run yet — that is "nothing to report",
 		// not an error the Gate has to handle.
@@ -639,41 +654,63 @@ func LoadModuleReviewHistory(ctx context.Context, workspacePath string, perModul
 		}
 		return nil, err
 	}
-	var out []ModuleReviewHistory
-	indexByModule := map[string]int{}
-	for rows.Next() {
-		var module, recordedAt, verdict string
-		if err := rows.Scan(&module, &recordedAt, &verdict); err != nil {
-			rows.Close()
+	type moduleSummary struct {
+		module    string
+		runCount  int
+		lastRanAt string
+	}
+	var summaries []moduleSummary
+	for summaryRows.Next() {
+		var s moduleSummary
+		if err := summaryRows.Scan(&s.module, &s.runCount, &s.lastRanAt); err != nil {
+			summaryRows.Close()
 			return nil, err
 		}
-		module = pulsemodules.Normalize(module)
-		index, exists := indexByModule[module]
-		if !exists {
-			index = len(out)
-			indexByModule[module] = index
-			out = append(out, ModuleReviewHistory{
-				Module:        module,
-				LastRanAt:     recordedAt,
-				RecentVerdict: []string{},
-			})
+		summaries = append(summaries, s)
+	}
+	if err := summaryRows.Err(); err != nil {
+		summaryRows.Close()
+		return nil, err
+	}
+	summaryRows.Close()
+
+	out := make([]ModuleReviewHistory, 0, len(summaries))
+	for _, s := range summaries {
+		history := ModuleReviewHistory{
+			Module:        pulsemodules.Normalize(s.module),
+			RunCount:      s.runCount,
+			LastRanAt:     s.lastRanAt,
+			RecentVerdict: []string{},
 		}
-		out[index].RunCount++
-		if len(out[index].RecentVerdict) < perModule {
+		recentRows, err := db.QueryContext(ctx, `SELECT recorded_at, verdict
+			FROM pulse_review_log
+			WHERE module = ?
+			ORDER BY recorded_at DESC, _id DESC
+			LIMIT ?`, s.module, perModule)
+		if err != nil {
+			return nil, err
+		}
+		for recentRows.Next() {
+			var recordedAt, verdict string
+			if err := recentRows.Scan(&recordedAt, &verdict); err != nil {
+				recentRows.Close()
+				return nil, err
+			}
 			if strings.TrimSpace(verdict) == "" {
 				verdict = "(ran; no verdict recorded)"
 			}
-			out[index].RecentVerdict = append(
-				out[index].RecentVerdict,
+			history.RecentVerdict = append(
+				history.RecentVerdict,
 				fmt.Sprintf("%s — %s", recordedAt, verdict),
 			)
 		}
+		if err := recentRows.Err(); err != nil {
+			recentRows.Close()
+			return nil, err
+		}
+		recentRows.Close()
+		out = append(out, history)
 	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return nil, err
-	}
-	rows.Close()
 
 	return out, nil
 }

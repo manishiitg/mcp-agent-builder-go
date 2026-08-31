@@ -1646,40 +1646,42 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
           </div>
 
           <div className="flex shrink-0 flex-wrap items-center gap-1 lg:justify-end">
-            {job.enabled ? (
-              isRunningJob ? (
-                <button
-                  type="button"
-                  onClick={() => handleStopRun(job)}
-                  className="inline-flex items-center gap-1 rounded-md border border-red-200 bg-red-50 px-2 py-1 text-xs font-medium text-red-600 transition-colors hover:bg-red-100 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400 dark:hover:bg-red-900/50"
-                >
-                  <Square className="h-3 w-3" />
-                  Stop
-                </button>
+            {!isReadOnlyUser && (
+              job.enabled ? (
+                isRunningJob ? (
+                  <button
+                    type="button"
+                    onClick={() => handleStopRun(job)}
+                    className="inline-flex items-center gap-1 rounded-md border border-red-200 bg-red-50 px-2 py-1 text-xs font-medium text-red-600 transition-colors hover:bg-red-100 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400 dark:hover:bg-red-900/50"
+                  >
+                    <Square className="h-3 w-3" />
+                    Stop
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => handleTrigger(job)}
+                    disabled={triggering === job.id}
+                    className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium transition-colors disabled:opacity-40 ${
+                      isMissedJob
+                        ? 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300 dark:hover:bg-amber-900/50'
+                        : 'border-border bg-background text-muted-foreground hover:bg-muted hover:text-green-600'
+                    }`}
+                  >
+                    <Play className="h-3 w-3" />
+                    Run now
+                  </button>
+                )
               ) : (
                 <button
                   type="button"
-                  onClick={() => handleTrigger(job)}
-                  disabled={triggering === job.id}
-                  className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium transition-colors disabled:opacity-40 ${
-                    isMissedJob
-                      ? 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300 dark:hover:bg-amber-900/50'
-                      : 'border-border bg-background text-muted-foreground hover:bg-muted hover:text-green-600'
-                  }`}
+                  onClick={() => handleToggle(job)}
+                  className="inline-flex items-center gap-1 rounded-md border border-green-200 bg-green-50 px-2 py-1 text-xs font-medium text-green-600 transition-colors hover:bg-green-100 dark:border-green-800 dark:bg-green-900/30 dark:text-green-400 dark:hover:bg-green-900/50"
                 >
                   <Play className="h-3 w-3" />
-                  Run now
+                  Resume
                 </button>
               )
-            ) : (
-              <button
-                type="button"
-                onClick={() => handleToggle(job)}
-                className="inline-flex items-center gap-1 rounded-md border border-green-200 bg-green-50 px-2 py-1 text-xs font-medium text-green-600 transition-colors hover:bg-green-100 dark:border-green-800 dark:bg-green-900/30 dark:text-green-400 dark:hover:bg-green-900/50"
-              >
-                <Play className="h-3 w-3" />
-                Resume
-              </button>
             )}
             <div className="relative">
               <button
@@ -1697,7 +1699,7 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
               </button>
               {openActionMenuJobId === job.id && (
                 <div role="menu" onPointerDown={(event) => event.stopPropagation()} className="absolute right-0 top-8 z-30 w-36 rounded-md border border-border bg-popover p-1 shadow-lg">
-                  {job.enabled && !isRunningJob && (
+                  {!isReadOnlyUser && job.enabled && !isRunningJob && (
                     <button type="button" role="menuitem" onClick={() => { setOpenActionMenuJobId(null); handleToggle(job) }} className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-popover-foreground hover:bg-muted">
                       <Pause className="h-3.5 w-3.5" /> Pause schedule
                     </button>
@@ -1705,9 +1707,11 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                   <button type="button" role="menuitem" onClick={() => { setOpenActionMenuJobId(null); showScheduleDetails(job) }} className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-popover-foreground hover:bg-muted">
                     <ChevronRight className="h-3.5 w-3.5" /> Show details
                   </button>
-                  <button type="button" role="menuitem" onClick={() => { setOpenActionMenuJobId(null); handleDelete(job) }} className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-red-600 hover:bg-red-500/10 dark:text-red-400">
-                    <Trash2 className="h-3.5 w-3.5" /> Delete schedule
-                  </button>
+                  {!isReadOnlyUser && (
+                    <button type="button" role="menuitem" onClick={() => { setOpenActionMenuJobId(null); handleDelete(job) }} className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-red-600 hover:bg-red-500/10 dark:text-red-400">
+                      <Trash2 className="h-3.5 w-3.5" /> Delete schedule
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -1788,7 +1792,7 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
             )}
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            {!isWorkflowScoped && (
+            {!isWorkflowScoped && !isReadOnlyUser && (
               <button
                 onClick={handleToggleGlobalPause}
                 disabled={isUpdatingSchedulerPause}
@@ -2342,31 +2346,33 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                         </div>
 
                         <div className="flex flex-wrap items-center gap-1.5 lg:justify-end">
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              handleToggleWorkflowGroupPause(group)
-                            }}
-                            disabled={bulkUpdatingGroupKey === group.key}
-                            title={group.enabled > 0
-                              ? `Pause all ${group.enabled} active schedule${group.enabled === 1 ? '' : 's'} in this automation`
-                              : `Resume all ${group.paused} paused schedule${group.paused === 1 ? '' : 's'} in this automation`}
-                            className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium transition-colors disabled:opacity-60 ${
-                              group.enabled > 0
-                                ? 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300 hover:bg-amber-500/20'
-                                : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/20'
-                            }`}
-                          >
-                            {bulkUpdatingGroupKey === group.key ? (
-                              <Loader className="h-3 w-3 animate-spin" />
-                            ) : group.enabled > 0 ? (
-                              <Pause className="h-3 w-3" />
-                            ) : (
-                              <Play className="h-3 w-3" />
-                            )}
-                            {group.enabled > 0 ? 'Pause all' : 'Resume all'}
-                          </button>
+                          {!isReadOnlyUser && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                handleToggleWorkflowGroupPause(group)
+                              }}
+                              disabled={bulkUpdatingGroupKey === group.key}
+                              title={group.enabled > 0
+                                ? `Pause all ${group.enabled} active schedule${group.enabled === 1 ? '' : 's'} in this automation`
+                                : `Resume all ${group.paused} paused schedule${group.paused === 1 ? '' : 's'} in this automation`}
+                              className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium transition-colors disabled:opacity-60 ${
+                                group.enabled > 0
+                                  ? 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300 hover:bg-amber-500/20'
+                                  : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/20'
+                              }`}
+                            >
+                              {bulkUpdatingGroupKey === group.key ? (
+                                <Loader className="h-3 w-3 animate-spin" />
+                              ) : group.enabled > 0 ? (
+                                <Pause className="h-3 w-3" />
+                              ) : (
+                                <Play className="h-3 w-3" />
+                              )}
+                              {group.enabled > 0 ? 'Pause all' : 'Resume all'}
+                            </button>
+                          )}
                           <span className="rounded-full border border-border bg-card px-2 py-0.5 text-xs text-muted-foreground">
                             {group.jobs.length} schedule{group.jobs.length === 1 ? '' : 's'}
                           </span>
@@ -2626,40 +2632,42 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
 
                       {/* Keep the immediate operational action visible; secondary actions live in one menu. */}
                       <div className="absolute right-0 top-0 flex items-center gap-1">
-                        {job.enabled ? (
-                          job.last_status === 'running' ? (
-                            <button
-                              type="button"
-                              onClick={() => handleStopRun(job)}
-                              className="inline-flex items-center gap-1 rounded-md border border-red-200 bg-red-50 px-2 py-1 text-xs font-medium text-red-600 transition-colors hover:bg-red-100 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400 dark:hover:bg-red-900/50"
-                            >
-                              <Square className="h-3 w-3" />
-                              Stop
-                            </button>
+                        {!isReadOnlyUser && (
+                          job.enabled ? (
+                            job.last_status === 'running' ? (
+                              <button
+                                type="button"
+                                onClick={() => handleStopRun(job)}
+                                className="inline-flex items-center gap-1 rounded-md border border-red-200 bg-red-50 px-2 py-1 text-xs font-medium text-red-600 transition-colors hover:bg-red-100 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400 dark:hover:bg-red-900/50"
+                              >
+                                <Square className="h-3 w-3" />
+                                Stop
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => handleTrigger(job)}
+                                disabled={triggering === job.id}
+                                className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium transition-colors disabled:opacity-40 ${
+                                  isMissedJob
+                                    ? 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300 dark:hover:bg-amber-900/50'
+                                    : 'border-border bg-background text-muted-foreground hover:bg-muted hover:text-green-600'
+                                }`}
+                              >
+                                <Play className="h-3 w-3" />
+                                Run now
+                              </button>
+                            )
                           ) : (
                             <button
                               type="button"
-                              onClick={() => handleTrigger(job)}
-                              disabled={triggering === job.id}
-                              className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium transition-colors disabled:opacity-40 ${
-                                isMissedJob
-                                  ? 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300 dark:hover:bg-amber-900/50'
-                                  : 'border-border bg-background text-muted-foreground hover:bg-muted hover:text-green-600'
-                              }`}
+                              onClick={() => handleToggle(job)}
+                              className="inline-flex items-center gap-1 rounded-md border border-green-200 bg-green-50 px-2 py-1 text-xs font-medium text-green-600 transition-colors hover:bg-green-100 dark:border-green-800 dark:bg-green-900/30 dark:text-green-400 dark:hover:bg-green-900/50"
                             >
                               <Play className="h-3 w-3" />
-                              Run now
+                              Resume
                             </button>
                           )
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => handleToggle(job)}
-                            className="inline-flex items-center gap-1 rounded-md border border-green-200 bg-green-50 px-2 py-1 text-xs font-medium text-green-600 transition-colors hover:bg-green-100 dark:border-green-800 dark:bg-green-900/30 dark:text-green-400 dark:hover:bg-green-900/50"
-                          >
-                            <Play className="h-3 w-3" />
-                            Resume
-                          </button>
                         )}
                         <div className="relative">
                           <button
@@ -2681,7 +2689,7 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                               onPointerDown={(event) => event.stopPropagation()}
                               className="absolute right-0 top-8 z-30 w-36 rounded-md border border-border bg-popover p-1 shadow-lg"
                             >
-                              {job.enabled && job.last_status !== 'running' && (
+                              {!isReadOnlyUser && job.enabled && job.last_status !== 'running' && (
                                 <button
                                   type="button"
                                   role="menuitem"
@@ -2705,14 +2713,16 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                                   {isExpanded ? 'Hide details' : 'Show details'}
                                 </button>
                               )}
-                              <button
-                                type="button"
-                                role="menuitem"
-                                onClick={() => { setOpenActionMenuJobId(null); handleDelete(job) }}
-                                className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-red-600 hover:bg-red-500/10 dark:text-red-400"
-                              >
-                                <Trash2 className="h-3.5 w-3.5" /> Delete schedule
-                              </button>
+                              {!isReadOnlyUser && (
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  onClick={() => { setOpenActionMenuJobId(null); handleDelete(job) }}
+                                  className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-red-600 hover:bg-red-500/10 dark:text-red-400"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" /> Delete schedule
+                                </button>
+                              )}
                             </div>
                           )}
                         </div>

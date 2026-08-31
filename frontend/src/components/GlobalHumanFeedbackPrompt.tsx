@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { MessageCircleQuestion, X } from 'lucide-react'
 import { agentApi } from '../services/api'
-import type { PendingHumanFeedbackRequest } from '../services/api-types'
 import { useChatStore } from '../stores'
 import { collectPendingHumanFeedback } from '../utils/humanFeedbackAttention'
 import {
@@ -21,7 +20,6 @@ export function GlobalHumanFeedbackPrompt() {
   const tabEvents = useChatStore((state) => state.tabEvents)
   const chatTabs = useChatStore((state) => state.chatTabs)
   const [submittedRequestIds, setSubmittedRequestIds] = useState<Set<string>>(() => new Set())
-  const [serverPending, setServerPending] = useState<PendingHumanFeedbackRequest[]>([])
   const [nowMs, setNowMs] = useState(() => Date.now())
   const [minimized, setMinimized] = useState(false)
 
@@ -40,24 +38,6 @@ export function GlobalHumanFeedbackPrompt() {
     return () => window.clearInterval(timer)
   }, [])
 
-  useEffect(() => {
-    let cancelled = false
-    const refresh = async () => {
-      try {
-        const response = await agentApi.getPendingHumanFeedback()
-        if (!cancelled) setServerPending(response.requests || [])
-      } catch {
-        // Event-backed discovery below remains available during transient API errors.
-      }
-    }
-    void refresh()
-    const timer = window.setInterval(() => { void refresh() }, 2_000)
-    return () => {
-      cancelled = true
-      window.clearInterval(timer)
-    }
-  }, [])
-
   const pending = useMemo(() => {
     const eventPending = collectPendingHumanFeedback(
       tabEvents,
@@ -65,33 +45,8 @@ export function GlobalHumanFeedbackPrompt() {
       nowMs,
     )
     const byRequestId = new Map(eventPending.map((request) => [request.requestId, request]))
-    for (const request of serverPending) {
-      if (submittedRequestIds.has(request.unique_id) || hasSubmittedFeedback(request.unique_id)) continue
-      const expiresAtMs = Date.parse(request.expires_at)
-      if (Number.isFinite(expiresAtMs) && nowMs > expiresAtMs) continue
-      const timestampMs = Date.parse(request.created_at)
-      byRequestId.set(request.unique_id, {
-        requestId: request.unique_id,
-        question: request.message_for_user,
-        sessionId: request.session_id || '',
-        timestampMs: Number.isFinite(timestampMs) ? timestampMs : nowMs,
-        expiresAtMs: Number.isFinite(expiresAtMs) ? expiresAtMs : nowMs + 30 * 60 * 1000,
-        displayEvent: {
-          type: 'blocking_human_feedback',
-          timestamp: request.created_at,
-          data: {
-            request_id: request.unique_id,
-            question: request.message_for_user,
-            context: request.context,
-            session_id: request.session_id,
-            options: request.options,
-            allow_feedback: request.allow_feedback,
-          },
-        },
-      })
-    }
     return Array.from(byRequestId.values()).sort((a, b) => a.timestampMs - b.timestampMs)
-  }, [tabEvents, nowMs, serverPending, submittedRequestIds])
+  }, [tabEvents, nowMs, submittedRequestIds])
   const current = pending[0]
   const pendingSignature = pending.map((request) => request.requestId).join('|')
 

@@ -9,6 +9,8 @@ import { agentApi, workflowManifestApi } from '../../services/api'
 import type { WorkflowCapabilities } from '../../services/api-types'
 import { useMCPStore } from '../../stores/useMCPStore'
 import { useWorkflowManifestStore } from '../../stores/useWorkflowManifestStore'
+import { useAuthStore } from '../../stores/useAuthStore'
+import { isWorkflowReadOnly } from '../../utils/workflowPermissions'
 
 export type WorkflowCapabilitySection = 'skills' | 'mcp' | 'secrets' | 'browser' | 'llm'
 
@@ -57,6 +59,7 @@ const SECTION_COPY: Record<WorkflowCapabilitySection, { title: string; descripti
 }
 
 export default function WorkflowCapabilitiesPanel({ section, workspacePath, onClose }: WorkflowCapabilitiesPanelProps) {
+  const isReadOnlyUser = useAuthStore(state => isWorkflowReadOnly(state.user, state.isMultiUserMode))
   const [capabilities, setCapabilities] = useState<WorkflowCapabilities>(EMPTY_CAPABILITIES)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -216,7 +219,10 @@ export default function WorkflowCapabilitiesPanel({ section, workspacePath, onCl
         )}
       </div>
 
-      {!loading && (
+      {/* PLAT-262: Save hidden for a read-only user — nothing in this panel
+          can actually persist for that account, so hide the button that
+          implies otherwise rather than let it fail after the fact. */}
+      {!loading && !isReadOnlyUser && (
         <footer className="flex shrink-0 justify-end border-t px-4 py-3">
           <button
             type="button"
