@@ -57,6 +57,13 @@ type OAuthLoginRequest struct {
 	ClientID   string `json:"client_id,omitempty"` // User-provided client_id for servers without DCR
 }
 
+// MCPConnectRequest represents a request to connect a server. APIKey is optional
+// and only meaningful for servers with no oauth block.
+type MCPConnectRequest struct {
+	ServerName string `json:"server_name"`
+	APIKey     string `json:"api_key,omitempty"`
+}
+
 // OAuthDiscoveryResponse is returned when the server doesn't support DCR and needs a client_id
 type OAuthDiscoveryResponse struct {
 	Status          string   `json:"status"` // "needs_client_id"
@@ -291,32 +298,18 @@ func (api *StreamingAPI) handleOAuthStart(w http.ResponseWriter, r *http.Request
 	// Apply user-provided client_id if present (from the "needs_client_id" flow)
 	if req.ClientID != "" {
 		if serverConfig.OAuth == nil {
-			serverConfig.OAuth = &oauth.OAuthConfig{
-				AutoDiscover: true,
-				UsePKCE:      true,
-				TokenFile:    userTokenFile,
-			}
+			http.Error(w, fmt.Sprintf("Server '%s' has no oauth configuration; a client_id is not applicable", req.ServerName), http.StatusBadRequest)
+			return
 		}
 		serverConfig.OAuth.ClientID = req.ClientID
 		api.logger.Info(fmt.Sprintf("Using user-provided client_id for %s: %s", req.ServerName, req.ClientID))
 	}
 
-	// Initialize OAuth config if not present
-	// Also support mcp-remote pattern: command=npx, args=["mcp-remote", "<url>"]
-	effectiveURL := serverConfig.URL
-	if effectiveURL == "" {
-		effectiveURL = extractMCPRemoteURL(serverConfig.Command, serverConfig.Args)
-	}
+	// The oauth block is the sole authority. Its absence means the server is
+	// open, not that endpoints need discovering — see MCP_CONNECTOR_STATE_PLAN.md §6.
 	if serverConfig.OAuth == nil {
-		if effectiveURL == "" {
-			http.Error(w, fmt.Sprintf("Server '%s' does not have OAuth configured and no URL for auto-discovery", req.ServerName), http.StatusBadRequest)
-			return
-		}
-		serverConfig.OAuth = &oauth.OAuthConfig{
-			AutoDiscover: true,
-			UsePKCE:      true,
-			TokenFile:    userTokenFile,
-		}
+		http.Error(w, fmt.Sprintf("Server '%s' is not an OAuth server", req.ServerName), http.StatusBadRequest)
+		return
 	}
 
 	// Always update TokenFile to user-specific path
@@ -327,94 +320,11 @@ func (api *StreamingAPI) handleOAuthStart(w http.ResponseWriter, r *http.Request
 	// sent to the OAuth provider and make the callback unreachable.
 	serverConfig.OAuth.RedirectURL = redirectURI
 
-	// Track discovered info for the "needs_client_id" response
-	var discoveredResource string
-	var discoveredScopes []string
-
-	// Auto-discover endpoints if needed (auto_discover is true OR endpoints are missing)
-	needsDiscovery := serverConfig.OAuth.AutoDiscover || serverConfig.OAuth.AuthURL == "" || serverConfig.OAuth.TokenURL == ""
-	if needsDiscovery && effectiveURL != "" {
-		api.logger.Info(fmt.Sprintf("Auto-discovering OAuth endpoints for %s", req.ServerName))
-
-		// For mcp-remote servers, temporarily set URL so discovery client can reach the remote
-		if serverConfig.URL == "" && effectiveURL != "" {
-			serverConfig.URL = effectiveURL
-		}
-
-		metadata, err := oauth.FetchAuthServerMetadata(effectiveURL)
-		if err != nil {
-			api.logger.Warn(fmt.Sprintf("RFC 8414 discovery failed: %v", err))
-			// Fallback to 401 response discovery
-			// This also handles RFC 9728 Protected Resource Metadata (resource_metadata parameter)
-			client := mcpclient.New(serverConfig, api.logger)
-			endpoints, err := client.DiscoverOAuthEndpoints(context.Background())
-			if err != nil {
-				http.Error(w, fmt.Sprintf("Failed to auto-discover OAuth endpoints: %v", err), http.StatusInternalServerError)
-				return
-			}
-			serverConfig.OAuth.AuthURL = endpoints.AuthURL
-			serverConfig.OAuth.TokenURL = endpoints.TokenURL
-			api.logger.Info(fmt.Sprintf("Discovered OAuth endpoints from 401 - Auth: %s, Token: %s", endpoints.AuthURL, endpoints.TokenURL))
-
-			// Capture Resource and Scopes from discovery
-			if endpoints.Resource != "" {
-				discoveredResource = endpoints.Resource
-				serverConfig.OAuth.Resource = endpoints.Resource
-				api.logger.Info(fmt.Sprintf("Discovered resource for %s: %s", req.ServerName, endpoints.Resource))
-			}
-			if len(endpoints.ScopesSupported) > 0 {
-				discoveredScopes = endpoints.ScopesSupported
-				// Apply discovered scopes if none configured
-				if len(serverConfig.OAuth.Scopes) == 0 {
-					serverConfig.OAuth.Scopes = endpoints.ScopesSupported
-					api.logger.Info(fmt.Sprintf("Applied discovered scopes for %s: %v", req.ServerName, endpoints.ScopesSupported))
-				}
-			}
-
-			// Perform Dynamic Client Registration if no client_id and discovered endpoints have registration endpoint
-			if serverConfig.OAuth.ClientID == "" && endpoints.RegistrationEndpoint != "" {
-				api.logger.Info(fmt.Sprintf("Performing Dynamic Client Registration for %s (via 401 discovery)", req.ServerName))
-
-				regResponse, err := oauth.RegisterClient(endpoints.RegistrationEndpoint, serverConfig.OAuth.RedirectURL)
-				if err != nil {
-					api.logger.Warn(fmt.Sprintf("Dynamic Client Registration failed: %v", err))
-					// Continue without client_id - will prompt user below
-				} else {
-					serverConfig.OAuth.ClientID = regResponse.ClientID
-					serverConfig.OAuth.ClientSecret = regResponse.ClientSecret
-					api.logger.Info(fmt.Sprintf("Registered client_id via 401 discovery: %s", regResponse.ClientID))
-				}
-			}
-		} else {
-			// Successfully got metadata from .well-known
-			serverConfig.OAuth.AuthURL = metadata.AuthorizationEndpoint
-			serverConfig.OAuth.TokenURL = metadata.TokenEndpoint
-			api.logger.Info(fmt.Sprintf("Discovered OAuth endpoints from .well-known - Auth: %s, Token: %s", metadata.AuthorizationEndpoint, metadata.TokenEndpoint))
-
-			// Capture scopes from auth server metadata
-			if len(metadata.ScopesSupported) > 0 {
-				discoveredScopes = metadata.ScopesSupported
-				if len(serverConfig.OAuth.Scopes) == 0 {
-					serverConfig.OAuth.Scopes = metadata.ScopesSupported
-					api.logger.Info(fmt.Sprintf("Applied discovered scopes from well-known for %s: %v", req.ServerName, metadata.ScopesSupported))
-				}
-			}
-
-			// Perform Dynamic Client Registration if no client_id and server supports it
-			if serverConfig.OAuth.ClientID == "" && metadata.RegistrationEndpoint != "" {
-				api.logger.Info(fmt.Sprintf("Performing Dynamic Client Registration for %s", req.ServerName))
-
-				regResponse, err := oauth.RegisterClient(metadata.RegistrationEndpoint, serverConfig.OAuth.RedirectURL)
-				if err != nil {
-					api.logger.Warn(fmt.Sprintf("Dynamic Client Registration failed: %v", err))
-					// Continue without client_id - will prompt user below
-				} else {
-					serverConfig.OAuth.ClientID = regResponse.ClientID
-					serverConfig.OAuth.ClientSecret = regResponse.ClientSecret
-					api.logger.Info(fmt.Sprintf("Registered client_id: %s", regResponse.ClientID))
-				}
-			}
-		}
+	// Endpoints come from config. Fail loudly rather than falling back to a probe.
+	if serverConfig.OAuth.AuthURL == "" || serverConfig.OAuth.TokenURL == "" {
+		api.logger.Error(fmt.Sprintf("Server %s is missing auth_url or token_url in config", req.ServerName), nil)
+		http.Error(w, fmt.Sprintf("Server '%s' is missing auth_url or token_url in its oauth config. Endpoints are no longer discovered at runtime; add them to the MCP config (see MCP_CONNECTOR_STATE_PLAN.md §6.5).", req.ServerName), http.StatusInternalServerError)
+		return
 	}
 
 	// Instead of hard-failing, return a discovery response prompting for client_id
@@ -425,8 +335,8 @@ func (api *StreamingAPI) handleOAuthStart(w http.ResponseWriter, r *http.Request
 			ServerName:      req.ServerName,
 			AuthURL:         serverConfig.OAuth.AuthURL,
 			TokenURL:        serverConfig.OAuth.TokenURL,
-			Resource:        discoveredResource,
-			ScopesSupported: discoveredScopes,
+			Resource:        serverConfig.OAuth.Resource,
+			ScopesSupported: serverConfig.OAuth.Scopes,
 			Message:         fmt.Sprintf("Server '%s' does not support Dynamic Client Registration. Please provide your OAuth App client_id.", req.ServerName),
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -585,64 +495,23 @@ func (api *StreamingAPI) handleOAuthStatus(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// If OAuth not configured but server has URL, try auto-discovery
+	// A server with no oauth block is open, not undiscovered. Report it as such
+	// instead of probing — this is what made open servers like Exa return 500.
 	if serverConfig.OAuth == nil {
-		if serverConfig.URL == "" {
-			http.Error(w, fmt.Sprintf("Server '%s' does not have OAuth configured and no URL for auto-discovery", serverName), http.StatusBadRequest)
-			return
-		}
-
-		// Auto-discover OAuth endpoints
-		endpoints, err := oauth.DiscoverFromWellKnown(serverConfig.URL)
-		if err != nil {
-			// Fallback to trying a request and parsing 401 response
-			client := mcpclient.New(serverConfig, api.logger)
-			endpoints, err = client.DiscoverOAuthEndpoints(context.Background())
-			if err != nil {
-				http.Error(w, fmt.Sprintf("Failed to auto-discover OAuth endpoints: %v", err), http.StatusInternalServerError)
-				return
-			}
-		}
-
-		// Create default OAuth config for auto-discovered server with user-specific token path
-		serverConfig.OAuth = &oauth.OAuthConfig{
-			AuthURL:      endpoints.AuthURL,
-			TokenURL:     endpoints.TokenURL,
-			UsePKCE:      true,
-			AutoDiscover: false,
-			TokenFile:    userTokenFile,
-		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"server_name":  serverName,
+			"has_oauth":    false,
+			"valid":        false,
+			"authenticated": false,
+		})
+		return
 	}
 
 	// Always set token file to user-specific path for status check
 	serverConfig.OAuth.TokenFile = userTokenFile
 
-	// Auto-discover endpoints if needed (for token refresh to work)
-	api.logger.Info(fmt.Sprintf("🔍 Checking if auto-discovery needed for %s: AutoDiscover=%v, TokenURL='%s', URL='%s'",
-		serverName, serverConfig.OAuth.AutoDiscover, serverConfig.OAuth.TokenURL, serverConfig.URL))
-	if serverConfig.OAuth.AutoDiscover || serverConfig.OAuth.TokenURL == "" {
-		if serverConfig.URL != "" {
-			api.logger.Info(fmt.Sprintf("🔍 Auto-discovering OAuth endpoints for %s from URL: %s", serverName, serverConfig.URL))
-			metadata, err := oauth.FetchAuthServerMetadata(serverConfig.URL)
-			if err != nil {
-				api.logger.Info(fmt.Sprintf("⚠️ RFC 8414 discovery failed for %s: %v, trying 401 discovery", serverName, err))
-				// Try 401 response discovery
-				client := mcpclient.New(serverConfig, api.logger)
-				endpoints, err := client.DiscoverOAuthEndpoints(context.Background())
-				if err == nil {
-					serverConfig.OAuth.AuthURL = endpoints.AuthURL
-					serverConfig.OAuth.TokenURL = endpoints.TokenURL
-					api.logger.Info(fmt.Sprintf("✅ Discovered endpoints via 401 for %s: Auth=%s, Token=%s", serverName, endpoints.AuthURL, endpoints.TokenURL))
-				} else {
-					api.logger.Info(fmt.Sprintf("⚠️ 401 discovery also failed for %s: %v", serverName, err))
-				}
-			} else {
-				serverConfig.OAuth.AuthURL = metadata.AuthorizationEndpoint
-				serverConfig.OAuth.TokenURL = metadata.TokenEndpoint
-				api.logger.Info(fmt.Sprintf("✅ Discovered endpoints via well-known for %s: Auth=%s, Token=%s", serverName, metadata.AuthorizationEndpoint, metadata.TokenEndpoint))
-			}
-		}
-	}
+	// Token refresh uses the configured token_url; there is no discovery fallback.
 
 	// Log the OAuth config for debugging
 	api.logger.Info(fmt.Sprintf("📋 OAuth status check for %s - Config: AuthURL=%s, TokenURL=%s, TokenFile=%s",
@@ -717,33 +586,10 @@ func (api *StreamingAPI) handleOAuthLogout(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// If OAuth not configured but server has URL, try auto-discovery
+	// No oauth block means there is no token to remove.
 	if serverConfig.OAuth == nil {
-		if serverConfig.URL == "" {
-			http.Error(w, fmt.Sprintf("Server '%s' does not have OAuth configured and no URL for auto-discovery", req.ServerName), http.StatusBadRequest)
-			return
-		}
-
-		// Auto-discover OAuth endpoints
-		endpoints, err := oauth.DiscoverFromWellKnown(serverConfig.URL)
-		if err != nil {
-			// Fallback to trying a request and parsing 401 response
-			client := mcpclient.New(serverConfig, api.logger)
-			endpoints, err = client.DiscoverOAuthEndpoints(context.Background())
-			if err != nil {
-				http.Error(w, fmt.Sprintf("Failed to auto-discover OAuth endpoints: %v", err), http.StatusInternalServerError)
-				return
-			}
-		}
-
-		// Create default OAuth config for auto-discovered server with user-specific token path
-		serverConfig.OAuth = &oauth.OAuthConfig{
-			AuthURL:      endpoints.AuthURL,
-			TokenURL:     endpoints.TokenURL,
-			UsePKCE:      true,
-			AutoDiscover: false,
-			TokenFile:    userTokenFile,
-		}
+		http.Error(w, fmt.Sprintf("Server '%s' is not an OAuth server", req.ServerName), http.StatusBadRequest)
+		return
 	}
 
 	// Always set token file to user-specific path for logout
@@ -759,29 +605,187 @@ func (api *StreamingAPI) handleOAuthLogout(w http.ResponseWriter, r *http.Reques
 
 	api.logger.Info(fmt.Sprintf("Successfully logged out user %s from %s", userID, req.ServerName))
 
-	// /api/tools answers from the discovery cache, so removing the token alone
-	// leaves the connector still reporting "Connected". Drop the cached entry and
-	// the in-memory status, then rediscover — discovery now finds no token file
-	// and records the server as not_connected. Mirrors what the connect path
-	// does after a successful authorization.
-	cacheManager := mcpcache.GetCacheManager(api.logger)
-	if err := cacheManager.InvalidateByServer(api.mcpConfigPath, req.ServerName); err != nil {
-		api.logger.Warn(fmt.Sprintf("Failed to invalidate cache for %s: %v", req.ServerName, err))
-	} else {
-		api.logger.Info(fmt.Sprintf("✅ Cache invalidated for %s after logout", req.ServerName))
+	// Removing the token alone would leave the overlay entry behind, which under
+	// the connection rule (§3) still reads as connected. Drop both.
+	if err := api.removeOverlayEntry(req.ServerName); err != nil {
+		api.logger.Warn(fmt.Sprintf("Failed to remove overlay entry for %s: %v", req.ServerName, err))
 	}
 
-	api.toolStatusMux.Lock()
-	delete(api.toolStatus, req.ServerName)
-	api.toolStatusMux.Unlock()
-
-	api.appendServerLog(req.ServerName, "info", "Disconnected — token removed, rediscovering tools...")
-	go api.startBackgroundDiscovery()
+	api.invalidateServerDiscovery(req.ServerName, "Disconnected — token removed, rediscovering tools...")
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
 		"status":  "success",
 		"message": fmt.Sprintf("Successfully logged out from %s", req.ServerName),
+	})
+}
+
+// removeOverlayEntry deletes a server from the user config overlay. Overlay
+// membership defines connection ownership (§3), so this is what actually
+// disconnects a server.
+func (api *StreamingAPI) removeOverlayEntry(serverName string) error {
+	userConfigPath := api.getUserConfigPath()
+	userConfig, err := mcpclient.LoadConfig(userConfigPath, api.logger)
+	if err != nil {
+		// Nothing to remove — an absent overlay already means "not connected".
+		api.logger.Debug(fmt.Sprintf("No user config overlay to remove %s from: %v", serverName, err))
+		return nil
+	}
+	if _, exists := userConfig.MCPServers[serverName]; !exists {
+		return nil
+	}
+	delete(userConfig.MCPServers, serverName)
+	if err := mcpclient.SaveConfig(userConfigPath, userConfig); err != nil {
+		return fmt.Errorf("failed to save user config after removing %s: %w", serverName, err)
+	}
+	api.logger.Info(fmt.Sprintf("🗑️ Removed %s from user config overlay", serverName))
+	return nil
+}
+
+// invalidateServerDiscovery drops cached discovery for a server and kicks off a
+// fresh pass. /api/tools answers from the discovery cache, so a connection change
+// that skips this leaves the connector reporting its previous state.
+func (api *StreamingAPI) invalidateServerDiscovery(serverName, logMessage string) {
+	cacheManager := mcpcache.GetCacheManager(api.logger)
+	if err := cacheManager.InvalidateByServer(api.mcpConfigPath, serverName); err != nil {
+		api.logger.Warn(fmt.Sprintf("Failed to invalidate cache for %s: %v", serverName, err))
+	} else {
+		api.logger.Info(fmt.Sprintf("✅ Cache invalidated for %s", serverName))
+	}
+
+	api.toolStatusMux.Lock()
+	delete(api.toolStatus, serverName)
+	api.toolStatusMux.Unlock()
+
+	api.clearDiscoveryFailure(serverName)
+	api.appendServerLog(serverName, "info", logMessage)
+	go api.startBackgroundDiscovery()
+}
+
+// handleConnectServer connects a server by writing it into the user config
+// overlay. OAuth servers are redirected to the authorization flow instead — the
+// overlay write happens on callback success.
+func (api *StreamingAPI) handleConnectServer(w http.ResponseWriter, r *http.Request) {
+	if isMCPConfigLocked() {
+		http.Error(w, "MCP configuration is locked by administrator", http.StatusForbidden)
+		return
+	}
+
+	var req MCPConnectRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid request: %v", err), http.StatusBadRequest)
+		return
+	}
+	if req.ServerName == "" {
+		http.Error(w, "server_name is required", http.StatusBadRequest)
+		return
+	}
+
+	config, err := mcpclient.LoadMergedConfig(api.mcpConfigPath, api.logger)
+	if err != nil {
+		api.logger.Error(fmt.Sprintf("Failed to load config: %v", err), err)
+		http.Error(w, "Failed to load server config", http.StatusInternalServerError)
+		return
+	}
+
+	serverConfig, err := config.GetServer(req.ServerName)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Server '%s' not found", req.ServerName), http.StatusNotFound)
+		return
+	}
+
+	// OAuth servers cannot be connected by a config write alone; the caller must
+	// run the authorization flow, which persists the overlay entry on success.
+	if serverConfig.OAuth != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"status":      "oauth_required",
+			"server_name": req.ServerName,
+			"message":     fmt.Sprintf("Server '%s' uses OAuth; start the authorization flow via /api/oauth/start", req.ServerName),
+		})
+		return
+	}
+
+	// An API key is optional for open servers. Stored as a bearer header, which
+	// the transport layer already forwards.
+	if req.APIKey != "" {
+		if serverConfig.Headers == nil {
+			serverConfig.Headers = make(map[string]string)
+		}
+		serverConfig.Headers["Authorization"] = "Bearer " + req.APIKey
+		api.logger.Info(fmt.Sprintf("🔑 Stored API key header for %s", req.ServerName))
+	}
+
+	// persistOAuthConfig is misnamed but generic: it upserts a whole server entry
+	// into the overlay. Writing the merged entry keeps base fields intact, since
+	// overlay entries replace base entries wholesale rather than field-by-field.
+	if err := api.persistOAuthConfig(req.ServerName, serverConfig); err != nil {
+		api.logger.Error(fmt.Sprintf("Failed to persist config for %s: %v", req.ServerName, err), err)
+		http.Error(w, fmt.Sprintf("Failed to save connection: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	api.invalidateServerDiscovery(req.ServerName, "Connected — discovering tools...")
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":      "connected",
+		"server_name": req.ServerName,
+		"message":     fmt.Sprintf("Connected to %s", req.ServerName),
+	})
+}
+
+// handleDisconnectServer removes a server from the user config overlay, and its
+// OAuth token if it has one.
+func (api *StreamingAPI) handleDisconnectServer(w http.ResponseWriter, r *http.Request) {
+	if isMCPConfigLocked() {
+		http.Error(w, "MCP configuration is locked by administrator", http.StatusForbidden)
+		return
+	}
+
+	var req MCPConnectRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid request: %v", err), http.StatusBadRequest)
+		return
+	}
+	if req.ServerName == "" {
+		http.Error(w, "server_name is required", http.StatusBadRequest)
+		return
+	}
+
+	userID := GetUserIDFromContext(r.Context())
+	api.logger.Info(fmt.Sprintf("🔌 Disconnect %s for user %s", req.ServerName, userID))
+
+	config, err := mcpclient.LoadMergedConfig(api.mcpConfigPath, api.logger)
+	if err != nil {
+		api.logger.Error(fmt.Sprintf("Failed to load config: %v", err), err)
+		http.Error(w, "Failed to load server config", http.StatusInternalServerError)
+		return
+	}
+
+	// Remove the token first. A server absent from config has no token to remove,
+	// which is not an error — the overlay removal below still needs to run.
+	if serverConfig, err := config.GetServer(req.ServerName); err == nil && serverConfig.OAuth != nil {
+		serverConfig.OAuth.TokenFile = getUserTokenFilePath(userID, req.ServerName)
+		oauthMgr := oauth.NewManager(serverConfig.OAuth, api.logger)
+		if err := oauthMgr.Logout(); err != nil {
+			api.logger.Warn(fmt.Sprintf("Failed to remove token for %s: %v", req.ServerName, err))
+		}
+	}
+
+	if err := api.removeOverlayEntry(req.ServerName); err != nil {
+		api.logger.Error(fmt.Sprintf("Failed to disconnect %s: %v", req.ServerName, err), err)
+		http.Error(w, fmt.Sprintf("Failed to disconnect: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	api.invalidateServerDiscovery(req.ServerName, "Disconnected — rediscovering tools...")
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":      "disconnected",
+		"server_name": req.ServerName,
+		"message":     fmt.Sprintf("Disconnected from %s", req.ServerName),
 	})
 }
 

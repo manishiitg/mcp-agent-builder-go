@@ -7,6 +7,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Loader2, Key, X, Plus, Check } from 'lucide-react';
 import { oauthApi } from '../services/oauthApi';
 import type { OAuthDiscoveryResponse } from '../services/oauthApi';
+import { mcpConfigApi } from '../services/mcpConfigApi';
 import { useChatStore } from '../stores';
 
 /** Toasts are global, so read the action lazily rather than subscribing to the store. */
@@ -15,7 +16,14 @@ const notify = (message: string, type: 'success' | 'info' | 'error') =>
 
 interface OAuthStatusBadgeProps {
   serverName: string;
-  requiresOAuth?: boolean; // Auto-detected from server discovery
+  requiresOAuth?: boolean; // Read from server config (presence of an oauth block)
+  /**
+   * Connection ownership from /api/tools — 'connected' | 'available'. When
+   * supplied, the control is driven by this instead of by polling
+   * /api/oauth/status, and clicks route to the connect/disconnect endpoints.
+   * When omitted, the component behaves exactly as before.
+   */
+  connection?: string;
   onAuthChange?: (valid: boolean) => void;
   /**
    * `label` renders the wide "Connect"/"Disconnect" buttons used by the server
@@ -29,18 +37,28 @@ interface OAuthStatusBadgeProps {
 export const OAuthStatusBadge: React.FC<OAuthStatusBadgeProps> = ({
   serverName,
   requiresOAuth,
+  connection,
   onAuthChange,
   variant = 'label'
 }) => {
+  // When the caller knows the connection state, this component stops asking the
+  // server about it — that is what removes ~24 polls per 10s from the directory.
+  const connectionDriven = connection !== undefined;
   const [tokenValid, setTokenValid] = useState<boolean>(false);
   const [loading, setLoading] = useState(false);
   const [hasOAuth, setHasOAuth] = useState<boolean | null>(null);
   const prevTokenValidRef = useRef<boolean | null>(null);
 
-  // Client ID dialog state
-  const [showClientIdDialog, setShowClientIdDialog] = useState(false);
+  // Connection ownership when supplied, token validity otherwise.
+  const isConnected = connectionDriven ? connection === 'connected' : tokenValid;
+
+  // Dialog state. 'client_id' collects an OAuth client_id for servers without
+  // DCR; 'api_key' collects an optional bearer key for open servers.
+  const [dialogMode, setDialogMode] = useState<'client_id' | 'api_key' | null>(null);
   const [clientIdInput, setClientIdInput] = useState('');
+  const [apiKeyInput, setApiKeyInput] = useState('');
   const [discoveryInfo, setDiscoveryInfo] = useState<OAuthDiscoveryResponse | null>(null);
+  const showClientIdDialog = dialogMode === 'client_id';
 
   // Check token status on mount and periodically
   const checkTokenStatus = React.useCallback(async () => {
@@ -55,7 +73,10 @@ export const OAuthStatusBadge: React.FC<OAuthStatusBadgeProps> = ({
       const becameValid = status.valid && prevValid !== true;
 
       setTokenValid(status.valid);
-      setHasOAuth(true);
+      // An open server now answers 200 with has_oauth:false rather than erroring,
+      // so honour it explicitly — otherwise the label variant would start
+      // offering a Connect button for servers that have no OAuth at all.
+      setHasOAuth(status.has_oauth !== false);
       prevTokenValidRef.current = status.valid;
 
       if (becameValid) {
@@ -74,15 +95,19 @@ export const OAuthStatusBadge: React.FC<OAuthStatusBadgeProps> = ({
   }, [serverName, requiresOAuth, onAuthChange]);
 
   useEffect(() => {
-    // If requiresOAuth is explicitly passed (from auto-discovery), use it immediately
+    // If requiresOAuth is explicitly passed (read from config), use it immediately
     if (requiresOAuth !== undefined) {
       setHasOAuth(requiresOAuth);
     }
 
+    // The connection prop already carries the answer; polling would only
+    // re-derive it, once per card every 10 seconds.
+    if (connectionDriven) return;
+
     checkTokenStatus();
     const interval = setInterval(checkTokenStatus, 10000); // Every 10 seconds
     return () => clearInterval(interval);
-  }, [serverName, requiresOAuth, checkTokenStatus]);
+  }, [serverName, requiresOAuth, connectionDriven, checkTokenStatus]);
 
   const handleLogin = async (clientId?: string) => {
     setLoading(true);
@@ -96,7 +121,7 @@ export const OAuthStatusBadge: React.FC<OAuthStatusBadgeProps> = ({
       if ('status' in response && response.status === 'needs_client_id') {
         console.log(`[OAuthStatusBadge] Server ${serverName} needs client_id`);
         setDiscoveryInfo(response as OAuthDiscoveryResponse);
-        setShowClientIdDialog(true);
+        setDialogMode('client_id');
         setLoading(false);
         return;
       }
@@ -151,16 +176,76 @@ export const OAuthStatusBadge: React.FC<OAuthStatusBadgeProps> = ({
 
   const handleClientIdSubmit = () => {
     if (!clientIdInput.trim()) return;
-    setShowClientIdDialog(false);
+    setDialogMode(null);
     setDiscoveryInfo(null);
     handleLogin(clientIdInput.trim());
     setClientIdInput('');
   };
 
   const handleClientIdCancel = () => {
-    setShowClientIdDialog(false);
+    setDialogMode(null);
     setClientIdInput('');
     setDiscoveryInfo(null);
+  };
+
+  /** Connect an open server, with or without an API key. */
+  const handleConnect = async (apiKey?: string) => {
+    setLoading(true);
+    try {
+      const response = await mcpConfigApi.connectServer(serverName, apiKey);
+      // The server has the final say on whether OAuth is required; fall through
+      // to the authorization flow rather than reporting a false success.
+      if (response.status === 'oauth_required') {
+        setLoading(false);
+        handleLogin();
+        return;
+      }
+      notify(`Connected to ${serverName}`, 'success');
+      onAuthChange?.(true);
+    } catch (error) {
+      console.error('[OAuthStatusBadge] Connect failed:', error);
+      notify(`Could not connect to ${serverName}`, 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDisconnect = async () => {
+    setLoading(true);
+    try {
+      await mcpConfigApi.disconnectServer(serverName);
+      setTokenValid(false);
+      prevTokenValidRef.current = false;
+      notify(`Disconnected from ${serverName}`, 'info');
+      onAuthChange?.(false);
+    } catch (error) {
+      console.error('[OAuthStatusBadge] Disconnect failed:', error);
+      notify(`Could not disconnect from ${serverName}`, 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /** Entry point for the connection-driven control. */
+  const handleConnectClick = () => {
+    if (requiresOAuth) {
+      handleLogin();
+      return;
+    }
+    // Open servers may accept an optional key; ask before connecting.
+    setDialogMode('api_key');
+  };
+
+  const handleApiKeySubmit = () => {
+    const key = apiKeyInput.trim();
+    setDialogMode(null);
+    setApiKeyInput('');
+    handleConnect(key || undefined);
+  };
+
+  const handleApiKeyCancel = () => {
+    setDialogMode(null);
+    setApiKeyInput('');
   };
 
   const handleLogout = async () => {
@@ -179,13 +264,15 @@ export const OAuthStatusBadge: React.FC<OAuthStatusBadgeProps> = ({
     }
   };
 
-  // Don't render if server doesn't have OAuth
-  if (hasOAuth === false) {
+  // Don't render if server doesn't have OAuth. In connection-driven mode this
+  // gate does not apply — an open server is exactly the case that must still
+  // render a Connect button, and it is why open servers previously showed none.
+  if (hasOAuth === false && !connectionDriven) {
     return null;
   }
 
   // Loading state while checking
-  if (hasOAuth === null) {
+  if (hasOAuth === null && !connectionDriven) {
     return (
       <div className="flex items-center gap-1 px-2 py-1 text-xs bg-gray-100 dark:bg-gray-700 rounded">
         <Loader2 className="w-3 h-3 animate-spin" />
@@ -264,26 +351,95 @@ export const OAuthStatusBadge: React.FC<OAuthStatusBadgeProps> = ({
     </div>
   );
 
+  // Optional API key for open servers. Same shell as the client-id dialog;
+  // only the copy and the empty-input behaviour differ — connecting without a
+  // key is a valid choice here, so the submit button is never disabled.
+  const apiKeyDialog = dialogMode === 'api_key' && (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl p-6 max-w-md w-full mx-4">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <Key className="w-5 h-5 text-blue-500" />
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+              Connect {serverName}
+            </h3>
+          </div>
+          <button
+            onClick={handleApiKeyCancel}
+            className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+          This server works without a key. Adding one may unlock additional tools.
+        </p>
+
+        <div className="mb-4">
+          <label htmlFor="api-key-input" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            API key <span className="font-normal text-gray-400">(optional)</span>
+          </label>
+          <input
+            id="api-key-input"
+            type="password"
+            value={apiKeyInput}
+            onChange={(e) => setApiKeyInput(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleApiKeySubmit()}
+            placeholder="Leave blank to connect anonymously"
+            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            autoFocus
+          />
+        </div>
+
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={handleApiKeyCancel}
+            className="px-4 py-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 rounded-md transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleApiKeySubmit}
+            className="px-4 py-2 text-sm font-medium bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+          >
+            Connect
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
   if (variant === 'icon') {
     // Connected reads as a filled green check; hovering swaps it for the X that
     // disconnects, so the resting state stays as calm as the directory grid.
     return (
       <>
         {clientIdDialog}
+        {apiKeyDialog}
         <button
-          onClick={() => (tokenValid ? handleLogout() : handleLogin())}
+          onClick={() => {
+            if (isConnected) {
+              if (connectionDriven) handleDisconnect();
+              else handleLogout();
+            } else if (connectionDriven) {
+              handleConnectClick();
+            } else {
+              handleLogin();
+            }
+          }}
           disabled={loading}
           className={`group/btn flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition-colors disabled:opacity-50 ${
-            tokenValid
+            isConnected
               ? 'border-green-600/40 bg-green-600/15 text-green-500 hover:border-red-500/40 hover:bg-red-500/15 hover:text-red-400'
               : 'border-gray-300 text-gray-500 hover:bg-gray-100 hover:text-gray-900 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-100'
           }`}
-          title={tokenValid ? `Disconnect ${serverName}` : `Connect ${serverName}`}
-          aria-label={tokenValid ? `Disconnect ${serverName}` : `Connect ${serverName}`}
+          title={isConnected ? `Disconnect ${serverName}` : `Connect ${serverName}`}
+          aria-label={isConnected ? `Disconnect ${serverName}` : `Connect ${serverName}`}
         >
           {loading ? (
             <Loader2 className="h-4 w-4 animate-spin" />
-          ) : tokenValid ? (
+          ) : isConnected ? (
             <>
               <Check className="h-4 w-4 group-hover/btn:hidden" />
               <X className="hidden h-4 w-4 group-hover/btn:block" />
@@ -296,13 +452,14 @@ export const OAuthStatusBadge: React.FC<OAuthStatusBadgeProps> = ({
     );
   }
 
-  if (!tokenValid) {
+  if (!isConnected) {
     return (
       <>
         {clientIdDialog}
+        {apiKeyDialog}
         <div className="flex items-center gap-1">
           <button
-            onClick={() => handleLogin()}
+            onClick={() => (connectionDriven ? handleConnectClick() : handleLogin())}
             disabled={loading}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 hover:bg-gray-700 dark:hover:bg-gray-300 rounded-md transition-colors disabled:opacity-50"
             title="Connect this service"
@@ -324,7 +481,7 @@ export const OAuthStatusBadge: React.FC<OAuthStatusBadgeProps> = ({
   return (
     <div className="flex items-center gap-1.5">
       <button
-        onClick={handleLogout}
+        onClick={() => (connectionDriven ? handleDisconnect() : handleLogout())}
         disabled={loading}
         className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-600 dark:hover:text-red-400 hover:border-red-300 dark:hover:border-red-800 rounded-md transition-colors disabled:opacity-50"
         title="Disconnect — removes the saved token, you will need to connect again"
