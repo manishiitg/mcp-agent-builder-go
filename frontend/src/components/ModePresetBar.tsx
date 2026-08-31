@@ -1,6 +1,8 @@
 import React, { lazy, Suspense, useState, useEffect, useCallback, useRef } from 'react'
 import { useShallow } from 'zustand/react/shallow'
-import { Workflow, Settings, Copy, Keyboard, Bot, Building2, HelpCircle, AlertCircle, Clock, Loader2, Pause } from 'lucide-react'
+import { Workflow, Settings, Copy, Keyboard, Bot, Building2, HelpCircle, AlertCircle, Clock, Loader2, Pause, Eye } from 'lucide-react'
+import { useAuthStore } from '../stores/useAuthStore'
+import { isWorkflowReadOnly } from '../utils/workflowPermissions'
 import { useModeStore } from '../stores/useModeStore'
 import { useGlobalPresetStore, usePresetApplication, usePresetManagement } from '../stores/useGlobalPresetStore'
 import type { CustomPreset, PredefinedPreset } from '../types/preset'
@@ -140,6 +142,7 @@ export const ModePresetBar: React.FC = () => {
     workspaceMinimized: state.workspaceMinimized,
     agentMode: state.agentMode,
   })))
+  const isReadOnlyUser = useAuthStore(state => isWorkflowReadOnly(state.user, state.isMultiUserMode))
   // Use toolList to get all available servers, not just enabled ones
   const toolList = useMCPStore(state => state.toolList)
   const appVersion = useAppVersion()
@@ -668,6 +671,20 @@ export const ModePresetBar: React.FC = () => {
               </button>
             </div>
 
+            {isReadOnlyUser && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div className="flex shrink-0 items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
+                    <Eye className="w-3 h-3" />
+                    <span>Read-only</span>
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  Your account has read-only workflow access — you can chat and watch runs, but can't edit plans, secrets, schedules, or config.
+                </TooltipContent>
+              </Tooltip>
+            )}
+
             {/* Center: Preset Information */}
             <div className="flex min-w-0 items-center gap-3">
               {/* Preset Information - Show ONLY for workflow mode */}
@@ -708,8 +725,11 @@ export const ModePresetBar: React.FC = () => {
                           )}
                         </button>
 
-                        {/* Settings gear icon - separate clickable element */}
-                        {activePreset && (
+                        {/* Settings gear icon - separate clickable element.
+                            Hidden for read-only users (PLAT-262): opens the
+                            automation's edit settings, which the backend
+                            won't let a read-only session mutate anyway. */}
+                        {activePreset && !isReadOnlyUser && (
                           <button
                             onClick={(e) => {
                               e.stopPropagation()
@@ -724,7 +744,7 @@ export const ModePresetBar: React.FC = () => {
                         )}
 
                         {/* Settings gear icon for when no preset is selected */}
-                        {!activePreset && (
+                        {!activePreset && !isReadOnlyUser && (
                           <div className="px-2 py-1 border-l border-gray-200 dark:border-gray-600">
                             <Settings className="w-3 h-3 text-gray-300" />
                           </div>
@@ -791,7 +811,7 @@ export const ModePresetBar: React.FC = () => {
                                   {/* Edit/Duplicate/Delete buttons */}
                                   {(
                                     <div className="flex gap-1">
-                                      {presetModeCategory !== null && isPresetActive(preset.id, presetModeCategory) && (
+                                      {presetModeCategory !== null && isPresetActive(preset.id, presetModeCategory) && !isReadOnlyUser && (
                                         <button
                                           onClick={(e) => {
                                             e.stopPropagation()

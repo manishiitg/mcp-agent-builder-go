@@ -29,3 +29,27 @@ func TestRequestLogPathPreservesPathWithoutQuery(t *testing.T) {
 		t.Fatalf("requestLogPath = %q, want /api/terminals", got)
 	}
 }
+
+func TestShouldTraceAPIRequest(t *testing.T) {
+	tests := []struct {
+		method string
+		want   bool
+	}{
+		{http.MethodGet, false},
+		{http.MethodHead, false},
+		{http.MethodOptions, false},
+		{http.MethodPost, true},
+		{http.MethodPut, true},
+		{http.MethodPatch, true},
+		{http.MethodDelete, true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.method, func(t *testing.T) {
+			req := httptest.NewRequest(test.method, "/api/example", nil)
+			if got := shouldTraceAPIRequest(req); got != test.want {
+				t.Fatalf("shouldTraceAPIRequest(%s) = %t, want %t", test.method, got, test.want)
+			}
+		})
+	}
+}

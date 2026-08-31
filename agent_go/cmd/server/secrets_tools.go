@@ -28,7 +28,11 @@ import (
 // afterDelete, if non-nil, is invoked after a successful delete_user_secret so
 // callers can clean up workspace state (e.g. detach from workflow.json + refresh
 // workshop shell env). Errors returned by afterDelete are surfaced to the agent.
-func (api *StreamingAPI) registerSecretManagementTools(agent definitionToolRegistrar, userID, workflowPath, toolCategory string, afterUpsert func(ctx context.Context, name, value string) error, afterDelete func(ctx context.Context, name string) error) error {
+// readOnly (PLAT-262), when true, registers only list_secrets — the four
+// mutating tools (set_user_secret, delete_user_secret, set_workflow_secret,
+// delete_workflow_secret) are skipped entirely so a read-only session never
+// sees them in its tool catalog.
+func (api *StreamingAPI) registerSecretManagementTools(agent definitionToolRegistrar, userID, workflowPath, toolCategory string, readOnly bool, afterUpsert func(ctx context.Context, name, value string) error, afterDelete func(ctx context.Context, name string) error) error {
 	if agent == nil {
 		return fmt.Errorf("agent is nil")
 	}
@@ -128,6 +132,10 @@ func (api *StreamingAPI) registerSecretManagementTools(agent definitionToolRegis
 		},
 	); err != nil {
 		return fmt.Errorf("register list_secrets: %w", err)
+	}
+
+	if readOnly {
+		return nil
 	}
 
 	if err := registerTool(

@@ -317,7 +317,7 @@ type WorkshopChatSession struct {
 	hasRunningAgents      func() bool               // optional: server-level check for running background agents
 	cancelAllServerAgents func()                    // optional: cancel all running agents in server registry
 	listServerAgents      func() []ServerAgentInfo  // optional: list all agents from server registry
-	workshopModeOverride  string                    // frontend-selected workshop mode
+	workshopModeOverride  string                    // frontend-selected workshop mode; PLAT-262 forces this to "run" for a read-only identity, see workflow_phase_tools.go
 	recoveryOnce          sync.Once                 // starts durable continuation replay once server notifiers are wired
 	onStepCorrelationDone func(string)
 }

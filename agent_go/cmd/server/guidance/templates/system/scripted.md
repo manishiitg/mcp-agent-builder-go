@@ -1,4 +1,4 @@
-## regular — Scripted Deterministic Worker
+## scripted — Deterministic Worker
 
 A `regular` step is the scripted boundary for one deterministic unit of work. It owns one
 coherent output and deterministic final gate and runs through the saved `main.py` path.

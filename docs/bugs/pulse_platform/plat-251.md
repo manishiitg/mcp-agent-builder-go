@@ -6,7 +6,7 @@
 |---|---|
 | Assigned agent | Claude Code |
 | Ticket state | `implemented; runtime reverify` |
-| Last synchronized | `2026-08-29` |
+| Last synchronized | `2026-08-31` |
 
 - **Priority:** harness_issue, severity low/cosmetic — no data loss or
   functional break, but visibly confusing (the same message text appears
@@ -64,6 +64,25 @@ this is a pure UI-visibility condition on already-existing delivery-status
 plumbing; reproducing it live requires an actual retained live-input
 session mid-turn, which risks disrupting other concurrent sessions'
 in-progress chats on the shared dev server.
+
+## Follow-up hardening — 2026-08-31
+
+The earlier change removed the duplicate *successful* delivery banner, but
+the message itself still waited for the `/api/live-input` acknowledgement
+before appearing in the transcript and before the composer cleared. Claude
+Code can take several seconds to acknowledge a retained turn even though the
+message has already been accepted for delivery, which made the UI look
+stalled and left the exact text sitting in the input.
+
+`ChatArea.tsx` now appends one optimistic user event before awaiting delivery,
+and `ChatInput.tsx` clears the captured draft immediately. If delivery fails,
+the draft is restored only when the user has not typed something newer or
+switched tabs. The transient `sending` banner now shows status only, rather
+than a second copy of the message.
+
+Focused live-input submission tests and the TypeScript build pass. Live
+reverification remains: the user bubble and cleared composer should happen
+immediately, while Claude Code continues starting the turn in the background.
 
 ## Reverify
 

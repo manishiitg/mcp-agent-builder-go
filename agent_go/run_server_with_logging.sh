@@ -51,6 +51,21 @@ MCP_SERVER_API_TOKEN_ARG_SET=false
 EXPECT_MCP_SERVER_API_TOKEN_VALUE=false
 POSITIONAL_ARGS=()
 
+print_usage() {
+    printf '%s\n' 'Usage: ./run_server_with_logging.sh [options]'
+    printf '%s\n' ''
+    printf '%s\n' 'Options:'
+    printf '%s\n' '  --with-workspace              Start the local workspace service.'
+    printf '%s\n' '  --with-frontend               Start the frontend and Electron app.'
+    printf '%s\n' '  --only-frontend               Start only the frontend and Electron app.'
+    printf '%s\n' '  --build                       Build and serve the frontend (use with --only-frontend).'
+    printf '%s\n' '  --without-electron            Do not launch Electron.'
+    printf '%s\n' '  --background, -b              Run services in the background.'
+    printf '%s\n' '  --test-connections, -t [file] Test an MCP config file.'
+    printf '%s\n' '  --mcp-api-token <token>       Set the MCP server API token for this run.'
+    printf '%s\n' '  --help, -h                    Show this help message.'
+}
+
 for arg in "$@"; do
     if [ "$EXPECT_MCP_SERVER_API_TOKEN_VALUE" = true ]; then
         MCP_SERVER_API_TOKEN_ARG="$arg"
@@ -94,11 +109,24 @@ for arg in "$@"; do
             MCP_SERVER_API_TOKEN_ARG="${arg#--mcp-api-token=}"
             MCP_SERVER_API_TOKEN_ARG_SET=true
             ;;
+        --help|-h)
+            print_usage
+            exit 0
+            ;;
         *)
             POSITIONAL_ARGS+=("$arg")
             ;;
     esac
 done
+
+# Only connection-test mode accepts a positional MCP configuration path. Treat
+# anything else as an error: a typo such as --with-frontendclear must not be
+# silently ignored and start a confusing partial local stack.
+if [ "${#POSITIONAL_ARGS[@]}" -gt 0 ] && [ "$TEST_CONNECTIONS" != true ]; then
+    echo "❌ Error: unknown option or argument: ${POSITIONAL_ARGS[0]}"
+    echo "   Run ./run_server_with_logging.sh --help to see supported options."
+    exit 2
+fi
 
 if [ "$EXPECT_MCP_SERVER_API_TOKEN_VALUE" = true ]; then
     echo "❌ Error: --mcp-api-token requires a token value"
@@ -772,7 +800,12 @@ ensure_local_auth_secret() {
             }
         ' "$target_env_file" > "$tmp_env_file" && mv "$tmp_env_file" "$target_env_file"
     else
-        printf 'AUTH_SECRET=%s\n' "$AUTH_SECRET" > "$target_env_file"
+        {
+            printf '%s\n' '# Local AgentWorks settings, generated on first launch.'
+            printf '%s\n' '# Configure LLM provider credentials in the app, not in this file.'
+            printf 'AUTH_SECRET=%s\n' "$AUTH_SECRET"
+        } > "$target_env_file"
+        LOCAL_ENV_CREATED=true
     fi
 
     chmod 600 "$target_env_file" 2>/dev/null || true
@@ -798,6 +831,7 @@ source_exported_env_file() {
 # Source environment variables from an explicit instance file when configured;
 # otherwise preserve the historical repo-local discovery behavior.
 ENV_FILE_PATH=""
+LOCAL_ENV_CREATED=false
 if [ -n "${AGENTWORKS_ENV_FILE:-}" ]; then
     ENV_FILE_PATH="$AGENTWORKS_ENV_FILE"
     if [ -f "$ENV_FILE_PATH" ]; then
@@ -817,7 +851,7 @@ elif [ -f ".env" ]; then
     source_exported_env_file .env
     echo "✅ Environment variables loaded (including Langfuse configuration)"
 else
-    echo "⚠️  No .env file found. Langfuse tracing will be disabled."
+    echo "ℹ️  First local run: creating a minimal .env with a secure AUTH_SECRET."
 fi
 
 # A sourced .env may contain an older value. The explicit command-line switch
@@ -828,6 +862,15 @@ if [ "$ENABLE_CHAT_TERMINAL_DEBUGS" = true ]; then
 fi
 
 ensure_local_auth_secret
+
+if [ "$LOCAL_ENV_CREATED" = true ]; then
+    echo ""
+    echo "✨ Local setup is ready."
+    echo "   Your AUTH_SECRET was generated and saved to ${ENV_FILE_PATH:-.env}."
+    echo "   To use an LLM, open the app and connect a provider in LLM Configuration."
+    echo "   Do not copy env.example or add placeholder API keys."
+    echo ""
+fi
 
 if [ "$MCP_SERVER_API_TOKEN_ARG_SET" = true ]; then
     export MCP_SERVER_API_TOKEN="$MCP_SERVER_API_TOKEN_ARG"
@@ -846,6 +889,12 @@ export LOG_LEVEL="debug"
 # Use LOG_PATH for the shell script to redirect output
 LOG_DIR="${AGENTWORKS_LOG_DIR:-logs}"
 LOG_PATH="${LOG_DIR}/server_debug.log"
+# Claude Code tmux panes are written here only when startup/prompt detection
+# times out. They are useful for support, but may contain user content.
+export CLAUDE_CODE_TMUX_DIAGNOSTICS_DIR="${LOG_DIR}/claude-tmux"
+# Shared tmux-backed providers (Codex, Cursor, and Pi) write failure panes
+# here. Like Claude diagnostics, these files can contain user content.
+export TMUX_DIAGNOSTICS_DIR="${LOG_DIR}/tmux"
 # Unset LOG_FILE to ensure the Go application logs to stdout (avoiding duplicates)
 unset LOG_FILE
 

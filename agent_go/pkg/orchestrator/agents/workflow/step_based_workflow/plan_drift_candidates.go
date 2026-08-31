@@ -25,8 +25,42 @@ import (
 // re-reviewed against the new checks). History: 1 = original 9 deterministic
 // checks + step-description/learnings/KB/DB-normalization judgment checks
 // (PLAT-258 phases 1-6). 2 = adds route_structural_isolation/
-// route_eval_pairing for routing steps (PLAT-259 phase B).
-const planDriftReviewContractVersion = 2
+// route_eval_pairing for routing steps (PLAT-259 phase B). 3 adds canonical
+// reference-backed checks for regular/scripted, message_sequence, todo_task,
+// routing, and branch steps. Step types without a new check keep version 2.
+const planDriftReviewContractVersion = 3
+
+const (
+	messageSequenceBestPracticesDriftCheckID = "message_sequence_best_practices"
+	scriptedBestPracticesDriftCheckID        = "scripted_best_practices"
+	todoTaskBestPracticesDriftCheckID        = "todo_task_best_practices"
+	routingBestPracticesDriftCheckID         = "routing_best_practices"
+	branchBestPracticesDriftCheckID          = "branch_best_practices"
+)
+
+func requiredStepTypeBestPracticesCheckID(stepType string) string {
+	switch strings.TrimSpace(stepType) {
+	case string(StepTypeRegular):
+		return scriptedBestPracticesDriftCheckID
+	case string(StepTypeMessageSeq):
+		return messageSequenceBestPracticesDriftCheckID
+	case string(StepTypeTodoTask):
+		return todoTaskBestPracticesDriftCheckID
+	case string(StepTypeRouting):
+		return routingBestPracticesDriftCheckID
+	case string(StepTypeBranch):
+		return branchBestPracticesDriftCheckID
+	default:
+		return ""
+	}
+}
+
+func requiredPlanDriftReviewContractVersion(stepType string) int {
+	if requiredStepTypeBestPracticesCheckID(stepType) != "" {
+		return 3
+	}
+	return 2
+}
 
 // PlanDriftCandidate is one step with no drift_review record at all, or one
 // whose record has needs_review==true (flagged stale by a dependency-
@@ -199,9 +233,10 @@ func CollectPlanDriftCandidates(ctx context.Context, workspacePath string) ([]Pl
 	var pendingStepIDs []string
 	for id := range stepIDs {
 		cfg, ok := byID[id]
+		requiredVersion := requiredPlanDriftReviewContractVersion(stepTypeByID[id])
 		if !ok || cfg.AgentConfigs == nil || cfg.AgentConfigs.DriftReview == nil ||
 			cfg.AgentConfigs.DriftReview.NeedsReview ||
-			cfg.AgentConfigs.DriftReview.ContractVersion < planDriftReviewContractVersion {
+			cfg.AgentConfigs.DriftReview.ContractVersion < requiredVersion {
 			pendingStepIDs = append(pendingStepIDs, id)
 		}
 	}

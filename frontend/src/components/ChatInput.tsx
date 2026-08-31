@@ -2540,11 +2540,19 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     if (routeLiveInputToCLI) {
       if (hasSubmitTarget) {
         const submittedTabId = activeTabId || undefined
+        const submittedDraft = {
+          inputText,
+          pastedAttachments: chatPastedAttachments,
+        }
         setLiveMessageDelivery({
           status: 'sending',
           message: query,
           provider: effectiveProviderForSteer || undefined,
         })
+        // Live-input acknowledgement can lag while the retained CLI wakes up.
+        // The conversation adds an optimistic user row immediately, so release
+        // the composer now instead of leaving the submitted text looking stuck.
+        clearInputState()
         let accepted: boolean | void
         try {
           accepted = await onSubmit(query, {
@@ -2556,6 +2564,13 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
           accepted = false
         }
         if (accepted === false) {
+          // Do not overwrite text the user began typing while delivery was in
+          // flight, and do not restore a draft into a tab they navigated away
+          // from. Otherwise put the original text/attachments back for retry.
+          if (submittedTabId && inputOwnerTabIdRef.current === submittedTabId && !latestQueryToSubmitRef.current.trim()) {
+            setLocalInputText(submittedDraft.inputText)
+            setTabConfig(submittedTabId, submittedDraft)
+          }
           setLiveMessageDelivery({
             status: 'failed',
             message: query,
@@ -2564,16 +2579,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
           })
           scheduleLiveMessageDeliveryClear()
           return
-        }
-        // Do not erase text typed while this asynchronous send was in flight.
-        if (shouldClearAcceptedChatDraft({
-          accepted,
-          submittedTabId,
-          currentTabId: inputOwnerTabIdRef.current,
-          submittedMessage: query,
-          currentMessage: latestQueryToSubmitRef.current,
-        })) {
-          clearInputState()
         }
         setLiveMessageDelivery({
           status: 'sent_to_cli',
@@ -3333,10 +3338,11 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   // once delivery reaches 'sent_to_cli' or 'next_turn_started' (see
   // ChatArea's submitQueryImmediately, which appends an optimistic user
   // message event for exactly those two statuses, on every surface, not
-  // just product chat). Showing the composer banner too for those statuses
-  // duplicated the same text right below the bubble. Queued/local-save
+  // just product chat). Live submissions now receive that same optimistic
+  // bubble before their acknowledgement arrives, so the sending indicator is
+  // status-only rather than a second copy of the message. Queued/local-save
   // states never get a bubble, so they still need the banner as the only
-  // signal; sending/failed are always transient and always shown.
+  // signal; failed submissions retain their message preview for retry context.
   const showLiveDelivery = Boolean(liveMessageDelivery && (
     liveMessageDelivery.status === 'sending' ||
     liveMessageDelivery.status === 'failed' ||
@@ -3569,7 +3575,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                   <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-current" />
                 )}
                 <span className="shrink-0 font-medium">{liveDeliveryText}</span>
-                {!isProductSurface && <span className="min-w-0 truncate opacity-75">
+                {!isProductSurface && liveMessageDelivery.status !== 'sending' && <span className="min-w-0 truncate opacity-75">
                   {liveDeliveryPreview(liveMessageDelivery.message)}
                 </span>}
                 {!isProductSurface && liveMessageDelivery.detail && (

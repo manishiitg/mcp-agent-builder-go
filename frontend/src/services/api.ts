@@ -651,6 +651,10 @@ workspaceApi.interceptors.response.use(
 
 const coalesceRuntimeRead = createRequestCoalescer()
 const RUNTIME_READ_TIMEOUT_MS = 15_000
+// /api/terminals is intentionally disabled outside developer runtime
+// diagnostics. Remember that capability result so normal product surfaces do
+// not keep polling a route that is unavailable by design.
+let runtimeTerminalDiagnosticsUnavailable = false
 
 export const agentApi = {
   // Observer APIs removed - no longer needed
@@ -720,12 +724,23 @@ export const agentApi = {
     content: 'none' | 'tail' | 'full' = 'tail',
     options?: { activeOnly?: boolean },
   ): Promise<ListTerminalsResponse> => {
+    if (runtimeTerminalDiagnosticsUnavailable) {
+      return { terminals: [], total: 0 }
+    }
     const params: Record<string, string | number | boolean> = sessionId ? { session_id: sessionId, content } : { content }
     if (options?.activeOnly) params.active_only = 1
     const requestKey = `terminals:${sessionId || '*'}:${content}:${options?.activeOnly ? 'active' : 'all'}`
     return coalesceRuntimeRead(requestKey, async () => {
-      const response = await api.get('/api/terminals', { params, timeout: RUNTIME_READ_TIMEOUT_MS })
-      return response.data
+      try {
+        const response = await api.get('/api/terminals', { params, timeout: RUNTIME_READ_TIMEOUT_MS })
+        return response.data
+      } catch (error) {
+        if (axios.isAxiosError(error) && error.response?.status === 404) {
+          runtimeTerminalDiagnosticsUnavailable = true
+          return { terminals: [], total: 0 }
+        }
+        throw error
+      }
     })
   },
 
@@ -2364,7 +2379,7 @@ export interface AuthUser {
   email?: string
   provider?: string
   is_bot_manager?: boolean
-  workflow_access?: 'write' | 'owner'
+  workflow_access?: 'read' | 'write' | 'owner'
   can_run_workflows?: boolean
   can_write_workflows?: boolean
   can_manage_workflow_access?: boolean
@@ -2482,7 +2497,7 @@ export const authApi = {
 
   upsertWorkflowUserPermission: async (
     userKey: string,
-    workflowAccess: 'write' | 'owner'
+    workflowAccess: 'read' | 'write' | 'owner'
   ): Promise<WorkflowUserPermission> => {
     const response = await api.put('/api/workflow/user-permissions', {
       user_key: userKey,
@@ -2498,7 +2513,7 @@ export const authApi = {
 
 export interface WorkflowUserPermission {
   user_key: string
-  workflow_access: 'write' | 'owner'
+  workflow_access: 'read' | 'write' | 'owner'
 }
 
 export interface WorkflowUserPermissionsResponse {

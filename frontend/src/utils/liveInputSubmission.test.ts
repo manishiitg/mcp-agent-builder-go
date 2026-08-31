@@ -67,8 +67,8 @@ describe('shouldRefreshSessionEventStream', () => {
     expect(shouldRefreshSessionEventStream(true, true)).toBe(true)
   })
 
-  it('keeps the existing AgentWorks connection when product full-turn mode is off', () => {
-    expect(shouldRefreshSessionEventStream(false, true)).toBe(false)
+  it('reattaches an AgentWorks stream when an old connection wrapper remains', () => {
+    expect(shouldRefreshSessionEventStream(false, true)).toBe(true)
   })
 
   it('connects any surface when no stream exists', () => {

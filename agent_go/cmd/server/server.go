@@ -504,6 +504,11 @@ type StreamingAPI struct {
 	// text, rendered as the same answer twice in a row.
 	retainedMainTurnCompletionEmitted map[string]time.Time
 	retainedMainTurnsMu               sync.Mutex
+	// nativeTranscriptSyncInFlight coalesces the post-completion durable sync
+	// for live coding-CLI turns. Guarded separately so transcript I/O never
+	// blocks the terminal/event observer.
+	nativeTranscriptSyncInFlight map[string]bool
+	nativeTranscriptSyncMu       sync.Mutex
 
 	// Pending completions queue — background agent IDs that finished while session was busy
 	pendingCompletions map[string][]string
@@ -1764,6 +1769,7 @@ func runServer(cmd *cobra.Command, args []string) {
 		retainedMainTurnExecutionIDs:           make(map[string]string),
 		retainedMainTurnAdditionalExecutionIDs: make(map[string]map[string]struct{}),
 		retainedMainTurnWatchCancels:           make(map[string]context.CancelFunc),
+		nativeTranscriptSyncInFlight:           make(map[string]bool),
 		pendingCompletions:                     make(map[string][]string),
 		completionRetryScheduled:               make(map[string]bool),
 		pendingStartNotifications:              make(map[string][]string),
@@ -2983,28 +2989,56 @@ func (api *StreamingAPI) apiRequestLogMiddleware(next http.Handler) http.Handler
 		}
 
 		start := time.Now()
-		inFlight := atomic.AddInt64(&apiRequestsInFlight, 1)
 		recorder := &statusCapturingResponseWriter{ResponseWriter: w}
+		traceRequest := shouldTraceAPIRequest(r)
+		var inFlight int64
+		if traceRequest {
+			inFlight = atomic.AddInt64(&apiRequestsInFlight, 1)
+			log.Printf("[API] --> %s %s in_flight=%d", r.Method, requestLogPath(r), inFlight)
+		}
 
-		log.Printf("[API] --> %s %s in_flight=%d", r.Method, requestLogPath(r), inFlight)
 		defer func() {
-			remaining := atomic.AddInt64(&apiRequestsInFlight, -1)
 			status := recorder.status
 			if status == 0 {
 				status = http.StatusOK
 			}
-			log.Printf("[API] <-- %s %s status=%d bytes=%d duration=%s in_flight=%d",
-				r.Method,
-				requestLogPath(r),
-				status,
-				recorder.bytes,
-				time.Since(start).Round(time.Millisecond),
-				remaining,
-			)
+			if traceRequest {
+				remaining := atomic.AddInt64(&apiRequestsInFlight, -1)
+				log.Printf("[API] <-- %s %s status=%d bytes=%d duration=%s in_flight=%d",
+					r.Method,
+					requestLogPath(r),
+					status,
+					recorder.bytes,
+					time.Since(start).Round(time.Millisecond),
+					remaining,
+				)
+			} else if status >= http.StatusBadRequest {
+				// Background reads are quiet when they succeed, but failures remain
+				// actionable in the normal server log.
+				log.Printf("[API] <-- %s %s status=%d bytes=%d duration=%s",
+					r.Method,
+					requestLogPath(r),
+					status,
+					recorder.bytes,
+					time.Since(start).Round(time.Millisecond),
+				)
+			}
 		}()
 
 		next.ServeHTTP(recorder, r)
 	})
+}
+
+// shouldTraceAPIRequest keeps normal logs focused on user actions and writes.
+// The frontend makes frequent successful GET requests for state refreshes; their
+// failures are still logged by apiRequestLogMiddleware.
+func shouldTraceAPIRequest(r *http.Request) bool {
+	switch r.Method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return false
+	default:
+		return true
+	}
 }
 
 func shouldLogAPIRequests() bool {
@@ -3123,6 +3157,13 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 	currentUserID := GetUserIDFromContext(r.Context())
 	queryLogCtx := requestLogContext(r.Context(), req, sessionID)
 	logfWithContext(queryLogCtx, "[USER_ID_DEBUGGING] HTTP handler: currentUserID=%q (from auth context)", currentUserID)
+
+	// PLAT-262: resolved fresh from this request's own live auth claims, not
+	// cached anywhere — a demotion takes effect on the caller's very next
+	// request. Gates mutating tool registration and workflow-folder write
+	// access below; never gates WorkshopMode (that axis stays prompt-only
+	// focus, per docs/design/agent_tool_surface_single_source.md).
+	currentUserIsReadOnly := workflowAccessForClaims(GetUserFromContext(r.Context())) == WorkflowAccessRead
 
 	api.applySavedMultiAgentChatConfig(r.Context(), &req, currentUserID)
 	resolvedProfile, err := api.resolveAgentProfileForQuery(r.Context(), &req, currentUserID, sessionID)
@@ -3457,6 +3498,15 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 	//
 	// This runs BEFORE the deprecated agent_mode=="workflow" orchestrator branch
 	// to intercept and redirect.
+	//
+	// req.AgentMode is one of: "workflow_phase" (Workflow Builder chat, this
+	// branch), the deprecated "workflow" (see below), or "multi-agent" — the
+	// generic direct-chat mode (model + skills + tools + workspace context)
+	// that the base agentworks surface uses by default and that other product
+	// surfaces (Video Studio, Dominion) opt into explicitly for plain chat.
+	// "multi-agent" is NOT a "Chief of Staff" product — no such product exists
+	// on main (only on the separate, unmerged feature/chief-of-staff-product
+	// branch) — see frontend/src/utils/agentModeDescriptions.ts.
 	isWorkflowPhase := req.AgentMode == "workflow_phase"
 	workflowPhaseID := req.PhaseID
 	workflowPhaseFolder := "" // The preset's SelectedFolder — used to auto-grant write access in FolderGuard
@@ -3949,6 +3999,13 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				if workflowPhaseID == workflowtypes.WorkflowStatusWorkflowBuilder {
 					triggeredBy = "workflow_builder"
 				}
+				// Scheduler turns intentionally use the workflow-builder phase,
+				// but they are still cron work. Preserve that origin in the running
+				// registry so the frontend restores a Schedule lane rather than
+				// treating it as the user's interactive Builder chat.
+				if requestedTrigger := strings.TrimSpace(req.TriggeredBy); requestedTrigger != "" {
+					triggeredBy = requestedTrigger
+				}
 
 				runFolder := ""
 				if req.ExecutionOptions != nil {
@@ -3963,6 +4020,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					PhaseID:       workflowPhaseID,
 					Status:        "running",
 					UserID:        currentUserID,
+					Title:         req.SessionTitle,
 					Query:         req.Query,
 					TriggeredBy:   triggeredBy,
 					StartedAt:     time.Now(),
@@ -4856,11 +4914,23 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			// workflow_layout.json must go through typed plan-mod tools that serialize
 			// full structs, not raw writes.
 			var fileContextBlockedWriteFolders []string
-			if isWorkflowPhase && workflowPhaseFolder != "" {
-				fileContextWriteFolders = append(fileContextWriteFolders, workflowPhaseFolder+"/")
-				blockedPlanning := workflowPhaseFolder + "/" + todo_creation_human.PlanningFolderName + "/"
+			// PLAT-262: a read-only identity gets none of the whole-workflow write
+			// grant below — effectiveWorkflowPhaseFolderForWrites stays "" for them,
+			// which workflowPhaseWriteFolders() below treats as "no workflow write
+			// root", leaving only its unconditional Downloads/ + the caller's own
+			// chat-history folder writable. Reads are untouched (readPaths below
+			// still uses the real workflowPhaseFolder).
+			effectiveWorkflowPhaseFolderForWrites := workflowPhaseFolder
+			if currentUserIsReadOnly {
+				effectiveWorkflowPhaseFolderForWrites = ""
+			}
+			if isWorkflowPhase && effectiveWorkflowPhaseFolderForWrites != "" {
+				fileContextWriteFolders = append(fileContextWriteFolders, effectiveWorkflowPhaseFolderForWrites+"/")
+				blockedPlanning := effectiveWorkflowPhaseFolderForWrites + "/" + todo_creation_human.PlanningFolderName + "/"
 				fileContextBlockedWriteFolders = append(fileContextBlockedWriteFolders, blockedPlanning)
-				log.Printf("[WORKFLOW_PHASE FOLDER GUARD] Write access: %s/ (whole workflow) with blocked-write prefix: %s", workflowPhaseFolder, blockedPlanning)
+				log.Printf("[WORKFLOW_PHASE FOLDER GUARD] Write access: %s/ (whole workflow) with blocked-write prefix: %s", effectiveWorkflowPhaseFolderForWrites, blockedPlanning)
+			} else if isWorkflowPhase && currentUserIsReadOnly {
+				log.Printf("[WORKFLOW_PHASE FOLDER GUARD] Read-only identity — no whole-workflow write grant for session=%s", sessionID)
 			}
 
 			// Apply folder guard to restrict writes based on mode.
@@ -4916,14 +4986,22 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			} else {
 				perUserChatsWrite := perUserChatsFolder + "/"
 				perUserChatHistory := strings.TrimSuffix(perUserChatsFolder, "Chats") + "chat_history/"
-				extraFolders := append([]string{}, resolvedGrants.WriteFolders...)
-				extraFolders = append(extraFolders, fileContextWriteFolders...)
-				extraFolders = append(extraFolders, perUserChatHistory)
-				workspaceExecutors = wrapExecutorsWithWorkflowPhaseFolderGuard(workspaceExecutors, workflowPhaseFolder, workflowReadOnlyFolders, fileContextBlockedWriteFolders, extraFolders...)
+				// PLAT-262: a read-only identity gets none of the approved external
+				// write grants either — write access is write access regardless of
+				// source. Their own chat-history folder stays writable (that's
+				// conversation persistence, not workflow mutation) and readPaths
+				// below is built the same for everyone (full reads, unaffected).
+				var extraWriteFolders []string
+				if !currentUserIsReadOnly {
+					extraWriteFolders = append([]string{}, resolvedGrants.WriteFolders...)
+					extraWriteFolders = append(extraWriteFolders, fileContextWriteFolders...)
+				}
+				extraFolders := append(append([]string{}, extraWriteFolders...), perUserChatHistory)
+				workspaceExecutors = wrapExecutorsWithWorkflowPhaseFolderGuard(workspaceExecutors, effectiveWorkflowPhaseFolderForWrites, workflowReadOnlyFolders, fileContextBlockedWriteFolders, extraFolders...)
 				workspace.SetSessionWorkingDir(sessionID, chatWorkingFolder)
 				readPaths := append([]string{perUserChatsWrite, perUserChatHistory, "Downloads/", "skills/", "subagents/", "Workflow/"}, extraFolders...)
 				readPaths = append(readPaths, workflowReadOnlyFolders...)
-				writePaths := workflowPhaseWriteFolders(workflowPhaseFolder, extraFolders...)
+				writePaths := workflowPhaseWriteFolders(effectiveWorkflowPhaseFolderForWrites, extraFolders...)
 				workspace.SetSessionFolderGuard(sessionID,
 					readPaths,
 					writePaths,
@@ -5038,9 +5116,18 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 						additionalFolders = append(additionalFolders, fileContextWriteFolders...)
 						return wrapExecutorsWithPlanFolderGuard(execs, perUserChatsFolder, workflowReadOnlyFolders, additionalFolders...)
 					}
-					browserExtraFolders := append([]string{}, resolvedGrants.WriteFolders...)
-					browserExtraFolders = append(browserExtraFolders, fileContextWriteFolders...)
-					return wrapExecutorsWithWorkflowPhaseFolderGuard(execs, workflowPhaseFolder, workflowReadOnlyFolders, fileContextBlockedWriteFolders, browserExtraFolders...)
+					// PLAT-262: this closure previously granted full write access to a
+					// read-only session's browser tools unconditionally — a real gap,
+					// found while investigating the shell-command read regression above.
+					var browserExtraFolders []string
+					browserGuardWriteFolder := workflowPhaseFolder
+					if currentUserIsReadOnly {
+						browserGuardWriteFolder = ""
+					} else {
+						browserExtraFolders = append([]string{}, resolvedGrants.WriteFolders...)
+						browserExtraFolders = append(browserExtraFolders, fileContextWriteFolders...)
+					}
+					return wrapExecutorsWithWorkflowPhaseFolderGuard(execs, browserGuardWriteFolder, workflowReadOnlyFolders, fileContextBlockedWriteFolders, browserExtraFolders...)
 				}
 				browserPorts := getCdpPorts(req)
 				if getBrowserMode(req) == "auto" {
@@ -5197,7 +5284,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				if resolvedProfile != nil {
 					secretWorkflowPath = req.SelectedFolder
 				}
-				if err := api.registerSecretManagementTools(llmAgent, currentUserID, secretWorkflowPath, "secret_tools", nil, nil); err != nil {
+				if err := api.registerSecretManagementTools(llmAgent, currentUserID, secretWorkflowPath, "secret_tools", currentUserIsReadOnly, nil, nil); err != nil {
 					logfWithContext(queryLogCtx, "[SECRET TOOLS] Failed to register multi-agent secret tools: %v", err)
 					sendError(fmt.Sprintf("Failed to register multi-agent secret tools: %v", err), true)
 					return
@@ -5580,6 +5667,21 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				}
 				if phaseTemplateVars["WorkshopMode"] == "" {
 					phaseTemplateVars["WorkshopMode"] = "workshop"
+				}
+
+				// PLAT-262: a read-only identity is always pinned to Run mode,
+				// overriding whatever was requested or defaulted above — the
+				// client-side toggle is hidden for these users too, but the
+				// server has the final say. This is the single point that
+				// decides WorkshopMode for both the system prompt rendered
+				// just below and every phaseTemplateVars["WorkshopMode"] read
+				// inside installWorkflowPhaseTools (same map, passed by
+				// reference). Read-only users never perform a same-session
+				// Workshop<->Run toggle, so this does not reopen the removed
+				// mode-based tool-catalog-filtering bug — see
+				// installWorkflowPhaseTools's doc comment.
+				if currentUserIsReadOnly {
+					phaseTemplateVars["WorkshopMode"] = "run"
 				}
 
 				// Read variable names from workspace (if any)
@@ -7405,6 +7507,11 @@ func (api *StreamingAPI) observeRetainedMainTurnEvent(sessionID string, event ev
 			api.completeTrackedExecution(id, trackedExecutionStatusCompleted, "", nil)
 		}
 	}
+	// A live retained CLI turn bypasses handleQuery's normal final-save block.
+	// Its provider transcript is now complete, so reconcile it asynchronously
+	// into the durable workflow conversation before a later restart can expose
+	// a user-only snapshot.
+	api.scheduleWorkflowBuilderNativeTranscriptSync(sessionID)
 	log.Printf("[RETAINED_TURN] Settled retained main-agent turn from structured %s event session=%s terminal=%s state=%s",
 		eventType, sessionID, snapshot.TerminalID, snapshot.State)
 }
@@ -9091,10 +9198,6 @@ func (api *StreamingAPI) buildWorkshopConfig(
 				if llmCfg.UseKnowledgebase != nil {
 					cfg.UseKnowledgebase = *llmCfg.UseKnowledgebase
 				}
-				if llmCfg.LockKnowledgebase != nil {
-					cfg.LockKnowledgebase = *llmCfg.LockKnowledgebase
-				}
-
 				// Tiered LLM allocation
 				if cfg.TieredConfig != nil {
 					cfg.LLMAllocationMode = "tiered"
@@ -9104,8 +9207,8 @@ func (api *StreamingAPI) buildWorkshopConfig(
 						workshopFormatAgentLLM(cfg.TieredConfig.Tier3))
 				}
 
-				log.Printf("[WORKSHOP] LLM config loaded: phase=%v pulse=%v tiered=%v kb=%v kbLock=%v",
-					cfg.PresetPhaseLLM != nil, cfg.PresetPulseLLM != nil, cfg.TieredConfig != nil, cfg.UseKnowledgebase, cfg.LockKnowledgebase)
+				log.Printf("[WORKSHOP] LLM config loaded: phase=%v pulse=%v tiered=%v kb=%v",
+					cfg.PresetPhaseLLM != nil, cfg.PresetPulseLLM != nil, cfg.TieredConfig != nil, cfg.UseKnowledgebase)
 			}
 		}
 	}

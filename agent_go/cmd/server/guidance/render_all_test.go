@@ -1298,7 +1298,7 @@ func TestDeterministicFetchersFeedLargeAgenticProcessors(t *testing.T) {
 				"Consume deterministic evidence; do not fetch it conversationally",
 			},
 		},
-		"regular": {
+		"scripted": {
 			registry: referenceKinds,
 			wants: []string{
 				"Declare these steps `scripted` from initial design",

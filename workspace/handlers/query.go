@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -19,6 +18,7 @@ import (
 	"time"
 
 	"github.com/manishiitg/coding-agent-loop/workspace/models"
+	"github.com/manishiitg/coding-agent-loop/workspace/sqliteopen"
 	"github.com/manishiitg/coding-agent-loop/workspace/utils"
 
 	"github.com/gin-gonic/gin"
@@ -252,7 +252,7 @@ func resolveReadonlyDBPath(c *gin.Context, requestedPath string) (string, error)
 // SQL validation is still required: query_only is defense in depth, not the
 // authorization boundary for caller-supplied SQL.
 func openQueryOnlyDB(fullPath string) (*sql.DB, error) {
-	dsn := (&url.URL{Scheme: "file", Path: fullPath}).String() + "?mode=rw&_pragma=query_only(true)&_pragma=busy_timeout(5000)"
+	dsn := sqliteopen.DSN(fullPath) + "&mode=rw&_pragma=query_only(true)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
@@ -262,7 +262,7 @@ func openQueryOnlyDB(fullPath string) (*sql.DB, error) {
 }
 
 func openMutationDB(fullPath string) (*sql.DB, error) {
-	dsn := (&url.URL{Scheme: "file", Path: fullPath}).String() + "?mode=rw&_pragma=busy_timeout(5000)"
+	dsn := sqliteopen.DSN(fullPath) + "&mode=rw"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
@@ -332,8 +332,7 @@ func InitializeWorkflowDB(c *gin.Context) {
 		}
 	}
 
-	dsn := (&url.URL{Scheme: "file", Path: fullPath}).String() + "?_pragma=busy_timeout(5000)"
-	db, err := sql.Open("sqlite", dsn)
+	db, err := sql.Open("sqlite", sqliteopen.DSN(fullPath))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse[any]{Success: false, Message: "Failed to open database", Error: err.Error()})
 		return

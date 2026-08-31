@@ -150,6 +150,44 @@ func TestReportHumanInputsUseWorkflowLocalDB(t *testing.T) {
 	}
 }
 
+// TestOpenReportHumanInputDBUsesWALMode locks in the fix for a real incident:
+// get_pulse_state(view=module) hit persistent SQLITE_BUSY under concurrent
+// load because this DB was opened in SQLite's default rollback-journal mode,
+// where a writer's transaction exclusively locks the whole file against every
+// concurrent reader. get_pulse_state(view=module) alone opens this DB 5
+// separate times sequentially for one call (pulse_worklist.go), multiplying
+// the collision window. WAL mode lets readers proceed without blocking on a
+// writer. Also locks in that busy_timeout is DSN-embedded, not a one-time
+// runtime PRAGMA, since this *sql.DB has no SetMaxOpenConns cap and a
+// runtime PRAGMA on one pooled connection would silently not apply to a
+// second connection the pool opens for a concurrent query.
+func TestOpenReportHumanInputDBUsesWALMode(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+
+	_, db, err := openReportHumanInputDB(ctx, "Workflow/wal-mode-check", true)
+	if err != nil {
+		t.Fatalf("openReportHumanInputDB: %v", err)
+	}
+	defer db.Close()
+
+	var journalMode string
+	if err := db.QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&journalMode); err != nil {
+		t.Fatalf("query journal_mode: %v", err)
+	}
+	if !strings.EqualFold(journalMode, "wal") {
+		t.Fatalf("journal_mode = %q, want \"wal\" -- a reader/writer collision on this db.sqlite will hit SQLITE_BUSY under concurrent load without WAL mode", journalMode)
+	}
+
+	var busyTimeoutMs int
+	if err := db.QueryRowContext(ctx, "PRAGMA busy_timeout").Scan(&busyTimeoutMs); err != nil {
+		t.Fatalf("query busy_timeout: %v", err)
+	}
+	if busyTimeoutMs <= 0 {
+		t.Fatalf("busy_timeout = %d, want > 0 -- a concurrent writer would return SQLITE_BUSY immediately instead of retrying", busyTimeoutMs)
+	}
+}
+
 func TestReportHumanInputPersistsStructuredApplyContract(t *testing.T) {
 	ctx := context.Background()
 	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())

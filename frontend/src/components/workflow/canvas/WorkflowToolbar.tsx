@@ -1021,6 +1021,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                 {workspacePath && (
                   <PulseWorkspace
                     workspacePath={workspacePath}
+                    moduleStates={pulseModuleStates}
                     finalCommandStates={pulseFinalCommandStates}
                     reviewFocuses={pulseReviewFocuses}
                     reviewFocusSelections={pulseReviewFocusSelections}

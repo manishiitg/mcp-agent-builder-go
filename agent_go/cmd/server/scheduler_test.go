@@ -2062,6 +2062,12 @@ func TestBuildWorkshopRequestDisablesLiveInputDeliveryForSchedulerTurns(t *testi
 	if got := reqMap["disable_live_input_delivery"]; got != true {
 		t.Fatalf("disable_live_input_delivery = %#v, want true", got)
 	}
+	if got := reqMap["triggered_by"]; got != "cron" {
+		t.Fatalf("triggered_by = %#v, want cron", got)
+	}
+	if got := reqMap["session_title"]; got != "Daily" {
+		t.Fatalf("session_title = %#v, want Daily", got)
+	}
 }
 
 func TestRefreshSessionTmuxSnapshotsForIdleCheckCapturesFreshPane(t *testing.T) {

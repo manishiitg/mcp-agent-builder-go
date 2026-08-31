@@ -66,6 +66,34 @@ func TestValidateStepDriftChecksRejectsFailWithoutFindingID(t *testing.T) {
 	}
 }
 
+func TestValidateStepTypeDriftChecksRequiresReferenceBackedBestPractices(t *testing.T) {
+	base := []StepDriftCheck{{CheckID: "step_description_accuracy", Status: "pass", Evidence: "the current description matches configured behavior"}}
+	for stepType, requiredCheckID := range map[string]string{
+		"regular":          scriptedBestPracticesDriftCheckID,
+		"message_sequence": messageSequenceBestPracticesDriftCheckID,
+		"todo_task":        todoTaskBestPracticesDriftCheckID,
+		"routing":          routingBestPracticesDriftCheckID,
+		"branch":           branchBestPracticesDriftCheckID,
+	} {
+		t.Run(stepType, func(t *testing.T) {
+			if err := validateStepTypeDriftChecks(stepType, base); err == nil || !strings.Contains(err.Error(), requiredCheckID) {
+				t.Fatalf("expected %s to require %s, got %v", stepType, requiredCheckID, err)
+			}
+			checks := append(append([]StepDriftCheck{}, base...), StepDriftCheck{
+				CheckID:  requiredCheckID,
+				Status:   "pass",
+				Evidence: "the step matches its canonical reference and has explicit evidence for every applicable execution boundary",
+			})
+			if err := validateStepTypeDriftChecks(stepType, checks); err != nil {
+				t.Fatalf("expected %s with %s to pass, got %v", stepType, requiredCheckID, err)
+			}
+		})
+	}
+	if err := validateStepTypeDriftChecks("human_input", base); err != nil {
+		t.Fatalf("human_input has no new reference-backed check in this change: %v", err)
+	}
+}
+
 func newPlanDriftReviewTestExecutor(files map[string]string) func(context.Context, map[string]interface{}) (string, error) {
 	return newPlanDriftReviewTestExecutorForWorkspace("", files)
 }
@@ -242,6 +270,37 @@ func TestRecordPlanDriftReviewExecutorWritesNewRecord(t *testing.T) {
 	// this brand-new review as already stale.
 	if dr.ContractVersion != planDriftReviewContractVersion {
 		t.Fatalf("drift_review.contract_version = %d, want %d (the current contract version)", dr.ContractVersion, planDriftReviewContractVersion)
+	}
+}
+
+func TestRecordPlanDriftReviewExecutorEnforcesMessageSequenceBestPracticesCheck(t *testing.T) {
+	ctx := context.Background()
+	files := map[string]string{
+		"planning/plan.json":        `{"steps":[{"id":"sequence-a","type":"message_sequence","title":"Sequence","description":"Complete the outcome.","items":[{"id":"verify","type":"user_message","message":"Verify the outcome."}]}]}`,
+		"planning/step_config.json": `{"steps":[{"id":"sequence-a"}]}`,
+	}
+	executor := newPlanDriftReviewTestExecutor(files)
+
+	baseCheck := map[string]interface{}{"check_id": "step_description_accuracy", "status": "pass", "evidence": "the description matches the current configured behavior"}
+	if _, err := executor(ctx, map[string]interface{}{
+		"step_id": "sequence-a",
+		"checks":  []interface{}{baseCheck},
+	}); err == nil || !strings.Contains(err.Error(), messageSequenceBestPracticesDriftCheckID) {
+		t.Fatalf("expected the executor to reject a message-sequence receipt without its type-specific check, got %v", err)
+	}
+
+	if _, err := executor(ctx, map[string]interface{}{
+		"step_id": "sequence-a",
+		"checks": []interface{}{
+			baseCheck,
+			map[string]interface{}{
+				"check_id": messageSequenceBestPracticesDriftCheckID,
+				"status":   "pass",
+				"evidence": "the sequence owns one coherent outcome, verifies authoritative evidence, repairs gaps, and uses the automatic final gate",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("expected the executor to accept a complete message-sequence receipt, got %v", err)
 	}
 }
 

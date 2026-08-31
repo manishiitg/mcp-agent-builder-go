@@ -8,9 +8,10 @@ interface WorkflowAccessPopupProps {
   onClose: () => void
 }
 
-type AccessLevel = 'write' | 'owner'
+type AccessLevel = 'read' | 'write' | 'owner'
 
 const ACCESS_LEVELS: { value: AccessLevel; label: string; hint: string }[] = [
+  { value: 'read', label: 'Read-only', hint: 'Can chat and watch runs, but cannot edit the plan, secrets, schedules, or config.' },
   { value: 'write', label: 'Write', hint: 'Full access to run and build workflows.' },
   { value: 'owner', label: 'Owner', hint: 'Write + can manage other users’ access.' },
 ]

@@ -64,6 +64,40 @@ func validateStepDriftChecks(checks []StepDriftCheck) error {
 	return nil
 }
 
+func validateStepTypeDriftChecks(stepType string, checks []StepDriftCheck) error {
+	requiredCheckID := requiredStepTypeBestPracticesCheckID(stepType)
+	if requiredCheckID == "" {
+		return nil
+	}
+	for _, check := range checks {
+		if strings.TrimSpace(check.CheckID) == requiredCheckID {
+			return nil
+		}
+	}
+	return fmt.Errorf(
+		"%s step reviews must include check_id %q after reading the matching builder-reference step-type guidance",
+		strings.TrimSpace(stepType), requiredCheckID,
+	)
+}
+
+func planDriftStepType(ctx context.Context, workspacePath, stepID string, readFile func(context.Context, string) (string, error)) string {
+	if stepID == WorkflowDriftReviewStepID {
+		return "workflow"
+	}
+	planPath := normalizePathForWorkspaceAPI("planning/plan.json", workspacePath)
+	content, err := readFile(ctx, planPath)
+	if err != nil || strings.TrimSpace(content) == "" {
+		return ""
+	}
+	var plan PlanningResponse
+	if err := json.Unmarshal([]byte(content), &plan); err != nil {
+		return ""
+	}
+	stepTypes := map[string]string{}
+	collectStepTypesByID(plan.Steps, stepTypes)
+	return stepTypes[stepID]
+}
+
 // pulseFindingInactiveStatuses mirrors the "active" boundary used elsewhere
 // in this package (e.g. run_concerns.go's active-issue filter): a finding
 // that has been closed out no longer represents unresolved repair work, so
@@ -133,7 +167,7 @@ func getRecordPlanDriftReviewSchema() string {
 					"properties": {
 						"check_id": {
 							"type": "string",
-							"description": "Stable check identifier. For the deterministic checks, use their real names: report_query_compatibility, validation_schema_db_rules, validation_schema_file_rules, scripted_code_db_queries, db_readme_contract, orphaned_tables. For a judgment check, invent a clear, stable id, e.g. step_description_accuracy, learnings_content_staleness, kb_content_relevance, db_schema_normalization, learnings_kb_access_appropriateness."
+							"description": "Stable check identifier. For the deterministic checks, use their real names: report_query_compatibility, validation_schema_db_rules, validation_schema_file_rules, scripted_code_db_queries, db_readme_contract, orphaned_tables. Step types require their matching reference-backed check: scripted_best_practices, message_sequence_best_practices, todo_task_best_practices, routing_best_practices, or branch_best_practices. For another judgment check, invent a clear, stable id, e.g. step_description_accuracy, learnings_content_staleness, kb_content_relevance, db_schema_normalization, learnings_kb_access_appropriateness."
 						},
 						"status": {
 							"type": "string",
@@ -187,6 +221,10 @@ func createRecordPlanDriftReviewExecutor(workspacePath string, logger loggerv2.L
 			return "", fmt.Errorf("checks must be an array of {check_id, status, evidence}: %w", err)
 		}
 		if err := validateStepDriftChecks(checks); err != nil {
+			return "", err
+		}
+		stepType := planDriftStepType(ctx, workspacePath, stepID, readFile)
+		if err := validateStepTypeDriftChecks(stepType, checks); err != nil {
 			return "", err
 		}
 		if err := verifyStepDriftCheckFindingsExist(ctx, workspacePath, stepID, checks); err != nil {

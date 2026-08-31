@@ -6,7 +6,7 @@
 |---|---|
 | Assigned agent | Claude Code |
 | Ticket state | `implemented; runtime reverify` |
-| Last synchronized | `2026-08-29` |
+| Last synchronized | `2026-08-31` |
 
 - **Priority:** harness_issue, severity medium — no data loss, but a
   permanently unusable tab with no visible error and no way to recover
@@ -71,6 +71,29 @@ risks disrupting other concurrent sessions on the shared dev server; the
 fix was verified by direct tracing of `resolveChatSurface`'s precedence
 chain and confirming the new timer/branch follow the exact same pattern
 already proven correct for `resumeGaveUp`.
+
+## Follow-up hardening — 2026-08-31
+
+Sales Outreach exposed an earlier, distinct path into the same symptom. The
+initial workflow reconnect deliberately filtered out every external read-only
+session, including a live scheduled run, then created a blank Workflow
+Builder tab. A later polling reconciler could eventually discover the
+schedule, but its first catch-up read only the volatile EventStore. If that
+buffer had expired, the polling loop marked the empty Schedule tab streaming
+again on each pass; that also prevented the existing give-up timer from
+arming reliably.
+
+`WorkflowLayout.tsx` now treats schedules (but not bot sessions) as
+first-class parallel tabs during the initial reconnect. Schedule catch-up
+uses the workflow's durable conversation history when live events are gone.
+The server also preserves `triggered_by=cron` and the configured schedule
+name in the running-workflow record from the start, so the frontend cannot
+mistake it for the user's interactive Builder chat.
+
+Focused scheduler, workflow-tab, and TypeScript checks pass. Live
+reverification remains: opening Sales Outreach while a schedule is running
+must show its named Schedule tab immediately alongside Chat, with its saved
+transcript rather than a permanent restore spinner.
 
 ## Reverify
 

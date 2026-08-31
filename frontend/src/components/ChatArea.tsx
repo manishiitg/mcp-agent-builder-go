@@ -4,7 +4,6 @@ import { useRenderLogger, useMemoLogger } from '../utils/renderLogger'
 import { chatSubmissionLane } from '../utils/promiseLane'
 import {
   liveInputSubmissionCoordinator,
-  shouldAppendOptimisticLiveInputMessage,
   shouldRefreshSessionEventStream,
   shouldUseRetainedLiveInput,
 } from '../utils/liveInputSubmission'
@@ -2107,40 +2106,17 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
         ? getTabLastEventIndex(effectiveSessionId)
         : lastEventIndexRef.current
 
-      // CRITICAL: Detect sentinel value (9999) which means "all events processed" but not an actual index
-      // If lastEventIndex is 9999 or higher, check stored events to get the actual last index
+      // Event cursors belong to the backend's raw event store, not the rendered
+      // transcript. A restored conversation includes synthesized history rows,
+      // so its length (or an old sentinel) can be ahead of a newly attached
+      // CLI stream and make every fresh tool/result event look already seen.
+      // Restart from the backend's safe forward cursor instead of guessing.
       if (rawLastEventIndex >= 9999) {
-        const storedEvents = getTabEvents(effectiveSessionId)
-        if (storedEvents && storedEvents.length > 0) {
-          const actualLastIndex = storedEvents.length - 1
-          rawLastEventIndex = actualLastIndex
-          // Update the stored index to the correct value
-          if (currentTab) {
-            setTabLastEventIndex(effectiveSessionId, actualLastIndex)
-          } else {
-            setLastEventIndex(actualLastIndex)
-          }
+        rawLastEventIndex = 0
+        if (currentTab) {
+          setTabLastEventIndex(effectiveSessionId, 0)
         } else {
-          // No stored events, but sentinel value - reset to 0 to start fresh
-          rawLastEventIndex = 0
-          if (currentTab) {
-            setTabLastEventIndex(effectiveSessionId, 0)
-          } else {
-            setLastEventIndex(0)
-          }
-        }
-      } else if (rawLastEventIndex === -1) {
-        // Safety check: if index is -1 but we have events, use the event count
-        // This prevents re-fetching from 0 if index state was lost but events exist
-        const storedEvents = getTabEvents(effectiveSessionId)
-        if (storedEvents && storedEvents.length > 0) {
-          const actualLastIndex = storedEvents.length - 1
-          rawLastEventIndex = actualLastIndex
-          logger.debug('ChatArea', `Recovered lastEventIndex ${actualLastIndex} for session ${effectiveSessionId}`)
-
-          if (currentTab) {
-            setTabLastEventIndex(effectiveSessionId, actualLastIndex)
-          }
+          setLastEventIndex(0)
         }
       }
 
@@ -2617,28 +2593,35 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       hasSession: Boolean(tabSessionId),
       hasOneShotContext,
     })
+    // A retained CLI delivery can take a few seconds to acknowledge while the
+    // provider wakes its pane. Put the user's message in the conversation
+    // before awaiting that acknowledgement so the composer is immediately
+    // ready for the next message. Keep its event ID so a later full-turn
+    // fallback reuses this row instead of echoing it a second time.
+    let optimisticLiveInputEventID = ''
     if (useRetainedLiveInput) {
+      const existingEvents = chatStore.getTabEvents(tabSessionId)
+      const latestTimestampMs = existingEvents.reduce((latest, event) => {
+        const ts = getEventTimestampMs(event)
+        return ts === null ? latest : Math.max(latest, ts)
+      }, 0)
+      const optimisticTimestampMs = Math.max(Date.now(), latestTimestampMs + 1)
+      const optimisticUserMessage = createUserMessageEvent(
+        trimmedQuery,
+        undefined,
+        new Date(optimisticTimestampMs).toISOString(),
+        tabSessionId,
+      )
+      optimisticLiveInputEventID = optimisticUserMessage.id
+      // This is a human-visible action rather than a high-volume SSE event;
+      // bypass the store's micro-batch so it appears in the current frame.
+      chatStore._addTabEventsImmediate(tabSessionId, [optimisticUserMessage])
+      chatStore.setAutoScroll(true)
+      setTimeout(() => { scrollToBottom('smooth') }, 50)
+
       try {
         const response = await agentApi.sendLiveInput(tabSessionId, trimmedQuery)
         if (response.delivery_status === 'sent_to_cli' || response.delivery_status === 'next_turn_started') {
-          const existingEvents = chatStore.getTabEvents(tabSessionId)
-          const indexedEvents = existingEvents.filter(event => typeof event.event_index === 'number')
-          const nextEventIndex = indexedEvents.length > 0
-            ? indexedEvents.reduce((maxIndex, event) => Math.max(maxIndex, event.event_index as number), -1) + 1
-            : undefined
-          const latestTimestampMs = existingEvents.reduce((latest, event) => {
-            const ts = getEventTimestampMs(event)
-            return ts === null ? latest : Math.max(latest, ts)
-          }, 0)
-          const optimisticTimestampMs = Math.max(Date.now(), latestTimestampMs + 1)
-          if (shouldAppendOptimisticLiveInputMessage(existingEvents, response.message_id)) {
-            chatStore.addTabEvents(tabSessionId, [createUserMessageEvent(
-              trimmedQuery,
-              nextEventIndex,
-              new Date(optimisticTimestampMs).toISOString(),
-              tabSessionId,
-            )])
-          }
           chatStore.setAutoScroll(true)
           chatStore.setIsCompleted(false)
           chatStore.setIsStreaming(true)
@@ -2805,13 +2788,18 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       return ts === null ? latest : Math.max(latest, ts)
     }, 0)
     const optimisticTimestampMs = Math.max(Date.now(), latestExistingTimestampMs + 1)
-    const optimisticUserMessage = createUserMessageEvent(
-      displayQueryWithContext,
-      nextEventIndex,
-      new Date(optimisticTimestampMs).toISOString(),
-      tabSessionId,
+    const alreadyHasLiveInputRow = Boolean(optimisticLiveInputEventID) && existingSessionEvents.some(
+      event => event.id === optimisticLiveInputEventID,
     )
-    chatStore.addTabEvents(tabSessionId, [optimisticUserMessage])
+    if (!alreadyHasLiveInputRow) {
+      const optimisticUserMessage = createUserMessageEvent(
+        displayQueryWithContext,
+        nextEventIndex,
+        new Date(optimisticTimestampMs).toISOString(),
+        tabSessionId,
+      )
+      chatStore.addTabEvents(tabSessionId, [optimisticUserMessage])
+    }
 
     // File context is one-shot: it belongs to the message being submitted, not
     // the whole conversation. The request payload below already captured it.
