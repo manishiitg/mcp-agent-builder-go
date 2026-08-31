@@ -247,10 +247,9 @@ Bring your existing CLI-based coding agents into the visual orchestrator via the
 ```bash
 git clone https://github.com/manishiitg/coding-agent-loop.git
 cd coding-agent-loop
-cp agent_go/env.example agent_go/.env
 ```
 
-Edit `agent_go/.env` for local app/runtime settings if needed. LLM providers and API keys are configured from the app UI after startup, not by editing the README examples into `.env`.
+No `.env` setup is required for a local first run. The launcher creates `agent_go/.env` with a secure, persistent `AUTH_SECRET` automatically. After startup, connect an LLM provider in the app's **LLM Configuration** screen. Do not copy `agent_go/env.example` or put placeholder API keys into `.env`; that file is for managed/deployment configuration.
 
 Install dependencies:
 
