@@ -5,8 +5,8 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | Claude Code |
-| Ticket state | `migration tool contract repaired after live verification` — the canonical workshop prompt and every named reference doc now offer `branch` as the fixed-choice alternative to `routing`; Execution Logs retains the executed type; generic plan APIs accept branch steps; and the atomic routing/branch conversion tool now publishes the changelog `reason` its executor requires. Frontend per-route reporting tabs and a successful live manual rerun remain open |
-| Last synchronized | `2026-08-30` |
+| Ticket state | `frontend per-route reporting implemented across Execution Logs, Costs, and Evaluation` — the canonical workshop prompt and every named reference doc offer `branch` as the fixed-choice alternative to `routing`; Execution Logs retains the executed type; generic plan APIs accept branch steps; the atomic routing/branch conversion tool publishes the changelog `reason` its executor requires; and every step reached through a run's actually-selected route is now tagged and filterable by route in Execution Logs, Costs, and Evaluation. A successful live manual rerun of `/verify-branch-step`/`/migrate-routing-to-branch` remains the one open item |
+| Last synchronized | `2026-08-31` |
 
 - **Type:** implemented platform feature. Originally filed at the
   user's explicit request immediately after the design converged, to record
@@ -721,3 +721,81 @@ branch renders with a violet `GitBranch` icon and visible `Branch` label.
 Execution-mode iconography remains available separately, so making the step
 type visible does not discard scripted/agentic/direct execution information.
 The production frontend build passes.
+
+## Frontend per-route reporting — implemented (2026-08-31)
+
+Closes the "Explicitly not done" item above: the plan schema and executor
+already knew a step could belong to a route (Phase A), but nothing computed
+which route a *downstream* step actually belonged to for a *given run*, so
+none of Execution Logs, Costs, or Evaluation could group or filter by route.
+Route membership is a per-run fact (the same plan can take a different route
+on a different run), not a static plan property, so it has to be derived
+from that run's actual `selected_route_id`, not merely the routes the plan
+declares.
+
+**Backend** (`agent_go/cmd/server/workflow.go`), computed once and reused by
+all three surfaces rather than re-derived per surface:
+
+- `collectSelectedRoutes` — a lightweight pre-pass over the same step-log
+  folder tree `processLogsFolder` walks (mirrors its wrapper-folder
+  recursion), reading each routing/branch step's `routing-evaluation.json`
+  for this run's real `selected_route_id`. Has to run before any
+  `stepsLogs` entries are created, since those seed from `stepMetadata` on
+  first creation and downstream folders can be visited before or after
+  their owning routing step's folder.
+- `computeRouteMembership` — for each routing/branch step with a recorded
+  selection, walks from the selected route's `next_step_id` to a
+  convergence point (generalizes `routeSegmentEndIndex` from
+  `planning_exports.go`, which only ever handled the first routing step for
+  validation pruning), tagging every step in that segment with
+  `route_id`/`route_name`/`route_kind:"routing"`/`route_step_id`/
+  `route_step_title`. Bounded on the other side by the nearest sibling
+  route's own entry point (`siblingBoundary`), so an untaken sibling route's
+  steps are never swept in by the walk — caught by a regression test before
+  shipping (the untaken route's step was initially tagged with the taken
+  route's info). Per the user's explicit choice, a step where sibling routes
+  legitimately converge is tagged with whichever route this run actually
+  took, not left unlabeled.
+- `/api/workflow/logs` now returns these fields per step. Kept field-
+  distinct from the pre-existing, unrelated `route_id`/`parent_step_id`
+  pair (the `todo_task` orchestrator's `predefined_routes[].sub_agent_step`
+  case) via `route_kind`, per the user's explicit choice to keep the two
+  mechanisms visually separate rather than unify them.
+- New regression test `TestHandleGetExecutionLogsTagsDownstreamStepsWithSelectedRoute`
+  (`workflow_execution_logs_test.go`): a routing step with two routes,
+  only one selected; asserts the selected route's downstream step is
+  tagged and the untaken sibling's step is not.
+
+**Frontend**, all three reusing the same Execution Logs response instead of
+each re-deriving route logic:
+
+- `ExecutionLogsPopup.tsx` — route filter pill bar (teal, matching the
+  canvas's `Route` icon convention above) above the step list, plus a
+  per-step "↳ route name" chip, visually distinct from the existing
+  orchestrator sub-agent-route chip.
+- `CostsPopup.tsx` — the same route filter on the "By Step" cost breakdown
+  view (it already fetched Execution Logs for step-title lookup, so route
+  data came for free), a route badge per step row, and the Total row
+  becomes a route-scoped subtotal when a filter is active rather than
+  silently showing the whole run's total.
+- `EvaluationPopup.tsx` — surfaces `applies_to_routes`, a real field on
+  `EvaluationStep` (`route_eval_pairing`'s own field, Phase B) that reached
+  the frontend's raw `evaluation_plan` JSON but was previously parsed out
+  and discarded by `parseEvaluationPlanDetails`. Now kept, and
+  cross-referenced against each run's actual route selections (fetched
+  lazily from Execution Logs when a report expands) to show, per eval
+  step, which route(s) it's scoped to and whether that route was actually
+  taken this run — plus a route filter bar mirroring the other two
+  surfaces.
+
+**Verification:** `GOWORK=off go build ./...` and `gofmt -l` clean; full
+`cmd/server` package suite passes (only the same pre-existing, unrelated
+`virtual-tools` and `scheduler_test.go` findings already on record for this
+ticket remain). `cd frontend && npm run build` (`tsc -b && vite build`)
+clean.
+
+Landed at `b87736573` on `main`.
+
+Still open, unchanged: the live manual reverify against a real workflow run
+(the two temporary operator commands from the section above), which this
+work did not touch.
