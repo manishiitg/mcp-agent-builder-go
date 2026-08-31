@@ -772,7 +772,12 @@ ensure_local_auth_secret() {
             }
         ' "$target_env_file" > "$tmp_env_file" && mv "$tmp_env_file" "$target_env_file"
     else
-        printf 'AUTH_SECRET=%s\n' "$AUTH_SECRET" > "$target_env_file"
+        {
+            printf '%s\n' '# Local AgentWorks settings, generated on first launch.'
+            printf '%s\n' '# Configure LLM provider credentials in the app, not in this file.'
+            printf 'AUTH_SECRET=%s\n' "$AUTH_SECRET"
+        } > "$target_env_file"
+        LOCAL_ENV_CREATED=true
     fi
 
     chmod 600 "$target_env_file" 2>/dev/null || true
@@ -798,6 +803,7 @@ source_exported_env_file() {
 # Source environment variables from an explicit instance file when configured;
 # otherwise preserve the historical repo-local discovery behavior.
 ENV_FILE_PATH=""
+LOCAL_ENV_CREATED=false
 if [ -n "${AGENTWORKS_ENV_FILE:-}" ]; then
     ENV_FILE_PATH="$AGENTWORKS_ENV_FILE"
     if [ -f "$ENV_FILE_PATH" ]; then
@@ -817,7 +823,7 @@ elif [ -f ".env" ]; then
     source_exported_env_file .env
     echo "✅ Environment variables loaded (including Langfuse configuration)"
 else
-    echo "⚠️  No .env file found. Langfuse tracing will be disabled."
+    echo "ℹ️  First local run: creating a minimal .env with a secure AUTH_SECRET."
 fi
 
 # A sourced .env may contain an older value. The explicit command-line switch
@@ -828,6 +834,15 @@ if [ "$ENABLE_CHAT_TERMINAL_DEBUGS" = true ]; then
 fi
 
 ensure_local_auth_secret
+
+if [ "$LOCAL_ENV_CREATED" = true ]; then
+    echo ""
+    echo "✨ Local setup is ready."
+    echo "   Your AUTH_SECRET was generated and saved to ${ENV_FILE_PATH:-.env}."
+    echo "   To use an LLM, open the app and connect a provider in LLM Configuration."
+    echo "   Do not copy env.example or add placeholder API keys."
+    echo ""
+fi
 
 if [ "$MCP_SERVER_API_TOKEN_ARG_SET" = true ]; then
     export MCP_SERVER_API_TOKEN="$MCP_SERVER_API_TOKEN_ARG"
