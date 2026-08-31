@@ -224,6 +224,44 @@ HOME=<service-home> npm config get prefix
 # expect: <tools-prefix>, not /usr or any other system default
 ```
 
+### 9. Server logs must actually reach a file the service account can read
+
+Found live on Dominion 2026-08-31 while trying to check for tool errors and
+finding nothing at all, despite the binary's own `--log-file` flag: this is
+a shared-code gap, not a Dominion-only misconfiguration, so check it on any
+new rootless deployment (Video Studio's `video-studio-agent` almost
+certainly has the identical gap — unconfirmed as of this writing).
+
+Two independent problems, both required:
+
+1. `createServerLogger()` (`agent_go/cmd/server/server.go`) ignores
+   `--log-file` entirely and hardcodes an empty log path, on the assumption
+   that whatever launches the binary redirects stdout to a file itself. A
+   bare `ExecStart=` in a systemd unit does not do that — output goes to
+   the system journal instead, which an unprivileged service account
+   (not in `adm`/`systemd-journal`) cannot read (`journalctl --user` fails
+   with "insufficient permissions"). Fix at the systemd-unit level, not in
+   application config: add `StandardOutput=append:<path>` and
+   `StandardError=append:<path>` to each service's unit file.
+2. Several other log streams (`logs/schedule.log`, `logs/llm_debug.log`)
+   use a path *relative to `WorkingDirectory`*, which is the `current`
+   release symlink. A plain `mkdir logs` inside each new release silently
+   orphans the previous release's history on every redeploy, starting over
+   empty — indistinguishable from logging being broken, since nothing
+   errors. Fix: symlink each release's `logs/` to one persistent,
+   release-independent directory instead of letting the app create a plain
+   one:
+   ```bash
+   ln -s /srv/dominion/logs /srv/dominion/releases/<release-id>/logs
+   ```
+
+Verify after any release, against real content, not just file existence:
+
+```bash
+ssh -p <port> <user>@<host> 'tail -5 /srv/dominion/logs/agent.log'
+# expect: recent [API] request lines, not empty and not stale
+```
+
 ## Not yet automated
 
 Every item above is currently a manual, human-run checklist. The more
