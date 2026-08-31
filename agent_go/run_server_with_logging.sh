@@ -889,6 +889,12 @@ export LOG_LEVEL="debug"
 # Use LOG_PATH for the shell script to redirect output
 LOG_DIR="${AGENTWORKS_LOG_DIR:-logs}"
 LOG_PATH="${LOG_DIR}/server_debug.log"
+# Claude Code tmux panes are written here only when startup/prompt detection
+# times out. They are useful for support, but may contain user content.
+export CLAUDE_CODE_TMUX_DIAGNOSTICS_DIR="${LOG_DIR}/claude-tmux"
+# Shared tmux-backed providers (Codex, Cursor, and Pi) write failure panes
+# here. Like Claude diagnostics, these files can contain user content.
+export TMUX_DIAGNOSTICS_DIR="${LOG_DIR}/tmux"
 # Unset LOG_FILE to ensure the Go application logs to stdout (avoiding duplicates)
 unset LOG_FILE
 
