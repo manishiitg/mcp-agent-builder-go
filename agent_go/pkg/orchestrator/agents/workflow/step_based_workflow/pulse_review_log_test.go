@@ -244,3 +244,66 @@ func TestLoadPulseReviewReceiptsNegativeLimitReturnsCompleteHistory(t *testing.T
 		t.Fatalf("preview=%d complete=%d", len(preview), len(complete))
 	}
 }
+
+// TestLoadModuleReviewHistoryTotalsAndRecentAreIndependent pins down the
+// contract LoadModuleReviewHistory must keep: RunCount is the module's
+// *total* historical run count, while RecentVerdict is capped at perModule
+// -- these are deliberately different numbers, and a rewrite of the query
+// (e.g. to bound an unindexed full-table scan that was hanging for minutes
+// on a workflow with months of accumulated history, confirmed live on the
+// Dominion deployment 2026-08-31) must not silently cap RunCount down to
+// perModule too.
+func TestLoadModuleReviewHistoryTotalsAndRecentAreIndependent(t *testing.T) {
+	ws := concernsWorkspace(t)
+	ctx := context.Background()
+
+	// module_b gets a single, older run.
+	if err := CompletePulseReview(ctx, ws, []string{"module_b"}, "b-run-1", "pulse-1", "B first pass.", "completed"); err != nil {
+		t.Fatalf("record module_b review: %v", err)
+	}
+	// module_a gets 5 runs, all after module_b's -- it should sort first,
+	// and only its 3 most recent verdicts should come back even though it
+	// ran 5 times.
+	for i := 0; i < 5; i++ {
+		runID := fmt.Sprintf("a-run-%d", i)
+		verdict := fmt.Sprintf("A pass %d.", i)
+		if err := CompletePulseReview(ctx, ws, []string{"module_a"}, runID, "pulse-1", verdict, "completed"); err != nil {
+			t.Fatalf("record module_a review %d: %v", i, err)
+		}
+	}
+
+	history, err := LoadModuleReviewHistory(ctx, ws, 3)
+	if err != nil {
+		t.Fatalf("LoadModuleReviewHistory: %v", err)
+	}
+	if len(history) != 2 {
+		t.Fatalf("expected 2 modules, got %d: %#v", len(history), history)
+	}
+	// module_a ran most recently, so it must sort first.
+	if history[0].Module != "module_a" {
+		t.Fatalf("expected module_a first (most recently run), got %#v", history)
+	}
+	if history[0].RunCount != 5 {
+		t.Fatalf("module_a RunCount should be the true total (5), got %d", history[0].RunCount)
+	}
+	if len(history[0].RecentVerdict) != 3 {
+		t.Fatalf("module_a RecentVerdict should be capped at perModule=3, got %d: %v", len(history[0].RecentVerdict), history[0].RecentVerdict)
+	}
+	// The 3 kept verdicts must be the most recent ones (pass 4, 3, 2), not
+	// an arbitrary or oldest-first subset.
+	for _, wantSubstr := range []string{"A pass 4.", "A pass 3.", "A pass 2."} {
+		found := false
+		for _, v := range history[0].RecentVerdict {
+			if strings.Contains(v, wantSubstr) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected %q among module_a's recent verdicts, got %v", wantSubstr, history[0].RecentVerdict)
+		}
+	}
+	if history[1].Module != "module_b" || history[1].RunCount != 1 {
+		t.Fatalf("expected module_b second with RunCount=1, got %#v", history[1])
+	}
+}
