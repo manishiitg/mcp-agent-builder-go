@@ -3124,6 +3124,13 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 	queryLogCtx := requestLogContext(r.Context(), req, sessionID)
 	logfWithContext(queryLogCtx, "[USER_ID_DEBUGGING] HTTP handler: currentUserID=%q (from auth context)", currentUserID)
 
+	// PLAT-262: resolved fresh from this request's own live auth claims, not
+	// cached anywhere — a demotion takes effect on the caller's very next
+	// request. Gates mutating tool registration and workflow-folder write
+	// access below; never gates WorkshopMode (that axis stays prompt-only
+	// focus, per docs/design/agent_tool_surface_single_source.md).
+	currentUserIsReadOnly := workflowAccessForClaims(GetUserFromContext(r.Context())) == WorkflowAccessRead
+
 	api.applySavedMultiAgentChatConfig(r.Context(), &req, currentUserID)
 	resolvedProfile, err := api.resolveAgentProfileForQuery(r.Context(), &req, currentUserID, sessionID)
 	if err != nil {
@@ -4856,11 +4863,23 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			// workflow_layout.json must go through typed plan-mod tools that serialize
 			// full structs, not raw writes.
 			var fileContextBlockedWriteFolders []string
-			if isWorkflowPhase && workflowPhaseFolder != "" {
-				fileContextWriteFolders = append(fileContextWriteFolders, workflowPhaseFolder+"/")
-				blockedPlanning := workflowPhaseFolder + "/" + todo_creation_human.PlanningFolderName + "/"
+			// PLAT-262: a read-only identity gets none of the whole-workflow write
+			// grant below — effectiveWorkflowPhaseFolderForWrites stays "" for them,
+			// which workflowPhaseWriteFolders() below treats as "no workflow write
+			// root", leaving only its unconditional Downloads/ + the caller's own
+			// chat-history folder writable. Reads are untouched (readPaths below
+			// still uses the real workflowPhaseFolder).
+			effectiveWorkflowPhaseFolderForWrites := workflowPhaseFolder
+			if currentUserIsReadOnly {
+				effectiveWorkflowPhaseFolderForWrites = ""
+			}
+			if isWorkflowPhase && effectiveWorkflowPhaseFolderForWrites != "" {
+				fileContextWriteFolders = append(fileContextWriteFolders, effectiveWorkflowPhaseFolderForWrites+"/")
+				blockedPlanning := effectiveWorkflowPhaseFolderForWrites + "/" + todo_creation_human.PlanningFolderName + "/"
 				fileContextBlockedWriteFolders = append(fileContextBlockedWriteFolders, blockedPlanning)
-				log.Printf("[WORKFLOW_PHASE FOLDER GUARD] Write access: %s/ (whole workflow) with blocked-write prefix: %s", workflowPhaseFolder, blockedPlanning)
+				log.Printf("[WORKFLOW_PHASE FOLDER GUARD] Write access: %s/ (whole workflow) with blocked-write prefix: %s", effectiveWorkflowPhaseFolderForWrites, blockedPlanning)
+			} else if isWorkflowPhase && currentUserIsReadOnly {
+				log.Printf("[WORKFLOW_PHASE FOLDER GUARD] Read-only identity — no whole-workflow write grant for session=%s", sessionID)
 			}
 
 			// Apply folder guard to restrict writes based on mode.
@@ -4916,14 +4935,22 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			} else {
 				perUserChatsWrite := perUserChatsFolder + "/"
 				perUserChatHistory := strings.TrimSuffix(perUserChatsFolder, "Chats") + "chat_history/"
-				extraFolders := append([]string{}, resolvedGrants.WriteFolders...)
-				extraFolders = append(extraFolders, fileContextWriteFolders...)
-				extraFolders = append(extraFolders, perUserChatHistory)
-				workspaceExecutors = wrapExecutorsWithWorkflowPhaseFolderGuard(workspaceExecutors, workflowPhaseFolder, workflowReadOnlyFolders, fileContextBlockedWriteFolders, extraFolders...)
+				// PLAT-262: a read-only identity gets none of the approved external
+				// write grants either — write access is write access regardless of
+				// source. Their own chat-history folder stays writable (that's
+				// conversation persistence, not workflow mutation) and readPaths
+				// below is built the same for everyone (full reads, unaffected).
+				var extraWriteFolders []string
+				if !currentUserIsReadOnly {
+					extraWriteFolders = append([]string{}, resolvedGrants.WriteFolders...)
+					extraWriteFolders = append(extraWriteFolders, fileContextWriteFolders...)
+				}
+				extraFolders := append(append([]string{}, extraWriteFolders...), perUserChatHistory)
+				workspaceExecutors = wrapExecutorsWithWorkflowPhaseFolderGuard(workspaceExecutors, effectiveWorkflowPhaseFolderForWrites, workflowReadOnlyFolders, fileContextBlockedWriteFolders, extraFolders...)
 				workspace.SetSessionWorkingDir(sessionID, chatWorkingFolder)
 				readPaths := append([]string{perUserChatsWrite, perUserChatHistory, "Downloads/", "skills/", "subagents/", "Workflow/"}, extraFolders...)
 				readPaths = append(readPaths, workflowReadOnlyFolders...)
-				writePaths := workflowPhaseWriteFolders(workflowPhaseFolder, extraFolders...)
+				writePaths := workflowPhaseWriteFolders(effectiveWorkflowPhaseFolderForWrites, extraFolders...)
 				workspace.SetSessionFolderGuard(sessionID,
 					readPaths,
 					writePaths,
@@ -5197,7 +5224,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				if resolvedProfile != nil {
 					secretWorkflowPath = req.SelectedFolder
 				}
-				if err := api.registerSecretManagementTools(llmAgent, currentUserID, secretWorkflowPath, "secret_tools", nil, nil); err != nil {
+				if err := api.registerSecretManagementTools(llmAgent, currentUserID, secretWorkflowPath, "secret_tools", currentUserIsReadOnly, nil, nil); err != nil {
 					logfWithContext(queryLogCtx, "[SECRET TOOLS] Failed to register multi-agent secret tools: %v", err)
 					sendError(fmt.Sprintf("Failed to register multi-agent secret tools: %v", err), true)
 					return

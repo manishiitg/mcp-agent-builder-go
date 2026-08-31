@@ -318,6 +318,7 @@ type WorkshopChatSession struct {
 	cancelAllServerAgents func()                    // optional: cancel all running agents in server registry
 	listServerAgents      func() []ServerAgentInfo  // optional: list all agents from server registry
 	workshopModeOverride  string                    // frontend-selected workshop mode
+	readOnlyAccess        bool                      // PLAT-262: caller's live WorkflowAccessLevel is read-only; re-set every turn, never stale
 	recoveryOnce          sync.Once                 // starts durable continuation replay once server notifiers are wired
 	onStepCorrelationDone func(string)
 }
@@ -550,6 +551,18 @@ func (s *WorkshopChatSession) SetExecutionStateChecks(hasPending, hasRunning fun
 // This takes priority over auto-detection when building AUTO-NOTIFICATION action hints.
 func (s *WorkshopChatSession) SetWorkshopModeOverride(mode string) {
 	s.workshopModeOverride = mode
+}
+
+// SetReadOnlyAccess records whether the caller currently holds only read
+// access to workflows (PLAT-262). The caller (cmd/server, which owns
+// WorkflowAccessLevel) must call this on every turn from the live request's
+// own auth claims -- a cached session must never keep a stale value, since a
+// demotion has to take effect on the caller's very next message. Read by
+// RegisterWorkshopChatTools when building this turn's InteractiveWorkshopManager,
+// which gates mutating tool registration and background sub-agent write
+// access accordingly.
+func (s *WorkshopChatSession) SetReadOnlyAccess(readOnly bool) {
+	s.readOnlyAccess = readOnly
 }
 
 func splitWorkshopRunFolderParts(targetRunFolder string) (string, string) {
@@ -1001,6 +1014,7 @@ func RegisterWorkshopChatTools(
 		cancelAllServerAgents:  session.cancelAllServerAgents,
 		listServerAgents:       session.listServerAgents,
 		workshopModeOverride:   session.workshopModeOverride,
+		readOnlyAccess:         session.readOnlyAccess,
 	}
 	registerWorkshopAgentTools(iwm, mcpAgent, session.config.WorkspacePath, logger)
 }

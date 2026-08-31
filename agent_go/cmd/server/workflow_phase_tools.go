@@ -47,6 +47,16 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 	phaseMoveFile func(ctx context.Context, src, dst string) error,
 	syntheticReq QueryRequest,
 ) error {
+	// PLAT-262: resolved fresh from this call's own ctx (ultimately the live
+	// request's auth claims — installWorkflowPhaseTools runs on every
+	// conversational turn, not just once at session creation, so this is
+	// never stale). Gates mutating tool registration below. Never gates
+	// WorkshopMode/syntheticReq.ExecutionOptions.WorkshopMode — that axis
+	// stays prompt-only focus, per
+	// docs/design/agent_tool_surface_single_source.md.
+	isReadOnlyAccess := workflowAccessForClaims(GetUserFromContext(ctx)) == WorkflowAccessRead
+	ctx = common.WithWorkflowReadOnlyAccess(ctx, isReadOnlyAccess)
+
 	// Register phase-appropriate tools
 	// PHASE_TOOL_RACE_DIAGNOSTIC: these are the registrations that
 	// the auto-restore path in chat_history_routes.go has NOT seen
@@ -65,7 +75,15 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 		// Schemas are covered by TestAllSchemaFunctionsReturnValidJSON — this should
 		// never fire in a healthy build. The /api/query caller wraps this with log.Fatalf
 		// to preserve the original Fatal semantics; the restore caller logs and skips.
-		if err := todo_creation_human.RegisterPlanModificationTools(
+		//
+		// PLAT-262: every one of these tools mutates plan structure, so a
+		// read-only identity gets none of them registered at all rather than
+		// a per-tool gate — matches the doc-approved "authority, decided once
+		// per distinct-caller registration" pattern (prepareReadOnlyBackgroundAgentTools),
+		// not the deleted per-turn workshop-mode catalog filter.
+		if isReadOnlyAccess {
+			log.Printf("[WORKFLOW_PHASE] Read-only identity — skipping plan modification tool registration for %s", workflowPhaseID)
+		} else if err := todo_creation_human.RegisterPlanModificationTools(
 			definitionAgent,
 			phaseWorkspacePath,
 			api.logger,
@@ -75,8 +93,9 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 			fmt.Sprintf("%s chat agent", workflowPhaseID),
 		); err != nil {
 			return fmt.Errorf("register plan modification tools for workflow-builder: %w", err)
+		} else {
+			log.Printf("[WORKFLOW_PHASE] Registered plan modification tools for %s", workflowPhaseID)
 		}
-		log.Printf("[WORKFLOW_PHASE] Registered plan modification tools for %s", workflowPhaseID)
 		// STOP-RACE GUARD: Check if the session was stopped while this goroutine
 		// was in flight. Without this check, the goroutine would create a new
 		// WorkshopChatSession with a fresh context.Background() that is never
@@ -93,6 +112,10 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 		if cached, ok := api.workshopChatSessions.Load(workshopSessionKey); ok {
 			workshopSession = cached.(*todo_creation_human.WorkshopChatSession)
 			log.Printf("[WORKFLOW_PHASE] Reusing existing workshop session for %s", sessionID)
+
+			// PLAT-262: re-set every turn from the current caller's live
+			// WorkflowAccessLevel — never trust a cached session's value.
+			workshopSession.SetReadOnlyAccess(isReadOnlyAccess)
 
 			// Always refresh API keys on session reuse (workspace keys may have changed)
 			// Use mergedAPIKeys loaded before goroutine (r.Context() is canceled inside goroutine)
@@ -198,6 +221,10 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 		}
 
 		if workshopSession != nil {
+			// PLAT-262: re-set every turn from the current caller's live
+			// WorkflowAccessLevel (covers both the newly-created-session path
+			// and belt-and-suspenders for the reused-session path above).
+			workshopSession.SetReadOnlyAccess(isReadOnlyAccess)
 			workshopSession.SetExtraSubAgentNotifier(&workflowSubAgentTrackingNotifier{
 				api:       api,
 				sessionID: sessionID,
@@ -252,7 +279,7 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 				}
 				return builderSession.DetachSecretFromWorkflow(ctx, name)
 			}
-			if err := api.registerSecretManagementTools(definitionAgent, userID, phaseWorkspacePath, "secret_tools", afterUpsert, afterDelete); err != nil {
+			if err := api.registerSecretManagementTools(definitionAgent, userID, phaseWorkspacePath, "secret_tools", isReadOnlyAccess, afterUpsert, afterDelete); err != nil {
 				log.Printf("[WORKFLOW_PHASE] Warning: Failed to register secret tools in %s: %v", workflowPhaseID, err)
 			} else {
 				log.Printf("[WORKFLOW_PHASE] Registered secret tools in %s (list_secrets, set_workflow_secret, delete_workflow_secret, set_user_secret, delete_user_secret) with workflow auto-detach", workflowPhaseID)
@@ -355,10 +382,14 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 		if workshopSession != nil {
 			todo_creation_human.RegisterRunFullWorkflowTool(definitionAgent, workshopSession, api.logger)
 			log.Printf("[WORKFLOW_PHASE] Registered run_full_workflow in %s", workflowPhaseID)
-			todo_creation_human.RegisterReorganizeKnowledgebaseTool(definitionAgent, workshopSession, api.logger)
-			log.Printf("[WORKFLOW_PHASE] Registered reorganize_knowledgebase in %s", workflowPhaseID)
-			todo_creation_human.RegisterConsolidateKnowledgebaseTool(definitionAgent, workshopSession, api.logger)
-			log.Printf("[WORKFLOW_PHASE] Registered consolidate_knowledgebase in %s", workflowPhaseID)
+			if isReadOnlyAccess {
+				log.Printf("[WORKFLOW_PHASE] PLAT-262: skipping reorganize_knowledgebase/consolidate_knowledgebase in %s (read-only access)", workflowPhaseID)
+			} else {
+				todo_creation_human.RegisterReorganizeKnowledgebaseTool(definitionAgent, workshopSession, api.logger)
+				log.Printf("[WORKFLOW_PHASE] Registered reorganize_knowledgebase in %s", workflowPhaseID)
+				todo_creation_human.RegisterConsolidateKnowledgebaseTool(definitionAgent, workshopSession, api.logger)
+				log.Printf("[WORKFLOW_PHASE] Registered consolidate_knowledgebase in %s", workflowPhaseID)
+			}
 			// Auto-improvement proposer tools stay in Workshop mode
 			// (was Optimizer before the merge). capture_context is also
 			// safe in Run mode because it requires explicit user
@@ -406,7 +437,10 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 	default:
 		// planning: plan modification tools
 		// Returns an error on failure — see workflow-builder case above for rationale.
-		if err := todo_creation_human.RegisterPlanModificationTools(
+		// PLAT-262: same read-only gate as the workflow-builder case above.
+		if isReadOnlyAccess {
+			log.Printf("[WORKFLOW_PHASE] Read-only identity — skipping plan modification tool registration for phase=%s", workflowPhaseID)
+		} else if err := todo_creation_human.RegisterPlanModificationTools(
 			definitionAgent,
 			phaseWorkspacePath,
 			api.logger,
@@ -416,8 +450,9 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 			fmt.Sprintf("%s chat agent", workflowPhaseID),
 		); err != nil {
 			return fmt.Errorf("register plan modification tools for phase=%s: %w", workflowPhaseID, err)
+		} else {
+			log.Printf("[WORKFLOW_PHASE] Registered plan modification tools for phase=%s", workflowPhaseID)
 		}
-		log.Printf("[WORKFLOW_PHASE] Registered plan modification tools for phase=%s", workflowPhaseID)
 	}
 
 	log.Printf("[PHASE_TOOL_RACE] PHASE_TOOL_REGISTER_END for session=%s phase=%s elapsed=%s",

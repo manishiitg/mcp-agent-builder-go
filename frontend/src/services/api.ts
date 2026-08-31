@@ -2364,7 +2364,7 @@ export interface AuthUser {
   email?: string
   provider?: string
   is_bot_manager?: boolean
-  workflow_access?: 'write' | 'owner'
+  workflow_access?: 'read' | 'write' | 'owner'
   can_run_workflows?: boolean
   can_write_workflows?: boolean
   can_manage_workflow_access?: boolean
@@ -2482,7 +2482,7 @@ export const authApi = {
 
   upsertWorkflowUserPermission: async (
     userKey: string,
-    workflowAccess: 'write' | 'owner'
+    workflowAccess: 'read' | 'write' | 'owner'
   ): Promise<WorkflowUserPermission> => {
     const response = await api.put('/api/workflow/user-permissions', {
       user_key: userKey,
@@ -2498,7 +2498,7 @@ export const authApi = {
 
 export interface WorkflowUserPermission {
   user_key: string
-  workflow_access: 'write' | 'owner'
+  workflow_access: 'read' | 'write' | 'owner'
 }
 
 export interface WorkflowUserPermissionsResponse {
