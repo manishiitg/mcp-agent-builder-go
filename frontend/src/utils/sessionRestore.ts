@@ -577,23 +577,32 @@ export async function hydrateTabEvents(
 ): Promise<RuntimeSessionState> {
   const chatStore = useChatStore.getState()
 
-  let response
-  try {
-    response = await agentApi.getRecentSessionEvents(sessionId)
-  } catch (error) {
-    if (isNotFoundError(error)) {
+  // These two reads never depend on each other's result -- the durable-history
+  // fetch is preferred "regardless" of what the live event store returns (see
+  // below), and the live-store fetch's only use of the history result is in
+  // the NotFound catch branch. Firing them together instead of one-after-
+  // another halves this function's network latency on every call.
+  const [eventsOutcome, restored] = await Promise.all([
+    agentApi.getRecentSessionEvents(sessionId).then(
+      (value) => ({ ok: true as const, value }),
+      (error: unknown) => ({ ok: false as const, error }),
+    ),
+    tryHydrateTabEventsFromChatHistory(sessionId, options.workspacePath, options.includeUiEvents),
+  ])
+
+  if (!eventsOutcome.ok) {
+    if (isNotFoundError(eventsOutcome.error)) {
       console.log(`${TAG} Polling session ${sessionId} not found; restoring from workspace chat history`)
-      const restored = await tryHydrateTabEventsFromChatHistory(sessionId, options.workspacePath, options.includeUiEvents)
       if (restored) return restored
     }
-    throw error
+    throw eventsOutcome.error
   }
+  const response = eventsOutcome.value
 
   // The event store is a short-lived transport cache and can contain only
   // prompts after a browser reload. Prefer the durable conversation for every
   // session, regardless of its owning product. Runtime status remains
   // authoritative so a currently running turn still renders as streaming.
-  const restored = await tryHydrateTabEventsFromChatHistory(sessionId, options.workspacePath, options.includeUiEvents)
   if (restored) {
     // Durable history can predate an active in-memory provider stream. Keep
     // its richer, restart-safe transcript, then append the live tail rather

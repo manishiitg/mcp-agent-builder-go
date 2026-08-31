@@ -652,6 +652,13 @@ workspaceApi.interceptors.response.use(
 
 const coalesceRuntimeRead = createRequestCoalescer()
 const RUNTIME_READ_TIMEOUT_MS = 15_000
+// coalesceRuntimeRead only de-dupes truly concurrent calls (the in-flight
+// entry is removed the instant the request settles); it does nothing for
+// calls made moments apart, e.g. one per workflow switch. This short TTL
+// cache covers that gap. 15s comfortably clears every known caller's own
+// staleness tolerance (the least tolerant re-checks every 60s).
+let runningWorkflowsCache: { data: { running: RunningWorkflowInfo[] }; timestamp: number } | null = null
+const RUNNING_WORKFLOWS_CACHE_TTL_MS = 15_000
 // /api/terminals is intentionally disabled outside developer runtime
 // diagnostics. Remember that capability result so normal product surfaces do
 // not keep polling a route that is unavailable by design.
@@ -1890,11 +1897,17 @@ export const agentApi = {
     return response.data
   },
 
-  listRunningWorkflows: async (): Promise<{ running: RunningWorkflowInfo[] }> => {
-    return coalesceRuntimeRead('running-workflows', async () => {
+  listRunningWorkflows: async (forceRefresh = false): Promise<{ running: RunningWorkflowInfo[] }> => {
+    const now = Date.now()
+    if (!forceRefresh && runningWorkflowsCache && (now - runningWorkflowsCache.timestamp) < RUNNING_WORKFLOWS_CACHE_TTL_MS) {
+      return runningWorkflowsCache.data
+    }
+    const data = await coalesceRuntimeRead('running-workflows', async () => {
       const response = await api.get('/api/workflow/running', { timeout: RUNTIME_READ_TIMEOUT_MS })
       return response.data
     })
+    runningWorkflowsCache = { data, timestamp: now }
+    return data
   },
 
   updateRunningWorkflow: async (sessionId: string, patch: UpdateRunningWorkflowRequest): Promise<RunningWorkflowInfo> => {
